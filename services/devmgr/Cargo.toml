@@ -15,6 +15,7 @@ vrt = { workspace = true }
 vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
+initrd = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }
