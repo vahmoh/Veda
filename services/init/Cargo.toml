@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "init"
 description = "The first user-space process: starts and supervises system services"
 version.workspace = true
@@ -14,6 +14,8 @@ bench = false
 vrt = { workspace = true }
 vabi = { workspace = true }
 initrd = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

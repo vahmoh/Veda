@@ -1,0 +1,24 @@
+[package]
+name = "vfs"
+description = "The Vindows virtual file system service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vfs"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+initrd = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true
