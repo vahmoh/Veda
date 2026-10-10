@@ -65,6 +65,8 @@ pub enum Icon {
     Palette,
     Chart,
     Car,
+    /// A police car's beacon, shining.
+    Siren,
     Rocket,
     Chess,
     Cube,
@@ -421,6 +423,27 @@ fn build(icon: Icon) -> Builder {
             b.circle(7.5, 16.5, 2.0);
             b.circle(16.5, 16.5, 2.0);
         }
+        Icon::Siren => {
+            // The dome on its base, and its light.
+            b.poly(
+                &[
+                    (6.5, 15.0),
+                    (6.92, 12.9),
+                    (8.11, 11.11),
+                    (9.9, 9.92),
+                    (12.0, 9.5),
+                    (14.1, 9.92),
+                    (15.89, 11.11),
+                    (17.08, 12.9),
+                    (17.5, 15.0),
+                ],
+                false,
+            );
+            b.poly(&[(4.5, 15.0), (19.5, 15.0), (19.5, 19.0), (4.5, 19.0)], true);
+            b.line(12.0, 2.5, 12.0, 5.5);
+            b.line(4.0, 6.0, 6.0, 8.0);
+            b.line(20.0, 6.0, 18.0, 8.0);
+        }
         Icon::Rocket => {
             b.stroke.move_to(12.0, 2.5);
             b.stroke.cubic_to(16.5, 6.0, 16.5, 12.0, 15.0, 16.0);
@@ -566,7 +589,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 78] = [
+    pub const ALL: [Icon; 79] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -623,6 +646,7 @@ impl Icon {
         Icon::Palette,
         Icon::Chart,
         Icon::Car,
+        Icon::Siren,
         Icon::Rocket,
         Icon::Chess,
         Icon::Cube,
@@ -665,6 +689,7 @@ impl Icon {
             "monitor" | "sysmon" | "taskmgr" => Icon::Chart,
             "gamepad" | "game" => Icon::Gamepad,
             "car" | "racer" => Icon::Car,
+            "siren" | "police" | "interceptor" => Icon::Siren,
             "rocket" => Icon::Rocket,
             "chess" => Icon::Chess,
             "cube" => Icon::Cube,

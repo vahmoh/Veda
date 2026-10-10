@@ -26,9 +26,9 @@ wait 3
 reset
 wait-serial "desktop ready" 90
 expect-serial "home directory restored from the home disk"
-# Double-click the sixth desktop icon (Note.txt, after the Trash, Home,
-# Velocity, Starfall and Prism).
-double-click 0.0469 0.6875
+# Double-click the seventh desktop icon (Note.txt, after the Trash, Home,
+# Velocity, Starfall, Interceptor and Prism).
+double-click 0.0469 0.81
 wait-serial "started editor" 30
 wait 5
 shot target/veda/nvme-after-reboot.png

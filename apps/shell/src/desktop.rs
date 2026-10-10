@@ -196,7 +196,7 @@ impl Desktop {
                 kind: Kind::Folder { path: HOME.into(), on_desktop: false },
             });
         }
-        for id in ["racer", "starfall", "prism"] {
+        for id in ["racer", "starfall", "interceptor", "prism"] {
             if let Some(app) = m.app(id) {
                 items.push(Shortcut {
                     label: app.name.clone(),
