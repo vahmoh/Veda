@@ -44,6 +44,9 @@ VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mes
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
 VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p prism-scene   # ... on this PC's Intel GPU, as `cargo xtask test` does where there is one
 cargo xtask script tests/ui/drivervm-renderer.vts   # Prism through the renderer in the driver VM, on softpipe
+cargo xtask script tests/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
+cargo xtask script tests/agent/app-interceptor.vts   # ... and for the voice agent
+VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
 cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl) -> target/toolchain
 cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
 cargo xtask linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
@@ -82,6 +85,15 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   driver VM's renderer renders under QEMU.
   `PRISM_SIZE=960x600 PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test
   -p prism-scene` saves Prism's frame as both renderers draw it.
+  Interceptor's game saves what it shows and plays to a directory named by
+  an environment variable: `INTERCEPTOR_SHOTS` (views round the bay at each
+  time of day, `INTERCEPTOR_ONLY` to choose, `INTERCEPTOR_SIZE`),
+  `INTERCEPTOR_CHASE` (chases by day, night, sunset and in the rain),
+  `INTERCEPTOR_FILM` (the menus' showcase on a contact sheet),
+  `INTERCEPTOR_EFFECTS` (smoke, skid marks and sparks), `INTERCEPTOR_SIGNS`
+  (the billboards and neon signs), `INTERCEPTOR_SOUNDS` (a chase, each
+  engine, a police car going by, every cue: WAV files with spectrograms);
+  `INTERCEPTOR_TIMING=1` times making the world and its pictures.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the
   tablet is bound to the display, so a click never grabs the mouse.
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the

@@ -151,8 +151,10 @@ the voice pipeline, consent, memory and how the agent is tested.
   snapshots, so your files survive restarts. The agent's memory and key
   live in a private directory that only the agent can open.
 * **Applications.** Text Editor, Photos, Music, Files, Terminal, Task
-  Manager, Settings and About, and two 3D games, *Velocity* (racing) and
-  *Starfall* (a space shooter), rendered by the `v3d` software 3D engine.
+  Manager, Settings and About, and three 3D games: *Velocity* (racing) and
+  *Starfall* (a space shooter), rendered by the `v3d` software 3D engine,
+  and *Interceptor*, police pursuits through a city by the sea in OpenGL
+  ES 3.0, its engines, sirens, crashes and music synthesised as it plays.
 * **3D graphics.** OpenGL ES 3.0 with GLSL ES 1.00 and 3.00 (`vgl`,
   `vglsl`), every call checked as the specification requires. It renders
   on the GPU through Veda's renderer in the driver VM, on Mesa's driver of
@@ -160,7 +162,9 @@ the voice pipeline, consent, memory and how the agent is tested.
   GPU), or with a multi-threaded software renderer where there is none.
   *Prism* shows it off: a reflective knot, shadow-mapped crystals drawn
   with instancing, and a fountain of sparks simulated with transform
-  feedback, at 75 frames a second under QEMU.
+  feedback, at 75 frames a second under QEMU. So does *Interceptor*: a
+  whole bay with its traffic by day, at sunset and at night, in the rain,
+  with shadows, bloom, smoke and sparks.
 * **C, and GCC inside Veda.** Write a C program in the Terminal or the
   Text Editor, compile it with GCC 16 and run it, in an emulator or on a
   PC alike. C programs are static ELF executables on the musl C library,
@@ -183,6 +187,8 @@ the voice pipeline, consent, memory and how the agent is tested.
 | Music | Files |
 | ![Velocity](docs/images/velocity.png) | ![Starfall](docs/images/starfall.png) |
 | *Velocity* | *Starfall* |
+| ![Interceptor: a chase through the hills at sunset, past a billboard for Veda](docs/images/interceptor.png) | ![Interceptor's career, over the chase that plays behind its menus](docs/images/interceptor-career.png) |
+| *Interceptor* (OpenGL ES 3.0) | *Interceptor*'s career |
 | ![GCC in the Terminal, naming an undeclared variable in a C program](docs/images/gcc.png) | ![Prism: a reflective knot, shadowed crystals and sparks in OpenGL ES 3.0](docs/images/prism.png) |
 | GCC in the Terminal | *Prism* (OpenGL ES 3.0) |
 
@@ -327,6 +333,7 @@ Things to ask:
 * "Remind me to stretch in twenty minutes."
 * "What's using the most memory?"
 * "Start a race in Velocity."
+* "Start a quick chase at sunset in Interceptor."
 * "Delete the City Lights photo" — and see it ask you first.
 * "What do you know about me?"
 
@@ -369,9 +376,10 @@ keyboard, the agent can do too, through the application's own actions.
 | **Settings** | Wallpaper gallery, the agent (Deepgram key, name, voice, language and speech models, listening, memory, permissions), network and Wi-Fi (connection, networks in range, saved networks, interfaces, diagnostics), display information and system details. | Open a page, change the agent's voice and speaking rate; rename the agent or change its language model (with your OK). Never the key. |
 | **Velocity** | An arcade 3D racing game against computer opponents on a procedurally generated circuit. | Start, pause, resume or restart a race; change the track, laps or opponents. |
 | **Starfall** | A 3D space shooter through asteroid fields and enemy waves. | Start, pause, resume or restart a game. |
+| **Interceptor** | Police pursuits through Veda Bay in OpenGL ES 3.0: a career of eight missions with stars to win, quick chases and patrols, by day, at sunset and at night, in the rain; traffic, suspects that run and ram, backup, nitrous; synthesised engines, sirens and music. | Start a mission, a quick chase (the suspect, time of day, weather, traffic, backup) or a patrol; pause, resume, restart or leave; change the volumes, units, camera and display. |
 
-The games are drawn by `v3d`, a multi-threaded fixed-point software 3D
-renderer, and *Prism* by OpenGL ES. Beyond the applications, the agent's
+*Velocity* and *Starfall* are drawn by `v3d`, a multi-threaded fixed-point
+software 3D renderer, and *Interceptor* and *Prism* by OpenGL ES. Beyond the applications, the agent's
 own functions cover windows, files, sound, Wi-Fi, the wallpaper,
 notifications, timers and reminders, its memory and the system.
 
@@ -493,7 +501,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
 | `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` (SATA), `nvme` (NVM Express); everything else is Linux's, in the driver VM |
-| `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
+| `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*), `starfall` and `interceptor` (its game, testable on the host, in `interceptor/game`) |
 | `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
 | `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |

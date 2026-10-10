@@ -664,6 +664,56 @@ is compared) the tests say so; and on Mesa's virgl over virglrenderer's
 test server (`VGL_GALLIUM_DEVICE=virgl`), as the driver VM's renderer
 renders under QEMU.
 
+## Interceptor (`apps/interceptor`)
+
+*Interceptor*, police pursuits through a bay city, is OpenGL ES 3.0's
+largest program. Its game (`apps/interceptor/game`, `no_std`) is
+everything but the window, the keyboard and the speakers, so that its
+world, physics, drivers, missions, pictures and sounds are tested on the
+host; the program around it (`apps/interceptor/src`) has the window, the
+menus and the dashboard (`vgfx`), the speakers' thread, the save file and
+the voice agent's link.
+
+* **Veda Bay** is made at start-up from a few dozen control points and a
+  seed, in a fifth of a second: a 6.2 km loop of road (a Catmull-Rom
+  spline sampled every 2 m, with its sections' cross-sections: downtown's
+  pavements, the hills' guardrails, a tunnel, the coast, a suspension
+  bridge, the port); the land around it, a height field whose fields
+  (shores, roughness, the road's height) follow the nearest stretch of road
+  (a distance transform finds it for every vertex) and are blurred where
+  stretches meet; downtown's 400 buildings, the street lights, about 1900
+  trees, the bridge's towers and cables, billboards and neon signs.
+* **The pictures** are lit physically (GGX and Lambert, the sky's light
+  and reflections from a cube map painted for the time of day), in half
+  floats with 4x multisampling, then bloomed, tone mapped and graded per
+  time of day. The street lights' pools are painted once into a map of the
+  world that every lit shader reads; the sun's shadows come from a shadow
+  map snapped to its texels; headlights and light bars are up to sixteen
+  dynamic lights. The city, the street lights, the trees and the cars are
+  drawn instanced (about 130 draws a frame). Smoke, spray and sparks are
+  particles; skid marks a ring of decals copied to the GPU as they are
+  made; rain falls through a box that follows the camera, entirely on the
+  GPU. A software renderer gets fewer and smaller of everything, tone
+  mapped in each shader; the resolution adapts to the frame rate.
+* **The simulation** steps at 120 Hz whatever the frame rate (frames are
+  drawn between the last two steps): four tyres with a friction circle,
+  weight transfer, a gearbox, stability control and anti-lock brakes;
+  collisions between cars' boxes and with the walls. The computer drives
+  the traffic (keeping its distance, yielding to sirens), the suspects
+  (choosing the line with the most room, swerving at the police) and the
+  police (taking its line only while it is clear of all but the suspect,
+  never faster than it can stop behind a car on it, closing with a PIT).
+  A session is a mission, a quick chase, a patrol or the menus' showcase,
+  which the computer drives and a cinematic camera films.
+* **The sounds** are synthesised as the game plays (`game::audio`): each
+  engine as its cylinders' firing pulses through its banks' exhaust pipes
+  and silencer (a cross-plane V8's burble, a flat six's rasp), sirens
+  with the Doppler shift of a car going by, tyres, wind, crashes and the
+  cues of the menus; placed by distance, direction and motion, echoed in
+  the tunnel, and limited, in a thread of their own. The music is loops of
+  stems that `tools/musicgen` renders at build time; the chase's second
+  stem joins as the suspect is caught up with.
+
 ## Audio
 
 * Sound devices are Linux's, in [the driver VM](DRIVERVM.md): HD Audio

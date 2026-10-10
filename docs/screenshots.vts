@@ -157,6 +157,49 @@ key alt-f4
 wait-serial "starfall exited" 20
 wait 2
 
+# Interceptor: the career's missions over the showcase behind the menus,
+# then a quick chase through the hills at sunset, the computer driving.
+# The quick chase's menu opens on its start button; four up is the time of
+# day, one left from night is sunset.
+key meta_l
+wait 2
+type "interceptor"
+key ret
+wait-serial "interceptor: ready" 90
+wait 2
+key ret
+wait-serial "screen Main" 10
+key ret
+wait-serial "screen Career" 10
+move 0.97 0.08
+wait 3
+shot docs/images/interceptor-career.png
+key esc
+wait-serial "screen Main" 10
+key down
+key ret
+wait-serial "screen Quick" 10
+key up
+key up
+key up
+key up
+key left
+key down
+key down
+key down
+key down
+key ret
+wait-serial "screen Playing" 10
+wait 4
+key f8
+wait-serial "autopilot on" 10
+move 0.97 0.08
+wait 10
+shot docs/images/interceptor.png
+key alt-f4
+wait-serial "interceptor exited" 20
+wait 2
+
 # GCC in the Terminal: a C program with a mistake, which GCC finds. It runs
 # once first, to have its programs read from the disk, then for the
 # picture; that run has no line in the log to wait for.
