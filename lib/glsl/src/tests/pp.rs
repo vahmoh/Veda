@@ -269,3 +269,21 @@ fn every_extension_is_known_by_name() {
         assert!(e.name().starts_with("GL_"));
     }
 }
+
+#[test]
+fn long_shaders_preprocess_in_linear_time() {
+    // About 300 kB of source. Reading it used to look over the whole string
+    // for every byte (minutes for this much); it should take a moment, even
+    // unoptimised.
+    let line = "float f(float x) { return x * 2.0 + 1.0; } // a comment to skip\n";
+    let mut src = String::from("#version 300 es\n");
+    for _ in 0..4500 {
+        src.push_str(line);
+    }
+    let t = std::time::Instant::now();
+    let (_, log, out) = run_strings(&[&src]);
+    let secs = t.elapsed().as_secs_f64();
+    assert!(log.is_empty(), "{log}");
+    assert!(out.tokens.len() >= 4500 * 15);
+    assert!(secs < 2.0, "{secs} s to preprocess {} bytes", src.len());
+}

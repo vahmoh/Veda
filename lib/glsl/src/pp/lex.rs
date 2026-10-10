@@ -65,7 +65,9 @@ impl PpTok {
 /// Reads the source strings as one stream of bytes, tracking which string
 /// and line each byte is on.
 struct Reader<'a> {
-    strings: &'a [&'a str],
+    /// Each string's text, up to its first zero byte (found once: every
+    /// byte read looks at its string).
+    strings: Vec<&'a [u8]>,
     /// The current string (index) and byte within it.
     s: usize,
     pos: usize,
@@ -75,16 +77,21 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(strings: &'a [&'a str], continuation: bool) -> Reader<'a> {
+        let strings = strings
+            .iter()
+            .map(|s| {
+                let bytes = s.as_bytes();
+                &bytes[..bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len())]
+            })
+            .collect();
         let mut r = Reader { strings, s: 0, pos: 0, line: 1, continuation };
         r.skip_finished_strings();
         r
     }
 
-    /// The current string's text, up to its first zero byte.
+    /// String `s`'s text, up to its first zero byte.
     fn text(&self, s: usize) -> &'a [u8] {
-        let bytes = self.strings[s].as_bytes();
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-        &bytes[..end]
+        self.strings[s]
     }
 
     fn skip_finished_strings(&mut self) {
