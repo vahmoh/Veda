@@ -513,6 +513,12 @@ impl Road {
         (a.paved + (b.paved - a.paved) * t, a.wall + (b.wall - a.wall) * t)
     }
 
+    /// How much a roof covers the road at `s`: 1 in a tunnel, 0 in the
+    /// open, between at its mouths.
+    pub fn covered(&self, s: f32) -> f32 {
+        [-6.0f32, 0.0, 6.0].iter().filter(|&&d| self.at(s + d).section == Section::Tunnel).count() as f32 / 3.0
+    }
+
     /// Whether a median barrier divides the road at `s`.
     pub fn divided(&self, s: f32) -> bool {
         self.at(s).median >= 0.5

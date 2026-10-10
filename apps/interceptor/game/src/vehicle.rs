@@ -628,6 +628,14 @@ impl Vehicle {
         basis * Mat4::from_quat(Quat::from_rotation_z(self.roll) * Quat::from_rotation_x(self.pitch))
     }
 
+    /// Where its wheels touch the ground (x, z): front left, front right,
+    /// rear left, rear right.
+    pub fn wheel_points(&self) -> [Vec2; 4] {
+        let (f, l) = (self.forward(), self.left());
+        let c = self.pos.xz();
+        self.wheel_offsets().map(|o| c + l * o.x + f * o.y)
+    }
+
     /// The body's corners on the ground (x, z): front left, front right,
     /// rear right, rear left.
     pub fn corners(&self) -> [Vec2; 4] {

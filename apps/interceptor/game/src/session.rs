@@ -24,11 +24,12 @@ use crate::camera::Cinematic;
 use crate::career::{self, Ending, MISSIONS, Outcome, SUSPECTS};
 use crate::carmodel::Kind;
 use crate::driver::{Police, Role};
+use crate::effects::Effects;
 use crate::env::{Environment, TimeOfDay, Weather};
 use crate::game::{Car, Game};
 use crate::prelude::*;
 use crate::pursuit::{self, Pursuit, State, Wanted};
-use crate::render::{CarView, Light};
+use crate::render::{CarView, Frame, Light, Passing};
 use crate::road::{Road, Section};
 use crate::vehicle::Spec;
 use crate::world::World;
@@ -88,6 +89,8 @@ const SHOWCASE_GAP: f32 = 26.0;
 pub struct Session {
     pub mode: Mode,
     pub game: Game,
+    /// Smoke, sparks and skid marks.
+    pub effects: Effects,
     /// The chase on (or just over).
     pub chase: Option<Pursuit>,
     pub phase: Phase,
@@ -211,6 +214,7 @@ impl Session {
         let mut s = Session {
             mode,
             game,
+            effects: Effects::new(),
             chase: None,
             phase: Phase::Driving,
             radio: None,
@@ -317,6 +321,7 @@ impl Session {
             return;
         }
         self.game.update(dt);
+        self.effects.update(&self.game, self.game.camera.eye, dt);
         self.top_speed = self.top_speed.max(self.game.player().vehicle.speed().abs());
         if let Phase::Over(t) = &mut self.phase {
             *t += dt;
@@ -484,6 +489,14 @@ impl Session {
             self.game.camera = cinema.update(&g.world, &hero.vehicle, hero.hint, chased, dt);
         }
         (cars, lights)
+    }
+
+    /// The picture to draw of `cars` and `lights` (from [`Session::frame`]):
+    /// filmed by the session's camera, with what passes.
+    pub fn picture<'a>(&'a self, cars: &'a [CarView], lights: &'a [Light]) -> Frame<'a> {
+        let (skids, skids_made) = self.effects.skids();
+        let passing = Passing { particles: &self.effects.particles, skids, skids_made, rain: self.game.rain_here() };
+        Frame { camera: self.game.camera, cars, lights, time: self.game.clock, passing }
     }
 
     /// The light of the session.

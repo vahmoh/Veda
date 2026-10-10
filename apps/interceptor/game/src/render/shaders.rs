@@ -972,3 +972,176 @@ void main() {
 pub const DEPTH_FS: &str = r#"
 void main() {}
 "#;
+
+/// Skid marks: rubber laid on the road, darkening what is under it, fading
+/// as it ages (`a_normal`: when it was made, how dark, and where across
+/// the mark the vertex is).
+pub const SKID_VS: &str = r#"
+in vec3 a_pos;
+in vec3 a_normal;
+out float v_alpha;
+out float v_across;
+void main() {
+    float age = u_eye.w - a_normal.x;
+    float fade = (1.0 - smoothstep(45.0, 75.0, age)) * step(-1.0, age);
+    float dist = length(a_pos - u_eye.xyz);
+    float seen = 1.0 - min(1.0 - exp(-u_fogColor.w * dist), u_fogParams.z);
+    v_alpha = a_normal.y * fade * seen * (1.0 - smoothstep(90.0, 140.0, dist));
+    v_across = a_normal.z;
+    gl_Position = u_viewProj * vec4(a_pos, 1.0);
+}
+"#;
+
+pub const SKID_FS: &str = r#"
+in float v_alpha;
+in float v_across;
+out vec4 o_color;
+void main() {
+    // Soft at its edges, as a tyre's tread wears them.
+    float a = v_alpha * (1.0 - v_across * v_across) * 0.8;
+    o_color = vec4(0.0, 0.0, 0.0, a);
+}
+"#;
+
+/// Smoke, spray and sparks: quads facing the camera (sparks drawn out
+/// along their flight). Smoke and spray are lit where they float, by the
+/// sky, the street lights, the sun and the nearest lights.
+pub const PARTICLE_VS: &str = r#"
+in vec2 a_pos;
+in vec4 a_inst0;   // position, size
+in vec4 a_inst1;   // velocity, kind (0 smoke, 1 spray, 2 spark)
+in vec4 a_inst2;   // colour, opacity
+uniform vec3 u_right;
+uniform vec3 u_up;
+out vec2 v_q;
+out vec4 v_color;
+flat out float v_spark;
+out float v_seen;
+void main() {
+    vec3 c = a_inst0.xyz;
+    float size = a_inst0.w;
+    vec3 w;
+    if (a_inst1.w > 1.5) {
+        vec3 vel = a_inst1.xyz;
+        float speed = length(vel);
+        vec3 along = speed > 0.01 ? vel / speed : u_up;
+        vec3 across = normalize(cross(along, normalize(c - u_eye.xyz)) + vec3(1e-4));
+        w = c + along * (a_pos.y * (size + speed * 0.03)) + across * (a_pos.x * size);
+        v_color = a_inst2;
+        v_spark = 1.0;
+    } else {
+        w = c + (u_right * a_pos.x + u_up * a_pos.y) * size;
+        vec3 up = vec3(0.0, 1.0, 0.0);
+        vec3 light = ambientLight(up) + lampLight(c, up) + u_sunColor.rgb * (0.3 * max(u_sunDir.y, 0.0));
+#ifndef LOW
+        int count = int(u_misc.x);
+        for (int i = 0; i < MAX_LIGHTS; i++) {
+            if (i >= count) {
+                break;
+            }
+            vec4 pr = u_lights[i * 3];
+            vec3 d = pr.xyz - c;
+            float dist2 = dot(d, d);
+            float r2 = pr.w * pr.w;
+            if (dist2 < r2) {
+                vec4 sp = u_lights[i * 3 + 2];
+                float cone = sp.w > -1.0 ? smoothstep(sp.w, sp.w + (1.0 - sp.w) * 0.6, dot(-normalize(d), sp.xyz)) : 1.0;
+                float fall = saturate(1.0 - dist2 * dist2 / (r2 * r2));
+                light += u_lights[i * 3 + 1].rgb * (fall * fall / (dist2 + 1.0) * cone * 0.12);
+            }
+        }
+#endif
+        v_color = vec4(a_inst2.rgb * light, a_inst2.a);
+        v_spark = 0.0;
+    }
+    float dist = length(c - u_eye.xyz);
+    v_seen = 1.0 - min(1.0 - exp(-u_fogColor.w * dist), u_fogParams.z);
+    // Smoke the camera is in would only whiten the picture.
+    if (v_spark < 0.5) {
+        v_seen *= smoothstep(size * 0.6, size * 0.6 + 4.0, dist);
+    }
+    v_q = a_pos;
+    gl_Position = u_viewProj * vec4(w, 1.0);
+}
+"#;
+
+pub const PARTICLE_FS: &str = r#"
+in vec2 v_q;
+in vec4 v_color;
+flat in float v_spark;
+in float v_seen;
+out vec4 o_color;
+void main() {
+    if (v_spark > 0.5) {
+        // A white-hot core along the streak, added to what is behind.
+        float g = exp(-v_q.x * v_q.x * 5.0) * (1.0 - v_q.y * v_q.y * 0.6);
+        o_color = vec4(finish(v_color.rgb * (g * v_color.a * v_seen)), 1.0);
+        return;
+    }
+    float d2 = dot(v_q, v_q);
+    if (d2 >= 1.0) {
+        discard;
+    }
+    // A soft round puff, thinning into the fog.
+    float a = (1.0 - d2) * (1.0 - d2) * v_color.a * v_seen;
+    o_color = vec4(finish(v_color.rgb), a);
+}
+"#;
+
+/// The rain: streaks falling through a box that follows the camera, lit
+/// by the sky, the street lights and the lights near (headlights'
+/// beams show it).
+pub const RAIN_VS: &str = r#"
+in vec2 a_pos;
+in vec4 a_inst0;   // where in the box (0..1), and a number deciding if it falls now
+uniform vec3 u_box;
+uniform vec3 u_fall;
+uniform float u_rain;
+out float v_alpha;
+out vec3 v_color;
+out float v_x;
+void main() {
+    vec3 base = u_eye.xyz - u_box * 0.5;
+    vec3 c = base + fract((a_inst0.xyz * u_box + u_fall * u_eye.w - base) / u_box) * u_box;
+    vec3 along = normalize(u_fall);
+    vec3 view = c - u_eye.xyz;
+    float dist = length(view);
+    vec3 across = normalize(cross(along, view / max(dist, 1e-3)) + vec3(1e-4));
+    vec3 w = c + along * (a_pos.y * 0.42) + across * (a_pos.x * (0.004 + dist * 0.0004));
+    v_alpha = step(a_inst0.w, u_rain) * smoothstep(1.5, 4.5, dist) * (1.0 - smoothstep(11.0, 17.0, dist));
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    vec3 light = ambientLight(up) * 0.7 + lampLight(c, up) * 1.6 + u_sunColor.rgb * 0.1;
+#ifndef LOW
+    int count = int(u_misc.x);
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        if (i >= count) {
+            break;
+        }
+        vec4 pr = u_lights[i * 3];
+        vec3 d = pr.xyz - c;
+        float dist2 = dot(d, d);
+        float r2 = pr.w * pr.w;
+        if (dist2 < r2) {
+            vec4 sp = u_lights[i * 3 + 2];
+            float cone = sp.w > -1.0 ? smoothstep(sp.w, sp.w + (1.0 - sp.w) * 0.6, dot(-normalize(d), sp.xyz)) : 1.0;
+            float fall = saturate(1.0 - dist2 * dist2 / (r2 * r2));
+            light += u_lights[i * 3 + 1].rgb * (fall * fall / (dist2 + 1.0) * cone * 2.0);
+        }
+    }
+#endif
+    v_color = light;
+    v_x = a_pos.x;
+    gl_Position = u_viewProj * vec4(w, 1.0);
+}
+"#;
+
+pub const RAIN_FS: &str = r#"
+in float v_alpha;
+in vec3 v_color;
+in float v_x;
+out vec4 o_color;
+void main() {
+    float a = (1.0 - abs(v_x)) * v_alpha * 0.24;
+    o_color = vec4(finish(v_color), a);
+}
+"#;

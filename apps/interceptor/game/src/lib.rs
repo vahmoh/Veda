@@ -20,6 +20,7 @@
 //! | [`input`] | the keyboard into a driver's controls |
 //! | [`driver`], [`traffic`] | the computer's drivers, and the traffic round the player |
 //! | [`game`] | the running game |
+//! | [`effects`] | tyre smoke, spray, sparks and skid marks |
 //! | [`pursuit`] | a chase: takedowns, busts, escapes |
 //! | [`career`] | the missions, their scores and stars, and what is saved |
 //! | [`session`] | a mission, a quick chase, a patrol or the menus' showcase, start to end |
@@ -39,6 +40,7 @@ pub mod career;
 pub mod carmodel;
 pub mod city;
 pub mod driver;
+pub mod effects;
 pub mod env;
 pub mod game;
 pub mod groundmesh;

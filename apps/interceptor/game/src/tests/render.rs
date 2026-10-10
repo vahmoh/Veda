@@ -18,7 +18,7 @@ use vgl::{Config, Context, gl};
 
 use crate::carmodel::Kind;
 use crate::env::{Environment, TimeOfDay, Weather};
-use crate::render::{Camera, CarView, Frame, Livery, Quality, Renderer};
+use crate::render::{Camera, CarView, Frame, Livery, Passing, Quality, Renderer};
 use crate::world::World;
 use vmath::{Mat4, Vec3};
 
@@ -46,7 +46,12 @@ fn frame(c: &mut Context, r: &mut Renderer, cam: &Camera, w: u32, h: u32) -> Vec
 }
 
 fn frame_with(c: &mut Context, r: &mut Renderer, cam: &Camera, cars: &[CarView], w: u32, h: u32) -> Vec<u32> {
-    r.render(c, &Frame { camera: *cam, cars, lights: &[], time: 12.0 }, w as i32, h as i32);
+    r.render(
+        c,
+        &Frame { camera: *cam, cars, lights: &[], time: 12.0, passing: Passing::default() },
+        w as i32,
+        h as i32,
+    );
     assert_eq!(c.get_error(), gl::NO_ERROR);
     let mut px = vec![0u32; (w * h) as usize];
     c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
@@ -245,8 +250,13 @@ fn chase_scene() {
         None if soft => (software(w, h), Quality::High),
         None => (software(w, h), Quality::Low),
     };
-    for (tname, time) in [("night", TimeOfDay::Night), ("day", TimeOfDay::Day), ("sunset", TimeOfDay::Sunset)] {
-        let env = Environment::new(time, Weather::Clear);
+    for (tname, time, weather) in [
+        ("night", TimeOfDay::Night, Weather::Clear),
+        ("day", TimeOfDay::Day, Weather::Clear),
+        ("sunset", TimeOfDay::Sunset, Weather::Clear),
+        ("rain", TimeOfDay::Night, Weather::Rain),
+    ] {
+        let env = Environment::new(time, weather);
         let world = World::new();
         let mut r = Renderer::new(&mut c, &world, env, quality).unwrap_or_else(|e| panic!("{e}"));
         let mut game = Game::new(world, env);
@@ -266,7 +276,13 @@ fn chase_scene() {
             if k == 39 {
                 r.render(
                     &mut c,
-                    &Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock },
+                    &Frame {
+                        camera: game.camera,
+                        cars: &cars,
+                        lights: &lights,
+                        time: game.clock,
+                        passing: Passing { rain: game.env.rain, ..Passing::default() },
+                    },
                     w as i32,
                     h as i32,
                 );
@@ -300,8 +316,7 @@ fn showcase_film() {
         session.update(dt);
         let (cars, lights) = session.frame(dt);
         if k % 60 == 59 && shot < cols * rows {
-            let game = &session.game;
-            let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock };
+            let frame = session.picture(&cars, &lights);
             r.render(&mut c, &frame, w as i32, h as i32);
             let mut px = vec![0u32; (w * h) as usize];
             c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
@@ -314,4 +329,75 @@ fn showcase_film() {
         }
     }
     save(&format!("{dir}/film.png"), &sheet, w * cols, h * rows);
+}
+
+/// `INTERCEPTOR_EFFECTS=dir`: a handbrake slide at night downtown (smoke
+/// and skid marks), then a scrape along a guardrail in the hills
+/// (sparks), on one contact sheet.
+#[test]
+fn effects_scene() {
+    use crate::driver::Role;
+    use crate::effects::Effects;
+    use crate::game::{Car, Game, STEP};
+    use crate::vehicle::Spec;
+    let Ok(dir) = std::env::var("INTERCEPTOR_EFFECTS") else { return };
+    let (w, h) = (640u32, 360u32);
+    let (cols, rows) = (3u32, 3u32);
+    let (mut c, quality) = match renderer(w, h) {
+        Some(c) => (c, Quality::High),
+        None => (software(w, h), Quality::Low),
+    };
+    let env = Environment::new(TimeOfDay::Night, Weather::Clear);
+    let world = World::new();
+    let mut r = Renderer::new(&mut c, &world, env, quality).unwrap_or_else(|e| panic!("{e}"));
+    let mut game = Game::new(world, env);
+    let p = game.player;
+    let place = |game: &mut Game, s: f32, lateral: f32, turn: f32, speed: f32| {
+        let mut car = Car::on_road(&game.world, Kind::Police, Spec::interceptor(), s, lateral, false, speed);
+        car.vehicle.yaw += turn;
+        car.vehicle.set_speed(speed);
+        car.role = Role::Player;
+        car.siren = true;
+        game.cars[p] = car;
+        game.follow = crate::camera::Follow::new(&game.cars[p].vehicle);
+    };
+    place(&mut game, 150.0, 2.1, 0.0, 28.0);
+    let mut fx = Effects::new();
+    let mut sheet = vec![0u32; (w * cols * h * rows) as usize];
+    let mut shot = 0;
+    let dt = STEP * 4.0;
+    let mut sparks_seen = 0;
+    for k in 0..135 {
+        let t = k as f32 * dt;
+        if k == 60 {
+            // Into the guardrail of the hills, glancing.
+            let s = crate::career::section_start(&game.world.road, crate::road::Section::Hills) + 300.0;
+            let (_, wall) = game.world.road.widths(s);
+            place(&mut game, s, wall - 1.6, -0.12, 27.0);
+        }
+        game.keys.handbrake = t < 1.2;
+        game.keys.left = t < 1.0;
+        game.keys.up = k >= 60;
+        game.update(dt);
+        let (cars, lights) = game.frame(dt);
+        fx.update(&game, game.camera.eye, dt);
+        sparks_seen += fx.particles.iter().filter(|p| p.kind == crate::effects::Kind::Spark).count();
+        if (k % 15 == 14 || (k > 60 && k % 8 == 0)) && shot < cols * rows {
+            let (skids, skids_made) = fx.skids();
+            let passing = Passing { particles: &fx.particles, skids, skids_made, rain: 0.0 };
+            let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock, passing };
+            r.render(&mut c, &frame, w as i32, h as i32);
+            assert_eq!(c.get_error(), gl::NO_ERROR);
+            let mut px = vec![0u32; (w * h) as usize];
+            c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+            let (x0, y0) = ((shot % cols) * w, (shot / cols) * h);
+            for y in 0..h {
+                let row = ((y0 + y) * w * cols + x0) as usize;
+                sheet[row..row + w as usize].copy_from_slice(&px[(y * w) as usize..((y + 1) * w) as usize]);
+            }
+            shot += 1;
+        }
+    }
+    std::println!("{sparks_seen} spark-frames");
+    save(&format!("{dir}/effects.png"), &sheet, w * cols, h * rows);
 }

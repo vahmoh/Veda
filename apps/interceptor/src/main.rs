@@ -29,7 +29,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 
-use interceptor_game::render::{Frame, Quality, Renderer};
+use interceptor_game::render::{Quality, Renderer};
 use interceptor_game::scale::{SCALES, Scale};
 use interceptor_game::world::World;
 use vabi::{WaitItem, signals};
@@ -193,8 +193,7 @@ fn main() -> i32 {
         let (iw, ih) = internal_size(window.width, window.height, scale.divisor());
         gl.resize(iw as u32, ih as u32);
         let t_render = vrt::time::now_ns();
-        let game = &app.session.game;
-        let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock };
+        let frame = app.session.picture(&cars, &lights);
         renderer.render(&mut gl, &frame, iw, ih);
         gl.flush();
         let t_drawn = vrt::time::now_ns();

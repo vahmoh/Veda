@@ -9,8 +9,12 @@
 //! front to back, and the sky where nothing else is.
 
 pub mod gpu;
+mod passing;
 pub mod post;
 pub mod shaders;
+
+pub use passing::Passing;
+use passing::PassingGpu;
 
 use alloc::format;
 use alloc::string::String;
@@ -116,8 +120,11 @@ pub struct Frame<'a> {
     pub cars: &'a [CarView],
     /// The lights that move; the strongest near the camera are used.
     pub lights: &'a [Light],
-    /// Seconds, for what moves by itself (the sea, the light bars).
+    /// Seconds, for what moves by itself (the sea, the light bars, the
+    /// rain) and what ages (skid marks): the game's clock.
     pub time: f32,
+    /// Smoke, sparks, skid marks and rain.
+    pub passing: Passing<'a>,
 }
 
 /// The nearest and farthest the camera sees (m).
@@ -224,6 +231,8 @@ pub struct Renderer {
     shadow: Option<Shadow>,
     /// What the programs are compiled with.
     defines: &'static str,
+    /// Skid marks, particles and rain.
+    passing: PassingGpu,
     /// Statistics of the last frame.
     pub stats: Stats,
 }
@@ -481,6 +490,7 @@ impl Renderer {
 
         let post = if hdr { Some(post::Post::new(gl, fullscreen)?) } else { None };
         let shadow = if casts_shadows(&env, quality) { Some(Shadow::new(gl, defines)?) } else { None };
+        let passing = PassingGpu::new(gl, defines, quality)?;
         let mut r = Renderer {
             quality,
             sizes,
@@ -517,6 +527,7 @@ impl Renderer {
             post,
             shadow,
             defines,
+            passing,
             stats: Stats::default(),
         };
         r.bake_sky(gl, defines)?;
@@ -731,6 +742,7 @@ impl Renderer {
             self.road[i].tarmac.draw(gl);
             self.count(self.road[i].tarmac.count);
         }
+        self.passing.draw_skids(gl, &frame.passing, &mut self.stats);
         gl.use_program(self.surface.id);
         gl.bind_texture(gl::TEXTURE_2D_ARRAY, self.surfaces);
         for &i in &visible {
@@ -814,6 +826,9 @@ impl Renderer {
         gl.depth_mask(true);
         gl.depth_func(gl::LESS);
         gl.bind_vertex_array(0);
+
+        // Smoke, sparks and rain in the air.
+        self.passing.draw_air(gl, &frame.passing, camera, &mut self.stats);
 
         if let Some(p) = self.post.as_mut() {
             p.finish(gl, &self.env.grade());

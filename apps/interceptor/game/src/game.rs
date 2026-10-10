@@ -617,6 +617,15 @@ impl Game {
         }
     }
 
+    /// How hard it rains where the camera is (not at all in a tunnel).
+    pub fn rain_here(&self) -> f32 {
+        if self.env.rain <= 0.0 {
+            return 0.0;
+        }
+        let at = self.world.road.locate(self.camera.eye, Some(self.player().hint));
+        self.env.rain * (1.0 - self.world.road.covered(at.s))
+    }
+
     /// The player's car.
     pub fn player(&self) -> &Car {
         &self.cars[self.player]
