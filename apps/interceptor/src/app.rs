@@ -177,7 +177,7 @@ impl App {
     }
 
     /// Back to the menus, the showcase behind them.
-    fn leave_play(&mut self, screen: Screen) {
+    pub(crate) fn leave_play(&mut self, screen: Screen) {
         if !matches!(self.session.mode, Mode::Showcase) {
             self.session = Session::new(self.world.clone(), Mode::Showcase);
             self.relight = true;
@@ -185,7 +185,8 @@ impl App {
         self.go(screen);
     }
 
-    fn save(&mut self) {
+    /// Writes the save file (the best results and the settings).
+    pub(crate) fn store_save(&mut self) {
         if !self.store.store(&self.save) {
             vrt::println!("cannot save the settings and results");
         }
@@ -338,12 +339,12 @@ impl App {
             keys::C => {
                 game.follow.view = game.follow.view.next();
                 self.save.settings.view = game.follow.view;
-                self.save();
+                self.store_save();
             }
             keys::R => game.reset_player(),
             keys::F3 => {
                 self.save.settings.stats = !self.save.settings.stats;
-                self.save();
+                self.store_save();
             }
             keys::F8 => {
                 let on = !game.autopilot;
@@ -359,7 +360,7 @@ impl App {
     fn toggle_fullscreen(&mut self) {
         self.save.settings.fullscreen = !self.save.settings.fullscreen;
         self.fullscreen = Some(self.save.settings.fullscreen);
-        self.save();
+        self.store_save();
     }
 
     /// The window lost the keyboard: let go, and pause play.
@@ -370,14 +371,14 @@ impl App {
         }
     }
 
-    fn pause(&mut self) {
+    pub(crate) fn pause(&mut self) {
         self.session.game.release();
         self.session.game.paused = true;
         self.cues.push(Cue::Back);
         self.go(Screen::Paused(0));
     }
 
-    fn resume(&mut self) {
+    pub(crate) fn resume(&mut self) {
         self.session.game.paused = matches!(self.session.phase, Phase::Countdown(_));
         self.go(Screen::Playing);
     }
@@ -455,7 +456,7 @@ impl App {
                     }
                     _ => return,
                 }
-                self.save();
+                self.store_save();
                 true
             }
             _ => false,
@@ -574,7 +575,7 @@ impl App {
             };
             let best = mission.is_some_and(|m| self.save.record(m, &outcome));
             if best {
-                self.save();
+                self.store_save();
             }
             self.result = Some(Result { outcome, mission, best });
             self.session.game.release();

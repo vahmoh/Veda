@@ -11,13 +11,15 @@
 //! In play: arrows or WASD drive, Space is the handbrake, Shift the
 //! nitrous, Q the siren, H the horn, C changes the camera, R puts the car
 //! back on the road, Esc pauses; F3 shows statistics, F11 toggles full
-//! screen, F8 lets the computer drive (for demonstrations).
+//! screen, F8 lets the computer drive (for demonstrations). The voice
+//! agent can start, pause and change things too ([`agent`]).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod agent;
 mod app;
 mod hud;
 mod menu;
@@ -152,6 +154,10 @@ fn main() -> i32 {
     let mut show_ms = 0.0f32;
     let mut judged = start;
     let mut screen = app.screen;
+    // The voice agent's link, and whether the window has the keyboard (play
+    // pauses when it has not).
+    let mut link = agent::Link::start();
+    let mut focused = true;
     loop {
         let mut events = core::mem::take(&mut pending);
         events.extend(window.poll_events());
@@ -160,10 +166,20 @@ fn main() -> i32 {
                 WindowEvent::Key { code, pressed, repeat, .. } => app.key(code, pressed, repeat),
                 WindowEvent::PointerMove { x, y } => app.point(x, y),
                 WindowEvent::PointerButton { x, y, button: 0, pressed: true, .. } => app.click(x, y),
-                WindowEvent::Focus { focused: false } => app.unfocused(),
+                WindowEvent::Focus { focused: f } => {
+                    focused = f;
+                    if !f {
+                        app.unfocused();
+                    }
+                }
                 WindowEvent::CloseRequested {} => return 0,
                 _ => {}
             }
+        }
+        // The agent's requests come after the keyboard's, so what they see
+        // is what the keys left.
+        if let Some(l) = &mut link {
+            agent::serve(l, &mut app, focused);
         }
         if window.closed || app.quit {
             return 0;

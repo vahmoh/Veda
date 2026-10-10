@@ -1,0 +1,71 @@
+# Interceptor for the voice agent, with a simulated Voice Agent service. It
+# starts for the agent and describes itself; it starts a mission (and
+# refuses a second while one is on, and a mission not yet opened), pauses
+# and resumes it, changes the settings, starts a quick chase with the
+# choices given, and leaves for the menu; it says what it shows all along.
+fail-on "PANIC"
+fail-on "shader:"
+fail-on "link: "
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# It starts for the agent and describes itself.
+agent-call app_actions '{"app":"interceptor"}' 90
+agent-result start_mission
+agent-result change_settings
+wait-serial "interceptor offers 8 action(s)" 20
+wait-serial "interceptor: ready" 60
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"screen":"title"'
+# The first mission: briefed, counting down.
+agent-call use_app '{"app":"interceptor","action":"start_mission","arguments":{"mission":"first shift"}}' 30
+agent-result '"started":true'
+agent-result '"mission":"First Shift"'
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"screen":"playing"'
+agent-result '"mode":"mission 1: First Shift"'
+agent-result '"chase":{'
+# One mission at a time; the last one is not open yet.
+agent-call use_app '{"app":"interceptor","action":"start_mission","arguments":{"mission":"Joyride"}}' 30
+agent-result "A chase or patrol is in progress"
+key f8
+wait-serial "autopilot on" 10
+wait 6
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"suspect_distance_m":'
+shot target/veda/agent-interceptor-1-mission.png
+# Paused and resumed by the agent.
+agent-call use_app '{"app":"interceptor","action":"pause"}' 30
+agent-result '"paused":true'
+wait-serial "screen Paused" 10
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"screen":"paused"'
+wait 1
+shot target/veda/agent-interceptor-2-paused.png
+agent-call use_app '{"app":"interceptor","action":"resume"}' 30
+agent-result '"paused":false'
+# The settings: miles an hour, the music lower; nonsense refused.
+agent-call use_app '{"app":"interceptor","action":"change_settings","arguments":{"speed_units":"mph","music":30}}' 30
+agent-result '"changed":true'
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"speed_units":"mph","camera":"chase"'
+agent-result '"music":30'
+agent-call use_app '{"app":"interceptor","action":"change_settings","arguments":{"music":300}}' 30
+agent-result "A volume is 0 to 100"
+# Back to the menu, abandoning the mission.
+agent-call use_app '{"app":"interceptor","action":"quit_to_menu"}' 30
+agent-result '"abandoned":true'
+agent-call use_app '{"app":"interceptor","action":"start_mission","arguments":{"mission":"most wanted"}}' 30
+agent-result "Most Wanted is not open yet"
+agent-call use_app '{"app":"interceptor","action":"pause"}' 30
+agent-result "There is nothing to pause: Interceptor is on the main menu"
+# A quick chase as asked: a supercar at sunset.
+agent-call use_app '{"app":"interceptor","action":"quick_chase","arguments":{"suspect":"supercar","time_of_day":"sunset","backup":1}}' 30
+agent-result '"started":true'
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"mode":"quick chase","time_of_day":"sunset"'
+wait 5
+shot target/veda/agent-interceptor-3-quick.png
+agent-call use_app '{"app":"interceptor","action":"quit_to_menu"}' 30
+agent-result '"screen":"main_menu"'
