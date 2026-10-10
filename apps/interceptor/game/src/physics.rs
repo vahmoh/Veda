@@ -31,6 +31,23 @@ pub struct Impact {
     pub slide: f32,
 }
 
+/// Closing slower than this (m/s), the bumpers take it: no harm done
+/// (cars leaning on each other, pushing, touching).
+const HARMLESS: f32 = 2.0;
+
+impl Impact {
+    /// How hard it was, 0 (a touch) to 1 (a head-on at 90 km/h).
+    pub fn hit(&self) -> f32 {
+        ((self.speed - HARMLESS) / 23.0).clamp(0.0, 1.0)
+    }
+
+    /// The share of a car it wrecks (0..0.25).
+    pub fn harm(&self) -> f32 {
+        let h = self.hit();
+        h * h * 0.25
+    }
+}
+
 impl World {
     /// The ground at `p`, on the road near sample `hint`: the tarmac
     /// (banked), the kerb and the pavement downtown, the verges' gravel

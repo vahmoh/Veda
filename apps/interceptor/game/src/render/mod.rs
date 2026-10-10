@@ -220,8 +220,10 @@ pub struct Renderer {
     dash: f32,
     /// Post-processing, with a GPU.
     post: Option<post::Post>,
-    /// The sun's shadows, with a GPU, by day.
+    /// The sun's shadows, with a GPU, by day (made when first needed).
     shadow: Option<Shadow>,
+    /// What the programs are compiled with.
+    defines: &'static str,
     /// Statistics of the last frame.
     pub stats: Stats,
 }
@@ -261,6 +263,53 @@ struct Shadow {
     building: Program,
     prop: Program,
     car: Program,
+}
+
+impl Shadow {
+    /// The shadow map and the programs that draw into it.
+    fn new(gl: &mut Context, defines: &str) -> Result<Shadow, String> {
+        // The prelude's samplers at their units, as in every lit program
+        // (samplers of different kinds may not share one).
+        let depth = |gl: &mut Context, name: &str, vs: &str, uniforms: &[&'static str]| {
+            let (v, f) = (source(defines, true, vs), source(defines, true, shaders::DEPTH_FS));
+            Program::new(gl, name, &v, &f, uniforms, &gpu::LIT_SAMPLERS)
+        };
+        let statik = depth(gl, "shadow static", shaders::STATIC_VS, &[])?;
+        let building = depth(gl, "shadow buildings", shaders::BUILDING_VS, &[])?;
+        let prop = depth(gl, "shadow props", shaders::PROP_VS, &[])?;
+        let car = depth(gl, "shadow cars", shaders::CAR_VS, &[])?;
+        let size = 2048;
+        let tex = gl.gen_texture();
+        gl.bind_texture(gl::TEXTURE_2D, tex);
+        gl.tex_storage_2d(gl::TEXTURE_2D, 1, gl::DEPTH_COMPONENT24, size, size);
+        for (pname, v) in [
+            (gl::TEXTURE_MIN_FILTER, gl::LINEAR),
+            (gl::TEXTURE_MAG_FILTER, gl::LINEAR),
+            (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
+            (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
+            (gl::TEXTURE_COMPARE_MODE, gl::COMPARE_REF_TO_TEXTURE),
+            (gl::TEXTURE_COMPARE_FUNC, gl::LEQUAL),
+        ] {
+            gl.tex_parameteri(gl::TEXTURE_2D, pname, v as i32);
+        }
+        let fbo = gl.gen_framebuffer();
+        gl.bind_framebuffer(gl::FRAMEBUFFER, fbo);
+        gl.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::TEXTURE_2D, tex, 0);
+        gl.draw_buffers(&[gl::NONE]);
+        gl.read_buffer(gl::NONE);
+        let complete = gl.check_framebuffer_status(gl::FRAMEBUFFER) == gl::FRAMEBUFFER_COMPLETE;
+        gl.bind_framebuffer(gl::FRAMEBUFFER, 0);
+        if !complete {
+            return Err("the shadow map's framebuffer is incomplete".into());
+        }
+        Ok(Shadow { fbo, tex, size, statik, building, prop, car })
+    }
+}
+
+/// Whether the sun casts shadows in `env` at `quality` (with a GPU, by day
+/// and at sunset).
+fn casts_shadows(env: &Environment, quality: Quality) -> bool {
+    quality == Quality::High && env.shadows > 0.0 && env.time != crate::env::TimeOfDay::Night
 }
 
 /// Half the side of the square the shadow map covers (m).
@@ -430,47 +479,8 @@ impl Renderer {
         };
         let car_glows = instanced_quads(gl, &[]);
 
-        let env_map = gl.gen_texture();
         let post = if hdr { Some(post::Post::new(gl, fullscreen)?) } else { None };
-        let shadow = if quality == Quality::High && env.shadows > 0.0 && env.time != crate::env::TimeOfDay::Night {
-            // The prelude's samplers at their units, as in every lit
-            // program (samplers of different kinds may not share one).
-            let depth = |gl: &mut Context, name: &str, vs: &str, uniforms: &[&'static str]| {
-                let (v, f) = (source(defines, true, vs), source(defines, true, shaders::DEPTH_FS));
-                Program::new(gl, name, &v, &f, uniforms, &gpu::LIT_SAMPLERS)
-            };
-            let statik = depth(gl, "shadow static", shaders::STATIC_VS, &[])?;
-            let building = depth(gl, "shadow buildings", shaders::BUILDING_VS, &[])?;
-            let prop = depth(gl, "shadow props", shaders::PROP_VS, &[])?;
-            let car = depth(gl, "shadow cars", shaders::CAR_VS, &[])?;
-            let size = 2048;
-            let tex = gl.gen_texture();
-            gl.bind_texture(gl::TEXTURE_2D, tex);
-            gl.tex_storage_2d(gl::TEXTURE_2D, 1, gl::DEPTH_COMPONENT24, size, size);
-            for (pname, v) in [
-                (gl::TEXTURE_MIN_FILTER, gl::LINEAR),
-                (gl::TEXTURE_MAG_FILTER, gl::LINEAR),
-                (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
-                (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
-                (gl::TEXTURE_COMPARE_MODE, gl::COMPARE_REF_TO_TEXTURE),
-                (gl::TEXTURE_COMPARE_FUNC, gl::LEQUAL),
-            ] {
-                gl.tex_parameteri(gl::TEXTURE_2D, pname, v as i32);
-            }
-            let fbo = gl.gen_framebuffer();
-            gl.bind_framebuffer(gl::FRAMEBUFFER, fbo);
-            gl.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::TEXTURE_2D, tex, 0);
-            gl.draw_buffers(&[gl::NONE]);
-            gl.read_buffer(gl::NONE);
-            let complete = gl.check_framebuffer_status(gl::FRAMEBUFFER) == gl::FRAMEBUFFER_COMPLETE;
-            gl.bind_framebuffer(gl::FRAMEBUFFER, 0);
-            if !complete {
-                return Err("the shadow map's framebuffer is incomplete".into());
-            }
-            Some(Shadow { fbo, tex, size, statik, building, prop, car })
-        } else {
-            None
-        };
+        let shadow = if casts_shadows(&env, quality) { Some(Shadow::new(gl, defines)?) } else { None };
         let mut r = Renderer {
             quality,
             sizes,
@@ -490,7 +500,8 @@ impl Renderer {
             lamp_meshes,
             lamp_glows,
             car_glows,
-            env_map,
+            // Painted by `bake_sky`.
+            env_map: 0,
             asphalt,
             surfaces,
             ground_tex,
@@ -505,6 +516,7 @@ impl Renderer {
             dash: world.dash_period(),
             post,
             shadow,
+            defines,
             stats: Stats::default(),
         };
         r.bake_sky(gl, defines)?;
@@ -518,6 +530,21 @@ impl Renderer {
     /// The quality it draws at.
     pub fn quality(&self) -> Quality {
         self.quality
+    }
+
+    /// Lights the world by `env` from now on: the sky is painted again, and
+    /// the shadow map made if the sun casts shadows for the first time.
+    pub fn set_environment(&mut self, gl: &mut Context, env: Environment) -> Result<(), String> {
+        self.env = env;
+        if casts_shadows(&env, self.quality) && self.shadow.is_none() {
+            self.shadow = Some(Shadow::new(gl, self.defines)?);
+        }
+        self.bake_sky(gl, self.defines)
+    }
+
+    /// The light the frame is lit by.
+    pub fn environment(&self) -> &Environment {
+        &self.env
     }
 
     /// Paints the sky of the environment into the cube map.
@@ -543,6 +570,9 @@ impl Renderer {
             &[],
         )?;
         let size = self.sizes.sky;
+        // Storage once allocated is fixed: a new sky, a new texture.
+        gl.delete_textures(&[self.env_map]);
+        self.env_map = gl.gen_texture();
         gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
         // In half floats where the renderer draws into them, so that the
         // sun's reflection keeps its brightness.
@@ -627,7 +657,7 @@ impl Renderer {
         let weight = |l: &Light| (l.color.x + l.color.y + l.color.z) / (1.0 + l.pos.distance_squared(eye));
         chosen.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
         chosen.truncate(MAX_LIGHTS);
-        let texel = self.shadow.as_ref().map_or(0.0, |sh| 1.0 / sh.size as f32);
+        let texel = self.shadow.as_ref().filter(|_| sun.is_some()).map_or(0.0, |sh| 1.0 / sh.size as f32);
         f.extend_from_slice(&[chosen.len() as f32, e.reflections, texel, 0.0]);
         for l in &chosen {
             f.extend_from_slice(&[l.pos.x, l.pos.y, l.pos.z, l.radius]);
@@ -655,7 +685,7 @@ impl Renderer {
         // This frame's cars, by kind.
         self.upload_cars(gl, frame.cars, camera.eye);
         // The sun's shadow map first.
-        let sun = self.shadow.is_some().then(|| self.sun_view_proj(camera));
+        let sun = (self.shadow.is_some() && casts_shadows(&self.env, self.quality)).then(|| self.sun_view_proj(camera));
         if let Some(sun) = sun {
             self.upload_frame(gl, &sun, None, camera.eye, time, &[]);
             self.draw_shadow_map(gl, &sun);
@@ -681,7 +711,8 @@ impl Renderer {
         gl.active_texture(gl::TEXTURE0 + gpu::unit::LIGHT_MAP);
         gl.bind_texture(gl::TEXTURE_2D, self.light_map);
         gl.active_texture(gl::TEXTURE0 + gpu::unit::SHADOW);
-        gl.bind_texture(gl::TEXTURE_2D, self.shadow.as_ref().map_or(self.no_shadow, |sh| sh.tex));
+        let shadow_map = self.shadow.as_ref().filter(|_| sun.is_some()).map_or(self.no_shadow, |sh| sh.tex);
+        gl.bind_texture(gl::TEXTURE_2D, shadow_map);
         gl.active_texture(gl::TEXTURE0);
         gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
 

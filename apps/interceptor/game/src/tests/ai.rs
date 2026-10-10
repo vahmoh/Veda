@@ -128,3 +128,32 @@ fn the_police_catch_up() {
     assert!(closest < 25.0, "never closer than {closest} m");
     assert!(end < 160.0, "{end} m behind at the end");
 }
+
+#[test]
+fn a_chase_through_traffic_has_few_bad_crashes() {
+    // The computer drives the police car after a suspect through the
+    // traffic: the hard crashes (closing faster than 15 m/s) involving
+    // either of them, which wreck cars, stay rare.
+    let mut g = game();
+    g.start_traffic();
+    let i = suspect(&mut g, 60.0, 22.0);
+    g.cars[g.player].vehicle.set_speed(22.0);
+    g.set_autopilot(true, Some(i));
+    let p = g.player;
+    let mut hard = 0;
+    run(&mut g, 120.0, |g| {
+        for e in &g.events {
+            let Event::Crash { a, b, impact } = e;
+            let involved = [*a, b.unwrap_or(usize::MAX)].iter().any(|&c| c == p || c == i);
+            if involved && impact.speed > 15.0 {
+                hard += 1;
+            }
+        }
+    });
+    std::println!(
+        "{hard} hard crashes in 120 s, police damage {:.2}, suspect damage {:.2}",
+        g.cars[p].damage,
+        g.cars[i].damage
+    );
+    assert!(hard <= 2, "{hard} hard crashes");
+}

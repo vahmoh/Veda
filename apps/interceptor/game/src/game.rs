@@ -6,6 +6,7 @@
 //! drawn between the last two steps, interpolated, so that motion stays
 //! smooth at any frame rate.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -201,7 +202,8 @@ pub enum Event {
 
 /// The game.
 pub struct Game {
-    pub world: World,
+    /// Veda Bay (made once, shared by every game played in it).
+    pub world: Arc<World>,
     pub env: Environment,
     pub cars: Vec<Car>,
     pub player: usize,
@@ -234,7 +236,8 @@ pub struct Game {
 impl Game {
     /// A game in `world` lit by `env`, the player in a police car at the
     /// start of the road.
-    pub fn new(world: World, env: Environment) -> Game {
+    pub fn new(world: impl Into<Arc<World>>, env: Environment) -> Game {
+        let world = world.into();
         let mut player = Car::on_road(&world, Kind::Police, Spec::interceptor(), 20.0, 2.1, false, 0.0);
         player.paint = Vec3::new(0.02, 0.02, 0.02);
         player.role = Role::Player;
@@ -399,6 +402,8 @@ impl Game {
     /// One physics step.
     fn step(&mut self) {
         self.clock += STEP;
+        // This step's events follow the frame's earlier steps'.
+        let first = self.events.len();
         let p = self.player;
         let speed = self.cars[p].vehicle.speed();
         self.cars[p].controls = self.driver.update(self.keys, speed, STEP);
@@ -474,13 +479,12 @@ impl Game {
                 }
             }
         }
-        for e in &self.events {
+        for e in &self.events[first..] {
             let Event::Crash { a, b, impact } = *e;
-            let hit = (impact.speed / 25.0).min(1.0);
             for c in [Some(a), b].into_iter().flatten() {
-                self.cars[c].damage = (self.cars[c].damage + hit * hit * 0.25).min(1.0);
+                self.cars[c].damage = (self.cars[c].damage + impact.harm()).min(1.0);
                 if c == self.player {
-                    self.follow.jolt(hit);
+                    self.follow.jolt(impact.hit());
                 }
                 // Traffic stops, shaken, after a real knock.
                 if let Role::Traffic(t) = &mut self.cars[c].role
@@ -616,6 +620,22 @@ impl Game {
         self.cars[p].siren = !self.cars[p].siren;
     }
 
+    /// Puts the player's car on the road at `s`, in the right-hand lane,
+    /// at `speed`, the camera behind it.
+    pub fn place_player(&mut self, s: f32, speed: f32) {
+        let p = self.player;
+        let old = &self.cars[p];
+        let mut car = Car::on_road(&self.world, old.kind, old.vehicle.spec, s, 2.1, false, speed);
+        car.id = old.id;
+        car.paint = old.paint;
+        car.siren = old.siren;
+        car.role = old.role;
+        self.cars[p] = car;
+        let view = self.follow.view;
+        self.follow = Follow::new(&self.cars[p].vehicle);
+        self.follow.view = view;
+    }
+
     /// Puts the player's car back on the road where it is, in its lane,
     /// facing forward and standing still (after a spin or getting stuck).
     pub fn reset_player(&mut self) {
@@ -629,6 +649,8 @@ impl Game {
         car.siren = old.siren;
         car.damage = old.damage;
         self.cars[p] = car;
+        let view = self.follow.view;
         self.follow = Follow::new(&self.cars[p].vehicle);
+        self.follow.view = view;
     }
 }

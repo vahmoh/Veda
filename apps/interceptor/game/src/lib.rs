@@ -21,6 +21,8 @@
 //! | [`driver`], [`traffic`] | the computer's drivers, and the traffic round the player |
 //! | [`game`] | the running game |
 //! | [`pursuit`] | a chase: takedowns, busts, escapes |
+//! | [`career`] | the missions, their scores and stars, and what is saved |
+//! | [`session`] | a mission, a quick chase, a patrol or the menus' showcase, start to end |
 //! | [`scale`] | the resolution the scene is rendered at |
 //! | [`audio`] | the sounds: engines, sirens, tyres, crashes, the cues, the music |
 //! | [`sound`] | what the game sounds like, frame by frame |
@@ -33,6 +35,7 @@ extern crate std;
 
 pub mod audio;
 pub mod camera;
+pub mod career;
 pub mod carmodel;
 pub mod city;
 pub mod driver;
@@ -49,6 +52,7 @@ pub mod render;
 pub mod road;
 pub mod roadmesh;
 pub mod scale;
+pub mod session;
 pub mod sound;
 pub mod terrain;
 pub mod texgen;

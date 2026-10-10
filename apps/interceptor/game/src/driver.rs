@@ -56,10 +56,22 @@ impl Scene {
     /// within `range` metres whose lateral offset is within `half` of
     /// `lateral`: its index and the gap (bumper to bumper).
     pub fn ahead(&self, me: usize, lateral: f32, half: f32, range: f32) -> Option<(usize, f32)> {
+        self.ahead_but(me, lateral, half, range, None)
+    }
+
+    /// As [`Scene::ahead`], not counting car `but` (the car being chased).
+    pub fn ahead_but(
+        &self,
+        me: usize,
+        lateral: f32,
+        half: f32,
+        range: f32,
+        but: Option<usize>,
+    ) -> Option<(usize, f32)> {
         let m = &self.places[me];
         let mut best: Option<(usize, f32)> = None;
         for (j, o) in self.places.iter().enumerate() {
-            if j == me || (o.lateral - lateral).abs() > half {
+            if j == me || Some(j) == but || (o.lateral - lateral).abs() > half {
                 continue;
             }
             let d = self.gap(m.s, o.s) * m.dir - (m.length + o.length) * 0.5;
@@ -68,6 +80,65 @@ impl Scene {
             }
         }
         best
+    }
+}
+
+/// The line among `candidates` (lateral offsets, each with a price) with
+/// the most room ahead of car `me`, judged by the first car in it but
+/// `but`: one going the same way can be followed, one coming the other way
+/// must be far off; moving across costs, and a line must be clearly better
+/// than `current` to be worth leaving it.
+fn roomiest(me: usize, scene: &Scene, candidates: &[(f32, f32)], current: f32, but: Option<usize>) -> f32 {
+    let p = &scene.places[me];
+    let mut best = (current, f32::MIN);
+    for &(lat, price) in candidates {
+        let room = match scene.ahead_but(me, lat, 2.0, 220.0, but) {
+            Some((j, gap)) => {
+                let theirs = scene.places[j].along * p.dir;
+                if theirs > 1.0 {
+                    // Going its way: as good as the speed it can keep
+                    // behind it, and the room to it.
+                    110.0 + (theirs / (p.along * p.dir).max(10.0)).min(1.0) * 80.0 + gap.min(150.0) * 0.2
+                } else {
+                    // Coming at it (or standing): as good as the time
+                    // before they meet; within four seconds, no line at all.
+                    let t = gap / ((p.along * p.dir).max(0.0) - theirs).max(1.0);
+                    if t < 4.0 { t * 15.0 - 80.0 } else { t.min(10.0) * 22.0 }
+                }
+            }
+            None => 230.0,
+        };
+        let change = (lat - current).abs() * 2.0 + if (lat - current).abs() > 0.5 { 25.0 } else { 0.0 };
+        let score = room - price - change;
+        if score > best.1 {
+            best = (lat, score);
+        }
+    }
+    best.0
+}
+
+/// Whether a car but `but` is coming at `me` along `lateral` (or `me` is
+/// closing on one) to meet it within `secs` seconds: time to choose
+/// another line.
+fn meeting(me: usize, scene: &Scene, lateral: f32, secs: f32, but: Option<usize>) -> bool {
+    let p = &scene.places[me];
+    scene.ahead_but(me, lateral, 2.0, 140.0, but).is_some_and(|(j, gap)| {
+        let closing = (p.along - scene.places[j].along) * p.dir;
+        closing > 3.0 && gap < closing * secs
+    })
+}
+
+/// The fastest car `me` may go along `lateral` and still stop behind the
+/// first car in it but `but` (braking at `decel`, m/s²), `margin` metres
+/// short of it.
+fn safe_speed(me: usize, scene: &Scene, lateral: f32, decel: f32, margin: f32, but: Option<usize>) -> f32 {
+    let p = &scene.places[me];
+    match scene.ahead_but(me, lateral, 1.9, 160.0, but) {
+        Some((j, gap)) => {
+            let theirs = (scene.places[j].along * p.dir).max(0.0);
+            theirs + (2.0 * decel * (gap - margin).max(0.0)).sqrt()
+        }
+        None => f32::MAX,
     }
 }
 
@@ -120,6 +191,13 @@ impl Pilot {
         let to = Vec2::new(target.x - car.pos.x, target.z - car.pos.z);
         let alpha = to.dot(car.left()).atan2(to.dot(car.forward()));
         let wheel = (2.0 * car.spec.wheelbase * alpha.sin() / to.length().max(1.0)).atan();
+        // Never sharper than the tyres can follow at this speed (a mildly
+        // understeering car's angle for all they grip, whatever the driver
+        // plans on): asking more only slides it wide or spins it.
+        let v2 = (speed * speed).max(1.0);
+        let tyres = car.spec.grip * G;
+        let most = 1.05 * tyres * (car.spec.wheelbase / v2 + 0.02 / G);
+        let wheel = wheel.clamp(-most, most);
         let lock = car.spec.steer_max / (1.0 + speed.abs() * 0.055);
         let steer = (wheel / lock.max(0.05)).clamp(-1.0, 1.0);
 
@@ -365,7 +443,8 @@ impl Suspect {
         // A barrier down the middle here or soon: keep to this side.
         let divided = divided_soon(road, p.s, p.dir, 60.0 + p.along.abs() * 4.0);
         self.rethink -= dt;
-        if self.rethink <= 0.0 {
+        if self.rethink <= 0.0 || meeting(me, scene, self.choice, 1.6, None) || meeting(me, scene, p.lateral, 1.6, None)
+        {
             self.rethink = 0.25;
             self.choice = self.best_lateral(me, scene, paved, divided);
         }
@@ -389,7 +468,12 @@ impl Suspect {
         let want = want.clamp(lo, hi);
         // Flat out but for the pursuit's pace: the corners and the damage
         // hold it back.
-        let speed = 80.0 * pace * (1.0 - 0.45 * damage);
+        // Boxed in, it brakes rather than ploughing on (the bolder, the
+        // later).
+        let (decel, margin) = (9.0 + 3.0 * self.aggression, 6.0 - 3.0 * self.aggression);
+        let room =
+            safe_speed(me, scene, want, decel, margin, None).min(safe_speed(me, scene, p.lateral, decel, margin, None));
+        let speed = (80.0 * pace * (1.0 - 0.45 * damage)).min(room);
         // What the tyres give in a corner, less what the load's shift
         // takes, as the driver dares (and as the pace lets it).
         let grip = car.spec.grip * G * 0.8 * self.skill * pace;
@@ -400,8 +484,7 @@ impl Suspect {
     /// (and of the other where nothing divides them, with a price for the
     /// oncoming traffic), and the shoulders.
     fn best_lateral(&self, me: usize, scene: &Scene, paved: f32, divided: bool) -> f32 {
-        let p = &scene.places[me];
-        let side = p.dir;
+        let side = scene.places[me].dir;
         let mut candidates = Vec::with_capacity(6);
         for lane in 0..2 {
             candidates.push((Road::lane_center(lane, side), 0.0));
@@ -410,26 +493,7 @@ impl Suspect {
             }
         }
         candidates.push((side * (paved - 1.3), 10.0));
-        let mut best = (self.choice, f32::MIN);
-        for (lat, price) in candidates {
-            // Room ahead: the first car in that line, by the time to reach
-            // it (oncoming cars close fast).
-            let room = match scene.ahead(me, lat, 2.0, 220.0) {
-                Some((j, gap)) => {
-                    let closing = (p.along - scene.places[j].along) * p.dir;
-                    if closing > 0.5 { (gap / closing).min(8.0) * 25.0 } else { 200.0 + gap * 0.1 }
-                }
-                None => 220.0,
-            };
-            // Moving across costs, and a line must be clearly better to be
-            // worth leaving the one chosen.
-            let change = (lat - self.choice).abs() * 2.0 + if (lat - self.choice).abs() > 0.5 { 25.0 } else { 0.0 };
-            let score = room - price - change;
-            if score > best.1 {
-                best = (lat, score);
-            }
-        }
-        best.0
+        roomiest(me, scene, &candidates, self.choice, None)
     }
 }
 
@@ -440,11 +504,15 @@ pub struct Police {
     /// The car it chases.
     pub target: usize,
     pub skill: f32,
+    /// The line it has chosen through the traffic, and when it next
+    /// chooses.
+    choice: f32,
+    rethink: f32,
 }
 
 impl Police {
     pub fn new(lateral: f32, target: usize, skill: f32) -> Police {
-        Police { pilot: Pilot::new(lateral), target, skill }
+        Police { pilot: Pilot::new(lateral), target, skill, choice: lateral, rethink: 0.0 }
     }
 
     /// The controls for car `me` this step.
@@ -483,6 +551,32 @@ impl Police {
                 // Ahead of it: hold back.
                 speed = (t.along * p.dir - 4.0).max(5.0);
             }
+        }
+        // Through the traffic: its line while that is clear of all but the
+        // suspect, else the one with the most room (the siren clears the
+        // way, mostly); never faster than it can stop behind a car in it.
+        let target = Some(self.target);
+        self.rethink -= dt;
+        let danger = |lat: f32, secs: f32| meeting(me, scene, lat, secs, target);
+        if self.rethink <= 0.0 || danger(self.choice, 2.0) || danger(p.lateral, 2.0) {
+            self.rethink = 0.25;
+            let divided = divided_soon(road, p.s, p.dir, 60.0 + p.along.abs() * 4.0);
+            let mut candidates = Vec::with_capacity(6);
+            candidates.push((want, 0.0));
+            for lane in 0..2 {
+                candidates.push((Road::lane_center(lane, p.dir), 6.0));
+                if !divided {
+                    candidates.push((Road::lane_center(lane, -p.dir), 30.0 + lane as f32 * 10.0));
+                }
+            }
+            self.choice = roomiest(me, scene, &candidates, self.choice, target);
+        }
+        if !close || danger(want, 2.5) || danger(p.lateral, 2.5) {
+            want = self.choice;
+        }
+        // Moving across, it is on both lines.
+        for lat in [want, p.lateral] {
+            speed = speed.min(safe_speed(me, scene, lat, 10.0, 6.0, target));
         }
         let (lo, hi) = allowed(road, &p, paved);
         let want = want.clamp(lo, hi);

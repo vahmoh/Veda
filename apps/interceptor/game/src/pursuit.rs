@@ -1,8 +1,9 @@
 //! A pursuit: the player's police car after a suspect.
 //!
 //! The suspect is stopped one of two ways: **taken down**, its car wrecked
-//! by enough hard knocks (a suspect's car breaks after about six good
-//! rams; a ram into a wall at speed counts double), or **busted**, boxed
+//! by enough hard knocks from the police (a suspect's car breaks after
+//! about six good rams; a wall it is pushed into straight after counts
+//! double; its own mistakes count as for any car), or **busted**, boxed
 //! in and held to a standstill with the police alongside for a few
 //! seconds. It **escapes** if it gets far enough ahead and stays there,
 //! out of sight. A timer counts up; a mission may set a limit.
@@ -21,8 +22,11 @@ pub const ESCAPE_TIME: f32 = 8.0;
 pub const BUST_SPEED: f32 = 2.5;
 pub const BUST_RANGE: f32 = 11.0;
 pub const BUST_TIME: f32 = 3.0;
-/// How much harder a suspect's car takes knocks than other cars.
+/// How much harder a suspect's car takes knocks from the police than
+/// other cars do.
 pub const FRAGILITY: f32 = 3.2;
+/// A wall hit this soon after a ram (s) is the ram's doing.
+const PUSHED: f32 = 2.0;
 
 /// How a pursuit stands.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,6 +65,8 @@ pub struct Pursuit {
     /// The distance between them along the road (m, positive while the
     /// suspect is ahead).
     pub gap: f32,
+    /// Seconds since the police last hit it.
+    since_hit: f32,
 }
 
 impl Pursuit {
@@ -78,7 +84,14 @@ impl Pursuit {
         car.role = Role::Suspect(Suspect::new(lane, wanted.skill, wanted.aggression, p, seed));
         game.cars.push(car);
         let suspect = game.cars.len() - 1;
-        Pursuit { suspect, state: State::Chasing { escaping: 0.0, busting: 0.0 }, time: 0.0, hits: 0, gap: ahead }
+        Pursuit {
+            suspect,
+            state: State::Chasing { escaping: 0.0, busting: 0.0 },
+            time: 0.0,
+            hits: 0,
+            gap: ahead,
+            since_hit: f32::MAX,
+        }
     }
 
     /// Whether it is still on.
@@ -96,23 +109,32 @@ impl Pursuit {
     pub fn update(&mut self, game: &mut Game, dt: f32) {
         let State::Chasing { mut escaping, mut busting } = self.state else { return };
         self.time += dt;
+        self.since_hit += dt;
         let (p, i) = (game.player, self.suspect);
-        // The knocks it took: harder on a suspect's car, a ram by the police
-        // counted.
+        // The knocks it took: harder from the police (any police car), and
+        // from a wall it was pushed into; a ram by the player counted.
         for e in &game.events {
             let Event::Crash { a, b, impact } = *e;
-            let involved = a == i || b == Some(i);
-            if !involved {
-                continue;
-            }
-            let hit = (impact.speed / 25.0).min(1.0);
-            let by_police = b.is_some_and(|b| b == p || a == p);
-            let into_wall = b.is_none();
-            let k = if into_wall { 2.0 } else { 1.0 };
-            let extra = hit * hit * 0.25 * (FRAGILITY - 1.0) * k;
-            game.cars[i].damage = (game.cars[i].damage + extra).min(1.0);
-            if by_police && impact.speed > 3.0 {
-                self.hits += 1;
+            let other = match (a == i, b == Some(i)) {
+                (true, _) => b,
+                (_, true) => Some(a),
+                _ => continue,
+            };
+            let police = other.is_some_and(|o| o == p || matches!(game.cars[o].role, Role::Police(_)));
+            let pushed = other.is_none() && self.since_hit < PUSHED;
+            let k = if police {
+                1.0
+            } else if pushed {
+                2.0
+            } else {
+                0.0
+            };
+            game.cars[i].damage = (game.cars[i].damage + impact.harm() * (FRAGILITY - 1.0) * k).min(1.0);
+            if police && impact.speed > 3.0 {
+                self.since_hit = 0.0;
+                if other == Some(p) {
+                    self.hits += 1;
+                }
             }
         }
         let ps = game.cars[p].place(&game.world).0;

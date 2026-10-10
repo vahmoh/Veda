@@ -1,5 +1,6 @@
-//! The cameras that follow a car: from behind (near or far), from the
-//! bonnet and from the bumper, and an orbit for the menus and replays.
+//! The cameras: those that follow a car (from behind, near or far, from
+//! the bonnet and from the bumper), and the menus' [`Cinematic`] camera,
+//! filming a chase as television would.
 //!
 //! The chase cameras trail the car on springs: further back and wider as
 //! the speed rises, looking where the car is going while it slides,
@@ -134,23 +135,7 @@ impl Follow {
                 Camera { eye: self.pos, target: m.transform_point3(ahead), up: Vec3::Y, fov: self.fov * 1.05 }
             }
         };
-        // Kept inside the walls and above the ground.
-        let at = world.road.locate(cam.eye, Some(hint));
-        let (_, wall) = world.road.widths(at.s);
-        if at.lateral.abs() > wall - 0.4 {
-            let (_, _, r, _) = world.road.frame(at.s);
-            let over = at.lateral.abs() - (wall - 0.4);
-            cam.eye -= Vec3::new(r.x, 0.0, r.z).normalize_or(Vec3::X) * (over * at.lateral.signum());
-        }
-        let floor = at.height + 0.4;
-        if cam.eye.y < floor {
-            cam.eye.y = floor;
-        }
-        // In a tunnel, under its roof.
-        let sample = world.road.sample(at.index as isize);
-        if sample.section == crate::road::Section::Tunnel {
-            cam.eye.y = cam.eye.y.min(at.height + 5.8);
-        }
+        cam.eye = keep_in(world, cam.eye, hint);
         // Shake: a few incommensurate waves.
         if self.shake > 0.01 {
             let t = self.shake_time;
@@ -158,5 +143,139 @@ impl Follow {
             cam.eye += Vec3::new((t * 37.0).sin() * s, (t * 43.0).sin() * s * 0.7, (t * 29.0).cos() * s);
         }
         cam
+    }
+}
+
+/// Keeps `eye` inside the road's walls, above the ground and under a
+/// tunnel's roof (the road sample near it is `hint`).
+fn keep_in(world: &World, mut eye: Vec3, hint: usize) -> Vec3 {
+    let at = world.road.locate(eye, Some(hint));
+    let (_, wall) = world.road.widths(at.s);
+    if at.lateral.abs() > wall - 0.4 {
+        let (_, _, r, _) = world.road.frame(at.s);
+        let over = at.lateral.abs() - (wall - 0.4);
+        eye -= Vec3::new(r.x, 0.0, r.z).normalize_or(Vec3::X) * (over * at.lateral.signum());
+    }
+    eye.y = eye.y.max(at.height + 0.4);
+    if world.road.sample(at.index as isize).section == crate::road::Section::Tunnel {
+        eye.y = eye.y.min(at.height + 5.8);
+    }
+    eye
+}
+
+/// A shot of the cinematic camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shot {
+    /// From a helicopter, high and behind, circling slowly.
+    Helicopter,
+    /// From the roadside ahead, the cars rushing past.
+    Roadside,
+    /// Low behind the hero, wide.
+    Low,
+    /// Alongside the car chased.
+    Alongside,
+    /// Ahead of the car chased, looking back at both.
+    Ahead,
+}
+
+/// The menus' camera: a chase filmed as television would, a shot every
+/// few seconds, cut to the next.
+#[derive(Clone, Debug)]
+pub struct Cinematic {
+    shot: Shot,
+    /// Seconds into the shot, and how long it lasts.
+    t: f32,
+    length: f32,
+    /// Shots so far (which one comes next).
+    count: u32,
+    /// A roadside camera's place, and the road sample near it.
+    spot: Vec3,
+    spot_hint: usize,
+}
+
+impl Default for Cinematic {
+    fn default() -> Cinematic {
+        Cinematic::new()
+    }
+}
+
+impl Cinematic {
+    pub fn new() -> Cinematic {
+        Cinematic { shot: Shot::Helicopter, t: 0.0, length: 7.0, count: 0, spot: Vec3::ZERO, spot_hint: 0 }
+    }
+
+    /// Films `hero` (`hint`: the road sample it is near) chasing `chased`,
+    /// if anything, `dt` seconds on.
+    pub fn update(&mut self, world: &World, hero: &Vehicle, hint: usize, chased: Option<&Vehicle>, dt: f32) -> Camera {
+        self.t += dt;
+        let road = &world.road;
+        let at = road.locate(hero.pos, Some(hint));
+        let tunnel = road.at(at.s).section == crate::road::Section::Tunnel;
+        // A helicopter cannot follow into a tunnel; a roadside camera's
+        // shot ends once the cars have gone by.
+        let passed = self.shot == Shot::Roadside && {
+            let f = Vec3::new(hero.forward().x, 0.0, hero.forward().y);
+            (hero.pos - self.spot).dot(f) > 30.0
+        };
+        if self.t > self.length || passed || (tunnel && self.shot == Shot::Helicopter) {
+            self.next(world, hero, hint, chased.is_some(), tunnel);
+        }
+        let f2 = hero.forward();
+        let fwd = Vec3::new(f2.x, 0.0, f2.y);
+        let side = Vec3::new(f2.y, 0.0, -f2.x);
+        let lift = Vec3::Y;
+        let other = chased.unwrap_or(hero);
+        let (eye, target, fov) = match self.shot {
+            Shot::Helicopter => {
+                let a = self.t * 0.06 + self.count as f32;
+                let around = fwd * (-26.0 * a.cos()) + side * (18.0 * a.sin());
+                let mid = (hero.pos + other.pos) * 0.5;
+                (hero.pos + around + lift * 20.0, mid + lift, 0.75)
+            }
+            Shot::Roadside => (self.spot, hero.pos.lerp(other.pos, 0.3) + lift * 0.8, 0.62),
+            Shot::Low => (hero.pos - fwd * 5.2 + side * 1.1 + lift * 0.65, hero.pos + fwd * 25.0 + lift * 1.2, 1.15),
+            Shot::Alongside => {
+                let slide = (self.t / self.length - 0.5) * 6.0;
+                let o = Vec3::new(other.forward().x, 0.0, other.forward().y);
+                let s = Vec3::new(o.z, 0.0, -o.x);
+                (other.pos + s * 5.5 + o * slide + lift * 1.1, other.pos + lift * 0.7, 0.95)
+            }
+            Shot::Ahead => {
+                let o = Vec3::new(other.forward().x, 0.0, other.forward().y);
+                (other.pos + o * 13.0 + lift * 2.0, (hero.pos + other.pos) * 0.5 + lift * 0.8, 0.8)
+            }
+        };
+        let eye = if self.shot == Shot::Helicopter { eye } else { keep_in(world, eye, at.index) };
+        Camera { eye, target, up: Vec3::Y, fov }
+    }
+
+    /// Cuts to the next shot.
+    fn next(&mut self, world: &World, hero: &Vehicle, hint: usize, chasing: bool, tunnel: bool) {
+        const ORDER: [Shot; 6] = [Shot::Helicopter, Shot::Low, Shot::Roadside, Shot::Ahead, Shot::Alongside, Shot::Low];
+        self.count += 1;
+        let mut shot = ORDER[self.count as usize % ORDER.len()];
+        if !chasing && matches!(shot, Shot::Ahead | Shot::Alongside) {
+            shot = Shot::Low;
+        }
+        if tunnel && shot == Shot::Helicopter {
+            shot = Shot::Low;
+        }
+        self.shot = shot;
+        self.t = 0.0;
+        self.length = match shot {
+            Shot::Helicopter => 8.0,
+            Shot::Roadside => 9.0,
+            _ => 6.0,
+        };
+        if shot == Shot::Roadside {
+            // Ahead, at the road's edge, on alternate sides.
+            let at = world.road.locate(hero.pos, Some(hint));
+            let ahead = 40.0 + hero.vel.length() * 2.5;
+            let s = world.road.wrap(at.s + ahead);
+            let (_, wall) = world.road.widths(s);
+            let side = if self.count.is_multiple_of(2) { 1.0 } else { -1.0 };
+            self.spot = world.road.point(s, side * (wall - 1.0)) + Vec3::Y * 1.3;
+            self.spot_hint = world.road.locate(self.spot, None).index;
+        }
     }
 }
