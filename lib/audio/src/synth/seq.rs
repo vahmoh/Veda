@@ -98,6 +98,10 @@ pub struct Master {
     pub comp_ratio: f32,
     /// Loudness target (RMS of the louder parts, dBFS).
     pub target_rms_db: f32,
+    /// A fixed gain (dB) in place of the loudness target: for stems of one
+    /// mix, rendered apart and played together, which must keep the
+    /// balance between them.
+    pub gain_db: Option<f32>,
     /// Peak ceiling (dBFS).
     pub ceiling_db: f32,
 }
@@ -111,6 +115,7 @@ impl Default for Master {
             comp_threshold: -16.0,
             comp_ratio: 2.0,
             target_rms_db: -15.5,
+            gain_db: None,
             ceiling_db: -1.0,
         }
     }
@@ -385,10 +390,9 @@ pub fn render(song: &Song) -> (Vec<f32>, MixStats) {
     let rms_db = 20.0 * FloatExt::log10(rms.max(1e-9));
     let peak = dry.iter().fold(0.0f32, |p, v| p.max(v.abs()));
     let ceiling = FloatExt::powf(10.0f32, m.ceiling_db / 20.0);
-    let mut gain_db = m.target_rms_db - rms_db;
     // Gentle mastering: never ask the limiter for more than 3 dB.
     let peak_db = 20.0 * FloatExt::log10(peak.max(1e-9));
-    gain_db = gain_db.min(m.ceiling_db + 3.0 - peak_db);
+    let gain_db = m.gain_db.unwrap_or((m.target_rms_db - rms_db).min(m.ceiling_db + 3.0 - peak_db));
     let gain = FloatExt::powf(10.0f32, gain_db / 20.0);
     let mut lim = Limiter::new(m.ceiling_db, 3.0, 90.0, sr);
     let lat = lim.latency();

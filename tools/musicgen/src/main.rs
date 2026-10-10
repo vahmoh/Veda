@@ -7,11 +7,13 @@
 //! Writes `OUT_DIR/samples/Music/<Title>.qoa` for every track of the album
 //! (QOA at 44.1 kHz, with a `VTAG` trailer holding title, artist, album,
 //! genre, year, track number, duration, tempo and cover-art parameters),
-//! and the system's startup sound, `OUT_DIR/sounds/startup.wav`.
+//! the system's startup sound, `OUT_DIR/sounds/startup.wav`, and the music
+//! of the games, `OUT_DIR/games/<game>/`.
 //! `--wav` also writes 16-bit WAV previews to `OUT_DIR/preview/`, and
 //! `--only N` renders just track N. Rendering is deterministic.
 
 mod dsl;
+mod interceptor;
 mod patches;
 mod songs;
 
@@ -165,6 +167,11 @@ fn main() {
             songs::startup::RATE,
             file.len() as f64 / 1e6
         );
+    }
+    // The games' music.
+    if only.is_none() {
+        println!("Interceptor:");
+        total_bytes += interceptor::write_all(&out);
     }
     // Remove stale tracks from earlier runs.
     if only.is_none() {

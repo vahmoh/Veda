@@ -7,6 +7,7 @@
 //! smooth at any frame rate.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::prelude::*;
 
@@ -73,9 +74,15 @@ impl Pose {
     }
 }
 
+/// The next car's [`Car::id`].
+static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
 /// A car in the game.
 #[derive(Clone, Debug)]
 pub struct Car {
+    /// Which car this is, for as long as it is on the road (its sounds
+    /// follow it by this; its place in the game's list changes).
+    pub id: u32,
     pub kind: Kind,
     pub vehicle: Vehicle,
     pub paint: Vec3,
@@ -109,6 +116,7 @@ impl Car {
             _ => Livery::Plain,
         };
         Car {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             kind,
             prev: Pose::of(&vehicle),
             vehicle,
@@ -616,6 +624,7 @@ impl Game {
         let lane = if lateral < 0.0 { -2.1 } else { 2.1 };
         let old = &self.cars[p];
         let mut car = Car::on_road(&self.world, old.kind, old.vehicle.spec, s, lane, lateral < 0.0, 0.0);
+        car.id = old.id;
         car.paint = old.paint;
         car.siren = old.siren;
         car.damage = old.damage;

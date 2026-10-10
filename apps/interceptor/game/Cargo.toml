@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+vaudio = { workspace = true }
 vgl = { workspace = true }
 vmath = { workspace = true }
 

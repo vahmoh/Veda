@@ -825,6 +825,7 @@ dependencies = [
 name = "interceptor-game"
 version = "0.1.0"
 dependencies = [
+ "vaudio",
  "vgl",
  "vimage",
  "vmath",

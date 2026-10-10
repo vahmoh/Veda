@@ -18,18 +18,22 @@
 extern crate alloc;
 
 mod hud;
+mod speakers;
 
 use alloc::format;
 use alloc::string::String;
 
+use interceptor_game::audio::Cue;
 use interceptor_game::carmodel::Kind;
 use interceptor_game::env::{Environment, TimeOfDay, Weather};
 use interceptor_game::game::Game;
-use interceptor_game::pursuit::{Pursuit, Wanted};
+use interceptor_game::pursuit::{Pursuit, State, Wanted};
 use interceptor_game::render::{Frame, Quality, Renderer};
 use interceptor_game::scale::{SCALES, Scale};
+use interceptor_game::sound::Sound;
 use interceptor_game::vehicle::Spec;
 use interceptor_game::world::World;
+use speakers::{Speakers, Tune};
 use vabi::{WaitItem, signals};
 use vgl::backend::Present;
 use vgl::{Config, gl};
@@ -120,6 +124,7 @@ fn main() -> i32 {
             return 1;
         }
     };
+    let speakers = Speakers::start();
     let (mut text, fonts) = vui::load_fonts();
     let fonts = hud::Fonts { regular: fonts[0], bold: fonts[1], mono: fonts[2], mono_bold: fonts[3] };
 
@@ -172,6 +177,10 @@ fn main() -> i32 {
     let mut chase = new_chase(&mut game, 0);
     let mut chases = 1u32;
     let mut after = 0.0f32;
+    let mut sound = Sound::new();
+    if let Some(s) = &speakers {
+        s.cue(Cue::Radio);
+    }
     vrt::println!("ready");
 
     let mut show_stats = false;
@@ -234,6 +243,9 @@ fn main() -> i32 {
         if !chase.on() {
             if after == 0.0 {
                 vrt::println!("chase {}: {:?} after {:.0} s, {} hits", chases, chase.state, chase.time, chase.hits);
+                if let Some(s) = &speakers {
+                    s.cue(if chase.state == State::Escaped { Cue::Lose } else { Cue::Win });
+                }
             }
             after += dt;
             if after > 6.0 {
@@ -241,12 +253,22 @@ fn main() -> i32 {
                 game.remove_car(chase.suspect);
                 chase = new_chase(&mut game, chases);
                 chases += 1;
+                if let Some(s) = &speakers {
+                    s.cue(Cue::Radio);
+                }
                 if game.autopilot {
                     game.set_autopilot(true, Some(chase.suspect));
                 }
             }
         }
         let (cars, lights) = game.frame(dt);
+        if let Some(s) = &speakers {
+            let (scene, cues) = sound.update(&game, 1.0, dt);
+            s.play(scene, cues);
+            // The chase's music heats up as the suspect is caught up with.
+            let heat = if chase.on() { 1.0 - ((chase.gap - 50.0) / 150.0).clamp(0.0, 1.0) } else { 0.0 };
+            s.music(Some(Tune::Pursuit), heat);
+        }
 
         // Render at the internal resolution.
         let (iw, ih) = internal_size(window.width, window.height, scale.divisor());

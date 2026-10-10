@@ -22,6 +22,8 @@
 //! | [`game`] | the running game |
 //! | [`pursuit`] | a chase: takedowns, busts, escapes |
 //! | [`scale`] | the resolution the scene is rendered at |
+//! | [`audio`] | the sounds: engines, sirens, tyres, crashes, the cues, the music |
+//! | [`sound`] | what the game sounds like, frame by frame |
 
 #![no_std]
 
@@ -29,6 +31,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod audio;
 pub mod camera;
 pub mod carmodel;
 pub mod city;
@@ -46,6 +49,7 @@ pub mod render;
 pub mod road;
 pub mod roadmesh;
 pub mod scale;
+pub mod sound;
 pub mod terrain;
 pub mod texgen;
 pub mod traffic;

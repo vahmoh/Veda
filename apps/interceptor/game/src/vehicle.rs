@@ -313,6 +313,11 @@ impl Vehicle {
         Vec2::new(self.yaw.cos(), -self.yaw.sin())
     }
 
+    /// Changing gear (the engine's drive is cut for a moment).
+    pub fn shifting(&self) -> bool {
+        self.shift > 0.0
+    }
+
     /// Speed along the heading (m/s, negative backwards).
     pub fn speed(&self) -> f32 {
         self.vel.dot(self.forward())
