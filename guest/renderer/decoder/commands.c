@@ -1057,7 +1057,11 @@ bind_sampler_states(struct vr_context *ctx, const struct cmd *c)
    }
    for (unsigned i = 0; i < n; i++) {
       struct vr_object *o = vr_object(ctx, arg(c, VIRGL_BIND_SAMPLER_STATES_S0_HANDLE + i));
-      cso_single_sampler(ctx->cso, stage, start + i, o ? &o->u.sampler : NULL);
+      /* Gallium's state cache takes no empty sampler state: a slot bound
+       * to none keeps the one it had, as blend, depth and rasterizer
+       * states do (a program samples only the slots its client filled). */
+      if (o)
+         cso_single_sampler(ctx->cso, stage, start + i, &o->u.sampler);
    }
    cso_single_sampler_done(ctx->cso, stage);
    return true;

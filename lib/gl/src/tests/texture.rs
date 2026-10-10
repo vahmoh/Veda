@@ -274,6 +274,37 @@ fn samples_3d_and_array_textures() {
     assert_eq!(px(&img, 2, 1, 0), [20, 61, 0, 255]);
 }
 
+/// A program with a sampler between two others that only a function its
+/// shader never calls reads: it stays one of the program's samplers, but
+/// the compiled shader reads none from it, so the renderer gets no sampler
+/// state for that slot (and must not trip over that).
+#[test]
+fn samples_around_an_unread_sampler() {
+    let mut c = context(2, 1);
+    textured(
+        &mut c,
+        "#version 300 es
+        precision highp float; uniform sampler2D a; uniform sampler2D unread; uniform sampler2D b;
+        in vec2 uv; out vec4 color;
+        vec4 never() { return texture(unread, uv); }
+        void main() { color = vec4(texture(a, uv).r, texture(b, uv).g, 0, 1); }",
+    );
+    let p = c.get_integer(gl::CURRENT_PROGRAM) as u32;
+    let (la, lb) = (c.get_uniform_location(p, "a"), c.get_uniform_location(p, "b"));
+    c.uniform1i(la, 0);
+    c.uniform1i(lb, 2);
+    texture_rgba(&mut c, 1, 1, &[90, 0, 0, 255], gl::NEAREST);
+    c.active_texture(gl::TEXTURE2);
+    texture_rgba(&mut c, 1, 1, &[0, 140, 0, 255], gl::NEAREST);
+    c.active_texture(gl::TEXTURE0);
+    for _ in 0..2 {
+        c.draw_arrays(gl::TRIANGLES, 0, 6);
+        no_error(&mut c);
+        let img = read_rgba(&mut c, 2, 1);
+        assert_eq!(px(&img, 2, 0, 0), [90, 140, 0, 255]);
+    }
+}
+
 #[test]
 fn compares_depth_textures() {
     let mut c = context(4, 1);
