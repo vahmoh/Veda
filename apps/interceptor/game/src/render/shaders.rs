@@ -917,6 +917,33 @@ void main() {
         albedo = vec3(0.3);
         rough = 0.85;
         metal = 0.0;
+    } else if (part == 3) {
+        // Bark.
+        albedo = vec3(0.16, 0.11, 0.07);
+        rough = 0.9;
+        metal = 0.0;
+    } else if (part == 4) {
+        // Leaves, coloured by the tree.
+        albedo = v_color.rgb;
+        rough = 0.8;
+        metal = 0.0;
+    } else if (part == 5) {
+        // Painted steel.
+        albedo = v_color.rgb;
+        rough = 0.5;
+        metal = 0.0;
+    } else if (part == 6) {
+        // A beacon, blinking.
+        albedo = vec3(0.4, 0.05, 0.03);
+        rough = 0.3;
+        metal = 0.0;
+        emit = vec3(30.0, 1.0, 0.5) * step(0.5, fract(u_eye.w * 0.7));
+    } else if (part == 7) {
+        // Neon: its colour, bright at night, lit by day.
+        albedo = v_color.rgb * 0.6;
+        rough = 0.25;
+        metal = 0.0;
+        emit = v_color.rgb * (1.5 + 14.0 * u_weather.z);
     }
     Surface s = Surface(albedo, rough, metal, n, 1.0, 1.0);
     vec3 c = shade(s, v_pos, 1.0) + emit;
@@ -1143,5 +1170,45 @@ out vec4 o_color;
 void main() {
     float a = (1.0 - abs(v_x)) * v_alpha * 0.24;
     o_color = vec4(finish(v_color), a);
+}
+"#;
+
+/// The billboards' faces: their pictures (a layer of the signs' texture
+/// array per design), lit from within at night.
+pub const SIGN_VS: &str = r#"
+in vec3 a_pos;
+in vec3 a_normal;
+in vec2 a_uv;
+in vec4 a_inst0;
+in vec4 a_inst1;
+out vec3 v_pos;
+out vec3 v_normal;
+out vec2 v_uv;
+flat out float v_layer;
+void main() {
+    float c = cos(a_inst0.w);
+    float s = sin(a_inst0.w);
+    vec3 l = a_pos * a_inst1.w;
+    vec3 w = vec3(c * l.x + s * l.z, l.y, -s * l.x + c * l.z) + a_inst0.xyz;
+    v_pos = w;
+    v_normal = vec3(c * a_normal.x + s * a_normal.z, a_normal.y, -s * a_normal.x + c * a_normal.z);
+    v_uv = a_uv;
+    v_layer = a_inst1.x;
+    gl_Position = u_viewProj * vec4(w, 1.0);
+}
+"#;
+
+pub const SIGN_FS: &str = r#"
+uniform mediump sampler2DArray u_signs;
+in vec3 v_pos;
+in vec3 v_normal;
+in vec2 v_uv;
+flat in float v_layer;
+out vec4 o_color;
+void main() {
+    vec3 albedo = texture(u_signs, vec3(v_uv, v_layer)).rgb;
+    Surface s = Surface(albedo, 0.35, 0.0, normalize(v_normal), 1.0, 1.0);
+    vec3 c = shade(s, v_pos, 1.0) + albedo * (0.12 + 2.4 * u_weather.z);
+    o_color = vec4(finish(fog(c, v_pos)), 1.0);
 }
 "#;

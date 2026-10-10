@@ -8,12 +8,14 @@
 //! | [`terrain`] | the land and the sea around the road |
 //! | [`city`] | the buildings |
 //! | [`lamps`] | the street lights |
+//! | [`scenery`] | the trees, and the harbour bridge's towers and cables |
 //! | [`world`] | all of Veda Bay, made at start-up |
 //! | [`render`] | the pictures, with OpenGL ES 3.0 |
 //! | [`env`] | the time of day and the weather |
 //! | [`mesh`] | meshes and the shapes they are made of |
 //! | [`roadmesh`], [`groundmesh`] | the road's, the ground's and the sea's meshes |
 //! | [`texgen`] | textures painted at start-up |
+//! | [`font`] | a stroke font for the signs |
 //! | [`carmodel`] | the cars' shapes |
 //! | [`vehicle`], [`physics`] | how cars drive and crash |
 //! | [`camera`] | the cameras that follow a car |
@@ -42,6 +44,7 @@ pub mod city;
 pub mod driver;
 pub mod effects;
 pub mod env;
+pub mod font;
 pub mod game;
 pub mod groundmesh;
 pub mod input;
@@ -54,6 +57,7 @@ pub mod render;
 pub mod road;
 pub mod roadmesh;
 pub mod scale;
+pub mod scenery;
 pub mod session;
 pub mod sound;
 pub mod terrain;

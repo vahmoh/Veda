@@ -29,6 +29,7 @@ use crate::env::Environment;
 use crate::groundmesh;
 use crate::lamps::{self, Lamp};
 use crate::roadmesh;
+use crate::scenery;
 use crate::terrain::{HALF_X, HALF_Z};
 use crate::texgen;
 use crate::world::World;
@@ -205,6 +206,20 @@ pub struct Renderer {
     no_shadow: u32,
     /// Each kind of street light, with its instances.
     lamp_meshes: Vec<(Geometry, i32)>,
+    /// The trees (pines, broad trees): their meshes, an instance buffer
+    /// refilled with those in view, and how many are in it; and where they
+    /// all are.
+    tree_meshes: [(Geometry, u32, i32); 2],
+    trees: Vec<scenery::Tree>,
+    /// The harbour bridge's towers and cables (one instance).
+    bridge: Geometry,
+    /// The billboards' frames and the neon signs (all of them, instanced),
+    /// and the billboards' faces with their pictures.
+    boards: (Geometry, i32),
+    neons: (Geometry, i32),
+    faces: (Geometry, i32),
+    sign: Program,
+    signs: u32,
     /// The lamps' glows (an instanced quad).
     lamp_glows: (u32, i32),
     /// The cars' lights' glows, refilled every frame (the vertex array and
@@ -474,8 +489,71 @@ impl Renderer {
                 (g, of_kind.len() as i32)
             })
             .collect();
+        let tree_meshes = [scenery::TreeKind::Pine, scenery::TreeKind::Broad].map(|k| {
+            let g = Geometry::new(gl, &scenery::tree_mesh(k));
+            gl.bind_vertex_array(g.vao);
+            let ib = gl.gen_buffer();
+            gl.bind_buffer(gl::ARRAY_BUFFER, ib);
+            gl.buffer_data_size(gl::ARRAY_BUFFER, 8 * 4, gl::STREAM_DRAW);
+            gpu::set_instance_layout(gl, 8, 0);
+            gl.bind_vertex_array(0);
+            (g, ib, 0)
+        });
+        let (bridge_mesh, beacons, bridge_lights) = scenery::bridge(&world.road);
+        let bridge = {
+            let g = Geometry::new(gl, &bridge_mesh);
+            gl.bind_vertex_array(g.vao);
+            let ib = gl.gen_buffer();
+            gl.bind_buffer(gl::ARRAY_BUFFER, ib);
+            // Where it is (the mesh is in the world's coordinates) and its
+            // paint.
+            gl.buffer_data(
+                gl::ARRAY_BUFFER,
+                &float_bytes(&[0.0, 0.0, 0.0, 0.0, 0.62, 0.17, 0.07, 1.0]),
+                gl::STATIC_DRAW,
+            );
+            gpu::set_instance_layout(gl, 8, 0);
+            gl.bind_vertex_array(0);
+            g
+        };
+        // The billboards and the neon signs: a static instance each.
+        let instanced = |gl: &mut Context, mesh: &crate::mesh::Mesh, data: &[f32]| {
+            let g = Geometry::new(gl, mesh);
+            gl.bind_vertex_array(g.vao);
+            let ib = gl.gen_buffer();
+            gl.bind_buffer(gl::ARRAY_BUFFER, ib);
+            gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(data), gl::STATIC_DRAW);
+            gpu::set_instance_layout(gl, 8, 0);
+            gl.bind_vertex_array(0);
+            (g, (data.len() / 8) as i32)
+        };
+        let board_data: Vec<f32> = world
+            .billboards
+            .iter()
+            .flat_map(|b| [b.base.x, b.base.y, b.base.z, b.yaw, f32::from(b.design), 0.0, 0.0, 1.0])
+            .collect();
+        let boards = instanced(gl, &scenery::board_frame_mesh(), &board_data);
+        let faces = instanced(gl, &scenery::board_face_mesh(), &board_data);
+        let neon_data: Vec<f32> = world
+            .neons
+            .iter()
+            .flat_map(|n| [n.base.x, n.base.y, n.base.z, n.yaw, n.color.x, n.color.y, n.color.z, 1.0])
+            .collect();
+        let neons = instanced(gl, &scenery::neon_mesh(), &neon_data);
+        let sign = lit(gl, "signs", shaders::SIGN_VS, shaders::SIGN_FS, &[], Some("u_signs"))?;
+        let signs = {
+            let imgs = texgen::billboards(if quality == Quality::High { 512 } else { 256 });
+            array(gl, &imgs)
+        };
         let lamp_glows = {
             let mut data = Vec::new();
+            // The bridge's: red beacons on its towers, white along its cables.
+            for b in &beacons {
+                data.extend_from_slice(&[b.x, b.y, b.z, 1.6, 1.6, 0.04, 0.02, 0.0]);
+            }
+            for l in &bridge_lights {
+                data.extend_from_slice(&[l.x, l.y, l.z, 0.9, 0.55, 0.5, 0.42, 0.0]);
+            }
             for l in &world.lamps {
                 let heads = if l.kind == lamps::Kind::Double { &l.heads[..] } else { &l.heads[..1] };
                 for h in heads {
@@ -508,6 +586,14 @@ impl Renderer {
             light_map,
             no_shadow,
             lamp_meshes,
+            tree_meshes,
+            trees: world.trees.clone(),
+            bridge,
+            boards,
+            neons,
+            faces,
+            sign,
+            signs,
             lamp_glows,
             car_glows,
             // Painted by `bake_sky`.
@@ -693,8 +779,9 @@ impl Renderer {
         let proj = Mat4::perspective_rh(camera.fov, aspect, NEAR, FAR);
         let view_proj = proj * camera.view();
         let planes = frustum(&view_proj);
-        // This frame's cars, by kind.
+        // This frame's cars, by kind, and the trees in view.
         self.upload_cars(gl, frame.cars, camera.eye);
+        self.upload_trees(gl, &planes, camera.eye);
         // The sun's shadow map first.
         let sun = (self.shadow.is_some() && casts_shadows(&self.env, self.quality)).then(|| self.sun_view_proj(camera));
         if let Some(sun) = sun {
@@ -757,11 +844,22 @@ impl Renderer {
         self.stats.draws += 1;
         self.stats.triangles += (self.blocks.0.count / 3 * self.blocks.1) as u32;
 
-        // The street lights.
+        // The street lights, the trees, the bridge.
         gl.use_program(self.prop.id);
         for k in 0..self.lamp_meshes.len() {
             let (g, n) = (&self.lamp_meshes[k].0, self.lamp_meshes[k].1);
             g.draw_instanced(gl, n);
+            self.stats.draws += 1;
+        }
+        let (draws, triangles) = self.draw_props(gl);
+        self.stats.draws += draws;
+        self.stats.triangles += triangles;
+        // The billboards' pictures.
+        if self.faces.1 > 0 {
+            gl.use_program(self.sign.id);
+            gl.active_texture(gl::TEXTURE0 + gpu::unit::OWN);
+            gl.bind_texture(gl::TEXTURE_2D_ARRAY, self.signs);
+            self.faces.0.draw_instanced(gl, self.faces.1);
             self.stats.draws += 1;
         }
 
@@ -890,6 +988,7 @@ impl Renderer {
             g.draw_instanced(gl, *n);
         }
         let car_program = sh.car.id;
+        draws += self.draw_props(gl).0;
         draws += self.draw_cars(gl, &car_program, false);
         gl.disable(gl::POLYGON_OFFSET_FILL);
         gl.enable(gl::CULL_FACE);
@@ -971,6 +1070,52 @@ impl Renderer {
         }
         self.stats.draws += draws;
         draws
+    }
+
+    /// Fills the trees' instance buffers with those in view and near
+    /// enough to be seen.
+    fn upload_trees(&mut self, gl: &mut Context, planes: &[Vec4; 6], eye: Vec3) {
+        let far = if self.quality == Quality::High { 900.0 } else { 320.0 };
+        let mut data = [Vec::new(), Vec::new()];
+        for t in &self.trees {
+            let top = t.base + Vec3::Y * (5.0 * t.scale);
+            if top.distance_squared(eye) > far * far || outside(planes, top, 7.0 * t.scale) {
+                continue;
+            }
+            let k = usize::from(t.kind == scenery::TreeKind::Broad);
+            data[k].extend_from_slice(&[t.base.x, t.base.y, t.base.z, t.yaw, t.tint.x, t.tint.y, t.tint.z, t.scale]);
+        }
+        for (k, d) in data.iter().enumerate() {
+            let (_, buf, n) = &mut self.tree_meshes[k];
+            *n = (d.len() / 8) as i32;
+            if *n > 0 {
+                gl.bind_buffer(gl::ARRAY_BUFFER, *buf);
+                gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(d), gl::STREAM_DRAW);
+            }
+        }
+        gl.bind_buffer(gl::ARRAY_BUFFER, 0);
+    }
+
+    /// Draws the trees and the bridge with the program bound (lit, or into
+    /// the shadow map); returns the draws and the triangles.
+    fn draw_props(&self, gl: &mut Context) -> (u32, u32) {
+        let (mut draws, mut triangles) = (1, (self.bridge.count / 3) as u32);
+        for (g, _, n) in &self.tree_meshes {
+            if *n > 0 {
+                g.draw_instanced(gl, *n);
+                triangles += (g.count / 3 * *n) as u32;
+                draws += 1;
+            }
+        }
+        self.bridge.draw_instanced(gl, 1);
+        for (g, n) in [&self.boards, &self.neons] {
+            if *n > 0 {
+                g.draw_instanced(gl, *n);
+                triangles += (g.count / 3 * *n) as u32;
+                draws += 1;
+            }
+        }
+        (draws, triangles)
     }
 
     fn count(&mut self, indices: i32) {

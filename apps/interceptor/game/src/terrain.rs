@@ -171,6 +171,13 @@ impl Terrain {
         self.nearest[j.min(self.h - 1) * self.w + i.min(self.w - 1)] as usize
     }
 
+    /// The road sample nearest `(x, z)` (as near as its cell's corner's).
+    pub fn nearest_sample(&self, x: f32, z: f32) -> usize {
+        let i = ((x + HALF_X) / CELL).round().max(0.0) as usize;
+        let j = ((z + HALF_Z) / CELL).round().max(0.0) as usize;
+        self.nearest(i, j)
+    }
+
     /// The height at `(x, z)`, interpolated as the mesh's triangles are.
     pub fn height(&self, x: f32, z: f32) -> f32 {
         let fx = ((x + HALF_X) / CELL).clamp(0.0, (self.w - 1) as f32 - 1e-3);

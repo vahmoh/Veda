@@ -7,6 +7,7 @@ use crate::city::{self, Block};
 use crate::lamps::{self, Lamp};
 use crate::layout::VEDA_BAY;
 use crate::road::Road;
+use crate::scenery::{self, Billboard, Neon, Tree};
 use crate::terrain::Terrain;
 
 /// The seed of everything random in the world.
@@ -20,6 +21,11 @@ pub struct World {
     pub blocks: Vec<Block>,
     /// The street lights.
     pub lamps: Vec<Lamp>,
+    /// The trees on the hills and along the coast.
+    pub trees: Vec<Tree>,
+    /// The billboards along the open road, and the neon signs on roofs.
+    pub billboards: Vec<Billboard>,
+    pub neons: Vec<Neon>,
 }
 
 impl World {
@@ -29,7 +35,10 @@ impl World {
         let terrain = Terrain::new(&road, SEED);
         let blocks = city::buildings(&road, &terrain, SEED);
         let lamps = lamps::place(&road);
-        World { road, terrain, blocks, lamps }
+        let billboards = scenery::billboards(&road, &terrain);
+        let neons = scenery::neons(&road, &blocks);
+        let trees = scenery::trees(&road, &terrain, &blocks, &billboards, SEED);
+        World { road, terrain, blocks, lamps, trees, billboards, neons }
     }
 
     /// The period of the lane markings' dashes (m): 12 m, adjusted so that

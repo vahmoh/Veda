@@ -401,3 +401,44 @@ fn effects_scene() {
     std::println!("{sparks_seen} spark-frames");
     save(&format!("{dir}/effects.png"), &sheet, w * cols, h * rows);
 }
+
+/// `INTERCEPTOR_SIGNS=dir`: the neon signs and the billboards, framed from
+/// the road at night and by day, on one contact sheet.
+#[test]
+fn signs_scene() {
+    let Ok(dir) = std::env::var("INTERCEPTOR_SIGNS") else { return };
+    let (w, h) = (480u32, 270u32);
+    let world = World::new();
+    let (mut c, quality) = match renderer(w, h) {
+        Some(c) => (c, Quality::High),
+        None => (software(w, h), Quality::Low),
+    };
+    // From the road in front of each, looking at it.
+    let mut views = Vec::new();
+    for n in world.neons.iter().take(3) {
+        let at = world.road.locate(n.base, None);
+        let face = Vec3::new(n.yaw.sin(), 0.0, n.yaw.cos());
+        let eye = world.road.point(at.s, 0.0) + face * 30.0 + Vec3::Y * 4.0;
+        views.push(Camera { eye, target: n.base + Vec3::Y * 4.0, up: Vec3::Y, fov: 0.9 });
+    }
+    for b in world.billboards.iter().take(3) {
+        let face = Vec3::new(b.yaw.sin(), 0.0, b.yaw.cos());
+        let eye = b.base + face * 26.0 + Vec3::Y * 3.0;
+        views.push(Camera { eye, target: b.base + Vec3::Y * 7.0, up: Vec3::Y, fov: 0.8 });
+    }
+    let (cols, rows) = (views.len() as u32, 2u32);
+    let mut sheet = vec![0u32; (w * cols * h * rows) as usize];
+    for (row, time) in [TimeOfDay::Night, TimeOfDay::Day].into_iter().enumerate() {
+        let mut r = Renderer::new(&mut c, &world, Environment::new(time, Weather::Clear), quality)
+            .unwrap_or_else(|e| panic!("{e}"));
+        for (k, cam) in views.iter().enumerate() {
+            let px = frame(&mut c, &mut r, cam, w, h);
+            let (x0, y0) = (k as u32 * w, row as u32 * h);
+            for y in 0..h {
+                let at = ((y0 + y) * w * cols + x0) as usize;
+                sheet[at..at + w as usize].copy_from_slice(&px[(y * w) as usize..((y + 1) * w) as usize]);
+            }
+        }
+    }
+    save(&format!("{dir}/signs.png"), &sheet, w * cols, h * rows);
+}

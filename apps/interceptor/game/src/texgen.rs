@@ -303,9 +303,170 @@ pub fn ripples(size: usize) -> Image {
     })
 }
 
+/// A picture being painted in linear light (rows from the top).
+struct Paint {
+    w: usize,
+    h: usize,
+    px: Vec<Vec3>,
+}
+
+impl Paint {
+    fn new(w: usize, h: usize) -> Paint {
+        Paint { w, h, px: vec![Vec3::ZERO; w * h] }
+    }
+
+    /// A gradient from `left` to `right`, darker towards the bottom by
+    /// `fall`.
+    fn gradient(&mut self, left: Vec3, right: Vec3, fall: f32) {
+        for y in 0..self.h {
+            let v = 1.0 - fall * y as f32 / self.h as f32;
+            for x in 0..self.w {
+                self.px[y * self.w + x] = left.lerp(right, x as f32 / self.w as f32) * v;
+            }
+        }
+    }
+
+    /// A rectangle of `c` (pixels; may run off the picture).
+    fn rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, c: Vec3) {
+        let (xa, xb) = ((x0.max(0.0)) as usize, (x1.min(self.w as f32)) as usize);
+        let (ya, yb) = ((y0.max(0.0)) as usize, (y1.min(self.h as f32)) as usize);
+        for y in ya..yb {
+            for x in xa..xb {
+                self.px[y * self.w + x] = c;
+            }
+        }
+    }
+
+    /// Strokes `width` pixels wide along `segments` (pixels), in `c`,
+    /// anti-aliased; overlapping strokes do not darken or brighten.
+    fn strokes(&mut self, segments: &[(Vec2, Vec2)], width: f32, c: Vec3) {
+        let r = width * 0.5;
+        let mut cover = vec![0.0f32; self.w * self.h];
+        for &(a, b) in segments {
+            let lo = a.min(b) - Vec2::splat(r + 1.0);
+            let hi = a.max(b) + Vec2::splat(r + 1.0);
+            let (x0, x1) = (lo.x.max(0.0) as usize, (hi.x.max(0.0) as usize).min(self.w));
+            let (y0, y1) = (lo.y.max(0.0) as usize, (hi.y.max(0.0) as usize).min(self.h));
+            let ab = b - a;
+            let len2 = ab.dot(ab).max(1e-6);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+                    let d = (p - (a + ab * t)).length();
+                    let k = (r + 0.5 - d).clamp(0.0, 1.0);
+                    let o = y * self.w + x;
+                    cover[o] = cover[o].max(k);
+                }
+            }
+        }
+        for (p, k) in self.px.iter_mut().zip(&cover) {
+            if *k > 0.0 {
+                *p = p.lerp(c, *k);
+            }
+        }
+    }
+
+    /// `text` `size` pixels to a capital, its baseline at `y`, starting at
+    /// `x` (or centred on it), in strokes `weight` of the size.
+    fn text(&mut self, text: &str, x: f32, y: f32, size: f32, weight: f32, centred: bool, c: Vec3) {
+        let k = size / crate::font::CAP;
+        let left = if centred { x - crate::font::width(text) * k * 0.5 } else { x };
+        let segments: Vec<(Vec2, Vec2)> = crate::font::layout(text, size)
+            .into_iter()
+            .map(|(a, b)| (Vec2::new(left + a.x, y - a.y), Vec2::new(left + b.x, y - b.y)))
+            .collect();
+        self.strokes(&segments, size * weight, c);
+    }
+
+    fn image(&self) -> Image {
+        Image::from_fn(self.w, self.h, |x, y| rgb(self.px[y * self.w + x], 1.0))
+    }
+}
+
+/// The billboards' pictures (`w` by `w / 2`): Veda's, the police's, the
+/// game's, and Veda's again by day.
+pub fn billboards(w: usize) -> Vec<Image> {
+    let h = w / 2;
+    let (fw, fh) = (w as f32, h as f32);
+    let mut out = Vec::new();
+    // "VEDA: the OS that flies".
+    let mut p = Paint::new(w, h);
+    p.gradient(Vec3::new(0.01, 0.02, 0.12), Vec3::new(0.12, 0.02, 0.2), 0.4);
+    let swoosh: Vec<(Vec2, Vec2)> = (0..24)
+        .map(|i| {
+            let t = |i: f32| {
+                let u = i / 24.0;
+                Vec2::new(fw * (0.04 + 0.92 * u), fh * (0.95 - 0.07 * u * u))
+            };
+            (t(i as f32), t(i as f32 + 1.0))
+        })
+        .collect();
+    p.strokes(&swoosh, fh * 0.03, Vec3::new(0.05, 0.6, 0.95));
+    p.text("VEDA", fw * 0.5, fh * 0.56, fh * 0.4, 0.2, true, Vec3::ONE);
+    p.text("THE OS THAT FLIES", fw * 0.5, fh * 0.82, fh * 0.1, 0.16, true, Vec3::new(0.25, 0.85, 1.0));
+    out.push(p.image());
+    // The police: drive safe.
+    let mut p = Paint::new(w, h);
+    p.gradient(Vec3::new(0.01, 0.015, 0.05), Vec3::new(0.02, 0.03, 0.08), 0.2);
+    p.rect(0.0, fh * 0.8, fw * 0.5, fh, Vec3::new(0.7, 0.02, 0.02));
+    p.rect(fw * 0.5, fh * 0.8, fw, fh, Vec3::new(0.02, 0.1, 0.75));
+    p.text("DRIVE SAFE", fw * 0.5, fh * 0.48, fh * 0.2, 0.18, true, Vec3::ONE);
+    p.text("VEDA BAY POLICE", fw * 0.5, fh * 0.68, fh * 0.1, 0.16, true, Vec3::new(1.0, 0.75, 0.1));
+    out.push(p.image());
+    // The game.
+    let mut p = Paint::new(w, h);
+    p.gradient(Vec3::new(0.02, 0.02, 0.025), Vec3::new(0.05, 0.05, 0.06), 0.3);
+    p.rect(fw * 0.1, fh * 0.2, fw * 0.48, fh * 0.24, Vec3::new(0.9, 0.03, 0.03));
+    p.rect(fw * 0.52, fh * 0.2, fw * 0.9, fh * 0.24, Vec3::new(0.05, 0.25, 1.0));
+    p.text("INTERCEPTOR", fw * 0.5, fh * 0.56, fh * 0.2, 0.2, true, Vec3::new(1.0, 0.72, 0.15));
+    p.text("NOW ON VEDA", fw * 0.5, fh * 0.8, fh * 0.11, 0.16, true, Vec3::ONE);
+    out.push(p.image());
+    // Veda by day: dark on light.
+    let mut p = Paint::new(w, h);
+    p.gradient(Vec3::new(0.85, 0.88, 0.93), Vec3::new(0.62, 0.72, 0.9), 0.15);
+    p.rect(0.0, 0.0, fw * 0.035, fh, Vec3::new(0.05, 0.3, 0.9));
+    p.text("VEDA OS", fw * 0.08, fh * 0.5, fh * 0.26, 0.2, false, Vec3::new(0.02, 0.04, 0.12));
+    p.text(
+        "FAST \u{b7} SECURE \u{b7} BEAUTIFUL",
+        fw * 0.08,
+        fh * 0.74,
+        fh * 0.068,
+        0.17,
+        false,
+        Vec3::new(0.05, 0.25, 0.75),
+    );
+    out.push(p.image());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billboards_are_painted() {
+        let boards = billboards(256);
+        assert_eq!(boards.len(), 4);
+        for (k, b) in boards.iter().enumerate() {
+            assert_eq!((b.w, b.h, b.data.len()), (256, 128, 256 * 128 * 4));
+            // Lettering: many levels of brightness, not a flat colour.
+            let mut seen = [false; 16];
+            for px in b.data.chunks(4) {
+                seen[(px[0] as usize + px[1] as usize + px[2] as usize) / 48] = true;
+            }
+            assert!(seen.iter().filter(|&&s| s).count() >= 4, "billboard {k} is flat");
+            if let Ok(dir) = std::env::var("INTERCEPTOR_SIGNS") {
+                let px: Vec<u32> = b
+                    .data
+                    .chunks(4)
+                    .map(|c| 0xFF00_0000 | (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
+                    .collect();
+                let image = vimage::Image { width: b.w as u32, height: b.h as u32, pixels: px };
+                std::fs::write(alloc::format!("{dir}/board-{k}.png"), vimage::png::encode(&image, 6).unwrap()).unwrap();
+            }
+        }
+    }
 
     #[test]
     fn noise_tiles() {

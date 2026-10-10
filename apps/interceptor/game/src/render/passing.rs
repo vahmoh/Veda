@@ -101,18 +101,7 @@ impl PassingGpu {
         let mut rng = vmath::Rng::new(0x4A1D);
         let data: Vec<f32> = (0..drops * 4).map(|_| rng.next_f32()).collect();
         let (rain_vao, _) = quads(gl, 4, &data);
-        Ok(PassingGpu {
-            skid,
-            particle,
-            rain,
-            skid_vao,
-            skid_vbo,
-            skids_copied: 0,
-            smoke,
-            sparks,
-            rain_vao,
-            drops,
-        })
+        Ok(PassingGpu { skid, particle, rain, skid_vao, skid_vbo, skids_copied: 0, smoke, sparks, rain_vao, drops })
     }
 
     /// Copies the skid marks made since the last frame.
