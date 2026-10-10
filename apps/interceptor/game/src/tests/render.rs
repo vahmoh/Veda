@@ -277,3 +277,41 @@ fn chase_scene() {
         save(&format!("{dir}/chase-{tname}.png"), &px, w, h);
     }
 }
+
+/// `INTERCEPTOR_FILM=dir`: the menus' showcase as the cinematic camera
+/// films it, a frame every two seconds for forty, on one contact sheet.
+#[test]
+fn showcase_film() {
+    use crate::session::{Mode, Session};
+    let Ok(dir) = std::env::var("INTERCEPTOR_FILM") else { return };
+    let (w, h) = (384u32, 216u32);
+    let (cols, rows) = (5u32, 4u32);
+    let (mut c, quality) = match renderer(w, h) {
+        Some(c) => (c, Quality::High),
+        None => (software(w, h), Quality::Low),
+    };
+    let world = alloc::sync::Arc::new(World::new());
+    let mut session = Session::new(world.clone(), Mode::Showcase);
+    let mut r = Renderer::new(&mut c, &world, session.env(), quality).unwrap_or_else(|e| panic!("{e}"));
+    let mut sheet = vec![0u32; (w * cols * h * rows) as usize];
+    let dt = 1.0 / 30.0;
+    let mut shot = 0;
+    for k in 0..(40.0 / dt) as usize {
+        session.update(dt);
+        let (cars, lights) = session.frame(dt);
+        if k % 60 == 59 && shot < cols * rows {
+            let game = &session.game;
+            let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock };
+            r.render(&mut c, &frame, w as i32, h as i32);
+            let mut px = vec![0u32; (w * h) as usize];
+            c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+            let (x0, y0) = ((shot % cols) * w, (shot / cols) * h);
+            for y in 0..h {
+                let row = ((y0 + y) * w * cols + x0) as usize;
+                sheet[row..row + w as usize].copy_from_slice(&px[(y * w) as usize..((y + 1) * w) as usize]);
+            }
+            shot += 1;
+        }
+    }
+    save(&format!("{dir}/film.png"), &sheet, w * cols, h * rows);
+}

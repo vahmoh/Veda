@@ -217,7 +217,10 @@ impl Cinematic {
             let f = Vec3::new(hero.forward().x, 0.0, hero.forward().y);
             (hero.pos - self.spot).dot(f) > 30.0
         };
-        if self.t > self.length || passed || (tunnel && self.shot == Shot::Helicopter) {
+        // Slow cars (a bust, a crash) make dull close-ups: then from above.
+        let slow = hero.vel.length() < 8.0;
+        let dull = slow && self.shot != Shot::Helicopter && !tunnel;
+        if self.t > self.length || passed || dull || (tunnel && self.shot == Shot::Helicopter) {
             self.next(world, hero, hint, chased.is_some(), tunnel);
         }
         let f2 = hero.forward();
@@ -225,25 +228,43 @@ impl Cinematic {
         let side = Vec3::new(f2.y, 0.0, -f2.x);
         let lift = Vec3::Y;
         let other = chased.unwrap_or(hero);
+        // Where the car chased is going (its heading may be anywhere in a
+        // spin), on the ground.
+        let going = {
+            let v = Vec3::new(other.vel.x, 0.0, other.vel.y);
+            let f = other.forward();
+            if v.length() > 3.0 { v.normalize() } else { Vec3::new(f.x, 0.0, f.y) }
+        };
         let (eye, target, fov) = match self.shot {
             Shot::Helicopter => {
+                // Over the street (not the blocks beside it), swinging
+                // slowly from behind to one side.
                 let a = self.t * 0.06 + self.count as f32;
-                let around = fwd * (-26.0 * a.cos()) + side * (18.0 * a.sin());
+                let s = at.s - 28.0 * a.cos();
+                let (_, wall) = road.widths(s);
+                let lateral = (at.lateral + 12.0 * a.sin()).clamp(-wall, wall);
                 let mid = (hero.pos + other.pos) * 0.5;
-                (hero.pos + around + lift * 20.0, mid + lift, 0.75)
+                (road.point(s, lateral) + lift * 32.0, mid + lift, 0.75)
             }
-            Shot::Roadside => (self.spot, hero.pos.lerp(other.pos, 0.3) + lift * 0.8, 0.62),
-            Shot::Low => (hero.pos - fwd * 5.2 + side * 1.1 + lift * 0.65, hero.pos + fwd * 25.0 + lift * 1.2, 1.15),
+            Shot::Roadside => {
+                // Zoomed to keep the cars about the same size as they come.
+                let target = hero.pos.lerp(other.pos, 0.3) + lift * 0.8;
+                let fov = 2.0 * (7.0 / self.spot.distance(target).max(1.0)).atan();
+                (self.spot, target, fov.clamp(0.22, 1.0))
+            }
+            Shot::Low => (hero.pos - fwd * 6.5 + side * 1.3 + lift * 0.9, hero.pos + fwd * 25.0 + lift * 1.2, 1.1),
             Shot::Alongside => {
+                // From the side with the road's width, not the wall's.
                 let slide = (self.t / self.length - 0.5) * 6.0;
-                let o = Vec3::new(other.forward().x, 0.0, other.forward().y);
-                let s = Vec3::new(o.z, 0.0, -o.x);
-                (other.pos + s * 5.5 + o * slide + lift * 1.1, other.pos + lift * 0.7, 0.95)
+                let o = going;
+                let to_right = Vec3::new(o.z, 0.0, -o.x);
+                let (_, _, r, _) = road.frame(at.s);
+                let them = road.locate(other.pos, Some(at.index));
+                let inward = if them.lateral > 0.0 { -r } else { r };
+                let side = if to_right.dot(inward) > 0.0 { to_right } else { -to_right };
+                (other.pos + side * 7.5 + o * slide + lift * 1.4, other.pos + lift * 0.7, 0.9)
             }
-            Shot::Ahead => {
-                let o = Vec3::new(other.forward().x, 0.0, other.forward().y);
-                (other.pos + o * 13.0 + lift * 2.0, (hero.pos + other.pos) * 0.5 + lift * 0.8, 0.8)
-            }
+            Shot::Ahead => (other.pos + going * 17.0 + lift * 2.4, (hero.pos + other.pos) * 0.5 + lift * 0.8, 0.8),
         };
         let eye = if self.shot == Shot::Helicopter { eye } else { keep_in(world, eye, at.index) };
         Camera { eye, target, up: Vec3::Y, fov }
@@ -254,8 +275,17 @@ impl Cinematic {
         const ORDER: [Shot; 6] = [Shot::Helicopter, Shot::Low, Shot::Roadside, Shot::Ahead, Shot::Alongside, Shot::Low];
         self.count += 1;
         let mut shot = ORDER[self.count as usize % ORDER.len()];
+        let speed = hero.vel.length();
         if !chasing && matches!(shot, Shot::Ahead | Shot::Alongside) {
             shot = Shot::Low;
+        }
+        // The cars must come by soon for a roadside camera; slow ones are
+        // best seen from above.
+        if shot == Shot::Roadside && speed < 15.0 {
+            shot = Shot::Low;
+        }
+        if speed < 8.0 {
+            shot = Shot::Helicopter;
         }
         if tunnel && shot == Shot::Helicopter {
             shot = Shot::Low;
@@ -264,17 +294,23 @@ impl Cinematic {
         self.t = 0.0;
         self.length = match shot {
             Shot::Helicopter => 8.0,
-            Shot::Roadside => 9.0,
+            Shot::Roadside => 7.0,
             _ => 6.0,
         };
         if shot == Shot::Roadside {
-            // Ahead, at the road's edge, on alternate sides.
+            // Ahead, just off the road on alternate sides, and between the
+            // street lamps (whose glare would fill the picture).
             let at = world.road.locate(hero.pos, Some(hint));
-            let ahead = 40.0 + hero.vel.length() * 2.5;
-            let s = world.road.wrap(at.s + ahead);
-            let (_, wall) = world.road.widths(s);
+            let ahead = 25.0 + speed * 2.2;
             let side = if self.count.is_multiple_of(2) { 1.0 } else { -1.0 };
-            self.spot = world.road.point(s, side * (wall - 1.0)) + Vec3::Y * 1.3;
+            let spot = |d: f32| {
+                let s = world.road.wrap(at.s + ahead + d);
+                let (paved, wall) = world.road.widths(s);
+                world.road.point(s, side * (paved + 1.0).min(wall - 0.6)) + Vec3::Y * 1.3
+            };
+            let clear = |p: Vec3| world.lamps.iter().all(|l| (l.base - p).xz().length() > 6.0);
+            let best = [0.0, 12.0, -12.0, 17.0, -17.0].into_iter().map(spot).find(|&p| clear(p));
+            self.spot = best.unwrap_or_else(|| spot(0.0));
             self.spot_hint = world.road.locate(self.spot, None).index;
         }
     }

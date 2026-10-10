@@ -80,6 +80,9 @@ pub enum Phase {
 pub const COUNTDOWN: f32 = 3.0;
 /// How long the radio's words stay up (s).
 pub const RADIO_SECS: f32 = 5.0;
+/// How far the showcase's police car follows its suspect (m): close enough
+/// to film both, never catching it.
+const SHOWCASE_GAP: f32 = 26.0;
 
 /// A session of play.
 pub struct Session {
@@ -240,6 +243,7 @@ impl Session {
             Mode::Showcase => {
                 let target = s.chase.map(|c| c.suspect);
                 s.game.set_autopilot(true, target);
+                s.game.autopilot_follows(SHOWCASE_GAP);
                 s.cinema = Some(Cinematic::new());
             }
         }
@@ -453,7 +457,7 @@ impl Session {
     /// In the showcase: a new suspect after each chase.
     fn showcase(&mut self, _dt: f32) {
         if let Phase::Over(t) = self.phase
-            && t > 4.0
+            && t > 2.5
         {
             if let Some(c) = self.chase.take() {
                 self.game.remove_car(c.suspect);
@@ -464,6 +468,7 @@ impl Session {
             self.begin_chase(&wanted, 45.0, speed, 0);
             let target = self.chase.map(|c| c.suspect);
             self.game.set_autopilot(true, target);
+            self.game.autopilot_follows(SHOWCASE_GAP);
             self.phase = Phase::Driving;
         }
     }

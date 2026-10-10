@@ -86,18 +86,17 @@ impl Speakers {
         a.cues.extend(cues);
     }
 
-    /// Sounds a cue now.
-    pub fn cue(&self, cue: Cue) {
-        self.shared.asked.lock().cues.push(cue);
-        let _ = self.shared.wake.signal();
-    }
-
     /// Plays `tune` (crossfading), or fades the music out; `intensity`
     /// (0..1) brings in a tune's later stems.
     pub fn music(&self, tune: Option<Tune>, intensity: f32) {
         let mut a = self.shared.asked.lock();
         a.tune = tune;
         a.intensity = intensity;
+    }
+
+    /// The music's volume (0..1).
+    pub fn set_music_volume(&self, v: f32) {
+        self.shared.asked.lock().music_volume = v;
     }
 }
 

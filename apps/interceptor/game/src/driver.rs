@@ -256,7 +256,8 @@ pub fn divided_soon(road: &Road, s: f32, dir: f32, ahead: f32) -> bool {
 /// four seconds; but if a barrier already stands between it and its own
 /// side, the carriageway it is trapped on.
 fn allowed(road: &Road, place: &Place, paved: f32) -> (f32, f32) {
-    let edge = paved - 1.0;
+    // A car's half width and a little: all its wheels on the tarmac.
+    let edge = paved - 1.25;
     let soon = divided_soon(road, place.s, place.dir, 60.0 + place.along.abs() * 4.0);
     if !soon {
         return (-edge, edge);
@@ -504,6 +505,9 @@ pub struct Police {
     /// The car it chases.
     pub target: usize,
     pub skill: f32,
+    /// Following this far behind rather than ramming (m): a chase filmed
+    /// for the menus, kept going.
+    pub follow: Option<f32>,
     /// The line it has chosen through the traffic, and when it next
     /// chooses.
     choice: f32,
@@ -512,7 +516,7 @@ pub struct Police {
 
 impl Police {
     pub fn new(lateral: f32, target: usize, skill: f32) -> Police {
-        Police { pilot: Pilot::new(lateral), target, skill, choice: lateral, rethink: 0.0 }
+        Police { pilot: Pilot::new(lateral), target, skill, follow: None, choice: lateral, rethink: 0.0 }
     }
 
     /// The controls for car `me` this step.
@@ -536,7 +540,13 @@ impl Police {
             // Nearer, on its tail.
             want = t.lateral;
         }
-        if close {
+        if let Some(d) = self.follow {
+            // On its tail at a distance, its speed matched.
+            if gap < d + 40.0 {
+                want = t.lateral;
+                speed = (t.along * p.dir + (gap - d) * 0.6).max(0.0);
+            }
+        } else if close {
             if gap > 4.0 {
                 // Line up with its rear quarter, a little to the side, then
                 // close in: the nose against its quarter turns it round.
@@ -571,7 +581,8 @@ impl Police {
             }
             self.choice = roomiest(me, scene, &candidates, self.choice, target);
         }
-        if !close || danger(want, 2.5) || danger(p.lateral, 2.5) {
+        let ramming = close && self.follow.is_none();
+        if !ramming || danger(want, 2.5) || danger(p.lateral, 2.5) {
             want = self.choice;
         }
         // Moving across, it is on both lines.

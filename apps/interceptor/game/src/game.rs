@@ -609,6 +609,14 @@ impl Game {
         };
     }
 
+    /// Has the computer, driving the player's car after a suspect, follow
+    /// it `distance` metres behind rather than ram it.
+    pub fn autopilot_follows(&mut self, distance: f32) {
+        if let Role::Police(p) = &mut self.autopilot_role {
+            p.follow = Some(distance);
+        }
+    }
+
     /// The player's car.
     pub fn player(&self) -> &Car {
         &self.cars[self.player]

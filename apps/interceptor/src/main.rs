@@ -1,46 +1,45 @@
 //! Interceptor: police pursuits through Veda Bay, in OpenGL ES 3.0.
 //!
-//! The game itself (the world, the cars, the pictures) is
-//! `interceptor_game`; this program gives it a window, the keyboard and a
-//! renderer (the GPU through Veda's renderer where there is one, the
-//! software renderer otherwise), and draws the dashboard over its frames.
-//! The scene is rendered at a resolution that adapts to what rendering
-//! costs, and scaled to the window.
+//! The game itself (the world, the cars, the missions, the pictures, the
+//! sounds) is `interceptor_game`; this program gives it a window, the
+//! keyboard and the mouse, a renderer (the GPU through Veda's renderer
+//! where there is one, the software renderer otherwise) and the speakers,
+//! and draws the menus and the dashboard over its frames. The scene is
+//! rendered at a resolution that adapts to what rendering costs, and
+//! scaled to the window.
 //!
-//! Keys: arrows or WASD drive, Space is the handbrake, Shift the nitrous,
-//! Q the siren, C changes the camera, R puts the car back on the road, F3
-//! shows statistics, F8 lets the computer drive, F11 toggles full screen,
-//! Esc quits.
+//! In play: arrows or WASD drive, Space is the handbrake, Shift the
+//! nitrous, Q the siren, H the horn, C changes the camera, R puts the car
+//! back on the road, Esc pauses; F3 shows statistics, F11 toggles full
+//! screen, F8 lets the computer drive (for demonstrations).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod app;
 mod hud;
+mod menu;
+mod paint;
 mod speakers;
+mod store;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 
-use interceptor_game::audio::Cue;
-use interceptor_game::carmodel::Kind;
-use interceptor_game::env::{Environment, TimeOfDay, Weather};
-use interceptor_game::game::Game;
-use interceptor_game::pursuit::{Pursuit, State, Wanted};
 use interceptor_game::render::{Frame, Quality, Renderer};
 use interceptor_game::scale::{SCALES, Scale};
-use interceptor_game::sound::Sound;
-use interceptor_game::vehicle::Spec;
 use interceptor_game::world::World;
-use speakers::{Speakers, Tune};
 use vabi::{WaitItem, signals};
 use vgl::backend::Present;
 use vgl::{Config, gl};
-use vmath::Vec3;
 use vproto::display::{WindowEvent, WindowSpec, WindowState};
-use vproto::input::keys;
 use vui::window::{Window, connect};
+
+use app::{App, Back, Screen};
+use speakers::Speakers;
 
 vrt::entry!(main);
 
@@ -74,37 +73,6 @@ fn wait_for_window(window: &mut Window, pending: &mut alloc::vec::Vec<WindowEven
     true
 }
 
-/// The suspects, in turn.
-const WANTED: [Wanted; 3] = [
-    Wanted {
-        kind: Kind::Coupe,
-        spec: Spec::sports(),
-        paint: Vec3::new(0.55, 0.02, 0.02),
-        skill: 0.92,
-        aggression: 0.3,
-    },
-    Wanted {
-        kind: Kind::Muscle,
-        spec: Spec::sports(),
-        paint: Vec3::new(0.85, 0.55, 0.02),
-        skill: 0.95,
-        aggression: 0.6,
-    },
-    Wanted {
-        kind: Kind::Supercar,
-        spec: Spec::supercar(),
-        paint: Vec3::new(0.02, 0.18, 0.45),
-        skill: 0.97,
-        aggression: 0.4,
-    },
-];
-
-/// A new chase: the next suspect, a little ahead of the player.
-fn new_chase(game: &mut Game, n: u32) -> Pursuit {
-    let wanted = &WANTED[n as usize % WANTED.len()];
-    Pursuit::start(game, wanted, 70.0, 20.0)
-}
-
 fn main() -> i32 {
     let display = match connect() {
         Ok(d) => d,
@@ -124,9 +92,10 @@ fn main() -> i32 {
             return 1;
         }
     };
+    // The sounds start loading while the world is made.
     let speakers = Speakers::start();
     let (mut text, fonts) = vui::load_fonts();
-    let fonts = hud::Fonts { regular: fonts[0], bold: fonts[1], mono: fonts[2], mono_bold: fonts[3] };
+    let fonts = paint::Fonts { regular: fonts[0], bold: fonts[1], mono: fonts[2], mono_bold: fonts[3] };
 
     // Events that came while a frame waited for the window.
     let mut pending = alloc::vec::Vec::new();
@@ -154,16 +123,18 @@ fn main() -> i32 {
     vrt::println!("{} ({:?} quality)", renderer_name, quality);
 
     let t0 = vrt::time::now_ns();
-    let world = World::new();
+    let world = Arc::new(World::new());
     let t1 = vrt::time::now_ns();
-    let env = Environment::new(TimeOfDay::Night, Weather::Clear);
-    let mut renderer = match Renderer::new(&mut gl, &world, env, quality) {
+    let mut app = App::new(world.clone(), speakers);
+    let mut renderer = match Renderer::new(&mut gl, &world, app.session.env(), quality) {
         Ok(r) => r,
         Err(e) => {
             vrt::println!("{}", e);
             return 1;
         }
     };
+    app.relight = false;
+    let map = hud::MiniMap::new(&world);
     let t2 = vrt::time::now_ns();
     vrt::println!(
         "Veda Bay made in {} ms ({} buildings), its pictures in {} ms",
@@ -171,19 +142,8 @@ fn main() -> i32 {
         world.blocks.len(),
         (t2 - t1) / 1_000_000
     );
-    let mut game = Game::new(world, env);
-    game.start_traffic();
-    game.cars[game.player].siren = true;
-    let mut chase = new_chase(&mut game, 0);
-    let mut chases = 1u32;
-    let mut after = 0.0f32;
-    let mut sound = Sound::new();
-    if let Some(s) = &speakers {
-        s.cue(Cue::Radio);
-    }
     vrt::println!("ready");
 
-    let mut show_stats = false;
     let start = vrt::time::now_ns();
     let mut last = start;
     let (mut frames, mut fps, mut fps_since) = (0u32, 0.0f32, start);
@@ -191,89 +151,49 @@ fn main() -> i32 {
     let mut render_ms = 0.0f32;
     let mut show_ms = 0.0f32;
     let mut judged = start;
+    let mut screen = app.screen;
     loop {
         let mut events = core::mem::take(&mut pending);
         events.extend(window.poll_events());
         for ev in events {
             match ev {
-                WindowEvent::Key { code, pressed, repeat, .. } => {
-                    let k = &mut game.keys;
-                    match code {
-                        keys::UP | keys::W => k.up = pressed,
-                        keys::DOWN | keys::S => k.down = pressed,
-                        keys::LEFT | keys::A => k.left = pressed,
-                        keys::RIGHT | keys::D => k.right = pressed,
-                        keys::SPACE => k.handbrake = pressed,
-                        keys::LEFTSHIFT | keys::RIGHTSHIFT => k.boost = pressed,
-                        _ => {}
-                    }
-                    if pressed && !repeat {
-                        match code {
-                            keys::Q => game.toggle_siren(),
-                            keys::C => game.follow.view = game.follow.view.next(),
-                            keys::R => game.reset_player(),
-                            keys::F3 => show_stats = !show_stats,
-                            keys::F8 => {
-                                let on = !game.autopilot;
-                                game.set_autopilot(on, Some(chase.suspect));
-                                vrt::println!("autopilot {}", if on { "on" } else { "off" });
-                            }
-                            keys::F11 => {
-                                let full = window.state == WindowState::Fullscreen;
-                                window.set_state(if full { WindowState::Normal } else { WindowState::Fullscreen });
-                            }
-                            keys::ESC => return 0,
-                            _ => {}
-                        }
-                    }
-                }
-                WindowEvent::Focus { focused: false } => game.release(),
+                WindowEvent::Key { code, pressed, repeat, .. } => app.key(code, pressed, repeat),
+                WindowEvent::PointerMove { x, y } => app.point(x, y),
+                WindowEvent::PointerButton { x, y, button: 0, pressed: true, .. } => app.click(x, y),
+                WindowEvent::Focus { focused: false } => app.unfocused(),
                 WindowEvent::CloseRequested {} => return 0,
                 _ => {}
             }
         }
-        if window.closed {
+        if window.closed || app.quit {
             return 0;
+        }
+        if let Some(full) = app.fullscreen.take() {
+            window.set_state(if full { WindowState::Fullscreen } else { WindowState::Normal });
+        }
+        if app.screen != screen {
+            screen = app.screen;
+            vrt::println!("screen {:?}", screen);
         }
         let now = vrt::time::now_ns();
         let dt = ((now - last) as f64 / 1e9).clamp(0.0, 0.25) as f32;
         last = now;
-        game.update(dt);
-        chase.update(&mut game, dt);
-        if !chase.on() {
-            if after == 0.0 {
-                vrt::println!("chase {}: {:?} after {:.0} s, {} hits", chases, chase.state, chase.time, chase.hits);
-                if let Some(s) = &speakers {
-                    s.cue(if chase.state == State::Escaped { Cue::Lose } else { Cue::Win });
-                }
-            }
-            after += dt;
-            if after > 6.0 {
-                after = 0.0;
-                game.remove_car(chase.suspect);
-                chase = new_chase(&mut game, chases);
-                chases += 1;
-                if let Some(s) = &speakers {
-                    s.cue(Cue::Radio);
-                }
-                if game.autopilot {
-                    game.set_autopilot(true, Some(chase.suspect));
-                }
+        app.update(dt);
+        if app.relight {
+            app.relight = false;
+            if let Err(e) = renderer.set_environment(&mut gl, app.session.env()) {
+                vrt::println!("cannot change the light: {}", e);
             }
         }
-        let (cars, lights) = game.frame(dt);
-        if let Some(s) = &speakers {
-            let (scene, cues) = sound.update(&game, 1.0, dt);
-            s.play(scene, cues);
-            // The chase's music heats up as the suspect is caught up with.
-            let heat = if chase.on() { 1.0 - ((chase.gap - 50.0) / 150.0).clamp(0.0, 1.0) } else { 0.0 };
-            s.music(Some(Tune::Pursuit), heat);
-        }
+        let frozen = matches!(app.screen, Screen::Paused(_) | Screen::Options(_, Back::Pause));
+        let (cars, lights) = app.session.frame(if frozen { 0.0 } else { dt });
+        app.sound(dt);
 
         // Render at the internal resolution.
         let (iw, ih) = internal_size(window.width, window.height, scale.divisor());
         gl.resize(iw as u32, ih as u32);
         let t_render = vrt::time::now_ns();
+        let game = &app.session.game;
         let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock };
         renderer.render(&mut gl, &frame, iw, ih);
         gl.flush();
@@ -292,10 +212,12 @@ fn main() -> i32 {
             gl.present_to(&mut dst);
         }
         let t_shown = vrt::time::now_ns();
-        let t_waited = t_ready;
-        hud::dashboard(&mut canvas, &mut text, &fonts, &game);
-        hud::pursuit(&mut canvas, &mut text, &fonts, &game, &chase);
-        if show_stats {
+        let settings = app.save.settings;
+        if app.screen == Screen::Playing {
+            hud::play(&mut canvas, &mut text, &fonts, &app.session, &map, settings.units, app.clock);
+        }
+        menu::draw(&mut canvas, &mut text, &fonts, &mut app);
+        if settings.stats {
             let lines = [
                 format!("{fps:.1} fps   render {render_ms:.1} ms   show {show_ms:.1} ms"),
                 format!("{iw} x {ih} -> {cw} x {ch}"),
@@ -310,7 +232,7 @@ fn main() -> i32 {
         // Frame rate, and the resolution it calls for.
         frames += 1;
         render_ms = render_ms * 0.9 + (t_drawn - t_render) as f32 / 1e6 * 0.1;
-        show_ms = show_ms * 0.9 + (t_shown - t_waited) as f32 / 1e6 * 0.1;
+        show_ms = show_ms * 0.9 + (t_shown - t_ready) as f32 / 1e6 * 0.1;
         if now - fps_since >= 1_000_000_000 {
             fps = frames as f32 / ((now - fps_since) as f32 / 1e9);
             frames = 0;

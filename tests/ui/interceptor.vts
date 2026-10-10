@@ -1,20 +1,45 @@
-# Interceptor: a pursuit at night through Veda Bay's traffic, rendered on
-# the host's GPU where QEMU has one (in software otherwise). It starts and
-# keeps rendering (its frame statistics reach the log); the computer takes
-# the wheel (F8) and chases the suspect.
+# Interceptor: from the title, through the menus, to the first career
+# mission at Veda Bay, rendered on the host's GPU where QEMU has one (in
+# software otherwise). The title and the menus show the showcase chase
+# behind them; the mission counts down; the computer takes the wheel (F8)
+# and chases the suspect; the game pauses and resumes; the chase ends on
+# the results screen.
 boot-cmdline "run=interceptor"
 fail-on "PANIC"
 fail-on "link: "
 fail-on "shader:"
 fail-on "cannot render on the GPU"
 fail-on "rendering stops"
+fail-on "cannot change the light"
 wait-serial "interceptor: ready" 120
+wait 4
+shot target/veda/interceptor-1-title.png
+key ret
+wait-serial "screen Main" 10
+wait 2
+shot target/veda/interceptor-2-menu.png
+key ret
+wait-serial "screen Career" 10
+wait 2
+shot target/veda/interceptor-3-career.png
+key ret
+wait-serial "screen Playing" 10
+wait 1
+shot target/veda/interceptor-4-countdown.png
 wait 3
-shot target/veda/interceptor-1.png
 key f8
 wait-serial "autopilot on" 10
-wait 12
-shot target/veda/interceptor-2-chase.png
+wait 10
+shot target/veda/interceptor-5-chase.png
+key esc
+wait-serial "screen Paused" 10
+wait 2
+shot target/veda/interceptor-6-paused.png
+key ret
+wait-serial "screen Playing" 10
 wait-serial " fps, render " 30
-wait 8
-shot target/veda/interceptor-3-chase.png
+wait 5
+shot target/veda/interceptor-7-chase.png
+wait-serial "screen Results" 240
+wait 4
+shot target/veda/interceptor-8-results.png
