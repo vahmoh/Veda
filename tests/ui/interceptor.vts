@@ -1,0 +1,20 @@
+# Interceptor: the police car at night in Veda Bay, rendered on the host's
+# GPU where QEMU has one (in software otherwise). It starts, keeps
+# rendering (its frame statistics reach the log), drives off with the
+# accelerator held, and its siren and light bar go on.
+boot-cmdline "run=interceptor"
+fail-on "PANIC"
+fail-on "link: "
+fail-on "shader:"
+fail-on "cannot render on the GPU"
+fail-on "rendering stops"
+wait-serial "interceptor: ready" 120
+wait 4
+shot target/veda/interceptor-1.png
+key q
+key-down up
+wait 5
+shot target/veda/interceptor-2-driving.png
+key-up up
+wait-serial "interceptor: " 30
+wait-serial " fps, render " 30

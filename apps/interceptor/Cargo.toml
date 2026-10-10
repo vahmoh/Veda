@@ -1,0 +1,27 @@
+[package]
+name = "interceptor"
+description = "Interceptor: police pursuits through Veda Bay, in OpenGL ES 3.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "interceptor"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vgl = { workspace = true, features = ["veda"] }
+interceptor-game = { path = "game" }
+vmath = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vui = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

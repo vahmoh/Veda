@@ -807,6 +807,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "interceptor"
+version = "0.1.0"
+dependencies = [
+ "interceptor-game",
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vgl",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "interceptor-game"
+version = "0.1.0"
+dependencies = [
+ "vgl",
+ "vimage",
+ "vmath",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"

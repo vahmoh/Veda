@@ -63,6 +63,8 @@ members = [
     "apps/starfall",
     "apps/prism",
     "apps/prism/scene",
+    "apps/interceptor",
+    "apps/interceptor/game",
     "services/audio",
     "tools/assetgen",
     "tools/musicgen",
