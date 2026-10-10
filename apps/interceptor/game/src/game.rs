@@ -15,7 +15,7 @@ use crate::carmodel::Kind;
 use crate::env::Environment;
 use crate::input::{Driver, Keys};
 use crate::physics::{self, Impact};
-use crate::render::{Camera, CarView, Livery};
+use crate::render::{Camera, CarView, Light, Livery};
 use crate::vehicle::{Controls, Spec, Vehicle};
 use crate::world::World;
 
@@ -121,6 +121,17 @@ impl Car {
         let at = world.road.locate(self.vehicle.pos, Some(self.hint));
         (at.s, at.lateral)
     }
+}
+
+/// The light bar's pattern at `t` seconds: each half flashes four times
+/// in a burst, the halves taking turns, 1.6 bursts a second. `[red,
+/// blue]`, each 0 or 1.
+pub fn light_bar(t: f32) -> [f32; 2] {
+    let half = |side: f32| {
+        let phase = (t * 1.6 + side * 0.5).fract();
+        if phase < 0.5 && (phase * 8.0).fract() >= 0.4 { 1.0 } else { 0.0 }
+    };
+    [half(0.0), half(1.0)]
 }
 
 /// Something that happened during a step that the sounds and the effects
@@ -240,13 +251,52 @@ impl Game {
         }
     }
 
-    /// What to draw now: the camera, and every car between its last two
-    /// steps. `dt` moves the camera.
-    pub fn frame(&mut self, dt: f32) -> Vec<CarView> {
+    /// What to draw now: every car between its last two steps, and the
+    /// lights that move with them (headlights, light bars); the camera
+    /// follows the player (`dt` moves it).
+    pub fn frame(&mut self, dt: f32) -> (Vec<CarView>, Vec<Light>) {
         let t = (self.pending / STEP).clamp(0.0, 1.0);
         let mut views = Vec::with_capacity(self.cars.len());
-        for car in &self.cars {
+        let mut lights = Vec::new();
+        let night = self.env.street_lights;
+        for (i, car) in self.cars.iter().enumerate() {
             let pose = car.prev.lerp(&Pose::of(&car.vehicle), t);
+            let m = pose.transform();
+            // Each car's bar keeps its own time, so that a convoy does not
+            // flash as one.
+            let bar = if car.siren { light_bar(self.clock + i as f32 * 0.37) } else { [0.0, 0.0] };
+            let half = car.vehicle.spec.half_length;
+            if car.headlights && night > 0.0 {
+                let pos = m.transform_point3(Vec3::new(0.0, 0.72, half + 0.2));
+                let dir = m.transform_vector3(Vec3::new(0.0, -0.09, 1.0)).normalize();
+                lights.push(Light {
+                    pos,
+                    color: Vec3::new(1.0, 0.94, 0.84) * 70.0,
+                    radius: 50.0,
+                    spot: Some((dir, 0.86)),
+                });
+            }
+            if car.siren {
+                let roof = m.transform_point3(Vec3::new(0.0, 1.75, 0.0));
+                let side = m.transform_vector3(Vec3::X) * 0.4;
+                let k = 0.4 + 0.6 * night;
+                if bar[0] > 0.0 {
+                    lights.push(Light {
+                        pos: roof + side,
+                        color: Vec3::new(1.0, 0.04, 0.02) * (30.0 * k),
+                        radius: 22.0,
+                        spot: None,
+                    });
+                }
+                if bar[1] > 0.0 {
+                    lights.push(Light {
+                        pos: roof - side,
+                        color: Vec3::new(0.05, 0.2, 1.0) * (36.0 * k),
+                        radius: 22.0,
+                        spot: None,
+                    });
+                }
+            }
             views.push(CarView {
                 kind: car.kind,
                 transform: pose.transform(),
@@ -256,7 +306,7 @@ impl Game {
                 steer: pose.steer,
                 headlights: if car.headlights { 1.0 } else { 0.0 },
                 brake: if car.vehicle.braking > 0.05 { 1.0 } else { 0.0 },
-                siren: car.siren.then_some(self.clock),
+                bar,
             });
         }
         // The camera follows the player as drawn.
@@ -266,7 +316,7 @@ impl Game {
         seen.pos = pose.pos;
         seen.yaw = pose.yaw;
         self.camera = self.follow.update(&seen, &self.world, player.hint, dt);
-        views
+        (views, lights)
     }
 
     /// The player's car.

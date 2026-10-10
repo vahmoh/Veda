@@ -7,6 +7,7 @@
 //! | [`road`] | the loop's centre line: frames, cross-sections, where a point is on it |
 //! | [`terrain`] | the land and the sea around the road |
 //! | [`city`] | the buildings |
+//! | [`lamps`] | the street lights |
 //! | [`world`] | all of Veda Bay, made at start-up |
 //! | [`render`] | the pictures, with OpenGL ES 3.0 |
 //! | [`env`] | the time of day and the weather |
@@ -32,6 +33,7 @@ pub mod env;
 pub mod game;
 pub mod groundmesh;
 pub mod input;
+pub mod lamps;
 pub mod layout;
 pub mod mesh;
 pub mod physics;

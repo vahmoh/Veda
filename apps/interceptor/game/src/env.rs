@@ -6,6 +6,7 @@
 //! the sun's colour; the exposure scales everything before tone mapping.
 
 use crate::prelude::*;
+use crate::render::post::Grade;
 
 /// When a chase happens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +72,44 @@ pub struct Environment {
 }
 
 impl Environment {
+    /// How the frame is graded after it is drawn.
+    pub fn grade(&self) -> Grade {
+        let mut g = match self.time {
+            TimeOfDay::Day => Grade {
+                exposure: self.exposure,
+                bloom: 0.1,
+                saturation: 1.1,
+                contrast: 1.05,
+                lift: [0.002, 0.003, 0.006],
+                gain: [1.02, 1.0, 0.97],
+                vignette: 0.22,
+            },
+            TimeOfDay::Sunset => Grade {
+                exposure: self.exposure,
+                bloom: 0.18,
+                saturation: 1.15,
+                contrast: 1.06,
+                lift: [0.004, 0.002, 0.006],
+                gain: [1.08, 0.99, 0.88],
+                vignette: 0.28,
+            },
+            TimeOfDay::Night => Grade {
+                exposure: self.exposure,
+                bloom: 0.3,
+                saturation: 1.12,
+                contrast: 1.08,
+                lift: [0.003, 0.005, 0.012],
+                gain: [1.0, 0.98, 1.04],
+                vignette: 0.32,
+            },
+        };
+        if self.weather == Weather::Rain {
+            g.saturation *= 0.85;
+            g.bloom *= 1.3;
+        }
+        g
+    }
+
     /// The look of `time` in `weather`.
     pub fn new(time: TimeOfDay, weather: Weather) -> Environment {
         let mut e = match time {
@@ -136,10 +175,10 @@ impl Environment {
                 time,
                 weather,
                 sun_dir: Vec3::new(0.35, 0.62, -0.45).normalize(),
-                sun_color: Vec3::new(0.10, 0.13, 0.20),
+                sun_color: Vec3::new(0.018, 0.022, 0.034),
                 shadows: 0.5,
-                sky_ambient: Vec3::new(0.018, 0.024, 0.045),
-                ground_ambient: Vec3::new(0.012, 0.010, 0.010),
+                sky_ambient: Vec3::new(0.012, 0.015, 0.026),
+                ground_ambient: Vec3::new(0.010, 0.008, 0.007),
                 fog_color: Vec3::new(0.022, 0.026, 0.042),
                 fog_density: 0.0005,
                 fog_falloff: 0.008,

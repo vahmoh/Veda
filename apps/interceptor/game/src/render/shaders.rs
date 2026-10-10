@@ -84,7 +84,10 @@ float smith(float nv, float nl, float a) {
 }
 
 // One light's contribution: radiance `c` arriving from direction `l`.
+// Lights are not points: a highlight is never sharper than the light's
+// size makes it (which also keeps a mirror's highlight finite).
 vec3 brdf(vec3 diff, vec3 f0, float a, vec3 n, vec3 v, vec3 l, vec3 c) {
+    a = max(a, 0.012);
     float nl = max(dot(n, l), 0.0);
     if (nl <= 0.0) {
         return vec3(0.0);
@@ -109,6 +112,21 @@ struct Surface {
 };
 
 uniform samplerCube u_env;
+uniform sampler2D u_lightMap;
+uniform highp sampler2DShadow u_shadowMap;
+
+// The street lights' light falling on a surface at `p` facing `n`: their
+// pools, painted from above into the light map (its alpha: how high the
+// lamps hang there, above which their light does not reach).
+vec3 lampLight(vec3 p, vec3 n) {
+    if (u_weather.z <= 0.0) {
+        return vec3(0.0);
+    }
+    vec4 l = texture(u_lightMap, (p.xz - u_lightRect.xy) * u_lightRect.zw);
+    float below = smoothstep(l.a + 3.0, l.a - 3.0, p.y);
+    float facing = 0.45 + 0.55 * max(n.y, 0.0);
+    return l.rgb * (u_weather.z * below * facing);
+}
 
 // The light a surface at `p` sends towards the camera.
 vec3 shade(Surface s, vec3 p, float sunShadow) {
@@ -118,6 +136,14 @@ vec3 shade(Surface s, vec3 p, float sunShadow) {
     vec3 f0 = mix(vec3(0.04), s.albedo, s.metal);
     vec3 diff = s.albedo * (1.0 - s.metal);
     vec3 c = brdf(diff, f0, a, s.n, v, u_sunDir.xyz, u_sunColor.rgb) * sunShadow * s.sky;
+    // The street lights: their light from above, and its sheen.
+    vec3 lamps = lampLight(p, s.n);
+    if (lamps.r + lamps.g + lamps.b > 0.0) {
+        c += diff * lamps;
+        float up = max(dot(reflect(-v, s.n), vec3(0.0, 1.0, 0.0)), 0.0);
+        float sheen = pow(up, mix(64.0, 4.0, s.rough)) * mix(1.0, 0.15, s.rough);
+        c += lamps * envBRDF(f0, s.rough, nv) * sheen * 2.0;
+    }
     // Ambient light and the sky's reflection.
     c += diff * ambientLight(s.n) * s.ao * (0.2 + 0.8 * s.sky);
     vec3 r = reflect(-v, s.n);
@@ -174,12 +200,19 @@ vec3 fog(vec3 c, vec3 p) {
 #ifdef TONEMAP
 // Without post-processing: exposure, a filmic curve and sRGB here.
 vec3 finish(vec3 c) {
-    c *= u_weather.w;
+    c = max(c, vec3(0.0)) * u_weather.w;
     c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
     return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
 }
 #else
-vec3 finish(vec3 c) { return c; }
+// In high dynamic range, kept finite and positive: half floats end at
+// 65504, and a single infinity would spread through the bloom.
+vec3 finish(vec3 c) {
+    if (any(isnan(c))) {
+        return vec3(0.0);
+    }
+    return clamp(c, vec3(0.0), vec3(512.0));
+}
 #endif
 "#;
 
@@ -253,13 +286,6 @@ void main() {
     float s = max(dot(d, u_sun), 0.0);
     c += u_glow * (pow(s, 6.0) * 0.5 + pow(s, 64.0) * 0.8) * clamp(h * 4.0 + 1.0, 0.0, 1.0);
     c += u_disc * smoothstep(0.9993, 0.9997, s);
-    // Stars, fading towards the horizon.
-    if (u_stars > 0.0 && h > 0.0) {
-        vec3 q = floor(d * 380.0);
-        float star = step(0.997, hash(q));
-        float twinkle = hash(q + 7.0);
-        c += vec3(0.8, 0.85, 1.0) * star * twinkle * u_stars * smoothstep(0.0, 0.3, h);
-    }
     // Clouds on a plane high above, thinning towards the horizon.
     if (u_clouds.a > 0.0 && h > 0.01) {
         vec2 q = d.xz / (h + 0.08) * 1.4;
@@ -287,11 +313,36 @@ void main() {
 "#;
 
 pub const SKY_FS: &str = r#"
+uniform float u_stars;
 in vec3 v_dir;
 out vec4 o_color;
+
+float hash3(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
 void main() {
     vec3 d = normalize(v_dir);
     vec3 c = textureLod(u_env, d, 0.0).rgb;
+    // Stars: points on a fine grid of the directions, one in a few hundred
+    // cells lit, at their own brightness, round and as sharp as a pixel.
+    if (u_stars > 0.0 && d.y > 0.0) {
+        float scale = 900.0;
+        vec3 q = d * scale;
+        vec3 cell = floor(q);
+        float h = hash3(cell);
+        if (h > 0.996) {
+            vec3 center = cell + 0.5 + (vec3(hash3(cell + 1.0), hash3(cell + 2.0), hash3(cell + 3.0)) - 0.5) * 0.6;
+            float dist = length(q - center);
+            float px = fwidth(q.x) + fwidth(q.y) + fwidth(q.z);
+            float point = smoothstep(px * 0.9 + 0.05, 0.0, dist);
+            float bright = pow(hash3(cell + 7.0), 4.0) * 3.0 + 0.3;
+            vec3 tint = mix(vec3(1.0, 0.85, 0.7), vec3(0.75, 0.85, 1.0), hash3(cell + 9.0));
+            c += tint * point * bright * u_stars * smoothstep(0.02, 0.3, d.y) * 0.15;
+        }
+    }
     o_color = vec4(finish(c), 1.0);
 }
 "#;
@@ -603,7 +654,7 @@ void main() {
     if (style == 0) {
         c = mix(c, c * (0.6 + v_tint * 1.2), glass);
     }
-    c += room * glow * glass * 2.2;
+    c += room * glow * glass * (ground > 0.5 ? 0.9 : 0.45);
     o_color = vec4(finish(fog(c, v_pos)), 1.0);
 }
 "#;
@@ -635,21 +686,13 @@ void main() {
 pub const CAR_FS: &str = r#"
 uniform vec3 u_paint;
 uniform int u_livery;      // 0 plain, 1 police, 2 taxi
-uniform vec4 u_lamps;      // headlights, brake, siren phase (s), siren on
+uniform vec4 u_lamps;      // headlights, brake, the light bar's red and blue
 uniform vec4 u_shape;      // the windscreen's foot (cowl) and the roof's ends (a, c), the shoulder
 in vec3 v_pos;
 in vec3 v_normal;
 in vec3 v_local;
 flat in float v_part;
 out vec4 o_color;
-
-// The light bar's pattern: each half flashes in bursts, the halves in turn.
-float flash(float t, float side) {
-    float phase = fract(t * 1.6 + side * 0.5);
-    float burst = step(phase, 0.5);
-    float strobe = step(0.5, fract(phase * 8.0));
-    return burst * strobe;
-}
 
 vec3 clearcoat(vec3 n, vec3 p) {
     vec3 v = normalize(u_eye.xyz - p);
@@ -716,11 +759,10 @@ void main() {
         rough = 0.15;
         emit = vec3(1.0, 0.03, 0.02) * (1.2 * u_lamps.x + 5.0 * u_lamps.y);
     } else if (part == 6 || part == 7) {
-        float side = part == 6 ? 0.0 : 1.0;
         vec3 tint = part == 6 ? vec3(1.0, 0.04, 0.02) : vec3(0.05, 0.2, 1.0);
         albedo = tint * 0.25;
         rough = 0.1;
-        emit = tint * 14.0 * flash(u_lamps.z, side) * u_lamps.w;
+        emit = tint * 14.0 * (part == 6 ? u_lamps.z : u_lamps.w);
     } else if (part == 8) {
         albedo = vec3(0.02);
         rough = 0.85;
@@ -745,5 +787,139 @@ void main() {
     }
     c += emit;
     o_color = vec4(finish(fog(c, v_pos)), 1.0);
+}
+"#;
+
+/// The street lights' map: each lamp's pool, as seen from above, added
+/// into an image of the world (`a_inst0`: the lamp's x, z, the pool's
+/// radius and the lamp's height; `a_inst1`: its colour).
+pub const LIGHT_MAP_VS: &str = r#"
+in vec2 a_pos;
+in vec4 a_inst0;
+in vec4 a_inst1;
+uniform vec4 u_rect;
+out vec2 v_q;
+flat out vec4 v_color;
+void main() {
+    v_q = a_pos;
+    vec2 w = a_inst0.xy + a_pos * a_inst0.z;
+    v_color = vec4(a_inst1.rgb, a_inst0.w);
+    gl_Position = vec4((w - u_rect.xy) * u_rect.zw * 2.0 - 1.0, 0.0, 1.0);
+}
+"#;
+
+pub const LIGHT_MAP_FS: &str = r#"
+in vec2 v_q;
+flat in vec4 v_color;
+out vec4 o_color;
+void main() {
+    float d2 = dot(v_q, v_q);
+    if (d2 >= 1.0) {
+        discard;
+    }
+    // Bright under the lamp, falling away smoothly to the pool's edge.
+    float window = (1.0 - d2) * (1.0 - d2);
+    float fall = window / (1.0 + d2 * 9.0);
+    o_color = vec4(v_color.rgb * fall, v_color.a);
+}
+"#;
+
+/// Props drawn many times over (street lights, for a start): placed and
+/// turned by the instance (`a_inst0`: position and heading; `a_inst1`:
+/// the lamp's colour and the prop's scale). Materials: 0 painted metal,
+/// 1 a lamp's glass (lit at night), 2 concrete.
+pub const PROP_VS: &str = r#"
+in vec3 a_pos;
+in vec3 a_normal;
+in vec4 a_params;
+in vec4 a_inst0;
+in vec4 a_inst1;
+out vec3 v_pos;
+out vec3 v_normal;
+flat out vec4 v_color;
+flat out float v_part;
+void main() {
+    float c = cos(a_inst0.w);
+    float s = sin(a_inst0.w);
+    vec3 l = a_pos * a_inst1.w;
+    vec3 w = vec3(c * l.x + s * l.z, l.y, -s * l.x + c * l.z) + a_inst0.xyz;
+    v_pos = w;
+    v_normal = vec3(c * a_normal.x + s * a_normal.z, a_normal.y, -s * a_normal.x + c * a_normal.z);
+    v_color = vec4(a_inst1.rgb, 1.0);
+    v_part = floor(a_params.x * 255.0 + 0.5);
+    gl_Position = u_viewProj * vec4(w, 1.0);
+}
+"#;
+
+pub const PROP_FS: &str = r#"
+in vec3 v_pos;
+in vec3 v_normal;
+flat in vec4 v_color;
+flat in float v_part;
+out vec4 o_color;
+void main() {
+    vec3 n = normalize(v_normal);
+    int part = int(v_part);
+    vec3 albedo = vec3(0.09, 0.10, 0.10);
+    float rough = 0.45;
+    float metal = 0.6;
+    vec3 emit = vec3(0.0);
+    if (part == 1) {
+        albedo = vec3(0.8);
+        rough = 0.2;
+        metal = 0.0;
+        emit = v_color.rgb * 6.0 * u_weather.z;
+    } else if (part == 2) {
+        albedo = vec3(0.3);
+        rough = 0.85;
+        metal = 0.0;
+    }
+    Surface s = Surface(albedo, rough, metal, n, 1.0, 1.0);
+    vec3 c = shade(s, v_pos, 1.0) + emit;
+    o_color = vec4(finish(fog(c, v_pos)), 1.0);
+}
+"#;
+
+/// Glows: soft discs facing the camera, added to the picture (lamps,
+/// headlights, light bars). `a_inst0`: the place and the size; `a_inst1`:
+/// the colour (its brightness included).
+pub const GLOW_VS: &str = r#"
+in vec2 a_pos;
+in vec4 a_inst0;
+in vec4 a_inst1;
+uniform vec3 u_right;
+uniform vec3 u_up;
+out vec2 v_q;
+flat out vec3 v_color;
+out float v_fog;
+void main() {
+    vec3 c = a_inst0.xyz;
+    float dist = length(c - u_eye.xyz);
+    // A little larger far away, so that distant lights still show; faded
+    // when the camera is in them.
+    float size = a_inst0.w * (1.0 + dist * 0.004);
+    vec3 w = c + (u_right * a_pos.x + u_up * a_pos.y) * size;
+    v_q = a_pos;
+    v_color = a_inst1.rgb * smoothstep(1.0, 4.0, dist);
+    // Pulled towards the camera a little, so that the lamp's own fitting
+    // does not hide its glow.
+    vec4 clip = u_viewProj * vec4(w + normalize(u_eye.xyz - c) * min(1.0, dist * 0.5), 1.0);
+    v_fog = 1.0 - min(1.0 - exp(-u_fogColor.w * dist), u_fogParams.z);
+    gl_Position = clip;
+}
+"#;
+
+pub const GLOW_FS: &str = r#"
+in vec2 v_q;
+flat in vec3 v_color;
+in float v_fog;
+out vec4 o_color;
+void main() {
+    float d2 = dot(v_q, v_q);
+    if (d2 >= 1.0) {
+        discard;
+    }
+    float g = exp(-d2 * 6.0) * 0.8 + exp(-d2 * 40.0) * 2.0;
+    o_color = vec4(finish(v_color * g * v_fog), 1.0);
 }
 "#;

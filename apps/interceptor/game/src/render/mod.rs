@@ -9,6 +9,7 @@
 //! front to back, and the sky where nothing else is.
 
 pub mod gpu;
+pub mod post;
 pub mod shaders;
 
 use alloc::format;
@@ -22,7 +23,9 @@ use crate::carmodel::{self, Kind};
 use crate::city::Block;
 use crate::env::Environment;
 use crate::groundmesh;
+use crate::lamps::{self, Lamp};
 use crate::roadmesh;
+use crate::terrain::{HALF_X, HALF_Z};
 use crate::texgen;
 use crate::world::World;
 use gpu::{Geometry, Program, float_bytes, mat};
@@ -89,14 +92,30 @@ pub struct CarView {
     /// How brightly its headlights and its brake lights shine (0..1).
     pub headlights: f32,
     pub brake: f32,
-    /// The light bar's clock (s), while it flashes.
-    pub siren: Option<f32>,
+    /// How brightly the light bar's red and blue halves shine now (0..1).
+    pub bar: [f32; 2],
+}
+
+/// A light that moves: a light bar's flash (a point), a headlight (a
+/// spot).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Light {
+    pub pos: Vec3,
+    /// Colour and strength (linear).
+    pub color: Vec3,
+    /// Nothing beyond this (m).
+    pub radius: f32,
+    /// A spot's direction and the cosine of its half-angle (a point's
+    /// cone is `None`).
+    pub spot: Option<(Vec3, f32)>,
 }
 
 /// What a frame shows.
 pub struct Frame<'a> {
     pub camera: Camera,
     pub cars: &'a [CarView],
+    /// The lights that move; the strongest near the camera are used.
+    pub lights: &'a [Light],
     /// Seconds, for what moves by itself (the sea, the light bars).
     pub time: f32,
 }
@@ -170,7 +189,17 @@ pub struct Renderer {
     water: Program,
     building: Program,
     car: Program,
+    prop: Program,
+    glow: Program,
     frame_ubo: u32,
+    /// The street lights' pools, seen from above, and a stand-in for the
+    /// sun's shadows where there are none.
+    light_map: u32,
+    no_shadow: u32,
+    /// Each kind of street light, with its instances.
+    lamp_meshes: Vec<(Geometry, i32)>,
+    /// The lamps' glows (an instanced quad).
+    lamp_glows: (u32, i32),
     env_map: u32,
     asphalt: u32,
     surfaces: u32,
@@ -186,6 +215,8 @@ pub struct Renderer {
     cars: Vec<(Kind, Geometry, Geometry, [Vec3; 4])>,
     fullscreen: u32,
     dash: f32,
+    /// Post-processing, with a GPU.
+    post: Option<post::Post>,
     /// Statistics of the last frame.
     pub stats: Stats,
 }
@@ -205,27 +236,41 @@ impl Renderer {
     /// Uploads `world` and prepares to draw it lit by `env`.
     pub fn new(gl: &mut Context, world: &World, env: Environment, quality: Quality) -> Result<Renderer, String> {
         let sizes = Sizes::of(quality);
-        let defines = match quality {
-            Quality::Low => "#define TONEMAP\n#define LOW\n",
-            Quality::High => "#define TONEMAP\n",
+        // A GPU draws in high dynamic range and tone maps afterwards; a
+        // software renderer (or a GPU that cannot draw in floats) tone
+        // maps in each program.
+        let hdr = quality == Quality::High && gl.backend().caps().color_buffer_float;
+        let defines = match (quality, hdr) {
+            (Quality::Low, _) => "#define TONEMAP\n#define LOW\n",
+            (Quality::High, false) => "#define TONEMAP\n",
+            (Quality::High, true) => "",
         };
+        // Every lit program samples the sky, the street lights' map and the
+        // shadow map at the shared units, and its own texture (if any) at
+        // the next.
         let lit =
-            |gl: &mut Context, name: &str, vs: &str, fs: &str, uniforms: &[&'static str], samplers: &[&'static str]| {
-                Program::new(gl, name, &source(defines, true, vs), &source(defines, true, fs), uniforms, samplers)
+            |gl: &mut Context, name: &str, vs: &str, fs: &str, uniforms: &[&'static str], own: Option<&'static str>| {
+                let mut samplers = gpu::LIT_SAMPLERS.to_vec();
+                if let Some(t) = own {
+                    samplers.push((t, gpu::unit::OWN));
+                }
+                Program::new(gl, name, &source(defines, true, vs), &source(defines, true, fs), uniforms, &samplers)
             };
-        let sky = lit(gl, "sky", shaders::SKY_VS, shaders::SKY_FS, &["u_invViewProj"], &["u_env"])?;
-        let terrain = lit(gl, "terrain", shaders::STATIC_VS, shaders::TERRAIN_FS, &[], &["u_env", "u_ground"])?;
-        let tarmac = lit(gl, "tarmac", shaders::STATIC_VS, shaders::TARMAC_FS, &["u_dash"], &["u_env", "u_asphalt"])?;
-        let surface = lit(gl, "surface", shaders::STATIC_VS, shaders::SURFACE_FS, &[], &["u_env", "u_surfaces"])?;
-        let water = lit(gl, "water", shaders::STATIC_VS, shaders::WATER_FS, &[], &["u_env", "u_ripples"])?;
-        let building = lit(gl, "building", shaders::BUILDING_VS, shaders::BUILDING_FS, &[], &["u_env", "u_walls"])?;
+        let sky = lit(gl, "sky", shaders::SKY_VS, shaders::SKY_FS, &["u_invViewProj", "u_stars"], None)?;
+        let terrain = lit(gl, "terrain", shaders::STATIC_VS, shaders::TERRAIN_FS, &[], Some("u_ground"))?;
+        let tarmac = lit(gl, "tarmac", shaders::STATIC_VS, shaders::TARMAC_FS, &["u_dash"], Some("u_asphalt"))?;
+        let surface = lit(gl, "surface", shaders::STATIC_VS, shaders::SURFACE_FS, &[], Some("u_surfaces"))?;
+        let water = lit(gl, "water", shaders::STATIC_VS, shaders::WATER_FS, &[], Some("u_ripples"))?;
+        let building = lit(gl, "building", shaders::BUILDING_VS, shaders::BUILDING_FS, &[], Some("u_walls"))?;
+        let prop = lit(gl, "prop", shaders::PROP_VS, shaders::PROP_FS, &[], None)?;
+        let glow = lit(gl, "glow", shaders::GLOW_VS, shaders::GLOW_FS, &["u_right", "u_up"], None)?;
         let car = lit(
             gl,
             "car",
             shaders::CAR_VS,
             shaders::CAR_FS,
             &["u_model", "u_paint", "u_livery", "u_lamps", "u_shape"],
-            &["u_env"],
+            None,
         )?;
 
         let frame_ubo = gl.gen_buffer();
@@ -296,8 +341,43 @@ impl Renderer {
             })
             .collect();
         let fullscreen = gpu::fullscreen_triangle(gl);
+        let light_map = bake_light_map(gl, &world.lamps, quality, defines)?;
+        let no_shadow = no_shadow_map(gl);
+        let lamp_meshes = [lamps::Kind::Post, lamps::Kind::Double, lamps::Kind::Ceiling]
+            .iter()
+            .map(|&k| {
+                let of_kind: Vec<&Lamp> = world.lamps.iter().filter(|l| l.kind == k).collect();
+                let g = Geometry::new(gl, &lamps::mesh(k));
+                let mut data = Vec::with_capacity(of_kind.len() * 8);
+                for l in &of_kind {
+                    data.extend_from_slice(&[
+                        l.base.x, l.base.y, l.base.z, l.yaw, l.color.x, l.color.y, l.color.z, 1.0,
+                    ]);
+                }
+                gl.bind_vertex_array(g.vao);
+                let ib = gl.gen_buffer();
+                gl.bind_buffer(gl::ARRAY_BUFFER, ib);
+                gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(&data), gl::STATIC_DRAW);
+                gpu::set_instance_layout(gl, 8, 0);
+                gl.bind_vertex_array(0);
+                (g, of_kind.len() as i32)
+            })
+            .collect();
+        let lamp_glows = {
+            let mut data = Vec::new();
+            for l in &world.lamps {
+                let heads = if l.kind == lamps::Kind::Double { &l.heads[..] } else { &l.heads[..1] };
+                for h in heads {
+                    let size = if l.kind == lamps::Kind::Ceiling { 0.6 } else { 1.2 };
+                    let c = l.color * 0.35;
+                    data.extend_from_slice(&[h.x, h.y - 0.2, h.z, size, c.x, c.y, c.z, 0.0]);
+                }
+            }
+            (instanced_quads(gl, &data), (data.len() / 8) as i32)
+        };
 
         let env_map = gl.gen_texture();
+        let post = if hdr { Some(post::Post::new(gl, fullscreen)?) } else { None };
         let mut r = Renderer {
             quality,
             sizes,
@@ -309,7 +389,13 @@ impl Renderer {
             water,
             building,
             car,
+            prop,
+            glow,
             frame_ubo,
+            light_map,
+            no_shadow,
+            lamp_meshes,
+            lamp_glows,
             env_map,
             asphalt,
             surfaces,
@@ -323,6 +409,7 @@ impl Renderer {
             cars,
             fullscreen,
             dash: world.dash_period(),
+            post,
             stats: Stats::default(),
         };
         r.bake_sky(gl, defines)?;
@@ -416,7 +503,7 @@ impl Renderer {
     }
 
     /// Fills the frame's uniform block.
-    fn upload_frame(&self, gl: &mut Context, view_proj: &Mat4, eye: Vec3, time: f32) {
+    fn upload_frame(&self, gl: &mut Context, view_proj: &Mat4, eye: Vec3, time: f32, lights: &[Light]) {
         let e = &self.env;
         let mut f = Vec::with_capacity(FRAME_FLOATS);
         f.extend_from_slice(&mat(view_proj));
@@ -430,8 +517,21 @@ impl Renderer {
         v4(&mut f, e.fog_color, e.fog_density);
         f.extend_from_slice(&[e.fog_falloff, e.fog_glow, e.fog_max, 0.0]);
         f.extend_from_slice(&[e.wetness, e.rain, e.street_lights, e.exposure]);
-        f.extend_from_slice(&[0.0, 0.0, 0.0, 0.0]);
-        f.extend_from_slice(&[0.0, e.reflections, 0.0, 0.0]);
+        f.extend_from_slice(&[-HALF_X, -HALF_Z, 0.5 / HALF_X, 0.5 / HALF_Z]);
+        // The lights that matter most here: bright and near.
+        let mut chosen: Vec<&Light> = lights.iter().filter(|l| l.pos.distance(eye) < l.radius + 150.0).collect();
+        let weight = |l: &Light| (l.color.x + l.color.y + l.color.z) / (1.0 + l.pos.distance_squared(eye));
+        chosen.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
+        chosen.truncate(MAX_LIGHTS);
+        f.extend_from_slice(&[chosen.len() as f32, e.reflections, 0.0, 0.0]);
+        for l in &chosen {
+            f.extend_from_slice(&[l.pos.x, l.pos.y, l.pos.z, l.radius]);
+            f.extend_from_slice(&[l.color.x, l.color.y, l.color.z, 0.0]);
+            match l.spot {
+                Some((d, cone)) => f.extend_from_slice(&[d.x, d.y, d.z, cone]),
+                None => f.extend_from_slice(&[0.0, -1.0, 0.0, -2.0]),
+            }
+        }
         f.resize(FRAME_FLOATS, 0.0);
         gl.bind_buffer(gl::UNIFORM_BUFFER, self.frame_ubo);
         gl.buffer_sub_data(gl::UNIFORM_BUFFER, 0, &float_bytes(&f));
@@ -447,10 +547,16 @@ impl Renderer {
         let proj = Mat4::perspective_rh(camera.fov, aspect, NEAR, FAR);
         let view_proj = proj * camera.view();
         let planes = frustum(&view_proj);
-        self.upload_frame(gl, &view_proj, camera.eye, time);
+        self.upload_frame(gl, &view_proj, camera.eye, time, frame.lights);
         self.stats = Stats::default();
 
-        gl.viewport(0, 0, width, height);
+        match self.post.as_mut() {
+            Some(p) => p.begin(gl, width, height),
+            None => {
+                gl.bind_framebuffer(gl::FRAMEBUFFER, 0);
+                gl.viewport(0, 0, width, height);
+            }
+        }
         gl.enable(gl::DEPTH_TEST);
         gl.depth_func(gl::LESS);
         gl.depth_mask(true);
@@ -459,6 +565,10 @@ impl Renderer {
         gl.disable(gl::BLEND);
         gl.clear_color(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT);
+        gl.active_texture(gl::TEXTURE0 + gpu::unit::LIGHT_MAP);
+        gl.bind_texture(gl::TEXTURE_2D, self.light_map);
+        gl.active_texture(gl::TEXTURE0 + gpu::unit::SHADOW);
+        gl.bind_texture(gl::TEXTURE_2D, self.no_shadow);
         gl.active_texture(gl::TEXTURE0);
         gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
 
@@ -490,6 +600,14 @@ impl Renderer {
         self.stats.draws += 1;
         self.stats.triangles += (self.blocks.0.count / 3 * self.blocks.1) as u32;
 
+        // The street lights.
+        gl.use_program(self.prop.id);
+        for k in 0..self.lamp_meshes.len() {
+            let (g, n) = (&self.lamp_meshes[k].0, self.lamp_meshes[k].1);
+            g.draw_instanced(gl, n);
+            self.stats.draws += 1;
+        }
+
         // The ground, fine near the camera.
         gl.use_program(self.terrain.id);
         gl.bind_texture(gl::TEXTURE_2D_ARRAY, self.ground_tex);
@@ -517,11 +635,33 @@ impl Renderer {
         gl.depth_mask(false);
         gl.use_program(self.sky.id);
         gl.uniform_matrix4fv(self.sky.at("u_invViewProj"), false, &mat(&view_proj.inverse()));
+        gl.uniform1f(self.sky.at("u_stars"), self.env.sky.stars);
         gl.bind_vertex_array(self.fullscreen);
         gl.draw_arrays(gl::TRIANGLES, 0, 3);
+
+        // The glows, added on top (tested against what hides them).
+        if self.env.street_lights > 0.0 {
+            let view = camera.view();
+            let (right, up) = (view.row(0).xyz(), view.row(1).xyz());
+            gl.use_program(self.glow.id);
+            gl.uniform3f(self.glow.at("u_right"), right.x, right.y, right.z);
+            gl.uniform3f(self.glow.at("u_up"), up.x, up.y, up.z);
+            gl.disable(gl::CULL_FACE);
+            gl.enable(gl::BLEND);
+            gl.blend_func(gl::ONE, gl::ONE);
+            gl.bind_vertex_array(self.lamp_glows.0);
+            gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, self.lamp_glows.1);
+            gl.disable(gl::BLEND);
+            gl.enable(gl::CULL_FACE);
+            self.stats.draws += 1;
+        }
         gl.depth_mask(true);
         gl.depth_func(gl::LESS);
         gl.bind_vertex_array(0);
+
+        if let Some(p) = self.post.as_mut() {
+            p.finish(gl, &self.env.grade());
+        }
     }
 
     /// Draws `cars`: each body, then its wheels.
@@ -556,8 +696,7 @@ impl Renderer {
                     Livery::Taxi => 2,
                 },
             );
-            let (phase, on) = c.siren.map_or((0.0, 0.0), |t| (t, 1.0));
-            gl.uniform4f(at_lamps, c.headlights, c.brake, phase, on);
+            gl.uniform4f(at_lamps, c.headlights, c.brake, c.bar[0], c.bar[1]);
             gl.uniform4f(at_shape, shape.cowl, shape.a, shape.c, shape.belt);
             self.cars[k].1.draw(gl);
             let body = self.cars[k].1.count;
@@ -586,6 +725,101 @@ impl Renderer {
         self.stats.draws += 1;
         self.stats.triangles += indices as u32 / 3;
     }
+}
+
+/// A vertex array drawing a quad (two triangles, corners at -1 and 1)
+/// once for each instance in `data` (eight floats each: two vec4s).
+fn instanced_quads(gl: &mut Context, data: &[f32]) -> u32 {
+    let vao = gl.gen_vertex_array();
+    gl.bind_vertex_array(vao);
+    let vbo = gl.gen_buffer();
+    gl.bind_buffer(gl::ARRAY_BUFFER, vbo);
+    let corners = [-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0];
+    gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(&corners), gl::STATIC_DRAW);
+    gl.vertex_attrib_pointer(gpu::attr::POS, 2, gl::FLOAT, false, 0, 0);
+    gl.enable_vertex_attrib_array(gpu::attr::POS);
+    let ib = gl.gen_buffer();
+    gl.bind_buffer(gl::ARRAY_BUFFER, ib);
+    gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(data), gl::STATIC_DRAW);
+    gpu::set_instance_layout(gl, 8, 0);
+    gl.bind_vertex_array(0);
+    vao
+}
+
+/// Paints the street lights' pools into a map of the world, seen from
+/// above: their light added up in colour, the highest lamp's height in
+/// alpha.
+fn bake_light_map(gl: &mut Context, lamps: &[Lamp], quality: Quality, defines: &str) -> Result<u32, String> {
+    let size = if quality == Quality::High { 2048 } else { 1024 };
+    let tex = gl.gen_texture();
+    gl.bind_texture(gl::TEXTURE_2D, tex);
+    let float = gl.backend().caps().color_buffer_float;
+    gl.tex_storage_2d(gl::TEXTURE_2D, 1, if float { gl::RGBA16F } else { gl::RGBA8 }, size, size);
+    for (p, v) in [
+        (gl::TEXTURE_MIN_FILTER, gl::LINEAR),
+        (gl::TEXTURE_MAG_FILTER, gl::LINEAR),
+        (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
+        (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
+    ] {
+        gl.tex_parameteri(gl::TEXTURE_2D, p, v as i32);
+    }
+    let p = Program::new(
+        gl,
+        "light map",
+        &source(defines, false, shaders::LIGHT_MAP_VS),
+        &source(defines, false, shaders::LIGHT_MAP_FS),
+        &["u_rect"],
+        &[],
+    )?;
+    let mut data = Vec::new();
+    for l in lamps {
+        let heads = if l.kind == lamps::Kind::Double { &l.heads[..] } else { &l.heads[..1] };
+        for h in heads {
+            // An 8-bit map holds a quarter of the light (the programs
+            // cannot tell: the pools are dim enough).
+            let c = if float { l.color } else { l.color * 0.25 };
+            data.extend_from_slice(&[h.x, h.z, l.radius, h.y, c.x, c.y, c.z, 0.0]);
+        }
+    }
+    let vao = instanced_quads(gl, &data);
+    let fbo = gl.gen_framebuffer();
+    gl.bind_framebuffer(gl::FRAMEBUFFER, fbo);
+    gl.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, tex, 0);
+    gl.viewport(0, 0, size, size);
+    gl.clear_color(0.0, 0.0, 0.0, 0.0);
+    gl.clear(gl::COLOR_BUFFER_BIT);
+    gl.disable(gl::DEPTH_TEST);
+    gl.disable(gl::CULL_FACE);
+    gl.enable(gl::BLEND);
+    gl.blend_func(gl::ONE, gl::ONE);
+    gl.blend_equation_separate(gl::FUNC_ADD, gl::MAX);
+    gl.use_program(p.id);
+    gl.uniform4f(p.at("u_rect"), -HALF_X, -HALF_Z, 0.5 / HALF_X, 0.5 / HALF_Z);
+    gl.bind_vertex_array(vao);
+    gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, (data.len() / 8) as i32);
+    gl.blend_equation(gl::FUNC_ADD);
+    gl.disable(gl::BLEND);
+    gl.bind_vertex_array(0);
+    gl.bind_framebuffer(gl::FRAMEBUFFER, 0);
+    gl.delete_framebuffers(&[fbo]);
+    gl.delete_vertex_arrays(&[vao]);
+    gl.delete_program(p.id);
+    Ok(tex)
+}
+
+/// A depth texture of one texel at the far plane, compared as shadow maps
+/// are: where there is no shadow map, nothing is in shadow.
+fn no_shadow_map(gl: &mut Context) -> u32 {
+    let t = gl.gen_texture();
+    gl.bind_texture(gl::TEXTURE_2D, t);
+    gl.tex_storage_2d(gl::TEXTURE_2D, 1, gl::DEPTH_COMPONENT24, 1, 1);
+    let one = 0xFFFF_FFFFu32.to_le_bytes();
+    gl.tex_sub_image_2d(gl::TEXTURE_2D, 0, 0, 0, 1, 1, gl::DEPTH_COMPONENT, gl::UNSIGNED_INT, &one[..]);
+    gl.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+    gl.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+    gl.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_COMPARE_MODE, gl::COMPARE_REF_TO_TEXTURE as i32);
+    gl.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_COMPARE_FUNC, gl::LEQUAL as i32);
+    t
 }
 
 /// The unit box the blocks are drawn with (no floor), with an instance

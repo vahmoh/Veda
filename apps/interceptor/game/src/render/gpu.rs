@@ -37,6 +37,19 @@ const ATTRIBS: [(u32, &str); 9] = [
     (attr::INST4, "a_inst4"),
 ];
 
+/// Texture units every lit program shares: the sky's cube map, the
+/// program's own textures, the street lights' map, the sun's shadow map.
+pub mod unit {
+    pub const ENV: u32 = 0;
+    pub const OWN: u32 = 1;
+    pub const LIGHT_MAP: u32 = 2;
+    pub const SHADOW: u32 = 3;
+}
+
+/// The samplers every lit program has, at their units.
+pub const LIT_SAMPLERS: [(&str, u32); 3] =
+    [("u_env", unit::ENV), ("u_lightMap", unit::LIGHT_MAP), ("u_shadowMap", unit::SHADOW)];
+
 /// The uniform block every lit program shares, at binding 0.
 pub const FRAME_BLOCK: &str = "Frame";
 pub const FRAME_BINDING: u32 = 0;
@@ -51,15 +64,15 @@ pub struct Program {
 impl Program {
     /// Compiles and links a program from a vertex and a fragment shader
     /// (complete sources), binding the shared attribute locations and the
-    /// frame block, and looks up `uniforms`; `samplers` are set to texture
-    /// units 0, 1, 2... in order.
+    /// frame block, and looks up `uniforms`; each of `samplers` is set to
+    /// its texture unit.
     pub fn new(
         gl: &mut Context,
         name: &str,
         vs: &str,
         fs: &str,
         uniforms: &[&'static str],
-        samplers: &[&'static str],
+        samplers: &[(&'static str, u32)],
     ) -> Result<Program, String> {
         let compile = |gl: &mut Context, kind: u32, src: &str| -> Result<u32, String> {
             let s = gl.create_shader(kind);
@@ -101,12 +114,12 @@ impl Program {
         }
         let mut names = Vec::new();
         let mut locations = Vec::new();
-        for &u in uniforms.iter().chain(samplers) {
+        for &u in uniforms {
             names.push(u);
             locations.push(gl.get_uniform_location(id, u));
         }
         gl.use_program(id);
-        for (unit, &s) in samplers.iter().enumerate() {
+        for &(s, unit) in samplers {
             let at = gl.get_uniform_location(id, s);
             gl.uniform1i(at, unit as i32);
         }

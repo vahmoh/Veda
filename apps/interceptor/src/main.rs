@@ -180,13 +180,13 @@ fn main() -> i32 {
         let dt = ((now - last) as f64 / 1e9).clamp(0.0, 0.25) as f32;
         last = now;
         game.update(dt);
-        let cars = game.frame(dt);
+        let (cars, lights) = game.frame(dt);
 
         // Render at the internal resolution.
         let (iw, ih) = internal_size(window.width, window.height, SCALES[level]);
         gl.resize(iw as u32, ih as u32);
         let t_render = vrt::time::now_ns();
-        let frame = Frame { camera: game.camera, cars: &cars, time: game.clock };
+        let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock };
         renderer.render(&mut gl, &frame, iw, ih);
         gl.flush();
 

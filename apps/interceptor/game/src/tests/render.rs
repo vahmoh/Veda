@@ -46,7 +46,7 @@ fn frame(c: &mut Context, r: &mut Renderer, cam: &Camera, w: u32, h: u32) -> Vec
 }
 
 fn frame_with(c: &mut Context, r: &mut Renderer, cam: &Camera, cars: &[CarView], w: u32, h: u32) -> Vec<u32> {
-    r.render(c, &Frame { camera: *cam, cars, time: 12.0 }, w as i32, h as i32);
+    r.render(c, &Frame { camera: *cam, cars, lights: &[], time: 12.0 }, w as i32, h as i32);
     assert_eq!(c.get_error(), gl::NO_ERROR);
     let mut px = vec![0u32; (w * h) as usize];
     c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
@@ -169,7 +169,7 @@ pub fn car_on_road(world: &World, kind: Kind, s: f32, lateral: f32, backwards: b
         steer: 0.0,
         headlights: 1.0,
         brake: 0.0,
-        siren: (kind == Kind::Police).then_some(0.1),
+        bar: if kind == Kind::Police { [1.0, 0.0] } else { [0.0, 0.0] },
     }
 }
 
@@ -225,5 +225,55 @@ fn showroom() {
             let px = frame_with(&mut c, &mut r, &cam, &cars, w, h);
             save(&format!("{dir}/cars-{tname}-{view}.png"), &px, w, h);
         }
+    }
+}
+
+/// A chase at night through the real game: the police car, siren on,
+/// following a suspect, seen from the chase camera
+/// (`INTERCEPTOR_CHASE=dir`; `INTERCEPTOR_AT=s` picks the place).
+#[test]
+fn chase_scene() {
+    use crate::game::{Car, Game};
+    use crate::vehicle::Spec;
+    let Ok(dir) = std::env::var("INTERCEPTOR_CHASE") else { return };
+    let (w, h) = (1280, 720);
+    let at: f32 = std::env::var("INTERCEPTOR_AT").ok().and_then(|s| s.parse().ok()).unwrap_or(150.0);
+    // INTERCEPTOR_SOFT=1: the software renderer drawing as a GPU does.
+    let soft = std::env::var("INTERCEPTOR_SOFT").is_ok();
+    let (mut c, quality) = match renderer(w, h).filter(|_| !soft) {
+        Some(c) => (c, Quality::High),
+        None if soft => (software(w, h), Quality::High),
+        None => (software(w, h), Quality::Low),
+    };
+    for (tname, time) in [("night", TimeOfDay::Night), ("day", TimeOfDay::Day), ("sunset", TimeOfDay::Sunset)] {
+        let env = Environment::new(time, Weather::Clear);
+        let world = World::new();
+        let mut r = Renderer::new(&mut c, &world, env, quality).unwrap_or_else(|e| panic!("{e}"));
+        let mut game = Game::new(world, env);
+        let mut suspect = Car::on_road(&game.world, Kind::Coupe, Spec::sports(), at + 16.0, 5.7, false, 30.0);
+        suspect.paint = Vec3::new(0.55, 0.02, 0.02);
+        game.cars.push(suspect);
+        let p = game.player;
+        game.cars[p] = Car::on_road(&game.world, Kind::Police, Spec::interceptor(), at, 2.1, false, 30.0);
+        game.cars[p].paint = Vec3::new(0.02, 0.02, 0.02);
+        game.cars[p].siren = true;
+        game.follow = crate::camera::Follow::new(&game.cars[p].vehicle);
+        game.cars[1].controls.throttle = 0.6;
+        game.cars[p].controls.throttle = 0.6;
+        for k in 0..40 {
+            game.update(1.0 / 60.0);
+            let (cars, lights) = game.frame(1.0 / 60.0);
+            if k == 39 {
+                r.render(
+                    &mut c,
+                    &Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock },
+                    w as i32,
+                    h as i32,
+                );
+            }
+        }
+        let mut px = vec![0u32; (w * h) as usize];
+        c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+        save(&format!("{dir}/chase-{tname}.png"), &px, w, h);
     }
 }

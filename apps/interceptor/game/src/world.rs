@@ -4,6 +4,7 @@
 use alloc::vec::Vec;
 
 use crate::city::{self, Block};
+use crate::lamps::{self, Lamp};
 use crate::layout::VEDA_BAY;
 use crate::road::Road;
 use crate::terrain::Terrain;
@@ -17,6 +18,8 @@ pub struct World {
     pub terrain: Terrain,
     /// The buildings' blocks.
     pub blocks: Vec<Block>,
+    /// The street lights.
+    pub lamps: Vec<Lamp>,
 }
 
 impl World {
@@ -25,7 +28,8 @@ impl World {
         let road = Road::new(VEDA_BAY);
         let terrain = Terrain::new(&road, SEED);
         let blocks = city::buildings(&road, &terrain, SEED);
-        World { road, terrain, blocks }
+        let lamps = lamps::place(&road);
+        World { road, terrain, blocks, lamps }
     }
 
     /// The period of the lane markings' dashes (m): 12 m, adjusted so that
