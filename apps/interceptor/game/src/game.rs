@@ -279,7 +279,8 @@ impl Game {
             if car.siren {
                 let roof = m.transform_point3(Vec3::new(0.0, 1.75, 0.0));
                 let side = m.transform_vector3(Vec3::X) * 0.4;
-                let k = 0.4 + 0.6 * night;
+                // Daylight drowns most of it.
+                let k = 0.15 + 0.85 * night.min(1.0);
                 if bar[0] > 0.0 {
                     lights.push(Light {
                         pos: roof + side,

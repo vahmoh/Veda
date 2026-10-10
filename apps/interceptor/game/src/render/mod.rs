@@ -200,6 +200,9 @@ pub struct Renderer {
     lamp_meshes: Vec<(Geometry, i32)>,
     /// The lamps' glows (an instanced quad).
     lamp_glows: (u32, i32),
+    /// The cars' lights' glows, refilled every frame (the vertex array and
+    /// its instance buffer).
+    car_glows: (u32, u32),
     env_map: u32,
     asphalt: u32,
     surfaces: u32,
@@ -217,6 +220,8 @@ pub struct Renderer {
     dash: f32,
     /// Post-processing, with a GPU.
     post: Option<post::Post>,
+    /// The sun's shadows, with a GPU, by day.
+    shadow: Option<Shadow>,
     /// Statistics of the last frame.
     pub stats: Stats,
 }
@@ -227,6 +232,20 @@ pub struct Stats {
     pub draws: u32,
     pub triangles: u32,
 }
+
+/// The sun's shadow map and the programs that draw its casters.
+struct Shadow {
+    fbo: u32,
+    tex: u32,
+    size: i32,
+    statik: Program,
+    building: Program,
+    prop: Program,
+    car: Program,
+}
+
+/// Half the side of the square the shadow map covers (m).
+const SHADOW_HALF: f32 = 95.0;
 
 /// The floats of the frame's uniform block (std140: matrices, then
 /// vectors of four).
@@ -373,11 +392,51 @@ impl Renderer {
                     data.extend_from_slice(&[h.x, h.y - 0.2, h.z, size, c.x, c.y, c.z, 0.0]);
                 }
             }
-            (instanced_quads(gl, &data), (data.len() / 8) as i32)
+            (instanced_quads(gl, &data).0, (data.len() / 8) as i32)
         };
+        let car_glows = instanced_quads(gl, &[]);
 
         let env_map = gl.gen_texture();
         let post = if hdr { Some(post::Post::new(gl, fullscreen)?) } else { None };
+        let shadow = if quality == Quality::High && env.shadows > 0.0 && env.time != crate::env::TimeOfDay::Night {
+            // The prelude's samplers at their units, as in every lit
+            // program (samplers of different kinds may not share one).
+            let depth = |gl: &mut Context, name: &str, vs: &str, uniforms: &[&'static str]| {
+                let (v, f) = (source(defines, true, vs), source(defines, true, shaders::DEPTH_FS));
+                Program::new(gl, name, &v, &f, uniforms, &gpu::LIT_SAMPLERS)
+            };
+            let statik = depth(gl, "shadow static", shaders::STATIC_VS, &[])?;
+            let building = depth(gl, "shadow buildings", shaders::BUILDING_VS, &[])?;
+            let prop = depth(gl, "shadow props", shaders::PROP_VS, &[])?;
+            let car = depth(gl, "shadow cars", shaders::CAR_VS, &["u_model"])?;
+            let size = 2048;
+            let tex = gl.gen_texture();
+            gl.bind_texture(gl::TEXTURE_2D, tex);
+            gl.tex_storage_2d(gl::TEXTURE_2D, 1, gl::DEPTH_COMPONENT24, size, size);
+            for (pname, v) in [
+                (gl::TEXTURE_MIN_FILTER, gl::LINEAR),
+                (gl::TEXTURE_MAG_FILTER, gl::LINEAR),
+                (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
+                (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
+                (gl::TEXTURE_COMPARE_MODE, gl::COMPARE_REF_TO_TEXTURE),
+                (gl::TEXTURE_COMPARE_FUNC, gl::LEQUAL),
+            ] {
+                gl.tex_parameteri(gl::TEXTURE_2D, pname, v as i32);
+            }
+            let fbo = gl.gen_framebuffer();
+            gl.bind_framebuffer(gl::FRAMEBUFFER, fbo);
+            gl.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::TEXTURE_2D, tex, 0);
+            gl.draw_buffers(&[gl::NONE]);
+            gl.read_buffer(gl::NONE);
+            let complete = gl.check_framebuffer_status(gl::FRAMEBUFFER) == gl::FRAMEBUFFER_COMPLETE;
+            gl.bind_framebuffer(gl::FRAMEBUFFER, 0);
+            if !complete {
+                return Err("the shadow map's framebuffer is incomplete".into());
+            }
+            Some(Shadow { fbo, tex, size, statik, building, prop, car })
+        } else {
+            None
+        };
         let mut r = Renderer {
             quality,
             sizes,
@@ -396,6 +455,7 @@ impl Renderer {
             no_shadow,
             lamp_meshes,
             lamp_glows,
+            car_glows,
             env_map,
             asphalt,
             surfaces,
@@ -410,6 +470,7 @@ impl Renderer {
             fullscreen,
             dash: world.dash_period(),
             post,
+            shadow,
             stats: Stats::default(),
         };
         r.bake_sky(gl, defines)?;
@@ -503,14 +564,23 @@ impl Renderer {
     }
 
     /// Fills the frame's uniform block.
-    fn upload_frame(&self, gl: &mut Context, view_proj: &Mat4, eye: Vec3, time: f32, lights: &[Light]) {
+    fn upload_frame(
+        &self,
+        gl: &mut Context,
+        view_proj: &Mat4,
+        sun: Option<&Mat4>,
+        eye: Vec3,
+        time: f32,
+        lights: &[Light],
+    ) {
         let e = &self.env;
         let mut f = Vec::with_capacity(FRAME_FLOATS);
         f.extend_from_slice(&mat(view_proj));
-        f.extend_from_slice(&mat(&Mat4::IDENTITY));
+        f.extend_from_slice(&mat(sun.unwrap_or(&Mat4::IDENTITY)));
         let v4 = |f: &mut Vec<f32>, v: Vec3, w: f32| f.extend_from_slice(&[v.x, v.y, v.z, w]);
         v4(&mut f, eye, time);
-        v4(&mut f, e.sun_dir, e.shadows);
+        // No shadow map, no shadows.
+        v4(&mut f, e.sun_dir, if sun.is_some() { e.shadows } else { 0.0 });
         v4(&mut f, e.sun_color, 0.0);
         v4(&mut f, e.sky_ambient, 0.0);
         v4(&mut f, e.ground_ambient, 0.0);
@@ -523,7 +593,8 @@ impl Renderer {
         let weight = |l: &Light| (l.color.x + l.color.y + l.color.z) / (1.0 + l.pos.distance_squared(eye));
         chosen.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
         chosen.truncate(MAX_LIGHTS);
-        f.extend_from_slice(&[chosen.len() as f32, e.reflections, 0.0, 0.0]);
+        let texel = self.shadow.as_ref().map_or(0.0, |sh| 1.0 / sh.size as f32);
+        f.extend_from_slice(&[chosen.len() as f32, e.reflections, texel, 0.0]);
         for l in &chosen {
             f.extend_from_slice(&[l.pos.x, l.pos.y, l.pos.z, l.radius]);
             f.extend_from_slice(&[l.color.x, l.color.y, l.color.z, 0.0]);
@@ -547,7 +618,13 @@ impl Renderer {
         let proj = Mat4::perspective_rh(camera.fov, aspect, NEAR, FAR);
         let view_proj = proj * camera.view();
         let planes = frustum(&view_proj);
-        self.upload_frame(gl, &view_proj, camera.eye, time, frame.lights);
+        // The sun's shadow map first.
+        let sun = self.shadow.is_some().then(|| self.sun_view_proj(camera));
+        if let Some(sun) = sun {
+            self.upload_frame(gl, &sun, None, camera.eye, time, &[]);
+            self.draw_shadow_map(gl, frame.cars, &sun);
+        }
+        self.upload_frame(gl, &view_proj, sun.as_ref(), camera.eye, time, frame.lights);
         self.stats = Stats::default();
 
         match self.post.as_mut() {
@@ -568,7 +645,7 @@ impl Renderer {
         gl.active_texture(gl::TEXTURE0 + gpu::unit::LIGHT_MAP);
         gl.bind_texture(gl::TEXTURE_2D, self.light_map);
         gl.active_texture(gl::TEXTURE0 + gpu::unit::SHADOW);
-        gl.bind_texture(gl::TEXTURE_2D, self.no_shadow);
+        gl.bind_texture(gl::TEXTURE_2D, self.shadow.as_ref().map_or(self.no_shadow, |sh| sh.tex));
         gl.active_texture(gl::TEXTURE0);
         gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
 
@@ -639,8 +716,10 @@ impl Renderer {
         gl.bind_vertex_array(self.fullscreen);
         gl.draw_arrays(gl::TRIANGLES, 0, 3);
 
-        // The glows, added on top (tested against what hides them).
-        if self.env.street_lights > 0.0 {
+        // The glows, added on top (tested against what hides them): the
+        // street lights' at night, the cars' lights' always.
+        let car_glows = car_glows(frame.cars, camera.eye, 0.2 + 0.8 * self.env.street_lights.min(1.0));
+        if self.env.street_lights > 0.0 || !car_glows.is_empty() {
             let view = camera.view();
             let (right, up) = (view.row(0).xyz(), view.row(1).xyz());
             gl.use_program(self.glow.id);
@@ -649,11 +728,20 @@ impl Renderer {
             gl.disable(gl::CULL_FACE);
             gl.enable(gl::BLEND);
             gl.blend_func(gl::ONE, gl::ONE);
-            gl.bind_vertex_array(self.lamp_glows.0);
-            gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, self.lamp_glows.1);
+            if self.env.street_lights > 0.0 {
+                gl.bind_vertex_array(self.lamp_glows.0);
+                gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, self.lamp_glows.1);
+                self.stats.draws += 1;
+            }
+            if !car_glows.is_empty() {
+                gl.bind_buffer(gl::ARRAY_BUFFER, self.car_glows.1);
+                gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(&car_glows), gl::STREAM_DRAW);
+                gl.bind_vertex_array(self.car_glows.0);
+                gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, (car_glows.len() / 8) as i32);
+                self.stats.draws += 1;
+            }
             gl.disable(gl::BLEND);
             gl.enable(gl::CULL_FACE);
-            self.stats.draws += 1;
         }
         gl.depth_mask(true);
         gl.depth_func(gl::LESS);
@@ -662,6 +750,77 @@ impl Renderer {
         if let Some(p) = self.post.as_mut() {
             p.finish(gl, &self.env.grade());
         }
+    }
+
+    /// The sun's view and projection: a square box round where the camera
+    /// looks, seen along the sunlight, its middle moved by whole texels so
+    /// that the shadows' edges stand still as the camera moves.
+    fn sun_view_proj(&self, camera: &Camera) -> Mat4 {
+        let size = self.shadow.as_ref().map_or(2048, |s| s.size) as f32;
+        let fwd = (camera.target - camera.eye).normalize_or(Vec3::Z);
+        let flat = Vec3::new(fwd.x, 0.0, fwd.z).normalize_or(Vec3::Z);
+        let center = camera.eye + flat * (SHADOW_HALF * 0.6);
+        let sun = self.env.sun_dir;
+        let up = if sun.y.abs() > 0.95 { Vec3::Z } else { Vec3::Y };
+        let view = Mat4::look_at_rh(Vec3::ZERO, -sun, up);
+        let c = view.transform_point3(center);
+        let texel = 2.0 * SHADOW_HALF / size;
+        let (cx, cy) = ((c.x / texel).round() * texel, (c.y / texel).round() * texel);
+        // Towards the sun far enough for the towers, beyond for the ground.
+        let proj = Mat4::orthographic_rh(
+            cx - SHADOW_HALF,
+            cx + SHADOW_HALF,
+            cy - SHADOW_HALF,
+            cy + SHADOW_HALF,
+            -c.z - 700.0,
+            -c.z + 150.0,
+        );
+        proj * view
+    }
+
+    /// Draws what casts shadows into the shadow map, seen from the sun.
+    fn draw_shadow_map(&mut self, gl: &mut Context, cars: &[CarView], sun: &Mat4) {
+        let Some(sh) = self.shadow.as_ref() else { return };
+        let planes = frustum(sun);
+        gl.bind_framebuffer(gl::FRAMEBUFFER, sh.fbo);
+        gl.viewport(0, 0, sh.size, sh.size);
+        gl.enable(gl::DEPTH_TEST);
+        gl.depth_func(gl::LESS);
+        gl.depth_mask(true);
+        gl.clear(gl::DEPTH_BUFFER_BIT);
+        // Open meshes (pavements, rails) cast from both sides.
+        gl.disable(gl::CULL_FACE);
+        gl.enable(gl::POLYGON_OFFSET_FILL);
+        gl.polygon_offset(1.6, 3.0);
+        gl.use_program(sh.statik.id);
+        let mut draws = 0;
+        for c in &self.road {
+            if !outside(&planes, c.center, c.radius) {
+                c.sides.draw(gl);
+                draws += 1;
+            }
+        }
+        gl.use_program(sh.building.id);
+        self.blocks.0.draw_instanced(gl, self.blocks.1);
+        gl.use_program(sh.prop.id);
+        for (g, n) in &self.lamp_meshes {
+            g.draw_instanced(gl, *n);
+        }
+        gl.use_program(sh.car.id);
+        let at_model = sh.car.at("u_model");
+        for c in cars {
+            let center = c.transform.transform_point3(Vec3::new(0.0, 0.8, 0.0));
+            if outside(&planes, center, 3.2) {
+                continue;
+            }
+            let Some(k) = self.cars.iter().position(|e| e.0 == c.kind) else { continue };
+            gl.uniform_matrix4fv(at_model, false, &mat(&c.transform));
+            self.cars[k].1.draw(gl);
+            draws += 1;
+        }
+        gl.disable(gl::POLYGON_OFFSET_FILL);
+        gl.enable(gl::CULL_FACE);
+        self.stats.draws += draws + 2 + self.lamp_meshes.len() as u32;
     }
 
     /// Draws `cars`: each body, then its wheels.
@@ -727,9 +886,58 @@ impl Renderer {
     }
 }
 
+/// The glows of the cars' lights: headlights seen from ahead, tail lights
+/// from behind (brighter when braking), the light bar's flashes from
+/// anywhere. Eight floats each: place and size, colour.
+fn car_glows(cars: &[CarView], eye: Vec3, dark: f32) -> Vec<f32> {
+    let mut out = Vec::new();
+    for c in cars {
+        let s = c.kind.shape();
+        let (half, w) = (s.length * 0.5, s.width * 0.5);
+        let m = &c.transform;
+        let forward = m.transform_vector3(Vec3::Z).normalize_or(Vec3::Z);
+        let mut glow = |local: Vec3, facing: Option<Vec3>, size: f32, color: Vec3| {
+            let p = m.transform_point3(local);
+            let k = match facing {
+                Some(d) => {
+                    let toward = (eye - p).normalize_or(Vec3::Y);
+                    let f = d.dot(toward).max(0.0);
+                    0.12 + 0.88 * f * f
+                }
+                None => 1.0,
+            };
+            let c = color * (k * dark);
+            if c.x + c.y + c.z > 0.01 {
+                out.extend_from_slice(&[p.x, p.y, p.z, size, c.x, c.y, c.z, 0.0]);
+            }
+        };
+        let hl_y = (s.ends.1 - 0.06).min(s.top_at(half - 0.1) - 0.05) - 0.03;
+        let t_y = (s.ends.1 - 0.02).min(s.top_at(-half + 0.1) - 0.04) - 0.06;
+        for side in [-1.0f32, 1.0] {
+            if c.headlights > 0.0 {
+                let at = Vec3::new(side * (w * 0.80 - 0.2), hl_y, half + 0.02);
+                glow(at, Some(forward), 0.55, Vec3::new(1.0, 0.95, 0.85) * (3.0 * c.headlights));
+            }
+            let tail = 0.5 * c.headlights + 2.5 * c.brake;
+            if tail > 0.0 {
+                let at = Vec3::new(side * (w * 0.82 - 0.21), t_y, -half - 0.02);
+                glow(at, Some(-forward), 0.4, Vec3::new(1.0, 0.03, 0.02) * tail);
+            }
+        }
+        if c.bar[0] + c.bar[1] > 0.0 {
+            let roof = s.top_at(s.a - 0.25) + 0.12;
+            let z = s.a - 0.28;
+            glow(Vec3::new(0.32, roof, z), None, 0.8, Vec3::new(1.0, 0.05, 0.02) * (6.0 * c.bar[0]));
+            glow(Vec3::new(-0.32, roof, z), None, 0.8, Vec3::new(0.1, 0.25, 1.0) * (7.0 * c.bar[1]));
+        }
+    }
+    out
+}
+
 /// A vertex array drawing a quad (two triangles, corners at -1 and 1)
-/// once for each instance in `data` (eight floats each: two vec4s).
-fn instanced_quads(gl: &mut Context, data: &[f32]) -> u32 {
+/// once for each instance in `data` (eight floats each: two vec4s), and
+/// the instance buffer.
+fn instanced_quads(gl: &mut Context, data: &[f32]) -> (u32, u32) {
     let vao = gl.gen_vertex_array();
     gl.bind_vertex_array(vao);
     let vbo = gl.gen_buffer();
@@ -743,7 +951,7 @@ fn instanced_quads(gl: &mut Context, data: &[f32]) -> u32 {
     gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(data), gl::STATIC_DRAW);
     gpu::set_instance_layout(gl, 8, 0);
     gl.bind_vertex_array(0);
-    vao
+    (vao, ib)
 }
 
 /// Paints the street lights' pools into a map of the world, seen from
@@ -781,7 +989,7 @@ fn bake_light_map(gl: &mut Context, lamps: &[Lamp], quality: Quality, defines: &
             data.extend_from_slice(&[h.x, h.z, l.radius, h.y, c.x, c.y, c.z, 0.0]);
         }
     }
-    let vao = instanced_quads(gl, &data);
+    let (vao, buffer) = instanced_quads(gl, &data);
     let fbo = gl.gen_framebuffer();
     gl.bind_framebuffer(gl::FRAMEBUFFER, fbo);
     gl.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, tex, 0);
@@ -803,6 +1011,7 @@ fn bake_light_map(gl: &mut Context, lamps: &[Lamp], quality: Quality, defines: &
     gl.bind_framebuffer(gl::FRAMEBUFFER, 0);
     gl.delete_framebuffers(&[fbo]);
     gl.delete_vertex_arrays(&[vao]);
+    gl.delete_buffers(&[buffer]);
     gl.delete_program(p.id);
     Ok(tex)
 }

@@ -44,7 +44,7 @@ layout(std140) uniform Frame {
     vec4 u_fogParams;    // x: height falloff, y: glow towards the sun, z: most fog
     vec4 u_weather;      // x: wetness, y: rain, z: street lights, w: exposure
     vec4 u_lightRect;    // the light map's world rectangle: x0, z0, 1/width, 1/depth
-    vec4 u_misc;         // x: dynamic lights, y: sky reflections' strength
+    vec4 u_misc;         // x: dynamic lights, y: sky reflections' strength, z: a shadow texel
     vec4 u_lights[MAX_LIGHTS * 3]; // (position, radius), (colour, 0), (direction, cos of the cone)
 };
 
@@ -128,8 +128,38 @@ vec3 lampLight(vec3 p, vec3 n) {
     return l.rgb * (u_weather.z * below * facing);
 }
 
+// How much of the sun reaches `p` (facing `n`): its shadow map, read with
+// filtered comparisons at four places round the point (soft edges), fading
+// out towards the map's edges, as strong as the moment's shadows are.
+float sunLight(vec3 p, vec3 n) {
+#ifdef LOW
+    return 1.0;
+#else
+    if (u_sunDir.w <= 0.0) {
+        return 1.0;
+    }
+    // Pushed out along the normal, away from its own surface's depth.
+    vec4 sc = u_shadowMatrix * vec4(p + n * 0.06, 1.0);
+    vec3 c = sc.xyz / sc.w * 0.5 + 0.5;
+    if (c.x <= 0.0 || c.y <= 0.0 || c.x >= 1.0 || c.y >= 1.0 || c.z >= 1.0) {
+        return 1.0;
+    }
+    float t = u_misc.z * 1.2;
+    float z = c.z - 0.0006;
+    float lit = texture(u_shadowMap, vec3(c.xy + vec2(-t, -t * 0.4), z));
+    lit += texture(u_shadowMap, vec3(c.xy + vec2(t * 0.4, -t), z));
+    lit += texture(u_shadowMap, vec3(c.xy + vec2(t, t * 0.4), z));
+    lit += texture(u_shadowMap, vec3(c.xy + vec2(-t * 0.4, t), z));
+    lit *= 0.25;
+    vec2 e = abs(c.xy * 2.0 - 1.0);
+    lit = mix(lit, 1.0, smoothstep(0.8, 1.0, max(e.x, e.y)));
+    return mix(1.0, lit, u_sunDir.w);
+#endif
+}
+
 // The light a surface at `p` sends towards the camera.
 vec3 shade(Surface s, vec3 p, float sunShadow) {
+    sunShadow *= sunLight(p, s.n);
     vec3 v = normalize(u_eye.xyz - p);
     float nv = max(dot(s.n, v), 1e-3);
     float a = max(s.rough * s.rough, 0.003);
@@ -922,4 +952,9 @@ void main() {
     float g = exp(-d2 * 6.0) * 0.8 + exp(-d2 * 40.0) * 2.0;
     o_color = vec4(finish(v_color * g * v_fog), 1.0);
 }
+"#;
+
+/// Depth only: the shadow map's casters.
+pub const DEPTH_FS: &str = r#"
+void main() {}
 "#;
