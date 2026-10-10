@@ -61,6 +61,60 @@ fn uniform_blocks_use_std140() {
     assert_eq!(c.get_error(), gl::INVALID_VALUE);
 }
 
+/// A uniform block's array read at indices computed in a loop that breaks
+/// and continues, as a shader walking a list of lights does.
+#[test]
+fn uniform_block_arrays_indexed_in_loops() {
+    let mut c = context(1, 1);
+    let p = program(
+        &mut c,
+        "#version 300 es
+        in vec2 pos; void main() { gl_Position = vec4(pos, 0, 1); }",
+        "#version 300 es
+        precision highp float;
+        layout(std140) uniform Frame { mat4 m; vec4 header; vec4 lights[12]; };
+        out vec4 color;
+        void main() {
+            vec3 sum = vec3(0.0);
+            int count = int(header.x);
+            for (int i = 0; i < 4; i++) {
+                if (i >= count) {
+                    break;
+                }
+                vec4 at = lights[i * 3];
+                if (at.w < 0.5) {
+                    continue;
+                }
+                sum += lights[i * 3 + 1].rgb * lights[i * 3 + 2].w;
+            }
+            color = vec4(sum, 1.0);
+        }",
+    );
+    c.use_program(p);
+    screen(&mut c, p);
+    let index = c.get_uniform_block_index(p, "Frame");
+    let mut data = [0f32; 16 + 4 + 48];
+    data[16] = 3.0; // three lights
+    let light = |data: &mut [f32], i: usize, on: f32, color: [f32; 3], k: f32| {
+        let at = 20 + i * 12;
+        data[at + 3] = on;
+        data[at + 4..at + 7].copy_from_slice(&color);
+        data[at + 11] = k;
+    };
+    light(&mut data, 0, 1.0, [0.25, 0.0, 0.0], 1.0);
+    // Off: skipped by the `continue`.
+    light(&mut data, 1, 0.0, [0.0, 1.0, 0.0], 1.0);
+    light(&mut data, 2, 1.0, [0.0, 0.0, 1.0], 0.5);
+    // Beyond the count: never read.
+    light(&mut data, 3, 1.0, [0.0, 1.0, 0.0], 1.0);
+    let ub = buffer_f32(&mut c, gl::UNIFORM_BUFFER, &data);
+    c.uniform_block_binding(p, index, 0);
+    c.bind_buffer_base(gl::UNIFORM_BUFFER, 0, ub);
+    c.draw_arrays(gl::TRIANGLES, 0, 6);
+    no_error(&mut c);
+    assert_close(&px(&read_rgba(&mut c, 1, 1), 1, 0, 0), &[64, 0, 128, 255]);
+}
+
 #[test]
 fn uniforms_are_kept_per_draw() {
     // Uniform changes between recorded draws do not reach earlier ones.

@@ -822,13 +822,15 @@ impl<'a> Translator<'a> {
             self.line(&l);
             return;
         }
-        // A stride that is not a whole number of vec4s (std140 never has
-        // one, but stay correct): find the word, then its component.
-        let s = self.imm(stride / 4).text();
-        let o = self.imm(offset / 4).text();
-        let w = self.calc("UMAD", &[&i.text(), &s, &o]);
+        // Any other stride (a dynamic index into a block comes as a byte
+        // offset, stride 1): the byte, then its word, then the word's
+        // vec4 and component.
+        let s = self.imm(stride).text();
+        let o = self.imm(offset).text();
+        let a = self.calc("UMAD", &[&i.text(), &s, &o]);
         let two = self.imm(2).text();
         let three = self.imm(3).text();
+        let w = self.calc("USHR", &[&a.text(), &two]);
         let v = self.calc("USHR", &[&w.text(), &two]);
         let c = self.calc("AND", &[&w.text(), &three]);
         self.address(v);
