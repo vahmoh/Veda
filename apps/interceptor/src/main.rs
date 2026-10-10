@@ -7,9 +7,10 @@
 //! The scene is rendered at a resolution that adapts to what rendering
 //! costs, and scaled to the window.
 //!
-//! Keys: arrows or WASD drive, Space is the handbrake, Q the siren, C
-//! changes the camera, R puts the car back on the road, F3 shows
-//! statistics, F11 toggles full screen, Esc quits.
+//! Keys: arrows or WASD drive, Space is the handbrake, Shift the nitrous,
+//! Q the siren, C changes the camera, R puts the car back on the road, F3
+//! shows statistics, F8 lets the computer drive, F11 toggles full screen,
+//! Esc quits.
 
 #![no_std]
 #![no_main]
@@ -21,32 +22,34 @@ mod hud;
 use alloc::format;
 use alloc::string::String;
 
+use interceptor_game::carmodel::Kind;
 use interceptor_game::env::{Environment, TimeOfDay, Weather};
 use interceptor_game::game::Game;
+use interceptor_game::pursuit::{Pursuit, Wanted};
 use interceptor_game::render::{Frame, Quality, Renderer};
+use interceptor_game::scale::{SCALES, Scale};
+use interceptor_game::vehicle::Spec;
 use interceptor_game::world::World;
 use vabi::{WaitItem, signals};
 use vgl::backend::Present;
 use vgl::{Config, gl};
+use vmath::Vec3;
 use vproto::display::{WindowEvent, WindowSpec, WindowState};
 use vproto::input::keys;
 use vui::window::{Window, connect};
 
 vrt::entry!(main);
 
-/// Internal resolution divisors to choose from.
-const SCALES: [f32; 7] = [1.0, 1.15, 1.33, 1.6, 2.0, 2.5, 3.0];
-/// The time a frame's rendering may take (rendering and reading it back):
-/// the resolution drops while it takes longer, and rises again when it
-/// takes much less.
-const BUDGET_MS: f32 = 12.0;
+/// The frame time to keep to (ms): about 58 frames a second.
+const TARGET_MS: f32 = 17.2;
 
 fn internal_size(w: i32, h: i32, scale: f32) -> (i32, i32) {
     (((w as f32 / scale) as i32).max(32), ((h as f32 / scale) as i32).max(18))
 }
 
-/// Waits until the window can take a frame; false if it closed.
-fn wait_for_window(window: &mut Window) -> bool {
+/// Waits until the window can take a frame, keeping the events that
+/// arrive meanwhile in `pending` (for the next frame); false if it closed.
+fn wait_for_window(window: &mut Window, pending: &mut alloc::vec::Vec<WindowEvent>) -> bool {
     while !window.can_draw() {
         let mut items = [WaitItem {
             handle: window.event_channel().raw(),
@@ -58,12 +61,44 @@ fn wait_for_window(window: &mut Window) -> bool {
             if let WindowEvent::CloseRequested {} = ev {
                 return false;
             }
+            pending.push(ev);
         }
         if window.closed {
             return false;
         }
     }
     true
+}
+
+/// The suspects, in turn.
+const WANTED: [Wanted; 3] = [
+    Wanted {
+        kind: Kind::Coupe,
+        spec: Spec::sports(),
+        paint: Vec3::new(0.55, 0.02, 0.02),
+        skill: 0.92,
+        aggression: 0.3,
+    },
+    Wanted {
+        kind: Kind::Muscle,
+        spec: Spec::sports(),
+        paint: Vec3::new(0.85, 0.55, 0.02),
+        skill: 0.95,
+        aggression: 0.6,
+    },
+    Wanted {
+        kind: Kind::Supercar,
+        spec: Spec::supercar(),
+        paint: Vec3::new(0.02, 0.18, 0.45),
+        skill: 0.97,
+        aggression: 0.4,
+    },
+];
+
+/// A new chase: the next suspect, a little ahead of the player.
+fn new_chase(game: &mut Game, n: u32) -> Pursuit {
+    let wanted = &WANTED[n as usize % WANTED.len()];
+    Pursuit::start(game, wanted, 70.0, 20.0)
 }
 
 fn main() -> i32 {
@@ -88,6 +123,8 @@ fn main() -> i32 {
     let (mut text, fonts) = vui::load_fonts();
     let fonts = hud::Fonts { regular: fonts[0], bold: fonts[1], mono: fonts[2], mono_bold: fonts[3] };
 
+    // Events that came while a frame waited for the window.
+    let mut pending = alloc::vec::Vec::new();
     // A loading screen while the world is made.
     for _ in 0..2 {
         let _ = window.poll_events();
@@ -95,21 +132,20 @@ fn main() -> i32 {
             hud::loading(&mut canvas, &mut text, &fonts);
             let _ = window.present(&[]);
         }
-        if !wait_for_window(&mut window) {
+        if !wait_for_window(&mut window, &mut pending) {
             return 0;
         }
     }
 
-    let mut level = 0usize;
-    let (iw, ih) = internal_size(window.width, window.height, SCALES[level]);
+    let (iw, ih) = internal_size(window.width, window.height, SCALES[0]);
     let config = Config { width: iw as u32, height: ih as u32, ..Config::default() };
     let mut gl = vgl::veda::context(config);
     let renderer_name: String = gl.get_string(gl::RENDERER).unwrap_or_default();
     let quality = Quality::for_renderer(&renderer_name);
-    if quality == Quality::Low {
-        // A software renderer: start small.
-        level = 4;
-    }
+    // A software renderer starts small and may go smaller; a GPU starts at
+    // the window's resolution and goes down no further than 1/2.
+    let mut scale =
+        if quality == Quality::Low { Scale::new(4, 6, TARGET_MS * 2.0) } else { Scale::new(0, 4, TARGET_MS) };
     vrt::println!("{} ({:?} quality)", renderer_name, quality);
 
     let t0 = vrt::time::now_ns();
@@ -131,6 +167,11 @@ fn main() -> i32 {
         (t2 - t1) / 1_000_000
     );
     let mut game = Game::new(world, env);
+    game.start_traffic();
+    game.cars[game.player].siren = true;
+    let mut chase = new_chase(&mut game, 0);
+    let mut chases = 1u32;
+    let mut after = 0.0f32;
     vrt::println!("ready");
 
     let mut show_stats = false;
@@ -139,9 +180,12 @@ fn main() -> i32 {
     let (mut frames, mut fps, mut fps_since) = (0u32, 0.0f32, start);
     let mut log_since = start;
     let mut render_ms = 0.0f32;
-    let mut since_change = 0u32;
+    let mut show_ms = 0.0f32;
+    let mut judged = start;
     loop {
-        for ev in window.poll_events() {
+        let mut events = core::mem::take(&mut pending);
+        events.extend(window.poll_events());
+        for ev in events {
             match ev {
                 WindowEvent::Key { code, pressed, repeat, .. } => {
                     let k = &mut game.keys;
@@ -151,6 +195,7 @@ fn main() -> i32 {
                         keys::LEFT | keys::A => k.left = pressed,
                         keys::RIGHT | keys::D => k.right = pressed,
                         keys::SPACE => k.handbrake = pressed,
+                        keys::LEFTSHIFT | keys::RIGHTSHIFT => k.boost = pressed,
                         _ => {}
                     }
                     if pressed && !repeat {
@@ -159,6 +204,11 @@ fn main() -> i32 {
                             keys::C => game.follow.view = game.follow.view.next(),
                             keys::R => game.reset_player(),
                             keys::F3 => show_stats = !show_stats,
+                            keys::F8 => {
+                                let on = !game.autopilot;
+                                game.set_autopilot(on, Some(chase.suspect));
+                                vrt::println!("autopilot {}", if on { "on" } else { "off" });
+                            }
                             keys::F11 => {
                                 let full = window.state == WindowState::Fullscreen;
                                 window.set_state(if full { WindowState::Normal } else { WindowState::Fullscreen });
@@ -180,19 +230,37 @@ fn main() -> i32 {
         let dt = ((now - last) as f64 / 1e9).clamp(0.0, 0.25) as f32;
         last = now;
         game.update(dt);
+        chase.update(&mut game, dt);
+        if !chase.on() {
+            if after == 0.0 {
+                vrt::println!("chase {}: {:?} after {:.0} s, {} hits", chases, chase.state, chase.time, chase.hits);
+            }
+            after += dt;
+            if after > 6.0 {
+                after = 0.0;
+                game.remove_car(chase.suspect);
+                chase = new_chase(&mut game, chases);
+                chases += 1;
+                if game.autopilot {
+                    game.set_autopilot(true, Some(chase.suspect));
+                }
+            }
+        }
         let (cars, lights) = game.frame(dt);
 
         // Render at the internal resolution.
-        let (iw, ih) = internal_size(window.width, window.height, SCALES[level]);
+        let (iw, ih) = internal_size(window.width, window.height, scale.divisor());
         gl.resize(iw as u32, ih as u32);
         let t_render = vrt::time::now_ns();
         let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock };
         renderer.render(&mut gl, &frame, iw, ih);
         gl.flush();
+        let t_drawn = vrt::time::now_ns();
 
-        if !wait_for_window(&mut window) {
+        if !wait_for_window(&mut window, &mut pending) {
             return 0;
         }
+        let t_ready = vrt::time::now_ns();
         let Ok(mut canvas) = window.begin_frame() else { continue };
         let (cw, ch) = (canvas.width(), canvas.height());
         {
@@ -202,10 +270,12 @@ fn main() -> i32 {
             gl.present_to(&mut dst);
         }
         let t_shown = vrt::time::now_ns();
+        let t_waited = t_ready;
         hud::dashboard(&mut canvas, &mut text, &fonts, &game);
+        hud::pursuit(&mut canvas, &mut text, &fonts, &game, &chase);
         if show_stats {
             let lines = [
-                format!("{fps:.1} fps   render {render_ms:.1} ms"),
+                format!("{fps:.1} fps   render {render_ms:.1} ms   show {show_ms:.1} ms"),
                 format!("{iw} x {ih} -> {cw} x {ch}"),
                 format!("{} draws, {} triangles", renderer.stats.draws, renderer.stats.triangles),
                 renderer_name.clone(),
@@ -217,7 +287,8 @@ fn main() -> i32 {
 
         // Frame rate, and the resolution it calls for.
         frames += 1;
-        render_ms = render_ms * 0.9 + (t_shown - t_render) as f32 / 1e6 * 0.1;
+        render_ms = render_ms * 0.9 + (t_drawn - t_render) as f32 / 1e6 * 0.1;
+        show_ms = show_ms * 0.9 + (t_shown - t_waited) as f32 / 1e6 * 0.1;
         if now - fps_since >= 1_000_000_000 {
             fps = frames as f32 / ((now - fps_since) as f32 / 1e9);
             frames = 0;
@@ -225,9 +296,10 @@ fn main() -> i32 {
             if now - log_since >= 5_000_000_000 {
                 log_since = now;
                 vrt::println!(
-                    "{:.1} fps, render {:.1} ms, {}x{} -> {}x{}, {} draws",
+                    "{:.1} fps, render {:.1} ms, show {:.1} ms, {}x{} -> {}x{}, {} draws",
                     fps,
                     render_ms,
+                    show_ms,
                     iw,
                     ih,
                     cw,
@@ -235,16 +307,12 @@ fn main() -> i32 {
                     renderer.stats.draws
                 );
             }
-            since_change += 1;
-            if since_change >= 2 {
-                let old = level;
-                if render_ms > BUDGET_MS && level + 1 < SCALES.len() {
-                    level += 1;
-                } else if render_ms < BUDGET_MS * 0.45 && level > 0 {
-                    level -= 1;
-                }
-                if level != old {
-                    since_change = 0;
+            // Every two seconds, the resolution the frame rate calls for.
+            if now - judged >= 2_000_000_000 {
+                let secs = (now - judged) as f32 / 1e9;
+                judged = now;
+                if scale.judge(1000.0 / fps.max(1.0), secs) {
+                    vrt::println!("{:.1} fps: rendering at 1/{} of the window", fps, scale.divisor());
                 }
             }
         }

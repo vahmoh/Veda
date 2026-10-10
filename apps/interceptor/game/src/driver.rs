@@ -1,0 +1,492 @@
+//! The computer's drivers.
+//!
+//! Each drives a car with the same controls as the player, through a
+//! [`Pilot`]: it steers for a point ahead on the line it wants to follow
+//! (pure pursuit), and holds the speed it wants, braking in time for the
+//! corners ahead. What the line and the speed are depends on who drives:
+//!
+//! * **Traffic** keeps to its lane at about the limit, follows the car
+//!   ahead at a safe distance (the Intelligent Driver Model), overtakes
+//!   slow cars when the next lane is clear, and pulls over to let a siren
+//!   by.
+//! * **A suspect** drives at the edge of its car's grip, picks whichever
+//!   lane is clearest (the other carriageway too, where nothing divides
+//!   it), swerves to block a police car about to pass, and slows as it is
+//!   damaged.
+//! * **The police** chase their target: they aim where it will be, and
+//!   once alongside its rear quarter they turn into it (a PIT).
+//!
+//! Drivers see the road through [`Scene`]: every car's place on it,
+//! sorted along it.
+
+use alloc::vec::Vec;
+
+use crate::prelude::*;
+use crate::road::{Road, Section};
+use crate::vehicle::{Controls, G, Vehicle};
+
+/// Where a car is on the road, as drivers see it.
+#[derive(Clone, Copy, Debug)]
+pub struct Place {
+    pub s: f32,
+    pub lateral: f32,
+    /// Speed along the road (negative against it).
+    pub along: f32,
+    /// The way it means to go: 1 along the road, -1 against it.
+    pub dir: f32,
+    pub length: f32,
+    /// Its siren is on.
+    pub siren: bool,
+}
+
+/// Every car's place, for the drivers.
+pub struct Scene {
+    pub places: Vec<Place>,
+    pub length: f32,
+}
+
+impl Scene {
+    /// The signed distance along the road from `a` to `b`, the short way.
+    pub fn gap(&self, a: f32, b: f32) -> f32 {
+        let d = (b - a).rem_euclid(self.length);
+        if d > self.length * 0.5 { d - self.length } else { d }
+    }
+
+    /// The nearest car ahead of car `me` (in its direction of travel)
+    /// within `range` metres whose lateral offset is within `half` of
+    /// `lateral`: its index and the gap (bumper to bumper).
+    pub fn ahead(&self, me: usize, lateral: f32, half: f32, range: f32) -> Option<(usize, f32)> {
+        let m = &self.places[me];
+        let mut best: Option<(usize, f32)> = None;
+        for (j, o) in self.places.iter().enumerate() {
+            if j == me || (o.lateral - lateral).abs() > half {
+                continue;
+            }
+            let d = self.gap(m.s, o.s) * m.dir - (m.length + o.length) * 0.5;
+            if d > -1.0 && d < range && best.is_none_or(|b| d < b.1) {
+                best = Some((j, d.max(0.0)));
+            }
+        }
+        best
+    }
+}
+
+/// Steering and pedals for following a line at a speed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Pilot {
+    /// The lateral offset being steered for (eased towards the wanted).
+    pub lateral: f32,
+    /// How long it has been stuck (s), and reversing out of it.
+    stuck: f32,
+    reversing: f32,
+}
+
+impl Pilot {
+    pub fn new(lateral: f32) -> Pilot {
+        Pilot { lateral, stuck: 0.0, reversing: 0.0 }
+    }
+
+    /// The controls that take `car` (at `place`) along the road in its
+    /// direction (`place.dir`) towards `want_lateral` at `want_speed`
+    /// (m/s), its tyres trusted up to `grip` (m/s²), over `dt` seconds.
+    /// `lane_rate` is how fast it moves across (m/s).
+    pub fn drive(
+        &mut self,
+        road: &Road,
+        car: &Vehicle,
+        place: &Place,
+        want_lateral: f32,
+        want_speed: f32,
+        grip: f32,
+        lane_rate: f32,
+        dt: f32,
+    ) -> Controls {
+        let step = lane_rate * dt;
+        self.lateral += (want_lateral - self.lateral).clamp(-step, step);
+        let speed = car.speed();
+        let dir = place.dir;
+
+        // Reversing out of a corner it got stuck in.
+        if self.reversing > 0.0 {
+            self.reversing -= dt;
+            let to = road.point(place.s + dir * 10.0, self.lateral) - car.pos;
+            let ang = to.xz().dot(car.left()).atan2(to.xz().dot(car.forward()));
+            return Controls { brake: 0.7, steer: (-ang * 2.0).clamp(-1.0, 1.0), ..Controls::default() };
+        }
+
+        // Steer for a point ahead on the line.
+        let look = 7.0 + speed.abs() * 0.42;
+        let target = road.point(place.s + dir * look, self.lateral);
+        let to = Vec2::new(target.x - car.pos.x, target.z - car.pos.z);
+        let alpha = to.dot(car.left()).atan2(to.dot(car.forward()));
+        let wheel = (2.0 * car.spec.wheelbase * alpha.sin() / to.length().max(1.0)).atan();
+        let lock = car.spec.steer_max / (1.0 + speed.abs() * 0.055);
+        let steer = (wheel / lock.max(0.05)).clamp(-1.0, 1.0);
+
+        // The speed the corners ahead allow, given the braking to get
+        // down to it: as far ahead as it takes to stop from this speed.
+        let decel = grip * 0.75;
+        let brake_dist = speed * speed / (2.0 * decel) + 30.0;
+        let mut allowed = want_speed;
+        let probe = (brake_dist.min(400.0) / 6.0).ceil() as usize;
+        for k in 1..=probe {
+            let d = k as f32 * 6.0;
+            let curv = road.curvature(place.s + dir * d).abs().max(1e-4);
+            let v_corner = (grip / curv).sqrt();
+            let v = (v_corner * v_corner + 2.0 * decel * (d - 8.0).max(0.0)).sqrt();
+            allowed = allowed.min(v);
+        }
+        let err = allowed - speed;
+        let mut c = Controls { steer, ..Controls::default() };
+        if err > 0.0 {
+            c.throttle = (err * 0.35).clamp(0.0, 1.0);
+        } else {
+            c.brake = (-err * 0.18).clamp(0.0, 1.0);
+        }
+
+        // Stuck against something: wanting to go and not going.
+        if want_speed > 3.0 && speed.abs() < 1.0 {
+            self.stuck += dt;
+            if self.stuck > 1.5 {
+                self.stuck = 0.0;
+                self.reversing = 1.4;
+            }
+        } else {
+            self.stuck = 0.0;
+        }
+        c
+    }
+}
+
+/// Whether a barrier divides the road at `s` or within `ahead` metres in
+/// direction `dir`: a driver on the other side by then would be trapped
+/// on the wrong carriageway.
+pub fn divided_soon(road: &Road, s: f32, dir: f32, ahead: f32) -> bool {
+    let ahead = ahead.max(0.0);
+    let mut d = 0.0;
+    while d <= ahead {
+        if road.divided(s + dir * d) {
+            return true;
+        }
+        d += 10.0;
+    }
+    false
+}
+
+/// The lateral offsets a driver heading `dir` at `place` may aim for:
+/// its own carriageway where a barrier divides the road here or within
+/// four seconds; but if a barrier already stands between it and its own
+/// side, the carriageway it is trapped on.
+fn allowed(road: &Road, place: &Place, paved: f32) -> (f32, f32) {
+    let edge = paved - 1.0;
+    let soon = divided_soon(road, place.s, place.dir, 60.0 + place.along.abs() * 4.0);
+    if !soon {
+        return (-edge, edge);
+    }
+    let own = place.lateral * place.dir > 0.0;
+    if road.divided(place.s) && !own {
+        // Trapped: drive the other carriageway until it opens.
+        if place.dir > 0.0 { (-edge, -1.2) } else { (1.2, edge) }
+    } else if place.dir > 0.0 {
+        (1.2, edge)
+    } else {
+        (-edge, -1.2)
+    }
+}
+
+/// How the computer drives a car.
+#[derive(Clone, Copy, Debug)]
+pub enum Role {
+    /// Driven by the player.
+    Player,
+    /// Ordinary traffic.
+    Traffic(Traffic),
+    /// On the run.
+    Suspect(Suspect),
+    /// Chasing car `target`.
+    Police(Police),
+    /// Standing still (a roadblock, a wreck).
+    Parked,
+}
+
+/// A traffic driver.
+#[derive(Clone, Copy, Debug)]
+pub struct Traffic {
+    pub pilot: Pilot,
+    /// 0 the inner lane, 1 the outer.
+    pub lane: usize,
+    /// 1 on the forward side (along the road), -1 the other way.
+    pub side: f32,
+    /// The speed it likes, as a share of the limit.
+    pub keen: f32,
+    /// Pulled over for a siren (s left to wait once it has passed).
+    pub yielding: f32,
+    /// Shaken by a crash: stopped for this long (s).
+    pub shaken: f32,
+    /// Seconds before it may change lanes again.
+    pub settle: f32,
+}
+
+impl Traffic {
+    pub fn new(lane: usize, side: f32, keen: f32) -> Traffic {
+        Traffic {
+            pilot: Pilot::new(Road::lane_center(lane, side)),
+            lane,
+            side,
+            keen,
+            yielding: 0.0,
+            shaken: 0.0,
+            settle: 2.0,
+        }
+    }
+
+    /// The controls for car `me` this step.
+    pub fn drive(&mut self, me: usize, road: &Road, scene: &Scene, car: &Vehicle, dt: f32) -> Controls {
+        let p = &scene.places[me];
+        let section = road.at(p.s).section;
+        let side = self.side;
+        self.settle = (self.settle - dt).max(0.0);
+        if self.shaken > 0.0 {
+            self.shaken -= dt;
+            return Controls { brake: 1.0, ..Controls::default() };
+        }
+        let limit = section.speed_limit() * self.keen;
+        // A siren behind, coming: over to the shoulder, slow.
+        let siren_behind = scene.places.iter().enumerate().any(|(j, o)| {
+            j != me && o.siren && o.dir == p.dir && {
+                let d = scene.gap(p.s, o.s) * p.dir;
+                d < -2.0 && d > -110.0
+            }
+        });
+        if siren_behind {
+            self.yielding = 1.5;
+        } else {
+            self.yielding = (self.yielding - dt).max(0.0);
+        }
+        let (want_lateral, mut want_speed) = if self.yielding > 0.0 {
+            let (paved, _) = road.widths(p.s);
+            (side * (paved - 1.3), limit * 0.35)
+        } else {
+            (Road::lane_center(self.lane, side), limit)
+        };
+        // Following the car ahead (the Intelligent Driver Model).
+        if let Some((j, gap)) = scene.ahead(me, self.pilot.lateral, 1.9, 140.0) {
+            let o = &scene.places[j];
+            let v = p.along * p.dir;
+            let lead = o.along * p.dir;
+            let (t, s0, a, b) = (1.3f32, 3.5f32, 2.0f32, 3.0f32);
+            let s_star = s0 + v.max(0.0) * t + v.max(0.0) * (v - lead) / (2.0 * (a * b).sqrt());
+            let free = 1.0 - (v / want_speed.max(1.0)).powi(4);
+            let acc = a * (free - (s_star.max(0.0) / gap.max(0.5)).powi(2));
+            // As a speed to aim at a moment from now.
+            want_speed = want_speed.min((v + acc * 1.2).max(0.0));
+            // Overtake on the other lane of this side when it is clear.
+            if self.yielding <= 0.0 && self.settle <= 0.0 && lead < limit * 0.75 && gap < 45.0 {
+                let other = 1 - self.lane;
+                let lat = Road::lane_center(other, side);
+                let clear = scene.places.iter().enumerate().all(|(k, q)| {
+                    k == me || (q.lateral - lat).abs() > 2.2 || {
+                        let d = scene.gap(p.s, q.s) * p.dir;
+                        !(-14.0..30.0).contains(&d)
+                    }
+                });
+                if clear {
+                    self.lane = other;
+                    self.settle = 6.0;
+                }
+            }
+        }
+        // Slow down into the tunnel and on the bridge's approach, as people
+        // do; keep a little under the limit in the city.
+        if section == Section::City {
+            want_speed = want_speed.min(limit * 1.05);
+        }
+        self.pilot.drive(road, car, p, want_lateral, want_speed, 6.5, 1.4, dt)
+    }
+}
+
+/// A driver on the run.
+#[derive(Clone, Copy, Debug)]
+pub struct Suspect {
+    pub pilot: Pilot,
+    /// How hard it drives (0.8 cautious .. 1.0 at the limit).
+    pub skill: f32,
+    /// How readily it swerves at the police (0..1).
+    pub aggression: f32,
+    /// The car it runs from.
+    pub pursuer: usize,
+    /// The lateral it has chosen, and when it next chooses.
+    choice: f32,
+    rethink: f32,
+    /// A swerve under way (s left), and towards which offset.
+    swerve: f32,
+    swerve_to: f32,
+    /// Its own dice.
+    rng: u32,
+}
+
+impl Suspect {
+    pub fn new(lateral: f32, skill: f32, aggression: f32, pursuer: usize, seed: u32) -> Suspect {
+        Suspect {
+            pilot: Pilot::new(lateral),
+            skill,
+            aggression,
+            pursuer,
+            choice: lateral,
+            rethink: 0.0,
+            swerve: 0.0,
+            swerve_to: 0.0,
+            rng: seed | 1,
+        }
+    }
+
+    /// A number in 0..1.
+    fn roll(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        (self.rng >> 8) as f32 / (1 << 24) as f32
+    }
+
+    /// The controls for car `me` this step; `damage` slows it; `pace` (the
+    /// pursuit's rubber band, about 0.85..1.05) scales its speed.
+    pub fn drive(
+        &mut self,
+        me: usize,
+        road: &Road,
+        scene: &Scene,
+        car: &Vehicle,
+        damage: f32,
+        pace: f32,
+        dt: f32,
+    ) -> Controls {
+        let p = scene.places[me];
+        let (paved, _) = road.widths(p.s);
+        // A barrier down the middle here or soon: keep to this side.
+        let divided = divided_soon(road, p.s, p.dir, 60.0 + p.along.abs() * 4.0);
+        self.rethink -= dt;
+        if self.rethink <= 0.0 {
+            self.rethink = 0.25;
+            self.choice = self.best_lateral(me, scene, paved, divided);
+        }
+        let mut want = self.choice;
+        // The pursuer about to pass or ram: swerve across its path.
+        let them = scene.places[self.pursuer];
+        let behind = scene.gap(them.s, p.s) * p.dir;
+        if self.swerve <= 0.0 && behind > 2.0 && behind < 14.0 && (them.lateral - p.lateral).abs() > 1.0 {
+            // Now and then, as the driver dares (about once a second at
+            // full aggression).
+            if self.roll() < self.aggression * dt * 1.2 {
+                self.swerve = 0.9;
+                self.swerve_to = them.lateral;
+            }
+        }
+        if self.swerve > 0.0 {
+            self.swerve -= dt;
+            want = self.swerve_to;
+        }
+        let (lo, hi) = allowed(road, &p, paved);
+        let want = want.clamp(lo, hi);
+        // Flat out but for the pursuit's pace: the corners and the damage
+        // hold it back.
+        let speed = 80.0 * pace * (1.0 - 0.45 * damage);
+        // What the tyres give in a corner, less what the load's shift
+        // takes, as the driver dares (and as the pace lets it).
+        let grip = car.spec.grip * G * 0.8 * self.skill * pace;
+        self.pilot.drive(road, car, &p, want, speed, grip, 3.8, dt)
+    }
+
+    /// The lateral offset with the most room ahead: each lane of its side
+    /// (and of the other where nothing divides them, with a price for the
+    /// oncoming traffic), and the shoulders.
+    fn best_lateral(&self, me: usize, scene: &Scene, paved: f32, divided: bool) -> f32 {
+        let p = &scene.places[me];
+        let side = p.dir;
+        let mut candidates = Vec::with_capacity(6);
+        for lane in 0..2 {
+            candidates.push((Road::lane_center(lane, side), 0.0));
+            if !divided {
+                candidates.push((Road::lane_center(lane, -side), 18.0 + lane as f32 * 8.0));
+            }
+        }
+        candidates.push((side * (paved - 1.3), 10.0));
+        let mut best = (self.choice, f32::MIN);
+        for (lat, price) in candidates {
+            // Room ahead: the first car in that line, by the time to reach
+            // it (oncoming cars close fast).
+            let room = match scene.ahead(me, lat, 2.0, 220.0) {
+                Some((j, gap)) => {
+                    let closing = (p.along - scene.places[j].along) * p.dir;
+                    if closing > 0.5 { (gap / closing).min(8.0) * 25.0 } else { 200.0 + gap * 0.1 }
+                }
+                None => 220.0,
+            };
+            // Moving across costs, and a line must be clearly better to be
+            // worth leaving the one chosen.
+            let change = (lat - self.choice).abs() * 2.0 + if (lat - self.choice).abs() > 0.5 { 25.0 } else { 0.0 };
+            let score = room - price - change;
+            if score > best.1 {
+                best = (lat, score);
+            }
+        }
+        best.0
+    }
+}
+
+/// A police driver.
+#[derive(Clone, Copy, Debug)]
+pub struct Police {
+    pub pilot: Pilot,
+    /// The car it chases.
+    pub target: usize,
+    pub skill: f32,
+}
+
+impl Police {
+    pub fn new(lateral: f32, target: usize, skill: f32) -> Police {
+        Police { pilot: Pilot::new(lateral), target, skill }
+    }
+
+    /// The controls for car `me` this step.
+    pub fn drive(&mut self, me: usize, road: &Road, scene: &Scene, car: &Vehicle, dt: f32) -> Controls {
+        let p = scene.places[me];
+        let t = scene.places[self.target];
+        let gap = scene.gap(p.s, t.s) * p.dir;
+        let (paved, _) = road.widths(p.s);
+        let close = gap.abs() < 30.0;
+        // Far behind, its own fastest line: towards the inside of the bend
+        // ahead (on its own side where the road is divided).
+        let mut want = {
+            let curv = road.curvature(p.s + 25.0 + p.along.max(0.0) * 0.8);
+            let into = ((curv.abs() - 0.003) / 0.009).clamp(0.0, 1.0);
+            let inside = curv.signum() * (paved - 2.0) * into;
+            let base = Road::lane_center(0, 1.0);
+            base + (inside - base) * into
+        };
+        let mut speed = 76.0 * self.skill;
+        if gap.abs() < 60.0 {
+            // Nearer, on its tail.
+            want = t.lateral;
+        }
+        if close {
+            if gap > 4.0 {
+                // Line up with its rear quarter, a little to the side, then
+                // close in: the nose against its quarter turns it round.
+                let offset = if p.lateral > t.lateral { 1.4 } else { -1.4 };
+                want = t.lateral + offset * (gap / 12.0).clamp(0.3, 1.0);
+                speed = (t.along * p.dir + 6.0).max(10.0);
+            } else if gap > -3.0 {
+                // Alongside its rear: turn into it.
+                want = t.lateral;
+                speed = t.along * p.dir + 3.0;
+            } else {
+                // Ahead of it: hold back.
+                speed = (t.along * p.dir - 4.0).max(5.0);
+            }
+        }
+        let (lo, hi) = allowed(road, &p, paved);
+        let want = want.clamp(lo, hi);
+        let grip = car.spec.grip * G * 0.85 * self.skill;
+        self.pilot.drive(road, car, &p, want, speed, grip, 4.5, dt)
+    }
+}

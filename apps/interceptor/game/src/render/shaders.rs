@@ -689,23 +689,35 @@ void main() {
 }
 "#;
 
-/// A car's body or wheel: car space to the world by `u_model`.
+/// Cars' bodies or wheels, many in one draw: each instance's place (the
+/// rows of its car-space-to-world transform, `a_inst0..2`), its paint and
+/// livery (`a_inst3`), its lamps (`a_inst4`: headlights, brake, the light
+/// bar's red and blue).
 pub const CAR_VS: &str = r#"
 in vec3 a_pos;
 in vec3 a_normal;
 in vec4 a_params;
-uniform mat4 u_model;
+in vec4 a_inst0;
+in vec4 a_inst1;
+in vec4 a_inst2;
+in vec4 a_inst3;
+in vec4 a_inst4;
 out vec3 v_pos;
 out vec3 v_normal;
 out vec3 v_local;
 flat out float v_part;
+flat out vec4 v_paint;
+flat out vec4 v_lamps;
 void main() {
-    vec4 w = u_model * vec4(a_pos, 1.0);
-    v_pos = w.xyz;
-    v_normal = mat3(u_model) * a_normal;
+    vec4 p = vec4(a_pos, 1.0);
+    vec3 w = vec3(dot(a_inst0, p), dot(a_inst1, p), dot(a_inst2, p));
+    v_pos = w;
+    v_normal = vec3(dot(a_inst0.xyz, a_normal), dot(a_inst1.xyz, a_normal), dot(a_inst2.xyz, a_normal));
     v_local = a_pos;
     v_part = floor(a_params.x * 255.0 + 0.5);
-    gl_Position = u_viewProj * w;
+    v_paint = a_inst3;
+    v_lamps = a_inst4;
+    gl_Position = u_viewProj * vec4(w, 1.0);
 }
 "#;
 
@@ -714,14 +726,13 @@ void main() {
 /// (brighter when braking), and the police light bar's red and blue,
 /// flashing in turn.
 pub const CAR_FS: &str = r#"
-uniform vec3 u_paint;
-uniform int u_livery;      // 0 plain, 1 police, 2 taxi
-uniform vec4 u_lamps;      // headlights, brake, the light bar's red and blue
 uniform vec4 u_shape;      // the windscreen's foot (cowl) and the roof's ends (a, c), the shoulder
 in vec3 v_pos;
 in vec3 v_normal;
 in vec3 v_local;
 flat in float v_part;
+flat in vec4 v_paint;      // paint, livery (0 plain, 1 police, 2 taxi)
+flat in vec4 v_lamps;      // headlights, brake, the light bar's red and blue
 out vec4 o_color;
 
 vec3 clearcoat(vec3 n, vec3 p) {
@@ -740,6 +751,9 @@ void main() {
         n = -n;
     }
     int part = int(v_part);
+    vec3 u_paint = v_paint.rgb;
+    int u_livery = int(v_paint.a + 0.5);
+    vec4 u_lamps = v_lamps;
     vec3 albedo = vec3(0.03);
     float rough = 0.5;
     float metal = 0.0;

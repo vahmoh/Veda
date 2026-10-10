@@ -14,8 +14,8 @@ use crate::prelude::*;
 use crate::mesh::Mesh;
 use crate::terrain::{CELL, HALF_X, HALF_Z, Terrain};
 
-/// Cells per chunk side.
-pub const CHUNK_CELLS: usize = 32;
+/// Cells per chunk side (512 m: few draws, each culled whole).
+pub const CHUNK_CELLS: usize = 64;
 /// The coarse level's step (vertices).
 pub const COARSE: usize = 4;
 /// How far the skirts hang (m).
@@ -195,7 +195,7 @@ mod tests {
         let road = Road::new(VEDA_BAY);
         let t = Terrain::new(&road, 7);
         let chunks = ground_chunks(&t);
-        assert!(chunks.len() > 100);
+        assert!(chunks.len() > 50, "{} chunks", chunks.len());
         for c in &chunks {
             for idx in [&c.fine, &c.coarse] {
                 let (up, down) = faces_up(&c.mesh, idx);

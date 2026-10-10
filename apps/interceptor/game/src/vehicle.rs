@@ -5,9 +5,11 @@
 //! loads on the tyres shift with braking, accelerating and cornering. The
 //! engine has a torque curve and an automatic gearbox; drag grows with
 //! the square of the speed; slopes pull; over a crest at speed a car
-//! flies. A few assists keep it easy to drive without hiding the physics:
-//! steering that lightens with speed and helps catch a slide, anti-lock
-//! brakes, traction control.
+//! flies. A few assists keep it easy to drive without hiding the physics,
+//! as a modern car's do: steering that lightens with speed and helps catch
+//! a slide, anti-lock brakes, traction control, and stability control,
+//! which reins in a car turning faster than its steering asks (off while
+//! the handbrake is held, so that it can still be thrown into a slide).
 //!
 //! Positions are world metres (x, z on the ground, y up); a car's heading
 //! `yaw` points it along `(sin yaw, cos yaw)` in x and z, and a positive
@@ -78,14 +80,14 @@ impl Spec {
             wheel_radius: 0.36,
             grip: 1.12,
             drive: Drive::All,
-            torque: 540.0,
+            torque: 600.0,
             rpm_peak: 4500.0,
             rpm_idle: 800.0,
             rpm_red: 6800.0,
             gears: [3.6, 2.3, 1.62, 1.22, 0.98, 0.80],
             reverse: 3.2,
             final_drive: 3.36,
-            drag: 0.55,
+            drag: 0.48,
             downforce: 0.05,
             brake: 21000.0,
             brake_front: 0.62,
@@ -124,7 +126,7 @@ impl Spec {
             wheel_radius: 0.35,
             grip: 1.2,
             drive: Drive::Rear,
-            torque: 520.0,
+            torque: 480.0,
             rpm_peak: 5500.0,
             rpm_red: 7600.0,
             gears: [3.4, 2.2, 1.6, 1.25, 1.0, 0.83],
@@ -266,6 +268,11 @@ pub struct Vehicle {
     roll_rate: f32,
     /// The ground's normal, smoothed.
     pub up: Vec3,
+    /// Stability control (on in every car unless switched off).
+    pub esc: bool,
+    /// The engine's output as a share of its make's (a nitrous boost
+    /// above 1, a tired or held-back engine below).
+    pub power: f32,
 }
 
 impl Vehicle {
@@ -293,6 +300,8 @@ impl Vehicle {
             pitch_rate: 0.0,
             roll_rate: 0.0,
             up: Vec3::Y,
+            esc: true,
+            power: 1.0,
         }
     }
 
@@ -516,6 +525,25 @@ impl Vehicle {
             // The yaw torque: d x F about +y.
             torque_yaw += d.y * wforce.x - d.x * wforce.y;
         }
+        // Stability control: the yaw rate the steering asks for at this
+        // speed (a bicycle's, short of what the tyres hold); turning faster
+        // than that is the tail stepping out, which braking one wheel
+        // reins in, and the engine is cut back.
+        if self.esc && !c.handbrake && !self.airborne && v_long > 5.0 {
+            // A mildly understeering car's: an understeer gradient of 0.02
+            // radians per g.
+            let asked = v_long * self.steer.tan() / (s.wheelbase + 0.02 * v_long * v_long / G);
+            let most = s.grip * G / v_long;
+            let asked = asked.clamp(-most, most);
+            let excess = self.yaw_rate - asked;
+            // Beyond a margin, and only the tail stepping out (turning more
+            // than asked), never a car turning less.
+            if excess.abs() > 0.1 + asked.abs() * 0.15 && excess.signum() == self.yaw_rate.signum() {
+                let brake_torque = 0.5 * s.track * s.grip * s.mass * G * 0.25;
+                torque_yaw -= excess.signum() * (excess.abs() * s.inertia * 6.0).min(brake_torque);
+                force -= f * (excess.abs().min(0.5) * s.mass * 2.0);
+            }
+        }
         // Drag, and gravity down slopes.
         force -= self.vel * (s.drag * speed);
         let n = self.up;
@@ -640,7 +668,7 @@ mod tests {
         let to_100 = to_100.expect("never reached 100 km/h");
         let top = v.speed() * 3.6;
         std::println!("0-100 km/h in {to_100:.1} s, top speed {top:.0} km/h, gear {}", v.gear);
-        assert!((4.0..8.0).contains(&to_100), "0-100 in {to_100} s");
+        assert!((3.0..6.0).contains(&to_100), "0-100 in {to_100} s");
         assert!((220.0..300.0).contains(&top), "top speed {top} km/h");
         // From 100 km/h to a stop.
         v.set_speed(100.0 / 3.6);

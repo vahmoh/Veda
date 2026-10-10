@@ -75,7 +75,7 @@ impl Follow {
     fn desired(&self, car: &Vehicle) -> (Vec3, Vec3) {
         let speed = car.vel.length();
         let (back, up, ahead) = match self.view {
-            View::Chase => (6.2 + speed * 0.02, 2.1 + speed * 0.004, 10.0),
+            View::Chase => (7.0 + speed * 0.02, 2.2 + speed * 0.004, 10.0),
             _ => (4.4 + speed * 0.015, 1.6 + speed * 0.003, 8.0),
         };
         let dir = if self.behind { -self.look } else { self.look };

@@ -4,6 +4,7 @@
 use alloc::format;
 
 use interceptor_game::game::Game;
+use interceptor_game::pursuit::{self, Pursuit, State};
 use vgfx::{Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
 use vmath::FloatExt;
 
@@ -117,10 +118,10 @@ pub fn dashboard(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game) {
     };
     centered(c, text, f.mono_bold, 16.0 * s, cx, cy + 74.0 * s, &gear, Color(0xFFFFB13D));
 
-    // The siren.
+    // The siren, above the nitrous.
     if game.player().siren {
         let blink = (game.clock * 3.2).fract() < 0.5;
-        let (lx, ly) = (cx - r - 18.0 * s, cy + r - 6.0 * s);
+        let (lx, ly) = (cx - r - 6.0 * s, cy - r - 2.0 * s);
         c.fill_rounded_rect(
             Rect::new((lx - 70.0 * s) as i32, (ly - 16.0 * s) as i32, (70.0 * s) as i32, (24.0 * s) as i32),
             6.0 * s,
@@ -132,7 +133,7 @@ pub fn dashboard(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game) {
     }
 
     // The keys.
-    let help = "Arrows/WASD drive   Space handbrake   Q siren   C camera   R reset   F11 full screen   Esc quit";
+    let help = "Arrows/WASD drive   Space handbrake   Shift nitrous   Q siren   C camera   R reset   F11 full screen   Esc quit";
     text.draw(c, f.regular, 12.0 * s, 18.0 * s, h - 16.0 * s, help, Color(0x90E6ECF5));
 }
 
@@ -145,4 +146,83 @@ pub fn stats(c: &mut Canvas, text: &mut Text, f: &Fonts, lines: &[alloc::string:
     for (i, l) in lines.iter().enumerate() {
         text.draw(c, f.mono, 12.0, (px + 10) as f32, (py + 22 + 18 * i as i32) as f32, l, Color(0xFFE8F0F8));
     }
+}
+
+/// The pursuit: the suspect's car's state and how far ahead it is (top
+/// middle), a warning while it is getting away or being boxed in, the
+/// nitrous left (beside the speedometer), and the outcome.
+pub fn pursuit(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game, chase: &Pursuit) {
+    let (w, h) = (c.width() as f32, c.height() as f32);
+    let s = (h / 720.0).max(0.6);
+    let cx = w * 0.5;
+    // The panel.
+    let (pw, ph) = (330.0 * s, 66.0 * s);
+    let (px, py) = (cx - pw * 0.5, 16.0 * s);
+    c.fill_rounded_rect(Rect::new(px as i32, py as i32, pw as i32, ph as i32), 10.0 * s, Color(0xA006090F));
+    text.draw(c, f.bold, 13.0 * s, px + 14.0 * s, py + 22.0 * s, "SUSPECT", RED);
+    let gap = chase.gap.max(0.0);
+    let dist = if gap >= 1000.0 { format!("{:.1} km", gap / 1000.0) } else { format!("{} m", gap as u32) };
+    let dw = text.measure(f.mono_bold, 13.0 * s, &dist);
+    text.draw(c, f.mono_bold, 13.0 * s, px + pw - 14.0 * s - dw, py + 22.0 * s, &dist, WHITE);
+    let secs = chase.time as u32;
+    let clock = format!("{}:{:02}", secs / 60, secs % 60);
+    let cw = text.measure(f.mono, 12.0 * s, &clock);
+    text.draw(c, f.mono, 12.0 * s, cx - cw * 0.5, py + 22.0 * s, &clock, DIM);
+    // Its car's integrity.
+    let integrity = chase.integrity(game).clamp(0.0, 1.0);
+    let (bx, by, bw, bh) = (px + 14.0 * s, py + 34.0 * s, pw - 28.0 * s, 12.0 * s);
+    c.fill_rounded_rect(Rect::new(bx as i32, by as i32, bw as i32, bh as i32), 4.0 * s, Color(0x40FFFFFF));
+    if integrity > 0.0 {
+        let color = if integrity < 0.3 {
+            RED
+        } else if integrity < 0.6 {
+            Color(0xFFFFB13D)
+        } else {
+            Color(0xFF4CD964)
+        };
+        c.fill_rounded_rect(Rect::new(bx as i32, by as i32, (bw * integrity) as i32, bh as i32), 4.0 * s, color);
+    }
+    text.draw(c, f.regular, 10.5 * s, bx, by + bh + 13.0 * s, "Ram it to a stop, or box it in", Color(0x80E6ECF5));
+
+    // The warnings.
+    let banner = |c: &mut Canvas, text: &mut Text, msg: &str, color: Color, y: f32| {
+        let size = 22.0 * s;
+        let tw = text.measure(f.bold, size, msg);
+        c.fill_rounded_rect(
+            Rect::new(
+                (cx - tw * 0.5 - 18.0 * s) as i32,
+                (y - size) as i32,
+                (tw + 36.0 * s) as i32,
+                (size * 1.5) as i32,
+            ),
+            8.0 * s,
+            Color(0xA006090F),
+        );
+        text.draw(c, f.bold, size, cx - tw * 0.5, y, msg, color);
+    };
+    match chase.state {
+        State::Chasing { escaping, busting } => {
+            if escaping > 0.0 {
+                let left = (pursuit::ESCAPE_TIME - escaping).ceil().max(0.0) as u32;
+                banner(c, text, &format!("SUSPECT GETTING AWAY  {left}"), Color(0xFFFFB13D), py + ph + 46.0 * s);
+            } else if busting > 0.0 {
+                let pct = (busting / pursuit::BUST_TIME * 100.0).min(100.0) as u32;
+                banner(c, text, &format!("BUSTING  {pct}%"), Color(0xFF4CD964), py + ph + 46.0 * s);
+            }
+        }
+        State::TakenDown => banner(c, text, "TAKEDOWN!", Color(0xFF4CD964), h * 0.36),
+        State::Busted => banner(c, text, "BUSTED!", Color(0xFF4CD964), h * 0.36),
+        State::Escaped => banner(c, text, "SUSPECT ESCAPED", RED, h * 0.36),
+    }
+
+    // The nitrous, left of the speedometer.
+    let level = game.boost.level.clamp(0.0, 1.0);
+    let r = 92.0 * s;
+    let (nx, ny) = (w - 2.0 * r - 70.0 * s, h - 48.0 * s - 90.0 * s);
+    let (nw, nh) = (10.0 * s, 90.0 * s);
+    c.fill_rounded_rect(Rect::new(nx as i32, ny as i32, nw as i32, nh as i32), 4.0 * s, Color(0x60000000));
+    let fill = nh * level;
+    let color = if game.boost.on { Color(0xFF7FE3FF) } else { ACCENT };
+    c.fill_rounded_rect(Rect::new(nx as i32, (ny + nh - fill) as i32, nw as i32, fill as i32), 4.0 * s, color);
+    centered(c, text, f.bold, 9.0 * s, nx + nw * 0.5, ny + nh + 13.0 * s, "N2O", DIM);
 }

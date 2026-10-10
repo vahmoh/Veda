@@ -13,6 +13,8 @@ pub struct Keys {
     pub left: bool,
     pub right: bool,
     pub handbrake: bool,
+    /// The nitrous.
+    pub boost: bool,
 }
 
 /// Ramps keys into controls.

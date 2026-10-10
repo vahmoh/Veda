@@ -10,12 +10,16 @@ use alloc::vec::Vec;
 
 use crate::prelude::*;
 
+use vmath::Rng;
+
 use crate::camera::Follow;
 use crate::carmodel::Kind;
+use crate::driver::{Place, Role, Scene};
 use crate::env::Environment;
 use crate::input::{Driver, Keys};
 use crate::physics::{self, Impact};
 use crate::render::{Camera, CarView, Light, Livery};
+use crate::traffic;
 use crate::vehicle::{Controls, Spec, Vehicle};
 use crate::world::World;
 
@@ -83,6 +87,8 @@ pub struct Car {
     pub headlights: bool,
     /// How battered it is (0 new, 1 wrecked).
     pub damage: f32,
+    /// Who drives it.
+    pub role: Role,
     prev: Pose,
 }
 
@@ -113,6 +119,7 @@ impl Car {
             siren: false,
             headlights: true,
             damage: 0.0,
+            role: Role::Parked,
         }
     }
 
@@ -132,6 +139,48 @@ pub fn light_bar(t: f32) -> [f32; 2] {
         if phase < 0.5 && (phase * 8.0).fract() >= 0.4 { 1.0 } else { 0.0 }
     };
     [half(0.0), half(1.0)]
+}
+
+/// The player's nitrous: a few seconds of half again the engine's power,
+/// filling up again slowly.
+#[derive(Clone, Copy, Debug)]
+pub struct Boost {
+    /// How much is left (0..1).
+    pub level: f32,
+    /// Burning now.
+    pub on: bool,
+}
+
+impl Boost {
+    /// Seconds a full charge lasts, and to fill an empty one.
+    const BURN: f32 = 5.0;
+    const FILL: f32 = 25.0;
+
+    pub fn new() -> Boost {
+        Boost { level: 1.0, on: false }
+    }
+
+    /// Burns while `held` (and while there is some left), fills otherwise.
+    pub fn update(&mut self, held: bool, dt: f32) {
+        self.on = held && self.level > 0.0;
+        if self.on {
+            self.level = (self.level - dt / Self::BURN).max(0.0);
+        } else {
+            self.level = (self.level + dt / Self::FILL).min(1.0);
+        }
+    }
+
+    /// The engine's power with it.
+    pub fn power(&self) -> f32 {
+        if self.on { 1.5 } else { 1.0 }
+    }
+}
+
+/// How hard a suspect `lead` metres ahead of its pursuer drives: flat
+/// out while the police are close, easing off as its lead grows, so that a
+/// chase stays a chase (and still a hard one).
+pub fn pace(lead: f32) -> f32 {
+    1.0 - ((lead - 40.0) / 210.0).clamp(0.0, 1.0) * 0.35
 }
 
 /// Something that happened during a step that the sounds and the effects
@@ -160,6 +209,18 @@ pub struct Game {
     /// The last frame's camera.
     pub camera: Camera,
     pub paused: bool,
+    /// Traffic round the player.
+    pub traffic: bool,
+    /// The computer drives the player's car (for demonstrations and the
+    /// tests).
+    pub autopilot: bool,
+    autopilot_role: Role,
+    rng: Rng,
+    /// The player's nitrous.
+    pub boost: Boost,
+    /// Every car's place, as the drivers saw it at the last step.
+    pub scene: Scene,
+    traffic_due: f32,
 }
 
 impl Game {
@@ -168,8 +229,10 @@ impl Game {
     pub fn new(world: World, env: Environment) -> Game {
         let mut player = Car::on_road(&world, Kind::Police, Spec::interceptor(), 20.0, 2.1, false, 0.0);
         player.paint = Vec3::new(0.02, 0.02, 0.02);
+        player.role = Role::Player;
         let follow = Follow::new(&player.vehicle);
         let camera = Camera { eye: Vec3::ZERO, target: Vec3::Z, up: Vec3::Y, fov: 1.0 };
+        let length = world.road.length();
         let mut g = Game {
             world,
             env,
@@ -183,9 +246,127 @@ impl Game {
             events: Vec::new(),
             camera,
             paused: false,
+            traffic: false,
+            autopilot: false,
+            autopilot_role: Role::Traffic(crate::driver::Traffic::new(0, 1.0, 1.15)),
+            rng: Rng::new(crate::world::SEED ^ 0x7AFF),
+            boost: Boost::new(),
+            scene: Scene { places: Vec::new(), length },
+            traffic_due: 0.0,
         };
         g.cars.push(player);
         g
+    }
+
+    /// Fills the road round the player with traffic (and keeps it busy
+    /// from then on).
+    pub fn start_traffic(&mut self) {
+        self.traffic = true;
+        let player_s = self.cars[self.player].place(&self.world).0;
+        let want = traffic::wanted(&self.world, player_s);
+        let mut tries = 0;
+        while self.traffic_count() < want && tries < want * 20 {
+            tries += 1;
+            let slot = traffic::any_slot(&mut self.rng, &self.world.road, player_s);
+            self.add_traffic(&slot);
+        }
+    }
+
+    fn traffic_count(&self) -> usize {
+        self.cars.iter().filter(|c| matches!(c.role, Role::Traffic(_))).count()
+    }
+
+    /// Every car's s and lateral offset.
+    fn spots(&self) -> Vec<(f32, f32)> {
+        self.cars.iter().map(|c| c.place(&self.world)).collect()
+    }
+
+    /// Puts a new traffic car at `slot` if there is room; true if it did.
+    fn add_traffic(&mut self, slot: &traffic::Slot) -> bool {
+        if !traffic::free(&self.world.road, &self.spots(), slot, 24.0) {
+            return false;
+        }
+        let car = self.traffic_car(slot);
+        self.cars.push(car);
+        true
+    }
+
+    /// A traffic car at `slot`, at the speed its lane drives at.
+    fn traffic_car(&mut self, slot: &traffic::Slot) -> Car {
+        let road = &self.world.road;
+        let section = road.at(slot.s).section;
+        let (kind, spec, paint) = traffic::pick(&mut self.rng, section);
+        let lateral = crate::road::Road::lane_center(slot.lane, slot.side);
+        let role = traffic::role(&mut self.rng, slot);
+        let keen = match role {
+            Role::Traffic(t) => t.keen,
+            _ => 1.0,
+        };
+        let speed = section.speed_limit() * keen * 0.9;
+        let mut car = Car::on_road(&self.world, kind, spec, slot.s, lateral, slot.side < 0.0, speed);
+        car.paint = paint;
+        car.role = role;
+        car.headlights = true;
+        car
+    }
+
+    /// Moves traffic that has left the window round the player back to
+    /// its far end, and adds cars where the road is busier.
+    fn keep_traffic(&mut self) {
+        let player_s = self.cars[self.player].place(&self.world).0;
+        for i in 0..self.cars.len() {
+            if !matches!(self.cars[i].role, Role::Traffic(_)) {
+                continue;
+            }
+            let s = self.cars[i].place(&self.world).0;
+            if traffic::gone(&self.world.road, player_s, s) {
+                // Somewhere new, out of sight; tried a few times.
+                for _ in 0..8 {
+                    let slot = traffic::far_slot(&mut self.rng, &self.world.road, player_s);
+                    if traffic::free(&self.world.road, &self.spots(), &slot, 24.0) {
+                        self.cars[i] = self.traffic_car(&slot);
+                        break;
+                    }
+                }
+            }
+        }
+        let want = traffic::wanted(&self.world, player_s);
+        if self.traffic_count() < want {
+            let slot = traffic::far_slot(&mut self.rng, &self.world.road, player_s);
+            self.add_traffic(&slot);
+        }
+    }
+
+    /// Where every car is, as the drivers see it.
+    fn update_scene(&mut self) {
+        let road = &self.world.road;
+        self.scene.places.clear();
+        for c in &self.cars {
+            let at = road.locate(c.vehicle.pos, Some(c.hint));
+            let (_, f, _, _) = road.frame(at.s);
+            let flat = Vec2::new(f.x, f.z).normalize_or(Vec2::Y);
+            let along = c.vehicle.vel.dot(flat);
+            let dir = match c.role {
+                Role::Traffic(t) => t.side,
+                // Chases run along the road.
+                Role::Suspect(_) | Role::Police(_) => 1.0,
+                _ => {
+                    if c.vehicle.forward().dot(flat) >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+            };
+            self.scene.places.push(Place {
+                s: at.s,
+                lateral: at.lateral,
+                along,
+                dir,
+                length: c.vehicle.spec.half_length * 2.0,
+                siren: c.siren,
+            });
+        }
     }
 
     /// Lets go of the controls (the window lost the keyboard).
@@ -213,8 +394,43 @@ impl Game {
         let p = self.player;
         let speed = self.cars[p].vehicle.speed();
         self.cars[p].controls = self.driver.update(self.keys, speed, STEP);
+        self.update_scene();
+        // The computer's drivers; their engines' power as the chase has it.
+        let road = &self.world.road;
+        let mut power: Vec<f32> = self.cars.iter().map(|_| 1.0).collect();
+        for (i, engine) in power.iter_mut().enumerate() {
+            let mut role = if i == p && self.autopilot { self.autopilot_role } else { self.cars[i].role };
+            let car = &self.cars[i];
+            let c = match &mut role {
+                Role::Player => continue,
+                Role::Parked => Controls { brake: 1.0, ..Controls::default() },
+                Role::Traffic(t) => t.drive(i, road, &self.scene, &car.vehicle, STEP),
+                Role::Suspect(sus) => {
+                    let lead = self.scene.gap(self.scene.places[sus.pursuer].s, self.scene.places[i].s);
+                    let pace = pace(lead);
+                    *engine = pace;
+                    sus.drive(i, road, &self.scene, &car.vehicle, car.damage, pace, STEP)
+                }
+                Role::Police(pol) => {
+                    // Pursuit-tuned, and given its head when fallen behind.
+                    let behind = self.scene.gap(self.scene.places[i].s, self.scene.places[pol.target].s);
+                    *engine = 1.1 + ((behind - 40.0) / 160.0).clamp(0.0, 1.0) * 0.4;
+                    pol.drive(i, road, &self.scene, &car.vehicle, STEP)
+                }
+            };
+            self.cars[i].controls = c;
+            if i == p && self.autopilot {
+                self.autopilot_role = role;
+            } else {
+                self.cars[i].role = role;
+            }
+        }
+        // The player's nitrous.
+        self.boost.update(self.keys.boost && !self.autopilot, STEP);
+        power[p] *= self.boost.power();
         let world = &self.world;
         for (i, car) in self.cars.iter_mut().enumerate() {
+            car.vehicle.power = power[i] * (1.0 - 0.3 * car.damage);
             car.prev = Pose::of(&car.vehicle);
             let hint = car.hint;
             let ground = |q: Vec3| world.ground(q, hint);
@@ -227,15 +443,26 @@ impl Game {
             }
             car.hint = world.road.locate(car.vehicle.pos, Some(car.hint)).index;
         }
-        // Car against car: those near each other along the road.
+        // Car against car: those near each other along the road (sorted
+        // by their place, each against those within reach of it).
         let n = self.cars.len();
-        for i in 0..n {
-            for j in i + 1..n {
-                let (a, b) = self.cars.split_at_mut(j);
-                if let Some(impact) = physics::collide_cars(&mut a[i].vehicle, &mut b[0].vehicle)
+        let mut order: Vec<usize> = (0..n).collect();
+        let places = &self.scene.places;
+        order.sort_by(|&a, &b| places[a].s.total_cmp(&places[b].s));
+        let length = self.scene.length;
+        for (k, &i) in order.iter().enumerate() {
+            for step in 1..n {
+                let j = order[(k + step) % n];
+                let gap = (places[j].s - places[i].s).rem_euclid(length);
+                if gap > 12.0 {
+                    break;
+                }
+                let (lo, hi) = (i.min(j), i.max(j));
+                let (a, b) = self.cars.split_at_mut(hi);
+                if let Some(impact) = physics::collide_cars(&mut a[lo].vehicle, &mut b[0].vehicle)
                     && impact.speed > 0.5
                 {
-                    self.events.push(Event::Crash { a: i, b: Some(j), impact });
+                    self.events.push(Event::Crash { a: lo, b: Some(hi), impact });
                 }
             }
         }
@@ -247,6 +474,19 @@ impl Game {
                 if c == self.player {
                     self.follow.jolt(hit);
                 }
+                // Traffic stops, shaken, after a real knock.
+                if let Role::Traffic(t) = &mut self.cars[c].role
+                    && impact.speed > 4.0
+                {
+                    t.shaken = 2.5;
+                }
+            }
+        }
+        if self.traffic {
+            self.traffic_due -= STEP;
+            if self.traffic_due <= 0.0 {
+                self.traffic_due = 0.5;
+                self.keep_traffic();
             }
         }
     }
@@ -318,6 +558,43 @@ impl Game {
         seen.yaw = pose.yaw;
         self.camera = self.follow.update(&seen, &self.world, player.hint, dt);
         (views, lights)
+    }
+
+    /// Takes car `i` off the road (not the player's). Cars after it move
+    /// down one place: references to them (the player, a police car's
+    /// target, a suspect's pursuer) are moved with them.
+    pub fn remove_car(&mut self, i: usize) {
+        if i == self.player || i >= self.cars.len() {
+            return;
+        }
+        self.cars.remove(i);
+        let shift = |j: &mut usize| {
+            if *j > i {
+                *j -= 1;
+            }
+        };
+        shift(&mut self.player);
+        for c in self.cars.iter_mut() {
+            match &mut c.role {
+                Role::Police(p) => shift(&mut p.target),
+                Role::Suspect(s) => shift(&mut s.pursuer),
+                _ => {}
+            }
+        }
+        if let Role::Police(p) = &mut self.autopilot_role {
+            shift(&mut p.target);
+        }
+    }
+
+    /// Lets the computer drive the player's car (or gives it back): as
+    /// police after `target` if there is one, as traffic otherwise.
+    pub fn set_autopilot(&mut self, on: bool, target: Option<usize>) {
+        self.autopilot = on;
+        let lane = crate::road::Road::lane_center(0, 1.0);
+        self.autopilot_role = match target {
+            Some(t) => Role::Police(crate::driver::Police::new(lane, t, 1.0)),
+            None => Role::Traffic(crate::driver::Traffic::new(0, 1.0, 1.15)),
+        };
     }
 
     /// The player's car.

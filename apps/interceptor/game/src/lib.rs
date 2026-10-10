@@ -18,7 +18,10 @@
 //! | [`vehicle`], [`physics`] | how cars drive and crash |
 //! | [`camera`] | the cameras that follow a car |
 //! | [`input`] | the keyboard into a driver's controls |
+//! | [`driver`], [`traffic`] | the computer's drivers, and the traffic round the player |
 //! | [`game`] | the running game |
+//! | [`pursuit`] | a chase: takedowns, busts, escapes |
+//! | [`scale`] | the resolution the scene is rendered at |
 
 #![no_std]
 
@@ -29,6 +32,7 @@ extern crate std;
 pub mod camera;
 pub mod carmodel;
 pub mod city;
+pub mod driver;
 pub mod env;
 pub mod game;
 pub mod groundmesh;
@@ -37,11 +41,14 @@ pub mod lamps;
 pub mod layout;
 pub mod mesh;
 pub mod physics;
+pub mod pursuit;
 pub mod render;
 pub mod road;
 pub mod roadmesh;
+pub mod scale;
 pub mod terrain;
 pub mod texgen;
+pub mod traffic;
 pub mod vehicle;
 pub mod world;
 

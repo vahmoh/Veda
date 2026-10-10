@@ -214,8 +214,8 @@ pub struct Renderer {
     sea: Geometry,
     /// The unit box every block is drawn with, and the blocks.
     blocks: (Geometry, i32),
-    /// Each kind of car's body and wheel.
-    cars: Vec<(Kind, Geometry, Geometry, [Vec3; 4])>,
+    /// Each kind of car's body and wheel, drawn instanced.
+    cars: Vec<CarGpu>,
     fullscreen: u32,
     dash: f32,
     /// Post-processing, with a GPU.
@@ -232,6 +232,25 @@ pub struct Stats {
     pub draws: u32,
     pub triangles: u32,
 }
+
+/// A kind of car on the GPU: its body and its wheel, each with a buffer
+/// of this frame's instances.
+struct CarGpu {
+    kind: Kind,
+    body: Geometry,
+    wheel: Geometry,
+    /// Where its wheels are (car space).
+    wheels: [Vec3; 4],
+    body_instances: u32,
+    wheel_instances: u32,
+    /// How many of each this frame.
+    bodies: i32,
+    wheels_drawn: i32,
+}
+
+/// Floats per car instance: three rows of the transform, paint and
+/// livery, lamps.
+const CAR_FLOATS: usize = 20;
 
 /// The sun's shadow map and the programs that draw its casters.
 struct Shadow {
@@ -283,14 +302,7 @@ impl Renderer {
         let building = lit(gl, "building", shaders::BUILDING_VS, shaders::BUILDING_FS, &[], Some("u_walls"))?;
         let prop = lit(gl, "prop", shaders::PROP_VS, shaders::PROP_FS, &[], None)?;
         let glow = lit(gl, "glow", shaders::GLOW_VS, shaders::GLOW_FS, &["u_right", "u_up"], None)?;
-        let car = lit(
-            gl,
-            "car",
-            shaders::CAR_VS,
-            shaders::CAR_FS,
-            &["u_model", "u_paint", "u_livery", "u_lamps", "u_shape"],
-            None,
-        )?;
+        let car = lit(gl, "car", shaders::CAR_VS, shaders::CAR_FS, &["u_shape"], None)?;
 
         let frame_ubo = gl.gen_buffer();
         gl.bind_buffer(gl::UNIFORM_BUFFER, frame_ubo);
@@ -356,7 +368,29 @@ impl Renderer {
             .iter()
             .map(|&k| {
                 let m = carmodel::build(k);
-                (k, Geometry::new(gl, &m.body), Geometry::new(gl, &m.wheel), m.wheels)
+                let body = Geometry::new(gl, &m.body);
+                let wheel = Geometry::new(gl, &m.wheel);
+                let mut instances = |g: &Geometry| {
+                    gl.bind_vertex_array(g.vao);
+                    let b = gl.gen_buffer();
+                    gl.bind_buffer(gl::ARRAY_BUFFER, b);
+                    gl.buffer_data_size(gl::ARRAY_BUFFER, CAR_FLOATS * 4, gl::STREAM_DRAW);
+                    gpu::set_instance_layout(gl, CAR_FLOATS, 0);
+                    gl.bind_vertex_array(0);
+                    b
+                };
+                let body_instances = instances(&body);
+                let wheel_instances = instances(&wheel);
+                CarGpu {
+                    kind: k,
+                    body,
+                    wheel,
+                    wheels: m.wheels,
+                    body_instances,
+                    wheel_instances,
+                    bodies: 0,
+                    wheels_drawn: 0,
+                }
             })
             .collect();
         let fullscreen = gpu::fullscreen_triangle(gl);
@@ -408,7 +442,7 @@ impl Renderer {
             let statik = depth(gl, "shadow static", shaders::STATIC_VS, &[])?;
             let building = depth(gl, "shadow buildings", shaders::BUILDING_VS, &[])?;
             let prop = depth(gl, "shadow props", shaders::PROP_VS, &[])?;
-            let car = depth(gl, "shadow cars", shaders::CAR_VS, &["u_model"])?;
+            let car = depth(gl, "shadow cars", shaders::CAR_VS, &[])?;
             let size = 2048;
             let tex = gl.gen_texture();
             gl.bind_texture(gl::TEXTURE_2D, tex);
@@ -618,11 +652,13 @@ impl Renderer {
         let proj = Mat4::perspective_rh(camera.fov, aspect, NEAR, FAR);
         let view_proj = proj * camera.view();
         let planes = frustum(&view_proj);
+        // This frame's cars, by kind.
+        self.upload_cars(gl, frame.cars, camera.eye);
         // The sun's shadow map first.
         let sun = self.shadow.is_some().then(|| self.sun_view_proj(camera));
         if let Some(sun) = sun {
             self.upload_frame(gl, &sun, None, camera.eye, time, &[]);
-            self.draw_shadow_map(gl, frame.cars, &sun);
+            self.draw_shadow_map(gl, &sun);
         }
         self.upload_frame(gl, &view_proj, sun.as_ref(), camera.eye, time, frame.lights);
         self.stats = Stats::default();
@@ -650,7 +686,8 @@ impl Renderer {
         gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
 
         // The cars first: they hide the most.
-        self.draw_cars(gl, frame.cars, &planes);
+        let car_program = self.car.id;
+        self.draw_cars(gl, &car_program, true);
 
         // The road: the tarmac, then its sides.
         let visible: Vec<usize> =
@@ -779,7 +816,7 @@ impl Renderer {
     }
 
     /// Draws what casts shadows into the shadow map, seen from the sun.
-    fn draw_shadow_map(&mut self, gl: &mut Context, cars: &[CarView], sun: &Mat4) {
+    fn draw_shadow_map(&mut self, gl: &mut Context, sun: &Mat4) {
         let Some(sh) = self.shadow.as_ref() else { return };
         let planes = frustum(sun);
         gl.bind_framebuffer(gl::FRAMEBUFFER, sh.fbo);
@@ -806,78 +843,88 @@ impl Renderer {
         for (g, n) in &self.lamp_meshes {
             g.draw_instanced(gl, *n);
         }
-        gl.use_program(sh.car.id);
-        let at_model = sh.car.at("u_model");
-        for c in cars {
-            let center = c.transform.transform_point3(Vec3::new(0.0, 0.8, 0.0));
-            if outside(&planes, center, 3.2) {
-                continue;
-            }
-            let Some(k) = self.cars.iter().position(|e| e.0 == c.kind) else { continue };
-            gl.uniform_matrix4fv(at_model, false, &mat(&c.transform));
-            self.cars[k].1.draw(gl);
-            draws += 1;
-        }
+        let car_program = sh.car.id;
+        draws += self.draw_cars(gl, &car_program, false);
         gl.disable(gl::POLYGON_OFFSET_FILL);
         gl.enable(gl::CULL_FACE);
         self.stats.draws += draws + 2 + self.lamp_meshes.len() as u32;
     }
 
-    /// Draws `cars`: each body, then its wheels.
-    fn draw_cars(&mut self, gl: &mut Context, cars: &[CarView], planes: &[Vec4; 6]) {
-        if cars.is_empty() {
-            return;
-        }
-        gl.active_texture(gl::TEXTURE0);
-        gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
-        gl.use_program(self.car.id);
-        let (at_model, at_paint, at_livery, at_lamps, at_shape) = (
-            self.car.at("u_model"),
-            self.car.at("u_paint"),
-            self.car.at("u_livery"),
-            self.car.at("u_lamps"),
-            self.car.at("u_shape"),
-        );
+    /// Fills each kind of car's instance buffers with this frame's cars
+    /// near the camera: bodies, and wheels (the right-hand ones turned
+    /// round so that their faces look out; the front ones steered).
+    fn upload_cars(&mut self, gl: &mut Context, cars: &[CarView], eye: Vec3) {
+        let mut bodies: Vec<Vec<f32>> = self.cars.iter().map(|_| Vec::new()).collect();
+        let mut wheels: Vec<Vec<f32>> = self.cars.iter().map(|_| Vec::new()).collect();
+        let push = |out: &mut Vec<f32>, m: &Mat4, paint: [f32; 4], lamps: [f32; 4]| {
+            for r in 0..3 {
+                let row = m.row(r);
+                out.extend_from_slice(&[row.x, row.y, row.z, row.w]);
+            }
+            out.extend_from_slice(&paint);
+            out.extend_from_slice(&lamps);
+        };
         for c in cars {
-            let center = c.transform.transform_point3(Vec3::new(0.0, 0.8, 0.0));
-            if outside(planes, center, 3.2) {
+            // Beyond the fog and the shadows' reach, not worth drawing.
+            if c.transform.w_axis.xyz().distance(eye) > 900.0 {
                 continue;
             }
-            let Some(k) = self.cars.iter().position(|e| e.0 == c.kind) else { continue };
-            let shape = c.kind.shape();
-            gl.uniform_matrix4fv(at_model, false, &mat(&c.transform));
-            gl.uniform3f(at_paint, c.paint.x, c.paint.y, c.paint.z);
-            gl.uniform1i(
-                at_livery,
-                match c.livery {
-                    Livery::Plain => 0,
-                    Livery::Police => 1,
-                    Livery::Taxi => 2,
-                },
-            );
-            gl.uniform4f(at_lamps, c.headlights, c.brake, c.bar[0], c.bar[1]);
-            gl.uniform4f(at_shape, shape.cowl, shape.a, shape.c, shape.belt);
-            self.cars[k].1.draw(gl);
-            let body = self.cars[k].1.count;
-            self.count(body);
-            // The wheels: the right-hand ones turned round, so that their
-            // faces look out; the front ones steered.
-            let wheels = self.cars[k].3;
-            for (w, &at) in wheels.iter().enumerate() {
-                let right = at.x < 0.0;
+            let Some(k) = self.cars.iter().position(|e| e.kind == c.kind) else { continue };
+            let livery = match c.livery {
+                Livery::Plain => 0.0,
+                Livery::Police => 1.0,
+                Livery::Taxi => 2.0,
+            };
+            let paint = [c.paint.x, c.paint.y, c.paint.z, livery];
+            let lamps = [c.headlights, c.brake, c.bar[0], c.bar[1]];
+            push(&mut bodies[k], &c.transform, paint, lamps);
+            for (w, &at) in self.cars[k].wheels.iter().enumerate() {
                 let steer = if w < 2 { c.steer } else { 0.0 };
                 let mut m = c.transform * Mat4::from_translation(at) * Mat4::from_rotation_y(steer);
-                if right {
+                if at.x < 0.0 {
                     m *= Mat4::from_rotation_y(core::f32::consts::PI) * Mat4::from_rotation_x(-c.spin);
                 } else {
                     m *= Mat4::from_rotation_x(c.spin);
                 }
-                gl.uniform_matrix4fv(at_model, false, &mat(&m));
-                self.cars[k].2.draw(gl);
-                let n = self.cars[k].2.count;
-                self.count(n);
+                push(&mut wheels[k], &m, [0.0; 4], [0.0; 4]);
             }
         }
+        for (k, g) in self.cars.iter_mut().enumerate() {
+            g.bodies = (bodies[k].len() / CAR_FLOATS) as i32;
+            g.wheels_drawn = (wheels[k].len() / CAR_FLOATS) as i32;
+            if g.bodies > 0 {
+                gl.bind_buffer(gl::ARRAY_BUFFER, g.body_instances);
+                gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(&bodies[k]), gl::STREAM_DRAW);
+                gl.bind_buffer(gl::ARRAY_BUFFER, g.wheel_instances);
+                gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(&wheels[k]), gl::STREAM_DRAW);
+            }
+        }
+    }
+
+    /// Draws this frame's cars with `program` (the cars' own, or the
+    /// shadow map's): each kind's bodies, then its wheels. Returns the
+    /// draws.
+    fn draw_cars(&mut self, gl: &mut Context, program: &u32, lit: bool) -> u32 {
+        gl.use_program(*program);
+        if lit {
+            gl.active_texture(gl::TEXTURE0);
+            gl.bind_texture(gl::TEXTURE_CUBE_MAP, self.env_map);
+        }
+        let at_shape = if lit { self.car.at("u_shape") } else { -1 };
+        let mut draws = 0;
+        for g in &self.cars {
+            if g.bodies == 0 {
+                continue;
+            }
+            let shape = g.kind.shape();
+            gl.uniform4f(at_shape, shape.cowl, shape.a, shape.c, shape.belt);
+            g.body.draw_instanced(gl, g.bodies);
+            g.wheel.draw_instanced(gl, g.wheels_drawn);
+            draws += 2;
+            self.stats.triangles += (g.body.count / 3 * g.bodies + g.wheel.count / 3 * g.wheels_drawn) as u32;
+        }
+        self.stats.draws += draws;
+        draws
     }
 
     fn count(&mut self, indices: i32) {
@@ -916,12 +963,12 @@ fn car_glows(cars: &[CarView], eye: Vec3, dark: f32) -> Vec<f32> {
         for side in [-1.0f32, 1.0] {
             if c.headlights > 0.0 {
                 let at = Vec3::new(side * (w * 0.80 - 0.2), hl_y, half + 0.02);
-                glow(at, Some(forward), 0.55, Vec3::new(1.0, 0.95, 0.85) * (3.0 * c.headlights));
+                glow(at, Some(forward), 0.32, Vec3::new(1.0, 0.95, 0.85) * (3.0 * c.headlights));
             }
-            let tail = 0.5 * c.headlights + 2.5 * c.brake;
+            let tail = 0.25 * c.headlights + 1.5 * c.brake;
             if tail > 0.0 {
                 let at = Vec3::new(side * (w * 0.82 - 0.21), t_y, -half - 0.02);
-                glow(at, Some(-forward), 0.4, Vec3::new(1.0, 0.03, 0.02) * tail);
+                glow(at, Some(-forward), 0.22, Vec3::new(1.0, 0.03, 0.02) * tail);
             }
         }
         if c.bar[0] + c.bar[1] > 0.0 {
