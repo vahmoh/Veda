@@ -205,7 +205,7 @@ pub struct Renderer {
     light_map: u32,
     no_shadow: u32,
     /// Each kind of street light, with its instances.
-    lamp_meshes: Vec<(Geometry, i32)>,
+    lamp_meshes: Vec<(Geometry, i32, lamps::Kind)>,
     /// The trees (pines, broad trees): their meshes, an instance buffer
     /// refilled with those in view, and how many are in it; and where they
     /// all are.
@@ -220,8 +220,10 @@ pub struct Renderer {
     faces: (Geometry, i32),
     sign: Program,
     signs: u32,
-    /// The lamps' glows (an instanced quad).
+    /// The lamps' glows (an instanced quad): those lit after dark, and
+    /// those day and night (a tunnel's lamps, the bridge's beacons).
     lamp_glows: (u32, i32),
+    always_glows: (u32, i32),
     /// The cars' lights' glows, refilled every frame (the vertex array and
     /// its instance buffer).
     car_glows: (u32, u32),
@@ -373,7 +375,7 @@ impl Renderer {
         let surface = lit(gl, "surface", shaders::STATIC_VS, shaders::SURFACE_FS, &[], Some("u_surfaces"))?;
         let water = lit(gl, "water", shaders::STATIC_VS, shaders::WATER_FS, &[], Some("u_ripples"))?;
         let building = lit(gl, "building", shaders::BUILDING_VS, shaders::BUILDING_FS, &[], Some("u_walls"))?;
-        let prop = lit(gl, "prop", shaders::PROP_VS, shaders::PROP_FS, &[], None)?;
+        let prop = lit(gl, "prop", shaders::PROP_VS, shaders::PROP_FS, &["u_always"], None)?;
         let glow = lit(gl, "glow", shaders::GLOW_VS, shaders::GLOW_FS, &["u_right", "u_up"], None)?;
         let car = lit(gl, "car", shaders::CAR_VS, shaders::CAR_FS, &["u_shape"], None)?;
 
@@ -486,7 +488,7 @@ impl Renderer {
                 gl.buffer_data(gl::ARRAY_BUFFER, &float_bytes(&data), gl::STATIC_DRAW);
                 gpu::set_instance_layout(gl, 8, 0);
                 gl.bind_vertex_array(0);
-                (g, of_kind.len() as i32)
+                (g, of_kind.len() as i32, k)
             })
             .collect();
         let tree_meshes = [scenery::TreeKind::Pine, scenery::TreeKind::Broad].map(|k| {
@@ -545,24 +547,27 @@ impl Renderer {
             let imgs = texgen::billboards(if quality == Quality::High { 512 } else { 256 });
             array(gl, &imgs)
         };
-        let lamp_glows = {
-            let mut data = Vec::new();
-            // The bridge's: red beacons on its towers, white along its cables.
+        let (lamp_glows, always_glows) = {
+            let (mut dark, mut always) = (Vec::new(), Vec::new());
+            // The bridge's: red beacons on its towers (always), white along
+            // its cables.
             for b in &beacons {
-                data.extend_from_slice(&[b.x, b.y, b.z, 1.6, 1.6, 0.04, 0.02, 0.0]);
+                always.extend_from_slice(&[b.x, b.y, b.z, 1.6, 1.6, 0.04, 0.02, 0.0]);
             }
             for l in &bridge_lights {
-                data.extend_from_slice(&[l.x, l.y, l.z, 0.9, 0.55, 0.5, 0.42, 0.0]);
+                dark.extend_from_slice(&[l.x, l.y, l.z, 0.9, 0.55, 0.5, 0.42, 0.0]);
             }
             for l in &world.lamps {
                 let heads = if l.kind == lamps::Kind::Double { &l.heads[..] } else { &l.heads[..1] };
                 for h in heads {
                     let size = if l.kind == lamps::Kind::Ceiling { 0.6 } else { 1.2 };
                     let c = l.color * 0.35;
-                    data.extend_from_slice(&[h.x, h.y - 0.2, h.z, size, c.x, c.y, c.z, 0.0]);
+                    let list = if l.kind.always_lit() { &mut always } else { &mut dark };
+                    list.extend_from_slice(&[h.x, h.y - 0.2, h.z, size, c.x, c.y, c.z, 0.0]);
                 }
             }
-            (instanced_quads(gl, &data).0, (data.len() / 8) as i32)
+            let quads = |gl: &mut Context, data: &[f32]| (instanced_quads(gl, data).0, (data.len() / 8) as i32);
+            (quads(gl, &dark), quads(gl, &always))
         };
         let car_glows = instanced_quads(gl, &[]);
 
@@ -595,6 +600,7 @@ impl Renderer {
             sign,
             signs,
             lamp_glows,
+            always_glows,
             car_glows,
             // Painted by `bake_sky`.
             env_map: 0,
@@ -846,11 +852,12 @@ impl Renderer {
 
         // The street lights, the trees, the bridge.
         gl.use_program(self.prop.id);
-        for k in 0..self.lamp_meshes.len() {
-            let (g, n) = (&self.lamp_meshes[k].0, self.lamp_meshes[k].1);
-            g.draw_instanced(gl, n);
+        for (g, n, kind) in &self.lamp_meshes {
+            gl.uniform1f(self.prop.at("u_always"), if kind.always_lit() { 1.0 } else { 0.0 });
+            g.draw_instanced(gl, *n);
             self.stats.draws += 1;
         }
+        gl.uniform1f(self.prop.at("u_always"), 0.0);
         let (draws, triangles) = self.draw_props(gl);
         self.stats.draws += draws;
         self.stats.triangles += triangles;
@@ -895,9 +902,10 @@ impl Renderer {
         gl.draw_arrays(gl::TRIANGLES, 0, 3);
 
         // The glows, added on top (tested against what hides them): the
-        // street lights' at night, the cars' lights' always.
+        // street lights' at night, the cars', the tunnel's and the bridge's
+        // beacons' always.
         let car_glows = car_glows(frame.cars, camera.eye, 0.2 + 0.8 * self.env.street_lights.min(1.0));
-        if self.env.street_lights > 0.0 || !car_glows.is_empty() {
+        if self.env.street_lights > 0.0 || !car_glows.is_empty() || self.always_glows.1 > 0 {
             let view = camera.view();
             let (right, up) = (view.row(0).xyz(), view.row(1).xyz());
             gl.use_program(self.glow.id);
@@ -909,6 +917,11 @@ impl Renderer {
             if self.env.street_lights > 0.0 {
                 gl.bind_vertex_array(self.lamp_glows.0);
                 gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, self.lamp_glows.1);
+                self.stats.draws += 1;
+            }
+            if self.always_glows.1 > 0 {
+                gl.bind_vertex_array(self.always_glows.0);
+                gl.draw_arrays_instanced(gl::TRIANGLES, 0, 6, self.always_glows.1);
                 self.stats.draws += 1;
             }
             if !car_glows.is_empty() {
@@ -984,7 +997,7 @@ impl Renderer {
         gl.use_program(sh.building.id);
         self.blocks.0.draw_instanced(gl, self.blocks.1);
         gl.use_program(sh.prop.id);
-        for (g, n) in &self.lamp_meshes {
+        for (g, n, _) in &self.lamp_meshes {
             g.draw_instanced(gl, *n);
         }
         let car_program = sh.car.id;
@@ -1224,7 +1237,10 @@ fn bake_light_map(gl: &mut Context, lamps: &[Lamp], quality: Quality, defines: &
             // An 8-bit map holds a quarter of the light (the programs
             // cannot tell: the pools are dim enough).
             let c = if float { l.color } else { l.color * 0.25 };
-            data.extend_from_slice(&[h.x, h.z, l.radius, h.y, c.x, c.y, c.z, 0.0]);
+            // A tunnel's lamps are lit day and night: they hang 1000 m
+            // higher in the map, which lampLight() reads so.
+            let hang = if l.kind.always_lit() { h.y + 1000.0 } else { h.y };
+            data.extend_from_slice(&[h.x, h.z, l.radius, hang, c.x, c.y, c.z, 0.0]);
         }
     }
     let (vao, buffer) = instanced_quads(gl, &data);

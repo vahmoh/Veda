@@ -82,7 +82,7 @@ pub fn trees(road: &Road, terrain: &Terrain, blocks: &[Block], boards: &[Billboa
                 }
                 // Clear of every stretch of the road (it loops back), and of
                 // the buildings.
-                let near = road.locate(Vec3::new(x, 0.0, z), Some(terrain.nearest_sample(x, z)));
+                let near = road.locate_from(Vec3::new(x, 0.0, z), terrain.nearest_sample(x, z));
                 let (_, wall) = road.widths(near.s);
                 if near.lateral.abs() < wall + 3.0 {
                     continue;
@@ -182,7 +182,7 @@ pub fn billboards(road: &Road, terrain: &Terrain) -> Vec<Billboard> {
         if terrain.is_water(p.x, p.z) || terrain.normal(p.x, p.z).y < 0.8 {
             continue;
         }
-        let near = road.locate(p, Some(terrain.nearest_sample(p.x, p.z)));
+        let near = road.locate_from(p, terrain.nearest_sample(p.x, p.z));
         let (_, wall) = road.widths(near.s);
         if near.lateral.abs() < wall + 4.0 {
             continue;

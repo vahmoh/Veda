@@ -19,6 +19,13 @@ pub enum Kind {
     Ceiling,
 }
 
+impl Kind {
+    /// Whether it is lit day and night (a tunnel's), not only after dark.
+    pub fn always_lit(self) -> bool {
+        self == Kind::Ceiling
+    }
+}
+
 /// A street light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lamp {

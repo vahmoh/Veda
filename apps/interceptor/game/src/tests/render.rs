@@ -442,3 +442,58 @@ fn signs_scene() {
     }
     save(&format!("{dir}/signs.png"), &sheet, w * cols, h * rows);
 }
+
+/// `INTERCEPTOR_TIMING=1`: how long making the world and its pictures takes.
+#[test]
+fn startup_timing() {
+    if std::env::var("INTERCEPTOR_TIMING").is_err() {
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    let world = World::new();
+    let t1 = std::time::Instant::now();
+    let (mut c, quality) = match renderer(1280, 720).filter(|_| std::env::var("INTERCEPTOR_SOFT").is_err()) {
+        Some(c) => (c, Quality::High),
+        None => (software(1280, 720), Quality::High),
+    };
+    let t2 = std::time::Instant::now();
+    let r = Renderer::new(&mut c, &world, Environment::new(TimeOfDay::Night, Weather::Clear), quality);
+    let t3 = std::time::Instant::now();
+    assert!(r.is_ok());
+    // The parts.
+    let time = |name: &str, f: &mut dyn FnMut()| {
+        let t = std::time::Instant::now();
+        f();
+        std::println!("  {name}: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    };
+    time("road", &mut || drop(crate::road::Road::new(crate::layout::VEDA_BAY)));
+    time("terrain", &mut || drop(crate::terrain::Terrain::new(&world.road, crate::world::SEED)));
+    time("buildings", &mut || drop(crate::city::buildings(&world.road, &world.terrain, crate::world::SEED)));
+    time("lamps", &mut || drop(crate::lamps::place(&world.road)));
+    time("billboards", &mut || drop(crate::scenery::billboards(&world.road, &world.terrain)));
+    time("neons", &mut || drop(crate::scenery::neons(&world.road, &world.blocks)));
+    time("trees", &mut || {
+        drop(crate::scenery::trees(&world.road, &world.terrain, &world.blocks, &world.billboards, 1))
+    });
+    time("asphalt", &mut || drop(crate::texgen::asphalt(512)));
+    time("surfaces", &mut || drop(crate::texgen::surfaces(256)));
+    time("walls", &mut || drop(crate::texgen::walls(256)));
+    time("ground", &mut || drop(crate::texgen::ground(512)));
+    time("ripples", &mut || drop(crate::texgen::ripples(256)));
+    time("boards", &mut || drop(crate::texgen::billboards(512)));
+    time("road meshes", &mut || drop(crate::roadmesh::chunks(&world.road)));
+    time("ground meshes", &mut || drop(crate::groundmesh::ground_chunks(&world.terrain)));
+    time("sea", &mut || drop(crate::groundmesh::sea(&world.terrain)));
+    time("cars", &mut || {
+        for k in crate::carmodel::Kind::ALL {
+            drop(crate::carmodel::build(k));
+        }
+    });
+    time("bridge", &mut || drop(crate::scenery::bridge(&world.road)));
+    std::println!(
+        "world {:.0} ms, context {:.0} ms, renderer {:.0} ms ({quality:?})",
+        (t1 - t0).as_secs_f64() * 1e3,
+        (t2 - t1).as_secs_f64() * 1e3,
+        (t3 - t2).as_secs_f64() * 1e3
+    );
+}

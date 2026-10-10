@@ -117,15 +117,19 @@ uniform highp sampler2DShadow u_shadowMap;
 
 // The street lights' light falling on a surface at `p` facing `n`: their
 // pools, painted from above into the light map (its alpha: how high the
-// lamps hang there, above which their light does not reach).
+// lamps hang there, above which their light does not reach). Lamps lit
+// day and night (a tunnel's) hang 1000 m higher in the map.
 vec3 lampLight(vec3 p, vec3 n) {
-    if (u_weather.z <= 0.0) {
+    vec4 l = texture(u_lightMap, (p.xz - u_lightRect.xy) * u_lightRect.zw);
+    bool always = l.a > 500.0;
+    float on = always ? 1.0 : u_weather.z;
+    if (on <= 0.0) {
         return vec3(0.0);
     }
-    vec4 l = texture(u_lightMap, (p.xz - u_lightRect.xy) * u_lightRect.zw);
-    float below = smoothstep(l.a + 3.0, l.a - 3.0, p.y);
+    float hang = always ? l.a - 1000.0 : l.a;
+    float below = smoothstep(hang + 3.0, hang - 3.0, p.y);
     float facing = 0.45 + 0.55 * max(n.y, 0.0);
-    return l.rgb * (u_weather.z * below * facing);
+    return l.rgb * (on * below * facing);
 }
 
 // How much of the sun reaches `p` (facing `n`): its shadow map, read with
@@ -896,6 +900,8 @@ void main() {
 "#;
 
 pub const PROP_FS: &str = r#"
+// 1 for lamps lit day and night (a tunnel's).
+uniform float u_always;
 in vec3 v_pos;
 in vec3 v_normal;
 flat in vec4 v_color;
@@ -912,7 +918,7 @@ void main() {
         albedo = vec3(0.8);
         rough = 0.2;
         metal = 0.0;
-        emit = v_color.rgb * 6.0 * u_weather.z;
+        emit = v_color.rgb * 6.0 * max(u_weather.z, u_always);
     } else if (part == 2) {
         albedo = vec3(0.3);
         rough = 0.85;

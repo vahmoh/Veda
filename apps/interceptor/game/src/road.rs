@@ -445,19 +445,7 @@ impl Road {
         let near = |i: usize| self.samples[i].pos.xz().distance_squared(p.xz());
         let mut best: Option<(usize, f32)> = None;
         if let Some(h) = hint.filter(|&h| h < n) {
-            // Walk downhill from the hint.
-            let (mut i, mut d) = (h, near(h));
-            loop {
-                let (prev, next) = ((i + n - 1) % n, (i + 1) % n);
-                let (dp, dn) = (near(prev), near(next));
-                if dn < d {
-                    (i, d) = (next, dn);
-                } else if dp < d {
-                    (i, d) = (prev, dp);
-                } else {
-                    break;
-                }
-            }
+            let (i, d) = self.downhill(p, h);
             // Trusted when it ends near the road (far off it, another
             // stretch of the loop may be nearer).
             let wall = self.samples[i].wall + 20.0;
@@ -480,6 +468,33 @@ impl Road {
             None => (0..n).min_by(|&a, &b| near(a).total_cmp(&near(b))).unwrap_or(0),
         };
         self.project(i, p)
+    }
+
+    /// Where `p` is relative to the road, given the sample nearest it
+    /// (found some other way, such as the terrain's map of them): no
+    /// search beyond that sample's neighbours.
+    pub fn locate_from(&self, p: Vec3, nearest: usize) -> Location {
+        let (i, _) = self.downhill(p, nearest.min(self.samples.len() - 1));
+        self.project(i, p)
+    }
+
+    /// From sample `i`, the samples nearer `p` one after another until
+    /// the nearest: that one and its distance squared (on the ground).
+    fn downhill(&self, p: Vec3, mut i: usize) -> (usize, f32) {
+        let n = self.samples.len();
+        let near = |i: usize| self.samples[i].pos.xz().distance_squared(p.xz());
+        let mut d = near(i);
+        loop {
+            let (prev, next) = ((i + n - 1) % n, (i + 1) % n);
+            let (dp, dn) = (near(prev), near(next));
+            if dn < d {
+                (i, d) = (next, dn);
+            } else if dp < d {
+                (i, d) = (prev, dp);
+            } else {
+                return (i, d);
+            }
+        }
     }
 
     /// `p` projected onto the centre line near sample `i`.

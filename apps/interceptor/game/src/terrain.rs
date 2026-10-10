@@ -138,7 +138,7 @@ impl Terrain {
             for i in 0..w {
                 let k = j * w + i;
                 let p = Vec3::new(-HALF_X + i as f32 * CELL, 0.0, -HALF_Z + j as f32 * CELL);
-                let loc = road.locate(p, Some(nearest[k] as usize));
+                let loc = road.locate_from(p, nearest[k] as usize);
                 let shore = &shores[loc.index];
                 let side = if inside[k] { &shore.inside } else { &shore.outside };
                 let values = [loc.height, side.coast, side.rough, side.rise, side.shelf, side.wobble];
