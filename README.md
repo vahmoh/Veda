@@ -187,8 +187,11 @@ Veda is built on an x86-64 PC with Linux.
 * [QEMU](https://www.qemu.org/download/) and the OVMF UEFI firmware (on
   Debian and Ubuntu: `qemu-system-x86`, `qemu-system-gui`,
   `qemu-system-modules-opengl` and `ovmf`), with access to `/dev/kvm`.
-* For the driver VM: the build tools for Linux, a cross compiler and Mesa,
-  and KVM's nested virtualization (`kvm_intel nested=1`). See
+* For the driver VM: the build tools for Linux, a cross compiler and Mesa
+  (on Debian and Ubuntu: `build-essential`, `bc`, `curl`, `rsync`, `m4`,
+  `flex`, `bison`, `meson`, `ninja-build`, `libgmp-dev`, `libmpfr-dev`,
+  `libmpc-dev`, `python3-mako` and `python3-packaging`), and KVM's nested
+  virtualization (`kvm_intel nested=1`). See
   [the driver VM](docs/DRIVERVM.md#testing).
 * Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
   your distribution's build tools for the C toolchain, which
@@ -203,14 +206,23 @@ cargo xtask doctor
 
 ### Build and run
 
+First, build the driver VM's Linux (its kernel, a cross compiler and
+Mesa), which takes a while. Without it, Veda boots with no keyboard,
+mouse, sound or network.
+
+```bash
+cargo xtask linux
+```
+
+Then build and run Veda:
+
 ```bash
 cargo xtask run
 ```
 
 This builds every component, writes `target/veda/veda.img` and boots it
-in a QEMU window at 1920x1080. The first build also builds the driver VM's
-Linux (its kernel, a cross compiler and Mesa) and renders the sample
-pictures and music, which takes a while. Later builds are incremental.
+in a QEMU window at 1920x1080. The first build also renders the sample
+pictures and music. Later builds are incremental.
 
 ```bash
 cargo xtask run --resolution 1280x800 --smp 4 --memory 2048
