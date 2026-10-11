@@ -47,6 +47,9 @@ const MAX_CLIENTS: usize = 64;
 const MAX_IMPORTS: usize = 4;
 /// How often signaling fences are looked for while some are pending.
 const POLL_NS: u64 = 1_000_000;
+/// How long a renderer started again tries for the service's name, which
+/// the one before it holds until Veda sees it gone.
+const REGISTER_FOR: Duration = Duration::from_secs(10);
 
 /// The decoder's interface (`decoder/renderer.h`).
 mod ffi {
@@ -419,11 +422,15 @@ fn read_client(device: &Device, client: &mut Client, commands: &mut [u32], trace
 
 /// Serves `gpu` on `device` for ever.
 fn serve(device: &Device, trace: bool) -> ! {
-    let listener = match vproto::register(gpu::NAME) {
-        Ok(l) => l,
-        Err(e) => {
-            println!("renderer: cannot provide the gpu service: {e:?}");
-            idle();
+    let since = std::time::Instant::now();
+    let listener = loop {
+        match vproto::register(gpu::NAME) {
+            Ok(l) => break l,
+            Err(_) if since.elapsed() < REGISTER_FOR => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                println!("renderer: cannot provide the gpu service: {e:?}");
+                idle();
+            }
         }
     };
     println!("renderer: serving gpu on {}", device.name);

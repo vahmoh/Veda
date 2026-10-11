@@ -154,8 +154,22 @@ impl Init {
         Ok(koid)
     }
 
+    /// Forgets service `name` if the process that registered it is gone (its
+    /// listener's other end closed): the name is free to register again, and
+    /// connections to it wait for whoever does (a driver started again).
+    fn forget_if_gone(&mut self, name: &str) {
+        let gone = self.services.get(name).is_some_and(|(listener, _)| {
+            listener.wait(signals::PEER_CLOSED, 0).is_ok_and(|s| s & signals::PEER_CLOSED != 0)
+        });
+        if gone {
+            println!("service '{}' is gone", name);
+            self.services.remove(name);
+        }
+    }
+
     /// Hands a queued or new connection to a registered service.
     fn deliver(&mut self, name: &str, server_end: Channel, client: ClientIdentity) {
+        self.forget_if_gone(name);
         if let Some((listener, _)) = self.services.get(name) {
             match vipc::send_event(listener, LISTENER_CONNECT, (server_end, client)) {
                 Ok(()) => return,
@@ -188,6 +202,7 @@ impl Init {
             }
 
             fn register(&mut self, name: String, listener: Channel) -> Result<(), RegistryError> {
+                self.init.forget_if_gone(&name);
                 if self.init.services.contains_key(&name) || name == launcher::NAME || name == registry::NAME {
                     return Err(RegistryError::AlreadyRegistered);
                 }
@@ -207,6 +222,10 @@ impl Init {
             }
 
             fn list(&mut self) -> Vec<String> {
+                let names: Vec<String> = self.init.services.keys().cloned().collect();
+                for name in &names {
+                    self.init.forget_if_gone(name);
+                }
                 self.init.services.keys().cloned().collect()
             }
 

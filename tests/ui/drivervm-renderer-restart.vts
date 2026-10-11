@@ -1,0 +1,31 @@
+# The renderer in the driver VM ends, as Linux's OOM killer ended it on a
+# PC while a game set up its pictures. Linux starts it again, and it takes
+# the `gpu` service back: Veda forgets the service of the renderer that
+# ended rather than keeping its name for it. The compositor, which drew on
+# the processor once the renderer was gone, composes on the GPU again; a
+# program started afterwards (Prism) renders through it, on softpipe here.
+gpu off
+boot-cmdline "drivervm.renderer=softpipe"
+boot-cmdline "drivervm.cmdline=veda.kill=renderer:12"
+fail-on "PANIC"
+fail-on "cannot provide the gpu service"
+fail-on "link: "
+fail-on "shader:"
+wait-serial "renderer: serving gpu on softpipe" 90
+wait-serial "desktop ready" 90
+wait-serial "veda: ending renderer, as asked" 60
+wait-serial "veda: renderer ended" 20
+wait-serial-count "renderer: serving gpu on softpipe" 2 30
+# The compositor finds its GPU gone when it next draws: the pointer moves.
+move 0.5 0.5
+wait 1
+move 0.6 0.4
+wait-serial "compositor: the GPU is set up again once its service is back (1 of 3)" 30
+wait-serial-count "compositor: frames are drawn by the GPU (softpipe) from now on" 2 60
+key meta_l
+wait 2
+type "prism"
+key ret
+wait-serial "softpipe (OpenGL ES 3.0 Veda)" 90
+wait-serial " fps, render " 60
+shot target/veda/drivervm-renderer-restart.png

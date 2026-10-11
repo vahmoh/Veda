@@ -120,6 +120,9 @@ pub(crate) struct Compositor {
     pub(crate) gpu_setup: Option<Pending>,
     /// The driver whose pictures the GPU was set up for (its connection).
     pub(crate) gpu_tried: Option<u64>,
+    /// How many times the GPU stopped while it composed: it is set up
+    /// again after the first few (its renderer ended and started again).
+    pub(crate) gpu_losses: u32,
 }
 
 /// The client rectangle of an automatically placed `w` x `h` window, with a

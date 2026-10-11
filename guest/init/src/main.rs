@@ -14,7 +14,9 @@
 //! the first program may never end. With `veda.poweroff` it powers the
 //! machine off once they are done instead, for the tests of the driver VM;
 //! with `veda.crash=SECONDS` Linux crashes (a panic) that long after it
-//! started, for the tests of its restart.
+//! started, for the tests of its restart, and with `veda.kill=NAME:SECONDS`
+//! driver `NAME` is ended that long after (by SIGKILL, as Linux's OOM
+//! killer ends one), for the tests of a driver's.
 
 use std::process::Command;
 use std::time::Duration;
@@ -62,6 +64,16 @@ fn keep_running(name: &'static str, args: &'static [&'static str]) {
     });
 }
 
+/// Ends the processes called `name`, by SIGKILL.
+fn kill_named(name: &str) {
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else { continue };
+        if std::fs::read_to_string(entry.path().join("comm")).is_ok_and(|c| c.trim() == name) {
+            let _ = guest_sys::kill(pid, 9);
+        }
+    }
+}
+
 fn main() {
     for (source, target, kind) in
         [("proc", "/proc", "proc"), ("sysfs", "/sys", "sysfs"), ("devtmpfs", "/dev", "devtmpfs")]
@@ -102,6 +114,17 @@ fn main() {
             std::thread::sleep(Duration::from_secs(seconds));
             println!("veda: crashing, as asked");
             let _ = std::fs::write("/proc/sysrq-trigger", "c");
+        });
+    }
+    let kill = options.iter().find_map(|o| {
+        let (name, seconds) = o.strip_prefix("veda.kill=")?.split_once(':')?;
+        Some((name.to_string(), seconds.parse::<u64>().ok()?))
+    });
+    if let Some((name, seconds)) = kill {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(seconds));
+            println!("veda: ending {name}, as asked");
+            kill_named(&name);
         });
     }
     for name in options.iter().filter_map(|o| o.strip_prefix("veda.run=")).flat_map(|l| l.split(',')) {

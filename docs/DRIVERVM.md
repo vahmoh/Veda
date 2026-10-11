@@ -556,7 +556,11 @@ allocates: an integrated GPU's pictures, textures and buffers are in the
 guest's RAM, so a guest that gets one has 1 GiB rather than 256 MiB
 (below the memory the firmware keeps for its devices): one game's
 pictures at 1920x1080 take 341 MiB on iris (Interceptor's), and the
-guest's own Linux and files 170.
+guest's own Linux and files 170. A renderer that ends (Linux's OOM killer
+ends the biggest program) is started again and takes the service back
+(Veda forgets the service of a process that ended), and the compositor,
+having drawn on the processor meanwhile, sets the GPU up again (three
+times at most).
 
 **USB**. USB controllers go to the driver VM whole (xHCI's, which PCs have
 had since about 2012), and Linux drives them, their hubs and every device
@@ -787,10 +791,12 @@ when it cannot run). Its options are on the kernel command line:
 `drivervm.cpus=N`, `drivervm.devices=VID:DID,...` (devices Veda would
 keep), `drivervm=off`, and `drivervm.crash=SECONDS`, which
 has Linux crash once, that long after it started, for the tests of the
-restart. A script adds variables to the firmware's store with
-`firmware-variable` (a scripted run starts with OVMF's own store, those
-added). Wi-Fi's scripts give QEMU's machine the virtual radio's
-virtio-serial function (`net wifi`), which `airlink` makes Linux's;
+restart (`drivervm.cmdline=veda.kill=NAME:SECONDS` ends one of the
+guest's programs instead, by SIGKILL). A script adds variables to the
+firmware's store with `firmware-variable` (a scripted run starts with
+OVMF's own store, those added). Wi-Fi's scripts give QEMU's machine the
+virtual radio's virtio-serial function (`net wifi`), which `airlink`
+makes Linux's;
 `usb net` a USB network adapter on its xHCI controller, and `input usb`
 USB keyboards, mice and a tablet instead of the PS/2 keyboard and the
 virtio tablet. The display and the GPU are QEMU's VGA and its virtio-gpu

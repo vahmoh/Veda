@@ -20,6 +20,10 @@ use crate::window::{AnimKind, Window};
 
 /// How long the GPU may take to draw a frame before it counts as stopped.
 const GPU_TIMEOUT_NS: u64 = 2_000_000_000;
+/// How many times a GPU that stopped is set up again (once its service is
+/// back): a renderer that ended is started again, but one that keeps
+/// stopping is left alone.
+const GPU_RETRIES: u32 = 3;
 /// How long handing a frame to the GPU may take before it is logged, and
 /// how many frames took that long.
 const SLOW_FRAME_NS: u64 = 50_000_000;
@@ -267,7 +271,7 @@ impl Compositor {
         self.gpu = Some(g);
         match fence {
             Some(fence) => self.screen.end_gpu_frame(real, fence),
-            None => self.drop_gpu("the GPU stopped answering"),
+            None => self.lose_gpu("the GPU stopped answering"),
         }
     }
 
@@ -378,6 +382,21 @@ impl Compositor {
         self.damage.add(screen);
     }
 
+    /// The GPU stopped while it composed: frames are drawn by the processor,
+    /// and it is set up again for the display's pictures once its service is
+    /// back (Linux starts a renderer that ended again), a few times.
+    fn lose_gpu(&mut self, why: &str) {
+        if self.gpu.is_none() {
+            return;
+        }
+        self.drop_gpu(why);
+        self.gpu_losses += 1;
+        if self.gpu_losses <= GPU_RETRIES {
+            println!("the GPU is set up again once its service is back ({} of {})", self.gpu_losses, GPU_RETRIES);
+            self.gpu_tried = None;
+        }
+    }
+
     /// The GPU's fences moved: the frame it drew, if done, is asked for.
     pub(crate) fn gpu_signaled(&mut self, now: u64) {
         let Some((fence, since)) = self.screen.drawing() else { return };
@@ -385,7 +404,7 @@ impl Compositor {
         if done {
             self.screen.drawn(now);
         } else if now.saturating_sub(since) >= GPU_TIMEOUT_NS || self.gpu.as_ref().is_none_or(|g| g.lost()) {
-            self.drop_gpu("the GPU did not draw a frame in time");
+            self.lose_gpu("the GPU did not draw a frame in time");
         }
     }
 

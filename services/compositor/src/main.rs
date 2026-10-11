@@ -194,6 +194,7 @@ fn main() -> i32 {
         gpu_ready: None,
         gpu_setup: None,
         gpu_tried: None,
+        gpu_losses: 0,
     };
     // At system start (not after a restart), the screen stays black until
     // the display is up, then the splash fades in, comes to life and
