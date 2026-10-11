@@ -68,6 +68,49 @@ struct HwParams {
 
 const _: () = assert!(size_of::<HwParams>() == 608);
 
+/// `snd_pcm_sw_params`.
+#[repr(C)]
+struct SwParams {
+    tstamp_mode: i32,
+    period_step: u32,
+    sleep_min: u32,
+    avail_min: u64,
+    xfer_align: u64,
+    start_threshold: u64,
+    stop_threshold: u64,
+    silence_threshold: u64,
+    silence_size: u64,
+    boundary: u64,
+    proto: u32,
+    tstamp_type: u32,
+    reserved: [u8; 56],
+}
+
+const _: () = assert!(size_of::<SwParams>() == 136);
+
+/// `snd_pcm_status`, a 64-bit program's: its times are `timespec`s.
+#[repr(C)]
+#[derive(Default)]
+struct RawStatus {
+    state: i32,
+    trigger_tstamp: [i64; 2],
+    tstamp: [i64; 2],
+    appl_ptr: u64,
+    hw_ptr: u64,
+    delay: i64,
+    avail: u64,
+    avail_max: u64,
+    overrange: u64,
+    suspended_state: i32,
+    audio_tstamp_data: u32,
+    audio_tstamp: [i64; 2],
+    driver_tstamp: [i64; 2],
+    audio_tstamp_accuracy: u32,
+    reserved: [u8; 20],
+}
+
+const _: () = assert!(size_of::<RawStatus>() == 152);
+
 /// `snd_xferi`.
 #[repr(C)]
 struct Transfer {
@@ -77,7 +120,8 @@ struct Transfer {
 }
 
 const HW_PARAMS: u32 = ioc(3, b'A', 0x11, size_of::<HwParams>());
-const DELAY: u32 = ioc(2, b'A', 0x21, size_of::<i64>());
+const SW_PARAMS: u32 = ioc(3, b'A', 0x13, size_of::<SwParams>());
+const STATUS: u32 = ioc(2, b'A', 0x20, size_of::<RawStatus>());
 const PREPARE: u32 = ioc(0, b'A', 0x40, 0);
 const START: u32 = ioc(0, b'A', 0x42, 0);
 const DROP: u32 = ioc(0, b'A', 0x43, 0);
@@ -89,6 +133,17 @@ const READI_FRAMES: u32 = ioc(2, b'A', 0x51, size_of::<Transfer>());
 pub enum Stream {
     Playback,
     Capture,
+}
+
+/// How a playing device stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Status {
+    /// Frames its buffer has room for: what [`Pcm::wait`] waits for.
+    pub free: u64,
+    /// Frames between the last one written and the one heard now: those
+    /// in the buffer, and the card's own delay beyond them (0 unless it
+    /// plays).
+    pub delay: u64,
 }
 
 impl HwParams {
@@ -189,7 +244,8 @@ impl Pcm {
         })
     }
 
-    fn fd(&self) -> RawFd {
+    /// Its file, for `poll`.
+    pub fn fd(&self) -> RawFd {
         self.file.as_raw_fd()
     }
 
@@ -247,17 +303,43 @@ impl Pcm {
         }
     }
 
-    /// Playback: frames between the last one written and the one heard
-    /// now. Capture: frames recorded and not read yet.
-    pub fn delay(&self) -> io::Result<u64> {
-        let mut d = 0i64;
-        // SAFETY: the kernel writes one snd_pcm_sframes_t.
-        unsafe { ioctl(self.fd(), DELAY, &mut d as *mut i64 as usize)? };
-        Ok(d.max(0) as u64)
+    /// Playback: how the device stands.
+    pub fn status(&self) -> io::Result<Status> {
+        let mut s = RawStatus::default();
+        // SAFETY: the kernel writes one snd_pcm_status.
+        unsafe { ioctl(self.fd(), STATUS, &mut s as *mut RawStatus as usize)? };
+        Ok(Status { free: s.avail, delay: s.delay.max(0) as u64 })
     }
 
-    /// Waits up to `ms` until the device has room for a period (playback),
-    /// or has recorded one (capture).
+    /// Makes [`wait`](Self::wait) wait until `frames` frames are free
+    /// (playback) or recorded (capture), rather than a period's (ALSA's
+    /// `avail_min`). The rest is as ALSA has it by default: playback
+    /// starts with the first frame written, and stops when it runs dry.
+    pub fn wake_at(&self, frames: u32) -> io::Result<()> {
+        let mut p = SwParams {
+            tstamp_mode: 0,
+            period_step: 1,
+            sleep_min: 0,
+            avail_min: frames.max(1) as u64,
+            xfer_align: 0,
+            start_threshold: 1,
+            stop_threshold: self.buffer as u64,
+            silence_threshold: 0,
+            silence_size: 0,
+            boundary: 0,
+            proto: 0,
+            tstamp_type: 0,
+            reserved: [0; 56],
+        };
+        // SAFETY: the request's structure, which the kernel reads and
+        // completes.
+        unsafe { ioctl(self.fd(), SW_PARAMS, &mut p as *mut SwParams as usize)? };
+        Ok(())
+    }
+
+    /// Waits up to `ms` until the device has room for a period (playback;
+    /// or as much as [`wake_at`](Self::wake_at) asks), or has recorded one
+    /// (capture).
     pub fn wait(&self, ms: i32) -> io::Result<bool> {
         let events = match self.stream {
             Stream::Playback => POLLOUT,

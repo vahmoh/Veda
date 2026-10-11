@@ -10,9 +10,10 @@
 //! underrun, which deepens the queue). How much has played comes from the
 //! card's own count (ALSA's delay), stamped with Veda's clock, which the
 //! guest reads itself. The card's period interrupts pace this program while
-//! it plays; after a while without audio it stops, and waits for the
-//! service to have some. The card's own mixer stays at unity gain (`ctl`):
-//! the volume is Veda's.
+//! it plays: it wakes when the card's buffer holds a period less than the
+//! queue's depth, and tops it up; after a while without audio it stops,
+//! and waits for the service to have some. The card's own mixer stays at
+//! unity gain (`ctl`): the volume is Veda's.
 //!
 //! The card records, on a thread of its own, while the audio service wants
 //! audio (the input ring's `CAPTURE` flag): what it read goes into the
@@ -26,11 +27,14 @@ mod ctl;
 mod pcm;
 
 use std::collections::VecDeque;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use guest_sys::{POLLIN, POLLOUT, PollFd, poll_many};
 use vabi::{WaitItem, signals};
 use vproto::audio::{DeviceFormat, Ring, Role, audiodev, ring::flags};
 use vrt::object::{Channel, Event};
@@ -169,8 +173,10 @@ struct Player {
     /// came from the ring: the rest is silence).
     written: u64,
     chunks: VecDeque<(u64, u32)>,
-    /// Frames written that are not heard yet.
+    /// Frames written that are not heard yet, and those of them still in
+    /// the card's buffer (the rest is the card's own delay).
     queued: u64,
+    filled: u64,
     /// Ring frames heard, and when that count last grew.
     played: u64,
     played_ns: u64,
@@ -190,6 +196,7 @@ impl Player {
             written: 0,
             chunks: VecDeque::new(),
             queued: 0,
+            filled: 0,
             played: 0,
             played_ns: 0,
             underruns: 0,
@@ -203,9 +210,40 @@ impl Player {
         self.pcm.period
     }
 
-    /// Periods queued in the card.
-    fn queued_periods(&self) -> u32 {
-        self.queued.div_ceil(self.period() as u64) as u32
+    /// Periods in the card's buffer.
+    fn filled_periods(&self) -> u32 {
+        self.filled.div_ceil(self.period() as u64) as u32
+    }
+
+    /// The periods the card is to hold until [`pump`](Self::pump) tops it
+    /// up again: the queue's depth while the ring has audio for it; else
+    /// the silence it is padded with ([`MIN_QUEUED`]), and none when it is
+    /// left to run out before it stops.
+    fn target(&self, ring: &Ring) -> u32 {
+        if ring.filled() >= self.period() {
+            self.depth
+        } else if self.idle(ring) {
+            0
+        } else {
+            MIN_QUEUED
+        }
+    }
+
+    /// Has the card's period interrupts wake [`serve`] once its buffer
+    /// holds a period less than `target` (or nothing, for none). ALSA
+    /// wakes a writer as soon as a period of the buffer is free, which,
+    /// with the queue shorter than the buffer, it always is.
+    fn pace(&self, target: u32) -> io::Result<()> {
+        let period = self.period();
+        self.pcm.wake_at(self.pcm.buffer.saturating_sub(target.saturating_sub(1) * period).max(period))
+    }
+
+    /// Nothing more to play: no stream is active, the ring is empty, and
+    /// the last audio is a while ago.
+    fn idle(&self, ring: &Ring) -> bool {
+        ring.producer_flags() & flags::ACTIVE == 0
+            && ring.filled() == 0
+            && now_ns().saturating_sub(self.last_audio_ns) > IDLE_STOP_NS
     }
 
     /// Counts the chunks the card has played into the ring's played
@@ -214,10 +252,12 @@ impl Player {
         if !self.running {
             return false;
         }
-        // Ran dry: all of it was heard.
-        let delay = self.pcm.delay().unwrap_or(0).min(self.written);
+        // Ran dry (or cannot tell): all of it was heard.
+        let status = self.pcm.status().unwrap_or(pcm::Status { free: self.pcm.buffer as u64, delay: 0 });
+        let delay = status.delay.min(self.written);
         let heard = self.written - delay;
         self.queued = delay;
+        self.filled = (self.pcm.buffer as u64).saturating_sub(status.free).min(delay);
         let now = now_ns();
         let mut any = false;
         while let Some(&(end, frames)) = self.chunks.front() {
@@ -248,6 +288,7 @@ impl Player {
         if taken > 0 {
             self.written += taken as u64;
             self.queued += taken as u64;
+            self.filled += taken as u64;
             self.chunks.push_back((self.written, from_ring as u32));
         }
         if from_ring > 0 {
@@ -259,10 +300,10 @@ impl Player {
     /// Starts the card on what the ring holds.
     fn start(&mut self, ring: &Ring) -> io::Result<()> {
         self.pcm.prepare()?;
-        (self.written, self.queued) = (0, 0);
+        (self.written, self.queued, self.filled) = (0, 0, 0);
         self.chunks.clear();
         // The card starts with the first period written.
-        while self.queued_periods() < self.depth && ring.filled() > 0 {
+        while self.filled_periods() < self.depth && ring.filled() > 0 {
             let n = ring.filled().min(self.period());
             if self.queue(ring, n)?.is_none() {
                 break;
@@ -287,7 +328,7 @@ impl Player {
     fn stop(&mut self) {
         let _ = self.pcm.stop();
         self.running = false;
-        self.queued = 0;
+        (self.queued, self.filled) = (0, 0);
         self.chunks.clear();
     }
 
@@ -306,7 +347,7 @@ impl Player {
             }
             return true;
         }
-        if !active && ring.filled() == 0 && now_ns().saturating_sub(self.last_audio_ns) > IDLE_STOP_NS {
+        if self.idle(ring) {
             // Nothing more: what is queued plays, then the card stops.
             if self.queued == 0 {
                 self.stop();
@@ -315,12 +356,12 @@ impl Player {
             return false;
         }
         let mut changed = false;
-        while self.queued_periods() < self.depth {
+        while self.filled_periods() < self.depth {
             let filled = ring.filled();
             let result = if filled >= self.period() {
                 self.starving = false;
                 self.queue(ring, self.period())
-            } else if self.queued_periods() >= MIN_QUEUED {
+            } else if self.filled_periods() >= MIN_QUEUED {
                 break;
             } else {
                 // About to run dry: queue what there is, and silence.
@@ -541,28 +582,40 @@ fn attach(
     Ok((client.into_channel(), output, input))
 }
 
-/// Plays until the audio service goes away.
-fn serve(player: &mut Player, link: &Channel, out: &Output) {
+/// Plays until the audio service goes away. While the card plays, its
+/// period interrupts wake this program when it needs more (as
+/// [`Player::pace`] has them); until the card has all it is to hold of the
+/// ring's audio, so does more audio in the ring; and so does the link
+/// closing.
+fn serve(player: &mut Player, link: &Channel, out: &Output) -> io::Result<()> {
     let (ring, data_event, space_event) = (&out.ring, &out.data_event, &out.space_event);
+    let watch = |handle, signals| vrt::guest::watch(handle, signals).map_err(|e| io::Error::other(format!("{e}")));
+    let mut data = File::from(watch(data_event.raw(), signals::SIGNALED)?);
+    let closed = watch(link.raw(), signals::PEER_CLOSED)?;
     let period_ms = (player.period() * 1000 / RATE) as i32;
+    // The periods the card's wake-ups are set for.
+    let mut paced = None;
     loop {
-        if player.running {
-            // The card's period interrupt (or two periods' time).
-            let _ = player.pcm.wait(2 * period_ms + 5);
-            let mut items = [WaitItem { handle: link.raw(), signals: signals::PEER_CLOSED, ..Default::default() }];
-            let _ = vrt::object::wait_many(&mut items, 0);
-            if items[0].observed & signals::PEER_CLOSED != 0 {
-                return;
-            }
-        } else {
-            let mut items = [
-                WaitItem { handle: link.raw(), signals: signals::PEER_CLOSED, ..Default::default() },
-                WaitItem { handle: data_event.raw(), signals: signals::SIGNALED, ..Default::default() },
-            ];
-            let _ = vrt::object::wait_many(&mut items, now_ns() + 500_000_000);
-            if items[0].observed & signals::PEER_CLOSED != 0 {
-                return;
-            }
+        let target = player.running.then(|| player.target(ring));
+        if let Some(t) = target
+            && paced != target
+        {
+            player.pace(t)?;
+            paced = target;
+        }
+        let audio = target.is_none_or(|t| t < player.depth);
+        let mut fds = [
+            PollFd::new(closed.as_raw_fd(), POLLIN),
+            PollFd::new(if audio { data.as_raw_fd() } else { -1 }, POLLIN),
+            PollFd::new(if player.running { player.pcm.fd() } else { -1 }, POLLOUT),
+        ];
+        // Two periods' time at most while the card plays, in case.
+        poll_many(&mut fds, if player.running { 2 * period_ms + 5 } else { 500 })?;
+        if fds[0].revents != 0 {
+            return Ok(());
+        }
+        if fds[1].revents & POLLIN != 0 {
+            let _ = data.read(&mut [0u8; 4]);
             let _ = data_event.clear();
         }
         let mut changed = player.reap();
@@ -642,8 +695,7 @@ fn main() {
                         None
                     }
                 };
-                serve(&mut player, &link, &out);
-                println!("alsa: the audio service went away");
+                let served = serve(&mut player, &link, &out);
                 player.stop();
                 if let Some((thread, wake)) = recording {
                     stop.store(true, Ordering::Release);
@@ -651,6 +703,13 @@ fn main() {
                         let _ = w.signal();
                     }
                     recorder = thread.join().ok();
+                }
+                match served {
+                    Ok(()) => println!("alsa: the audio service went away"),
+                    Err(e) => {
+                        println!("alsa: cannot play: {e}");
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
                 }
             }
             Err(e) => {

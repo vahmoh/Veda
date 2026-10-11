@@ -447,8 +447,12 @@ silence when it runs short while streams play (an underrun, which deepens
 the queue). How much has played comes from the card's own count (ALSA's
 delay), stamped with Veda's clock, which the guest reads itself: the audio
 service's positions and latencies are as with a native driver. The card's
-period interrupts pace the driver while it plays; after a while without
-audio the card stops. The card's mixer is set once to its outputs at 0 dB
+period interrupts pace the driver while it plays: ALSA wakes it when the
+card's buffer holds a period less than the queue's depth (the stream's
+`avail_min`: ALSA's default, a single period free, would never let it
+sleep, as the queue is shorter than the buffer), and so does more audio
+in the ring while the card lacks it (a watch of the ring's event, polled
+with the card); after a while without audio the card stops. The card's mixer is set once to its outputs at 0 dB
 (from their dB scales), unmuted: the volume is the audio service's.
 A card that records (its first capture device) is the device's input too:
 a thread of its own reads the card a period at a time into the input
