@@ -21,7 +21,7 @@ cargo xtask test --ui          # ... plus every GUI script in tests/ui and tests
 cargo xtask test --ui --jobs 2 # ... two at a time (default: one per five processors)
 cargo xtask scripts tests/ui/drivervm-audio.vts tests/ui/nvme.vts   # some scripts, built once, side by side
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
-cargo xtask script docs/interceptor.vts --resolution 1920x1080   # ... and Interceptor's, in Full HD
+cargo xtask script docs/interceptor.vts --resolution 1920x1200   # ... and Interceptor's, then scaled to 1280x800
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks
 cargo xtask run --disk-bus nvme             # ... with NVM Express disks
 cargo xtask script tests/ui/nvme.vts        # starting from NVMe, the home directory on NVMe

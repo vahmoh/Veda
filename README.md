@@ -1,203 +1,199 @@
 # Veda: The Agentic-Native Operating System
 
-Veda is an operating system with an AI agent built into it — not an
-assistant added to a desktop, but a part of the system that every
-application is made to work with. You talk to it the way you would talk
-to someone in the room — "Hey Veda, switch my wallpaper to the dunes" —
-and it does the work through the same operations as your keyboard and
-mouse, in any application, and asks you before anything that is hard
-to undo.
+Veda is an operating system with a voice agent built in. Say "Hey Veda,
+switch my wallpaper to the dunes" and it does the work in any application,
+through the same code as your keyboard and mouse. It asks you first before
+anything that is hard to undo.
 
 Everything is written from scratch in Rust and lives in this repository:
-the UEFI bootloader, a capability-based microkernel, the drivers, the
-system services, the window system, the toolkit and the applications. A
-few mature crates provide the TCP/IP engine, TLS and cryptography
-(smoltcp, rustls, RustCrypto). Veda runs on x86-64 PCs and in QEMU.
+the UEFI bootloader, a capability-based microkernel, the system services,
+the window system, the toolkit and the applications. A few mature crates
+provide TCP/IP, TLS and cryptography (smoltcp, rustls, RustCrypto). Veda
+runs on x86-64 PCs and in QEMU.
 
-![The Veda desktop, with the agent's window open](docs/images/desktop.png)
+![The Veda desktop, with the agent's window open and listening](docs/images/desktop.png)
 
 ## Why agentic-native
 
 Operating systems were designed for a person at a keyboard. An assistant
-added to one later usually has to read the screen, imitate clicks or make
-do with the few applications that offer an API, and the system has no say
-in what it does. Veda turns this around: the agent is a first-class user
-of the system, and the system is built so that its work is reliable,
-visible and safe.
+added later has to read the screen, imitate clicks or use the few
+applications that have an API, and the system cannot hold it to anything.
+In Veda, the agent is a first-class user of the system:
 
-* **The agent is part of the system.** It is a system service, started at
-  boot and restarted if it fails, present as a small ring on the taskbar
-  and asleep until you call it — by its name, with a click on the ring or
-  with **Super+Space**.
-* **Every application speaks to it natively.** Agent support is part of
-  the application platform: an application describes its actions, with
-  typed parameters and a risk level, reports what it shows as structured
-  state, and carries out actions through the same code as the keyboard and
-  mouse — so the window shows the result exactly as if you had done it. No
-  screen scraping, no simulated clicks. The built-in applications offer
-  more than 70 actions between them, from writing in a document to
-  starting a race.
-* **The system holds the agent to your consent.** Every action is
-  *routine*, *sensitive* or *destructive*. Routine actions just happen; the
-  others wait for your OK. The agent service enforces this, not the
-  language model: the call is held until you answer, only the desktop
-  shell can answer (the system knows each program by the identity `init`
-  attaches to its connections), and nothing the agent reads in a document
-  or an application can approve anything.
-* **It works from real context.** Every conversation starts with what the
-  agent needs to help: the time, the windows on the screen, every
-  application's actions, what you have told it about yourself and how your
-  last conversation ended. While it works it reads the applications'
-  state, so it acts on what is really there.
-* **Your memory stays yours.** It remembers what you tell it plainly —
-  your name, the people in your life, how you like things done — never its
-  own guesses. That memory is kept on your computer, and Settings shows all
-  of it and forgets any of it.
-* **Voice comes first.** Conversations happen in real time: interrupt the
-  agent and it stops and listens. The audio system is built for it — echo
-  cancellation and an echo gate so that the agent never hears itself, and
-  other sound turned down while it talks with you. While it sleeps, a voice
-  detector on the computer listens for speech, so that nothing leaves the
-  computer while nobody speaks.
+* **Part of the system.** The agent is a system service, started at boot
+  and restarted if it fails. It sleeps until you say its name, click the
+  ring on the taskbar or press **Super+Space**.
+* **Native in every application.** Applications declare their actions
+  (typed parameters and a risk level) and report what they show as JSON.
+  The agent calls those actions, which run the same code as the keyboard
+  and mouse: no screen scraping, no simulated clicks. The built-in
+  applications offer more than 70 actions.
+* **Consent enforced by the system.** Every action is *routine*,
+  *sensitive* or *destructive*. The agent service, not the language model,
+  holds the last two until you allow them. Only the desktop shell can
+  answer (`init` tells every service which program is calling), so
+  nothing the agent reads in a document can approve anything.
+* **Real context.** Each conversation starts with the time, the open
+  windows, every application's actions, what the agent knows about you
+  and how your last conversation ended. Before acting, it reads the
+  applications' current state.
+* **Memory you control.** It remembers only what you tell it plainly (your
+  name, the people in your life, how you like things done), never its own
+  guesses. The memory stays on your computer, and Settings shows and
+  forgets any part of it.
+* **Voice first.** You can interrupt it at any time. Echo cancellation and
+  an echo gate keep it from hearing itself, and other sound drops 20 dB
+  during a conversation. Asleep, it listens with a voice detector that
+  runs locally, so no audio leaves the computer while nobody speaks.
 * **The intelligence is a setting.** Speech recognition, the language
-  model and the voice come from Deepgram's Voice Agent platform, with the
-  audio opted out of Deepgram's model improvement; the model, the voice
-  and even the agent's name are chosen in Settings.
+  model and the voice come from Deepgram's Voice Agent API, with the audio
+  opted out of Deepgram's model improvement. The model (OpenAI's
+  gpt-4.1-mini by default), the voice and even the agent's name are
+  chosen in Settings.
 
 ## How the agent works
 
 1. **Listening.** Asleep, the agent runs a voice detector on the computer.
-   When someone speaks, the speech goes to a recogniser that knows the
-   agent's name; a sentence that calls it ("Hey Veda, …", "…, Veda?") wakes
-   it, and what was said with the name is the first thing it hears.
+   Speech it hears goes to Deepgram's recogniser, with the agent's name as
+   a key term. A sentence that starts or ends with the name ("Hey Veda, …",
+   "…, Veda?") wakes the agent, and the rest of the sentence is its first
+   request.
 2. **Conversation.** Waking opens a Deepgram Voice Agent session with the
-   agent's instructions, the context above and its functions. Deepgram
-   takes care of turn-taking, the language model and the voice; Veda's
-   audio service carries the sound both ways.
-3. **Action.** The model calls the agent's own functions — windows, files,
+   agent's instructions, context and functions. Deepgram handles
+   turn-taking, the language model and the voice; Veda's audio service
+   carries the sound both ways.
+3. **Action.** The model calls the agent's 17 functions (windows, files,
    volume, Wi-Fi, wallpaper, notifications, timers and reminders, memory,
-   the system and its running programs — and, through `use_app` and
-   `read_app`, every application's actions and state. The agent service
-   runs each call and answers with a structured result.
-4. **Consent.** A call that needs your OK is held and shown in the agent's
-   window (or as a notification while the window is closed), saying
-   exactly what will happen and to what. Allow it and it runs; decline it,
-   or let it expire, and it does not. Sensitive actions can be allowed for
-   good; destructive ones are asked about every time.
+   the system and its programs) and, through `use_app` and `read_app`,
+   every application's actions and state. Each call returns a structured
+   result.
+4. **Consent.** A call that needs your OK waits in the agent's window, or
+   in a notification, saying exactly what will happen and to what. It runs
+   only if you allow it within three minutes. Sensitive actions can be
+   allowed for good; destructive ones are asked about every time.
 
-[The agent](docs/AGENT.md) describes the design in full: the protocols,
-the voice pipeline, consent, memory and how the agent is tested.
+[The agent](docs/AGENT.md) covers the design in full: the protocols, the
+voice pipeline, consent, memory and testing.
 
 ## The operating system
 
-* **Microkernel.** `vkernel` only does isolation, scheduling, memory and
-  IPC: capability handles with rights, channels that carry handles, VMOs,
-  events, futexes, interrupt objects. SMP with x2APIC, tickless timers and
-  XSAVE. Drivers, the file system, the window system and the agent are
-  user-space processes, supervised by `init`: if the window system
-  crashes, it is restarted and the desktop comes back on its own.
-* **Desktop.** A startup sequence that fades a splash in from a black
-  screen once the display is up (a breathing light around the ring, the
-  name and tagline rising in) and dissolves it into the desktop once that
-  is ready, its startup sound starting with it; a compositing window manager with server-side decorations,
-  shadows, animations, window snapping and an Alt+Tab switcher with live
-  thumbnails, which composes on the GPU with OpenGL ES on PCs with Intel
-  graphics, every frame flipped whole at the vertical blank, and on the
-  processor elsewhere; a shell with wallpaper, desktop icons (the Trash
-  first), a taskbar, a searchable start menu, a calendar and notifications;
-  the `vui` toolkit (widgets, menus, dialogs, vector icons, anti-aliased
-  text with the Inter and JetBrains Mono fonts), whose applications are
-  agent-compatible.
-* **Networking and Wi-Fi.** A user-space network service (IPv4 and IPv6,
-  DHCP, DNS, routing, TCP, UDP, ICMP) and a Wi-Fi service that scans,
-  joins WPA2, WPA3 and open networks with management frame protection,
-  remembers networks, reconnects and roams on its own. The drivers,
-  Linux's in the driver VM, only move frames and join the networks the
-  Wi-Fi service chooses. Applications, the agent among them, get TLS 1.3 and 1.2 (HTTPS,
-  secure WebSockets) from `vtls`, with certificates checked against the
-  Mozilla roots. Under QEMU a simulated Wi-Fi environment provides access
-  points bridged to the Internet. See [Networking](docs/NETWORKING.md).
-* **Audio.** A mixing audio service with echo-cancelled capture and
-  ducking, built for the agent's conversations as much as for music.
-* **Linux's drivers, in a virtual machine.** Veda drives its disks itself
-  (and sound, for now), and takes the rest from Linux, which it runs in a
-  virtual machine, the *driver VM*, on a hypervisor of its own (VMX with
-  EPT, a paravirtual platform with no emulated hardware). Devices go to it
-  whole, their DMA confined to its memory and their interrupts remapped
-  by Veda's IOMMU driver, and its programs reach Veda's services through
-  Veda's own system calls, carried across. Linux's drivers there serve
-  Veda's keyboards, mice and tablets, USB, wired and Wi-Fi networks,
-  displays and GPUs; when the VM fails, Veda resets its devices and starts
-  it again. See [the driver VM](docs/DRIVERVM.md).
-* **Storage.** virtio-blk, AHCI (SATA) and NVMe drivers and a file system
-  service that keeps the home directory on its own disk with crash-safe
-  snapshots, so your files survive restarts. The agent's memory and key
-  live in a private directory that only the agent can open.
-* **Applications.** Text Editor, Photos, Music, Files, Terminal, Task
-  Manager, Settings and About, and *Interceptor*, police pursuits through
-  a city by the sea in OpenGL ES 3.0, its engines, sirens, crashes and
-  music synthesised as it plays.
-* **3D graphics.** OpenGL ES 3.0 with GLSL ES 1.00 and 3.00 (`vgl`,
-  `vglsl`), every call checked as the specification requires. It renders
-  on the GPU through Veda's renderer in the driver VM, on Mesa's driver of
-  the GPU over Linux's (Intel's iris; under QEMU, virgl on the host's
-  GPU), or with a multi-threaded software renderer where there is none.
-  *Interceptor* shows it off: a whole bay with its traffic by day, at
-  sunset and at night, in the rain, with shadows, bloom, smoke and sparks,
-  full screen in Full HD.
-* **C, and GCC inside Veda.** Write a C program in the Terminal or the
-  Text Editor, compile it with GCC 16 and run it, in an emulator or on a
-  PC alike. C programs are static ELF executables on the musl C library,
-  whose system calls go to `vposix`, a POSIX layer written in Rust: files,
-  directories, pipes, a terminal with line editing and `termios`, threads,
-  `mmap`, `posix_spawn`, clocks and signals they raise themselves. The
-  toolchain is built from the upstream releases with small patches
-  (`ports/`), and a cross compiler builds C and C++ programs for Veda on
-  the development machine. See [C on Veda](docs/C.md).
-* **Tooling.** One command builds a bootable disk image and runs it in
-  QEMU; scripted, headless runs drive the GUI and the agent and check
-  screenshots and logs.
+* **Microkernel.** `vkernel` handles only isolation, scheduling, memory
+  and IPC: capability handles with rights, channels that carry messages
+  and handles, VMOs, events, futexes and interrupt objects. It supports
+  SMP with x2APIC, tickless timers and XSAVE.
+* **Supervised services.** Drivers, the file system, the window system,
+  audio, networking and the agent are user-space processes. `init`
+  restarts the window system, the shell, audio, networking and the agent
+  if they crash, so the desktop comes back on its own.
+* **Linux's drivers in a VM.** Veda drives only its disks (virtio-blk,
+  AHCI, NVMe). Linux drives everything else in the *driver VM*, on Veda's
+  own hypervisor (VMX with EPT, no emulated hardware). Devices go to it
+  whole, their DMA confined and their interrupts remapped by Veda's IOMMU
+  driver. A crashed driver takes down only the VM, which Veda resets and
+  restarts. See [the driver VM](docs/DRIVERVM.md).
+* **Desktop.** A compositing window manager with server-side decorations,
+  shadows, animations, snapping and an Alt+Tab switcher with live
+  thumbnails. It composes on the GPU with Intel graphics and on the
+  processor elsewhere; once Linux drives the display, every frame is
+  flipped whole at the vertical blank. The shell has a taskbar, a
+  searchable start menu, desktop icons, a calendar and notifications.
+* **Toolkit.** `vui` is an immediate-mode toolkit: widgets, menus,
+  dialogs, vector icons and anti-aliased text in Inter and JetBrains Mono.
+  Every `vui` application is agent-compatible.
+* **3D graphics.** OpenGL ES 3.0 with GLSL ES 1.00 and 3.00, in Rust
+  (`vgl`, `vglsl`), every call checked as the specification requires. It
+  renders on the GPU through Mesa in the driver VM (Intel's iris; virgl on
+  the host's GPU under QEMU), or on a multi-threaded software renderer.
+  *Interceptor* shows it off, full screen: a bay city with its traffic,
+  physically based lighting, shadows, bloom and 4x multisampling.
+* **Networking.** A network service with IPv4 and IPv6, DHCP, DNS, TCP,
+  UDP and ICMP, and a Wi-Fi service that joins WPA2, WPA3 and open
+  networks with management frame protection, remembers them, reconnects
+  and roams. Linux's drivers only move frames and never see a password.
+  Applications get TLS 1.3 and 1.2 from `vtls`, with certificates checked
+  against Mozilla's roots. See [Networking](docs/NETWORKING.md).
+* **Audio.** A mixing service with echo-cancelled recording and ducking,
+  built for the agent's conversations as much as for music.
+* **Storage.** The home directory has its own disk. It is saved half a
+  second after changes stop, alternating between two checksummed slots,
+  so an interrupted save never damages the previous one. The agent's
+  memory and key live in a private directory that only the agent can
+  open.
+* **C and GCC.** The image includes GCC 16, binutils and musl: write a C
+  program in the Terminal, compile it and run it, in QEMU or on a PC. C
+  programs are static executables whose system calls go to `vposix`, a
+  POSIX layer in Rust. A cross compiler also builds C and C++ programs
+  for Veda on the development machine. See [C on Veda](docs/C.md).
+
+## Applications
+
+Every application is agent-compatible: what you can do with the mouse and
+keyboard, the agent can do too.
+
+| Application | What it does | What the agent can do |
+|-------------|--------------|-----------------------|
+| **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, zoom, unlimited undo. | Create, open, read and write documents; find and replace, undo, save; save as or discard changes (with your OK). |
+| **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, rotation, full screen and slideshows; PNG, JPEG, BMP and QOI. | Show, zoom and rotate a picture, go full screen, run a slideshow, set a picture as the wallpaper. |
+| **Music** | A library of `~/Music` (QOA and WAV), cover art, a live spectrum visualiser, seeking, shuffle and repeat. | Play a song by name, pause, stop, skip, seek, shuffle, repeat, set the volume. |
+| **Files** | Places, breadcrumbs, list and icon views with thumbnails, search, copy and paste, properties, and a Trash that restores items where they were. | Open, search, make folders; copy, move, rename and delete to the Trash (with your OK); restore; empty the Trash (asked every time). |
+| **Terminal** | A shell with about fifty built-in commands (files, processes, `wifi`, `ping`, `curl`, ...), history and tab completion; runs C programs and GCC with pipes, redirections and Ctrl+C. | Run a command (with your OK), read its output, interrupt it. |
+| **Task Manager** | Processes with CPU and memory use, "end task" and live performance graphs. | List processes, read the graphs, end a program (asked every time). |
+| **Settings** | Wallpapers, the agent (key, name, voice, models, listening, memory, permissions), networks and Wi-Fi, the display and the system. | Open a page, change the agent's voice and speaking rate; rename it or change its model (with your OK). Never the key. |
+| **Interceptor** | Police pursuits through a bay city in OpenGL ES 3.0: eight missions, quick chases and patrols, by day, at sunset, at night and in the rain, with synthesised engines, sirens and music. | Start a mission, a chase or a patrol; pause, resume, restart or quit; change the sound, units, camera and display. |
 
 ## Screenshots
 
-| ![The Text Editor with a Rust program](docs/images/editor.png) | ![Photos with the picture library](docs/images/photos.png) |
-|:---:|:---:|
-| Text Editor | Photos |
-| ![Music](docs/images/music.png) | ![Files](docs/images/files.png) |
-| Music | Files |
-| ![GCC in the Terminal, naming an undeclared variable in a C program](docs/images/gcc.png) | ![Interceptor: a chase at sunset on a road through the trees of the hills](docs/images/interceptor.png) |
-| GCC in the Terminal | *Interceptor* (OpenGL ES 3.0) |
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/editor.png" width="100%" align="top" alt="The Text Editor showing a Rust program with syntax highlighting"></td>
+    <td width="50%"><img src="docs/images/photos.png" width="100%" align="top" alt="Photos showing a library of eight pictures"></td>
+  </tr>
+  <tr>
+    <td align="center">Text Editor, highlighting Rust</td>
+    <td align="center">Photos, the picture library</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/music.png" width="100%" align="top" alt="Music playing a song, with cover art and a spectrum visualiser"></td>
+    <td width="50%"><img src="docs/images/files.png" width="100%" align="top" alt="Files showing pictures as thumbnails, with the Trash in its sidebar"></td>
+  </tr>
+  <tr>
+    <td align="center">Music, with its visualiser</td>
+    <td align="center">Files, with thumbnails</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/gcc.png" width="100%" align="top" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
+    <td width="50%"><img src="docs/images/interceptor.png" width="100%" align="top" alt="Interceptor: a chase at sunset on a road through the trees of the hills"></td>
+  </tr>
+  <tr>
+    <td align="center">GCC 16 in the Terminal</td>
+    <td align="center"><i>Interceptor</i>, in OpenGL ES 3.0</td>
+  </tr>
+</table>
 
-All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`
-(the agent talking to the stand-in for Deepgram), and Interceptor's, full
-screen in Full HD, by `cargo xtask script docs/interceptor.vts --resolution
-1920x1080`.
+Every screenshot is 1280x800. They are taken in QEMU by `cargo xtask
+script docs/screenshots.vts`, with the agent talking to a stand-in for
+Deepgram. Interceptor's is taken at 1920x1200 by `cargo xtask script
+docs/interceptor.vts --resolution 1920x1200` and scaled down.
 
 ## Quick start
 
 ### Requirements
 
-Veda is built on an x64 PC with Linux.
+Veda is built on an x86-64 PC with Linux.
 
-* [Rust](https://rustup.rs) (stable). `rust-toolchain.toml` makes rustup
-  install the extra targets on first use. The user-space programs are PE
-  executables, which LLVM's linker that comes with Rust (`rust-lld`) links.
-* [QEMU](https://www.qemu.org/download/) and the OVMF UEFI firmware: the
-  distribution's packages (on Debian and Ubuntu `qemu-system-x86`,
-  `qemu-system-gui`, `qemu-system-modules-opengl` and `ovmf`), and access
-  to `/dev/kvm` (members of the `kvm` group have it), with which QEMU runs
-  Veda on the processor's hardware virtualization.
-* For the agent: a [Deepgram](https://deepgram.com) API key, entered in
-  Veda's Settings.
-* For C and GCC in the image (optional): the distribution's build tools,
-  for the toolchain `cargo xtask toolchain` builds once (see
+* [Rust](https://rustup.rs), stable. `rust-toolchain.toml` makes rustup
+  install the extra targets on first use, and Rust's own linker
+  (`rust-lld`) links everything.
+* [QEMU](https://www.qemu.org/download/) and the OVMF UEFI firmware (on
+  Debian and Ubuntu: `qemu-system-x86`, `qemu-system-gui`,
+  `qemu-system-modules-opengl` and `ovmf`), with access to `/dev/kvm`.
+* For the driver VM: the build tools for Linux, a cross compiler and Mesa,
+  and KVM's nested virtualization (`kvm_intel nested=1`). See
+  [the driver VM](docs/DRIVERVM.md#testing).
+* Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
+  your distribution's build tools for the C toolchain, which
+  `cargo xtask toolchain` builds once (see
   [C on Veda](docs/C.md#the-toolchain)).
-* For the driver VM, whose Linux drives every device but the disks and
-  sound: the Linux kernel's build tools, and the
-  distribution's build tools for a cross compiler and Mesa, for
-  `cargo xtask linux`, and KVM's nested virtualization
-  (`kvm_intel nested=1`), on which QEMU gives Veda the processor's VMX (see
-  [the driver VM](docs/DRIVERVM.md#testing)).
 
 Check the environment:
 
@@ -211,30 +207,23 @@ cargo xtask doctor
 cargo xtask run
 ```
 
-This builds every component, writes the disk image
-`target/veda/veda.img` and boots it in a QEMU window, on a 1920x1080
-screen (`--resolution` makes it larger or smaller). The first build
-also builds the driver VM's Linux (its kernel, a cross compiler for its
-programs, and Mesa), which takes a while, and renders the sample pictures
-and music; later builds are incremental, and `cargo xtask linux` builds
-Linux again after its port changes. Useful options:
+This builds every component, writes `target/veda/veda.img` and boots it
+in a QEMU window at 1920x1080. The first build also builds the driver VM's
+Linux (its kernel, a cross compiler and Mesa) and renders the sample
+pictures and music, which takes a while. Later builds are incremental.
 
 ```bash
 cargo xtask run --resolution 1280x800 --smp 4 --memory 2048
 cargo xtask run --cmdline "run=editor"
-```
-
-`--cmdline "run=NAME"` starts `/system/bin/NAME.exe` after boot. The
-machine is on QEMU's NAT through a wired card by default; for Wi-Fi:
-
-```bash
 cargo xtask run --net wifi
 ```
 
-This also starts `airsim`, a simulated Wi-Fi environment whose networks
-("Veda Home", "Veda WPA3", ...; password `veda-wifi`) lead to the
-Internet. `--net both` adds the wired card. See `cargo xtask help` for all
-commands and options.
+`run=NAME` starts `/system/bin/NAME.exe` after boot. By default the
+machine reaches the Internet through a wired card on QEMU's NAT.
+`--net wifi` gives it a Wi-Fi radio instead, and starts `airsim`, a
+simulated Wi-Fi environment whose networks ("Veda Home", "Veda WPA3",
+...) lead to the Internet with the password `veda-wifi`; `--net both`
+gives it both. `cargo xtask help` lists every command and option.
 
 ### A real PC, from a USB stick
 
@@ -242,48 +231,39 @@ commands and options.
 cargo xtask iso
 ```
 
-writes `target/veda/veda.iso`, a live system. Write it to a USB stick with
-[Rufus](https://rufus.ie) (partition scheme GPT, target system UEFI, ISO
-mode), or as it is with any image writer, and start the PC from the stick
-(usually from the firmware's boot menu: F12, F11 or Esc at power-on) in
-UEFI mode with Secure Boot off, as Veda's loader is not signed. Veda runs
-from memory and leaves the PC alone: no disk driver starts, so it never
-reads or writes the PC's disks or the systems installed on them, and its
-home directory lasts until the PC is turned off. The stick keeps the
-system's log of each start, in `VEDA/LOGS` (the newest start's in the
-directory with the highest number: `VEDA.TXT`, Veda's log, and
-`LINUX.TXT`, the driver VM's Linux's), synced every second: whatever
-happened, even with nothing on the screen, can be read on any computer
-afterwards. To try the stick in QEMU first:
+This writes `target/veda/veda.iso`, a live system. To start it:
 
-```bash
-cargo xtask run --live
-```
+1. Write it to a USB stick with [Rufus](https://rufus.ie) (partition
+   scheme GPT, target system UEFI, ISO mode) or with any image writer.
+2. In the PC's firmware settings, turn on VT-x and VT-d and turn off
+   Secure Boot (Veda's loader is not signed).
+3. Start the PC from the stick in UEFI mode, usually from the boot menu
+   (F12, F11 or Esc at power-on).
 
-On real hardware the desktop appears in the screen mode the firmware
-provides (1920x1080, or the largest below it), drawn into the firmware's
-framebuffer; with the driver VM, Linux's display driver shows every frame
-whole, flipped at the screen's vertical blank, so animations run as
-smoothly as in a virtual machine. The driver VM needs the processor's
-virtualization (VT-x), and its devices the IOMMU (VT-d), which PCs of
-the last decade have, turned on in the firmware's settings: without
-them, Veda drives only the disks (with VT-x alone, PS/2 keyboards and
-mice too). Through it, USB keyboards, mice and hubs work
-on the USB 3 (xHCI) controllers that PCs have had since about 2012, as do
-PS/2 keyboards, mice and touchpads, USB network adapters, and Intel's and
-Realtek's Ethernet cards and Intel's Wi-Fi cards; USB disks, the stick
-included, are left alone. Sound plays through Linux's drivers too: HD
-Audio, the sound hardware of nearly every PC since 2005, through the
-speakers (a laptop's amplifiers among them: Cirrus Logic's CS35L41, with
-the calibration the firmware keeps for them), or
-the headphones when they are plugged in, and the line outputs, with the
-microphone on the codec (built in, or on a jack) for the agent.
-Built-in microphones wired to an audio DSP rather than to the codec, as
-in many recent laptops, are recorded through Linux's Sound Open Firmware on
-Intel's PCs from Tiger Lake to Raptor Lake (11th to 13th generation Core);
-later ones' stay silent for now. Intel's integrated graphics are Linux's
-too (i915, with Mesa's iris for the GPU), and HDMI and DisplayPort audio
-with them. To try USB input or HD Audio in QEMU:
+Veda runs from memory and starts no disk driver, so it never reads or
+writes the PC's disks. Its home directory lasts until the PC is turned
+off. To try the stick in QEMU first, run `cargo xtask run --live`.
+
+The stick keeps a log of every start in `VEDA/LOGS`, one numbered folder
+per start (the newest has the highest number): `VEDA.TXT` from Veda and
+`LINUX.TXT` from the driver VM. They are synced every second, so even a
+start that shows nothing can be diagnosed on another computer.
+
+Linux's drivers in the driver VM support:
+
+| Devices | Support |
+|---------|---------|
+| Display | The firmware's screen mode near 1920x1080, in the panel's own shape where the firmware reports it; every frame flipped whole at the vertical blank |
+| GPU | Intel's integrated graphics (i915, with Mesa's iris) |
+| Input | USB keyboards, mice and hubs on USB 3 (xHCI) controllers; PS/2 keyboards, mice and touchpads |
+| Network | Intel's and Realtek's Ethernet, Intel's Wi-Fi, USB network adapters |
+| Sound | HD Audio (speakers, headphones, line outputs, the codec's microphone), laptop amplifiers (Cirrus Logic CS35L41), HDMI and DisplayPort audio |
+| Built-in microphones on an audio DSP | Intel's Tiger Lake to Raptor Lake (11th to 13th generation Core), through Sound Open Firmware; later ones are silent for now |
+
+Without VT-x and VT-d, Veda drives only the disks (with VT-x alone, PS/2
+keyboards and mice too). USB disks, the stick included, are left alone.
+[Status](docs/DRIVERVM.md#status) shows how far each device class has
+come. To try USB input or HD Audio in QEMU:
 
 ```bash
 cargo xtask run --input usb
@@ -294,14 +274,15 @@ cargo xtask run --sound hda
 
 1. Open **Settings → Agent** and add your Deepgram API key. The agent's
    name, voice, language model, listening and memory are on the same page.
-2. Say **"Hey Veda"**, click the small ring at the right of the taskbar or
-   press **Super+Space**.
-3. Talk naturally, ask follow-up questions, interrupt whenever you like,
-   and say goodbye when you are done. It goes back to sleep and listens
-   for its name.
+2. Say **"Hey Veda"**, click the ring at the right of the taskbar or press
+   **Super+Space**.
+3. Talk naturally and interrupt whenever you like. Say goodbye when you
+   are done, and it goes back to sleep.
 
-Veda hears you through your PC's microphone and answers through its
-speakers, under QEMU too.
+Veda uses the PC's microphone and speakers, under QEMU too. It speaks
+English only for now. Deepgram bills every minute of conversation; asleep,
+only the short recognitions that check for its name are billed, at most
+ten minutes an hour.
 
 Things to ask:
 
@@ -312,58 +293,35 @@ Things to ask:
 * "Remind me to stretch in twenty minutes."
 * "What's using the most memory?"
 * "Start a quick chase at sunset in Interceptor."
-* "Delete the City Lights photo" — and see it ask you first.
+* "Delete the City Lights photo." (It asks you first.)
 * "What do you know about me?"
 
 ## Using the desktop
 
-* Click the logo (the ring in the middle of the taskbar) or tap the
-  **Super** key for the start menu; type to search for an application.
+* Click the ring in the middle of the taskbar, or tap **Super**, for the
+  start menu, and type to search.
 * Click a taskbar button to open, focus or minimise an application;
   middle-click opens another window. Click the clock for the calendar.
-* Double-click desktop icons. Right-click the desktop to change the
-  wallpaper.
-* What you delete goes to the **Trash**, the first icon on the desktop:
-  open it to restore items where they were, or to empty it. Drag items of
-  the desktop onto it, or press **Delete** in Files (**Ctrl+Z** puts them
-  back; **Shift+Delete** deletes for good).
+* Double-click a desktop icon to open it. Right-click the desktop to
+  change the wallpaper.
 * Drag a window to the top of the screen to maximise it, or to a side to
-  fill that half (or use **Super+Left/Right/Up/Down**). **Super+D** shows
-  the desktop, **Alt+Tab** switches windows and **Alt+F4** closes the
-  active one.
-* The speaker icon on the taskbar opens the volume control (scroll over it
-  to change the volume). The network icon next to it shows the Wi-Fi
-  signal and opens the list of networks to join.
+  fill that half (or press **Super+Left/Right/Up/Down**). **Super+D**
+  shows the desktop, **Alt+Tab** switches windows, **Alt+F4** closes one.
+* Deleted items go to the **Trash**, the first desktop icon: drag desktop
+  items onto it, or press **Delete** in Files (**Ctrl+Z** brings them
+  back, **Shift+Delete** deletes for good). Open it to restore items
+  where they were, or to empty it.
+* The speaker icon on the taskbar sets the volume (scroll over it); the
+  network icon next to it lists the Wi-Fi networks to join.
 
 Your files live in `/home/user`, kept on `target/veda/home.img` across
 restarts and rebuilds (`--fresh-home` starts over).
 
-## Applications
-
-Every application is agent-compatible: what you can do with the mouse and
-keyboard, the agent can do too, through the application's own actions.
-
-| Application | What it does | What the agent can do |
-|-------------|--------------|-----------------------|
-| **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, line numbers, zoom, unlimited undo, open/save dialogs. | Create, open, read and write documents; find and replace, select, undo, save; save under another name or discard changes (with your OK). |
-| **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, slideshows, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. | Show any picture, zoom, rotate, go full screen, run a slideshow, show details, set a picture as the wallpaper. |
-| **Music** | A library of `~/Music`, now playing with cover art and a live spectrum visualiser, seeking, shuffle and repeat; plays QOA and WAV through the audio service. | Play a song by its name, pause, stop, skip, seek, shuffle, repeat, set the volume. |
-| **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, new folders and documents, properties, free space; delete to the Trash (with undo), which lists where each item came from and when, and restores or empties. | Open folders and files, search, show properties, make folders; copy, move, rename and delete to the Trash (with your OK); restore from the Trash; empty it (asked every time). |
-| **Terminal** | A command shell with about fifty built-in commands for files, processes, the network (`wifi`, `ifconfig`, `ping`, `nslookup`, `curl`, ...) and the system, history and tab completion. Runs programs, C programs and GCC included, as a Unix terminal does: line editing, `termios`, Ctrl+C, pipes and redirections. | Run a command (with your OK), read its output, interrupt it. |
-| **Task Manager** | Processes with CPU and memory use, "end task", and live performance graphs. | List processes, show and read the performance graphs, end a program (asked every time). |
-| **Settings** | Wallpaper gallery, the agent (Deepgram key, name, voice, language and speech models, listening, memory, permissions), network and Wi-Fi (connection, networks in range, saved networks, interfaces, diagnostics), display information and system details. | Open a page, change the agent's voice and speaking rate; rename the agent or change its language model (with your OK). Never the key. |
-| **Interceptor** | Police pursuits through Veda Bay in OpenGL ES 3.0: a career of eight missions with stars to win, quick chases and patrols, by day, at sunset and at night, in the rain; traffic, suspects that run and ram, backup, nitrous; synthesised engines, sirens and music. | Start a mission, a quick chase (the suspect, time of day, weather, traffic, backup) or a patrol; pause, resume, restart or leave; change the volumes, units, camera and display. |
-
-Beyond the applications, the agent's own functions cover windows, files,
-sound, Wi-Fi, the wallpaper, notifications, timers and reminders, its
-memory and the system.
-
 ## Building agent-compatible applications
 
 Agent support is part of the `vui` application platform. An application
-describes what it can do, reports what it shows and performs actions;
-`vui::run` registers it with the agent service and answers the agent
-between frames:
+describes its actions, reports its state and performs actions; `vui::run`
+registers it with the agent service and answers the agent between frames:
 
 ```rust
 use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, object, show_path};
@@ -404,11 +362,12 @@ impl vui::App for Notes {
 }
 ```
 
-Actions are written for a language model (short imperative descriptions,
-units and defaults spelled out), declare their risk, name their targets
-explicitly and go through the same code as the keyboard and mouse. The
-consent, the memory and the conversation are the system's job, not the
-application's. See [Making an application agent-compatible](docs/AGENT.md#making-an-application-agent-compatible).
+Write action descriptions for a language model: short, imperative, with
+units and defaults spelled out. Declare each action's risk, name its
+target explicitly (an approved action may run minutes later), and run it
+through the same code as the keyboard and mouse. Consent, memory and the
+conversation are the system's job, not the application's. See
+[Making an application agent-compatible](docs/AGENT.md#making-an-application-agent-compatible).
 
 ## Testing
 
@@ -416,75 +375,63 @@ application's. See [Making an application agent-compatible](docs/AGENT.md#making
 cargo xtask test
 ```
 
-runs the host unit tests of the libraries (the agent's protocol, tools,
-prompt, memory, wake word and echo gate, the kernel ABI, heap, IPC,
-service protocols, math, rasterizer, fonts, image codecs, 2D graphics,
-text editing, paths and file types, audio, ELF loading, the POSIX layer,
-build tool) and then boots Veda headless with the `systest` integration
-tests (IPC, sockets, memory, threads, file system, launcher, crash reports,
-recovery of the window system after it is killed, and C programs that
-check the C library and the POSIX layer), failing on any panic.
-
-The agent is tested end to end against a stand-in for Deepgram that runs
-on the host (`tests/agent/`): conversations, function calls, interruptions,
-echo, consent in the window and in notifications, waking by name over
-music, every application's actions and restarts — deterministic, offline
-and free. `tests/real/agent-*.vts` talk to the real Deepgram with the key
-in `DEEPGRAM_API_KEY`, with a synthetic voice speaking into a virtual
-microphone.
-
-Networking has its own host tests (the 802.11 protocol and cryptography
-against published test vectors, station against access point, TCP/IP stacks
-over a simulated cable, the Wi-Fi simulator, TLS handshakes against a
-rustls server and real certificate chains), and `nettest` checks DNS,
-TCP, HTTP, HTTPS and ping from inside Veda.
-
-GUI automation scripts in `tests/ui/` click through the desktop and
-applications, check the log and save screenshots; two of them run C
-programs in the Terminal and compile one with GCC inside Veda (they need
-the toolchain, and are skipped without it). The Wi-Fi scripts join
-networks through the desktop and break the simulated network in many ways
-(access point gone, disconnection, outages, the radio or the Wi-Fi service
-vanishing) to check that Veda recovers by itself. Run them all, the
-agent's included, with the unit and integration tests, or one at a time:
+This runs the libraries' unit tests on the host, then boots Veda headless
+with the `systest` integration tests (IPC, memory, threads, the file
+system, crash recovery of the window system, C and C++ programs). Any
+panic fails the run.
 
 ```bash
 cargo xtask test --ui
 ```
 
-```bash
-cargo xtask script tests/agent/wake-name.vts
-```
+This adds the GUI scripts in `tests/ui/` and the agent's scripts in
+`tests/agent/`. They click through the desktop and the applications, check
+logs and screenshots, and break the simulated Wi-Fi network in many ways
+to check that Veda recovers by itself. Scripts that need GCC are skipped
+without the C toolchain.
+
+The agent's scripts run against a stand-in for Deepgram on the host, so
+they are deterministic, offline and free. They cover conversations,
+function calls, interruptions, echo, consent, waking by name over music
+and every application's actions. `tests/real/` talks to the real Deepgram
+(with the key in `DEEPGRAM_API_KEY`), using a synthetic voice in a
+virtual microphone.
+
+Networking has host tests of its own: 802.11 and its cryptography against
+published test vectors, TCP/IP over a simulated cable, and TLS against a
+rustls server and real certificate chains. Inside Veda, `nettest` checks
+DNS, TCP, HTTP, HTTPS and ping.
+
+To run one script, or to boot headless and save `target/veda/screen.png`:
 
 ```bash
+cargo xtask script tests/agent/wake-name.vts
 cargo xtask shot --wait 20
 ```
 
-(`shot` boots headless and saves `target/veda/screen.png`.)
-
-The serial console (kernel log plus every program's output) is saved to
-`target/veda/serial.log`.
+Every run saves the serial console (the kernel log and every program's
+output) to `target/veda/serial.log`.
 
 ## Repository layout
 
 | Path | Contents |
 |------|----------|
-| `services/agent/` | the agent: conversations, the name listener, functions, consent, memory |
-| `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
+| `services/agent/`, `lib/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `lib/agent` |
 | `boot/` | `vboot`, the UEFI bootloader |
-| `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
+| `kernel/` | `vkernel`, the microkernel, with the hypervisor and the IOMMU driver |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
-| `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` (SATA), `nvme` (NVM Express); everything else is Linux's, in the driver VM |
-| `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `interceptor` (its game, testable on the host, in `interceptor/game`) |
-| `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests |
-| `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
-| `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
-| `third_party/` | vendored crates with Veda patches (smoltcp) |
-| `xtask/` | the build system: cross-compilation, disk image, QEMU, automation, the stand-in for Deepgram |
+| `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
+| `lib/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
+| `apps/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
+| `guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
+| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, and Linux for the driver VM |
+| `tests/` | `systest` and `nettest` (in-system tests), C and C++ test programs, GUI and agent scripts |
+| `tools/` | host programs that generate wallpapers, pictures and music at build time, and `airsim` (simulated Wi-Fi) |
+| `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
+| `third_party/` | vendored crates with Veda's patches (smoltcp) |
 | `assets/` | fonts and application manifests |
 | `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
+| `website/` | [www.vedaos.org](https://www.vedaos.org), a static page |
 
 ## Documentation
 
@@ -495,8 +442,8 @@ The serial console (kernel log plus every program's output) is saved to
   simulated Wi-Fi environment, security and tests.
 * [C on Veda](docs/C.md): writing, compiling and running C programs, the
   POSIX layer, and how the toolchain is built.
-* [The driver VM](docs/DRIVERVM.md): Linux's drivers in a virtual machine:
-  the hypervisor, the platform, the bridge, the IOMMU and the devices.
+* [The driver VM](docs/DRIVERVM.md): the hypervisor, the platform, the
+  bridge, the IOMMU and the devices.
 * [Developing](docs/DEVELOPING.md): build commands, the system image,
   writing applications, performance notes.
 * [Coding conventions](docs/CODING.md).
@@ -512,17 +459,21 @@ the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
 the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE.
 
-The bundled fonts (Inter, Lato, JetBrains Mono) are under the SIL Open
-Font License 1.1; see `assets/fonts/`. The firmware the driver VM's Linux
-loads into devices (`ports/linux/firmware.txt`) comes unmodified from the
-Linux firmware collection, under the terms its `WHENCE` gives each file's
-maker (who allow its redistribution), and from Sound Open Firmware's
-releases (sof-bin: Intel's signed builds of the audio DSP's firmware,
-under the BSD licence and Intel's patent licence of its `LICENCE.Intel`);
-it runs on the devices, not in Veda. Vendored third-party code keeps
-its own license; see `third_party/`. The C toolchain an image may contain
-keeps its own licences too: GCC and binutils GPL version 3 or later (the
-GCC runtime library with its Runtime Library Exception, so programs GCC
-builds keep their own licences), GMP, MPFR and MPC LGPL version 3 or
-later, musl MIT; their source is the upstream releases `ports/*/port.toml`
-names, with the patches beside them.
+Other parts keep their own licences:
+
+* **Fonts** (Inter, Lato, JetBrains Mono): the SIL Open Font License 1.1;
+  see `assets/fonts/`.
+* **Device firmware** that the driver VM's Linux loads into devices
+  (`ports/linux/firmware.txt`) runs on the devices, not in Veda. It comes
+  unmodified from the Linux firmware collection, under the terms its
+  `WHENCE` gives each file's maker (who allow its redistribution), and
+  from Sound Open Firmware's releases (sof-bin: Intel's signed builds of
+  the audio DSP's firmware, under the BSD licence and Intel's patent
+  licence in its `LICENCE.Intel`).
+* **Vendored code** keeps its own licence; see `third_party/`.
+* **The C toolchain** an image may contain: GCC and binutils under the GPL
+  version 3 or later (the GCC runtime library with its Runtime Library
+  Exception, so programs GCC builds keep their own licences), GMP, MPFR
+  and MPC under the LGPL version 3 or later, and musl under the MIT
+  licence. Their source is the upstream releases that `ports/*/port.toml`
+  names, with the patches beside them.

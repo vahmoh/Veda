@@ -1,14 +1,17 @@
 # Interceptor's picture in the README: a chase at sunset on a road through
-# the trees of the hills, full screen in Full HD. Regenerate it with
+# the trees of the hills, full screen. Regenerate it with
 #
-#   cargo xtask script docs/interceptor.vts --resolution 1920x1080
+#   cargo xtask script docs/interceptor.vts --resolution 1920x1200
 #
-# which writes docs/images/interceptor.png. The game starts with the
-# system; F3 twice turns the statistics off, and a quick chase at sunset is
-# chosen from the menus (its menu opens on its start button; four up is the
-# time of day, one left from night is sunset). The computer takes the wheel
-# during the countdown, so every run films the same chase: 9 s on, the
-# police car among the traffic between the trees, the sun low.
+# which writes docs/images/interceptor.png at 1920x1200; scale it to
+# 1280x800, the size of the other screenshots, so that the README's table
+# shows them all alike (the website's pictures come from the same
+# 1920x1200 shot). The game starts with the system; F3 twice turns the
+# statistics off, and a quick chase at sunset is chosen from the menus (its
+# menu opens on its start button; four up is the time of day, one left
+# from night is sunset). The computer takes the wheel during the
+# countdown, so every run films the same chase: 9 s on, the police car
+# among the traffic between the trees, the sun low.
 boot-cmdline "run=interceptor"
 fail-on "PANIC"
 fail-on "rendering stops"

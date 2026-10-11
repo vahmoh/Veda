@@ -8,7 +8,8 @@
 # virtual Wi-Fi radio (its icon is on the taskbar) and airsim's simulated
 # networks, and the agent talks to the stand-in for Deepgram. GCC must be
 # in the image (`cargo xtask toolchain`). Interceptor's picture has a
-# script of its own, in Full HD (`docs/interceptor.vts`).
+# script of its own, shot at 1920x1200 and scaled to 1280x800
+# (`docs/interceptor.vts`).
 requires native-toolchain
 net wifi
 agent-asleep
