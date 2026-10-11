@@ -63,16 +63,7 @@ python -m http.server 8000
 
 ## Publishing
 
-`.github/workflows/website.yml` publishes this folder to GitHub Pages when it
-changes on `main`. Once, in the repository's settings on GitHub:
-
-1. **Pages** → *Build and deployment* → *Source*: **GitHub Actions**.
-2. **Pages** → *Custom domain*: `www.vedaos.org`, then *Enforce HTTPS* once
-   the certificate is issued.
-3. At the domain's DNS provider: a `CNAME` record for `www` pointing to
-   `vahmoh25.github.io`, and for the bare `vedaos.org` the four `A` records of
-   GitHub Pages (185.199.108.153, 185.199.109.153, 185.199.110.153,
-   185.199.111.153), so that it redirects to `www`.
-
-The site works the same on any other static host (Cloudflare Pages, Netlify,
-an S3 bucket): publish this folder as it is.
+Nothing publishes this folder automatically: upload it as it is to the static
+host that serves www.vedaos.org (any will do: Cloudflare Pages, GitHub Pages,
+Netlify, an S3 bucket). `CNAME` gives the domain to GitHub Pages; the other
+hosts ignore it.
