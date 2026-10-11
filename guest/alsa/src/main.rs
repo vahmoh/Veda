@@ -7,13 +7,16 @@
 //! Veda's own sound drivers do, and plays the service's mixed output from
 //! the shared ring: a period (10 ms) at a time, a few periods ahead of what
 //! is heard. Running short while streams play, it pads with silence (an
-//! underrun, which deepens the queue). How much has played comes from the
-//! card's own count (ALSA's delay), stamped with Veda's clock, which the
-//! guest reads itself. The card's period interrupts pace this program while
-//! it plays: it wakes when the card's buffer holds a period less than the
-//! queue's depth, and tops it up; after a while without audio it stops,
-//! and waits for the service to have some. The card's own mixer stays at
-//! unity gain (`ctl`): the volume is Veda's.
+//! underrun, which deepens the queue, until half a minute without one makes
+//! it a period shallower again); a stream that ends, and says so, is no
+//! underrun, nor is the card running out of padding with nothing to play
+//! after it. How much has played comes from the card's own count (ALSA's
+//! delay), stamped with Veda's clock, which the guest reads itself. The
+//! card's period interrupts pace this program while it plays: it wakes when
+//! the card's buffer holds a period less than the queue's depth, and tops
+//! it up; after a while without audio it stops, and waits for the service
+//! to have some. The card's own mixer stays at unity gain (`ctl`): the
+//! volume is Veda's.
 //!
 //! The card records, on a thread of its own, while the audio service wants
 //! audio (the input ring's `CAPTURE` flag): what it read goes into the
@@ -53,6 +56,9 @@ const PERIODS: u32 = 16;
 /// Periods kept queued normally (60 ms), and at most after underruns.
 const DEPTH: u32 = 6;
 const MAX_DEPTH: u32 = 12;
+/// After this long without an underrun the queue gets a period shorter,
+/// back to [`DEPTH`] in the end.
+const SHALLOWER_NS: u64 = 30_000_000_000;
 /// Below this many queued periods the driver pads with silence.
 const MIN_QUEUED: u32 = 2;
 /// Periods of audio needed before (re)starting playback.
@@ -162,12 +168,44 @@ fn find_card() -> Card {
     }
 }
 
+/// How many periods the card is kept ahead: [`DEPTH`], a period more for
+/// each underrun (up to [`MAX_DEPTH`]), and a period less again for each
+/// [`SHALLOWER_NS`] without one.
+struct Depth {
+    periods: u32,
+    /// When it last changed.
+    since_ns: u64,
+}
+
+impl Depth {
+    fn new() -> Depth {
+        Depth { periods: DEPTH, since_ns: 0 }
+    }
+
+    /// An underrun at `now`: a period deeper.
+    fn deepen(&mut self, now: u64) {
+        self.periods = (self.periods + 1).min(MAX_DEPTH);
+        self.since_ns = now;
+    }
+
+    /// A period shallower, if it has been deeper than [`DEPTH`] for
+    /// [`SHALLOWER_NS`] without an underrun by `now`; true if it got so.
+    fn recover(&mut self, now: u64) -> bool {
+        if self.periods > DEPTH && now.saturating_sub(self.since_ns) >= SHALLOWER_NS {
+            self.periods -= 1;
+            self.since_ns = now;
+            return true;
+        }
+        false
+    }
+}
+
 /// The card, playing the ring.
 struct Player {
     pcm: Pcm,
     running: bool,
     /// Periods kept queued.
-    depth: u32,
+    depth: Depth,
     /// Frames written to the card since it started, and the chunks written
     /// (the card's position at a chunk's end, and how many of its frames
     /// came from the ring: the rest is silence).
@@ -192,7 +230,7 @@ impl Player {
         Player {
             pcm,
             running: false,
-            depth: DEPTH,
+            depth: Depth::new(),
             written: 0,
             chunks: VecDeque::new(),
             queued: 0,
@@ -221,7 +259,7 @@ impl Player {
     /// left to run out before it stops.
     fn target(&self, ring: &Ring) -> u32 {
         if ring.filled() >= self.period() {
-            self.depth
+            self.depth.periods
         } else if self.idle(ring) {
             0
         } else {
@@ -303,7 +341,7 @@ impl Player {
         (self.written, self.queued, self.filled) = (0, 0, 0);
         self.chunks.clear();
         // The card starts with the first period written.
-        while self.filled_periods() < self.depth && ring.filled() > 0 {
+        while self.filled_periods() < self.depth.periods && ring.filled() > 0 {
             let n = ring.filled().min(self.period());
             if self.queue(ring, n)?.is_none() {
                 break;
@@ -315,12 +353,26 @@ impl Player {
         Ok(())
     }
 
-    /// The card ran dry and stopped (it was not refilled in time).
-    fn ran_dry(&mut self) {
+    /// An underrun: audio that should have been playing was not there in
+    /// time. The queue gets a period longer.
+    fn underrun(&mut self) {
         self.underruns += 1;
-        self.depth = (self.depth + 1).min(MAX_DEPTH);
-        if self.underruns <= 10 || self.underruns.is_multiple_of(100) {
-            println!("alsa: the card ran dry: underrun {} (queue depth now {})", self.underruns, self.depth);
+        self.depth.deepen(now_ns());
+    }
+
+    /// The card ran dry and stopped: it was not refilled in time. That is
+    /// an underrun if audio was waiting, in the ring or on its way (streams
+    /// play); with nothing but the silence it was padded with, the card
+    /// stopped as it would have.
+    fn ran_dry(&mut self, ring: &Ring) {
+        if ring.filled() > 0 || ring.producer_flags() & flags::ACTIVE != 0 {
+            self.underrun();
+            if self.underruns <= 10 || self.underruns.is_multiple_of(100) {
+                println!(
+                    "alsa: the card ran dry: underrun {} (queue depth now {})",
+                    self.underruns, self.depth.periods
+                );
+            }
         }
         self.stop();
     }
@@ -335,6 +387,10 @@ impl Player {
     /// Starts, refills or stops the card. Returns true if ring data was
     /// consumed or the state changed.
     fn pump(&mut self, ring: &Ring) -> bool {
+        if self.depth.recover(now_ns()) {
+            let secs = SHALLOWER_NS / 1_000_000_000;
+            println!("alsa: no underrun for {secs} s (queue depth now {})", self.depth.periods);
+        }
         let active = ring.producer_flags() & flags::ACTIVE != 0;
         if !self.running {
             let filled = ring.filled();
@@ -356,7 +412,7 @@ impl Player {
             return false;
         }
         let mut changed = false;
-        while self.filled_periods() < self.depth {
+        while self.filled_periods() < self.depth.periods {
             let filled = ring.filled();
             let result = if filled >= self.period() {
                 self.starving = false;
@@ -367,10 +423,9 @@ impl Player {
                 // About to run dry: queue what there is, and silence.
                 if active && !self.starving {
                     self.starving = true;
-                    self.underruns += 1;
-                    self.depth = (self.depth + 1).min(MAX_DEPTH);
+                    self.underrun();
                     if self.underruns <= 10 || self.underruns.is_multiple_of(100) {
-                        println!("alsa: underrun {} (queue depth now {})", self.underruns, self.depth);
+                        println!("alsa: underrun {} (queue depth now {})", self.underruns, self.depth.periods);
                     }
                 }
                 self.queue(ring, filled)
@@ -380,7 +435,7 @@ impl Player {
                 Ok(None) => break,
                 // EPIPE: it ran dry before this was written.
                 Err(e) if e.raw_os_error() == Some(32) => {
-                    self.ran_dry();
+                    self.ran_dry(ring);
                     return true;
                 }
                 Err(e) => {
@@ -603,7 +658,7 @@ fn serve(player: &mut Player, link: &Channel, out: &Output) -> io::Result<()> {
             player.pace(t)?;
             paced = target;
         }
-        let audio = target.is_none_or(|t| t < player.depth);
+        let audio = target.is_none_or(|t| t < player.depth.periods);
         let mut fds = [
             PollFd::new(closed.as_raw_fd(), POLLIN),
             PollFd::new(if audio { data.as_raw_fd() } else { -1 }, POLLIN),
@@ -723,6 +778,33 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_queue_deepens_with_underruns_and_recovers_without() {
+        let mut depth = Depth::new();
+        assert!(!depth.recover(10 * SHALLOWER_NS));
+        // Underruns at 1 s, 2 s, ...: a period each, up to the most.
+        for s in 1..=10 {
+            depth.deepen(s * 1_000_000_000);
+        }
+        assert_eq!(depth.periods, MAX_DEPTH);
+        // Half a minute after the last one, a period less, and then a
+        // period less for each half minute more, down to the usual depth.
+        let last = 10 * 1_000_000_000;
+        assert!(!depth.recover(last + SHALLOWER_NS - 1));
+        assert!(depth.recover(last + SHALLOWER_NS));
+        assert!(!depth.recover(last + SHALLOWER_NS + 1));
+        let mut now = last + SHALLOWER_NS;
+        while depth.recover(now + SHALLOWER_NS) {
+            now += SHALLOWER_NS;
+        }
+        assert_eq!(depth.periods, DEPTH);
+        assert_eq!(now, last + (MAX_DEPTH - DEPTH) as u64 * SHALLOWER_NS);
+        // An underrun on the way back starts the wait again.
+        depth.deepen(now);
+        assert!(!depth.recover(now + SHALLOWER_NS / 2));
+        assert_eq!(depth.periods, DEPTH + 1);
+    }
 
     /// As Linux lists a card with an audio DSP (SOF's, on an Alder Lake
     /// laptop), after a GPU's HDMI audio.

@@ -16,7 +16,7 @@ use vagent::deepgram;
 use vproto::agent::{
     AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, UiLink, agent,
 };
-use vproto::audio::{OutputStream, StreamSpec, audio};
+use vproto::audio::{OutputStream, StreamSpec, audio, ring};
 use vrt::object::Channel;
 use vrt::sync::Mutex;
 use vrt::time::Duration;
@@ -333,6 +333,8 @@ fn play(pcm: &[i16]) {
         stream.wait_writable(2400, vrt::time::deadline_after(Duration::from_millis(200)));
         pos += stream.write(&pcm[pos..]);
     }
+    // Nothing follows: played out, the stream has ended, not run short.
+    stream.ring().set_producer_flags(ring::flags::END);
     while stream.played_now() < stream.written() && vrt::time::now_ns() < end {
         vrt::time::sleep(Duration::from_millis(50));
     }

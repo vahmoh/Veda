@@ -19,7 +19,7 @@
 use alloc::vec;
 
 use vaudio::wav::{self, WavInfo};
-use vproto::audio::{OutputStream, StreamSpec, audio};
+use vproto::audio::{OutputStream, StreamSpec, audio, ring};
 use vproto::vfs;
 use vrt::println;
 
@@ -161,5 +161,7 @@ fn ready(audio: &audio::Client, vfs: Option<&vfs::Client>) -> Result<(OutputStre
     };
     let stream = OutputStream::open(audio, spec).map_err(|_| "the audio service refused its stream")?;
     let written = stream.write(&pcm[..frames * 2]);
+    // That is all of it: played out, the stream has ended, not run short.
+    stream.ring().set_producer_flags(ring::flags::END);
     Ok((stream, written as u64 * 1000 / info.rate.max(1) as u64))
 }
