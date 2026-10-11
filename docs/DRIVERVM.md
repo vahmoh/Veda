@@ -9,26 +9,6 @@ devices; its drivers serve Veda's services through the same protocols
 Veda's own drivers speak. A driver that crashes, hangs or is compromised
 takes down a virtual machine that Veda restarts, never Veda.
 
-```
- ┌──────────────────────────────────────────────────────────────────────────┐
- │ Veda: services (audio, compositor, netd, wlan…)   native drivers: the    │
- │       speak audiodev, displaydev, netdev, gpu…     disks                 │
- │                     │                                                    │
- │             drivervm (the monitor: memory, processors, hypercalls,       │
- │             the bridge, the registry the guest sees, devices it gets)    │
- ├─────────────────────│──────────────────────────────────────────────────── │
- │ vkernel: Guest (EPT) · Vcpu (VMX, x2APIC) · IOMMU domains · interrupts   │
- ╞═════════════════════│════════════════════════════════════════════════════╡
- │ Linux (the guest)   │                                                    │
- │   programs: Veda's drivers for Linux (vrt over /dev/veda): ALSA →        │
- │   audiodev, KMS → displaydev, Mesa → gpu, nl80211 → wlanphy, …          │
- │   kernel: Linux's drivers (i915/xe, amdgpu, snd-hda/SOF, iwlwifi, mt76,  │
- │   btusb…) + the Veda platform (console, bridge, PCI, processors)         │
- └──────────────────────────────────────────────────────────────────────────┘
-        devices given to the guest: their BARs in its memory, their DMA
-        through the IOMMU into its memory only, their interrupts remapped
-```
-
 ## Why
 
 Veda's own drivers covered what a PC needs to start and be used: storage,

@@ -66,23 +66,6 @@ visible and safe.
 
 ## How the agent works
 
-```
- ┌───────────────────────────────────────────────────────────────────────┐
- │ You: voice, keyboard, mouse                                           │
- ├───────────────────────────────────┬───────────────────────────────────┤
- │ Agent service                     │ Desktop shell                     │
- │  conversation (Deepgram Voice     │  the ring and the agent's window  │
- │  Agent) · name listener · memory  │  consent requests · notifications │
- │  worker: functions and consent    │                                   │
- ├───────────────────────────────────┴───────────────────────────────────┤
- │ Applications: actions · state · invoke (the agentapp protocol)        │
- ├───────────────────────────────────────────────────────────────────────┤
- │ Services: windows · files · audio · network · Wi-Fi · launcher        │
- ├───────────────────────────────────────────────────────────────────────┤
- │ vkernel: capabilities · IPC · isolation · scheduling                  │
- └───────────────────────────────────────────────────────────────────────┘
-```
-
 1. **Listening.** Asleep, the agent runs a voice detector on the computer.
    When someone speaks, the speech goes to a recogniser that knows the
    agent's name; a sentence that calls it ("Hey Veda, …", "…, Veda?") wakes

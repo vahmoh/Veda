@@ -6,25 +6,6 @@ management and inter-process communication; device drivers, file systems,
 the window system and every application are ordinary user-space processes
 that communicate over kernel channels.
 
-```
- ┌──────────────────────────────────────────────────────────────────────────┐
- │ Applications   shell · editor · photos · music · terminal · games …      │
- │                C programs: gcc · as · ld … (musl, vposix)                │
- ├──────────────────────────────────────────────────────────────────────────┤
- │ Libraries      vui (widgets) · vgfx (2D) · vgl (OpenGL ES) · v3d …       │
- ├──────────────────────────────────────────────────────────────────────────┤
- │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
- │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        virtio-blk · ahci · nvme (disks) · pci · the driver VM    │
- │                (Linux's: GPUs, displays, input, USB, networks, Wi-Fi,    │
- │                sound …)                                                  │
- ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
- │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
- ├──────────────────────────────────────────────────────────────────────────┤
- │ vboot (UEFI)   loads kernel + initrd, sets graphics mode, builds paging  │
- └──────────────────────────────────────────────────────────────────────────┘
-```
-
 ## Boot
 
 1. OVMF loads `\EFI\BOOT\BOOTX64.EFI` (`boot/`, the `vboot` loader) from the

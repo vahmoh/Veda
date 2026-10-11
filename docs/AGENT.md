@@ -15,26 +15,6 @@ Speech recognition, the language model and the voice all come from
 its streaming speech recognition for hearing the agent's name. The API key,
 the models and the voice are system settings (Settings → Agent).
 
-```
-            ┌───────────── shell ─────────────┐      ┌──── Settings ────┐
-            │ tray ring · agent window ·      │      │ Agent page: key, │
-            │ approval cards / notifications  │      │ voice, models,   │
-            └──────────────┬──────────────────┘      │ memory, consent  │
-               ui link     │  (events + live levels)  └────────┬─────────┘
-                           ▼                                   │ admin
-  ┌──────────────────────── services/agent ───────────────────▼─────────┐
-  │ conversation (Voice Agent WebSocket) · name listener (Nova-3)       │
-  │ worker: system functions · applications · approvals · memory       │
-  └──────┬───────────────────────┬────────────────────────┬────────────┘
-         │ audio (mic 16 kHz,    │ agentapp protocol      │ wss / https
-         │ echo-cancelled;       │ (describe · state ·    │ (vweb + vtls)
-         │ voice 24 kHz)         │  invoke)               ▼
-   ┌─────▼─────┐        ┌────────▼─────────┐       Deepgram
-   │ audio     │        │ applications     │
-   │ service   │        │ (vui::App, games)│
-   └───────────┘        └──────────────────┘
-```
-
 ## Talking to it
 
 * **Say its name**: "Hey Veda, open my shopping list", "Veda, play some

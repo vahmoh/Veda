@@ -62,10 +62,6 @@ connects it with other programs and built-in commands.
 
 ## How it works
 
-```text
- C program ── musl (libc.a) ── POSIX layer (lib/posix, in libc.a) ── Veda's kernel and services
-```
-
 **Executables** are ELF64 files for the System V x86-64 ABI, as on Linux.
 Veda's own (Rust) programs stay PE; `vrt::process::Spawn` starts either
 kind. For an ELF program it maps the segments (`lib/elf` validates them and

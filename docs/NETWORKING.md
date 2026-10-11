@@ -4,28 +4,6 @@ Veda reaches the Internet over Ethernet and Wi-Fi. As everywhere else
 in the system, the work is split into isolated user-space processes that
 talk over kernel channels; the kernel knows nothing about networks.
 
-```text
- applications (Settings, the taskbar's network flyout, Terminal, nettest, ...)
-        |  vnet: sockets, DNS, status          vnet::wifi: networks, joining
-        |  ("net" protocol)                    ("wlan" protocol)
-        v                                      v
- +----------------------+    "netdev"    +----------------------------+
- | netd                 |<---------------| wlan  (the Wi-Fi service)  |
- | vnetstack + smoltcp: |  wlan0 frames  | vwlan: choosing networks,  |
- | interfaces, DHCP,    |  (Ethernet)    | SAE, 4-way and group       |
- | SLAAC, routes, DNS,  |                | handshakes, saved networks,|
- | TCP, UDP, ICMP       |                | reconnection, roaming      |
- +----------------------+                +----------------------------+
-        ^ "netdev"                              ^ "wlanphy" (managed:
-        | eth0 frames                           |  commands, Ethernet frames)
- ===== the driver VM ==========================================================
- +--------------+                        +--------------+
- | net          |  Linux's network       | wifi         |  Linux's Wi-Fi radios
- | (guest/net)  |  cards                 | (guest/wifi) |  (nl80211; airlink
- +--------------+                        +--------------+  makes QEMU's virtual
-                                                           radio one)
-```
-
 * **Drivers** move frames and nothing else, and they are Linux's, in
   [the driver VM](DRIVERVM.md): `net` offers each of Linux's network
   cards to `netd` as an Ethernet device, and `wifi` each of its Wi-Fi
