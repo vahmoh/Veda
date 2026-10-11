@@ -581,6 +581,13 @@ impl App {
             if best {
                 self.store_save();
             }
+            vrt::println!(
+                "result: {} in {}, {} hits, {} stars",
+                outcome.ending.title().to_lowercase(),
+                interceptor_game::career::clock(outcome.time),
+                outcome.hits,
+                outcome.stars
+            );
             self.result = Some(Result { outcome, mission, best });
             self.session.game.release();
             self.go(Screen::Results(0));
