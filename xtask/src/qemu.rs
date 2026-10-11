@@ -168,6 +168,46 @@ impl InputDevices {
     }
 }
 
+/// The display's own size, which its EDID gives as its preferred mode, and
+/// its refresh rate: the firmware starts in that mode (OVMF reads the size
+/// from the EDID's first detailed timing) and the driver VM's Linux offers
+/// it first. [`Screen::new`] makes only sizes QEMU can present that way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Screen {
+    pub width: u32,
+    pub height: u32,
+    /// The refresh rate (mHz).
+    refresh: u32,
+}
+
+impl Screen {
+    /// QEMU's own: 1280x800 at 75 Hz.
+    pub const DEFAULT: Screen = Screen { width: 1280, height: 800, refresh: 75_000 };
+
+    /// A display of `width` by `height`, at QEMU's 75 Hz, or at the fastest
+    /// whole rate below it at which the EDID's detailed timing can still
+    /// describe it: QEMU makes up its timings with 35% horizontal and 3.5%
+    /// vertical blanking (hw/display/edid-generate.c), and the timing holds
+    /// a pixel clock below 655.36 MHz and sizes below 4096 each way. The
+    /// VGA's widths are multiples of 8 (QEMU rounds others down).
+    pub fn new(width: u32, height: u32) -> Result<Screen> {
+        if !width.is_multiple_of(8) {
+            return Err(format!("QEMU's display cannot be {width} pixels wide: its widths are multiples of 8"));
+        }
+        if width >= 4096 || height >= 4096 {
+            return Err(format!(
+                "QEMU's display cannot take {width}x{height} for its own size: at most 4095 pixels each way"
+            ));
+        }
+        let (w, h) = (width as u64, height as u64);
+        // The pixels of a frame with its blanking, and the fastest rate
+        // (whole hertz) whose clock, in units of 10 kHz, is below 65 536.
+        let total = (w + w * 35 / 100) * (h + h * 35 / 1000);
+        let hz = ((65_536 * 10_000_000 - 1) / total / 1000).min(75) as u32;
+        Ok(Screen { width, height, refresh: hz * 1000 })
+    }
+}
+
 /// User-tunable virtual machine settings.
 #[derive(Debug, Clone)]
 pub struct VmConfig {
@@ -175,6 +215,8 @@ pub struct VmConfig {
     pub memory_mib: u32,
     /// Show a window (`false` = headless).
     pub display: bool,
+    /// The display's own size: the screen's.
+    pub screen: Screen,
     pub audio: bool,
     /// The sound card: `virtio` (the default) or `hda` (Intel HD Audio).
     pub sound: String,
@@ -234,6 +276,7 @@ impl Default for VmConfig {
             cpus: 4,
             memory_mib: 1024,
             display: true,
+            screen: Screen::DEFAULT,
             audio: true,
             sound: "virtio".into(),
             audio_wav: None,
@@ -325,15 +368,24 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     // device takes it), named so that the tablet can be bound to it (see
     // `-display` below): QEMU's standard VGA, whose memory holds the
     // firmware's framebuffer, and which Linux's bochs driver drives in the
-    // driver VM. With a GPU, a virtio-gpu with virgl beside it, whose
-    // virglrenderer runs on the host's OpenGL and needs an OpenGL display
-    // backend (a window or an offscreen one): its render node is the
-    // renderer's in the driver VM, while the screen stays the VGA's, which
-    // QEMU can take screenshots of (not of a GPU's scanouts). It is at
-    // 00:10.0, so that the other devices are where they are with it or
-    // without it.
+    // driver VM; its EDID gives the screen's size as its own. With a GPU, a
+    // virtio-gpu with virgl beside it, whose virglrenderer runs on the
+    // host's OpenGL and needs an OpenGL display backend (a window or an
+    // offscreen one): its render node is the renderer's in the driver VM,
+    // while the screen stays the VGA's, which QEMU can take screenshots of
+    // (not of a GPU's scanouts). It is at 00:10.0, so that the other
+    // devices are where they are with it or without it.
     let gpu = cfg.gpu.unwrap_or_else(|| install.has_gl_gpu());
-    cmd.args(["-vga", "none", "-device", &format!("VGA,id={DISPLAY_ID},addr=0x1")]);
+    let Screen { width: w, height: h, refresh } = cfg.screen;
+    // Its memory holds a frame of the screen, for the firmware and for
+    // Linux's driver: QEMU's 16 MiB up to 2560x1600, a power of two above.
+    let memory = (w as u64 * h as u64 * 4).div_ceil(1 << 20).next_power_of_two().max(16);
+    cmd.args([
+        "-vga",
+        "none",
+        "-device",
+        &format!("VGA,id={DISPLAY_ID},addr=0x1,xres={w},yres={h},refresh_rate={refresh},vgamem_mb={memory}"),
+    ]);
     if gpu {
         cmd.args(["-device", &virtio(cfg, "virtio-gpu-gl-pci,id=gpu0,addr=0x10")]);
     }
@@ -549,4 +601,23 @@ pub fn vars_file(install: &QemuInstall) -> Result<PathBuf> {
             .map_err(|e| format!("copying {}: {e}", install.ovmf_vars_template.display()))?;
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screens_are_what_qemu_can_present() {
+        assert_eq!(Screen::new(1280, 800), Ok(Screen::DEFAULT));
+        for (w, h) in [(1920, 1080), (2560, 1600), (3200, 1800)] {
+            assert_eq!(Screen::new(w, h).map(|s| s.refresh), Ok(75_000), "{w}x{h}");
+        }
+        // 4K's pixel clock at 75 Hz is beyond the timing's: it is as fast
+        // as it can be (QEMU's clock at 56 Hz is 64 882, at 57 Hz 66 041).
+        assert_eq!(Screen::new(3840, 2160).map(|s| s.refresh), Ok(56_000));
+        assert_eq!(Screen::new(3840, 2400).map(|s| s.refresh), Ok(50_000));
+        assert!(Screen::new(1366, 768).is_err());
+        assert!(Screen::new(4096, 2160).is_err());
+    }
 }

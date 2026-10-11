@@ -234,14 +234,15 @@ cargo xtask run
 ```
 
 This builds every component, writes the disk image
-`target/veda/veda.img` and boots it in a QEMU window. The first build
+`target/veda/veda.img` and boots it in a QEMU window, on a 1920x1080
+screen (`--resolution` makes it larger or smaller). The first build
 also builds the driver VM's Linux (its kernel, a cross compiler for its
 programs, and Mesa), which takes a while, and renders the sample pictures
 and music; later builds are incremental, and `cargo xtask linux` builds
 Linux again after its port changes. Useful options:
 
 ```bash
-cargo xtask run --resolution 1920x1080 --smp 4 --memory 2048
+cargo xtask run --resolution 1280x800 --smp 4 --memory 2048
 cargo xtask run --cmdline "run=editor"
 ```
 

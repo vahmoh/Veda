@@ -61,9 +61,11 @@ COMMANDS:
 
 BUILD OPTIONS:
     --debug             Build without optimisations (slow under emulation)
-    --resolution WxH    Preferred screen resolution (default 1280x800; iso: 1920x1080, or
-                        the largest the screen offers below it; of the display's own shape,
-                        if the firmware gives its EDID and has such a mode about as wide)
+    --resolution WxH    Screen resolution (default 1920x1080 for run and iso; 1280x800 for
+                        build, shot and the scripts, which are laid out for it). QEMU's
+                        display takes it for its own size; a PC gets its largest mode up to
+                        it, of the display's own shape if the firmware gives its EDID and
+                        has such a mode about as wide
     --cmdline \"...\"     Extra kernel command line arguments
     --no-generate       Reuse the media in target/generated instead of regenerating it
     --skip PROGRAM      Leave a program out of the image (repeatable)
@@ -109,9 +111,8 @@ ISO OPTIONS:
 #[derive(Clone)]
 struct Options {
     profile: Profile,
-    resolution: String,
-    /// `--resolution` was given (otherwise the live system has its own).
-    resolution_set: bool,
+    /// `--resolution` (otherwise each boot has its own: see [`screen`]).
+    resolution: Option<(u32, u32)>,
     cmdline: String,
     vm: qemu::VmConfig,
     wait: f64,
@@ -139,8 +140,7 @@ struct Options {
 fn parse_options(args: &[String]) -> Result<Options> {
     let mut o = Options {
         profile: Profile::Release,
-        resolution: "1280x800".into(),
-        resolution_set: false,
+        resolution: None,
         cmdline: String::new(),
         vm: qemu::VmConfig::default(),
         wait: 10.0,
@@ -163,10 +163,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--release" => o.profile = Profile::Release,
             "--resolution" => {
                 let v = value(arg)?;
-                let (w, h) =
-                    resolution_size(&v).ok_or("--resolution expects WxH, at least 640x480 (such as 1920x1080)")?;
-                o.resolution = format!("{w}x{h}");
-                o.resolution_set = true;
+                o.resolution =
+                    Some(resolution_size(&v).ok_or("--resolution expects WxH, at least 640x480 (such as 1920x1080)")?);
             }
             "--live" => o.live = true,
             "--cmdline" => o.cmdline = value(arg)?,
@@ -364,27 +362,40 @@ fn build_system(o: &Options) -> Result<System> {
     Ok(System { bootloader, kernel, initrd })
 }
 
+/// The screen of the GUI scripts, of the shots and of the image `build`
+/// writes: the scripts' clicks and the README's pictures are laid out for
+/// it.
+const SCRIPTED_SCREEN: (u32, u32) = (1280, 800);
+
+/// The screen of `run`'s window, and of the live system, which takes a
+/// PC's largest mode up to it.
+const LARGE_SCREEN: (u32, u32) = (1920, 1080);
+
+/// The screen resolution a boot asks for: `--resolution`, else the live
+/// system's or the scripts' (`run` asks for [`LARGE_SCREEN`] itself).
+/// QEMU's display has it for its own size (`qemu::VmConfig::screen`).
+fn screen(o: &Options, live: bool) -> (u32, u32) {
+    o.resolution.unwrap_or(if live { LARGE_SCREEN } else { SCRIPTED_SCREEN })
+}
+
 /// The boot configuration of `o` (screen resolution and kernel command
 /// line), for the disk image or for the live system.
 fn boot_config(o: &Options, live: bool) -> String {
     let mut cmdline = o.cmdline.clone();
-    let resolution = if live {
+    if live {
         // The live system runs from memory and leaves the PC's disks alone.
         // A PC's clock keeps local time under Windows, so it shows no time
-        // zone; and it takes the screen's largest mode up to 1080p.
+        // zone.
         cmdline = format!("live {cmdline}").trim().to_string();
-        if o.resolution_set { o.resolution.as_str() } else { "1920x1080" }
-    } else {
+    } else if !cmdline.split_whitespace().any(|a| a.starts_with("tz="))
+        && let Some(tz) = util::host_utc_offset()
+    {
         // The machine's clock keeps UTC; local time is the host's, unless the
         // command line says otherwise.
-        if !cmdline.split_whitespace().any(|a| a.starts_with("tz="))
-            && let Some(tz) = util::host_utc_offset()
-        {
-            cmdline = format!("{cmdline} tz={tz}").trim().to_string();
-        }
-        o.resolution.as_str()
-    };
-    format!("# Veda boot configuration (read by the UEFI loader)\nresolution={resolution}\ncmdline={cmdline}\n")
+        cmdline = format!("{cmdline} tz={tz}").trim().to_string();
+    }
+    let (w, h) = screen(o, live);
+    format!("# Veda boot configuration (read by the UEFI loader)\nresolution={w}x{h}\ncmdline={cmdline}\n")
 }
 
 /// The boot partition's files for `system` with `boot_cfg`.
@@ -450,7 +461,11 @@ fn iso(o: &Options) -> Result {
 
 fn run(o: &Options) -> Result {
     let install = qemu::QemuInstall::locate()?;
+    // A window about as large as a laptop's screen, unless asked otherwise.
+    let o = &Options { resolution: Some(o.resolution.unwrap_or(LARGE_SCREEN)), ..o.clone() };
     let mut vm = o.vm.clone();
+    let (w, h) = screen(o, o.live);
+    vm.screen = qemu::Screen::new(w, h)?;
     let disk = if o.live {
         // A stick with the ISO on it, and no home disk.
         let iso = live_iso();
@@ -684,6 +699,8 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     let o = &o;
     let live = o.live || automate::live(script);
+    let (w, h) = screen(o, live);
+    let display = qemu::Screen::new(w, h)?;
     let disk = if live {
         let iso = live_iso();
         match system {
@@ -700,6 +717,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         }
     };
     let mut vm = o.vm.clone();
+    vm.screen = display;
     vm.audio_wav = (!automate::host_audio(script)).then(|| util::out_dir().join("audio.wav"));
     if automate::silent_audio(script) {
         vm.audio_wav = None;

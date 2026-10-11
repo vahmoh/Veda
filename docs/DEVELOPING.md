@@ -9,7 +9,8 @@ programs for it. Read `docs/CODING.md` (conventions) and
 ```text
 cargo xtask build              # build everything -> target/veda/veda.img
 cargo xtask iso                # the live system for a USB stick -> target/veda/veda.iso
-cargo xtask run                # build and boot in a QEMU window
+cargo xtask run                # build and boot in a QEMU window, on a 1920x1080 screen
+cargo xtask run --resolution 2560x1600   # ... on a larger one
 cargo xtask run --live         # boot the live system in QEMU from a virtual USB stick
 cargo xtask run --smp 2 --memory 2048
 cargo xtask shot --wait 15     # boot headless, save target/veda/screen.png
@@ -96,6 +97,13 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   `INTERCEPTOR_TIMING=1` times making the world and its pictures.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the
   tablet is bound to the display, so a click never grabs the mouse.
+* `run`'s screen is 1920x1080; the scripts' and shots' is 1280x800, which
+  their clicks and the README's pictures are laid out for. QEMU's display
+  has the screen's size for its own (its EDID's preferred mode), so the
+  firmware starts in it and Linux drives it at 75 Hz. `--resolution WxH`
+  sets either: a width that is a multiple of 8, up to 4095x4095; beyond
+  about six million pixels the display runs slower than 75 Hz (56 Hz at
+  3840x2160), as fast as QEMU's EDID can describe it.
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)
