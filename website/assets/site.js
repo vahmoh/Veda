@@ -766,10 +766,14 @@ void main() {
       fig.voice = fig.state === 'speaking' ? voiceAt(t) : 0;
       s.clear();
       // The ring rises a little as its words come in below it; at rest
-      // (reduced motion) it has a place of its own between them.
+      // (reduced motion) it has a place of its own between them. On a
+      // phone the words above fill more of the screen: the coil starts
+      // lower, well clear of them, and rises to the middle as they leave.
       const lift = still ? 0 : smooth(0.84, 0.94, p);
       const base = Math.min(s.w, s.h) * (s.w < 700 ? 0.18 : 0.15) * (1 - 0.2 * lift);
-      const cy = still && spot ? spot.offsetTop + spot.offsetHeight / 2 : s.h * (0.5 - 0.12 * lift);
+      const clear = s.w < 700 ? one.offsetTop + one.offsetHeight + 0.09 * s.h + 0.45 * base - s.h / 2 : 0;
+      const drop = Math.max(0, clear) * (1 - smooth(0.42, 0.54, p));
+      const cy = still && spot ? spot.offsetTop + spot.offsetHeight / 2 : s.h * (0.5 - 0.12 * lift) + drop;
       presence(s.ctx, s.w / 2, cy, still ? Math.min(base, spot ? spot.offsetHeight * 0.36 : base) : base, fig, t);
     };
     if (still) { reply.textContent = line; draw(0); return; }
