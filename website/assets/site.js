@@ -1,8 +1,8 @@
-/* vedaos.org — the page's motion, in Veda's own visual language:
+/* vedaos.org: the page's motion, in Veda's own visual language:
  *
  * - the hero's sky is the Aurora wallpaper (tools/assetgen/src/wallpapers.rs)
  *   brought to life in a WebGL shader; the ring's light is CSS;
- * - the agent's figure — OS1's ring and the coil from "Her" — is a port of
+ * - the agent's figure (OS1's ring and the coil from "Her") is a port of
  *   apps/shell/src/presence.rs and the states of apps/shell/src/agent.rs;
  * - everything else is scroll-driven, and runs only while on screen.
  *
@@ -568,7 +568,7 @@ void main() {
       say: 'Delete the City Lights photo.',
       steps: [['files', 'Moving “City Lights.jpg” to the Trash', 'files · delete · ~/Pictures/City Lights.jpg']],
       ask: { title: 'Move “City Lights.jpg” to the Trash', detail: '~/Pictures/City Lights.jpg can be restored from the Trash until it is emptied.' },
-      replies: { allow: 'Done — it’s in the Trash, if you change your mind.', deny: 'Okay, I’ve left it where it is.' },
+      replies: { allow: 'Done. It’s in the Trash, if you change your mind.', deny: 'Okay, I’ve left it where it is.' },
     },
   };
   const AUTOPLAY = ['remind', 'photo', 'list', 'memory'];
@@ -795,7 +795,7 @@ void main() {
       const allow = b.dataset.answer === 'allow';
       card.classList.add('answered');
       card.classList.toggle('denied', !allow);
-      result.textContent = allow ? 'Moved to the Trash — and it can come back from there. ' : 'Nothing was changed. ';
+      result.textContent = allow ? 'Moved to the Trash, and it can come back from there. ' : 'Nothing was changed. ';
       const again = document.createElement('button');
       again.type = 'button';
       again.className = 'again';

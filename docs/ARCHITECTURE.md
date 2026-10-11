@@ -268,7 +268,7 @@ has ended and left its stack, which is how thread libraries join threads.
   before the output is enabled. A pin's interrupt (a `GpioInt`
   connection) is an interrupt `devmgr` raises: a controller has one line
   for all its pins, which `devmgr` waits on, and when it fires each pin
-  with an interrupt pending raises its own — an edge, or level-triggered
+  with an interrupt pending raises its own: an edge, or level-triggered
   as its connection says, the pin masked until the interrupt is ended (the
   ending signals an event, and `devmgr` unmasks the pin, which fires again
   if its level lasts). Only a pad the firmware leaves in GPIO driver mode
@@ -763,8 +763,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
   Linux's GPIO character device in the guest). `cargo xtask acpi` shows
   what devmgr makes of a real machine's ACPI tables. The real machine
   stays the final check of what Linux drives there.
-* GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
-  mouse, keyboard, waits on log lines, screenshots — and fail on panics.
+* GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP
+  (mouse, keyboard, waits on log lines, screenshots) and fail on panics.
   QEMU's machine has an IOMMU, as PCs do, so the driver VM runs in every
   script, with the pointer, USB, the networks and the display.
   The sound cards' scripts also check QEMU's recording of the output for

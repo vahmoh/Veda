@@ -40,7 +40,7 @@ These rules apply to every crate in the repository.
 
 * Libraries are `#![no_std]` (plus `extern crate alloc;` when they allocate)
   so they can run inside Veda **and** be unit-tested on the host.
-  Tests use `#[cfg(test)] extern crate std;` — never `cfg_attr(not(test), no_std)`.
+  Tests use `#[cfg(test)] extern crate std;`, never `cfg_attr(not(test), no_std)`.
 * Floating-point functions such as `sqrt`, `sin`, `floor` or `powf` are **not**
   available in `core` on stable. Use `vmath` (`use vmath::FloatExt;` gives
   `x.sqrt()`, `x.sin()`, ... on `f32`/`f64`), or small local helpers in crates

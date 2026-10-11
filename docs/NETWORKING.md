@@ -79,8 +79,8 @@ out, and a system call only when the other side is asleep.
 * **Saved networks** (`/home/user/.config/wlan/networks`) are joined
   automatically, preferring the most recently used, then the strongest
   access point (5 GHz gets a small bonus).
-* **Lost connections** — the access point stops answering, disconnects
-  the station, or the signal fades — are re-established after a fresh scan,
+* **Lost connections** (the access point stops answering, disconnects
+  the station, or the signal fades) are re-established after a fresh scan,
   on any access point of the network. An access point that stopped
   answering is not tried again until it is heard again.
 * **Failed attempts** are retried with growing delays (2, 4, 8, 16, 32,
@@ -153,7 +153,7 @@ cargo xtask run --net wifi
 
 boots with the Wi-Fi radio only (`--net both` adds the wired card). airsim
 logs to `target/veda/airsim.log` and accepts commands on the control
-port printed at startup — one per line, answered by `ok` or `error: ...`:
+port printed at startup, one per line, answered by `ok` or `error: ...`:
 
 ```text
 list | status                       access points; radio, wired side and counters
@@ -335,8 +335,8 @@ built `no_std`:
   code for that target (Veda's user space keeps the fast code, chosen at
   run time from the processor's features).
 
-Everything else — the 802.11 protocol, the handshakes, SAE's protocol
-logic, the TLS stream and provider, the services and drivers — is in this
+Everything else (the 802.11 protocol, the handshakes, SAE's protocol
+logic, the TLS stream and provider, the services and drivers) is in this
 repository. The cryptography is checked against published test vectors:
 RFC 8439 (ChaCha20), RFC 7693 (BLAKE2s), RFC 3394 (AES key wrap), RFC 4493
 (AES-CMAC), the IEEE 802.11 PSK and PRF vectors, the IEEE 802.11i CCMP
@@ -374,9 +374,9 @@ and RSA signatures made by OpenSSL.
 * **GUI and recovery** (`cargo xtask test --ui`): `tests/ui/wifi-connect.vts`
   joins networks through the flyout (a wrong password first), Settings and
   the Terminal; `tests/ui/drivervm-wifi-recovery.vts` breaks the network
-  through airsim — access point gone, disconnection, wired side down, DNS
+  through airsim (access point gone, disconnection, wired side down, DNS
   failure, out of range, the medium going silent, rekeying and loss, the
-  Wi-Fi service killed — and checks that Veda recovers by itself each
+  Wi-Fi service killed) and checks that Veda recovers by itself each
   time; `tests/ui/network-failover.vts` unplugs and replugs the wired
   card's cable (QMP `set_link`) with Wi-Fi connected and checks that
   traffic moves between the interfaces; `tests/ui/drivervm-net.vts` and

@@ -2,7 +2,7 @@
 
 Veda runs C programs and builds them itself: the system image comes with
 GCC 16, GNU binutils and the musl C library, so a C program can be written,
-compiled and run inside Veda — in an emulator or on a PC booted from a USB
+compiled and run inside Veda, in an emulator or on a PC booted from a USB
 stick alike. The same toolchain, built to run on the development machine,
 cross-compiles C and C++ programs for Veda.
 
@@ -54,7 +54,7 @@ signal for a program that was ended: 130 after Ctrl+C, 134 after `abort`,
 139 after a crash). Keys typed while it runs go to it a line at a time,
 edited in the window, as on a Unix terminal in canonical mode: a read
 returns one line at most, and lines typed ahead stay for whoever reads
-next — the program, a program it started, or the shell once it has ended.
+next: the program, a program it started, or the shell once it has ended.
 A program can turn that off with `termios` and read keys one by one
 (`VMIN` and `VTIME` work as POSIX says). Ctrl+C ends it, with the programs
 it started; Ctrl+D ends its input. `>`, `>>` and `<` give it files, `|`
@@ -69,9 +69,9 @@ groups the pages by permissions), gives it an 8 MiB stack with guard pages
 below, and lays out the top of the stack as Linux does: arguments,
 environment and the auxiliary vector (program headers, entry point, page
 size, 16 random bytes, the hardware capabilities). It also sends the
-startup message every Veda process gets — for an ELF program, the working
-directory and the handles: the registry, the terminal, and the files and
-streams that become its descriptors (role `FD + n`).
+startup message every Veda process gets, which for an ELF program carries
+the working directory and the handles: the registry, the terminal, and the
+files and streams that become its descriptors (role `FD + n`).
 
 **The C library** is musl 1.2.6 (`ports/musl`). It is Linux's C library
 almost unchanged: where it would make a Linux system call, it calls
@@ -133,7 +133,7 @@ and wakes a waiter on, once the thread has left its stack).
 ## Limits
 
 * **No `fork` or `exec`.** Processes are started with `posix_spawn`.
-  Software that forks needs porting to it — most build tools and browsers
+  Software that forks needs porting to it; most build tools and browsers
   already use `posix_spawn` or `vfork`+`exec`, which ports to it directly.
   A started program inherits at most 62 descriptors (more fail with
   `EMFILE`): open files that children need not have with `O_CLOEXEC`.
@@ -170,12 +170,12 @@ and wakes a waiter on, once the thread has left its stack).
 2. builds the POSIX layer for `x86_64-unknown-none`;
 3. runs `ports/build.sh` to unpack and patch the
    sources and build, in `target/toolchain`:
-   * `cross/` — the cross toolchain for this machine: `x86_64-veda-gcc`,
+   * `cross/`, the cross toolchain for this machine: `x86_64-veda-gcc`,
      `x86_64-veda-g++` with the C++ library (libstdc++), and the binutils,
      with a sysroot laid out like Veda's `/system`. GCC is written in C++,
      so the C++ compiler is what builds the native GCC; programs in C++
      can use it too;
-   * `native/system/` — the toolchain built to run inside Veda: GCC (built
+   * `native/system/`, the toolchain built to run inside Veda: GCC (built
      on this machine, to run on Veda, making programs for Veda), binutils,
      GMP, MPFR and MPC, the C library and its headers.
 
@@ -222,10 +222,10 @@ beside it.
 
 ## Tests
 
-* `tests/c/posix.c` checks the C library and the POSIX layer — the
+* `tests/c/posix.c` checks the C library and the POSIX layer (the
   startup, standard I/O, the heap, `mmap` and `madvise`, files,
   directories, pipes, threads and TLS, clocks, signals, `posix_spawn` and
-  wait statuses — and `tests/c/cxx.cc` the C++ library: exceptions (across
+  wait statuses), and `tests/c/cxx.cc` the C++ library: exceptions (across
   threads too), run-time types, static constructors, containers, streams,
   threads. `systest` runs them inside Veda with `tests/c/hello.c`, each
   linked both at a fixed address and position-independent, and tests the

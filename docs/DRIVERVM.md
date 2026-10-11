@@ -1,6 +1,6 @@
 # The driver VM
 
-Veda drives only what it cannot do without — the disks it starts from —
+Veda drives only what it cannot do without (the disks it starts from)
 and takes everything else from Linux: GPUs and displays, audio, networks,
 Wi-Fi, Bluetooth, USB, input, cameras, and the thousands of devices Linux
 has drivers for ([Status](#status) says how far that has come). Linux runs
@@ -51,8 +51,8 @@ Each one came from what the alternatives would cost.
    `--cfg veda_guest`: its system calls on Veda's objects (channels,
    events, VMOs, waits) become operations on `/dev/veda`, which the guest's
    kernel turns into hypercalls, which the monitor carries out on a handle
-   table of the guest's own. So `vipc` and `vproto` — every protocol Veda
-   has — work in the guest unchanged; a driver for Linux is written exactly
+   table of the guest's own. So `vipc` and `vproto` (every protocol Veda
+   has) work in the guest unchanged; a driver for Linux is written exactly
    like a Veda driver, against Linux's device interfaces instead of the
    hardware. The objects stay in Veda; the guest holds numbers that only
    the monitor gives meaning to, so it reaches exactly what it was given.
@@ -67,7 +67,7 @@ Each one came from what the alternatives would cost.
    and the interrupt lines they use, so that Linux finds them as on a PC. A small patch to Linux
    (`ports/linux`, modelled on Linux's Jailhouse and ACRN guests) makes it
    the *Veda platform*. In return the hypervisor emulates no instruction
-   at all — no MMIO decoding, the largest source of hypervisor bugs — and
+   at all (no MMIO decoding, the largest source of hypervisor bugs), and
    Linux boots in about 0.1 s. The one device of the PC's own the guest
    reaches is the keyboard controller (the i8042), whose two ports the
    monitor reads and writes for it (the processor says which port and
@@ -78,9 +78,9 @@ Each one came from what the alternatives would cost.
    IOMMU domain of its devices) and `Vcpu` objects (a virtual processor
    that a thread of the monitor runs), and handles in the kernel only what
    must be fast or belongs to the processor: the local APIC and its timer,
-   `cpuid`, MSRs, `hlt`, control registers. Everything that is policy —
-   the guest's memory map, how it boots, its hypercalls, the bridge, which
-   devices it gets — is the monitor's, `drivervm`, an ordinary process.
+   `cpuid`, MSRs, `hlt`, control registers. Everything that is policy
+   (the guest's memory map, how it boots, its hypercalls, the bridge, which
+   devices it gets) is the monitor's, `drivervm`, an ordinary process.
 
 5. **Devices are given whole, behind the IOMMU.** A PCI function given to
    the guest has its BARs mapped into the guest, its DMA translated by the
@@ -205,7 +205,7 @@ nor offers it to the next.
 boot every device is in the host's domain, which passes requests through:
 Veda's own drivers reach memory as before. `guest_attach_device` puts the
 function in its guest's domain, whose second-level page tables mirror the
-guest's memory — every `guest_map` and `guest_unmap` updates the EPT and
+guest's memory: every `guest_map` and `guest_unmap` updates the EPT and
 the domain together, so a device reaches exactly what the guest's
 processors reach, at the same addresses, and unmapping makes devices
 forget the pages (an IOTLB invalidation) before they can be reused. The
@@ -469,7 +469,7 @@ moves frames and answers nothing on the network itself.
 **Wi-Fi** (`guest/wifi`). Each of Linux's Wi-Fi radios is offered to
 Veda's Wi-Fi service as a *managed* radio ([Networking](NETWORKING.md)):
 Linux's 802.11 stack is its MLME, on the service's commands, through
-nl80211 — it scans, sends the authentication and association frames,
+nl80211: it scans, sends the authentication and association frames,
 retries, encrypts, and watches the link; the service decides what to
 join, does SAE and the key handshakes, and gives Linux the session keys
 only. There is no supplicant in the guest. The driver's netlink socket

@@ -1,11 +1,11 @@
 # The voice agent
 
-Veda has a voice that lives in it. The agent — called Veda too, until you
-rename it — is not an application you open: it is always there, a small
+Veda has a voice that lives in it. The agent (called Veda too, until you
+rename it) is not an application you open: it is always there, a small
 ring at the right of the taskbar, asleep until you call it. You talk to it
 as you would to a person in the room; it answers in its own voice and does things on the
-computer for you — opens and arranges applications, writes in the Text
-Editor, works with files, plays music, changes settings, sets timers —
+computer for you (opens and arranges applications, writes in the Text
+Editor, works with files, plays music, changes settings, sets timers)
 through the same operations the keyboard and mouse use. It remembers what
 you tell it about yourself, and it asks before doing anything that is hard
 to undo.
@@ -22,7 +22,7 @@ the models and the voice are system settings (Settings → Agent).
   first thing it hears.
 * **Click its ring** at the right of the taskbar, or press **Win+Space**:
   the agent's window opens and it listens.
-* Talk naturally. Interrupt it whenever you like — it stops speaking at
+* Talk naturally. Interrupt it whenever you like: it stops speaking at
   once and listens. Change your mind, ask follow-up questions, or ask it to
   do several things in a row.
 * Say goodbye ("thanks, that's all") and it goes back to sleep after its
@@ -44,8 +44,8 @@ is closed.
 * **Asleep** (`services/agent/src/listen.rs`). With "Answer when someone
   says its name" on, the microphone stays open and a voice detector
   (`vaudio::vad`) runs on the computer; nothing is sent anywhere while
-  nobody speaks. When someone does, the speech — with 0.6 s from before,
-  so the first word is not cut — is streamed to Deepgram's Nova-3
+  nobody speaks. When someone does, the speech (with 0.6 s from before,
+  so the first word is not cut) is streamed to Deepgram's Nova-3
   recogniser, with the agent's name as a key term, until three seconds of
   quiet, eight seconds without a word, or a minute. Sound that brought no
   words (music, a television) is then taken for a background: until it
@@ -72,7 +72,7 @@ is closed.
   voice from Settings, the agent's instructions (`vagent::prompt`: its
   character, how it talks, what it can do, what it remembers about you,
   the time and what is on the screen, and every application's actions,
-  and how the last conversation ended — for reference only: each
+  and how the last conversation ended, for reference only, as each
   conversation starts afresh) and its functions.
   `mip_opt_out` keeps the audio out of Deepgram's model improvement.
   While a conversation is on, the agent asks the audio service to duck
@@ -94,15 +94,15 @@ is closed.
   down as answers play through: a jitter buffer.
 * **Not hearing itself.** The microphone is echo-cancelled in the audio
   service (`vaudio::aec`, with the mixed speaker output as the
-  reference). No canceller removes everything — loudspeakers a hand away
+  reference). No canceller removes everything (loudspeakers a hand away
   from the microphone, a hypervisor's long audio path, the first second
-  before it has learnt the room — and what is left of the agent's voice is
+  before it has learnt the room), and what is left of the agent's voice is
   still speech to the recogniser, which would take it for you: the agent
   would stop mid-sentence and answer words nobody said. So while the
   agent's voice is audible (and for its echo's length after), an echo
   gate (`vagent::gate`) sends silence instead of the microphone, unless
-  the microphone is clearly louder than the echo could be — you talking
-  over it — and then it sends the last 300 ms too, so your first words are
+  the microphone is clearly louder than the echo could be (you talking
+  over it), and then it sends the last 300 ms too, so your first words are
   not lost. Beside the cleaned microphone the audio service delivers what
   was playing when it was recorded (the voice, and music under it, say)
   and the microphone as recorded. The gate learns how loud the echo is in
@@ -120,8 +120,8 @@ is closed.
   that needs your consent answers "waiting for approval", and the outcome
   comes back later as a notice (`[System] The user allowed …`).
 * **Ending.** `end_conversation` (after a goodbye) closes the conversation
-  once the goodbye has been played — unless you talk over it or ask for
-  something else — and the agent falls asleep and listens for its name
+  once the goodbye has been played (unless you talk over it or ask for
+  something else), and the agent falls asleep and listens for its name
   again.
 
 ## What it can do
@@ -158,7 +158,7 @@ in one line; `app_actions` gives the details.
 * **The agent service enforces this**, not the language model: a function
   call that needs consent is held and only runs after you click Allow.
   Only the desktop shell may answer an approval, and only Settings may
-  change the agent's settings — both are recognised by their process
+  change the agent's settings: both are recognised by their process
   identity, which init attaches to every connection (system service names
   cannot be taken by other programs).
 * Requests appear in the agent's window or as a notification, with what
@@ -179,8 +179,8 @@ in one line; `app_actions` gives the details.
 
 ## Memory
 
-The agent remembers what you tell it about yourself — your name, people in
-your life, plans, how you like things done — when you say it plainly or
+The agent remembers what you tell it about yourself (your name, people in
+your life, plans, how you like things done) when you say it plainly or
 ask it to, never its own guesses. It also notes which applications you use
 at what times of day, and keeps the last turns of recent conversations, so
 that it can tell you what you talked about (a new conversation starts
@@ -193,8 +193,8 @@ know about me?", "forget where I work").
 ## Settings → Agent
 
 * **Deepgram**: the API key (checked with Deepgram when saved).
-* **Voice**: the agent's name (which it answers to), its voice — Deepgram's
-  Aura-2 voices, with a spoken preview — and its speaking rate.
+* **Voice**: the agent's name (which it answers to), its voice (Deepgram's
+  Aura-2 voices, with a spoken preview) and its speaking rate.
 * **Intelligence**: the language model (Deepgram's catalogue, marked with
   Deepgram's price tier: Standard models cost less per minute than
   Advanced ones) and the speech recognition model.
@@ -268,7 +268,7 @@ is a compact example):
   sensitive for what is hard to undo or reaches outside; destructive for
   deleting or discarding. A sensitive or destructive action may run
   minutes after it was asked for: name its target in the arguments (a file
-  path, a document's name — never "the selected one"), look it up again
+  path, a document's name, never "the selected one"), look it up again
   when it runs, refuse if it is gone, and match destructive targets
   exactly.
 * **State** is compact JSON of what the window shows: the current
@@ -294,7 +294,7 @@ sleep between events.
   speaks the Voice Agent protocol (answers `Settings`, records what the
   agent sends, sends function calls, voice, interruptions) and the
   streaming recognition protocol (`agent-hear` makes it "hear" a sentence).
-  Scripts in `tests/agent/` use it — no network, no cost, deterministic:
+  Scripts in `tests/agent/` use it (no network, no cost, deterministic):
   `agent-connected`, `agent-call FUNCTION 'ARGS'`, `agent-result TEXT` (in
   the function's result), `agent-mark` and `agent-expect TEXT` (in what the
   agent sent), `agent-speak SECONDS`, `agent-interrupt`, `agent-hear TEXT`,

@@ -19,20 +19,20 @@ is published.
 The animations are Veda's own, not look-alikes:
 
 * **The hero's sky** is the *Aurora* wallpaper
-  (`tools/assetgen/src/wallpapers.rs`) — its blooms, its three silky ribbons
-  with their cores, filaments, halos and curtains of rays — rewritten as a
-  WebGL shader, so that the ribbons flow. It is drawn below the screen's
+  (`tools/assetgen/src/wallpapers.rs`), with its blooms and its three silky
+  ribbons (their cores, filaments, halos and curtains of rays), rewritten
+  as a WebGL shader, so that the ribbons flow. It is drawn below the screen's
   resolution (it is all soft light), and only while it is in view.
 * **The ring and its light** are the boot splash and the startup sequence
   (`lib/splash`, `services/compositor/src/startup.rs`): the same proportions,
   the same falloff of the light, its breath every 2.6 seconds and its glint
-  going round every 2 — in CSS, so they are there before any script runs.
-  Scrolling, the ring flies into the logo in the header.
+  going round every 2 seconds, drawn in CSS so that they are there before
+  any script runs. Scrolling, the ring flies into the logo in the header.
 * **The agent's figure** in the demo and in "Add a key. Watch it wake." is a
   port of `apps/shell/src/presence.rs` and `agent.rs`: OS1's ring from *Her*,
   breathing while it listens, trembling and glowing while it speaks, a light
-  running round it while it thinks, and the film's coil — a ribbon wound three
-  times around a spinning loop — that turns to face you and becomes the ring
+  running round it while it thinks, and the film's coil (a ribbon wound three
+  times around a spinning loop) that turns to face you and becomes the ring
   as the agent wakes.
 
 Colours, type (Inter) and icons (the paths of `lib/ui/src/icons.rs`) are the
