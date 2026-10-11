@@ -77,6 +77,25 @@ fn looks_like_a_view(px: &[u32], w: u32, h: u32) {
 }
 
 #[test]
+fn says_what_renders() {
+    use crate::render::device_name;
+    // Intel's GPUs as iris names them in the driver VM, and as virgl does
+    // under QEMU (the host's GPU, through QEMU).
+    assert_eq!(device_name("Mesa Intel(R) Graphics (ADL GT2)"), "Intel Graphics (ADL GT2)");
+    assert_eq!(
+        device_name("virgl (Mesa Intel(R) Iris(R) Xe Graphics (TGL GT2))"),
+        "Intel Iris Xe Graphics (TGL GT2) through QEMU"
+    );
+    assert_eq!(device_name("virgl (NVIDIA GeForce RTX 3060/PCIe/SSE2)"), "NVIDIA GeForce RTX 3060 through QEMU");
+    assert_eq!(
+        device_name("virgl (llvmpipe (LLVM 19.1.7, 256 bits))"),
+        "llvmpipe (LLVM 19.1.7, 256 bits) through QEMU"
+    );
+    assert_eq!(device_name("Veda software renderer"), "Veda software renderer");
+    assert_eq!(Quality::for_renderer("virgl (llvmpipe (LLVM 19.1.7, 256 bits))"), Quality::Low);
+}
+
+#[test]
 fn renders_veda_bay_in_software() {
     let (w, h) = (160, 90);
     let world = World::new();

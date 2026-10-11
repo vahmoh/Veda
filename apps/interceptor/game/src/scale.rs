@@ -1,5 +1,5 @@
-//! The resolution the scene is rendered at: as high as the frame rate
-//! allows.
+//! The resolution the scene is rendered at in software: as high as the
+//! frame rate allows.
 //!
 //! Frames running slower than the target make it try the next lower
 //! resolution; a change is kept only if frames got faster, since what

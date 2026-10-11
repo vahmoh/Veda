@@ -56,6 +56,31 @@ impl Quality {
     }
 }
 
+/// What renders, in words, from the renderer's name (`GL_RENDERER`): the
+/// GPU as Mesa names it, without the trademarks; under QEMU, whose virgl
+/// renders on the host's GPU, the host's, saying so; or the software
+/// renderer.
+pub fn device_name(renderer: &str) -> String {
+    let (name, host) = match renderer.strip_prefix("virgl (").and_then(|r| r.strip_suffix(')')) {
+        Some(inner) => (inner, true),
+        None => (renderer, false),
+    };
+    let name = name.strip_prefix("Mesa ").unwrap_or(name);
+    // NVIDIA's own driver adds the bus and the instruction set.
+    let name = name.split("/PCIe").next().unwrap_or(name);
+    let mut words = String::new();
+    for word in name.replace("(R)", "").replace("(TM)", "").split_whitespace() {
+        if !words.is_empty() {
+            words.push(' ');
+        }
+        words.push_str(word);
+    }
+    if host {
+        words.push_str(" through QEMU");
+    }
+    words
+}
+
 /// A camera.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {

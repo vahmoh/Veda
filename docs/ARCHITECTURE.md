@@ -693,8 +693,10 @@ the voice agent's link.
   drawn instanced (about 130 draws a frame). Smoke, spray and sparks are
   particles; skid marks a ring of decals copied to the GPU as they are
   made; rain falls through a box that follows the camera, entirely on the
-  GPU. A software renderer gets fewer and smaller of everything, tone
-  mapped in each shader; the resolution adapts to the frame rate.
+  GPU. The game starts full screen, and on a GPU renders at the window's
+  full resolution (Full HD on a 1080p screen) whatever that costs. A
+  software renderer gets fewer and smaller of everything, tone mapped in
+  each shader, at a resolution that adapts to the frame rate.
 * **The simulation** steps at 120 Hz whatever the frame rate (frames are
   drawn between the last two steps, and the cameras film the cars as
   drawn: the chase camera's springs are solved rather than stepped, so
@@ -718,6 +720,12 @@ the voice agent's link.
   the tunnel, and limited, in a thread of their own. The music is loops of
   stems that `tools/musicgen` renders at build time; the chase's second
   stem joins as the suspect is caught up with.
+* **How it runs** shows in a corner: the frame rate and what renders (the
+  GPU as Mesa names it, the host's under QEMU, or the processor); F3 adds
+  the renderer's statistics and the last frames' lengths as a graph, or
+  hides it all. Every 5 s the log has the frame rate and the longest frame
+  with what its time went to (moving the game on, rendering, waiting for
+  the window, reading the picture back, drawing over it).
 
 ## Audio
 

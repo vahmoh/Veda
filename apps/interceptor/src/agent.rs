@@ -15,7 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use interceptor_game::camera::View as CameraView;
-use interceptor_game::career::{self, MISSIONS, SUSPECTS, Units};
+use interceptor_game::career::{self, MISSIONS, SUSPECTS, Stats, Units};
 use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::pursuit::State;
 use interceptor_game::session::{self, Mode, Phase, Quick};
@@ -89,7 +89,13 @@ pub fn info() -> AppAgentInfo {
                 .param("music", "integer", "The music's volume, 0 to 100", false)
                 .choice("speed_units", "How the speedometer counts", false, &["km/h", "mph"])
                 .choice("camera", "The camera in play", false, &views)
-                .param("statistics", "boolean", "Show the frame rate and the renderer's statistics", false)
+                .choice(
+                    "statistics",
+                    "What is shown of how the game runs: off, fps (the frame rate and the GPU rendering) or \
+                     detailed (the renderer's statistics as well)",
+                    false,
+                    &["off", "fps", "detailed"],
+                )
                 .param("full_screen", "boolean", "Fill the screen", false)
                 .build(),
         ],
@@ -168,7 +174,7 @@ pub fn state(app: &App, in_front: bool) -> Value {
             "music" => (s.music * 100.0).round() as u32,
             "speed_units" => s.units.name(),
             "camera" => VIEWS.iter().find(|x| x.1 == s.view).map_or("chase", |x| x.0),
-            "statistics" => s.stats,
+            "statistics" => s.stats.key(),
             "full_screen" => s.fullscreen,
         },
     );
@@ -423,8 +429,9 @@ impl App {
                     self.session.game.follow.view = s.view;
                     changed = true;
                 }
-                if let Some(b) = arg_bool(args, "statistics") {
-                    s.stats = b;
+                if let Some(v) = arg_opt_str(args, "statistics") {
+                    let options: Vec<(&str, Stats)> = Stats::ALL.iter().map(|&x| (x.key(), x)).collect();
+                    s.stats = pick("statistics setting", v, &options)?;
                     changed = true;
                 }
                 if let Some(b) = arg_bool(args, "full_screen") {

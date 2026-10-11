@@ -136,15 +136,15 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(world: Arc<World>, speakers: Option<Speakers>) -> App {
-        let store = Store::new();
-        let save = store.load();
+    /// The game in `world`, with what `store` kept (`save`); the window is
+    /// already full screen if the save says so.
+    pub fn new(world: Arc<World>, speakers: Option<Speakers>, store: Store, save: Save) -> App {
         let session = Session::new(world.clone(), Mode::Showcase);
         App {
             world,
             session,
             screen: Screen::Title,
-            fullscreen: save.settings.fullscreen.then_some(true),
+            fullscreen: None,
             save,
             store,
             quick: Quick::default(),
@@ -236,7 +236,7 @@ impl App {
                 Item::setting("MUSIC", format!("{}%", (s.music * 100.0).round() as u32)),
                 Item::setting("SPEED IN", s.units.name().into()),
                 Item::setting("CAMERA", VIEWS.iter().find(|v| v.0 == s.view).map_or("Chase", |v| v.1).into()),
-                Item::setting("STATISTICS", on_off(s.stats)),
+                Item::setting("STATISTICS", s.stats.name().into()),
                 Item::setting("FULL SCREEN", on_off(s.fullscreen)),
                 Item::button("BACK"),
             ],
@@ -307,6 +307,7 @@ impl App {
             keys::RIGHT | keys::D => self.adjust(sel, 1),
             keys::ENTER | keys::KPENTER | keys::SPACE if !repeat => self.choose(sel),
             keys::ESC | keys::BACKSPACE if !repeat => self.back(),
+            keys::F3 if !repeat => self.cycle_stats(),
             keys::F11 if !repeat => self.toggle_fullscreen(),
             _ => {}
         }
@@ -342,10 +343,7 @@ impl App {
                 self.store_save();
             }
             keys::R => game.reset_player(),
-            keys::F3 => {
-                self.save.settings.stats = !self.save.settings.stats;
-                self.store_save();
-            }
+            keys::F3 => self.cycle_stats(),
             keys::F8 => {
                 let on = !game.autopilot;
                 let target = self.session.chase.filter(|c| c.on()).map(|c| c.suspect);
@@ -355,6 +353,12 @@ impl App {
             keys::F11 => self.toggle_fullscreen(),
             _ => {}
         }
+    }
+
+    /// F3: the frame rate and the GPU, the statistics as well, nothing.
+    fn cycle_stats(&mut self) {
+        self.save.settings.stats = self.save.settings.stats.step(1);
+        self.store_save();
     }
 
     fn toggle_fullscreen(&mut self) {
@@ -449,7 +453,7 @@ impl App {
                         s.view = cycle(&VIEWS, |v| v == s.view, dir);
                         self.session.game.follow.view = s.view;
                     }
-                    4 => s.stats = !s.stats,
+                    4 => s.stats = s.stats.step(dir),
                     5 => {
                         s.fullscreen = !s.fullscreen;
                         self.fullscreen = Some(s.fullscreen);

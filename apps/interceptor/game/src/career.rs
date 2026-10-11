@@ -290,6 +290,46 @@ impl Units {
     }
 }
 
+/// What is shown of how the game runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stats {
+    Off,
+    /// The frame rate, and the GPU that renders (or that the processor
+    /// does).
+    Fps,
+    /// And where frames' time goes: rendering, showing, the resolution,
+    /// the draws, the last frames' lengths.
+    Detailed,
+}
+
+impl Stats {
+    pub const ALL: [Stats; 3] = [Stats::Off, Stats::Fps, Stats::Detailed];
+
+    /// The next (or the one before, `dir` -1), round.
+    pub fn step(self, dir: i32) -> Stats {
+        let i = Stats::ALL.iter().position(|&s| s == self).unwrap_or(0) as i32;
+        Stats::ALL[(i + dir).rem_euclid(Stats::ALL.len() as i32) as usize]
+    }
+
+    /// As the options show it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Stats::Off => "Off",
+            Stats::Fps => "FPS and GPU",
+            Stats::Detailed => "Detailed",
+        }
+    }
+
+    /// As the save file and the voice agent say it.
+    pub fn key(self) -> &'static str {
+        match self {
+            Stats::Off => "off",
+            Stats::Fps => "fps",
+            Stats::Detailed => "detailed",
+        }
+    }
+}
+
 /// The player's settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
@@ -298,14 +338,14 @@ pub struct Settings {
     pub music: f32,
     pub units: Units,
     pub view: View,
-    /// The frame rate and the renderer's statistics.
-    pub stats: bool,
+    pub stats: Stats,
+    /// Full screen (as it starts), or in a window.
     pub fullscreen: bool,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { effects: 0.9, music: 0.6, units: Units::Kmh, view: View::Chase, stats: false, fullscreen: false }
+        Settings { effects: 0.9, music: 0.6, units: Units::Kmh, view: View::Chase, stats: Stats::Fps, fullscreen: true }
     }
 }
 
@@ -370,7 +410,8 @@ impl Save {
         t.push_str(&format!("effects {:.2}\nmusic {:.2}\n", s.effects, s.music));
         t.push_str(&format!("units {}\n", if s.units == Units::Mph { "mph" } else { "kmh" }));
         t.push_str(&format!("camera {}\n", view_name(s.view)));
-        t.push_str(&format!("stats {}\nfullscreen {}\n", on_off(s.stats), on_off(s.fullscreen)));
+        t.push_str(&format!("statistics {}\n", s.stats.key()));
+        t.push_str(&format!("screen {}\n", if s.fullscreen { "full" } else { "window" }));
         t
     }
 
@@ -402,17 +443,23 @@ impl Save {
                         s.view = view;
                     }
                 }
-                ["stats", v] => s.stats = *v == "on",
-                ["fullscreen", v] => s.fullscreen = *v == "on",
+                ["statistics", v] => {
+                    if let Some(&stats) = Stats::ALL.iter().find(|x| x.key() == *v) {
+                        s.stats = stats;
+                    }
+                }
+                ["screen", "full"] => s.fullscreen = true,
+                ["screen", "window"] => s.fullscreen = false,
+                // Saves from before the frame rate was shown and the game
+                // started full screen, by default: they kept every setting,
+                // so only what differed from those defaults was chosen.
+                ["stats", "on"] => s.stats = Stats::Detailed,
+                ["fullscreen", "on"] => s.fullscreen = true,
                 _ => {}
             }
         }
         save
     }
-}
-
-fn on_off(b: bool) -> &'static str {
-    if b { "on" } else { "off" }
 }
 
 /// `secs` as minutes, seconds and tenths ("1:05.3").
@@ -448,9 +495,16 @@ mod tests {
         save.settings.units = Units::Mph;
         save.settings.view = View::Bonnet;
         save.settings.music = 0.25;
+        save.settings.stats = Stats::Off;
+        save.settings.fullscreen = false;
         let back = Save::parse(&save.to_text());
         assert_eq!(back.best[0].map(|b| b.stars), Some(2));
         assert_eq!(back.settings, save.settings);
+        // A save from before shows the frame rate unless it showed the
+        // statistics, and starts full screen.
+        let old = Save::parse("stats off\nfullscreen off\n").settings;
+        assert_eq!((old.stats, old.fullscreen), (Stats::Fps, true));
+        assert_eq!(Save::parse("stats on\n").settings.stats, Stats::Detailed);
         assert!(back.unlocked(1) && !back.unlocked(2));
         // Garbage is ignored.
         let odd = Save::parse("mission 99 3 1 1\nmission 1 7 10 10\neffects loud\nunits furlongs\n");

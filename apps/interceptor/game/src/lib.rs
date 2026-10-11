@@ -26,7 +26,7 @@
 //! | [`pursuit`] | a chase: takedowns, busts, escapes |
 //! | [`career`] | the missions, their scores and stars, and what is saved |
 //! | [`session`] | a mission, a quick chase, a patrol or the menus' showcase, start to end |
-//! | [`scale`] | the resolution the scene is rendered at |
+//! | [`scale`] | the resolution the software renderer renders at |
 //! | [`audio`] | the sounds: engines, sirens, tyres, crashes, the cues, the music |
 //! | [`sound`] | what the game sounds like, frame by frame |
 

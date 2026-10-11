@@ -4,15 +4,18 @@
 //! sounds) is `interceptor_game`; this program gives it a window, the
 //! keyboard and the mouse, a renderer (the GPU through Veda's renderer
 //! where there is one, the software renderer otherwise) and the speakers,
-//! and draws the menus and the dashboard over its frames. The scene is
-//! rendered at a resolution that adapts to what rendering costs, and
-//! scaled to the window.
+//! and draws the menus and the dashboard over its frames. It starts full
+//! screen (Full HD on a 1080p display); on a GPU the scene is rendered at
+//! the window's full resolution, while the software renderer's adapts to
+//! what rendering costs, scaled to the window.
 //!
 //! In play: arrows or WASD drive, Space is the handbrake, Shift the
 //! nitrous, Q the siren, H the horn, C changes the camera, R puts the car
-//! back on the road, Esc pauses; F3 shows statistics, F11 toggles full
-//! screen, F8 lets the computer drive (for demonstrations). The voice
-//! agent can start, pause and change things too ([`agent`]).
+//! back on the road, Esc pauses; F11 toggles full screen, F8 lets the
+//! computer drive (for demonstrations). The frame rate and the GPU that
+//! renders are shown in a corner ([`perf`]); F3 adds where frames' time
+//! goes, or hides it all. The voice agent can start, pause and change
+//! things too ([`agent`]).
 
 #![no_std]
 #![no_main]
@@ -24,6 +27,7 @@ mod app;
 mod hud;
 mod menu;
 mod paint;
+mod perf;
 mod speakers;
 mod store;
 
@@ -31,25 +35,32 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 
+use interceptor_game::career::Stats;
 use interceptor_game::render::{Quality, Renderer};
-use interceptor_game::scale::{SCALES, Scale};
+use interceptor_game::scale::Scale;
 use interceptor_game::world::World;
 use vabi::{WaitItem, signals};
 use vgl::backend::Present;
 use vgl::{Config, gl};
-use vproto::display::{WindowEvent, WindowSpec, WindowState};
+use vproto::display::{Cursor, WindowEvent, WindowSpec, WindowState};
 use vui::window::{Window, connect};
 
 use app::{App, Back, Screen};
+use perf::{Perf, Phases};
 use speakers::Speakers;
+use store::Store;
 
 vrt::entry!(main);
 
-/// The frame time to keep to (ms): about 58 frames a second.
-const TARGET_MS: f32 = 17.2;
+/// The frame time the software renderer keeps to (ms): about 29 frames
+/// a second.
+const SOFTWARE_TARGET_MS: f32 = 34.4;
 
-fn internal_size(w: i32, h: i32, scale: f32) -> (i32, i32) {
-    (((w as f32 / scale) as i32).max(32), ((h as f32 / scale) as i32).max(18))
+/// The size to render at for a `w` x `h` window: all of it on a GPU, as
+/// `scale` has it in software.
+fn internal_size(w: i32, h: i32, scale: Option<&Scale>) -> (i32, i32) {
+    let divisor = scale.map_or(1.0, Scale::divisor);
+    (((w as f32 / divisor) as i32).max(32), ((h as f32 / divisor) as i32).max(18))
 }
 
 /// Waits until the window can take a frame, keeping the events that
@@ -83,6 +94,10 @@ fn main() -> i32 {
             return 1;
         }
     };
+    // The settings say whether it starts full screen (as it does unless
+    // played in a window last time): so from its first frame.
+    let store = Store::new();
+    let save = store.load();
     let mut spec = WindowSpec::new("Interceptor", 1280, 720);
     spec.app_id = "interceptor".into();
     spec.min_width = 480;
@@ -94,6 +109,9 @@ fn main() -> i32 {
             return 1;
         }
     };
+    if save.settings.fullscreen {
+        window.set_state(WindowState::Fullscreen);
+    }
     // The sounds start loading while the world is made.
     let speakers = Speakers::start();
     let (mut text, fonts) = vui::load_fonts();
@@ -113,21 +131,21 @@ fn main() -> i32 {
         }
     }
 
-    let (iw, ih) = internal_size(window.width, window.height, SCALES[0]);
+    let (iw, ih) = internal_size(window.width, window.height, None);
     let config = Config { width: iw as u32, height: ih as u32, ..Config::default() };
     let mut gl = vgl::veda::context(config);
     let renderer_name: String = gl.get_string(gl::RENDERER).unwrap_or_default();
     let quality = Quality::for_renderer(&renderer_name);
-    // A software renderer starts small and may go smaller; a GPU starts at
-    // the window's resolution and goes down no further than 1/2.
-    let mut scale =
-        if quality == Quality::Low { Scale::new(4, 6, TARGET_MS * 2.0) } else { Scale::new(0, 4, TARGET_MS) };
+    // A GPU renders every frame at the window's full resolution (whatever
+    // that costs: the frame rate shows it); a software renderer starts at
+    // half of it, and goes up or down to keep to its frame rate.
+    let mut scale = (quality == Quality::Low).then(|| Scale::new(4, 6, SOFTWARE_TARGET_MS));
     vrt::println!("{} ({:?} quality)", renderer_name, quality);
 
     let t0 = vrt::time::now_ns();
     let world = Arc::new(World::new());
     let t1 = vrt::time::now_ns();
-    let mut app = App::new(world.clone(), speakers);
+    let mut app = App::new(world.clone(), speakers, store, save);
     let mut renderer = match Renderer::new(&mut gl, &world, app.session.env(), quality) {
         Ok(r) => r,
         Err(e) => {
@@ -148,23 +166,31 @@ fn main() -> i32 {
 
     let start = vrt::time::now_ns();
     let mut last = start;
-    let (mut frames, mut fps, mut fps_since) = (0u32, 0.0f32, start);
+    let mut perf = Perf::new(renderer_name, start);
+    // When the last frame ended (where the next one's time starts).
+    let mut frame_end = start;
     let mut log_since = start;
-    let mut render_ms = 0.0f32;
-    let mut show_ms = 0.0f32;
     let mut judged = start;
     let mut screen = app.screen;
     // The voice agent's link, and whether the window has the keyboard (play
     // pauses when it has not).
     let mut link = agent::Link::start();
     let mut focused = true;
+    // The pointer over the game: hidden while driving (the keyboard
+    // drives), shown on the menus, which it works too; and where it last
+    // was (it selects what it moves onto, not what comes under it).
+    let mut cursor = Cursor::Arrow;
+    let mut pointer = None;
     loop {
         let mut events = core::mem::take(&mut pending);
         events.extend(window.poll_events());
         for ev in events {
             match ev {
                 WindowEvent::Key { code, pressed, repeat, .. } => app.key(code, pressed, repeat),
-                WindowEvent::PointerMove { x, y } => app.point(x, y),
+                WindowEvent::PointerMove { x, y } if pointer != Some((x, y)) => {
+                    pointer = Some((x, y));
+                    app.point(x, y);
+                }
                 WindowEvent::PointerButton { x, y, button: 0, pressed: true, .. } => app.click(x, y),
                 WindowEvent::Focus { focused: f } => {
                     focused = f;
@@ -187,12 +213,19 @@ fn main() -> i32 {
         if let Some(full) = app.fullscreen.take() {
             window.set_state(if full { WindowState::Fullscreen } else { WindowState::Normal });
         }
+        let pointer = if app.screen == Screen::Playing { Cursor::Hidden } else { Cursor::Arrow };
+        if pointer != cursor {
+            cursor = pointer;
+            window.set_cursor(cursor);
+        }
         if app.screen != screen {
             screen = app.screen;
             vrt::println!("screen {:?}", screen);
         }
         let now = vrt::time::now_ns();
-        let dt = ((now - last) as f64 / 1e9).clamp(0.0, 0.25) as f32;
+        // Never a negative frame (from a clock read on another processor a
+        // hair behind), nor more than a quarter of a second.
+        let dt = (now.saturating_sub(last) as f64 / 1e9).min(0.25) as f32;
         last = now;
         app.update(dt);
         if app.relight {
@@ -206,7 +239,7 @@ fn main() -> i32 {
         app.sound(dt);
 
         // Render at the internal resolution.
-        let (iw, ih) = internal_size(window.width, window.height, scale.divisor());
+        let (iw, ih) = internal_size(window.width, window.height, scale.as_ref());
         gl.resize(iw as u32, ih as u32);
         let t_render = vrt::time::now_ns();
         let frame = app.session.picture(&cars, &lights);
@@ -232,46 +265,81 @@ fn main() -> i32 {
             hud::play(&mut canvas, &mut text, &fonts, &app.session, &map, settings.units, app.clock);
         }
         menu::draw(&mut canvas, &mut text, &fonts, &mut app);
-        if settings.stats {
-            let lines = [
-                format!("{fps:.1} fps   render {render_ms:.1} ms   show {show_ms:.1} ms"),
-                format!("{iw} x {ih} -> {cw} x {ch}"),
-                format!("{} draws, {} triangles", renderer.stats.draws, renderer.stats.triangles),
-                renderer_name.clone(),
-            ];
-            hud::stats(&mut canvas, &mut text, &fonts, &lines);
+        if settings.stats != Stats::Off {
+            // Top left in play, clear of the dashboard; top right on the
+            // menus, which run down the left.
+            let s = paint::scale(ch);
+            let menus = matches!(
+                app.screen,
+                Screen::Title
+                    | Screen::Main(_)
+                    | Screen::Career(_)
+                    | Screen::Quick(_)
+                    | Screen::Patrol(_)
+                    | Screen::Options(..)
+            );
+            let (x, y) = if menus {
+                (cw as f32 - 16.0 * s, 16.0 * s)
+            } else if app.screen == Screen::Playing {
+                hud::performance_in_play(&canvas, &mut text, &fonts, &perf, &app.session)
+            } else {
+                (16.0 * s, 16.0 * s)
+            };
+            let height = hud::performance(&mut canvas, &mut text, &fonts, &perf, x, y, menus);
+            if settings.stats == Stats::Detailed {
+                let lines = [
+                    format!("render {:.1} ms   show {:.1} ms", perf.render_ms, perf.show_ms),
+                    format!("{iw} x {ih} -> {cw} x {ch}"),
+                    format!("{} draws, {} triangles", renderer.stats.draws, renderer.stats.triangles),
+                ];
+                // Under the map in play, under the frame rate on the menus.
+                let (right, top) = if menus { (x, y + height + 8.0 * s) } else { (cw as f32 - 16.0 * s, 210.0 * s) };
+                hud::stats(&mut canvas, &mut text, &fonts, &perf, &lines, right, top);
+            }
         }
         drop(canvas);
         let _ = window.present(&[]);
 
-        // Frame rate, and the resolution it calls for.
-        frames += 1;
-        render_ms = render_ms * 0.9 + (t_drawn - t_render) as f32 / 1e6 * 0.1;
-        show_ms = show_ms * 0.9 + (t_shown - t_ready) as f32 / 1e6 * 0.1;
-        if now - fps_since >= 1_000_000_000 {
-            fps = frames as f32 / ((now - fps_since) as f32 / 1e9);
-            frames = 0;
-            fps_since = now;
-            if now - log_since >= 5_000_000_000 {
-                log_since = now;
+        // The frame's length (from the last one's end) and what it went to;
+        // once a second, the frame rate, the log, and the resolution it
+        // calls for.
+        let t_end = vrt::time::now_ns();
+        let ms = |from: u64, to: u64| to.saturating_sub(from) as f32 / 1e6;
+        let spent = Phases {
+            update: ms(frame_end, t_render),
+            render: ms(t_render, t_drawn),
+            wait: ms(t_drawn, t_ready),
+            show: ms(t_ready, t_shown),
+            draw: ms(t_shown, t_end),
+        };
+        let length = ms(frame_end, t_end);
+        frame_end = t_end;
+        if perf.frame(t_end, length, spent) {
+            if t_end - log_since >= 5_000_000_000 {
+                log_since = t_end;
+                let longest = perf.report();
                 vrt::println!(
-                    "{:.1} fps, render {:.1} ms, show {:.1} ms, {}x{} -> {}x{}, {} draws",
-                    fps,
-                    render_ms,
-                    show_ms,
+                    "{:.1} fps, render {:.1} ms, show {:.1} ms, {}x{} -> {}x{}, {} draws; {}",
+                    perf.fps,
+                    perf.render_ms,
+                    perf.show_ms,
                     iw,
                     ih,
                     cw,
                     ch,
-                    renderer.stats.draws
+                    renderer.stats.draws,
+                    longest
                 );
             }
-            // Every two seconds, the resolution the frame rate calls for.
-            if now - judged >= 2_000_000_000 {
-                let secs = (now - judged) as f32 / 1e9;
-                judged = now;
-                if scale.judge(1000.0 / fps.max(1.0), secs) {
-                    vrt::println!("{:.1} fps: rendering at 1/{} of the window", fps, scale.divisor());
+            // Every two seconds, the software renderer's resolution as the
+            // frame rate calls for it.
+            if let Some(scale) = &mut scale
+                && t_end - judged >= 2_000_000_000
+            {
+                let secs = (t_end - judged) as f32 / 1e9;
+                judged = t_end;
+                if scale.judge(1000.0 / perf.fps.max(1.0), secs) {
+                    vrt::println!("{:.1} fps: rendering at 1/{} of the window", perf.fps, scale.divisor());
                 }
             }
         }

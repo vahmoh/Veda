@@ -2,7 +2,7 @@
 //! revs, gear, siren, nitrous), the pursuit (the suspect's distance, its
 //! car's state, the time and any limit, the warnings), the map of the bay,
 //! the radio's words, the countdown, a patrol's tally; and the loading
-//! screen and the statistics.
+//! screen, the frame rate with what renders, and the statistics.
 
 use alloc::format;
 use alloc::string::String;
@@ -18,6 +18,7 @@ use vgfx::{Align, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Tex
 use vmath::FloatExt;
 
 use crate::paint::{self, ACCENT, AMBER, DIM, FAINT, Fonts, GREEN, PANEL, RED, WHITE, centered, rect};
+use crate::perf::{HISTORY, Perf};
 
 /// The screen while Veda Bay is made.
 pub fn loading(c: &mut Canvas, text: &mut Text, f: &Fonts) {
@@ -125,17 +126,129 @@ pub fn dashboard(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game, units:
     text.draw(c, f.regular, 12.0 * s, 18.0 * s, h - 16.0 * s, help, Color(0x90E6ECF5));
 }
 
-/// Statistics in a panel at the right, under the map.
-pub fn stats(c: &mut Canvas, text: &mut Text, f: &Fonts, lines: &[String]) {
-    let s = paint::scale(c.height());
-    let w = c.width() as f32;
-    let (pw, ph) = (300.0 * s, (18 * lines.len() + 16) as f32 * s);
-    let (px, py) = (w - pw - 16.0 * s, 210.0 * s);
-    c.fill_rounded_rect(rect(px, py, pw, ph), 8.0 * s, Color(0xB0101418));
-    for (i, l) in lines.iter().enumerate() {
-        text.draw(c, f.mono, 12.0 * s, px + 10.0 * s, py + (22 + 18 * i) as f32 * s, l, Color(0xFFE8F0F8));
+/// The readout of the frame rate: its type sizes (at a scale of 1).
+const RATE_SIZE: f32 = 17.0;
+const TEXT_SIZE: f32 = 11.5;
+const LABEL_SIZE: f32 = 9.5;
+
+/// The readout at scale `s`: its words, the widths it is laid out by
+/// (the rate's, "FPS"'s and the GPU's or CPU's label), and its size.
+struct Readout {
+    fps: String,
+    ms: String,
+    kind: &'static str,
+    widths: [f32; 3],
+    size: (f32, f32),
+}
+
+impl Readout {
+    fn new(text: &mut Text, f: &Fonts, perf: &Perf, s: f32) -> Readout {
+        // Nothing to say until the first second has been counted.
+        let measured = perf.fps > 0.0;
+        let fps = if measured { format!("{:.0}", perf.fps) } else { String::from("--") };
+        let ms = if measured { format!("{:.1} ms", perf.frame_ms) } else { String::new() };
+        let kind = if perf.cpu { "CPU" } else { "GPU" };
+        let widths = [
+            text.measure(f.mono_bold, RATE_SIZE * s, &fps),
+            text.measure(f.bold, LABEL_SIZE * s, "FPS"),
+            text.measure(f.bold, LABEL_SIZE * s, kind),
+        ];
+        let first = widths[0] + 5.0 * s + widths[1] + 10.0 * s + text.measure(f.mono, TEXT_SIZE * s, &ms);
+        let second = widths[2] + 6.0 * s + text.measure(f.regular, TEXT_SIZE * s, &perf.device);
+        Readout { fps, ms, kind, widths, size: (first.max(second) + 20.0 * s, 50.0 * s) }
     }
 }
+
+/// Where the readout of the frame rate goes in play: the top left corner,
+/// under a patrol's tally, or under the chase's panel where the window is
+/// too narrow for both side by side.
+pub fn performance_in_play(c: &Canvas, text: &mut Text, f: &Fonts, perf: &Perf, session: &Session) -> (f32, f32) {
+    let s = paint::scale(c.height());
+    let width = Readout::new(text, f, perf, s).size.0;
+    let y = if let Mode::Patrol { .. } = session.mode {
+        84.0 * s
+    } else if session.chase.is_some() && (16.0 + 8.0) * s + width > c.width() as f32 * 0.5 - PURSUIT_HALF * s {
+        (16.0 + PURSUIT_HEIGHT + 8.0) * s
+    } else {
+        16.0 * s
+    };
+    (16.0 * s, y)
+}
+
+/// The frame rate and what renders (the GPU, or the processor), in a
+/// small panel whose top left corner is at (`x`, `y`), or its top right
+/// if `right`. Returns its height.
+pub fn performance(c: &mut Canvas, text: &mut Text, f: &Fonts, perf: &Perf, x: f32, y: f32, right: bool) -> f32 {
+    let s = paint::scale(c.height());
+    let r = Readout::new(text, f, perf, s);
+    let (pw, ph) = r.size;
+    let px = if right { x - pw } else { x };
+    c.fill_rounded_rect(rect(px, y, pw, ph), 8.0 * s, PANEL);
+    // Green while smooth, amber under 50 a second, red under 30.
+    let color = match perf.fps {
+        r if r <= 0.0 => DIM,
+        r if r >= 50.0 => GREEN,
+        r if r >= 30.0 => AMBER,
+        _ => RED,
+    };
+    let base = y + 22.0 * s;
+    let mut tx = px + 10.0 * s;
+    text.draw(c, f.mono_bold, RATE_SIZE * s, tx, base, &r.fps, color);
+    tx += r.widths[0] + 5.0 * s;
+    text.draw(c, f.bold, LABEL_SIZE * s, tx, base, "FPS", DIM);
+    tx += r.widths[1] + 10.0 * s;
+    text.draw(c, f.mono, TEXT_SIZE * s, tx, base, &r.ms, FAINT);
+    let base = y + 40.0 * s;
+    let kind_color = if perf.cpu { AMBER } else { ACCENT };
+    text.draw(c, f.bold, LABEL_SIZE * s, px + 10.0 * s, base, r.kind, kind_color);
+    text.draw(c, f.regular, TEXT_SIZE * s, px + (10.0 + 6.0) * s + r.widths[2], base, &perf.device, DIM);
+    ph
+}
+
+/// The renderer's statistics in a panel whose top right corner is at
+/// (`right`, `y`): `lines`, the last frames' lengths as a graph (the faint
+/// lines at 60 and 30 a second), and the renderer's own name.
+pub fn stats(c: &mut Canvas, text: &mut Text, f: &Fonts, perf: &Perf, lines: &[String], right: f32, y: f32) {
+    let s = paint::scale(c.height());
+    let pad = 10.0 * s;
+    let (gw, gh) = (280.0 * s, 44.0 * s);
+    let (pw, ph) = (gw + pad * 2.0, (18 * lines.len() + 40) as f32 * s + gh + 18.0 * s);
+    let px = right - pw;
+    c.fill_rounded_rect(rect(px, y, pw, ph), 8.0 * s, Color(0xB0101418));
+    let mut base = y + 22.0 * s;
+    for l in lines {
+        text.draw(c, f.mono, 12.0 * s, px + pad, base, l, Color(0xFFE8F0F8));
+        base += 18.0 * s;
+    }
+    let longest = format!("frames: the longest {:.0} ms", perf.longest_shown());
+    text.draw(c, f.mono, 12.0 * s, px + pad, base, &longest, Color(0xFFE8F0F8));
+    // The graph: up to 50 ms, a bar a frame, the latest at the right.
+    let (gx, gy) = (px + pad, base + 8.0 * s);
+    c.fill_rect(rect(gx, gy, gw, gh), Color(0x40000000));
+    for ms in [1000.0 / 60.0, 1000.0 / 30.0] {
+        c.fill_rect(rect(gx, gy + gh * (1.0 - ms / 50.0), gw, 1.0), Color(0x30FFFFFF));
+    }
+    let bar = gw / HISTORY as f32;
+    let start = HISTORY - perf.history.len();
+    for (i, &ms) in perf.history.iter().enumerate() {
+        let h = (ms / 50.0).clamp(0.02, 1.0) * gh;
+        let color = if ms <= 20.0 {
+            ACCENT
+        } else if ms <= 34.0 {
+            AMBER
+        } else {
+            RED
+        };
+        let x0 = gx + (start + i) as f32 * bar;
+        c.fill_rect(rect(x0, gy + gh - h, (bar - 0.4 * s).max(1.0), h), color);
+    }
+    text.draw(c, f.regular, 11.0 * s, px + pad, gy + gh + 18.0 * s, &perf.renderer, DIM);
+}
+
+/// The pursuit's panel: half its width (its middle is the screen's) and
+/// its height, at the top.
+const PURSUIT_HALF: f32 = 170.0;
+const PURSUIT_HEIGHT: f32 = 66.0;
 
 /// The pursuit: the suspect's car's state and how far ahead it is (top
 /// middle), with the time (or the time left), and a warning while it is
@@ -144,7 +257,7 @@ fn pursuit(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game, chase: &Purs
     let (w, h) = (c.width() as f32, c.height() as f32);
     let s = paint::scale(c.height());
     let cx = w * 0.5;
-    let (pw, ph) = (340.0 * s, 66.0 * s);
+    let (pw, ph) = (PURSUIT_HALF * 2.0 * s, PURSUIT_HEIGHT * s);
     let (px, py) = (cx - pw * 0.5, 16.0 * s);
     c.fill_rounded_rect(rect(px, py, pw, ph), 10.0 * s, Color(0xA006090F));
     text.draw(c, f.bold, 13.0 * s, px + 14.0 * s, py + 22.0 * s, "SUSPECT", RED);
