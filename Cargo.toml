@@ -24,7 +24,6 @@ members = [
     "lib/ui",
     "lib/text",
     "lib/files",
-    "lib/v3d",
     "lib/audio",
     "lib/entropy",
     "lib/netstack",
@@ -59,10 +58,6 @@ members = [
     "apps/taskmgr",
     "apps/files",
     "apps/settings",
-    "apps/racer",
-    "apps/starfall",
-    "apps/prism",
-    "apps/prism/scene",
     "apps/interceptor",
     "apps/interceptor/game",
     "services/audio",
@@ -129,7 +124,6 @@ vgfx = { path = "lib/gfx" }
 vui = { path = "lib/ui" }
 vtext = { path = "lib/text" }
 vfiles = { path = "lib/files" }
-v3d = { path = "lib/v3d" }
 vaudio = { path = "lib/audio" }
 ventropy = { path = "lib/entropy" }
 vnetstack = { path = "lib/netstack" }

@@ -63,6 +63,9 @@ impl Shortcut {
     }
 }
 
+/// The applications with a shortcut on the desktop (when installed).
+const APP_SHORTCUTS: &[&str] = &["interceptor"];
+
 const CELL_W: i32 = 92;
 const CELL_H: i32 = 98;
 const MARGIN: i32 = 14;
@@ -196,7 +199,7 @@ impl Desktop {
                 kind: Kind::Folder { path: HOME.into(), on_desktop: false },
             });
         }
-        for id in ["racer", "starfall", "interceptor", "prism"] {
+        for &id in APP_SHORTCUTS {
             if let Some(app) = m.app(id) {
                 items.push(Shortcut {
                     label: app.name.clone(),

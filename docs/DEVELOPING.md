@@ -21,6 +21,7 @@ cargo xtask test --ui          # ... plus every GUI script in tests/ui and tests
 cargo xtask test --ui --jobs 2 # ... two at a time (default: one per five processors)
 cargo xtask scripts tests/ui/drivervm-audio.vts tests/ui/nvme.vts   # some scripts, built once, side by side
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
+cargo xtask script docs/interceptor.vts --resolution 1920x1080   # ... and Interceptor's, in Full HD
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks
 cargo xtask run --disk-bus nvme             # ... with NVM Express disks
 cargo xtask script tests/ui/nvme.vts        # starting from NVMe, the home directory on NVMe
@@ -36,15 +37,14 @@ cargo xtask script tests/ui/drivervm-wifi-recovery.vts   # Wi-Fi failure-recover
 cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
 cargo xtask script tests/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
 cargo xtask script tests/ui/drivervm-compose.vts   # ... its frames drawn by a GPU (the renderer on softpipe; slow)
-cargo xtask script tests/ui/drivervm-gpu.vts       # Prism on the host's GPU, through Mesa's virgl in the driver VM
-cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
+cargo xtask script tests/ui/drivervm-gpu.vts       # Interceptor on the host's GPU, through Mesa's virgl in the driver VM
 VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (desktop OpenGL)
 VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on OpenGL ES
 VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
 VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.so)
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
-VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p prism-scene   # ... on this PC's Intel GPU, as `cargo xtask test` does where there is one
-cargo xtask script tests/ui/drivervm-renderer.vts   # Prism through the renderer in the driver VM, on softpipe
+VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p interceptor-game   # ... on this PC's Intel GPU, as `cargo xtask test` does where there is one
+cargo xtask script tests/ui/drivervm-renderer.vts   # Interceptor through the renderer in the driver VM, on softpipe
 cargo xtask script tests/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
 cargo xtask script tests/agent/app-interceptor.vts   # ... and for the voice agent
 VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
@@ -84,8 +84,6 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   softpipe, and on Mesa's virgl over virglrenderer's test server
   (`virgl_test_server`, in `virgl-server` on Debian and Ubuntu), as the
   driver VM's renderer renders under QEMU.
-  `PRISM_SIZE=960x600 PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test
-  -p prism-scene` saves Prism's frame as both renderers draw it.
   Interceptor's game saves what it shows and plays to a directory named by
   an environment variable: `INTERCEPTOR_SHOTS` (views round the bay at each
   time of day, `INTERCEPTOR_ONLY` to choose, `INTERCEPTOR_SIZE`),

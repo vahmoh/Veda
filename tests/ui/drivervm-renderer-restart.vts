@@ -3,8 +3,12 @@
 # the `gpu` service back: Veda forgets the service of the renderer that
 # ended rather than keeping its name for it. The compositor, which drew on
 # the processor once the renderer was gone, composes on the GPU again; a
-# program started afterwards (Prism) renders through it, on softpipe here.
+# program started afterwards (Interceptor) renders through it, on softpipe
+# here (which keeps the game's pictures in the renderer's own memory: the
+# guest gets 1 GiB, and the machine 2).
 gpu off
+memory 2048
+boot-cmdline "drivervm.memory=1024"
 boot-cmdline "drivervm.renderer=softpipe"
 boot-cmdline "drivervm.cmdline=veda.kill=renderer:12"
 fail-on "PANIC"
@@ -24,8 +28,9 @@ wait-serial "compositor: the GPU is set up again once its service is back (1 of 
 wait-serial-count "compositor: frames are drawn by the GPU (softpipe) from now on" 2 60
 key meta_l
 wait 2
-type "prism"
+type "interceptor"
 key ret
-wait-serial "softpipe (OpenGL ES 3.0 Veda)" 90
+wait-serial "interceptor: softpipe (Low quality)" 90
+wait-serial "interceptor: ready" 180
 wait-serial " fps, render " 60
 shot target/veda/drivervm-renderer-restart.png

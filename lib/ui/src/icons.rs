@@ -688,7 +688,7 @@ impl Icon {
             "settings" => Icon::Settings,
             "monitor" | "sysmon" | "taskmgr" => Icon::Chart,
             "gamepad" | "game" => Icon::Gamepad,
-            "car" | "racer" => Icon::Car,
+            "car" => Icon::Car,
             "siren" | "police" | "interceptor" => Icon::Siren,
             "rocket" => Icon::Rocket,
             "chess" => Icon::Chess,

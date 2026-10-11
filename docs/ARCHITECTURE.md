@@ -503,41 +503,10 @@ State that must survive between frames (focus, scroll offsets, text cursors,
 open menus, animations) lives in a per-window `UiState` keyed by widget ids.
 Frames are drawn only when input arrives or an animation asks for one.
 
-## 3D graphics (`lib/v3d`)
-
-`v3d` renders on the CPU (the games predate OpenGL ES in Veda), usually
-under QEMU's TCG emulator, where integer instructions are cheap and floating point is very
-expensive. Floating point is therefore used once per draw call (matrices
-and light parameters); everything per vertex and per pixel is fixed-point
-integer code (`src/pipeline`). Each render mode gets its own monomorphised
-rasteriser, and hot loops are kept scalar: TCG emulates SSE integer
-multiplies with slow helper calls, so auto-vectorised loops would be
-several times slower there.
-
-* **Geometry.** Objects outside the view frustum are skipped. Vertices are
-  transformed and lit (Gouraud: sun, hemisphere ambient, point lights, fog)
-  in batches; triangles are back-face culled, clipped against the near
-  plane and a guard band, set up, and binned into 64x32-pixel screen tiles.
-* **Rasterisation.** A thread pool sized to the CPU count fills the tiles in
-  parallel, each worker owning whole tiles: depth testing, perspective-
-  correct mip-mapped textures, opaque, alpha, additive and multiplicative
-  blending, then billboards and particles.
-* **Output.** The image is rendered at an internal resolution and scaled to
-  the window with a bilinear (or fast 2x) upscale. The game harness
-  (`v3d::app`) adjusts the internal resolution to hold the frame rate,
-  draws the 2D HUD with `vgfx`, shows statistics on F3 and lets the
-  computer play on F8 (for demos and the GUI tests).
-
-The window system cooperates: a game's window is opaque, so the compositor
-copies its rows and skips everything underneath, and the scheduler starts
-the pool's workers on different CPUs at once.
-
 ## OpenGL ES and the GPU (`lib/glsl`, `lib/gl`, `guest/renderer`)
 
 Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `vgl`,
-in pure Rust. *Prism* (`apps/prism`) shows it off: a reflective knot under
-a sky cube map, shadow-mapped crystals drawn with instancing, and sparks
-simulated with transform feedback.
+in pure Rust: *Interceptor* (below) is its largest program.
 
 * **The shading language.** `vglsl` preprocesses, parses and checks
   shaders, links programs (attribute, uniform and varying locations,
@@ -626,18 +595,17 @@ simulated with transform feedback.
   (`device.c`). virgl cannot (its host draws into memory of its own).
 
 `vgl::veda::context` renders on the GPU when the `gpu` service exists and
-in software on every CPU otherwise. Under QEMU the difference is large:
-Prism runs at about 1 frame a second in software, and at 75 at 1024x640 on
-the host's GPU through the driver VM.
+in software on every CPU otherwise. The difference is large: on the
+Zenbook's processors Interceptor draws 5 frames a second at 640x360, and
+through the driver VM on QEMU's virtual GPU 40 at 1920x1080.
 
 The virgl renderer is tested on the host: `vgl::virgl::host` calls
 virglrenderer as QEMU does, on OpenGL contexts made as QEMU makes them,
 and runs the whole `vgl` test suite on the host's GPU
 (`VGL_TEST_BACKEND=virgl`): it loads the system's virglrenderer and
 renders through EGL on a GPU's render node (GBM), on desktop OpenGL as
-QEMU does and on OpenGL ES (`VGL_TEST_HOST=gles`). Prism's scene,
-rendered both ways, must look the same to within the GPU's rounding. The
-suite also runs through the renderer's decoder (`VGL_TEST_BACKEND=gallium`,
+QEMU does and on OpenGL ES (`VGL_TEST_HOST=gles`). The suite also runs
+through the renderer's decoder (`VGL_TEST_BACKEND=gallium`,
 `vgl::virgl::gallium`, which loads the decoder built with Mesa for the
 host as `vgallium.so`): on softpipe, where it falls short of a GPU (no
 multisampling, points an eighth of a pixel off, depth filtered before it
@@ -808,8 +776,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
   under it, and `drivervm-display-restart.vts` the window system restart
   while it is attached. `drivervm-compose.vts` has the GPU compose: the
   renderer on softpipe draws every frame into its pictures, slowly, under
-  emulation; `drivervm-gpu.vts` renders Prism on the host's GPU through
-  QEMU's virtio-gpu, given to the driver VM.
+  emulation; `drivervm-gpu.vts` renders Interceptor on the host's GPU
+  through QEMU's virtio-gpu, given to the driver VM.
 * The agent's scripts (`tests/agent/*.vts`) with a stand-in for Deepgram on
   the host and a test microphone fed from the host; `tests/real/` talks to
   the real Deepgram.
@@ -829,7 +797,6 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/ipc`, `lib/proto` | message encoding and the service protocols |
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
 | `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
-| `lib/v3d` | the fixed-point software 3D renderer and the game harness |
 | `lib/glsl`, `lib/gl` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
@@ -845,7 +812,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `third_party/` | vendored crates with documented patches (smoltcp) |
 | `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa |
-| `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |
+| `services/`, `drivers/`, `apps/` | system services, drivers and applications |
 | `tests/` | in-system tests, C and C++ test programs (`tests/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |

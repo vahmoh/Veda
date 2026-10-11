@@ -1,15 +1,15 @@
 # A game registers again when the agent service restarts (init starts it
 # again after it failed), with a simulated Voice Agent service: the new
-# agent reaches the race in progress rather than starting a second
-# Velocity.
+# agent reaches the mission in progress rather than starting a second
+# Interceptor.
 fail-on "PANIC"
 wait-serial "desktop ready" 120
 mic-silence 1
 agent-connected 120
 wait-serial "state: Listening" 30
-agent-call use_app '{"app":"racer","action":"start_race","arguments":{"laps":1}}' 60
+agent-call use_app '{"app":"interceptor","action":"start_mission","arguments":{"mission":"first shift"}}' 90
 agent-result '"started":true'
-wait-serial "racer offers 6 action(s)" 10
+wait-serial "interceptor offers 8 action(s)" 20
 agent-call open_app '{"app":"terminal"}' 60
 agent-result opened
 wait-serial "started terminal" 30
@@ -20,16 +20,17 @@ type "kill -f agent"
 key ret
 wait-serial "restarting agent" 30
 wait-serial "state: Listening" 60
-# Velocity registers with the new agent service, which finds the race
-# (paused: the Terminal has the keyboard).
-wait-serial "racer offers 6 action(s)" 30
-agent-call read_app '{"app":"racer"}' 30
-agent-result '"screen":"paused","track":"Valley Ring","laps":1'
-agent-call window '{"operation":"focus","window":"racer"}' 30
+# Interceptor registers with the new agent service, which finds the
+# mission (paused: the Terminal has the keyboard).
+wait-serial "interceptor offers 8 action(s)" 30
+agent-call read_app '{"app":"interceptor"}' 30
+agent-result '"screen":"paused"'
+agent-result '"mode":"mission 1: First Shift"'
+agent-call window '{"operation":"focus","window":"interceptor"}' 30
 agent-result '"ok":true'
 wait 1
-agent-call use_app '{"app":"racer","action":"resume"}' 30
+agent-call use_app '{"app":"interceptor","action":"resume"}' 30
 agent-result '"paused":false'
 wait 2
 shot target/veda/agent-games-restart.png
-reject-serial "started racer"
+reject-serial "started interceptor"

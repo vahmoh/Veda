@@ -737,6 +737,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(bus) = automate::disk_bus(script)? {
         vm.disk_bus = bus;
     }
+    if let Some(mib) = automate::memory(script)? {
+        vm.memory_mib = mib;
+    }
     vm.acpi_tables = automate::acpi_tables(script)?;
     vm.firmware_variables = automate::firmware_variables(script)?;
     if let Some(input) = automate::input_devices(script)? {
@@ -804,7 +807,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vsplash", &[]),
     ("vglsl", &[]),
     ("vgl", &[]),
-    ("prism-scene", &[]),
     ("interceptor-game", &[]),
     ("airsim", &[]),
     ("xtask", &[]),
@@ -884,9 +886,9 @@ fn test(o: &Options) -> Result {
         }
         if linux::intel_gpu() {
             util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's iris, on this machine's Intel GPU)");
-            // Prism's scene and Interceptor's too: their shadows, sparks
-            // and cars on the GPU.
-            for package in ["vgl", "prism-scene", "interceptor-game"] {
+            // Interceptor's game too: its shadows, sparks and cars on the
+            // GPU.
+            for package in ["vgl", "interceptor-game"] {
                 let mut cmd = util::cargo();
                 cmd.args(["test", "--quiet", "--package", package])
                     .env("VGL_TEST_BACKEND", "gallium")

@@ -6,19 +6,7 @@ use vproto::init::AppInfo;
 use vui::Icon;
 
 /// Preferred order of apps on the taskbar and in the start menu.
-const ORDER: [&str; 11] = [
-    "files",
-    "editor",
-    "photos",
-    "music",
-    "terminal",
-    "settings",
-    "taskmgr",
-    "racer",
-    "starfall",
-    "interceptor",
-    "prism",
-];
+const ORDER: [&str; 8] = ["files", "editor", "photos", "music", "terminal", "settings", "taskmgr", "interceptor"];
 
 /// Sorts apps into their display order (unknown apps last, by name).
 pub fn sort(apps: &mut [AppInfo]) {
@@ -36,10 +24,7 @@ pub fn tile_colors(id: &str) -> (Color, Color) {
         "settings" => (Color::hex(0x98A2B8), Color::hex(0x56607A)),
         "taskmgr" => (Color::hex(0x35D9AE), Color::hex(0x10897A)),
         "about" => (Color::hex(0x8C7CFF), Color::hex(0x4B3FD1)),
-        "racer" => (Color::hex(0xFF9A4A), Color::hex(0xE0402F)),
-        "starfall" => (Color::hex(0x7A6BFF), Color::hex(0x231C78)),
         "interceptor" => (Color::hex(0x4D7CFF), Color::hex(0x172566)),
-        "prism" => (Color::hex(0x5CE1E6), Color::hex(0x3A5BD9)),
         // The Trash: brushed metal, with a dark glyph (see `glyph_color`).
         "trash" => (Color::hex(0xEEF1F6), Color::hex(0xAAB3C3)),
         // Notifications about problems.

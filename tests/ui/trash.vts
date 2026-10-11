@@ -70,8 +70,8 @@ wait-serial "files: emptied the Trash (1 item)" 20
 wait 1
 shot target/veda/trash-5-empty.png
 # A document made on the desktop appears there (the desktop looks every
-# second and a half), seventh after the Trash, Home, Velocity, Starfall,
-# Interceptor and Prism, and is dragged onto the Trash.
+# second and a half), fourth after the Trash, Home and Interceptor, and is
+# dragged onto the Trash.
 click 0.08 0.2313
 wait 1
 key ctrl-n
@@ -81,13 +81,13 @@ wait-serial "files: created document /home/user/Desktop/New document.txt" 20
 key meta_l-d
 wait 4
 shot target/veda/trash-6-desktop-item.png
-mouse-down 0.0469 0.81
+mouse-down 0.0469 0.4425
 wait 0.5
-move 0.06 0.6
+move 0.06 0.38
 wait 0.5
-move 0.06 0.5
+move 0.06 0.3
 wait 0.5
-move 0.05 0.2
+move 0.05 0.18
 wait 0.5
 move 0.0469 0.08
 wait 1

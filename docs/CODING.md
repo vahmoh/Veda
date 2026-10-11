@@ -67,9 +67,8 @@ prefer integer/fixed-point arithmetic where it is natural, and process data in
 cache-friendly order. TCG emulates SSE integer multiplies and shuffles with
 slow helper calls, so a hot loop that LLVM auto-vectorises can become
 several times slower than its scalar form: check the generated code of hot
-loops and keep them scalar where needed (`scalar_loop` in
-`lib/v3d/src/pipeline`). Always build the OS with optimisations (`--release`
-is the default for `cargo xtask`).
+loops and keep them scalar where needed. Always build the OS with
+optimisations (`--release` is the default for `cargo xtask`).
 
 ## Robustness and errors
 

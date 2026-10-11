@@ -283,7 +283,7 @@ is a compact example):
 * **Paths**: accept `~/…`, absolute paths and paths relative to the home
   folder (`arg_path`), and show them with `show_path`.
 
-Programs with their own loop (the games) keep a
+Programs with their own loop (a game such as Interceptor) keep a
 `vui::agent::Registration`, call `serve` with their `AgentServer` once per
 frame (it never waits), and include `wait_items` in their wait set if they
 sleep between events.

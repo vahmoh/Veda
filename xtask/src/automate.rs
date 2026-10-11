@@ -29,6 +29,7 @@
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
+//! memory 2048                      # the machine's memory for this run (MiB), applied before boot
 //! acpi-table touchpad              # add a table to the firmware's (xtask/src/acpitest.rs), applied before boot
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
@@ -580,6 +581,18 @@ pub fn usb_net(script: &str) -> bool {
     script.lines().map(words).any(|w| w.len() == 2 && w[0] == "usb" && w[1] == "net")
 }
 
+/// The machine's memory (MiB), as a script asks with `memory`.
+pub fn memory(script: &str) -> Result<Option<u32>> {
+    let mut mib = None;
+    for w in script.lines().map(words) {
+        if w.first().is_some_and(|c| c == "memory") {
+            let v = w.get(1).ok_or("memory: missing size")?;
+            mib = Some(v.parse().map_err(|_| format!("memory: '{v}' is not a size in MiB"))?);
+        }
+    }
+    Ok(mib)
+}
+
 /// How QEMU attaches the disks, as a script asks with `disk`.
 pub fn disk_bus(script: &str) -> Result<Option<DiskBus>> {
     let mut bus = None;
@@ -753,8 +766,8 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "disk" | "usb" | "sound" | "audio" | "requires" | "live" | "input"
-                | "gpu" | "acpi-table" | "firmware-variable" => {}
+                "boot-cmdline" | "net" | "nic" | "disk" | "memory" | "usb" | "sound" | "audio" | "requires"
+                | "live" | "input" | "gpu" | "acpi-table" | "firmware-variable" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);

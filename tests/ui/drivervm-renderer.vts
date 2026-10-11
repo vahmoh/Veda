@@ -1,10 +1,15 @@
-# The renderer in the driver VM: an OpenGL ES 3.0 program (Prism) renders
-# through Veda's renderer, which runs in Linux, on Mesa's softpipe here (for
-# want of a GPU; on a PC, on the GPU's own driver). The renderer serves the
-# `gpu` protocol, so Prism takes it for a GPU, and its frames keep coming.
+# The renderer in the driver VM: an OpenGL ES 3.0 program (Interceptor)
+# renders through Veda's renderer, which runs in Linux, on Mesa's softpipe
+# here (for want of a GPU; on a PC, on the GPU's own driver). The renderer
+# serves the `gpu` protocol, so Interceptor takes it for a GPU (a software
+# one: it draws less), and its frames keep coming. softpipe keeps the
+# game's pictures in the renderer's own memory, more than the driver VM
+# has by default: the guest gets 1 GiB, and the machine 2.
 gpu off
+memory 2048
+boot-cmdline "drivervm.memory=1024"
 boot-cmdline "drivervm.renderer=softpipe"
-boot-cmdline "run=prism"
+boot-cmdline "run=interceptor"
 fail-on "PANIC"
 fail-on "renderer: commands refused"
 fail-on "renderer: a resource refused"
@@ -13,10 +18,8 @@ fail-on "rendering stops"
 fail-on "link: "
 fail-on "shader:"
 wait-serial "renderer: serving gpu on softpipe" 90
-wait-serial "softpipe (OpenGL ES 3.0 Veda)" 90
-wait 8
-shot target/veda/drivervm-renderer-1.png
+wait-serial "interceptor: softpipe (Low quality)" 90
+wait-serial "interceptor: ready" 180
 wait-serial " fps, render " 60
-key s
 wait 4
-shot target/veda/drivervm-renderer-2-no-shadows.png
+shot target/veda/drivervm-renderer-1.png
