@@ -66,6 +66,17 @@ impl Pose {
         }
     }
 
+    /// Puts `v` in this pose.
+    fn apply(&self, v: &mut Vehicle) {
+        v.pos = self.pos;
+        v.yaw = self.yaw;
+        v.pitch = self.pitch;
+        v.roll = self.roll;
+        v.up = self.up;
+        v.spin = self.spin;
+        v.steer = self.steer;
+    }
+
     fn transform(&self) -> Mat4 {
         let fwd = Vec3::new(self.yaw.sin(), 0.0, self.yaw.cos());
         let f = (fwd - self.up * fwd.dot(self.up)).normalize_or(fwd);
@@ -213,9 +224,15 @@ pub struct Game {
     /// The game's clock (s), and the time not yet stepped.
     pub clock: f32,
     pending: f32,
+    /// How far the time drawn has moved since the last frame (s).
+    moved: f32,
+    /// How far the cameras moved at the last frame (s).
+    pub frame_time: f32,
     driver: Driver,
     /// What happened since the last frame.
     pub events: Vec<Event>,
+    /// Where the last step's events start in `events`.
+    step_first: usize,
     /// The last frame's camera.
     pub camera: Camera,
     pub paused: bool,
@@ -253,8 +270,11 @@ impl Game {
             keys: Keys::default(),
             clock: 0.0,
             pending: 0.0,
+            moved: 0.0,
+            frame_time: 0.0,
             driver: Driver::default(),
             events: Vec::new(),
+            step_first: 0,
             camera,
             paused: false,
             traffic: false,
@@ -386,17 +406,38 @@ impl Game {
         self.driver.release();
     }
 
-    /// Advances the game by `dt` seconds of real time.
-    pub fn update(&mut self, dt: f32) {
+    /// Advances the game by `dt` seconds of real time ([`Game::update_with`],
+    /// nothing done after each step).
+    pub fn update(&mut self, dt: f32) -> f32 {
+        self.update_with(dt, |_| {})
+    }
+
+    /// Advances the game by `dt` seconds of real time, calling `each` after
+    /// every step (whose events [`Game::step_events`] gives), so that what
+    /// follows the game follows it step by step, whatever the frames.
+    /// Returns how far the game moved on (s): `dt`, but no more than it
+    /// catches up on after a stall, and nothing while paused.
+    pub fn update_with(&mut self, dt: f32, mut each: impl FnMut(&mut Game)) -> f32 {
         self.events.clear();
+        self.step_first = 0;
         if self.paused {
-            return;
+            return 0.0;
         }
-        self.pending = (self.pending + dt).min(MAX_CATCH_UP);
+        let pending = (self.pending + dt).min(MAX_CATCH_UP);
+        let moved = pending - self.pending;
+        self.moved += moved;
+        self.pending = pending;
         while self.pending >= STEP {
             self.pending -= STEP;
             self.step();
+            each(self);
         }
+        moved
+    }
+
+    /// Where the last step's events are in `events`.
+    pub fn step_events(&self) -> core::ops::Range<usize> {
+        self.step_first..self.events.len()
     }
 
     /// One physics step.
@@ -404,6 +445,7 @@ impl Game {
         self.clock += STEP;
         // This step's events follow the frame's earlier steps'.
         let first = self.events.len();
+        self.step_first = first;
         let p = self.player;
         let speed = self.cars[p].vehicle.speed();
         self.cars[p].controls = self.driver.update(self.keys, speed, STEP);
@@ -505,8 +547,14 @@ impl Game {
 
     /// What to draw now: every car between its last two steps, and the
     /// lights that move with them (headlights, light bars); the camera
-    /// follows the player (`dt` moves it).
+    /// follows the player as drawn. `dt` is the time since the last frame
+    /// (0 while frozen), which the camera moves by while the game waits (a
+    /// countdown); while it runs, the camera moves on as far as the cars
+    /// did, so that a stall the game does not catch up on moves it no
+    /// further than them.
     pub fn frame(&mut self, dt: f32) -> (Vec<CarView>, Vec<Light>) {
+        let moved = core::mem::take(&mut self.moved);
+        self.frame_time = if self.paused { dt } else { moved };
         let t = (self.pending / STEP).clamp(0.0, 1.0);
         let mut views = Vec::with_capacity(self.cars.len());
         let mut lights = Vec::new();
@@ -563,13 +611,19 @@ impl Game {
             });
         }
         // The camera follows the player as drawn.
-        let player = &self.cars[self.player];
-        let mut seen = player.vehicle.clone();
-        let pose = player.prev.lerp(&Pose::of(&player.vehicle), t);
-        seen.pos = pose.pos;
-        seen.yaw = pose.yaw;
-        self.camera = self.follow.update(&seen, &self.world, player.hint, dt);
+        let seen = self.drawn(self.player);
+        let hint = self.cars[self.player].hint;
+        self.camera = self.follow.update(&seen, &self.world, hint, self.frame_time);
         (views, lights)
+    }
+
+    /// Car `i`'s vehicle as drawn now (between its last two steps): what
+    /// cameras film.
+    pub fn drawn(&self, i: usize) -> Vehicle {
+        let car = &self.cars[i];
+        let mut v = car.vehicle.clone();
+        car.prev.lerp(&Pose::of(&car.vehicle), (self.pending / STEP).clamp(0.0, 1.0)).apply(&mut v);
+        v
     }
 
     /// Takes car `i` off the road (not the player's). Cars after it move

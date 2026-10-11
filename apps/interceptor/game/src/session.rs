@@ -301,7 +301,10 @@ impl Session {
         self.limit.map(|l| (l - chase.time).max(0.0))
     }
 
-    /// Advances `dt` seconds.
+    /// Advances `dt` seconds of real time: the countdown and the radio's
+    /// words by that, the game and all that follows it (the chase, step by
+    /// step; the smoke and sparks; the time since the chase ended) by as
+    /// far as the game moved on.
     pub fn update(&mut self, dt: f32) {
         if let Some(r) = &mut self.radio {
             r.1 += dt;
@@ -320,18 +323,27 @@ impl Session {
             }
             return;
         }
-        self.game.update(dt);
-        self.effects.update(&self.game, self.game.camera.eye, dt);
-        self.top_speed = self.top_speed.max(self.game.player().vehicle.speed().abs());
+        // The chase, while it is on, follows each of the game's steps (and
+        // stops at its time limit, if it has one).
+        let driving = self.phase == Phase::Driving;
+        let (chase, top, limit) = (&mut self.chase, &mut self.top_speed, self.limit);
+        let moved = self.game.update_with(dt, |game| {
+            *top = top.max(game.player().vehicle.speed().abs());
+            if let Some(chase) = chase.as_mut()
+                && driving
+                && limit.is_none_or(|l| chase.time < l)
+            {
+                chase.step(game);
+            }
+        });
+        self.effects.update(&self.game, self.game.camera.eye, moved);
         if let Phase::Over(t) = &mut self.phase {
-            *t += dt;
+            *t += moved;
         }
-        // The chase, while it is on.
         let mut ended = None;
-        if let Some(chase) = &mut self.chase
-            && self.phase == Phase::Driving
+        if let Some(chase) = &self.chase
+            && driving
         {
-            chase.update(&mut self.game, dt);
             ended = match chase.state {
                 State::TakenDown => Some(Ending::TakenDown),
                 State::Busted => Some(Ending::Busted),
@@ -345,8 +357,8 @@ impl Session {
             None => self.chatter(),
         }
         match self.mode {
-            Mode::Patrol { .. } => self.patrol(dt),
-            Mode::Showcase => self.showcase(dt),
+            Mode::Patrol { .. } => self.patrol(moved),
+            Mode::Showcase => self.showcase(),
             _ => {}
         }
     }
@@ -414,7 +426,7 @@ impl Session {
     }
 
     /// On patrol: the suspect of a chase over is taken away, and dispatch
-    /// calls in the next.
+    /// calls in the next (`dt` seconds of the game on).
     fn patrol(&mut self, dt: f32) {
         if let Phase::Over(t) = self.phase
             && t > 6.0
@@ -460,7 +472,7 @@ impl Session {
     }
 
     /// In the showcase: a new suspect after each chase.
-    fn showcase(&mut self, _dt: f32) {
+    fn showcase(&mut self) {
         if let Phase::Over(t) = self.phase
             && t > 2.5
         {
@@ -479,14 +491,16 @@ impl Session {
     }
 
     /// What to draw now, filmed by the session's camera (`dt` since the
-    /// last frame).
+    /// last frame, 0 while frozen: see [`Game::frame`]).
     pub fn frame(&mut self, dt: f32) -> (Vec<CarView>, Vec<Light>) {
         let (cars, lights) = self.game.frame(dt);
         if let Some(cinema) = &mut self.cinema {
+            // The cars as drawn, so that the camera moves with them.
             let g = &self.game;
-            let hero = &g.cars[g.player];
-            let chased = self.chase.filter(|c| c.on()).map(|c| &g.cars[c.suspect].vehicle);
-            self.game.camera = cinema.update(&g.world, &hero.vehicle, hero.hint, chased, dt);
+            let hero = g.drawn(g.player);
+            let chased = self.chase.filter(|c| c.on()).map(|c| g.drawn(c.suspect));
+            let hint = g.cars[g.player].hint;
+            self.game.camera = cinema.update(&g.world, &hero, hint, chased.as_ref(), g.frame_time);
         }
         (cars, lights)
     }
@@ -555,6 +569,35 @@ mod tests {
         std::println!("{o:?}");
         assert!(o.ending.caught(), "{o:?}");
         assert!(matches!(s.phase, Phase::Over(_)));
+    }
+
+    #[test]
+    fn a_chase_goes_the_same_whatever_the_frames() {
+        // The first mission, the computer at the wheel from the countdown:
+        // the cars, their drivers and the chase all step at a fixed rate,
+        // so frames of any lengths, stalls the game does not catch up on
+        // included, play the same chase to the same end.
+        let world = world();
+        let play = |dts: &dyn Fn(usize) -> f32| {
+            let mut s = Session::new(world.clone(), Mode::Career(0));
+            let target = s.chase.map(|c| c.suspect);
+            s.game.set_autopilot(true, target);
+            let (mut i, mut t) = (0, 0.0);
+            while s.outcome.is_none() && t < 600.0 {
+                let dt = dts(i);
+                s.update(dt);
+                s.frame(dt);
+                (i, t) = (i + 1, t + dt);
+            }
+            s.outcome.expect("the chase never ended")
+        };
+        let mut rng = Rng::new(11);
+        let uneven: Vec<f32> = (0..4096).map(|_| rng.range_f32(0.008, 0.040)).collect();
+        let first = play(&|_| 1.0 / 60.0);
+        std::println!("{first:?}");
+        assert_eq!(play(&|_| 1.0 / 40.0), first);
+        assert_eq!(play(&|i| uneven[i % uneven.len()]), first);
+        assert_eq!(play(&|i| if i % 120 == 119 { 0.25 } else { 1.0 / 60.0 }), first);
     }
 
     #[test]

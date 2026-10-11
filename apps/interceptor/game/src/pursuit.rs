@@ -10,7 +10,7 @@
 
 use crate::carmodel::Kind;
 use crate::driver::{Role, Suspect};
-use crate::game::{Car, Event, Game};
+use crate::game::{Car, Event, Game, STEP};
 use crate::prelude::*;
 use crate::vehicle::Spec;
 
@@ -104,17 +104,19 @@ impl Pursuit {
         1.0 - game.cars[self.suspect].damage
     }
 
-    /// Follows the pursuit through the frame's events (`dt` seconds of
-    /// game time passed).
-    pub fn update(&mut self, game: &mut Game, dt: f32) {
+    /// Follows the pursuit through a step of the game, just taken (see
+    /// [`Game::update_with`]): step by step, it goes the same however the
+    /// game's frames fall.
+    pub fn step(&mut self, game: &mut Game) {
+        let dt = STEP;
         let State::Chasing { mut escaping, mut busting } = self.state else { return };
         self.time += dt;
         self.since_hit += dt;
         let (p, i) = (game.player, self.suspect);
         // The knocks it took: harder from the police (any police car), and
         // from a wall it was pushed into; a ram by the player counted.
-        for e in &game.events {
-            let Event::Crash { a, b, impact } = *e;
+        for k in game.step_events() {
+            let Event::Crash { a, b, impact } = game.events[k];
             let other = match (a == i, b == Some(i)) {
                 (true, _) => b,
                 (_, true) => Some(a),
@@ -175,7 +177,6 @@ impl Pursuit {
 mod tests {
     use super::*;
     use crate::env::{Environment, TimeOfDay, Weather};
-    use crate::game::STEP;
     use crate::world::World;
 
     fn wanted() -> Wanted {
@@ -206,8 +207,7 @@ mod tests {
             car.role = Role::Player;
             g.cars[p] = car;
             for _ in 0..(0.6 / STEP) as usize {
-                g.update(STEP);
-                chase.update(&mut g, STEP);
+                g.update_with(STEP, |g| chase.step(g));
             }
             rams += 1;
         }
@@ -222,8 +222,7 @@ mod tests {
         let mut chase = Pursuit::start(&mut g, &wanted(), 60.0, 30.0);
         // The player stays put.
         for _ in 0..(90.0 / STEP) as usize {
-            g.update(STEP);
-            chase.update(&mut g, STEP);
+            g.update_with(STEP, |g| chase.step(g));
             if !chase.on() {
                 break;
             }

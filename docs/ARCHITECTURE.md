@@ -696,7 +696,10 @@ the voice agent's link.
   GPU. A software renderer gets fewer and smaller of everything, tone
   mapped in each shader; the resolution adapts to the frame rate.
 * **The simulation** steps at 120 Hz whatever the frame rate (frames are
-  drawn between the last two steps): four tyres with a friction circle,
+  drawn between the last two steps, and the cameras film the cars as
+  drawn: the chase camera's springs are solved rather than stepped, so
+  frames of uneven length never move it about behind the car, nor does a
+  stall the game does not catch up on): four tyres with a friction circle,
   weight transfer, a gearbox, stability control and anti-lock brakes;
   collisions between cars' boxes and with the walls. The computer drives
   the traffic (keeping its distance, yielding to sirens), the suspects
@@ -704,7 +707,9 @@ the voice agent's link.
   police (taking its line only while it is clear of all but the suspect,
   never faster than it can stop behind a car on it, closing with a PIT).
   A session is a mission, a quick chase, a patrol or the menus' showcase,
-  which the computer drives and a cinematic camera films.
+  which the computer drives and a cinematic camera films; its chase
+  follows the game step by step, so that it goes the same however the
+  frames fall.
 * **The sounds** are synthesised as the game plays (`game::audio`): each
   engine as its cylinders' firing pulses through its banks' exhaust pipes
   and silencer (a cross-plane V8's burble, a flat six's rasp), sirens

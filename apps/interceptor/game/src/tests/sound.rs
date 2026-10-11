@@ -111,8 +111,7 @@ fn a_chase_sounds() {
     let mut crashes = 0;
     let mut most = [0usize; 3];
     for _ in 0..secs * fps {
-        game.update(dt);
-        chase.update(&mut game, dt);
+        game.update_with(dt, |g| chase.step(g));
         game.frame(dt);
         let (scene, cues) = sound.update(&game, 1.0, dt);
         most = [most[0].max(scene.engines.len()), most[1].max(scene.sirens.len()), most[2].max(scene.tires.len())];

@@ -2,6 +2,7 @@
 //! drivers, the pictures and the sounds.
 
 mod ai;
+mod camera;
 mod map;
 mod render;
 mod sound;

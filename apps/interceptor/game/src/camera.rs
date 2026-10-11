@@ -5,7 +5,11 @@
 //! The chase cameras trail the car on springs: further back and wider as
 //! the speed rises, looking where the car is going while it slides,
 //! shaken by crashes, and kept inside the road's walls and under a
-//! tunnel's roof.
+//! tunnel's roof. The springs are solved, not stepped: a camera is where
+//! it would be however long the frames are, so frames of uneven length
+//! (a slow one now and then) never move it about behind the car.
+
+use core::ops::{Add, Div, Mul, Sub};
 
 use crate::prelude::*;
 
@@ -47,6 +51,13 @@ pub struct Follow {
     shake_time: f32,
     /// Looking back over the shoulder.
     pub behind: bool,
+    /// Where the chase camera wanted to be at the last frame, and for which
+    /// view (looking back or not): the spring follows that place as it
+    /// moved since.
+    last: Option<(Vec3, View, bool)>,
+    /// The direction it turned to look along and the field of view it
+    /// widened to at the last frame, followed likewise.
+    wanted: Option<(Vec2, f32)>,
 }
 
 impl Follow {
@@ -62,6 +73,8 @@ impl Follow {
             shake: 0.0,
             shake_time: 0.0,
             behind: false,
+            last: None,
+            wanted: None,
         };
         c.pos = c.desired(car).0;
         c
@@ -95,24 +108,31 @@ impl Follow {
         let heading = car.forward();
         let motion = if speed > 4.0 { car.vel / speed } else { heading };
         let want = (heading * 0.55 + motion * 0.45).normalize_or(heading);
-        let k = 1.0 - (-dt * 5.0).exp();
-        self.look = (self.look + (want - self.look) * k).normalize_or(want);
         // Wider with speed.
         let fov = 1.0 + (speed / 70.0).min(1.0) * 0.28;
-        self.fov += (fov - self.fov) * (1.0 - (-dt * 2.0).exp());
+        let (want_before, fov_before) = self.wanted.unwrap_or((want, fov));
+        self.look = ease(self.look, want_before, want, 5.0, dt).normalize_or(want);
+        self.fov = ease(self.fov, fov_before, fov, 2.0, dt);
+        self.wanted = Some((want, fov));
         self.shake_time += dt;
         self.shake *= (-dt * 3.0).exp();
 
         let mut cam = match self.view {
             View::Chase | View::Near => {
                 let (eye, target) = self.desired(car);
-                // A critically damped spring towards it.
+                // A critically damped spring after it, the place it wants
+                // having moved steadily since the last frame (but for a
+                // change of view, which it eases to from where it is).
                 let w = if self.view == View::Chase { 9.0 } else { 11.0 };
-                let a = (eye - self.pos) * (w * w) - self.vel * (2.0 * w);
-                self.vel += a * dt;
-                self.pos += self.vel * dt;
-                // Never far behind (after a teleport or a long frame).
-                if self.pos.distance(eye) > 25.0 {
+                let from = match self.last {
+                    Some((at, view, behind)) if view == self.view && behind == self.behind => at,
+                    _ => eye,
+                };
+                (self.pos, self.vel) = spring(self.pos, self.vel, from, eye, w, dt);
+                self.last = Some((eye, self.view, self.behind));
+                // Never far behind (after a teleport): further than the
+                // spring's own lag at this speed.
+                if self.pos.distance(eye) > 25.0 + 2.0 * speed / w {
                     self.pos = eye;
                     self.vel = Vec3::ZERO;
                 }
@@ -132,6 +152,7 @@ impl Follow {
                 };
                 self.pos = m.transform_point3(eye);
                 self.vel = Vec3::ZERO;
+                self.last = None;
                 Camera { eye: self.pos, target: m.transform_point3(ahead), up: Vec3::Y, fov: self.fov * 1.05 }
             }
         };
@@ -144,6 +165,46 @@ impl Follow {
         }
         cam
     }
+}
+
+/// A critically damped spring of rate `w` (1/s), at `pos` going at `vel`,
+/// after a place moving steadily from `from` to `to` over `dt` seconds:
+/// where it is and how fast it goes at the end. Solved exactly, so it is
+/// the same over one long frame as over many short ones (stepped, it
+/// would come out ahead by more the longer the frame, and overshoot).
+fn spring(pos: Vec3, vel: Vec3, from: Vec3, to: Vec3, w: f32, dt: f32) -> (Vec3, Vec3) {
+    if dt <= 0.0 {
+        return (pos, vel);
+    }
+    // A step of under a millisecond is too short to tell the place's speed
+    // by: it counts as having moved at once.
+    let from = if dt < 1e-3 { to } else { from };
+    // Relative to the place, which goes at `v`, the spring settles `lag`
+    // behind it; what is left of where it was dies away as (c1 + c2 t)
+    // e^(-w t).
+    let v = (to - from) / dt;
+    let lag = v * (2.0 / w);
+    let c1 = pos - from + lag;
+    let c2 = vel - v + c1 * w;
+    let decay = (-w * dt).exp();
+    let left = (c1 + c2 * dt) * decay;
+    let rate = (c2 - (c1 + c2 * dt) * w) * decay;
+    (to - lag + left, v + rate)
+}
+
+/// Eases `x` at `rate` (1/s) after a value moving steadily from `from` to
+/// `to` over `dt` seconds, solved exactly as [`spring`] is.
+fn ease<T>(x: T, from: T, to: T, rate: f32, dt: f32) -> T
+where
+    T: Copy + Add<Output = T> + Sub<Output = T> + Mul<f32, Output = T> + Div<f32, Output = T>,
+{
+    if dt <= 0.0 {
+        return x;
+    }
+    let from = if dt < 1e-3 { to } else { from };
+    // It settles `lag` behind a value going steadily; the rest dies away.
+    let lag = (to - from) / (rate * dt);
+    to - lag + (x - from + lag) * (-rate * dt).exp()
 }
 
 /// Keeps `eye` inside the road's walls, above the ground and under a
