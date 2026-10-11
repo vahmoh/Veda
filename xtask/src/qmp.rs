@@ -57,6 +57,24 @@ impl Qmp {
         }
     }
 
+    /// Gives up on answers QEMU takes longer than `timeout` for.
+    pub fn set_timeout(&mut self, timeout: Duration) {
+        self.writer.set_read_timeout(Some(timeout)).ok();
+    }
+
+    /// QEMU's state, as `query-status` tells it: `running`, `paused`,
+    /// `internal-error`, ...
+    pub fn status(&mut self) -> Result<String> {
+        let line = self.execute("query-status", "{}")?;
+        field(&line, "status").ok_or_else(|| format!("query-status: {}", line.trim()))
+    }
+
+    /// What a command of QEMU's monitor (its human interface) prints.
+    pub fn human(&mut self, command: &str) -> Result<String> {
+        let line = self.execute("human-monitor-command", &format!("{{\"command-line\":\"{command}\"}}"))?;
+        field(&line, "return").ok_or_else(|| format!("{command}: {}", line.trim()))
+    }
+
     pub fn screenshot(&mut self, path: &Path) -> Result {
         let path = path.to_string_lossy().replace('\\', "/");
         self.execute("screendump", &format!("{{\"filename\":\"{path}\",\"format\":\"png\"}}")).map(|_| ())
@@ -146,5 +164,45 @@ impl Qmp {
 
     pub fn quit(&mut self) {
         let _ = self.execute("quit", "{}");
+    }
+}
+
+/// The string value of the first `key` in a QMP message, its escapes
+/// undone (a monitor's `\r\n` line ends become `\n`).
+fn field(message: &str, key: &str) -> Option<String> {
+    let at = message.find(&format!("\"{key}\""))? + key.len() + 2;
+    let value = message[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                'r' => {}
+                't' => out.push('\t'),
+                'u' => {
+                    let code: String = chars.by_ref().take(4).collect();
+                    out.push(u32::from_str_radix(&code, 16).ok().and_then(char::from_u32).unwrap_or('?'));
+                }
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::field;
+
+    #[test]
+    fn fields_of_replies() {
+        let status = r#"{"return": {"status": "running", "singlestep": false, "running": true}}"#;
+        assert_eq!(field(status, "status").as_deref(), Some("running"));
+        let text = r#"{"return": "CPU#0\r\nRIP=000000000000fff0 HLT=0\r\nsaid \"hi\" é\r\n"}"#;
+        assert_eq!(field(text, "return").as_deref(), Some("CPU#0\nRIP=000000000000fff0 HLT=0\nsaid \"hi\" é\n"));
+        assert_eq!(field(r#"{"return": {}}"#, "return"), None);
     }
 }

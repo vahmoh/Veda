@@ -499,7 +499,7 @@ fn run(o: &Options) -> Result {
     } else {
         None
     };
-    let mut cmd = qemu::command(&install, &disk, &vars, &vm);
+    let mut cmd = qemu::command(&install, &disk, &vars, &vm)?;
     util::status("Running", format!("{}", install.binary.display()));
     util::run(&mut cmd)
 }

@@ -21,7 +21,7 @@
 //! expect-serial "PASS"             # fail unless the log contains the text
 //! reject-serial "panic"            # fail if the log contains the text
 //! fail-on "PANIC"                  # abort later waits as soon as the text appears
-//! reset                            # reboot (disks are kept); later waits see only new output
+//! reset                            # reboot (disks are kept) until the loader starts; later waits see only new output
 //! checkpoint                       # later waits and expects see only output from now on
 //! link wired off                   # unplug (off) or plug in (on) the wired card's cable
 //! boot-cmdline "run=about"        # extra kernel command line, applied before boot
@@ -90,6 +90,12 @@ use crate::qemu::{self, DiskBus, InputDevices, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
 
+/// What Veda's boot loader prints first: a machine that was reset has
+/// started again.
+const LOADER_BANNER: &str = "[vboot] Veda boot loader";
+/// How long a reset may take to reach the loader (it takes about a second).
+const RESTART: Duration = Duration::from_secs(30);
+
 /// The machine a script drives: QEMU, through QMP.
 pub struct Machine {
     child: Child,
@@ -129,6 +135,21 @@ impl Machine {
 
     fn reset(&mut self) -> Result {
         self.qmp.execute("system_reset", "{}").map(|_| ())
+    }
+
+    /// QEMU's state and its processors', for a machine that does not do
+    /// what it should: whether QEMU answers at all, how it runs, and where
+    /// each processor is.
+    fn examine(&mut self) -> String {
+        self.qmp.set_timeout(Duration::from_secs(5));
+        let status = match self.qmp.status() {
+            Ok(s) => s,
+            Err(e) => return format!("QEMU does not answer ({e})"),
+        };
+        match self.qmp.human("info registers -a") {
+            Ok(registers) => format!("QEMU is {status}, {}", processors(&registers)),
+            Err(e) => format!("QEMU is {status}, its processors unread ({e})"),
+        }
     }
 
     /// Why the machine stopped, if it did.
@@ -193,7 +214,7 @@ impl Session {
             None
         };
         let vars = qemu::script_vars_file(install, &vm.firmware_variables)?;
-        let mut cmd = qemu::command(install, disk, &vars, &vm);
+        let mut cmd = qemu::command(install, disk, &vars, &vm)?;
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(&qmp, Duration::from_secs(20))?;
@@ -229,13 +250,28 @@ impl Session {
         self.since = self.serial_bytes().len();
     }
 
-    /// Resets the machine (a reboot that keeps the disks).
+    /// Resets the machine (a reboot that keeps the disks), and waits until
+    /// Veda's boot loader starts again.
     pub fn reset(&mut self) -> Result {
-        self.since = self.serial_bytes().len();
-        self.boot = self.since;
+        let before = self.serial_bytes().len();
+        self.since = before;
+        self.boot = before;
         self.pointer = false;
         self.keyboard = false;
-        self.m.reset()
+        self.m.reset()?;
+        if self.appears(before, LOADER_BANNER, RESTART)? {
+            return Ok(());
+        }
+        let printed = self.serial_bytes().len().saturating_sub(before);
+        let what = match printed {
+            0 => String::from("the firmware printed nothing"),
+            n => format!("the firmware printed {n} bytes, but Veda's boot loader did not start"),
+        };
+        Err(format!(
+            "the machine did not start again: {what} in the {} s after the reset; {}",
+            RESTART.as_secs(),
+            self.m.examine()
+        ))
     }
 
     /// Waits until the serial log contains `needle`.
@@ -266,11 +302,21 @@ impl Session {
 
     /// Waits until the serial log from byte `from` on contains `needle`.
     fn wait_from(&mut self, from: usize, needle: &str, timeout: Duration) -> Result {
+        match self.appears(from, needle, timeout)? {
+            true => Ok(()),
+            false => Err(format!("timed out after {}s waiting for \"{needle}\"", timeout.as_secs())),
+        }
+    }
+
+    /// Whether the serial log comes to contain `needle` after byte `from`
+    /// within `timeout`; an error if it shows a failure pattern first, or
+    /// QEMU stops.
+    fn appears(&mut self, from: usize, needle: &str, timeout: Duration) -> Result<bool> {
         let start = Instant::now();
         loop {
             let b = self.serial_bytes();
             if String::from_utf8_lossy(&b[from.min(b.len())..]).contains(needle) {
-                return Ok(());
+                return Ok(true);
             }
             let log = self.serial();
             if let Some(p) = self.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
@@ -280,7 +326,7 @@ impl Session {
                 return Err(format!("{why} before \"{needle}\" appeared"));
             }
             if start.elapsed() > timeout {
-                return Err(format!("timed out after {}s waiting for \"{needle}\"", timeout.as_secs()));
+                return Ok(false);
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -289,6 +335,25 @@ impl Session {
     pub fn finish(mut self) {
         self.m.finish();
     }
+}
+
+/// Where each processor is, from QEMU's `info registers -a`: the code
+/// segment's selector and the instruction pointer, and whether it halted.
+fn processors(registers: &str) -> String {
+    let mut out = Vec::new();
+    let (mut cpu, mut rip, mut halted) = ("", "", false);
+    for line in registers.lines() {
+        if let Some(n) = line.strip_prefix("CPU#") {
+            cpu = n.trim();
+        } else if let Some(rest) = line.strip_prefix("RIP=") {
+            rip = rest.split_whitespace().next().unwrap_or_default();
+            halted = rest.split_whitespace().any(|w| w == "HLT=1");
+        } else if let Some(rest) = line.strip_prefix("CS =") {
+            let cs = rest.split_whitespace().next().unwrap_or_default();
+            out.push(format!("processor {cpu} at {cs}:{rip}{}", if halted { " halted" } else { "" }));
+        }
+    }
+    if out.is_empty() { String::from("no processors") } else { out.join(", ") }
 }
 
 /// Splits a script line into words, honouring double quotes.
@@ -1034,6 +1099,21 @@ pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn processors_are_where_their_registers_say() {
+        let registers = "CPU#0\nRAX=0000000000000000 RBX=0000000000000000\n\
+            RIP=000000000000fff0 RFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0\n\
+            ES =0000 0000000000000000 0000ffff 00009300\n\
+            CS =f000 00000000ffff0000 0000ffff 00009b00\n\
+            CPU#1\nRIP=ffffffff80029bf0 RFL=00000246 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1\n\
+            CS =0008 0000000000000000 ffffffff 00a09b00 DPL=0 CS64 [-RA]\n";
+        assert_eq!(
+            processors(registers),
+            "processor 0 at f000:000000000000fff0, processor 1 at 0008:ffffffff80029bf0 halted"
+        );
+        assert_eq!(processors(""), "no processors");
+    }
 
     fn wav(samples: &[i16], data_len: Option<u32>) -> Vec<u8> {
         let mut w = b"RIFF\0\0\0\0WAVEfmt ".to_vec();

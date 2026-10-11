@@ -10,6 +10,9 @@ pub struct QemuInstall {
     pub binary: PathBuf,
     pub ovmf_code: PathBuf,
     pub ovmf_vars_template: PathBuf,
+    /// The firmware's IGVM parameter area (its start and size), if it has
+    /// one: see [`igvm_params`].
+    pub igvm_params: Option<(u64, u64)>,
 }
 
 impl QemuInstall {
@@ -52,7 +55,8 @@ impl QemuInstall {
             .ok_or(missing)?;
         let ovmf_vars_template =
             std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
-        Ok(QemuInstall { binary, ovmf_code, ovmf_vars_template })
+        let code = std::fs::read(&ovmf_code).map_err(|e| format!("reading {}: {e}", ovmf_code.display()))?;
+        Ok(QemuInstall { binary, ovmf_code, ovmf_vars_template, igvm_params: igvm_params(&code) })
     }
 
     /// Whether this QEMU has the 3D virtio-gpu (built with virglrenderer):
@@ -66,6 +70,44 @@ impl QemuInstall {
                 .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("\"virtio-gpu-gl-pci\""))
         })
     }
+}
+
+/// The IGVM parameter area of an OVMF image, its start and size, from the
+/// IGVM descriptor its reset vector carries (`OvmfPkg/ResetVector/X64/
+/// IgvmMetadata.asm`): `IGVM`, its length, version 1 and the number of its
+/// sections, then the sections, each a start (or offset), a size and an id,
+/// the parameter area's 0x100.
+///
+/// OVMF reads the area at every boot for the number of processors and a
+/// memory map that a VM started from an IGVM file is given there, without
+/// telling whether this boot is one: a count it finds is taken as the
+/// machine's. Before edk2's e4f99a8554 (December 2025) it also leaves the
+/// area to the operating system as ordinary memory, which QEMU's resets
+/// keep. So whatever Veda left there can pass for a processor count after a
+/// reset (a program's PE header has its system version, 6, there), and the
+/// firmware then waits for ever for processors that do not exist.
+/// [`command`] blanks the area at every reset, as it is at power-on.
+fn igvm_params(code: &[u8]) -> Option<(u64, u64)> {
+    const PARAM_AREA: u32 = 0x100;
+    let word = |at: usize| code.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let mut from = 0;
+    while let Some(at) = code[from..].windows(4).position(|w| w == b"IGVM").map(|i| from + i) {
+        from = at + 4;
+        let (Some(length), Some(1), Some(sections)) = (word(at + 4), word(at + 8), word(at + 12)) else {
+            continue;
+        };
+        if sections > 16 || length != 16 + 12 * sections {
+            continue;
+        }
+        for section in (0..sections as usize).map(|i| at + 16 + 12 * i) {
+            if let (Some(start), Some(size), Some(PARAM_AREA)) = (word(section), word(section + 4), word(section + 8))
+                && size > 0
+            {
+                return Some((start as u64, size as u64));
+            }
+        }
+    }
+    None
 }
 
 /// How the virtual machine reaches the network.
@@ -327,7 +369,7 @@ pub fn prepare_home_disk(path: &Path, fresh: bool) -> Result {
 }
 
 /// Builds the QEMU command line for booting `disk`.
-pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) -> Command {
+pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) -> Result<Command> {
     let mut cmd = Command::new(&install.binary);
     let flash = |file: &Path, ro: bool| {
         format!(
@@ -364,6 +406,16 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
+    // The firmware's IGVM parameter area blank at every reset, from a file
+    // of zeros QEMU's loader writes there (see `igvm_params`).
+    if let Some((start, size)) = install.igvm_params {
+        let blank = util::out_dir().join("ovmf-igvm-params.bin");
+        if std::fs::metadata(&blank).map(|m| m.len()).ok() != Some(size) {
+            std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
+            std::fs::write(&blank, vec![0u8; size as usize]).map_err(|e| format!("{}: {e}", blank.display()))?;
+        }
+        cmd.args(["-device", &format!("loader,file={},addr={start:#x},force-raw=on", blank.display())]);
+    }
     // The display, at 00:01.0 (where `-vga std` puts it, before any other
     // device takes it), named so that the tablet can be bound to it (see
     // `-display` below): QEMU's standard VGA, whose memory holds the
@@ -514,7 +566,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-no-reboot"]);
     }
     cmd.args(&cfg.extra);
-    cmd
+    Ok(cmd)
 }
 
 /// The host's render node QEMU's 3D GPU renders on, headless: the one
@@ -606,6 +658,35 @@ pub fn vars_file(install: &QemuInstall) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An IGVM descriptor as OVMF's reset vector carries it, with `sections`
+    /// (start or offset, size, id), amid other bytes.
+    fn descriptor(sections: &[(u32, u32, u32)], version: u32) -> Vec<u8> {
+        let mut image = b"..IGVM?..".to_vec();
+        image.extend(b"IGVM");
+        for v in [16 + 12 * sections.len() as u32, version, sections.len() as u32] {
+            image.extend(v.to_le_bytes());
+        }
+        for &(a, b, c) in sections {
+            image.extend([a, b, c].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        image.extend(b"more");
+        image
+    }
+
+    #[test]
+    fn the_igvm_parameter_area_is_found() {
+        // As Ubuntu's OVMF 2025.11 has it: the area, its memory map and its
+        // processor count, then the HOB area.
+        let ovmf =
+            descriptor(&[(0x812000, 0x1000, 0x100), (0, 0xc0, 0x101), (0xc0, 16, 0x102), (0x813000, 0x1000, 0x200)], 1);
+        assert_eq!(igvm_params(&ovmf), Some((0x812000, 0x1000)));
+        // Without one (an older OVMF, or a build without the area), or of
+        // another version: nothing to blank.
+        assert_eq!(igvm_params(&descriptor(&[(0x813000, 0x1000, 0x200)], 1)), None);
+        assert_eq!(igvm_params(&descriptor(&[(0x812000, 0x1000, 0x100)], 2)), None);
+        assert_eq!(igvm_params(b"no descriptor here"), None);
+    }
 
     #[test]
     fn screens_are_what_qemu_can_present() {

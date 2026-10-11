@@ -104,6 +104,15 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   sets either: a width that is a multiple of 8, up to 4095x4095; beyond
   about six million pixels the display runs slower than 75 Hz (56 Hz at
   3840x2160), as fast as QEMU's EDID can describe it.
+* A script's `reset` restarts the machine as a PC's reset does, its memory
+  kept, and waits until Veda's loader starts again; if it does not, the
+  script fails saying what the firmware printed, how QEMU runs and where
+  each processor is. OVMF before edk2's e4f99a8554 (December 2025, so
+  Ubuntu 26.04's) reads a processor count and a memory map from a page of
+  memory it leaves to the system, at every boot: after a reset it could
+  take a program header of Veda's there for six processors, and wait for
+  ever for the two that are not. QEMU's loader blanks that page at every
+  reset (`igvm_params` in `xtask/src/qemu.rs` finds it in the firmware).
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)
