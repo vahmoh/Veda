@@ -95,6 +95,10 @@ pub(crate) struct Compositor {
     pub(crate) drag: Option<Drag>,
     pub(crate) decor_state: DecorState,
     pub(crate) hover_window: Option<u32>,
+    /// What the pointer was over when that was last worked out: windows
+    /// open, close, change their state and come to the front under a
+    /// pointer that stays put, and then it is worked out again.
+    pub(crate) hover_hit: Option<(u32, Part)>,
     pub(crate) last_click: (u64, u32, u8, i32, i32),
     pub(crate) click_count: u8,
     pub(crate) clipboard: String,

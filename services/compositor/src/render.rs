@@ -76,6 +76,12 @@ impl Compositor {
         for id in finished_close {
             self.destroy_window(id);
         }
+        // A window that came or went under the pointer, or changed, while
+        // the pointer stayed put: the hover and the cursor follow it (a game
+        // opening full screen under the pointer hides it).
+        if self.drag.is_none() && self.window_at(self.pointer.0, self.pointer.1) != self.hover_hit {
+            self.update_hover(false);
+        }
         self.advance_startup(now);
         self.take_gpu();
         if self.gpu.is_some() && !self.screen.flipping() {

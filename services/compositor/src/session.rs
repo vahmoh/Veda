@@ -199,7 +199,8 @@ impl display::Server for Session<'_> {
         self.own(id)?;
         self.comp.windows.get_mut(&id).unwrap().cursor = cursor;
         if self.comp.hover_window == Some(id) {
-            self.comp.update_hover();
+            // Its new cursor, nothing having moved.
+            self.comp.update_hover(false);
         }
         Ok(())
     }

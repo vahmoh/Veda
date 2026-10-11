@@ -106,14 +106,19 @@ impl Compositor {
                     self.send(id, WindowEvent::PointerMove { x: x - c.x, y: y - c.y });
                 }
             }
-            _ => self.update_hover(),
+            _ => self.update_hover(true),
         }
         self.update_cursor_rect();
     }
 
-    pub(crate) fn update_hover(&mut self) {
+    /// Works out what the pointer is over: the window it is over hears
+    /// where it is if it `moved`, or if that window (or part of it) has
+    /// just come under it, and the cursor becomes that window's.
+    pub(crate) fn update_hover(&mut self, moved: bool) {
         let (x, y) = self.pointer;
         let hit = self.window_at(x, y);
+        let entered = hit != self.hover_hit;
+        self.hover_hit = hit;
         let new_hover_window = hit.map(|(id, _)| id);
         if new_hover_window != self.hover_window {
             if let Some(old) = self.hover_window {
@@ -135,7 +140,9 @@ impl Compositor {
             Some((id, Part::Client)) => {
                 let w = &self.windows[&id];
                 let c = w.client_rect;
-                self.send(id, WindowEvent::PointerMove { x: x - c.x, y: y - c.y });
+                if moved || entered {
+                    self.send(id, WindowEvent::PointerMove { x: x - c.x, y: y - c.y });
+                }
                 w.cursor
             }
             Some((_, Part::Edge(dx, dy))) => match (dx, dy) {
@@ -205,7 +212,7 @@ impl Compositor {
                 }
                 _ => {}
             }
-            self.update_hover();
+            self.update_hover(true);
             return;
         }
 

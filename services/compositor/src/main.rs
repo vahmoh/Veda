@@ -180,6 +180,7 @@ fn main() -> i32 {
         drag: None,
         decor_state: DecorState::default(),
         hover_window: None,
+        hover_hit: None,
         last_click: (0, 0, 0, 0, 0),
         click_count: 0,
         clipboard: String::new(),
