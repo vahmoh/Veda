@@ -772,6 +772,33 @@ impl Told {
     }
 }
 
+/// The driver VM's memory when it gets an integrated GPU (MiB), whose
+/// memory is the VM's own: a game's pictures take hundreds of MiB there
+/// (Interceptor's 235 at 1280x720 and 341 at 1920x1080, on iris), beside
+/// Linux's 170 and the desktop's, where the VM's own default (256) leaves
+/// under 100 for them all.
+const GPU_VM_MIB: u64 = 1024;
+/// The driver VM's own default (MiB).
+const VM_MIB: u64 = 256;
+
+/// The memory the driver VM is to have for `guest`'s devices (MiB), where
+/// they need more than its default: an integrated GPU's. Not up to the
+/// memory the firmware keeps for them, which the guest has where the PC
+/// has it (above the first MiB, which the guest keeps as the PC does).
+fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
+    if !guest.iter().any(|d| intel_gpu(&d.info)) {
+        return None;
+    }
+    let kept = guest
+        .iter()
+        .flat_map(|d| acpi.map(|a| a.reserved_memory(d.address.bus, d.address.slot, d.address.function)))
+        .flatten()
+        .map(|r| r.start >> 20)
+        .filter(|&mib| mib > 0)
+        .min();
+    Some(kept.unwrap_or(GPU_VM_MIB).clamp(VM_MIB, GPU_VM_MIB))
+}
+
 /// The driver VM: the devices it gets, and its process, which is started
 /// again when it ends without Linux having powered the machine off.
 struct DriverVm {
@@ -793,19 +820,28 @@ struct DriverVm {
 }
 
 impl DriverVm {
+    /// The driver VM of `devices`, with `options` (and `memory` MiB, where
+    /// its devices need more than its default and the options say nothing).
     fn new(
         options: &[String],
+        memory: Option<u64>,
         devices: Vec<GuestDevice>,
         i8042: Option<I8042>,
         variables: Option<Vmo>,
         hypervisor: Resource,
     ) -> DriverVm {
-        let args = options
+        let mut args: Vec<String> = options
             .iter()
             .filter_map(|a| a.strip_prefix("drivervm."))
             .filter(|a| !a.starts_with("devices="))
             .map(Into::into)
             .collect();
+        if let Some(mib) = memory
+            && !args.iter().any(|a| a.starts_with("memory="))
+        {
+            println!("the driver VM gets {mib} MiB: its integrated GPU's memory is the VM's");
+            args.push(alloc::format!("memory={mib}"));
+        }
         DriverVm {
             args,
             devices,
@@ -1086,7 +1122,8 @@ fn main() -> i32 {
         match take(HYPERVISOR_RESOURCE) {
             Some(hypervisor) => {
                 let variables = vrt::env::take_handle(vabi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
-                vm = Some(DriverVm::new(&drivervm, guest, i8042, variables, hypervisor));
+                let memory = vm_memory(&guest, mgr.acpi.as_ref());
+                vm = Some(DriverVm::new(&drivervm, memory, guest, i8042, variables, hypervisor));
             }
             None => println!("no hypervisor resource for the driver VM"),
         }

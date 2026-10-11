@@ -552,7 +552,11 @@ under QEMU the compositor composes on the processor. The program is
 Mesa's build: the decoder and the drivers around the Rust half, which
 serves the protocol (Rust and C++ linked statically, on musl, with the
 guest's toolchain). GPU memory is the guest's, which Linux's driver
-allocates.
+allocates: an integrated GPU's pictures, textures and buffers are in the
+guest's RAM, so a guest that gets one has 1 GiB rather than 256 MiB
+(below the memory the firmware keeps for its devices): one game's
+pictures at 1920x1080 take 341 MiB on iris (Interceptor's), and the
+guest's own Linux and files 170.
 
 **USB**. USB controllers go to the driver VM whole (xHCI's, which PCs have
 had since about 2012), and Linux drives them, their hubs and every device
@@ -778,7 +782,8 @@ remaps interrupts, its virtio functions behind it, as a PC's are
 (`--no-iommu` for `cargo xtask run` leaves it out): every script runs the
 driver VM, and the GUI scripts need it (`cargo xtask test --ui` says why
 when it cannot run). Its options are on the kernel command line:
-`drivervm.run=PROGRAM`, `drivervm.poweroff`, `drivervm.memory=MIB`,
+`drivervm.run=PROGRAM`, `drivervm.poweroff`, `drivervm.memory=MIB`
+(256 by default, 1024 with an integrated GPU),
 `drivervm.cpus=N`, `drivervm.devices=VID:DID,...` (devices Veda would
 keep), `drivervm=off`, and `drivervm.crash=SECONDS`, which
 has Linux crash once, that long after it started, for the tests of the
