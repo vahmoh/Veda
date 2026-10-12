@@ -332,9 +332,12 @@ icon=document
 category=Accessories
 description=What it does
 pinned=false
+taskbar=false
 ```
 
-`icon` names are mapped to vector icons by `vui::Icon::by_name`.
+`icon` names are mapped to vector icons by `vui::Icon::by_name`;
+`pinned=true` puts the app in the start menu's pinned grid, and
+`taskbar=true` keeps it on the taskbar when it is not running.
 
 5. Make it agent-compatible: implement `App::agent_info` (a summary and
    the actions it offers, with their risk), `App::agent_state` (what the

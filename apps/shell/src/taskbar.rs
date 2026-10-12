@@ -1,5 +1,6 @@
-//! The taskbar: start button, pinned and running applications in the middle,
-//! and the agent, network, volume and clock buttons on the right.
+//! The taskbar: start button, the applications kept on it (`taskbar=true`
+//! in their manifests) and running ones in the middle, and the agent,
+//! network, volume and clock buttons on the right.
 
 use alloc::format;
 use alloc::string::String;
@@ -25,7 +26,8 @@ struct Win {
     minimized: bool,
 }
 
-/// One button: an app (pinned and/or running) or a lone window.
+/// One button: an app (kept on the taskbar and/or running) or a lone
+/// window.
 struct Item {
     key: String,
     /// App id (selects the tile colour and what to launch).
@@ -51,7 +53,7 @@ fn items(m: &Model) -> Vec<Item> {
     let mut items: Vec<Item> = m
         .apps
         .iter()
-        .filter(|a| a.pinned)
+        .filter(|a| a.taskbar)
         .map(|a| Item {
             key: a.id.clone(),
             app: a.id.clone(),

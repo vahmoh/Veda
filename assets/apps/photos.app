@@ -4,3 +4,4 @@ icon=image
 category=Media
 description=View and browse your pictures
 pinned=true
+taskbar=true

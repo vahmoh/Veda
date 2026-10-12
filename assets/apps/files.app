@@ -4,3 +4,4 @@ icon=folder
 category=System
 description=Browse and manage your files
 pinned=true
+taskbar=true

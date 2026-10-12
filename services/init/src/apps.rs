@@ -8,7 +8,11 @@
 //! category=Accessories
 //! description=Edit plain-text documents
 //! pinned=true
+//! taskbar=false
 //! ```
+//!
+//! `pinned` puts the app in the start menu's pinned grid, `taskbar` on the
+//! taskbar (both off unless given).
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -24,6 +28,7 @@ pub fn parse(id: &str, text: &str) -> AppInfo {
         category: "Applications".to_string(),
         description: String::new(),
         pinned: false,
+        taskbar: false,
     };
     for line in text.lines() {
         let line = line.trim();
@@ -39,6 +44,7 @@ pub fn parse(id: &str, text: &str) -> AppInfo {
             "category" => app.category = v,
             "description" => app.description = v,
             "pinned" => app.pinned = v == "true",
+            "taskbar" => app.taskbar = v == "true",
             _ => {}
         }
     }

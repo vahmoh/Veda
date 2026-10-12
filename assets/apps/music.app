@@ -4,3 +4,4 @@ icon=music
 category=Media
 description=Play your music library
 pinned=true
+taskbar=true

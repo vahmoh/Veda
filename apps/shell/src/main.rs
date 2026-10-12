@@ -4,8 +4,8 @@
 //!
 //! * the **desktop** ([`desktop`]): wallpaper and desktop icons, the Trash
 //!   first;
-//! * the **taskbar** ([`taskbar`]): start button, pinned and running apps,
-//!   clock;
+//! * the **taskbar** ([`taskbar`]): start button, the apps kept on it and
+//!   running ones, clock;
 //! * the **start menu** ([`start`]), **calendar** ([`calendar`]),
 //!   **volume** ([`volume`]) and **network** ([`wifi`]) popups;
 //! * **notifications** ([`notify`]);

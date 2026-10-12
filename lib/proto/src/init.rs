@@ -66,8 +66,10 @@ message! {
         pub icon: String,
         pub category: String,
         pub description: String,
-        /// Shown pinned in the taskbar / start menu.
+        /// Shown pinned in the start menu.
         pub pinned: bool,
+        /// Shown on the taskbar, running or not.
+        pub taskbar: bool,
     }
 }
 
