@@ -11,8 +11,10 @@ rav1e = { workspace = true }
 vaudio = { workspace = true }
 vfont = { workspace = true }
 vgfx = { workspace = true }
-vimage = { workspace = true }
-vmath = { workspace = true }
+vimage = { workspace = true, features = ["encode"] }
+fastnoise-lite = { workspace = true }
+rand = { workspace = true }
+rand_pcg = { workspace = true }
 vraster = { workspace = true }
 
 [lints]

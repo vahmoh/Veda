@@ -2,11 +2,11 @@
 
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// Frequency of a MIDI note (A4 = 69 = 440 Hz; fractional notes allowed).
 pub fn mtof(note: f32) -> f32 {
-    440.0 * FloatExt::exp2((note - 69.0) / 12.0)
+    440.0 * Float::exp2((note - 69.0) / 12.0)
 }
 
 /// Parses a note name such as `C4`, `F#3`, `Bb2` or `E-1` (C4 = 60).

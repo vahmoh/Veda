@@ -13,7 +13,6 @@ use alloc::vec::Vec;
 
 use crate::flatten;
 use crate::geom::Point;
-use crate::math;
 use crate::path::{KAPPA, Path, PathEl};
 
 /// The shape at the ends of open contours.
@@ -150,13 +149,13 @@ impl Ctx<'_> {
         let cos = (a.dot(b) / r2).clamp(-1.0, 1.0);
         let sin = a.cross(b) / r2;
         // Sagitta of the arc: r * (1 - cos(angle / 2)).
-        if r * (1.0 - math::sqrt((1.0 + cos) * 0.5)) <= self.tol {
+        if r * (1.0 - libm::sqrtf((1.0 + cos) * 0.5)) <= self.tol {
             let e = c + b;
             self.out.line_to(e.x, e.y);
             return;
         }
         let t = sin.abs() / (1.0 + cos); // tan(angle / 2)
-        let k = 4.0 / 3.0 * t / (1.0 + math::sqrt(1.0 + t * t)); // 4/3 tan(angle / 4)
+        let k = 4.0 / 3.0 * t / (1.0 + libm::sqrtf(1.0 + t * t)); // 4/3 tan(angle / 4)
         let s = if sin >= 0.0 { 1.0 } else { -1.0 };
         let ta = a.perp() * s;
         let tb = b.perp() * s;

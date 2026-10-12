@@ -325,6 +325,6 @@ trait FloorPx {
 
 impl FloorPx for f32 {
     fn floor_px(self) -> f32 {
-        vmath::FloatExt::floor(self + 0.5)
+        libm::floorf(self + 0.5)
     }
 }

@@ -69,10 +69,14 @@ pub mod world;
 #[cfg(test)]
 mod tests;
 
-/// What most modules use: the vector types and `FloatExt`, whose float
-/// methods (`x.sin()`) `core` lacks. Where `std` is linked (the tests, and
-/// builds alongside the tests' dependencies) its own methods take
-/// precedence, so a glob keeps the import from being reported unused.
+/// What most modules use: glam's vector types, their swizzles (`v.xz()`)
+/// and its `FloatExt` (`lerp`, `smoothstep`), and num-traits' `Float` and
+/// `Euclid`, whose float methods (`x.sin()`) `core` lacks. Where `std` is
+/// linked (the tests, and builds alongside the tests' dependencies) its own
+/// methods take precedence, so a glob keeps the import from being reported
+/// unused (and `Euclid::rem_euclid(&x, &y)` is called as a function: its
+/// signature is not std's).
 mod prelude {
-    pub use vmath::{FloatExt, Mat4, Quat, Vec2, Vec3, Vec4};
+    pub use glam::{FloatExt, Mat4, Quat, Vec2, Vec3, Vec3Swizzles, Vec4, Vec4Swizzles};
+    pub use num_traits::{Euclid, Float};
 }

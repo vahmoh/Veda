@@ -23,14 +23,14 @@ use crate::pursuit::{Pursuit, Wanted};
 use crate::sound::Sound;
 use crate::vehicle::Spec;
 use crate::world::World;
-use vmath::Vec3;
+use glam::Vec3;
 
 /// Writes stereo `pcm` as a WAV file and its spectrogram as a PNG.
 fn save(dir: &str, name: &str, pcm: &[i16]) {
     let wav = vaudio::wav::write(pcm, 2, RATE, &vaudio::Tags::default());
     std::fs::write(format!("{dir}/{name}.wav"), wav).unwrap();
     let image = spectrogram(pcm);
-    std::fs::write(format!("{dir}/{name}.png"), vimage::png::encode(&image, 6).unwrap()).unwrap();
+    std::fs::write(format!("{dir}/{name}.png"), vimage::encode_png(&image).unwrap()).unwrap();
 }
 
 /// The spectrogram of stereo `pcm` (its mid channel).

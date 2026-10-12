@@ -9,8 +9,10 @@
 
 use std::f32::consts::TAU;
 
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 use vaudio::synth::{self, Adsr, Analog, FilterSpec, Fm, Mode, OscSpec, Part, Song, Wave, theory};
-use vmath::{Noise, Rng};
 use vraster::{Path, Rasterizer, Transform};
 
 use crate::paint::{Blend, Canvas, Rgb, add, fbm1, gradient, hex, mix, noise1, scale, smoothstep, tonemap};
@@ -70,6 +72,26 @@ impl Ribbon {
     }
 }
 
+/// Fractal Perlin noise (FastNoise Lite) over noise units: `octaves`
+/// octaves, each `lacunarity` times the frequency and half the amplitude of
+/// the one before.
+fn fractal(kind: FractalType, octaves: i32, lacunarity: f32) -> FastNoiseLite {
+    let mut noise = FastNoiseLite::with_seed(0xA0_7A);
+    noise.set_noise_type(Some(NoiseType::Perlin));
+    noise.set_frequency(Some(1.0));
+    noise.set_fractal_type(Some(kind));
+    noise.set_fractal_octaves(Some(octaves));
+    noise.set_fractal_lacunarity(Some(lacunarity));
+    noise.set_fractal_gain(Some(0.5));
+    noise
+}
+
+/// Ridged noise from 0 to 1: 1 on the crests, falling away sharply.
+fn ridges(noise: &FastNoiseLite, x: f32, y: f32) -> f32 {
+    let r = 0.5 * (noise.get_noise_2d(x, y) + 1.0);
+    r * r
+}
+
 /// The scene: the sky and the mountains are painted once, as panoramas
 /// wider than the frame, and the camera's window moves over them.
 pub struct Aurora {
@@ -96,7 +118,9 @@ impl Aurora {
     pub fn new() -> Aurora {
         let sw = WIDTH + PAN.ceil() as usize + 2;
         let mut sky = Canvas::new(sw, SHORE);
-        let noise = Noise::new(0xA0_7A);
+        let (fbm2, fbm3, fbm4) =
+            (fractal(FractalType::FBm, 2, 2.0), fractal(FractalType::FBm, 3, 2.0), fractal(FractalType::FBm, 4, 2.0));
+        let (ridged4, ridged5) = (fractal(FractalType::Ridged, 4, 2.0), fractal(FractalType::Ridged, 5, 2.1));
         let stops = [(0.0, hex(0x02040C)), (0.45, hex(0x050C1C)), (0.8, hex(0x0A1A30)), (1.0, hex(0x123247))];
         sky.shade(|x, y| {
             let v = y / SHORE as f32;
@@ -107,28 +131,28 @@ impl Aurora {
             let d = (y - (40.0 + x * 0.16)) / 70.0;
             let band = (-d * d).exp();
             if band > 0.01 {
-                let cloud = 0.5 + 0.5 * noise.fbm(x / 90.0, y / 90.0, 4, 2.0, 0.5);
-                let lane = smoothstep(0.1, 0.5, noise.fbm(x / 40.0 + 7.0, y / 25.0, 3, 2.0, 0.5).abs());
+                let cloud = 0.5 + 0.5 * fbm4.get_noise_2d(x / 90.0, y / 90.0);
+                let lane = smoothstep(0.1, 0.5, fbm3.get_noise_2d(x / 40.0 + 7.0, y / 25.0).abs());
                 c = add(c, scale(hex(0x9FB0D8), band * cloud * lane * 0.07));
             }
             c
         });
-        let mut rng = Rng::new(0x57A2);
+        let mut rng = Pcg32::seed_from_u64(0x57A2);
         // Faint stars, painted into the panorama.
         for _ in 0..2600 {
-            let (x, y) = (rng.next_f32() * sw as f32, rng.next_f32() * SHORE as f32);
-            let b = 0.05 + 0.25 * rng.next_f32().powi(3);
-            sky.splat(x, y, rng.range_f32(0.45, 0.7), scale(star_colour(&mut rng), b));
+            let (x, y) = (rng.random::<f32>() * sw as f32, rng.random::<f32>() * SHORE as f32);
+            let b = 0.05 + 0.25 * rng.random::<f32>().powi(3);
+            sky.splat(x, y, rng.random_range(0.45..0.7), scale(star_colour(&mut rng), b));
         }
         // Bright ones twinkle, frame by frame.
         let stars = (0..220)
             .map(|_| Star {
-                x: rng.next_f32() * sw as f32,
-                y: rng.next_f32().powf(1.3) * SHORE as f32 * 0.95,
-                sigma: rng.range_f32(0.55, 1.1),
-                color: scale(star_colour(&mut rng), rng.range_f32(0.35, 1.0)),
-                rate: rng.range_f32(0.4, 2.2),
-                phase: rng.next_f32() * TAU,
+                x: rng.random::<f32>() * sw as f32,
+                y: rng.random::<f32>().powf(1.3) * SHORE as f32 * 0.95,
+                sigma: rng.random_range(0.55..1.1),
+                color: scale(star_colour(&mut rng), rng.random_range(0.35..1.0)),
+                rate: rng.random_range(0.4..2.2),
+                phase: rng.random::<f32>() * TAU,
             })
             .collect();
 
@@ -136,8 +160,8 @@ impl Aurora {
         let far: Vec<f32> = (0..sw)
             .map(|x| {
                 let x = x as f32;
-                let ridge = noise.ridged(x / 520.0 + 3.1, 0.37, 5, 2.1, 0.5);
-                let rise = 40.0 + 230.0 * ridge.powf(1.6) + 14.0 * noise.fbm(x / 45.0, 1.7, 3, 2.0, 0.5);
+                let ridge = ridges(&ridged5, x / 520.0 + 3.1, 0.37);
+                let rise = 40.0 + 230.0 * ridge.powf(1.6) + 14.0 * fbm3.get_noise_2d(x / 45.0, 1.7);
                 SHORE as f32 - rise
             })
             .collect();
@@ -148,7 +172,7 @@ impl Aurora {
             if below < 0.0 {
                 return [0.0; 3];
             }
-            let streaks = noise.ridged(x / 26.0, y / 60.0, 4, 2.0, 0.5);
+            let streaks = ridges(&ridged4, x / 26.0, y / 60.0);
             let k =
                 smoothstep(0.62, 0.9, streaks) * (-below / 70.0).exp() * smoothstep(150.0, 230.0, SHORE as f32 - ridge);
             [k; 3]
@@ -157,7 +181,7 @@ impl Aurora {
         let mut near: Vec<f32> = (0..nw)
             .map(|x| {
                 let x = x as f32;
-                let hill = 0.5 + 0.5 * noise.fbm(x / 260.0 + 11.0, 4.2, 4, 2.0, 0.5);
+                let hill = 0.5 + 0.5 * fbm4.get_noise_2d(x / 260.0 + 11.0, 4.2);
                 SHORE as f32 - 6.0 - 46.0 * hill * hill
             })
             .collect();
@@ -165,10 +189,10 @@ impl Aurora {
         let ground = near.clone();
         let mut x = 0.0;
         while x < nw as f32 {
-            let density = smoothstep(-0.25, 0.2, noise.fbm(x / 140.0, 9.3, 2, 2.0, 0.5));
-            if rng.next_f32() < density {
-                let height = rng.range_f32(9.0, 27.0) * (0.55 + 0.45 * density);
-                let half = height * rng.range_f32(0.17, 0.26);
+            let density = smoothstep(-0.25, 0.2, fbm2.get_noise_2d(x / 140.0, 9.3));
+            if rng.random::<f32>() < density {
+                let height = rng.random_range(9.0..27.0) * (0.55 + 0.45 * density);
+                let half = height * rng.random_range(0.17..0.26);
                 let base = ground[(x as usize).min(nw - 1)] + 2.0;
                 let (from, to) = ((x - half).floor().max(0.0) as usize, (x + half).ceil() as usize);
                 for (c, top) in near.iter_mut().enumerate().take(to).skip(from) {
@@ -180,7 +204,7 @@ impl Aurora {
                     }
                 }
             }
-            x += rng.range_f32(3.0, 8.0);
+            x += rng.random_range(3.0..8.0);
         }
 
         let ribbons = vec![
@@ -413,8 +437,8 @@ impl Aurora {
     }
 }
 
-fn star_colour(rng: &mut Rng) -> Rgb {
-    match rng.next_f32() {
+fn star_colour(rng: &mut Pcg32) -> Rgb {
+    match rng.random::<f32>() {
         v if v < 0.3 => [0.78, 0.86, 1.0],
         v if v < 0.42 => [1.0, 0.9, 0.78],
         _ => [1.0, 1.0, 1.0],

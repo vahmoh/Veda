@@ -5,12 +5,19 @@
 /// Entries of the sine table (one period).
 const TABLE: usize = 2048;
 
-/// One period of a sine, plus a guard entry for interpolation.
+/// One period of a sine, plus a guard entry for interpolation. Built at
+/// compile time, where `libm` cannot run, by turning a unit phasor a
+/// 1/TABLE turn per entry in `f64` (accurate to about 3e-14).
 static SINE: [f32; TABLE + 1] = {
+    // The cosine and sine of 2π / TABLE.
+    const C: f64 = 0.999_995_293_809_576_2;
+    const S: f64 = 0.003_067_956_762_965_976;
     let mut t = [0.0f32; TABLE + 1];
+    let (mut re, mut im) = (1.0f64, 0.0f64);
     let mut i = 0;
     while i <= TABLE {
-        t[i] = vmath::f32::sin(i as f32 * (core::f32::consts::TAU / TABLE as f32));
+        t[i] = im as f32;
+        (re, im) = (re * C - im * S, re * S + im * C);
         i += 1;
     }
     t
@@ -169,6 +176,14 @@ impl ChipNoise {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_entries_are_the_sine() {
+        for (i, &v) in SINE.iter().enumerate() {
+            let want = libm::sin(i as f64 * core::f64::consts::TAU / TABLE as f64) as f32;
+            assert!((v - want).abs() <= 1e-7, "entry {i}: {v} vs {want}");
+        }
+    }
 
     #[test]
     fn table_sine_is_accurate() {

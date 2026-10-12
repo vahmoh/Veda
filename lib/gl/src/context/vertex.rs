@@ -264,7 +264,7 @@ impl Context {
         if pname == gl::CURRENT_VERTEX_ATTRIB {
             if let Some(c) = self.current(index) {
                 let v: [i32; 4] = match c {
-                    Current::Float(f) => f.map(|x| vmath::f32::round(x) as i32),
+                    Current::Float(f) => f.map(|x| libm::roundf(x) as i32),
                     Current::Int(i) => i,
                     Current::Uint(u) => u.map(|x| x as i32),
                 };

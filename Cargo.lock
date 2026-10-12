@@ -13,6 +13,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aead"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -62,6 +68,7 @@ dependencies = [
 name = "agent"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vabi",
  "vagent",
  "vaudio",
@@ -69,7 +76,6 @@ dependencies = [
  "vfiles",
  "vipc",
  "vjson",
- "vmath",
  "vnet",
  "vproto",
  "vrt",
@@ -236,6 +242,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
+name = "bitflags"
+version = "2.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
+
+[[package]]
 name = "bitstream-io"
 version = "4.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,6 +281,12 @@ name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+
+[[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
 name = "byteorder"
@@ -363,12 +381,12 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 name = "compositor"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "vabi",
  "vbuild",
  "vgfx",
  "vgl",
  "vipc",
- "vmath",
  "vproto",
  "vraster",
  "vrt",
@@ -394,6 +412,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -508,7 +535,7 @@ version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "defmt-macros",
 ]
 
@@ -625,11 +652,11 @@ dependencies = [
 name = "editor"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "vabi",
  "vbuild",
  "vfiles",
  "vgfx",
- "vmath",
  "vproto",
  "vrt",
  "vtext",
@@ -695,6 +722,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast_image_resize"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "num-traits",
+ "thiserror",
+]
+
+[[package]]
+name = "fastnoise-lite"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e5f3c3cc9081e5d0e18bcd50e80cd33cba47fc22f88a9da9c33ecd1c87ea5c0"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "fdeflate"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
 name = "ff"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -728,6 +785,17 @@ name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+
+[[package]]
+name = "flate2"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide 0.9.1",
+ "zlib-rs",
+]
 
 [[package]]
 name = "getrandom"
@@ -771,6 +839,15 @@ checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
 dependencies = [
  "polyval",
  "zeroize",
+]
+
+[[package]]
+name = "glam"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc148d4ddd3930c52f9e5ae79b89805c6f07e9ff417e7b083e0348cea60a5aba"
+dependencies = [
+ "libm",
 ]
 
 [[package]]
@@ -1009,12 +1086,14 @@ dependencies = [
 name = "interceptor"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "interceptor-game",
+ "libm",
+ "num-traits",
  "vabi",
  "vbuild",
  "vgfx",
  "vgl",
- "vmath",
  "vproto",
  "vrt",
  "vui",
@@ -1024,10 +1103,16 @@ dependencies = [
 name = "interceptor-game"
 version = "0.1.0"
 dependencies = [
+ "fastnoise-lite",
+ "glam",
+ "libm",
+ "num-traits",
+ "rand 0.10.3",
+ "rand_distr",
+ "rand_pcg",
  "vaudio",
  "vgl",
  "vimage",
- "vmath",
 ]
 
 [[package]]
@@ -1061,6 +1146,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1075,6 +1166,12 @@ dependencies = [
  "arbitrary",
  "cc",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "log"
@@ -1114,16 +1211,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
 name = "music"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
+ "rand 0.10.3",
+ "rand_pcg",
  "vabi",
  "vaudio",
  "vbuild",
  "vfiles",
  "vgfx",
  "vipc",
- "vmath",
  "vproto",
  "vrt",
  "vui",
@@ -1238,6 +1357,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -1312,15 +1432,28 @@ dependencies = [
 name = "photos"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "vabi",
  "vbuild",
  "vfiles",
  "vgfx",
  "vimage",
- "vmath",
  "vproto",
  "vrt",
  "vui",
+]
+
+[[package]]
+name = "png"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
+dependencies = [
+ "bitflags 2.13.2",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -1408,6 +1541,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qoi"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1439,6 +1581,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+dependencies = [
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "rand_chacha"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1462,6 +1613,25 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rand_distr"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
+dependencies = [
+ "num-traits",
+ "rand 0.10.3",
+]
+
+[[package]]
+name = "rand_pcg"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core 0.10.1",
+]
 
 [[package]]
 name = "rav1e"
@@ -1490,7 +1660,7 @@ dependencies = [
  "num-traits",
  "paste",
  "profiling",
- "rand",
+ "rand 0.9.5",
  "rand_chacha",
  "simd_helpers",
  "thiserror",
@@ -1652,11 +1822,11 @@ dependencies = [
 name = "settings"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "vabi",
  "vbuild",
  "vfiles",
  "vgfx",
- "vmath",
  "vnet",
  "vproto",
  "vrt",
@@ -1689,6 +1859,7 @@ dependencies = [
 name = "shell"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "vabi",
  "vaudio",
  "vbuild",
@@ -1696,7 +1867,6 @@ dependencies = [
  "vgfx",
  "vimage",
  "vipc",
- "vmath",
  "vnet",
  "vproto",
  "vrt",
@@ -1720,6 +1890,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
 name = "simd_helpers"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1732,7 +1908,7 @@ dependencies = [
 name = "smoltcp"
 version = "0.14.0"
 dependencies = [
- "bitflags",
+ "bitflags 1.3.2",
  "byteorder",
  "cfg-if",
  "defmt",
@@ -1903,7 +2079,11 @@ dependencies = [
 name = "vaudio"
 version = "0.1.0"
 dependencies = [
- "vmath",
+ "libm",
+ "num-traits",
+ "rand 0.10.3",
+ "rand_distr",
+ "rand_pcg",
 ]
 
 [[package]]
@@ -1942,6 +2122,7 @@ dependencies = [
 name = "vfont"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vraster",
 ]
 
@@ -1961,8 +2142,9 @@ dependencies = [
 name = "vgfx"
 version = "0.1.0"
 dependencies = [
+ "libm",
+ "num-traits",
  "vfont",
- "vmath",
  "vraster",
 ]
 
@@ -1970,9 +2152,9 @@ dependencies = [
 name = "vgl"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vabi",
  "vglsl",
- "vmath",
  "vproto",
  "vrt",
 ]
@@ -1981,7 +2163,7 @@ dependencies = [
 name = "vglsl"
 version = "0.1.0"
 dependencies = [
- "vmath",
+ "libm",
 ]
 
 [[package]]
@@ -2004,12 +2186,14 @@ dependencies = [
 name = "videogen"
 version = "0.1.0"
 dependencies = [
+ "fastnoise-lite",
+ "rand 0.10.3",
+ "rand_pcg",
  "rav1e",
  "vaudio",
  "vfont",
  "vgfx",
  "vimage",
- "vmath",
  "vraster",
 ]
 
@@ -2017,6 +2201,7 @@ dependencies = [
 name = "videos"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vabi",
  "vaudio",
  "vbuild",
@@ -2025,7 +2210,6 @@ dependencies = [
  "videos-core",
  "vipc",
  "vjson",
- "vmath",
  "vproto",
  "vrt",
  "vui",
@@ -2041,6 +2225,20 @@ dependencies = [
 [[package]]
 name = "vimage"
 version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "crc32fast",
+ "fast_image_resize",
+ "jpeg-encoder",
+ "miniz_oxide 0.9.1",
+ "png",
+ "qoi",
+ "zune-bmp",
+ "zune-core",
+ "zune-inflate",
+ "zune-jpeg",
+ "zune-png",
+]
 
 [[package]]
 name = "viommu"
@@ -2082,10 +2280,6 @@ dependencies = [
  "viommu",
  "vpe",
 ]
-
-[[package]]
-name = "vmath"
-version = "0.1.0"
 
 [[package]]
 name = "vnet"
@@ -2139,6 +2333,9 @@ version = "0.1.0"
 [[package]]
 name = "vraster"
 version = "0.1.0"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "vrt"
@@ -2184,12 +2381,12 @@ dependencies = [
 name = "vui"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vabi",
  "vfiles",
  "vgfx",
  "vipc",
  "vjson",
- "vmath",
  "vproto",
  "vraster",
  "vrt",
@@ -2462,3 +2659,51 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+
+[[package]]
+name = "zune-bmp"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b77b890dbf6b1a32fc57d9f1f30e22175694c454581de7c6e466f2853cf9fe3"
+dependencies = [
+ "log",
+ "zune-core",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
+name = "zune-inflate"
+version = "0.2.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
+name = "zune-jpeg"
+version = "0.5.15"
+dependencies = [
+ "zune-core",
+]
+
+[[package]]
+name = "zune-png"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a321146329f7617ba0a5b26982cba45b7ce78163135aba78be25850aefcea80"
+dependencies = [
+ "zune-core",
+ "zune-inflate",
+]

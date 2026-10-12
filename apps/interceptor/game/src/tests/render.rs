@@ -20,7 +20,7 @@ use crate::carmodel::Kind;
 use crate::env::{Environment, TimeOfDay, Weather};
 use crate::render::{Camera, CarView, Frame, Livery, Passing, Quality, Renderer};
 use crate::world::World;
-use vmath::{Mat4, Vec3};
+use glam::{Mat4, Vec3};
 
 fn software(w: u32, h: u32) -> Context {
     let config = Config { width: w, height: h, ..Config::default() };
@@ -60,7 +60,7 @@ fn frame_with(c: &mut Context, r: &mut Renderer, cam: &Camera, cars: &[CarView],
 
 fn save(path: &str, px: &[u32], w: u32, h: u32) {
     let image = vimage::Image { width: w, height: h, pixels: px.to_vec() };
-    std::fs::write(path, vimage::png::encode(&image, 6).unwrap()).unwrap();
+    std::fs::write(path, vimage::encode_png(&image).unwrap()).unwrap();
 }
 
 /// The sky at the top, the road at the bottom, all painted, and many

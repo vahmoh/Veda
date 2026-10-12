@@ -154,7 +154,7 @@ fn render_shapes_png() {
         let pts: Vec<Point> = (0..5)
             .map(|i| {
                 let a = -core::f32::consts::FRAC_PI_2 + i as f32 * 4.0 * core::f32::consts::PI / 5.0;
-                let (sn, cs) = math::sin_cos(a);
+                let (sn, cs) = libm::sincosf(a);
                 Point::new(cx + rad * cs, cy + rad * sn)
             })
             .collect();
@@ -190,7 +190,7 @@ fn render_shapes_png() {
     // Thin hairlines at various angles.
     for i in 0..24 {
         let a = i as f32 * core::f32::consts::PI / 24.0;
-        let (sn, cs) = math::sin_cos(a);
+        let (sn, cs) = libm::sincosf(a);
         let mut l = Path::new();
         l.line(120.0 + 20.0 * cs, 340.0 + 20.0 * sn, 120.0 + 70.0 * cs, 340.0 + 70.0 * sn);
         r.stroke(&l, &StrokeStyle::new(1.0), &id, (cv.width, cv.height), |s| cv.span(&s, [0, 0, 0]));

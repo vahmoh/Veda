@@ -93,7 +93,7 @@ pub struct Camera {
 
 impl Camera {
     pub fn view(&self) -> Mat4 {
-        Mat4::look_at_rh(self.eye, self.target, self.up)
+        glam::camera::rh::view::look_at_mat4(self.eye, self.target, self.up)
     }
 }
 
@@ -807,7 +807,7 @@ impl Renderer {
         let camera = &frame.camera;
         let time = frame.time;
         let aspect = width as f32 / height.max(1) as f32;
-        let proj = Mat4::perspective_rh(camera.fov, aspect, NEAR, FAR);
+        let proj = glam::camera::rh::proj::opengl::perspective(camera.fov, aspect, NEAR, FAR);
         let view_proj = proj * camera.view();
         let planes = frustum(&view_proj);
         // This frame's cars, by kind, and the trees in view.
@@ -921,7 +921,11 @@ impl Renderer {
         gl.depth_func(gl::LEQUAL);
         gl.depth_mask(false);
         gl.use_program(self.sky.id);
-        gl.uniform_matrix4fv(self.sky.at("u_invViewProj"), false, &mat(&view_proj.inverse()));
+        gl.uniform_matrix4fv(
+            self.sky.at("u_invViewProj"),
+            false,
+            &mat(&view_proj.try_inverse().unwrap_or(Mat4::IDENTITY)),
+        );
         gl.uniform1f(self.sky.at("u_stars"), self.env.sky.stars);
         gl.bind_vertex_array(self.fullscreen);
         gl.draw_arrays(gl::TRIANGLES, 0, 3);
@@ -981,12 +985,12 @@ impl Renderer {
         let center = camera.eye + flat * (SHADOW_HALF * 0.6);
         let sun = self.env.sun_dir;
         let up = if sun.y.abs() > 0.95 { Vec3::Z } else { Vec3::Y };
-        let view = Mat4::look_at_rh(Vec3::ZERO, -sun, up);
+        let view = glam::camera::rh::view::look_at_mat4(Vec3::ZERO, -sun, up);
         let c = view.transform_point3(center);
         let texel = 2.0 * SHADOW_HALF / size;
         let (cx, cy) = ((c.x / texel).round() * texel, (c.y / texel).round() * texel);
         // Towards the sun far enough for the towers, beyond for the ground.
-        let proj = Mat4::orthographic_rh(
+        let proj = glam::camera::rh::proj::opengl::orthographic(
             cx - SHADOW_HALF,
             cx + SHADOW_HALF,
             cy - SHADOW_HALF,

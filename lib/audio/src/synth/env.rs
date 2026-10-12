@@ -5,7 +5,7 @@
 //! sound natural) and a linear attack. Because notes are rendered offline
 //! with known lengths, the release starts at a fixed sample.
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// Envelope shape (times in seconds, sustain as a level 0..1).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,7 +49,7 @@ pub struct Env {
 
 /// Per-sample multiplier that decays by about 60 dB over `secs`.
 fn coef(secs: f32, sr: f32) -> f32 {
-    FloatExt::exp(-6.9 / (secs.max(0.0005) * sr))
+    Float::exp(-6.9 / (secs.max(0.0005) * sr))
 }
 
 impl Env {

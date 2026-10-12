@@ -533,7 +533,7 @@ impl<'a> Ui<'a> {
         let accent = self.ctx.theme.accent;
         for i in 0..8 {
             let a = t + i as f32 * core::f32::consts::TAU / 8.0;
-            let (s, c) = (vmath::FloatExt::sin(a), vmath::FloatExt::cos(a));
+            let (s, c) = (libm::sinf(a), libm::cosf(a));
             let alpha = (255.0 * (i as f32 + 1.0) / 8.0) as u8;
             self.canvas.fill_circle(
                 cx as f32 + c * radius,

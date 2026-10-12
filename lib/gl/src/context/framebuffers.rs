@@ -86,8 +86,8 @@ fn required_read(i: &Internal) -> (u32, u32) {
 /// format's class reads them).
 fn color_bits(f: Format, c: [f32; 4]) -> [u32; 4] {
     match f.class() {
-        Class::Uint => c.map(|x| vmath::f32::round(x.max(0.0)) as u32),
-        Class::Sint => c.map(|x| vmath::f32::round(x) as i32 as u32),
+        Class::Uint => c.map(|x| libm::roundf(x.max(0.0)) as u32),
+        Class::Sint => c.map(|x| libm::roundf(x) as i32 as u32),
         _ => c.map(f32::to_bits),
     }
 }

@@ -15,7 +15,7 @@ vrt = { workspace = true }
 vabi = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
-vmath = { workspace = true }
+num-traits = { workspace = true }
 vtext = { workspace = true }
 vfiles = { workspace = true }
 vui = { workspace = true }

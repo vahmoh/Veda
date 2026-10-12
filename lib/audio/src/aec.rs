@@ -81,7 +81,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 use crate::fft::RealFft;
 use crate::mix::f32_to_i16;
@@ -140,7 +140,7 @@ const GAIN_BANDS: usize = 16;
 /// `1 - e^(-B / (seconds x rate))`: the per-block coefficient of a first
 /// order smoother with the given time constant.
 fn smoothing(block: usize, rate: u32, seconds: f32) -> f32 {
-    1.0 - FloatExt::exp(-(block as f32) / (seconds * rate as f32))
+    1.0 - Float::exp(-(block as f32) / (seconds * rate as f32))
 }
 
 /// The default block: the smallest power of two that lasts at least 1/128 s
@@ -153,7 +153,7 @@ fn block_size(rate: u32) -> usize {
 /// partition's age like a room's impulse response, summing to 1.
 fn prior(parts: usize, block: usize, rate: u32) -> Vec<f32> {
     let r = 1.0 - smoothing(block, rate, PRIOR_S);
-    let mut w: Vec<f32> = (0..parts).map(|p| FloatExt::powi(r, p as i32)).collect();
+    let mut w: Vec<f32> = (0..parts).map(|p| Float::powi(r, p as i32)).collect();
     let sum: f32 = w.iter().sum();
     for v in &mut w {
         *v /= sum;
@@ -331,7 +331,7 @@ impl DelayEstimator {
             let b = ((lo + (hi - lo) * (i + 1) as f32 / BANDS as f32) as usize).clamp(a + 1, block + 1);
             bands[i] = (a, b);
             // A -70 dBFS signal: 1e-7 x 2B per bin.
-            floor_log[i] = FloatExt::log2(1e-7 * n as f32 * (b - a) as f32);
+            floor_log[i] = Float::log2(1e-7 * n as f32 * (b - a) as f32);
         }
         let mut d = DelayEstimator {
             bands,
@@ -354,7 +354,7 @@ impl DelayEstimator {
             peak_width: ((0.04 * rate as f32) as usize).div_ceil(block),
             settle_updates: (0.4 * rate as f32 / block as f32) as u32,
             c_score: smoothing(block, rate, 1.0),
-            floor_rise: FloatExt::powf(10.0, 0.3 * block as f32 / rate as f32),
+            floor_rise: Float::powf(10.0, 0.3 * block as f32 / rate as f32),
         };
         d.reset();
         d
@@ -381,7 +381,7 @@ impl DelayEstimator {
     fn logs(&self, pow: &[f32], floor: &[f32; BANDS], out: &mut [f32; BANDS]) {
         for (o, (&(a, b), &f)) in out.iter_mut().zip(self.bands.iter().zip(floor)) {
             let e: f32 = pow[a..b].iter().sum();
-            *o = FloatExt::log2(e.max(1e-30)).max(f);
+            *o = Float::log2(e.max(1e-30)).max(f);
         }
     }
 
@@ -422,7 +422,7 @@ impl DelayEstimator {
         {
             let e: f32 = pow[a..b].iter().sum();
             *n = if e < *n { e } else { (*n * self.floor_rise).min(NOISE_MAX) };
-            *f = FloatExt::log2(2.0 * *n + 1e-30).max(abs);
+            *f = Float::log2(2.0 * *n + 1e-30).max(abs);
         }
         let mut logs = [0.0; BANDS];
         self.logs(pow, &floor, &mut logs);
@@ -447,7 +447,7 @@ impl DelayEstimator {
             self.cross[q] += c * (x - self.cross[q]);
             self.ref_energy[q] += c * (self.ref_flux_energy[i] - self.ref_energy[q]);
             // Its normalised correlation.
-            self.norm[q] = self.cross[q] / FloatExt::sqrt(self.ref_energy[q] * self.cap_energy + 1e-20);
+            self.norm[q] = self.cross[q] / Float::sqrt(self.ref_energy[q] * self.cap_energy + 1e-20);
             if self.norm[q] > self.norm[best] {
                 best = q;
             }
@@ -709,7 +709,7 @@ impl EchoCanceller {
         let max_delay = ((MAX_DELAY_MS as u64 * rate as u64 / 1000) as usize).div_ceil(block);
         let hist_len = max_delay + parts + 1;
         let hann =
-            (0..n).map(|i| (0.5 - 0.5 * FloatExt::cos(core::f64::consts::TAU * i as f64 / n as f64)) as f32).collect();
+            (0..n).map(|i| (0.5 - 0.5 * Float::cos(core::f64::consts::TAU * i as f64 / n as f64)) as f32).collect();
         let bin_hz = rate as f32 / n as f32;
         let spec = || vec![0.0f32; bins];
         let mut aec = EchoCanceller {
@@ -814,11 +814,11 @@ impl EchoCanceller {
             c_rev: smoothing(block, rate, 0.5),
             leak_keep: 1.0 - smoothing(block, rate, 0.4),
             boot_keep: 1.0 - smoothing(block, rate, BOOT_S),
-            boot_seed: FloatExt::exp(-0.08 / BOOT_S),
-            noise_rise: FloatExt::powf(10.0, 0.3 * block as f32 / rate as f32),
+            boot_seed: Float::exp(-0.08 / BOOT_S),
+            noise_rise: Float::powf(10.0, 0.3 * block as f32 / rate as f32),
             resid_keep: 1.0 - smoothing(block, rate, 0.025),
             // 60 dB per 0.25 s.
-            min_decay: FloatExt::powf(10.0, -6.0 * block as f32 / (0.25 * rate as f32)),
+            min_decay: Float::powf(10.0, -6.0 * block as f32 / (0.25 * rate as f32)),
             diverge_blocks: (0.3 * rate as f32 / block as f32) as u32 + 1,
             dt_hold_blocks: (0.1 * rate as f32 / block as f32) as u32 + 1,
             echo_hold_blocks: (5.0 * rate as f32 / block as f32) as u32,
@@ -939,7 +939,7 @@ impl EchoCanceller {
         if self.erle_e <= 0.0 || self.erle_d <= 0.0 {
             return 0.0;
         }
-        (10.0 * FloatExt::log10(self.erle_d / self.erle_e)).clamp(-30.0, 80.0)
+        (10.0 * Float::log10(self.erle_d / self.erle_e)).clamp(-30.0, 80.0)
     }
 
     /// True while both ends talk at once: the far end plays and the capture
@@ -1214,9 +1214,9 @@ impl EchoCanceller {
         if filtering {
             // Proportionate weights, and the far-end power weighted alike: the
             // normaliser, and the far-end power that the echo comes from.
-            let total: f32 = self.part_norm.iter().map(|&v| FloatExt::sqrt(v)).sum();
+            let total: f32 = self.part_norm.iter().map(|&v| Float::sqrt(v)).sum();
             for ((g, &v), &prior) in self.prop.iter_mut().zip(&self.part_norm).zip(&self.prior) {
-                let share = if total > 0.0 { FloatExt::sqrt(v) / total } else { prior };
+                let share = if total > 0.0 { Float::sqrt(v) / total } else { prior };
                 *g = (1.0 - PROPORTION) * prior + PROPORTION * share;
             }
             self.normw.fill(0.0);
@@ -1276,7 +1276,7 @@ impl EchoCanceller {
         let (mut sa, mut sb, mut saa, mut sbb, mut sab) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let band = self.band_lo..self.band_hi;
         for (&p, &y) in pow[band.clone()].iter().zip(&self.py[band]) {
-            let (a, b) = (FloatExt::sqrt(p), FloatExt::sqrt(y));
+            let (a, b) = (Float::sqrt(p), Float::sqrt(y));
             sa += a;
             sb += b;
             saa += a * a;
@@ -1285,7 +1285,7 @@ impl EchoCanceller {
         }
         let n = (self.band_hi - self.band_lo).max(1) as f32;
         let cov = sab - sa * sb / n;
-        cov / FloatExt::sqrt(((saa - sa * sa / n) * (sbb - sb * sb / n)).max(0.0) + 1e-30)
+        cov / Float::sqrt(((saa - sa * sa / n) * (sbb - sb * sb / n)).max(0.0) + 1e-30)
     }
 
     /// One step of the adaptive filter (see the module documentation on the
@@ -1572,7 +1572,7 @@ impl EchoCanceller {
                 r = 0.0;
             }
             self.resid[k] = r;
-            let floor = if pe > noise { FloatExt::sqrt(noise / pe).max(GAIN_FLOOR) } else { 1.0 };
+            let floor = if pe > noise { Float::sqrt(noise / pe).max(GAIN_FLOOR) } else { 1.0 };
             let mut g = (1.0 - OVER_SUPPRESS * r / (pe + 1e-20)).clamp(floor, 1.0);
             let prev = self.gain[k];
             if g > prev {
@@ -1703,6 +1703,7 @@ impl EchoCanceller {
 mod tests {
     use super::*;
     use crate::testsig::*;
+    use rand::Rng;
     use std::println;
 
     /// The sound at the microphone, split by source.
@@ -1988,7 +1989,7 @@ mod tests {
     fn hostile_input_is_harmless() {
         let rate = 16_000;
         let mut aec = EchoCanceller::new(rate, 250);
-        let mut rng = vmath::Rng::new(99);
+        let mut rng = generator(99);
         let feed = |aec: &mut EchoCanceller, cap: &[i16], refr: &[i16]| -> Vec<i16> {
             let mut out = vec![0i16; cap.len()];
             for ((c, r), o) in cap.chunks(160).zip(refr.chunks(160)).zip(out.chunks_mut(160)) {

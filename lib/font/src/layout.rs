@@ -9,7 +9,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vraster::{Point, math};
+use vraster::Point;
 
 use crate::GlyphId;
 use crate::font::Font;
@@ -257,7 +257,7 @@ impl<'c, 'a> ScaledFont<'c, 'a> {
     fn step(&self, index: usize, c: char, x: f32, prev: &mut Option<(usize, GlyphId)>, tab: f32) -> Step {
         if c == '\t' {
             *prev = None;
-            let next = if tab > 0.0 { (math::floor(x / tab + 1e-4) + 1.0) * tab } else { x };
+            let next = if tab > 0.0 { (libm::floorf(x / tab + 1e-4) + 1.0) * tab } else { x };
             return Step { index, glyph: None, x, advance: next - x };
         }
         if is_invisible(c) {

@@ -14,9 +14,29 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
 
-use vmath::Rng;
+use rand::RngExt;
+use rand_pcg::Pcg32;
 
 use crate::fft::RealFft;
+
+/// The random numbers of every signal: PCG32, seeded with the SplitMix64
+/// hash of `seed` on a fixed stream. The echo canceller's and the voice
+/// detector's tests were tuned on the signals this makes; other random
+/// signals move their results by more than the tests' margins.
+pub fn generator(seed: u64) -> Pcg32 {
+    let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    Pcg32::new(z ^ (z >> 31), 0x6d1f_1ce5_ca5c_aded)
+}
+
+/// A normally distributed value with standard deviation `sd`, by the
+/// Box–Muller transform of two uniform values (as the tuned signals were).
+fn gaussian(rng: &mut Pcg32, sd: f32) -> f32 {
+    let u1 = 1.0 - rng.random::<f32>(); // (0, 1]: its logarithm is finite
+    let u2 = rng.random::<f32>();
+    sd * libm::sqrtf(-2.0 * libm::logf(u1)) * libm::cosf(TAU * u2)
+}
 
 /// The character of a synthetic voice.
 #[derive(Debug, Clone, Copy)]
@@ -128,40 +148,40 @@ fn glottal(p: f32) -> f32 {
 pub fn speech(rate: u32, seconds: f32, voice: Voice, pacing: Pacing, seed: u64) -> Speech {
     let fs = rate as f32;
     let n = (seconds * fs) as usize;
-    let mut rng = Rng::new(seed);
+    let mut rng = generator(seed);
     // Lay out the syllables.
     let mut syllables: Vec<Syllable> = Vec::new();
     let mut utterances: Vec<(usize, usize)> = Vec::new();
     let mut t = pacing.lead_in;
     while t < seconds {
-        let count = rng.range_i32(pacing.syllables.0 as i32, pacing.syllables.1 as i32 + 1);
+        let count = rng.random_range(pacing.syllables.0..=pacing.syllables.1);
         let first = (t * fs) as usize;
         let mut end = first;
         for i in 0..count {
-            let dur = rng.range_f32(0.12, 0.3);
+            let dur = rng.random_range(0.12..0.3);
             if t + dur > seconds {
                 break;
             }
-            let fricative = (rng.next_f32() < 0.3).then(|| {
-                ((rng.range_f32(0.04, 0.09) * fs) as usize, if rng.next_f32() < 0.6 { 4800.0 } else { 2600.0 })
+            let fricative = (rng.random::<f32>() < 0.3).then(|| {
+                ((rng.random_range(0.04..0.09) * fs) as usize, if rng.random::<f32>() < 0.6 { 4800.0 } else { 2600.0 })
             });
-            let accent = if i == 0 || rng.next_f32() < 0.25 { rng.range_f32(0.1, 0.35) } else { 0.0 };
+            let accent = if i == 0 || rng.random::<f32>() < 0.25 { rng.random_range(0.1..0.35) } else { 0.0 };
             syllables.push(Syllable {
                 start: (t * fs) as usize,
                 len: (dur * fs) as usize,
-                vowel: rng.below_usize(VOWELS.len()),
-                amp: rng.range_f32(0.5, 1.0),
+                vowel: rng.random_range(0..VOWELS.len()),
+                amp: rng.random_range(0.5..1.0),
                 accent,
                 fricative,
             });
             end = ((t + dur) * fs) as usize;
             // Syllables within a word touch or leave short gaps.
-            t += dur + rng.range_f32(-0.02, 0.06).max(0.0);
+            t += dur + rng.random_range(-0.02f32..0.06).max(0.0);
         }
         if end > first {
             utterances.push((first, end.min(n)));
         }
-        t += rng.range_f32(pacing.pause.0, pacing.pause.1);
+        t += rng.random_range(pacing.pause.0..=pacing.pause.1);
     }
     let mut out = vec![0.0f32; n];
     let mut active = vec![false; n];
@@ -201,11 +221,11 @@ pub fn speech(rate: u32, seconds: f32, voice: Voice, pacing: Pacing, seed: u64) 
         phase += f0 / fs;
         if phase >= 1.0 {
             phase -= 1.0;
-            jitter = rng.gaussian(0.0, 0.01);
+            jitter = gaussian(&mut rng, 0.01);
         }
         let flow = glottal(phase);
         // Glottal flow derivative plus breath noise while the glottis is open.
-        let source = flow - prev_flow + 0.004 * flow * rng.gaussian(0.0, 1.0);
+        let source = flow - prev_flow + 0.004 * flow * gaussian(&mut rng, 1.0);
         prev_flow = flow;
         // Envelope: raised-cosine attack and release.
         let mut env = 0.0;
@@ -228,7 +248,7 @@ pub fn speech(rate: u32, seconds: f32, voice: Voice, pacing: Pacing, seed: u64) 
                     fric.tune(fc, 1500.0, fs);
                 }
                 let fe = (p as f32 / flen as f32 * PI).sin();
-                noise = fric.run(rng.gaussian(0.0, 1.0)) * fe * 0.35;
+                noise = fric.run(gaussian(&mut rng, 1.0)) * fe * 0.35;
                 // The vowel starts as the fricative fades.
                 env *= p as f32 / flen as f32;
             }
@@ -259,17 +279,17 @@ pub fn speech(rate: u32, seconds: f32, voice: Voice, pacing: Pacing, seed: u64) 
 
 /// Gaussian white noise with the given RMS level.
 pub fn white(n: usize, level: f32, seed: u64) -> Vec<f32> {
-    let mut rng = Rng::new(seed);
-    (0..n).map(|_| rng.gaussian(0.0, level)).collect()
+    let mut rng = generator(seed);
+    (0..n).map(|_| gaussian(&mut rng, level)).collect()
 }
 
 /// Pink (1/f) noise with the given RMS level (Paul Kellet's filter).
 pub fn pink(n: usize, level: f32, seed: u64) -> Vec<f32> {
-    let mut rng = Rng::new(seed);
+    let mut rng = generator(seed);
     let mut b = [0.0f32; 7];
     let mut out: Vec<f32> = (0..n)
         .map(|_| {
-            let w = rng.gaussian(0.0, 1.0);
+            let w = gaussian(&mut rng, 1.0);
             b[0] = 0.99886 * b[0] + w * 0.0555179;
             b[1] = 0.99332 * b[1] + w * 0.0750759;
             b[2] = 0.96900 * b[2] + w * 0.153_852;
@@ -289,14 +309,14 @@ pub fn pink(n: usize, level: f32, seed: u64) -> Vec<f32> {
 /// and a slow, slight swell, at the given RMS level.
 pub fn fan(rate: u32, n: usize, level: f32, seed: u64) -> Vec<f32> {
     let fs = rate as f32;
-    let mut rng = Rng::new(seed);
+    let mut rng = generator(seed);
     let c1 = 1.0 - (-TAU * 600.0 / fs).exp();
     let c2 = 1.0 - (-TAU * 3000.0 / fs).exp();
     let (mut l1, mut l2) = (0.0f32, 0.0f32);
     let mut out: Vec<f32> = (0..n)
         .map(|i| {
             let t = i as f32 / fs;
-            let w = rng.gaussian(0.0, 1.0);
+            let w = gaussian(&mut rng, 1.0);
             l1 += c1 * (w - l1);
             l2 += c2 * (w - l2);
             let hum =
@@ -326,13 +346,13 @@ fn normalize(x: &mut [f32], level: f32) {
 pub fn room(rate: u32, rt60: f32, length: f32, seed: u64) -> Vec<f32> {
     let fs = rate as f32;
     let n = ((length * fs) as usize).max(16);
-    let mut rng = Rng::new(seed);
+    let mut rng = generator(seed);
     let mut h = vec![0.0f32; n];
     h[0] = 1.0;
     for _ in 0..6 {
-        let at = (rng.range_f32(0.0015, 0.015) * fs) as usize;
+        let at = (rng.random_range(0.0015..0.015) * fs) as usize;
         if at < n {
-            h[at] += rng.range_f32(0.15, 0.4) * if rng.next_f32() < 0.5 { -1.0 } else { 1.0 };
+            h[at] += rng.random_range(0.15..0.4) * if rng.random::<f32>() < 0.5 { -1.0 } else { 1.0 };
         }
     }
     // Diffuse tail with about half the energy of the direct path.
@@ -340,7 +360,7 @@ pub fn room(rate: u32, rt60: f32, length: f32, seed: u64) -> Vec<f32> {
     let amp = (0.5 * 2.0 * decay).sqrt();
     let start = (0.003 * fs) as usize;
     for (i, v) in h.iter_mut().enumerate().skip(start) {
-        *v += rng.gaussian(0.0, amp) * (-decay * (i - start) as f32).exp();
+        *v += gaussian(&mut rng, amp) * (-decay * (i - start) as f32).exp();
     }
     // Loudspeaker band: one-pole high-pass and low-pass.
     let hp = (-TAU * 150.0 / fs).exp();

@@ -230,11 +230,8 @@ fn resolution_size(v: &str) -> Option<(u32, u32)> {
 /// changes make it run again.
 const GENERATORS: &[(&str, &[&str])] = &[
     ("assetgen", &["tools/assetgen", "lib/image"]),
-    ("musicgen", &["tools/musicgen", "lib/audio", "lib/image", "lib/math"]),
-    (
-        "videogen",
-        &["tools/videogen", "lib/gfx", "lib/raster", "lib/font", "lib/audio", "lib/image", "lib/math", "assets/fonts"],
-    ),
+    ("musicgen", &["tools/musicgen", "lib/audio", "lib/image"]),
+    ("videogen", &["tools/videogen", "lib/gfx", "lib/raster", "lib/font", "lib/audio", "lib/image", "assets/fonts"]),
 ];
 
 /// Newest modification time of any file under `dir`.
@@ -814,10 +811,9 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("initrd", &["std"]),
     ("vheap", &[]),
     ("vipc", &[]),
-    ("vmath", &[]),
     ("vraster", &[]),
     ("vfont", &[]),
-    ("vimage", &[]),
+    ("vimage", &["encode"]),
     ("vaudio", &[]),
     ("vproto", &[]),
     ("vgfx", &[]),

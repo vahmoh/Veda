@@ -167,18 +167,18 @@ fn render_page(
         let st = fonts.scaled(primary, s);
         let lines =
             st.wrap_lines(SAMPLE, width as f32 - 20.0).len() + st.wrap_lines(UI_SAMPLE, width as f32 - 20.0).len();
-        height += vraster::math::ceil(st.line_height()) * lines as f32 + 10.0;
+        height += libm::ceilf(st.line_height()) * lines as f32 + 10.0;
     }
     let mut cv = Canvas::new(width, height as u32 + 10, bg);
     let mut y = 8.0f32;
     let mut blocks = Vec::new();
     for &s in &sizes {
         let st = fonts.scaled(primary, s);
-        let lh = vraster::math::ceil(st.line_height());
+        let lh = libm::ceilf(st.line_height());
         let top = y as u32;
         for text in [SAMPLE, UI_SAMPLE] {
             for range in st.wrap_lines(text, width as f32 - 20.0) {
-                let baseline = vraster::math::round(y + st.ascent()) as i32;
+                let baseline = libm::roundf(y + st.ascent()) as i32;
                 draw_line(&mut cv, &mut cache, &st, &text[range], 10.0, baseline, fg);
                 y += lh;
             }
@@ -245,10 +245,10 @@ fn render_detail_png() {
             for (k, (y0, fg)) in [(0.0f32, [0x22u8, 0x22, 0x22]), (42.0, [0xF2, 0xF2, 0xF2])].iter().enumerate() {
                 let _ = k;
                 let st = fonts.scaled(0, 12.0);
-                let b = vraster::math::round(y0 + 2.0 + st.ascent()) as i32;
+                let b = libm::roundf(y0 + 2.0 + st.ascent()) as i32;
                 draw_line(&mut cv, &mut cache, &st, "Settings Edit gyp", 3.0, b, *fg);
                 let st = fonts.scaled(0, 14.0);
-                let b2 = b + vraster::math::ceil(st.line_height()) as i32 - 1;
+                let b2 = b + libm::ceilf(st.line_height()) as i32 - 1;
                 draw_line(&mut cv, &mut cache, &st, "Quick fox 0123", 3.0, b2, *fg);
             }
             cv.zoomed(0, 0, 150, 84, 5).save(&format!("detail_{name}_{vname}.png"));
@@ -270,9 +270,9 @@ fn render_showcase_png() {
     let blue = [0x20, 0x50, 0xB0];
     let mut y = 6.0f32;
     let mut line = |cv: &mut Canvas, st: ScaledFont<'_, '_>, text: &str, color: [u8; 3], y: &mut f32| {
-        let b = vraster::math::round(*y + st.ascent()) as i32;
+        let b = libm::roundf(*y + st.ascent()) as i32;
         draw_line(cv, &mut cache, &st, text, 10.0, b, color);
-        *y += vraster::math::ceil(st.line_height());
+        *y += libm::ceilf(st.line_height());
     };
     let kern = "AVATAR Toyota Te Ta We Yo LT P. F. Veda";
     for f in [inter, lato] {
@@ -360,9 +360,9 @@ fn render_options_comparison_png() {
                 let mut y = band as f32 + 2.0;
                 for &s in &[12.0f32, 14.0, 16.0] {
                     let st = fonts.scaled(0, s);
-                    let baseline = vraster::math::round(y + st.ascent()) as i32;
+                    let baseline = libm::roundf(y + st.ascent()) as i32;
                     draw_line(&mut cv, &mut cache, &st, "Settings File Edit Help — quick brown fox", 6.0, baseline, fg);
-                    y += vraster::math::ceil(st.line_height());
+                    y += libm::ceilf(st.line_height());
                 }
                 band += BAND;
             }

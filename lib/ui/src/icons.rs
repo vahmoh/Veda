@@ -138,7 +138,7 @@ impl Builder {
     /// drawn before it by a straight line.
     fn arc(&mut self, cx: f32, cy: f32, r: f32, start_deg: f32, sweep_deg: f32) {
         let rad = core::f32::consts::PI / 180.0;
-        let (s, c) = vraster::math::sin_cos(start_deg * rad);
+        let (s, c) = libm::sincosf(start_deg * rad);
         self.stroke.move_to(cx + r * c, cy + r * s);
         self.stroke.arc(cx, cy, r, start_deg * rad, sweep_deg * rad);
     }
@@ -220,7 +220,7 @@ fn build(icon: Icon) -> Builder {
             let rad = core::f32::consts::PI / 180.0;
             for i in 0..8 {
                 let a = i as f32 * 45.0 * rad;
-                let (s, c) = (vmath::FloatExt::sin(a), vmath::FloatExt::cos(a));
+                let (s, c) = (libm::sinf(a), libm::cosf(a));
                 b.line(12.0 + c * 6.5, 12.0 + s * 6.5, 12.0 + c * 9.0, 12.0 + s * 9.0);
             }
             b.circle(12.0, 12.0, 6.5);
@@ -419,7 +419,7 @@ fn build(icon: Icon) -> Builder {
             let rad = core::f32::consts::PI / 180.0;
             for i in 0..8 {
                 let a = i as f32 * 45.0 * rad;
-                let (s, c) = (vmath::FloatExt::sin(a), vmath::FloatExt::cos(a));
+                let (s, c) = (libm::sinf(a), libm::cosf(a));
                 b.line(12.0 + c * 7.0, 12.0 + s * 7.0, 12.0 + c * 9.5, 12.0 + s * 9.5);
             }
         }

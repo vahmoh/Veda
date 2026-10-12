@@ -3,6 +3,8 @@
 
 use alloc::vec;
 
+use glam::Vec3Swizzles;
+
 use crate::layout::VEDA_BAY;
 use crate::road::{Road, Section};
 use crate::terrain::{HALF_X, HALF_Z, Terrain};
@@ -87,5 +89,5 @@ fn map() {
         }
     }
     let image = vimage::Image { width: w, height: h, pixels: px };
-    std::fs::write(path, vimage::png::encode(&image, 6).unwrap()).unwrap();
+    std::fs::write(path, vimage::encode_png(&image).unwrap()).unwrap();
 }

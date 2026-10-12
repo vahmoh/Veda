@@ -6,19 +6,26 @@ These rules apply to every crate in the repository.
 
 * Rust 2024 edition, **stable** toolchain (tested with 1.99). No nightly
   features, no `RUSTC_BOOTSTRAP`.
-* **Few, mature external crates.** The system is written in this
-  repository. Where a protocol or cryptographic primitive has a mature,
-  widely reviewed Rust implementation, that is used instead of a new one:
-  smoltcp (TCP/IP, vendored in `third_party/` with documented patches),
-  rustls with rustls-webpki and webpki-roots (TLS), the RustCrypto crates
-  (hashes, HMAC, PBKDF2, AES, AES-GCM, CCM, CMAC, AES key wrap,
-  ChaCha20-Poly1305, P-256, P-384, ECDSA, `crypto-bigint`), x25519-dalek
-  and ed25519-dalek, `subtle`, `zeroize` and `httparse`. A new dependency
-  must build `no_std` (check with `--target x86_64-unknown-uefi`), be
-  declared in the workspace's `[workspace.dependencies]`, and come with a
-  reason; avoid crates with large dependency trees, and a second
-  generation of a crate family already used. `core`, `alloc` and (for host
-  tools only) `std` are available.
+* **Proven libraries first.** Where a mature, widely used Rust
+  implementation exists (of a protocol, of cryptography, of a file format,
+  of numerical code), Veda uses it rather than writing its own; Veda's own
+  code is what is particular to Veda and the glue that fits libraries to
+  it. In use: smoltcp (TCP/IP), rustls with rustls-webpki and webpki-roots
+  (TLS), the RustCrypto crates (hashes, HMAC, PBKDF2, AES, AES-GCM, CCM,
+  CMAC, AES key wrap, ChaCha20-Poly1305, P-256, P-384, ECDSA,
+  `crypto-bigint`), x25519-dalek and ed25519-dalek, `subtle`, `zeroize` and
+  `httparse`; `libm` and `num-traits` (float functions), `glam` (vectors,
+  matrices, quaternions), `rand`, `rand_pcg` and `rand_distr` (random
+  numbers), FastNoise Lite (noise); zune's JPEG, PNG and BMP decoders,
+  `qoi` and `fast_image_resize` (images); and on the build machine only,
+  `png`, `jpeg-encoder` and `rav1e`. A new dependency must build `no_std`
+  (see Library crates), be declared in the workspace's
+  `[workspace.dependencies]`, and come with a reason; avoid crates with
+  large dependency trees, and a second generation of a crate family
+  already used. A library that is wrong is fixed, not worked around in
+  silence: vendored in `third_party/` with documented patches (smoltcp,
+  zune-jpeg), and reported upstream. `core`, `alloc` and (for host tools
+  only) `std` are available.
 * **Rust only**, performance-critical code included (see Performance below).
   Software written in C that Veda builds on (the C toolchain: GCC,
   binutils, musl, ...) comes as *ports* (`ports/`): an upstream release
@@ -42,14 +49,20 @@ These rules apply to every crate in the repository.
   so they can run inside Veda **and** be unit-tested on the host.
   Tests use `#[cfg(test)] extern crate std;`, never `cfg_attr(not(test), no_std)`.
 * Floating-point functions such as `sqrt`, `sin`, `floor` or `powf` are **not**
-  available in `core` on stable. Use `vmath` (`use vmath::FloatExt;` gives
-  `x.sqrt()`, `x.sin()`, ... on `f32`/`f64`), or small local helpers in crates
-  that must not depend on `vmath`.
-* Verify that a library really is `no_std`-clean with
-  `cargo build -p <crate> --target x86_64-unknown-uefi`. (That target is
-  soft-float: `.cargo/config.toml` makes the RustCrypto and dalek crates
-  use their portable code there, as LLVM cannot build their SIMD code for
-  it.)
+  available in `core` on stable. Use `libm` (`libm::sinf(x)`), or num-traits'
+  `Float`, whose methods are libm's: `use num_traits::Float;` gives
+  `x.sqrt()`, `x.sin()`, ... on `f32`/`f64`. Where `std` is linked (host
+  tests) its own methods win over `Float`'s, so code whose results must be
+  the same on the host and in Veda calls `libm` (or `Float::sin(x)`).
+* Verify that a library builds for the loader's and kernel's soft-float
+  target with `cargo build -p <crate> --target x86_64-unknown-uefi`
+  (`.cargo/config.toml` makes the RustCrypto and dalek crates use their
+  portable code there, as LLVM cannot build their SIMD code for it). That
+  target has a `std`, though, so this does not show a dependency on it;
+  `--target x86_64-unknown-none` has none, and building Veda
+  (`cargo xtask build`), whose programs link without `std`, is the final
+  check. `vimage` runs only in user space and does not build soft-float
+  (`fast_image_resize`'s SIMD code).
 
 ## Pixels and colors
 

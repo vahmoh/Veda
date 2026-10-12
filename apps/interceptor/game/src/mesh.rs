@@ -75,7 +75,7 @@ impl Mesh {
     /// Appends `other` moved by `m` (normals turned with it).
     pub fn append_transformed(&mut self, other: &Mesh, m: &Mat4) {
         let base = self.base();
-        let normal = m.inverse().transpose();
+        let normal = m.try_inverse().unwrap_or(Mat4::IDENTITY).transpose();
         for v in &other.vertices {
             self.vertices.push(Vertex {
                 pos: m.transform_point3(v.pos),

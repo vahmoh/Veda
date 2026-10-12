@@ -9,8 +9,10 @@
 use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
+use num_traits::Float;
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, StrokeStyle};
-use vmath::{FloatExt, Rng};
 
 /// Cover art styles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,9 +64,20 @@ impl ArtSpec {
     }
 }
 
-/// A color from hue (turns), saturation and value.
+/// A color from hue (turns; any value wraps around), saturation and value.
 pub fn hsv(h: f32, s: f32, v: f32) -> Color {
-    let (r, g, b) = vmath::color::hsv_to_rgb(h, s.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let (s, v) = (s.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+    let h6 = (h - h.floor()) * 6.0;
+    let f = h6 - h6.floor();
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    let (r, g, b) = match h6 as u32 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
     Color::rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
@@ -86,7 +99,7 @@ pub fn render(spec: &ArtSpec, size: i32) -> Bitmap {
     let mut bmp = Bitmap::new(size, size);
     {
         let mut c = Canvas::for_bitmap(&mut bmp);
-        let mut rng = Rng::new(spec.seed);
+        let mut rng = Pcg32::seed_from_u64(spec.seed);
         let s = size as f32;
         match spec.style {
             Style::Synthwave => synthwave(&mut c, s, spec.hue, &mut rng),
@@ -116,13 +129,13 @@ fn glow(c: &mut Canvas, cx: f32, cy: f32, radius: f32, color: Color, strength: f
     }
 }
 
-fn stars(c: &mut Canvas, s: f32, max_y: f32, count: usize, rng: &mut Rng) {
+fn stars(c: &mut Canvas, s: f32, max_y: f32, count: usize, rng: &mut Pcg32) {
     for _ in 0..count {
-        let x = rng.range_f32(0.0, s);
-        let y = rng.range_f32(0.0, max_y);
-        let b = rng.range_f32(0.3, 1.0);
+        let x = rng.random_range(0.0..=s);
+        let y = rng.random_range(0.0..=max_y);
+        let b = rng.random_range(0.3..1.0);
         let a = (b * 220.0) as u8;
-        if rng.chance(0.15) {
+        if rng.random_bool(0.15) {
             c.fill_circle(x, y, s * 0.006 + 0.6, Color::rgba(255, 255, 255, a));
         } else {
             c.fill_rect(Rect::new(r(x), r(y), 1, 1), Color::rgba(255, 255, 255, a));
@@ -136,7 +149,7 @@ fn vignette(c: &mut Canvas, size: i32) {
     c.fill_vertical_gradient(Rect::new(0, size - band, size, band), Color::rgba(0, 0, 0, 0), Color::rgba(0, 0, 0, 90));
 }
 
-fn synthwave(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
+fn synthwave(c: &mut Canvas, s: f32, hue: f32, rng: &mut Pcg32) {
     let horizon = s * 0.64;
     let top = hsv(hue + 0.70, 0.85, 0.12);
     let mid = hsv(hue + 0.82, 0.8, 0.38);
@@ -168,10 +181,10 @@ fn synthwave(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     p.move_to(0.0, horizon);
     let mut x = 0.0;
     while x <= s {
-        let peak = horizon - rng.range_f32(s * 0.02, s * 0.12);
+        let peak = horizon - rng.random_range(s * 0.02..=s * 0.12);
         p.line_to(x + s * 0.06, peak);
         x += s * 0.12;
-        p.line_to(x.min(s), horizon - rng.range_f32(0.0, s * 0.03));
+        p.line_to(x.min(s), horizon - rng.random_range(0.0..=s * 0.03));
     }
     p.line_to(s, horizon);
     p.close();
@@ -195,7 +208,7 @@ fn synthwave(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     }
 }
 
-fn lofi(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
+fn lofi(c: &mut Canvas, s: f32, hue: f32, rng: &mut Pcg32) {
     let top = hsv(hue + 0.72, 0.45, 0.30);
     let bottom = hsv(hue + 0.02, 0.45, 0.85);
     c.fill_vertical_gradient(Rect::new(0, 0, r(s), r(s)), top, bottom);
@@ -210,15 +223,15 @@ fn lofi(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     let base = s * 0.8;
     let mut x = -s * 0.02;
     while x < s {
-        let w = rng.range_f32(s * 0.07, s * 0.15);
-        let h = rng.range_f32(s * 0.12, s * 0.38);
-        let col = hsv(hue + 0.72, 0.35, rng.range_f32(0.12, 0.2));
+        let w = rng.random_range(s * 0.07..=s * 0.15);
+        let h = rng.random_range(s * 0.12..=s * 0.38);
+        let col = hsv(hue + 0.72, 0.35, rng.random_range(0.12..0.2));
         c.fill_rect(Rect::new(r(x), r(base - h), r(w) + 1, r(h + s * 0.2)), col);
         let mut wy = base - h + s * 0.02;
         while wy < base - s * 0.02 {
             let mut wx = x + s * 0.015;
             while wx < x + w - s * 0.02 {
-                if rng.chance(0.35) {
+                if rng.random_bool(0.35) {
                     c.fill_rect(
                         Rect::new(r(wx), r(wy), r(s * 0.012).max(1), r(s * 0.016).max(1)),
                         hsv(0.11, 0.55, 1.0).with_alpha(200),
@@ -228,7 +241,7 @@ fn lofi(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
             }
             wy += s * 0.035;
         }
-        x += w + rng.range_f32(0.0, s * 0.02);
+        x += w + rng.random_range(0.0..=s * 0.02);
     }
     // Window sill and frame.
     let frame = hsv(hue + 0.72, 0.3, 0.08);
@@ -248,37 +261,44 @@ fn lofi(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
         c.draw_line(
             sx,
             sy,
-            sx + FloatExt::sin(a) * s * 0.07,
-            sy - FloatExt::cos(a).abs() * s * 0.1,
+            sx + Float::sin(a) * s * 0.07,
+            sy - Float::cos(a).abs() * s * 0.1,
             s * 0.012,
             hsv(0.33, 0.5, 0.45),
         );
     }
     // Rain on the glass.
     for _ in 0..90 {
-        let x = rng.range_f32(0.0, s);
-        let y = rng.range_f32(0.0, s * 0.85);
-        let len = rng.range_f32(s * 0.02, s * 0.06);
-        c.draw_line(x, y, x - len * 0.15, y + len, 1.0, Color::rgba(220, 230, 255, rng.range_f32(40.0, 110.0) as u8));
+        let x = rng.random_range(0.0..=s);
+        let y = rng.random_range(0.0..=s * 0.85);
+        let len = rng.random_range(s * 0.02..=s * 0.06);
+        c.draw_line(
+            x,
+            y,
+            x - len * 0.15,
+            y + len,
+            1.0,
+            Color::rgba(220, 230, 255, rng.random_range(40.0..110.0) as u8),
+        );
     }
 }
 
-fn aurora(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
+fn aurora(c: &mut Canvas, s: f32, hue: f32, rng: &mut Pcg32) {
     c.fill_vertical_gradient(Rect::new(0, 0, r(s), r(s)), hsv(hue + 0.62, 0.8, 0.06), hsv(hue + 0.55, 0.7, 0.22));
     stars(c, s, s * 0.8, 110, rng);
     // Curtains: vertical strips whose top follows layered sines.
     for layer in 0..3 {
         let col = hsv(hue + layer as f32 * 0.08, 0.75, 1.0);
         let base = s * (0.28 + layer as f32 * 0.1);
-        let (f1, f2) = (rng.range_f32(1.5, 3.0), rng.range_f32(4.0, 7.0));
-        let (p1, p2) = (rng.range_f32(0.0, TAU), rng.range_f32(0.0, TAU));
+        let (f1, f2) = (rng.random_range(1.5..3.0), rng.random_range(4.0..7.0));
+        let (p1, p2) = (rng.random_range(0.0..TAU), rng.random_range(0.0..TAU));
         let strip = 3;
         let mut x = 0;
         while x < r(s) {
             let u = x as f32 / s;
-            let y = base + FloatExt::sin(u * f1 * TAU + p1) * s * 0.08 + FloatExt::sin(u * f2 * TAU + p2) * s * 0.025;
-            let len = s * (0.18 + 0.1 * FloatExt::sin(u * 9.0 + p2).abs());
-            let a = (90.0 + 60.0 * FloatExt::sin(u * 13.0 + p1)) as u8;
+            let y = base + Float::sin(u * f1 * TAU + p1) * s * 0.08 + Float::sin(u * f2 * TAU + p2) * s * 0.025;
+            let len = s * (0.18 + 0.1 * Float::sin(u * 9.0 + p2).abs());
+            let a = (90.0 + 60.0 * Float::sin(u * 13.0 + p1)) as u8;
             c.fill_vertical_gradient(Rect::new(x, r(y), strip, r(len)), col.with_alpha(a), col.with_alpha(0));
             c.fill_vertical_gradient(
                 Rect::new(x, r(y - len * 0.25), strip, r(len * 0.25)),
@@ -295,8 +315,8 @@ fn aurora(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
         let mut x = 0.0;
         p.line_to(0.0, s * h0);
         while x < s {
-            x += rng.range_f32(s * 0.05, s * 0.12);
-            p.line_to(x.min(s), s * h0 - rng.range_f32(0.0, s * (0.16 - k as f32 * 0.06)));
+            x += rng.random_range(s * 0.05..=s * 0.12);
+            p.line_to(x.min(s), s * h0 - rng.random_range(0.0..=s * (0.16 - k as f32 * 0.06)));
         }
         p.line_to(s, s);
         p.close();
@@ -304,7 +324,7 @@ fn aurora(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     }
 }
 
-fn pixel(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
+fn pixel(c: &mut Canvas, s: f32, hue: f32, rng: &mut Pcg32) {
     let bg = hsv(hue, 0.55, 0.42);
     c.fill_rect(Rect::new(0, 0, r(s), r(s)), bg);
     // Checkerboard sky.
@@ -327,7 +347,7 @@ fn pixel(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     let mut cells = [[0u8; 8]; 8];
     for row in cells.iter_mut() {
         for x in 0..4 {
-            let v = if rng.chance(0.55) { 1 } else { 0 };
+            let v = if rng.random_bool(0.55) { 1 } else { 0 };
             row[x] = v;
             row[7 - x] = v;
         }
@@ -366,7 +386,7 @@ fn pixel(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     }
 }
 
-fn pulse(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
+fn pulse(c: &mut Canvas, s: f32, hue: f32, rng: &mut Pcg32) {
     c.fill_vertical_gradient(Rect::new(0, 0, r(s), r(s)), hsv(hue + 0.7, 0.8, 0.10), hsv(hue + 0.75, 0.85, 0.22));
     let (cx, cy) = (s * 0.5, s * 0.42);
     glow(c, cx, cy, s * 0.5, hsv(hue, 0.8, 1.0), 0.8);
@@ -379,13 +399,13 @@ fn pulse(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     }
     // Light beams.
     for _ in 0..6 {
-        let a = rng.range_f32(0.0, TAU);
+        let a = rng.random_range(0.0..TAU);
         let len = s * 0.9;
         c.draw_line(
             cx,
             cy,
-            cx + FloatExt::cos(a) * len,
-            cy + FloatExt::sin(a) * len,
+            cx + Float::cos(a) * len,
+            cy + Float::sin(a) * len,
             s * 0.01,
             hsv(hue + 0.4, 0.5, 1.0).with_alpha(50),
         );
@@ -394,7 +414,7 @@ fn pulse(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     let bars = 16;
     let bw = s / bars as f32;
     for i in 0..bars {
-        let h = s * rng.range_f32(0.05, 0.25) * (1.0 - (i as f32 / bars as f32 - 0.5).abs());
+        let h = s * rng.random_range(0.05..0.25) * (1.0 - (i as f32 / bars as f32 - 0.5).abs());
         let col = hsv(hue + 0.3 + i as f32 * 0.02, 0.7, 1.0);
         c.fill_vertical_gradient(
             Rect::new(r(i as f32 * bw + 1.0), r(s - h), r(bw - 2.0).max(1), r(h) + 1),
@@ -404,7 +424,7 @@ fn pulse(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
     }
 }
 
-fn waves(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
+fn waves(c: &mut Canvas, s: f32, hue: f32, rng: &mut Pcg32) {
     c.fill_vertical_gradient(Rect::new(0, 0, r(s), r(s)), hsv(hue + 0.08, 0.35, 0.95), hsv(hue, 0.5, 0.75));
     glow(c, s * 0.3, s * 0.28, s * 0.25, Color::rgb(255, 250, 235), 1.0);
     c.fill_circle(s * 0.3, s * 0.28, s * 0.09, Color::rgb(255, 252, 240));
@@ -413,17 +433,14 @@ fn waves(c: &mut Canvas, s: f32, hue: f32, rng: &mut Rng) {
         let t = l as f32 / (layers - 1) as f32;
         let base = s * (0.42 + t * 0.48);
         let col = hsv(hue + 0.55 + t * 0.12, 0.4 + t * 0.3, 0.85 - t * 0.6);
-        let (f, ph, amp) = (rng.range_f32(1.0, 2.5), rng.range_f32(0.0, TAU), s * rng.range_f32(0.03, 0.07));
+        let (f, ph, amp) = (rng.random_range(1.0..2.5), rng.random_range(0.0..TAU), s * rng.random_range(0.03..0.07));
         let mut p = Path::new();
         p.move_to(0.0, s);
         let mut pts = Vec::new();
         let mut x = 0.0;
         while x <= s + 4.0 {
             let u = x / s;
-            pts.push((
-                x,
-                base + FloatExt::sin(u * f * TAU + ph) * amp + FloatExt::sin(u * 11.0 + ph * 2.0) * amp * 0.25,
-            ));
+            pts.push((x, base + Float::sin(u * f * TAU + ph) * amp + Float::sin(u * 11.0 + ph * 2.0) * amp * 0.25));
             x += 4.0;
         }
         for (x, y) in &pts {

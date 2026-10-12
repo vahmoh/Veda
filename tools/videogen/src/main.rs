@@ -249,7 +249,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
 fn write_png(dir: &Path, name: &str, pixels: &[u32], width: usize) -> Result<(), String> {
     let image = vimage::Image::from_pixels(width as u32, (pixels.len() / width) as u32, pixels.to_vec())
         .map_err(|e| e.to_string())?;
-    let png = vimage::png::encode(&image, 1).map_err(|e| e.to_string())?;
+    let png = vimage::encode_png(&image).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     std::fs::write(dir.join(name), png).map_err(|e| format!("writing a preview: {e}"))
 }

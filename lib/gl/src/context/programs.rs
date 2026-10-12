@@ -1160,7 +1160,7 @@ impl Context {
             let v: Vec<i32> = w
                 .iter()
                 .map(|&b| match s {
-                    Scalar::Float => vmath::f32::round(f32::from_bits(b)) as i32,
+                    Scalar::Float => libm::roundf(f32::from_bits(b)) as i32,
                     Scalar::Bool => i32::from(b != 0),
                     _ => b as i32,
                 })
@@ -1175,7 +1175,7 @@ impl Context {
             let v: Vec<u32> = w
                 .iter()
                 .map(|&b| match s {
-                    Scalar::Float => vmath::f32::round(f32::from_bits(b)) as u32,
+                    Scalar::Float => libm::roundf(f32::from_bits(b)) as u32,
                     Scalar::Bool => u32::from(b != 0),
                     _ => b,
                 })

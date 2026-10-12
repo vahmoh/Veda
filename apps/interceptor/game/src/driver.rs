@@ -48,7 +48,7 @@ pub struct Scene {
 impl Scene {
     /// The signed distance along the road from `a` to `b`, the short way.
     pub fn gap(&self, a: f32, b: f32) -> f32 {
-        let d = (b - a).rem_euclid(self.length);
+        let d = Euclid::rem_euclid(&(b - a), &self.length);
         if d > self.length * 0.5 { d - self.length } else { d }
     }
 

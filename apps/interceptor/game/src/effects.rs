@@ -9,7 +9,9 @@
 
 use alloc::vec::Vec;
 
-use vmath::Rng;
+use rand::{RngExt, SeedableRng};
+use rand_distr::UnitBall;
+use rand_pcg::Pcg32;
 
 use crate::game::{Event, Game};
 use crate::prelude::*;
@@ -105,7 +107,7 @@ pub struct Effects {
     /// Segments made so far (the next goes at `made % MAX_SKIDS`).
     made: u64,
     trails: Vec<Trail>,
-    rng: Rng,
+    rng: Pcg32,
 }
 
 impl Default for Effects {
@@ -121,7 +123,7 @@ impl Effects {
             skids: Vec::with_capacity(MAX_SKIDS),
             made: 0,
             trails: Vec::new(),
-            rng: Rng::new(0xEFFEC7),
+            rng: Pcg32::seed_from_u64(0xEFFEC7),
         }
     }
 
@@ -154,7 +156,7 @@ impl Effects {
 
     /// A random vector in the unit ball.
     fn jitter(&mut self) -> Vec3 {
-        self.rng.in_unit_sphere()
+        Vec3::from(self.rng.sample::<[f32; 3], _>(UnitBall))
     }
 
     /// Follows `game` through the `dt` seconds its last update took, seen
@@ -207,7 +209,7 @@ impl Effects {
                     let rate = ((slip - SMOKES) * 5.0).min(36.0) * (1.0 - 0.7 * wet);
                     for _ in 0..self.count(rate * dt) {
                         let j = self.jitter();
-                        let life = 1.6 + self.rng.next_f32() * 0.9;
+                        let life = 1.6 + self.rng.random::<f32>() * 0.9;
                         self.add(Particle {
                             kind: Kind::Smoke,
                             pos: p + Vec3::Y * 0.25 + j * 0.2,
@@ -224,7 +226,7 @@ impl Effects {
                     let rate = ((speed - 12.0) * 1.2).min(30.0) * wet;
                     for _ in 0..self.count(rate * dt) {
                         let j = self.jitter();
-                        let life = 0.5 + self.rng.next_f32() * 0.4;
+                        let life = 0.5 + self.rng.random::<f32>() * 0.4;
                         self.add(Particle {
                             kind: Kind::Spray,
                             pos: p + Vec3::Y * 0.2 + j * 0.15,
@@ -252,9 +254,9 @@ impl Effects {
             let n = (fierce * 1.2).clamp(4.0, 36.0) as usize;
             for _ in 0..n {
                 let j = self.jitter();
-                let kick = 3.0 + self.rng.next_f32() * 8.0;
-                let up = 0.3 + self.rng.next_f32() * 0.4;
-                let life = 0.25 + self.rng.next_f32() * 0.45;
+                let kick = 3.0 + self.rng.random::<f32>() * 8.0;
+                let up = 0.3 + self.rng.random::<f32>() * 0.4;
+                let life = 0.25 + self.rng.random::<f32>() * 0.45;
                 self.add(Particle {
                     kind: Kind::Spark,
                     pos: impact.point + Vec3::Y * up,
@@ -292,7 +294,7 @@ impl Effects {
     /// How many to make for `n` expected (the fraction by chance).
     fn count(&mut self, n: f32) -> usize {
         let whole = n.floor();
-        whole as usize + usize::from(self.rng.next_f32() < n - whole)
+        whole as usize + usize::from(self.rng.random::<f32>() < n - whole)
     }
 }
 

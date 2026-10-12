@@ -16,7 +16,6 @@
 
 use crate::gl;
 use vglsl::ops::{f16_to_f32, f32_to_f16};
-use vmath::f32 as m;
 
 /// A storage layout.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -275,7 +274,7 @@ impl Format {
             Rgb9E5Float => {
                 let v = word();
                 let e = (v >> 27) as i32 - 15 - 9;
-                let scale = m::exp2(e as f32);
+                let scale = libm::exp2f(e as f32);
                 Texel::Float([
                     (v & 511) as f32 * scale,
                     ((v >> 9) & 511) as f32 * scale,
@@ -316,7 +315,7 @@ impl Format {
         let unorm = |x: f32, max: f32| -> u32 { (clamp01(x) * max + 0.5) as u32 };
         let snorm = |x: f32, max: f32| -> i32 {
             let v = x.clamp(-1.0, 1.0) * max;
-            m::round(if v.is_nan() { 0.0 } else { v }) as i32
+            libm::roundf(if v.is_nan() { 0.0 } else { v }) as i32
         };
         let put_u16 = |out: &mut [u8], i: usize, v: u16| out[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
         let put_u32 = |out: &mut [u8], i: usize, v: u32| out[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
@@ -679,7 +678,7 @@ fn small_float(v: u32, mbits: u32) -> f32 {
     let mant = v & ((1 << mbits) - 1);
     let mf = mant as f32 / (1u32 << mbits) as f32;
     match e {
-        0 => mf * m::exp2(-14.0),
+        0 => mf * libm::exp2f(-14.0),
         31 => {
             if mant == 0 {
                 f32::INFINITY
@@ -687,7 +686,7 @@ fn small_float(v: u32, mbits: u32) -> f32 {
                 f32::NAN
             }
         }
-        _ => (1.0 + mf) * m::exp2(e as f32 - 15.0),
+        _ => (1.0 + mf) * libm::exp2f(e as f32 - 15.0),
     }
 }
 
@@ -759,13 +758,13 @@ pub fn f32_to_rgb9e5(r: f32, g: f32, b: f32) -> u32 {
     // fall under the -16 floor).
     let fl = ((max.to_bits() >> 23) & 0xFF) as i32 - 127;
     let mut e = fl.max(-16) + 1 + 15;
-    let scale = |e: i32| m::exp2((e - 15 - 9) as f32);
-    let maxs = m::floor(max / scale(e) + 0.5) as i32;
+    let scale = |e: i32| libm::exp2f((e - 15 - 9) as f32);
+    let maxs = libm::floorf(max / scale(e) + 0.5) as i32;
     if maxs == 512 {
         e += 1;
     }
     let s = scale(e);
-    let q = |x: f32| (m::floor(x / s + 0.5) as u32).min(511);
+    let q = |x: f32| (libm::floorf(x / s + 0.5) as u32).min(511);
     q(r) | (q(g) << 9) | (q(b) << 18) | ((e as u32 & 31) << 27)
 }
 
@@ -1316,7 +1315,7 @@ impl Client {
                 UNSIGNED_BYTE if self.integer() => out[o] = uv[i].min(255) as u8,
                 BYTE if self.integer() => out[o] = iv[i].clamp(-128, 127) as i8 as u8,
                 UNSIGNED_BYTE => out[o] = (clamp01(src[i]) * 255.0 + 0.5) as u8,
-                BYTE => out[o] = m::round(src[i].clamp(-1.0, 1.0) * 127.0) as i8 as u8,
+                BYTE => out[o] = libm::roundf(src[i].clamp(-1.0, 1.0) * 127.0) as i8 as u8,
                 UNSIGNED_SHORT => out[o..o + 2].copy_from_slice(&(uv[i].min(65535) as u16).to_le_bytes()),
                 SHORT => out[o..o + 2].copy_from_slice(&(iv[i].clamp(-32768, 32767) as i16).to_le_bytes()),
                 UNSIGNED_INT => out[o..o + 4].copy_from_slice(&uv[i].to_le_bytes()),

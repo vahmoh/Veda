@@ -10,6 +10,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 use vgl::{Context, gl};
 
 use super::gpu::{self, Program, float_bytes};
@@ -98,8 +100,8 @@ impl PassingGpu {
         // The drops: where each is in the box, and a number deciding
         // whether it falls in a given rain (all of them in a downpour).
         let drops = if quality == Quality::High { 7000 } else { 2000 };
-        let mut rng = vmath::Rng::new(0x4A1D);
-        let data: Vec<f32> = (0..drops * 4).map(|_| rng.next_f32()).collect();
+        let mut rng = Pcg32::seed_from_u64(0x4A1D);
+        let data: Vec<f32> = (0..drops * 4).map(|_| rng.random::<f32>()).collect();
         let (rain_vao, _) = quads(gl, 4, &data);
         Ok(PassingGpu { skid, particle, rain, skid_vao, skid_vbo, skids_copied: 0, smoke, sparks, rain_vao, drops })
     }

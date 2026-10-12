@@ -6,7 +6,7 @@ use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 use super::filter::OnePole;
 use super::osc::sin_turns;
@@ -258,7 +258,7 @@ pub struct Compressor {
 
 impl Compressor {
     pub fn new(threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32, sr: f32) -> Compressor {
-        let c = |ms: f32| FloatExt::exp(-1.0 / (ms.max(0.01) * 0.001 * sr));
+        let c = |ms: f32| Float::exp(-1.0 / (ms.max(0.01) * 0.001 * sr));
         Compressor {
             threshold_db,
             ratio: ratio.max(1.0),
@@ -287,11 +287,11 @@ impl Compressor {
     /// The gain to apply given the detector input (peak of both channels).
     #[inline]
     pub fn gain(&mut self, detector: f32) -> f32 {
-        let level_db = 20.0 * FloatExt::log10(detector.abs().max(1e-6));
+        let level_db = 20.0 * Float::log10(detector.abs().max(1e-6));
         let target = self.curve(level_db);
         let coef = if target < self.env_db { self.attack } else { self.release };
         self.env_db = target + (self.env_db - target) * coef;
-        FloatExt::powf(10.0f32, self.env_db / 20.0) * self.makeup
+        Float::powf(10.0f32, self.env_db / 20.0) * self.makeup
     }
 }
 
@@ -314,14 +314,14 @@ impl Limiter {
     pub fn new(ceiling_db: f32, lookahead_ms: f32, release_ms: f32, sr: f32) -> Limiter {
         let lookahead = ((lookahead_ms * 0.001 * sr) as usize).max(1);
         Limiter {
-            ceiling: FloatExt::powf(10.0f32, ceiling_db / 20.0),
+            ceiling: Float::powf(10.0f32, ceiling_db / 20.0),
             delay: VecDeque::with_capacity(lookahead + 1),
             window: VecDeque::new(),
             lookahead,
             n: 0,
             min_gain: 1.0,
             gain: 1.0,
-            release: FloatExt::exp(-1.0 / (release_ms * 0.001 * sr)),
+            release: Float::exp(-1.0 / (release_ms * 0.001 * sr)),
         }
     }
 
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn limiter_never_exceeds_the_ceiling() {
         let mut lim = Limiter::new(-1.0, 3.0, 80.0, 44_100.0);
-        let ceiling = FloatExt::powf(10.0f32, -1.0 / 20.0);
+        let ceiling = Float::powf(10.0f32, -1.0 / 20.0);
         let mut max = 0.0f32;
         for i in 0..44_100 {
             let x = 1.8 * (i as f32 * 0.05).sin() * if i % 5000 < 100 { 1.5 } else { 0.5 };

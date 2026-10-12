@@ -818,7 +818,6 @@ impl<F: FnMut(Span<'_>)> Batcher<'_, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math;
     use alloc::vec;
 
     fn total(mask: &Mask) -> f64 {
@@ -950,7 +949,7 @@ mod tests {
         let pts: Vec<Point> = (0..5)
             .map(|i| {
                 let a = -core::f32::consts::FRAC_PI_2 + i as f32 * 4.0 * core::f32::consts::PI / 5.0;
-                let (s, c) = math::sin_cos(a);
+                let (s, c) = libm::sincosf(a);
                 Point::new(50.0 + 40.0 * c, 50.0 + 40.0 * s)
             })
             .collect();
@@ -1097,7 +1096,7 @@ mod tests {
         chart.move_to(0.0, 500.0);
         for i in 1..2000 {
             let x = i as f32 * 0.9;
-            let y = 500.0 + 200.0 * math::sin(i as f32 * 0.05) + 50.0 * math::sin(i as f32 * 0.7);
+            let y = 500.0 + 200.0 * libm::sinf(i as f32 * 0.05) + 50.0 * libm::sinf(i as f32 * 0.7);
             chart.line_to(x, y);
         }
         let t1 = std::time::Instant::now();

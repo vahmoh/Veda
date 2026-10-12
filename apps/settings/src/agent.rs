@@ -23,7 +23,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 use vproto::agent::{AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, agent};
 use vrt::object::Event;
 use vrt::sync::{Condvar, Mutex};

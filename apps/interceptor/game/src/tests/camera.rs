@@ -5,6 +5,9 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
+
 use crate::career::SUSPECTS;
 use crate::env::{Environment, TimeOfDay, Weather};
 use crate::game::{Game, STEP};
@@ -73,8 +76,8 @@ fn the_chase_camera_keeps_its_place_whatever_the_frames() {
     let (warm, secs) = (12.0, 12.0);
     // Frames at 240 a second: the camera as it should be.
     let reference = film(&world, warm, secs + 0.5, |_| 1.0 / 240.0);
-    let mut rng = vmath::Rng::new(7);
-    let uneven: Vec<f32> = (0..2000).map(|_| rng.range_f32(0.008, 0.040)).collect();
+    let mut rng = Pcg32::seed_from_u64(7);
+    let uneven: Vec<f32> = (0..2000).map(|_| rng.random_range(0.008..0.040)).collect();
     let cases: [(&str, &dyn Fn(usize) -> f32); 7] = [
         ("75 fps", &|_| 1.0 / 75.0),
         ("60 fps", &|_| 1.0 / 60.0),

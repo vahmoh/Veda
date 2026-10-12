@@ -9,7 +9,7 @@
 //! circle shrinks between syllables instead of lingering. The sums are
 //! integer arithmetic; a few transcendental functions per block.
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// The level reported for silence, in dBFS.
 pub const SILENCE_DB: f32 = -120.0;
@@ -28,12 +28,12 @@ fn measure(samples: &[i16]) -> (f32, u32) {
 
 /// Power ratio to dB, with silence at [`SILENCE_DB`].
 fn power_db(p: f32) -> f32 {
-    if p > 1e-12 { (10.0 * FloatExt::log10(p)).max(SILENCE_DB) } else { SILENCE_DB }
+    if p > 1e-12 { (10.0 * Float::log10(p)).max(SILENCE_DB) } else { SILENCE_DB }
 }
 
 /// dB to a power ratio, with [`SILENCE_DB`] and below as `0.0`.
 fn db_power(db: f32) -> f32 {
-    if db > SILENCE_DB { FloatExt::powf(10.0, db / 10.0) } else { 0.0 }
+    if db > SILENCE_DB { Float::powf(10.0, db / 10.0) } else { 0.0 }
 }
 
 /// `x` limited to `lo..=hi`, with NaN as `lo`.
@@ -44,7 +44,7 @@ fn limit(x: f32, lo: f32, hi: f32) -> f32 {
 /// The one-pole smoothing coefficient for a step of `dt` seconds with time
 /// constant `tau` (a step response for `tau == 0`).
 fn smoothing(dt: f32, tau: f32) -> f32 {
-    if tau > 0.0 { 1.0 - FloatExt::exp(-dt / tau) } else { 1.0 }
+    if tau > 0.0 { 1.0 - Float::exp(-dt / tau) } else { 1.0 }
 }
 
 /// The RMS level of `samples` in dBFS ([`SILENCE_DB`] for silence or an

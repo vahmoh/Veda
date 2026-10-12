@@ -21,7 +21,7 @@ vweb = { workspace = true }
 vnet = { workspace = true }
 vfiles = { workspace = true }
 vaudio = { workspace = true }
-vmath = { workspace = true }
+libm = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

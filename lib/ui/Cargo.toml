@@ -11,7 +11,7 @@ vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
-vmath = { workspace = true }
+libm = { workspace = true }
 vraster = { workspace = true }
 vfiles = { workspace = true }
 vjson = { workspace = true }

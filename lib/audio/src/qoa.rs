@@ -473,17 +473,19 @@ fn encode_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vmath::FloatExt;
+    use num_traits::Float;
+    use rand::{Rng, RngExt, SeedableRng};
+    use rand_pcg::Pcg32;
 
     fn music_like(frames: usize, channels: usize) -> Vec<i16> {
         let mut v = Vec::with_capacity(frames * channels);
-        let mut rng = vmath::Rng::new(3);
+        let mut rng = Pcg32::seed_from_u64(3);
         for i in 0..frames {
             let t = i as f32 / 44_100.0;
             for c in 0..channels {
-                let s = 0.4 * FloatExt::sin(t * 220.0 * core::f32::consts::TAU + c as f32)
-                    + 0.2 * FloatExt::sin(t * 1234.5 * core::f32::consts::TAU)
-                    + 0.05 * (rng.next_f32() - 0.5);
+                let s = 0.4 * Float::sin(t * 220.0 * core::f32::consts::TAU + c as f32)
+                    + 0.2 * Float::sin(t * 1234.5 * core::f32::consts::TAU)
+                    + 0.05 * (rng.random::<f32>() - 0.5);
                 v.push(crate::mix::f32_to_i16(s));
             }
         }
@@ -556,11 +558,11 @@ mod tests {
         let file = encode(&input, 2, 44_100).unwrap();
         assert!(QoaFile::open(&file[..20]).is_err());
         assert!(QoaFile::open(b"qoaf").is_err());
-        let mut rng = vmath::Rng::new(9);
+        let mut rng = Pcg32::seed_from_u64(9);
         for _ in 0..200 {
             let mut bad = file.clone();
             for _ in 0..8 {
-                let i = rng.below(bad.len() as u32) as usize;
+                let i = rng.random_range(0..bad.len());
                 bad[i] = rng.next_u32() as u8;
             }
             if let Ok(q) = QoaFile::open(&bad) {

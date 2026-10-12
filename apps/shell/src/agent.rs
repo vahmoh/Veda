@@ -20,8 +20,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use num_traits::Float;
 use vgfx::{Align, Canvas, Color, Rect};
-use vmath::FloatExt;
 use vproto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
 use vrt::object::Channel;
 use vrt::vm::Mapping;

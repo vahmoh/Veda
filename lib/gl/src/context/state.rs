@@ -44,7 +44,7 @@ fn floats(v: &[f32], normalized: bool) -> Value {
 /// A normalized float as an integer (table 4.5's signed conversion).
 fn norm_to_int(f: f32) -> i64 {
     let v = (f64::from(f.clamp(-1.0, 1.0)) * 4_294_967_295.0 - 1.0) / 2.0;
-    vmath::f64::round(v) as i64
+    libm::round(v) as i64
 }
 
 /// The extensions this implementation offers (`GL_EXTENSIONS`).
@@ -359,7 +359,7 @@ impl Context {
             }
             Value::Floats(n, f, normalized) => {
                 for k in 0..n {
-                    tmp[k] = if normalized { norm_to_int(f[k]) } else { vmath::f32::round(f[k]) as i64 };
+                    tmp[k] = if normalized { norm_to_int(f[k]) } else { libm::roundf(f[k]) as i64 };
                 }
                 n
             }

@@ -40,7 +40,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 use crate::fft::RealFft;
 
@@ -180,8 +180,8 @@ impl Vad {
         let mut speech_band = Vec::new();
         let mut bias = Vec::new();
         for pair in EDGES.windows(2) {
-            let a = (FloatExt::round(pair[0] / bin_hz) as usize).max(1);
-            let b = (FloatExt::round(pair[1] / bin_hz) as usize).min(nyquist);
+            let a = (Float::round(pair[0] / bin_hz) as usize).max(1);
+            let b = (Float::round(pair[1] / bin_hz) as usize).min(nyquist);
             if b <= a {
                 continue;
             }
@@ -191,16 +191,16 @@ impl Vad {
             // of 2 x bins x ~3 (smoothing) degrees of freedom, over 160
             // hops, lies about 2.6 standard deviations below the mean.
             let dof = 6.0 * (b - a) as f32;
-            bias.push(1.0 / (1.0 - 2.6 / FloatExt::sqrt(dof)).max(0.25));
+            bias.push(1.0 / (1.0 - 2.6 / Float::sqrt(dof)).max(0.25));
         }
         let hann: Vec<f32> = (0..window)
-            .map(|i| (0.5 - 0.5 * FloatExt::cos(core::f64::consts::TAU * i as f64 / window as f64)) as f32)
+            .map(|i| (0.5 - 0.5 * Float::cos(core::f64::consts::TAU * i as f64 / window as f64)) as f32)
             .collect();
         // Power of a full-scale-normalised sine bin: undo the window and FFT
         // gain, so that band powers are mean squares.
         let wsum: f32 = hann.iter().map(|w| w * w).sum();
         let nb = bands.len();
-        let per_hop = |seconds: f32| 1.0 - FloatExt::exp(-0.01 / seconds);
+        let per_hop = |seconds: f32| 1.0 - Float::exp(-0.01 / seconds);
         let mut vad = Vad {
             rate,
             hop,
@@ -361,7 +361,7 @@ impl Vad {
     /// bands, relative to a full-scale sine).
     pub fn noise_db(&self) -> f32 {
         let n: f32 = self.noise.iter().sum();
-        10.0 * FloatExt::log10(n.max(FLOOR_POWER))
+        10.0 * Float::log10(n.max(FLOOR_POWER))
     }
 
     fn analyse(&mut self) {
@@ -416,12 +416,12 @@ impl Vad {
                 floor_total += self.noise[i];
             }
         }
-        self.levels[self.level_pos] = 10.0 * FloatExt::log10(total.max(FLOOR_POWER));
+        self.levels[self.level_pos] = 10.0 * Float::log10(total.max(FLOOR_POWER));
         self.level_pos = (self.level_pos + 1) % self.levels.len();
         let (lo, hi) = self.levels.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &l| (lo.min(l), hi.max(l)));
         if self.hops >= self.levels.len() as u64 && hi - lo < STEADY_DB && total > 2.0 * floor_total {
             // The new floor: this spectrum at the lowest level of the window.
-            let scale = FloatExt::powf(10.0, (lo - 10.0 * FloatExt::log10(total.max(FLOOR_POWER))) / 10.0);
+            let scale = Float::powf(10.0, (lo - 10.0 * Float::log10(total.max(FLOOR_POWER))) / 10.0);
             for i in 0..nb {
                 let floor = self.smooth[i] * scale;
                 self.noise[i] = floor;
@@ -442,7 +442,7 @@ impl Vad {
             let xi = (DD_ALPHA * prior + (1.0 - DD_ALPHA) * (gamma - 1.0).max(0.0)).clamp(1e-3, 1e3);
             let gain = xi / (1.0 + xi);
             self.speech_power[i] = gain * gain * self.power[i];
-            *band_llr = gamma * gain - FloatExt::ln(1.0 + xi);
+            *band_llr = gamma * gain - Float::ln(1.0 + xi);
             if self.speech_band[i] {
                 sig += self.power[i];
                 nse += self.noise[i];
@@ -455,8 +455,8 @@ impl Vad {
         llrs.sort_unstable_by(|a, b| b.total_cmp(a));
         let top = nb.div_ceil(3).max(1);
         let llr = llrs[..top].iter().sum::<f32>() / top as f32;
-        self.snr_db = 10.0 * FloatExt::log10((sig / nse.max(FLOOR_POWER)).max(1e-6));
-        let mut p = 1.0 / (1.0 + FloatExt::exp(-SLOPE * (llr - self.threshold)));
+        self.snr_db = 10.0 * Float::log10((sig / nse.max(FLOOR_POWER)).max(1e-6));
+        let mut p = 1.0 / (1.0 + Float::exp(-SLOPE * (llr - self.threshold)));
 
         // Clicks: an impulse is not speech (here and while the window still
         // holds it).

@@ -10,7 +10,6 @@ members = [
     "lib/pe",
     "lib/elf",
     "lib/posix",
-    "lib/math",
     "lib/raster",
     "lib/font",
     "lib/image",
@@ -115,7 +114,6 @@ initrd = { path = "lib/initrd" }
 vpe = { path = "lib/pe" }
 velf = { path = "lib/elf" }
 vposix = { path = "lib/posix" }
-vmath = { path = "lib/math" }
 vraster = { path = "lib/raster" }
 vfont = { path = "lib/font" }
 vimage = { path = "lib/image" }
@@ -177,6 +175,44 @@ p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh"
 crypto-bigint = { version = "0.7.5", default-features = false, features = ["alloc"] }
 # HTTP/1.x message parsing (no_std).
 httparse = { version = "1.10", default-features = false }
+# Floating-point functions, which `core` lacks on stable Rust: libm, the Rust
+# project's port of musl's, called directly (`libm::sqrtf(x)`) or through
+# num-traits' `Float` (`use num_traits::Float;` gives `x.sqrt()`, `x.sin()`).
+libm = "0.2.16"
+num-traits = { version = "0.2.19", default-features = false, features = ["libm"] }
+# Vectors, matrices and quaternions for 3D graphics (Interceptor). Without
+# std it takes its float functions from libm.
+glam = { version = "0.34.1", default-features = false, features = ["nostd-libm"] }
+# Random numbers that are the same everywhere for a seed: PCG32, and normal
+# and directional distributions.
+rand = { version = "0.10.3", default-features = false, features = ["alloc"] }
+rand_pcg = { version = "0.10.2", default-features = false }
+rand_distr = { version = "0.6.0", default-features = false }
+# Gradient noise for procedural terrain and pictures (FastNoise Lite's
+# official Rust port).
+fastnoise-lite = { version = "1.1.1", default-features = false, features = ["libm"] }
+# Image decoding: zune's JPEG (the `image` crate's), PNG and BMP decoders,
+# the `qoi` crate and fast_image_resize's resampling, all without std. Their
+# SIMD needs std's run-time CPU detection, so in Veda they run their portable
+# code (fast_image_resize detects the CPU itself).
+zune-core = { version = "0.5.3", default-features = false }
+# zune-jpeg is vendored with a fix (see third_party/zune-jpeg/VEDA-PATCHES.md).
+zune-jpeg = { path = "third_party/zune-jpeg", default-features = false }
+zune-png = { version = "0.5.2", default-features = false }
+zune-bmp = { version = "0.5.2", default-features = false }
+# The PNG decoder's zlib, named for its errors (truncated data, Adler-32).
+zune-inflate = { version = "0.2.54", default-features = false, features = ["zlib"] }
+qoi = { version = "0.4.1", default-features = false, features = ["alloc"] }
+fast_image_resize = { version = "6.1.0", default-features = false, features = ["no_std"] }
+# Pixel buffers seen as the bytes the image libraries read and write.
+bytemuck = { version = "1.25.2", default-features = false }
+# Image encoding, on the build machine only (generated pictures, test
+# output): PNG (the `image` crate's) and JPEG with progressive scans; and
+# zlib and CRC-32 for the image tests' hand-made PNGs.
+png = "0.18.1"
+jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
+miniz_oxide = "0.9.1"
+crc32fast = "1.5.2"
 # The TCP/IP stack (vendored with a security patch, see third_party/).
 smoltcp = { path = "third_party/smoltcp", default-features = false, features = [
     "alloc",

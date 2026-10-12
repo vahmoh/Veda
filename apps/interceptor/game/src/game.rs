@@ -10,9 +10,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::prelude::*;
-
-use vmath::Rng;
+use rand::SeedableRng;
+use rand_pcg::Pcg32;
 
 use crate::camera::Follow;
 use crate::carmodel::Kind;
@@ -20,6 +19,7 @@ use crate::driver::{Place, Role, Scene};
 use crate::env::Environment;
 use crate::input::{Driver, Keys};
 use crate::physics::{self, Impact};
+use crate::prelude::*;
 use crate::render::{Camera, CarView, Light, Livery};
 use crate::traffic;
 use crate::vehicle::{Controls, Spec, Vehicle};
@@ -242,7 +242,7 @@ pub struct Game {
     /// tests).
     pub autopilot: bool,
     autopilot_role: Role,
-    rng: Rng,
+    rng: Pcg32,
     /// The player's nitrous.
     pub boost: Boost,
     /// Every car's place, as the drivers saw it at the last step.
@@ -280,7 +280,7 @@ impl Game {
             traffic: false,
             autopilot: false,
             autopilot_role: Role::Traffic(crate::driver::Traffic::new(0, 1.0, 1.15)),
-            rng: Rng::new(crate::world::SEED ^ 0x7AFF),
+            rng: Pcg32::seed_from_u64(crate::world::SEED ^ 0x7AFF),
             boost: Boost::new(),
             scene: Scene { places: Vec::new(), length },
             traffic_due: 0.0,
@@ -508,7 +508,7 @@ impl Game {
         for (k, &i) in order.iter().enumerate() {
             for step in 1..n {
                 let j = order[(k + step) % n];
-                let gap = (places[j].s - places[i].s).rem_euclid(length);
+                let gap = Euclid::rem_euclid(&(places[j].s - places[i].s), &length);
                 if gap > 12.0 {
                     break;
                 }

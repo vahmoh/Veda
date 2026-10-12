@@ -1,7 +1,6 @@
 //! 2x3 affine transforms.
 
 use crate::geom::Point;
-use crate::math;
 
 /// A 2D affine transform (the same layout as the canvas/SVG `matrix(a, b, c, d, e, f)`):
 ///
@@ -65,7 +64,7 @@ impl Transform {
     /// A rotation by `angle` radians about the origin.
     #[inline]
     pub fn rotate(angle: f32) -> Self {
-        let (s, c) = math::sin_cos(angle);
+        let (s, c) = libm::sincosf(angle);
         Transform::new(c, s, -s, c, 0.0, 0.0)
     }
 
@@ -170,8 +169,8 @@ impl Transform {
         let (a, b, c, d) = (self.a as f64, self.b as f64, self.c as f64, self.d as f64);
         let t = a * a + b * b + c * c + d * d;
         let det = a * d - b * c;
-        let disc = math::sqrt64((t * t - 4.0 * det * det).max(0.0));
-        math::sqrt64((t + disc) * 0.5) as f32
+        let disc = libm::sqrt((t * t - 4.0 * det * det).max(0.0));
+        libm::sqrt((t + disc) * 0.5) as f32
     }
 }
 

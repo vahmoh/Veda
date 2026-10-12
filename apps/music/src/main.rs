@@ -35,10 +35,13 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use num_traits::Float;
+use rand::SeedableRng;
+use rand::seq::SliceRandom;
+use rand_pcg::Pcg32;
 use vabi::{RawHandle, signals};
 use vaudio::fft::Analyzer;
 use vgfx::{Align, Bitmap, Color, Rect};
-use vmath::FloatExt;
 use vproto::input::keys;
 use vrt::object::Event;
 use vrt::sync::Mutex;
@@ -95,7 +98,7 @@ fn round_corners(b: &mut Bitmap, radius: f32) {
         for x in 0..band.min(w) {
             let fx = rad - (x as f32 + 0.5);
             let fy = rad - (y as f32 + 0.5);
-            let d = FloatExt::sqrt(fx * fx + fy * fy);
+            let d = Float::sqrt(fx * fx + fy * fy);
             let cov = ((rad - d + 0.5).clamp(0.0, 1.0) * 255.0) as u32;
             if cov >= 255 {
                 continue;
@@ -187,7 +190,7 @@ struct Player {
     /// A seek we asked the engine for that it has not done yet.
     seeking: Option<u32>,
     seek_seq: u32,
-    rng: vmath::Rng,
+    rng: Pcg32,
     /// Another Music process handed us a file: come to the front.
     activate: bool,
     perf_frames: u32,
@@ -248,7 +251,7 @@ impl Player {
             load_seq: 0,
             seeking: None,
             seek_seq: 0,
-            rng: vmath::Rng::new(seed),
+            rng: Pcg32::seed_from_u64(seed),
             activate: false,
             perf_frames: 0,
             perf_ns: 0,
@@ -334,7 +337,7 @@ impl Player {
         let n = self.tracks.len();
         self.order = (0..n).collect();
         if self.shuffle && n > 1 {
-            self.rng.shuffle(&mut self.order);
+            self.order.shuffle(&mut self.rng);
             // Keep the current track first so "next" moves on from it.
             if let Some(c) = self.current
                 && let Some(p) = self.order.iter().position(|&i| i == c)

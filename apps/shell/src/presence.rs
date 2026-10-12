@@ -15,8 +15,8 @@
 use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
 
+use num_traits::Float;
 use vgfx::{Canvas, Color, FillRule, Path};
-use vmath::FloatExt;
 
 /// The ring's width relative to its radius.
 pub const RING_WIDTH: f32 = 0.25;

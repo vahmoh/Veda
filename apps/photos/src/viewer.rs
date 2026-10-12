@@ -13,7 +13,7 @@ use vproto::input::keys;
 use vui::{ButtonKind, Cursor, Font, Icon, Ui};
 
 #[allow(unused_imports)]
-use vmath::FloatExt;
+use num_traits::Float;
 
 use crate::catalog::{self, Thumb};
 use crate::library::empty_state;

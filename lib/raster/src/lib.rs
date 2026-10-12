@@ -9,7 +9,6 @@
 //! * [`Stroker`] / [`stroke`] turn stroked paths (width, caps, joins, miter limit) into fillable
 //!   outlines.
 //! * [`flatten`] approximates curves by lines (Wang's formula, default tolerance 0.2 px).
-//! * [`math`] provides the few float functions (`floor`, `sqrt`, `sin_cos`, ...) missing from `core`.
 //!
 //! ```ignore
 //! let mut path = Path::new();
@@ -29,7 +28,6 @@ extern crate std;
 
 pub mod flatten;
 mod geom;
-pub mod math;
 mod path;
 mod raster;
 mod stroke;

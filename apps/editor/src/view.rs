@@ -5,8 +5,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use num_traits::Float;
 use vgfx::{Align, Color, Rect};
-use vmath::FloatExt;
 use vproto::display::modifiers;
 use vproto::input::keys;
 use vtext::highlight::{self, Language, Span, State, Token};

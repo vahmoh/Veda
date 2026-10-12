@@ -11,7 +11,6 @@ use super::resource::{Level, Resource};
 use crate::backend::{Blit, BufferRange, Filter, Framebuffer, Rect, Region, ResourceId, Surface};
 use crate::format::{Class, Format, Geometry, Texel, downsample};
 use crate::pixels;
-use vmath::f32 as m;
 
 /// Copies a box between images of the same format.
 pub fn copy_region(
@@ -149,7 +148,7 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
                     let t = if blit.filter == Filter::Linear && !integer {
                         // Bilinear, clamped to the source's edges.
                         let (u, v) = (fx - 0.5, fy - 0.5);
-                        let (i0, j0) = (m::floor(u) as i32, m::floor(v) as i32);
+                        let (i0, j0) = (libm::floorf(u) as i32, libm::floorf(v) as i32);
                         let (a, c) = (u - i0 as f32, v - j0 as f32);
                         let at = |i: i32, j: i32| {
                             let (i, j) = (i.clamp(0, sw - 1) as u32, j.clamp(0, sh - 1) as u32);
@@ -158,7 +157,7 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
                         let l = |p: [f32; 4], q: [f32; 4], t: f32| [0, 1, 2, 3].map(|k| p[k] + (q[k] - p[k]) * t);
                         Texel::Float(l(l(at(i0, j0), at(i0 + 1, j0), a), l(at(i0, j0 + 1), at(i0 + 1, j0 + 1), a), c))
                     } else {
-                        let (i, j) = (m::floor(fx) as i32, m::floor(fy) as i32);
+                        let (i, j) = (libm::floorf(fx) as i32, libm::floorf(fy) as i32);
                         if i < 0 || j < 0 || i >= sw || j >= sh {
                             // Outside the source: the destination keeps
                             // its value.
@@ -186,7 +185,7 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
         let Some(dr) = b.res(ds.resource) else { continue };
         for y in y0..y1 {
             for x in x0..x1 {
-                let (i, j) = (m::floor(sx(x)) as i32, m::floor(sy(y)) as i32);
+                let (i, j) = (libm::floorf(sx(x)) as i32, libm::floorf(sy(y)) as i32);
                 let o = (((y - y0) * (x1 - x0) + (x - x0)) as usize) * f.bytes();
                 let (si, sj) = if i < 0 || j < 0 || i >= sw || j >= sh {
                     // Keep the destination's texel.

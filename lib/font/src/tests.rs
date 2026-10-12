@@ -307,7 +307,7 @@ fn glyph_bitmap_placement() {
     let mut r = GlyphRasterizer::with_options(RasterOptions::LINEAR);
     let h = r.rasterize(&f, gid(&f, 'H'), 20.0, 0.0);
     let cap = f.metrics().cap_height as f32 * 20.0 / f.units_per_em() as f32;
-    assert_eq!(h.top, vraster::math::ceil(cap) as i32);
+    assert_eq!(h.top, libm::ceilf(cap) as i32);
     assert_eq!(h.height as i32, h.top, "H sits on the baseline");
     assert!(h.left >= 0 && h.left <= 3);
     assert!(h.data.contains(&255), "stems should have fully covered pixels");

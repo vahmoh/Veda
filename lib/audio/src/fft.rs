@@ -17,7 +17,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// An in-place complex FFT of a fixed power-of-two size.
 #[derive(Debug, Clone)]
@@ -41,8 +41,8 @@ impl Fft {
         while h < n {
             for k in 0..h {
                 let a = -core::f64::consts::PI * k as f64 / h as f64;
-                tw_re[h + k] = FloatExt::cos(a) as f32;
-                tw_im[h + k] = FloatExt::sin(a) as f32;
+                tw_re[h + k] = Float::cos(a) as f32;
+                tw_im[h + k] = Float::sin(a) as f32;
             }
             h *= 2;
         }
@@ -141,8 +141,8 @@ impl RealFft {
     pub fn new(n: usize) -> RealFft {
         let n = n.max(4).next_power_of_two();
         let angle = |k: usize| -core::f64::consts::TAU * k as f64 / n as f64;
-        let post_re = (0..=n / 2).map(|k| FloatExt::cos(angle(k)) as f32).collect();
-        let post_im = (0..=n / 2).map(|k| FloatExt::sin(angle(k)) as f32).collect();
+        let post_re = (0..=n / 2).map(|k| Float::cos(angle(k)) as f32).collect();
+        let post_im = (0..=n / 2).map(|k| Float::sin(angle(k)) as f32).collect();
         RealFft { n, half: Fft::new(n / 2), post_re, post_im, zr: vec![0.0; n / 2], zi: vec![0.0; n / 2] }
     }
 
@@ -219,7 +219,7 @@ impl RealFft {
 /// A Hann window of length `n`.
 pub fn hann(n: usize) -> Vec<f32> {
     let d = (n.max(2) - 1) as f64;
-    (0..n).map(|i| (0.5 - 0.5 * FloatExt::cos(core::f64::consts::TAU * i as f64 / d)) as f32).collect()
+    (0..n).map(|i| (0.5 - 0.5 * Float::cos(core::f64::consts::TAU * i as f64 / d)) as f32).collect()
 }
 
 /// Turns blocks of samples into log-spaced band levels for a visualiser.
@@ -253,8 +253,8 @@ impl Analyzer {
         let ratio = hi / lo;
         let bands = (0..bands.max(1))
             .map(|b| {
-                let f0 = lo * FloatExt::powf(ratio, b as f32 / bands as f32);
-                let f1 = lo * FloatExt::powf(ratio, (b + 1) as f32 / bands as f32);
+                let f0 = lo * Float::powf(ratio, b as f32 / bands as f32);
+                let f1 = lo * Float::powf(ratio, (b + 1) as f32 / bands as f32);
                 (f0 / bin_hz, f1 / bin_hz)
             })
             .collect();
@@ -301,12 +301,12 @@ impl Analyzer {
         }
         self.fft.forward(&self.input, &mut self.re, &mut self.im);
         for ((m, r), i) in self.mag.iter_mut().zip(&self.re).zip(&self.im) {
-            *m = FloatExt::sqrt(r * r + i * i) * self.norm;
+            *m = Float::sqrt(r * r + i * i) * self.norm;
         }
         let last = self.mag.len() - 1;
         for (b, level) in self.bands.iter().zip(levels.iter_mut()) {
             let (b0, b1) = *b;
-            let (i0, i1) = ((b0 as usize).min(last), (FloatExt::ceil(b1) as usize).min(last + 1));
+            let (i0, i1) = ((b0 as usize).min(last), (Float::ceil(b1) as usize).min(last + 1));
             let peak = if i1 <= i0 + 1 {
                 // Narrower than a bin: interpolate.
                 let t = b0 - i0 as f32;
@@ -316,7 +316,7 @@ impl Analyzer {
             } else {
                 self.mag[i0..i1].iter().fold(0.0f32, |m, &v| m.max(v))
             };
-            let db = 20.0 * FloatExt::log10(peak.max(1e-9));
+            let db = 20.0 * Float::log10(peak.max(1e-9));
             *level = ((db - self.floor_db) / (self.ceil_db - self.floor_db)).clamp(0.0, 1.0);
         }
     }
@@ -325,6 +325,8 @@ impl Analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{RngExt, SeedableRng};
+    use rand_pcg::Pcg32;
 
     fn naive(x: &[f32]) -> Vec<(f64, f64)> {
         let n = x.len();
@@ -343,9 +345,9 @@ mod tests {
 
     #[test]
     fn complex_and_real_fft_match_dft() {
-        let mut rng = vmath::Rng::new(1);
+        let mut rng = Pcg32::seed_from_u64(1);
         for n in [4usize, 8, 64, 512] {
-            let x: Vec<f32> = (0..n).map(|_| rng.range_f32(-1.0, 1.0)).collect();
+            let x: Vec<f32> = (0..n).map(|_| rng.random_range(-1.0..1.0)).collect();
             let want = naive(&x);
             let mut re = x.clone();
             let mut im = vec![0.0; n];
@@ -366,9 +368,9 @@ mod tests {
 
     #[test]
     fn real_inverse_restores_the_signal() {
-        let mut rng = vmath::Rng::new(7);
+        let mut rng = Pcg32::seed_from_u64(7);
         for n in [4usize, 8, 32, 256, 1024] {
-            let x: Vec<f32> = (0..n).map(|_| rng.range_f32(-1.0, 1.0)).collect();
+            let x: Vec<f32> = (0..n).map(|_| rng.random_range(-1.0..1.0)).collect();
             let mut rf = RealFft::new(n);
             let (mut re, mut im) = (vec![0.0; n / 2 + 1], vec![0.0; n / 2 + 1]);
             rf.forward(&x, &mut re, &mut im);

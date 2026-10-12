@@ -4,7 +4,7 @@
 
 use core::f32::consts::PI;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// Filter response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +36,7 @@ impl Svf {
     /// Sets the cut-off (Hz) and resonance (Q, 0.5 = soft, 10 = ringing).
     pub fn set(&mut self, cutoff: f32, q: f32, sr: f32) {
         let fc = cutoff.clamp(10.0, sr * 0.45);
-        let g = vmath::f32::tan(PI * fc / sr);
+        let g = libm::tanf(PI * fc / sr);
         self.k = 1.0 / q.max(0.1);
         self.a1 = 1.0 / (1.0 + g * (g + self.k));
         self.a2 = g * self.a1;
@@ -85,9 +85,9 @@ pub struct Biquad {
 impl Biquad {
     pub fn new(kind: BiquadKind, freq: f32, q: f32, sr: f32) -> Biquad {
         let w0 = 2.0 * PI * freq.clamp(10.0, sr * 0.45) / sr;
-        let (sin, cos) = (FloatExt::sin(w0), FloatExt::cos(w0));
+        let (sin, cos) = (Float::sin(w0), Float::cos(w0));
         let alpha = sin / (2.0 * q.max(0.1));
-        let gain_a = |db: f32| FloatExt::powf(10.0f32, db / 40.0);
+        let gain_a = |db: f32| Float::powf(10.0f32, db / 40.0);
         let (b0, b1, b2, a0, a1, a2) = match kind {
             BiquadKind::LowPass => {
                 ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha)
@@ -101,7 +101,7 @@ impl Biquad {
             }
             BiquadKind::LowShelf(db) => {
                 let a = gain_a(db);
-                let s = 2.0 * FloatExt::sqrt(a) * alpha;
+                let s = 2.0 * Float::sqrt(a) * alpha;
                 (
                     a * ((a + 1.0) - (a - 1.0) * cos + s),
                     2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
@@ -113,7 +113,7 @@ impl Biquad {
             }
             BiquadKind::HighShelf(db) => {
                 let a = gain_a(db);
-                let s = 2.0 * FloatExt::sqrt(a) * alpha;
+                let s = 2.0 * Float::sqrt(a) * alpha;
                 (
                     a * ((a + 1.0) + (a - 1.0) * cos + s),
                     -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
@@ -145,7 +145,7 @@ pub struct OnePole {
 
 impl OnePole {
     pub fn new(cutoff: f32, sr: f32) -> OnePole {
-        OnePole { a: 1.0 - FloatExt::exp(-2.0 * PI * cutoff / sr), y: 0.0 }
+        OnePole { a: 1.0 - Float::exp(-2.0 * PI * cutoff / sr), y: 0.0 }
     }
 
     #[inline(always)]

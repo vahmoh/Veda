@@ -4,8 +4,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use num_traits::Float;
 use vgfx::Bitmap;
-use vmath::FloatExt;
 
 /// Name of the built-in procedural wallpaper (used in place of a path).
 pub const PROCEDURAL: &str = "procedural";

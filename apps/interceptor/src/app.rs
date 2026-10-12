@@ -14,6 +14,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use glam::Vec3;
 use interceptor_game::audio::{Cue, Emitter};
 use interceptor_game::camera::View;
 use interceptor_game::career::{MISSIONS, Outcome, SUSPECTS, Save, Units};
@@ -21,8 +22,8 @@ use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::session::{Mode, Phase, Quick, Session};
 use interceptor_game::sound::Sound;
 use interceptor_game::world::World;
+use num_traits::Float;
 use vgfx::Rect;
-use vmath::{FloatExt, Vec3};
 use vproto::input::keys;
 
 use crate::speakers::{Speakers, Tune};

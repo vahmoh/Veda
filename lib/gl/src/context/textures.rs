@@ -112,7 +112,7 @@ impl Param {
         match self {
             Param::I(i) => i,
             // Enums and integers given as floats.
-            Param::F(f) => vmath::f32::round(f) as i32,
+            Param::F(f) => libm::roundf(f) as i32,
         }
     }
 
@@ -127,7 +127,7 @@ impl Param {
         match self {
             Param::I(i) => i as u32,
             Param::F(f) => {
-                if f >= 0.0 && f == vmath::f32::round(f) && f < 4_294_967_296.0 {
+                if f >= 0.0 && f == libm::roundf(f) && f < 4_294_967_296.0 {
                     f as u32
                 } else {
                     u32::MAX
@@ -1570,7 +1570,7 @@ impl Context {
     pub fn get_tex_parameteri(&mut self, target: u32, pname: u32) -> i32 {
         self.get_tex_parameter(target, pname).map_or(0, |p| match p {
             Param::I(i) => i,
-            Param::F(f) => vmath::f32::round(f) as i32,
+            Param::F(f) => libm::roundf(f) as i32,
         })
     }
 
@@ -1729,7 +1729,7 @@ impl Context {
     pub fn get_sampler_parameteri(&mut self, sampler: u32, pname: u32) -> i32 {
         self.get_sampler_param(sampler, pname).map_or(0, |p| match p {
             Param::I(i) => i,
-            Param::F(f) => vmath::f32::round(f) as i32,
+            Param::F(f) => libm::roundf(f) as i32,
         })
     }
 

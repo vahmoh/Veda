@@ -488,7 +488,7 @@ fn draw_rounded(ui: &mut Ui, b: &Bitmap, x: i32, y: i32, radius: i32) {
     for row in 0..r {
         // How far the curve is in at this row.
         let dy = (r - row) as f32 - 0.5;
-        let inset = r - vmath::FloatExt::floor(vmath::FloatExt::sqrt((r * r) as f32 - dy * dy)) as i32;
+        let inset = r - libm::floorf(libm::sqrtf((r * r) as f32 - dy * dy)) as i32;
         let w = b.width - 2 * inset;
         if w <= 0 {
             continue;

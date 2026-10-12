@@ -1,8 +1,8 @@
 //! Shared styling of shell surfaces: translucent "mica" backgrounds sampled
 //! from the blurred wallpaper, and rounded window corners.
 
+use num_traits::Float;
 use vgfx::{Bitmap, Canvas, Color, Rect};
-use vmath::FloatExt;
 
 /// Corner radius of popups (start menu, calendar, notifications).
 pub const POPUP_RADIUS: i32 = 12;

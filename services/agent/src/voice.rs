@@ -90,16 +90,12 @@ fn loudness(samples: impl Iterator<Item = i16>) -> f32 {
     if n == 0 {
         return 0.0;
     }
-    let rms = vmath_sqrt((sum / n as f64) as f32) / 32768.0;
+    let rms = libm::sqrtf((sum / n as f64) as f32) / 32768.0;
     if rms < 1e-5 {
         return 0.0;
     }
-    let db = 20.0 * vmath::f32::log10(rms);
+    let db = 20.0 * libm::log10f(rms);
     ((db + 50.0) / 44.0).clamp(0.0, 1.0)
-}
-
-fn vmath_sqrt(x: f32) -> f32 {
-    vmath::f32::sqrt(x)
 }
 
 impl Voice {

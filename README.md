@@ -5,11 +5,13 @@ switch my wallpaper to the dunes" and it does the work in any application,
 through the same code as your keyboard and mouse. It asks you first before
 anything that is hard to undo.
 
-Everything is written from scratch in Rust and lives in this repository:
-the UEFI bootloader, a capability-based microkernel, the system services,
-the window system, the toolkit and the applications. A few mature crates
-provide TCP/IP, TLS and cryptography (smoltcp, rustls, RustCrypto). Veda
-runs on x86-64 PCs and in QEMU.
+The system is written in Rust and lives in this repository: the UEFI
+bootloader, a capability-based microkernel, the system services, the
+window system, the toolkit and the applications. Where a proven, widely
+used library exists, Veda uses it rather than its own: TCP/IP, TLS and
+cryptography (smoltcp, rustls, RustCrypto), image codecs (zune, qoi,
+fast_image_resize) and math (libm, glam, rand). Veda runs on x86-64 PCs
+and in QEMU.
 
 ![The Veda desktop, with the agent's window open and listening](docs/images/desktop.png)
 
@@ -466,7 +468,7 @@ output) to `target/veda/serial.log`.
 | `tests/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
-| `third_party/` | vendored crates with Veda's patches (smoltcp) |
+| `third_party/` | vendored crates with Veda's patches (smoltcp, zune-jpeg) |
 | `assets/` | fonts and application manifests |
 | `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
 | `website/` | [www.vedaos.org](https://www.vedaos.org), a static page |

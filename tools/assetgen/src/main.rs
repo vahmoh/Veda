@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use paint::Buf;
-use vimage::jpeg::{EncodeOptions, Subsampling};
+use vimage::{JpegOptions, Subsampling};
 
 /// How a generated image is stored.
 #[derive(Clone, Copy)]
@@ -75,24 +75,35 @@ fn items() -> Vec<Item> {
     ]
 }
 
-fn encode(buf: &Buf, store: Store, seed: u32) -> Vec<u8> {
-    let img = buf.to_image(seed);
-    let jpeg = |img: &vimage::Image, quality, subsampling, progressive| {
-        let opts =
-            EncodeOptions { quality, subsampling, optimize_huffman: true, progressive, ..EncodeOptions::default() };
-        vimage::jpeg::encode(img, &opts).expect("JPEG encoding")
+fn encode(img: &vimage::Image, store: Store) -> Vec<u8> {
+    let jpeg = |img: &vimage::Image, quality, subsampling, progressive, exif| {
+        let opts = JpegOptions { quality, subsampling, optimize_huffman: true, progressive, exif };
+        vimage::encode_jpeg(img, &opts).expect("JPEG encoding")
     };
     match store {
-        Store::Jpeg(q, s) => jpeg(&img, q, s, false),
-        Store::ProgressiveJpeg(q) => jpeg(&img, q, Subsampling::Yuv420, true),
+        Store::Jpeg(q, s) => jpeg(img, q, s, false, None),
+        Store::ProgressiveJpeg(q) => jpeg(img, q, Subsampling::Yuv420, true, None),
         Store::RotatedJpeg(q) => {
-            let stored = vimage::rotate270(&img);
-            paint::with_exif_orientation(&jpeg(&stored, q, Subsampling::Yuv420, false), 6)
+            let stored = vimage::rotate270(img);
+            jpeg(&stored, q, Subsampling::Yuv420, false, Some(paint::exif_orientation(6)))
         }
-        Store::Png => vimage::png::encode(&img, 6).expect("PNG encoding"),
-        Store::Bmp => paint::bmp24(&img),
-        Store::Qoi => vimage::qoi::encode(&img).expect("QOI encoding"),
+        Store::Png => vimage::encode_png(img).expect("PNG encoding"),
+        Store::Bmp => paint::bmp24(img),
+        Store::Qoi => vimage::encode_qoi(img).expect("QOI encoding"),
     }
+}
+
+/// The peak signal-to-noise ratio of `b` against `a` (same size), over the colour channels.
+fn psnr(a: &vimage::Image, b: &vimage::Image) -> f64 {
+    let mut sum = 0u64;
+    for (&p, &q) in a.pixels.iter().zip(&b.pixels) {
+        for shift in [0, 8, 16] {
+            let d = ((p >> shift) & 255).abs_diff((q >> shift) & 255) as u64;
+            sum += d * d;
+        }
+    }
+    let mse = sum as f64 / (3 * a.pixels.len()) as f64;
+    if mse == 0.0 { f64::INFINITY } else { 10.0 * (255.0 * 255.0 / mse).log10() }
 }
 
 /// Removes the files of a directory this tool owns (not its subdirectories).
@@ -125,11 +136,18 @@ fn main() {
             continue;
         }
         let t = Instant::now();
-        let buf = (item.render)(item.w, item.h);
-        let bytes = encode(&buf, item.store, 0x5EED + i as u32);
-        // Every file must decode with the system's own decoder.
+        let img = (item.render)(item.w, item.h).to_image(0x5EED + i as u32);
+        let bytes = encode(&img, item.store);
+        // Every file must decode with the system's own decoder to what was drawn: exactly when
+        // the format is lossless, closely when it is JPEG (quality 90 is well above 35 dB).
         let decoded = vimage::decode(&bytes).expect("generated image decodes");
         assert_eq!((decoded.width as usize, decoded.height as usize), (item.w, item.h), "{}", item.name);
+        let quality = psnr(&img, &decoded);
+        match item.store {
+            Store::Png | Store::Qoi => assert!(decoded == img, "{} decodes differently", item.name),
+            Store::Bmp => assert!(quality.is_infinite(), "{} decodes differently", item.name),
+            _ => assert!(quality > 35.0, "{} decodes at {quality:.1} dB", item.name),
+        }
         let dir = out.join(item.dir);
         std::fs::create_dir_all(&dir).expect("creating the output directory");
         std::fs::write(dir.join(item.name), &bytes).expect("writing the output file");
@@ -137,7 +155,7 @@ fn main() {
         if let Some(preview) = std::env::var_os("ASSETGEN_PREVIEW") {
             let preview = PathBuf::from(preview);
             std::fs::create_dir_all(&preview).expect("creating the preview directory");
-            let png = vimage::png::encode(&decoded, 1).expect("PNG encoding");
+            let png = vimage::encode_png(&decoded).expect("PNG encoding");
             std::fs::write(preview.join(format!("{}.png", item.name)), png).expect("writing the preview");
         }
         total += bytes.len();

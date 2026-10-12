@@ -6,7 +6,7 @@
 # chase ends on the results screen. The computer takes the wheel before
 # the start, so that every run plays the same chase (the cars, their
 # drivers and the chase step at a fixed rate, whatever the frames): the
-# suspect is taken down 50 s after the start. Taking it later, the chase
+# suspect is taken down 36 s after the start. Taking it later, the chase
 # would last anything from under a minute to eight, by the moment the
 # key landed. Resuming from the pause carries on with that chase (Enter
 # on the pause menu, the hidden pointer resting on another item).
@@ -45,6 +45,6 @@ wait-serial "screen Playing" 10
 wait-serial " fps, render " 30
 wait 5
 shot target/veda/interceptor-7-chase.png
-wait-serial "result: taken down in 0:49.9, 8 hits" 120
+wait-serial "result: taken down in 0:35.6, 4 hits" 120
 wait 4
 shot target/veda/interceptor-8-results.png

@@ -206,18 +206,13 @@ pub fn render(w: usize, h: usize, ss: usize, f: impl Fn(f32, f32) -> Rgb + Sync)
     buf
 }
 
-/// Inserts an EXIF `APP1` segment with an orientation tag right after the JPEG `SOI` marker.
-pub fn with_exif_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
-    let mut app1 = b"Exif\0\0MM\0*\0\0\0\x08\0\x01".to_vec();
-    app1.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1]);
-    app1.extend_from_slice(&orientation.to_be_bytes());
-    app1.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
-    let mut out = jpeg[..2].to_vec();
-    out.extend_from_slice(&[0xFF, 0xE1]);
-    out.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
-    out.extend_from_slice(&app1);
-    out.extend_from_slice(&jpeg[2..]);
-    out
+/// EXIF data (a big-endian TIFF structure) holding just an orientation tag.
+pub fn exif_orientation(orientation: u16) -> Vec<u8> {
+    let mut tiff = b"MM\0*\0\0\0\x08\0\x01".to_vec();
+    tiff.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1]);
+    tiff.extend_from_slice(&orientation.to_be_bytes());
+    tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    tiff
 }
 
 /// Writes a 24-bit uncompressed BMP (`BITMAPINFOHEADER`, bottom-up rows).

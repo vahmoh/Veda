@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::error::ImageError;
-use crate::util::try_vec;
 
 /// A decoded image.
 ///
@@ -41,7 +40,10 @@ impl Image {
     /// failure as [`ImageError::OutOfMemory`] instead of aborting.
     pub fn try_new(width: u32, height: u32) -> Result<Image, ImageError> {
         let n = (width as usize).checked_mul(height as usize).ok_or(ImageError::OutOfMemory)?;
-        Ok(Image { width, height, pixels: try_vec(n, 0)? })
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(n)?;
+        pixels.resize(n, 0);
+        Ok(Image { width, height, pixels })
     }
 
     /// Creates a `width x height` image filled with `color` (`0xAARRGGBB`).

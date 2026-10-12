@@ -22,7 +22,6 @@ use super::target::RenderTarget;
 use super::texture::Sampled;
 use crate::backend::{Blend, Cull, DepthStencil, Framebuffer, Raster, ResourceId, Viewport};
 use crate::format::Format;
-use vmath::f32 as m;
 
 /// Tile size in pixels.
 pub const TILE: i32 = 64;
@@ -396,7 +395,7 @@ impl Setup<'_> {
 
     fn emit_triangle(&mut self, v0: &ClipVertex, v1: &ClipVertex, v2: &ClipVertex, provoking: &[u32]) {
         let w = [self.window(&v0.pos), self.window(&v1.pos), self.window(&v2.pos)];
-        let fix = |x: f32| m::round_ties_even(x * SUB as f32) as i64;
+        let fix = |x: f32| libm::roundevenf(x * SUB as f32) as i64;
         let mut xy = w.map(|p| (fix(p[0]), fix(p[1])));
         let area = (xy[1].0 - xy[0].0) * (xy[2].1 - xy[0].1) - (xy[2].0 - xy[0].0) * (xy[1].1 - xy[0].1);
         if area == 0 {
@@ -549,10 +548,10 @@ impl Setup<'_> {
         let hw = width * 0.5;
         let r = self.clip_rect;
         let bbox = [
-            (m::floor(wa[0].min(wb[0]) - hw) as i32 - 1).max(r[0]),
-            (m::floor(wa[1].min(wb[1]) - hw) as i32 - 1).max(r[1]),
-            (m::ceil(wa[0].max(wb[0]) + hw) as i32 + 1).min(r[2]),
-            (m::ceil(wa[1].max(wb[1]) + hw) as i32 + 1).min(r[3]),
+            (libm::floorf(wa[0].min(wb[0]) - hw) as i32 - 1).max(r[0]),
+            (libm::floorf(wa[1].min(wb[1]) - hw) as i32 - 1).max(r[1]),
+            (libm::ceilf(wa[0].max(wb[0]) + hw) as i32 + 1).min(r[2]),
+            (libm::ceilf(wa[1].max(wb[1]) + hw) as i32 + 1).min(r[3]),
         ];
         if bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
             return;
@@ -604,10 +603,10 @@ impl Setup<'_> {
         let h = size * 0.5;
         let r = self.clip_rect;
         let bbox = [
-            (m::floor(win[0] - h) as i32).max(r[0]),
-            (m::floor(win[1] - h) as i32).max(r[1]),
-            (m::ceil(win[0] + h) as i32 + 1).min(r[2]),
-            (m::ceil(win[1] + h) as i32 + 1).min(r[3]),
+            (libm::floorf(win[0] - h) as i32).max(r[0]),
+            (libm::floorf(win[1] - h) as i32).max(r[1]),
+            (libm::ceilf(win[0] + h) as i32 + 1).min(r[2]),
+            (libm::ceilf(win[1] + h) as i32 + 1).min(r[3]),
         ];
         if bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
             return;

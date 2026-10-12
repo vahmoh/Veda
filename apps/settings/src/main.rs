@@ -30,8 +30,8 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use num_traits::Float;
 use vgfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};
-use vmath::FloatExt;
 use vproto::display::{ScreenInfo, modifiers};
 use vproto::init::launcher;
 use vproto::input::keys;

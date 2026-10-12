@@ -6,7 +6,7 @@
 //! Gain changes are ramped linearly across a block, which avoids the
 //! clicks of an abrupt step.
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// Unity gain in Q15.
 pub const UNITY_Q15: i32 = 1 << 15;
@@ -27,12 +27,12 @@ pub fn i16_to_f32(s: i16) -> f32 {
 
 /// Decibels to a linear amplitude factor.
 pub fn db_to_gain(db: f32) -> f32 {
-    FloatExt::powf(10.0f32, db / 20.0)
+    Float::powf(10.0f32, db / 20.0)
 }
 
 /// Linear amplitude factor to decibels (`-inf` is clamped to -144 dB).
 pub fn gain_to_db(gain: f32) -> f32 {
-    if gain <= 1e-7 { -144.0 } else { 20.0 * FloatExt::log10(gain) }
+    if gain <= 1e-7 { -144.0 } else { 20.0 * Float::log10(gain) }
 }
 
 /// Maps a volume slider position (0..=1) to an amplitude factor with a
@@ -44,7 +44,7 @@ pub fn slider_to_gain(pos: f32) -> f32 {
 
 /// Inverse of [`slider_to_gain`].
 pub fn gain_to_slider(gain: f32) -> f32 {
-    FloatExt::cbrt(gain.clamp(0.0, 1.0))
+    Float::cbrt(gain.clamp(0.0, 1.0))
 }
 
 /// A linear gain (clamped to 0..=1) in Q15.

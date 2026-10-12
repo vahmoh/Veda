@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vmath = { workspace = true }
+libm = { workspace = true }
 
 [lints]
 workspace = true

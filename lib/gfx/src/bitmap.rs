@@ -56,8 +56,8 @@ impl Bitmap {
     pub fn sample_bilinear(&self, fx: f32, fy: f32) -> u32 {
         let x = fx - 0.5;
         let y = fy - 0.5;
-        let x0 = vmath::FloatExt::floor(x);
-        let y0 = vmath::FloatExt::floor(y);
+        let x0 = libm::floorf(x);
+        let y0 = libm::floorf(y);
         let tx = ((x - x0) * 256.0) as u32;
         let ty = ((y - y0) * 256.0) as u32;
         let (ix, iy) = (x0 as i32, y0 as i32);

@@ -35,8 +35,8 @@ use core::f32::consts::PI;
 
 use alloc::string::String;
 
+use num_traits::Float;
 use vgfx::{Bitmap, Canvas, Color, Rect, Text};
-use vmath::FloatExt;
 use vrt::println;
 use vsplash::Ring;
 

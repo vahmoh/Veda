@@ -14,7 +14,6 @@ use vglsl::interp::{LANES, Lanes, Mask, Textures};
 use vglsl::ir::TexOp;
 use vglsl::ops::f16_to_f32;
 use vglsl::types::Dim;
-use vmath::f32 as m;
 
 use crate::backend::{Filter, Func, SamplerState, Wrap};
 use crate::format::{Class, Format};
@@ -425,7 +424,7 @@ impl Sampled {
         let px = (dx[0] * w) * (dx[0] * w) + (dx[1] * h) * (dx[1] * h) + (dx[2] * d) * (dx[2] * d);
         let py = (dy[0] * w) * (dy[0] * w) + (dy[1] * h) * (dy[1] * h) + (dy[2] * d) * (dy[2] * d);
         // log2(sqrt(x)) = log2(x) / 2.
-        0.5 * m::log2(px.max(py))
+        0.5 * libm::log2f(px.max(py))
     }
 
     /// Applies the swizzle to a result.

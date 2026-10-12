@@ -20,7 +20,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// Largest exact phase count before switching to approximate stepping.
 const MAX_EXACT_PHASES: u32 = 1024;
@@ -297,10 +297,10 @@ fn design(phases: usize, taps: usize, ratio: f64) -> Vec<i16> {
             let sinc = if arg.abs() < 1e-12 {
                 1.0
             } else {
-                FloatExt::sin(core::f64::consts::PI * arg) / (core::f64::consts::PI * arg)
+                Float::sin(core::f64::consts::PI * arg) / (core::f64::consts::PI * arg)
             };
             let r = x / (center + 0.5);
-            let w = bessel_i0(KAISER_BETA * FloatExt::sqrt((1.0 - r * r).max(0.0))) / i0_beta;
+            let w = bessel_i0(KAISER_BETA * Float::sqrt((1.0 - r * r).max(0.0))) / i0_beta;
             sinc * w
         })
         .collect();
@@ -309,7 +309,7 @@ fn design(phases: usize, taps: usize, ratio: f64) -> Vec<i16> {
         // Phase p uses h[m * phases + p] for input frame newest - m.
         let sum: f64 = (0..taps).map(|m| proto[m * phases + p]).sum();
         let scale = if sum.abs() > 1e-9 { 16384.0 / sum } else { 0.0 };
-        let mut q: Vec<i32> = (0..taps).map(|m| FloatExt::round(proto[m * phases + p] * scale) as i32).collect();
+        let mut q: Vec<i32> = (0..taps).map(|m| Float::round(proto[m * phases + p] * scale) as i32).collect();
         // Fix rounding so the phase sums to exactly 16384 (unity gain).
         let err = 16384 - q.iter().sum::<i32>();
         if let Some(mid) = q.get_mut(taps / 2) {

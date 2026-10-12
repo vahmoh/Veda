@@ -8,7 +8,8 @@
 
 use std::f32::consts::TAU;
 
-use vmath::Rng;
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 
 use crate::paint::{Canvas, Rgb, add, gradient, hex, mix, scale, smoothstep, tonemap};
 
@@ -81,19 +82,19 @@ impl Bubbles {
             let side = 1.0 - 0.25 * smoothstep(0.25, 0.75, dx.abs());
             add(scale(c, side), scale(hex(0xBFF4FF), glow))
         });
-        let mut rng = Rng::new(0xB0BB1E5);
+        let mut rng = Pcg32::seed_from_u64(0xB0BB1E5);
         let mut bubbles: Vec<Bubble> = (0..34)
             .map(|i| {
-                let near = rng.next_f32();
-                let r = 3.0 + 9.0 * near + rng.next_f32() * (6.0 + 20.0 * near * near);
+                let near = rng.random::<f32>();
+                let r = 3.0 + 9.0 * near + rng.random::<f32>() * (6.0 + 20.0 * near * near);
                 Bubble {
-                    x: rng.range_f32(0.04, 0.96) * w,
+                    x: rng.random_range(0.04..0.96) * w,
                     r,
                     start: (i as f32 * 0.618_034).fract(),
                     laps: if r > 14.0 { 2 } else { 1 },
-                    wobble: rng.range_f32(0.15, 0.5) * r.sqrt() * 3.0,
-                    wobbles: 2 + rng.below(4),
-                    phase: rng.next_f32() * TAU,
+                    wobble: rng.random_range(0.15..0.5) * r.sqrt() * 3.0,
+                    wobbles: 2 + rng.random_range(0..4),
+                    phase: rng.random::<f32>() * TAU,
                     near,
                 }
             })
@@ -102,21 +103,21 @@ impl Bubbles {
         bubbles.sort_by(|a, b| a.near.total_cmp(&b.near));
         let rays = (0..6)
             .map(|i| Ray {
-                x: (i as f32 + 0.3 + rng.next_f32() * 0.5) / 6.0 * w * 1.3 - 0.15 * w,
-                width: rng.range_f32(14.0, 40.0),
-                sway: rng.range_f32(6.0, 16.0),
-                phase: rng.next_f32() * TAU,
-                strength: rng.range_f32(0.05, 0.11),
+                x: (i as f32 + 0.3 + rng.random::<f32>() * 0.5) / 6.0 * w * 1.3 - 0.15 * w,
+                width: rng.random_range(14.0..40.0),
+                sway: rng.random_range(6.0..16.0),
+                phase: rng.random::<f32>() * TAU,
+                strength: rng.random_range(0.05..0.11),
             })
             .collect();
         let motes = (0..70)
             .map(|_| Mote {
-                x: rng.next_f32() * w,
-                y: rng.next_f32() * h,
-                size: rng.range_f32(0.5, 1.3),
-                drift: (rng.range_f32(3.0, 10.0), rng.range_f32(4.0, 14.0)),
-                phase: rng.next_f32() * TAU,
-                bright: rng.range_f32(0.08, 0.3),
+                x: rng.random::<f32>() * w,
+                y: rng.random::<f32>() * h,
+                size: rng.random_range(0.5..1.3),
+                drift: (rng.random_range(3.0..10.0), rng.random_range(4.0..14.0)),
+                phase: rng.random::<f32>() * TAU,
+                bright: rng.random_range(0.08..0.3),
             })
             .collect();
         Bubbles { water, bubbles, rays, motes }

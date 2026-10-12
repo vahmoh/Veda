@@ -14,7 +14,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 use super::filter::{Biquad, BiquadKind, Mode, Svf};
 use super::fx::{Chorus, Compressor, Delay, Limiter, Reverb, soft_clip};
@@ -307,9 +307,9 @@ pub fn part_levels(song: &Song) -> Vec<(String, f32, f32)> {
                 .collect();
             levels.sort_by(|a, b| b.partial_cmp(a).unwrap_or(core::cmp::Ordering::Equal));
             let loud = &levels[..(levels.len() / 2).max(1).min(levels.len())];
-            let rms = if loud.is_empty() { 0.0 } else { FloatExt::sqrt(loud.iter().sum::<f32>() / loud.len() as f32) };
+            let rms = if loud.is_empty() { 0.0 } else { Float::sqrt(loud.iter().sum::<f32>() / loud.len() as f32) };
             let peak = buf.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-            (p.name.clone(), 20.0 * FloatExt::log10(rms.max(1e-9)), 20.0 * FloatExt::log10(peak.max(1e-9)))
+            (p.name.clone(), 20.0 * Float::log10(rms.max(1e-9)), 20.0 * Float::log10(peak.max(1e-9)))
         })
         .collect()
 }
@@ -386,14 +386,14 @@ pub fn render(song: &Song) -> (Vec<f32>, MixStats) {
         dry.chunks(block).map(|b| b.iter().map(|v| v * v).sum::<f32>() / b.len() as f32).collect();
     levels.sort_by(|a, b| b.partial_cmp(a).unwrap_or(core::cmp::Ordering::Equal));
     let loud = &levels[..(levels.len() / 2).max(1)];
-    let rms = FloatExt::sqrt(loud.iter().sum::<f32>() / loud.len() as f32);
-    let rms_db = 20.0 * FloatExt::log10(rms.max(1e-9));
+    let rms = Float::sqrt(loud.iter().sum::<f32>() / loud.len() as f32);
+    let rms_db = 20.0 * Float::log10(rms.max(1e-9));
     let peak = dry.iter().fold(0.0f32, |p, v| p.max(v.abs()));
-    let ceiling = FloatExt::powf(10.0f32, m.ceiling_db / 20.0);
+    let ceiling = Float::powf(10.0f32, m.ceiling_db / 20.0);
     // Gentle mastering: never ask the limiter for more than 3 dB.
-    let peak_db = 20.0 * FloatExt::log10(peak.max(1e-9));
+    let peak_db = 20.0 * Float::log10(peak.max(1e-9));
     let gain_db = m.gain_db.unwrap_or((m.target_rms_db - rms_db).min(m.ceiling_db + 3.0 - peak_db));
-    let gain = FloatExt::powf(10.0f32, gain_db / 20.0);
+    let gain = Float::powf(10.0f32, gain_db / 20.0);
     let mut lim = Limiter::new(m.ceiling_db, 3.0, 90.0, sr);
     let lat = lim.latency();
     let mut out = vec![0.0f32; frames * 2];
@@ -422,10 +422,10 @@ pub fn render(song: &Song) -> (Vec<f32>, MixStats) {
     }
     let final_peak = out.iter().fold(0.0f32, |p, v| p.max(v.abs()));
     let stats = MixStats {
-        peak_db: 20.0 * FloatExt::log10(final_peak.max(1e-9)),
+        peak_db: 20.0 * Float::log10(final_peak.max(1e-9)),
         rms_db: rms_db + gain_db,
         gain_db,
-        limit_db: 20.0 * FloatExt::log10(lim.min_gain.max(1e-9)),
+        limit_db: 20.0 * Float::log10(lim.min_gain.max(1e-9)),
     };
     (out, stats)
 }

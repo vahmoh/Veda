@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use vraster::{Point, math};
+use vraster::Point;
 
 use crate::GlyphId;
 use crate::font::Font;
@@ -28,9 +28,9 @@ pub fn subpixel_position(x: f32) -> (i32, u8) {
     if !x.is_finite() {
         return (0, 0);
     }
-    let fl = math::floor(x);
+    let fl = libm::floorf(x);
     let mut ix = fl as i32;
-    let mut bin = math::round((x - fl) * SUBPIXEL_BINS as f32) as i32;
+    let mut bin = libm::roundf((x - fl) * SUBPIXEL_BINS as f32) as i32;
     if bin >= SUBPIXEL_BINS as i32 {
         bin = 0;
         ix = ix.saturating_add(1);
@@ -58,7 +58,7 @@ impl GlyphKey {
         GlyphKey {
             font_id: font.id(),
             glyph,
-            size_64: math::round(s * 64.0) as u32,
+            size_64: libm::roundf(s * 64.0) as u32,
             subpixel: subpixel.min(SUBPIXEL_BINS - 1),
         }
     }
@@ -215,7 +215,7 @@ impl GlyphCache {
         let mut glyphs = core::mem::take(&mut self.layout);
         glyphs.clear();
         let end = style.layout_line_into(text, origin, &mut glyphs);
-        let baseline = if origin.y.is_finite() { math::round(origin.y) as i32 } else { 0 };
+        let baseline = if origin.y.is_finite() { libm::roundf(origin.y) as i32 } else { 0 };
         for g in &glyphs {
             let Some(font) = style.collection().font(g.font as usize) else { continue };
             let (px, bin) = subpixel_position(g.x);

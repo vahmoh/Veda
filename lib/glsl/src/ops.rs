@@ -16,10 +16,8 @@
 //! * Shift amounts are taken modulo 32.
 //! * `round` rounds halfway cases to even, like `roundEven`.
 //!
-//! Transcendental functions come from `vmath`, so a constant folded on the
+//! Transcendental functions come from `libm`, so a constant folded on the
 //! host or in Veda is the same value the interpreter computes at run time.
-
-use vmath::f32 as m;
 
 /// A scalar type.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -307,32 +305,32 @@ pub fn eval(op: Op, args: &[Value], ret: Ty) -> Value {
                 x
             })
         }
-        FFloor => Value::F(m::floor(a.f())),
-        FCeil => Value::F(m::ceil(a.f())),
-        FTrunc => Value::F(m::trunc(a.f())),
-        FRoundEven => Value::F(m::round_ties_even(a.f())),
+        FFloor => Value::F(libm::floorf(a.f())),
+        FCeil => Value::F(libm::ceilf(a.f())),
+        FTrunc => Value::F(libm::truncf(a.f())),
+        FRoundEven => Value::F(libm::roundevenf(a.f())),
         FFract => {
             let x = a.f();
-            Value::F(x - m::floor(x))
+            Value::F(x - libm::floorf(x))
         }
-        FSqrt => Value::F(m::sqrt(a.f())),
-        FRsq => Value::F(1.0 / m::sqrt(a.f())),
-        FExp => Value::F(m::exp(a.f())),
-        FLog => Value::F(m::ln(a.f())),
-        FExp2 => Value::F(m::exp2(a.f())),
-        FLog2 => Value::F(m::log2(a.f())),
-        FSin => Value::F(m::sin(a.f())),
-        FCos => Value::F(m::cos(a.f())),
-        FTan => Value::F(m::tan(a.f())),
-        FAsin => Value::F(m::asin(a.f())),
-        FAcos => Value::F(m::acos(a.f())),
-        FAtan => Value::F(m::atan(a.f())),
-        FSinh => Value::F(m::sinh(a.f())),
-        FCosh => Value::F(m::cosh(a.f())),
-        FTanh => Value::F(m::tanh(a.f())),
-        FAsinh => Value::F(m::asinh(a.f())),
-        FAcosh => Value::F(m::acosh(a.f())),
-        FAtanh => Value::F(m::atanh(a.f())),
+        FSqrt => Value::F(libm::sqrtf(a.f())),
+        FRsq => Value::F(1.0 / libm::sqrtf(a.f())),
+        FExp => Value::F(libm::expf(a.f())),
+        FLog => Value::F(libm::logf(a.f())),
+        FExp2 => Value::F(libm::exp2f(a.f())),
+        FLog2 => Value::F(libm::log2f(a.f())),
+        FSin => Value::F(libm::sinf(a.f())),
+        FCos => Value::F(libm::cosf(a.f())),
+        FTan => Value::F(libm::tanf(a.f())),
+        FAsin => Value::F(libm::asinf(a.f())),
+        FAcos => Value::F(libm::acosf(a.f())),
+        FAtan => Value::F(libm::atanf(a.f())),
+        FSinh => Value::F(libm::sinhf(a.f())),
+        FCosh => Value::F(libm::coshf(a.f())),
+        FTanh => Value::F(libm::tanhf(a.f())),
+        FAsinh => Value::F(libm::asinhf(a.f())),
+        FAcosh => Value::F(libm::acoshf(a.f())),
+        FAtanh => Value::F(libm::atanhf(a.f())),
         FAdd => Value::F(a.f() + b.f()),
         FSub => Value::F(a.f() - b.f()),
         FMul => Value::F(a.f() * b.f()),
@@ -340,8 +338,8 @@ pub fn eval(op: Op, args: &[Value], ret: Ty) -> Value {
         // minps/maxps: the second operand unless the comparison holds.
         FMin => Value::F(if a.f() < b.f() { a.f() } else { b.f() }),
         FMax => Value::F(if a.f() > b.f() { a.f() } else { b.f() }),
-        FPow => Value::F(m::powf(a.f(), b.f())),
-        FAtan2 => Value::F(m::atan2(a.f(), b.f())),
+        FPow => Value::F(libm::powf(a.f(), b.f())),
+        FAtan2 => Value::F(libm::atan2f(a.f(), b.f())),
         FLt => Value::B(a.f() < b.f()),
         FLe => Value::B(a.f() <= b.f()),
         FEq => Value::B(a.f() == b.f()),

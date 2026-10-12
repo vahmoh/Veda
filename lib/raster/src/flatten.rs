@@ -8,7 +8,6 @@
 //! only where needed. Points are evaluated with forward differencing.
 
 use crate::geom::Point;
-use crate::math;
 
 /// Default flattening tolerance in pixels.
 pub const DEFAULT_TOLERANCE: f32 = 0.2;
@@ -24,7 +23,7 @@ fn segments_for(m: f32, tolerance: f32) -> u32 {
     if v.is_nan() || v <= 1.0 {
         return 1;
     }
-    let n = math::ceil(math::sqrt(v));
+    let n = libm::ceilf(libm::sqrtf(v));
     if n >= MAX_SEGMENTS as f32 { MAX_SEGMENTS } else { (n as u32).max(1) }
 }
 
@@ -38,7 +37,7 @@ pub fn quad_segments(p0: Point, p1: Point, p2: Point, tolerance: f32) -> u32 {
 pub fn cubic_segments(p0: Point, p1: Point, p2: Point, p3: Point, tolerance: f32) -> u32 {
     let d1 = (p0 - p1 * 2.0 + p2).length_squared();
     let d2 = (p1 - p2 * 2.0 + p3).length_squared();
-    segments_for(0.75 * math::sqrt(d1.max(d2)), tolerance)
+    segments_for(0.75 * libm::sqrtf(d1.max(d2)), tolerance)
 }
 
 /// Flattens the quadratic curve `p0, p1, p2`, calling `f` with every polyline vertex after `p0`

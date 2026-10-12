@@ -2,8 +2,6 @@
 
 use core::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
-use crate::math;
-
 /// A point or vector in 2D space (pixels or path units; `y` grows downwards on screens).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -44,7 +42,7 @@ impl Point {
     /// Length.
     #[inline]
     pub fn length(self) -> f32 {
-        math::hypot(self.x, self.y)
+        libm::hypotf(self.x, self.y)
     }
 
     /// Returns the vector scaled to unit length, or `None` if it is (almost) zero or not finite.

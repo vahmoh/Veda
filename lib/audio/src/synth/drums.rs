@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 use super::filter::{Biquad, BiquadKind, Mode, OnePole, Svf};
 use super::fx::soft_clip;
@@ -46,11 +46,11 @@ pub fn kick(p: Kick, sr: f32) -> Vec<f32> {
     (0..n)
         .map(|i| {
             let t = i as f32 / sr;
-            let f = p.end + (p.start - p.end) * FloatExt::exp(-t / p.sweep);
+            let f = p.end + (p.start - p.end) * Float::exp(-t / p.sweep);
             osc_phase += f / sr;
             let body = sin_turns(osc_phase);
-            let amp = FloatExt::exp(-t * 6.9 / p.decay) * (t * 1000.0).min(1.0);
-            let click = hp.process(noise.noise()) * FloatExt::exp(-t / 0.003) * p.click;
+            let amp = Float::exp(-t * 6.9 / p.decay) * (t * 1000.0).min(1.0);
+            let click = hp.process(noise.noise()) * Float::exp(-t / 0.003) * p.click;
             soft_clip((body * amp + click) * p.drive) / norm
         })
         .collect()
@@ -68,10 +68,10 @@ pub fn snare(tone: f32, snappy: f32, decay: f32, sr: f32) -> Vec<f32> {
     (0..n)
         .map(|i| {
             let t = i as f32 / sr;
-            p1 += tone * (1.0 + 0.5 * FloatExt::exp(-t / 0.01)) / sr;
+            p1 += tone * (1.0 + 0.5 * Float::exp(-t / 0.01)) / sr;
             p2 += tone * 1.62 / sr;
-            let body = (sin_turns(p1) * 0.7 + sin_turns(p2) * 0.35) * FloatExt::exp(-t * 6.9 / (decay * 0.45));
-            let nz = lp.process(hp.process(noise.noise())) * FloatExt::exp(-t * 6.9 / decay) * snappy;
+            let body = (sin_turns(p1) * 0.7 + sin_turns(p2) * 0.35) * Float::exp(-t * 6.9 / (decay * 0.45));
+            let nz = lp.process(hp.process(noise.noise())) * Float::exp(-t * 6.9 / decay) * snappy;
             soft_clip((body * 0.9 + nz * 1.4) * 1.2) * (t * 2000.0).min(1.0)
         })
         .collect()
@@ -90,12 +90,12 @@ pub fn clap(sr: f32) -> Vec<f32> {
             for k in 0..3 {
                 let tk = t - k as f32 * 0.011;
                 if (0.0..0.011).contains(&tk) {
-                    env += FloatExt::exp(-tk / 0.0035);
+                    env += Float::exp(-tk / 0.0035);
                 }
             }
             let tail = t - 0.033;
             if tail >= 0.0 {
-                env += 0.85 * FloatExt::exp(-tail / 0.06);
+                env += 0.85 * Float::exp(-tail / 0.06);
             }
             bp.process(noise.noise()) * env * 2.4
         })
@@ -122,7 +122,7 @@ pub fn hat(decay: f32, bright: f32, sr: f32) -> Vec<f32> {
             }
             let x = m * 0.18 + noise.noise() * 0.35;
             let y = bp.process(hp.process(x));
-            y * FloatExt::exp(-t * 6.9 / decay) * (t * 4000.0).min(1.0) * 2.2
+            y * Float::exp(-t * 6.9 / decay) * (t * 4000.0).min(1.0) * 2.2
         })
         .collect()
 }
@@ -136,7 +136,7 @@ pub fn cymbal(decay: f32, sr: f32) -> Vec<f32> {
     hp.set(5000.0, 0.7, sr);
     for (i, v) in h.iter_mut().enumerate().take(n) {
         let t = i as f32 / sr;
-        *v = *v * 0.6 + hp.process(noise.noise()) * FloatExt::exp(-t * 6.9 / decay) * 0.5;
+        *v = *v * 0.6 + hp.process(noise.noise()) * Float::exp(-t * 6.9 / decay) * 0.5;
     }
     h
 }
@@ -150,7 +150,7 @@ pub fn shaker(sr: f32) -> Vec<f32> {
     (0..n)
         .map(|i| {
             let t = i as f32 / sr;
-            let env = (t / 0.012).min(1.0) * FloatExt::exp(-(t - 0.012).max(0.0) / 0.03);
+            let env = (t / 0.012).min(1.0) * Float::exp(-(t - 0.012).max(0.0) / 0.03);
             hp.process(noise.noise()) * env
         })
         .collect()
@@ -167,7 +167,7 @@ pub fn rim(sr: f32) -> Vec<f32> {
         .map(|i| {
             let t = i as f32 / sr;
             ph += 1750.0 / sr;
-            (sin_turns(ph) * 0.6 + bp.process(noise.noise()) * 1.5) * FloatExt::exp(-t / 0.012)
+            (sin_turns(ph) * 0.6 + bp.process(noise.noise()) * 1.5) * Float::exp(-t / 0.012)
         })
         .collect()
 }
@@ -179,8 +179,8 @@ pub fn tom(freq: f32, sr: f32) -> Vec<f32> {
     (0..n)
         .map(|i| {
             let t = i as f32 / sr;
-            ph += freq * (1.0 + 0.6 * FloatExt::exp(-t / 0.03)) / sr;
-            sin_turns(ph) * FloatExt::exp(-t * 6.9 / 0.4) * (t * 1500.0).min(1.0)
+            ph += freq * (1.0 + 0.6 * Float::exp(-t / 0.03)) / sr;
+            sin_turns(ph) * Float::exp(-t * 6.9 / 0.4) * (t * 1500.0).min(1.0)
         })
         .collect()
 }
@@ -192,9 +192,9 @@ pub fn chip_kick(sr: f32) -> Vec<f32> {
     (0..n)
         .map(|i| {
             let t = i as f32 / sr;
-            ph += (60.0 + 240.0 * FloatExt::exp(-t / 0.025)) / sr;
+            ph += (60.0 + 240.0 * Float::exp(-t / 0.025)) / sr;
             let v = if super::osc::fract(ph) < 0.5 { 1.0 } else { -1.0 };
-            v * 0.8 * FloatExt::exp(-t * 6.9 / 0.15)
+            v * 0.8 * Float::exp(-t * 6.9 / 0.15)
         })
         .collect()
 }
@@ -207,7 +207,7 @@ pub fn chip_noise(decay: f32, clock: f32, short: bool, sr: f32) -> Vec<f32> {
         .map(|i| {
             let t = i as f32 / sr;
             // 16 volume steps like the hardware.
-            let env = (FloatExt::exp(-t * 6.9 / decay) * 15.0) as i32 as f32 / 15.0;
+            let env = (Float::exp(-t * 6.9 / decay) * 15.0) as i32 as f32 / 15.0;
             lfsr.next(clock) * env * 0.6
         })
         .collect()
@@ -223,7 +223,7 @@ pub fn sweep(secs: f32, f0: f32, f1: f32, swell: bool, sr: f32) -> Vec<f32> {
         .map(|i| {
             let x = i as f32 / n as f32;
             if i % 32 == 0 {
-                bp.set(f0 * FloatExt::powf(f1 / f0, x), 1.6, sr);
+                bp.set(f0 * Float::powf(f1 / f0, x), 1.6, sr);
             }
             let env = if swell { x * x } else { (1.0 - x) * (1.0 - x) };
             bp.process(noise.noise()) * env * 1.6

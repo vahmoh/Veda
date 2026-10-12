@@ -498,7 +498,7 @@ shell tells the user with a notification.
 |---------|------|
 | `vraster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
 | `vfont` | TrueType/OpenType (CFF) parsing, glyph outlines, metrics, kerning, a glyph bitmap cache |
-| `vimage` | PNG, JPEG (baseline and progressive), BMP and QOI decoders and encoders, resampling |
+| `vimage` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding for the build machine's tools (`png`, `jpeg-encoder`) |
 | `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps, shadows, text layout and rendering |
 | `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
 | `vtext` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
@@ -635,7 +635,9 @@ everything but the window, the keyboard and the speakers, so that its
 world, physics, drivers, missions, pictures and sounds are tested on the
 host; the program around it (`apps/interceptor/src`) has the window, the
 menus and the dashboard (`vgfx`), the speakers' thread, the save file and
-the voice agent's link.
+the voice agent's link. Its vectors, matrices and quaternions are `glam`'s,
+its random numbers `rand`'s (PCG32, seeded, so that the bay and its traffic
+are the same every time), and the land's noise FastNoise Lite's.
 
 * **Veda Bay** is made at start-up from a few dozen control points and a
   seed, in a fifth of a second: a 6.2 km loop of road (a Catmull-Rom
@@ -876,7 +878,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/abi`, `lib/bootinfo`, `lib/initrd`, `lib/pe`, `lib/elf` | shared formats and the kernel ABI |
 | `lib/rt`, `lib/heap`, `lib/build` | user runtime, allocator, build helper |
 | `lib/posix` | the POSIX layer under the C library |
-| `lib/math`, `lib/raster`, `lib/font`, `lib/image` | math, vector rasterisation, fonts, image codecs |
+| `lib/raster`, `lib/font`, `lib/image` | vector rasterisation, fonts, images |
 | `lib/ipc`, `lib/proto` | message encoding and the service protocols |
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
 | `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |

@@ -105,7 +105,7 @@ fn shared_edges_cover_every_pixel_once() {
     let n = 23;
     for i in 0..=n {
         let a = i as f32 / n as f32 * core::f32::consts::TAU;
-        v.extend_from_slice(&[3.0 * vmath::f32::cos(a), 3.0 * vmath::f32::sin(a), 0.0, 1.0]);
+        v.extend_from_slice(&[3.0 * libm::cosf(a), 3.0 * libm::sinf(a), 0.0, 1.0]);
     }
     attrib(&mut c, p, "pos", 4, &v);
     c.clear_color(0.0, 0.0, 0.0, 0.0);

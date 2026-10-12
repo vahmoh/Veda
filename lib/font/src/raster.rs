@@ -9,7 +9,7 @@
 
 use alloc::vec::Vec;
 
-use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform, math};
+use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
 
 use crate::GlyphId;
 use crate::font::{Font, OutlineScratch};
@@ -154,8 +154,8 @@ impl Zones {
         }
         // Round the x-height up from a fraction of 0.35 (slightly larger lowercase reads better),
         // the cap height to nearest.
-        let xt = math::floor(xp + dark + 0.65) - dark;
-        let ct = math::round(cp + dark) - dark;
+        let xt = libm::floorf(xp + dark + 0.65) - dark;
+        let ct = libm::roundf(cp + dark) - dark;
         if !(xt > 0.0 && ct > xt) {
             return None;
         }
@@ -277,7 +277,7 @@ impl GlyphRasterizer {
             *v = if self.linear {
                 i as u8
             } else {
-                math::round(255.0 * math::powf(i as f32 / 255.0, 1.0 / g)).clamp(0.0, 255.0) as u8
+                libm::roundf(255.0 * libm::powf(i as f32 / 255.0, 1.0 / g)).clamp(0.0, 255.0) as u8
             };
         }
         let tol = if options.tolerance > 0.0 { options.tolerance } else { 0.05 };
@@ -328,10 +328,10 @@ impl GlyphRasterizer {
         if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) {
             return;
         }
-        let x0 = math::floor(b.x0).max(-1e6) as i32;
-        let y0 = math::floor(b.y0).max(-1e6) as i32;
-        let x1 = math::ceil(b.x1).min(1e6) as i32;
-        let y1 = math::ceil(b.y1).min(1e6) as i32;
+        let x0 = libm::floorf(b.x0).max(-1e6) as i32;
+        let y0 = libm::floorf(b.y0).max(-1e6) as i32;
+        let x1 = libm::ceilf(b.x1).min(1e6) as i32;
+        let y1 = libm::ceilf(b.y1).min(1e6) as i32;
         let (w, h) = (x1 - x0, y1 - y0);
         if w <= 0 || h <= 0 || w > MAX_BITMAP_DIM || h > MAX_BITMAP_DIM {
             return;

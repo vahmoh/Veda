@@ -1,8 +1,8 @@
 //! Music's own widgets drawn on top of `vui` (the seek bar, the play
 //! button and the toggles are `vui::media`'s).
 
+use num_traits::Float;
 use vgfx::{Color, Rect};
-use vmath::FloatExt;
 use vui::Ui;
 
 /// A small three-bar "now playing" equaliser glyph, animated by `t`
@@ -16,7 +16,7 @@ pub fn eq_glyph(ui: &mut Ui, r: Rect, t: f32, moving: bool, color: Color) {
     for i in 0..3 {
         let phase = i as f32 * 1.7;
         let h = if moving {
-            4.0 + 9.0 * (0.5 + 0.5 * FloatExt::sin(t * (5.0 + i as f32 * 1.3) + phase))
+            4.0 + 9.0 * (0.5 + 0.5 * Float::sin(t * (5.0 + i as f32 * 1.3) + phase))
         } else {
             4.0 + i as f32 * 2.0
         };

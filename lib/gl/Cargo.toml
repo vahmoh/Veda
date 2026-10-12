@@ -15,7 +15,7 @@ host-virgl = []
 
 [dependencies]
 vglsl = { workspace = true }
-vmath = { workspace = true }
+libm = { workspace = true }
 vrt = { workspace = true, default-features = false, optional = true }
 vabi = { workspace = true, optional = true }
 vproto = { workspace = true, optional = true }

@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 // Float math under `no_std` (std, linked into host tests, has these inherently).
 #[allow(unused_imports)]
-use vmath::FloatExt;
+use num_traits::Float;
 use vraster::{FillRule, Path, Rasterizer, Span, StrokeStyle, Transform};
 
 use crate::bitmap::Bitmap;

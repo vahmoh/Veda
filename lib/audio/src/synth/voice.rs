@@ -16,7 +16,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vmath::FloatExt;
+use num_traits::Float;
 
 use super::env::{Adsr, Env};
 use super::filter::{Mode, Svf};
@@ -35,7 +35,7 @@ pub trait Instrument {
 #[inline]
 pub fn pan_gains(pan: f32) -> (f32, f32) {
     let a = (pan.clamp(-1.0, 1.0) + 1.0) * core::f32::consts::FRAC_PI_4;
-    (FloatExt::cos(a), FloatExt::sin(a))
+    (Float::cos(a), Float::sin(a))
 }
 
 fn hash(seed: u32, i: u32) -> u32 {
@@ -136,12 +136,12 @@ impl Instrument for Analog {
         // Oscillator bank: (osc, ratio, gain_l, gain_r).
         let mut bank = Vec::new();
         let u = self.unison.max(1);
-        let norm = 1.0 / FloatExt::sqrt(u as f32);
+        let norm = 1.0 / Float::sqrt(u as f32);
         for (k, o) in self.oscs.iter().enumerate() {
             for v in 0..u {
                 let x = if u == 1 { 0.0 } else { v as f32 / (u - 1) as f32 * 2.0 - 1.0 };
                 let cents = x * self.detune * 0.5 + (unit(seed, (k * 31 + v) as u32) - 0.5) * 2.0;
-                let ratio = FloatExt::exp2((o.semis + cents / 100.0) / 12.0);
+                let ratio = Float::exp2((o.semis + cents / 100.0) / 12.0);
                 let (gl, gr) = pan_gains(x * self.width);
                 let phase = if matches!(o.wave, Wave::Sine) && u == 1 {
                     0.0
@@ -181,7 +181,7 @@ impl Instrument for Analog {
             let (vr, vd, vf) = self.vibrato;
             let vib = if vd != 0.0 { vd * sin_turns(t * vr) * (t / vf.max(0.001)).min(1.0) } else { 0.0 };
             let pe = if self.pitch_env.0 != 0.0 {
-                self.pitch_env.0 * FloatExt::exp(-t / self.pitch_env.1.max(0.001))
+                self.pitch_env.0 * Float::exp(-t / self.pitch_env.1.max(0.001))
             } else {
                 0.0
             };
@@ -211,7 +211,7 @@ impl Instrument for Analog {
                 fe = e.tick();
                 if i % 16 == 0 {
                     let oct = f.env_octaves * fe + f.keytrack * (pitch - 60.0) / 12.0 + f.vel_octaves * vel;
-                    let fc = f.cutoff * FloatExt::exp2(oct);
+                    let fc = f.cutoff * Float::exp2(oct);
                     for flt in filters.iter_mut() {
                         flt.set(fc, f.q, sr);
                     }
@@ -260,13 +260,13 @@ impl Instrument for Fm {
         let n = (total * sr) as usize;
         let mut out = Vec::with_capacity(n * 2);
         let f = mtof(pitch);
-        let (dl, dr) = (FloatExt::exp2(-self.detune / 2400.0), FloatExt::exp2(self.detune / 2400.0));
+        let (dl, dr) = (Float::exp2(-self.detune / 2400.0), Float::exp2(self.detune / 2400.0));
         let (mut pl, mut pr, mut pm, mut pt) = (0.0f32, 0.0f32, unit(seed, 1) * 0.1, 0.0f32);
         let mut amp = Env::new(self.amp, sr);
         let release_at = (secs * sr) as usize;
         let idx_peak = self.index * (1.0 + self.vel_index * (vel - 0.5));
-        let idx_coef = FloatExt::exp(-1.0 / (self.index_decay.max(0.001) * sr));
-        let tine_coef = FloatExt::exp(-1.0 / (0.012 * sr));
+        let idx_coef = Float::exp(-1.0 / (self.index_decay.max(0.001) * sr));
+        let tine_coef = Float::exp(-1.0 / (0.012 * sr));
         let mut idx = 1.0f32;
         let mut tine = 1.0f32;
         let trem_phase = unit(seed, 7);
@@ -334,8 +334,8 @@ impl Pluck {
         // Remove DC from the excitation.
         let mean = buf.iter().sum::<f32>() / n as f32;
         buf.iter_mut().for_each(|v| *v -= mean);
-        let g_hold = FloatExt::powf(10.0f32, -3.0 * period / (self.sustain.max(0.05) * sr));
-        let g_rel = FloatExt::powf(10.0f32, -3.0 * period / (self.release.max(0.01) * sr));
+        let g_hold = Float::powf(10.0f32, -3.0 * period / (self.sustain.max(0.05) * sr));
+        let g_rel = Float::powf(10.0f32, -3.0 * period / (self.release.max(0.01) * sr));
         let release_at = (secs * sr) as usize;
         let mut out = Vec::with_capacity(total);
         let mut pos = 0usize;
@@ -360,8 +360,8 @@ impl Instrument for Pluck {
     fn render(&self, pitch: f32, vel: f32, secs: f32, sr: f32, seed: u32) -> Vec<f32> {
         let total = ((secs + self.release) * sr) as usize + 64;
         let f = mtof(pitch);
-        let a = self.string(f * FloatExt::exp2(-1.5 / 1200.0), vel, secs, sr, seed, total);
-        let b = self.string(f * FloatExt::exp2(1.5 / 1200.0), vel, secs, sr, hash(seed, 3), total);
+        let a = self.string(f * Float::exp2(-1.5 / 1200.0), vel, secs, sr, seed, total);
+        let b = self.string(f * Float::exp2(1.5 / 1200.0), vel, secs, sr, hash(seed, 3), total);
         let g = self.gain * (0.4 + 0.6 * vel);
         let w = self.width.clamp(0.0, 1.0);
         let mut out = Vec::with_capacity(total * 2);
@@ -465,7 +465,7 @@ impl Kit {
 
 impl Instrument for Kit {
     fn render(&self, pitch: f32, vel: f32, _secs: f32, _sr: f32, _seed: u32) -> Vec<f32> {
-        let key = FloatExt::round(pitch) as i32;
+        let key = Float::round(pitch) as i32;
         let Some(s) = self.sounds.iter().find(|s| s.key == key) else { return Vec::new() };
         let (gl, gr) = pan_gains(s.pan);
         let g = s.gain * vel * vel;

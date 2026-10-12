@@ -13,7 +13,8 @@
 
 use alloc::vec::Vec;
 
-use vmath::Rng;
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 
 use crate::city::Block;
 use crate::mesh::{Mesh, Params, cuboid, lathe, sphere};
@@ -53,7 +54,7 @@ const MOST_TREES: usize = 4000;
 
 /// Plants the trees along the road outside the city.
 pub fn trees(road: &Road, terrain: &Terrain, blocks: &[Block], boards: &[Billboard], seed: u64) -> Vec<Tree> {
-    let mut rng = Rng::new(seed ^ 0x7EE5);
+    let mut rng = Pcg32::seed_from_u64(seed ^ 0x7EE5);
     let mut out: Vec<Tree> = Vec::new();
     let mut s = 0.0;
     while s < road.length() && out.len() < MOST_TREES {
@@ -71,11 +72,11 @@ pub fn trees(road: &Road, terrain: &Terrain, blocks: &[Block], boards: &[Billboa
         for side in [-1.0f32, 1.0] {
             // Most near the road, fewer further away.
             for _ in 0..6 {
-                if !rng.chance(0.5 * wooded) {
+                if rng.random::<f32>() >= 0.5 * wooded {
                     continue;
                 }
-                let away = at.wall + 4.0 + rng.next_f32().powi(2) * 120.0;
-                let p = road.point(s + rng.range_f32(-2.5, 2.5), side * away);
+                let away = at.wall + 4.0 + rng.random::<f32>().powi(2) * 120.0;
+                let p = road.point(s + rng.random_range(-2.5..2.5), side * away);
                 let (x, z) = (p.x, p.z);
                 if terrain.is_water(x, z) || terrain.normal(x, z).y < 0.72 {
                     continue;
@@ -98,10 +99,10 @@ pub fn trees(road: &Road, terrain: &Terrain, blocks: &[Block], boards: &[Billboa
                     continue;
                 }
                 let pine = match at.section {
-                    Section::Hills => rng.chance(0.75),
-                    _ => rng.chance(0.3),
+                    Section::Hills => rng.random_bool(0.75),
+                    _ => rng.random_bool(0.3),
                 };
-                let green = rng.range_f32(0.0, 1.0);
+                let green = rng.random_range(0.0..1.0);
                 let tint = if pine {
                     Vec3::new(0.05, 0.13 + green * 0.05, 0.07)
                 } else {
@@ -110,8 +111,8 @@ pub fn trees(road: &Road, terrain: &Terrain, blocks: &[Block], boards: &[Billboa
                 out.push(Tree {
                     kind: if pine { TreeKind::Pine } else { TreeKind::Broad },
                     base: Vec3::new(x, terrain.height(x, z) - 0.2, z),
-                    yaw: rng.range_f32(0.0, core::f32::consts::TAU),
-                    scale: rng.range_f32(0.75, 1.35),
+                    yaw: rng.random_range(0.0..=core::f32::consts::TAU),
+                    scale: rng.random_range(0.75..1.35),
                     tint,
                 });
             }

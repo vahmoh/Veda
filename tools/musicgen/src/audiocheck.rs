@@ -364,7 +364,7 @@ fn spectrogram(path: &str, out: &str, from: f64, to: f64) -> Result<(), String> 
         }
     }
     let image = vimage::Image { width: w as u32, height: (h + strip) as u32, pixels: img };
-    let png = vimage::encode(&image, vimage::Format::Png).map_err(|e| format!("{e:?}"))?;
+    let png = vimage::encode_png(&image).map_err(|e| format!("{e:?}"))?;
     std::fs::write(out, png).map_err(|e| format!("{out}: {e}"))?;
     println!("wrote {out} ({:.1} s to {:.1} s)", a as f64 / rate, b as f64 / rate);
     Ok(())

@@ -116,12 +116,12 @@ fn rounded_polygon(points: &[(f32, f32, f32)]) -> Path {
         let (x, y, r) = points[i];
         let (nx, ny, _) = points[(i + 1) % n];
         let (ax, ay, bx, by) = (px - x, py - y, nx - x, ny - y);
-        let (la, lb) = (vmath::FloatExt::sqrt(ax * ax + ay * ay), vmath::FloatExt::sqrt(bx * bx + by * by));
+        let (la, lb) = (libm::sqrtf(ax * ax + ay * ay), libm::sqrtf(bx * bx + by * by));
         // How far from the corner along each side a circle of radius `r`
         // touches them.
         let cos = ((ax * bx + ay * by) / (la * lb)).clamp(-1.0, 1.0);
-        let half = vmath::FloatExt::acos(cos) / 2.0;
-        let d = (r / vmath::FloatExt::tan(half)).min(la / 2.0).min(lb / 2.0);
+        let half = libm::acosf(cos) / 2.0;
+        let d = (r / libm::tanf(half)).min(la / 2.0).min(lb / 2.0);
         let (sx, sy) = (x + ax / la * d, y + ay / la * d);
         let (ex, ey) = (x + bx / lb * d, y + by / lb * d);
         if i == 0 {
@@ -274,7 +274,7 @@ pub fn draw_volume(c: &mut Canvas, r: Rect, volume: f32, muted: bool, color: Col
         cross.line_to(cx - h, cy + h);
         k.stroke_path(&cross, &round(STROKE), color);
     } else {
-        let waves = vmath::FloatExt::ceil(volume * 3.0).clamp(1.0, 3.0) as usize;
+        let waves = libm::ceilf(volume * 3.0).clamp(1.0, 3.0) as usize;
         for r in [3.5, 7.25, 11.0].into_iter().take(waves) {
             k.stroke_path(&arc(9.0, 10.0, r, 0.0, 45.0), &round(STROKE), color);
         }

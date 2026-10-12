@@ -183,6 +183,6 @@ trait RoundDown {
 impl RoundDown for f32 {
     /// Snaps to whole pixels (keeps glyph stems crisp on baselines).
     fn round_down(self) -> f32 {
-        vmath::FloatExt::floor(self + 0.5)
+        libm::floorf(self + 0.5)
     }
 }

@@ -17,7 +17,8 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vmath::Rng;
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 
 use crate::audio::Cue;
 use crate::camera::Cinematic;
@@ -110,7 +111,7 @@ pub struct Session {
     /// next suspect.
     next: f32,
     calls: u32,
-    rng: Rng,
+    rng: Pcg32,
     cinema: Option<Cinematic>,
     cues: Vec<Cue>,
     /// What the radio has said of this chase already.
@@ -172,7 +173,7 @@ fn road_name(s: Section) -> &'static str {
 impl Session {
     /// Starts `mode` in `world`.
     pub fn new(world: Arc<World>, mode: Mode) -> Session {
-        let mut rng = Rng::new(crate::world::SEED ^ 0x5E55);
+        let mut rng = Pcg32::seed_from_u64(crate::world::SEED ^ 0x5E55);
         let road_start = |world: &World, section: Section, at: f32| {
             world.road.wrap(career::section_start(&world.road, section) + at)
         };
@@ -184,7 +185,7 @@ impl Session {
                 (Environment::new(m.time, m.weather), s, Some((m.wanted, m.ahead, m.speed)))
             }
             Mode::Quick(q) => {
-                let s = rng.range_f32(0.0, world.road.length());
+                let s = rng.random_range(0.0..=world.road.length());
                 let w = SUSPECTS[q.suspect.min(SUSPECTS.len() - 1)].1;
                 (Environment::new(q.time, q.weather), s, Some((w, 70.0, 20.0)))
             }
@@ -436,7 +437,7 @@ impl Session {
                 self.remove_backup();
             }
             self.phase = Phase::Driving;
-            self.next = self.rng.range_f32(15.0, 30.0);
+            self.next = self.rng.random_range(15.0..30.0);
             let p = self.game.player;
             self.game.cars[p].siren = false;
         }
@@ -446,8 +447,8 @@ impl Session {
         self.next -= dt;
         if self.next <= 0.0 {
             self.calls += 1;
-            let wanted = SUSPECTS[self.rng.below(SUSPECTS.len() as u32) as usize].1;
-            let ahead = self.rng.range_f32(160.0, 260.0);
+            let wanted = SUSPECTS[self.rng.random_range(0..SUSPECTS.len() as u32) as usize].1;
+            let ahead = self.rng.random_range(160.0..260.0);
             let speed = self.game.player().vehicle.speed().max(16.0);
             let (s, _) = self.game.cars[self.game.player].place(&self.game.world);
             let place = road_name(self.game.world.road.at(s + ahead).section);
@@ -591,8 +592,8 @@ mod tests {
             }
             s.outcome.expect("the chase never ended")
         };
-        let mut rng = Rng::new(11);
-        let uneven: Vec<f32> = (0..4096).map(|_| rng.range_f32(0.008, 0.040)).collect();
+        let mut rng = Pcg32::seed_from_u64(11);
+        let uneven: Vec<f32> = (0..4096).map(|_| rng.random_range(0.008..0.040)).collect();
         let first = play(&|_| 1.0 / 60.0);
         std::println!("{first:?}");
         assert_eq!(play(&|_| 1.0 / 40.0), first);

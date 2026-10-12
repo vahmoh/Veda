@@ -7,7 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-vimage = { workspace = true }
+vimage = { workspace = true, features = ["encode"] }
 
 [lints]
 workspace = true

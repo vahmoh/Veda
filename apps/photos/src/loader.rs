@@ -20,7 +20,7 @@ use vrt::object::Event;
 use vrt::sync::{Condvar, Mutex};
 
 #[allow(unused_imports)]
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// Files larger than this are not opened.
 const MAX_FILE: u64 = 128 << 20;

@@ -16,7 +16,7 @@
 use vaudio::synth::filter::{DcBlock, Mode, OnePole, Svf};
 
 use super::{EngineState, Listener, Noise, Placing, RATE, SineTable, Voiced, pan_gains};
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// How an engine's cylinders are laid out (what it sounds like).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,7 +313,7 @@ impl Voice {
         let c = &self.c;
         // The silencer opens with the load and revs; the pipes' body rises
         // with the revs.
-        let open = (load1 * 0.7 + 0.3) * FloatExt::sqrt((rpm1 / 7000.0).clamp(0.1, 1.0));
+        let open = (load1 * 0.7 + 0.3) * Float::sqrt((rpm1 / 7000.0).clamp(0.1, 1.0));
         self.silencer.set(c.muffle.0 + (c.muffle.1 - c.muffle.0) * open, 0.9, rate);
         self.body.set(90.0 + rpm1 * 0.02, 1.2, rate);
         self.intake.set(c.intake.0 * (0.7 + rpm1 / 9000.0), 1.6, rate);
@@ -324,13 +324,13 @@ impl Voice {
         let fires_hz = rpm1 / 120.0 * c.cylinders as f32;
         let width = (c.pulse * 0.001).min(0.6 / fires_hz.max(1.0));
         let pulse_step = (2_147_483_648.0 / (width * rate)) as u32;
-        let density = FloatExt::powf(60.0 / fires_hz.max(20.0), 0.35);
-        let strength = (0.12 + 0.88 * FloatExt::powf(load1, 0.8)) * density * if boost { 1.25 } else { 1.0 };
+        let density = Float::powf(60.0 / fires_hz.max(20.0), 0.35);
+        let strength = (0.12 + 0.88 * Float::powf(load1, 0.8)) * density * if boost { 1.25 } else { 1.0 };
         // At idle the firings vary most.
         let jitter = c.jitter * (1.0 + 2.0 * (1.0 - rpm1 / 2000.0).clamp(0.0, 1.0));
         let rasp = c.rasp * (0.3 + 0.7 * load1);
         let intake = c.intake.1 * load1 * (rpm1 / 6000.0).min(1.2);
-        let whine = c.whine.1 * FloatExt::powi(rpm1 / 6000.0, 2) * (0.3 + 0.7 * load1) * if boost { 1.6 } else { 1.0 };
+        let whine = c.whine.1 * Float::powi(rpm1 / 6000.0, 2) * (0.3 + 0.7 * load1) * if boost { 1.6 } else { 1.0 };
         let clatter = c.clatter * (0.35 + 0.65 * load1);
         let n = l.len();
         let (rpm0, place0) = (self.rpm, self.place);
@@ -345,7 +345,7 @@ impl Voice {
             self.cycle = self.cycle.wrapping_add(super::increment(heard / 120.0));
             // At the limiter, the fuel is cut a dozen times a second.
             if limiter {
-                self.cut = FloatExt::fract(self.cut + 12.0 / rate);
+                self.cut = Float::fract(self.cut + 12.0 / rate);
             }
             let slot = ((self.cycle as u64 * c.cylinders as u64) >> 32) as usize;
             if slot != self.slot {
@@ -434,7 +434,7 @@ mod tests {
     use super::*;
     use crate::audio::{Emitter, rms};
     use alloc::vec;
-    use vmath::Vec3;
+    use glam::Vec3;
 
     fn run(layout: Layout, rpm: f32, load: f32) -> f32 {
         let sines = SineTable::new();

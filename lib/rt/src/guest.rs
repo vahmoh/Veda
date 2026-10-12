@@ -292,7 +292,8 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
         }
         nr::LOG_READ => {
             let len = a[2].min(b::MAX_COPY as usize);
-            let mut r = b::LogRead { offset: a[0] as u64, buffer: a[1] as u64, len: len as u64, ..b::LogRead::default() };
+            let mut r =
+                b::LogRead { offset: a[0] as u64, buffer: a[1] as u64, len: len as u64, ..b::LogRead::default() };
             bridge(op::LOG_READ, &mut r)?;
             Ok((r.len as usize, r.next as usize))
         }

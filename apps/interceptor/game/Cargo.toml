@@ -8,11 +8,17 @@ license.workspace = true
 [dependencies]
 vaudio = { workspace = true }
 vgl = { workspace = true }
-vmath = { workspace = true }
+fastnoise-lite = { workspace = true }
+glam = { workspace = true }
+libm = { workspace = true }
+num-traits = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+rand_pcg = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-vimage = { workspace = true }
+vimage = { workspace = true, features = ["encode"] }
 vgl = { workspace = true, features = ["host-virgl"] }

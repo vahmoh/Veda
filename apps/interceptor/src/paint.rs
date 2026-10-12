@@ -52,7 +52,7 @@ pub fn star(c: &mut Canvas, cx: f32, cy: f32, r: f32, filled: bool, color: Color
     for k in 0..10 {
         let a = -core::f32::consts::FRAC_PI_2 + k as f32 * core::f32::consts::PI / 5.0;
         let rr = if k % 2 == 0 { r } else { r * 0.42 };
-        let (x, y) = (cx + vmath::FloatExt::cos(a) * rr, cy + vmath::FloatExt::sin(a) * rr);
+        let (x, y) = (cx + libm::cosf(a) * rr, cy + libm::sinf(a) * rr);
         if k == 0 {
             p.move_to(x, y);
         } else {

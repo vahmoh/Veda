@@ -182,7 +182,7 @@ mod tests {
     fn tone(period: usize, periods: usize) -> Vec<u8> {
         let pcm: Vec<i16> = (0..period * periods)
             .flat_map(|i| {
-                let v = (vmath::FloatExt::sin(i as f32 / period as f32 * core::f32::consts::TAU) * 12_000.0) as i16;
+                let v = (libm::sinf(i as f32 / period as f32 * core::f32::consts::TAU) * 12_000.0) as i16;
                 [v, v]
             })
             .collect();

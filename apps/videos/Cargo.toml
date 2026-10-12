@@ -17,7 +17,7 @@ vipc = { workspace = true }
 vproto = { workspace = true }
 vui = { workspace = true }
 vgfx = { workspace = true }
-vmath = { workspace = true }
+libm = { workspace = true }
 vfiles = { workspace = true }
 vjson = { workspace = true }
 vaudio = { workspace = true }

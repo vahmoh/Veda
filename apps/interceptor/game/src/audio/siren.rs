@@ -8,8 +8,8 @@
 //! started together drift apart, as real ones do, and each is heard with
 //! the Doppler shift of its car going by.
 
+use num_traits::Float;
 use vaudio::synth::filter::{Mode, Svf};
-use vmath::FloatExt;
 
 use super::{Listener, Placing, RATE, SineTable, SirenState, Voiced, pan_gains};
 
@@ -119,7 +119,7 @@ impl Voice {
         if self.fresh {
             self.place = place1;
             // Sirens switched on together soon drift apart.
-            self.at = FloatExt::fract(key as f32 * 0.618_034);
+            self.at = Float::fract(key as f32 * 0.618_034);
             self.fresh = false;
         }
         self.air.set(place1.cutoff.min(10_000.0), 0.7, rate);
@@ -129,7 +129,7 @@ impl Voice {
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
             self.fade += (to_fade - self.fade) * 0.0006;
-            self.at = FloatExt::fract(self.at + step);
+            self.at = Float::fract(self.at + step);
             // Glide to the pattern's pitch (the hi-lo's steps are not clicks).
             self.pitch += (self.wail.pitch(self.at) - self.pitch) * 0.02;
             let doppler = place0.doppler + (place1.doppler - place0.doppler) * t;

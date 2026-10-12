@@ -8,9 +8,10 @@
 
 use alloc::vec::Vec;
 
-use crate::prelude::*;
-use vmath::Rng;
+use rand::{RngExt, SeedableRng};
+use rand_pcg::Pcg32;
 
+use crate::prelude::*;
 use crate::road::{Road, Section};
 use crate::terrain::Terrain;
 
@@ -107,14 +108,14 @@ fn place(road: &Road, terrain: &Terrain, s: f32, side: f32, lateral: f32, size: 
 
 /// The buildings of Veda Bay.
 pub fn buildings(road: &Road, terrain: &Terrain, seed: u64) -> Vec<Block> {
-    let mut rng = Rng::new(seed ^ 0xC17E);
+    let mut rng = Pcg32::seed_from_u64(seed ^ 0xC17E);
     let mut out = Vec::new();
     let city = |s: f32| road.at(s).section == Section::City && road.at(s).pavement >= 0.99;
     for side in [-1.0f32, 1.0] {
         // The rows: the front one on the pavement's edge, then two more
         // behind it, further out and taller.
         for (row, lateral) in [(0, 15.0f32), (1, 52.0), (2, 96.0)] {
-            let mut s = rng.range_f32(0.0, 20.0);
+            let mut s = rng.random_range(0.0..20.0);
             while s < road.length() {
                 if !city(s) {
                     s += 8.0;
@@ -123,33 +124,35 @@ pub fn buildings(road: &Road, terrain: &Terrain, seed: u64) -> Vec<Block> {
                 let p = road.point(s, 0.0);
                 let core = (1.0 - p.xz().distance(CORE) / 900.0).clamp(0.0, 1.0);
                 let width = match row {
-                    0 => rng.range_f32(14.0, 34.0),
-                    _ => rng.range_f32(22.0, 44.0),
+                    0 => rng.random_range(14.0..34.0),
+                    _ => rng.random_range(22.0..44.0),
                 };
                 let depth = match row {
-                    0 => rng.range_f32(16.0, 30.0),
-                    _ => rng.range_f32(20.0, 38.0),
+                    0 => rng.random_range(16.0..30.0),
+                    _ => rng.random_range(20.0..38.0),
                 };
                 // Taller in the core and further back; a few towers.
-                let tall = core * core * if rng.chance(0.25 + 0.35 * core) { rng.range_f32(1.0, 2.2) } else { 0.5 };
-                let height = (12.0 + rng.range_f32(0.0, 18.0) + tall * 70.0 * (1.0 + row as f32 * 0.5)).min(190.0);
+                let tall = core
+                    * core
+                    * if rng.random::<f32>() < 0.25 + 0.35 * core { rng.random_range(1.0..2.2) } else { 0.5 };
+                let height = (12.0 + rng.random_range(0.0..18.0) + tall * 70.0 * (1.0 + row as f32 * 0.5)).min(190.0);
                 let style = if height > 70.0 {
-                    if rng.chance(0.6) { style::GLASS } else { style::STONE }
+                    if rng.random_bool(0.6) { style::GLASS } else { style::STONE }
                 } else {
-                    [style::OFFICE, style::BRICK, style::FLATS, style::BRICK, style::OFFICE][rng.below_usize(5)]
+                    [style::OFFICE, style::BRICK, style::FLATS, style::BRICK, style::OFFICE][rng.random_range(0..5)]
                 };
                 let size = Vec3::new(width, height, depth);
                 if let Some((base, yaw)) = place(road, terrain, s + width * 0.5, side, lateral, size) {
                     let tint = tint_of(style, &mut rng);
-                    let seed = rng.next_f32();
+                    let seed = rng.random::<f32>();
                     out.push(Block { base, yaw, size, style, tint, seed });
                     // Towers step back as they rise.
-                    if height > 60.0 && rng.chance(0.7) {
+                    if height > 60.0 && rng.random_bool(0.7) {
                         let mut below = *out.last().unwrap();
                         let mut top = below.base.y + below.size.y;
-                        for _ in 0..rng.range_u32(1, 3) {
-                            let shrink = rng.range_f32(0.65, 0.85);
-                            let rise = below.size.y * rng.range_f32(0.25, 0.5);
+                        for _ in 0..rng.random_range(1..3) {
+                            let shrink = rng.random_range(0.65..0.85);
+                            let rise = below.size.y * rng.random_range(0.25..0.5);
                             let next = Block {
                                 base: Vec3::new(below.base.x, top, below.base.z),
                                 size: Vec3::new(below.size.x * shrink, rise, below.size.z * shrink),
@@ -162,7 +165,7 @@ pub fn buildings(road: &Road, terrain: &Terrain, seed: u64) -> Vec<Block> {
                     }
                 }
                 // Alleys between them, and now and then a square.
-                let gap = if rng.chance(0.12) { rng.range_f32(18.0, 32.0) } else { rng.range_f32(2.5, 7.0) };
+                let gap = if rng.random_bool(0.12) { rng.random_range(18.0..32.0) } else { rng.random_range(2.5..7.0) };
                 s += width + gap;
             }
         }
@@ -175,23 +178,25 @@ pub fn buildings(road: &Road, terrain: &Terrain, seed: u64) -> Vec<Block> {
                 s += 10.0;
                 continue;
             }
-            let size = Vec3::new(rng.range_f32(30.0, 70.0), rng.range_f32(8.0, 16.0), rng.range_f32(18.0, 32.0));
-            let lateral = 24.0 + rng.range_f32(0.0, 30.0);
-            if rng.chance(0.55)
+            let size =
+                Vec3::new(rng.random_range(30.0..70.0), rng.random_range(8.0..16.0), rng.random_range(18.0..32.0));
+            let lateral = 24.0 + rng.random_range(0.0..30.0);
+            if rng.random_bool(0.55)
                 && let Some((base, yaw)) = place(road, terrain, s + size.x * 0.5, side, lateral, size)
             {
                 let tint = tint_of(style::SHED, &mut rng);
-                out.push(Block { base, yaw, size, style: style::SHED, tint, seed: rng.next_f32() });
+                out.push(Block { base, yaw, size, style: style::SHED, tint, seed: rng.random::<f32>() });
             }
-            s += size.x + rng.range_f32(10.0, 40.0);
+            s += size.x + rng.random_range(10.0..40.0);
         }
     }
     out
 }
 
 /// A wall colour for `style`.
-fn tint_of(style: u8, rng: &mut Rng) -> Vec3 {
-    let pick = |rng: &mut Rng, colors: &[Vec3]| colors[rng.below_usize(colors.len())] * rng.range_f32(0.85, 1.1);
+fn tint_of(style: u8, rng: &mut Pcg32) -> Vec3 {
+    let pick =
+        |rng: &mut Pcg32, colors: &[Vec3]| colors[rng.random_range(0..colors.len())] * rng.random_range(0.85..1.1);
     match style {
         style::GLASS => {
             pick(rng, &[Vec3::new(0.30, 0.42, 0.48), Vec3::new(0.22, 0.30, 0.38), Vec3::new(0.35, 0.38, 0.36)])

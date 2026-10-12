@@ -1,11 +1,31 @@
 [package]
 name = "vimage"
-description = "Image codecs (PNG, JPEG, BMP, QOI) and resampling"
+description = "Image decoding and resampling on zune's JPEG, PNG and BMP decoders, qoi and fast_image_resize"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Encoding to PNG, JPEG and QOI, for the tools that make pictures on the
+# build machine (the PNG encoder needs std).
+encode = ["dep:png", "dep:jpeg-encoder"]
+
 [dependencies]
+bytemuck = { workspace = true }
+fast_image_resize = { workspace = true }
+qoi = { workspace = true }
+zune-bmp = { workspace = true }
+zune-core = { workspace = true }
+zune-inflate = { workspace = true }
+zune-jpeg = { workspace = true }
+zune-png = { workspace = true }
+png = { workspace = true, optional = true }
+jpeg-encoder = { workspace = true, optional = true }
+
+[dev-dependencies]
+crc32fast = { workspace = true }
+jpeg-encoder = { workspace = true }
+miniz_oxide = { workspace = true }
 
 [lints]
 workspace = true

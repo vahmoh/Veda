@@ -590,10 +590,10 @@ impl Backend for SoftBackend {
         }
         let vp = state.viewport;
         let vpr = [
-            vmath::f32::floor(vp.x) as i32,
-            vmath::f32::floor(vp.y) as i32,
-            vmath::f32::ceil(vp.x + vp.w) as i32,
-            vmath::f32::ceil(vp.y + vp.h) as i32,
+            libm::floorf(vp.x) as i32,
+            libm::floorf(vp.y) as i32,
+            libm::ceilf(vp.x + vp.w) as i32,
+            libm::ceilf(vp.y + vp.h) as i32,
         ];
         let tri_rect =
             [clip_rect[0].max(vpr[0]), clip_rect[1].max(vpr[1]), clip_rect[2].min(vpr[2]), clip_rect[3].min(vpr[3])];

@@ -9,7 +9,6 @@ use alloc::vec::Vec;
 
 use crate::flatten;
 use crate::geom::{Point, Rect};
-use crate::math;
 use crate::transform::Transform;
 
 /// Handle length of a cubic Bézier approximating a quarter circle of radius 1: 4/3 * (sqrt(2) - 1).
@@ -281,7 +280,7 @@ impl Path {
         }
         const TAU: f32 = core::f32::consts::TAU;
         let sweep = sweep_angle.clamp(-TAU, TAU);
-        let (mut s, mut c) = math::sin_cos(start_angle);
+        let (mut s, mut c) = libm::sincosf(start_angle);
         let (x0, y0) = (cx + rx * c, cy + ry * s);
         if self.state == State::Empty {
             self.move_to(x0, y0);
@@ -289,11 +288,11 @@ impl Path {
             self.line_to(x0, y0);
         }
         let quarter = core::f32::consts::FRAC_PI_2;
-        let n = (math::ceil(sweep.abs() / quarter - 1e-4) as usize).clamp(1, 4);
+        let n = (libm::ceilf(sweep.abs() / quarter - 1e-4) as usize).clamp(1, 4);
         let step = sweep / n as f32;
-        let k = 4.0 / 3.0 * math::tan(step * 0.25);
+        let k = 4.0 / 3.0 * libm::tanf(step * 0.25);
         for i in 1..=n {
-            let (s1, c1) = math::sin_cos(start_angle + step * i as f32);
+            let (s1, c1) = libm::sincosf(start_angle + step * i as f32);
             self.cubic_to(
                 cx + rx * (c - k * s),
                 cy + ry * (s + k * c),
@@ -476,7 +475,7 @@ impl Path {
                 // Limit the miter at sharp corners to twice the strength.
                 let len2 = shift.length_squared();
                 if len2 > 4.0 {
-                    shift = shift * (2.0 / math::sqrt(len2));
+                    shift = shift * (2.0 / libm::sqrtf(len2));
                 }
                 scratch[s + i] = Point::new(shift.x * hx, shift.y * hy);
             }

@@ -28,7 +28,7 @@ fn scene(c: &mut Context, w: u32, h: u32) {
         let (cx, cy, z) = (rnd() * 2.0 - 1.0, rnd() * 2.0 - 1.0, rnd());
         for k in 0..3 {
             let a = k as f32 * 2.1 + rnd();
-            pos.extend_from_slice(&[cx + 0.25 * vmath::f32::cos(a), cy + 0.25 * vmath::f32::sin(a), z]);
+            pos.extend_from_slice(&[cx + 0.25 * libm::cosf(a), cy + 0.25 * libm::sinf(a), z]);
             uv.extend_from_slice(&[rnd(), rnd()]);
             col.extend_from_slice(&[rnd(), rnd(), rnd()]);
         }

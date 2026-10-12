@@ -14,8 +14,8 @@ use interceptor_game::game::Game;
 use interceptor_game::pursuit::{self, Pursuit, State};
 use interceptor_game::session::{self, Mode, Phase, Session};
 use interceptor_game::world::World;
+use num_traits::Float;
 use vgfx::{Align, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
-use vmath::FloatExt;
 
 use crate::paint::{self, ACCENT, AMBER, DIM, FAINT, Fonts, GREEN, PANEL, RED, WHITE, centered, rect};
 use crate::perf::{HISTORY, Perf};

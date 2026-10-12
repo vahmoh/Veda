@@ -5,9 +5,9 @@
 
 use alloc::vec::Vec;
 
+use num_traits::Float;
 use vgfx::color::{over, scale};
 use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
-use vmath::FloatExt;
 use vproto::display::{Cursor, WindowKind, WindowState};
 
 use crate::gpu::{Gpu, Slot, Texture, rgba};

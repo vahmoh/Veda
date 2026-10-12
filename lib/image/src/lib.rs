@@ -1,17 +1,24 @@
-//! Image codecs and resampling for Veda.
+//! Images for Veda: decoding, scaling and (on the build machine) encoding,
+//! on proven libraries.
 //!
-//! `vimage` decodes and encodes the image formats used by the photo viewer, wallpapers, icons and
-//! screenshots, and provides the image operations those applications need.
+//! `vimage` opens the pictures of Photos, the wallpapers and the file
+//! manager's thumbnails, and scales them. The codecs are not Veda's own:
 //!
-//! | Format | Decoding | Encoding |
-//! |--------|----------|----------|
-//! | PNG  ([`png`])  | every color type and bit depth, Adam7, `tRNS` | RGB8 / RGBA8, adaptive filters |
-//! | JPEG ([`jpeg`]) | baseline + progressive Huffman, any sampling, restarts, EXIF orientation | baseline or progressive, 4:4:4 / 4:2:2 / 4:2:0 |
-//! | BMP  ([`bmp`])  | 1/4/8/16/24/32 bit, bit fields, RLE4/RLE8, core/V4/V5 headers | 32-bit BGRA |
-//! | QOI  ([`qoi`])  | yes | yes |
+//! | Format | Decoder |
+//! |--------|---------|
+//! | JPEG | [`zune_jpeg`] (the `image` crate's): baseline, extended and progressive, any sampling, restarts, grayscale, CMYK and YCCK |
+//! | PNG  | [`zune_png`]: every colour type and bit depth, Adam7, `tRNS` (an APNG shows its default image) |
+//! | BMP  | [`zune_bmp`]: 1 to 32 bits, bit fields, RLE4 and RLE8, OS/2 and Windows V1-V5 headers |
+//! | QOI  | [`qoi`] |
 //!
-//! The [`inflate`] and [`deflate`] modules contain the zlib implementation used by PNG; they are
-//! public so other components can use them. [`checksum`] provides CRC-32 and Adler-32.
+//! Scaling is [`fast_image_resize`]'s convolution, alpha-correct and using
+//! the processor's SIMD where it has it. With the `encode` feature (the
+//! build machine's tools), [`encode_png`] (the `png` crate), [`encode_jpeg`]
+//! (`jpeg-encoder`) and [`encode_qoi`] write pictures.
+//!
+//! What this crate adds is Veda's side: one [`Image`] type in the
+//! framebuffer's pixel layout, limits on what a file can make it allocate,
+//! EXIF orientation, and errors an application can explain to its user.
 //!
 //! # Pixels
 //!
@@ -25,24 +32,16 @@
 //! * [`decode`] / [`decode_with`] decode any supported format; [`decode_lenient`] also accepts
 //!   files whose only fault is a checksum, and says so.
 //! * [`read_info`] returns dimensions and alpha information without decoding pixels.
-//! * [`encode`] writes an image with default settings; the format modules offer more control.
-//! * [`ops`] (re-exported here) resizes, crops, flips and rotates images.
+//! * [`resize`], [`thumbnail`] and [`crop`] scale and cut images; [`apply_orientation`] and the
+//!   rotations turn them.
 //!
 //! # Robustness
 //!
-//! Decoders never panic, never loop forever and never trust sizes from the file: dimensions are
-//! limited by [`DecodeOptions`] (16384 x 16384 and 64 Mi pixels by default), allocations are
-//! fallible ([`ImageError::OutOfMemory`]) and are only made once the input could plausibly fill
-//! them. Malformed input is reported as an [`ImageError`].
-//!
-//! # Performance and memory
-//!
-//! Hot paths are table driven and process whole rows (no per-pixel allocation or division).
-//! On a modern x86-64 host a 1920x1080 JPEG decodes in about 15 ms and a 1920x1080 RGBA PNG in
-//! about 20 ms; expect roughly ten times that under QEMU's TCG emulation. Decoding needs the
-//! output (4 bytes per pixel) plus intermediate buffers: the inflated PNG rows (up to 8 bytes
-//! per pixel for 16-bit RGBA), or the JPEG component planes (1-3 bytes per pixel) and, for
-//! progressive JPEGs, the coefficients (2-6 bytes per pixel).
+//! Malformed input is reported as an [`ImageError`] (the tests feed the decoders thousands of
+//! damaged files). Dimensions are limited by [`DecodeOptions`] (16384 x 16384 and 64 Mi pixels
+//! by default); the picture is only allocated once the file is long enough to describe it, and
+//! fallibly ([`ImageError::OutOfMemory`]). The decoders' own working memory (a progressive
+//! JPEG's coefficients, a PNG's inflated rows) is in proportion to the picture.
 
 #![no_std]
 
@@ -50,29 +49,24 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
-pub mod bmp;
-pub mod checksum;
-pub mod deflate;
+mod decode;
+#[cfg(feature = "encode")]
+mod encode;
 mod error;
+mod exif;
 mod image;
-pub mod inflate;
-pub mod jpeg;
-mod mathf;
-pub mod ops;
-pub mod png;
-pub mod qoi;
-mod util;
+mod ops;
 
 #[cfg(test)]
 mod tests;
 
-use alloc::vec::Vec;
-
+#[cfg(feature = "encode")]
+pub use encode::{JpegOptions, Subsampling, encode_jpeg, encode_png, encode_qoi};
 pub use error::ImageError;
 pub use image::{Image, Orientation};
 pub use ops::{
-    Filter, apply_orientation, crop, fit_size, flip_horizontal, flip_vertical, premultiply, premultiply_pixel, resize,
-    rotate90, rotate180, rotate270, thumbnail, unpremultiply, unpremultiply_pixel,
+    Filter, apply_orientation, crop, fit_size, flip_horizontal, flip_vertical, resize, rotate90, rotate180, rotate270,
+    thumbnail,
 };
 
 /// Default maximum width or height accepted by the decoders.
@@ -149,7 +143,7 @@ pub struct DecodeOptions {
     pub max_dimension: u32,
     /// Maximum accepted `width * height`.
     pub max_pixels: u64,
-    /// Verify PNG chunk CRCs and the zlib Adler-32 checksum. Disabling saves a little time.
+    /// Verify PNG chunk CRCs and the zlib Adler-32 checksum.
     pub verify_checksums: bool,
     /// Rotate/flip JPEG images according to their EXIF orientation tag.
     pub apply_orientation: bool,
@@ -182,15 +176,18 @@ impl Default for DecodeOptions {
     }
 }
 
+/// The PNG file signature.
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
+
 /// Identifies the format of `data` from its magic bytes.
 pub fn detect(data: &[u8]) -> Option<Format> {
-    if data.starts_with(&png::SIGNATURE) {
+    if data.starts_with(&PNG_SIGNATURE) {
         Some(Format::Png)
-    } else if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some(Format::Jpeg)
     } else if data.starts_with(b"qoif") {
         Some(Format::Qoi)
-    } else if bmp::is_bmp(data) {
+    } else if zune_bmp::probe_bmp(data) {
         Some(Format::Bmp)
     } else {
         None
@@ -204,13 +201,12 @@ pub fn decode(data: &[u8]) -> Result<Image, ImageError> {
 
 /// Decodes an image in any supported format.
 pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageError> {
-    match detect(data) {
-        Some(Format::Png) => png::decode_with(data, options),
-        Some(Format::Jpeg) => jpeg::decode_with(data, options),
-        Some(Format::Bmp) => bmp::decode_with(data, options),
-        Some(Format::Qoi) => qoi::decode_with(data, options),
-        None => Err(ImageError::UnknownFormat),
+    let format = detect(data).ok_or(ImageError::UnknownFormat)?;
+    let (image, orientation) = decode::decode(data, format, options)?;
+    if options.apply_orientation && orientation != Orientation::Normal {
+        return ops::try_apply_orientation(&image, orientation);
     }
+    Ok(image)
 }
 
 /// Decodes like [`decode`], but when the only problem is a checksum (a PNG chunk CRC or the zlib
@@ -228,67 +224,7 @@ pub fn decode_lenient(data: &[u8]) -> Result<(Image, bool), ImageError> {
 
 /// Reads the format, dimensions and alpha information of an image without decoding its pixels.
 ///
-/// This only parses headers (for BMP files with 32-bit pixels and no explicit alpha mask it also
-/// scans the alpha bytes), so it is cheap enough for file listings.
+/// This only parses headers, so it is cheap enough for file listings.
 pub fn read_info(data: &[u8]) -> Result<ImageInfo, ImageError> {
-    match detect(data) {
-        Some(Format::Png) => {
-            let i = png::read_info(data)?;
-            Ok(ImageInfo {
-                format: Format::Png,
-                width: i.width,
-                height: i.height,
-                has_alpha: i.has_alpha,
-                orientation: Orientation::Normal,
-                progressive: i.interlaced,
-            })
-        }
-        Some(Format::Jpeg) => {
-            let i = jpeg::read_info(data)?;
-            let (width, height) =
-                if i.orientation.swaps_dimensions() { (i.height, i.width) } else { (i.width, i.height) };
-            Ok(ImageInfo {
-                format: Format::Jpeg,
-                width,
-                height,
-                has_alpha: false,
-                orientation: i.orientation,
-                progressive: i.progressive,
-            })
-        }
-        Some(Format::Bmp) => {
-            let i = bmp::read_info(data)?;
-            Ok(ImageInfo {
-                format: Format::Bmp,
-                width: i.width,
-                height: i.height,
-                has_alpha: i.has_alpha,
-                orientation: Orientation::Normal,
-                progressive: false,
-            })
-        }
-        Some(Format::Qoi) => {
-            let i = qoi::read_info(data)?;
-            Ok(ImageInfo {
-                format: Format::Qoi,
-                width: i.width,
-                height: i.height,
-                has_alpha: i.channels == 4,
-                orientation: Orientation::Normal,
-                progressive: false,
-            })
-        }
-        None => Err(ImageError::UnknownFormat),
-    }
-}
-
-/// Encodes `image` with default settings: PNG at compression level 6, JPEG at quality 90 with
-/// 4:2:0 chroma subsampling (alpha is ignored), 32-bit BMP, or QOI.
-pub fn encode(image: &Image, format: Format) -> Result<Vec<u8>, ImageError> {
-    match format {
-        Format::Png => png::encode(image, 6),
-        Format::Jpeg => jpeg::encode(image, &jpeg::EncodeOptions::default()),
-        Format::Bmp => bmp::encode(image),
-        Format::Qoi => qoi::encode(image),
-    }
+    decode::read_info(data, detect(data).ok_or(ImageError::UnknownFormat)?)
 }

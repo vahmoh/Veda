@@ -8,7 +8,9 @@
 //! removed, so that the other drivers' references to them (a police car's
 //! target) stay valid.
 
-use vmath::Rng;
+use rand::RngExt;
+use rand::seq::IndexedRandom;
+use rand_pcg::Pcg32;
 
 use crate::carmodel::Kind;
 use crate::driver::{Role, Traffic};
@@ -35,7 +37,7 @@ pub fn density(section: Section) -> f32 {
 }
 
 /// A kind of car, its make-up and a paint, as traffic in `section`.
-pub fn pick(rng: &mut Rng, section: Section) -> (Kind, Spec, Vec3) {
+pub fn pick(rng: &mut Pcg32, section: Section) -> (Kind, Spec, Vec3) {
     let kinds: &[(Kind, u32)] = match section {
         Section::City => &[
             (Kind::Saloon, 5),
@@ -55,16 +57,7 @@ pub fn pick(rng: &mut Rng, section: Section) -> (Kind, Spec, Vec3) {
             (Kind::Coupe, 1),
         ],
     };
-    let total: u32 = kinds.iter().map(|k| k.1).sum();
-    let mut roll = rng.below(total);
-    let mut kind = kinds[0].0;
-    for &(k, w) in kinds {
-        if roll < w {
-            kind = k;
-            break;
-        }
-        roll -= w;
-    }
+    let kind = kinds.choose_weighted(rng, |k| k.1).map_or(kinds[0].0, |k| k.0);
     let spec = match kind {
         Kind::Van => Spec::van(),
         Kind::Coupe => Spec::sports(),
@@ -82,16 +75,7 @@ pub fn pick(rng: &mut Rng, section: Section) -> (Kind, Spec, Vec3) {
         (Vec3::new(0.45, 0.33, 0.20), 1),
         (Vec3::new(0.70, 0.45, 0.04), 1),
     ];
-    let total: u32 = paints.iter().map(|p| p.1).sum();
-    let mut roll = rng.below(total);
-    let mut paint = paints[0].0;
-    for &(c, w) in &paints {
-        if roll < w {
-            paint = c;
-            break;
-        }
-        roll -= w;
-    }
+    let mut paint = paints.choose_weighted(rng, |p| p.1).map_or(paints[0].0, |p| p.0);
     if kind == Kind::Taxi {
         paint = Vec3::new(0.85, 0.62, 0.02);
     }
@@ -115,8 +99,8 @@ pub fn free(road: &Road, places: &[(f32, f32)], slot: &Slot, room: f32) -> bool 
 }
 
 /// A new traffic driver for `slot`, liking a speed near the limit.
-pub fn role(rng: &mut Rng, slot: &Slot) -> Role {
-    Role::Traffic(Traffic::new(slot.lane, slot.side, rng.range_f32(0.85, 1.08)))
+pub fn role(rng: &mut Pcg32, slot: &Slot) -> Role {
+    Role::Traffic(Traffic::new(slot.lane, slot.side, rng.random_range(0.85..1.08)))
 }
 
 /// How many traffic cars the window round `s` holds.
@@ -135,20 +119,20 @@ pub fn wanted(world: &World, s: f32) -> usize {
 /// A place in the window round the player at `player_s` to put a car,
 /// out of sight: far ahead (both ways), or far behind on the player's
 /// side (it will come up from behind).
-pub fn far_slot(rng: &mut Rng, road: &Road, player_s: f32) -> Slot {
-    let side = if rng.chance(0.5) { 1.0 } else { -1.0 };
-    let lane = rng.below(2) as usize;
-    let behind = side > 0.0 && rng.chance(0.2);
-    let d = if behind { -rng.range_f32(OUT_OF_SIGHT * 0.5, BEHIND) } else { rng.range_f32(OUT_OF_SIGHT, AHEAD) };
+pub fn far_slot(rng: &mut Pcg32, road: &Road, player_s: f32) -> Slot {
+    let side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+    let lane = rng.random_range(0..2) as usize;
+    let behind = side > 0.0 && rng.random_bool(0.2);
+    let d = if behind { -rng.random_range(OUT_OF_SIGHT * 0.5..=BEHIND) } else { rng.random_range(OUT_OF_SIGHT..AHEAD) };
     Slot { s: road.wrap(player_s + d), lane, side }
 }
 
 /// A place anywhere in the window (for filling it at the start), but not
 /// right by the player.
-pub fn any_slot(rng: &mut Rng, road: &Road, player_s: f32) -> Slot {
-    let side = if rng.chance(0.5) { 1.0 } else { -1.0 };
-    let lane = rng.below(2) as usize;
-    let mut d = rng.range_f32(-BEHIND, AHEAD);
+pub fn any_slot(rng: &mut Pcg32, road: &Road, player_s: f32) -> Slot {
+    let side = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+    let lane = rng.random_range(0..2) as usize;
+    let mut d = rng.random_range(-BEHIND..AHEAD);
     if d.abs() < 40.0 {
         d = 40.0 * d.signum().max(0.0) + 40.0;
     }

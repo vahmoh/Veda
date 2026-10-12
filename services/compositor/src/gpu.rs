@@ -32,12 +32,12 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use num_traits::Float;
 use vgfx::{Bitmap, Rect};
 use vgl::backend::External;
 use vgl::veda::{FenceWatch, GpuTransport};
 use vgl::virgl::VirglBackend;
 use vgl::{Config, Context, gl};
-use vmath::FloatExt;
 use vproto::gpu::gpu;
 use vrt::object::{Event, Vmo};
 use vrt::sync::Mutex;

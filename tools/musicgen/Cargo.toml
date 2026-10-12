@@ -17,7 +17,7 @@ path = "src/audiocheck.rs"
 
 [dependencies]
 vaudio = { workspace = true }
-vimage = { workspace = true }
+vimage = { workspace = true, features = ["encode"] }
 
 [lints]
 workspace = true

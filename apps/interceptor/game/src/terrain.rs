@@ -16,8 +16,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+
 use crate::prelude::*;
-use vmath::{Noise, smoothstep};
 
 use crate::road::{Location, Road, Section};
 
@@ -127,7 +128,7 @@ impl Terrain {
         let nearest = nearest_samples(road, w, h);
         let inside = inside_loop(road, w, h);
         let shores = shores_along(road);
-        let noise = Noise::new(seed);
+        let relief = Relief::new(seed);
         // Where each vertex is relative to the road, and what the ground
         // is like there as the nearest stretch of road has it. Those fields
         // change abruptly where another stretch becomes the nearest, so
@@ -156,7 +157,7 @@ impl Terrain {
         for (k, height) in heights.iter_mut().enumerate() {
             let p = Vec2::new(-HALF_X + (k % w) as f32 * CELL, -HALF_Z + (k / w) as f32 * CELL);
             let values: [f32; FIELDS] = core::array::from_fn(|f| fields[f][k]);
-            *height = natural(road, &shores[at[k].index], &noise, p, &at[k], &values, inside[k]);
+            *height = natural(road, &shores[at[k].index], &relief, p, &at[k], &values, inside[k]);
         }
         Terrain { w, h, heights, nearest }
     }
@@ -231,8 +232,8 @@ fn shores_along(road: &Road) -> Vec<Shore> {
     let depth = road.section_depths();
     for (i, sh) in cur.iter_mut().enumerate() {
         let s = road.samples()[i].section;
-        sh.tunnel = if s == Section::Tunnel { smoothstep(14.0, 26.0, depth[i]) } else { 0.0 };
-        sh.bridge = if s == Section::Bridge { smoothstep(24.0, 40.0, depth[i]) } else { 0.0 };
+        sh.tunnel = if s == Section::Tunnel { depth[i].smoothstep(14.0, 26.0) } else { 0.0 };
+        sh.bridge = if s == Section::Bridge { depth[i].smoothstep(24.0, 40.0) } else { 0.0 };
     }
     cur
 }
@@ -241,9 +242,68 @@ fn shores_along(road: &Road) -> Vec<Shore> {
 /// [`Side`]'s coast, roughness, rise, shelf and wobble.
 const FIELDS: usize = 6;
 
+/// The noise the land is shaped with: fractal Perlin noise, each octave at
+/// twice the frequency and half the amplitude of the one before.
+struct Relief {
+    /// Rolling hills, about 290 m across.
+    hills: FastNoiseLite,
+    /// Ridges about 830 m apart.
+    ridges: FastNoiseLite,
+    /// The wobble of the shore lines, about 250 m long.
+    shore: FastNoiseLite,
+}
+
+impl Relief {
+    fn new(seed: u64) -> Relief {
+        // A field's octaves take consecutive seeds from its own.
+        let seed = seed as i32;
+        Relief {
+            hills: fractal(seed, FractalType::FBm, 0.0035, 5, 2.0),
+            ridges: fractal(seed.wrapping_add(100), FractalType::Ridged, 0.0012, 4, 2.1),
+            shore: fractal(seed.wrapping_add(200), FractalType::FBm, 0.004, 4, 2.0),
+        }
+    }
+
+    /// The hills at `p`, about -1 to 1.
+    fn hills(&self, p: Vec2) -> f32 {
+        self.hills.get_noise_2d(p.x, p.y)
+    }
+
+    /// The ridges at `p`, 0 to 1: 1 on their crests, falling away sharply.
+    fn ridges(&self, p: Vec2) -> f32 {
+        let r = 0.5 * (self.ridges.get_noise_2d(p.x, p.y) + 1.0);
+        r * r
+    }
+
+    /// How far the shore lines move in and out at `p`, about -1 to 1.
+    fn shore(&self, p: Vec2) -> f32 {
+        self.shore.get_noise_2d(p.x, p.y)
+    }
+}
+
+/// Fractal Perlin noise of `octaves` octaves at `frequency` (per metre).
+fn fractal(seed: i32, kind: FractalType, frequency: f32, octaves: i32, lacunarity: f32) -> FastNoiseLite {
+    let mut noise = FastNoiseLite::with_seed(seed);
+    noise.set_noise_type(Some(NoiseType::Perlin));
+    noise.set_frequency(Some(frequency));
+    noise.set_fractal_type(Some(kind));
+    noise.set_fractal_octaves(Some(octaves));
+    noise.set_fractal_lacunarity(Some(lacunarity));
+    noise.set_fractal_gain(Some(0.5));
+    noise
+}
+
 /// The natural height at `p`, which is at `at` relative to the road, with
 /// the blurred fields `f` and the nearest stretch's `shore`.
-fn natural(road: &Road, shore: &Shore, noise: &Noise, p: Vec2, at: &Location, f: &[f32; FIELDS], inside: bool) -> f32 {
+fn natural(
+    road: &Road,
+    shore: &Shore,
+    relief: &Relief,
+    p: Vec2,
+    at: &Location,
+    f: &[f32; FIELDS],
+    inside: bool,
+) -> f32 {
     let [base, coast, rough, rise, shelf, wobble] = *f;
     // Under a bridge's span, water right up to it.
     let coast = coast * (1.0 - shore.bridge);
@@ -252,23 +312,23 @@ fn natural(road: &Road, shore: &Shore, noise: &Noise, p: Vec2, at: &Location, f:
 
     // Land: from the road's height, rising (or falling) away from it, with
     // features that grow with the distance.
-    let away = smoothstep(wall, wall + 160.0, d);
-    let n1 = noise.fbm2(p.x * 0.0035, p.y * 0.0035, 5, 2.0, 0.5);
-    let n2 = noise.ridged2(p.x * 0.0012 + 17.0, p.y * 0.0012 - 5.0, 4, 2.1, 0.5);
+    let away = d.smoothstep(wall, wall + 160.0);
+    let n1 = relief.hills(p);
+    let n2 = relief.ridges(p);
     let mut land = base + rise * away + rough * away * (n1 + 0.6 * n2);
     // Mountains to the east and the north, far from the road.
     if !inside {
-        let far = smoothstep(150.0, 700.0, d);
-        let east = smoothstep(900.0, 1800.0, p.x);
-        let north = smoothstep(-900.0, -1700.0, p.y);
+        let far = d.smoothstep(150.0, 700.0);
+        let east = p.x.smoothstep(900.0, 1800.0);
+        let north = 1.0 - p.y.smoothstep(-1700.0, -900.0);
         land += (east * 260.0 + north * 140.0) * (0.55 + 0.45 * n2) * far;
     }
 
     // The shore: the land falls to the sea over its shelf, then the sea
     // floor deepens away from it, to a depth of 12 m.
-    let edge = coast - d + noise.fbm2(p.x * 0.004 + 3.0, p.y * 0.004, 4, 2.0, 0.5) * wobble;
+    let edge = coast - d + relief.shore(p) * wobble;
     let mut h = if edge > 0.0 {
-        let fall = smoothstep(shelf.max(1.0), 0.0, edge);
+        let fall = 1.0 - edge.smoothstep(0.0, shelf.max(1.0));
         land + (1.0 - land) * fall
     } else {
         -1.5 - (-edge).min(150.0) * 0.07
@@ -277,16 +337,16 @@ fn natural(road: &Road, shore: &Shore, noise: &Noise, p: Vec2, at: &Location, f:
     // The road's corridor: the ground under the road, and cuttings and
     // embankments either side, except over a tunnel and under a bridge.
     let road_h = at.height;
-    let corridor = 1.0 - smoothstep(wall + 2.0, wall + 28.0, d);
+    let corridor = 1.0 - d.smoothstep(wall + 2.0, wall + 28.0);
     let open = (1.0 - shore.tunnel) * (1.0 - shore.bridge);
     if corridor > 0.0 && open > 0.0 {
         let under = road_h - UNDER_ROAD;
         h += (under - h) * corridor * open;
     }
     // Over a tunnel the hill stays well above its roof.
-    let over = shore.tunnel * (1.0 - smoothstep(30.0, 140.0, d));
+    let over = shore.tunnel * (1.0 - d.smoothstep(30.0, 140.0));
     if over > 0.0 {
-        let cover = road_h + 18.0 + 20.0 * smoothstep(0.0, 100.0, d);
+        let cover = road_h + 18.0 + 20.0 * d.smoothstep(0.0, 100.0);
         let under = road_h - UNDER_ROAD;
         h = h.max(under + (cover - under) * over);
     }

@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use vaudio::synth::filter::{Mode, Svf};
 
 use super::{Cue, Listener, Noise, Placing, RATE, Scene, SineTable, TireState, Voiced, increment, pan_gains};
-use vmath::FloatExt;
+use num_traits::Float;
 
 /// A voice playing one car's tyres.
 pub struct Tire {
@@ -71,7 +71,7 @@ impl Tire {
         let squeal_hz = 760.0 + slip1.min(20.0) * 22.0;
         self.squeal.set(squeal_hz, 9.0, rate);
         self.air.set(place1.cutoff.min(12_000.0), 0.7, rate);
-        let roar_of = |speed: f32| FloatExt::powf(speed / 30.0, 1.4).min(1.6) * 0.42;
+        let roar_of = |speed: f32| Float::powf(speed / 30.0, 1.4).min(1.6) * 0.42;
         // Tyres squeal past the slip angle of their best grip, and the
         // harder the faster they slide.
         let squeal_of = |slip: f32, speed: f32| {
@@ -165,7 +165,7 @@ impl World {
     /// Mixes this block of the wind, scraping and rain into `l` and `r`.
     pub fn render(&mut self, scene: &Scene, l: &mut [f32], r: &mut [f32]) {
         let rate = RATE as f32;
-        let wind = FloatExt::powi(scene.wind / 45.0, 2).min(1.3);
+        let wind = Float::powi(scene.wind / 45.0, 2).min(1.3);
         let cutoff = 260.0 + scene.wind.clamp(0.0, 90.0) * 32.0;
         for f in &mut self.wind {
             f.set(cutoff, 0.5, rate);
@@ -356,7 +356,7 @@ impl Cues {
 
 /// A decay from 1 with time constant `tau` (s), after `t` seconds.
 fn decay(t: f32, tau: f32) -> f32 {
-    if t < 0.0 { 0.0 } else { FloatExt::exp(-t / tau) }
+    if t < 0.0 { 0.0 } else { Float::exp(-t / tau) }
 }
 
 /// An attack over `a` seconds, held until `hold`, released over `rel`.
@@ -486,7 +486,7 @@ impl Active {
             Cue::Boost => {
                 // A whoosh rising, on a low thump.
                 if self.step.is_multiple_of(16) {
-                    let hz = 250.0 * FloatExt::powf(12.0f32, (t / 0.5).min(1.0));
+                    let hz = 250.0 * Float::powf(12.0f32, (t / 0.5).min(1.0));
                     self.filters[0].set(hz, 1.6, RATE as f32);
                 }
                 let env = if t < 0.06 { t / 0.06 } else { decay(t - 0.06, 0.35) };
@@ -503,7 +503,7 @@ mod tests {
     use super::*;
     use crate::audio::{Emitter, rms};
     use alloc::vec;
-    use vmath::Vec3;
+    use glam::Vec3;
 
     #[test]
     fn every_cue_sounds_and_ends() {
