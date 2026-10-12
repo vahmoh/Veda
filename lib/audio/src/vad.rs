@@ -12,9 +12,12 @@
 //!   statistics*: the minimum over the last 1.6 s (in eight sub-windows), so
 //!   that the floor follows the background through ongoing speech, which
 //!   always has pauses. The minimum of a fluctuating power lies below its
-//!   mean, which a per-band bias (from the band's width) corrects. A sound
-//!   that is loud but steady for 0.4 s (a fan switching on) becomes the new
-//!   floor at once: speech is never that steady.
+//!   mean, which a per-band bias (from the band's width) corrects. At the
+//!   start the powers are averaged until they are as steady as the smoothed
+//!   ones, and only then enter the minimum (a single unlucky power would set
+//!   a narrow band's floor far too low). A sound that is loud (6 dB above
+//!   the floor) but steady for 0.4 s, like a fan switching on, becomes the
+//!   new floor at once: speech is never that steady.
 //! * **Speech likelihood.** Per band, the a-posteriori SNR (power over
 //!   noise) and the a-priori SNR (decision-directed: mostly the speech power
 //!   estimated in the previous hop) give the log-likelihood ratio of speech
@@ -23,8 +26,10 @@
 //!   rules others, like a fan's rumble, must not drown it) becomes a
 //!   probability through a logistic curve whose midpoint the sensitivity
 //!   moves.
-//! * **Clicks.** A hop whose peak stands far above its RMS (an impulse)
-//!   does not count as speech, nor do the next hops that still see it.
+//! * **Clicks.** A hop whose peak stands far above its RMS, or far above
+//!   the RMS of its samples more than a millisecond away from the peak (an
+//!   impulse, even in loud low-pitched noise), does not count as speech, nor
+//!   do the next hops that still see it.
 //!
 //! Speech starts in a hop with a probability above 0.5 and continues while
 //! the probability stays above 0.1 (the fading ends of syllables);
@@ -60,12 +65,18 @@ const SLOPE: f32 = 3.0;
 const CONTINUE: f32 = 0.1;
 /// Hops that the verdict stays speech after the last speech hop (100 ms).
 const HANGOVER: u32 = 10;
-/// Peak-to-RMS power ratio above which a hop is a click (14 dB).
+/// Peak-to-RMS power ratio above which a hop is a click (14 dB), and the
+/// ratio of the peak to the RMS of the hop's samples more than a millisecond
+/// away from it (16 dB): a click's energy stays near its peak, even in loud
+/// low-pitched noise, which can hide a click's crest.
 const CLICK_CREST: f32 = 25.0;
+const CLICK_CREST_AWAY: f32 = 40.0;
 /// Sound whose smoothed level in the speech band has stayed within this
-/// many dB for `STEADY_HOPS` hops is steady.
+/// many dB for `STEADY_HOPS` hops is steady, and becomes the floor when it
+/// stands this power ratio (6 dB) above it.
 const STEADY_DB: f32 = 3.0;
 const STEADY_HOPS: usize = 40;
+const STEADY_ABOVE: f32 = 4.0;
 /// Lowest band power considered (about -110 dBFS).
 const FLOOR_POWER: f32 = 1e-11;
 
@@ -131,7 +142,9 @@ pub struct Vad {
     /// The smoothed speech band level (dB) of the last `STEADY_HOPS` hops.
     levels: Vec<f32>,
     level_pos: usize,
-    // Minimum statistics bookkeeping.
+    // Minimum statistics bookkeeping: hops after which the smoothed powers
+    // enter the minimum (their running mean is as steady as the smoothing).
+    settle_hops: u64,
     min_count: u32,
     min_slot: usize,
     hops: u64,
@@ -201,6 +214,7 @@ impl Vad {
         let wsum: f32 = hann.iter().map(|w| w * w).sum();
         let nb = bands.len();
         let per_hop = |seconds: f32| 1.0 - Float::exp(-0.01 / seconds);
+        let c_smooth = per_hop(0.03);
         let mut vad = Vad {
             rate,
             hop,
@@ -228,6 +242,9 @@ impl Vad {
             speech_power: vec![0.0; nb],
             levels: vec![0.0; STEADY_HOPS],
             level_pos: 0,
+            // A running mean of n powers fluctuates like the smoothed power
+            // when n = (2 - c) / c.
+            settle_hops: (2.0 / c_smooth) as u64,
             min_count: 0,
             min_slot: 0,
             hops: 0,
@@ -243,7 +260,7 @@ impl Vad {
             start_hops: 10,
             start_window: 15,
             end_hops: 60,
-            c_smooth: per_hop(0.03),
+            c_smooth,
         };
         vad.set_sensitivity(0.5);
         vad.reset();
@@ -364,6 +381,29 @@ impl Vad {
         10.0 * Float::log10(n.max(FLOOR_POWER))
     }
 
+    /// The latest hop's peak power over its mean power, and over the mean
+    /// power of its samples more than a millisecond away from the peak.
+    fn hop_crests(&self) -> (f32, f32) {
+        let mask = self.window - 1;
+        let first = (self.pos + self.window - self.hop) & mask;
+        let sample = |j: usize| self.ring[(first + j) & mask];
+        let (mut at, mut peak) = (0, 0.0f32);
+        for j in 0..self.hop {
+            let v = sample(j);
+            if v * v > peak {
+                peak = v * v;
+                at = j;
+            }
+        }
+        let reach = self.rate as usize / 1000;
+        let (lo, hi) = (at.saturating_sub(reach), (at + reach + 1).min(self.hop));
+        let near: f32 = (lo..hi).map(|j| sample(j) * sample(j)).sum();
+        let away = (self.hop - (hi - lo)) as f32;
+        let crest = peak * self.hop as f32 / self.hop_energy.max(1e-20);
+        let crest_away = peak * away / (self.hop_energy - near).max(1e-20);
+        (crest, crest_away)
+    }
+
     fn analyse(&mut self) {
         let mask = self.window - 1;
         for (i, (v, &w)) in self.input.iter_mut().zip(&self.hann).enumerate() {
@@ -378,30 +418,42 @@ impl Vad {
             *p = (e * self.scale).max(FLOOR_POWER);
         }
         self.hops += 1;
-        let first = self.hops == 1;
 
-        // Noise floor by minimum statistics of the smoothed band powers.
+        // Noise floor by minimum statistics of the smoothed band powers. The
+        // first hops are averaged (a running mean, until the smoothing takes
+        // over), and their mean is the floor until it is as steady as the
+        // smoothed powers: only then do they enter the minimum. A single
+        // power fluctuates far more than a smoothed one, and an unluckily low
+        // one would set the floor of a narrow band (two FFT bins at 100 Hz)
+        // far too low for the next 1.6 s, where ordinary noise looks like
+        // speech.
         let nb = self.bands.len();
-        let c = self.c_smooth;
+        let c = self.c_smooth.max(1.0 / self.hops as f32);
         for (s, &p) in self.smooth.iter_mut().zip(&self.power) {
-            *s = if first { p } else { *s + c * (p - *s) };
+            *s += c * (p - *s);
         }
-        for (m, &s) in self.sub_min.iter_mut().zip(&self.smooth) {
-            *m = m.min(s);
-        }
-        self.min_count += 1;
-        if self.min_count >= MIN_HOPS {
-            self.mins[self.min_slot * nb..(self.min_slot + 1) * nb].copy_from_slice(&self.sub_min);
-            self.min_slot = (self.min_slot + 1) % MIN_WINDOWS;
-            self.sub_min.fill(f32::MAX);
-            self.min_count = 0;
-        }
-        for (i, noise) in self.noise.iter_mut().enumerate() {
-            let mut m = self.sub_min[i];
-            for w in 0..MIN_WINDOWS {
-                m = m.min(self.mins[w * nb + i]);
+        if self.hops < self.settle_hops {
+            for (n, &s) in self.noise.iter_mut().zip(&self.smooth) {
+                *n = s.max(FLOOR_POWER);
             }
-            *noise = (m * self.bias[i]).max(FLOOR_POWER);
+        } else {
+            for (m, &s) in self.sub_min.iter_mut().zip(&self.smooth) {
+                *m = m.min(s);
+            }
+            self.min_count += 1;
+            if self.min_count >= MIN_HOPS {
+                self.mins[self.min_slot * nb..(self.min_slot + 1) * nb].copy_from_slice(&self.sub_min);
+                self.min_slot = (self.min_slot + 1) % MIN_WINDOWS;
+                self.sub_min.fill(f32::MAX);
+                self.min_count = 0;
+            }
+            for (i, noise) in self.noise.iter_mut().enumerate() {
+                let mut m = self.sub_min[i];
+                for w in 0..MIN_WINDOWS {
+                    m = m.min(self.mins[w * nb + i]);
+                }
+                *noise = (m * self.bias[i]).max(FLOOR_POWER);
+            }
         }
 
         // A loud but steady sound becomes the floor: speech is never steady
@@ -419,7 +471,9 @@ impl Vad {
         self.levels[self.level_pos] = 10.0 * Float::log10(total.max(FLOOR_POWER));
         self.level_pos = (self.level_pos + 1) % self.levels.len();
         let (lo, hi) = self.levels.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &l| (lo.min(l), hi.max(l)));
-        if self.hops >= self.levels.len() as u64 && hi - lo < STEADY_DB && total > 2.0 * floor_total {
+        // (Closer to the floor, quiet speech, whose syllables the noise
+        // smooths out, can be as steady.)
+        if self.hops >= self.levels.len() as u64 && hi - lo < STEADY_DB && total > STEADY_ABOVE * floor_total {
             // The new floor: this spectrum at the lowest level of the window.
             let scale = Float::powf(10.0, (lo - 10.0 * Float::log10(total.max(FLOOR_POWER))) / 10.0);
             for i in 0..nb {
@@ -460,7 +514,8 @@ impl Vad {
 
         // Clicks: an impulse is not speech (here and while the window still
         // holds it).
-        if self.hop_peak * self.hop as f32 > CLICK_CREST * self.hop_energy.max(1e-20) && self.hop_peak > 1e-6 {
+        let (crest, away) = self.hop_crests();
+        if (crest > CLICK_CREST || away > CLICK_CREST_AWAY) && self.hop_peak > 1e-6 {
             self.click_hold = (self.window / self.hop) as u32 + 1;
         }
         if self.click_hold > 0 {
@@ -492,6 +547,8 @@ impl Vad {
 mod tests {
     use super::*;
     use crate::testsig::*;
+    use alloc::format;
+    use alloc::string::String;
     use std::println;
 
     /// Runs the detector in 10 ms frames; returns the verdict and the
@@ -515,24 +572,49 @@ mod tests {
         a.iter().zip(b).map(|(x, y)| x + y).collect()
     }
 
+    /// Isolated clicks every 0.7 s: a full-scale sample, or a short ringing
+    /// burst.
+    fn add_clicks(x: &mut [f32]) {
+        let mut i = 3000;
+        while i + 64 < x.len() {
+            if (i / 11_200) % 2 == 0 {
+                x[i] = 0.9;
+            } else {
+                for j in 0..48 {
+                    x[i + j] += 0.6 * (-(j as f32) / 8.0).exp() * if j % 2 == 0 { 1.0 } else { -1.0 };
+                }
+            }
+            i += 11_200;
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum Noise {
+        White,
+        Pink,
+        Fan,
+    }
+
     #[test]
     fn detects_speech_in_noise_at_10_db_snr() {
         let rate = 16_000;
         let seconds = 30.0;
         let n = (seconds * rate as f32) as usize;
-        // Speech at -20 dBFS (over the utterances), noise 10 dB below.
-        let noise_level = 0.1 / 10f32.sqrt();
-        let noises: [(&str, Vec<f32>); 3] = [
-            ("white", white(n, noise_level, 1)),
-            ("pink", pink(n, noise_level, 2)),
-            ("fan", fan(rate, n, noise_level, 3)),
-        ];
-        for (name, noise) in &noises {
+        let cases: Vec<(Noise, u64)> =
+            [Noise::White, Noise::Pink, Noise::Fan].into_iter().flat_map(|k| seeds(0).map(move |s| (k, s))).collect();
+        for_cases("VAD, speech in noise at 10 dB SNR (noise, seed)", &cases, |&(kind, seed)| {
+            // Speech at -20 dBFS (over the utterances), noise 10 dB below.
+            let level = 0.1 / 10f32.sqrt();
+            let noise = match kind {
+                Noise::White => white(n, level, seed + 1),
+                Noise::Pink => pink(n, level, seed + 2),
+                Noise::Fan => fan(rate, n, level, seed + 3),
+            };
             let (mut right, mut total, mut missed, mut false_alarms) = (0usize, 0usize, 0usize, 0usize);
-            for (voice, seed) in [(MALE, 10u64), (FEMALE, 11)] {
-                let talk = speech(rate, seconds, voice, CONVERSATION, seed);
+            for (voice, s) in [(MALE, seed + 10), (FEMALE, seed + 11)] {
+                let talk = speech(rate, seconds, voice, CONVERSATION, s);
                 let mut vad = Vad::new(rate);
-                let (frames, _) = run(&mut vad, &mix(&talk.samples, noise));
+                let (frames, _) = run(&mut vad, &mix(&talk.samples, &noise));
                 let want = truth(&talk.active, rate);
                 for (&got, &want) in frames.iter().zip(&want) {
                     right += usize::from(got == want);
@@ -542,72 +624,74 @@ mod tests {
                 }
             }
             let accuracy = right as f32 / total as f32;
-            println!(
-                "VAD, {name} noise at 10 dB SNR: {:.1} % of frames right ({:.1} % missed speech, {:.1} % false alarms)",
+            let line = format!(
+                "{:.1} % of frames right ({:.1} % missed speech, {:.1} % false alarms)",
                 100.0 * accuracy,
                 100.0 * missed as f32 / total as f32,
                 100.0 * false_alarms as f32 / total as f32
             );
-            assert!(accuracy >= 0.95, "{name}: {accuracy}");
-        }
+            let mut t = Targets::new();
+            t.check(accuracy >= 0.95, || format!("accuracy {:.1} %", 100.0 * accuracy));
+            (line, t.0)
+        });
     }
 
     #[test]
     fn steady_noise_and_clicks_are_not_speech() {
         let rate = 16_000;
         let n = 10 * rate as usize;
-        for (name, mut noise) in
-            [("white", white(n, 0.03, 4)), ("pink", pink(n, 0.03, 5)), ("fan", fan(rate, n, 0.05, 6))]
-        {
-            // Isolated clicks every 0.7 s: a full-scale sample, or a short
-            // ringing burst.
-            let mut i = 3000;
-            while i + 64 < n {
-                if (i / 11_200) % 2 == 0 {
-                    noise[i] = 0.9;
-                } else {
-                    for j in 0..48 {
-                        noise[i + j] += 0.6 * (-(j as f32) / 8.0).exp() * if j % 2 == 0 { 1.0 } else { -1.0 };
-                    }
-                }
-                i += 11_200;
-            }
+        let cases: Vec<(Noise, u64)> =
+            [Noise::White, Noise::Pink, Noise::Fan].into_iter().flat_map(|k| seeds(0).map(move |s| (k, s))).collect();
+        for_cases("VAD, steady noise with clicks (noise, seed)", &cases, |&(kind, seed)| {
+            let mut noise = match kind {
+                Noise::White => white(n, 0.03, seed + 4),
+                Noise::Pink => pink(n, 0.03, seed + 5),
+                Noise::Fan => fan(rate, n, 0.05, seed + 6),
+            };
+            add_clicks(&mut noise);
             let mut vad = Vad::new(rate);
             let (frames, speaking) = run(&mut vad, &noise);
             let alarms = frames.iter().filter(|&&f| f).count();
-            println!(
-                "VAD, {name} noise with clicks: {alarms} of {} frames called speech, speaking {} frames",
-                frames.len(),
-                speaking.iter().filter(|&&s| s).count()
-            );
-            assert!(!speaking.iter().any(|&s| s), "{name}: false utterance");
-            assert!(alarms * 50 < frames.len(), "{name}: {alarms} speech frames");
-        }
+            let utterance = speaking.iter().filter(|&&s| s).count();
+            let line = format!("{alarms} of {} frames called speech, speaking {utterance} frames", frames.len());
+            let mut t = Targets::new();
+            t.check(utterance == 0, || "false utterance".into());
+            t.check(alarms * 50 < frames.len(), || format!("{alarms} speech frames"));
+            (line, t.0)
+        });
     }
 
     #[test]
     fn a_fan_switching_on_becomes_the_floor() {
         let rate = 16_000;
         let n = 12 * rate as usize;
-        let mut x = white(n, 0.0005, 7);
-        let fan = fan(rate, n, 0.05, 8);
-        let on = 3 * rate as usize;
-        for (v, f) in x[on..].iter_mut().zip(&fan[on..]) {
-            *v += f;
-        }
-        // And someone talks at 8 s.
-        let talk = speech(rate, 4.0, MALE, Pacing { lead_in: 0.2, syllables: (6, 6), pause: (5.0, 5.0) }, 9);
-        for (v, s) in x[8 * rate as usize..].iter_mut().zip(&talk.samples) {
-            *v += s * 2.0;
-        }
-        let mut vad = Vad::new(rate);
-        let (_, speaking) = run(&mut vad, &x);
-        let first = speaking.iter().position(|&s| s);
-        let last_false = speaking[..800].iter().rposition(|&s| s);
-        println!("VAD, fan switching on at 3 s: utterance frames before 8 s end at {last_false:?}, first at {first:?}");
-        // The fan may look like speech for a moment, but not for long.
-        assert!(last_false.is_none_or(|f| f < 300 + 200), "fan heard as speech until frame {last_false:?}");
-        assert!(speaking[820..1000].iter().any(|&s| s), "speech after the fan not heard");
+        let cases: Vec<u64> = seeds(7).collect();
+        for_cases("VAD, fan switching on at 3 s (seed)", &cases, |&seed| {
+            let mut x = white(n, 0.0005, seed);
+            let fan = fan(rate, n, 0.05, seed + 1);
+            let on = 3 * rate as usize;
+            for (v, f) in x[on..].iter_mut().zip(&fan[on..]) {
+                *v += f;
+            }
+            // And someone talks at 8 s.
+            let pacing = Pacing { lead_in: 0.2, syllables: (6, 6), pause: (5.0, 5.0) };
+            let talk = speech(rate, 4.0, MALE, pacing, seed + 2);
+            for (v, s) in x[8 * rate as usize..].iter_mut().zip(&talk.samples) {
+                *v += s * 2.0;
+            }
+            let mut vad = Vad::new(rate);
+            let (_, speaking) = run(&mut vad, &x);
+            let first = speaking.iter().position(|&s| s);
+            let last_false = speaking[..800].iter().rposition(|&s| s);
+            let line = format!("utterance frames before 8 s end at {last_false:?}, first at {first:?}");
+            let mut t = Targets::new();
+            // The fan may look like speech for a moment, but not for long.
+            t.check(last_false.is_none_or(|f| f < 300 + 200), || {
+                format!("fan heard as speech until frame {last_false:?}")
+            });
+            t.check(speaking[820..1000].iter().any(|&s| s), || "speech after the fan not heard".into());
+            (line, t.0)
+        });
     }
 
     /// A steady vowel: harmonics of 150 Hz with a falling spectrum.
@@ -625,51 +709,75 @@ mod tests {
     #[test]
     fn hysteresis_follows_the_timing() {
         let rate = 16_000;
-        let mut x = white(4 * rate as usize, 0.001, 12);
-        let place = |x: &mut [f32], at: f32, sound: &[f32]| {
-            let a = (at * rate as f32) as usize;
-            for (v, s) in x[a..].iter_mut().zip(sound) {
-                *v += s;
-            }
-        };
-        // A 60 ms blip (too short), then one second of voice with a 300 ms
-        // pause in the middle.
-        place(&mut x, 0.5, &vowel(rate, 0.06));
-        place(&mut x, 1.0, &vowel(rate, 0.35));
-        place(&mut x, 1.65, &vowel(rate, 0.35));
-        let mut vad = Vad::new(rate);
-        let (frames, speaking) = run(&mut vad, &x);
-        let on = speaking.iter().position(|&s| s).unwrap();
-        let off = on + speaking[on..].iter().position(|&s| !s).unwrap();
-        let last_voice = frames.iter().rposition(|&f| f).unwrap();
-        println!("VAD timing: utterance from frame {on} to {off} (voice 100..200, verdicts end at {last_voice})");
-        assert!((108..=115).contains(&on), "start at frame {on}");
-        assert!((260..=275).contains(&off), "end at frame {off}");
-        assert!(speaking[..100].iter().all(|&s| !s), "the blip started an utterance");
-        // Shorter timing ends sooner.
-        let mut quick = Vad::new(rate);
-        quick.set_timing(50, 200);
-        let (_, speaking) = run(&mut quick, &x);
-        let on = speaking.iter().position(|&s| s).unwrap();
-        assert!((50..=60).contains(&on), "the blip did not start a quick utterance: {on}");
+        let cases: Vec<u64> = seeds(12).collect();
+        for_cases("VAD timing (seed)", &cases, |&seed| {
+            let mut x = white(4 * rate as usize, 0.001, seed);
+            let place = |x: &mut [f32], at: f32, sound: &[f32]| {
+                let a = (at * rate as f32) as usize;
+                for (v, s) in x[a..].iter_mut().zip(sound) {
+                    *v += s;
+                }
+            };
+            // A 60 ms blip (too short), then one second of voice with a 300 ms
+            // pause in the middle.
+            place(&mut x, 0.5, &vowel(rate, 0.06));
+            place(&mut x, 1.0, &vowel(rate, 0.35));
+            place(&mut x, 1.65, &vowel(rate, 0.35));
+            let mut vad = Vad::new(rate);
+            let (frames, speaking) = run(&mut vad, &x);
+            let on = speaking.iter().position(|&s| s);
+            let off = on.and_then(|on| speaking[on..].iter().position(|&s| !s).map(|o| on + o));
+            let last_voice = frames.iter().rposition(|&f| f);
+            // Shorter timing ends sooner.
+            let mut quick = Vad::new(rate);
+            quick.set_timing(50, 200);
+            let (_, quick_speaking) = run(&mut quick, &x);
+            let quick_on = quick_speaking.iter().position(|&s| s);
+            let line = format!(
+                "utterance from frame {on:?} to {off:?} (voice 100..200, verdicts end at {last_voice:?}); with \
+                 quicker timing from {quick_on:?}"
+            );
+            let mut t = Targets::new();
+            t.check(on.is_some_and(|f| (108..=115).contains(&f)), || format!("start at frame {on:?}"));
+            t.check(off.is_some_and(|f| (260..=275).contains(&f)), || format!("end at frame {off:?}"));
+            t.check(speaking[..100].iter().all(|&s| !s), || "the blip started an utterance".into());
+            t.check(quick_on.is_some_and(|f| (50..=60).contains(&f)), || {
+                format!("the blip did not start a quick utterance: {quick_on:?}")
+            });
+            (line, t.0)
+        });
     }
 
     #[test]
     fn sensitivity_and_odd_input() {
         let rate = 16_000;
         let n = 10 * rate as usize;
-        let talk = speech(rate, 10.0, FEMALE, CONVERSATION, 13);
-        // Quiet speech: 3 dB SNR.
-        let x = mix(&talk.samples, &white(n, 0.07, 14));
-        let count = |s: f32| {
-            let mut vad = Vad::new(rate);
-            vad.set_sensitivity(s);
-            run(&mut vad, &x).0.iter().filter(|&&f| f).count()
-        };
-        let (low, mid, high) = (count(0.1), count(0.5), count(0.9));
-        println!("VAD at 3 dB SNR: speech frames {low} / {mid} / {high} at sensitivity 0.1 / 0.5 / 0.9");
-        assert!(low < mid && mid < high);
-        // Silence, DC, odd and empty frames, other rates.
+        let cases: Vec<u64> = seeds(13).collect();
+        for_cases("VAD sensitivity and other rates (seed)", &cases, |&seed| {
+            let talk = speech(rate, 10.0, FEMALE, CONVERSATION, seed);
+            // Quiet speech: 3 dB SNR.
+            let x = mix(&talk.samples, &white(n, 0.07, seed + 1));
+            let count = |s: f32| {
+                let mut vad = Vad::new(rate);
+                vad.set_sensitivity(s);
+                run(&mut vad, &x).0.iter().filter(|&&f| f).count()
+            };
+            let (low, mid, high) = (count(0.1), count(0.5), count(0.9));
+            let mut t = Targets::new();
+            t.check(low < mid && mid < high, || format!("speech frames {low} / {mid} / {high}"));
+            let mut rates = String::new();
+            for r in [8_000u32, 48_000] {
+                let talk = speech(r, 4.0, MALE, CONVERSATION, seed + 2);
+                let mut vad = Vad::new(r);
+                let (frames, _) = run(&mut vad, &mix(&talk.samples, &white(talk.samples.len(), 0.003, seed + 3)));
+                let want = truth(&talk.active, r);
+                let right = frames.iter().zip(&want).filter(|(a, b)| a == b).count();
+                t.check(right as f32 > 0.9 * want.len() as f32, || format!("{r} Hz: {right} of {}", want.len()));
+                rates += &format!(", {r} Hz {:.1} % right", 100.0 * right as f32 / want.len() as f32);
+            }
+            (format!("at 3 dB SNR: speech frames {low} / {mid} / {high} at sensitivity 0.1 / 0.5 / 0.9{rates}"), t.0)
+        });
+        // Silence, DC, odd and empty frames.
         let mut vad = Vad::new(16_000);
         for len in [0usize, 1, 7, 160, 333, 4096] {
             assert_eq!(vad.process(&vec![0i16; len]), VadState::Silence);
@@ -680,14 +788,6 @@ mod tests {
         }
         assert!(!vad.speaking() && !vad.state().is_speech());
         assert!(vad.probability().is_finite() && vad.noise_db().is_finite() && vad.snr_db().is_finite());
-        for rate in [8_000u32, 48_000] {
-            let talk = speech(rate, 4.0, MALE, CONVERSATION, 15);
-            let mut vad = Vad::new(rate);
-            let (frames, _) = run(&mut vad, &mix(&talk.samples, &white(talk.samples.len(), 0.003, 16)));
-            let want = truth(&talk.active, rate);
-            let right = frames.iter().zip(&want).filter(|(a, b)| a == b).count();
-            assert!(right as f32 > 0.9 * want.len() as f32, "{rate} Hz: {right} of {}", want.len());
-        }
     }
 
     /// Processing time per second of audio on the host, with the level

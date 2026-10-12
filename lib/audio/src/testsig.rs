@@ -9,7 +9,11 @@
 //! * [`white`], [`pink`] and [`fan`]: background noises.
 //! * [`room`]: a decaying random room impulse response, and [`convolve`].
 //! * Measurements: [`power`], [`db`], [`correlation`].
+//! * Running a scenario with many sets of signals: [`seeds`], [`for_cases`],
+//!   [`Targets`].
 
+use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
@@ -20,9 +24,7 @@ use rand_pcg::Pcg32;
 use crate::fft::RealFft;
 
 /// The random numbers of every signal: PCG32, seeded with the SplitMix64
-/// hash of `seed` on a fixed stream. The echo canceller's and the voice
-/// detector's tests were tuned on the signals this makes; other random
-/// signals move their results by more than the tests' margins.
+/// hash of `seed` on a fixed stream.
 pub fn generator(seed: u64) -> Pcg32 {
     let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -31,7 +33,7 @@ pub fn generator(seed: u64) -> Pcg32 {
 }
 
 /// A normally distributed value with standard deviation `sd`, by the
-/// Box–Muller transform of two uniform values (as the tuned signals were).
+/// Box–Muller transform of two uniform values.
 fn gaussian(rng: &mut Pcg32, sd: f32) -> f32 {
     let u1 = 1.0 - rng.random::<f32>(); // (0, 1]: its logarithm is finite
     let u2 = rng.random::<f32>();
@@ -443,6 +445,60 @@ pub fn to_i16(x: &[f32]) -> Vec<i16> {
 /// Converts 16-bit samples to floats in [-1, 1).
 pub fn to_f32(x: &[i16]) -> Vec<f32> {
     x.iter().map(|&v| v as f32 / 32768.0).collect()
+}
+
+/// Every scenario of the echo canceller's and the voice detector's tests
+/// runs with this many sets of signals (seeds `base`, `base + 1000`, ...; a
+/// scene derives the seeds of its parts from its own), and every quality
+/// target must hold for each of them: the tests measure the algorithms, not
+/// one lucky realisation of the signals.
+pub const SEEDS: u64 = 12;
+
+/// The seeds of a scenario whose first set of signals uses `base`.
+pub fn seeds(base: u64) -> impl Iterator<Item = u64> {
+    (0..SEEDS).map(move |k| base + 1000 * k)
+}
+
+/// Runs `check` on every case in parallel. It returns a line to print and
+/// the targets that the case missed; the test fails listing them all.
+pub fn for_cases<T: Sync + core::fmt::Debug>(
+    what: &str,
+    cases: &[T],
+    check: impl Fn(&T) -> (String, Vec<String>) + Sync,
+) {
+    let check = &check;
+    let results: Vec<(String, Vec<String>)> = std::thread::scope(|s| {
+        let runs: Vec<_> = cases.iter().map(|c| s.spawn(move || check(c))).collect();
+        runs.into_iter().map(|r| r.join().unwrap()).collect()
+    });
+    let mut missed = Vec::new();
+    for (case, (line, misses)) in cases.iter().zip(&results) {
+        std::println!("{what}, {case:?}: {line}");
+        missed.extend(misses.iter().map(|m| format!("{case:?}: {m}")));
+    }
+    assert!(
+        missed.is_empty(),
+        "{what}: {} missed targets in {} runs:\n{}",
+        missed.len(),
+        cases.len(),
+        missed.join("\n")
+    );
+}
+
+/// The targets a case missed.
+pub struct Targets(pub Vec<String>);
+
+impl Targets {
+    pub fn new() -> Targets {
+        Targets(Vec::new())
+    }
+
+    /// Notes `what` unless `ok`.
+    pub fn check(&mut self, ok: bool, what: impl FnOnce() -> String) {
+        if !ok {
+            self.0.push(what());
+        }
+    }
 }
 
 #[cfg(test)]
