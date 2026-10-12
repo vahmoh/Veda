@@ -150,6 +150,128 @@ stage_libstdcxx_cross() {
 }
 stage libstdcxx_cross gcc_cross musl
 
+# --- the media libraries, for mediadec ---------------------------------------
+
+# dav1d and FFmpeg, static and position independent, for the sandboxed
+# decoder of Videos (services/mediadec, which `cargo xtask` links). They go
+# to a prefix of their own: the sysroot is copied into the image, these are
+# not. They are compiled with the C library as built (they link nothing but
+# their checkasm programs), so a new POSIX layer only relinks those.
+MEDIA=$ROOT/media
+
+stage_src_dav1d() { unpack dav1d; }
+stage src_dav1d "$PORTS/dav1d/port.toml"
+stage_src_ffmpeg() { unpack ffmpeg; }
+stage src_ffmpeg "$PORTS/ffmpeg/port.toml" "$PORTS/ffmpeg/veda.patch"
+
+# `grep -q` for each `#define` a configured build must have: a check that
+# fails says which (a configure test that failed without a word, under GCC's
+# C23 default, say).
+expect_defines() {
+	local file=$1 line
+	shift
+	for line in "$@"; do
+		grep -qxF "#define $line" "$file" || { echo "$file: expected '#define $line'" >&2; exit 1; }
+	done
+}
+
+# Both bit depths (10-bit video is common), the assembly (nasm, ELF64), and
+# the tests, for checkasm, which compares each assembly function with the C
+# one: a release build would leave those out (trim_dsp).
+DAV1D_OPTIONS=(
+	--prefix=/system --libdir=lib --buildtype=release --default-library=static -Db_pie=true
+	-Denable_asm=true -Denable_tests=true -Denable_tools=false -Dbitdepths=8,16 -Dtrim_dsp=false
+)
+
+stage_dav1d() {
+	local b=$BUILD/dav1d
+	rm -rf "$b" "$MEDIA/dav1d" && mkdir -p "$b"
+	cat > "$BUILD/dav1d.cross" <<-EOF
+	[binaries]
+	c = '$CROSS/bin/$TARGET-gcc'
+	ar = '$CROSS/bin/$TARGET-ar'
+	strip = '$CROSS/bin/$TARGET-strip'
+	nasm = 'nasm'
+	pkg-config = 'false'
+	[host_machine]
+	system = 'veda'
+	cpu_family = 'x86_64'
+	cpu = 'x86_64'
+	endian = 'little'
+	[built-in options]
+	# dav1d defines _GNU_SOURCE itself only on the systems it knows (Linux):
+	# without it, musl's headers under -std=c99 hide clock_gettime and the
+	# rest of POSIX.
+	c_args = ['-D_GNU_SOURCE']
+	EOF
+	quiet "$b-setup.log" meson setup "$b" "$SRC/dav1d" --cross-file "$BUILD/dav1d.cross" "${DAV1D_OPTIONS[@]}"
+	expect_defines "$b/config.h" "HAVE_ASM 1" "CONFIG_8BPC 1" "CONFIG_16BPC 1"
+	quiet "$b-build.log" ninja -C "$b" -j"$JOBS"
+	quiet "$b-install.log" env DESTDIR="$MEDIA/dav1d" meson install -C "$b" --no-rebuild
+}
+stage dav1d src_dav1d gcc_cross musl @DAV1D_OPTIONS @ROOT
+
+# LGPL (no --enable-gpl, nothing non-free: checked below), only what
+# mediadec decodes: the demuxers, decoders (AV1 through dav1d), parsers and
+# the scaler and resampler; no programs, devices, filters, network or
+# libraries found by themselves.
+FFMPEG_OPTIONS=(
+	--enable-cross-compile --cross-prefix=$TARGET- --arch=x86_64 --target-os=veda
+	--prefix=/system --enable-static --disable-shared --enable-pic --enable-pthreads
+	--disable-debug --disable-autodetect --disable-everything --disable-programs --disable-doc
+	--disable-network --disable-avdevice --disable-avfilter --x86asmexe=nasm
+	--enable-libdav1d
+	--enable-demuxer=mov,matroska,ogg,avi,mpegts,mpegps
+	--enable-decoder=libdav1d,vp9,vp8,h264,hevc,mpeg4,mpeg1video,mpeg2video
+	--enable-decoder=aac,aac_latm,opus,vorbis,mp3float,mp2float,flac,ac3,eac3,'pcm_*'
+	--enable-parser=av1,vp9,vp8,h264,hevc,mpeg4video,mpegvideo,aac,aac_latm,opus,vorbis,mpegaudio,flac,ac3
+	--enable-bsf=extract_extradata
+)
+
+stage_ffmpeg() {
+	local b=$BUILD/ffmpeg
+	rm -rf "$b" "$MEDIA/ffmpeg" && mkdir -p "$b" "$BUILD/ffmpeg-tools"
+	# A pkg-config that knows only dav1d, as built above.
+	cat > "$BUILD/ffmpeg-tools/pkg-config" <<-EOF
+	#!/bin/sh
+	pkg=
+	for a; do case "\$a" in -*) ;; *) pkg=\${pkg:-\$a};; esac; done
+	case "\$pkg" in ""|dav1d*) ;; *) exit 1;; esac
+	for a; do case "\$a" in
+	--version) echo 0.29.2; exit 0;;
+	--modversion) echo $(port dav1d version); exit 0;;
+	--cflags) echo "-I$MEDIA/dav1d/system/include"; exit 0;;
+	--libs) echo "-L$MEDIA/dav1d/system/lib -ldav1d -pthread"; exit 0;;
+	esac; done
+	[ -n "\$pkg" ]
+	EOF
+	chmod +x "$BUILD/ffmpeg-tools/pkg-config"
+	cd "$b"
+	quiet configure.log "$SRC/ffmpeg/configure" "${FFMPEG_OPTIONS[@]}" \
+		--pkg-config="$BUILD/ffmpeg-tools/pkg-config"
+	expect_defines config.h "HAVE_PTHREADS 1" "HAVE_X86ASM 1" "HAVE_AVX2_EXTERNAL 1" \
+		"HAVE_SCHED_GETAFFINITY 1" "HAVE_POSIX_MEMALIGN 1" "CONFIG_GPL 0" "CONFIG_NONFREE 0" \
+		"CONFIG_SWSCALE 1" "CONFIG_SWRESAMPLE 1"
+	expect_defines config_components.h "CONFIG_LIBDAV1D_DECODER 1" "CONFIG_H264_DECODER 1" \
+		"CONFIG_MATROSKA_DEMUXER 1"
+	quiet make.log make -j"$JOBS"
+	quiet install.log make install DESTDIR="$MEDIA/ffmpeg"
+}
+stage ffmpeg src_ffmpeg dav1d gcc_cross musl @FFMPEG_OPTIONS @ROOT
+
+# Both projects' checkasm, which checks every assembly function against its
+# C version: run inside Veda by systest (it checks the processor's state as
+# Veda keeps it). Linked with the C library as it is now.
+stage_media_tests() {
+	rm -rf "$MEDIA/tests" && mkdir -p "$MEDIA/tests"
+	rm -f "$BUILD/dav1d/tests/checkasm" "$BUILD/ffmpeg/tests/checkasm/checkasm"
+	quiet "$BUILD/dav1d-checkasm.log" ninja -C "$BUILD/dav1d" tests/checkasm
+	quiet "$BUILD/ffmpeg-checkasm.log" make -C "$BUILD/ffmpeg" -j"$JOBS" checkasm
+	$TARGET-strip --strip-all -o "$MEDIA/tests/checkasm-dav1d" "$BUILD/dav1d/tests/checkasm"
+	$TARGET-strip --strip-all -o "$MEDIA/tests/checkasm-ffmpeg" "$BUILD/ffmpeg/tests/checkasm/checkasm"
+}
+stage media_tests dav1d ffmpeg posix_layer
+
 # --- the native toolchain ----------------------------------------------------
 
 # The native programs are compiled once; when only the POSIX layer changed,

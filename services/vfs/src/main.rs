@@ -58,7 +58,8 @@ vrt::entry!(main);
 const SYSTEM: &str = "system";
 const DEV: &str = "dev";
 /// Directories every home has.
-const HOME_DIRS: [&str; 4] = ["home/user/Documents", "home/user/Pictures", "home/user/Music", "home/user/Desktop"];
+const HOME_DIRS: [&str; 5] =
+    ["home/user/Documents", "home/user/Pictures", "home/user/Music", "home/user/Videos", "home/user/Desktop"];
 /// Changes are saved once nothing changed for this long...
 const SAVE_QUIET_NS: u64 = 500_000_000;
 /// ... or at the latest this long after the first unsaved change.

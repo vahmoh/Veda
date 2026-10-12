@@ -38,6 +38,26 @@ struct Surface {
 
 const BUFFERS: u8 = 2;
 
+/// When the last acknowledged frame was presented and when it reaches the
+/// screen, as the compositor reported with its `FrameDone`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameTiming {
+    /// When the client presented it (monotonic ns).
+    pub presented_ns: u64,
+    /// When it is seen (monotonic ns; 0: no frame acknowledged yet).
+    pub seen_ns: u64,
+    /// The time between two frames on the screen (ns).
+    pub period_ns: u64,
+}
+
+impl FrameTiming {
+    /// The earliest a frame presented at `now` can be seen: a period after
+    /// the last one, and not before `now`.
+    pub fn earliest(&self, now: u64) -> u64 {
+        if self.seen_ns == 0 { now } else { (self.seen_ns + self.period_ns).max(now) }
+    }
+}
+
 pub struct Window {
     pub display: Display,
     pub id: u32,
@@ -47,6 +67,10 @@ pub struct Window {
     shown: Option<u8>,
     /// A presented frame has not been acknowledged yet.
     in_flight: bool,
+    /// When the frame in flight was presented.
+    presented_ns: u64,
+    /// The last acknowledged frame's timing.
+    timing: FrameTiming,
     pub width: i32,
     pub height: i32,
     pub state: WindowState,
@@ -65,6 +89,8 @@ impl Window {
             surface: None,
             shown: None,
             in_flight: false,
+            presented_ns: 0,
+            timing: FrameTiming::default(),
             width: w,
             height: h,
             state: WindowState::Normal,
@@ -92,7 +118,14 @@ impl Window {
                                 self.height = *height as i32;
                                 self.state = *state;
                             }
-                            WindowEvent::FrameDone { .. } => self.in_flight = false,
+                            WindowEvent::FrameDone { seen_ns, period_ns, .. } => {
+                                self.in_flight = false;
+                                self.timing = FrameTiming {
+                                    presented_ns: self.presented_ns,
+                                    seen_ns: *seen_ns,
+                                    period_ns: *period_ns,
+                                };
+                            }
                             WindowEvent::Focus { focused } => self.focused = *focused,
                             _ => {}
                         }
@@ -112,6 +145,11 @@ impl Window {
     /// True if a new frame may be drawn now (the previous one was shown).
     pub fn can_draw(&self) -> bool {
         !self.in_flight && !self.closed
+    }
+
+    /// The last acknowledged frame's timing.
+    pub fn frame_timing(&self) -> FrameTiming {
+        self.timing
     }
 
     fn ensure_surface(&mut self) -> Result<(), WindowError> {
@@ -160,6 +198,7 @@ impl Window {
     pub fn present(&mut self, damage: &[Rect]) -> Result<(), WindowError> {
         let index = self.back_index();
         let rects: Vec<dp::Rect> = damage.iter().map(|r| dp::Rect::new(r.x, r.y, r.w as u32, r.h as u32)).collect();
+        self.presented_ns = vrt::time::now_ns();
         self.display.present(self.id, index, rects).map_err(WindowError::Ipc)?.map_err(WindowError::Display)?;
         self.shown = Some(index);
         self.in_flight = true;

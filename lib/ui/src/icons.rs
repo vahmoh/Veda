@@ -58,6 +58,10 @@ pub enum Icon {
     /// Rotate clockwise.
     RotateRight,
     Fullscreen,
+    /// Leave full screen: the corners pointing inwards.
+    FullscreenExit,
+    /// A strip of film: videos.
+    Video,
     List,
     User,
     Sun,
@@ -380,6 +384,22 @@ fn build(icon: Icon) -> Builder {
             b.poly(&[(20.0, 15.0), (20.0, 20.0), (15.0, 20.0)], false);
             b.poly(&[(9.0, 20.0), (4.0, 20.0), (4.0, 15.0)], false);
         }
+        Icon::FullscreenExit => {
+            b.poly(&[(9.0, 4.0), (9.0, 9.0), (4.0, 9.0)], false);
+            b.poly(&[(15.0, 4.0), (15.0, 9.0), (20.0, 9.0)], false);
+            b.poly(&[(20.0, 15.0), (15.0, 15.0), (15.0, 20.0)], false);
+            b.poly(&[(4.0, 15.0), (9.0, 15.0), (9.0, 20.0)], false);
+        }
+        Icon::Video => {
+            b.rrect(3.5, 4.0, 17.0, 16.0, 2.5);
+            b.line(8.0, 4.0, 8.0, 20.0);
+            b.line(16.0, 4.0, 16.0, 20.0);
+            // The sprocket holes along both edges.
+            for y in [8.0, 12.0, 16.0] {
+                b.line(3.5, y, 8.0, y);
+                b.line(16.0, y, 20.5, y);
+            }
+        }
         Icon::List => {
             for y in [6.0, 12.0, 18.0] {
                 b.dot(5.0, y, 1.2);
@@ -589,7 +609,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 79] = [
+    pub const ALL: [Icon; 81] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -639,6 +659,8 @@ impl Icon {
         Icon::Rotate,
         Icon::RotateRight,
         Icon::Fullscreen,
+        Icon::FullscreenExit,
+        Icon::Video,
         Icon::List,
         Icon::User,
         Icon::Sun,
@@ -684,6 +706,7 @@ impl Icon {
             "document" | "editor" | "text" => Icon::Document,
             "image" | "photos" => Icon::Image,
             "music" => Icon::Music,
+            "video" | "videos" | "film" | "movie" => Icon::Video,
             "terminal" => Icon::Terminal,
             "settings" => Icon::Settings,
             "monitor" | "sysmon" | "taskmgr" => Icon::Chart,

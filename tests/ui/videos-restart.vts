@@ -1,0 +1,28 @@
+# The decoder killed while a video plays (1280x800 with the taskbar; `-f`:
+# the Terminal counts processes the launcher did not start as the system's):
+# Videos starts it again where the picture was, and the video goes on to
+# its end.
+requires media
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+fail-on "videos: panic:"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+type 'open "/home/user/Videos/Aurora Timelapse.mkv"'
+key ret
+wait-serial "videos: playing Aurora Timelapse" 60
+wait-serial "videos: first frame in" 10
+wait 4
+key alt-tab
+wait 2
+type "kill -f mediadec"
+key ret
+wait-serial "videos: decoder stopped (exit" 20
+wait-serial "videos: decoder restarted in" 10
+wait-serial "videos: seek done in" 10
+wait 2
+shot target/veda/videos-restart.png
+wait-serial "videos: finished Aurora Timelapse" 30
+reject-serial "videos: decoder keeps stopping"
+reject-serial "videos: cannot"

@@ -6,7 +6,8 @@
 //! and Settings all ask it, so "which app opens a `.qoa` file" has one
 //! answer. Only formats an application can really open are associated with
 //! it: Photos opens what `vimage` decodes, Music plays what `vaudio`
-//! decodes, and the Text Editor takes text and source files.
+//! decodes, Videos plays what its decoder (FFmpeg and dav1d) decodes, and
+//! the Text Editor takes text and source files.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -22,6 +23,8 @@ pub enum FileKind {
     Image,
     /// Sound or music (not every audio format can be played).
     Audio,
+    /// A video.
+    Video,
     /// A Veda program (`.exe`).
     Program,
     Other,
@@ -42,6 +45,8 @@ pub const EDITOR: App = App { id: "editor", exe: "/system/bin/editor.exe" };
 pub const PHOTOS: App = App { id: "photos", exe: "/system/bin/photos.exe" };
 /// Music.
 pub const MUSIC: App = App { id: "music", exe: "/system/bin/music.exe" };
+/// Videos.
+pub const VIDEOS: App = App { id: "videos", exe: "/system/bin/videos.exe" };
 /// Files, which opens folders.
 pub const FILES: App = App { id: "files", exe: "/system/bin/files.exe" };
 
@@ -65,6 +70,10 @@ const fn image(extensions: &'static [&'static str], name: &'static str) -> FileT
 
 const fn audio(extensions: &'static [&'static str], name: &'static str, app: Option<App>) -> FileType {
     FileType { extensions, kind: FileKind::Audio, name, app }
+}
+
+const fn video(extensions: &'static [&'static str], name: &'static str) -> FileType {
+    FileType { extensions, kind: FileKind::Video, name, app: Some(VIDEOS) }
 }
 
 const fn other(extensions: &'static [&'static str], kind: FileKind, name: &'static str) -> FileType {
@@ -100,6 +109,16 @@ pub const TYPES: &[FileType] = &[
     audio(&["mid", "midi"], "MIDI music", None),
     audio(&["mod", "xm", "s3m", "it"], "Tracker music", None),
     audio(&["aac", "m4a"], "AAC audio", None),
+    video(&["mp4", "m4v"], "MPEG-4 video"),
+    video(&["mov"], "QuickTime video"),
+    video(&["3gp"], "3GPP video"),
+    video(&["mkv"], "Matroska video"),
+    video(&["webm"], "WebM video"),
+    video(&["avi"], "AVI video"),
+    video(&["ogv"], "Ogg video"),
+    // Not `ts`, which is TypeScript as often as a transport stream.
+    video(&["m2ts", "mts"], "MPEG transport stream"),
+    video(&["mpg", "mpeg"], "MPEG video"),
     other(&["exe"], FileKind::Program, "Program"),
     other(&["ttf", "otf"], FileKind::Other, "Font"),
     other(&["img", "iso"], FileKind::Other, "Disk image"),
@@ -135,6 +154,11 @@ pub fn is_playable_audio(name: &str) -> bool {
     default_app(name) == Some(MUSIC)
 }
 
+/// True for videos — the files Videos opens.
+pub fn is_video(name: &str) -> bool {
+    default_app(name) == Some(VIDEOS)
+}
+
 /// A short description of a file's type: "PNG image", "Folder", or for an
 /// unknown extension "XYZ file".
 pub fn kind_name(name: &str, is_dir: bool) -> String {
@@ -159,6 +183,9 @@ mod tests {
         assert_eq!(file_kind("Photo.jpeg"), FileKind::Image);
         assert_eq!(file_kind("song.qoa"), FileKind::Audio);
         assert_eq!(file_kind("song.mp3"), FileKind::Audio);
+        assert_eq!(file_kind("Holiday.MKV"), FileKind::Video);
+        assert_eq!(file_kind("~/Videos/clip.webm"), FileKind::Video);
+        assert_eq!(file_kind("main.ts"), FileKind::Other);
         assert_eq!(file_kind("init.exe"), FileKind::Program);
         assert_eq!(file_kind("Inter.otf"), FileKind::Other);
         assert_eq!(file_kind("Makefile"), FileKind::Other);
@@ -174,6 +201,9 @@ mod tests {
         assert_eq!(default_app("Retro Sunset.bmp"), Some(PHOTOS));
         assert_eq!(default_app("Calibration.qoa"), Some(MUSIC));
         assert_eq!(default_app("take.wave"), Some(MUSIC));
+        assert_eq!(default_app("Aurora Timelapse.mkv"), Some(VIDEOS));
+        assert_eq!(default_app("phone.MOV"), Some(VIDEOS));
+        assert_eq!(default_app("broadcast.m2ts"), Some(VIDEOS));
         // Music cannot play these, so nothing opens them by default.
         assert_eq!(default_app("song.mp3"), None);
         assert_eq!(default_app("tune.mid"), None);
@@ -183,6 +213,8 @@ mod tests {
         assert_eq!(PHOTOS.exe, "/system/bin/photos.exe");
         assert!(is_image("a.qoi") && !is_image("a.mp3") && !is_image("png"));
         assert!(is_playable_audio("A.WAV") && !is_playable_audio("a.flac"));
+        assert!(is_video("a.mp4") && is_video("a.mpeg") && !is_video("a.ogg") && !is_video("a.ts"));
+        assert_eq!(VIDEOS.exe, "/system/bin/videos.exe");
     }
 
     #[test]
@@ -190,6 +222,7 @@ mod tests {
         assert_eq!(kind_name("anything", true), "Folder");
         assert_eq!(kind_name("a.png", false), "PNG image");
         assert_eq!(kind_name("a.JPG", false), "JPEG image");
+        assert_eq!(kind_name("a.mkv", false), "Matroska video");
         assert_eq!(kind_name("a.zip", false), "ZIP file");
         assert_eq!(kind_name("LICENSE", false), "File");
     }

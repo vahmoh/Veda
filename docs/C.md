@@ -109,7 +109,10 @@ its own heap (`vrt`'s), not from `malloc`, which calls into it.
 services or talk to them directly (`<veda/ipc.h>`): handles, channels and
 the service registry (`veda_service_register`, `_accept`, `_connect`),
 waiting on several objects at once (`veda_wait`), memory objects
-(`veda_vmo_create`, `_map`) and events. They are the kernel's calls but for
+(`veda_vmo_create`, `_map`) and events, and the handles a program was
+started with for a role of its own (`veda_startup_handle`: `mediadec`
+takes its control channel so, from Videos, which starts it with nothing
+else). They are the kernel's calls but for
 the registry's, made by the POSIX layer (`lib/posix/src/native.rs`); every
 call returns 0 or a count, or a negative Veda error number. A program
 speaks a protocol by writing its messages itself: a 12-byte header (method,
@@ -193,10 +196,11 @@ toolchain exists, and says so when it does not. The image grows by about
 80 MB with it, which Veda keeps in memory; compiling is comfortable in
 QEMU's default 1 GiB.
 
-The build needs the distribution's packages; on Debian and Ubuntu:
+The build needs the distribution's packages (nasm, meson and ninja for the
+media libraries, which videos are decoded with); on Debian and Ubuntu:
 
 ```text
-sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev
+sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev nasm meson ninja-build
 ```
 
 ### The ports
@@ -207,6 +211,8 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 | `gcc` | 16.2.0 | the `x86_64-veda` target: `gcc/config/veda.h` and `i386/veda.h` (musl, static linking, `/system`), `veda.opt`, libgcc's configuration, libstdc++'s checks of the C library |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
 | `musl` | 1.2.6 | system calls through the POSIX layer, `_start`, thread entry points, `posix_spawn`, the call to set the layer up |
+| `dav1d` | 1.5.4 | none: built as released (meson), for the media decoder |
+| `ffmpeg` | 9.0.2 | `veda` as a target operating system in `configure`; built with only the demuxers, decoders and parsers the media decoder uses |
 
 Each port is a directory with `port.toml` (version, address, SHA-256,
 licence) and `veda.patch`; `ports/README.md` describes how to change one.
@@ -216,7 +222,9 @@ licence) and `veda.patch`; `ports/README.md` describes how to change one.
 GCC, binutils and the GCC runtime library are under the GNU GPL version 3
 (libgcc with the GCC Runtime Library Exception, which leaves programs GCC
 builds under their own licences); GMP, MPFR and MPC under the GNU LGPL
-version 3; musl under the MIT licence. The source of what Veda's image
+version 3; musl under the MIT licence; FFmpeg under the GNU LGPL version
+2.1 or later (the build checks that nothing GPL or non-free is in it) and
+dav1d under the BSD 2-clause licence. The source of what Veda's image
 contains is the upstream archive each `port.toml` names plus the patch
 beside it.
 

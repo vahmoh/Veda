@@ -189,8 +189,13 @@ union! {
         /// A key event. `text` is the character produced (empty if none).
         8 => Key { code: u16, pressed: bool, repeat: bool, modifiers: u32, text: String },
         /// Buffer `shown` is now on screen: draw the next frame into another
-        /// buffer and present it.
-        9 => FrameDone { shown: u8 },
+        /// buffer and present it. The frame it is in reaches the screen at
+        /// `seen_ns` (monotonic ns: the vertical blank it is flipped at,
+        /// where a display driver flips and keeps time; when it was composed
+        /// otherwise), and frames follow each other every `period_ns`, so a
+        /// frame presented next is seen at `seen_ns + period_ns` at the
+        /// earliest.
+        9 => FrameDone { shown: u8, seen_ns: u64, period_ns: u64 },
         /// (Shell) the set of windows or their states changed.
         10 => WindowsChanged {},
         /// (Shell) the user pressed the Start/Super key.

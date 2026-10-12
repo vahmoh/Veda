@@ -543,7 +543,8 @@ fn entry_style(name: &str, is_dir: bool) -> Style {
     }
     match file_kind(name) {
         FileKind::Program => Style::fg(color::BRIGHT_GREEN).bold(),
-        FileKind::Image => Style::fg(color::BRIGHT_MAGENTA),
+        // As GNU dircolors has them: pictures and videos alike.
+        FileKind::Image | FileKind::Video => Style::fg(color::BRIGHT_MAGENTA),
         FileKind::Audio => Style::fg(color::BRIGHT_CYAN),
         FileKind::Text | FileKind::Other => Style::PLAIN,
     }
@@ -1329,6 +1330,7 @@ fn cmd_stat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                         FileKind::Text => "text document",
                         FileKind::Image => "image",
                         FileKind::Audio => "audio",
+                        FileKind::Video => "video",
                         FileKind::Program => "program",
                         FileKind::Other => "file",
                     };

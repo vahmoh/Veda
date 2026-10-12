@@ -102,6 +102,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::PROCESS_LIST => task::process_list(a[0], a[1]),
         nr::PROCESS_OPEN => task::process_open(a[0] as RawHandle, a[1] as u64),
         nr::THREAD_SET_EXIT_FUTEX => task::thread_set_exit_futex(a[0]),
+        nr::PROCESS_RESTRICT => task::process_restrict(a[0]),
 
         nr::FUTEX_WAIT => {
             crate::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64))?;

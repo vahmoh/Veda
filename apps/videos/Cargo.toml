@@ -1,0 +1,30 @@
+[package]
+name = "videos"
+description = "Videos: watch the videos in your library, decoded by the sandboxed media decoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "videos"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vui = { workspace = true }
+vgfx = { workspace = true }
+vmath = { workspace = true }
+vfiles = { workspace = true }
+vjson = { workspace = true }
+vaudio = { workspace = true }
+videos-core = { path = "core" }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

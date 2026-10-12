@@ -36,6 +36,13 @@ pub trait App {
     /// Called once the window exists, before the first frame.
     fn init(&mut self, _window: &Window) {}
 
+    /// Whether [`App::update`] paints every pixel of the window itself (a
+    /// video's stage, a game's view): the frame is then not cleared to the
+    /// theme's background first, which saves a write of the whole window.
+    fn paints_every_pixel(&self) -> bool {
+        false
+    }
+
     /// What the app offers the voice agent: a summary and its actions.
     /// `None` (the default) keeps the app to itself.
     fn agent_info(&self) -> Option<AppAgentInfo> {
@@ -131,6 +138,9 @@ pub struct Host {
     pending: VecDeque<WindowEvent>,
     /// The UI asked to close the window (`Ui::close_window`).
     pub close_requested: bool,
+    /// Frames start cleared to the theme's background (see
+    /// [`App::paints_every_pixel`]).
+    pub clear: bool,
 }
 
 impl Host {
@@ -148,6 +158,7 @@ impl Host {
             repaint_at: None,
             pending: VecDeque::new(),
             close_requested: false,
+            clear: true,
         })
     }
 
@@ -182,8 +193,11 @@ impl Host {
         self.input.now = vrt::time::now_ns();
         let bg = self.ctx.theme.bg;
         let window_state = self.window.state;
+        let frame_timing = self.window.frame_timing();
         let Ok(mut canvas) = self.window.begin_frame() else { return };
-        canvas.clear(bg);
+        if self.clear {
+            canvas.clear(bg);
+        }
         // While a menu is open it has the keyboard: widgets see no keys.
         let menu_open = self.state.open_menu.is_some() || self.state.context_menu.is_some();
         let quiet;
@@ -196,6 +210,7 @@ impl Host {
         let mut ui = Ui::new(canvas, &mut self.ctx, &mut self.state, input);
         ui.menu_input = &self.input;
         ui.window_state = window_state;
+        ui.frame_timing = frame_timing;
         draw(&mut ui);
         ui.finish();
         let (repaint, close, cursor, skip) = (ui.repaint_at, ui.close_requested, ui.cursor, ui.skip_present);
@@ -273,6 +288,7 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
     // Registered in the background, and again whenever the agent restarts.
     let mut agent = if app.agent_info().is_some() { Registration::start() } else { None };
     loop {
+        host.clear = !app.paints_every_pixel();
         let events = host.pump(|ui| app.update(ui));
         if host.window.closed {
             return 0;

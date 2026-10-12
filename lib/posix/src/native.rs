@@ -71,6 +71,26 @@ pub unsafe extern "C" fn veda_duplicate(h: RawHandle, rights: u32, out: *mut Raw
     unsafe { give(out, call(nr::HANDLE_DUPLICATE, [h as usize, rights as usize, 0, 0, 0, 0])) }
 }
 
+/// Takes the handle the program was started with in `role`, an
+/// application's role (`role::USER` and above; the layer keeps descriptors,
+/// the terminal and the registry for itself). Each is taken once: fails
+/// with `NotFound` when none (or none left) has the role, with
+/// `InvalidArgs` for the layer's own roles.
+///
+/// # Safety
+/// `out` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> c_int {
+    if role < vabi::startup::role::USER {
+        return fail(Error::InvalidArgs);
+    }
+    match vrt::env::take_handle(role) {
+        // SAFETY: as the caller promises.
+        Some(h) => unsafe { give(out, Ok(h.into_raw() as usize)) },
+        None => fail(Error::NotFound),
+    }
+}
+
 /// Registers the program as the provider of service `name`; connections
 /// to it arrive on `*listener` ([`veda_service_accept`]).
 ///

@@ -38,6 +38,23 @@ pub const ELF_STACK_MAX: usize = 512 << 20;
 pub const STACK_GUARD: usize = 64 << 10;
 /// Where position-independent ELF executables are loaded.
 pub const PIE_BASE: u64 = 0x0000_5555_0000_0000;
+/// ... at a random page of this span above it, so that where their code is
+/// cannot be guessed (2^28 places).
+pub const PIE_SPAN: u64 = 1 << 40;
+
+/// Takes abilities from this process, for good ([`vabi::restrict`]).
+pub fn restrict(flags: usize) -> Result<(), Error> {
+    call(nr::PROCESS_RESTRICT, [flags, 0, 0, 0, 0, 0]).map(|_| ())
+}
+
+/// Where a position-independent image of `len` bytes goes: a random page
+/// in `PIE_BASE..PIE_BASE + PIE_SPAN`.
+fn pie_base(len: u64) -> u64 {
+    let mut r = [0u8; 8];
+    crate::object::random_bytes(&mut r);
+    let pages = PIE_SPAN.saturating_sub(len.next_multiple_of(4096)) / 4096;
+    PIE_BASE + u64::from_le_bytes(r) % pages.max(1) * 4096
+}
 /// The user and group POSIX programs run as.
 pub const UID: u32 = 1000;
 
@@ -242,9 +259,10 @@ impl<'a> Spawn<'a> {
         let elf = velf::Elf::parse(image).map_err(SpawnError::BadElf)?;
         let (lo, hi) = elf.span();
         // Where the image goes: at its addresses, or, if it is
-        // position-independent, at PIE_BASE. `bias` moves an address of the
-        // file there (downwards too: the arithmetic wraps).
-        let base = if elf.is_position_independent() { PIE_BASE } else { lo };
+        // position-independent, at a random place above PIE_BASE. `bias`
+        // moves an address of the file there (downwards too: the
+        // arithmetic wraps).
+        let base = if elf.is_position_independent() { pie_base(hi - lo) } else { lo };
         let bias = base.wrapping_sub(lo);
         let end = base.checked_add(hi - lo);
         if base < vabi::USER_SPACE_START as u64 || end.is_none_or(|e| e > vabi::USER_SPACE_END as u64) {

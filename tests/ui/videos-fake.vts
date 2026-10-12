@@ -1,0 +1,124 @@
+# Videos with the stand-in decoder, fakedec (no FFmpeg needed; 1280x800
+# with the taskbar). A test pattern plays, pauses and resumes, seeks with
+# keys and with the seek bar, steps a picture each way, changes its volume
+# and mutes, goes full screen and back, and plays to its end; then, from the
+# library, a decoder that crashes twice at one place (restarted, then on
+# past it), one that hangs (the watchdog restarts it), one too slow to keep
+# up (it skips pictures) and a file that is not a video. The clips are in
+# tests/fakedec/clips. The window's client area starts at (90, 54); the
+# lines checked are the player's ("videos: ...").
+boot-cmdline "startup-sound=off"
+boot-cmdline "run=videos:--decoder,/system/bin/fakedec.exe,/system/tests/videos/fake/pattern.mkv"
+fail-on "PANIC"
+fail-on "videos: panic:"
+wait-serial "videos: decoder: fakedec" 90
+wait-serial "videos: playing Test Pattern (1280x720 FAKE 30 fps, PCM 48000 Hz, 0:20)" 30
+wait-serial "videos: first frame in" 10
+wait 3
+shot target/veda/videos-fake-1-playing.png
+# Pause and resume with the space bar: the position has moved on.
+key spc
+wait-serial "videos: paused at 0:0" 10
+reject-serial "videos: paused at 0:00"
+wait 1
+shot target/veda/videos-fake-2-paused.png
+key spc
+wait-serial "videos: resumed at 0:0" 10
+# Ten seconds on with L, then the middle of the seek bar.
+key l
+wait-serial "videos: seek to 0:1" 10
+wait-serial "videos: seek done in" 10
+wait 2
+click 0.51 0.8188
+wait-serial "videos: seek to 0:10" 10
+wait-serial "videos: seek done in" 10
+wait 2
+# Paused, a picture forward and one back.
+key spc
+wait-serial "videos: paused at 0:1" 10
+key dot
+wait-serial "videos: step to 0:1" 10
+key comma
+wait-serial-count "videos: step to 0:1" 2 10
+wait 1
+shot target/veda/videos-fake-3-step.png
+# Volume a step down, muted and back.
+key down
+wait-serial "videos: volume 95%" 10
+key m
+wait-serial "videos: muted" 10
+key m
+wait-serial "videos: unmuted" 10
+# Full screen and back.
+key f
+wait-serial "videos: full screen on" 10
+wait 2
+shot target/veda/videos-fake-4-full-screen.png
+key esc
+wait-serial "videos: full screen off" 10
+# From 90% to the end.
+key spc
+wait-serial "videos: resumed at" 10
+key 9
+wait-serial "videos: seek to 0:18" 10
+wait-serial "videos: finished Test Pattern" 20
+wait-serial "videos: playback:" 5
+wait 2
+shot target/veda/videos-fake-5-ended.png
+reject-serial "videos: out of sync"
+reject-serial "videos: cannot"
+reject-serial "videos: decoder stopped"
+expect-audio
+# The library: the clips' folder (broken, crash, hang, pattern, portrait,
+# slow, train).
+key esc
+wait-serial "videos: showing the library" 10
+wait 4
+shot target/veda/videos-fake-6-library.png
+# The decoder crashes at 6 s; started again there, it crashes again, and
+# playback goes on 10 s later.
+key home
+key right
+key ret
+wait-serial "videos: playing Crash at 6 s" 30
+wait-serial "videos: decoder stopped (exit" 20
+wait-serial "videos: decoder restarted in" 10
+wait-serial "videos: decoder stopped twice at the same place: going on from 0:15" 20
+wait-serial "videos: finished Crash at 6 s" 30
+key esc
+wait-serial-count "videos: showing the library" 2 10
+# The decoder hangs at 5 s: its heartbeat stops, and the watchdog starts it
+# again (twice, then past the place).
+key home
+key right
+key right
+key ret
+wait-serial "videos: playing Hang at 5 s" 30
+wait-serial "videos: decoder stopped (it stopped working)" 20
+wait-serial "videos: decoder stopped twice at the same place: going on from 0:1" 30
+wait-serial "videos: finished Hang at 5 s" 30
+key esc
+wait-serial-count "videos: showing the library" 3 10
+# A decoder too slow for its video: pictures are skipped.
+key home
+key right
+key right
+key right
+key right
+key right
+key ret
+wait-serial "videos: playing Slow Decoder" 30
+wait-serial "videos: decoder too slow: skipping" 30
+wait 2
+shot target/veda/videos-fake-7-slow.png
+key esc
+wait-serial-count "videos: showing the library" 4 10
+# A file that is not a video.
+key home
+key ret
+wait-serial "videos: cannot play broken.webm: This file isn't a video Videos can open, or it is damaged." 30
+wait 2
+shot target/veda/videos-fake-8-broken.png
+key esc
+wait-serial-count "videos: showing the library" 5 10
+reject-serial "videos: decoder keeps stopping"

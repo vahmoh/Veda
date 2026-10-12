@@ -397,12 +397,13 @@ fn draw_sidebar(f: &mut Files, ui: &mut Ui, r: Rect) {
     let t = ui.theme().clone();
     ui.canvas.fill_rect(r, t.surface);
     ui.canvas.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), t.border);
-    let places: [(&str, Icon, &str); 6] = [
+    let places: [(&str, Icon, &str); 7] = [
         ("Home", Icon::Home, HOME),
         ("Desktop", Icon::Monitor, "/home/user/Desktop"),
         ("Documents", Icon::Document, "/home/user/Documents"),
         ("Pictures", Icon::Image, "/home/user/Pictures"),
         ("Music", Icon::Music, "/home/user/Music"),
+        ("Videos", Icon::Video, "/home/user/Videos"),
         ("Trash", Icon::Trash, trash::FILES),
     ];
     let locations: [(&str, Icon, &str); 3] =

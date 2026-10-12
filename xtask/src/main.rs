@@ -231,6 +231,10 @@ fn resolution_size(v: &str) -> Option<(u32, u32)> {
 const GENERATORS: &[(&str, &[&str])] = &[
     ("assetgen", &["tools/assetgen", "lib/image"]),
     ("musicgen", &["tools/musicgen", "lib/audio", "lib/image", "lib/math"]),
+    (
+        "videogen",
+        &["tools/videogen", "lib/gfx", "lib/raster", "lib/font", "lib/audio", "lib/image", "lib/math", "assets/fonts"],
+    ),
 ];
 
 /// Newest modification time of any file under `dir`.
@@ -308,6 +312,14 @@ fn build_system(o: &Options) -> Result<System> {
     for (name, exe) in toolchain::c_tests()? {
         initrd.add(&format!("tests/c/{name}"), exe);
     }
+    // Videos for the stand-in decoder, fakedec (the GUI scripts').
+    let clips = util::workspace_root().join("tests/fakedec/clips");
+    for entry in std::fs::read_dir(&clips).map_err(|e| format!("reading {}: {e}", clips.display()))?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name != "README.md" {
+            initrd.add(&format!("tests/videos/fake/{name}"), util::read(&entry.path())?);
+        }
+    }
     // The C toolchain (`cargo xtask toolchain`): gcc, as, ld, the C library
     // and its headers, as /system has them.
     toolchain::relink_native()?;
@@ -317,6 +329,23 @@ fn build_system(o: &Options) -> Result<System> {
     }
     for (path, data) in native {
         initrd.add(&path, data);
+    }
+    // The media decoder (`cargo xtask toolchain` builds FFmpeg and dav1d),
+    // which Videos plays videos with, and the media libraries' tests.
+    if !o.skip.iter().any(|s| s == "mediadec") {
+        match toolchain::mediadec()? {
+            Some(exe) => {
+                initrd.add("bin/mediadec", exe);
+            }
+            None => util::status(
+                "Note",
+                "no media decoder in the image: videos do not play (`cargo xtask toolchain` builds FFmpeg and \
+                 dav1d; it needs nasm)",
+            ),
+        }
+        for (name, exe) in toolchain::media_tests()? {
+            initrd.add(&format!("tests/media/{name}"), exe);
+        }
     }
     // The driver VM's Linux (`cargo xtask linux`, or the first time an
     // image needs it) and its programs.
@@ -781,6 +810,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vpe", &[]),
     ("velf", &[]),
     ("vposix", &[]),
+    ("mediadec", &[]),
     ("initrd", &["std"]),
     ("vheap", &[]),
     ("vipc", &[]),
@@ -808,6 +838,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vglsl", &[]),
     ("vgl", &[]),
     ("interceptor-game", &[]),
+    ("videos-core", &[]),
     ("airsim", &[]),
     ("xtask", &[]),
 ];
@@ -923,7 +954,7 @@ fn test(o: &Options) -> Result {
     // The last test restarts the window system; give the desktop a moment
     // to come back before the screenshot.
     let checks =
-        "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nwait 3\nshot target/veda/test-desktop.png\n";
+        "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 600\nwait 3\nshot target/veda/test-desktop.png\n";
     script_on(&o, checks, Some(&system))?;
     if o.ui {
         // The GUI scripts, then the agent's (with the stand-in for Deepgram;
@@ -994,6 +1025,10 @@ fn doctor() -> Result {
     match toolchain::status() {
         Ok(v) => println!("  [ok]   c toolchain: {v}"),
         Err(e) => println!("  [--]   c toolchain: {e}"),
+    }
+    match toolchain::media_status() {
+        Ok(v) => println!("  [ok]   media decoders: {v}"),
+        Err(e) => println!("  [--]   media decoders: {e}"),
     }
     match linux::status() {
         Ok(v) => println!("  [ok]   driver vm: {v}"),

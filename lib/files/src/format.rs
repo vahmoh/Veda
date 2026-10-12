@@ -1,4 +1,4 @@
-//! File sizes and modification times for people.
+//! File sizes, modification times and durations for people.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -23,6 +23,17 @@ pub fn human_size(bytes: u64) -> String {
             return format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[unit]);
         }
         unit += 1;
+    }
+}
+
+/// A length of time in milliseconds as `m:ss`, or `h:mm:ss` from an hour
+/// (a song's or a video's).
+pub fn duration(ms: u64) -> String {
+    let s = ms / 1000;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
     }
 }
 
@@ -63,6 +74,16 @@ pub fn friendly_time_at(ns: u64, now_ns: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durations() {
+        assert_eq!(duration(0), "0:00");
+        assert_eq!(duration(8_999), "0:08");
+        assert_eq!(duration(75_000), "1:15");
+        assert_eq!(duration(3_599_999), "59:59");
+        assert_eq!(duration(3_600_000), "1:00:00");
+        assert_eq!(duration(36_610_000), "10:10:10");
+    }
 
     #[test]
     fn sizes() {

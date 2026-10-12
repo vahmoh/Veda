@@ -1,0 +1,24 @@
+[package]
+name = "fakedec"
+description = "A stand-in for the media decoder: speaks vproto::media with drawn pictures and a tone, for testing Videos without FFmpeg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fakedec"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

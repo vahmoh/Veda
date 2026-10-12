@@ -1,0 +1,68 @@
+# Videos' agent interface, with a simulated Voice Agent service: the agent
+# lists the videos, plays one by name (as speech recognition may hear it),
+# pauses, seeks, resumes, sets the player's volume, goes full screen and
+# back, reads what is playing, goes back to the library and plays another
+# from the start, as the user would with the keys and buttons. The player
+# logs what it does ("videos: playing <title>", "videos: seek to m:ss", ...).
+requires media
+fail-on "PANIC"
+fail-on "videos: panic:"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Videos starts for the agent and describes itself.
+agent-call app_actions '{"app":"videos"}' 60
+agent-result list_videos
+wait-serial "videos offers" 10
+agent-call use_app '{"app":"videos","action":"list_videos","arguments":{"query":"aurora"}}' 30
+agent-result '"title":"Aurora Timelapse"'
+agent-result '"total":1'
+# A video by name, heard a little wrong.
+agent-call use_app '{"app":"videos","action":"play","arguments":{"video":"the count down video"}}' 30
+agent-result '"title":"Countdown","playback":"playing'
+wait-serial "videos: playing Countdown" 30
+wait 3
+agent-call use_app '{"app":"videos","action":"pause"}' 30
+agent-result '"playback":"paused"'
+wait-serial "videos: paused at 0:0" 10
+agent-call use_app '{"app":"videos","action":"seek","arguments":{"seconds":8}}' 30
+agent-result '"position":"0:08"'
+wait-serial "videos: seek to 0:08" 10
+agent-call use_app '{"app":"videos","action":"seek","arguments":{"seconds":-5,"relative":true}}' 30
+agent-result '"position":"0:03"'
+wait-serial "videos: seek to 0:03" 10
+agent-call use_app '{"app":"videos","action":"seek","arguments":{"seconds":600}}' 30
+agent-result "is only 0:12 long"
+agent-call use_app '{"app":"videos","action":"play"}' 30
+agent-result '"playback":"playing"'
+wait-serial "videos: resumed at 0:03" 10
+# The player's own volume, and full screen.
+agent-call use_app '{"app":"videos","action":"set_volume","arguments":{"level":40}}' 30
+agent-result '"volume":40,"muted":false'
+wait-serial "videos: volume 40%" 10
+agent-call use_app '{"app":"videos","action":"full_screen","arguments":{"on":true}}' 30
+agent-result '"full_screen":true'
+wait-serial "videos: full screen on" 10
+# What the player shows.
+agent-call read_app '{"app":"videos"}' 30
+agent-result '"view":"player","now_playing":{"title":"Countdown"'
+agent-result '"picture":"640 × 360 · AV1 · 30 fps"'
+agent-result '"full_screen":true,"volume":40,"muted":false'
+agent-result '"library":{"folder":"~/Videos","videos":3'
+wait 2
+shot target/veda/agent-app-videos.png
+agent-call use_app '{"app":"videos","action":"full_screen","arguments":{"on":false}}' 30
+wait-serial "videos: full screen off" 10
+# Back to the library; another video from the start; one that is not there.
+agent-call use_app '{"app":"videos","action":"show_library"}' 30
+agent-result '"view":"library","videos":3'
+wait-serial "videos: showing the library" 10
+agent-call use_app '{"app":"videos","action":"play","arguments":{"video":"bubbles","from":"start"}}' 30
+agent-result '"title":"Rising Bubbles"'
+wait-serial "videos: playing Rising Bubbles" 30
+agent-call use_app '{"app":"videos","action":"play","arguments":{"video":"titanic"}}' 30
+agent-result "nothing in the library matches"
+agent-call use_app '{"app":"videos","action":"rewind"}' 30
+agent-result "Videos has no action called rewind"
+reject-serial "videos: cannot"

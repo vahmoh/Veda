@@ -42,6 +42,7 @@ members = [
     "lib/hv",
     "lib/iommu",
     "services/init",
+    "services/mediadec",
     "services/vfs",
     "services/devmgr",
     "services/compositor",
@@ -54,15 +55,18 @@ members = [
     "apps/editor",
     "apps/photos",
     "apps/music",
+    "apps/videos",
     "apps/terminal",
     "apps/taskmgr",
     "apps/files",
     "apps/settings",
     "apps/interceptor",
     "apps/interceptor/game",
+    "apps/videos/core",
     "services/audio",
     "tools/assetgen",
     "tools/musicgen",
+    "tools/videogen",
     "tools/airsim",
     "drivers/virtio-blk",
     "drivers/ahci",
@@ -71,6 +75,7 @@ members = [
     "tests/nettest",
     "tests/testmic",
     "tests/audiotest",
+    "tests/fakedec",
     "guest/init",
     "guest/bridgetest",
     "guest/pcitest",
@@ -163,6 +168,10 @@ webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+# AV1 encoding for tools/videogen only (the sample videos, made on the
+# build machine; never in the image): Veda decodes AV1, but has no encoder
+# of its own. No assembly, no threads, so it encodes the same everywhere.
+rav1e = { version = "0.8.1", default-features = false }
 ed25519-dalek = { version = "3", default-features = false }
 p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh"] }
 crypto-bigint = { version = "0.7.5", default-features = false, features = ["alloc"] }

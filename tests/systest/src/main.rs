@@ -24,6 +24,7 @@ use vrt::object::{Channel, Event, Interrupt, Vmo};
 use vrt::println;
 use vrt::sync::{Condvar, Mutex};
 
+mod media;
 mod posix;
 
 vrt::entry!(main);
@@ -327,6 +328,7 @@ fn main() -> i32 {
     match vrt::env::args().get(1).map(|a| a.as_str()) {
         Some("crash") => crash(),
         Some("job") => return posix::job(),
+        Some("restricted") => return posix::restricted(),
         Some("wait") => {
             posix::wait();
             return 0;
@@ -334,7 +336,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 17] = [
+    let tests: [Test; 20] = [
         ("ipc primitives", test_ipc_primitives),
         ("write-combining memory", test_write_combining_memory),
         ("software interrupts", test_software_interrupts),
@@ -348,7 +350,10 @@ fn main() -> i32 {
         ("vfs space", test_vfs_space),
         ("vfs open files", posix::test_vfs_open_files),
         ("c programs", posix::test_c_programs),
+        ("media checkasm", media::test_checkasm),
+        ("media decoder", media::test_decoder),
         ("killing a job", posix::test_kill_job),
+        ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),

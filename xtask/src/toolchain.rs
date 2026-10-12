@@ -7,11 +7,13 @@
 //!   Veda's `/system`), used to build the C tests and ports;
 //! * the **native toolchain**, the same compiler built to run inside Veda,
 //!   which the system image installs in `/system` (`gcc`, `as`, `ld`, the C
-//!   library and its headers).
+//!   library and its headers);
+//! * the **media libraries**, dav1d and FFmpeg built with the cross
+//!   toolchain, which `mediadec` (the decoder of Videos) is linked with.
 //!
 //! Everything lives under `target/toolchain` (`$VEDA_TOOLCHAIN` overrides
 //! it): `downloads/` (the verified source archives), `src/` (unpacked and
-//! patched), `build/`, `cross/` and `native/`. The GNU packages are built
+//! patched), `build/`, `cross/`, `native/` and `media/`. Everything is built
 //! with `ports/build.sh`.
 
 use std::path::{Path, PathBuf};
@@ -37,6 +39,7 @@ pub fn root() -> PathBuf {
 pub fn built(what: &str) -> bool {
     match what {
         "cross toolchain" => cross_gcc().is_some(),
+        "media libraries" => cross_gcc().is_some() && media_libraries().is_some(),
         _ => root().join("native").join("system").join("bin").join("gcc").is_file(),
     }
 }
@@ -54,6 +57,39 @@ pub fn status() -> std::result::Result<String, String> {
     Err(format!("not built (optional: C and GCC in the image); {how}"))
 }
 
+/// Where the media libraries (dav1d, FFmpeg) and their tests are.
+pub fn media_root() -> PathBuf {
+    root().join("media")
+}
+
+/// The media libraries' static libraries, in link order, if all are built.
+pub fn media_libraries() -> Option<Vec<PathBuf>> {
+    let lib = |port: &str, name: &str| media_root().join(port).join("system").join("lib").join(format!("lib{name}.a"));
+    let libs = vec![
+        lib("ffmpeg", "avformat"),
+        lib("ffmpeg", "avcodec"),
+        lib("ffmpeg", "swscale"),
+        lib("ffmpeg", "swresample"),
+        lib("ffmpeg", "avutil"),
+        lib("dav1d", "dav1d"),
+    ];
+    libs.iter().all(|l| l.is_file()).then_some(libs)
+}
+
+/// For `cargo xtask doctor`: whether the media libraries, which videos need,
+/// have been built.
+pub fn media_status() -> std::result::Result<String, String> {
+    if media_libraries().is_some() {
+        let version = |p: &str| Port::named(p).map(|p| p.version).unwrap_or_default();
+        return Ok(format!("FFmpeg {} and dav1d {} ({})", version("ffmpeg"), version("dav1d"), media_root().display()));
+    }
+    let how = match shell() {
+        Ok(_) => "`cargo xtask toolchain` builds them".to_string(),
+        Err(e) => format!("`cargo xtask toolchain` builds them, but {e}"),
+    };
+    Err(format!("not built (optional: videos play with them); {how}"))
+}
+
 /// The cross compiler, if it has been built.
 pub fn cross_gcc() -> Option<PathBuf> {
     let gcc = root().join("cross").join("bin").join(format!("{TARGET}-gcc"));
@@ -67,7 +103,7 @@ fn cross_tool(name: &str) -> PathBuf {
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
 /// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
-const POSIX_LAYER_EXPORTS: [&str; 21] = [
+const POSIX_LAYER_EXPORTS: [&str; 22] = [
     "__veda_syscall",
     "__veda_init",
     "__veda_spawn",
@@ -77,6 +113,7 @@ const POSIX_LAYER_EXPORTS: [&str; 21] = [
     "__veda_bootstrap",
     "veda_close",
     "veda_duplicate",
+    "veda_startup_handle",
     "veda_service_register",
     "veda_service_accept",
     "veda_service_connect",
@@ -113,16 +150,24 @@ pub fn posix_library() -> Result<PathBuf> {
 /// else (no Rust or compiler-builtins symbol can clash with the C
 /// library's). `ports/build.sh` does the same for the first build.
 pub fn posix_object(lib: &Path, out: &Path) -> Result {
+    isolated_object(lib, out, &POSIX_LAYER_EXPORTS)
+}
+
+/// Links a Rust static library into one relocatable object that defines
+/// `exports` and nothing else globally: its Rust runtime, compiler builtins
+/// (`memcpy` ...) and allocator stay its own, beside the C library's.
+/// Symbols it uses but does not define stay global, for the final link.
+fn isolated_object(lib: &Path, out: &Path, exports: &[&str]) -> Result {
     let whole = out.with_extension("all.o");
     let mut ld = Command::new(cross_tool("ld"));
     ld.args(["-r", "--gc-sections"]);
-    for s in POSIX_LAYER_EXPORTS {
+    for s in exports {
         ld.args(["-u", s]);
     }
     util::run(ld.arg("-o").arg(&whole).arg(lib))?;
     let mut objcopy = Command::new(cross_tool("objcopy"));
     objcopy.args(["--strip-debug", "--remove-section=.llvmbc", "--remove-section=.llvmcmd"]);
-    for s in POSIX_LAYER_EXPORTS {
+    for s in exports {
         objcopy.arg(format!("--keep-global-symbol={s}"));
     }
     util::run(objcopy.arg(&whole).arg(out))?;
@@ -214,6 +259,141 @@ pub fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     Ok(programs)
 }
 
+/// The flags the media decoder's shim is compiled with.
+const SHIM_CFLAGS: &[&str] =
+    &["-std=gnu17", "-O2", "-fPIE", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-g0"];
+
+/// C source without its comments (`/* */` and `//`), each replaced by a
+/// space.
+fn without_c_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let block = rest.find("/*");
+        let line = rest.find("//");
+        match (block, line) {
+            (Some(b), l) if l.is_none_or(|l| b < l) => {
+                out.push_str(&rest[..b]);
+                out.push(' ');
+                rest = rest[b + 2..].find("*/").map_or("", |e| &rest[b + 2 + e + 2..]);
+            }
+            (_, Some(l)) => {
+                out.push_str(&rest[..l]);
+                out.push(' ');
+                rest = rest[l..].find('\n').map_or("", |e| &rest[l + e..]);
+            }
+            _ => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+}
+
+/// The media decoder (`services/mediadec`) for the system image, if the
+/// cross toolchain and the media libraries are built: its Rust half (built
+/// for `x86_64-unknown-none` and made one object exporting `mediadec_main`
+/// alone), its C shim, FFmpeg and dav1d, linked by the cross GCC as a
+/// static position-independent program. Built again when any of it changed.
+pub fn mediadec() -> Result<Option<Vec<u8>>> {
+    let (Some(gcc), Some(libraries)) = (cross_gcc(), media_libraries()) else { return Ok(None) };
+    refresh_posix_layer()?;
+    let crate_dir = util::workspace_root().join("services").join("mediadec");
+    let shim = crate_dir.join("shim");
+    let header = shim.join("vmd.h");
+    // No floating point crosses the shim: the Rust half passes it otherwise.
+    let text = std::fs::read_to_string(&header).map_err(|e| format!("reading {}: {e}", header.display()))?;
+    let code = without_c_comments(&text);
+    if code.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == "float" || w == "double") {
+        return Err(format!("{}: no `float` or `double` may cross the shim", header.display()));
+    }
+    util::status("Building", "the media decoder (x86_64-unknown-none and C)");
+    util::run(util::cargo().args([
+        "rustc",
+        "--package",
+        "mediadec",
+        "--target",
+        "x86_64-unknown-none",
+        "--release",
+        "--crate-type",
+        "staticlib",
+    ]))?;
+    let rust_lib = util::target_dir().join("x86_64-unknown-none").join("release").join("libmediadec.a");
+    let out = root().join("build").join("mediadec");
+    std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
+    let rust_obj = out.join("mediadec-rs.o");
+    if !is_newer(&rust_obj, &[&rust_lib]) {
+        isolated_object(&rust_lib, &rust_obj, &["mediadec_main"])?;
+        // What it defines globally must be that and nothing else.
+        let nm = Command::new(cross_tool("nm"))
+            .args(["-g", "--defined-only", "--format=just-symbols"])
+            .arg(&rust_obj)
+            .output()
+            .map_err(|e| format!("running nm: {e}"))?;
+        let defined: Vec<String> = String::from_utf8_lossy(&nm.stdout).lines().map(str::to_string).collect();
+        if defined != ["mediadec_main"] {
+            let _ = std::fs::remove_file(&rust_obj);
+            return Err(format!("the media decoder's Rust half exports more than mediadec_main: {defined:?}"));
+        }
+    }
+    let media = media_root();
+    let includes =
+        [media.join("ffmpeg").join("system").join("include"), media.join("dav1d").join("system").join("include")];
+    let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
+    let mut sources: Vec<PathBuf> = std::fs::read_dir(&shim)
+        .map_err(|e| format!("reading {}: {e}", shim.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "c"))
+        .collect();
+    sources.sort();
+    let headers: Vec<PathBuf> = ["vmd.h", "vmd_internal.h"].iter().map(|h| shim.join(h)).collect();
+    let mut objects = Vec::new();
+    for source in &sources {
+        let object = out.join(source.file_name().unwrap()).with_extension("o");
+        let mut inputs: Vec<&Path> = vec![source, &gcc];
+        inputs.extend(headers.iter().map(PathBuf::as_path));
+        inputs.extend(libraries.iter().map(PathBuf::as_path));
+        if !is_newer(&object, &inputs) {
+            let mut cc = Command::new(&gcc);
+            cc.args(SHIM_CFLAGS);
+            for i in &includes {
+                cc.arg("-I").arg(i);
+            }
+            util::run(cc.arg("-c").arg("-o").arg(&object).arg(source))?;
+        }
+        objects.push(object);
+    }
+    let exe = out.join("mediadec");
+    let mut inputs: Vec<&Path> = vec![&rust_obj, &libc];
+    inputs.extend(objects.iter().map(PathBuf::as_path));
+    inputs.extend(libraries.iter().map(PathBuf::as_path));
+    if !is_newer(&exe, &inputs) {
+        let unstripped = out.join("mediadec.debug");
+        let mut link = Command::new(&gcc);
+        link.args(["-static-pie", "-pthread", "-Wl,--gc-sections", "-Wl,-z,stack-size=2097152", "-o"]).arg(&unstripped);
+        link.args(&objects).arg(&rust_obj).arg("-Wl,--start-group").args(&libraries).arg("-Wl,--end-group").arg("-lm");
+        util::run(&mut link)?;
+        // The unstripped program stays, for addr2line.
+        util::run(Command::new(cross_tool("strip")).arg("--strip-all").arg("-o").arg(&exe).arg(&unstripped))?;
+    }
+    Ok(Some(util::read(&exe)?))
+}
+
+/// The media libraries' tests for the system image (`/system/tests/media`):
+/// FFmpeg's and dav1d's checkasm.
+pub fn media_tests() -> Result<Vec<(String, Vec<u8>)>> {
+    let dir = media_root().join("tests");
+    let mut tests = Vec::new();
+    for name in ["checkasm-dav1d", "checkasm-ffmpeg"] {
+        let path = dir.join(name);
+        if path.is_file() {
+            tests.push((name.to_string(), util::read(&path)?));
+        }
+    }
+    Ok(tests)
+}
+
 /// Where [`command`] notes the POSIX layer the native programs were linked
 /// with: the SHA-256 of its object.
 fn native_layer_note() -> PathBuf {
@@ -269,6 +449,7 @@ pub fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 /// A source package of `ports/` (its `port.toml`).
 pub struct Port {
     name: String,
+    version: String,
     url: String,
     sha256: String,
 }
@@ -289,7 +470,7 @@ impl Port {
                 .map(|(_, v)| v.trim().trim_matches('"').to_string())
                 .ok_or_else(|| format!("{}: no {key}", file.display()))
         };
-        Ok(Port { name: value("name")?, url: value("url")?, sha256: value("sha256")? })
+        Ok(Port { name: value("name")?, version: value("version")?, url: value("url")?, sha256: value("sha256")? })
     }
 
     /// Where its archive is downloaded to, in `downloads`.
@@ -298,9 +479,9 @@ impl Port {
     }
 }
 
-/// The ports the toolchain is built from.
+/// The ports the toolchain and the media libraries are built from.
 fn ports() -> Result<Vec<Port>> {
-    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl"].iter().map(|p| Port::named(p)).collect()
+    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "dav1d", "ffmpeg"].iter().map(|p| Port::named(p)).collect()
 }
 
 pub fn sha256_of(path: &Path) -> Result<String> {
@@ -343,14 +524,34 @@ pub fn fetch(port: &Port, downloads: &Path) -> Result {
 }
 
 /// The programs the build needs from the system: compilers and GNU tools,
-/// and curl for the downloads (`docs/C.md` names the packages).
-const BUILD_TOOLS: [&str; 8] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl"];
+/// curl for the downloads, and nasm, meson and ninja for the media
+/// libraries (`docs/C.md` names the packages).
+const BUILD_TOOLS: [&str; 11] =
+    ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "nasm", "meson", "ninja"];
+
+/// The oldest nasm that assembles dav1d (2.14, for its AVX-512 code).
+const NASM_MIN: (u32, u32) = (2, 14);
+
+/// nasm's version (`NASM version 2.16.03 ...`).
+fn nasm_version() -> Option<(u32, u32)> {
+    let out = Command::new("nasm").arg("-v").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let version = text.split_whitespace().nth(2)?;
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().ok());
+    Some((parts.next()??, parts.next().flatten().unwrap_or(0)))
+}
 
 /// The shell that runs `ports/build.sh`, once the build tools are there.
 fn shell() -> Result<Command> {
     let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
     match missing.as_slice() {
-        [] => Ok(Command::new("bash")),
+        [] => match nasm_version() {
+            Some(v) if v >= NASM_MIN => Ok(Command::new("bash")),
+            _ => Err(format!(
+                "nasm {}.{} or newer is needed: install it from the distribution's packages (see docs/C.md)",
+                NASM_MIN.0, NASM_MIN.1
+            )),
+        },
         [tool] => Err(format!("{tool} is missing: install it from the distribution's packages (see docs/C.md)")),
         [tools @ .., last] => Err(format!(
             "{} and {last} are missing: install them from the distribution's packages (see docs/C.md)",
@@ -372,6 +573,18 @@ pub fn command(args: &[String]) -> Result {
         }
     }
     let started = std::time::Instant::now();
+    // One build at a time: a second would empty the first's build
+    // directories under it.
+    std::fs::create_dir_all(root()).map_err(|e| format!("creating {}: {e}", root().display()))?;
+    let lock_path = root().join(".lock");
+    let lock = std::fs::File::create(&lock_path).map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err("another `cargo xtask toolchain` is building the toolchain: wait for it to finish".into());
+        }
+        Err(std::fs::TryLockError::Error(e)) => return Err(format!("locking {}: {e}", lock_path.display())),
+    }
     // The tools first: the downloads are large.
     let mut sh = shell()?;
     for port in ports()? {
@@ -401,4 +614,17 @@ fn is_newer(target: &Path, inputs: &[&Path]) -> bool {
     let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     let Some(t) = modified(target) else { return false };
     inputs.iter().all(|i| modified(i).is_some_and(|m| m <= t))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comments_are_left_out() {
+        let c = "int a; /* a float */ int b; // a double\nint c; /* no end";
+        assert_eq!(without_c_comments(c), "int a;   int b;  \nint c;  ");
+        assert_eq!(without_c_comments("x // y"), "x  ");
+        assert_eq!(without_c_comments("/**/f"), " f");
+    }
 }

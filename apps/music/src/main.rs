@@ -42,7 +42,7 @@ use vmath::FloatExt;
 use vproto::input::keys;
 use vrt::object::Event;
 use vrt::sync::Mutex;
-use vui::{App, Font, Icon, Ui, WindowSpec};
+use vui::{App, Font, Icon, Ui, WindowSpec, media};
 
 use art::ArtSpec;
 use engine::{Command, PlayState, Shared, Status};
@@ -822,7 +822,7 @@ impl Player {
             Some(f) => (f * dur_ms as f32) as u64,
             None => pos_ms,
         };
-        if let Some(f) = widgets::seek_bar(ui, bar, frac, accent, &mut self.seek_drag)
+        if let Some(f) = media::seek_bar(ui, bar, frac, accent, &mut self.seek_drag).commit
             && self.current.is_some()
             && dur_ms > 0
         {
@@ -846,7 +846,7 @@ impl Player {
         // Centred, but leave room for the volume control on the right.
         let cx = (area.x + area.w / 2).min(area.right() - (154 + 24 + 40 + 96)).max(area.x + 154);
         let playing = self.status.state == PlayState::Playing;
-        if widgets::play_button(ui, (cx, cy), 28, playing, accent, accent2) {
+        if media::play_button(ui, (cx, cy), 28, playing, accent, accent2) {
             self.toggle_play();
         }
         let bs = 40;
@@ -859,7 +859,7 @@ impl Player {
             self.next(true);
         }
         let shuffle_r = prev_r.translate(-bs - 22, 0);
-        if widgets::toggle_icon(ui, shuffle_r, Icon::Shuffle, self.shuffle, None, "Shuffle (S)", accent) {
+        if media::toggle_icon(ui, shuffle_r, Icon::Shuffle, self.shuffle, None, "Shuffle (S)", accent) {
             self.toggle_shuffle();
         }
         let repeat_r = next_r.translate(bs + 22, 0);
@@ -868,7 +868,7 @@ impl Player {
             Repeat::All => (true, None, "Repeat: all (R)"),
             Repeat::One => (true, Some("1"), "Repeat: one (R)"),
         };
-        if widgets::toggle_icon(ui, repeat_r, Icon::Repeat, on, badge, tip, accent) {
+        if media::toggle_icon(ui, repeat_r, Icon::Repeat, on, badge, tip, accent) {
             self.cycle_repeat();
         }
 

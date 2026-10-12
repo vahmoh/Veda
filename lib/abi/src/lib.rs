@@ -184,6 +184,10 @@ pub mod nr {
     /// libraries join with this: the word changes only once the thread no
     /// longer runs on its stack.
     pub const THREAD_SET_EXIT_FUTEX: usize = 71;
+    /// `process_restrict(flags)`: takes abilities from the calling process,
+    /// for good ([`restrict`](crate::restrict)). What it holds already
+    /// (handles, mappings) stays.
+    pub const PROCESS_RESTRICT: usize = 72;
 
     // --- futexes ------------------------------------------------------
     /// `futex_wait(addr, expected, deadline)`.
@@ -572,6 +576,19 @@ pub struct HandleBasicInfo {
     pub koid: u64,
     pub object_type: u32,
     pub rights: u32,
+}
+
+/// What `process_restrict` takes from a process: a program that parses
+/// what it cannot trust (the media decoder) gives them up before it does.
+pub mod restrict {
+    /// Reading the kernel log.
+    pub const NO_LOG: usize = 1 << 0;
+    /// Creating, listing and opening processes (threads stay).
+    pub const NO_PROCESSES: usize = 1 << 1;
+    /// New executable memory: mapping, allocating or protecting pages as
+    /// executable, in any process.
+    pub const NO_EXECUTE: usize = 1 << 2;
+    pub const ALL: usize = NO_LOG | NO_PROCESSES | NO_EXECUTE;
 }
 
 /// Flags of `process_kill`.

@@ -137,9 +137,15 @@ pub fn vmo_pages(res: RawHandle, raw: RawHandle, offset: usize, count: usize, ou
     ok(count)
 }
 
+/// Refuses new executable memory to a process that gave it up.
+fn executable_allowed(perms: Perms) -> Result<(), Error> {
+    if perms.exec { super::task::allowed(vabi::restrict::NO_EXECUTE) } else { Ok(()) }
+}
+
 pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: usize, flags: usize) -> SysResult {
     let p = target_process(proc)?;
     let perms = Perms::from_map_flags(flags);
+    executable_allowed(perms)?;
     // x86 has no write-only or execute-only pages: a page that can be
     // accessed at all can be read, so any access takes the READ right.
     let mut needed = Rights::MAP;
@@ -177,6 +183,7 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
 
 pub fn vm_allocate(proc: RawHandle, len: usize, addr: usize, flags: usize) -> SysResult {
     let p = target_process(proc)?;
+    executable_allowed(Perms::from_map_flags(flags))?;
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let at = aspace.allocate(
         len as u64,
@@ -202,6 +209,7 @@ pub fn vm_unmap(proc: RawHandle, addr: usize, len: usize) -> SysResult {
 
 pub fn vm_protect(proc: RawHandle, addr: usize, len: usize, flags: usize) -> SysResult {
     let p = target_process(proc)?;
+    executable_allowed(Perms::from_map_flags(flags))?;
     p.aspace().ok_or(Error::BadState)?.protect(addr as u64, len as u64, Perms::from_map_flags(flags))?;
     ok(0)
 }

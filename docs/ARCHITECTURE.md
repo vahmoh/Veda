@@ -111,7 +111,10 @@ given. Hardware access requires *resource* handles: `init` receives the root
 resource and derives narrow ones (an I/O port range, one IRQ, one MMIO range)
 for each driver. A process's handle (with `MANAGE`) can end the process
 alone or with every process it started, and those they started: its job,
-as the Terminal's Ctrl+C ends a program.
+as the Terminal's Ctrl+C ends a program. A process can also give up, for
+good, what it would otherwise be allowed (`process_restrict`): reading the
+kernel log, creating, listing and opening processes, and new executable
+memory. The media decoder does so before it parses a file.
 
 **Memory.** VMOs are the unit of memory. Anonymous VMOs are committed lazily
 on page faults; they may be write-combining, for a device that reads them
@@ -390,6 +393,9 @@ driver.
   a shared VMO. It draws into the back buffer and `present`s it; the
   compositor answers `FrameDone` once the previous buffer is no longer
   needed, which paces every client to the display without copying pixels.
+  `FrameDone` also says when the frame is seen (the vertical blank it is
+  flipped at) and how often frames follow, so that a client can time what
+  it shows to the screen (Videos does).
 * **Composition** is damage driven: changed rectangles are recomposed from
   the bottom up (premultiplied alpha, shadows, rounded corners,
   open/close/minimise animations), at most once per display frame. At
@@ -719,6 +725,75 @@ the voice agent's link.
   latency at 16 kHz. `vad::Vad` flags speech every 10 ms (minimum-statistics
   noise floors, a likelihood ratio test, click rejection, hysteresis per
   utterance), and `level` meters RMS and peak levels in dBFS.
+
+## Video
+
+Videos (`apps/videos`) plays videos with FFmpeg and dav1d, decoded in
+`mediadec`, a process of their own; it speaks `vproto::media` with it.
+
+```
+Videos (Rust, vui)                            mediadec (C program, sandboxed)
+  window: library, player, picture choice,      Rust half: protocol, loop,
+          copy to the window, controls            limits, rotation
+  engine thread: the decoder, crash restart     C shim (the only code that
+  audio thread: sound -> audio service,           calls FFmpeg): demuxing
+          the clock                               through the file channel,
+  thumbnail thread: a second decoder              decoders, swscale, swresample
+        |  the control channel, a read-only file channel,
+        |  and memory the app made: a frame pool and a sound ring
+        +------------------------------------------>
+```
+
+* **The sandbox.** The app starts `mediadec` with one handle, its control
+  channel, and no registry: it reaches no file, service or network but
+  what it is sent, a read-only channel to one file. FFmpeg reads through
+  callbacks on that channel. Before it reads anything, the decoder gives
+  up reading the kernel log, creating or seeing processes, and new
+  executable memory, for good (`process_restrict`); like every
+  position-independent program, it is loaded at a random address. A file that crashes or hangs the decoder
+  (its heartbeat, in the frame pool, stops for 5 s) costs a restart, at
+  the picture on the screen, which stays up meanwhile; twice at the same
+  place, playback goes on 10 s further.
+* **One loop.** The decoder's one thread answers the app between single
+  calls into FFmpeg and decodes ahead while there is room: pictures and
+  sound wait in queues of their own, and sound comes first when the app
+  is about to run out of it. Frame threads of FFmpeg and dav1d decode.
+  Its Rust half is built for `x86_64-unknown-none` and made one object
+  that exports a single symbol, so that its runtime and musl's keep to
+  themselves (see [C on Veda](C.md)).
+* **Pictures** are converted by swscale (the stream's matrix and range,
+  HDR tone-mapped to BT.709) straight into a slot of the *frame pool*, at
+  the size the window shows them, turned upright. The pool is memory the
+  app made: a page of state (each slot FREE, WRITING, READY or HELD,
+  changed by compare-and-swap; times, generations, the end and a
+  heartbeat) and the pixels. The app copies the picture it shows to its
+  window, one row at a time; a resize or full screen gives the decoder a
+  new pool, and the old one's pictures are shown until they run out.
+* **Sound** is converted by swresample to 16-bit stereo at the output's
+  rate, into a ring of records that say when each is heard. The app's
+  audio thread moves it into an output stream and notes where each piece
+  came from: what the output has played then says which moment of the
+  video is heard. That is the clock pictures follow, smoothed, and held
+  until the sound is heard after starting, and until it stops after
+  pausing. A video without sound (or whose sound ended) follows the
+  system clock.
+* **Timing.** For each frame the app knows when it will be seen (from
+  `FrameDone`) and so what the clock will say then; it shows the newest
+  picture due by then, gives back those passed over, and wakes when the
+  next is due. It presents only when the picture or the controls change:
+  a 24 fps video is presented 24 times a second. A decoder that falls
+  behind is asked to leave out the loop filter, then pictures nothing
+  refers to, then all but key frames. The app logs how playback went
+  every 10 s (`videos: playback: ...`: pictures shown and dropped, the
+  offset from the sound, presents a second, drawing time).
+* **Seeking** gives the pool and the ring a new *generation*: what the
+  decoder made for an older one is passed over. Key frame seeks follow a
+  dragged seek bar; an exact seek decodes from the key frame before the
+  target and shows the picture at it, with the sound from there.
+* **Tests.** `tests/fakedec` stands in for `mediadec`: it draws its
+  pictures and a tone, and crashes, hangs or falls behind when its clip
+  asks. `systest` runs FFmpeg's and dav1d's `checkasm` on Veda and checks
+  every picture of a sample video against its encoder's MD5s.
 
 ## The voice agent (`services/agent`)
 

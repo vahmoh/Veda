@@ -1,0 +1,8 @@
+# FFmpeg: the demuxers, decoders, scaler and resampler of mediadec, the
+# sandboxed decoder that Videos plays videos with (built LGPL: no GPL or
+# non-free parts; build.sh checks).
+name = "ffmpeg"
+version = "9.0.2"
+url = "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz"
+sha256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
+license = "LGPL-2.1-or-later"

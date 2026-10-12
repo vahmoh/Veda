@@ -14,7 +14,7 @@ use vgfx::{Align, Canvas, Color, Rect, Text};
 use vproto::display::{Cursor, WindowEvent, WindowState, modifiers};
 
 use crate::theme::{Font, Theme};
-use crate::window::Display;
+use crate::window::{Display, FrameTiming};
 
 /// Identifies a widget across frames.
 pub type Id = u64;
@@ -235,6 +235,7 @@ pub struct Ui<'a> {
     pub(crate) close_requested: bool,
     pub(crate) skip_present: bool,
     pub(crate) window_state: WindowState,
+    pub(crate) frame_timing: FrameTiming,
 }
 
 /// Result of interacting with a widget area.
@@ -278,6 +279,7 @@ impl<'a> Ui<'a> {
             close_requested: false,
             skip_present: false,
             window_state: WindowState::Normal,
+            frame_timing: FrameTiming::default(),
         }
     }
 
@@ -349,6 +351,13 @@ impl<'a> Ui<'a> {
     /// The window's state (normal, maximised, minimised or full screen).
     pub fn window_state(&self) -> WindowState {
         self.window_state
+    }
+
+    /// When the last frame acknowledged by the compositor was presented and
+    /// when it is seen: a frame drawn now is seen at
+    /// [`FrameTiming::earliest`] at the earliest.
+    pub fn frame_timing(&self) -> FrameTiming {
+        self.frame_timing
     }
 
     /// Asks the window system to maximise, restore, minimise or show the

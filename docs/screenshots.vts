@@ -6,8 +6,8 @@
 # menu's search and the Terminal, so only Music's play button and a few
 # things on the taskbar are clicked by position. The machine has the
 # virtual Wi-Fi radio (its icon is on the taskbar) and airsim's simulated
-# networks, and the agent talks to the stand-in for Deepgram. GCC must be
-# in the image (`cargo xtask toolchain`). Interceptor's picture has a
+# networks, and the agent talks to the stand-in for Deepgram. GCC and the
+# video decoder must be in the image (`cargo xtask toolchain`). Interceptor's picture has a
 # script of its own, shot at 1920x1200 and scaled to 1280x800
 # (`docs/interceptor.vts`).
 requires native-toolchain
@@ -102,6 +102,26 @@ wait 6
 shot docs/images/music.png
 key alt-f4
 wait-serial "music exited" 20
+wait 2
+
+# Videos: the library, then the aurora timelapse playing, the pointer on
+# its seek bar (which shows a picture from further on).
+key meta_l
+wait 2
+type "videos"
+key ret
+wait-serial "videos: library: 3 videos" 30
+move 0.97 0.08
+wait 8
+shot docs/images/videos-library.png
+key ret
+wait-serial "videos: playing Aurora Timelapse" 30
+wait 6
+move 0.66 0.8188
+wait 3
+shot docs/images/videos.png
+key alt-f4
+wait-serial "videos exited" 20
 wait 2
 
 # Files: the pictures as thumbnails.

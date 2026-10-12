@@ -1,0 +1,6 @@
+# dav1d: VideoLAN's AV1 decoder, which FFmpeg decodes AV1 with.
+name = "dav1d"
+version = "1.5.4"
+url = "https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz"
+sha256 = "686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5"
+license = "BSD-2-Clause"

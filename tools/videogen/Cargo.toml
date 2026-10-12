@@ -1,0 +1,19 @@
+[package]
+name = "videogen"
+description = "Films and encodes the sample videos shipped with Veda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rav1e = { workspace = true }
+vaudio = { workspace = true }
+vfont = { workspace = true }
+vgfx = { workspace = true }
+vimage = { workspace = true }
+vmath = { workspace = true }
+vraster = { workspace = true }
+
+[lints]
+workspace = true

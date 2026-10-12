@@ -9,8 +9,8 @@ wait-serial "desktop ready" 90
 wait-serial "started files" 60
 wait 3
 # Maximise the window (Super+Up): the positions below assume it. Sidebar
-# rows: Documents y=0.276, Pictures 0.321, Music 0.366, Trash 0.411,
-# System 0.551;
+# rows: Documents y=0.276, Pictures 0.321, Music 0.366, Videos 0.411,
+# Trash 0.456, System 0.596;
 # list rows: 0.18, 0.22, 0.26, ...
 key meta_l-up
 wait 2
@@ -57,7 +57,7 @@ shot target/veda/files-2-confirm.png
 key ret
 wait-serial "files: deleted 1 item from /home/user/Documents" 20
 # The system image is read-only: creating a folder there is refused.
-click 0.08 0.5513
+click 0.08 0.5963
 wait 1
 key ctrl-shift-n
 wait-serial "files: Can't create folder: /system is part of the read-only system image." 20

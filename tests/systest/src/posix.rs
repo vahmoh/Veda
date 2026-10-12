@@ -233,6 +233,55 @@ pub fn job() -> i32 {
     }
 }
 
+/// A process that gave up abilities (`process_restrict`, as the media
+/// decoder does before reading a file) is refused them, and keeps the rest.
+pub fn test_process_restrict() -> TestResult {
+    let copy = start_copy("restricted")?;
+    let code = copy.join(vrt::time::deadline_after(vrt::time::Duration::from_secs(20))).map_err(s)?;
+    check(code == 0, "the restricted copy is refused what it gave up, and only that (see its log)")
+}
+
+/// `systest restricted`: gives up what the media decoder gives up, then
+/// tries each.
+pub fn restricted() -> i32 {
+    match try_restricted() {
+        Ok(()) => 0,
+        Err(e) => {
+            vrt::println!("restricted: {e}");
+            1
+        }
+    }
+}
+
+fn try_restricted() -> TestResult {
+    use vabi::restrict;
+    const PAGE: usize = vabi::PAGE_SIZE;
+    let mut log = [0u8; 64];
+    check(vrt::object::log_read(0, &mut log).is_ok(), "the log can be read until then")?;
+    check(vrt::process::restrict(1 << 20) == Err(Error::InvalidArgs), "abilities it does not know are refused")?;
+    vrt::process::restrict(restrict::ALL).map_err(s)?;
+    let denied = Err(Error::AccessDenied);
+    check(vrt::object::log_read(0, &mut log).map(|_| ()) == denied, "the log is refused")?;
+    let mut list = [vabi::ProcessInfo::default(); 4];
+    check(vrt::object::process_list(&mut list).map(|_| ()) == denied, "the process list is refused")?;
+    let name = b"escape";
+    let created = call(nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), 0, 0, 0, 0]);
+    check(created.map(|_| ()) == denied, "a new process is refused")?;
+    let (rx, rw) = (map_flags::READ | map_flags::EXECUTE, map_flags::READ | map_flags::WRITE);
+    check(vm::allocate(None, PAGE, 0, rx).map(|_| ()) == denied, "executable memory is refused")?;
+    let vmo = Vmo::create(PAGE).map_err(s)?;
+    check(vm::map(None, &vmo, 0, PAGE, 0, rx).map(|_| ()) == denied, "an executable mapping is refused")?;
+    // What it keeps: memory, pages made other than executable, threads, and
+    // giving up more.
+    let at = vm::allocate(None, PAGE, 0, rw).map_err(s)?;
+    check(vm::protect(None, at, PAGE, rx) == denied, "pages are not made executable")?;
+    vm::protect(None, at, PAGE, map_flags::READ).map_err(|e| format!("pages made read-only: {e}"))?;
+    vm::unmap(None, at, PAGE).map_err(s)?;
+    let t = vrt::thread::spawn(|| {});
+    t.join().map_err(|e| format!("a thread: {e}"))?;
+    vrt::process::restrict(restrict::NO_LOG).map_err(s)
+}
+
 /// `systest wait`: waits until it is killed (a minute at most).
 pub fn wait() {
     vrt::time::sleep(vrt::time::Duration::from_secs(60));
@@ -313,6 +362,11 @@ pub fn test_vfs_open_files() -> TestResult {
 /// Runs a C program with its output on a socket: the exit code and what it
 /// wrote.
 pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String), String> {
+    run_c_for(path, args, cwd, 120)
+}
+
+/// [`run_c`], giving the program `seconds` to finish.
+pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> Result<(i64, String), String> {
     let fs = vfs_client()?;
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
@@ -334,7 +388,7 @@ pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String
     }
     // SAFETY: a read-only mapping of the VFS's copy of the file.
     let process: Process = spawn.start(unsafe { image.as_slice() }).map_err(|e| format!("{path}: {e}"))?;
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(120));
+    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(seconds));
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     loop {

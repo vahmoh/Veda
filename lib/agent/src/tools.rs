@@ -174,7 +174,7 @@ pub fn definitions() -> Vec<Value> {
         ),
         function(
             FILES,
-            "Works with the user's files under ~ (the home folder: Documents, Pictures, Music, Desktop). Paths may start with ~. \
+            "Works with the user's files under ~ (the home folder: Documents, Pictures, Music, Videos, Desktop). Paths may start with ~. \
              delete moves items to the Trash, from where restore puts them back until empty_trash deletes them for good.",
             &[
                 choice(

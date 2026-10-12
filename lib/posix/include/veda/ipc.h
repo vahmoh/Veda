@@ -83,6 +83,16 @@ struct veda_wait_item {
    uint32_t reserved;
 };
 
+/* Roles of the handles a program is started with: an application's own
+ * start here (the POSIX layer keeps descriptors, the terminal and the
+ * registry, below). */
+#define VEDA_ROLE_USER 0x1000u
+
+/* Takes the handle the program was started with in `role` (VEDA_ROLE_USER
+ * or above), each once: VEDA_ENOT_FOUND when there is none (or none left),
+ * VEDA_EINVALID_ARGS for the layer's own roles. */
+int veda_startup_handle(uint32_t role, veda_handle_t *out);
+
 int veda_close(veda_handle_t handle);
 int veda_duplicate(veda_handle_t handle, uint32_t rights, veda_handle_t *out);
 

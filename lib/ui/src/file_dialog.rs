@@ -42,12 +42,13 @@ pub enum FileDialogResult {
 }
 
 /// Shortcuts in the sidebar.
-const PLACES: [(&str, &str, Icon); 6] = [
+const PLACES: [(&str, &str, Icon); 7] = [
     ("Home", "/home/user", Icon::Home),
     ("Desktop", "/home/user/Desktop", Icon::Monitor),
     ("Documents", "/home/user/Documents", Icon::Document),
     ("Pictures", "/home/user/Pictures", Icon::Image),
     ("Music", "/home/user/Music", Icon::Music),
+    ("Videos", "/home/user/Videos", Icon::Video),
     ("System", "/system", Icon::Cpu),
 ];
 

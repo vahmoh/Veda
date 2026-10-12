@@ -226,6 +226,16 @@ impl Screen {
         self.clock
     }
 
+    /// The time between two frames on the screen: the display's refresh
+    /// period where a driver flips and keeps time, the compositor's own
+    /// pace otherwise.
+    pub(crate) fn period_ns(&self) -> u64 {
+        match &self.flips {
+            Some(f) if !f.lost && f.last.period_ns > 0 => f.last.period_ns,
+            _ => FRAME_NS,
+        }
+    }
+
     /// Starts a frame: chooses where it goes, and brings that up to date
     /// where it is stale from what the screen shows (`layer` during the
     /// startup sequence, the back buffer otherwise).

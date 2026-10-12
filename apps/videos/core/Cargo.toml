@@ -1,0 +1,12 @@
+[package]
+name = "videos-core"
+description = "What Videos decides, testable on the host: its clock, the pictures it shows and when, its layout, what it remembers and how it finds videos by name"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vproto = { workspace = true }
+
+[lints]
+workspace = true

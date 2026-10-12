@@ -10,6 +10,7 @@ use vfiles::path::extension;
 pub const FOLDER: Color = Color::hex(0xF5B43C);
 const IMAGE: Color = Color::hex(0xE879C9);
 const AUDIO: Color = Color::hex(0xF2766B);
+const VIDEO: Color = Color::hex(0x3CC8F0);
 const TEXT: Color = Color::hex(0x6EA8FE);
 const PROGRAM: Color = Color::hex(0x4CC38A);
 const OTHER: Color = Color::hex(0x9A9AA8);
@@ -22,6 +23,7 @@ pub fn kind_color(name: &str, is_dir: bool) -> Color {
     match file_kind(name) {
         FileKind::Image => IMAGE,
         FileKind::Audio => AUDIO,
+        FileKind::Video => VIDEO,
         FileKind::Text => TEXT,
         FileKind::Program => PROGRAM,
         FileKind::Other => OTHER,
@@ -36,6 +38,7 @@ pub fn small_icon(name: &str, is_dir: bool) -> Icon {
     match file_kind(name) {
         FileKind::Image => Icon::Image,
         FileKind::Audio => Icon::Music,
+        FileKind::Video => Icon::Video,
         FileKind::Text => Icon::Document,
         FileKind::Program => Icon::Cube,
         FileKind::Other => match extension(name).as_str() {

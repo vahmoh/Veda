@@ -16,6 +16,7 @@ pub fn debug_write(ptr: usize, len: usize) -> SysResult {
 }
 
 pub fn log_read(offset: usize, buf: usize, len: usize) -> SysResult {
+    super::task::allowed(vabi::restrict::NO_LOG)?;
     let mut tmp = user::buffer(len.min(64 * 1024))?;
     let (n, next) = crate::log::read(offset as u64, &mut tmp);
     user::copy_to_user(buf as u64, &tmp[..n])?;

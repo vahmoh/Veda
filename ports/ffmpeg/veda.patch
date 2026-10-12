@@ -1,0 +1,13 @@
+--- a/configure
++++ b/configure
+@@ -6325,6 +6325,10 @@
+         enable section_data_rel_ro
+         enabled_any arm aarch64 && enable_weak linux_perf
+         ;;
++    veda)
++        # Veda: static ELF programs on musl, over Veda's POSIX layer.
++        enable section_data_rel_ro
++        ;;
+     irix*)
+         target_os=irix
+         ranlib="echo ignoring ranlib"

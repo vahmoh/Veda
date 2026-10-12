@@ -28,6 +28,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <veda/ipc.h>
 
 extern char **environ;
 
@@ -450,6 +451,31 @@ static void check_processes(void)
 	CHECK("environment", e && *e == '/', "HOME is '%s'", e ? e : "(unset)");
 }
 
+/* Veda's own interfaces (<veda/ipc.h>): the program's startup handles,
+ * and objects of its own. */
+static void check_veda_interfaces(void)
+{
+	veda_handle_t h = VEDA_INVALID_HANDLE;
+	/* systest starts it with descriptors and the registry only. */
+	int r = veda_startup_handle(VEDA_ROLE_USER, &h);
+	CHECK("no startup handle of an application's role", r == -VEDA_ENOT_FOUND, "returned %d (handle %u)", r, h);
+	r = veda_startup_handle(16, &h);
+	CHECK("the layer's startup handles stay its own", r == -VEDA_EINVALID_ARGS, "returned %d", r);
+	veda_handle_t event;
+	r = veda_event_create(&event);
+	CHECK("event", r == 0, "returned %d", r);
+	if (r == 0) {
+		struct veda_wait_item item = { .handle = event, .signals = VEDA_SIGNALED };
+		r = veda_wait(&item, 1, 0);
+		CHECK("an event not signalled yet", r == 0, "wait returned %d", r);
+		veda_object_signal(event, 0, VEDA_SIGNALED);
+		r = veda_wait(&item, 1, 0);
+		CHECK("a signalled event", r == 1 && (item.observed & VEDA_SIGNALED), "wait returned %d, observed %#x", r,
+		      item.observed);
+		veda_close(event);
+	}
+}
+
 static int child(const char *mode)
 {
 	if (!strcmp(mode, "echo")) {
@@ -485,6 +511,7 @@ int main(int argc, char **argv)
 	check_time();
 	check_signals();
 	check_processes();
+	check_veda_interfaces();
 	printf("%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
 	return failures;
 }

@@ -114,6 +114,12 @@ voice pipeline, consent, memory and testing.
   against Mozilla's roots. See [Networking](docs/NETWORKING.md).
 * **Audio.** A mixing service with echo-cancelled recording and ducking,
   built for the agent's conversations as much as for music.
+* **Video.** FFmpeg and dav1d, ported to Veda, decode the common formats
+  (AV1, VP9, H.264, HEVC and more) in a sandboxed process that reaches
+  nothing but the file it is given: a damaged file that crashes or hangs
+  it costs a moment, not the video. Pictures come through shared memory
+  and are shown in time with the sound, timed to the screen's refresh.
+  See [Architecture](docs/ARCHITECTURE.md#video).
 * **Storage.** The home directory has its own disk. It is saved half a
   second after changes stop, alternating between two checksummed slots,
   so an interrupted save never damages the previous one. The agent's
@@ -135,6 +141,7 @@ keyboard, the agent can do too.
 | **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, zoom, unlimited undo. | Create, open, read and write documents; find and replace, undo, save; save as or discard changes (with your OK). |
 | **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, rotation, full screen and slideshows; PNG, JPEG, BMP and QOI. | Show, zoom and rotate a picture, go full screen, run a slideshow, set a picture as the wallpaper. |
 | **Music** | A library of `~/Music` (QOA and WAV), cover art, a live spectrum visualiser, seeking, shuffle and repeat. | Play a song by name, pause, stop, skip, seek, shuffle, repeat, set the volume. |
+| **Videos** | A library of `~/Videos` with thumbnails and "Continue watching", and a player with seek previews, full screen, picture stepping and resuming where you left off; AV1, VP9, VP8, H.264, HEVC, MPEG-4 and MPEG-1/2 with AAC, Opus, Vorbis, MP3, FLAC and AC-3, in MP4, Matroska, WebM, Ogg, AVI and MPEG-TS. | Play a video by name, from where it was left or the start; pause, seek, set the volume, go full screen, list the videos. |
 | **Files** | Places, breadcrumbs, list and icon views with thumbnails, search, copy and paste, properties, and a Trash that restores items where they were. | Open, search, make folders; copy, move, rename and delete to the Trash (with your OK); restore; empty the Trash (asked every time). |
 | **Terminal** | A shell with about fifty built-in commands (files, processes, `wifi`, `ping`, `curl`, ...), history and tab completion; runs C programs and GCC with pipes, redirections and Ctrl+C. | Run a command (with your OK), read its output, interrupt it. |
 | **Task Manager** | Processes with CPU and memory use, "end task" and live performance graphs. | List processes, read the graphs, end a program (asked every time). |
@@ -159,6 +166,14 @@ keyboard, the agent can do too.
   <tr>
     <td align="center">Music, with its visualiser</td>
     <td align="center">Files, with thumbnails</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/videos.png" width="100%" align="top" alt="Videos playing an aurora timelapse, a picture from further on above its seek bar"></td>
+    <td width="50%"><img src="docs/images/videos-library.png" width="100%" align="top" alt="The Videos library: three videos with their pictures and lengths"></td>
+  </tr>
+  <tr>
+    <td align="center">Videos, AV1 decoded by dav1d</td>
+    <td align="center">Videos, the library</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/gcc.png" width="100%" align="top" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
@@ -196,7 +211,8 @@ Veda is built on an x86-64 PC with Linux.
 * Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
   your distribution's build tools for the C toolchain, which
   `cargo xtask toolchain` builds once (see
-  [C on Veda](docs/C.md#the-toolchain)).
+  [C on Veda](docs/C.md#the-toolchain)), with `nasm` for the video
+  decoders it builds too.
 
 Check the environment:
 
@@ -222,7 +238,15 @@ cargo xtask run
 
 This builds every component, writes `target/veda/veda.img` and boots it
 in a QEMU window at 1920x1080. The first build also renders the sample
-pictures and music. Later builds are incremental.
+pictures, music and videos. Later builds are incremental.
+
+Videos plays videos with FFmpeg and dav1d, which the C toolchain builds
+(it needs `nasm`). Build it once, and the images built after it include
+the decoder:
+
+```bash
+cargo xtask toolchain
+```
 
 ```bash
 cargo xtask run --resolution 1280x800 --smp 4 --memory 2048
@@ -399,8 +423,10 @@ cargo xtask test --ui
 This adds the GUI scripts in `tests/ui/` and the agent's scripts in
 `tests/agent/`. They click through the desktop and the applications, check
 logs and screenshots, and break the simulated Wi-Fi network in many ways
-to check that Veda recovers by itself. Scripts that need GCC are skipped
-without the C toolchain.
+to check that Veda recovers by itself. Scripts that need GCC or the video
+decoder are skipped without the C toolchain. Videos is also tested without
+it, with a stand-in decoder (`tests/fakedec`) that draws its pictures and
+crashes, hangs or falls behind when asked.
 
 The agent's scripts run against a stand-in for Deepgram on the host, so
 they are deterministic, offline and free. They cover conversations,
@@ -431,14 +457,14 @@ output) to `target/veda/serial.log`.
 | `services/agent/`, `lib/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `lib/agent` |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel, with the hypervisor and the IOMMU driver |
-| `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
+| `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
 | `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
 | `lib/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
 | `apps/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
 | `guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
-| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, and Linux for the driver VM |
-| `tests/` | `systest` and `nettest` (in-system tests), C and C++ test programs, GUI and agent scripts |
-| `tools/` | host programs that generate wallpapers, pictures and music at build time, and `airsim` (simulated Wi-Fi) |
+| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, FFmpeg and dav1d for videos, and Linux for the driver VM |
+| `tests/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
+| `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
 | `third_party/` | vendored crates with Veda's patches (smoltcp) |
 | `assets/` | fonts and application manifests |
@@ -489,3 +515,9 @@ Other parts keep their own licences:
   and MPC under the LGPL version 3 or later, and musl under the MIT
   licence. Their source is the upstream releases that `ports/*/port.toml`
   names, with the patches beside them.
+* **The video decoder** an image may contain: FFmpeg under the LGPL
+  version 2.1 or later (built without its GPL and non-free parts, which
+  the build checks) and dav1d under the BSD 2-clause licence, from the
+  releases `ports/ffmpeg` and `ports/dav1d` name. Some formats it decodes
+  (H.264, HEVC, AAC) are covered by patents in some countries; whoever
+  distributes Veda there is responsible for any licences they need.

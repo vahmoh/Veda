@@ -1,7 +1,8 @@
 # Ports
 
 Third-party software Veda builds from source: the C toolchain (see
-[docs/C.md](../docs/C.md)) and Mesa, for the renderer. Veda's own code is
+[docs/C.md](../docs/C.md)), FFmpeg and dav1d, which `mediadec` decodes
+videos with, and Mesa, for the renderer. Veda's own code is
 Rust; what is written in C
 comes as a port: the upstream release, unchanged but for a patch that is
 kept small, readable and explained.
@@ -46,6 +47,20 @@ the layer (`src/thread/x86_64/*.s`); `vfork` falls back to the generic
 version (which fails: there is no `fork`); `__init_libc` sets the layer
 up; `posix_spawn` asks the layer to start the program.
 
+**dav1d**: none. It is built as released (meson, with a cross file for
+`x86_64-veda` and nasm for its assembly), static, for 8- and 16-bit
+pictures, with its `checkasm`.
+
+**ffmpeg**: `veda` as a `--target-os` in `configure`, beside `linux`. It
+is built with `--disable-everything` and then only the demuxers, decoders
+(AV1 through dav1d), parsers and bitstream filter `mediadec` uses, without
+programs, devices, filters or network, and as LGPL: `build.sh` checks
+that `config.h` has `CONFIG_GPL 0` and `CONFIG_NONFREE 0`, and that the
+assembly, threads and dav1d were found. Its `checkasm` is built too.
+Both libraries are installed apart from the C toolchain
+(`target/toolchain/media`), since only `mediadec` links them; `systest`
+runs both `checkasm` programs on Veda.
+
 **mesa**: Veda's renderer (`guest/renderer`), which carries out the
 OpenGL ES command streams of applications on Mesa's Gallium drivers in the
 driver VM, is a target of Mesa's build: `src/gallium/targets/veda`,
@@ -80,6 +95,13 @@ system.
 
 The ports keep their licences: GCC and binutils GPL-3.0-or-later (libgcc
 with the GCC Runtime Library Exception), GMP, MPFR and MPC
-LGPL-3.0-or-later, musl MIT, and the parts of Mesa the renderer uses MIT.
-Distributing Veda's image, which contains them, means offering their
-source: the archives `port.toml` names and the patches here.
+LGPL-3.0-or-later, musl MIT, FFmpeg LGPL-2.1-or-later, dav1d BSD-2-Clause,
+and the parts of Mesa the renderer uses MIT. Distributing Veda's image,
+which contains them, means offering their source: the archives
+`port.toml` names and the patches here.
+
+Some of the formats FFmpeg decodes (H.264, HEVC and AAC among them) are
+covered by patents in some countries. The software licences do not
+grant those; whoever distributes Veda where they apply decides whether
+licences are needed (or builds FFmpeg without those decoders: their
+names are in `build.sh`).

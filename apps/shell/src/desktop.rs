@@ -79,6 +79,7 @@ pub fn app_for_file(name: &str) -> Option<(&'static str, Icon)> {
     let icon = match vfiles::file_kind(name) {
         FileKind::Image => Icon::Image,
         FileKind::Audio => Icon::Music,
+        FileKind::Video => Icon::Video,
         _ => Icon::Document,
     };
     Some((app.id, icon))

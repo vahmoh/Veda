@@ -6,7 +6,8 @@ use vproto::init::AppInfo;
 use vui::Icon;
 
 /// Preferred order of apps on the taskbar and in the start menu.
-const ORDER: [&str; 8] = ["files", "editor", "photos", "music", "terminal", "settings", "taskmgr", "interceptor"];
+const ORDER: [&str; 9] =
+    ["files", "editor", "photos", "music", "videos", "terminal", "settings", "taskmgr", "interceptor"];
 
 /// Sorts apps into their display order (unknown apps last, by name).
 pub fn sort(apps: &mut [AppInfo]) {
@@ -20,6 +21,7 @@ pub fn tile_colors(id: &str) -> (Color, Color) {
         "files" | "home" => (Color::hex(0xFFC857), Color::hex(0xF08A24)),
         "photos" => (Color::hex(0xFF7AB2), Color::hex(0xA64DFF)),
         "music" => (Color::hex(0xFF6B7A), Color::hex(0xD12F6E)),
+        "videos" => (Color::hex(0x3CC8F0), Color::hex(0x2563D9)),
         "terminal" => (Color::hex(0x454B59), Color::hex(0x1C1F26)),
         "settings" => (Color::hex(0x98A2B8), Color::hex(0x56607A)),
         "taskmgr" => (Color::hex(0x35D9AE), Color::hex(0x10897A)),

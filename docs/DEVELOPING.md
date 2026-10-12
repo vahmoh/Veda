@@ -277,9 +277,12 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
 | everything under `target/generated/` (build-time generated media) | `/system/<same relative path>` |
 | `tests/c/*.c` and `*.cc`, compiled by the cross toolchain (each also as `<name>-pie`) | `/system/tests/c/<name>` |
 | the native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
+| `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg and dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
+| `tests/fakedec/clips/*` (videos for the stand-in decoder) | `/system/tests/videos/fake/` |
 
-The last two need `cargo xtask toolchain` (see [C on Veda](C.md)); without
-it, the build says so and leaves them out. With `cargo xtask linux` done,
+The C test programs, the toolchain and the decoder need `cargo xtask
+toolchain` (see [C on Veda](C.md)); without it, the build says so and
+leaves them out. With `cargo xtask linux` done,
 the image also holds the driver VM's Linux: `/system/linux/bzImage` and
 `/system/linux/initramfs.cpio`, made of the programs in `guest/` (see
 [the driver VM](DRIVERVM.md)). Files under `samples/` in the
@@ -383,6 +386,35 @@ command. [C on Veda](C.md) describes the environment, what is different
 from Linux, and how the toolchain is built and tested. The test programs
 in `tests/c/` are compiled by `cargo xtask build` and installed in
 `/system/tests/c`, for `systest` and the GUI scripts to run.
+
+### Videos and its decoder
+
+Videos (`apps/videos`) is a `vui` application; what it does that can be
+tested on the host is in `apps/videos/core` (the clock, pacing, choosing
+pictures, skipping, the layout, what it remembers), and the protocol it
+speaks with its decoder, with the frame pool and the sound ring, is
+`vproto::media`. The decoder, `services/mediadec`, is a C program: its
+Rust half is built for `x86_64-unknown-none` and linked with its C shim,
+FFmpeg and dav1d by the cross compiler (`xtask/src/toolchain.rs`,
+`mediadec()`), so it exists only once `cargo xtask toolchain` built the
+media libraries (`cargo xtask doctor` says whether they are).
+
+Without it, `tests/fakedec` stands in: `videos --decoder
+/system/bin/fakedec.exe FILE` plays the text files in
+`/system/tests/videos/fake` (see `tests/fakedec/src/clip.rs`), drawing a
+timecode and playing a tone, and crashing, hanging or falling behind when
+a clip asks; `tests/ui/videos-fake.vts` runs Videos through all of that.
+The scripts that need the real decoder say `requires media`.
+
+The sample videos (`samples/Videos`, copied to `~/Videos`) are made at
+build time by `tools/videogen`: scenes drawn with `vgfx` and sound made
+with `vaudio`, encoded with rav1e (AV1, on the build machine only) and a
+FLAC encoder of its own into Matroska. It also writes
+`/system/tests/videos/Countdown.md5`, the encoder's MD5 of every picture,
+which `systest` checks the decoder against, and a truncated copy for the
+error scripts. Every picture's key frame group is encoded in parallel
+(about 25 s on a 20-core machine); `VIDEOGEN_PREVIEW=DIR` also writes
+PNGs of what was drawn and decoded.
 
 ## Performance notes
 

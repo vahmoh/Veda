@@ -96,11 +96,13 @@ impl Compositor {
         } else {
             self.composite_cpu(now, real);
         }
-        // Clients may now draw their next frame.
+        // Clients may now draw their next frame: theirs is seen when this
+        // one is (`now`), the next a period later at the earliest.
+        let period_ns = self.screen.period_ns();
         let owed: Vec<(u32, u8)> =
             self.windows.iter_mut().filter_map(|(id, w)| w.frame_owed.take().map(|b| (*id, b))).collect();
         for (id, b) in owed {
-            self.send(id, WindowEvent::FrameDone { shown: b });
+            self.send(id, WindowEvent::FrameDone { shown: b, seen_ns: now, period_ns });
         }
         self.last_frame = real;
     }

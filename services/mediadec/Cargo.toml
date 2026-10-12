@@ -1,0 +1,20 @@
+[package]
+name = "mediadec"
+description = "The media decoder: FFmpeg and dav1d in a sandboxed process, which Videos plays videos with"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Built for x86_64-unknown-none as a static library and linked with the C
+# shim (shim/) and FFmpeg by the x86_64-veda GCC: xtask/src/toolchain.rs.
+[lib]
+bench = false
+
+[dependencies]
+vabi = { workspace = true }
+vrt = { workspace = true, default-features = false }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[lints]
+workspace = true

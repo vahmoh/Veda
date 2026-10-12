@@ -2,7 +2,7 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use vabi::{ProcessInfo, process_state};
 
@@ -35,12 +35,24 @@ pub struct Process {
     pending_code: SpinLock<Option<i64>>,
     pub signals: Signals,
     exited_threads_cpu_ns: AtomicU64,
+    /// What it gave up ([`vabi::restrict`]), for good.
+    restrictions: AtomicUsize,
 }
 
 /// Every process ever created that is still referenced somewhere.
 static PROCESSES: SpinLock<Vec<Weak<Process>>> = SpinLock::new(Vec::new());
 
 impl Process {
+    /// Takes `flags` ([`vabi::restrict`]) from the process, for good.
+    pub fn restrict(&self, flags: usize) {
+        self.restrictions.fetch_or(flags, Ordering::AcqRel);
+    }
+
+    /// Whether the process gave up `flag`.
+    pub fn restricted(&self, flag: usize) -> bool {
+        self.restrictions.load(Ordering::Acquire) & flag != 0
+    }
+
     pub fn new(name: &str, parent_koid: u64) -> Option<Arc<Process>> {
         let p = Arc::new(Process {
             koid: super::new_koid(),
@@ -53,6 +65,7 @@ impl Process {
             pending_code: SpinLock::new(None),
             signals: Signals::new(0),
             exited_threads_cpu_ns: AtomicU64::new(0),
+            restrictions: AtomicUsize::new(0),
         });
         let mut list = PROCESSES.lock();
         list.retain(|w| w.strong_count() > 0);

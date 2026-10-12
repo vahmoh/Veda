@@ -2,7 +2,7 @@
 
 use core::sync::atomic::Ordering;
 
-use vabi::{Error, ProcessInfo, RawHandle, Rights, resource_kind};
+use vabi::{Error, ProcessInfo, RawHandle, Rights, resource_kind, restrict};
 
 use super::{SysResult, current_process, get_process, get_resource, get_thread, insert, ok, read_str, target_process};
 use crate::mm::user;
@@ -18,7 +18,21 @@ fn is_user_address(a: usize) -> bool {
     (vabi::USER_SPACE_START..vabi::USER_SPACE_END).contains(&a)
 }
 
+/// Refuses what the calling process gave up (`flag`, [`restrict`]).
+pub(super) fn allowed(flag: usize) -> Result<(), Error> {
+    if current_process()?.restricted(flag) { Err(Error::AccessDenied) } else { Ok(()) }
+}
+
+pub fn process_restrict(flags: usize) -> SysResult {
+    if flags & !restrict::ALL != 0 {
+        return Err(Error::InvalidArgs);
+    }
+    current_process()?.restrict(flags);
+    ok(0)
+}
+
 pub fn process_create(name: usize, len: usize) -> SysResult {
+    allowed(restrict::NO_PROCESSES)?;
     let name = read_str(name, len, vabi::NAME_MAX * 4)?;
     let parent = current_process()?;
     let p = Process::new(&name, parent.koid).ok_or(Error::NoMemory)?;
@@ -153,6 +167,7 @@ pub fn thread_set_fs_base(value: usize) -> SysResult {
 }
 
 pub fn process_list(buf: usize, cap: usize) -> SysResult {
+    allowed(restrict::NO_PROCESSES)?;
     let all = process::all();
     let size = core::mem::size_of::<ProcessInfo>();
     for (i, p) in all.iter().take(cap).enumerate() {
@@ -162,6 +177,7 @@ pub fn process_list(buf: usize, cap: usize) -> SysResult {
 }
 
 pub fn process_open(res: RawHandle, koid: u64) -> SysResult {
+    allowed(restrict::NO_PROCESSES)?;
     let r = get_resource(res, Rights::NONE)?;
     if !r.permits(resource_kind::PROCESS, 0, 0) {
         return Err(Error::AccessDenied);

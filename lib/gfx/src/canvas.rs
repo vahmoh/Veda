@@ -45,6 +45,23 @@ fn blend_cov(dst: &mut u32, px: u32, cov: u32) {
     }
 }
 
+/// For output index `i` of `dst_len` scaled from `src_len` (both counted
+/// from the destination's origin): the two source indices to blend and the
+/// weight (0..=255) of the second, in 16.16 fixed point.
+fn taps(i: i32, src_len: i32, dst_len: i32, bilinear: bool) -> (usize, usize, u32) {
+    let step = ((src_len as i64) << 16) / dst_len as i64;
+    let centre = i as i64 * step + step / 2;
+    if !bilinear {
+        let s = (centre >> 16).clamp(0, src_len as i64 - 1) as usize;
+        return (s, s, 0);
+    }
+    let p = centre - (1 << 15);
+    let s0 = p >> 16;
+    let weight = if p < 0 { 0 } else { ((p & 0xFFFF) >> 8) as u32 };
+    let clamp = |v: i64| v.clamp(0, src_len as i64 - 1) as usize;
+    (clamp(s0), clamp(s0 + 1), weight)
+}
+
 /// Fills a run of pixels with a premultiplied color.
 #[inline]
 fn fill_run(row: &mut [u32], px: u32) {
@@ -413,26 +430,12 @@ impl<'a> Canvas<'a> {
         }
         let (dx0, dy0) = (dst.x + self.ox, dst.y + self.oy);
         let bilinear = filter == Filter::Bilinear;
-        // For output index `i` (relative to the destination origin): the two
-        // source indices to blend and the weight (0..=255) of the second.
-        let taps = |i: i32, src_len: i32, dst_len: i32| -> (usize, usize, u32) {
-            let step = ((src_len as i64) << 16) / dst_len as i64;
-            let centre = i as i64 * step + step / 2;
-            if !bilinear {
-                let s = (centre >> 16).clamp(0, src_len as i64 - 1) as usize;
-                return (s, s, 0);
-            }
-            let p = centre - (1 << 15);
-            let s0 = p >> 16;
-            let weight = if p < 0 { 0 } else { ((p & 0xFFFF) >> 8) as u32 };
-            let clamp = |v: i64| v.clamp(0, src_len as i64 - 1) as usize;
-            (clamp(s0), clamp(s0 + 1), weight)
-        };
-        let cols: Vec<(usize, usize, u32)> = (d.x..d.right()).map(|x| taps(x - dx0, b.width, dst.w)).collect();
+        let cols: Vec<(usize, usize, u32)> =
+            (d.x..d.right()).map(|x| taps(x - dx0, b.width, dst.w, bilinear)).collect();
         let w = b.width as usize;
         let op = opacity as u32;
         for y in d.y..d.bottom() {
-            let (r0, r1, wy) = taps(y - dy0, b.height, dst.h);
+            let (r0, r1, wy) = taps(y - dy0, b.height, dst.h, bilinear);
             let (row0, row1) = (&b.pixels[r0 * w..r0 * w + w], &b.pixels[r1 * w..r1 * w + w]);
             let start = (y * self.stride + d.x) as usize;
             let out = &mut self.pixels[start..start + cols.len()];
@@ -448,6 +451,70 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Copies `w` x `h` opaque pixels from `src` (`stride` pixels from one
+    /// row to the next) with their top-left at (x, y), without blending.
+    ///
+    /// # Safety
+    /// `src` points to `h` rows of `w` readable pixels, `stride` apart, for
+    /// the whole call. They may be memory another process writes (a video
+    /// decoder's pictures): they are only copied, never borrowed.
+    pub unsafe fn blit_raw(&mut self, src: *const u32, stride: usize, w: i32, h: i32, x: i32, y: i32) {
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let d = self.device(Rect::new(x, y, w, h));
+        let (dx0, dy0) = (x + self.ox, y + self.oy);
+        for dy in d.y..d.bottom() {
+            let s = (dy - dy0) as usize * stride + (d.x - dx0) as usize;
+            let start = (dy * self.stride + d.x) as usize;
+            let out = &mut self.pixels[start..start + d.w as usize];
+            // SAFETY: the clipped rectangle lies inside the caller's `w` x
+            // `h` pixels, so the row is readable; `out` is the canvas's own.
+            unsafe { core::ptr::copy_nonoverlapping(src.add(s), out.as_mut_ptr(), out.len()) };
+        }
+    }
+
+    /// Draws `w` x `h` opaque pixels from `src` scaled into `dst`, without
+    /// blending; sampled as [`Canvas::draw_bitmap_scaled`] does.
+    ///
+    /// # Safety
+    /// As for [`Canvas::blit_raw`].
+    pub unsafe fn draw_raw_scaled(
+        &mut self,
+        src: *const u32,
+        stride: usize,
+        w: i32,
+        h: i32,
+        dst: Rect,
+        filter: Filter,
+    ) {
+        if w <= 0 || h <= 0 || dst.is_empty() {
+            return;
+        }
+        let d = self.device(dst);
+        if d.is_empty() {
+            return;
+        }
+        let (dx0, dy0) = (dst.x + self.ox, dst.y + self.oy);
+        let bilinear = filter == Filter::Bilinear;
+        let cols: Vec<(usize, usize, u32)> = (d.x..d.right()).map(|x| taps(x - dx0, w, dst.w, bilinear)).collect();
+        for y in d.y..d.bottom() {
+            let (r0, r1, wy) = taps(y - dy0, h, dst.h, bilinear);
+            // SAFETY: the taps are clamped inside the caller's `w` x `h`
+            // pixels; each is read by value.
+            let px = |r: usize, c: usize| unsafe { src.add(r * stride + c).read() };
+            let start = (y * self.stride + d.x) as usize;
+            let out = &mut self.pixels[start..start + cols.len()];
+            for (p, &(c0, c1, wx)) in out.iter_mut().zip(&cols) {
+                *p = if bilinear {
+                    lerp_px(lerp_px(px(r0, c0), px(r0, c1), wx), lerp_px(px(r1, c0), px(r1, c1), wx), wy)
+                } else {
+                    px(r0, c0)
+                };
+            }
+        }
+    }
+
     /// Multiplies the alpha of everything inside `r` by `opacity`.
     pub fn fade_rect(&mut self, r: Rect, opacity: u8) {
         let d = self.device(r);
@@ -455,6 +522,45 @@ impl<'a> Canvas<'a> {
             for p in &mut self.row_mut(y)[d.x as usize..d.right() as usize] {
                 *p = scale(*p, opacity as u32);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use alloc::vec;
+
+    use super::*;
+
+    #[test]
+    fn raw_pixels_are_copied_and_clipped() {
+        let src: Vec<u32> = (0..6 * 4).map(|i| 0xFF00_0000 | i).collect();
+        let mut dst = vec![0u32; 8 * 5];
+        let mut c = Canvas::new(&mut dst, 8, 5, 8);
+        // 4 x 3 of the 6-wide source, its top-left at (6, 3): clipped to 2 x 2.
+        // SAFETY: `src` holds 4 rows of 6 pixels.
+        unsafe { c.blit_raw(src.as_ptr(), 6, 4, 3, 6, 3) };
+        drop(c);
+        assert_eq!(&dst[3 * 8 + 6..3 * 8 + 8], &[0xFF00_0000, 0xFF00_0001]);
+        assert_eq!(&dst[4 * 8 + 6..4 * 8 + 8], &[0xFF00_0006, 0xFF00_0007]);
+        assert_eq!(dst.iter().filter(|&&p| p != 0).count(), 4);
+    }
+
+    #[test]
+    fn raw_pixels_scale_like_bitmaps() {
+        let mut b = Bitmap::new(5, 3);
+        for (i, p) in b.pixels.iter_mut().enumerate() {
+            *p = 0xFF00_0000 | (i as u32 * 0x0A0B0C);
+        }
+        let dst = Rect::new(1, 1, 13, 7);
+        for filter in [Filter::Nearest, Filter::Bilinear] {
+            let (mut a, mut r) = (vec![0u32; 16 * 10], vec![0u32; 16 * 10]);
+            Canvas::new(&mut a, 16, 10, 16).draw_bitmap_scaled(&b, dst, filter, 255);
+            // SAFETY: the bitmap holds 3 rows of 5 pixels.
+            unsafe { Canvas::new(&mut r, 16, 10, 16).draw_raw_scaled(b.pixels.as_ptr(), 5, 5, 3, dst, filter) };
+            assert_eq!(a, r, "{filter:?}");
         }
     }
 }

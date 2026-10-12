@@ -3,6 +3,7 @@
 //! * [`window`]: client-side windows on top of the display protocol.
 //! * [`app`]: the event loop ([`run`]) driving an [`App`].
 //! * [`agent`]: offering an application's abilities to the voice agent.
+//! * [`media`]: widgets for media players (seek bar, play button).
 //! * [`Ui`]: the immediate-mode context passed to `App::update` each frame,
 //!   with widgets ([`widgets`], [`text_input`], [`menu`]), icons
 //!   ([`Icon`]) and the dark [`Theme`].
@@ -25,6 +26,7 @@ pub mod agent;
 pub mod app;
 pub mod file_dialog;
 pub mod icons;
+pub mod media;
 pub mod menu;
 pub mod text_input;
 pub mod theme;
@@ -42,3 +44,4 @@ pub use ui::{Context, Id, Input, Response, Ui, UiState};
 pub use vgfx::{Align, Canvas, Color, Rect};
 pub use vproto::display::{Cursor, WindowKind, WindowSpec, WindowState};
 pub use widgets::{ButtonKind, ListResponse, RowState};
+pub use window::FrameTiming;
