@@ -530,8 +530,12 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // GTK, whose window grabs the mouse at a click while the pointer is
         // relative; the tablet is bound to the display, so the pointer is
         // absolute from power-on, and a click before the guest's driver
-        // runs grabs nothing.
-        cmd.args(["-display", if gpu { "gtk,gl=on" } else { "gtk" }]);
+        // runs grabs nothing. The window takes the screen's size: with a
+        // display that can follow the window's size, as the GPU's could,
+        // QEMU would otherwise zoom to fit and open the window at its
+        // smallest, a quarter of the screen each way, the screen shrunk
+        // into it. Veda's screen is the VGA's, which keeps its size.
+        cmd.args(["-display", if gpu { "gtk,gl=on,zoom-to-fit=off" } else { "gtk,zoom-to-fit=off" }]);
     } else if gpu {
         // Headless, on the host's GPU of `render_node`.
         let display = match render_node() {
