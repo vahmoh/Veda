@@ -7,10 +7,10 @@ use alloc::vec::Vec;
 
 use vgfx::{Align, Color, Rect};
 use vproto::display::WindowState;
-use vui::{Font, Icon, Ui};
+use vui::{Font, Icon, Ui, status};
 
 use crate::tooltip::Tip;
-use crate::{Action, DISMISS_GRACE_NS, Model, agent, apps, chrome, volume, wifi};
+use crate::{Action, DISMISS_GRACE_NS, Model, agent, apps, chrome, wifi};
 
 /// Height of the taskbar in pixels.
 pub const HEIGHT: i32 = 48;
@@ -195,7 +195,11 @@ impl Taskbar {
         let resp = ui.interact(ui.id("volume"), vol);
         Self::button_bg(ui, vol, resp.hovered, resp.held, m.volume_open);
         let (level, muted) = m.audio.as_ref().map_or((1.0, false), |a| (a.master_volume, a.muted));
-        ui.icon(vol, volume::icon(level, muted), 18.0, t.text);
+        match m.audio {
+            Some(_) => status::draw_volume(&mut ui.canvas, vol, level, muted, t.text),
+            // Nothing to play sound on: the speaker crossed out, faint.
+            None => status::draw_volume(&mut ui.canvas, vol, 0.0, true, t.text_faint),
+        }
         if resp.pressed {
             self.volume_pressed_at = ui.now();
         }

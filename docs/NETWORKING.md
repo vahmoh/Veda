@@ -215,10 +215,13 @@ channel.
 
 ## Using the network
 
-* **The taskbar's network icon** shows the Wi-Fi signal (or the wired
-  connection) and opens the network flyout: Wi-Fi on and off, networks in
-  range, joining one (with its password, optionally automatically in
-  future), hidden networks, disconnecting, and a link to Settings.
+* **The taskbar's network icon** shows the Wi-Fi signal (its arcs light
+  up in turn while it joins a network), the wired connection when Wi-Fi
+  is not connected, a faint fan when Wi-Fi is on but not connected, or the
+  fan crossed out when Wi-Fi is off. It opens the network flyout: Wi-Fi on
+  and off, networks in range (a padlock on the secured ones), joining one
+  (with its password, optionally automatically in future), hidden
+  networks, disconnecting, and a link to Settings.
 * **Settings → Network & Internet**: the Wi-Fi connection in detail,
   networks in range, saved networks (automatic connection, forget), every
   interface with its addresses, gateway, DNS servers, DHCP lease and

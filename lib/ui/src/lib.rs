@@ -7,6 +7,7 @@
 //! * [`Ui`]: the immediate-mode context passed to `App::update` each frame,
 //!   with widgets ([`widgets`], [`text_input`], [`menu`]), icons
 //!   ([`Icon`]) and the dark [`Theme`].
+//! * [`status`]: the network and sound glyphs of the taskbar's tray.
 //!
 //! ```ignore
 //! struct Hello { clicks: u32 }
@@ -28,6 +29,7 @@ pub mod file_dialog;
 pub mod icons;
 pub mod media;
 pub mod menu;
+pub mod status;
 pub mod text_input;
 pub mod theme;
 pub mod ui;

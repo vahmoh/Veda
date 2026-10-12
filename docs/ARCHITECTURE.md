@@ -500,7 +500,7 @@ shell tells the user with a notification.
 | `vfont` | TrueType/OpenType (CFF) parsing, glyph outlines, metrics, kerning, a glyph bitmap cache |
 | `vimage` | PNG, JPEG (baseline and progressive), BMP and QOI decoders and encoders, resampling |
 | `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps, shadows, text layout and rendering |
-| `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons, the dark theme |
+| `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
 | `vtext` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
 
 `vui` is immediate mode: each frame the application's `update` lays out and
@@ -508,6 +508,14 @@ draws widgets, and the widgets report their interactions in the same call.
 State that must survive between frames (focus, scroll offsets, text cursors,
 open menus, animations) lives in a per-window `UiState` keyed by widget ids.
 Frames are drawn only when input arrives or an animation asks for one.
+
+Icons come in two kinds. The line icons (`vui::Icon`) are paths on a
+24-unit grid, drawn at any size. The status glyphs (`vui::status`: the
+network, with its signal, and the sound, with its level) are drawn for the
+size of the taskbar's tray: solid shapes on a 20-pixel grid whose straight
+edges fall on whole pixels, so that they stay crisp on a 1x screen. Each is
+drawn into a small layer first, where a slash or a badge (the agent's ring
+uses them too) cuts a gap into what it crosses.
 
 ## OpenGL ES and the GPU (`lib/glsl`, `lib/gl`, `guest/renderer`)
 

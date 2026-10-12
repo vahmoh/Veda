@@ -74,7 +74,7 @@ impl View {
         let w = ui.width;
         let h = ui.height;
         let now = ui.now();
-        crate::agent::draw_presence(ui, 38.0, 38.0, 13.0, &m.agent, now);
+        crate::agent::draw_presence(&mut ui.canvas, 38.0, 38.0, 13.0, &m.agent, now);
         let used = crate::agent::approval_title(ui, Rect::new(68, 14, w - 86, 22), &self.title);
         let dy = used - 22;
         ui.paragraph(Rect::new(68, 38 + dy, w - 86, 44 - dy), &self.body, 12.5, t.text_dim);

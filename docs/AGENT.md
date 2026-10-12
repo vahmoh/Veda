@@ -35,9 +35,11 @@ while the agent listens, trembles and glows with its voice while it
 speaks, and a light runs around it while it thinks. Waking up, it is the
 film's loading figure, a white ribbon coiled around a long loop and
 spinning, its far side fading; when the agent is ready the coil turns to
-face you, faster and faster, and becomes the ring. A microphone button mutes it. Requests for your consent appear in
-the window while it is open, and as notifications above the tray while it
-is closed.
+face you, faster and faster, and becomes the ring. A microphone button
+mutes it, and the ring on the taskbar is crossed out while it is muted.
+Requests for your consent appear in the window while it is open, and as
+notifications above the tray while it is closed; a blue dot on the
+taskbar's ring says that one is waiting.
 
 ## How a conversation works
 

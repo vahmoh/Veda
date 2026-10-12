@@ -821,6 +821,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vaudio", &[]),
     ("vproto", &[]),
     ("vgfx", &[]),
+    ("vui", &[]),
     ("vtext", &[]),
     ("vfiles", &["thumbnails"]),
     ("ventropy", &[]),

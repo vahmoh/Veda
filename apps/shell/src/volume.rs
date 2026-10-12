@@ -3,7 +3,7 @@
 use alloc::format;
 
 use vgfx::{Align, Rect};
-use vui::{Font, Icon, Ui};
+use vui::{Font, Ui, status};
 
 use crate::{Action, Model, chrome, taskbar};
 
@@ -14,11 +14,6 @@ const PAD: i32 = 20;
 /// Where the flyout appears: above the tray, at the right edge.
 pub fn placement(screen: Rect) -> Rect {
     Rect::new(screen.w - WIDTH - 12, screen.h - taskbar::HEIGHT - 12 - HEIGHT, WIDTH, HEIGHT)
-}
-
-/// The icon for a volume level.
-pub fn icon(volume: f32, muted: bool) -> Icon {
-    if muted || volume <= 0.001 { Icon::Mute } else { Icon::Volume }
 }
 
 pub struct VolumeFlyout {
@@ -57,7 +52,8 @@ impl VolumeFlyout {
         let row = Rect::new(PAD, 56, w - 2 * PAD, 40);
         let mute_r = Rect::new(row.x - 6, row.y, 40, 40);
         let mut muted = audio.muted;
-        if ui.icon_button(mute_r, icon(audio.master_volume, audio.muted), if muted { "Unmute" } else { "Mute" }) {
+        let tip = if muted { "Unmute" } else { "Mute" };
+        if ui.glyph_button(mute_r, tip, |c, r, color| status::draw_volume(c, r, audio.master_volume, muted, color)) {
             muted = !muted;
         }
         let mut volume = audio.master_volume;

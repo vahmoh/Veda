@@ -134,8 +134,12 @@ impl Builder {
     fn circle(&mut self, cx: f32, cy: f32, r: f32) {
         self.stroke.circle(cx, cy, r);
     }
+    /// An arc of its own: a path's arc would be joined to whatever was
+    /// drawn before it by a straight line.
     fn arc(&mut self, cx: f32, cy: f32, r: f32, start_deg: f32, sweep_deg: f32) {
         let rad = core::f32::consts::PI / 180.0;
+        let (s, c) = vraster::math::sin_cos(start_deg * rad);
+        self.stroke.move_to(cx + r * c, cy + r * s);
         self.stroke.arc(cx, cy, r, start_deg * rad, sweep_deg * rad);
     }
     fn dot(&mut self, cx: f32, cy: f32, r: f32) {
@@ -197,14 +201,14 @@ fn build(icon: Icon) -> Builder {
             b.poly(&[(8.0, 19.0), (5.0, 16.0), (8.0, 13.0)], false);
         }
         Icon::Volume | Icon::Speaker => {
-            b.poly(&[(4.0, 9.0), (8.0, 9.0), (13.0, 5.0), (13.0, 19.0), (8.0, 15.0), (4.0, 15.0)], true);
-            b.arc(13.0, 12.0, 4.0, -45.0, 90.0);
-            b.arc(13.0, 12.0, 7.5, -50.0, 100.0);
+            b.poly(&[(3.0, 9.0), (7.0, 9.0), (12.0, 4.5), (12.0, 19.5), (7.0, 15.0), (3.0, 15.0)], true);
+            b.arc(12.0, 12.0, 4.0, -45.0, 90.0);
+            b.arc(12.0, 12.0, 8.0, -45.0, 90.0);
         }
         Icon::Mute => {
-            b.poly(&[(4.0, 9.0), (8.0, 9.0), (13.0, 5.0), (13.0, 19.0), (8.0, 15.0), (4.0, 15.0)], true);
-            b.line(16.5, 9.5, 21.5, 14.5);
-            b.line(21.5, 9.5, 16.5, 14.5);
+            b.poly(&[(3.0, 9.0), (7.0, 9.0), (12.0, 4.5), (12.0, 19.5), (7.0, 15.0), (3.0, 15.0)], true);
+            b.line(16.0, 9.0, 22.0, 15.0);
+            b.line(22.0, 9.0, 16.0, 15.0);
         }
         Icon::Search => {
             b.circle(10.5, 10.5, 6.5);
@@ -515,13 +519,12 @@ fn build(icon: Icon) -> Builder {
             }
         }
         Icon::Network => {
-            b.poly(
-                &[(4.0, 8.0), (4.0, 19.0), (20.0, 19.0), (20.0, 8.0), (16.0, 8.0), (16.0, 5.0), (8.0, 5.0), (8.0, 8.0)],
-                true,
-            );
-            for x in [8.5, 11.0, 13.5, 16.0] {
-                b.line(x - 0.5, 12.0, x - 0.5, 15.5);
-            }
+            // Three boxes joined: the mark beside network sockets.
+            b.rrect(9.0, 3.0, 6.0, 5.0, 1.5);
+            b.rrect(3.0, 16.0, 6.0, 5.0, 1.5);
+            b.rrect(15.0, 16.0, 6.0, 5.0, 1.5);
+            b.line(12.0, 8.0, 12.0, 12.0);
+            b.poly(&[(6.0, 16.0), (6.0, 12.0), (18.0, 12.0), (18.0, 16.0)], false);
         }
         Icon::Mic | Icon::MicOff => {
             b.rrect(9.0, 3.0, 6.0, 11.0, 3.0);
@@ -723,5 +726,24 @@ impl Icon {
             "warning" => Icon::Warning,
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vgfx::Bitmap;
+
+    #[test]
+    fn arcs_are_not_joined_to_what_comes_before() {
+        // The power symbol at 96 pixels, 4 to a unit of its grid: its stem
+        // and its arc are drawn, and nothing between the stem's foot and
+        // where the arc starts.
+        let mut b = Bitmap::new(96, 96);
+        Icon::Power.draw(&mut Canvas::for_bitmap(&mut b), Rect::new(0, 0, 96, 96), 96.0, Color::WHITE);
+        let alpha = |x: i32, y: i32| b.get(x, y) >> 24;
+        assert_eq!(alpha(48, 24), 255, "the stem");
+        assert_eq!(alpha(18, 52), 255, "the arc's left");
+        assert_eq!(alpha(56, 35), 0, "between them");
     }
 }

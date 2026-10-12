@@ -2,7 +2,7 @@
 
 use alloc::string::String;
 
-use vgfx::{Align, Color, Rect};
+use vgfx::{Align, Canvas, Color, Rect};
 use vproto::display::Cursor;
 use vproto::input::keys;
 
@@ -114,6 +114,14 @@ impl<'a> Ui<'a> {
 
     /// A borderless icon button with a tooltip.
     pub fn icon_button(&mut self, r: Rect, icon: Icon, tooltip: &str) -> bool {
+        let size = (r.w.min(r.h) as f32 * 0.55).clamp(14.0, 22.0);
+        self.glyph_button(r, tooltip, |c, r, color| icon.draw(c, r, size, color))
+    }
+
+    /// A borderless button with a tooltip, showing what `draw` draws in
+    /// the button's rectangle and colour (a [`status`](crate::status)
+    /// glyph, say).
+    pub fn glyph_button(&mut self, r: Rect, tooltip: &str, draw: impl FnOnce(&mut Canvas, Rect, Color)) -> bool {
         let id = self.id(tooltip) ^ (r.x as u64) << 32 ^ r.y as u64 ^ 0x1c0;
         let resp = self.interact(id, r);
         let hover = self.animate(id, if resp.hovered { 1.0 } else { 0.0 }, 8.0);
@@ -122,8 +130,7 @@ impl<'a> Ui<'a> {
             let radius = self.ctx.theme.radius;
             self.canvas.fill_rounded_rect(r, radius, bg);
         }
-        let size = (r.w.min(r.h) as f32 * 0.55).clamp(14.0, 22.0);
-        icon.draw(&mut self.canvas, r, size, fg);
+        draw(&mut self.canvas, r, fg);
         if resp.hovered {
             self.set_cursor(Cursor::Hand);
             self.tooltip(id, r, tooltip);

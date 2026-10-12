@@ -20,12 +20,12 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Align, Color, Rect};
+use vgfx::{Align, Canvas, Color, Rect};
 use vmath::FloatExt;
 use vproto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
 use vrt::object::Channel;
 use vrt::vm::Mapping;
-use vui::{Font, Icon, Ui};
+use vui::{Font, Icon, Ui, status};
 
 use crate::presence::{self, RING_WIDTH};
 use crate::{Action, Model, chrome, connect_running, taskbar};
@@ -194,7 +194,7 @@ impl AgentModel {
 /// Draws the agent's figure for its state around (`cx`, `cy`): a ring of
 /// radius `base` (the coil while waking up). `now` is the time in
 /// nanoseconds; small figures (the tray) are simpler.
-pub fn draw_presence(ui: &mut Ui, cx: f32, cy: f32, base: f32, a: &AgentModel, now: u64) {
+pub fn draw_presence(c: &mut Canvas, cx: f32, cy: f32, base: f32, a: &AgentModel, now: u64) {
     let (voice, mic) = a.levels;
     let state = a.state().unwrap_or(AgentState::Off);
     // Seconds, wrapped every hour (an f32 keeps them precise).
@@ -202,7 +202,6 @@ pub fn draw_presence(ui: &mut Ui, cx: f32, cy: f32, base: f32, a: &AgentModel, n
     let small = base < 16.0;
     let width = (RING_WIDTH * base).max(2.2);
     let white = |alpha: f32| Color::rgba(255, 255, 255, (alpha.clamp(0.0, 1.0) * 255.0) as u8);
-    let c = &mut ui.canvas;
     let v = a.figure(now);
     if v < 1.0 {
         // Turning between the coil and the ring.
@@ -242,17 +241,21 @@ pub fn draw_presence(ui: &mut Ui, cx: f32, cy: f32, base: f32, a: &AgentModel, n
     }
 }
 
-/// The agent's tray item: a small ring that echoes the big one.
+/// The agent's tray item: a small ring that echoes the big one, crossed
+/// out while the microphone is off, with a dot at its shoulder while
+/// something waits for approval. Both cut a gap into the ring.
 pub fn draw_orb(ui: &mut Ui, r: Rect, a: &AgentModel, now: u64) {
-    let (cx, cy) = (r.center().0 as f32, r.center().1 as f32);
-    draw_presence(ui, cx, cy, 7.0, a, now);
+    let accent = ui.theme().accent;
+    let mut layer = status::Layer::new(r);
+    let (cx, cy) = (r.w as f32 / 2.0, r.h as f32 / 2.0);
+    draw_presence(&mut layer.canvas(), cx, cy, 7.0, a, now);
     if a.status.as_ref().is_some_and(|s| s.muted) {
-        ui.canvas.fill_rect(Rect::new(r.center().0 - 9, r.center().1, 18, 2), Color::rgba(255, 120, 110, 230));
+        layer.slash((cx - 6.0, cy - 6.0), (cx + 6.0, cy + 6.0), Color::WHITE);
     }
     if !a.approvals.is_empty() {
-        let t = ui.theme().clone();
-        ui.canvas.fill_circle(cx + 8.0, cy - 8.0, 4.0, t.accent);
+        layer.badge(cx + 6.0, cy - 6.0, 3.5, accent);
     }
+    layer.draw(&mut ui.canvas);
 }
 
 /// The agent's window.
@@ -307,7 +310,7 @@ impl AgentWindow {
         if resp.hovered {
             ui.set_cursor(vui::Cursor::Hand);
         }
-        draw_presence(ui, w as f32 / 2.0, cy as f32, base, &m.agent, now);
+        draw_presence(&mut ui.canvas, w as f32 / 2.0, cy as f32, base, &m.agent, now);
         if resp.clicked {
             m.push(if m.agent.active() { Action::AgentSleep } else { Action::AgentWake });
         }

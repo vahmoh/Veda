@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 
 use vgfx::{Align, Rect};
 use vnet::wifi::{ConnState, NetworkInfo, Security, WlanStatus, signal_bars};
+use vui::status::Network;
 use vui::{Font, Icon, Ui};
 
 use crate::{Action, Model, chrome, taskbar};
@@ -23,16 +24,6 @@ pub fn placement(screen: Rect) -> Rect {
     Rect::new(screen.w - WIDTH - 12, screen.h - taskbar::HEIGHT - 12 - HEIGHT, WIDTH, HEIGHT)
 }
 
-/// The Wi-Fi icon for a signal level in bars (0-4).
-pub fn bars_icon(bars: u8) -> Icon {
-    match bars {
-        0 => Icon::WifiNone,
-        1 => Icon::WifiWeak,
-        2 => Icon::WifiFair,
-        _ => Icon::Wifi,
-    }
-}
-
 fn has_adapter(s: &Option<WlanStatus>) -> bool {
     s.as_ref().is_some_and(|s| s.state != ConnState::NoAdapter)
 }
@@ -41,32 +32,32 @@ fn joining(s: &WlanStatus) -> bool {
     matches!(s.state, ConnState::Authenticating | ConnState::Associating | ConnState::Securing)
 }
 
-/// Draws a Wi-Fi signal as bright bars over the faint full fan (so a weak
-/// signal still reads as a Wi-Fi icon).
-pub fn draw_signal(ui: &mut Ui, r: Rect, bars: u8, size: f32, color: vgfx::Color) {
-    let faint = ui.theme().text_faint;
-    if bars < 3 {
-        ui.icon(r, Icon::Wifi, size, faint);
-    }
-    ui.icon(r, bars_icon(bars), size, color);
-}
+/// How long each step of the joining animation lasts.
+const JOINING_STEP_NS: u64 = 350_000_000;
 
-/// Draws the taskbar's network icon: the Wi-Fi signal when connected, a
-/// faint Wi-Fi fan when not, the crossed fan when Wi-Fi is off, and the
-/// wired icon on machines without Wi-Fi.
+/// Draws the taskbar's network glyph: the Wi-Fi signal when connected, its
+/// arcs lighting up in turn while joining, the wired mark when a cable
+/// connects (and Wi-Fi does not), a faint fan when Wi-Fi is on but not
+/// connected, the fan crossed out when it is off, and the wired mark
+/// crossed out with no network at all.
 pub fn draw_icon(ui: &mut Ui, r: Rect, m: &Model) {
     let t = ui.theme().clone();
-    match &m.wifi {
+    let glyph = match &m.wifi {
         Some(s) if has_adapter(&m.wifi) => match s.state {
-            ConnState::RadioOff => ui.icon(r, Icon::WifiOff, 18.0, t.text),
-            ConnState::Connected => draw_signal(ui, r, signal_bars(s.signal_dbm), 18.0, t.text),
-            // Not connected: with a wired connection the wired icon says
-            // more, otherwise a faint Wi-Fi fan invites a click.
-            _ if m.wired_up => ui.icon(r, Icon::Network, 18.0, t.text),
-            _ => ui.icon(r, Icon::Wifi, 18.0, t.text_faint),
+            ConnState::Connected => Network::Wifi(signal_bars(s.signal_dbm)),
+            _ if joining(s) => {
+                let now = ui.now();
+                ui.repaint_at((now / JOINING_STEP_NS + 1) * JOINING_STEP_NS);
+                Network::Joining((now / JOINING_STEP_NS) as u32)
+            }
+            _ if m.wired_up => Network::Wired,
+            ConnState::RadioOff => Network::WifiOff,
+            _ => Network::WifiIdle,
         },
-        _ => ui.icon(r, Icon::Network, 18.0, if m.wired_up { t.text } else { t.text_faint }),
-    }
+        _ if m.wired_up => Network::Wired,
+        _ => Network::Offline,
+    };
+    glyph.draw(&mut ui.canvas, r, t.text);
 }
 
 /// The taskbar tooltip.
@@ -74,8 +65,9 @@ pub fn tooltip(m: &Model) -> String {
     match &m.wifi {
         Some(s) if has_adapter(&m.wifi) => match s.state {
             ConnState::Connected => format!("{}\nInternet access", s.name),
-            ConnState::RadioOff => "Wi-Fi is off".into(),
             _ if joining(s) => format!("Connecting to {}", s.name),
+            ConnState::RadioOff if m.wired_up => "Wired network connected\nWi-Fi is off".into(),
+            ConnState::RadioOff => "Wi-Fi is off".into(),
             _ if m.wired_up => "Wired network connected".into(),
             _ => "Not connected".into(),
         },
@@ -253,9 +245,11 @@ impl WifiFlyout {
             ui.repaint();
         }
         let color = if n.security.supported() { t.text } else { t.text_faint };
-        draw_signal(ui, Rect::new(head.x + 8, head.y + 13, 28, 28), n.bars, 22.0, color);
+        let signal = Rect::new(head.x + 8, head.y + 13, 28, 28);
         if n.security.needs_password() {
-            ui.icon(Rect::new(head.x + 26, head.y + 30, 14, 14), Icon::Lock, 11.0, color);
+            Network::Wifi(n.bars).draw_locked(&mut ui.canvas, signal, color);
+        } else {
+            Network::Wifi(n.bars).draw(&mut ui.canvas, signal, color);
         }
         ui.label(Rect::new(head.x + 48, head.y + 8, head.w - 56, 20), &n.name, Font::Regular, 14.0, color, Align::Left);
         let sub = subtitle(m, n);
