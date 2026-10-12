@@ -104,16 +104,14 @@ key alt-f4
 wait-serial "music exited" 20
 wait 2
 
-# Videos: the library, then the aurora timelapse playing, the pointer on
-# its seek bar (which shows a picture from further on).
+# Videos: the aurora timelapse, the library's first video, playing, the
+# pointer on its seek bar (which shows a picture from further on).
 key meta_l
 wait 2
 type "videos"
 key ret
 wait-serial "videos: library: 3 videos" 30
-move 0.97 0.08
-wait 8
-shot docs/images/videos-library.png
+wait 2
 key ret
 wait-serial "videos: playing Aurora Timelapse" 30
 wait 6
@@ -122,6 +120,23 @@ wait 3
 shot docs/images/videos.png
 key alt-f4
 wait-serial "videos exited" 20
+wait 2
+
+# Settings, on the agent's page: the Terminal starts it there.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "run settings agent && exit"
+key ret
+wait-serial "started settings" 30
+move 0.97 0.08
+wait 8
+shot docs/images/agent-settings.png
+key alt-f4
+wait-serial "settings exited" 20
 wait 2
 
 # Files: the pictures as thumbnails.

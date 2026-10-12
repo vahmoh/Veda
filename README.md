@@ -169,11 +169,11 @@ keyboard, the agent can do too.
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/videos.png" width="100%" align="top" alt="Videos playing an aurora timelapse, a picture from further on above its seek bar"></td>
-    <td width="50%"><img src="docs/images/videos-library.png" width="100%" align="top" alt="The Videos library: three videos with their pictures and lengths"></td>
+    <td width="50%"><img src="docs/images/agent-settings.png" width="100%" align="top" alt="Settings on the agent's page: its Deepgram key, its name, voice and speaking rate, and its language model"></td>
   </tr>
   <tr>
     <td align="center">Videos, AV1 decoded by dav1d</td>
-    <td align="center">Videos, the library</td>
+    <td align="center">Agent Settings</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/gcc.png" width="100%" align="top" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
