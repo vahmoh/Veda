@@ -21,7 +21,7 @@ extern crate alloc;
 
 mod apps;
 #[cfg(target_arch = "x86_64")]
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 mod arch;
 mod boot;
 

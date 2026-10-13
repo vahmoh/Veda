@@ -18,15 +18,15 @@
 //! address with [`PeImage::relocations`].
 //!
 //! An image is for one processor ([`Machine`]): each architecture's is in
-//! `lib/pe/arch/<architecture>/` ([`amd64`]), on every host, so that the
-//! build machine's tools check images for the target. [`NATIVE`] is the
-//! processor the code runs on, whose images it loads.
+//! `lib/pe/src/arch/<architecture>/` ([`amd64`]), on every host, so that
+//! the build machine's tools check images for the target. [`NATIVE`] is
+//! the processor the code runs on, whose images it loads.
 
 #![no_std]
 
 use core::fmt;
 
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 pub mod amd64;
 
 /// The processor an image's code is for.

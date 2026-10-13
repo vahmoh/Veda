@@ -121,10 +121,10 @@ Each one came from what the alternatives would cost.
 
 | Piece | Where | What it does |
 |-------|-------|--------------|
-| Hypervisor | `kernel/src/hv`, `kernel/arch/amd64/hv` | `Guest` and `Vcpu` objects; guest memory shootdowns; on AMD64 VMX and EPT, and the virtual x2APIC |
-| IOMMU | `kernel/arch/amd64/iommu` | VT-d: every device's interrupts remapped; devices passed through, or in a guest's domain |
-| Hypervisor logic | `lib/hv` (`vhv`) | the platform's ABI, the bridge's ABI, a given function's configuration space; on AMD64 (`lib/hv/arch/amd64`) the virtual local APIC, the guests' `cpuid`, the platform's discovery and Linux's boot protocol (host-tested) |
-| IOMMU logic | `lib/iommu` (`viommu`) | on AMD64 (`lib/iommu/arch/amd64`) the DMAR table; the units' registers, tables, entries and descriptors (host-tested) |
+| Hypervisor | `kernel/src/hv`, `kernel/src/arch/amd64/hv` | `Guest` and `Vcpu` objects; guest memory shootdowns; on AMD64 VMX and EPT, and the virtual x2APIC |
+| IOMMU | `kernel/src/arch/amd64/iommu` | VT-d: every device's interrupts remapped; devices passed through, or in a guest's domain |
+| Hypervisor logic | `lib/hv` (`vhv`) | the platform's ABI, the bridge's ABI, a given function's configuration space; on AMD64 (`lib/hv/src/arch/amd64`) the virtual local APIC, the guests' `cpuid`, the platform's discovery and Linux's boot protocol (host-tested) |
+| IOMMU logic | `lib/iommu` (`viommu`) | on AMD64 (`lib/iommu/src/arch/amd64`) the DMAR table; the units' registers, tables, entries and descriptors (host-tested) |
 | Device manager | `services/devmgr` | which devices go to the driver VM (all but Veda's own), their `pcidev` channels, resetting them and starting the driver VM again |
 | Monitor | `services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
 | Guest kernel | `ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
@@ -160,16 +160,17 @@ in `rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`vhv::platform`):
 | `GPIO` | reads a GPIO pin the guest has, drives it, makes it an input, or tells its direction |
 | `FIRMWARE_VARIABLE` | the PC's firmware variables, read-only: what UEFI's `GetVariable` and `GetNextVariableName` do |
 
-On AMD64 the monitor boots Linux (`services/drivervm/arch/amd64/boot.rs`)
-through the x86 boot protocol's 64-bit entry (`vhv::amd64::linux`): the
-kernel at the address it prefers, the initramfs at the
-top of memory, a memory map that keeps the first 64 KiB (the GDT and page
-tables the processors start on) and the legacy hole out; the ACPI tables
-are in the hole, from 0xE0000, where a PC's firmware puts its own.
+On AMD64 the monitor boots Linux
+(`services/drivervm/src/arch/amd64/boot.rs`) through the x86 boot
+protocol's 64-bit entry (`vhv::amd64::linux`): the kernel at the address
+it prefers, the initramfs at the top of memory, a memory map that keeps
+the first 64 KiB (the GDT and page tables the processors start on) and the
+legacy hole out; the ACPI tables are in the hole, from 0xE0000, where a
+PC's firmware puts its own.
 
 ### The hypervisor
 
-What follows is the hypervisor on AMD64 (`kernel/arch/amd64/hv`).
+What follows is the hypervisor on AMD64 (`kernel/src/arch/amd64/hv`).
 `vcpu_run` enters the guest on the calling thread with the BKL released, as
 user code runs. Host interrupts make the guest exit and are taken at once
 (the guest never delays them); the scheduler preempts a virtual processor
@@ -206,12 +207,12 @@ keeps for it (below). A function the monitor cannot give it lets go of at
 once: `devmgr` keeps it, and neither resets it when the driver VM ends
 nor offers it to the next.
 
-**DMA.** The kernel drives the IOMMU (`kernel/arch/amd64/iommu`, Intel VT-d). At
-boot every device is in the host's domain, which passes requests through:
-Veda's own drivers reach memory as before. `guest_attach_device` puts the
-function in its guest's domain, whose second-level page tables mirror the
-guest's memory: every `guest_map` and `guest_unmap` updates the EPT and
-the domain together, so a device reaches exactly what the guest's
+**DMA.** The kernel drives the IOMMU (`kernel/src/arch/amd64/iommu`, Intel
+VT-d). At boot every device is in the host's domain, which passes requests
+through: Veda's own drivers reach memory as before. `guest_attach_device`
+puts the function in its guest's domain, whose second-level page tables
+mirror the guest's memory: every `guest_map` and `guest_unmap` updates the
+EPT and the domain together, so a device reaches exactly what the guest's
 processors reach, at the same addresses, and unmapping makes devices
 forget the pages (an IOTLB invalidation) before they can be reused. The
 function is attached before the guest runs, so it never does DMA the guest
@@ -767,7 +768,7 @@ has the display draws its first frames there, until `kms` attaches to it.
 `cargo xtask linux` builds the guest's kernel, its toolchain and Mesa
 (the first image built builds them too, where the machine has the tools);
 every image includes the guest, and without it nothing but the disks and
-sound is driven. Under QEMU's PC (`xtask/arch/amd64`), Veda runs
+sound is driven. Under QEMU's PC (`xtask/src/arch/amd64`), Veda runs
 its guests on the processor's VMX, which KVM gives it nested
 (`kvm_intel nested=1`), and xtask's machine has an Intel IOMMU that
 remaps interrupts, its virtio functions behind it, as a PC's are

@@ -113,7 +113,7 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   memory it leaves to the system, at every boot: after a reset it could
   take a program header of Veda's there for six processors, and wait for
   ever for the two that are not. QEMU's loader blanks that page at every
-  reset (`blank_at_reset` in `xtask/arch/amd64/qemu.rs` finds it in the
+  reset (`blank_at_reset` in `xtask/src/arch/amd64/qemu.rs` finds it in the
   firmware).
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.

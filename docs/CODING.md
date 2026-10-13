@@ -43,27 +43,27 @@ architecture, or on the platform that comes with it (a PC's devices and
 firmware), is kept apart from the rest, so that another architecture can
 be added beside AMD64 without touching code that is not its own:
 
-* A component with such code keeps it in its own `arch/<architecture>/`
-  directory, beside `src/`: `boot/arch/amd64`, `kernel/arch/amd64`,
-  `lib/abi/arch/amd64`, `lib/rt/arch/amd64`, `services/drivervm/arch/amd64`,
-  `xtask/arch/amd64` and the others. Nothing outside those directories
-  names an architecture's instructions, registers, system call numbers or
-  calling conventions, or the devices of its platform (a PC's interrupt
-  controllers, timers, keyboard controller and IOMMU); drivers of devices
-  that come on a bus (PCI's, USB's) are each device's, not an
-  architecture's.
-* The rest of the component reaches it through one module, `arch`, whose
+* A crate with such code keeps it in its own `src/arch/<architecture>/`
+  directory: `boot/src/arch/amd64`, `kernel/src/arch/amd64`,
+  `lib/abi/src/arch/amd64`, `lib/rt/src/arch/amd64`,
+  `services/drivervm/src/arch/amd64`, `xtask/src/arch/amd64` and the
+  others. Nothing outside those directories names an architecture's
+  instructions, registers, system call numbers or calling conventions, or
+  the devices of its platform (a PC's interrupt controllers, timers,
+  keyboard controller and IOMMU); drivers of devices that come on a bus
+  (PCI's, USB's) are each device's, not an architecture's.
+* The rest of the crate reaches it through one module, `arch`, whose
   items every architecture provides with the same names and meanings, and
   nothing else of it. The kernel's (`kernel/src/arch.rs`) and xtask's
   (`xtask/src/arch.rs`) document their interface in a table; vocabulary
   is the architecture-neutral one (the clock's counter, not the TSC; a
-  thread's TLS pointer, not its FS base). Code in `arch/<architecture>/`
-  may use the rest of its component.
+  thread's TLS pointer, not its FS base). Code in
+  `src/arch/<architecture>/` may use the rest of its crate.
 * How the module is chosen depends on what the code does:
   * **Code that runs on the architecture** (the loader, the kernel, the
     runtime, services, tests) takes the module of the target it is
     compiled for:
-    `#[cfg(target_arch = "x86_64")] #[path = "../arch/amd64/mod.rs"] mod arch;`.
+    `#[cfg(target_arch = "x86_64")] #[path = "arch/amd64/mod.rs"] mod arch;`.
   * **Knowledge of an architecture's formats** that tools need on any
     machine (executables' machine types, the IOMMU's tables, the virtual
     devices of the hypervisor's guests) is a public module named after the
@@ -75,8 +75,9 @@ be added beside AMD64 without touching code that is not its own:
     build machine: the architecture is the one Veda is built for (the
     `TARGET` Cargo gives a build script, xtask's `arch`), never the one
     they run on.
-* What tools read from places of their own follows the same rule where
-  the tool allows it: Cargo's settings of the targets are in
+* What tools read from places of their own, which have no `src/`, is in
+  an `arch/<architecture>/` directory of each place, where the tool
+  allows it: Cargo's settings of the targets are in
   `.cargo/arch/amd64/config.toml` (which `.cargo/config.toml` includes);
   the ports' in `ports/arch/amd64/settings.sh`, and each port's changes
   for the architecture in `ports/<port>/arch/amd64/` (a patch applied
@@ -87,7 +88,7 @@ be added beside AMD64 without touching code that is not its own:
 
 ## Targets
 
-On AMD64 (`xtask/arch/amd64` names them for the build):
+On AMD64 (`xtask/src/arch/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|

@@ -32,7 +32,7 @@
 //!
 //! What is particular to the architecture (Linux's system call numbers and
 //! the calls only it has, the thread pointer, where threads start) is in
-//! `arch` (`lib/posix/arch/<architecture>/`).
+//! `arch` (`lib/posix/src/arch/<architecture>/`).
 //!
 //! The layer is built as a static library for the architecture's bare-metal
 //! target (`x86_64-unknown-none` on AMD64) and
@@ -46,7 +46,7 @@ extern crate alloc;
 extern crate std;
 
 #[cfg(target_arch = "x86_64")]
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 mod arch;
 mod error;
 mod fd;

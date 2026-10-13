@@ -10,9 +10,9 @@
 //! in the kernel or in user space.
 //!
 //! What depends on the processor's architecture is in [`arch`]
-//! (`lib/abi/arch/<architecture>/`), and re-exported here: how system calls
-//! are made, the page size, the user address space, how threads start, and
-//! the registers and exits of virtual processors.
+//! (`lib/abi/src/arch/<architecture>/`), and re-exported here: how system
+//! calls are made, the page size, the user address space, how threads
+//! start, and the registers and exits of virtual processors.
 //!
 //! # Calling convention
 //!
@@ -33,7 +33,7 @@
 #![no_std]
 
 #[cfg(target_arch = "x86_64")]
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 pub mod arch;
 pub mod startup;
 

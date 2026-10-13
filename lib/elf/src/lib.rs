@@ -21,7 +21,7 @@
 //! links C programs statically.
 //!
 //! An executable is for one processor ([`Machine`]): each architecture's
-//! is in `lib/elf/arch/<architecture>/` ([`amd64`]). [`NATIVE`] is the
+//! is in `lib/elf/src/arch/<architecture>/` ([`amd64`]). [`NATIVE`] is the
 //! processor the code runs on, whose programs it loads.
 //!
 //! The crate is plain data processing, unit-tested on the host.
@@ -33,7 +33,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt;
 
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 pub mod amd64;
 
 /// The processor an executable's code is for.

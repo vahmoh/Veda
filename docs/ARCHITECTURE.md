@@ -93,7 +93,7 @@ logs there (`logkeeper`, see [DRIVERVM.md](DRIVERVM.md)).
 
 | Module | Responsibility |
 |--------|----------------|
-| `arch` | the processor architecture and its platform, behind one interface (`kernel/src/arch.rs`, which lists it): implemented in `kernel/arch/<architecture>/`, on AMD64 the GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, the TSC, HPET and PIT, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory) |
+| `arch` | the processor architecture and its platform, behind one interface (`kernel/src/arch.rs`, which lists it): implemented in `kernel/src/arch/<architecture>/`, on AMD64 the GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, the TSC, HPET and PIT, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory) |
 | `mm` | frame allocator, page tables, kernel heap, kernel stacks/MMIO windows, VMOs, address spaces, user copies |
 | `sched` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
 | `object` | handles, signals, processes, channels, sockets, events, interrupts, I/O ports, resources |
@@ -879,8 +879,9 @@ policy, the wake word) are in `vagent`, tested on the host. See
 
 Veda runs on AMD64 (x86-64). What depends on the architecture, or on the
 platform that comes with it, is in each component's `arch/<architecture>/`
-directory, which the rest of the component reaches through its `arch`
-module ([CODING.md](CODING.md) has the rules). On AMD64:
+directory (a crate's in its `src/`), which the rest of the component
+reaches through its `arch` module ([CODING.md](CODING.md) has the rules).
+On AMD64:
 
 | Component | What is AMD64's (`arch/amd64/`) |
 |-----------|---------------------------------|
@@ -901,8 +902,9 @@ module ([CODING.md](CODING.md) has the rules). On AMD64:
 
 ## Repository layout
 
-Components with code particular to an architecture keep it in
-`arch/<architecture>/`, beside `src/` (see Architectures above).
+Crates with code particular to an architecture keep it in
+`src/arch/<architecture>/`, other directories in an `arch/<architecture>/`
+of their own (see Architectures above).
 
 | Path | Contents |
 |------|----------|

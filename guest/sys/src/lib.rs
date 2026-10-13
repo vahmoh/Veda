@@ -14,7 +14,7 @@ use std::io;
 use std::os::fd::RawFd;
 
 #[cfg(target_arch = "x86_64")]
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 mod arch;
 pub mod netif;
 

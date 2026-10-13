@@ -7,11 +7,11 @@
 //! the Microsoft linker's syntax, which LLVM's linker (`rust-lld`) takes.
 //!
 //! What depends on the architecture (its user target and the image base)
-//! is in `lib/build/arch/<architecture>/`. A build script runs on the build
-//! machine, so the target being built picks the architecture, not the
-//! machine the script runs on.
+//! is in `lib/build/src/arch/<architecture>/`. A build script runs on the
+//! build machine, so the target being built picks the architecture, not
+//! the machine the script runs on.
 
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 pub mod amd64;
 
 /// The image base of Veda executables for `target`, if it is a target Veda

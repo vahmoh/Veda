@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Link the kernel as a fixed-address, higher-half PE image, as its
-//! architecture says (`arch/<architecture>/link.rs`).
+//! architecture says (`src/arch/<architecture>/link.rs`).
 
-#[path = "arch/amd64/link.rs"]
+#[path = "src/arch/amd64/link.rs"]
 mod amd64;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=arch/amd64/link.rs");
+    println!("cargo:rerun-if-changed=src/arch/amd64/link.rs");
     let target = std::env::var("TARGET").unwrap_or_default();
     let link_args = match target.as_str() {
         amd64::TARGET => amd64::LINK_ARGS,

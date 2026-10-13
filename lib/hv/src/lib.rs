@@ -14,8 +14,8 @@
 //! What is particular to the architecture its guests are (their virtual
 //! processors' interrupt controller, what the processor tells them of
 //! itself, how they find the platform and boot, the PC's devices and memory
-//! map) is in `lib/hv/arch/<architecture>/`: [`amd64`]. It describes those
-//! machines on any host, so its unit tests run anywhere.
+//! map) is in `lib/hv/src/arch/<architecture>/`: [`amd64`]. It describes
+//! those machines on any host, so its unit tests run anywhere.
 //!
 //! The kernel drives them under its virtual processors (its architecture's
 //! `hv`), and the virtual machine monitor and the Linux guest's side use
@@ -28,7 +28,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod acpi;
-#[path = "../arch/amd64/mod.rs"]
+#[path = "arch/amd64/mod.rs"]
 pub mod amd64;
 pub mod bridge;
 pub mod igd;

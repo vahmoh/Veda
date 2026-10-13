@@ -33,7 +33,7 @@
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
 //! memory 2048                      # the machine's memory for this run (MiB), applied before boot
-//! acpi-table touchpad              # add a table to the firmware's (the machine's: xtask/arch/*/acpitest.rs), applied before boot
+//! acpi-table touchpad              # add a table to the firmware's (the machine's: xtask/src/arch/*/acpitest.rs), applied before boot
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
 //! live [writable]                  # boot the live system (`xtask iso`) from a USB stick (read-only unless writable), applied before boot
