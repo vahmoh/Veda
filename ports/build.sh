@@ -4,13 +4,13 @@
 
 # Builds Veda's C toolchain from the ports in this directory. `cargo xtask
 # toolchain` runs it after downloading and
-# verifying the sources; see xtask/src/toolchain.rs and docs/C.md.
+# verifying the sources; see xtask/src/toolchain.rs and documentation/C.md.
 #
 # Environment:
 #   VEDA_PORTS       this directory
 #   VEDA_ARCH        the architecture built for (arch/$VEDA_ARCH/settings.sh)
 #   VEDA_TOOLCHAIN   where to build; downloads/ holds the verified archives
-#   VEDA_POSIX_LIB   the POSIX layer (lib/posix) as a static library
+#   VEDA_POSIX_LIB   the POSIX layer (libraries/posix) as a static library
 #   VEDA_POSIX_EXPORTS  the symbols it gives the C library
 #   JOBS             parallel jobs (default: the number of processors)
 #
@@ -142,7 +142,7 @@ stage_posix_layer() {
 	$TARGET-ar rcs "$SYSROOT/system/lib/libc.a" "$BUILD/veda.o"
 	# And its header for Veda's own interfaces, <veda/ipc.h>.
 	mkdir -p "$SYSROOT/system/include/veda"
-	cp "$PORTS"/../lib/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
+	cp "$PORTS"/../libraries/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
 }
 stage posix_layer musl "$POSIX_LIB" @POSIX_EXPORTS
 

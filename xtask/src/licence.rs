@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The licence header every file of Veda's own starts with
-//! (docs/CODING.md): its copyright holders, then its licence, as SPDX tags
-//! in the file's comment syntax. Its test holds the repository to it.
+//! (documentation/CODING.md): its copyright holders, then its licence, as
+//! SPDX tags in the file's comment syntax. Its test holds the repository to
+//! it.
 
 use std::process::Command;
 
@@ -93,10 +94,12 @@ mod tests {
 
     #[test]
     fn what_cannot_carry_a_header_goes_without() {
-        for path in ["docs/images/a.png", "Cargo.lock", "LICENSE", "ports/gcc/veda.patch"] {
+        for path in ["documentation/images/a.png", "Cargo.lock", "LICENSE", "ports/gcc/veda.patch"] {
             assert!(exempt(path), "{path}");
         }
-        for path in ["kernel/src/main.rs", "ports/crates.sh", "ports/linux/veda.config", "docs/website/index.html"] {
+        for path in
+            ["kernel/src/main.rs", "ports/crates.sh", "ports/linux/veda.config", "documentation/website/index.html"]
+        {
             assert!(!exempt(path), "{path}");
         }
     }
@@ -129,6 +132,10 @@ mod tests {
                 Err(_) => wrong.push(format!("{path} is not text: add its format to those without comments")),
             }
         }
-        assert!(wrong.is_empty(), "files without their licence header (docs/CODING.md):\n{}", wrong.join("\n"));
+        assert!(
+            wrong.is_empty(),
+            "files without their licence header (documentation/CODING.md):\n{}",
+            wrong.join("\n")
+        );
     }
 }

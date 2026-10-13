@@ -20,7 +20,7 @@ pub const UEFI_TARGET: &str = "x86_64-unknown-uefi";
 /// Rust's target of user-space programs: `no_std` PE executables, built
 /// for Windows' target, which gives them hard-float SSE code on stable
 /// Rust, and linked by LLVM's linker in the Microsoft linker's flavour
-/// (`lib/build`).
+/// (`libraries/build`).
 pub const USER_TARGET: &str = vbuild::amd64::TARGET;
 
 /// Rust's target of the code C programs link: the POSIX layer and the media
@@ -69,7 +69,7 @@ pub fn check_port_tools() -> Result {
     match nasm_version() {
         Some(v) if v >= NASM_MIN => Ok(()),
         _ => Err(format!(
-            "nasm {}.{} or newer is needed: install it from the distribution's packages (see docs/C.md)",
+            "nasm {}.{} or newer is needed: install it from the distribution's packages (see documentation/C.md)",
             NASM_MIN.0, NASM_MIN.1
         )),
     }

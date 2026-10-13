@@ -4,12 +4,12 @@
 //! `drivervm` — the driver VM.
 //!
 //! Runs Linux in a virtual machine, for the drivers Veda takes from it
-//! (see `docs/DRIVERVM.md`). The machine is Veda's paravirtual platform
-//! (`vhv::platform`): processors, memory, and hypercalls; no emulated
-//! hardware. This program is its monitor: it lays out the
-//! guest's memory, loads the kernel and its initial RAM file system from
-//! the system image (`linux/kernel`, `linux/initramfs.cpio`), runs the
-//! virtual processors, one thread each, and serves the hypercalls. What is
+//! (see `documentation/DRIVERVM.md`). The machine is Veda's paravirtual
+//! platform (`vhv::platform`): processors, memory, and hypercalls; no
+//! emulated hardware. This program is its monitor: it lays out the guest's
+//! memory, loads the kernel and its initial RAM file system from the system
+//! image (`linux/kernel`, `linux/initramfs.cpio`), runs the virtual
+//! processors, one thread each, and serves the hypercalls. What is
 //! particular to the architecture (booting Linux, the PC's own devices,
 //! the guest's memory map below 4 GiB) is in `arch`
 //! (`services/drivervm/src/arch/<architecture>/`).

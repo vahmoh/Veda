@@ -49,14 +49,14 @@ COMMANDS:
                 Build once, then run the scripts, several at once (--jobs N);
                 each one's log goes to target/veda/test-logs
     test        Run host unit tests, then the in-system integration tests
-                (--ui also runs the GUI automation scripts in tests/ui
-                and the agent's in tests/agent, several at once: --jobs N)
+                (--ui also runs the GUI automation scripts in verification/ui
+                and the agent's in verification/agent, several at once: --jobs N)
     toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
                 compiler for this machine and the native one the image installs in
-                /system (needs build tools; see docs/C.md; --jobs N)
+                /system (needs build tools; see documentation/C.md; --jobs N)
     linux       Build the Linux kernel of the driver VM from ports/linux (see
-                docs/DRIVERVM.md; --jobs N); later builds put it in the image, with the
-                guest's programs
+                documentation/DRIVERVM.md; --jobs N); later builds put it in the
+                image, with the guest's programs
     acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
                 holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
                 the firmware's variables read as zeros but those given with
@@ -128,7 +128,8 @@ struct Options {
     wait: f64,
     until: Option<String>,
     out: Option<PathBuf>,
-    /// `test`: also run the GUI scripts in `tests/ui` and `tests/agent`.
+    /// `test`: also run the GUI scripts in `verification/ui` and
+    /// `verification/agent`.
     ui: bool,
     /// Run the media generators (off: reuse what `target/generated` has).
     generate: bool,
@@ -239,9 +240,20 @@ fn resolution_size(v: &str) -> Option<(u32, u32)> {
 /// with the source directories (the tool and the libraries it uses) whose
 /// changes make it run again.
 const GENERATORS: &[(&str, &[&str])] = &[
-    ("assetgen", &["tools/assetgen", "lib/image"]),
-    ("musicgen", &["tools/musicgen", "lib/audio", "lib/image"]),
-    ("videogen", &["tools/videogen", "lib/gfx", "lib/raster", "lib/font", "lib/audio", "lib/image", "assets/fonts"]),
+    ("assetgen", &["tools/assetgen", "libraries/image"]),
+    ("musicgen", &["tools/musicgen", "libraries/audio", "libraries/image"]),
+    (
+        "videogen",
+        &[
+            "tools/videogen",
+            "libraries/gfx",
+            "libraries/raster",
+            "libraries/font",
+            "libraries/audio",
+            "libraries/image",
+            "assets/fonts",
+        ],
+    ),
 ];
 
 /// Newest modification time of any file under `dir`.
@@ -320,7 +332,7 @@ fn build_system(o: &Options) -> Result<System> {
         initrd.add(&format!("tests/c/{name}"), exe);
     }
     // Videos for the stand-in decoder, fakedec (the GUI scripts').
-    let clips = util::workspace_root().join("tests/fakedec/clips");
+    let clips = util::workspace_root().join("verification/fakedec/clips");
     for entry in std::fs::read_dir(&clips).map_err(|e| format!("reading {}: {e}", clips.display()))?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name != "README.md" {
@@ -966,12 +978,12 @@ fn test(o: &Options) -> Result {
     script_on(&o, checks, Some(&system))?;
     if o.ui {
         // The GUI scripts, then the agent's (with the stand-in for Deepgram;
-        // tests/real, which talks to the real one, is left out): each
+        // verification/real, which talks to the real one, is left out): each
         // group's own, and those that hold only on the architecture's
         // machine (`arch/<architecture>/`).
         let mut scripts: Vec<PathBuf> = Vec::new();
         for group in ["ui", "agent"] {
-            let dir = util::workspace_root().join("tests").join(group);
+            let dir = util::workspace_root().join("verification").join(group);
             let arch_dir = dir.join("arch").join(arch::NAME);
             for dir in std::iter::once(dir).chain(arch_dir.is_dir().then_some(arch_dir)) {
                 let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)

@@ -53,7 +53,7 @@
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
 //! say "open the text editor"      # speak into the test microphone (Deepgram TTS, cached) and wait until said
 //! say-async "stop"                 # the same without waiting (to talk over the agent)
-//! mic-wav tests/audio/hello.wav    # play a WAV file into the microphone and wait
+//! mic-wav verification/audio/hello.wav  # play a WAV file into the microphone and wait
 //! mic-silence 2                    # queue seconds of silence
 //! mic-tone 1.5 [6000]              # queue seconds of a voice-like buzz (peak amplitude), for voice detection
 //! mic-echo -6 250                  # the machine's sound output comes back into the microphone (gain dB, delay ms)

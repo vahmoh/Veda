@@ -7,42 +7,42 @@ members = [
     "xtask",
     "boot",
     "kernel",
-    "lib/abi",
-    "lib/bootinfo",
-    "lib/initrd",
-    "lib/pe",
-    "lib/elf",
-    "lib/posix",
-    "lib/raster",
-    "lib/font",
-    "lib/image",
-    "lib/heap",
-    "lib/build",
-    "lib/rt",
-    "lib/ipc",
-    "lib/proto",
-    "lib/virtio",
-    "lib/gfx",
-    "lib/ui",
-    "lib/text",
-    "lib/files",
-    "lib/audio",
-    "lib/entropy",
-    "lib/netstack",
-    "lib/net",
-    "lib/tls",
-    "lib/wlan",
-    "lib/radiolink",
-    "lib/json",
-    "lib/web",
-    "lib/agent",
-    "lib/acpi",
-    "lib/gpio",
-    "lib/splash",
-    "lib/glsl",
-    "lib/gl",
-    "lib/hv",
-    "lib/iommu",
+    "libraries/abi",
+    "libraries/bootinfo",
+    "libraries/initrd",
+    "libraries/pe",
+    "libraries/elf",
+    "libraries/posix",
+    "libraries/raster",
+    "libraries/font",
+    "libraries/image",
+    "libraries/heap",
+    "libraries/build",
+    "libraries/rt",
+    "libraries/ipc",
+    "libraries/proto",
+    "libraries/virtio",
+    "libraries/gfx",
+    "libraries/ui",
+    "libraries/text",
+    "libraries/files",
+    "libraries/audio",
+    "libraries/entropy",
+    "libraries/netstack",
+    "libraries/net",
+    "libraries/tls",
+    "libraries/wlan",
+    "libraries/radiolink",
+    "libraries/json",
+    "libraries/web",
+    "libraries/agent",
+    "libraries/acpi",
+    "libraries/gpio",
+    "libraries/splash",
+    "libraries/glsl",
+    "libraries/gl",
+    "libraries/hv",
+    "libraries/iommu",
     "services/init",
     "services/mediadec",
     "services/vfs",
@@ -52,19 +52,19 @@ members = [
     "services/wlan",
     "services/agent",
     "services/drivervm",
-    "apps/about",
-    "apps/shell",
-    "apps/editor",
-    "apps/photos",
-    "apps/music",
-    "apps/videos",
-    "apps/terminal",
-    "apps/taskmgr",
-    "apps/files",
-    "apps/settings",
-    "apps/interceptor",
-    "apps/interceptor/game",
-    "apps/videos/core",
+    "applications/about",
+    "applications/shell",
+    "applications/editor",
+    "applications/photos",
+    "applications/music",
+    "applications/videos",
+    "applications/terminal",
+    "applications/taskmgr",
+    "applications/files",
+    "applications/settings",
+    "applications/interceptor",
+    "applications/interceptor/game",
+    "applications/videos/core",
     "services/audio",
     "tools/assetgen",
     "tools/musicgen",
@@ -73,11 +73,11 @@ members = [
     "drivers/virtio-blk",
     "drivers/ahci",
     "drivers/nvme",
-    "tests/systest",
-    "tests/nettest",
-    "tests/testmic",
-    "tests/audiotest",
-    "tests/fakedec",
+    "verification/systest",
+    "verification/nettest",
+    "verification/testmic",
+    "verification/audiotest",
+    "verification/fakedec",
     "guest/init",
     "guest/bridgetest",
     "guest/pcitest",
@@ -112,42 +112,42 @@ authors = ["Vahid Mohammadi"]
 repository = "https://github.com/vahmoh25/Veda"
 
 [workspace.dependencies]
-vabi = { path = "lib/abi" }
-bootinfo = { path = "lib/bootinfo" }
-initrd = { path = "lib/initrd" }
-vpe = { path = "lib/pe" }
-velf = { path = "lib/elf" }
-vposix = { path = "lib/posix" }
-vraster = { path = "lib/raster" }
-vfont = { path = "lib/font" }
-vimage = { path = "lib/image" }
-vheap = { path = "lib/heap" }
-vbuild = { path = "lib/build" }
-vrt = { path = "lib/rt" }
-vipc = { path = "lib/ipc" }
-vproto = { path = "lib/proto" }
-vvirtio = { path = "lib/virtio" }
-vgfx = { path = "lib/gfx" }
-vui = { path = "lib/ui" }
-vtext = { path = "lib/text" }
-vfiles = { path = "lib/files" }
-vaudio = { path = "lib/audio" }
-ventropy = { path = "lib/entropy" }
-vnetstack = { path = "lib/netstack" }
-vnet = { path = "lib/net" }
-vtls = { path = "lib/tls" }
-vwlan = { path = "lib/wlan" }
-vradiolink = { path = "lib/radiolink" }
-vjson = { path = "lib/json" }
-vweb = { path = "lib/web" }
-vagent = { path = "lib/agent" }
-vacpi = { path = "lib/acpi" }
-vgpio = { path = "lib/gpio" }
-vsplash = { path = "lib/splash" }
-vglsl = { path = "lib/glsl" }
-vgl = { path = "lib/gl" }
-vhv = { path = "lib/hv" }
-viommu = { path = "lib/iommu" }
+vabi = { path = "libraries/abi" }
+bootinfo = { path = "libraries/bootinfo" }
+initrd = { path = "libraries/initrd" }
+vpe = { path = "libraries/pe" }
+velf = { path = "libraries/elf" }
+vposix = { path = "libraries/posix" }
+vraster = { path = "libraries/raster" }
+vfont = { path = "libraries/font" }
+vimage = { path = "libraries/image" }
+vheap = { path = "libraries/heap" }
+vbuild = { path = "libraries/build" }
+vrt = { path = "libraries/rt" }
+vipc = { path = "libraries/ipc" }
+vproto = { path = "libraries/proto" }
+vvirtio = { path = "libraries/virtio" }
+vgfx = { path = "libraries/gfx" }
+vui = { path = "libraries/ui" }
+vtext = { path = "libraries/text" }
+vfiles = { path = "libraries/files" }
+vaudio = { path = "libraries/audio" }
+ventropy = { path = "libraries/entropy" }
+vnetstack = { path = "libraries/netstack" }
+vnet = { path = "libraries/net" }
+vtls = { path = "libraries/tls" }
+vwlan = { path = "libraries/wlan" }
+vradiolink = { path = "libraries/radiolink" }
+vjson = { path = "libraries/json" }
+vweb = { path = "libraries/web" }
+vagent = { path = "libraries/agent" }
+vacpi = { path = "libraries/acpi" }
+vgpio = { path = "libraries/gpio" }
+vsplash = { path = "libraries/splash" }
+vglsl = { path = "libraries/glsl" }
+vgl = { path = "libraries/gl" }
+vhv = { path = "libraries/hv" }
+viommu = { path = "libraries/iommu" }
 guest-sys = { path = "guest/sys" }
 guest-netlink = { path = "guest/netlink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
@@ -164,7 +164,7 @@ p256 = { version = "0.14", default-features = false, features = ["arithmetic", "
 subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.9", default-features = false }
 # TLS (HTTPS, secure WebSockets): rustls, with a CryptoProvider built on the
-# RustCrypto crates (lib/tls). Same RustCrypto generation as above.
+# RustCrypto crates (libraries/tls). Same RustCrypto generation as above.
 rustls = { version = "0.23.45", default-features = false, features = ["tls12", "custom-provider"] }
 webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }

@@ -4,11 +4,12 @@
 # Ports
 
 Third-party software Veda builds from source: the C toolchain (see
-[docs/C.md](../docs/C.md)), FFmpeg and dav1d, which `mediadec` decodes
-videos with, Mesa, for the renderer, and the Rust crates that Veda
-changes (see Crates below). Veda's own code is Rust; what is written in C
-comes as a port, as does a crate that Veda changes: the upstream release,
-unchanged but for a patch that is kept small, readable and explained.
+[documentation/C.md](../documentation/C.md)), FFmpeg and dav1d, which
+`mediadec` decodes videos with, Mesa, for the renderer, and the Rust crates
+that Veda changes (see Crates below). Veda's own code is Rust; what is
+written in C comes as a port, as does a crate that Veda changes: the
+upstream release, unchanged but for a patch that is kept small, readable
+and explained.
 
 Each port is a directory:
 
@@ -87,7 +88,7 @@ it).
 **gmp, mpfr, mpc**: `config.sub` knows `veda`, so they build for Veda as
 the native GCC's libraries.
 
-**musl**: `__init_libc` sets the POSIX layer (`lib/posix`) up;
+**musl**: `__init_libc` sets the POSIX layer (`libraries/posix`) up;
 `posix_spawn` asks the layer to start the program. For AMD64: system calls
 go to the layer instead of the `syscall` instruction
 (`arch/x86_64/syscall_arch.h`); `_start` keeps the bootstrap channel

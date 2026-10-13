@@ -254,7 +254,7 @@
 + * /dev/veda at (MAP_SHARED, the length asked for); it is unmapped with
 + * munmap.
 + *
-+ * These are the definitions of Veda's own lib/hv/src/bridge.rs.
++ * These are the definitions of Veda's own libraries/hv/src/bridge.rs.
 + */
 +#ifndef _UAPI_LINUX_VEDA_H
 +#define _UAPI_LINUX_VEDA_H
@@ -539,7 +539,7 @@
 +#include <asm/veda_para.h>
 +#include <uapi/linux/veda.h>
 +
-+/* Operations (lib/hv/src/bridge.rs: op): the ioctls' numbers, and the
++/* Operations (libraries/hv/src/bridge.rs: op): the ioctls' numbers, and the
 + * driver's own. */
 +#define OP_SETUP	1
 +#define OP_WAIT		6
@@ -556,7 +556,7 @@
 +#define MAX_WAIT_ITEMS	1024
 +#define MAX_COPY	(64 * 1024)
 +
-+/* The notification ring: one page (lib/hv/src/bridge.rs: ring). */
++/* The notification ring: one page (libraries/hv/src/bridge.rs: ring). */
 +#define RING_HEAD	0
 +#define RING_TAIL	64
 +#define RING_ENTRIES	128

@@ -3,7 +3,8 @@
 
 //! `kmspause` — pauses Veda's display driver for Linux (`kms`) for a few
 //! seconds once it has set a display's mode, for the compositor's test of
-//! a driver that stops answering (`tests/ui/drivervm-display-pause.vts`):
+//! a driver that stops answering
+//! (`verification/ui/drivervm-display-pause.vts`):
 //! a flip asked for meanwhile waits longer than the compositor waits, and
 //! is carried out once the driver goes on. It says `kmspause: kms paused`
 //! and `kmspause: kms goes on`.

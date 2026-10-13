@@ -131,7 +131,7 @@ const POSIX_LAYER_EXPORTS: [&str; 22] = [
     "veda_object_signal",
 ];
 
-/// Builds the POSIX layer (`lib/posix`) as a static library for the
+/// Builds the POSIX layer (`libraries/posix`) as a static library for the
 /// architecture's bare target; returns its path.
 pub fn posix_library() -> Result<PathBuf> {
     util::status("Building", format!("the POSIX layer ({BARE_TARGET})"));
@@ -193,7 +193,7 @@ pub fn refresh_posix_layer() -> Result {
         std::fs::create_dir_all(object.parent().unwrap()).map_err(|e| format!("{e}"))?;
         posix_object(&library, &object)?;
     }
-    let headers = util::workspace_root().join("lib").join("posix").join("include").join("veda");
+    let headers = util::workspace_root().join("libraries").join("posix").join("include").join("veda");
     for sysroot in [root().join("cross").join("sysroot"), root().join("native")] {
         let libc = sysroot.join("system").join("lib").join("libc.a");
         if libc.is_file() && !is_newer(&libc, &[&object]) {
@@ -221,16 +221,17 @@ pub fn refresh_posix_layer() -> Result {
 /// executable's name, and the flags.
 const C_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-pie", &["-fPIE", "-static-pie"])];
 
-/// Compiles the test programs in C and C++ (`tests/c/*.c` and `*.cc`, each
-/// in every one of [`C_TEST_VARIANTS`]) for the system image: `(name,
-/// executable)`. None without a cross compiler. What they expect of the
-/// architecture is in the headers of `tests/c/arch/<architecture>/`.
+/// Compiles the test programs in C and C++ (`verification/c/*.c` and
+/// `*.cc`, each in every one of [`C_TEST_VARIANTS`]) for the system image:
+/// `(name, executable)`. None without a cross compiler. What they expect of
+/// the architecture is in the headers of
+/// `verification/c/arch/<architecture>/`.
 pub fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let Some(gcc) = cross_gcc() else { return Ok(Vec::new()) };
     let gxx = cross_tool("g++");
     refresh_posix_layer()?;
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
-    let src = util::workspace_root().join("tests").join("c");
+    let src = util::workspace_root().join("verification").join("c");
     let arch_headers = src.join("arch").join(arch::NAME);
     let headers: Vec<PathBuf> = std::fs::read_dir(&arch_headers)
         .map_err(|e| format!("reading {}: {e}", arch_headers.display()))?
@@ -467,8 +468,8 @@ fn toolchain_ports() -> Result<Vec<Port>> {
 
 /// The programs the build needs from the system: compilers and GNU tools,
 /// curl for the downloads, and meson and ninja for the media libraries;
-/// and the architecture's own (`arch::PORT_TOOLS`). `docs/C.md` names the
-/// packages.
+/// and the architecture's own (`arch::PORT_TOOLS`). `documentation/C.md`
+/// names the packages.
 const BUILD_TOOLS: [&str; 10] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "meson", "ninja"];
 
 /// The shell that runs `ports/build.sh`, once the build tools are there.
@@ -477,9 +478,11 @@ fn shell() -> Result<Command> {
         BUILD_TOOLS.iter().chain(arch::PORT_TOOLS).copied().filter(|t| util::find_on_path(t).is_none()).collect();
     match missing.as_slice() {
         [] => arch::check_port_tools().map(|()| Command::new("bash")),
-        [tool] => Err(format!("{tool} is missing: install it from the distribution's packages (see docs/C.md)")),
+        [tool] => {
+            Err(format!("{tool} is missing: install it from the distribution's packages (see documentation/C.md)"))
+        }
         [tools @ .., last] => Err(format!(
-            "{} and {last} are missing: install them from the distribution's packages (see docs/C.md)",
+            "{} and {last} are missing: install them from the distribution's packages (see documentation/C.md)",
             tools.join(", ")
         )),
     }

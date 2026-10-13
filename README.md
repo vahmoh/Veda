@@ -16,7 +16,7 @@ cryptography (smoltcp, rustls, RustCrypto), image codecs (zune, qoi,
 fast_image_resize) and math (libm, glam, rand). Veda runs on x86-64 PCs
 and in QEMU.
 
-![The Veda desktop, with the agent's window open and listening](docs/images/desktop.png)
+![The Veda desktop, with the agent's window open and listening](documentation/images/desktop.png)
 
 ## Why agentic-native
 
@@ -77,8 +77,8 @@ In Veda, the agent is a first-class user of the system:
    only if you allow it within three minutes. Sensitive actions can be
    allowed for good; destructive ones are asked about every time.
 
-[The agent](docs/AGENT.md) covers the design in full: the protocols, the
-voice pipeline, consent, memory and testing.
+[The agent](documentation/AGENT.md) covers the design in full: the
+protocols, the voice pipeline, consent, memory and testing.
 
 ## The operating system
 
@@ -95,7 +95,7 @@ voice pipeline, consent, memory and testing.
   own hypervisor (VMX with EPT, no emulated hardware). Devices go to it
   whole, their DMA confined and their interrupts remapped by Veda's IOMMU
   driver. A crashed driver takes down only the VM, which Veda resets and
-  restarts. See [the driver VM](docs/DRIVERVM.md).
+  restarts. See [the driver VM](documentation/DRIVERVM.md).
 * **Desktop.** A compositing window manager with server-side decorations,
   shadows, animations, snapping and an Alt+Tab switcher with live
   thumbnails. It composes on the GPU with Intel graphics and on the
@@ -116,7 +116,7 @@ voice pipeline, consent, memory and testing.
   networks with management frame protection, remembers them, reconnects
   and roams. Linux's drivers only move frames and never see a password.
   Applications get TLS 1.3 and 1.2 from `vtls`, with certificates checked
-  against Mozilla's roots. See [Networking](docs/NETWORKING.md).
+  against Mozilla's roots. See [Networking](documentation/NETWORKING.md).
 * **Audio.** A mixing service with echo-cancelled recording and ducking,
   built for the agent's conversations as much as for music.
 * **Video.** FFmpeg and dav1d, ported to Veda, decode the common formats
@@ -124,7 +124,7 @@ voice pipeline, consent, memory and testing.
   nothing but the file it is given: a damaged file that crashes or hangs
   it costs a moment, not the video. Pictures come through shared memory
   and are shown in time with the sound, timed to the screen's refresh.
-  See [Architecture](docs/ARCHITECTURE.md#video).
+  See [Architecture](documentation/ARCHITECTURE.md#video).
 * **Storage.** The home directory has its own disk. It is saved half a
   second after changes stop, alternating between two checksummed slots,
   so an interrupted save never damages the previous one. The agent's
@@ -134,7 +134,7 @@ voice pipeline, consent, memory and testing.
   program in the Terminal, compile it and run it, in QEMU or on a PC. C
   programs are static executables whose system calls go to `vposix`, a
   POSIX layer in Rust. A cross compiler also builds C and C++ programs
-  for Veda on the development machine. See [C on Veda](docs/C.md).
+  for Veda on the development machine. See [C on Veda](documentation/C.md).
 
 ## Applications
 
@@ -157,32 +157,32 @@ keyboard, the agent can do too.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/editor.png" width="100%" align="top" alt="The Text Editor showing a Rust program with syntax highlighting"></td>
-    <td width="50%"><img src="docs/images/photos.png" width="100%" align="top" alt="Photos showing a library of eight pictures"></td>
+    <td width="50%"><img src="documentation/images/editor.png" width="100%" align="top" alt="The Text Editor showing a Rust program with syntax highlighting"></td>
+    <td width="50%"><img src="documentation/images/photos.png" width="100%" align="top" alt="Photos showing a library of eight pictures"></td>
   </tr>
   <tr>
     <td align="center">Text Editor, highlighting Rust</td>
     <td align="center">Photos, the picture library</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/music.png" width="100%" align="top" alt="Music playing a song, with cover art and a spectrum visualiser"></td>
-    <td width="50%"><img src="docs/images/files.png" width="100%" align="top" alt="Files showing pictures as thumbnails, with the Trash in its sidebar"></td>
+    <td width="50%"><img src="documentation/images/music.png" width="100%" align="top" alt="Music playing a song, with cover art and a spectrum visualiser"></td>
+    <td width="50%"><img src="documentation/images/files.png" width="100%" align="top" alt="Files showing pictures as thumbnails, with the Trash in its sidebar"></td>
   </tr>
   <tr>
     <td align="center">Music, with its visualiser</td>
     <td align="center">Files, with thumbnails</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/videos.png" width="100%" align="top" alt="Videos playing an aurora timelapse, a picture from further on above its seek bar"></td>
-    <td width="50%"><img src="docs/images/agent-settings.png" width="100%" align="top" alt="Settings on the agent's page: its Deepgram key, its name, voice and speaking rate, and its language model"></td>
+    <td width="50%"><img src="documentation/images/videos.png" width="100%" align="top" alt="Videos playing an aurora timelapse, a picture from further on above its seek bar"></td>
+    <td width="50%"><img src="documentation/images/agent-settings.png" width="100%" align="top" alt="Settings on the agent's page: its Deepgram key, its name, voice and speaking rate, and its language model"></td>
   </tr>
   <tr>
     <td align="center">Videos, AV1 decoded by dav1d</td>
     <td align="center">Agent Settings</td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/images/gcc.png" width="100%" align="top" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
-    <td width="50%"><img src="docs/images/interceptor.png" width="100%" align="top" alt="Interceptor: a chase at sunset on a road through the trees of the hills"></td>
+    <td width="50%"><img src="documentation/images/gcc.png" width="100%" align="top" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
+    <td width="50%"><img src="documentation/images/interceptor.png" width="100%" align="top" alt="Interceptor: a chase at sunset on a road through the trees of the hills"></td>
   </tr>
   <tr>
     <td align="center">GCC 16 in the Terminal</td>
@@ -190,10 +190,11 @@ keyboard, the agent can do too.
   </tr>
 </table>
 
-Every screenshot is 1280x800. They are taken in QEMU by `cargo xtask
-script docs/screenshots.vts`, with the agent talking to a stand-in for
-Deepgram. Interceptor's is taken at 1920x1200 by `cargo xtask script
-docs/interceptor.vts --resolution 1920x1200` and scaled down.
+Every screenshot is 1280x800. They are taken in QEMU by
+`cargo xtask script documentation/screenshots.vts`, with the agent talking
+to a stand-in for Deepgram. Interceptor's is taken at 1920x1200 by
+`cargo xtask script documentation/interceptor.vts --resolution 1920x1200`
+and scaled down.
 
 ## Quick start
 
@@ -212,11 +213,11 @@ Veda is built on an x86-64 PC with Linux.
   `flex`, `bison`, `meson`, `ninja-build`, `libgmp-dev`, `libmpfr-dev`,
   `libmpc-dev`, `python3-mako` and `python3-packaging`), and KVM's nested
   virtualization (`kvm_intel nested=1`). See
-  [the driver VM](docs/DRIVERVM.md#testing).
+  [the driver VM](documentation/DRIVERVM.md#testing).
 * Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
   your distribution's build tools for the C toolchain, which
   `cargo xtask toolchain` builds once (see
-  [C on Veda](docs/C.md#the-toolchain)), with `nasm` for the video
+  [C on Veda](documentation/C.md#the-toolchain)), with `nasm` for the video
   decoders it builds too.
 
 Check the environment:
@@ -303,8 +304,8 @@ Linux's drivers in the driver VM support:
 
 Without VT-x and VT-d, Veda drives only the disks (with VT-x alone, PS/2
 keyboards and mice too). USB disks, the stick included, are left alone.
-[Status](docs/DRIVERVM.md#status) shows how far each device class has
-come. To try USB input or HD Audio in QEMU:
+[Status](documentation/DRIVERVM.md#status) shows how far each device class
+has come. To try USB input or HD Audio in QEMU:
 
 ```bash
 cargo xtask run --input usb
@@ -408,7 +409,7 @@ units and defaults spelled out. Declare each action's risk, name its
 target explicitly (an approved action may run minutes later), and run it
 through the same code as the keyboard and mouse. Consent, memory and the
 conversation are the system's job, not the application's. See
-[Making an application agent-compatible](docs/AGENT.md#making-an-application-agent-compatible).
+[Making an application agent-compatible](documentation/AGENT.md#making-an-application-agent-compatible).
 
 ## Testing
 
@@ -425,20 +426,21 @@ panic fails the run.
 cargo xtask test --ui
 ```
 
-This adds the GUI scripts in `tests/ui/` (with `tests/ui/arch/amd64/`,
-those that hold only on QEMU's PC) and the agent's scripts in
-`tests/agent/`. They click through the desktop and the applications, check
-logs and screenshots, and break the simulated Wi-Fi network in many ways
-to check that Veda recovers by itself. Scripts that need GCC or the video
-decoder are skipped without the C toolchain. Videos is also tested without
-it, with a stand-in decoder (`tests/fakedec`) that draws its pictures and
-crashes, hangs or falls behind when asked.
+This adds the GUI scripts in `verification/ui/` (with
+`verification/ui/arch/amd64/`, those that hold only on QEMU's PC) and the
+agent's scripts in `verification/agent/`. They click through the desktop
+and the applications, check logs and screenshots, and break the simulated
+Wi-Fi network in many ways to check that Veda recovers by itself. Scripts
+that need GCC or the video decoder are skipped without the C toolchain.
+Videos is also tested without it, with a stand-in decoder
+(`verification/fakedec`) that draws its pictures and crashes, hangs or
+falls behind when asked.
 
 The agent's scripts run against a stand-in for Deepgram on the host, so
 they are deterministic, offline and free. They cover conversations,
 function calls, interruptions, echo, consent, waking by name over music
-and every application's actions. `tests/real/` talks to the real Deepgram
-(with the key in `DEEPGRAM_API_KEY`), using a synthetic voice in a
+and every application's actions. `verification/real/` talks to the real
+Deepgram (with the key in `DEEPGRAM_API_KEY`), using a synthetic voice in a
 virtual microphone.
 
 Networking has host tests of its own: 802.11 and its cryptography against
@@ -449,7 +451,7 @@ DNS, TCP, HTTP, HTTPS and ping.
 To run one script, or to boot headless and save `target/veda/screen.png`:
 
 ```bash
-cargo xtask script tests/agent/wake-name.vts
+cargo xtask script verification/agent/wake-name.vts
 cargo xtask shot --wait 20
 ```
 
@@ -460,35 +462,36 @@ output) to `target/veda/serial.log`.
 
 | Path | Contents |
 |------|----------|
-| `services/agent/`, `lib/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `lib/agent` |
+| `services/agent/`, `libraries/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `libraries/agent` |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel, with the hypervisor and the IOMMU driver |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
 | `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
-| `lib/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
-| `apps/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
+| `libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
+| `applications/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
 | `guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
 | `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
-| `tests/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
+| `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
 | `assets/` | fonts and application manifests |
-| `docs/` | documentation, the README's screenshots, the icon and social preview (`docs/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`docs/website/`) |
+| `documentation/` | documentation, the README's screenshots, the icon and social preview (`documentation/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`documentation/website/`) |
 
 ## Documentation
 
-* [The agent](docs/AGENT.md): the voice agent, its functions, consent and
-  memory, and how applications become agent-compatible.
-* [Architecture](docs/ARCHITECTURE.md): how the system fits together.
-* [Networking](docs/NETWORKING.md): the network and Wi-Fi services, the
-  simulated Wi-Fi environment, security and tests.
-* [C on Veda](docs/C.md): writing, compiling and running C programs, the
-  POSIX layer, and how the toolchain is built.
-* [The driver VM](docs/DRIVERVM.md): the hypervisor, the platform, the
-  bridge, the IOMMU and the devices.
-* [Developing](docs/DEVELOPING.md): build commands, the system image,
-  writing applications, performance notes.
-* [Coding conventions](docs/CODING.md).
+* [The agent](documentation/AGENT.md): the voice agent, its functions,
+  consent and memory, and how applications become agent-compatible.
+* [Architecture](documentation/ARCHITECTURE.md): how the system fits
+  together.
+* [Networking](documentation/NETWORKING.md): the network and Wi-Fi
+  services, the simulated Wi-Fi environment, security and tests.
+* [C on Veda](documentation/C.md): writing, compiling and running C
+  programs, the POSIX layer, and how the toolchain is built.
+* [The driver VM](documentation/DRIVERVM.md): the hypervisor, the platform,
+  the bridge, the IOMMU and the devices.
+* [Developing](documentation/DEVELOPING.md): build commands, the system
+  image, writing applications, performance notes.
+* [Coding conventions](documentation/CODING.md).
 
 ## License
 
@@ -503,7 +506,7 @@ PURPOSE.
 
 Every file of Veda's own names its copyright holders and its licence in
 its first lines, as SPDX tags (see
-[Licence headers](docs/CODING.md#licence-headers)).
+[Licence headers](documentation/CODING.md#licence-headers)).
 
 Other parts keep their own licences:
 

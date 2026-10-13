@@ -4,7 +4,7 @@
 
 # Builds the Linux kernel of Veda's driver VM from the port in this
 # directory. `cargo xtask linux` runs it after downloading and verifying the
-# sources (see xtask/src/linux.rs and docs/DRIVERVM.md).
+# sources (see xtask/src/linux.rs and documentation/DRIVERVM.md).
 #
 # Environment:
 #   VEDA_PORTS   the ports directory

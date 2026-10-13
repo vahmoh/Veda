@@ -3,11 +3,11 @@
 
 //! `efivartest` — checks, inside the driver VM's Linux, the PC's firmware
 //! variables Veda gave it, as a test's firmware has them
-//! (`tests/ui/drivervm-variables.vts`): two variables of a test vendor's,
-//! `VedaTest`, which an operating system may read, and `VedaBootOnly`,
-//! which it may not. The guest reads the first through efivarfs as the
-//! firmware keeps it, does not have the second, and cannot change them. It
-//! says `efivartest: PASS` when all is well.
+//! (`verification/ui/drivervm-variables.vts`): two variables of a test
+//! vendor's, `VedaTest`, which an operating system may read, and
+//! `VedaBootOnly`, which it may not. The guest reads the first through
+//! efivarfs as the firmware keeps it, does not have the second, and cannot
+//! change them. It says `efivartest: PASS` when all is well.
 
 use std::fs;
 

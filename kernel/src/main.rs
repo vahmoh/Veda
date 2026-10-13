@@ -9,7 +9,7 @@
 //! interrupt delivery. Drivers, file systems, the window system and all
 //! applications are user-space processes that talk over channels.
 //!
-//! See `docs/ARCHITECTURE.md` for the overall design.
+//! See `documentation/ARCHITECTURE.md` for the overall design.
 
 #![no_std]
 #![no_main]
