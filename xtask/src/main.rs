@@ -11,12 +11,14 @@ mod airsim;
 mod arch;
 mod automate;
 mod components;
+mod crates;
 mod image;
 #[cfg(test)]
 mod licence;
 mod linux;
 mod mic;
 mod ovmfvars;
+mod ports;
 mod qemu;
 mod qmp;
 mod toolchain;
@@ -63,6 +65,9 @@ COMMANDS:
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
+
+Every command but help and clean first prepares the crates of ports/
+(smoltcp, zune-jpeg) for Cargo, when a port has changed: see ports/README.md.
 
 BUILD OPTIONS:
     --debug             Build without optimisations (slow under emulation)
@@ -1014,6 +1019,7 @@ fn doctor() -> Result {
         );
     }
     check("linker", rust_lld().map(|p| p.display().to_string()));
+    check("ported crates", crates::status());
     match qemu::QemuInstall::locate() {
         Ok(q) => {
             check("qemu", Ok(q.binary.display().to_string()));
@@ -1067,7 +1073,14 @@ fn main() -> ExitCode {
         Some((c, r)) => (c.as_str(), r),
         None => ("help", &[][..]),
     };
-    let result = match cmd {
+    // Before anything else, Cargo is made to build the crates in ports/ as
+    // Veda patches them (see crates.rs), but for the commands that build
+    // nothing; `doctor` reports on them.
+    let prepared = match cmd {
+        "help" | "--help" | "-h" | "clean" | "doctor" => Ok(()),
+        _ => crates::prepare(),
+    };
+    let result = prepared.and_then(|()| match cmd {
         "build" => parse_options(rest).and_then(|o| build(&o).map(|_| ())),
         "iso" => parse_options(rest).and_then(|o| iso(&o)),
         "run" => parse_options(rest).and_then(|o| run(&o)),
@@ -1098,7 +1111,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         other => Err(format!("unknown command '{other}'\n\n{HELP}")),
-    };
+    });
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

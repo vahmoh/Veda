@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::arch::{self, BARE_TARGET};
+use crate::ports::{self, Port};
 use crate::util::{self, Result};
 
 /// Where the toolchain is built.
@@ -422,7 +423,7 @@ pub fn relink_native() -> Result {
     if !built("native toolchain") || !object.is_file() {
         return Ok(());
     }
-    let current = sha256_of(&object)?;
+    let current = ports::sha256_of(&object)?;
     if std::fs::read_to_string(native_layer_note()).is_ok_and(|linked| linked.trim() == current) {
         return Ok(());
     }
@@ -459,81 +460,9 @@ pub fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
     Ok(files)
 }
 
-/// A source package of `ports/` (its `port.toml`).
-pub struct Port {
-    name: String,
-    version: String,
-    url: String,
-    sha256: String,
-}
-
-impl Port {
-    /// The port in `ports/NAME`.
-    pub fn named(name: &str) -> Result<Port> {
-        Port::load(&util::workspace_root().join("ports").join(name))
-    }
-
-    fn load(dir: &Path) -> Result<Port> {
-        let file = dir.join("port.toml");
-        let text = std::fs::read_to_string(&file).map_err(|e| format!("reading {}: {e}", file.display()))?;
-        let value = |key: &str| -> Result<String> {
-            text.lines()
-                .filter_map(|l| l.split_once('='))
-                .find(|(k, _)| k.trim() == key)
-                .map(|(_, v)| v.trim().trim_matches('"').to_string())
-                .ok_or_else(|| format!("{}: no {key}", file.display()))
-        };
-        Ok(Port { name: value("name")?, version: value("version")?, url: value("url")?, sha256: value("sha256")? })
-    }
-
-    /// Where its archive is downloaded to, in `downloads`.
-    fn archive(&self, downloads: &Path) -> PathBuf {
-        downloads.join(self.url.rsplit('/').next().unwrap_or(&self.name))
-    }
-}
-
 /// The ports the toolchain and the media libraries are built from.
-fn ports() -> Result<Vec<Port>> {
+fn toolchain_ports() -> Result<Vec<Port>> {
     ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "dav1d", "ffmpeg"].iter().map(|p| Port::named(p)).collect()
-}
-
-pub fn sha256_of(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let data = util::read(path)?;
-    Ok(Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect())
-}
-
-/// Downloads a port's source archive into `downloads` unless it is there,
-/// and checks it against the SHA-256 the port pins. An archive the other
-/// build (the C toolchain's, or the driver VM's Linux) has is copied.
-pub fn fetch(port: &Port, downloads: &Path) -> Result {
-    let archive = port.archive(downloads);
-    if archive.is_file() && sha256_of(&archive)? == port.sha256 {
-        return Ok(());
-    }
-    for other in [root().join("downloads"), crate::linux::root().join("downloads")] {
-        let copy = port.archive(&other);
-        if other != downloads && copy.is_file() && sha256_of(&copy)? == port.sha256 {
-            std::fs::create_dir_all(downloads).map_err(|e| format!("{e}"))?;
-            std::fs::copy(&copy, &archive).map_err(|e| format!("copying {}: {e}", copy.display()))?;
-            return Ok(());
-        }
-    }
-    util::status("Downloading", &port.url);
-    std::fs::create_dir_all(archive.parent().unwrap()).map_err(|e| format!("{e}"))?;
-    let partial = archive.with_extension("part");
-    util::run(
-        Command::new("curl")
-            .args(["-fL", "--retry", "3", "--silent", "--show-error", "-o"])
-            .arg(&partial)
-            .arg(&port.url),
-    )?;
-    let got = sha256_of(&partial)?;
-    if got != port.sha256 {
-        let _ = std::fs::remove_file(&partial);
-        return Err(format!("{}: SHA-256 {got}, expected {} (ports/{}/port.toml)", port.url, port.sha256, port.name));
-    }
-    std::fs::rename(&partial, &archive).map_err(|e| format!("{e}"))
 }
 
 /// The programs the build needs from the system: compilers and GNU tools,
@@ -583,8 +512,8 @@ pub fn command(args: &[String]) -> Result {
     }
     // The tools first: the downloads are large.
     let mut sh = shell()?;
-    for port in ports()? {
-        fetch(&port, &root().join("downloads"))?;
+    for port in toolchain_ports()? {
+        ports::fetch(&port, &root().join("downloads"))?;
     }
     // The script makes the C library's object of the POSIX layer once its
     // cross linker exists.
@@ -601,7 +530,7 @@ pub fn command(args: &[String]) -> Result {
     // The native programs now have the POSIX layer's object as it is.
     let object = posix_layer_object();
     let note = native_layer_note();
-    std::fs::write(&note, sha256_of(&object)?).map_err(|e| format!("writing {}: {e}", note.display()))?;
+    std::fs::write(&note, ports::sha256_of(&object)?).map_err(|e| format!("writing {}: {e}", note.display()))?;
     util::status("Finished", format!("the C toolchain in {:.0} min", started.elapsed().as_secs_f32() / 60.0));
     Ok(())
 }

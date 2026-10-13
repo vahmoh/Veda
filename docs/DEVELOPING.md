@@ -272,6 +272,12 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   log, screenshots) to private paths, e.g.
   `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
   Paths in automation scripts (`shot FILE`) are relative to the repository.
+* smoltcp and zune-jpeg, which Veda changes, are ports: every
+  `cargo xtask` command first has Cargo build them as `ports/` has them,
+  prepared in `ports/.crates` (see "Crates" in `ports/README.md`). In a
+  new checkout, run one (`cargo xtask doctor`) before Cargo itself
+  (`cargo test -p ...`, rust-analyzer), which until then builds their
+  releases as published.
 
 ## The system image
 

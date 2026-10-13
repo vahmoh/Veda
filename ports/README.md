@@ -5,16 +5,18 @@
 
 Third-party software Veda builds from source: the C toolchain (see
 [docs/C.md](../docs/C.md)), FFmpeg and dav1d, which `mediadec` decodes
-videos with, and Mesa, for the renderer. Veda's own code is
-Rust; what is written in C
-comes as a port: the upstream release, unchanged but for a patch that is
-kept small, readable and explained.
+videos with, Mesa, for the renderer, and the Rust crates that Veda
+changes (see Crates below). Veda's own code is Rust; what is written in C
+comes as a port, as does a crate that Veda changes: the upstream release,
+unchanged but for a patch that is kept small, readable and explained.
 
 Each port is a directory:
 
 * `port.toml`: the name, version, download address, the SHA-256 of the
-  archive and the licence. `cargo xtask toolchain` downloads the archive
-  and refuses one whose hash differs.
+  archive and the licence. `cargo xtask` downloads the archive
+  (`cargo xtask toolchain` the C toolchain's, `cargo xtask linux` the
+  driver VM's, every command the crates') and refuses one whose hash
+  differs.
 * `veda.patch`: the changes for Veda, applied with `patch -p1` to the
   unpacked archive.
 * `arch/<architecture>/veda.patch`: the changes for Veda on that
@@ -22,11 +24,46 @@ Each port is a directory:
   have one for AMD64); and what else the port takes from the architecture
   (the driver VM kernel's options, `linux/arch/amd64/veda.config`).
 
-`build.sh` builds them all (`cargo xtask toolchain` runs it; the
-comments at its top list what it expects and makes), for the
-architecture xtask names (`VEDA_ARCH`): what the scripts take from it (the
-target triples, musl's, Meson's, FFmpeg's and Linux's names for it, the
-assembler of the media libraries) is in `arch/<architecture>/settings.sh`.
+`build.sh` builds the C toolchain and the media libraries (run by
+`cargo xtask toolchain`), `linux/build.sh` the driver VM's Linux, its
+toolchain and Mesa's build (`cargo xtask linux`), and `crates.sh`
+prepares the crates (below); the comments at the top of each list what
+it expects and makes. They build for the architecture xtask names
+(`VEDA_ARCH`): what the scripts take from it (the target triples, musl's,
+Meson's, FFmpeg's and Linux's names for it, the assembler of the media
+libraries) is in `arch/<architecture>/settings.sh`.
+
+## Crates
+
+smoltcp and zune-jpeg are Rust crates. Each one's release is its
+archive on crates.io (the `.crate` that Cargo itself would download; the
+SHA-256 that `port.toml` pins is crates.io's checksum of it). The
+workspace depends on the release by its version, as on any crate
+(smoltcp's is `version = "=0.14.0"` in `Cargo.toml`), and Cargo builds
+the port in its place:
+
+* Every `cargo xtask` command first prepares the crates
+  (`xtask/src/crates.rs`): when a port has changed, it downloads and
+  checks the release, and `crates.sh` unpacks it and applies the port's
+  patches in `ports/.crates/src/<crate>`, which Git ignores.
+* xtask writes `ports/.crates/config.toml`, which has Cargo build those
+  in place of the releases (a `[patch.crates-io]`, which
+  `.cargo/config.toml` includes), and checks that `Cargo.lock` has them.
+
+Cargo reads them before it builds anything, so they are kept outside
+`target/` and `cargo clean` (removing `ports/.crates` has them prepared
+anew). Where they are not ready, in a new checkout or while a port that
+has changed is prepared again, Cargo resolves the releases as published,
+and `Cargo.lock` shows them so, until a `cargo xtask` command has
+prepared them: in a new checkout, run one (`cargo xtask doctor`) before
+Cargo itself (`cargo test -p ...`, rust-analyzer).
+
+A crate's own tests run apart from the workspace, which leaves the
+crates out, from the repository's root:
+
+```bash
+cargo test --lib --manifest-path ports/.crates/src/smoltcp/Cargo.toml --target-dir target/ports
+```
 
 ## The patches
 
@@ -92,12 +129,47 @@ toolchain (GCC, binutils and musl for Linux, the releases these ports
 pin, unpatched); `cargo xtask` builds the renderer (ninja) with the
 system.
 
+**smoltcp**: unpredictable protocol numbers. Upstream draws TCP initial
+sequence numbers, DHCP transaction ids, DNS ids, the initial IPv4
+identification and random source ports from an sPCG32 generator seeded
+with 64 bits, whose state can be recovered from a few outputs: a server
+that sees the initial sequence numbers of its own connections could
+predict those of the machine's other connections and inject data into
+them off-path (RFC 6528 explains the attack). `Config` gains
+`random_key: Option<[u8; 32]>`; with a key, the generator (`src/rand.rs`)
+gives a ChaCha20 keystream (RFC 8439's block function, a 64-bit block
+counter, a zero nonce), and `netd` keys every interface with 32 bytes
+from the kernel's generator. Without one, it is upstream's sPCG32
+exactly, so upstream's tests still pass byte for byte.
+
+**zune-jpeg**: sequential JPEGs with a scan per component. A baseline or
+extended JPEG may code its components in separate scans, one each (T.81,
+A.2.2), each holding its component's data units in raster order: for a
+picture whose chroma is subsampled, the luma scan has twice the rows of
+MCUs. Upstream decoded every scan for as many rows as the picture has MCU
+rows, and placed each row of luma blocks two block rows apart, so these
+pictures came out as stripes (libjpeg decodes them correctly);
+jpeg-encoder, for one, writes every baseline JPEG with optimized Huffman
+tables this way. A scan of one component is decoded for its component's
+rows of data units (`single_component_scan_rows` in `src/mcu.rs`), each
+8 lines of the component's plane; other pictures decode as before
+(`vimage`'s `jpegs_with_a_scan_per_component` test checks it). And
+`src/lib.rs` loses a crate-level `#![macro_use]`, which does nothing
+there, and which rustc warns will become an error. Left as it is, as
+`vimage` does not use it: CMYK and YCCK pictures converted to RGBA (or
+BGRA) are written three bytes a pixel (`color_convert_cymk_to_rgb` and
+`color_convert_ycck_to_rgb` in `src/worker.rs`); `vimage` converts them
+to RGB, which is right.
+
 ## Updating a port
 
 1. Download the new release and its signature; check the signature
    against the project's keys (GNU: the GNU keyring; musl: its key on
-   musl.libc.org).
-2. Put the new version, address and SHA-256 into `port.toml`.
+   musl.libc.org). A crate's release, its archive on crates.io, has no
+   signature: its SHA-256 is the checksum crates.io's index gives it
+   (which a `Cargo.lock` with the release shows).
+2. Put the new version, address and SHA-256 into `port.toml`, and a
+   crate's version into the workspace's `Cargo.toml` too.
 3. Unpack the release, apply the old `veda.patch` (and then each
    architecture's `arch/<architecture>/veda.patch`) and resolve what no
    longer applies; then make the patches again (`diff -ruN a b`, paths
@@ -105,16 +177,19 @@ system.
    pristine release, an architecture's against the release with
    `veda.patch` applied). What only an architecture needs goes in its
    patch.
-4. `cargo xtask toolchain` rebuilds what changed; then `cargo xtask test`.
+4. `cargo xtask toolchain` rebuilds what changed (`cargo xtask linux`
+   the driver VM's; any `cargo xtask` command prepares a crate again, and
+   its own tests run as Crates above shows); then `cargo xtask test`.
 
 ## Licences
 
 The ports keep their licences: GCC and binutils GPL-3.0-or-later (libgcc
 with the GCC Runtime Library Exception), GMP, MPFR and MPC
 LGPL-3.0-or-later, musl MIT, FFmpeg LGPL-2.1-or-later, dav1d BSD-2-Clause,
-and the parts of Mesa the renderer uses MIT. Distributing Veda's image,
-which contains them, means offering their source: the archives
-`port.toml` names and the patches here.
+the parts of Mesa the renderer uses MIT, smoltcp 0BSD, and zune-jpeg MIT,
+Apache-2.0 or Zlib. Distributing Veda's image, which contains them, means
+offering their source: the archives `port.toml` names and the patches
+here.
 
 Some of the formats FFmpeg decodes (H.264, HEVC and AAC among them) are
 covered by patents in some countries. The software licences do not

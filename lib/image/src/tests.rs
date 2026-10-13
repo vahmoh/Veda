@@ -379,7 +379,7 @@ fn jpegs_of_every_kind() {
 fn jpegs_with_a_scan_per_component() {
     // jpeg-encoder writes a baseline JPEG with optimized Huffman tables as one scan per
     // component, whose data units are in each component's own raster order (T.81 A.2.2):
-    // zune-jpeg 0.5.15 misplaced the luma rows of subsampled ones (see third_party/zune-jpeg).
+    // zune-jpeg 0.5.15 misplaced the luma rows of subsampled ones (see ports/zune-jpeg).
     for (w, h) in [(48u32, 32u32), (100, 60), (333, 211)] {
         let img = photo(w, h);
         for sampling in [jpeg_encoder::SamplingFactor::R_4_2_0, jpeg_encoder::SamplingFactor::R_4_2_2] {

@@ -468,11 +468,10 @@ output) to `target/veda/serial.log`.
 | `lib/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
 | `apps/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
 | `guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
-| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, FFmpeg and dav1d for videos, and Linux for the driver VM |
+| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `tests/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
-| `third_party/` | vendored crates with Veda's patches (smoltcp, zune-jpeg) |
 | `assets/` | fonts and application manifests |
 | `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
 | `website/` | [www.vedaos.org](https://www.vedaos.org), a static page |
@@ -521,7 +520,10 @@ Other parts keep their own licences:
   from Sound Open Firmware's releases (sof-bin: Intel's signed builds of
   the audio DSP's firmware, under the BSD licence and Intel's patent
   licence in its `LICENCE.Intel`).
-* **Vendored code** keeps its own licence; see `third_party/`.
+* **The crates Veda changes**: smoltcp under the 0BSD licence, and
+  zune-jpeg under the MIT, Apache 2.0 or zlib licence, at the choice of
+  whoever uses it. Their source is the releases that `ports/smoltcp` and
+  `ports/zune-jpeg` name, with the patches beside them.
 * **The C toolchain** an image may contain: GCC and binutils under the GPL
   version 3 or later (the GCC runtime library with its Runtime Library
   Exception, so programs GCC builds keep their own licences), GMP, MPFR

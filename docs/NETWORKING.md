@@ -22,8 +22,8 @@ talk over kernel channels; the kernel knows nothing about networks.
 * **`netd`** is the network service: IPv4 and IPv6, DHCP, IPv6 address
   autoconfiguration, routing between interfaces, a caching DNS resolver,
   and the sockets applications use. The protocol engine is
-  [smoltcp](https://github.com/smoltcp-rs/smoltcp), vendored in
-  `third_party/smoltcp` with one documented patch (see below).
+  [smoltcp](https://github.com/smoltcp-rs/smoltcp), a port
+  (`ports/smoltcp`): its release with one documented patch (see below).
 * **Applications** use `vnet` (`lib/net`): blocking, `std::net`-like
   `TcpStream`, `TcpListener`, `UdpSocket`, name resolution, ping, a small
   HTTP client, and `vnet::wifi` for Wi-Fi; and `vtls` (`lib/tls`) for TLS
@@ -304,10 +304,10 @@ yet).
 The protocols are implemented with mature Rust crates where they exist,
 built `no_std`:
 
-* **smoltcp 0.14** (TCP/IP), vendored with one patch: its random numbers
+* **smoltcp 0.14** (TCP/IP), a port with one patch: its random numbers
   (TCP initial sequence numbers, DHCP and DNS ids, source ports) come from
   a ChaCha20 stream keyed from the kernel's generator instead of the
-  predictable upstream sPCG32 (`third_party/smoltcp/VEDA-PATCHES.md`).
+  predictable upstream sPCG32 (`ports/smoltcp`; see `ports/README.md`).
 * **RustCrypto**: `sha1`, `sha2`, `hmac`, `pbkdf2`, `aes`, `ccm`, `cmac`,
   `aes-kw`, `p256` (SAE), plus `subtle` (constant-time comparisons) and
   `zeroize`.

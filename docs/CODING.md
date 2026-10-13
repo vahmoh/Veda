@@ -26,9 +26,10 @@ These rules apply to every crate in the repository.
   `[workspace.dependencies]`, and come with a reason; avoid crates with
   large dependency trees, and a second generation of a crate family
   already used. A library that is wrong is fixed, not worked around in
-  silence: vendored in `third_party/` with documented patches (smoltcp,
-  zune-jpeg), and reported upstream. `core`, `alloc` and (for host tools
-  only) `std` are available.
+  silence: it becomes a port (`ports/`, as smoltcp and zune-jpeg are: its
+  release with an explained patch, which Cargo builds in its place), and
+  the bug is reported upstream. `core`, `alloc` and (for host tools only)
+  `std` are available.
 * **Rust only**, performance-critical code included (see Performance below).
   Software written in C that Veda builds on (the C toolchain: GCC,
   binutils, musl, ...) comes as *ports* (`ports/`): an upstream release
@@ -177,8 +178,8 @@ tags in the file's comment syntax:
   SVG have it in HTML comments.
 * Files whose format has no comments go without (images, fonts, videos,
   test vectors, JSON, `website/CNAME`), as do `Cargo.lock`, which Cargo
-  writes, licence texts, and other projects' files: the vendored crates
-  (`third_party/<crate>/`) and the ports' patches.
+  writes, licence texts, and the ports' patches, which change other
+  projects' files.
 * A test of xtask's (`xtask/src/licence.rs`), which `cargo xtask test`
   runs, checks every file of the repository, and every new one Git does
   not ignore.

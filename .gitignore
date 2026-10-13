@@ -5,7 +5,7 @@
 *.pdb
 *.obj
 /out
-# Lock files of vendored crates' own test runs
-/third_party/*/Cargo.lock
+# The crates in ports/, as `cargo xtask` prepares them for Cargo
+/ports/.crates/
 # Tool working copies (git worktrees of parallel work)
 /.claude/

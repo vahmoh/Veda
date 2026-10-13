@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# zune-jpeg: the JPEG decoder of vimage, Veda's pictures (the `image`
+# crate's). A crate: its release on crates.io, which Cargo builds.
+name = "zune-jpeg"
+version = "0.5.15"
+url = "https://static.crates.io/crates/zune-jpeg/zune-jpeg-0.5.15.crate"
+sha256 = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+license = "MIT OR Apache-2.0 OR Zlib"

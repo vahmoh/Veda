@@ -16,14 +16,12 @@ const LICENCES: &[&str] = &["GPL-3.0-only", "MIT"];
 /// Whether the file at `path` (from the repository's root) goes without a
 /// header: one in a format without comments (images, fonts, videos, test
 /// vectors, JSON, the website's domain), Cargo's `Cargo.lock`, a licence's
-/// text, or other projects' files (the vendored crates, and the ports'
-/// patches, which change other projects' code).
+/// text, or the ports' patches, which change other projects' code.
 fn exempt(path: &str) -> bool {
     const BINARY: &[&str] = &["png", "jpg", "ico", "ttf", "otf", "woff2", "mkv", "mp4", "webm", "der", "sig", "bin"];
     let name = path.rsplit('/').next().unwrap_or(path);
     name.rsplit_once('.').is_some_and(|(_, e)| BINARY.contains(&e) || e == "webmanifest" || e == "patch")
         || ["Cargo.lock", "CNAME", "LICENSE", "OFL.txt"].contains(&name)
-        || path.strip_prefix("third_party/").is_some_and(|p| p.contains('/'))
 }
 
 /// Checks the header at the top of `text`: after what has to come first (a
@@ -95,10 +93,10 @@ mod tests {
 
     #[test]
     fn what_cannot_carry_a_header_goes_without() {
-        for path in ["docs/images/a.png", "Cargo.lock", "LICENSE", "ports/gcc/veda.patch", "third_party/a/b.rs"] {
+        for path in ["docs/images/a.png", "Cargo.lock", "LICENSE", "ports/gcc/veda.patch"] {
             assert!(exempt(path), "{path}");
         }
-        for path in ["kernel/src/main.rs", "third_party/README.md", "ports/linux/veda.config", "website/index.html"] {
+        for path in ["kernel/src/main.rs", "ports/crates.sh", "ports/linux/veda.config", "website/index.html"] {
             assert!(!exempt(path), "{path}");
         }
     }

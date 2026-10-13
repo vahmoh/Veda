@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# smoltcp: the TCP/IP stack of the network service (netd, through
+# vnetstack). A crate: its release on crates.io, which Cargo builds.
+name = "smoltcp"
+version = "0.14.0"
+url = "https://static.crates.io/crates/smoltcp/smoltcp-0.14.0.crate"
+sha256 = "b6f8b28ad56c6e35524a37dd492af5d1a47e31e1a4d175cd12f89c075f01980f"
+license = "0BSD"

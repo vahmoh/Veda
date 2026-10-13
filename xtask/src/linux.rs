@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::arch::{self, GUEST_TARGET};
-use crate::toolchain::{self, Port};
+use crate::ports::{self, Port};
 use crate::util::{self, Result};
 
 /// The guest's programs: the package, its binary, and where it goes in the
@@ -162,7 +162,7 @@ pub fn command(args: &[String]) -> Result {
     let started = std::time::Instant::now();
     let downloads = root().join("downloads");
     for name in ["zlib", "elfutils", "linux", "binutils", "gcc", "musl", "mesa"] {
-        toolchain::fetch(&Port::named(name)?, &downloads)?;
+        ports::fetch(&Port::named(name)?, &downloads)?;
     }
     firmware()?;
     let lib = renderer_lib()?;
@@ -280,7 +280,7 @@ fn firmware() -> Result<Vec<(String, PathBuf)>> {
 /// Makes `file` the one of `url` whose SHA-256 is `sha256` (as `list`
 /// pins it).
 fn fetch_firmware(file: &Path, url: &str, sha256: &str, list: &Path) -> Result {
-    if file.is_file() && toolchain::sha256_of(file)? == sha256 {
+    if file.is_file() && ports::sha256_of(file)? == sha256 {
         return Ok(());
     }
     util::status("Downloading", url);
@@ -289,7 +289,7 @@ fn fetch_firmware(file: &Path, url: &str, sha256: &str, list: &Path) -> Result {
     util::run(
         Command::new("curl").args(["-fL", "--retry", "3", "--silent", "--show-error", "-o"]).arg(&partial).arg(url),
     )?;
-    let got = toolchain::sha256_of(&partial)?;
+    let got = ports::sha256_of(&partial)?;
     if got != sha256 {
         let _ = std::fs::remove_file(&partial);
         return Err(format!("{url}: SHA-256 {got}, expected {sha256} ({})", list.display()));

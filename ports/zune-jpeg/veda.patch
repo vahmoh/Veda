@@ -1,0 +1,61 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -163,7 +163,6 @@
+ #![cfg_attr(not(any(feature = "x86", feature = "neon")), forbid(unsafe_code))]
+ #![cfg_attr(not(feature = "std"), no_std)]
+ #![cfg_attr(feature = "portable_simd", feature(portable_simd))]
+-#![macro_use]
+ extern crate alloc;
+ extern crate core;
+ 
+--- a/src/mcu.rs
++++ b/src/mcu.rs
+@@ -198,7 +198,16 @@
+ 
+             trace!("Decoding MCU width: {mcu_width}, height: {mcu_height}");
+ 
+-            for i in 0..mcu_height {
++            // Veda: a scan of a single component (non-interleaved) codes that
++            // component's data units in raster order (T.81, A.2.2): as many rows of them as
++            // the component has, which for a subsampled image is not the number of MCU rows.
++            let scan_rows = if all_components_in_first_scan {
++                mcu_height
++            } else {
++                self.single_component_scan_rows().unwrap_or(mcu_height)
++            };
++
++            for i in 0..scan_rows {
+                 if stream.overread_by > 0 {
+                     pixels.get_mut(pixels_written..).map(|v| v.fill(128));
+                     if self.options.strict_mode() {
+@@ -428,6 +437,17 @@
+         }
+     }
+ 
++    /// Veda: the rows of data units of the component of a single-component scan
++    /// (`None` for a scan of several components): `ceil(height * v / v_max / 8)`.
++    fn single_component_scan_rows(&self) -> Option<usize> {
++        if self.num_scans != 1 {
++            return None;
++        }
++        let component = self.components.get(self.z_order[0])?;
++        let v_max = self.v_max.max(1);
++        Some((usize::from(self.info.height) * component.vertical_sample + v_max * 8 - 1) / (v_max * 8))
++    }
++
+     // Inline-never ensures we do get this function optimize on its own, into two different
+     // versions, without the optimizer tripping up over the complexity that comes with the
+     // constant folding. And constant folding is quite important for performance here as
+@@ -490,8 +510,10 @@
+ 
+                 let qt_table = &component.quantization_table;
+                 let channel = if PROGRESSIVE {
+-                    let offset =
+-                        mcu_height * component.width_stride * 8 * component.vertical_sample;
++                    // Veda: in a scan of one component, `mcu_height` counts that
++                    // component's rows of data units, of 8 lines each.
++                    let lines = if z_scans.len() == 1 { 8 } else { 8 * component.vertical_sample };
++                    let offset = mcu_height * component.width_stride * lines;
+                     // Small stopgap for https://github.com/etemesi254/zune-image/issues/362
+                     if offset >= progressive[k].len(){
+                         return Err(DecodeErrors::FormatStatic("Would panic on slice iteration"))

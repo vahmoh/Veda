@@ -930,8 +930,7 @@ of their own (see Architectures above).
 | `lib/web`, `lib/json` | HTTP/1.1 and WebSocket clients over TCP or TLS; JSON |
 | `lib/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
-| `third_party/` | vendored crates with documented patches (smoltcp) |
-| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa |
+| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications |
 | `tests/` | in-system tests, C and C++ test programs (`tests/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |

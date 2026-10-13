@@ -95,9 +95,10 @@ members = [
     "guest/input",
     "guest/renderer",
 ]
-# Vendored third-party crates are path dependencies, not members (their own
-# tests and dev-dependencies stay out of this workspace). See third_party/.
-exclude = ["third_party"]
+# The crates in ports/, as `cargo xtask` prepares them for Cargo, are not
+# members (their own tests and dev-dependencies stay out of this
+# workspace): see "Crates" in ports/README.md.
+exclude = ["ports/.crates"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
 # inside Veda is cross-built by `cargo xtask build`, which knows the correct
 # target for every component.
@@ -199,8 +200,10 @@ fastnoise-lite = { version = "1.1.1", default-features = false, features = ["lib
 # SIMD needs std's run-time CPU detection, so in Veda they run their portable
 # code (fast_image_resize detects the CPU itself).
 zune-core = { version = "0.5.3", default-features = false }
-# zune-jpeg is vendored with a fix (see third_party/zune-jpeg/VEDA-PATCHES.md).
-zune-jpeg = { path = "third_party/zune-jpeg", default-features = false }
+# zune-jpeg, which Veda builds with a fix of its own, is a port
+# (ports/zune-jpeg): Cargo builds it in place of the release of the version
+# it pins (see "Crates" in ports/README.md).
+zune-jpeg = { version = "=0.5.15", default-features = false }
 zune-png = { version = "0.5.2", default-features = false }
 zune-bmp = { version = "0.5.2", default-features = false }
 # The PNG decoder's zlib, named for its errors (truncated data, Adler-32).
@@ -216,8 +219,9 @@ png = "0.18.1"
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 miniz_oxide = "0.9.1"
 crc32fast = "1.5.2"
-# The TCP/IP stack (vendored with a security patch, see third_party/).
-smoltcp = { path = "third_party/smoltcp", default-features = false, features = [
+# The TCP/IP stack, which Veda builds with a security patch: a port
+# (ports/smoltcp), like zune-jpeg.
+smoltcp = { version = "=0.14.0", default-features = false, features = [
     "alloc",
     "medium-ethernet",
     "medium-ip",
