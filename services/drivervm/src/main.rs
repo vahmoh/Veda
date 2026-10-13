@@ -2,11 +2,14 @@
 //!
 //! Runs Linux in a virtual machine, for the drivers Veda takes from it
 //! (see `docs/DRIVERVM.md`). The machine is Veda's paravirtual platform
-//! (`vhv::platform`): processors with an x2APIC, memory, and hypercalls;
-//! no emulated hardware. This program is its monitor: it lays out the
+//! (`vhv::platform`): processors, memory, and hypercalls; no emulated
+//! hardware. This program is its monitor: it lays out the
 //! guest's memory, loads the kernel and its initial RAM file system from
-//! the system image (`linux/bzImage`, `linux/initramfs.cpio`), runs the
-//! virtual processors, one thread each, and serves the hypercalls.
+//! the system image (`linux/kernel`, `linux/initramfs.cpio`), runs the
+//! virtual processors, one thread each, and serves the hypercalls. What is
+//! particular to the architecture (booting Linux, the PC's own devices,
+//! the guest's memory map below 4 GiB) is in `arch`
+//! (`services/drivervm/arch/<architecture>/`).
 //!
 //! Programs in the guest reach Veda's objects through the bridge
 //! (`vhv::bridge`): this program keeps the guest's handles and carries out
@@ -15,8 +18,8 @@
 //!
 //! It gives the guest the PCI functions devmgr hands over (`pci`): their
 //! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
-//! and the lines their INTx are wired to: `lines`); the PC's keyboard
-//! controller, if devmgr hands its ports and interrupts over (`i8042`);
+//! and the lines their INTx are wired to: `lines`); the PC's own devices,
+//! if devmgr hands them over (`arch::platform`: the keyboard controller);
 //! ACPI tables that describe them (`vhv::acpi`); and the PC's firmware
 //! variables, read-only (`variables`).
 //!
@@ -37,9 +40,11 @@
 
 extern crate alloc;
 
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+mod arch;
 mod bridge;
 mod gpio;
-mod i8042;
 mod lines;
 mod machine;
 mod memory;
@@ -50,7 +55,7 @@ mod variables;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vrt::object::{Channel, Interrupt, IoPorts, Resource, Vmo};
+use vrt::object::{Channel, Resource, Vmo};
 use vrt::println;
 
 use lines::Lines;
@@ -63,13 +68,6 @@ vrt::entry!(main);
 const HYPERVISOR_RESOURCE: u32 = vabi::startup::role::USER + 1;
 /// Role of the `pcidev` channels of the guest's PCI functions (one each).
 const DEVICE_ROLE: u32 = vabi::startup::role::USER + 2;
-/// Roles of the keyboard controller's data port, its command port, and
-/// its keyboard's and mouse's interrupts, if devmgr gives the guest the
-/// controller.
-const I8042_DATA_ROLE: u32 = vabi::startup::role::USER + 3;
-const I8042_COMMAND_ROLE: u32 = vabi::startup::role::USER + 4;
-const I8042_KEYBOARD_ROLE: u32 = vabi::startup::role::USER + 5;
-const I8042_MOUSE_ROLE: u32 = vabi::startup::role::USER + 6;
 /// Role of the PC's firmware variables, if it has some.
 const VARIABLES_ROLE: u32 = vabi::startup::role::USER + 7;
 
@@ -109,26 +107,18 @@ fn main() -> i32 {
         println!("no system image");
         return 1;
     };
-    let (Some(kernel), Some(initramfs)) = (image.find("linux/bzImage"), image.find("linux/initramfs.cpio")) else {
+    let (Some(kernel), Some(initramfs)) = (image.find("linux/kernel"), image.find("linux/initramfs.cpio")) else {
         println!("the system image has no Linux guest");
         return 1;
     };
     let config = config();
     let devices: Vec<Channel> =
         core::iter::from_fn(|| vrt::env::take_handle(DEVICE_ROLE)).map(Channel::from_handle).collect();
-    let take = |role| vrt::env::take_handle(role);
     let mut lines = Lines::default();
-    let i8042 =
-        match (take(I8042_DATA_ROLE), take(I8042_COMMAND_ROLE), take(I8042_KEYBOARD_ROLE), take(I8042_MOUSE_ROLE)) {
-            (Some(data), Some(command), Some(keyboard), Some(mouse)) => {
-                lines.add(i8042::KEYBOARD_GSI, Interrupt::from_handle(keyboard), false);
-                lines.add(i8042::MOUSE_GSI, Interrupt::from_handle(mouse), false);
-                Some(i8042::I8042::new(IoPorts::from_handle(data), IoPorts::from_handle(command)))
-            }
-            _ => None,
-        };
-    let variables = take(VARIABLES_ROLE).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
-    let pc = Pc { devices, i8042, lines, variables };
+    let platform = arch::platform::Platform::take(&mut lines);
+    let variables =
+        vrt::env::take_handle(VARIABLES_ROLE).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
+    let pc = Pc { devices, platform, lines, variables };
     match Machine::start(&hypervisor, kernel.data, initramfs.data, pc, &config) {
         Ok(machine) => machine.wait(),
         Err(e) => {

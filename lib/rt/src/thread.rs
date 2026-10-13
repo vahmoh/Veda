@@ -69,8 +69,10 @@ impl<T> JoinHandle<T> {
     }
 }
 
+/// A thread [`Builder::spawn`] started, from the architecture's thread
+/// entry point (`arch`): `arg` is the closure it leaked.
 #[cfg(not(veda_guest))]
-extern "sysv64" fn thread_entry(arg: usize, _unused: usize) -> ! {
+pub(crate) fn run(arg: usize) -> ! {
     // SAFETY: `arg` is the box leaked by `Builder::spawn`.
     let f = unsafe { Box::from_raw(arg as *mut Box<dyn FnOnce() + Send>) };
     f();
@@ -130,10 +132,11 @@ impl Builder {
             *slot.lock() = Some(v);
         });
         let arg = Box::into_raw(Box::new(body)) as usize;
-        let rsp = stack.addr() + stack.len() - 72;
-        if let Err(e) =
-            call(nr::THREAD_START, [thread.raw() as usize, thread_entry as *const () as usize, rsp, arg, 0, 0])
-        {
+        let sp = vabi::entry_stack_pointer(stack.addr() + stack.len());
+        if let Err(e) = call(
+            nr::THREAD_START,
+            [thread.raw() as usize, crate::arch::thread_entry as *const () as usize, sp, arg, 0, 0],
+        ) {
             // SAFETY: the thread never started, so we still own the box.
             drop(unsafe { Box::from_raw(arg as *mut Box<dyn FnOnce() + Send>) });
             return Err(e);

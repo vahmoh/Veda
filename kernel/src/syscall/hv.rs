@@ -3,8 +3,7 @@
 use vabi::{Error, RawHandle, Rights, VcpuExit, VcpuState, map_flags, resource_kind};
 
 use super::{SysResult, get_interrupt, get_resource, get_vmo, handle, insert, ok};
-use crate::hv::ept::Access;
-use crate::hv::{Guest, Vcpu};
+use crate::hv::{Access, Guest, Vcpu};
 use crate::mm::user;
 use crate::object::KObject;
 
@@ -27,7 +26,7 @@ pub fn guest_create(res: RawHandle, cpus: usize) -> SysResult {
     if !r.permits(resource_kind::HYPERVISOR, 0, 0) {
         return Err(Error::AccessDenied);
     }
-    crate::hv::vmx::caps().map_err(|_| Error::NotSupported)?;
+    crate::arch::hv::available().map_err(|_| Error::NotSupported)?;
     let guest = Guest::new(u32::try_from(cpus).map_err(|_| Error::InvalidArgs)?)?;
     let rights = Rights(Rights::BASIC.0 | Rights::WRITE.0 | Rights::MANAGE.0);
     ok(insert(KObject::Guest(guest), rights)? as usize)
@@ -105,7 +104,7 @@ pub fn vcpu_bind_interrupt(vcpu: RawHandle, interrupt: RawHandle, vector: usize)
         irq.unbind();
         return ok(0);
     }
-    let vector = u8::try_from(vector).ok().filter(|&v| v >= 32).ok_or(Error::InvalidArgs)?;
+    let vector = crate::arch::hv::interrupt_vector(vector).ok_or(Error::InvalidArgs)?;
     irq.bind(&v, vector);
     ok(0)
 }

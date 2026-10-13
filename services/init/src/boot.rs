@@ -61,15 +61,18 @@ fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
             // firmware's variables, for the driver VM.
             out.extend(dup(&init.boot_info).map(|h| (role::BOOT_INFO, h)));
             out.extend(dup(&init.firmware_variables).map(|h| (role::FIRMWARE_VARIABLES, h)));
-            for (r, kind, base, size) in [
-                (roles::IOPORT_RESOURCE, resource_kind::IOPORT, 0u64, 0x1_0000u64),
-                (roles::IRQ_RESOURCE, resource_kind::IRQ, 0, 256),
-                (roles::MMIO_RESOURCE, resource_kind::MMIO, 0, 1 << 46),
-                (roles::DMA_RESOURCE, resource_kind::DMA, 0, 0),
-                (roles::HYPERVISOR_RESOURCE, resource_kind::HYPERVISOR, 0, 0),
-                (roles::PCI_RESOURCE, resource_kind::PCI, 0, 0x1_0000),
+            // The machine's ports, lines and physical addresses are the
+            // architecture's (`arch`); PCI functions are named by requester
+            // ids.
+            for (r, kind, range) in [
+                (roles::IOPORT_RESOURCE, resource_kind::IOPORT, crate::arch::IO_PORTS),
+                (roles::IRQ_RESOURCE, resource_kind::IRQ, crate::arch::IRQS),
+                (roles::MMIO_RESOURCE, resource_kind::MMIO, crate::arch::MMIO),
+                (roles::DMA_RESOURCE, resource_kind::DMA, 0..0),
+                (roles::HYPERVISOR_RESOURCE, resource_kind::HYPERVISOR, 0..0),
+                (roles::PCI_RESOURCE, resource_kind::PCI, 0..0x1_0000),
             ] {
-                out.extend(init_resource(init, kind, base, size).map(|h| (r, h)));
+                out.extend(init_resource(init, kind, range.start, range.end - range.start).map(|h| (r, h)));
             }
         }
         "compositor" => {

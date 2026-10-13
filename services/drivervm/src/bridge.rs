@@ -246,7 +246,8 @@ impl Bridge {
     }
 
     fn setup(&self, memory: &GuestMemory, r: &b::Setup) -> Result<(), Error> {
-        if !r.ring.is_multiple_of(4096) || !memory.contains(r.ring, 4096) || !(32..=255).contains(&r.vector) {
+        if !r.ring.is_multiple_of(4096) || !memory.contains(r.ring, 4096) || !crate::arch::is_interrupt_vector(r.vector)
+        {
             return Err(Error::InvalidArgs);
         }
         let mut waits = self.waits.lock();

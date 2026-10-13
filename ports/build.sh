@@ -5,13 +5,14 @@
 #
 # Environment:
 #   VEDA_PORTS       this directory
+#   VEDA_ARCH        the architecture built for (arch/$VEDA_ARCH/settings.sh)
 #   VEDA_TOOLCHAIN   where to build; downloads/ holds the verified archives
 #   VEDA_POSIX_LIB   the POSIX layer (lib/posix) as a static library
 #   VEDA_POSIX_EXPORTS  the symbols it gives the C library
 #   JOBS             parallel jobs (default: the number of processors)
 #
 # Results, under $VEDA_TOOLCHAIN:
-#   cross/           the cross toolchain (x86_64-veda-gcc, -g++ ...) for this
+#   cross/           the cross toolchain ($TARGET-gcc, -g++ ...) for this
 #                    machine; cross/sysroot is laid out like Veda's /system
 #   native/system/   the toolchain built for Veda, as /system has it
 #
@@ -22,8 +23,8 @@
 
 set -euo pipefail
 
-TARGET=x86_64-veda
 PORTS=${VEDA_PORTS:?}
+VEDA_ARCH=${VEDA_ARCH:?}
 ROOT=${VEDA_TOOLCHAIN:?}
 POSIX_LIB=${VEDA_POSIX_LIB:?}
 POSIX_EXPORTS=${VEDA_POSIX_EXPORTS:?}
@@ -43,12 +44,14 @@ export PATH="$CROSS/bin:$PATH"
 
 BUILD_TRIPLE=$(gcc -dumpmachine)
 
-# log, port, stage, quiet and unpack.
+# log, port, patches, stage, quiet and unpack.
 source "$PORTS/common.sh"
+# TARGET and what the ports take from the architecture.
+source "$PORTS/arch/$VEDA_ARCH/settings.sh"
 
 for p in binutils gcc gmp mpfr mpc musl; do
 	eval "stage_src_$p() { unpack $p; }"
-	stage "src_$p" "$PORTS/$p/port.toml" "$PORTS/$p/veda.patch"
+	stage "src_$p" "+$p"
 done
 
 # --- the cross toolchain -----------------------------------------------------
@@ -67,17 +70,17 @@ stage_binutils_cross() {
 	quiet make.log make -j"$JOBS" MAKEINFO=true
 	quiet install.log make install MAKEINFO=true
 }
-stage binutils_cross src_binutils @BINUTILS_OPTIONS @ROOT
+stage binutils_cross src_binutils @BINUTILS_OPTIONS @ROOT @TARGET
 
 # GCC's limits.h wraps the C library's only if it sees it: the headers
 # come first.
 stage_musl_headers() {
 	local b=$BUILD/musl-headers
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet install.log make -f "$SRC/musl/Makefile" srcdir="$SRC/musl" ARCH=x86_64 prefix=/system \
+	quiet install.log make -f "$SRC/musl/Makefile" srcdir="$SRC/musl" ARCH="$MUSL_ARCH" prefix=/system \
 		DESTDIR="$SYSROOT" install-headers
 }
-stage musl_headers src_musl
+stage musl_headers src_musl @MUSL_ARCH
 
 GCC_OPTIONS=(
 	--disable-nls --disable-multilib --disable-shared
@@ -160,9 +163,9 @@ stage libstdcxx_cross gcc_cross musl
 MEDIA=$ROOT/media
 
 stage_src_dav1d() { unpack dav1d; }
-stage src_dav1d "$PORTS/dav1d/port.toml"
+stage src_dav1d +dav1d
 stage_src_ffmpeg() { unpack ffmpeg; }
-stage src_ffmpeg "$PORTS/ffmpeg/port.toml" "$PORTS/ffmpeg/veda.patch"
+stage src_ffmpeg +ffmpeg
 
 # `grep -q` for each `#define` a configured build must have: a check that
 # fails says which (a configure test that failed without a word, under GCC's
@@ -175,9 +178,10 @@ expect_defines() {
 	done
 }
 
-# Both bit depths (10-bit video is common), the assembly (nasm, ELF64), and
-# the tests, for checkasm, which compares each assembly function with the C
-# one: a release build would leave those out (trim_dsp).
+# Both bit depths (10-bit video is common), the assembly (the
+# architecture's assembler: DAV1D_BINARIES), and the tests, for checkasm,
+# which compares each assembly function with the C one: a release build
+# would leave those out (trim_dsp).
 DAV1D_OPTIONS=(
 	--prefix=/system --libdir=lib --buildtype=release --default-library=static -Db_pie=true
 	-Denable_asm=true -Denable_tests=true -Denable_tools=false -Dbitdepths=8,16 -Dtrim_dsp=false
@@ -191,12 +195,12 @@ stage_dav1d() {
 	c = '$CROSS/bin/$TARGET-gcc'
 	ar = '$CROSS/bin/$TARGET-ar'
 	strip = '$CROSS/bin/$TARGET-strip'
-	nasm = 'nasm'
+	$DAV1D_BINARIES
 	pkg-config = 'false'
 	[host_machine]
 	system = 'veda'
-	cpu_family = 'x86_64'
-	cpu = 'x86_64'
+	cpu_family = '$MESON_CPU_FAMILY'
+	cpu = '$MESON_CPU'
 	endian = 'little'
 	[built-in options]
 	# dav1d defines _GNU_SOURCE itself only on the systems it knows (Linux):
@@ -209,17 +213,18 @@ stage_dav1d() {
 	quiet "$b-build.log" ninja -C "$b" -j"$JOBS"
 	quiet "$b-install.log" env DESTDIR="$MEDIA/dav1d" meson install -C "$b" --no-rebuild
 }
-stage dav1d src_dav1d gcc_cross musl @DAV1D_OPTIONS @ROOT
+stage dav1d src_dav1d gcc_cross musl @DAV1D_OPTIONS @ROOT @DAV1D_BINARIES @MESON_CPU_FAMILY @MESON_CPU
 
 # LGPL (no --enable-gpl, nothing non-free: checked below), only what
 # mediadec decodes: the demuxers, decoders (AV1 through dav1d), parsers and
 # the scaler and resampler; no programs, devices, filters, network or
-# libraries found by themselves.
+# libraries found by themselves; the architecture's assembly
+# (FFMPEG_ARCH_OPTIONS).
 FFMPEG_OPTIONS=(
-	--enable-cross-compile --cross-prefix=$TARGET- --arch=x86_64 --target-os=veda
+	--enable-cross-compile --cross-prefix=$TARGET- --target-os=veda "${FFMPEG_ARCH_OPTIONS[@]}"
 	--prefix=/system --enable-static --disable-shared --enable-pic --enable-pthreads
 	--disable-debug --disable-autodetect --disable-everything --disable-programs --disable-doc
-	--disable-network --disable-avdevice --disable-avfilter --x86asmexe=nasm
+	--disable-network --disable-avdevice --disable-avfilter
 	--enable-libdav1d
 	--enable-demuxer=mov,matroska,ogg,avi,mpegts,mpegps
 	--enable-decoder=libdav1d,vp9,vp8,h264,hevc,mpeg4,mpeg1video,mpeg2video
@@ -249,7 +254,7 @@ stage_ffmpeg() {
 	cd "$b"
 	quiet configure.log "$SRC/ffmpeg/configure" "${FFMPEG_OPTIONS[@]}" \
 		--pkg-config="$BUILD/ffmpeg-tools/pkg-config"
-	expect_defines config.h "HAVE_PTHREADS 1" "HAVE_X86ASM 1" "HAVE_AVX2_EXTERNAL 1" \
+	expect_defines config.h "HAVE_PTHREADS 1" "${FFMPEG_ARCH_DEFINES[@]}" \
 		"HAVE_SCHED_GETAFFINITY 1" "HAVE_POSIX_MEMALIGN 1" "CONFIG_GPL 0" "CONFIG_NONFREE 0" \
 		"CONFIG_SWSCALE 1" "CONFIG_SWRESAMPLE 1"
 	expect_defines config_components.h "CONFIG_LIBDAV1D_DECODER 1" "CONFIG_H264_DECODER 1" \
@@ -257,7 +262,7 @@ stage_ffmpeg() {
 	quiet make.log make -j"$JOBS"
 	quiet install.log make install DESTDIR="$MEDIA/ffmpeg"
 }
-stage ffmpeg src_ffmpeg dav1d gcc_cross musl @FFMPEG_OPTIONS @ROOT
+stage ffmpeg src_ffmpeg dav1d gcc_cross musl @FFMPEG_OPTIONS @FFMPEG_ARCH_DEFINES @ROOT
 
 # Both projects' checkasm, which checks every assembly function against its
 # C version: run inside Veda by systest (it checks the processor's state as

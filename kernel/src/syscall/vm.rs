@@ -146,10 +146,10 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
     let p = target_process(proc)?;
     let perms = Perms::from_map_flags(flags);
     executable_allowed(perms)?;
-    // x86 has no write-only or execute-only pages: a page that can be
-    // accessed at all can be read, so any access takes the READ right.
+    // Where the page tables cannot give an access without reading (no
+    // write-only or execute-only pages), that access takes the READ right.
     let mut needed = Rights::MAP;
-    if !perms.none() {
+    if perms.effective().read {
         needed = needed | Rights::READ;
     }
     if perms.write {

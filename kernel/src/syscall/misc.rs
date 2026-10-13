@@ -58,8 +58,8 @@ pub fn system_info(ptr: usize) -> SysResult {
     let procs = crate::object::process::all();
     let info = SystemInfo {
         version,
-        cpu_count: crate::arch::percpu::online().count() as u32,
-        page_size: 4096,
+        cpu_count: crate::percpu::online().count() as u32,
+        page_size: crate::mm::PAGE_SIZE as u32,
         total_memory: total,
         free_memory: free,
         uptime_ns: time::now_ns(),
@@ -80,15 +80,12 @@ pub fn system_power(res: RawHandle, action: usize) -> SysResult {
     match action {
         power_action::POWER_OFF => {
             crate::kinfo!("power: shutting down");
-            crate::acpi::power_off();
-            // QEMU's isa-debug-exit device (used by automated tests).
-            // SAFETY: harmless if the device is absent.
-            unsafe { crate::arch::port::outb(0xF4, 0x10) };
+            crate::arch::power::off();
             Err(Error::NotSupported)
         }
         power_action::REBOOT => {
             crate::kinfo!("power: rebooting");
-            crate::acpi::reboot();
+            crate::arch::power::reboot();
             Err(Error::NotSupported)
         }
         _ => Err(Error::InvalidArgs),

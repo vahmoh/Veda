@@ -5,15 +5,16 @@
 #
 # Environment:
 #   VEDA_PORTS   the ports directory
+#   VEDA_ARCH    the architecture built for (../arch/$VEDA_ARCH/settings.sh)
 #   VEDA_LINUX   where to build; downloads/ holds the verified archives
 #   VEDA_RENDERER_LIB  the renderer's Rust half (guest/renderer), which
 #                Mesa's build links the program around
 #   JOBS         parallel jobs (default: the number of processors)
 #
 # Results, under $VEDA_LINUX:
-#   bzImage          the kernel
+#   kernel           the kernel (the architecture's image of it)
 #   toolchain/       a cross toolchain for the guest's programs in C and C++
-#                    (x86_64-linux-musl-gcc, -g++ ...), with their sysroot
+#                    ($GUEST-gcc, -g++ ...), with their sysroot
 #   build/mesa/      Mesa built with it for the guest's renderer
 #                    (src/gallium/targets/veda/libvrenderer.a)
 #
@@ -24,6 +25,7 @@
 set -euo pipefail
 
 PORTS=${VEDA_PORTS:?}
+VEDA_ARCH=${VEDA_ARCH:?}
 ROOT=${VEDA_LINUX:?}
 RENDERER_LIB=${VEDA_RENDERER_LIB:?}
 JOBS=${JOBS:-$(nproc)}
@@ -36,14 +38,17 @@ DEPS=$BUILD/host-deps
 
 mkdir -p "$SRC" "$BUILD" "$STAMPS"
 
+# log, port, patches, stage, quiet and unpack.
 source "$PORTS/common.sh"
+# GUEST and what the ports take from the architecture.
+source "$PORTS/arch/$VEDA_ARCH/settings.sh"
 
 stage_src_zlib() { unpack zlib; }
-stage src_zlib "$PORTS/zlib/port.toml"
+stage src_zlib +zlib
 stage_src_elfutils() { unpack elfutils; }
-stage src_elfutils "$PORTS/elfutils/port.toml"
+stage src_elfutils +elfutils
 stage_src_linux() { unpack linux; }
-stage src_linux "$PORTS/linux/port.toml" "$PORTS/linux/veda.patch"
+stage src_linux +linux
 
 stage_zlib() {
 	local b=$BUILD/zlib
@@ -86,34 +91,36 @@ stage_libelf() {
 }
 stage libelf src_elfutils zlib @DEPS
 
-# Everything off but what the driver VM needs (veda.config), all of which
-# must take: Kconfig leaves out an option it does not know, or whose
-# dependencies are off, without a word.
+# Everything off but what the driver VM needs (veda.config, and the
+# architecture's: arch/$VEDA_ARCH/veda.config), all of which must take:
+# Kconfig leaves out an option it does not know, or whose dependencies are
+# off, without a word.
 stage_config() {
-	quiet "$BUILD/config.log" make -C "$SRC/linux" O="$BUILD/linux" \
-		KCONFIG_ALLCONFIG="$PORTS/linux/veda.config" allnoconfig
+	cat "$PORTS/linux/veda.config" "$PORTS/linux/arch/$VEDA_ARCH/veda.config" > "$BUILD/veda.config"
+	quiet "$BUILD/config.log" make -C "$SRC/linux" O="$BUILD/linux" ARCH="$LINUX_ARCH" \
+		KCONFIG_ALLCONFIG="$BUILD/veda.config" allnoconfig
 	local line missing=""
 	while IFS= read -r line; do
 		case $line in
 		CONFIG_*=n) if grep -q "^${line%=n}=" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
 		CONFIG_*=*) if ! grep -qxF "$line" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
 		esac
-	done < "$PORTS/linux/veda.config"
+	done < "$BUILD/veda.config"
 	if [ -n "$missing" ]; then
 		echo "veda.config: options that did not take (unknown, or their dependencies off):$missing" >&2
 		exit 1
 	fi
 }
-stage config src_linux "$PORTS/linux/veda.config"
+stage config src_linux "$PORTS/linux/veda.config" "$PORTS/linux/arch/$VEDA_ARCH/veda.config" @LINUX_ARCH
 
 # --- the guest's C and C++ toolchain -------------------------------------------
 
 # The guest's programs in C and C++ (Mesa, for the renderer) are built by a
 # cross toolchain for Linux on musl, from the releases Veda's own is built
 # from (ports/binutils, gcc and musl) as their authors released them: Veda's
-# patches add Veda's target, and the guest's is upstream's own. Programs
-# link statically, position independent (-static-pie, as Rust links them).
-GUEST=x86_64-linux-musl
+# patches add Veda's target, and the guest's (GUEST) is upstream's own.
+# Programs link statically, position independent (-static-pie, as Rust
+# links them).
 TOOLS=$ROOT/toolchain
 SYSROOT=$TOOLS/sysroot
 export PATH="$TOOLS/bin:$PATH"
@@ -133,17 +140,17 @@ stage_binutils() {
 	quiet make.log make -j"$JOBS" MAKEINFO=true
 	quiet install.log make install MAKEINFO=true
 }
-stage binutils src_binutils @TOOLS
+stage binutils src_binutils @TOOLS @GUEST
 
 # GCC's limits.h wraps the C library's only if it sees it: the headers
 # come first.
 stage_musl_headers() {
 	local b=$BUILD/musl-headers
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet install.log make -f "$SRC/musl/Makefile" srcdir="$SRC/musl" ARCH=x86_64 prefix=/usr \
+	quiet install.log make -f "$SRC/musl/Makefile" srcdir="$SRC/musl" ARCH="$MUSL_ARCH" prefix=/usr \
 		DESTDIR="$SYSROOT" install-headers
 }
-stage musl_headers src_musl @TOOLS
+stage musl_headers src_musl @TOOLS @MUSL_ARCH
 
 GCC_OPTIONS=(
 	--disable-nls --disable-multilib --disable-shared
@@ -179,10 +186,10 @@ stage musl src_musl gcc
 # Linux's interface for programs (its UAPI headers: linux/types.h, the
 # DRM's, ...), from the kernel the guest runs.
 stage_linux_headers() {
-	quiet "$BUILD/headers.log" make -C "$SRC/linux" O="$BUILD/linux-headers" ARCH=x86_64 \
+	quiet "$BUILD/headers.log" make -C "$SRC/linux" O="$BUILD/linux-headers" ARCH="$LINUX_ARCH" \
 		INSTALL_HDR_PATH="$SYSROOT/usr" headers_install
 }
-stage linux_headers src_linux musl_headers @TOOLS
+stage linux_headers src_linux musl_headers @TOOLS @LINUX_ARCH
 
 # The C++ library checks the C library by linking programs with it, so it
 # comes once that is complete. Rust's programs ask for an unwinder library
@@ -209,7 +216,7 @@ stage libstdcxx gcc musl
 # if it has one), which the OpenGL ES tests use. `cargo xtask` builds them
 # (ninja) when it needs them.
 stage_src_mesa() { unpack mesa; }
-stage src_mesa "$PORTS/mesa/port.toml" "$PORTS/mesa/veda.patch"
+stage src_mesa +mesa
 
 MESA_OPTIONS=(
 	--buildtype=release -Ddefault_library=static -Dvulkan-drivers=
@@ -232,8 +239,8 @@ stage_mesa() {
 	pkg-config = 'false'
 	[host_machine]
 	system = 'linux'
-	cpu_family = 'x86_64'
-	cpu = 'x86_64'
+	cpu_family = '$MESON_CPU_FAMILY'
+	cpu = '$MESON_CPU'
 	endian = 'little'
 	EOF
 	rm -rf "$BUILD/mesa" "$BUILD/mesa-host"
@@ -243,11 +250,11 @@ stage_mesa() {
 	quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
 		"${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe,virgl,iris
 }
-stage mesa src_mesa libstdcxx linux_headers @MESA_OPTIONS @RENDERER_LIB
+stage mesa src_mesa libstdcxx linux_headers @MESA_OPTIONS @RENDERER_LIB @MESON_CPU_FAMILY @MESON_CPU
 
 # make knows what changed.
 log Building linux
-quiet "$BUILD/linux.log" make -C "$SRC/linux" O="$BUILD/linux" HOSTPKG_CONFIG="$DEPS/bin/pkg-config" \
-	-j"$JOBS" bzImage
-cp "$BUILD/linux/arch/x86/boot/bzImage" "$ROOT/bzImage"
-log Finished "Linux $(port linux version) for the driver VM ($ROOT/bzImage)"
+quiet "$BUILD/linux.log" make -C "$SRC/linux" O="$BUILD/linux" ARCH="$LINUX_ARCH" \
+	HOSTPKG_CONFIG="$DEPS/bin/pkg-config" -j"$JOBS" "$LINUX_IMAGE"
+cp "$BUILD/linux/$LINUX_IMAGE_PATH" "$ROOT/kernel"
+log Finished "Linux $(port linux version) for the driver VM ($ROOT/kernel)"

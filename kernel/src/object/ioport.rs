@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 
 use vabi::Error;
 
-use crate::arch::port;
+use crate::arch;
 
 pub struct IoPorts {
     pub koid: u64,
@@ -29,27 +29,12 @@ impl IoPorts {
     pub fn read(&self, p: u16, width: usize) -> Result<u32, Error> {
         self.check(p, width)?;
         // SAFETY: the driver was granted this port range.
-        Ok(unsafe {
-            match width {
-                1 => port::inb(p) as u32,
-                2 => port::inw(p) as u32,
-                4 => port::inl(p),
-                _ => return Err(Error::InvalidArgs),
-            }
-        })
+        unsafe { arch::ioport::read(p, width) }.ok_or(Error::InvalidArgs)
     }
 
     pub fn write(&self, p: u16, width: usize, value: u32) -> Result<(), Error> {
         self.check(p, width)?;
         // SAFETY: the driver was granted this port range.
-        unsafe {
-            match width {
-                1 => port::outb(p, value as u8),
-                2 => port::outw(p, value as u16),
-                4 => port::outl(p, value),
-                _ => return Err(Error::InvalidArgs),
-            }
-        }
-        Ok(())
+        if unsafe { arch::ioport::write(p, width, value) } { Ok(()) } else { Err(Error::InvalidArgs) }
     }
 }

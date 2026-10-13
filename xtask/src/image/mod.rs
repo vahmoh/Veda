@@ -22,7 +22,7 @@ impl EspContents<'_> {
     /// The partition's files: where they go, and what they hold.
     fn files(&self) -> Vec<(&'static str, &[u8])> {
         let mut files = vec![
-            ("EFI/BOOT/BOOTX64.EFI", self.bootloader),
+            (crate::arch::UEFI_BOOT_PATH, self.bootloader),
             ("VEDA/VKERNEL.EXE", self.kernel),
             ("VEDA/INITRD.IMG", self.initrd),
         ];
@@ -123,7 +123,7 @@ mod tests {
         };
         let image = iso_image(&esp).unwrap();
         assert_eq!(esp_file(&image, "VEDA/BOOT.CFG").unwrap(), b"run=editor");
-        assert_eq!(esp_file(&image, "efi/boot/bootx64.efi").unwrap(), b"MZ loader");
+        assert_eq!(esp_file(&image, &crate::arch::UEFI_BOOT_PATH.to_ascii_lowercase()).unwrap(), b"MZ loader");
         assert!(esp_file(&image, LOGS).unwrap_err().contains("a directory"));
         assert!(image.len() as u64 > LOGS_ROOM_MIB * 1024 * 1024);
         assert!(esp_file(&[0; 4096], "VEDA/BOOT.CFG").is_err());

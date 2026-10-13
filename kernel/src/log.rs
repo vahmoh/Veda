@@ -122,7 +122,7 @@ pub fn write(level: Level, args: fmt::Arguments) {
         return;
     }
     let ns = crate::time::now_ns();
-    let cpu = crate::arch::percpu::cpu_id_or_boot();
+    let cpu = crate::percpu::cpu_id_or_boot();
     let tag = match level {
         Level::Debug => "debug",
         Level::Info => "info",

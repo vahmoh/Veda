@@ -10,9 +10,9 @@ use super::paging::{self, Cache, Flags};
 use super::{PAGE_SIZE, phys};
 use crate::sync::SpinLock;
 
-const MMIO_BASE: u64 = 0xFFFF_C000_0000_0000;
-const MMIO_LIMIT: u64 = MMIO_BASE + (64 << 30);
-const STACK_BASE: u64 = 0xFFFF_C800_0000_0000;
+const MMIO_BASE: u64 = crate::arch::mm::MMIO_BASE;
+const MMIO_LIMIT: u64 = MMIO_BASE + crate::arch::mm::MMIO_SIZE;
+const STACK_BASE: u64 = crate::arch::mm::STACKS_BASE;
 /// Virtual size reserved per stack slot (stack + guard).
 const STACK_SLOT: u64 = 128 * 1024;
 
@@ -38,7 +38,7 @@ pub fn map_mmio(phys_addr: u64, size: u64, cache: Cache) -> u64 {
     };
     let flags = Flags { writable: true, executable: false, user: false, global: true, cache };
     for i in 0..pages {
-        paging::map(paging::kernel_pml4(), virt + i * PAGE_SIZE, start + i * PAGE_SIZE, flags, true)
+        paging::map(paging::kernel_root(), virt + i * PAGE_SIZE, start + i * PAGE_SIZE, flags, true)
             .expect("out of memory mapping MMIO");
     }
     virt + (phys_addr - start)
@@ -68,16 +68,17 @@ impl KernelStack {
             let Some(frame) = phys::alloc() else {
                 // Roll back what we mapped so far.
                 for j in 0..i {
-                    if let Some(f) = paging::unmap(paging::kernel_pml4(), base + j * PAGE_SIZE) {
+                    if let Some(f) = paging::unmap(paging::kernel_root(), base + j * PAGE_SIZE) {
                         phys::free(f);
                     }
                 }
                 STATE.lock().free_stack_slots.push(slot);
                 return None;
             };
-            // Not global: freed stacks must be flushable with a CR3 reload.
+            // Not global: a freed stack must be forgotten by a flush of the
+            // TLB's non-global entries.
             let flags = Flags { global: false, ..Flags::KERNEL_RW };
-            paging::map(paging::kernel_pml4(), base + i * PAGE_SIZE, frame, flags, true).ok()?;
+            paging::map(paging::kernel_root(), base + i * PAGE_SIZE, frame, flags, true).ok()?;
         }
         Some(KernelStack { base, pages })
     }
@@ -91,7 +92,7 @@ impl Drop for KernelStack {
     fn drop(&mut self) {
         for i in 0..self.pages {
             let va = self.base + i * PAGE_SIZE;
-            if let Some(frame) = paging::unmap(paging::kernel_pml4(), va) {
+            if let Some(frame) = paging::unmap(paging::kernel_root(), va) {
                 phys::free(frame);
             }
         }
@@ -104,5 +105,6 @@ impl Drop for KernelStack {
 
 /// Returns `true` if `addr` lies in a kernel stack guard page.
 pub fn is_stack_guard(addr: u64) -> bool {
-    (STACK_BASE..STACK_BASE + (1 << 39)).contains(&addr) && (addr - STACK_BASE) % STACK_SLOT < PAGE_SIZE
+    (STACK_BASE..STACK_BASE + crate::arch::mm::STACKS_SIZE).contains(&addr)
+        && (addr - STACK_BASE) % STACK_SLOT < PAGE_SIZE
 }

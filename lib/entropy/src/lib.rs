@@ -9,7 +9,8 @@
 //!   of the state does not reveal earlier output.
 //!
 //! The crate has no platform code: the kernel supplies the entropy (firmware
-//! seed, RDSEED/RDRAND, timing jitter, interrupt timing) and the locking.
+//! seed, the processor's random number generators, timing jitter, interrupt
+//! timing) and the locking.
 //! It is `no_std` and dependency-free so the kernel can use it.
 
 #![no_std]
@@ -136,7 +137,8 @@ impl FastPool {
         FastPool { lanes: [0; 4], count: 0 }
     }
 
-    /// Mixes one sample (for example a TSC reading and an interrupt vector).
+    /// Mixes one sample (for example a clock counter reading and an interrupt
+    /// vector).
     pub fn add(&mut self, a: u64, b: u64) {
         // A SipHash-like round over the four lanes.
         let l = &mut self.lanes;

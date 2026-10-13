@@ -30,7 +30,7 @@
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
 //! memory 2048                      # the machine's memory for this run (MiB), applied before boot
-//! acpi-table touchpad              # add a table to the firmware's (xtask/src/acpitest.rs), applied before boot
+//! acpi-table touchpad              # add a table to the firmware's (the machine's: xtask/arch/*/acpitest.rs), applied before boot
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
 //! live [writable]                  # boot the live system (`xtask iso`) from a USB stick (read-only unless writable), applied before boot
@@ -86,6 +86,7 @@ use std::time::{Duration, Instant};
 
 use crate::agentsim::AgentSim;
 use crate::airsim::AirSim;
+use crate::arch;
 use crate::mic::{self, MicServer};
 use crate::ovmfvars;
 use crate::qemu::{self, DiskBus, InputDevices, NetMode, QemuInstall, VmConfig};
@@ -149,7 +150,7 @@ impl Machine {
             Err(e) => return format!("QEMU does not answer ({e})"),
         };
         match self.qmp.human("info registers -a") {
-            Ok(registers) => format!("QEMU is {status}, {}", processors(&registers)),
+            Ok(registers) => format!("QEMU is {status}, {}", arch::qemu::processors(&registers)),
             Err(e) => format!("QEMU is {status}, its processors unread ({e})"),
         }
     }
@@ -337,25 +338,6 @@ impl Session {
     pub fn finish(mut self) {
         self.m.finish();
     }
-}
-
-/// Where each processor is, from QEMU's `info registers -a`: the code
-/// segment's selector and the instruction pointer, and whether it halted.
-fn processors(registers: &str) -> String {
-    let mut out = Vec::new();
-    let (mut cpu, mut rip, mut halted) = ("", "", false);
-    for line in registers.lines() {
-        if let Some(n) = line.strip_prefix("CPU#") {
-            cpu = n.trim();
-        } else if let Some(rest) = line.strip_prefix("RIP=") {
-            rip = rest.split_whitespace().next().unwrap_or_default();
-            halted = rest.split_whitespace().any(|w| w == "HLT=1");
-        } else if let Some(rest) = line.strip_prefix("CS =") {
-            let cs = rest.split_whitespace().next().unwrap_or_default();
-            out.push(format!("processor {cpu} at {cs}:{rip}{}", if halted { " halted" } else { "" }));
-        }
-    }
-    if out.is_empty() { String::from("no processors") } else { out.join(", ") }
 }
 
 /// Splits a script line into words, honouring double quotes.
@@ -616,13 +598,14 @@ pub fn alone(script: &str) -> bool {
     script.lines().any(|l| words(l).first().is_some_and(|w| w == "mic-echo"))
 }
 
-/// The ACPI tables a script adds to QEMU's with `acpi-table NAME`
-/// (`acpitest`), written out for QEMU.
+/// The ACPI tables a script adds to QEMU's with `acpi-table NAME` (the
+/// machine's: `arch::acpitest`), written out for QEMU.
 pub fn acpi_tables(script: &str) -> Result<Vec<PathBuf>> {
     let mut tables = Vec::new();
     for w in script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "acpi-table")) {
         let n = w.get(1).ok_or("acpi-table: missing name")?;
-        let table = crate::acpitest::table(n).ok_or(format!("acpi-table: no table '{n}' (touchpad, gpio, nhlt)"))?;
+        let table = arch::acpitest::table(n)
+            .ok_or_else(|| format!("acpi-table: no table '{n}' ({})", arch::acpitest::NAMES.join(", ")))?;
         let path = util::out_dir().join(format!("acpi-{n}.aml"));
         std::fs::write(&path, table).map_err(|e| format!("{}: {e}", path.display()))?;
         tables.push(path);
@@ -1115,21 +1098,6 @@ pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn processors_are_where_their_registers_say() {
-        let registers = "CPU#0\nRAX=0000000000000000 RBX=0000000000000000\n\
-            RIP=000000000000fff0 RFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0\n\
-            ES =0000 0000000000000000 0000ffff 00009300\n\
-            CS =f000 00000000ffff0000 0000ffff 00009b00\n\
-            CPU#1\nRIP=ffffffff80029bf0 RFL=00000246 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1\n\
-            CS =0008 0000000000000000 ffffffff 00a09b00 DPL=0 CS64 [-RA]\n";
-        assert_eq!(
-            processors(registers),
-            "processor 0 at f000:000000000000fff0, processor 1 at 0008:ffffffff80029bf0 halted"
-        );
-        assert_eq!(processors(""), "no processors");
-    }
 
     fn wav(samples: &[i16], data_len: Option<u32>) -> Vec<u8> {
         let mut w = b"RIFF\0\0\0\0WAVEfmt ".to_vec();

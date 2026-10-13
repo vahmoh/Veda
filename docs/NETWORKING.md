@@ -334,9 +334,10 @@ built `no_std`:
 
   LLVM cannot build the SIMD code (AES-NI, SSE2, AVX2) of the RustCrypto
   and dalek crates for the soft-float UEFI target, which only the `no_std`
-  check of the libraries uses: `.cargo/config.toml` selects their portable
-  code for that target (Veda's user space keeps the fast code, chosen at
-  run time from the processor's features).
+  check of the libraries uses: Cargo's settings of the target
+  (`.cargo/arch/amd64/config.toml`) select their portable code for it
+  (Veda's user space keeps the fast code, chosen at run time from the
+  processor's features).
 
 Everything else (the 802.11 protocol, the handshakes, SAE's protocol
 logic, the TLS stream and provider, the services and drivers) is in this

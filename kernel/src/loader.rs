@@ -100,7 +100,7 @@ pub fn spawn_init(boot: &BootInfo) {
         initrd_size: boot.initrd.size,
         cmdline,
         cmdline_len: boot.cmdline_len,
-        cpu_count: crate::arch::percpu::online().count() as u32,
+        cpu_count: crate::percpu::online().count() as u32,
         acpi_rsdp: boot.rsdp_phys,
         acpi_memory,
         acpi_memory_count: acpi_memory_count as u32,
@@ -162,9 +162,8 @@ pub fn spawn_init(boot: &BootInfo) {
 
     let thread = Thread::new_user(&process, "main").expect("creating init's thread");
     assert!(process.add_thread(thread.clone()));
-    // Leave the Win64 shadow space above the (fake) return address.
-    let rsp = stack_base + STACK_SIZE - 72;
-    thread.prepare_user_entry(pe.entry_point(), rsp, bootstrap as u64, 0);
+    let sp = vabi::entry_stack_pointer((stack_base + STACK_SIZE) as usize) as u64;
+    thread.prepare_user_entry(pe.entry_point(), sp, bootstrap as u64, 0);
     process.mark_started();
     sched::make_ready(&thread);
     crate::kinfo!("started init (process {}), entry {:#x}", process.koid, pe.entry_point());
@@ -181,10 +180,10 @@ fn keep_alive(p: Arc<Process>) {
 /// What the machine offers beyond what Veda needs (`vabi::platform`).
 fn platform() -> u32 {
     let mut bits = 0;
-    if crate::hv::vmx::caps().is_ok() {
+    if crate::arch::hv::available().is_ok() {
         bits |= vabi::platform::VIRTUALIZATION;
     }
-    if crate::iommu::active() {
+    if crate::arch::iommu::active() {
         bits |= vabi::platform::IOMMU;
     }
     bits

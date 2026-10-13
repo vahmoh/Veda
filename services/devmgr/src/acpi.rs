@@ -113,9 +113,11 @@ impl Memory for FirmwareMemory {
         self.read_as(address, buf, cached)
     }
 
-    /// Through the configuration ports: segment 0, the first 256 bytes.
+    /// Through the configuration mechanism (`arch::config`): segment 0, as
+    /// much of each function's space as it reaches.
     fn read_pci(&self, f: PciFunction, offset: u16, buf: &mut [u8]) -> bool {
-        if f.segment != 0 || f.device > 31 || f.function > 7 || offset as usize + buf.len() > 256 {
+        let reach = crate::arch::config::CONFIG_BYTES as usize;
+        if f.segment != 0 || f.device > 31 || f.function > 7 || offset as usize + buf.len() > reach {
             return false;
         }
         let a = Address { bus: f.bus, slot: f.device, function: f.function };
@@ -158,8 +160,9 @@ pub struct Acpi {
     roots: Vec<(u8, Path)>,
     /// The firmware's [`DEVICE_TABLES`].
     device_tables: Vec<tables::Table>,
-    /// The memory the firmware keeps for devices (the DMAR table's RMRRs).
-    reserved: Vec<viommu::dmar::Reserved>,
+    /// The memory the firmware keeps for devices (`arch::dmar`): each
+    /// range, with the requester ids of the functions it is for.
+    reserved: Vec<(Vec<u16>, Range<u64>)>,
 }
 
 impl Acpi {
@@ -206,14 +209,7 @@ impl Acpi {
                 String::new()
             }
         );
-        let reserved = match tables.iter().find(|t| t.is(b"DMAR")).map(|t| viommu::dmar::parse(&t.data)) {
-            Some(Ok(dmar)) => dmar.reserved,
-            Some(Err(e)) => {
-                println!("acpi: the DMAR table: {:?}", e);
-                Vec::new()
-            }
-            None => Vec::new(),
-        };
+        let reserved = crate::arch::dmar::reserved_memory(&tables);
         let device_tables = tables.into_iter().filter(|t| DEVICE_TABLES.iter().any(|d| t.is(d.signature))).collect();
         Some(Acpi { ns, memory, roots, device_tables, reserved })
     }
@@ -222,11 +218,7 @@ impl Acpi {
     /// `[start, end)` ranges.
     pub fn reserved_memory(&self, bus: u8, slot: u8, function: u8) -> Vec<Range<u64>> {
         let sid = (bus as u16) << 8 | (slot as u16) << 3 | function as u16;
-        self.reserved
-            .iter()
-            .filter(|r| r.segment == 0 && r.scopes.iter().any(|s| s.source_id() == Some(sid)))
-            .map(|r| r.base..r.limit + 1)
-            .collect()
+        self.reserved.iter().filter(|(of, _)| of.contains(&sid)).map(|(_, r)| r.clone()).collect()
     }
 
     /// The firmware's tables that describe the hardware of the function

@@ -8,8 +8,8 @@
 //! signals (per thread), and handlers called synchronously on the raising
 //! thread once the signal is not blocked.
 //!
-//! A thread is known by its thread pointer: `%fs:0`, which the x86-64 TLS
-//! ABI makes point at itself, unique while the thread lives.
+//! A thread is known by its thread pointer (`arch::thread_pointer`), unique
+//! while the thread lives.
 
 use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -51,10 +51,7 @@ fn current() -> usize {
     if !THREADS_READY.load(Ordering::Acquire) {
         return 0;
     }
-    let tp: usize;
-    // SAFETY: with TLS set up, %fs:0 holds the thread pointer itself.
-    unsafe { core::arch::asm!("mov {}, qword ptr fs:[0]", out(reg) tp, options(nostack, readonly, preserves_flags)) };
-    tp
+    crate::arch::thread_pointer()
 }
 
 /// The calling thread has ended: forget its state.

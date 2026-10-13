@@ -3,9 +3,9 @@
 //! Run `cargo xtask help` for the list of commands.
 
 mod acpi;
-mod acpitest;
 mod agentsim;
 mod airsim;
+mod arch;
 mod automate;
 mod components;
 mod image;
@@ -74,8 +74,8 @@ RUN OPTIONS:
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
-    --no-iommu          Leave the IOMMU out of QEMU's machine (it has one, intel-iommu
-                        remapping interrupts, as the driver VM's devices need)
+    --no-iommu          Leave the IOMMU out of QEMU's machine (it has one, remapping
+                        interrupts, as the driver VM's devices need)
     --gpu, --no-gpu     Give QEMU's machine a 3D GPU (virtio-gpu with virgl, rendering on the
                         host's GPU) or not (default: if this QEMU has one)
     --no-audio          Do not attach a sound device
@@ -89,9 +89,9 @@ RUN OPTIONS:
                         and the airsim access points), both, or none
     --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000e, igb
     --disk-bus BUS      How QEMU attaches the disks: virtio (default), ahci (SATA) or nvme
-    --input DEVICES     Keyboard and pointer: standard (default: PS/2 keyboard and virtio
-                        tablet) or usb (on the xHCI controller: a keyboard and a tablet behind
-                        a hub, and a mouse)
+    --input DEVICES     Keyboard and pointer: standard (default: the machine's keyboard, a
+                        PC's PS/2 one, and the virtio tablet) or usb (on the xHCI controller: a
+                        keyboard and a tablet behind a hub, and a mouse)
     --live              Boot the live system (iso) from a USB stick, as a PC would
 
 SCRIPT OPTIONS:
@@ -337,7 +337,7 @@ fn build_system(o: &Options) -> Result<System> {
             None => util::status(
                 "Note",
                 "no media decoder in the image: videos do not play (`cargo xtask toolchain` builds FFmpeg and \
-                 dav1d; it needs nasm)",
+                 dav1d)",
             ),
         }
         for (name, exe) in toolchain::media_tests()? {
@@ -349,7 +349,7 @@ fn build_system(o: &Options) -> Result<System> {
     linux::build_once()?;
     match linux::guest()? {
         Some((kernel, initramfs)) => {
-            initrd.add("linux/bzImage", kernel);
+            initrd.add("linux/kernel", kernel);
             initrd.add("linux/initramfs.cpio", initramfs);
         }
         None => util::status(
@@ -384,7 +384,7 @@ fn build_system(o: &Options) -> Result<System> {
     let initrd = initrd.build();
     let bootloader = util::read(&artifacts.bootloader)?;
     let kernel = util::read(&artifacts.kernel)?;
-    vpe::PeImage::parse(&kernel).map_err(|e| format!("kernel image is invalid: {e}"))?;
+    vpe::PeImage::parse_for(&kernel, arch::KERNEL_MACHINE).map_err(|e| format!("kernel image is invalid: {e}"))?;
     Ok(System { bootloader, kernel, initrd })
 }
 
@@ -865,7 +865,7 @@ fn test(o: &Options) -> Result {
     // display's mode and where pictures go on it, the logs a stick keeps),
     // on Linux as they run.
     for package in ["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper"] {
-        util::run(util::cargo().args(["test", "--quiet", "--package", package, "--target", linux::GUEST_TARGET]))?;
+        util::run(util::cargo().args(["test", "--quiet", "--package", package, "--target", arch::GUEST_TARGET]))?;
     }
     // And through Veda's renderer, where it has been built: on softpipe;
     // on virgl over virglrenderer's test server, as the driver VM's
@@ -955,18 +955,23 @@ fn test(o: &Options) -> Result {
     script_on(&o, checks, Some(&system))?;
     if o.ui {
         // The GUI scripts, then the agent's (with the stand-in for Deepgram;
-        // tests/real, which talks to the real one, is left out).
+        // tests/real, which talks to the real one, is left out): each
+        // group's own, and those that hold only on the architecture's
+        // machine (`arch/<architecture>/`).
         let mut scripts: Vec<PathBuf> = Vec::new();
         for group in ["ui", "agent"] {
             let dir = util::workspace_root().join("tests").join(group);
-            let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
-                .map_err(|e| format!("reading {}: {e}", dir.display()))?
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|x| x == "vts"))
-                .collect();
-            found.sort();
-            scripts.extend(found);
+            let arch_dir = dir.join("arch").join(arch::NAME);
+            for dir in std::iter::once(dir).chain(arch_dir.is_dir().then_some(arch_dir)) {
+                let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+                    .map_err(|e| format!("reading {}: {e}", dir.display()))?
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|x| x == "vts"))
+                    .collect();
+                found.sort();
+                scripts.extend(found);
+            }
         }
         let mut ui = o.clone();
         ui.cmdline.clear();
@@ -990,7 +995,7 @@ fn doctor() -> Result {
     check("rustc", rustc.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).map_err(|e| e.to_string()));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();
     let targets = targets.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).map_err(|e| e.to_string());
-    for (name, target) in [("uefi target", components::UEFI_TARGET), ("user target", components::USER_TARGET)] {
+    for (name, target) in [("uefi target", arch::UEFI_TARGET), ("user target", arch::USER_TARGET)] {
         check(
             name,
             targets.clone().and_then(|s| {
@@ -1006,7 +1011,7 @@ fn doctor() -> Result {
     match qemu::QemuInstall::locate() {
         Ok(q) => {
             check("qemu", Ok(q.binary.display().to_string()));
-            check("ovmf", Ok(q.ovmf_code.display().to_string()));
+            check("firmware", Ok(q.firmware_code.display().to_string()));
         }
         Err(e) => check("qemu", Err(e)),
     }

@@ -11,14 +11,14 @@
 //! | files, directories | the VFS service: a `file` connection per open file ([`file`]) |
 //! | pipes, `socketpair`, the terminal | socket endpoints ([`stream`], [`socket`], [`tty`]) |
 //! | `mmap` | the kernel's private memory, or a VMO per mapping ([`mem`]) |
-//! | threads, TLS, futexes | kernel threads, `FS` base, kernel futexes ([`thread`]) |
+//! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
 //! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`) ([`signal`]) |
 //!
 //! musl's hooks into this layer are:
 //!
-//! * `_start` stores the bootstrap channel the kernel passed in `rdi` in
-//!   [`__veda_bootstrap`]; `__init_libc` then calls [`__veda_init`], which
+//! * `_start` stores the bootstrap channel the kernel passed (the entry
+//!   point's first argument) in [`__veda_bootstrap`]; `__init_libc` then calls [`__veda_init`], which
 //!   reads the startup message: the working directory, the descriptors the
 //!   program was given (role `FD + n`), the terminal and the registry;
 //! * `__veda_syscall(n, a1, ..., a6)` replaces the `syscall` instruction;
@@ -27,7 +27,12 @@
 //!   `__veda_unmapself`;
 //! * `posix_spawn` calls [`process::__veda_spawn`].
 //!
-//! The layer is built as a static library for `x86_64-unknown-none` and
+//! What is particular to the architecture (Linux's system call numbers and
+//! the calls only it has, the thread pointer, where threads start) is in
+//! `arch` (`lib/posix/arch/<architecture>/`).
+//!
+//! The layer is built as a static library for the architecture's bare-metal
+//! target (`x86_64-unknown-none` on AMD64) and
 //! linked into musl's `libc.a` as one object that exports only these
 //! symbols. Its own memory comes from `vrt`'s heap, not from `malloc`.
 
@@ -37,6 +42,9 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+mod arch;
 mod error;
 mod fd;
 mod file;

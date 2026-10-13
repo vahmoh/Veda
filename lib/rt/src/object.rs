@@ -541,7 +541,8 @@ impl Guest {
         call(nr::GUEST_UNMAP, [self.raw() as usize, gpa as usize, len, 0, 0, 0]).map(|_| ())
     }
 
-    /// A virtual processor with local APIC id `id`, in `state`.
+    /// A virtual processor with id `id` (its interrupt controller's: the
+    /// local APIC's on AMD64), in `state`.
     pub fn create_vcpu(&self, id: u32, state: &vabi::VcpuState) -> Result<Vcpu, Error> {
         call(nr::VCPU_CREATE, [self.raw() as usize, id as usize, state as *const _ as usize, 0, 0, 0])
             .map(|h| Vcpu(Handle(h as RawHandle)))
@@ -563,14 +564,16 @@ impl Vcpu {
         call(nr::VCPU_RUN, [self.raw() as usize, exit as *mut _ as usize, 0, 0, 0, 0]).map(|_| ())
     }
 
-    /// Raises interrupt `vector` at the virtual processor's local APIC.
+    /// Raises interrupt `vector` at the virtual processor's interrupt
+    /// controller.
     pub fn interrupt(&self, vector: u8) -> Result<(), Error> {
         call(nr::VCPU_INTERRUPT, [self.raw() as usize, vector as usize, 0, 0, 0, 0]).map(|_| ())
     }
 
-    /// Makes `irq` raise `vector` at the virtual processor's local APIC,
-    /// rather than signal, from now on (a level-triggered line masked until
-    /// the guest's end-of-interrupt); vector 0 makes it signal again.
+    /// Makes `irq` raise `vector` at the virtual processor's interrupt
+    /// controller, rather than signal, from now on (a level-triggered line
+    /// masked until the guest's end-of-interrupt); vector 0 makes it signal
+    /// again.
     pub fn bind_interrupt(&self, irq: &Interrupt, vector: u8) -> Result<(), Error> {
         call(nr::VCPU_BIND_INTERRUPT, [self.raw() as usize, irq.raw() as usize, vector as usize, 0, 0, 0]).map(|_| ())
     }

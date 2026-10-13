@@ -62,7 +62,8 @@ connects it with other programs and built-in commands.
 
 ## How it works
 
-**Executables** are ELF64 files for the System V x86-64 ABI, as on Linux.
+**Executables** are ELF64 files for the System V ABI of the processor (on
+AMD64 x86-64's), as on Linux.
 Veda's own (Rust) programs stay PE; `vrt::process::Spawn` starts either
 kind. For an ELF program it maps the segments (`lib/elf` validates them and
 groups the pages by permissions), gives it an 8 MiB stack with guard pages
@@ -170,11 +171,15 @@ and wakes a waiter on, once the thread has left its stack).
 1. downloads the source archives and checks them against the SHA-256 each
    `ports/*/port.toml` pins (their GPG signatures were checked against the
    GNU and musl keys when they were pinned);
-2. builds the POSIX layer for `x86_64-unknown-none`;
+2. builds the POSIX layer for the architecture's bare target
+   (`x86_64-unknown-none` on AMD64);
 3. runs `ports/build.sh` to unpack and patch the
-   sources and build, in `target/toolchain`:
-   * `cross/`, the cross toolchain for this machine: `x86_64-veda-gcc`,
-     `x86_64-veda-g++` with the C++ library (libstdc++), and the binutils,
+   sources (each port's patch, then the architecture's) and build, with
+   the architecture's settings (`ports/arch/<architecture>/settings.sh`),
+   in `target/toolchain`:
+   * `cross/`, the cross toolchain for this machine: on AMD64
+     `x86_64-veda-gcc`, `x86_64-veda-g++` with the C++ library
+     (libstdc++), and the binutils,
      with a sysroot laid out like Veda's `/system`. GCC is written in C++,
      so the C++ compiler is what builds the native GCC; programs in C++
      can use it too;
@@ -196,8 +201,9 @@ toolchain exists, and says so when it does not. The image grows by about
 80 MB with it, which Veda keeps in memory; compiling is comfortable in
 QEMU's default 1 GiB.
 
-The build needs the distribution's packages (nasm, meson and ninja for the
-media libraries, which videos are decoded with); on Debian and Ubuntu:
+The build needs the distribution's packages (meson and ninja for the
+media libraries, which videos are decoded with, and on AMD64 nasm for
+their assembly); on Debian and Ubuntu:
 
 ```text
 sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev nasm meson ninja-build
@@ -207,15 +213,17 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 
 | Port | Version | What changes for Veda |
 |------|---------|-----------------------|
-| `binutils` | 2.47 | the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
-| `gcc` | 16.2.0 | the `x86_64-veda` target: `gcc/config/veda.h` and `i386/veda.h` (musl, static linking, `/system`), `veda.opt`, libgcc's configuration, libstdc++'s checks of the C library |
+| `binutils` | 2.47 | Veda in `config.sub`; on AMD64 the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
+| `gcc` | 16.2.0 | Veda's target: `gcc/config/veda.h` (musl, static linking, `/system`), `veda.opt`, libgcc's configuration, libstdc++'s checks of the C library; on AMD64 `x86_64-veda`, `i386/veda.h` (the System V x86-64 ABI) |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
-| `musl` | 1.2.6 | system calls through the POSIX layer, `_start`, thread entry points, `posix_spawn`, the call to set the layer up |
+| `musl` | 1.2.6 | the call to set the layer up, `posix_spawn`; on AMD64 system calls through the POSIX layer, `_start`, thread entry points |
 | `dav1d` | 1.5.4 | none: built as released (meson), for the media decoder |
 | `ffmpeg` | 9.0.2 | `veda` as a target operating system in `configure`; built with only the demuxers, decoders and parsers the media decoder uses |
 
 Each port is a directory with `port.toml` (version, address, SHA-256,
-licence) and `veda.patch`; `ports/README.md` describes how to change one.
+licence), `veda.patch` and, for what is the architecture's,
+`arch/<architecture>/veda.patch`; `ports/README.md` describes how to
+change one.
 
 ### Licences
 
@@ -238,7 +246,8 @@ beside it.
   threads. `systest` runs them inside Veda with `tests/c/hello.c`, each
   linked both at a fixed address and position-independent, and tests the
   kernel's sockets, memory protection, private memory and exit futexes and
-  the VFS's open files.
+  the VFS's open files. What they expect of the architecture (the machine
+  `uname` names, as Linux does) is in `tests/c/arch/<architecture>/`.
 * `tests/ui/c-programs.vts` runs programs in the Terminal: exit statuses,
   an interactive program (`tests/c/greet.c`), Ctrl+C and Ctrl+D, pipes and
   files.

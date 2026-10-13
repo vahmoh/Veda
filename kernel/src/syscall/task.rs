@@ -154,15 +154,15 @@ pub fn thread_set_priority(raw: RawHandle, prio: usize) -> SysResult {
     ok(0)
 }
 
-pub fn thread_set_fs_base(value: usize) -> SysResult {
+/// Sets the calling thread's thread pointer: where it finds its
+/// thread-local storage.
+pub fn thread_set_tls(value: usize) -> SysResult {
     if value != 0 && !is_user_address(value) {
         return Err(Error::InvalidArgs);
     }
     let cur = sched::current();
     // SAFETY: the current thread's context, under the BKL.
-    unsafe { (*cur.ctx_ptr()).fs_base = value as u64 };
-    // SAFETY: loading a user-space address into FS.base.
-    unsafe { crate::arch::cpu::wrmsr(crate::arch::cpu::MSR_FS_BASE, value as u64) };
+    unsafe { (*cur.ctx_ptr()).set_tls(value as u64) };
     ok(0)
 }
 

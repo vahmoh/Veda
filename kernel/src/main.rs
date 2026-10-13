@@ -17,21 +17,23 @@ mod acpi;
 mod arch;
 mod futex;
 mod hv;
-mod iommu;
 mod loader;
 mod log;
 mod mm;
 mod object;
 mod panic;
+mod percpu;
 mod random;
 mod sched;
 mod sync;
 mod syscall;
 mod time;
 
-use bootinfo::{BootInfo, MemoryKind};
+use alloc::sync::Arc;
+use core::sync::atomic::Ordering;
 
-use arch::{apic, cpu, gdt, idt, percpu, smp};
+use bootinfo::{BootInfo, MemoryKind};
+use sched::Thread;
 use sync::bkl;
 
 #[global_allocator]
@@ -111,36 +113,16 @@ fn log_paint(s: &bootinfo::PaintReport) {
     kinfo!("boot: the loader cleared the screen in {}; {}", ms(s.paint_ticks), how);
 }
 
-/// Kernel entry point, called by `vboot` (see the `bootinfo` crate for the
-/// machine state at this point).
-#[unsafe(no_mangle)]
-pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
-    arch::serial::init();
-    // SAFETY: per-CPU structures of the BSP, set up exactly once.
-    unsafe {
-        let p = percpu::get(0);
-        gdt::load(p.gdt.get(), p.tss.get());
-        percpu::install(0, 0);
-    }
-    idt::init();
-    idt::load();
+/// The kernel, once the architecture's entry code has the boot CPU ready
+/// to log and take exceptions (`arch::kernel_entry`): sets up memory, the
+/// platform and the other CPUs, and starts `init`.
+fn kernel_main(boot: &'static BootInfo) -> ! {
     if !boot.is_valid() {
         panic!("invalid boot information (loader/kernel version mismatch)");
     }
-    let features = cpu::detect_features();
     let opts = parse_cmdline(boot.cmdline());
     kinfo!("Veda kernel {} starting", env!("CARGO_PKG_VERSION"));
-    kinfo!(
-        "cpu: xsave={} avx={} x2apic={} tsc-deadline={} invariant-tsc={} smep={} smap={} 1g-pages={}",
-        features.xsave,
-        features.avx,
-        features.x2apic,
-        features.tsc_deadline,
-        features.invariant_tsc,
-        features.smep,
-        features.smap,
-        features.page_1g
-    );
+    arch::cpu::report();
 
     // Memory: frame allocator, kernel address space, heap.
     // SAFETY: the loader built a valid memory map.
@@ -155,68 +137,42 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
         free >> 20,
         reclaimed >> 10
     );
-    smp::init_this_cpu(0);
+    arch::init_cpu(0);
     panic::set_framebuffer(&boot.framebuffer);
 
-    // Platform: ACPI, interrupt controllers, timers.
+    // Platform: ACPI, interrupt controllers, clocks and timers.
     acpi::init(boot.rsdp_phys);
-    let acpi = acpi::ACPI.expect();
-    apic::disable_pic();
-    apic::select_mode(acpi.lapic_phys);
-    apic::init_local();
-    // SAFETY: recording the BSP's APIC id before any IPI is sent.
-    unsafe { percpu::set_apic_id(0, apic::id()) };
-    for io in &acpi.ioapics {
-        apic::add_ioapic(io.id, io.phys, io.gsi_base);
-    }
-    if let Some(hpet) = acpi.hpet_phys {
-        time::set_hpet(hpet);
-    }
-    // The boot processor's TSC as all processors' will be (see `time`).
-    let firmware_adjust = time::reset_boot_tsc();
-    time::calibrate_tsc();
-    if let Some(adjust) = firmware_adjust {
-        kinfo!("time: the firmware's adjustment of CPU 0's TSC ({} ns) set to 0", time::ticks_to_ns(adjust));
-    }
+    arch::init_platform();
     log_screen(&boot.screen);
     log_paint(&boot.paint);
     time::set_boot_time(&boot.boot_time, opts.tz);
-    if features.tsc_deadline {
-        apic::use_tsc_deadline(true);
-    } else {
-        apic::calibrate_timer(&time::busy_wait_ms);
-    }
-    kinfo!(
-        "time: TSC {} MHz (by the {}), {} timer, {} mode APIC",
-        time::tsc_hz() / 1_000_000,
-        time::tsc_source(),
-        if features.tsc_deadline { "TSC-deadline" } else { "one-shot" },
-        if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
-    );
-    // How fast the processor runs: rated, and measured while busy.
-    let rated = cpu::rated_mhz()
-        .map_or(alloc::string::String::new(), |(base, top)| alloc::format!(", rated {} MHz (up to {} MHz)", base, top));
-    let measured =
-        cpu::measure_mhz(20_000).map_or(alloc::string::String::from("unknown"), |mhz| alloc::format!("{} MHz", mhz));
-    let pstates = match cpu::hwp_range() {
-        Some((lowest, highest)) => alloc::format!("hardware P-states on (performance {} to {})", lowest, highest),
-        None => alloc::string::String::from("no hardware P-states: the firmware's speed"),
-    };
-    kinfo!("cpu: running at {} while busy{}; {}", measured, rated, pstates);
+    arch::init_timer();
 
     random::init(boot.entropy());
 
-    // Scheduler on the BSP; this boot context becomes CPU 0's idle thread.
-    sched::init_cpu(sched::Thread::new_idle_current(0));
-    percpu::get(0).online.store(true, core::sync::atomic::Ordering::Release);
+    // Scheduler on the boot CPU; this boot context becomes CPU 0's idle
+    // thread.
+    sched::init_cpu(Thread::new_idle_current(0));
+    percpu::get(0).online.store(true, Ordering::Release);
 
-    let aps = smp::start_aps(opts.max_cpus);
-    kinfo!("smp: {} CPU(s) online", aps + 1);
-    hv::report();
-    iommu::init();
+    let others = arch::smp::start_secondary_cpus(opts.max_cpus);
+    kinfo!("smp: {} CPU(s) online", others + 1);
+    arch::hv::report();
+    arch::iommu::init();
 
     bkl::acquire();
     loader::spawn_init(boot);
     kinfo!("boot complete; handing the CPU to user space");
+    sched::idle_loop()
+}
+
+/// A CPU other than the boot CPU, once its architecture has set it up
+/// (`arch::smp`): it comes online with `idle` as its idle thread, says it
+/// started (`started`), and takes work.
+fn secondary_main(id: usize, idle: Arc<Thread>, started: impl FnOnce()) -> ! {
+    sched::init_cpu(idle);
+    percpu::get(id).online.store(true, Ordering::Release);
+    started();
+    bkl::acquire();
     sched::idle_loop()
 }

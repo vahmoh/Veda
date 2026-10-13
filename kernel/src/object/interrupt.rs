@@ -6,18 +6,18 @@
 //! clears the signal and unmasks the line.
 //!
 //! An interrupt may instead be bound to a virtual processor (the device is
-//! a guest's): then it raises a vector of the processor's local APIC, and
-//! the guest's driver handles it as on a machine of its own. An edge (an
-//! MSI, an edge-triggered line) needs nothing more; a level-triggered line
-//! is masked when it fires, as above, and raised as a level-triggered
-//! interrupt, whose end-of-interrupt at the virtual processor unmasks the
-//! line again — as a PC's I/O APIC waits for the processor's
-//! end-of-interrupt — unless it is no longer bound by then (the guest masks
-//! a line by having it bound to nothing).
+//! a guest's): then it raises a vector of the processor's interrupt
+//! controller, and the guest's driver handles it as on a machine of its
+//! own. An edge (an MSI, an edge-triggered line) needs nothing more; a
+//! level-triggered line is masked when it fires, as above, and raised as a
+//! level-triggered interrupt, whose end-of-interrupt at the virtual
+//! processor unmasks the line again — as a machine's interrupt controller
+//! waits for the processor's end-of-interrupt — unless it is no longer
+//! bound by then (the guest masks a line by having it bound to nothing).
 //!
-//! Every device interrupt has a vector of its own, from one pool: an MSI's
-//! when it is made, a line's when it is set up (any input of the machine's
-//! I/O APICs).
+//! Every device interrupt has a vector of its own, from one pool
+//! (`arch::irq`): an MSI's when it is made, a line's when it is set up (any
+//! line of the machine's interrupt controllers, by its GSI).
 //!
 //! A program can make interrupts of its own and raise them (`irq_raise`):
 //! the lines of an interrupt controller it drives itself, which the kernel
@@ -36,13 +36,13 @@ use vabi::signals::SIGNALED;
 
 use super::Signals;
 use super::event::Event;
-use crate::arch::{apic, idt};
-use crate::hv::vcpu::Vcpu;
+use crate::arch::irq;
+use crate::hv::Vcpu;
 use crate::sync::SpinLock;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Source {
-    /// An I/O APIC input.
+    /// An interrupt line, by its GSI (ACPI's number for it).
     Gsi { gsi: u32, level: bool },
     /// A message-signalled interrupt (of a PCI function).
     Msi,
@@ -71,13 +71,13 @@ struct Slot {
 }
 
 impl Slot {
-    /// A live interrupt of I/O APIC input `gsi`.
+    /// A live interrupt of line `gsi`.
     fn has_line(&self, gsi: u32) -> bool {
         self.irq.strong_count() > 0 && matches!(self.source, Source::Gsi { gsi: g, .. } if g == gsi)
     }
 }
 
-static VECTORS: SpinLock<[Option<Slot>; 256]> = SpinLock::new([const { None }; 256]);
+static VECTORS: SpinLock<[Option<Slot>; irq::VECTORS]> = SpinLock::new([const { None }; irq::VECTORS]);
 
 impl Interrupt {
     fn new(vector: u8, source: Source) -> Arc<Interrupt> {
@@ -127,8 +127,8 @@ impl Interrupt {
         Ok(())
     }
 
-    /// Sets up an I/O APIC input. Fails if the line is already set up, if
-    /// no I/O APIC has it or if no vector is free.
+    /// Sets up line `gsi`. Fails if the line is already set up, if no
+    /// interrupt controller has it or if no vector is free.
     pub fn new_gsi(gsi: u32, level: bool, active_low: bool) -> Result<Arc<Interrupt>, Error> {
         let mut table = VECTORS.lock();
         if table.iter().flatten().any(|s| s.has_line(gsi)) {
@@ -139,7 +139,7 @@ impl Interrupt {
         let irq = Interrupt::new(vector, source);
         table[vector as usize] = Some(Slot { irq: Arc::downgrade(&irq), source });
         drop(table);
-        if !apic::route_gsi(gsi, vector, level, active_low, false) {
+        if !irq::route_line(gsi, vector, level, active_low) {
             return Err(Error::NotFound);
         }
         Ok(irq)
@@ -154,7 +154,7 @@ impl Interrupt {
         let irq = Interrupt::new(vector, Source::Msi);
         table[vector as usize] = Some(Slot { irq: Arc::downgrade(&irq), source: Source::Msi });
         drop(table);
-        Some((irq, apic::msi_message(vector, device)))
+        Some((irq, irq::msi_message(vector, device)))
     }
 
     /// Re-arms the interrupt after the driver has serviced it: a line is
@@ -162,7 +162,7 @@ impl Interrupt {
     pub fn ack(&self) {
         self.signals.update(SIGNALED, 0);
         match self.source {
-            Source::Gsi { gsi, level: true } => apic::set_gsi_masked(gsi, false),
+            Source::Gsi { gsi, level: true } => irq::mask_line(gsi, false),
             Source::Software { level: true } if self.raised.swap(false, Ordering::AcqRel) => {
                 if let Some(e) = &self.ended {
                     e.signals.update(0, SIGNALED);
@@ -172,8 +172,8 @@ impl Interrupt {
         }
     }
 
-    /// Makes the interrupt raise `vector` at `vcpu`'s local APIC from now
-    /// on, instead of its signal.
+    /// Makes the interrupt raise `vector` at `vcpu`'s interrupt controller
+    /// from now on, instead of its signal.
     pub fn bind(&self, vcpu: &Arc<Vcpu>, vector: u8) {
         *self.target.lock() = Some((Arc::downgrade(vcpu), vector));
     }
@@ -194,9 +194,8 @@ impl Interrupt {
 }
 
 /// A vector no device interrupt has.
-fn free_vector(table: &[Option<Slot>; 256]) -> Option<u8> {
-    (idt::DEVICE_VECTOR_FIRST..=idt::DEVICE_VECTOR_LAST)
-        .find(|&v| table[v as usize].as_ref().is_none_or(|s| s.irq.strong_count() == 0))
+fn free_vector(table: &[Option<Slot>; irq::VECTORS]) -> Option<u8> {
+    irq::DEVICE_VECTORS.into_iter().find(|&v| table[v as usize].as_ref().is_none_or(|s| s.irq.strong_count() == 0))
 }
 
 impl Drop for Interrupt {
@@ -216,9 +215,9 @@ impl Drop for Interrupt {
         if let Source::Gsi { gsi, .. } = self.source
             && !table.iter().flatten().any(|s| s.has_line(gsi))
         {
-            apic::set_gsi_masked(gsi, true);
+            irq::mask_line(gsi, true);
         }
-        apic::release_vector(self.vector);
+        irq::release(self.vector);
     }
 }
 
@@ -232,7 +231,7 @@ pub fn dispatch(vector: u8) {
     };
     let level = match irq.source {
         Source::Gsi { gsi, level: true } => {
-            apic::set_gsi_masked(gsi, true);
+            irq::mask_line(gsi, true);
             true
         }
         _ => false,

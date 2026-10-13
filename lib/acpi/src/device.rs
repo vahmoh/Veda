@@ -213,8 +213,8 @@ pub fn pci_companion(
     })
 }
 
-/// Where a PCI function's INTx goes: an I/O APIC input (a GSI), and how
-/// it signals.
+/// Where a PCI function's INTx goes: an interrupt controller's input (a
+/// GSI), and how it signals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IntxRoute {
     pub gsi: u32,

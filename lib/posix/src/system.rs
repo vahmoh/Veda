@@ -25,7 +25,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
         nodename: field("veda"),
         release: field(RELEASE),
         version: field(&version),
-        machine: field("x86_64"),
+        machine: field(vrt::arch::MACHINE),
         domainname: field("(none)"),
     };
     // SAFETY: the program passed a struct utsname.

@@ -422,7 +422,8 @@ panic fails the run.
 cargo xtask test --ui
 ```
 
-This adds the GUI scripts in `tests/ui/` and the agent's scripts in
+This adds the GUI scripts in `tests/ui/` (with `tests/ui/arch/amd64/`,
+those that hold only on QEMU's PC) and the agent's scripts in
 `tests/agent/`. They click through the desktop and the applications, check
 logs and screenshots, and break the simulated Wi-Fi network in many ways
 to check that Veda recovers by itself. Scripts that need GCC or the video

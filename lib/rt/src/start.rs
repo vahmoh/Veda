@@ -36,10 +36,9 @@ unsafe extern "Rust" {
     fn __vrt_main() -> i32;
 }
 
-/// The process entry point (`/ENTRY:_vrt_start`). The kernel passes the
-/// bootstrap channel handle in `rdi`.
-#[unsafe(no_mangle)]
-pub extern "sysv64" fn _vrt_start(bootstrap: RawHandle, _arg: usize) -> ! {
+/// The process's start, from the architecture's entry point (`arch`): it
+/// takes the bootstrap channel the kernel passed, runs `main` and exits.
+pub(crate) fn start(bootstrap: RawHandle) -> ! {
     crate::env::adopt(bootstrap);
     // SAFETY: provided by the program through `vrt::entry!`.
     let code = unsafe { __vrt_main() };

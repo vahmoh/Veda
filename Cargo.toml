@@ -243,7 +243,7 @@ smoltcp = { path = "third_party/smoltcp", default-features = false, features = [
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
-# Set for the programs of the driver VM's Linux guest (.cargo/config.toml).
+# Set for the programs of the driver VM's Linux guest (.cargo/arch/*/config.toml).
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(veda_guest)"] }
 missing_debug_implementations = "allow"
 

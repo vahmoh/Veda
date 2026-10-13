@@ -30,6 +30,9 @@
 #include <unistd.h>
 #include <veda/ipc.h>
 
+/* The architecture's expectations (tests/c/arch/<architecture>/). */
+#include "machine.h"
+
 extern char **environ;
 
 static int failures;
@@ -74,7 +77,7 @@ static void check_stdio_and_strings(void)
 			if (v[j] < v[i]) { int t = v[i]; v[i] = v[j]; v[j] = t; }
 	CHECK("arrays", v[0] == 1 && v[4] == 9, "unsorted");
 	struct utsname u;
-	CHECK("uname", uname(&u) == 0 && !strcmp(u.sysname, "Veda") && !strcmp(u.machine, "x86_64"),
+	CHECK("uname", uname(&u) == 0 && !strcmp(u.sysname, "Veda") && !strcmp(u.machine, VEDA_MACHINE),
 	      "sysname '%s' machine '%s'", u.sysname, u.machine);
 }
 
@@ -117,9 +120,9 @@ static void check_startup(void)
 {
 	const char *execfn = (const char *)getauxval(AT_EXECFN);
 	const char *platform = (const char *)getauxval(AT_PLATFORM);
-	CHECK("auxiliary vector", getauxval(AT_PAGESZ) == 4096 && sysconf(_SC_PAGESIZE) == 4096 &&
+	CHECK("auxiliary vector", getauxval(AT_PAGESZ) == VEDA_PAGE_SIZE && sysconf(_SC_PAGESIZE) == VEDA_PAGE_SIZE &&
 	      getauxval(AT_PHDR) && getauxval(AT_PHNUM) && getauxval(AT_RANDOM) && !getauxval(AT_SECURE) &&
-	      execfn && *execfn == '/' && platform && !strcmp(platform, "x86_64"), "missing or wrong entries");
+	      execfn && *execfn == '/' && platform && !strcmp(platform, VEDA_MACHINE), "missing or wrong entries");
 	/* Where the program was loaded: right for this program's own code. */
 	CHECK("entry point", getauxval(AT_ENTRY) == (unsigned long)_start, "AT_ENTRY %#lx, _start %p",
 	      getauxval(AT_ENTRY), (void *)_start);
@@ -127,38 +130,39 @@ static void check_startup(void)
 
 static void check_mmap(void)
 {
-	size_t len = 3 * 4096;
+	const size_t page = VEDA_PAGE_SIZE;
+	size_t len = 3 * page;
 	unsigned char *p = mmap(0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	CHECK("mmap anonymous", p != MAP_FAILED && p[0] == 0 && p[len - 1] == 0, "map failed or not zero");
 	if (p == MAP_FAILED)
 		return;
 	memset(p, 0xab, len);
-	CHECK("mprotect part of a mapping", mprotect(p + 4096, 4096, PROT_READ) == 0, "mprotect failed");
-	CHECK("munmap part of a mapping", munmap(p + 8192, 4096) == 0 && p[0] == 0xab, "munmap failed");
-	CHECK("munmap", munmap(p, 8192) == 0, "munmap failed");
+	CHECK("mprotect part of a mapping", mprotect(p + page, page, PROT_READ) == 0, "mprotect failed");
+	CHECK("munmap part of a mapping", munmap(p + 2 * page, page) == 0 && p[0] == 0xab, "munmap failed");
+	CHECK("munmap", munmap(p, 2 * page) == 0, "munmap failed");
 	void *none = mmap(0, 1 << 20, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	CHECK("mmap reservation", none != MAP_FAILED && mprotect(none, 4096, PROT_READ | PROT_WRITE) == 0,
+	CHECK("mmap reservation", none != MAP_FAILED && mprotect(none, page, PROT_READ | PROT_WRITE) == 0,
 	      "reserve then commit failed");
 	if (none != MAP_FAILED) {
 		char *r = none;
 		r[100] = 7;
 		/* Giving pages back, as allocators do: they read as zeros. */
-		CHECK("madvise MADV_DONTNEED", madvise(r, 4096, MADV_DONTNEED) == 0 && r[100] == 0, "not dropped");
+		CHECK("madvise MADV_DONTNEED", madvise(r, page, MADV_DONTNEED) == 0 && r[100] == 0, "not dropped");
 		CHECK("decommit a reservation",
-		      mprotect(r, 4096, PROT_NONE) == 0 && madvise(r, 1 << 20, MADV_DONTNEED) == 0,
+		      mprotect(r, page, PROT_NONE) == 0 && madvise(r, 1 << 20, MADV_DONTNEED) == 0,
 		      "madvise failed");
 		munmap(none, 1 << 20);
 	}
 	/* Shared memory has nowhere to take its contents back from. */
-	char *shared = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	char *shared = mmap(0, page, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	CHECK("mmap shared", shared != MAP_FAILED, "map failed");
 	if (shared != MAP_FAILED) {
 		shared[0] = 5;
 		errno = 0;
 		CHECK("MADV_DONTNEED keeps shared memory",
-		      madvise(shared, 4096, MADV_DONTNEED) == -1 && errno == EINVAL && shared[0] == 5,
+		      madvise(shared, page, MADV_DONTNEED) == -1 && errno == EINVAL && shared[0] == 5,
 		      "contents dropped");
-		munmap(shared, 4096);
+		munmap(shared, page);
 	}
 }
 

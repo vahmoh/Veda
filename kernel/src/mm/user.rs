@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use vabi::Error;
 
-use crate::arch::cpu::{user_access_begin, user_access_end};
+use crate::arch::mm::{user_access_begin, user_access_end};
 use crate::sched;
 
 fn validate(addr: u64, len: usize, write: bool) -> Result<(), Error> {

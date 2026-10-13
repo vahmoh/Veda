@@ -1,13 +1,6 @@
 //! `vhv` — what Veda's hypervisor knows that touches no hardware.
 //!
-//! * [`lapic`]: the local APIC of a guest's virtual processor, in x2APIC
-//!   mode: registers, interrupt priorities, the timer, inter-processor
-//!   interrupts.
-//! * [`cpuid`]: what `cpuid` tells a guest: the processor's own features,
-//!   less those a guest cannot use, and the platform's leaves.
-//! * [`platform`]: the paravirtual platform guests run on: how they find
-//!   it, and its hypercalls.
-//! * [`linux`]: booting a Linux kernel on it (the x86 boot protocol).
+//! * [`platform`]: the paravirtual platform guests run on: its hypercalls.
 //! * [`bridge`]: Veda's IPC for the guest's programs.
 //! * [`pci`]: the configuration space of a PCI function given to a guest,
 //!   and the stand-in for the PC's host bridge.
@@ -15,9 +8,15 @@
 //!   firmware: its OpRegion, as the guest has it.
 //! * [`acpi`]: the ACPI tables that describe the guest's machine.
 //!
-//! The kernel drives them under its virtual processors (`kernel/src/hv`),
-//! and the virtual machine monitor and the Linux guest's side use the
-//! platform's definitions; the host's unit tests run them all.
+//! What is particular to the architecture its guests are (their virtual
+//! processors' interrupt controller, what the processor tells them of
+//! itself, how they find the platform and boot, the PC's devices and memory
+//! map) is in `lib/hv/arch/<architecture>/`: [`amd64`]. It describes those
+//! machines on any host, so its unit tests run anywhere.
+//!
+//! The kernel drives them under its virtual processors (its architecture's
+//! `hv`), and the virtual machine monitor and the Linux guest's side use
+//! the platform's definitions; the host's unit tests run them all.
 
 #![no_std]
 
@@ -26,10 +25,9 @@ extern crate alloc;
 extern crate std;
 
 pub mod acpi;
+#[path = "../arch/amd64/mod.rs"]
+pub mod amd64;
 pub mod bridge;
-pub mod cpuid;
 pub mod igd;
-pub mod lapic;
-pub mod linux;
 pub mod pci;
 pub mod platform;

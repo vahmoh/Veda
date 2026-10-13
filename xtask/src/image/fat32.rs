@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn short_names() {
-        assert_eq!(&short_name("bootx64.efi").unwrap(), b"BOOTX64 EFI");
+        assert_eq!(&short_name("loader1.efi").unwrap(), b"LOADER1 EFI");
         assert_eq!(&short_name("EFI").unwrap(), b"EFI        ");
         assert!(short_name("waytoolongname.txt").is_err());
         assert!(short_name("a.toolong").is_err());
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn builds_volume_with_files() {
         let mut b = Fat32Builder::new("VEDA");
-        b.add_file("EFI/BOOT/BOOTX64.EFI", vec![0xAB; 10_000]).unwrap();
+        b.add_file("EFI/BOOT/LOADER.EFI", vec![0xAB; 10_000]).unwrap();
         b.add_file("VEDA/BOOT.CFG", b"hello".to_vec()).unwrap();
         let sectors = 128 * 1024 * 1024 / SECTOR as u32;
         let img = b.build(sectors, 2048).unwrap();

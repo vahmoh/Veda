@@ -182,13 +182,14 @@ impl<'a> Spawn<'a> {
         Ok((process, thread))
     }
 
-    /// Sends the startup message and starts the main thread at `entry`.
+    /// Sends the startup message and starts the main thread at `entry`, its
+    /// stack pointer `sp`.
     fn launch(
         self,
         process: Process,
         thread: Thread,
         entry: usize,
-        rsp: usize,
+        sp: usize,
         args: &[&str],
         env: &[&str],
     ) -> Result<Process, SpawnError> {
@@ -204,7 +205,7 @@ impl<'a> Spawn<'a> {
         drop(ours);
         call(
             nr::PROCESS_START,
-            [process.raw() as usize, thread.raw() as usize, entry, rsp, theirs.into_handle().into_raw() as usize, 0],
+            [process.raw() as usize, thread.raw() as usize, entry, sp, theirs.into_handle().into_raw() as usize, 0],
         )?;
         Ok(process)
     }
@@ -242,7 +243,7 @@ impl<'a> Spawn<'a> {
 
         let stack = Vmo::create(MAIN_STACK)?;
         let stack_base = vm::map(Some(&process), &stack, 0, MAIN_STACK, 0, map_flags::READ | map_flags::WRITE)?;
-        let rsp = stack_base + MAIN_STACK - 72;
+        let sp = vabi::entry_stack_pointer(stack_base + MAIN_STACK);
 
         // The startup message carries text.
         fn text<'b>(v: &[&'b [u8]]) -> Vec<Cow<'b, str>> {
@@ -252,7 +253,7 @@ impl<'a> Spawn<'a> {
         let args: Vec<&str> = args.iter().map(|s| s.as_ref()).collect();
         let env: Vec<&str> = env.iter().map(|s| s.as_ref()).collect();
         let entry = pe.entry_point() as usize;
-        self.launch(process, thread, entry, rsp, &args, &env)
+        self.launch(process, thread, entry, sp, &args, &env)
     }
 
     fn start_elf(self, image: &[u8]) -> Result<Process, SpawnError> {
@@ -304,7 +305,8 @@ impl<'a> Spawn<'a> {
             phdr: elf.phdr_vaddr().wrapping_add(bias),
             phnum: elf.phnum() as u64,
             entry: elf.entry().wrapping_add(bias),
-            hwcap: cpu_features(),
+            hwcap: crate::arch::hwcap(),
+            platform: velf::NATIVE.platform,
             uid: UID,
             gid: UID,
             random,
@@ -320,10 +322,4 @@ impl<'a> Spawn<'a> {
         let entry = elf.entry().wrapping_add(bias) as usize;
         self.launch(process, thread, entry, img.sp as usize, &[], &[])
     }
-}
-
-/// The CPU's feature flags as `AT_HWCAP` reports them on x86-64
-/// (`CPUID.1:EDX`).
-fn cpu_features() -> u64 {
-    core::arch::x86_64::__cpuid(1).edx as u64
 }

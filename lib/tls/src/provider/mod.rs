@@ -87,12 +87,13 @@ impl SecureRandom for RandomSource {
 }
 
 /// The kernel's random number generator: a ChaCha20 stream seeded from the
-/// firmware's RNG, RDSEED/RDRAND and timing jitter.
+/// firmware's RNG, the processor's random number generators and timing
+/// jitter.
 pub static SYSTEM_RANDOM: RandomSource = RandomSource::new(vrt::object::random_bytes);
 
 /// The cipher suites, in order of preference: AES-128-GCM is the cheapest
-/// here (it uses AES-NI when the processor has it), ChaCha20-Poly1305 the
-/// fallback.
+/// here (it uses the processor's AES instructions when it has them),
+/// ChaCha20-Poly1305 the fallback.
 pub(crate) static CIPHER_SUITES: &[SupportedCipherSuite] = &[
     TLS13_AES_128_GCM_SHA256,
     TLS13_AES_256_GCM_SHA384,

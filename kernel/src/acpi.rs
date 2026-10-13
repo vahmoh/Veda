@@ -1,6 +1,7 @@
-//! Minimal ACPI table parsing: CPUs and interrupt controllers (MADT), HPET,
-//! PCI Express configuration space (MCFG), power control (FADT, `\_S5`) and
-//! where the IOMMU's table is (DMAR, which `iommu` reads).
+//! The firmware's ACPI tables, as far as the kernel reads them: where each
+//! table is, PCI Express configuration space (MCFG) and power control
+//! (FADT, `\_S5`). The tables that describe the architecture's own devices
+//! (its processors, interrupt controllers and IOMMU) are read by its code.
 //! There is no AML interpreter; `\_S5` is located with a byte-pattern scan,
 //! which is reliable for the firmware Veda targets.
 
@@ -8,27 +9,6 @@ use alloc::vec::Vec;
 
 use crate::mm::phys_to_virt;
 use crate::sync::Once;
-
-#[derive(Debug, Clone, Copy)]
-pub struct CpuEntry {
-    pub apic_id: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct IoApicEntry {
-    pub id: u8,
-    pub phys: u64,
-    pub gsi_base: u32,
-}
-
-/// ISA IRQ → GSI mapping with polarity/trigger.
-#[derive(Debug, Clone, Copy)]
-pub struct IrqOverride {
-    pub isa_irq: u8,
-    pub gsi: u32,
-    pub active_low: bool,
-    pub level: bool,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct McfgEntry {
@@ -56,32 +36,35 @@ pub struct GenericAddressRaw {
 
 #[derive(Debug, Default)]
 pub struct AcpiInfo {
-    pub lapic_phys: u64,
-    pub cpus: Vec<CpuEntry>,
-    pub ioapics: Vec<IoApicEntry>,
-    pub overrides: Vec<IrqOverride>,
-    pub hpet_phys: Option<u64>,
+    /// Every table the root table lists: its signature and physical address.
+    pub tables: Vec<([u8; 4], u64)>,
     pub mcfg: Vec<McfgEntry>,
     pub power: PowerInfo,
-    /// The DMAR table (its physical address).
-    pub dmar: Option<u64>,
 }
 
 pub static ACPI: Once<AcpiInfo> = Once::new();
 
-fn read_u8(addr: u64) -> u8 {
+/// Reads the byte of the firmware's tables at physical address `addr`
+/// (they are in RAM, which the direct map covers).
+pub fn read_u8(addr: u64) -> u8 {
     // SAFETY: ACPI tables are in RAM covered by the direct map.
     unsafe { core::ptr::read_unaligned(phys_to_virt(addr) as *const u8) }
 }
-fn read_u16(addr: u64) -> u16 {
+
+/// Reads a 16-bit word of the firmware's tables (see [`read_u8`]).
+pub fn read_u16(addr: u64) -> u16 {
     // SAFETY: as above.
     unsafe { core::ptr::read_unaligned(phys_to_virt(addr) as *const u16) }
 }
-fn read_u32(addr: u64) -> u32 {
+
+/// Reads a 32-bit word of the firmware's tables (see [`read_u8`]).
+pub fn read_u32(addr: u64) -> u32 {
     // SAFETY: as above.
     unsafe { core::ptr::read_unaligned(phys_to_virt(addr) as *const u32) }
 }
-fn read_u64(addr: u64) -> u64 {
+
+/// Reads a 64-bit word of the firmware's tables (see [`read_u8`]).
+pub fn read_u64(addr: u64) -> u64 {
     // SAFETY: as above.
     unsafe { core::ptr::read_unaligned(phys_to_virt(addr) as *const u64) }
 }
@@ -90,7 +73,8 @@ fn signature(addr: u64) -> [u8; 4] {
     read_u32(addr).to_le_bytes()
 }
 
-fn checksum_ok(addr: u64, len: u32) -> bool {
+/// Whether the `len` bytes of the table at `addr` add up to 0.
+pub fn checksum_ok(addr: u64, len: u32) -> bool {
     (0..len as u64).fold(0u8, |s, i| s.wrapping_add(read_u8(addr + i))) == 0
 }
 
@@ -115,52 +99,6 @@ fn tables(rsdp: u64) -> Vec<([u8; 4], u64)> {
         }
     }
     out
-}
-
-fn parse_madt(addr: u64, info: &mut AcpiInfo) {
-    info.lapic_phys = read_u32(addr + 36) as u64;
-    let len = read_u32(addr + 4) as u64;
-    let mut off = 44;
-    while off + 2 <= len {
-        let ty = read_u8(addr + off);
-        let elen = read_u8(addr + off + 1) as u64;
-        if elen < 2 {
-            break;
-        }
-        let e = addr + off;
-        match ty {
-            0 => {
-                let flags = read_u32(e + 4);
-                if flags & 0b11 != 0 {
-                    info.cpus.push(CpuEntry { apic_id: read_u8(e + 3) as u32 });
-                }
-            }
-            1 => info.ioapics.push(IoApicEntry {
-                id: read_u8(e + 2),
-                phys: read_u32(e + 4) as u64,
-                gsi_base: read_u32(e + 8),
-            }),
-            2 => {
-                let flags = read_u16(e + 8);
-                info.overrides.push(IrqOverride {
-                    isa_irq: read_u8(e + 3),
-                    gsi: read_u32(e + 4),
-                    active_low: flags & 0b11 == 0b11,
-                    level: (flags >> 2) & 0b11 == 0b11,
-                });
-            }
-            5 => info.lapic_phys = read_u64(e + 4),
-            9 => {
-                let flags = read_u32(e + 8);
-                let id = read_u32(e + 4);
-                if flags & 0b11 != 0 && !info.cpus.iter().any(|c| c.apic_id == id) {
-                    info.cpus.push(CpuEntry { apic_id: id });
-                }
-            }
-            _ => {}
-        }
-        off += elen;
-    }
 }
 
 fn parse_mcfg(addr: u64, info: &mut AcpiInfo) {
@@ -252,76 +190,33 @@ fn parse_fadt(addr: u64, info: &mut AcpiInfo) {
 pub fn init(rsdp: u64) {
     let mut info = AcpiInfo::default();
     if rsdp == 0 || read_u64(rsdp).to_le_bytes() != *b"RSD PTR " {
-        crate::kwarn!("acpi: no valid RSDP; assuming a single CPU");
-        info.lapic_phys = 0xFEE0_0000;
-        info.cpus.push(CpuEntry { apic_id: 0 });
+        crate::kwarn!("acpi: no valid RSDP");
         ACPI.set(info);
         return;
     }
-    for (sig, addr) in tables(rsdp) {
+    info.tables = tables(rsdp);
+    for i in 0..info.tables.len() {
+        let (sig, addr) = info.tables[i];
         match &sig {
-            b"APIC" => parse_madt(addr, &mut info),
-            b"HPET" => info.hpet_phys = Some(read_u64(addr + 44)),
             b"MCFG" => parse_mcfg(addr, &mut info),
             b"FACP" => parse_fadt(addr, &mut info),
-            b"DMAR" if checksum_ok(addr, read_u32(addr + 4)) => info.dmar = Some(addr),
             _ => {}
         }
     }
-    crate::kinfo!(
-        "acpi: {} CPU(s), {} I/O APIC(s), {} override(s), hpet={}, mcfg={}, s5={}",
-        info.cpus.len(),
-        info.ioapics.len(),
-        info.overrides.len(),
-        info.hpet_phys.is_some(),
-        info.mcfg.len(),
-        info.power.s5_found
-    );
     for m in &info.mcfg {
         crate::kdebug!("acpi: PCIe ECAM at {:#x} (segment {}, buses {}-{})", m.base, m.segment, m.bus_start, m.bus_end);
     }
     ACPI.set(info);
 }
 
+/// The physical addresses of the tables with signature `sig`, in the root
+/// table's order.
+pub fn find_all(sig: &[u8; 4]) -> impl Iterator<Item = u64> + '_ {
+    ACPI.get().into_iter().flat_map(|info| info.tables.iter()).filter(move |(s, _)| s == sig).map(|&(_, addr)| addr)
+}
+
 /// The bytes of the table at `addr`, its header included.
 pub fn table_bytes(addr: u64) -> &'static [u8] {
     // SAFETY: as for the readers above; the firmware's tables stay.
     unsafe { core::slice::from_raw_parts(phys_to_virt(addr) as *const u8, read_u32(addr + 4) as usize) }
-}
-
-/// Translates a legacy ISA IRQ into (GSI, level, active_low).
-pub fn isa_irq_to_gsi(irq: u8) -> (u32, bool, bool) {
-    if let Some(info) = ACPI.get()
-        && let Some(o) = info.overrides.iter().find(|o| o.isa_irq == irq)
-    {
-        return (o.gsi, o.level, o.active_low);
-    }
-    (irq as u32, false, false)
-}
-
-/// Powers the machine off through ACPI. Returns only on failure.
-pub fn power_off() {
-    let Some(info) = ACPI.get() else { return };
-    let p = &info.power;
-    if p.pm1a_cnt != 0 && p.s5_found {
-        // SAFETY: writing SLP_TYP|SLP_EN to the PM1 control registers.
-        unsafe {
-            crate::arch::port::outw(p.pm1a_cnt, (p.slp_typ_a << 10) | (1 << 13));
-            if p.pm1b_cnt != 0 {
-                crate::arch::port::outw(p.pm1b_cnt, (p.slp_typ_b << 10) | (1 << 13));
-            }
-        }
-    }
-}
-
-/// Resets the machine (FADT reset register, then the keyboard controller).
-pub fn reboot() {
-    if let Some((reg, value)) = ACPI.get().and_then(|i| i.power.reset)
-        && reg.space == 1
-    {
-        // SAFETY: firmware-described reset port.
-        unsafe { crate::arch::port::outb(reg.address as u16, value) };
-    }
-    // SAFETY: 8042 "pulse reset line" command.
-    unsafe { crate::arch::port::outb(0x64, 0xFE) };
 }

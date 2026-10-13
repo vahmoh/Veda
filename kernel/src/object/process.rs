@@ -137,9 +137,8 @@ impl Process {
                 sched::State::Blocked => sched::wake(&t, WakeReason::Killed),
                 sched::State::Running => {
                     let cpu = t.sched.lock().cpu;
-                    if cpu != crate::arch::percpu::cpu_id_or_boot() {
-                        let apic = crate::arch::percpu::get(cpu as usize).apic_id;
-                        crate::arch::apic::send_ipi(apic, crate::arch::idt::RESCHED_VECTOR as u32);
+                    if cpu != crate::percpu::cpu_id_or_boot() {
+                        crate::arch::smp::reschedule(cpu);
                     }
                 }
                 _ => {}

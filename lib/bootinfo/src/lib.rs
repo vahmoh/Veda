@@ -1,30 +1,30 @@
 //! The boot handoff protocol between `vboot` (the UEFI loader) and `vkernel`.
 //!
-//! When the loader jumps to the kernel entry point, the CPU is in 64-bit long
-//! mode with interrupts disabled and paging enabled using page tables built by
-//! the loader. Those tables contain:
+//! The loader jumps to the kernel's entry point with paging enabled, on
+//! page tables of its own that map:
 //!
-//! * an identity map of low physical memory (so the loader can survive the
-//!   switch; the kernel drops it as soon as it installs its own tables),
-//! * a direct map of all physical RAM and the low 4 GiB at [`HHDM_BASE`],
-//! * the kernel image at its link address, with per-section permissions.
+//! * low physical memory where it is (so the loader can survive the switch;
+//!   the kernel drops it as soon as it installs its own tables),
+//! * all physical RAM, the direct map, at [`HHDM_BASE`],
+//! * the kernel image at its link address, [`KERNEL_BASE`], with
+//!   per-section permissions.
 //!
-//! The entry point is `extern "sysv64" fn(&'static BootInfo) -> !`. Every
-//! pointer stored inside [`BootInfo`] is a *virtual* address inside the direct
-//! map, so the kernel can use it immediately.
+//! The entry point takes the [`BootInfo`]. Every pointer stored inside it is
+//! a *virtual* address inside the direct map, so the kernel can use it
+//! immediately. How the processor is entered, and where the direct map and
+//! the kernel are, is the architecture's part of the protocol ([`arch`]).
 //!
 //! All structures are `#[repr(C)]` and contain only plain data, because the
 //! loader and kernel are separate binaries that must agree on the layout.
 
 #![no_std]
 
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+pub mod arch;
 pub mod variables;
 
-/// Virtual base address of the higher-half direct map of physical memory.
-pub const HHDM_BASE: u64 = 0xFFFF_8000_0000_0000;
-
-/// Link address of the kernel image.
-pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
+pub use arch::{HHDM_BASE, KERNEL_BASE, memory_type};
 
 /// `BootInfo::magic` value (`"VEDABOOT"` in little-endian).
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
@@ -93,7 +93,8 @@ pub struct BootInfo {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PaintReport {
-    /// Timestamp-counter ticks the painting took (0: nothing was painted).
+    /// Ticks of the clock's counter the painting took (the counter the
+    /// kernel's clock counts; 0: nothing was painted).
     pub paint_ticks: u64,
     /// Ticks spent making the framebuffer write-combining.
     pub setup_ticks: u64,
@@ -127,38 +128,13 @@ pub struct ScreenReport {
     pub own: [u16; 2],
 }
 
-/// The processor's memory types (the MTRRs' and PAT's encodings).
-pub mod memory_type {
-    pub const UNCACHED: u8 = 0;
-    pub const WRITE_COMBINING: u8 = 1;
-    pub const WRITE_THROUGH: u8 = 4;
-    pub const WRITE_PROTECTED: u8 = 5;
-    pub const WRITE_BACK: u8 = 6;
-    /// The PAT's UC- (uncached unless the MTRRs say write-combining).
-    pub const UNCACHED_MINUS: u8 = 7;
-    /// The loader could not tell.
-    pub const UNKNOWN: u8 = 0xFF;
-
-    /// A name for the log.
-    pub fn name(t: u8) -> &'static str {
-        match t {
-            UNCACHED | UNCACHED_MINUS => "uncached",
-            WRITE_COMBINING => "write-combining",
-            WRITE_THROUGH => "write-through",
-            WRITE_PROTECTED => "write-protected",
-            WRITE_BACK => "write-back",
-            _ => "of an unknown memory type",
-        }
-    }
-}
-
 /// How the framebuffer was made write-combining for painting.
 pub mod made_wc {
     /// It was not: it was already, or there is no framebuffer.
     pub const ALREADY: u8 = 0;
     /// The loader painted through page tables of its own, which map the
-    /// framebuffer write-combining by its page attributes (the PAT), the
-    /// firmware's MTRRs notwithstanding.
+    /// framebuffer write-combining by its page attributes, whatever the
+    /// firmware made of its range.
     pub const PAGE_ATTRIBUTES: u8 = 1;
     /// It could not be.
     pub const NOT: u8 = 2;

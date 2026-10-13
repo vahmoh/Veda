@@ -3,8 +3,9 @@
 //! `cargo xtask toolchain` builds, from the sources in `ports/`:
 //!
 //! * a **cross toolchain** that runs on this machine and makes Veda
-//!   programs (`x86_64-veda-gcc` and friends, with a sysroot laid out like
-//!   Veda's `/system`), used to build the C tests and ports;
+//!   programs (`<target>-gcc` and friends, for the architecture's target,
+//!   `arch::C_TARGET`, with a sysroot laid out like Veda's `/system`), used
+//!   to build the C tests and ports;
 //! * the **native toolchain**, the same compiler built to run inside Veda,
 //!   which the system image installs in `/system` (`gcc`, `as`, `ld`, the C
 //!   library and its headers);
@@ -19,10 +20,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::arch::{self, BARE_TARGET};
 use crate::util::{self, Result};
-
-/// The target triple of Veda's C programs.
-pub const TARGET: &str = "x86_64-veda";
 
 /// Where the toolchain is built.
 pub fn root() -> PathBuf {
@@ -92,13 +91,13 @@ pub fn media_status() -> std::result::Result<String, String> {
 
 /// The cross compiler, if it has been built.
 pub fn cross_gcc() -> Option<PathBuf> {
-    let gcc = root().join("cross").join("bin").join(format!("{TARGET}-gcc"));
+    let gcc = root().join("cross").join("bin").join(format!("{}-gcc", arch::C_TARGET));
     gcc.is_file().then_some(gcc)
 }
 
 /// A tool of the cross toolchain (`ld`, `objcopy`, `ar`, ...).
 fn cross_tool(name: &str) -> PathBuf {
-    root().join("cross").join("bin").join(format!("{TARGET}-{name}"))
+    root().join("cross").join("bin").join(format!("{}-{name}", arch::C_TARGET))
 }
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
@@ -128,21 +127,21 @@ const POSIX_LAYER_EXPORTS: [&str; 22] = [
     "veda_object_signal",
 ];
 
-/// Builds the POSIX layer (`lib/posix`) as a static library for
-/// `x86_64-unknown-none`; returns its path.
+/// Builds the POSIX layer (`lib/posix`) as a static library for the
+/// architecture's bare target; returns its path.
 pub fn posix_library() -> Result<PathBuf> {
-    util::status("Building", "the POSIX layer (x86_64-unknown-none)");
+    util::status("Building", format!("the POSIX layer ({BARE_TARGET})"));
     util::run(util::cargo().args([
         "rustc",
         "--package",
         "vposix",
         "--target",
-        "x86_64-unknown-none",
+        BARE_TARGET,
         "--release",
         "--crate-type",
         "staticlib",
     ]))?;
-    Ok(util::target_dir().join("x86_64-unknown-none").join("release").join("libvposix.a"))
+    Ok(util::target_dir().join(BARE_TARGET).join("release").join("libvposix.a"))
 }
 
 /// Links the POSIX layer's static library into the one relocatable object
@@ -220,13 +219,20 @@ const C_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-pie", &["-fPIE", "-s
 
 /// Compiles the test programs in C and C++ (`tests/c/*.c` and `*.cc`, each
 /// in every one of [`C_TEST_VARIANTS`]) for the system image: `(name,
-/// executable)`. None without a cross compiler.
+/// executable)`. None without a cross compiler. What they expect of the
+/// architecture is in the headers of `tests/c/arch/<architecture>/`.
 pub fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let Some(gcc) = cross_gcc() else { return Ok(Vec::new()) };
     let gxx = cross_tool("g++");
     refresh_posix_layer()?;
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
     let src = util::workspace_root().join("tests").join("c");
+    let arch_headers = src.join("arch").join(arch::NAME);
+    let headers: Vec<PathBuf> = std::fs::read_dir(&arch_headers)
+        .map_err(|e| format!("reading {}: {e}", arch_headers.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
     let out = root().join("tests");
     std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
     let mut sources: Vec<PathBuf> = std::fs::read_dir(&src)
@@ -243,10 +249,14 @@ pub fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
         for (suffix, flags) in C_TEST_VARIANTS {
             let name = format!("{stem}{suffix}");
             let exe = out.join(&name);
-            if !is_newer(&exe, &[&source, compiler, &libc]) {
+            let inputs: Vec<&Path> =
+                [source.as_path(), compiler, &libc].into_iter().chain(headers.iter().map(PathBuf::as_path)).collect();
+            if !is_newer(&exe, &inputs) {
                 util::run(
                     Command::new(compiler)
                         .args(["-O2", "-Wall", "-Wextra", "-Werror", "-g0", "-s"])
+                        .arg("-I")
+                        .arg(&arch_headers)
                         .args(*flags)
                         .arg("-o")
                         .arg(&exe)
@@ -292,7 +302,7 @@ fn without_c_comments(text: &str) -> String {
 
 /// The media decoder (`services/mediadec`) for the system image, if the
 /// cross toolchain and the media libraries are built: its Rust half (built
-/// for `x86_64-unknown-none` and made one object exporting `mediadec_main`
+/// for the architecture's bare target and made one object exporting `mediadec_main`
 /// alone), its C shim, FFmpeg and dav1d, linked by the cross GCC as a
 /// static position-independent program. Built again when any of it changed.
 pub fn mediadec() -> Result<Option<Vec<u8>>> {
@@ -307,18 +317,18 @@ pub fn mediadec() -> Result<Option<Vec<u8>>> {
     if code.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == "float" || w == "double") {
         return Err(format!("{}: no `float` or `double` may cross the shim", header.display()));
     }
-    util::status("Building", "the media decoder (x86_64-unknown-none and C)");
+    util::status("Building", format!("the media decoder ({BARE_TARGET} and C)"));
     util::run(util::cargo().args([
         "rustc",
         "--package",
         "mediadec",
         "--target",
-        "x86_64-unknown-none",
+        BARE_TARGET,
         "--release",
         "--crate-type",
         "staticlib",
     ]))?;
-    let rust_lib = util::target_dir().join("x86_64-unknown-none").join("release").join("libmediadec.a");
+    let rust_lib = util::target_dir().join(BARE_TARGET).join("release").join("libmediadec.a");
     let out = root().join("build").join("mediadec");
     std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
     let rust_obj = out.join("mediadec-rs.o");
@@ -524,34 +534,17 @@ pub fn fetch(port: &Port, downloads: &Path) -> Result {
 }
 
 /// The programs the build needs from the system: compilers and GNU tools,
-/// curl for the downloads, and nasm, meson and ninja for the media
-/// libraries (`docs/C.md` names the packages).
-const BUILD_TOOLS: [&str; 11] =
-    ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "nasm", "meson", "ninja"];
-
-/// The oldest nasm that assembles dav1d (2.14, for its AVX-512 code).
-const NASM_MIN: (u32, u32) = (2, 14);
-
-/// nasm's version (`NASM version 2.16.03 ...`).
-fn nasm_version() -> Option<(u32, u32)> {
-    let out = Command::new("nasm").arg("-v").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let version = text.split_whitespace().nth(2)?;
-    let mut parts = version.split('.').map(|p| p.parse::<u32>().ok());
-    Some((parts.next()??, parts.next().flatten().unwrap_or(0)))
-}
+/// curl for the downloads, and meson and ninja for the media libraries;
+/// and the architecture's own (`arch::PORT_TOOLS`). `docs/C.md` names the
+/// packages.
+const BUILD_TOOLS: [&str; 10] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "meson", "ninja"];
 
 /// The shell that runs `ports/build.sh`, once the build tools are there.
 fn shell() -> Result<Command> {
-    let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
+    let missing: Vec<&str> =
+        BUILD_TOOLS.iter().chain(arch::PORT_TOOLS).copied().filter(|t| util::find_on_path(t).is_none()).collect();
     match missing.as_slice() {
-        [] => match nasm_version() {
-            Some(v) if v >= NASM_MIN => Ok(Command::new("bash")),
-            _ => Err(format!(
-                "nasm {}.{} or newer is needed: install it from the distribution's packages (see docs/C.md)",
-                NASM_MIN.0, NASM_MIN.1
-            )),
-        },
+        [] => arch::check_port_tools().map(|()| Command::new("bash")),
         [tool] => Err(format!("{tool} is missing: install it from the distribution's packages (see docs/C.md)")),
         [tools @ .., last] => Err(format!(
             "{} and {last} are missing: install them from the distribution's packages (see docs/C.md)",
@@ -596,6 +589,7 @@ pub fn command(args: &[String]) -> Result {
     let script = util::workspace_root().join("ports").join("build.sh");
     sh.arg(&script)
         .env("VEDA_PORTS", util::workspace_root().join("ports"))
+        .env("VEDA_ARCH", arch::NAME)
         .env("VEDA_TOOLCHAIN", root())
         .env("VEDA_POSIX_LIB", &library)
         .env("VEDA_POSIX_EXPORTS", POSIX_LAYER_EXPORTS.join(" "))

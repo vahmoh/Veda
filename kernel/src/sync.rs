@@ -21,7 +21,7 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use crate::arch::percpu;
+use crate::percpu;
 
 /// Owner value of an unlocked lock. Owners are stored as `cpu_id + 1` so that
 /// a fresh lock is all zeroes (large lock-protected statics then live in .bss).

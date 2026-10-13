@@ -8,7 +8,8 @@
 //!
 //! * the seed the loader obtained from the firmware's `EFI_RNG_PROTOCOL`
 //!   (backed by virtio-rng under QEMU),
-//! * RDSEED and RDRAND output when the CPU has them,
+//! * the processor's random number generators, where it has them
+//!   (`arch::cpu::RANDOM_SOURCES`),
 //! * timing jitter measured at boot,
 //! * the arrival times of device interrupts (folded in at every reseed).
 //!
@@ -17,7 +18,8 @@
 
 use ventropy::{FastPool, Generator};
 
-use crate::arch::cpu;
+use crate::arch::clock::ticks;
+use crate::arch::cpu::RANDOM_SOURCES;
 use crate::sync::SpinLock;
 use crate::time;
 
@@ -58,16 +60,16 @@ fn mix_hardware(g: &mut Generator, read: fn() -> Option<u64>, words: usize) -> u
 /// differences are unpredictable.
 fn mix_jitter(g: &mut Generator, samples: usize) {
     let mut acc = 0u64;
-    let mut prev = cpu::rdtsc();
+    let mut prev = ticks();
     let mut buf = [0u8; 64];
     let mut filled = 0;
     for i in 0..samples {
         // A data-dependent loop length makes the timing vary further.
         for _ in 0..(16 + (acc & 31)) {
-            acc = acc.rotate_left(7) ^ cpu::rdtsc();
+            acc = acc.rotate_left(7) ^ ticks();
             core::hint::spin_loop();
         }
-        let now = cpu::rdtsc();
+        let now = ticks();
         let delta = now.wrapping_sub(prev);
         prev = now;
         buf[filled..filled + 2].copy_from_slice(&((delta as u16) ^ (i as u16)).to_le_bytes());
@@ -85,20 +87,18 @@ fn mix_jitter(g: &mut Generator, samples: usize) {
 pub fn init(firmware_seed: &[u8]) {
     let mut st = RNG.lock();
     let g = &mut st.generator;
-    let mut sources: [&str; 4] = [""; 4];
+    let mut sources: [&str; RANDOM_SOURCES.len() + 2] = [""; RANDOM_SOURCES.len() + 2];
     let mut count = 0;
     if !firmware_seed.is_empty() {
         g.mix(firmware_seed);
         sources[count] = "firmware RNG";
         count += 1;
     }
-    if mix_hardware(g, cpu::rdseed, 8) > 0 {
-        sources[count] = "RDSEED";
-        count += 1;
-    }
-    if mix_hardware(g, cpu::rdrand, 8) > 0 {
-        sources[count] = "RDRAND";
-        count += 1;
+    for (name, read) in RANDOM_SOURCES {
+        if mix_hardware(g, read, 8) > 0 {
+            sources[count] = name;
+            count += 1;
+        }
     }
     mix_jitter(g, 256);
     g.mix(&time::now_ns().to_le_bytes());
@@ -117,7 +117,7 @@ pub fn init(firmware_seed: &[u8]) {
 
 /// Records the arrival of a device interrupt (BKL held, interrupts off).
 pub fn add_interrupt_timing(vector: u8) {
-    IRQ_POOL.lock().add(cpu::rdtsc(), vector as u64);
+    IRQ_POOL.lock().add(ticks(), vector as u64);
 }
 
 /// Fills `out` with cryptographically secure random bytes.
@@ -133,9 +133,10 @@ pub fn fill(out: &mut [u8]) {
         let g = &mut st.generator;
         g.mix(&irq.0);
         g.mix(&irq.1.to_le_bytes());
-        mix_hardware(g, cpu::rdseed, 4);
-        mix_hardware(g, cpu::rdrand, 4);
-        g.mix(&cpu::rdtsc().to_le_bytes());
+        for (_, read) in RANDOM_SOURCES {
+            mix_hardware(g, read, 4);
+        }
+        g.mix(&ticks().to_le_bytes());
         g.reseed();
         st.last_reseed_ns = now;
         st.bytes_since_reseed = 0;

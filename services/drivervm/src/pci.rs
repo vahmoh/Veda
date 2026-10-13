@@ -89,7 +89,7 @@ pub struct Devices {
     /// The memory the firmware keeps for them, where the guest has it.
     reserved: Vec<Range<u64>>,
     /// An Intel GPU's: the guest's copy of its OpRegion (for
-    /// `vhv::igd::OPREGION_AT`), and the stand-in for the PC's host bridge.
+    /// `crate::arch::OPREGION_AT`), and the stand-in for the PC's host bridge.
     opregion: Option<Vec<u8>>,
     host_bridge: Option<HostBridge>,
 }
@@ -200,7 +200,7 @@ impl Devices {
                     (opregion, host_bridge) = intel_gpu(&pci, &name);
                 }
                 let has_copy = intel_gpus == 0 && opregion.is_some();
-                config.intel_graphics(if has_copy { vhv::igd::OPREGION_AT as u32 } else { 0 });
+                config.intel_graphics(if has_copy { crate::arch::OPREGION_AT as u32 } else { 0 });
                 intel_gpus += 1;
             }
             let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
@@ -246,7 +246,7 @@ impl Devices {
     }
 
     /// The guest's copy of an Intel GPU's OpRegion, for
-    /// `vhv::igd::OPREGION_AT`.
+    /// `crate::arch::OPREGION_AT`.
     pub fn opregion(&self) -> Option<&[u8]> {
         self.opregion.as_deref()
     }
@@ -328,7 +328,7 @@ impl Devices {
         if !s.msis.contains_key(&index) {
             match s.pci.alloc_msi() {
                 Ok(Ok((irq, msg))) => {
-                    let message = vhv::platform::msi_result(msg.address, msg.data);
+                    let message = crate::arch::msi_result(msg.address, msg.data);
                     s.msis.insert(index, (irq, message));
                 }
                 _ => {
@@ -361,13 +361,13 @@ fn intel_gpu(pci: &pcidev::Client, name: &str) -> (Option<Vec<u8>>, Option<HostB
     let copy = match pci.opregion() {
         Ok(Ok(o)) => {
             let vbt = (!o.vbt.is_empty()).then_some(&o.vbt[..]);
-            let copy = vhv::igd::for_guest(&o.opregion, vbt, vhv::igd::OPREGION_AT);
+            let copy = vhv::igd::for_guest(&o.opregion, vbt, crate::arch::OPREGION_AT);
             let vbt = match vbt {
                 Some(v) => format!("a VBT of {} bytes after it", v.len()),
                 None => String::from("its VBT in it"),
             };
             match &copy {
-                Some(_) => println!("{name}: its OpRegion is the guest's at {:#x}, {vbt}", vhv::igd::OPREGION_AT),
+                Some(_) => println!("{name}: its OpRegion is the guest's at {:#x}, {vbt}", crate::arch::OPREGION_AT),
                 None => println!("{name}: its OpRegion is not one the guest can have"),
             }
             copy

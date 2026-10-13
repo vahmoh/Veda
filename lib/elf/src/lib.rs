@@ -1,7 +1,8 @@
 //! `velf` — ELF64 executables for Veda's POSIX programs.
 //!
 //! C programs built by Veda's GCC are static ELF64 executables for the
-//! System V x86-64 ABI, as on Linux. Loading one takes:
+//! System V ABI of their processor (x86-64's on AMD64), as on Linux.
+//! Loading one takes:
 //!
 //! 1. [`Elf::parse`], which validates the header and every program header,
 //!    so a loader can trust what it gets from then on;
@@ -16,6 +17,10 @@
 //! Executables that need a dynamic linker (`PT_INTERP`) are refused: Veda
 //! links C programs statically.
 //!
+//! An executable is for one processor ([`Machine`]): each architecture's
+//! is in `lib/elf/arch/<architecture>/` ([`amd64`]). [`NATIVE`] is the
+//! processor the code runs on, whose programs it loads.
+//!
 //! The crate is plain data processing, unit-tested on the host.
 
 #![no_std]
@@ -24,6 +29,24 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::fmt;
+
+#[path = "../arch/amd64/mod.rs"]
+pub mod amd64;
+
+/// The processor an executable's code is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Machine {
+    /// The ELF header's `e_machine`.
+    pub code: u16,
+    /// Its name, for errors.
+    pub name: &'static str,
+    /// The platform the auxiliary vector names (`AT_PLATFORM`).
+    pub platform: &'static [u8],
+}
+
+/// The processor this code runs on.
+#[cfg(target_arch = "x86_64")]
+pub const NATIVE: Machine = amd64::MACHINE;
 
 /// Errors produced while parsing an executable or laying out its stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,8 +57,8 @@ pub enum ElfError {
     BadMagic,
     /// Not a 64-bit little-endian ELF file of the current version.
     WrongClass,
-    /// Not an x86-64 file.
-    WrongMachine,
+    /// Not a file for the processor named.
+    WrongMachine(&'static str),
     /// A relocatable object or core dump, not an executable.
     NotExecutable,
     /// The executable needs a dynamic linker.
@@ -56,7 +79,7 @@ impl fmt::Display for ElfError {
             ElfError::Truncated => "the file is truncated",
             ElfError::BadMagic => "not an ELF file",
             ElfError::WrongClass => "not a 64-bit little-endian ELF file",
-            ElfError::WrongMachine => "not an x86-64 program",
+            ElfError::WrongMachine(machine) => return write!(f, "not an {machine} program"),
             ElfError::NotExecutable => "not an executable (an object file or core dump)",
             ElfError::Dynamic => "dynamically linked (Veda runs static executables)",
             ElfError::BadSegment => "malformed program header",
@@ -75,7 +98,6 @@ pub const PHDR_SIZE: usize = 56;
 /// Largest image (from its lowest to its highest page) accepted.
 const MAX_IMAGE: u64 = 4 << 30;
 
-const EM_X86_64: u16 = 62;
 const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
 
@@ -170,7 +192,7 @@ pub struct Segment<'a> {
     pub perms: Perms,
 }
 
-/// A validated ELF64 x86-64 executable.
+/// A validated ELF64 executable.
 #[derive(Debug, Clone, Copy)]
 pub struct Elf<'a> {
     data: &'a [u8],
@@ -189,8 +211,15 @@ pub fn is_elf(data: &[u8]) -> bool {
 }
 
 impl<'a> Elf<'a> {
-    /// Parses and validates an executable.
+    /// Parses and validates an executable for the processor this code runs
+    /// on ([`NATIVE`]).
+    #[cfg(target_arch = "x86_64")]
     pub fn parse(data: &'a [u8]) -> Result<Elf<'a>, ElfError> {
+        Self::parse_for(data, NATIVE)
+    }
+
+    /// Parses and validates an executable for `machine`.
+    pub fn parse_for(data: &'a [u8], machine: Machine) -> Result<Elf<'a>, ElfError> {
         if data.len() < EHDR_SIZE {
             return Err(if is_elf(data) || data.len() < 4 { ElfError::Truncated } else { ElfError::BadMagic });
         }
@@ -201,8 +230,8 @@ impl<'a> Elf<'a> {
         if data[4] != 2 || data[5] != 1 || data[6] != 1 || u32_at(data, 20) != 1 {
             return Err(ElfError::WrongClass);
         }
-        if u16_at(data, 18) != EM_X86_64 {
-            return Err(ElfError::WrongMachine);
+        if u16_at(data, 18) != machine.code {
+            return Err(ElfError::WrongMachine(machine.name));
         }
         let pie = match u16_at(data, 16) {
             ET_EXEC => false,
@@ -391,8 +420,10 @@ pub struct AuxInfo<'a> {
     pub phnum: u64,
     /// The entry point (load bias applied).
     pub entry: u64,
-    /// The CPU's features (`CPUID.1:EDX`).
+    /// The processor's features, as Linux's `AT_HWCAP` gives them.
     pub hwcap: u64,
+    /// The platform's name (`AT_PLATFORM`: [`Machine::platform`]).
+    pub platform: &'a [u8],
     pub uid: u32,
     pub gid: u32,
     /// 16 random bytes (stack protector and pointer guard seeds).
@@ -414,8 +445,8 @@ pub struct StackImage {
 ///
 /// ```text
 /// sp -> argc, argv[0..argc], NULL, envp[..], NULL, auxv pairs, AT_NULL
-///       padding, argument and environment strings, "x86_64", the
-///       program path, 16 random bytes                       <- top
+///       padding, argument and environment strings, the platform,
+///       the program path, 16 random bytes                    <- top
 /// ```
 ///
 /// Strings must not contain NUL bytes (they would end early). Fails with
@@ -427,11 +458,10 @@ pub fn initial_stack(
     aux: &AuxInfo,
     max: usize,
 ) -> Result<StackImage, ElfError> {
-    const PLATFORM: &[u8] = b"x86_64";
     // Strings from the top down: random bytes, platform, path, environment
     // and arguments; their addresses are fixed once the total is known.
     let strings_len =
-        16 + PLATFORM.len() + 1 + aux.execfn.len() + 1 + args.iter().chain(env).map(|s| s.len() + 1).sum::<usize>();
+        16 + aux.platform.len() + 1 + aux.execfn.len() + 1 + args.iter().chain(env).map(|s| s.len() + 1).sum::<usize>();
     let auxv: [(u64, u64); 18] = [
         (at::PHDR, aux.phdr),
         (at::PHENT, PHDR_SIZE as u64),
@@ -470,7 +500,7 @@ pub fn initial_stack(
         cursor
     };
     let random = place(&mut bytes, &aux.random, false);
-    let platform = place(&mut bytes, PLATFORM, true);
+    let platform = place(&mut bytes, aux.platform, true);
     let execfn = place(&mut bytes, aux.execfn, true);
     let env_addrs: Vec<u64> = env.iter().rev().map(|s| place(&mut bytes, s, true)).collect();
     let arg_addrs: Vec<u64> = args.iter().rev().map(|s| place(&mut bytes, s, true)).collect();

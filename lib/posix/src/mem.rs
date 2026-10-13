@@ -25,7 +25,7 @@ fn map_prot(prot: u32) -> usize {
     if prot & PROT_READ != 0 {
         f |= map_flags::READ;
     }
-    // x86 pages that can be written or executed can be read.
+    // Pages that can be written or executed can be read, as on Linux.
     if prot & PROT_WRITE != 0 {
         f |= map_flags::READ | map_flags::WRITE;
     }

@@ -2,7 +2,8 @@
 //!
 //! * `cargo xtask linux` builds its kernel from `ports/linux` (first zlib
 //!   and elfutils' libelf, from `ports/zlib` and `ports/elfutils`, for the
-//!   kernel's build tool objtool): `target/linux/bzImage`.
+//!   kernel's build tool objtool): `target/linux/kernel`, the
+//!   architecture's image of it.
 //!   It also builds a cross toolchain for the guest's programs in C and C++
 //!   (`target/linux/toolchain`, for Linux on musl) and configures Mesa's
 //!   build with it for the renderer, and for this machine (`vgallium.so`,
@@ -12,19 +13,17 @@
 //!   (`guest/`: Rust for Linux on musl, static; the renderer, Mesa's build
 //!   around its Rust half) and packs them into the initial RAM file system
 //!   the kernel starts with, with the firmware its drivers load
-//!   (`ports/linux/firmware.txt`). Both go into the system
-//!   image (`linux/bzImage`, `linux/initramfs.cpio`), where `drivervm`
+//!   (`ports/linux/firmware.txt`, and the architecture's in
+//!   `ports/linux/arch/<architecture>/`). Both go into the system
+//!   image (`linux/kernel`, `linux/initramfs.cpio`), where `drivervm`
 //!   finds them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::arch::{self, GUEST_TARGET};
 use crate::toolchain::{self, Port};
 use crate::util::{self, Result};
-
-/// The target of the guest's programs (`.cargo/config.toml` sets its
-/// linker and `veda_guest`).
-pub const GUEST_TARGET: &str = "x86_64-unknown-linux-musl";
 
 /// The guest's programs: the package, its binary, and where it goes in the
 /// initial RAM file system.
@@ -60,9 +59,14 @@ pub fn root() -> PathBuf {
     }
 }
 
+/// The guest's kernel, once built.
+fn image() -> PathBuf {
+    root().join("kernel")
+}
+
 /// Whether the guest's kernel has been built.
 pub fn built() -> bool {
-    root().join("bzImage").is_file()
+    image().is_file()
 }
 
 /// Mesa's build directories, which `ports/linux/build.sh` configures: for
@@ -109,24 +113,19 @@ pub fn intel_gpu() -> bool {
 }
 
 /// Whether the driver VM can run in this machine's QEMU: its Linux is
-/// built, and KVM gives guests VMX of their own (nested virtualization,
-/// on Intel's processors: Veda's hypervisor uses VMX).
+/// built, and KVM lets Veda's hypervisor run (nested virtualization).
 pub fn runnable() -> Result {
     if !built() {
         return Err("its Linux is not built (`cargo xtask linux`)".into());
     }
-    let nested = std::fs::read_to_string("/sys/module/kvm_intel/parameters/nested").unwrap_or_default();
-    if !matches!(nested.trim(), "Y" | "1") {
-        return Err("KVM gives guests no VMX here (kvm_intel nested=1)".into());
-    }
-    Ok(())
+    arch::nested_virtualization()
 }
 
 /// For `cargo xtask doctor`: whether the guest has been built (`Ok`), and if
 /// not, whether it can be (`Err`).
 pub fn status() -> std::result::Result<String, String> {
     if built() {
-        return Ok(format!("built ({})", root().join("bzImage").display()));
+        return Ok(format!("built ({})", image().display()));
     }
     let how = match tools() {
         Ok(()) => "`cargo xtask linux` builds it".to_string(),
@@ -169,6 +168,7 @@ pub fn command(args: &[String]) -> Result {
         Command::new("bash")
             .arg(ports.join("linux").join("build.sh"))
             .env("VEDA_PORTS", &ports)
+            .env("VEDA_ARCH", arch::NAME)
             .env("VEDA_LINUX", root())
             .env("VEDA_RENDERER_LIB", &lib)
             .env("JOBS", jobs.to_string()),
@@ -223,7 +223,7 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         util::ninja(&mesa_build(), "src/gallium/targets/veda/renderer")?;
         let exe = mesa_build().join("src").join("gallium").join("targets").join("veda").join("renderer");
         let stripped = root().join("build").join("renderer");
-        let strip = root().join("toolchain").join("bin").join("x86_64-linux-musl-strip");
+        let strip = root().join("toolchain").join("bin").join(format!("{}-strip", arch::GUEST_C_TARGET));
         util::run(Command::new(strip).arg("-o").arg(&stripped).arg(&exe))?;
         archive.file("bin/renderer", 0o755, &util::read(&stripped)?);
     }
@@ -238,39 +238,45 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         }
         archive.file(&path, 0o644, &util::read(&file)?);
     }
-    Ok(Some((util::read(&root().join("bzImage"))?, archive.finish())))
+    Ok(Some((util::read(&image())?, archive.finish())))
 }
 
-/// The firmware of `ports/linux/firmware.txt`: each file's name, and where
-/// it is (fetched now if it is not, or is not the file pinned).
+/// The firmware of `ports/linux/firmware.txt` and of the architecture's
+/// list (`ports/linux/arch/<architecture>/firmware.txt`, which may name the
+/// sources of the first): each file's name, and where it is (fetched now if
+/// it is not, or is not the file pinned).
 fn firmware() -> Result<Vec<(String, PathBuf)>> {
-    let list = util::workspace_root().join("ports").join("linux").join("firmware.txt");
-    let text = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;
+    let port = util::workspace_root().join("ports").join("linux");
+    let arch_list = port.join("arch").join(arch::NAME).join("firmware.txt");
     let mut sources = std::collections::BTreeMap::new();
     let mut files = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let bad = || format!("{}:{}: not a source or a file: {line}", list.display(), n + 1);
-        let words: Vec<&str> = line.split_whitespace().collect();
-        match words.as_slice() {
-            [] => {}
-            [first, ..] if first.starts_with('#') => {}
-            ["source", name, url] if url.contains("{}") => {
-                sources.insert(name.to_string(), url.to_string());
+    for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {
+        let text = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;
+        for (n, line) in text.lines().enumerate() {
+            let bad = || format!("{}:{}: not a source or a file: {line}", list.display(), n + 1);
+            let words: Vec<&str> = line.split_whitespace().collect();
+            match words.as_slice() {
+                [] => {}
+                [first, ..] if first.starts_with('#') => {}
+                ["source", name, url] if url.contains("{}") => {
+                    sources.insert(name.to_string(), url.to_string());
+                }
+                [name, source, path, sha256] if sha256.len() == 64 && !name.contains("..") => {
+                    let url = sources.get(*source).ok_or_else(bad)?.replace("{}", path);
+                    let file = root().join("firmware").join(name);
+                    fetch_firmware(&file, &url, sha256, &list)?;
+                    files.push((name.to_string(), file));
+                }
+                _ => return Err(bad()),
             }
-            [name, source, path, sha256] if sha256.len() == 64 && !name.contains("..") => {
-                let url = sources.get(*source).ok_or_else(bad)?.replace("{}", path);
-                let file = root().join("firmware").join(name);
-                fetch_firmware(&file, &url, sha256)?;
-                files.push((name.to_string(), file));
-            }
-            _ => return Err(bad()),
         }
     }
     Ok(files)
 }
 
-/// Makes `file` the one of `url` whose SHA-256 is `sha256`.
-fn fetch_firmware(file: &Path, url: &str, sha256: &str) -> Result {
+/// Makes `file` the one of `url` whose SHA-256 is `sha256` (as `list`
+/// pins it).
+fn fetch_firmware(file: &Path, url: &str, sha256: &str, list: &Path) -> Result {
     if file.is_file() && toolchain::sha256_of(file)? == sha256 {
         return Ok(());
     }
@@ -283,7 +289,7 @@ fn fetch_firmware(file: &Path, url: &str, sha256: &str) -> Result {
     let got = toolchain::sha256_of(&partial)?;
     if got != sha256 {
         let _ = std::fs::remove_file(&partial);
-        return Err(format!("{url}: SHA-256 {got}, expected {sha256} (ports/linux/firmware.txt)"));
+        return Err(format!("{url}: SHA-256 {got}, expected {sha256} ({})", list.display()));
     }
     std::fs::rename(&partial, file).map_err(|e| format!("{e}"))
 }

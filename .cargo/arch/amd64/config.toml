@@ -1,0 +1,29 @@
+# Cargo's configuration of the AMD64 targets (included by .cargo/config.toml).
+
+# The UEFI target is soft-float: LLVM cannot build the SIMD code (AES-NI,
+# SSE2, AVX2) of the RustCrypto and dalek crates for it. Nothing that runs on
+# that target uses them, but the no_std check of the libraries
+# (`cargo build -p <crate> --target x86_64-unknown-uefi`) compiles them:
+# select their portable implementations there. User space is unaffected.
+[target.x86_64-unknown-uefi]
+rustflags = [
+    "--cfg", "aes_backend=\"soft\"",
+    "--cfg", "polyval_backend=\"soft\"",
+    "--cfg", "chacha20_backend=\"soft\"",
+    "--cfg", "poly1305_backend=\"soft\"",
+    "--cfg", "sha1_backend=\"soft\"",
+    "--cfg", "sha2_backend=\"soft\"",
+    "--cfg", "curve25519_dalek_backend=\"serial\"",
+]
+
+# Veda's user-space programs are PE executables, linked by LLVM's linker in
+# the Microsoft linker's flavour, which Rust ships (see lib/build).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+
+# Programs of the driver VM's Linux guest (guest/): their Veda runtime makes
+# its system calls through the bridge (see lib/rt/src/guest.rs), and they
+# link statically with Rust's own linker.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["--cfg", "veda_guest"]

@@ -1,7 +1,7 @@
 # The helpers the build scripts of the ports share (`build.sh`, and
-# `linux/build.sh`). They expect PORTS (the ports directory), DOWNLOADS
-# (the verified archives), SRC (where ports are unpacked) and STAMPS
-# (the stages' fingerprints).
+# `linux/build.sh`). They expect PORTS (the ports directory), VEDA_ARCH
+# (the architecture built for), DOWNLOADS (the verified archives), SRC
+# (where ports are unpacked) and STAMPS (the stages' fingerprints).
 
 log() { printf '\033[1;32m%12s\033[0m %s\n' "$1" "$2"; }
 
@@ -10,8 +10,18 @@ port() {
 	sed -n "s/^$2 *= *\"\(.*\)\"/\1/p" "$PORTS/$1/port.toml"
 }
 
+# Veda's patches of port NAME, those it has: its own (NAME/veda.patch),
+# then the architecture's (NAME/arch/$VEDA_ARCH/veda.patch).
+patches() {
+	local p
+	for p in "$PORTS/$1/veda.patch" "$PORTS/$1/arch/$VEDA_ARCH/veda.patch"; do
+		if [ -f "$p" ]; then echo "$p"; fi
+	done
+}
+
 # Runs stage NAME (a shell function stage_NAME) unless its fingerprint is
-# unchanged. Other arguments are what it depends on: files, stages, and
+# unchanged. Other arguments are what it depends on: files, stages, ports
+# as Veda builds them (+NAME: the release and Veda's patches) and
 # variables it uses (@NAME).
 stage() {
 	local name=$1
@@ -22,6 +32,10 @@ stage() {
 		for dep in "$@"; do
 			case "$dep" in
 			@*) declare -p "${dep#@}" ;;
+			+*)
+				sha256sum "$PORTS/${dep#+}/port.toml"
+				patches "${dep#+}" | while IFS= read -r p; do sha256sum "$p"; done
+				;;
 			*) if [ -f "$dep" ]; then sha256sum "$dep"; else cat "$STAMPS/$dep"; fi ;;
 			esac
 		done
@@ -47,10 +61,10 @@ quiet() {
 	fi
 }
 
-# Unpacks port NAME into $SRC/NAME and applies its patch, if it has one;
-# with `upstream`, as its authors released it (the patch is for Veda).
+# Unpacks port NAME into $SRC/NAME and applies its patches (`patches`);
+# with `upstream`, as its authors released it (the patches are for Veda).
 unpack() {
-	local name=$1 version archive dir
+	local name=$1 version archive dir p
 	version=$(port "$name" version)
 	archive=$DOWNLOADS/$(basename "$(port "$name" url)")
 	dir=$SRC/$name
@@ -59,7 +73,9 @@ unpack() {
 	tar -xf "$archive" -C "$dir.tmp"
 	mv "$dir.tmp/$name-$version" "$dir"
 	rmdir "$dir.tmp"
-	if [ "${2:-}" != upstream ] && [ -f "$PORTS/$name/veda.patch" ]; then
-		(cd "$dir" && patch -p1 --batch --forward --quiet < "$PORTS/$name/veda.patch")
+	if [ "${2:-}" != upstream ]; then
+		while IFS= read -r p; do
+			(cd "$dir" && patch -p1 --batch --forward --quiet < "$p")
+		done < <(patches "$name")
 	fi
 }

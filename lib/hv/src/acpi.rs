@@ -1,10 +1,11 @@
 //! The platform's ACPI tables: the machine as they describe it to the
-//! guest, as a PC's firmware describes a PC: hardware-reduced ACPI (no fixed hardware, no SCI) and no
-//! MADT (the processors are the platform's, which Linux learns from its
-//! CPUID leaves). The DSDT holds the PCI root (bus 0, the windows the BARs
-//! are in), its functions and where their INTx go (`_PRT`: the GSIs the
-//! guest has, level-triggered), and the keyboard controller's devices when
-//! the guest has it, with the ports and lines a PC's are at. Below a
+//! guest, as a PC's firmware describes a PC: hardware-reduced ACPI (no
+//! fixed hardware, no SCI) and no MADT (the processors are the platform's,
+//! which the guest learns of as its architecture's platform says). The
+//! DSDT holds the PCI root (bus 0, the windows the BARs are in), its
+//! functions and where their INTx go (`_PRT`: the GSIs the guest has,
+//! level-triggered), and the devices of the architecture's machine
+//! ([`Platform`]: a PC's keyboard controller, `crate::amd64::acpi`). Below a
 //! function are the devices the PC's firmware describes there that the
 //! guest has — a touchpad on an I2C controller, amplifiers on an SPI
 //! controller — with their ids, their place on the function's bus, the
@@ -14,14 +15,14 @@
 //! controllers of the platform's (`VEDA0001`), one for each of the PC's
 //! that the pins are on, with the PC's numbers for them: the pins it has
 //! (`veda,pins` in its `_DSD`), and the lines the ones that interrupt are
-//! on (its `_CRS`, in the order of `veda,interrupt-pins`). The FADT says
-//! whether there is a keyboard controller, and that there is no VGA and no
-//! CMOS clock. Tables of the PC's firmware that describe a function's
-//! hardware come with it, as the firmware has them (an Intel audio
-//! controller's NHLT: the links of its DSP).
+//! on (its `_CRS`, in the order of `veda,interrupt-pins`). The FADT has the
+//! flags of the architecture's boot architecture. Tables of the PC's
+//! firmware that describe a function's hardware come with it, as the
+//! firmware has them (an Intel audio controller's NHLT: the links of its
+//! DSP).
 //!
-//! The tables go in the PC's firmware area below 1 MiB, which the memory
-//! map reserves; the boot parameters say where the RSDP is.
+//! The tables go where the guest's memory map has room for them
+//! ([`Machine::at`]); the boot parameters say where the RSDP is.
 
 use alloc::format;
 use alloc::vec::Vec;
@@ -29,25 +30,13 @@ use core::ops::Range;
 
 use alloc::string::String;
 use vacpi::asm::{
-    cat, device, dsm, dword_memory, eisa, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, io, irq_no_flags,
-    name, package, qword_memory, resource_template, scope, spi_descriptor_of, string, word_bus_number,
+    cat, device, dsm, dword_memory, eisa, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, name, package,
+    qword_memory, resource_template, scope, spi_descriptor_of, string, word_bus_number,
 };
 use vacpi::resource::Spi;
 
 /// A GPIO connection, as [`Resource::Gpio`] holds it.
 pub use vacpi::resource::Gpio;
-
-/// Where the tables are in the guest's memory, the RSDP first.
-pub const AT: u64 = 0xE_0000;
-/// The room they have there.
-pub const ROOM: usize = 0x2_0000;
-
-/// The PC's keyboard controller: its data port, its status and command
-/// port, and the keyboard's and the mouse's interrupt lines (GSIs).
-pub const I8042_DATA: u16 = 0x60;
-pub const I8042_COMMAND: u16 = 0x64;
-pub const KEYBOARD_GSI: u32 = 1;
-pub const MOUSE_GSI: u32 = 12;
 
 /// A PCI function as the guest has it.
 #[derive(Debug, Clone)]
@@ -131,12 +120,24 @@ pub const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
 /// The bytes `ToUUID` makes of a UUID's text.
 pub use vacpi::asm::uuid;
 
+/// What the architecture's machine adds to the tables.
+#[derive(Debug, Clone, Default)]
+pub struct Platform {
+    /// The definitions of its own devices, in `\_SB` (AML).
+    pub devices: Vec<u8>,
+    /// Its boot architecture's flags in the FADT: where they are, and
+    /// their value.
+    pub boot_flags: Option<(usize, u16)>,
+}
+
 /// What the tables describe.
 pub struct Machine<'a> {
     pub functions: &'a [Function],
     pub gpio: &'a [GpioController],
-    /// The guest has the keyboard controller.
-    pub i8042: bool,
+    /// What the architecture's machine adds.
+    pub platform: &'a Platform,
+    /// Where the tables go in the guest's memory, the RSDP first.
+    pub at: u64,
     /// Where the functions' BARs are, below and above 4 GiB.
     pub pci_low: Range<u64>,
     pub pci_high: Range<u64>,
@@ -153,15 +154,12 @@ const FADT_LENGTH: usize = 276;
 
 /// FADT flags: hardware-reduced ACPI.
 const HW_REDUCED_ACPI: u32 = 1 << 20;
-/// IA-PC boot architecture flags.
-const BOOT_8042: u16 = 1 << 1;
-const BOOT_VGA_NOT_PRESENT: u16 = 1 << 2;
-const BOOT_CMOS_RTC_NOT_PRESENT: u16 = 1 << 5;
 
-/// The tables, to be written at [`AT`]: the RSDP, the XSDT, the FADT, the
-/// DSDT and the firmware's, one after the other, each at a multiple of 16.
+/// The tables, to be written at [`Machine::at`]: the RSDP, the XSDT, the
+/// FADT, the DSDT and the firmware's, one after the other, each at a
+/// multiple of 16.
 pub fn tables(m: &Machine) -> Vec<u8> {
-    let xsdt_at = AT + 48;
+    let xsdt_at = m.at + 48;
     let xsdt_length = HEADER + 8 * (1 + m.firmware_tables.len());
     let fadt_at = (xsdt_at + xsdt_length as u64).next_multiple_of(16);
     let dsdt_at = (fadt_at + FADT_LENGTH as u64).next_multiple_of(16);
@@ -180,14 +178,14 @@ pub fn tables(m: &Machine) -> Vec<u8> {
         core::iter::once(fadt_at).chain(firmware_at.iter().copied()).flat_map(u64::to_le_bytes).collect();
     let mut out = Vec::new();
     out.extend_from_slice(&rsdp(xsdt_at));
-    out.resize((xsdt_at - AT) as usize, 0);
+    out.resize((xsdt_at - m.at) as usize, 0);
     out.extend_from_slice(&table(b"XSDT", 1, &listed));
-    out.resize((fadt_at - AT) as usize, 0);
+    out.resize((fadt_at - m.at) as usize, 0);
     out.extend_from_slice(&table(b"FACP", 6, &fadt(m, dsdt_at)));
-    out.resize((dsdt_at - AT) as usize, 0);
+    out.resize((dsdt_at - m.at) as usize, 0);
     out.extend_from_slice(&dsdt);
     for (t, at) in m.firmware_tables.iter().zip(firmware_at) {
-        out.resize((at - AT) as usize, 0);
+        out.resize((at - m.at) as usize, 0);
         out.extend_from_slice(t);
     }
     out
@@ -241,8 +239,9 @@ fn fadt(m: &Machine, dsdt_at: u64) -> Vec<u8> {
     let mut f = [0u8; FADT_LENGTH];
     // The DSDT, below 4 GiB, at both of its addresses.
     f[40..44].copy_from_slice(&(dsdt_at as u32).to_le_bytes());
-    let boot = BOOT_VGA_NOT_PRESENT | BOOT_CMOS_RTC_NOT_PRESENT | if m.i8042 { BOOT_8042 } else { 0 };
-    f[109..111].copy_from_slice(&boot.to_le_bytes());
+    if let Some((at, flags)) = m.platform.boot_flags {
+        f[at..at + 2].copy_from_slice(&flags.to_le_bytes());
+    }
     f[112..116].copy_from_slice(&HW_REDUCED_ACPI.to_le_bytes());
     // ACPI 6.5.
     f[131] = 5;
@@ -257,18 +256,7 @@ fn dsdt(m: &Machine) -> Vec<u8> {
     for c in m.gpio {
         sb.extend_from_slice(&gpio_controller(c));
     }
-    if m.i8042 {
-        let keyboard = cat(&[&io(I8042_DATA, 1), &io(I8042_COMMAND, 1), &irq_no_flags(KEYBOARD_GSI as u8)]);
-        let mouse = irq_no_flags(MOUSE_GSI as u8);
-        sb.extend_from_slice(&device(
-            "PS2K",
-            &cat(&[&name("_HID", &eisa("PNP0303")), &name("_CRS", &resource_template(&keyboard))]),
-        ));
-        sb.extend_from_slice(&device(
-            "PS2M",
-            &cat(&[&name("_HID", &eisa("PNP0F13")), &name("_CRS", &resource_template(&mouse))]),
-        ));
-    }
+    sb.extend_from_slice(&m.platform.devices);
     scope("\\_SB", &sb)
 }
 
@@ -409,6 +397,10 @@ mod tests {
     use vacpi::name::Path;
     use vacpi::resource::Resource as Resource2;
 
+    /// Where a test machine has its tables, and the room they have.
+    pub(crate) const AT: u64 = 0xE_0000;
+    const ROOM: usize = 0x2_0000;
+
     fn function(devfn: u8, intx: Option<(u8, u32)>) -> Function {
         Function { devfn, intx, data: Vec::new(), children: Vec::new() }
     }
@@ -419,7 +411,8 @@ mod tests {
         let m = Machine {
             functions: &functions,
             gpio: &[],
-            i8042: true,
+            platform: &Platform::default(),
+            at: AT,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
             firmware_tables: &[],
@@ -448,10 +441,6 @@ mod tests {
         assert_eq!(intx(16), None);
         let at = |p| Path::parse(p).unwrap();
         assert_eq!(device::pci_companion(&ns, &roots, (0, 16, 0), &NoMemory), Some(at("\\_SB.PCI0.S80")));
-        let keyboard = device::resources(&ns, &at("\\_SB.PS2K"), &NoMemory).unwrap();
-        assert_eq!(keyboard[..2], [Resource2::Io { base: 0x60, length: 1 }, Resource2::Io { base: 0x64, length: 1 }]);
-        assert!(matches!(&keyboard[2], Resource2::Irq { irqs, edge: true, .. } if irqs == &[1]));
-        assert!(device::identify(&ns, &at("\\_SB.PS2M"), &NoMemory).is("PNP0F13"));
     }
 
     #[test]
@@ -482,7 +471,8 @@ mod tests {
         let m = Machine {
             functions: &functions,
             gpio: &[],
-            i8042: false,
+            platform: &Platform::default(),
+            at: AT,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
             firmware_tables: &[],
@@ -570,7 +560,8 @@ mod tests {
         let m = Machine {
             functions: &functions,
             gpio: &gpio,
-            i8042: false,
+            platform: &Platform::default(),
+            at: AT,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
             firmware_tables: &[],
@@ -620,7 +611,8 @@ mod tests {
         let m = Machine {
             functions: &functions,
             gpio: &[],
-            i8042: false,
+            platform: &Platform::default(),
+            at: AT,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
             firmware_tables: &firmware_tables,

@@ -2,10 +2,10 @@
 //! which Videos plays videos with (`vproto::media`).
 //!
 //! The program is C's world (a static ELF program on musl, over Veda's POSIX
-//! layer), as FFmpeg needs; this crate is its Rust half, built for
-//! `x86_64-unknown-none` and linked with the C shim (`shim/`, the only code
-//! calling FFmpeg) by the `x86_64-veda` GCC. `main()` in the shim hands the
-//! program to [`mediadec_main`].
+//! layer), as FFmpeg needs; this crate is its Rust half, built for the
+//! architecture's bare target (`<architecture>-unknown-none`) and linked
+//! with the C shim (`shim/`, the only code calling FFmpeg) by Veda's GCC.
+//! `main()` in the shim hands the program to [`mediadec_main`].
 //!
 //! The player starts it with one handle, the control channel
 //! ([`vproto::media::CONTROL_ROLE`]), and no registry: it reaches no file,
@@ -68,7 +68,7 @@ mod program {
     /// musl's `malloc`, shared with FFmpeg: one heap, safe from any thread.
     struct Malloc;
 
-    /// What `malloc` aligns to on x86-64.
+    /// What musl's `malloc` aligns to (its unit, on every architecture).
     const MALLOC_ALIGN: usize = 16;
 
     // SAFETY: musl's allocator returns memory of at least the size asked,

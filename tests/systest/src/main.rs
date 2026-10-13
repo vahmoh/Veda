@@ -24,6 +24,9 @@ use vrt::object::{Channel, Event, Interrupt, Vmo};
 use vrt::println;
 use vrt::sync::{Condvar, Mutex};
 
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+mod arch;
 mod media;
 mod posix;
 
@@ -163,7 +166,7 @@ fn test_service_restart() -> TestResult {
 fn test_crash_report() -> TestResult {
     let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let events = l.watch().map_err(|e| e.to_string())?.map_err(|e| alloc::format!("watch: {e:?}"))?;
-    println!("crash report: starting a copy of systest that faults on purpose (invalid opcode)");
+    println!("crash report: starting a copy of systest that faults on purpose");
     let koid = l
         .launch("/system/bin/systest.exe".into(), alloc::vec!["crash".into()])
         .map_err(|e| e.to_string())?
@@ -174,11 +177,10 @@ fn test_crash_report() -> TestResult {
     check(event == TaskEvent::Crashed { koid, name: "systest".into() }, "the report names the crashed process")
 }
 
-/// `systest crash`: the faulting child of [`test_crash_report`].
+/// `systest crash`: the faulting child of [`test_crash_report`], which
+/// faults as the architecture can on purpose.
 fn crash() -> ! {
-    // SAFETY: `ud2` raises an invalid-opcode exception on purpose; the
-    // kernel ends the process.
-    unsafe { core::arch::asm!("ud2", options(noreturn)) }
+    arch::crash()
 }
 
 fn test_threads_and_locks() -> TestResult {

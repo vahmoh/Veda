@@ -352,7 +352,7 @@ mod tests {
     fn sample(boot_bytes: usize) -> (Vec<u8>, u32) {
         let initrd = initrd();
         let mut b = IsoBuilder::new("veda");
-        b.add_file("EFI/BOOT/BOOTX64.EFI", b"loader").unwrap();
+        b.add_file("EFI/BOOT/LOADER.EFI", b"loader").unwrap();
         b.add_file("VEDA/INITRD.IMG", &initrd).unwrap();
         b.add_file("VEDA/BOOT.CFG", b"cmdline=live\n").unwrap();
         b.add_file("VEDA/EMPTY", b"").unwrap();
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(&pvd[40..45], b"VEDA ");
         assert_eq!(u32le(&pvd[80..]) as usize, image.len() / BLOCK);
         assert_eq!(&image[blocks(18)][..6], b"\xffCD001");
-        assert_eq!(read(&image, "EFI/BOOT/BOOTX64.EFI").unwrap(), b"loader");
+        assert_eq!(read(&image, "EFI/BOOT/LOADER.EFI").unwrap(), b"loader");
         assert_eq!(read(&image, "VEDA/BOOT.CFG").unwrap(), b"cmdline=live\n");
         assert_eq!(read(&image, "VEDA/INITRD.IMG").unwrap(), initrd());
         assert_eq!(read(&image, "VEDA/EMPTY").unwrap(), b"");

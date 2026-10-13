@@ -1,13 +1,14 @@
-//! Kernel panics and fatal CPU exceptions.
+//! Kernel panics.
 //!
 //! A panic stops every CPU, prints a report to the serial console and paints
-//! a "stop screen" on the framebuffer.
+//! a "stop screen" on the framebuffer. Fatal CPU exceptions are reported by
+//! the architecture's trap handling, between [`begin`] and [`end`].
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::arch::entry::TrapFrame;
-use crate::arch::{apic, cpu, idt, percpu};
+use crate::arch::cpu;
 use crate::log::emergency;
+use crate::percpu;
 
 static PANICKING: AtomicBool = AtomicBool::new(false);
 
@@ -21,15 +22,6 @@ pub fn set_framebuffer(fb: &bootinfo::Framebuffer) {
     }
     FB_ADDR.store(crate::mm::phys_to_virt(fb.phys_base), Ordering::Relaxed);
     FB_GEOMETRY.store(fb.width as u64 | (fb.height as u64) << 20 | (fb.stride as u64) << 40, Ordering::Relaxed);
-}
-
-fn halt_other_cpus() {
-    let me = percpu::cpu_id_or_boot();
-    for p in percpu::online() {
-        if p.cpu_id != me {
-            apic::send_ipi(p.apic_id, idt::HALT_VECTOR as u32);
-        }
-    }
 }
 
 /// Paints the stop screen: a deep blue background with a white frowning
@@ -78,91 +70,34 @@ fn paint_stop_screen() {
     }
 }
 
-fn enter_panic() -> bool {
+/// Begins a panic: interrupts off on this CPU, and every other CPU halted.
+/// A CPU that finds a panic under way already halts here.
+pub fn begin() {
     cpu::disable_interrupts();
     if PANICKING.swap(true, Ordering::SeqCst) {
         // Another CPU is already panicking.
         cpu::halt_forever();
     }
-    halt_other_cpus();
-    true
+    crate::arch::smp::halt_others();
+}
+
+/// Ends a panic: the stop screen, then this CPU halts for good.
+pub fn end() -> ! {
+    paint_stop_screen();
+    cpu::halt_forever();
+}
+
+/// Whether a panic is under way.
+pub fn panicking() -> bool {
+    PANICKING.load(Ordering::SeqCst)
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    enter_panic();
+    begin();
     emergency(format_args!("\n\n*** VEDA KERNEL PANIC on CPU {} ***\n{}\n", percpu::cpu_id_or_boot(), info));
     if let Some(t) = crate::sched::try_current() {
         emergency(format_args!("current thread: {} of {}\n", t.koid, t.process_name()));
     }
-    paint_stop_screen();
-    cpu::halt_forever();
-}
-
-fn dump_frame(frame: &TrapFrame) {
-    emergency(format_args!(
-        "  rip {:#018x}  rsp {:#018x}  rflags {:#x}\n  cs {:#x}  ss {:#x}  error {:#x}\n",
-        frame.rip, frame.rsp, frame.rflags, frame.cs, frame.ss, frame.error_code
-    ));
-    emergency(format_args!(
-        "  rax {:#018x} rbx {:#018x} rcx {:#018x} rdx {:#018x}\n  rsi {:#018x} rdi {:#018x} rbp {:#018x}\n",
-        frame.rax, frame.rbx, frame.rcx, frame.rdx, frame.rsi, frame.rdi, frame.rbp
-    ));
-    emergency(format_args!(
-        "  r8  {:#018x} r9  {:#018x} r10 {:#018x} r11 {:#018x}\n  r12 {:#018x} r13 {:#018x} r14 {:#018x} r15 {:#018x}\n",
-        frame.r8, frame.r9, frame.r10, frame.r11, frame.r12, frame.r13, frame.r14, frame.r15
-    ));
-    // Walk the frame-pointer chain for a crude backtrace.
-    emergency(format_args!("  backtrace:"));
-    let mut rbp = frame.rbp;
-    for _ in 0..16 {
-        if rbp < 0xFFFF_8000_0000_0000 || !rbp.is_multiple_of(8) {
-            break;
-        }
-        // SAFETY: best effort on a kernel stack; a bad chain only ends the walk
-        // early because we check the address range first.
-        let (next, ret) = unsafe { (*(rbp as *const u64), *((rbp + 8) as *const u64)) };
-        emergency(format_args!(" {:#x}", ret));
-        if next <= rbp {
-            break;
-        }
-        rbp = next;
-    }
-    emergency(format_args!("\n"));
-}
-
-/// A CPU exception raised by kernel code.
-pub fn kernel_exception(frame: &TrapFrame) -> ! {
-    enter_panic();
-    let v = frame.vector as usize;
-    emergency(format_args!(
-        "\n\n*** VEDA KERNEL PANIC: {} (vector {}) in kernel mode on CPU {} rip={:#x} cr2={:#x} rsp={:#x} err={:#x} ***\n",
-        idt::EXCEPTION_NAMES.get(v).copied().unwrap_or("?"),
-        v,
-        percpu::cpu_id_or_boot(),
-        frame.rip,
-        cpu::read_cr2(),
-        frame.rsp,
-        frame.error_code
-    ));
-    if v == 14 {
-        let addr = cpu::read_cr2();
-        let what = if crate::mm::kvirt::is_stack_guard(addr) { " (kernel stack overflow?)" } else { "" };
-        emergency(format_args!("  faulting address {:#x}{}\n", addr, what));
-    }
-    dump_frame(frame);
-    paint_stop_screen();
-    cpu::halt_forever();
-}
-
-/// Non-maskable interrupt: only expected as part of a panic.
-pub fn nmi(frame: &TrapFrame) -> ! {
-    if PANICKING.load(Ordering::SeqCst) {
-        cpu::halt_forever();
-    }
-    enter_panic();
-    emergency(format_args!("\n\n*** VEDA KERNEL PANIC: unexpected NMI ***\n"));
-    dump_frame(frame);
-    paint_stop_screen();
-    cpu::halt_forever();
+    end()
 }

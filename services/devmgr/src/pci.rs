@@ -1,12 +1,13 @@
-//! PCI configuration space access (port 0xCF8/0xCFC mechanism), bus
-//! enumeration, and resetting a function.
+//! PCI configuration space access (through the architecture's mechanism,
+//! `arch::config`), bus enumeration, and resetting a function.
 
 use alloc::vec::Vec;
 use core::ops::Range;
 
 use vproto::pci::{Bar, DeviceInfo};
-use vrt::object::IoPorts;
 use vrt::time::{Duration, sleep};
+
+use crate::arch::config::ConfigAccess;
 
 const CAP_POWER_MANAGEMENT: u8 = 0x01;
 const CAP_PCI_EXPRESS: u8 = 0x10;
@@ -45,7 +46,7 @@ pub struct Placement {
 }
 
 pub struct ConfigSpace {
-    ports: IoPorts,
+    access: ConfigAccess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,22 +64,12 @@ impl Address {
 }
 
 impl ConfigSpace {
-    pub fn new(ports: IoPorts) -> ConfigSpace {
-        ConfigSpace { ports }
-    }
-
-    fn select(&self, a: Address, offset: u16) {
-        let addr = 0x8000_0000u32
-            | (a.bus as u32) << 16
-            | (a.slot as u32) << 11
-            | (a.function as u32) << 8
-            | (offset as u32 & 0xFC);
-        self.ports.out32(0xCF8, addr);
+    pub fn new(access: ConfigAccess) -> ConfigSpace {
+        ConfigSpace { access }
     }
 
     pub fn read32(&self, a: Address, offset: u16) -> u32 {
-        self.select(a, offset);
-        self.ports.in32(0xCFC)
+        self.access.read32(a, offset)
     }
 
     pub fn read(&self, a: Address, offset: u16, width: u8) -> u32 {
@@ -92,8 +83,7 @@ impl ConfigSpace {
     }
 
     pub fn write32(&self, a: Address, offset: u16, value: u32) {
-        self.select(a, offset);
-        self.ports.out32(0xCFC, value);
+        self.access.write32(a, offset, value);
     }
 
     pub fn write(&self, a: Address, offset: u16, width: u8, value: u32) {

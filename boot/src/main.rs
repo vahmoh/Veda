@@ -18,12 +18,21 @@
 #![no_std]
 #![no_main]
 
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+mod arch;
 mod blank;
 mod config;
-mod memtype;
-mod paging;
-mod serial;
 mod uefi;
+
+/// Logs a formatted line to the serial console (`arch::serial`).
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write as _;
+        let _ = writeln!($crate::arch::serial::Serial, "[vboot] {}", format_args!($($arg)*));
+    }};
+}
 
 use core::ffi::c_void;
 use core::ptr;
@@ -71,6 +80,11 @@ impl Tags {
 }
 
 type Result<T> = core::result::Result<T, &'static str>;
+
+/// Allocates one zeroed, page-aligned physical page for a page table.
+pub trait FrameSource {
+    fn alloc_zeroed_page(&mut self) -> Result<u64>;
+}
 
 /// Memory the loader reads into from the firmware, as much as that needs:
 /// loader data, which the kernel takes back.
@@ -504,13 +518,6 @@ fn preferred_timing(edid: &[u8]) -> Option<(u32, u32)> {
     (w > 0 && h > 0).then_some((w, h))
 }
 
-fn rdtsc() -> u64 {
-    let (lo, hi): (u32, u32);
-    // SAFETY: reading the timestamp counter.
-    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)) };
-    (hi as u64) << 32 | lo as u64
-}
-
 /// Clears the screen write-combining if the framebuffer is not (see
 /// `blank`); how it went, for the kernel's log.
 fn clear_screen(fw: &Firmware, fb: &Framebuffer) -> PaintReport {
@@ -520,31 +527,30 @@ fn clear_screen(fw: &Firmware, fb: &Framebuffer) -> PaintReport {
     }
     let surface =
         blank::Surface { base: fb.phys_base as *mut u32, width: fb.width, height: fb.height, stride: fb.stride };
-    let start = rdtsc();
-    report.found = memtype::memory_type(fb.phys_base);
+    let start = arch::ticks();
+    report.found = arch::memory_type(fb.phys_base);
     if report.found == memory_type::WRITE_COMBINING {
         blank::clear(&surface);
         report.painted = report.found;
         report.made_wc = made_wc::ALREADY;
-        report.paint_ticks = (rdtsc() - start).max(1);
+        report.paint_ticks = (arch::ticks() - start).max(1);
         return report;
     }
-    let painted = ram_limit(fw)
-        .and_then(|limit| blank::clear_write_combining(&mut ScratchFrames(fw), &surface, limit, supports_1g_pages()));
+    let painted = ram_limit(fw).and_then(|limit| arch::clear_write_combining(&mut ScratchFrames(fw), &surface, limit));
     match painted {
         Ok(ticks) => {
             report.painted = memory_type::WRITE_COMBINING;
             report.made_wc = made_wc::PAGE_ATTRIBUTES;
             report.paint_ticks = ticks.max(1);
-            report.setup_ticks = (rdtsc() - start).saturating_sub(ticks);
+            report.setup_ticks = (arch::ticks() - start).saturating_sub(ticks);
         }
         Err(e) => {
             log!("cannot clear the screen write-combining: {e}");
-            let painting = rdtsc();
+            let painting = arch::ticks();
             blank::clear(&surface);
             report.painted = report.found;
             report.made_wc = made_wc::NOT;
-            report.paint_ticks = (rdtsc() - painting).max(1);
+            report.paint_ticks = (arch::ticks() - painting).max(1);
         }
     }
     log!(
@@ -560,14 +566,14 @@ fn clear_screen(fw: &Firmware, fb: &Framebuffer) -> PaintReport {
 /// (scratch the kernel reuses).
 struct ScratchFrames<'a>(&'a Firmware);
 
-impl paging::FrameSource for ScratchFrames<'_> {
+impl FrameSource for ScratchFrames<'_> {
     fn alloc_zeroed_page(&mut self) -> Result<u64> {
         self.0.alloc_zeroed(PAGE, None)
     }
 }
 
-/// The end of what the direct map covers: all RAM, and at least the low
-/// 4 GiB (the MMIO hole), to a GiB.
+/// The end of what the direct map covers: all RAM, and at least what the
+/// architecture needs (`arch::DIRECT_MAP_MIN`), to a GiB.
 fn ram_limit(fw: &Firmware) -> Result<u64> {
     let (bytes, desc_size) = memory_map_size(fw);
     let capacity = bytes + 16 * desc_size;
@@ -577,7 +583,7 @@ fn ram_limit(fw: &Firmware) -> Result<u64> {
 
 /// [`ram_limit`], reading the memory map into `map` (`capacity` bytes).
 fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<u64> {
-    let mut limit = 4u64 << 30;
+    let mut limit = arch::DIRECT_MAP_MIN;
     let (mut size, mut key, mut ds, mut ver) = (capacity, 0usize, 0usize, 0u32);
     // SAFETY: a buffer of `capacity` bytes.
     let s = unsafe { (fw.bs.get_memory_map)(&mut size, map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver) };
@@ -598,7 +604,7 @@ fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<u64> {
 /// Page allocator for the page-table builder (boot data pages).
 struct TableFrames<'a>(&'a Firmware);
 
-impl paging::FrameSource for TableFrames<'_> {
+impl FrameSource for TableFrames<'_> {
     fn alloc_zeroed_page(&mut self) -> Result<u64> {
         self.0.alloc_zeroed(PAGE, Some(MemoryKind::BootData))
     }
@@ -628,28 +634,19 @@ fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(vpe::PeImage<'static>, Ker
 }
 
 /// Maps the kernel image with per-section permissions (W^X).
-fn map_kernel<F: paging::FrameSource>(
-    pt: &mut paging::PageTables<F>,
-    pe: &vpe::PeImage,
-    k: &KernelImage,
-) -> Result<()> {
-    use paging::{GLOBAL, NO_EXECUTE, WRITABLE};
+fn map_kernel<F: FrameSource>(space: &mut arch::KernelSpace<F>, pe: &vpe::PeImage, k: &KernelImage) -> Result<()> {
     let mut off = 0;
     while off < k.size {
         let rva = off as u32;
-        let mut flags = GLOBAL | NO_EXECUTE;
+        let (mut writable, mut executable) = (false, false);
         for s in pe.sections() {
             let end = s.virtual_address + s.virtual_size.next_multiple_of(PAGE as u32);
             if rva >= s.virtual_address && rva < end {
-                if s.writable() {
-                    flags |= WRITABLE;
-                }
-                if s.executable() {
-                    flags &= !NO_EXECUTE;
-                }
+                writable |= s.writable();
+                executable |= s.executable();
             }
         }
-        pt.map_4k(k.virt_base + off, k.phys_base + off, flags)?;
+        space.map_kernel_page(k.virt_base + off, k.phys_base + off, writable, executable)?;
         off += PAGE;
     }
     Ok(())
@@ -673,31 +670,6 @@ fn memory_map_size(fw: &Firmware) -> (usize, usize) {
     // SAFETY: a size query with a null buffer is explicitly allowed.
     unsafe { (fw.bs.get_memory_map)(&mut size, ptr::null_mut(), &mut key, &mut desc_size, &mut ver) };
     (size, desc_size.max(core::mem::size_of::<MemoryDescriptor>()))
-}
-
-fn read_msr(msr: u32) -> u64 {
-    let (lo, hi): (u32, u32);
-    // SAFETY: reading an architectural MSR.
-    unsafe { core::arch::asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack)) };
-    (hi as u64) << 32 | lo as u64
-}
-
-fn write_msr(msr: u32, value: u64) {
-    // SAFETY: writing an architectural MSR with a valid value.
-    unsafe {
-        core::arch::asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nomem, nostack))
-    };
-}
-
-fn supports_1g_pages() -> bool {
-    let edx: u32;
-    // SAFETY: CPUID is always available on x86-64. rbx is reserved by LLVM,
-    // so it is saved manually.
-    unsafe {
-        core::arch::asm!("mov {tmp}, rbx", "cpuid", "mov rbx, {tmp}", tmp = out(reg) _,
-            inout("eax") 0x8000_0001u32 => _, inout("ecx") 0 => _, out("edx") edx, options(nostack));
-    }
-    edx & (1 << 26) != 0
 }
 
 fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
@@ -758,19 +730,14 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     let regions =
         fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, Some(MemoryKind::BootData))?;
 
-    // The direct map covers all RAM and at least the low 4 GiB (MMIO hole).
+    // The direct map covers all RAM, and what the architecture needs.
     let phys_limit = ram_limit_of(fw, raw_map, map_capacity)?;
 
     let mut frames = TableFrames(fw);
-    let mut pt = paging::PageTables::new(&mut frames, supports_1g_pages())?;
-    // Identity map (slot 0) and direct map (slot 256) share the same tables;
-    // the direct map is additionally non-executable.
-    pt.map_linear(0, phys_limit, paging::WRITABLE)?;
-    pt.alias_pml4_slot(256, 0, paging::NO_EXECUTE);
-    // The identity map must not be global: the kernel will drop it.
-    map_kernel(&mut pt, &pe, &kernel)?;
-    let cr3 = pt.pml4;
-    log!("page tables at {:#x}, direct map limit {:#x}", cr3, phys_limit);
+    let mut space = arch::KernelSpace::new(&mut frames, phys_limit)?;
+    map_kernel(&mut space, &pe, &kernel)?;
+    let root = space.root();
+    log!("page tables at {:#x}, direct map limit {:#x}", root, phys_limit);
 
     // ExitBootServices: no firmware calls (including printing) after this.
     let mut map_size;
@@ -886,39 +853,18 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     }
     log!("handing over to the kernel ({} memory regions)", merged);
 
-    // Enable no-execute support (required by the NX bits in our tables) and
-    // supervisor write protection, then switch address space and jump.
-    const IA32_EFER: u32 = 0xC000_0080;
-    write_msr(IA32_EFER, read_msr(IA32_EFER) | (1 << 11));
     let entry = pe.entry_point();
     let stack_top = HHDM_BASE + stack + BOOT_STACK_SIZE;
     let info_virt = HHDM_BASE + boot_info_phys;
-    // SAFETY: enabling supervisor write protection (CR0.WP) with interrupts
-    // masked; the firmware's page tables are still active and writable.
-    unsafe {
-        core::arch::asm!("cli", "mov {tmp}, cr0", "or {tmp}, 0x10000", "mov cr0, {tmp}", tmp = out(reg) _, options(nostack));
-    }
-    // SAFETY: the new tables identity-map this code, map the stack and the
-    // kernel, and the kernel entry follows the documented contract.
-    unsafe {
-        core::arch::asm!(
-            "mov cr3, {cr3}",
-            "mov rsp, {stack}",
-            "xor ebp, ebp",
-            "push 0",               // fake return address keeps the ABI alignment
-            "jmp {entry}",
-            cr3 = in(reg) cr3,
-            stack = in(reg) stack_top,
-            entry = in(reg) entry,
-            in("rdi") info_virt,
-            options(noreturn)
-        );
-    }
+    // SAFETY: boot services have exited; the kernel's address space maps
+    // this code where it is, the stack and the kernel, and the kernel's
+    // entry follows the documented contract.
+    unsafe { arch::enter_kernel(root, stack_top, entry, info_virt) }
 }
 
 #[unsafe(export_name = "efi_main")]
 extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
-    serial::init();
+    arch::serial::init();
     log!("Veda boot loader {}", env!("CARGO_PKG_VERSION"));
     // SAFETY: the firmware passes a valid system table.
     let st: &'static SystemTable = unsafe { &*st };

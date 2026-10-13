@@ -40,6 +40,9 @@
 extern crate alloc;
 
 mod acpi;
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+mod arch;
 mod gpio;
 mod pci;
 mod placement;
@@ -67,6 +70,8 @@ use vrt::object::{Channel, Interrupt, IoPorts, Process, Resource, Vmo};
 use vrt::println;
 
 use acpi::Acpi;
+use arch::config::ConfigAccess;
+use arch::platform::Platform;
 use gpio::Gpio;
 use pci::{Address, ConfigSpace, Placement};
 
@@ -86,14 +91,6 @@ const DRIVERVM_HYPERVISOR_ROLE: u32 = vabi::startup::role::USER + 1;
 /// Role of the `pcidev` channels of the devices the driver VM gets (one
 /// each).
 const DRIVERVM_DEVICE_ROLE: u32 = vabi::startup::role::USER + 2;
-/// Roles of the keyboard controller's data port, its command port, and its
-/// keyboard's and mouse's interrupts, which the driver VM gets.
-const DRIVERVM_I8042_ROLES: [u32; 4] = [
-    vabi::startup::role::USER + 3,
-    vabi::startup::role::USER + 4,
-    vabi::startup::role::USER + 5,
-    vabi::startup::role::USER + 6,
-];
 /// Role of the firmware's variables (`init` hands them over), which the
 /// driver VM gets.
 const DRIVERVM_VARIABLES_ROLE: u32 = vabi::startup::role::USER + 7;
@@ -653,40 +650,6 @@ fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
     Some((initrd::Archive::open(bytes).ok()?, vmo))
 }
 
-/// The PC's keyboard controller (the i8042), which the driver VM gets: its
-/// data port, its command port (the ports around them stay Veda's), and
-/// its keyboard's and mouse's interrupts (ISA 1 and 12). It does no DMA,
-/// so it needs no IOMMU; the driver VM's monitor keeps it from resetting
-/// the machine.
-struct I8042 {
-    data: IoPorts,
-    command: IoPorts,
-    keyboard: Interrupt,
-    mouse: Interrupt,
-}
-
-impl I8042 {
-    fn claim(io: &Resource, irq: &Resource) -> Option<I8042> {
-        Some(I8042 {
-            data: IoPorts::create(io, 0x60, 1).ok()?,
-            command: IoPorts::create(io, 0x64, 1).ok()?,
-            keyboard: Interrupt::create(irq, 1, irq_flags::ISA).ok()?,
-            mouse: Interrupt::create(irq, 12, irq_flags::ISA).ok()?,
-        })
-    }
-
-    /// Copies of its handles, by role, for a run of the driver VM.
-    fn handles(&self) -> Option<Vec<(u32, vrt::object::Handle)>> {
-        let handles = [
-            self.data.0.duplicate(None),
-            self.command.0.duplicate(None),
-            self.keyboard.0.duplicate(None),
-            self.mouse.0.duplicate(None),
-        ];
-        DRIVERVM_I8042_ROLES.into_iter().zip(handles).map(|(role, h)| Some((role, h.ok()?))).collect()
-    }
-}
-
 /// A run of the driver VM that ends sooner than this after it started is
 /// a failure; the next start waits longer after each in a row, and stops
 /// after a few.
@@ -784,7 +747,8 @@ const VM_MIB: u64 = 256;
 /// The memory the driver VM is to have for `guest`'s devices (MiB), where
 /// they need more than its default: an integrated GPU's. Not up to the
 /// memory the firmware keeps for them, which the guest has where the PC
-/// has it (above the first MiB, which the guest keeps as the PC does).
+/// has it (above the low memory the guest keeps as the PC does,
+/// `arch::GUEST_LOW_RESERVED`).
 fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
     if !guest.iter().any(|d| intel_gpu(&d.info)) {
         return None;
@@ -793,8 +757,8 @@ fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
         .iter()
         .flat_map(|d| acpi.map(|a| a.reserved_memory(d.address.bus, d.address.slot, d.address.function)))
         .flatten()
+        .filter(|r| r.start >= arch::GUEST_LOW_RESERVED)
         .map(|r| r.start >> 20)
-        .filter(|&mib| mib > 0)
         .min();
     Some(kept.unwrap_or(GPU_VM_MIB).clamp(VM_MIB, GPU_VM_MIB))
 }
@@ -806,7 +770,8 @@ struct DriverVm {
     /// `devices`, which is devmgr's.
     args: Vec<String>,
     devices: Vec<GuestDevice>,
-    i8042: Option<I8042>,
+    /// The PC's own devices it gets (`arch::platform`).
+    platform: Platform,
     /// The firmware's variables, for Linux's drivers that read them.
     variables: Option<Vmo>,
     hypervisor: Resource,
@@ -826,7 +791,7 @@ impl DriverVm {
         options: &[String],
         memory: Option<u64>,
         devices: Vec<GuestDevice>,
-        i8042: Option<I8042>,
+        platform: Platform,
         variables: Option<Vmo>,
         hypervisor: Resource,
     ) -> DriverVm {
@@ -845,7 +810,7 @@ impl DriverVm {
         DriverVm {
             args,
             devices,
-            i8042,
+            platform,
             variables,
             hypervisor,
             process: None,
@@ -858,7 +823,7 @@ impl DriverVm {
 
     /// Starts it, with what it runs on: the hypervisor resource, the system
     /// image, which holds its Linux, new channels of its devices (which
-    /// devmgr serves as `bound`'s), the keyboard controller, and the
+    /// devmgr serves as `bound`'s), the PC's own devices, and the
     /// firmware's variables.
     fn start(
         &mut self,
@@ -870,7 +835,7 @@ impl DriverVm {
         self.next_start_ns = None;
         let (Ok(h), Ok(i)) = (self.hypervisor.duplicate(), image.0.duplicate(None)) else { return };
         let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
-        handles.extend(self.i8042.as_ref().and_then(I8042::handles).unwrap_or_default());
+        handles.extend(self.platform.handles());
         if let Some(variables) = self.variables.as_ref().and_then(|v| v.0.duplicate(None).ok()) {
             handles.push((DRIVERVM_VARIABLES_ROLE, variables));
         }
@@ -993,15 +958,15 @@ fn main() -> i32 {
         println!("missing hardware resources");
         return 1;
     };
-    let Ok(ports) = IoPorts::create(&io, 0xCF8, 8) else {
-        println!("cannot access PCI configuration ports");
+    let Ok(access) = ConfigAccess::open(&io) else {
+        println!("cannot access PCI configuration space");
         return 1;
     };
     let Some((boot, image)) = boot_image() else {
         println!("no system image to load drivers from");
         return 1;
     };
-    let config = Rc::new(ConfigSpace::new(ports));
+    let config = Rc::new(ConfigSpace::new(access));
     let machine = boot_info();
     let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m, config.clone()));
     let platform = machine.map_or(0, |m| m.platform);
@@ -1030,7 +995,7 @@ fn main() -> i32 {
         .filter(|a| *a == "drivervm" || a.starts_with("drivervm.") || a.starts_with("drivervm="))
         .cloned()
         .collect();
-    let linux = boot.find("linux/bzImage").is_some() && boot.find("linux/initramfs.cpio").is_some();
+    let linux = boot.find("linux/kernel").is_some() && boot.find("linux/initramfs.cpio").is_some();
     let runs = if drivervm.iter().any(|a| a == "drivervm=off") {
         Err("drivervm=off")
     } else if platform & vabi::platform::VIRTUALIZATION == 0 {
@@ -1113,17 +1078,17 @@ fn main() -> i32 {
         }
     }
 
-    // The keyboard controller goes too, whose ports and interrupts are
-    // the PC's whether or not anything answers there.
-    let i8042 = if runs.is_ok() { I8042::claim(&mgr.io, &mgr.irq) } else { None };
+    // The PC's own devices go too (`arch::platform`: the keyboard
+    // controller).
+    let platform = if runs.is_ok() { Platform::claim(&mgr.io, &mgr.irq) } else { Platform::none() };
     // It starts for its devices, or because the boot options ask for it.
     let mut vm = None;
-    if runs.is_ok() && (!guest.is_empty() || i8042.is_some() || drivervm.iter().any(|a| a == "drivervm")) {
+    if runs.is_ok() && (!guest.is_empty() || !platform.is_empty() || drivervm.iter().any(|a| a == "drivervm")) {
         match take(HYPERVISOR_RESOURCE) {
             Some(hypervisor) => {
                 let variables = vrt::env::take_handle(vabi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
                 let memory = vm_memory(&guest, mgr.acpi.as_ref());
-                vm = Some(DriverVm::new(&drivervm, memory, guest, i8042, variables, hypervisor));
+                vm = Some(DriverVm::new(&drivervm, memory, guest, platform, variables, hypervisor));
             }
             None => println!("no hypervisor resource for the driver VM"),
         }

@@ -11,7 +11,7 @@ pub fn now_ns() -> u64 {
     clock_get(clock::MONOTONIC)
 }
 
-/// How the clocks follow the TSC.
+/// How the clocks follow the processor's clock counter.
 pub fn clock_info() -> Result<vabi::ClockInfo, vabi::Error> {
     let mut info = vabi::ClockInfo::default();
     call(nr::CLOCK_INFO, [&mut info as *mut _ as usize, 0, 0, 0, 0, 0])?;

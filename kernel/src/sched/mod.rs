@@ -5,8 +5,8 @@
 //! * Preemptive: a running thread is preempted when its 10 ms time slice
 //!   ends and a thread of equal or higher priority is ready, or immediately
 //!   when a higher-priority thread wakes up.
-//! * Tickless: each CPU arms its local APIC timer for its next event (time
-//!   slice end or the earliest sleeping thread's deadline).
+//! * Tickless: each CPU arms its timer (`arch::timer`) for its next event
+//!   (time slice end or the earliest sleeping thread's deadline).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
 
 pub mod thread;
@@ -17,8 +17,9 @@ use core::sync::atomic::Ordering;
 
 pub use thread::{State, Thread, WakeReason};
 
-use crate::arch::entry::{TrapFrame, vk_context_switch};
-use crate::arch::{apic, cpu, idt, percpu};
+use crate::arch::trap::TrapFrame;
+use crate::arch::{self, cpu};
+use crate::percpu;
 use crate::sync::{SpinLock, bkl};
 use crate::time;
 
@@ -140,7 +141,7 @@ fn after_wakeup(prio: u8) {
         // it only changes while that CPU holds the BKL.
         let idle = unsafe { (*p.sched.get()).current.as_ref().is_some_and(|t| t.is_idle) };
         if idle && !p.resched_pending.swap(true, Ordering::AcqRel) {
-            apic::send_ipi(p.apic_id, idt::RESCHED_VECTOR as u32);
+            arch::smp::reschedule(p.cpu_id);
             break;
         }
     }
@@ -239,7 +240,7 @@ fn arm_timer(running_idle: bool) {
         deadline = deadline.min(now + SERIAL_NS);
     }
     let deadline = deadline.max(now + 50_000);
-    apic::arm_timer(time::ns_to_tsc(deadline), deadline - now);
+    arch::timer::arm(deadline, now);
 }
 
 /// Picks the next thread and switches to it if it differs from the current
@@ -299,28 +300,9 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     }
     cs.switched_in_at = now;
 
-    if !prev.is_idle {
-        prev.save_fpu();
-        // SAFETY: the scheduler owns the contexts under the BKL.
-        unsafe { (*prev.ctx_ptr()).fs_base = cpu::rdmsr(cpu::MSR_FS_BASE) };
-    }
-    if !next.is_idle {
-        next.restore_fpu();
-        // SAFETY: as above.
-        unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, (*next.ctx_ptr()).fs_base) };
-    }
     match &next.aspace {
         Some(a) => a.activate(),
-        None => {
-            let k = crate::mm::paging::kernel_pml4();
-            if cpu::read_cr3() != k {
-                // SAFETY: the kernel PML4 maps all kernel code and data.
-                unsafe { cpu::write_cr3(k) };
-            }
-        }
-    }
-    if next.kernel_stack_top != 0 {
-        percpu::set_kernel_stack(next.kernel_stack_top);
+        None => crate::mm::paging::activate_kernel(),
     }
     {
         let mut s = next.sched.lock();
@@ -330,11 +312,9 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     cs.slice_end = now + TIME_SLICE_NS;
     arm_timer(next.is_idle);
 
+    let (prev_ctx, next_ctx) = (prev.ctx_ptr(), next.ctx_ptr());
     // SAFETY: contexts are only touched here, under the BKL.
-    let prev_rsp: *mut u64 = unsafe { &raw mut (*prev.ctx_ptr()).rsp };
-    // SAFETY: as above.
-    let next_rsp = unsafe { (*next.ctx_ptr()).rsp };
-    if next_rsp == 0 {
+    if !unsafe { (*next_ctx).is_ready() } {
         panic!(
             "switching to thread {} ({} of {}, idle={}, state={:?}) with no saved context; prev {} ({})",
             next.koid,
@@ -346,12 +326,12 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
             prev.process_name()
         );
     }
+    let next_stack_top = next.kernel_stack_top;
     cs.current = Some(next);
     cs.prev = Some(prev);
-    // SAFETY: `next_rsp` is a stack prepared by `Thread::new_*` or saved by
-    // a previous switch; `prev` stays alive in `cs.prev` until the switch is
-    // complete.
-    unsafe { vk_context_switch(prev_rsp, next_rsp) };
+    // SAFETY: `next` was prepared by `Thread::new_*` or saved by a previous
+    // switch; `prev` stays alive in `cs.prev` until the switch is complete.
+    unsafe { arch::thread::switch(prev_ctx, next_ctx, next_stack_top) };
     finish_switch();
 }
 
@@ -362,8 +342,8 @@ fn finish_switch() {
     drop(prev);
 }
 
-/// First Rust code run by a new user thread (from `vk_thread_trampoline`).
-pub extern "sysv64" fn thread_start_hook() {
+/// First Rust code run by a new user thread.
+pub fn thread_start_hook() {
     finish_switch();
     let cur = current();
     if cur.kill_pending.load(Ordering::Acquire) {
@@ -373,7 +353,7 @@ pub extern "sysv64" fn thread_start_hook() {
 }
 
 /// First Rust code run by a new kernel thread.
-pub extern "sysv64" fn kernel_thread_start_hook() {
+pub fn kernel_thread_start_hook() {
     finish_switch();
 }
 
@@ -388,7 +368,7 @@ pub fn request_resched() {
     cpu_sched().need_resched = true;
 }
 
-/// Local APIC timer interrupt.
+/// The CPU's timer interrupt.
 pub fn timer_interrupt() {
     let now = time::now_ns();
     expire_timeouts(now);
@@ -448,42 +428,30 @@ pub fn exit_current() -> ! {
 
 /// Handles a CPU exception raised by user code (BKL held).
 pub fn user_exception(frame: &mut TrapFrame) {
-    let vector = frame.vector as usize;
     let cur = current();
-    if vector == 14 {
-        let addr = cpu::read_cr2();
-        let write = frame.error_code & 2 != 0;
-        let exec = frame.error_code & 16 != 0;
+    if let Some(fault) = frame.page_fault() {
         if let Some(a) = &cur.aspace
-            && a.handle_fault(addr, write, exec)
+            && a.handle_fault(fault.address, fault.write, fault.execute)
         {
             return;
         }
         crate::kerror!(
-            "{} (thread {}): page fault at {:#x} ({} {}), rip {:#x}",
+            "{} (thread {}): page fault at {:#x} ({} {}), {}",
             cur.process_name(),
             cur.koid,
-            addr,
-            if exec {
+            fault.address,
+            if fault.execute {
                 "execute"
-            } else if write {
+            } else if fault.write {
                 "write"
             } else {
                 "read"
             },
-            if frame.error_code & 1 != 0 { "protection violation" } else { "not mapped" },
-            frame.rip
+            if fault.present { "protection violation" } else { "not mapped" },
+            frame.location()
         );
     } else {
-        crate::kerror!(
-            "{} (thread {}): {} (error {:#x}) at rip {:#x}, rsp {:#x}",
-            cur.process_name(),
-            cur.koid,
-            idt::EXCEPTION_NAMES[vector],
-            frame.error_code,
-            frame.rip,
-            frame.rsp
-        );
+        crate::kerror!("{} (thread {}): {}", cur.process_name(), cur.koid, frame.describe());
     }
     match &cur.process {
         Some(p) => p.kill(vabi::EXIT_CODE_CRASHED),
@@ -499,13 +467,13 @@ pub fn idle_loop() -> ! {
         schedule();
         // Nothing to run: halt until the next interrupt.
         bkl::release();
-        cpu::enable_interrupts_and_halt();
+        cpu::wait_for_interrupt();
         bkl::acquire();
     }
 }
 
-/// Entry point for idle threads of application processors.
-pub extern "sysv64" fn ap_idle_entry(_arg: u64) -> ! {
+/// Entry point of the idle threads of the CPUs started after the first.
+pub fn idle_entry(_arg: u64) -> ! {
     idle_loop()
 }
 

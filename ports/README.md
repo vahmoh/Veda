@@ -14,42 +14,51 @@ Each port is a directory:
   and refuses one whose hash differs.
 * `veda.patch`: the changes for Veda, applied with `patch -p1` to the
   unpacked archive.
+* `arch/<architecture>/veda.patch`: the changes for Veda on that
+  architecture, applied after `veda.patch` (binutils, GCC, musl and Linux
+  have one for AMD64); and what else the port takes from the architecture
+  (the driver VM kernel's options, `linux/arch/amd64/veda.config`).
 
 `build.sh` builds them all (`cargo xtask toolchain` runs it; the
-comments at its top list what it expects and makes).
+comments at its top list what it expects and makes), for the
+architecture xtask names (`VEDA_ARCH`): what the scripts take from it (the
+target triples, musl's, Meson's, FFmpeg's and Linux's names for it, the
+assembler of the media libraries) is in `arch/<architecture>/settings.sh`.
 
 ## The patches
 
-**binutils**: `x86_64-veda` in `config.sub`, BFD (`x86_64_elf64_vec`),
-gas (ELF) and ld (`elf_x86_64`, with code on pages of its own, as on
-Linux).
+**binutils**: `veda` in `config.sub`; for AMD64, `x86_64-veda` in BFD
+(`x86_64_elf64_vec`), gas (ELF) and ld (`elf_x86_64`, with code on pages
+of its own, as on Linux).
 
-**gcc**: `x86_64-veda` in `config.sub`; `gcc/config/veda.h` (the system's
+**gcc**: `veda` in `config.sub`; `gcc/config/veda.h` (the system's
 macros, `/system/lib` for start files and libraries, static linking:
 `crt1.o` or, with `-static-pie`, `rcrt1.o`; musl's type definitions),
-`gcc/config/i386/veda.h` (the System V x86-64 ABI, the stack protector's
-canary where musl keeps it), `gcc/config/veda.opt` (`-pthread`,
-`-rdynamic`, `-posix`; and `veda.opt.urls`, its links to GCC's manual),
-their entries in `gcc/config.gcc`, libgcc's configuration in
-`libgcc/config.host`, no `fixincludes` for musl's headers, and libstdc++
-checking Veda's C library as it checks Linux's when cross compiled
-(`libstdc++-v3/crossconfig.m4`, and the same line in the `configure`
-generated from it).
+`gcc/config/veda.opt` (`-pthread`, `-rdynamic`, `-posix`; and
+`veda.opt.urls`, its links to GCC's manual), the system's entries in
+`gcc/config.gcc` and `libgcc/config.host`, no `fixincludes` for musl's
+headers, and libstdc++ checking Veda's C library as it checks Linux's when
+cross compiled (`libstdc++-v3/crossconfig.m4`, and the same line in the
+`configure` generated from it). For AMD64: `x86_64-veda`'s entries in
+`gcc/config.gcc` and `libgcc/config.host`, and `gcc/config/i386/veda.h`
+(the System V x86-64 ABI, the stack protector's canary where musl keeps
+it).
 
 **gmp, mpfr, mpc**: `config.sub` knows `veda`, so they build for Veda as
 the native GCC's libraries.
 
-**musl**: system calls go to the POSIX layer (`lib/posix`) instead of
-the `syscall` instruction (`arch/x86_64/syscall_arch.h`); `_start` keeps
-the bootstrap channel (`crt_arch.h`); thread creation, the thread pointer,
-a thread freeing its own stack and cancellable system calls go through
-the layer (`src/thread/x86_64/*.s`); `vfork` falls back to the generic
-version (which fails: there is no `fork`); `__init_libc` sets the layer
-up; `posix_spawn` asks the layer to start the program.
+**musl**: `__init_libc` sets the POSIX layer (`lib/posix`) up;
+`posix_spawn` asks the layer to start the program. For AMD64: system calls
+go to the layer instead of the `syscall` instruction
+(`arch/x86_64/syscall_arch.h`); `_start` keeps the bootstrap channel
+(`crt_arch.h`); thread creation, the thread pointer, a thread freeing its
+own stack and cancellable system calls go through the layer
+(`src/thread/x86_64/*.s`); `vfork` falls back to the generic version
+(which fails: there is no `fork`).
 
 **dav1d**: none. It is built as released (meson, with a cross file for
-`x86_64-veda` and nasm for its assembly), static, for 8- and 16-bit
-pictures, with its `checkasm`.
+Veda's target and the architecture's assembler: nasm on AMD64), static,
+for 8- and 16-bit pictures, with its `checkasm`.
 
 **ffmpeg**: `veda` as a `--target-os` in `configure`, beside `linux`. It
 is built with `--disable-everything` and then only the demuxers, decoders
@@ -86,9 +95,13 @@ system.
    against the project's keys (GNU: the GNU keyring; musl: its key on
    musl.libc.org).
 2. Put the new version, address and SHA-256 into `port.toml`.
-3. Unpack the release, apply the old `veda.patch` and resolve what no
-   longer applies; then make the patch again (`diff -ruN a b` against the
-   pristine release, paths starting at the release's top directory).
+3. Unpack the release, apply the old `veda.patch` (and then each
+   architecture's `arch/<architecture>/veda.patch`) and resolve what no
+   longer applies; then make the patches again (`diff -ruN a b`, paths
+   starting at the release's top directory: `veda.patch` against the
+   pristine release, an architecture's against the release with
+   `veda.patch` applied). What only an architecture needs goes in its
+   patch.
 4. `cargo xtask toolchain` rebuilds what changed; then `cargo xtask test`.
 
 ## Licences

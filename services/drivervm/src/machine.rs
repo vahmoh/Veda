@@ -1,27 +1,22 @@
 //! The virtual machine: its memory, its processors, its devices and its
 //! hypercalls.
 //!
-//! Guest-physical memory is one VMO, mapped at 0 in the guest and here.
-//! Its first 64 KiB hold what the kernel is entered with (a GDT, page
-//! tables that map the first 4 GiB as they are, the boot parameters and
-//! the command line) and stay reserved: the processors Linux starts later
-//! start on the same page tables. As on a PC, the memory map leaves out
-//! the legacy area below 1 MiB, where the ACPI tables are (from 0xE0000).
-//! The kernel goes where it prefers to be, the initial RAM file system at
-//! the top of memory.
+//! Guest-physical memory is one VMO, mapped at 0 in the guest and here,
+//! which Linux is loaded into as the architecture boots it (`arch::boot`,
+//! which also says what of it stays reserved).
 //!
 //! The rest of the guest-physical address space:
 //!
 //! | Where | What |
 //! |-------|------|
-//! | 3 GiB to 4 GiB − 20 MiB | BARs of the guest's PCI functions |
+//! | below 4 GiB, where the architecture's machine has room (`arch::PCI_LOW`) | BARs of the guest's PCI functions |
 //! | 64 GiB to 128 GiB | the bridge's window: VMOs guest programs map |
 //! | 128 GiB to 256 GiB | BARs that do not fit below 4 GiB |
 //!
 //! Memory the firmware keeps for a function (a GPU's stolen memory) is
 //! where the PC has it, in what is free of that: from the end of RAM to
-//! 3 GiB, from 4 GiB to 64 GiB, from 256 GiB; the memory map says it is
-//! reserved.
+//! the BARs' window below 4 GiB, from 4 GiB to 64 GiB, from 256 GiB; the
+//! memory map says it is reserved.
 
 use alloc::format;
 use alloc::string::String;
@@ -30,15 +25,14 @@ use alloc::vec::Vec;
 
 use vabi::{VcpuExit, map_flags, vcpu_exit};
 use vhv::acpi;
-use vhv::linux::{self, E820_RAM, E820_RESERVED, MemoryRange};
 use vhv::platform::{self, error, hypercall, power};
 use vrt::object::{Channel, Guest, Resource, Vcpu, Vmo};
 use vrt::println;
 use vrt::sync::Mutex;
 use vrt::vm::Mapping;
 
+use crate::arch::{self, PCI_LOW, platform::Platform};
 use crate::bridge::{self, Bridge};
-use crate::i8042::{self, I8042};
 use crate::lines::Lines;
 use crate::memory::GuestMemory;
 use crate::pci::{Devices, Windows};
@@ -59,26 +53,14 @@ impl Default for Config {
 }
 
 const MIB: u64 = 1 << 20;
-const GDT_AT: u64 = 0x1000;
-const PAGE_TABLES_AT: u64 = 0x2000;
-const BOOT_PARAMS_AT: u64 = 0x8000;
-const CMDLINE_AT: u64 = 0x9000;
-/// The loader's structures, which stay reserved.
-const LOW_RESERVED: u64 = 0x1_0000;
-/// The legacy video and firmware area below 1 MiB.
-const LEGACY_START: u64 = 0x9_F000;
-const LEGACY_END: u64 = 0x10_0000;
 /// The kernel's console is the platform's, from its first message on. Its
 /// display drivers say in detail what they do (DRM's driver, mode-setting
 /// and PRIME debugging messages), which only its log has (`logkeeper`
 /// keeps it on the live system's stick), with room for all they say while
 /// Linux starts.
 const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_len=4M drm.debug=0xe";
-/// The register of the boot parameters at entry.
-const RSI: usize = 6;
-/// Where PCI functions' BARs go: below 4 GiB (RAM ends before), above the
-/// bridge's window.
-const PCI_LOW: core::ops::Range<u64> = 0xC000_0000..0xFEC0_0000;
+/// Where PCI functions' BARs go that do not fit below 4 GiB
+/// (`arch::PCI_LOW`): above the bridge's window.
 const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
 
 /// How the process ends, for whoever started it.
@@ -97,8 +79,8 @@ pub mod exit_code {
 pub struct Pc {
     /// The `pcidev` channels of its PCI functions.
     pub devices: Vec<Channel>,
-    /// The keyboard controller, if devmgr hands it over.
-    pub i8042: Option<I8042>,
+    /// The architecture's devices of the PC (a keyboard controller).
+    pub platform: Platform,
     /// Its interrupt lines (to which the functions' are added).
     pub lines: Lines,
     /// The firmware's variables.
@@ -110,23 +92,22 @@ pub struct Machine {
     memory: GuestMemory,
     bridge: Bridge,
     devices: Devices,
-    /// The keyboard controller, if the guest has it.
-    i8042: Option<I8042>,
+    /// The architecture's devices of the PC, and what the processors do
+    /// that is not a hypercall.
+    platform: Platform,
     /// The interrupt lines the guest has.
     lines: Lines,
     /// The PC's firmware variables.
     variables: FirmwareVariables,
     /// The guest's first processor, which the bridge's interrupts go to.
     notify: Vcpu,
-    /// The processors that have started (by APIC id), for the devices'
-    /// interrupts.
+    /// The processors that have started (by their number), for the
+    /// devices' interrupts.
     vcpus: Mutex<Vec<Option<Vcpu>>>,
     /// The console line each processor is writing (the kernel's messages
     /// and a program's output, written at once on two processors, stay
     /// apart).
     console: Mutex<Vec<Vec<u8>>>,
-    /// I/O ports the guest touched (each reported once).
-    ports: Mutex<Vec<u16>>,
 }
 
 impl Machine {
@@ -139,12 +120,12 @@ impl Machine {
         pc: Pc,
         config: &Config,
     ) -> Result<Arc<Machine>, String> {
-        let Pc { devices, i8042, mut lines, variables } = pc;
+        let Pc { devices, platform, mut lines, variables } = pc;
         let size = config.memory_mib as u64 * MIB;
         if size > PCI_LOW.start {
             return Err(format!("the guest can have at most {} MiB", PCI_LOW.start / MIB));
         }
-        let image = linux::parse(kernel).map_err(|e| format!("the kernel: {e}"))?;
+        let image = arch::boot::parse(kernel)?;
         let vmo = Vmo::create_committed(size as usize).map_err(|e| format!("no memory for the guest: {e}"))?;
         let memory = Mapping::new(vmo, size as usize, map_flags::READ | map_flags::WRITE)
             .map_err(|e| format!("cannot map the guest's memory: {e}"))?;
@@ -161,74 +142,34 @@ impl Machine {
         };
         let functions = devices.functions();
         let gpio = devices.gpio_controllers();
+        let pc = platform.acpi();
         let description = acpi::Machine {
             functions: &functions,
             gpio: &gpio,
-            i8042: i8042.is_some(),
+            platform: &pc,
+            at: arch::ACPI_AT,
             pci_low: PCI_LOW,
             pci_high: PCI_HIGH,
             firmware_tables: devices.firmware_tables(),
         };
         let acpi_tables = acpi::tables(&description);
-        if acpi_tables.len() > acpi::ROOM {
+        if acpi_tables.len() > arch::ACPI_ROOM {
             return Err(format!("the ACPI tables take {} KiB, more than they have", acpi_tables.len() / 1024));
         }
 
-        // The kernel where it prefers to be, the initial RAM file system at
-        // the top, between them the room the kernel unpacks itself into.
-        let kernel_at = image.preferred_address.max(LEGACY_END);
-        let initrd_at = (size - initramfs.len() as u64) & !0xFFF;
-        if kernel_at + image.init_size.max(image.protected.len() as u64) > initrd_at {
-            return Err(format!("{} MiB is too little memory for the guest", config.memory_mib));
-        }
         let mut cmdline = String::from(CMDLINE);
         cmdline.push_str(&devices.host_options());
         cmdline.push_str(config.cmdline.trim_end());
-        if cmdline.len() > image.cmdline_size as usize || cmdline.len() >= 4096 {
-            return Err(String::from("the kernel's command line is too long"));
-        }
-        cmdline.push('\0');
-        let mut ranges = alloc::vec![
-            MemoryRange { start: 0, len: LOW_RESERVED, kind: E820_RESERVED },
-            MemoryRange { start: LOW_RESERVED, len: LEGACY_START - LOW_RESERVED, kind: E820_RAM },
-            MemoryRange { start: LEGACY_START, len: LEGACY_END - LEGACY_START, kind: E820_RESERVED },
-            MemoryRange { start: LEGACY_END, len: size - LEGACY_END, kind: E820_RAM },
-        ];
-        ranges.extend(devices.reserved().iter().map(|r| MemoryRange {
-            start: r.start,
-            len: r.end - r.start,
-            kind: E820_RESERVED,
-        }));
-        ranges.sort_unstable_by_key(|r| r.start);
-        let boot = linux::Boot {
+        let state = arch::boot::load(&arch::boot::Load {
+            memory: &memory,
+            size,
+            reserved: devices.reserved(),
             kernel: &image,
-            kernel_at,
-            cmdline_at: CMDLINE_AT,
-            initrd: Some((initrd_at, initramfs.len() as u64)),
-            memory: &ranges,
-            rsdp: Some(acpi::AT),
-        };
-        let gdt: Vec<u8> = linux::GDT.iter().flat_map(|e| e.to_le_bytes()).collect();
-        let tables = linux::identity_page_tables(PAGE_TABLES_AT);
-        let mut loaded = memory.write(GDT_AT, &gdt);
-        for (i, t) in tables.iter().enumerate() {
-            let bytes: Vec<u8> = t.iter().flat_map(|e| e.to_le_bytes()).collect();
-            loaded &= memory.write(PAGE_TABLES_AT + i as u64 * 0x1000, &bytes);
-        }
-        loaded &= memory.write(BOOT_PARAMS_AT, &linux::boot_params(&boot));
-        loaded &= memory.write(CMDLINE_AT, cmdline.as_bytes());
-        loaded &= memory.write(acpi::AT, &acpi_tables);
-        if let Some(opregion) = devices.opregion() {
-            loaded &= memory.write(vhv::igd::OPREGION_AT, opregion);
-        }
-        loaded &= memory.write(kernel_at, image.protected);
-        loaded &= memory.write(initrd_at, initramfs);
-        if !loaded {
-            return Err(String::from("the kernel does not fit the guest's memory"));
-        }
-
-        let mut state = linux::long_mode(linux::entry(kernel_at), PAGE_TABLES_AT, GDT_AT);
-        state.gprs[RSI] = BOOT_PARAMS_AT;
+            initramfs,
+            cmdline: &cmdline,
+            acpi_tables: &acpi_tables,
+            opregion: devices.opregion(),
+        })?;
         let vcpu = guest.create_vcpu(0, &state).map_err(|e| format!("no virtual processor: {e}"))?;
         let duplicate = |v: &Vcpu| v.0.duplicate(None).map(Vcpu::from_handle).map_err(|e| format!("{e}"));
         let notify = duplicate(&vcpu)?;
@@ -239,13 +180,12 @@ impl Machine {
             memory,
             bridge: Bridge::new().map_err(|e| format!("no bridge: {e}"))?,
             devices,
-            i8042,
+            platform,
             lines,
             variables,
             notify,
             vcpus: Mutex::new(vcpus),
             console: Mutex::new((0..config.cpus).map(|_| Vec::new()).collect()),
-            ports: Mutex::new(Vec::new()),
         });
         // The bridge's waits and the guest's registry, on threads of their
         // own.
@@ -295,24 +235,10 @@ impl Machine {
             }
             match exit.reason {
                 vcpu_exit::HYPERCALL => exit.data[0] = self.hypercall(id, &exit.data),
-                vcpu_exit::IO => self.port(&mut exit),
-                vcpu_exit::MEMORY => self.stop(
-                    &format!(
-                        "processor {id} reached unmapped memory at {:#x} (access {}, rip {:#x})",
-                        exit.data[0], exit.data[1], exit.data[2]
-                    ),
-                    exit_code::FAULT,
-                ),
-                vcpu_exit::SHUTDOWN => self.stop(&format!("processor {id} shut down"), exit_code::CRASHED),
                 _ => {
-                    let state = vcpu.state().map(|s| format!("{s:x?}")).unwrap_or_default();
-                    self.stop(
-                        &format!(
-                            "processor {id} failed (exit {:#x}, {:#x}, rip {:#x}): {state}",
-                            exit.data[0], exit.data[1], exit.data[2]
-                        ),
-                        exit_code::FAULT,
-                    )
+                    if let Err((why, code)) = self.platform.exit(id, &vcpu, &mut exit) {
+                        self.stop(&why, code)
+                    }
                 }
             }
         }
@@ -351,11 +277,11 @@ impl Machine {
         }
     }
 
-    /// Starts processor `id` in 64-bit mode at `rip`.
-    fn start_cpu(self: &Arc<Self>, id: u64, rip: u64) -> u64 {
+    /// Starts processor `id` at `entry`, as the architecture starts them.
+    fn start_cpu(self: &Arc<Self>, id: u64, entry: u64) -> u64 {
         let mut vcpus = self.vcpus.lock();
         let Some(slot) = vcpus.get_mut(id as usize).filter(|s| s.is_none()) else { return error::INVALID };
-        let state = linux::long_mode(rip, PAGE_TABLES_AT, GDT_AT);
+        let state = arch::boot::secondary(entry);
         let made = self.guest.create_vcpu(id as u32, &state).and_then(|v| Ok((v.0.duplicate(None)?, v)));
         let vcpu = match made {
             Ok((copy, v)) => {
@@ -378,8 +304,8 @@ impl Machine {
     }
 
     /// Collects processor `id`'s console output into lines, for the log.
-    fn console_write(&self, id: u32, count: u64, regs: [u64; 4]) {
-        let (bytes, n) = platform::console_bytes(count, regs);
+    fn console_write(&self, id: u32, count: u64, words: [u64; 4]) {
+        let (bytes, n) = platform::console_bytes(count, words);
         let mut lines = self.console.lock();
         let Some(line) = lines.get_mut(id as usize) else { return };
         for &b in &bytes[..n] {
@@ -393,30 +319,6 @@ impl Machine {
                 _ => {}
             }
         }
-    }
-
-    /// The platform has no I/O ports but the keyboard controller's, if the
-    /// guest has it: elsewhere reads find nothing, writes go nowhere. Each
-    /// port is reported the first time.
-    fn port(&self, exit: &mut VcpuExit) {
-        let port = exit.data[0] as u16;
-        if let Some(i8042) = &self.i8042
-            && matches!(port, i8042::DATA | i8042::COMMAND)
-            && exit.data[1] == 1
-        {
-            if exit.data[2] == 1 {
-                i8042.write(port, exit.data[3] as u8);
-            } else {
-                exit.data[3] = i8042.read(port) as u64;
-            }
-            return;
-        }
-        let mut seen = self.ports.lock();
-        if !seen.contains(&port) && seen.len() < 32 {
-            seen.push(port);
-            println!("Linux touched I/O port {:#x}, which does not exist", port);
-        }
-        exit.data[3] = u64::MAX;
     }
 
     /// Ends the machine (and this process).

@@ -19,12 +19,12 @@ use alloc::vec::Vec;
 
 use vabi::Error;
 
-use super::ept::{self, Access, Ept};
-use super::vcpu::Vcpu;
-use crate::iommu::Domain;
+use super::{Access, Vcpu};
+use crate::arch::hv::GuestTables;
+use crate::arch::iommu::Domain;
 use crate::mm::PAGE_SIZE;
 use crate::mm::vmo::Vmo;
-use crate::sync::SpinLock;
+use crate::sync::{SpinLock, SpinLockGuard};
 
 /// A guest may have at most this many processors.
 pub const MAX_VCPUS: u32 = 64;
@@ -49,9 +49,9 @@ impl Mapping {
 
 pub struct Guest {
     pub koid: u64,
-    /// How many processors the guest has (what `cpuid` tells it).
+    /// How many processors the guest has (what the platform tells it).
     pub cpus: u32,
-    ept: SpinLock<Ept>,
+    tables: SpinLock<GuestTables>,
     /// Mappings by guest-physical address.
     mappings: SpinLock<BTreeMap<u64, Mapping>>,
     /// The domain of the devices given to the guest, once there is one.
@@ -67,16 +67,16 @@ impl Guest {
         Ok(Arc::new(Guest {
             koid: crate::object::new_koid(),
             cpus,
-            ept: SpinLock::new(Ept::new().ok_or(Error::NoMemory)?),
+            tables: SpinLock::new(GuestTables::new().ok_or(Error::NoMemory)?),
             mappings: SpinLock::new(BTreeMap::new()),
             domain: SpinLock::new(None),
             vcpus: SpinLock::new(Vec::new()),
         }))
     }
 
-    /// The EPT pointer of the guest's address space.
-    pub fn ept_pointer(&self) -> u64 {
-        self.ept.lock().pointer()
+    /// The tables that translate the guest's physical addresses.
+    pub fn tables(&self) -> SpinLockGuard<'_, GuestTables> {
+        self.tables.lock()
     }
 
     /// Maps `len` bytes of `vmo` from `offset` at `gpa`.
@@ -85,7 +85,8 @@ impl Guest {
             return Err(Error::InvalidArgs);
         }
         let len = crate::mm::checked_page_align_up(len).ok_or(Error::OutOfRange)?;
-        if offset.checked_add(len).is_none_or(|e| e > vmo.size()) || gpa.checked_add(len).is_none_or(|e| e > ept::LIMIT)
+        if offset.checked_add(len).is_none_or(|e| e > vmo.size())
+            || gpa.checked_add(len).is_none_or(|e| e > GuestTables::LIMIT)
         {
             return Err(Error::OutOfRange);
         }
@@ -94,7 +95,7 @@ impl Guest {
         if overlaps {
             return Err(Error::AlreadyExists);
         }
-        let mut ept = self.ept.lock();
+        let mut tables = self.tables.lock();
         let mut domain = self.domain.lock();
         let mut done = 0;
         let mut mapped = Ok(());
@@ -102,7 +103,7 @@ impl Guest {
             mapped = vmo
                 .page(offset + done, true)
                 .ok_or(Error::NoMemory)
-                .and_then(|frame| ept.map(gpa + done, frame, access, vmo.cache()).map_err(|_| Error::NoMemory));
+                .and_then(|frame| tables.map(gpa + done, frame, access, vmo.cache()).map_err(|_| Error::NoMemory));
             if mapped.is_ok() {
                 done += PAGE_SIZE;
             }
@@ -117,7 +118,7 @@ impl Guest {
             // A processor (or device) may have reached the pages already:
             // they are forgotten everywhere before the VMO can go.
             for off in (0..done).step_by(PAGE_SIZE as usize) {
-                ept.unmap(gpa + off);
+                tables.unmap(gpa + off);
             }
             if let Some(d) = domain.as_mut() {
                 for off in (0..len).step_by(PAGE_SIZE as usize) {
@@ -125,7 +126,7 @@ impl Guest {
                 }
                 d.commit(true);
             }
-            drop((ept, domain, mappings));
+            drop((tables, domain, mappings));
             crate::arch::tlb::shootdown_guest_memory();
             return Err(e);
         }
@@ -150,12 +151,12 @@ impl Guest {
             if starts.iter().any(|s| s + mappings[s].len > end) {
                 return Err(Error::InvalidArgs);
             }
-            let mut ept = self.ept.lock();
+            let mut tables = self.tables.lock();
             let mut domain = self.domain.lock();
             for s in starts {
                 let m = mappings.remove(&s).unwrap();
                 for off in (0..m.len).step_by(PAGE_SIZE as usize) {
-                    ept.unmap(s + off);
+                    tables.unmap(s + off);
                     if let Some(d) = domain.as_mut() {
                         d.unmap(s + off);
                     }

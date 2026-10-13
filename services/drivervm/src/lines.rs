@@ -1,13 +1,15 @@
 //! The interrupt lines the guest has: the PC's global system interrupts
-//! (GSIs) its devices use — the keyboard controller's (1 and 12), the lines
-//! the PCI functions' INTx are wired to — by the numbers the guest's ACPI
+//! (GSIs) its devices use — its own devices' (`arch::platform`: a
+//! keyboard controller's 1 and 12), the lines the PCI functions' INTx are
+//! wired to — by the numbers the guest's ACPI
 //! tables give them, which are the PC's; and lines the platform makes, GSIs
 //! from `PLATFORM_GSIS` on: the interrupts of GPIO pins. devmgr hands over
 //! an interrupt for each; functions that share a line share it.
 //!
 //! The guest routes a line to one of its processors with a hypercall
 //! ([`vhv::platform::hypercall::GSI`]): the line's interrupt is bound to the
-//! processor, at whose local APIC the kernel raises the vector — an edge,
+//! processor, at whose interrupt controller the kernel raises the vector —
+//! an edge,
 //! or a level-triggered interrupt with the line masked until the
 //! processor's end-of-interrupt. Routed to nothing (vector 0), the line is
 //! masked: its interrupt is bound to nothing, a level-triggered line stays

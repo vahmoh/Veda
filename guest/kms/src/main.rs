@@ -351,7 +351,8 @@ fn attach(d: &Display, client: protocol::Client) -> Result<Session, String> {
 
 /// Veda's clock at Linux's monotonic `ns`.
 fn veda_time(ns: u64) -> u64 {
-    // Both clocks follow the TSC; their difference, read now.
+    // Both clocks follow the processors' counter; their difference, read
+    // now.
     let (veda, linux) = (vrt::time::now_ns(), guest_sys::monotonic_ns());
     (ns as i64 + (veda as i64 - linux as i64)).max(0) as u64
 }

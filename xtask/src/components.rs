@@ -1,20 +1,18 @@
 //! Cross-building the individual Veda components with cargo.
 //!
-//! * The UEFI loader and the kernel are built for `x86_64-unknown-uefi`
-//!   (freestanding, soft-float, PE/COFF output).
-//! * User-space programs are `no_std` PE executables built for
-//!   `x86_64-pc-windows-msvc`, which gives us hard-float SSE code on stable
-//!   Rust, linked by LLVM's linker in the Microsoft linker's flavour, which
-//!   Rust ships (`rust-lld`, the UEFI target's linker; `.cargo/config.toml`
-//!   names it). Each program's `build.rs` (via the `vbuild` helper crate)
-//!   supplies the Veda-specific linker options.
+//! * The UEFI loader and the kernel are built for the architecture's UEFI
+//!   target (`arch::UEFI_TARGET`: freestanding, PE/COFF output).
+//! * User-space programs are `no_std` PE executables built for its user
+//!   target (`arch::USER_TARGET`), linked by LLVM's linker in the Microsoft
+//!   linker's flavour, which Rust ships (`rust-lld`, the UEFI target's
+//!   linker; Cargo's configuration names it). Each program's `build.rs`
+//!   (via the `vbuild` helper crate) supplies the Veda-specific linker
+//!   options.
 
 use std::path::PathBuf;
 
+use crate::arch::{UEFI_TARGET, USER_TARGET};
 use crate::util::{self, Result};
-
-pub const UEFI_TARGET: &str = "x86_64-unknown-uefi";
-pub const USER_TARGET: &str = "x86_64-pc-windows-msvc";
 
 /// The linker of user-space programs.
 pub const USER_LINKER: &str = "rust-lld";

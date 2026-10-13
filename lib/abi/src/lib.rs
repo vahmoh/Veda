@@ -6,14 +6,17 @@
 //! exchanged through system calls. It contains no code that depends on being
 //! in the kernel or in user space.
 //!
+//! What depends on the processor's architecture is in [`arch`]
+//! (`lib/abi/arch/<architecture>/`), and re-exported here: how system calls
+//! are made, the page size, the user address space, how threads start, and
+//! the registers and exits of virtual processors.
+//!
 //! # Calling convention
 //!
-//! System calls use the `syscall` instruction. `rax` holds the call number
-//! (see [`nr`]), arguments are passed in `rdi, rsi, rdx, r10, r8, r9`. On
-//! return `rax` holds a status: non-negative values are success results,
-//! negative values are `-(error code)` (see [`Error`]). Some calls return a
-//! second value in `rdx`. `rcx` and `r11` are clobbered by the instruction;
-//! all other registers are preserved.
+//! A system call takes a call number (see [`nr`]) and up to six arguments,
+//! all of them machine words, in the registers [`arch`] names. It returns a
+//! status: non-negative values are success results, negative values are
+//! `-(error code)` (see [`Error`]). Some calls return a second value.
 //!
 //! # Objects and handles
 //!
@@ -26,7 +29,12 @@
 
 #![no_std]
 
+#[cfg(target_arch = "x86_64")]
+#[path = "../arch/amd64/mod.rs"]
+pub mod arch;
 pub mod startup;
+
+pub use arch::{PAGE_SIZE, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState, entry_stack_pointer, vcpu_exit};
 
 use core::fmt;
 
@@ -38,9 +46,6 @@ pub const INVALID_HANDLE: RawHandle = 0;
 
 /// Deadline value meaning "wait forever".
 pub const DEADLINE_INFINITE: u64 = u64::MAX;
-
-/// Page size used by the kernel for all mappings.
-pub const PAGE_SIZE: usize = 4096;
 
 /// Maximum number of data bytes in one channel message.
 pub const CHANNEL_MAX_BYTES: usize = 64 * 1024;
@@ -56,7 +61,7 @@ pub mod nr {
     // --- misc ---------------------------------------------------------
     /// `debug_write(ptr, len)`: append text to the kernel log.
     pub const DEBUG_WRITE: usize = 0;
-    /// `log_read(offset, buf, len) -> bytes` (rdx = next offset).
+    /// `log_read(offset, buf, len) -> bytes` (second value: the next offset).
     pub const LOG_READ: usize = 1;
     /// `clock_get(clock_id) -> nanoseconds`.
     pub const CLOCK_GET: usize = 2;
@@ -71,7 +76,8 @@ pub mod nr {
     /// `random(buf, len)`: fill a buffer (at most 4096 bytes) with output of
     /// the kernel's cryptographically secure generator.
     pub const RANDOM: usize = 7;
-    /// `clock_info(out: *mut ClockInfo)`: how the clocks follow the TSC.
+    /// `clock_info(out: *mut ClockInfo)`: how the clocks follow the
+    /// processor's clock counter.
     pub const CLOCK_INFO: usize = 8;
 
     // --- handles and objects ------------------------------------------
@@ -172,8 +178,9 @@ pub mod nr {
     pub const THREAD_EXIT: usize = 66;
     /// `thread_set_priority(h, priority)`.
     pub const THREAD_SET_PRIORITY: usize = 67;
-    /// `thread_set_fs_base(value)`: thread-local storage base.
-    pub const THREAD_SET_FS_BASE: usize = 68;
+    /// `thread_set_tls(value)`: the calling thread's thread pointer, through
+    /// which it finds its thread-local storage (see [`arch`](crate::arch)).
+    pub const THREAD_SET_TLS: usize = 68;
     /// `process_list(buf: *mut ProcessInfo, cap) -> total`.
     pub const PROCESS_LIST: usize = 69;
     /// `process_open(resource, koid) -> h`.
@@ -231,8 +238,8 @@ pub mod nr {
     // --- virtual machines (requires a hypervisor resource) ------------
     /// `guest_create(resource, cpus) -> h`: a virtual machine with an
     /// empty guest-physical address space, which will have `cpus`
-    /// processors (with local APIC ids 0 to `cpus` - 1; what `cpuid` tells
-    /// the guest).
+    /// processors, numbered 0 to `cpus` - 1 (what the processors tell the
+    /// guest).
     pub const GUEST_CREATE: usize = 90;
     /// `guest_map(guest, vmo, vmo_offset, len, gpa, flags)`: makes `len`
     /// bytes of a VMO the guest's memory at guest-physical address `gpa`
@@ -243,15 +250,16 @@ pub mod nr {
     /// `guest_unmap(guest, gpa, len)`: removes the guest's memory in
     /// `[gpa, gpa+len)`; no processor or device reaches it afterwards.
     pub const GUEST_UNMAP: usize = 92;
-    /// `vcpu_create(guest, id, state: *const VcpuState) -> h`: a virtual
-    /// processor of the guest with local APIC id `id`, in `state`.
+    /// `vcpu_create(guest, id, state: *const VcpuState) -> h`: virtual
+    /// processor number `id` of the guest (as its interrupt controller
+    /// knows it), in `state`.
     pub const VCPU_CREATE: usize = 93;
     /// `vcpu_run(vcpu, exit: *mut VcpuExit)`: runs the virtual processor
     /// until it needs its virtual machine monitor (see [`VcpuExit`]), on
     /// the calling thread.
     pub const VCPU_RUN: usize = 94;
     /// `vcpu_interrupt(vcpu, vector)`: raises an interrupt at the virtual
-    /// processor's local APIC (from any thread).
+    /// processor's interrupt controller (from any thread).
     pub const VCPU_INTERRUPT: usize = 95;
     /// `vcpu_read_state(vcpu, out: *mut VcpuState)`: the virtual
     /// processor's registers, while no thread runs it.
@@ -264,8 +272,9 @@ pub mod nr {
     /// if another guest has the function.
     pub const GUEST_ATTACH_DEVICE: usize = 97;
     /// `vcpu_bind_interrupt(vcpu, interrupt, vector)`: the interrupt
-    /// raises `vector` (32 to 255) at the virtual processor's local APIC
-    /// from now on, instead of signaling: an edge (an MSI, an
+    /// raises `vector` (an interrupt's, not an exception's) at the virtual
+    /// processor's interrupt controller from now on, instead of
+    /// signaling: an edge (an MSI, an
     /// edge-triggered line) as an edge; a level-triggered line as a
     /// level-triggered interrupt, the line masked from when it fires until
     /// the guest's end-of-interrupt of the vector (if it is still bound
@@ -505,17 +514,19 @@ pub mod clock {
     pub const UTC: usize = 2;
 }
 
-/// How the clocks follow the TSC (`clock_info`), which every processor
-/// reads alike: the monotonic clock is `((tsc - tsc_at_zero) * ns_per_tick)
-/// >> 32` nanoseconds; the real-time clocks are it plus their offsets.
+/// How the clocks follow the processor's clock counter (`clock_info`),
+/// which every processor reads alike, and user space too (see [`arch`]):
+/// the monotonic clock is `((ticks - ticks_at_zero) * ns_per_tick) >> 32`
+/// nanoseconds; the real-time clocks are it plus their offsets.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClockInfo {
-    /// The TSC when the monotonic clock read 0.
-    pub tsc_at_zero: u64,
-    /// Nanoseconds per TSC tick, in 32.32 fixed point.
+    /// The counter when the monotonic clock read 0.
+    pub ticks_at_zero: u64,
+    /// Nanoseconds per tick, in 32.32 fixed point.
     pub ns_per_tick: u64,
-    pub tsc_hz: u64,
+    /// The counter's frequency.
+    pub ticks_hz: u64,
     /// [`clock::REALTIME`] and [`clock::UTC`] at monotonic 0.
     pub realtime_at_zero: u64,
     pub utc_at_zero: u64,
@@ -709,11 +720,6 @@ pub mod cache_policy {
     pub const UNCACHED: usize = 2;
 }
 
-/// Lowest address user space may map.
-pub const USER_SPACE_START: usize = 0x0000_0000_0001_0000;
-/// One past the highest user-space address.
-pub const USER_SPACE_END: usize = 0x0000_7FFF_FFFF_0000;
-
 /// Thread priorities (0 = lowest, 31 = highest).
 pub mod priority {
     pub const IDLE: usize = 0;
@@ -751,8 +757,8 @@ pub mod resource_kind {
 
 /// Flags for `irq_create`.
 pub mod irq_flags {
-    /// `irq` is a legacy ISA IRQ number (0-15) rather than a GSI; the kernel
-    /// applies the firmware's interrupt source overrides.
+    /// `irq` is a legacy ISA IRQ number (0-15, a PC's) rather than a GSI;
+    /// the kernel applies the firmware's interrupt source overrides.
     pub const ISA: usize = 1 << 0;
     /// Level triggered (default: edge).
     pub const LEVEL: usize = 1 << 1;
@@ -769,49 +775,6 @@ pub struct MsiInfo {
     pub vector: u32,
 }
 
-/// A segment register of a virtual processor.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VcpuSegment {
-    pub base: u64,
-    pub limit: u32,
-    /// The descriptor's attributes as Intel's VMX keeps them: type (bits
-    /// 0-3), S (4), DPL (5-6), P (7), AVL (12), L (13), D/B (14), G (15),
-    /// and bit 16 for a segment that cannot be used.
-    pub access: u32,
-    pub selector: u16,
-    pub _reserved: [u16; 3],
-}
-
-/// The registers of a virtual processor (`vcpu_create`,
-/// `vcpu_read_state`).
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VcpuState {
-    /// rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8 to r15: the order in
-    /// which instructions number them.
-    pub gprs: [u64; 16],
-    pub rip: u64,
-    pub rflags: u64,
-    pub cr0: u64,
-    pub cr2: u64,
-    pub cr3: u64,
-    pub cr4: u64,
-    pub efer: u64,
-    pub cs: VcpuSegment,
-    pub ds: VcpuSegment,
-    pub es: VcpuSegment,
-    pub fs: VcpuSegment,
-    pub gs: VcpuSegment,
-    pub ss: VcpuSegment,
-    pub tr: VcpuSegment,
-    pub ldtr: VcpuSegment,
-    pub gdt_base: u64,
-    pub idt_base: u64,
-    pub gdt_limit: u32,
-    pub idt_limit: u32,
-}
-
 /// Why `vcpu_run` returned, and what the monitor answers ([`vcpu_exit`]).
 ///
 /// The structure goes both ways: `vcpu_run` fills it in when the virtual
@@ -824,30 +787,6 @@ pub struct VcpuExit {
     pub reason: u32,
     pub _reserved: u32,
     pub data: [u64; 7],
-}
-
-/// Reasons of a [`VcpuExit`].
-pub mod vcpu_exit {
-    /// The guest made a hypercall (`vmcall`): `data` holds its rax (the
-    /// call), rbx, rcx, rdx, rsi and rdi. The next `vcpu_run` gives the
-    /// guest `data[0]` in rax.
-    pub const HYPERCALL: u32 = 1;
-    /// The guest read or wrote an I/O port: `data[0]` is the port,
-    /// `data[1]` the size (1, 2 or 4), `data[2]` 1 for a write, `data[3]`
-    /// the value written. After a read, the next `vcpu_run` gives the
-    /// guest `data[3]`.
-    pub const IO: u32 = 2;
-    /// The guest reached guest-physical memory that is not mapped (or not
-    /// for that access): `data[0]` is the address, `data[1]` the access
-    /// (1 read, 2 write, 4 instruction fetch), `data[2]` the guest's rip.
-    pub const MEMORY: u32 = 3;
-    /// The guest shut its processor down (a triple fault).
-    pub const SHUTDOWN: u32 = 4;
-    /// The processor would not run the guest, or did something the kernel
-    /// does not handle: `data[0]` is the processor's exit reason,
-    /// `data[1]` its qualification (or the instruction error of a failed
-    /// entry), `data[2]` the guest's rip.
-    pub const FAILED: u32 = 5;
 }
 
 /// Actions for `system_power`.
@@ -871,7 +810,7 @@ pub struct SystemInfo {
     pub thread_count: u32,
     /// Accumulated idle time across all CPUs (for CPU usage graphs).
     pub idle_time_ns: u64,
-    /// CPU brand string from CPUID (NUL padded).
+    /// The processor's name, as it gives it (NUL padded).
     pub cpu_brand: [u8; 48],
 }
 
@@ -950,8 +889,8 @@ pub const ACPI_MEMORY_RANGES: usize = 16;
 
 /// Bits of [`KernelBootInfo::platform`].
 pub mod platform {
-    /// The processors run virtual machines (VMX, with EPT): a hypervisor
-    /// resource makes guests.
+    /// The processors run virtual machines: a hypervisor resource makes
+    /// guests.
     pub const VIRTUALIZATION: u32 = 1 << 0;
     /// An IOMMU confines devices' DMA and remaps their interrupts: PCI
     /// functions can be given to guests.

@@ -17,7 +17,7 @@ cargo xtask shot --wait 15     # boot headless, save target/veda/screen.png
 cargo xtask shot --cmdline "run=about"   # also start bin/about.exe at boot
 cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
-cargo xtask test --ui          # ... plus every GUI script in tests/ui and tests/agent, several at once
+cargo xtask test --ui          # ... plus every GUI script in tests/ui and tests/agent (and their arch/amd64), several at once
 cargo xtask test --ui --jobs 2 # ... two at a time (default: one per five processors)
 cargo xtask scripts tests/ui/drivervm-audio.vts tests/ui/nvme.vts   # some scripts, built once, side by side
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
@@ -55,9 +55,9 @@ cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the d
 cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
 cargo xtask script tests/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
-cargo xtask script tests/ui/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
+cargo xtask script tests/ui/arch/amd64/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
 cargo xtask script tests/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
-cargo xtask script tests/ui/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
+cargo xtask script tests/ui/arch/amd64/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
 cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
@@ -110,7 +110,8 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   memory it leaves to the system, at every boot: after a reset it could
   take a program header of Veda's there for six processors, and wait for
   ever for the two that are not. QEMU's loader blanks that page at every
-  reset (`igvm_params` in `xtask/src/qemu.rs` finds it in the firmware).
+  reset (`blank_at_reset` in `xtask/arch/amd64/qemu.rs` finds it in the
+  firmware).
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)
@@ -283,7 +284,8 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
 The C test programs, the toolchain and the decoder need `cargo xtask
 toolchain` (see [C on Veda](C.md)); without it, the build says so and
 leaves them out. With `cargo xtask linux` done,
-the image also holds the driver VM's Linux: `/system/linux/bzImage` and
+the image also holds the driver VM's Linux: `/system/linux/kernel` (the
+architecture's image of it: a bzImage on AMD64) and
 `/system/linux/initramfs.cpio`, made of the programs in `guest/` (see
 [the driver VM](DRIVERVM.md)). Files under `samples/` in the
 system image are also copied into the user's
@@ -378,7 +380,8 @@ directly: `begin_frame()` returns a `Canvas` for the back buffer,
 ### Programs in C
 
 C programs are compiled with GCC, inside Veda or on the development machine
-with the cross compiler, `target/toolchain/cross/bin/x86_64-veda-gcc`:
+with the cross compiler, `target/toolchain/cross/bin/x86_64-veda-gcc` on
+AMD64 (`<target>-gcc`, for the architecture's C target):
 
 ```text
 target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
@@ -397,7 +400,8 @@ tested on the host is in `apps/videos/core` (the clock, pacing, choosing
 pictures, skipping, the layout, what it remembers), and the protocol it
 speaks with its decoder, with the frame pool and the sound ring, is
 `vproto::media`. The decoder, `services/mediadec`, is a C program: its
-Rust half is built for `x86_64-unknown-none` and linked with its C shim,
+Rust half is built for the architecture's bare target
+(`x86_64-unknown-none` on AMD64) and linked with its C shim,
 FFmpeg and dav1d by the cross compiler (`xtask/src/toolchain.rs`,
 `mediadec()`), so it exists only once `cargo xtask toolchain` built the
 media libraries (`cargo xtask doctor` says whether they are).

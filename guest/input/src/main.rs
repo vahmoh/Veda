@@ -65,8 +65,8 @@ const REL_CNT: usize = 0x10;
 const ABS_CNT: usize = 0x40;
 const LED_CNT: usize = 0x10;
 const PROP_CNT: usize = 0x20;
-/// Bytes of a `struct input_event` on x86-64: a `timeval`, the type, the
-/// code and the value.
+/// Bytes of a `struct input_event` on 64-bit Linux: a `timeval`, the type,
+/// the code and the value.
 const EVENT_SIZE: usize = 24;
 
 // evdev's requests (linux/input.h): their numbers, of type 'E'.

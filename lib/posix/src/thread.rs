@@ -2,8 +2,9 @@
 //!
 //! musl creates threads with `__clone`, which the C library hands to
 //! [`__veda_clone`]: a kernel thread in this process that starts in
-//! [`__veda_thread_entry`], which installs the thread pointer and the
-//! thread's exit futex and calls the thread function. When a thread ends,
+//! `__veda_thread_entry` (the architecture's, `arch`), which installs the
+//! thread pointer and the thread's exit futex and calls the thread
+//! function. When a thread ends,
 //! the kernel clears its exit futex word and wakes a waiter, which is how
 //! musl knows a joined thread is gone for good (`CLONE_CHILD_CLEARTID`).
 
@@ -15,7 +16,7 @@ use vrt::sys::call;
 
 use crate::error::{self, SysResult};
 use crate::linux::errno::*;
-use crate::linux::{Timespec, arch, clone, futex};
+use crate::linux::{Timespec, clone, futex};
 use crate::{process, time, user};
 
 /// The start of a new thread, at the top of its stack.
@@ -84,86 +85,19 @@ pub unsafe extern "C" fn __veda_clone(
         // SAFETY: as above.
         unsafe { core::ptr::write_volatile(ctid as *mut i32, tid) };
     }
-    let entry = thread_entry_address();
+    let entry = crate::arch::thread_entry_address();
     match call(nr::THREAD_START, [thread.raw() as usize, entry, block, block, 0, 0]) {
         Ok(_) => tid,
         Err(e) => -(error::kernel(e) as i32),
     }
 }
 
-#[cfg(target_os = "none")]
-fn thread_entry_address() -> usize {
-    unsafe extern "C" {
-        fn __veda_thread_entry();
-    }
-    __veda_thread_entry as *const () as usize
-}
-
-#[cfg(not(target_os = "none"))]
-fn thread_entry_address() -> usize {
-    0
-}
-
-// A new thread starts here with rdi = rsp = its `Start`.
-#[cfg(target_os = "none")]
-core::arch::global_asm!(
-    ".global __veda_thread_entry",
-    ".hidden __veda_thread_entry",
-    ".type __veda_thread_entry, @function",
-    "__veda_thread_entry:",
-    "    mov rbx, rdi",
-    "    mov rdi, [rbx + 16]",
-    "    mov eax, {set_fs}",
-    "    syscall",
-    "    mov rdi, [rbx + 24]",
-    "    mov eax, {set_exit_futex}",
-    "    syscall",
-    "    mov rdi, [rbx + 8]",
-    "    xor ebp, ebp",
-    "    call [rbx]",
-    "    mov eax, {exit}",
-    "    syscall",
-    "    ud2",
-    ".size __veda_thread_entry, . - __veda_thread_entry",
-    set_fs = const nr::THREAD_SET_FS_BASE,
-    set_exit_futex = const nr::THREAD_SET_EXIT_FUTEX,
-    exit = const nr::THREAD_EXIT,
-);
-
-// `__unmapself(base, size)`: frees the stack the thread runs on and ends
-// the thread, touching no stack in between.
-#[cfg(target_os = "none")]
-core::arch::global_asm!(
-    ".global __veda_unmapself",
-    ".hidden __veda_unmapself",
-    ".type __veda_unmapself, @function",
-    "__veda_unmapself:",
-    "    mov rdx, rsi",
-    "    mov rsi, rdi",
-    "    xor edi, edi",
-    "    mov eax, {unmap}",
-    "    syscall",
-    "    mov eax, {exit}",
-    "    syscall",
-    "    ud2",
-    ".size __veda_unmapself, . - __veda_unmapself",
-    unmap = const nr::VM_UNMAP,
-    exit = const nr::THREAD_EXIT,
-);
-
 /// `__set_thread_area(p)`: the calling thread's thread pointer.
 #[unsafe(no_mangle)]
 pub extern "C" fn __veda_set_thread_area(p: *mut c_void) -> i32 {
-    match call(nr::THREAD_SET_FS_BASE, [p as usize, 0, 0, 0, 0, 0]) {
+    match call(nr::THREAD_SET_TLS, [p as usize, 0, 0, 0, 0, 0]) {
         Ok(_) => 0,
         Err(e) => -(error::kernel(e) as i32),
-    }
-}
-
-pub fn arch_prctl(code: u32, addr: usize) -> SysResult {
-    match code {
-        arch::SET_FS => call(nr::THREAD_SET_FS_BASE, [addr, 0, 0, 0, 0, 0]).map(|_| 0).map_err(error::kernel),
-        _ => Err(EINVAL),
     }
 }
 

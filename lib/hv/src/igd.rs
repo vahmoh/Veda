@@ -4,24 +4,19 @@
 //! The OpRegion: memory the firmware fills for the GPU's driver, which the
 //! GPU's configuration space names (ASLS): the display's description (its
 //! VBT: the panel, the ports) and mailboxes through which the firmware's
-//! ACPI and the driver talk. The guest has a copy of it at
-//! [`OPREGION_AT`], with its raw VBT right after it if the firmware keeps
-//! that outside (from version 2.0, mailbox 3's RVDA and RVDS); without the
+//! ACPI and the driver talk. The guest has a copy of it where its machine
+//! puts it (on AMD64, `crate::amd64::memory::OPREGION_AT`), with its raw
+//! VBT right after it if the firmware keeps that outside (from version
+//! 2.0, mailbox 3's RVDA and RVDS); without the
 //! mailbox through which the driver would call the PC's firmware (SWSCI,
 //! which raises an SMI there).
 
 use alloc::vec::Vec;
 
-/// Where the guest's copy of the OpRegion is: in the legacy area below
-/// 1 MiB, which the guest's memory map reserves, before its ACPI tables.
-pub const OPREGION_AT: u64 = 0xC_0000;
-/// The room it has there.
+/// The most room the guest's copy (with its raw VBT) takes.
 pub const OPREGION_ROOM: usize = 0x2_0000;
 /// An OpRegion's size, its mailboxes included.
 pub const OPREGION_SIZE: usize = 0x2000;
-
-// The copy ends where the ACPI tables begin.
-const _: () = assert!(OPREGION_AT + OPREGION_ROOM as u64 <= crate::acpi::AT);
 
 const SIGNATURE: &[u8; 16] = b"IntelGraphicsMem";
 /// The header's version (its minor and major numbers), and its mailboxes.
@@ -97,6 +92,9 @@ pub fn for_guest(opregion: &[u8], vbt: Option<&[u8]>, at: u64) -> Option<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where a test guest has its copy.
+    const OPREGION_AT: u64 = 0xC_0000;
 
     /// An OpRegion of version `major.minor` with the ACPI, SWSCI and ASLE
     /// mailboxes, its raw VBT at `rvda` (`rvds` bytes).

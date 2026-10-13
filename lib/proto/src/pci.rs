@@ -53,7 +53,7 @@ message! {
 }
 
 message! {
-    /// An I/O APIC input (a GSI), and how it signals.
+    /// An interrupt controller's input (a GSI), and how it signals.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct InterruptLine {
         pub gsi: u32,
@@ -107,7 +107,7 @@ message! {
     pub struct IntxLine {
         /// The function's pin: 1 for INTA# to 4.
         pub pin: u8,
-        /// The I/O APIC input (GSI) it is wired to, and how.
+        /// The interrupt controller's input (GSI) it is wired to, and how.
         pub gsi: u32,
         pub level: bool,
         pub active_low: bool,

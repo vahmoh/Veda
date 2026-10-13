@@ -42,10 +42,7 @@ pub fn ioport_write(raw: RawHandle, port: usize, width: usize, value: usize) -> 
 pub fn irq_create(res: RawHandle, irq: usize, flags: usize) -> SysResult {
     let r = get_resource(res, Rights::NONE)?;
     let (gsi, level, active_low) = if flags & irq_flags::ISA != 0 {
-        if irq > 15 {
-            return Err(Error::InvalidArgs);
-        }
-        crate::acpi::isa_irq_to_gsi(irq as u8)
+        crate::arch::irq::isa_line(irq).ok_or(Error::InvalidArgs)?
     } else {
         (irq as u32, flags & irq_flags::LEVEL != 0, flags & irq_flags::ACTIVE_LOW != 0)
     };

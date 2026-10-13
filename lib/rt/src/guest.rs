@@ -1,35 +1,27 @@
 //! Veda's system calls in a Linux guest of the driver VM.
 //!
 //! A program built for the guest (with `--cfg veda_guest`, which the
-//! guest's target sets) makes its system calls here instead of with
-//! `syscall`: the ones on Veda's objects, and its log, through the bridge
-//! (`/dev/veda`, `vhv::bridge`), the rest with Linux's own (time from the
-//! TSC, which the guest reads as Veda does; futexes; sleeping). So the
+//! guest's target sets) makes its system calls here instead of the way
+//! Veda's programs do: the ones on Veda's objects, and its log, through the
+//! bridge (`/dev/veda`, `vhv::bridge`), the rest with Linux's own
+//! (`arch::linux`; time from the processor's clock counter, which the guest
+//! reads as Veda does; futexes; sleeping). So the
 //! program uses `vrt`, and everything built on it (`vipc`, `vproto`), as a
 //! Veda program does. What makes no sense in the guest (processes,
 //! hardware, virtual machines) is `NotSupported`.
 
-use core::arch::asm;
 use core::sync::atomic::{AtomicI32, Ordering};
 
 use vabi::{ClockInfo, Error, HandleBasicInfo, RawHandle, WaitItem, clock, info_topic, map_flags, nr};
 use vhv::bridge::{self as b, op};
 
+use crate::arch::linux::{self, nr as sys};
 use crate::sync::Lazy;
 
-const SYS_WRITE: usize = 1;
-const SYS_OPEN: usize = 2;
-const SYS_MMAP: usize = 9;
-const SYS_MUNMAP: usize = 11;
-const SYS_IOCTL: usize = 16;
-const SYS_SCHED_YIELD: usize = 24;
-const SYS_NANOSLEEP: usize = 35;
-const SYS_FUTEX: usize = 202;
-const SYS_EXIT_GROUP: usize = 231;
-const SYS_GETRANDOM: usize = 318;
 const EINTR: isize = 4;
 const ETIMEDOUT: isize = 110;
 const EAGAIN: isize = 11;
+const AT_FDCWD: usize = -100isize as usize;
 const O_RDWR: usize = 2;
 const O_CLOEXEC: usize = 0o2_000_000;
 const PROT_READ: usize = 1;
@@ -40,25 +32,8 @@ const FUTEX_WAKE_PRIVATE: usize = 129;
 
 /// A Linux system call: its result, or `-errno`.
 fn linux(nr: usize, a: [usize; 6]) -> isize {
-    let ret: isize;
-    // SAFETY: the callers pass the arguments the call takes; the kernel
-    // clobbers rcx and r11.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") nr as isize => ret,
-            in("rdi") a[0],
-            in("rsi") a[1],
-            in("rdx") a[2],
-            in("r10") a[3],
-            in("r8") a[4],
-            in("r9") a[5],
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    ret
+    // SAFETY: the callers pass the arguments the call takes.
+    unsafe { linux::syscall(nr, a) }
 }
 
 /// `/dev/veda`, opened the first time it is needed (-1: it cannot be).
@@ -67,7 +42,7 @@ static DEVICE: AtomicI32 = AtomicI32::new(0);
 fn device() -> Result<usize, Error> {
     match DEVICE.load(Ordering::Acquire) {
         0 => {
-            let fd = linux(SYS_OPEN, [c"/dev/veda".as_ptr() as usize, O_RDWR | O_CLOEXEC, 0, 0, 0, 0]);
+            let fd = linux(sys::OPENAT, [AT_FDCWD, c"/dev/veda".as_ptr() as usize, O_RDWR | O_CLOEXEC, 0, 0, 0]);
             let fd = if fd < 0 { -1 } else { fd as i32 };
             match DEVICE.compare_exchange(0, fd, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) if fd >= 0 => Ok(fd as usize),
@@ -75,7 +50,7 @@ fn device() -> Result<usize, Error> {
                 // Another thread opened it first.
                 Err(other) => {
                     if fd >= 0 {
-                        linux(3, [fd as usize, 0, 0, 0, 0, 0]);
+                        linux(sys::CLOSE, [fd as usize, 0, 0, 0, 0, 0]);
                     }
                     if other < 0 { Err(Error::NotSupported) } else { Ok(other as usize) }
                 }
@@ -96,7 +71,7 @@ const fn command(op: u32, size: usize) -> usize {
 fn bridge<T>(op: u32, req: &mut T) -> Result<(), Error> {
     let fd = device()?;
     loop {
-        match linux(SYS_IOCTL, [fd, command(op, core::mem::size_of::<T>()), req as *mut T as usize, 0, 0, 0]) {
+        match linux(sys::IOCTL, [fd, command(op, core::mem::size_of::<T>()), req as *mut T as usize, 0, 0, 0]) {
             0 => break,
             r if r == -EINTR => continue,
             _ => return Err(Error::Io),
@@ -110,7 +85,7 @@ fn bridge<T>(op: u32, req: &mut T) -> Result<(), Error> {
     }
 }
 
-/// How Veda's clocks follow the TSC (asked once).
+/// How Veda's clocks follow the processor's clock counter (asked once).
 fn clock_info() -> ClockInfo {
     static INFO: Lazy<ClockInfo> = Lazy::new(|| {
         let mut r = b::Clock::default();
@@ -122,9 +97,8 @@ fn clock_info() -> ClockInfo {
 
 fn now_ns() -> u64 {
     let info = clock_info();
-    // SAFETY: RDTSC is always available.
-    let tsc = unsafe { core::arch::x86_64::_rdtsc() };
-    ((tsc.saturating_sub(info.tsc_at_zero) as u128 * info.ns_per_tick as u128) >> 32) as u64
+    let ticks = crate::arch::clock_ticks();
+    ((ticks.saturating_sub(info.ticks_at_zero) as u128 * info.ns_per_tick as u128) >> 32) as u64
 }
 
 /// How long from now until Veda's monotonic `deadline`, as a Linux
@@ -148,7 +122,7 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
     let one = |v: usize| Ok((v, 0));
     match n {
         nr::DEBUG_WRITE => {
-            linux(SYS_WRITE, [2, a[0], a[1], 0, 0, 0]);
+            linux(sys::WRITE, [2, a[0], a[1], 0, 0, 0]);
             one(0)
         }
         nr::CLOCK_GET => {
@@ -168,21 +142,21 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
         nr::SLEEP => {
             loop {
                 let Some(t) = timeout(a[0] as u64) else {
-                    linux(SYS_NANOSLEEP, [&[i64::MAX, 0] as *const _ as usize, 0, 0, 0, 0, 0]);
+                    linux(sys::NANOSLEEP, [&[i64::MAX, 0] as *const _ as usize, 0, 0, 0, 0, 0]);
                     continue;
                 };
-                if t == [0, 0] || linux(SYS_NANOSLEEP, [&t as *const _ as usize, 0, 0, 0, 0, 0]) == 0 {
+                if t == [0, 0] || linux(sys::NANOSLEEP, [&t as *const _ as usize, 0, 0, 0, 0, 0]) == 0 {
                     break;
                 }
             }
             one(0)
         }
         nr::YIELD => {
-            linux(SYS_SCHED_YIELD, [0; 6]);
+            linux(sys::SCHED_YIELD, [0; 6]);
             one(0)
         }
         nr::RANDOM => {
-            let r = linux(SYS_GETRANDOM, [a[0], a[1], 0, 0, 0, 0]);
+            let r = linux(sys::GETRANDOM, [a[0], a[1], 0, 0, 0, 0]);
             if r < 0 { Err(Error::Io) } else { one(0) }
         }
         nr::HANDLE_CLOSE => {
@@ -312,31 +286,31 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
             };
             bridge(op::VMO_MAP, &mut r)?;
             let prot = PROT_READ | if a[5] & map_flags::WRITE != 0 { PROT_WRITE } else { 0 };
-            let addr = linux(SYS_MMAP, [0, len, prot, MAP_SHARED, device()?, r.gpa as usize]);
+            let addr = linux(sys::MMAP, [0, len, prot, MAP_SHARED, device()?, r.gpa as usize]);
             if addr < 0 {
                 return Err(Error::NoMemory);
             }
             one(addr as usize)
         }
         nr::VM_UNMAP if a[0] == 0 => {
-            let r = linux(SYS_MUNMAP, [a[1], a[2].next_multiple_of(4096), 0, 0, 0, 0]);
+            let r = linux(sys::MUNMAP, [a[1], a[2].next_multiple_of(4096), 0, 0, 0, 0]);
             if r < 0 { Err(Error::InvalidArgs) } else { one(0) }
         }
         nr::PROCESS_EXIT => {
-            linux(SYS_EXIT_GROUP, [a[0], 0, 0, 0, 0, 0]);
+            linux(sys::EXIT_GROUP, [a[0], 0, 0, 0, 0, 0]);
             one(0)
         }
         nr::FUTEX_WAIT => {
             let t = timeout(a[2] as u64);
             let ts = t.as_ref().map_or(0, |t| t as *const _ as usize);
-            match linux(SYS_FUTEX, [a[0], FUTEX_WAIT_PRIVATE, a[1], ts, 0, 0]) {
+            match linux(sys::FUTEX, [a[0], FUTEX_WAIT_PRIVATE, a[1], ts, 0, 0]) {
                 r if r == -ETIMEDOUT => Err(Error::TimedOut),
                 r if r == -EAGAIN => Err(Error::ShouldWait),
                 _ => one(0),
             }
         }
         nr::FUTEX_WAKE => {
-            let r = linux(SYS_FUTEX, [a[0], FUTEX_WAKE_PRIVATE, a[1], 0, 0, 0]);
+            let r = linux(sys::FUTEX, [a[0], FUTEX_WAKE_PRIVATE, a[1], 0, 0, 0]);
             one(r.max(0) as usize)
         }
         _ => Err(Error::NotSupported),

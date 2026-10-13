@@ -9,7 +9,7 @@ pub mod phys;
 pub mod user;
 pub mod vmo;
 
-pub const PAGE_SIZE: u64 = 4096;
+pub const PAGE_SIZE: u64 = crate::arch::paging::PAGE_SIZE;
 
 /// Virtual address of physical address `phys` in the direct map.
 #[inline]

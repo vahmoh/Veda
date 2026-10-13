@@ -75,9 +75,9 @@ fn remember_ram(map: &[MemoryRegion]) {
     }
 }
 
-/// Physical memory below this address is never handed out (real-mode area,
-/// AP trampoline).
-const LOW_RESERVED: u64 = 0x10_0000;
+/// Physical memory below this address is never handed out: the
+/// architecture's.
+const LOW_RESERVED: u64 = crate::arch::mm::RESERVED_BELOW;
 
 impl Bitmap {
     fn set(&mut self, frame: u64, used: bool) {
@@ -237,12 +237,7 @@ pub fn free_contiguous(phys: u64, count: u64) {
 
 /// Fills frames with zeroes through the direct map.
 pub fn zero_frames(phys: u64, count: u64) {
-    let qwords = count * PAGE_SIZE / 8;
-    // SAFETY: the frames are owned by the caller and mapped by the direct map.
-    unsafe {
-        core::arch::asm!("rep stosq", inout("rdi") phys_to_virt(phys) => _, inout("rcx") qwords => _, in("rax") 0u64,
-            options(nostack, preserves_flags));
-    }
+    crate::arch::mm::zero(phys_to_virt(phys), count * PAGE_SIZE);
 }
 
 /// (total usable bytes, free bytes)

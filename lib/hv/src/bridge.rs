@@ -25,13 +25,13 @@
 //! The definitions here and those of Linux's bridge driver
 //! (`include/uapi/linux/veda.h` in the Linux port) are the same.
 
-/// The platform's hypercall for the bridge: `rbx` is the operation, `rcx`
-/// the guest-physical address of its request. The result in `rax` is 0
-/// when the monitor carried the operation out (its status is in the
-/// request), negative when it could not read or write the request.
+/// The platform's hypercall for the bridge, `bridge(operation, request)`:
+/// `request` is the guest-physical address of the operation's request. It
+/// returns 0 when the monitor carried the operation out (its status is in
+/// the request), negative when it could not read or write the request.
 pub const HYPERCALL: u64 = 5;
 
-/// Operations (`rbx` of the hypercall; also the `ioctl` numbers).
+/// Operations (the hypercall's `operation`; also the `ioctl` numbers).
 pub mod op {
     /// [`super::Setup`]: the driver's notification ring and vector.
     pub const SETUP: u32 = 1;
@@ -278,8 +278,8 @@ pub struct Bootstrap {
     pub _reserved: u32,
 }
 
-/// [`op::CLOCK`]: how Veda's clocks follow the TSC, which the guest reads
-/// as Veda does (`vabi::ClockInfo`).
+/// [`op::CLOCK`]: how Veda's clocks follow the processor's clock counter,
+/// which the guest reads as Veda does (`vabi::ClockInfo`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Clock {

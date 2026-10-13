@@ -8,8 +8,9 @@ that communicate over kernel channels.
 
 ## Boot
 
-1. OVMF loads `\EFI\BOOT\BOOTX64.EFI` (`boot/`, the `vboot` loader) from the
-   FAT32 EFI system partition built by `cargo xtask build`.
+1. The firmware (OVMF under QEMU) loads the loader (`boot/`, `vboot`) from
+   UEFI's boot path for the architecture (`\EFI\BOOT\BOOTX64.EFI` on
+   AMD64) on the FAT32 EFI system partition built by `cargo xtask build`.
 2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
    GOP graphics mode (about `BOOT.CFG`'s size, and of the display's own
    shape where the firmware gives the display's EDID: 1920x1200 rather
@@ -29,8 +30,9 @@ that communicate over kernel channels.
    firmware's MTRRs cannot overrule), and the screen is black at once.
    The kernel logs how it went (`boot: the loader cleared the screen in
    ...`).
-3. The kernel initialises memory, ACPI, APICs, timers and the other CPUs, then
-   starts `bin/init.exe` from the initrd (the only program it loads itself).
+3. The kernel initialises memory, ACPI, the interrupt controllers, timers
+   and the other CPUs, then starts `bin/init.exe` from the initrd (the only
+   program it loads itself).
 4. `init` starts the system services and the desktop shell, then supervises
    them: the window system, the shell, audio, the network and Wi-Fi services
    and the agent are restarted if they crash (at most three times a
@@ -88,14 +90,13 @@ logs there (`logkeeper`, see [DRIVERVM.md](DRIVERVM.md)).
 
 | Module | Responsibility |
 |--------|----------------|
-| `arch` | GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, SMP bring-up, TLB shootdowns |
+| `arch` | the processor architecture and its platform, behind one interface (`kernel/src/arch.rs`, which lists it): implemented in `kernel/arch/<architecture>/`, on AMD64 the GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, the TSC, HPET and PIT, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory) |
 | `mm` | frame allocator, page tables, kernel heap, kernel stacks/MMIO windows, VMOs, address spaces, user copies |
 | `sched` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
 | `object` | handles, signals, processes, channels, sockets, events, interrupts, I/O ports, resources |
 | `syscall` | the system call layer (see `lib/abi`) |
-| `hv` | the hypervisor: VMX and EPT, guests and their virtual processors (see [the driver VM](DRIVERVM.md)) |
-| `iommu` | Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory |
-| `acpi`, `time`, `futex`, `loader`, `log`, `panic` | supporting subsystems |
+| `hv` | the hypervisor: guests and their virtual processors (see [the driver VM](DRIVERVM.md)), on the architecture's virtualization (`arch::hv`) |
+| `acpi`, `time`, `percpu`, `futex`, `loader`, `log`, `panic` | supporting subsystems |
 
 **Concurrency.** The kernel runs with interrupts disabled and holds a big
 kernel lock (BKL) whenever it touches shared state, so kernel code is
@@ -138,8 +139,9 @@ promises for pipes), half-closing to end a stream, and endpoints that can
 be duplicated, so several processes can share one. Threads wait on signals
 of several objects at once (`object_wait_many`).
 
-**Time.** The monotonic clock comes from the TSC, calibrated against the
-HPET (or the PIT without one). On an Intel processor not under a
+**Time.** The monotonic clock counts the processors' clock counter
+(`arch::clock`). On AMD64 that is the TSC, calibrated against the HPET
+(or the PIT without one). On an Intel processor not under a
 hypervisor, the TSC frequency the processor reports itself (CPUID leaves
 0x15 and 0x16, as Linux reads them) wins over a timer that measures more
 than 5% off it; `dmesg time` says which was used. The clock and every
@@ -163,7 +165,8 @@ without them it would stay at whatever speed the firmware left it at.
 
 **Scheduling.** 32 priorities, round-robin within a priority, 10 ms slices,
 preemption on wake-up of a higher-priority thread, tickless one-shot timers,
-eager FPU/SSE/AVX state switching with XSAVE. A thread can name an *exit
+eager switching of the FPU's and vector registers' state (with XSAVE on
+AMD64). A thread can name an *exit
 futex*: a word the kernel clears, and wakes a waiter on, once the thread
 has ended and left its stack, which is how thread libraries join threads.
 
@@ -869,7 +872,34 @@ policy, the wake word) are in `vagent`, tested on the host. See
 
 `cargo xtask test --ui` runs all three.
 
+## Architectures
+
+Veda runs on AMD64 (x86-64). What depends on the architecture, or on the
+platform that comes with it, is in each component's `arch/<architecture>/`
+directory, which the rest of the component reaches through its `arch`
+module ([CODING.md](CODING.md) has the rules). On AMD64:
+
+| Component | What is AMD64's (`arch/amd64/`) |
+|-----------|---------------------------------|
+| `boot/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
+| `kernel/` | see `arch` above |
+| `lib/bootinfo` | the address space the loader hands over, and how the kernel is entered |
+| `lib/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
+| `lib/rt` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |
+| `lib/posix` | Linux's system call numbers and the calls only x86-64 has, the thread pointer |
+| `lib/pe`, `lib/elf` | the executables' machine type (on every host, for the tools) |
+| `lib/build` | the user programs' target and image base |
+| `lib/hv`, `lib/iommu` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
+| `services/devmgr`, `services/drivervm`, `services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
+| `guest/sys` | the driver VM's Linux system call numbers |
+| `tests/systest`, `tests/c`, `tests/ui` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
+| `xtask/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
+| `.cargo/`, `ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
+
 ## Repository layout
+
+Components with code particular to an architecture keep it in
+`arch/<architecture>/`, beside `src/` (see Architectures above).
 
 | Path | Contents |
 |------|----------|
@@ -886,7 +916,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
-| `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
+| `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI; the architecture's virtual devices and boot protocol (on AMD64 the local APIC, `cpuid`, Linux's boot protocol) and its IOMMU's tables and structures (VT-d's) |
 | `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `lib/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |

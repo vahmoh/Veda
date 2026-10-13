@@ -707,13 +707,15 @@ unsafe impl Send for DumbMap {}
 
 impl DumbMap {
     fn new(fd: RawFd, offset: u64, len: usize) -> io::Result<DumbMap> {
-        const SYS_MMAP: usize = 9;
         const PROT_READ_WRITE: usize = 3;
         const MAP_SHARED: usize = 1;
         // SAFETY: a new shared mapping of the card's file at the offset its
         // driver gave for the buffer.
         let ptr = unsafe {
-            guest_sys::syscall6(SYS_MMAP, [0, len, PROT_READ_WRITE, MAP_SHARED, fd as usize, offset as usize])?
+            guest_sys::syscall6(
+                guest_sys::nr::MMAP,
+                [0, len, PROT_READ_WRITE, MAP_SHARED, fd as usize, offset as usize],
+            )?
         };
         Ok(DumbMap { ptr: ptr as *mut u8, len })
     }
@@ -734,8 +736,7 @@ impl DumbMap {
 
 impl Drop for DumbMap {
     fn drop(&mut self) {
-        const SYS_MUNMAP: usize = 11;
         // SAFETY: the mapping made in `new`, no longer used.
-        let _ = unsafe { guest_sys::syscall(SYS_MUNMAP, [self.ptr as usize, self.len, 0, 0, 0]) };
+        let _ = unsafe { guest_sys::syscall(guest_sys::nr::MUNMAP, [self.ptr as usize, self.len, 0, 0, 0]) };
     }
 }

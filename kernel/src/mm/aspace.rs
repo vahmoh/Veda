@@ -42,6 +42,12 @@ impl Perms {
     pub fn none(self) -> bool {
         !self.read && !self.write && !self.exec
     }
+
+    /// What the page tables grant for these permissions: the hardware may
+    /// allow more than asked (`arch::paging::effective`).
+    pub fn effective(self) -> Perms {
+        crate::arch::paging::effective(self)
+    }
 }
 
 /// The end of `[addr, addr+len)` with `len` rounded up to whole pages (both
@@ -83,13 +89,14 @@ impl Mapping {
 }
 
 pub struct AddressSpace {
-    pml4: u64,
+    /// The page tables' root.
+    root: u64,
     mappings: SpinLock<BTreeMap<u64, Mapping>>,
 }
 
 impl AddressSpace {
     pub fn new() -> Option<Arc<AddressSpace>> {
-        Some(Arc::new(AddressSpace { pml4: paging::new_user_pml4()?, mappings: SpinLock::new(BTreeMap::new()) }))
+        Some(Arc::new(AddressSpace { root: paging::new_user_root()?, mappings: SpinLock::new(BTreeMap::new()) }))
     }
 
     /// Finds a free, page-aligned range of `len` bytes at or above `hint`
@@ -188,11 +195,11 @@ impl AddressSpace {
                 let mapped = m
                     .vmo
                     .page(m.vmo_offset + off, true)
-                    .is_some_and(|frame| paging::map(self.pml4, m.start + off, frame, m.pte_flags(), true).is_ok());
+                    .is_some_and(|frame| paging::map(self.root, m.start + off, frame, m.pte_flags(), true).is_ok());
                 if !mapped {
                     // No page table entry may outlive the failed mapping.
                     for va in (m.start..m.start + off).step_by(PAGE_SIZE as usize) {
-                        paging::unmap(self.pml4, va);
+                        paging::unmap(self.root, va);
                     }
                     drop(map);
                     crate::arch::tlb::shootdown(m.start, off);
@@ -223,7 +230,7 @@ impl AddressSpace {
             let cut_start = m.start.max(addr);
             let cut_end = m.end().min(end);
             for va in (cut_start..cut_end).step_by(PAGE_SIZE as usize) {
-                paging::unmap(self.pml4, va);
+                paging::unmap(self.root, va);
             }
             if m.private {
                 freed.append(m.vmo.decommit(m.vmo_offset + (cut_start - m.start), cut_end - cut_start));
@@ -266,7 +273,7 @@ impl AddressSpace {
             let from = m.start.max(addr);
             let to = m.end().min(end);
             for va in (from..to).step_by(PAGE_SIZE as usize) {
-                paging::unmap(self.pml4, va);
+                paging::unmap(self.root, va);
             }
             freed.append(m.vmo.decommit(m.vmo_offset + (from - m.start), to - from));
         }
@@ -334,9 +341,9 @@ impl AddressSpace {
             for va in (m.start..m.end()).step_by(PAGE_SIZE as usize) {
                 if perms.none() {
                     // Faults on the page are refused from now on.
-                    paging::unmap(self.pml4, va);
+                    paging::unmap(self.root, va);
                 } else {
-                    paging::protect(self.pml4, va, flags);
+                    paging::protect(self.root, va, flags);
                 }
             }
         }
@@ -349,14 +356,15 @@ impl AddressSpace {
     pub fn handle_fault(&self, addr: u64, write: bool, exec: bool) -> bool {
         let map = self.mappings.lock();
         let Some((_, m)) = map.range(..=addr).next_back() else { return false };
-        // The hardware cannot make pages writable or executable but not
-        // readable, so any access at all lets them be read.
-        if addr >= m.end() || m.perms.none() || (write && !m.perms.write) || (exec && !m.perms.exec) {
+        // The access the page tables would allow once the page is mapped.
+        let granted = m.perms.effective();
+        let allowed = if write || exec { (!write || granted.write) && (!exec || granted.exec) } else { granted.read };
+        if addr >= m.end() || !allowed {
             return false;
         }
         let va = page_align_down(addr);
         let Some(frame) = m.vmo.page(m.vmo_offset + (va - m.start), true) else { return false };
-        paging::map(self.pml4, va, frame, m.pte_flags(), true).is_ok()
+        paging::map(self.root, va, frame, m.pte_flags(), true).is_ok()
     }
 
     /// Ensures every page of `[addr, addr+len)` is mapped with the required
@@ -371,8 +379,8 @@ impl AddressSpace {
         }
         let mut va = page_align_down(addr);
         while va < end {
-            let ok = match paging::translate(self.pml4, va) {
-                Some((_, pte)) => pte & paging::USER != 0 && (!write || pte & paging::WRITABLE != 0),
+            let ok = match paging::translate(self.root, va) {
+                Some((_, flags)) => flags.user && (!write || flags.writable),
                 None => false,
             };
             if !ok && !self.handle_fault(va, write, false) {
@@ -401,11 +409,7 @@ impl AddressSpace {
 
     /// Loads this address space on the current CPU.
     pub fn activate(&self) {
-        if crate::arch::cpu::read_cr3() != self.pml4 {
-            // SAFETY: the PML4 shares the kernel half, so the kernel keeps
-            // running after the switch.
-            unsafe { crate::arch::cpu::write_cr3(self.pml4) };
-        }
+        paging::activate(self.root);
     }
 }
 
@@ -414,6 +418,6 @@ impl Drop for AddressSpace {
         // Mappings (and their VMO references) are dropped with the map; the
         // frames belong to the VMOs. Only the page tables are ours.
         self.mappings.lock().clear();
-        paging::free_user_pml4(self.pml4);
+        paging::free_user_root(self.root);
     }
 }

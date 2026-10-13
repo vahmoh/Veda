@@ -36,72 +36,6 @@
  *-*-fuchsia*)
    native_system_header_dir=/include
    tmake_file="t-fuchsia"
-@@ -2373,6 +2381,9 @@
- 			;;
- 	esac
- 	;;
-+x86_64-*-veda*)
-+	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/x86-64.h veda.h i386/veda.h"
-+	;;
- x86_64-*-fuchsia*)
- 	tmake_file="${tmake_file} i386/t-x86_64-elf"
- 	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h newlib-stdint.h i386/i386elf.h i386/x86-64.h fuchsia.h"
---- /dev/null
-+++ b/gcc/config/i386/veda.h
-@@ -0,0 +1,53 @@
-+/* Definitions for x86-64 Veda.
-+   Copyright (C) 2026 Free Software Foundation, Inc.
-+
-+This file is part of GCC.
-+
-+GCC is free software; you can redistribute it and/or modify
-+it under the terms of the GNU General Public License as published by
-+the Free Software Foundation; either version 3, or (at your option)
-+any later version.
-+
-+GCC is distributed in the hope that it will be useful,
-+but WITHOUT ANY WARRANTY; without even the implied warranty of
-+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+GNU General Public License for more details.
-+
-+You should have received a copy of the GNU General Public License
-+along with GCC; see the file COPYING3.  If not see
-+<http://www.gnu.org/licenses/>.  */
-+
-+/* The System V x86-64 ABI, LP64, as on GNU/Linux.  */
-+
-+#undef  ASM_SPEC
-+#define ASM_SPEC "--64 %{msse2avx:%{!mavx:-msse2avx}}"
-+
-+#undef  CC1_SPEC
-+#define CC1_SPEC "%(cc1_cpu)"
-+
-+/* The thread pointer (%fs) points at the thread control block, which
-+   begins with itself.  */
-+#undef  TARGET_TLS_DIRECT_SEG_REFS_DEFAULT
-+#define TARGET_TLS_DIRECT_SEG_REFS_DEFAULT MASK_TLS_DIRECT_SEG_REFS
-+
-+#ifdef TARGET_LIBC_PROVIDES_SSP
-+/* musl keeps the stack protector's canary where glibc does.  */
-+#define TARGET_THREAD_SSP_OFFSET 0x28
-+#endif
-+
-+/* -ffast-math sets the flush-to-zero and denormals-are-zero modes.  */
-+#undef  ENDFILE_SPEC
-+#define ENDFILE_SPEC \
-+  "%{mdaz-ftz:crtfastmath.o%s;Ofast|ffast-math|funsafe-math-optimizations:%{!mno-daz-ftz:crtfastmath.o%s}} \
-+   %{mpc32:crtprec32.o%s} %{mpc64:crtprec64.o%s} %{mpc80:crtprec80.o%s} " \
-+  VEDA_ENDFILE_SPEC
-+
-+#define TARGET_ASM_FILE_END file_end_indicate_exec_stack
-+
-+/* The stack pointer needs to be moved while checking the stack.  */
-+#define STACK_CHECK_MOVING_SP 1
-+
-+/* Static stack checking is supported by means of probes.  */
-+#define STACK_CHECK_STATIC_BUILTIN 1
-+
-+#define MULTILIB_DEFAULTS { "m64" }
 --- /dev/null
 +++ b/gcc/config/veda.h
 @@ -0,0 +1,98 @@
@@ -263,18 +197,6 @@
  *-*-linux* | frv-*-*linux* | *-*-kfreebsd*-gnu | *-*-gnu* | *-*-kopensolaris*-gnu | *-*-uclinuxfdpiceabi)
    tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver t-linux"
    extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
-@@ -757,6 +762,11 @@
- x86_64-*-fuchsia*)
- 	tmake_file="$tmake_file t-libgcc-pic"
- 	;;
-+x86_64-*-veda*)
-+	extra_parts="$extra_parts crtprec32.o crtprec64.o crtprec80.o crtfastmath.o"
-+	tmake_file="${tmake_file} i386/t-crtpc t-crtfm i386/t-crtstuff t-dfprules"
-+	tm_file="${tm_file} i386/elf-lib.h"
-+	;;
- i[34567]86-*-dragonfly*)
- 	tmake_file="${tmake_file} i386/t-dragonfly i386/t-crtstuff"
- 	md_unwind_header=i386/dragonfly-unwind.h
 --- a/libstdc++-v3/configure
 +++ b/libstdc++-v3/configure
 @@ -39204,7 +39204,7 @@

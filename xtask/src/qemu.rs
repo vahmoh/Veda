@@ -1,62 +1,53 @@
-//! Locating QEMU and the OVMF firmware, and assembling the command line.
+//! Locating QEMU and its UEFI firmware, and assembling the command line.
+//! The machine is the architecture's (`arch::qemu`): its emulator, its
+//! firmware, and the arguments and devices particular to it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::arch;
 use crate::util::{self, Result};
 
 /// Where to find QEMU and its UEFI firmware.
 pub struct QemuInstall {
     pub binary: PathBuf,
-    pub ovmf_code: PathBuf,
-    pub ovmf_vars_template: PathBuf,
-    /// The firmware's IGVM parameter area (its start and size), if it has
-    /// one: see [`igvm_params`].
-    pub igvm_params: Option<(u64, u64)>,
+    pub firmware_code: PathBuf,
+    pub firmware_vars_template: PathBuf,
+    /// Memory the firmware needs blank at every reset (its start and size),
+    /// if any: see `arch::qemu::blank_at_reset`.
+    pub blank_at_reset: Option<(u64, u64)>,
 }
 
 impl QemuInstall {
-    /// Finds QEMU via `$QEMU` or `PATH`, and the OVMF firmware via
-    /// `$OVMF_CODE`/`$OVMF_VARS`, QEMU's data directory or where Linux
+    /// Finds QEMU via `$QEMU` or `PATH`, and its UEFI firmware (EDK II's)
+    /// via `$OVMF_CODE`/`$OVMF_VARS`, QEMU's data directory or where Linux
     /// distributions install it.
     pub fn locate() -> Result<Self> {
         let binary = std::env::var_os("QEMU")
             .map(PathBuf::from)
-            .or_else(|| util::find_on_path("qemu-system-x86_64"))
+            .or_else(|| util::find_on_path(arch::qemu::BINARY))
             .ok_or("QEMU not found: install it or set the QEMU environment variable")?;
 
         let qemu_dir = binary.parent().unwrap_or(Path::new("."));
-        let dirs = [
-            qemu_dir.join("share"),
-            qemu_dir.join("../share/qemu"),
-            PathBuf::from("/usr/share/qemu"),
-            PathBuf::from("/usr/share/OVMF"),
-            PathBuf::from("/usr/share/edk2/ovmf"),
-            PathBuf::from("/usr/share/edk2/x64"),
-        ];
-        // The firmware and its variable store, as QEMU's own builds name
-        // them and as Linux distributions do (Debian and Ubuntu, Fedora,
-        // Arch): both from one place, as their sizes must match.
-        let pairs = [
-            ("edk2-x86_64-code.fd", "edk2-i386-vars.fd"),
-            ("OVMF_CODE.fd", "OVMF_VARS.fd"),
-            ("OVMF_CODE_4M.fd", "OVMF_VARS_4M.fd"),
-            ("OVMF_CODE.4m.fd", "OVMF_VARS.4m.fd"),
-        ];
+        let dirs = [qemu_dir.join("share"), qemu_dir.join("../share/qemu"), PathBuf::from("/usr/share/qemu")]
+            .into_iter()
+            .chain(arch::qemu::FIRMWARE_DIRS.iter().map(PathBuf::from));
         let found = dirs
-            .iter()
-            .flat_map(|d| pairs.iter().map(move |(code, vars)| (d.join(code), d.join(vars))))
+            .flat_map(|d| arch::qemu::FIRMWARE_FILES.iter().map(move |(code, vars)| (d.join(code), d.join(vars))))
             .find(|(code, vars)| code.is_file() && vars.is_file());
-        let missing = "the OVMF firmware was not found: install it (the ovmf or edk2-ovmf package) or set \
-                       OVMF_CODE and OVMF_VARS";
-        let ovmf_code = std::env::var_os("OVMF_CODE")
+        let missing = format!(
+            "the UEFI firmware was not found: install it ({}) or set OVMF_CODE and OVMF_VARS",
+            arch::qemu::FIRMWARE_PACKAGES
+        );
+        let firmware_code = std::env::var_os("OVMF_CODE")
             .map(PathBuf::from)
             .or_else(|| found.as_ref().map(|(code, _)| code.clone()))
-            .ok_or(missing)?;
-        let ovmf_vars_template =
+            .ok_or(&missing)?;
+        let firmware_vars_template =
             std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
-        let code = std::fs::read(&ovmf_code).map_err(|e| format!("reading {}: {e}", ovmf_code.display()))?;
-        Ok(QemuInstall { binary, ovmf_code, ovmf_vars_template, igvm_params: igvm_params(&code) })
+        let code = std::fs::read(&firmware_code).map_err(|e| format!("reading {}: {e}", firmware_code.display()))?;
+        let blank_at_reset = arch::qemu::blank_at_reset(&code);
+        Ok(QemuInstall { binary, firmware_code, firmware_vars_template, blank_at_reset })
     }
 
     /// Whether this QEMU has the 3D virtio-gpu (built with virglrenderer):
@@ -70,44 +61,6 @@ impl QemuInstall {
                 .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("\"virtio-gpu-gl-pci\""))
         })
     }
-}
-
-/// The IGVM parameter area of an OVMF image, its start and size, from the
-/// IGVM descriptor its reset vector carries (`OvmfPkg/ResetVector/X64/
-/// IgvmMetadata.asm`): `IGVM`, its length, version 1 and the number of its
-/// sections, then the sections, each a start (or offset), a size and an id,
-/// the parameter area's 0x100.
-///
-/// OVMF reads the area at every boot for the number of processors and a
-/// memory map that a VM started from an IGVM file is given there, without
-/// telling whether this boot is one: a count it finds is taken as the
-/// machine's. Before edk2's e4f99a8554 (December 2025) it also leaves the
-/// area to the operating system as ordinary memory, which QEMU's resets
-/// keep. So whatever Veda left there can pass for a processor count after a
-/// reset (a program's PE header has its system version, 6, there), and the
-/// firmware then waits for ever for processors that do not exist.
-/// [`command`] blanks the area at every reset, as it is at power-on.
-fn igvm_params(code: &[u8]) -> Option<(u64, u64)> {
-    const PARAM_AREA: u32 = 0x100;
-    let word = |at: usize| code.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-    let mut from = 0;
-    while let Some(at) = code[from..].windows(4).position(|w| w == b"IGVM").map(|i| from + i) {
-        from = at + 4;
-        let (Some(length), Some(1), Some(sections)) = (word(at + 4), word(at + 8), word(at + 12)) else {
-            continue;
-        };
-        if sections > 16 || length != 16 + 12 * sections {
-            continue;
-        }
-        for section in (0..sections as usize).map(|i| at + 16 + 12 * i) {
-            if let (Some(start), Some(size), Some(PARAM_AREA)) = (word(section), word(section + 4), word(section + 8))
-                && size > 0
-            {
-                return Some((start as u64, size as u64));
-            }
-        }
-    }
-    None
 }
 
 /// How the virtual machine reaches the network.
@@ -193,7 +146,7 @@ impl DiskBus {
 /// The keyboard and pointing devices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputDevices {
-    /// A PS/2 keyboard and the virtio tablet.
+    /// The machine's own keyboard (a PC's is PS/2's) and the virtio tablet.
     Standard,
     /// USB devices on the xHCI controller, as most PCs have: a keyboard and
     /// a tablet behind a hub, and a mouse.
@@ -260,7 +213,8 @@ pub struct VmConfig {
     /// The display's own size: the screen's.
     pub screen: Screen,
     pub audio: bool,
-    /// The sound card: `virtio` (the default) or `hda` (Intel HD Audio).
+    /// The sound card: `virtio` (the default) or `hda` (Intel HD Audio, the
+    /// machine's controller).
     pub sound: String,
     /// Record guest audio to this WAV file instead of playing it.
     pub audio_wav: Option<PathBuf>,
@@ -302,8 +256,8 @@ pub struct VmConfig {
     /// A display that is also a 3D GPU (virtio-gpu with virgl): `None` uses
     /// one if QEMU has it.
     pub gpu: Option<bool>,
-    /// An IOMMU (QEMU's intel-iommu, remapping interrupts), as PCs have:
-    /// the driver VM's devices need it.
+    /// An IOMMU, remapping interrupts, as PCs have (the machine's: see
+    /// `arch::qemu::machine_args`): the driver VM's devices need it.
     pub iommu: bool,
     /// QEMU's USB network adapter (`usb-net`: CDC Ethernet, which Veda has
     /// no driver for) on the xHCI controller, on a NAT of its own.
@@ -380,36 +334,23 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         )
     };
     cmd.args(["-name", "Veda"]);
-    // With USB input there is no PS/2 controller, as on many PCs: keys can
-    // only come through USB.
-    let mut machine = String::from("q35");
-    if cfg.input == InputDevices::Usb {
-        machine.push_str(",i8042=off");
-    }
-    // Interrupt remapping needs the I/O APIC in QEMU, not in KVM.
-    if cfg.iommu {
-        machine.push_str(",kernel-irqchip=split");
-    }
-    cmd.args(["-machine", &machine]);
+    // The machine, with its own keyboard unless input is USB's; its IOMMU,
+    // before the devices it translates; and its processors.
+    cmd.args(arch::qemu::machine_args(cfg.input == InputDevices::Standard, cfg.iommu));
     for t in &cfg.acpi_tables {
         cmd.args(["-acpitable", &format!("file={}", t.display())]);
-    }
-    // The IOMMU comes before the devices it translates.
-    if cfg.iommu {
-        cmd.args(["-device", "intel-iommu,intremap=on,eim=on"]);
     }
     // KVM when the host offers it; otherwise the TCG emulator
     // (multi-threaded, one host thread per vCPU).
     cmd.args(["-accel", "kvm", "-accel", "tcg,thread=multi"]);
-    cmd.args(["-cpu", "max"]);
     cmd.args(["-smp", &cfg.cpus.to_string()]);
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
-    cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
+    cmd.args(["-drive", &flash(&install.firmware_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
-    // The firmware's IGVM parameter area blank at every reset, from a file
-    // of zeros QEMU's loader writes there (see `igvm_params`).
-    if let Some((start, size)) = install.igvm_params {
-        let blank = util::out_dir().join("ovmf-igvm-params.bin");
+    // What the firmware needs blank at every reset, from a file of zeros
+    // QEMU's loader writes there (see `arch::qemu::blank_at_reset`).
+    if let Some((start, size)) = install.blank_at_reset {
+        let blank = util::out_dir().join("firmware-blank.bin");
         if std::fs::metadata(&blank).map(|m| m.len()).ok() != Some(size) {
             std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
             std::fs::write(&blank, vec![0u8; size as usize]).map_err(|e| format!("{}: {e}", blank.display()))?;
@@ -459,12 +400,16 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-device", "usb-storage,bus=xhci.0,drive=disk0,bootindex=0,removable=on"]);
     } else {
         cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
-        // q35's built-in AHCI controller has six ports, ide.0 to ide.5.
+        // On the machine's AHCI controller, the boot disk on its first
+        // port and the home disk on its second.
         match cfg.disk_bus {
             DiskBus::Virtio => {
                 cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot")])
             }
-            DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=veda-boot"]),
+            DiskBus::Ahci => cmd.args([
+                "-device",
+                &format!("ide-hd,bus={},drive=disk0,bootindex=0,serial=veda-boot", arch::qemu::ahci_port(0)),
+            ]),
             DiskBus::Nvme => cmd.args(["-device", "nvme,drive=disk0,bootindex=0,serial=veda-boot"]),
         };
     }
@@ -472,7 +417,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
         match cfg.disk_bus {
             DiskBus::Virtio => cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=home,serial=veda-home")]),
-            DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=veda-home"]),
+            DiskBus::Ahci => {
+                cmd.args(["-device", &format!("ide-hd,bus={},drive=home,serial=veda-home", arch::qemu::ahci_port(1))])
+            }
             DiskBus::Nvme => cmd.args(["-device", "nvme,drive=home,serial=veda-home"]),
         };
     }
@@ -504,11 +451,11 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // runs (WAV) have none, so a test microphone can take its place.
         let streams = if cfg.audio_wav.is_some() { 1 } else { 2 };
         match cfg.sound.as_str() {
-            // The ICH9's HD Audio controller with a codec that has a line
-            // output and, with the host's sound system, a line input.
+            // The machine's HD Audio controller with a codec that has a
+            // line output and, with the host's sound system, a line input.
             "hda" => {
                 let codec = if streams == 2 { "hda-duplex" } else { "hda-output" };
-                cmd.args(["-device", "ich9-intel-hda,id=hda"]);
+                cmd.args(["-device", &format!("{},id=hda", arch::qemu::HDA_CONTROLLER)]);
                 cmd.args(["-device", &format!("{codec},bus=hda.0,audiodev=audio0")])
             }
             _ => cmd.args(["-device", &virtio(cfg, &format!("virtio-sound-pci,audiodev=audio0,streams={streams}"))]),
@@ -561,7 +508,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-qmp", &format!("unix:{},server=on,wait=off", path.display())]);
     }
     if cfg.debug_exit {
-        cmd.args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]);
+        cmd.args(["-device", arch::qemu::DEBUG_EXIT]);
     }
     if cfg.gdb {
         cmd.args(["-s", "-S"]);
@@ -637,7 +584,7 @@ pub fn wifi_args(cfg: &VmConfig, p: &WifiSockets) -> Vec<String> {
 /// (every run starts with the same), with `variables` added.
 pub fn script_vars_file(install: &QemuInstall, variables: &[crate::ovmfvars::Variable]) -> Result<PathBuf> {
     let path = util::out_dir().join("script-vars.fd");
-    let template = &install.ovmf_vars_template;
+    let template = &install.firmware_vars_template;
     let mut image = std::fs::read(template).map_err(|e| format!("reading {}: {e}", template.display()))?;
     if !variables.is_empty() {
         crate::ovmfvars::add(&mut image, variables).map_err(|e| format!("{}: {e}", template.display()))?;
@@ -653,8 +600,8 @@ pub fn vars_file(install: &QemuInstall) -> Result<PathBuf> {
     let path = util::out_dir().join("ovmf-vars.fd");
     if !path.exists() {
         std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
-        std::fs::copy(&install.ovmf_vars_template, &path)
-            .map_err(|e| format!("copying {}: {e}", install.ovmf_vars_template.display()))?;
+        std::fs::copy(&install.firmware_vars_template, &path)
+            .map_err(|e| format!("copying {}: {e}", install.firmware_vars_template.display()))?;
     }
     Ok(path)
 }
@@ -662,35 +609,6 @@ pub fn vars_file(install: &QemuInstall) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// An IGVM descriptor as OVMF's reset vector carries it, with `sections`
-    /// (start or offset, size, id), amid other bytes.
-    fn descriptor(sections: &[(u32, u32, u32)], version: u32) -> Vec<u8> {
-        let mut image = b"..IGVM?..".to_vec();
-        image.extend(b"IGVM");
-        for v in [16 + 12 * sections.len() as u32, version, sections.len() as u32] {
-            image.extend(v.to_le_bytes());
-        }
-        for &(a, b, c) in sections {
-            image.extend([a, b, c].iter().flat_map(|v| v.to_le_bytes()));
-        }
-        image.extend(b"more");
-        image
-    }
-
-    #[test]
-    fn the_igvm_parameter_area_is_found() {
-        // As Ubuntu's OVMF 2025.11 has it: the area, its memory map and its
-        // processor count, then the HOB area.
-        let ovmf =
-            descriptor(&[(0x812000, 0x1000, 0x100), (0, 0xc0, 0x101), (0xc0, 16, 0x102), (0x813000, 0x1000, 0x200)], 1);
-        assert_eq!(igvm_params(&ovmf), Some((0x812000, 0x1000)));
-        // Without one (an older OVMF, or a build without the area), or of
-        // another version: nothing to blank.
-        assert_eq!(igvm_params(&descriptor(&[(0x813000, 0x1000, 0x200)], 1)), None);
-        assert_eq!(igvm_params(&descriptor(&[(0x812000, 0x1000, 0x100)], 2)), None);
-        assert_eq!(igvm_params(b"no descriptor here"), None);
-    }
 
     #[test]
     fn screens_are_what_qemu_can_present() {

@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::error::SysResult;
 use crate::fd::{self, Object};
 use crate::linux::errno::*;
-use crate::linux::{Timespec, Timeval, at, clock, nr, o};
+use crate::linux::{Timespec, clock, nr};
 use crate::{fs, io, mem, process, signal, socket, system, thread, time, user, vfs};
 
 /// Deadline (monotonic ns) of a relative timeout, `None` for none.
@@ -16,19 +16,6 @@ unsafe fn deadline_ts(ts: usize) -> Result<Option<u64>, isize> {
     // SAFETY: the program passed a timespec.
     let t: Timespec = unsafe { user::read(ts)? };
     Ok(Some(time::monotonic_ns().saturating_add(t.to_ns().ok_or(EINVAL)?)))
-}
-
-unsafe fn deadline_tv(tv: usize) -> Result<Option<u64>, isize> {
-    if tv == 0 {
-        return Ok(None);
-    }
-    // SAFETY: the program passed a timeval.
-    let t: Timeval = unsafe { user::read(tv)? };
-    if t.sec < 0 || !(0..1_000_000).contains(&t.usec) {
-        return Err(EINVAL);
-    }
-    let ns = (t.sec as u64).saturating_mul(1_000_000_000).saturating_add(t.usec as u64 * 1000);
-    Ok(Some(time::monotonic_ns().saturating_add(ns)))
 }
 
 /// `fallocate` with mode 0: makes sure the file is at least
@@ -63,11 +50,17 @@ fn unsupported(n: usize) -> SysResult {
     Err(ENOSYS)
 }
 
-/// Runs Linux system call `n`.
+/// Runs Linux system call `n`: one the architecture has of its own
+/// (`arch::syscall`), or one of the calls of Linux's generic ABI, which
+/// every architecture has.
 ///
 /// # Safety
 /// The arguments are the program's: pointers must be valid for the call.
 pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
+    // SAFETY: forwarded to the caller.
+    if let Some(result) = unsafe { crate::arch::syscall::dispatch(n, a) } {
+        return result;
+    }
     let fd0 = a[0] as i32;
     // SAFETY (whole match): the arguments are passed on as the program gave
     // them, each call documenting what it requires of them.
@@ -75,21 +68,11 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         match n {
             nr::READ => io::read(fd0, a[1], a[2]),
             nr::WRITE => io::write(fd0, a[1], a[2]),
-            nr::OPEN => fs::openat(at::FDCWD, a[0], a[1] as u32),
-            nr::CREAT => fs::openat(at::FDCWD, a[0], o::CREAT | o::WRONLY | o::TRUNC),
             nr::OPENAT => fs::openat(fd0, a[1], a[2] as u32),
             nr::CLOSE => io::close(fd0),
-            nr::STAT => fs::fstatat(at::FDCWD, a[0], a[1], 0),
-            nr::LSTAT => fs::fstatat(at::FDCWD, a[0], a[1], at::SYMLINK_NOFOLLOW),
             nr::FSTAT => fs::fstat(fd0, a[1]),
             nr::NEWFSTATAT => fs::fstatat(fd0, a[1], a[2], a[3] as u32),
-            nr::POLL => {
-                let ms = a[2] as i32;
-                let deadline = (ms >= 0).then(|| time::monotonic_ns().saturating_add(ms as u64 * 1_000_000));
-                io::poll(a[0], a[1], deadline)
-            }
             nr::PPOLL => io::poll(a[0], a[1], deadline_ts(a[2])?),
-            nr::SELECT => io::select(fd0, a[1], a[2], a[3], deadline_tv(a[4])?),
             nr::PSELECT6 => io::select(fd0, a[1], a[2], a[3], deadline_ts(a[4])?),
             nr::LSEEK => io::lseek(fd0, a[1] as i64, a[2] as u32),
             nr::MMAP => mem::mmap(a[0], a[1], a[2] as u32, a[3] as u32, a[4] as i32, a[5] as i64),
@@ -113,9 +96,7 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::WRITEV => io::writev(fd0, a[1], a[2], None),
             nr::PREADV => io::readv(fd0, a[1], a[2], Some(a[3] as i64)),
             nr::PWRITEV => io::writev(fd0, a[1], a[2], Some(a[3] as i64)),
-            nr::ACCESS => fs::faccessat(at::FDCWD, a[0], a[1] as u32),
             nr::FACCESSAT | nr::FACCESSAT2 => fs::faccessat(fd0, a[1], a[2] as u32),
-            nr::PIPE => io::pipe2(a[0], 0),
             nr::PIPE2 => io::pipe2(a[0], a[1] as u32),
             nr::SOCKETPAIR => socket::socketpair(a[0], a[1], a[3]),
             nr::SOCKET => Err(EAFNOSUPPORT),
@@ -129,15 +110,11 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
                 Ok(0)
             }
             nr::DUP => io::dup(fd0),
-            nr::DUP2 => io::dup3(fd0, a[1] as i32, 0, true),
             nr::DUP3 => io::dup3(fd0, a[1] as i32, a[2] as u32, false),
             nr::CLOSE_RANGE => io::close_range(a[0] as u32, a[1] as u32, a[2] as u32),
-            nr::PAUSE => signal::pause_forever(),
             nr::NANOSLEEP => time::clock_nanosleep(clock::MONOTONIC, 0, a[0]),
             nr::CLOCK_NANOSLEEP => time::clock_nanosleep(a[0] as u32, a[1] as u32, a[2]),
-            nr::GETPID | nr::GETTID | nr::GETPGRP | nr::GETPGID | nr::GETSID | nr::SETSID => {
-                Ok(process::pid() as usize)
-            }
+            nr::GETPID | nr::GETTID | nr::GETPGID | nr::GETSID | nr::SETSID => Ok(process::pid() as usize),
             nr::GETPPID => Ok(process::ppid() as usize),
             nr::SETPGID => Ok(0),
             nr::GETUID | nr::GETEUID | nr::GETGID | nr::GETEGID => Ok(vfs::UID as usize),
@@ -159,7 +136,7 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::SETGROUPS => Err(EPERM),
             // Processes are made from program images (posix_spawn), not
             // by copying this one.
-            nr::CLONE | nr::FORK | nr::VFORK | nr::EXECVE => Err(ENOSYS),
+            nr::CLONE | nr::EXECVE => Err(ENOSYS),
             nr::EXIT => thread::exit_thread(),
             nr::EXIT_GROUP => process::exit(a[0] as i32),
             nr::WAIT4 => process::wait4(fd0, a[1], a[2] as u32, a[3]),
@@ -181,19 +158,13 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::GETCWD => fs::getcwd(a[0], a[1]),
             nr::CHDIR => fs::chdir(a[0]),
             nr::FCHDIR => fs::fchdir(fd0),
-            nr::RENAME => fs::renameat(at::FDCWD, a[0], at::FDCWD, a[1], 0),
             nr::RENAMEAT => fs::renameat(fd0, a[1], a[2] as i32, a[3], 0),
             nr::RENAMEAT2 => fs::renameat(fd0, a[1], a[2] as i32, a[3], a[4] as u32),
-            nr::MKDIR => fs::mkdirat(at::FDCWD, a[0]),
             nr::MKDIRAT => fs::mkdirat(fd0, a[1]),
-            nr::RMDIR => fs::unlinkat(at::FDCWD, a[0], at::REMOVEDIR),
-            nr::UNLINK => fs::unlinkat(at::FDCWD, a[0], 0),
             nr::UNLINKAT => fs::unlinkat(fd0, a[1], a[2] as u32),
             // Veda has neither hard nor symbolic links.
-            nr::LINK | nr::LINKAT | nr::SYMLINK | nr::SYMLINKAT | nr::MKNOD | nr::MKNODAT => Err(EPERM),
-            nr::READLINK => fs::readlinkat(at::FDCWD, a[0]),
+            nr::LINKAT | nr::SYMLINKAT | nr::MKNODAT => Err(EPERM),
             nr::READLINKAT => fs::readlinkat(fd0, a[1]),
-            nr::CHMOD | nr::CHOWN | nr::LCHOWN => fs::chmodat(at::FDCWD, a[0]),
             nr::FCHMODAT | nr::FCHOWNAT => fs::chmodat(fd0, a[1]),
             nr::FCHMOD | nr::FCHOWN => fd::get(fd0).map(|_| 0),
             nr::UMASK => system::umask(a[0] as u32),
@@ -201,7 +172,6 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::STATFS => fs::statfs(a[0], a[1]),
             nr::FSTATFS => fs::fstatfs(fd0, a[1]),
             nr::GETTIMEOFDAY => time::gettimeofday(a[0]),
-            nr::TIME => time::time(a[0]),
             nr::CLOCK_GETTIME => time::clock_gettime(a[0] as u32, a[1]),
             nr::CLOCK_GETRES => time::clock_getres(a[0] as u32, a[1]),
             nr::TIMES => time::times(a[0]),
@@ -211,7 +181,6 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::GETRUSAGE => process::getrusage(fd0, a[1]),
             nr::SYSINFO => system::sysinfo(a[0]),
             nr::PRCTL => system::prctl(a[0] as u32, a[1]),
-            nr::ARCH_PRCTL => thread::arch_prctl(a[0] as u32, a[1]),
             nr::FUTEX => thread::futex(a[0], a[1] as u32, a[2] as u32, a[3], a[4], a[5] as u32),
             nr::SET_TID_ADDRESS => thread::set_tid_address(a[0]),
             nr::SET_ROBUST_LIST => Ok(0),

@@ -1,9 +1,6 @@
 //! Raw system calls. Prefer the safe wrappers in [`crate::object`] and the
 //! other modules; these exist for completeness and for low-level code.
 
-#[cfg(not(veda_guest))]
-use core::arch::asm;
-
 pub use vabi::nr;
 use vabi::{Error, RawHandle};
 
@@ -17,29 +14,7 @@ fn decode(ret: isize) -> SysResult {
 }
 
 #[cfg(not(veda_guest))]
-#[inline(always)]
-pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize) -> (isize, usize) {
-    let ret: isize;
-    let rdx: usize;
-    // SAFETY: the kernel preserves all registers except rax, rdx (second
-    // result), rcx and r11.
-    unsafe {
-        asm!(
-            "syscall",
-            inlateout("rax") n as isize => ret,
-            in("rdi") a0,
-            in("rsi") a1,
-            inlateout("rdx") a2 => rdx,
-            in("r10") a3,
-            in("r8") a4,
-            in("r9") a5,
-            lateout("rcx") _,
-            lateout("r11") _,
-            options(nostack),
-        );
-    }
-    (ret, rdx)
-}
+pub use crate::arch::syscall6;
 
 #[cfg(not(veda_guest))]
 #[inline(always)]

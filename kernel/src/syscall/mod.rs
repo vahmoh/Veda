@@ -12,32 +12,28 @@ use alloc::sync::Arc;
 
 use vabi::{Error, RawHandle, Rights, nr};
 
-use crate::arch::entry::TrapFrame;
+use crate::arch::trap::TrapFrame;
 use crate::object::KObject;
 use crate::object::handle::Handle;
 use crate::object::process::Process;
 use crate::sched;
 use crate::sync::bkl;
 
-/// Successful result: primary value and optional second value (in `rdx`).
+/// Successful result: primary value and optional second value.
 pub type SysResult = Result<(usize, Option<usize>), Error>;
 
 fn ok(v: usize) -> SysResult {
     Ok((v, None))
 }
 
-/// Entry point from `vk_syscall_entry`.
-pub extern "sysv64" fn syscall_dispatch(frame: &mut TrapFrame) {
+/// Carries out the system call a thread made (from the architecture's
+/// entry code), returning its result in `frame`.
+pub fn syscall_dispatch(frame: &mut TrapFrame) {
     bkl::acquire();
-    let a = [frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9].map(|x| x as usize);
-    match dispatch(frame.rax as usize, a) {
-        Ok((v, second)) => {
-            frame.rax = v as u64;
-            if let Some(s) = second {
-                frame.rdx = s as u64;
-            }
-        }
-        Err(e) => frame.rax = e.as_return() as u64,
+    let (n, a) = frame.syscall();
+    match dispatch(n, a) {
+        Ok((v, second)) => frame.set_syscall_result(v as u64, second.map(|s| s as u64)),
+        Err(e) => frame.set_syscall_result(e.as_return() as u64, None),
     }
     sched::return_to_user_hook(frame);
     bkl::release();
@@ -98,7 +94,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::THREAD_START => task::thread_start(a[0] as RawHandle, a[1], a[2], a[3], a[4]),
         nr::THREAD_EXIT => task::thread_exit(),
         nr::THREAD_SET_PRIORITY => task::thread_set_priority(a[0] as RawHandle, a[1]),
-        nr::THREAD_SET_FS_BASE => task::thread_set_fs_base(a[0]),
+        nr::THREAD_SET_TLS => task::thread_set_tls(a[0]),
         nr::PROCESS_LIST => task::process_list(a[0], a[1]),
         nr::PROCESS_OPEN => task::process_open(a[0] as RawHandle, a[1] as u64),
         nr::THREAD_SET_EXIT_FUTEX => task::thread_set_exit_futex(a[0]),

@@ -1,4 +1,4 @@
-//! A small, allocation-free parser for PE32+ (x86-64 Portable Executable)
+//! A small, allocation-free parser for PE32+ (64-bit Portable Executable)
 //! images.
 //!
 //! Veda uses PE as its executable format for the kernel and for every
@@ -13,10 +13,31 @@
 //!
 //! Images that were linked with base relocations can be loaded at another
 //! address with [`PeImage::relocations`].
+//!
+//! An image is for one processor ([`Machine`]): each architecture's is in
+//! `lib/pe/arch/<architecture>/` ([`amd64`]), on every host, so that the
+//! build machine's tools check images for the target. [`NATIVE`] is the
+//! processor the code runs on, whose images it loads.
 
 #![no_std]
 
 use core::fmt;
+
+#[path = "../arch/amd64/mod.rs"]
+pub mod amd64;
+
+/// The processor an image's code is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Machine {
+    /// The COFF header's machine type.
+    pub code: u16,
+    /// Its name, for errors.
+    pub name: &'static str,
+}
+
+/// The processor this code runs on.
+#[cfg(target_arch = "x86_64")]
+pub const NATIVE: Machine = amd64::MACHINE;
 
 /// Errors produced while parsing an image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,8 +46,8 @@ pub enum PeError {
     Truncated,
     /// Missing `MZ` or `PE\0\0` signature.
     BadSignature,
-    /// Not an x86-64 image.
-    WrongMachine,
+    /// Not an image for the processor named.
+    WrongMachine(&'static str),
     /// Not a PE32+ optional header.
     NotPe32Plus,
     /// A section or data directory points outside the file or image.
@@ -42,7 +63,7 @@ impl fmt::Display for PeError {
         let msg = match self {
             PeError::Truncated => "image is truncated",
             PeError::BadSignature => "bad MZ/PE signature",
-            PeError::WrongMachine => "image is not x86-64",
+            PeError::WrongMachine(machine) => return write!(f, "image is not {machine}"),
             PeError::NotPe32Plus => "image is not PE32+",
             PeError::BadSection => "section or directory out of bounds",
             PeError::HasImports => "image has DLL imports",
@@ -52,7 +73,6 @@ impl fmt::Display for PeError {
     }
 }
 
-const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
 const PE32_PLUS_MAGIC: u16 = 0x20b;
 const DIR_IMPORT: usize = 1;
 const DIR_BASERELOC: usize = 5;
@@ -119,8 +139,15 @@ impl fmt::Debug for PeImage<'_> {
 }
 
 impl<'a> PeImage<'a> {
-    /// Parses and validates `data` as an x86-64 PE32+ image.
+    /// Parses and validates `data` as a PE32+ image for the processor this
+    /// code runs on ([`NATIVE`]).
+    #[cfg(target_arch = "x86_64")]
     pub fn parse(data: &'a [u8]) -> Result<Self, PeError> {
+        Self::parse_for(data, NATIVE)
+    }
+
+    /// Parses and validates `data` as a PE32+ image for `machine`.
+    pub fn parse_for(data: &'a [u8], machine: Machine) -> Result<Self, PeError> {
         if data.get(0..2) != Some(b"MZ") {
             return Err(PeError::BadSignature);
         }
@@ -129,8 +156,8 @@ impl<'a> PeImage<'a> {
             return Err(PeError::BadSignature);
         }
         let coff = pe_off + 4;
-        if rd_u16(data, coff)? != IMAGE_FILE_MACHINE_AMD64 {
-            return Err(PeError::WrongMachine);
+        if rd_u16(data, coff)? != machine.code {
+            return Err(PeError::WrongMachine(machine.name));
         }
         let num_sections = rd_u16(data, coff + 2)? as usize;
         let opt_size = rd_u16(data, coff + 16)? as usize;
@@ -400,7 +427,7 @@ mod tests {
         img[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
         img[0x80..0x84].copy_from_slice(b"PE\0\0");
         let coff = 0x84;
-        img[coff..coff + 2].copy_from_slice(&0x8664u16.to_le_bytes());
+        img[coff..coff + 2].copy_from_slice(&amd64::MACHINE.code.to_le_bytes());
         img[coff + 2..coff + 4].copy_from_slice(&1u16.to_le_bytes());
         img[coff + 16..coff + 18].copy_from_slice(&240u16.to_le_bytes());
         let opt = coff + 20;
@@ -426,7 +453,7 @@ mod tests {
     #[test]
     fn parses_minimal_image() {
         let bytes = tiny_image();
-        let pe = PeImage::parse(&bytes).unwrap();
+        let pe = PeImage::parse_for(&bytes, amd64::MACHINE).unwrap();
         assert_eq!(pe.image_base(), 0x1_4000_0000);
         assert_eq!(pe.entry_point(), 0x1_4000_1000);
         assert_eq!(pe.subsystem(), Subsystem::Native);
@@ -441,10 +468,10 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert_eq!(PeImage::parse(b"hello").unwrap_err(), PeError::BadSignature);
+        assert_eq!(PeImage::parse_for(b"hello", amd64::MACHINE).unwrap_err(), PeError::BadSignature);
         let mut bytes = tiny_image();
         bytes[0x84] = 0x4c; // i386 machine
         bytes[0x85] = 0x01;
-        assert_eq!(PeImage::parse(&bytes).unwrap_err(), PeError::WrongMachine);
+        assert_eq!(PeImage::parse_for(&bytes, amd64::MACHINE).unwrap_err(), PeError::WrongMachine("x86-64"));
     }
 }

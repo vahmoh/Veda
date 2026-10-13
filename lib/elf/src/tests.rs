@@ -32,7 +32,7 @@ struct Exe {
 
 impl Exe {
     fn new(entry: u64, segs: Vec<Seg>) -> Exe {
-        Exe { kind: ET_EXEC, machine: EM_X86_64, entry, segs, extra: Vec::new(), headers_in_first: true }
+        Exe { kind: ET_EXEC, machine: amd64::MACHINE.code, entry, segs, extra: Vec::new(), headers_in_first: true }
     }
 
     fn build(&self) -> Vec<u8> {
@@ -98,7 +98,7 @@ fn typical() -> Exe {
 #[test]
 fn parses_a_static_executable() {
     let bytes = typical().build();
-    let elf = Elf::parse(&bytes).unwrap();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
     assert!(!elf.is_position_independent());
     assert_eq!(elf.entry(), 0x401040);
     assert_eq!(elf.phdr_vaddr(), 0x400040);
@@ -117,7 +117,7 @@ fn parses_a_static_executable() {
 #[test]
 fn groups_pages_by_permissions() {
     let bytes = typical().build();
-    let runs = page_runs(&Elf::parse(&bytes).unwrap());
+    let runs = page_runs(&Elf::parse_for(&bytes, amd64::MACHINE).unwrap());
     let p = |f| Perms::from_flags(f);
     assert_eq!(
         runs,
@@ -139,7 +139,7 @@ fn shared_pages_get_both_permissions() {
     // says they are at the start of the code.
     exe.extra.push((pt::PHDR, 0x401000, 0));
     let bytes = exe.build();
-    let elf = Elf::parse(&bytes).unwrap();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
     let runs = page_runs(&elf);
     let p = |f| Perms::from_flags(f);
     assert_eq!(
@@ -156,7 +156,7 @@ fn position_independent_executables() {
     let mut exe = Exe::new(0x1040, vec![seg(R, 0, 0x100, 0), seg(RX, 0x1000, 0x100, 0x100)]);
     exe.kind = ET_DYN;
     let bytes = exe.build();
-    let elf = Elf::parse(&bytes).unwrap();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
     assert!(elf.is_position_independent());
     assert_eq!(elf.span(), (0, 0x2000));
 }
@@ -166,7 +166,7 @@ fn stack_size_request() {
     let mut exe = typical();
     exe.extra.push((pt::GNU_STACK, 0, 16 << 20));
     let bytes = exe.build();
-    assert_eq!(Elf::parse(&bytes).unwrap().stack_size(), Some(16 << 20));
+    assert_eq!(Elf::parse_for(&bytes, amd64::MACHINE).unwrap().stack_size(), Some(16 << 20));
 }
 
 #[test]
@@ -175,14 +175,14 @@ fn refuses_what_it_cannot_run() {
     let with = |f: &dyn Fn(&mut Vec<u8>)| {
         let mut b = good.clone();
         f(&mut b);
-        Elf::parse(&b).unwrap_err()
+        Elf::parse_for(&b, amd64::MACHINE).unwrap_err()
     };
-    assert_eq!(Elf::parse(b"MZ\x90\x00").unwrap_err(), ElfError::BadMagic);
-    assert_eq!(Elf::parse(&good[..40]).unwrap_err(), ElfError::Truncated);
-    assert_eq!(Elf::parse(&good[..100]).unwrap_err(), ElfError::Truncated);
+    assert_eq!(Elf::parse_for(b"MZ\x90\x00", amd64::MACHINE).unwrap_err(), ElfError::BadMagic);
+    assert_eq!(Elf::parse_for(&good[..40], amd64::MACHINE).unwrap_err(), ElfError::Truncated);
+    assert_eq!(Elf::parse_for(&good[..100], amd64::MACHINE).unwrap_err(), ElfError::Truncated);
     assert_eq!(with(&|b| b[4] = 1), ElfError::WrongClass);
     assert_eq!(with(&|b| b[5] = 2), ElfError::WrongClass);
-    assert_eq!(with(&|b| b[18] = 3), ElfError::WrongMachine);
+    assert_eq!(with(&|b| b[18] = 3), ElfError::WrongMachine("x86-64"));
     assert_eq!(with(&|b| b[16] = 1), ElfError::NotExecutable);
     assert_eq!(with(&|b| b[56] = 0), ElfError::NoSegments);
     assert_eq!(with(&|b| b[54] = 32), ElfError::BadSegment);
@@ -203,11 +203,11 @@ fn refuses_what_it_cannot_run() {
 
     let mut dynamic = typical();
     dynamic.extra.push((pt::INTERP, 0, 0));
-    assert_eq!(Elf::parse(&dynamic.build()).unwrap_err(), ElfError::Dynamic);
+    assert_eq!(Elf::parse_for(&dynamic.build(), amd64::MACHINE).unwrap_err(), ElfError::Dynamic);
     // Program headers said to be where nothing is loaded.
     let mut stray = typical();
     stray.extra.push((pt::PHDR, 0x1000_0000, 0));
-    assert_eq!(Elf::parse(&stray.build()).unwrap_err(), ElfError::NoSegments);
+    assert_eq!(Elf::parse_for(&stray.build(), amd64::MACHINE).unwrap_err(), ElfError::NoSegments);
 }
 
 fn word(img: &StackImage, addr: u64) -> u64 {
@@ -229,6 +229,7 @@ fn aux(execfn: &[u8]) -> AuxInfo<'_> {
         phnum: 4,
         entry: 0x401040,
         hwcap: 0x178bfbff,
+        platform: amd64::MACHINE.platform,
         uid: 1000,
         gid: 1000,
         random: *b"0123456789abcdef",
