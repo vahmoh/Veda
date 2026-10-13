@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `pcitest` — checks, inside the driver VM's Linux, the PCI functions
 //! Veda gave it: each is on the guest's PCI with a driver of Linux's, and
 //! described by an ACPI device of the platform's tables (with the devices

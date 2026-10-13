@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The cameras: those that follow a car (from behind, near or far, from
 //! the bonnet and from the bumper), and the menus' [`Cinematic`] camera,
 //! filming a chase as television would.

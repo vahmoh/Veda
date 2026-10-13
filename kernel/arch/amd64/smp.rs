@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Bringing up application processors (APs).
 //!
 //! Each AP is started with the INIT-SIPI-SIPI sequence. It begins in 16-bit

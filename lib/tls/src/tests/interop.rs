@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interoperability with real servers over the host's network (ignored by
 //! default; run with `cargo test -p vtls -- --ignored --nocapture`).
 //!

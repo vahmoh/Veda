@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 Vahid Mohammadi
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: MIT
  *
  * The driver VM's renderer: the decoder (this directory) and Mesa's

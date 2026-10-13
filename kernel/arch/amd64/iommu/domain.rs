@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A guest's domain: the second-level page tables that translate its
 //! devices' requests (the guest's memory, as its processors see it), and
 //! the devices in it.

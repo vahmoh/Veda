@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Veda's system calls in a Linux guest of the driver VM.
 //!
 //! A program built for the guest (with `--cfg veda_guest`, which the

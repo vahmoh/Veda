@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # What Cargo is told of each architecture's targets (their linkers and
 # flags) is in .cargo/arch/<architecture>/config.toml.
 include = ["arch/amd64/config.toml"]

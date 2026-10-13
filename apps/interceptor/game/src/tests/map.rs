@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A picture of Veda Bay seen from above (`INTERCEPTOR_MAP=path.png`), and
 //! the layout's sanity: the loop never comes near itself.
 

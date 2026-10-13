@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Anti-aliased vector path rasterizer shared by the font engine and 2D graphics.
 //!
 //! * [`Path`] builds contours of lines and quadratic/cubic Bézier curves, with helpers for

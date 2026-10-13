@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `systest` — integration tests that run inside Veda.
 //!
 //! Each test prints `<name> ... ok|FAILED: reason` and the final line is `PASS`

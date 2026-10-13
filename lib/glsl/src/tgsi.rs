@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! TGSI, Gallium's shader language, in the text form virglrenderer reads.
 //!
 //! In virtio-gpu's 3D mode the guest hands shaders to the host as TGSI

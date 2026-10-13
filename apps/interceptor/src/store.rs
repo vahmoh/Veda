@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What is kept between sessions: the career's best results and the
 //! settings, in `~/.config/interceptor/save` (the text of
 //! [`Save::to_text`]), read at start and written whenever they change.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Where a video goes in a window, and at what size it is decoded.
 //!
 //! The decoder scales pictures to the size they are shown at, so the pool's

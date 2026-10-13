@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Asynchronous queries and sync objects (OpenGL ES 3.0 sections 2.14 and
 //! 5.2).
 

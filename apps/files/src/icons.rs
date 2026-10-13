@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! File-type icons: small line icons for the list view and large drawn
 //! icons (folders, pages with a type badge, image thumbnails) for the grid.
 

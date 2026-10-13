@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Text output to the system log (`print!`, `println!`, `log!`).
 
 use alloc::string::String;

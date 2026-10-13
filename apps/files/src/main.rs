@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Files: the Veda file manager.
 //!
 //! Browses the virtual file system with a places sidebar, a breadcrumb

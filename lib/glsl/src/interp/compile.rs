@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! IR to bytecode.
 //!
 //! 1. Uniform values (constants, uniforms, and pure operations on uniform

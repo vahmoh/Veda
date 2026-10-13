@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The loader's log on AMD64: polled 16550 UART output on COM1, usable both
 //! before and after `ExitBootServices`.
 

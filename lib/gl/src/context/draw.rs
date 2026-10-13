@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Drawing (OpenGL ES 3.0 sections 2.8.3 and 2.9): the checks a draw call
 //! makes, and the complete state it hands the renderer.
 

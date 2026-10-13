@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The world's other sounds and the game's cues.
 //!
 //! **Tyres** roar on the tarmac with the speed (most of what a passing car

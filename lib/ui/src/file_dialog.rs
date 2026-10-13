@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A modal dialog for choosing a file to open or a place to save one,
 //! browsing the file system through the VFS service.
 //!

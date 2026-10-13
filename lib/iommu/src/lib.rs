@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `viommu` — what Veda knows of IOMMUs that touches no hardware.
 //!
 //! Each architecture's IOMMU is in `lib/iommu/arch/<architecture>/`:

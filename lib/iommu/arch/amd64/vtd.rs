@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A VT-d remapping unit's registers, and the structures it reads from
 //! memory: root and context entries (which domain a device is in), the
 //! second-level page tables of a domain, interrupt remapping entries, and

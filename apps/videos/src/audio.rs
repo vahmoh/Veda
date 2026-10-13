@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The audio thread: plays the decoder's sound and keeps the clock.
 //!
 //! It takes the sound the decoder writes into the ring (records of a

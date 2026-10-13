@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Vertex arrays and generic vertex attributes (OpenGL ES 3.0 sections 2.8
 //! and 2.11).
 

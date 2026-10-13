@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The DMAR table: where the firmware says the remapping hardware is, which
 //! devices each unit translates, and which memory devices use before the
 //! system takes over (Intel VT-d specification, chapter 8).

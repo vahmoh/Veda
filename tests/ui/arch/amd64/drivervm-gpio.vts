@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # GPIO pins for the driver VM. A test table describes one of devmgr's
 # simulated GPIO controllers (VTST0002, Alder Lake-P's pads, its even pins
 # wired to the odd ones after them) and a device below QEMU's virtio GPU

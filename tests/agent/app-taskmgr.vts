@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Task Manager's agent interface, with a simulated Voice Agent service: the
 # agent lists the processes, sorts and filters the table, reads the load and
 # shows the performance graphs, as the user would in the window. Ending an

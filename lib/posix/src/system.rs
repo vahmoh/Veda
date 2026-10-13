@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The system: name, memory, limits, processors, randomness.
 
 use core::sync::atomic::{AtomicU32, Ordering};

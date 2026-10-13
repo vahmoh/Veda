@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! When the agent must ask the user first.
 //!
 //! * [`Risk::Routine`] actions run without asking.

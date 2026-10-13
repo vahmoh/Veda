@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What the ACPI tables (`crate::acpi`) say of the PC a guest has: its
 //! keyboard controller (the i8042), where the guest has it, with the ports
 //! and lines a PC's is at; and the IA-PC boot architecture's flags in the

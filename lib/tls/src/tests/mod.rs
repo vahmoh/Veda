@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Tests of the whole client: handshakes against a rustls server in memory,
 //! certificate chains captured from real servers, and (ignored by default)
 //! connections to real servers over the host's network.

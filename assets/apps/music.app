@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 name=Music
 exe=/system/bin/music.exe
 icon=music

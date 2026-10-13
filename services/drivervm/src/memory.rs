@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The guest's memory, as the monitor reaches it.
 //!
 //! The guest's RAM is one VMO, mapped here as it is mapped at

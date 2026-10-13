@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "ventropy"
 description = "ChaCha20, BLAKE2s and the random generator behind the kernel's random system call"

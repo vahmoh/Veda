@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # GCC inside Veda (needs the native toolchain in the image): write a C
 # program in the Terminal, compile and run it; a program in two files,
 # compiled separately and linked; a mistake, which GCC reports with its

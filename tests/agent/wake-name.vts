@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Waking the agent by its name, with the simulated services: asleep, the
 # agent keeps the microphone open but sends nothing while it is quiet.
 # Speech is streamed for recognition; speech that only mentions the agent

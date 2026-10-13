@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The C toolchain: GCC, binutils and musl for Veda.
 //!
 //! `cargo xtask toolchain` builds, from the sources in `ports/`:

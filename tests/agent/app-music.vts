@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Music's agent interface, with a simulated Voice Agent service: the agent
 # finds songs in the library, plays one by name (as speech recognition may
 # hear it), pauses, seeks, resumes and skips, sets the player's volume,

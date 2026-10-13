@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! SHA-2 hashes and HMAC for rustls.
 //!
 //! The TLS 1.3 key schedule (HKDF) and the TLS 1.2 PRF are rustls' generic

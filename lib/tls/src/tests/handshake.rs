@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Handshakes against a rustls server in memory: every cipher suite, key
 //! exchange group and certificate type, data in both directions, closing,
 //! key updates, rejected certificates and broken servers.

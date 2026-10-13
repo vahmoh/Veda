@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The virgl renderer: OpenGL ES on the GPU.
 //!
 //! virgl's protocol gives its client a Gallium-shaped view of a GPU: the

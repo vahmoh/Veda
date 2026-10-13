@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Global descriptor table and task state segment (one of each per CPU).
 //!
 //! The segment order is dictated by `syscall`/`sysret`:

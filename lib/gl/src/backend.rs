@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The interface between the OpenGL ES front end and a renderer.
 //!
 //! The front end ([`crate::Context`]) checks every call against the

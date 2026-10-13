@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Memory: `mmap` and friends.
 //!
 //! Private anonymous memory is the kernel's private memory (`vm_allocate`):

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Expressions: types, l-values, calls, constructors and constant folding.
 
 use alloc::boxed::Box;

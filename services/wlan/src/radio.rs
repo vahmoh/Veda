@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The radio a driver offered through `wlanphy`: one that moves frames, or
 //! a managed one, which joins access points on the service's commands.
 

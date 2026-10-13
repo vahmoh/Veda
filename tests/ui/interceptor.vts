@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Interceptor: from the title, through the menus, to the first career
 # mission at Veda Bay, full screen, rendered on the host's GPU where QEMU
 # has one (in software otherwise). The title and the menus show the

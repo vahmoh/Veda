@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `airlink` — the driver VM's radio medium, for the tests of Wi-Fi: QEMU's
 //! virtual Wi-Fi radio (a virtio-serial port named `org.veda.wlan.0`, whose
 //! other end is `airsim` on the host, which simulates the access points) as

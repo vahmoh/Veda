@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The library's worker: what each video is (its length, size and codecs)
 //! and a picture of it for its card, and the previews above the seek bar.
 //!

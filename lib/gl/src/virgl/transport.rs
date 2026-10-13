@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How the renderer reaches what carries its commands out.
 //!
 //! In Veda, through the `gpu` service (Veda's renderer, in the driver VM),

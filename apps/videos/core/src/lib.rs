@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `videos-core` — what the Videos app decides, apart from what it draws
 //! and whom it talks to, so that it can be tested on the host.
 //!

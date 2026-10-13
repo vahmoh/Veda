@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `bridgetest` — checks the driver VM's bridge from inside the Linux
 //! guest: Veda's objects, used by a Linux program through `vrt` exactly as
 //! a Veda program uses them.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Music — the Veda music player.
 //!
 //! * A library of the tracks in `/home/user/Music` (QOA and WAV), plus any

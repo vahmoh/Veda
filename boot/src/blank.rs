@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The screen while the system starts: blank. The loader clears the GOP
 //! framebuffer to black the moment it has set its mode, whatever the
 //! firmware left there (its logo, its boot menu), and the screen stays

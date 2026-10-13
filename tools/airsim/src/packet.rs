@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Just enough of Ethernet, IPv4, IPv6 and UDP to recognise DHCP and DNS
 //! traffic on the wired side, and to answer a DNS query with SERVFAIL (used
 //! by the `dns servfail` condition).

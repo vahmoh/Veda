@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What is drawn over play with `vgfx`: the dashboard (speedometer,
 //! revs, gear, siren, nitrous), the pursuit (the suspect's distance, its
 //! car's state, the time and any limit, the warnings), the map of the bay,

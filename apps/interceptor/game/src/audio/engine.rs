@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Engines, modelled as what makes their sound: each cylinder's firing
 //! sends a pulse of gas into its bank's exhaust, the pipes ring with it,
 //! and the silencer takes the edge off.

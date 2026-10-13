@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Processes: ids, starting programs (`posix_spawn`), waiting for them,
 //! `kill` and exit.
 //!

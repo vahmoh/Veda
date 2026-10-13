@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The semantic checks: from the syntax tree to the checked shader.
 //!
 //! Names are resolved through nested scopes (GLSL ES's rules: a function's

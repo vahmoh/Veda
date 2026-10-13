@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The desktop wallpapers (1920x1200).
 
 use std::f32::consts::{PI, TAU};

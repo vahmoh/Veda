@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 Vahid Mohammadi
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: MIT
  *
  * libdrm's functions that Mesa uses, for Veda's renderer (see xf86drm.h):

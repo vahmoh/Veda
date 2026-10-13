@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What the agent remembers about the user.
 //!
 //! * **Facts** the user shared or the agent learned (`remember`), each with

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `testmic` — a microphone for automated tests.
 //!
 //! `testmic HOST,PORT,RATE` (started with `run=testmic:10.0.2.2,5555,16000`)

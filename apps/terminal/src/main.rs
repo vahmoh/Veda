@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Terminal: a terminal window hosting the built-in command shell (`vsh`).
 //!
 //! The window shows a scrollback buffer of styled text in JetBrains Mono

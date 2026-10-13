@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The viewer: one picture, fitted to the window or zoomed and panned, with a toolbar,
 //! navigation arrows, a filmstrip, an info panel, a full-screen mode and a slideshow.
 

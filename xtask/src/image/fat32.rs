@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A minimal FAT32 formatter that writes a populated volume into memory,
 //! and a reader of files on such a volume (what a test's guest wrote).
 //!

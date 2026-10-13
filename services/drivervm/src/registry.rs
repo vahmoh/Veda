@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The registry the guest sees: Veda's, narrowed to the services that
 //! drivers attach to.
 //!

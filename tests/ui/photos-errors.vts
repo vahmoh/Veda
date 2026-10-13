@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Photos error and empty states, driven from the Terminal (1280x800 screen): a
 # file that is not a picture, the library around it, and an empty folder.
 boot-cmdline "run=terminal"

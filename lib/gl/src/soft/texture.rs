@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Texture sampling for the shader interpreter (OpenGL ES 3.0 sections
 //! 3.8.10 to 3.8.16): every target, nearest and linear filtering within and
 //! between mipmap levels, the wrap modes, seamless cube maps, depth

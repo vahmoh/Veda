@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Photos: browse the pictures in a folder and look at them.
 //!
 //! * The library ([`library`]) shows a grid of thumbnails of `~/Pictures`, of a folder given

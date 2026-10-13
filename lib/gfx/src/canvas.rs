@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! [`Canvas`]: drawing operations on a borrowed pixel buffer.
 //!
 //! All coordinates are relative to the current origin ([`Canvas::translate`])

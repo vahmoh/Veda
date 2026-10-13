@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Scalar operations and their exact semantics.
 //!
 //! Every computation a shader does is lowered to these operations on

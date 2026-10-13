@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The IOMMU of AMD64 machines: Intel VT-d.
 //!
 //! * [`dmar`]: the firmware's DMAR table: the remapping units, the devices

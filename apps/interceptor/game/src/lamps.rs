@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The street lights: where they stand along the road and what they are
 //! like. Downtown, warm white lamps on both kerbs; on the open roads,
 //! sodium lamps on the outer verge; on divided roads, double lamps on the

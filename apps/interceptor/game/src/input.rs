@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The keyboard into a driver's controls: keys are on or off, pedals and
 //! steering are not, so presses ramp the controls in and releases ramp
 //! them out, steering quicker to centre than to turn, and gentler at

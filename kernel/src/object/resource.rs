@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Hardware resources: capabilities that authorise access to I/O ports,
 //! interrupt lines, physical memory, DMA and power control.
 //!

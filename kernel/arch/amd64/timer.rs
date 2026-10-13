@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Each CPU's timer: its local APIC's, which fires once, at a TSC value
 //! (TSC-deadline mode) or after a delay (one-shot mode).
 

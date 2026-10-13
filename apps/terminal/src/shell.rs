@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The command interpreter ("vsh").
 //!
 //! A command line is tokenised (quotes, backslash escapes, `$VAR` and `~`

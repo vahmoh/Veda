@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The startup sound (`/system/sounds/startup.wav`), played once as the
 //! desktop first appears, while the window system's startup splash dissolves
 //! into it. Only when the shell starts with the system (init passes

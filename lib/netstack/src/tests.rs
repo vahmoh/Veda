@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Integration tests: whole conversations between two stacks over a
 //! simulated cable, with a DHCP server in the harness and a DNS server on
 //! the far stack. The cable can drop frames at random or go dark.

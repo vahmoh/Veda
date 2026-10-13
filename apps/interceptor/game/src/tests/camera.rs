@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The chase camera keeps its place behind the car however long the
 //! frames are: at any frame rate, through frames of uneven length, and
 //! through stalls longer than the game catches up on.

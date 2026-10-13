@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What `init` knows of AMD64 machines: the extent of their hardware
 //! resources, which it delegates to the device manager.
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `renderer` — Veda's renderer, in the driver VM: the OpenGL ES command
 //! streams of Veda's applications (vgl's, in virglrenderer's protocol)
 //! carried out on the GPU by Mesa's Gallium driver for it, over the GPU's

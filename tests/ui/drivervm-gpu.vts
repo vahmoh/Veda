@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The GPU through Linux's driver: QEMU's virtio-gpu (3D on this machine's
 # GPU) goes to the driver VM, with the display (QEMU's VGA), where Linux's
 # virtio_gpu and bochs drive them. Veda's renderer renders on the GPU

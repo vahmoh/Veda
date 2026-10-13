@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Shared styling of shell surfaces: translucent "mica" backgrounds sampled
 //! from the blurred wallpaper, and rounded window corners.
 

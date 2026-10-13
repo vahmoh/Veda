@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A PCM device of Linux's sound system through the kernel's own interface
 //! (`/dev/snd/pcmC*D*p` and `...c`, and the ioctls of
 //! `include/uapi/sound/asound.h`): configured for interleaved 16-bit

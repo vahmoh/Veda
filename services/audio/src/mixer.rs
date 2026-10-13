@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The mixer: client streams, the output and the mixing step.
 //!
 //! Every stream has its own resampler from the stream's rate to the

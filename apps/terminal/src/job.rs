@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Commands run on a thread of their own, so that the window stays
 //! responsive while they work and Ctrl+C can stop them.
 //!

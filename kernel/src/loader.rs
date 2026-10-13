@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Starts the first user process, `init`, from the initrd.
 //!
 //! This is the only program the kernel loads itself. `init` receives the

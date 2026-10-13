@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The helpers the build scripts of the ports share (`build.sh`, and
 # `linux/build.sh`). They expect PORTS (the ports directory), VEDA_ARCH
 # (the architecture built for), DOWNLOADS (the verified archives), SRC

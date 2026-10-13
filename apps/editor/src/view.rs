@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The text view: draws a [`Document`] (line numbers, syntax colours,
 //! search matches, selection, cursor) and turns keyboard and mouse input
 //! into edits and cursor movement.

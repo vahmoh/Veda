@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Tests of the simulated environment, with `vwlan`'s station state machine
 //! playing the guest. Every message between the "guest" and the world goes
 //! through the radio link encoding, as it does under QEMU.

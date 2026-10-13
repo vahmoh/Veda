@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Settings (1280x800 with the taskbar): applying wallpapers through the
 # desktop shell with the mouse and with the keyboard, and the Agent,
 # Network, Display, System and About pages. Settings logs every wallpaper change.

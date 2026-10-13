@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The voice agent's presence on the desktop.
 //!
 //! * [`AgentLink`]: the shell's connection to the agent service — the

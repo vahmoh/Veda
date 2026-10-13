@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Virtual machines: guests and their virtual processors.
 
 use vabi::{Error, RawHandle, Rights, VcpuExit, VcpuState, map_flags, resource_kind};

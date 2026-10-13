@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! RGB to Y'CbCr as the videos store it: BT.709 coefficients, limited
 //! ("studio") range, 8 bits, 4:2:0, in fixed point.
 //!

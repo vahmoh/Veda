@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A PCI function given to a guest, as the guest sees its configuration
 //! space: the function's own, but for what the platform owns. The memory
 //! BARs hold the guest-physical addresses the platform mapped them at (and

@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # Third-party code
 
 Veda uses mature external crates where an established, widely used

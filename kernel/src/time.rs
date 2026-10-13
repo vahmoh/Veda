@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Timekeeping.
 //!
 //! The monotonic clock counts the ticks of the processor's clock counter

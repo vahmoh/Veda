@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Veda kernel ABI.
 //!
 //! This crate is the single source of truth for the interface between the

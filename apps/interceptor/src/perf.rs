@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How the game runs, frame by frame: the frame rate, the frames' lengths
 //! and where their time goes, and what renders. The readout over the game
 //! shows it ([`crate::hud::performance`]); the log has the longest frame

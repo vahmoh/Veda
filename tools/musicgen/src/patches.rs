@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Instrument presets shared by the songs.
 
 use vaudio::synth::drums::{self, Kick};

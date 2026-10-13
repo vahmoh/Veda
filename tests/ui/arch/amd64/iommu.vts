@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The IOMMU (QEMU's intel-iommu, interrupt remapping on), which the tests'
 # machines have, as PCs do: Veda's kernel remaps every device's interrupts,
 # which only that device may raise, and passes the DMA of Veda's own

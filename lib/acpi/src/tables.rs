@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The ACPI tables: from the RSDP to the root table (the XSDT, or the RSDT
 //! of older firmware), to every table it lists, and the DSDT the FADT
 //! points to.

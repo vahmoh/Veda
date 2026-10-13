@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Terminal for the voice agent: what it shows (the latest output, the
 //! folder it is in, the command running) and what it does (running a
 //! command line as the user would type it, stopping it, clearing the

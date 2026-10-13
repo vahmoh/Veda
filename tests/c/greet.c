@@ -1,4 +1,7 @@
-/* greet — an interactive program for the terminal: asks for a name on a
+/* SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
+ * greet — an interactive program for the terminal: asks for a name on a
  * line of its own prompt, answers, and reports what it knows about the
  * terminal. Exits with 0 if its standard streams are the terminal and the
  * terminal has a size, 1 otherwise. */

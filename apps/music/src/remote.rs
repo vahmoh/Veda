@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! One player at a time: the first Music process registers the `music`
 //! service; a later one that was asked to open a file (for example from the
 //! desktop) hands the file to the running player and exits.

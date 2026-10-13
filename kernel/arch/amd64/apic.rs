@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Local APIC (x2APIC or memory-mapped xAPIC), I/O APIC and legacy PIC.
 //!
 //! Devices' interrupts go to the boot processor. With the IOMMU remapping

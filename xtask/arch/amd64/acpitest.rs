@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! ACPI tables that tests add to QEMU's (`-acpitable`), describing what a
 //! PC's firmware does and QEMU's does not, for the driver VM to pass on:
 //! devices on QEMU's PC, named as its firmware names them, on its I/O

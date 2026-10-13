@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 Vahid Mohammadi
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: MIT
  *
  * <xf86drm.h> for Veda's renderer: what Mesa's drivers use of libdrm's

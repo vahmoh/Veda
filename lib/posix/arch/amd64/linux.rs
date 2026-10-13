@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What Linux's ABI has particular to x86-64, as musl uses it: the system
 //! call numbers, `struct stat`, and `arch_prctl`'s codes.
 

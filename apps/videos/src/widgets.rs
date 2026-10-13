@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Small pieces drawn over the video: a borderless button that reads on any
 //! picture, the time above the seek bar, and the message that confirms a
 //! key ("+10 s", "Volume 80%").

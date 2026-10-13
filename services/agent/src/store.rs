@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The agent's private directory, `/home/.private/agent`, on the home disk.
 //! Only the agent service can open it (the file system checks who is
 //! asking), so the Deepgram key and what the agent remembers about the user

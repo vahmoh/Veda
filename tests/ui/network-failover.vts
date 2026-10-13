@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # A wired card and Wi-Fi together. The wired connection is preferred; when
 # its cable is unplugged, traffic moves to Wi-Fi, and back when it is
 # plugged in again. When Wi-Fi goes away, the wired connection carries on

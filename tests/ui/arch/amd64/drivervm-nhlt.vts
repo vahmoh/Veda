@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The firmware's NHLT for the driver VM: an Intel audio controller's table
 # of its DSP's links (the digital microphones and ports on them), without
 # which Linux's SOF does not find the microphones. It goes to the guest

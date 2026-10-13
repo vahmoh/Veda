@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Decisions of the Wi-Fi service: which access point to join, whether an
 //! access point may be used for a saved network, when to try again after a
 //! failure, and when to move to a better access point.

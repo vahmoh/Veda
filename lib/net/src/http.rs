@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A small HTTP/1.1 client: `GET` over plain HTTP, following redirects,
 //! with `Content-Length`, chunked and read-to-close bodies. Response heads
 //! are parsed by `httparse`.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! [`Layout`]: buffer lines broken into visual rows on a monospace grid
 //! (soft wrap), with hit testing and vertical movement.
 //!

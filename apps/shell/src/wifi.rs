@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The network flyout opened from the network icon on the taskbar: Wi-Fi on
 //! and off, the networks in range, joining one (with its password), leaving
 //! it, and a link to the network settings.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Simple text layout: font fallback, pixel metrics, measuring, line layout, word wrapping and
 //! caret hit-testing.
 //!

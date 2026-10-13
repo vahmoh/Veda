@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "guest-input"
 description = "Veda's input driver for Linux: Linux's keyboards, mice, touchpads, tablets and touchscreens as Veda's input devices"

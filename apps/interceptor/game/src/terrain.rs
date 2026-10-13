@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The land and the sea around the road: a height field on a grid.
 //!
 //! Veda Bay lies inside the loop: the city on its north shore, the hills

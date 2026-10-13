@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The OpenGL ES 3.0 context: the GL's state and objects, and every entry
 //! point, checked against the specification.
 //!

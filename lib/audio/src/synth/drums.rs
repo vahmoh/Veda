@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Synthesised drum one-shots (mono `f32` buffers): electronic kicks,
 //! snares, claps, metallic hi-hats and cymbals, toms, shakers, chiptune
 //! drums, noise sweeps and vinyl crackle.

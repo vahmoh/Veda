@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Memory on AMD64, beyond the page tables: the layout of the kernel's
 //! address space, the physical memory the architecture keeps for itself,
 //! and the caches.

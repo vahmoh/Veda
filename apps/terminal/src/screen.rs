@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The terminal's text buffer.
 //!
 //! Output is kept as logical lines of styled [`Cell`]s. Lines are

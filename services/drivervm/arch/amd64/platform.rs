@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The PC's own devices the guest has: its keyboard controller, if devmgr
 //! hands its ports and interrupts over (`i8042`). And what the guest's
 //! processors do that is not a hypercall: reach I/O ports (the platform

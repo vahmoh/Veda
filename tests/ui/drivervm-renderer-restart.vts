@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The renderer in the driver VM ends, as Linux's OOM killer ended it on a
 # PC while a game set up its pictures. Linux starts it again, and it takes
 # the `gpu` service back: Veda forgets the service of the renderer that

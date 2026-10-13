@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The interrupt lines the guest has: the PC's global system interrupts
 //! (GSIs) its devices use — its own devices' (`arch::platform`: a
 //! keyboard controller's 1 and 12), the lines the PCI functions' INTx are

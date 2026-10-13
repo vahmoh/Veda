@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The kernel ABI on AMD64: how system calls are made, the user address
 //! space and its pages, how threads start, and virtual processors as Intel
 //! VMX presents an x86-64 processor.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Saved networks and their file format.
 //!
 //! The file is plain text, one `key=value` per line, one block per network:

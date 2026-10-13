@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What the menus and the dashboard are drawn with: the fonts, the
 //! palette, and a few shapes (stars, a padlock, the logo).
 

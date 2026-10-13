@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `ahci` — the driver for SATA disks behind an AHCI controller: the disk
 //! controller of QEMU's q35 machine and of most PCs.
 //!

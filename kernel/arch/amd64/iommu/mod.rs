@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The IOMMU (Intel VT-d): what devices reach of memory, and which
 //! interrupts they may raise.
 //!

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Helpers for the `build.rs` scripts of Veda user-space crates:
 //! [`user_program`] emits the linker options that turn a `no_std` binary
 //! into a Veda PE executable (fixed base, custom entry point, no CRT), in

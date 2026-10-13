@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Startup Chime" — a short bell flourish, shipped as a mono 22.05 kHz
 //! WAV file (it shows that the player handles WAV, mono and resampling).
 

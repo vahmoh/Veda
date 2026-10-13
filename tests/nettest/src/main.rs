@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `nettest` — network checks that run inside Veda.
 //!
 //! * `nettest` / `nettest online`: waits for a network connection, then

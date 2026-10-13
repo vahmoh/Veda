@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `netd` — the network service.
 //!
 //! * Network devices (Ethernet drivers, and the Wi-Fi service for each

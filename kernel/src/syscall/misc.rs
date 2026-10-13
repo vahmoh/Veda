@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Miscellaneous system calls: logging, clocks, sleeping, system info.
 
 use vabi::{Error, RawHandle, SystemInfo, clock, power_action, resource_kind};

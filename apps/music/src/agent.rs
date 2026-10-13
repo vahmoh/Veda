@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Music for the voice agent: what it shows (the song playing and where it
 //! is, what plays next, the library) and what it does (playing a song,
 //! album or artist by name, pausing, skipping, seeking, shuffle, repeat and

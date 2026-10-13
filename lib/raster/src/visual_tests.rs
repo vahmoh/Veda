@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Visual check: renders a few shapes and strokes to a PNG for manual inspection.
 //!
 //! Run with `cargo test -p vraster -- --ignored --nocapture`; the image is written to

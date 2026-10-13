@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Per-CPU data: what the kernel keeps for each CPU.
 //!
 //! A CPU finds its own [`PerCpu`] by its index, which the architecture keeps

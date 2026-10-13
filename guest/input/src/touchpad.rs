@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Touchpads: where the fingers are on the pad, made a pointer's motion,
 //! scrolling and clicks, as PCs' systems make them.
 //!

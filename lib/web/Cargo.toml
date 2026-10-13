@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vweb"
 description = "Web clients for Veda applications: URLs, HTTP/1.1 and WebSocket over TCP or TLS"

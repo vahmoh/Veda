@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Rising Bubbles": translucent bubbles rising through sunlit water, 360x640
 //! (portrait) at 30 fps, 6 s, without sound.
 //!

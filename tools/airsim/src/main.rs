@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! airsim — the simulated Wi-Fi environment for Veda under QEMU.
 //!
 //! QEMU cannot emulate a Wi-Fi adapter, so Veda's virtual radio (a

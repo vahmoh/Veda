@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `net` — Veda's network driver for Linux: the guest's Ethernet cards
 //! (Linux's network interfaces of PCI and USB devices; Wi-Fi radios are
 //! `wifi`'s) as Veda's network devices, each attached to Veda's network

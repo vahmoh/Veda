@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Pictures turned upright on their way into a slot: a stream's rotation
 //! (clockwise, in right angles) and mirroring, applied to opaque pixels the
 //! scaler made at the turned size.

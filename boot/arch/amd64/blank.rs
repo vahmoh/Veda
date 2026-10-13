@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Painting the screen write-combining on AMD64.
 //!
 //! Firmware usually leaves the framebuffer uncached (see `memtype`), where

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The paravirtual platform Veda's guests run on.
 //!
 //! A guest finds no emulated hardware: no interrupt controllers or timers

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Acoustic echo cancellation.
 //!
 //! A voice assistant that keeps listening while it talks hears itself: the

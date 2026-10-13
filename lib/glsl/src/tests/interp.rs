@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The interpreter, end to end: GLSL compiled, linked, lowered to SSA,
 //! compiled to bytecode and run on sixteen lanes whose inputs differ, so
 //! that every branch and loop diverges. Expected values come from plain

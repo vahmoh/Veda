@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The paravirtual platform (`crate::platform`) as x86-64 guests have it.
 //!
 //! A guest's processors have an x2APIC whose timer runs on the TSC

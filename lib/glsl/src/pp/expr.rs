@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `#if`, `#elif` and `#line` expressions.
 //!
 //! Integer constants and the operators of GLSL ES's preprocessor table

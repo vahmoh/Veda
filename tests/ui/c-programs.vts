@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # C programs in the Terminal (1280x800 with the taskbar): a program found by
 # its path runs as a child of the shell with the terminal as its standard
 # streams, and $? is its exit status; an interactive program shows its

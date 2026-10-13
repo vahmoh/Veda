@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The ground's and the sea's meshes.
 //!
 //! The ground is cut into square chunks, each drawn at full detail near

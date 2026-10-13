@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vgl"
 description = "OpenGL ES 3.0: the API with complete error checking, a multi-threaded SIMD software renderer, and a virgl renderer for virtio-gpu"

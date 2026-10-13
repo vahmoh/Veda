@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vsplash"
 description = "The startup splash's picture (a dark gradient and the Veda ring), drawn alike by the processor and the GPU"

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Image thumbnails, decoded on a background thread (feature `thumbnails`).
 //!
 //! The UI asks for a thumbnail with [`Thumbnailer::get`]; unknown paths are

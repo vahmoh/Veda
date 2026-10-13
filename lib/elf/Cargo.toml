@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "velf"
 description = "ELF64 executable parser and System V process image layout, used to load POSIX programs"

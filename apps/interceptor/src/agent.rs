@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interceptor for the voice agent: what the game shows (the menus, the
 //! career and its stars, a chase's suspect, distance, time and damage, a
 //! patrol's tally, the results, the settings) and what it does (starting a

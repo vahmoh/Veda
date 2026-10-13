@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # Veda architecture
 
 Veda is an x86-64 operating system built around a capability-based

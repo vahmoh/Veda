@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Glyph outline consumers.
 //!
 //! Outlines are produced in font units with y pointing up. [`OutlineSink`] receives them;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Deepgram APIs the agent uses.
 //!
 //! * The **Voice Agent API** (`wss://agent.deepgram.com/v1/agent/converse`):

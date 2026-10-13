@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Synthesis for offline rendering (the `musicgen` tool).
 //!
 //! | Module | Contents |

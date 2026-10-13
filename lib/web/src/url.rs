@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! URLs for the web clients: `http`, `https`, `ws` and `wss`.
 
 use alloc::format;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The sounds, synthesised as the game plays: engines that follow their
 //! revs and load, sirens wailing and yelping with the Doppler shift of a
 //! passing police car, tyres squealing, crashes, wind, horns, the echo of

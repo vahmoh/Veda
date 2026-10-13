@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "guest-wifi"
 description = "Veda's Wi-Fi driver for Linux: Linux's Wi-Fi radios as Veda's managed radios"

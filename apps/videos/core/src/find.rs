@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Videos by their names, as people say them ("play the aurora video"):
 //! words scored as Music scores songs, so the two apps understand names
 //! alike.

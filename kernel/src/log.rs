@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Kernel log: formatted messages go to an in-memory ring buffer that user
 //! space can read with the `log_read` system call, and from it to the
 //! serial port, as fast as the port takes them (`arch::serial`): never

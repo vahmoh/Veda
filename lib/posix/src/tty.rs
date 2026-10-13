@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The terminal: `isatty`, its size and its modes (`termios`).
 //!
 //! A program run by the Terminal gets the terminal's shared state

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Ephemeral key exchange: X25519 (RFC 7748), secp256r1 and secp384r1
 //! (ECDH with uncompressed points, RFC 8446 section 4.2.8.2).
 //!

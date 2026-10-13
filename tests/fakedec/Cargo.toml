@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "fakedec"
 description = "A stand-in for the media decoder: speaks vproto::media with drawn pictures and a tone, for testing Videos without FFmpeg"

@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
  * convert.c - pictures to the screen's pixels (libswscale), sound to the
  * player's samples (libswresample), and pictures' fingerprints.
  *

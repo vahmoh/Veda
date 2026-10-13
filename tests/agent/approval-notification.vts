@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Consent while the agent's window is closed: the request appears as a
 # notification with Deny and Allow above the tray, and stays until it is
 # answered. Denied, nothing happens; allowed, the action runs and the

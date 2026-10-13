@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Signature verification for certificates (through webpki) and for the
 //! handshake (CertificateVerify in TLS 1.3, ServerKeyExchange in TLS 1.2):
 //! ECDSA on P-256 and P-384, Ed25519, RSA PKCS#1 v1.5 and RSA-PSS.

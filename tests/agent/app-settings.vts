@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Settings' agent interface, with a simulated Voice Agent service: the
 # agent shows a page and changes its own speaking rate and, with the user's
 # OK, its name; the conversation picks the changes up at once.

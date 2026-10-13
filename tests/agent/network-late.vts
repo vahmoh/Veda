@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The agent wakes as Veda starts while the network is not there yet (the
 # cable is out): it keeps trying, and the conversation opens once the
 # cable is in. A network that has been down for a while is reported at

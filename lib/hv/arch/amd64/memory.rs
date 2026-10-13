@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Where a guest has what is below 1 MiB, as a PC has it: in the legacy
 //! area, which the guest's memory map reserves, the copy of an Intel GPU's
 //! OpRegion (`crate::igd`), then the ACPI tables (`crate::acpi`), the RSDP

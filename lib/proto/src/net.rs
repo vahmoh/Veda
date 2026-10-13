@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The network protocols served by `netd`, the network service.
 //!
 //! * [`net`] (service `"net"`): what applications use — TCP and UDP sockets,

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # A card without MSIs: QEMU's Intel 82540EM ("e1000") interrupts through
 # its INTx, a level-triggered line of the I/O APIC. devmgr finds where the
 # firmware wires it (its _PRT), the driver VM gets the line, and the

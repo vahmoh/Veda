@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Kernel virtual address regions outside the direct map:
 //!
 //! * MMIO windows (uncached or write-combining device registers), and

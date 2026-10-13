@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The shim's interface (`shim/vmd.h`), as Rust sees it. Integers and
 //! opaque pointers only: this half is built without floating point, which
 //! it would pass otherwise than GCC. The structures' sizes are checked on

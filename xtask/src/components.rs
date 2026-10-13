@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Cross-building the individual Veda components with cargo.
 //!
 //! * The UEFI loader and the kernel are built for the architecture's UEFI

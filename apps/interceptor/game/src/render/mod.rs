@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The pictures, with OpenGL ES 3.0: the world's meshes on the GPU, the
 //! sky, and a frame drawn from a camera.
 //!

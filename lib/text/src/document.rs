@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! [`Document`]: a buffer with a selection, editing commands and grouped
 //! undo/redo.
 

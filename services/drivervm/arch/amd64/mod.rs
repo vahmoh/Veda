@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The driver VM on AMD64: its guest is a PC, as far as Linux needs one.
 //!
 //! * [`boot`]: Linux booted the x86 way.

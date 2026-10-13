@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The computer's drivers drive: traffic flows without piling up, a
 //! suspect runs fast without getting stuck, the police catch up with it.
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vheap"
 description = "TLSF (two-level segregated fit) memory allocator used for user-space heaps"

@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # Veda coding conventions
 
 These rules apply to every crate in the repository.
@@ -140,7 +143,8 @@ optimisations (`--release` is the default for `cargo xtask`).
 * Never panic on malformed input (files, IPC messages, user data): return a
   crate-specific error enum that implements `core::fmt::Display`.
 * `unsafe` blocks carry a `// SAFETY:` comment explaining why they are sound.
-* Public items have doc comments; every module starts with a `//!` overview.
+* Public items have doc comments; every module starts with a `//!` overview,
+  after its licence header (below).
 
 ## Formatting and testing
 
@@ -148,3 +152,32 @@ optimisations (`--release` is the default for `cargo xtask`).
 * Unit tests live next to the code (`#[cfg(test)] mod tests`). Run them with
   `cargo test -p <crate>`; `cargo xtask test` runs the full suite plus the
   QEMU integration tests.
+
+## Licence headers
+
+Every file of Veda's own starts with its copyright and its licence, as SPDX
+tags in the file's comment syntax:
+
+```rust
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! The module's overview.
+```
+
+* The licence is Veda's, the GPL version 3 (`LICENSE`), but for the code
+  that Mesa's build compiles with Mesa: the driver VM's renderer
+  (`guest/renderer/decoder`, `guest/renderer/drm`) is under the MIT
+  licence, as Mesa is.
+* The year is the one the file was first published in.
+* Only what has to be first comes before the header: a script's `#!` line,
+  an HTML page's `<!doctype html>`, an XML declaration. In C, C++ and
+  JavaScript the header opens the file's first comment; Markdown, HTML and
+  SVG have it in HTML comments.
+* Files whose format has no comments go without (images, fonts, videos,
+  test vectors, JSON, `website/CNAME`), as do `Cargo.lock`, which Cargo
+  writes, licence texts, and other projects' files: the vendored crates
+  (`third_party/<crate>/`) and the ports' patches.
+* A test of xtask's (`xtask/src/licence.rs`), which `cargo xtask test`
+  runs, checks every file of the repository, and every new one Git does
+  not ignore.

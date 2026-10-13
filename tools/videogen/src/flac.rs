@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A small FLAC encoder (RFC 9639) for the videos' sound: 16-bit PCM in
 //! blocks of [`BLOCK`] samples, each channel coded with the smallest of the
 //! fixed predictors of order 0 to 4 (or verbatim, or as a constant), its

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Mesa: the Gallium framework, its software (softpipe) and Intel (iris)
 # drivers, NIR and Intel's shader compiler, for OpenGL ES on the GPU.
 name = "mesa"

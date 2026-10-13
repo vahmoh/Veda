@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What Videos remembers between runs, in `~/.config/videos/state`: its
 //! volume, where each video was left, and which were watched to the end.
 //!

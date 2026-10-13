@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `assetgen` — generates the Veda wallpapers and sample pictures at build time.
 //!
 //! ```text

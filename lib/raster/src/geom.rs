@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Basic geometry types: points/vectors and axis-aligned rectangles.
 
 use core::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};

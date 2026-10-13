@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Vector paths: contours made of lines and quadratic/cubic Bézier curves, plus builders for common
 //! shapes (rectangles, rounded rectangles, ellipses, circles, arcs and pies).
 //!

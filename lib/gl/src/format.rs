@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Pixel formats: what resources store, what OpenGL ES calls them, and
 //! conversion to and from the pixel data applications pass.
 //!

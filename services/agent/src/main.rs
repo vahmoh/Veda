@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `agent` — the voice agent that lives in Veda.
 //!
 //! A system service, started at boot and restarted if it fails. It is the

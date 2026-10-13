@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The decoder killed while a video plays (1280x800 with the taskbar; `-f`:
 # the Terminal counts processes the launcher did not start as the system's):
 # Videos starts it again where the picture was, and the video goes on to

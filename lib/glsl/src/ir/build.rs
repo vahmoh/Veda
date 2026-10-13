@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! From the checked shader to SSA.
 //!
 //! The builder walks `main` (and every function it calls, inlined) in

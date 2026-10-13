@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Memory objects and address-space management.
 
 use vabi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};

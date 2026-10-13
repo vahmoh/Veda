@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Settings → Agent: the page the shell's "Open Settings" button opens. With
 # no Deepgram key the agent asks for one; a key that is not a Deepgram key
 # is refused before it is stored, and a well-formed one is stored (only its

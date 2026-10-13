@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Stroking: converts the outline of a stroked path into a path that can be filled.
 //!
 //! Each contour is flattened into a polyline. Open polylines become one closed outline (left side

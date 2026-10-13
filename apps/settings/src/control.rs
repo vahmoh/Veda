@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Settings for the voice agent: which page is shown, and the agent's own
 //! voice, speaking rate, name and language model — so the user can say
 //! "talk a little slower" and the change is made where it belongs, in the

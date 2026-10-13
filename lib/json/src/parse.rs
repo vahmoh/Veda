@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The parser: RFC 8259 JSON, strict (no comments, no trailing commas),
 //! with a nesting limit. Duplicate object keys keep the last value.
 

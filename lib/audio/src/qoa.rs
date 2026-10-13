@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! QOA — the "Quite OK Audio" format.
 //!
 //! QOA is a lossy codec with a fixed bit rate of 3.2 bits per sample. Each

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Serving Settings: the agent's configuration, the Deepgram key, the
 //! models and voices to choose from, voice previews, memory and
 //! permissions.

@@ -1,4 +1,7 @@
-/* posix — checks of Veda's POSIX layer through the C library.
+/* SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
+ * posix — checks of Veda's POSIX layer through the C library.
  *
  * Each check prints "ok - NAME" or "not ok - NAME: REASON"; the program
  * exits with the number of failed checks (0: all passed). `systest` runs it

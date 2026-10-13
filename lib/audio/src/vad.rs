@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Voice activity detection.
 //!
 //! [`Vad`] decides every 10 ms whether a mono 16-bit signal (16 kHz is the

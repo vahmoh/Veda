@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! State queries (OpenGL ES 3.0 section 6.1): `Get*`, strings and the
 //! implementation's limits.
 

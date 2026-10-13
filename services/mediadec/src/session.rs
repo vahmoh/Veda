@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A decoding session: the protocol's calls ([`media::Server`]) and the work
 //! the decoder's loop does between them, one shim call at a time, so that a
 //! request waits at most for one call into FFmpeg.

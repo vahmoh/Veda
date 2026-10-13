@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Certificate chains of real servers, captured on 2026-10-03 and verified
 //! against the built-in roots (webpki-roots) at that time, as the client
 //! does during a handshake.

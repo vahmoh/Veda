@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Synchronisation primitives for user space.
 //!
 //! [`Mutex`] and [`Condvar`] are futex-based: uncontended operations never

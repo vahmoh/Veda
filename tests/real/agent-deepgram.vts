@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The voice agent with the real Deepgram Voice Agent API, on the real
 # Internet: the API key is typed into Settings → Agent and checked with
 # Deepgram, Deepgram's voices are listed, then a spoken conversation (the

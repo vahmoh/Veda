@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vhv"
 description = "The hypervisor's logic that touches no hardware: the paravirtual platform that Linux guests run on, with its ACPI tables, and the architecture's virtual devices (on AMD64 the local APIC, and the guests' CPUID)"

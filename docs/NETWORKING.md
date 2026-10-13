@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # Networking and Wi-Fi
 
 Veda reaches the Internet over Ethernet and Wi-Fi. As everywhere else

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A decoding session: the protocol's calls ([`media::Server`]) and the work
 //! the loop does between them, one piece at a time, as `mediadec`'s session
 //! does them (`services/mediadec/src/session.rs`, which this follows call

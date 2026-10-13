@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Starting a decoder: its program read once, then a process with nothing
 //! but its control channel (no registry, so no file, service or network but
 //! what it is sent), and a client to speak `vproto::media` with it.

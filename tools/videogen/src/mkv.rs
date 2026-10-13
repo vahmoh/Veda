@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A small Matroska muxer for the sample videos: AV1 video (track 1) and,
 //! optionally, FLAC sound (track 2).
 //!

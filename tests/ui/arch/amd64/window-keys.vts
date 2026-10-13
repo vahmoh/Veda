@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Window shortcuts (1280x800) on the Text Editor: Super+Right snaps it to the
 # right half, Super+Up maximises it, Super+Down restores it, Super+D shows the
 # desktop and brings the window back, and Super+Down minimises it. The keys

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A TLSF (two-level segregated fit) allocator.
 //!
 //! TLSF gives O(1) allocation and deallocation with low fragmentation:

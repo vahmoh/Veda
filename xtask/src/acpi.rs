@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `cargo xtask acpi DIR`: what devmgr makes of a PC's ACPI tables, worked
 //! out on the host. DIR holds the tables as Linux has them (`sudo cp -r
 //! /sys/firmware/acpi/tables DIR`); the same interpreter (`vacpi`) loads

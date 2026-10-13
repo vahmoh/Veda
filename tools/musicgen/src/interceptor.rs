@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interceptor's music: loops for the menus, for driving about and for
 //! the chase, written to `OUT_DIR/games/interceptor/` (QOA, 44.1 kHz).
 //!

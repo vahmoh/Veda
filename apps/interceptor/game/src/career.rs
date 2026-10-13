@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The career: missions in order, each a pursuit in its own place, light
 //! and weather against its own suspect; how a result is scored and the
 //! stars it earns; and what is kept between sessions (the best results

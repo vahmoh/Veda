@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # NVM Express disks (1280x800): the machine starts from one, whose boot
 # loader and system the firmware reads, and Veda's nvme driver serves the
 # home disk, another, from which the home directory survives a reboot: a

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! When to ask the decoder to leave pictures out.
 //!
 //! A machine too slow for a video shows it late: pictures pile up behind the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Veda icon set: simple line icons designed on a 24x24 grid, drawn
 //! as vector paths so they are crisp at any size.
 

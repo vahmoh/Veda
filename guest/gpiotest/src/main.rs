@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `gpiotest` — checks, inside the driver VM's Linux, the GPIO pins Veda
 //! gave it, as a test's ACPI table describes them: a simulated controller
 //! of devmgr's (`VTST0002`, whose even pins drive the odd ones after them),

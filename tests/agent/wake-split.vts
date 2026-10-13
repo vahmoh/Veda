@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # A call the recogniser finishes before the rest of the sentence ("Hey
 # Veda." ... "What time is it?", as Deepgram does when the speaker pauses
 # after the name): the agent wakes once the sentence is over, and all of it

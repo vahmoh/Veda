@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A controller as its registers behave, for tests: devmgr drives one in
 //! place of a PC's when a test's ACPI table describes it, and host tests
 //! use it too. Every pad starts host-owned, unlocked, in GPIO driver mode,

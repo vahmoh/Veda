@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Composition: damaged regions are redrawn bottom to top, by the GPU
 //! straight into the picture the display shows next (`gpu`) where it can,
 //! or by the processor into the back buffer, which is then copied to the

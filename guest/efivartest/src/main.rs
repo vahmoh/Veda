@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `efivartest` — checks, inside the driver VM's Linux, the PC's firmware
 //! variables Veda gave it, as a test's firmware has them
 //! (`tests/ui/drivervm-variables.vts`): two variables of a test vendor's,

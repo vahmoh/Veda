@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The engine thread: the decoder's keeper.
 //!
 //! It starts the decoder (`mediadec`, or a stand-in named on the command

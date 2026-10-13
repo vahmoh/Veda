@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The menus, drawn over the showcase (or over play, paused): the title,
 //! the main menu, the career's missions with their briefings, a quick
 //! chase's and a patrol's choices, the options, the pause menu and the

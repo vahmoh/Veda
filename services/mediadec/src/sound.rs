@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The times of sound: where a chunk starts after an exact seek, and how
 //! chunks follow each other so that the sound stays continuous (the player
 //! keeps time by it).

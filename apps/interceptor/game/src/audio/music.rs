@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The music: tunes of a few stems recorded in step (the same tempo and
 //! length), looping. A tune's first stem always plays; the others join as
 //! the game's intensity rises (in a pursuit: the lead and the heavier

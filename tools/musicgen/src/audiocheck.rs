@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `audiocheck` — analyses a recording of Veda's audio output (the WAV
 //! file QEMU writes in headless runs) to prove that playback works.
 //!

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Interceptor and About for the voice agent, with a simulated Voice Agent
 # service. A game whose window is not in front waits, paused: a chase the
 # agent started pauses itself when the Terminal takes the keyboard, the

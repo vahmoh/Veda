@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Task Manager for the voice agent: what it shows (the page, the busiest
 //! processes, the system's load) and what it does (listing and sorting the
 //! processes, showing the performance graphs, ending applications), through

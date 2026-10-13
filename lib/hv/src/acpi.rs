@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The platform's ACPI tables: the machine as they describe it to the
 //! guest, as a PC's firmware describes a PC: hardware-reduced ACPI (no
 //! fixed hardware, no SCI) and no MADT (the processors are the platform's,

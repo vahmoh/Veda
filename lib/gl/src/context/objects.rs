@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The GL's objects, and how names refer to them.
 //!
 //! Objects of one kind live in a [`Store`]. A name refers to an object, and

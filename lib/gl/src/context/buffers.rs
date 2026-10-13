@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Buffer objects (OpenGL ES 3.0 section 2.10).
 
 use alloc::vec::Vec;

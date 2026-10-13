@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Alt+Tab window switcher: while Alt is held, an overlay shows
 //! thumbnails of the open windows (most recently used first); Tab and
 //! Shift+Tab move the selection and releasing Alt activates it.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Programs run in the terminal.
 //!
 //! A program typed at the prompt (found on `PATH`, or named by a path) runs

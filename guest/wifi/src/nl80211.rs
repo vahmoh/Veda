@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! nl80211, the part a station of Veda's needs: the radio's interface and
 //! channels, scans and their results, joining (authentication,
 //! association, keys and the control port that carries EAPOL) and leaving,

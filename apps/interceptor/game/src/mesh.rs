@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Meshes built on the processor: the vertex layout every static object
 //! shares, and the shapes the world and the cars are made of.
 //!

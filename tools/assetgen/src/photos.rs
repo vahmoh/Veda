@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Sample "photos" for `~/Pictures`: procedural scenes in every supported format.
 
 use std::f32::consts::TAU;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A scene: the draws and clears recorded for one framebuffer, with their
 //! primitives set up and sorted into 64x64-pixel tiles, ready for the
 //! tiles to be rendered in parallel.

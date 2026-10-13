@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Curve flattening: approximating quadratic and cubic Bézier curves by line segments.
 //!
 //! The segment count comes from Wang's formula: for a degree-`d` curve whose control points have

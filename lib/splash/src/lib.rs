@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vsplash` — the startup splash's picture: a dark gradient with the
 //! Veda logo (OS1's white ring from "Her").
 //!

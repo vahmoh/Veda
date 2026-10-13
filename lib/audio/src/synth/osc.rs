@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Oscillators: a table sine, band-limited (PolyBLEP) saw, square and
 //! pulse waves, an integrated triangle, white noise and an NES-style
 //! stepped triangle and LFSR noise for chiptune sounds.

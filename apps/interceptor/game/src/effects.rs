@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What passes: tyre smoke where wheels slide, spray thrown up from a wet
 //! road, sparks where metal meets metal or a wall, and the skid marks
 //! sliding tyres leave on the road (fading over a minute). Made here from

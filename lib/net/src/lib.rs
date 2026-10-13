@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vnet` — networking for Veda applications.
 //!
 //! Blocking, `std::net`-like types on top of the network service's socket

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The Terminal's agent interface, with a simulated Voice Agent service.
 # Running a command waits for the user's OK (the request shows the exact
 # command line) and returns what the command printed. A long command keeps

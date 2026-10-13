@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Media time: the clock pictures are shown by.
 //!
 //! With sound it is the sound as it is heard: the audio thread notes where

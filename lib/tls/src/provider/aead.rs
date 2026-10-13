@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Record protection: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 for
 //! TLS 1.3 (RFC 8446 section 5.2) and TLS 1.2 (RFC 5288, RFC 7905).
 //!

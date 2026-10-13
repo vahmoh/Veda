@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vipc` — typed inter-process communication for Veda.
 //!
 //! * [`codec`]: the binary encoding (`Encode`/`Decode`) plus the `message!`,

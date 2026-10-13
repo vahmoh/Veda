@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The resolution the scene is rendered at in software: as high as the
 //! frame rate allows.
 //!

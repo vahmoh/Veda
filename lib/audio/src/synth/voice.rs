@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Instruments. Each renders one note at a time into a stereo buffer
 //! (interleaved, including its release tail), which keeps offline
 //! rendering simple: notes never steal voices from each other.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Memory management: physical frames, page tables, the kernel heap, kernel
 //! virtual allocations, memory objects (VMOs) and user address spaces.
 

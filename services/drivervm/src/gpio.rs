@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The GPIO pins the guest has: the PC's pins that the devices described
 //! below its functions are wired to (a laptop's amplifiers: a chip select,
 //! their reset, their interrupt), on a GPIO controller of the platform's

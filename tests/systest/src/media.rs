@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Tests of the media decoder (`/system/bin/mediadec`, FFmpeg and dav1d)
 //! and the libraries it is built from, when the image has them (the cross
 //! toolchain built them):

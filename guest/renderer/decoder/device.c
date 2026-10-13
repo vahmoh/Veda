@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 Vahid Mohammadi
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: MIT
  *
  * Devices: a Gallium screen, and the capabilities it gives clients

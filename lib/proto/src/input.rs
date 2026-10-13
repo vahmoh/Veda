@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Input events from device drivers to the window system.
 //!
 //! Drivers connect to the `input` service (provided by the compositor) and

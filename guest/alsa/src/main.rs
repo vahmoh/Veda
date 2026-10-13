@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `alsa` — Veda's sound driver for Linux: the guest's sound card (the PC's
 //! own: its first playback device that is not a display's, and its card's
 //! microphones, through ALSA's kernel interface) as Veda's output and input

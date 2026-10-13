@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! PCI configuration space access (through the architecture's mechanism,
 //! `arch::config`), bus enumeration, and resetting a function.
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The link to the agent's user interface in the shell: one-way events
 //! (status, approval requests) on a channel, and a shared page of live
 //! voice levels that the shell's animation reads every frame.

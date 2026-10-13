@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! ISO 9660 images that boot with UEFI, from a disc or from a USB stick.
 //!
 //! An image holds its files twice. Once in an ISO 9660 file system (level 1:

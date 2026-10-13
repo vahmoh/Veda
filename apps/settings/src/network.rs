@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The "Network & Internet" page: the Wi-Fi switch and connection, the
 //! networks in range, saved networks, every interface with its addresses,
 //! and diagnostics.

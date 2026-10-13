@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vtext` — the text editing model behind the Text Editor.
 //!
 //! * [`Buffer`]: text as lines, addressed by [`Pos`] (line, byte column);

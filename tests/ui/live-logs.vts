@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The live system keeps its log on the stick it started from: logkeeper,
 # in the driver VM, whose Linux has the stick (it is on the USB controller),
 # writes Veda's log (Linux's console among it) and Linux's own, whole, into

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Widgets for media players (Music, Videos): a seek bar that also says
 //! where the pointer is over it, the big round play button, and icon buttons
 //! that can be toggled on.

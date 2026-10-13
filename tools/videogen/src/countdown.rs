@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Countdown": an A/V sync test, 640x360 at 30 fps, exactly 12 s.
 //!
 //! The first second is 75% colour bars. Then the numbers 10 to 1 count

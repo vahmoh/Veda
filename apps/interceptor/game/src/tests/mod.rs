@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Host tests that look at the whole game: the map of Veda Bay, the
 //! drivers, the pictures and the sounds.
 

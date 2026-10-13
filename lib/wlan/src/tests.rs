@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! End-to-end tests: a [`Station`] and an [`AccessPoint`] joined by a
 //! simulated radio channel, with a millisecond clock. A managed station's
 //! radio is simulated too ([`Mlme`]): it makes the frames of the station's

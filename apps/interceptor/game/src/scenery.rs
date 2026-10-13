@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The bay's furniture beyond the road and the city: trees on the hills
 //! and along the coast, the harbour bridge's towers, cables and lights,
 //! billboards along the open road, and neon names on downtown's roofs.

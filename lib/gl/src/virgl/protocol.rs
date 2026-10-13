@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The virgl command stream's numbers: virglrenderer's
 //! `virgl_protocol.h` and `virgl_hw.h`, and the Gallium enumerations the
 //! commands carry (`p_defines.h`).

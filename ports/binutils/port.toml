@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # GNU Binutils: the assembler, the linker and the tools for object files.
 name = "binutils"
 version = "2.47"

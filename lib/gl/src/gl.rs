@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The OpenGL ES 2.0 and 3.0 enumerants, as `u32` (`GLenum`, `GLbitfield`)
 //! values, named as in C without the `GL_` prefix: `gl::TRIANGLES` is
 //! `GL_TRIANGLES`.

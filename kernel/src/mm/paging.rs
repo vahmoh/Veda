@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Page tables, as the rest of the kernel sees them: what a mapping allows
 //! ([`Flags`]), how its memory is cached ([`Cache`]), and the kernel's own
 //! address space. The tables themselves, and an address space's root, are

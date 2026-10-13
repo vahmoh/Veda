@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Optimisation passes.
 //!
 //! * [`simplify`]: replaces trivial φs (all operands the same value, or the

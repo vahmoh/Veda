@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # C on Veda
 
 Veda runs C programs and builds them itself: the system image comes with

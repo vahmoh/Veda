@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What Veda's hypervisor knows of AMD64 machines that touches no hardware.
 //!
 //! * [`lapic`]: the local APIC of a guest's virtual processor, in x2APIC

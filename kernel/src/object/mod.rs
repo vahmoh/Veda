@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Kernel objects, handles and signals.
 //!
 //! Every object user space can reach is a [`KObject`] stored in a process's

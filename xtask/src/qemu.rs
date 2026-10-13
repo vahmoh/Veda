@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Locating QEMU and its UEFI firmware, and assembling the command line.
 //! The machine is the architecture's (`arch::qemu`): its emulator, its
 //! firmware, and the arguments and devices particular to it.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The architecture Veda is built for.
 //!
 //! Everything about building Veda and running it in QEMU that depends on

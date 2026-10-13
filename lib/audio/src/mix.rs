@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Gains, volume curves, mixing and sample conversion.
 //!
 //! The mixer inside the audio service runs on every block of audio, so the

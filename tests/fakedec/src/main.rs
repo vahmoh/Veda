@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `fakedec` — a stand-in for the media decoder, `mediadec`: it speaks
 //! [`vproto::media`] as `mediadec` does, with pictures it draws and a tone
 //! in place of a file's, so that Videos' playback, pacing, seeking, crash

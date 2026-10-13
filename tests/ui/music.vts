@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Music player (1280x800 with the taskbar): play, pause and resume, seek
 # (keyboard and seek bar), next track, volume (keyboard and slider),
 # shuffle/repeat, and playing a track from the library by double-clicking

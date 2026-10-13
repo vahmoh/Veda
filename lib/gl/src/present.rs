@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Showing images in windows: bilinear scaling of 0xAARRGGBB images.
 
 use core::ops::Range;

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! GPIO pins, for the devices the firmware wires to them (a laptop's
 //! amplifiers: their reset line, a chip select, their interrupt). devmgr
 //! drives them on a driver's behalf — Veda's, or the driver VM's monitor

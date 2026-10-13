@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Status glyphs: the network and the sound, as the taskbar's tray and the
 //! panels it opens show them.
 //!

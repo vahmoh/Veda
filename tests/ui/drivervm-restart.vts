@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The driver VM starts again when it fails. Among its devices are the wired
 # card (QEMU's 82576, which has a function-level reset) and Wi-Fi (the
 # virtual radio's port, which has none; see drivervm-wifi.vts); nettest

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The preprocessor's tokenizer: phases 1 to 8 of GLSL ES compilation.
 //!
 //! The shader's source strings are read as one stream of characters (a

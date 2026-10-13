@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Network commands: `wifi`, `ifconfig`, `ping`, `nslookup`, `netstat`,
 //! `route` and `curl`. They talk to the network and Wi-Fi services through
 //! `vnet`; every wait is bounded, and the long ones (pinging, scanning,

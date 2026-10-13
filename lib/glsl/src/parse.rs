@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The parser: GLSL ES 1.00 and 3.00 grammar (chapter 9), by recursive
 //! descent, with binary operators by precedence climbing.
 //!

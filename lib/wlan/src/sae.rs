@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! SAE — Simultaneous Authentication of Equals (IEEE 802.11-2020, 12.4),
 //! the password-authenticated key exchange of WPA3-Personal, over the
 //! NIST P-256 group (group 19).

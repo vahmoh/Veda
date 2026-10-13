@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # A crashing application is reported: start a program that faults on
 # purpose from the Terminal and check that the shell shows a notification.
 fail-on "PANIC"

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Colors and pixel arithmetic.
 //!
 //! API colors ([`Color`]) use straight alpha. Pixels in surfaces are

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Skyline Run" — uplifting house in G minor / B-flat major, 124 BPM.
 //!
 //! Intro (8) · groove (8) · drop (16) · breakdown (8) · drop (16) · outro (4)

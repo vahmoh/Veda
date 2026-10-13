@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The startup sound, which the shell plays as the boot splash gives way
 //! to the desktop: under four seconds, quiet, and soft at its start (the
 //! speaker amplifiers of some laptops power up as it begins). A warm

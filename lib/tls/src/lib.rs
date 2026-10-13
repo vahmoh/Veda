@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vtls` — TLS for Veda applications: HTTPS, secure WebSockets and any
 //! other protocol over TLS 1.3 or TLS 1.2.
 //!

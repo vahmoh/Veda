@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Veda's renderer on the host, for tests (`VGL_TEST_BACKEND=gallium`):
 //! the decoder that carries out virgl command streams on a Gallium driver
 //! (`guest/renderer`), built with Mesa as `vgallium.so` around softpipe,

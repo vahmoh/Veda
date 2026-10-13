@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The running game: the cars on the road and who drives them, the
 //! physics stepping at a fixed rate, the camera, and what a frame shows.
 //!

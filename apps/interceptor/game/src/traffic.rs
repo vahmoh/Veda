@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Traffic round the player: cars both ways, as many as the district is
 //! busy, in the colours people buy.
 //!

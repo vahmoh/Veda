@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Devices' interrupts on AMD64.
 //!
 //! Each device interrupt has a vector of its own, from one pool: an MSI's,

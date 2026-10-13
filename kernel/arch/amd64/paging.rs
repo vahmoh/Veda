@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! x86-64 four-level page tables.
 //!
 //! An address space is the physical address of its top-level table (a

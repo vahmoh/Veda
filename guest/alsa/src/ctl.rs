@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The sound card's mixer, through ALSA's control interface
 //! (`/dev/snd/controlC*`): its output path at unity gain, unmuted. Veda's
 //! audio service sets the volume itself, as for Veda's own drivers, whose

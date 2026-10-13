@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Aurora Drift" — ambient in D major, 66 BPM.
 //!
 //! Intro (6) · A (8) · B (8) · A' (8): slow pads, glassy bells, harp

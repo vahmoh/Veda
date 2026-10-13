@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The POSIX layer on AMD64: what Linux's x86-64 ABI has of its own
 //! ([`linux`], [`syscall`]), the thread pointer (the FS base, which `%fs:0`
 //! holds), and the code new threads start in and old ones end with.

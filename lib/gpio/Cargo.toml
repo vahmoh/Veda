@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vgpio"
 description = "GPIO controllers for Veda's device manager: Intel's chipset pads, located by ACPI pin number and driven through their registers"

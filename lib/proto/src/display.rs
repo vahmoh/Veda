@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The display protocol: how applications get windows from the compositor.
 //!
 //! A client creates a window, then attaches pixel buffers that live in a

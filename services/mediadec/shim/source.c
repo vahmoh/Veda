@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
  * source.c - opening a source and reading its packets (libavformat).
  *
  * FFmpeg reads through the Rust half's callbacks (struct vmd_io), so the

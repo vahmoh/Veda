@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Visual checks: render sample text with every bundled font to PNG files for inspection.
 //!
 //! Run with `cargo test -p vfont -- --ignored --nocapture`; images are written to

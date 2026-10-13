@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The syntax tree the parser builds: GLSL ES 1.00 and 3.00 alike.
 //!
 //! The parser accepts the grammar of chapter 9 of either version and

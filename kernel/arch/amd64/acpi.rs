@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What the firmware's ACPI tables say of an AMD64 machine: its processors
 //! and interrupt controllers (MADT), its HPET, and where its IOMMU's table
 //! is (DMAR, which `iommu` reads).

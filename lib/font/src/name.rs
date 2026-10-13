@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The `name` table: font family, style, copyright and license strings.
 //!
 //! Records are chosen in this order of preference: Windows Unicode English (US), any Windows

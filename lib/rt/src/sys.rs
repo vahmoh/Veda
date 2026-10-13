@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Raw system calls. Prefer the safe wrappers in [`crate::object`] and the
 //! other modules; these exist for completeness and for low-level code.
 

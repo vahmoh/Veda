@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The memory the firmware keeps for devices, as a PC's says it: the DMAR
 //! table's (Intel VT-d's) reserved memory regions, RMRRs.
 

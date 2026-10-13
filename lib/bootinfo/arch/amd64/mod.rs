@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The boot handoff protocol on AMD64.
 //!
 //! The loader enters the kernel in 64-bit long mode, with interrupts

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Socket channels: the per-socket conversation with a client (see the
 //! `vproto::net` module docs for the protocol and its credit-based flow
 //! control).

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Veda Bay renders on the host: in software, and through Veda's
 //! renderer (on softpipe, or on this machine's Intel GPU with
 //! `VGL_GALLIUM_DEVICE=iris`), as it renders in Veda.

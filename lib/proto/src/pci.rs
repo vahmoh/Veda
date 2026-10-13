@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The per-device PCI protocol served by `devmgr`.
 //!
 //! A driver is started with a channel speaking this protocol for exactly one

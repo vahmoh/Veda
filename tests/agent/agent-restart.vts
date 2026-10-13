@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Applications register again when the agent service restarts (init starts
 # it again after it failed), with a simulated Voice Agent service: the new
 # agent reaches the Text Editor that is open, with its unsaved text,

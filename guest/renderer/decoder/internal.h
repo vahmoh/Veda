@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 Vahid Mohammadi
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
  * SPDX-License-Identifier: MIT
  *
  * The renderer's insides: devices, contexts and the objects of a context,

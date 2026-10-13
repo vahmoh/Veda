@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Keyboard state: modifiers, the US keyboard layout, and auto-repeat.
 
 use alloc::string::String;

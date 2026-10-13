@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The firmware's description of the machine (ACPI): which devices it
 //! places below which PCI functions, what they are and which resources
 //! they use, for their drivers. A driver only learns about the devices

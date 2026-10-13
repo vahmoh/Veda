@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Pointer and keyboard input: hit testing, moving and resizing windows,
 //! clicks and focus, key delivery and the global shortcuts.
 

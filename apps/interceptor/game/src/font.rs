@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A stroke font for the signs: capital letters (and a few marks) as line
 //! segments on a grid four units wide and six high, drawn as strokes of
 //! any thickness: painted into the billboards' pictures, or built as the

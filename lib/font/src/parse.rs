@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Bounds-checked big-endian readers for font data.
 //!
 //! All reads return `None` instead of panicking when the data is too short; callers map that to a

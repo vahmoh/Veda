@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Synthetic signals for the echo canceller and voice activity tests.
 //!
 //! Everything is deterministic (seeded) and needs no files:

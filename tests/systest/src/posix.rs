@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Tests of what C programs stand on: sockets, memory protection, private
 //! memory, the thread exit futex, the VFS's open-file connections, ending a
 //! job, and the C programs themselves (`/system/tests/c`, built by the cross

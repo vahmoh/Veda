@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Linux ABI that musl expects: flags and the layouts of the structures
 //! passed through system calls. What is particular to the architecture (the
 //! system call numbers, `struct stat`) is `arch::linux`'s, re-exported here.

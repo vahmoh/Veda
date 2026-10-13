@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vgfx` — Veda 2D graphics.
 //!
 //! * [`Canvas`]: drawing on a borrowed buffer of premultiplied `0xAARRGGBB`

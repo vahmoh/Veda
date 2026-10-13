@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `compositor` — the Veda window system.
 //!
 //! Owns the screen and composes client windows onto it. It provides three

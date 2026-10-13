@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Transform feedback objects (OpenGL ES 3.0 section 2.15).
 
 use super::{Context, TransformFeedback};

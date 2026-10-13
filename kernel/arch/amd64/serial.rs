@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! COM1, the serial port the kernel log goes to (QEMU's console, which
 //! tests read; a cable's).
 //!

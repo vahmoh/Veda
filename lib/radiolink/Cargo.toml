@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vradiolink"
 description = "The message format between Veda's virtual Wi-Fi radio and the airsim host simulator"

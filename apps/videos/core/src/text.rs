@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Times and descriptions for people: `1:05`, `0:04.033`, "720p",
 //! "1280 × 720 · AV1 · 24 fps", "FLAC · 48 kHz · stereo".
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Which decoded picture to show.
 //!
 //! The decoder publishes pictures ahead of time into the slots of the frame

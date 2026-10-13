@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The smoltcp device behind each interface: two frame queues. The
 //! network service moves frames between these queues and the driver's
 //! shared ring; tests connect two stacks' queues directly.

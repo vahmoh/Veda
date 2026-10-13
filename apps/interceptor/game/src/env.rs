@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The time of day and the weather: the sun or the moon, the sky, the
 //! ambient light, the fog, how wet the roads are and whether the street
 //! lights are on.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Copying data between the kernel and the current user address space.
 //!
 //! User memory can be changed concurrently by other threads of the process

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Transform feedback where the host records only zeros.
 //!
 //! Some hosts' OpenGL drivers capture nothing but zeros from a vertex

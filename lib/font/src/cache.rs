@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A bounded cache of rasterized glyphs.
 //!
 //! Entries are keyed by (font id, glyph id, size in 1/64 px, horizontal subpixel bin out of

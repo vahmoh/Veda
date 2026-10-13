@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The preprocessor: GLSL ES 1.00 and 3.00, sections 3.3 to 3.5.
 //!
 //! It works as C++'s does, without `#` and `##` (neither version has

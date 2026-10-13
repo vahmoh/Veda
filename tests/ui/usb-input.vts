@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # USB input (1280x800): QEMU's xHCI controller with a keyboard and a tablet
 # behind a hub, and a mouse on a port of its own, and no PS/2 controller, so
 # keys and clicks can only come through USB, which is Linux's: the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The device manager on AMD64 (a PC): its PCI configuration mechanism
 //! (`config`), the memory the firmware keeps for devices (`dmar`), and the
 //! PC's own devices the driver VM gets (`platform`).

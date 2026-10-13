@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! TrueType/OpenType (glyf and CFF) font parsing, rasterization, caching and text layout.
 //!
 //! * [`Font`] is a zero-copy parser over the font file bytes: table directory, metrics

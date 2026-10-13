@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A small pool of worker threads for data-parallel work (rendering, mostly).
 //!
 //! [`ThreadPool::run`] executes a closure once on every participating thread

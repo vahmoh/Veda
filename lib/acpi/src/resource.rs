@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Resource templates: what `_CRS` returns, a list of descriptors for the
 //! memory, I/O ports, interrupts, GPIO pins and serial bus connections a
 //! device uses (ACPI 6.5, section 6.4).

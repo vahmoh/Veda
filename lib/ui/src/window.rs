@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Client-side windows: connection to the compositor, double-buffered
 //! shared surfaces, frame pacing and event delivery.
 

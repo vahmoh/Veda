@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vnetstack` — the network stack behind `netd`.
 //!
 //! The stack owns the interfaces (each a smoltcp [`Interface`] with its own

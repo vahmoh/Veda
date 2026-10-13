@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Performance tab: a resource list with sparklines on the left and a
 //! large history graph with summary tiles for the selected resource.
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What the game sounds like: from the cars on the road and what happened
 //! to them, the [`Scene`] the mixer plays each frame (the engines, sirens
 //! and tyres nearest the ears, the wind, a scrape, a tunnel's echo) and

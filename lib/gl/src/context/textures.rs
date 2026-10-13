@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Textures and samplers (OpenGL ES 3.0 section 3.8).
 //!
 //! Each image of a mutable texture can be specified separately with any

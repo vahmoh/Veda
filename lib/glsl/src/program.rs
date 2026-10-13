@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A program: linking plus the optimised code of both stages.
 //!
 //! [`link`] is what `glLinkProgram` does: it links the shaders' interfaces

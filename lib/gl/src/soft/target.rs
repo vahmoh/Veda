@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Render targets: reading and writing color, depth and stencil samples,
 //! blending (OpenGL ES 3.0 section 4.1.7) and the stencil and depth tests
 //! (sections 4.1.4 and 4.1.5).

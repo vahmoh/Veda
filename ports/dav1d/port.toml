@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # dav1d: VideoLAN's AV1 decoder, which FFmpeg decodes AV1 with.
 name = "dav1d"
 version = "1.5.4"

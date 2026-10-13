@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Drawing of window decorations, client surfaces and the mouse cursor:
 //! by the processor into a canvas, or by the GPU (`gpu`), which draws the
 //! same shapes from the same formulas and takes what is text or a drawing

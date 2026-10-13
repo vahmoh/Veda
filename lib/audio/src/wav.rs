@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! RIFF/WAVE files.
 //!
 //! [`WavInfo::parse`] understands uncompressed PCM (8-bit unsigned, 16, 24

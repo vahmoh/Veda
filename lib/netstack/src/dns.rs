@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The stub resolver: turns host names into addresses by asking the
 //! configured DNS servers, and caches the answers.
 //!

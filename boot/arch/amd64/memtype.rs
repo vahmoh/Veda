@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The framebuffer's memory type, as the firmware leaves it.
 //!
 //! Firmware usually leaves its framebuffer uncached: the MTRRs mark the

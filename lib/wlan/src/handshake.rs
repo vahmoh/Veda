@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The 4-way handshake and the group key handshake (IEEE 802.11-2020,
 //! 12.7.6 and 12.7.7): the station side ([`Supplicant`]) and the access
 //! point side ([`Authenticator`]).

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The TGSI back end: every program translates into well-formed text
 //! (balanced control flow, every register declared, nothing virglrenderer
 //! cannot read). That the host runs it correctly is tested in `vgl`,

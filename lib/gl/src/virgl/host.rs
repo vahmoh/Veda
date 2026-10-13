@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The virgl renderer on the host's GPU, for tests (with the `host-virgl`
 //! feature): virglrenderer, the library QEMU runs for a virtio-gpu device,
 //! called directly, on OpenGL contexts made as QEMU makes them.

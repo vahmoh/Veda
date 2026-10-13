@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The terminal programs run in.
 //!
 //! A terminal (the Terminal application) runs a program with its standard

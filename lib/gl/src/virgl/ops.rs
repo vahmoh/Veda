@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Clears, blits, mipmaps, presentation, and the resources and shaders
 //! they need; and how 3D textures are read, copied and drawn into on hosts
 //! that cannot bind their slices to a framebuffer.

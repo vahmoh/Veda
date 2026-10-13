@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Processes tab: a sortable, searchable table of running processes
 //! grouped into applications and system processes.
 

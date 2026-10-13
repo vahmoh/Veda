@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The cryptographic building blocks of IEEE 802.11 security, on top of
 //! RustCrypto primitives: the passphrase-to-PSK mapping, the PRF and KDF
 //! used to derive keys, EAPOL-Key MICs, AES key wrap and constant-time

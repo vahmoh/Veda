@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How cars drive: a rigid body on four tyres.
 //!
 //! Each tyre's grip follows a Pacejka "magic formula" of its slip angle,

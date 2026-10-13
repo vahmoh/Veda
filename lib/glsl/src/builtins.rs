@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Built-in functions, variables and constants (GLSL ES 1.00 chapter 8
 //! and 7, GLSL ES 3.00 chapter 8 and 7).
 //!

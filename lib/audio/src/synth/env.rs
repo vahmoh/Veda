@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Envelopes.
 //!
 //! [`Adsr`] describes an attack/decay/sustain/release shape; [`Env`] runs

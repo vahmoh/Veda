@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Control commands: tests (and people) change the simulated environment
 //! while Veda runs, over a line-based TCP connection.
 //!

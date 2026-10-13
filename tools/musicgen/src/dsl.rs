@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A tiny composition language on top of `vaudio::synth`: drum patterns
 //! as strings, melodies as `note/beats` tokens, chord progressions,
 //! arpeggios, basslines and humanisation.

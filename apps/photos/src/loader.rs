@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Reading and decoding pictures on background threads.
 //!
 //! Two workers, each with its own VFS connection: one decodes full pictures for the viewer (the

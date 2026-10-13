@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The radio link: messages between the virtual Wi-Fi radio of a Veda
 //! guest (`airlink`, in the driver VM, which makes it a radio of Linux's)
 //! and the radio medium simulated on the host (`airsim`).

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Videos with the stand-in decoder, fakedec (no FFmpeg needed; 1280x800
 # with the taskbar). A test pattern plays, pauses and resumes, seeks with
 # keys and with the seek bar, steps a picture each way, changes its volume

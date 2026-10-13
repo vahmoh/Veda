@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # QEMU's Intel 82574L ("e1000e") through Linux's e1000e, in the driver VM,
 # which gets every network card. The card attaches to the network service,
 # gets an address by DHCP, and nettest checks DNS, TCP, HTTP and ping

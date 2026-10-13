@@ -1,4 +1,7 @@
-/* What the test programs expect of the machine on AMD64. */
+/* SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+   SPDX-License-Identifier: GPL-3.0-only
+
+   What the test programs expect of the machine on AMD64. */
 #ifndef VEDA_TESTS_MACHINE_H
 #define VEDA_TESTS_MACHINE_H
 

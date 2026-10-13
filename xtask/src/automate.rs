@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Scripted, headless runs of Veda in QEMU.
 //!
 //! Automation scripts drive the virtual machine through QMP and inspect its

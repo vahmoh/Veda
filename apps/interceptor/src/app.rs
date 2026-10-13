@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The game's screens and the moves between them: the title, the main
 //! menu, the career's missions, a quick chase's and a patrol's choices,
 //! the options, play itself, the pause menu and the results.

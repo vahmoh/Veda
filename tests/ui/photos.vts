@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Photos smoke test (1280x800 screen with the taskbar): the library, the viewer
 # (next picture, details, wheel zoom, panning, rotation), full screen, setting
 # the wallpaper and keyboard navigation. The window's client area starts at

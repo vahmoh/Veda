@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Morning Compile" — sunny acoustic pop in G major, 104 BPM.
 //!
 //! Intro (4) · verse (8) · chorus (8) · verse (8) · bridge (8) · chorus

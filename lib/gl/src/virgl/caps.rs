@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The host's capabilities: virglrenderer's capability set 2
 //! (`struct virgl_caps_v2`), as the device reports it.
 

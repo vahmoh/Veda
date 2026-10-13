@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Sockets: bidirectional byte streams.
 //!
 //! A socket has two endpoints. Bytes written to one are read from the other,

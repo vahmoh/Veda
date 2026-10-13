@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # vedaos.org
 
 The website of Veda, at [www.vedaos.org](https://www.vedaos.org). One static

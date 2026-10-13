@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The Text Editor's agent interface, with a simulated Voice Agent service:
 # the agent writes a document, reads what the editor shows, replaces a word
 # and saves the file, as the user would with the keyboard. Throwing away

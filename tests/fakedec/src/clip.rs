@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What a fake video is: a text file whose first line is `FAKEVIDEO`
 //! followed by options, `key=value` separated by spaces (the rest of the
 //! file is not read):

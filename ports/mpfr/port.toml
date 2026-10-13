@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Multiple precision floating point with correct rounding (needed by GCC).
 name = "mpfr"
 version = "4.2.2"

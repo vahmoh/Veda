@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Opening a picture from Files (1280x800 screen): Photos starts with the file's
 # path, shows it directly, and can browse the rest of its folder.
 boot-cmdline "run=files"

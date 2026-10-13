@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! IEEE 802.11 MAC frames: the frame control field, MAC headers,
 //! management frame bodies, and data frames with LLC/SNAP encapsulation.
 //!

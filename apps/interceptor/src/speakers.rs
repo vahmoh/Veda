@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The speakers: a thread that renders the game's sounds
 //! ([`interceptor_game::audio`]) into a stream to the audio service, and
 //! plays the music on a stream of its own.

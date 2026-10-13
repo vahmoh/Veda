@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `audiotest` — audio checks that run inside Veda.
 //!
 //! * `audiotest record SECS`: records SECS seconds from the microphone

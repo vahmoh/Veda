@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! [`Buffer`]: text stored as a vector of lines.
 
 use alloc::string::{String, ToString};

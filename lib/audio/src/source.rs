@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! One streaming, seekable decoder interface over the supported formats.
 //!
 //! A [`Source`] owns (or borrows, through any `AsRef<[u8]>`) the bytes of a

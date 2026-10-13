@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The cars' shapes, made from a few measurements.
 //!
 //! A body is lofted through cross-sections from the tail to the nose.

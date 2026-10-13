@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The algorithms behind the kernel's random number generator.
 //!
 //! * [`chacha20_block`]: the ChaCha20 block function (RFC 8439).

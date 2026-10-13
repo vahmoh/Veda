@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Threads.
 //!
 //! In a guest of the driver VM, threads are Linux's (`std`'s): the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Glyph rasterization: outlines to anti-aliased coverage bitmaps.
 //!
 //! Glyphs are rendered unhinted with exact-area anti-aliasing (`vraster`, non-zero rule) at

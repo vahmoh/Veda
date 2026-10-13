@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The `VINITRD` archive format.
 //!
 //! The initial ramdisk is a flat, read-only archive of files that the

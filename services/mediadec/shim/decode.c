@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
  * decode.c - decoders (libavcodec; AV1 through dav1d).
  *
  * The Rust half feeds them packets and takes their frames one call at a

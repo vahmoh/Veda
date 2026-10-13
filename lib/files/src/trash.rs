@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Trash: what the user deletes goes here rather than away, and can be
 //! put back where it was or deleted for good.
 //!

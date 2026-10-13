@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Pixel Quest" — chiptune in C major, 150 BPM.
 //!
 //! Intro (4) · theme (16) · bridge (8) · cave (8) · theme with harmony

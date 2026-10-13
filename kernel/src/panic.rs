@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Kernel panics.
 //!
 //! A panic stops every CPU, prints a report to the serial console and paints

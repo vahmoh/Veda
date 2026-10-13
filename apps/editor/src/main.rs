@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Text Editor: a tabbed editor for plain text and source code with syntax
 //! highlighting, find and replace, word wrap and unlimited undo.
 //!

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Damaged files (1280x800 with the taskbar): a copy of Countdown cut short
 # plays until its data ends and finishes there, and a file that is not a
 # video is refused with a message saying so, in the player and on its card

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Virtual processors: a guest's processors, run on Intel VMX.
 //!
 //! A thread of the virtual machine monitor runs a virtual processor with

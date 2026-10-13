@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The microphone through Linux's driver: QEMU's Intel HD Audio controller,
 # whose codec has a line input (QEMU's silent sound system records silence,
 # at the card's pace), goes to the driver VM. Veda's ALSA driver attaches

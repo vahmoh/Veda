@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Cars in Veda Bay: the ground under them, the walls they cannot pass,
 //! and their crashes into the walls and into each other.
 //!

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! User address spaces: a page-table hierarchy plus the list of VMO mappings
 //! that it is lazily populated from on page faults.
 

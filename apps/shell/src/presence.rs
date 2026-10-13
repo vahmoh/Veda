@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How the agent looks: OS1's ring, from Spike Jonze's "Her".
 //!
 //! * **The ring**: white, a quarter of its radius wide (OS1's proportions).

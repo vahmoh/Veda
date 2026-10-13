@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # The Veda icon
 
 The logo, OS1's white ring from *Her* (a quarter of its radius wide), on

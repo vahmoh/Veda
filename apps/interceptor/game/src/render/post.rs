@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Post-processing on the GPU: the scene is drawn in high dynamic range
 //! (half floats) with 4x multisampling, resolved, bloomed and tone mapped
 //! into the window's framebuffer.

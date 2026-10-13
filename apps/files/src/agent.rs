@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Files for the voice agent: what the window shows (the folder and its
 //! items, the selection, how they are listed, open dialogs) and what it does
 //! (showing folders, opening, selecting and filtering items, making folders,

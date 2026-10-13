@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A tiny client for the QEMU Machine Protocol (QMP), used to automate a
 //! running virtual machine: screenshots, keyboard/mouse input, shutdown.
 

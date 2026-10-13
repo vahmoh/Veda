@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The library: the videos in `~/Videos` as cards (a picture from each, its
 //! length, size and codec), with those left part way first under
 //! "Continue watching".

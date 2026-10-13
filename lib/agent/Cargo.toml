@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vagent"
 description = "The voice agent's logic: the Deepgram Voice Agent protocol, tools, memory, configuration and the approval policy"

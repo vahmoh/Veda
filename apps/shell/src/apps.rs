@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Application icons: every app is shown as a rounded gradient tile with a
 //! white line glyph, coloured by app id.
 

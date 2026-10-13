@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Saved networks on disk, in the user's configuration directory (the part
 //! of the file system that is kept on the home disk).
 //!

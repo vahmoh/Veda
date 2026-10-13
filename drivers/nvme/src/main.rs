@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `nvme` — the driver for NVM Express disks: the SSDs of most PCs since
 //! about 2016, and QEMU's `nvme`.
 //!

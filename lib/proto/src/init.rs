@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Protocols implemented by `init`: the service registry and the launcher.
 
 use alloc::string::String;

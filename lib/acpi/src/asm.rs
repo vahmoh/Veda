@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A small AML assembler, so that the tables Veda writes (the driver VM's,
 //! and those of tests and simulated boards) read like ASL:
 //! `device("SPK1", &cat(&[&name("_HID", &string("CSC3551")), ...]))`.

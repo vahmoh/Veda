@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The pictures, drawn rather than decoded. Each says which it is, so that
 //! a test (or a person) can tell what is on the screen, and when:
 //!

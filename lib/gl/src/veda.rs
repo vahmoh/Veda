@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Running in Veda (feature `veda`): contexts on the GPU through the `gpu`
 //! service (Veda's renderer, in the driver VM), or with the software
 //! renderer on every CPU.

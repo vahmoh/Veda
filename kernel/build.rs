@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Link the kernel as a fixed-address, higher-half PE image, as its
 //! architecture says (`arch/<architecture>/link.rs`).
 

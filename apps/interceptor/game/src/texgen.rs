@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Textures made on the processor at start-up: tileable noise, and the
 //! world's surfaces painted with it (asphalt, concrete, paving, metal,
 //! grass, rock, sand, the water's ripples).

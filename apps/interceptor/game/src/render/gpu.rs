@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Small helpers over OpenGL ES: programs with their uniforms, meshes in
 //! buffers, textures and framebuffers.
 

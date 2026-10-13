@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Resource storage: buffers, and images laid out level by level.
 //!
 //! A level is `layers` images of `height` rows of `width` texels, each

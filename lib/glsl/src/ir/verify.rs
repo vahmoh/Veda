@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Checks the IR's invariants; used after building and after each pass in
 //! tests, and available to debug builds.
 //!

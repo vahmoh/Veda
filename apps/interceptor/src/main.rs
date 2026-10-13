@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interceptor: police pursuits through Veda Bay, in OpenGL ES 3.0.
 //!
 //! The game itself (the world, the cars, the missions, the pictures, the

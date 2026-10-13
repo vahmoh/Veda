@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Linux system calls the driver VM's programs make that Rust's `std`
 //! does not: mounting (and file systems' free space), powering off,
 //! signals, `ioctl`, `poll`, and sockets other than the Internet's. Raw:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Linux: the kernel of the driver VM, which drives the devices Veda gives it.
 name = "linux"
 version = "7.2.9"

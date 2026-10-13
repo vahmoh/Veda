@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Desktop wallpapers: loading from image files, a procedural default, and
 //! the blurred copy used for translucent ("mica") shell surfaces.
 

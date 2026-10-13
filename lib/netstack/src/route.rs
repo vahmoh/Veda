@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Route selection: which interface carries traffic to a destination.
 //!
 //! 1. Loopback addresses go to `lo`.

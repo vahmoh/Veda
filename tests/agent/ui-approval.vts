@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The agent's interface with a simulated Voice Agent service: the tray item,
 # the window with its circle, and an approval request answered in the
 # window (denied, then allowed).

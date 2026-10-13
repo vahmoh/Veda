@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The station: joining an access point and exchanging data with it.
 //!
 //! [`Station`] is a state machine without I/O. The caller feeds it

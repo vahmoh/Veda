@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Text rendering: a font collection plus a glyph cache, drawing onto a
 //! [`Canvas`] with subpixel positioning.
 

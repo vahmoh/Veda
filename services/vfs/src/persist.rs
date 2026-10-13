@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Persistence of the user's home directory on the home disk.
 //!
 //! The disk with serial number [`HOME_DISK_SERIAL`] holds snapshots of

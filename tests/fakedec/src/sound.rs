@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The sound: a quiet 440 Hz tone, and a click (10 ms of 1 kHz, louder)
 //! from every whole second of media time, when the picture's marker is at
 //! its left edge. Both channels alike, at the output's rate; the phase

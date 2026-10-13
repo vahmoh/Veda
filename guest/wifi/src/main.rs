@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `wifi` — Veda's Wi-Fi driver for Linux: the guest's Wi-Fi radios (the
 //! cards Linux's mac80211 drivers drive: Intel's, MediaTek's, Realtek's,
 //! Qualcomm's) as Veda's *managed* radios, each offered to Veda's Wi-Fi

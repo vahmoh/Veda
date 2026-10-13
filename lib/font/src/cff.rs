@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! CFF outlines (`CFF ` table, Type 2 charstrings).
 //!
 //! The parser reads the header, the Top DICT (CharStrings, Private, and for CID-keyed fonts

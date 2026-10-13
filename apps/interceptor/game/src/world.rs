@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Veda Bay: the road, the land and the sea, made once at start-up from
 //! the layout and a seed. Deterministic: the same world everywhere.
 

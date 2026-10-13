@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Making an application available to the voice agent.
 //!
 //! Agent compatibility is part of the application platform: an [`App`]

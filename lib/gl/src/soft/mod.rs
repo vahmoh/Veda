@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The software renderer: OpenGL ES 3.0 on the CPU, on every core.
 //!
 //! Draws are not rendered when they are made. Each draw's vertices are

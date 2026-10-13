@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Assembly entry and exit paths.
 //!
 //! * `vk_isr_stubs`: 256 interrupt stubs, 16 bytes apart, that normalise the

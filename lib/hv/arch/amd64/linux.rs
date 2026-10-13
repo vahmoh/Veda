@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Booting Linux on the platform: the x86 boot protocol's 64-bit entry.
 //!
 //! A `bzImage` holds a setup header (protocol 2.12 or later, with a 64-bit

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `velf` — ELF64 executables for Veda's POSIX programs.
 //!
 //! C programs built by Veda's GCC are static ELF64 executables for the

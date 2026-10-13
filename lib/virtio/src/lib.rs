@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! virtio 1.x over PCI ("modern" interface) for user-space drivers.
 //!
 //! * [`Device`] locates the virtio capabilities through the `pcidev`

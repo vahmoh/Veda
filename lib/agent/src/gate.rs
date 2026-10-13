@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Keeping the agent from hearing itself.
 //!
 //! The microphone is echo-cancelled in the audio service, but no canceller

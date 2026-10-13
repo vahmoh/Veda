@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A stand-in for the Deepgram Voice Agent API, for deterministic tests.
 //!
 //! [`AgentSim`] listens on a local port; the agent in Veda connects to

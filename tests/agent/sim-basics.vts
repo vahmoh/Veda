@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The agent with a simulated Voice Agent service (no cost, deterministic):
 # the conversation's settings, functions that act on the system, the voice
 # and an interruption.

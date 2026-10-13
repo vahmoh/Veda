@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Wi-Fi for applications: the networks in range, joining and leaving
 //! them, saved networks, the radio switch, status events and diagnostics
 //! (through the Wi-Fi service's `wlan` protocol).

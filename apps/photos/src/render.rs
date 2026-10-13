@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Drawing pictures quickly at any zoom.
 //!
 //! [`render`] scales (and rotates by quarter turns) a picture with fixed-point arithmetic only,

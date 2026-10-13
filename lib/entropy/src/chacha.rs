@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The ChaCha20 block function (RFC 8439, section 2.3).
 
 #[inline(always)]

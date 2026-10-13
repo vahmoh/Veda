@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Tests of this crate's side of decoding: every format and colour model reaches Veda's pixel
 //! order exactly, the limits hold, checksums can be skipped, scaling and orientation are
 //! right, and damaged files (mutation fuzzing) give a picture or an error, never a panic.

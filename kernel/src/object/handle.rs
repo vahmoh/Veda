@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Per-process handle tables.
 //!
 //! A handle value encodes a slot index and a generation counter, so a stale

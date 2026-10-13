@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Building Veda for AMD64 (x86-64), and running it on QEMU's PC.
 
 pub mod acpitest;

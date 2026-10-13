@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The scheduler.
 //!
 //! * 32 priority levels with round-robin within a level; a global run queue

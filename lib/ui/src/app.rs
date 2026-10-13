@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Running UIs: [`Host`] drives one window (events, frame pacing, drawing);
 //! [`run`] is the event loop for the common one-window [`App`], which also
 //! serves the voice agent for apps that offer it something (see

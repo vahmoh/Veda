@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Task Manager: running processes and system load.
 //!
 //! * **Processes**: a sortable table (name, PID, threads, memory, CPU %)

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Character to glyph mapping (`cmap` table).
 //!
 //! Supports subtable formats 4 (BMP segments), 12 (segmented coverage), 13 (many-to-one ranges),

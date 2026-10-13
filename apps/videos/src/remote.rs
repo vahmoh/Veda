@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! One player at a time: the first Videos process registers the `videos`
 //! service; a later one asked to open a file (from Files, the Terminal or
 //! the desktop) hands the file to the running player and exits.

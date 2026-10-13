@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The desktop shell's service: lets applications (Settings, Photos, ...)
 //! change the wallpaper and post notifications, and the agent arrange
 //! windows.

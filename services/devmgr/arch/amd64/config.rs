@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! PCI configuration space on a PC: configuration mechanism #1, an address
 //! written to port 0xCF8, the data at port 0xCFC (segment 0, the first 256
 //! bytes of each function's).

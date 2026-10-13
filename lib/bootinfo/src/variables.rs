@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The firmware's variables, as the loader hands them over.
 //!
 //! A PC's UEFI firmware keeps variables, some of which an operating system

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+//
 // cxx — checks of the C++ library (libstdc++) on Veda, which programs in
 // C++ build on: exceptions, run-time types, static constructors, containers
 // and strings, streams, threads.

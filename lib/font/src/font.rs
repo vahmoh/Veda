@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The [`Font`] type: a zero-copy view of an OpenType/TrueType font file.
 
 use alloc::string::String;

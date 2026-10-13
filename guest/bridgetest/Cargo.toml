@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "guest-bridgetest"
 description = "Checks the driver VM's bridge from inside the Linux guest"

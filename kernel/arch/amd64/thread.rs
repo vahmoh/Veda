@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What a thread keeps of the processor while another runs: its kernel
 //! stack pointer where it was switched away, its FS base (the thread
 //! pointer of its thread-local storage), and its x87, SSE and AVX

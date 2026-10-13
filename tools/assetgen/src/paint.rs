@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Float image buffers, colour helpers, parallel rendering and output encoding.
 
 use vimage::Image;

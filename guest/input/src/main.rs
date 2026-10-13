@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `input` — Veda's input driver for Linux: the keyboards, mice, tablets
 //! and touchscreens Linux drives (on USB, virtio…: its event devices,
 //! evdev) as input devices of Veda's window system, whose `input` service

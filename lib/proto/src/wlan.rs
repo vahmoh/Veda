@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Wi-Fi protocols served by the `wlan` service.
 //!
 //! * [`wlan`] (service `"wlan"`): Wi-Fi management for the desktop, Settings

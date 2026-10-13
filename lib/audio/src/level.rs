@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Signal levels for meters and animations.
 //!
 //! [`rms_dbfs`] and [`peak_dbfs`] measure a block of 16-bit samples

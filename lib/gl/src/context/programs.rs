@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Shaders, programs and uniforms (OpenGL ES 3.0 section 2.12).
 //!
 //! Shaders and programs share one namespace. Deleting either only flags it

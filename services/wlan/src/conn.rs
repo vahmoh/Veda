@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Joining networks: requests, the station, automatic connection, retries,
 //! recovery after a lost connection and roaming.
 

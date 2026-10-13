@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The TLS stream: TLS records over a [`Transport`] (usually a TCP
 //! connection), driven through rustls' unbuffered client API.
 //!

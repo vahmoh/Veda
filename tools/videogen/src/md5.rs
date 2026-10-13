@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! MD5 (RFC 1321): the fingerprints of the countdown's pictures, as the
 //! decoder computes them, and the signature in FLAC's STREAMINFO.
 

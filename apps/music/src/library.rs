@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The music library: tracks found in the user's Music folder (plus files
 //! opened explicitly), with metadata read from the first and last few
 //! kilobytes of each file.

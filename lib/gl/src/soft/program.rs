@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Programs as the software renderer runs them: both stages compiled for
 //! the SIMD interpreter, with the registers of their interfaces found
 //! once.

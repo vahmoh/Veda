@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The PCI functions the guest gets. devmgr hands each over as a `pcidev`
 //! channel, and each is given to the guest whole: its DMA reaches the
 //! guest's memory and nothing else (the IOMMU), its memory BARs are mapped

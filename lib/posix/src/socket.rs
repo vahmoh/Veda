@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Sockets: `socketpair`, whose ends are kernel sockets as pipes are, and
 //! what works on them: `send` and `recv` and their message forms, and
 //! `shutdown`. There are no network sockets yet: `socket` fails with

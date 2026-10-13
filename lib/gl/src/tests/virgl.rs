@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The virgl renderer on the host's GPU, where virglrenderer is installed
 //! (the whole suite runs on it with `VGL_TEST_BACKEND=virgl`; these always
 //! do, and are skipped without it).

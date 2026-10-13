@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The cryptography behind TLS: a rustls [`CryptoProvider`] built on the
 //! RustCrypto and dalek crates (pure Rust, no C or assembly).
 //!

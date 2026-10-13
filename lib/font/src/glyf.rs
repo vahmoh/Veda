@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! TrueType outlines (`glyf` + `loca`), including composite glyphs.
 //!
 //! Glyphs are decoded into a flat point list (on/off-curve flags plus contour ends) so that

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Veda builds on stable Rust (tested with 1.99). rustup installs the extra
 # targets automatically on first use: the bare-metal ones of the loader and
 # kernel and of the POSIX layer in the C library, the one of user-space

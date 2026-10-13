@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Test vectors are raw bytes (DER, signatures): never convert line endings.
 *.der binary
 *.sig binary

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Symbols that compiled Rust code expects from a C runtime, on AMD64's
 //! user target (`x86_64-pc-windows-msvc`).
 //!

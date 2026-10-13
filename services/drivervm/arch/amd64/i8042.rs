@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The PC's keyboard controller (the i8042), when devmgr gives it the
 //! guest: Linux's driver of it reaches its two ports through the monitor,
 //! which carries the reads and writes out on the controller, but what would

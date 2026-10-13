@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Diagnostics: errors and warnings with their source locations, and the
 //! information log that `glGetShaderInfoLog` / `glGetProgramInfoLog` return.
 

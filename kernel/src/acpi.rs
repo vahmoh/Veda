@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The firmware's ACPI tables, as far as the kernel reads them: where each
 //! table is, PCI Express configuration space (MCFG) and power control
 //! (FADT, `\_S5`). The tables that describe the architecture's own devices

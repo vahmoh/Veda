@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `init` — the first program of Linux in Veda's driver VM.
 //!
 //! It mounts the kernel's file systems, says on the console (which is

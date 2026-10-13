@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Rainy Window" — lo-fi hip hop in F major, 78 BPM, swung.
 //!
 //! Intro (4) · A (8) · B (8) · A (8) · break (2) · outro (4)

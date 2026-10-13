@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The road's meshes: the tarmac, and what lines it (kerbs and pavements,
 //! barriers, verges and guardrails, a tunnel's walls and roof), swept
 //! along the centre line in chunks that can be culled one by one.

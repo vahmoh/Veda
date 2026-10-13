@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Track metadata.
 //!
 //! [`Tags`] holds the descriptive fields a music player shows. They come

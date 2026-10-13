@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A WebSocket client (RFC 6455).
 //!
 //! [`WebSocket::handshake`] upgrades an HTTP connection; then text and

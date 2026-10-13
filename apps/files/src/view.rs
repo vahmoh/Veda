@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Drawing and mouse interaction of the Files window: toolbar with the
 //! breadcrumb path bar and search box, places sidebar, list and grid views,
 //! the Trash's bar and the notice of a move to the Trash, status bar,

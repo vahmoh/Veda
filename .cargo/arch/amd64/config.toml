@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Cargo's configuration of the AMD64 targets (included by .cargo/config.toml).
 
 # The UEFI target is soft-float: LLVM cannot build the SIMD code (AES-NI,

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Traps: the registers a trap saves ([`TrapFrame`]), what the rest of the
 //! kernel learns from them (a system call's arguments, a page fault), and
 //! the exceptions the kernel does not survive (its own, and NMIs).

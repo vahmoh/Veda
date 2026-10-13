@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! One remapping unit: its registers, its invalidation queue, and the root
 //! and context tables that put each of its devices in a domain.
 //!

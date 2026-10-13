@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The home directory survives a reboot (1280x800): write a note on the
 # desktop, restart the machine, and open it again from there.
 fail-on "PANIC"

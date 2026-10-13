@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Operators, constructors and built-in functions as scalar operations.
 //!
 //! Every value is handled as its scalar components, flattened in GL

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Arguments passed by pointer.
 //!
 //! The C library and the POSIX layer share an address space: a system call

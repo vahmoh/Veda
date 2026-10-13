@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The ports on AMD64 (x86-64): what the build scripts (build.sh and
 # linux/build.sh) take from the architecture they build for. The ports'
 # own changes for it are in <port>/arch/amd64/.

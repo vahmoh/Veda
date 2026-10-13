@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What a source holds, as the protocol says it ([`MediaInfo`]): built
 //! from the shim's descriptions, kept to the protocol's limits, with times
 //! from the start of the source.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vposix` — Veda's POSIX layer.
 //!
 //! C programs on Veda use musl, a C library written for Linux, with one

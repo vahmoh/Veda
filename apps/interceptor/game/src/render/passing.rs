@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What passes, drawn: skid marks laid on the road, smoke, spray and
 //! sparks in the air, and the rain round the camera.
 //!

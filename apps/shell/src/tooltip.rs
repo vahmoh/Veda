@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Tooltips for the taskbar. The taskbar is too short to draw them itself,
 //! so a tooltip is a small window of the notification layer (which never
 //! takes the keyboard focus) placed just above the hovered button.

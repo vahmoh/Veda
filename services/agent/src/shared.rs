@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! State shared by the agent's threads: settings, the Deepgram key, memory,
 //! permissions, the catalogue of applications and timers — all persisted in
 //! the private directory.

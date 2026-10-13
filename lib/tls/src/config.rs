@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Client configuration: trusted certificate authorities, protocol versions,
 //! application protocols, and the system's randomness and clock.
 

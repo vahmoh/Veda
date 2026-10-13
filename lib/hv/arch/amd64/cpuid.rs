@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What `cpuid` tells a guest.
 //!
 //! The answers start from the processor's own and keep only what a guest

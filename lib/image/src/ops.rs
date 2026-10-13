@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Image operations: scaling (by [`fast_image_resize`]), thumbnails, cropping, and the flips
 //! and quarter turns of EXIF orientation.
 //!

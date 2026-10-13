@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Sirens: a tone swept up and down, rich in odd harmonics as from an
 //! electronic siren's square wave, through the narrow band of its horn
 //! speaker.

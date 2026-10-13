@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Linux's system calls on x86-64, for programs of the driver VM's guest
 //! (`crate::guest`): the numbers of those the runtime makes, and the
 //! `syscall` instruction.

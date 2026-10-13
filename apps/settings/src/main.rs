@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Settings: personalise Veda and look up system details.
 //!
 //! * **Personalization**: a gallery of the system wallpapers (from the desktop

@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
  * main.c - mediadec's entry point, FFmpeg's log, and what the shim's files
  * share.
  *

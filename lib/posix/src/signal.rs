@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Signals.
 //!
 //! Veda delivers no asynchronous signals: other processes stop a program

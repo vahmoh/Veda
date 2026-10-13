@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # A firmware may place a function's BARs nowhere (a laptop's leaves its
 # serial bus controllers so, asleep, for the operating system to set up):
 # devmgr places them then, in a window of the PCI root bridge's, before any

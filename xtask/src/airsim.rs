@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Building, starting and controlling `airsim`, the simulated Wi-Fi
 //! environment that `--net wifi` runs next to QEMU (see `tools/airsim`).
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `cargo xtask` — the Veda developer tool.
 //!
 //! Run `cargo xtask help` for the list of commands.
@@ -9,6 +12,8 @@ mod arch;
 mod automate;
 mod components;
 mod image;
+#[cfg(test)]
+mod licence;
 mod linux;
 mod mic;
 mod ovmfvars;

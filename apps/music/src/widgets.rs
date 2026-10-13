@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Music's own widgets drawn on top of `vui` (the seek bar, the play
 //! button and the toggles are `vui::media`'s).
 

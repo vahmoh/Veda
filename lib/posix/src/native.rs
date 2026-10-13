@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Veda's own interfaces, for C programs that are Veda services or talk to
 //! them directly (`<veda/ipc.h>`): handles, channels and the service
 //! registry, waiting, memory objects and events. They are the kernel's

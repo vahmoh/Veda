@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Network interfaces, for the drivers that carry an interface's frames to
 //! Veda: switching one on and off, and a raw packet socket on one.
 

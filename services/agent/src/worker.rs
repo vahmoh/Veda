@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The worker thread: runs what the agent decided to do.
 //!
 //! Function calls from the language model arrive as [`Job::Call`]s. The

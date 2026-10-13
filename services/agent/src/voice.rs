@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The agent's ears and voice.
 //!
 //! * The microphone: a 16 kHz capture stream with echo cancellation, so

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The agent's instructions: who it is, how it talks, what it can do, and
 //! what it knows right now.
 //!

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The PC's own devices the driver VM gets: its keyboard controller (the
 //! i8042): its data port, its command port (the ports around them stay
 //! Veda's), and its keyboard's and mouse's interrupts (ISA 1 and 12). It

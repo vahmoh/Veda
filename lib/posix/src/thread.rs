@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Threads, thread-local storage and futexes.
 //!
 //! musl creates threads with `__clone`, which the C library hands to

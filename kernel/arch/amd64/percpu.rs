@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! What AMD64 keeps for each CPU, reached through the `GS` segment base
 //! while in the kernel: the scratch slots the entry code uses at fixed
 //! offsets (`gs:[OFFSET]`), the CPU's index, its descriptor tables and its

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The clock's counter on AMD64: the TSC, which every processor reads alike.
 //!
 //! Its frequency is measured at boot against the HPET (or the legacy PIT

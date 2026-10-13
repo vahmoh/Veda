@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The agent's configuration: what it is called, which Deepgram models it
 //! listens, thinks and speaks with, and how it behaves. Stored as JSON in
 //! the agent's private directory; the Deepgram key is kept apart from it.

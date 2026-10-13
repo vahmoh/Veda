@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Intel's integrated GPUs as the guest has them: what their driver reads
 //! of the PC's firmware besides the GPU itself.
 //!

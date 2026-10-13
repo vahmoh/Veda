@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Shutting down from the start menu (1280x800): open the menu with the Super
 # key, open the power menu and choose "Shut down" with the keyboard; the
 # machine must power off through ACPI.

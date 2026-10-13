@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Soft drop shadows, rendered as cached nine-slice images.
 //!
 //! A shadow is the blurred silhouette of a rounded rectangle. Its corners

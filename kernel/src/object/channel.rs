@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Channels: bidirectional, message-oriented IPC with handle transfer.
 //!
 //! A channel has two endpoints. Writing to one endpoint queues a message (up

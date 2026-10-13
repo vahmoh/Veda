@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The player: a video on a black stage, its pictures shown in time with
 //! its sound, and the controls over it.
 //!

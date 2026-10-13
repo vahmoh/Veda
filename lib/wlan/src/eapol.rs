@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! EAPOL-Key frames (IEEE 802.11-2020, 12.7.2) and key data
 //! encapsulations (KDEs).
 

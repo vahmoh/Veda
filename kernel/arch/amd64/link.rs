@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How the AMD64 kernel is linked (for `build.rs`): a PE image for the UEFI
 //! target, at a fixed address in the higher half.
 

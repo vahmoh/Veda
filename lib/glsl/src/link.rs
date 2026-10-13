@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Linking: a vertex and a fragment shader into a program.
 //!
 //! The linker matches the stages' interfaces (varyings by name, type and

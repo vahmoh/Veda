@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interceptor's game: everything but the window, the keyboard and the
 //! speakers, so that it can be tested on the host.
 //!

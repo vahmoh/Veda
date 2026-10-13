@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Linux's DRM, the part a display driver of Veda's needs: the card's
 //! connectors and modes, framebuffers of imported memory (PRIME) or of the
 //! card's own (dumb buffers), setting a mode with the picture where it goes

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The loader on AMD64: the page tables it builds for the kernel (x86-64's
 //! four levels, `paging`), the framebuffer's memory type and painting it
 //! write-combining (`memtype`, `blank`), COM1 (`serial`), the TSC, and the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The global allocator.
 //!
 //! Small and medium allocations come from a TLSF allocator (`vheap`) over a

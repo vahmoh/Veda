@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! AV1 encoding with rav1e: the settings every sample shares, the packets
 //! as Matroska stores them and the fingerprints of the pictures a decoder
 //! makes of them.

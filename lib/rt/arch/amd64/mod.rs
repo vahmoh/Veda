@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The runtime on AMD64: how Veda's system calls are made, where programs
 //! and threads start, the C runtime symbols of the user target
 //! (`x86_64-pc-windows-msvc`), and what programs learn of the processor. In

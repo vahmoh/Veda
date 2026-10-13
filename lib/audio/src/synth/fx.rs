@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Effects for offline mixing: a ping-pong delay, a Freeverb-style stereo
 //! reverb, a chorus, a compressor with optional side-chain, a look-ahead
 //! limiter and a soft saturator. All process interleaved stereo `f32`.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Creating processes from PE and ELF images.
 //!
 //! Process creation is done entirely from user space with kernel primitives:

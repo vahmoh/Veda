@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `kmspause` — pauses Veda's display driver for Linux (`kms`) for a few
 //! seconds once it has set a display's mode, for the compositor's test of
 //! a driver that stops answering (`tests/ui/drivervm-display-pause.vts`):

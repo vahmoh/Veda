@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Extended page tables: a guest's physical address space.
 //!
 //! Four levels of tables, as the processor's own paging but with the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `kms` — Veda's display driver for Linux: a display Linux drives (KMS:
 //! a GPU's display engine, or QEMU's standard VGA in tests) as the screen
 //! Veda's compositor flips, through `displaydev`, as Veda's own display

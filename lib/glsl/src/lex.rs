@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The language's tokens: phase 11, after preprocessing.
 //!
 //! Identifiers become keywords, type names or reserved words (an error)

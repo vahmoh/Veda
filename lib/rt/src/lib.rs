@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vrt` — the Veda user-space runtime.
 //!
 //! Every Veda program links this crate. It provides:

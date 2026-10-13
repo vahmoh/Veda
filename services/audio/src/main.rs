@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `audio` — the system audio service.
 //!
 //! * Registers `audio` (the public protocol, [`vproto::audio::audio`]):

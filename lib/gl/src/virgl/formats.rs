@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How each storage format is kept on the host.
 //!
 //! Most formats have a virgl format with the same memory layout. Where the

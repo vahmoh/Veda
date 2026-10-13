@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The vertex stage: attribute fetch (OpenGL ES 3.0 section 2.9) and the
 //! vertex shader, sixteen vertices at a time.
 //!

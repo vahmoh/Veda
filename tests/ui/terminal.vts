@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Terminal (1280x800 with the taskbar): file commands with && chaining,
 # redirection, pipes and wildcards; df; error handling; Tab completion; the
 # history (Up and Ctrl+R); starting and ending programs; mouse selection

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The renderer in the driver VM: an OpenGL ES 3.0 program (Interceptor)
 # renders through Veda's renderer, which runs in Linux, on Mesa's softpipe
 # here (for want of a GPU; on a PC, on the GPU's own driver). The renderer

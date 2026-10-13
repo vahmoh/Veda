@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Rendering tests: exact results where the specification makes them
 //! exact, tight bounds where it allows a choice.
 

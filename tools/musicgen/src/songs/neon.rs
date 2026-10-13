@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Neon Horizon" — synthwave in A minor, 100 BPM.
 //!
 //! Intro (8) · verse (8) · chorus (8) · breakdown (4) · chorus (8) · outro (8)

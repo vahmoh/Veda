@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! TLB shootdowns.
 //!
 //! When the BKL holder changes a user mapping that other CPUs may have

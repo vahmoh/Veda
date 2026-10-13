@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Videos without its decoder (as in an image built without the C
 # toolchain, where /system/bin/mediadec is missing; here a decoder that does
 # not exist is named): a video opened says that playback isn't available and

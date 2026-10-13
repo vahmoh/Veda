@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The AMD64 (x86-64) architecture.
 //!
 //! The loader jumps to [`kernel_entry`], which sets the boot processor up

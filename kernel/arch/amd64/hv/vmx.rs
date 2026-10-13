@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Intel VMX: what the processor offers, its instructions, and the fields
 //! of a virtual machine control structure (VMCS).
 //!

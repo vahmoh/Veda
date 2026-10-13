@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # A USB device through Linux: QEMU's USB network adapter (CDC Ethernet) on
 # the xHCI controller, which goes to the driver VM whole, as USB
 # controllers do. Linux's xhci_hcd finds the adapter, cdc_ether drives it,

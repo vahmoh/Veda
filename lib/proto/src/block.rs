@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The block device protocol: sector-level access to a disk.
 //!
 //! A disk driver registers one service per disk, named after the disk's

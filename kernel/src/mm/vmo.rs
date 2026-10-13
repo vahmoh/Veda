@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Virtual memory objects (VMOs): the unit of memory that can be mapped into
 //! address spaces and shared between processes through handles.
 

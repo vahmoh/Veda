@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! How playback went: pictures shown and dropped, how far the pictures
 //! were from the sound, how often the window presented and how long its
 //! frames took; summed up in one log line now and then.

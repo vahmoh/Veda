@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `init` — the first user-space process.
 //!
 //! * Starts the system services and the desktop shell from the initrd, giving

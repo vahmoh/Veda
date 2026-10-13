@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # Fake videos
 
 Videos for `fakedec`, the stand-in decoder (see `../src/clip.rs` for the

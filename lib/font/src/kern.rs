@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Pair kerning.
 //!
 //! Kerning values come from the GPOS table when it has PairPos lookups (lookup type 2, formats 1

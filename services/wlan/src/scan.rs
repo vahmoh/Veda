@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Scanning: visiting the channels in turn, probing where allowed, and the
 //! table of access points heard (from beacons and probe responses, during
 //! scans and in between).

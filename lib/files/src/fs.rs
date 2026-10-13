@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A convenient client of the VFS service: whole-file reads and writes,
 //! appends, recursive copies, moves and removals, and how full a file
 //! system is.

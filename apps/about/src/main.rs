@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! About Veda: the system's version, hardware and licences. The voice
 //! agent reads what the window shows and can show the licences.
 

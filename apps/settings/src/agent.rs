@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The "Agent" page: the voice agent as an OS setting.
 //!
 //! * **Deepgram**: the API key (stored by the agent in its private

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The media protocol: how an application has videos and sounds decoded by
 //! `mediadec`, a sandboxed decoder process (FFmpeg and dav1d, see
 //! `services/mediadec`).

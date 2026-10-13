@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The display through Linux's KMS: QEMU's standard VGA (whose memory holds
 # the firmware's framebuffer) goes to the driver VM, where Linux's bochs
 # driver drives it and Veda's display driver for Linux attaches it to the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The bridge: Veda's IPC for the programs of a Linux guest.
 //!
 //! A program in the driver VM uses Veda's objects as a Veda program does:

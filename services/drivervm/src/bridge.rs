@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The bridge, the monitor's side: the guest's handles, and the operations
 //! on them (`vhv::bridge` describes them).
 //!

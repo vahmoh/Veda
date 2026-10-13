@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Operations outside the pipeline: copies between images, copies from
 //! the framebuffer, blits (OpenGL ES 3.0 section 4.3.3), mipmap generation
 //! and transform feedback's writes.

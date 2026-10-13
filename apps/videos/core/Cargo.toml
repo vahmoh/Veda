@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "videos-core"
 description = "What Videos decides, testable on the host: its clock, the pictures it shows and when, its layout, what it remembers and how it finds videos by name"

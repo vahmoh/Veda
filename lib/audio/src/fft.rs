@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Fast Fourier transforms and spectrum analysis.
 //!
 //! * [`Fft`]: an in-place radix-2 complex FFT with precomputed twiddles.

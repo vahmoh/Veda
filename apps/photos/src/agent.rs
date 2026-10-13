@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Photos for the voice agent: what the window shows (the library of a folder, or the picture
 //! in the viewer with its size, zoom and turn) and what it does (showing pictures and folders,
 //! moving through them, zooming, turning, full screen, slideshows, the details panel and the

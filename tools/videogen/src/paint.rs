@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Painting the films' pictures: a floating-point RGB canvas, vector paths
 //! composited through `vraster` with a colour per pixel, soft lights, text
 //! outlines from `vfont`, and the step down to 8-bit pixels.

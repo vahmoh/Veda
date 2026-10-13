@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vglsl` — the OpenGL ES Shading Language compiler.
 //!
 //! It compiles shaders written in GLSL ES 1.00 (OpenGL ES 2.0) and 3.00

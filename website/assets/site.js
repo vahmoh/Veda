@@ -1,4 +1,7 @@
-/* vedaos.org: the page's motion, in Veda's own visual language:
+/* SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
+ * vedaos.org: the page's motion, in Veda's own visual language:
  *
  * - the hero's sky is the Aurora wallpaper (tools/assetgen/src/wallpapers.rs)
  *   brought to life in a WebGL shader; the ring's light is CSS;

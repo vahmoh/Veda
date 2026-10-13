@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interrupt objects deliver hardware interrupts to user-space drivers.
 //!
 //! When the interrupt fires the kernel sets `SIGNALED` on the object (and,

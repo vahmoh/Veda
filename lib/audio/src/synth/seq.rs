@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Songs: parts (an instrument, its notes and mixing settings) rendered
 //! offline into a mastered stereo mix.
 //!

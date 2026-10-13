@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vgl` — OpenGL ES 3.0 for Veda.
 //!
 //! * [`Context`] is the API: every OpenGL ES 3.0 entry point, as a method

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Framebuffers and renderbuffers (OpenGL ES 3.0 chapter 4): attachments
 //! and completeness, clearing, reading pixels, blits, and the default
 //! framebuffer a window provides.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Notification bubbles, stacked above the taskbar in the bottom-right
 //! corner. They disappear after a few seconds (not while hovered) or when
 //! clicked.

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The library: a grid of thumbnail cards for the pictures in the folder.
 
 use alloc::format;

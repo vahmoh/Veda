@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The checked shader: a typed tree in which every name is resolved.
 //!
 //! [`crate::sema`] builds it from the syntax tree. Expressions carry their

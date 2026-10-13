@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Rendering a scene's tiles (OpenGL ES 3.0 chapters 3 and 4):
 //! rasterization, the fragment shader, and the per-fragment operations.
 //!

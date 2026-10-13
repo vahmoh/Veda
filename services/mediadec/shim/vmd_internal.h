@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
  * vmd_internal.h - what the shim's files share: the objects behind vmd.h's
  * opaque types, and small helpers.
  */

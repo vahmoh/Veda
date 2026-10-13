@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The taskbar: start button, the applications kept on it (`taskbar=true`
 //! in their manifests) and running ones in the middle, and the agent,
 //! network, volume and clock buttons on the right.

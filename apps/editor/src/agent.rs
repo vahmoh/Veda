@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Text Editor for the voice agent: what it shows (the open documents,
 //! the current one's text, cursor and selection) and what it does
 //! (writing, finding and replacing, undoing, saving), through the same

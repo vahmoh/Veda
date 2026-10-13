@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! "Aurora Timelapse": northern lights over a mountain lake, 1280x720 at
 //! 24 fps, 16 s, with an ambient pad and soft bells.
 //!

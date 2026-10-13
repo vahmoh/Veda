@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Linux's system calls on x86-64: the numbers of those the driver VM's
 //! programs make (`arch/x86/entry/syscalls/syscall_64.tbl`), and the
 //! `syscall` instruction.

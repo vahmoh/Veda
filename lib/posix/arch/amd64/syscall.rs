@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The system calls of Linux's x86-64 ABI that its generic one (which newer
 //! architectures have) does without: older forms of calls it has (`open`
 //! for `openat`, `pipe` for `pipe2`, ...), and `arch_prctl`.

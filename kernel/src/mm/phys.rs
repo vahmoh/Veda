@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Physical page frame allocator.
 //!
 //! A bitmap with one bit per 4 KiB frame (1 = in use) covering all RAM. A

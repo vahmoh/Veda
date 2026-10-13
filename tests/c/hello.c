@@ -1,4 +1,7 @@
-/* The smallest check of C on Veda: output, arguments, the heap, the
+/* SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+   SPDX-License-Identifier: GPL-3.0-only
+
+   The smallest check of C on Veda: output, arguments, the heap, the
    process id and the working directory. Exits with 42 so that the caller
    can tell it ran to the end. */
 

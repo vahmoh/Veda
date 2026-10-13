@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Pixel transfers: where a rectangle's pixels are in application memory
 //! (OpenGL ES 3.0 sections 3.7.1 and 4.3.1, the pixel storage modes), and
 //! conversion between the application's `(format, type)` layouts and a

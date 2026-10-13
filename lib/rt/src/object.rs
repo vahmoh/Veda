@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Safe, owning wrappers around kernel object handles.
 //!
 //! Every wrapper closes its handle when dropped. Use `into_raw`/`from_raw`

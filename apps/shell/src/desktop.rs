@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The desktop: the wallpaper, shortcut icons (the Trash first, then the
 //! home folder, games and the files in `~/Desktop`) and the context menus
 //! of the desktop and its icons.

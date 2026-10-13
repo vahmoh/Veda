@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The agent does not hear itself. The machine's sound output comes back
 # into the test microphone a quarter of a second later and only 6 dB
 # quieter — loudspeakers right next to the microphone, as on a laptop —

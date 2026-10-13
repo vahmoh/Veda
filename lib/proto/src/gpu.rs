@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The GPU protocol: 3D rendering on the GPU.
 //!
 //! Veda's renderer serves it, in the driver VM (`guest/renderer`), on

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Paths: resolving what a program names against its working directory.
 //!
 //! The file system service takes absolute, normalised UTF-8 paths. POSIX

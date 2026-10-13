@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: © 2026 Vahid Mohammadi -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
 # Veda: The Agentic-Native Operating System
 
 Veda is an operating system with a voice agent built in. Say "Hey Veda,
@@ -500,8 +503,15 @@ the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
 the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE.
 
+Every file of Veda's own names its copyright holders and its licence in
+its first lines, as SPDX tags (see
+[Licence headers](docs/CODING.md#licence-headers)).
+
 Other parts keep their own licences:
 
+* **The driver VM's renderer**: its C code (`guest/renderer/decoder`,
+  `guest/renderer/drm`), which Mesa's build compiles with Mesa, is under
+  the MIT licence, as Mesa is.
 * **Fonts** (Inter, Lato, JetBrains Mono): the SIL Open Font License 1.1;
   see `assets/fonts/`.
 * **Device firmware** that the driver VM's Linux loads into devices

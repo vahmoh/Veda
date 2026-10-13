@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Interrupt descriptor table, vector assignment and the trap dispatcher.
 
 use core::arch::asm;

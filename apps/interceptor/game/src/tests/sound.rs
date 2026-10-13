@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The sounds of a chase: a pursuit through traffic drives the mixer as
 //! the game does, and what comes out is sound (never silence, never
 //! clipping, never broken), with every voice within its limits.

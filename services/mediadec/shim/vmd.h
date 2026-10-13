@@ -1,4 +1,7 @@
 /*
+ * SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
  * vmd.h - mediadec's shim: the only code of Veda's that calls FFmpeg.
  *
  * mediadec is a Rust program in C's world (a static ELF program on musl):

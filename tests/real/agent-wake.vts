@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Waking the agent by its name with Deepgram's real speech recognition:
 # after the key is set in Settings the agent listens for its name; a
 # sentence that only mentions it does not wake it, one addressed to it

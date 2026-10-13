@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The Linux guest of the driver VM (see `docs/DRIVERVM.md`).
 //!
 //! * `cargo xtask linux` builds its kernel from `ports/linux` (first zlib

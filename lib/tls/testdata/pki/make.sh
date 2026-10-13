@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Generates the test PKI of vtls' handshake tests with OpenSSL 3.4 or newer:
 #
 #   sh make.sh        (in lib/tls/testdata/pki)

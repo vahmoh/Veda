@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Variables in OVMF's variable store, as the firmware keeps them, for the
 //! tests of what Veda does with a PC's firmware variables: a script's
 //! `firmware-variable NAME GUID ATTRIBUTES DATA` adds one to the store its

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! HTTP/1.1 requests over a [`Connection`].
 //!
 //! One request per connection (`Connection: close`), which is all the

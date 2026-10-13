@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `logkeeper` — keeps the system's log on the stick the live system
 //! started from, so that what happened can be looked into afterwards (on
 //! another computer, or on this one started again), however the system

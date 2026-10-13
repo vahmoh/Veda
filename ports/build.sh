@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # Builds Veda's C toolchain from the ports in this directory. `cargo xtask
 # toolchain` runs it after downloading and
 # verifying the sources; see xtask/src/toolchain.rs and docs/C.md.

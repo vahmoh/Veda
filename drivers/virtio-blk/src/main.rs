@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `virtio-blk` — the driver for virtio block devices (disks).
 //!
 //! Each disk is served as the `block` protocol under the name

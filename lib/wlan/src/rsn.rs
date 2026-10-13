@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The RSN element (IEEE 802.11-2020, 9.4.2.24): cipher and AKM suites,
 //! capabilities, and the choice of security for a connection.
 

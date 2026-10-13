@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! CCMP-128 (IEEE 802.11-2020, 12.5.3) for data and robust management
 //! frames, and BIP-CMAC-128 (12.5.4) for group-addressed management
 //! frames.

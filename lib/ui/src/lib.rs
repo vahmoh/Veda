@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `vui` — the Veda GUI toolkit.
 //!
 //! * [`window`]: client-side windows on top of the display protocol.

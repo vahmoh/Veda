@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Symbols that compiled Rust code expects from a C runtime, whatever the
 //! architecture: the floating-point remainders LLVM emits calls to. The
 //! rest are the architecture's (`arch`).

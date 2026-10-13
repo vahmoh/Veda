@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Booting Linux on the guest the x86 way (`vhv::amd64::linux`).
 //!
 //! The guest's first 64 KiB hold what the kernel is entered with (a GDT,

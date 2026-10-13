@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "guest-net"
 description = "Veda's network driver for Linux: Linux's Ethernet cards as Veda's network devices"

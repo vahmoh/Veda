@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! When a picture presented now reaches the screen.
 //!
 //! With every frame it acknowledges, the compositor tells the window when

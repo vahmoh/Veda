@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 [package]
 name = "vtls"
 description = "TLS for Veda applications: HTTPS and secure WebSockets with rustls and a pure-Rust cryptography provider"

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! QEMU's PC: the q35 machine (its ICH9 chipset), with EDK II's OVMF for
 //! its firmware.
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Syntax highlighting.
 //!
 //! A small hand-written lexer per [`Language`] splits each line into

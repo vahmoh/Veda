@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Hand-written bindings for the subset of the UEFI specification (2.10) that
 //! the loader uses. Function pointers that are never called are declared as
 //! `usize` so the table layouts stay correct without spelling out every

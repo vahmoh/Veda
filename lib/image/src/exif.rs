@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The orientation tag of EXIF data.
 //!
 //! The JPEG decoder hands over a file's EXIF data (the TIFF structure after the `Exif\0\0`

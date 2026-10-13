@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! A session of play: a career mission, a quick chase, a patrol, or the
 //! menus' showcase, from the countdown to the result.
 //!

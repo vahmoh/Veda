@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Encoding (the `encode` feature), for the tools that make pictures on the build machine:
 //! PNG with the `png` crate, JPEG with `jpeg-encoder`, QOI with the `qoi` crate.
 

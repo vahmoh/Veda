@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Virtual machines on AMD64: Intel VMX with EPT.
 //!
 //! A guest's physical address space is translated by extended page tables

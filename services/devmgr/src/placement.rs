@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Placing the BARs the firmware leaves unplaced. A firmware may assign no
 //! address to a function's memory BAR (a laptop's leaves its serial bus
 //! controllers so, asleep, for the operating system to set up), and an OS

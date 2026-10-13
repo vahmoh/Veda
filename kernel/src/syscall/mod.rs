@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! System call dispatch. See `vabi` for the calling convention and the
 //! meaning of each call.
 

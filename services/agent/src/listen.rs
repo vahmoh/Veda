@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Listening for the agent's name while it is asleep.
 //!
 //! The microphone stays open and a voice detector runs here, on the

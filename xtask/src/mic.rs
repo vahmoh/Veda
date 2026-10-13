@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The test microphone: audio that automation scripts make Veda hear.
 //!
 //! [`MicServer`] listens on a local TCP port; inside Veda, `testmic`

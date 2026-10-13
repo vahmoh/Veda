@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Small helpers shared by the xtask commands.
 
 use std::path::{Path, PathBuf};

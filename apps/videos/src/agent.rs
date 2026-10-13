@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Videos for the voice agent: what it shows (the library, the video open
 //! and where it is) and what it does (playing a video by name, pausing,
 //! seeking, the player's volume, full screen, back to the library), through

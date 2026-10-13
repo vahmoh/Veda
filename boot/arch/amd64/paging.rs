@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Builds the initial x86-64 4-level page tables handed to the kernel.
 //!
 //! While boot services are active the firmware identity-maps all memory, so

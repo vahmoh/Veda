@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! The anti-aliasing scan converter.
 //!
 //! [`Rasterizer`] computes the exact area of every pixel covered by a path, in the style of

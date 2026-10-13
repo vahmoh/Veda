@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
 # The network through Linux's driver: QEMU's Intel 82576 card goes to the
 # driver VM, as every network card does. Linux's igb drives it, and Veda's
 # network driver for Linux attaches it to Veda's network service as eth0,

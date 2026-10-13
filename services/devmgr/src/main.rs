@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! `devmgr` — the device manager.
 //!
 //! Enumerates the PCI bus, matches devices against the driver table, starts

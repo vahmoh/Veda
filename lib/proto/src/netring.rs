@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Shared-memory packet rings: how frames travel between network drivers,
 //! the Wi-Fi service and the network service.
 //!
