@@ -68,14 +68,15 @@ connects it with other programs and built-in commands.
 **Executables** are ELF64 files for the System V ABI of the processor (on
 AMD64 x86-64's), as on Linux.
 Veda's own (Rust) programs stay PE; `vrt::process::Spawn` starts either
-kind. For an ELF program it maps the segments (`libraries/elf` validates
-them and groups the pages by permissions), gives it an 8 MiB stack with
-guard pages below, and lays out the top of the stack as Linux does:
-arguments, environment and the auxiliary vector (program headers, entry
-point, page size, 16 random bytes, the hardware capabilities). It also
-sends the startup message every Veda process gets, which for an ELF program
-carries the working directory and the handles: the registry, the terminal,
-and the files and streams that become its descriptors (role `FD + n`).
+kind. For an ELF program it maps the segments
+(`implementation/libraries/elf` validates them and groups the pages by
+permissions), gives it an 8 MiB stack with guard pages below, and lays out
+the top of the stack as Linux does: arguments, environment and the
+auxiliary vector (program headers, entry point, page size, 16 random bytes,
+the hardware capabilities). It also sends the startup message every Veda
+process gets, which for an ELF program carries the working directory and
+the handles: the registry, the terminal, and the files and streams that
+become its descriptors (role `FD + n`).
 
 **The C library** is musl 1.2.6 (`ports/musl`). It is Linux's C library
 almost unchanged: where it would make a Linux system call, it calls
@@ -85,8 +86,9 @@ the POSIX layer. `_start` stores the bootstrap channel the kernel passes,
 and `__init_libc` calls the POSIX layer to set itself up before any
 constructor runs. `posix_spawn` is Veda's own (there is no `fork`).
 
-**The POSIX layer** (`libraries/posix`, crate `vposix`) is written in Rust
-and carries out Linux system calls with Veda's objects and services:
+**The POSIX layer** (`implementation/libraries/posix`, crate `vposix`) is
+written in Rust and carries out Linux system calls with Veda's objects and
+services:
 
 | What a C program uses | What it is on Veda |
 |-----------------------|--------------------|
@@ -117,11 +119,11 @@ waiting on several objects at once (`veda_wait`), memory objects
 started with for a role of its own (`veda_startup_handle`: `mediadec`
 takes its control channel so, from Videos, which starts it with nothing
 else). They are the kernel's calls but for
-the registry's, made by the POSIX layer (`libraries/posix/src/native.rs`);
-every call returns 0 or a count, or a negative Veda error number. A program
-speaks a protocol by writing its messages itself: a 12-byte header (method,
-transaction, request or response), then the values in order, as the
-header describes.
+the registry's, made by the POSIX layer
+(`implementation/libraries/posix/src/native.rs`); every call returns 0 or a
+count, or a negative Veda error number. A program speaks a protocol by
+writing its messages itself: a 12-byte header (method, transaction, request
+or response), then the values in order, as the header describes.
 
 **The Terminal** runs a program on a fresh socket pair: the program's
 descriptors 0, 1 and 2 are one end, the window keeps the other. The
@@ -257,9 +259,9 @@ beside it.
   Ctrl+D, pipes and files.
 * `verification/ui/c-compile.vts` writes a C program in the Terminal,
   compiles it with GCC inside Veda and runs it.
-* `libraries/elf` (the ELF loader's checks and the stack layout) and
-  `libraries/posix` (paths, structures, flag conversions) are unit-tested
-  on the host.
+* `implementation/libraries/elf` (the ELF loader's checks and the stack
+  layout) and `implementation/libraries/posix` (paths, structures, flag
+  conversions) are unit-tested on the host.
 
 `cargo xtask test --ui` runs them; the scripts that need the toolchain are
 skipped when it has not been built.

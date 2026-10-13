@@ -2625,6 +2625,7 @@ dependencies = [
  "vacpi",
  "vbuild",
  "vimage",
+ "vjson",
  "vpe",
 ]
 

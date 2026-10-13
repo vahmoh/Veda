@@ -131,8 +131,8 @@ const POSIX_LAYER_EXPORTS: [&str; 22] = [
     "veda_object_signal",
 ];
 
-/// Builds the POSIX layer (`libraries/posix`) as a static library for the
-/// architecture's bare target; returns its path.
+/// Builds the POSIX layer (`implementation/libraries/posix`) as a static
+/// library for the architecture's bare target; returns its path.
 pub fn posix_library() -> Result<PathBuf> {
     util::status("Building", format!("the POSIX layer ({BARE_TARGET})"));
     util::run(util::cargo().args([
@@ -193,7 +193,8 @@ pub fn refresh_posix_layer() -> Result {
         std::fs::create_dir_all(object.parent().unwrap()).map_err(|e| format!("{e}"))?;
         posix_object(&library, &object)?;
     }
-    let headers = util::workspace_root().join("libraries").join("posix").join("include").join("veda");
+    let headers =
+        util::workspace_root().join("implementation").join("libraries").join("posix").join("include").join("veda");
     for sysroot in [root().join("cross").join("sysroot"), root().join("native")] {
         let libc = sysroot.join("system").join("lib").join("libc.a");
         if libc.is_file() && !is_newer(&libc, &[&object]) {
@@ -305,15 +306,16 @@ fn without_c_comments(text: &str) -> String {
     }
 }
 
-/// The media decoder (`services/mediadec`) for the system image, if the
-/// cross toolchain and the media libraries are built: its Rust half (built
-/// for the architecture's bare target and made one object exporting `mediadec_main`
-/// alone), its C shim, FFmpeg and dav1d, linked by the cross GCC as a
-/// static position-independent program. Built again when any of it changed.
+/// The media decoder (`implementation/services/mediadec`) for the system
+/// image, if the cross toolchain and the media libraries are built: its
+/// Rust half (built for the architecture's bare target and made one object
+/// exporting `mediadec_main` alone), its C shim, FFmpeg and dav1d, linked
+/// by the cross GCC as a static position-independent program. Built again
+/// when any of it changed.
 pub fn mediadec() -> Result<Option<Vec<u8>>> {
     let (Some(gcc), Some(libraries)) = (cross_gcc(), media_libraries()) else { return Ok(None) };
     refresh_posix_layer()?;
-    let crate_dir = util::workspace_root().join("services").join("mediadec");
+    let crate_dir = util::workspace_root().join("implementation").join("services").join("mediadec");
     let shim = crate_dir.join("shim");
     let header = shim.join("vmd.h");
     // No floating point crosses the shim: the Rust half passes it otherwise.

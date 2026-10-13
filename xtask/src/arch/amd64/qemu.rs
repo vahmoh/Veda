@@ -95,7 +95,7 @@ pub const HDA_CONTROLLER: &str = "ich9-intel-hda";
 
 /// The device through which the guest ends QEMU with an exit code
 /// (`isa-debug-exit`), at the I/O port the kernel writes it at
-/// (`kernel/src/arch/amd64/power.rs`).
+/// (`implementation/kernel/src/arch/amd64/power.rs`).
 pub const DEBUG_EXIT: &str = "isa-debug-exit,iobase=0xf4,iosize=0x04";
 
 /// Where each processor is, from QEMU's `info registers -a`: the code

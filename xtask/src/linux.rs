@@ -13,10 +13,10 @@
 //!   the renderer's decoder on softpipe, virgl and iris, for the OpenGL ES
 //!   tests).
 //! * Once it is built, every image build also builds the guest's programs
-//!   (`guest/`: Rust for Linux on musl, static; the renderer, Mesa's build
-//!   around its Rust half) and packs them into the initial RAM file system
-//!   the kernel starts with, with the firmware its drivers load
-//!   (`ports/linux/firmware.txt`, and the architecture's in
+//!   (`implementation/guest/`: Rust for Linux on musl, static; the
+//!   renderer, Mesa's build around its Rust half) and packs them into the
+//!   initial RAM file system the kernel starts with, with the firmware its
+//!   drivers load (`ports/linux/firmware.txt`, and the architecture's in
 //!   `ports/linux/arch/<architecture>/`). Both go into the system
 //!   image (`linux/kernel`, `linux/initramfs.cpio`), where `drivervm`
 //!   finds them.
@@ -83,8 +83,40 @@ fn mesa_host_build() -> PathBuf {
     root().join("build").join("mesa-host")
 }
 
-/// The renderer's Rust half (`guest/renderer`), a static library that
-/// Mesa's build links the program around, built.
+/// The renderer's sources (`implementation/guest/renderer`), whose decoder
+/// and libdrm Mesa's builds compile.
+fn renderer_source() -> Result<PathBuf> {
+    let dir = util::workspace_root().join("implementation").join("guest").join("renderer");
+    std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
+/// Keeps the Mesa build in `dir` on the renderer's sources: `cargo xtask
+/// linux` configured it with where they were, and should they have moved
+/// since (they, or the whole checkout), it is told where they are now, and
+/// builds again only what they reach.
+fn follow_renderer(dir: &Path) -> Result {
+    let info = dir.join("meson-info").join("intro-buildoptions.json");
+    let text = std::fs::read_to_string(&info).map_err(|e| format!("reading {}: {e}", info.display()))?;
+    let options = vjson::parse(&text).map_err(|e| format!("{}: {e}", info.display()))?;
+    let configured = options
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|option| option.get("name").and_then(vjson::Value::as_str) == Some("veda-renderer"))
+        .and_then(|option| option.get("value").and_then(vjson::Value::as_str))
+        .ok_or_else(|| format!("{}: Mesa's build has no veda-renderer option", info.display()))?;
+    let source = renderer_source()?;
+    if Path::new(configured) == source {
+        return Ok(());
+    }
+    util::status("Configuring", format!("{} for the renderer at {}", dir.display(), source.display()));
+    let mut option = std::ffi::OsString::from("-Dveda-renderer=");
+    option.push(&source);
+    util::run(Command::new("meson").arg("configure").arg(dir).arg(option))
+}
+
+/// The renderer's Rust half (`implementation/guest/renderer`), a static
+/// library that Mesa's build links the program around, built.
 fn renderer_lib() -> Result<PathBuf> {
     util::run(util::cargo().args(["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
     Ok(util::target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
@@ -98,6 +130,7 @@ pub fn vgallium() -> Result<Option<PathBuf>> {
     if !dir.join("build.ninja").is_file() {
         return Ok(None);
     }
+    follow_renderer(&dir)?;
     util::status("Building", "the renderer for the host (Mesa)");
     util::ninja(&dir, "src/gallium/targets/veda/vgallium.so")?;
     Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.so")))
@@ -173,6 +206,7 @@ pub fn command(args: &[String]) -> Result {
             .env("VEDA_PORTS", &ports)
             .env("VEDA_ARCH", arch::NAME)
             .env("VEDA_LINUX", root())
+            .env("VEDA_RENDERER", renderer_source()?)
             .env("VEDA_RENDERER_LIB", &lib)
             .env("JOBS", jobs.to_string()),
     )?;
@@ -222,6 +256,7 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     // The renderer: Mesa's build links its decoder and drivers around the
     // Rust half just built (once `cargo xtask linux` has configured it).
     if mesa_build().join("build.ninja").is_file() {
+        follow_renderer(&mesa_build())?;
         util::status("Building", "the driver VM's renderer (Mesa)");
         util::ninja(&mesa_build(), "src/gallium/targets/veda/renderer")?;
         let exe = mesa_build().join("src").join("gallium").join("targets").join("veda").join("renderer");

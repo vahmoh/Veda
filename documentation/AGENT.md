@@ -33,24 +33,25 @@ the models and the voice are system settings (Settings → Agent).
   default, Settings → Agent → Listening).
 
 The window is deliberately plain: the taskbar's colour and a white ring,
-OS1's from Spike Jonze's *Her* (`applications/shell/src/presence.rs`). It
-breathes while the agent listens, trembles and glows with its voice while
-it speaks, and a light runs around it while it thinks. Waking up, it is the
-film's loading figure, a white ribbon coiled around a long loop and
-spinning, its far side fading; when the agent is ready the coil turns to
-face you, faster and faster, and becomes the ring. A microphone button
-mutes it, and the ring on the taskbar is crossed out while it is muted.
-Requests for your consent appear in the window while it is open, and as
-notifications above the tray while it is closed; a blue dot on the
-taskbar's ring says that one is waiting.
+OS1's from Spike Jonze's *Her*
+(`implementation/applications/shell/src/presence.rs`). It breathes while
+the agent listens, trembles and glows with its voice while it speaks, and a
+light runs around it while it thinks. Waking up, it is the film's loading
+figure, a white ribbon coiled around a long loop and spinning, its far side
+fading; when the agent is ready the coil turns to face you, faster and
+faster, and becomes the ring. A microphone button mutes it, and the ring on
+the taskbar is crossed out while it is muted. Requests for your consent
+appear in the window while it is open, and as notifications above the tray
+while it is closed; a blue dot on the taskbar's ring says that one is
+waiting.
 
 ## How a conversation works
 
-* **Asleep** (`services/agent/src/listen.rs`). With "Answer when someone
-  says its name" on, the microphone stays open and a voice detector
-  (`vaudio::vad`) runs on the computer; nothing is sent anywhere while
-  nobody speaks. When someone does, the speech (with 0.6 s from before,
-  so the first word is not cut) is streamed to Deepgram's Nova-3
+* **Asleep** (`implementation/services/agent/src/listen.rs`). With "Answer
+  when someone says its name" on, the microphone stays open and a voice
+  detector (`vaudio::vad`) runs on the computer; nothing is sent anywhere
+  while nobody speaks. When someone does, the speech (with 0.6 s from
+  before, so the first word is not cut) is streamed to Deepgram's Nova-3
   recogniser, with the agent's name as a key term, until three seconds of
   quiet, eight seconds without a word, or a minute. Sound that brought no
   words (music, a television) is then taken for a background: until it
@@ -262,7 +263,7 @@ impl vui::App for Notes {
 ```
 
 Conventions (the built-in applications follow them;
-`applications/editor/src/agent.rs` is a compact example):
+`implementation/applications/editor/src/agent.rs` is a compact example):
 
 * **Actions** are snake_case verbs with short imperative descriptions
   written for a language model: say the units, the formats and what the

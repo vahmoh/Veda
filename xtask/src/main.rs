@@ -240,17 +240,17 @@ fn resolution_size(v: &str) -> Option<(u32, u32)> {
 /// with the source directories (the tool and the libraries it uses) whose
 /// changes make it run again.
 const GENERATORS: &[(&str, &[&str])] = &[
-    ("assetgen", &["tools/assetgen", "libraries/image"]),
-    ("musicgen", &["tools/musicgen", "libraries/audio", "libraries/image"]),
+    ("assetgen", &["tools/assetgen", "implementation/libraries/image"]),
+    ("musicgen", &["tools/musicgen", "implementation/libraries/audio", "implementation/libraries/image"]),
     (
         "videogen",
         &[
             "tools/videogen",
-            "libraries/gfx",
-            "libraries/raster",
-            "libraries/font",
-            "libraries/audio",
-            "libraries/image",
+            "implementation/libraries/gfx",
+            "implementation/libraries/raster",
+            "implementation/libraries/font",
+            "implementation/libraries/audio",
+            "implementation/libraries/image",
             "assets/fonts",
         ],
     ),

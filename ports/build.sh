@@ -10,7 +10,8 @@
 #   VEDA_PORTS       this directory
 #   VEDA_ARCH        the architecture built for (arch/$VEDA_ARCH/settings.sh)
 #   VEDA_TOOLCHAIN   where to build; downloads/ holds the verified archives
-#   VEDA_POSIX_LIB   the POSIX layer (libraries/posix) as a static library
+#   VEDA_POSIX_LIB   the POSIX layer (implementation/libraries/posix) as a
+#                    static library
 #   VEDA_POSIX_EXPORTS  the symbols it gives the C library
 #   JOBS             parallel jobs (default: the number of processors)
 #
@@ -142,7 +143,7 @@ stage_posix_layer() {
 	$TARGET-ar rcs "$SYSROOT/system/lib/libc.a" "$BUILD/veda.o"
 	# And its header for Veda's own interfaces, <veda/ipc.h>.
 	mkdir -p "$SYSROOT/system/include/veda"
-	cp "$PORTS"/../libraries/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
+	cp "$PORTS"/../implementation/libraries/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
 }
 stage posix_layer musl "$POSIX_LIB" @POSIX_EXPORTS
 
@@ -159,10 +160,11 @@ stage libstdcxx_cross gcc_cross musl
 # --- the media libraries, for mediadec ---------------------------------------
 
 # dav1d and FFmpeg, static and position independent, for the sandboxed
-# decoder of Videos (services/mediadec, which `cargo xtask` links). They go
-# to a prefix of their own: the sysroot is copied into the image, these are
-# not. They are compiled with the C library as built (they link nothing but
-# their checkasm programs), so a new POSIX layer only relinks those.
+# decoder of Videos (implementation/services/mediadec, which `cargo xtask`
+# links). They go to a prefix of their own: the sysroot is copied into the
+# image, these are not. They are compiled with the C library as built (they
+# link nothing but their checkasm programs), so a new POSIX layer only
+# relinks those.
 MEDIA=$ROOT/media
 
 stage_src_dav1d() { unpack dav1d; }

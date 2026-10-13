@@ -178,7 +178,7 @@
 +/*
 + * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
 + * how Linux finds it, and its hypercalls. The definitions are Veda's own
-+ * (libraries/hv/src/platform.rs in Veda's tree).
++ * (implementation/libraries/hv/src/platform.rs in Veda's tree).
 + *
 + * A hypercall is vmcall with the call in rax and its arguments in rbx, rcx,
 + * rdx, rsi and rdi; the result comes back in rax, negative for an error.

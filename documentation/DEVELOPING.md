@@ -179,11 +179,12 @@ cargo xtask script verification/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 80
   the sound started (as the desktop appeared), or why not.
   `verification/ui/startup.vts` checks both, and that the sound reaches the
   recording. Its look is in
-  `services/compositor/src/startup.rs` (timings, colours, the tagline);
-  the sound is `tools/musicgen/src/songs/startup.rs`. `startup-sound=off`
-  on the kernel command line (`--cmdline`, or the `BOOT.CFG` of an image)
-  leaves the sound out; the scripts that check a recording of the sound
-  output, or feed it back into the microphone, boot with it.
+  `implementation/services/compositor/src/startup.rs` (timings, colours,
+  the tagline); the sound is `tools/musicgen/src/songs/startup.rs`.
+  `startup-sound=off` on the kernel command line (`--cmdline`, or the
+  `BOOT.CFG` of an image) leaves the sound out; the scripts that check a
+  recording of the sound output, or feed it back into the microphone, boot
+  with it.
 * Displays and GPUs are Linux's, in the driver VM, as are input devices,
   USB and networks: `dmesg drivervm` shows what Linux and Veda's drivers
   for Linux say (the display `kms` drives, its mode, whether it shows the
@@ -300,15 +301,15 @@ toolchain` (see [C on Veda](C.md)); without it, the build says so and
 leaves them out. With `cargo xtask linux` done,
 the image also holds the driver VM's Linux: `/system/linux/kernel` (the
 architecture's image of it: a bzImage on AMD64) and
-`/system/linux/initramfs.cpio`, made of the programs in `guest/` (see
-[the driver VM](DRIVERVM.md)). Files under `samples/` in the
-system image are also copied into the user's
-home directory at boot (`/system/samples/Pictures/x.png` →
+`/system/linux/initramfs.cpio`, made of the programs in
+`implementation/guest/` (see [the driver VM](DRIVERVM.md)). Files under
+`samples/` in the system image are also copied into the user's home
+directory at boot (`/system/samples/Pictures/x.png` →
 `/home/user/Pictures/x.png`).
 
 ## Writing an application
 
-1. Create a crate under `applications/<name>`, add it to the
+1. Create a crate under `implementation/applications/<name>`, add it to the
    workspace `members` in `Cargo.toml` and to `PROGRAMS` in
    `xtask/src/components.rs`.
 2. `Cargo.toml` depends on `vrt`, `vabi`, `vui` (and others as needed) and has
@@ -409,12 +410,13 @@ in `verification/c/` are compiled by `cargo xtask build` and installed in
 
 ### Videos and its decoder
 
-Videos (`applications/videos`) is a `vui` application; what it does that
-can be tested on the host is in `applications/videos/core` (the clock,
-pacing, choosing pictures, skipping, the layout, what it remembers), and
-the protocol it speaks with its decoder, with the frame pool and the sound
-ring, is `vproto::media`. The decoder, `services/mediadec`, is a C program:
-its Rust half is built for the architecture's bare target
+Videos (`implementation/applications/videos`) is a `vui` application; what
+it does that can be tested on the host is in
+`implementation/applications/videos/core` (the clock, pacing, choosing
+pictures, skipping, the layout, what it remembers), and the protocol it
+speaks with its decoder, with the frame pool and the sound ring, is
+`vproto::media`. The decoder, `implementation/services/mediadec`, is a C
+program: its Rust half is built for the architecture's bare target
 (`x86_64-unknown-none` on AMD64) and linked with its C shim,
 FFmpeg and dav1d by the cross compiler (`xtask/src/toolchain.rs`,
 `mediadec()`), so it exists only once `cargo xtask toolchain` built the

@@ -20,13 +20,15 @@ rustflags = [
 ]
 
 # Veda's user-space programs are PE executables, linked by LLVM's linker in
-# the Microsoft linker's flavour, which Rust ships (see libraries/build).
+# the Microsoft linker's flavour, which Rust ships (see
+# implementation/libraries/build).
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld"
 
-# Programs of the driver VM's Linux guest (guest/): their Veda runtime makes
-# its system calls through the bridge (see libraries/rt/src/guest.rs), and
-# they link statically with Rust's own linker.
+# Programs of the driver VM's Linux guest (implementation/guest/): their
+# Veda runtime makes its system calls through the bridge (see
+# implementation/libraries/rt/src/guest.rs), and they link statically with
+# Rust's own linker.
 [target.x86_64-unknown-linux-musl]
 linker = "rust-lld"
 rustflags = ["--cfg", "veda_guest"]

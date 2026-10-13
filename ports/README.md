@@ -88,13 +88,13 @@ it).
 **gmp, mpfr, mpc**: `config.sub` knows `veda`, so they build for Veda as
 the native GCC's libraries.
 
-**musl**: `__init_libc` sets the POSIX layer (`libraries/posix`) up;
-`posix_spawn` asks the layer to start the program. For AMD64: system calls
-go to the layer instead of the `syscall` instruction
-(`arch/x86_64/syscall_arch.h`); `_start` keeps the bootstrap channel
-(`crt_arch.h`); thread creation, the thread pointer, a thread freeing its
-own stack and cancellable system calls go through the layer
-(`src/thread/x86_64/*.s`); `vfork` falls back to the generic version
+**musl**: `__init_libc` sets the POSIX layer
+(`implementation/libraries/posix`) up; `posix_spawn` asks the layer to
+start the program. For AMD64: system calls go to the layer instead of the
+`syscall` instruction (`arch/x86_64/syscall_arch.h`); `_start` keeps the
+bootstrap channel (`crt_arch.h`); thread creation, the thread pointer, a
+thread freeing its own stack and cancellable system calls go through the
+layer (`src/thread/x86_64/*.s`); `vfork` falls back to the generic version
 (which fails: there is no `fork`).
 
 **dav1d**: none. It is built as released (meson, with a cross file for
@@ -111,20 +111,20 @@ Both libraries are installed apart from the C toolchain
 (`target/toolchain/media`), since only `mediadec` links them; `systest`
 runs both `checkasm` programs on Veda.
 
-**mesa**: Veda's renderer (`guest/renderer`), which carries out the
-OpenGL ES command streams of applications on Mesa's Gallium drivers in the
-driver VM, is a target of Mesa's build: `src/gallium/targets/veda`,
+**mesa**: Veda's renderer (`implementation/guest/renderer`), which carries
+out the OpenGL ES command streams of applications on Mesa's Gallium drivers
+in the driver VM, is a target of Mesa's build: `src/gallium/targets/veda`,
 compiling the decoder the `veda-renderer` option names, links the
 renderer's program for the guest around its Rust half
 (`veda-renderer-lib`) and, for the machine that builds it, `vgallium.so`
 (the decoder on softpipe and on virgl over virglrenderer's test server)
 for the OpenGL ES tests. Gallium's own state handling is built without
 any OpenGL API (`with_gfx_compute`), with the renderer's small libdrm
-(`guest/renderer/drm`); the program, static, has no dynamic linker that
-would tell Mesa its build id, which it does without, and links Gallium's
-stand-ins for video. iris, Intel's driver, is built without what needs
-Mesa's OpenCL compiler (LLVM): generating indirect draws on the GPU, and
-blorp's indirect copies (its bounds check is written in NIR instead).
+(`implementation/guest/renderer/drm`); the program, static, has no dynamic
+linker that would tell Mesa its build id, which it does without, and links
+Gallium's stand-ins for video. iris, Intel's driver, is built without what
+needs Mesa's OpenCL compiler (LLVM): generating indirect draws on the GPU,
+and blorp's indirect copies (its bounds check is written in NIR instead).
 `linux/build.sh` configures Mesa (meson) with the driver VM's own
 toolchain (GCC, binutils and musl for Linux, the releases these ports
 pin, unpatched); `cargo xtask` builds the renderer (ninja) with the

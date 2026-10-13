@@ -24,11 +24,11 @@ talk over kernel channels; the kernel knows nothing about networks.
   and the sockets applications use. The protocol engine is
   [smoltcp](https://github.com/smoltcp-rs/smoltcp), a port
   (`ports/smoltcp`): its release with one documented patch (see below).
-* **Applications** use `vnet` (`libraries/net`): blocking, `std::net`-like
-  `TcpStream`, `TcpListener`, `UdpSocket`, name resolution, ping, a small
-  HTTP client, and `vnet::wifi` for Wi-Fi; and `vtls` (`libraries/tls`) for
-  TLS (HTTPS, secure WebSockets) over a `TcpStream`, inside the
-  application's own process.
+* **Applications** use `vnet` (`implementation/libraries/net`): blocking,
+  `std::net`-like `TcpStream`, `TcpListener`, `UdpSocket`, name resolution,
+  ping, a small HTTP client, and `vnet::wifi` for Wi-Fi; and `vtls`
+  (`implementation/libraries/tls`) for TLS (HTTPS, secure WebSockets) over
+  a `TcpStream`, inside the application's own process.
 
 Frames travel between processes through shared-memory rings
 (`vproto::netring`): a pair of single-producer/single-consumer rings per
@@ -39,16 +39,16 @@ out, and a system call only when the other side is asleep.
 
 | Path | What it is |
 |------|------------|
-| `services/netd` | the network service (`net` and `netdev` protocols) |
-| `libraries/netstack` | `vnetstack`: interfaces, DHCP, SLAAC, routes, DNS, sockets on smoltcp |
-| `services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
-| `libraries/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
-| `guest/net`, `guest/wifi`, `guest/airlink` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios; QEMU's virtual radio as one of Linux's (mac80211_hwsim) |
-| `libraries/radiolink` | `vradiolink`: the message format between `airlink` and `airsim` |
-| `libraries/net` | `vnet`: the application API, including `vnet::wifi` |
-| `libraries/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
-| `libraries/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
-| `libraries/entropy`, `kernel/src/random.rs` | the kernel's random number generator |
+| `implementation/services/netd` | the network service (`net` and `netdev` protocols) |
+| `implementation/libraries/netstack` | `vnetstack`: interfaces, DHCP, SLAAC, routes, DNS, sockets on smoltcp |
+| `implementation/services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
+| `implementation/libraries/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
+| `implementation/guest/net`, `implementation/guest/wifi`, `implementation/guest/airlink` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios; QEMU's virtual radio as one of Linux's (mac80211_hwsim) |
+| `implementation/libraries/radiolink` | `vradiolink`: the message format between `airlink` and `airsim` |
+| `implementation/libraries/net` | `vnet`: the application API, including `vnet::wifi` |
+| `implementation/libraries/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
+| `implementation/libraries/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
+| `implementation/libraries/entropy`, `implementation/kernel/src/random.rs` | the kernel's random number generator |
 | `tools/airsim` | the simulated Wi-Fi environment on the host |
 | `verification/nettest` | in-system network checks |
 | `verification/ui/wifi-connect.vts`, `drivervm-wifi*.vts` | Wi-Fi GUI and failure-recovery tests |
@@ -184,10 +184,11 @@ is left.
 The cards of PCs (Intel's, MediaTek's, Realtek's, Qualcomm's) keep their
 MAC in firmware: their drivers do not move raw frames, and Linux's 802.11
 stack (cfg80211 and mac80211) builds on that. Veda uses them through
-[the driver VM](DRIVERVM.md), where `wifi` (`guest/wifi`) offers each of
-Linux's radios to `wlan` as a *managed* radio (`phy_caps::MANAGED`): its
-control channel speaks `wlanmlme_ctl` instead of `wlanphy_ctl`, and the
-station of `vwlan` drives it with commands rather than frames:
+[the driver VM](DRIVERVM.md), where `wifi` (`implementation/guest/wifi`)
+offers each of Linux's radios to `wlan` as a *managed* radio
+(`phy_caps::MANAGED`): its control channel speaks `wlanmlme_ctl` instead of
+`wlanphy_ctl`, and the station of `vwlan` drives it with commands rather
+than frames:
 
 | The station | `wlanmlme_ctl` | Linux (nl80211) |
 |-------------|----------------|-----------------|
@@ -208,9 +209,9 @@ heard lately: `wifi` listens on the access point's channel first when it
 must. The Wi-Fi service is the same for both kinds of radio, and so are
 the user's networks and the connection policy.
 
-Under QEMU, `airlink` (`guest/airlink`) makes the virtual radio's port one
-of Linux's simulated radios (`mac80211_hwsim`), whose medium it is, so the
-whole path runs against airsim's networks:
+Under QEMU, `airlink` (`implementation/guest/airlink`) makes the virtual
+radio's port one of Linux's simulated radios (`mac80211_hwsim`), whose
+medium it is, so the whole path runs against airsim's networks:
 `verification/ui/drivervm-wifi.vts` joins every kind of network through it,
 and `verification/ui/drivervm-wifi-recovery.vts` breaks them. airsim's
 radio then hears every channel (radio link version 2's `LISTEN`), each
@@ -257,9 +258,9 @@ let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection
 
 ## TLS
 
-`vtls` (`libraries/tls`) is the TLS client of Veda applications: HTTPS,
-secure WebSockets, anything else over TLS 1.3 or TLS 1.2. It runs in the
-application's process, on top of a `vnet::TcpStream`.
+`vtls` (`implementation/libraries/tls`) is the TLS client of Veda
+applications: HTTPS, secure WebSockets, anything else over TLS 1.3 or TLS
+1.2. It runs in the application's process, on top of a `vnet::TcpStream`.
 
 * **Protocol.** [rustls](https://github.com/rustls/rustls) 0.23, through
   its `no_std` "unbuffered" API: `TlsStream` keeps the received TLS bytes,

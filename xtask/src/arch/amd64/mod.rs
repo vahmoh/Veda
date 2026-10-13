@@ -20,7 +20,7 @@ pub const UEFI_TARGET: &str = "x86_64-unknown-uefi";
 /// Rust's target of user-space programs: `no_std` PE executables, built
 /// for Windows' target, which gives them hard-float SSE code on stable
 /// Rust, and linked by LLVM's linker in the Microsoft linker's flavour
-/// (`libraries/build`).
+/// (`implementation/libraries/build`).
 pub const USER_TARGET: &str = vbuild::amd64::TARGET;
 
 /// Rust's target of the code C programs link: the POSIX layer and the media

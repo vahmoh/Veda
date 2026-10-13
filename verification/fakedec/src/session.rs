@@ -3,9 +3,10 @@
 
 //! A decoding session: the protocol's calls ([`media::Server`]) and the work
 //! the loop does between them, one piece at a time, as `mediadec`'s session
-//! does them (`services/mediadec/src/session.rs`, which this follows call
-//! for call). Its "decoders" make each picture and each record of sound
-//! from the clip's description at once, where `mediadec`'s decode packets.
+//! does them (`implementation/services/mediadec/src/session.rs`, which this
+//! follows call for call). Its "decoders" make each picture and each record
+//! of sound from the clip's description at once, where `mediadec`'s decode
+//! packets.
 //!
 //! The work, in order of preference: put a decoded picture into a free slot
 //! of the pool, write sound into the ring, decode a picture, decode sound.

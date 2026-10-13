@@ -184,7 +184,7 @@
 +#
 +# Veda's renderer: the virgl command streams of Veda's OpenGL ES library
 +# carried out by a Gallium driver. Its sources are in the Veda repository
-+# (guest/renderer), which -Dveda-renderer names.
++# (implementation/guest/renderer), which -Dveda-renderer names.
 +
 +veda_dir = get_option('veda-renderer')
 +veda_sources = files(

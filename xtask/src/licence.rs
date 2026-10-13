@@ -97,9 +97,12 @@ mod tests {
         for path in ["documentation/images/a.png", "Cargo.lock", "LICENSE", "ports/gcc/veda.patch"] {
             assert!(exempt(path), "{path}");
         }
-        for path in
-            ["kernel/src/main.rs", "ports/crates.sh", "ports/linux/veda.config", "documentation/website/index.html"]
-        {
+        for path in [
+            "implementation/kernel/src/main.rs",
+            "ports/crates.sh",
+            "ports/linux/veda.config",
+            "documentation/website/index.html",
+        ] {
             assert!(!exempt(path), "{path}");
         }
     }

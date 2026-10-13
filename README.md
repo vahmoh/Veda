@@ -462,14 +462,14 @@ output) to `target/veda/serial.log`.
 
 | Path | Contents |
 |------|----------|
-| `services/agent/`, `libraries/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `libraries/agent` |
-| `boot/` | `vboot`, the UEFI bootloader |
-| `kernel/` | `vkernel`, the microkernel, with the hypervisor and the IOMMU driver |
-| `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
-| `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
-| `libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
-| `applications/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
-| `guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
+| `implementation/services/agent/`, `implementation/libraries/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `implementation/libraries/agent` |
+| `implementation/boot/` | `vboot`, the UEFI bootloader |
+| `implementation/kernel/` | `vkernel`, the microkernel, with the hypervisor and the IOMMU driver |
+| `implementation/services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
+| `implementation/drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
+| `implementation/libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
+| `implementation/applications/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
+| `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
 | `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
@@ -510,9 +510,10 @@ its first lines, as SPDX tags (see
 
 Other parts keep their own licences:
 
-* **The driver VM's renderer**: its C code (`guest/renderer/decoder`,
-  `guest/renderer/drm`), which Mesa's build compiles with Mesa, is under
-  the MIT licence, as Mesa is.
+* **The driver VM's renderer**: its C code
+  (`implementation/guest/renderer/decoder`,
+  `implementation/guest/renderer/drm`), which Mesa's build compiles with
+  Mesa, is under the MIT licence, as Mesa is.
 * **Fonts** (Inter, Lato, JetBrains Mono): the SIL Open Font License 1.1;
   see `assets/fonts/`.
 * **Device firmware** that the driver VM's Linux loads into devices

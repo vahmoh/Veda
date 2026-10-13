@@ -6,8 +6,8 @@
  * - the hero's sky is the Aurora wallpaper (tools/assetgen/src/wallpapers.rs)
  *   brought to life in a WebGL shader; the ring's light is CSS;
  * - the agent's figure (OS1's ring and the coil from "Her") is a port of
- *   applications/shell/src/presence.rs and the states of
- *   applications/shell/src/agent.rs;
+ *   implementation/applications/shell/src/presence.rs and the states of
+ *   implementation/applications/shell/src/agent.rs;
  * - everything else is scroll-driven, and runs only while on screen.
  *
  * No dependencies. Respects prefers-reduced-motion. */
@@ -60,7 +60,8 @@
   addEventListener('scroll', request, { passive: true });
   addEventListener('resize', request);
 
-  // ---- the agent's figure (applications/shell/src/presence.rs) ----------
+  // ---- the agent's figure -----------------------------------------------
+  // As implementation/applications/shell/src/presence.rs draws it.
   const RING_WIDTH = 0.25;
   const tremble = (a, r, amount, t) => {
     if (amount <= 0) return 0;
@@ -209,7 +210,7 @@
     draw(runPts, runLevel);
   };
   // How fast the coil spins, and how much more it turns as it becomes the
-  // ring (applications/shell/src/agent.rs).
+  // ring (implementation/applications/shell/src/agent.rs).
   const SPIN = 2.1, SPIN_EXTRA = 9;
   /** The figure for `f` = {state, v, voice, mic} around (cx, cy), a ring
    * of radius `base`; `v` below 1 is the coil turning into the ring. */

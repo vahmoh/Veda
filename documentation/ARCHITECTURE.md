@@ -11,9 +11,10 @@ that communicate over kernel channels.
 
 ## Boot
 
-1. The firmware (OVMF under QEMU) loads the loader (`boot/`, `vboot`) from
-   UEFI's boot path for the architecture (`\EFI\BOOT\BOOTX64.EFI` on
-   AMD64) on the FAT32 EFI system partition built by `cargo xtask build`.
+1. The firmware (OVMF under QEMU) loads the loader (`implementation/boot/`,
+   `vboot`) from UEFI's boot path for the architecture
+   (`\EFI\BOOT\BOOTX64.EFI` on AMD64) on the FAT32 EFI system partition
+   built by `cargo xtask build`.
 2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
    GOP graphics mode (about `BOOT.CFG`'s size, and of the display's own
    shape where the firmware gives the display's EDID: 1920x1200 rather
@@ -53,9 +54,10 @@ picture, black too (on a PC's panel Linux keeps the link the firmware
 set, so the panel stays on: Veda's patch to i915 keeps the firmware's
 bits a colour at the first commit); without a driver coming, at once,
 on the firmware's framebuffer. Then the window system fades the splash
-in from black (the gradient and the ring: `vsplash`, `libraries/splash`,
-drawn by the processor or by the GPU's shaders from the same
-arithmetic; `services/compositor/src/startup.rs`), and brings it to
+in from black (the gradient and the ring: `vsplash`,
+`implementation/libraries/splash`, drawn by the processor or by the GPU's
+shaders from the same arithmetic;
+`implementation/services/compositor/src/startup.rs`), and brings it to
 life: a soft light gathers around the ring and breathes, with a glint
 going round while the system works, and the name and the tagline ("The
 agentic-native operating system") rise into view. Once the shell's
@@ -89,15 +91,15 @@ are never read or written. The stick keeps the system's log instead
 Linux, which has the stick on its USB controller, writes each start's
 logs there (`logkeeper`, see [DRIVERVM.md](DRIVERVM.md)).
 
-## The kernel (`kernel/`)
+## The kernel (`implementation/kernel/`)
 
 | Module | Responsibility |
 |--------|----------------|
-| `arch` | the processor architecture and its platform, behind one interface (`kernel/src/arch.rs`, which lists it): implemented in `kernel/src/arch/<architecture>/`, on AMD64 the GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, the TSC, HPET and PIT, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory) |
+| `arch` | the processor architecture and its platform, behind one interface (`implementation/kernel/src/arch.rs`, which lists it): implemented in `implementation/kernel/src/arch/<architecture>/`, on AMD64 the GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, the TSC, HPET and PIT, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory) |
 | `mm` | frame allocator, page tables, kernel heap, kernel stacks/MMIO windows, VMOs, address spaces, user copies |
 | `sched` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
 | `object` | handles, signals, processes, channels, sockets, events, interrupts, I/O ports, resources |
-| `syscall` | the system call layer (see `libraries/abi`) |
+| `syscall` | the system call layer (see `implementation/libraries/abi`) |
 | `hv` | the hypervisor: guests and their virtual processors (see [the driver VM](DRIVERVM.md)), on the architecture's virtualization (`arch::hv`) |
 | `acpi`, `time`, `percpu`, `futex`, `loader`, `log`, `panic` | supporting subsystems |
 
@@ -187,15 +189,15 @@ has ended and left its stack, which is how thread libraries join threads.
   create a process, map the program's image from VMOs, create a thread, and
   start it with a bootstrap channel carrying the startup message
   (arguments, environment, working directory, role-tagged handles). An ELF
-  program's segments are checked and mapped by `libraries/elf`, and its
-  stack starts the way Linux starts one: arguments, environment and the
-  auxiliary vector.
+  program's segments are checked and mapped by
+  `implementation/libraries/elf`, and its stack starts the way Linux starts
+  one: arguments, environment and the auxiliary vector.
 * **C programs** run on musl, whose system calls go to `vposix`
-  (`libraries/posix`), a POSIX layer in Rust linked into the C library:
-  files are the VFS's open files, pipes and terminals are sockets, threads
-  are kernel threads, `posix_spawn` starts processes. The Terminal runs
-  them with a terminal of their own (canonical line editing, `termios`,
-  Ctrl+C). See [C on Veda](C.md).
+  (`implementation/libraries/posix`), a POSIX layer in Rust linked into the
+  C library: files are the VFS's open files, pipes and terminals are
+  sockets, threads are kernel threads, `posix_spawn` starts processes. The
+  Terminal runs them with a terminal of their own (canonical line editing,
+  `termios`, Ctrl+C). See [C on Veda](C.md).
 * **Services** register with the registry in `init`; clients connect by name.
   Protocols are declared with the `vipc` macros, which generate typed client
   stubs and server dispatch code. With every connection the registry hands
@@ -203,7 +205,7 @@ has ended and left its stack, which is how thread libraries join threads.
   a system service or an application), so a service can decide who may do
   what; system service names cannot be registered by other programs.
 
-## Devices (`services/devmgr`)
+## Devices (`implementation/services/devmgr`)
 
 * `devmgr` enumerates the PCI bus and starts a driver for each device it
   has one for, matched by vendor and device or by PCI class. A driver gets
@@ -222,14 +224,14 @@ has ended and left its stack, which is how thread libraries join threads.
   hands them to `devmgr`), because some devices exist only there: a
   laptop's touchpad on an I2C bus, its speaker amplifiers on an SPI bus,
   the GPIO pins wired to them.
-  `vacpi` (`libraries/acpi`) loads the DSDT and SSDTs into a namespace and
-  evaluates its objects with a small AML interpreter: integer, string,
-  buffer and package operations, buffer fields, control flow, method
-  calls, and the fields of firmware memory regions (the firmware's
-  settings, which decide what exists and where) and of PCI configuration
-  space (the registers of the function at the `_ADR` of the device a
-  region is in, on its root bridge's bus or below its bridges, as ACPICA
-  finds it: an Intel PC's root bridge sizes its windows by its host
+  `vacpi` (`implementation/libraries/acpi`) loads the DSDT and SSDTs into a
+  namespace and evaluates its objects with a small AML interpreter:
+  integer, string, buffer and package operations, buffer fields, control
+  flow, method calls, and the fields of firmware memory regions (the
+  firmware's settings, which decide what exists and where) and of PCI
+  configuration space (the registers of the function at the `_ADR` of the
+  device a region is in, on its root bridge's bus or below its bridges, as
+  ACPICA finds it: an Intel PC's root bridge sizes its windows by its host
   bridge's). It changes nothing: what a method stores lasts only for that
   evaluation, and it reads no I/O ports or embedded controller. Definitions
   inside an `If` outside any method exist only when their condition holds
@@ -270,26 +272,26 @@ has ended and left its stack, which is how thread libraries join threads.
   the driver's behalf, and no others: a driver names a pin of one of its
   devices (counting the pins of its GPIO connections), `devmgr` finds the
   controller (its registers from its own `_CRS`) and the pad (`vgpio`,
-  `libraries/gpio`). The controllers are Intel's (Tiger Lake-LP's pads,
-  which Alder Lake-P kept; the layout as Linux's `pinctrl-tigerlake` has
-  it): a pad owned by the firmware, or whose settings are locked, is
-  refused; one in another function becomes a GPIO only when needed; a level
-  is set before the output is enabled. A pin's interrupt (a `GpioInt`
-  connection) is an interrupt `devmgr` raises: a controller has one line
-  for all its pins, which `devmgr` waits on, and when it fires each pin
-  with an interrupt pending raises its own: an edge, or level-triggered
-  as its connection says, the pin masked until the interrupt is ended (the
-  ending signals an event, and `devmgr` unmasks the pin, which fires again
-  if its level lasts). Only a pad the firmware leaves in GPIO driver mode
-  interrupts (one in ACPI mode raises the firmware's events; Linux refuses
-  those too). The kernel's part is mechanism: an interrupt a program
-  raises (`irq_raise`, with a handle's `SIGNAL` right; whoever it is for
-  gets a handle without it), which reaches its driver, or a guest's
-  processor, as a line's does, and signals the event its maker gave when
-  a level-triggered one ends (as KVM's resample event does for VFIO). A
-  test's ACPI table may describe a simulated controller (`VTST0002`):
-  `vgpio::sim`'s registers, as the hardware keeps them, its even pins
-  wired to the odd ones after them.
+  `implementation/libraries/gpio`). The controllers are Intel's (Tiger
+  Lake-LP's pads, which Alder Lake-P kept; the layout as Linux's
+  `pinctrl-tigerlake` has it): a pad owned by the firmware, or whose
+  settings are locked, is refused; one in another function becomes a GPIO
+  only when needed; a level is set before the output is enabled. A pin's
+  interrupt (a `GpioInt` connection) is an interrupt `devmgr` raises: a
+  controller has one line for all its pins, which `devmgr` waits on, and
+  when it fires each pin with an interrupt pending raises its own: an edge,
+  or level-triggered as its connection says, the pin masked until the
+  interrupt is ended (the ending signals an event, and `devmgr` unmasks the
+  pin, which fires again if its level lasts). Only a pad the firmware
+  leaves in GPIO driver mode interrupts (one in ACPI mode raises the
+  firmware's events; Linux refuses those too). The kernel's part is
+  mechanism: an interrupt a program raises (`irq_raise`, with a handle's
+  `SIGNAL` right; whoever it is for gets a handle without it), which
+  reaches its driver, or a guest's processor, as a line's does, and signals
+  the event its maker gave when a level-triggered one ends (as KVM's
+  resample event does for VFIO). A test's ACPI table may describe a
+  simulated controller (`VTST0002`): `vgpio::sim`'s registers, as the
+  hardware keeps them, its even pins wired to the odd ones after them.
 
 ## Storage
 
@@ -348,11 +350,11 @@ has ended and left its stack, which is how thread libraries join threads.
 USB is Linux's: the controllers go to [the driver VM](DRIVERVM.md) whole,
 and Linux drives them, their hubs and the devices on them. Keyboards,
 mice, tablets and touchscreens reach the window system's `input` service
-through `input` (`guest/input`), which reads Linux's event devices;
-network adapters reach the network service through `net`; Bluetooth
-adapters get Linux's Bluetooth stack, which no service of Veda's uses
-yet. Disks on USB are left alone: disks are Veda's, which has no driver
-for them yet.
+through `input` (`implementation/guest/input`), which reads Linux's event
+devices; network adapters reach the network service through `net`;
+Bluetooth adapters get Linux's Bluetooth stack, which no service of Veda's
+uses yet. Disks on USB are left alone: disks are Veda's, which has no
+driver for them yet.
 
 ## Networking
 
@@ -360,14 +362,15 @@ Networking is three layers of processes (details in
 [NETWORKING.md](NETWORKING.md)):
 
 * **Drivers** only move frames, and they are Linux's, in [the driver
-  VM](DRIVERVM.md): `net` (`guest/net`) offers its network cards' Ethernet
-  frames to the network service; `wifi` (`guest/wifi`) offers its Wi-Fi
-  radios to the Wi-Fi service as *managed* radios, which scan, join access
-  points, encrypt and move Ethernet frames on the service's commands
-  (under QEMU, the virtual radio: a virtio-serial port connected to the
-  `airsim` simulator on the host, which `airlink` makes a radio of
-  Linux's). Frames travel through shared-memory rings (`vproto::netring`)
-  with wake-up events; neither side trusts the other's indices or lengths.
+  VM](DRIVERVM.md): `net` (`implementation/guest/net`) offers its network
+  cards' Ethernet frames to the network service; `wifi`
+  (`implementation/guest/wifi`) offers its Wi-Fi radios to the Wi-Fi
+  service as *managed* radios, which scan, join access points, encrypt and
+  move Ethernet frames on the service's commands (under QEMU, the virtual
+  radio: a virtio-serial port connected to the `airsim` simulator on the
+  host, which `airlink` makes a radio of Linux's). Frames travel through
+  shared-memory rings (`vproto::netring`) with wake-up events; neither side
+  trusts the other's indices or lengths.
 * **`wlan`** (the Wi-Fi service, built on `vwlan`) decides what to join,
   authenticates (open system; SAE, which it computes), runs the key
   handshakes and gives the radio only the session keys, keeps the saved
@@ -389,7 +392,7 @@ cannot block a service. Random numbers (TCP sequence numbers, DHCP and DNS
 ids, Wi-Fi nonces and keys, TLS secrets) come from the kernel's ChaCha20
 generator.
 
-## The window system (`services/compositor`)
+## The window system (`implementation/services/compositor`)
 
 The compositor owns the screen and serves three protocols: `display` for
 applications, `input` for input drivers and `displaydev` for a display
@@ -464,24 +467,25 @@ virtual machine's window, whose host shows whole frames, judders on a
 laptop's panel. Displays and GPUs are Linux's, in
 [the driver VM](DRIVERVM.md), as are their drivers' quirks and firmware:
 
-* **Displays.** `kms` (`guest/kms`) drives, through Linux's KMS, the
-  display whose memory holds the firmware's framebuffer (a laptop with two
-  GPUs has outputs on both), and attaches it to the window system through
-  `displaydev`: the compositor draws into pictures of Veda's memory, which
-  Linux's driver shows as they are (dma-bufs of the VMOs, write-combining
-  memory) and flips at the vertical blank, the flips' times on Veda's
-  clock; scaled by the display engine to a display that has no mode of
-  their size (a laptop's panel). Until it attaches, and whenever the driver
-  VM is gone, the compositor draws into the firmware's framebuffer.
-* **GPUs.** The renderer (`guest/renderer`) carries out applications'
-  OpenGL ES command streams on Mesa's Gallium driver of the GPU, over the
-  GPU's Linux driver (see below).
+* **Displays.** `kms` (`implementation/guest/kms`) drives, through Linux's
+  KMS, the display whose memory holds the firmware's framebuffer (a laptop
+  with two GPUs has outputs on both), and attaches it to the window system
+  through `displaydev`: the compositor draws into pictures of Veda's
+  memory, which Linux's driver shows as they are (dma-bufs of the VMOs,
+  write-combining memory) and flips at the vertical blank, the flips' times
+  on Veda's clock; scaled by the display engine to a display that has no
+  mode of their size (a laptop's panel). Until it attaches, and whenever
+  the driver VM is gone, the compositor draws into the firmware's
+  framebuffer.
+* **GPUs.** The renderer (`implementation/guest/renderer`) carries out
+  applications' OpenGL ES command streams on Mesa's Gallium driver of the
+  GPU, over the GPU's Linux driver (see below).
 
 Under QEMU, the driver VM gets QEMU's VGA (Linux's bochs driver) and, for
 3D, a virtio-gpu (Linux's virtio_gpu, Mesa's virgl), whose virglrenderer
 renders on the host's GPU; `verification/ui/drivervm-*.vts` cover both.
 
-## The desktop shell (`applications/shell`)
+## The desktop shell (`implementation/applications/shell`)
 
 The shell is an ordinary process that the compositor trusts with shell
 surfaces: the desktop (wallpaper and icons), the taskbar (a panel), the
@@ -523,7 +527,7 @@ edges fall on whole pixels, so that they stay crisp on a 1x screen. Each is
 drawn into a small layer first, where a slash or a badge (the agent's ring
 uses them too) cuts a gap into what it crosses.
 
-## OpenGL ES and the GPU (`libraries/glsl`, `libraries/gl`, `guest/renderer`)
+## OpenGL ES and the GPU (`implementation/libraries/{glsl,gl}`, `implementation/guest/renderer`)
 
 Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `vgl`,
 in pure Rust: *Interceptor* (below) is its largest program.
@@ -580,23 +584,23 @@ in pure Rust: *Interceptor* (below) is its largest program.
   (hosts find stencil-only attachments incomplete), whose depth draws
   ignore: a test without its attachment is turned off, as OpenGL ES has
   it pass.
-* **The renderer** (`guest/renderer`) serves the `gpu` protocol from the
-  driver VM: each connection gets a context and a block of Veda's memory
-  shared with it (commands, staging, query results, the fence word), and
-  its commands are carried out on one of Mesa's Gallium drivers, over the
-  GPU's Linux driver: iris on i915 or xe (Intel's GPUs), virgl on
-  virtio-gpu (QEMU's, which renders on the host's GPU), or softpipe
-  (`drivervm.renderer=softpipe`, for tests). The program is Mesa's build
-  of the decoder (`decoder/`, C) around its Rust half, which serves the
-  protocol over the bridge; `cargo xtask linux` builds Mesa for the guest
-  with a toolchain of its own (`ports/linux/build.sh`). The decoder takes
-  virgl's commands straight to Gallium's calls, checking every word first
-  (a client can fail its own context, never the renderer), with Gallium's
-  state cache (`cso_context`) between it and the driver, so that a client
-  deleting an object leaves nothing behind that the driver still uses.
-  Commands are copied out of the shared memory before they are decoded.
-  Formats are virgl's, which OpenGL hosts take: 24-bit depth with stencil
-  is `S8_UINT_Z24_UNORM`, depth in the upper bits as
+* **The renderer** (`implementation/guest/renderer`) serves the `gpu`
+  protocol from the driver VM: each connection gets a context and a block
+  of Veda's memory shared with it (commands, staging, query results, the
+  fence word), and its commands are carried out on one of Mesa's Gallium
+  drivers, over the GPU's Linux driver: iris on i915 or xe (Intel's GPUs),
+  virgl on virtio-gpu (QEMU's, which renders on the host's GPU), or
+  softpipe (`drivervm.renderer=softpipe`, for tests). The program is Mesa's
+  build of the decoder (`decoder/`, C) around its Rust half, which serves
+  the protocol over the bridge; `cargo xtask linux` builds Mesa for the
+  guest with a toolchain of its own (`ports/linux/build.sh`). The decoder
+  takes virgl's commands straight to Gallium's calls, checking every word
+  first (a client can fail its own context, never the renderer), with
+  Gallium's state cache (`cso_context`) between it and the driver, so that
+  a client deleting an object leaves nothing behind that the driver still
+  uses. Commands are copied out of the shared memory before they are
+  decoded. Formats are virgl's, which OpenGL hosts take: 24-bit depth with
+  stencil is `S8_UINT_Z24_UNORM`, depth in the upper bits as
   `GL_UNSIGNED_INT_24_8` packs it. iris has depth only in the lower bits
   (`Z24_UNORM_S8_UINT`), so on iris the renderer keeps those formats that
   way round and turns each texel round when it is copied in or out
@@ -633,18 +637,18 @@ is compared) the tests say so; and on Mesa's virgl over virglrenderer's
 test server (`VGL_GALLIUM_DEVICE=virgl`), as the driver VM's renderer
 renders under QEMU.
 
-## Interceptor (`applications/interceptor`)
+## Interceptor (`implementation/applications/interceptor`)
 
 *Interceptor*, police pursuits through a bay city, is OpenGL ES 3.0's
-largest program. Its game (`applications/interceptor/game`, `no_std`) is
-everything but the window, the keyboard and the speakers, so that its
-world, physics, drivers, missions, pictures and sounds are tested on the
-host; the program around it (`applications/interceptor/src`) has the
-window, the menus and the dashboard (`vgfx`), the speakers' thread, the
-save file and the voice agent's link. Its vectors, matrices and quaternions
-are `glam`'s, its random numbers `rand`'s (PCG32, seeded, so that the bay
-and its traffic are the same every time), and the land's noise FastNoise
-Lite's.
+largest program. Its game (`implementation/applications/interceptor/game`,
+`no_std`) is everything but the window, the keyboard and the speakers, so
+that its world, physics, drivers, missions, pictures and sounds are tested
+on the host; the program around it
+(`implementation/applications/interceptor/src`) has the window, the menus
+and the dashboard (`vgfx`), the speakers' thread, the save file and the
+voice agent's link. Its vectors, matrices and quaternions are `glam`'s, its
+random numbers `rand`'s (PCG32, seeded, so that the bay and its traffic are
+the same every time), and the land's noise FastNoise Lite's.
 
 * **Veda Bay** is made at start-up from a few dozen control points and a
   seed, in a fifth of a second: a 6.2 km loop of road (a Catmull-Rom
@@ -745,8 +749,9 @@ Lite's.
 
 ## Video
 
-Videos (`applications/videos`) plays videos with FFmpeg and dav1d, decoded
-in `mediadec`, a process of their own; it speaks `vproto::media` with it.
+Videos (`implementation/applications/videos`) plays videos with FFmpeg and
+dav1d, decoded in `mediadec`, a process of their own; it speaks
+`vproto::media` with it.
 
 ```
 Videos (Rust, vui)                            mediadec (C program, sandboxed)
@@ -812,7 +817,7 @@ Videos (Rust, vui)                            mediadec (C program, sandboxed)
   asks. `systest` runs FFmpeg's and dav1d's `checkasm` on Veda and checks
   every picture of a sample video against its encoder's MD5s.
 
-## The voice agent (`services/agent`)
+## The voice agent (`implementation/services/agent`)
 
 The agent service holds the conversation with Deepgram's Voice Agent API
 (a WebSocket over TLS through `vweb` and `vtls`), the microphone and the
@@ -886,17 +891,17 @@ On AMD64:
 
 | Component | What is AMD64's (`arch/amd64/`) |
 |-----------|---------------------------------|
-| `boot/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
-| `kernel/` | see `arch` above |
-| `libraries/bootinfo` | the address space the loader hands over, and how the kernel is entered |
-| `libraries/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
-| `libraries/rt` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |
-| `libraries/posix` | Linux's system call numbers and the calls only x86-64 has, the thread pointer |
-| `libraries/pe`, `libraries/elf` | the executables' machine type (on every host, for the tools) |
-| `libraries/build` | the user programs' target and image base |
-| `libraries/hv`, `libraries/iommu` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
-| `services/devmgr`, `services/drivervm`, `services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
-| `guest/sys` | the driver VM's Linux system call numbers |
+| `implementation/boot/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
+| `implementation/kernel/` | see `arch` above |
+| `implementation/libraries/bootinfo` | the address space the loader hands over, and how the kernel is entered |
+| `implementation/libraries/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
+| `implementation/libraries/rt` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |
+| `implementation/libraries/posix` | Linux's system call numbers and the calls only x86-64 has, the thread pointer |
+| `implementation/libraries/pe`, `implementation/libraries/elf` | the executables' machine type (on every host, for the tools) |
+| `implementation/libraries/build` | the user programs' target and image base |
+| `implementation/libraries/hv`, `implementation/libraries/iommu` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
+| `implementation/services/devmgr`, `implementation/services/drivervm`, `implementation/services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
+| `implementation/guest/sys` | the driver VM's Linux system call numbers |
 | `verification/systest`, `verification/c`, `verification/ui` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
 | `xtask/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
@@ -909,30 +914,30 @@ of their own (see Architectures above).
 
 | Path | Contents |
 |------|----------|
-| `boot/` | UEFI loader |
-| `kernel/` | microkernel |
-| `libraries/abi`, `libraries/bootinfo`, `libraries/initrd`, `libraries/pe`, `libraries/elf` | shared formats and the kernel ABI |
-| `libraries/rt`, `libraries/heap`, `libraries/build` | user runtime, allocator, build helper |
-| `libraries/posix` | the POSIX layer under the C library |
-| `libraries/raster`, `libraries/font`, `libraries/image` | vector rasterisation, fonts, images |
-| `libraries/ipc`, `libraries/proto` | message encoding and the service protocols |
-| `libraries/gfx`, `libraries/ui`, `libraries/text` | 2D drawing, the GUI toolkit, the text editing model |
-| `libraries/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
-| `libraries/glsl`, `libraries/gl` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
-| `libraries/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
-| `libraries/virtio` | virtio device access shared by the drivers |
-| `libraries/acpi`, `libraries/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
-| `libraries/hv`, `libraries/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI; the architecture's virtual devices and boot protocol (on AMD64 the local APIC, `cpuid`, Linux's boot protocol) and its IOMMU's tables and structures (VT-d's) |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
-| `libraries/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
-| `libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
-| `libraries/netstack`, `libraries/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
-| `libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
-| `libraries/web`, `libraries/json` | HTTP/1.1 and WebSocket clients over TCP or TLS; JSON |
-| `libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
-| `libraries/wlan`, `libraries/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
+| `implementation/boot/` | UEFI loader |
+| `implementation/kernel/` | microkernel |
+| `implementation/libraries/abi`, `implementation/libraries/bootinfo`, `implementation/libraries/initrd`, `implementation/libraries/pe`, `implementation/libraries/elf` | shared formats and the kernel ABI |
+| `implementation/libraries/rt`, `implementation/libraries/heap`, `implementation/libraries/build` | user runtime, allocator, build helper |
+| `implementation/libraries/posix` | the POSIX layer under the C library |
+| `implementation/libraries/raster`, `implementation/libraries/font`, `implementation/libraries/image` | vector rasterisation, fonts, images |
+| `implementation/libraries/ipc`, `implementation/libraries/proto` | message encoding and the service protocols |
+| `implementation/libraries/gfx`, `implementation/libraries/ui`, `implementation/libraries/text` | 2D drawing, the GUI toolkit, the text editing model |
+| `implementation/libraries/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
+| `implementation/libraries/glsl`, `implementation/libraries/gl` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
+| `implementation/libraries/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
+| `implementation/libraries/virtio` | virtio device access shared by the drivers |
+| `implementation/libraries/acpi`, `implementation/libraries/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
+| `implementation/libraries/hv`, `implementation/libraries/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI; the architecture's virtual devices and boot protocol (on AMD64 the local APIC, `cpuid`, Linux's boot protocol) and its IOMMU's tables and structures (VT-d's) |
+| `implementation/guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
+| `implementation/libraries/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
+| `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
+| `implementation/libraries/netstack`, `implementation/libraries/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
+| `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
+| `implementation/libraries/web`, `implementation/libraries/json` | HTTP/1.1 and WebSocket clients over TCP or TLS; JSON |
+| `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
+| `implementation/libraries/wlan`, `implementation/libraries/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
-| `services/`, `drivers/`, `applications/` | system services, drivers and applications |
+| `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |

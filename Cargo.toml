@@ -5,95 +5,95 @@
 resolver = "3"
 members = [
     "xtask",
-    "boot",
-    "kernel",
-    "libraries/abi",
-    "libraries/bootinfo",
-    "libraries/initrd",
-    "libraries/pe",
-    "libraries/elf",
-    "libraries/posix",
-    "libraries/raster",
-    "libraries/font",
-    "libraries/image",
-    "libraries/heap",
-    "libraries/build",
-    "libraries/rt",
-    "libraries/ipc",
-    "libraries/proto",
-    "libraries/virtio",
-    "libraries/gfx",
-    "libraries/ui",
-    "libraries/text",
-    "libraries/files",
-    "libraries/audio",
-    "libraries/entropy",
-    "libraries/netstack",
-    "libraries/net",
-    "libraries/tls",
-    "libraries/wlan",
-    "libraries/radiolink",
-    "libraries/json",
-    "libraries/web",
-    "libraries/agent",
-    "libraries/acpi",
-    "libraries/gpio",
-    "libraries/splash",
-    "libraries/glsl",
-    "libraries/gl",
-    "libraries/hv",
-    "libraries/iommu",
-    "services/init",
-    "services/mediadec",
-    "services/vfs",
-    "services/devmgr",
-    "services/compositor",
-    "services/netd",
-    "services/wlan",
-    "services/agent",
-    "services/drivervm",
-    "applications/about",
-    "applications/shell",
-    "applications/editor",
-    "applications/photos",
-    "applications/music",
-    "applications/videos",
-    "applications/terminal",
-    "applications/taskmgr",
-    "applications/files",
-    "applications/settings",
-    "applications/interceptor",
-    "applications/interceptor/game",
-    "applications/videos/core",
-    "services/audio",
+    "implementation/boot",
+    "implementation/kernel",
+    "implementation/libraries/abi",
+    "implementation/libraries/bootinfo",
+    "implementation/libraries/initrd",
+    "implementation/libraries/pe",
+    "implementation/libraries/elf",
+    "implementation/libraries/posix",
+    "implementation/libraries/raster",
+    "implementation/libraries/font",
+    "implementation/libraries/image",
+    "implementation/libraries/heap",
+    "implementation/libraries/build",
+    "implementation/libraries/rt",
+    "implementation/libraries/ipc",
+    "implementation/libraries/proto",
+    "implementation/libraries/virtio",
+    "implementation/libraries/gfx",
+    "implementation/libraries/ui",
+    "implementation/libraries/text",
+    "implementation/libraries/files",
+    "implementation/libraries/audio",
+    "implementation/libraries/entropy",
+    "implementation/libraries/netstack",
+    "implementation/libraries/net",
+    "implementation/libraries/tls",
+    "implementation/libraries/wlan",
+    "implementation/libraries/radiolink",
+    "implementation/libraries/json",
+    "implementation/libraries/web",
+    "implementation/libraries/agent",
+    "implementation/libraries/acpi",
+    "implementation/libraries/gpio",
+    "implementation/libraries/splash",
+    "implementation/libraries/glsl",
+    "implementation/libraries/gl",
+    "implementation/libraries/hv",
+    "implementation/libraries/iommu",
+    "implementation/services/init",
+    "implementation/services/mediadec",
+    "implementation/services/vfs",
+    "implementation/services/devmgr",
+    "implementation/services/compositor",
+    "implementation/services/netd",
+    "implementation/services/wlan",
+    "implementation/services/agent",
+    "implementation/services/drivervm",
+    "implementation/applications/about",
+    "implementation/applications/shell",
+    "implementation/applications/editor",
+    "implementation/applications/photos",
+    "implementation/applications/music",
+    "implementation/applications/videos",
+    "implementation/applications/terminal",
+    "implementation/applications/taskmgr",
+    "implementation/applications/files",
+    "implementation/applications/settings",
+    "implementation/applications/interceptor",
+    "implementation/applications/interceptor/game",
+    "implementation/applications/videos/core",
+    "implementation/services/audio",
     "tools/assetgen",
     "tools/musicgen",
     "tools/videogen",
     "tools/airsim",
-    "drivers/virtio-blk",
-    "drivers/ahci",
-    "drivers/nvme",
+    "implementation/drivers/virtio-blk",
+    "implementation/drivers/ahci",
+    "implementation/drivers/nvme",
     "verification/systest",
     "verification/nettest",
     "verification/testmic",
     "verification/audiotest",
     "verification/fakedec",
-    "guest/init",
-    "guest/bridgetest",
-    "guest/pcitest",
-    "guest/gpiotest",
-    "guest/efivartest",
-    "guest/kmspause",
-    "guest/logkeeper",
-    "guest/sys",
-    "guest/alsa",
-    "guest/net",
-    "guest/netlink",
-    "guest/wifi",
-    "guest/airlink",
-    "guest/kms",
-    "guest/input",
-    "guest/renderer",
+    "implementation/guest/init",
+    "implementation/guest/bridgetest",
+    "implementation/guest/pcitest",
+    "implementation/guest/gpiotest",
+    "implementation/guest/efivartest",
+    "implementation/guest/kmspause",
+    "implementation/guest/logkeeper",
+    "implementation/guest/sys",
+    "implementation/guest/alsa",
+    "implementation/guest/net",
+    "implementation/guest/netlink",
+    "implementation/guest/wifi",
+    "implementation/guest/airlink",
+    "implementation/guest/kms",
+    "implementation/guest/input",
+    "implementation/guest/renderer",
 ]
 # The crates in ports/, as `cargo xtask` prepares them for Cargo, are not
 # members (their own tests and dev-dependencies stay out of this
@@ -112,44 +112,44 @@ authors = ["Vahid Mohammadi"]
 repository = "https://github.com/vahmoh25/Veda"
 
 [workspace.dependencies]
-vabi = { path = "libraries/abi" }
-bootinfo = { path = "libraries/bootinfo" }
-initrd = { path = "libraries/initrd" }
-vpe = { path = "libraries/pe" }
-velf = { path = "libraries/elf" }
-vposix = { path = "libraries/posix" }
-vraster = { path = "libraries/raster" }
-vfont = { path = "libraries/font" }
-vimage = { path = "libraries/image" }
-vheap = { path = "libraries/heap" }
-vbuild = { path = "libraries/build" }
-vrt = { path = "libraries/rt" }
-vipc = { path = "libraries/ipc" }
-vproto = { path = "libraries/proto" }
-vvirtio = { path = "libraries/virtio" }
-vgfx = { path = "libraries/gfx" }
-vui = { path = "libraries/ui" }
-vtext = { path = "libraries/text" }
-vfiles = { path = "libraries/files" }
-vaudio = { path = "libraries/audio" }
-ventropy = { path = "libraries/entropy" }
-vnetstack = { path = "libraries/netstack" }
-vnet = { path = "libraries/net" }
-vtls = { path = "libraries/tls" }
-vwlan = { path = "libraries/wlan" }
-vradiolink = { path = "libraries/radiolink" }
-vjson = { path = "libraries/json" }
-vweb = { path = "libraries/web" }
-vagent = { path = "libraries/agent" }
-vacpi = { path = "libraries/acpi" }
-vgpio = { path = "libraries/gpio" }
-vsplash = { path = "libraries/splash" }
-vglsl = { path = "libraries/glsl" }
-vgl = { path = "libraries/gl" }
-vhv = { path = "libraries/hv" }
-viommu = { path = "libraries/iommu" }
-guest-sys = { path = "guest/sys" }
-guest-netlink = { path = "guest/netlink" }
+vabi = { path = "implementation/libraries/abi" }
+bootinfo = { path = "implementation/libraries/bootinfo" }
+initrd = { path = "implementation/libraries/initrd" }
+vpe = { path = "implementation/libraries/pe" }
+velf = { path = "implementation/libraries/elf" }
+vposix = { path = "implementation/libraries/posix" }
+vraster = { path = "implementation/libraries/raster" }
+vfont = { path = "implementation/libraries/font" }
+vimage = { path = "implementation/libraries/image" }
+vheap = { path = "implementation/libraries/heap" }
+vbuild = { path = "implementation/libraries/build" }
+vrt = { path = "implementation/libraries/rt" }
+vipc = { path = "implementation/libraries/ipc" }
+vproto = { path = "implementation/libraries/proto" }
+vvirtio = { path = "implementation/libraries/virtio" }
+vgfx = { path = "implementation/libraries/gfx" }
+vui = { path = "implementation/libraries/ui" }
+vtext = { path = "implementation/libraries/text" }
+vfiles = { path = "implementation/libraries/files" }
+vaudio = { path = "implementation/libraries/audio" }
+ventropy = { path = "implementation/libraries/entropy" }
+vnetstack = { path = "implementation/libraries/netstack" }
+vnet = { path = "implementation/libraries/net" }
+vtls = { path = "implementation/libraries/tls" }
+vwlan = { path = "implementation/libraries/wlan" }
+vradiolink = { path = "implementation/libraries/radiolink" }
+vjson = { path = "implementation/libraries/json" }
+vweb = { path = "implementation/libraries/web" }
+vagent = { path = "implementation/libraries/agent" }
+vacpi = { path = "implementation/libraries/acpi" }
+vgpio = { path = "implementation/libraries/gpio" }
+vsplash = { path = "implementation/libraries/splash" }
+vglsl = { path = "implementation/libraries/glsl" }
+vgl = { path = "implementation/libraries/gl" }
+vhv = { path = "implementation/libraries/hv" }
+viommu = { path = "implementation/libraries/iommu" }
+guest-sys = { path = "implementation/guest/sys" }
+guest-netlink = { path = "implementation/guest/netlink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
@@ -164,7 +164,8 @@ p256 = { version = "0.14", default-features = false, features = ["arithmetic", "
 subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.9", default-features = false }
 # TLS (HTTPS, secure WebSockets): rustls, with a CryptoProvider built on the
-# RustCrypto crates (libraries/tls). Same RustCrypto generation as above.
+# RustCrypto crates (implementation/libraries/tls). Same RustCrypto
+# generation as above.
 rustls = { version = "0.23.45", default-features = false, features = ["tls12", "custom-provider"] }
 webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }

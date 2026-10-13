@@ -45,20 +45,22 @@ firmware), is kept apart from the rest, so that another architecture can
 be added beside AMD64 without touching code that is not its own:
 
 * A crate with such code keeps it in its own `src/arch/<architecture>/`
-  directory: `boot/src/arch/amd64`, `kernel/src/arch/amd64`,
-  `libraries/abi/src/arch/amd64`, `libraries/rt/src/arch/amd64`,
-  `services/drivervm/src/arch/amd64`, `xtask/src/arch/amd64` and the
-  others. Nothing outside those directories names an architecture's
+  directory: `implementation/boot/src/arch/amd64`,
+  `implementation/kernel/src/arch/amd64`,
+  `implementation/libraries/abi/src/arch/amd64`,
+  `implementation/libraries/rt/src/arch/amd64`,
+  `implementation/services/drivervm/src/arch/amd64`, `xtask/src/arch/amd64`
+  and the others. Nothing outside those directories names an architecture's
   instructions, registers, system call numbers or calling conventions, or
   the devices of its platform (a PC's interrupt controllers, timers,
   keyboard controller and IOMMU); drivers of devices that come on a bus
   (PCI's, USB's) are each device's, not an architecture's.
 * The rest of the crate reaches it through one module, `arch`, whose
   items every architecture provides with the same names and meanings, and
-  nothing else of it. The kernel's (`kernel/src/arch.rs`) and xtask's
-  (`xtask/src/arch.rs`) document their interface in a table; vocabulary
-  is the architecture-neutral one (the clock's counter, not the TSC; a
-  thread's TLS pointer, not its FS base). Code in
+  nothing else of it. The kernel's (`implementation/kernel/src/arch.rs`) and
+  xtask's (`xtask/src/arch.rs`) document their interface in a table;
+  vocabulary is the architecture-neutral one (the clock's counter, not the
+  TSC; a thread's TLS pointer, not its FS base). Code in
   `src/arch/<architecture>/` may use the rest of its crate.
 * How the module is chosen depends on what the code does:
   * **Code that runs on the architecture** (the loader, the kernel, the
@@ -94,11 +96,11 @@ On AMD64 (`xtask/src/arch/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
-| `boot/` (UEFI loader), `kernel/` | `x86_64-unknown-uefi` | freestanding, soft-float, PE |
-| user space (`libraries/`, `services/`, `drivers/`, `applications/`) | `x86_64-pc-windows-msvc`, `#![no_std]` | hard-float SSE2, PE `.exe`, linked by `rust-lld` |
-| `libraries/posix` (in the C library), `services/mediadec`'s Rust half | `x86_64-unknown-none` | the System V ABI of C programs; linked into musl's `libc.a` |
+| `implementation/boot/` (UEFI loader), `implementation/kernel/` | `x86_64-unknown-uefi` | freestanding, soft-float, PE |
+| user space (`implementation/libraries/`, `implementation/services/`, `implementation/drivers/`, `implementation/applications/`) | `x86_64-pc-windows-msvc`, `#![no_std]` | hard-float SSE2, PE `.exe`, linked by `rust-lld` |
+| `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | the System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | static ELF executables on musl |
-| the driver VM's programs (`guest/`) | `x86_64-unknown-linux-musl` | static, on Linux |
+| the driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | static, on Linux |
 | `xtask/`, host tools | host (`std`) | |
 
 ## Library crates
@@ -170,8 +172,8 @@ tags in the file's comment syntax:
 
 * The licence is Veda's, the GPL version 3 (`LICENSE`), but for the code
   that Mesa's build compiles with Mesa: the driver VM's renderer
-  (`guest/renderer/decoder`, `guest/renderer/drm`) is under the MIT
-  licence, as Mesa is.
+  (`implementation/guest/renderer/decoder`,
+  `implementation/guest/renderer/drm`) is under the MIT licence, as Mesa is.
 * The year is the one the file was first published in.
 * Only what has to be first comes before the header: a script's `#!` line,
   an HTML page's `<!doctype html>`, an XML declaration. In C, C++ and
