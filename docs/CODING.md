@@ -177,8 +177,8 @@ tags in the file's comment syntax:
   JavaScript the header opens the file's first comment; Markdown, HTML and
   SVG have it in HTML comments.
 * Files whose format has no comments go without (images, fonts, videos,
-  test vectors, JSON, `website/CNAME`), as do `Cargo.lock`, which Cargo
-  writes, licence texts, and the ports' patches, which change other
+  test vectors, JSON, `docs/website/CNAME`), as do `Cargo.lock`, which
+  Cargo writes, licence texts, and the ports' patches, which change other
   projects' files.
 * A test of xtask's (`xtask/src/licence.rs`), which `cargo xtask test`
   runs, checks every file of the repository, and every new one Git does

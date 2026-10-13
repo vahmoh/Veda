@@ -473,8 +473,7 @@ output) to `target/veda/serial.log`.
 | `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
 | `assets/` | fonts and application manifests |
-| `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
-| `website/` | [www.vedaos.org](https://www.vedaos.org), a static page |
+| `docs/` | documentation, the README's screenshots, the icon and social preview (`docs/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`docs/website/`) |
 
 ## Documentation
 
