@@ -754,12 +754,13 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         vm.audio_wav = None;
         vm.audio_silent = true;
     }
-    // Scripts that reboot the machine need QEMU to stay up across it.
-    vm.allow_reboot = script.lines().any(|l| l.trim() == "reset");
+    // Scripts that reboot the machine need QEMU to stay up across it (and
+    // the HD Audio card, see `automate::sound_card`).
+    vm.allow_reboot = automate::resets(script);
     if let Some(net) = automate::net_mode(script)? {
         vm.net = net;
     }
-    if let Some(card) = automate::sound_card(script) {
+    if let Some(card) = automate::sound_card(script)? {
         vm.sound = card;
     }
     if let Some(model) = automate::nic_model(script) {

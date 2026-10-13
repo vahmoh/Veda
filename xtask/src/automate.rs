@@ -35,7 +35,7 @@
 //! memory 2048                      # the machine's memory for this run (MiB), applied before boot
 //! acpi-table touchpad              # add a table to the firmware's (the machine's: xtask/src/arch/*/acpitest.rs), applied before boot
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
-//! sound hda                        # the sound card for this run (virtio or hda), applied before boot
+//! sound hda                        # the sound card for this run (virtio or hda; hda if the script resets), applied before boot
 //! live [writable]                  # boot the live system (`xtask iso`) from a USB stick (read-only unless writable), applied before boot
 //! expect-stick VEDA/LOGS/0001/VEDA.TXT "desktop ready"  # fail unless a file on the live system's stick contains the text
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
@@ -546,9 +546,31 @@ pub fn needs_toolchain(script: &str) -> Option<&'static str> {
     })
 }
 
-/// The sound card a script asks for with `sound` (`virtio` or `hda`).
-pub fn sound_card(script: &str) -> Option<String> {
-    script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned())
+/// Whether a script resets the machine (`reset`), which QEMU must then stay
+/// up across.
+pub fn resets(script: &str) -> bool {
+    script.lines().map(words).any(|w| w == ["reset"])
+}
+
+/// The sound card a script's machine has: the one it asks for with `sound`
+/// (`virtio` or `hda`), if any. A machine the script resets has the HD
+/// Audio card: QEMU's virtio sound card keeps the buffers its streams hold
+/// across a reset, and completes them once the next start has set the card
+/// up again, writing their status into memory that is the next start's by
+/// then (QEMU frees them since its 75d28444c7, of September 2026).
+pub fn sound_card(script: &str) -> Result<Option<String>> {
+    let card =
+        script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned());
+    if !resets(script) {
+        return Ok(card);
+    }
+    match card.as_deref() {
+        None | Some("hda") => Ok(Some("hda".into())),
+        Some(other) => Err(format!(
+            "sound {other}: a script that resets the machine has the HD Audio card (`sound hda`), as QEMU's virtio \
+             sound card completes its buffers from before a reset into the next start's memory"
+        )),
+    }
 }
 
 /// Whether a script plays through the host's loudspeakers and records its
@@ -1138,5 +1160,16 @@ mod tests {
         // QEMU's header while recording: no data length.
         assert_eq!(silent_gaps(&wav(&s, Some(0)), 5.0).unwrap(), [(0.15, 30.0), (0.28, 10.0)]);
         assert!(silent_gaps(b"RIFF", 20.0).is_err());
+    }
+
+    #[test]
+    fn a_machine_that_is_reset_has_the_hd_audio_card() {
+        assert_eq!(sound_card("wait 1\n"), Ok(None));
+        assert_eq!(sound_card("sound virtio\n"), Ok(Some("virtio".into())));
+        assert_eq!(sound_card("wait 1\nreset\n"), Ok(Some("hda".into())));
+        assert_eq!(sound_card("sound hda\nreset\n"), Ok(Some("hda".into())));
+        assert!(sound_card("sound virtio\nreset\n").is_err_and(|e| e.contains("sound hda")));
+        assert!(resets("reset  # and start again\n"));
+        assert!(!resets("reset-later\n# reset\n"));
     }
 }

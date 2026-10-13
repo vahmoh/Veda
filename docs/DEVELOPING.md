@@ -205,7 +205,11 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   `dmesg snd_hda` its controllers and codecs, `dmesg cs35l41` a laptop's
   speaker amplifiers (their firmware, the speaker id, which codec they
   bound to), `dmesg alsa` Veda's driver for Linux (the card it attached,
-  and underruns).
+  and underruns). Scripts that reset the machine have this card: QEMU's
+  virtio sound card keeps the buffers its streams hold across a reset,
+  and completes them once the next start has set it up again, writing
+  into memory that is the next start's by then (QEMU frees them since its
+  commit 75d28444c7, of September 2026).
 * `dmesg devmgr` starts with what the firmware's ACPI tables gave
   (`devmgr: acpi: N tables, ...`, and the conditional definitions left
   out when their condition reads what the interpreter does not), then,
