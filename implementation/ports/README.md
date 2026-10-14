@@ -10,7 +10,8 @@ which `mediadec` decodes videos with, Mesa, for the renderer, and the Rust
 crates that Veda changes (see Crates below). Veda's own code is Rust; what
 is written in C comes as a port, as do Rust itself and a crate that Veda
 changes: the upstream release, unchanged but for a patch that is kept
-small, readable and explained.
+small, readable and explained. The fonts Veda ships are here too, as
+released (see Fonts below).
 
 Each port is a directory:
 
@@ -70,6 +71,14 @@ crates out, from the repository's root:
 ```bash
 cargo test --lib --manifest-path implementation/ports/.crates/src/smoltcp/Cargo.toml --target-dir target/ports
 ```
+
+## Fonts
+
+`fonts/` holds the fonts Veda ships: Inter, Lato and JetBrains Mono,
+unmodified, with their licence (`OFL.txt`) and a README that gives each
+one's copyright. There is nothing to build or patch: `cargo xtask build`
+installs them in `/system/fonts` as they are, and `vfont`'s tests and
+`videogen` read them from here.
 
 ## The patches
 
@@ -239,7 +248,9 @@ Apache-2.0 with LLVM's exceptions), FFmpeg LGPL-2.1-or-later, dav1d
 BSD-2-Clause, the parts of Mesa the renderer uses MIT, smoltcp 0BSD, and
 zune-jpeg MIT, Apache-2.0 or Zlib. Distributing Veda's image, which
 contains them, means offering their source: the archives `port.toml`
-names and the patches here.
+names and the patches here. The fonts are under the SIL Open Font
+License 1.1, whose text the image carries with them
+(`/system/fonts/OFL.txt`).
 
 Some of the formats FFmpeg decodes (H.264, HEVC and AAC among them) are
 covered by patents in some countries. The software licences do not

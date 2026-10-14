@@ -472,13 +472,12 @@ output) to `target/veda/serial.log`.
 | `implementation/services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
 | `implementation/drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
 | `implementation/libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
-| `implementation/applications/` | the desktop `shell` and the applications; what is testable on the host of Interceptor (its game), Videos and the Terminal is in `interceptor/game`, `videos/core` and `terminal/core` |
+| `implementation/applications/` | the desktop `shell` and the applications, each with its manifest for the start menu (`<name>.app`); what is testable on the host of Interceptor (its game), Videos and the Terminal is in `interceptor/game`, `videos/core` and `terminal/core` |
 | `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
-| `implementation/ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
+| `implementation/ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG); and the fonts (Inter, Lato, JetBrains Mono), unmodified |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `generation/` | host programs that generate wallpapers, pictures, music and videos at build time |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
-| `assets/` | fonts and application manifests |
 | `documentation/` | documentation, the README's screenshots, the icon and social preview (`documentation/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`documentation/website/`) |
 
 ## Documentation
@@ -523,7 +522,7 @@ Other parts keep their own licences:
   `implementation/guest/renderer/drm`), which Mesa's build compiles with
   Mesa, is under the MIT licence, as Mesa is.
 * **Fonts** (Inter, Lato, JetBrains Mono): the SIL Open Font License 1.1;
-  see `assets/fonts/`.
+  see `implementation/ports/fonts/`.
 * **Device firmware** that the driver VM's Linux loads into devices
   (`implementation/ports/linux/firmware.txt`) runs on the devices, not in
   Veda. It comes unmodified from the Linux firmware collection, under the

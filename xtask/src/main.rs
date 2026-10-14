@@ -253,7 +253,7 @@ const GENERATORS: &[(&str, &[&str])] = &[
             "implementation/libraries/font",
             "implementation/libraries/audio",
             "implementation/libraries/image",
-            "assets/fonts",
+            "implementation/ports/fonts",
         ],
     ),
 ];
@@ -389,13 +389,14 @@ fn build_system(o: &Options) -> Result<System> {
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // The licence, which About Veda refers to.
     initrd.add("LICENSE.txt", util::read(&util::workspace_root().join("LICENSE"))?);
-    // Everything under assets/ is installed at the same relative path
-    // (assets/fonts/X -> /system/fonts/X); README files are documentation.
-    for assets in [util::workspace_root().join("assets"), util::generated_dir()] {
-        if !assets.is_dir() {
+    // The fonts, with their licence (implementation/ports/fonts/X ->
+    // /system/fonts/X), and the generated media at the same relative path;
+    // README files are documentation.
+    for (files, into) in [(ports::dir().join("fonts"), "fonts/"), (util::generated_dir(), "")] {
+        if !files.is_dir() {
             continue;
         }
-        let mut stack = vec![assets.clone()];
+        let mut stack = vec![files.clone()];
         while let Some(dir) = stack.pop() {
             let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
             for entry in entries.flatten() {
@@ -403,10 +404,22 @@ fn build_system(o: &Options) -> Result<System> {
                 if path.is_dir() {
                     stack.push(path);
                 } else if path.file_name().is_some_and(|n| n != "README.md") {
-                    let rel = path.strip_prefix(&assets).unwrap().to_string_lossy().replace('\\', "/");
-                    initrd.add(&rel, util::read(&path)?);
+                    let rel = path.strip_prefix(&files).unwrap().to_string_lossy().replace('\\', "/");
+                    initrd.add(&format!("{into}{rel}"), util::read(&path)?);
                 }
             }
+        }
+    }
+    // The applications' manifests, which the start menu lists
+    // (implementation/applications/<name>/<name>.app ->
+    // /system/apps/<name>.app).
+    let applications = util::workspace_root().join("implementation").join("applications");
+    let entries = std::fs::read_dir(&applications).map_err(|e| format!("reading {}: {e}", applications.display()))?;
+    for app in entries.flatten() {
+        let name = format!("{}.app", app.file_name().to_string_lossy());
+        let manifest = app.path().join(&name);
+        if manifest.is_file() {
+            initrd.add(&format!("apps/{name}"), util::read(&manifest)?);
         }
     }
     let initrd = initrd.build();

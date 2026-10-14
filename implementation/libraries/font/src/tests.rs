@@ -10,12 +10,12 @@ use std::println;
 
 use crate::*;
 
-pub(crate) const INTER: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.otf");
-pub(crate) const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../../assets/fonts/Inter-SemiBold.otf");
-pub(crate) const LATO: &[u8] = include_bytes!("../../../../assets/fonts/Lato-Regular.ttf");
-pub(crate) const LATO_BOLD: &[u8] = include_bytes!("../../../../assets/fonts/Lato-Bold.ttf");
-pub(crate) const JBM: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
-pub(crate) const JBM_BOLD: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Bold.ttf");
+pub(crate) const INTER: &[u8] = include_bytes!("../../../ports/fonts/Inter-Regular.otf");
+pub(crate) const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../ports/fonts/Inter-SemiBold.otf");
+pub(crate) const LATO: &[u8] = include_bytes!("../../../ports/fonts/Lato-Regular.ttf");
+pub(crate) const LATO_BOLD: &[u8] = include_bytes!("../../../ports/fonts/Lato-Bold.ttf");
+pub(crate) const JBM: &[u8] = include_bytes!("../../../ports/fonts/JetBrainsMono-Regular.ttf");
+pub(crate) const JBM_BOLD: &[u8] = include_bytes!("../../../ports/fonts/JetBrainsMono-Bold.ttf");
 
 pub(crate) const ALL: [(&str, &[u8]); 6] = [
     ("Inter-Regular", INTER),

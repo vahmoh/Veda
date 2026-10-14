@@ -282,7 +282,8 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
 |--------|--------------|
 | every program listed in `xtask/src/components.rs` (`PROGRAMS`) | `/system/bin/<name>.exe` |
 | `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
-| everything under `assets/` | `/system/<same relative path>` |
+| the fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
+| each application's manifest, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
 | everything under `target/generated/` (build-time generated media) | `/system/<same relative path>` |
 | `verification/c/*.c` and `*.cc`, compiled by the cross toolchain (each also as `<name>-pie`) | `/system/tests/c/<name>` |
 | `verification/rust/*.rs`, compiled by the toolchain's Rust (each also as `<name>-fixed`) | `/system/tests/rust/<name>` |
@@ -334,7 +335,8 @@ fn main() -> i32 {
 }
 ```
 
-4. Add a manifest `assets/apps/<name>.app` so the start menu lists it:
+4. Add a manifest, `<name>.app` beside the crate's `Cargo.toml`, so the
+   start menu lists it:
 
 ```text
 name=My App

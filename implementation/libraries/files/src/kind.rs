@@ -36,7 +36,7 @@ pub enum FileKind {
 /// An application that opens files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct App {
-    /// Application id (`assets/apps/<id>.app`), for `launcher::launch_app`.
+    /// Application id (`/system/apps/<id>.app`), for `launcher::launch_app`.
     pub id: &'static str,
     /// The program, for `launcher::launch`.
     pub exe: &'static str,

@@ -936,10 +936,9 @@ of their own (see Architectures above).
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
-| `implementation/ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
-| `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications |
+| `implementation/ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases; and the fonts, unmodified |
+| `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`) |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
 | `generation/` | host programs: media generators |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
-| `assets/` | fonts, firmware and other data shipped in the initrd |
 | `documentation/` | documentation |

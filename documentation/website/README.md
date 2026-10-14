@@ -11,7 +11,7 @@ is published.
 |------|------------|
 | `index.html` | The page, with its CSS inline, its structured data and every word of its content (search engines and screen readers get it all without running a script) |
 | `assets/site.js` | The motion: the hero's sky, the agent's figure, the simulated conversation, the scroll effects |
-| `assets/fonts/` | Inter (400 and 600) as WOFF2, from `assets/fonts/` of the repository (SIL Open Font License, `OFL.txt`) |
+| `assets/fonts/` | Inter (400 and 600) as WOFF2, from `implementation/ports/fonts/` of the repository (SIL Open Font License, `OFL.txt`) |
 | `assets/img/` | Screenshots (640, 960 and 1280 pixels wide), the social image `og.jpg` and the app icons |
 | `404.html` | The page for addresses that do not exist |
 | `robots.txt`, `sitemap.xml`, `site.webmanifest`, favicons | For search engines, browsers and home screens |

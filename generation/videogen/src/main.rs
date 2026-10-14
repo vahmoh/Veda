@@ -45,9 +45,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// The fonts the countdown is set in.
-pub const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.otf");
-pub const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.otf");
-pub const MONO: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+pub const INTER: &[u8] = include_bytes!("../../../implementation/ports/fonts/Inter-Regular.otf");
+pub const INTER_SEMIBOLD: &[u8] = include_bytes!("../../../implementation/ports/fonts/Inter-SemiBold.otf");
+pub const MONO: &[u8] = include_bytes!("../../../implementation/ports/fonts/JetBrainsMono-Regular.ttf");
 
 const VIDEOS: &str = "samples/Videos";
 const TESTS: &str = "tests/videos";

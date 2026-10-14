@@ -43,7 +43,7 @@ pub fn target_dir() -> PathBuf {
 }
 
 /// Where build-time generated assets (wallpapers, sample media) go; they
-/// are installed into the system image like `assets/`.
+/// are installed into the system image at the same relative path.
 pub fn generated_dir() -> PathBuf {
     workspace_root().join("target").join("generated")
 }
