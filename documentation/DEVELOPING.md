@@ -17,7 +17,7 @@ cargo orchestration run --resolution 2560x1600   # ... on a larger one
 cargo orchestration run --live         # boot the live system in QEMU from a virtual USB stick
 cargo orchestration run --smp 2 --memory 2048
 cargo orchestration shot --wait 15     # boot headless, save target/veda/screen.png
-cargo orchestration shot --cmdline "run=about"   # also start bin/about.exe at boot
+cargo orchestration shot --cmdline "run=about"   # also start bin/about at boot
 cargo orchestration script verification/ui/about-interaction.vts   # scripted GUI test
 cargo orchestration test               # host unit tests + in-system integration tests
 cargo orchestration test --ui          # ... plus every GUI script in verification/ui and verification/agent (and their arch/amd64), several at once
@@ -109,11 +109,11 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
   each processor is. OVMF before edk2's e4f99a8554 (December 2025, so
   Ubuntu 26.04's) reads a processor count and a memory map from a page of
   memory it leaves to the system, at every boot: after a reset it could
-  take a program header of Veda's there for six processors, and wait for
-  ever for the two that are not. QEMU's loader blanks that page at every
+  take what Veda left there for six processors, and wait for ever for the
+  two that are not. QEMU's loader blanks that page at every
   reset (`blank_at_reset` in `orchestration/src/arch/amd64/qemu.rs` finds it
   in the firmware).
-* `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
+* `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME` after the
   system services, which is the quickest way to test an application.
 * `cargo orchestration iso` writes a hybrid ISO image
   (`orchestration/src/image/iso9660.rs`) that boots with UEFI from a disc,
@@ -282,7 +282,7 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
 
 | Source | Installed as |
 |--------|--------------|
-| every program listed in `orchestration/src/components.rs` (`PROGRAMS`) | `/system/bin/<name>.exe` |
+| every program listed in `orchestration/src/components.rs` (`PROGRAMS`), without its symbols, which `target/x86_64-unknown-linux-musl/` keeps | `/system/bin/<name>` |
 | `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
 | the fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | each application's manifest, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
@@ -342,7 +342,7 @@ fn main() -> i32 {
 
 ```text
 name=My App
-exe=/system/bin/myapp.exe
+exe=/system/bin/myapp
 icon=document
 category=Accessories
 description=What it does
@@ -438,7 +438,7 @@ FFmpeg and dav1d by the cross compiler (`orchestration/src/toolchain.rs`,
 the media libraries (`cargo orchestration doctor` says whether they are).
 
 Without it, `verification/fakedec` stands in: `videos --decoder
-/system/bin/fakedec.exe FILE` plays the text files in
+/system/bin/fakedec FILE` plays the text files in
 `/system/tests/videos/fake` (see `verification/fakedec/src/clip.rs`),
 drawing a timecode and playing a tone, and crashing, hanging or falling
 behind when a clip asks; `verification/ui/videos-fake.vts` runs Videos

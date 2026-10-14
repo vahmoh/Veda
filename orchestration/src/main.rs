@@ -327,7 +327,7 @@ fn build_system(o: &Options) -> Result<System> {
     util::status("Packing", "initrd");
     let mut initrd = initrd::builder::Builder::new();
     for (program, path) in &artifacts.programs {
-        initrd.add(&format!("bin/{}.exe", program.binary), util::read(path)?);
+        initrd.add(&format!("bin/{}", program.binary), shipped(path, true)?);
     }
     // C programs that test the POSIX layer (with a cross compiler only).
     for (name, exe) in toolchain::c_tests()? {
@@ -425,9 +425,24 @@ fn build_system(o: &Options) -> Result<System> {
     }
     let initrd = initrd.build();
     let bootloader = util::read(&artifacts.bootloader)?;
-    let kernel = util::read(&artifacts.kernel)?;
-    vpe::PeImage::parse_for(&kernel, arch::KERNEL_MACHINE).map_err(|e| format!("kernel image is invalid: {e}"))?;
+    let kernel = shipped(&artifacts.kernel, false)?;
     Ok(System { bootloader, kernel, initrd })
+}
+
+/// The executable at `path` as the system ships it, checked: a Veda
+/// program if `program` (one with `vrt`'s note), and without its symbols
+/// and section headers (`velf::strip`), which the build's own copy keeps
+/// for debugging.
+fn shipped(path: &std::path::Path, program: bool) -> Result<Vec<u8>> {
+    let mut file = util::read(path)?;
+    let invalid = |e: velf::ElfError| format!("{}: {e}", path.display());
+    let kind = velf::Elf::parse_for(&file, arch::MACHINE).map_err(invalid)?.kind();
+    if program && kind != velf::Kind::Veda {
+        return Err(format!("{}: not a Veda program (it lacks the note vrt gives one)", path.display()));
+    }
+    let len = velf::strip(&mut file, arch::MACHINE).map_err(invalid)?;
+    file.truncate(len);
+    Ok(file)
 }
 
 /// The screen of the GUI scripts, of the shots and of the image `build`
@@ -827,7 +842,6 @@ fn shot(o: &Options) -> Result {
 /// Library crates with host unit tests (features in parentheses).
 const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vabi", &[]),
-    ("vpe", &[]),
     ("velf", &[]),
     ("vposix", &[]),
     ("mediadec", &[]),
@@ -886,7 +900,7 @@ fn test(o: &Options) -> Result {
     // display's mode and where pictures go on it, the logs a stick keeps),
     // on Linux as they run.
     for package in ["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper"] {
-        util::run(util::cargo().args(["test", "--quiet", "--package", package, "--target", arch::GUEST_TARGET]))?;
+        util::run(&mut linux::guest_cargo(&["test", "--quiet", "--package", package, "--target", arch::GUEST_TARGET]))?;
     }
     // And through Veda's renderer, where it has been built: on softpipe;
     // on virgl over virglrenderer's test server, as the driver VM's
@@ -1016,7 +1030,9 @@ fn doctor() -> Result {
     check("rustc", rustc.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).map_err(|e| e.to_string()));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();
     let targets = targets.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).map_err(|e| e.to_string());
-    for (name, target) in [("uefi target", arch::UEFI_TARGET), ("user target", arch::USER_TARGET)] {
+    for (name, target) in
+        [("uefi target", arch::UEFI_TARGET), ("kernel target", arch::KERNEL_TARGET), ("user target", arch::USER_TARGET)]
+    {
         check(
             name,
             targets.clone().and_then(|s| {
@@ -1065,8 +1081,9 @@ fn doctor() -> Result {
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
-/// The linker of user-space programs (`components::USER_LINKER`): LLVM's,
-/// which comes with Rust's toolchain, beside the host's libraries.
+/// The linker of the kernel and of user-space programs
+/// (`components::USER_LINKER`): LLVM's, which comes with Rust's toolchain,
+/// beside the host's libraries.
 fn rust_lld() -> Result<PathBuf> {
     let out = std::process::Command::new("rustc")
         .args(["--print", "target-libdir"])

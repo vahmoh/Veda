@@ -3,8 +3,7 @@
 
 //! Veda's user programs on AMD64.
 
-/// The target user programs are built for.
-pub const TARGET: &str = "x86_64-pc-windows-msvc";
-
-/// Image base of every Veda executable (the PE default for x86-64).
-pub const IMAGE_BASE: &str = "0x140000000";
+/// The target user programs are built for: Linux's on musl, for the System
+/// V ABI's ELF64 executables and the hard-float `core` stable Rust ships
+/// for it (nothing of Linux or musl is linked; see `.cargo/arch/amd64`).
+pub const TARGET: &str = "x86_64-unknown-linux-musl";

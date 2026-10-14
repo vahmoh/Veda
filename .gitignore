@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 /target
-*.pdb
-*.obj
 /out
 # The crates in implementation/ports/, as `cargo orchestration` prepares them
 # for Cargo

@@ -38,7 +38,7 @@ use core::cmp::Ordering;
 
 use vfiles::format::{friendly_time, human_size};
 use vfiles::fs::{Error, Space};
-use vfiles::kind::{default_app, kind_name};
+use vfiles::kind::{FileKind, default_app, file_kind, kind_name};
 use vfiles::path::{
     display_path, extension, file_name, is_read_only, is_within, join, natural_cmp, normalize, parent, resolve,
 };
@@ -58,6 +58,8 @@ struct Entry {
     is_dir: bool,
     size: u64,
     modified: u64,
+    /// The file is a program (the file system's `executable`).
+    program: bool,
     /// For an item in the Trash: where it was deleted from, if known.
     origin: Option<String>,
     /// For an item in the Trash: when it was deleted (0 if not known).
@@ -108,6 +110,8 @@ struct Props {
     modified: String,
     read_only: bool,
     is_dir: bool,
+    /// The file is a program (the file system's `executable`).
+    program: bool,
     /// For an item in the Trash: where it was deleted from and when.
     deleted_from: Option<(String, String)>,
 }
@@ -368,6 +372,7 @@ impl Files {
                             is_dir: e.is_dir,
                             size: e.size,
                             modified: e.modified,
+                            program: e.executable,
                             origin: None,
                             deleted: 0,
                         };
@@ -450,7 +455,9 @@ impl Files {
                 SortKey::Name => Ordering::Equal,
                 SortKey::Size => ea.size.cmp(&eb.size),
                 SortKey::Kind if trash_root => location(ea).cmp(&location(eb)),
-                SortKey::Kind => kind_name(&ea.name, ea.is_dir).cmp(&kind_name(&eb.name, eb.is_dir)),
+                SortKey::Kind => {
+                    kind_name(&ea.name, ea.is_dir, ea.program).cmp(&kind_name(&eb.name, eb.is_dir, eb.program))
+                }
                 SortKey::Modified if trash_root => ea.deleted.cmp(&eb.deleted),
                 SortKey::Modified => ea.modified.cmp(&eb.modified),
             }
@@ -683,7 +690,7 @@ impl Files {
     // ---- opening -----------------------------------------------------------
 
     fn launch(&mut self, exe: &str, args: Vec<String>) {
-        let what = file_name(exe).trim_end_matches(".exe").to_string();
+        let what = file_name(exe).to_string();
         let target = args.first().cloned();
         let r = match self.launcher() {
             Some(l) => l.launch(exe.into(), args),
@@ -716,7 +723,7 @@ impl Files {
         let ext = extension(path);
         if let Some(app) = default_app(path) {
             self.launch(app.exe, vec![path.to_string()]);
-        } else if ext == "exe" {
+        } else if self.fs.stat(path).is_ok_and(|st| file_kind(path, st.executable) == FileKind::Program) {
             if is_read_only(path) {
                 self.launch(path, Vec::new());
             } else {
@@ -767,7 +774,7 @@ impl Files {
     }
 
     fn open_terminal(&mut self, dir: &str) {
-        self.launch("/system/bin/terminal.exe", vec![dir.to_string()]);
+        self.launch("/system/bin/terminal", vec![dir.to_string()]);
     }
 
     // ---- operations --------------------------------------------------------
@@ -1191,7 +1198,7 @@ impl Files {
             (format!("{} ({} bytes)", human_size(st.size), st.size), None)
         };
         self.dialog = Some(Dialog::Properties(Props {
-            kind: kind_name(&name, st.is_dir),
+            kind: kind_name(&name, st.is_dir, st.executable),
             name,
             path: path.to_string(),
             size,
@@ -1199,6 +1206,7 @@ impl Files {
             modified: friendly_time(st.modified),
             read_only: st.read_only,
             is_dir: st.is_dir,
+            program: st.executable,
             deleted_from,
         }));
     }

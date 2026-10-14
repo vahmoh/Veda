@@ -15,15 +15,17 @@ that communicate over kernel channels.
    `vboot`) from UEFI's boot path for the architecture
    (`\EFI\BOOT\BOOTX64.EFI` on AMD64) on the FAT32 EFI system partition
    built by `cargo orchestration build`.
-2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
+2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.ELF` and `INITRD.IMG`, picks a
    GOP graphics mode (about `BOOT.CFG`'s size, and of the display's own
    shape where the firmware gives the display's EDID: 1920x1200 rather
    than 1920x1080 on a 16:10 panel, which the firmware and later the
    display's driver then scale evenly, without bars; the kernel logs the
    modes there were, `boot: the firmware's screen modes: ...`), clears the
    screen to black, whatever the firmware left there, loads the
-   kernel's PE sections, builds page tables (identity map, direct map at
-   `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), reads the
+   kernel's segments (an ELF64 executable's, linked at its address),
+   builds page tables (identity map, direct map at `0xFFFF800000000000`,
+   kernel at `0xFFFFFFFF80000000`, each page with its segment's
+   permissions, which it tells the kernel), reads the
    firmware's variables that an operating system may read (for the driver
    VM's Linux: `bootinfo::variables`), exits boot services
    and jumps to the kernel with a `bootinfo::BootInfo`. Firmware usually
@@ -35,7 +37,7 @@ that communicate over kernel channels.
    The kernel logs how it went (`boot: the loader cleared the screen in
    ...`).
 3. The kernel initialises memory, ACPI, the interrupt controllers, timers
-   and the other CPUs, then starts `bin/init.exe` from the initrd (the only
+   and the other CPUs, then starts `bin/init` from the initrd (the only
    program it loads itself).
 4. `init` starts the system services and the desktop shell, then supervises
    them: the window system, the shell, audio, the network and Wi-Fi services
@@ -177,24 +179,34 @@ has ended and left its stack, which is how thread libraries join threads.
 
 ## User space
 
-* **Executables.** Veda's own programs are PE32+ images (built for
-  `x86_64-pc-windows-msvc` with `#![no_std]`, linked at `0x140000000` with
-  no imports): this target gives stable Rust hard-float SSE code, while the
-  kernel is soft-float. C programs are static ELF64 executables for the
-  System V ABI, built with GCC and musl (see [C on Veda](C.md)). So are
-  programs on Rust's standard library: Rust compiles them for its own
-  target for Veda, and GCC links them with the C library, which the
-  standard library stands on (see [Rust on Veda](RUST.md)).
+* **Executables.** Every program, and the kernel, is a static ELF64
+  executable for the System V ABI (x86-64's on AMD64); only the loader is
+  a PE/COFF image, the one format UEFI's firmware starts. Veda's own
+  programs are built with `#![no_std]` for Linux's musl target, which gives
+  stable Rust hard-float SSE code (the kernel is soft-float), and linked by
+  `rust-lld` with nothing of Linux's or musl's: position-independent, their
+  relative relocations packed (`DT_RELR`), and marked by a note
+  (`velf::veda`). C programs are static ELF64 executables too, built with
+  GCC and musl (see [C on Veda](C.md)). So are programs on Rust's standard
+  library: Rust compiles them for its own target for Veda, and GCC links
+  them with the C library, which the standard library stands on (see
+  [Rust on Veda](RUST.md)).
 * **`vrt`** is the runtime each of Veda's own programs links: entry
   point and startup message, syscall wrappers, heap (TLSF), threads,
   futex-based locks, time, logging and process creation.
 * **Process creation** happens in user space (`vrt::process::Spawn`):
   create a process, map the program's image from VMOs, create a thread, and
   start it with a bootstrap channel carrying the startup message
-  (arguments, environment, working directory, role-tagged handles). An ELF
+  (arguments, environment, working directory, role-tagged handles). A
   program's segments are checked and mapped by
-  `implementation/libraries/elf`, and its stack starts the way Linux starts
-  one: arguments, environment and the auxiliary vector.
+  `implementation/libraries/elf`, at a random address if it is
+  position-independent (one of 2^28 pages); Veda's programs are relocated
+  there first, then their RELRO is read-only. A POSIX program relocates
+  itself, and its stack starts the way Linux starts one: arguments,
+  environment and the auxiliary vector. A crash's line in the kernel's log
+  gives where the failing code is in its program's image, which for
+  Veda's programs is its address in the executable that `target/` keeps
+  with its symbols (the system image's copies have none).
 * **C programs** run on musl, whose system calls go to `vposix`
   (`implementation/libraries/posix`), a POSIX layer in Rust linked into the
   C library: files are the VFS's open files, pipes and terminals are
@@ -323,7 +335,8 @@ has ended and left its stack, which is how thread libraries join threads.
   duplicates share it, as POSIX descriptors do. A file removed while open
   stays readable and writable through its connections until the last one
   closes. Stat results carry inode numbers and whether a file is a program
-  (by its first bytes: ELF, PE, `#!`), and `/dev` holds `null`, `zero`,
+  (by its first bytes: ELF or `#!`; directory listings say so too), and
+  `/dev` holds `null`, `zero`,
   `full`, `random` and `urandom`.
 * Applications work with files through `vfiles`: paths (resolving against a
   working directory and `~`, the read-only `/system`, wildcards, natural
@@ -898,8 +911,8 @@ On AMD64:
 | `implementation/libraries/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
 | `implementation/libraries/rt` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |
 | `implementation/libraries/posix` | Linux's system call numbers and the calls only x86-64 has, the thread pointer |
-| `implementation/libraries/pe`, `implementation/libraries/elf` | the executables' machine type (on every host, for the tools) |
-| `implementation/libraries/build` | the user programs' target and image base |
+| `implementation/libraries/elf` | the executables' machine type and relative relocation (on every host, for the tools) |
+| `implementation/libraries/build` | the user programs' target |
 | `implementation/libraries/hv`, `implementation/libraries/iommu` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
 | `implementation/services/devmgr`, `implementation/services/drivervm`, `implementation/services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
 | `verification/systest`, `verification/c`, `verification/ui` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
@@ -916,7 +929,7 @@ of their own (see Architectures above).
 |------|----------|
 | `implementation/boot/` | UEFI loader |
 | `implementation/kernel/` | microkernel |
-| `implementation/libraries/abi`, `implementation/libraries/bootinfo`, `implementation/libraries/initrd`, `implementation/libraries/pe`, `implementation/libraries/elf` | shared formats and the kernel ABI |
+| `implementation/libraries/abi`, `implementation/libraries/bootinfo`, `implementation/libraries/initrd`, `implementation/libraries/elf` | shared formats and the kernel ABI |
 | `implementation/libraries/rt`, `implementation/libraries/heap`, `implementation/libraries/build` | user runtime, allocator, build helper |
 | `implementation/libraries/posix` | the POSIX layer under the C library |
 | `implementation/libraries/raster`, `implementation/libraries/font`, `implementation/libraries/image` | vector rasterisation, fonts, images |

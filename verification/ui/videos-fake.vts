@@ -11,7 +11,7 @@
 # verification/fakedec/clips. The window's client area starts at (90, 54);
 # the lines checked are the player's ("videos: ...").
 boot-cmdline "startup-sound=off"
-boot-cmdline "run=videos:--decoder,/system/bin/fakedec.exe,/system/tests/videos/fake/pattern.mkv"
+boot-cmdline "run=videos:--decoder,/system/bin/fakedec,/system/tests/videos/fake/pattern.mkv"
 fail-on "PANIC"
 fail-on "videos: panic:"
 wait-serial "videos: decoder: fakedec" 90

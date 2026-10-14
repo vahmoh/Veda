@@ -37,8 +37,8 @@ pub const FIRMWARE_PACKAGES: &str = "the ovmf or edk2-ovmf package";
 /// machine's. Before edk2's e4f99a8554 (December 2025) it also leaves the
 /// area to the operating system as ordinary memory, which QEMU's resets
 /// keep. So whatever Veda left there can pass for a processor count after a
-/// reset (a program's PE header has its system version, 6, there), and the
-/// firmware then waits for ever for processors that do not exist.
+/// reset (a program's header once had a 6 there), and the firmware then
+/// waits for ever for processors that do not exist.
 pub fn blank_at_reset(code: &[u8]) -> Option<(u64, u64)> {
     const PARAM_AREA: u32 = 0x100;
     let word = |at: usize| code.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));

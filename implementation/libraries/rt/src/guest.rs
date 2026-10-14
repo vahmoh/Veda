@@ -3,8 +3,8 @@
 
 //! Veda's system calls in a Linux guest of the driver VM.
 //!
-//! A program built for the guest (with `--cfg veda_guest`, which the
-//! guest's target sets) makes its system calls here instead of the way
+//! A program built for the guest (with `--cfg veda_guest`, which its
+//! configuration sets) makes its system calls here instead of the way
 //! Veda's programs do: the ones on Veda's objects, and its log, through the
 //! bridge (`/dev/veda`, `vhv::bridge`), the rest with Linux's own
 //! (`arch::linux`; time from the processor's clock counter, which the guest

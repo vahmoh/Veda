@@ -159,10 +159,10 @@ impl Tree {
         self.insert(parent, name, kind)
     }
 
-    /// Whether file contents are a program: an ELF or PE executable, or a
-    /// script that names its interpreter.
+    /// Whether file contents are a program: an ELF executable, or a script
+    /// that names its interpreter.
     pub fn is_program(bytes: &[u8]) -> bool {
-        bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"MZ") || bytes.starts_with(b"#!")
+        bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"#!")
     }
 
     pub fn stat(&self, id: NodeId) -> Stat {
@@ -202,7 +202,14 @@ impl Tree {
             .iter()
             .map(|(name, &child)| {
                 let s = self.stat(child);
-                DirEntry { name: name.clone(), is_dir: s.is_dir, size: s.size, modified: s.modified, inode: child }
+                DirEntry {
+                    name: name.clone(),
+                    is_dir: s.is_dir,
+                    size: s.size,
+                    modified: s.modified,
+                    inode: child,
+                    executable: s.executable,
+                }
             })
             .collect())
     }

@@ -169,7 +169,7 @@ pub fn test_private_memory() -> TestResult {
 /// Starts a copy of systest that does `what` (see `main`), as its child.
 fn start_copy(what: &str) -> Result<Process, String> {
     let fs = vfs_client()?;
-    let path = "/system/bin/systest.exe";
+    let path = "/system/bin/systest";
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
     let registry = vproto::with_registry(|r| r.clone_registry())

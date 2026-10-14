@@ -103,6 +103,11 @@ impl TrapFrame {
         })
     }
 
+    /// The address of the trapped code (its instruction pointer).
+    pub fn code_address(&self) -> u64 {
+        self.rip
+    }
+
     /// Where the trapped code was, for the log.
     pub fn location(&self) -> impl Display {
         let rip = self.rip;

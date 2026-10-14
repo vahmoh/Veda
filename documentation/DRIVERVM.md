@@ -51,7 +51,8 @@ Each one came from what the alternatives would cost.
 
 2. **The bridge is Veda's system call interface, carried into the guest.**
    A program in the guest uses `vrt`, Veda's runtime, built with
-   `--cfg veda_guest`: its system calls on Veda's objects (channels,
+   `--cfg veda_guest` (`implementation/guest/.cargo/config.toml`): its
+   system calls on Veda's objects (channels,
    events, VMOs, waits) become operations on `/dev/veda`, which the guest's
    kernel turns into hypercalls, which the monitor carries out on a handle
    table of the guest's own. So `vipc` and `vproto` (every protocol Veda

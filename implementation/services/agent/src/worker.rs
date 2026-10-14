@@ -597,7 +597,7 @@ impl Ctx {
                     "folder": st.is_dir,
                     "size": vfiles::format::human_size(st.size),
                     "modified": vfiles::format::format_time(st.modified),
-                    "kind": vfiles::kind::kind_name(vfiles::path::file_name(&path), st.is_dir),
+                    "kind": vfiles::kind::kind_name(vfiles::path::file_name(&path), st.is_dir, st.executable),
                 }))
             }
             "read" => {
@@ -612,7 +612,11 @@ impl Ctx {
                     }
                     Err(_) => Ok(json!({
                         "path": show(&path),
-                        "kind": vfiles::kind::kind_name(vfiles::path::file_name(&path), false),
+                        "kind": vfiles::kind::kind_name(
+                            vfiles::path::file_name(&path),
+                            false,
+                            self.fs.stat(&path).is_ok_and(|st| st.executable),
+                        ),
                         "size": vfiles::format::human_size(bytes.len() as u64),
                         "note": "not a text file; open it in its application instead",
                     })),

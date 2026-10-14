@@ -355,6 +355,16 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Where `addr` is in the VMO mapped there, if anything is: for a
+    /// program's code, the offset into its image, which is the address in
+    /// its executable for one linked at 0, as Veda's programs are (for the
+    /// log of a crash).
+    pub fn vmo_offset_of(&self, addr: u64) -> Option<u64> {
+        let map = self.mappings.lock();
+        let (_, m) = map.range(..=addr).next_back()?;
+        (addr < m.end()).then(|| m.vmo_offset + (addr - m.start))
+    }
+
     /// Resolves a user page fault. Returns `false` if the access is invalid.
     pub fn handle_fault(&self, addr: u64, write: bool, exec: bool) -> bool {
         let map = self.mappings.lock();

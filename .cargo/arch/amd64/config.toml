@@ -3,12 +3,13 @@
 
 # Cargo's configuration of the AMD64 targets (included by .cargo/config.toml).
 
-# The UEFI target is soft-float: LLVM cannot build the SIMD code (AES-NI,
-# SSE2, AVX2) of the RustCrypto and dalek crates for it. Nothing that runs on
-# that target uses them, but the no_std check of the libraries
-# (`cargo build -p <crate> --target x86_64-unknown-uefi`) compiles them:
-# select their portable implementations there. User space is unaffected.
-[target.x86_64-unknown-uefi]
+# The kernel's target is soft-float: LLVM cannot build the SIMD code
+# (AES-NI, SSE2, AVX2) of the RustCrypto and dalek crates for it. The
+# kernel's random number generator (implementation/libraries/entropy) and
+# the no_std check of the libraries (`cargo build -p <crate> --target
+# x86_64-unknown-none`) compile them: select their portable implementations
+# there. User space is unaffected.
+[target.x86_64-unknown-none]
 rustflags = [
     "--cfg", "aes_backend=\"soft\"",
     "--cfg", "polyval_backend=\"soft\"",
@@ -19,16 +20,14 @@ rustflags = [
     "--cfg", "curve25519_dalek_backend=\"serial\"",
 ]
 
-# Veda's user-space programs are PE executables, linked by LLVM's linker in
-# the Microsoft linker's flavour, which Rust ships (see
-# implementation/libraries/build).
-[target.x86_64-pc-windows-msvc]
-linker = "rust-lld"
-
-# Programs of the driver VM's Linux guest (implementation/guest/): their
-# Veda runtime makes its system calls through the bridge (see
-# implementation/libraries/rt/src/guest.rs), and they link statically with
-# Rust's own linker.
+# Veda's user-space programs: position-independent ELF64 executables for
+# the System V ABI, built for Linux's musl target (whose `core` and `alloc`
+# stable Rust ships hard-float) and linked by LLVM's linker, which Rust
+# ships. Nothing of Linux or musl is in them: no start files or C library
+# (`link-self-contained=no`); `vrt` starts them, and `vbuild` gives the
+# linker the rest (see implementation/libraries/build). The driver VM's
+# Linux programs, on this target too, are built apart, with musl:
+# implementation/guest/.cargo/config.toml.
 [target.x86_64-unknown-linux-musl]
 linker = "rust-lld"
-rustflags = ["--cfg", "veda_guest"]
+rustflags = ["-C", "link-self-contained=no"]

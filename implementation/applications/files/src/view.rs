@@ -149,8 +149,13 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
             1.0,
             if f.drop_target.is_some() { t.accent } else { t.border_strong },
         );
-        let icon =
-            if d.paths.len() == 1 { icons::small_icon(&d.paths[0], f.fs.is_dir(&d.paths[0])) } else { Icon::Copy };
+        let icon = match &d.paths[..] {
+            [path] => match f.fs.stat(path) {
+                Ok(st) => icons::small_icon(path, st.is_dir, st.executable),
+                Err(_) => icons::small_icon(path, false, false),
+            },
+            _ => Icon::Copy,
+        };
         ui.icon(Rect::new(badge.x + 8, badge.y, 20, badge.h), icon, 15.0, t.accent_hover);
         ui.label(badge.inset(34, 0, 8, 0), &text, Font::Regular, t.small_size, t.text, Align::Left);
         return;
@@ -868,19 +873,19 @@ fn item(
     // Items in the Trash go by the names they were deleted with.
     let name = e.shown_name();
     let trash_root = f.trash_root();
-    let color = icons::kind_color(name, e.is_dir).fade(op);
+    let color = icons::kind_color(name, e.is_dir, e.program).fade(op);
     if grid {
         let icon_r = Rect::new(inner.x + (inner.w - 76) / 2, inner.y + 8, 76, 64);
         let mut drawn = false;
         if !e.is_dir
-            && file_kind(name) == FileKind::Image
+            && file_kind(name, e.program) == FileKind::Image
             && let Some(bmp) = f.thumbs.as_mut().and_then(|th| th.get(&path))
         {
             icons::draw_thumbnail(ui, icon_r.inset(2, 2, 2, 2), bmp, op);
             drawn = true;
         }
         if !drawn {
-            icons::draw_large(ui, Rect::new(icon_r.x + 6, icon_r.y, 64, 64), name, e.is_dir, op);
+            icons::draw_large(ui, Rect::new(icon_r.x + 6, icon_r.y, 64, 64), name, e.is_dir, e.program, op);
         }
         let name_r = Rect::new(inner.x + 4, icon_r.bottom() + 6, inner.w - 8, 40);
         if renaming {
@@ -890,7 +895,7 @@ fn item(
         }
     } else {
         let cols = columns(r);
-        let small = icons::small_icon(name, e.is_dir);
+        let small = icons::small_icon(name, e.is_dir, e.program);
         small.draw(&mut ui.canvas, Rect::new(cols.name.x + 12, r.y, 20, r.h), 18.0, color);
         let name_r = Rect::new(cols.name.x + 44, r.y, cols.name.w - 48, r.h);
         if renaming {
@@ -914,7 +919,7 @@ fn item(
             let kind = match &e.origin {
                 Some(_) if trash_root => location(&e),
                 None if trash_root => "Not known".to_string(),
-                _ => kind_name(name, e.is_dir),
+                _ => kind_name(name, e.is_dir, e.program),
             };
             ui.label(cols.kind.inset(8, 0, 6, 0), &kind, Font::Regular, t.font_size - 1.0, dim, Align::Left);
         }
@@ -927,7 +932,7 @@ fn item(
         let mut tip = if e.is_dir {
             name.to_string()
         } else {
-            format!("{name} · {} · {}", kind_name(name, false), human_size(e.size))
+            format!("{name} · {} · {}", kind_name(name, false, e.program), human_size(e.size))
         };
         if e.origin.is_some() {
             tip.push_str(&format!(" · deleted from {}", location(&e)));
@@ -1294,7 +1299,7 @@ pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
         if p.is_dir {
             icons::draw_folder(ui, icon_r, 1.0);
         } else {
-            icons::draw_page(ui, icon_r, &p.name, 1.0);
+            icons::draw_page(ui, icon_r, &p.name, p.program, 1.0);
         }
         ui.label(
             Rect::new(inner.x + 68, inner.y + 2, inner.w - 68, 28),

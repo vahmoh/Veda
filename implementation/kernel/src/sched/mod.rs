@@ -432,6 +432,13 @@ pub fn exit_current() -> ! {
 /// Handles a CPU exception raised by user code (BKL held).
 pub fn user_exception(frame: &mut TrapFrame) {
     let cur = current();
+    // Programs are placed at random addresses: where the code that failed
+    // is in its program's image says what it was.
+    let offset = cur.aspace.as_ref().and_then(|a| a.vmo_offset_of(frame.code_address()));
+    let in_image = core::fmt::from_fn(move |f| match offset {
+        Some(offset) => write!(f, " ({offset:#x} in its image)"),
+        None => Ok(()),
+    });
     if let Some(fault) = frame.page_fault() {
         if let Some(a) = &cur.aspace
             && a.handle_fault(fault.address, fault.write, fault.execute)
@@ -439,7 +446,7 @@ pub fn user_exception(frame: &mut TrapFrame) {
             return;
         }
         crate::kerror!(
-            "{} (thread {}): page fault at {:#x} ({} {}), {}",
+            "{} (thread {}): page fault at {:#x} ({} {}), {}{}",
             cur.process_name(),
             cur.koid,
             fault.address,
@@ -451,10 +458,11 @@ pub fn user_exception(frame: &mut TrapFrame) {
                 "read"
             },
             if fault.present { "protection violation" } else { "not mapped" },
-            frame.location()
+            frame.location(),
+            in_image
         );
     } else {
-        crate::kerror!("{} (thread {}): {}", cur.process_name(), cur.koid, frame.describe());
+        crate::kerror!("{} (thread {}): {}{}", cur.process_name(), cur.koid, frame.describe(), in_image);
     }
     match &cur.process {
         Some(p) => p.kill(vabi::EXIT_CODE_CRASHED),

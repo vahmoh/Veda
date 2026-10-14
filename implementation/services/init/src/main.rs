@@ -144,8 +144,8 @@ impl Init {
             println!("failed to start {}: {}", path, e);
             match e {
                 vrt::process::SpawnError::NotExecutable
-                | vrt::process::SpawnError::BadPe(_)
-                | vrt::process::SpawnError::BadElf(_) => LaunchError::BadImage,
+                | vrt::process::SpawnError::BadElf(_)
+                | vrt::process::SpawnError::Incompatible => LaunchError::BadImage,
                 vrt::process::SpawnError::Kernel(vabi::Error::NoMemory) => LaunchError::NoMemory,
                 _ => LaunchError::Failed,
             }
@@ -252,7 +252,7 @@ impl Init {
         struct Launch<'a>(&'a mut Init);
         impl launcher::Server for Launch<'_> {
             fn launch(&mut self, path: String, args: Vec<String>) -> Result<u64, LaunchError> {
-                let name = path.rsplit('/').next().unwrap_or(&path).trim_end_matches(".exe").to_string();
+                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
                 self.0.spawn(&name, &path, &args, Vec::new(), false)
             }
 

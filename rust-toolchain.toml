@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # Veda builds on stable Rust (tested with 1.99). rustup installs the extra
-# targets automatically on first use: the bare-metal ones of the loader and
-# kernel and of the POSIX layer in the C library, the one of user-space
-# programs, and Linux's on musl, of the driver VM's programs. They are the
-# AMD64 targets (orchestration/src/arch/amd64 names them for the build);
-# rustup reads them from this file only.
+# targets automatically on first use: UEFI's, of the loader; the bare-metal
+# one of the kernel and of the POSIX layer in the C library; and Linux's on
+# musl, of user-space programs (its ELF64 executables, without Linux's or
+# musl's code) and of the driver VM's programs. They are the AMD64 targets
+# (orchestration/src/arch/amd64 names them for the build); rustup reads them
+# from this file only.
 [toolchain]
 channel = "stable"
-targets = ["x86_64-unknown-uefi", "x86_64-unknown-none", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"]
+targets = ["x86_64-unknown-uefi", "x86_64-unknown-none", "x86_64-unknown-linux-musl"]
 components = ["rustfmt", "clippy"]

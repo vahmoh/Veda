@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The driver VM's programs (this directory's crates): Linux's, on musl. Cargo
+# reads this file on top of the checkout's (.cargo/config.toml) when it runs
+# here, as `cargo orchestration` runs it for them:
+#
+#   cargo build --release --target x86_64-unknown-linux-musl --package guest-init
+#
+# Their target is that of Veda's own programs, so they are built apart, into
+# target/guest. They link statically with Rust's own linker and musl's start
+# files and C library, which Rust ships (its self-contained ones, which the
+# checkout's configuration leaves out of Veda's programs; of two
+# `link-self-contained` the last counts). And they are built with `--cfg
+# veda_guest`: their Veda runtime then makes its system calls through the
+# bridge (see implementation/libraries/rt/src/guest.rs).
+[build]
+target-dir = "../../target/guest"
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["--cfg", "veda_guest", "-C", "link-self-contained=yes"]

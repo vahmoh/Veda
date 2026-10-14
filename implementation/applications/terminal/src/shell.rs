@@ -330,19 +330,19 @@ impl Shell {
         self.apps.clone().unwrap_or_default()
     }
 
-    /// Names of the programs in `/system/bin` (without `.exe`).
+    /// Names of the programs in `/system/bin`.
     pub fn programs(&self) -> Vec<String> {
         self.fs
             .read_dir("/system/bin")
-            .map(|v| v.into_iter().filter_map(|e| e.name.strip_suffix(".exe").map(|s| s.to_string())).collect())
+            .map(|v| v.into_iter().filter(|e| e.executable && !e.is_dir).map(|e| e.name).collect())
             .unwrap_or_default()
     }
 
     /// Starts a program or application. `prog` is an application id, a
-    /// program name from `/system/bin` or a path to an `.exe`. Returns a
+    /// program name from `/system/bin` or a path to a program. Returns a
     /// display name and the process id.
     pub fn launch(&mut self, prog: &str, args: Vec<String>) -> Result<(String, u64), String> {
-        let as_path = prog.contains('/') || prog.ends_with(".exe");
+        let as_path = prog.contains('/');
         if !as_path {
             let apps = self.apps();
             let lower = prog.to_ascii_lowercase();
@@ -352,10 +352,7 @@ impl Shell {
                 return launch_result(r).map(|koid| (name, koid));
             }
         }
-        let mut path = if as_path { self.resolve(prog) } else { format!("/system/bin/{prog}.exe") };
-        if !path.ends_with(".exe") && !self.fs.exists(&path) {
-            path.push_str(".exe");
-        }
+        let path = if as_path { self.resolve(prog) } else { format!("/system/bin/{prog}") };
         match self.fs.stat(&path) {
             Ok(st) if !st.is_dir => {}
             _ => return Err(format!("{prog}: command not found")),
@@ -363,15 +360,15 @@ impl Shell {
         if !is_read_only(&path) {
             return Err(format!("{prog}: only programs installed in /system/bin can be started"));
         }
-        let name = file_name(&path).trim_end_matches(".exe").to_string();
+        let name = file_name(&path).to_string();
         let r = self.launcher().ok_or("the launcher is unavailable")?.launch(path, args);
         launch_result(r).map(|koid| (name, koid))
     }
 
     /// The program a command name runs as a child of the terminal: a path
-    /// (with a `/`) to a file, or a file of that name (or that name plus
-    /// `.exe`) in a directory of `PATH`. Built-in commands and installed
-    /// applications come first: they are not programs here.
+    /// (with a `/`) to a file, or a file of that name in a directory of
+    /// `PATH`. Built-in commands and installed applications come first:
+    /// they are not programs here.
     pub fn program_for(&mut self, name: &str) -> Option<String> {
         if commands::find(name).is_some() {
             return None;
@@ -387,10 +384,9 @@ impl Shell {
         }
         let dirs = self.var("PATH").unwrap_or_default();
         for dir in dirs.split(':').filter(|d| d.starts_with('/')) {
-            for candidate in [format!("{dir}/{name}"), format!("{dir}/{name}.exe")] {
-                if is_file(&self.fs, &candidate) {
-                    return Some(normalize(&candidate));
-                }
+            let candidate = format!("{dir}/{name}");
+            if is_file(&self.fs, &candidate) {
+                return Some(normalize(&candidate));
             }
         }
         None

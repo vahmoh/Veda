@@ -240,7 +240,7 @@ pub fn state(f: &Files) -> Value {
             let name = e.shown_name();
             let mut item = json!({
                 "name": name,
-                "kind": kind_name(name, e.is_dir),
+                "kind": kind_name(name, e.is_dir, e.program),
                 "size": size_text(e),
             });
             if !trash_root {

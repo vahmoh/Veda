@@ -5,7 +5,9 @@
 //!
 //! This is the only program the kernel loads itself. `init` receives the
 //! root resource and handles to the boot modules; every other process is
-//! created from user space.
+//! created from user space. Like every Veda program, `init` is a
+//! position-independent ELF64 executable: the kernel places it at a random
+//! address and relocates it there, as `vrt::process` does the others.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -16,8 +18,8 @@ use vabi::{KernelBootInfo, Rights};
 
 use crate::mm::aspace::Perms;
 use crate::mm::paging::Cache;
+use crate::mm::phys_to_virt;
 use crate::mm::vmo::Vmo;
-use crate::mm::{page_align_up, phys_to_virt};
 use crate::object::KObject;
 use crate::object::channel::{self, Message};
 use crate::object::handle::Handle;
@@ -25,12 +27,8 @@ use crate::object::process::Process;
 use crate::object::resource::Resource;
 use crate::sched::{self, Thread};
 
-const INIT_PATH: &str = "bin/init.exe";
+const INIT_PATH: &str = "bin/init";
 const STACK_SIZE: u64 = 1 << 20;
-
-fn perms_of(s: &vpe::Section) -> Perms {
-    Perms { read: true, write: s.writable(), exec: s.executable() }
-}
 
 pub fn spawn_init(boot: &BootInfo) {
     // SAFETY: the initrd lies in RAM covered by the direct map and is never
@@ -39,35 +37,37 @@ pub fn spawn_init(boot: &BootInfo) {
         unsafe { core::slice::from_raw_parts(phys_to_virt(boot.initrd.base) as *const u8, boot.initrd.size as usize) };
     let archive = initrd::Archive::open(initrd).expect("the initrd is corrupt");
     crate::kinfo!("initrd: {} files, {} KiB", archive.len(), initrd.len() / 1024);
-    let file = archive.find(INIT_PATH).expect("bin/init.exe is missing from the initrd");
-    let pe = vpe::PeImage::parse(file.data).expect("init.exe is not a valid PE32+ image");
-    pe.check_no_imports().expect("init.exe has DLL imports");
+    let file = archive.find(INIT_PATH).expect("bin/init is missing from the initrd");
+    let elf = velf::Elf::parse(file.data).expect("init is not a valid ELF64 executable");
+    assert!(elf.kind() == velf::Kind::Veda, "init is not a Veda program of this version");
 
     let process = Process::new("init", 0).expect("out of memory creating init");
     let aspace = process.aspace().unwrap();
 
-    // Copy the image into a VMO and map each section with its permissions.
-    let base = pe.image_base();
-    let image = Vmo::new_anonymous(pe.size_of_image() as u64, Cache::WriteBack).expect("init image too large");
-    assert!(image.write(0, pe.header_bytes()));
-    let ro = Perms { read: true, write: false, exec: false };
-    aspace
-        .map(image.clone(), 0, page_align_up(pe.size_of_headers() as u64), base, true, ro, Perms::ALL, false)
-        .expect("mapping init headers");
-    for s in pe.sections().filter(|s| !s.discardable() && s.virtual_size > 0) {
-        assert!(image.write(s.virtual_address as u64, s.data));
-        aspace
-            .map(
-                image.clone(),
-                s.virtual_address as u64,
-                page_align_up(s.virtual_size as u64),
-                base + s.virtual_address as u64,
-                true,
-                perms_of(&s),
-                Perms::ALL,
-                false,
-            )
-            .expect("mapping an init section");
+    // The image: its segments, relocated for a random place, in a VMO mapped
+    // there run by run with their permissions (RELRO read-only).
+    let (lo, hi) = elf.span();
+    let base = if elf.is_position_independent() {
+        let mut random = [0u8; 8];
+        crate::random::fill(&mut random);
+        vabi::program_base((hi - lo) as usize, u64::from_le_bytes(random)) as u64
+    } else {
+        lo
+    };
+    let bias = base.wrapping_sub(lo);
+    let mut image = alloc::vec![0u8; (hi - lo) as usize];
+    for s in elf.segments() {
+        let at = (s.vaddr - lo) as usize;
+        image[at..at + s.data.len()].copy_from_slice(s.data);
+    }
+    elf.relocate(&mut image, bias).expect("init's relocations are invalid");
+    let vmo = Vmo::new_anonymous(hi - lo, Cache::WriteBack).expect("init image too large");
+    assert!(vmo.write(0, &image));
+    drop(image);
+    for run in velf::page_runs(&elf, velf::Relro::ReadOnly) {
+        let perms = Perms { read: true, write: run.perms.write, exec: run.perms.exec };
+        let at = run.start.wrapping_add(bias);
+        aspace.map(vmo.clone(), run.start - lo, run.len, at, true, perms, Perms::ALL, false).expect("mapping init");
     }
 
     let stack = Vmo::new_anonymous(STACK_SIZE, Cache::WriteBack).unwrap();
@@ -166,10 +166,11 @@ pub fn spawn_init(boot: &BootInfo) {
     let thread = Thread::new_user(&process, "main").expect("creating init's thread");
     assert!(process.add_thread(thread.clone()));
     let sp = vabi::entry_stack_pointer((stack_base + STACK_SIZE) as usize) as u64;
-    thread.prepare_user_entry(pe.entry_point(), sp, bootstrap as u64, 0);
+    let entry = elf.entry().wrapping_add(bias);
+    thread.prepare_user_entry(entry, sp, bootstrap as u64, 0);
     process.mark_started();
     sched::make_ready(&thread);
-    crate::kinfo!("started init (process {}), entry {:#x}", process.koid, pe.entry_point());
+    crate::kinfo!("started init (process {}), entry {:#x}", process.koid, entry);
     keep_alive(process);
 }
 

@@ -63,7 +63,14 @@ impl Dev {
 
     pub fn list() -> Vec<DirEntry> {
         ALL.iter()
-            .map(|&(name, d)| DirEntry { name: name.into(), is_dir: false, size: 0, modified: 0, inode: d.inode() })
+            .map(|&(name, d)| DirEntry {
+                name: name.into(),
+                is_dir: false,
+                size: 0,
+                modified: 0,
+                inode: d.inode(),
+                executable: false,
+            })
             .collect()
     }
 

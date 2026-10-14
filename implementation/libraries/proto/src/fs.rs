@@ -68,8 +68,8 @@ message! {
         pub inode: u64,
         /// Identifies the file system the file is in (see [`device`]).
         pub device: u64,
-        /// A program: an ELF or PE executable, or a `#!` script. (Veda keeps
-        /// no permission bits; this is what makes a file executable.)
+        /// A program: an ELF executable, or a `#!` script. (Veda keeps no
+        /// permission bits; this is what makes a file executable.)
         pub executable: bool,
         /// A device such as `/dev/null` rather than a regular file.
         pub char_device: bool,
@@ -95,6 +95,8 @@ message! {
         pub modified: u64,
         /// As [`Stat::inode`].
         pub inode: u64,
+        /// As [`Stat::executable`].
+        pub executable: bool,
     }
 }
 

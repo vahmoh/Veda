@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 name=Files
-exe=/system/bin/files.exe
+exe=/system/bin/files
 icon=folder
 category=System
 description=Browse and manage your files

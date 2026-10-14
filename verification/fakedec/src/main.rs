@@ -6,7 +6,7 @@
 //! in place of a file's, so that Videos' playback, pacing, seeking, crash
 //! recovery and agent can be developed and tested without FFmpeg.
 //!
-//! Videos starts it as it starts `mediadec` (`/system/bin/fakedec.exe`),
+//! Videos starts it as it starts `mediadec` (`/system/bin/fakedec`),
 //! with nothing but the control channel ([`vproto::media::CONTROL_ROLE`]).
 //! The videos it opens are text files ([`clip`]):
 //!

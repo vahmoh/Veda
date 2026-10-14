@@ -588,7 +588,7 @@ fn start_driver(boot: &initrd::Archive<'static>, driver: &str, info: &DeviceInfo
     Some(ours)
 }
 
-/// Starts `bin/NAME.exe` from the system image with the registry and
+/// Starts `bin/NAME` from the system image with the registry and
 /// `handles` (by role): the process, if it started.
 fn start_program(
     boot: &initrd::Archive<'static>,
@@ -596,7 +596,7 @@ fn start_program(
     args: &[String],
     handles: Vec<(u32, vrt::object::Handle)>,
 ) -> Option<Process> {
-    let path = alloc::format!("bin/{name}.exe");
+    let path = alloc::format!("bin/{name}");
     let Some(image) = boot.find(&path).map(|f| f.data) else {
         println!("{} is not installed", name);
         return None;

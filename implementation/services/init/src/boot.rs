@@ -97,7 +97,7 @@ pub fn start_system(init: &mut Init) {
 /// Starts one system service, with the system (`at_boot`) or again after
 /// it exited.
 pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
-    let path = alloc::format!("bin/{name}.exe");
+    let path = alloc::format!("bin/{name}");
     if init.initrd.find(&path).is_none() {
         println!("{} is not installed; skipping", name);
         return;
@@ -154,7 +154,7 @@ pub fn start_requested(init: &mut Init) {
                 Some((name, args)) => (name, args.split(',').filter(|a| !a.is_empty()).map(Into::into).collect()),
                 None => (spec, Vec::new()),
             };
-            let path = alloc::format!("bin/{name}.exe");
+            let path = alloc::format!("bin/{name}");
             match init.spawn(name, &path, &args, Vec::new(), false) {
                 Ok(_) => {}
                 Err(e) => println!("cannot start {}: {:?}", name, e),
@@ -162,7 +162,7 @@ pub fn start_requested(init: &mut Init) {
         }
     }
     if cmdline.split_whitespace().any(|a| a == "systest") {
-        match init.spawn("systest", "bin/systest.exe", &[], Vec::new(), false) {
+        match init.spawn("systest", "bin/systest", &[], Vec::new(), false) {
             Ok(_) => {}
             Err(e) => println!("systest: FAIL (cannot start: {:?})", e),
         }

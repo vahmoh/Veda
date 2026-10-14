@@ -45,6 +45,24 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-input", "input", "bin/input"),
 ];
 
+/// Cargo, for the driver VM's programs (`implementation/guest/`), running
+/// `args`: in their directory, so that their configuration is read
+/// (`implementation/guest/.cargo/config.toml`: musl, and `veda_guest`), and
+/// into a target directory of their own, as their target is that of Veda's
+/// programs ([`guest_target_dir`]).
+pub fn guest_cargo(args: &[&str]) -> Command {
+    let mut cmd = util::cargo();
+    cmd.current_dir(util::workspace_root().join("implementation").join("guest"));
+    cmd.args(args).arg("--target-dir").arg(guest_target_dir());
+    cmd
+}
+
+/// Where the driver VM's programs are built (what their configuration says
+/// for Cargo run by hand, beside `$CARGO_TARGET_DIR`'s other builds).
+fn guest_target_dir() -> PathBuf {
+    util::target_dir().join("guest")
+}
+
 /// Tools the build runs: the kernel's, beyond a C compiler; GCC's (m4, and
 /// the GMP, MPFR and MPC it links with); meson and ninja for Mesa.
 const BUILD_TOOLS: [&str; 14] =
@@ -117,8 +135,8 @@ fn follow_renderer(dir: &Path) -> Result {
 /// The renderer's Rust half (`implementation/guest/renderer`), a static
 /// library that Mesa's build links the program around, built.
 fn renderer_lib() -> Result<PathBuf> {
-    util::run(util::cargo().args(["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
-    Ok(util::target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
+    util::run(&mut guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
+    Ok(guest_target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
 }
 
 /// The renderer's decoder for this machine (`vgallium.so`: on softpipe, on
@@ -236,13 +254,12 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         return Ok(None);
     }
     util::status("Building", format!("the driver VM's programs ({GUEST_TARGET})"));
-    let mut cmd = util::cargo();
-    cmd.args(["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]);
+    let mut cmd = guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]);
     for (package, ..) in GUEST_PROGRAMS {
         cmd.args(["--package", package]);
     }
     util::run(&mut cmd)?;
-    let bin = util::target_dir().join(GUEST_TARGET).join("release");
+    let bin = guest_target_dir().join(GUEST_TARGET).join("release");
     let mut archive = cpio::Archive::new();
     archive.directory("dev");
     archive.directory("bin");

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 name=Photos
-exe=/system/bin/photos.exe
+exe=/system/bin/photos
 icon=image
 category=Media
 description=View and browse your pictures

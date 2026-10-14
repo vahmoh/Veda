@@ -170,7 +170,7 @@ impl ChildState {
 /// The `errno` for a failure to start a program.
 fn spawn_errno(e: SpawnError) -> isize {
     match e {
-        SpawnError::NotExecutable | SpawnError::BadPe(_) | SpawnError::BadElf(_) => ENOEXEC,
+        SpawnError::NotExecutable | SpawnError::BadElf(_) | SpawnError::Incompatible => ENOEXEC,
         SpawnError::TooLarge => E2BIG,
         SpawnError::Kernel(vabi::Error::NoMemory) => ENOMEM,
         SpawnError::Kernel(e) => error::kernel(e),

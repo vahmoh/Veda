@@ -9,7 +9,7 @@
 //! * safe wrappers for kernel objects and system calls ([`object`], [`vm`]),
 //! * the global heap ([`heap`]), threads ([`thread`]) and synchronisation
 //!   ([`sync`]), clocks ([`time`]), logging ([`println!`]),
-//! * process creation from PE images ([`process`]),
+//! * process creation from ELF64 executables ([`process`]),
 //! * the few C runtime symbols compiled code relies on.
 //!
 //! The runtime pieces that only make sense in a real Veda program (entry
@@ -18,7 +18,8 @@
 //! `default-features = false`, which keeps them unit-testable on the host.
 //!
 //! Programs of the driver VM's Linux guest are built with `--cfg
-//! veda_guest` (the guest's target sets it): their system calls then go
+//! veda_guest` (their configuration sets it:
+//! `implementation/guest/.cargo/config.toml`): their system calls then go
 //! through the bridge (`guest`), and threads are Linux's (`std`'s).
 
 #![no_std]

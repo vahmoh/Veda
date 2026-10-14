@@ -11,7 +11,7 @@ publish = false
 
 [dependencies]
 initrd = { workspace = true, features = ["std"] }
-vpe = { workspace = true }
+velf = { workspace = true }
 vbuild = { workspace = true }
 sha2 = { workspace = true }
 vimage = { workspace = true }

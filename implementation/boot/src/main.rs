@@ -5,12 +5,13 @@
 //!
 //! Responsibilities, in order:
 //!
-//! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.EXE`, `INITRD.IMG` (and the optional
+//! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.ELF`, `INITRD.IMG` (and the optional
 //!    `VKERNEL.SYM`) from the boot volume,
 //! 2. pick and set a graphics mode (of the display's own shape, where the
 //!    firmware gives its EDID) and clear the screen: it stays blank until
 //!    the window system's splash fades in,
-//! 3. load the kernel's PE sections into fresh physical pages,
+//! 3. load the kernel's segments (an ELF64 executable's) into fresh
+//!    physical pages,
 //! 4. build the initial page tables (identity map, direct map, kernel image),
 //! 5. read the firmware's variables that an operating system may read
 //!    ([`bootinfo::variables`]),
@@ -41,8 +42,9 @@ use core::ffi::c_void;
 use core::ptr;
 
 use bootinfo::{
-    BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KernelImage, MemoryKind, MemoryMap,
-    MemoryRegion, PaintReport, PhysRegion, PixelFormat, SCREEN_MODES, ScreenReport, made_wc, memory_type, variables,
+    BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KERNEL_RUNS_MAX, KernelImage,
+    KernelRun, MemoryKind, MemoryMap, MemoryRegion, PaintReport, PhysRegion, PixelFormat, SCREEN_MODES, ScreenReport,
+    made_wc, memory_type, variables,
 };
 use uefi::{memory_type as mt, *};
 
@@ -613,44 +615,45 @@ impl FrameSource for TableFrames<'_> {
     }
 }
 
-/// Loads the kernel's sections into physically contiguous pages.
-fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(vpe::PeImage<'static>, KernelImage)> {
-    // SAFETY: `file` lives in pages that are never freed.
-    let file: &'static [u8] = unsafe { core::slice::from_raw_parts(file.as_ptr(), file.len()) };
-    let pe = vpe::PeImage::parse(file).map_err(|_| "kernel is not a valid PE32+ image")?;
-    pe.check_no_imports().map_err(|_| "kernel has DLL imports")?;
-    if pe.image_base() != bootinfo::KERNEL_BASE {
-        return Err("kernel is not linked at KERNEL_BASE");
+/// Loads the kernel, an ELF64 executable linked at [`bootinfo::KERNEL_BASE`],
+/// into physically contiguous pages: its entry point, and where it is.
+fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(u64, KernelImage)> {
+    let elf = velf::Elf::parse(file).map_err(|_| "the kernel is not a valid ELF64 executable")?;
+    let (lo, hi) = elf.span();
+    if elf.is_position_independent() || lo != bootinfo::KERNEL_BASE {
+        return Err("the kernel is not linked at KERNEL_BASE");
     }
-    let size = (pe.size_of_image() as u64).next_multiple_of(PAGE);
+    let size = hi - lo;
     let phys = fw.alloc_zeroed(size, Some(MemoryKind::Kernel))?;
-    // SAFETY: the destination was just allocated with `size` bytes and the
-    // parser verified every section lies inside `size_of_image`.
-    unsafe {
-        let hdr = pe.header_bytes();
-        ptr::copy_nonoverlapping(hdr.as_ptr(), phys as *mut u8, hdr.len());
-        for s in pe.sections() {
-            ptr::copy_nonoverlapping(s.data.as_ptr(), (phys + s.virtual_address as u64) as *mut u8, s.data.len());
-        }
+    for s in elf.segments() {
+        // SAFETY: the destination was just allocated with `size` bytes, and
+        // the parser verified that every segment lies in the span.
+        unsafe { ptr::copy_nonoverlapping(s.data.as_ptr(), (phys + (s.vaddr - lo)) as *mut u8, s.data.len()) };
     }
-    Ok((pe, KernelImage { phys_base: phys, virt_base: pe.image_base(), size }))
+    // Linked at its address, the kernel has nothing to relocate: its RELRO
+    // is read-only from the start.
+    let mut runs = [KernelRun::default(); KERNEL_RUNS_MAX];
+    let mut run_count = 0;
+    for r in velf::page_runs(&elf, velf::Relro::ReadOnly) {
+        let slot = runs.get_mut(run_count).ok_or("the kernel has too many segments")?;
+        *slot = KernelRun {
+            offset: r.start - lo,
+            len: r.len,
+            writable: r.perms.write,
+            executable: r.perms.exec,
+            _pad: [0; 6],
+        };
+        run_count += 1;
+    }
+    Ok((elf.entry(), KernelImage { phys_base: phys, virt_base: lo, size, run_count: run_count as u64, runs }))
 }
 
-/// Maps the kernel image with per-section permissions (W^X).
-fn map_kernel<F: FrameSource>(space: &mut arch::KernelSpace<F>, pe: &vpe::PeImage, k: &KernelImage) -> Result<()> {
-    let mut off = 0;
-    while off < k.size {
-        let rva = off as u32;
-        let (mut writable, mut executable) = (false, false);
-        for s in pe.sections() {
-            let end = s.virtual_address + s.virtual_size.next_multiple_of(PAGE as u32);
-            if rva >= s.virtual_address && rva < end {
-                writable |= s.writable();
-                executable |= s.executable();
-            }
+/// Maps the kernel image's pages with the permissions of their runs (W^X).
+fn map_kernel<F: FrameSource>(space: &mut arch::KernelSpace<F>, k: &KernelImage) -> Result<()> {
+    for r in k.runs() {
+        for off in (r.offset..r.offset + r.len).step_by(PAGE as usize) {
+            space.map_kernel_page(k.virt_base + off, k.phys_base + off, r.writable, r.executable)?;
         }
-        space.map_kernel_page(k.virt_base + off, k.phys_base + off, writable, executable)?;
-        off += PAGE;
     }
     Ok(())
 }
@@ -699,11 +702,11 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     );
     let paint = clear_screen(fw, &framebuffer);
 
-    let kernel_file = fw.read_file(root, "\\VEDA\\VKERNEL.EXE", None)?.ok_or("\\VEDA\\VKERNEL.EXE not found")?;
+    let kernel_file = fw.read_file(root, "\\VEDA\\VKERNEL.ELF", None)?.ok_or("\\VEDA\\VKERNEL.ELF not found")?;
     // SAFETY: the kernel file was read into kernel_file.base.
     let kernel_bytes = unsafe { core::slice::from_raw_parts(kernel_file.base as *const u8, kernel_file.size as usize) };
-    let (pe, kernel) = load_kernel(fw, kernel_bytes)?;
-    log!("kernel: {} KiB at phys {:#x}, entry {:#x}", kernel.size / 1024, kernel.phys_base, pe.entry_point());
+    let (entry, kernel) = load_kernel(fw, kernel_bytes)?;
+    log!("kernel: {} KiB at phys {:#x}, entry {:#x}", kernel.size / 1024, kernel.phys_base, entry);
 
     let initrd =
         fw.read_file(root, "\\VEDA\\INITRD.IMG", Some(MemoryKind::Initrd))?.ok_or("\\VEDA\\INITRD.IMG not found")?;
@@ -738,7 +741,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
 
     let mut frames = TableFrames(fw);
     let mut space = arch::KernelSpace::new(&mut frames, phys_limit)?;
-    map_kernel(&mut space, &pe, &kernel)?;
+    map_kernel(&mut space, &kernel)?;
     let root = space.root();
     log!("page tables at {:#x}, direct map limit {:#x}", root, phys_limit);
 
@@ -856,7 +859,6 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     }
     log!("handing over to the kernel ({} memory regions)", merged);
 
-    let entry = pe.entry_point();
     let stack_top = HHDM_BASE + stack + BOOT_STACK_SIZE;
     let info_virt = HHDM_BASE + boot_info_phys;
     // SAFETY: boot services have exited; the kernel's address space maps

@@ -255,7 +255,7 @@ cargo orchestration run --resolution 1280x800 --smp 4 --memory 2048
 cargo orchestration run --cmdline "run=editor"
 ```
 
-`run=NAME` starts `/system/bin/NAME.exe` after boot. The machine reaches
+`run=NAME` starts `/system/bin/NAME` after boot. The machine reaches
 the Internet through a wired card on QEMU's NAT (`--net none` leaves it
 out). `cargo orchestration help` lists every command and option.
 

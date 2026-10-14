@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! name=Text Editor
-//! exe=/system/bin/editor.exe
+//! exe=/system/bin/editor
 //! icon=editor
 //! category=Accessories
 //! description=Edit plain-text documents
@@ -26,7 +26,7 @@ pub fn parse(id: &str, text: &str) -> AppInfo {
     let mut app = AppInfo {
         id: id.to_string(),
         name: id.to_string(),
-        exe: alloc::format!("/system/bin/{id}.exe"),
+        exe: alloc::format!("/system/bin/{id}"),
         icon: id.to_string(),
         category: "Applications".to_string(),
         description: String::new(),

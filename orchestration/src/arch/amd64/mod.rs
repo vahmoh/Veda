@@ -13,21 +13,27 @@ use crate::util::Result;
 /// The architecture's directories: `arch/amd64` throughout the tree.
 pub const NAME: &str = "amd64";
 
-/// Rust's target of the loader and the kernel: freestanding, soft-float,
-/// PE/COFF output.
+/// Rust's target of the loader: UEFI's, freestanding and soft-float, whose
+/// programs are PE/COFF images, the one format UEFI's firmware starts.
 pub const UEFI_TARGET: &str = "x86_64-unknown-uefi";
 
-/// Rust's target of user-space programs: `no_std` PE executables, built
-/// for Windows' target, which gives them hard-float SSE code on stable
-/// Rust, and linked by LLVM's linker in the Microsoft linker's flavour
-/// (`implementation/libraries/build`).
+/// Rust's target of the kernel: freestanding and soft-float, ELF64 output
+/// (the kernel's `build.rs` links it at its address).
+pub const KERNEL_TARGET: &str = "x86_64-unknown-none";
+
+/// Rust's target of user-space programs: `no_std` position-independent
+/// ELF64 executables for the System V ABI, built for Linux's musl target,
+/// which gives them hard-float SSE code on stable Rust, and linked by LLVM's
+/// linker with nothing of Linux's or musl's (`implementation/libraries/build`).
 pub const USER_TARGET: &str = vbuild::amd64::TARGET;
 
 /// Rust's target of the code C programs link: the POSIX layer and the media
 /// decoder's Rust half.
 pub const BARE_TARGET: &str = "x86_64-unknown-none";
 
-/// Rust's target of the driver VM's programs: Linux's, on musl.
+/// Rust's target of the driver VM's programs: Linux's, on musl. It is the
+/// user-space programs' too: these are built apart, with musl
+/// (`implementation/guest/.cargo/config.toml`).
 pub const GUEST_TARGET: &str = "x86_64-unknown-linux-musl";
 
 /// Rust's target of programs that use its standard library on Veda, on the C
@@ -44,8 +50,8 @@ pub const C_TARGET: &str = "x86_64-veda";
 /// friends), Linux's own, as the ports build it (the same).
 pub const GUEST_C_TARGET: &str = "x86_64-linux-musl";
 
-/// The machine of the kernel's image.
-pub const KERNEL_MACHINE: vpe::Machine = vpe::amd64::MACHINE;
+/// The machine of Veda's executables: the kernel's and its programs'.
+pub const MACHINE: velf::Machine = velf::amd64::MACHINE;
 
 /// Where the loader goes on the boot partition: the boot program UEFI
 /// starts from a disk of its own on x64.

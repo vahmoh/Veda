@@ -27,7 +27,7 @@ use vipc::WaitSet;
 use vproto::fs::vfs;
 use vproto::tty::{self, Tty};
 use vrt::object::{Channel, Event, Handle, Process, Socket};
-use vrt::process::{Spawn, SpawnError, format_of};
+use vrt::process::{Spawn, SpawnError, is_executable};
 use vrt::sync::Mutex;
 
 use crate::job::Output;
@@ -215,7 +215,7 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         .map_err(|e| format!("{}: {e}", run.path))?;
     // SAFETY: a read-only mapping of a VMO made for us alone.
     let bytes = unsafe { &image.as_slice()[..size as usize] };
-    if format_of(bytes).is_none() {
+    if !is_executable(bytes) {
         return Err(spawn_error(run.path, SpawnError::NotExecutable));
     }
 
@@ -262,7 +262,6 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
     }
 
     let name = run.path.rsplit('/').next().unwrap_or(run.path);
-    let name = name.strip_suffix(".exe").unwrap_or(name);
     let mut spawn = Spawn::new(name).path(run.path).cwd(run.cwd);
     spawn.args = run.args.iter().map(|a| a.as_bytes()).collect();
     spawn.env = run.env.iter().map(|e| e.as_bytes()).collect();

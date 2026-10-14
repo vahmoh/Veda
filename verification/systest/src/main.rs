@@ -49,7 +49,7 @@ fn vfs_client() -> Result<vfs::Client, String> {
 fn test_vfs_system_image() -> TestResult {
     let fs = vfs_client()?;
     let entries = fs.read_dir("/system/bin".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-    check(entries.iter().any(|e| e.name == "init.exe"), "init.exe listed in /system/bin")?;
+    check(entries.iter().any(|e| e.name == "init" && e.executable), "init listed in /system/bin, a program")?;
     let st = fs.stat("/system/etc/version".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     check(!st.is_dir && st.size > 0 && st.read_only, "version file stat")?;
     let (vmo, len) =
@@ -172,7 +172,7 @@ fn test_crash_report() -> TestResult {
     let events = l.watch().map_err(|e| e.to_string())?.map_err(|e| alloc::format!("watch: {e:?}"))?;
     println!("crash report: starting a copy of systest that faults on purpose");
     let koid = l
-        .launch("/system/bin/systest.exe".into(), alloc::vec!["crash".into()])
+        .launch("/system/bin/systest".into(), alloc::vec!["crash".into()])
         .map_err(|e| e.to_string())?
         .map_err(|e| alloc::format!("launch: {e:?}"))?;
     let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(10));

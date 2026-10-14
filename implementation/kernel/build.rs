@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Link the kernel as a fixed-address, higher-half PE image, as its
-//! architecture says (`src/arch/<architecture>/link.rs`).
+//! Link the kernel as an ELF64 executable at a fixed address in the higher
+//! half, as its architecture says (`src/arch/<architecture>/link.rs`).
 
 #[path = "src/arch/amd64/link.rs"]
 mod amd64;
@@ -19,8 +19,4 @@ fn main() {
     for arg in link_args {
         println!("cargo:rustc-link-arg-bins={arg}");
     }
-    // A linker map lets the build tool produce a symbol table for backtraces.
-    let out = std::env::var("OUT_DIR").unwrap();
-    println!("cargo:rustc-link-arg-bins=/MAP:{out}/vkernel.map");
-    println!("cargo:rustc-env=VKERNEL_MAP={out}/vkernel.map");
 }

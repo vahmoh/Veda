@@ -16,7 +16,7 @@
 //! | `cpu` | interrupts on and off, waiting for one, halting; the processor's name and features, for the log; its random number generators |
 //! | `percpu` | the current CPU's index |
 //! | `smp` | starting the other CPUs; making one reschedule; halting the others |
-//! | `trap` | the registers a trap saves: a system call's arguments and results, page faults, descriptions for the log |
+//! | `trap` | the registers a trap saves: a system call's arguments and results, page faults, where the code was, descriptions for the log |
 //! | `thread` | a thread's saved context, and switching between threads |
 //! | `paging` | page tables: mappings, address spaces, the kernel's own |
 //! | `mm` | the layout of the kernel's address space, memory the architecture keeps, caches, access to user memory |

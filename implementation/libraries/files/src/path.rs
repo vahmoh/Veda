@@ -284,7 +284,7 @@ mod tests {
         assert!(!is_within("/ab", "/a"));
         assert!(is_within("/anything", "/"));
         assert!(is_read_only("/system"));
-        assert!(is_read_only("/system/bin/init.exe"));
+        assert!(is_read_only("/system/bin/init"));
         assert!(!is_read_only("/systemd"));
         assert!(!is_read_only("/home/user"));
         assert!(same_volume("/home/user/a", "/tmp/b"));

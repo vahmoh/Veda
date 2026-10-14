@@ -26,7 +26,7 @@ impl EspContents<'_> {
     fn files(&self) -> Vec<(&'static str, &[u8])> {
         let mut files = vec![
             (crate::arch::UEFI_BOOT_PATH, self.bootloader),
-            ("VEDA/VKERNEL.EXE", self.kernel),
+            ("VEDA/VKERNEL.ELF", self.kernel),
             ("VEDA/INITRD.IMG", self.initrd),
         ];
         if !self.symbols.is_empty() {

@@ -244,7 +244,7 @@ impl TaskManager {
     /// looked up again now, as the user may have allowed this a while ago,
     /// and only an exact match is ended.
     fn agent_end(&mut self, args: &Value) -> Result<Value, String> {
-        let name = arg_opt_str(args, "name").map(|n| n.trim().trim_end_matches(".exe").to_lowercase());
+        let name = arg_opt_str(args, "name").map(|n| n.trim().to_lowercase());
         let pid = arg_opt_int(args, "pid")?;
         if name.is_none() && pid.is_none() {
             return Err("which application? Give its name or PID".into());

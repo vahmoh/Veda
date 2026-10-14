@@ -79,7 +79,7 @@ const DRAG_START: i32 = 8;
 /// Which application opens a file, by extension.
 pub fn app_for_file(name: &str) -> Option<(&'static str, Icon)> {
     let app = vfiles::default_app(name)?;
-    let icon = match vfiles::file_kind(name) {
+    let icon = match vfiles::file_kind(name, false) {
         FileKind::Image => Icon::Image,
         FileKind::Audio => Icon::Music,
         FileKind::Video => Icon::Video,

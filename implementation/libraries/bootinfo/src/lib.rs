@@ -9,8 +9,8 @@
 //! * low physical memory where it is (so the loader can survive the switch;
 //!   the kernel drops it as soon as it installs its own tables),
 //! * all physical RAM, the direct map, at [`HHDM_BASE`],
-//! * the kernel image at its link address, [`KERNEL_BASE`], with
-//!   per-section permissions.
+//! * the kernel image at its link address, [`KERNEL_BASE`], each page
+//!   with the permissions of its segment ([`KernelImage::runs`]).
 //!
 //! The entry point takes the [`BootInfo`]. Every pointer stored inside it is
 //! a *virtual* address inside the direct map, so the kernel can use it
@@ -33,7 +33,7 @@ pub use arch::{HHDM_BASE, KERNEL_BASE, memory_type};
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
 
 /// Version of this protocol. Bump on any layout change.
-pub const BOOTINFO_VERSION: u32 = 5;
+pub const BOOTINFO_VERSION: u32 = 6;
 
 /// Maximum length of the kernel command line, in bytes.
 pub const CMDLINE_MAX: usize = 256;
@@ -184,13 +184,48 @@ impl PhysRegion {
     }
 }
 
-/// Where the kernel image lives in physical and virtual memory.
+/// Most runs of pages ([`KernelImage::runs`]) a kernel image may have:
+/// twice what a linker makes of one (read-only data, code, RELRO, data).
+pub const KERNEL_RUNS_MAX: usize = 8;
+
+/// Where the kernel image lives in physical and virtual memory, and how
+/// its pages may be used.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KernelImage {
+    /// Physical address of its first page (the image is contiguous).
     pub phys_base: u64,
+    /// Virtual address of its first page, [`KERNEL_BASE`].
     pub virt_base: u64,
+    /// Its size in bytes, whole pages.
     pub size: u64,
+    /// How many of `runs` there are.
+    pub run_count: u64,
+    /// The image's pages by permissions, in address order, from its
+    /// executable's segments (RELRO read-only): the loader maps them so,
+    /// and so does the kernel's own address space. Pages of no run are not
+    /// mapped.
+    pub runs: [KernelRun; KERNEL_RUNS_MAX],
+}
+
+impl KernelImage {
+    /// The runs of pages there are.
+    pub fn runs(&self) -> &[KernelRun] {
+        &self.runs[..(self.run_count as usize).min(KERNEL_RUNS_MAX)]
+    }
+}
+
+/// Pages of the kernel image with the same permissions (all are readable).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KernelRun {
+    /// Where they start, from the image's first page, and how many bytes
+    /// (whole pages) they take.
+    pub offset: u64,
+    pub len: u64,
+    pub writable: bool,
+    pub executable: bool,
+    pub _pad: [u8; 6],
 }
 
 /// The physical memory map, an array of [`MemoryRegion`]s.

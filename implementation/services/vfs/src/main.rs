@@ -508,7 +508,14 @@ impl vfs::Server for Session<'_> {
         };
         if m == Mount::Ram && comps.is_empty() {
             for name in [SYSTEM, DEV] {
-                entries.push(DirEntry { name: name.into(), is_dir: true, size: 0, modified: 0, inode: tree::ROOT });
+                entries.push(DirEntry {
+                    name: name.into(),
+                    is_dir: true,
+                    size: 0,
+                    modified: 0,
+                    inode: tree::ROOT,
+                    executable: false,
+                });
             }
         }
         // Private directories are invisible to everyone but their owner.

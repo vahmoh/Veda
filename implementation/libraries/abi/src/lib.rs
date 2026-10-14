@@ -38,9 +38,20 @@
 pub mod arch;
 pub mod startup;
 
-pub use arch::{PAGE_SIZE, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState, entry_stack_pointer, vcpu_exit};
+pub use arch::{
+    PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState,
+    entry_stack_pointer, vcpu_exit,
+};
 
 use core::fmt;
+
+/// Where a position-independent program whose image takes `len` bytes is
+/// loaded, for the random number `random`: a page of [`PROGRAM_SPAN`]
+/// bytes above [`PROGRAM_BASE`] that leaves room for it.
+pub fn program_base(len: usize, random: u64) -> usize {
+    let pages = (PROGRAM_SPAN.saturating_sub(len.next_multiple_of(PAGE_SIZE)) / PAGE_SIZE).max(1);
+    PROGRAM_BASE + (random % pages as u64) as usize * PAGE_SIZE
+}
 
 /// A handle value as seen by user space. `0` is never a valid handle.
 pub type RawHandle = u32;

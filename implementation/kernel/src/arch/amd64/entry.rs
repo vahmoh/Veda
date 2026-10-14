@@ -22,8 +22,9 @@ use super::gdt::{USER_CS, USER_DS};
 use super::percpu::{OFF_KERNEL_RSP, OFF_USER_RSP};
 use super::trap::{SYSCALL_VECTOR, TrapFrame};
 
-// NOTE: on the UEFI target `extern "C"` is the Win64 ABI (rcx, rdx, ...),
-// while the assembly uses the System V convention (rdi, rsi, ...).
+// The assembly uses the System V calling convention (rdi, rsi, ...), which
+// its declarations and the Rust functions it calls name (`sysv64`) rather
+// than take from the target.
 unsafe extern "sysv64" {
     /// Start of the 256 interrupt stubs (16 bytes each).
     pub static vk_isr_stubs: [u8; 4096];

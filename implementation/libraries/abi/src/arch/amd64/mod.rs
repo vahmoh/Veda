@@ -30,12 +30,18 @@ pub const USER_SPACE_START: usize = 0x0000_0000_0001_0000;
 /// One past the highest user-space address.
 pub const USER_SPACE_END: usize = 0x0000_7FFF_FFFF_0000;
 
+/// Where position-independent programs are loaded: at a random page of
+/// this span ([`program_base`](crate::program_base)), 2^28 places, so that
+/// where their code is cannot be guessed.
+pub const PROGRAM_BASE: usize = 0x0000_5555_0000_0000;
+pub const PROGRAM_SPAN: usize = 1 << 40;
+
 /// The stack pointer a thread of a Veda program starts with, its stack's
 /// top being `top` (16-byte aligned): aligned as on entry to a function
-/// (8 bytes, a return address's room, off 16-byte alignment), below 64
-/// bytes left free, room for the Win64 shadow space of the calls it makes.
+/// (8 bytes, a return address's room, off 16-byte alignment), as the
+/// System V ABI has it.
 pub const fn entry_stack_pointer(top: usize) -> usize {
-    top - 72
+    top - 8
 }
 
 /// A segment register of a virtual processor.

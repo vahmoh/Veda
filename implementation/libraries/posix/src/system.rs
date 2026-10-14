@@ -57,7 +57,7 @@ fn limit(resource: u32) -> Result<Rlimit, isize> {
     let unlimited = Rlimit { cur: rlimit::INFINITY, max: rlimit::INFINITY };
     Ok(match resource {
         rlimit::STACK => {
-            let s = vrt::process::ELF_STACK as u64;
+            let s = vrt::process::POSIX_STACK as u64;
             Rlimit { cur: s, max: s }
         }
         rlimit::NOFILE => Rlimit { cur: fd::MAX_FDS as u64, max: fd::MAX_FDS as u64 },

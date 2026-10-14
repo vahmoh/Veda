@@ -69,7 +69,7 @@ be added beside AMD64 without touching code that is not its own:
   * **Knowledge of an architecture's formats** that tools need on any
     machine (executables' machine types, the IOMMU's tables, the virtual
     devices of the hypervisor's guests) is a public module named after the
-    architecture (`vpe::amd64`, `velf::amd64`, `viommu::amd64`,
+    architecture (`velf::amd64`, `viommu::amd64`,
     `vhv::amd64`), compiled on every host so that host tests and build
     tools use it too; `NATIVE` names the one of the architecture compiled
     for, where a crate needs it.
@@ -95,12 +95,13 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
-| `implementation/boot/` (UEFI loader), `implementation/kernel/` | `x86_64-unknown-uefi` | freestanding, soft-float, PE |
-| user space (`implementation/libraries/`, `implementation/services/`, `implementation/drivers/`, `implementation/applications/`) | `x86_64-pc-windows-msvc`, `#![no_std]` | hard-float SSE2, PE `.exe`, linked by `rust-lld` |
+| `implementation/boot/` (UEFI loader) | `x86_64-unknown-uefi` | freestanding, soft-float, PE/COFF (the format UEFI's firmware starts) |
+| `implementation/kernel/` | `x86_64-unknown-none` | freestanding, soft-float, ELF64 executable linked at its address |
+| user space (`implementation/libraries/`, `implementation/services/`, `implementation/drivers/`, `implementation/applications/`) | `x86_64-unknown-linux-musl`, `#![no_std]` | hard-float SSE2, position-independent ELF64 executables with nothing of Linux's or musl's, linked by `rust-lld` |
 | `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | the System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | static ELF executables on musl |
 | programs on Rust's standard library (`verification/rust`) | `x86_64-unknown-veda` (the `rust` port's) | static ELF executables on the C library, linked by `x86_64-veda-gcc` |
-| the driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | static, on Linux |
+| the driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | static, on Linux; built from `implementation/guest/` (its `.cargo/config.toml`), into `target/guest` |
 | `orchestration/`, host tools | host (`std`) | |
 
 ## Library crates
@@ -114,15 +115,13 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
   `x.sqrt()`, `x.sin()`, ... on `f32`/`f64`. Where `std` is linked (host
   tests) its own methods win over `Float`'s, so code whose results must be
   the same on the host and in Veda calls `libm` (or `Float::sin(x)`).
-* Verify that a library builds for the loader's and kernel's soft-float
-  target with `cargo build -p <crate> --target x86_64-unknown-uefi`
+* Verify that a library builds for the kernel's soft-float target, which
+  has no `std`, with `cargo build -p <crate> --target x86_64-unknown-none`
   (`.cargo/arch/amd64/config.toml` makes the RustCrypto and dalek crates
   use their portable code there, as LLVM cannot build their SIMD code for
-  it). That target has a `std`, though, so this does not show a dependency
-  on it; `--target x86_64-unknown-none` has none, and building Veda
-  (`cargo orchestration build`), whose programs link without `std`, is the
-  final check. `vimage` runs only in user space and does not build
-  soft-float (`fast_image_resize`'s SIMD code).
+  it). Building Veda (`cargo orchestration build`), whose programs link
+  without `std`, is the final check. `vimage` runs only in user space and
+  does not build soft-float (`fast_image_resize`'s SIMD code).
 
 ## Pixels and colors
 

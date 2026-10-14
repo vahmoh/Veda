@@ -15,11 +15,13 @@ dependency's reason beside it.
 ## What a library must fit
 
 * **No standard library.** Veda's own components are `no_std` with
-  `alloc`. User space is PE images that import nothing, so a crate that
-  takes `cfg(windows)` paths on that target (`x86_64-pc-windows-msvc`), or
-  detects the processor through `std`, does not fit either. The kernel and
-  the loader are soft-float UEFI images, where crates run their portable
-  code (`.cargo/arch/amd64/config.toml` chooses it). The build machine's
+  `alloc`. User space is ELF64 executables built for Linux's musl target
+  but linked with nothing of Linux's or musl's, so a crate that takes
+  `cfg(target_os = "linux")` or `cfg(unix)` paths to system calls or the C
+  library on that target (`x86_64-unknown-linux-musl`), or detects the
+  processor through `std`, does not fit either. The kernel and the loader
+  are soft-float and freestanding, where crates run their portable code
+  (`.cargo/arch/amd64/config.toml` chooses it). The build machine's
   tools (`orchestration`, `generation/`) and the driver VM's Linux programs
   have `std`.
 * **Little in every program.** Programs are linked statically and without
@@ -64,9 +66,9 @@ Linux (the driver VM's kernel).
 
 | Code | Weighed | Why it stays |
 |------|---------|--------------|
-| `vheap`, the allocator of every program | rlsf 0.2, talc 5, dlmalloc | rlsf (a Miri-found undefined behaviour fixed in 2026) and talc (its interface reworked through version 5) are no better proven than `vheap` under its randomised stress test and invariant checks; dlmalloc imports `windows-sys` on the user target |
+| `vheap`, the allocator of every program | rlsf 0.2, talc 5, dlmalloc | rlsf (a Miri-found undefined behaviour fixed in 2026) and talc (its interface reworked through version 5) are no better proven than `vheap` under its randomised stress test and invariant checks; dlmalloc takes its memory from the C library (`mmap`) on the user target |
 | The loader's UEFI bindings | r-efi 7 (std's) | r-efi declares the firmware's inputs as mutable pointers, as C's prototypes do, so every GUID and string passed would be cast; the loader binds the calls it makes, typed as the specification reads them, and every boot runs them |
-| `velf`, `vpe` | object 0.40 | About 400 lines of header decoding, bounds- and overflow-checked, would move; the validation and loading, which are Veda's, would not |
+| `velf` | object 0.40 | About 400 lines of header decoding, bounds- and overflow-checked, would move; the validation, relocation and loading, which are Veda's, would not |
 | `vacpi`, the AML interpreter | acpi 6.1 | acpi has `todo!()` and `unimplemented!()` paths (Load, Match, CopyObject; GPIO and serial-bus resources, which Veda's devices need), no step or depth limits, and handlers that cannot fail: firmware could stop the device manager. `vacpi` is bounded and never panics on firmware |
 | The hypervisor's ACPI tables (`vhv`, `vacpi::asm`) | acpi_tables 0.2 | It has no GpioInt, GpioIo, I2C or SPI serial-bus descriptors, which the guest's DSDT uses |
 | `vvirtio` | virtio-drivers 0.13 | It maps BARs by physical address where Veda's drivers get them from the device manager, and never programs MSI-X vectors |

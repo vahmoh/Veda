@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 name=Text Editor
-exe=/system/bin/editor.exe
+exe=/system/bin/editor
 icon=document
 category=Productivity
 description=Write and edit text documents

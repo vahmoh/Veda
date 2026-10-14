@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 name=Settings
-exe=/system/bin/settings.exe
+exe=/system/bin/settings
 icon=settings
 category=System
 description=Wallpaper, display and system details

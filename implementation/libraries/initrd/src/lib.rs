@@ -22,7 +22,7 @@
 //! +-----------------------------+ total_size
 //! ```
 //!
-//! Paths are relative (`bin/init.exe`), use `/` as separator, and never
+//! Paths are relative (`bin/init`), use `/` as separator, and never
 //! contain `.` or `..` components. Directories are implicit.
 
 #![no_std]
@@ -87,7 +87,7 @@ impl core::fmt::Debug for Archive<'_> {
 /// One file in the archive.
 #[derive(Debug, Clone, Copy)]
 pub struct File<'a> {
-    /// Relative path, e.g. `bin/init.exe`.
+    /// Relative path, e.g. `bin/init`.
     pub path: &'a str,
     /// Offset of the data from the start of the archive (page aligned).
     pub offset: u64,
@@ -266,20 +266,20 @@ mod tests {
     #[test]
     fn round_trip() {
         let mut b = Builder::new();
-        b.add("bin/init.exe", vec![1, 2, 3]);
+        b.add("bin/init", vec![1, 2, 3]);
         b.add("/fonts/ui.ttf", vec![9; 5000]);
         b.add("a.txt", vec![]);
         let img = b.build();
         let ar = Archive::open(&img).unwrap();
         assert_eq!(ar.len(), 3);
-        let init = ar.find("/bin/init.exe").unwrap();
+        let init = ar.find("/bin/init").unwrap();
         assert_eq!(init.data, &[1, 2, 3]);
         assert_eq!(init.offset % DATA_ALIGN, 0);
         assert_eq!(ar.find("fonts/ui.ttf").unwrap().data.len(), 5000);
         assert_eq!(ar.find("a.txt").unwrap().data.len(), 0);
         assert!(ar.find("missing").is_none());
         let paths: std::vec::Vec<_> = ar.files().map(|f| f.path).collect();
-        assert_eq!(paths, ["a.txt", "bin/init.exe", "fonts/ui.ttf"]);
+        assert_eq!(paths, ["a.txt", "bin/init", "fonts/ui.ttf"]);
     }
 
     #[test]

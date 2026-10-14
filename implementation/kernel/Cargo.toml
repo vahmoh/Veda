@@ -16,7 +16,7 @@ bench = false
 [dependencies]
 bootinfo = { workspace = true }
 vabi = { workspace = true }
-vpe = { workspace = true }
+velf = { workspace = true }
 initrd = { workspace = true }
 ventropy = { workspace = true }
 vhv = { workspace = true }

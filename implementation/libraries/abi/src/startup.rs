@@ -20,11 +20,12 @@
 //! n_handles x u32 role              roles of the message's handles, in order
 //! ```
 //!
-//! ELF (POSIX) programs find their arguments and environment on their stack
-//! as the System V ABI describes, put there by the process that loaded
-//! them, so their startup message leaves both out (a message holds at most
+//! POSIX programs find their arguments and environment on their stack as
+//! the System V ABI describes, put there by the process that loaded them,
+//! so their startup message leaves both out (a message holds at most
 //! [`CHANNEL_MAX_BYTES`](crate::CHANNEL_MAX_BYTES), a command line may be
-//! longer).
+//! longer). A loader tells Veda's own programs from POSIX ones by the note
+//! Veda's programs carry (`velf::veda`).
 
 /// `"VSTA"`
 pub const MAGIC: u32 = u32::from_le_bytes(*b"VSTA");

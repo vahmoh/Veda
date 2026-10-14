@@ -536,15 +536,16 @@ fn usage(io: &mut Io, cmd: &str) -> i32 {
     io.error(cmd, &format!("usage: {u}"))
 }
 
-/// The colour of a directory entry name.
-fn entry_style(name: &str, is_dir: bool) -> Style {
+/// The colour of a directory entry's name (`program` as for
+/// [`vfiles::kind::file_kind`]).
+fn entry_style(name: &str, is_dir: bool, program: bool) -> Style {
     if is_dir {
         return Style::fg(color::BRIGHT_BLUE).bold();
     }
     if name.starts_with('.') {
         return Style::DIM;
     }
-    match file_kind(name) {
+    match file_kind(name, program) {
         FileKind::Program => Style::fg(color::BRIGHT_GREEN).bold(),
         // As GNU dircolors has them: pictures and videos alike.
         FileKind::Image | FileKind::Video => Style::fg(color::BRIGHT_MAGENTA),
@@ -698,9 +699,9 @@ fn print_entry_long(io: &mut Io, e: &DirEntry) {
         io.print(&rpad(&human_size(e.size), 10));
     }
     io.print("  ");
-    io.styled(&e.name, entry_style(&e.name, e.is_dir));
+    io.styled(&e.name, entry_style(&e.name, e.is_dir, e.executable));
     if e.is_dir {
-        io.styled("/", entry_style(&e.name, true));
+        io.styled("/", entry_style(&e.name, true, false));
     }
     io.print("\n");
 }
@@ -719,7 +720,7 @@ fn print_wide(sh: &Shell, io: &mut Io, entries: &[DirEntry]) {
             let i = c * rows + r;
             let Some(n) = names.get(i) else { continue };
             let e = &entries[i];
-            io.styled(n, entry_style(&e.name, e.is_dir));
+            io.styled(n, entry_style(&e.name, e.is_dir, e.executable));
             if (c + 1) * rows + r < names.len() {
                 io.print(&pad("", colw - n.chars().count()));
             }
@@ -748,8 +749,14 @@ fn cmd_ls(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             }
         };
         if !st.is_dir {
-            let e =
-                DirEntry { name: arg.clone(), is_dir: false, size: st.size, modified: st.modified, inode: st.inode };
+            let e = DirEntry {
+                name: arg.clone(),
+                is_dir: false,
+                size: st.size,
+                modified: st.modified,
+                inode: st.inode,
+                executable: st.executable,
+            };
             print_entry_long(io, &e);
             continue;
         }
@@ -1067,7 +1074,7 @@ fn find_rec(
             None => true,
         };
         if name_ok && kind.is_none_or(|d| d == e.is_dir) {
-            io.styled(&display, entry_style(&e.name, e.is_dir));
+            io.styled(&display, entry_style(&e.name, e.is_dir, e.executable));
             io.print("\n");
             *found += 1;
         }
@@ -1106,7 +1113,7 @@ fn tree_rec(sh: &Shell, io: &mut Io, dir: &str, prefix: &str, all: bool, depth: 
         let last = i + 1 == entries.len();
         io.styled(prefix, Style::DIM);
         io.styled(if last { "└── " } else { "├── " }, Style::DIM);
-        io.styled(&e.name, entry_style(&e.name, e.is_dir));
+        io.styled(&e.name, entry_style(&e.name, e.is_dir, e.executable));
         io.print("\n");
         if e.is_dir {
             counts.0 += 1;
@@ -1321,7 +1328,7 @@ fn cmd_stat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             Ok(st) => {
                 let label = |io: &mut Io, l: &str| io.styled(&format!("{l:>9}: "), Style::DIM);
                 label(io, "Name");
-                io.styled(file_name(&abs), entry_style(file_name(&abs), st.is_dir));
+                io.styled(file_name(&abs), entry_style(file_name(&abs), st.is_dir, st.executable));
                 io.print("\n");
                 label(io, "Path");
                 io.println(&abs);
@@ -1329,7 +1336,7 @@ fn cmd_stat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 if st.is_dir {
                     io.println(&format!("folder ({} items)", st.size));
                 } else {
-                    let kind = match file_kind(&abs) {
+                    let kind = match file_kind(&abs, st.executable) {
                         FileKind::Text => "text document",
                         FileKind::Image => "image",
                         FileKind::Audio => "audio",
@@ -1413,7 +1420,7 @@ fn cmd_open(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             status |= launch_with(sh, io, &args[0], FILES.exe, vec![abs]);
         } else if let Some(app) = default_app(&abs) {
             status |= launch_with(sh, io, &args[0], app.exe, vec![abs]);
-        } else if file_kind(&abs) == FileKind::Program {
+        } else if file_kind(&abs, st.executable) == FileKind::Program {
             match sh.launch(&abs, Vec::new()) {
                 Ok((name, koid)) => io.styled(&format!("Started {name} (PID {koid})\n"), Style::DIM),
                 Err(e) => status = io.error(&args[0], &e),
@@ -1543,14 +1550,11 @@ fn cmd_kill(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     for t in &targets {
         let matches: Vec<(u64, String)> = match t.parse::<u64>() {
             Ok(pid) => procs.iter().filter(|p| p.koid == pid).map(|p| (p.koid, p.name().to_string())).collect(),
-            Err(_) => {
-                let name = t.trim_end_matches(".exe");
-                procs
-                    .iter()
-                    .filter(|p| p.name().eq_ignore_ascii_case(name))
-                    .map(|p| (p.koid, p.name().to_string()))
-                    .collect()
-            }
+            Err(_) => procs
+                .iter()
+                .filter(|p| p.name().eq_ignore_ascii_case(t))
+                .map(|p| (p.koid, p.name().to_string()))
+                .collect(),
         };
         if matches.is_empty() {
             status = io.error("kill", &format!("{t}: no such process"));
@@ -2019,8 +2023,8 @@ fn cmd_which(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             io.println(&format!("{name}: shell built-in ({})", b.help.to_lowercase()));
         } else if let Some(app) = sh.apps().into_iter().find(|a| &a.id == name) {
             io.println(&format!("{name}: application \"{}\" ({})", app.name, app.exe));
-        } else if sh.fs.exists(&format!("/system/bin/{name}.exe")) {
-            io.println(&format!("/system/bin/{name}.exe"));
+        } else if let Some(path) = sh.program_for(name) {
+            io.println(&path);
         } else {
             status = io.error("which", &format!("{name}: not found"));
         }

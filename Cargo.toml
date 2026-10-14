@@ -10,7 +10,6 @@ members = [
     "implementation/libraries/abi",
     "implementation/libraries/bootinfo",
     "implementation/libraries/initrd",
-    "implementation/libraries/pe",
     "implementation/libraries/elf",
     "implementation/libraries/posix",
     "implementation/libraries/raster",
@@ -114,7 +113,6 @@ repository = "https://github.com/vahmoh25/Veda"
 vabi = { path = "implementation/libraries/abi" }
 bootinfo = { path = "implementation/libraries/bootinfo" }
 initrd = { path = "implementation/libraries/initrd" }
-vpe = { path = "implementation/libraries/pe" }
 velf = { path = "implementation/libraries/elf" }
 vposix = { path = "implementation/libraries/posix" }
 vraster = { path = "implementation/libraries/raster" }

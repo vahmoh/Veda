@@ -3,8 +3,8 @@
 
 //! The runtime on AMD64: how Veda's system calls are made, where programs
 //! and threads start, the C runtime symbols of the user target
-//! (`x86_64-pc-windows-msvc`), and what programs learn of the processor. In
-//! the driver VM's Linux guest, Linux's system calls (`linux`).
+//! (`x86_64-unknown-linux-musl`), and what programs learn of the processor.
+//! In the driver VM's Linux guest, Linux's system calls (`linux`).
 
 #[cfg(feature = "runtime")]
 mod crt;
@@ -45,8 +45,8 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
     (ret, rdx)
 }
 
-/// The process entry point (`/ENTRY:_vrt_start`, see `vbuild`). The kernel
-/// passes the bootstrap channel handle in `rdi`.
+/// The process entry point (`--entry=_vrt_start`, see `vbuild`). The
+/// kernel passes the bootstrap channel handle in `rdi`.
 #[cfg(feature = "runtime")]
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn _vrt_start(bootstrap: vabi::RawHandle, _arg: usize) -> ! {

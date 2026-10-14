@@ -32,7 +32,7 @@ type "ls /sys"
 key tab
 type "b"
 key tab
-type " | grep files.exe && logger vsh-complete-ok"
+type " | grep files && logger vsh-complete-ok"
 key ret
 wait-serial "terminal: vsh-complete-ok" 30
 # History: Up twice recalls the pwd command and runs it in /tmp; Ctrl+R

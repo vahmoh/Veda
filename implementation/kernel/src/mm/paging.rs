@@ -41,30 +41,23 @@ pub enum MapError {
 }
 
 /// Builds the kernel address space: the direct map of physical memory
-/// (`arch::paging::new_kernel_space`), and the kernel image with
-/// per-section permissions. Then switches to it.
+/// (`arch::paging::new_kernel_space`), and the kernel image with the
+/// permissions the loader found for its pages (`bootinfo::KernelImage`).
+/// Then switches to it.
 pub fn init_kernel_space(boot: &bootinfo::BootInfo) {
     let root = arch::paging::new_kernel_space(boot.hhdm_limit);
-    // Kernel image: walk our own PE section table (the headers are mapped at
-    // the image base).
     let k = &boot.kernel;
-    // SAFETY: the loader mapped the whole image, headers included.
-    let image = unsafe { core::slice::from_raw_parts(k.virt_base as *const u8, k.size as usize) };
-    let pe = vpe::PeImage::parse(image).expect("kernel image headers are corrupt");
-    let mut off = 0;
-    while off < k.size {
-        let rva = off as u32;
-        let mut flags =
-            Flags { writable: false, executable: false, user: false, global: true, cache: Cache::WriteBack };
-        for s in pe.sections() {
-            let end = s.virtual_address + s.virtual_size.next_multiple_of(PAGE_SIZE as u32);
-            if rva >= s.virtual_address && rva < end {
-                flags.writable |= s.writable();
-                flags.executable |= s.executable();
-            }
+    for r in k.runs() {
+        let flags = Flags {
+            writable: r.writable,
+            executable: r.executable,
+            user: false,
+            global: true,
+            cache: Cache::WriteBack,
+        };
+        for off in (r.offset..r.offset + r.len).step_by(PAGE_SIZE as usize) {
+            map(root, k.virt_base + off, k.phys_base + off, flags, true).expect("mapping the kernel image");
         }
-        map(root, k.virt_base + off, k.phys_base + off, flags, true).expect("mapping the kernel image");
-        off += PAGE_SIZE;
     }
     arch::paging::install_kernel_space(root);
 }

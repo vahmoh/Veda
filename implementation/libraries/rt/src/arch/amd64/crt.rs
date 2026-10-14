@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Symbols that compiled Rust code expects from a C runtime, on AMD64's
-//! user target (`x86_64-pc-windows-msvc`).
+//! user target (`x86_64-unknown-linux-musl`, whose C library Veda's
+//! programs do not link).
 //!
-//! Veda programs link no CRT, so the runtime provides the memory
-//! primitives LLVM emits calls to (with the Win64 calling convention), the
-//! stack probe and floating-point marker of the MSVC target, and a stub
-//! exception personality (we always build with `panic = "abort"`, so it is
-//! never called).
+//! The runtime provides the memory primitives LLVM emits calls to (with the
+//! System V calling convention: `rdi`, `rsi`, `rdx`), and stubs for the
+//! unwinder's symbols that the precompiled `core` and `alloc` name (Veda
+//! builds with `panic = "abort"`, so nothing unwinds and they never run).
+//! Stack probes are inline on this target: there is no probe function.
 //!
 //! `memcpy`/`memset` use 16-byte SSE moves in a loop rather than
 //! `rep movsb`, which is markedly faster under QEMU's TCG emulator.
@@ -20,188 +21,179 @@ global_asm!(
     .section .text
     .balign 16
     .globl memcpy
+    .type memcpy, @function
 memcpy:
-    mov rax, rcx
-    cmp r8, 64
+    mov rax, rdi
+    cmp rdx, 64
     jb 3f
 2:
-    movdqu xmm0, [rdx]
-    movdqu xmm1, [rdx + 16]
-    movdqu xmm2, [rdx + 32]
-    movdqu xmm3, [rdx + 48]
-    movdqu [rcx], xmm0
-    movdqu [rcx + 16], xmm1
-    movdqu [rcx + 32], xmm2
-    movdqu [rcx + 48], xmm3
-    add rdx, 64
-    add rcx, 64
-    sub r8, 64
-    cmp r8, 64
+    movdqu xmm0, [rsi]
+    movdqu xmm1, [rsi + 16]
+    movdqu xmm2, [rsi + 32]
+    movdqu xmm3, [rsi + 48]
+    movdqu [rdi], xmm0
+    movdqu [rdi + 16], xmm1
+    movdqu [rdi + 32], xmm2
+    movdqu [rdi + 48], xmm3
+    add rsi, 64
+    add rdi, 64
+    sub rdx, 64
+    cmp rdx, 64
     jae 2b
 3:
-    cmp r8, 8
+    cmp rdx, 8
     jb 5f
 4:
-    mov r9, [rdx]
-    mov [rcx], r9
-    add rdx, 8
-    add rcx, 8
-    sub r8, 8
-    cmp r8, 8
+    mov rcx, [rsi]
+    mov [rdi], rcx
+    add rsi, 8
+    add rdi, 8
+    sub rdx, 8
+    cmp rdx, 8
     jae 4b
 5:
-    test r8, r8
+    test rdx, rdx
     jz 7f
 6:
-    mov r9b, [rdx]
-    mov [rcx], r9b
-    inc rdx
-    inc rcx
-    dec r8
+    mov cl, [rsi]
+    mov [rdi], cl
+    inc rsi
+    inc rdi
+    dec rdx
     jnz 6b
 7:
     ret
+    .size memcpy, . - memcpy
 
     .balign 16
     .globl memset
+    .type memset, @function
 memset:
-    mov rax, rcx
-    movzx edx, dl
-    mov r9, 0x0101010101010101
-    imul rdx, r9
-    movq xmm0, rdx
+    mov rax, rdi
+    movzx ecx, sil
+    mov r8, 0x0101010101010101
+    imul rcx, r8
+    movq xmm0, rcx
     punpcklqdq xmm0, xmm0
-    cmp r8, 64
+    cmp rdx, 64
     jb 3f
 2:
-    movdqu [rcx], xmm0
-    movdqu [rcx + 16], xmm0
-    movdqu [rcx + 32], xmm0
-    movdqu [rcx + 48], xmm0
-    add rcx, 64
-    sub r8, 64
-    cmp r8, 64
+    movdqu [rdi], xmm0
+    movdqu [rdi + 16], xmm0
+    movdqu [rdi + 32], xmm0
+    movdqu [rdi + 48], xmm0
+    add rdi, 64
+    sub rdx, 64
+    cmp rdx, 64
     jae 2b
 3:
-    cmp r8, 8
+    cmp rdx, 8
     jb 5f
 4:
-    mov [rcx], rdx
-    add rcx, 8
-    sub r8, 8
-    cmp r8, 8
+    mov [rdi], rcx
+    add rdi, 8
+    sub rdx, 8
+    cmp rdx, 8
     jae 4b
 5:
-    test r8, r8
+    test rdx, rdx
     jz 7f
 6:
-    mov [rcx], dl
-    inc rcx
-    dec r8
+    mov [rdi], cl
+    inc rdi
+    dec rdx
     jnz 6b
 7:
     ret
-
-    // MSVC stack probe: rax = bytes to allocate; touch each page below rsp.
-    // Must preserve every register except r10/r11 (and flags).
-    .balign 16
-    .globl __chkstk
-__chkstk:
-    push r10
-    push r11
-    mov r10, rsp
-    add r10, 24
-    mov r11, rax
-2:
-    cmp r11, 4096
-    jb 3f
-    sub r10, 4096
-    test byte ptr [r10], 0
-    sub r11, 4096
-    jmp 2b
-3:
-    sub r10, r11
-    test byte ptr [r10], 0
-    pop r11
-    pop r10
-    ret
+    .size memset, . - memset
 
     // memmove: forward copy is safe when dst <= src or the ranges do not
     // overlap; otherwise copy backwards.
     .balign 16
     .globl memmove
+    .type memmove, @function
 memmove:
-    cmp rcx, rdx
+    cmp rdi, rsi
     jbe memcpy
-    lea r9, [rdx + r8]
-    cmp rcx, r9
+    lea rcx, [rsi + rdx]
+    cmp rdi, rcx
     jae memcpy
-    mov rax, rcx
-    add rcx, r8
-    add rdx, r8
+    mov rax, rdi
+    add rdi, rdx
+    add rsi, rdx
 2:
-    cmp r8, 8
+    cmp rdx, 8
     jb 3f
-    sub rcx, 8
+    sub rdi, 8
+    sub rsi, 8
+    mov rcx, [rsi]
+    mov [rdi], rcx
     sub rdx, 8
-    mov r9, [rdx]
-    mov [rcx], r9
-    sub r8, 8
     jmp 2b
 3:
-    test r8, r8
+    test rdx, rdx
     jz 4f
-    dec rcx
+    dec rdi
+    dec rsi
+    mov cl, [rsi]
+    mov [rdi], cl
     dec rdx
-    mov r9b, [rdx]
-    mov [rcx], r9b
-    dec r8
     jmp 3b
 4:
     ret
+    .size memmove, . - memmove
 
     .balign 16
     .globl memcmp
+    .type memcmp, @function
     .globl bcmp
+    .type bcmp, @function
 memcmp:
 bcmp:
     xor eax, eax
-    test r8, r8
+    test rdx, rdx
     jz 3f
 2:
-    movzx eax, byte ptr [rcx]
-    movzx r9d, byte ptr [rdx]
-    sub eax, r9d
+    movzx eax, byte ptr [rdi]
+    movzx ecx, byte ptr [rsi]
+    sub eax, ecx
     jnz 3f
-    inc rcx
-    inc rdx
-    dec r8
+    inc rdi
+    inc rsi
+    dec rdx
     jnz 2b
 3:
     ret
+    .size memcmp, . - memcmp
+    .size bcmp, . - bcmp
 
     .balign 16
     .globl strlen
+    .type strlen, @function
 strlen:
-    mov rax, rcx
+    mov rax, rdi
 2:
     cmp byte ptr [rax], 0
     je 3f
     inc rax
     jmp 2b
 3:
-    sub rax, rcx
+    sub rax, rdi
     ret
+    .size strlen, . - strlen
 "#
 );
 
-/// Tells the MSVC toolchain that floating point is used.
+/// The exception personality that the unwind tables of the precompiled
+/// `core` and `alloc` name. Never called: nothing unwinds.
 #[unsafe(no_mangle)]
-pub static _fltused: i32 = 0;
+pub extern "C" fn rust_eh_personality() -> ! {
+    crate::sys::process_exit(-1)
+}
 
-/// Exception personality referenced by unwind tables in the precompiled
-/// `core`/`alloc`. Veda builds with `panic = "abort"`, so it never runs.
+/// Where the landing pads of the precompiled `core` and `alloc` resume
+/// unwinding. Never reached: nothing unwinds.
 #[unsafe(no_mangle)]
-pub extern "C" fn __CxxFrameHandler3() -> ! {
+pub extern "C" fn _Unwind_Resume() -> ! {
     crate::sys::process_exit(-1)
 }

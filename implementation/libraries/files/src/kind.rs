@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What a file is, judged by its extension, and the application that opens
-//! it by default.
+//! What a file is, judged by its extension (or, for a program, which has
+//! none, by what the file system says of its contents), and the
+//! application that opens it by default.
 //!
 //! [`TYPES`] is the one association table of the system: Files, the
 //! Terminal's `open`, the desktop's icons and the pickers of Photos, Music
@@ -28,7 +29,8 @@ pub enum FileKind {
     Audio,
     /// A video.
     Video,
-    /// A Veda program (`.exe`).
+    /// A program: an executable, or a script that names its interpreter
+    /// (the file system's `executable`), whose name says nothing else.
     Program,
     Other,
 }
@@ -43,15 +45,15 @@ pub struct App {
 }
 
 /// The Text Editor.
-pub const EDITOR: App = App { id: "editor", exe: "/system/bin/editor.exe" };
+pub const EDITOR: App = App { id: "editor", exe: "/system/bin/editor" };
 /// Photos.
-pub const PHOTOS: App = App { id: "photos", exe: "/system/bin/photos.exe" };
+pub const PHOTOS: App = App { id: "photos", exe: "/system/bin/photos" };
 /// Music.
-pub const MUSIC: App = App { id: "music", exe: "/system/bin/music.exe" };
+pub const MUSIC: App = App { id: "music", exe: "/system/bin/music" };
 /// Videos.
-pub const VIDEOS: App = App { id: "videos", exe: "/system/bin/videos.exe" };
+pub const VIDEOS: App = App { id: "videos", exe: "/system/bin/videos" };
 /// Files, which opens folders.
-pub const FILES: App = App { id: "files", exe: "/system/bin/files.exe" };
+pub const FILES: App = App { id: "files", exe: "/system/bin/files" };
 
 /// A file type: its extensions (lower case), kind, description and default
 /// application.
@@ -122,7 +124,6 @@ pub const TYPES: &[FileType] = &[
     // Not `ts`, which is TypeScript as often as a transport stream.
     video(&["m2ts", "mts"], "MPEG transport stream"),
     video(&["mpg", "mpeg"], "MPEG video"),
-    other(&["exe"], FileKind::Program, "Program"),
     other(&["ttf", "otf"], FileKind::Other, "Font"),
     other(&["img", "iso"], FileKind::Other, "Disk image"),
 ];
@@ -136,9 +137,15 @@ pub fn file_type(name: &str) -> Option<&'static FileType> {
     TYPES.iter().find(|t| t.extensions.contains(&ext.as_str()))
 }
 
-/// The kind of the file `name`.
-pub fn file_kind(name: &str) -> FileKind {
-    file_type(name).map_or(FileKind::Other, |t| t.kind)
+/// The kind of the file `name`, which is a program if `program` (its
+/// contents are, as the file system's `executable` says) and its name says
+/// nothing else: a script with a known extension is a document to edit.
+pub fn file_kind(name: &str, program: bool) -> FileKind {
+    match file_type(name) {
+        Some(t) => t.kind,
+        None if program => FileKind::Program,
+        None => FileKind::Other,
+    }
 }
 
 /// The application that opens the file `name` by default, if any. (Folders
@@ -162,14 +169,18 @@ pub fn is_video(name: &str) -> bool {
     default_app(name) == Some(VIDEOS)
 }
 
-/// A short description of a file's type: "PNG image", "Folder", or for an
-/// unknown extension "XYZ file".
-pub fn kind_name(name: &str, is_dir: bool) -> String {
+/// A short description of a file's type: "PNG image", "Folder",
+/// "Program" (`program` as for [`file_kind`]), or for an unknown extension
+/// "XYZ file".
+pub fn kind_name(name: &str, is_dir: bool, program: bool) -> String {
     if is_dir {
         return "Folder".to_string();
     }
     if let Some(t) = file_type(name) {
         return t.name.to_string();
+    }
+    if program {
+        return "Program".to_string();
     }
     let ext = extension(name);
     if ext.is_empty() { "File".to_string() } else { format!("{} file", ext.to_ascii_uppercase()) }
@@ -181,18 +192,32 @@ mod tests {
 
     #[test]
     fn kinds_by_extension() {
-        assert_eq!(file_kind("notes.TXT"), FileKind::Text);
-        assert_eq!(file_kind("/home/user/primes.rs"), FileKind::Text);
-        assert_eq!(file_kind("Photo.jpeg"), FileKind::Image);
-        assert_eq!(file_kind("song.qoa"), FileKind::Audio);
-        assert_eq!(file_kind("song.mp3"), FileKind::Audio);
-        assert_eq!(file_kind("Holiday.MKV"), FileKind::Video);
-        assert_eq!(file_kind("~/Videos/clip.webm"), FileKind::Video);
-        assert_eq!(file_kind("main.ts"), FileKind::Other);
-        assert_eq!(file_kind("init.exe"), FileKind::Program);
-        assert_eq!(file_kind("Inter.otf"), FileKind::Other);
-        assert_eq!(file_kind("Makefile"), FileKind::Other);
-        assert_eq!(file_kind(".png"), FileKind::Other);
+        assert_eq!(file_kind("notes.TXT", false), FileKind::Text);
+        assert_eq!(file_kind("/home/user/primes.rs", false), FileKind::Text);
+        assert_eq!(file_kind("Photo.jpeg", false), FileKind::Image);
+        assert_eq!(file_kind("song.qoa", false), FileKind::Audio);
+        assert_eq!(file_kind("song.mp3", false), FileKind::Audio);
+        assert_eq!(file_kind("Holiday.MKV", false), FileKind::Video);
+        assert_eq!(file_kind("~/Videos/clip.webm", false), FileKind::Video);
+        assert_eq!(file_kind("main.ts", false), FileKind::Other);
+        assert_eq!(file_kind("Inter.otf", false), FileKind::Other);
+        assert_eq!(file_kind("Makefile", false), FileKind::Other);
+        assert_eq!(file_kind(".png", false), FileKind::Other);
+        // Veda has no programs of Windows'.
+        assert_eq!(file_kind("setup.exe", false), FileKind::Other);
+    }
+
+    #[test]
+    fn programs_by_their_contents() {
+        assert_eq!(file_kind("/system/bin/init", true), FileKind::Program);
+        assert_eq!(file_kind("a.out", true), FileKind::Program);
+        assert_eq!(file_kind("/system/bin/init", false), FileKind::Other);
+        // A script with an extension of its own is a document.
+        assert_eq!(file_kind("build.sh", true), FileKind::Text);
+        assert_eq!(kind_name("gcc", false, true), "Program");
+        assert_eq!(kind_name("build.sh", false, true), "Shell script");
+        assert_eq!(kind_name("gcc", false, false), "File");
+        assert_eq!(kind_name("bin", true, true), "Folder");
     }
 
     #[test]
@@ -210,24 +235,24 @@ mod tests {
         // Music cannot play these, so nothing opens them by default.
         assert_eq!(default_app("song.mp3"), None);
         assert_eq!(default_app("tune.mid"), None);
-        assert_eq!(default_app("init.exe"), None);
+        assert_eq!(default_app("/system/bin/init"), None);
         assert_eq!(default_app("archive.zip"), None);
         assert_eq!(default_app("README"), None);
-        assert_eq!(PHOTOS.exe, "/system/bin/photos.exe");
+        assert_eq!(PHOTOS.exe, "/system/bin/photos");
         assert!(is_image("a.qoi") && !is_image("a.mp3") && !is_image("png"));
         assert!(is_playable_audio("A.WAV") && !is_playable_audio("a.flac"));
         assert!(is_video("a.mp4") && is_video("a.mpeg") && !is_video("a.ogg") && !is_video("a.ts"));
-        assert_eq!(VIDEOS.exe, "/system/bin/videos.exe");
+        assert_eq!(VIDEOS.exe, "/system/bin/videos");
     }
 
     #[test]
     fn descriptions() {
-        assert_eq!(kind_name("anything", true), "Folder");
-        assert_eq!(kind_name("a.png", false), "PNG image");
-        assert_eq!(kind_name("a.JPG", false), "JPEG image");
-        assert_eq!(kind_name("a.mkv", false), "Matroska video");
-        assert_eq!(kind_name("a.zip", false), "ZIP file");
-        assert_eq!(kind_name("LICENSE", false), "File");
+        assert_eq!(kind_name("anything", true, false), "Folder");
+        assert_eq!(kind_name("a.png", false, false), "PNG image");
+        assert_eq!(kind_name("a.JPG", false, false), "JPEG image");
+        assert_eq!(kind_name("a.mkv", false, false), "Matroska video");
+        assert_eq!(kind_name("a.zip", false, false), "ZIP file");
+        assert_eq!(kind_name("LICENSE", false, false), "File");
     }
 
     #[test]

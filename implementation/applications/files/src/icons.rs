@@ -18,12 +18,13 @@ const TEXT: Color = Color::hex(0x6EA8FE);
 const PROGRAM: Color = Color::hex(0x4CC38A);
 const OTHER: Color = Color::hex(0x9A9AA8);
 
-/// The accent colour of a file type.
-pub fn kind_color(name: &str, is_dir: bool) -> Color {
+/// The accent colour of a file type (`program` as for
+/// [`vfiles::kind::file_kind`]).
+pub fn kind_color(name: &str, is_dir: bool, program: bool) -> Color {
     if is_dir {
         return FOLDER;
     }
-    match file_kind(name) {
+    match file_kind(name, program) {
         FileKind::Image => IMAGE,
         FileKind::Audio => AUDIO,
         FileKind::Video => VIDEO,
@@ -33,12 +34,13 @@ pub fn kind_color(name: &str, is_dir: bool) -> Color {
     }
 }
 
-/// The line icon of a file type.
-pub fn small_icon(name: &str, is_dir: bool) -> Icon {
+/// The line icon of a file type (`program` as for
+/// [`vfiles::kind::file_kind`]).
+pub fn small_icon(name: &str, is_dir: bool, program: bool) -> Icon {
     if is_dir {
         return Icon::Folder;
     }
-    match file_kind(name) {
+    match file_kind(name, program) {
         FileKind::Image => Icon::Image,
         FileKind::Audio => Icon::Music,
         FileKind::Video => Icon::Video,
@@ -71,8 +73,9 @@ pub fn draw_folder(ui: &mut Ui, r: Rect, opacity: f32) {
     );
 }
 
-/// Draws a document page with the file's type icon and extension badge.
-pub fn draw_page(ui: &mut Ui, r: Rect, name: &str, opacity: f32) {
+/// Draws a document page with the file's type icon and extension badge
+/// (`program` as for [`vfiles::kind::file_kind`]).
+pub fn draw_page(ui: &mut Ui, r: Rect, name: &str, program: bool, opacity: f32) {
     let s = r.w.min(r.h) as f32;
     let x = r.x as f32 + (r.w as f32 - s) / 2.0;
     let y = r.y as f32 + (r.h as f32 - s) / 2.0;
@@ -93,9 +96,9 @@ pub fn draw_page(ui: &mut Ui, r: Rect, name: &str, opacity: f32) {
     tri.line_to(px - fold + 2.0, py + fold);
     tri.close();
     ui.canvas.fill_path(&tri, Color::hex(0xB9BECC).fade(opacity), FillRule::NonZero);
-    let color = kind_color(name, false).fade(opacity);
+    let color = kind_color(name, false, program).fade(opacity);
     let icon_r = Rect::new(page.x, page.y + (s * 0.1) as i32, page.w, (s * 0.42) as i32);
-    small_icon(name, false).draw(&mut ui.canvas, icon_r, s * 0.34, color);
+    small_icon(name, false, program).draw(&mut ui.canvas, icon_r, s * 0.34, color);
     let ext = extension(name).to_ascii_uppercase();
     if !ext.is_empty() && ext.len() <= 5 {
         let size = (s * 0.17).clamp(8.0, 13.0);
@@ -123,10 +126,10 @@ pub fn draw_thumbnail(ui: &mut Ui, r: Rect, bmp: &Bitmap, opacity: f32) {
 }
 
 /// Draws the large icon of an entry.
-pub fn draw_large(ui: &mut Ui, r: Rect, name: &str, is_dir: bool, opacity: f32) {
+pub fn draw_large(ui: &mut Ui, r: Rect, name: &str, is_dir: bool, program: bool, opacity: f32) {
     if is_dir {
         draw_folder(ui, r, opacity);
     } else {
-        draw_page(ui, r, name, opacity);
+        draw_page(ui, r, name, program, opacity);
     }
 }

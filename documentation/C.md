@@ -66,11 +66,12 @@ connects it with other programs and built-in commands.
 ## How it works
 
 **Executables** are ELF64 files for the System V ABI of the processor (on
-AMD64 x86-64's), as on Linux.
-Veda's own (Rust) programs stay PE; `vrt::process::Spawn` starts either
-kind. For an ELF program it maps the segments
-(`implementation/libraries/elf` validates them and groups the pages by
-permissions), gives it an 8 MiB stack with guard pages below, and lays out
+AMD64 x86-64's), as on Linux; so are Veda's own (Rust) programs, which a
+note marks (`velf::veda`). `vrt::process::Spawn` starts both kinds. For a
+POSIX program it maps the segments (`implementation/libraries/elf`
+validates them and groups the pages by permissions), at a random address
+if the program is position-independent (it relocates itself), gives it an
+8 MiB stack with guard pages below, and lays out
 the top of the stack as Linux does: arguments, environment and the
 auxiliary vector (program headers, entry point, page size, 16 random bytes,
 the hardware capabilities). It also sends the startup message every Veda
@@ -156,7 +157,7 @@ and wakes a waiter on, once the thread has left its stack).
 * **No links.** Veda's file system has neither hard nor symbolic links;
   `link` and `symlink` fail, `readlink` finds none.
 * **No permissions.** Files have no owners or permission bits: a program
-  file (ELF, PE or `#!`) is executable, everything else is not; `chmod` and
+  file (ELF or `#!`) is executable, everything else is not; `chmod` and
   `chown` change nothing. Programs run as user 1000.
 * **Static linking only**: no shared libraries, no `dlopen`.
 * **No network sockets yet** (`socket` fails with `EAFNOSUPPORT`).
