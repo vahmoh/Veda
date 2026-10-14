@@ -99,6 +99,8 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::WRITEV => io::writev(fd0, a[1], a[2], None),
             nr::PREADV => io::readv(fd0, a[1], a[2], Some(a[3] as i64)),
             nr::PWRITEV => io::writev(fd0, a[1], a[2], Some(a[3] as i64)),
+            nr::PREADV2 => io::preadv2(fd0, a[1], a[2], a[3] as i64, a[5] as u32),
+            nr::PWRITEV2 => io::pwritev2(fd0, a[1], a[2], a[3] as i64, a[5] as u32),
             nr::FACCESSAT | nr::FACCESSAT2 => fs::faccessat(fd0, a[1], a[2] as u32),
             nr::PIPE2 => io::pipe2(a[0], a[1] as u32),
             nr::SOCKETPAIR => socket::socketpair(a[0], a[1], a[3]),

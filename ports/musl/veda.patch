@@ -19,6 +19,19 @@
  
  	if (aux[AT_UID]==aux[AT_EUID] && aux[AT_GID]==aux[AT_EGID]
  		&& !aux[AT_SECURE]) return;
+--- a/src/ldso/dl_iterate_phdr.c
++++ b/src/ldso/dl_iterate_phdr.c
+@@ -29,7 +29,9 @@
+ 			tls_phdr = phdr;
+ 	}
+ 	info.dlpi_addr  = base;
+-	info.dlpi_name  = "/proc/self/exe";
++	/* Veda has no /proc: the program is named by the path it was started
++	   from, as the loader gives it (AT_EXECFN), if it was given one. */
++	info.dlpi_name  = aux[AT_EXECFN] ? (char *)aux[AT_EXECFN] : "";
+ 	info.dlpi_phdr  = (void *)aux[AT_PHDR];
+ 	info.dlpi_phnum = aux[AT_PHNUM];
+ 	info.dlpi_adds  = 0;
 --- a/src/process/posix_spawn.c
 +++ b/src/process/posix_spawn.c
 @@ -1,219 +1,60 @@

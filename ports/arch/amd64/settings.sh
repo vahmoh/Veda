@@ -10,6 +10,12 @@ TARGET=x86_64-veda
 # The driver VM's: Linux's own, on musl.
 GUEST=x86_64-linux-musl
 
+# Veda's Rust target, which the rust port adds, and LLVM's name for the
+# architecture's code generator, the only one Rust's compiler is built
+# with.
+RUST_TARGET=x86_64-unknown-veda
+RUST_LLVM_TARGETS=X86
+
 # musl's name for the architecture (its arch/ directory).
 MUSL_ARCH=x86_64
 

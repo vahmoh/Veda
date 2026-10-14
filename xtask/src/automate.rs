@@ -48,6 +48,7 @@
 //! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
+//! requires rust-toolchain          # only with the Rust test programs (the same)
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
@@ -533,15 +534,17 @@ pub fn needs_mic(script: &str) -> bool {
     })
 }
 
-/// The part of the C toolchain a script needs (`requires c-toolchain`: the
-/// C test programs the cross compiler builds; `requires native-toolchain`:
-/// GCC in the image; `requires media`: the media decoder), as
-/// [`crate::toolchain::built`] names it.
+/// The part of the toolchain a script needs (`requires c-toolchain`: the C
+/// test programs the cross compiler builds; `requires native-toolchain`:
+/// GCC in the image; `requires media`: the media decoder; `requires
+/// rust-toolchain`: the Rust test programs), as [`crate::toolchain::built`]
+/// names it.
 pub fn needs_toolchain(script: &str) -> Option<&'static str> {
     script.lines().map(words).find_map(|w| match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["requires", "c-toolchain", ..] => Some("cross toolchain"),
         ["requires", "native-toolchain", ..] => Some("native toolchain"),
         ["requires", "media", ..] => Some("media libraries"),
+        ["requires", "rust-toolchain", ..] => Some("rust toolchain"),
         _ => None,
     })
 }

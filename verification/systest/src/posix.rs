@@ -4,7 +4,8 @@
 //! Tests of what C programs stand on: sockets, memory protection, private
 //! memory, the thread exit futex, the VFS's open-file connections, ending a
 //! job, and the C programs themselves (`/system/tests/c`, built by the cross
-//! toolchain).
+//! toolchain), and the Rust programs on its standard library, which stand
+//! on the C library too (`/system/tests/rust`, built by Rust's).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -362,8 +363,8 @@ pub fn test_vfs_open_files() -> TestResult {
     check(names.iter().any(|n| n == "urandom"), "/dev lists its devices")
 }
 
-/// Runs a C program with its output on a socket: the exit code and what it
-/// wrote.
+/// Runs a program of the C library's (in C, C++ or Rust) with its output on
+/// a socket: the exit code and what it wrote.
 pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String), String> {
     run_c_for(path, args, cwd, 120)
 }
@@ -442,6 +443,29 @@ pub fn test_c_programs() -> TestResult {
             let passed = code == 0 && out.contains("PASS: 0 failed");
             check(passed, &format!("{program} checks failed (exit code {code})"))?;
         }
+    }
+    Ok(())
+}
+
+/// Rust programs built by Rust's toolchain run, position-independent (as
+/// Rust links them for Veda) and at a fixed address: the checks of its
+/// standard library (`verification/rust/stdlib.rs`).
+pub fn test_rust_programs() -> TestResult {
+    let fs = vfs_client()?;
+    if fs.stat("/system/tests/rust/stdlib".into()).map_err(s)?.is_err() {
+        vrt::println!("rust programs: none in this image (no Rust toolchain was built)");
+        return Ok(());
+    }
+    for variant in ["", "-fixed"] {
+        let program = format!("stdlib{variant}");
+        let dir = format!("/tmp/{program}-test");
+        let _ = fs.mkdir(dir.clone());
+        let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &[], &dir)?;
+        for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
+            vrt::println!("{program}: {line}");
+        }
+        let passed = code == 0 && out.contains("PASS: 0 failed");
+        check(passed, &format!("{program} checks failed (exit code {code})"))?;
     }
     Ok(())
 }

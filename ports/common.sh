@@ -65,17 +65,23 @@ quiet() {
 	fi
 }
 
-# Unpacks port NAME into $SRC/NAME and applies its patches (`patches`);
-# with `upstream`, as its authors released it (the patches are for Veda).
+# Unpacks port NAME into $SRC/NAME (its archive's one top directory: most
+# are NAME-VERSION, Rust's is rustc-VERSION-src) and applies its patches
+# (`patches`); with `upstream`, as its authors released it (the patches
+# are for Veda).
 unpack() {
-	local name=$1 version archive dir p
-	version=$(port "$name" version)
+	local name=$1 archive dir top p
 	archive=$DOWNLOADS/$(basename "$(port "$name" url)")
 	dir=$SRC/$name
 	rm -rf "$dir" "$dir.tmp"
 	mkdir -p "$dir.tmp"
 	tar -xf "$archive" -C "$dir.tmp"
-	mv "$dir.tmp/$name-$version" "$dir"
+	top=("$dir.tmp"/*)
+	if [ ${#top[@]} -ne 1 ] || [ ! -d "${top[0]}" ]; then
+		echo "$archive: not one top directory" >&2
+		exit 1
+	fi
+	mv "${top[0]}" "$dir"
 	rmdir "$dir.tmp"
 	if [ "${2:-}" != upstream ]; then
 		while IFS= read -r p; do

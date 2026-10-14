@@ -1,0 +1,1335 @@
+--- a/compiler/rustc_target/src/spec/base/mod.rs
++++ b/compiler/rustc_target/src/spec/base/mod.rs
+@@ -34,6 +34,7 @@
+ pub(crate) mod teeos;
+ pub(crate) mod uefi_msvc;
+ pub(crate) mod unikraft_linux_musl;
++pub(crate) mod veda;
+ pub(crate) mod vxworks;
+ pub(crate) mod wasm;
+ pub(crate) mod windows_gnu;
+--- /dev/null
++++ b/compiler/rustc_target/src/spec/base/veda.rs
+@@ -0,0 +1,23 @@
++use crate::spec::{Env, Os, TargetOptions, cvs};
++
++/// Veda: its C library is musl, and every program is linked statically,
++/// position-independent by default (`-static-pie`), by the driver of the C
++/// toolchain (`<arch>-veda-gcc`), which brings Veda's start files, its C
++/// library and GCC's runtime and unwinder, as for C programs.
++pub(crate) fn opts() -> TargetOptions {
++    TargetOptions {
++        os: Os::Veda,
++        env: Env::Musl,
++        families: cvs!["unix"],
++        // There are no shared libraries.
++        dynamic_linking: false,
++        crt_static_default: true,
++        crt_static_respected: true,
++        position_independent_executables: true,
++        static_position_independent_executables: true,
++        has_thread_local: true,
++        // Backtraces rely on unwind tables, whatever the panic strategy.
++        default_uwtable: true,
++        ..Default::default()
++    }
++}
+--- a/compiler/rustc_target/src/spec/mod.rs
++++ b/compiler/rustc_target/src/spec/mod.rs
+@@ -2014,6 +2014,7 @@
+         Trusty = "trusty",
+         TvOs = "tvos",
+         Uefi = "uefi",
++        Veda = "veda",
+         VexOs = "vexos",
+         VisionOs = "visionos",
+         Vita = "vita",
+--- a/library/backtrace/src/symbolize/gimli.rs
++++ b/library/backtrace/src/symbolize/gimli.rs
+@@ -44,6 +44,7 @@
+         target_os = "illumos",
+         target_os = "aix",
+         target_os = "cygwin",
++        target_os = "veda",
+     ))] {
+         #[path = "gimli/mmap_unix.rs"]
+         mod mmap;
+@@ -231,6 +232,7 @@
+             target_os = "netbsd",
+             target_os = "nto",
+             target_os = "android",
++            target_os = "veda",
+         ),
+         not(target_env = "uclibc"),
+     ))] {
+--- a/library/backtrace/src/symbolize/gimli/libs_dl_iterate_phdr.rs
++++ b/library/backtrace/src/symbolize/gimli/libs_dl_iterate_phdr.rs
+@@ -18,9 +18,9 @@
+ pub(super) fn native_libraries() -> Vec<Library> {
+     let mut cb_data = CallbackData {
+         libs: Vec::new(),
+-        #[cfg(not(target_os = "hurd"))]
++        #[cfg(not(any(target_os = "hurd", target_os = "veda")))]
+         maps: parse_running_mmaps::parse_maps().ok(),
+-        #[cfg(target_os = "hurd")]
++        #[cfg(any(target_os = "hurd", target_os = "veda"))]
+         maps: None,
+     };
+     unsafe {
+@@ -33,7 +33,7 @@
+     maps: &Option<Vec<parse_running_mmaps::MapsEntry>>,
+     base_addr: usize,
+ ) -> OsString {
+-    #[cfg(not(target_os = "hurd"))]
++    #[cfg(not(any(target_os = "hurd", target_os = "veda")))]
+     if let Some(entries) = maps {
+         let opt_path = entries
+             .iter()
+--- a/library/std/build.rs
++++ b/library/std/build.rs
+@@ -51,6 +51,7 @@
+         || target_os == "qnx"
+         || target_os == "xous"
+         || target_os == "hurd"
++        || target_os == "veda"
+         || target_os == "uefi"
+         || target_os == "teeos"
+         || target_os == "zkvm"
+--- a/library/std/src/os/mod.rs
++++ b/library/std/src/os/mod.rs
+@@ -139,6 +139,8 @@
+ pub mod trusty;
+ #[cfg(target_os = "uefi")]
+ pub mod uefi;
++#[cfg(target_os = "veda")]
++pub mod veda;
+ #[cfg(target_os = "vita")]
+ pub mod vita;
+ #[cfg(target_os = "vxworks")]
+--- a/library/std/src/os/unix/mod.rs
++++ b/library/std/src/os/unix/mod.rs
+@@ -82,6 +82,8 @@
+     pub use crate::os::rtems::*;
+     #[cfg(target_os = "solaris")]
+     pub use crate::os::solaris::*;
++    #[cfg(target_os = "veda")]
++    pub use crate::os::veda::*;
+     #[cfg(target_os = "vita")]
+     pub use crate::os::vita::*;
+     #[cfg(target_os = "vxworks")]
+--- a/library/std/src/os/unix/net/datagram.rs
++++ b/library/std/src/os/unix/net/datagram.rs
+@@ -10,6 +10,7 @@
+     target_os = "haiku",
+     target_os = "nto",
+     target_os = "qnx",
++    target_os = "veda",
+     target_os = "cygwin"
+ ))]
+ use libc::MSG_NOSIGNAL;
+@@ -38,6 +39,7 @@
+     target_os = "haiku",
+     target_os = "nto",
+     target_os = "qnx",
++    target_os = "veda",
+     target_os = "cygwin"
+ )))]
+ const MSG_NOSIGNAL: core::ffi::c_int = 0x0;
+--- a/library/std/src/os/unix/net/stream.rs
++++ b/library/std/src/os/unix/net/stream.rs
+@@ -7,6 +7,7 @@
+         target_os = "solaris", target_os = "illumos",
+         target_os = "haiku", target_os = "nto",
+         target_os = "qnx", target_os = "cygwin",
++        target_os = "veda",
+     ) => {
+         use libc::MSG_NOSIGNAL;
+     }
+--- /dev/null
++++ b/library/std/src/os/veda/fs.rs
+@@ -0,0 +1,116 @@
++//! Veda-specific extensions to primitives in the [`std::fs`] module.
++//!
++//! [`std::fs`]: crate::fs
++
++#![stable(feature = "metadata_ext", since = "1.1.0")]
++
++use crate::fs::Metadata;
++use crate::sys::AsInner;
++
++/// OS-specific extensions to [`fs::Metadata`]: the fields of `struct stat`
++/// as Veda's C library fills them in.
++///
++/// [`fs::Metadata`]: crate::fs::Metadata
++#[stable(feature = "metadata_ext", since = "1.1.0")]
++pub trait MetadataExt {
++    /// Returns the ID of the device the file is on.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_dev(&self) -> u64;
++    /// Returns the inode number.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_ino(&self) -> u64;
++    /// Returns the file type and mode.
++    #[stable(feature = "metadata_ext", since = "1.1.0")]
++    fn st_mode(&self) -> u32;
++    /// Returns the number of hard links to the file.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_nlink(&self) -> u64;
++    /// Returns the user ID of the file's owner.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_uid(&self) -> u32;
++    /// Returns the group ID of the file's owner.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_gid(&self) -> u32;
++    /// Returns the device ID of the file, if it is a device.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_rdev(&self) -> u64;
++    /// Returns the size of the file, in bytes.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_size(&self) -> u64;
++    /// Returns the last access time, in seconds since the Unix epoch.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_atime(&self) -> i64;
++    /// Returns the nanoseconds of the last access time.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_atime_nsec(&self) -> i64;
++    /// Returns the last modification time, in seconds since the Unix epoch.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_mtime(&self) -> i64;
++    /// Returns the nanoseconds of the last modification time.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_mtime_nsec(&self) -> i64;
++    /// Returns the last status change time, in seconds since the Unix epoch.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_ctime(&self) -> i64;
++    /// Returns the nanoseconds of the last status change time.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_ctime_nsec(&self) -> i64;
++    /// Returns the preferred block size for efficient I/O.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_blksize(&self) -> u64;
++    /// Returns the number of 512-byte blocks allocated to the file.
++    #[stable(feature = "metadata_ext2", since = "1.8.0")]
++    fn st_blocks(&self) -> u64;
++}
++
++#[stable(feature = "metadata_ext", since = "1.1.0")]
++impl MetadataExt for Metadata {
++    fn st_dev(&self) -> u64 {
++        self.as_inner().as_inner().st_dev as u64
++    }
++    fn st_ino(&self) -> u64 {
++        self.as_inner().as_inner().st_ino as u64
++    }
++    fn st_mode(&self) -> u32 {
++        self.as_inner().as_inner().st_mode as u32
++    }
++    fn st_nlink(&self) -> u64 {
++        self.as_inner().as_inner().st_nlink as u64
++    }
++    fn st_uid(&self) -> u32 {
++        self.as_inner().as_inner().st_uid as u32
++    }
++    fn st_gid(&self) -> u32 {
++        self.as_inner().as_inner().st_gid as u32
++    }
++    fn st_rdev(&self) -> u64 {
++        self.as_inner().as_inner().st_rdev as u64
++    }
++    fn st_size(&self) -> u64 {
++        self.as_inner().as_inner().st_size as u64
++    }
++    fn st_atime(&self) -> i64 {
++        self.as_inner().as_inner().st_atime as i64
++    }
++    fn st_atime_nsec(&self) -> i64 {
++        self.as_inner().as_inner().st_atime_nsec as i64
++    }
++    fn st_mtime(&self) -> i64 {
++        self.as_inner().as_inner().st_mtime as i64
++    }
++    fn st_mtime_nsec(&self) -> i64 {
++        self.as_inner().as_inner().st_mtime_nsec as i64
++    }
++    fn st_ctime(&self) -> i64 {
++        self.as_inner().as_inner().st_ctime as i64
++    }
++    fn st_ctime_nsec(&self) -> i64 {
++        self.as_inner().as_inner().st_ctime_nsec as i64
++    }
++    fn st_blksize(&self) -> u64 {
++        self.as_inner().as_inner().st_blksize as u64
++    }
++    fn st_blocks(&self) -> u64 {
++        self.as_inner().as_inner().st_blocks as u64
++    }
++}
+--- /dev/null
++++ b/library/std/src/os/veda/mod.rs
+@@ -0,0 +1,10 @@
++//! Veda-specific definitions.
++//!
++//! Veda's C library is musl, whose interface is Linux's; what the standard
++//! library knows of files, processes and threads comes from it.
++
++#![stable(feature = "raw_ext", since = "1.1.0")]
++#![forbid(unsafe_op_in_unsafe_fn)]
++
++pub mod fs;
++pub(crate) mod raw;
+--- /dev/null
++++ b/library/std/src/os/veda/raw.rs
+@@ -0,0 +1,4 @@
++//! Veda-specific raw type definitions: its C library's.
++
++#[stable(feature = "raw_ext", since = "1.1.0")]
++pub use libc::{blkcnt_t, blksize_t, dev_t, ino_t, mode_t, nlink_t, off_t, pthread_t, time_t};
+--- a/library/std/src/sys/args/unix.rs
++++ b/library/std/src/sys/args/unix.rs
+@@ -85,6 +85,7 @@
+     target_os = "hurd",
+     target_os = "rtems",
+     target_os = "nuttx",
++    target_os = "veda",
+ ))]
+ mod imp {
+     use crate::ffi::c_char;
+--- a/library/std/src/sys/env_consts.rs
++++ b/library/std/src/sys/env_consts.rs
+@@ -334,6 +334,17 @@
+     pub const EXE_EXTENSION: &str = "efi";
+ }
+ 
++#[cfg(target_os = "veda")]
++pub mod os {
++    pub const FAMILY: &str = "unix";
++    pub const OS: &str = "veda";
++    pub const DLL_PREFIX: &str = "lib";
++    pub const DLL_SUFFIX: &str = ".so";
++    pub const DLL_EXTENSION: &str = "so";
++    pub const EXE_SUFFIX: &str = "";
++    pub const EXE_EXTENSION: &str = "";
++}
++
+ #[cfg(target_os = "vexos")]
+ pub mod os {
+     pub const FAMILY: &str = "";
+--- a/library/std/src/sys/fd/unix.rs
++++ b/library/std/src/sys/fd/unix.rs
+@@ -103,6 +103,7 @@
+     target_os = "linux",
+     target_os = "nto",
+     target_os = "qnx",
++    target_os = "veda",
+ ))]
+ const fn max_iov() -> usize {
+     libc::UIO_MAXIOV as usize
+@@ -124,6 +125,7 @@
+     target_os = "vita",
+     target_vendor = "apple",
+     target_os = "cygwin",
++    target_os = "veda",
+ )))]
+ const fn max_iov() -> usize {
+     16 // The minimum value required by POSIX.
+@@ -248,6 +250,7 @@
+         target_os = "netbsd",
+         target_os = "openbsd", // OpenBSD 2.7
+         all(target_os = "macos", target_arch = "aarch64"),
++        target_os = "veda",
+     ))]
+     pub fn read_vectored_at(&self, bufs: &mut [IoSliceMut<'_>], offset: u64) -> io::Result<usize> {
+         let ret = cvt(unsafe {
+@@ -274,6 +277,7 @@
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_vendor = "apple",
++        target_os = "veda",
+     )))]
+     pub fn read_vectored_at(&self, bufs: &mut [IoSliceMut<'_>], offset: u64) -> io::Result<usize> {
+         io::default_read_vectored(|b| self.read_at(b, offset), bufs)
+@@ -444,6 +448,7 @@
+         target_os = "netbsd",
+         target_os = "openbsd", // OpenBSD 2.7
+         all(target_os = "macos", target_arch = "aarch64"),
++        target_os = "veda",
+     ))]
+     pub fn write_vectored_at(&self, bufs: &[IoSlice<'_>], offset: u64) -> io::Result<usize> {
+         let ret = cvt(unsafe {
+@@ -470,6 +475,7 @@
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_vendor = "apple",
++        target_os = "veda",
+     )))]
+     pub fn write_vectored_at(&self, bufs: &[IoSlice<'_>], offset: u64) -> io::Result<usize> {
+         io::default_write_vectored(|b| self.write_at(b, offset), bufs)
+--- a/library/std/src/sys/fs/unix.rs
++++ b/library/std/src/sys/fs/unix.rs
+@@ -15,9 +15,10 @@
+     target_os = "hurd",
+     target_os = "illumos",
+     target_vendor = "apple",
++    target_os = "veda",
+ ))]
+ use libc::dirfd;
+-#[cfg(any(target_os = "fuchsia", target_os = "illumos", target_vendor = "apple"))]
++#[cfg(any(target_os = "fuchsia", target_os = "illumos", target_vendor = "apple", target_os = "veda"))]
+ use libc::fstatat as fstatat64;
+ #[cfg(any(all(target_os = "linux", not(target_env = "musl")), target_os = "hurd"))]
+ use libc::fstatat64;
+@@ -1022,6 +1023,7 @@
+             target_os = "hurd",
+             target_os = "illumos",
+             target_vendor = "apple",
++            target_os = "veda",
+         ),
+         not(miri) // no dirfd on Miri
+     ))]
+@@ -1053,6 +1055,7 @@
+             target_os = "hurd",
+             target_os = "illumos",
+             target_vendor = "apple",
++            target_os = "veda",
+         )),
+         miri // no dirfd on Miri
+     ))]
+@@ -1295,6 +1298,7 @@
+             target_os = "qnx",
+             target_os = "hurd",
+             target_os = "l4re",
++            target_os = "veda",
+         ))]
+         unsafe fn os_datasync(fd: c_int) -> c_int {
+             libc::fdatasync(fd)
+@@ -1312,6 +1316,7 @@
+             target_os = "hurd",
+             target_os = "l4re",
+             target_vendor = "apple",
++            target_os = "veda",
+         )))]
+         unsafe fn os_datasync(fd: c_int) -> c_int {
+             libc::fsync(fd)
+--- a/library/std/src/sys/io/error/unix.rs
++++ b/library/std/src/sys/io/error/unix.rs
+@@ -18,6 +18,7 @@
+             target_os = "l4re",
+             target_os = "hurd",
+             target_os = "teeos",
++            target_os = "veda",
+         ),
+         link_name = "__errno_location"
+     )]
+--- a/library/std/src/sys/net/connection/socket/mod.rs
++++ b/library/std/src/sys/net/connection/socket/mod.rs
+@@ -73,6 +73,7 @@
+         target_os = "haiku",
+         target_os = "nto", target_os = "qnx",
+         target_os = "cygwin",
++        target_os = "veda",
+     ) => {
+         use libc::MSG_NOSIGNAL;
+     }
+--- a/library/std/src/sys/net/connection/socket/unix.rs
++++ b/library/std/src/sys/net/connection/socket/unix.rs
+@@ -78,6 +78,7 @@
+                 target_os = "nto",
+                 target_os = "qnx",
+                 target_os = "solaris",
++                target_os = "veda",
+             ) => {
+                 // On platforms that support it we pass the SOCK_CLOEXEC
+                 // flag to atomically create the socket and set it as
+@@ -126,6 +127,7 @@
+                     target_os = "cygwin",
+                     target_os = "nto",
+                     target_os = "qnx",
++                    target_os = "veda",
+                 ) => {
+                     // Like above, set cloexec atomically
+                     cvt(libc::socketpair(fam, ty | libc::SOCK_CLOEXEC, 0, fds.as_mut_ptr()))?;
+@@ -256,6 +258,7 @@
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+                 target_os = "cygwin",
++                target_os = "veda",
+             ) => {
+                 unsafe {
+                     let fd = cvt_r(|| libc::accept4(self.as_raw_fd(), storage, len, libc::SOCK_CLOEXEC))?;
+--- a/library/std/src/sys/pal/unix/sync/mod.rs
++++ b/library/std/src/sys/pal/unix/sync/mod.rs
+@@ -6,6 +6,7 @@
+     target_os = "openbsd",
+     target_os = "dragonfly",
+     target_os = "fuchsia",
++    target_os = "veda",
+ )))]
+ #![forbid(unsafe_op_in_unsafe_fn)]
+ 
+--- a/library/std/src/sys/paths/unix.rs
++++ b/library/std/src/sys/paths/unix.rs
+@@ -370,6 +370,19 @@
+     Err(io::const_error!(io::ErrorKind::Unsupported, "not yet implemented!"))
+ }
+ 
++#[cfg(target_os = "veda")]
++pub fn current_exe() -> io::Result<PathBuf> {
++    // The loader gives a program the path of its file (`AT_EXECFN`), which
++    // is empty when whoever started it did not say.
++    let execfn = unsafe { libc::getauxval(libc::AT_EXECFN) } as usize;
++    let path = ptr::with_exposed_provenance::<c_char>(execfn);
++    let bytes = if path.is_null() { &[][..] } else { unsafe { CStr::from_ptr(path) }.to_bytes() };
++    if bytes.is_empty() {
++        return Err(io::const_error!(io::ErrorKind::Uncategorized, "the program's path is unknown"));
++    }
++    Ok(PathBuf::from(OsStr::from_bytes(bytes)))
++}
++
+ #[cfg(target_os = "vxworks")]
+ pub fn current_exe() -> io::Result<PathBuf> {
+     #[cfg(test)]
+--- a/library/std/src/sys/pipe/unix.rs
++++ b/library/std/src/sys/pipe/unix.rs
+@@ -22,6 +22,7 @@
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "cygwin",
++            target_os = "veda",
+             target_os = "redox"
+         ) => {
+             unsafe {
+--- a/library/std/src/sys/process/unix/unix.rs
++++ b/library/std/src/sys/process/unix/unix.rs
+@@ -432,6 +432,7 @@
+         target_os = "qnx",
+         target_vendor = "apple",
+         target_os = "cygwin",
++        target_os = "veda",
+     )))]
+     fn posix_spawn(
+         &mut self,
+@@ -452,6 +453,7 @@
+         target_os = "qnx",
+         target_vendor = "apple",
+         target_os = "cygwin",
++        target_os = "veda",
+     ))]
+     fn posix_spawn(
+         &mut self,
+@@ -603,7 +605,11 @@
+         /// Some platforms can set a new working directory for a spawned process in the
+         /// `posix_spawn` path. This function looks up the function pointer for adding
+         /// such an action to a `posix_spawn_file_actions_t` struct.
+-        #[cfg(not(any(all(target_os = "linux", target_env = "musl"), target_os = "cygwin")))]
++        #[cfg(not(any(
++            all(target_os = "linux", target_env = "musl"),
++            target_os = "cygwin",
++            target_os = "veda",
++        )))]
+         fn get_posix_spawn_addchdir() -> Option<PosixSpawnAddChdirFn> {
+             use crate::sys::weak::weak;
+ 
+@@ -639,7 +645,11 @@
+         /// of the symbol at compile time or know about it upfront.
+         ///
+         /// Cygwin doesn't support weak symbol, so just link it.
+-        #[cfg(any(all(target_os = "linux", target_env = "musl"), target_os = "cygwin"))]
++        #[cfg(any(
++            all(target_os = "linux", target_env = "musl"),
++            target_os = "cygwin",
++            target_os = "veda",
++        ))]
+         fn get_posix_spawn_addchdir() -> Option<PosixSpawnAddChdirFn> {
+             // Our minimum required musl supports this function, so we can just use it.
+             Some(libc::posix_spawn_file_actions_addchdir_np)
+--- a/library/std/src/sys/random/mod.rs
++++ b/library/std/src/sys/random/mod.rs
+@@ -44,7 +44,7 @@
+         mod hermit;
+         pub use hermit::fill_bytes;
+     }
+-    any(target_os = "horizon", target_os = "cygwin") => {
++    any(target_os = "horizon", target_os = "cygwin", target_os = "veda") => {
+         // FIXME(horizon): add arc4random_buf to shim-3ds
+         mod getrandom;
+         pub use getrandom::fill_bytes;
+--- a/library/std/src/sys/sync/condvar/mod.rs
++++ b/library/std/src/sys/sync/condvar/mod.rs
+@@ -11,6 +11,7 @@
+         all(target_family = "wasm", target_feature = "atomics"),
+         target_os = "hermit",
+         all(target_os = "wasi", target_env = "p3"),
++        target_os = "veda",
+     ) => {
+         mod futex;
+         pub use futex::Condvar;
+--- a/library/std/src/sys/sync/futex/mod.rs
++++ b/library/std/src/sys/sync/futex/mod.rs
+@@ -7,6 +7,7 @@
+         target_os = "openbsd",
+         target_os = "dragonfly",
+         target_os = "fuchsia",
++        target_os = "veda",
+     ) => {
+         mod unix;
+         pub use unix::*;
+--- a/library/std/src/sys/sync/futex/unix.rs
++++ b/library/std/src/sys/sync/futex/unix.rs
+@@ -16,7 +16,7 @@
+ /// Returns directly if the futex doesn't hold the expected value.
+ ///
+ /// Returns false on timeout, and true in all other cases.
+-#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
++#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "veda"))]
+ pub fn futex_wait(futex: &Atomic<u32>, expected: u32, timeout: Option<Duration>) -> bool {
+     use crate::ptr::null;
+     use crate::sync::atomic::Ordering::Relaxed;
+@@ -57,7 +57,7 @@
+                         umtx_timeout_ptr as *mut _,
+                     )
+                 }
+-                any(target_os = "linux", target_os = "android") => {
++                any(target_os = "linux", target_os = "android", target_os = "veda") => {
+                     // Use FUTEX_WAIT_BITSET rather than FUTEX_WAIT to be able to give an
+                     // absolute time rather than a relative time.
+                     libc::syscall(
+@@ -90,7 +90,7 @@
+ /// or false if no thread was waiting on this futex.
+ ///
+ /// On some platforms, this always returns false.
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++#[cfg(any(target_os = "linux", target_os = "android", target_os = "veda"))]
+ pub fn futex_wake(futex: &Atomic<u32>) -> bool {
+     let ptr = futex as *const Atomic<u32>;
+     let op = libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG;
+@@ -98,7 +98,7 @@
+ }
+ 
+ /// Wakes up all threads that are waiting on `futex_wait` on this futex.
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++#[cfg(any(target_os = "linux", target_os = "android", target_os = "veda"))]
+ pub fn futex_wake_all(futex: &Atomic<u32>) {
+     let ptr = futex as *const Atomic<u32>;
+     let op = libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG;
+--- a/library/std/src/sys/sync/mutex/mod.rs
++++ b/library/std/src/sys/sync/mutex/mod.rs
+@@ -10,6 +10,7 @@
+         all(target_family = "wasm", target_feature = "atomics"),
+         target_os = "hermit",
+         all(target_os = "wasi", target_env = "p3"),
++        target_os = "veda",
+     ) => {
+         mod futex;
+         pub use futex::Mutex;
+--- a/library/std/src/sys/sync/once/mod.rs
++++ b/library/std/src/sys/sync/once/mod.rs
+@@ -20,6 +20,7 @@
+         target_os = "fuchsia",
+         target_os = "hermit",
+         all(target_os = "wasi", target_env = "p3"),
++        target_os = "veda",
+     ) => {
+         mod futex;
+         pub use futex::{Once, OnceState};
+--- a/library/std/src/sys/sync/rwlock/mod.rs
++++ b/library/std/src/sys/sync/rwlock/mod.rs
+@@ -11,6 +11,7 @@
+         target_os = "hermit",
+         target_os = "motor",
+         all(target_os = "wasi", target_env = "p3"),
++        target_os = "veda",
+     ) => {
+         mod futex;
+         pub use futex::RwLock;
+--- a/library/std/src/sys/sync/thread_parking/mod.rs
++++ b/library/std/src/sys/sync/thread_parking/mod.rs
+@@ -11,6 +11,7 @@
+         target_os = "motor",
+         target_os = "hermit",
+         all(target_os = "wasi", target_env = "p3"),
++        target_os = "veda",
+     ) => {
+         mod futex;
+         pub use futex::Parker;
+--- a/library/std/src/sys/thread/mod.rs
++++ b/library/std/src/sys/thread/mod.rs
+@@ -59,6 +59,7 @@
+             target_os = "hurd",
+             target_os = "aix",
+             target_os = "wasi",
++            target_os = "veda",
+         )))]
+         pub use unix::set_name;
+         #[cfg(any(
+@@ -73,6 +74,7 @@
+             target_os = "vxworks",
+             target_os = "wasi",
+             target_vendor = "apple",
++            target_os = "veda",
+         ))]
+         pub use unix::sleep_until;
+         #[expect(dead_code)]
+@@ -85,6 +87,7 @@
+             target_os = "hurd",
+             target_os = "aix",
+             target_os = "wasi",
++            target_os = "veda",
+         ))]
+         pub use unsupported::set_name;
+     }
+@@ -134,6 +137,7 @@
+     target_os = "wasi",
+     target_vendor = "apple",
+     target_os = "motor",
++    target_os = "veda",
+     target_os = "vexos"
+ )))]
+ pub fn sleep_until(deadline: crate::time::Instant) {
+--- a/library/std/src/sys/thread/unix.rs
++++ b/library/std/src/sys/thread/unix.rs
+@@ -6,6 +6,7 @@
+     target_os = "hurd",
+     target_os = "aix",
+     target_os = "wasi",
++    target_os = "veda",
+ )))]
+ use crate::ffi::CStr;
+ use crate::mem::{self, DropGuard, ManuallyDrop};
+@@ -162,6 +163,7 @@
+             target_os = "cygwin",
+             target_os = "redox",
+             target_os = "wasi",
++            target_os = "veda",
+         ) => {
+             #[allow(unused_assignments)]
+             #[allow(unused_mut)]
+@@ -549,6 +551,7 @@
+             target_os = "hurd",
+             target_os = "vxworks",
+             target_os = "wasi",
++            target_os = "veda",
+         ) => {
+             // POSIX specifies that `nanosleep` uses CLOCK_REALTIME, but is not
+             // affected by clock adjustments. The timing of `sleep` however should
+@@ -646,6 +649,7 @@
+     target_os = "hurd",
+     target_os = "vxworks",
+     target_os = "wasi",
++    target_os = "veda",
+ ))]
+ pub fn sleep_until(deadline: crate::time::Instant) {
+     use crate::time::Instant;
+--- a/library/unwind/src/lib.rs
++++ b/library/unwind/src/lib.rs
+@@ -63,7 +63,7 @@
+ #[link(name = "unwind")]
+ unsafe extern "C" {}
+ 
+-#[cfg(all(target_env = "musl", not(target_abi = "pauthtest")))]
++#[cfg(all(target_env = "musl", not(target_abi = "pauthtest"), not(target_os = "veda")))]
+ cfg_select! {
+     all(feature = "llvm-libunwind", feature = "system-llvm-libunwind") => {
+         compile_error!("`llvm-libunwind` and `system-llvm-libunwind` cannot be enabled at the same time");
+@@ -216,6 +216,12 @@
+ #[link(name = "gcc_s")]
+ unsafe extern "C" {}
+ 
++// Veda's programs are static, and unwind with GCC's unwinder, as its C++
++// programs do: it is in libgcc, as GCC is built for static linking alone.
++#[cfg(target_os = "veda")]
++#[link(name = "gcc", kind = "static", modifiers = "-bundle")]
++unsafe extern "C" {}
++
+ #[cfg(all(target_os = "wasi", panic = "unwind"))]
+ #[link(name = "unwind")]
+ unsafe extern "C" {}
+--- a/src/librustdoc/clean/cfg.rs
++++ b/src/librustdoc/clean/cfg.rs
+@@ -653,6 +653,7 @@
+         Trusty => "Trusty",
+         TvOs => "tvOS",
+         Uefi => "UEFI",
++        Veda => "Veda",
+         VexOs => "VEXos",
+         VisionOs => "visionOS",
+         Vita => "Play Station Vita",
+--- a/vendor/libc-0.2.189/build.rs
++++ b/vendor/libc-0.2.189/build.rs
+@@ -152,10 +152,12 @@
+     let musl = target_env == "musl" || target_env == "ohos";
+ 
+     // loongarch64, hexagon, ohos and pauthtest only exist with recent musl
++    // (and Veda's C library is a recent musl)
+     if target_arch == "loongarch64"
+         || target_arch == "hexagon"
+         || target_env == "ohos"
+         || target_abi == "pauthtest"
++        || target_os == "veda"
+     {
+         musl_v1_2_3 = true;
+     }
+--- a/vendor/libc-0.2.189/src/macros.rs
++++ b/vendor/libc-0.2.189/src/macros.rs
+@@ -108,7 +108,12 @@
+             };
+ 
+             #[allow(unused_imports)]
+-            #[cfg(any(target_os = "linux", target_os = "android", target_os = "l4re"))]
++            #[cfg(any(
++                target_os = "linux",
++                target_os = "veda",
++                target_os = "android",
++                target_os = "l4re"
++            ))]
+             pub(crate) use crate::types::u32_cast_ioctl;
+             #[allow(unused_imports)]
+             pub(crate) use crate::types::{
+--- a/vendor/libc-0.2.189/src/new/common/linux_like/mod.rs
++++ b/vendor/libc-0.2.189/src/new/common/linux_like/mod.rs
+@@ -4,6 +4,7 @@
+     target_os = "android",
+     target_os = "emscripten",
+     target_os = "l4re",
++    target_os = "veda",
+     target_os = "linux"
+ ))]
+ pub(crate) mod pthread;
+--- a/vendor/libc-0.2.189/src/new/common/linux_like/pthread.rs
++++ b/vendor/libc-0.2.189/src/new/common/linux_like/pthread.rs
+@@ -1,7 +1,7 @@
+ use crate::prelude::*;
+ 
+ extern "C" {
+-    #[cfg(any(target_os = "linux", target_os = "l4re"))]
++    #[cfg(any(target_os = "linux", target_os = "veda", target_os = "l4re"))]
+     pub fn pthread_getaffinity_np(
+         thread: crate::pthread_t,
+         cpusetsize: size_t,
+@@ -10,16 +10,16 @@
+ 
+     pub fn pthread_getattr_np(native: crate::pthread_t, attr: *mut crate::pthread_attr_t) -> c_int;
+ 
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     pub fn pthread_getname_np(thread: crate::pthread_t, name: *mut c_char, len: size_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "linux", target_os = "l4re"))]
++    #[cfg(any(target_os = "linux", target_os = "veda", target_os = "l4re"))]
+     pub fn pthread_setaffinity_np(
+         thread: crate::pthread_t,
+         cpusetsize: size_t,
+         cpuset: *const crate::cpu_set_t,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_setname_np(thread: crate::pthread_t, name: *const c_char) -> c_int;
+ }
+--- a/vendor/libc-0.2.189/src/new/common/mod.rs
++++ b/vendor/libc-0.2.189/src/new/common/mod.rs
+@@ -23,6 +23,7 @@
+     target_os = "emscripten",
+     target_os = "l4re",
+     target_os = "linux",
++    target_os = "veda",
+ ))]
+ pub(crate) mod linux_like;
+ 
+--- a/vendor/libc-0.2.189/src/new/common/posix/mod.rs
++++ b/vendor/libc-0.2.189/src/new/common/posix/mod.rs
+@@ -8,6 +8,7 @@
+     target_os = "emscripten",
+     target_os = "l4re",
+     target_os = "linux",
++    target_os = "veda",
+     target_os = "qurt",
+     target_vendor = "apple",
+ ))]
+--- a/vendor/libc-0.2.189/src/new/common/posix/pthread.rs
++++ b/vendor/libc-0.2.189/src/new/common/posix/pthread.rs
+@@ -5,14 +5,14 @@
+ use crate::prelude::*;
+ 
+ extern "C" {
+-    #[cfg(any(target_os = "android", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_atfork(
+         prepare: Option<unsafe extern "C" fn()>,
+         parent: Option<unsafe extern "C" fn()>,
+         child: Option<unsafe extern "C" fn()>,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_attr_getguardsize(
+         attr: *const crate::pthread_attr_t,
+         guardsize: *mut size_t,
+@@ -22,6 +22,7 @@
+         target_os = "android",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+         target_vendor = "apple",
+     ))]
+     pub fn pthread_attr_getinheritsched(
+@@ -29,13 +30,23 @@
+         inheritsched: *mut c_int,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "l4re", target_os = "linux", target_vendor = "apple"))]
++    #[cfg(any(
++        target_os = "l4re",
++        target_os = "linux",
++        target_os = "veda",
++        target_vendor = "apple"
++    ))]
+     pub fn pthread_attr_getschedparam(
+         attr: *const crate::pthread_attr_t,
+         param: *mut crate::sched_param,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "l4re", target_os = "linux", target_vendor = "apple"))]
++    #[cfg(any(
++        target_os = "l4re",
++        target_os = "linux",
++        target_os = "veda",
++        target_vendor = "apple"
++    ))]
+     pub fn pthread_attr_getschedpolicy(
+         attr: *const crate::pthread_attr_t,
+         policy: *mut c_int,
+@@ -45,6 +56,7 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re"
+     ))]
+     pub fn pthread_attr_getstack(
+@@ -53,13 +65,14 @@
+         stacksize: *mut size_t,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_attr_setguardsize(attr: *mut crate::pthread_attr_t, guardsize: size_t) -> c_int;
+ 
+     #[cfg(any(
+         target_os = "android",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+         target_vendor = "apple"
+     ))]
+     pub fn pthread_attr_setinheritsched(
+@@ -67,19 +80,30 @@
+         inheritsched: c_int,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "l4re", target_os = "linux", target_vendor = "apple"))]
++    #[cfg(any(
++        target_os = "l4re",
++        target_os = "linux",
++        target_os = "veda",
++        target_vendor = "apple"
++    ))]
+     pub fn pthread_attr_setschedparam(
+         attr: *mut crate::pthread_attr_t,
+         param: *const crate::sched_param,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "l4re", target_os = "linux", target_vendor = "apple"))]
++    #[cfg(any(
++        target_os = "l4re",
++        target_os = "linux",
++        target_os = "veda",
++        target_vendor = "apple"
++    ))]
+     pub fn pthread_attr_setschedpolicy(attr: *mut crate::pthread_attr_t, policy: c_int) -> c_int;
+ 
+     #[cfg(any(
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re"
+     ))]
+     pub fn pthread_attr_setstack(
+@@ -88,41 +112,49 @@
+         stacksize: size_t,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrier_destroy(barrier: *mut crate::pthread_barrier_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrier_init(
+         barrier: *mut crate::pthread_barrier_t,
+         attr: *const crate::pthread_barrierattr_t,
+         count: c_uint,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrier_wait(barrier: *mut crate::pthread_barrier_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrierattr_destroy(attr: *mut crate::pthread_barrierattr_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrierattr_getpshared(
+         attr: *const crate::pthread_barrierattr_t,
+         shared: *mut c_int,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrierattr_init(attr: *mut crate::pthread_barrierattr_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_barrierattr_setpshared(
+         attr: *mut crate::pthread_barrierattr_t,
+         shared: c_int,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "l4re", all(target_os = "linux", not(target_env = "ohos"))))]
++    #[cfg(any(
++        target_os = "l4re",
++        all(any(target_os = "linux", target_os = "veda"), not(target_env = "ohos"))
++    ))]
+     pub fn pthread_cancel(thread: crate::pthread_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "emscripten", target_os = "linux",))]
++    #[cfg(any(
++        target_os = "android",
++        target_os = "emscripten",
++        target_os = "linux",
++        target_os = "veda"
++    ))]
+     pub fn pthread_condattr_getclock(
+         attr: *const crate::pthread_condattr_t,
+         clock_id: *mut crate::clockid_t,
+@@ -132,6 +164,7 @@
+         target_os = "android",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+         target_vendor = "apple",
+     ))]
+     pub fn pthread_condattr_getpshared(
+@@ -139,7 +172,12 @@
+         pshared: *mut c_int,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "emscripten", target_os = "linux",))]
++    #[cfg(any(
++        target_os = "android",
++        target_os = "emscripten",
++        target_os = "linux",
++        target_os = "veda"
++    ))]
+     pub fn pthread_condattr_setclock(
+         attr: *mut crate::pthread_condattr_t,
+         clock_id: crate::clockid_t,
+@@ -149,6 +187,7 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re",
+         target_vendor = "apple",
+     ))]
+@@ -162,6 +201,7 @@
+         target_os = "emscripten",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+     ))]
+     pub fn pthread_create(
+         native: *mut crate::pthread_t,
+@@ -170,13 +210,14 @@
+         value: *mut c_void,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_getcpuclockid(thread: crate::pthread_t, clk_id: *mut crate::clockid_t) -> c_int;
+ 
+     #[cfg(any(
+         target_os = "android",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+         target_vendor = "apple",
+     ))]
+     pub fn pthread_getschedparam(
+@@ -191,14 +232,15 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "l4re",
++        target_os = "veda",
+         target_os = "linux"
+     ))]
+     pub fn pthread_kill(thread: crate::pthread_t, sig: c_int) -> c_int;
+ 
+-    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
++    #[cfg(all(any(target_os = "linux", target_os = "veda"), not(target_env = "ohos")))]
+     pub fn pthread_mutex_consistent(mutex: *mut crate::pthread_mutex_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     #[cfg_attr(gnu_time_bits64, link_name = "__pthread_mutex_timedlock64")]
+     #[cfg_attr(musl_redir_time64, link_name = "__pthread_mutex_timedlock_time64")]
+     pub fn pthread_mutex_timedlock(
+@@ -206,7 +248,7 @@
+         abstime: *const crate::timespec,
+     ) -> c_int;
+ 
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     pub fn pthread_mutexattr_getprotocol(
+         attr: *const crate::pthread_mutexattr_t,
+         protocol: *mut c_int,
+@@ -216,6 +258,7 @@
+         target_os = "android",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+         target_vendor = "apple",
+     ))]
+     pub fn pthread_mutexattr_getpshared(
+@@ -223,13 +266,13 @@
+         pshared: *mut c_int,
+     ) -> c_int;
+ 
+-    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
++    #[cfg(all(any(target_os = "linux", target_os = "veda"), not(target_env = "ohos")))]
+     pub fn pthread_mutexattr_getrobust(
+         attr: *const crate::pthread_mutexattr_t,
+         robustness: *mut c_int,
+     ) -> c_int;
+ 
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     pub fn pthread_mutexattr_setprotocol(
+         attr: *mut crate::pthread_mutexattr_t,
+         protocol: c_int,
+@@ -239,6 +282,7 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re",
+         target_vendor = "apple",
+     ))]
+@@ -247,7 +291,7 @@
+         pshared: c_int,
+     ) -> c_int;
+ 
+-    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
++    #[cfg(all(any(target_os = "linux", target_os = "veda"), not(target_env = "ohos")))]
+     pub fn pthread_mutexattr_setrobust(
+         attr: *mut crate::pthread_mutexattr_t,
+         robustness: c_int,
+@@ -257,6 +301,7 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re",
+         target_vendor = "apple",
+     ))]
+@@ -269,6 +314,7 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re",
+         target_vendor = "apple",
+     ))]
+@@ -278,7 +324,7 @@
+     ) -> c_int;
+ 
+     // FIXME(1.0): These shoul be combined to the version that takes an optional unsafe function.
+-    #[cfg(any(target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_once(control: *mut crate::pthread_once_t, routine: extern "C" fn()) -> c_int;
+     #[cfg(target_vendor = "apple")]
+     pub fn pthread_once(
+@@ -290,6 +336,7 @@
+         target_os = "android",
+         target_os = "l4re",
+         target_os = "linux",
++        target_os = "veda",
+         target_vendor = "apple",
+     ))]
+     pub fn pthread_setschedparam(
+@@ -298,7 +345,7 @@
+         param: *const crate::sched_param,
+     ) -> c_int;
+ 
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     pub fn pthread_setschedprio(native: crate::pthread_t, priority: c_int) -> c_int;
+ 
+     // FIXME(reorg): In recent POSIX versions, this is a signal.h function and not required
+@@ -307,6 +354,7 @@
+         target_os = "android",
+         target_os = "emscripten",
+         target_os = "l4re",
++        target_os = "veda",
+         target_os = "linux"
+     ))]
+     pub fn pthread_sigmask(
+@@ -315,18 +363,18 @@
+         oldset: *mut crate::sigset_t,
+     ) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_spin_destroy(lock: *mut crate::pthread_spinlock_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_spin_init(lock: *mut crate::pthread_spinlock_t, pshared: c_int) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_spin_lock(lock: *mut crate::pthread_spinlock_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_spin_trylock(lock: *mut crate::pthread_spinlock_t) -> c_int;
+ 
+-    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "l4re", target_os = "linux", target_os = "veda"))]
+     pub fn pthread_spin_unlock(lock: *mut crate::pthread_spinlock_t) -> c_int;
+ }
+--- a/vendor/libc-0.2.189/src/new/mod.rs
++++ b/vendor/libc-0.2.189/src/new/mod.rs
+@@ -87,7 +87,7 @@
+     } else if #[cfg(target_os = "l4re")] {
+         mod l4re;
+         // pub(crate) use l4re::*;
+-    } else if #[cfg(target_os = "linux")] {
++    } else if #[cfg(any(target_os = "linux", target_os = "veda"))] {
+         mod linux_uapi;
+         pub(crate) use linux_uapi::*;
+     } else if #[cfg(target_os = "netbsd")] {
+@@ -176,7 +176,7 @@
+         use bionic_libc::kernel_uapi::linux;
+         pub use linux::types::*;
+         pub use sys::socket::*;
+-    } else if #[cfg(target_os = "linux")] {
++    } else if #[cfg(any(target_os = "linux", target_os = "veda"))] {
+         pub use linux::can::bcm::*;
+         pub use linux::can::error::*;
+         pub use linux::can::j1939::*;
+@@ -249,6 +249,7 @@
+             target_os = "android",
+             target_os = "emscripten",
+             target_os = "l4re",
++            target_os = "veda",
+             target_os = "linux"
+         ))]
+         pub use pthread::*;
+--- a/vendor/libc-0.2.189/src/types.rs
++++ b/vendor/libc-0.2.189/src/types.rs
+@@ -108,7 +108,7 @@
+ /// Used to avoid `overflowing_literals` when the value is in-range for the unsigned number but
+ /// out-of-range for signed.
+ #[allow(unused)]
+-#[cfg(any(target_os = "linux", target_os = "android", target_os = "l4re"))]
++#[cfg(any(target_os = "linux", target_os = "veda", target_os = "android", target_os = "l4re"))]
+ pub(crate) const fn u32_cast_ioctl(x: u32) -> crate::Ioctl {
+     assert!(size_of::<u32>() <= size_of::<crate::Ioctl>()); // Should always be true
+     x as crate::Ioctl
+--- a/vendor/libc-0.2.189/src/unix/linux_like/mod.rs
++++ b/vendor/libc-0.2.189/src/unix/linux_like/mod.rs
+@@ -287,23 +287,23 @@
+                 pub stx_dio_offset_align: crate::__u32,
+                 // The following fields are not available on Android as of
+                 // 2026-06.
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 pub stx_subvol: crate::__u64,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 pub stx_atomic_write_unit_min: crate::__u32,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 pub stx_atomic_write_unit_max: crate::__u32,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 pub stx_atomic_write_segments_max: crate::__u32,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 pub stx_dio_read_offset_align: crate::__u32,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 pub stx_atomic_write_unit_max_opt: crate::__u32,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 __statx_pad2: Padding<[crate::__u32; 1]>,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 __statx_pad3: Padding<[crate::__u64; 8]>,
+-                #[cfg(not(target_os = "linux"))]
++                #[cfg(not(any(target_os = "linux", target_os = "veda")))]
+                 __statx_pad3: Padding<[crate::__u64; 12]>,
+             }
+ 
+@@ -968,7 +968,7 @@
+ pub const TCP_MD5SIG: c_int = 14;
+ cfg_if! {
+     if #[cfg(all(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         any(target_env = "gnu", target_env = "musl", target_env = "ohos")
+     ))] {
+         // WARN: deprecated
+@@ -2215,7 +2215,7 @@
+     if #[cfg(target_os = "emscripten")] {
+         mod emscripten;
+         pub use self::emscripten::*;
+-    } else if #[cfg(target_os = "linux")] {
++    } else if #[cfg(any(target_os = "linux", target_os = "veda"))] {
+         mod linux;
+         pub use self::linux::*;
+         mod linux_l4re_shared;
+--- a/vendor/libc-0.2.189/src/unix/mod.rs
++++ b/vendor/libc-0.2.189/src/unix/mod.rs
+@@ -784,17 +784,17 @@
+     pub fn snprintf(s: *mut c_char, n: size_t, format: *const c_char, ...) -> c_int;
+     pub fn sprintf(s: *mut c_char, format: *const c_char, ...) -> c_int;
+     #[cfg_attr(
+-        all(target_os = "linux", not(target_env = "uclibc")),
++        all(any(target_os = "linux", target_os = "veda"), not(target_env = "uclibc")),
+         link_name = "__isoc99_fscanf"
+     )]
+     pub fn fscanf(stream: *mut crate::FILE, format: *const c_char, ...) -> c_int;
+     #[cfg_attr(
+-        all(target_os = "linux", not(target_env = "uclibc")),
++        all(any(target_os = "linux", target_os = "veda"), not(target_env = "uclibc")),
+         link_name = "__isoc99_scanf"
+     )]
+     pub fn scanf(format: *const c_char, ...) -> c_int;
+     #[cfg_attr(
+-        all(target_os = "linux", not(target_env = "uclibc")),
++        all(any(target_os = "linux", target_os = "veda"), not(target_env = "uclibc")),
+         link_name = "__isoc99_sscanf"
+     )]
+     pub fn sscanf(s: *const c_char, format: *const c_char, ...) -> c_int;
+@@ -2471,6 +2471,7 @@
+         pub use self::newlib::*;
+     } else if #[cfg(any(
+         target_os = "linux",
++        target_os = "veda",
+         target_os = "l4re",
+         target_os = "android",
+         target_os = "emscripten"

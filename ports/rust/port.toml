@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Rust: the compiler, with its LLVM, and the standard library, for Veda's
+# own target, whose programs stand on the C library as C++'s do.
+name = "rust"
+version = "1.99.0"
+url = "https://static.rust-lang.org/dist/rustc-1.99.0-src.tar.xz"
+sha256 = "cc41916a8c84f5d9ec4f55561b44e39f43b647b133f8a6f51be9ea13c83f7036"
+license = "MIT OR Apache-2.0"

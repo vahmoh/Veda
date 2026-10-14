@@ -51,8 +51,9 @@ cargo xtask script verification/ui/drivervm-renderer.vts   # Interceptor through
 cargo xtask script verification/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
 cargo xtask script verification/agent/app-interceptor.vts   # ... and for the voice agent
 VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
-cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl) -> target/toolchain
+cargo xtask toolchain          # build the toolchain from ports/ (GCC, binutils, musl; Rust) -> target/toolchain
 cargo xtask script verification/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
+cargo xtask script verification/ui/rust-programs.vts   # Rust's standard library on Veda: its checks, in the Terminal
 cargo xtask linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
 cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the driver VM
 cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
@@ -292,16 +293,17 @@ cargo xtask script verification/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 80
 | everything under `assets/` | `/system/<same relative path>` |
 | everything under `target/generated/` (build-time generated media) | `/system/<same relative path>` |
 | `verification/c/*.c` and `*.cc`, compiled by the cross toolchain (each also as `<name>-pie`) | `/system/tests/c/<name>` |
+| `verification/rust/*.rs`, compiled by the toolchain's Rust (each also as `<name>-fixed`) | `/system/tests/rust/<name>` |
 | the native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg and dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*` (videos for the stand-in decoder) | `/system/tests/videos/fake/` |
 
-The C test programs, the toolchain and the decoder need `cargo xtask
-toolchain` (see [C on Veda](C.md)); without it, the build says so and
-leaves them out. With `cargo xtask linux` done,
-the image also holds the driver VM's Linux: `/system/linux/kernel` (the
-architecture's image of it: a bzImage on AMD64) and
-`/system/linux/initramfs.cpio`, made of the programs in
+The C and Rust test programs, the toolchain and the decoder need `cargo
+xtask toolchain` (see [C on Veda](C.md) and [Rust on Veda](RUST.md));
+without it, the build says so and leaves them out. With `cargo xtask
+linux` done, the image also holds the driver VM's Linux:
+`/system/linux/kernel` (the architecture's image of it: a bzImage on
+AMD64) and `/system/linux/initramfs.cpio`, made of the programs in
 `implementation/guest/` (see [the driver VM](DRIVERVM.md)). Files under
 `samples/` in the system image are also copied into the user's home
 directory at boot (`/system/samples/Pictures/x.png` →
@@ -407,6 +409,23 @@ command. [C on Veda](C.md) describes the environment, what is different
 from Linux, and how the toolchain is built and tested. The test programs
 in `verification/c/` are compiled by `cargo xtask build` and installed in
 `/system/tests/c`, for `systest` and the GUI scripts to run.
+
+### Programs on Rust's standard library
+
+Programs that use Rust's standard library are compiled on the
+development machine by the toolchain's Rust, for Veda's target
+(`x86_64-unknown-veda` on AMD64), and linked by the cross compiler:
+
+```text
+target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C linker=target/toolchain/cross/bin/x86_64-veda-gcc -O -o hello hello.rs
+```
+
+They are static ELF executables on the C library, as C programs are.
+[Rust on Veda](RUST.md) describes building them with Cargo, how the
+standard library works on Veda, and how Rust is built and tested. The
+test programs in `verification/rust/` are compiled by `cargo xtask build`
+and installed in `/system/tests/rust`, for `systest` and the GUI scripts
+to run.
 
 ### Videos and its decoder
 

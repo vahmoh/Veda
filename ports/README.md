@@ -4,35 +4,40 @@
 # Ports
 
 Third-party software Veda builds from source: the C toolchain (see
-[documentation/C.md](../documentation/C.md)), FFmpeg and dav1d, which
-`mediadec` decodes videos with, Mesa, for the renderer, and the Rust crates
-that Veda changes (see Crates below). Veda's own code is Rust; what is
-written in C comes as a port, as does a crate that Veda changes: the
-upstream release, unchanged but for a patch that is kept small, readable
-and explained.
+[documentation/C.md](../documentation/C.md)), Rust (see
+[documentation/RUST.md](../documentation/RUST.md)), FFmpeg and dav1d,
+which `mediadec` decodes videos with, Mesa, for the renderer, and the Rust
+crates that Veda changes (see Crates below). Veda's own code is Rust; what
+is written in C comes as a port, as do Rust itself and a crate that Veda
+changes: the upstream release, unchanged but for a patch that is kept
+small, readable and explained.
 
 Each port is a directory:
 
 * `port.toml`: the name, version, download address, the SHA-256 of the
   archive and the licence. `cargo xtask` downloads the archive
-  (`cargo xtask toolchain` the C toolchain's, `cargo xtask linux` the
+  (`cargo xtask toolchain` the toolchain's, `cargo xtask linux` the
   driver VM's, every command the crates') and refuses one whose hash
-  differs.
+  differs; for Rust also the release that builds it (its stage 0: its
+  compiler, standard library and Cargo for this machine), as the
+  release's `src/stage0` pins them by SHA-256.
 * `veda.patch`: the changes for Veda, applied with `patch -p1` to the
   unpacked archive.
 * `arch/<architecture>/veda.patch`: the changes for Veda on that
-  architecture, applied after `veda.patch` (binutils, GCC, musl and Linux
-  have one for AMD64); and what else the port takes from the architecture
-  (the driver VM kernel's options, `linux/arch/amd64/veda.config`).
+  architecture, applied after `veda.patch` (binutils, GCC, musl, Rust and
+  Linux have one for AMD64); and what else the port takes from the
+  architecture (the driver VM kernel's options,
+  `linux/arch/amd64/veda.config`).
 
-`build.sh` builds the C toolchain and the media libraries (run by
+`build.sh` builds the C toolchain, the media libraries and Rust (run by
 `cargo xtask toolchain`), `linux/build.sh` the driver VM's Linux, its
 toolchain and Mesa's build (`cargo xtask linux`), and `crates.sh`
 prepares the crates (below); the comments at the top of each list what
 it expects and makes. They build for the architecture xtask names
 (`VEDA_ARCH`): what the scripts take from it (the target triples, musl's,
-Meson's, FFmpeg's and Linux's names for it, the assembler of the media
-libraries) is in `arch/<architecture>/settings.sh`.
+Meson's, FFmpeg's and Linux's names for it, Rust's target and LLVM's name
+of its code generator, the assembler of the media libraries) is in
+`arch/<architecture>/settings.sh`.
 
 ## Crates
 
@@ -90,12 +95,53 @@ the native GCC's libraries.
 
 **musl**: `__init_libc` sets the POSIX layer
 (`implementation/libraries/posix`) up; `posix_spawn` asks the layer to
-start the program. For AMD64: system calls go to the layer instead of the
-`syscall` instruction (`arch/x86_64/syscall_arch.h`); `_start` keeps the
-bootstrap channel (`crt_arch.h`); thread creation, the thread pointer, a
-thread freeing its own stack and cancellable system calls go through the
-layer (`src/thread/x86_64/*.s`); `vfork` falls back to the generic version
+start the program; `dl_iterate_phdr` names a program by the path it was
+started from (`AT_EXECFN`) rather than `/proc/self/exe`, which Veda does
+not have (backtraces read the program's symbols from it). For AMD64:
+system calls go to the layer instead of the `syscall` instruction
+(`arch/x86_64/syscall_arch.h`); `_start` keeps the bootstrap channel
+(`crt_arch.h`); thread creation, the thread pointer, a thread freeing its
+own stack and cancellable system calls go through the layer
+(`src/thread/x86_64/*.s`); `vfork` falls back to the generic version
 (which fails: there is no `fork`).
+
+**rust**: Veda as a target of Rust's compiler and of its standard library,
+which stands on the C library there. The compiler: Veda among its systems
+(`Os::Veda`) and `spec/base/veda.rs`: the `unix` family,
+`target_env = "musl"`, no dynamic linking, programs static and
+position-independent by default (`-static-pie`), thread-local storage,
+unwind tables; for AMD64, `x86_64-unknown-veda`
+(`spec/targets/x86_64_unknown_veda.rs`), linked by `x86_64-veda-gcc`,
+which bootstrap builds though its stage 0 does not know it
+(`STAGE0_MISSING_TARGETS`). The standard library (`library/std`) takes on
+Veda the ways of the systems whose C library has what Veda's has:
+futexes for its locks and thread parking (`FUTEX_WAIT_BITSET` with
+absolute deadlines, which the POSIX layer carries out),
+`clock_nanosleep`, `getrandom`, `pipe2`, `preadv` and `pwritev` (1024
+vectors at most, the layer's limit), `fstatat` and `openat` in
+directories (`remove_dir_all` without races), `fdatasync`, `posix_spawn`
+for every process (there is no `fork`; its `addchdir_np` linked
+directly, as with musl on Linux), `SOCK_CLOEXEC`, `accept4` and
+`MSG_NOSIGNAL`; `current_exe` from the loader's `AT_EXECFN` (there is no
+`/proc`); neither thread names, nor file locks (`Unsupported`), nor a
+stack-overflow handler (a fault ends the program); and
+`std::os::veda::fs::MetadataExt`. The `libc` crate, the standard
+library's bindings of the C library, vendored in `vendor/libc-*` (the
+copy Rust's build compiles): Veda's C library has Linux's interface, so
+each of the crate's conditions on `target_os = "linux"` that can hold
+with musl holds for Veda too (those for glibc, uClibc and 32-bit time
+stay as they are), and its musl is a recent one (`musl_v1_2_3`);
+`build.sh` gives the files the patch changes their new SHA-256 in the
+crate's `.cargo-checksum.json`, which Cargo checks. `library/unwind`:
+GCC's unwinder, which is in libgcc (GCC is built for static linking
+alone), as C++'s exceptions have it: a program in Rust and C++ has one
+unwinder. `library/backtrace`: a program's symbols and lines come from
+its own file, found through `AT_EXECFN` (there is no `/proc/self/maps`).
+Rust is built with its LLVM, for the architecture's code generator
+alone, by the release before it (its stage 0), as Rust's releases are;
+its Cargo runs from outside Veda's checkout, whose `.cargo/config.toml`
+(the crates' `[patch]`) must not reach Rust's build, with the release's
+own configuration (its vendored crates) instead.
 
 **dav1d**: none. It is built as released (meson, with a cross file for
 Veda's target and the architecture's assembler: nasm on AMD64), static,
@@ -166,9 +212,11 @@ to RGB, which is right.
 
 1. Download the new release and its signature; check the signature
    against the project's keys (GNU: the GNU keyring; musl: its key on
-   musl.libc.org). A crate's release, its archive on crates.io, has no
-   signature: its SHA-256 is the checksum crates.io's index gives it
-   (which a `Cargo.lock` with the release shows).
+   musl.libc.org; Rust: its release key, on rust-lang.org, whose
+   signature also vouches for the archive's `src/stage0`, which pins the
+   release that builds it). A crate's release, its archive on crates.io,
+   has no signature: its SHA-256 is the checksum crates.io's index gives
+   it (which a `Cargo.lock` with the release shows).
 2. Put the new version, address and SHA-256 into `port.toml`, and a
    crate's version into the workspace's `Cargo.toml` too.
 3. Unpack the release, apply the old `veda.patch` (and then each
@@ -186,11 +234,12 @@ to RGB, which is right.
 
 The ports keep their licences: GCC and binutils GPL-3.0-or-later (libgcc
 with the GCC Runtime Library Exception), GMP, MPFR and MPC
-LGPL-3.0-or-later, musl MIT, FFmpeg LGPL-2.1-or-later, dav1d BSD-2-Clause,
-the parts of Mesa the renderer uses MIT, smoltcp 0BSD, and zune-jpeg MIT,
-Apache-2.0 or Zlib. Distributing Veda's image, which contains them, means
-offering their source: the archives `port.toml` names and the patches
-here.
+LGPL-3.0-or-later, musl MIT, Rust MIT or Apache-2.0 (its compiler's LLVM
+Apache-2.0 with LLVM's exceptions), FFmpeg LGPL-2.1-or-later, dav1d
+BSD-2-Clause, the parts of Mesa the renderer uses MIT, smoltcp 0BSD, and
+zune-jpeg MIT, Apache-2.0 or Zlib. Distributing Veda's image, which
+contains them, means offering their source: the archives `port.toml`
+names and the patches here.
 
 Some of the formats FFmpeg decodes (H.264, HEVC and AAC among them) are
 covered by patents in some countries. The software licences do not

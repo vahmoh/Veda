@@ -135,6 +135,11 @@ protocols, the voice pipeline, consent, memory and testing.
   programs are static executables whose system calls go to `vposix`, a
   POSIX layer in Rust. A cross compiler also builds C and C++ programs
   for Veda on the development machine. See [C on Veda](documentation/C.md).
+* **Rust's standard library.** The toolchain builds Rust from its release,
+  with Veda among the compiler's targets: programs that use the standard
+  library (threads, files, processes, panics with backtraces) run on Veda,
+  where it stands on the C library. See
+  [Rust on Veda](documentation/RUST.md).
 
 ## Applications
 
@@ -215,10 +220,11 @@ Veda is built on an x86-64 PC with Linux.
   virtualization (`kvm_intel nested=1`). See
   [the driver VM](documentation/DRIVERVM.md#testing).
 * Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
-  your distribution's build tools for the C toolchain, which
-  `cargo xtask toolchain` builds once (see
+  your distribution's build tools for the toolchain, which
+  `cargo xtask toolchain` builds once: C (see
   [C on Veda](documentation/C.md#the-toolchain)), with `nasm` for the video
-  decoders it builds too.
+  decoders it builds too, and Rust, with CMake (see
+  [Rust on Veda](documentation/RUST.md#the-toolchain)).
 
 Check the environment:
 
@@ -246,9 +252,10 @@ This builds every component, writes `target/veda/veda.img` and boots it
 in a QEMU window at 1920x1080. The first build also renders the sample
 pictures, music and videos. Later builds are incremental.
 
-Videos plays videos with FFmpeg and dav1d, which the C toolchain builds
-(it needs `nasm`). Build it once, and the images built after it include
-the decoder:
+Videos plays videos with FFmpeg and dav1d, which the toolchain builds
+(it needs `nasm`), with GCC for the image and Rust for Veda's target (with
+CMake). Build it once, in about half an hour, and the images built after
+it include the decoder:
 
 ```bash
 cargo xtask toolchain
@@ -470,7 +477,7 @@ output) to `target/veda/serial.log`.
 | `implementation/libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
 | `implementation/applications/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
 | `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
-| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
+| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
@@ -487,6 +494,8 @@ output) to `target/veda/serial.log`.
   services, the simulated Wi-Fi environment, security and tests.
 * [C on Veda](documentation/C.md): writing, compiling and running C
   programs, the POSIX layer, and how the toolchain is built.
+* [Rust on Veda](documentation/RUST.md): programs on Rust's standard
+  library, how it works on Veda, and how Rust is built.
 * [The driver VM](documentation/DRIVERVM.md): the hypervisor, the platform,
   the bridge, the IOMMU and the devices.
 * [Developing](documentation/DEVELOPING.md): build commands, the system
@@ -527,6 +536,10 @@ Other parts keep their own licences:
   zune-jpeg under the MIT, Apache 2.0 or zlib licence, at the choice of
   whoever uses it. Their source is the releases that `ports/smoltcp` and
   `ports/zune-jpeg` name, with the patches beside them.
+* **Rust's standard library**, in the programs an image may contain that
+  use it (its tests): the MIT or Apache 2.0 licence, at the choice of
+  whoever uses it. Its source is the release that `ports/rust` names, with
+  the patches beside it.
 * **The C toolchain** an image may contain: GCC and binutils under the GPL
   version 3 or later (the GCC runtime library with its Runtime Library
   Exception, so programs GCC builds keep their own licences), GMP, MPFR

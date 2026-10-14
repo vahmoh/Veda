@@ -51,9 +51,10 @@ COMMANDS:
     test        Run host unit tests, then the in-system integration tests
                 (--ui also runs the GUI automation scripts in verification/ui
                 and the agent's in verification/agent, several at once: --jobs N)
-    toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
+    toolchain   Build the toolchain from ports/: GCC, binutils and musl (a cross
                 compiler for this machine and the native one the image installs in
-                /system (needs build tools; see documentation/C.md; --jobs N)
+                /system), the media libraries, and Rust for Veda's target (needs
+                build tools; see documentation/C.md and RUST.md; --jobs N)
     linux       Build the Linux kernel of the driver VM from ports/linux (see
                 documentation/DRIVERVM.md; --jobs N); later builds put it in the
                 image, with the guest's programs
@@ -330,6 +331,10 @@ fn build_system(o: &Options) -> Result<System> {
     // C programs that test the POSIX layer (with a cross compiler only).
     for (name, exe) in toolchain::c_tests()? {
         initrd.add(&format!("tests/c/{name}"), exe);
+    }
+    // Rust programs that test its standard library (with Rust only).
+    for (name, exe) in toolchain::rust_tests()? {
+        initrd.add(&format!("tests/rust/{name}"), exe);
     }
     // Videos for the stand-in decoder, fakedec (the GUI scripts').
     let clips = util::workspace_root().join("verification/fakedec/clips");
@@ -1055,6 +1060,10 @@ fn doctor() -> Result {
     match toolchain::media_status() {
         Ok(v) => println!("  [ok]   media decoders: {v}"),
         Err(e) => println!("  [--]   media decoders: {e}"),
+    }
+    match toolchain::rust_status() {
+        Ok(v) => println!("  [ok]   rust toolchain: {v}"),
+        Err(e) => println!("  [--]   rust toolchain: {e}"),
     }
     match linux::status() {
         Ok(v) => println!("  [ok]   driver vm: {v}"),

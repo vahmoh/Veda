@@ -190,12 +190,15 @@ and wakes a waiter on, once the thread has left its stack).
      can use it too;
    * `native/system/`, the toolchain built to run inside Veda: GCC (built
      on this machine, to run on Veda, making programs for Veda), binutils,
-     GMP, MPFR and MPC, the C library and its headers.
+     GMP, MPFR and MPC, the C library and its headers;
+   * `rust/`, Rust: its compiler for this machine, and its standard
+     library for this machine and for Veda, on the C library (see
+     [Rust on Veda](RUST.md#the-toolchain)).
 
-The first build takes about a quarter of an hour on a recent PC; later
-ones rebuild what
-changed (each stage keeps a fingerprint of what went into it, and where: a
-toolchain directory that has moved is built again). When the
+The first build takes about half an hour on a recent PC (C a quarter of
+an hour, Rust as long again); later ones rebuild what changed (each stage
+keeps a fingerprint of what went into it, and where: a toolchain
+directory that has moved is built again). When the
 POSIX layer changes, `cargo xtask build` puts the new one into the C
 library, and links the native programs again with it (GCC, binutils: they
 are C programs too), which recompiles nothing.
@@ -208,10 +211,10 @@ QEMU's default 1 GiB.
 
 The build needs the distribution's packages (meson and ninja for the
 media libraries, which videos are decoded with, and on AMD64 nasm for
-their assembly); on Debian and Ubuntu:
+their assembly; CMake and Python for Rust); on Debian and Ubuntu:
 
 ```text
-sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev nasm meson ninja-build
+sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev nasm meson ninja-build cmake python3
 ```
 
 ### The ports
@@ -221,7 +224,8 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 | `binutils` | 2.47 | Veda in `config.sub`; on AMD64 the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
 | `gcc` | 16.2.0 | Veda's target: `gcc/config/veda.h` (musl, static linking, `/system`), `veda.opt`, libgcc's configuration, libstdc++'s checks of the C library; on AMD64 `x86_64-veda`, `i386/veda.h` (the System V x86-64 ABI) |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
-| `musl` | 1.2.6 | the call to set the layer up, `posix_spawn`; on AMD64 system calls through the POSIX layer, `_start`, thread entry points |
+| `musl` | 1.2.6 | the call to set the layer up, `posix_spawn`, the program's path in `dl_iterate_phdr`; on AMD64 system calls through the POSIX layer, `_start`, thread entry points |
+| `rust` | 1.99.0 | Veda's target in the compiler; the standard library on the C library, the `libc` crate's description of it, GCC's unwinder; on AMD64 `x86_64-unknown-veda` (see [Rust on Veda](RUST.md)) |
 | `dav1d` | 1.5.4 | none: built as released (meson), for the media decoder |
 | `ffmpeg` | 9.0.2 | `veda` as a target operating system in `configure`; built with only the demuxers, decoders and parsers the media decoder uses |
 
@@ -235,11 +239,12 @@ change one.
 GCC, binutils and the GCC runtime library are under the GNU GPL version 3
 (libgcc with the GCC Runtime Library Exception, which leaves programs GCC
 builds under their own licences); GMP, MPFR and MPC under the GNU LGPL
-version 3; musl under the MIT licence; FFmpeg under the GNU LGPL version
-2.1 or later (the build checks that nothing GPL or non-free is in it) and
-dav1d under the BSD 2-clause licence. The source of what Veda's image
-contains is the upstream archive each `port.toml` names plus the patch
-beside it.
+version 3; musl under the MIT licence; Rust under the MIT licence or the
+Apache licence 2.0 (its compiler's LLVM under the Apache licence 2.0 with
+LLVM's exceptions); FFmpeg under the GNU LGPL version 2.1 or later (the
+build checks that nothing GPL or non-free is in it) and dav1d under the
+BSD 2-clause licence. The source of what Veda's image contains is the
+upstream archive each `port.toml` names plus the patch beside it.
 
 ## Tests
 

@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# Builds Veda's C toolchain from the ports in this directory. `cargo xtask
-# toolchain` runs it after downloading and
-# verifying the sources; see xtask/src/toolchain.rs and documentation/C.md.
+# Builds Veda's toolchain from the ports in this directory: C (GCC,
+# binutils and musl), the media libraries and Rust. `cargo xtask toolchain`
+# runs it after downloading and verifying the sources; see
+# xtask/src/toolchain.rs, documentation/C.md and documentation/RUST.md.
 #
 # Environment:
 #   VEDA_PORTS       this directory
@@ -13,12 +14,20 @@
 #   VEDA_POSIX_LIB   the POSIX layer (implementation/libraries/posix) as a
 #                    static library
 #   VEDA_POSIX_EXPORTS  the symbols it gives the C library
+#   VEDA_RUST_HOST   Rust's name for this machine (its target)
+#   VEDA_RUST_STAGE0 the archives, in downloads/, of the release of Rust that
+#                    builds the port's (its compiler, standard library and
+#                    Cargo for this machine)
 #   JOBS             parallel jobs (default: the number of processors)
 #
 # Results, under $VEDA_TOOLCHAIN:
 #   cross/           the cross toolchain ($TARGET-gcc, -g++ ...) for this
 #                    machine; cross/sysroot is laid out like Veda's /system
 #   native/system/   the toolchain built for Veda, as /system has it
+#   media/           the media libraries, for mediadec
+#   rust/            Rust, as its releases install: the compiler for this
+#                    machine, the standard library for it and for Veda
+#                    ($RUST_TARGET)
 #
 # Every stage keeps a fingerprint of what went into it (its commands, the
 # patches, the stages before it) and is skipped while that is unchanged.
@@ -32,6 +41,8 @@ VEDA_ARCH=${VEDA_ARCH:?}
 ROOT=${VEDA_TOOLCHAIN:?}
 POSIX_LIB=${VEDA_POSIX_LIB:?}
 POSIX_EXPORTS=${VEDA_POSIX_EXPORTS:?}
+RUST_HOST=${VEDA_RUST_HOST:?}
+RUST_STAGE0=${VEDA_RUST_STAGE0:?}
 JOBS=${JOBS:-$(nproc)}
 
 DOWNLOADS=$ROOT/downloads
@@ -384,4 +395,122 @@ stage_native() {
 }
 stage native binutils_native gcc_native posix_layer
 
-log Finished "the C toolchain ($ROOT)"
+# --- Rust --------------------------------------------------------------------
+
+# Rust (ports/rust): its compiler, built with its LLVM to run on this
+# machine, and its standard library, for this machine (where build scripts
+# and procedural macros run) and for Veda's target (RUST_TARGET), where it
+# stands on the C library as libstdc++ does: the cross GCC links its
+# programs. Installed in rust/, as Rust's releases install. It is
+# compiled by the release before it (RUST_STAGE0, which the release's
+# src/stage0 pins: xtask downloaded and checked it).
+RUST=$ROOT/rust
+
+# Cargo checks the files of each crate the release vendors (in vendor/,
+# and in library/vendor/ for its rust-src) against the crate's
+# .cargo-checksum.json: the files Veda's patches change get their new sums.
+update_vendor_checksums() {
+	local p rel crate file sum json
+	while IFS= read -r p; do sed -n 's|^+++ b/||p' "$p"; done < <(patches rust) | sort -u |
+		while IFS= read -r rel; do
+			case "$rel" in
+			library/vendor/*/*) crate=$(cut -d/ -f1-3 <<< "$rel") ;;
+			vendor/*/*) crate=$(cut -d/ -f1-2 <<< "$rel") ;;
+			*) continue ;;
+			esac
+			file=${rel#"$crate"/}
+			sum=$(sha256sum "$SRC/rust/$rel" | cut -d' ' -f1)
+			json=$SRC/rust/$crate/.cargo-checksum.json
+			grep -qF "\"$file\":\"" "$json" || { echo "$json: no $file" >&2; exit 1; }
+			sed -i "s|\"${file//./\\.}\":\"[0-9a-f]*\"|\"$file\":\"$sum\"|" "$json"
+		done
+}
+
+stage_src_rust() {
+	unpack rust
+	update_vendor_checksums
+}
+stage src_rust +rust
+
+# The release that builds Rust's, its stage 0, as its archives install.
+stage_rust_stage0() {
+	local s0=$BUILD/rust-stage0 archive
+	rm -rf "$s0" "$s0.tmp" && mkdir -p "$s0.tmp"
+	for archive in $RUST_STAGE0; do
+		tar -xf "$DOWNLOADS/$archive" -C "$s0.tmp"
+		quiet "$BUILD/rust-stage0.log" "$s0.tmp/${archive%.tar.xz}/install.sh" --prefix="$s0" \
+			--disable-ldconfig
+	done
+	rm -rf "$s0.tmp"
+}
+stage rust_stage0 @RUST_STAGE0 @ROOT
+
+# Rust's build runs Cargo in its source tree, which is inside Veda's
+# checkout, and Cargo reads the configuration of every directory above the
+# one it runs in: the checkout's (its .cargo/config.toml) is Veda's own and
+# must not reach Rust's build. Its Cargo runs from the root directory
+# instead, given the release's configuration (its vendored crates).
+stage_rust() {
+	local b=$BUILD/rust
+	rm -rf "$b" "$RUST" && mkdir -p "$b"
+	cat > "$b/cargo" <<-EOF
+	#!/bin/sh
+	cd / && exec "$BUILD/rust-stage0/bin/cargo" --config "$SRC/rust/.cargo/config.toml" "\$@"
+	EOF
+	chmod +x "$b/cargo"
+	cat > "$b/bootstrap.toml" <<-EOF
+	change-id = "ignore"
+
+	[llvm]
+	download-ci-llvm = false
+	targets = "$RUST_LLVM_TARGETS"
+	experimental-targets = ""
+	ninja = true
+
+	[build]
+	description = "Veda"
+	rustc = "$BUILD/rust-stage0/bin/rustc"
+	cargo = "$b/cargo"
+	build-dir = "$b"
+	host = ["$RUST_HOST"]
+	target = ["$RUST_HOST", "$RUST_TARGET"]
+	docs = false
+	extended = false
+	vendor = true
+	locked-deps = true
+	submodules = false
+	optimized-compiler-builtins = false
+	jobs = $JOBS
+
+	[install]
+	prefix = "$RUST"
+	sysconfdir = "etc"
+
+	[rust]
+	channel = "stable"
+	llvm-tools = false
+	lld = false
+	llvm-bitcode-linker = false
+
+	[target.$RUST_TARGET]
+	cc = "$CROSS/bin/$TARGET-gcc"
+	cxx = "$CROSS/bin/$TARGET-g++"
+	ar = "$CROSS/bin/$TARGET-ar"
+	ranlib = "$CROSS/bin/$TARGET-ranlib"
+	linker = "$CROSS/bin/$TARGET-gcc"
+	EOF
+	quiet "$b/install.log" python3 "$SRC/rust/x.py" install --config "$b/bootstrap.toml"
+	# A program for Veda builds and links.
+	echo 'fn main() { println!("hello"); }' > "$b/hello.rs"
+	quiet "$b/hello.log" "$RUST/bin/rustc" --edition 2024 --target "$RUST_TARGET" \
+		-C linker="$CROSS/bin/$TARGET-gcc" -o "$b/hello" "$b/hello.rs"
+	# What built it (some 9 GB) is not needed once Rust is installed: this
+	# stage builds it all again when it runs again. The logs stay.
+	find "$b" -mindepth 1 -maxdepth 1 ! -name '*.log' -exec rm -rf {} +
+}
+# Rust's build compiles no C for Veda and links nothing but the program
+# above: it does not depend on the C toolchain's stages, only on the C
+# toolchain being there.
+stage rust src_rust rust_stage0 @RUST_HOST @RUST_TARGET @RUST_LLVM_TARGETS @TARGET @ROOT
+
+log Finished "the toolchain ($ROOT)"

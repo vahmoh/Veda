@@ -174,6 +174,8 @@ pub mod nr {
     pub const PIPE2: usize = 293;
     pub const PREADV: usize = 295;
     pub const PWRITEV: usize = 296;
+    pub const PREADV2: usize = 327;
+    pub const PWRITEV2: usize = 328;
     pub const PRLIMIT64: usize = 302;
     pub const SYNCFS: usize = 306;
     pub const GETCPU: usize = 309;

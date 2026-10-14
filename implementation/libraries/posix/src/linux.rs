@@ -74,6 +74,16 @@ pub mod o {
     pub const TMPFILE: u32 = 0o20000000;
 }
 
+/// The flags of `preadv2` and `pwritev2`.
+pub mod rwf {
+    pub const HIPRI: u32 = 0x1;
+    pub const DSYNC: u32 = 0x2;
+    pub const SYNC: u32 = 0x4;
+    pub const NOWAIT: u32 = 0x8;
+    pub const APPEND: u32 = 0x10;
+    pub const NOAPPEND: u32 = 0x20;
+}
+
 /// `*at` flags.
 pub mod at {
     /// `dirfd` meaning the working directory.

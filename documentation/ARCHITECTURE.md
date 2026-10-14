@@ -181,10 +181,13 @@ has ended and left its stack, which is how thread libraries join threads.
   `x86_64-pc-windows-msvc` with `#![no_std]`, linked at `0x140000000` with
   no imports): this target gives stable Rust hard-float SSE code, while the
   kernel is soft-float. C programs are static ELF64 executables for the
-  System V ABI, built with GCC and musl (see [C on Veda](C.md)).
-* **`vrt`** is the runtime every Rust program links: entry point and
-  startup message, syscall wrappers, heap (TLSF), threads, futex-based
-  locks, time, logging and process creation.
+  System V ABI, built with GCC and musl (see [C on Veda](C.md)). So are
+  programs on Rust's standard library: Rust compiles them for its own
+  target for Veda, and GCC links them with the C library, which the
+  standard library stands on (see [Rust on Veda](RUST.md)).
+* **`vrt`** is the runtime each of Veda's own programs links: entry
+  point and startup message, syscall wrappers, heap (TLSF), threads,
+  futex-based locks, time, logging and process creation.
 * **Process creation** happens in user space (`vrt::process::Spawn`):
   create a process, map the program's image from VMOs, create a thread, and
   start it with a bootstrap channel carrying the startup message
@@ -936,7 +939,7 @@ of their own (see Architectures above).
 | `implementation/libraries/web`, `implementation/libraries/json` | HTTP/1.1 and WebSocket clients over TCP or TLS; JSON |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/libraries/wlan`, `implementation/libraries/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
-| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
+| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |

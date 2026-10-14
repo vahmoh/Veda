@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# A Rust program in the Terminal (1280x800 with the taskbar): the checks of
+# Rust's standard library (verification/rust/stdlib.rs, which the
+# toolchain's Rust built) run with the terminal as their standard streams,
+# as a command typed there does, start their own children from it, and
+# pass; $? is their exit status. Results are checked with the shell's
+# `logger` command, which writes to the serial log.
+requires rust-toolchain
+boot-cmdline "run=terminal"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+type "mkdir /tmp/stdlib; cd /tmp/stdlib && /system/tests/rust/stdlib; logger stdlib-status-$?"
+key ret
+wait-serial "terminal: stdlib-status-0" 120
+shot target/veda/rust-programs.png

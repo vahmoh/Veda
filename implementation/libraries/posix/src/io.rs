@@ -13,7 +13,7 @@ use vrt::object::Socket;
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
 use crate::linux::errno::*;
-use crate::linux::{self, Flock, Iovec, Pollfd, fcntl, ioctl, o, poll};
+use crate::linux::{self, Flock, Iovec, Pollfd, fcntl, ioctl, o, poll, rwf};
 use crate::{time, tty, user};
 
 /// Reads into `buf` from `desc` (at `offset` for `pread`).
@@ -179,6 +179,54 @@ pub unsafe fn writev(fd: i32, iov: usize, count: usize, offset: Option<i64>) -> 
         }
     }
     Ok(total)
+}
+
+/// Whether a call of `preadv2` (`write` false) or `pwritev2` on a
+/// descriptor (`appending` or not) can be made as its flags (`RWF_*`) ask.
+/// It can with those that change nothing here: `RWF_HIPRI` (a hint),
+/// `RWF_DSYNC` and `RWF_SYNC` (every write reaches the VFS as it is made,
+/// so `fsync` has nothing to do), and for a read the append flags, which
+/// do not concern it. A write can also be made with `RWF_NOAPPEND`, except
+/// in append mode, where the VFS writes at the end. Not with `RWF_APPEND`
+/// for a write, or with `RWF_NOWAIT`.
+fn rwf_possible(flags: u32, write: bool, appending: bool) -> bool {
+    let nothing = rwf::HIPRI | rwf::DSYNC | rwf::SYNC;
+    if write {
+        flags & !(nothing | rwf::NOAPPEND) == 0 && !(appending && flags & rwf::NOAPPEND != 0)
+    } else {
+        flags & !(nothing | rwf::APPEND | rwf::NOAPPEND) == 0
+    }
+}
+
+/// `preadv2`: [`readv`] at `offset`, or at the file's own offset when it is
+/// -1. A call whose flags ask for what cannot be done fails with
+/// `EOPNOTSUPP` ([`rwf_possible`]), which callers take as "without them".
+///
+/// # Safety
+/// As [`readv`].
+pub unsafe fn preadv2(fd: i32, iov: usize, count: usize, offset: i64, flags: u32) -> SysResult {
+    if !rwf_possible(flags, false, false) {
+        return Err(EOPNOTSUPP);
+    }
+    // SAFETY: per the caller.
+    unsafe { readv(fd, iov, count, (offset != -1).then_some(offset)) }
+}
+
+/// `pwritev2`: [`writev`] at `offset`, or at the file's own offset when it
+/// is -1. A call whose flags ask for what cannot be done fails with
+/// `EOPNOTSUPP` ([`rwf_possible`]), which callers take as "without them":
+/// the C library's `pwrite` asks for `RWF_NOAPPEND` first, then writes
+/// without it.
+///
+/// # Safety
+/// As [`writev`].
+pub unsafe fn pwritev2(fd: i32, iov: usize, count: usize, offset: i64, flags: u32) -> SysResult {
+    let appending = fd::get(fd)?.flags() & o::APPEND != 0;
+    if !rwf_possible(flags, true, appending) {
+        return Err(EOPNOTSUPP);
+    }
+    // SAFETY: per the caller.
+    unsafe { writev(fd, iov, count, (offset != -1).then_some(offset)) }
 }
 
 pub fn lseek(fd: i32, offset: i64, whence: u32) -> SysResult {
@@ -515,5 +563,25 @@ pub fn adopt_startup_fds() {
         if fd::get(n).is_err() {
             let _ = fd::replace(n, Description::new(object, o::RDWR), false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flags_of_vectored_calls_that_can_be_done() {
+        // The C library's pwrite and pwritev, but in append mode.
+        assert!(rwf_possible(rwf::NOAPPEND, true, false));
+        assert!(!rwf_possible(rwf::NOAPPEND, true, true));
+        assert!(rwf_possible(0, true, true) && rwf_possible(0, false, false));
+        assert!(rwf_possible(rwf::HIPRI | rwf::DSYNC | rwf::SYNC, true, true));
+        // Appending, or reading only what is there, is not done.
+        assert!(!rwf_possible(rwf::APPEND, true, false));
+        assert!(!rwf_possible(rwf::NOWAIT, true, false) && !rwf_possible(rwf::NOWAIT, false, false));
+        // The append flags do not concern a read.
+        assert!(rwf_possible(rwf::APPEND | rwf::NOAPPEND, false, false));
+        assert!(!rwf_possible(0x100, false, false) && !rwf_possible(0x100, true, false));
     }
 }

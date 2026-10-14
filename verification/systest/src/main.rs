@@ -341,7 +341,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 20] = [
+    let tests: [Test; 21] = [
         ("ipc primitives", test_ipc_primitives),
         ("write-combining memory", test_write_combining_memory),
         ("software interrupts", test_software_interrupts),
@@ -355,6 +355,7 @@ fn main() -> i32 {
         ("vfs space", test_vfs_space),
         ("vfs open files", posix::test_vfs_open_files),
         ("c programs", posix::test_c_programs),
+        ("rust programs", posix::test_rust_programs),
         ("media checkasm", media::test_checkasm),
         ("media decoder", media::test_decoder),
         ("killing a job", posix::test_kill_job),

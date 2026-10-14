@@ -97,8 +97,9 @@ members = [
 ]
 # The crates in ports/, as `cargo xtask` prepares them for Cargo, are not
 # members (their own tests and dev-dependencies stay out of this
-# workspace): see "Crates" in ports/README.md.
-exclude = ["ports/.crates"]
+# workspace): see "Crates" in ports/README.md. Nor is anything in target/,
+# such as the release of Rust that the toolchain is built from.
+exclude = ["ports/.crates", "target"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
 # inside Veda is cross-built by `cargo xtask build`, which knows the correct
 # target for every component.

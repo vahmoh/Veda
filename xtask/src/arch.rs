@@ -13,7 +13,7 @@
 //! | Item | What it provides |
 //! |------|------------------|
 //! | `NAME` | the architecture's directories' name (`arch/<NAME>` throughout the tree) |
-//! | `UEFI_TARGET`, `USER_TARGET`, `BARE_TARGET`, `GUEST_TARGET` | Rust's targets: of the loader and the kernel; of user-space programs; of the code C programs link; of the driver VM's programs |
+//! | `UEFI_TARGET`, `USER_TARGET`, `BARE_TARGET`, `GUEST_TARGET`, `STD_TARGET` | Rust's targets: of the loader and the kernel; of user-space programs; of the code C programs link; of the driver VM's programs; of programs on Rust's standard library |
 //! | `C_TARGET`, `GUEST_C_TARGET` | the C toolchains' targets: Veda's, and the driver VM's |
 //! | `PORT_TOOLS`, `check_port_tools` | what the ports need from the system besides what every architecture's need |
 //! | `KERNEL_MACHINE` | the machine of the kernel's image |
@@ -28,6 +28,6 @@
 mod amd64;
 
 pub use amd64::{
-    BARE_TARGET, C_TARGET, GUEST_C_TARGET, GUEST_TARGET, KERNEL_MACHINE, NAME, PORT_TOOLS, UEFI_BOOT_PATH, UEFI_TARGET,
-    USER_TARGET, acpitest, check_port_tools, nested_virtualization, qemu,
+    BARE_TARGET, C_TARGET, GUEST_C_TARGET, GUEST_TARGET, KERNEL_MACHINE, NAME, PORT_TOOLS, STD_TARGET, UEFI_BOOT_PATH,
+    UEFI_TARGET, USER_TARGET, acpitest, check_port_tools, nested_virtualization, qemu,
 };

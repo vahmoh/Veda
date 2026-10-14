@@ -31,11 +31,12 @@ These rules apply to every crate in the repository.
   the bug is reported upstream. `core`, `alloc` and (for host tools only)
   `std` are available.
 * **Rust only**, performance-critical code included (see Performance below).
-  Software written in C that Veda builds on (the C toolchain: GCC,
-  binutils, musl, ...) comes as *ports* (`ports/`): an upstream release
-  pinned by its SHA-256 plus a small, explained patch, never copied into
-  the source tree. The C and C++ programs in `verification/c` test that
-  environment.
+  Third-party software that Veda builds (the toolchain: GCC, binutils,
+  musl, and Rust for Veda's own target; ...) comes as *ports*
+  (`ports/`): an upstream release pinned by its SHA-256 plus a small,
+  explained patch, never copied into the source tree. The C and C++
+  programs in `verification/c` test that environment, and the Rust
+  programs in `verification/rust` the standard library on it.
 
 ## Architectures
 
@@ -100,6 +101,7 @@ On AMD64 (`xtask/src/arch/amd64` names them for the build):
 | user space (`implementation/libraries/`, `implementation/services/`, `implementation/drivers/`, `implementation/applications/`) | `x86_64-pc-windows-msvc`, `#![no_std]` | hard-float SSE2, PE `.exe`, linked by `rust-lld` |
 | `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | the System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | static ELF executables on musl |
+| programs on Rust's standard library (`verification/rust`) | `x86_64-unknown-veda` (the `rust` port's) | static ELF executables on the C library, linked by `x86_64-veda-gcc` |
 | the driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | static, on Linux |
 | `xtask/`, host tools | host (`std`) | |
 
