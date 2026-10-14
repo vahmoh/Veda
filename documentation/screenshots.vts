@@ -20,8 +20,8 @@ wait-serial "desktop ready" 90
 wait-serial "Routable via eth0" 120
 wait 6
 
-# The README's main picture: the desktop with the agent's window open,
-# listening (the ring on the taskbar opens it and wakes the agent).
+# The desktop with the agent's window open, listening (the ring on the
+# taskbar opens it and wakes the agent).
 click 0.825 0.97
 wait-serial "state: Listening" 30
 move 0.97 0.08

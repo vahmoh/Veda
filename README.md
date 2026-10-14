@@ -16,7 +16,7 @@ cryptography (smoltcp, rustls, RustCrypto), image codecs (zune, qoi,
 fast_image_resize) and math (libm, glam, rand). Veda runs on x86-64 PCs
 and in QEMU.
 
-![The Veda desktop, with the agent's window open and listening](documentation/images/desktop.png)
+[![Veda in one minute, on YouTube: a Deepgram key entered, the voice agent waking, and the agent at work in Photos, Music, the Text Editor and Interceptor](documentation/images/demo.jpg)](https://www.youtube.com/watch?v=gXIS-6cVNAk)
 
 ## Why agentic-native
 
@@ -144,6 +144,12 @@ protocols, the voice pipeline, consent, memory and testing.
 ## Screenshots
 
 <table>
+  <tr>
+    <td colspan="2"><img src="documentation/images/desktop.png" width="100%" align="top" alt="The Veda desktop, with the agent's window open and listening"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">The desktop, the agent's window open and listening</td>
+  </tr>
   <tr>
     <td width="50%"><img src="documentation/images/editor.png" width="100%" align="top" alt="The Text Editor showing a Rust program with syntax highlighting"></td>
     <td width="50%"><img src="documentation/images/photos.png" width="100%" align="top" alt="Photos showing a library of eight pictures"></td>
