@@ -19,19 +19,13 @@
 //!   `GET /v1/projects` from api.deepgram.com without a key (expects 401),
 //!   reporting the TLS version, cipher suite, key exchange and the
 //!   handshake time.
-//! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
-//!   Wi-Fi service (by default the simulated "Veda Home" network of
-//!   `cargo xtask run --net wifi`), then runs the online checks over it.
-//! * `nettest wifi-watch [SSID [PASSWORD]]`: joins (and saves) the network,
-//!   then reports every change of what a user would notice — the Wi-Fi
-//!   state and access point, whether the gateway answers pings, whether DNS
-//!   answers — as `watch: wifi=... ping=... dns=...` lines, forever. Tests
-//!   break the simulated network meanwhile and wait for the recovery.
-//!
-//! * `nettest route-watch [SSID [PASSWORD]]`: like `wifi-watch`, but reports
-//!   the interface of the default route instead of the Wi-Fi state
-//!   (`watch: route=... ping=... dns=...`), for machines with both a wired
-//!   card and Wi-Fi.
+//! * `nettest wifi SSID [PASSWORD]`: joins a Wi-Fi network through the
+//!   Wi-Fi service, then runs the online checks over it.
+//! * `nettest route-watch`: reports every change of what a user would
+//!   notice — the interface of the default route, whether the gateway
+//!   answers pings, whether DNS answers — as `watch: route=... ping=...
+//!   dns=...` lines, forever. Tests break the network meanwhile (the cable,
+//!   the driver VM) and wait for the recovery.
 //!
 //! In SSID arguments `+` stands for a space (the kernel command line
 //! splits arguments at spaces).
@@ -118,8 +112,8 @@ fn ipv6_tcp(global_only: bool) -> Check {
 }
 
 /// Waits (up to a minute) for an IPv4 lease on the wired interface, shows
-/// the configuration, and fails if it is a hypervisor's NAT (10.0.2.0/24,
-/// or 10.0.3.0/24 for the simulated Wi-Fi).
+/// the configuration, and fails if it is a hypervisor's NAT (QEMU's,
+/// 10.0.2.0/24).
 fn check_lan() -> Check {
     let end = vrt::time::now_ns() + 60_000_000_000;
     let ifaces = loop {
@@ -149,7 +143,7 @@ fn check_lan() -> Check {
         })
         .ok_or("no IPv4 address")?;
     let o = v4.0.octets();
-    if o[0] == 10 && o[1] == 0 && (o[2] == 2 || o[2] == 3) {
+    if o[0] == 10 && o[1] == 0 && o[2] == 2 {
         return Err(format!("{}/{} is a hypervisor's NAT, not a real network", v4.0, v4.1));
     }
     let gw: Vec<String> = eth.gateways.iter().map(|g| format!("{g}")).collect();
@@ -385,41 +379,14 @@ fn dns_probe(server: IpAddr, id: u16) -> String {
     String::from("fail")
 }
 
-/// `nettest wifi-watch` / `route-watch`: joins the network, then reports
-/// changes forever.
-fn watch(ssid: &str, password: &str, by_route: bool) -> i32 {
-    for (name, check) in
-        [("wifi adapter", &check_wifi_adapter as &dyn Fn() -> Check), ("wifi scan", &|| check_wifi_scan(ssid))]
-    {
-        match check() {
-            Ok(d) => println!("{} ... ok: {}", name, d),
-            Err(e) => {
-                println!("{} ... FAILED: {}", name, e);
-                println!("FAIL (1 failed)");
-                return 1;
-            }
-        }
-    }
-    // Saved, so the Wi-Fi service rejoins by itself after failures.
-    let pass = (!password.is_empty()).then_some(password);
-    if let Err(e) = wifi::connect(ssid, pass, true) {
-        println!("wifi connect ... FAILED: {}", e);
-        println!("FAIL (1 failed)");
-        return 1;
-    }
-    println!("watch: started for {}", ssid);
+/// `nettest route-watch`: reports changes forever.
+fn route_watch() -> ! {
+    println!("watch: started");
     let mut last = String::new();
     let mut seq: u16 = 0;
     loop {
-        let wifi_part = match wifi::status() {
-            Ok(s) if s.state == wifi::ConnState::Connected => format!("connected ap={}", vnet::format_mac(&s.bssid)),
-            Ok(s) => format!("{:?}", s.state).to_ascii_lowercase(),
-            Err(_) => String::from("unavailable"),
-        };
         let st = vnet::status().ok();
-        let online = st
-            .as_ref()
-            .is_some_and(|s| s.connectivity == Connectivity::Routable && (by_route || s.default_interface == "wlan0"));
+        let online = st.as_ref().is_some_and(|s| s.connectivity == Connectivity::Routable);
         let route = match &st {
             Some(s) if s.connectivity == Connectivity::Routable => s.default_interface.clone(),
             _ => String::from("none"),
@@ -445,11 +412,7 @@ fn watch(ssid: &str, password: &str, by_route: bool) -> i32 {
             }
             _ => ("none", String::from("none")),
         };
-        let line = if by_route {
-            format!("watch: route={route} ping={ping} dns={dns}")
-        } else {
-            format!("watch: wifi={wifi_part} ping={ping} dns={dns}")
-        };
+        let line = format!("watch: route={route} ping={ping} dns={dns}");
         if line != last {
             println!("{}", line);
             last = line;
@@ -547,19 +510,13 @@ fn main() -> i32 {
                 ("http local", &|| check_http(&url, "hello from the host")),
             ])
         }
-        "wifi-watch" => {
-            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Veda Home"));
-            let password = args.get(3).cloned().unwrap_or_else(|| String::from("veda-wifi"));
-            watch(&ssid, &password, false)
-        }
-        "route-watch" => {
-            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Veda Home"));
-            let password = args.get(3).cloned().unwrap_or_else(|| String::from("veda-wifi"));
-            watch(&ssid, &password, true)
-        }
+        "route-watch" => route_watch(),
         "wifi" => {
-            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Veda Home"));
-            let password = args.get(3).cloned().unwrap_or_else(|| String::from("veda-wifi"));
+            let Some(ssid) = args.get(2).map(|s| s.replace('+', " ")) else {
+                println!("usage: nettest wifi SSID [PASSWORD]");
+                return 2;
+            };
+            let password = args.get(3).cloned().unwrap_or_default();
             let gateway = || -> Check {
                 let st = vnet::status().map_err(net)?;
                 let gw = st.default_gateway.ok_or("no gateway")?;

@@ -443,8 +443,8 @@ pub fn select(ap: &Rsne, allow_sae: bool) -> Result<Selection, SelectError> {
     Ok(Selection { akm, pmf, own_rsne: own.element() })
 }
 
-/// The RSN element of an access point offering `security` (for the
-/// simulated access points and the tests).
+/// The RSN element of an access point offering `security` (for
+/// [`crate::ap`] and the tests).
 pub fn ap_rsne(security: Security, pmf_required: bool) -> Option<Rsne> {
     let (akms, mut capabilities) = match security {
         Security::Wpa2Personal => {
@@ -452,7 +452,7 @@ pub fn ap_rsne(security: Security, pmf_required: bool) -> Option<Rsne> {
         }
         Security::Wpa3Personal => (alloc::vec![Akm::Sae], caps::MFPC | caps::MFPR),
         Security::Wpa2Wpa3Personal => (alloc::vec![Akm::Psk, Akm::Sae], caps::MFPC),
-        // Advertised only (simulated networks that stations cannot join).
+        // Advertised only (networks Veda's station does not join).
         Security::Enterprise => (alloc::vec![Akm::Ieee8021x], caps::MFPC),
         _ => return None,
     };

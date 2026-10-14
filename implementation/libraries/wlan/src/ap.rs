@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! An access point: what the simulated Wi-Fi networks of `airsim` run, and
-//! the counterpart of [`crate::station::Station`] in the tests.
+//! An access point: the counterpart of [`crate::station::Station`] in the
+//! tests.
 //!
 //! Like the station it is a state machine without I/O: the caller feeds
 //! frames from the air, Ethernet frames from the wired side and timer
@@ -98,7 +98,7 @@ struct StaEntry {
 /// Time between handshake retransmissions.
 const HANDSHAKE_RETRY_MS: u64 = 1000;
 
-/// A simulated access point.
+/// An access point.
 pub struct AccessPoint {
     pub cfg: ApConfig,
     rsne: Option<Rsne>,

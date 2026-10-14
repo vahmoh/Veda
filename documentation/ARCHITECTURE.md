@@ -369,9 +369,7 @@ Networking is three layers of processes (details in
   cards' Ethernet frames to the network service; `wifi`
   (`implementation/guest/wifi`) offers its Wi-Fi radios to the Wi-Fi
   service as *managed* radios, which scan, join access points, encrypt and
-  move Ethernet frames on the service's commands (under QEMU, the virtual
-  radio: a virtio-serial port connected to the `airsim` simulator on the
-  host, which `airlink` makes a radio of Linux's). Frames travel through
+  move Ethernet frames on the service's commands. Frames travel through
   shared-memory rings (`vproto::netring`) with wake-up events; neither side
   trusts the other's indices or lengths.
 * **`wlan`** (the Wi-Fi service, built on `vwlan`) decides what to join,
@@ -854,8 +852,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
   Ethernet or Wi-Fi.
 * Network host tests: the 802.11 protocol and its cryptography against
   published vectors, a station against an access point, two TCP/IP stacks
-  over a simulated cable, the Wi-Fi simulator, and the TLS client against
-  a rustls server and real certificate chains.
+  over a simulated cable, and the TLS client against a rustls server and
+  real certificate chains.
 * Hardware no emulator has is simulated where Veda's own code drives it:
   `vgpio::sim` is a GPIO controller as its registers behave (Intel's
   pads, its pins wired in pairs), which devmgr drives in place of a PC's
@@ -930,18 +928,18 @@ of their own (see Architectures above).
 | `implementation/libraries/virtio` | virtio device access shared by the drivers |
 | `implementation/libraries/acpi`, `implementation/libraries/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `implementation/libraries/hv`, `implementation/libraries/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI; the architecture's virtual devices and boot protocol (on AMD64 the local APIC, `cpuid`, Linux's boot protocol) and its IOMMU's tables and structures (VT-d's) |
-| `implementation/guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
+| `implementation/guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `implementation/libraries/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
 | `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `implementation/libraries/netstack`, `implementation/libraries/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
-| `implementation/libraries/wlan`, `implementation/libraries/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
+| `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
 | `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
-| `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |
+| `tools/` | host programs: media generators |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
 | `assets/` | fonts, firmware and other data shipped in the initrd |
 | `documentation/` | documentation |

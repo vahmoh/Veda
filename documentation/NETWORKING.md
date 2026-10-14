@@ -44,16 +44,14 @@ out, and a system call only when the other side is asleep.
 | `implementation/libraries/netstack` | `vnetstack`: interfaces, DHCP, SLAAC, routes, DNS, sockets on smoltcp |
 | `implementation/services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
 | `implementation/libraries/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
-| `implementation/guest/net`, `implementation/guest/wifi`, `implementation/guest/airlink` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios; QEMU's virtual radio as one of Linux's (mac80211_hwsim) |
-| `implementation/libraries/radiolink` | `vradiolink`: the message format between `airlink` and `airsim` |
+| `implementation/guest/net`, `implementation/guest/wifi` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios |
 | `implementation/libraries/net` | `vnet`: the application API, including `vnet::wifi` |
 | `implementation/libraries/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
 | `implementation/libraries/web` | `vweb`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
 | `implementation/libraries/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
 | `implementation/libraries/entropy`, `implementation/kernel/src/random.rs` | the kernel's random number generator |
-| `tools/airsim` | the simulated Wi-Fi environment on the host |
 | `verification/nettest` | in-system network checks |
-| `verification/ui/wifi-connect.vts`, `drivervm-wifi*.vts` | Wi-Fi GUI and failure-recovery tests |
+| `verification/ui/drivervm-net.vts`, `e1000e.vts`, `drivervm-usb.vts`, `network-cable.vts` | GUI scripts: Linux's drivers of QEMU's network cards, and a cable pulled |
 
 ## Wi-Fi
 
@@ -124,60 +122,12 @@ out, and a system call only when the other side is asleep.
 * The saved-networks file holds the passphrases (needed to rejoin); the
   file system has no access control yet, so any program can read it.
 
-### The virtual radio and `airsim`
+### Soft MAC radios
 
-QEMU cannot emulate a Wi-Fi adapter. Under QEMU the radio is therefore a
-virtio-serial port named `org.veda.wlan.0` whose other end is **airsim**
-(`tools/airsim`), a host program that simulates the radio medium and a set
-of access points built on `vwlan`'s access point state machine. The port
-goes to the driver VM, where `airlink` makes it a radio of Linux's (see
-below). airsim
-bridges the access points to a QEMU user-mode network (NAT) through a hub
-and a datagram link, so the guest reaches the real Internet over
-(simulated) Wi-Fi. It talks to QEMU, and takes the tests' commands, over
-Unix sockets in the run's directory (none is a port that another run on
-the machine could take); it has nothing to do with the host's own Wi-Fi.
-
-| Name | SSID | Security | Channel | Signal |
-|------|------|----------|---------|--------|
-| home | Veda Home | WPA2-Personal | 1 | -48 dBm |
-| home2 | Veda Home | WPA2-Personal | 11 | -66 dBm |
-| wpa3 | Veda WPA3 | WPA3-Personal (H2E, PMF required) | 6 | -55 dBm |
-| mixed | Veda Mixed | WPA2/WPA3 transition | 44 | -60 dBm |
-| guest | Veda Guest | open | 36 | -71 dBm |
-| hidden | (Veda Hidden) | WPA2-Personal, hidden | 6 | -63 dBm |
-| corp | Veda Corp | Enterprise (not supported) | 11 | -78 dBm |
-
-The password of every secured network is `veda-wifi`. The Wi-Fi NAT is
-10.0.3.0/24 (gateway 10.0.3.2, DNS 10.0.3.3), distinct from the wired
-NAT's 10.0.2.0/24 so both can be used at once.
-
-```bash
-cargo xtask run --net wifi
-```
-
-boots with the Wi-Fi radio only (`--net both` adds the wired card). airsim
-logs to `target/veda/airsim.log` and accepts commands on the control
-port printed at startup, one per line, answered by `ok` or `error: ...`:
-
-```text
-list | status                       access points; radio, wired side and counters
-ap NAME on|off                      switch an access point (on = restarted)
-ap NAME signal DBM                  signal at the guest (-92 and below: out of range)
-ap NAME loss PERCENT                frame loss in each direction
-ap NAME deauth [REASON]             disconnect its stations
-ap NAME rekey                       send new group keys
-ap NAME password PASSWORD           change the password (restarts it)
-wired up|down                       the network behind the access points
-dhcp on|off                         let DHCP through or not
-dns normal|unanswered|servfail      how DNS queries are treated
-radio drop [SECONDS]                cut the guest's radio link for a while
-```
-
-The service can also drive a radio that moves raw 802.11 frames and does
+The service can drive a radio that moves raw 802.11 frames and does
 nothing else (a *soft MAC* radio, `wlanphy_ctl`), being its MLME itself:
 scanning channel by channel, sending the authentication and association
-frames, encrypting with CCMP. Veda's own driver of the virtual radio was
+frames, encrypting with CCMP. Veda's own driver of a virtual radio was
 one; it went with Veda's other network drivers, and no radio of that kind
 is left.
 
@@ -211,14 +161,6 @@ heard lately: `wifi` listens on the access point's channel first when it
 must. The Wi-Fi service is the same for both kinds of radio, and so are
 the user's networks and the connection policy.
 
-Under QEMU, `airlink` (`implementation/guest/airlink`) makes the virtual
-radio's port one of Linux's simulated radios (`mac80211_hwsim`), whose
-medium it is, so the whole path runs against airsim's networks:
-`verification/ui/drivervm-wifi.vts` joins every kind of network through it,
-and `verification/ui/drivervm-wifi-recovery.vts` breaks them. airsim's
-radio then hears every channel (radio link version 2's `LISTEN`), each
-frame with its own, and Linux keeps what is on its channel.
-
 ## Using the network
 
 * **The taskbar's network icon** shows the Wi-Fi signal (its arcs light
@@ -250,7 +192,7 @@ vnet::wifi::scan()?;
 for n in vnet::wifi::networks()? {
     // n.name, n.security, n.signal_dbm, n.bars, n.saved, n.connected
 }
-vnet::wifi::connect("Veda Home", Some("veda-wifi"), true)?;
+vnet::wifi::connect("Veda Home", Some("password"), true)?;
 let events = vnet::wifi::Watcher::new()?; // status changes, scans, failures
 
 let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]); // share it
@@ -366,39 +308,34 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
 * **Host tests** (`cargo xtask test` runs them all): `vwlan` (frames, RSN,
   crypto vectors, handshakes, SAE, and station-against-access-point runs:
   every security type, wrong passwords, hidden networks, replays,
-  deauthentication, silent access points, reconnection), `vnetstack`
-  (two stacks over a simulated cable: DHCP including lease renewal and
-  server outages, TCP, UDP, DNS, ICMP, IPv6), `vradiolink`, `airsim`
-  (the simulator driven by the station: every network, failover, range,
-  rekeying, password changes, lossy links, DHCP and DNS conditions,
-  malformed frames), the profile and policy modules, and `vtls`: the
-  provider against the vectors above, handshakes with a rustls server in
-  memory (every cipher suite, key exchange group and certificate type, data
-  both ways, closing from either side, key updates, records split down to
-  single bytes, expired, future, misnamed, untrusted and client-only
-  certificates, broken servers, every bit of the server's first flight
-  damaged in turn), and the certificate chains of api.deepgram.com,
-  example.com and www.google.com captured on 2026-10-03, verified against
-  the built-in roots. `cargo test -p vtls -- --ignored --nocapture`
-  connects to those servers for real with each cipher suite and group.
-* **In-system**: `nettest` (`run=nettest`, `run=nettest:wifi`): DNS, UDP,
-  TCP, HTTP and ping over Ethernet or Wi-Fi; `run=nettest:https`: HTTPS
-  requests to example.com (200 and the page) and api.deepgram.com (401
-  without a key) with the TLS version, cipher suite and handshake time.
-  These checks, and the scripts below, reach real Internet hosts through
-  QEMU's NAT, so the host must be online.
+  deauthentication, silent access points, reconnection), `vnetstack` (two
+  stacks over a simulated cable: DHCP including lease renewal and server
+  outages, TCP, UDP, DNS, ICMP, IPv6), the profile and policy modules, and
+  `vtls`: the provider against the vectors above, handshakes with a rustls
+  server in memory (every cipher suite, key exchange group and certificate
+  type, data both ways, closing from either side, key updates, records
+  split down to single bytes, expired, future, misnamed, untrusted and
+  client-only certificates, broken servers, every bit of the server's
+  first flight damaged in turn), and the certificate chains of
+  api.deepgram.com, example.com and www.google.com captured on 2026-10-03,
+  verified against the built-in roots.
+  `cargo test -p vtls -- --ignored --nocapture` connects to those servers
+  for real with each cipher suite and group.
+* **In-system**: `nettest` (`run=nettest`; on a PC with Wi-Fi,
+  `run=nettest:wifi,SSID,PASSWORD`): DNS, UDP, TCP, HTTP and ping over
+  Ethernet or Wi-Fi; `run=nettest:https`: HTTPS requests to example.com
+  (200 and the page) and api.deepgram.com (401 without a key) with the TLS
+  version, cipher suite and handshake time. These checks, and the scripts
+  below, reach real Internet hosts through QEMU's NAT, so the host must be
+  online.
 * **GUI and recovery** (`cargo xtask test --ui`):
-  `verification/ui/wifi-connect.vts` joins networks through the flyout (a
-  wrong password first), Settings and the Terminal;
-  `verification/ui/drivervm-wifi-recovery.vts` breaks the network through
-  airsim (access point gone, disconnection, wired side down, DNS failure,
-  out of range, the medium going silent, rekeying and loss, the Wi-Fi
-  service killed) and checks that Veda recovers by itself each time;
-  `verification/ui/network-failover.vts` unplugs and replugs the wired
-  card's cable (QMP `set_link`) with Wi-Fi connected and checks that
-  traffic moves between the interfaces; `verification/ui/drivervm-net.vts`
-  and `e1000e.vts` run Linux's drivers of QEMU's Intel 82576 and 82574L,
-  and `drivervm-usb.vts` of its USB network adapter.
+  `verification/ui/network-cable.vts` unplugs and replugs the wired card's
+  cable (QMP `set_link`) and checks that the default route goes and comes
+  back; `verification/ui/drivervm-restart.vts` crashes the driver VM and
+  checks that the network comes back with it;
+  `verification/ui/drivervm-net.vts` and `e1000e.vts` run Linux's drivers
+  of QEMU's Intel 82576 and 82574L, and `drivervm-usb.vts` of its USB
+  network adapter.
 
 ## Limitations and next steps
 
@@ -406,7 +343,8 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
   firmware so far (`ports/linux/firmware.txt`); other cards need their
   driver and firmware added. 6 GHz channels, and telling Linux the
   country (it keeps to the world's rules, listening first on channels
-  that need it), are next.
+  that need it), are next. QEMU cannot emulate a Wi-Fi adapter, so beyond
+  `vwlan`'s host tests Wi-Fi is tested on PCs.
 * WPA2/WPA3-Enterprise (802.1X/EAP), Enhanced Open (OWE), fast roaming
   (802.11r), power saving, 802.11n/ac rate control.
 * TLS: no session resumption (each connection is a full handshake), no

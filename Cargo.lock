@@ -95,16 +95,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "airsim"
-version = "0.1.0"
-dependencies = [
- "smoltcp",
- "ventropy",
- "vradiolink",
- "vwlan",
-]
-
-[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -909,16 +899,6 @@ dependencies = [
  "ff",
  "rand_core 0.10.1",
  "subtle",
-]
-
-[[package]]
-name = "guest-airlink"
-version = "0.1.0"
-dependencies = [
- "guest-netlink",
- "guest-sys",
- "rustix",
- "vradiolink",
 ]
 
 [[package]]
@@ -2509,10 +2489,6 @@ dependencies = [
  "vipc",
  "vrt",
 ]
-
-[[package]]
-name = "vradiolink"
-version = "0.1.0"
 
 [[package]]
 name = "vraster"

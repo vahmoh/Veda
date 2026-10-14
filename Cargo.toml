@@ -32,7 +32,6 @@ members = [
     "implementation/libraries/net",
     "implementation/libraries/tls",
     "implementation/libraries/wlan",
-    "implementation/libraries/radiolink",
     "implementation/libraries/web",
     "implementation/libraries/agent",
     "implementation/libraries/acpi",
@@ -69,7 +68,6 @@ members = [
     "tools/assetgen",
     "tools/musicgen",
     "tools/videogen",
-    "tools/airsim",
     "implementation/drivers/virtio-blk",
     "implementation/drivers/ahci",
     "implementation/drivers/nvme",
@@ -90,7 +88,6 @@ members = [
     "implementation/guest/net",
     "implementation/guest/netlink",
     "implementation/guest/wifi",
-    "implementation/guest/airlink",
     "implementation/guest/kms",
     "implementation/guest/input",
     "implementation/guest/renderer",
@@ -138,7 +135,6 @@ vnetstack = { path = "implementation/libraries/netstack" }
 vnet = { path = "implementation/libraries/net" }
 vtls = { path = "implementation/libraries/tls" }
 vwlan = { path = "implementation/libraries/wlan" }
-vradiolink = { path = "implementation/libraries/radiolink" }
 vweb = { path = "implementation/libraries/web" }
 vagent = { path = "implementation/libraries/agent" }
 vacpi = { path = "implementation/libraries/acpi" }

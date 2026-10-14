@@ -264,15 +264,11 @@ cargo xtask toolchain
 ```bash
 cargo xtask run --resolution 1280x800 --smp 4 --memory 2048
 cargo xtask run --cmdline "run=editor"
-cargo xtask run --net wifi
 ```
 
-`run=NAME` starts `/system/bin/NAME.exe` after boot. By default the
-machine reaches the Internet through a wired card on QEMU's NAT.
-`--net wifi` gives it a Wi-Fi radio instead, and starts `airsim`, a
-simulated Wi-Fi environment whose networks ("Veda Home", "Veda WPA3",
-...) lead to the Internet with the password `veda-wifi`; `--net both`
-gives it both. `cargo xtask help` lists every command and option.
+`run=NAME` starts `/system/bin/NAME.exe` after boot. The machine reaches
+the Internet through a wired card on QEMU's NAT (`--net none` leaves it
+out). `cargo xtask help` lists every command and option.
 
 ### A real PC, from a USB stick
 
@@ -436,9 +432,10 @@ cargo xtask test --ui
 This adds the GUI scripts in `verification/ui/` (with
 `verification/ui/arch/amd64/`, those that hold only on QEMU's PC) and the
 agent's scripts in `verification/agent/`. They click through the desktop
-and the applications, check logs and screenshots, and break the simulated
-Wi-Fi network in many ways to check that Veda recovers by itself. Scripts
-that need GCC or the video decoder are skipped without the C toolchain.
+and the applications, check logs and screenshots, and break things on
+purpose (Linux in the driver VM crashes, a cable is pulled, services and
+drivers are killed) to check that Veda recovers by itself. Scripts that
+need GCC or the video decoder are skipped without the C toolchain.
 Videos is also tested without it, with a stand-in decoder
 (`verification/fakedec`) that draws its pictures and crashes, hangs or
 falls behind when asked.
@@ -479,7 +476,7 @@ output) to `target/veda/serial.log`.
 | `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
 | `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
-| `tools/` | host programs that generate wallpapers, pictures, music and videos at build time, and `airsim` (simulated Wi-Fi) |
+| `tools/` | host programs that generate wallpapers, pictures, music and videos at build time |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
 | `assets/` | fonts and application manifests |
 | `documentation/` | documentation, the README's screenshots, the icon and social preview (`documentation/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`documentation/website/`) |
@@ -491,7 +488,7 @@ output) to `target/veda/serial.log`.
 * [Architecture](documentation/ARCHITECTURE.md): how the system fits
   together.
 * [Networking](documentation/NETWORKING.md): the network and Wi-Fi
-  services, the simulated Wi-Fi environment, security and tests.
+  services, security and tests.
 * [C on Veda](documentation/C.md): writing, compiling and running C
   programs, the POSIX layer, and how the toolchain is built.
 * [Rust on Veda](documentation/RUST.md): programs on Rust's standard

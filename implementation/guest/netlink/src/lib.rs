@@ -3,7 +3,7 @@
 
 //! Netlink for the driver VM's programs: a socket of a netlink family,
 //! messages built and parsed with their attributes, and generic netlink's
-//! families (nl80211, mac80211_hwsim) found by name.
+//! families (nl80211) found by name.
 //!
 //! One socket carries a program's requests and the events of the groups it
 //! joined: [`Socket::request`] collects the replies to a request (until its

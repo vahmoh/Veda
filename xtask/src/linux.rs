@@ -41,7 +41,6 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-alsa", "alsa", "bin/alsa"),
     ("guest-net", "net", "bin/net"),
     ("guest-wifi", "wifi", "bin/wifi"),
-    ("guest-airlink", "airlink", "bin/airlink"),
     ("guest-kms", "kms", "bin/kms"),
     ("guest-input", "input", "bin/input"),
 ];

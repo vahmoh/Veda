@@ -7,11 +7,11 @@
 //! Veda's log) how Linux came up, starts `logkeeper` first where there is
 //! a USB controller (the stick the live system started from keeps the
 //! system's log), and Veda's drivers for Linux that the guest's devices
-//! need (`input` for whatever input devices come,
-//! `alsa` for sound cards, `net` for Ethernet cards, `wifi` for Wi-Fi radios
-//! and `airlink` for QEMU's virtual one, `kms` for displays and `renderer`
-//! for their GPUs), again if they end. With `veda.renderer=softpipe` the
-//! renderer renders on softpipe, for tests, whatever the devices.
+//! need (`input` for whatever input devices come, `alsa` for sound cards,
+//! `net` for Ethernet cards, `wifi` for Wi-Fi radios, `kms` for displays
+//! and `renderer` for their GPUs), again if they end. With
+//! `veda.renderer=softpipe` the renderer renders on softpipe, for tests,
+//! whatever the devices.
 //! Then it runs the programs the kernel's command line names
 //! (`veda.run=bridgetest,...`, from `/bin`, one after the other) and stays:
 //! the first program may never end. With `veda.poweroff` it powers the
@@ -30,15 +30,13 @@ use rustix::system::{RebootCommand, reboot};
 
 /// Veda's drivers for Linux, and the PCI classes (their first bytes, as
 /// sysfs gives them) of the functions each serves: multimedia devices,
-/// Ethernet cards, other network cards (Wi-Fi's), the communication
-/// controllers whose ports QEMU's virtual radio is on, displays with their
-/// GPUs, and USB controllers, whose devices may be network or Wi-Fi
-/// adapters. (`input` takes input devices on whatever they are.)
+/// Ethernet cards, other network cards (Wi-Fi's), displays with their GPUs,
+/// and USB controllers, whose devices may be network or Wi-Fi adapters.
+/// (`input` takes input devices on whatever they are.)
 const DRIVERS: &[(&str, &[&str])] = &[
     ("alsa", &["0x04"]),
     ("net", &["0x0200", "0x0c03"]),
-    ("wifi", &["0x0280", "0x0780", "0x0c03"]),
-    ("airlink", &["0x0780"]),
+    ("wifi", &["0x0280", "0x0c03"]),
     ("kms", &["0x03"]),
     ("renderer", &["0x03"]),
 ];

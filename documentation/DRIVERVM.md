@@ -129,7 +129,7 @@ Each one came from what the alternatives would cost.
 | Monitor | `implementation/services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
 | Guest kernel | `ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, network interfaces among it; `netlink`); their Linux system calls are `rustix`'s |
+| Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, network interfaces among it; `netlink`); their Linux system calls are `rustix`'s |
 | Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt` and the architecture's (`ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
 
 ### The platform
@@ -483,10 +483,7 @@ decides what to join, does SAE and the key handshakes, and gives Linux the
 session keys only. There is no supplicant in the guest. The driver's
 netlink socket owns the connection and its control port, over which EAPOL
 comes and goes: if the driver ends, Linux leaves the network. Data is
-Ethernet, as for `net`. Under QEMU, `airlink`
-(`implementation/guest/airlink`) makes the virtual radio (the virtio-serial
-port airsim is on) a radio of Linux's own, one of `mac80211_hwsim`'s, and
-is its medium; the kernel's command line has it make none itself.
+Ethernet, as for `net`.
 
 **Display** (`implementation/guest/kms`). A display Linux drives (KMS) is
 attached to Veda's compositor as the screen it flips (`displaydev`), as
@@ -718,7 +715,7 @@ where Veda stands:
 | The bridge: Veda's IPC in the guest | done (`verification/ui/drivervm-bridge.vts`) |
 | Devices: IOMMU (DMA and interrupt remapping), PCI given to the guest | done (`verification/ui/arch/amd64/iommu.vts`, `verification/ui/drivervm-pci.vts`) |
 | Audio: ALSA → `audiodev` (playback and recording); virtio's sound devices Linux's, Veda's own driver of them and AC'97's gone | done (`verification/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `music.vts`, `volume.vts`) |
-| Network and Wi-Fi: Linux's cards → `netdev`, nl80211 → `wlanphy` (managed radios); Veda's own network and radio drivers gone | done (`verification/ui/drivervm-net.vts`, `e1000e.vts`, `drivervm-wifi.vts`, `drivervm-wifi-recovery.vts`, `wifi-connect.vts`, `network-failover.vts`) |
+| Network and Wi-Fi: Linux's cards → `netdev`, nl80211 → `wlanphy` (managed radios); Veda's own network and radio drivers gone | done (`verification/ui/drivervm-net.vts`, `e1000e.vts`, `network-cable.vts`); Wi-Fi tested on PCs |
 | Display: KMS → `displaydev`, the compositor's pictures shown as they are; Veda's own display drivers gone | done (`verification/ui/drivervm-display.vts`, `drivervm-display-restart.vts`, `drivervm-display-crash.vts`) |
 | GPU: the renderer in the guest, on Mesa's Gallium drivers over Linux's (virgl under QEMU; iris; softpipe); Veda's own GPU drivers gone | done (`verification/ui/drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs below |
 | Input and USB: Linux's event devices → `input`; USB controllers whole (keyboards, mice, network and Bluetooth adapters); Veda's own USB and virtio input drivers gone | done (`verification/ui/usb-input.vts`, `drivervm-usb.vts`, `live-usb.vts`); touchpads later |
@@ -785,12 +782,10 @@ has Linux crash once, that long after it started, for the tests of the
 restart (`drivervm.cmdline=veda.kill=NAME:SECONDS` ends one of the
 guest's programs instead, by SIGKILL). A script adds variables to the
 firmware's store with `firmware-variable` (a scripted run starts with
-OVMF's own store, those added). Wi-Fi's scripts give QEMU's machine the
-virtual radio's virtio-serial function (`net wifi`), which `airlink`
-makes Linux's;
-`usb net` a USB network adapter on its xHCI controller, and `input usb`
-USB keyboards, mice and a tablet instead of the PS/2 keyboard and the
-virtio tablet. The display and the GPU are QEMU's VGA and its virtio-gpu
+OVMF's own store, those added). `usb net` gives QEMU's machine a USB
+network adapter on its xHCI controller, and `input usb` USB keyboards,
+mice and a tablet instead of the PS/2 keyboard and the virtio tablet.
+The display and the GPU are QEMU's VGA and its virtio-gpu
 (with `gpu on`; it renders on the host's GPU the firmware showed its
 screen on, or the one `VEDA_RENDERNODE` names, such as
 `/dev/dri/renderD129`), and `drivervm.renderer=softpipe` has the

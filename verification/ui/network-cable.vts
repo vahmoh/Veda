@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The wired card's cable unplugged, then plugged in again: the default route
+# goes with the link and comes back with it. nettest reports the interface
+# of the default route and whether the gateway and DNS answer.
+net ethernet
+boot-cmdline "run=nettest:route-watch"
+wait-serial "watch: route=eth0 ping=ok dns=ok" 120
+
+# 1. Unplug the cable: no route is left.
+checkpoint
+link wired off
+wait-serial "eth0: link down" 30
+wait-serial "watch: route=none" 60
+
+# 2. Plug it back in: the wired connection carries traffic again.
+checkpoint
+link wired on
+wait-serial "watch: route=eth0 ping=ok dns=ok" 90
+reject-serial "panicked"

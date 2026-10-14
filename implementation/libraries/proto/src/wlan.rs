@@ -125,8 +125,8 @@ enumeration! {
     pub enum RadioState {
         /// Working.
         Ready = 1,
-        /// Temporarily unusable (for example the virtual radio's host side
-        /// disconnected); frames are dropped until it is `Ready` again.
+        /// Temporarily unusable; frames are dropped until it is `Ready`
+        /// again.
         Unavailable = 2,
     }
 }

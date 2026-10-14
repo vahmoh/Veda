@@ -81,7 +81,7 @@ Linux (the driver VM's kernel).
 | `vtls`'s `CryptoProvider` and RSA verification | rustls-rustcrypto, rsa 0.10 | rustls-rustcrypto's one release is an alpha on the older RustCrypto generation, and its development version imports Windows' `ProcessPrng`; rsa 0.10 is a release candidate (its 0.9 is the older generation) |
 | The IPC codec (`vipc`) | postcard, serde | A message's kernel handles move out of it into a side table, which serde's `Serialize(&self)` cannot do |
 | The 802.11 stack (`vwlan`) | ieee80211 0.5 | It has no SAE, CCMP or handshakes, and is on the older RustCrypto generation; Veda's frames, handshakes and SAE are built on RustCrypto's primitives |
-| The driver VM's DRM and netlink (`guest/kms`, `guest/netlink`) | drm 0.15, wl-nl80211, netlink-sys | drm's page flips carry their CRTC as their user data, where Veda's carry the flip's sequence number, and its `drm-sys` pins `linux-raw-sys` 0.9; wl-nl80211 is asynchronous (tokio), and nothing speaks `mac80211_hwsim`. Both make their system calls through `rustix` |
+| The driver VM's DRM and netlink (`guest/kms`, `guest/netlink`) | drm 0.15, wl-nl80211, netlink-sys | drm's page flips carry their CRTC as their user data, where Veda's carry the flip's sequence number, and its `drm-sys` pins `linux-raw-sys` 0.9; wl-nl80211 is asynchronous (tokio). Both make their system calls through `rustix` |
 
 ### Graphics and text
 

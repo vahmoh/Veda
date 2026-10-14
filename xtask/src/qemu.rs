@@ -74,12 +74,6 @@ pub enum NetMode {
     /// A wired card on QEMU's NAT (DHCP 10.0.2.15, gateway 10.0.2.2, DNS
     /// 10.0.2.3; the host is reachable at 10.0.2.2).
     Ethernet,
-    /// The virtual Wi-Fi radio only: a virtio-serial port connected to the
-    /// `airsim` simulator, whose access points bridge to a second NAT
-    /// (10.0.3.0/24: gateway 10.0.3.2, DNS 10.0.3.3).
-    Wifi,
-    /// Both the wired card and the Wi-Fi radio.
-    Both,
 }
 
 impl NetMode {
@@ -87,31 +81,9 @@ impl NetMode {
         match s {
             "none" | "off" => Some(NetMode::None),
             "ethernet" | "wired" | "user" => Some(NetMode::Ethernet),
-            "wifi" | "wi-fi" | "wireless" => Some(NetMode::Wifi),
-            "both" => Some(NetMode::Both),
             _ => None,
         }
     }
-
-    pub fn wired(self) -> bool {
-        matches!(self, NetMode::Ethernet | NetMode::Both)
-    }
-
-    pub fn wireless(self) -> bool {
-        matches!(self, NetMode::Wifi | NetMode::Both)
-    }
-}
-
-/// The sockets joining QEMU and `airsim` (see `crate::airsim`): Unix
-/// sockets in the run's directory, which no other run shares.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WifiSockets {
-    /// QEMU listens here for the simulator's radio connection.
-    pub radio: PathBuf,
-    /// QEMU's end of the bridged NAT link (datagrams).
-    pub qemu: PathBuf,
-    /// The simulator's end of it.
-    pub sim: PathBuf,
 }
 
 /// A Unix socket's path as a QEMU option value (`,` would split it).
@@ -253,9 +225,6 @@ pub struct VmConfig {
     pub net: NetMode,
     /// Model of the wired card (`None`: virtio-net).
     pub nic_model: Option<String>,
-    /// Sockets for the Wi-Fi radio and its NAT link (required when `net`
-    /// includes Wi-Fi).
-    pub wifi: Option<WifiSockets>,
     /// A display that is also a 3D GPU (virtio-gpu with virgl): `None` uses
     /// one if QEMU has it.
     pub gpu: Option<bool>,
@@ -294,7 +263,6 @@ impl Default for VmConfig {
             allow_reboot: false,
             net: NetMode::Ethernet,
             nic_model: None,
-            wifi: None,
             gpu: None,
             iommu: true,
             usb_net: false,
@@ -464,7 +432,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             _ => cmd.args(["-device", &virtio(cfg, &format!("virtio-sound-pci,audiodev=audio0,streams={streams}"))]),
         };
     }
-    if cfg.net.wired() {
+    if cfg.net == NetMode::Ethernet {
         let model = cfg.nic_model.as_deref().unwrap_or("virtio-net-pci");
         let nic = format!("{model},id={WIRED_NIC_ID},netdev=net0,mac=52:54:00:12:34:56");
         cmd.args(["-netdev", "user,id=net0"]);
@@ -472,9 +440,6 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     } else {
         // Without this QEMU adds a default card.
         cmd.args(["-nic", "none"]);
-    }
-    if let (true, Some(p)) = (cfg.net.wireless(), &cfg.wifi) {
-        cmd.args(wifi_args(cfg, p));
     }
     if cfg.display {
         // GTK, whose window grabs the mouse at a click while the pointer is
@@ -551,36 +516,6 @@ pub fn render_node() -> Option<String> {
 /// ones only.
 fn virtio(cfg: &VmConfig, spec: &str) -> String {
     if cfg.iommu { format!("{spec},disable-legacy=on,iommu_platform=on") } else { spec.to_string() }
-}
-
-/// QEMU arguments for the virtual Wi-Fi radio: a virtio-serial port named
-/// `org.veda.wlan.0` that `airsim` connects to, and a NAT (`user`
-/// network) joined through a hub to a UDP link with `airsim`, whose access
-/// points bridge their stations onto it.
-pub fn wifi_args(cfg: &VmConfig, p: &WifiSockets) -> Vec<String> {
-    [
-        "-device",
-        &virtio(cfg, "virtio-serial-pci,id=vser0,max_ports=2"),
-        "-chardev",
-        &format!("socket,id=wlanradio,path={},server=on,wait=off", p.radio.display()),
-        "-device",
-        "virtserialport,bus=vser0.0,nr=1,chardev=wlanradio,name=org.veda.wlan.0",
-        "-netdev",
-        "user,id=wlanwan,net=10.0.3.0/24",
-        "-netdev",
-        "hubport,id=wlanhub0,hubid=7,netdev=wlanwan",
-        "-netdev",
-        &format!(
-            "dgram,id=wlanair,local.type=unix,local.path={},remote.type=unix,remote.path={}",
-            p.qemu.display(),
-            p.sim.display()
-        ),
-        "-netdev",
-        "hubport,id=wlanhub1,hubid=7,netdev=wlanair",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
 }
 
 /// A scripted run's UEFI variable store: a copy of the firmware's template

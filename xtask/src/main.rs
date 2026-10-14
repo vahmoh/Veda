@@ -7,7 +7,6 @@
 
 mod acpi;
 mod agentsim;
-mod airsim;
 mod arch;
 mod automate;
 mod components;
@@ -96,8 +95,7 @@ RUN OPTIONS:
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
     --fresh-home        Start with a new home directory (deletes target/veda/home.img)
-    --net MODE          Network: ethernet (default, QEMU's NAT), wifi (the virtual Wi-Fi radio
-                        and the airsim access points), both, or none
+    --net MODE          Network: ethernet (default, a wired card on QEMU's NAT) or none
     --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000e, igb
     --disk-bus BUS      How QEMU attaches the disks: virtio (default), ahci (SATA) or nvme
     --input DEVICES     Keyboard and pointer: standard (default: the machine's keyboard, a
@@ -534,24 +532,6 @@ fn run(o: &Options) -> Result {
         disk
     };
     let vars = qemu::vars_file(&install)?;
-    // The simulated Wi-Fi environment runs while QEMU does.
-    let _sim = if vm.net.wireless() {
-        let out = util::out_dir();
-        let sim = airsim::AirSim::start(&airsim::build()?, &out, &out.join("airsim.log"))?;
-        vm.wifi = Some(sim.sockets.clone());
-        util::status(
-            "Wi-Fi",
-            format!(
-                "simulated networks (password \"{}\"); log {}; control: nc -U {}",
-                airsim::PASSWORD,
-                sim.log.display(),
-                sim.control.display()
-            ),
-        );
-        Some(sim)
-    } else {
-        None
-    };
     let mut cmd = qemu::command(&install, &disk, &vars, &vm)?;
     util::status("Running", format!("{}", install.binary.display()));
     util::run(&mut cmd)
@@ -741,11 +721,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     let agent = if automate::needs_agentsim(script) { Some(agentsim::AgentSim::start()?) } else { None };
     if let Some(a) = &agent {
-        // This computer is the gateway of the guest's network: QEMU's NAT,
-        // or the Wi-Fi radio's own when that is the only network.
-        let wifi_only = automate::net_mode(script)? == Some(qemu::NetMode::Wifi);
-        let host = if wifi_only { "10.0.3.2" } else { "10.0.2.2" };
-        o.cmdline = format!("{} {}", o.cmdline, a.boot_arg(host, !automate::agent_asleep(script))).trim().to_string();
+        // This computer is the gateway of the guest's network, QEMU's NAT.
+        o.cmdline =
+            format!("{} {}", o.cmdline, a.boot_arg("10.0.2.2", !automate::agent_asleep(script))).trim().to_string();
     }
     for extra in automate::boot_cmdline(script) {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
@@ -855,7 +833,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vweb", &[]),
     ("vagent", &[]),
     ("vwlan", &[]),
-    ("vradiolink", &[]),
     ("vacpi", &[]),
     ("vgpio", &[]),
     ("vsplash", &[]),
@@ -864,7 +841,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("interceptor-game", &[]),
     ("videos-core", &[]),
     ("terminal-core", &[]),
-    ("airsim", &[]),
     ("xtask", &[]),
 ];
 

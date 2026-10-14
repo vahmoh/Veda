@@ -34,9 +34,7 @@ cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, 
 cargo xtask script verification/ui/usb-input.vts   # USB input, with devices plugged in and out
 cargo xtask script verification/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
 cargo xtask script verification/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
-cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
-cargo xtask run --net both     # ... plus the wired card (or --net none)
-cargo xtask script verification/ui/drivervm-wifi-recovery.vts   # Wi-Fi failure-recovery test
+cargo xtask run --net none     # boot without a network card
 cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
 cargo xtask script verification/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
 cargo xtask script verification/ui/drivervm-compose.vts   # ... its frames drawn by a GPU (the renderer on softpipe; slow)
@@ -63,7 +61,6 @@ cargo xtask script verification/ui/arch/amd64/drivervm-gpio.vts   # GPIO pins fo
 cargo xtask script verification/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
 cargo xtask script verification/ui/arch/amd64/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
 cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
-cargo xtask script verification/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
@@ -255,15 +252,9 @@ cargo xtask script verification/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 80
   they type it into Settings with
   `type-env`, so it is in neither the script nor the logs. See
   [The agent](AGENT.md#testing).
-* With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
-  environment) next to QEMU; it logs to `target/veda/airsim.log` and
-  prints its control port, which takes commands such as `ap home off`,
-  `ap home signal -80`, `wired down` or `dns servfail` (see
-  [NETWORKING.md](NETWORKING.md)). Scripts use the same commands with
-  `air`, `air-expect` and `air-wait` after a `net wifi` line.
 * `--cmdline "run=nettest"` checks the Internet connection from inside
-  Veda; `run=nettest:wifi` first joins the simulated "Veda Home"
-  network (`run=NAME:ARG1,ARG2` passes arguments).
+  Veda (`run=NAME:ARG1,ARG2` passes arguments); on a PC with Wi-Fi,
+  `run=nettest:wifi,SSID,PASSWORD` joins a network first.
 * The home directory is kept on its own disk, `target/veda/home.img`,
   across builds and runs; `--fresh-home` starts over with a new one.
   Scripted runs (`shot`, `script`, `test`) always use a fresh home disk.
