@@ -36,8 +36,9 @@ dependency's reason beside it.
   generation of one Veda already uses (RustCrypto's 0.10 digests,
   `linux-raw-sys` 0.9) brings both into the build.
 * **Fixed, not worked around.** A library that is wrong becomes a port
-  (`ports/`, as smoltcp and zune-jpeg are): its release with an explained
-  patch, which Cargo builds in its place, and the fix goes upstream.
+  (`implementation/ports/`, as smoltcp and zune-jpeg are): its release with
+  an explained patch, which Cargo builds in its place, and the fix goes
+  upstream.
 
 ## In use
 

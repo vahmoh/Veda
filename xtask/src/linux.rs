@@ -3,22 +3,22 @@
 
 //! The Linux guest of the driver VM (see `documentation/DRIVERVM.md`).
 //!
-//! * `cargo xtask linux` builds its kernel from `ports/linux` (first zlib
-//!   and elfutils' libelf, from `ports/zlib` and `ports/elfutils`, for the
-//!   kernel's build tool objtool): `target/linux/kernel`, the
-//!   architecture's image of it.
-//!   It also builds a cross toolchain for the guest's programs in C and C++
+//! * `cargo xtask linux` builds its kernel from `implementation/ports/linux`
+//!   (first zlib and elfutils' libelf, from `implementation/ports/zlib` and
+//!   `implementation/ports/elfutils`, for the kernel's build tool objtool):
+//!   `target/linux/kernel`, the architecture's image of it. It also builds a
+//!   cross toolchain for the guest's programs in C and C++
 //!   (`target/linux/toolchain`, for Linux on musl) and configures Mesa's
 //!   build with it for the renderer, and for this machine (`vgallium.so`,
 //!   the renderer's decoder on softpipe, virgl and iris, for the OpenGL ES
 //!   tests).
 //! * Once it is built, every image build also builds the guest's programs
-//!   (`implementation/guest/`: Rust for Linux on musl, static; the
-//!   renderer, Mesa's build around its Rust half) and packs them into the
-//!   initial RAM file system the kernel starts with, with the firmware its
-//!   drivers load (`ports/linux/firmware.txt`, and the architecture's in
-//!   `ports/linux/arch/<architecture>/`). Both go into the system
-//!   image (`linux/kernel`, `linux/initramfs.cpio`), where `drivervm`
+//!   (`implementation/guest/`: Rust for Linux on musl, static; the renderer,
+//!   Mesa's build around its Rust half) and packs them into the initial RAM
+//!   file system the kernel starts with, with the firmware its drivers load
+//!   (`implementation/ports/linux/firmware.txt`, and the architecture's in
+//!   `implementation/ports/linux/arch/<architecture>/`). Both go into the
+//!   system image (`linux/kernel`, `linux/initramfs.cpio`), where `drivervm`
 //!   finds them.
 
 use std::path::{Path, PathBuf};
@@ -71,9 +71,9 @@ pub fn built() -> bool {
     image().is_file()
 }
 
-/// Mesa's build directories, which `ports/linux/build.sh` configures: for
-/// the guest (the renderer), and for this machine (the renderer's decoder
-/// as a library, for the OpenGL ES tests).
+/// Mesa's build directories, which `implementation/ports/linux/build.sh`
+/// configures: for the guest (the renderer), and for this machine (the
+/// renderer's decoder as a library, for the OpenGL ES tests).
 fn mesa_build() -> PathBuf {
     root().join("build").join("mesa")
 }
@@ -198,7 +198,7 @@ pub fn command(args: &[String]) -> Result {
     }
     firmware()?;
     let lib = renderer_lib()?;
-    let ports = util::workspace_root().join("ports");
+    let ports = ports::dir();
     util::run(
         Command::new("bash")
             .arg(ports.join("linux").join("build.sh"))
@@ -278,12 +278,13 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     Ok(Some((util::read(&image())?, archive.finish())))
 }
 
-/// The firmware of `ports/linux/firmware.txt` and of the architecture's
-/// list (`ports/linux/arch/<architecture>/firmware.txt`, which may name the
-/// sources of the first): each file's name, and where it is (fetched now if
-/// it is not, or is not the file pinned).
+/// The firmware of `implementation/ports/linux/firmware.txt` and of the
+/// architecture's list
+/// (`implementation/ports/linux/arch/<architecture>/firmware.txt`, which may
+/// name the sources of the first): each file's name, and where it is
+/// (fetched now if it is not, or is not the file pinned).
 fn firmware() -> Result<Vec<(String, PathBuf)>> {
-    let port = util::workspace_root().join("ports").join("linux");
+    let port = ports::dir().join("linux");
     let arch_list = port.join("arch").join(arch::NAME).join("firmware.txt");
     let mut sources = std::collections::BTreeMap::new();
     let mut files = Vec::new();

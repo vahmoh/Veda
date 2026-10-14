@@ -3,9 +3,13 @@
 
 # What Cargo is told of each architecture's targets (their linkers and
 # flags) is in .cargo/arch/<architecture>/config.toml. The crates in
-# ports/ take the place of their releases once `cargo xtask` has prepared
-# them, in ports/.crates/config.toml (see "Crates" in ports/README.md).
-include = ["arch/amd64/config.toml", { path = "../ports/.crates/config.toml", optional = true }]
+# implementation/ports/ take the place of their releases once `cargo xtask`
+# has prepared them, in implementation/ports/.crates/config.toml (see
+# "Crates" in implementation/ports/README.md).
+include = [
+    "arch/amd64/config.toml",
+    { path = "../implementation/ports/.crates/config.toml", optional = true },
+]
 
 [alias]
 # `cargo xtask <command>` drives every development workflow (build, run, test).

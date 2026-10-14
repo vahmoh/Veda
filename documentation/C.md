@@ -78,12 +78,12 @@ process gets, which for an ELF program carries the working directory and
 the handles: the registry, the terminal, and the files and streams that
 become its descriptors (role `FD + n`).
 
-**The C library** is musl 1.2.6 (`ports/musl`). It is Linux's C library
-almost unchanged: where it would make a Linux system call, it calls
-`__veda_syscall`, and a handful of entry points that cannot be C (thread
-creation, the thread pointer, a thread freeing its own stack) jump into
-the POSIX layer. `_start` stores the bootstrap channel the kernel passes,
-and `__init_libc` calls the POSIX layer to set itself up before any
+**The C library** is musl 1.2.6 (`implementation/ports/musl`). It is Linux's
+C library almost unchanged: where it would make a Linux system call, it
+calls `__veda_syscall`, and a handful of entry points that cannot be C
+(thread creation, the thread pointer, a thread freeing its own stack) jump
+into the POSIX layer. `_start` stores the bootstrap channel the kernel
+passes, and `__init_libc` calls the POSIX layer to set itself up before any
 constructor runs. `posix_spawn` is Veda's own (there is no `fork`).
 
 **The POSIX layer** (`implementation/libraries/posix`, crate `vposix`) is
@@ -171,17 +171,19 @@ and wakes a waiter on, once the thread has left its stack).
 
 ## The toolchain
 
-`cargo xtask toolchain` builds it from the sources in `ports/`:
+`cargo xtask toolchain` builds it from the sources in
+`implementation/ports/`:
 
 1. downloads the source archives and checks them against the SHA-256 each
-   `ports/*/port.toml` pins (their GPG signatures were checked against the
-   GNU and musl keys when they were pinned);
+   `implementation/ports/*/port.toml` pins (their GPG signatures were
+   checked against the GNU and musl keys when they were pinned);
 2. builds the POSIX layer for the architecture's bare target
    (`x86_64-unknown-none` on AMD64);
-3. runs `ports/build.sh` to unpack and patch the
+3. runs `implementation/ports/build.sh` to unpack and patch the
    sources (each port's patch, then the architecture's) and build, with
-   the architecture's settings (`ports/arch/<architecture>/settings.sh`),
-   in `target/toolchain`:
+   the architecture's settings
+   (`implementation/ports/arch/<architecture>/settings.sh`), in
+   `target/toolchain`:
    * `cross/`, the cross toolchain for this machine: on AMD64
      `x86_64-veda-gcc`, `x86_64-veda-g++` with the C++ library
      (libstdc++), and the binutils,
@@ -231,8 +233,8 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 
 Each port is a directory with `port.toml` (version, address, SHA-256,
 licence), `veda.patch` and, for what is the architecture's,
-`arch/<architecture>/veda.patch`; `ports/README.md` describes how to
-change one.
+`arch/<architecture>/veda.patch`; `implementation/ports/README.md` describes
+how to change one.
 
 ### Licences
 

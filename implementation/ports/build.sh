@@ -154,7 +154,7 @@ stage_posix_layer() {
 	$TARGET-ar rcs "$SYSROOT/system/lib/libc.a" "$BUILD/veda.o"
 	# And its header for Veda's own interfaces, <veda/ipc.h>.
 	mkdir -p "$SYSROOT/system/include/veda"
-	cp "$PORTS"/../implementation/libraries/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
+	cp "$PORTS"/../libraries/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
 }
 stage posix_layer musl "$POSIX_LIB" @POSIX_EXPORTS
 
@@ -397,11 +397,11 @@ stage native binutils_native gcc_native posix_layer
 
 # --- Rust --------------------------------------------------------------------
 
-# Rust (ports/rust): its compiler, built with its LLVM to run on this
-# machine, and its standard library, for this machine (where build scripts
-# and procedural macros run) and for Veda's target (RUST_TARGET), where it
-# stands on the C library as libstdc++ does: the cross GCC links its
-# programs. Installed in rust/, as Rust's releases install. It is
+# Rust (implementation/ports/rust): its compiler, built with its LLVM to run
+# on this machine, and its standard library, for this machine (where build
+# scripts and procedural macros run) and for Veda's target (RUST_TARGET),
+# where it stands on the C library as libstdc++ does: the cross GCC links
+# its programs. Installed in rust/, as Rust's releases install. It is
 # compiled by the release before it (RUST_STAGE0, which the release's
 # src/stage0 pins: xtask downloaded and checked it).
 RUST=$ROOT/rust

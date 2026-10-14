@@ -50,13 +50,15 @@ COMMANDS:
     test        Run host unit tests, then the in-system integration tests
                 (--ui also runs the GUI automation scripts in verification/ui
                 and the agent's in verification/agent, several at once: --jobs N)
-    toolchain   Build the toolchain from ports/: GCC, binutils and musl (a cross
-                compiler for this machine and the native one the image installs in
-                /system), the media libraries, and Rust for Veda's target (needs
-                build tools; see documentation/C.md and RUST.md; --jobs N)
-    linux       Build the Linux kernel of the driver VM from ports/linux (see
-                documentation/DRIVERVM.md; --jobs N); later builds put it in the
-                image, with the guest's programs
+    toolchain   Build the toolchain from implementation/ports/: GCC, binutils and
+                musl (a cross compiler for this machine and the native one the
+                image installs in /system), the media libraries, and Rust for
+                Veda's target (needs build tools; see documentation/C.md and
+                RUST.md; --jobs N)
+    linux       Build the Linux kernel of the driver VM from
+                implementation/ports/linux (see documentation/DRIVERVM.md;
+                --jobs N); later builds put it in the image, with the guest's
+                programs
     acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
                 holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
                 the firmware's variables read as zeros but those given with
@@ -66,8 +68,9 @@ COMMANDS:
     doctor      Check that the required tools are installed
     help        Show this message
 
-Every command but help and clean first prepares the crates of ports/
-(smoltcp, zune-jpeg) for Cargo, when a port has changed: see ports/README.md.
+Every command but help and clean first prepares the crates of
+implementation/ports/ (smoltcp, zune-jpeg) for Cargo, when a port has
+changed: see implementation/ports/README.md.
 
 BUILD OPTIONS:
     --debug             Build without optimisations (slow under emulation)
@@ -1070,9 +1073,9 @@ fn main() -> ExitCode {
         Some((c, r)) => (c.as_str(), r),
         None => ("help", &[][..]),
     };
-    // Before anything else, Cargo is made to build the crates in ports/ as
-    // Veda patches them (see crates.rs), but for the commands that build
-    // nothing; `doctor` reports on them.
+    // Before anything else, Cargo is made to build the crates in
+    // implementation/ports/ as Veda patches them (see crates.rs), but for
+    // the commands that build nothing; `doctor` reports on them.
     let prepared = match cmd {
         "help" | "--help" | "-h" | "clean" | "doctor" => Ok(()),
         _ => crates::prepare(),

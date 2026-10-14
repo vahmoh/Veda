@@ -4,8 +4,8 @@
 # Ports
 
 Third-party software Veda builds from source: the C toolchain (see
-[documentation/C.md](../documentation/C.md)), Rust (see
-[documentation/RUST.md](../documentation/RUST.md)), FFmpeg and dav1d,
+[documentation/C.md](../../documentation/C.md)), Rust (see
+[documentation/RUST.md](../../documentation/RUST.md)), FFmpeg and dav1d,
 which `mediadec` decodes videos with, Mesa, for the renderer, and the Rust
 crates that Veda changes (see Crates below). Veda's own code is Rust; what
 is written in C comes as a port, as do Rust itself and a crate that Veda
@@ -51,16 +51,16 @@ the port in its place:
 * Every `cargo xtask` command first prepares the crates
   (`xtask/src/crates.rs`): when a port has changed, it downloads and
   checks the release, and `crates.sh` unpacks it and applies the port's
-  patches in `ports/.crates/src/<crate>`, which Git ignores.
-* xtask writes `ports/.crates/config.toml`, which has Cargo build those
-  in place of the releases (a `[patch.crates-io]`, which
+  patches in `implementation/ports/.crates/src/<crate>`, which Git ignores.
+* xtask writes `implementation/ports/.crates/config.toml`, which has Cargo
+  build those in place of the releases (a `[patch.crates-io]`, which
   `.cargo/config.toml` includes), and checks that `Cargo.lock` has them.
 
 Cargo reads them before it builds anything, so they are kept outside
-`target/` and `cargo clean` (removing `ports/.crates` has them prepared
-anew). Where they are not ready, in a new checkout or while a port that
-has changed is prepared again, Cargo resolves the releases as published,
-and `Cargo.lock` shows them so, until a `cargo xtask` command has
+`target/` and `cargo clean` (removing `implementation/ports/.crates` has
+them prepared anew). Where they are not ready, in a new checkout or while a
+port that has changed is prepared again, Cargo resolves the releases as
+published, and `Cargo.lock` shows them so, until a `cargo xtask` command has
 prepared them: in a new checkout, run one (`cargo xtask doctor`) before
 Cargo itself (`cargo test -p ...`, rust-analyzer).
 
@@ -68,7 +68,7 @@ A crate's own tests run apart from the workspace, which leaves the
 crates out, from the repository's root:
 
 ```bash
-cargo test --lib --manifest-path ports/.crates/src/smoltcp/Cargo.toml --target-dir target/ports
+cargo test --lib --manifest-path implementation/ports/.crates/src/smoltcp/Cargo.toml --target-dir target/ports
 ```
 
 ## The patches

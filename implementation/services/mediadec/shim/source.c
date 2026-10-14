@@ -19,7 +19,7 @@
 
 #include "vmd_internal.h"
 
-/* The demuxers mediadec is built with (ports/build.sh). */
+/* The demuxers mediadec is built with (implementation/ports/build.sh). */
 static const char FORMATS[] = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,ogg,avi,mpegts,mpeg";
 
 /* AVIO's buffer. */

@@ -49,7 +49,7 @@ cargo xtask script verification/ui/drivervm-renderer.vts   # Interceptor through
 cargo xtask script verification/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
 cargo xtask script verification/agent/app-interceptor.vts   # ... and for the voice agent
 VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
-cargo xtask toolchain          # build the toolchain from ports/ (GCC, binutils, musl; Rust) -> target/toolchain
+cargo xtask toolchain          # build the toolchain from implementation/ports/ (GCC, binutils, musl; Rust) -> target/toolchain
 cargo xtask script verification/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
 cargo xtask script verification/ui/rust-programs.vts   # Rust's standard library on Veda: its checks, in the Terminal
 cargo xtask linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
@@ -267,11 +267,12 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
   `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
   Paths in automation scripts (`shot FILE`) are relative to the repository.
 * smoltcp and zune-jpeg, which Veda changes, are ports: every
-  `cargo xtask` command first has Cargo build them as `ports/` has them,
-  prepared in `ports/.crates` (see "Crates" in `ports/README.md`). In a
-  new checkout, run one (`cargo xtask doctor`) before Cargo itself
-  (`cargo test -p ...`, rust-analyzer), which until then builds their
-  releases as published.
+  `cargo xtask` command first has Cargo build them as
+  `implementation/ports/` has them, prepared in
+  `implementation/ports/.crates` (see "Crates" in
+  `implementation/ports/README.md`). In a new checkout, run one
+  (`cargo xtask doctor`) before Cargo itself (`cargo test -p ...`,
+  rust-analyzer), which until then builds their releases as published.
 
 ## The system image
 

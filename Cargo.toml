@@ -92,11 +92,12 @@ members = [
     "implementation/guest/input",
     "implementation/guest/renderer",
 ]
-# The crates in ports/, as `cargo xtask` prepares them for Cargo, are not
-# members (their own tests and dev-dependencies stay out of this
-# workspace): see "Crates" in ports/README.md. Nor is anything in target/,
-# such as the release of Rust that the toolchain is built from.
-exclude = ["ports/.crates", "target"]
+# The crates in implementation/ports/, as `cargo xtask` prepares them for
+# Cargo, are not members (their own tests and dev-dependencies stay out of
+# this workspace): see "Crates" in implementation/ports/README.md. Nor is
+# anything in target/, such as the release of Rust that the toolchain is
+# built from.
+exclude = ["implementation/ports/.crates", "target"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
 # inside Veda is cross-built by `cargo xtask build`, which knows the correct
 # target for every component.
@@ -257,8 +258,8 @@ vte = { version = "0.15.0", default-features = false }
 # code (fast_image_resize detects the CPU itself).
 zune-core = { version = "0.5.3", default-features = false }
 # zune-jpeg, which Veda builds with a fix of its own, is a port
-# (ports/zune-jpeg): Cargo builds it in place of the release of the version
-# it pins (see "Crates" in ports/README.md).
+# (implementation/ports/zune-jpeg): Cargo builds it in place of the release
+# of the version it pins (see "Crates" in implementation/ports/README.md).
 zune-jpeg = { version = "=0.5.15", default-features = false }
 zune-png = { version = "0.5.2", default-features = false }
 zune-bmp = { version = "0.5.2", default-features = false }
@@ -279,7 +280,7 @@ miniz_oxide = "0.9.1"
 # it is compiled (slicing by 16 tables on a plain x86-64).
 crc32fast = { version = "1.5.2", default-features = false }
 # The TCP/IP stack, which Veda builds with a security patch: a port
-# (ports/smoltcp), like zune-jpeg.
+# (implementation/ports/smoltcp), like zune-jpeg.
 smoltcp = { version = "=0.14.0", default-features = false, features = [
     "alloc",
     "medium-ethernet",

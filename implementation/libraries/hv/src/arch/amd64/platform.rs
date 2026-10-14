@@ -26,7 +26,8 @@
 //! they are. The ACPI tables' RSDP is where the boot parameters say
 //! (`acpi_rsdp_addr`, see `linux`). The Linux guest's side of all this is
 //! `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` and
-//! `arch/x86/include/asm/veda_para.h` in the Linux port (`ports/linux`).
+//! `arch/x86/include/asm/veda_para.h` in the Linux port
+//! (`implementation/ports/linux`).
 
 /// The leaf of the platform's signature.
 pub const CPUID_SIGNATURE: u32 = 0x4000_0000;

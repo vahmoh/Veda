@@ -105,13 +105,13 @@ Rust's programs share those of C programs (see
 ## The toolchain
 
 `cargo xtask toolchain` builds Rust after the C toolchain, from the
-`rust` port (`ports/rust`): the release's source
+`rust` port (`implementation/ports/rust`): the release's source
 (`rustc-1.99.0-src.tar.xz`, pinned by its SHA-256; its signature was
 checked against the Rust project's release key when it was pinned), with
 Veda's patches: Veda's target in the compiler, the standard library on
 Veda, the `libc` crate's description of Veda's C library, and the
-unwinder (`ports/README.md` describes them). Rust's own build program
-(`x.py`) then works in `target/toolchain/build/rust`:
+unwinder (`implementation/ports/README.md` describes them). Rust's own build
+program (`x.py`) then works in `target/toolchain/build/rust`:
 
 1. with the release before this one, its stage 0, which builds it:
    `cargo xtask toolchain` downloads that release's compiler, standard

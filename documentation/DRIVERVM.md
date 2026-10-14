@@ -68,11 +68,11 @@ Each one came from what the alternatives would cost.
    describes, the monitor describes too, in ACPI tables of its own
    (hardware-reduced ACPI: tables, no fixed hardware): the guest's devices
    and the interrupt lines they use, so that Linux finds them as on a PC. A small patch to Linux
-   (`ports/linux`, modelled on Linux's Jailhouse and ACRN guests) makes it
-   the *Veda platform*. In return the hypervisor emulates no instruction
-   at all (no MMIO decoding, the largest source of hypervisor bugs), and
-   Linux boots in about 0.1 s. The one device of the PC's own the guest
-   reaches is the keyboard controller (the i8042), whose two ports the
+   (`implementation/ports/linux`, modelled on Linux's Jailhouse and ACRN
+   guests) makes it the *Veda platform*. In return the hypervisor emulates
+   no instruction at all (no MMIO decoding, the largest source of hypervisor
+   bugs), and Linux boots in about 0.1 s. The one device of the PC's own the
+   guest reaches is the keyboard controller (the i8042), whose two ports the
    monitor reads and writes for it (the processor says which port and
    what value: nothing to decode), all but what would reset the machine.
 
@@ -113,9 +113,9 @@ Each one came from what the alternatives would cost.
 
 9. **Linux is a port.** The kernel is built from a pinned release with a
    configuration that turns on only what the platform has and the devices
-   need (`ports/linux/veda.config`), and a patch for the Veda platform.
-   The guest's programs are Rust, static, on musl; the initial RAM file
-   system holds them and the firmware the devices need.
+   need (`implementation/ports/linux/veda.config`), and a patch for the Veda
+   platform. The guest's programs are Rust, static, on musl; the initial RAM
+   file system holds them and the firmware the devices need.
 
 ## The pieces
 
@@ -127,10 +127,10 @@ Each one came from what the alternatives would cost.
 | IOMMU logic | `implementation/libraries/iommu` (`viommu`) | on AMD64 (`implementation/libraries/iommu/src/arch/amd64`) the DMAR table; the units' registers, tables, entries and descriptors (host-tested) |
 | Device manager | `implementation/services/devmgr` | which devices go to the driver VM (all but Veda's own), their `pcidev` channels, resetting them and starting the driver VM again |
 | Monitor | `implementation/services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
-| Guest kernel | `ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
+| Guest kernel | `implementation/ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, network interfaces among it; `netlink`); their Linux system calls are `rustix`'s |
-| Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt` and the architecture's (`ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
+| Build | `xtask/src/linux.rs`, `implementation/ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `implementation/ports/linux/firmware.txt` and the architecture's (`implementation/ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
 
 ### The platform
 
@@ -460,8 +460,8 @@ makes them devices on the SPI controller (`spi-pxa2xx`, through
 `intel-lpss`) from the firmware's description, `cs35l41_hda` finds their
 reset line, speaker id and the second one's chip select on the
 platform's GPIO controller, and their interrupt on its line, loads their
-DSP's firmware (`ports/linux/firmware.txt`) and powers them for the
-codec's streams, as on the PC. Until the guest has the firmware's
+DSP's firmware (`implementation/ports/linux/firmware.txt`) and powers them
+for the codec's streams, as on the PC. Until the guest has the firmware's
 variables they play without the factory calibration of the speakers,
 which Linux reads from a UEFI variable (Veda's own driver had none
 either).
@@ -579,16 +579,16 @@ every second. A stick that cannot be written to, or without the
 directory, it leaves alone.
 
 **Firmware.** The initial RAM file system carries the firmware Linux's
-drivers load (`/lib/firmware`): the files `ports/linux/firmware.txt`
-lists, and for the devices only the architecture's machines have its list
-(`ports/linux/arch/amd64/firmware.txt`: i915's, the audio DSP's), from a
-pinned release of linux-firmware (and cfg80211's regulatory database, from
-wireless-regdb; Sound Open Firmware's from sof-bin), each checked against
-its SHA-256. A device
-whose firmware is not listed does not work in the driver VM; its driver
-and its firmware go in together. Loading firmware from Veda's file system
-when a device asks, rather than carrying all of it, comes when the list
-grows.
+drivers load (`/lib/firmware`): the files
+`implementation/ports/linux/firmware.txt` lists, and for the devices only
+the architecture's machines have its list
+(`implementation/ports/linux/arch/amd64/firmware.txt`: i915's, the audio
+DSP's), from a pinned release of linux-firmware (and cfg80211's regulatory
+database, from wireless-regdb; Sound Open Firmware's from sof-bin), each
+checked against its SHA-256. A device whose firmware is not listed does not
+work in the driver VM; its driver and its firmware go in together. Loading
+firmware from Veda's file system when a device asks, rather than carrying
+all of it, comes when the list grows.
 
 ### The bridge
 

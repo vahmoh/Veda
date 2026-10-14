@@ -474,7 +474,7 @@ output) to `target/veda/serial.log`.
 | `implementation/libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
 | `implementation/applications/` | the desktop `shell` and the applications; what is testable on the host of Interceptor (its game), Videos and the Terminal is in `interceptor/game`, `videos/core` and `terminal/core` |
 | `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
-| `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
+| `implementation/ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `generation/` | host programs that generate wallpapers, pictures, music and videos at build time |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
@@ -525,29 +525,31 @@ Other parts keep their own licences:
 * **Fonts** (Inter, Lato, JetBrains Mono): the SIL Open Font License 1.1;
   see `assets/fonts/`.
 * **Device firmware** that the driver VM's Linux loads into devices
-  (`ports/linux/firmware.txt`) runs on the devices, not in Veda. It comes
-  unmodified from the Linux firmware collection, under the terms its
-  `WHENCE` gives each file's maker (who allow its redistribution), and
-  from Sound Open Firmware's releases (sof-bin: Intel's signed builds of
+  (`implementation/ports/linux/firmware.txt`) runs on the devices, not in
+  Veda. It comes unmodified from the Linux firmware collection, under the
+  terms its `WHENCE` gives each file's maker (who allow its redistribution),
+  and from Sound Open Firmware's releases (sof-bin: Intel's signed builds of
   the audio DSP's firmware, under the BSD licence and Intel's patent
   licence in its `LICENCE.Intel`).
 * **The crates Veda changes**: smoltcp under the 0BSD licence, and
   zune-jpeg under the MIT, Apache 2.0 or zlib licence, at the choice of
-  whoever uses it. Their source is the releases that `ports/smoltcp` and
-  `ports/zune-jpeg` name, with the patches beside them.
+  whoever uses it. Their source is the releases that
+  `implementation/ports/smoltcp` and `implementation/ports/zune-jpeg` name,
+  with the patches beside them.
 * **Rust's standard library**, in the programs an image may contain that
   use it (its tests): the MIT or Apache 2.0 licence, at the choice of
-  whoever uses it. Its source is the release that `ports/rust` names, with
-  the patches beside it.
+  whoever uses it. Its source is the release that
+  `implementation/ports/rust` names, with the patches beside it.
 * **The C toolchain** an image may contain: GCC and binutils under the GPL
   version 3 or later (the GCC runtime library with its Runtime Library
   Exception, so programs GCC builds keep their own licences), GMP, MPFR
   and MPC under the LGPL version 3 or later, and musl under the MIT
-  licence. Their source is the upstream releases that `ports/*/port.toml`
-  names, with the patches beside them.
+  licence. Their source is the upstream releases that
+  `implementation/ports/*/port.toml` names, with the patches beside them.
 * **The video decoder** an image may contain: FFmpeg under the LGPL
   version 2.1 or later (built without its GPL and non-free parts, which
   the build checks) and dav1d under the BSD 2-clause licence, from the
-  releases `ports/ffmpeg` and `ports/dav1d` name. Some formats it decodes
-  (H.264, HEVC, AAC) are covered by patents in some countries; whoever
-  distributes Veda there is responsible for any licences they need.
+  releases `implementation/ports/ffmpeg` and `implementation/ports/dav1d`
+  name. Some formats it decodes (H.264, HEVC, AAC) are covered by patents in
+  some countries; whoever distributes Veda there is responsible for any
+  licences they need.

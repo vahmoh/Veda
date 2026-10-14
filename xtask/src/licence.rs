@@ -94,13 +94,13 @@ mod tests {
 
     #[test]
     fn what_cannot_carry_a_header_goes_without() {
-        for path in ["documentation/images/a.png", "Cargo.lock", "LICENSE", "ports/gcc/veda.patch"] {
+        for path in ["documentation/images/a.png", "Cargo.lock", "LICENSE", "implementation/ports/gcc/veda.patch"] {
             assert!(exempt(path), "{path}");
         }
         for path in [
             "implementation/kernel/src/main.rs",
-            "ports/crates.sh",
-            "ports/linux/veda.config",
+            "implementation/ports/crates.sh",
+            "implementation/ports/linux/veda.config",
             "documentation/website/index.html",
         ] {
             assert!(!exempt(path), "{path}");

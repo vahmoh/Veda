@@ -30,13 +30,14 @@ pub const BARE_TARGET: &str = "x86_64-unknown-none";
 /// Rust's target of the driver VM's programs: Linux's, on musl.
 pub const GUEST_TARGET: &str = "x86_64-unknown-linux-musl";
 
-/// Rust's target of programs that use its standard library on Veda, on the
-/// C library: the rust port's own, which the toolchain builds
-/// (`ports/rust`, its settings in `ports/arch/amd64/settings.sh`).
+/// Rust's target of programs that use its standard library on Veda, on the C
+/// library: the rust port's own, which the toolchain builds
+/// (`implementation/ports/rust`, its settings in
+/// `implementation/ports/arch/amd64/settings.sh`).
 pub const STD_TARGET: &str = "x86_64-unknown-veda";
 
 /// The C toolchain's target (`x86_64-veda-gcc` and friends), as the ports
-/// build it (`ports/arch/amd64/settings.sh`).
+/// build it (`implementation/ports/arch/amd64/settings.sh`).
 pub const C_TARGET: &str = "x86_64-veda";
 
 /// The target of the driver VM's C toolchain (`x86_64-linux-musl-gcc` and

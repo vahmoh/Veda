@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The ports (`ports/`): the releases of other projects that Veda builds
-//! with changes of its own, each pinned by its `port.toml` (see
-//! `ports/README.md`).
+//! The ports (`implementation/ports/`): the releases of other projects that
+//! Veda builds with changes of its own, each pinned by its `port.toml` (see
+//! `implementation/ports/README.md`).
 //!
 //! What builds them fetches their releases here, each build into a
 //! `downloads/` of its own: the toolchain, with the media libraries and
@@ -16,7 +16,12 @@ use std::process::Command;
 use crate::util::{self, Result};
 use crate::{crates, linux, toolchain};
 
-/// A source package of `ports/` (its `port.toml`).
+/// The ports' directory.
+pub fn dir() -> PathBuf {
+    util::workspace_root().join("implementation").join("ports")
+}
+
+/// A source package of `implementation/ports/` (its `port.toml`).
 pub struct Port {
     pub name: String,
     pub version: String,
@@ -25,9 +30,9 @@ pub struct Port {
 }
 
 impl Port {
-    /// The port in `ports/NAME`.
+    /// The port in `implementation/ports/NAME`.
     pub fn named(name: &str) -> Result<Port> {
-        Port::load(&util::workspace_root().join("ports").join(name))
+        Port::load(&dir().join(name))
     }
 
     fn load(dir: &Path) -> Result<Port> {
@@ -66,7 +71,7 @@ pub fn sha256_of(path: &Path) -> Result<String> {
 /// build has (the toolchain's, the driver VM's Linux's or the crates') is
 /// copied.
 pub fn fetch(port: &Port, downloads: &Path) -> Result {
-    download(&port.url, &port.sha256, &format!("ports/{}/port.toml", port.name), downloads).map(|_| ())
+    download(&port.url, &port.sha256, &format!("implementation/ports/{}/port.toml", port.name), downloads).map(|_| ())
 }
 
 /// Downloads the archive at `url` into `downloads` unless it is there, and

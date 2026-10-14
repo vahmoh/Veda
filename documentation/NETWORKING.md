@@ -23,7 +23,8 @@ talk over kernel channels; the kernel knows nothing about networks.
   autoconfiguration, routing between interfaces, a caching DNS resolver,
   and the sockets applications use. The protocol engine is
   [smoltcp](https://github.com/smoltcp-rs/smoltcp), a port
-  (`ports/smoltcp`): its release with one documented patch (see below).
+  (`implementation/ports/smoltcp`): its release with one documented patch
+  (see below).
 * **Applications** use `vnet` (`implementation/libraries/net`): blocking,
   `std::net`-like `TcpStream`, `TcpListener`, `UdpSocket`, name resolution,
   ping, and `vnet::wifi` for Wi-Fi; `vtls`
@@ -253,7 +254,8 @@ built `no_std`:
 * **smoltcp 0.14** (TCP/IP), a port with one patch: its random numbers
   (TCP initial sequence numbers, DHCP and DNS ids, source ports) come from
   a ChaCha20 stream keyed from the kernel's generator instead of the
-  predictable upstream sPCG32 (`ports/smoltcp`; see `ports/README.md`).
+  predictable upstream sPCG32 (`implementation/ports/smoltcp`; see
+  `implementation/ports/README.md`).
 * **RustCrypto**: `sha1`, `sha2`, `hmac`, `pbkdf2`, `aes`, `ccm`, `cmac`,
   `aes-kw`, `p256` (SAE), `base16ct` (keys typed in hexadecimal), plus
   `subtle` (constant-time comparisons) and `zeroize`; `chacha20` and
@@ -340,9 +342,9 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
 ## Limitations and next steps
 
 * Wi-Fi hardware is Linux's, through the driver VM: Intel's AX211 has its
-  firmware so far (`ports/linux/firmware.txt`); other cards need their
-  driver and firmware added. 6 GHz channels, and telling Linux the
-  country (it keeps to the world's rules, listening first on channels
+  firmware so far (`implementation/ports/linux/firmware.txt`); other cards
+  need their driver and firmware added. 6 GHz channels, and telling Linux
+  the country (it keeps to the world's rules, listening first on channels
   that need it), are next. QEMU cannot emulate a Wi-Fi adapter, so beyond
   `vwlan`'s host tests Wi-Fi is tested on PCs.
 * WPA2/WPA3-Enterprise (802.1X/EAP), Enhanced Open (OWE), fast roaming

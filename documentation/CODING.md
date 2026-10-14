@@ -22,16 +22,16 @@ These rules apply to every crate in the repository.
   linked without whole-program LTO, so what a crate makes reachable
   (generic code instantiated for every case, features left on) is in
   every program that calls it. A library that is wrong is fixed, not
-  worked around in silence: it becomes a port (`ports/`, as smoltcp and
-  zune-jpeg are: its release with an explained patch, which Cargo builds
-  in its place), and the bug is reported upstream. `core`, `alloc` and
-  (for host tools and the driver VM's Linux programs only) `std` are
-  available.
+  worked around in silence: it becomes a port (`implementation/ports/`, as
+  smoltcp and zune-jpeg are: its release with an explained patch, which
+  Cargo builds in its place), and the bug is reported upstream. `core`,
+  `alloc` and (for host tools and the driver VM's Linux programs only) `std`
+  are available.
 * **Rust only**, performance-critical code included (see Performance below).
   Third-party software that Veda builds (the toolchain: GCC, binutils,
   musl, and Rust for Veda's own target; ...) comes as *ports*
-  (`ports/`): an upstream release pinned by its SHA-256 plus a small,
-  explained patch, never copied into the source tree. The C and C++
+  (`implementation/ports/`): an upstream release pinned by its SHA-256 plus
+  a small, explained patch, never copied into the source tree. The C and C++
   programs in `verification/c` test that environment, and the Rust
   programs in `verification/rust` the standard library on it.
 
@@ -80,13 +80,13 @@ be added beside AMD64 without touching code that is not its own:
   an `arch/<architecture>/` directory of each place, where the tool
   allows it: Cargo's settings of the targets are in
   `.cargo/arch/amd64/config.toml` (which `.cargo/config.toml` includes);
-  the ports' in `ports/arch/amd64/settings.sh`, and each port's changes
-  for the architecture in `ports/<port>/arch/amd64/` (a patch applied
-  after the port's own; the driver VM's kernel options); what the C tests
-  expect of it in `verification/c/arch/amd64/`; and the GUI scripts that
-  hold only on its machine in `verification/ui/arch/amd64/`.
-  `rust-toolchain.toml` lists AMD64's Rust targets, as rustup reads them
-  nowhere else.
+  the ports' in `implementation/ports/arch/amd64/settings.sh`, and each
+  port's changes for the architecture in
+  `implementation/ports/<port>/arch/amd64/` (a patch applied after the
+  port's own; the driver VM's kernel options); what the C tests expect of it
+  in `verification/c/arch/amd64/`; and the GUI scripts that hold only on its
+  machine in `verification/ui/arch/amd64/`. `rust-toolchain.toml` lists
+  AMD64's Rust targets, as rustup reads them nowhere else.
 
 ## Targets
 

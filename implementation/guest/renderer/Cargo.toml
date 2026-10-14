@@ -10,7 +10,8 @@ license.workspace = true
 
 # The program's Rust half, which serves the `gpu` protocol. Mesa's build
 # links it with the decoder (decoder/), its libdrm (drm/) and the Gallium
-# drivers into the program (ports/mesa: src/gallium/targets/veda).
+# drivers into the program (src/gallium/targets/veda, with the port
+# implementation/ports/mesa).
 [lib]
 name = "renderer"
 path = "src/lib.rs"

@@ -123,10 +123,10 @@ stage config src_linux "$PORTS/linux/veda.config" "$PORTS/linux/arch/$VEDA_ARCH/
 
 # The guest's programs in C and C++ (Mesa, for the renderer) are built by a
 # cross toolchain for Linux on musl, from the releases Veda's own is built
-# from (ports/binutils, gcc and musl) as their authors released them: Veda's
-# patches add Veda's target, and the guest's (GUEST) is upstream's own.
-# Programs link statically, position independent (-static-pie, as Rust
-# links them).
+# from (implementation/ports/binutils, gcc and musl) as their authors
+# released them: Veda's patches add Veda's target, and the guest's (GUEST)
+# is upstream's own. Programs link statically, position independent
+# (-static-pie, as Rust links them).
 TOOLS=$ROOT/toolchain
 SYSROOT=$TOOLS/sysroot
 export PATH="$TOOLS/bin:$PATH"

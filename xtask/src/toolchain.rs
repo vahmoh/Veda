@@ -4,7 +4,8 @@
 //! The toolchain: GCC, binutils and musl for Veda, the media libraries, and
 //! Rust.
 //!
-//! `cargo xtask toolchain` builds, from the sources in `ports/`:
+//! `cargo xtask toolchain` builds, from the sources in
+//! `implementation/ports/`:
 //!
 //! * a **cross toolchain** that runs on this machine and makes Veda
 //!   programs (`<target>-gcc` and friends, for the architecture's target,
@@ -23,7 +24,7 @@
 //! Everything lives under `target/toolchain` (`$VEDA_TOOLCHAIN` overrides
 //! it): `downloads/` (the verified source archives), `src/` (unpacked and
 //! patched), `build/`, `cross/`, `native/`, `media/` and `rust/`.
-//! Everything is built with `ports/build.sh`.
+//! Everything is built with `implementation/ports/build.sh`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -185,7 +186,8 @@ pub fn posix_library() -> Result<PathBuf> {
 /// Links the POSIX layer's static library into the one relocatable object
 /// the C library holds, which exports [`POSIX_LAYER_EXPORTS`] and nothing
 /// else (no Rust or compiler-builtins symbol can clash with the C
-/// library's). `ports/build.sh` does the same for the first build.
+/// library's). `implementation/ports/build.sh` does the same for the first
+/// build.
 pub fn posix_object(lib: &Path, out: &Path) -> Result {
     isolated_object(lib, out, &POSIX_LAYER_EXPORTS)
 }
@@ -501,8 +503,8 @@ fn native_layer_note() -> PathBuf {
 
 /// The native toolchain's programs are C programs too, with the POSIX layer
 /// linked in: when it has changed since they were linked, links them again
-/// (`ports/build.sh` redoes only that). Without the build tools it says so
-/// and leaves them as they are.
+/// (`implementation/ports/build.sh` redoes only that). Without the build
+/// tools it says so and leaves them as they are.
 pub fn relink_native() -> Result {
     let object = posix_layer_object();
     if !built("native toolchain") || !object.is_file() {
@@ -628,7 +630,8 @@ fn fetch_rust_stage0(downloads: &Path, host: &str) -> Result<Vec<String>> {
 const BUILD_TOOLS: [&str; 12] =
     ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl", "meson", "ninja", "cmake", "python3"];
 
-/// The shell that runs `ports/build.sh`, once the build tools are there.
+/// The shell that runs `implementation/ports/build.sh`, once the build tools
+/// are there.
 fn shell() -> Result<Command> {
     let missing: Vec<&str> =
         BUILD_TOOLS.iter().chain(arch::PORT_TOOLS).copied().filter(|t| util::find_on_path(t).is_none()).collect();
@@ -680,9 +683,9 @@ pub fn command(args: &[String]) -> Result {
     // The script makes the C library's object of the POSIX layer once its
     // cross linker exists.
     let library = posix_library()?;
-    let script = util::workspace_root().join("ports").join("build.sh");
+    let script = ports::dir().join("build.sh");
     sh.arg(&script)
-        .env("VEDA_PORTS", util::workspace_root().join("ports"))
+        .env("VEDA_PORTS", ports::dir())
         .env("VEDA_ARCH", arch::NAME)
         .env("VEDA_TOOLCHAIN", root())
         .env("VEDA_POSIX_LIB", &library)

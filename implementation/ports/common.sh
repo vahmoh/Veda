@@ -9,7 +9,7 @@
 
 log() { printf '\033[1;32m%12s\033[0m %s\n' "$1" "$2"; }
 
-# The value of KEY in ports/NAME/port.toml.
+# The value of KEY in implementation/ports/NAME/port.toml.
 port() {
 	sed -n "s/^$2 *= *\"\(.*\)\"/\1/p" "$PORTS/$1/port.toml"
 }

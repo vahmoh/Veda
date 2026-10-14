@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The crates among the ports: Rust crates that Veda builds with changes
-//! of its own (see "Crates" in `ports/README.md`).
+//! of its own (see "Crates" in `implementation/ports/README.md`).
 //!
 //! The workspace depends on each one's release by its version, as on any
 //! crate. [`prepare`], which every `cargo xtask` command runs before
 //! anything else, has Cargo build the port in its place: it downloads and
-//! checks the release, has `ports/crates.sh` unpack it and apply the
-//! port's patches in `ports/.crates/src/<crate>`, and writes
-//! `ports/.crates/config.toml`, a `[patch.crates-io]` of them, which
-//! `.cargo/config.toml` includes. They are kept outside `target/` (and
-//! `cargo clean`), as Cargo reads them before it builds anything; until a
-//! checkout has them, Cargo takes the releases as published.
+//! checks the release, has `implementation/ports/crates.sh` unpack it and
+//! apply the port's patches in `implementation/ports/.crates/src/<crate>`,
+//! and writes `implementation/ports/.crates/config.toml`, a
+//! `[patch.crates-io]` of them, which `.cargo/config.toml` includes. They
+//! are kept outside `target/` (and `cargo clean`), as Cargo reads them
+//! before it builds anything; until a checkout has them, Cargo takes the
+//! releases as published.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,18 +27,18 @@ use crate::util::{self, Result};
 pub const CRATES: [&str; 2] = ["smoltcp", "zune-jpeg"];
 
 /// The programs that preparing them takes: for the downloads, and for
-/// `ports/crates.sh`.
+/// `implementation/ports/crates.sh`.
 const TOOLS: [&str; 6] = ["curl", "bash", "tar", "gzip", "patch", "sha256sum"];
 
-/// Their directory in `ports/`.
+/// Their directory in `implementation/ports/`.
 const DIRECTORY: &str = ".crates";
 
 /// Where they are prepared: `downloads/` (the verified releases), `src/`
 /// (each crate, unpacked and patched), `stamps/` (the fingerprints of
-/// `ports/crates.sh`), `prepared` (the fingerprint of the ports they were
-/// prepared from) and `config.toml` (Cargo's patch).
+/// `implementation/ports/crates.sh`), `prepared` (the fingerprint of the
+/// ports they were prepared from) and `config.toml` (Cargo's patch).
 pub fn root() -> PathBuf {
-    util::workspace_root().join("ports").join(DIRECTORY)
+    ports::dir().join(DIRECTORY)
 }
 
 /// Makes Cargo build every crate of [`CRATES`] as its port has it: prepares
@@ -98,12 +99,12 @@ pub fn status() -> std::result::Result<String, String> {
     Ok(format!("{} ({})", crates.join(", "), root().display()))
 }
 
-/// The SHA-256 of what the crates are prepared from: `ports/crates.sh`,
-/// and each crate's `port.toml` and patches (its own, and the
-/// architecture's).
+/// The SHA-256 of what the crates are prepared from:
+/// `implementation/ports/crates.sh`, and each crate's `port.toml` and
+/// patches (its own, and the architecture's).
 fn fingerprint() -> Result<String> {
     use sha2::{Digest, Sha256};
-    let ports = util::workspace_root().join("ports");
+    let ports = ports::dir();
     let mut files = vec![ports.join("crates.sh")];
     for name in CRATES {
         let dir = ports.join(name);
@@ -128,13 +129,14 @@ fn prepared(root: &Path, stamp: &Path, print: &str) -> bool {
         && CRATES.iter().all(|c| root.join("src").join(c).join("Cargo.toml").is_file())
 }
 
-/// Downloads the crates' releases and has `ports/crates.sh` unpack and
-/// patch those whose ports have changed.
+/// Downloads the crates' releases and has `implementation/ports/crates.sh`
+/// unpack and patch those whose ports have changed.
 fn unpack(root: &Path) -> Result {
     let missing: Vec<&str> = TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
     if !missing.is_empty() {
         return Err(format!(
-            "{} missing: install from the distribution's packages (the crates in ports/ are prepared with them)",
+            "{} missing: install from the distribution's packages (the crates in implementation/ports/ are \
+             prepared with them)",
             missing.join(", ")
         ));
     }
@@ -146,7 +148,7 @@ fn unpack(root: &Path) -> Result {
             let _ = std::fs::remove_file(root.join("stamps").join(format!("src_{name}")));
         }
     }
-    let ports = util::workspace_root().join("ports");
+    let ports = ports::dir();
     util::run(
         Command::new("bash")
             .arg(ports.join("crates.sh"))
@@ -161,10 +163,11 @@ fn unpack(root: &Path) -> Result {
 fn config_text() -> String {
     let mut text = String::from(
         "# Written by `cargo xtask` (xtask/src/crates.rs): Cargo builds the\n\
-         # crates in ports/ as they are prepared here, in place of their\n\
-         # releases. It takes these paths from ports/, the directory above\n\
-         # this file's. Should one of them be missing, remove ports/.crates:\n\
-         # the next `cargo xtask` command prepares them anew.\n\
+         # crates in implementation/ports/ as they are prepared here, in place\n\
+         # of their releases. It takes these paths from implementation/ports/,\n\
+         # the directory above this file's. Should one of them be missing,\n\
+         # remove implementation/ports/.crates: the next `cargo xtask` command\n\
+         # prepares them anew.\n\
          [patch.crates-io]\n",
     );
     for name in CRATES {
@@ -183,8 +186,8 @@ fn check_lock() -> Result {
         let port = Port::named(name)?;
         if !locked_from_path(&lock, name, &port.version) {
             return Err(format!(
-                "Cargo does not build {name} {} from ports/{name}: the workspace must depend on that version \
-                 (`{name} = {{ version = \"={}\", ... }}` in Cargo.toml)",
+                "Cargo does not build {name} {} from implementation/ports/{name}: the workspace must depend \
+                 on that version (`{name} = {{ version = \"={}\", ... }}` in Cargo.toml)",
                 port.version, port.version
             ));
         }

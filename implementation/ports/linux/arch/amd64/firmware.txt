@@ -3,9 +3,9 @@
 
 # The firmware of the devices only PCs have (their drivers are in this
 # directory's veda.config), beside every architecture's
-# (ports/linux/firmware.txt, whose sources these may name): from
-# linux-firmware, and from sof-bin, Sound Open Firmware's (Intel's signed
-# builds, which anyone may redistribute under its LICENCE.Intel).
+# (implementation/ports/linux/firmware.txt, whose sources these may name):
+# from linux-firmware, and from sof-bin, Sound Open Firmware's (Intel's
+# signed builds, which anyone may redistribute under its LICENCE.Intel).
 
 source sof-bin https://raw.githubusercontent.com/thesofproject/sof-bin/v2026.09.2/{}
 

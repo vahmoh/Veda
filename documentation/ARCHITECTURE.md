@@ -594,12 +594,12 @@ in pure Rust: *Interceptor* (below) is its largest program.
   softpipe (`drivervm.renderer=softpipe`, for tests). The program is Mesa's
   build of the decoder (`decoder/`, C) around its Rust half, which serves
   the protocol over the bridge; `cargo xtask linux` builds Mesa for the
-  guest with a toolchain of its own (`ports/linux/build.sh`). The decoder
-  takes virgl's commands straight to Gallium's calls, checking every word
-  first (a client can fail its own context, never the renderer), with
-  Gallium's state cache (`cso_context`) between it and the driver, so that
-  a client deleting an object leaves nothing behind that the driver still
-  uses. Commands are copied out of the shared memory before they are
+  guest with a toolchain of its own (`implementation/ports/linux/build.sh`).
+  The decoder takes virgl's commands straight to Gallium's calls, checking
+  every word first (a client can fail its own context, never the renderer),
+  with Gallium's state cache (`cso_context`) between it and the driver, so
+  that a client deleting an object leaves nothing behind that the driver
+  still uses. Commands are copied out of the shared memory before they are
   decoded. Formats are virgl's, which OpenGL hosts take: 24-bit depth with
   stencil is `S8_UINT_Z24_UNORM`, depth in the upper bits as
   `GL_UNSIGNED_INT_24_8` packs it. iris has depth only in the lower bits
@@ -904,7 +904,7 @@ On AMD64:
 | `implementation/services/devmgr`, `implementation/services/drivervm`, `implementation/services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
 | `verification/systest`, `verification/c`, `verification/ui` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
 | `xtask/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
-| `.cargo/`, `ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
+| `.cargo/`, `implementation/ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
 
 ## Repository layout
 
@@ -936,7 +936,7 @@ of their own (see Architectures above).
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
-| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
+| `implementation/ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
 | `generation/` | host programs: media generators |
