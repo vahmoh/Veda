@@ -20,6 +20,7 @@ vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 guest-sys = { workspace = true }
+rustix = { workspace = true }
 guest-netlink = { workspace = true }
 
 [lints]

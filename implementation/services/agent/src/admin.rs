@@ -206,7 +206,7 @@ impl agent::Server for Admin {
 
     fn check_key(&mut self) -> Result<String, AgentError> {
         let text = self.get(deepgram::PROJECTS_URL)?;
-        let v = vjson::parse(&text).unwrap_or_default();
+        let v = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
         let name = v.pointer("/projects/0/name").and_then(|n| n.as_str()).unwrap_or("your project");
         Ok(alloc::format!("The key works ({name})."))
     }

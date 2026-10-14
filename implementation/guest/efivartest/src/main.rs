@@ -11,6 +11,8 @@
 
 use std::fs;
 
+use rustix::mount::{MountFlags, mount};
+
 /// The test vendor's GUID.
 const VENDOR: &str = "4c9c67e7-ba9b-4464-baa5-3e0538e7a82d";
 /// `VedaTest`'s attributes (non-volatile, boot services' and the
@@ -35,7 +37,8 @@ impl Checks {
 
 fn main() {
     let mut c = Checks { failed: 0 };
-    let mounted = fs::create_dir_all(MOUNTED).and_then(|()| guest_sys::mount("efivarfs", MOUNTED, "efivarfs"));
+    let mounted = fs::create_dir_all(MOUNTED)
+        .and_then(|()| Ok(mount("efivarfs", MOUNTED, "efivarfs", MountFlags::empty(), None)?));
     if let Err(e) = &mounted {
         println!("efivartest: cannot mount efivarfs: {e}");
     }

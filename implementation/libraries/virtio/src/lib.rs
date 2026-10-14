@@ -260,6 +260,9 @@ impl Virtqueue {
             if self.last_used == self.used_idx() {
                 return None;
             }
+            // The entry is read after the index that announced it (virtio
+            // 1.2, 2.7.13: the driver's read barrier).
+            fence(Ordering::Acquire);
             let (id, len) = self.used_elem(self.last_used % self.size);
             self.last_used = self.last_used.wrapping_add(1);
             if id >= self.size as u32 || self.chain_len[id as usize] == 0 {

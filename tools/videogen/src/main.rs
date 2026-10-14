@@ -35,7 +35,6 @@ mod av1;
 mod bubbles;
 mod countdown;
 mod flac;
-mod md5;
 mod mkv;
 mod paint;
 mod yuv;
@@ -338,7 +337,7 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
         let bytes = mux(film, &video, sound.as_ref())?;
         write_atomically(&out.join(VIDEOS).join(film.file), &bytes)?;
         if let Some(dir) = &preview {
-            let text: String = video.md5.iter().map(|d| format!("{}\n", md5::hex(d))).collect();
+            let text: String = video.md5.iter().map(|d| format!("{}\n", hex(d))).collect();
             std::fs::write(dir.join(format!("{}.md5", film.title)), text)
                 .map_err(|e| format!("writing a preview: {e}"))?;
         }
@@ -367,7 +366,7 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
     }
 
     if let Some((bytes, md5)) = countdown {
-        let text: String = md5.iter().map(|d| format!("{}\n", md5::hex(d))).collect();
+        let text: String = md5.iter().map(|d| format!("{}\n", hex(d))).collect();
         write_atomically(&out.join(TESTS).join("Countdown.md5"), text.as_bytes())?;
         println!("  {:<38} {} pictures", format!("{TESTS}/Countdown.md5"), md5.len());
         let truncated = &bytes[..bytes.len() * 3 / 5];
@@ -396,6 +395,12 @@ fn main() {
         eprintln!("videogen: {e}");
         std::process::exit(1);
     }
+}
+
+/// An MD5 digest as lower-case hexadecimal, as `md5sum` and the decoder
+/// print it.
+fn hex(digest: &[u8; 16]) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

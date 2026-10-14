@@ -12,7 +12,8 @@ wait-serial "interface attached" 30
 agent-call open_app '{"app":"about"}' 60
 wait-serial "started about" 30
 agent-call tasks '{"operation":"list"}' 30
-agent-result '"name":"about","id":'
+agent-result '"name":"about"'
+agent-result '"id":'
 agent-call tasks '{"operation":"end","name":"about"}' 30
 agent-result waiting_for_approval
 wait-serial "approval 1 requested: End about" 10

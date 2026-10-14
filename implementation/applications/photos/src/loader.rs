@@ -384,23 +384,11 @@ fn make_thumbs(img: &Image) -> Thumbs {
     let has_alpha = img.pixels.iter().any(|p| p >> 24 != 0xFF);
     // An intermediate size with enough pixels for the crops of any aspect ratio.
     let base = vimage::thumbnail(img, BASE_SIZE, BASE_SIZE, Filter::Bilinear);
-    let card = finish(cover(&base, CARD_W, CARD_H), has_alpha, 10.0);
-    let strip = finish(cover(&base, STRIP_W, STRIP_H), has_alpha, 6.0);
+    let card = finish(vimage::cover(&base, CARD_W, CARD_H, Filter::Bilinear), has_alpha, 10.0);
+    let strip = finish(vimage::cover(&base, STRIP_W, STRIP_H, Filter::Bilinear), has_alpha, 6.0);
     let preview = vimage::thumbnail(&base, PREVIEW_W, PREVIEW_H, Filter::Bilinear);
     let preview = Bitmap::from_straight(preview.width as i32, preview.height as i32, preview.pixels);
     Thumbs { card, strip, preview, has_alpha }
-}
-
-/// Crops the centre of `img` to the aspect ratio of `w` x `h` and scales it to that size.
-fn cover(img: &Image, w: u32, h: u32) -> Image {
-    let (iw, ih) = (img.width.max(1), img.height.max(1));
-    let (cw, ch) = if iw as u64 * h as u64 > ih as u64 * w as u64 {
-        (((ih as u64 * w as u64) / h as u64).max(1) as u32, ih)
-    } else {
-        (iw, ((iw as u64 * h as u64) / w as u64).max(1) as u32)
-    };
-    let cropped = vimage::crop(img, (iw - cw) / 2, (ih - ch) / 2, cw, ch);
-    vimage::resize(&cropped, w, h, Filter::Bilinear)
 }
 
 /// Puts a transparent thumbnail on a checkerboard and rounds its corners; returns it

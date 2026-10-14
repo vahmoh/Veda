@@ -78,18 +78,3 @@ pub fn split(path: &str) -> (String, String) {
 pub fn folder_name(dir: &str) -> &str {
     dir.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("/")
 }
-
-/// Human-readable size: `512 bytes`, `12.4 KB`, `3.1 MB` (powers of 1024).
-pub fn human_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        return format!("{bytes} bytes");
-    }
-    let (value, unit) = if bytes < 1024 * 1024 {
-        (bytes * 10 / 1024, "KB")
-    } else if bytes < 1024 * 1024 * 1024 {
-        (bytes * 10 / (1024 * 1024), "MB")
-    } else {
-        (bytes * 10 / (1024 * 1024 * 1024), "GB")
-    };
-    if value >= 1000 { format!("{} {unit}", value / 10) } else { format!("{}.{} {unit}", value / 10, value % 10) }
-}

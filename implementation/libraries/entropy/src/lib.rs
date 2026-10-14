@@ -1,31 +1,32 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The algorithms behind the kernel's random number generator.
+//! The kernel's random number generator.
 //!
-//! * [`chacha20_block`]: the ChaCha20 block function (RFC 8439).
-//! * [`Blake2s`]: the BLAKE2s-256 hash (RFC 7693), used to condense entropy.
 //! * [`Generator`]: a cryptographically secure generator in the style of
-//!   Linux's: an entropy pool hashed with BLAKE2s feeds the key of a
-//!   ChaCha20 stream, and every request replaces the key with fresh
-//!   keystream before returning ("fast key erasure"), so a later compromise
-//!   of the state does not reveal earlier output.
+//!   Linux's: an entropy pool hashed with BLAKE2s (RFC 7693) feeds the key
+//!   of a ChaCha20 stream (RFC 8439), and every request replaces the key
+//!   with fresh keystream before returning ("fast key erasure"), so a later
+//!   compromise of the state does not reveal earlier output.
+//! * [`FastPool`]: a cheap pool for interrupt timing, folded into a
+//!   [`Generator`].
 //!
+//! ChaCha20 and BLAKE2s are RustCrypto's (`chacha20`, `blake2`), which wipe
+//! their state when it is dropped; on the soft-float targets of the loader
+//! and kernel they run their portable code (`.cargo/arch/amd64/config.toml`).
 //! The crate has no platform code: the kernel supplies the entropy (firmware
 //! seed, the processor's random number generators, timing jitter, interrupt
-//! timing) and the locking.
-//! It is `no_std` and dependency-free so the kernel can use it.
+//! timing) and the locking. It is `no_std` and does not allocate, so the
+//! kernel can use it.
 
 #![no_std]
 
 #[cfg(test)]
 extern crate std;
 
-mod blake2s;
-mod chacha;
-
-pub use blake2s::Blake2s;
-pub use chacha::chacha20_block;
+use blake2::{Blake2s256, Digest};
+use chacha20::ChaCha20;
+use chacha20::cipher::{KeyIvInit, StreamCipher};
 
 /// Bytes in a generator key.
 pub const KEY_LEN: usize = 32;
@@ -39,7 +40,9 @@ pub const KEY_LEN: usize = 32;
 #[derive(Clone)]
 pub struct Generator {
     key: [u8; KEY_LEN],
-    pool: Blake2s,
+    /// BLAKE2s over every input so far (`None` until the first: a hash's
+    /// state cannot be made in a `const`, as the kernel's static needs).
+    pool: Option<Blake2s256>,
     /// Number of entropy inputs mixed into the pool since the last reseed.
     pending_inputs: u32,
     reseeds: u64,
@@ -50,30 +53,32 @@ impl Generator {
     /// seeded with [`Generator::mix`] and [`Generator::reseed`] before its
     /// output is unpredictable.
     pub const fn new() -> Generator {
-        Generator { key: [0; KEY_LEN], pool: Blake2s::new_const(), pending_inputs: 0, reseeds: 0 }
+        Generator { key: [0; KEY_LEN], pool: None, pending_inputs: 0, reseeds: 0 }
     }
 
     /// Mixes `data` into the entropy pool. Inputs never reduce the
     /// unpredictability of the pool, so untrusted data may be mixed too.
     pub fn mix(&mut self, data: &[u8]) {
         // Length-prefix each input so concatenations cannot collide.
-        self.pool.update(&(data.len() as u64).to_le_bytes());
-        self.pool.update(data);
+        let pool = self.pool.get_or_insert_with(Blake2s256::new);
+        pool.update((data.len() as u64).to_le_bytes());
+        pool.update(data);
         self.pending_inputs = self.pending_inputs.saturating_add(1);
     }
 
     /// Folds the entropy pool into the key: `key = BLAKE2s(key ‖ pool)`.
     /// The pool keeps accumulating (it is chained, not cleared).
     pub fn reseed(&mut self) {
-        let pool_digest = self.pool.clone().finalize();
-        let mut h = Blake2s::new();
+        let pool = self.pool.get_or_insert_with(Blake2s256::new);
+        let pool_digest = pool.clone().finalize();
+        let mut h = Blake2s256::new();
         h.update(b"veda reseed");
-        h.update(&self.key);
-        h.update(&pool_digest);
-        h.update(&self.reseeds.to_le_bytes());
-        self.key = h.finalize();
+        h.update(self.key);
+        h.update(pool_digest);
+        h.update(self.reseeds.to_le_bytes());
+        self.key = h.finalize().into();
         // Chain the pool so the next digest depends on everything so far.
-        self.pool.update(&pool_digest);
+        pool.update(pool_digest);
         self.reseeds += 1;
         self.pending_inputs = 0;
     }
@@ -88,27 +93,19 @@ impl Generator {
         self.pending_inputs
     }
 
-    /// Fills `out` with random bytes.
+    /// Fills `out` with random bytes (at most 256 GiB, ChaCha20's stream
+    /// under one key and nonce).
     ///
-    /// The first 32 bytes of keystream become the next key and are never
-    /// output; the rest of the stream (block 0's second half, then blocks
-    /// 1, 2, ...) is the output.
+    /// The key's ChaCha20 stream (a zero nonce, from block 0): its first 32
+    /// bytes become the next key and are never output; the rest of it is
+    /// the output.
     pub fn fill(&mut self, out: &mut [u8]) {
-        let key = self.key;
-        let first = chacha20_block(&key, 0, &[0; 12]);
-        self.key.copy_from_slice(&first[..KEY_LEN]);
-        let mut done = 0;
-        let take = (first.len() - KEY_LEN).min(out.len());
-        out[..take].copy_from_slice(&first[KEY_LEN..KEY_LEN + take]);
-        done += take;
-        let mut counter = 1u32;
-        while done < out.len() {
-            let block = chacha20_block(&key, counter, &[0; 12]);
-            let n = block.len().min(out.len() - done);
-            out[done..done + n].copy_from_slice(&block[..n]);
-            done += n;
-            counter = counter.wrapping_add(1);
-        }
+        let mut stream = ChaCha20::new(&self.key.into(), &[0; 12].into());
+        let mut next = [0u8; KEY_LEN];
+        stream.apply_keystream(&mut next);
+        out.fill(0);
+        stream.apply_keystream(out);
+        self.key = next;
     }
 
     /// Returns a random `u64`.
@@ -200,6 +197,32 @@ mod tests {
         let mut z = [0u8; 64];
         c.fill(&mut z);
         assert_eq!(x, z);
+    }
+
+    /// The generator's output for fixed inputs, as its first version (its
+    /// own ChaCha20 and BLAKE2s) produced it: the output and keys are
+    /// exactly what RFC 8439 and RFC 7693 make of the design.
+    #[test]
+    fn known_answers() {
+        let hex = |b: &[u8]| b.iter().map(|x| std::format!("{x:02x}")).collect::<std::string::String>();
+        let mut g = Generator::new();
+        g.mix(b"known answer");
+        g.mix(&[0xa5; 300]);
+        g.reseed();
+        let mut out = [0u8; 150];
+        g.fill(&mut out);
+        assert_eq!(
+            hex(&out),
+            "f3664c94a182ad064e77309d74ac3bcd40d9bdaa8ce16f2ca869bf9ac606917fcb69b76fdf97f38af59efcd1cb7a77a920d66398e4e3bab7301b8e7e38770d74650e918f2b7905ddd7cfe4403789519567412bbf3ea6d5303a0cca9eaf2edf063036a4dc6af7f463c81b8f40f3830e4d5cbc9f0e480545f0c729cef82b202fe29581fdeecf0efadec45ebacd325ddf513e252ba3df6b"
+        );
+        let mut more = [0u8; 40];
+        g.fill(&mut more);
+        assert_eq!(hex(&more), "3b4a3f425c07b7ec424cbf5354581b778746048c018acc0862ec899f55f5208367f3e4c84aa001b3");
+        assert_eq!(hex(&g.key), "de1c4bd04d5fb046a0b0d0f789d700517019893dd001a7858de42b7be23dda50");
+        // A pool nothing was mixed into.
+        let mut fresh = Generator::new();
+        fresh.reseed();
+        assert_eq!(hex(&fresh.key), "ecf2211632b1dfd6722f937ad552f44bb0ef66fb778d45801f0ac2de5618bdf8");
     }
 
     #[test]

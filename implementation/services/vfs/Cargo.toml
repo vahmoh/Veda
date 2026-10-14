@@ -19,6 +19,7 @@ vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 initrd = { workspace = true }
+crc32fast = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

@@ -14,6 +14,7 @@ vheap = { workspace = true }
 vpe = { workspace = true }
 velf = { workspace = true }
 vhv = { workspace = true }
+libm = { workspace = true }
 
 [features]
 default = ["runtime"]

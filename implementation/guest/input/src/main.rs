@@ -25,12 +25,17 @@ mod touchpad;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::time::Duration;
 
-use guest_sys::{POLLIN, PollFd, ioc, ioctl, poll_many};
+use guest_sys::ReadInto;
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::io::Errno;
+use rustix::ioctl::{IntegerSetter, Opcode, ioctl, opcode};
+use rustix::net::netlink::{self, SocketAddrNetlink};
+use rustix::net::{AddressFamily, SocketFlags, SocketType, bind, socket_with};
 use vproto::input::{InputEvent, InputSink, keys};
 
 use touchpad::{Axis, Touchpad};
@@ -80,12 +85,15 @@ const EVIOCGKEY: u8 = 0x18;
 const EVIOCGBIT: u8 = 0x20;
 const EVIOCGABS: u8 = 0x40;
 const EVIOCGRAB: u8 = 0x90;
+/// `EVIOCGRAB`'s request, which takes an `int`: the device's events for
+/// this file alone (1), or for every reader again (0).
+const GRAB: Opcode = opcode::write::<i32>(b'E', EVIOCGRAB);
 
 /// What evdev request `nr` reads into `len` bytes.
 fn get(file: &File, nr: u8, len: usize) -> io::Result<Vec<u8>> {
     let mut buf = vec![0u8; len];
     // SAFETY: the request writes at most `len` bytes into `buf`.
-    unsafe { ioctl(file.as_raw_fd(), ioc(2, b'E', nr, len), buf.as_mut_ptr() as usize)? };
+    unsafe { ioctl(file, ReadInto::new(b'E', nr, &mut buf))? };
     Ok(buf)
 }
 
@@ -214,7 +222,7 @@ impl Device {
         }
         // Linux's own handlers of keys (SysRq's) see nothing of it now.
         // SAFETY: the request takes a value.
-        if let Err(e) = unsafe { ioctl(file.as_raw_fd(), ioc(1, b'E', EVIOCGRAB, 4), 1) } {
+        if let Err(e) = unsafe { ioctl(&file, IntegerSetter::<GRAB>::new_usize(1)) } {
             println!("input: {name}: cannot have it alone: {e}");
         }
         println!("input: {name}: {}", what.join(" and "));
@@ -402,17 +410,10 @@ impl Device {
 
 /// A socket the kernel's uevents come on: devices that come and go.
 fn uevents() -> io::Result<OwnedFd> {
-    const AF_NETLINK: i32 = 16;
-    const SOCK_DGRAM: i32 = 2;
-    const SOCK_NONBLOCK: i32 = 0o4000;
-    const SOCK_CLOEXEC: i32 = 0o2000000;
-    const NETLINK_KOBJECT_UEVENT: i32 = 15;
-    let socket = guest_sys::socket(AF_NETLINK, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, NETLINK_KOBJECT_UEVENT)?;
-    // A `sockaddr_nl`: the family, any port, the kernel's group (1).
-    let mut address = [0u8; 12];
-    address[0..2].copy_from_slice(&(AF_NETLINK as u16).to_ne_bytes());
-    address[8..12].copy_from_slice(&1u32.to_ne_bytes());
-    guest_sys::bind(socket.as_raw_fd(), &address)?;
+    let flags = SocketFlags::NONBLOCK | SocketFlags::CLOEXEC;
+    let socket = socket_with(AddressFamily::NETLINK, SocketType::DGRAM, flags, Some(netlink::KOBJECT_UEVENT))?;
+    // Any port, the kernel's group (1).
+    bind(&socket, &SocketAddrNetlink::new(0, 1))?;
     Ok(socket)
 }
 
@@ -420,7 +421,7 @@ fn uevents() -> io::Result<OwnedFd> {
 fn input_uevent(socket: &OwnedFd) -> bool {
     let mut buf = [0u8; 4096];
     let mut input = false;
-    while let Ok(n) = guest_sys::read(socket.as_raw_fd(), &mut buf) {
+    while let Ok(n) = rustix::io::read(socket, &mut buf) {
         input |= buf[..n].split(|&b| b == 0).any(|field| field == b"SUBSYSTEM=input");
     }
     input
@@ -481,20 +482,23 @@ fn main() {
     scan(&mut devices, caps);
     let mut buf = vec![0u8; EVENT_SIZE * 64];
     loop {
-        let mut fds = vec![PollFd::new(uevents.as_raw_fd(), POLLIN)];
         let numbers: Vec<u64> = devices.keys().copied().collect();
-        fds.extend(devices.values().map(|d| PollFd::new(d.file.as_raw_fd(), POLLIN)));
-        if let Err(e) = poll_many(&mut fds, -1) {
-            if e.kind() != io::ErrorKind::Interrupted {
+        // Whether the uevents, then each device, have something.
+        let mut fds = vec![PollFd::new(&uevents, PollFlags::IN)];
+        fds.extend(devices.values().map(|d| PollFd::new(&d.file, PollFlags::IN)));
+        if let Err(e) = poll(&mut fds, None) {
+            if e != Errno::INTR {
                 println!("input: cannot wait: {e}");
                 std::thread::sleep(Duration::from_secs(1));
             }
             continue;
         }
+        let ready: Vec<bool> = fds.iter().map(|f| !f.revents().is_empty()).collect();
+        drop(fds);
         let mut gone = Vec::new();
         let was = caps;
-        for (number, fd) in numbers.iter().zip(&fds[1..]) {
-            let Some(d) = devices.get_mut(number).filter(|_| fd.revents != 0) else { continue };
+        for (number, _) in numbers.iter().zip(&ready[1..]).filter(|(_, ready)| **ready) {
+            let Some(d) = devices.get_mut(number) else { continue };
             match d.read(&mut buf) {
                 Ok(batches) => {
                     for b in batches {
@@ -520,7 +524,7 @@ fn main() {
             }
         }
         // A device came, or went (and its number may be another's now).
-        if (fds[0].revents != 0 && input_uevent(&uevents)) || !gone.is_empty() {
+        if (ready[0] && input_uevent(&uevents)) || !gone.is_empty() {
             scan(&mut devices, caps);
         }
     }

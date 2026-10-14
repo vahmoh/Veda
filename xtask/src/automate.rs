@@ -62,6 +62,7 @@
 //! agent-connected 120              # wait until the agent opened a conversation with the simulator
 //! agent-call open_app '{"app":"editor"}'  # the simulated model calls a function; waits for the result
 //! agent-result "opened"            # fail unless the last function result contains the text
+//! agent-result '"page":"processes","shown":1'  # ... or these JSON members, in one object, in any order
 //! agent-mark                       # later agent-expect looks only at messages from now on
 //! agent-expect "InjectUserMessage" 30  # wait until the agent sends a message containing the text
 //! agent-speak 3                    # the simulated agent talks for 3 s (a tone)
@@ -96,6 +97,8 @@ use crate::ovmfvars;
 use crate::qemu::{self, DiskBus, InputDevices, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
+
+use vaudio::wav::{SampleFormat, WavInfo};
 
 /// What Veda's boot loader prints first: a machine that was reset has
 /// started again.
@@ -137,11 +140,11 @@ impl Machine {
     /// Plugs in or unplugs the wired card's cable.
     pub fn set_wired_link(&mut self, up: bool) -> Result {
         let name = qemu::WIRED_NIC_ID;
-        self.qmp.execute("set_link", &format!("{{\"name\":\"{name}\",\"up\":{up}}}")).map(|_| ())
+        self.qmp.execute("set_link", serde_json::json!({ "name": name, "up": up })).map(|_| ())
     }
 
     fn reset(&mut self) -> Result {
-        self.qmp.execute("system_reset", "{}").map(|_| ())
+        self.qmp.execute("system_reset", serde_json::json!({})).map(|_| ())
     }
 
     /// QEMU's state and its processors', for a machine that does not do
@@ -784,7 +787,10 @@ pub fn run_script(
                 | "live" | "input" | "gpu" | "acpi-table" | "firmware-variable" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
-                    let arguments = w.get(2).map_or("{}", String::as_str);
+                    let arguments = match w.get(2) {
+                        Some(text) => serde_json::from_str(text).map_err(|e| ctx(format!("arguments: {e}")))?,
+                        None => serde_json::json!({}),
+                    };
                     s.m.qmp.execute(command, arguments).map(|_| ()).map_err(ctx)?;
                 }
                 "air" => {
@@ -894,15 +900,9 @@ pub fn run_script(
                 "expect-audio" => {
                     let wav =
                         std::fs::read(util::out_dir().join("audio.wav")).map_err(|e| ctx(format!("audio.wav: {e}")))?;
-                    let peak = wav
-                        .get(44..)
-                        .unwrap_or(&[])
-                        .as_chunks::<2>()
-                        .0
-                        .iter()
-                        .map(|b| i16::from_le_bytes(*b).unsigned_abs())
-                        .max()
-                        .unwrap_or(0);
+                    let (pcm, ..) = recorded_pcm(&wav).map_err(ctx)?;
+                    let peak =
+                        pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b).unsigned_abs()).max().unwrap_or(0);
                     if peak < 1000 {
                         return Err(ctx(format!("the sound output is silent (peak {peak})")));
                     }
@@ -972,7 +972,7 @@ pub fn run_script(
                         }
                         "agent-result" => {
                             let needle = w.get(1).ok_or("missing text")?;
-                            if !agent_result.contains(needle.as_str()) {
+                            if !result_has(&agent_result, needle) {
                                 return Err(ctx(format!(
                                     "the last result does not contain \"{needle}\": {agent_result}"
                                 )));
@@ -1077,30 +1077,56 @@ pub fn tail(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-/// The stretches of digital silence (every channel exactly zero) longer
-/// than `limit_ms` in a 16-bit PCM WAV file, between its first and last
-/// sound: where (s) and how long (ms). QEMU leaves the data chunk's length
-/// at zero while it records; that means "to the end".
-pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f64)>, String> {
-    let u16_at = |at: usize| wav.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
-    let u32_at = |at: usize| wav.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
-    if wav.get(0..4) != Some(b"RIFF") || wav.get(8..12) != Some(b"WAVE") {
-        return Err("audio.wav is not a WAV file".into());
-    }
-    let (mut at, mut format) = (12, None);
-    let data = loop {
-        let (Some(id), Some(len)) = (wav.get(at..at + 4), u32_at(at + 4)) else {
-            return Err("audio.wav has no data".into());
-        };
-        if id == b"fmt " {
-            format = Some((u16_at(at + 10).unwrap_or(0), u32_at(at + 12).unwrap_or(0), u16_at(at + 22).unwrap_or(0)));
-        } else if id == b"data" {
-            let end = if len == 0 { wav.len() } else { (at + 8 + len).min(wav.len()) };
-            break &wav[at + 8..end];
+/// Whether a function's result (JSON) has what a script expects of it: the
+/// members it writes as JSON (`"page":"processes","shown":1`), all in one
+/// object of the result and in any order (an object's members have none).
+/// Values are compared as JSON's: numbers by value (`2` is `2.0`), objects
+/// by the members given, arrays element by element; or else, the text
+/// itself is looked for (a word, a key, the start of a value).
+fn result_has(result: &str, expected: &str) -> bool {
+    use serde_json::{Map, Value};
+    /// Whether `actual` is `expected`, as described above.
+    fn matches(actual: &Value, expected: &Value) -> bool {
+        match (actual, expected) {
+            (Value::Object(a), Value::Object(e)) => has_all(a, e),
+            (Value::Array(a), Value::Array(e)) => a.len() == e.len() && a.iter().zip(e).all(|(a, e)| matches(a, e)),
+            (Value::Number(a), Value::Number(e)) => a.as_f64() == e.as_f64(),
+            _ => actual == expected,
         }
-        at += 8 + len + (len & 1);
-    };
-    let Some((channels @ 1.., rate @ 1.., 16)) = format else { return Err("audio.wav is not 16-bit PCM".into()) };
+    }
+    fn has_all(object: &Map<String, Value>, members: &Map<String, Value>) -> bool {
+        members.iter().all(|(k, v)| object.get(k).is_some_and(|x| matches(x, v)))
+    }
+    /// Whether `value`, or a value in it, is an object with `members`.
+    fn holds(value: &Value, members: &Map<String, Value>) -> bool {
+        match value {
+            Value::Object(o) => has_all(o, members) || o.values().any(|v| holds(v, members)),
+            Value::Array(a) => a.iter().any(|v| holds(v, members)),
+            _ => false,
+        }
+    }
+    match (serde_json::from_str::<Map<String, Value>>(&format!("{{{expected}}}")), serde_json::from_str(result)) {
+        (Ok(members), Ok(value)) => holds(&value, &members),
+        _ => result.contains(expected),
+    }
+}
+
+/// The samples of QEMU's recording of the sound output (`audio.wav`), 16-bit
+/// PCM: the data, the channels and the rate. QEMU leaves the data chunk's
+/// length at zero while it records; that means "to the end".
+fn recorded_pcm(wav: &[u8]) -> std::result::Result<(&[u8], usize, u32), String> {
+    let info = WavInfo::parse(wav).map_err(|e| format!("audio.wav: {e}"))?;
+    if info.format != SampleFormat::S16 {
+        return Err("audio.wav is not 16-bit PCM".into());
+    }
+    Ok((&wav[info.data_offset..info.data_offset + info.data_len], info.channels as usize, info.rate))
+}
+
+/// The stretches of digital silence (every channel exactly zero) longer
+/// than `limit_ms` in QEMU's recording of the sound output, between its
+/// first and last sound: where (s) and how long (ms).
+pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f64)>, String> {
+    let (data, channels, rate) = recorded_pcm(wav)?;
     let frames: Vec<&[u8]> = data.chunks_exact(2 * channels).collect();
     let silent = |f: &[u8]| f.iter().all(|&b| b == 0);
     let loud = |f: &[u8]| f.as_chunks::<2>().0.iter().any(|s| i16::from_le_bytes(*s).unsigned_abs() > 64);
@@ -1145,6 +1171,32 @@ mod tests {
             w.extend_from_slice(&s.to_le_bytes());
         }
         w
+    }
+
+    #[test]
+    fn results_are_compared_as_json() {
+        let result =
+            r#"{"ok":true,"result":{"items":8,"pictures":["a.jpg"],"showing":"~/Pictures","x":{"y":1,"z":2}}}"#;
+        // Members in any order, in one object, at any depth.
+        assert!(result_has(result, r#""showing":"~/Pictures","items":8"#));
+        assert!(result_has(result, r#""items":8,"showing":"~/Pictures""#));
+        assert!(result_has(result, r#""ok":true"#));
+        assert!(result_has(result, r#""x":{"z":2}"#), "an object with the members given");
+        assert!(result_has(result, r#""pictures":["a.jpg"]"#));
+        assert!(!result_has(result, r#""showing":"~/Pictures","items":7"#));
+        assert!(!result_has(result, r#""ok":true,"items":8"#), "members of different objects");
+        assert!(!result_has(result, r#""pictures":[]"#));
+        // Numbers by value; arrays element by element, of the same length.
+        let numbers = r#"{"seconds":2.0,"size":20,"up_next":[{"artist":"A","title":"T"}]}"#;
+        assert!(result_has(numbers, r#""seconds":2,"size":20.0"#));
+        assert!(!result_has(numbers, r#""seconds":2.5"#));
+        assert!(result_has(numbers, r#""up_next":[{"title":"T"}]"#));
+        assert!(!result_has(numbers, r#""up_next":[{"title":"T"},{"title":"T"}]"#));
+        // Anything else is looked for as text.
+        assert!(result_has(result, r#""showing":"~/Pic"#));
+        assert!(result_has(result, "Pictures"));
+        assert!(result_has("written", "written"));
+        assert!(!result_has(result, "nothing"));
     }
 
     #[test]

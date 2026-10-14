@@ -331,19 +331,9 @@ fn parse_date(s: &str) -> Option<u64> {
     {
         return None;
     }
-    let days = days_from_civil(year, month, day);
+    // From 1970 on (checked above): never negative.
+    let days = vrt::time::days_from_civil(year as i32, month as u8, day as u8) as u64;
     Some(((days * 86_400) + hour * 3_600 + minute * 60 + second) * NS_PER_SEC)
-}
-
-/// Days from 1970-01-01 to a date on or after it (the inverse of
-/// `DateTime::from_unix`'s civil-from-days).
-fn days_from_civil(year: u64, month: u64, day: u64) -> u64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let (era, yoe) = (y / 400, y % 400);
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 #[cfg(test)]

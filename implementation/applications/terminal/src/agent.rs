@@ -14,7 +14,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, arg_str, clip, object, show_path};
+use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, arg_str, clip, json, show_path};
 
 use crate::{DEFAULT_FONT_SIZE, Terminal};
 
@@ -105,18 +105,18 @@ fn clip_middle(text: &str, max: usize) -> (String, bool) {
 
 pub fn state(t: &Terminal) -> Value {
     let (output, earlier) = t.tail(usize::MAX, STATE_OUTPUT);
-    let mut v = object! { "folder" => t.folder(), "running" => t.running() };
+    let mut v = json!({ "folder": t.folder(), "running": t.running() });
     if t.job.is_none() {
-        v.set("last_exit_status", t.last_status);
+        v["last_exit_status"] = json!(t.last_status);
     }
     if !t.input.is_empty()
         && let Some(shell) = &t.shell
     {
-        v.set("typed", shell.redact(&t.input));
+        v["typed"] = json!(shell.redact(&t.input));
     }
-    v.set("output", output);
-    v.set("earlier_lines", earlier);
-    v.set("text_size", t.font_size);
+    v["output"] = output.into();
+    v["earlier_lines"] = earlier.into();
+    v["text_size"] = agent::number(t.font_size);
     v
 }
 
@@ -130,10 +130,10 @@ impl Terminal {
     /// The command running and for how long, or null.
     fn running(&self) -> Value {
         match &self.job {
-            Some(job) if !job.finished() => object! {
-                "command" => job.shown.as_str(),
-                "seconds" => vrt::time::now_ns().saturating_sub(job.started) / 1_000_000_000,
-            },
+            Some(job) if !job.finished() => json!({
+                "command": job.shown.as_str(),
+                "seconds": vrt::time::now_ns().saturating_sub(job.started) / 1_000_000_000,
+            }),
             _ => Value::Null,
         }
     }
@@ -220,29 +220,29 @@ impl Terminal {
                 self.input = typed;
                 self.cursor = cursor.min(self.input.len());
                 let (output, cut) = clip_middle(&self.text(from, self.screen.end()), MAX_OUTPUT);
-                let mut v = object! { "command" => shown, "finished" => finished, "output" => output };
+                let mut v = json!({ "command": shown, "finished": finished, "output": output });
                 if cut {
-                    v.set("output_cut_short", true);
+                    v["output_cut_short"] = json!(true);
                 }
                 if finished {
-                    v.set("exit_status", self.last_status);
-                    v.set("folder", self.folder());
+                    v["exit_status"] = json!(self.last_status);
+                    v["folder"] = json!(self.folder());
                 } else {
-                    v.set("note", "it is still running: read_output shows what it prints next, interrupt stops it");
+                    v["note"] = json!("it is still running: read_output shows what it prints next, interrupt stops it");
                 }
                 Ok(v)
             }
             "read_output" => {
                 let lines = arg_opt_int(args, "lines")?.unwrap_or(READ_LINES).clamp(1, MAX_READ_LINES) as usize;
                 let (output, earlier) = self.tail(lines, MAX_OUTPUT);
-                let mut v = object! {
-                    "output" => output,
-                    "earlier_lines" => earlier,
-                    "folder" => self.folder(),
-                    "running" => self.running(),
-                };
+                let mut v = json!({
+                    "output": output,
+                    "earlier_lines": earlier,
+                    "folder": self.folder(),
+                    "running": self.running(),
+                });
                 if self.job.is_none() {
-                    v.set("last_exit_status", self.last_status);
+                    v["last_exit_status"] = json!(self.last_status);
                 }
                 Ok(v)
             }
@@ -252,24 +252,23 @@ impl Terminal {
                 };
                 self.interrupt();
                 let stopped = self.wait_for_job(STOP_WAIT_NS);
-                let mut v = object! { "command" => shown, "stopped" => stopped };
+                let mut v = json!({ "command": shown, "stopped": stopped });
                 if !stopped {
-                    v.set(
-                        "note",
+                    v["note"] = json!(
                         "it is waiting for something it cannot leave at once (such as the network) and stops when \
-                         that ends",
+                         that ends"
                     );
                 }
                 Ok(v)
             }
             "clear_screen" => {
                 self.clear_screen();
-                Ok(object! { "cleared" => true })
+                Ok(json!({ "cleared": true }))
             }
             "set_text_size" => {
                 let points = arg_f64(args, "points")? as f32;
                 self.font_size = if points <= 0.0 { DEFAULT_FONT_SIZE } else { points.clamp(9.0, 28.0) };
-                Ok(object! { "text_size" => self.font_size })
+                Ok(json!({ "text_size": agent::number(self.font_size) }))
             }
             other => Err(format!("the Terminal has no action called {other}")),
         }

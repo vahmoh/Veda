@@ -11,7 +11,7 @@
 //!
 //! A decoder for the tests checks that every stream comes back exactly.
 
-use crate::md5::Md5;
+use md5::{Digest, Md5};
 
 /// Samples per channel in a block (the last block may be shorter).
 pub const BLOCK: usize = 4096;
@@ -66,7 +66,7 @@ pub fn encode(pcm: &[i16], channels: usize, rate: u32) -> Flac {
     let samples = pcm.len() / channels;
     let mut md5 = Md5::new();
     for s in pcm {
-        md5.update(&s.to_le_bytes());
+        md5.update(s.to_le_bytes());
     }
     let mut frames = Vec::with_capacity(samples.div_ceil(BLOCK));
     for (number, block) in pcm.chunks(BLOCK * channels).enumerate() {
@@ -88,7 +88,7 @@ pub fn encode(pcm: &[i16], channels: usize, rate: u32) -> Flac {
     w.put(3, channels as u64 - 1);
     w.put(5, 15);
     w.put(36, samples as u64);
-    for b in md5.finish() {
+    for b in md5.finalize() {
         w.put(8, b as u64);
     }
     let streaminfo = w.finish().try_into().expect("STREAMINFO is 34 bytes");
@@ -698,7 +698,7 @@ mod tests {
         assert_eq!((d.min_block, d.max_block), (4096, 4096));
         assert_eq!(d.total as usize, pcm.len() / channels);
         assert!(d.pcm == pcm, "the samples come back");
-        assert_eq!(d.md5, crate::md5::digest(&pcm.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<_>>()));
+        assert_eq!(d.md5, <[u8; 16]>::from(Md5::digest(pcm.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<_>>())));
         let sizes: Vec<u32> = flac.frames.iter().map(|f| f.len() as u32).collect();
         assert_eq!(d.min_frame, sizes.iter().copied().min().unwrap_or(0));
         assert_eq!(d.max_frame, sizes.iter().copied().max().unwrap_or(0));

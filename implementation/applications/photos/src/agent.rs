@@ -14,11 +14,12 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use vfiles::format::human_size;
 use vfiles::kind::is_image;
 use vfiles::path::file_stem;
 use vproto::fs::Stat;
 use vui::agent::{
-    self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_str, arg_path, arg_str, object, show_path,
+    self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_str, arg_path, arg_str, json, show_path,
 };
 
 use crate::catalog::{self, Entry};
@@ -96,33 +97,33 @@ fn percent(scale: f32) -> u32 {
 
 /// The picture in the viewer.
 fn picture(p: &Photos, e: &Entry) -> Value {
-    let mut v = object! { "name" => e.name.as_str(), "path" => show_path(&e.path), "number" => p.current + 1 };
+    let mut v = json!({ "name": e.name.as_str(), "path": show_path(&e.path), "number": p.current + 1 });
     match p.pictures.iter().find(|(path, _)| *path == e.path).map(|(_, s)| s) {
         Some(Slot::Ready(pic)) => {
-            v.set("status", "shown");
+            v["status"] = json!("shown");
             if pic.damaged {
-                v.set("damaged", true);
+                v["damaged"] = json!(true);
             }
         }
         Some(Slot::Failed(why)) => {
-            v.set("status", "failed");
-            v.set("problem", why.as_str());
+            v["status"] = json!("failed");
+            v["problem"] = json!(why.as_str());
         }
         _ => {
-            v.set("status", "loading");
+            v["status"] = json!("loading");
         }
     }
     if let Some((w, h)) = p.dims() {
-        v.set("width", w);
-        v.set("height", h);
+        v["width"] = w.into();
+        v["height"] = h.into();
     }
     match &e.meta {
         Some(m) => {
-            v.set("format", m.format.name());
-            v.set("file_size", catalog::human_size(m.file_size));
+            v["format"] = json!(m.format.name());
+            v["file_size"] = json!(human_size(m.file_size));
         }
         None if e.size > 0 => {
-            v.set("file_size", catalog::human_size(e.size));
+            v["file_size"] = json!(human_size(e.size));
         }
         None => {}
     }
@@ -131,42 +132,42 @@ fn picture(p: &Photos, e: &Entry) -> Value {
 
 pub fn state(p: &Photos) -> Value {
     let names: Vec<&str> = p.entries.iter().take(MAX_NAMES).map(|e| e.name.as_str()).collect();
-    let mut v = object! {
-        "showing" => if p.mode == Mode::Viewer { "viewer" } else { "library" },
-        "folder" => show_path(&p.dir),
-        "picture_count" => p.entries.len(),
-        "pictures" => names,
-    };
+    let mut v = json!({
+        "showing": if p.mode == Mode::Viewer { "viewer" } else { "library" },
+        "folder": show_path(&p.dir),
+        "picture_count": p.entries.len(),
+        "pictures": names,
+    });
     if p.entries.len() > MAX_NAMES {
-        v.set("pictures_cut_short", true);
+        v["pictures_cut_short"] = json!(true);
     }
     if let Some(e) = &p.list_error {
-        v.set("error", e.as_str());
+        v["error"] = json!(e.as_str());
     }
     match (p.mode, p.entries.get(p.current)) {
         (Mode::Viewer, Some(e)) => {
-            v.set("picture", picture(p, e));
+            v["picture"] = json!(picture(p, e));
             if let Some(d) = p.dims() {
-                v.set("zoom_percent", percent(p.view.placement(d, p.viewport()).scale));
+                v["zoom_percent"] = json!(percent(p.view.placement(d, p.viewport()).scale));
             }
-            v.set("fitted", p.view.zoom.is_none());
-            v.set("rotation", p.view.rot as u32 * 90);
-            v.set("full_screen", p.pending_fullscreen.unwrap_or(p.fullscreen));
-            v.set("details_panel", p.show_info);
-            v.set("slideshow", p.slideshow.map(|s| object! { "seconds" => s.interval as f64 / 1e9 }));
+            v["fitted"] = json!(p.view.zoom.is_none());
+            v["rotation"] = json!(p.view.rot as u32 * 90);
+            v["full_screen"] = json!(p.pending_fullscreen.unwrap_or(p.fullscreen));
+            v["details_panel"] = json!(p.show_info);
+            v["slideshow"] = json!(p.slideshow.map(|s| json!({ "seconds": s.interval as f64 / 1e9 })));
         }
         (Mode::Library, Some(e)) if p.keyboard_nav => {
-            v.set("selected", e.name.as_str());
+            v["selected"] = json!(e.name.as_str());
         }
         _ => {}
     }
     if p.wallpaper_busy {
-        v.set("wallpaper", "being changed");
+        v["wallpaper"] = json!("being changed");
     }
     if let Some(t) = &p.toast
         && vrt::time::now_ns() < t.until
     {
-        v.set("message", t.text.as_str());
+        v["message"] = json!(t.text.as_str());
     }
     v
 }
@@ -183,7 +184,7 @@ impl Photos {
     /// The picture shown or selected, for results: `{key: name, "number": n, "of": count}`.
     fn position(&self, key: &str) -> Value {
         let name = self.entries.get(self.current).map_or("", |e| e.name.as_str());
-        object! { key => name, "number" => self.current + 1, "of" => self.entries.len() }
+        json!({ (key): name, "number": self.current + 1, "of": self.entries.len() })
     }
 
     /// The picture of the folder called `name`: exactly, else ignoring case, else without its
@@ -310,7 +311,7 @@ impl Photos {
             "show_library" => {
                 self.leave_viewer();
                 self.reload();
-                Ok(object! { "folder" => show_path(&self.dir), "picture_count" => self.entries.len() })
+                Ok(json!({ "folder": show_path(&self.dir), "picture_count": self.entries.len() }))
             }
             "open_folder" => {
                 let path = arg_path(args, "path")?;
@@ -327,11 +328,11 @@ impl Photos {
                     return Err(e.clone());
                 }
                 let names: Vec<&str> = self.entries.iter().take(MAX_NAMES).map(|e| e.name.as_str()).collect();
-                Ok(object! {
-                    "folder" => show_path(&self.dir),
-                    "picture_count" => self.entries.len(),
-                    "pictures" => names,
-                })
+                Ok(json!({
+                    "folder": show_path(&self.dir),
+                    "picture_count": self.entries.len(),
+                    "pictures": names,
+                }))
             }
             "zoom" => {
                 self.need_picture()?;
@@ -357,7 +358,7 @@ impl Photos {
                     }
                 }
                 let scale = self.view.placement(d, vp).scale;
-                Ok(object! { "zoom_percent" => percent(scale), "fitted" => self.view.zoom.is_none() })
+                Ok(json!({ "zoom_percent": percent(scale), "fitted": self.view.zoom.is_none() }))
             }
             "rotate" => {
                 self.need_picture()?;
@@ -369,7 +370,7 @@ impl Photos {
                     }
                 };
                 self.rotate_by(turn, now);
-                Ok(object! { "rotation" => self.view.rot as u32 * 90 })
+                Ok(json!({ "rotation": self.view.rot as u32 * 90 }))
             }
             "full_screen" => {
                 let on = arg_bool(args, "on").ok_or("say whether full screen goes on (true) or off (false)")?;
@@ -382,7 +383,7 @@ impl Photos {
                     }
                 }
                 self.pending_fullscreen = Some(on);
-                Ok(object! { "full_screen" => on })
+                Ok(json!({ "full_screen": on }))
             }
             "slideshow" => {
                 let on = arg_bool(args, "on").ok_or("say whether the slideshow starts (true) or stops (false)")?;
@@ -407,13 +408,13 @@ impl Photos {
                 }
                 self.start_slideshow((secs * 1e9) as u64);
                 let mut v = self.position("from");
-                v.set("seconds", secs);
+                v["seconds"] = secs.into();
                 Ok(v)
             }
             "details" => {
                 let show = arg_bool(args, "show").ok_or("say whether to show (true) or hide (false) the details")?;
                 self.show_details(show, now);
-                Ok(object! { "details_panel" => show })
+                Ok(json!({ "details_panel": show }))
             }
             "set_as_wallpaper" => {
                 if arg_opt_str(args, "picture").is_some() {
@@ -432,7 +433,7 @@ impl Photos {
                 if !self.wallpaper_busy {
                     return Err("the desktop is not available".into());
                 }
-                Ok(object! { "wallpaper" => show_path(&path) })
+                Ok(json!({ "wallpaper": show_path(&path) }))
             }
             other => Err(format!("Photos has no action called {other}")),
         }

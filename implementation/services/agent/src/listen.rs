@@ -28,10 +28,10 @@ use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use serde_json::json;
 use vabi::{RawHandle, signals};
 use vagent::{deepgram, wake};
 use vaudio::vad::Vad;
-use vjson::object;
 use vweb::ws::{Message, WebSocket};
 use vweb::{Conn, WebError};
 
@@ -249,7 +249,7 @@ impl Listener {
     /// Ends recognition (quietly or after an error).
     fn stop(&mut self, now: u64) {
         if let Some(mut s) = self.stream.take() {
-            let _ = s.send_text(&object! { "type" => "CloseStream" }.to_string());
+            let _ = s.send_text(&json!({ "type": "CloseStream" }).to_string());
             self.used_ns += now.saturating_sub(self.started_ns);
         }
         self.connector = None;

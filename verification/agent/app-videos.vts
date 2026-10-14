@@ -23,7 +23,8 @@ agent-result '"title":"Aurora Timelapse"'
 agent-result '"total":1'
 # A video by name, heard a little wrong.
 agent-call use_app '{"app":"videos","action":"play","arguments":{"video":"the count down video"}}' 30
-agent-result '"title":"Countdown","playback":"playing'
+agent-result '"title":"Countdown"'
+agent-result '"playback":"playing'
 wait-serial "videos: playing Countdown" 30
 wait 3
 agent-call use_app '{"app":"videos","action":"pause"}' 30
@@ -49,10 +50,10 @@ agent-result '"full_screen":true'
 wait-serial "videos: full screen on" 10
 # What the player shows.
 agent-call read_app '{"app":"videos"}' 30
-agent-result '"view":"player","now_playing":{"title":"Countdown"'
+agent-result '"view":"player","now_playing":{"title":"Countdown"}'
 agent-result '"picture":"640 × 360 · AV1 · 30 fps"'
 agent-result '"full_screen":true,"volume":40,"muted":false'
-agent-result '"library":{"folder":"~/Videos","videos":3'
+agent-result '"library":{"folder":"~/Videos","videos":3}'
 wait 2
 shot target/veda/agent-app-videos.png
 agent-call use_app '{"app":"videos","action":"full_screen","arguments":{"on":false}}' 30

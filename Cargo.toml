@@ -33,7 +33,6 @@ members = [
     "implementation/libraries/tls",
     "implementation/libraries/wlan",
     "implementation/libraries/radiolink",
-    "implementation/libraries/json",
     "implementation/libraries/web",
     "implementation/libraries/agent",
     "implementation/libraries/acpi",
@@ -65,6 +64,7 @@ members = [
     "implementation/applications/interceptor",
     "implementation/applications/interceptor/game",
     "implementation/applications/videos/core",
+    "implementation/applications/terminal/core",
     "implementation/services/audio",
     "tools/assetgen",
     "tools/musicgen",
@@ -139,7 +139,6 @@ vnet = { path = "implementation/libraries/net" }
 vtls = { path = "implementation/libraries/tls" }
 vwlan = { path = "implementation/libraries/wlan" }
 vradiolink = { path = "implementation/libraries/radiolink" }
-vjson = { path = "implementation/libraries/json" }
 vweb = { path = "implementation/libraries/web" }
 vagent = { path = "implementation/libraries/agent" }
 vacpi = { path = "implementation/libraries/acpi" }
@@ -164,6 +163,12 @@ aes-kw = { version = "0.3", default-features = false }
 p256 = { version = "0.14", default-features = false, features = ["arithmetic", "hash2curve"] }
 subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.9", default-features = false }
+# The kernel's random number generator (implementation/libraries/entropy):
+# ChaCha20 (RFC 8439) and BLAKE2s, which wipe their state when dropped. On
+# the soft-float targets they run their portable code
+# (.cargo/arch/amd64/config.toml).
+chacha20 = { version = "0.10.2", default-features = false, features = ["cipher", "zeroize"] }
+blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 # TLS (HTTPS, secure WebSockets): rustls, with a CryptoProvider built on the
 # RustCrypto crates (implementation/libraries/tls). Same RustCrypto
 # generation as above.
@@ -172,6 +177,9 @@ webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+# MD5 for tools/videogen only: FLAC's STREAMINFO signature and the sample
+# videos' picture fingerprints (what FFmpeg's decoder checks them against).
+md-5 = { version = "0.11.0", default-features = false }
 # AV1 encoding for tools/videogen only (the sample videos, made on the
 # build machine; never in the image): Veda decodes AV1, but has no encoder
 # of its own. No assembly, no threads, so it encodes the same everywhere.
@@ -179,8 +187,39 @@ rav1e = { version = "0.8.1", default-features = false }
 ed25519-dalek = { version = "3", default-features = false }
 p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh"] }
 crypto-bigint = { version = "0.7.5", default-features = false, features = ["alloc"] }
+# JSON (the voice agent's protocols, applications' agent actions, saved
+# settings): serde's data model, with derived types for Veda's own
+# messages, and serde_json without std. Its objects are ordered maps
+# (BTreeMap): no input makes parsing slow, and what is written comes out
+# the same every time.
+serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
+# A WebSocket server for xtask's stand-in for Deepgram's Voice Agent API,
+# on the build machine only: RFC 6455's handshake, frames and closing
+# handshake (same sha1 and rand generations as above).
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+# The Linux ABI that the POSIX layer gives musl (implementation/libraries/
+# posix): constants and system call numbers as Linux's own headers define
+# them, generated for each architecture.
+linux-raw-sys = { version = "0.12.1", default-features = false, features = ["general", "errno", "ioctl", "net", "prctl", "no_std"] }
+# The driver VM's programs' Linux system calls beyond std's (mounting,
+# polling, sockets of every family, ioctls, mappings): the Bytecode
+# Alliance's safe bindings, which make the calls themselves on Linux,
+# without libc, and type their files, flags and errors.
+rustix = { version = "1.1.5", default-features = false, features = ["std", "event", "fs", "mm", "mount", "net", "process", "system", "time"] }
+# C's interfaces for the few Linux calls rustix does not make (socket
+# options of netlink and packet sockets), through the guest's musl.
+libc = { version = "0.2.190", default-features = false }
 # HTTP/1.x message parsing (no_std).
 httparse = { version = "1.10", default-features = false }
+# Percent-encoding of URL components: the `url` crate's own, without its
+# Unicode tables (Veda's URLs are its web clients' few schemes).
+percent-encoding = { version = "2.3.2", default-features = false, features = ["alloc"] }
+# Base64 (WebSocket keys) and hexadecimal (Wi-Fi keys typed as hex): the
+# RustCrypto crates', which work without data-dependent branches or tables,
+# so secrets they decode leave no trace in timing.
+base64ct = { version = "1.8.3", default-features = false, features = ["alloc"] }
+base16ct = { version = "1.0.0", default-features = false, features = ["alloc"] }
 # Floating-point functions, which `core` lacks on stable Rust: libm, the Rust
 # project's port of musl's, called directly (`libm::sqrtf(x)`) or through
 # num-traits' `Float` (`use num_traits::Float;` gives `x.sqrt()`, `x.sin()`).
@@ -197,6 +236,24 @@ rand_distr = { version = "0.6.0", default-features = false }
 # Gradient noise for procedural terrain and pictures (FastNoise Lite's
 # official Rust port).
 fastnoise-lite = { version = "1.1.1", default-features = false, features = ["libm"] }
+# Fonts: ttf-parser reads the tables, character maps, names and outlines
+# (TrueType and CFF) without std, allocations or unsafe code, and never
+# panics on a malformed font; vfont builds Veda's metrics, kerning, caches
+# and rendering on it. Its GPOS kerning needs `opentype-layout`; variable
+# fonts (and CFF2) would add 45 KB to every program for instances vfont
+# does not draw. (skrifa, Google Fonts' newer parser, adds hinting but
+# some 600 KB to every program without whole-program LTO.)
+ttf-parser = { version = "0.25.1", default-features = false, features = ["opentype-layout", "no-std-float"] }
+# Unicode text: grapheme cluster boundaries (UAX #29: where a caret stands
+# and what one press of an arrow key skips, a letter with its accents) and
+# display width (which characters take no cell: combining marks), as Rust's
+# editors and terminals use them. Both without std.
+unicode-segmentation = "1.13.3"
+unicode-width = { version = "0.2.2", default-features = false }
+# Terminal escape sequences: Alacritty's parser of the DEC/ECMA-48 state
+# machine (Paul Williams's), which decodes UTF-8 and splits parameters and
+# their colon sub-parameters, without std.
+vte = { version = "0.15.0", default-features = false }
 # Image decoding: zune's JPEG (the `image` crate's), PNG and BMP decoders,
 # the `qoi` crate and fast_image_resize's resampling, all without std. Their
 # SIMD needs std's run-time CPU detection, so in Veda they run their portable
@@ -216,11 +273,14 @@ fast_image_resize = { version = "6.1.0", default-features = false, features = ["
 bytemuck = { version = "1.25.2", default-features = false }
 # Image encoding, on the build machine only (generated pictures, test
 # output): PNG (the `image` crate's) and JPEG with progressive scans; and
-# zlib and CRC-32 for the image tests' hand-made PNGs.
+# zlib for the image tests' hand-made PNGs.
 png = "0.18.1"
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 miniz_oxide = "0.9.1"
-crc32fast = "1.5.2"
+# CRC-32 (IEEE 802.3): the VFS's snapshots of the home directory, GPT
+# headers and hand-made PNGs. Without std it picks its fastest code when
+# it is compiled (slicing by 16 tables on a plain x86-64).
+crc32fast = { version = "1.5.2", default-features = false }
 # The TCP/IP stack, which Veda builds with a security patch: a port
 # (ports/smoltcp), like zune-jpeg.
 smoltcp = { version = "=0.14.0", default-features = false, features = [

@@ -12,6 +12,7 @@ license.workspace = true
 vwlan = { workspace = true }
 vradiolink = { workspace = true }
 ventropy = { workspace = true }
+smoltcp = { workspace = true }
 
 [lints]
 workspace = true

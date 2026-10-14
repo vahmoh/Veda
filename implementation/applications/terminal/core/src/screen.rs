@@ -11,11 +11,15 @@
 //! line" (`ESC [ K`) with which programs redraw the line they are on
 //! (progress bars); other escape sequences (window titles, hyperlinks,
 //! cursor movement, ...) are recognised and left out, so that none of their
-//! bytes show. [`Screen::write_styled`] writes plain text in a given style.
+//! bytes show. The `vte` crate (Alacritty's parser of the DEC/ECMA-48
+//! state machine) reads the sequences. [`Screen::write_styled`] writes
+//! plain text in a given style.
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use vte::{Params, Parser, Perform};
 
 /// Maximum number of lines kept in the scrollback.
 pub const MAX_LINES: usize = 10_000;
@@ -94,41 +98,6 @@ pub struct Pos {
     pub col: usize,
 }
 
-/// State of the escape-sequence parser (sequences as ECMA-48 forms them).
-enum Esc {
-    None,
-    /// Saw ESC.
-    Escape,
-    /// Inside `ESC [`; collected parameter bytes.
-    Csi(String),
-    /// After ESC and an intermediate byte (`ESC ( B` chooses a character
-    /// set): ignored up to the final byte.
-    Intermediate,
-    /// Inside a control string, ignored up to its end (`ESC \`, or BEL as
-    /// xterm allows): `ESC ]` (an operating system command, such as a
-    /// window title or the hyperlinks GCC puts in its messages), `ESC P`,
-    /// `ESC _`, `ESC ^` or `ESC X`.
-    Control {
-        /// The last character was ESC.
-        escape: bool,
-    },
-}
-
-impl Esc {
-    /// The state after ESC and `c`.
-    fn after_escape(c: char) -> Esc {
-        match c {
-            '[' => Esc::Csi(String::new()),
-            ']' | 'P' | '_' | '^' | 'X' => Esc::Control { escape: false },
-            '\x20'..='\x2f' => Esc::Intermediate,
-            '\x1b' => Esc::Escape,
-            // Anything else completes a sequence of its own (`ESC 7`,
-            // `ESC c`, ...), none of which this terminal acts on.
-            _ => Esc::None,
-        }
-    }
-}
-
 /// The scrollback buffer.
 pub struct Screen {
     /// Completed lines.
@@ -141,7 +110,8 @@ pub struct Screen {
     col: usize,
     /// Current style of [`Screen::write`].
     style: Style,
-    esc: Esc,
+    /// The escape sequence being read.
+    parser: Parser,
     /// Incremented on every change (for redraw decisions and caches).
     pub generation: u64,
 }
@@ -160,7 +130,7 @@ impl Screen {
             partial: Vec::new(),
             col: 0,
             style: Style::PLAIN,
-            esc: Esc::None,
+            parser: Parser::new(),
             generation: 0,
         }
     }
@@ -189,7 +159,7 @@ impl Screen {
         self.partial.clear();
         self.col = 0;
         self.style = Style::PLAIN;
-        self.esc = Esc::None;
+        self.parser = Parser::new();
         self.generation += 1;
     }
 
@@ -215,7 +185,7 @@ impl Screen {
             self.newline();
         }
         self.style = Style::PLAIN;
-        self.esc = Esc::None;
+        self.parser = Parser::new();
     }
 
     /// Appends a completed line of cells (e.g. the echoed prompt).
@@ -259,16 +229,16 @@ impl Screen {
 
     /// `ESC [ n K`: erases the line after the cursor (0), before it (1) or
     /// all of it (2).
-    fn erase_in_line(&mut self, params: &str) {
-        match params {
-            "" | "0" => self.partial.truncate(self.col),
-            "1" => {
+    fn erase_in_line(&mut self, mode: u16) {
+        match mode {
+            0 => self.partial.truncate(self.col),
+            1 => {
                 let end = (self.col + 1).min(self.partial.len());
                 for c in &mut self.partial[..end] {
                     *c = Cell { ch: ' ', style: Style::PLAIN };
                 }
             }
-            "2" => self.partial.clear(),
+            2 => self.partial.clear(),
             _ => {}
         }
     }
@@ -286,53 +256,10 @@ impl Screen {
     /// Writes text, interpreting `ESC [ ... m` colour sequences and
     /// `ESC [ K`; other escape sequences are recognised and left out.
     pub fn write(&mut self, s: &str) {
-        for c in s.chars() {
-            match &mut self.esc {
-                Esc::None => {
-                    if c == '\x1b' {
-                        self.esc = Esc::Escape;
-                    } else {
-                        let style = self.style;
-                        self.put(c, style);
-                    }
-                }
-                Esc::Escape => self.esc = Esc::after_escape(c),
-                Esc::Intermediate => {
-                    if !('\x20'..='\x2f').contains(&c) {
-                        self.esc = Esc::None;
-                    }
-                }
-                Esc::Control { escape } => {
-                    if *escape {
-                        // ESC \ ends the string; any other ESC starts a new
-                        // sequence.
-                        self.esc = if c == '\\' { Esc::None } else { Esc::after_escape(c) };
-                    } else if c == '\x07' {
-                        self.esc = Esc::None;
-                    } else if c == '\x1b' {
-                        *escape = true;
-                    }
-                }
-                // ESC starts a new sequence; CAN and SUB cancel this one.
-                Esc::Csi(_) if c == '\x1b' => self.esc = Esc::Escape,
-                Esc::Csi(_) if c == '\x18' || c == '\x1a' => self.esc = Esc::None,
-                Esc::Csi(params) => {
-                    if ('\x40'..='\x7e').contains(&c) {
-                        let params = core::mem::take(params);
-                        self.esc = Esc::None;
-                        match c {
-                            'm' => self.style = apply_sgr(self.style, &params),
-                            'K' => self.erase_in_line(&params),
-                            _ => {}
-                        }
-                    } else if params.len() < 64 {
-                        params.push(c);
-                    } else {
-                        self.esc = Esc::None;
-                    }
-                }
-            }
-        }
+        // The parser is taken out while it drives the screen.
+        let mut parser = core::mem::take(&mut self.parser);
+        parser.advance(self, s.as_bytes());
+        self.parser = parser;
         self.generation += 1;
     }
 
@@ -366,50 +293,107 @@ impl Screen {
     }
 }
 
-/// Applies an SGR parameter string (e.g. `"1;31"`) to a style.
-fn apply_sgr(mut s: Style, params: &str) -> Style {
-    let nums: Vec<u32> = if params.is_empty() {
-        alloc::vec![0]
-    } else {
-        params.split(';').map(|p| p.parse::<u32>().unwrap_or(0)).collect()
-    };
-    let mut i = 0;
-    while i < nums.len() {
-        match nums[i] {
-            0 => s = Style::PLAIN,
-            1 => s.bold = true,
-            2 => s.dim = true,
-            4 => s.underline = true,
-            7 => s.inverse = true,
-            22 => {
+/// What the parser recognises, applied to the screen.
+impl Perform for Screen {
+    fn print(&mut self, c: char) {
+        let style = self.style;
+        self.put(c, style);
+    }
+
+    fn execute(&mut self, byte: u8) {
+        if matches!(byte, b'\n' | b'\r' | b'\x08' | b'\t') {
+            let style = self.style;
+            self.put(byte as char, style);
+        }
+    }
+
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if ignore || !intermediates.is_empty() {
+            return;
+        }
+        match action {
+            'm' => self.style = apply_sgr(self.style, params),
+            'K' => self.erase_in_line(params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0)),
+            _ => {}
+        }
+    }
+}
+
+/// Applies SGR parameters (e.g. `1;31`) to a style.
+fn apply_sgr(mut s: Style, params: &Params) -> Style {
+    if params.is_empty() {
+        return Style::PLAIN;
+    }
+    let mut it = params.iter();
+    while let Some(p) = it.next() {
+        match *p {
+            [0] => s = Style::PLAIN,
+            [1] => s.bold = true,
+            [2] => s.dim = true,
+            // `4:0` is no underline; `4:3` and the like are underline styles.
+            [4, 0] => s.underline = false,
+            [4, ..] => s.underline = true,
+            [7] => s.inverse = true,
+            [22] => {
                 s.bold = false;
                 s.dim = false;
             }
-            24 => s.underline = false,
-            27 => s.inverse = false,
-            n @ 30..=37 => s.fg = (n - 30) as u8,
-            39 => s.fg = color::DEFAULT,
-            n @ 40..=47 => s.bg = (n - 40) as u8,
-            49 => s.bg = color::DEFAULT,
-            n @ 90..=97 => s.fg = (n - 90 + 8) as u8,
-            n @ 100..=107 => s.bg = (n - 100 + 8) as u8,
-            // 256-colour form: 38;5;N (only the first 16 map exactly).
-            n @ (38 | 48) if nums.get(i + 1) == Some(&5) => {
-                if let Some(&c) = nums.get(i + 2) {
-                    let c = if c < 16 { c as u8 } else { approx_256(c) };
-                    if n == 38 {
-                        s.fg = c;
-                    } else {
-                        s.bg = c;
-                    }
-                }
-                i += 2;
-            }
+            [24] => s.underline = false,
+            [27] => s.inverse = false,
+            [n @ 30..=37] => s.fg = (n - 30) as u8,
+            [39] => s.fg = color::DEFAULT,
+            [n @ 40..=47] => s.bg = (n - 40) as u8,
+            [49] => s.bg = color::DEFAULT,
+            [n @ 90..=97] => s.fg = (n - 90 + 8) as u8,
+            [n @ 100..=107] => s.bg = (n - 100 + 8) as u8,
+            // Foreground, background and underline (not drawn) colours.
+            [n @ (38 | 48 | 58), ref sub @ ..] => match (n, extended_colour(sub, &mut it)) {
+                (38, Some(c)) => s.fg = c,
+                (48, Some(c)) => s.bg = c,
+                _ => {}
+            },
             _ => {}
         }
-        i += 1;
     }
     s
+}
+
+/// The palette colour of an extended colour, from its parameter's
+/// sub-parameters (`38:5:N`, `38:2:S:R:G:B` with a colour space `S`, often
+/// left empty, or `38:2:R:G:B`) or, written with semicolons, from the
+/// parameters that follow (`38;5;N`, `38;2;R;G;B`), which it consumes.
+/// Colours beyond the palette's 16 take the nearest of them.
+fn extended_colour<'a>(sub: &[u16], rest: &mut impl Iterator<Item = &'a [u16]>) -> Option<u8> {
+    let mut next = || rest.next().and_then(|p| p.first().copied());
+    match *sub {
+        [] => match next()? {
+            5 => next().map(palette_256),
+            2 => {
+                let (r, g, b) = (next()?, next()?, next()?);
+                Some(approx_rgb(r, g, b))
+            }
+            _ => None,
+        },
+        [5, i, ..] => Some(palette_256(i)),
+        [2, _, r, g, b, ..] | [2, r, g, b] => Some(approx_rgb(r, g, b)),
+        _ => None,
+    }
+}
+
+/// The palette colour of 256-colour index `i` (the first 16 exactly).
+fn palette_256(i: u16) -> u8 {
+    if i < 16 { i as u8 } else { approx_256(i.min(255) as u32) }
+}
+
+/// The palette colour nearest a true colour, through the 256-colour cube.
+fn approx_rgb(r: u16, g: u16, b: u16) -> u8 {
+    // The cube's levels are 0, 95, 135, 175, 215 and 255.
+    let level = |v: u16| match v.min(255) {
+        0..48 => 0,
+        48..115 => 1,
+        v => ((v - 35) / 40) as u32,
+    };
+    approx_256(16 + 36 * level(r) + 6 * level(g) + level(b))
 }
 
 /// Maps a colour of the xterm 256-colour cube onto the 16-colour palette.

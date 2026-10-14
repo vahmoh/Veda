@@ -13,10 +13,12 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use vproto::init::TaskInfo;
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_opt_int, arg_opt_str, object};
+use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_opt_int, arg_opt_str, json};
 
 use crate::procs::{self, Row};
-use crate::{Column, Dialog, Proc, Resource, SAMPLE_NS, TaskManager, format_uptime, human_size};
+use vfiles::format::human_size;
+
+use crate::{Column, Dialog, Proc, Resource, SAMPLE_NS, TaskManager, format_uptime};
 
 /// The most processes the agent gets in one list.
 const MAX_PROCS: usize = 60;
@@ -108,15 +110,15 @@ fn percent(p: f32) -> f64 {
 
 /// One process as the agent sees it.
 fn proc_value(p: &Proc) -> Value {
-    let mut v = object! { "name" => p.name.as_str() };
+    let mut v = json!({ "name": p.name.as_str() });
     if p.title != p.name {
-        v.set("title", p.title.as_str());
+        v["title"] = json!(p.title.as_str());
     }
-    v.set("pid", p.koid);
-    v.set("cpu_percent", percent(p.cpu));
-    v.set("memory", human_size(p.memory));
-    v.set("threads", p.threads);
-    v.set("kind", if p.is_app { "app" } else { "system" });
+    v["pid"] = json!(p.koid);
+    v["cpu_percent"] = json!(percent(p.cpu));
+    v["memory"] = json!(human_size(p.memory));
+    v["threads"] = json!(p.threads);
+    v["kind"] = json!(if p.is_app { "app" } else { "system" });
     v
 }
 
@@ -146,34 +148,34 @@ fn memory(tm: &TaskManager) -> (u64, u64, f64) {
 }
 
 pub fn state(tm: &TaskManager) -> Value {
-    let mut v = object! { "page" => if tm.tab == 0 { "processes" } else { "performance" } };
+    let mut v = json!({ "page": if tm.tab == 0 { "processes" } else { "performance" } });
     if tm.tab == 0 {
-        v.set("sorted_by", column_name(tm.sort));
-        v.set("descending", tm.descending);
+        v["sorted_by"] = json!(column_name(tm.sort));
+        v["descending"] = json!(tm.descending);
         if !tm.search.is_empty() {
-            v.set("search", tm.search.as_str());
+            v["search"] = json!(tm.search.as_str());
         }
-        v.set("selected", tm.selected_proc().map(|p| object! { "name" => p.name.as_str(), "pid" => p.koid }));
+        v["selected"] = json!(tm.selected_proc().map(|p| json!({ "name": p.name.as_str(), "pid": p.koid })));
     } else {
-        v.set("graph", if tm.resource == Resource::Cpu { "cpu" } else { "memory" });
+        v["graph"] = json!(if tm.resource == Resource::Cpu { "cpu" } else { "memory" });
     }
     if let Some(d) = &tm.dialog {
         let shown = match d {
             Dialog::ConfirmKill { title, .. } => format!("asking the user whether to end {title}"),
             Dialog::Error(msg) => msg.clone(),
         };
-        v.set("dialog", shown);
+        v["dialog"] = shown.into();
     }
     let (used, total, share) = memory(tm);
-    v.set("cpu_percent", percent(tm.cpu_now * 100.0));
-    v.set("memory_used", human_size(used));
-    v.set("memory_total", human_size(total));
-    v.set("memory_percent", share);
-    v.set("processes", tm.procs.len());
-    v.set("applications", tm.procs.iter().filter(|p| p.is_app).count());
+    v["cpu_percent"] = json!(percent(tm.cpu_now * 100.0));
+    v["memory_used"] = json!(human_size(used));
+    v["memory_total"] = json!(human_size(total));
+    v["memory_percent"] = share.into();
+    v["processes"] = json!(tm.procs.len());
+    v["applications"] = json!(tm.procs.iter().filter(|p| p.is_app).count());
     let busiest: Vec<Value> =
         sorted(tm.procs.iter(), Column::Cpu).into_iter().take(STATE_PROCS).map(proc_value).collect();
-    v.set("busiest", busiest);
+    v["busiest"] = busiest.into();
     v
 }
 
@@ -198,29 +200,29 @@ impl TaskManager {
         let busiest: Vec<Value> = sorted(self.procs.iter(), Column::Cpu)
             .into_iter()
             .take(3)
-            .map(|p| object! { "name" => p.title.as_str(), "pid" => p.koid, "cpu_percent" => percent(p.cpu) })
+            .map(|p| json!({ "name": p.title.as_str(), "pid": p.koid, "cpu_percent": percent(p.cpu) }))
             .collect();
         let largest: Vec<Value> = sorted(self.procs.iter(), Column::Memory)
             .into_iter()
             .take(3)
-            .map(|p| object! { "name" => p.title.as_str(), "pid" => p.koid, "memory" => human_size(p.memory) })
+            .map(|p| json!({ "name": p.title.as_str(), "pid": p.koid, "memory": human_size(p.memory) }))
             .collect();
-        object! {
-            "cpu_percent" => percent(self.cpu_now * 100.0),
-            "cpu_average_percent" => percent(average * 100.0),
-            "cpu_peak_percent" => percent(peak * 100.0),
-            "measured_over_seconds" => self.cpu_hist.len(),
-            "cpu" => self.cpu_model.as_str(),
-            "cores" => info.cpu_count,
-            "memory_used" => human_size(used),
-            "memory_total" => human_size(total),
-            "memory_percent" => share,
-            "processes" => info.process_count,
-            "threads" => info.thread_count,
-            "up_time" => format_uptime(info.uptime_ns),
-            "busiest" => busiest,
-            "largest" => largest,
-        }
+        json!({
+            "cpu_percent": percent(self.cpu_now * 100.0),
+            "cpu_average_percent": percent(average * 100.0),
+            "cpu_peak_percent": percent(peak * 100.0),
+            "measured_over_seconds": self.cpu_hist.len(),
+            "cpu": self.cpu_model.as_str(),
+            "cores": info.cpu_count,
+            "memory_used": human_size(used),
+            "memory_total": human_size(total),
+            "memory_percent": share,
+            "processes": info.process_count,
+            "threads": info.thread_count,
+            "up_time": format_uptime(info.uptime_ns),
+            "busiest": busiest,
+            "largest": largest,
+        })
     }
 
     /// The running programs according to the launcher (which knows which
@@ -314,9 +316,9 @@ impl TaskManager {
             self.sample();
             self.next_sample = vrt::time::now_ns() + SAMPLE_NS;
         }
-        let mut v = object! { "ended" => title, "pid" => koid };
+        let mut v = json!({ "ended": title, "pid": koid });
         if !gone {
-            v.set("note", "it is still shutting down");
+            v["note"] = json!("it is still shutting down");
         }
         Ok(v)
     }
@@ -349,7 +351,7 @@ impl TaskManager {
                 };
                 let list = sorted(self.procs.iter().filter(wanted), sort);
                 let shown: Vec<Value> = list.iter().take(limit).map(|p| proc_value(p)).collect();
-                Ok(object! { "processes" => shown, "total" => list.len(), "sorted_by" => column_name(sort) })
+                Ok(json!({ "processes": shown, "total": list.len(), "sorted_by": column_name(sort) }))
             }
             "show_processes" => {
                 self.tab = 0;
@@ -367,13 +369,13 @@ impl TaskManager {
                 }
                 procs::rebuild_rows(self);
                 let shown = self.rows.iter().filter(|r| matches!(r, Row::Proc(_))).count();
-                Ok(object! {
-                    "page" => "processes",
-                    "sorted_by" => column_name(self.sort),
-                    "descending" => self.descending,
-                    "search" => self.search.as_str(),
-                    "shown" => shown,
-                })
+                Ok(json!({
+                    "page": "processes",
+                    "sorted_by": column_name(self.sort),
+                    "descending": self.descending,
+                    "search": self.search.as_str(),
+                    "shown": shown,
+                }))
             }
             "show_performance" => {
                 self.resource = match arg_opt_str(args, "graph").unwrap_or("cpu") {
@@ -384,8 +386,8 @@ impl TaskManager {
                 self.tab = 1;
                 self.refresh();
                 let mut v = self.performance_value();
-                v.set("page", "performance");
-                v.set("graph", if self.resource == Resource::Cpu { "cpu" } else { "memory" });
+                v["page"] = json!("performance");
+                v["graph"] = json!(if self.resource == Resource::Cpu { "cpu" } else { "memory" });
                 Ok(v)
             }
             "read_performance" => {

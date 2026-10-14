@@ -11,7 +11,9 @@ use alloc::string::{String, ToString};
 use vgfx::{LineJoin, Path, StrokeStyle};
 use vui::{Align, Color, Cursor, Font, Icon, Rect, Ui};
 
-use crate::{HISTORY, Resource, TaskManager, format_uptime, human_size};
+use vfiles::format::human_size;
+
+use crate::{HISTORY, Resource, TaskManager, format_uptime};
 
 const CPU_COLOR: Color = Color::hex(0x5B8CFF);
 const MEM_COLOR: Color = Color::hex(0xA77BFF);

@@ -3,11 +3,13 @@
 
 //! `vweb` — web clients for Veda applications.
 //!
-//! * [`Url`]: `http`, `https`, `ws` and `wss` URLs, with percent-encoding
-//!   for query strings ([`url::encode_component`]).
+//! * [`Url`]: `http`, `https`, `ws` and `wss` URLs, the references
+//!   redirects give ([`Url::join`]), and percent-encoding for query strings
+//!   ([`url::encode_component`]).
 //! * [`http`]: HTTP/1.1 requests and responses over any [`Connection`]
-//!   (`Content-Length`, chunked and read-to-close bodies), and
-//!   [`http::fetch`] which connects, sends and reads in one call.
+//!   (`Content-Length`, chunked and read-to-close bodies), [`http::fetch`]
+//!   which connects, sends and reads in one call, and [`http::get`] which
+//!   follows redirects.
 //! * [`ws`]: a WebSocket client (RFC 6455): the opening handshake, masked
 //!   frames, fragmented messages, pings answered automatically, the
 //!   closing handshake, and a non-blocking [`ws::WebSocket::poll`] for
@@ -23,7 +25,6 @@
 
 extern crate alloc;
 
-pub mod base64;
 pub mod http;
 pub mod url;
 pub mod ws;
@@ -58,6 +59,8 @@ pub enum WebError {
     },
     /// A response or message exceeded the size limit.
     TooLarge,
+    /// The server redirected more times than a client follows.
+    TooManyRedirects,
     /// The connection was closed.
     Closed,
     TimedOut,
@@ -87,6 +90,7 @@ impl fmt::Display for WebError {
                 Ok(())
             }
             WebError::TooLarge => f.write_str("the response is too large"),
+            WebError::TooManyRedirects => f.write_str("the server redirected too many times"),
             WebError::Closed => f.write_str("the connection was closed"),
             WebError::TimedOut => f.write_str("the server did not answer in time"),
         }

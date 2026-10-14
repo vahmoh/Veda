@@ -35,10 +35,11 @@ mod drm;
 
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
-use guest_sys::{POLLIN, PollFd, poll_many};
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::time::{ClockId, clock_gettime};
 use vabi::signals;
 use vproto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenMode, Shown, displaydev as protocol};
 use vrt::object::{Channel, Event, Vmo};
@@ -212,7 +213,7 @@ fn imported(card: &Card, width: u32, height: u32, stride: u32, bytes: usize) -> 
             .map_err(|e| format!("no write-combining memory: {e}"))
             .and_then(|vmo| {
                 let buf: OwnedFd = vrt::guest::dmabuf(vmo.raw(), 0, bytes as u64, true).map_err(|e| format!("{e}"))?;
-                let fb = card.import_framebuffer(buf.as_raw_fd(), width, height, stride).map_err(|e| format!("{e}"))?;
+                let fb = card.import_framebuffer(&buf, width, height, stride).map_err(|e| format!("{e}"))?;
                 Ok((vmo, fb))
             });
         match fb {
@@ -356,7 +357,9 @@ fn attach(d: &Display, client: protocol::Client) -> Result<Session, String> {
 fn veda_time(ns: u64) -> u64 {
     // Both clocks follow the processors' counter; their difference, read
     // now.
-    let (veda, linux) = (vrt::time::now_ns(), guest_sys::monotonic_ns());
+    let veda = vrt::time::now_ns();
+    let now = clock_gettime(ClockId::Monotonic);
+    let linux = now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64;
     (ns as i64 + (veda as i64 - linux as i64)).max(0) as u64
 }
 
@@ -375,15 +378,16 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
     let mut showing = false;
     loop {
         let mut fds = [
-            PollFd::new(request.as_raw_fd(), POLLIN),
-            PollFd::new(closed.as_raw_fd(), POLLIN),
-            PollFd::new(d.card.fd(), POLLIN),
+            PollFd::new(&request, PollFlags::IN),
+            PollFd::new(&closed, PollFlags::IN),
+            PollFd::new(d.card.file(), PollFlags::IN),
         ];
-        poll_many(&mut fds, -1)?;
-        if fds[1].revents != 0 {
+        poll(&mut fds, None)?;
+        let [requested, closing, flipped] = fds.map(|f| f.revents());
+        if !closing.is_empty() {
             return Ok(());
         }
-        if fds[0].revents & POLLIN != 0 {
+        if requested.contains(PollFlags::IN) {
             let _ = request.read(&mut [0u8; 4]);
             let _ = s.request.clear();
             let (picture, seq) = s.state.queued();
@@ -392,7 +396,7 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
                 waiting = Some((picture as usize, seq));
             }
         }
-        if fds[2].revents & POLLIN != 0 {
+        if flipped.contains(PollFlags::IN) {
             for f in d.card.events()? {
                 flipping = false;
                 let shown = Shown {

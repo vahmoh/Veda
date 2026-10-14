@@ -12,9 +12,9 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use terminal_core::screen::{Style, color};
 use vproto::fs::DirEntry;
 
-use crate::screen::{Style, color};
 use crate::shell::{INTERRUPTED, Io, Shell, launch_error};
 use vfiles::HOME;
 use vfiles::format::{format_time, human_size};
@@ -298,7 +298,7 @@ pub static BUILTINS: &[Builtin] = &[
         aliases: &["wget"],
         group: Group::Network,
         usage: "curl [-I] URL",
-        help: "Fetch a web page over HTTP (-I: headers only)",
+        help: "Fetch a web page over HTTP or HTTPS (-I: headers only)",
         run: crate::netcmds::cmd_curl,
     },
     Builtin {

@@ -26,7 +26,6 @@ mod commands;
 mod job;
 mod netcmds;
 mod program;
-mod screen;
 mod shell;
 
 use alloc::collections::VecDeque;
@@ -36,6 +35,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use terminal_core::screen::{self, Cell, Pos, Screen, Style, color};
 use vabi::{RawHandle, signals};
 use vfiles::HOME;
 use vfiles::path::display_path;
@@ -46,7 +46,6 @@ use vui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
 
 use job::{Job, Output};
 use program::Console;
-use screen::{Cell, Pos, Screen, Style, color};
 use shell::Shell;
 
 vrt::entry!(main);

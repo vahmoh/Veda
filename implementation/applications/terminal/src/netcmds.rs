@@ -10,10 +10,10 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use terminal_core::screen::{Style, color};
 use vnet::wifi::{self, ConnState, WlanEvent};
 use vnet::{Duration, IpAddr, NetError};
 
-use crate::screen::{Style, color};
 use crate::shell::{INTERRUPTED, Io, Shell};
 
 fn net_err(io: &mut Io, cmd: &str, e: NetError) -> i32 {
@@ -485,10 +485,10 @@ pub fn cmd_route(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
 pub fn cmd_curl(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let head_only = args.iter().any(|a| a == "-I");
     let Some(url) = args.iter().skip(1).find(|a| !a.starts_with('-')) else {
-        return io.error("curl", "usage: curl [-I] http://HOST[:PORT]/PATH");
+        return io.error("curl", "usage: curl [-I] [http[s]://]HOST[:PORT][/PATH]");
     };
     let url = if url.contains("://") { url.clone() } else { format!("http://{url}") };
-    match vnet::http::get(&url, Duration::from_secs(20), 1 << 20) {
+    match vweb::http::get(&url, Duration::from_secs(20), 1 << 20) {
         Ok(r) => {
             if head_only {
                 io.println(&format!("HTTP/1.1 {} {}", r.status, r.reason));
@@ -504,12 +504,6 @@ pub fn cmd_curl(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             }
             if r.status >= 400 { 22 } else { 0 }
         }
-        Err(e) => {
-            let status = io.error("curl", &format!("{e}"));
-            if url.starts_with("https://") {
-                io.hint("HTTPS is not supported yet (TLS arrives in a later version).");
-            }
-            status
-        }
+        Err(e) => io.error("curl", &format!("{e}")),
     }
 }

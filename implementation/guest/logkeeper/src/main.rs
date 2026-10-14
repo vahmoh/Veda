@@ -25,6 +25,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use rustix::io::Errno;
+use rustix::mount::{MountFlags, UnmountFlags, mount, unmount};
+
 /// Where the stick is mounted.
 const MOUNTED: &str = "/stick";
 /// The stick's directory of logs, which says it keeps them.
@@ -42,8 +45,6 @@ const SEARCH: Duration = Duration::from_secs(60);
 const READ_EVERY: Duration = Duration::from_millis(250);
 const SYNC_EVERY: Duration = Duration::from_secs(1);
 const O_NONBLOCK: i32 = 0o4000;
-const EACCES: i32 = 13;
-const EROFS: i32 = 30;
 const EPIPE: i32 = 32;
 
 /// Stays, doing nothing (init would start it again were it to end).
@@ -99,13 +100,13 @@ fn mount_stick() -> Option<String> {
             if !is_veda(&sector) {
                 continue;
             }
-            match guest_sys::mount(&device, MOUNTED, "vfat") {
+            match mount(&device, MOUNTED, "vfat", MountFlags::empty(), None) {
                 Ok(()) if Path::new(MOUNTED).join(LOGS).is_dir() => return Some(name),
                 Ok(()) => {
                     println!("logkeeper: {name} has Veda's files but no {LOGS}: it is left alone");
-                    let _ = guest_sys::unmount(MOUNTED);
+                    let _ = unmount(MOUNTED, UnmountFlags::empty());
                 }
-                Err(e) if matches!(e.raw_os_error(), Some(EROFS | EACCES)) => {
+                Err(Errno::ROFS | Errno::ACCESS) => {
                     println!("logkeeper: {name} has Veda's files but cannot be written to");
                 }
                 Err(e) => println!("logkeeper: cannot mount {name}: {e}"),
@@ -134,6 +135,12 @@ fn sync_dir(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
 
+/// The bytes free for programs on the file system `path` is on.
+fn free_bytes(path: &str) -> io::Result<u64> {
+    let s = rustix::fs::statfs(path)?;
+    Ok(s.f_bavail.saturating_mul(s.f_bsize as u64))
+}
+
 /// The directory for this start's logs, in `logs`: numbered after the
 /// last start's. The oldest starts' go first, so that [`KEPT`] are left
 /// with this one, and room for its logs.
@@ -141,7 +148,7 @@ fn new_start(logs: &Path) -> io::Result<PathBuf> {
     let mut kept = starts(fs::read_dir(logs)?.flatten().filter_map(|e| e.file_name().into_string().ok()));
     let number = kept.last().map_or(1, |n| n + 1);
     let room = VEDA_LIMIT + LINUX_LIMIT + SPARE;
-    while !kept.is_empty() && (kept.len() >= KEPT || guest_sys::free_bytes(MOUNTED)? < room) {
+    while !kept.is_empty() && (kept.len() >= KEPT || free_bytes(MOUNTED)? < room) {
         let oldest = kept.remove(0);
         fs::remove_dir_all(logs.join(format!("{oldest:04}")))?;
     }

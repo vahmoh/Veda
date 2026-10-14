@@ -18,6 +18,7 @@ vrt = { workspace = true }
 vabi = { workspace = true }
 vnet = { workspace = true }
 vtls = { workspace = true }
+vweb = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

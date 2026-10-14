@@ -7,6 +7,9 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use unicode_segmentation::GraphemeCursor;
+use unicode_width::UnicodeWidthChar;
+
 /// A position in a buffer: a line index and a byte offset into that line.
 /// Valid positions are always on a character boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -56,7 +59,8 @@ enum Class {
 fn class(c: char) -> Class {
     if c.is_whitespace() {
         Class::Space
-    } else if c.is_alphanumeric() || c == '_' {
+    } else if c.is_alphanumeric() || c == '_' || c.width() == Some(0) {
+        // Characters of no width are the accents and joiners of the letters before them.
         Class::Word
     } else {
         Class::Punct
@@ -191,11 +195,13 @@ impl Buffer {
         }
     }
 
-    /// One character back (to the end of the previous line at a line start).
+    /// One character back, a grapheme cluster (a letter with its accents, an emoji with its
+    /// modifiers); to the end of the previous line at a line start.
     pub fn prev(&self, p: Pos) -> Pos {
         if p.col > 0 {
-            let n = self.lines[p.line][..p.col].chars().next_back().map_or(1, char::len_utf8);
-            Pos::new(p.line, p.col - n)
+            let s = &self.lines[p.line];
+            let col = GraphemeCursor::new(p.col, s.len(), true).prev_boundary(s, 0).ok().flatten().unwrap_or(0);
+            Pos::new(p.line, col)
         } else if p.line > 0 {
             self.line_end(p.line - 1)
         } else {
@@ -203,12 +209,12 @@ impl Buffer {
         }
     }
 
-    /// One character forward (to the start of the next line at a line end).
+    /// One character forward, a grapheme cluster; to the start of the next line at a line end.
     pub fn next(&self, p: Pos) -> Pos {
         let s = &self.lines[p.line];
         if p.col < s.len() {
-            let n = s[p.col..].chars().next().map_or(1, char::len_utf8);
-            Pos::new(p.line, p.col + n)
+            let col = GraphemeCursor::new(p.col, s.len(), true).next_boundary(s, 0).ok().flatten().unwrap_or(s.len());
+            Pos::new(p.line, col)
         } else if p.line + 1 < self.lines.len() {
             Pos::new(p.line + 1, 0)
         } else {
@@ -401,6 +407,30 @@ mod tests {
 
     fn buf(s: &str) -> Buffer {
         Buffer::from_text(s)
+    }
+
+    #[test]
+    fn moves_over_whole_characters() {
+        // e + combining acute, then a thumbs-up with a skin tone.
+        let b = buf("e\u{301}\u{1f44d}\u{1f3fd}!");
+        let stops: Vec<usize> = core::iter::successors(Some(Pos::new(0, 0)), |&p| {
+            let n = b.next(p);
+            (n != p).then_some(n)
+        })
+        .map(|p| p.col)
+        .collect();
+        assert_eq!(stops, [0, 3, 11, 12]);
+        assert_eq!(b.prev(Pos::new(0, 11)).col, 3);
+        assert_eq!(b.prev(Pos::new(0, 3)).col, 0);
+    }
+
+    #[test]
+    fn words_keep_their_accents() {
+        let b = buf("cafe\u{301} au lait");
+        let end = "cafe\u{301}".len();
+        assert_eq!(b.word_right(Pos::new(0, 0)).col, end);
+        assert_eq!(b.word_left(Pos::new(0, end)).col, 0);
+        assert_eq!(b.word_at(Pos::new(0, 2)), (Pos::new(0, 0), Pos::new(0, end)));
     }
 
     #[test]

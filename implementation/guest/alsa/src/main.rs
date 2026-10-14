@@ -35,12 +35,11 @@ mod pcm;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use guest_sys::{POLLIN, POLLOUT, PollFd, poll_many};
+use rustix::event::{PollFd, PollFlags, poll};
 use vabi::{WaitItem, signals};
 use vproto::audio::{DeviceFormat, Ring, Role, audiodev, ring::flags};
 use vrt::object::{Channel, Event};
@@ -662,17 +661,24 @@ fn serve(player: &mut Player, link: &Channel, out: &Output) -> io::Result<()> {
             paced = target;
         }
         let audio = target.is_none_or(|t| t < player.depth.periods);
-        let mut fds = [
-            PollFd::new(closed.as_raw_fd(), POLLIN),
-            PollFd::new(if audio { data.as_raw_fd() } else { -1 }, POLLIN),
-            PollFd::new(if player.running { player.pcm.fd() } else { -1 }, POLLOUT),
-        ];
+        // The link closing; audio coming, while there is room for it; room
+        // on the card, while it plays.
+        let mut fds = vec![PollFd::new(&closed, PollFlags::IN)];
+        let data_at = audio.then(|| {
+            fds.push(PollFd::new(&data, PollFlags::IN));
+            fds.len() - 1
+        });
+        if player.running {
+            fds.push(PollFd::new(player.pcm.file(), PollFlags::OUT));
+        }
         // Two periods' time at most while the card plays, in case.
-        poll_many(&mut fds, if player.running { 2 * period_ms + 5 } else { 500 })?;
-        if fds[0].revents != 0 {
+        poll(&mut fds, guest_sys::poll_timeout(if player.running { 2 * period_ms + 5 } else { 500 }).as_ref())?;
+        if !fds[0].revents().is_empty() {
             return Ok(());
         }
-        if fds[1].revents & POLLIN != 0 {
+        let data_came = data_at.is_some_and(|i| fds[i].revents().contains(PollFlags::IN));
+        drop(fds);
+        if data_came {
             let _ = data.read(&mut [0u8; 4]);
             let _ = data_event.clear();
         }

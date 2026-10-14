@@ -4,9 +4,11 @@
 //! HTTP/1.1 requests over a [`Connection`].
 //!
 //! One request per connection (`Connection: close`), which is all the
-//! system's clients need (API calls and downloads). Response heads are
-//! parsed by `httparse`; bodies may be `Content-Length`, chunked or
-//! read-to-close, and are limited to a caller-chosen size.
+//! system's clients need (API calls and downloads). Response heads and the
+//! sizes of chunks are parsed by `httparse`; bodies may be
+//! `Content-Length`, chunked or read-to-close, and are limited to a
+//! caller-chosen size. [`fetch`] makes one request; [`get`] follows
+//! redirects.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -19,11 +21,18 @@ use crate::{Connection, Url, WebError};
 /// Largest response head.
 const MAX_HEAD: usize = 64 * 1024;
 const MAX_HEADERS: usize = 64;
+/// Longest line that gives a chunk's size (with its extensions).
+const MAX_CHUNK_LINE: usize = 1024;
+/// Redirects [`get`] follows.
+const MAX_REDIRECTS: usize = 5;
 
 /// A response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     pub status: u16,
+    /// The status's reason phrase (`OK`, `Not Found`, ...), which may be
+    /// empty.
+    pub reason: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -50,7 +59,9 @@ impl Response {
 }
 
 /// Writes a request. `headers` must not contain line breaks (they are
-/// rejected); `Host`, `Connection` and `Content-Length` are added.
+/// rejected); `Host`, `Connection` and `Content-Length` are added, and
+/// `User-Agent` and `Accept-Encoding: identity` unless `headers` has them
+/// (nothing here decompresses a body).
 pub fn write_request<C: Connection>(
     conn: &mut C,
     method: &str,
@@ -59,16 +70,20 @@ pub fn write_request<C: Connection>(
     body: &[u8],
 ) -> Result<(), WebError> {
     let mut head = format!("{method} {} HTTP/1.1\r\nHost: {}\r\n", url.path, url.host_header());
-    let mut has_agent = false;
+    let (mut has_agent, mut has_encoding) = (false, false);
     for (k, v) in headers {
         if k.is_empty() || [k, v].iter().any(|s| s.contains(['\r', '\n'])) {
             return Err(WebError::Protocol("invalid request header".into()));
         }
         has_agent |= k.eq_ignore_ascii_case("user-agent");
+        has_encoding |= k.eq_ignore_ascii_case("accept-encoding");
         head.push_str(&format!("{k}: {v}\r\n"));
     }
     if !has_agent {
-        head.push_str("User-Agent: Veda/0.1\r\n");
+        head.push_str(concat!("User-Agent: Veda/", env!("CARGO_PKG_VERSION"), "\r\n"));
+    }
+    if !has_encoding {
+        head.push_str("Accept-Encoding: identity\r\n");
     }
     if !body.is_empty() || matches!(method, "POST" | "PUT" | "PATCH") {
         head.push_str(&format!("Content-Length: {}\r\n", body.len()));
@@ -116,22 +131,27 @@ impl<C: Connection> Reader<'_, C> {
     }
 }
 
-/// A parsed response head: status, headers and the head's length.
-pub(crate) type Head = (u16, Vec<(String, String)>, usize);
+/// A parsed response head.
+pub(crate) struct Head {
+    pub status: u16,
+    pub reason: String,
+    pub headers: Vec<(String, String)>,
+}
 
 /// Parses a response head.
 pub(crate) fn parse_head(bytes: &[u8]) -> Result<Head, WebError> {
     let mut raw = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut resp = httparse::Response::new(&mut raw);
     match resp.parse(bytes) {
-        Ok(httparse::Status::Complete(len)) => {
+        Ok(httparse::Status::Complete(_)) => {
             let status = resp.code.ok_or_else(|| WebError::Protocol("no status".into()))?;
+            let reason = resp.reason.unwrap_or_default().to_string();
             let headers = resp
                 .headers
                 .iter()
                 .map(|h| (h.name.to_string(), String::from_utf8_lossy(h.value).trim().to_string()))
                 .collect();
-            Ok((status, headers, len))
+            Ok(Head { status, reason, headers })
         }
         Ok(httparse::Status::Partial) => Err(WebError::Protocol("incomplete head".into())),
         Err(e) => Err(WebError::Protocol(format!("{e}"))),
@@ -144,7 +164,7 @@ pub fn read_response<C: Connection>(conn: &mut C, method: &str, max_body: usize)
     let mut r = Reader { conn, buf: Vec::new() };
     loop {
         let head_len = r.read_head()?;
-        let (status, headers, _) = parse_head(&r.buf[..head_len])?;
+        let Head { status, reason, headers } = parse_head(&r.buf[..head_len])?;
         r.buf.drain(..head_len);
         // Interim responses (100 Continue) precede the real one.
         if (100..200).contains(&status) {
@@ -176,40 +196,52 @@ pub fn read_response<C: Connection>(conn: &mut C, method: &str, max_body: usize)
             }
             core::mem::take(&mut r.buf)
         };
-        return Ok(Response { status, headers, body });
+        return Ok(Response { status, reason, headers, body });
     }
 }
 
+/// Reads a chunked body (RFC 9112, section 7.1). `httparse` parses each
+/// chunk's size (16 hexadecimal digits at most, and at least one: it would
+/// take a line without digits for 0, the end); the sizes add up without
+/// overflowing, past `max_body` being refused, and each chunk must end its
+/// line.
 fn read_chunked<C: Connection>(r: &mut Reader<'_, C>, max_body: usize) -> Result<Vec<u8>, WebError> {
+    let bad = |what: &str| WebError::Protocol(what.into());
     let mut body = Vec::new();
     loop {
-        // Chunk size line.
-        let line_end = loop {
-            if let Some(i) = r.buf.windows(2).position(|w| w == b"\r\n") {
-                break i;
-            }
-            if r.buf.len() > 1024 || !r.fill()? {
-                return Err(WebError::Protocol("bad chunk".into()));
+        let (line_len, size) = loop {
+            match httparse::parse_chunk_size(&r.buf) {
+                Ok(httparse::Status::Complete(found)) if r.buf[0].is_ascii_hexdigit() => break found,
+                Ok(httparse::Status::Partial) if r.buf.len() <= MAX_CHUNK_LINE => {
+                    if !r.fill()? {
+                        return Err(bad("connection closed in a chunk size"));
+                    }
+                }
+                _ => return Err(bad("bad chunk size")),
             }
         };
-        let line = core::str::from_utf8(&r.buf[..line_end]).map_err(|_| WebError::Protocol("bad chunk".into()))?;
-        let size_text = line.split(';').next().unwrap_or("").trim();
-        let size = usize::from_str_radix(size_text, 16).map_err(|_| WebError::Protocol("bad chunk size".into()))?;
-        r.buf.drain(..line_end + 2);
+        r.buf.drain(..line_len);
         if size == 0 {
-            // Trailers end with an empty line; the connection closes after.
+            // Trailers and an empty line may follow; the connection closes
+            // after them.
             return Ok(body);
         }
-        if body.len() + size > max_body {
-            return Err(WebError::TooLarge);
-        }
-        while r.buf.len() < size + 2 {
+        // The chunk, then the line break that ends it.
+        let end = usize::try_from(size)
+            .ok()
+            .filter(|&size| body.len().saturating_add(size) <= max_body)
+            .and_then(|size| size.checked_add(2))
+            .ok_or(WebError::TooLarge)?;
+        while r.buf.len() < end {
             if !r.fill()? {
-                return Err(WebError::Protocol("connection closed in a chunk".into()));
+                return Err(bad("connection closed in a chunk"));
             }
         }
-        body.extend_from_slice(&r.buf[..size]);
-        r.buf.drain(..size + 2);
+        if &r.buf[end - 2..end] != b"\r\n" {
+            return Err(bad("chunk not terminated"));
+        }
+        body.extend_from_slice(&r.buf[..end - 2]);
+        r.buf.drain(..end);
     }
 }
 
@@ -223,10 +255,40 @@ pub fn fetch(
     timeout: Duration,
     max_body: usize,
 ) -> Result<Response, WebError> {
-    let url = Url::parse(url)?;
-    let mut conn = crate::connect(&url, timeout)?;
+    request(method, &Url::parse(url)?, headers, body, timeout, max_body)
+}
+
+/// Fetches `url` with `GET`, following up to five redirects, to `http` and
+/// `https` URLs (relative ones resolved against the URL that redirected).
+/// `timeout` bounds each connection and `max_body` each body.
+pub fn get(url: &str, timeout: Duration, max_body: usize) -> Result<Response, WebError> {
+    let mut url = Url::parse(url)?;
+    for _ in 0..=MAX_REDIRECTS {
+        if !matches!(url.scheme.as_str(), "http" | "https") {
+            return Err(WebError::BadUrl);
+        }
+        let response = request("GET", &url, &[("Accept", "*/*")], &[], timeout, max_body)?;
+        match response.header("location") {
+            Some(to) if matches!(response.status, 301 | 302 | 303 | 307 | 308) => url = url.join(to)?,
+            _ => return Ok(response),
+        }
+    }
+    Err(WebError::TooManyRedirects)
+}
+
+/// Connects to the server of `url`, sends one request and reads the
+/// response.
+fn request(
+    method: &str,
+    url: &Url,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    timeout: Duration,
+    max_body: usize,
+) -> Result<Response, WebError> {
+    let mut conn = crate::connect(url, timeout)?;
     conn.set_read_timeout(Some(timeout));
-    write_request(&mut conn, method, &url, headers, body)?;
+    write_request(&mut conn, method, url, headers, body)?;
     read_response(&mut conn, method, max_body)
 }
 
@@ -251,7 +313,14 @@ mod tests {
         assert!(text.starts_with("POST /v1/models?x=1 HTTP/1.1\r\nHost: api.deepgram.com\r\n"));
         assert!(text.contains("Authorization: Token abc\r\n"));
         assert!(text.contains("Content-Length: 2\r\n"));
+        assert!(text.contains(concat!("User-Agent: Veda/", env!("CARGO_PKG_VERSION"), "\r\n")));
+        assert!(text.contains("Accept-Encoding: identity\r\n"));
         assert!(text.ends_with("Connection: close\r\n\r\n{}"));
+        // The caller's own choices stand.
+        let mut c = TestConn::new(b"", 1);
+        write_request(&mut c, "GET", &url, &[("user-agent", "Test"), ("Accept-Encoding", "gzip")], b"").unwrap();
+        let text = String::from_utf8(c.output).unwrap();
+        assert!(!text.contains("Veda/") && !text.contains("identity"));
         let mut c = TestConn::new(b"", 1);
         assert!(write_request(&mut c, "GET", &url, &[("X", "a\r\nInjected: 1")], b"").is_err());
     }
@@ -262,6 +331,7 @@ mod tests {
             let mut c = TestConn::new(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nX-A: b \r\n\r\nhelloEXTRA", chunk);
             let r = read_response(&mut c, "GET", 100).unwrap();
             assert_eq!((r.status, r.body.as_slice(), r.header("x-a")), (200, b"hello".as_slice(), Some("b")));
+            assert_eq!(r.reason, "OK");
 
             let mut c = TestConn::new(
                 b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\n\r\n4;ext\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n",
@@ -289,5 +359,38 @@ mod tests {
         assert!(matches!(read_response(&mut c, "GET", 100), Err(WebError::Protocol(_))));
         let mut c = TestConn::new(b"", 7);
         assert_eq!(read_response(&mut c, "GET", 100), Err(WebError::Closed));
+    }
+
+    #[test]
+    fn rejects_hostile_chunks() {
+        let chunked = |chunks: &[u8]| {
+            let mut input = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+            input.extend_from_slice(chunks);
+            input
+        };
+        for chunk in [1, 5, 4096] {
+            let read =
+                |chunks: &[u8], max_body| read_response(&mut TestConn::new(&chunked(chunks), chunk), "GET", max_body);
+            // Sizes that would overflow a sum or the buffer's index.
+            assert_eq!(read(b"1\r\na\r\nffffffffffffffff\r\nb\r\n0\r\n\r\n", 100), Err(WebError::TooLarge));
+            assert_eq!(read(b"fffffffffffffffe\r\n", usize::MAX), Err(WebError::TooLarge));
+            assert_eq!(read(b"5\r\nabcde\r\n6\r\nfghijk\r\n0\r\n\r\n", 10), Err(WebError::TooLarge));
+            // More than 16 digits, a sign, no digits, a chunk without its
+            // line break, a size line that never ends.
+            for bad in [
+                &b"10000000000000000\r\n"[..],
+                b"+5\r\nabcde\r\n0\r\n\r\n",
+                b"\r\n",
+                b";ext\r\n",
+                b" 5\r\nabcde\r\n0\r\n\r\n",
+                b"3\r\nabcXY0\r\n\r\n",
+            ] {
+                assert!(matches!(read(bad, 100), Err(WebError::Protocol(_))), "{}", String::from_utf8_lossy(bad));
+            }
+            assert!(matches!(read(&[b'1'; 2000], 100), Err(WebError::Protocol(_))));
+            // Extensions and a trailer are allowed; the body is exact.
+            let r = read(b"3;name=value\r\nabc\r\n2 \r\nde\r\n0\r\nX-Trailer: 1\r\n\r\n", 5).unwrap();
+            assert_eq!(r.body, b"abcde");
+        }
     }
 }

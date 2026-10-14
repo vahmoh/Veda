@@ -5,6 +5,7 @@
 
 use alloc::string::String;
 
+use unicode_segmentation::GraphemeCursor;
 use vgfx::{Color, Rect};
 use vproto::display::Cursor;
 use vproto::input::keys;
@@ -30,29 +31,42 @@ fn floor_boundary(s: &str, i: usize) -> usize {
     i
 }
 
+/// The caret position one character before `i`: a grapheme cluster back (a letter with its
+/// accents, an emoji with its modifiers), which is also what Backspace deletes.
 fn prev_boundary(s: &str, i: usize) -> usize {
-    s[..i].char_indices().next_back().map(|(p, _)| p).unwrap_or(0)
+    GraphemeCursor::new(i, s.len(), true).prev_boundary(s, 0).ok().flatten().unwrap_or(0)
 }
 
+/// The caret position one character (grapheme cluster) after `i`.
 fn next_boundary(s: &str, i: usize) -> usize {
-    s[i..].chars().next().map(|c| i + c.len_utf8()).unwrap_or(i)
+    GraphemeCursor::new(i, s.len(), true).next_boundary(s, 0).ok().flatten().unwrap_or(s.len())
+}
+
+/// Whether the character before `i` is white space.
+fn space_before(s: &str, i: usize) -> bool {
+    s[..i].chars().next_back().is_some_and(char::is_whitespace)
+}
+
+/// Whether the character at `i` is white space.
+fn space_at(s: &str, i: usize) -> bool {
+    s[i..].chars().next().is_some_and(char::is_whitespace)
 }
 
 fn word_left(s: &str, mut i: usize) -> usize {
-    while i > 0 && s[..i].ends_with(' ') {
+    while i > 0 && space_before(s, i) {
         i = prev_boundary(s, i);
     }
-    while i > 0 && !s[..i].ends_with(' ') {
+    while i > 0 && !space_before(s, i) {
         i = prev_boundary(s, i);
     }
     i
 }
 
 fn word_right(s: &str, mut i: usize) -> usize {
-    while i < s.len() && s[i..].starts_with(' ') {
+    while i < s.len() && space_at(s, i) {
         i = next_boundary(s, i);
     }
-    while i < s.len() && !s[i..].starts_with(' ') {
+    while i < s.len() && !space_at(s, i) {
         i = next_boundary(s, i);
     }
     i
@@ -329,5 +343,23 @@ trait FloorPx {
 impl FloorPx for f32 {
     fn floor_px(self) -> f32 {
         libm::floorf(self + 0.5)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn carets_move_over_whole_characters_and_words() {
+        // e + combining acute: one character to the caret and to Backspace.
+        let s = "ce\u{301}\u{a0}d";
+        assert_eq!(next_boundary(s, 1), 4);
+        assert_eq!(prev_boundary(s, 4), 1);
+        assert_eq!(next_boundary(s, s.len()), s.len());
+        assert_eq!(prev_boundary(s, 0), 0);
+        // A no-break space separates words like any white space.
+        assert_eq!(word_right(s, 0), 4);
+        assert_eq!(word_left(s, s.len()), s.len() - 1);
     }
 }

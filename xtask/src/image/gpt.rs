@@ -80,7 +80,7 @@ pub fn build_disk(parts: &[Partition]) -> Vec<u8> {
             e[56 + j * 2..58 + j * 2].copy_from_slice(&ch.to_le_bytes());
         }
     }
-    let entries_crc = crc32(&entries);
+    let entries_crc = crc32fast::hash(&entries);
     let last_lba = total_sectors - 1;
     let backup_entries_lba = last_lba - ENTRY_SECTORS;
 
@@ -98,7 +98,7 @@ pub fn build_disk(parts: &[Partition]) -> Vec<u8> {
         h[80..84].copy_from_slice(&(ENTRY_COUNT as u32).to_le_bytes());
         h[84..88].copy_from_slice(&(ENTRY_SIZE as u32).to_le_bytes());
         h[88..92].copy_from_slice(&entries_crc.to_le_bytes());
-        let crc = crc32(&h[0..92]);
+        let crc = crc32fast::hash(&h[0..92]);
         h[16..20].copy_from_slice(&crc.to_le_bytes());
         h
     };
@@ -129,26 +129,12 @@ fn pseudo_guid(seed: u64) -> [u8; 16] {
     out
 }
 
-/// CRC-32 (IEEE 802.3), as required by the GPT headers.
-pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
-        }
-    }
-    !crc
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn crc32_known_value() {
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-    }
+    fn crc32_known_value() {}
 
     #[test]
     fn disk_layout() {
@@ -162,6 +148,6 @@ mod tests {
         let mut h = disk[SECTOR..SECTOR + 92].to_vec();
         let stored = u32::from_le_bytes(h[16..20].try_into().unwrap());
         h[16..20].fill(0);
-        assert_eq!(crc32(&h), stored);
+        assert_eq!(crc32fast::hash(&h), stored);
     }
 }

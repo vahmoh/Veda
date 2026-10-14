@@ -547,6 +547,29 @@ fn scaling_keeps_colour_and_alpha_apart() {
 }
 
 #[test]
+fn covering_crops_the_centre() {
+    // Left and right thirds red, the middle green: a square cover of the
+    // wide picture is the middle, all green.
+    let wide =
+        Image::from_fn(90, 30, |x, _| if (30..60).contains(&x) { argb(255, 0, 255, 0) } else { argb(255, 255, 0, 0) });
+    let square = crate::cover(&wide, 10, 10, Filter::Bilinear);
+    assert_eq!((square.width, square.height), (10, 10));
+    assert!(square.pixels.iter().all(|&p| p == argb(255, 0, 255, 0)));
+    // A tall one is a narrower middle; a banner, the full width with the red.
+    let tall = crate::cover(&wide, 10, 40, Filter::Bilinear);
+    assert_eq!((tall.width, tall.height), (10, 40));
+    assert!(tall.pixels.iter().all(|&p| p == argb(255, 0, 255, 0)));
+    let banner = crate::cover(&wide, 120, 10, Filter::Bilinear);
+    assert_eq!((banner.width, banner.height), (120, 10));
+    assert!(banner.pixels.iter().any(|&p| p == argb(255, 255, 0, 0)));
+    // Degenerate sizes give what resize gives, without dividing by zero.
+    assert!(crate::cover(&wide, 0, 10, Filter::Bilinear).pixels.is_empty());
+    assert_eq!(crate::cover(&Image::new(0, 0), 4, 4, Filter::Bilinear).pixels.len(), 16);
+    let line = crate::cover(&photo(1000, 1), 3, 3, Filter::Bilinear);
+    assert_eq!((line.width, line.height), (3, 3));
+}
+
+#[test]
 fn turns_and_mirrors() {
     let img = Image::from_fn(3, 2, |x, y| y * 3 + x);
     assert_eq!(crate::rotate90(&img).pixels, [3, 0, 4, 1, 5, 2]);

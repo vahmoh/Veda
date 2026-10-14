@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vjson"
-description = "JSON values: parsing, building and writing"
+name = "terminal-core"
+description = "What the Terminal shows, testable on the host: its scrollback of styled text and the escape sequences that style it"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+vte = { workspace = true }
 
 [lints]
 workspace = true

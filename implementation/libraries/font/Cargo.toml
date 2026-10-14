@@ -3,7 +3,7 @@
 
 [package]
 name = "vfont"
-description = "TrueType/OpenType (glyf and CFF) font parsing, rasterization, caching and text layout"
+description = "Fonts on ttf-parser: metrics, kerning, outlines, rasterization, caching and text layout"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,11 @@ license.workspace = true
 [dependencies]
 vraster = { workspace = true }
 libm = { workspace = true }
+ttf-parser = { workspace = true }
+unicode-segmentation = { workspace = true }
+
+[dev-dependencies]
+png = { workspace = true }
 
 [lints]
 workspace = true

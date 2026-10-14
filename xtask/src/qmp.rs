@@ -9,6 +9,8 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use serde_json::{Value, json};
+
 use crate::util::Result;
 
 pub struct Qmp {
@@ -32,7 +34,7 @@ impl Qmp {
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
         let mut qmp = Qmp { reader: BufReader::new(stream.try_clone().map_err(|e| e.to_string())?), writer: stream };
         qmp.read_line()?; // greeting
-        qmp.execute("qmp_capabilities", "{}")?;
+        qmp.execute("qmp_capabilities", json!({}))?;
         Ok(qmp)
     }
 
@@ -45,17 +47,15 @@ impl Qmp {
         Ok(line)
     }
 
-    /// Executes a command and waits for its result, skipping async events.
-    pub fn execute(&mut self, command: &str, arguments: &str) -> Result<String> {
-        let msg = format!("{{\"execute\":\"{command}\",\"arguments\":{arguments}}}\n");
+    /// Executes a command and waits for its result (the value of its
+    /// `return`), skipping the events QEMU sends meanwhile.
+    pub fn execute(&mut self, command: &str, arguments: Value) -> Result<Value> {
+        let msg = json!({ "execute": command, "arguments": arguments }).to_string() + "\n";
         self.writer.write_all(msg.as_bytes()).map_err(|e| format!("QMP write: {e}"))?;
         loop {
             let line = self.read_line()?;
-            if line.contains("\"return\"") {
-                return Ok(line);
-            }
-            if line.contains("\"error\"") {
-                return Err(format!("QMP {command} failed: {}", line.trim()));
+            if let Some(reply) = reply(&line) {
+                return reply.map_err(|why| format!("QMP {command} failed: {why}"));
             }
         }
     }
@@ -68,26 +68,26 @@ impl Qmp {
     /// QEMU's state, as `query-status` tells it: `running`, `paused`,
     /// `internal-error`, ...
     pub fn status(&mut self) -> Result<String> {
-        let line = self.execute("query-status", "{}")?;
-        field(&line, "status").ok_or_else(|| format!("query-status: {}", line.trim()))
+        let reply = self.execute("query-status", json!({}))?;
+        reply["status"].as_str().map(String::from).ok_or_else(|| format!("query-status: {reply}"))
     }
 
-    /// What a command of QEMU's monitor (its human interface) prints.
+    /// What a command of QEMU's monitor (its human interface) prints, with
+    /// `\n` line ends.
     pub fn human(&mut self, command: &str) -> Result<String> {
-        let line = self.execute("human-monitor-command", &format!("{{\"command-line\":\"{command}\"}}"))?;
-        field(&line, "return").ok_or_else(|| format!("{command}: {}", line.trim()))
+        let reply = self.execute("human-monitor-command", json!({ "command-line": command }))?;
+        reply.as_str().map(|text| text.replace("\r\n", "\n")).ok_or_else(|| format!("{command}: {reply}"))
     }
 
     pub fn screenshot(&mut self, path: &Path) -> Result {
-        let path = path.to_string_lossy().replace('\\', "/");
-        self.execute("screendump", &format!("{{\"filename\":\"{path}\",\"format\":\"png\"}}")).map(|_| ())
+        self.execute("screendump", json!({ "filename": path.to_string_lossy(), "format": "png" })).map(|_| ())
     }
 
     /// Presses and releases a key combination given in QEMU's `qcode` names
     /// joined by `-` (e.g. `ctrl-alt-t`, `ret`, `a`).
     pub fn send_keys(&mut self, combo: &str) -> Result {
-        let keys: Vec<String> = combo.split('-').map(|k| format!("{{\"type\":\"qcode\",\"data\":\"{k}\"}}")).collect();
-        self.execute("send-key", &format!("{{\"keys\":[{}]}}", keys.join(","))).map(|_| ())
+        let keys: Vec<Value> = combo.split('-').map(|k| json!({ "type": "qcode", "data": k })).collect();
+        self.execute("send-key", json!({ "keys": keys })).map(|_| ())
     }
 
     /// Types ASCII text by sending one key press per character.
@@ -143,69 +143,59 @@ impl Qmp {
     /// fraction of the screen (0.0 ..= 1.0).
     pub fn move_mouse(&mut self, fx: f64, fy: f64) -> Result {
         let (x, y) = ((fx.clamp(0.0, 1.0) * 32767.0) as u32, (fy.clamp(0.0, 1.0) * 32767.0) as u32);
-        let events = format!(
-            "{{\"events\":[{{\"type\":\"abs\",\"data\":{{\"axis\":\"x\",\"value\":{x}}}}},\
-             {{\"type\":\"abs\",\"data\":{{\"axis\":\"y\",\"value\":{y}}}}}]}}"
-        );
-        self.execute("input-send-event", &events).map(|_| ())
+        let events = json!([
+            { "type": "abs", "data": { "axis": "x", "value": x } },
+            { "type": "abs", "data": { "axis": "y", "value": y } },
+        ]);
+        self.execute("input-send-event", json!({ "events": events })).map(|_| ())
     }
 
     /// Presses or releases a mouse button (`left`, `right`, `middle`).
     pub fn mouse_button(&mut self, button: &str, down: bool) -> Result {
-        let events =
-            format!("{{\"events\":[{{\"type\":\"btn\",\"data\":{{\"button\":\"{button}\",\"down\":{down}}}}}]}}");
-        self.execute("input-send-event", &events).map(|_| ())
+        let event = json!({ "type": "btn", "data": { "button": button, "down": down } });
+        self.execute("input-send-event", json!({ "events": [event] })).map(|_| ())
     }
 
     /// Presses or releases one key (QEMU qcode), e.g. to hold a modifier.
     pub fn key_event(&mut self, qcode: &str, down: bool) -> Result {
-        let events = format!(
-            "{{\"events\":[{{\"type\":\"key\",\"data\":{{\"down\":{down},\"key\":{{\"type\":\"qcode\",\"data\":\"{qcode}\"}}}}}}]}}"
-        );
-        self.execute("input-send-event", &events).map(|_| ())
+        let event = json!({ "type": "key", "data": { "down": down, "key": { "type": "qcode", "data": qcode } } });
+        self.execute("input-send-event", json!({ "events": [event] })).map(|_| ())
     }
 
     pub fn quit(&mut self) {
-        let _ = self.execute("quit", "{}");
+        let _ = self.execute("quit", json!({}));
     }
 }
 
-/// The string value of the first `key` in a QMP message, its escapes
-/// undone (a monitor's `\r\n` line ends become `\n`).
-fn field(message: &str, key: &str) -> Option<String> {
-    let at = message.find(&format!("\"{key}\""))? + key.len() + 2;
-    let value = message[at..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
-    let mut out = String::new();
-    let mut chars = value.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                'n' => out.push('\n'),
-                'r' => {}
-                't' => out.push('\t'),
-                'u' => {
-                    let code: String = chars.by_ref().take(4).collect();
-                    out.push(u32::from_str_radix(&code, 16).ok().and_then(char::from_u32).unwrap_or('?'));
-                }
-                c => out.push(c),
-            },
-            c => out.push(c),
-        }
+/// What a line from QEMU answers: `Some(Ok(value))` for a command's
+/// `return`, `Some(Err(why))` for its `error`, and `None` for anything else
+/// (an event, or a line that is not a message).
+fn reply(line: &str) -> Option<std::result::Result<Value, String>> {
+    let mut message: Value = serde_json::from_str(line).ok()?;
+    if let Some(value) = message.get_mut("return") {
+        return Some(Ok(value.take()));
     }
-    None
+    let error = message.get("error")?;
+    let why = error["desc"].as_str().map_or_else(|| error.to_string(), String::from);
+    Some(Err(why))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::field;
+    use super::*;
 
     #[test]
-    fn fields_of_replies() {
+    fn replies_and_events() {
         let status = r#"{"return": {"status": "running", "singlestep": false, "running": true}}"#;
-        assert_eq!(field(status, "status").as_deref(), Some("running"));
-        let text = r#"{"return": "CPU#0\r\nRIP=000000000000fff0 HLT=0\r\nsaid \"hi\" é\r\n"}"#;
-        assert_eq!(field(text, "return").as_deref(), Some("CPU#0\nRIP=000000000000fff0 HLT=0\nsaid \"hi\" é\n"));
-        assert_eq!(field(r#"{"return": {}}"#, "return"), None);
+        assert_eq!(reply(status).unwrap().unwrap()["status"], "running");
+        let text = r#"{"return": "CPU#0\r\nsaid \"hi\" \u00e9\r\n"}"#;
+        assert_eq!(reply(text).unwrap().unwrap(), "CPU#0\r\nsaid \"hi\" é\r\n");
+        assert_eq!(reply(r#"{"return": {}}"#).unwrap().unwrap(), json!({}));
+        let error = r#"{"error": {"class": "GenericError", "desc": "No such device"}}"#;
+        assert_eq!(reply(error).unwrap(), Err("No such device".to_string()));
+        // An event is not the answer, even one that reports an error.
+        let event = r#"{"event": "BLOCK_JOB_ERROR", "data": {"error": "nospace"}, "timestamp": {"seconds": 1}}"#;
+        assert_eq!(reply(event), None);
+        assert_eq!(reply("not json"), None);
     }
 }

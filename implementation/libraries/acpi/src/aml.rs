@@ -674,6 +674,48 @@ fn field_list(
     Ok(())
 }
 
+/// The sleep type values (SLP_TYPa, SLP_TYPb) of system state `\_S<state>`
+/// as a DSDT or SSDT defines them: `Name (\_S5, Package () { a, b, ... })`,
+/// the name rooted or not, wherever the definition is. For the kernel,
+/// which turns the machine off without loading the namespace (devmgr's
+/// [`Namespace`] reads the object like any other). `None` if the table
+/// does not define it with integer constants.
+pub fn sleep_type(aml: &[u8], state: u8) -> Option<(u16, u16)> {
+    let name = [b'_', b'S', b'0' + state, b'_'];
+    (0..aml.len()).find_map(|i| {
+        let after = match &aml[i..] {
+            [0x08, b'\\', n @ ..] if n.starts_with(&name) => i + 6,
+            [0x08, n @ ..] if n.starts_with(&name) => i + 5,
+            _ => return None,
+        };
+        let mut c = Cursor { code: aml, pos: after };
+        if c.byte().ok()? != 0x12 {
+            return None;
+        }
+        let end = c.pkg_end().ok()?;
+        let _count = c.byte().ok()?;
+        let mut c = Cursor { code: &aml[..end], pos: c.pos };
+        let a = constant(&mut c)?;
+        // A package of one element leaves SLP_TYPb at 0.
+        let b = if c.pos < end { constant(&mut c)? } else { 0 };
+        Some((a as u16, b as u16))
+    })
+}
+
+/// An integer constant: Zero, One, Ones, or a byte, word, dword or qword.
+fn constant(c: &mut Cursor) -> Option<u64> {
+    Some(match c.byte().ok()? {
+        0x00 => 0,
+        0x01 => 1,
+        0xFF => u64::MAX,
+        0x0A => c.byte().ok()? as u64,
+        0x0B => c.word().ok()? as u64,
+        0x0C => c.dword().ok()? as u64,
+        0x0E => c.qword().ok()?,
+        _ => return None,
+    })
+}
+
 /// A position in a table's AML.
 struct Cursor<'a> {
     code: &'a [u8],

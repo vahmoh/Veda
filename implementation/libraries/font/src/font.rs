@@ -2,19 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The [`Font`] type: a zero-copy view of an OpenType/TrueType font file.
+//!
+//! The file is read by the `ttf-parser` crate: its tables, character maps, names and outlines
+//! (TrueType and CFF), every read bounds-checked. What Veda decides on top of them stays
+//! here: which character map and names to use, which metrics lay text out, the x-height and cap
+//! height when the font does not give them, and the cached kerning.
 
 use alloc::string::String;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use ttf_parser::cmap::Subtable as CmapSubtable;
+use ttf_parser::{Face, FaceParsingError, GlyphId as RawGlyphId, OutlineBuilder, PlatformId, Tag};
 use vraster::{Path, Point, Rect};
 
-use crate::cff::Cff;
-use crate::cmap::Cmap;
-use crate::glyf::{Glyf, GlyfScratch};
 use crate::kern::{KernCache, Kerning};
 use crate::name::{self, name_id};
 use crate::outline::{BoundsSink, OutlineSink, PathSink};
-use crate::parse::{i16_at, tag_at, u16_at, u32_at};
 use crate::{FontError, GlyphId};
 
 /// Source of unique font ids (see [`Font::id`]).
@@ -83,36 +86,10 @@ pub struct FontMetrics {
     pub is_monospace: bool,
 }
 
-/// Tables used by the engine.
-#[derive(Clone, Copy, Default)]
-struct Tables<'a> {
-    head: &'a [u8],
-    hhea: &'a [u8],
-    maxp: &'a [u8],
-    hmtx: &'a [u8],
-    cmap: &'a [u8],
-    os2: &'a [u8],
-    post: &'a [u8],
-    name: &'a [u8],
-    glyf: &'a [u8],
-    loca: &'a [u8],
-    cff: &'a [u8],
-    cff2: &'a [u8],
-    kern: &'a [u8],
-    gpos: &'a [u8],
-}
-
-#[derive(Clone)]
-enum Outlines<'a> {
-    Glyf(Glyf<'a>),
-    Cff(Cff<'a>),
-}
-
-/// Reusable scratch buffers for outline extraction (avoids allocations in hot paths).
+/// Reusable scratch buffers for outline extraction. `ttf-parser` decodes outlines without
+/// allocating, so there is nothing to keep; the type stays for the interface's sake.
 #[derive(Default)]
-pub struct OutlineScratch {
-    glyf: GlyfScratch,
-}
+pub struct OutlineScratch {}
 
 impl OutlineScratch {
     /// Creates empty scratch buffers.
@@ -131,14 +108,14 @@ impl OutlineScratch {
 #[derive(Clone)]
 pub struct Font<'a> {
     data: &'a [u8],
+    face: Face<'a>,
     id: u32,
-    tables: Tables<'a>,
     metrics: FontMetrics,
     num_glyphs: u16,
-    num_h_metrics: u16,
     inv_upem: f32,
-    cmap: Option<Cmap<'a>>,
-    outlines: Outlines<'a>,
+    /// The character map's chosen subtable, and whether it is Microsoft's symbol encoding.
+    cmap: Option<(CmapSubtable<'a>, bool)>,
+    format: OutlineFormat,
     kerning: Kerning<'a>,
     kern_cache: Option<KernCache>,
     ascii: [u16; 128],
@@ -155,6 +132,52 @@ impl core::fmt::Debug for Font<'_> {
     }
 }
 
+/// Ranks a character map's encoding record; lower is better, `None` = not usable. Unicode's full
+/// repertoire first, then the BMP, then Microsoft's symbol encoding.
+fn cmap_rank(platform: PlatformId, encoding: u16) -> Option<u8> {
+    Some(match (platform, encoding) {
+        (PlatformId::Windows, 10) => 0,
+        (PlatformId::Unicode, 6) => 1,
+        (PlatformId::Unicode, 4) => 2,
+        (PlatformId::Windows, 1) => 3,
+        (PlatformId::Unicode, 3) => 4,
+        (PlatformId::Unicode, _) => 5,
+        (PlatformId::Windows, 0) => 6,
+        _ => return None,
+    })
+}
+
+/// Feeds `ttf-parser`'s outline commands to an [`OutlineSink`], counting the contours.
+struct Builder<'s, S: ?Sized>(&'s mut S, usize);
+
+impl<S: OutlineSink + ?Sized> OutlineBuilder for Builder<'_, S> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.1 += 1;
+        self.0.move_to(x, y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(x, y);
+    }
+
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.0.quad_to(x1, y1, x, y);
+    }
+
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.0.curve_to(x1, y1, x2, y2, x, y);
+    }
+
+    fn close(&mut self) {
+        self.0.close();
+    }
+}
+
+/// A big-endian `u16` at `offset` of a table.
+fn u16_at(table: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(table.get(offset..offset + 2)?.try_into().ok()?))
+}
+
 impl<'a> Font<'a> {
     /// Parses a font file (`.ttf`/`.otf`; for collections the first font).
     pub fn from_bytes(data: &'a [u8]) -> Result<Font<'a>, FontError> {
@@ -164,117 +187,67 @@ impl<'a> Font<'a> {
     /// The number of fonts in `data`: the font count of a collection (`.ttc`), 1 for a plain font
     /// file and 0 if `data` is not a font.
     pub fn count(data: &[u8]) -> u32 {
-        match tag_at(data, 0) {
-            Some(t) if &t == b"ttcf" => u32_at(data, 8).unwrap_or(0),
-            Some(t) if matches!(&t, b"\0\x01\0\0" | b"OTTO" | b"true") => 1,
-            _ => 0,
+        match ttf_parser::fonts_in_collection(data) {
+            Some(n) => n,
+            None if data.len() >= 4 && matches!(&data[..4], b"\0\x01\0\0" | b"OTTO" | b"true") => 1,
+            None => 0,
         }
     }
 
     /// Parses font number `index` of a collection (index 0 for plain font files).
     pub fn from_collection(data: &'a [u8], index: u32) -> Result<Font<'a>, FontError> {
-        let tag = tag_at(data, 0).ok_or(FontError::Truncated)?;
-        let dir = if &tag == b"ttcf" {
-            let n = u32_at(data, 8).ok_or(FontError::Truncated)?;
-            if index >= n {
-                return Err(FontError::InvalidFontIndex);
-            }
-            u32_at(data, 12 + index as usize * 4).ok_or(FontError::Truncated)? as usize
-        } else if index != 0 {
-            return Err(FontError::InvalidFontIndex);
-        } else {
-            0
-        };
-        match u32_at(data, dir).ok_or(FontError::Truncated)? {
-            0x0001_0000 | 0x4F54_544F | 0x7472_7565 => {}
-            _ => return Err(FontError::UnsupportedFormat),
+        let face = Face::parse(data, index).map_err(|e| match e {
+            FaceParsingError::MalformedFont => FontError::Truncated,
+            FaceParsingError::UnknownMagic => FontError::UnsupportedFormat,
+            FaceParsingError::FaceIndexOutOfBounds => FontError::InvalidFontIndex,
+            FaceParsingError::NoHeadTable => FontError::MissingTable(*b"head"),
+            FaceParsingError::NoHheaTable => FontError::MissingTable(*b"hhea"),
+            FaceParsingError::NoMaxpTable => FontError::MissingTable(*b"maxp"),
+        })?;
+        let tables = face.tables();
+        if tables.hmtx.is_none() {
+            return Err(FontError::MissingTable(*b"hmtx"));
         }
-        let num_tables = u16_at(data, dir + 4).ok_or(FontError::Truncated)? as usize;
-        let mut t = Tables::default();
-        for i in 0..num_tables {
-            let rec = dir + 12 + i * 16;
-            let (Some(tag), Some(off), Some(len)) = (tag_at(data, rec), u32_at(data, rec + 8), u32_at(data, rec + 12))
-            else {
-                return Err(FontError::Truncated);
-            };
-            let slot = match &tag {
-                b"head" => &mut t.head,
-                b"hhea" => &mut t.hhea,
-                b"maxp" => &mut t.maxp,
-                b"hmtx" => &mut t.hmtx,
-                b"cmap" => &mut t.cmap,
-                b"OS/2" => &mut t.os2,
-                b"post" => &mut t.post,
-                b"name" => &mut t.name,
-                b"glyf" => &mut t.glyf,
-                b"loca" => &mut t.loca,
-                b"CFF " => &mut t.cff,
-                b"CFF2" => &mut t.cff2,
-                b"kern" => &mut t.kern,
-                b"GPOS" => &mut t.gpos,
-                _ => continue,
-            };
-            let (off, len) = (off as usize, len as usize);
-            match off.checked_add(len).and_then(|end| data.get(off..end)) {
-                Some(s) => *slot = s,
-                None => return Err(FontError::MalformedTable(tag)),
-            }
-        }
-        for (table, tag) in [(t.head, *b"head"), (t.hhea, *b"hhea"), (t.maxp, *b"maxp"), (t.hmtx, *b"hmtx")] {
-            if table.is_empty() {
-                return Err(FontError::MissingTable(tag));
-            }
-        }
-
-        // head
-        let bad_head = FontError::MalformedTable(*b"head");
-        let upem = u16_at(t.head, 18).ok_or(bad_head)?;
+        let num_glyphs = face.number_of_glyphs();
+        let upem = face.units_per_em();
         if !(16..=16384).contains(&upem) {
-            return Err(bad_head);
+            return Err(FontError::MalformedTable(*b"head"));
         }
+        let bbox = face.global_bounding_box();
         let mut m = FontMetrics {
             units_per_em: upem,
-            x_min: i16_at(t.head, 36).ok_or(bad_head)?,
-            y_min: i16_at(t.head, 38).ok_or(bad_head)?,
-            x_max: i16_at(t.head, 40).ok_or(bad_head)?,
-            y_max: i16_at(t.head, 42).ok_or(bad_head)?,
+            x_min: bbox.x_min,
+            y_min: bbox.y_min,
+            x_max: bbox.x_max,
+            y_max: bbox.y_max,
             weight_class: 400,
+            hhea_ascender: tables.hhea.ascender,
+            hhea_descender: tables.hhea.descender,
+            hhea_line_gap: tables.hhea.line_gap,
             ..FontMetrics::default()
         };
-        let loc_long = i16_at(t.head, 50).ok_or(bad_head)? != 0;
-
-        // maxp, hhea
-        let num_glyphs = u16_at(t.maxp, 4).ok_or(FontError::MalformedTable(*b"maxp"))?;
-        let bad_hhea = FontError::MalformedTable(*b"hhea");
-        m.hhea_ascender = i16_at(t.hhea, 4).ok_or(bad_hhea)?;
-        m.hhea_descender = i16_at(t.hhea, 6).ok_or(bad_hhea)?;
-        m.hhea_line_gap = i16_at(t.hhea, 8).ok_or(bad_hhea)?;
-        let num_h_metrics = u16_at(t.hhea, 34).ok_or(bad_hhea)?.min(num_glyphs).min((t.hmtx.len() / 4) as u16);
-        if num_h_metrics == 0 && num_glyphs > 0 {
-            return Err(FontError::MalformedTable(*b"hmtx"));
-        }
 
         // OS/2
-        let os2 = t.os2;
         let mut use_typo = false;
-        if let (Some(version), Some(asc), Some(desc), Some(gap)) =
-            (u16_at(os2, 0), i16_at(os2, 68), i16_at(os2, 70), i16_at(os2, 72))
-        {
-            m.weight_class = u16_at(os2, 4).unwrap_or(400);
-            m.strikeout_size = i16_at(os2, 26).unwrap_or(0);
-            m.strikeout_position = i16_at(os2, 28).unwrap_or(0);
-            m.typo_ascender = asc;
-            m.typo_descender = desc;
-            m.typo_line_gap = gap;
-            m.win_ascent = u16_at(os2, 74).unwrap_or(0);
-            m.win_descent = u16_at(os2, 76).unwrap_or(0);
-            use_typo = u16_at(os2, 62).unwrap_or(0) & 0x80 != 0;
-            if version >= 2 {
-                m.x_height = i16_at(os2, 86).unwrap_or(0);
-                m.cap_height = i16_at(os2, 88).unwrap_or(0);
-            }
+        if let Some(os2) = tables.os2 {
+            m.weight_class = os2.weight().to_number();
+            let strikeout = os2.strikeout_metrics();
+            m.strikeout_size = strikeout.thickness;
+            m.strikeout_position = strikeout.position;
+            m.typo_ascender = os2.typographic_ascender();
+            m.typo_descender = os2.typographic_descender();
+            m.typo_line_gap = os2.typographic_line_gap();
+            // Unsigned in the table, which `ttf-parser` reads as signed.
+            let raw = face.raw_face().table(Tag::from_bytes(b"OS/2")).unwrap_or_default();
+            m.win_ascent = u16_at(raw, 74).unwrap_or(0);
+            m.win_descent = u16_at(raw, 76).unwrap_or(0);
+            use_typo = os2.use_typographic_metrics();
+            m.x_height = os2.x_height().unwrap_or(0);
+            m.cap_height = os2.capital_height().unwrap_or(0);
         }
-        if (use_typo && m.typo_ascender - m.typo_descender > 0) || (m.hhea_ascender == 0 && m.hhea_descender == 0) {
+        // In i32: a corrupt font's values may not subtract within i16.
+        let typo_height = m.typo_ascender as i32 - m.typo_descender as i32;
+        if (use_typo && typo_height > 0) || (m.hhea_ascender == 0 && m.hhea_descender == 0) {
             m.ascender = m.typo_ascender;
             m.descender = m.typo_descender;
             m.line_gap = m.typo_line_gap;
@@ -293,49 +266,56 @@ impl<'a> Font<'a> {
         }
 
         // post
-        m.underline_position = i16_at(t.post, 8).unwrap_or(-(upem as i32 / 10) as i16);
-        m.underline_thickness = i16_at(t.post, 10).unwrap_or((upem as i32 / 20) as i16);
-        m.is_monospace = u32_at(t.post, 12).unwrap_or(0) != 0;
+        match tables.post {
+            Some(post) => {
+                m.underline_position = post.underline_metrics.position;
+                m.underline_thickness = post.underline_metrics.thickness;
+                m.is_monospace = post.is_monospaced;
+            }
+            None => {
+                m.underline_position = -(upem as i32 / 10) as i16;
+                m.underline_thickness = (upem as i32 / 20) as i16;
+            }
+        }
         if m.strikeout_size == 0 {
             m.strikeout_size = m.underline_thickness;
         }
 
         // Outlines
-        let outlines = if !t.glyf.is_empty() && !t.loca.is_empty() {
-            Outlines::Glyf(Glyf { loca: t.loca, glyf: t.glyf, long: loc_long, num_glyphs })
-        } else if !t.cff.is_empty() {
-            let cff = Cff::parse(t.cff)?;
-            if cff.num_glyphs() < num_glyphs as u32 {
-                return Err(FontError::MalformedTable(*b"CFF "));
-            }
-            Outlines::Cff(cff)
-        } else if !t.cff2.is_empty() {
-            return Err(FontError::UnsupportedFormat);
+        let format = if tables.glyf.is_some() {
+            OutlineFormat::TrueType
+        } else if tables.cff.is_some() {
+            OutlineFormat::Cff
         } else {
             return Err(FontError::MissingTable(*b"glyf"));
         };
 
-        let cmap = if t.cmap.is_empty() { None } else { Cmap::parse(t.cmap) };
-        let kerning = Kerning::new(t.gpos, t.kern);
+        // The best character map subtable.
+        let cmap = tables
+            .cmap
+            .into_iter()
+            .flat_map(|c| c.subtables)
+            .filter_map(|st| Some((cmap_rank(st.platform_id, st.encoding_id)?, st)))
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, st)| (st, st.platform_id == PlatformId::Windows && st.encoding_id == 0));
+
+        let kerning = Kerning::new(&face);
         let kern_cache = if kerning.is_some() { Some(KernCache::new()) } else { None };
         let mut font = Font {
             data,
+            face,
             id: NEXT_FONT_ID.fetch_add(1, Ordering::Relaxed),
-            tables: t,
             metrics: m,
             num_glyphs,
-            num_h_metrics,
             inv_upem: 1.0 / upem as f32,
             cmap,
-            outlines,
+            format,
             kerning,
             kern_cache,
             ascii: [0; 128],
         };
-        if let Some(cmap) = &font.cmap {
-            for c in 0..128u32 {
-                font.ascii[c as usize] = cmap.lookup(c).filter(|&g| g < num_glyphs).unwrap_or(0);
-            }
+        for c in 0..128u32 {
+            font.ascii[c as usize] = font.lookup(c).unwrap_or(0);
         }
         // Measure x-height and cap height when OS/2 does not provide them.
         if font.metrics.x_height <= 0 {
@@ -345,6 +325,15 @@ impl<'a> Font<'a> {
             font.metrics.cap_height = font.measure_top('H').unwrap_or((upem as i32 * 7 / 10) as i16);
         }
         Ok(font)
+    }
+
+    /// The glyph the character map gives code point `cp` (`None` for unmapped characters, glyph
+    /// 0 and glyphs past the font's). Symbol fonts have their characters at U+F000 + code.
+    fn lookup(&self, cp: u32) -> Option<u16> {
+        let (subtable, symbol) = self.cmap.as_ref()?;
+        let mapped = |cp: u32| subtable.glyph_index(cp).map(|g| g.0).filter(|&g| g != 0);
+        let g = mapped(cp).or_else(|| if *symbol && cp < 0x100 { mapped(0xF000 + cp) } else { None })?;
+        (g < self.num_glyphs).then_some(g)
     }
 
     /// The top of the outline of `c` (font units), if the font has a non-empty glyph for it.
@@ -365,27 +354,9 @@ impl<'a> Font<'a> {
         self.id
     }
 
-    /// Raw access to a table by tag (only for the tables the engine uses: `head`, `hhea`, `maxp`,
-    /// `hmtx`, `cmap`, `OS/2`, `post`, `name`, `glyf`, `loca`, `CFF `, `kern`, `GPOS`).
+    /// Raw access to a table by tag.
     pub fn table(&self, tag: [u8; 4]) -> Option<&'a [u8]> {
-        let t = &self.tables;
-        let s = match &tag {
-            b"head" => t.head,
-            b"hhea" => t.hhea,
-            b"maxp" => t.maxp,
-            b"hmtx" => t.hmtx,
-            b"cmap" => t.cmap,
-            b"OS/2" => t.os2,
-            b"post" => t.post,
-            b"name" => t.name,
-            b"glyf" => t.glyf,
-            b"loca" => t.loca,
-            b"CFF " => t.cff,
-            b"kern" => t.kern,
-            b"GPOS" => t.gpos,
-            _ => return None,
-        };
-        if s.is_empty() { None } else { Some(s) }
+        self.face.raw_face().table(Tag::from_bytes(&tag)).filter(|d| !d.is_empty())
     }
 
     /// Font units per em.
@@ -408,10 +379,7 @@ impl<'a> Font<'a> {
 
     /// The outline format.
     pub fn outline_format(&self) -> OutlineFormat {
-        match self.outlines {
-            Outlines::Glyf(_) => OutlineFormat::TrueType,
-            Outlines::Cff(_) => OutlineFormat::Cff,
-        }
+        self.format
     }
 
     /// Font-wide metrics in font units.
@@ -428,7 +396,7 @@ impl<'a> Font<'a> {
             let g = self.ascii[cp as usize];
             return if g != 0 { Some(GlyphId(g)) } else { None };
         }
-        self.cmap.as_ref()?.lookup(cp).filter(|&g| g < self.num_glyphs).map(GlyphId)
+        self.lookup(cp).map(GlyphId)
     }
 
     /// Returns `true` if the font has a glyph for `c`.
@@ -440,22 +408,18 @@ impl<'a> Font<'a> {
     /// The advance width of a glyph in font units (0 for invalid glyph ids).
     #[inline]
     pub fn advance_width(&self, glyph: GlyphId) -> u16 {
-        if glyph.0 >= self.num_glyphs || self.num_h_metrics == 0 {
+        if glyph.0 >= self.num_glyphs {
             return 0;
         }
-        let i = (glyph.0 as usize).min(self.num_h_metrics as usize - 1);
-        u16_at(self.tables.hmtx, i * 4).unwrap_or(0)
+        self.face.glyph_hor_advance(RawGlyphId(glyph.0)).unwrap_or(0)
     }
 
     /// The left side bearing of a glyph in font units.
     pub fn left_side_bearing(&self, glyph: GlyphId) -> i16 {
-        let n = self.num_h_metrics as usize;
-        let i = glyph.0 as usize;
         if glyph.0 >= self.num_glyphs {
             return 0;
         }
-        let off = if i < n { i * 4 + 2 } else { n * 4 + (i - n) * 2 };
-        i16_at(self.tables.hmtx, off).unwrap_or(0)
+        self.face.glyph_hor_side_bearing(RawGlyphId(glyph.0)).unwrap_or(0)
     }
 
     /// Returns `true` if the font has pair kerning (GPOS `kern` feature or `kern` table).
@@ -495,15 +459,23 @@ impl<'a> Font<'a> {
         &self,
         glyph: GlyphId,
         sink: &mut S,
-        scratch: &mut OutlineScratch,
+        _scratch: &mut OutlineScratch,
     ) -> Result<(), FontError> {
         if glyph.0 >= self.num_glyphs {
             return Err(FontError::InvalidGlyph);
         }
-        match &self.outlines {
-            Outlines::Glyf(g) => g.outline(glyph.0, sink, &mut scratch.glyf),
-            Outlines::Cff(c) => c.outline(glyph.0, sink),
+        let id = RawGlyphId(glyph.0);
+        let mut builder = Builder(sink, 0);
+        if self.face.outline_glyph(id, &mut builder).is_some() {
+            return Ok(());
         }
+        // No outline: an empty glyph (a space), unless the glyph has data, which was malformed
+        // or too deeply composed: a TrueType glyph's header box, or contours a CFF glyph began.
+        let has_data = match self.face.tables().glyf {
+            Some(glyf) => glyf.bbox(id).is_some(),
+            None => builder.1 > 0,
+        };
+        if has_data { Err(FontError::MalformedGlyph) } else { Ok(()) }
     }
 
     /// The control box of a glyph's outline in font units (`None` for empty glyphs). For
@@ -517,10 +489,8 @@ impl<'a> Font<'a> {
     /// The bounding box stored in a TrueType glyph header (`[x_min, y_min, x_max, y_max]`);
     /// `None` for CFF fonts and empty glyphs.
     pub fn glyph_header_bbox(&self, glyph: GlyphId) -> Option<[i16; 4]> {
-        match &self.outlines {
-            Outlines::Glyf(g) => g.header_bbox(glyph.0),
-            Outlines::Cff(_) => None,
-        }
+        let b = self.face.tables().glyf?.bbox(RawGlyphId(glyph.0))?;
+        Some([b.x_min, b.y_min, b.x_max, b.y_max])
     }
 
     /// The outline of `glyph` as a path in pixels for a top-down raster: scaled to `size_px`
@@ -548,7 +518,7 @@ impl<'a> Font<'a> {
 
     /// Looks up a `name` table string by name id (see [`crate::name_id`]).
     pub fn name(&self, id: u16) -> Option<String> {
-        name::lookup(self.tables.name, id)
+        name::lookup(&self.face, id)
     }
 
     /// The family name (typographic family if present, else the legacy family).

@@ -14,10 +14,11 @@
 //!   from a real network rather than a hypervisor's NAT (a PC's own), plus
 //!   TCP over IPv6 when there is a global address.
 //! * `nettest ipv6`: TCP over IPv6 to example.com.
-//! * `nettest https`: HTTPS requests with `vtls`: `GET /` from example.com
-//!   (expects 200 and the page) and `GET /v1/projects` from
-//!   api.deepgram.com without a key (expects 401), reporting the TLS
-//!   version, cipher suite, key exchange and the handshake time.
+//! * `nettest https`: HTTPS requests with `vtls` (and `vweb`'s HTTP):
+//!   `GET /` from example.com (expects 200 and the page) and
+//!   `GET /v1/projects` from api.deepgram.com without a key (expects 401),
+//!   reporting the TLS version, cipher suite, key exchange and the
+//!   handshake time.
 //! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
 //!   Wi-Fi service (by default the simulated "Veda Home" network of
 //!   `cargo xtask run --net wifi`), then runs the online checks over it.
@@ -245,7 +246,7 @@ fn check_dns(host: &str) -> Check {
 
 fn check_http(url: &str, expect: &str) -> Check {
     let t0 = vrt::time::now_ns();
-    let r = vnet::http::get(url, Duration::from_secs(20), 4 << 20).map_err(|e| format!("{e}"))?;
+    let r = vweb::http::get(url, Duration::from_secs(20), 4 << 20).map_err(|e| format!("{e}"))?;
     let ms = (vrt::time::now_ns() - t0) / 1_000_000;
     if r.status != 200 {
         return Err(format!("HTTP {} {}", r.status, r.reason));
@@ -289,39 +290,25 @@ fn check_https(host: &str, path: &str, status: u16, text: Option<&str>, how: Con
             (tls, format!("TCP {tcp_ms} ms, TLS handshake {} ms", ms_since(t1)))
         }
     };
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Veda-nettest\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-    );
-    tls.write_all(request.as_bytes()).map_err(|e| format!("sending the request: {e}"))?;
+    let url = vweb::Url::parse(&format!("https://{host}{path}")).map_err(|e| format!("{e}"))?;
+    vweb::http::write_request(&mut tls, "GET", &url, &[("User-Agent", "Veda-nettest"), ("Accept", "*/*")], &[])
+        .map_err(|e| format!("sending the request: {e}"))?;
     tls.transport_mut().set_read_timeout(Some(Duration::from_secs(30)));
-    let mut response = Vec::new();
-    let mut buf = alloc::vec![0u8; 16 * 1024];
-    loop {
-        let n = tls.read(&mut buf).map_err(|e| format!("reading the response: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        response.extend_from_slice(&buf[..n]);
-        if response.len() > 4 << 20 {
-            return Err(String::from("response larger than 4 MiB"));
-        }
-    }
+    let response = vweb::http::read_response(&mut tls, "GET", 4 << 20).map_err(|e| format!("the response: {e}"))?;
     tls.close();
     let total_ms = ms_since(t0);
-    let text_of = String::from_utf8_lossy(&response);
-    let status_line = text_of.lines().next().unwrap_or_default();
-    let code: Option<u16> = status_line.strip_prefix("HTTP/1.1 ").and_then(|rest| rest.get(..3)?.parse().ok());
-    if code != Some(status) {
+    let status_line = format!("HTTP {} {}", response.status, response.reason);
+    if response.status != status {
         return Err(format!("expected HTTP {status}, got {status_line:?}"));
     }
     if let Some(text) = text
-        && !text_of.contains(text)
+        && !response.text().contains(text)
     {
-        return Err(format!("the response ({} bytes) does not contain {text:?}", response.len()));
+        return Err(format!("the response ({} bytes) does not contain {text:?}", response.body.len()));
     }
     Ok(format!(
         "{status_line}, {} bytes; {}, {}, {}; {timing}, total {total_ms} ms",
-        response.len(),
+        response.body.len(),
         tls.protocol_version(),
         tls.cipher_suite(),
         tls.key_exchange_group()

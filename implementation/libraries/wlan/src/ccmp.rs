@@ -76,11 +76,13 @@ fn aad_and_nonce(header: &[u8], pn: u64) -> (Vec<u8>, [u8; 13]) {
 }
 
 /// The MAC header length a CCMP frame protects (HT Control excluded from
-/// the AAD but kept in the header).
+/// the AAD but kept in the header); `None` for frames CCMP does not
+/// protect (control frames, whose header length is 0) and for frames
+/// shorter than their header.
 fn protected_header_len(frame: &[u8]) -> Option<usize> {
     let fc = FrameControl::from_bytes([*frame.first()?, *frame.get(1)?]);
     let len = frame::header_len(fc);
-    if frame.len() < len { None } else { Some(len) }
+    if len == 0 || frame.len() < len { None } else { Some(len) }
 }
 
 /// Encrypts an MPDU (`frame` = MAC header + plaintext body) with packet
@@ -288,6 +290,21 @@ mod tests {
         let mut wrong = tk;
         wrong[0] ^= 1;
         assert_eq!(ccmp_decrypt(&wrong, &enc), Err(CcmpError::BadMic));
+    }
+
+    #[test]
+    fn control_frames_are_not_ccmp_frames() {
+        let tk = [7u8; 16];
+        // An ACK and a block ack request, Protected bit set, long enough to
+        // hold a CCMP header (Ext IV set) and MIC: control frames have no
+        // header CCMP protects.
+        for fc in [[0xd4, 0x40], [0x84, 0x40]] {
+            let mut frame = fc.to_vec();
+            frame.resize(64, 0xff);
+            assert_eq!(ccmp_decrypt(&tk, &frame), Err(CcmpError::Malformed));
+            assert_eq!(ccmp_header(&frame), None);
+            assert_eq!(ccmp_encrypt(&tk, &frame, 1, 0), None);
+        }
     }
 
     /// IEEE 802.11-2012, M.9.1: BIP with a broadcast deauthentication.

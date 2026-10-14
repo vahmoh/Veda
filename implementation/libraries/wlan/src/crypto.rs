@@ -61,17 +61,12 @@ pub fn pbkdf2_psk(passphrase: &[u8], ssid: &[u8]) -> [u8; 32] {
     psk
 }
 
-/// A PSK given directly as 64 hexadecimal digits.
+/// A PSK given directly as 64 hexadecimal digits, of either case, decoded
+/// without branches on its digits (it is the network's key).
 pub fn psk_from_hex(text: &str) -> Option<[u8; 32]> {
-    let b = text.as_bytes();
-    if b.len() != 64 {
-        return None;
-    }
     let mut psk = [0u8; 32];
-    for (i, pair) in b.chunks(2).enumerate() {
-        let hi = (pair[0] as char).to_digit(16)?;
-        let lo = (pair[1] as char).to_digit(16)?;
-        psk[i] = (hi * 16 + lo) as u8;
+    if text.len() != 64 || base16ct::mixed::decode(text, &mut psk).is_err() {
+        return None;
     }
     Some(psk)
 }
@@ -210,9 +205,10 @@ pub(crate) mod tests {
     use super::*;
     use alloc::vec::Vec;
 
+    /// The bytes of a test vector's hexadecimal digits (spaces allowed).
     pub fn hex(s: &str) -> Vec<u8> {
-        let s: alloc::string::String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        let s: alloc::string::String = s.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        base16ct::mixed::decode_vec(s).unwrap()
     }
 
     /// IEEE 802.11-2020, J.4 (via hostap's crypto module tests).
@@ -231,7 +227,10 @@ pub(crate) mod tests {
             hex("becb93866bb8c3832cb777c2f559807c8c59afcb6eae734885001300a981cc62").as_slice()
         );
         assert_eq!(psk_from_hex(&"0f".repeat(32)), Some([0x0f; 32]));
+        assert_eq!(psk_from_hex(&"aB".repeat(32)), Some([0xab; 32]));
         assert_eq!(psk_from_hex("zz"), None);
+        assert_eq!(psk_from_hex(&"0g".repeat(32)), None);
+        assert_eq!(psk_from_hex(&"0f".repeat(33)), None);
     }
 
     /// IEEE 802.11-2020, J.3 PRF test vectors.

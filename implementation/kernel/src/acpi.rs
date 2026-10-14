@@ -5,8 +5,8 @@
 //! table is, PCI Express configuration space (MCFG) and power control
 //! (FADT, `\_S5`). The tables that describe the architecture's own devices
 //! (its processors, interrupt controllers and IOMMU) are read by its code.
-//! There is no AML interpreter; `\_S5` is located with a byte-pattern scan,
-//! which is reliable for the firmware Veda targets.
+//! The kernel loads no AML namespace (devmgr does): `\_S5`'s package is
+//! found and decoded where the DSDT defines it (`vacpi::aml::sleep_type`).
 
 use alloc::vec::Vec;
 
@@ -91,6 +91,11 @@ fn tables(rsdp: u64) -> Vec<([u8; 4], u64)> {
         (read_u32(rsdp + 16) as u64, 4)
     };
     let len = read_u32(root + 4);
+    // A header and its entries; a length that cannot be is no table.
+    if !(36..=1 << 20).contains(&len) {
+        crate::kwarn!("acpi: root table length {len} is invalid");
+        return out;
+    }
     if !checksum_ok(root, len) {
         crate::kwarn!("acpi: root table checksum mismatch");
     }
@@ -119,54 +124,10 @@ fn parse_mcfg(addr: u64, info: &mut AcpiInfo) {
     }
 }
 
-/// Finds `\_S5` in the DSDT and decodes SLP_TYPa/b.
+/// SLP_TYPa/b of `\_S5` in the DSDT (vacpi decodes the package: the
+/// kernel loads no namespace).
 fn find_s5(dsdt: u64) -> Option<(u16, u16)> {
-    let len = read_u32(dsdt + 4) as u64;
-    let mut i = 36;
-    while i + 4 < len {
-        if read_u32(dsdt + i).to_le_bytes() == *b"_S5_" {
-            // Expect: [NameOp 0x08] "_S5_" PackageOp(0x12) PkgLength NumElements ...
-            let mut p = dsdt + i + 4;
-            if read_u8(p) != 0x12 {
-                i += 1;
-                continue;
-            }
-            p += 1;
-            let lead = read_u8(p);
-            p += 1 + ((lead >> 6) as u64); // skip PkgLength bytes
-            p += 1; // NumElements
-            let value = |p: &mut u64| -> u16 {
-                match read_u8(*p) {
-                    0x0A => {
-                        let v = read_u8(*p + 1) as u16;
-                        *p += 2;
-                        v
-                    }
-                    0x00 => {
-                        *p += 1;
-                        0
-                    }
-                    0x01 => {
-                        *p += 1;
-                        1
-                    }
-                    0xFF => {
-                        *p += 1;
-                        0xFF
-                    }
-                    v => {
-                        *p += 1;
-                        v as u16
-                    }
-                }
-            };
-            let a = value(&mut p);
-            let b = value(&mut p);
-            return Some((a, b));
-        }
-        i += 1;
-    }
-    None
+    vacpi::aml::sleep_type(table_bytes(dsdt), 5)
 }
 
 fn parse_fadt(addr: u64, info: &mut AcpiInfo) {

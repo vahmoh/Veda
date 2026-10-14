@@ -16,7 +16,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use vproto::agent::{AgentConfig, AgentError, ModelCatalog, ModelChoice, agent};
-use vui::agent::{self as api, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_str, arg_str, object};
+use vui::agent::{self as api, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_str, arg_str, json};
 
 use crate::{SECTIONS, Section, Settings};
 
@@ -101,29 +101,29 @@ fn find<'a>(choices: &'a [ModelChoice], query: &str) -> Option<&'a ModelChoice> 
 }
 
 fn voice_value(v: &ModelChoice) -> Value {
-    object! { "name" => v.name.as_str(), "about" => v.detail.as_str() }
+    json!({ "name": v.name.as_str(), "about": v.detail.as_str() })
 }
 
 pub fn state(s: &Settings) -> Value {
     let agent = client().ok().and_then(|c| config(&c).ok()).map(|c| {
-        object! {
-            "name" => c.name.as_str(),
-            "voice" => c.voice.as_str(),
-            "speaking_rate" => c.speed,
-            "language_model" => c.think_model.as_str(),
-            "speech_recognition" => c.listen_model.as_str(),
-            "answers_to_its_name" => c.listen_for_name,
-            "enabled" => c.enabled,
-            "has_deepgram_key" => c.has_key,
-        }
+        json!({
+            "name": c.name.as_str(),
+            "voice": c.voice.as_str(),
+            "speaking_rate": api::number(c.speed),
+            "language_model": c.think_model.as_str(),
+            "speech_recognition": c.listen_model.as_str(),
+            "answers_to_its_name": c.listen_for_name,
+            "enabled": c.enabled,
+            "has_deepgram_key": c.has_key,
+        })
     });
-    object! {
-        "page" => section_name(s.section),
-        "pages" => Value::from(PAGES.iter().map(|p| Value::from(*p)).collect::<Vec<Value>>()),
-        "wallpaper" => (!s.current.is_empty()).then(|| Settings::title_of(&s.current)),
-        "screen" => s.screen.map(|i| format!("{} x {}", i.width, i.height)),
-        "agent" => agent,
-    }
+    json!({
+        "page": section_name(s.section),
+        "pages": Value::from(PAGES.iter().map(|p| Value::from(*p)).collect::<Vec<Value>>()),
+        "wallpaper": (!s.current.is_empty()).then(|| Settings::title_of(&s.current)),
+        "screen": s.screen.map(|i| format!("{} x {}", i.width, i.height)),
+        "agent": agent,
+    })
 }
 
 impl Settings {
@@ -137,7 +137,7 @@ impl Settings {
                     .find(|&s| section_name(s) == page)
                     .ok_or_else(|| format!("Settings has no page called {page}; it has {}", PAGES.join(", ")))?;
                 self.section = section;
-                Ok(object! { "showing" => section_name(section) })
+                Ok(json!({ "showing": section_name(section) }))
             }
             "set_agent_voice" => {
                 let voice = arg_opt_str(args, "voice");
@@ -168,7 +168,7 @@ impl Settings {
                 let (voice, speed) = (cfg.voice.clone(), cfg.speed);
                 save(&c, cfg)?;
                 self.reload_agent_page();
-                Ok(object! { "voice" => voice, "speaking_rate" => speed })
+                Ok(json!({ "voice": voice, "speaking_rate": api::number(speed) }))
             }
             "list_voices" => {
                 let voices = catalog(&client()?)?.voices;
@@ -179,15 +179,15 @@ impl Settings {
                     .take(60)
                     .map(voice_value)
                     .collect();
-                Ok(object! { "voices" => list, "of" => voices.len() })
+                Ok(json!({ "voices": list, "of": voices.len() }))
             }
             "list_models" => {
                 let models = catalog(&client()?)?.think;
                 let list: Vec<Value> = models
                     .iter()
-                    .map(|m| object! { "name" => m.name.as_str(), "id" => m.id.as_str(), "tier" => m.detail.as_str() })
+                    .map(|m| json!({ "name": m.name.as_str(), "id": m.id.as_str(), "tier": m.detail.as_str() }))
                     .collect();
-                Ok(object! { "models" => list })
+                Ok(json!({ "models": list }))
             }
             "set_agent_model" => {
                 let q = arg_str(args, "model")?;
@@ -200,7 +200,7 @@ impl Settings {
                 let (name, tier) = (m.name.clone(), m.detail.clone());
                 save(&c, cfg)?;
                 self.reload_agent_page();
-                Ok(object! { "model" => name, "tier" => tier })
+                Ok(json!({ "model": name, "tier": tier }))
             }
             "rename_agent" => {
                 let name = arg_str(args, "name")?.trim().to_string();
@@ -212,7 +212,7 @@ impl Settings {
                 cfg.name = name.clone();
                 save(&c, cfg)?;
                 self.reload_agent_page();
-                Ok(object! { "name" => name })
+                Ok(json!({ "name": name }))
             }
             other => Err(format!("Settings has no action called {other}")),
         }

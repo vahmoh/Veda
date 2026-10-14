@@ -56,10 +56,10 @@ agent-result '"repeat":"one"'
 wait-serial "music: repeat one" 10
 # What the player shows.
 agent-call read_app '{"app":"music"}' 30
-agent-result '"playback":"playing","now_playing":{"title":"Aurora Drift"'
+agent-result '"playback":"playing","now_playing":{"title":"Aurora Drift"}'
 agent-result '"shuffle":true,"repeat":"one","volume":40,"muted":false'
-agent-result '"up_next":[{"title":"Aurora Drift"'
-agent-result '"library":{"songs":7,"albums":1,"artists":1'
+agent-result '"up_next":[{"title":"Aurora Drift"}]'
+agent-result '"library":{"songs":7,"albums":1,"artists":1}'
 wait 3
 shot target/veda/agent-app-music.png
 # An album starts from its first song; a song that is not there is refused.

@@ -22,7 +22,7 @@
 
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use crate::percpu;
 
@@ -136,28 +136,37 @@ pub mod bkl {
 
 /// A value initialised exactly once during boot, then read-only.
 pub struct Once<T> {
-    ready: AtomicBool,
+    /// [`EMPTY`](Self::EMPTY), [`WRITING`](Self::WRITING) or
+    /// [`READY`](Self::READY).
+    state: AtomicU8,
     value: UnsafeCell<Option<T>>,
 }
 
-// SAFETY: written once before `ready` is published, read-only afterwards.
+// SAFETY: written once, by the one caller that claimed it, before `READY`
+// is published; read-only afterwards.
 unsafe impl<T: Send + Sync> Sync for Once<T> {}
 
 impl<T> Once<T> {
+    const EMPTY: u8 = 0;
+    const WRITING: u8 = 1;
+    const READY: u8 = 2;
+
     pub const fn new() -> Self {
-        Once { ready: AtomicBool::new(false), value: UnsafeCell::new(None) }
+        Once { state: AtomicU8::new(Self::EMPTY), value: UnsafeCell::new(None) }
     }
 
     /// Stores the value. Panics if called twice.
     pub fn set(&self, value: T) {
-        assert!(!self.ready.load(Ordering::Acquire), "Once::set called twice");
-        // SAFETY: no reader can observe the value before `ready` is set.
+        let claimed = self.state.compare_exchange(Self::EMPTY, Self::WRITING, Ordering::Acquire, Ordering::Relaxed);
+        assert!(claimed.is_ok(), "Once::set called twice");
+        // SAFETY: this caller alone moved the state from EMPTY, and no
+        // reader looks at the value before it is READY.
         unsafe { *self.value.get() = Some(value) };
-        self.ready.store(true, Ordering::Release);
+        self.state.store(Self::READY, Ordering::Release);
     }
 
     pub fn get(&self) -> Option<&T> {
-        if self.ready.load(Ordering::Acquire) {
+        if self.state.load(Ordering::Acquire) == Self::READY {
             // SAFETY: published and never mutated again.
             unsafe { (*self.value.get()).as_ref() }
         } else {

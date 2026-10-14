@@ -69,13 +69,13 @@ name = "agent"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "serde_json",
  "vabi",
  "vagent",
  "vaudio",
  "vbuild",
  "vfiles",
  "vipc",
- "vjson",
  "vnet",
  "vproto",
  "vrt",
@@ -98,6 +98,7 @@ dependencies = [
 name = "airsim"
 version = "0.1.0"
 dependencies = [
+ "smoltcp",
  "ventropy",
  "vradiolink",
  "vwlan",
@@ -182,6 +183,7 @@ dependencies = [
 name = "audiotest"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vabi",
  "vbuild",
  "vipc",
@@ -236,6 +238,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
 
 [[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -254,6 +262,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eff00be299a18769011411c9def0d827e8f2d7bf0c3dbf53633147a8867fd1f"
 dependencies = [
  "no_std_io2",
+]
+
+[[package]]
+name = "blake2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b5d4d889834ee8ecfc0f8426ad30faf7cdcb10f741a8e6d7224d95325479f6f"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -295,6 +312,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "bytes"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
 name = "cc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,6 +356,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures",
+ "rand_core 0.10.1",
  "zeroize",
 ]
 
@@ -398,6 +422,15 @@ name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
+name = "core_maths"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "cpubits"
@@ -519,6 +552,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "data-encoding"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "dbl"
@@ -710,6 +749,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "fakedec"
 version = "0.1.0"
 dependencies = [
@@ -829,6 +878,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -867,6 +917,7 @@ version = "0.1.0"
 dependencies = [
  "guest-netlink",
  "guest-sys",
+ "rustix",
  "vradiolink",
 ]
 
@@ -875,6 +926,7 @@ name = "guest-alsa"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "rustix",
  "vabi",
  "vipc",
  "vproto",
@@ -895,7 +947,7 @@ dependencies = [
 name = "guest-efivartest"
 version = "0.1.0"
 dependencies = [
- "guest-sys",
+ "rustix",
 ]
 
 [[package]]
@@ -903,13 +955,14 @@ name = "guest-gpiotest"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "rustix",
 ]
 
 [[package]]
 name = "guest-init"
 version = "0.1.0"
 dependencies = [
- "guest-sys",
+ "rustix",
 ]
 
 [[package]]
@@ -917,6 +970,7 @@ name = "guest-input"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "rustix",
  "vproto",
  "vrt",
 ]
@@ -925,7 +979,7 @@ dependencies = [
 name = "guest-kms"
 version = "0.1.0"
 dependencies = [
- "guest-sys",
+ "rustix",
  "vabi",
  "vproto",
  "vrt",
@@ -935,14 +989,14 @@ dependencies = [
 name = "guest-kmspause"
 version = "0.1.0"
 dependencies = [
- "guest-sys",
+ "rustix",
 ]
 
 [[package]]
 name = "guest-logkeeper"
 version = "0.1.0"
 dependencies = [
- "guest-sys",
+ "rustix",
  "vrt",
 ]
 
@@ -951,6 +1005,7 @@ name = "guest-net"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "rustix",
  "vabi",
  "vproto",
  "vrt",
@@ -961,6 +1016,7 @@ name = "guest-netlink"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "rustix",
 ]
 
 [[package]]
@@ -980,6 +1036,10 @@ dependencies = [
 [[package]]
 name = "guest-sys"
 version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
+]
 
 [[package]]
 name = "guest-wifi"
@@ -987,6 +1047,7 @@ version = "0.1.0"
 dependencies = [
  "guest-netlink",
  "guest-sys",
+ "rustix",
  "vabi",
  "vipc",
  "vproto",
@@ -1038,6 +1099,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest",
+]
+
+[[package]]
+name = "http"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
+dependencies = [
+ "bytes",
+ "itoa",
 ]
 
 [[package]]
@@ -1136,6 +1207,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
 name = "jobserver"
 version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1174,6 +1251,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1192,6 +1275,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest",
 ]
 
 [[package]]
@@ -1277,6 +1370,7 @@ dependencies = [
  "vnet",
  "vrt",
  "vtls",
+ "vweb",
 ]
 
 [[package]]
@@ -1427,6 +1521,12 @@ dependencies = [
  "digest",
  "hmac",
 ]
+
+[[package]]
+name = "percent-encoding"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "photos"
@@ -1586,6 +1686,8 @@ version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
+ "chacha20",
+ "getrandom 0.4.3",
  "rand_core 0.10.1",
 ]
 
@@ -1721,6 +1823,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustix"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+dependencies = [
+ "bitflags 2.13.2",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "rustls"
 version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1786,6 +1901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -1806,6 +1922,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -1968,6 +2097,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
  "vproto",
  "vrt",
@@ -1978,6 +2108,7 @@ dependencies = [
 name = "terminal"
 version = "0.1.0"
 dependencies = [
+ "terminal-core",
  "vabi",
  "vbuild",
  "vfiles",
@@ -1987,6 +2118,14 @@ dependencies = [
  "vproto",
  "vrt",
  "vui",
+ "vweb",
+]
+
+[[package]]
+name = "terminal-core"
+version = "0.1.0"
+dependencies = [
+ "vte",
 ]
 
 [[package]]
@@ -2022,6 +2161,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttf-parser"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+dependencies = [
+ "core_maths",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.10.3",
+ "sha1",
+ "thiserror",
+]
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2032,6 +2196,18 @@ name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "universal-hash"
@@ -2072,7 +2248,9 @@ version = "0.1.0"
 name = "vagent"
 version = "0.1.0"
 dependencies = [
- "vjson",
+ "percent-encoding",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2105,6 +2283,10 @@ version = "0.1.0"
 [[package]]
 name = "ventropy"
 version = "0.1.0"
+dependencies = [
+ "blake2",
+ "chacha20",
+]
 
 [[package]]
 name = "vfiles"
@@ -2123,6 +2305,9 @@ name = "vfont"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "png",
+ "ttf-parser",
+ "unicode-segmentation",
  "vraster",
 ]
 
@@ -2130,6 +2315,7 @@ dependencies = [
 name = "vfs"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "initrd",
  "vabi",
  "vbuild",
@@ -2187,6 +2373,7 @@ name = "videogen"
 version = "0.1.0"
 dependencies = [
  "fastnoise-lite",
+ "md-5",
  "rand 0.10.3",
  "rand_pcg",
  "rav1e",
@@ -2202,6 +2389,7 @@ name = "videos"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "serde_json",
  "vabi",
  "vaudio",
  "vbuild",
@@ -2209,7 +2397,6 @@ dependencies = [
  "vgfx",
  "videos-core",
  "vipc",
- "vjson",
  "vproto",
  "vrt",
  "vui",
@@ -2265,16 +2452,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "vjson"
-version = "0.1.0"
-
-[[package]]
 name = "vkernel"
 version = "0.1.0"
 dependencies = [
  "bootinfo",
  "initrd",
  "vabi",
+ "vacpi",
  "ventropy",
  "vhv",
  "viommu",
@@ -2285,7 +2469,6 @@ dependencies = [
 name = "vnet"
 version = "0.1.0"
 dependencies = [
- "httparse",
  "vabi",
  "vipc",
  "vproto",
@@ -2311,6 +2494,7 @@ version = "0.1.0"
 name = "vposix"
 version = "0.1.0"
 dependencies = [
+ "linux-raw-sys",
  "vabi",
  "vipc",
  "vproto",
@@ -2335,12 +2519,14 @@ name = "vraster"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "png",
 ]
 
 [[package]]
 name = "vrt"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "vabi",
  "velf",
  "vheap",
@@ -2353,8 +2539,22 @@ name = "vsplash"
 version = "0.1.0"
 
 [[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
+
+[[package]]
 name = "vtext"
 version = "0.1.0"
+dependencies = [
+ "unicode-segmentation",
+ "unicode-width",
+]
 
 [[package]]
 name = "vtls"
@@ -2382,11 +2582,12 @@ name = "vui"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "serde_json",
+ "unicode-segmentation",
  "vabi",
  "vfiles",
  "vgfx",
  "vipc",
- "vjson",
  "vproto",
  "vraster",
  "vrt",
@@ -2405,7 +2606,9 @@ dependencies = [
 name = "vweb"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
  "httparse",
+ "percent-encoding",
  "sha1",
  "vabi",
  "vnet",
@@ -2419,6 +2622,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "aes-kw",
+ "base16ct",
  "ccm",
  "cmac",
  "hkdf",
@@ -2619,13 +2823,15 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "initrd",
- "sha1",
+ "serde_json",
  "sha2",
+ "tungstenite",
  "vacpi",
+ "vaudio",
  "vbuild",
  "vimage",
- "vjson",
  "vpe",
 ]
 
@@ -2666,6 +2872,12 @@ name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zune-bmp"

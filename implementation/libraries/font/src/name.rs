@@ -5,11 +5,13 @@
 //!
 //! Records are chosen in this order of preference: Windows Unicode English (US), any Windows
 //! Unicode record, Unicode platform, Macintosh Roman English, any Macintosh Roman record.
-//! Windows/Unicode strings are UTF-16BE; Macintosh strings are Mac OS Roman.
+//! Windows/Unicode strings are UTF-16BE; Macintosh strings are Mac OS Roman (`ttf-parser`
+//! decodes neither without std).
 
 use alloc::string::String;
 
-use crate::parse::u16_at;
+use ttf_parser::name::Names;
+use ttf_parser::{Face, PlatformId};
 
 /// Well-known name ids.
 pub mod name_id {
@@ -58,46 +60,36 @@ const MAC_ROMAN: [u16; 128] = [
 ];
 
 /// Preference score of a name record (lower is better), `None` if unsupported.
-fn score(platform: u16, encoding: u16, language: u16) -> Option<u8> {
+fn score(platform: PlatformId, encoding: u16, language: u16) -> Option<u8> {
     match (platform, encoding) {
-        (3, 1) | (3, 10) => Some(if language == 0x0409 { 0 } else { 1 }),
-        (0, _) => Some(2),
-        (1, 0) => Some(if language == 0 { 3 } else { 4 }),
+        (PlatformId::Windows, 1 | 10) => Some(if language == 0x0409 { 0 } else { 1 }),
+        (PlatformId::Unicode, _) => Some(2),
+        (PlatformId::Macintosh, 0) => Some(if language == 0 { 3 } else { 4 }),
         _ => None,
     }
 }
 
 /// Looks up and decodes the best record with the given name id.
-pub(crate) fn lookup(name: &[u8], id: u16) -> Option<String> {
-    let count = u16_at(name, 2)? as usize;
-    let storage = u16_at(name, 4)? as usize;
-    let mut best: Option<(u8, u16, &[u8])> = None;
-    for i in 0..count {
-        let rec = 6 + i * 12;
-        let Some(name_id) = u16_at(name, rec + 6) else { break };
-        if name_id != id {
+pub(crate) fn lookup(face: &Face<'_>, id: u16) -> Option<String> {
+    lookup_in(face.names(), id)
+}
+
+/// [`lookup`] among a `name` table's records.
+fn lookup_in(names: Names<'_>, id: u16) -> Option<String> {
+    let mut best: Option<(u8, PlatformId, &[u8])> = None;
+    for name in names {
+        if name.name_id != id {
             continue;
         }
-        let (Some(p), Some(e), Some(l), Some(len), Some(off)) = (
-            u16_at(name, rec),
-            u16_at(name, rec + 2),
-            u16_at(name, rec + 4),
-            u16_at(name, rec + 8),
-            u16_at(name, rec + 10),
-        ) else {
-            break;
-        };
-        let Some(s) = score(p, e, l) else { continue };
+        let Some(s) = score(name.platform_id, name.encoding_id, name.language_id) else { continue };
         if best.is_some_and(|(b, _, _)| b <= s) {
             continue;
         }
-        let start = storage + off as usize;
-        let Some(bytes) = name.get(start..start + len as usize) else { continue };
-        best = Some((s, p, bytes));
+        best = Some((s, name.platform_id, name.name));
     }
     let (_, platform, bytes) = best?;
     let mut out = String::new();
-    if platform == 1 {
+    if platform == PlatformId::Macintosh {
         for &b in bytes {
             let c = if b < 0x80 { b as u32 } else { MAC_ROMAN[(b - 0x80) as usize] as u32 };
             out.push(char::from_u32(c).unwrap_or('\u{FFFD}'));
@@ -115,6 +107,11 @@ pub(crate) fn lookup(name: &[u8], id: u16) -> Option<String> {
 mod tests {
     use super::*;
     use alloc::vec::Vec;
+
+    /// [`lookup_in`] a raw `name` table.
+    fn lookup(table: &[u8], id: u16) -> Option<String> {
+        lookup_in(ttf_parser::name::Table::parse(table)?.names, id)
+    }
 
     #[test]
     fn decodes_and_prefers_windows_english() {

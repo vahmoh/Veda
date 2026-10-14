@@ -12,7 +12,9 @@ use core::cmp::Ordering;
 use vproto::input::keys;
 use vui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
 
-use crate::{Column, Proc, TaskManager, human_size};
+use vfiles::format::human_size;
+
+use crate::{Column, Proc, TaskManager};
 
 const ROW_H: i32 = 34;
 const HEADER_H: i32 = 32;

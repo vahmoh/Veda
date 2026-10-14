@@ -25,7 +25,7 @@ use vfiles::kind::{EDITOR, default_app, kind_name};
 use vfiles::path::{extension, file_name, file_stem, is_within, join, parent, resolve};
 use vfiles::{HOME, trash};
 use vui::agent::{
-    self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_opt_str, arg_path, arg_str, clip, object, show_path,
+    self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_opt_str, arg_path, arg_str, clip, json, show_path,
 };
 
 use crate::{Dialog, Entry, Files, Props, Rename, SortKey, ViewMode, items, location, space_text};
@@ -191,15 +191,15 @@ fn sort_name(key: SortKey) -> &'static str {
 
 /// What the Properties dialog says.
 fn properties(p: &Props) -> Value {
-    object! {
-        "name" => p.name.as_str(),
-        "path" => show_path(&p.path),
-        "kind" => p.kind.as_str(),
-        "size" => p.size.as_str(),
-        "contains" => p.contents.as_deref(),
-        "modified" => p.modified.as_str(),
-        "read_only" => p.read_only,
-    }
+    json!({
+        "name": p.name.as_str(),
+        "path": show_path(&p.path),
+        "kind": p.kind.as_str(),
+        "size": p.size.as_str(),
+        "contains": p.contents.as_deref(),
+        "modified": p.modified.as_str(),
+        "read_only": p.read_only,
+    })
 }
 
 /// A folder as the agent hears of it: `~/Documents`, or `Trash` and
@@ -215,17 +215,17 @@ fn place(path: &str) -> String {
 /// The dialog in front of the window.
 fn dialog(d: &Dialog) -> Value {
     match d {
-        Dialog::ConfirmDelete(paths) => object! {
-            "asks_to_delete_for_good" => paths.iter().take(MAX_ITEMS).map(|p| place(p)).collect::<Vec<_>>(),
-        },
-        Dialog::ConfirmEmpty(n) => object! { "asks_to_empty_trash" => format!("{} in the Trash", items(*n)) },
-        Dialog::NoRoomInTrash(paths) => object! {
-            "asks_to_delete_for_good" => paths.iter().take(MAX_ITEMS).map(|p| show_path(p)).collect::<Vec<_>>(),
-            "because" => "there is not enough free space to keep them in the Trash",
-        },
-        Dialog::Error { title, message } => object! { "error" => title.as_str(), "message" => clip(message, 600).0 },
-        Dialog::Properties(p) => object! { "properties" => properties(p) },
-        Dialog::OpenUnknown(path) => object! { "no_app_for" => show_path(path) },
+        Dialog::ConfirmDelete(paths) => json!({
+            "asks_to_delete_for_good": paths.iter().take(MAX_ITEMS).map(|p| place(p)).collect::<Vec<_>>(),
+        }),
+        Dialog::ConfirmEmpty(n) => json!({ "asks_to_empty_trash": format!("{} in the Trash", items(*n)) }),
+        Dialog::NoRoomInTrash(paths) => json!({
+            "asks_to_delete_for_good": paths.iter().take(MAX_ITEMS).map(|p| show_path(p)).collect::<Vec<_>>(),
+            "because": "there is not enough free space to keep them in the Trash",
+        }),
+        Dialog::Error { title, message } => json!({ "error": title.as_str(), "message": clip(message, 600).0 }),
+        Dialog::Properties(p) => json!({ "properties": properties(p) }),
+        Dialog::OpenUnknown(path) => json!({ "no_app_for": show_path(path) }),
     }
 }
 
@@ -238,66 +238,66 @@ pub fn state(f: &Files) -> Value {
         .map(|&i| {
             let e = &f.entries[i];
             let name = e.shown_name();
-            let mut item = object! {
-                "name" => name,
-                "kind" => kind_name(name, e.is_dir),
-                "size" => size_text(e),
-            };
+            let mut item = json!({
+                "name": name,
+                "kind": kind_name(name, e.is_dir),
+                "size": size_text(e),
+            });
             if !trash_root {
-                item.set("modified", format_time(e.modified));
+                item["modified"] = json!(format_time(e.modified));
             } else {
                 // The Trash lists what was deleted, from where and when.
                 if name != e.name {
-                    item.set("name_in_trash", e.name.as_str());
+                    item["name_in_trash"] = json!(e.name.as_str());
                 }
-                item.set("deleted_from", if e.origin.is_some() { location(e) } else { "not known".into() });
-                item.set("deleted", format_time(e.deleted));
+                item["deleted_from"] = json!(if e.origin.is_some() { location(e) } else { "not known".into() });
+                item["deleted"] = json!(format_time(e.deleted));
             }
             item
         })
         .collect();
-    let mut v = object! {
-        "folder" => place(&f.cwd),
-        "items" => listed,
-        "item_count" => f.view.len(),
-        "selected" => selected_names(f),
-        "layout" => if f.mode == ViewMode::List { "list" } else { "icons" },
-        "sort_by" => sort_name(f.sort),
-        "order" => if f.ascending { "ascending" } else { "descending" },
-        "show_hidden" => f.show_hidden,
-        "can_go_back" => !f.back.is_empty(),
-        "can_go_forward" => !f.forward.is_empty(),
-    };
+    let mut v = json!({
+        "folder": place(&f.cwd),
+        "items": listed,
+        "item_count": f.view.len(),
+        "selected": selected_names(f),
+        "layout": if f.mode == ViewMode::List { "list" } else { "icons" },
+        "sort_by": sort_name(f.sort),
+        "order": if f.ascending { "ascending" } else { "descending" },
+        "show_hidden": f.show_hidden,
+        "can_go_back": !f.back.is_empty(),
+        "can_go_forward": !f.forward.is_empty(),
+    });
     if f.view.len() > MAX_ITEMS {
-        v.set("items_cut_short", true);
+        v["items_cut_short"] = json!(true);
     }
     if !f.search.is_empty() {
-        v.set("search", f.search.as_str());
+        v["search"] = json!(f.search.as_str());
     }
     if let Some(e) = &f.list_error {
-        v.set("error", e.as_str());
+        v["error"] = json!(e.as_str());
     }
     if f.read_only() {
-        v.set("read_only", true);
+        v["read_only"] = json!(true);
     }
     if !trash_root {
         let n = trash::count(&f.fs);
         if n > 0 {
-            v.set("in_trash", items(n));
+            v["in_trash"] = json!(items(n));
         }
     }
     if let Some(s) = &f.space {
-        v.set("free_space", space_text(s));
+        v["free_space"] = json!(space_text(s));
     }
     if let Some((paths, cut)) = &f.clipboard {
         let paths: Vec<String> = paths.iter().take(MAX_ITEMS).map(|p| show_path(p)).collect();
-        v.set("clipboard", object! { "paths" => paths, "cut" => *cut });
+        v["clipboard"] = json!({ "paths": paths, "cut": *cut });
     }
     if let Some(r) = &f.rename {
-        v.set("renaming", r.original.as_str());
+        v["renaming"] = json!(r.original.as_str());
     }
     if let Some(d) = &f.dialog {
-        v.set("dialog", dialog(d));
+        v["dialog"] = json!(dialog(d));
     }
     v
 }
@@ -456,10 +456,10 @@ impl Files {
 
     /// Where the window is now, for results.
     fn location(&self) -> Value {
-        let mut v = object! { "showing" => place(&self.cwd), "items" => self.view.len() };
+        let mut v = json!({ "showing": place(&self.cwd), "items": self.view.len() });
         let selected = selected_names(self);
         if !selected.is_empty() {
-            v.set("selected", selected);
+            v["selected"] = selected.into();
         }
         v
     }
@@ -544,7 +544,7 @@ impl Files {
                 if in_editor {
                     self.launch(EDITOR.exe, vec![path.clone()]);
                     self.failed()?;
-                    return Ok(object! { "opened" => show_path(&path), "with" => EDITOR.id });
+                    return Ok(json!({ "opened": show_path(&path), "with": EDITOR.id }));
                 }
                 self.open_file(&path);
                 if matches!(self.dialog, Some(Dialog::OpenUnknown(_))) {
@@ -557,14 +557,14 @@ impl Files {
                 }
                 self.failed()?;
                 Ok(match default_app(&path) {
-                    Some(app) => object! { "opened" => show_path(&path), "with" => app.id },
-                    None => object! { "started" => show_path(&path) },
+                    Some(app) => json!({ "opened": show_path(&path), "with": app.id }),
+                    None => json!({ "started": show_path(&path) }),
                 })
             }
             "select" => {
                 if arg_bool(args, "all") == Some(true) {
                     self.select_all();
-                    return Ok(object! { "selected" => self.selected.len() });
+                    return Ok(json!({ "selected": self.selected.len() }));
                 }
                 let mut names: Vec<String> = Vec::new();
                 for wanted in list_arg(args, "names") {
@@ -590,7 +590,7 @@ impl Files {
                     }
                 }
                 self.select_names(&names);
-                Ok(object! { "selected" => names })
+                Ok(json!({ "selected": names }))
             }
             "search" => {
                 self.search = arg_opt_str(args, "text").unwrap_or("").trim().to_string();
@@ -598,7 +598,7 @@ impl Files {
                 self.reset_scroll = true;
                 let names: Vec<&str> =
                     self.view.iter().take(MAX_ITEMS).map(|&i| self.entries[i].name.as_str()).collect();
-                Ok(object! { "search" => self.search.as_str(), "matches" => self.view.len(), "names" => names })
+                Ok(json!({ "search": self.search.as_str(), "matches": self.view.len(), "names": names }))
             }
             "view" => {
                 if let Some(layout) = arg_opt_str(args, "layout") {
@@ -632,12 +632,12 @@ impl Files {
                     self.show_hidden = hidden;
                 }
                 self.rebuild_view();
-                Ok(object! {
-                    "layout" => if self.mode == ViewMode::List { "list" } else { "icons" },
-                    "sort_by" => sort_name(self.sort),
-                    "order" => if self.ascending { "ascending" } else { "descending" },
-                    "show_hidden" => self.show_hidden,
-                })
+                Ok(json!({
+                    "layout": if self.mode == ViewMode::List { "list" } else { "icons" },
+                    "sort_by": sort_name(self.sort),
+                    "order": if self.ascending { "ascending" } else { "descending" },
+                    "show_hidden": self.show_hidden,
+                }))
             }
             "new_folder" => {
                 let name = arg_str(args, "name")?.trim();
@@ -664,7 +664,7 @@ impl Files {
                     self.failed()?;
                     return Err(format!("{} could not be made", show_path(&path)));
                 }
-                Ok(object! { "created" => show_path(&path) })
+                Ok(json!({ "created": show_path(&path) }))
             }
             "properties" => {
                 let path = match arg_opt_str(args, "item") {
@@ -699,7 +699,7 @@ impl Files {
                 self.rename = Some(Rename { original: old, text: new.to_string(), focused: true });
                 self.commit_rename();
                 self.failed()?;
-                Ok(object! { "renamed" => show_path(&path), "now" => show_path(&renamed) })
+                Ok(json!({ "renamed": show_path(&path), "now": show_path(&renamed) }))
             }
             "move" | "copy" => {
                 let cut = action == "move";
@@ -732,9 +732,9 @@ impl Files {
                 }
                 let arrived: Vec<String> =
                     arrived.iter().take(MAX_ITEMS).map(|n| show_path(&self.path_of(n))).collect();
-                let mut v = object! { verb => arrived };
+                let mut v = json!({ (verb): arrived });
                 if let Some(p) = problems {
-                    v.set("problems", p);
+                    v["problems"] = p.into();
                 }
                 Ok(v)
             }
@@ -784,9 +784,9 @@ impl Files {
                 if moved.is_empty() {
                     return Err(problems.join("; "));
                 }
-                let mut v = object! { "moved_to_trash" => moved };
+                let mut v = json!({ "moved_to_trash": moved });
                 if !problems.is_empty() {
-                    v.set("problems", problems.join("; "));
+                    v["problems"] = json!(problems.join("; "));
                 }
                 Ok(v)
             }
@@ -811,9 +811,9 @@ impl Files {
                     return Err(problems.unwrap_or_else(|| "nothing could be restored".into()));
                 }
                 let restored: Vec<String> = restored.iter().map(|p| show_path(p)).collect();
-                let mut v = object! { "restored" => restored };
+                let mut v = json!({ "restored": restored });
                 if let Some(p) = problems {
-                    v.set("problems", p);
+                    v["problems"] = p.into();
                 }
                 Ok(v)
             }
@@ -830,7 +830,7 @@ impl Files {
                     }
                     self.empty_trash();
                     self.failed()?;
-                    return Ok(object! { "emptied" => format!("{} deleted for good", items(n)) });
+                    return Ok(json!({ "emptied": format!("{} deleted for good", items(n)) }));
                 }
                 let mut paths = Vec::new();
                 for w in &wanted {
@@ -851,9 +851,9 @@ impl Files {
                 if gone.is_empty() {
                     return Err(problems.unwrap_or_else(|| "nothing could be deleted".into()));
                 }
-                let mut v = object! { "deleted_for_good" => gone };
+                let mut v = json!({ "deleted_for_good": gone });
                 if let Some(p) = problems {
-                    v.set("problems", p);
+                    v["problems"] = p.into();
                 }
                 Ok(v)
             }

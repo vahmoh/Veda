@@ -40,7 +40,7 @@ fn reference(w: u32, h: u32) -> Vec<u32> {
             }
             let dx = x as i32 * 16 + 8 - cx;
             if dx.abs() <= outer + 16 && dy.abs() <= outer + 16 {
-                let d = isqrt((dx * dx + dy * dy) as u32) as i32;
+                let d = ((dx * dx + dy * dy) as u32).isqrt() as i32;
                 let cov = ((outer + 8 - d).clamp(0, 16) * (d - inner + 8).clamp(0, 16)) as u32;
                 if cov > 0 {
                     c = mix(c, 0xFFFFFF, cov);
@@ -142,6 +142,4 @@ fn the_gradient() {
     background(799, 800, 0, &mut row);
     assert_eq!(row, [BOTTOM; 8]);
     assert_eq!(mix(0x000000, 0xFFFFFF, 128), 0x7F7F7F);
-    assert_eq!(isqrt(1 << 20), 1 << 10);
-    assert_eq!(isqrt(99), 9);
 }

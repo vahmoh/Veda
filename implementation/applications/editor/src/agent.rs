@@ -16,7 +16,7 @@ use vtext::highlight::Language;
 use vtext::{Pos, Selection};
 use vui::agent::{
     self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, arg_path, arg_str, clip,
-    object, show_path,
+    json, show_path,
 };
 
 use crate::{DEFAULT_FONT_SIZE, Editor, Modal, Tab, write_text};
@@ -102,12 +102,12 @@ pub fn info() -> AppAgentInfo {
 
 /// One document as the agent sees it in the list.
 fn tab_summary(t: &Tab, current: bool) -> Value {
-    object! {
-        "title" => t.title.as_str(),
-        "file" => t.path.as_deref().map(show_path),
-        "unsaved_changes" => t.doc.is_modified(),
-        "current" => current,
-    }
+    json!({
+        "title": t.title.as_str(),
+        "file": t.path.as_deref().map(show_path),
+        "unsaved_changes": t.doc.is_modified(),
+        "current": current,
+    })
 }
 
 pub fn state(ed: &Editor) -> Value {
@@ -126,24 +126,24 @@ pub fn state(ed: &Editor) -> Value {
         Modal::Shortcuts => "Keyboard shortcuts",
         Modal::About => "About",
     });
-    object! {
-        "documents" => Value::Array(ed.tabs.iter().enumerate().map(|(i, t)| tab_summary(t, i == ed.active)).collect()),
-        "current" => object! {
-            "title" => tab.title.as_str(),
-            "file" => tab.path.as_deref().map(show_path),
-            "language" => tab.lang.name(),
-            "read_only" => tab.read_only,
-            "unsaved_changes" => tab.doc.is_modified(),
-            "lines" => tab.doc.buffer().line_count(),
-            "cursor" => object! { "line" => cursor.line + 1, "column" => cursor.col + 1 },
-            "selection" => selected,
-            "text" => shown,
-            "text_cut_short" => truncated,
+    json!({
+        "documents": Value::Array(ed.tabs.iter().enumerate().map(|(i, t)| tab_summary(t, i == ed.active)).collect()),
+        "current": {
+            "title": tab.title.as_str(),
+            "file": tab.path.as_deref().map(show_path),
+            "language": tab.lang.name(),
+            "read_only": tab.read_only,
+            "unsaved_changes": tab.doc.is_modified(),
+            "lines": tab.doc.buffer().line_count(),
+            "cursor": { "line": cursor.line + 1, "column": cursor.col + 1 },
+            "selection": selected,
+            "text": shown,
+            "text_cut_short": truncated,
         },
-        "dialog" => dialog,
-        "word_wrap" => ed.opts.wrap,
-        "font_size" => ed.opts.font_size,
-    }
+        "dialog": dialog,
+        "word_wrap": ed.opts.wrap,
+        "font_size": ed.opts.font_size,
+    })
 }
 
 /// How many times to repeat (1 to 1000).
@@ -224,7 +224,7 @@ impl Editor {
                     self.tab().doc.paste(text);
                 }
                 self.tab().view.reveal_cursor();
-                Ok(object! { "opened" => self.tabs[self.active].title.as_str() })
+                Ok(json!({ "opened": self.tabs[self.active].title.as_str() }))
             }
             "open_file" => {
                 let path = arg_path(args, "path")?;
@@ -235,7 +235,7 @@ impl Editor {
                     return Err(e);
                 }
                 let tab = &self.tabs[self.active];
-                Ok(object! { "opened" => show_path(&path), "lines" => tab.doc.buffer().line_count() })
+                Ok(json!({ "opened": show_path(&path), "lines": tab.doc.buffer().line_count() }))
             }
             "write" => {
                 self.writable()?;
@@ -254,7 +254,7 @@ impl Editor {
                 doc.paste(text);
                 self.tabs[i].view.reveal_cursor();
                 let c = self.tabs[i].doc.cursor();
-                Ok(object! { "written" => text.chars().count(), "cursor_line" => c.line + 1 })
+                Ok(json!({ "written": text.chars().count(), "cursor_line": c.line + 1 }))
             }
             "read" => {
                 let from = line_arg(self, args, "from_line")?.unwrap_or(1);
@@ -271,7 +271,7 @@ impl Editor {
                     out.push('\n');
                     last = k + 1;
                 }
-                Ok(object! { "from_line" => from, "to_line" => last, "of_lines" => total, "text" => out })
+                Ok(json!({ "from_line": from, "to_line": last, "of_lines": total, "text": out }))
             }
             "find" => {
                 let text = arg_str(args, "text")?;
@@ -282,7 +282,7 @@ impl Editor {
                 }
                 tab.view.reveal_cursor();
                 let c = tab.doc.selection().start();
-                Ok(object! { "found_at_line" => c.line + 1, "column" => c.col + 1 })
+                Ok(json!({ "found_at_line": c.line + 1, "column": c.col + 1 }))
             }
             "replace" => {
                 self.writable()?;
@@ -302,14 +302,14 @@ impl Editor {
                     return Err(format!("\u{201c}{find}\u{201d} is not in {}", tab.title));
                 }
                 tab.view.reveal_cursor();
-                Ok(object! { "replaced" => n })
+                Ok(json!({ "replaced": n }))
             }
             "go_to_line" => {
                 let line = line_arg(self, args, "line")?.ok_or("which line?")?;
                 let tab = &mut self.tabs[i];
                 tab.doc.goto_line(line);
                 tab.view.reveal_cursor();
-                Ok(object! { "line" => line })
+                Ok(json!({ "line": line }))
             }
             "select" => {
                 let from = line_arg(self, args, "from_line")?;
@@ -326,7 +326,7 @@ impl Editor {
                 }
                 tab.view.reveal_cursor();
                 let selected = tab.doc.selected_text();
-                Ok(object! { "selected" => clip(&selected, 500).0 })
+                Ok(json!({ "selected": clip(&selected, 500).0 }))
             }
             "undo" | "redo" => {
                 let n = times(args)?;
@@ -343,7 +343,7 @@ impl Editor {
                     return Err(format!("there is nothing to {action}"));
                 }
                 tab.view.reveal_cursor();
-                Ok(object! { action => done })
+                Ok(json!({ (action): done }))
             }
             "save" => {
                 let tab = &self.tabs[i];
@@ -369,7 +369,7 @@ impl Editor {
                     }
                 };
                 self.save_to(i, &path)?;
-                Ok(object! { "saved" => show_path(&path) })
+                Ok(json!({ "saved": show_path(&path) }))
             }
             "save_as" => {
                 let path = arg_path(args, "path")?;
@@ -378,12 +378,12 @@ impl Editor {
                 }
                 let replaced = self.tabs[i].path.as_deref() != Some(path.as_str()) && self.file_exists(&path);
                 self.save_to(i, &path)?;
-                Ok(object! { "saved" => show_path(&path), "replaced_a_file" => replaced })
+                Ok(json!({ "saved": show_path(&path), "replaced_a_file": replaced }))
             }
             "switch_document" => {
                 let k = self.find_tab(arg_str(args, "name")?, true)?;
                 self.active = k;
-                Ok(object! { "showing" => self.tabs[k].title.as_str() })
+                Ok(json!({ "showing": self.tabs[k].title.as_str() }))
             }
             "close_document" => {
                 let i = match arg_opt_str(args, "name") {
@@ -402,7 +402,7 @@ impl Editor {
                     self.modal = None;
                 }
                 self.remove_tab(i);
-                Ok(object! { "closed" => title })
+                Ok(json!({ "closed": title }))
             }
             "discard_changes" => {
                 // By name: the user approved discarding this document,
@@ -413,7 +413,7 @@ impl Editor {
                     self.modal = None;
                 }
                 self.remove_tab(i);
-                Ok(object! { "closed_without_saving" => title })
+                Ok(json!({ "closed_without_saving": title }))
             }
             "view" => {
                 if let Some(w) = arg_bool(args, "word_wrap") {
@@ -426,11 +426,11 @@ impl Editor {
                     let size = arg_f64(args, "font_size")? as f32;
                     self.opts.font_size = if size <= 0.0 { DEFAULT_FONT_SIZE } else { size.clamp(9.0, 32.0) };
                 }
-                Ok(object! {
-                    "word_wrap" => self.opts.wrap,
-                    "line_numbers" => self.opts.line_numbers,
-                    "font_size" => self.opts.font_size,
-                })
+                Ok(json!({
+                    "word_wrap": self.opts.wrap,
+                    "line_numbers": self.opts.line_numbers,
+                    "font_size": self.opts.font_size,
+                }))
             }
             other => Err(format!("the Text Editor has no action called {other}")),
         }

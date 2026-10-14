@@ -745,3 +745,45 @@ fn tables_from_the_rsdp() {
     assert!(tables.iter().all(|t| t.checksum_ok()));
     assert_eq!(crate::tables::load(&ram, 0x200).unwrap_err(), crate::tables::TableError::NoRsdp);
 }
+
+#[test]
+fn sleep_types_in_every_encoding() {
+    use crate::aml::sleep_type;
+    // Name (\_S5, Package (0x04) { 0x05, 0x05, Zero, Zero }), as compilers
+    // write it, at the top of a DSDT.
+    let byte = name("\\_S5_", &package(&[vec![0x0A, 0x05], vec![0x0A, 0x05], vec![0x00], vec![0x00]]));
+    assert_eq!(sleep_type(&byte, 5), Some((5, 5)));
+    // Rooted or not, after other code, with Zero, One, words and dwords
+    // (which the kernel's earlier byte scan read as their prefixes).
+    let words = cat(&[
+        &method("_PTS", 1, &ret(&nm("\\_S5_"))),
+        &scope("\\", &name("_S5_", &package(&[vec![0x0B, 0x07, 0x00], vec![0x01]]))),
+    ]);
+    assert_eq!(sleep_type(&words, 5), Some((7, 1)));
+    let dwords = name("_S5_", &package(&[vec![0x0C, 0x06, 0, 0, 0], vec![0x0E, 3, 0, 0, 0, 0, 0, 0, 0]]));
+    assert_eq!(sleep_type(&dwords, 5), Some((6, 3)));
+    // Other states; one element; a reference only; elements that are not
+    // constants; a package cut short.
+    let s3 = name("_S3_", &package(&[vec![0x0A, 0x01], vec![0x0A, 0x01]]));
+    assert_eq!((sleep_type(&s3, 3), sleep_type(&s3, 5)), (Some((1, 1)), None));
+    assert_eq!(sleep_type(&name("_S5_", &package(&[vec![0x0A, 0x07]])), 5), Some((7, 0)));
+    assert_eq!(sleep_type(&method("_PTS", 1, &ret(&nm("\\_S5_"))), 5), None);
+    assert_eq!(sleep_type(&name("_S5_", &package(&[nm("SLPA"), nm("SLPB")])), 5), None);
+    assert_eq!(sleep_type(&byte[..byte.len() - 3], 5), None);
+    assert_eq!(sleep_type(&[], 5), None);
+}
+
+#[test]
+fn package_lengths_of_every_size() {
+    // A buffer's PkgLength in each of its four forms, as the interpreter
+    // reads them back.
+    for size in [10, 0x3E, 0x3F, 0xFF0, 0xFFF, 0xF_FFF0, 0x10_0000] {
+        let code = name("BUF_", &buffer(&vec![0x5A; size]));
+        let mut ns = Namespace::new();
+        ns.load(&code, &crate::NoMemory).unwrap();
+        match eval(&ns, "\\BUF_", &crate::NoMemory) {
+            Ok(Value::Buffer(b)) => assert_eq!(b.len(), size),
+            other => panic!("{size}: {other:?}"),
+        }
+    }
+}

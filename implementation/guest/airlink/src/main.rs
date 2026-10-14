@@ -17,12 +17,11 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::{Duration, Instant};
 
 use guest_netlink::{Builder, Family, NETLINK_GENERIC, Socket};
-use guest_sys::{POLLERR, POLLHUP, POLLIN, POLLOUT, PollFd, poll_many};
+use rustix::event::{PollFd, PollFlags, poll};
 use vradiolink::{LinkError, Message, Reader, VERSION, msg};
 
 /// The port of the radio link, and how long to wait for Linux to find it.
@@ -298,17 +297,16 @@ impl Airlink {
                 self.hello();
             }
             self.write_out();
-            let mut fds = [
-                PollFd::new(self.port.as_raw_fd(), POLLIN | if self.out.is_empty() { 0 } else { POLLOUT }),
-                PollFd::new(self.hwsim.fd(), POLLIN),
-            ];
+            let port_events = if self.out.is_empty() { PollFlags::IN } else { PollFlags::IN | PollFlags::OUT };
             let timeout = if self.hwsim.has_events() { 0 } else { HELLO_EVERY.as_millis() as i32 };
-            poll_many(&mut fds, timeout)?;
-            if fds[0].revents & POLLIN != 0 && !self.read_port() {
+            let mut fds = [PollFd::new(&self.port, port_events), PollFd::new(&self.hwsim, PollFlags::IN)];
+            poll(&mut fds, guest_sys::poll_timeout(timeout).as_ref())?;
+            let port = fds[0].revents();
+            if port.contains(PollFlags::IN) && !self.read_port() {
                 away = true;
             }
             // While airsim is away the port hangs up.
-            if fds[0].revents & (POLLHUP | POLLERR) != 0 {
+            if port.intersects(PollFlags::HUP | PollFlags::ERR) {
                 away = true;
             }
             if away {

@@ -178,11 +178,8 @@ impl Listener {
     }
 }
 
-/// Equal-power gains for a pan (-1..1).
-pub fn pan_gains(pan: f32) -> (f32, f32) {
-    let a = (pan.clamp(-1.0, 1.0) + 1.0) * core::f32::consts::FRAC_PI_4;
-    (a.cos(), a.sin())
-}
+/// Equal-power gains for a pan (-1..1), as the synthesiser's voices pan.
+pub use vaudio::synth::voice::pan_gains;
 
 /// A table of one turn of a sine, for the oscillators.
 pub struct SineTable {

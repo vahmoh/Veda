@@ -28,6 +28,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use vaudio::resample::Resampler;
+use vaudio::wav::{self, SampleFormat, WavInfo};
+
 use crate::util::{self, Result};
 
 /// Sample rate of the test microphone.
@@ -50,12 +53,9 @@ struct Echo {
     gain: f64,
     /// Bytes of the file read so far.
     offset: u64,
-    /// The WAV's format, once its header has been read.
-    rate: u32,
-    channels: usize,
-    /// Mono source frames not yet resampled, and the position in them.
-    src: Vec<f64>,
-    pos: f64,
+    /// The recording's channels and the converter from its rate to the
+    /// microphone's, once its header has been read.
+    input: Option<(usize, Resampler)>,
     /// The output at 16 kHz, delayed: what the microphone hears next.
     delay_line: VecDeque<i16>,
 }
@@ -65,15 +65,22 @@ impl Echo {
     fn refill(&mut self) {
         let Ok(mut f) = std::fs::File::open(&self.wav) else { return };
         use std::io::{Read, Seek, SeekFrom};
-        if self.rate == 0 {
-            let mut header = [0u8; 44];
-            if f.read_exact(&mut header).is_err() {
+        if self.input.is_none() {
+            // QEMU's header: 16-bit PCM, the data's length 0 while it
+            // records (to the end of the file).
+            let mut header = Vec::new();
+            if Read::by_ref(&mut f).take(4096).read_to_end(&mut header).is_err() {
                 return;
             }
-            self.channels = u16::from_le_bytes([header[22], header[23]]).max(1) as usize;
-            self.rate = u32::from_le_bytes([header[24], header[25], header[26], header[27]]);
-            self.offset = 44;
+            let len = f.metadata().map_or(0, |m| m.len());
+            let Ok(info) = WavInfo::parse_prefix(&header, len) else { return };
+            if info.format != SampleFormat::S16 {
+                return;
+            }
+            self.offset = info.data_offset as u64;
+            self.input = Some((info.channels as usize, Resampler::new(info.rate, RATE, 1)));
         }
+        let Some((channels, resampler)) = self.input.as_mut() else { return };
         if f.seek(SeekFrom::Start(self.offset)).is_err() {
             return;
         }
@@ -81,25 +88,27 @@ impl Echo {
         if f.read_to_end(&mut bytes).is_err() {
             return;
         }
-        let frame = 2 * self.channels;
+        let frame = 2 * *channels;
         let whole = bytes.len() / frame * frame;
         self.offset += whole as u64;
-        for fr in bytes[..whole].chunks_exact(frame) {
-            let sum: f64 = fr.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b) as f64).sum();
-            self.src.push(sum / self.channels as f64);
+        // One microphone hears all the loudspeakers.
+        let mono: Vec<i16> = bytes[..whole]
+            .chunks_exact(frame)
+            .map(|fr| {
+                let sum: i32 = fr.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b) as i32).sum();
+                (sum / *channels as i32) as i16
+            })
+            .collect();
+        resampler.push(&mono);
+        let mut out = [0i16; 1024];
+        loop {
+            let n = resampler.pull(&mut out);
+            if n == 0 {
+                break;
+            }
+            let gain = self.gain;
+            self.delay_line.extend(out[..n].iter().map(|&s| (s as f64 * gain).clamp(-32768.0, 32767.0) as i16));
         }
-        // Linear interpolation down to 16 kHz.
-        let step = self.rate as f64 / RATE as f64;
-        while self.pos + 1.0 < self.src.len() as f64 {
-            let i = self.pos as usize;
-            let frac = self.pos - i as f64;
-            let y = self.src[i] * (1.0 - frac) + self.src[i + 1] * frac;
-            self.delay_line.push_back((y * self.gain).clamp(-32768.0, 32767.0) as i16);
-            self.pos += step;
-        }
-        let used = (self.pos as usize).min(self.src.len());
-        self.src.drain(..used);
-        self.pos -= used as f64;
     }
 }
 
@@ -147,10 +156,7 @@ impl MicServer {
             wav,
             gain: 10f64.powf(gain_db / 20.0),
             offset: 0,
-            rate: 0,
-            channels: 2,
-            src: Vec::new(),
-            pos: 0.0,
+            input: None,
             delay_line: VecDeque::from(vec![0i16; delay]),
         };
         // Only what plays from now on comes back.
@@ -311,7 +317,7 @@ fn deepgram_speak(text: &str, voice: &str, key: &str, dir: &Path) -> Result<Vec<
         }
     };
     std::fs::write(&header, format!("Authorization: Token {key}\n")).map_err(|e| e.to_string())?;
-    std::fs::write(&body, format!("{{\"text\":{}}}", json_string(text))).map_err(|e| e.to_string())?;
+    std::fs::write(&body, serde_json::json!({ "text": text }).to_string()).map_err(|e| e.to_string())?;
     let url =
         format!("https://api.deepgram.com/v1/speak?model={voice}&encoding=linear16&sample_rate={RATE}&container=none");
     let result = Command::new("curl")
@@ -347,66 +353,16 @@ fn deepgram_speak(text: &str, voice: &str, key: &str, dir: &Path) -> Result<Vec<
     Ok(bytes)
 }
 
-/// Reads a 16-bit PCM WAV file as 16 kHz mono samples (other rates are
-/// converted by linear interpolation, which is good enough for tests).
+/// Reads a WAV file (in any of the formats Veda plays) as 16 kHz mono
+/// samples.
 pub fn read_wav(path: &Path) -> Result<Vec<i16>> {
     let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let bad = || format!("{}: not a 16-bit PCM WAV file", path.display());
-    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        return Err(bad());
-    }
-    let (mut channels, mut rate, mut bits, mut samples) = (0u16, 0u32, 0u16, None);
-    let mut i = 12;
-    while i + 8 <= data.len() {
-        let id = &data[i..i + 4];
-        let len = u32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap()) as usize;
-        let body = &data[i + 8..(i + 8 + len).min(data.len())];
-        if id == b"fmt " && body.len() >= 16 {
-            channels = u16::from_le_bytes([body[2], body[3]]);
-            rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
-            bits = u16::from_le_bytes([body[14], body[15]]);
-        } else if id == b"data" {
-            samples = Some(pcm_from_bytes(body));
-        }
-        i += 8 + len + (len & 1);
-    }
-    let samples = samples.ok_or_else(bad)?;
-    if bits != 16 || channels == 0 || rate == 0 {
-        return Err(bad());
-    }
-    let mono: Vec<i16> = samples
-        .chunks_exact(channels as usize)
-        .map(|f| (f.iter().map(|&s| s as i32).sum::<i32>() / channels as i32) as i16)
-        .collect();
-    if rate == RATE {
-        return Ok(mono);
-    }
-    let n = (mono.len() as u64 * RATE as u64 / rate as u64) as usize;
-    Ok((0..n)
-        .map(|k| {
-            let pos = k as f64 * rate as f64 / RATE as f64;
-            let i = pos as usize;
-            let frac = pos - i as f64;
-            let a = mono.get(i).copied().unwrap_or(0) as f64;
-            let b = mono.get(i + 1).copied().unwrap_or(0) as f64;
-            (a + (b - a) * frac) as i16
-        })
-        .collect())
-}
-
-fn json_string(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+    let info = WavInfo::parse(&data).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut stereo = vec![0i16; info.frames as usize * 2];
+    let frames = wav::read_stereo(&info, &data, 0, &mut stereo);
+    let mono: Vec<i16> =
+        stereo[..frames * 2].as_chunks::<2>().0.iter().map(|[l, r]| ((*l as i32 + *r as i32) / 2) as i16).collect();
+    Ok(Resampler::process_all(info.rate, RATE, 1, &mono))
 }
 
 fn fnv64(s: &str) -> u64 {
@@ -437,8 +393,61 @@ mod tests {
         mic.wait_drained(Duration::from_secs(2)).unwrap();
     }
 
+    /// `secs` of a 1 kHz tone at `rate` Hz on every channel, as 16-bit
+    /// samples.
+    fn tone(rate: u32, channels: usize, secs: f64) -> Vec<i16> {
+        let frames = (rate as f64 * secs) as usize;
+        let at = |i: usize| (8000.0 * (std::f64::consts::TAU * 1000.0 * i as f64 / rate as f64).sin()) as i16;
+        (0..frames).flat_map(|i| std::iter::repeat_n(at(i), channels)).collect()
+    }
+
+    /// The level (RMS) and the number of times the signal crosses zero.
+    fn measure(s: &[i16]) -> (f64, usize) {
+        let rms = (s.iter().map(|&v| (v as f64).powi(2)).sum::<f64>() / s.len() as f64).sqrt();
+        (rms, s.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count())
+    }
+
     #[test]
-    fn json_strings_are_escaped() {
-        assert_eq!(json_string("say \"hi\"\n\\"), "\"say \\\"hi\\\"\\n\\\\\"");
+    fn wav_files_become_the_microphones_rate() {
+        let path = std::env::temp_dir().join(format!("veda-mic-{}.wav", std::process::id()));
+        std::fs::write(&path, wav::write(&tone(48_000, 2, 1.0), 2, 48_000, &Default::default())).unwrap();
+        let read = read_wav(&path);
+        let _ = std::fs::remove_file(&path);
+        let samples = read.unwrap();
+        assert_eq!(samples.len(), RATE as usize);
+        // The tone, as loud (8000 / √2) and as high (2000 crossings a second)
+        // as it was.
+        let (rms, crossings) = measure(&samples[100..15_900]);
+        assert!((rms - 5657.0).abs() < 60.0, "{rms}");
+        assert!(crossings.abs_diff(1975) <= 4, "{crossings}");
+        assert!(read_wav(Path::new("/nonexistent.wav")).is_err());
+    }
+
+    #[test]
+    fn the_echo_follows_a_growing_recording() {
+        // QEMU's recording: 48 kHz stereo, the data's length 0 until it ends.
+        let path = std::env::temp_dir().join(format!("veda-echo-{}.wav", std::process::id()));
+        let mut file = wav::write(&tone(48_000, 2, 0.5), 2, 48_000, &Default::default());
+        let data = file.windows(4).position(|w| w == b"data").unwrap();
+        file[data + 4..data + 8].copy_from_slice(&0u32.to_le_bytes());
+        std::fs::write(&path, &file).unwrap();
+        let mut echo =
+            Echo { wav: path.clone(), gain: 0.5, offset: 0, input: None, delay_line: VecDeque::from(vec![0; 160]) };
+        echo.refill();
+        let first = echo.delay_line.len();
+        // Half a second, 6 dB quieter, after 10 ms of the delay's silence
+        // (the converter holds back the frames its filter has yet to see).
+        assert!((160 + 7900..=160 + 8000).contains(&first), "{first}");
+        // More of the recording: the echo continues where it was.
+        let more: Vec<u8> = tone(48_000, 2, 1.0)[48_000..].iter().flat_map(|s| s.to_le_bytes()).collect();
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(&more).unwrap();
+        echo.refill();
+        let _ = std::fs::remove_file(&path);
+        let echoed: Vec<i16> = echo.delay_line.iter().copied().collect();
+        assert!((160 + 15_900..=160 + 16_000).contains(&echoed.len()), "{}", echoed.len());
+        assert!(echoed[..160].iter().all(|&s| s == 0));
+        let (rms, crossings) = measure(&echoed[400..16_000]);
+        assert!((rms - 2828.0).abs() < 40.0, "{rms}");
+        assert!(crossings.abs_diff(1950) <= 4, "{crossings}");
     }
 }

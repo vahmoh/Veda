@@ -106,17 +106,15 @@ fn parse_security(s: &str) -> Option<Security> {
     })
 }
 
+/// Appends `bytes` in lower-case hexadecimal, as the file keeps names and
+/// passphrases (without branches on their bytes: passphrases are secret).
 fn hex(out: &mut String, bytes: &[u8]) {
-    for b in bytes {
-        let _ = write!(out, "{b:02x}");
-    }
+    out.push_str(&base16ct::lower::encode_string(bytes));
 }
 
+/// The bytes of hexadecimal digits of either case.
 fn unhex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
+    base16ct::mixed::decode_vec(s).ok()
 }
 
 /// Writes the file for `profiles`.

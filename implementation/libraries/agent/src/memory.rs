@@ -18,7 +18,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vjson::{Value, object};
+use serde_json::{Value, json};
 
 use crate::deepgram::Role;
 
@@ -243,34 +243,35 @@ impl Memory {
         s
     }
 
-    pub fn to_json(&self) -> Value {
+    /// The memory as stored: compact JSON.
+    pub fn to_json(&self) -> String {
         let facts: Vec<Value> = self
             .facts
             .iter()
-            .map(|f| object! { "id" => f.id, "text" => f.text.as_str(), "kind" => f.kind.as_str(), "created" => f.created })
+            .map(|f| json!({ "id": f.id, "text": f.text.as_str(), "kind": f.kind.as_str(), "created": f.created }))
             .collect();
-        let mut apps = vjson::Map::new();
+        let mut apps = serde_json::Map::new();
         for (k, u) in &self.apps {
             let hours: Vec<Value> = u.hours.iter().map(|&h| Value::from(h)).collect();
-            apps.insert(k.as_str(), object! { "count" => u.count, "last" => u.last, "hours" => hours });
+            apps.insert(k.clone(), json!({ "count": u.count, "last": u.last, "hours": hours }));
         }
         let turns: Vec<Value> = self
             .turns
             .iter()
-            .map(|t| object! { "role" => t.role.as_str(), "text" => t.text.as_str(), "at" => t.at })
+            .map(|t| json!({ "role": t.role.as_str(), "text": t.text.as_str(), "at": t.at }))
             .collect();
-        object! { "version" => 1, "next_id" => self.next_id, "facts" => facts, "apps" => apps, "turns" => turns }
+        json!({ "version": 1, "next_id": self.next_id, "facts": facts, "apps": apps, "turns": turns }).to_string()
     }
 
     /// Reads stored memory; malformed entries are skipped.
     pub fn from_json(text: &str) -> Memory {
         let mut m = Memory::new();
-        let Ok(v) = vjson::parse(text) else { return m };
+        let Ok(v) = serde_json::from_str::<Value>(text) else { return m };
         if let Some(facts) = v["facts"].as_array() {
             for f in facts {
-                let (Some(id), Some(t)) = (f["id"].as_u64(), f.str("text")) else { continue };
+                let (Some(id), Some(t)) = (f["id"].as_u64(), f["text"].as_str()) else { continue };
                 if m.facts.len() < MAX_FACTS && !t.trim().is_empty() {
-                    let kind = f.str("kind").filter(|k| KINDS.contains(k)).unwrap_or("fact");
+                    let kind = f["kind"].as_str().filter(|k| KINDS.contains(k)).unwrap_or("fact");
                     m.facts.push(Fact {
                         id,
                         text: clip(t, MAX_FACT_LEN),
@@ -299,7 +300,7 @@ impl Memory {
         }
         if let Some(turns) = v["turns"].as_array() {
             for t in turns.iter().rev().take(MAX_TURNS).rev() {
-                if let (Some(role), Some(text)) = (t.str("role").and_then(Role::parse), t.str("text")) {
+                if let (Some(role), Some(text)) = (t["role"].as_str().and_then(Role::parse), t["text"].as_str()) {
                     m.turns.push(Turn { role, text: clip(text, MAX_TURN_LEN), at: t["at"].as_u64().unwrap_or(0) });
                 }
             }
@@ -311,7 +312,6 @@ impl Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
 
     #[test]
     fn remembers_searches_and_forgets() {
@@ -366,7 +366,7 @@ mod tests {
         m.remember("Likes tea", "preference", 1);
         m.note_app_use("photos", 2, 3);
         m.add_turn(Role::User, "hello", 4);
-        let back = Memory::from_json(&m.to_json().to_string());
+        let back = Memory::from_json(&m.to_json());
         assert_eq!(back, m);
         assert_eq!(back.clone().remember("Another", "fact", 5), 2);
         assert_eq!(Memory::from_json("{broken"), Memory::new());

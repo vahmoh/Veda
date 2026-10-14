@@ -13,11 +13,13 @@ publish = false
 initrd = { workspace = true, features = ["std"] }
 vpe = { workspace = true }
 vbuild = { workspace = true }
-sha1 = { workspace = true }
 sha2 = { workspace = true }
 vimage = { workspace = true }
 vacpi = { workspace = true }
-vjson = { workspace = true }
+vaudio = { workspace = true }
+serde_json = { workspace = true }
+crc32fast = { workspace = true }
+tungstenite = { workspace = true }
 
 [lints]
 workspace = true

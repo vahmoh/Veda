@@ -10,10 +10,11 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::ops::RangeInclusive;
-use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 
-use guest_sys::{POLLIN, POLLOUT, ioc, ioctl, poll};
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::io::Errno;
+use rustix::ioctl::{NoArg, Opcode, Updater, ioctl, opcode};
 
 const O_NONBLOCK: i32 = 0o4000;
 
@@ -122,14 +123,15 @@ struct Transfer {
     frames: u64,
 }
 
-const HW_PARAMS: u32 = ioc(3, b'A', 0x11, size_of::<HwParams>());
-const SW_PARAMS: u32 = ioc(3, b'A', 0x13, size_of::<SwParams>());
-const STATUS: u32 = ioc(2, b'A', 0x20, size_of::<RawStatus>());
-const PREPARE: u32 = ioc(0, b'A', 0x40, 0);
-const START: u32 = ioc(0, b'A', 0x42, 0);
-const DROP: u32 = ioc(0, b'A', 0x43, 0);
-const WRITEI_FRAMES: u32 = ioc(1, b'A', 0x50, size_of::<Transfer>());
-const READI_FRAMES: u32 = ioc(2, b'A', 0x51, size_of::<Transfer>());
+const HW_PARAMS: Opcode = opcode::read_write::<HwParams>(b'A', 0x11);
+const SW_PARAMS: Opcode = opcode::read_write::<SwParams>(b'A', 0x13);
+const STATUS: Opcode = opcode::read::<RawStatus>(b'A', 0x20);
+const PREPARE: Opcode = opcode::none(b'A', 0x40);
+const START: Opcode = opcode::none(b'A', 0x42);
+const DROP: Opcode = opcode::none(b'A', 0x43);
+// Linux writes a transfer's result into it, whichever way the frames go.
+const WRITEI_FRAMES: Opcode = opcode::write::<Transfer>(b'A', 0x50);
+const READI_FRAMES: Opcode = opcode::read::<Transfer>(b'A', 0x51);
 
 /// Which way a device's frames go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,7 +219,6 @@ impl Pcm {
             Stream::Capture => options.read(true),
         };
         let file = options.custom_flags(O_NONBLOCK).open(path)?;
-        let fd = file.as_raw_fd();
         let configure = |exact: bool| -> io::Result<HwParams> {
             let mut p = HwParams::any();
             p.only(param::ACCESS, ACCESS_RW_INTERLEAVED);
@@ -233,7 +234,7 @@ impl Pcm {
                 p.within(param::BUFFER_SIZE, period * 4, period * periods * 2);
             }
             // SAFETY: the request's structure, which the kernel refines.
-            unsafe { ioctl(fd, HW_PARAMS, &mut p as *mut HwParams as usize)? };
+            unsafe { ioctl(&file, Updater::<HW_PARAMS, HwParams>::new(&mut p))? };
             Ok(p)
         };
         let p = configure(true).or_else(|_| configure(false))?;
@@ -248,30 +249,30 @@ impl Pcm {
     }
 
     /// Its file, for `poll`.
-    pub fn fd(&self) -> RawFd {
-        self.file.as_raw_fd()
+    pub fn file(&self) -> &File {
+        &self.file
     }
 
-    fn request(&self, request: u32) -> io::Result<()> {
+    fn request<const REQUEST: Opcode>(&self) -> io::Result<()> {
         // SAFETY: a request that takes no argument.
-        unsafe { ioctl(self.fd(), request, 0).map(|_| ()) }
+        Ok(unsafe { ioctl(&self.file, NoArg::<REQUEST>::new()) }?)
     }
 
     /// Makes the device ready to play what is written next, or to record
     /// (after it was configured, ran dry or over, or was stopped).
     pub fn prepare(&self) -> io::Result<()> {
-        self.request(PREPARE)
+        self.request::<PREPARE>()
     }
 
     /// Starts a prepared device (a recording; playback starts with the
     /// first frames written).
     pub fn start(&self) -> io::Result<()> {
-        self.request(START)
+        self.request::<START>()
     }
 
     /// Stops at once, dropping what is queued.
     pub fn stop(&self) -> io::Result<()> {
-        self.request(DROP)
+        self.request::<DROP>()
     }
 
     /// Writes interleaved frames, without waiting: how many the device
@@ -283,10 +284,10 @@ impl Pcm {
             frames: (samples.len() / self.channels as usize) as u64,
         };
         // SAFETY: the transfer names the samples, which the kernel reads.
-        match unsafe { ioctl(self.fd(), WRITEI_FRAMES, &mut t as *mut Transfer as usize) } {
-            Ok(_) => Ok(t.result as usize),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(e) => Err(e),
+        match unsafe { ioctl(&self.file, Updater::<WRITEI_FRAMES, Transfer>::new(&mut t)) } {
+            Ok(()) => Ok(t.result as usize),
+            Err(Errno::AGAIN) => Ok(0),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -299,10 +300,10 @@ impl Pcm {
             frames: (samples.len() / self.channels as usize) as u64,
         };
         // SAFETY: the transfer names the buffer, which the kernel writes.
-        match unsafe { ioctl(self.fd(), READI_FRAMES, &mut t as *mut Transfer as usize) } {
-            Ok(_) => Ok(t.result as usize),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
-            Err(e) => Err(e),
+        match unsafe { ioctl(&self.file, Updater::<READI_FRAMES, Transfer>::new(&mut t)) } {
+            Ok(()) => Ok(t.result as usize),
+            Err(Errno::AGAIN) => Ok(0),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -310,7 +311,7 @@ impl Pcm {
     pub fn status(&self) -> io::Result<Status> {
         let mut s = RawStatus::default();
         // SAFETY: the kernel writes one snd_pcm_status.
-        unsafe { ioctl(self.fd(), STATUS, &mut s as *mut RawStatus as usize)? };
+        unsafe { ioctl(&self.file, Updater::<STATUS, RawStatus>::new(&mut s))? };
         Ok(Status { free: s.avail, delay: s.delay.max(0) as u64 })
     }
 
@@ -336,7 +337,7 @@ impl Pcm {
         };
         // SAFETY: the request's structure, which the kernel reads and
         // completes.
-        unsafe { ioctl(self.fd(), SW_PARAMS, &mut p as *mut SwParams as usize)? };
+        unsafe { ioctl(&self.file, Updater::<SW_PARAMS, SwParams>::new(&mut p))? };
         Ok(())
     }
 
@@ -345,9 +346,11 @@ impl Pcm {
     /// (capture).
     pub fn wait(&self, ms: i32) -> io::Result<bool> {
         let events = match self.stream {
-            Stream::Playback => POLLOUT,
-            Stream::Capture => POLLIN,
+            Stream::Playback => PollFlags::OUT,
+            Stream::Capture => PollFlags::IN,
         };
-        poll(self.fd(), events, ms).map(|e| e & events != 0)
+        let mut fds = [PollFd::new(&self.file, events)];
+        poll(&mut fds, guest_sys::poll_timeout(ms).as_ref())?;
+        Ok(fds[0].revents().intersects(events))
     }
 }

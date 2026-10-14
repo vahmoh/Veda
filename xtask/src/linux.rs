@@ -97,13 +97,13 @@ fn renderer_source() -> Result<PathBuf> {
 fn follow_renderer(dir: &Path) -> Result {
     let info = dir.join("meson-info").join("intro-buildoptions.json");
     let text = std::fs::read_to_string(&info).map_err(|e| format!("reading {}: {e}", info.display()))?;
-    let options = vjson::parse(&text).map_err(|e| format!("{}: {e}", info.display()))?;
+    let options = serde_json::from_str::<serde_json::Value>(&text).map_err(|e| format!("{}: {e}", info.display()))?;
     let configured = options
         .as_array()
         .into_iter()
         .flatten()
-        .find(|option| option.get("name").and_then(vjson::Value::as_str) == Some("veda-renderer"))
-        .and_then(|option| option.get("value").and_then(vjson::Value::as_str))
+        .find(|option| option.get("name").and_then(serde_json::Value::as_str) == Some("veda-renderer"))
+        .and_then(|option| option.get("value").and_then(serde_json::Value::as_str))
         .ok_or_else(|| format!("{}: Mesa's build has no veda-renderer option", info.display()))?;
     let source = renderer_source()?;
     if Path::new(configured) == source {

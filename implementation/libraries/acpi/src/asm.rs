@@ -15,18 +15,26 @@ use crate::name::NameString;
 use crate::resource::{Gpio, Spi};
 use crate::value::Value;
 
-/// The bytes of `body` behind its PkgLength.
+/// The bytes of `body` behind its PkgLength, which counts its own bytes:
+/// one for the shortest bodies, two to four for longer ones (up to 256 MiB,
+/// the format's limit).
 pub fn pkg(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let n = body.len();
     if n + 1 < 0x40 {
         out.push((n + 1) as u8);
-    } else if n + 2 < 0x1000 {
-        let total = n + 2;
-        out.extend([0x40 | (total & 0xF) as u8, (total >> 4) as u8]);
     } else {
-        let total = n + 3;
-        out.extend([0x80 | (total & 0xF) as u8, (total >> 4) as u8, (total >> 12) as u8]);
+        let follow = if n + 2 < 1 << 12 {
+            1
+        } else if n + 3 < 1 << 20 {
+            2
+        } else {
+            3
+        };
+        let total = n + 1 + follow;
+        assert!(total < 1 << 28, "an AML package is shorter than 256 MiB");
+        out.push((follow as u8) << 6 | (total & 0xF) as u8);
+        out.extend((0..follow).map(|i| (total >> (4 + 8 * i)) as u8));
     }
     out.extend_from_slice(body);
     out

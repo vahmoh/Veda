@@ -17,9 +17,9 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use serde_json::Value;
 use vabi::RawHandle;
 use vagent::deepgram::{self, ServerMessage};
-use vjson::Value;
 use vnet::NetError;
 use vrt::object::Event;
 use vrt::sync::Mutex;

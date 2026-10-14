@@ -79,6 +79,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn calendar_dates_and_days_agree() {
+        use vrt::time::days_from_civil;
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(1600, 2, 29), -135_081);
+        // Every day of four centuries, through leap days and the years that
+        // skip them, there and back.
+        for days in 0..146_097 * 4 {
+            let d = DateTime::from_unix(days as u64 * 86_400);
+            assert_eq!(days_from_civil(d.year, d.month, d.day), days, "{d:?}");
+        }
+    }
+
+    #[test]
     fn durations() {
         assert_eq!(duration(0), "0:00");
         assert_eq!(duration(8_999), "0:08");

@@ -11,5 +11,8 @@ license.workspace = true
 [dependencies]
 libm = { workspace = true }
 
+[dev-dependencies]
+png = { workspace = true }
+
 [lints]
 workspace = true

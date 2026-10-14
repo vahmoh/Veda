@@ -6,6 +6,7 @@
 use alloc::format;
 use alloc::string::String;
 
+use vfiles::format::human_size;
 use vgfx::{Align, Color, Rect};
 use vproto::input::keys;
 use vui::{Cursor, Font, Icon, Ui};
@@ -226,7 +227,7 @@ fn card_info(e: &catalog::Entry) -> String {
     match (&e.meta, &e.thumb) {
         (Some(m), _) => format!("{} × {}  ·  {}", m.width, m.height, m.format.name()),
         (None, Thumb::Failed(why)) => why.clone(),
-        (None, _) if e.size > 0 => catalog::human_size(e.size),
+        (None, _) if e.size > 0 => human_size(e.size),
         _ => String::new(),
     }
 }

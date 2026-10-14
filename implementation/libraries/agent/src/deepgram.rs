@@ -21,7 +21,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vjson::{Value, object};
+use serde_json::{Value, json};
 
 /// The Voice Agent endpoint.
 pub const AGENT_URL: &str = "wss://agent.deepgram.com/v1/agent/converse";
@@ -87,95 +87,102 @@ pub fn is_flux(model: &str) -> bool {
 
 /// The `Settings` message that opens a conversation.
 pub fn settings(s: &SessionSettings) -> Value {
-    let mut listen = object! {
-        "type" => "deepgram",
-        "version" => if is_flux(&s.listen_model) { "v2" } else { "v1" },
-        "model" => s.listen_model.as_str(),
-    };
+    let mut listen = json!({
+        "type": "deepgram",
+        "version": if is_flux(&s.listen_model) { "v2" } else { "v1" },
+        "model": s.listen_model.as_str(),
+    });
     if !is_flux(&s.listen_model) {
-        listen.set("language", "en");
-        listen.set("smart_format", true);
+        listen["language"] = json!("en");
+        listen["smart_format"] = json!(true);
     }
     if !s.keyterms.is_empty() {
-        listen.set("keyterms", s.keyterms.clone());
+        listen["keyterms"] = json!(s.keyterms);
     }
-    let mut speak = object! { "type" => "deepgram", "model" => s.voice.as_str() };
+    let mut speak = json!({ "type": "deepgram", "model": s.voice.as_str() });
     if (s.speed - 1.0).abs() > 0.01 {
-        speak.set("speed", s.speed.clamp(0.7, 1.5));
+        speak["speed"] = speed(s.speed);
     }
-    let mut agent = object! {
-        "listen" => object! { "provider" => listen },
-        "think" => object! {
-            "provider" => object! {
-                "type" => s.think_provider.as_str(),
-                "model" => s.think_model.as_str(),
-                "temperature" => 0.7,
+    let mut agent = json!({
+        "listen": { "provider": listen },
+        "think": {
+            "provider": {
+                "type": s.think_provider.as_str(),
+                "model": s.think_model.as_str(),
+                "temperature": 0.7,
             },
-            "prompt" => s.prompt.as_str(),
-            "functions" => Value::Array(s.functions.clone()),
+            "prompt": s.prompt.as_str(),
+            "functions": s.functions,
         },
-        "speak" => object! { "provider" => speak },
-    };
+        "speak": { "provider": speak },
+    });
     if !s.history.is_empty() {
         let messages: Vec<Value> = s
             .history
             .iter()
-            .map(|(role, text)| object! { "type" => "History", "role" => role.as_str(), "content" => text.as_str() })
+            .map(|(role, text)| json!({ "type": "History", "role": role.as_str(), "content": text.as_str() }))
             .collect();
-        agent.set("context", object! { "messages" => messages });
+        agent["context"] = json!({ "messages": messages });
     }
     if let Some(g) = &s.greeting {
-        agent.set("greeting", g.as_str());
+        agent["greeting"] = json!(g.as_str());
     }
-    object! {
-        "type" => "Settings",
-        "tags" => vjson::array!["veda"],
+    json!({
+        "type": "Settings",
+        "tags": ["veda"],
         // Do not let Deepgram keep the user's conversations to improve its
         // models.
-        "mip_opt_out" => true,
-        "flags" => object! { "history" => true },
-        "audio" => object! {
-            "input" => object! { "encoding" => "linear16", "sample_rate" => INPUT_RATE },
-            "output" => object! { "encoding" => "linear16", "sample_rate" => OUTPUT_RATE, "container" => "none" },
+        "mip_opt_out": true,
+        "flags": { "history": true },
+        "audio": {
+            "input": { "encoding": "linear16", "sample_rate": INPUT_RATE },
+            "output": { "encoding": "linear16", "sample_rate": OUTPUT_RATE, "container": "none" },
         },
-        "agent" => agent,
-    }
+        "agent": agent,
+    })
 }
 
 /// The result of a function the agent asked for.
 pub fn function_response(id: &str, name: &str, content: &str) -> Value {
-    object! { "type" => "FunctionCallResponse", "id" => id, "name" => name, "content" => content }
+    json!({ "type": "FunctionCallResponse", "id": id, "name": name, "content": content })
 }
 
 /// Text the agent should treat as the user's turn (Veda uses it for
 /// system notices such as an approval decision or a fired reminder).
 pub fn inject_user_message(content: &str) -> Value {
-    object! { "type" => "InjectUserMessage", "content" => content }
+    json!({ "type": "InjectUserMessage", "content": content })
 }
 
 /// Makes the agent say `message` verbatim (`interrupt` cuts in at once).
 pub fn inject_agent_message(message: &str, interrupt: bool) -> Value {
-    object! { "type" => "InjectAgentMessage", "message" => message, "behavior" => if interrupt { "interrupt" } else { "queue" } }
+    json!({ "type": "InjectAgentMessage", "message": message, "behavior": if interrupt { "interrupt" } else { "queue" } })
 }
 
 pub fn update_prompt(prompt: &str) -> Value {
-    object! { "type" => "UpdatePrompt", "prompt" => prompt }
+    json!({ "type": "UpdatePrompt", "prompt": prompt })
 }
 
-pub fn update_speak(voice: &str, speed: f32) -> Value {
-    let mut provider = object! { "type" => "deepgram", "model" => voice };
-    if (speed - 1.0).abs() > 0.01 {
-        provider.set("speed", speed.clamp(0.7, 1.5));
+pub fn update_speak(voice: &str, rate: f32) -> Value {
+    let mut provider = json!({ "type": "deepgram", "model": voice });
+    if (rate - 1.0).abs() > 0.01 {
+        provider["speed"] = speed(rate);
     }
-    object! { "type" => "UpdateSpeak", "speak" => object! { "provider" => provider } }
+    json!({ "type": "UpdateSpeak", "speak": { "provider": provider } })
+}
+
+/// A speaking rate (0.7 to 1.5) as Deepgram is sent it: the decimal it was
+/// set with (1.2), not the `f64` an `f32` widens to (1.2000000476837158).
+fn speed(rate: f32) -> Value {
+    let rate = rate.clamp(0.7, 1.5);
+    alloc::format!("{rate}").parse::<f64>().map_or(Value::Null, Value::from)
 }
 
 pub fn update_think(provider: &str, model: &str) -> Value {
-    object! { "type" => "UpdateThink", "think" => object! { "provider" => object! { "type" => provider, "model" => model } } }
+    json!({ "type": "UpdateThink", "think": { "provider": { "type": provider, "model": model } } })
 }
 
 pub fn keep_alive() -> Value {
-    object! { "type" => "KeepAlive" }
+    json!({ "type": "KeepAlive" })
 }
 
 /// A function the language model wants the agent to run.
@@ -192,9 +199,9 @@ pub struct FunctionCall {
 impl FunctionCall {
     /// The arguments parsed (an empty object if they are not a JSON object).
     pub fn args(&self) -> Value {
-        match vjson::parse(&self.arguments) {
+        match serde_json::from_str::<Value>(&self.arguments) {
             Ok(v @ Value::Object(_)) => v,
-            _ => Value::object(),
+            _ => json!({}),
         }
     }
 }
@@ -264,7 +271,7 @@ pub enum ServerMessage {
 }
 
 fn text(v: &Value, key: &str) -> String {
-    v.str(key).unwrap_or("").to_string()
+    v[key].as_str().unwrap_or("").to_string()
 }
 
 /// A duration in seconds (a number, or a number in a string).
@@ -278,13 +285,13 @@ fn seconds(v: &Value, key: &str) -> Option<f64> {
 
 /// Parses a JSON message from the Voice Agent API.
 pub fn parse_server_message(json: &str) -> Result<ServerMessage, String> {
-    let v = vjson::parse(json).map_err(|e| e.to_string())?;
-    let kind = v.str("type").ok_or("message without a type")?;
+    let v = serde_json::from_str::<Value>(json).map_err(|e| e.to_string())?;
+    let kind = v["type"].as_str().ok_or("message without a type")?;
     Ok(match kind {
         "Welcome" => ServerMessage::Welcome { request_id: text(&v, "request_id") },
         "SettingsApplied" => ServerMessage::SettingsApplied,
         "ConversationText" => ServerMessage::ConversationText {
-            role: v.str("role").and_then(Role::parse).ok_or("bad role")?,
+            role: v["role"].as_str().and_then(Role::parse).ok_or("bad role")?,
             content: text(&v, "content"),
         },
         "UserStartedSpeaking" => ServerMessage::UserStartedSpeaking,
@@ -317,7 +324,7 @@ pub fn parse_server_message(json: &str) -> Result<ServerMessage, String> {
         "LatencyReport" => {
             ServerMessage::LatencyReport { total: seconds(&v, "total_latency"), think: seconds(&v, "ttt_text_latency") }
         }
-        "History" => match v.str("role").and_then(Role::parse) {
+        "History" => match v["role"].as_str().and_then(Role::parse) {
             Some(role) => ServerMessage::History { role, content: text(&v, "content") },
             None => ServerMessage::Other { kind: "History".into() },
         },
@@ -356,8 +363,8 @@ pub struct Heard {
 
 /// Parses a `Results` message from streaming speech-to-text.
 pub fn parse_listen_result(json: &str) -> Option<Heard> {
-    let v = vjson::parse(json).ok()?;
-    if v.str("type") != Some("Results") {
+    let v = serde_json::from_str::<Value>(json).ok()?;
+    if v["type"].as_str() != Some("Results") {
         return None;
     }
     let text = v.pointer("/channel/alternatives/0/transcript")?.as_str()?.to_string();
@@ -375,19 +382,17 @@ pub fn speak_url(voice: &str) -> String {
 
 /// The body of a text-to-speech request.
 pub fn speak_body(text: &str) -> String {
-    object! { "text" => text }.to_string()
+    json!({ "text": text }).to_string()
 }
 
+/// What a URL's query component keeps as it is: RFC 3986's unreserved
+/// characters.
+const UNRESERVED: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+
+/// Percent-encodes `s` for a query component.
 fn encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+    percent_encoding::utf8_percent_encode(s, UNRESERVED).to_string()
 }
 
 /// A language model the agent can think with.
@@ -456,16 +461,16 @@ pub fn managed_provider(provider: &str) -> bool {
 
 /// Parses the think-model catalog, keeping models Deepgram runs itself.
 pub fn parse_think_models(json: &str) -> Vec<ThinkModel> {
-    let Ok(v) = vjson::parse(json) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return Vec::new() };
     v["models"]
         .as_array()
         .map(|ms| {
             ms.iter()
                 .filter_map(|m| {
-                    let id = m.str("id")?.to_string();
-                    let provider = m.str("provider")?.to_string();
+                    let id = m["id"].as_str()?.to_string();
+                    let provider = m["provider"].as_str()?.to_string();
                     managed_provider(&provider).then(|| ThinkModel {
-                        name: m.str("name").unwrap_or(&id).to_string(),
+                        name: m["name"].as_str().unwrap_or(&id).to_string(),
                         tier: tier(&id),
                         id,
                         provider,
@@ -490,20 +495,20 @@ pub struct Voice {
 
 /// Parses the model catalog: the English Aura-2 voices.
 pub fn parse_voices(json: &str) -> Vec<Voice> {
-    let Ok(v) = vjson::parse(json) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<Value>(json) else { return Vec::new() };
     let mut voices: Vec<Voice> = v["tts"]
         .as_array()
         .map(|ms| {
             ms.iter()
-                .filter(|m| m.str("architecture") == Some("aura-2"))
+                .filter(|m| m["architecture"].as_str() == Some("aura-2"))
                 .filter(|m| {
                     m["languages"]
                         .as_array()
                         .is_some_and(|l| l.iter().any(|x| matches!(x.as_str(), Some("en" | "en-US"))))
                 })
                 .filter_map(|m| {
-                    let id = m.str("canonical_name")?.to_string();
-                    let raw = m.str("name").unwrap_or(&id);
+                    let id = m["canonical_name"].as_str()?.to_string();
+                    let raw = m["name"].as_str().unwrap_or(&id);
                     let mut name = String::new();
                     let mut chars = raw.chars();
                     if let Some(c) = chars.next() {
@@ -517,7 +522,7 @@ pub fn parse_voices(json: &str) -> Vec<Voice> {
                     Some(Voice {
                         id,
                         name,
-                        accent: m["metadata"].str("accent").unwrap_or("").to_string(),
+                        accent: m["metadata"]["accent"].as_str().unwrap_or("").to_string(),
                         description: tags.join(", "),
                     })
                 })
@@ -548,9 +553,7 @@ mod tests {
             think_provider: "open_ai".into(),
             think_model: "gpt-4.1-mini".into(),
             prompt: "You are Veda.".into(),
-            functions: vec![
-                object! { "name" => "open_app", "description" => "Opens an app", "parameters" => object! {} },
-            ],
+            functions: vec![json!({ "name": "open_app", "description": "Opens an app", "parameters": {} })],
             voice: "aura-2-helena-en".into(),
             speed: 1.0,
             history: vec![(Role::User, "Hi".into()), (Role::Assistant, "Hello!".into())],
@@ -561,7 +564,7 @@ mod tests {
     #[test]
     fn builds_the_settings_message() {
         let v = settings(&sample());
-        assert_eq!(v.str("type"), Some("Settings"));
+        assert_eq!(v["type"].as_str(), Some("Settings"));
         assert_eq!(v["mip_opt_out"].as_bool(), Some(true));
         assert_eq!(v.pointer("/audio/input/sample_rate").and_then(Value::as_u64), Some(16_000));
         assert_eq!(v.pointer("/audio/output/sample_rate").and_then(Value::as_u64), Some(24_000));
@@ -584,6 +587,9 @@ mod tests {
         assert_eq!(v.pointer("/agent/listen/provider/version").and_then(Value::as_str), Some("v1"));
         assert_eq!(v.pointer("/agent/listen/provider/language").and_then(Value::as_str), Some("en"));
         assert!((v.pointer("/agent/speak/provider/speed").and_then(Value::as_f64).unwrap() - 1.2).abs() < 1e-6);
+        // As it was set, not as an `f32` widens.
+        assert!(v.to_string().contains(r#""speed":1.2,"#) || v.to_string().contains(r#""speed":1.2}"#));
+        assert!(update_speak("aura-2-thalia-en", 0.85).to_string().contains(r#""speed":0.85"#));
         assert!(v.pointer("/agent/context").is_none());
         assert_eq!(v.pointer("/agent/greeting").and_then(Value::as_str), Some("Hi there"));
     }

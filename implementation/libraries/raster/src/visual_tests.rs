@@ -6,65 +6,20 @@
 //! Run with `cargo test -p vraster -- --ignored --nocapture`; the image is written to
 //! `target/agents/vfont/samples/vraster_shapes.png` (relative to the workspace root).
 
-use alloc::vec;
 use alloc::vec::Vec;
 use std::string::String;
 
 use crate::*;
 
-/// Minimal PNG encoder (RGB8, stored deflate blocks).
+/// The picture (RGB, 8 bits a channel) as a PNG file.
 pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Vec<u8> {
-    fn crc32(data: &[u8]) -> u32 {
-        let mut table = [0u32; 256];
-        for (i, t) in table.iter_mut().enumerate() {
-            let mut c = i as u32;
-            for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-            }
-            *t = c;
-        }
-        let mut crc = 0xFFFF_FFFFu32;
-        for &b in data {
-            crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
-        }
-        crc ^ 0xFFFF_FFFF
-    }
-    fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
-        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        let mut body = Vec::with_capacity(4 + data.len());
-        body.extend_from_slice(tag);
-        body.extend_from_slice(data);
-        out.extend_from_slice(&body);
-        out.extend_from_slice(&crc32(&body).to_be_bytes());
-    }
-    let stride = width as usize * 3;
-    let mut raw = Vec::with_capacity((stride + 1) * height as usize);
-    for y in 0..height as usize {
-        raw.push(0);
-        raw.extend_from_slice(&rgb[y * stride..(y + 1) * stride]);
-    }
-    let mut z = vec![0x78, 0x01];
-    let chunks: Vec<&[u8]> = raw.chunks(65_535).collect();
-    for (i, c) in chunks.iter().enumerate() {
-        z.push(if i + 1 == chunks.len() { 1 } else { 0 });
-        z.extend_from_slice(&(c.len() as u16).to_le_bytes());
-        z.extend_from_slice(&(!(c.len() as u16)).to_le_bytes());
-        z.extend_from_slice(c);
-    }
-    let (mut a, mut b) = (1u32, 0u32);
-    for &v in &raw {
-        a = (a + v as u32) % 65_521;
-        b = (b + a) % 65_521;
-    }
-    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
-    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
-    chunk(&mut out, b"IHDR", &ihdr);
-    chunk(&mut out, b"IDAT", &z);
-    chunk(&mut out, b"IEND", &[]);
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(rgb).unwrap();
+    writer.finish().unwrap();
     out
 }
 

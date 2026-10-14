@@ -48,6 +48,45 @@ mod tests {
     }
 
     #[test]
+    fn resizing_keeps_colours_and_premultiplication() {
+        // A uniform picture keeps its colour exactly, shrunk or grown.
+        let flat = Bitmap::filled(97, 61, 0xFFC8_6432);
+        for (w, h) in [(13, 9), (200, 150), (97, 30), (1, 1)] {
+            let r = flat.resized(w, h);
+            assert_eq!((r.width, r.height), (w, h));
+            assert!(r.pixels.iter().all(|&p| p == 0xFFC8_6432), "{w}x{h}");
+        }
+        // A gradient keeps its direction: brighter to the right, the same
+        // down each column.
+        let mut ramp = Bitmap::new(64, 16);
+        for (i, p) in ramp.pixels.iter_mut().enumerate() {
+            *p = 0xFF00_0000 | (i % 64 * 4) as u32;
+        }
+        for (w, h) in [(16, 4), (100, 20)] {
+            let r = ramp.resized(w, h);
+            let at = |x: i32, y: i32| r.pixels[(y * w + x) as usize];
+            assert!((1..w).all(|x| at(x, 0) >= at(x - 1, 0)) && at(w - 1, 0) > at(0, 0), "{w}x{h}");
+            assert!((0..w).all(|x| (1..h).all(|y| at(x, y) == at(x, 0))), "{w}x{h}");
+        }
+        // Opaque white beside transparency: no channel exceeds the alpha.
+        let mut half = Bitmap::new(16, 4);
+        for (i, p) in half.pixels.iter_mut().enumerate() {
+            if i % 16 < 8 {
+                *p = 0xFFFF_FFFF;
+            }
+        }
+        for (w, h) in [(3, 1), (40, 7)] {
+            for p in half.resized(w, h).pixels {
+                assert!([16, 8, 0].iter().all(|s| (p >> s) & 0xFF <= p >> 24), "{p:08x}");
+            }
+        }
+        // Nothing to scale, or nothing to scale to.
+        assert!(Bitmap::new(0, 5).resized(4, 4).pixels.iter().all(|&p| p == 0));
+        assert!(flat.resized(0, 3).pixels.is_empty());
+        assert!(flat.resized(-2, 3).pixels.is_empty());
+    }
+
+    #[test]
     fn rectangle_containment() {
         let a = Rect::new(10, 10, 100, 50);
         assert!(a.contains_rect(&a));

@@ -35,8 +35,8 @@
 //! * [`decode`] / [`decode_with`] decode any supported format; [`decode_lenient`] also accepts
 //!   files whose only fault is a checksum, and says so.
 //! * [`read_info`] returns dimensions and alpha information without decoding pixels.
-//! * [`resize`], [`thumbnail`] and [`crop`] scale and cut images; [`apply_orientation`] and the
-//!   rotations turn them.
+//! * [`resize`], [`thumbnail`], [`cover`] and [`crop`] scale and cut images; [`apply_orientation`]
+//!   and the rotations turn them.
 //!
 //! # Robustness
 //!
@@ -68,8 +68,8 @@ pub use encode::{JpegOptions, Subsampling, encode_jpeg, encode_png, encode_qoi};
 pub use error::ImageError;
 pub use image::{Image, Orientation};
 pub use ops::{
-    Filter, apply_orientation, crop, fit_size, flip_horizontal, flip_vertical, resize, rotate90, rotate180, rotate270,
-    thumbnail,
+    Filter, apply_orientation, cover, crop, fit_size, flip_horizontal, flip_vertical, resize, rotate90, rotate180,
+    rotate270, thumbnail,
 };
 
 /// Default maximum width or height accepted by the decoders.

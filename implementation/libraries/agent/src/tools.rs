@@ -15,7 +15,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vjson::{Value, object};
+use serde::Serialize;
+use serde_json::{Value, json};
 
 /// How much an action can affect the user (the same scale as
 /// `vproto::agent::Risk`).
@@ -55,35 +56,35 @@ pub const fn choice<'a>(name: &'a str, description: &'a str, required: bool, cho
 
 /// The JSON schema of a list of parameters.
 pub fn schema(params: &[P]) -> Value {
-    let mut props = vjson::Map::new();
+    let mut props = serde_json::Map::new();
     let mut required = Vec::new();
     for p in params {
         let kind = match p.kind {
             "integer" | "number" | "boolean" | "object" | "array" => p.kind,
             _ => "string",
         };
-        let mut s = object! { "type" => kind, "description" => p.description };
+        let mut s = json!({ "type": kind, "description": p.description });
         // Lists are lists of text (file names, paths).
         if kind == "array" {
-            s.set("items", object! { "type" => "string" });
+            s["items"] = json!({ "type": "string" });
         }
         if !p.choices.is_empty() {
-            s.set("enum", p.choices.iter().map(|c| Value::from(*c)).collect::<Vec<_>>());
+            s["enum"] = json!(p.choices.iter().map(|c| Value::from(*c)).collect::<Vec<_>>());
         }
-        props.insert(p.name, s);
+        props.insert(p.name.into(), s);
         if p.required {
             required.push(Value::from(p.name));
         }
     }
-    object! { "type" => "object", "properties" => props, "required" => required }
+    json!({ "type": "object", "properties": props, "required": required })
 }
 
 /// One function definition. `defer` holds the call until the user has
 /// finished speaking (for actions with effects).
 pub fn function(name: &str, description: &str, params: &[P], defer: bool) -> Value {
-    let mut f = object! { "name" => name, "description" => description, "parameters" => schema(params) };
+    let mut f = json!({ "name": name, "description": description, "parameters": schema(params) });
     if defer {
-        f.set("defer_until_eot", true);
+        f["defer_until_eot"] = json!(true);
     }
     f
 }
@@ -301,15 +302,15 @@ pub fn definitions() -> Vec<Value> {
 /// The risk of a call of a system function (`exists` tells whether a path
 /// exists, to tell creating a file from overwriting one).
 pub fn risk(name: &str, args: &Value, exists: &dyn Fn(&str) -> bool) -> Risk {
-    let op = args.str("operation").unwrap_or("");
+    let op = args["operation"].as_str().unwrap_or("");
     match name {
         names::FILES => match op {
             // What is deleted can be restored from the Trash, until the
             // Trash is emptied.
             "delete" => Risk::Sensitive,
             "empty_trash" => Risk::Destructive,
-            "write" if args.str("path").is_some_and(exists) => Risk::Sensitive,
-            "move" | "rename" if args.str("to").is_some_and(exists) => Risk::Destructive,
+            "write" if args["path"].as_str().is_some_and(exists) => Risk::Sensitive,
+            "move" | "rename" if args["to"].as_str().is_some_and(exists) => Risk::Destructive,
             _ => Risk::Routine,
         },
         names::WIFI if matches!(op, "disconnect" | "off") => Risk::Sensitive,
@@ -322,9 +323,9 @@ pub fn risk(name: &str, args: &Value, exists: &dyn Fn(&str) -> bool) -> Risk {
 
 /// How an action reads in an approval request: (action, detail).
 pub fn describe(name: &str, args: &Value) -> (String, String) {
-    let op = args.str("operation").unwrap_or("");
-    let path = args.str("path").unwrap_or("");
-    let to = args.str("to").unwrap_or("");
+    let op = args["operation"].as_str().unwrap_or("");
+    let path = args["path"].as_str().unwrap_or("");
+    let to = args["to"].as_str().unwrap_or("");
     let quoted = |p: &str| alloc::format!("\u{201c}{}\u{201d}", p.rsplit('/').next().unwrap_or(p));
     match (name, op) {
         (names::FILES, "delete") => (
@@ -359,7 +360,7 @@ pub fn describe(name: &str, args: &Value) -> (String, String) {
             ("Shut down the computer".into(), "Unsaved work in open applications will be lost.".into())
         }
         (names::TASKS, "end") => (
-            match (args.str("name"), args["id"].as_u64()) {
+            match (args["name"].as_str(), args["id"].as_u64()) {
                 (Some(n), Some(id)) => alloc::format!("End {n} (id {id})"),
                 (Some(n), None) => alloc::format!("End {n}"),
                 (None, Some(id)) => alloc::format!("End program {id}"),
@@ -383,9 +384,9 @@ pub fn action_schema(params: &[(String, String, String, bool, Vec<String>)]) -> 
             && let Some(prop) = s.get("properties").and_then(|p| p.get(n)).cloned()
         {
             let mut prop = prop;
-            prop.set("enum", choices.iter().map(|c| Value::from(c.as_str())).collect::<Vec<_>>());
+            prop["enum"] = json!(choices.iter().map(|c| Value::from(c.as_str())).collect::<Vec<_>>());
             if let Some(Value::Object(props)) = s.as_object_mut().and_then(|o| o.get_mut("properties")) {
-                props.insert(n.as_str(), prop);
+                props.insert(n.clone(), prop);
             }
         }
     }
@@ -401,21 +402,35 @@ pub fn signature(name: &str, params: &[(String, bool)]) -> String {
 
 /// Whether `name` is one of the system functions.
 pub fn is_system(name: &str) -> bool {
-    definitions().iter().any(|d| d.str("name") == Some(name))
+    definitions().iter().any(|d| d["name"].as_str() == Some(name))
+}
+
+/// What a call returns to the language model: whether it worked, then its
+/// result or why it failed.
+#[derive(Serialize)]
+struct Outcome<'a> {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+impl Outcome<'_> {
+    fn text(&self) -> String {
+        // Values and strings always serialize.
+        serde_json::to_string(self).unwrap_or_default()
+    }
 }
 
 /// A string for the language model saying a call failed.
 pub fn error(message: &str) -> String {
-    object! { "ok" => false, "error" => message }.to_string()
+    Outcome { ok: false, result: None, error: Some(message) }.text()
 }
 
 /// A string for the language model with a successful result.
 pub fn ok(result: Value) -> String {
-    let mut v = object! { "ok" => true };
-    if !result.is_null() {
-        v.set("result", result);
-    }
-    v.to_string()
+    Outcome { ok: true, result: Some(&result).filter(|r| !r.is_null()), error: None }.text()
 }
 
 #[cfg(test)]
@@ -427,19 +442,19 @@ mod tests {
     fn definitions_are_valid_function_schemas() {
         let defs = definitions();
         assert_eq!(defs.len(), 17);
-        let mut names: Vec<&str> = defs.iter().filter_map(|d| d.str("name")).collect();
+        let mut names: Vec<&str> = defs.iter().filter_map(|d| d["name"].as_str()).collect();
         names.sort();
         names.dedup();
         assert_eq!(names.len(), 17, "names must be unique");
         for d in &defs {
-            assert!(d.str("description").is_some_and(|s| s.len() > 20));
+            assert!(d["description"].as_str().is_some_and(|s| s.len() > 20));
             assert_eq!(d.pointer("/parameters/type").and_then(Value::as_str), Some("object"));
             let required = d.pointer("/parameters/required").and_then(Value::as_array).unwrap();
             for r in required {
                 assert!(d.pointer(&alloc::format!("/parameters/properties/{}", r.as_str().unwrap())).is_some());
             }
         }
-        let files = defs.iter().find(|d| d.str("name") == Some("files")).unwrap();
+        let files = defs.iter().find(|d| d["name"].as_str() == Some("files")).unwrap();
         assert_eq!(files["defer_until_eot"].as_bool(), Some(true));
         assert!(files.pointer("/parameters/properties/operation/enum").and_then(Value::as_array).unwrap().len() > 5);
         assert!(is_system("files") && !is_system("open_file"));
@@ -449,28 +464,27 @@ mod tests {
     fn classifies_risk() {
         let exists = |p: &str| p == "~/Documents/a.txt";
         let r = |name: &str, args: Value| risk(name, &args, &exists);
-        assert_eq!(r("files", object! { "operation" => "read", "path" => "~/Documents/a.txt" }), Risk::Routine);
+        assert_eq!(r("files", json!({ "operation": "read", "path": "~/Documents/a.txt" })), Risk::Routine);
         // Deleted items can be restored from the Trash; emptying it is for good.
-        assert_eq!(r("files", object! { "operation" => "delete", "path" => "x" }), Risk::Sensitive);
-        assert_eq!(r("files", object! { "operation" => "empty_trash" }), Risk::Destructive);
-        assert_eq!(r("files", object! { "operation" => "restore", "path" => "~/Documents/a.txt" }), Risk::Routine);
-        assert_eq!(r("files", object! { "operation" => "list_trash" }), Risk::Routine);
-        assert_eq!(r("files", object! { "operation" => "write", "path" => "~/Documents/new.txt" }), Risk::Routine);
-        assert_eq!(r("files", object! { "operation" => "write", "path" => "~/Documents/a.txt" }), Risk::Sensitive);
+        assert_eq!(r("files", json!({ "operation": "delete", "path": "x" })), Risk::Sensitive);
+        assert_eq!(r("files", json!({ "operation": "empty_trash" })), Risk::Destructive);
+        assert_eq!(r("files", json!({ "operation": "restore", "path": "~/Documents/a.txt" })), Risk::Routine);
+        assert_eq!(r("files", json!({ "operation": "list_trash" })), Risk::Routine);
+        assert_eq!(r("files", json!({ "operation": "write", "path": "~/Documents/new.txt" })), Risk::Routine);
+        assert_eq!(r("files", json!({ "operation": "write", "path": "~/Documents/a.txt" })), Risk::Sensitive);
         assert_eq!(
-            r("files", object! { "operation" => "rename", "path" => "b", "to" => "~/Documents/a.txt" }),
+            r("files", json!({ "operation": "rename", "path": "b", "to": "~/Documents/a.txt" })),
             Risk::Destructive
         );
-        assert_eq!(r("system", object! { "operation" => "shutdown" }), Risk::Destructive);
-        assert_eq!(r("system", object! { "operation" => "info" }), Risk::Routine);
-        assert_eq!(r("wifi", object! { "operation" => "off" }), Risk::Sensitive);
-        assert_eq!(r("memory", object! { "operation" => "forget_all" }), Risk::Destructive);
-        assert_eq!(r("open_app", object! { "app" => "editor" }), Risk::Routine);
-        let (action, detail) =
-            describe("files", &object! { "operation" => "delete", "path" => "~/Documents/report.txt" });
+        assert_eq!(r("system", json!({ "operation": "shutdown" })), Risk::Destructive);
+        assert_eq!(r("system", json!({ "operation": "info" })), Risk::Routine);
+        assert_eq!(r("wifi", json!({ "operation": "off" })), Risk::Sensitive);
+        assert_eq!(r("memory", json!({ "operation": "forget_all" })), Risk::Destructive);
+        assert_eq!(r("open_app", json!({ "app": "editor" })), Risk::Routine);
+        let (action, detail) = describe("files", &json!({ "operation": "delete", "path": "~/Documents/report.txt" }));
         assert_eq!(action, "Move \u{201c}report.txt\u{201d} to the Trash");
         assert!(detail.contains("~/Documents/report.txt"));
-        assert_eq!(describe("files", &object! { "operation" => "empty_trash" }).0, "Empty the Trash");
+        assert_eq!(describe("files", &json!({ "operation": "empty_trash" })).0, "Empty the Trash");
     }
 
     #[test]

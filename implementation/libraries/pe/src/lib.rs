@@ -320,10 +320,12 @@ impl<'a> PeImage<'a> {
 
     /// Translates an RVA into a slice of file bytes, if it is backed by data.
     fn rva_to_file(&self, rva: u32, len: u32) -> Option<&'a [u8]> {
+        // Sums that overflow belong to no section (a malformed image).
+        let end = rva.checked_add(len)?;
         for s in self.sections() {
-            if rva >= s.virtual_address && rva + len <= s.virtual_address + s.raw_size {
-                let off = (s.raw_offset + (rva - s.virtual_address)) as usize;
-                return self.data.get(off..off + len as usize);
+            if rva >= s.virtual_address && s.virtual_address.checked_add(s.raw_size).is_some_and(|e| end <= e) {
+                let off = s.raw_offset.checked_add(rva - s.virtual_address)? as usize;
+                return self.data.get(off..off.checked_add(len as usize)?);
             }
         }
         None
@@ -399,8 +401,9 @@ impl Iterator for Relocations<'_> {
                 let e = u16::from_le_bytes([self.entries[0], self.entries[1]]);
                 self.entries = &self.entries[2..];
                 match e >> 12 {
-                    0 => continue,                                             // ABSOLUTE: padding
-                    10 => return Some(Ok(self.page_rva + (e & 0xfff) as u32)), // DIR64
+                    0 => continue, // ABSOLUTE: padding
+                    // DIR64
+                    10 => return Some(self.page_rva.checked_add((e & 0xfff) as u32).ok_or(PeError::BadRelocation)),
                     _ => return Some(Err(PeError::BadRelocation)),
                 }
             }
@@ -477,5 +480,20 @@ mod tests {
         bytes[0x84] = 0x4c; // i386 machine
         bytes[0x85] = 0x01;
         assert_eq!(PeImage::parse_for(&bytes, amd64::MACHINE).unwrap_err(), PeError::WrongMachine("x86-64"));
+    }
+
+    #[test]
+    fn sums_past_the_address_space_are_errors() {
+        // A base relocation directory at the top of the address space.
+        let mut bytes = tiny_image();
+        let reloc = 0x84 + 20 + 112 + 5 * 8;
+        bytes[reloc..reloc + 4].copy_from_slice(&0xFFFF_FF00u32.to_le_bytes());
+        bytes[reloc + 4..reloc + 8].copy_from_slice(&0x200u32.to_le_bytes());
+        let pe = PeImage::parse_for(&bytes, amd64::MACHINE).unwrap();
+        assert!(matches!(pe.relocations(), Err(PeError::BadRelocation)));
+        // A relocation block whose page (unaligned, as nothing checks) and
+        // offset add up past it.
+        let mut r = Relocations { data: &[], page_rva: u32::MAX, entries: &[0xff, 0xaf] };
+        assert_eq!(r.next(), Some(Err(PeError::BadRelocation)));
     }
 }

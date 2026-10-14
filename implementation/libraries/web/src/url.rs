@@ -1,10 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! URLs for the web clients: `http`, `https`, `ws` and `wss`.
+//! URLs for the web clients: `http`, `https`, `ws` and `wss`, and the
+//! references a server redirects to (RFC 3986).
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 use crate::WebError;
 
@@ -21,8 +25,10 @@ pub struct Url {
 }
 
 impl Url {
-    /// Parses `scheme://host[:port][/path][?query]`. User information and
-    /// fragments are not accepted (they have no use for these clients).
+    /// Parses `scheme://host[:port][/path][?query][#fragment]`. The fragment
+    /// is dropped: it is never sent to a server. User information is not
+    /// accepted (these clients have no use for it, and it hides the host
+    /// from whoever reads the URL).
     pub fn parse(text: &str) -> Result<Url, WebError> {
         let (scheme, rest) = text.split_once("://").ok_or(WebError::BadUrl)?;
         let scheme = scheme.to_ascii_lowercase();
@@ -31,11 +37,12 @@ impl Url {
             "https" | "wss" => 443,
             _ => return Err(WebError::BadUrl),
         };
+        let rest = rest.split_once('#').map_or(rest, |(before, _)| before);
         let (authority, path) = match rest.find(['/', '?']) {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
         };
-        if authority.is_empty() || authority.contains('@') || path.contains('#') {
+        if authority.is_empty() || authority.contains('@') {
             return Err(WebError::BadUrl);
         }
         let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
@@ -59,10 +66,46 @@ impl Url {
             return Err(WebError::BadUrl);
         }
         let path = if path.starts_with('?') { format!("/{path}") } else { path.to_string() };
-        if path.chars().any(|c| c.is_whitespace() || c.is_control()) {
-            return Err(WebError::BadUrl);
-        }
+        check_path(&path)?;
         Ok(Url { scheme, host: host.to_ascii_lowercase(), port, path })
+    }
+
+    /// The URL that `reference` (a redirect's `Location`, say) names
+    /// relative to this one, resolved as RFC 3986 says (section 5.2): a URL
+    /// of its own, `//host/path` (this scheme), `/path` (this server), a
+    /// path relative to this one's directory, or `?query` (this path). Dot
+    /// segments are removed; the fragment is dropped.
+    pub fn join(&self, reference: &str) -> Result<Url, WebError> {
+        let reference = reference.trim();
+        let reference = reference.split_once('#').map_or(reference, |(before, _)| before);
+        if has_scheme(reference) {
+            return Url::parse(reference);
+        }
+        if let Some(network_path) = reference.strip_prefix("//") {
+            return Url::parse(&format!("{}://{network_path}", self.scheme));
+        }
+        let (base_path, base_query) = match self.path.split_once('?') {
+            Some((path, query)) => (path, Some(query)),
+            None => (self.path.as_str(), None),
+        };
+        let (path, query) = match reference.split_once('?') {
+            Some((path, query)) => (path, Some(query)),
+            None => (reference, None),
+        };
+        let (path, query) = if path.is_empty() {
+            (base_path.to_string(), query.or(base_query))
+        } else if path.starts_with('/') {
+            (remove_dot_segments(path), query)
+        } else {
+            let directory = &base_path[..base_path.rfind('/').map_or(0, |i| i + 1)];
+            (remove_dot_segments(&format!("{directory}{path}")), query)
+        };
+        let path = match query {
+            Some(query) => format!("{path}?{query}"),
+            None => path,
+        };
+        check_path(&path)?;
+        Ok(Url { path, ..self.clone() })
     }
 
     /// True for `https` and `wss`.
@@ -93,17 +136,49 @@ impl core::fmt::Display for Url {
     }
 }
 
-/// Percent-encodes everything except unreserved characters (RFC 3986).
-pub fn encode_component(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
+/// A request target may not hold white space or control characters (they
+/// would break the request line).
+fn check_path(path: &str) -> Result<(), WebError> {
+    if path.chars().any(|c| c.is_whitespace() || c.is_control()) { Err(WebError::BadUrl) } else { Ok(()) }
+}
+
+/// Whether a reference starts with a scheme (`ALPHA *( ALPHA / DIGIT / "+"
+/// / "-" / "." ) ":"`), which makes it a URL of its own.
+fn has_scheme(reference: &str) -> bool {
+    let scheme = reference.split_once(':').map_or("", |(scheme, _)| scheme);
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// An absolute path without its `.` and `..` segments (RFC 3986, section
+/// 5.2.4); `..` above the root stays at the root.
+fn remove_dot_segments(path: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut segments = path.strip_prefix('/').unwrap_or(path).split('/').peekable();
+    while let Some(segment) = segments.next() {
+        let last = segments.peek().is_none();
+        match segment {
+            "." | ".." => {
+                if segment == ".." {
+                    kept.pop();
+                }
+                // A path ending in a dot segment names a directory.
+                if last {
+                    kept.push("");
+                }
+            }
+            segment => kept.push(segment),
         }
     }
-    out
+    format!("/{}", kept.join("/"))
+}
+
+/// What a URL component keeps as it is: RFC 3986's unreserved characters.
+const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+
+/// Percent-encodes everything except unreserved characters (RFC 3986).
+pub fn encode_component(s: &str) -> String {
+    utf8_percent_encode(s, UNRESERVED).to_string()
 }
 
 #[cfg(test)]
@@ -126,13 +201,18 @@ mod tests {
         assert_eq!((u.host.as_str(), u.port, u.path.as_str()), ("::1", 81, "/?x=1"));
         assert_eq!(u.host_header(), "[::1]:81");
         assert_eq!(u.to_string(), "http://[::1]:81/?x=1");
+        let u = Url::parse("http://[2001:db8::1]:8080/x").unwrap();
+        assert_eq!((u.host.as_str(), u.port, u.host_header().as_str()), ("2001:db8::1", 8080, "[2001:db8::1]:8080"));
+        // The fragment is not part of what is fetched.
+        assert_eq!(Url::parse("http://example.com:8080/a/b?q=1#frag").unwrap().path, "/a/b?q=1");
+        assert_eq!(Url::parse("http://h#f").unwrap().path, "/");
         for bad in [
             "ftp://x",
             "http://",
             "http://a b/",
             "http://u@h/",
             "http://h:99999/",
-            "http://h/#f",
+            "http://h/a b",
             "nourl",
             "http://h:0/",
         ] {
@@ -141,11 +221,55 @@ mod tests {
     }
 
     #[test]
+    fn resolves_references() {
+        // RFC 3986, section 5.4: its examples whose results are HTTP URLs.
+        let base = Url::parse("http://a/b/c/d;p?q").unwrap();
+        for (reference, target) in [
+            ("g", "http://a/b/c/g"),
+            ("./g", "http://a/b/c/g"),
+            ("g/", "http://a/b/c/g/"),
+            ("/g", "http://a/g"),
+            ("//g", "http://g/"),
+            ("?y", "http://a/b/c/d;p?y"),
+            ("g?y", "http://a/b/c/g?y"),
+            ("#s", "http://a/b/c/d;p?q"),
+            ("g#s", "http://a/b/c/g"),
+            (";x", "http://a/b/c/;x"),
+            ("", "http://a/b/c/d;p?q"),
+            (".", "http://a/b/c/"),
+            ("./", "http://a/b/c/"),
+            ("..", "http://a/b/"),
+            ("../", "http://a/b/"),
+            ("../g", "http://a/b/g"),
+            ("../..", "http://a/"),
+            ("../../g", "http://a/g"),
+            ("../../../g", "http://a/g"),
+            ("/./g", "http://a/g"),
+            ("/../g", "http://a/g"),
+            ("g.", "http://a/b/c/g."),
+            ("..g", "http://a/b/c/..g"),
+            ("./../g", "http://a/b/g"),
+            ("./g/.", "http://a/b/c/g/"),
+            ("g/./h", "http://a/b/c/g/h"),
+            ("g/../h", "http://a/b/c/h"),
+            ("g;x=1/../y", "http://a/b/c/y"),
+            ("https://other.example:8443/x", "https://other.example:8443/x"),
+        ] {
+            assert_eq!(base.join(reference).unwrap().to_string(), target, "{reference}");
+        }
+        assert_eq!(base.join("ftp://a/"), Err(WebError::BadUrl));
+        assert_eq!(base.join("g h"), Err(WebError::BadUrl));
+        let secure = Url::parse("https://h:8443/a/b").unwrap();
+        assert_eq!(secure.join("//other/x").unwrap().to_string(), "https://other/x");
+        assert_eq!(secure.join("c").unwrap().to_string(), "https://h:8443/a/c");
+    }
+
+    #[test]
     fn encodes_query_components() {
         let u = Url::parse("https://api.deepgram.com/v1/speak")
             .unwrap()
             .with_query("model", "aura-2-thalia-en")
-            .with_query("q", "a b&c/é");
-        assert_eq!(u.path, "/v1/speak?model=aura-2-thalia-en&q=a%20b%26c%2F%C3%A9");
+            .with_query("q", "a b&c/é~-._");
+        assert_eq!(u.path, "/v1/speak?model=aura-2-thalia-en&q=a%20b%26c%2F%C3%A9~-._");
     }
 }

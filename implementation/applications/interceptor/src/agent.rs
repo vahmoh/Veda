@@ -23,7 +23,7 @@ use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::pursuit::State;
 use interceptor_game::session::{self, Mode, Phase, Quick};
 use num_traits::Float;
-use vui::agent::{self, Action, AgentServer, AppAgentInfo, Value, arg_bool, arg_opt_int, arg_opt_str, object};
+use vui::agent::{self, Action, AgentServer, AppAgentInfo, Value, arg_bool, arg_opt_int, arg_opt_str, json};
 
 pub use vui::agent::Registration as Link;
 
@@ -133,56 +133,53 @@ pub fn state(app: &App, in_front: bool) -> Value {
         Screen::Paused(_) => "paused",
         Screen::Results(_) => "results",
     };
-    let mut v = object! { "screen" => screen };
+    let mut v = json!({ "screen": screen });
     if app.in_play() {
-        v.set("play", play(app));
+        v["play"] = json!(play(app));
     }
     if let (Screen::Results(_), Some(r)) = (app.screen, app.result) {
         let o = r.outcome;
-        let mut res = object! {
-            "ending" => o.ending.title().to_lowercase(),
-            "caught" => o.ending.caught(),
-            "time" => career::clock(o.time),
-            "hits_landed" => o.hits,
-            "damage_taken_percent" => (o.damage * 100.0).round() as u32,
-            "score" => o.score,
-            "stars" => o.stars,
-            "new_best" => r.best,
-        };
+        let mut res = json!({
+            "ending": o.ending.title().to_lowercase(),
+            "caught": o.ending.caught(),
+            "time": career::clock(o.time),
+            "hits_landed": o.hits,
+            "damage_taken_percent": (o.damage * 100.0).round() as u32,
+            "score": o.score,
+            "stars": o.stars,
+            "new_best": r.best,
+        });
         if let Some(m) = r.mission {
-            res.set("mission", MISSIONS[m].name);
+            res["mission"] = json!(MISSIONS[m].name);
         }
-        v.set("results", res);
+        v["results"] = res;
     }
     if matches!(app.screen, Screen::Career(_) | Screen::Main(_) | Screen::Results(_)) {
         let missions: Vec<Value> = MISSIONS
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let mut e = object! { "mission" => m.name, "open" => app.save.unlocked(i) };
+                let mut e = json!({ "mission": m.name, "open": app.save.unlocked(i) });
                 if let Some(b) = app.save.best[i] {
-                    e.set("stars", b.stars);
-                    e.set("best_time", career::clock(b.time));
+                    e["stars"] = json!(b.stars);
+                    e["best_time"] = json!(career::clock(b.time));
                 }
                 e
             })
             .collect();
-        v.set("career", object! { "stars" => app.save.stars(), "of" => MISSIONS.len() * 3, "missions" => missions });
+        v["career"] = json!({ "stars": app.save.stars(), "of": MISSIONS.len() * 3, "missions": missions });
     }
     let s = &app.save.settings;
-    v.set(
-        "settings",
-        object! {
-            "sound_effects" => (s.effects * 100.0).round() as u32,
-            "music" => (s.music * 100.0).round() as u32,
-            "speed_units" => s.units.name(),
-            "camera" => VIEWS.iter().find(|x| x.1 == s.view).map_or("chase", |x| x.0),
-            "statistics" => s.stats.key(),
-            "full_screen" => s.fullscreen,
-        },
-    );
-    v.set("window_in_front", in_front);
-    v.set("controls", CONTROLS);
+    v["settings"] = json!({
+        "sound_effects": (s.effects * 100.0).round() as u32,
+        "music": (s.music * 100.0).round() as u32,
+        "speed_units": s.units.name(),
+        "camera": VIEWS.iter().find(|x| x.1 == s.view).map_or("chase", |x| x.0),
+        "statistics": s.stats.key(),
+        "full_screen": s.fullscreen,
+    });
+    v["window_in_front"] = in_front.into();
+    v["controls"] = json!(CONTROLS);
     v
 }
 
@@ -196,62 +193,62 @@ fn play(app: &App) -> Value {
         Mode::Showcase => String::from("showcase"),
     };
     let units = app.save.settings.units;
-    let mut v = object! {
-        "mode" => mode,
-        "time_of_day" => time_name(s.env().time),
-        "weather" => weather_name(s.env().weather),
-        "speed" => format!("{} {}", units.of(s.game.player().vehicle.speed().abs()).round() as u32, units.name()),
-        "siren" => s.game.player().siren,
-        "nitrous_percent" => (s.game.boost.level * 100.0) as u32,
-    };
+    let mut v = json!({
+        "mode": mode,
+        "time_of_day": time_name(s.env().time),
+        "weather": weather_name(s.env().weather),
+        "speed": format!("{} {}", units.of(s.game.player().vehicle.speed().abs()).round() as u32, units.name()),
+        "siren": s.game.player().siren,
+        "nitrous_percent": (s.game.boost.level * 100.0) as u32,
+    });
     match s.phase {
         Phase::Countdown(t) => {
-            v.set("starts_in_seconds", t.ceil() as u32);
+            v["starts_in_seconds"] = json!(t.ceil() as u32);
         }
         Phase::Driving => {}
         Phase::Over(_) => {
-            v.set("chase_over", true);
+            v["chase_over"] = json!(true);
         }
     }
     if let Some(c) = s.chase {
-        let mut chase = object! {
-            "time" => clock(c.time),
-            "suspect_distance_m" => c.gap.max(0.0).round() as i32,
-            "suspect_car_left_percent" => (c.integrity(&s.game) * 100.0).max(0.0).round() as u32,
-            "hits_landed" => c.hits,
-        };
+        let mut chase = json!({
+            "time": clock(c.time),
+            "suspect_distance_m": c.gap.max(0.0).round() as i32,
+            "suspect_car_left_percent": (c.integrity(&s.game) * 100.0).max(0.0).round() as u32,
+            "hits_landed": c.hits,
+        });
         if let Some(left) = s.time_left() {
-            chase.set("time_left", clock(left));
+            chase["time_left"] = json!(clock(left));
         }
         match c.state {
             State::Chasing { escaping, busting } => {
                 if escaping > 0.0 {
-                    chase.set("suspect_getting_away", true);
+                    chase["suspect_getting_away"] = json!(true);
                 }
                 if busting > 0.0 {
-                    chase.set("busting_percent", (busting / interceptor_game::pursuit::BUST_TIME * 100.0) as u32);
+                    chase["busting_percent"] = json!((busting / interceptor_game::pursuit::BUST_TIME * 100.0) as u32);
                 }
             }
             State::TakenDown => {
-                chase.set("ended", "taken down");
+                chase["ended"] = json!("taken down");
             }
             State::Busted => {
-                chase.set("ended", "busted");
+                chase["ended"] = json!("busted");
             }
             State::Escaped => {
-                chase.set("ended", "escaped");
+                chase["ended"] = json!("escaped");
             }
         }
-        v.set("chase", chase);
+        v["chase"] = chase;
     }
     if let Mode::Patrol { .. } = s.mode {
-        v.set("caught", s.arrests);
-        v.set("lost", s.escapes);
+        v["caught"] = json!(s.arrests);
+        v["lost"] = json!(s.escapes);
     }
     if let Some((words, age)) = &s.radio
         && *age < session::RADIO_SECS
     {
-        v.set("radio", words.as_str());
+        v["radio"] = json!(words.as_str());
     }
     v
 }
@@ -292,10 +289,10 @@ impl App {
     /// in front (play pauses whenever it is not).
     fn agent_play(&mut self, mode: Mode, in_front: bool) -> Value {
         self.play(mode);
-        let mut v = object! { "started" => true };
+        let mut v = json!({ "started": true });
         if !in_front {
             self.pause();
-            v.set("note", "Interceptor's window is not in front, so play waits, paused, until it is");
+            v["note"] = json!("Interceptor's window is not in front, so play waits, paused, until it is");
         }
         v
     }
@@ -322,8 +319,8 @@ impl App {
                     ));
                 }
                 let mut v = self.agent_play(Mode::Career(m), in_front);
-                v.set("mission", MISSIONS[m].name);
-                v.set("brief", MISSIONS[m].brief);
+                v["mission"] = json!(MISSIONS[m].name);
+                v["brief"] = json!(MISSIONS[m].brief);
                 Ok(v)
             }
             "quick_chase" => {
@@ -372,9 +369,9 @@ impl App {
                 }
                 if self.screen == Screen::Playing {
                     self.pause();
-                    Ok(object! { "paused" => true })
+                    Ok(json!({ "paused": true }))
                 } else {
-                    Ok(object! { "paused" => true, "note" => "it was already paused" })
+                    Ok(json!({ "paused": true, "note": "it was already paused" }))
                 }
             }
             "resume" => {
@@ -382,7 +379,7 @@ impl App {
                     return Err(format!("There is nothing to resume: Interceptor is {}", self.where_it_is()));
                 }
                 if self.screen == Screen::Playing {
-                    return Ok(object! { "paused" => false, "note" => "it was not paused" });
+                    return Ok(json!({ "paused": false, "note": "it was not paused" }));
                 }
                 if !in_front {
                     return Err("Interceptor's window is not in front, and play pauses whenever it is not: bring \
@@ -390,7 +387,7 @@ impl App {
                         .into());
                 }
                 self.resume();
-                Ok(object! { "paused" => false })
+                Ok(json!({ "paused": false }))
             }
             "restart" => {
                 let mode = match self.session.mode {
@@ -404,7 +401,7 @@ impl App {
             "quit_to_menu" => {
                 let abandoned = busy;
                 self.leave_play(Screen::Main(0));
-                Ok(object! { "screen" => "main_menu", "abandoned" => abandoned })
+                Ok(json!({ "screen": "main_menu", "abandoned": abandoned }))
             }
             "change_settings" => {
                 let s = &mut self.save.settings;
@@ -448,7 +445,7 @@ impl App {
                         .into());
                 }
                 self.store_save();
-                Ok(object! { "changed" => true })
+                Ok(json!({ "changed": true }))
             }
             other => Err(format!("Interceptor has no action called {other}")),
         }

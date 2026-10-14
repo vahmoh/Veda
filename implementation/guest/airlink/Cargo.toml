@@ -17,6 +17,7 @@ bench = false
 [dependencies]
 vradiolink = { workspace = true }
 guest-sys = { workspace = true }
+rustix = { workspace = true }
 guest-netlink = { workspace = true }
 
 [lints]

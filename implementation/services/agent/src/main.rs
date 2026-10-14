@@ -47,12 +47,12 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use serde_json::json;
 use vabi::{WaitItem, signals};
 use vagent::deepgram::{self, Role, ServerMessage};
 use vagent::gate::{self, EchoGate, Verdict};
 use vagent::prompt::{self, PromptContext};
 use vagent::tools;
-use vjson::object;
 use vproto::agent::{
     AgentConfig, AgentError, AgentEvent, AgentState, AgentStatus, ApprovalRequest, MemoryItem, ModelCatalog,
     Permission, Risk, UiLink, agent,
@@ -319,7 +319,7 @@ impl Agent {
     }
 
     /// The `Settings` message for a new conversation.
-    fn settings(&self) -> vjson::Value {
+    fn settings(&self) -> serde_json::Value {
         let c = self.config();
         deepgram::settings(&deepgram::SessionSettings {
             listen_model: c.listen_model.clone(),
@@ -395,7 +395,7 @@ impl Agent {
         }
     }
 
-    fn send(&mut self, v: &vjson::Value) {
+    fn send(&mut self, v: &serde_json::Value) {
         let failed = match &mut self.session {
             Some(s) => s.send(v).is_err(),
             None => false,
@@ -595,9 +595,12 @@ impl Agent {
             // An approved action: tell the agent how it went (a result can
             // be a failure: the file was gone by then, say).
             let text = match outcome {
-                Outcome::Result(r) => match vjson::parse(&r).ok().filter(|v| v["ok"].as_bool() == Some(false)) {
+                Outcome::Result(r) => match serde_json::from_str::<serde_json::Value>(&r)
+                    .ok()
+                    .filter(|v| v["ok"].as_bool() == Some(false))
+                {
                     Some(v) => {
-                        let why = v.str("error").unwrap_or("it failed").to_string();
+                        let why = v["error"].as_str().unwrap_or("it failed").to_string();
                         println!("approved action failed: {why}");
                         format!("[System] The user allowed \"{label}\", but it failed: {why}")
                     }
@@ -618,7 +621,7 @@ impl Agent {
                 if let Some(s) = &mut self.session {
                     s.request_end(vrt::time::now_ns());
                 }
-                tools::ok(vjson::Value::Null)
+                tools::ok(serde_json::Value::Null)
             }
             Outcome::Approval(p) => self.ask(p),
         };
@@ -656,11 +659,11 @@ impl Agent {
             self.ui = None;
         }
         self.publish();
-        object! {
-            "ok" => false,
-            "waiting_for_approval" => true,
-            "message" => format!("The system is asking the user to allow \"{label}\" on screen. Tell them briefly; the outcome will follow."),
-        }
+        json!({
+            "ok": false,
+            "waiting_for_approval": true,
+            "message": format!("The system is asking the user to allow \"{label}\" on screen. Tell them briefly; the outcome will follow."),
+        })
         .to_string()
     }
 

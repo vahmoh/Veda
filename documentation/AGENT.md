@@ -222,7 +222,7 @@ actions, and `vui::run` registers it with the agent service (again after
 the service restarts) and answers the agent between frames.
 
 ```rust
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, object, show_path};
+use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, json, show_path};
 
 impl vui::App for Notes {
     fn update(&mut self, ui: &mut vui::Ui) { /* ... */ }
@@ -244,17 +244,17 @@ impl vui::App for Notes {
     }
 
     fn agent_state(&self) -> Value {
-        object! { "note" => self.title.as_str(), "lines" => self.lines.len() }
+        json!({ "note": self.title.as_str(), "lines": self.lines.len() })
     }
 
     fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
         match action {
-            "open_note" => { /* the same code as clicking it */ Ok(object! { "showing" => self.title.as_str() }) }
-            "add_line" => { self.append(arg_str(args, "text")?); Ok(object! { "lines" => self.lines.len() }) }
+            "open_note" => { /* the same code as clicking it */ Ok(json!({ "showing": self.title.as_str() })) }
+            "add_line" => { self.append(arg_str(args, "text")?); Ok(json!({ "lines": self.lines.len() })) }
             "delete_note" => {
                 let path = arg_path(args, "path")?;
                 self.delete(&path).map_err(|e| format!("{} could not be deleted: {e}", show_path(&path)))?;
-                Ok(object! { "deleted" => show_path(&path) })
+                Ok(json!({ "deleted": show_path(&path) }))
             }
             other => Err(format!("Notes has no action called {other}")),
         }
@@ -302,7 +302,8 @@ sleep between events.
   streaming recognition protocol (`agent-hear` makes it "hear" a sentence).
   Scripts in `verification/agent/` use it (no network, no cost,
   deterministic): `agent-connected`, `agent-call FUNCTION 'ARGS'`,
-  `agent-result TEXT` (in the function's result), `agent-mark` and
+  `agent-result TEXT` (in the function's result; JSON members such as
+  `'"page":"processes","shown":1'` are found in any order), `agent-mark` and
   `agent-expect TEXT` (in what the agent sent), `agent-speak SECONDS`,
   `agent-interrupt`, `agent-hear TEXT`, `agent-listens N` (and
   `agent-not-listening`, until no recognition stream is open),

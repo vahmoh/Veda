@@ -12,6 +12,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use unicode_segmentation::GraphemeCursor;
 use vraster::Point;
 
 use crate::GlyphId;
@@ -425,16 +426,33 @@ impl<'c, 'a> ScaledFont<'c, 'a> {
         result.unwrap_or(total)
     }
 
-    /// The byte index of the character boundary nearest to `x` (pixels from the line start):
+    /// The byte index of the caret position nearest to `x` (pixels from the line start):
     /// clicking on the left half of a character places the caret before it, on the right half
-    /// after it.
+    /// after it. Characters are grapheme clusters: the caret never lands between a letter and
+    /// its accents.
     pub fn index_for_x(&self, text: &str, x: f32) -> usize {
         let mut found = None;
-        self.walk(text, |s| {
-            if found.is_none() && x < s.x + s.advance * 0.5 {
-                found = Some(s.index);
+        let mut cluster = (0, 0.0f32);
+        let total = self.walk(text, |s| {
+            if found.is_some() {
+                return;
+            }
+            // A cluster starts here: decide on the one before, by its full width.
+            if s.index > 0 && GraphemeCursor::new(s.index, text.len(), true).is_boundary(text, 0) == Ok(true) {
+                let (start, start_x) = cluster;
+                if x < start_x + (s.x - start_x) * 0.5 {
+                    found = Some(start);
+                }
+                cluster = (s.index, s.x);
             }
         });
+        if found.is_none() && !text.is_empty() {
+            // The last cluster, which ends with the line.
+            let (start, start_x) = cluster;
+            if x < start_x + (total - start_x) * 0.5 {
+                found = Some(start);
+            }
+        }
         found.unwrap_or(text.len())
     }
 }

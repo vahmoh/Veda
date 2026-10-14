@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 rav1e = { workspace = true }
+md-5 = { workspace = true }
 vaudio = { workspace = true }
 vfont = { workspace = true }
 vgfx = { workspace = true }

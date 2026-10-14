@@ -11,14 +11,18 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use videos_core::{find, text};
-use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, object, show_path};
+use videos_core::text;
+use vui::agent::names::{self, MIN_SCORE, query_words, score};
+use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, json, show_path};
 
 use crate::player::{Phase, Player};
 use crate::{OpenAt, Videos};
 
 /// The most videos the agent gets in one list.
 const MAX_VIDEOS: usize = 60;
+/// Words of a request that name no video ("the", "video", "play").
+const FILLER: &[&str] =
+    &["the", "a", "an", "my", "video", "videos", "clip", "movie", "film", "play", "watch", "please", "one", "of"];
 /// How long an action waits for a video to open.
 const OPEN_WAIT_NS: u64 = 8_000_000_000;
 /// How long it waits for the library when the app has just started.
@@ -86,68 +90,65 @@ fn playback(p: &Player) -> String {
 fn now_playing(p: &Player) -> Value {
     let now = vrt::time::now_ns();
     let at = p.position_us(now).max(0) as u64 / 1000;
-    let mut v = object! {
-        "title" => p.title.as_str(),
-        "playback" => playback(p),
-        "position" => text::time(at),
-        "position_seconds" => at / 1000,
-        "file" => show_path(&p.path),
-    };
+    let mut v = json!({
+        "title": p.title.as_str(),
+        "playback": playback(p),
+        "position": text::time(at),
+        "position_seconds": at / 1000,
+        "file": show_path(&p.path),
+    });
     if let Some(info) = &p.info {
         if let Some(d) = info.duration_us {
             let ms = d.max(0) as u64 / 1000;
-            v.set("duration", text::time(ms));
-            v.set("duration_seconds", ms / 1000);
+            v["duration"] = json!(text::time(ms));
+            v["duration_seconds"] = json!(ms / 1000);
         }
-        v.set("picture", info.video_stream().map_or(String::from("none"), text::picture));
-        v.set("sound", info.audio_stream().map_or(String::from("none"), text::sound));
+        v["picture"] = json!(info.video_stream().map_or(String::from("none"), text::picture));
+        v["sound"] = json!(info.audio_stream().map_or(String::from("none"), text::sound));
     }
     v
 }
 
 pub fn state(v: &Videos) -> Value {
-    let mut s = object! { "view" => if v.player.is_some() { "player" } else { "library" } };
-    s.set("now_playing", v.player.as_ref().map_or(Value::Null, now_playing));
-    s.set("full_screen", v.full_screen);
-    s.set("volume", (v.volume * 100.0 + 0.5) as u32);
-    s.set("muted", v.muted);
+    let mut s = json!({ "view": if v.player.is_some() { "player" } else { "library" } });
+    s["now_playing"] = json!(v.player.as_ref().map_or(Value::Null, now_playing));
+    s["full_screen"] = json!(v.full_screen);
+    s["volume"] = json!((v.volume * 100.0 + 0.5) as u32);
+    s["muted"] = json!(v.muted);
     if let Some(why) = &v.unavailable {
-        s.set("playback_available", false);
-        s.set("why_unavailable", why.as_str());
+        s["playback_available"] = json!(false);
+        s["why_unavailable"] = json!(why.as_str());
     }
     let total: u64 = v.entries.iter().filter_map(|e| e.duration_ms()).sum();
-    s.set(
-        "library",
-        object! {
-            "folder" => show_path(&v.dir),
-            "videos" => v.entries.len(),
-            "total_time" => text::time(total),
-        },
-    );
-    s.set("videos", v.entries.iter().take(MAX_VIDEOS).map(|e| v.video(e)).collect::<Vec<_>>());
+    s["library"] = json!({
+        "folder": show_path(&v.dir),
+        "videos": v.entries.len(),
+        "total_time": text::time(total),
+    });
+    s["videos"] = json!(v.entries.iter().take(MAX_VIDEOS).map(|e| v.video(e)).collect::<Vec<_>>());
     if v.entries.len() > MAX_VIDEOS {
-        s.set("videos_cut_short", true);
+        s["videos_cut_short"] = json!(true);
     }
     let cont: Vec<Value> = v.continuing().iter().map(|&i| v.video(&v.entries[i])).collect();
-    s.set("continue_watching", cont);
+    s["continue_watching"] = cont.into();
     s
 }
 
 impl Videos {
     /// One video of the library as the agent sees it.
     fn video(&self, e: &crate::library::Entry) -> Value {
-        let mut v = object! { "title" => e.title.as_str() };
+        let mut v = json!({ "title": e.title.as_str() });
         if let Some(d) = e.duration_ms() {
-            v.set("duration", text::time(d));
+            v["duration"] = json!(text::time(d));
         }
         let what = e.description();
         if !what.is_empty() {
-            v.set(if matches!(e.info, Some(Err(_))) { "problem" } else { "picture" }, what);
+            v[if matches!(e.info, Some(Err(_))) { "problem" } else { "picture" }] = what.into();
         }
         if let Some(r) = self.state.resume_of(&e.path).filter(|r| r.size == e.size && r.modified == e.modified) {
-            v.set("left_at", text::time(r.position_ms));
+            v["left_at"] = json!(text::time(r.position_ms));
         } else if self.state.is_watched(&e.path) {
-            v.set("watched", true);
+            v["watched"] = json!(true);
         }
         v
     }
@@ -183,12 +184,13 @@ impl Videos {
 
     /// The video `query` names.
     fn find_video(&self, query: &str) -> Result<usize, String> {
+        let q = query_words(query, FILLER);
         let titles: Vec<&str> = self.entries.iter().map(|e| e.title.as_str()).collect();
-        if let Some(i) = find::best(query, &titles) {
+        if let Some(i) = names::best(&q, &titles) {
             return Ok(i);
         }
-        let names: Vec<&str> = self.entries.iter().map(|e| vfiles::path::file_stem(&e.name)).collect();
-        find::best(query, &names).ok_or_else(|| {
+        let files: Vec<&str> = self.entries.iter().map(|e| vfiles::path::file_stem(&e.name)).collect();
+        names::best(&q, &files).ok_or_else(|| {
             let some: Vec<&str> = titles.iter().take(6).copied().collect();
             format!(
                 "nothing in the library matches \u{201c}{query}\u{201d}; it has {} videos, such as {}",
@@ -275,11 +277,11 @@ impl Videos {
                 }
                 let us = target.max(0.0) as i64;
                 p.seek_to(us, vproto::media::SeekMode::Exact, now);
-                Ok(object! {
-                    "title" => p.title.as_str(),
-                    "position" => text::time(us as u64 / 1000),
-                    "duration" => text::time(duration.max(0) as u64 / 1000),
-                })
+                Ok(json!({
+                    "title": p.title.as_str(),
+                    "position": text::time(us as u64 / 1000),
+                    "duration": text::time(duration.max(0) as u64 / 1000),
+                }))
             }
             "set_volume" => {
                 let mut level = (self.volume * 100.0 + 0.5) as i64;
@@ -300,7 +302,7 @@ impl Videos {
                 {
                     self.set_muted(mute);
                 }
-                Ok(object! { "volume" => (self.volume * 100.0 + 0.5) as u32, "muted" => self.muted })
+                Ok(json!({ "volume": (self.volume * 100.0 + 0.5) as u32, "muted": self.muted }))
             }
             "full_screen" => {
                 let on = arg_bool(args, "on").ok_or("say whether full screen should be on (true) or off (false)")?;
@@ -308,19 +310,19 @@ impl Videos {
                     return Err("full screen is for a video: play one first".into());
                 }
                 self.want_full_screen = Some(on);
-                Ok(object! { "full_screen" => on })
+                Ok(json!({ "full_screen": on }))
             }
             "list_videos" => {
                 let query = arg_opt_str(args, "query");
                 if self.entries.is_empty() {
                     return Err(self.empty_library());
                 }
-                let q = query.map(find::query_words).unwrap_or_default();
+                let q = query.map(|q| query_words(q, FILLER)).unwrap_or_default();
                 let found: Vec<usize> = (0..self.entries.len())
                     .filter(|&i| {
                         query.is_none()
-                            || find::score(&q, &self.entries[i].title) >= 30
-                            || find::score(&q, vfiles::path::file_stem(&self.entries[i].name)) >= 30
+                            || score(&q, &self.entries[i].title) >= MIN_SCORE
+                            || score(&q, vfiles::path::file_stem(&self.entries[i].name)) >= MIN_SCORE
                     })
                     .collect();
                 if found.is_empty() {
@@ -330,11 +332,11 @@ impl Videos {
                     ));
                 }
                 let videos: Vec<Value> = found.iter().take(MAX_VIDEOS).map(|&i| self.video(&self.entries[i])).collect();
-                Ok(object! { "videos" => videos, "total" => found.len(), "cut_short" => found.len() > MAX_VIDEOS })
+                Ok(json!({ "videos": videos, "total": found.len(), "cut_short": found.len() > MAX_VIDEOS }))
             }
             "show_library" => {
                 self.show_library();
-                Ok(object! { "view" => "library", "videos" => self.entries.len() })
+                Ok(json!({ "view": "library", "videos": self.entries.len() }))
             }
             other => Err(format!("Videos has no action called {other}")),
         }

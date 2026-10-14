@@ -20,12 +20,16 @@
 //! SECONDS`, `agent-interrupt`, `agent-send JSON`, `agent-audio BYTES`,
 //! `agent-hear TEXT`, and `agent-asleep` (the agent is not woken at start).
 
-use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use sha1::{Digest, Sha1};
+use serde_json::{Value, json};
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::StatusCode;
+use tungstenite::protocol::CloseFrame;
+use tungstenite::protocol::frame::coding::CloseCode;
+use tungstenite::{Message, WebSocket};
 
 use crate::util::Result;
 
@@ -45,11 +49,20 @@ struct Log {
     listen_texts: Vec<String>,
 }
 
+/// A WebSocket connection from the agent. Its reader holds the lock only
+/// while it waits for a message, a few milliseconds at a time, so the
+/// script's messages go out between reads, whole.
+type Socket = Arc<Mutex<WebSocket<TcpStream>>>;
+
+/// How long a reader waits for a message before letting writers in.
+const READ_SLICE: Duration = Duration::from_millis(10);
+
 struct Shared {
     log: Mutex<Log>,
-    writer: Mutex<Option<TcpStream>>,
+    /// The open conversation.
+    agent: Mutex<Option<Socket>>,
     /// The open speech recognition connection.
-    listen_writer: Mutex<Option<TcpStream>>,
+    listen: Mutex<Option<Socket>>,
 }
 
 /// The simulated Voice Agent service.
@@ -63,11 +76,8 @@ impl AgentSim {
     pub fn start() -> Result<AgentSim> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("agent simulator: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let shared = Arc::new(Shared {
-            log: Mutex::new(Log::default()),
-            writer: Mutex::new(None),
-            listen_writer: Mutex::new(None),
-        });
+        let shared =
+            Arc::new(Shared { log: Mutex::new(Log::default()), agent: Mutex::new(None), listen: Mutex::new(None) });
         let s = shared.clone();
         std::thread::Builder::new()
             .name("agentsim".into())
@@ -104,8 +114,8 @@ impl AgentSim {
     pub fn hear(&self, text: &str, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
-            let streaming = self.shared.listen_writer.lock().unwrap().is_some()
-                && self.shared.log.lock().unwrap().listen_audio_bytes > 0;
+            let streaming =
+                self.shared.listen.lock().unwrap().is_some() && self.shared.log.lock().unwrap().listen_audio_bytes > 0;
             if streaming {
                 break;
             }
@@ -119,14 +129,14 @@ impl AgentSim {
             if i > 0 {
                 std::thread::sleep(Duration::from_millis(300));
             }
-            let msg = format!(
-                "{{\"type\":\"Results\",\"is_final\":true,\"speech_final\":{},\"channel\":{{\"alternatives\":[{{\"transcript\":{},\"confidence\":0.98}}]}}}}",
-                i + 1 == pieces.len(),
-                json_string(piece)
-            );
-            let mut w = self.shared.listen_writer.lock().unwrap();
-            let s = w.as_mut().ok_or("the recognition stream closed")?;
-            s.write_all(&frame(1, msg.as_bytes())).map_err(|e| format!("agent simulator: {e}"))?;
+            let result = json!({
+                "type": "Results",
+                "is_final": true,
+                "speech_final": i + 1 == pieces.len(),
+                "channel": { "alternatives": [{ "transcript": piece, "confidence": 0.98 }] },
+            });
+            let socket = self.shared.listen.lock().unwrap().clone().ok_or("the recognition stream closed")?;
+            send(&socket, Message::text(result.to_string()))?;
         }
         Ok(())
     }
@@ -139,7 +149,7 @@ impl AgentSim {
     /// Waits until the agent has no recognition stream open.
     pub fn wait_not_listening(&self, timeout: Duration) -> Result {
         let start = Instant::now();
-        while self.shared.listen_writer.lock().unwrap().is_some() {
+        while self.shared.listen.lock().unwrap().is_some() {
             if start.elapsed() > timeout {
                 return Err("the agent kept listening".into());
             }
@@ -148,21 +158,20 @@ impl AgentSim {
         Ok(())
     }
 
-    fn send(&self, frame: Vec<u8>) -> Result {
-        let mut w = self.shared.writer.lock().unwrap();
-        let s = w.as_mut().ok_or("the agent is not connected to the simulator")?;
-        s.write_all(&frame).map_err(|e| format!("agent simulator: {e}"))
+    fn send(&self, message: Message) -> Result {
+        let socket = self.shared.agent.lock().unwrap().clone().ok_or("the agent is not connected to the simulator")?;
+        send(&socket, message)
     }
 
     pub fn send_json(&self, json: &str) -> Result {
-        self.send(frame(1, json.as_bytes()))
+        self.send(Message::text(json))
     }
 
     /// Waits until the agent is connected (and configured).
     pub fn wait_connected(&self, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
-            if self.shared.writer.lock().unwrap().is_some() && self.texts().iter().any(|t| t.contains("\"Settings\"")) {
+            if self.shared.agent.lock().unwrap().is_some() && self.texts().iter().any(|t| t.contains("\"Settings\"")) {
                 return Ok(());
             }
             if start.elapsed() > timeout {
@@ -211,15 +220,14 @@ impl AgentSim {
         let id = format!("call-{}", self.next_call);
         self.next_call += 1;
         let skip = self.texts().len();
-        let msg = format!(
-            "{{\"type\":\"FunctionCallRequest\",\"functions\":[{{\"id\":\"{id}\",\"name\":\"{name}\",\"arguments\":{},\"client_side\":true}}]}}",
-            json_string(args_json)
-        );
-        self.send_json(&msg)?;
+        // Deepgram gives the arguments as JSON in a string.
+        let request = json!({
+            "type": "FunctionCallRequest",
+            "functions": [{ "id": id, "name": name, "arguments": args_json, "client_side": true }],
+        });
+        self.send_json(&request.to_string())?;
         let response = self.wait_text(&format!("\"id\":\"{id}\""), skip, timeout)?;
-        // The result as the language model reads it (the response carries
-        // it as a JSON string).
-        Ok(string_field(&response, "content").unwrap_or(response))
+        Ok(content(&response).unwrap_or(response))
     }
 
     /// The agent "speaks" for `secs` seconds: a voice-like buzz at
@@ -248,163 +256,87 @@ impl AgentSim {
             pcm.extend_from_slice(&s.to_le_bytes());
         }
         for chunk in pcm.chunks(4800) {
-            self.send(frame(2, chunk))?;
+            self.send(Message::binary(chunk.to_vec()))?;
         }
         self.send_json(r#"{"type":"AgentAudioDone"}"#)
     }
 }
 
-/// A server frame (not masked).
-fn frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
-    let mut f = vec![0x80 | opcode];
-    if payload.len() < 126 {
-        f.push(payload.len() as u8);
-    } else if payload.len() <= 0xFFFF {
-        f.push(126);
-        f.extend_from_slice(&(payload.len() as u16).to_be_bytes());
-    } else {
-        f.push(127);
-        f.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-    }
-    f.extend_from_slice(payload);
-    f
+/// The result in a `FunctionCallResponse`, as the language model reads it
+/// (the response carries it as a JSON string).
+fn content(response: &str) -> Option<String> {
+    serde_json::from_str::<Value>(response).ok()?["content"].as_str().map(String::from)
 }
 
-/// The value of the string field `name` in a flat JSON message, decoded.
-fn string_field(json: &str, name: &str) -> Option<String> {
-    let start = json.find(&format!("\"{name}\":\""))? + name.len() + 4;
-    let mut out = String::new();
-    let mut chars = json[start..].chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => out.push('\r'),
-                'u' => {
-                    let hex: String = chars.by_ref().take(4).collect();
-                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?).unwrap_or('\u{fffd}'));
-                }
-                c => out.push(c),
-            },
-            c => out.push(c),
-        }
-    }
-    None
+/// Sends a message on a connection.
+fn send(socket: &Socket, message: Message) -> Result {
+    socket.lock().unwrap().send(message).map_err(|e| format!("agent simulator: {e}"))
 }
 
-fn json_string(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn base64(data: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for i in 0..4 {
-            if i <= c.len() {
-                out.push(A[(n >> (18 - 6 * i)) as usize & 63] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
-/// One connection from the agent: the upgrade, then frames.
-fn serve(mut stream: TcpStream, shared: &Shared) -> Result {
-    let _ = stream.set_nodelay(true);
-    // The upgrade request.
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        if stream.read(&mut byte).map_err(|e| e.to_string())? == 0 {
-            return Err("closed during the handshake".into());
-        }
-        head.push(byte[0]);
-        if head.len() > 16 * 1024 {
-            return Err("handshake too long".into());
-        }
-    }
-    let text = String::from_utf8_lossy(&head).to_string();
-    let key = text
-        .lines()
-        .find_map(|l| l.strip_prefix("Sec-WebSocket-Key: ").or_else(|| l.strip_prefix("sec-websocket-key: ")))
-        .ok_or("no WebSocket key")?
-        .trim()
-        .to_string();
-    if !text.lines().any(|l| l.to_ascii_lowercase().starts_with("authorization: token ")) {
-        let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
-        return Err("no Authorization header".into());
-    }
-    let mut h = Sha1::new();
-    h.update(key.as_bytes());
-    h.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    let accept = base64(&h.finalize());
-    let resp = format!(
-        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-    );
-    stream.write_all(resp.as_bytes()).map_err(|e| e.to_string())?;
-    let path = text.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("/");
-    if path.starts_with("/v1/listen") {
-        return serve_listen(stream, shared);
-    }
-    *shared.writer.lock().unwrap() = Some(stream.try_clone().map_err(|e| e.to_string())?);
-    shared.log.lock().unwrap().connections += 1;
-    stream.write_all(&frame(1, br#"{"type":"Welcome","request_id":"sim-1"}"#)).map_err(|e| e.to_string())?;
+/// The next message on a connection, or `None` once it has closed. Pings
+/// are answered and the closing handshake completed by tungstenite.
+fn receive(socket: &Socket) -> Result<Option<Message>> {
     loop {
-        let mut h2 = [0u8; 2];
-        if stream.read_exact(&mut h2).is_err() {
-            break;
+        let read = socket.lock().unwrap().read();
+        match read {
+            Ok(message) => return Ok(Some(message)),
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) =>
+            {
+                // Writers' turn.
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => return Ok(None),
+            Err(tungstenite::Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)) => {
+                return Ok(None);
+            }
+            Err(e) => return Err(format!("agent simulator: {e}")),
         }
-        let opcode = h2[0] & 0x0F;
-        let mut len = (h2[1] & 0x7F) as u64;
-        if len == 126 {
-            let mut b = [0u8; 2];
-            stream.read_exact(&mut b).map_err(|e| e.to_string())?;
-            len = u16::from_be_bytes(b) as u64;
-        } else if len == 127 {
-            let mut b = [0u8; 8];
-            stream.read_exact(&mut b).map_err(|e| e.to_string())?;
-            len = u64::from_be_bytes(b);
+    }
+}
+
+/// One connection from the agent: the upgrade (with Deepgram's token
+/// authentication), then the conversation or speech recognition its path
+/// asks for.
+fn serve(stream: TcpStream, shared: &Shared) -> Result {
+    let _ = stream.set_nodelay(true);
+    let mut path = String::new();
+    // The error type is tungstenite's: what the handshake answers with.
+    #[allow(clippy::result_large_err)]
+    let check = |request: &Request, response: Response| -> std::result::Result<Response, ErrorResponse> {
+        path = request.uri().path().to_string();
+        let token = request.headers().get("authorization").and_then(|v| v.to_str().ok());
+        if token.is_some_and(|t| t.len() > 6 && t[..6].eq_ignore_ascii_case("token ")) {
+            Ok(response)
+        } else {
+            let mut refusal = ErrorResponse::new(None);
+            *refusal.status_mut() = StatusCode::UNAUTHORIZED;
+            Err(refusal)
         }
-        if h2[1] & 0x80 == 0 {
-            return Err("unmasked frame from the client".into());
-        }
-        let mut mask = [0u8; 4];
-        stream.read_exact(&mut mask).map_err(|e| e.to_string())?;
-        let mut payload = vec![0u8; len as usize];
-        stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
-        for (i, b) in payload.iter_mut().enumerate() {
-            *b ^= mask[i & 3];
-        }
-        match opcode {
-            1 => {
-                let t = String::from_utf8_lossy(&payload).to_string();
-                let settings = t.contains("\"type\":\"Settings\"");
-                shared.log.lock().unwrap().texts.push(t);
+    };
+    let ws = tungstenite::accept_hdr(stream, check).map_err(|e| format!("the WebSocket upgrade: {e}"))?;
+    ws.get_ref().set_read_timeout(Some(READ_SLICE)).map_err(|e| e.to_string())?;
+    let socket: Socket = Arc::new(Mutex::new(ws));
+    if path.starts_with("/v1/listen") {
+        return serve_listen(&socket, shared);
+    }
+    *shared.agent.lock().unwrap() = Some(socket.clone());
+    shared.log.lock().unwrap().connections += 1;
+    send(&socket, Message::text(r#"{"type":"Welcome","request_id":"sim-1"}"#))?;
+    while let Some(message) = receive(&socket)? {
+        match message {
+            Message::Text(text) => {
+                let settings = text.contains("\"type\":\"Settings\"");
+                shared.log.lock().unwrap().texts.push(text.to_string());
                 if settings {
-                    stream.write_all(&frame(1, br#"{"type":"SettingsApplied"}"#)).map_err(|e| e.to_string())?;
+                    send(&socket, Message::text(r#"{"type":"SettingsApplied"}"#))?;
                 }
             }
-            2 => {
+            Message::Binary(audio) => {
                 let mut log = shared.log.lock().unwrap();
-                log.audio_bytes += payload.len();
+                log.audio_bytes += audio.len();
                 // 20 ms at a time (16 kHz, 16-bit).
-                for chunk in payload.chunks(640) {
+                for chunk in audio.chunks(640) {
                     let n = chunk.len() / 2;
                     if n == 0 {
                         continue;
@@ -422,100 +354,131 @@ fn serve(mut stream: TcpStream, shared: &Shared) -> Result {
                     log.mic_levels.push(db);
                 }
             }
-            8 => {
-                let _ = stream.write_all(&frame(8, &payload));
-                break;
-            }
-            9 => {
-                let _ = stream.write_all(&frame(10, &payload));
-            }
             _ => {}
         }
     }
-    *shared.writer.lock().unwrap() = None;
+    *shared.agent.lock().unwrap() = None;
     Ok(())
 }
 
-/// Reads one client frame: (opcode, unmasked payload), or None at the end.
-fn read_frame(stream: &mut TcpStream) -> Result<Option<(u8, Vec<u8>)>> {
-    let mut h2 = [0u8; 2];
-    if stream.read_exact(&mut h2).is_err() {
-        return Ok(None);
-    }
-    let mut len = (h2[1] & 0x7F) as u64;
-    if len == 126 {
-        let mut b = [0u8; 2];
-        stream.read_exact(&mut b).map_err(|e| e.to_string())?;
-        len = u16::from_be_bytes(b) as u64;
-    } else if len == 127 {
-        let mut b = [0u8; 8];
-        stream.read_exact(&mut b).map_err(|e| e.to_string())?;
-        len = u64::from_be_bytes(b);
-    }
-    if h2[1] & 0x80 == 0 {
-        return Err("unmasked frame from the client".into());
-    }
-    let mut mask = [0u8; 4];
-    stream.read_exact(&mut mask).map_err(|e| e.to_string())?;
-    let mut payload = vec![0u8; len as usize];
-    stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
-    for (i, b) in payload.iter_mut().enumerate() {
-        *b ^= mask[i & 3];
-    }
-    Ok(Some((h2[0] & 0x0F, payload)))
-}
-
 /// A speech recognition stream: audio in; transcripts come from the
-/// script (`agent-hear`). `CloseStream` ends it like Deepgram does.
-fn serve_listen(mut stream: TcpStream, shared: &Shared) -> Result {
-    *shared.listen_writer.lock().unwrap() = Some(stream.try_clone().map_err(|e| e.to_string())?);
+/// script (`agent-hear`). `CloseStream` ends it as Deepgram does.
+fn serve_listen(socket: &Socket, shared: &Shared) -> Result {
+    *shared.listen.lock().unwrap() = Some(socket.clone());
     shared.log.lock().unwrap().listen_connections += 1;
-    while let Some((opcode, payload)) = read_frame(&mut stream)? {
-        match opcode {
-            1 => {
-                let t = String::from_utf8_lossy(&payload).to_string();
-                let close = t.contains("CloseStream");
-                shared.log.lock().unwrap().listen_texts.push(t);
+    while let Some(message) = receive(socket)? {
+        match message {
+            Message::Text(text) => {
+                let close = text.contains("CloseStream");
+                shared.log.lock().unwrap().listen_texts.push(text.to_string());
                 if close {
-                    let _ = stream.write_all(&frame(1, br#"{"type":"Metadata","duration":1.0}"#));
-                    let _ = stream.write_all(&frame(8, &1000u16.to_be_bytes()));
+                    let _ = send(socket, Message::text(r#"{"type":"Metadata","duration":1.0}"#));
+                    let _ =
+                        socket.lock().unwrap().close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
                     break;
                 }
             }
-            2 => shared.log.lock().unwrap().listen_audio_bytes += payload.len(),
-            8 => {
-                let _ = stream.write_all(&frame(8, &payload));
-                break;
-            }
-            9 => {
-                let _ = stream.write_all(&frame(10, &payload));
-            }
+            Message::Binary(audio) => shared.log.lock().unwrap().listen_audio_bytes += audio.len(),
             _ => {}
         }
     }
-    *shared.listen_writer.lock().unwrap() = None;
+    *shared.listen.lock().unwrap() = None;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tungstenite::client::IntoClientRequest;
 
-    #[test]
-    fn accept_key_and_base64() {
-        let mut h = Sha1::new();
-        h.update(b"dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-        assert_eq!(base64(&h.finalize()), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
-        assert_eq!(json_string("a\"b"), "\"a\\\"b\"");
-        assert_eq!(frame(1, b"hi"), vec![0x81, 2, b'h', b'i']);
+    /// Connects to the simulator as the agent does (`token`: the
+    /// Authorization header's value, if any).
+    fn connect(sim: &AgentSim, path: &str, token: Option<&str>) -> tungstenite::Result<WebSocket<TcpStream>> {
+        let mut request = format!("ws://127.0.0.1:{}{path}", sim.port).into_client_request()?;
+        if let Some(token) = token {
+            request.headers_mut().insert("Authorization", token.parse().unwrap());
+        }
+        let stream = TcpStream::connect(("127.0.0.1", sim.port)).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        tungstenite::client(request, stream).map(|(ws, _)| ws).map_err(|e| match e {
+            tungstenite::HandshakeError::Failure(e) => e,
+            tungstenite::HandshakeError::Interrupted(_) => tungstenite::Error::ConnectionClosed,
+        })
+    }
+
+    fn text(ws: &mut WebSocket<TcpStream>) -> String {
+        loop {
+            if let Message::Text(t) = ws.read().unwrap() {
+                return t.to_string();
+            }
+        }
     }
 
     #[test]
-    fn decodes_function_results() {
+    fn converses_as_deepgram_does() {
+        let mut sim = AgentSim::start().unwrap();
+        // Deepgram refuses a connection without a key.
+        match connect(&sim, "/v1/agent/converse", None) {
+            Err(tungstenite::Error::Http(response)) => assert_eq!(response.status(), StatusCode::UNAUTHORIZED),
+            other => panic!("expected 401, got {:?}", other.map(|_| ())),
+        }
+        let mut agent = connect(&sim, "/v1/agent/converse", Some("Token k")).unwrap();
+        assert!(text(&mut agent).contains("Welcome"));
+        agent.send(Message::text(r#"{"type":"Settings","agent":{}}"#)).unwrap();
+        assert!(text(&mut agent).contains("SettingsApplied"));
+        sim.wait_connected(Duration::from_secs(10)).unwrap();
+        // Microphone audio: a full-scale square wave is 0 dBFS.
+        let mut audio = Vec::new();
+        for i in 0..320 {
+            audio.extend_from_slice(&(if i % 2 == 0 { i16::MAX } else { -i16::MAX }).to_le_bytes());
+        }
+        agent.send(Message::binary(audio)).unwrap();
+        // A function call, whose result comes back as a JSON string.
+        let result = std::thread::scope(|s| {
+            let caller = s.spawn(|| sim.call("get_time", r#"{"zone":"UTC"}"#, Duration::from_secs(10)));
+            let request: Value = serde_json::from_str(&text(&mut agent)).unwrap();
+            assert_eq!(request["type"], "FunctionCallRequest");
+            let function = &request["functions"][0];
+            assert_eq!((&function["name"], &function["arguments"]), (&json!("get_time"), &json!(r#"{"zone":"UTC"}"#)));
+            let response = json!({
+                "type": "FunctionCallResponse",
+                "id": function["id"],
+                "name": "get_time",
+                "content": r#"{"ok":true,"result":"12:00 \u00e9"}"#,
+            });
+            agent.send(Message::text(response.to_string())).unwrap();
+            caller.join().unwrap()
+        });
+        assert_eq!(result.unwrap(), r#"{"ok":true,"result":"12:00 \u00e9"}"#);
+        let start = Instant::now();
+        while sim.mic_levels_len() == 0 && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!((sim.mic_peak_since(0) - 0.0).abs() < 0.01);
+        agent.close(None).unwrap();
+        while agent.read().is_ok() {}
+    }
+
+    #[test]
+    fn recognises_what_the_script_says() {
+        let sim = AgentSim::start().unwrap();
+        let mut listen = connect(&sim, "/v1/listen?model=nova-3", Some("token k")).unwrap();
+        listen.send(Message::binary(vec![0u8; 640])).unwrap();
+        sim.hear("Hey Veda, | what time is it?", Duration::from_secs(10)).unwrap();
+        let first: Value = serde_json::from_str(&text(&mut listen)).unwrap();
+        let second: Value = serde_json::from_str(&text(&mut listen)).unwrap();
+        assert_eq!(first["channel"]["alternatives"][0]["transcript"], "Hey Veda,");
+        assert_eq!((&first["speech_final"], &second["speech_final"]), (&json!(false), &json!(true)));
+        assert_eq!(sim.listen_connections(), 1);
+        listen.send(Message::text(r#"{"type":"CloseStream"}"#)).unwrap();
+        assert!(text(&mut listen).contains("Metadata"));
+        sim.wait_not_listening(Duration::from_secs(10)).unwrap();
+    }
+
+    #[test]
+    fn reads_function_results() {
         let msg = r#"{"type":"FunctionCallResponse","id":"call-1","content":"{\"ok\":true,\"text\":\"a\\nb é\"}"}"#;
-        assert_eq!(string_field(msg, "content").as_deref(), Some(r#"{"ok":true,"text":"a\nb é"}"#));
-        assert_eq!(string_field(msg, "id").as_deref(), Some("call-1"));
-        assert_eq!(string_field(msg, "missing"), None);
-        assert_eq!(string_field(r#"{"content":"cut"#, "content"), None);
+        assert_eq!(content(msg).as_deref(), Some(r#"{"ok":true,"text":"a\nb é"}"#));
+        assert_eq!(content(r#"{"content":"cut"#), None);
     }
 }

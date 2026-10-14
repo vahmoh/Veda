@@ -40,20 +40,6 @@ pub fn mix(a: u32, b: u32, t: u32) -> u32 {
     channel(16) | channel(8) | channel(0)
 }
 
-/// The integer square root of `n`.
-pub fn isqrt(n: u32) -> u32 {
-    if n < 2 {
-        return n;
-    }
-    let mut x = n;
-    let mut y = x.div_ceil(2);
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
-}
-
 /// The ordered-dither (8x8 Bayer) pattern at pixel (`x`, `y`), 0 to 63:
 /// the thresholds of every 2x2, 4x4 and 8x8 square of pixels are spread
 /// evenly over the range.
@@ -120,7 +106,7 @@ impl Ring {
         if dx.abs() > self.outer + 16 || dy.abs() > self.outer + 16 {
             return 0;
         }
-        let d = isqrt((dx * dx + dy * dy) as u32) as i32;
+        let d = ((dx * dx + dy * dy) as u32).isqrt() as i32;
         ((self.outer + 8 - d).clamp(0, 16) * (d - self.inner + 8).clamp(0, 16)) as u32
     }
 }

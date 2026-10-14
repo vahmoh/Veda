@@ -13,7 +13,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 
-use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, object};
+use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, json};
 use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 
 vrt::entry!(main);
@@ -115,19 +115,19 @@ impl App for About {
 
     fn agent_state(&self) -> Value {
         let i = &self.info;
-        let mut v = object! {
-            "version" => cstr(&i.version),
-            "edition" => "microkernel edition",
-            "processor" => cstr(&i.cpu_brand),
-            "cores" => i.cpu_count,
-            "memory" => self.memory(),
-            "uptime" => fmt_uptime(i.uptime_ns),
-            "processes" => i.process_count,
-            "threads" => i.thread_count,
-            "licences_shown" => self.show_details,
-        };
+        let mut v = json!({
+            "version": cstr(&i.version),
+            "edition": "microkernel edition",
+            "processor": cstr(&i.cpu_brand),
+            "cores": i.cpu_count,
+            "memory": self.memory(),
+            "uptime": fmt_uptime(i.uptime_ns),
+            "processes": i.process_count,
+            "threads": i.thread_count,
+            "licences_shown": self.show_details,
+        });
         if self.show_details {
-            v.set("licences", LICENCES);
+            v["licences"] = json!(LICENCES);
         }
         v
     }
@@ -137,9 +137,9 @@ impl App for About {
             "show_licences" => {
                 // As the "Show licences" switch does.
                 self.show_details = arg_bool(args, "show").unwrap_or(true);
-                let mut v = object! { "licences_shown" => self.show_details };
+                let mut v = json!({ "licences_shown": self.show_details });
                 if self.show_details {
-                    v.set("licences", LICENCES);
+                    v["licences"] = json!(LICENCES);
                 }
                 Ok(v)
             }

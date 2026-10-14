@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use vfiles::format::human_size;
 use vgfx::{Align, Bitmap, Color, Rect};
 use vimage::Orientation;
 use vproto::display::modifiers;
@@ -666,12 +667,12 @@ impl Photos {
                     (f, _) => format!("{} image", f.name()),
                 };
                 rows.push(("Type", kind));
-                rows.push(("File size", catalog::human_size(m.file_size)));
+                rows.push(("File size", human_size(m.file_size)));
                 rows.push(("Orientation", String::from(orientation_text(m.orientation))));
                 rows.push(("Transparency", String::from(if m.has_alpha { "Yes" } else { "No" })));
             }
             None => {
-                rows.push(("File size", if e.size > 0 { catalog::human_size(e.size) } else { String::from("–") }));
+                rows.push(("File size", if e.size > 0 { human_size(e.size) } else { String::from("–") }));
             }
         }
         rows.push(("Folder", catalog::split(&e.path).0));

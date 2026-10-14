@@ -12,8 +12,6 @@
 //! * [`resolve`] / [`lookup`] — name resolution through the system's
 //!   caching resolver.
 //! * [`Pinger`] — ICMP echo (what `ping` uses).
-//! * [`http`] — a small HTTP/1.1 client (plain HTTP; TLS is the `vtls`
-//!   crate's, over a [`TcpStream`]).
 //! * [`status`], [`interfaces`], ... — the state of the network, and
 //!   configuration for the Settings app and the Terminal.
 //! * [`wifi`] — Wi-Fi: networks in range, joining, saved networks, events.
@@ -26,12 +24,14 @@
 //! [`TcpStream::handle`] and call the non-blocking methods
 //! ([`TcpStream::try_read`], [`TcpStream::poll_connect`]) when it is
 //! readable.
+//!
+//! HTTP and WebSocket clients, over plain or TLS connections, are the
+//! `vweb` crate's; TLS itself is `vtls`'s, over a [`TcpStream`].
 
 #![no_std]
 
 extern crate alloc;
 
-pub mod http;
 mod ping;
 mod tcp;
 mod udp;

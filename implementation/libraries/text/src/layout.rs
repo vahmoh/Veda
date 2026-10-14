@@ -5,15 +5,27 @@
 //! (soft wrap), with hit testing and vertical movement.
 //!
 //! Columns are display columns: every character is one cell wide except
-//! tabs, which advance to the next tab stop.
+//! tabs, which advance to the next tab stop, and characters that take no
+//! cell (accents that combine with the character before, zero-width
+//! characters).
 
 use alloc::vec::Vec;
 
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthChar;
+
 use crate::buffer::{Buffer, Pos};
 
-/// Width in cells of `c` when it starts at display column `x`.
+/// Width in cells of `c` when it starts at display column `x`: tabs advance to the next tab
+/// stop, characters of no width (`unicode-width`: combining accents, zero-width spaces and
+/// joiners) take no cell, as the fonts draw them, and every other character one. (Wide East
+/// Asian characters too: the fonts draw them, glyphless, in one cell.)
 pub fn char_width(c: char, x: usize, tab: usize) -> usize {
-    if c == '\t' { tab - x % tab } else { 1 }
+    match c {
+        '\t' => tab - x % tab,
+        c if c.width() == Some(0) => 0,
+        _ => 1,
+    }
 }
 
 /// Display column of byte offset `col` in `line`.
@@ -171,7 +183,7 @@ impl Layout {
             row.end
         } else {
             let line = buf.line(row.line);
-            line[row.start..row.end].char_indices().next_back().map_or(row.start, |(off, _)| row.start + off)
+            line[row.start..row.end].grapheme_indices(true).next_back().map_or(row.start, |(off, _)| row.start + off)
         }
     }
 
@@ -259,5 +271,22 @@ mod tests {
         assert_eq!(display_col("\tx", 1, 4), 4);
         assert_eq!(display_col("ab\tx", 3, 4), 4);
         assert_eq!(display_col("é", 2, 4), 1);
+        // A combining accent and a zero-width space take no cell, as the fonts draw them.
+        let s = "e\u{301}x\u{200b}y";
+        assert_eq!(display_col(s, s.find('x').unwrap(), 4), 1);
+        assert_eq!(display_col(s, s.len(), 4), 3);
+    }
+
+    #[test]
+    fn clicks_land_between_characters_with_their_accents() {
+        let b = Buffer::from_text("ce\u{301}x");
+        let l = Layout::new(&b, None, 4);
+        let x_of = |col| l.x_of(&b, Pos::new(0, col));
+        // c, é (two code points, one cell), x.
+        assert_eq!((x_of(0), x_of(1), x_of(4), x_of(5)), (0, 1, 2, 3));
+        for x in 0..4 {
+            let col = l.pos_at(&b, 0, x).col;
+            assert!([0, 1, 4, 5].contains(&col), "column {x} gave byte {col}");
+        }
     }
 }

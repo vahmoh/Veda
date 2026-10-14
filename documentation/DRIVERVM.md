@@ -129,7 +129,7 @@ Each one came from what the alternatives would cost.
 | Monitor | `implementation/services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
 | Guest kernel | `ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: system calls, network interfaces; `netlink`) |
+| Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, network interfaces among it; `netlink`); their Linux system calls are `rustix`'s |
 | Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt` and the architecture's (`ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
 
 ### The platform
@@ -426,7 +426,7 @@ and GSIs 1 and 12), and Linux's i8042 finds it through ACPI's Plug and
 Play; its interrupts are edges, routed by `GSI`.
 
 **Sound** (`implementation/guest/alsa`). Linux's first playback device,
-through ALSA's kernel interface (the PCM and control ioctls; no library),
+through ALSA's kernel interface (the PCM and control ioctls, without alsa-lib),
 is attached to Veda's audio service as its output device, through
 `audiodev`, as Veda's own drivers attach theirs. The service's mixed output
 comes through the shared ring, a VMO of Veda's mapped into the program; the

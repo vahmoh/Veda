@@ -20,6 +20,7 @@ vpe = { workspace = true }
 initrd = { workspace = true }
 ventropy = { workspace = true }
 vhv = { workspace = true }
+vacpi = { workspace = true }
 viommu = { workspace = true }
 
 [lints]

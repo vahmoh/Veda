@@ -852,7 +852,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vnetstack", &[]),
     ("vnet", &[]),
     ("vtls", &[]),
-    ("vjson", &[]),
     ("vweb", &[]),
     ("vagent", &[]),
     ("vwlan", &[]),
@@ -864,6 +863,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vgl", &[]),
     ("interceptor-game", &[]),
     ("videos-core", &[]),
+    ("terminal-core", &[]),
     ("airsim", &[]),
     ("xtask", &[]),
 ];

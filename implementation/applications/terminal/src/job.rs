@@ -14,12 +14,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use terminal_core::screen::{Screen, Style};
 use vabi::{RawHandle, signals};
 use vrt::object::Event;
 use vrt::sync::Mutex;
 use vrt::thread::JoinHandle;
 
-use crate::screen::{Screen, Style};
 use crate::shell::Shell;
 
 /// The stack of a command's thread (folder walks recurse).

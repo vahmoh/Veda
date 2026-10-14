@@ -24,6 +24,10 @@
 use std::process::Command;
 use std::time::Duration;
 
+use rustix::mount::{MountFlags, mount};
+use rustix::process::{Pid, Signal, kill_process};
+use rustix::system::{RebootCommand, reboot};
+
 /// Veda's drivers for Linux, and the PCI classes (their first bytes, as
 /// sysfs gives them) of the functions each serves: multimedia devices,
 /// Ethernet cards, other network cards (Wi-Fi's), the communication
@@ -70,9 +74,9 @@ fn keep_running(name: &'static str, args: &'static [&'static str]) {
 /// Ends the processes called `name`, by SIGKILL.
 fn kill_named(name: &str) {
     for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else { continue };
+        let Some(pid) = entry.file_name().to_string_lossy().parse().ok().and_then(Pid::from_raw) else { continue };
         if std::fs::read_to_string(entry.path().join("comm")).is_ok_and(|c| c.trim() == name) {
-            let _ = guest_sys::kill(pid, 9);
+            let _ = kill_process(pid, Signal::KILL);
         }
     }
 }
@@ -82,7 +86,7 @@ fn main() {
         [("proc", "/proc", "proc"), ("sysfs", "/sys", "sysfs"), ("devtmpfs", "/dev", "devtmpfs")]
     {
         let _ = std::fs::create_dir_all(target);
-        if let Err(e) = guest_sys::mount(source, target, kind) {
+        if let Err(e) = mount(source, target, kind, MountFlags::empty(), None) {
             println!("veda: cannot mount {target}: {e}");
         }
     }
@@ -138,7 +142,7 @@ fn main() {
     }
     if options.contains(&"veda.poweroff") {
         println!("veda: powering off, as asked");
-        if let Err(e) = guest_sys::power_off() {
+        if let Err(e) = reboot(RebootCommand::PowerOff) {
             println!("veda: cannot power off: {e}");
         }
     }

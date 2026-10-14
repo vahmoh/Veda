@@ -11,11 +11,11 @@
 //! device. It says `gpiotest: PASS` when all is well.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Read;
 use std::mem::size_of;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd};
 
-use guest_sys::{POLLIN, ioc, ioctl, poll};
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::ioctl::{Getter, Opcode, Updater, ioctl, opcode};
 
 struct Checks {
     failed: u32,
@@ -86,10 +86,10 @@ struct LineEvent {
 }
 
 const GPIO: u8 = 0xB4;
-const GET_CHIPINFO: u32 = ioc(2, GPIO, 0x01, size_of::<ChipInfo>());
-const GET_LINE: u32 = ioc(3, GPIO, 0x07, size_of::<LineRequest>());
-const GET_VALUES: u32 = ioc(3, GPIO, 0x0E, size_of::<LineValues>());
-const SET_VALUES: u32 = ioc(3, GPIO, 0x0F, size_of::<LineValues>());
+const GET_CHIPINFO: Opcode = opcode::read::<ChipInfo>(GPIO, 0x01);
+const GET_LINE: Opcode = opcode::read_write::<LineRequest>(GPIO, 0x07);
+const GET_VALUES: Opcode = opcode::read_write::<LineValues>(GPIO, 0x0E);
+const SET_VALUES: Opcode = opcode::read_write::<LineValues>(GPIO, 0x0F);
 const FLAG_INPUT: u64 = 1 << 2;
 const FLAG_OUTPUT: u64 = 1 << 3;
 const FLAG_EDGES: u64 = 1 << 4 | 1 << 5;
@@ -103,9 +103,8 @@ fn platform_chip() -> Option<(File, ChipInfo)> {
     chips.sort();
     for path in chips.iter().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("gpiochip"))) {
         let Ok(chip) = OpenOptions::new().read(true).write(true).open(path) else { continue };
-        let mut info = ChipInfo { name: [0; 32], label: [0; 32], lines: 0 };
         // SAFETY: the kernel writes a gpiochip_info.
-        if unsafe { ioctl(chip.as_raw_fd(), GET_CHIPINFO, &mut info as *mut _ as usize) }.is_ok()
+        if let Ok(info) = unsafe { ioctl(&chip, Getter::<GET_CHIPINFO, ChipInfo>::new()) }
             && info.label.starts_with(b"VEDA0001")
         {
             return Some((chip, info));
@@ -115,7 +114,7 @@ fn platform_chip() -> Option<(File, ChipInfo)> {
 }
 
 /// Lines of `chip` requested with `flags`: a file of their own.
-fn request(chip: RawFd, offsets: &[u32], flags: u64) -> std::io::Result<OwnedFd> {
+fn request(chip: &File, offsets: &[u32], flags: u64) -> std::io::Result<OwnedFd> {
     let mut r = LineRequest {
         offsets: [0; 64],
         consumer: [0; 32],
@@ -128,7 +127,7 @@ fn request(chip: RawFd, offsets: &[u32], flags: u64) -> std::io::Result<OwnedFd>
     r.offsets[..offsets.len()].copy_from_slice(offsets);
     r.consumer[..8].copy_from_slice(b"gpiotest");
     // SAFETY: the kernel reads the request and writes the lines' file.
-    unsafe { ioctl(chip, GET_LINE, &mut r as *mut _ as usize) }?;
+    unsafe { ioctl(chip, Updater::<GET_LINE, LineRequest>::new(&mut r)) }?;
     // SAFETY: a file the kernel just made for us.
     Ok(unsafe { OwnedFd::from_raw_fd(r.fd) })
 }
@@ -137,28 +136,27 @@ fn request(chip: RawFd, offsets: &[u32], flags: u64) -> std::io::Result<OwnedFd>
 fn level(line: &OwnedFd) -> Option<bool> {
     let mut v = LineValues { bits: 0, mask: 1 };
     // SAFETY: the kernel reads the mask and writes the bits.
-    unsafe { ioctl(line.as_raw_fd(), GET_VALUES, &mut v as *mut _ as usize) }.ok()?;
+    unsafe { ioctl(line, Updater::<GET_VALUES, LineValues>::new(&mut v)) }.ok()?;
     Some(v.bits & 1 != 0)
 }
 
 fn drive(line: &OwnedFd, high: bool) -> bool {
     let mut v = LineValues { bits: high as u64, mask: 1 };
     // SAFETY: the kernel reads the values.
-    unsafe { ioctl(line.as_raw_fd(), SET_VALUES, &mut v as *mut _ as usize) }.is_ok()
+    unsafe { ioctl(line, Updater::<SET_VALUES, LineValues>::new(&mut v)) }.is_ok()
 }
 
 /// The next edge of a line requested with edges, within two seconds.
 fn edge(line: &OwnedFd) -> Option<LineEvent> {
-    if poll(line.as_raw_fd(), POLLIN, 2000).ok()? & POLLIN == 0 {
+    let mut fds = [PollFd::new(line, PollFlags::IN)];
+    poll(&mut fds, guest_sys::poll_timeout(2000).as_ref()).ok()?;
+    if !fds[0].revents().contains(PollFlags::IN) {
         return None;
     }
-    // SAFETY: the file is the line's; it outlives this read.
-    let mut file = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(line.as_raw_fd()) });
     let mut event = LineEvent::default();
     // SAFETY: a gpio_v2_line_event's bytes, which the kernel writes whole.
     let bytes = unsafe { std::slice::from_raw_parts_mut(&mut event as *mut _ as *mut u8, size_of::<LineEvent>()) };
-    file.read_exact(bytes).ok()?;
-    Some(event)
+    (rustix::io::read(line, bytes).ok()? == size_of::<LineEvent>()).then_some(event)
 }
 
 fn main() {
@@ -170,11 +168,10 @@ fn main() {
     };
     let label = String::from_utf8_lossy(&info.label).trim_end_matches('\0').to_string();
     c.check(&format!("{label} has the lines up to its last pin (4)"), info.lines == 4);
-    let chip = chip.as_raw_fd();
-    let output = request(chip, &[0], FLAG_OUTPUT);
-    let input = request(chip, &[1], FLAG_INPUT | FLAG_EDGES);
+    let output = request(&chip, &[0], FLAG_OUTPUT);
+    let input = request(&chip, &[1], FLAG_INPUT | FLAG_EDGES);
     c.check("pin 0 is an output, pin 1 an input with its edges", output.is_ok() && input.is_ok());
-    c.check("pin 2, which no device is wired to, is not there", request(chip, &[2], FLAG_INPUT).is_err());
+    c.check("pin 2, which no device is wired to, is not there", request(&chip, &[2], FLAG_INPUT).is_err());
     let (Ok(output), Ok(input)) = (output, input) else {
         println!("gpiotest: FAIL");
         return;
@@ -190,7 +187,7 @@ fn main() {
         );
         c.check(&format!("pin 1 is {}", if high { "high" } else { "low" }), level(&input) == Some(high));
     }
-    let three = request(chip, &[3], FLAG_INPUT);
+    let three = request(&chip, &[3], FLAG_INPUT);
     c.check("pin 3, nothing driving it, is low", three.as_ref().ok().and_then(level) == Some(false));
     println!("gpiotest: {}", if c.failed == 0 { "PASS" } else { "FAIL" });
 }

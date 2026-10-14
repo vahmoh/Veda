@@ -13,7 +13,6 @@ vrt = { workspace = true, default-features = false }
 vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
-httparse = { workspace = true }
 
 [lints]
 workspace = true

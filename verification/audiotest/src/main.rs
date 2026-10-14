@@ -44,39 +44,12 @@ fn levels(samples: &[i16]) -> (f32, f32) {
         sum += (s as f64) * (s as f64);
         peak = peak.max((s as i32).abs());
     }
-    let rms = sqrt(sum / samples.len() as f64) / 32768.0;
+    let rms = libm::sqrt(sum / samples.len() as f64) / 32768.0;
     (db(rms), db(peak as f64 / 32768.0))
 }
 
 fn db(x: f64) -> f32 {
-    if x <= 1e-6 { -120.0 } else { (20.0 * log10(x)) as f32 }
-}
-
-/// Square root by Newton's method (core has no float functions on stable).
-fn sqrt(x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    let mut r = if x > 1.0 { x / 2.0 } else { 1.0 };
-    for _ in 0..60 {
-        r = 0.5 * (r + x / r);
-    }
-    r
-}
-
-/// log10 from the binary exponent plus a series for the mantissa.
-fn log10(x: f64) -> f64 {
-    let bits = x.to_bits();
-    let exp = ((bits >> 52) & 0x7ff) as i64 - 1023;
-    let m = f64::from_bits((bits & !(0x7ff << 52)) | (1023 << 52)); // in [1, 2)
-    // ln(m) = 2 atanh((m - 1) / (m + 1))
-    let t = (m - 1.0) / (m + 1.0);
-    let (mut term, mut sum) = (t, 0.0);
-    for k in 0..30 {
-        sum += term / (2 * k + 1) as f64;
-        term *= t * t;
-    }
-    (2.0 * sum + exp as f64 * core::f64::consts::LN_2) / core::f64::consts::LN_10
+    if x <= 1e-6 { -120.0 } else { (20.0 * libm::log10(x)) as f32 }
 }
 
 fn connect() -> Option<audio::Client> {
@@ -167,16 +140,9 @@ fn tri(x: f64) -> f64 {
     if f < 0.5 { 4.0 * f - 1.0 } else { 3.0 - 4.0 * f }
 }
 
-/// sin(2 pi x) by a polynomial on a reduced argument.
+/// sin(2 pi x).
 fn sin_turns(x: f64) -> f64 {
-    let mut f = x - (x as i64) as f64;
-    if f < 0.0 {
-        f += 1.0;
-    }
-    // Bhaskara-style approximation, accurate enough for a test tone.
-    let (sign, g) = if f < 0.5 { (1.0, f) } else { (-1.0, f - 0.5) };
-    let a = g * 180.0; // degrees in [0, 90) twice
-    sign * 4.0 * a * (180.0 - a) / (40500.0 - a * (180.0 - a))
+    libm::sin(core::f64::consts::TAU * x)
 }
 
 fn echo(secs: u32) -> i32 {

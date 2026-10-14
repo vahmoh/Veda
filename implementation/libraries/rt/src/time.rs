@@ -96,6 +96,19 @@ pub fn utc_offset_s() -> i64 {
     (diff / 1_000_000_000 + 30).div_euclid(60) * 60
 }
 
+/// Days since 1970-01-01 of a date in the proleptic Gregorian calendar
+/// (negative before it): the inverse of [`DateTime::from_unix`]'s
+/// civil-from-days (Howard Hinnant's algorithms).
+pub fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
+    let y = if month <= 2 { year as i64 - 1 } else { year as i64 };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month as i64 + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// A broken-down local date and time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DateTime {

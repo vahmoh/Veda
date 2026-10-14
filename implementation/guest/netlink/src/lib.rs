@@ -12,27 +12,26 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::num::NonZeroU32;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::io::Errno;
+use rustix::net::netlink::SocketAddrNetlink;
+use rustix::net::{AddressFamily, Protocol, SocketFlags, SocketType, bind, socket_with, sockopt};
 
 pub const NETLINK_ROUTE: i32 = 0;
 pub const NETLINK_GENERIC: i32 = 16;
 
-const AF_NETLINK: i32 = 16;
-const SOCK_RAW: i32 = 3;
-const SOCK_NONBLOCK: i32 = 0o4000;
-const SOCK_CLOEXEC: i32 = 0o2_000_000;
 const SOL_NETLINK: i32 = 270;
 const NETLINK_ADD_MEMBERSHIP: i32 = 1;
 const NETLINK_CAP_ACK: i32 = 10;
 const NETLINK_EXT_ACK: i32 = 11;
-const SOL_SOCKET: i32 = 1;
-const SO_RCVBUFFORCE: i32 = 33;
 
 pub const NLM_F_REQUEST: u16 = 1;
 pub const NLM_F_MULTI: u16 = 2;
 pub const NLM_F_ACK: u16 = 4;
 pub const NLM_F_DUMP: u16 = 0x300;
-const ENOBUFS: i32 = 105;
 const NLMSG_ERROR: u16 = 2;
 /// An error's flags: its request is cut to its header; attributes follow.
 const NLM_F_CAPPED: u16 = 0x100;
@@ -228,35 +227,38 @@ pub struct Socket {
     reason: Option<String>,
 }
 
+/// The socket's file, for `poll`.
+impl AsFd for Socket {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+}
+
 impl Socket {
     /// A socket of netlink `protocol`, not blocking.
     pub fn open(protocol: i32) -> io::Result<Socket> {
-        let fd = guest_sys::socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol)?;
-        // sockaddr_nl: family, pad, pid 0 (the kernel's choice), groups 0.
-        let mut address = [0u8; 12];
-        address[0..2].copy_from_slice(&(AF_NETLINK as u16).to_ne_bytes());
-        guest_sys::bind(fd.as_raw_fd(), &address)?;
+        let protocol = NonZeroU32::new(protocol as u32).map(Protocol::from_raw);
+        let flags = SocketFlags::NONBLOCK | SocketFlags::CLOEXEC;
+        let fd = socket_with(AddressFamily::NETLINK, SocketType::RAW, flags, protocol)?;
+        // The port the kernel chooses, no groups.
+        bind(&fd, &SocketAddrNetlink::new(0, 0))?;
         // Errors with their reasons, without the request they answer.
-        let _ = guest_sys::setsockopt(fd.as_raw_fd(), SOL_NETLINK, NETLINK_EXT_ACK, &1i32.to_ne_bytes());
-        let _ = guest_sys::setsockopt(fd.as_raw_fd(), SOL_NETLINK, NETLINK_CAP_ACK, &1i32.to_ne_bytes());
-        let _ = guest_sys::setsockopt(fd.as_raw_fd(), SOL_SOCKET, SO_RCVBUFFORCE, &(4i32 << 20).to_ne_bytes());
+        let _ = guest_sys::setsockopt(&fd, SOL_NETLINK, NETLINK_EXT_ACK, 1i32);
+        let _ = guest_sys::setsockopt(&fd, SOL_NETLINK, NETLINK_CAP_ACK, 1i32);
+        let _ = sockopt::set_socket_recv_buffer_size_force(&fd, 4 << 20);
         Ok(Socket { fd, seq: 1, events: VecDeque::new(), buf: vec![0u8; 64 * 1024], reason: None })
-    }
-
-    pub fn fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
     }
 
     /// Receives the events of multicast group `group` from now on.
     pub fn join(&self, group: u32) -> io::Result<()> {
-        guest_sys::setsockopt(self.fd(), SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group.to_ne_bytes())
+        guest_sys::setsockopt(&self.fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, group)
     }
 
     /// Sends `msg` without waiting for anything.
     pub fn send(&mut self, msg: Builder) -> io::Result<u32> {
         self.seq = self.seq.wrapping_add(1).max(1);
         let bytes = msg.finish(self.seq);
-        let n = guest_sys::write(self.fd(), &bytes)?;
+        let n = rustix::io::write(&self.fd, &bytes)?;
         if n != bytes.len() {
             return Err(io::Error::other("netlink message cut short"));
         }
@@ -266,13 +268,13 @@ impl Socket {
     /// The messages of one datagram (none if there is none).
     fn receive(&mut self) -> io::Result<Vec<Received>> {
         let n = loop {
-            match guest_sys::read(self.fd(), &mut self.buf) {
+            match rustix::io::read(&self.fd, &mut self.buf) {
                 Ok(n) => break n,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(Vec::new()),
+                Err(Errno::AGAIN) => return Ok(Vec::new()),
                 // The socket overflowed: events were lost, which a program
                 // that waits for them finds by their absence.
-                Err(e) if e.raw_os_error() == Some(ENOBUFS) => {}
-                Err(e) => return Err(e),
+                Err(Errno::NOBUFS) => {}
+                Err(e) => return Err(e.into()),
             }
         };
         let mut out = Vec::new();
@@ -310,7 +312,7 @@ impl Socket {
             if batch.is_empty() {
                 // Nothing yet: wait for the kernel's answer (which it always
                 // gives at once, but for a dump's next part).
-                if guest_sys::poll(self.fd(), guest_sys::POLLIN, 5000)? == 0 {
+                if poll(&mut [PollFd::new(&self.fd, PollFlags::IN)], guest_sys::poll_timeout(5000).as_ref())? == 0 {
                     return Err(io::Error::from(io::ErrorKind::TimedOut));
                 }
                 continue;

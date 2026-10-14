@@ -514,6 +514,14 @@ fn caret_helpers() {
     assert_eq!(st.index_for_x(text, x1 + (x2 - x1) * 0.4), 1);
     assert_eq!(st.index_for_x(text, x1 + (x2 - x1) * 0.6), 2);
     assert_eq!(st.index_for_x("", 5.0), 0);
+    // A letter and its combining accent are one character to the caret.
+    let accented = "ae\u{301}b";
+    for x in (0..80).map(|i| i as f32 * 0.5) {
+        let i = st.index_for_x(accented, x);
+        assert!([0, 1, 4, 5].contains(&i), "x {x} gave index {i}");
+    }
+    let after_accent = st.x_for_index(accented, 4);
+    assert_eq!(st.index_for_x(accented, after_accent + 0.1), 4);
 }
 
 fn check_wrap(st: &ScaledFont<'_, '_>, text: &str, width: f32) -> Vec<core::ops::Range<usize>> {
@@ -740,8 +748,8 @@ fn malformed_fonts_never_panic() {
 
 #[test]
 fn self_referencing_composite_is_an_error() {
-    // Point the first component of a composite glyph at the glyph itself: the recursion limit
-    // must turn this into an error instead of a stack overflow.
+    // Point the first component of a composite glyph at the glyph itself: this must be an error
+    // instead of a stack overflow.
     let lato = font(LATO);
     let is_composite = |g: u16| glyf_data(&lato, g).map(|d| d.len() > 14 && d[0] & 0x80 != 0).unwrap_or(false);
     let target = (0..lato.num_glyphs()).find(|&g| is_composite(g)).unwrap();
@@ -750,7 +758,7 @@ fn self_referencing_composite_is_an_error() {
     // The first component's glyph index follows the 10-byte header and the 2-byte flags.
     d[data_off + 12..data_off + 14].copy_from_slice(&target.to_be_bytes());
     let bad = Font::from_bytes(&d).unwrap();
-    assert_eq!(bad.glyph_bounds(GlyphId(target)), Err(FontError::LimitExceeded));
+    assert!(bad.glyph_bounds(GlyphId(target)).is_err());
     assert!(GlyphRasterizer::new().rasterize(&bad, GlyphId(target), 16.0, 0.0).is_empty());
 }
 

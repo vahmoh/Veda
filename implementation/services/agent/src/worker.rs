@@ -20,10 +20,10 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use serde_json::{Value, json};
 use vabi::RawHandle;
 use vagent::policy;
 use vagent::tools::{self, names};
-use vjson::{Value, object};
 use vproto::agent::{AppAgentInfo, Risk, agentapp};
 use vproto::display::{WindowKind, display};
 use vproto::init::{AppInfo, launcher};
@@ -336,7 +336,7 @@ impl Ctx {
             tools::Risk::Sensitive => Risk::Sensitive,
             tools::Risk::Destructive => Risk::Destructive,
         };
-        let key = policy::key("system", &format!("{name}.{}", args.str("operation").unwrap_or("")));
+        let key = policy::key("system", &format!("{name}.{}", args["operation"].as_str().unwrap_or("")));
         if !approved && self.needs_approval(&key, risk) {
             let (action, detail) = tools::describe(name, args);
             let app = match name {
@@ -390,28 +390,28 @@ impl Ctx {
     }
 
     fn status(&self) -> Value {
-        let mut v = object! { "time" => now_text() };
+        let mut v = json!({ "time": now_text() });
         if let Some(d) = connect(display::NAME, display::Client::new)
             && let Ok(list) = d.list_windows()
         {
             let windows: Vec<Value> = list
                 .iter()
                 .filter(|w| matches!(w.kind, WindowKind::Normal | WindowKind::Borderless))
-                .map(|w| object! { "app" => w.app_id.as_str(), "title" => w.title.as_str(), "in_front" => w.focused, "state" => format!("{:?}", w.state).to_lowercase() })
+                .map(|w| json!({ "app": w.app_id.as_str(), "title": w.title.as_str(), "in_front": w.focused, "state": format!("{:?}", w.state).to_lowercase() }))
                 .collect();
-            v.set("windows", windows);
+            v["windows"] = windows.into();
         }
         if let Some(a) = connect(vproto::audio::audio::NAME, vproto::audio::audio::Client::new)
             && let Ok(s) = a.status()
         {
-            v.set("volume", (s.master_volume * 100.0 + 0.5) as u32);
-            v.set("muted", s.muted);
+            v["volume"] = json!((s.master_volume * 100.0 + 0.5) as u32);
+            v["muted"] = json!(s.muted);
         }
         if let Ok(s) = vnet::status() {
-            v.set("internet", format!("{:?}", s.connectivity).to_lowercase());
+            v["internet"] = json!(format!("{:?}", s.connectivity).to_lowercase());
         }
         if let Ok(w) = vnet::wifi::status() {
-            v.set("wifi", object! { "state" => format!("{:?}", w.state).to_lowercase(), "network" => w.name.as_str() });
+            v["wifi"] = json!({ "state": format!("{:?}", w.state).to_lowercase(), "network": w.name.as_str() });
         }
         v
     }
@@ -423,14 +423,14 @@ impl Ctx {
             .installed()
             .iter()
             .map(|a| {
-                let mut v = object! {
-                    "id" => a.id.as_str(),
-                    "name" => a.name.as_str(),
-                    "about" => a.description.as_str(),
-                    "running" => self.link(&a.id).is_some(),
-                };
+                let mut v = json!({
+                    "id": a.id.as_str(),
+                    "name": a.name.as_str(),
+                    "about": a.description.as_str(),
+                    "running": self.link(&a.id).is_some(),
+                });
                 if let Some(info) = infos.get(&a.id) {
-                    v.set("actions", info.actions.iter().map(|x| Value::from(x.name.as_str())).collect::<Vec<_>>());
+                    v["actions"] = json!(info.actions.iter().map(|x| Value::from(x.name.as_str())).collect::<Vec<_>>());
                 }
                 v
             })
@@ -439,26 +439,26 @@ impl Ctx {
     }
 
     fn app_arg(&self, args: &Value) -> Result<AppInfo, String> {
-        let q = args.str("app").ok_or("which application?")?;
+        let q = args["app"].as_str().ok_or("which application?")?;
         self.find_app(q).ok_or_else(|| format!("there is no application called {q}"))
     }
 
     fn open_app(&mut self, args: &Value) -> Result<Value, String> {
         let app = self.app_arg(args)?;
-        let file = args.str("file").filter(|f| !f.trim().is_empty()).map(resolve).transpose()?;
+        let file = args["file"].as_str().filter(|f| !f.trim().is_empty()).map(resolve).transpose()?;
         // An open application without a file to open comes to the front.
         if file.is_none()
             && let Some(id) = self.find_window(&app.id)
         {
             self.window_action(id, "focus")?;
-            return Ok(object! { "brought_to_front" => app.name.as_str() });
+            return Ok(json!({ "brought_to_front": app.name.as_str() }));
         }
         let launcher = connect(launcher::NAME, launcher::Client::new).ok_or("the launcher is not available")?;
         let argv: Vec<String> = file.iter().cloned().collect();
         match launcher.launch_app(app.id.clone(), argv) {
             Ok(Ok(_)) => {
                 self.note_use(&app.id);
-                Ok(object! { "opened" => app.name.as_str(), "file" => file.as_deref().map(show) })
+                Ok(json!({ "opened": app.name.as_str(), "file": file.as_deref().map(show) }))
             }
             _ => Err(format!("{} could not be started", app.name)),
         }
@@ -476,13 +476,14 @@ impl Ctx {
     fn use_app(&mut self, args: &Value, approved: bool) -> Outcome {
         let r = (|| -> Result<Outcome, String> {
             let app = self.app_arg(args)?;
-            let action = args.str("action").ok_or("which action?")?.to_string();
+            let action = args["action"].as_str().ok_or("which action?")?.to_string();
             let call_args = match args.get("arguments") {
                 Some(v @ Value::Object(_)) => v.clone(),
-                Some(Value::String(s)) => {
-                    vjson::parse(s).ok().filter(|v| v.as_object().is_some()).unwrap_or_else(Value::object)
-                }
-                _ => Value::object(),
+                Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+                    .ok()
+                    .filter(|v| v.as_object().is_some())
+                    .unwrap_or_else(|| json!({})),
+                _ => json!({}),
             };
             self.ensure_running(&app)?;
             let info = self.shared.lock().apps.get(&app.id).cloned();
@@ -509,7 +510,7 @@ impl Ctx {
             link.client.set_timeout(APP_TIMEOUT_NS);
             let result = result.map_err(|_| format!("{} did not answer", app.name))?;
             Ok(Outcome::Result(if result.ok {
-                tools::ok(vjson::parse(&result.result).unwrap_or(Value::String(result.result)))
+                tools::ok(serde_json::from_str::<Value>(&result.result).unwrap_or(Value::String(result.result)))
             } else {
                 tools::error(&result.result)
             }))
@@ -522,7 +523,7 @@ impl Ctx {
         self.take_registrations();
         let link = self.link(&app.id).ok_or_else(|| format!("{} is not open", app.name))?;
         let state = link.client.state().map_err(|_| format!("{} did not answer", app.name))?;
-        Ok(vjson::parse(&state).unwrap_or(Value::String(state)))
+        Ok(serde_json::from_str::<Value>(&state).unwrap_or(Value::String(state)))
     }
 
     /// The id of a window of `app` (or with `app` in its title).
@@ -547,7 +548,7 @@ impl Ctx {
     }
 
     fn window(&mut self, args: &Value) -> Result<Value, String> {
-        let op = args.str("operation").unwrap_or("list");
+        let op = args["operation"].as_str().unwrap_or("list");
         match op {
             "list" => Ok(self.status()["windows"].clone()),
             "show_desktop" => {
@@ -555,7 +556,7 @@ impl Ctx {
                 Ok(Value::Null)
             }
             _ => {
-                let target = args.str("window").ok_or("which window?")?;
+                let target = args["window"].as_str().ok_or("which window?")?;
                 let id = self
                     .find_app(target)
                     .and_then(|a| self.find_window(&a.id))
@@ -568,8 +569,8 @@ impl Ctx {
     }
 
     fn files(&mut self, args: &Value) -> Result<Value, String> {
-        let op = args.str("operation").unwrap_or("");
-        let path = resolve(args.str("path").unwrap_or("~"))?;
+        let op = args["operation"].as_str().unwrap_or("");
+        let path = resolve(args["path"].as_str().unwrap_or("~"))?;
         let err = |e: vfiles::Error| e.to_string();
         match op {
             "list" => {
@@ -578,25 +579,26 @@ impl Ctx {
                     .iter()
                     .filter(|e| !e.name.starts_with('.'))
                     .take(150)
-                    .map(|e| object! { "name" => e.name.as_str(), "folder" => e.is_dir, "size" => vfiles::format::human_size(e.size) })
+                    .map(|e| json!({ "name": e.name.as_str(), "folder": e.is_dir, "size": vfiles::format::human_size(e.size) }))
                     .collect();
-                Ok(object! { "folder" => show(&path), "entries" => list, "total" => entries.len() })
+                Ok(json!({ "folder": show(&path), "entries": list, "total": entries.len() }))
             }
             "find" => {
-                let what = args.str("text").or(args.str("to")).ok_or("what should I look for?")?.to_lowercase();
+                let what =
+                    args["text"].as_str().or(args["to"].as_str()).ok_or("what should I look for?")?.to_lowercase();
                 let mut found = Vec::new();
                 self.find(&path, &what, 0, &mut found);
-                Ok(object! { "matches" => found.into_iter().map(Value::from).collect::<Vec<_>>() })
+                Ok(json!({ "matches": found.into_iter().map(Value::from).collect::<Vec<_>>() }))
             }
             "info" => {
                 let st = self.fs.stat(&path).map_err(err)?;
-                Ok(object! {
-                    "path" => show(&path),
-                    "folder" => st.is_dir,
-                    "size" => vfiles::format::human_size(st.size),
-                    "modified" => vfiles::format::format_time(st.modified),
-                    "kind" => vfiles::kind::kind_name(vfiles::path::file_name(&path), st.is_dir),
-                })
+                Ok(json!({
+                    "path": show(&path),
+                    "folder": st.is_dir,
+                    "size": vfiles::format::human_size(st.size),
+                    "modified": vfiles::format::format_time(st.modified),
+                    "kind": vfiles::kind::kind_name(vfiles::path::file_name(&path), st.is_dir),
+                }))
             }
             "read" => {
                 let bytes = self.fs.read(&path).map_err(err)?;
@@ -606,18 +608,18 @@ impl Ctx {
                         while !text.is_char_boundary(end) {
                             end -= 1;
                         }
-                        Ok(object! { "path" => show(&path), "text" => &text[..end], "truncated" => end < text.len() })
+                        Ok(json!({ "path": show(&path), "text": &text[..end], "truncated": end < text.len() }))
                     }
-                    Err(_) => Ok(object! {
-                        "path" => show(&path),
-                        "kind" => vfiles::kind::kind_name(vfiles::path::file_name(&path), false),
-                        "size" => vfiles::format::human_size(bytes.len() as u64),
-                        "note" => "not a text file; open it in its application instead",
-                    }),
+                    Err(_) => Ok(json!({
+                        "path": show(&path),
+                        "kind": vfiles::kind::kind_name(vfiles::path::file_name(&path), false),
+                        "size": vfiles::format::human_size(bytes.len() as u64),
+                        "note": "not a text file; open it in its application instead",
+                    })),
                 }
             }
             "write" | "append" => {
-                let text = args.str("text").unwrap_or("");
+                let text = args["text"].as_str().unwrap_or("");
                 if !path.starts_with("/home/") && !path.starts_with("/tmp/") {
                     return Err("files can only be written in the home folder".into());
                 }
@@ -627,14 +629,14 @@ impl Ctx {
                 } else {
                     self.fs.append(&path, text.as_bytes()).map_err(err)?;
                 }
-                Ok(object! { "saved" => show(&path) })
+                Ok(json!({ "saved": show(&path) }))
             }
             "create_folder" => {
                 self.fs.mkdir_all(&path).map_err(err)?;
-                Ok(object! { "created" => show(&path) })
+                Ok(json!({ "created": show(&path) }))
             }
             "copy" | "move" | "rename" => {
-                let to = args.str("to").ok_or("where to?")?;
+                let to = args["to"].as_str().ok_or("where to?")?;
                 let mut dest = if op == "rename" && !to.contains('/') && !to.starts_with('~') {
                     vfiles::path::join(vfiles::path::parent(&path), to)
                 } else {
@@ -648,7 +650,7 @@ impl Ctx {
                 } else {
                     self.fs.move_to(&path, &dest).map_err(err)?;
                 }
-                Ok(object! { "done" => op, "from" => show(&path), "to" => show(&dest) })
+                Ok(json!({ "done": op, "from": show(&path), "to": show(&dest) }))
             }
             "delete" => {
                 if path == HOME || !path.starts_with("/home/user/") {
@@ -660,10 +662,10 @@ impl Ctx {
                     );
                 }
                 vfiles::trash::put(&self.fs, &path).map_err(err)?;
-                Ok(object! {
-                    "moved_to_trash" => show(&path),
-                    "note" => "restore puts it back until the Trash is emptied",
-                })
+                Ok(json!({
+                    "moved_to_trash": show(&path),
+                    "note": "restore puts it back until the Trash is emptied",
+                }))
             }
             "list_trash" => {
                 let items = vfiles::trash::items(&self.fs).map_err(err)?;
@@ -672,18 +674,19 @@ impl Ctx {
                     .take(150)
                     .map(|i| {
                         let from = i.info.as_ref().map(|info| show(vfiles::path::parent(&info.origin)));
-                        object! {
-                            "name" => i.original_name(),
-                            "folder" => i.is_dir,
-                            "deleted_from" => from.unwrap_or_else(|| "not known".into()),
-                            "deleted" => vfiles::format::format_time(i.deleted()),
-                        }
+                        json!({
+                            "name": i.original_name(),
+                            "folder": i.is_dir,
+                            "deleted_from": from.unwrap_or_else(|| "not known".into()),
+                            "deleted": vfiles::format::format_time(i.deleted()),
+                        })
                     })
                     .collect();
-                Ok(object! { "trash" => list, "total" => items.len() })
+                Ok(json!({ "trash": list, "total": items.len() }))
             }
             "restore" => {
-                let wanted = args.str("path").ok_or("which item? give where it was deleted from, or its name")?.trim();
+                let wanted =
+                    args["path"].as_str().ok_or("which item? give where it was deleted from, or its name")?.trim();
                 let name = vfiles::path::file_name(wanted).to_lowercase();
                 // By where it was deleted from, else by name: the latest
                 // deleted first.
@@ -694,12 +697,12 @@ impl Ctx {
                     .or_else(|| items.iter().find(|i| i.name == wanted || i.original_name().to_lowercase() == name))
                     .ok_or_else(|| format!("nothing in the Trash is called {wanted}"))?;
                 let to = vfiles::trash::restore(&self.fs, &item.name).map_err(err)?;
-                Ok(object! { "restored" => show(&to) })
+                Ok(json!({ "restored": show(&to) }))
             }
             "empty_trash" => {
                 let n = vfiles::trash::empty(&self.fs).map_err(err)?;
                 let what = if n == 1 { "1 item".to_string() } else { format!("{n} items") };
-                Ok(object! { "emptied" => format!("{what} deleted for good") })
+                Ok(json!({ "emptied": format!("{what} deleted for good") }))
             }
             other => Err(format!("unknown file operation {other}")),
         }
@@ -744,20 +747,20 @@ impl Ctx {
         }
         let level = level.clamp(0, 100);
         a.set_master(level as f32 / 100.0, muted).map_err(|_| "the sound service did not answer")?;
-        Ok(object! { "volume" => level, "muted" => muted })
+        Ok(json!({ "volume": level, "muted": muted }))
     }
 
     fn wifi(&self, args: &Value) -> Result<Value, String> {
         use vnet::wifi;
         let err = |e: wifi::WifiError| e.to_string();
-        match args.str("operation").unwrap_or("status") {
+        match args["operation"].as_str().unwrap_or("status") {
             "status" => {
                 let s = wifi::status().map_err(err)?;
-                Ok(object! {
-                    "state" => format!("{:?}", s.state).to_lowercase(),
-                    "network" => s.name.as_str(),
-                    "radio_on" => s.state != ConnState::RadioOff && s.state != ConnState::NoAdapter,
-                })
+                Ok(json!({
+                    "state": format!("{:?}", s.state).to_lowercase(),
+                    "network": s.name.as_str(),
+                    "radio_on": s.state != ConnState::RadioOff && s.state != ConnState::NoAdapter,
+                }))
             }
             "scan" => {
                 let _ = wifi::scan();
@@ -766,15 +769,15 @@ impl Ctx {
                 let list: Vec<Value> = nets
                     .iter()
                     .take(20)
-                    .map(|n| object! { "name" => n.name.as_str(), "security" => format!("{:?}", n.security), "bars" => n.bars, "saved" => n.saved, "connected" => n.connected })
+                    .map(|n| json!({ "name": n.name.as_str(), "security": format!("{:?}", n.security), "bars": n.bars, "saved": n.saved, "connected": n.connected }))
                     .collect();
                 Ok(Value::Array(list))
             }
             "connect" => {
-                let net = args.str("network").ok_or("which network?")?;
-                wifi::connect(net, args.str("password").filter(|p| !p.is_empty()), true).map_err(err)?;
+                let net = args["network"].as_str().ok_or("which network?")?;
+                wifi::connect(net, args["password"].as_str().filter(|p| !p.is_empty()), true).map_err(err)?;
                 let s = wifi::wait_for(Duration::from_secs(20), |s| s.state == ConnState::Connected).map_err(err)?;
-                Ok(object! { "connected" => s.state == ConnState::Connected, "network" => net })
+                Ok(json!({ "connected": s.state == ConnState::Connected, "network": net }))
             }
             "disconnect" => wifi::disconnect().map(|_| Value::Null).map_err(err),
             "on" => wifi::set_radio(true).map(|_| Value::Null).map_err(err),
@@ -788,17 +791,17 @@ impl Ctx {
         let list = s.wallpapers().map_err(|_| "the desktop did not answer")?;
         let current = s.wallpaper().unwrap_or_default();
         let name_of = |p: &str| vfiles::path::file_stem(p).to_string();
-        match args.str("operation").unwrap_or("list") {
-            "list" => Ok(object! {
-                "pictures" => list.iter().map(|p| Value::from(name_of(p))).collect::<Vec<_>>(),
-                "current" => name_of(&current),
-            }),
+        match args["operation"].as_str().unwrap_or("list") {
+            "list" => Ok(json!({
+                "pictures": list.iter().map(|p| Value::from(name_of(p))).collect::<Vec<_>>(),
+                "current": name_of(&current),
+            })),
             op @ ("set" | "next") => {
                 let path = if op == "next" {
                     let i = list.iter().position(|p| *p == current).map(|i| (i + 1) % list.len().max(1)).unwrap_or(0);
                     list.get(i).cloned().ok_or("there are no wallpapers")?
                 } else {
-                    let want = args.str("picture").ok_or("which picture?")?;
+                    let want = args["picture"].as_str().ok_or("which picture?")?;
                     let w = want.to_lowercase();
                     match list.iter().find(|p| name_of(p).to_lowercase().contains(&w)) {
                         Some(p) => p.clone(),
@@ -806,7 +809,7 @@ impl Ctx {
                     }
                 };
                 match s.set_wallpaper(path.clone()) {
-                    Ok(Ok(())) => Ok(object! { "wallpaper" => name_of(&path) }),
+                    Ok(Ok(())) => Ok(json!({ "wallpaper": name_of(&path) })),
                     _ => Err(format!("the desktop could not use {}", show(&path))),
                 }
             }
@@ -816,8 +819,8 @@ impl Ctx {
 
     fn notify(&self, args: &Value) -> Result<Value, String> {
         let s = connect(shell::NAME, shell::Client::new).ok_or("the desktop is not available")?;
-        let title = args.str("title").unwrap_or("Reminder");
-        let text = args.str("text").unwrap_or("");
+        let title = args["title"].as_str().unwrap_or("Reminder");
+        let text = args["text"].as_str().unwrap_or("");
         s.notify(title.into(), text.into(), "agent".into()).map_err(|_| "the desktop did not answer")?;
         Ok(Value::Null)
     }
@@ -825,12 +828,12 @@ impl Ctx {
     fn timer(&self, args: &Value) -> Result<Value, String> {
         let now = vrt::time::unix_time_ns() / 1_000_000_000;
         let mut sh = self.shared.lock();
-        match args.str("operation").unwrap_or("list") {
+        match args["operation"].as_str().unwrap_or("list") {
             "set" => {
-                let label = args.str("label").unwrap_or("Timer");
+                let label = args["label"].as_str().unwrap_or("Timer");
                 let due = if let Some(s) = args["seconds"].as_f64() {
                     now + (s.max(1.0) as u64)
-                } else if let Some(at) = args.str("at") {
+                } else if let Some(at) = args["at"].as_str() {
                     let (h, m) = at.split_once(':').ok_or("the time must look like 17:30")?;
                     let (h, m): (u64, u64) = (h.trim().parse().map_err(|_| "bad hour")?, m.trim().parse().map_err(|_| "bad minute")?);
                     if h > 23 || m > 59 {
@@ -842,18 +845,18 @@ impl Ctx {
                     return Err("when? give seconds or a time".into());
                 };
                 let id = sh.add_timer(label, due);
-                Ok(object! { "id" => id, "label" => label, "due_in_seconds" => due - now })
+                Ok(json!({ "id": id, "label": label, "due_in_seconds": due - now }))
             }
             "list" => Ok(Value::Array(
-                sh.timers.iter().map(|t| object! { "id" => t.id, "label" => t.label.as_str(), "due_in_seconds" => t.due.saturating_sub(now) }).collect(),
+                sh.timers.iter().map(|t| json!({ "id": t.id, "label": t.label.as_str(), "due_in_seconds": t.due.saturating_sub(now) })).collect(),
             )),
             "cancel" => {
                 let id = args["id"].as_u64().or_else(|| {
-                    let l = args.str("label")?.to_lowercase();
+                    let l = args["label"].as_str()?.to_lowercase();
                     sh.timers.iter().find(|t| t.label.to_lowercase().contains(&l)).map(|t| t.id)
                 });
                 match id.and_then(|id| sh.remove_timer(id)) {
-                    Some(t) => Ok(object! { "cancelled" => t.label.as_str() }),
+                    Some(t) => Ok(json!({ "cancelled": t.label.as_str() })),
                     None => Err("no such timer".into()),
                 }
             }
@@ -864,36 +867,34 @@ impl Ctx {
     fn memory(&self, args: &Value) -> Result<Value, String> {
         let now = vrt::time::unix_time_ns() / 1_000_000_000;
         let mut sh = self.shared.lock();
-        let r = match args.str("operation").unwrap_or("search") {
+        let r = match args["operation"].as_str().unwrap_or("search") {
             "remember" => {
-                let text = args.str("text").filter(|t| !t.trim().is_empty()).ok_or("what should I remember?")?;
-                let id = sh.memory.remember(text, args.str("kind").unwrap_or("fact"), now);
-                Ok(object! { "remembered" => id })
+                let text = args["text"].as_str().filter(|t| !t.trim().is_empty()).ok_or("what should I remember?")?;
+                let id = sh.memory.remember(text, args["kind"].as_str().unwrap_or("fact"), now);
+                Ok(json!({ "remembered": id }))
             }
             "search" => Ok(Value::Array(
                 sh.memory
-                    .search(args.str("text").unwrap_or(""), 15)
+                    .search(args["text"].as_str().unwrap_or(""), 15)
                     .iter()
-                    .map(|f| object! { "id" => f.id, "text" => f.text.as_str() })
+                    .map(|f| json!({ "id": f.id, "text": f.text.as_str() }))
                     .collect(),
             )),
             "forget" => match args["id"].as_u64() {
-                Some(id) if sh.memory.forget(id) => Ok(object! { "forgot" => id }),
+                Some(id) if sh.memory.forget(id) => Ok(json!({ "forgot": id })),
                 Some(_) => Err("nothing with that id".into()),
                 None => {
-                    let gone = sh.memory.forget_matching(args.str("text").unwrap_or(""));
+                    let gone = sh.memory.forget_matching(args["text"].as_str().unwrap_or(""));
                     if gone.is_empty() {
                         Err("nothing matched".into())
                     } else {
-                        Ok(
-                            object! { "forgot" => gone.iter().map(|f| Value::from(f.text.as_str())).collect::<Vec<_>>() },
-                        )
+                        Ok(json!({ "forgot": gone.iter().map(|f| Value::from(f.text.as_str())).collect::<Vec<_>>() }))
                     }
                 }
             },
             "forget_all" => {
                 sh.memory.forget_all();
-                Ok(object! { "forgot" => "everything" })
+                Ok(json!({ "forgot": "everything" }))
             }
             other => Err(format!("unknown memory operation {other}")),
         };
@@ -903,16 +904,16 @@ impl Ctx {
 
     fn system(&self, args: &Value) -> Result<Value, String> {
         let launcher = connect(launcher::NAME, launcher::Client::new).ok_or("the launcher is not available")?;
-        match args.str("operation").unwrap_or("info") {
+        match args["operation"].as_str().unwrap_or("info") {
             "info" => {
                 let info = vrt::object::system_info().map_err(|_| "no system information")?;
-                Ok(object! {
-                    "os" => "Veda 0.1",
-                    "cpus" => info.cpu_count,
-                    "memory_total" => vfiles::format::human_size(info.total_memory),
-                    "memory_free" => vfiles::format::human_size(info.free_memory),
-                    "uptime_minutes" => vrt::time::now_ns() / 60_000_000_000,
-                })
+                Ok(json!({
+                    "os": "Veda 0.1",
+                    "cpus": info.cpu_count,
+                    "memory_total": vfiles::format::human_size(info.total_memory),
+                    "memory_free": vfiles::format::human_size(info.free_memory),
+                    "uptime_minutes": vrt::time::now_ns() / 60_000_000_000,
+                }))
             }
             "restart" => {
                 let _ = launcher.power(vproto::init::power::REBOOT);
@@ -929,17 +930,17 @@ impl Ctx {
     fn tasks(&self, args: &Value) -> Result<Value, String> {
         let launcher = connect(launcher::NAME, launcher::Client::new).ok_or("the launcher is not available")?;
         let tasks = launcher.tasks().map_err(|_| "the launcher did not answer")?;
-        match args.str("operation").unwrap_or("list") {
+        match args["operation"].as_str().unwrap_or("list") {
             "list" => Ok(Value::Array(
                 tasks
                     .iter()
                     .map(|t| {
-                        object! {
-                            "name" => t.name.as_str(),
-                            "id" => t.koid,
-                            "memory" => vfiles::format::human_size(t.memory),
-                            "app" => t.is_app,
-                        }
+                        json!({
+                            "name": t.name.as_str(),
+                            "id": t.koid,
+                            "memory": vfiles::format::human_size(t.memory),
+                            "app": t.is_app,
+                        })
                     })
                     .collect(),
             )),
@@ -947,7 +948,7 @@ impl Ctx {
                 // Only applications: system services are not the agent's to
                 // stop. The program is named exactly (and by its id when
                 // several share the name): the approval may come later.
-                let name = args.str("name").map(str::to_lowercase);
+                let name = args["name"].as_str().map(str::to_lowercase);
                 let id = args["id"].as_u64();
                 let matching: Vec<_> = tasks
                     .iter()
@@ -964,7 +965,7 @@ impl Ctx {
                     }
                 };
                 match launcher.kill(t.koid) {
-                    Ok(Ok(())) => Ok(object! { "ended" => t.name.as_str() }),
+                    Ok(Ok(())) => Ok(json!({ "ended": t.name.as_str() })),
                     _ => Err(format!("{} could not be ended", t.name)),
                 }
             }
@@ -984,15 +985,15 @@ fn describe_info(info: &AppAgentInfo) -> Value {
                 .iter()
                 .map(|p| (p.name.clone(), p.kind.clone(), p.description.clone(), p.required, p.choices.clone()))
                 .collect();
-            object! {
-                "name" => a.name.as_str(),
-                "description" => a.description.as_str(),
-                "parameters" => tools::action_schema(&params),
-                "needs_approval" => a.risk != Risk::Routine,
-            }
+            json!({
+                "name": a.name.as_str(),
+                "description": a.description.as_str(),
+                "parameters": tools::action_schema(&params),
+                "needs_approval": a.risk != Risk::Routine,
+            })
         })
         .collect();
-    object! { "about" => info.summary.as_str(), "actions" => actions }
+    json!({ "about": info.summary.as_str(), "actions": actions })
 }
 
 /// Arguments as they read in an approval request.

@@ -13,6 +13,7 @@ vabi = { workspace = true }
 vrt = { workspace = true, default-features = false }
 vipc = { workspace = true }
 vproto = { workspace = true }
+linux-raw-sys = { workspace = true }
 
 [lints]
 workspace = true

@@ -14,7 +14,6 @@
 //! * [`layout`]: where a video goes in a window, and at what size it is
 //!   decoded.
 //! * [`store`]: what Videos remembers (volume, where each video was left).
-//! * [`find`]: videos by their names, as people say them.
 //! * [`text`]: times and descriptions for people.
 
 #![no_std]
@@ -24,7 +23,6 @@ extern crate alloc;
 extern crate std;
 
 pub mod clock;
-pub mod find;
 pub mod layout;
 pub mod pacing;
 pub mod select;

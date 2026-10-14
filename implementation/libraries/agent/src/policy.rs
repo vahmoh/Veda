@@ -15,7 +15,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vjson::{Value, object};
+use serde_json::{Value, json};
 
 use crate::tools::Risk;
 
@@ -63,20 +63,22 @@ impl Permissions {
         self.always.iter().map(|(k, l)| (k.clone(), l.clone())).collect()
     }
 
-    pub fn to_json(&self) -> Value {
+    /// The permissions as stored: indented JSON.
+    pub fn to_json(&self) -> String {
         let items: Vec<Value> =
-            self.always.iter().map(|(k, l)| object! { "key" => k.as_str(), "label" => l.as_str() }).collect();
-        object! { "always" => items }
+            self.always.iter().map(|(k, l)| json!({ "key": k.as_str(), "label": l.as_str() })).collect();
+        // Strings always serialize.
+        serde_json::to_string_pretty(&json!({ "always": items })).unwrap_or_default()
     }
 
     pub fn from_json(text: &str) -> Permissions {
         let mut p = Permissions::new();
-        if let Ok(v) = vjson::parse(text)
+        if let Ok(v) = serde_json::from_str::<Value>(text)
             && let Some(items) = v["always"].as_array()
         {
             for i in items {
-                if let Some(k) = i.str("key") {
-                    p.allow_always(k, i.str("label").unwrap_or(k), Risk::Sensitive);
+                if let Some(k) = i["key"].as_str() {
+                    p.allow_always(k, i["label"].as_str().unwrap_or(k), Risk::Sensitive);
                 }
             }
         }
@@ -87,7 +89,6 @@ impl Permissions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
 
     #[test]
     fn decides_by_risk_and_permission() {
@@ -101,7 +102,7 @@ mod tests {
         // Destructive actions can never be allowed for good.
         assert!(!p.allow_always("files.delete", "x", Risk::Destructive));
         assert!(p.needs_approval("files.delete", Risk::Destructive));
-        let back = Permissions::from_json(&p.to_json().to_string());
+        let back = Permissions::from_json(&p.to_json());
         assert_eq!(back, p);
         assert!(p.revoke(&k));
         assert!(p.needs_approval(&k, Risk::Sensitive));

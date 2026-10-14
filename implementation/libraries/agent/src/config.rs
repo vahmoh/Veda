@@ -7,7 +7,7 @@
 
 use alloc::string::{String, ToString};
 
-use vjson::{Value, object};
+use serde::Serialize;
 
 /// Defaults: Deepgram's turn-aware recognition, a fast language model of
 /// the lower price tier, and a warm voice.
@@ -18,8 +18,8 @@ pub const DEFAULT_THINK: &str = "gpt-4.1-mini";
 pub const DEFAULT_VOICE: &str = "aura-2-helena-en";
 pub const DEFAULT_IDLE_S: u32 = 40;
 
-/// The agent's settings.
-#[derive(Debug, Clone, PartialEq)]
+/// The agent's settings, stored as JSON in this order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Config {
     pub enabled: bool,
     /// What the agent is called and answers to.
@@ -36,6 +36,7 @@ pub struct Config {
     pub idle_timeout_s: u32,
     /// Another Voice Agent endpoint (a local simulator in tests). Only the
     /// kernel command line sets it.
+    #[serde(skip)]
     pub endpoint: Option<String>,
 }
 
@@ -95,27 +96,19 @@ impl Config {
         Ok(())
     }
 
-    /// The settings as stored.
-    pub fn to_json(&self) -> Value {
-        object! {
-            "enabled" => self.enabled,
-            "name" => self.name.as_str(),
-            "listen_model" => self.listen_model.as_str(),
-            "think_provider" => self.think_provider.as_str(),
-            "think_model" => self.think_model.as_str(),
-            "voice" => self.voice.as_str(),
-            "speed" => self.speed,
-            "listen_for_name" => self.listen_for_name,
-            "idle_timeout_s" => self.idle_timeout_s,
-        }
+    /// The settings as stored: indented JSON (the speed as set: 1.2, not
+    /// the `f64` an `f32` widens to).
+    pub fn to_json(&self) -> String {
+        // Strings, numbers and booleans always serialize.
+        serde_json::to_string_pretty(self).unwrap_or_default()
     }
 
     /// Reads stored settings; anything missing or invalid keeps its
     /// default.
     pub fn from_json(text: &str) -> Config {
         let d = Config::default();
-        let Ok(v) = vjson::parse(text) else { return d };
-        let s = |k: &str, def: &str| v.str(k).filter(|s| !s.is_empty()).unwrap_or(def).to_string();
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return d };
+        let s = |k: &str, def: &str| v[k].as_str().filter(|s| !s.is_empty()).unwrap_or(def).to_string();
         let c = Config {
             enabled: v["enabled"].as_bool().unwrap_or(d.enabled),
             name: s("name", &d.name),
@@ -146,7 +139,6 @@ pub fn valid_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
 
     #[test]
     fn round_trips_and_validates() {
@@ -155,8 +147,10 @@ mod tests {
         c.name = "Sam".into();
         c.speed = 1.2;
         c.idle_timeout_s = 90;
-        let back = Config::from_json(&c.to_json().to_string());
+        let back = Config::from_json(&c.to_json());
         assert_eq!(back, c);
+        assert!(c.to_json().contains("\"speed\": 1.2,"));
+        assert!(!c.to_json().contains("endpoint"));
         assert_eq!(Config::from_json("garbage"), Config::default());
         assert_eq!(Config::from_json(r#"{"name":""}"#).name, DEFAULT_NAME);
         // An invalid stored value falls back to the defaults.

@@ -19,6 +19,7 @@ vabi = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
 vui = { workspace = true }
+vfiles = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

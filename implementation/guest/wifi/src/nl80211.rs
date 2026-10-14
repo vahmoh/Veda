@@ -11,7 +11,7 @@
 //! the control port's frames come to it.
 
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, BorrowedFd};
 
 use guest_netlink::{Attrs, Builder, Family, NETLINK_GENERIC, NLM_F_DUMP, Received, Socket};
 
@@ -240,6 +240,13 @@ pub struct Nl80211 {
     ifindex: u32,
 }
 
+/// The socket's file, for `poll`.
+impl AsFd for Nl80211 {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.socket.as_fd()
+    }
+}
+
 impl Nl80211 {
     /// A socket for interface `ifindex`, receiving its events.
     pub fn open(ifindex: u32) -> io::Result<Nl80211> {
@@ -250,10 +257,6 @@ impl Nl80211 {
             socket.join(id)?;
         }
         Ok(Nl80211 { socket, family: family.id, ifindex })
-    }
-
-    pub fn fd(&self) -> RawFd {
-        self.socket.fd()
     }
 
     /// Whether events wait in the program (a poll would not see them).

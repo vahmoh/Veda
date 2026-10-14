@@ -13,8 +13,9 @@
 
 use alloc::vec::Vec;
 
-use fast_image_resize::images::{Image as Target, ImageRef};
-use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
+use fast_image_resize::images::{TypedImage, TypedImageRef};
+use fast_image_resize::pixels::U8x4;
+use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
 
 use crate::{Image, ImageError, Orientation};
 
@@ -56,11 +57,13 @@ pub fn resize(image: &Image, width: u32, height: u32, filter: Filter) -> Image {
     }
     let mut out = Image::new(width, height);
     let options = ResizeOptions::new().resize_alg(filter.algorithm()).use_alpha(image.has_alpha());
-    let source = ImageRef::new(image.width, image.height, bytemuck::cast_slice(&image.pixels), PixelType::U8x4);
-    let target = Target::from_slice_u8(width, height, bytemuck::cast_slice_mut(&mut out.pixels), PixelType::U8x4);
-    // Both buffers are sized for their images, and of one pixel type: nothing can fail.
+    let source = TypedImageRef::<U8x4>::from_buffer(image.width, image.height, bytemuck::cast_slice(&image.pixels));
+    let target = TypedImage::<U8x4>::from_buffer(width, height, bytemuck::cast_slice_mut(&mut out.pixels));
+    // Both buffers are sized for their images: nothing can fail. Resizing the one pixel type
+    // Veda's images have, rather than any of the thirteen the resizer knows (`Resizer::resize`),
+    // leaves the code for the other twelve out of every program: some 3.7 MB.
     if let (Ok(source), Ok(mut target)) = (source, target) {
-        let _ = Resizer::new().resize(&source, &mut target, &options);
+        let _ = Resizer::new().resize_typed(&source, &mut target, &options);
     }
     out
 }
@@ -87,6 +90,18 @@ pub fn thumbnail(image: &Image, max_width: u32, max_height: u32, filter: Filter)
     }
     let (tw, th) = fit_size(image.width, image.height, max_width, max_height);
     resize(image, tw, th, filter)
+}
+
+/// Crops the centre of `image` to the aspect ratio of `width x height` and scales it to that
+/// size: the picture fills the area and what overflows it is cut off (a wallpaper, a card).
+pub fn cover(image: &Image, width: u32, height: u32, filter: Filter) -> Image {
+    if width == 0 || height == 0 || image.is_empty() {
+        return resize(image, width, height, filter);
+    }
+    let (iw, ih, w, h) = (image.width as u64, image.height as u64, width as u64, height as u64);
+    let (cw, ch) = if iw * h > ih * w { ((ih * w / h).max(1), ih) } else { (iw, (iw * h / w).max(1)) };
+    let cropped = crop(image, ((iw - cw) / 2) as u32, ((ih - ch) / 2) as u32, cw as u32, ch as u32);
+    resize(&cropped, width, height, filter)
 }
 
 /// Returns the part of `image` inside the rectangle at `(x, y)` of size `width x height`,

@@ -128,22 +128,6 @@ pub fn format_uptime(ns: u64) -> String {
     }
 }
 
-/// Human-readable memory size.
-pub fn human_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        return alloc::format!("{bytes} B");
-    }
-    let kib = bytes as f64 / 1024.0;
-    if kib < 1024.0 {
-        return alloc::format!("{kib:.1} KiB");
-    }
-    let mib = kib / 1024.0;
-    if mib < 1024.0 {
-        return alloc::format!("{mib:.1} MiB");
-    }
-    alloc::format!("{:.2} GiB", mib / 1024.0)
-}
-
 impl TaskManager {
     fn new() -> TaskManager {
         let mut tm = TaskManager {

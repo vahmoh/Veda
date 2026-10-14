@@ -11,25 +11,22 @@ These rules apply to every crate in the repository.
   features, no `RUSTC_BOOTSTRAP`.
 * **Proven libraries first.** Where a mature, widely used Rust
   implementation exists (of a protocol, of cryptography, of a file format,
-  of numerical code), Veda uses it rather than writing its own; Veda's own
-  code is what is particular to Veda and the glue that fits libraries to
-  it. In use: smoltcp (TCP/IP), rustls with rustls-webpki and webpki-roots
-  (TLS), the RustCrypto crates (hashes, HMAC, PBKDF2, AES, AES-GCM, CCM,
-  CMAC, AES key wrap, ChaCha20-Poly1305, P-256, P-384, ECDSA,
-  `crypto-bigint`), x25519-dalek and ed25519-dalek, `subtle`, `zeroize` and
-  `httparse`; `libm` and `num-traits` (float functions), `glam` (vectors,
-  matrices, quaternions), `rand`, `rand_pcg` and `rand_distr` (random
-  numbers), FastNoise Lite (noise); zune's JPEG, PNG and BMP decoders,
-  `qoi` and `fast_image_resize` (images); and on the build machine only,
-  `png`, `jpeg-encoder` and `rav1e`. A new dependency must build `no_std`
-  (see Library crates), be declared in the workspace's
-  `[workspace.dependencies]`, and come with a reason; avoid crates with
-  large dependency trees, and a second generation of a crate family
-  already used. A library that is wrong is fixed, not worked around in
-  silence: it becomes a port (`ports/`, as smoltcp and zune-jpeg are: its
-  release with an explained patch, which Cargo builds in its place), and
-  the bug is reported upstream. `core`, `alloc` and (for host tools only)
-  `std` are available.
+  of text handling, of numerical code, of an ABI), Veda uses it rather than
+  writing its own; Veda's own code is what is particular to Veda and the
+  glue that fits libraries to it. [Libraries](DEPENDENCIES.md) lists the
+  libraries in use, and what Veda keeps of its own and why. A new
+  dependency must build `no_std` (see Library crates), be declared in the
+  workspace's `[workspace.dependencies]`, and come with a reason; avoid
+  crates with large dependency trees, and a second generation of a crate
+  family already used. Measure what it adds to a program: programs are
+  linked without whole-program LTO, so what a crate makes reachable
+  (generic code instantiated for every case, features left on) is in
+  every program that calls it. A library that is wrong is fixed, not
+  worked around in silence: it becomes a port (`ports/`, as smoltcp and
+  zune-jpeg are: its release with an explained patch, which Cargo builds
+  in its place), and the bug is reported upstream. `core`, `alloc` and
+  (for host tools and the driver VM's Linux programs only) `std` are
+  available.
 * **Rust only**, performance-critical code included (see Performance below).
   Third-party software that Veda builds (the toolchain: GCC, binutils,
   musl, and Rust for Veda's own target; ...) comes as *ports*

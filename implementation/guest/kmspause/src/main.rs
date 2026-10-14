@@ -11,6 +11,8 @@
 
 use std::time::{Duration, Instant};
 
+use rustix::process::{Pid, Signal, kill_process};
+
 /// How long kms is paused: longer than the compositor waits for a flip
 /// (a second).
 const PAUSE: Duration = Duration::from_secs(4);
@@ -19,13 +21,11 @@ const PAUSE: Duration = Duration::from_secs(4);
 const SETTLE: Duration = Duration::from_secs(5);
 /// How long to wait for kms to set a mode.
 const WAIT: Duration = Duration::from_secs(120);
-const SIGCONT: i32 = 18;
-const SIGSTOP: i32 = 19;
 
 /// The process id of `kms`, if it runs.
-fn kms() -> Option<i32> {
+fn kms() -> Option<Pid> {
     std::fs::read_dir("/proc").ok()?.flatten().find_map(|e| {
-        let pid: i32 = e.file_name().to_str()?.parse().ok()?;
+        let pid = Pid::from_raw(e.file_name().to_str()?.parse().ok()?)?;
         let name = std::fs::read_to_string(e.path().join("comm")).ok()?;
         (name.trim() == "kms").then_some(pid)
     })
@@ -54,13 +54,13 @@ fn main() {
         println!("kmspause: kms does not run");
         return;
     };
-    if let Err(e) = guest_sys::kill(pid, SIGSTOP) {
+    if let Err(e) = kill_process(pid, Signal::STOP) {
         println!("kmspause: cannot pause kms: {e}");
         return;
     }
     println!("kmspause: kms paused");
     std::thread::sleep(PAUSE);
-    match guest_sys::kill(pid, SIGCONT) {
+    match kill_process(pid, Signal::CONT) {
         Ok(()) => println!("kmspause: kms goes on"),
         Err(e) => println!("kmspause: cannot let kms go on: {e}"),
     }

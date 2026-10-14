@@ -41,18 +41,6 @@ const R_SAMPLE_FILE: u8 = 3;
 /// still appear).
 const R_KNOWN_SAMPLE: u8 = 4;
 
-/// CRC-32 (IEEE 802.3).
-pub fn crc32(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-        }
-    }
-    !crc
-}
-
 /// The sample files in the system image (`samples/...`), which seed the
 /// user's home directory.
 pub struct Samples {
@@ -354,7 +342,7 @@ impl Store {
                 continue;
             }
             match self.read(start + 1, len) {
-                Ok(data) if crc32(&data) == crc => best = Some((generation, slot, data)),
+                Ok(data) if crc32fast::hash(&data) == crc => best = Some((generation, slot, data)),
                 _ => println!("home snapshot in slot {} is damaged; ignoring it", slot),
             }
         }
@@ -376,7 +364,7 @@ impl Store {
         header[0..8].copy_from_slice(&MAGIC);
         header[8..16].copy_from_slice(&(self.generation + 1).to_le_bytes());
         header[16..24].copy_from_slice(&(data.len() as u64).to_le_bytes());
-        header[24..28].copy_from_slice(&crc32(data).to_le_bytes());
+        header[24..28].copy_from_slice(&crc32fast::hash(data).to_le_bytes());
         self.write(start, &header)?;
         self.flush()?;
         self.generation += 1;

@@ -16,6 +16,7 @@ bench = false
 
 [dependencies]
 guest-sys = { workspace = true }
+rustix = { workspace = true }
 
 [lints]
 workspace = true

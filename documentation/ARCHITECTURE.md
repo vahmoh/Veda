@@ -510,7 +510,7 @@ shell tells the user with a notification.
 | Library | Role |
 |---------|------|
 | `vraster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
-| `vfont` | TrueType/OpenType (CFF) parsing, glyph outlines, metrics, kerning, a glyph bitmap cache |
+| `vfont` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterized glyphs, a glyph bitmap cache, text layout |
 | `vimage` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding for the build machine's tools (`png`, `jpeg-encoder`) |
 | `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps, shadows, text layout and rendering |
 | `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
@@ -904,7 +904,6 @@ On AMD64:
 | `implementation/libraries/build` | the user programs' target and image base |
 | `implementation/libraries/hv`, `implementation/libraries/iommu` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
 | `implementation/services/devmgr`, `implementation/services/drivervm`, `implementation/services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
-| `implementation/guest/sys` | the driver VM's Linux system call numbers |
 | `verification/systest`, `verification/c`, `verification/ui` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
 | `xtask/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
@@ -936,7 +935,7 @@ of their own (see Architectures above).
 | `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `implementation/libraries/netstack`, `implementation/libraries/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
-| `implementation/libraries/web`, `implementation/libraries/json` | HTTP/1.1 and WebSocket clients over TCP or TLS; JSON |
+| `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/libraries/wlan`, `implementation/libraries/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |

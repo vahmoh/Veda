@@ -18,12 +18,13 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use base64ct::{Base64, Encoding};
 use sha1::{Digest, Sha1};
 use vabi::RawHandle;
 use vrt::time::Duration;
 
-use crate::http::{Reader, parse_head};
-use crate::{Conn, Connection, Url, WebError, base64, random_bytes};
+use crate::http::{Head, Reader, parse_head};
+use crate::{Conn, Connection, Url, WebError, random_bytes};
 
 const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 /// Default limit for one message.
@@ -80,7 +81,7 @@ pub fn accept_key(key: &str) -> String {
     let mut h = Sha1::new();
     h.update(key.as_bytes());
     h.update(GUID.as_bytes());
-    base64::encode(&h.finalize())
+    Base64::encode_string(&h.finalize())
 }
 
 impl WebSocket<Conn> {
@@ -101,7 +102,7 @@ impl<C: Connection> WebSocket<C> {
     pub fn handshake(mut conn: C, url: &Url, headers: &[(&str, &str)]) -> Result<WebSocket<C>, WebError> {
         let mut nonce = [0u8; 16];
         random_bytes(&mut nonce);
-        let key = base64::encode(&nonce);
+        let key = Base64::encode_string(&nonce);
         let mut all: Vec<(&str, &str)> =
             vec![("Upgrade", "websocket"), ("Connection", "Upgrade"), ("Sec-WebSocket-Version", "13")];
         all.push(("Sec-WebSocket-Key", &key));
@@ -117,7 +118,7 @@ impl<C: Connection> WebSocket<C> {
         conn.write_all(head.as_bytes())?;
         let mut r = Reader { conn: &mut conn, buf: Vec::new() };
         let head_len = r.read_head()?;
-        let (status, resp_headers, _) = parse_head(&r.buf[..head_len])?;
+        let Head { status, headers: resp_headers, .. } = parse_head(&r.buf[..head_len])?;
         let find = |name: &str| resp_headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
         if status != 101 {
             // Read whatever error the server explains itself with.
@@ -455,7 +456,7 @@ mod tests {
         assert!(request.starts_with("GET /v1/agent/converse HTTP/1.1\r\nHost: agent.deepgram.com\r\n"));
         assert!(request.contains("Authorization: Token k\r\n"));
         let key = request.lines().find_map(|l| l.strip_prefix("Sec-WebSocket-Key: ")).unwrap().to_string();
-        assert_eq!(base64::decode(&key).unwrap().len(), 16);
+        assert_eq!(Base64::decode_vec(&key).unwrap().len(), 16);
 
         let wrong = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: nope\r\n\r\n";
         assert!(matches!(WebSocket::handshake(TestConn::new(wrong, 5), &url, &[]), Err(WebError::Protocol(_))));

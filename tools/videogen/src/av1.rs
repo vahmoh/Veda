@@ -19,8 +19,8 @@ use rav1e::prelude::{
     InvalidConfig, MatrixCoefficients, PixelRange, Rational, SceneDetectionSpeed, TransferCharacteristics,
 };
 
-use crate::md5::Md5;
 use crate::yuv::Yuv420;
+use md5::{Digest, Md5};
 
 /// OBU types (AV1 specification, section 6.2.2).
 pub const OBU_SEQUENCE_HEADER: u8 = 1;
@@ -239,7 +239,7 @@ fn picture_md5(frame: &Frame<u8>, width: usize, height: usize) -> [u8; 16] {
             md5.update(&data[y * stride..y * stride + w]);
         }
     }
-    md5.finish()
+    md5.finalize().into()
 }
 
 /// The visible part of a frame.
@@ -424,6 +424,6 @@ mod tests {
         md5.update(&picture.y);
         md5.update(&picture.u);
         md5.update(&picture.v);
-        assert_eq!(video.md5[0], md5.finish());
+        assert_eq!(video.md5[0], <[u8; 16]>::from(md5.finalize()));
     }
 }

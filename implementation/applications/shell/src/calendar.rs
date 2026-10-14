@@ -6,7 +6,7 @@
 use alloc::format;
 
 use vgfx::{Align, Color, Rect};
-use vrt::time::DateTime;
+use vrt::time::{DateTime, days_from_civil};
 use vui::{Font, Icon, Ui};
 
 use crate::{Model, chrome, taskbar};
@@ -18,17 +18,6 @@ const PAD: i32 = 20;
 /// Where the flyout appears: above the clock, at the right edge.
 pub fn placement(screen: Rect) -> Rect {
     Rect::new(screen.w - WIDTH - 12, screen.h - taskbar::HEIGHT - 12 - HEIGHT, WIDTH, HEIGHT)
-}
-
-/// Days since 1970-01-01 of a civil date (proleptic Gregorian).
-fn days_from_civil(y: i32, m: u8, d: u8) -> i64 {
-    let y = if m <= 2 { y as i64 - 1 } else { y as i64 };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m as i64 + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 fn days_in_month(y: i32, m: u8) -> u8 {

@@ -373,7 +373,7 @@ describes its actions, reports its state and performs actions; `vui::run`
 registers it with the agent service and answers the agent between frames:
 
 ```rust
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, object, show_path};
+use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, json, show_path};
 
 impl vui::App for Notes {
     fn update(&mut self, ui: &mut vui::Ui) { /* ... */ }
@@ -394,16 +394,16 @@ impl vui::App for Notes {
     }
 
     fn agent_state(&self) -> Value {
-        object! { "note" => self.title.as_str(), "lines" => self.lines.len() }
+        json!({ "note": self.title.as_str(), "lines": self.lines.len() })
     }
 
     fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
         match action {
-            "add_line" => { self.append(arg_str(args, "text")?); Ok(object! { "lines" => self.lines.len() }) }
+            "add_line" => { self.append(arg_str(args, "text")?); Ok(json!({ "lines": self.lines.len() })) }
             "delete_note" => {
                 let path = arg_path(args, "path")?;
                 self.delete(&path).map_err(|e| format!("{} could not be deleted: {e}", show_path(&path)))?;
-                Ok(object! { "deleted" => show_path(&path) })
+                Ok(json!({ "deleted": show_path(&path) }))
             }
             other => Err(format!("Notes has no action called {other}")),
         }
@@ -475,7 +475,7 @@ output) to `target/veda/serial.log`.
 | `implementation/services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
 | `implementation/drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
 | `implementation/libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
-| `implementation/applications/` | the desktop `shell` and the applications; Interceptor's game, testable on the host, is in `interceptor/game` |
+| `implementation/applications/` | the desktop `shell` and the applications; what is testable on the host of Interceptor (its game), Videos and the Terminal is in `interceptor/game`, `videos/core` and `terminal/core` |
 | `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
 | `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
@@ -500,6 +500,8 @@ output) to `target/veda/serial.log`.
   the bridge, the IOMMU and the devices.
 * [Developing](documentation/DEVELOPING.md): build commands, the system
   image, writing applications, performance notes.
+* [Libraries](documentation/DEPENDENCIES.md): the libraries Veda is built
+  on, and what it keeps of its own and why.
 * [Coding conventions](documentation/CODING.md).
 
 ## License

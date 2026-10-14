@@ -26,9 +26,10 @@ talk over kernel channels; the kernel knows nothing about networks.
   (`ports/smoltcp`): its release with one documented patch (see below).
 * **Applications** use `vnet` (`implementation/libraries/net`): blocking,
   `std::net`-like `TcpStream`, `TcpListener`, `UdpSocket`, name resolution,
-  ping, a small HTTP client, and `vnet::wifi` for Wi-Fi; and `vtls`
-  (`implementation/libraries/tls`) for TLS (HTTPS, secure WebSockets) over
-  a `TcpStream`, inside the application's own process.
+  ping, and `vnet::wifi` for Wi-Fi; `vtls`
+  (`implementation/libraries/tls`) for TLS over a `TcpStream`, inside the
+  application's own process; and `vweb` (`implementation/libraries/web`)
+  for HTTP and WebSocket clients over either (HTTPS, secure WebSockets).
 
 Frames travel between processes through shared-memory rings
 (`vproto::netring`): a pair of single-producer/single-consumer rings per
@@ -47,6 +48,7 @@ out, and a system call only when the other side is asleep.
 | `implementation/libraries/radiolink` | `vradiolink`: the message format between `airlink` and `airsim` |
 | `implementation/libraries/net` | `vnet`: the application API, including `vnet::wifi` |
 | `implementation/libraries/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
+| `implementation/libraries/web` | `vweb`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
 | `implementation/libraries/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
 | `implementation/libraries/entropy`, `implementation/kernel/src/random.rs` | the kernel's random number generator |
 | `tools/airsim` | the simulated Wi-Fi environment on the host |
@@ -241,7 +243,8 @@ frame with its own, and Linux keeps what is on its channel.
 use vnet::{Duration, TcpStream};
 
 let mut s = TcpStream::connect_host("example.com", 80, Duration::from_secs(20))?;
-let page = vnet::http::get("http://example.com/", Duration::from_secs(20), 1 << 20)?;
+// HTTP or HTTPS, following redirects; the body at most 1 MiB.
+let page = vweb::http::get("https://example.com/", Duration::from_secs(20), 1 << 20)?;
 
 vnet::wifi::scan()?;
 for n in vnet::wifi::networks()? {
@@ -310,9 +313,13 @@ built `no_std`:
   a ChaCha20 stream keyed from the kernel's generator instead of the
   predictable upstream sPCG32 (`ports/smoltcp`; see `ports/README.md`).
 * **RustCrypto**: `sha1`, `sha2`, `hmac`, `pbkdf2`, `aes`, `ccm`, `cmac`,
-  `aes-kw`, `p256` (SAE), plus `subtle` (constant-time comparisons) and
-  `zeroize`.
-* **httparse** for the HTTP client.
+  `aes-kw`, `p256` (SAE), `base16ct` (keys typed in hexadecimal), plus
+  `subtle` (constant-time comparisons) and `zeroize`; `chacha20` and
+  `blake2` for the kernel's random number generator, which every key comes
+  from.
+* **httparse** for the HTTP client (`vweb`): response heads and the sizes
+  of chunked bodies; **percent-encoding** (the `url` crate's) for URL
+  components and **base64ct** (RustCrypto's) for WebSocket keys.
 * **TLS** (`vtls`):
   * **rustls 0.23.45** (`tls12`, `custom-provider`; no default features):
     the most widely used Rust TLS implementation, memory safe and
@@ -346,12 +353,13 @@ built `no_std`:
 Everything else (the 802.11 protocol, the handshakes, SAE's protocol
 logic, the TLS stream and provider, the services and drivers) is in this
 repository. The cryptography is checked against published test vectors:
-RFC 8439 (ChaCha20), RFC 7693 (BLAKE2s), RFC 3394 (AES key wrap), RFC 4493
-(AES-CMAC), the IEEE 802.11 PSK and PRF vectors, the IEEE 802.11i CCMP
-test MPDUs, the IEEE 802.11-2020 Annex J.10 SAE vectors, and for TLS the
-RFC 8448 handshake trace (X25519, protected records, RSA-PSS and PKCS#1
-signatures), RFC 4231 (HMAC), RFC 8032 (Ed25519), the TLS 1.2 PRF vector
-and RSA signatures made by OpenSSL.
+RFC 8439 (the smoltcp port's ChaCha20 generator), RFC 3394 (AES key
+wrap), RFC 4493 (AES-CMAC), the IEEE 802.11 PSK and PRF vectors, the IEEE
+802.11i CCMP test MPDUs, the IEEE 802.11-2020 Annex J.10 SAE vectors, and
+for TLS the RFC 8448 handshake trace (X25519, protected records, RSA-PSS
+and PKCS#1 signatures), RFC 4231 (HMAC), RFC 8032 (Ed25519), the TLS 1.2
+PRF vector and RSA signatures made by OpenSSL; the kernel's generator
+(RustCrypto's ChaCha20 and BLAKE2s) against its known answers.
 
 ## Testing
 
@@ -409,6 +417,7 @@ and RSA signatures made by OpenSSL.
   system certificate store to add one to (`ClientConfigBuilder` can, per
   application). Certificate checks depend on the firmware clock being
   right.
-* An HTTPS client in `vnet::http` (applications speak HTTP over a
-  `vtls::TlsStream` themselves for now).
+* HTTP: one request per connection (`Connection: close`), no compressed
+  bodies, cookies or caching (`vweb`'s client serves API calls and
+  downloads).
 * Encrypting the saved passphrases at rest.

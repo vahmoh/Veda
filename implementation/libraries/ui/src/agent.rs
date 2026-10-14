@@ -46,7 +46,9 @@ use vrt::object::{Channel, Event};
 use vrt::sync::{Condvar, Mutex};
 use vrt::time::Duration;
 
-pub use vjson::{Map, Value, object};
+pub use serde_json::{Map, Value, json};
+
+pub mod names;
 
 /// How long registering with the agent service may take before the
 /// application gives up and runs without it.
@@ -125,10 +127,17 @@ pub fn arg_opt_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
 /// language models sometimes quote them).
 pub fn arg_f64(args: &Value, name: &str) -> Result<f64, String> {
     match args.get(name) {
-        Some(Value::Number(n)) => Ok(n.as_f64()),
+        Some(Value::Number(n)) => n.as_f64().ok_or_else(|| alloc::format!("'{name}' must be a number")),
         Some(Value::String(s)) => s.trim().parse().map_err(|_| alloc::format!("'{name}' must be a number")),
         _ => Err(alloc::format!("missing number argument '{name}'")),
     }
+}
+
+/// An `f32` as a JSON number with the decimals it was set with (0.85, not
+/// the 0.8500000238418579 a widening to `f64` gives); `null` if it is not
+/// finite.
+pub fn number(f: f32) -> Value {
+    alloc::format!("{f}").parse::<f64>().map_or(Value::Null, Value::from)
 }
 
 /// Reads a boolean argument (`"true"`/`"false"` accepted).
@@ -228,9 +237,9 @@ impl<S: AgentServer + ?Sized> agentapp::Server for Dispatch<'_, S> {
     }
 
     fn invoke(&mut self, action: String, args: String) -> ActionResult {
-        let args = match vjson::parse(&args) {
+        let args = match serde_json::from_str::<Value>(&args) {
             Ok(v @ Value::Object(_)) => v,
-            Ok(Value::Null) => Value::object(),
+            Ok(Value::Null) => json!({}),
             Ok(_) | Err(_) => return ActionResult { ok: false, result: "the arguments must be a JSON object".into() },
         };
         match self.0.agent_invoke(&action, &args) {

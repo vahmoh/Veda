@@ -53,14 +53,18 @@ pub trait App {
     }
 
     /// What the app shows right now, for the agent (a JSON value).
-    fn agent_state(&self) -> vjson::Value {
-        vjson::Value::Null
+    fn agent_state(&self) -> serde_json::Value {
+        serde_json::Value::Null
     }
 
     /// Runs one of the actions from [`App::agent_info`] for the agent.
     /// `args` is a JSON object; the result is a JSON value for the agent
     /// (or a short explanation of what went wrong).
-    fn agent_invoke(&mut self, _action: &str, _args: &vjson::Value) -> Result<vjson::Value, alloc::string::String> {
+    fn agent_invoke(
+        &mut self,
+        _action: &str,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, alloc::string::String> {
         Err("this app does not offer that".into())
     }
 }
@@ -77,11 +81,15 @@ impl<A: App> AgentServer for AppAgent<'_, A> {
         })
     }
 
-    fn agent_state(&self) -> vjson::Value {
+    fn agent_state(&self) -> serde_json::Value {
         self.0.agent_state()
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vjson::Value) -> Result<vjson::Value, alloc::string::String> {
+    fn agent_invoke(
+        &mut self,
+        action: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, alloc::string::String> {
         self.0.agent_invoke(action, args)
     }
 }

@@ -23,12 +23,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use terminal_core::screen::{Cell, Style, cells, color};
 use vproto::init::{AppInfo, LaunchError, launcher};
 
 use crate::commands;
 use crate::job::Output;
 use crate::program::{self, Console, Destination, Input, Run};
-use crate::screen::{Cell, Style, cells, color};
 use vfiles::path::{display_path, file_name, glob_match, has_wildcards, is_read_only, normalize, resolve};
 use vfiles::{Fs, HOME};
 

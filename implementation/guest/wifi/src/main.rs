@@ -25,10 +25,9 @@ mod nl80211;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
-use guest_sys::{POLLIN, POLLOUT, PollFd, poll_many};
+use rustix::event::{PollFd, PollFlags, poll};
 use vabi::signals;
 use vipc::Bytes;
 use vproto::netring::{Link, RxInfo, SlotMeta, kind};
@@ -750,23 +749,30 @@ fn run(radio: &mut Radio, att: &Attachment) -> io::Result<()> {
             continue;
         }
         let timeout = if radio.nl.has_events() { 0 } else { CHECK.as_millis() as i32 };
-        let mut fds = [
-            PollFd::new(radio.data.as_raw_fd(), POLLIN | if from_veda { 0 } else { POLLOUT }),
-            PollFd::new(radio.nl.fd(), POLLIN),
-            PollFd::new(control.as_raw_fd(), POLLIN),
-            PollFd::new(closed.as_raw_fd(), POLLIN),
-            PollFd::new(if from_veda { wake.as_raw_fd() } else { -1 }, POLLIN),
+        let radio_events = if from_veda { PollFlags::IN } else { PollFlags::IN | PollFlags::OUT };
+        let mut fds = vec![
+            PollFd::new(&radio.data, radio_events),
+            PollFd::new(&radio.nl, PollFlags::IN),
+            PollFd::new(&control, PollFlags::IN),
+            PollFd::new(&closed, PollFlags::IN),
         ];
-        let _ = poll_many(&mut fds, timeout);
+        if from_veda {
+            fds.push(PollFd::new(&wake, PollFlags::IN));
+        }
+        let _ = poll(&mut fds, guest_sys::poll_timeout(timeout).as_ref());
+        let closing = !fds[3].revents().is_empty();
+        let controlled = fds[2].revents().contains(PollFlags::IN);
+        let woken = fds.get(4).is_some_and(|f| f.revents().contains(PollFlags::IN));
+        drop(fds);
         att.link.finish_wait();
-        if fds[3].revents != 0 {
+        if closing {
             return Ok(());
         }
         // Taken: the next poll waits for them again.
-        if fds[2].revents & POLLIN != 0 {
+        if controlled {
             let _ = control.read(&mut [0u8; 4]);
         }
-        if fds[4].revents & POLLIN != 0 {
+        if woken {
             let _ = wake.read(&mut [0u8; 4]);
         }
     }

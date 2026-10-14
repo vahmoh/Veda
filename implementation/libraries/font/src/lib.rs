@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! TrueType/OpenType (glyf and CFF) font parsing, rasterization, caching and text layout.
+//! Fonts: TrueType/OpenType (glyf and CFF) metrics, kerning, outlines, rasterization,
+//! caching and text layout.
 //!
-//! * [`Font`] is a zero-copy parser over the font file bytes: table directory, metrics
-//!   ([`FontMetrics`]), names, `cmap` (formats 4 and 12, plus 0/6/13), kerning (GPOS PairPos for
-//!   the `kern` feature, or the legacy `kern` table; cached) and glyph outlines (TrueType quadratic
-//!   outlines including composites, and CFF Type 2 charstrings).
+//! * [`Font`] is a zero-copy view of a font file, read by the `ttf-parser` crate (the tables,
+//!   character maps, names and outlines): its metrics ([`FontMetrics`]),
+//!   names, character mapping, kerning (GPOS PairPos for the `kern` feature, or the legacy `kern`
+//!   table; cached) and glyph outlines (TrueType quadratic outlines including composites, and CFF
+//!   Type 2 charstrings).
 //! * [`OutlineSink`] receives outlines in font units; [`PathSink`] / [`Font::glyph_path`] produce
 //!   [`vraster::Path`]s in pixels (scaled, y flipped).
 //! * [`rasterize_glyph`] / [`GlyphRasterizer`] render anti-aliased [`GlyphBitmap`]s at fractional
@@ -35,9 +37,9 @@
 //! }
 //! ```
 //!
-//! Malformed fonts never cause panics or unbounded work: every read is bounds-checked, composite
-//! glyph nesting, charstring subroutine depth and operation counts are limited, and errors are
-//! reported as [`FontError`].
+//! Malformed fonts never cause panics or unbounded work: the crates bounds-check every read and
+//! limit composite glyph nesting, charstring subroutine depth and operation counts, and errors
+//! are reported as [`FontError`].
 
 #![no_std]
 
@@ -46,15 +48,11 @@ extern crate alloc;
 extern crate std;
 
 mod cache;
-mod cff;
-mod cmap;
 mod font;
-mod glyf;
 mod kern;
 mod layout;
 mod name;
 mod outline;
-mod parse;
 mod raster;
 
 use core::fmt;
@@ -81,7 +79,7 @@ impl GlyphId {
 pub enum FontError {
     /// The data ends before a structure it declares.
     Truncated,
-    /// Not a supported font format (unknown signature, CFF2, non-Type 2 charstrings, ...).
+    /// Not a supported font format (an unknown signature, outlines only in `VARC`, ...).
     UnsupportedFormat,
     /// The font index is out of range for this (collection) file.
     InvalidFontIndex,
