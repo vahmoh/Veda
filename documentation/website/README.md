@@ -22,7 +22,7 @@ is published.
 The animations are Veda's own, not look-alikes:
 
 * **The hero's sky** is the *Aurora* wallpaper
-  (`generation/assetgen/src/wallpapers.rs`), with its blooms and its three
+  (`generation/assets/src/wallpapers.rs`), with its blooms and its three
   silky ribbons (their cores, filaments, halos and curtains of rays),
   rewritten as a WebGL shader, so that the ribbons flow. It is drawn below
   the screen's resolution (it is all soft light), and only while it is in

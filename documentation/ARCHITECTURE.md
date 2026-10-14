@@ -68,7 +68,7 @@ card is attached, or none is coming, as devmgr tells the audio service;
 the window system waits for that 3 s at most), the ring swells and fades,
 the words lift away and the desktop dissolves in, in under a second, and
 the startup sound, `/system/sounds/startup.wav` (composed by
-`generation/musicgen`), starts with it: the shell holds it in a paused stream
+`generation/music`), starts with it: the shell holds it in a paused stream
 and starts it when told the desktop appears (`WindowEvent::Appearing`).
 So the desktop appears on its final screen, with its sound and its
 devices there. The splash's gradient is dark and steps only a few dozen
@@ -695,7 +695,7 @@ the same every time), and the land's noise FastNoise Lite's.
   with the Doppler shift of a car going by, tyres, wind, crashes and the
   cues of the menus; placed by distance, direction and motion, echoed in
   the tunnel, and limited, in a thread of their own. The music is loops of
-  stems that `generation/musicgen` renders at build time; the chase's second
+  stems that `generation/music` renders at build time; the chase's second
   stem joins as the suspect is caught up with.
 * **How it runs** shows in a corner: the frame rate and what renders (the
   GPU as Mesa names it, the host's under QEMU, or the processor); F3 adds
@@ -735,7 +735,7 @@ the same every time), and the land's noise FastNoise Lite's.
   its own counter and clamps the peer's: a misbehaving client can only
   garble its own audio.
 * `vaudio` holds the formats (WAV, QOA), the resampler, mixing, an FFT for
-  visualisers, and a synthesiser and sequencer that `generation/musicgen`
+  visualisers, and a synthesiser and sequencer that `generation/music`
   uses to render the bundled album and the startup sound at build time.
 * `vaudio` also holds the voice processing for an always-listening
   assistant. `aec::EchoCanceller` removes the loudspeakers' sound from the

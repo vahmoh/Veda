@@ -65,9 +65,9 @@ members = [
     "implementation/applications/videos/core",
     "implementation/applications/terminal/core",
     "implementation/services/audio",
-    "generation/assetgen",
-    "generation/musicgen",
-    "generation/videogen",
+    "generation/assets",
+    "generation/music",
+    "generation/videos",
     "implementation/drivers/virtio-blk",
     "implementation/drivers/ahci",
     "implementation/drivers/nvme",
@@ -174,11 +174,11 @@ webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
-# MD5 for generation/videogen only: FLAC's STREAMINFO signature and the
+# MD5 for generation/videos only: FLAC's STREAMINFO signature and the
 # sample videos' picture fingerprints (what FFmpeg's decoder checks them
 # against).
 md-5 = { version = "0.11.0", default-features = false }
-# AV1 encoding for generation/videogen only (the sample videos, made on the
+# AV1 encoding for generation/videos only (the sample videos, made on the
 # build machine; never in the image): Veda decodes AV1, but has no encoder
 # of its own. No assembly, no threads, so it encodes the same everywhere.
 rav1e = { version = "0.8.1", default-features = false }

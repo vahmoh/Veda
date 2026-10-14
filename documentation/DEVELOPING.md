@@ -179,7 +179,7 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
   `verification/ui/startup.vts` checks both, and that the sound reaches the
   recording. Its look is in
   `implementation/services/compositor/src/startup.rs` (timings, colours,
-  the tagline); the sound is `generation/musicgen/src/songs/startup.rs`.
+  the tagline); the sound is `generation/music/src/songs/startup.rs`.
   `startup-sound=off` on the kernel command line (`--cmdline`, or the
   `BOOT.CFG` of an image) leaves the sound out; the scripts that check a
   recording of the sound output, or feed it back into the microphone, boot
@@ -446,7 +446,7 @@ through all of that. The scripts that need the real decoder say
 `requires media`.
 
 The sample videos (`samples/Videos`, copied to `~/Videos`) are made at
-build time by `generation/videogen`: scenes drawn with `vgfx` and sound made
+build time by `generation/videos`: scenes drawn with `vgfx` and sound made
 with `vaudio`, encoded with rav1e (AV1, on the build machine only) and a
 FLAC encoder of its own into Matroska. It also writes
 `/system/tests/videos/Countdown.md5`, the encoder's MD5 of every picture,
