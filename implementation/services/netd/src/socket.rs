@@ -213,10 +213,7 @@ impl Conn {
         let mut buf = alloc::vec![0u8; CHUNK];
         while self.rx_outstanding < RECEIVE_WINDOW {
             let room = ((RECEIVE_WINDOW - self.rx_outstanding) as usize).min(CHUNK);
-            let n = match stack.tcp_recv(self.id, &mut buf[..room]) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
+            let n = stack.tcp_recv(self.id, &mut buf[..room]).unwrap_or_default();
             if n == 0 {
                 break;
             }

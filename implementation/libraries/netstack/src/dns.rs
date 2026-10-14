@@ -292,6 +292,22 @@ pub(crate) enum Reject {
     ServerFailure,
 }
 
+/// An answer record the resolver uses.
+#[derive(Debug)]
+struct Record {
+    owner: String,
+    ttl: u32,
+    data: RecordData,
+}
+
+#[derive(Debug)]
+enum RecordData {
+    /// From an A or AAAA record.
+    Address(IpAddr),
+    /// The name a CNAME record's owner is an alias of.
+    Cname(String),
+}
+
 /// Parses an answer to the query (`txid`, `name`, `qtype`).
 pub(crate) fn parse_response(msg: &[u8], txid: u16, name: &str, qtype: u16) -> Result<Answer, Reject> {
     let packet = DnsPacket::new_checked(msg).map_err(|_| Reject::Ignore)?;
@@ -313,7 +329,7 @@ pub(crate) fn parse_response(msg: &[u8], txid: u16, name: &str, qtype: u16) -> R
     let rcode = packet.rcode();
     let truncated = flags & 0x0200 != 0;
     // Answer section.
-    let mut records: Vec<(String, u16, u32, Option<IpAddr>, Option<String>)> = Vec::new();
+    let mut records: Vec<Record> = Vec::new();
     for _ in 0..packet.answer_record_count().min(64) {
         let (next, rec) = match DnsRecord::parse(rest) {
             Ok(v) => v,
@@ -323,16 +339,16 @@ pub(crate) fn parse_response(msg: &[u8], txid: u16, name: &str, qtype: u16) -> R
         };
         rest = next;
         let Some(owner) = decode_name(&packet, rec.name) else { break };
-        match rec.data {
-            DnsRecordData::A(a) => records.push((owner, TYPE_A, rec.ttl, Some(IpAddr::V4(a)), None)),
-            DnsRecordData::Aaaa(a) => records.push((owner, TYPE_AAAA, rec.ttl, Some(IpAddr::V6(a)), None)),
-            DnsRecordData::Cname(target) => {
-                if let Some(t) = decode_name(&packet, target) {
-                    records.push((owner, 5, rec.ttl, None, Some(t)));
-                }
-            }
-            DnsRecordData::Other(..) => {}
-        }
+        let data = match rec.data {
+            DnsRecordData::A(a) => RecordData::Address(IpAddr::V4(a)),
+            DnsRecordData::Aaaa(a) => RecordData::Address(IpAddr::V6(a)),
+            DnsRecordData::Cname(target) => match decode_name(&packet, target) {
+                Some(target) => RecordData::Cname(target),
+                None => continue,
+            },
+            DnsRecordData::Other(..) => continue,
+        };
+        records.push(Record { owner, ttl: rec.ttl, data });
     }
     // The SOA minimum in the authority section bounds negative caching.
     let mut soa_ttl: Option<u32> = None;
@@ -366,21 +382,23 @@ pub(crate) fn parse_response(msg: &[u8], txid: u16, name: &str, qtype: u16) -> R
     let mut current = String::from(name);
     let mut ttl = u32::MAX;
     for _ in 0..MAX_CNAME_CHAIN {
-        match records.iter().find(|r| r.0 == current && r.1 == 5) {
-            Some(r) => {
-                ttl = ttl.min(r.2);
-                current = r.4.clone().unwrap_or_default();
-            }
-            None => break,
-        }
+        let link = records.iter().find_map(|r| match &r.data {
+            RecordData::Cname(target) if r.owner == current => Some((target, r.ttl)),
+            _ => None,
+        });
+        let Some((target, link_ttl)) = link else { break };
+        ttl = ttl.min(link_ttl);
+        current = target.clone();
     }
+    // The addresses of the type asked for, at the chain's end.
     let mut addrs = Vec::new();
-    for r in records.iter().filter(|r| r.0 == current && r.1 == qtype) {
-        if let Some(a) = r.3
+    for r in records.iter().filter(|r| r.owner == current) {
+        if let RecordData::Address(a) = r.data
+            && matches!((qtype, a), (TYPE_A, IpAddr::V4(_)) | (TYPE_AAAA, IpAddr::V6(_)))
             && !addrs.contains(&a)
         {
             addrs.push(a);
-            ttl = ttl.min(r.2);
+            ttl = ttl.min(r.ttl);
         }
     }
     if addrs.is_empty() {
@@ -526,7 +544,7 @@ impl Stack {
             if q.answer.is_some() || q.attempt.is_some() {
                 continue;
             }
-            if servers.is_empty() || q.tries >= servers.len().max(1) * ROUNDS + 1 {
+            if servers.is_empty() || q.tries > servers.len().max(1) * ROUNDS {
                 q.answer =
                     Some(Answer::Failed(if servers.is_empty() { NetError::DnsFailure } else { NetError::TimedOut }));
                 continue;
@@ -715,6 +733,8 @@ pub(crate) mod tests {
                 ("www.example.com", 5, 300, encode_name("cdn.example.net")),
                 ("cdn.example.net", 1, 60, vec![93, 184, 215, 14]),
                 ("cdn.example.net", 1, 120, vec![93, 184, 215, 15]),
+                // Not the type asked for.
+                ("cdn.example.net", 28, 30, "2001:db8::1".parse::<core::net::Ipv6Addr>().unwrap().octets().to_vec()),
                 ("unrelated.example", 1, 10, vec![1, 2, 3, 4]),
             ],
             &[],

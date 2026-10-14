@@ -136,13 +136,12 @@ fn main() -> i32 {
             count += 1;
             bytes = rest;
         }
-        for pair in bytes.chunks_exact(2) {
-            samples[count] = i16::from_le_bytes([pair[0], pair[1]]);
+        let (pairs, odd) = bytes.as_chunks::<2>();
+        for pair in pairs {
+            samples[count] = i16::from_le_bytes(*pair);
             count += 1;
         }
-        if bytes.len() % 2 == 1 {
-            carry = bytes.last().copied();
-        }
+        carry = odd.first().copied();
         if ring.consumer_flags() & flags::CAPTURE == 0 {
             // Nobody is listening: the audio is dropped, like a microphone
             // whose recording has not been started.

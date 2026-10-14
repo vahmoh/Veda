@@ -16,7 +16,7 @@
 //! the stack tells them apart (refused, reset, timed out) from its own
 //! bookkeeping, so applications get accurate errors.
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, VecDeque, btree_map};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -135,8 +135,8 @@ impl Table {
         loop {
             let id = self.next;
             self.next = self.next.wrapping_add(1).max(1);
-            if !self.map.contains_key(&id) {
-                self.map.insert(id, e);
+            if let btree_map::Entry::Vacant(slot) = self.map.entry(id) {
+                slot.insert(e);
                 return id;
             }
         }
