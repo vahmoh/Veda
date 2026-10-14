@@ -5,7 +5,7 @@
 //! of its own (see "Crates" in `implementation/ports/README.md`).
 //!
 //! The workspace depends on each one's release by its version, as on any
-//! crate. [`prepare`], which every `cargo xtask` command runs before
+//! crate. [`prepare`], which every `cargo orchestration` command runs before
 //! anything else, has Cargo build the port in its place: it downloads and
 //! checks the release, has `implementation/ports/crates.sh` unpack it and
 //! apply the port's patches in `implementation/ports/.crates/src/<crate>`,
@@ -49,8 +49,8 @@ pub fn prepare() -> Result {
     let (config, stamp) = (root.join("config.toml"), root.join("prepared"));
     let print = fingerprint()?;
     let mut changed = false;
-    // One preparation at a time (another `cargo xtask` may be at it): the
-    // lock is held until Cargo has the crates.
+    // One preparation at a time (another `cargo orchestration` may be at
+    // it): the lock is held until Cargo has the crates.
     let _lock = if prepared(&root, &stamp, &print) {
         None
     } else {
@@ -61,9 +61,9 @@ pub fn prepare() -> Result {
         if !prepared(&root, &stamp, &print) {
             // Until the crates are ready, nothing says they are: Cargo takes
             // the releases (a crate that a failed preparation has left out
-            // would stop it from building anything, xtask included), and the
-            // next command prepares them again (one it has left half done
-            // too, whichever ports it is prepared from).
+            // would stop it from building anything, `orchestration`
+            // included), and the next command prepares them again (one it
+            // has left half done too, whichever ports it is prepared from).
             for file in [&config, &stamp] {
                 let _ = std::fs::remove_file(file);
             }
@@ -90,8 +90,8 @@ pub fn prepare() -> Result {
     check_lock()
 }
 
-/// For `cargo xtask doctor`: the crates, as Cargo builds them (prepared
-/// now if they were not).
+/// For `cargo orchestration doctor`: the crates, as Cargo builds them
+/// (prepared now if they were not).
 pub fn status() -> std::result::Result<String, String> {
     prepare()?;
     let crates: Vec<String> =
@@ -162,12 +162,12 @@ fn unpack(root: &Path) -> Result {
 /// `config.toml`: the crates, for Cargo, in place of their releases.
 fn config_text() -> String {
     let mut text = String::from(
-        "# Written by `cargo xtask` (xtask/src/crates.rs): Cargo builds the\n\
-         # crates in implementation/ports/ as they are prepared here, in place\n\
-         # of their releases. It takes these paths from implementation/ports/,\n\
-         # the directory above this file's. Should one of them be missing,\n\
-         # remove implementation/ports/.crates: the next `cargo xtask` command\n\
-         # prepares them anew.\n\
+        "# Written by `cargo orchestration` (orchestration/src/crates.rs): Cargo\n\
+         # builds the crates in implementation/ports/ as they are prepared here,\n\
+         # in place of their releases. It takes these paths from\n\
+         # implementation/ports/, the directory above this file's. Should one of\n\
+         # them be missing, remove implementation/ports/.crates: the next\n\
+         # `cargo orchestration` command prepares them anew.\n\
          [patch.crates-io]\n",
     );
     for name in CRATES {

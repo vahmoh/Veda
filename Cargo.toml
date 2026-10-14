@@ -4,7 +4,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "xtask",
+    "orchestration",
     "implementation/boot",
     "implementation/kernel",
     "implementation/libraries/abi",
@@ -92,16 +92,16 @@ members = [
     "implementation/guest/input",
     "implementation/guest/renderer",
 ]
-# The crates in implementation/ports/, as `cargo xtask` prepares them for
-# Cargo, are not members (their own tests and dev-dependencies stay out of
-# this workspace): see "Crates" in implementation/ports/README.md. Nor is
+# The crates in implementation/ports/, as `cargo orchestration` prepares them
+# for Cargo, are not members (their own tests and dev-dependencies stay out
+# of this workspace): see "Crates" in implementation/ports/README.md. Nor is
 # anything in target/, such as the release of Rust that the toolchain is
 # built from.
 exclude = ["implementation/ports/.crates", "target"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
-# inside Veda is cross-built by `cargo xtask build`, which knows the correct
-# target for every component.
-default-members = ["xtask"]
+# inside Veda is cross-built by `cargo orchestration build`, which knows the
+# correct target for every component.
+default-members = ["orchestration"]
 
 [workspace.package]
 version = "0.1.0"
@@ -192,9 +192,9 @@ crypto-bigint = { version = "0.7.5", default-features = false, features = ["allo
 # the same every time.
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
-# A WebSocket server for xtask's stand-in for Deepgram's Voice Agent API,
-# on the build machine only: RFC 6455's handshake, frames and closing
-# handshake (same sha1 and rand generations as above).
+# A WebSocket server for `orchestration`'s stand-in for Deepgram's Voice
+# Agent API, on the build machine only: RFC 6455's handshake, frames and
+# closing handshake (same sha1 and rand generations as above).
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 # The Linux ABI that the POSIX layer gives musl (implementation/libraries/
 # posix): constants and system call numbers as Linux's own headers define

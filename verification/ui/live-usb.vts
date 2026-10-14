@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# The live system (`cargo xtask iso`) started from a USB stick, as a PC starts
-# it: the desktop comes up with the home directory in memory, and no disk
-# driver of Veda's runs, so the computer's disks are never touched. The
-# stick is on the USB controller, which goes to the driver VM: Linux finds
-# it, where logkeeper would keep the system's log (live-logs.vts), but this
-# one cannot be written to.
+# The live system (`cargo orchestration iso`) started from a USB stick, as a
+# PC starts it: the desktop comes up with the home directory in memory, and
+# no disk driver of Veda's runs, so the computer's disks are never touched.
+# The stick is on the USB controller, which goes to the driver VM: Linux
+# finds it, where logkeeper would keep the system's log (live-logs.vts), but
+# this one cannot be written to.
 live
 fail-on "PANIC"
 wait-serial "desktop ready" 120

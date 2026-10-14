@@ -4,11 +4,11 @@
 //! The architecture Veda is built for.
 //!
 //! Everything about building Veda and running it in QEMU that depends on
-//! the architecture Veda is built for (not on the one xtask runs on) is in
-//! `xtask/src/arch/<architecture>/`. Veda is built for AMD64
-//! (`xtask/src/arch/amd64/`). The rest of xtask reaches it only through the
-//! interface below, which every architecture provides with the same names
-//! and meanings:
+//! the architecture Veda is built for (not on the one `orchestration` runs
+//! on) is in `orchestration/src/arch/<architecture>/`. Veda is built for
+//! AMD64 (`orchestration/src/arch/amd64/`). The rest of `orchestration`
+//! reaches it only through the interface below, which every architecture
+//! provides with the same names and meanings:
 //!
 //! | Item | What it provides |
 //! |------|------------------|
@@ -22,8 +22,8 @@
 //! | `qemu` | QEMU's machine: its emulator, firmware and arguments, its chipset's devices, its processors' registers |
 //! | `acpitest` | ACPI tables that tests add to the machine's |
 //!
-//! Code in `src/arch/<architecture>/` may use the rest of xtask; the rest
-//! of xtask uses nothing of it but this.
+//! Code in `src/arch/<architecture>/` may use the rest of `orchestration`;
+//! the rest of `orchestration` uses nothing of it but this.
 
 mod amd64;
 

@@ -4,7 +4,7 @@
 # Interceptor's picture in the README: a chase at sunset on a road through
 # the trees of the hills, full screen. Regenerate it with
 #
-#   cargo xtask script documentation/interceptor.vts --resolution 1920x1200
+#   cargo orchestration script documentation/interceptor.vts --resolution 1920x1200
 #
 # which writes documentation/images/interceptor.png at 1920x1200; scale it
 # to 1280x800, the size of the other screenshots, so that the README's table

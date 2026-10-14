@@ -6,7 +6,7 @@
 # asks for, where it comes from (a source below, and the file's path in
 # it), and its SHA-256: from a release of linux-firmware, whose WHENCE says
 # whose each file is and that anyone may redistribute it, or of
-# wireless-regdb. `cargo xtask linux` fetches them (into
+# wireless-regdb. `cargo orchestration linux` fetches them (into
 # target/linux/firmware); image builds check and pack them. The firmware of
 # the devices only the architecture's machines have is in its list
 # (arch/<architecture>/firmware.txt), which may name the sources here.

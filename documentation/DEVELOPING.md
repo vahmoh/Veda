@@ -10,57 +10,57 @@ programs for it. Read `documentation/CODING.md` (conventions) and
 ## Everyday commands
 
 ```text
-cargo xtask build              # build everything -> target/veda/veda.img
-cargo xtask iso                # the live system for a USB stick -> target/veda/veda.iso
-cargo xtask run                # build and boot in a QEMU window, on a 1920x1080 screen
-cargo xtask run --resolution 2560x1600   # ... on a larger one
-cargo xtask run --live         # boot the live system in QEMU from a virtual USB stick
-cargo xtask run --smp 2 --memory 2048
-cargo xtask shot --wait 15     # boot headless, save target/veda/screen.png
-cargo xtask shot --cmdline "run=about"   # also start bin/about.exe at boot
-cargo xtask script verification/ui/about-interaction.vts   # scripted GUI test
-cargo xtask test               # host unit tests + in-system integration tests
-cargo xtask test --ui          # ... plus every GUI script in verification/ui and verification/agent (and their arch/amd64), several at once
-cargo xtask test --ui --jobs 2 # ... two at a time (default: one per five processors)
-cargo xtask scripts verification/ui/drivervm-audio.vts verification/ui/nvme.vts   # some scripts, built once, side by side
-cargo xtask script documentation/screenshots.vts   # retake the README screenshots
-cargo xtask script documentation/interceptor.vts --resolution 1920x1200   # ... and Interceptor's, then scaled to 1280x800
-cargo xtask run --disk-bus ahci                # QEMU with SATA disks
-cargo xtask run --disk-bus nvme                # ... with NVM Express disks
-cargo xtask script verification/ui/nvme.vts    # starting from NVMe, the home directory on NVMe
-cargo xtask run --sound hda    # Intel HD Audio, as most PCs have
-cargo xtask script verification/ui/drivervm-audio.vts   # HD Audio, Linux's: music plays and reaches the recording
-cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
-cargo xtask script verification/ui/usb-input.vts   # USB input, with devices plugged in and out
-cargo xtask script verification/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
-cargo xtask script verification/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
-cargo xtask run --net none     # boot without a network card
-cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
-cargo xtask script verification/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
-cargo xtask script verification/ui/drivervm-compose.vts   # ... its frames drawn by a GPU (the renderer on softpipe; slow)
-cargo xtask script verification/ui/drivervm-gpu.vts       # Interceptor on the host's GPU, through Mesa's virgl in the driver VM
+cargo orchestration build              # build everything -> target/veda/veda.img
+cargo orchestration iso                # the live system for a USB stick -> target/veda/veda.iso
+cargo orchestration run                # build and boot in a QEMU window, on a 1920x1080 screen
+cargo orchestration run --resolution 2560x1600   # ... on a larger one
+cargo orchestration run --live         # boot the live system in QEMU from a virtual USB stick
+cargo orchestration run --smp 2 --memory 2048
+cargo orchestration shot --wait 15     # boot headless, save target/veda/screen.png
+cargo orchestration shot --cmdline "run=about"   # also start bin/about.exe at boot
+cargo orchestration script verification/ui/about-interaction.vts   # scripted GUI test
+cargo orchestration test               # host unit tests + in-system integration tests
+cargo orchestration test --ui          # ... plus every GUI script in verification/ui and verification/agent (and their arch/amd64), several at once
+cargo orchestration test --ui --jobs 2 # ... two at a time (default: one per five processors)
+cargo orchestration scripts verification/ui/drivervm-audio.vts verification/ui/nvme.vts   # some scripts, built once, side by side
+cargo orchestration script documentation/screenshots.vts   # retake the README screenshots
+cargo orchestration script documentation/interceptor.vts --resolution 1920x1200   # ... and Interceptor's, then scaled to 1280x800
+cargo orchestration run --disk-bus ahci                # QEMU with SATA disks
+cargo orchestration run --disk-bus nvme                # ... with NVM Express disks
+cargo orchestration script verification/ui/nvme.vts    # starting from NVMe, the home directory on NVMe
+cargo orchestration run --sound hda    # Intel HD Audio, as most PCs have
+cargo orchestration script verification/ui/drivervm-audio.vts   # HD Audio, Linux's: music plays and reaches the recording
+cargo orchestration run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
+cargo orchestration script verification/ui/usb-input.vts   # USB input, with devices plugged in and out
+cargo orchestration script verification/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
+cargo orchestration script verification/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
+cargo orchestration run --net none     # boot without a network card
+cargo orchestration run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
+cargo orchestration script verification/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
+cargo orchestration script verification/ui/drivervm-compose.vts   # ... its frames drawn by a GPU (the renderer on softpipe; slow)
+cargo orchestration script verification/ui/drivervm-gpu.vts       # Interceptor on the host's GPU, through Mesa's virgl in the driver VM
 VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (desktop OpenGL)
 VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on OpenGL ES
 VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
 VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.so)
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
-VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p interceptor-game   # ... on this PC's Intel GPU, as `cargo xtask test` does where there is one
-cargo xtask script verification/ui/drivervm-renderer.vts   # Interceptor through the renderer in the driver VM, on softpipe
-cargo xtask script verification/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
-cargo xtask script verification/agent/app-interceptor.vts   # ... and for the voice agent
+VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p interceptor-game   # ... on this PC's Intel GPU, as `cargo orchestration test` does where there is one
+cargo orchestration script verification/ui/drivervm-renderer.vts   # Interceptor through the renderer in the driver VM, on softpipe
+cargo orchestration script verification/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
+cargo orchestration script verification/agent/app-interceptor.vts   # ... and for the voice agent
 VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
-cargo xtask toolchain          # build the toolchain from implementation/ports/ (GCC, binutils, musl; Rust) -> target/toolchain
-cargo xtask script verification/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
-cargo xtask script verification/ui/rust-programs.vts   # Rust's standard library on Veda: its checks, in the Terminal
-cargo xtask linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
-cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the driver VM
-cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
-cargo xtask script verification/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
-cargo xtask script verification/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
-cargo xtask script verification/ui/arch/amd64/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
-cargo xtask script verification/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
-cargo xtask script verification/ui/arch/amd64/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
-cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
+cargo orchestration toolchain          # build the toolchain from implementation/ports/ (GCC, binutils, musl; Rust) -> target/toolchain
+cargo orchestration script verification/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
+cargo orchestration script verification/ui/rust-programs.vts   # Rust's standard library on Veda: its checks, in the Terminal
+cargo orchestration linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
+cargo orchestration run --no-iommu     # QEMU without its IOMMU: no device goes to the driver VM
+cargo orchestration run --cmdline "drivervm=off"    # ... or no driver VM at all
+cargo orchestration script verification/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
+cargo orchestration script verification/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
+cargo orchestration script verification/ui/arch/amd64/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
+cargo orchestration script verification/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
+cargo orchestration script verification/ui/arch/amd64/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
+cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
@@ -75,14 +75,14 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
   `VEDA_RENDERNODE` names, such as `/dev/dri/renderD129`). `--no-gpu`
   leaves the GPU out and `--gpu` insists on it. OpenGL ES programs render on it through Veda's renderer, in the
   driver VM, which gets it, and in software without it.
-* Where QEMU has the 3D GPU, `cargo xtask test` also runs the OpenGL ES
-  tests on the host's GPU, through the system's virglrenderer
+* Where QEMU has the 3D GPU, `cargo orchestration test` also runs the OpenGL
+  ES tests on the host's GPU, through the system's virglrenderer
   (`libvirglrenderer1` on Debian and Ubuntu), which QEMU runs: on desktop
   OpenGL, as QEMU renders, and on OpenGL ES, through EGL on headless
   QEMU's GPU (`VGL_TEST_RENDERNODE` names another).
-  Once the driver VM's Linux is built (`cargo xtask linux`, which builds
-  Mesa for the host too), the tests also run through Veda's renderer: on
-  softpipe, and on Mesa's virgl over virglrenderer's test server
+  Once the driver VM's Linux is built (`cargo orchestration linux`, which
+  builds Mesa for the host too), the tests also run through Veda's renderer:
+  on softpipe, and on Mesa's virgl over virglrenderer's test server
   (`virgl_test_server`, in `virgl-server` on Debian and Ubuntu), as the
   driver VM's renderer renders under QEMU.
   Interceptor's game saves what it shows and plays to a directory named by
@@ -111,17 +111,18 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
   memory it leaves to the system, at every boot: after a reset it could
   take a program header of Veda's there for six processors, and wait for
   ever for the two that are not. QEMU's loader blanks that page at every
-  reset (`blank_at_reset` in `xtask/src/arch/amd64/qemu.rs` finds it in the
-  firmware).
+  reset (`blank_at_reset` in `orchestration/src/arch/amd64/qemu.rs` finds it
+  in the firmware).
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
-* `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)
-  that boots with UEFI from a disc, from a stick Rufus made from it in ISO
-  mode, and from a stick it was written to as it is. Its boot configuration
-  puts `live` on the kernel command line (no disk driver starts; `/home`
-  stays in memory), asks for 1920x1080 or the screen's largest mode below
-  it (`--resolution` changes it), and adds no time zone, as a PC's clock
-  keeps local time under Windows. Scripts boot it with a `live` line
+* `cargo orchestration iso` writes a hybrid ISO image
+  (`orchestration/src/image/iso9660.rs`) that boots with UEFI from a disc,
+  from a stick Rufus made from it in ISO mode, and from a stick it was
+  written to as it is. Its boot configuration puts `live` on the kernel
+  command line (no disk driver starts; `/home` stays in memory), asks for
+  1920x1080 or the screen's largest mode below it (`--resolution` changes
+  it), and adds no time zone, as a PC's clock keeps local time under
+  Windows. Scripts boot it with a `live` line
   (`verification/ui/live-usb.vts`); `--out FILE` writes it elsewhere.
 * A stick the live system started from keeps the logs of its last eight
   starts: `VEDA/LOGS/NNNN/VEDA.TXT` (Veda's log, Linux's console among it)
@@ -232,7 +233,7 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
   what it found (`DMICs detected in NHLT tables: 4`, the topology it
   loads), and `alsa` which device it records (`records
   (/dev/snd/pcmC0D6c, 4 channels)`).
-  Before booting a machine, `cargo xtask acpi
+  Before booting a machine, `cargo orchestration acpi
   DIR` shows what devmgr makes of its ACPI tables, on the host, with the
   interpreter devmgr runs: copy them first (`sudo cp -r
   /sys/firmware/acpi/tables DIR`, under Linux). It lists the PCI root
@@ -245,10 +246,10 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
   `DIR/pci/BB:DD.F` files (`/sys/bus/pci/devices/*/config`; all of it as
   root), else from this machine.
 * The agent's scripts (`verification/agent/`) talk to a stand-in for
-  Deepgram that xtask starts on the host, and feed the agent's microphone
-  from the host (`testmic`). The scripts in `verification/real/` talk to
-  the real Deepgram with the key in `DEEPGRAM_API_KEY`
-  (`export DEEPGRAM_API_KEY=...`);
+  Deepgram that `cargo orchestration` starts on the host, and feed the
+  agent's microphone from the host (`testmic`). The scripts in
+  `verification/real/` talk to the real Deepgram with the key in
+  `DEEPGRAM_API_KEY` (`export DEEPGRAM_API_KEY=...`);
   they type it into Settings with
   `type-env`, so it is in neither the script nor the logs. See
   [The agent](AGENT.md#testing).
@@ -267,20 +268,21 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
   `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
   Paths in automation scripts (`shot FILE`) are relative to the repository.
 * smoltcp and zune-jpeg, which Veda changes, are ports: every
-  `cargo xtask` command first has Cargo build them as
+  `cargo orchestration` command first has Cargo build them as
   `implementation/ports/` has them, prepared in
   `implementation/ports/.crates` (see "Crates" in
   `implementation/ports/README.md`). In a new checkout, run one
-  (`cargo xtask doctor`) before Cargo itself (`cargo test -p ...`,
+  (`cargo orchestration doctor`) before Cargo itself (`cargo test -p ...`,
   rust-analyzer), which until then builds their releases as published.
 
 ## The system image
 
-`cargo xtask build` puts these into the initrd, mounted at `/system`:
+`cargo orchestration build` puts these into the initrd, mounted at
+`/system`:
 
 | Source | Installed as |
 |--------|--------------|
-| every program listed in `xtask/src/components.rs` (`PROGRAMS`) | `/system/bin/<name>.exe` |
+| every program listed in `orchestration/src/components.rs` (`PROGRAMS`) | `/system/bin/<name>.exe` |
 | `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
 | the fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | each application's manifest, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
@@ -291,11 +293,11 @@ cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo c
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg and dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*` (videos for the stand-in decoder) | `/system/tests/videos/fake/` |
 
-The C and Rust test programs, the toolchain and the decoder need `cargo
-xtask toolchain` (see [C on Veda](C.md) and [Rust on Veda](RUST.md));
-without it, the build says so and leaves them out. With `cargo xtask
-linux` done, the image also holds the driver VM's Linux:
-`/system/linux/kernel` (the architecture's image of it: a bzImage on
+The C and Rust test programs, the toolchain and the decoder need
+`cargo orchestration toolchain` (see [C on Veda](C.md) and
+[Rust on Veda](RUST.md)); without it, the build says so and leaves them out.
+With `cargo orchestration linux` done, the image also holds the driver VM's
+Linux: `/system/linux/kernel` (the architecture's image of it: a bzImage on
 AMD64) and `/system/linux/initramfs.cpio`, made of the programs in
 `implementation/guest/` (see [the driver VM](DRIVERVM.md)). Files under
 `samples/` in the system image are also copied into the user's home
@@ -306,7 +308,7 @@ directory at boot (`/system/samples/Pictures/x.png` →
 
 1. Create a crate under `implementation/applications/<name>`, add it to the
    workspace `members` in `Cargo.toml` and to `PROGRAMS` in
-   `xtask/src/components.rs`.
+   `orchestration/src/components.rs`.
 2. `Cargo.toml` depends on `vrt`, `vabi`, `vui` (and others as needed) and has
    `vbuild` as a build dependency; `build.rs` is `fn main() { vbuild::user_program(); }`.
 3. `src/main.rs`:
@@ -401,8 +403,8 @@ target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
 They are static ELF executables on musl and run from the Terminal like any
 command. [C on Veda](C.md) describes the environment, what is different
 from Linux, and how the toolchain is built and tested. The test programs
-in `verification/c/` are compiled by `cargo xtask build` and installed in
-`/system/tests/c`, for `systest` and the GUI scripts to run.
+in `verification/c/` are compiled by `cargo orchestration build` and
+installed in `/system/tests/c`, for `systest` and the GUI scripts to run.
 
 ### Programs on Rust's standard library
 
@@ -417,9 +419,9 @@ target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C l
 They are static ELF executables on the C library, as C programs are.
 [Rust on Veda](RUST.md) describes building them with Cargo, how the
 standard library works on Veda, and how Rust is built and tested. The
-test programs in `verification/rust/` are compiled by `cargo xtask build`
-and installed in `/system/tests/rust`, for `systest` and the GUI scripts
-to run.
+test programs in `verification/rust/` are compiled by
+`cargo orchestration build` and installed in `/system/tests/rust`, for
+`systest` and the GUI scripts to run.
 
 ### Videos and its decoder
 
@@ -431,9 +433,9 @@ speaks with its decoder, with the frame pool and the sound ring, is
 `vproto::media`. The decoder, `implementation/services/mediadec`, is a C
 program: its Rust half is built for the architecture's bare target
 (`x86_64-unknown-none` on AMD64) and linked with its C shim,
-FFmpeg and dav1d by the cross compiler (`xtask/src/toolchain.rs`,
-`mediadec()`), so it exists only once `cargo xtask toolchain` built the
-media libraries (`cargo xtask doctor` says whether they are).
+FFmpeg and dav1d by the cross compiler (`orchestration/src/toolchain.rs`,
+`mediadec()`), so it exists only once `cargo orchestration toolchain` built
+the media libraries (`cargo orchestration doctor` says whether they are).
 
 Without it, `verification/fakedec` stands in: `videos --decoder
 /system/bin/fakedec.exe FILE` plays the text files in

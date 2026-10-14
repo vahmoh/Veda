@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # Builds the Linux kernel of Veda's driver VM from the port in this
-# directory. `cargo xtask linux` runs it after downloading and verifying the
-# sources (see xtask/src/linux.rs and documentation/DRIVERVM.md).
+# directory. `cargo orchestration linux` runs it after downloading and
+# verifying the sources (see orchestration/src/linux.rs and
+# documentation/DRIVERVM.md).
 #
 # Environment:
 #   VEDA_PORTS   the ports directory
@@ -220,7 +221,7 @@ stage libstdcxx gcc musl
 # the guest, and for this machine the same decoder as a library
 # (vgallium.so) on softpipe, on virgl over virglrenderer's test server, and
 # on iris (this machine's Intel GPU, if it has one), which the OpenGL ES
-# tests use. `cargo xtask` builds them (ninja) when it needs them.
+# tests use. `cargo orchestration` builds them (ninja) when it needs them.
 stage_src_mesa() { unpack mesa; }
 stage src_mesa +mesa
 

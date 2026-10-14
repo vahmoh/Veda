@@ -196,9 +196,9 @@ keyboard, the agent can do too.
 </table>
 
 Every screenshot is 1280x800. They are taken in QEMU by
-`cargo xtask script documentation/screenshots.vts`, with the agent talking
-to a stand-in for Deepgram. Interceptor's is taken at 1920x1200 by
-`cargo xtask script documentation/interceptor.vts --resolution 1920x1200`
+`cargo orchestration script documentation/screenshots.vts`, with the agent
+talking to a stand-in for Deepgram. Interceptor's is taken at 1920x1200 by
+`cargo orchestration script documentation/interceptor.vts --resolution 1920x1200`
 and scaled down.
 
 ## Quick start
@@ -221,7 +221,7 @@ Veda is built on an x86-64 PC with Linux.
   [the driver VM](documentation/DRIVERVM.md#testing).
 * Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
   your distribution's build tools for the toolchain, which
-  `cargo xtask toolchain` builds once: C (see
+  `cargo orchestration toolchain` builds once: C (see
   [C on Veda](documentation/C.md#the-toolchain)), with `nasm` for the video
   decoders it builds too, and Rust, with CMake (see
   [Rust on Veda](documentation/RUST.md#the-toolchain)).
@@ -229,7 +229,7 @@ Veda is built on an x86-64 PC with Linux.
 Check the environment:
 
 ```bash
-cargo xtask doctor
+cargo orchestration doctor
 ```
 
 ### Build and run
@@ -239,13 +239,13 @@ Mesa), which takes a while. Without it, Veda boots with no keyboard,
 mouse, sound or network.
 
 ```bash
-cargo xtask linux
+cargo orchestration linux
 ```
 
 Then build and run Veda:
 
 ```bash
-cargo xtask run
+cargo orchestration run
 ```
 
 This builds every component, writes `target/veda/veda.img` and boots it
@@ -258,22 +258,22 @@ CMake). Build it once, in about half an hour, and the images built after
 it include the decoder:
 
 ```bash
-cargo xtask toolchain
+cargo orchestration toolchain
 ```
 
 ```bash
-cargo xtask run --resolution 1280x800 --smp 4 --memory 2048
-cargo xtask run --cmdline "run=editor"
+cargo orchestration run --resolution 1280x800 --smp 4 --memory 2048
+cargo orchestration run --cmdline "run=editor"
 ```
 
 `run=NAME` starts `/system/bin/NAME.exe` after boot. The machine reaches
 the Internet through a wired card on QEMU's NAT (`--net none` leaves it
-out). `cargo xtask help` lists every command and option.
+out). `cargo orchestration help` lists every command and option.
 
 ### A real PC, from a USB stick
 
 ```bash
-cargo xtask iso
+cargo orchestration iso
 ```
 
 This writes `target/veda/veda.iso`, a live system. To start it:
@@ -287,7 +287,7 @@ This writes `target/veda/veda.iso`, a live system. To start it:
 
 Veda runs from memory and starts no disk driver, so it never reads or
 writes the PC's disks. Its home directory lasts until the PC is turned
-off. To try the stick in QEMU first, run `cargo xtask run --live`.
+off. To try the stick in QEMU first, run `cargo orchestration run --live`.
 
 The stick keeps a log of every start in `VEDA/LOGS`, one numbered folder
 per start (the newest has the highest number): `VEDA.TXT` from Veda and
@@ -311,8 +311,8 @@ keyboards and mice too). USB disks, the stick included, are left alone.
 has come. To try USB input or HD Audio in QEMU:
 
 ```bash
-cargo xtask run --input usb
-cargo xtask run --sound hda
+cargo orchestration run --input usb
+cargo orchestration run --sound hda
 ```
 
 ## Talking to Veda
@@ -417,7 +417,7 @@ conversation are the system's job, not the application's. See
 ## Testing
 
 ```bash
-cargo xtask test
+cargo orchestration test
 ```
 
 This runs the libraries' unit tests on the host, then boots Veda headless
@@ -426,7 +426,7 @@ system, crash recovery of the window system, C and C++ programs). Any
 panic fails the run.
 
 ```bash
-cargo xtask test --ui
+cargo orchestration test --ui
 ```
 
 This adds the GUI scripts in `verification/ui/` (with
@@ -455,8 +455,8 @@ DNS, TCP, HTTP, HTTPS and ping.
 To run one script, or to boot headless and save `target/veda/screen.png`:
 
 ```bash
-cargo xtask script verification/agent/wake-name.vts
-cargo xtask shot --wait 20
+cargo orchestration script verification/agent/wake-name.vts
+cargo orchestration shot --wait 20
 ```
 
 Every run saves the serial console (the kernel log and every program's
@@ -477,7 +477,7 @@ output) to `target/veda/serial.log`.
 | `implementation/ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG); and the fonts (Inter, Lato, JetBrains Mono), unmodified |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
 | `generation/` | host programs that generate wallpapers, pictures, music and videos at build time |
-| `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
+| `orchestration/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
 | `documentation/` | documentation, the README's screenshots, the icon and social preview (`documentation/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`documentation/website/`) |
 
 ## Documentation

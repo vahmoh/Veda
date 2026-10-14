@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # Builds Veda's toolchain from the ports in this directory: C (GCC,
-# binutils and musl), the media libraries and Rust. `cargo xtask toolchain`
-# runs it after downloading and verifying the sources; see
-# xtask/src/toolchain.rs, documentation/C.md and documentation/RUST.md.
+# binutils and musl), the media libraries and Rust.
+# `cargo orchestration toolchain` runs it after downloading and verifying the
+# sources; see orchestration/src/toolchain.rs, documentation/C.md and
+# documentation/RUST.md.
 #
 # Environment:
 #   VEDA_PORTS       this directory
@@ -138,8 +139,8 @@ stage musl src_musl gcc_cross
 
 # The POSIX layer changes more often than the rest: it is added last, as
 # one object that exports its interface and nothing else (no Rust or
-# compiler-builtins symbol can clash with the C library's). `cargo xtask`
-# refreshes it in the same way when it changes.
+# compiler-builtins symbol can clash with the C library's).
+# `cargo orchestration` refreshes it in the same way when it changes.
 stage_posix_layer() {
 	local b=$BUILD/posix-layer
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
@@ -171,11 +172,11 @@ stage libstdcxx_cross gcc_cross musl
 # --- the media libraries, for mediadec ---------------------------------------
 
 # dav1d and FFmpeg, static and position independent, for the sandboxed
-# decoder of Videos (implementation/services/mediadec, which `cargo xtask`
-# links). They go to a prefix of their own: the sysroot is copied into the
-# image, these are not. They are compiled with the C library as built (they
-# link nothing but their checkasm programs), so a new POSIX layer only
-# relinks those.
+# decoder of Videos (implementation/services/mediadec, which
+# `cargo orchestration` links). They go to a prefix of their own: the sysroot
+# is copied into the image, these are not. They are compiled with the C
+# library as built (they link nothing but their checkasm programs), so a new
+# POSIX layer only relinks those.
 MEDIA=$ROOT/media
 
 stage_src_dav1d() { unpack dav1d; }
@@ -403,7 +404,7 @@ stage native binutils_native gcc_native posix_layer
 # where it stands on the C library as libstdc++ does: the cross GCC links
 # its programs. Installed in rust/, as Rust's releases install. It is
 # compiled by the release before it (RUST_STAGE0, which the release's
-# src/stage0 pins: xtask downloaded and checked it).
+# src/stage0 pins: `cargo orchestration` downloaded and checked it).
 RUST=$ROOT/rust
 
 # Cargo checks the files of each crate the release vendors (in vendor/,

@@ -296,7 +296,7 @@ sleep between events.
 
 ## Testing
 
-* `xtask/src/agentsim.rs` is a stand-in for Deepgram on the host: it
+* `orchestration/src/agentsim.rs` is a stand-in for Deepgram on the host: it
   speaks the Voice Agent protocol (answers `Settings`, records what the
   agent sends, sends function calls, voice, interruptions) and the
   streaming recognition protocol (`agent-hear` makes it "hear" a sentence).
@@ -324,7 +324,7 @@ sleep between events.
   in `$DEEPGRAM_API_KEY` (typed into Settings by `type-env`, so it appears
   in neither scripts nor logs); `say` synthesises the user's sentences with
   Deepgram's text to speech on the host. They are billed, so they are not
-  part of `cargo xtask test`.
+  part of `cargo orchestration test`.
 * `vagent` (protocol, tools, prompt, memory, policy, wake word, echo
   gate) has host unit tests, and so has `vaudio`'s echo canceller and
   voice detector.

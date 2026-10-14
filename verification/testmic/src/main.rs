@@ -12,7 +12,7 @@
 //! microphone records silence and the program reconnects.
 //!
 //! Test scripts drive it with `say`, `mic-wav` and `mic-wait` (see
-//! `xtask/src/automate.rs`).
+//! `orchestration/src/automate.rs`).
 
 #![no_std]
 #![no_main]

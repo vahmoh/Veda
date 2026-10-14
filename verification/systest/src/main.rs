@@ -5,8 +5,9 @@
 //!
 //! Each test prints `<name> ... ok|FAILED: reason` and the final line is `PASS`
 //! or `FAIL (n failed)`; the kernel log prefixes every line with the program
-//! name, so the serial log reads `systest: PASS`. `cargo xtask test` boots the
-//! system with `systest` on the kernel command line and checks the log.
+//! name, so the serial log reads `systest: PASS`. `cargo orchestration test`
+//! boots the system with `systest` on the kernel command line and checks the
+//! log.
 
 #![no_std]
 #![no_main]

@@ -171,7 +171,7 @@ and wakes a waiter on, once the thread has left its stack).
 
 ## The toolchain
 
-`cargo xtask toolchain` builds it from the sources in
+`cargo orchestration toolchain` builds it from the sources in
 `implementation/ports/`:
 
 1. downloads the source archives and checks them against the SHA-256 each
@@ -201,11 +201,11 @@ The first build takes about half an hour on a recent PC (C a quarter of
 an hour, Rust as long again); later ones rebuild what changed (each stage
 keeps a fingerprint of what went into it, and where: a toolchain
 directory that has moved is built again). When the
-POSIX layer changes, `cargo xtask build` puts the new one into the C
+POSIX layer changes, `cargo orchestration build` puts the new one into the C
 library, and links the native programs again with it (GCC, binutils: they
 are C programs too), which recompiles nothing.
 
-`cargo xtask build` installs the native toolchain in the image (in
+`cargo orchestration build` installs the native toolchain in the image (in
 `/system`) and the C test programs in `/system/tests/c` when the
 toolchain exists, and says so when it does not. The image grows by about
 80 MB with it, which Veda keeps in memory; compiling is comfortable in
@@ -270,5 +270,5 @@ upstream archive each `port.toml` names plus the patch beside it.
   layout) and `implementation/libraries/posix` (paths, structures, flag
   conversions) are unit-tested on the host.
 
-`cargo xtask test --ui` runs them; the scripts that need the toolchain are
-skipped when it has not been built.
+`cargo orchestration test --ui` runs them; the scripts that need the
+toolchain are skipped when it has not been built.

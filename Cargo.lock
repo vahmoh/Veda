@@ -1453,6 +1453,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "orchestration"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "initrd",
+ "serde_json",
+ "sha2",
+ "tungstenite",
+ "vacpi",
+ "vaudio",
+ "vbuild",
+ "vimage",
+ "vpe",
+]
+
+[[package]]
 name = "p256"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2793,22 +2809,6 @@ dependencies = [
  "curve25519-dalek",
  "rand_core 0.10.1",
  "zeroize",
-]
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
-dependencies = [
- "crc32fast",
- "initrd",
- "serde_json",
- "sha2",
- "tungstenite",
- "vacpi",
- "vaudio",
- "vbuild",
- "vimage",
- "vpe",
 ]
 
 [[package]]

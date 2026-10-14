@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `cargo xtask` — the Veda developer tool.
+//! `cargo orchestration` — the Veda developer tool.
 //!
-//! Run `cargo xtask help` for the list of commands.
+//! Run `cargo orchestration help` for the list of commands.
 
 mod acpi;
 mod agentsim;
@@ -33,7 +33,7 @@ const HELP: &str = "\
 Veda developer tool
 
 USAGE:
-    cargo xtask <COMMAND> [OPTIONS]
+    cargo orchestration <COMMAND> [OPTIONS]
 
 COMMANDS:
     build       Build every component and assemble target/veda/veda.img
@@ -225,7 +225,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 o.vm.input =
                     qemu::InputDevices::parse(&v).ok_or(format!("unknown input devices '{v}' (standard, usb)"))?;
             }
-            other => return Err(format!("unknown option '{other}' (see `cargo xtask help`)")),
+            other => return Err(format!("unknown option '{other}' (see `cargo orchestration help`)")),
         }
     }
     Ok(o)
@@ -345,18 +345,19 @@ fn build_system(o: &Options) -> Result<System> {
             initrd.add(&format!("tests/videos/fake/{name}"), util::read(&entry.path())?);
         }
     }
-    // The C toolchain (`cargo xtask toolchain`): gcc, as, ld, the C library
-    // and its headers, as /system has them.
+    // The C toolchain (`cargo orchestration toolchain`): gcc, as, ld, the C
+    // library and its headers, as /system has them.
     toolchain::relink_native()?;
     let native = toolchain::native_files()?;
     if native.is_empty() {
-        util::status("Note", "no C toolchain in the image (build it with `cargo xtask toolchain`)");
+        util::status("Note", "no C toolchain in the image (build it with `cargo orchestration toolchain`)");
     }
     for (path, data) in native {
         initrd.add(&path, data);
     }
-    // The media decoder (`cargo xtask toolchain` builds FFmpeg and dav1d),
-    // which Videos plays videos with, and the media libraries' tests.
+    // The media decoder (`cargo orchestration toolchain` builds FFmpeg and
+    // dav1d), which Videos plays videos with, and the media libraries'
+    // tests.
     if !o.skip.iter().any(|s| s == "mediadec") {
         match toolchain::mediadec()? {
             Some(exe) => {
@@ -364,7 +365,7 @@ fn build_system(o: &Options) -> Result<System> {
             }
             None => util::status(
                 "Note",
-                "no media decoder in the image: videos do not play (`cargo xtask toolchain` builds FFmpeg and \
+                "no media decoder in the image: videos do not play (`cargo orchestration toolchain` builds FFmpeg and \
                  dav1d)",
             ),
         }
@@ -372,8 +373,8 @@ fn build_system(o: &Options) -> Result<System> {
             initrd.add(&format!("tests/media/{name}"), exe);
         }
     }
-    // The driver VM's Linux (`cargo xtask linux`, or the first time an
-    // image needs it) and its programs.
+    // The driver VM's Linux (`cargo orchestration linux`, or the first time
+    // an image needs it) and its programs.
     linux::build_once()?;
     match linux::guest()? {
         Some((kernel, initramfs)) => {
@@ -383,7 +384,7 @@ fn build_system(o: &Options) -> Result<System> {
         None => util::status(
             "Note",
             "no driver VM in the image: nothing but the disks and sound is driven \
-             (`cargo xtask linux` builds its Linux)",
+             (`cargo orchestration linux` builds its Linux)",
         ),
     }
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
@@ -521,7 +522,7 @@ fn iso(o: &Options) -> Result {
         "\nWrite it to a USB stick with Rufus (partition scheme GPT, target system UEFI,\n\
          ISO mode), or as it is with any image writer. Start the PC from the stick\n\
          with UEFI, with Secure Boot off: Veda runs from memory and leaves the PC's\n\
-         disks alone. `cargo xtask run --live` tries it in QEMU first."
+         disks alone. `cargo orchestration run --live` tries it in QEMU first."
     );
     Ok(())
 }
@@ -582,8 +583,8 @@ fn load_system(dir: &std::path::Path) -> Result<System> {
     Ok(System { bootloader: bootloader?, kernel: kernel?, initrd: initrd? })
 }
 
-/// `cargo xtask scripts FILE...`: builds the system once and runs the
-/// scripts on it.
+/// `cargo orchestration scripts FILE...`: builds the system once and runs
+/// the scripts on it.
 fn scripts(o: &Options, files: Vec<PathBuf>) -> Result {
     let started = std::time::Instant::now();
     let system = build_system(o)?;
@@ -614,7 +615,7 @@ fn run_scripts(o: &Options, mut files: Vec<PathBuf>) -> Result {
         {
             util::status(
                 "Skipping",
-                format!("GUI script {} (needs the {what}: `cargo xtask toolchain`)", name_of(&path)),
+                format!("GUI script {} (needs the {what}: `cargo orchestration toolchain`)", name_of(&path)),
             );
             continue;
         }
@@ -857,7 +858,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("interceptor-game", &[]),
     ("videos-core", &[]),
     ("terminal-core", &[]),
-    ("xtask", &[]),
+    ("orchestration", &[]),
 ];
 
 fn test(o: &Options) -> Result {
@@ -1102,7 +1103,7 @@ fn main() -> ExitCode {
         "scripts" => {
             let files: Vec<PathBuf> = rest.iter().filter(|a| a.ends_with(".vts")).map(PathBuf::from).collect();
             if files.is_empty() {
-                Err("usage: cargo xtask scripts FILE... [options]".into())
+                Err("usage: cargo orchestration scripts FILE... [options]".into())
             } else {
                 parse_options(&rest.iter().filter(|a| !a.ends_with(".vts")).cloned().collect::<Vec<_>>())
                     .and_then(|o| scripts(&o, files))
@@ -1112,7 +1113,7 @@ fn main() -> ExitCode {
             Some((file, opts)) => std::fs::read_to_string(file)
                 .map_err(|e| format!("reading {file}: {e}"))
                 .and_then(|text| parse_options(opts).and_then(|o| script(&o, &text))),
-            None => Err("usage: cargo xtask script FILE [options]".into()),
+            None => Err("usage: cargo orchestration script FILE [options]".into()),
         },
         "acpi" => acpi::command(rest),
         "toolchain" => toolchain::command(rest),

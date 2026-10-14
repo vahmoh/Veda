@@ -47,18 +47,19 @@ be added beside AMD64 without touching code that is not its own:
   `implementation/kernel/src/arch/amd64`,
   `implementation/libraries/abi/src/arch/amd64`,
   `implementation/libraries/rt/src/arch/amd64`,
-  `implementation/services/drivervm/src/arch/amd64`, `xtask/src/arch/amd64`
-  and the others. Nothing outside those directories names an architecture's
-  instructions, registers, system call numbers or calling conventions, or
-  the devices of its platform (a PC's interrupt controllers, timers,
-  keyboard controller and IOMMU); drivers of devices that come on a bus
-  (PCI's, USB's) are each device's, not an architecture's.
+  `implementation/services/drivervm/src/arch/amd64`,
+  `orchestration/src/arch/amd64` and the others. Nothing outside those
+  directories names an architecture's instructions, registers, system call
+  numbers or calling conventions, or the devices of its platform (a PC's
+  interrupt controllers, timers, keyboard controller and IOMMU); drivers of
+  devices that come on a bus (PCI's, USB's) are each device's, not an
+  architecture's.
 * The rest of the crate reaches it through one module, `arch`, whose
   items every architecture provides with the same names and meanings, and
   nothing else of it. The kernel's (`implementation/kernel/src/arch.rs`) and
-  xtask's (`xtask/src/arch.rs`) document their interface in a table;
-  vocabulary is the architecture-neutral one (the clock's counter, not the
-  TSC; a thread's TLS pointer, not its FS base). Code in
+  `orchestration`'s (`orchestration/src/arch.rs`) document their interface
+  in a table; vocabulary is the architecture-neutral one (the clock's
+  counter, not the TSC; a thread's TLS pointer, not its FS base). Code in
   `src/arch/<architecture>/` may use the rest of its crate.
 * How the module is chosen depends on what the code does:
   * **Code that runs on the architecture** (the loader, the kernel, the
@@ -72,10 +73,10 @@ be added beside AMD64 without touching code that is not its own:
     `vhv::amd64`), compiled on every host so that host tests and build
     tools use it too; `NATIVE` names the one of the architecture compiled
     for, where a crate needs it.
-  * **Build scripts and tools** (`build.rs`, `vbuild`, xtask) run on the
-    build machine: the architecture is the one Veda is built for (the
-    `TARGET` Cargo gives a build script, xtask's `arch`), never the one
-    they run on.
+  * **Build scripts and tools** (`build.rs`, `vbuild`, `orchestration`) run
+    on the build machine: the architecture is the one Veda is built for (the
+    `TARGET` Cargo gives a build script, `orchestration`'s `arch`), never
+    the one they run on.
 * What tools read from places of their own, which have no `src/`, is in
   an `arch/<architecture>/` directory of each place, where the tool
   allows it: Cargo's settings of the targets are in
@@ -90,7 +91,7 @@ be added beside AMD64 without touching code that is not its own:
 
 ## Targets
 
-On AMD64 (`xtask/src/arch/amd64` names them for the build):
+On AMD64 (`orchestration/src/arch/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
@@ -100,7 +101,7 @@ On AMD64 (`xtask/src/arch/amd64` names them for the build):
 | C programs | `x86_64-veda` (GCC) | static ELF executables on musl |
 | programs on Rust's standard library (`verification/rust`) | `x86_64-unknown-veda` (the `rust` port's) | static ELF executables on the C library, linked by `x86_64-veda-gcc` |
 | the driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | static, on Linux |
-| `xtask/`, host tools | host (`std`) | |
+| `orchestration/`, host tools | host (`std`) | |
 
 ## Library crates
 
@@ -119,9 +120,9 @@ On AMD64 (`xtask/src/arch/amd64` names them for the build):
   use their portable code there, as LLVM cannot build their SIMD code for
   it). That target has a `std`, though, so this does not show a dependency
   on it; `--target x86_64-unknown-none` has none, and building Veda
-  (`cargo xtask build`), whose programs link without `std`, is the final
-  check. `vimage` runs only in user space and does not build soft-float
-  (`fast_image_resize`'s SIMD code).
+  (`cargo orchestration build`), whose programs link without `std`, is the
+  final check. `vimage` runs only in user space and does not build
+  soft-float (`fast_image_resize`'s SIMD code).
 
 ## Pixels and colors
 
@@ -140,7 +141,7 @@ cache-friendly order. TCG emulates SSE integer multiplies and shuffles with
 slow helper calls, so a hot loop that LLVM auto-vectorises can become
 several times slower than its scalar form: check the generated code of hot
 loops and keep them scalar where needed. Always build the OS with
-optimisations (`--release` is the default for `cargo xtask`).
+optimisations (`--release` is the default for `cargo orchestration`).
 
 ## Robustness and errors
 
@@ -154,8 +155,8 @@ optimisations (`--release` is the default for `cargo xtask`).
 
 * `cargo fmt` (see `rustfmt.toml`, `max_width = 120`).
 * Unit tests live next to the code (`#[cfg(test)] mod tests`). Run them with
-  `cargo test -p <crate>`; `cargo xtask test` runs the full suite plus the
-  QEMU integration tests.
+  `cargo test -p <crate>`; `cargo orchestration test` runs the full suite
+  plus the QEMU integration tests.
 
 ## Licence headers
 
@@ -182,6 +183,6 @@ tags in the file's comment syntax:
   test vectors, JSON, `documentation/website/CNAME`), as do `Cargo.lock`,
   which Cargo writes, licence texts, and the ports' patches, which change
   other projects' files.
-* A test of xtask's (`xtask/src/licence.rs`), which `cargo xtask test`
-  runs, checks every file of the repository, and every new one Git does
-  not ignore.
+* A test of `orchestration`'s (`orchestration/src/licence.rs`), which
+  `cargo orchestration test` runs, checks every file of the repository, and
+  every new one Git does not ignore.

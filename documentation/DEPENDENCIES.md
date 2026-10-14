@@ -20,8 +20,8 @@ dependency's reason beside it.
   detects the processor through `std`, does not fit either. The kernel and
   the loader are soft-float UEFI images, where crates run their portable
   code (`.cargo/arch/amd64/config.toml` chooses it). The build machine's
-  tools (`xtask`, `generation/`) and the driver VM's Linux programs have
-  `std`.
+  tools (`orchestration`, `generation/`) and the driver VM's Linux programs
+  have `std`.
 * **Little in every program.** Programs are linked statically and without
   whole-program LTO, so what a crate makes reachable is in every program
   that calls it. Measured on Veda's programs:
@@ -104,6 +104,6 @@ Linux (the driver VM's kernel).
 | `vaudio`: WAV, QOA, resampler, FFT, echo canceller, mixing, synthesiser | hound, symphonia, qoaudio, rubato, rustfft, sonora-aec3, dasp, fundsp | hound, symphonia, qoaudio, rubato, rustfft and sonora-aec3 need `std` (and hound takes a WAV file's data length literally, which QEMU leaves at 0 while it records); dasp has had no release since 2020; the synthesiser's instruments are what Veda's music sounds like |
 | `vaudio`'s voice activity detector | earshot 1.2 | To be evaluated on recorded speech before it replaces a tuned detector |
 | `videogen`'s FLAC encoder, Matroska muxer and YUV conversion | flacenc, webm-iterable, yuvutils-rs | flacenc is on older RustCrypto and `heapless` generations; no Rust Matroska writer is mature; Veda's YUV is exact on its test colours |
-| `xtask`'s disk images (FAT32, ISO 9660, GPT, cpio), QMP client and command line | fatfs, hadris-iso, gpt, cpio, qapi, lexopt | fatfs cannot set hidden sectors and has had no release since 2023; hadris-iso is young; gpt makes random GUIDs by default, where Veda's images are reproducible; qapi brings generated types for eight commands |
+| `orchestration`'s disk images (FAT32, ISO 9660, GPT, cpio), QMP client and command line | fatfs, hadris-iso, gpt, cpio, qapi, lexopt | fatfs cannot set hidden sectors and has had no release since 2023; hadris-iso is young; gpt makes random GUIDs by default, where Veda's images are reproducible; qapi brings generated types for eight commands |
 | The asset generators' noise | fastnoise-lite | Their noise is the look of Veda's wallpapers and photos |
 | The compositor's keyboard layout | pc-keyboard 0.9 | US only today; other layouts come with a layout setting, which pc-keyboard can then decode |

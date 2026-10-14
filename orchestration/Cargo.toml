@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "xtask"
+name = "orchestration"
 description = "Veda build orchestration: cross-builds every component, creates the disk image and runs QEMU"
 version.workspace = true
 edition.workspace = true

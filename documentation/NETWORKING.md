@@ -307,20 +307,20 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
 
 ## Testing
 
-* **Host tests** (`cargo xtask test` runs them all): `vwlan` (frames, RSN,
-  crypto vectors, handshakes, SAE, and station-against-access-point runs:
-  every security type, wrong passwords, hidden networks, replays,
-  deauthentication, silent access points, reconnection), `vnetstack` (two
-  stacks over a simulated cable: DHCP including lease renewal and server
-  outages, TCP, UDP, DNS, ICMP, IPv6), the profile and policy modules, and
-  `vtls`: the provider against the vectors above, handshakes with a rustls
-  server in memory (every cipher suite, key exchange group and certificate
-  type, data both ways, closing from either side, key updates, records
-  split down to single bytes, expired, future, misnamed, untrusted and
-  client-only certificates, broken servers, every bit of the server's
-  first flight damaged in turn), and the certificate chains of
-  api.deepgram.com, example.com and www.google.com captured on 2026-10-03,
-  verified against the built-in roots.
+* **Host tests** (`cargo orchestration test` runs them all): `vwlan`
+  (frames, RSN, crypto vectors, handshakes, SAE, and
+  station-against-access-point runs: every security type, wrong passwords,
+  hidden networks, replays, deauthentication, silent access points,
+  reconnection), `vnetstack` (two stacks over a simulated cable: DHCP
+  including lease renewal and server outages, TCP, UDP, DNS, ICMP, IPv6),
+  the profile and policy modules, and `vtls`: the provider against the
+  vectors above, handshakes with a rustls server in memory (every cipher
+  suite, key exchange group and certificate type, data both ways, closing
+  from either side, key updates, records split down to single bytes,
+  expired, future, misnamed, untrusted and client-only certificates, broken
+  servers, every bit of the server's first flight damaged in turn), and the
+  certificate chains of api.deepgram.com, example.com and www.google.com
+  captured on 2026-10-03, verified against the built-in roots.
   `cargo test -p vtls -- --ignored --nocapture` connects to those servers
   for real with each cipher suite and group.
 * **In-system**: `nettest` (`run=nettest`; on a PC with Wi-Fi,
@@ -330,7 +330,7 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
   version, cipher suite and handshake time. These checks, and the scripts
   below, reach real Internet hosts through QEMU's NAT, so the host must be
   online.
-* **GUI and recovery** (`cargo xtask test --ui`):
+* **GUI and recovery** (`cargo orchestration test --ui`):
   `verification/ui/network-cable.vts` unplugs and replugs the wired card's
   cable (QMP `set_link`) and checks that the default route goes and comes
   back; `verification/ui/drivervm-restart.vts` crashes the driver VM and

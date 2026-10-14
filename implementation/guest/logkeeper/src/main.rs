@@ -10,14 +10,14 @@
 //! debugging messages too: its display drivers' say what they do).
 //!
 //! The stick is a USB disk with a FAT32 file system named `VEDA` that has
-//! a `VEDA/LOGS` directory: the live system's image has one (`cargo xtask
-//! iso`), so the stick it is written to keeps the logs; other disks are
-//! left alone. Each start of the system gets a directory of its own there,
-//! numbered (`VEDA/LOGS/0007`), with `VEDA.TXT` and `LINUX.TXT` in it; the
-//! oldest go, so that [`KEPT`] starts' are kept at most, with room for
-//! this one's. What is written is synced to the stick every second, so a
-//! computer switched off (or that stopped responding) keeps all of it but
-//! the last second.
+//! a `VEDA/LOGS` directory: the live system's image has one
+//! (`cargo orchestration iso`), so the stick it is written to keeps the
+//! logs; other disks are left alone. Each start of the system gets a
+//! directory of its own there, numbered (`VEDA/LOGS/0007`), with `VEDA.TXT`
+//! and `LINUX.TXT` in it; the oldest go, so that [`KEPT`] starts' are kept
+//! at most, with room for this one's. What is written is synced to the stick
+//! every second, so a computer switched off (or that stopped responding)
+//! keeps all of it but the last second.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};

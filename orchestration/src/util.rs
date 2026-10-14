@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Small helpers shared by the xtask commands.
+//! Small helpers shared by the `cargo orchestration` commands.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,7 +10,7 @@ pub type Result<T = ()> = std::result::Result<T, String>;
 
 /// The repository root (the directory containing the workspace `Cargo.toml`).
 pub fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask lives in the workspace").to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("orchestration lives in the workspace").to_path_buf()
 }
 
 /// Directory that receives the assembled image and QEMU state

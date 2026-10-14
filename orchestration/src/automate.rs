@@ -4,8 +4,8 @@
 //! Scripted, headless runs of Veda in QEMU.
 //!
 //! Automation scripts drive the virtual machine through QMP and inspect its
-//! serial console. They power `cargo xtask shot` and the integration tests.
-//! One command per line; `#` starts a comment:
+//! serial console. They power `cargo orchestration shot` and the integration
+//! tests. One command per line; `#` starts a comment:
 //!
 //! ```text
 //! wait-serial "desktop ready" 60   # wait for a log line (timeout in s)
@@ -33,10 +33,10 @@
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
 //! memory 2048                      # the machine's memory for this run (MiB), applied before boot
-//! acpi-table touchpad              # add a table to the firmware's (the machine's: xtask/src/arch/*/acpitest.rs), applied before boot
+//! acpi-table touchpad              # add a table to the firmware's (the machine's: orchestration/src/arch/*/acpitest.rs), applied before boot
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
 //! sound hda                        # the sound card for this run (virtio or hda; hda if the script resets), applied before boot
-//! live [writable]                  # boot the live system (`xtask iso`) from a USB stick (read-only unless writable), applied before boot
+//! live [writable]                  # boot the live system (`cargo orchestration iso`) from a USB stick (read-only unless writable), applied before boot
 //! expect-stick VEDA/LOGS/0001/VEDA.TXT "desktop ready"  # fail unless a file on the live system's stick contains the text
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
 //! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out
@@ -45,7 +45,7 @@
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
 //! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
-//! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
+//! requires c-toolchain             # only with the C test programs (`cargo orchestration toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
 //! requires rust-toolchain          # only with the Rust test programs (the same)

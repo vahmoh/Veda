@@ -4,7 +4,7 @@
 //! The toolchain: GCC, binutils and musl for Veda, the media libraries, and
 //! Rust.
 //!
-//! `cargo xtask toolchain` builds, from the sources in
+//! `cargo orchestration toolchain` builds, from the sources in
 //! `implementation/ports/`:
 //!
 //! * a **cross toolchain** that runs on this machine and makes Veda
@@ -55,15 +55,15 @@ pub fn built(what: &str) -> bool {
     }
 }
 
-/// For `cargo xtask doctor`: whether the toolchain, which is optional, has
-/// been built (`Ok`), and if not, whether it can be (`Err`).
+/// For `cargo orchestration doctor`: whether the toolchain, which is
+/// optional, has been built (`Ok`), and if not, whether it can be (`Err`).
 pub fn status() -> std::result::Result<String, String> {
     if built("native toolchain") && built("cross toolchain") {
         return Ok(format!("built ({})", root().display()));
     }
     let how = match shell() {
-        Ok(_) => "`cargo xtask toolchain` builds it".to_string(),
-        Err(e) => format!("`cargo xtask toolchain` builds it, but {e}"),
+        Ok(_) => "`cargo orchestration toolchain` builds it".to_string(),
+        Err(e) => format!("`cargo orchestration toolchain` builds it, but {e}"),
     };
     Err(format!("not built (optional: C and GCC in the image); {how}"))
 }
@@ -81,16 +81,16 @@ pub fn rustc() -> Option<PathBuf> {
     (rustc.is_file() && std.is_dir()).then_some(rustc)
 }
 
-/// For `cargo xtask doctor`: whether Rust, which is optional, has been
-/// built (`Ok`), and if not, whether it can be (`Err`).
+/// For `cargo orchestration doctor`: whether Rust, which is optional, has
+/// been built (`Ok`), and if not, whether it can be (`Err`).
 pub fn rust_status() -> std::result::Result<String, String> {
     if rustc().is_some() {
         let version = Port::named("rust").map(|p| p.version).unwrap_or_default();
         return Ok(format!("Rust {version} for {} ({})", arch::STD_TARGET, rust_root().display()));
     }
     let how = match shell() {
-        Ok(_) => "`cargo xtask toolchain` builds it".to_string(),
-        Err(e) => format!("`cargo xtask toolchain` builds it, but {e}"),
+        Ok(_) => "`cargo orchestration toolchain` builds it".to_string(),
+        Err(e) => format!("`cargo orchestration toolchain` builds it, but {e}"),
     };
     Err(format!("not built (optional: Rust's standard library on Veda); {how}"))
 }
@@ -114,16 +114,16 @@ pub fn media_libraries() -> Option<Vec<PathBuf>> {
     libs.iter().all(|l| l.is_file()).then_some(libs)
 }
 
-/// For `cargo xtask doctor`: whether the media libraries, which videos need,
-/// have been built.
+/// For `cargo orchestration doctor`: whether the media libraries, which
+/// videos need, have been built.
 pub fn media_status() -> std::result::Result<String, String> {
     if media_libraries().is_some() {
         let version = |p: &str| Port::named(p).map(|p| p.version).unwrap_or_default();
         return Ok(format!("FFmpeg {} and dav1d {} ({})", version("ffmpeg"), version("dav1d"), media_root().display()));
     }
     let how = match shell() {
-        Ok(_) => "`cargo xtask toolchain` builds them".to_string(),
-        Err(e) => format!("`cargo xtask toolchain` builds them, but {e}"),
+        Ok(_) => "`cargo orchestration toolchain` builds them".to_string(),
+        Err(e) => format!("`cargo orchestration toolchain` builds them, but {e}"),
     };
     Err(format!("not built (optional: videos play with them); {how}"))
 }
@@ -556,8 +556,8 @@ fn toolchain_ports() -> Result<Vec<Port>> {
         .collect()
 }
 
-/// Rust's name for this machine (its target), as the Rust that runs xtask
-/// gives it.
+/// Rust's name for this machine (its target), as the Rust that runs
+/// `orchestration` gives it.
 fn rust_host() -> Result<String> {
     let out = Command::new("rustc").arg("-vV").output().map_err(|e| format!("running rustc: {e}"))?;
     String::from_utf8_lossy(&out.stdout)
@@ -647,7 +647,7 @@ fn shell() -> Result<Command> {
     }
 }
 
-/// `cargo xtask toolchain [--jobs N]`.
+/// `cargo orchestration toolchain [--jobs N]`.
 pub fn command(args: &[String]) -> Result {
     let mut jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
     let mut it = args.iter();
@@ -668,7 +668,9 @@ pub fn command(args: &[String]) -> Result {
     match lock.try_lock() {
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
-            return Err("another `cargo xtask toolchain` is building the toolchain: wait for it to finish".into());
+            return Err(
+                "another `cargo orchestration toolchain` is building the toolchain: wait for it to finish".into()
+            );
         }
         Err(std::fs::TryLockError::Error(e)) => return Err(format!("locking {}: {e}", lock_path.display())),
     }

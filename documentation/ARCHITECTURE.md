@@ -14,7 +14,7 @@ that communicate over kernel channels.
 1. The firmware (OVMF under QEMU) loads the loader (`implementation/boot/`,
    `vboot`) from UEFI's boot path for the architecture
    (`\EFI\BOOT\BOOTX64.EFI` on AMD64) on the FAT32 EFI system partition
-   built by `cargo xtask build`.
+   built by `cargo orchestration build`.
 2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
    GOP graphics mode (about `BOOT.CFG`'s size, and of the display's own
    shape where the firmware gives the display's EDID: 1920x1200 rather
@@ -78,12 +78,12 @@ pattern) so that it shows no bands. `init` asks for the sequence
 system or shell restarted after a crash shows the desktop at once, and
 quietly.
 
-The live system (`cargo xtask iso`) starts the same way from a USB stick or
-a disc. Its image is a hybrid ISO 9660 image: the boot files in the ISO 9660
-tree (what Rufus copies onto a stick), and a FAT file system with the same
-files, which is both the El Torito UEFI boot image and, through an MBR
-partition table in the system area, the EFI system partition of a stick the
-image is written to as it is. Its `BOOT.CFG` puts `live` on the kernel
+The live system (`cargo orchestration iso`) starts the same way from a USB
+stick or a disc. Its image is a hybrid ISO 9660 image: the boot files in the
+ISO 9660 tree (what Rufus copies onto a stick), and a FAT file system with
+the same files, which is both the El Torito UEFI boot image and, through an
+MBR partition table in the system area, the EFI system partition of a stick
+the image is written to as it is. Its `BOOT.CFG` puts `live` on the kernel
 command line; `init` passes it on to `devmgr`, which then starts no disk
 driver, and to `vfs`, which keeps `/home` in memory, so the computer's disks
 are never read or written. The stick keeps the system's log instead
@@ -157,9 +157,9 @@ to another; as Linux does, the kernel sets the boot processor's to 0
 before the clock starts and each other processor's alike as it starts,
 then checks with an exchange of readings that they agree and corrects
 what is left (`dmesg smp` says by how much). The wall clock starts from
-the firmware's RTC, which keeps UTC; the `tz=` boot option (xtask passes
-the host's offset) gives local time, which people see, while protocols and
-certificates use the UTC clock.
+the firmware's RTC, which keeps UTC; the `tz=` boot option
+(`cargo orchestration` passes the host's offset) gives local time, which
+people see, while protocols and certificates use the UTC clock.
 
 **Processors.** Each processor turns its caches on as it starts (a
 processor started with INIT keeps the setting the firmware left it, which
@@ -245,8 +245,8 @@ has ended and left its stack, which is how thread libraries join threads.
   ACPICA does. Every evaluation is bounded. The tables and the firmware's
   ACPI memory are mapped cached, anything else AML reads uncached. On the
   laptop this was written for, all of a 480 KiB DSDT and sixteen SSDTs
-  load, every conditional definition with them; `cargo xtask acpi` shows
-  what devmgr makes of a machine's tables, on the host.
+  load, every conditional definition with them; `cargo orchestration acpi`
+  shows what devmgr makes of a machine's tables, on the host.
 * **The IOMMU.** Where the firmware describes one (VT-d), the kernel
   remaps every interrupt: a device's MSI raises an entry that names the
   device, so no other can raise it, and the compatibility format is
@@ -593,7 +593,7 @@ in pure Rust: *Interceptor* (below) is its largest program.
   virgl on virtio-gpu (QEMU's, which renders on the host's GPU), or
   softpipe (`drivervm.renderer=softpipe`, for tests). The program is Mesa's
   build of the decoder (`decoder/`, C) around its Rust half, which serves
-  the protocol over the bridge; `cargo xtask linux` builds Mesa for the
+  the protocol over the bridge; `cargo orchestration linux` builds Mesa for the
   guest with a toolchain of its own (`implementation/ports/linux/build.sh`).
   The decoder takes virgl's commands straight to Gallium's calls, checking
   every word first (a client can fail its own context, never the renderer),
@@ -858,8 +858,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
   `vgpio::sim` is a GPIO controller as its registers behave (Intel's
   pads, its pins wired in pairs), which devmgr drives in place of a PC's
   when a test's ACPI table describes one (`drivervm-gpio.vts`, through to
-  Linux's GPIO character device in the guest). `cargo xtask acpi` shows
-  what devmgr makes of a real machine's ACPI tables. The real machine
+  Linux's GPIO character device in the guest). `cargo orchestration acpi`
+  shows what devmgr makes of a real machine's ACPI tables. The real machine
   stays the final check of what Linux drives there.
 * GUI automation scripts (`verification/ui/*.vts`) that drive QEMU through
   QMP (mouse, keyboard, waits on log lines, screenshots) and fail on
@@ -880,7 +880,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
   Deepgram on the host and a test microphone fed from the host;
   `verification/real/` talks to the real Deepgram.
 
-`cargo xtask test --ui` runs all three.
+`cargo orchestration test --ui` runs all three.
 
 ## Architectures
 
@@ -903,7 +903,7 @@ On AMD64:
 | `implementation/libraries/hv`, `implementation/libraries/iommu` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
 | `implementation/services/devmgr`, `implementation/services/drivervm`, `implementation/services/init` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
 | `verification/systest`, `verification/c`, `verification/ui` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
-| `xtask/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
+| `orchestration/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `implementation/ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
 
 ## Repository layout
@@ -940,5 +940,5 @@ of their own (see Architectures above).
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`) |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
 | `generation/` | host programs: media generators |
-| `xtask/` | build orchestration, disk image creation, QEMU automation |
+| `orchestration/` | build orchestration, disk image creation, QEMU automation |
 | `documentation/` | documentation |

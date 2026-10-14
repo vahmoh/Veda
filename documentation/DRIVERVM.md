@@ -130,7 +130,7 @@ Each one came from what the alternatives would cost.
 | Guest kernel | `implementation/ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, network interfaces among it; `netlink`); their Linux system calls are `rustix`'s |
-| Build | `xtask/src/linux.rs`, `implementation/ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `implementation/ports/linux/firmware.txt` and the architecture's (`implementation/ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
+| Build | `orchestration/src/linux.rs`, `implementation/ports/linux/build.sh` | `cargo orchestration linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `implementation/ports/linux/firmware.txt` and the architecture's (`implementation/ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
 
 ### The platform
 
@@ -378,9 +378,9 @@ joins the guest's domain. The kernel lets it join only so: a device
 whose firmware's memory its domain does not have where it is stays the
 host's. A function whose firmware's memory is where the guest has
 something else (its RAM, its BARs) is not given. Under QEMU, a virtio function's DMA goes
-through the IOMMU only if the function says so (`iommu_platform`): xtask
-gives QEMU's virtio functions that, modern ones only, as a PC's are
-behind its IOMMU, and Veda's virtio drivers accept it
+through the IOMMU only if the function says so (`iommu_platform`):
+`cargo orchestration` gives QEMU's virtio functions that, modern ones only,
+as a PC's are behind its IOMMU, and Veda's virtio drivers accept it
 (`VIRTIO_F_ACCESS_PLATFORM`).
 
 ### Veda's drivers for Linux
@@ -764,18 +764,18 @@ has the display draws its first frames there, until `kms` attaches to it.
 
 ## Testing
 
-`cargo xtask linux` builds the guest's kernel, its toolchain and Mesa
+`cargo orchestration linux` builds the guest's kernel, its toolchain and Mesa
 (the first image built builds them too, where the machine has the tools);
 every image includes the guest, and without it nothing but the disks and
-sound is driven. Under QEMU's PC (`xtask/src/arch/amd64`), Veda runs
+sound is driven. Under QEMU's PC (`orchestration/src/arch/amd64`), Veda runs
 its guests on the processor's VMX, which KVM gives it nested
-(`kvm_intel nested=1`), and xtask's machine has an Intel IOMMU that
-remaps interrupts, its virtio functions behind it, as a PC's are
-(`--no-iommu` for `cargo xtask run` leaves it out): every script runs the
-driver VM, and the GUI scripts need it (`cargo xtask test --ui` says why
-when it cannot run). Its options are on the kernel command line:
-`drivervm.run=PROGRAM`, `drivervm.poweroff`, `drivervm.memory=MIB`
-(256 by default, 1024 with an integrated GPU),
+(`kvm_intel nested=1`), and the machine `cargo orchestration` starts has an
+Intel IOMMU that remaps interrupts, its virtio functions behind it, as a
+PC's are (`--no-iommu` for `cargo orchestration run` leaves it out): every
+script runs the driver VM, and the GUI scripts need it
+(`cargo orchestration test --ui` says why when it cannot run). Its options
+are on the kernel command line: `drivervm.run=PROGRAM`, `drivervm.poweroff`,
+`drivervm.memory=MIB` (256 by default, 1024 with an integrated GPU),
 `drivervm.cpus=N`, `drivervm.devices=VID:DID,...` (devices Veda would
 keep), `drivervm=off`, and `drivervm.crash=SECONDS`, which
 has Linux crash once, that long after it started, for the tests of the

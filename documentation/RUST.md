@@ -16,8 +16,8 @@ works on Veda, what it does not do yet, and how Rust is built and tested.
 
 ## Building a program
 
-`cargo xtask toolchain` builds Rust in `target/toolchain/rust`, laid out
-as Rust's releases install, beside the C toolchain. Its compiler runs on
+`cargo orchestration toolchain` builds Rust in `target/toolchain/rust`, laid
+out as Rust's releases install, beside the C toolchain. Its compiler runs on
 the development machine and compiles for it and for Veda; the C
 toolchain's driver links Veda's programs, as it links C programs:
 
@@ -104,7 +104,7 @@ Rust's programs share those of C programs (see
 
 ## The toolchain
 
-`cargo xtask toolchain` builds Rust after the C toolchain, from the
+`cargo orchestration toolchain` builds Rust after the C toolchain, from the
 `rust` port (`implementation/ports/rust`): the release's source
 (`rustc-1.99.0-src.tar.xz`, pinned by its SHA-256; its signature was
 checked against the Rust project's release key when it was pinned), with
@@ -114,8 +114,8 @@ unwinder (`implementation/ports/README.md` describes them). Rust's own build
 program (`x.py`) then works in `target/toolchain/build/rust`:
 
 1. with the release before this one, its stage 0, which builds it:
-   `cargo xtask toolchain` downloads that release's compiler, standard
-   library and Cargo, and checks them against the SHA-256 that the
+   `cargo orchestration toolchain` downloads that release's compiler,
+   standard library and Cargo, and checks them against the SHA-256 that the
    release's `src/stage0` gives them;
 2. it builds the release's LLVM, with the architecture's code generator
    alone (X86 on AMD64);
@@ -156,7 +156,7 @@ sudo apt install cmake python3
   statuses and signals, the working directory, the environment, pipes to
   a child, `kill`, missing programs, `HashMap`'s random keys differing
   between processes, and `pre_exec` and `exec` failing), pipes (and
-  `BrokenPipe`), Unix socket pairs, and a deep stack. `cargo xtask
+  `BrokenPipe`), Unix socket pairs, and a deep stack. `cargo orchestration
   build` compiles it with the toolchain's Rust twice,
   position-independent (`stdlib`) and at a fixed address
   (`stdlib-fixed`), into `/system/tests/rust`, and `systest` runs both
@@ -164,5 +164,5 @@ sudo apt install cmake python3
 * `verification/ui/rust-programs.vts` runs it in the Terminal, with the
   terminal as its standard streams.
 
-`cargo xtask test` runs them once Rust is built; the GUI script is
+`cargo orchestration test` runs them once Rust is built; the GUI script is
 skipped without it.

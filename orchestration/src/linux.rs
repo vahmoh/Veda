@@ -3,15 +3,15 @@
 
 //! The Linux guest of the driver VM (see `documentation/DRIVERVM.md`).
 //!
-//! * `cargo xtask linux` builds its kernel from `implementation/ports/linux`
-//!   (first zlib and elfutils' libelf, from `implementation/ports/zlib` and
-//!   `implementation/ports/elfutils`, for the kernel's build tool objtool):
-//!   `target/linux/kernel`, the architecture's image of it. It also builds a
-//!   cross toolchain for the guest's programs in C and C++
-//!   (`target/linux/toolchain`, for Linux on musl) and configures Mesa's
-//!   build with it for the renderer, and for this machine (`vgallium.so`,
-//!   the renderer's decoder on softpipe, virgl and iris, for the OpenGL ES
-//!   tests).
+//! * `cargo orchestration linux` builds its kernel from
+//!   `implementation/ports/linux` (first zlib and elfutils' libelf, from
+//!   `implementation/ports/zlib` and `implementation/ports/elfutils`, for
+//!   the kernel's build tool objtool): `target/linux/kernel`, the
+//!   architecture's image of it. It also builds a cross toolchain for the
+//!   guest's programs in C and C++ (`target/linux/toolchain`, for Linux on
+//!   musl) and configures Mesa's build with it for the renderer, and for
+//!   this machine (`vgallium.so`, the renderer's decoder on softpipe, virgl
+//!   and iris, for the OpenGL ES tests).
 //! * Once it is built, every image build also builds the guest's programs
 //!   (`implementation/guest/`: Rust for Linux on musl, static; the renderer,
 //!   Mesa's build around its Rust half) and packs them into the initial RAM
@@ -89,10 +89,10 @@ fn renderer_source() -> Result<PathBuf> {
     std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
-/// Keeps the Mesa build in `dir` on the renderer's sources: `cargo xtask
-/// linux` configured it with where they were, and should they have moved
-/// since (they, or the whole checkout), it is told where they are now, and
-/// builds again only what they reach.
+/// Keeps the Mesa build in `dir` on the renderer's sources:
+/// `cargo orchestration linux` configured it with where they were, and
+/// should they have moved since (they, or the whole checkout), it is told
+/// where they are now, and builds again only what they reach.
 fn follow_renderer(dir: &Path) -> Result {
     let info = dir.join("meson-info").join("intro-buildoptions.json");
     let text = std::fs::read_to_string(&info).map_err(|e| format!("reading {}: {e}", info.display()))?;
@@ -151,20 +151,20 @@ pub fn intel_gpu() -> bool {
 /// built, and KVM lets Veda's hypervisor run (nested virtualization).
 pub fn runnable() -> Result {
     if !built() {
-        return Err("its Linux is not built (`cargo xtask linux`)".into());
+        return Err("its Linux is not built (`cargo orchestration linux`)".into());
     }
     arch::nested_virtualization()
 }
 
-/// For `cargo xtask doctor`: whether the guest has been built (`Ok`), and if
-/// not, whether it can be (`Err`).
+/// For `cargo orchestration doctor`: whether the guest has been built
+/// (`Ok`), and if not, whether it can be (`Err`).
 pub fn status() -> std::result::Result<String, String> {
     if built() {
         return Ok(format!("built ({})", image().display()));
     }
     let how = match tools() {
-        Ok(()) => "`cargo xtask linux` builds it".to_string(),
-        Err(e) => format!("`cargo xtask linux` builds it, but {e}"),
+        Ok(()) => "`cargo orchestration linux` builds it".to_string(),
+        Err(e) => format!("`cargo orchestration linux` builds it, but {e}"),
     };
     Err(format!("not built (the driver VM drives every device but the disks and sound); {how}"))
 }
@@ -178,7 +178,7 @@ fn tools() -> Result {
     }
 }
 
-/// `cargo xtask linux [--jobs N]`.
+/// `cargo orchestration linux [--jobs N]`.
 pub fn command(args: &[String]) -> Result {
     let mut jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
     let mut it = args.iter();
@@ -214,8 +214,8 @@ pub fn command(args: &[String]) -> Result {
 }
 
 /// Builds the guest the first time an image needs it, where this machine
-/// has the tools for it (afterwards `cargo xtask linux` builds it again,
-/// once its port changes).
+/// has the tools for it (afterwards `cargo orchestration linux` builds it
+/// again, once its port changes).
 pub fn build_once() -> Result {
     if built() {
         return Ok(());
@@ -253,7 +253,8 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         archive.file(path, 0o755, &util::read(&bin.join(binary))?);
     }
     // The renderer: Mesa's build links its decoder and drivers around the
-    // Rust half just built (once `cargo xtask linux` has configured it).
+    // Rust half just built (once `cargo orchestration linux` has configured
+    // it).
     if mesa_build().join("build.ninja").is_file() {
         follow_renderer(&mesa_build())?;
         util::status("Building", "the driver VM's renderer (Mesa)");

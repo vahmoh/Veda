@@ -5,7 +5,7 @@
 *.pdb
 *.obj
 /out
-# The crates in implementation/ports/, as `cargo xtask` prepares them
+# The crates in implementation/ports/, as `cargo orchestration` prepares them
 # for Cargo
 /implementation/ports/.crates/
 # Tool working copies (git worktrees of parallel work)

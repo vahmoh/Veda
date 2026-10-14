@@ -16,12 +16,12 @@ released (see Fonts below).
 Each port is a directory:
 
 * `port.toml`: the name, version, download address, the SHA-256 of the
-  archive and the licence. `cargo xtask` downloads the archive
-  (`cargo xtask toolchain` the toolchain's, `cargo xtask linux` the
-  driver VM's, every command the crates') and refuses one whose hash
-  differs; for Rust also the release that builds it (its stage 0: its
-  compiler, standard library and Cargo for this machine), as the
-  release's `src/stage0` pins them by SHA-256.
+  archive and the licence. `cargo orchestration` downloads the archive
+  (`cargo orchestration toolchain` the toolchain's,
+  `cargo orchestration linux` the driver VM's, every command the crates')
+  and refuses one whose hash differs; for Rust also the release that builds
+  it (its stage 0: its compiler, standard library and Cargo for this
+  machine), as the release's `src/stage0` pins them by SHA-256.
 * `veda.patch`: the changes for Veda, applied with `patch -p1` to the
   unpacked archive.
 * `arch/<architecture>/veda.patch`: the changes for Veda on that
@@ -31,13 +31,13 @@ Each port is a directory:
   `linux/arch/amd64/veda.config`).
 
 `build.sh` builds the C toolchain, the media libraries and Rust (run by
-`cargo xtask toolchain`), `linux/build.sh` the driver VM's Linux, its
-toolchain and Mesa's build (`cargo xtask linux`), and `crates.sh`
+`cargo orchestration toolchain`), `linux/build.sh` the driver VM's Linux, its
+toolchain and Mesa's build (`cargo orchestration linux`), and `crates.sh`
 prepares the crates (below); the comments at the top of each list what
-it expects and makes. They build for the architecture xtask names
-(`VEDA_ARCH`): what the scripts take from it (the target triples, musl's,
-Meson's, FFmpeg's and Linux's names for it, Rust's target and LLVM's name
-of its code generator, the assembler of the media libraries) is in
+it expects and makes. They build for the architecture `cargo orchestration`
+names (`VEDA_ARCH`): what the scripts take from it (the target triples,
+musl's, Meson's, FFmpeg's and Linux's names for it, Rust's target and LLVM's
+name of its code generator, the assembler of the media libraries) is in
 `arch/<architecture>/settings.sh`.
 
 ## Crates
@@ -49,21 +49,23 @@ workspace depends on the release by its version, as on any crate
 (smoltcp's is `version = "=0.14.0"` in `Cargo.toml`), and Cargo builds
 the port in its place:
 
-* Every `cargo xtask` command first prepares the crates
-  (`xtask/src/crates.rs`): when a port has changed, it downloads and
+* Every `cargo orchestration` command first prepares the crates
+  (`orchestration/src/crates.rs`): when a port has changed, it downloads and
   checks the release, and `crates.sh` unpacks it and applies the port's
   patches in `implementation/ports/.crates/src/<crate>`, which Git ignores.
-* xtask writes `implementation/ports/.crates/config.toml`, which has Cargo
-  build those in place of the releases (a `[patch.crates-io]`, which
-  `.cargo/config.toml` includes), and checks that `Cargo.lock` has them.
+* `cargo orchestration` writes `implementation/ports/.crates/config.toml`,
+  which has Cargo build those in place of the releases (a
+  `[patch.crates-io]`, which `.cargo/config.toml` includes), and checks that
+  `Cargo.lock` has them.
 
 Cargo reads them before it builds anything, so they are kept outside
 `target/` and `cargo clean` (removing `implementation/ports/.crates` has
 them prepared anew). Where they are not ready, in a new checkout or while a
 port that has changed is prepared again, Cargo resolves the releases as
-published, and `Cargo.lock` shows them so, until a `cargo xtask` command has
-prepared them: in a new checkout, run one (`cargo xtask doctor`) before
-Cargo itself (`cargo test -p ...`, rust-analyzer).
+published, and `Cargo.lock` shows them so, until a `cargo orchestration`
+command has prepared them: in a new checkout, run one
+(`cargo orchestration doctor`) before Cargo itself (`cargo test -p ...`,
+rust-analyzer).
 
 A crate's own tests run apart from the workspace, which leaves the
 crates out, from the repository's root:
@@ -76,9 +78,9 @@ cargo test --lib --manifest-path implementation/ports/.crates/src/smoltcp/Cargo.
 
 `fonts/` holds the fonts Veda ships: Inter, Lato and JetBrains Mono,
 unmodified, with their licence (`OFL.txt`) and a README that gives each
-one's copyright. There is nothing to build or patch: `cargo xtask build`
-installs them in `/system/fonts` as they are, and `vfont`'s tests and
-`videogen` read them from here.
+one's copyright. There is nothing to build or patch:
+`cargo orchestration build` installs them in `/system/fonts` as they are,
+and `vfont`'s tests and `videogen` read them from here.
 
 ## The patches
 
@@ -182,7 +184,7 @@ needs Mesa's OpenCL compiler (LLVM): generating indirect draws on the GPU,
 and blorp's indirect copies (its bounds check is written in NIR instead).
 `linux/build.sh` configures Mesa (meson) with the driver VM's own
 toolchain (GCC, binutils and musl for Linux, the releases these ports
-pin, unpatched); `cargo xtask` builds the renderer (ninja) with the
+pin, unpatched); `cargo orchestration` builds the renderer (ninja) with the
 system.
 
 **smoltcp**: unpredictable protocol numbers. Upstream draws TCP initial
@@ -235,9 +237,10 @@ to RGB, which is right.
    pristine release, an architecture's against the release with
    `veda.patch` applied). What only an architecture needs goes in its
    patch.
-4. `cargo xtask toolchain` rebuilds what changed (`cargo xtask linux`
-   the driver VM's; any `cargo xtask` command prepares a crate again, and
-   its own tests run as Crates above shows); then `cargo xtask test`.
+4. `cargo orchestration toolchain` rebuilds what changed
+   (`cargo orchestration linux` the driver VM's; any `cargo orchestration`
+   command prepares a crate again, and its own tests run as Crates above
+   shows); then `cargo orchestration test`.
 
 ## Licences
 
