@@ -141,23 +141,6 @@ protocols, the voice pipeline, consent, memory and testing.
   where it stands on the C library. See
   [Rust on Veda](documentation/RUST.md).
 
-## Applications
-
-Every application is agent-compatible: what you can do with the mouse and
-keyboard, the agent can do too.
-
-| Application | What it does | What the agent can do |
-|-------------|--------------|-----------------------|
-| **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, zoom, unlimited undo. | Create, open, read and write documents; find and replace, undo, save; save as or discard changes (with your OK). |
-| **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, rotation, full screen and slideshows; PNG, JPEG, BMP and QOI. | Show, zoom and rotate a picture, go full screen, run a slideshow, set a picture as the wallpaper. |
-| **Music** | A library of `~/Music` (QOA and WAV), cover art, a live spectrum visualiser, seeking, shuffle and repeat. | Play a song by name, pause, stop, skip, seek, shuffle, repeat, set the volume. |
-| **Videos** | A library of `~/Videos` with thumbnails and "Continue watching", and a player with seek previews, full screen, picture stepping and resuming where you left off; AV1, VP9, VP8, H.264, HEVC, MPEG-4 and MPEG-1/2 with AAC, Opus, Vorbis, MP3, FLAC and AC-3, in MP4, Matroska, WebM, Ogg, AVI and MPEG-TS. | Play a video by name, from where it was left or the start; pause, seek, set the volume, go full screen, list the videos. |
-| **Files** | Places, breadcrumbs, list and icon views with thumbnails, search, copy and paste, properties, and a Trash that restores items where they were. | Open, search, make folders; copy, move, rename and delete to the Trash (with your OK); restore; empty the Trash (asked every time). |
-| **Terminal** | A shell with about fifty built-in commands (files, processes, `wifi`, `ping`, `curl`, ...), history and tab completion; runs C programs and GCC with pipes, redirections and Ctrl+C. | Run a command (with your OK), read its output, interrupt it. |
-| **Task Manager** | Processes with CPU and memory use, "end task" and live performance graphs. | List processes, read the graphs, end a program (asked every time). |
-| **Settings** | Wallpapers, the agent (key, name, voice, models, listening, memory, permissions), networks and Wi-Fi, the display and the system. | Open a page, change the agent's voice and speaking rate; rename it or change its model (with your OK). Never the key. |
-| **Interceptor** | Police pursuits through a bay city in OpenGL ES 3.0: eight missions, quick chases and patrols, by day, at sunset, at night and in the rain, with synthesised engines, sirens and music. | Start a mission, a chase or a patrol; pause, resume, restart or quit; change the sound, units, camera and display. |
-
 ## Screenshots
 
 <table>
@@ -341,27 +324,6 @@ Things to ask:
 * "Delete the City Lights photo." (It asks you first.)
 * "What do you know about me?"
 
-## Using the desktop
-
-* Click the ring in the middle of the taskbar, or tap **Super**, for the
-  start menu, and type to search.
-* Click a taskbar button to open, focus or minimise an application;
-  middle-click opens another window. Click the clock for the calendar.
-* Double-click a desktop icon to open it. Right-click the desktop to
-  change the wallpaper.
-* Drag a window to the top of the screen to maximise it, or to a side to
-  fill that half (or press **Super+Left/Right/Up/Down**). **Super+D**
-  shows the desktop, **Alt+Tab** switches windows, **Alt+F4** closes one.
-* Deleted items go to the **Trash**, the first desktop icon: drag desktop
-  items onto it, or press **Delete** in Files (**Ctrl+Z** brings them
-  back, **Shift+Delete** deletes for good). Open it to restore items
-  where they were, or to empty it.
-* The speaker icon on the taskbar sets the volume (scroll over it); the
-  network icon next to it lists the Wi-Fi networks to join.
-
-Your files live in `/home/user`, kept on `target/veda/home.img` across
-restarts and rebuilds (`--fresh-home` starts over).
-
 ## Building agent-compatible applications
 
 Agent support is part of the `vui` application platform. An application
@@ -461,24 +423,6 @@ cargo orchestration shot --wait 20
 
 Every run saves the serial console (the kernel log and every program's
 output) to `target/veda/serial.log`.
-
-## Repository layout
-
-| Path | Contents |
-|------|----------|
-| `implementation/services/agent/`, `implementation/libraries/agent/` | the agent: conversations, the name listener, functions, consent and memory; its logic (Deepgram's protocol, instructions, wake word, echo gate) is in `implementation/libraries/agent` |
-| `implementation/boot/` | `vboot`, the UEFI bootloader |
-| `implementation/kernel/` | `vkernel`, the microkernel, with the hypervisor and the IOMMU driver |
-| `implementation/services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor), `mediadec` (the sandboxed video decoder) |
-| `implementation/drivers/` | Veda's own drivers: `virtio-blk`, `ahci` and `nvme` |
-| `implementation/libraries/` | shared libraries: the system call ABI and runtime, IPC and service protocols, the POSIX layer, 2D graphics, fonts and images, the `vui` toolkit, OpenGL ES and GLSL, networking and TLS, audio, the agent's logic, and more |
-| `implementation/applications/` | the desktop `shell` and the applications, each with its manifest for the start menu (`<name>.app`); what is testable on the host of Interceptor (its game), Videos and the Terminal is in `interceptor/game`, `videos/core` and `terminal/core` |
-| `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
-| `implementation/ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG); and the fonts (Inter, Lato, JetBrains Mono), unmodified |
-| `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
-| `generation/` | host programs that generate wallpapers, pictures, music and videos at build time |
-| `orchestration/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
-| `documentation/` | documentation, the README's screenshots, the icon and social preview (`documentation/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`documentation/website/`) |
 
 ## Documentation
 
