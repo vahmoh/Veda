@@ -476,7 +476,7 @@ output) to `target/veda/serial.log`.
 | `implementation/guest/` | the driver VM's programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the OpenGL ES `renderer`, and `logkeeper` (the stick's logs) |
 | `ports/` | upstream releases with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl for the C toolchain, Rust, FFmpeg and dav1d for videos, Linux for the driver VM, and the crates smoltcp (TCP/IP) and zune-jpeg (JPEG) |
 | `verification/` | `systest` and `nettest` (in-system tests), C and C++ test programs, `fakedec` (a stand-in video decoder), GUI and agent scripts |
-| `tools/` | host programs that generate wallpapers, pictures, music and videos at build time |
+| `generation/` | host programs that generate wallpapers, pictures, music and videos at build time |
 | `xtask/` | the build system: cross-compilation, disk images, QEMU, automation, the stand-in for Deepgram |
 | `assets/` | fonts and application manifests |
 | `documentation/` | documentation, the README's screenshots, the icon and social preview (`documentation/icon/`), and [www.vedaos.org](https://www.vedaos.org), a static page (`documentation/website/`) |

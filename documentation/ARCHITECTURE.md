@@ -68,7 +68,7 @@ card is attached, or none is coming, as devmgr tells the audio service;
 the window system waits for that 3 s at most), the ring swells and fades,
 the words lift away and the desktop dissolves in, in under a second, and
 the startup sound, `/system/sounds/startup.wav` (composed by
-`tools/musicgen`), starts with it: the shell holds it in a paused stream
+`generation/musicgen`), starts with it: the shell holds it in a paused stream
 and starts it when told the desktop appears (`WindowEvent::Appearing`).
 So the desktop appears on its final screen, with its sound and its
 devices there. The splash's gradient is dark and steps only a few dozen
@@ -695,7 +695,7 @@ the same every time), and the land's noise FastNoise Lite's.
   with the Doppler shift of a car going by, tyres, wind, crashes and the
   cues of the menus; placed by distance, direction and motion, echoed in
   the tunnel, and limited, in a thread of their own. The music is loops of
-  stems that `tools/musicgen` renders at build time; the chase's second
+  stems that `generation/musicgen` renders at build time; the chase's second
   stem joins as the suspect is caught up with.
 * **How it runs** shows in a corner: the frame rate and what renders (the
   GPU as Mesa names it, the host's under QEMU, or the processor); F3 adds
@@ -735,8 +735,8 @@ the same every time), and the land's noise FastNoise Lite's.
   its own counter and clamps the peer's: a misbehaving client can only
   garble its own audio.
 * `vaudio` holds the formats (WAV, QOA), the resampler, mixing, an FFT for
-  visualisers, and a synthesiser and sequencer that `tools/musicgen` uses
-  to render the bundled album and the startup sound at build time.
+  visualisers, and a synthesiser and sequencer that `generation/musicgen`
+  uses to render the bundled album and the startup sound at build time.
 * `vaudio` also holds the voice processing for an always-listening
   assistant. `aec::EchoCanceller` removes the loudspeakers' sound from the
   microphone, given the mixed speaker output as reference: a
@@ -939,7 +939,7 @@ of their own (see Architectures above).
 | `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; and the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
-| `tools/` | host programs: media generators |
+| `generation/` | host programs: media generators |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
 | `assets/` | fonts, firmware and other data shipped in the initrd |
 | `documentation/` | documentation |

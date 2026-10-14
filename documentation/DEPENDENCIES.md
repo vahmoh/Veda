@@ -20,7 +20,8 @@ dependency's reason beside it.
   detects the processor through `std`, does not fit either. The kernel and
   the loader are soft-float UEFI images, where crates run their portable
   code (`.cargo/arch/amd64/config.toml` chooses it). The build machine's
-  tools (`xtask`, `tools/`) and the driver VM's Linux programs have `std`.
+  tools (`xtask`, `generation/`) and the driver VM's Linux programs have
+  `std`.
 * **Little in every program.** Programs are linked statically and without
   whole-program LTO, so what a crate makes reachable is in every program
   that calls it. Measured on Veda's programs:
