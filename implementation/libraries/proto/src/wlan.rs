@@ -29,6 +29,22 @@
 //!
 //! The service presents each connected radio to `netd` as an Ethernet-like
 //! interface (`wlan0`) through the `netdev` protocol.
+//!
+//! # Who may do what
+//!
+//! The service knows who opened each connection (the registry's client
+//! identity):
+//!
+//! * only the device manager (whose drivers, the driver VM's programs
+//!   included, speak as it) offers radios ([`wlanphy`]);
+//! * only the desktop shell, the agent service, Settings and the Terminal
+//!   scan, join and leave networks, switch the radio and change saved
+//!   networks;
+//! * only Settings and the Terminal see what reveals where the machine is
+//!   or has been, or identifies it: the access points' addresses (BSSIDs),
+//!   the saved networks, diagnostics and the adapter's address. Others get
+//!   [`WlanError::Denied`], and statuses without those addresses;
+//! * every program may see the status and the networks in range.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -37,13 +53,6 @@ use vipc::{Bytes, enumeration, message, protocol, union};
 use vrt::object::Channel;
 
 use crate::netring::LinkEndpoints;
-
-/// Longest SSID (IEEE 802.11-2020, 9.4.2.2).
-pub const MAX_SSID_LEN: usize = 32;
-/// Shortest and longest WPA passphrase (8..63 characters; 64 hex digits
-/// give the PSK directly).
-pub const MIN_PASSPHRASE_LEN: usize = 8;
-pub const MAX_PASSPHRASE_LEN: usize = 64;
 
 enumeration! {
     /// Frequency bands.
@@ -80,12 +89,6 @@ message! {
 
 /// Bits of [`PhyInfo::caps`].
 pub mod phy_caps {
-    /// The radio encrypts and decrypts CCMP itself (keys can be installed).
-    pub const HW_CRYPTO: u32 = 1;
-    /// The radio reports transmit status (acknowledged or not).
-    pub const TX_STATUS: u32 = 2;
-    /// The radio supports 802.11n (HT).
-    pub const HT: u32 = 4;
     /// The radio joins access points itself, on the service's commands: its
     /// control channel speaks [`super::wlanmlme_ctl`].
     pub const MANAGED: u32 = 8;
@@ -132,6 +135,7 @@ enumeration! {
 }
 
 message! {
+    /// A radio's own counts of frames.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub struct PhyStats {
         pub tx_frames: u64,
@@ -352,7 +356,9 @@ enumeration! {
     /// Why a connection attempt failed or a connection ended.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum FailReason {
-        /// The password is wrong (handshake failed).
+        /// The access point does not seem to accept the password: probably
+        /// a wrong one. (Nothing proves it: the frames that tell are not
+        /// authenticated, so automatic joining tries again after a pause.)
         WrongPassword = 1,
         /// The network is out of range.
         NotFound = 2,
@@ -381,7 +387,7 @@ enumeration! {
 impl FailReason {
     pub const fn description(self) -> &'static str {
         match self {
-            FailReason::WrongPassword => "the password is incorrect",
+            FailReason::WrongPassword => "the password may be incorrect",
             FailReason::NotFound => "the network is out of range",
             FailReason::AuthRejected => "the access point refused the connection",
             FailReason::AssocRejected => "the access point is not accepting connections",
@@ -431,8 +437,10 @@ message! {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ConnectRequest {
         pub ssid: Bytes,
-        /// The security to use; `None` picks it from the scan results (or the
-        /// saved network).
+        /// The security to use: that of the network the user chose from the
+        /// list. `None` (a hidden network) takes what the network offers (or
+        /// the saved network's); a passphrase is never used with an open
+        /// access point either way.
         pub security: Option<Security>,
         /// The password (`None` for open networks, or to use the saved one).
         pub passphrase: Option<String>,
@@ -476,6 +484,8 @@ enumeration! {
         Busy = 8,
         Storage = 9,
         LimitReached = 10,
+        /// The caller may not do this (see the module docs).
+        Denied = 11,
     }
 }
 
@@ -492,6 +502,7 @@ impl core::fmt::Display for WlanError {
             WlanError::Busy => "busy",
             WlanError::Storage => "could not save the network",
             WlanError::LimitReached => "too many saved networks",
+            WlanError::Denied => "not allowed",
         })
     }
 }
@@ -515,6 +526,7 @@ message! {
         pub disconnections: u64,
         pub auth_failures: u64,
         pub beacons_rx: u64,
+        /// Connections lost because the access point was no longer heard.
         pub beacon_losses: u64,
         pub data_tx: u64,
         pub data_rx: u64,
@@ -536,6 +548,9 @@ message! {
         pub status: WlanStatus,
         pub counters: WlanCounters,
         pub log: Vec<LogEntry>,
+        /// The radio's own counts (none without a radio, or if it did not
+        /// answer).
+        pub radio: Option<PhyStats>,
     }
 }
 
@@ -557,6 +572,8 @@ pub const WLAN_EVENT: u32 = 1;
 protocol! {
     /// Wi-Fi management.
     pub mod wlan = "wlan" {
+        /// The status (without the access point's and the adapter's
+        /// addresses for most programs: see the module docs).
         1 => fn status() -> WlanStatus;
         /// Starts a scan (the result is announced with
         /// [`WlanEvent::ScanDone`]).
@@ -564,22 +581,35 @@ protocol! {
         /// Networks in range, strongest first.
         3 => fn networks() -> Vec<NetworkInfo>;
         /// Every access point heard recently.
-        4 => fn access_points() -> Vec<BssInfo>;
+        4 => fn access_points() -> Result<Vec<BssInfo>, WlanError>;
         /// Starts connecting; progress and the outcome are reported through
         /// the status and [`WlanEvent`]s.
         5 => fn connect(request: ConnectRequest) -> Result<(), WlanError>;
         /// Disconnects and stops joining networks automatically until the
         /// next `connect` (or restart).
         6 => fn disconnect() -> Result<(), WlanError>;
-        7 => fn saved() -> Vec<SavedNetwork>;
+        7 => fn saved() -> Result<Vec<SavedNetwork>, WlanError>;
         8 => fn forget(ssid: Bytes) -> Result<(), WlanError>;
         9 => fn set_auto_connect(ssid: Bytes, enabled: bool) -> Result<(), WlanError>;
         10 => fn set_radio(on: bool) -> Result<(), WlanError>;
         /// Sends [`WlanEvent`]s (ordinal [`WLAN_EVENT`]) on `events` until it
         /// is closed.
         11 => fn watch(events: Channel) -> Result<(), WlanError>;
-        12 => fn diagnostics() -> WlanDiagnostics;
+        12 => fn diagnostics() -> Result<WlanDiagnostics, WlanError>;
     }
+}
+
+/// Whether `p` is acceptable as a passphrase, as the service takes one: 8
+/// to 63 printable ASCII characters, or exactly 64 hexadecimal digits (the
+/// PSK itself).
+pub fn valid_passphrase(p: &str) -> bool {
+    let printable = p.bytes().all(|b| (0x20..=0x7E).contains(&b));
+    (printable && (8..=63).contains(&p.len())) || (p.len() == 64 && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Whether `ssid` is a valid SSID (1 to 32 bytes).
+pub fn valid_ssid(ssid: &[u8]) -> bool {
+    (1..=32).contains(&ssid.len())
 }
 
 /// Formats an SSID for display: valid UTF-8 as is (control characters

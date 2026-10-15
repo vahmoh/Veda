@@ -5,7 +5,9 @@
 
 mod api;
 mod bench;
+mod contract;
 mod fbo;
+mod gpu_path;
 mod pipeline;
 mod render;
 mod texture;

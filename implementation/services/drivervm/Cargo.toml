@@ -18,6 +18,7 @@ bootinfo = { workspace = true }
 vrt = { workspace = true }
 vabi = { workspace = true }
 vhv = { workspace = true }
+drivervm-core = { path = "core" }
 vipc = { workspace = true }
 vproto = { workspace = true }
 initrd = { workspace = true }

@@ -4,6 +4,10 @@
 //! What a device in the namespace is, and what it uses: its identification
 //! objects (`_HID`, `_CID`, `_UID`, `_ADR`, `_SUB`, `_STA`) and its
 //! current resources (`_CRS`).
+//!
+//! Each of this module's questions (a device's identity, the PCI root
+//! bridges, where an interrupt goes) is answered by evaluations that spend
+//! from one budget together, however many devices it looks at.
 
 use alloc::format;
 use alloc::string::String;
@@ -12,7 +16,7 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::Memory;
-use crate::aml::{self, Namespace};
+use crate::aml::{self, Namespace, Question};
 use crate::name::Path;
 use crate::resource::{self, Resource, ResourceError};
 use crate::value::Value;
@@ -69,7 +73,11 @@ fn id(v: &Value) -> Option<String> {
 /// A device's hardware id and compatible ids only (evaluating nothing
 /// else), for finding devices of a kind.
 pub fn ids(ns: &Namespace, device: &Path, memory: &dyn Memory) -> Vec<String> {
-    let get = |name: &str| ns.evaluate_child(device, name, memory).and_then(Result::ok);
+    ids_of(&Question::new(ns, memory), device)
+}
+
+fn ids_of(q: &Question, device: &Path) -> Vec<String> {
+    let get = |name: &str| q.child(device, name).and_then(Result::ok);
     let mut ids: Vec<String> = get("_HID").as_ref().and_then(id).into_iter().collect();
     match get("_CID") {
         Some(Value::Package(items)) => ids.extend(items.iter().filter_map(id)),
@@ -82,7 +90,11 @@ pub fn ids(ns: &Namespace, device: &Path, memory: &dyn Memory) -> Vec<String> {
 /// Reads a device's identification objects. Ones that are missing or fail
 /// are left out.
 pub fn identify(ns: &Namespace, device: &Path, memory: &dyn Memory) -> Identity {
-    let get = |name: &str| ns.evaluate_child(device, name, memory).and_then(Result::ok);
+    identity_of(&Question::new(ns, memory), device)
+}
+
+fn identity_of(q: &Question, device: &Path) -> Identity {
+    let get = |name: &str| q.child(device, name).and_then(Result::ok);
     let cids = match get("_CID") {
         Some(Value::Package(items)) => items.iter().filter_map(id).collect(),
         Some(v) => id(&v).into_iter().collect(),
@@ -98,7 +110,7 @@ pub fn identify(ns: &Namespace, device: &Path, memory: &dyn Memory) -> Identity 
         }),
         adr: get("_ADR").and_then(|v| v.as_integer()),
         sub: get("_SUB").and_then(|v| v.as_str().map(String::from)),
-        status: match ns.evaluate_child(device, "_STA", memory) {
+        status: match q.child(device, "_STA") {
             Some(Ok(v)) => v.as_integer().unwrap_or(STA_DEFAULT),
             _ => STA_DEFAULT,
         },
@@ -129,7 +141,11 @@ impl fmt::Display for ResourcesError {
 
 /// The resources a device currently uses (`_CRS`).
 pub fn resources(ns: &Namespace, device: &Path, memory: &dyn Memory) -> Result<Vec<Resource>, ResourcesError> {
-    let value = ns.evaluate_child(device, "_CRS", memory).ok_or(ResourcesError::None)?.map_err(ResourcesError::Aml)?;
+    resources_of(&Question::new(ns, memory), device)
+}
+
+fn resources_of(q: &Question, device: &Path) -> Result<Vec<Resource>, ResourcesError> {
+    let value = q.child(device, "_CRS").ok_or(ResourcesError::None)?.map_err(ResourcesError::Aml)?;
     let template = value.as_buffer().ok_or(ResourcesError::NotABuffer)?;
     resource::parse(template).map_err(ResourcesError::Template)
 }
@@ -143,10 +159,11 @@ pub fn children(ns: &Namespace, path: &Path) -> Vec<Path> {
 /// The PCI root bridges (`PNP0A08`, `PNP0A03`): their bus number (`_BBN`,
 /// 0 without) and path. Only the devices' ids are evaluated.
 pub fn pci_roots(ns: &Namespace, memory: &dyn Memory) -> Vec<(u8, Path)> {
+    let q = Question::new(ns, memory);
     let mut roots = Vec::new();
     for d in ns.devices() {
-        if ids(ns, d, memory).iter().any(|i| i == "PNP0A08" || i == "PNP0A03") {
-            let bus = ns.evaluate_child(d, "_BBN", memory).and_then(Result::ok).and_then(|v| v.as_integer());
+        if ids_of(&q, d).iter().any(|i| i == "PNP0A08" || i == "PNP0A03") {
+            let bus = q.child(d, "_BBN").and_then(Result::ok).and_then(|v| v.as_integer());
             roots.push((bus.unwrap_or(0) as u8, d.clone()));
         }
     }
@@ -185,10 +202,11 @@ pub fn motherboard_memory(ns: &Namespace, memory: &dyn Memory) -> Vec<Reserved> 
         Resource::Window { kind: 0, min, max, length, .. } if length > 0 && max > min => Some(min..max.checked_add(1)?),
         _ => None,
     };
+    let q = Question::new(ns, memory);
     ns.devices()
-        .filter(|d| ids(ns, d, memory).iter().any(|i| i == "PNP0C01" || i == "PNP0C02"))
+        .filter(|d| ids_of(&q, d).iter().any(|i| i == "PNP0C01" || i == "PNP0C02"))
         .map(|d| {
-            let memory = match resources(ns, d, memory) {
+            let memory = match resources_of(&q, d) {
                 Ok(r) => Ok(r.into_iter().filter_map(ranges).collect()),
                 Err(ResourcesError::None) => Ok(Vec::new()),
                 Err(e) => Err(e),
@@ -210,8 +228,9 @@ pub fn pci_companion(
     let (_, root) = roots.iter().find(|(b, _)| *b == bus)?;
     let exact = (slot as u64) << 16 | function as u64;
     let any_function = (slot as u64) << 16 | 0xFFFF;
+    let q = Question::new(ns, memory);
     children(ns, root).into_iter().find(|d| {
-        let adr = ns.evaluate_child(d, "_ADR", memory).and_then(Result::ok).and_then(|v| v.as_integer());
+        let adr = q.child(d, "_ADR").and_then(Result::ok).and_then(|v| v.as_integer());
         adr == Some(exact) || adr == Some(any_function)
     })
 }
@@ -240,20 +259,24 @@ pub fn pci_interrupt(
     let (_, root) = roots.iter().find(|(b, _)| *b == bus)?;
     let pic = Path::parse("\\_PIC")?;
     let prt = root.join("_PRT")?;
-    let Value::Package(routes) = ns.evaluate_after(&pic, &[Value::Integer(1)], &prt, &[], memory).ok()? else {
+    // `_PRT` numbers INTA# 0.
+    let route_pin = (pin as u64).checked_sub(1)?;
+    let q = Question::new(ns, memory);
+    let Value::Package(routes) = q.evaluate_after(&pic, &[Value::Integer(1)], &prt, &[]).ok()? else {
         return None;
     };
     for route in routes {
         let Value::Package(r) = route else { continue };
-        let [address, route_pin, source, index] = r.as_slice() else { continue };
-        let (Some(address), Some(route_pin)) = (address.as_integer(), route_pin.as_integer()) else { continue };
-        if address >> 16 != slot as u64 || route_pin + 1 != pin as u64 {
+        let [address, pin, source, index] = r.as_slice() else { continue };
+        if address.as_integer().map(|a| a >> 16) != Some(slot as u64) || pin.as_integer() != Some(route_pin) {
             continue;
         }
         let index = index.as_integer().unwrap_or(0);
         return match source {
-            Value::Reference(link) => link_interrupt(ns, link, index as usize, memory),
-            v if v.as_integer() == Some(0) => Some(IntxRoute { gsi: index as u32, level: true, active_low: true }),
+            Value::Reference(link) => link_interrupt(&q, link, usize::try_from(index).ok()?),
+            v if v.as_integer() == Some(0) => {
+                Some(IntxRoute { gsi: u32::try_from(index).ok()?, level: true, active_low: true })
+            }
             _ => None,
         };
     }
@@ -261,8 +284,8 @@ pub fn pci_interrupt(
 }
 
 /// The `index`-th interrupt an interrupt link device's `_CRS` holds.
-fn link_interrupt(ns: &Namespace, link: &Path, index: usize, memory: &dyn Memory) -> Option<IntxRoute> {
-    resources(ns, link, memory).ok()?.into_iter().find_map(|r| match r {
+fn link_interrupt(q: &Question, link: &Path, index: usize) -> Option<IntxRoute> {
+    resources_of(q, link).ok()?.into_iter().find_map(|r| match r {
         Resource::Irq { irqs, edge, active_low, .. } => {
             Some(IntxRoute { gsi: *irqs.get(index)?, level: !edge, active_low })
         }
@@ -302,11 +325,12 @@ impl Described {
 /// The present devices directly below `path`, described. A device without
 /// `_CRS` simply uses nothing.
 pub fn describe_children(ns: &Namespace, path: &Path, memory: &dyn Memory) -> Vec<Described> {
+    let q = Question::new(ns, memory);
     children(ns, path)
         .into_iter()
         .map(|p| Described {
-            identity: identify(ns, &p, memory),
-            resources: match resources(ns, &p, memory) {
+            identity: identity_of(&q, &p),
+            resources: match resources_of(&q, &p) {
                 Err(ResourcesError::None) => Ok(Vec::new()),
                 r => r,
             },

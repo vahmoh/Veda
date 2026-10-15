@@ -308,15 +308,33 @@ fn server_closes() {
         assert!(server.received.ends_with(b"after"));
     }
 
-    // The transport ends without close_notify: the end of the stream too.
+    // The transport ends without close_notify: the data before is read,
+    // then the stream reports that it was cut short (anyone on the path
+    // could have ended it there), every time.
     let mut server = ServerSetup::new().start();
     let mut tls = connect(&mut server).unwrap();
     tls.write_all(b"bye").unwrap();
     tls.transport_mut().hang_up = true;
     assert_eq!(read_exact(&mut tls, 3), b"bye");
     let mut buf = [0u8; 16];
-    assert_eq!(tls.read(&mut buf), Ok(0));
-    assert_eq!(tls.try_read(&mut buf), Ok(Some(0)));
+    assert_eq!(tls.read(&mut buf), Err(TlsError::Truncated));
+    assert_eq!(tls.try_read(&mut buf), Err(TlsError::Truncated));
+    assert_eq!(tls.read(&mut buf), Err(TlsError::Truncated));
+}
+
+/// What does not fit the transport now waits, in order, for the next send:
+/// `try_write` never blocks.
+#[test]
+fn non_blocking_writes_queue_what_does_not_fit() {
+    let mut server = ServerSetup::new().start();
+    let mut tls = connect(&mut server).unwrap();
+    tls.transport_mut().write_room = Some(10);
+    assert_eq!(tls.try_write(b"first message"), Ok(false));
+    assert_eq!(tls.try_write(b", second"), Ok(false));
+    tls.transport_mut().write_room = None;
+    tls.write_all(b", third").unwrap();
+    // The server echoes what it received, in order.
+    assert_eq!(read_exact(&mut tls, 28), b"first message, second, third");
 }
 
 /// A read with nothing to read times out (the transport's timeout), and
@@ -423,6 +441,10 @@ fn broken_servers() {
         }
         fn write_all(&mut self, _data: &[u8]) -> Result<(), TlsError> {
             Ok(())
+        }
+
+        fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError> {
+            Ok(data.len())
         }
     }
     let config = client_config().build();

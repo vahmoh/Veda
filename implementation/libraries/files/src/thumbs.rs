@@ -24,7 +24,7 @@ use vrt::sync::{Condvar, Mutex};
 use crate::fs::Fs;
 
 /// Files larger than this are not decoded.
-const MAX_FILE: u64 = 48 << 20;
+const MAX_FILE: usize = 48 << 20;
 
 struct Shared {
     queue: Mutex<VecDeque<String>>,
@@ -119,11 +119,7 @@ fn worker(shared: Arc<Shared>, event: Event, max_w: u32, max_h: u32) {
 }
 
 fn load(fs: &Fs, path: &str, max_w: u32, max_h: u32) -> Option<Bitmap> {
-    let st = fs.stat(path).ok()?;
-    if st.is_dir || st.size > MAX_FILE {
-        return None;
-    }
-    let data = fs.read(path).ok()?;
+    let data = fs.read_limited(path, MAX_FILE).ok()?;
     let img = vimage::decode(&data).ok()?;
     let t = vimage::thumbnail(&img, max_w, max_h, vimage::Filter::Bilinear);
     if t.width == 0 || t.height == 0 {

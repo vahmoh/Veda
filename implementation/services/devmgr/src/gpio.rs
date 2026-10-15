@@ -205,9 +205,12 @@ impl Gpio {
         let mut communities = Vec::new();
         for &(base, length) in &windows[..layout.communities()] {
             let len = length as usize;
-            let mapped = Vmo::create_physical(mmio, base, len, cache_policy::UNCACHED)
-                .ok()
-                .and_then(|vmo| vmo.map(0, len, map_flags::READ | map_flags::WRITE).ok().map(|a| (a, vmo)));
+            // The VMO, and so its mapping, starts at the page the registers
+            // start on.
+            let skew = (base % vabi::PAGE_SIZE as u64) as usize;
+            let mapped = Vmo::create_physical(mmio, base, len, cache_policy::UNCACHED).ok().and_then(|vmo| {
+                vmo.map(0, skew + len, map_flags::READ | map_flags::WRITE).ok().map(|a| (a + skew, vmo))
+            });
             let Some((address, vmo)) = mapped else {
                 println!("gpio: {} ({}): cannot map registers at {:#x}", path, hid, base);
                 return None;

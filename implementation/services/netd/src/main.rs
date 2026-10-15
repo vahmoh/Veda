@@ -3,20 +3,25 @@
 
 //! `netd` — the network service.
 //!
-//! * Network devices (Ethernet drivers, and the Wi-Fi service for each
-//!   wireless connection) attach through the `netdev` protocol; their frames
-//!   flow through shared rings.
+//! * Network devices (Linux's network cards in the driver VM, which speak
+//!   as the device manager, and the Wi-Fi service for each wireless
+//!   connection) attach through the `netdev` protocol; their frames flow
+//!   through shared rings, which the stack reads and writes directly.
 //! * Applications use the `net` protocol: sockets (each its own channel),
-//!   name resolution, status and configuration.
+//!   name resolution, status and configuration. Configuration, and seeing
+//!   other processes' sockets and the hardware addresses, is for Settings
+//!   and the Terminal alone.
 //! * The protocol work itself — interfaces, DHCP, IPv6 autoconfiguration,
 //!   routing, DNS, TCP, UDP, ICMP — happens in `vnetstack` (smoltcp
 //!   underneath).
 //!
 //! Everything runs on one thread around a single wait: on device rings,
-//! device and client channels, socket channels and the stack's next timer.
-//! Every peer is untrusted: malformed messages fail only the offending
-//! socket or connection, and per-client limits bound what a client can
-//! consume.
+//! device and client channels, socket channels, lookups' reply channels and
+//! the stack's next timer. Each wake-up attends to what changed: the
+//! sockets the stack reports ready, and those whose client wrote or made
+//! room. Every peer is untrusted: malformed messages fail only the
+//! offending socket or connection, and per-process limits bound what a
+//! program can consume, however many connections it opens.
 
 #![no_std]
 #![no_main]
@@ -25,62 +30,179 @@ extern crate alloc;
 
 mod socket;
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
 use vabi::signals;
-use vnetstack::{IfaceId, ResolveId, Stack, StackEvent};
+use vnetstack::{IfaceId, MAX_PENDING_LOOKUPS, MAX_SOCKETS, ResolveId, SockId, Stack, StackEvent};
+use vproto::init::ClientIdentity;
 use vproto::net::{
-    AddrFamily, DeviceInfo, DnsCacheEntry, InterfaceInfo, IpConfig, NET_EVENT, NetError, NetEvent, NetStatus,
-    NetdevError, RESOLVE_RESULT, RouteInfo, SocketInfo, TcpOptions, net, netdev,
+    AddrFamily, DeviceInfo, InterfaceInfo, IpConfig, NET_EVENT, NetError, NetEvent, NetStatus, NetdevError,
+    RESOLVE_RESULT, RouteInfo, SocketInfo, TcpOptions, format_mac, net, netdev,
 };
-use vproto::netring::{Link, LinkEndpoints, SlotMeta, kind};
+use vproto::netring::{self, LinkEndpoints, SlotMeta, kind};
 use vrt::object::Channel;
 use vrt::println;
 
-use socket::{Conn, Kind, SEND_WINDOW};
+use socket::{Conn, Events};
 
 vrt::entry!(main);
 
-/// Sockets one client connection may own.
-const MAX_SOCKETS_PER_CLIENT: usize = 256;
-/// Status watchers.
+/// `net` connections, of all processes and of one.
+const MAX_CLIENTS: usize = 256;
+const MAX_CLIENTS_PER_PROCESS: usize = 32;
+/// Sockets of one process (connections its listeners accepted included);
+/// the stack's table bounds them all together.
+const MAX_SOCKETS_PER_PROCESS: usize = 256;
+/// Lookups in progress for one process; the stack bounds them all
+/// together.
+const MAX_LOOKUPS_PER_PROCESS: usize = 32;
+/// Status watchers, of all processes and of one.
 const MAX_WATCHERS: usize = 32;
-/// Frames taken from one device per loop iteration.
-const RX_BUDGET: usize = 256;
-/// Requests handled per client per loop iteration.
+const MAX_WATCHERS_PER_PROCESS: usize = 4;
+/// What of each shared resource only system services may take, so that
+/// applications together cannot leave the system without: connections,
+/// sockets, lookups and watchers.
+const RESERVED_CLIENTS: usize = 32;
+const RESERVED_SOCKETS: usize = 128;
+const RESERVED_LOOKUPS: usize = 32;
+const RESERVED_WATCHERS: usize = 8;
+/// Device connections (attached or not yet).
+const MAX_DEVICES: usize = 32;
+/// Requests handled per connection per loop iteration.
 const CLIENT_BUDGET: usize = 32;
+/// Non-Ethernet frames skipped per frame asked for (a device must send
+/// Ethernet frames; this bounds what a broken one costs).
+const MAX_SKIPPED: usize = 64;
 /// Reseed the stack's generator with kernel entropy this often.
 const RESEED_NS: u64 = 300_000_000_000;
 
-/// A device attached through `netdev`.
+/// Wait-set keys: the kind of handle in the high bits, its key below.
+const NET_LISTENER: u64 = 0;
+const DEV_LISTENER: u64 = 1;
+const DEVICE: u64 = 1 << 56;
+const DEVICE_LINK: u64 = 1 << 57;
+const CLIENT: u64 = 1 << 58;
+const SOCKET: u64 = 1 << 59;
+const LOOKUP: u64 = 1 << 60;
+const KEY: u64 = (1 << 56) - 1;
+
+/// A device's frame link, as the stack reads and writes it.
+struct RingLink {
+    link: netring::Link,
+    /// Frames of another kind than Ethernet, skipped.
+    skipped: u64,
+}
+
+impl vnetstack::Link for RingLink {
+    fn receive(&mut self, buf: &mut [u8]) -> Option<usize> {
+        for _ in 0..MAX_SKIPPED {
+            let (meta, len) = self.link.recv(buf)?;
+            if meta.kind == kind::ETHERNET {
+                return Some(len);
+            }
+            self.skipped += 1;
+        }
+        None
+    }
+
+    fn can_send(&self) -> bool {
+        self.link.send_space() > 0
+    }
+
+    fn send(&mut self, frame: &[u8]) -> bool {
+        self.link.send(SlotMeta::ethernet(), frame)
+    }
+
+    fn dropped(&self) -> u64 {
+        self.link.peer_dropped()
+    }
+
+    fn malformed(&self) -> u64 {
+        self.link.bad_frames() + self.skipped
+    }
+}
+
+/// A device attached through `netdev` (only the device manager's drivers
+/// and the Wi-Fi service connect).
 struct Device {
     channel: Channel,
-    link: Option<Link>,
+    link: Option<RingLink>,
     iface: Option<IfaceId>,
     name: String,
+}
+
+/// The devices' links by interface, for the stack.
+struct DeviceLinks<'a>(&'a mut BTreeMap<u64, Device>);
+
+impl vnetstack::Links for DeviceLinks<'_> {
+    fn link(&mut self, id: IfaceId) -> Option<&mut dyn vnetstack::Link> {
+        let dev = self.0.values_mut().find(|d| d.iface == Some(id))?;
+        dev.link.as_mut().map(|l| l as &mut dyn vnetstack::Link)
+    }
 }
 
 /// A `net` client connection.
 struct Client {
     channel: Channel,
-    /// Identifies the client in socket listings.
-    id: u64,
+    who: ClientIdentity,
+    /// Settings or the Terminal: may configure, and see everything.
+    manager: bool,
+}
+
+/// Whether one more of a shared resource (`used` of `max`) may go to a
+/// client: system services may take the last `reserved`, others not.
+fn room(service: bool, used: usize, max: usize, reserved: usize) -> bool {
+    used < if service { max } else { max.saturating_sub(reserved) }
+}
+
+/// A lookup in progress.
+struct Lookup {
+    reply: Channel,
+    owner: u64,
+}
+
+/// A status watcher.
+struct Watcher {
+    channel: Channel,
+    owner: u64,
+}
+
+/// What one process holds.
+#[derive(Default)]
+struct Usage {
+    clients: usize,
+    sockets: usize,
+    lookups: usize,
+    watchers: usize,
+}
+
+impl Usage {
+    fn is_empty(&self) -> bool {
+        self.clients == 0 && self.sockets == 0 && self.lookups == 0 && self.watchers == 0
+    }
 }
 
 struct Netd {
     stack: Stack,
+    /// What it waits on (see `Netd::wait`).
+    ws: vipc::WaitSet,
     net_listener: Channel,
     dev_listener: Channel,
     clients: BTreeMap<u64, Client>,
     devices: BTreeMap<u64, Device>,
-    sockets: BTreeMap<u64, Conn>,
-    resolves: BTreeMap<ResolveId, Channel>,
-    watchers: Vec<Channel>,
+    sockets: BTreeMap<SockId, Conn>,
+    lookups: BTreeMap<ResolveId, Lookup>,
+    watchers: Vec<Watcher>,
+    /// What each process holds, by process id.
+    usage: BTreeMap<u64, Usage>,
+    /// Sockets to attend to on the next pump (their client wrote or made
+    /// room, or they are new).
+    work: BTreeSet<SockId>,
+    events: Events,
     next_key: u64,
-    frame: Vec<u8>,
     last_reseed: u64,
 }
 
@@ -88,30 +210,72 @@ fn now_us() -> u64 {
     vrt::time::now_ns() / 1000
 }
 
-fn mac_string(m: &[u8; 6]) -> String {
-    alloc::format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
+/// Whether `who` may attach network devices: the device manager (whose
+/// drivers, the driver VM's programs included, speak as it) and the Wi-Fi
+/// service.
+fn may_attach(who: &ClientIdentity) -> bool {
+    who.service && matches!(who.name.as_str(), "devmgr" | "wlan")
+}
+
+/// Whether `who` manages the network: Settings and the Terminal.
+fn manages(who: &ClientIdentity) -> bool {
+    who.app && matches!(who.name.as_str(), "settings" | "terminal")
 }
 
 impl Netd {
     fn key(&mut self) -> u64 {
-        self.next_key += 1;
+        self.next_key = (self.next_key + 1) & KEY;
         self.next_key
     }
 
-    fn client_sockets(&self, owner: u64) -> usize {
-        self.sockets.values().filter(|c| c.owner == owner).count()
+    fn usage(&mut self, owner: u64) -> &mut Usage {
+        self.usage.entry(owner).or_default()
+    }
+
+    /// Gives back what `owner` held, as `f` says.
+    fn release(&mut self, owner: u64, f: impl FnOnce(&mut Usage)) {
+        if let Some(u) = self.usage.get_mut(&owner) {
+            f(u);
+            if u.is_empty() {
+                self.usage.remove(&owner);
+            }
+        }
+    }
+
+    fn sockets_of(&self, owner: u64) -> usize {
+        self.usage.get(&owner).map_or(0, |u| u.sockets)
     }
 
     fn add_socket(&mut self, conn: Conn) {
-        let k = self.key();
-        self.sockets.insert(k, conn);
+        let (id, owner) = (conn.id, conn.owner);
+        self.usage(owner).sockets += 1;
+        self.sockets.insert(id, conn);
+        self.work.insert(id);
+    }
+
+    /// The client closed a socket: the stack finishes it (a TCP connection
+    /// gracefully).
+    fn close_socket(&mut self, id: SockId) {
+        if let Some(conn) = self.sockets.remove(&id) {
+            self.stack.close(id);
+            self.work.remove(&id);
+            self.release(conn.owner, |u| u.sockets -= 1);
+        }
     }
 
     // ---------------------------------------------------------------
     // Devices
 
     fn accept_devices(&mut self) {
-        while let Some(ch) = vproto::accept(&self.dev_listener) {
+        while let Some((ch, who)) = vproto::accept_with_identity(&self.dev_listener) {
+            if !may_attach(&who) {
+                println!("{} may not attach network devices; refused", who.name);
+                continue;
+            }
+            if self.devices.len() >= MAX_DEVICES {
+                println!("too many network devices; refused one from {}", who.name);
+                continue;
+            }
             let k = self.key();
             self.devices.insert(k, Device { channel: ch, link: None, iface: None, name: String::new() });
         }
@@ -124,10 +288,10 @@ impl Netd {
         }
         impl netdev::Server for Session<'_> {
             fn attach(&mut self, info: DeviceInfo, link: LinkEndpoints, link_up: bool) -> Result<String, NetdevError> {
-                if self.netd.devices.get(&self.key).is_some_and(|d| d.iface.is_some()) {
+                if self.netd.devices.get(&self.key).is_none_or(|d| d.iface.is_some()) {
                     return Err(NetdevError::Invalid);
                 }
-                let link = Link::attach(link).map_err(|_| NetdevError::BadLink)?;
+                let link = netring::Link::attach(link).map_err(|_| NetdevError::BadLink)?;
                 let id = self.netd.stack.add_interface(&info, link_up)?;
                 let name = String::from(self.netd.stack.interface_name(id).unwrap_or("?"));
                 println!(
@@ -137,15 +301,16 @@ impl Netd {
                         vproto::net::InterfaceKind::Wireless => "wireless",
                         _ => "ethernet",
                     },
-                    mac_string(&info.mac),
+                    format_mac(&info.mac),
                     info.driver,
                     info.location,
                     if link_up { "up" } else { "down" }
                 );
-                let dev = self.netd.devices.get_mut(&self.key).unwrap();
-                dev.link = Some(link);
-                dev.iface = Some(id);
-                dev.name = name.clone();
+                if let Some(dev) = self.netd.devices.get_mut(&self.key) {
+                    dev.link = Some(RingLink { link, skipped: 0 });
+                    dev.iface = Some(id);
+                    dev.name = name.clone();
+                }
                 Ok(name)
             }
 
@@ -184,49 +349,51 @@ impl Netd {
         }
     }
 
-    /// Feeds received frames into the stack.
-    fn receive_frames(&mut self) {
-        for dev in self.devices.values() {
-            let (Some(link), Some(id)) = (&dev.link, dev.iface) else { continue };
-            for _ in 0..RX_BUDGET {
-                let Some((meta, len)) = link.recv(&mut self.frame) else { break };
-                if meta.kind == kind::ETHERNET {
-                    self.stack.receive_frame(id, &self.frame[..len]);
-                }
-            }
-        }
-    }
-
-    /// Hands the stack's outgoing frames to the devices.
-    fn transmit_frames(&mut self) {
-        for dev in self.devices.values() {
-            let (Some(link), Some(id)) = (&dev.link, dev.iface) else { continue };
-            self.stack.transmit_frames(id, |f| link.send(SlotMeta::ethernet(), f));
-        }
-    }
-
     // ---------------------------------------------------------------
     // Clients
 
     fn accept_clients(&mut self) {
-        while let Some(ch) = vproto::accept(&self.net_listener) {
+        while let Some((ch, who)) = vproto::accept_with_identity(&self.net_listener) {
+            let mine = self.usage.get(&who.koid).map_or(0, |u| u.clients);
+            if !room(who.service, self.clients.len(), MAX_CLIENTS, RESERVED_CLIENTS) || mine >= MAX_CLIENTS_PER_PROCESS
+            {
+                println!("{} has too many connections; refused one", who.name);
+                continue;
+            }
             let k = self.key();
-            self.clients.insert(k, Client { channel: ch, id: k });
+            self.usage(who.koid).clients += 1;
+            let manager = manages(&who);
+            self.clients.insert(k, Client { channel: ch, who, manager });
+        }
+    }
+
+    fn remove_client(&mut self, key: u64) {
+        if let Some(c) = self.clients.remove(&key) {
+            self.release(c.who.koid, |u| u.clients -= 1);
         }
     }
 
     fn handle_client(&mut self, key: u64) {
         struct Session<'a> {
             netd: &'a mut Netd,
+            /// The client's process.
             owner: u64,
+            manager: bool,
+            /// A system service.
+            service: bool,
         }
         impl Session<'_> {
             fn check_quota(&self) -> Result<(), NetError> {
-                if self.netd.client_sockets(self.owner) >= MAX_SOCKETS_PER_CLIENT {
+                let shared = room(self.service, self.netd.stack.socket_count(), MAX_SOCKETS, RESERVED_SOCKETS);
+                if !shared || self.netd.sockets_of(self.owner) >= MAX_SOCKETS_PER_PROCESS {
                     Err(NetError::LimitReached)
                 } else {
                     Ok(())
                 }
+            }
+
+            fn check_manager(&self) -> Result<(), NetError> {
+                if self.manager { Ok(()) } else { Err(NetError::PermissionDenied) }
             }
         }
         impl net::Server for Session<'_> {
@@ -238,13 +405,7 @@ impl Netd {
             ) -> Result<(), NetError> {
                 self.check_quota()?;
                 let id = self.netd.stack.tcp_connect(remote, &options, self.owner)?;
-                let kind = Kind::Tcp {
-                    announced: false,
-                    eof_sent: false,
-                    pending: VecDeque::new(),
-                    shutdown_requested: false,
-                };
-                self.netd.add_socket(Conn::new(socket, id, kind, self.owner));
+                self.netd.add_socket(Conn::tcp(socket, id, self.owner));
                 Ok(())
             }
 
@@ -257,32 +418,33 @@ impl Netd {
             ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
-                self.netd.add_socket(Conn::new(listener, id, Kind::Listener, self.owner));
+                self.netd.add_socket(Conn::listener(listener, id, self.owner));
                 Ok(bound)
             }
 
             fn udp_bind(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
-                let mut conn = Conn::new(socket, id, Kind::Udp { pending: VecDeque::new() }, self.owner);
-                conn.grant_initial(SEND_WINDOW);
-                self.netd.add_socket(conn);
+                self.netd.add_socket(Conn::udp(socket, id, self.owner));
                 Ok(bound)
             }
 
             fn ping_open(&mut self, socket: Channel) -> Result<(), NetError> {
                 self.check_quota()?;
                 let id = self.netd.stack.ping_open(self.owner)?;
-                self.netd.add_socket(Conn::new(socket, id, Kind::Ping, self.owner));
+                self.netd.add_socket(Conn::ping(socket, id, self.owner));
                 Ok(())
             }
 
             fn resolve(&mut self, name: String, family: AddrFamily, reply: Channel) -> Result<(), NetError> {
-                if self.netd.resolves.len() >= 512 {
+                let mine = self.netd.usage.get(&self.owner).map_or(0, |u| u.lookups);
+                let shared = room(self.service, self.netd.lookups.len(), MAX_PENDING_LOOKUPS, RESERVED_LOOKUPS);
+                if !shared || mine >= MAX_LOOKUPS_PER_PROCESS {
                     return Err(NetError::LimitReached);
                 }
                 let id = self.netd.stack.resolve(&name, family)?;
-                self.netd.resolves.insert(id, reply);
+                self.netd.usage(self.owner).lookups += 1;
+                self.netd.lookups.insert(id, Lookup { reply, owner: self.owner });
                 Ok(())
             }
 
@@ -291,7 +453,15 @@ impl Netd {
             }
 
             fn interfaces(&mut self) -> Vec<InterfaceInfo> {
-                self.netd.stack.interfaces()
+                let mut list = self.netd.stack.interfaces();
+                if !self.manager {
+                    // A hardware address identifies the machine wherever it
+                    // goes: not every program needs it.
+                    for i in &mut list {
+                        i.mac = [0; 6];
+                    }
+                }
+                list
             }
 
             fn routes(&mut self) -> Vec<RouteInfo> {
@@ -299,50 +469,54 @@ impl Netd {
             }
 
             fn sockets(&mut self) -> Vec<SocketInfo> {
-                self.netd.stack.socket_infos()
+                self.netd.stack.socket_infos(if self.manager { None } else { Some(self.owner) })
             }
 
             fn watch(&mut self, events: Channel) -> Result<(), NetError> {
-                if self.netd.watchers.len() >= MAX_WATCHERS {
+                let mine = self.netd.watchers.iter().filter(|w| w.owner == self.owner).count();
+                let shared = room(self.service, self.netd.watchers.len(), MAX_WATCHERS, RESERVED_WATCHERS);
+                if !shared || mine >= MAX_WATCHERS_PER_PROCESS {
                     return Err(NetError::LimitReached);
                 }
                 let status = self.netd.stack.status();
                 let _ = vipc::send_event(&events, NET_EVENT, NetEvent::StatusChanged { status });
-                self.netd.watchers.push(events);
+                self.netd.usage(self.owner).watchers += 1;
+                self.netd.watchers.push(Watcher { channel: events, owner: self.owner });
                 Ok(())
             }
 
-            fn dns_cache(&mut self) -> Vec<DnsCacheEntry> {
-                self.netd.stack.dns_cache()
-            }
-
             fn configure(&mut self, interface: String, config: IpConfig) -> Result<(), NetError> {
+                self.check_manager()?;
                 let id = self.netd.stack.find_interface(&interface).ok_or(NetError::InvalidArgument)?;
                 println!("{}: configuration set to {:?}", interface, config);
                 self.netd.stack.configure(id, config)
             }
 
             fn renew(&mut self, interface: String) -> Result<(), NetError> {
+                self.check_manager()?;
                 let id = self.netd.stack.find_interface(&interface).ok_or(NetError::InvalidArgument)?;
                 self.netd.stack.renew(id)
             }
 
             fn set_dns_servers(&mut self, servers: Vec<IpAddr>) -> Result<(), NetError> {
+                self.check_manager()?;
                 self.netd.stack.set_dns_servers(servers)
             }
 
-            fn flush_dns_cache(&mut self) {
+            fn flush_dns_cache(&mut self) -> Result<(), NetError> {
+                self.check_manager()?;
                 self.netd.stack.flush_dns_cache();
+                Ok(())
             }
         }
         for _ in 0..CLIENT_BUDGET {
             let Some(c) = self.clients.get(&key) else { return };
-            let owner = c.id;
+            let (owner, manager, service) = (c.who.koid, c.manager, c.who.service);
             let msg = match c.channel.read() {
                 Ok(m) => m,
                 Err(_) => return,
             };
-            let mut s = Session { netd: self, owner };
+            let mut s = Session { netd: self, owner, manager, service };
             match net::dispatch(&mut s, msg) {
                 Ok(reply) => {
                     if let Some(c) = self.clients.get(&key) {
@@ -350,8 +524,8 @@ impl Netd {
                     }
                 }
                 Err(_) => {
-                    // A malformed request: drop the client.
-                    self.clients.remove(&key);
+                    // Not even a message header: drop the client.
+                    self.remove_client(key);
                     return;
                 }
             }
@@ -361,37 +535,42 @@ impl Netd {
     // ---------------------------------------------------------------
     // Sockets, lookups, events
 
-    /// Moves data between socket channels and the stack. Returns `true` if
-    /// the stack got new data to send.
-    fn pump_sockets(&mut self) -> bool {
-        let mut fed = false;
+    /// Attends to the sockets with something to do: those the stack reports
+    /// ready, and those whose client wrote, made room or is new. A socket
+    /// waiting for its client's room is left alone until it has it.
+    fn pump_sockets(&mut self) {
+        let mut work = core::mem::take(&mut self.work);
+        work.extend(self.stack.take_ready());
         let mut accepted = Vec::new();
-        for conn in self.sockets.values_mut() {
-            fed |= conn.pump(&mut self.stack, &mut accepted);
+        for id in work {
+            let Some(conn) = self.sockets.get_mut(&id) else { continue };
+            if conn.blocked {
+                continue;
+            }
+            let owner = conn.owner;
+            let mut room = MAX_SOCKETS_PER_PROCESS.saturating_sub(self.usage.get(&owner).map_or(0, |u| u.sockets));
+            conn.pump(&mut self.stack, &mut self.events, &mut room, &mut accepted);
+            for conn in accepted.drain(..) {
+                self.add_socket(conn);
+            }
         }
-        for conn in accepted {
-            self.add_socket(conn);
-        }
-        fed
     }
 
     fn deliver_lookups(&mut self) {
         for id in self.stack.resolve_ready() {
             let Some(result) = self.stack.resolve_result(id) else { continue };
-            if let Some(reply) = self.resolves.remove(&id) {
-                let _ = vipc::send_event(&reply, RESOLVE_RESULT, result);
+            if let Some(l) = self.lookups.remove(&id) {
+                let _ = vipc::send_event(&l.reply, RESOLVE_RESULT, result);
+                self.release(l.owner, |u| u.lookups -= 1);
             }
         }
-        // Lookups whose client went away.
-        let gone: Vec<ResolveId> = self
-            .resolves
-            .iter()
-            .filter(|(_, ch)| ch.wait(signals::PEER_CLOSED, 0).is_ok_and(|s| s & signals::PEER_CLOSED != 0))
-            .map(|(id, _)| *id)
-            .collect();
-        for id in gone {
-            self.resolves.remove(&id);
+    }
+
+    /// A lookup's client went away.
+    fn cancel_lookup(&mut self, id: ResolveId) {
+        if let Some(l) = self.lookups.remove(&id) {
             self.stack.resolve_cancel(id);
+            self.release(l.owner, |u| u.lookups -= 1);
         }
     }
 
@@ -431,8 +610,18 @@ impl Netd {
                     NetEvent::InterfaceChanged { name }
                 }
             };
-            self.watchers
-                .retain(|w| !matches!(vipc::send_event(w, NET_EVENT, ev.clone()), Err(vipc::IpcError::PeerClosed)));
+            let mut gone = Vec::new();
+            self.watchers.retain(|w| {
+                let closed =
+                    matches!(vipc::send_event(&w.channel, NET_EVENT, ev.clone()), Err(vipc::IpcError::PeerClosed));
+                if closed {
+                    gone.push(w.owner);
+                }
+                !closed
+            });
+            for owner in gone {
+                self.release(owner, |u| u.watchers -= 1);
+            }
         }
     }
 
@@ -440,105 +629,122 @@ impl Netd {
     // The loop
 
     fn run(&mut self) -> ! {
-        const NET_LISTENER: u64 = 0;
-        const DEV_LISTENER: u64 = 1;
-        // Keys of the three tables are disjoint (`self.key()`); these bits
-        // tell wait results apart.
-        const DEVICE_LINK: u64 = 1 << 62;
         loop {
-            let now = now_us();
             if vrt::time::now_ns().saturating_sub(self.last_reseed) >= RESEED_NS {
+                // The stack is seeded already: a reseed the kernel cannot
+                // give now waits for the next.
                 let mut seed = [0u8; 32];
-                vrt::object::random_bytes(&mut seed);
-                self.stack.add_entropy(&seed);
+                if vrt::object::try_random_bytes(&mut seed).is_ok() {
+                    self.stack.add_entropy(&seed);
+                }
                 self.last_reseed = vrt::time::now_ns();
             }
-            self.receive_frames();
-            self.stack.poll(now);
-            if self.pump_sockets() {
-                self.stack.poll(now_us());
-            }
-            self.transmit_frames();
+            // Frames in and out, timers, housekeeping; then the clients.
+            self.stack.poll(now_us(), &mut DeviceLinks(&mut self.devices));
+            self.pump_sockets();
             self.deliver_lookups();
             self.publish_events();
+            self.wait();
+        }
+    }
 
-            // Wait for the next thing to do.
-            let mut ws = vipc::WaitSet::new();
-            ws.add(self.net_listener.raw(), signals::READABLE, NET_LISTENER);
-            ws.add(self.dev_listener.raw(), signals::READABLE, DEV_LISTENER);
-            let mut busy = false;
-            for (&k, d) in &self.devices {
-                ws.add(d.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
-                if let Some(link) = &d.link {
-                    if link.prepare_wait(false) {
-                        ws.add(link.wake_event().raw(), signals::SIGNALED, k | DEVICE_LINK);
-                    } else {
-                        busy = true;
+    /// Waits for the next thing to do, and does it.
+    fn wait(&mut self) {
+        // The set is kept from one wait to the next: its handles stay
+        // registered with the kernel, so that a wait costs what is ready,
+        // however many sockets there are.
+        let mut ws = core::mem::take(&mut self.ws);
+        ws.clear();
+        ws.add(self.net_listener.raw(), signals::READABLE, NET_LISTENER);
+        ws.add(self.dev_listener.raw(), signals::READABLE, DEV_LISTENER);
+        // Something to do at once: frames waiting, a full link with room
+        // again, or sockets the stack reported meanwhile.
+        let mut busy = !self.work.is_empty();
+        for (&k, d) in &self.devices {
+            ws.add(d.channel.raw(), signals::READABLE | signals::PEER_CLOSED, DEVICE | k);
+            if let (Some(ring), Some(id)) = (&d.link, d.iface) {
+                // A link the stack could not send everything to wakes us
+                // when it has room again.
+                if ring.link.prepare_wait(self.stack.link_blocked(id)) {
+                    ws.add(ring.link.wake_event().raw(), signals::SIGNALED, DEVICE_LINK | k);
+                } else {
+                    busy = true;
+                }
+            }
+        }
+        for (&k, c) in &self.clients {
+            ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, CLIENT | k);
+        }
+        for (&id, s) in &self.sockets {
+            let mut want = signals::PEER_CLOSED;
+            if s.wants_requests() {
+                want |= signals::READABLE;
+            }
+            if s.blocked {
+                want |= signals::WRITABLE;
+            }
+            ws.add(s.channel.raw(), want, SOCKET | id as u64);
+        }
+        for (&id, l) in &self.lookups {
+            ws.add(l.reply.raw(), signals::PEER_CLOSED, LOOKUP | id as u64);
+        }
+        let deadline = if busy {
+            0
+        } else {
+            match self.stack.next_deadline() {
+                Some(t) => t.saturating_mul(1000),
+                None => vabi::DEADLINE_INFINITE,
+            }
+        };
+        let ready = ws.wait(deadline).unwrap_or_default();
+        self.ws = ws;
+        for d in self.devices.values() {
+            if let Some(ring) = &d.link {
+                ring.link.finish_wait();
+            }
+        }
+        for (key, observed) in ready {
+            let k = key & KEY;
+            match key & !KEY {
+                _ if key == NET_LISTENER => self.accept_clients(),
+                _ if key == DEV_LISTENER => self.accept_devices(),
+                // Frames or room: the next poll sees to them.
+                DEVICE_LINK => {}
+                DEVICE => {
+                    if observed & signals::READABLE != 0 {
+                        self.handle_device(k);
+                    }
+                    if observed & signals::PEER_CLOSED != 0 && observed & signals::READABLE == 0 {
+                        self.remove_device(k);
                     }
                 }
-            }
-            for (&k, c) in &self.clients {
-                ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
-            }
-            for (&k, s) in &self.sockets {
-                let mut want = signals::READABLE | signals::PEER_CLOSED;
-                if s.blocked {
-                    want |= signals::WRITABLE;
-                }
-                ws.add(s.channel.raw(), want, k);
-            }
-            let deadline = if busy {
-                0
-            } else {
-                match self.stack.next_deadline() {
-                    Some(t) => t.saturating_mul(1000),
-                    None => vabi::DEADLINE_INFINITE,
-                }
-            };
-            let ready = ws.wait(deadline).unwrap_or_default();
-            for d in self.devices.values() {
-                if let Some(link) = &d.link {
-                    link.finish_wait();
-                }
-            }
-            for (key, observed) in ready {
-                match key {
-                    NET_LISTENER => self.accept_clients(),
-                    DEV_LISTENER => self.accept_devices(),
-                    k if k & DEVICE_LINK != 0 => {}
-                    k if self.devices.contains_key(&k) => {
-                        if observed & signals::READABLE != 0 {
-                            self.handle_device(k);
-                        }
-                        if observed & signals::PEER_CLOSED != 0 && observed & signals::READABLE == 0 {
-                            self.remove_device(k);
-                        }
-                    }
-                    k if self.clients.contains_key(&k) => {
-                        if observed & signals::READABLE != 0 {
-                            self.handle_client(k);
-                        } else if observed & signals::PEER_CLOSED != 0 {
-                            self.clients.remove(&k);
-                        }
-                    }
-                    k => {
-                        let Some(conn) = self.sockets.get_mut(&k) else { continue };
-                        let open = if observed & signals::READABLE != 0 {
-                            conn.handle_requests(&mut self.stack)
-                        } else {
-                            true
-                        };
-                        if !open || (observed & signals::PEER_CLOSED != 0 && observed & signals::READABLE == 0) {
-                            let conn = self.sockets.remove(&k).unwrap();
-                            self.stack.close(conn.id);
-                        }
+                CLIENT => {
+                    if observed & signals::READABLE != 0 {
+                        self.handle_client(k);
+                    } else if observed & signals::PEER_CLOSED != 0 {
+                        self.remove_client(k);
                     }
                 }
+                SOCKET => self.socket_signalled(k as SockId, observed),
+                LOOKUP => self.cancel_lookup(k as ResolveId),
+                _ => {}
             }
-            // Finished sockets whose client is gone.
-            self.sockets.retain(|_, c| {
-                !(c.done && c.channel.wait(signals::PEER_CLOSED, 0).is_ok_and(|s| s & signals::PEER_CLOSED != 0))
-            });
+        }
+    }
+
+    fn socket_signalled(&mut self, id: SockId, observed: u32) {
+        let Some(conn) = self.sockets.get_mut(&id) else { return };
+        if observed & signals::WRITABLE != 0 {
+            conn.blocked = false;
+            self.work.insert(id);
+        }
+        let mut open = true;
+        if observed & signals::READABLE != 0 {
+            open = conn.handle_requests(&mut self.stack);
+            self.work.insert(id);
+        }
+        if !open || (observed & signals::PEER_CLOSED != 0 && observed & signals::READABLE == 0) {
+            self.close_socket(id);
         }
     }
 }
@@ -554,15 +760,18 @@ fn main() -> i32 {
     println!("network service ready");
     let mut netd = Netd {
         stack,
+        ws: vipc::WaitSet::new(),
         net_listener,
         dev_listener,
         clients: BTreeMap::new(),
         devices: BTreeMap::new(),
         sockets: BTreeMap::new(),
-        resolves: BTreeMap::new(),
+        lookups: BTreeMap::new(),
         watchers: Vec::new(),
+        usage: BTreeMap::new(),
+        work: BTreeSet::new(),
+        events: Events::new(),
         next_key: 16,
-        frame: alloc::vec![0u8; 16384],
         last_reseed: vrt::time::now_ns(),
     };
     netd.run()

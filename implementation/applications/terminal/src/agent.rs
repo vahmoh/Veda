@@ -6,6 +6,14 @@
 //! command line as the user would type it, stopping it, clearing the
 //! screen, the text size), through the same paths as the keyboard.
 //!
+//! Running a command line takes the user's consent, which the user may
+//! give once and for all for `run_command` ("always allow"). That consent
+//! covers only command lines that look or change something without losing
+//! anything: `run_command` refuses one that deletes, replaces, moves or
+//! ends something, forgets the history or runs a program (as
+//! `terminal_core::classify` reads it), which only `run_risky_command`
+//! runs, with the user's consent every time.
+//!
 //! Command lines read back by the agent have Wi-Fi passwords hidden, as in
 //! the command history.
 
@@ -14,6 +22,8 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use terminal_core::classify::Effect;
+use terminal_core::syntax::redact;
 use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, arg_str, clip, json, show_path};
 
 use crate::{DEFAULT_FONT_SIZE, Terminal};
@@ -21,6 +31,18 @@ use crate::{DEFAULT_FONT_SIZE, Terminal};
 /// The longest command line the agent may run: short enough for the
 /// approval card to show all of it.
 const MAX_COMMAND: usize = 80;
+/// What the command of `run_command` is.
+const COMMAND_PARAM: &str = "The command line exactly as the user would type it: one line of at most 80 characters, \
+                             such as ls ~/Documents. It runs in the terminal's current folder (cd changes it). One \
+                             that deletes, replaces, moves or ends something, forgets the history or runs a program \
+                             (rm, mv, cp, kill, history -c, > onto a file that exists, programs) is refused: \
+                             run_risky_command runs those. Returns what it printed, waiting up to 10 seconds; a \
+                             longer command keeps running.";
+/// What the command of `run_risky_command` is.
+const RISKY_COMMAND_PARAM: &str = "The command line exactly as the user would type it: one line of at most 80 \
+                                   characters. It runs in the terminal's current folder (cd changes it). To copy or \
+                                   move files, Files' actions, which never replace anything, are better. Returns what \
+                                   it printed, waiting up to 10 seconds; a longer command keeps running.";
 /// How long `run_command` waits for the command (an application has 30
 /// seconds to answer the agent; most commands finish well within this).
 const RUN_WAIT_NS: u64 = 10_000_000_000;
@@ -41,15 +63,12 @@ pub fn info() -> AppAgentInfo {
          system, and shows what they print.",
         vec![
             Action::new("run_command", "Runs a command in the terminal")
-                .param(
-                    "command",
-                    "string",
-                    "The command line exactly as the user would type it: one line of at most 80 characters, such as \
-                     ls ~/Documents. It runs in the terminal's current folder (cd changes it). Returns what it \
-                     printed, waiting up to 10 seconds; a longer command keeps running.",
-                    true,
-                )
+                .param("command", "string", COMMAND_PARAM, true)
                 .risk(Risk::Sensitive)
+                .build(),
+            Action::new("run_risky_command", "Runs a command that may delete, replace or end something")
+                .param("command", "string", RISKY_COMMAND_PARAM, true)
+                .risk(Risk::Destructive)
                 .build(),
             Action::new("read_output", "Returns the terminal's latest output and whether a command is still running")
                 .param("lines", "integer", "How many lines from the end (40 by default, at most 200)", false)
@@ -109,10 +128,8 @@ pub fn state(t: &Terminal) -> Value {
     if t.job.is_none() {
         v["last_exit_status"] = json!(t.last_status);
     }
-    if !t.input.is_empty()
-        && let Some(shell) = &t.shell
-    {
-        v["typed"] = json!(shell.redact(&t.input));
+    if !t.line.is_empty() {
+        v["typed"] = json!(redact(t.line.text()));
     }
     v["output"] = output.into();
     v["earlier_lines"] = earlier.into();
@@ -186,7 +203,7 @@ impl Terminal {
     pub(crate) fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
         self.collect();
         match action {
-            "run_command" => {
+            "run_command" | "run_risky_command" => {
                 let command = arg_str(args, "command")?.trim();
                 if command.is_empty() {
                     return Err("which command? Give the command line to run".into());
@@ -205,20 +222,26 @@ impl Terminal {
                         job.shown
                     ));
                 }
-                let shown = self.shell.as_ref().map_or_else(|| command.to_string(), |s| s.redact(command));
+                // The standing consent of run_command covers only what loses
+                // nothing (read as the shell will run it, now).
+                if action == "run_command"
+                    && self.shell.as_mut().is_none_or(|shell| shell.classify(command) == Effect::Destroys)
+                {
+                    return Err("this command line deletes, replaces, moves or ends something, or runs a program: \
+                                run it with run_risky_command, which asks the user"
+                        .into());
+                }
+                let shown = redact(command);
                 // What the user was typing waits while the agent's command
                 // runs.
-                let typed = core::mem::take(&mut self.input);
-                let cursor = self.cursor;
+                let typed = core::mem::take(&mut self.line);
                 self.hsearch = None;
-                self.input = command.to_string();
-                self.cursor = self.input.len();
+                self.line.set(command);
                 // As Enter does: the line is echoed and starts.
                 self.submit();
                 let from = self.echoes.back().map_or(self.screen.end(), |(line, _)| line + 1);
                 let finished = self.wait_for_job(RUN_WAIT_NS);
-                self.input = typed;
-                self.cursor = cursor.min(self.input.len());
+                self.line = typed;
                 let (output, cut) = clip_middle(&self.text(from, self.screen.end()), MAX_OUTPUT);
                 let mut v = json!({ "command": shown, "finished": finished, "output": output });
                 if cut {

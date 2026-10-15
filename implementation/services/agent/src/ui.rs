@@ -9,6 +9,7 @@ use vproto::agent::{AGENT_EVENT, AgentError, AgentEvent, Live, UiLink};
 use vrt::object::{Channel, Vmo};
 use vrt::vm::Mapping;
 
+/// The link to the shell's interface of the agent.
 pub struct Ui {
     events: Channel,
     map: Mapping,

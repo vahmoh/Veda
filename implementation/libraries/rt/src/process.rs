@@ -21,7 +21,9 @@
 //!   Their arguments, environment and auxiliary vector are laid out on
 //!   their stack as on Linux (`velf::initial_stack`); the startup message
 //!   carries the working directory and the handles (registry, file
-//!   descriptors, terminal).
+//!   descriptors, terminal), and, where a Veda program's environment goes,
+//!   what their POSIX layer inherits from the one that starts them
+//!   ([`Spawn::inherited`]).
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -42,8 +44,9 @@ pub const MAIN_STACK: usize = 1 << 20;
 pub const POSIX_STACK: usize = 8 << 20;
 /// The largest main-thread stack a POSIX program may ask for.
 pub const POSIX_STACK_MAX: usize = 512 << 20;
-/// Inaccessible pages below a POSIX program's stack, so that an overflow
-/// faults instead of running into other memory.
+/// Inaccessible pages below a program's stack, and below each of its
+/// threads', so that an overflow faults instead of running into other
+/// memory.
 pub const STACK_GUARD: usize = 64 << 10;
 
 /// Takes abilities from this process, for good ([`vabi::restrict`]).
@@ -64,6 +67,8 @@ pub enum SpawnError {
     /// The arguments and environment do not fit (in the startup message of
     /// a Veda program, on the stack of a POSIX one).
     TooLarge,
+    /// No process the caller accepts ([`Spawn::accept`]) could be made.
+    Refused,
     Kernel(Error),
 }
 
@@ -80,6 +85,7 @@ impl core::fmt::Display for SpawnError {
             SpawnError::BadElf(e) => write!(f, "invalid executable: {e}"),
             SpawnError::Incompatible => f.write_str("built for another version of Veda"),
             SpawnError::TooLarge => f.write_str("the argument list is too long"),
+            SpawnError::Refused => f.write_str("no process the caller accepts could be made"),
             SpawnError::Kernel(e) => write!(f, "{e}"),
         }
     }
@@ -93,10 +99,10 @@ pub fn is_executable(image: &[u8]) -> bool {
 
 /// Where a position-independent image of `len` bytes goes: a random page
 /// of the span programs are placed in (`vabi::program_base`).
-fn random_base(len: usize) -> u64 {
+fn random_base(len: usize) -> Result<u64, Error> {
     let mut r = [0u8; 8];
-    crate::object::random_bytes(&mut r);
-    vabi::program_base(len, u64::from_le_bytes(r)) as u64
+    crate::object::try_random_bytes(&mut r)?;
+    Ok(vabi::program_base(len, u64::from_le_bytes(r)) as u64)
 }
 
 /// Maps `elf`'s image into `process`, at its address or, if it is
@@ -107,7 +113,7 @@ fn random_base(len: usize) -> u64 {
 fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, SpawnError> {
     let (lo, hi) = elf.span();
     let len = (hi - lo) as usize;
-    let base = if elf.is_position_independent() { random_base(len) } else { lo };
+    let base = if elf.is_position_independent() { random_base(len)? } else { lo };
     let bias = base.wrapping_sub(lo);
     let end = base.checked_add(hi - lo);
     if base < vabi::USER_SPACE_START as u64 || end.is_none_or(|e| e > vabi::USER_SPACE_END as u64) {
@@ -158,11 +164,31 @@ pub struct Spawn<'a> {
     pub path: &'a str,
     /// Handles to pass, tagged with roles (`vabi::startup::role`).
     pub handles: Vec<(u32, Handle)>,
+    /// For a POSIX program: what its POSIX layer inherits from the one
+    /// starting it, `KEY=VALUE` strings the startup message carries in place
+    /// of the environment (which is on the program's stack). Left out for a
+    /// Veda program.
+    pub inherited: Vec<&'a str>,
+    /// Whether the process of this kernel object id may be the one started
+    /// (`None`: any). One refused is dropped before it runs and another
+    /// made in its place, a few times at most: for ids the caller derives
+    /// from kernel object ids, which can repeat (POSIX process ids, cut
+    /// to 30 bits).
+    pub accept: Option<&'a dyn Fn(u64) -> bool>,
 }
 
 impl<'a> Spawn<'a> {
     pub fn new(name: &'a str) -> Spawn<'a> {
-        Spawn { name, args: alloc::vec![name.as_bytes()], env: Vec::new(), cwd: "", path: "", handles: Vec::new() }
+        Spawn {
+            name,
+            args: alloc::vec![name.as_bytes()],
+            env: Vec::new(),
+            cwd: "",
+            path: "",
+            handles: Vec::new(),
+            inherited: Vec::new(),
+            accept: None,
+        }
     }
 
     pub fn arg(self, a: &'a str) -> Self {
@@ -215,13 +241,24 @@ impl<'a> Spawn<'a> {
     }
 
     fn create_process(&self) -> Result<(Process, Thread), SpawnError> {
-        let h = call(nr::PROCESS_CREATE, [self.name.as_ptr() as usize, self.name.len(), 0, 0, 0, 0])?;
-        // SAFETY: fresh handle from the kernel.
-        let process = Process(unsafe { Handle::from_raw(h as u32) });
-        let t = call(nr::THREAD_CREATE, [process.raw() as usize, "main".as_ptr() as usize, 4, 0, 0, 0])?;
-        // SAFETY: fresh handle from the kernel.
-        let thread = Thread(unsafe { Handle::from_raw(t as u32) });
-        Ok((process, thread))
+        /// How many processes are made, at most, for one the caller accepts.
+        const TRIES: usize = 4;
+        for _ in 0..TRIES {
+            let h = call(nr::PROCESS_CREATE, [self.name.as_ptr() as usize, self.name.len(), 0, 0, 0, 0])?;
+            // SAFETY: fresh handle from the kernel.
+            let process = Process(unsafe { Handle::from_raw(h as u32) });
+            if let Some(accept) = self.accept
+                && !accept(process.0.koid())
+            {
+                // Never started: it goes with its handle.
+                continue;
+            }
+            let t = call(nr::THREAD_CREATE, [process.raw() as usize, "main".as_ptr() as usize, 4, 0, 0, 0])?;
+            // SAFETY: fresh handle from the kernel.
+            let thread = Thread(unsafe { Handle::from_raw(t as u32) });
+            return Ok((process, thread));
+        }
+        Err(SpawnError::Refused)
     }
 
     /// Sends the startup message and starts the main thread at `entry`, its
@@ -258,9 +295,11 @@ impl<'a> Spawn<'a> {
         let (process, thread) = self.create_process()?;
         let bias = load_image(&process, elf, true)?;
 
-        let stack = Vmo::create(MAIN_STACK)?;
-        let stack_base = vm::map(Some(&process), &stack, 0, MAIN_STACK, 0, map_flags::READ | map_flags::WRITE)?;
-        let sp = vabi::entry_stack_pointer(stack_base + MAIN_STACK);
+        // Stack: guard pages, then the stack proper.
+        let stack = Vmo::create(STACK_GUARD + MAIN_STACK)?;
+        let base = vm::map(Some(&process), &stack, 0, STACK_GUARD + MAIN_STACK, 0, map_flags::READ | map_flags::WRITE)?;
+        vm::protect(Some(&process), base, STACK_GUARD, 0)?;
+        let sp = vabi::entry_stack_pointer(base + STACK_GUARD + MAIN_STACK);
 
         // The startup message carries text.
         fn text<'b>(v: &[&'b [u8]]) -> Vec<Cow<'b, str>> {
@@ -274,8 +313,9 @@ impl<'a> Spawn<'a> {
     }
 
     /// Starts a POSIX program: its arguments, environment and auxiliary
-    /// vector on its stack.
-    fn start_posix(self, elf: &Elf) -> Result<Process, SpawnError> {
+    /// vector on its stack, and what its POSIX layer inherits in its
+    /// startup message.
+    fn start_posix(mut self, elf: &Elf) -> Result<Process, SpawnError> {
         let (process, thread) = self.create_process()?;
         let bias = load_image(&process, elf, false)?;
 
@@ -288,7 +328,7 @@ impl<'a> Spawn<'a> {
         vm::protect(Some(&process), base, STACK_GUARD, 0)?;
         let top = (base + STACK_GUARD + size) as u64;
         let mut random = [0u8; 16];
-        crate::object::random_bytes(&mut random);
+        crate::object::try_random_bytes(&mut random)?;
         let aux = velf::AuxInfo {
             phdr: elf.phdr_vaddr().wrapping_add(bias),
             phnum: elf.phnum() as u64,
@@ -310,6 +350,7 @@ impl<'a> Spawn<'a> {
         stack.write(STACK_GUARD + size - len, &img)?;
 
         let entry = elf.entry().wrapping_add(bias) as usize;
-        self.launch(process, thread, entry, sp as usize, &[], &[])
+        let inherited = core::mem::take(&mut self.inherited);
+        self.launch(process, thread, entry, sp as usize, &[], &inherited)
     }
 }

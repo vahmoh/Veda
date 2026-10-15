@@ -4,13 +4,17 @@
 //! The library: the videos in `~/Videos` as cards (a picture from each, its
 //! length, size and codec), with those left part way first under
 //! "Continue watching".
+//!
+//! The rows of cards are worked out again only when the videos, where they
+//! were left, or the number of columns change.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vfiles::kind::is_video;
-use vfiles::path::{join, natural_cmp};
+use vfiles::format::duration as time;
+use vfiles::kind::{FileKind, TYPES, VIDEOS, is_video};
+use vfiles::path::{HOME, display_path, join, natural_cmp};
 use vgfx::{Align, Bitmap, Color, Rect};
 use videos_core::text;
 use vproto::fs::FsError;
@@ -23,8 +27,10 @@ use crate::player::ACCENT;
 use crate::thumbs;
 use crate::{OpenAt, Videos};
 
-/// The folder shown.
-pub const VIDEOS_DIR: &str = "/home/user/Videos";
+/// The folder shown unless another is asked for: `~/Videos`.
+pub fn videos_dir() -> String {
+    join(HOME, "Videos")
+}
 
 const HEADER_H: i32 = 92;
 const MARGIN: i32 = 32;
@@ -46,7 +52,10 @@ pub enum Card {
     Missing,
     Requested,
     Ready(Bitmap),
-    /// The video could not be read (no picture).
+    /// It plays, but there is no picture of it (sound only, or a picture
+    /// that could not be made).
+    NoPicture,
+    /// The video could not be read.
     Failed,
 }
 
@@ -69,6 +78,11 @@ impl Entry {
             Some(Ok(i)) => i.duration_us.map(|d| d.max(0) as u64 / 1000),
             _ => None,
         }
+    }
+
+    /// Whether it is sound without pictures.
+    pub fn sound_only(&self) -> bool {
+        matches!(&self.info, Some(Ok(i)) if i.video_stream().is_none() && i.audio_stream().is_some())
     }
 
     /// "720p · AV1", or why it cannot be played.
@@ -117,18 +131,28 @@ pub fn list(vfs: &vfs::Client, dir: &str) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
-/// "~/Videos" for the home folder's paths.
-pub fn short_dir(dir: &str) -> String {
-    match dir.strip_prefix("/home/user") {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
-        _ => dir.into(),
-    }
+/// The extensions of the files Videos plays (for the open dialog): the
+/// system's file types that open in Videos.
+fn video_extensions() -> Vec<&'static str> {
+    TYPES
+        .iter()
+        .filter(|t| t.kind == FileKind::Video && t.app == Some(VIDEOS))
+        .flat_map(|t| t.extensions.iter().copied())
+        .collect()
 }
 
 /// A row of cards: its heading (if it starts a section) and its entries.
-struct Row {
+pub(crate) struct Row {
     heading: Option<&'static str>,
     items: Vec<usize>,
+}
+
+/// The rows of the grid as last worked out, and for what: the library's
+/// version, the remembered positions' and the number of columns.
+#[derive(Default)]
+pub(crate) struct Rows {
+    key: Option<(u64, u64, usize)>,
+    rows: Vec<Row>,
 }
 
 impl Videos {
@@ -147,20 +171,25 @@ impl Videos {
         v.into_iter().map(|(_, i)| i).collect()
     }
 
-    /// The rows of the grid, `cols` cards wide.
-    fn rows(&self, cols: usize) -> Vec<Row> {
-        let mut rows = Vec::new();
-        let cont = self.continuing();
-        if !cont.is_empty() {
-            rows.push(Row { heading: Some("Continue watching"), items: cont.into_iter().take(cols).collect() });
+    /// The rows of the grid, `cols` cards wide (worked out again only when
+    /// something they show changed).
+    fn rows(&mut self, cols: usize) -> Vec<Row> {
+        let key = (self.entries_version, self.state.version(), cols);
+        if self.rows.key != Some(key) {
+            let mut rows = Vec::new();
+            let cont = self.continuing();
+            if !cont.is_empty() {
+                rows.push(Row { heading: Some("Continue watching"), items: cont.into_iter().take(cols).collect() });
+            }
+            let sectioned = !rows.is_empty();
+            let all: Vec<usize> = (0..self.entries.len()).collect();
+            for (n, chunk) in all.chunks(cols.max(1)).enumerate() {
+                let heading = (sectioned && n == 0).then_some("All videos");
+                rows.push(Row { heading, items: chunk.to_vec() });
+            }
+            self.rows = Rows { key: Some(key), rows };
         }
-        let sectioned = !rows.is_empty();
-        let all: Vec<usize> = (0..self.entries.len()).collect();
-        for (n, chunk) in all.chunks(cols.max(1)).enumerate() {
-            let heading = (sectioned && n == 0).then_some("All videos");
-            rows.push(Row { heading, items: chunk.to_vec() });
-        }
-        rows
+        core::mem::take(&mut self.rows.rows)
     }
 
     pub(crate) fn library(&mut self, ui: &mut Ui) {
@@ -179,7 +208,7 @@ impl Videos {
         if self.entries.is_empty() {
             let hint = format!(
                 "Videos you save in {} (MP4, MKV, WebM, MOV, AVI, Ogg or MPEG) appear here.",
-                short_dir(&self.dir)
+                display_path(&self.dir)
             );
             empty_state(ui, body, Icon::Video, "No videos yet", &hint);
             return;
@@ -201,7 +230,6 @@ impl Videos {
             y += ITEM_H + ROW_GAP;
         }
         let content_h = y + 16;
-        let flat: Vec<usize> = rows.iter().flat_map(|r| r.items.iter().copied()).collect();
         self.library_keys(ui, &rows, (body.h / (ITEM_H + ROW_GAP)).max(1) as usize);
         if self.reveal_selection {
             if let Some(row) = self.row_of(&rows, self.current) {
@@ -239,12 +267,15 @@ impl Videos {
         for i in wanted {
             self.want_card(i);
         }
+        // Kept for the next frame, unless what they show changed.
+        if self.rows.rows.is_empty() {
+            self.rows.rows = rows;
+        }
         if let Some((i, position)) = open {
             self.current = position;
             self.keyboard_nav = false;
             self.open_entry(i, OpenAt::Resume);
         }
-        let _ = flat;
     }
 
     fn row_of(&self, rows: &[Row], position: usize) -> Option<usize> {
@@ -281,9 +312,9 @@ impl Videos {
         let total: u64 = self.entries.iter().filter_map(|e| e.duration_ms()).sum();
         let mut sub = what;
         if total > 0 {
-            sub += &format!("  ·  {}", text::time(total));
+            sub += &format!("  ·  {}", time(total));
         }
-        sub += &format!("  ·  {}", short_dir(&self.dir));
+        sub += &format!("  ·  {}", display_path(&self.dir));
         ui.label(
             Rect::new(r.x + MARGIN + 1, r.y + 58, r.w - 2 * MARGIN - 200, 20),
             &sub,
@@ -294,7 +325,7 @@ impl Videos {
         );
         let open = Rect::new(r.right() - MARGIN - 100, r.y + 28, 100, 34);
         if ui.button_full(open, Some(Icon::Open), "Open", ButtonKind::Secondary) {
-            self.dialog = Some(FileDialog::open("Open a video", &self.dir).with_filter(VIDEO_EXTENSIONS));
+            self.dialog = Some(FileDialog::open("Open a video", &self.dir).with_filter(&video_extensions()));
         }
         if ui.icon_button(Rect::new(open.x - 46, r.y + 26, 38, 38), Icon::Refresh, "Refresh (F5)") {
             self.reload();
@@ -342,6 +373,7 @@ impl Videos {
                 }
             }
             Card::Failed => ui.icon(pic, Icon::Warning, 28.0, t.warning.fade(0.8)),
+            Card::NoPicture if e.sound_only() => ui.icon(pic, Icon::Music, 30.0, t.text_faint),
             _ => ui.icon(pic, Icon::Video, 30.0, t.text_faint),
         }
         // Where it was left, or that it was watched.
@@ -360,7 +392,7 @@ impl Videos {
         if let Some(d) = duration
             && !continuing
         {
-            let label = text::time(d);
+            let label = time(d);
             let w = ui.measure(&label, Font::Bold, 11.5) as i32 + 12;
             let badge = Rect::new(pic.right() - w - 8, pic.bottom() - 30, w, 20);
             ui.canvas.fill_rounded_rect(badge, 6.0, Color::rgba(0, 0, 0, 170));
@@ -385,7 +417,7 @@ impl Videos {
             Align::Left,
         );
         let (line, color) = match (continuing, resume, duration) {
-            (true, Some(r), Some(d)) => (format!("{} left", text::time(d.saturating_sub(r.position_ms))), t.text_dim),
+            (true, Some(r), Some(d)) => (format!("{} left", time(d.saturating_sub(r.position_ms))), t.text_dim),
             _ => match &e.info {
                 Some(Err(_)) => (e.description(), t.warning),
                 _ => (e.description(), t.text_dim),
@@ -419,7 +451,9 @@ impl Videos {
         e.card = match picture {
             Some(p) => Card::Ready(Bitmap::from_straight(p.width as i32, p.height as i32, p.pixels)),
             None if info.is_err() => Card::Failed,
-            None => Card::Failed,
+            // It plays: sound only, or a video whose picture could not be
+            // made.
+            None => Card::NoPicture,
         };
         e.info = Some(info);
     }
@@ -430,7 +464,7 @@ impl Videos {
             return;
         }
         let n: usize = rows.iter().map(|r| r.items.len()).sum();
-        if n == 0 || self.dialog.is_some() {
+        if n == 0 || self.dialog.is_some() || ui.input.keys.is_empty() {
             return;
         }
         let cur = self.current.min(n - 1);
@@ -476,10 +510,6 @@ impl Videos {
         }
     }
 }
-
-/// The extensions of videos (for the open dialog).
-pub const VIDEO_EXTENSIONS: &[&str] =
-    &["mp4", "m4v", "mov", "3gp", "mkv", "webm", "avi", "ogv", "m2ts", "mts", "mpg", "mpeg"];
 
 /// A picture with its corners rounded by drawing them over the card's
 /// rounded background.

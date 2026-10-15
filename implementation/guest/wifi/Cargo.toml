@@ -11,7 +11,6 @@ license.workspace = true
 [[bin]]
 name = "wifi"
 path = "src/main.rs"
-test = false
 bench = false
 
 [dependencies]

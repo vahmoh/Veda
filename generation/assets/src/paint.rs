@@ -1,57 +1,20 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Float image buffers, colour helpers, parallel rendering and output encoding.
+//! Float image buffers, colour helpers (the generators' own colours,
+//! `gencommon::colour`, and the pictures' particular ones), parallel
+//! rendering and output encoding.
 
+pub use gencommon::colour::{Rgb, add, gradient, hex, mix, scale as mul, smoothstep};
 use vimage::Image;
 
-/// A colour with channels in `[0, 1]` (display space, values above 1 are allowed while
-/// accumulating light).
-pub type Rgb = [f32; 3];
-
-/// `0xRRGGBB` to a colour.
-pub fn hex(c: u32) -> Rgb {
-    [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0]
-}
-
-pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
-}
-
-pub fn add(a: Rgb, b: Rgb) -> Rgb {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-pub fn mul(a: Rgb, k: f32) -> Rgb {
-    [a[0] * k, a[1] * k, a[2] * k]
-}
-
+/// `a` lit by `b`, channel by channel.
 pub fn mulc(a: Rgb, b: Rgb) -> Rgb {
     [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
 
-pub fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 pub fn clamp01(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
-}
-
-/// Multi-stop gradient lookup: `stops` are `(position, colour)` sorted by position.
-pub fn gradient(stops: &[(f32, Rgb)], t: f32) -> Rgb {
-    if t <= stops[0].0 {
-        return stops[0].1;
-    }
-    for w in stops.windows(2) {
-        let ((p0, c0), (p1, c1)) = (w[0], w[1]);
-        if t <= p1 {
-            let k = smoothstep(0.0, 1.0, (t - p0) / (p1 - p0).max(1e-6));
-            return mix(c0, c1, k);
-        }
-    }
-    stops[stops.len() - 1].1
 }
 
 /// Soft exponential tone mapping that keeps colours below ~0.7 almost unchanged and rolls bright

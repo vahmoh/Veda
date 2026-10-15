@@ -164,13 +164,15 @@ pub fn spawn_init(boot: &BootInfo) {
         .expect("inserting init's bootstrap handle");
 
     let thread = Thread::new_user(&process, "main").expect("creating init's thread");
-    assert!(process.add_thread(thread.clone()));
+    process.add_thread(thread.clone()).expect("init's process takes its first thread");
     let sp = vabi::entry_stack_pointer((stack_base + STACK_SIZE) as usize) as u64;
     let entry = elf.entry().wrapping_add(bias);
     thread.prepare_user_entry(entry, sp, bootstrap as u64, 0);
     process.mark_started();
     sched::make_ready(&thread);
-    crate::kinfo!("started init (process {}), entry {:#x}", process.koid, entry);
+    // Every process may read the log: where init is stays out of it (its
+    // entry is given as the offset in its image, as crashes are).
+    crate::kinfo!("started init (process {}), entry {:#x} in its image", process.koid, elf.entry());
     keep_alive(process);
 }
 

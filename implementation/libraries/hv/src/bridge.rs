@@ -73,11 +73,13 @@ pub const OK: u32 = 0;
 /// The wait goes on: its completion comes through the ring.
 pub const PENDING: u32 = u32::MAX;
 
-/// The most bytes a channel message carries, and handles.
-pub const MAX_BYTES: u32 = 64 * 1024;
-pub const MAX_HANDLES: u32 = 64;
-/// The most items a wait takes.
-pub const MAX_WAIT_ITEMS: u32 = 1024;
+/// The most bytes a channel message carries, and handles: the kernel's.
+pub const MAX_BYTES: u32 = vabi::CHANNEL_MAX_BYTES as u32;
+pub const MAX_HANDLES: u32 = vabi::CHANNEL_MAX_HANDLES as u32;
+/// The most items a wait takes: the kernel's most for one wait. One that
+/// does not finish at once goes on within what the monitor waits on at
+/// once, its own event besides (`LimitReached` beyond).
+pub const MAX_WAIT_ITEMS: u32 = vabi::WAIT_MANY_MAX as u32;
 /// The most bytes one VMO read or write moves.
 pub const MAX_COPY: u64 = 64 * 1024;
 
@@ -329,6 +331,12 @@ pub struct Completion {
 }
 
 const _: () = {
+    // The kernel's limits, as they are (no bits lost), and as Linux's bridge
+    // driver has them too (`MAX_BYTES`, `MAX_HANDLES`, `MAX_WAIT_ITEMS` in
+    // `drivers/virt/veda/bridge.c`).
+    assert!(MAX_BYTES as usize == vabi::CHANNEL_MAX_BYTES && MAX_BYTES == 64 * 1024);
+    assert!(MAX_HANDLES as usize == vabi::CHANNEL_MAX_HANDLES && MAX_HANDLES == 64);
+    assert!(MAX_WAIT_ITEMS as usize == vabi::WAIT_MANY_MAX && MAX_WAIT_ITEMS == 1024);
     assert!(core::mem::size_of::<Setup>() == 16);
     assert!(core::mem::size_of::<Wait>() == 40);
     assert!(core::mem::size_of::<ChannelWrite>() == 40);

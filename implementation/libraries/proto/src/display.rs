@@ -10,9 +10,20 @@
 //! finished reading the previous buffer, which paces clients to the display.
 //!
 //! The compositor draws window decorations (title bar, frame, shadow) itself,
-//! so windows stay movable and closable even when their client hangs.
+//! so a window stays movable when its client hangs. A client that does not
+//! answer the user's request to close a window (asking the compositor for
+//! nothing for a few seconds) is shown as not responding, and a second
+//! request closes its connection, which takes its windows away.
 //! Events for a window (input, resize requests, focus) arrive on a separate
-//! per-window event channel.
+//! per-window event channel. A client that falls behind reading them loses
+//! nothing that carries state: pointer motion is merged, the latest size
+//! and focus replace older ones, and a key or button pressed while it is far
+//! behind is dropped together with its release.
+//!
+//! Who a client is decides what it may do: the desktop, panels and
+//! notifications, managing other windows and hearing the shell's keys are
+//! the shell's (the system service `shell`), listing the windows the
+//! shell's and the agent's, the clipboard the focused window's process's.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -52,7 +63,11 @@ enumeration! {
         Desktop = 3,
         /// A panel such as the taskbar (shell only), above normal windows.
         Panel = 4,
-        /// A popup or menu, above everything; closed when it loses focus.
+        /// A popup or menu, above everything. An application opens one only
+        /// while one of its windows has the focus, for that window, and no
+        /// larger than half the screen; it takes the focus, and as soon as
+        /// the focus goes elsewhere the compositor hides it and asks its
+        /// client to close it (`CloseRequested`).
         Popup = 5,
         /// A notification bubble (shell only), above windows, no focus.
         Notification = 6,
@@ -86,6 +101,10 @@ enumeration! {
     }
 }
 
+/// The longest text the clipboard holds (bytes), so that the answer that
+/// carries it fits in a message.
+pub const CLIPBOARD_MAX: usize = vabi::CHANNEL_MAX_BYTES - 64;
+
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum DisplayError {
@@ -102,10 +121,12 @@ message! {
     pub struct WindowSpec {
         pub title: String,
         pub kind: WindowKind,
-        /// Client-area size.
+        /// Client-area size: at most the screen's (a popup's half of it);
+        /// the first `Configure` says the size the window has.
         pub width: u32,
         pub height: u32,
-        /// Requested position (`i32::MIN` = let the compositor choose).
+        /// Requested position (`i32::MIN` = let the compositor choose);
+        /// at most 2^20 from the origin.
         pub x: i32,
         pub y: i32,
         pub min_width: u32,
@@ -144,7 +165,8 @@ message! {
 }
 
 message! {
-    /// A window as seen by the shell's taskbar.
+    /// A window as seen by the shell's taskbar (titles and application ids
+    /// at most 256 bytes, cut at a character boundary).
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct WindowInfo {
         pub id: u32,
@@ -178,7 +200,10 @@ union! {
     /// Events delivered on a window's event channel.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum WindowEvent {
-        /// The window should become `width` x `height` (attach new buffers).
+        /// The window should become `width` x `height` (attach new buffers),
+        /// in `state`: sent as it is created, and at most once a frame as
+        /// it changes (`Minimized` when it goes to the taskbar, its size
+        /// unchanged).
         1 => Configure { width: u32, height: u32, state: WindowState },
         /// The user asked to close the window.
         2 => CloseRequested {},
@@ -197,7 +222,8 @@ union! {
         /// where a display driver flips and keeps time; when it was composed
         /// otherwise), and frames follow each other every `period_ns`, so a
         /// frame presented next is seen at `seen_ns + period_ns` at the
-        /// earliest.
+        /// earliest. A window that cannot be seen (minimised) hears it once
+        /// it can be again, or when it is asked to close.
         9 => FrameDone { shown: u8, seen_ns: u64, period_ns: u64 },
         /// (Shell) the set of windows or their states changed.
         10 => WindowsChanged {},
@@ -217,33 +243,47 @@ pub const EVENT: u32 = 1;
 protocol! {
     /// The window system.
     pub mod display = "display" {
-        /// Creates a window; returns its id and its event channel.
+        /// Creates a window; returns its id and its event channel. `Denied`
+        /// for the shell's kinds asked by another client, and for an
+        /// application's popup while none of its windows has the focus;
+        /// `NoMemory` past a process's 64 windows.
         1 => fn create_window(spec: WindowSpec) -> Result<(u32, Channel), DisplayError>;
-        /// Attaches `count` buffers of `width` x `height` pixels (`stride`
-        /// pixels per row), laid out back to back in `buffers`.
+        /// Attaches `count` (at most 3) buffers of `width` x `height`
+        /// pixels (at most the screen's), laid out back to back in
+        /// `buffers`, each row `stride` pixels from the next (at most 64
+        /// more than `width`). They are shown from the next `present` on:
+        /// until then the buffers attached before are. A process attaches
+        /// a few screens' worth at most (`NoMemory`).
         2 => fn attach_buffers(id: u32, buffers: Vmo, width: u32, height: u32, stride: u32, count: u8) -> Result<(), DisplayError>;
-        /// Shows buffer `index`; `damage` lists the changed rectangles
-        /// (empty = everything).
+        /// Shows buffer `index` (of the buffers attached last); `damage`
+        /// lists the changed rectangles (empty = everything).
         3 => fn present(id: u32, index: u8, damage: Vec<Rect>) -> Result<(), DisplayError>;
         4 => fn set_title(id: u32, title: String) -> Result<(), DisplayError>;
         5 => fn set_state(id: u32, state: WindowState) -> Result<(), DisplayError>;
         6 => fn destroy_window(id: u32) -> Result<(), DisplayError>;
         7 => fn set_cursor(id: u32, cursor: Cursor) -> Result<(), DisplayError>;
-        /// Starts an interactive move (for client-drawn drag areas).
-        8 => fn begin_move(id: u32) -> Result<(), DisplayError>;
         9 => fn screen_info() -> ScreenInfo;
-        10 => fn set_clipboard(text: String) -> ();
-        11 => fn get_clipboard() -> String;
-        /// Moves a window (e.g. to place a popup).
+        /// Puts text on the clipboard: for the process of the focused
+        /// window, and the shell (`Denied` for others); at most
+        /// [`CLIPBOARD_MAX`] bytes (`Invalid` for more).
+        10 => fn set_clipboard(text: String) -> Result<(), DisplayError>;
+        /// The clipboard's text: for the process of the focused window
+        /// (`Denied` for others).
+        11 => fn get_clipboard() -> Result<String, DisplayError>;
+        /// Moves a window's frame to (`x`, `y`) (e.g. to place a popup,
+        /// which stays on the screen); positions are at most 2^20 from the
+        /// origin.
         12 => fn set_position(id: u32, x: i32, y: i32) -> Result<(), DisplayError>;
-        /// (Shell) all top-level windows.
+        /// (Shell and agent) the top-level windows, bottom to top: the
+        /// topmost 100 at most. Other clients get none.
         20 => fn list_windows() -> Vec<WindowInfo>;
         /// Raises, restores and focuses a window. The shell may activate
         /// any window, other clients only their own.
         21 => fn activate_window(id: u32) -> Result<(), DisplayError>;
         /// (Shell) minimises a window.
         22 => fn minimize_window(id: u32) -> Result<(), DisplayError>;
-        /// (Shell) closes a window as if its close button was pressed.
+        /// (Shell) closes a window as if its close button was pressed (its
+        /// client's connection, if it did not answer the last request).
         23 => fn close_window(id: u32) -> Result<(), DisplayError>;
         /// Shell only: maximises, restores or snaps any window (see
         /// [`arrangement`]), bringing it to the front.

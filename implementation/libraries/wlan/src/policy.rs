@@ -20,6 +20,11 @@ pub const ROAM_BELOW_DBM: i8 = -72;
 pub const ROAM_MARGIN_DB: i8 = 10;
 /// Retry delays after failures to join automatically (milliseconds).
 const BACKOFF_MS: [u64; 6] = [2_000, 4_000, 8_000, 16_000, 32_000, 60_000];
+/// Retry delays after the access point did not seem to accept the
+/// password (milliseconds): longer, as trying a wrong password over and
+/// over could get the device blocked, but never for good, as the evidence
+/// is not authenticated and anyone in range could fake it.
+const REFUSED_BACKOFF_MS: [u64; 4] = [60_000, 300_000, 900_000, 3_600_000];
 
 /// Whether an access point offering `offered` may be used for a network
 /// saved with `saved` security.
@@ -45,6 +50,22 @@ pub fn security_compatible(saved: Security, sae_used: bool, offered: Security) -
         }
         _ => false,
     }
+}
+
+/// Whether an access point offering `offered` may be used to join a network
+/// asked for with `wanted` security (`None`: what the network offers) and
+/// with or without a passphrase (`sae_used`: as for
+/// [`security_compatible`]).
+///
+/// A passphrase is never used with an open access point: an open "evil
+/// twin" of a protected network must not be joined (nor saved as open) when
+/// the user gave a password. Without a passphrase only an open network can
+/// be joined.
+pub fn may_join(wanted: Option<Security>, sae_used: bool, passphrase: bool, offered: Security) -> bool {
+    if !offered.supported() || passphrase == (offered == Security::Open) {
+        return false;
+    }
+    wanted.is_none_or(|w| security_compatible(w, sae_used, offered))
 }
 
 /// Whether `bss` belongs to the saved network `p` (by name, or for a hidden
@@ -74,6 +95,8 @@ pub fn best_for<'a>(p: &Profile, seen: &'a [Bss]) -> Option<&'a Bss> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Backoff {
     pub failures: u32,
+    /// Attempts whose password the access point did not seem to accept.
+    pub refusals: u32,
     pub next_ms: u64,
 }
 
@@ -82,7 +105,15 @@ impl Backoff {
     pub fn failed(&mut self, now: u64) {
         let delay = BACKOFF_MS[(self.failures as usize).min(BACKOFF_MS.len() - 1)];
         self.failures = self.failures.saturating_add(1);
-        self.next_ms = now + delay;
+        self.next_ms = self.next_ms.max(now + delay);
+    }
+
+    /// Records at `now` an attempt whose password the access point did not
+    /// seem to accept.
+    pub fn refused(&mut self, now: u64) {
+        let delay = REFUSED_BACKOFF_MS[(self.refusals as usize).min(REFUSED_BACKOFF_MS.len() - 1)];
+        self.refusals = self.refusals.saturating_add(1);
+        self.next_ms = self.next_ms.max(now + delay);
     }
 
     pub fn ready(&self, now: u64) -> bool {
@@ -231,6 +262,40 @@ mod tests {
         // Networks without auto-connect are never chosen.
         b.auto_connect = false;
         assert_eq!(choose(&[b.clone()], &seen, &BTreeMap::new(), 0), None);
+    }
+
+    #[test]
+    fn a_passphrase_never_goes_to_an_open_access_point() {
+        use Security::*;
+        // The user picked a protected network and typed its password: an
+        // open access point of the same name is an evil twin.
+        for wanted in [None, Some(Wpa2Personal), Some(Wpa3Personal), Some(Wpa2Wpa3Personal)] {
+            assert!(!may_join(wanted, false, true, Open), "{wanted:?}");
+            assert!(may_join(wanted, false, true, Wpa2Wpa3Personal), "{wanted:?}");
+        }
+        assert!(may_join(None, false, true, Wpa2Personal));
+        assert!(may_join(None, false, true, Wpa3Personal));
+        assert!(!may_join(Some(Wpa3Personal), false, true, Wpa2Personal));
+        // Without a password only open networks.
+        assert!(may_join(None, false, false, Open));
+        assert!(may_join(Some(Open), false, false, Open));
+        assert!(!may_join(None, false, false, Wpa2Personal));
+        assert!(!may_join(Some(Open), false, true, Open));
+        assert!(!may_join(None, false, true, Wep) && !may_join(None, false, false, Owe));
+    }
+
+    #[test]
+    fn refusals_wait_longer_but_not_for_ever() {
+        let mut b = Backoff::default();
+        b.refused(0);
+        assert!(!b.ready(59_999) && b.ready(60_000));
+        for _ in 0..10 {
+            b.refused(0);
+        }
+        assert_eq!(b.next_ms, 3_600_000);
+        // Other failures never shorten the wait.
+        b.failed(0);
+        assert_eq!(b.next_ms, 3_600_000);
     }
 
     #[test]

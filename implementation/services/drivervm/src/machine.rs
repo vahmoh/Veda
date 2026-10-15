@@ -66,17 +66,8 @@ const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_
 /// (`arch::PCI_LOW`): above the bridge's window.
 const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
 
-/// How the process ends, for whoever started it.
-pub mod exit_code {
-    /// Linux powered the machine off.
-    pub const POWER_OFF: i32 = 0;
-    /// Linux asked for a restart.
-    pub const RESTART: i32 = 2;
-    /// Linux crashed, or shut its processor down.
-    pub const CRASHED: i32 = 3;
-    /// The guest did what the platform does not allow, or could not run.
-    pub const FAULT: i32 = 4;
-}
+/// How the process ends, for the device manager, which started it.
+pub use vproto::startup::drivervm::exit_code;
 
 /// What the guest has of the PC.
 pub struct Pc {
@@ -155,7 +146,10 @@ impl Machine {
             pci_high: PCI_HIGH,
             firmware_tables: devices.firmware_tables(),
         };
-        let acpi_tables = acpi::tables(&description);
+        let acpi::Description { tables: acpi_tables, left_out } = acpi::describe(&description);
+        for what in &left_out {
+            println!("the guest's ACPI tables leave out {}", what);
+        }
         if acpi_tables.len() > arch::ACPI_ROOM {
             return Err(format!("the ACPI tables take {} KiB, more than they have", acpi_tables.len() / 1024));
         }
@@ -223,8 +217,8 @@ impl Machine {
             .map_err(|e| format!("no thread for processor {id}: {e}"))
     }
 
-    /// The machine runs until a processor ends it.
-    pub fn wait(&self) -> i32 {
+    /// The machine runs until a processor ends it (and this process).
+    pub fn wait(&self) -> ! {
         loop {
             vrt::time::sleep(vrt::time::Duration::from_secs(3600));
         }
@@ -266,9 +260,10 @@ impl Machine {
             vhv::bridge::HYPERCALL => self.bridge.call(&self.memory, &self.guest, data[1] as u32, data[2]),
             hypercall::PCI_CONFIG_READ => self.devices.config_read(data[1], data[2], data[3]),
             hypercall::PCI_CONFIG_WRITE => self.devices.config_write(data[1], data[2], data[3], data[4]),
-            hypercall::PCI_MSI => match self.vcpus.lock().get(data[3] as usize) {
-                Some(Some(vcpu)) => self.devices.msi(data[1], data[2], vcpu, data[4]),
-                _ => error::INVALID,
+            // (devmgr makes the MSI: not with the processors' lock held.)
+            hypercall::PCI_MSI => match self.vcpu(data[3]) {
+                Some(vcpu) => self.devices.msi(data[1], data[2], &vcpu, data[4]),
+                None => error::INVALID,
             },
             hypercall::GSI => match self.vcpus.lock().get(data[2] as usize) {
                 Some(Some(vcpu)) if self.lines.route(data[1], vcpu, data[3]) => 0,
@@ -278,6 +273,13 @@ impl Machine {
             hypercall::FIRMWARE_VARIABLE => self.variables.call(&self.memory, data[1], data[2]),
             _ => error::UNKNOWN,
         }
+    }
+
+    /// Processor `id`, if it has started: a handle of its own.
+    fn vcpu(&self, id: u64) -> Option<Vcpu> {
+        let vcpus = self.vcpus.lock();
+        let vcpu = vcpus.get(usize::try_from(id).ok()?)?.as_ref()?;
+        vcpu.0.duplicate(None).ok().map(Vcpu::from_handle)
     }
 
     /// Starts processor `id` at `entry`, as the architecture starts them.

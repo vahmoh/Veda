@@ -505,18 +505,18 @@ fn presents_top_down_argb() {
         c.clear_color(1.0, 0.0, 0.0, 1.0);
         c.clear(gl::COLOR_BUFFER_BIT);
         let mut out = vec![0u32; 4 * 2];
-        let mut dst = Present { pixels: &mut out, stride: 4, width: 3, height: 2, opaque: true };
+        let mut dst = Present::new(&mut out, 4, 3, 2, true).unwrap();
         c.present_to(&mut dst);
         assert_eq!(&out[0..3], &[0xFFFF_0000; 3], "threads {threads}, samples {samples}");
         assert_eq!(&out[4..7], &[0xFF00_00FF; 3]);
         // Premultiplied: blue at half alpha.
-        let mut dst = Present { pixels: &mut out, stride: 4, width: 3, height: 2, opaque: false };
+        let mut dst = Present::new(&mut out, 4, 3, 2, false).unwrap();
         c.present_to(&mut dst);
         assert_close(&out[4].to_be_bytes(), &0x8000_0080u32.to_be_bytes());
         // Scaled to a window twice as high: the top half red, the bottom
         // blue, a blend between.
         let mut tall = vec![0u32; 3 * 4];
-        let mut dst = Present { pixels: &mut tall, stride: 3, width: 3, height: 4, opaque: true };
+        let mut dst = Present::new(&mut tall, 3, 3, 4, true).unwrap();
         c.present_to(&mut dst);
         assert_eq!(tall[0], 0xFFFF_0000);
         assert_eq!(tall[9], 0xFF00_00FF);

@@ -80,7 +80,9 @@ VR_API void vr_context_destroy(struct vr_context *ctx);
 VR_API const char *vr_context_error(const struct vr_context *ctx);
 
 /* Creates a resource; `backing_len` bytes of the shared memory from
- * `backing_offset` back it (0: none). Its handle goes to `*id`. */
+ * `backing_offset` back it (0: none). Its handle goes to `*id`. Every byte
+ * of a resource the driver makes reads as zero, whatever its memory held
+ * before (another context's, freed). */
 VR_API int vr_resource_create(struct vr_context *ctx, const struct vr_resource_args *args,
                               uint64_t backing_offset, uint64_t backing_len, uint32_t *id);
 VR_API void vr_resource_destroy(struct vr_context *ctx, uint32_t id);

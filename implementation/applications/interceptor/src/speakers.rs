@@ -10,11 +10,12 @@
 //! keeping about 40 ms queued (what is heard follows what is seen closely,
 //! and a frame or two late from the game still plays on), and keeps the
 //! music's longer queue topped up. Without an audio service (or sound
-//! hardware) the game plays on silently.
+//! hardware) the thread ends, and the game plays on silently.
 
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use interceptor_game::audio::music::Music;
 use interceptor_game::audio::{Cue, Mixer, RATE, Scene};
@@ -50,6 +51,9 @@ const QUEUED: u32 = BLOCK as u32 * 4;
 /// The music's queue (ms) and the frames it is topped up by.
 const MUSIC_MS: u32 = 500;
 const MUSIC_BLOCK: usize = 2048;
+/// The most cues waiting for the thread: more come only while it is
+/// starved of time, and the oldest of those are long past.
+const MOST_CUES: usize = 64;
 
 /// What the game asks of the thread.
 struct Asked {
@@ -63,6 +67,8 @@ struct Asked {
 struct Shared {
     asked: Mutex<Asked>,
     wake: Event,
+    /// The thread is running (it ends without an audio service).
+    alive: AtomicBool,
 }
 
 /// The game's end of the speakers.
@@ -76,17 +82,31 @@ impl Speakers {
         let shared = Arc::new(Shared {
             asked: Mutex::new(Asked { scene: None, cues: Vec::new(), tune: None, intensity: 0.0, music_volume: 0.8 }),
             wake: Event::create().ok()?,
+            alive: AtomicBool::new(true),
         });
         let theirs = shared.clone();
-        vrt::thread::Builder::new().name("speakers").priority(vabi::priority::HIGH).spawn(move || run(&theirs)).ok()?;
+        vrt::thread::Builder::new()
+            .name("speakers")
+            .priority(vabi::priority::HIGH)
+            .spawn(move || {
+                run(&theirs);
+                theirs.alive.store(false, Ordering::Release);
+            })
+            .ok()?;
         Some(Speakers { shared })
     }
 
-    /// What is sounding now, and what just happened.
+    /// What is sounding now, and what just happened (nothing is kept once
+    /// the thread has ended).
     pub fn play(&self, scene: Scene, cues: Vec<Cue>) {
+        if !self.shared.alive.load(Ordering::Acquire) {
+            return;
+        }
         let mut a = self.shared.asked.lock();
         a.scene = Some(scene);
         a.cues.extend(cues);
+        let over = a.cues.len().saturating_sub(MOST_CUES);
+        a.cues.drain(..over);
     }
 
     /// Plays `tune` (crossfading), or fades the music out; `intensity`
@@ -236,9 +256,10 @@ fn run(shared: &Shared) {
             }
         }
         let now = vrt::time::now_ns();
-        busy += now - woke;
-        if now - since >= 20_000_000_000 {
-            let secs = (now - since) as f64 / 1e9;
+        // (A clock read on another processor may be a hair behind.)
+        busy += now.saturating_sub(woke);
+        if now.saturating_sub(since) >= 20_000_000_000 {
+            let secs = now.saturating_sub(since) as f64 / 1e9;
             let u = effects.ring().underruns();
             vrt::println!(
                 "sound: mixing takes {:.1}% of a CPU, {:.0} wakes a second, {} underruns",

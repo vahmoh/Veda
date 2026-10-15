@@ -44,16 +44,20 @@ pub enum FileDialogResult {
     Chosen(String),
 }
 
-/// Shortcuts in the sidebar.
-const PLACES: [(&str, &str, Icon); 7] = [
-    ("Home", "/home/user", Icon::Home),
-    ("Desktop", "/home/user/Desktop", Icon::Monitor),
-    ("Documents", "/home/user/Documents", Icon::Document),
-    ("Pictures", "/home/user/Pictures", Icon::Image),
-    ("Music", "/home/user/Music", Icon::Music),
-    ("Videos", "/home/user/Videos", Icon::Video),
-    ("System", "/system", Icon::Cpu),
-];
+/// Shortcuts in the sidebar: the user's places, in `vfiles`' order with
+/// their icons, then the system image.
+const PLACES: [(&str, &str, Icon); 7] = {
+    let p = &vfiles::path::PLACES;
+    [
+        (p[0].name, p[0].path, Icon::Home),
+        (p[1].name, p[1].path, Icon::Monitor),
+        (p[2].name, p[2].path, Icon::Document),
+        (p[3].name, p[3].path, Icon::Image),
+        (p[4].name, p[4].path, Icon::Music),
+        (p[5].name, p[5].path, Icon::Video),
+        ("System", vfiles::path::SYSTEM, Icon::Cpu),
+    ]
+};
 
 pub struct FileDialog {
     mode: FileDialogMode,
@@ -186,15 +190,16 @@ impl FileDialog {
         }
     }
 
-    /// Draws the dialog. Returns the outcome once the user is done.
+    /// Draws the dialog. Returns the outcome once the user is done (Esc
+    /// cancels).
     pub fn show(&mut self, ui: &mut Ui) -> Option<FileDialogResult> {
         let mut result = None;
-        if ui.input.key(keys::ESC) {
-            return Some(FileDialogResult::Cancelled);
-        }
         let t = ui.theme().clone();
         let (w, h) = ((ui.width - 40).min(720), (ui.height - 40).min(500));
         ui.modal(w, h, |ui, card| {
+            if ui.input.key(keys::ESC) {
+                result = Some(FileDialogResult::Cancelled);
+            }
             let inner = card.inset(20, 16, 20, 18);
             ui.heading(Rect::new(inner.x, inner.y, inner.w - 40, 28), &self.title);
             if ui.icon_button(Rect::new(inner.right() - 32, inner.y - 2, 32, 32), Icon::Close, "Cancel") {
@@ -334,6 +339,10 @@ impl FileDialog {
                 result = Some(FileDialogResult::Cancelled);
             }
         });
+        if result.is_some() {
+            // The dialog goes: the next frame is drawn without it.
+            ui.repaint();
+        }
         result
     }
 }

@@ -56,6 +56,12 @@ message! {
         pub service: bool,
         /// Started through the launcher (applications and test programs).
         pub app: bool,
+        /// Started because the kernel command line asked for it (`run=`,
+        /// `systest`): chosen by the machine's owner, as the system services
+        /// are, and so trusted by a service with what it trusts a test
+        /// program with (the test microphone). Such a program is an
+        /// application otherwise (`app`).
+        pub requested: bool,
     }
 }
 
@@ -113,6 +119,20 @@ enumeration! {
         NoMemory = 3,
         Denied = 4,
         Failed = 5,
+    }
+}
+
+/// What went wrong, in words for the user, for starting a program ("could
+/// not start Music: not enough memory") as for ending one.
+impl core::fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            LaunchError::NotFound => "not found",
+            LaunchError::BadImage => "not a valid Veda program",
+            LaunchError::NoMemory => "not enough memory",
+            LaunchError::Denied => "permission denied",
+            LaunchError::Failed => "the system could not do it",
+        })
     }
 }
 

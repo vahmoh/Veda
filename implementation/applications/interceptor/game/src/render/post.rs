@@ -20,6 +20,7 @@ use vgl::{Context, gl};
 
 use super::gpu::Program;
 use super::shaders::source;
+use crate::env::{Environment, TimeOfDay, Weather};
 
 /// How many bloom levels (each half the size of the one before).
 const LEVELS: usize = 6;
@@ -35,6 +36,46 @@ pub struct Grade {
     pub lift: [f32; 3],
     pub gain: [f32; 3],
     pub vignette: f32,
+}
+
+impl Grade {
+    /// How a frame lit by `env` is graded after it is drawn.
+    pub fn of(env: &Environment) -> Grade {
+        let mut g = match env.time {
+            TimeOfDay::Day => Grade {
+                exposure: env.exposure,
+                bloom: 0.1,
+                saturation: 1.1,
+                contrast: 1.05,
+                lift: [0.002, 0.003, 0.006],
+                gain: [1.02, 1.0, 0.97],
+                vignette: 0.22,
+            },
+            TimeOfDay::Sunset => Grade {
+                exposure: env.exposure,
+                bloom: 0.18,
+                saturation: 1.15,
+                contrast: 1.06,
+                lift: [0.004, 0.002, 0.006],
+                gain: [1.08, 0.99, 0.88],
+                vignette: 0.28,
+            },
+            TimeOfDay::Night => Grade {
+                exposure: env.exposure,
+                bloom: 0.3,
+                saturation: 1.12,
+                contrast: 1.08,
+                lift: [0.003, 0.005, 0.012],
+                gain: [1.0, 0.98, 1.04],
+                vignette: 0.32,
+            },
+        };
+        if env.weather == Weather::Rain {
+            g.saturation *= 0.85;
+            g.bloom *= 1.3;
+        }
+        g
+    }
 }
 
 const FULLSCREEN: &str = r#"
@@ -224,7 +265,7 @@ impl Post {
             ],
             &[("u_scene", 0), ("u_bloom", 1)],
         )?;
-        let samples = if gl.backend().caps().max_samples >= 4 { 4 } else { 0 };
+        let samples = if gl.caps().max_samples >= 4 { 4 } else { 0 };
         Ok(Post { down, up, composite, msaa: None, scene: None, bloom: Vec::new(), size: (0, 0), samples, fullscreen })
     }
 

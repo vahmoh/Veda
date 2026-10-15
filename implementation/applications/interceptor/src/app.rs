@@ -91,28 +91,14 @@ pub const MAIN: [(&str, &str); 5] = [
     ("QUIT", "Leave Interceptor."),
 ];
 
-const TIMES: [(TimeOfDay, &str); 3] =
-    [(TimeOfDay::Day, "Day"), (TimeOfDay::Sunset, "Sunset"), (TimeOfDay::Night, "Night")];
-const WEATHERS: [(Weather, &str); 2] = [(Weather::Clear, "Clear"), (Weather::Rain, "Rain")];
-const VIEWS: [(View, &str); 4] =
-    [(View::Chase, "Chase"), (View::Near, "Near"), (View::Bonnet, "Bonnet"), (View::Bumper, "Bumper")];
-
-fn time_name(t: TimeOfDay) -> &'static str {
-    TIMES.iter().find(|x| x.0 == t).map_or("Night", |x| x.1)
-}
-
-fn weather_name(w: Weather) -> &'static str {
-    WEATHERS.iter().find(|x| x.0 == w).map_or("Clear", |x| x.1)
-}
-
 fn on_off(b: bool) -> String {
     String::from(if b { "On" } else { "Off" })
 }
 
-/// The next of `list` after (or before, `dir` -1) the one `is`.
-fn cycle<T: Copy>(list: &[(T, &str)], is: impl Fn(T) -> bool, dir: i32) -> T {
-    let i = list.iter().position(|x| is(x.0)).unwrap_or(0) as i32;
-    list[(i + dir).rem_euclid(list.len() as i32) as usize].0
+/// The one of `list` after `is` (or before it, `dir` -1), round.
+fn cycle<T: Copy + PartialEq>(list: &[T], is: T, dir: i32) -> T {
+    let i = list.iter().position(|&x| x == is).unwrap_or(0) as i32;
+    list[(i + dir).rem_euclid(list.len() as i32) as usize]
 }
 
 /// The game.
@@ -125,9 +111,11 @@ pub struct App {
     pub quick: Quick,
     pub patrol: (TimeOfDay, Weather),
     pub result: Option<Result>,
+    /// What was played last (restarting plays it again).
+    pub last_played: Option<Mode>,
     /// Seconds on this screen (its animations), and since the start.
     pub screen_time: f32,
-    pub clock: f32,
+    pub clock: f64,
     /// Asks of the window and the renderer, for the main loop.
     pub quit: bool,
     pub relight: bool,
@@ -154,6 +142,7 @@ impl App {
             quick: Quick::default(),
             patrol: (TimeOfDay::Night, Weather::Clear),
             result: None,
+            last_played: None,
             screen_time: 0.0,
             clock: 0.0,
             quit: false,
@@ -175,9 +164,21 @@ impl App {
     /// Plays `mode`.
     pub fn play(&mut self, mode: Mode) {
         self.session = Session::new(self.world.clone(), mode);
-        self.session.game.follow.view = self.save.settings.view;
+        if let Some(follow) = &mut self.session.game.follow {
+            follow.view = self.save.settings.view;
+        }
+        self.last_played = Some(mode);
         self.relight = true;
         self.go(Screen::Playing);
+    }
+
+    /// The camera in play from now on (kept for next time).
+    pub(crate) fn set_view(&mut self, view: View) {
+        self.save.settings.view = view;
+        if let Some(follow) = &mut self.session.game.follow {
+            follow.view = view;
+        }
+        self.store_save();
     }
 
     /// Back to the menus, the showcase behind them.
@@ -221,8 +222,8 @@ impl App {
                 };
                 alloc::vec![
                     Item::setting("SUSPECT", SUSPECTS[q.suspect].0.into()),
-                    Item::setting("TIME OF DAY", time_name(q.time).into()),
-                    Item::setting("WEATHER", weather_name(q.weather).into()),
+                    Item::setting("TIME OF DAY", q.time.name().into()),
+                    Item::setting("WEATHER", q.weather.name().into()),
                     Item::setting("TRAFFIC", on_off(q.traffic)),
                     Item::setting("BACKUP", backup),
                     Item::button("START CHASE"),
@@ -230,8 +231,8 @@ impl App {
                 ]
             }
             Screen::Patrol(_) => alloc::vec![
-                Item::setting("TIME OF DAY", time_name(self.patrol.0).into()),
-                Item::setting("WEATHER", weather_name(self.patrol.1).into()),
+                Item::setting("TIME OF DAY", self.patrol.0.name().into()),
+                Item::setting("WEATHER", self.patrol.1.name().into()),
                 Item::button("START PATROL"),
                 Item::button("BACK"),
             ],
@@ -239,7 +240,7 @@ impl App {
                 Item::setting("SOUND EFFECTS", format!("{}%", (s.effects * 100.0).round() as u32)),
                 Item::setting("MUSIC", format!("{}%", (s.music * 100.0).round() as u32)),
                 Item::setting("SPEED IN", s.units.name().into()),
-                Item::setting("CAMERA", VIEWS.iter().find(|v| v.0 == s.view).map_or("Chase", |v| v.1).into()),
+                Item::setting("CAMERA", s.view.name().into()),
                 Item::setting("STATISTICS", s.stats.name().into()),
                 Item::setting("FULL SCREEN", on_off(s.fullscreen)),
                 Item::button("BACK"),
@@ -341,11 +342,7 @@ impl App {
                 let emitter = Emitter { pos: v.pos + Vec3::Y, vel: Vec3::new(v.vel.x, v.vy, v.vel.y) };
                 self.cues.push(Cue::Horn { emitter, secs: 0.45 });
             }
-            keys::C => {
-                game.follow.view = game.follow.view.next();
-                self.save.settings.view = game.follow.view;
-                self.store_save();
-            }
+            keys::C => self.set_view(self.save.settings.view.next()),
             keys::R => game.reset_player(),
             keys::F3 => self.cycle_stats(),
             keys::F8 => {
@@ -429,8 +426,8 @@ impl App {
                 let q = &mut self.quick;
                 match i {
                     0 => q.suspect = (q.suspect as i32 + dir).rem_euclid(SUSPECTS.len() as i32) as usize,
-                    1 => q.time = cycle(&TIMES, |t| t == q.time, dir),
-                    2 => q.weather = cycle(&WEATHERS, |w| w == q.weather, dir),
+                    1 => q.time = cycle(&TimeOfDay::ALL, q.time, dir),
+                    2 => q.weather = cycle(&Weather::ALL, q.weather, dir),
                     3 => q.traffic = !q.traffic,
                     4 => q.backup = (q.backup as i32 + dir).rem_euclid(3) as usize,
                     _ => return,
@@ -440,8 +437,8 @@ impl App {
             Screen::Patrol(_) => {
                 let p = &mut self.patrol;
                 match i {
-                    0 => p.0 = cycle(&TIMES, |t| t == p.0, dir),
-                    1 => p.1 = cycle(&WEATHERS, |w| w == p.1, dir),
+                    0 => p.0 = cycle(&TimeOfDay::ALL, p.0, dir),
+                    1 => p.1 = cycle(&Weather::ALL, p.1, dir),
                     _ => return,
                 }
                 true
@@ -453,16 +450,17 @@ impl App {
                     0 => s.effects = step(s.effects),
                     1 => s.music = step(s.music),
                     2 => s.units = if s.units == Units::Kmh { Units::Mph } else { Units::Kmh },
-                    3 => {
-                        s.view = cycle(&VIEWS, |v| v == s.view, dir);
-                        self.session.game.follow.view = s.view;
-                    }
+                    3 => s.view = cycle(&View::ALL, s.view, dir),
                     4 => s.stats = s.stats.step(dir),
                     5 => {
                         s.fullscreen = !s.fullscreen;
                         self.fullscreen = Some(s.fullscreen);
                     }
                     _ => return,
+                }
+                // The camera in play is the setting's.
+                if let Some(follow) = &mut self.session.game.follow {
+                    follow.view = self.save.settings.view;
                 }
                 self.store_save();
                 true
@@ -566,7 +564,7 @@ impl App {
 
     /// Advances `dt` seconds.
     pub fn update(&mut self, dt: f32) {
-        self.clock += dt;
+        self.clock += f64::from(dt);
         self.screen_time += dt;
         if matches!(self.screen, Screen::Paused(_) | Screen::Options(_, Back::Pause)) {
             return;

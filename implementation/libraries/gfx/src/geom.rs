@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Integer pixel geometry.
+//!
+//! The arithmetic saturates at `i32`'s ends: a rectangle reaching past
+//! them ends there, never wraps round to the other side.
 
 /// An integer rectangle (`w`/`h` are never negative).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -22,11 +25,11 @@ impl Rect {
     }
 
     pub const fn right(&self) -> i32 {
-        self.x + self.w
+        self.x.saturating_add(self.w)
     }
 
     pub const fn bottom(&self) -> i32 {
-        self.y + self.h
+        self.y.saturating_add(self.h)
     }
 
     pub const fn is_empty(&self) -> bool {
@@ -56,7 +59,7 @@ impl Rect {
         if x1 <= x0 || y1 <= y0 {
             return Rect::default();
         }
-        Rect::new(x0, y0, x1 - x0, y1 - y0)
+        Rect::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
     }
 
     pub fn intersects(&self, o: &Rect) -> bool {
@@ -73,29 +76,42 @@ impl Rect {
         }
         let x0 = self.x.min(o.x);
         let y0 = self.y.min(o.y);
-        Rect::new(x0, y0, self.right().max(o.right()) - x0, self.bottom().max(o.bottom()) - y0)
+        let (x1, y1) = (self.right().max(o.right()), self.bottom().max(o.bottom()));
+        Rect::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
     }
 
     pub fn translate(&self, dx: i32, dy: i32) -> Rect {
-        Rect { x: self.x + dx, y: self.y + dy, ..*self }
+        Rect { x: self.x.saturating_add(dx), y: self.y.saturating_add(dy), ..*self }
     }
 
     /// Grows (positive) or shrinks (negative) on every side.
     pub fn inflate(&self, d: i32) -> Rect {
-        Rect::new(self.x - d, self.y - d, self.w + 2 * d, self.h + 2 * d)
+        let twice = d.saturating_mul(2);
+        Rect::new(
+            self.x.saturating_sub(d),
+            self.y.saturating_sub(d),
+            self.w.saturating_add(twice),
+            self.h.saturating_add(twice),
+        )
     }
 
     pub fn inset(&self, left: i32, top: i32, right: i32, bottom: i32) -> Rect {
-        Rect::new(self.x + left, self.y + top, self.w - left - right, self.h - top - bottom)
+        Rect::new(
+            self.x.saturating_add(left),
+            self.y.saturating_add(top),
+            self.w.saturating_sub(left).saturating_sub(right),
+            self.h.saturating_sub(top).saturating_sub(bottom),
+        )
     }
 
     pub fn center(&self) -> (i32, i32) {
-        (self.x + self.w / 2, self.y + self.h / 2)
+        (self.x.saturating_add(self.w / 2), self.y.saturating_add(self.h / 2))
     }
 
     /// Centers a `w` x `h` rectangle inside this one.
     pub fn centered(&self, w: i32, h: i32) -> Rect {
-        Rect::new(self.x + (self.w - w) / 2, self.y + (self.h - h) / 2, w, h)
+        let (dx, dy) = (self.w.saturating_sub(w) / 2, self.h.saturating_sub(h) / 2);
+        Rect::new(self.x.saturating_add(dx), self.y.saturating_add(dy), w, h)
     }
 
     pub fn area(&self) -> i64 {
@@ -105,13 +121,13 @@ impl Rect {
     /// Splits off the top `h` pixels: (top, rest).
     pub fn split_top(&self, h: i32) -> (Rect, Rect) {
         let h = h.clamp(0, self.h);
-        (Rect::new(self.x, self.y, self.w, h), Rect::new(self.x, self.y + h, self.w, self.h - h))
+        (Rect::new(self.x, self.y, self.w, h), Rect::new(self.x, self.y.saturating_add(h), self.w, self.h - h))
     }
 
     /// Splits off the left `w` pixels: (left, rest).
     pub fn split_left(&self, w: i32) -> (Rect, Rect) {
         let w = w.clamp(0, self.w);
-        (Rect::new(self.x, self.y, w, self.h), Rect::new(self.x + w, self.y, self.w - w, self.h))
+        (Rect::new(self.x, self.y, w, self.h), Rect::new(self.x.saturating_add(w), self.y, self.w - w, self.h))
     }
 
     /// Splits off the bottom `h` pixels: (rest, bottom).
@@ -178,5 +194,86 @@ impl Damage {
 
     pub fn take(&mut self) -> alloc::vec::Vec<Rect> {
         core::mem::take(&mut self.rects)
+    }
+
+    /// Where the picture `new` differs from `old`, both `width` x `height`
+    /// pixels with rows `stride` apart: each band of changed rows as one
+    /// rectangle, as wide as its changes. Empty when nothing changed; the
+    /// whole picture when the buffers are too short for it.
+    ///
+    /// Rows are compared two pixels at a time, from either end, so that a
+    /// row costs as far as its first and last change.
+    pub fn of_changes(old: &[u32], new: &[u32], width: i32, height: i32, stride: usize) -> Damage {
+        let mut damage = Damage::new();
+        let (w, h) = (width.max(0) as usize, height.max(0) as usize);
+        let needed = if h == 0 { 0 } else { stride.saturating_mul(h - 1).saturating_add(w) };
+        if stride < w || old.len() < needed || new.len() < needed {
+            damage.add(Rect::new(0, 0, width, height));
+            return damage;
+        }
+        // The band of changed rows being gathered: its first row and columns.
+        let mut band: Option<(usize, usize, usize)> = None;
+        for y in 0..=h {
+            let change = (y < h).then(|| changed_columns(&old[y * stride..][..w], &new[y * stride..][..w])).flatten();
+            band = match (band, change) {
+                (Some((top, l, r)), Some((a, b))) => Some((top, l.min(a), r.max(b))),
+                (None, Some((a, b))) => Some((y, a, b)),
+                (Some((top, l, r)), None) => {
+                    damage.add(Rect::new(l as i32, top as i32, (r - l) as i32, (y - top) as i32));
+                    None
+                }
+                (None, None) => None,
+            };
+        }
+        damage
+    }
+}
+
+/// The columns from the first pixel that differs between two rows to the
+/// last, if any does.
+fn changed_columns(old: &[u32], new: &[u32]) -> Option<(usize, usize)> {
+    let n = old.len().min(new.len());
+    let (old_pairs, _) = old[..n].as_chunks::<2>();
+    let (new_pairs, _) = new[..n].as_chunks::<2>();
+    let differs = |i: usize| old[i] != new[i];
+    // A row of an odd width ends with a pixel of no pair.
+    let odd_differs = n % 2 == 1 && differs(n - 1);
+    let first = match old_pairs.iter().zip(new_pairs).position(|(a, b)| a != b) {
+        Some(p) if differs(2 * p) => 2 * p,
+        Some(p) => 2 * p + 1,
+        None if odd_differs => n - 1,
+        None => return None,
+    };
+    let last = if odd_differs {
+        n - 1
+    } else {
+        // A pair differs, since the odd pixel does not: the last one.
+        let p = old_pairs.iter().zip(new_pairs).rposition(|(a, b)| a != b).unwrap_or(first / 2);
+        if differs(2 * p + 1) { 2 * p + 1 } else { 2 * p }
+    };
+    Some((first, last + 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rectangles_near_the_ends_of_i32_do_not_wrap() {
+        let far = Rect::new(i32::MAX - 10, i32::MAX - 10, 100, 100);
+        assert_eq!((far.right(), far.bottom()), (i32::MAX, i32::MAX));
+        assert!(far.contains(i32::MAX - 1, i32::MAX - 1));
+        assert!(!far.contains(0, 0));
+        let screen = Rect::new(0, 0, 1280, 800);
+        assert!(far.intersect(&screen).is_empty());
+        assert_eq!(screen.translate(i32::MAX, 0).x, i32::MAX);
+        assert_eq!(Rect::new(i32::MIN, 0, 10, 10).inflate(5).x, i32::MIN);
+        assert_eq!(screen.inflate(i32::MAX).w, i32::MAX);
+        assert_eq!(screen.inset(i32::MIN, 0, 0, 0).w, i32::MAX);
+        assert_eq!(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX).union(&far).w, i32::MAX);
+        // Within range, as before.
+        assert_eq!(screen.intersect(&Rect::new(1200, 700, 200, 200)), Rect::new(1200, 700, 80, 100));
+        assert_eq!(screen.centered(80, 40), Rect::new(600, 380, 80, 40));
+        assert_eq!(screen.inset(10, 20, 30, 40), Rect::new(10, 20, 1240, 740));
     }
 }

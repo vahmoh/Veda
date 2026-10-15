@@ -17,7 +17,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vglsl::interp::{Env, Exec, Lanes};
+use vglsl::interp::Env;
 
 use super::VirglBackend;
 use super::ops::{NO_BLEND, NO_TESTS, PLAIN_RASTER};
@@ -26,7 +26,7 @@ use crate::format::Format;
 use crate::pixels::try_zeroed;
 use crate::soft::program::SoftProgram;
 use crate::soft::texture::{DrawTextures, Sampled, TexLevel};
-use crate::soft::vertex::{self, Fetch};
+use crate::soft::vertex;
 
 const CHECK_VS: &str = "#version 300 es\nout vec4 v;\nvoid main() { v = vec4(1.0, 2.0, 3.0, 4.0); gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
 const CHECK_FS: &str = "#version 300 es\nprecision mediump float;\nout vec4 o;\nvoid main() { o = vec4(1.0); }\n";
@@ -36,7 +36,7 @@ const CHECK_FS: &str = "#version 300 es\nprecision mediump float;\nout vec4 o;\n
 /// leaves its buffer where it is).
 struct ReadBack {
     sampled: Sampled,
-    _texels: Vec<Vec<u8>>,
+    texels: Vec<Vec<u8>>,
 }
 
 impl VirglBackend {
@@ -113,121 +113,38 @@ impl VirglBackend {
     ) {
         let sp = self.guest_programs.entry(s.program).or_insert_with(|| Arc::new(SoftProgram::new(source.clone())));
         let sp = sp.clone();
-        let ncap = sp.feedback.len();
-        if ncap == 0 {
+        if sp.feedback.is_empty() {
             return;
         }
         // What the vertices are made of, as it is now.
         let mut buffers: Vec<u32> = s.attribs.iter().filter_map(|a| a.buffer).collect();
         buffers.extend(s.blocks.iter().flatten().map(|r| r.buffer));
-        buffers.extend(s.index.map(|(b, _)| b));
         for b in buffers {
             self.current_shadow(b);
         }
-        let textures: Vec<Option<ReadBack>> = (0..s.textures.len() as u32)
-            .map(|i| if samplers.contains(&i) { self.read_back_texture(&s.textures[i as usize]) } else { None })
-            .collect();
-        let Some(recorded) = self.shade_captured(&sp, s, info, &textures) else { return };
-        // Each buffer's vertices, as far as its range holds them.
-        let vertices = recorded.len() / ncap;
+        let (mut sampled, mut texels) = (Vec::new(), Vec::new());
+        for i in 0..s.textures.len() {
+            let read = if samplers.contains(&(i as u32)) { self.read_back_texture(&s.textures[i]) } else { None };
+            let (one, its_texels) = read.map(|r| (r.sampled, r.texels)).unzip();
+            sampled.push(one);
+            texels.extend(its_texels);
+        }
+        let recorded = {
+            let bytes = |id: u32| self.resources.get(&id).and_then(|r| r.shadow.as_ref()).map(|s| s.data.as_slice());
+            let fetch = vertex::fetches(s.attribs, bytes);
+            let blocks = vertex::block_snapshots(&sp.program, s.blocks, bytes);
+            let block_refs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+            let tex = DrawTextures { bound: &sampled };
+            let env = Env { uniforms: s.uniforms, blocks: &block_refs, textures: &tex };
+            vertex::capture(&sp, &fetch, &env, info)
+        };
+        drop(texels);
+        let Some(recorded) = recorded else { return };
         for (bi, range) in ranges.iter().enumerate() {
-            let stride = sp.feedback_strides.get(bi).copied().unwrap_or(0);
-            if stride == 0 {
-                continue;
+            if let Some(data) = vertex::feedback_bytes(&sp, bi, range.size, &recorded) {
+                self.write_buffer(range.buffer, range.offset, &data);
             }
-            let comps: Vec<usize> =
-                sp.feedback.iter().enumerate().filter(|(_, c)| c.buffer as usize == bi).map(|(k, _)| k).collect();
-            let n = vertices.min(range.size / stride);
-            let Some(mut data) = try_zeroed(n * stride) else { continue };
-            for v in 0..n {
-                for (j, &k) in comps.iter().enumerate() {
-                    data[v * stride + j * 4..][..4].copy_from_slice(&recorded[v * ncap + k].to_le_bytes());
-                }
-            }
-            self.write_buffer(range.buffer, range.offset, &data);
         }
-    }
-
-    /// The captured components of a draw's whole primitives, in order.
-    fn shade_captured(
-        &self,
-        sp: &SoftProgram,
-        s: &DrawState<'_>,
-        info: &DrawInfo,
-        textures: &[Option<ReadBack>],
-    ) -> Option<Vec<u32>> {
-        let bytes = |id: u32| self.resources.get(&id).and_then(|r| r.shadow.as_ref()).map(|s| s.data.as_slice());
-        let fetch: Vec<Fetch<'_>> = s
-            .attribs
-            .iter()
-            .map(|a| Fetch {
-                data: a.buffer.and_then(bytes),
-                offset: a.offset,
-                stride: a.stride as usize,
-                size: a.size,
-                ty: a.ty,
-                normalized: a.normalized,
-                integer: a.integer,
-                divisor: a.divisor,
-                current: a.current,
-            })
-            .collect();
-        // Each block as the program declares it, zero past its buffer.
-        let blocks: Vec<Vec<u8>> = sp
-            .program
-            .linked
-            .blocks
-            .iter()
-            .enumerate()
-            .map(|(i, b)| {
-                let mut v = vec![0u8; b.size as usize];
-                if let Some(Some(r)) = s.blocks.get(i)
-                    && let Some(d) = bytes(r.buffer)
-                {
-                    let start = r.offset.min(d.len());
-                    let end = start.saturating_add(r.size.min(b.size as usize)).min(d.len());
-                    v[..end - start].copy_from_slice(&d[start..end]);
-                }
-                v
-            })
-            .collect();
-        let block_refs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
-        let sampled: Vec<Option<Sampled>> = textures.iter().map(|t| t.as_ref().map(|t| t.sampled.clone())).collect();
-        let tex = DrawTextures { bound: &sampled };
-        let env = Env { uniforms: s.uniforms, blocks: &block_refs, textures: &tex };
-        let mut exec = Exec::new(&sp.vs);
-        if exec.regs.len() < sp.registers {
-            exec.regs.resize(sp.registers, Lanes::ZERO);
-        }
-        exec.prologue(&sp.vs, &env);
-        // The vertex stream: indices, or consecutive vertices.
-        let ids: Vec<u32> = match s.index {
-            Some((buffer, ty)) => {
-                let restart = ty.restart();
-                crate::soft::read_indices(bytes(buffer).unwrap_or(&[]), info.first, info.count, ty)
-                    .into_iter()
-                    .filter(|&i| !(s.primitive_restart && i == restart))
-                    .collect()
-            }
-            None => (0..info.count).map(|k| (info.first as u32).wrapping_add(k)).collect(),
-        };
-        let per = match info.mode {
-            Mode::Points => 1,
-            Mode::Lines => 2,
-            _ => 3,
-        };
-        let whole = ids.len() / per * per;
-        let ncap = sp.feedback.len();
-        let words = vertex::vertex_words(sp);
-        let mut out = try_u32s(ids.len() * words)?;
-        let mut captured = try_u32s(ids.len() * ncap)?;
-        let mut recorded = Vec::new();
-        recorded.try_reserve_exact(whole * ncap * info.instances.max(1) as usize).ok()?;
-        for instance in 0..info.instances.max(1) {
-            vertex::shade(sp, &fetch, &env, &mut exec, &ids, instance, &mut out, Some(&mut captured));
-            recorded.extend_from_slice(&captured[..whole * ncap]);
-        }
-        Some(recorded)
     }
 
     /// A texture's levels, read back as a sampler of the vertex shader sees
@@ -235,17 +152,10 @@ impl VirglBackend {
     fn read_back_texture(&mut self, b: &TextureBinding) -> Option<ReadBack> {
         let v = b.view?;
         let d = self.resources.get(&v.resource)?.desc;
-        let format = d.format;
-        let tb = format.bytes();
+        let tb = d.format.bytes();
         let (mut texels, mut levels) = (Vec::new(), Vec::new());
         for l in v.base_level..=v.max_level.min(d.levels.saturating_sub(1)) {
-            let (w, h) = ((d.width >> l).max(1), (d.height >> l).max(1));
-            let depth = match d.target {
-                Target::Texture3D => (d.depth >> l).max(1),
-                Target::TextureCube => 6,
-                Target::Texture2DArray => d.depth,
-                _ => 1,
-            };
+            let (w, h, depth) = d.level_size(l);
             let (row, image) = (w as usize * tb, w as usize * h as usize * tb);
             let mut data = try_zeroed(image * depth as usize)?;
             self.read_texture(v.resource, l, Region::new(0, 0, 0, w, h, depth), &mut data, row, image);
@@ -255,29 +165,6 @@ impl VirglBackend {
         if levels.is_empty() {
             return None;
         }
-        let dim = match v.target {
-            Target::Texture3D => vglsl::types::Dim::D3,
-            Target::TextureCube => vglsl::types::Dim::Cube,
-            Target::Texture2DArray => vglsl::types::Dim::D2Array,
-            _ => vglsl::types::Dim::D2,
-        };
-        let sampled = Sampled {
-            levels,
-            dim,
-            format,
-            texel: tb,
-            kind: Sampled::kind_of(format),
-            swizzle: v.swizzle,
-            state: b.sampler,
-        };
-        Some(ReadBack { sampled, _texels: texels })
+        Some(ReadBack { sampled: Sampled::new(&v, b.sampler, d.format, levels), texels })
     }
-}
-
-/// `n` zeroed words, if there is memory for them.
-fn try_u32s(n: usize) -> Option<Vec<u32>> {
-    let mut v = Vec::new();
-    v.try_reserve_exact(n).ok()?;
-    v.resize(n, 0);
-    Some(v)
 }

@@ -92,6 +92,17 @@ impl Transport for Tcp {
     fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
         self.0.write_all(data).map_err(io_error)
     }
+
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError> {
+        self.0.set_nonblocking(true).map_err(io_error)?;
+        let result = self.0.write(data);
+        self.0.set_nonblocking(false).map_err(io_error)?;
+        match result {
+            Ok(n) => Ok(n),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(0),
+            Err(e) => Err(io_error(e)),
+        }
+    }
 }
 
 fn base() -> ClientConfigBuilder {

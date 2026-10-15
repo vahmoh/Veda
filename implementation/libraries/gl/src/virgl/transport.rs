@@ -40,9 +40,10 @@ pub trait Transport {
     /// The host's capability set 2 (`struct virgl_caps_v2`).
     fn caps(&self) -> &[u8];
 
-    /// The memory shared with the host: its address in this process and
-    /// its size. The host writes into it while commands run (transfers
-    /// from the host) and, for query results, later; read it with care.
+    /// The memory shared with the host: its address in this process (a
+    /// multiple of 16) and its size. The host writes into it while
+    /// commands run (transfers from the host) and, for query results,
+    /// later; read it with care.
     fn shared(&self) -> (*mut u8, usize);
 
     /// Creates a resource. `backing`, a range of the shared memory, is
@@ -52,6 +53,14 @@ pub trait Transport {
     fn create_resource(&mut self, args: &ResourceArgs, backing: Option<Range<usize>>) -> Result<u32, OutOfMemory>;
 
     fn destroy_resource(&mut self, handle: u32);
+
+    /// Whether every resource the host creates reads as zero, whatever its
+    /// memory held before (another context's, freed). Veda's renderer
+    /// makes it so; where the host does not (virglrenderer), the backend
+    /// zeroes new resources itself.
+    fn zeroes_new_resources(&self) -> bool {
+        false
+    }
 
     /// Creates a 2D render target (`args`) whose storage is memory from
     /// outside, which the host renders into in place; returns its handle.
@@ -78,6 +87,47 @@ pub trait Transport {
     /// Whether a fence has signaled.
     fn signaled(&mut self, fence: u64) -> bool;
 
-    /// Waits for a fence.
-    fn wait(&mut self, fence: u64) -> Result<(), Lost>;
+    /// Waits up to `timeout_ns` for a fence: whether it signaled. A
+    /// transport may give up on a host that takes much longer than any
+    /// work should (it has hung: `Lost`).
+    fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost>;
+}
+
+/// Memory a transport of the host tests shares with its renderer: a raw
+/// allocation, zeroed, which the renderer writes through pointers of its
+/// own (which a `Box` or `Vec`, moved or borrowed after they were taken,
+/// would no longer allow); freed when it goes.
+#[cfg(any(test, feature = "host-virgl"))]
+pub(crate) struct HostMemory {
+    ptr: core::ptr::NonNull<u8>,
+    layout: core::alloc::Layout,
+}
+
+#[cfg(any(test, feature = "host-virgl"))]
+impl HostMemory {
+    /// `len` bytes (16-byte aligned), or `None` if there is no memory.
+    pub fn new(len: usize) -> Option<HostMemory> {
+        let layout = core::alloc::Layout::from_size_align(len.max(1), 16).ok()?;
+        // SAFETY: a layout of non-zero size.
+        let ptr = core::ptr::NonNull::new(unsafe { alloc::alloc::alloc_zeroed(layout) })?;
+        Some(HostMemory { ptr, layout })
+    }
+
+    /// Where it is (valid for reads and writes of `len()` bytes while it
+    /// lives).
+    pub fn ptr(&self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.layout.size()
+    }
+}
+
+#[cfg(any(test, feature = "host-virgl"))]
+impl Drop for HostMemory {
+    fn drop(&mut self) {
+        // SAFETY: allocated in `new` with this layout, freed once.
+        unsafe { alloc::alloc::dealloc(self.ptr.as_ptr(), self.layout) };
+    }
 }

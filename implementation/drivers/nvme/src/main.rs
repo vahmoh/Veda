@@ -5,9 +5,10 @@
 //! about 2016, and QEMU's `nvme`.
 //!
 //! Like `ahci` and `virtio-blk`, every namespace is served as the `block`
-//! protocol under `block/<serial>` (the controller's serial number; a
-//! namespace other than the first adds `-n<id>`), so the file system finds
-//! the home disk by its serial number whatever the disk.
+//! protocol under `block/<serial>` (`vproto::block::serve`; the
+//! controller's serial number, to which a namespace other than the first
+//! adds `-n<id>`), so the file system finds the home disk by its serial
+//! number whatever the disk.
 //!
 //! The controller is reset and given an admin queue pair and one I/O queue
 //! pair, and the driver runs a request at a time (the file system issues
@@ -17,33 +18,28 @@
 //! IDENTIFY gives the serial number and model, the namespaces, and their
 //! sizes and block sizes (512 or 4096 bytes; formats with metadata are not
 //! used). It waits on an MSI-X (or MSI) interrupt when the controller has
-//! one, and polls otherwise.
+//! one, and polls otherwise. A command that does not finish (or a
+//! controller that reports a fatal error) fails, and the controller is
+//! reset, which drops every command it has, and started again: a command
+//! left to it might otherwise still write into the buffer later ones use.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{Ordering, fence};
 
-use vabi::{map_flags, signals};
-use vipc::{Bytes, WaitSet};
-use vproto::block::{BlockError, BlockInfo, MAX_TRANSFER, block, service_name};
-use vproto::pci::pcidev;
+use vproto::block::{self, BlockError, BlockInfo, MAX_TRANSFER, Served};
+use vproto::pci::{DmaBuffer, Registers, pcidev};
 use vrt::object::{Channel, Interrupt};
 use vrt::println;
-use vrt::vm::Mapping;
-use vvirtio::DmaBuffer;
 
 vrt::entry!(main);
 
-/// Handle role of the PCI device channel from `devmgr`.
-const PCIDEV_ROLE: u32 = vabi::startup::role::USER + 10;
 /// The BAR of the controller's registers.
 const REGISTERS: u8 = 0;
 const PAGE: usize = 4096;
@@ -113,11 +109,14 @@ impl Queue {
     }
 }
 
-/// Why a command failed: the controller's status (its type and code), or
-/// no answer.
+/// Why a command failed: the controller's status (its type and code), no
+/// answer (or a fatal error of the controller's), a queue entry outside the
+/// driver's memory, or a controller given up.
 enum Failure {
     Status(u16),
     Timeout,
+    Memory,
+    Gone,
 }
 
 impl core::fmt::Display for Failure {
@@ -125,13 +124,16 @@ impl core::fmt::Display for Failure {
         match self {
             Failure::Status(s) => write!(f, "status type {}, code {:#04x}", s >> 8, s & 0xFF),
             Failure::Timeout => f.write_str("no answer"),
+            Failure::Memory => f.write_str("a queue entry outside the driver's memory"),
+            Failure::Gone => f.write_str("the controller is given up"),
         }
     }
 }
 
 struct Controller {
-    _bar: Mapping,
-    mmio: *mut u8,
+    regs: Registers,
+    /// Its capabilities (CAP).
+    cap: u64,
     mem: DmaBuffer,
     irq: Option<Interrupt>,
     /// Bytes between doorbells.
@@ -141,6 +143,9 @@ struct Controller {
     admin: Queue,
     io: Queue,
     next_id: u16,
+    /// It did not start again after a command it did not finish: it is
+    /// used no more.
+    gone: bool,
 }
 
 /// A namespace being served.
@@ -152,13 +157,11 @@ struct Namespace {
 
 impl Controller {
     fn r32(&self, off: usize) -> u32 {
-        // SAFETY: a register inside the mapped BAR.
-        unsafe { read_volatile(self.mmio.add(off) as *const u32) }
+        self.regs.read32(off)
     }
 
     fn w32(&self, off: usize, v: u32) {
-        // SAFETY: a register inside the mapped BAR.
-        unsafe { write_volatile(self.mmio.add(off) as *mut u32, v) }
+        self.regs.write32(off, v)
     }
 
     fn r64(&self, off: usize) -> u64 {
@@ -186,13 +189,16 @@ impl Controller {
     /// on queue pair `io` (else the admin one) and waits for it: dword 0 of
     /// its completion.
     fn run(&mut self, io: bool, mut cmd: [u32; 16]) -> Result<u32, Failure> {
+        if self.gone {
+            return Err(Failure::Gone);
+        }
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         cmd[0] |= (id as u32) << 16;
         let stride = self.stride;
         let q = if io { &mut self.io } else { &mut self.admin };
         let bytes: Vec<u8> = cmd.iter().flat_map(|d| d.to_le_bytes()).collect();
-        self.mem.write(q.sq + q.tail as usize * 64, &bytes);
+        self.mem.write(q.sq + q.tail as usize * 64, &bytes).map_err(|_| Failure::Memory)?;
         q.tail = (q.tail + 1) % ENTRIES;
         let (qid, tail) = (q.id as usize, q.tail);
         fence(Ordering::SeqCst);
@@ -202,15 +208,15 @@ impl Controller {
         loop {
             let q = if io { &mut self.io } else { &mut self.admin };
             let at = q.cq + q.head as usize * 16;
-            // SAFETY: the completion queue's entry, which the device writes
-            // whole before it flips the phase tag.
-            let entry = unsafe { self.mem.bytes(at, 16) };
-            let dword =
-                |i: usize| u32::from_le_bytes([entry[4 * i], entry[4 * i + 1], entry[4 * i + 2], entry[4 * i + 3]]);
-            let status = dword(3) >> 16;
+            // The completion queue's entry, which the controller writes whole
+            // before it flips the phase tag (in dword 3, with its status and
+            // the command's identifier): read as it is now.
+            let last = self.mem.read32(at + 12).map_err(|_| Failure::Memory)?;
+            let status = last >> 16;
             if (status & 1 == 1) == q.phase {
                 fence(Ordering::SeqCst);
-                let (result, done_id) = (dword(0), dword(3) as u16);
+                let result = self.mem.read32(at).map_err(|_| Failure::Memory)?;
+                let done_id = last as u16;
                 q.head = (q.head + 1) % ENTRIES;
                 if q.head == 0 {
                     q.phase = !q.phase;
@@ -259,8 +265,7 @@ impl Controller {
     fn identify(&mut self, cns: u32, namespace: u32) -> Result<Vec<u8>, Failure> {
         let buffer = self.mem.phys() + IDENTIFY as u64;
         self.run(false, Self::command(ADMIN_IDENTIFY, namespace, [buffer, 0], [cns, 0, 0, 0, 0, 0]))?;
-        // SAFETY: the device has written the structure.
-        Ok(unsafe { self.mem.bytes(IDENTIFY, PAGE) }.to_vec())
+        self.mem.to_vec(IDENTIFY, PAGE).map_err(|_| Failure::Memory)
     }
 
     /// The data buffer's `len` bytes from page `offset` on as PRP entries:
@@ -291,30 +296,64 @@ impl Controller {
             if let Err(e) = self.run(true, cmd) {
                 let what = if write { "write" } else { "read" };
                 println!("namespace {}: {} of {} blocks at {} failed: {}", ns.id, what, n, start, e);
-                return Err(BlockError::Io);
+                return Err(self.failed(e));
             }
             done += n;
         }
         Ok(())
     }
-}
 
-/// An identify string: ASCII, padded with spaces.
-fn ascii(bytes: &[u8]) -> String {
-    String::from(String::from_utf8_lossy(bytes).trim_matches(|c: char| c == ' ' || c == '\0'))
+    /// A command failed for `why`: if the controller did not answer, it is
+    /// reset (which drops every command it has, so that none writes into
+    /// the buffer when later ones use it) and started again, or given up if
+    /// it does not start. The request fails either way.
+    fn failed(&mut self, why: Failure) -> BlockError {
+        if matches!(why, Failure::Timeout)
+            && let Err(e) = self.restart()
+        {
+            println!("the controller does not start again ({}): its disks are given up", e);
+            self.gone = true;
+        }
+        BlockError::Io
+    }
+
+    /// Resets the controller and starts it again with fresh queues.
+    fn restart(&mut self) -> Result<(), String> {
+        if !self.disable() {
+            return Err(String::from("does not reset"));
+        }
+        // The queues start again at their first entries, and the
+        // completions there from before must not look new.
+        self.admin = Queue::new(0, ADMIN_SQ, ADMIN_CQ);
+        self.io = Queue::new(1, IO_SQ, IO_CQ);
+        let queues = alloc::vec![0; IDENTIFY - ADMIN_SQ];
+        self.mem.write(ADMIN_SQ, &queues).map_err(|e| format!("its queues: {e}"))?;
+        start(self)
+    }
+
+    /// How long the controller may take to get ready, or to reset: CAP.TO,
+    /// in 500 ms.
+    fn ready_timeout(&self) -> u64 {
+        ((self.cap >> 24) & 0xFF).max(1) * 500_000_000
+    }
+
+    /// Resets the controller: it stops, and drops its queues and every
+    /// command in them. False if it does not.
+    fn disable(&self) -> bool {
+        if self.r32(reg::CC) & CC_EN != 0 {
+            self.w32(reg::CC, self.r32(reg::CC) & !CC_EN);
+        }
+        self.wait(self.ready_timeout(), |c| c.r32(reg::CSTS) & CSTS_RDY == 0)
+    }
 }
 
 /// Resets the controller and starts it with its admin queues, then its
 /// I/O queue pair.
-fn start(c: &mut Controller, cap: u64) -> Result<(), String> {
-    // CAP.TO: how long the controller may take to get ready, in 500 ms.
-    let timeout = ((cap >> 24) & 0xFF).max(1) * 500_000_000;
-    if c.r32(reg::CC) & CC_EN != 0 {
-        c.w32(reg::CC, c.r32(reg::CC) & !CC_EN);
-    }
-    if !c.wait(timeout, |c| c.r32(reg::CSTS) & CSTS_RDY == 0) {
+fn start(c: &mut Controller) -> Result<(), String> {
+    if !c.disable() {
         return Err(String::from("does not reset"));
     }
+    let timeout = c.ready_timeout();
     let base = c.mem.phys();
     let entries = (ENTRIES - 1) as u32;
     c.w32(reg::AQA, entries << 16 | entries);
@@ -354,73 +393,48 @@ fn namespace(c: &mut Controller, id: u32) -> Option<Namespace> {
         return None;
     }
     if metadata != 0 || !matches!(shift, 9 | 12) {
-        println!("namespace {}: blocks of {} bytes with {} of metadata are not supported", id, 1u64 << shift, metadata);
+        // A block size of 2^shift bytes, which may be past what a u64 holds.
+        let size = 1u64.checked_shl(shift).map_or_else(|| format!("2^{shift}"), |size| format!("{size}"));
+        println!("namespace {}: blocks of {} bytes with {} of metadata are not supported", id, size, metadata);
         return None;
     }
     Some(Namespace { id, blocks, block_size: 1 << shift })
 }
 
-/// A namespace being served on a client's connection.
-struct Disk<'a> {
-    c: &'a mut Controller,
-    ns: &'a Namespace,
-    serial: &'a str,
+/// The controller and the namespaces it serves.
+struct Nvme {
+    c: Controller,
+    namespaces: Vec<Namespace>,
 }
 
-impl Disk<'_> {
-    /// The blocks of `count` blocks at `lba`, if they are on the disk and
-    /// fit one transfer.
-    fn check(&self, lba: u64, count: u64) -> Result<usize, BlockError> {
-        let len = count as usize * self.ns.block_size;
-        if count == 0 || len > MAX_TRANSFER as usize {
-            return Err(BlockError::Invalid);
-        }
-        match lba.checked_add(count) {
-            Some(end) if end <= self.ns.blocks => Ok(len),
-            _ => Err(BlockError::OutOfRange),
-        }
-    }
-}
-
-impl block::Server for Disk<'_> {
-    fn info(&mut self) -> BlockInfo {
-        BlockInfo {
-            sectors: self.ns.blocks,
-            sector_size: self.ns.block_size as u32,
-            read_only: false,
-            serial: String::from(self.serial),
-        }
+impl block::Disks for Nvme {
+    fn read(&mut self, disk: usize, lba: u64, count: u32) -> Result<Vec<u8>, BlockError> {
+        let ns = self.namespaces.get(disk).ok_or(BlockError::Invalid)?;
+        self.c.transfer(ns, lba, count as usize, false)?;
+        self.c.mem.to_vec(DATA, count as usize * ns.block_size).map_err(|_| BlockError::Invalid)
     }
 
-    fn read(&mut self, lba: u64, count: u32) -> Result<Bytes, BlockError> {
-        let len = self.check(lba, count as u64)?;
-        self.c.transfer(self.ns, lba, count as usize, false)?;
-        // SAFETY: the device has finished writing the data.
-        Ok(Bytes(unsafe { self.c.mem.bytes(DATA, len) }.to_vec()))
+    fn write(&mut self, disk: usize, lba: u64, data: &[u8]) -> Result<(), BlockError> {
+        let ns = self.namespaces.get(disk).ok_or(BlockError::Invalid)?;
+        self.c.mem.write(DATA, data).map_err(|_| BlockError::Invalid)?;
+        self.c.transfer(ns, lba, data.len() / ns.block_size, true)
     }
 
-    fn write(&mut self, lba: u64, data: Bytes) -> Result<(), BlockError> {
-        let len = data.0.len();
-        if !len.is_multiple_of(self.ns.block_size) {
-            return Err(BlockError::Invalid);
+    fn flush(&mut self, disk: usize) -> Result<(), BlockError> {
+        let ns = self.namespaces.get(disk).ok_or(BlockError::Invalid)?;
+        let cmd = Controller::command(IO_FLUSH, ns.id, [0, 0], [0; 6]);
+        match self.c.run(true, cmd) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!("namespace {}: flush failed: {}", ns.id, e);
+                Err(self.c.failed(e))
+            }
         }
-        let count = (len / self.ns.block_size) as u64;
-        self.check(lba, count)?;
-        self.c.mem.write(DATA, &data.0);
-        self.c.transfer(self.ns, lba, count as usize, true)
-    }
-
-    fn flush(&mut self) -> Result<(), BlockError> {
-        let cmd = Controller::command(IO_FLUSH, self.ns.id, [0, 0], [0; 6]);
-        self.c.run(true, cmd).map(|_| ()).map_err(|e| {
-            println!("namespace {}: flush failed: {}", self.ns.id, e);
-            BlockError::Io
-        })
     }
 }
 
 fn main() -> i32 {
-    let Some(h) = vrt::env::take_handle(PCIDEV_ROLE) else {
+    let Some(h) = vrt::env::take_handle(vproto::startup::driver::PCIDEV) else {
         println!("no pcidev channel");
         return 1;
     };
@@ -434,22 +448,20 @@ fn main() -> i32 {
         println!("no DMA resource");
         return 1;
     };
-    let Ok(Ok(vmo)) = pci.map_bar(REGISTERS) else {
-        println!("cannot map the registers (BAR {})", REGISTERS);
-        return 1;
-    };
-    let Ok(size) = vmo.size() else { return 1 };
-    let Ok(bar) = Mapping::new(vmo, size, map_flags::READ | map_flags::WRITE) else {
-        println!("cannot map the registers");
-        return 1;
+    let regs = match Registers::map(&pci, REGISTERS) {
+        Ok(regs) => regs,
+        Err(e) => {
+            println!("cannot map the registers (BAR {}): {}", REGISTERS, e);
+            return 1;
+        }
     };
     let Ok(mem) = DmaBuffer::new(&dma, MEMORY) else {
         println!("no DMA memory");
         return 1;
     };
     let mut c = Controller {
-        mmio: bar.as_ptr(),
-        _bar: bar,
+        regs,
+        cap: 0,
         mem,
         irq: None,
         stride: 4,
@@ -457,13 +469,17 @@ fn main() -> i32 {
         admin: Queue::new(0, ADMIN_SQ, ADMIN_CQ),
         io: Queue::new(1, IO_SQ, IO_CQ),
         next_id: 0,
+        gone: false,
     };
-    if size < reg::DOORBELLS + 16 {
-        println!("register window too small ({} bytes)", size);
+    c.cap = c.r64(reg::CAP);
+    let cap = c.cap;
+    c.stride = 4 << ((cap >> 32) & 0xF);
+    // The doorbells of both queue pairs, as far apart as CAP.DSTRD says,
+    // are inside the registers.
+    if c.regs.len() < reg::DOORBELLS + 4 * c.stride {
+        println!("register window too small ({} bytes) for doorbells {} bytes apart", c.regs.len(), c.stride);
         return 1;
     }
-    let cap = c.r64(reg::CAP);
-    c.stride = 4 << ((cap >> 32) & 0xF);
     // Queues of `ENTRIES` (CAP.MQES is the most, less one), the NVM
     // command set (CAP.CSS), 4 KiB pages (CAP.MPSMIN).
     let mpsmin = (cap >> 48) & 0xF;
@@ -475,9 +491,12 @@ fn main() -> i32 {
     let data = c.mem.phys() + DATA as u64;
     let list: Vec<u8> =
         (1..MAX_TRANSFER as usize / PAGE).flat_map(|i| (data + (i * PAGE) as u64).to_le_bytes()).collect();
-    c.mem.write(PRP_LIST, &list);
+    if c.mem.write(PRP_LIST, &list).is_err() {
+        println!("no room for the PRP list");
+        return 1;
+    }
     c.irq = vproto::pci::enable_msix(&pci).or_else(|| vproto::pci::enable_msi(&pci));
-    if let Err(why) = start(&mut c, cap) {
+    if let Err(why) = start(&mut c) {
         println!("controller at {}: {}", location, why);
         return 1;
     }
@@ -485,11 +504,16 @@ fn main() -> i32 {
         println!("controller at {}: IDENTIFY CONTROLLER failed", location);
         return 1;
     };
-    let serial = ascii(&controller[4..24]);
-    let model = ascii(&controller[24..64]);
-    // MDTS: the largest transfer, in pages, as a power of two (0: any).
-    if controller[77] != 0 {
-        c.max_transfer = c.max_transfer.min(PAGE << controller[77]);
+    // Identify strings: ASCII, padded with spaces.
+    let serial = block::device_text(&controller[4..24]);
+    let model = block::device_text(&controller[24..64]);
+    // MDTS: the largest transfer, in pages, as a power of two (0: no limit;
+    // nor is one larger than memory).
+    let mdts = controller[77] as u32;
+    if mdts != 0
+        && let Some(most) = 1usize.checked_shl(mdts).and_then(|pages| pages.checked_mul(PAGE))
+    {
+        c.max_transfer = c.max_transfer.min(most);
     }
     let Ok(list) = c.identify(IDENTIFY_NAMESPACES, 0) else {
         println!("controller at {}: no namespace list", location);
@@ -503,66 +527,33 @@ fn main() -> i32 {
         return 0;
     }
 
-    // One service per namespace.
-    let mut listeners: Vec<(Channel, usize, String)> = Vec::new();
-    for (i, ns) in namespaces.iter().enumerate() {
-        let base = if serial.is_empty() { format!("nvme-{}", location) } else { serial.clone() };
-        let id = if i == 0 { base } else { format!("{}-n{}", base, ns.id) };
-        match vproto::register(&service_name(&id)) {
-            Ok(l) => {
-                println!(
-                    "disk {} at {} namespace {}: {} MiB in {}-byte blocks ({}){}",
-                    id,
-                    location,
-                    ns.id,
-                    (ns.blocks * ns.block_size as u64) >> 20,
-                    ns.block_size,
-                    model,
-                    if c.irq.is_some() { "" } else { ", polling" }
-                );
-                listeners.push((l, i, id));
-            }
-            Err(e) => println!("cannot register block/{}: {:?}", id, e),
-        }
-    }
-
-    // Keys: listeners are 1..=n, clients start above.
-    let mut clients: BTreeMap<u64, (Channel, usize)> = BTreeMap::new();
-    let mut next = 1000u64;
-    loop {
-        let mut ws = WaitSet::new();
-        for (k, (l, _, _)) in listeners.iter().enumerate() {
-            ws.add(l.raw(), signals::READABLE | signals::PEER_CLOSED, k as u64 + 1);
-        }
-        for (&k, (ch, _)) in &clients {
-            ws.add(ch.raw(), signals::READABLE | signals::PEER_CLOSED, k);
-        }
-        let Ok(ready) = ws.wait(vabi::DEADLINE_INFINITE) else { continue };
-        for (key, observed) in ready {
-            if key >= 1 && key as usize <= listeners.len() {
-                let (l, ns, _) = &listeners[key as usize - 1];
-                while let Some(ch) = vproto::accept(l) {
-                    clients.insert(next, (ch, *ns));
-                    next += 1;
-                }
-                continue;
-            }
-            if observed & signals::READABLE != 0 {
-                while let Some((Ok(msg), ns)) = clients.get(&key).map(|(ch, n)| (ch.read(), *n)) {
-                    let serial = listeners.iter().find(|(_, n, _)| *n == ns).map(|(_, _, s)| s.as_str()).unwrap_or("");
-                    let mut server = Disk { c: &mut c, ns: &namespaces[ns], serial };
-                    match block::dispatch(&mut server, msg) {
-                        Ok(reply) => {
-                            if let Some((ch, _)) = clients.get(&key) {
-                                let _ = reply.send(ch);
-                            }
-                        }
-                        Err(e) => println!("bad request: {}", e),
-                    }
-                }
-            } else if observed & signals::PEER_CLOSED != 0 {
-                clients.remove(&key);
-            }
-        }
-    }
+    // One disk per namespace: the first named by the controller's serial
+    // number, the others by it and their ids.
+    let base = block::disk_id(&serial, &format!("nvme-{location}"));
+    let polling = if c.irq.is_some() { "" } else { ", polling" };
+    let served: Vec<Served> = namespaces
+        .iter()
+        .enumerate()
+        .map(|(i, ns)| {
+            let id = if i == 0 { base.clone() } else { format!("{}-n{}", base, ns.id) };
+            let info = BlockInfo {
+                sectors: ns.blocks,
+                sector_size: ns.block_size as u32,
+                read_only: false,
+                serial: if serial.is_empty() { String::new() } else { id.clone() },
+            };
+            let description = format!(
+                "{} namespace {}: {} MiB in {}-byte blocks ({}){}",
+                location,
+                ns.id,
+                info.mib(),
+                ns.block_size,
+                model,
+                polling
+            );
+            Served { id, info, description }
+        })
+        .collect();
+    block::serve(&mut Nvme { c, namespaces }, &served);
+    1
 }

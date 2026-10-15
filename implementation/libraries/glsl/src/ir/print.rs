@@ -158,7 +158,6 @@ fn inst(f: &Func, id: super::InstId, out: &mut String) {
             let _ = write!(out, "texsize s{index}");
         }
         InstOp::Deriv { y } => out.push_str(if *y { "ddy" } else { "ddx" }),
-        InstOp::Nop => out.push_str("nop"),
     }
     for (k, a) in i.args.iter().enumerate() {
         out.push_str(if k == 0 { " " } else { ", " });

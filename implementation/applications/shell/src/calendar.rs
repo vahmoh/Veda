@@ -6,7 +6,7 @@
 use alloc::format;
 
 use vgfx::{Align, Color, Rect};
-use vrt::time::{DateTime, days_from_civil};
+use vrt::time::{DateTime, days_from_civil, days_in_month, month_name, weekday};
 use vui::{Font, Icon, Ui};
 
 use crate::{Model, chrome, taskbar};
@@ -18,15 +18,6 @@ const PAD: i32 = 20;
 /// Where the flyout appears: above the clock, at the right edge.
 pub fn placement(screen: Rect) -> Rect {
     Rect::new(screen.w - WIDTH - 12, screen.h - taskbar::HEIGHT - 12 - HEIGHT, WIDTH, HEIGHT)
-}
-
-fn days_in_month(y: i32, m: u8) -> u8 {
-    match m {
-        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
 }
 
 pub struct Calendar {
@@ -87,8 +78,8 @@ impl Calendar {
 
         // Day grid: six weeks starting on the Monday on or before the 1st.
         let first = days_from_civil(self.year, self.month, 1);
-        let weekday = (first + 4).rem_euclid(7); // 0 = Sunday
-        let lead = (weekday + 6) % 7; // days shown from the previous month
+        // Days shown from the previous month (weekdays from Sunday, 0).
+        let lead = (weekday(first) as i64 + 6) % 7;
         let (py, pm) = if self.month == 1 { (self.year - 1, 12) } else { (self.year, self.month - 1) };
         let prev_len = days_in_month(py, pm) as i64;
         let len = days_in_month(self.year, self.month) as i64;
@@ -117,22 +108,4 @@ impl Calendar {
         }
         chrome::popup_frame(&mut ui.canvas);
     }
-}
-
-fn month_name(m: u8) -> &'static str {
-    const NAMES: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
-    NAMES[(m.clamp(1, 12) - 1) as usize]
 }

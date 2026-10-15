@@ -1,70 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Painting the films' pictures: a floating-point RGB canvas, vector paths
-//! composited through `vraster` with a colour per pixel, soft lights, text
-//! outlines from `vfont`, and the step down to 8-bit pixels.
+//! Painting the films' pictures: a floating-point RGB canvas (in the
+//! generators' colours, `gencommon::colour`), vector paths composited
+//! through `vraster` with a colour per pixel, soft lights, text outlines
+//! from `vfont`, and the step down to 8-bit pixels.
 
+pub use gencommon::colour::{Rgb, add, gradient, hex, mix, scale, smoothstep};
+use gencommon::hash::hash01;
 use vfont::{Font, PathSink};
 use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
-
-/// A colour, channels nominally in `[0, 1]` (display space; light may
-/// add up beyond 1 before the tone curve).
-pub type Rgb = [f32; 3];
-
-/// `0xRRGGBB` as a colour.
-pub const fn hex(c: u32) -> Rgb {
-    [((c >> 16) & 0xFF) as f32 / 255.0, ((c >> 8) & 0xFF) as f32 / 255.0, (c & 0xFF) as f32 / 255.0]
-}
-
-pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
-}
-
-pub fn scale(a: Rgb, k: f32) -> Rgb {
-    [a[0] * k, a[1] * k, a[2] * k]
-}
-
-pub fn add(a: Rgb, b: Rgb) -> Rgb {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-pub fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-/// Multi-stop gradient: `stops` are `(position, colour)` in order.
-pub fn gradient(stops: &[(f32, Rgb)], t: f32) -> Rgb {
-    if t <= stops[0].0 {
-        return stops[0].1;
-    }
-    for w in stops.windows(2) {
-        let ((p0, c0), (p1, c1)) = (w[0], w[1]);
-        if t <= p1 {
-            return mix(c0, c1, smoothstep(0.0, 1.0, (t - p0) / (p1 - p0).max(1e-6)));
-        }
-    }
-    stops[stops.len() - 1].1
-}
 
 /// Rolls bright light off smoothly instead of clipping it.
 pub fn tonemap(c: Rgb) -> Rgb {
     c.map(|v| if v <= 0.75 { v.max(0.0) } else { 0.75 + 0.25 * (1.0 - (-(v - 0.75) / 0.25).exp()) })
-}
-
-/// Integer hash of a lattice point.
-pub fn hash(x: i32, y: i32, seed: u32) -> u32 {
-    let mut h =
-        seed.wrapping_mul(0x9E37_79B9) ^ (x as u32).wrapping_mul(0x27D4_EB2D) ^ (y as u32).wrapping_mul(0x1656_67B1);
-    h = (h ^ (h >> 15)).wrapping_mul(0x85EB_CA6B);
-    h = (h ^ (h >> 13)).wrapping_mul(0xC2B2_AE35);
-    h ^ (h >> 16)
-}
-
-/// A hash in `[0, 1)`.
-pub fn hash01(x: i32, y: i32, seed: u32) -> f32 {
-    (hash(x, y, seed) >> 8) as f32 / (1u32 << 24) as f32
 }
 
 /// Smooth 1D value noise in `[-1, 1]`.

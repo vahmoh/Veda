@@ -74,8 +74,9 @@ pub enum BuiltinOut {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TexOp {
     pub sampler: Sampler,
-    /// The sampler index; with `dynamic`, the first argument is added to it
-    /// (clamped to `count`).
+    /// The sampler index; with `dynamic`, that of the first of `count`
+    /// samplers (all of this type), among which the first argument (a
+    /// signed int, clamped to `0..count`) chooses.
     pub index: u32,
     pub dynamic: bool,
     pub count: u32,
@@ -136,8 +137,8 @@ pub enum InstOp {
         slot: u32,
         comp: u8,
     },
-    /// The same at `base + index * stride`, with the index (the argument)
-    /// clamped to `0..count`.
+    /// The same at `base + index * stride`, with the index (the argument,
+    /// a signed int) clamped to `0..count`.
     LoadUniformIndexed {
         base: u32,
         comp: u8,
@@ -145,7 +146,8 @@ pub enum InstOp {
         count: u32,
     },
     /// A uniform block's 32 bits at a byte offset; with an argument, plus
-    /// `argument * stride` (the argument clamped to `0..count`).
+    /// `argument * stride` (the argument, a signed int, clamped to
+    /// `0..count`). Without one, `stride` and `count` are 0.
     LoadBlock {
         block: u32,
         offset: u32,
@@ -154,6 +156,7 @@ pub enum InstOp {
     },
     Tex(TexOp),
     /// `textureSize`: arguments: [dynamic index,] level; 2 or 3 results.
+    /// The sampler is chosen as [`TexOp`]'s is.
     TexSize {
         sampler: Sampler,
         index: u32,
@@ -164,8 +167,6 @@ pub enum InstOp {
     Deriv {
         y: bool,
     },
-    /// Nothing: a value no longer used (removed by passes).
-    Nop,
 }
 
 impl InstOp {
@@ -369,7 +370,12 @@ fn link_list(
     // `prev` is the block control falls from into the next node, or None
     // if the previous node does not fall through.
     let mut falls = entry.is_some();
-    for n in list {
+    // The block after node `k` (lists alternate blocks and other nodes).
+    let next = |k: usize| match list.get(k + 1) {
+        Some(Node::Block(b)) => Some(*b),
+        _ => None,
+    };
+    for (k, n) in list.iter().enumerate() {
         match n {
             Node::Block(b) => {
                 if falls && let Some(p) = prev {
@@ -397,7 +403,9 @@ fn link_list(
                     .collect();
                 // The next node is a block (lists alternate): give it the
                 // ends now, and mark that nothing else falls into it.
-                pending_merge(list, n, &ends, preds);
+                if let Some(b) = next(k) {
+                    preds[b.0 as usize].extend_from_slice(&ends);
+                }
                 prev = None;
                 falls = false;
             }
@@ -423,7 +431,9 @@ fn link_list(
                     }
                 }
                 let exits: Vec<Block> = inner_breaks.into_iter().filter(|b| reachable(*b, preds, f)).collect();
-                pending_merge(list, n, &exits, preds);
+                if let Some(b) = next(k) {
+                    preds[b.0 as usize].extend_from_slice(&exits);
+                }
                 prev = None;
                 falls = false;
             }
@@ -437,13 +447,84 @@ fn reachable(b: Block, preds: &[Vec<Block>], f: &Func) -> bool {
     !preds[b.0 as usize].is_empty() || first_block(&f.body) == Some(b)
 }
 
-/// Gives the block following node `n` in `list` the predecessors `ends`.
-fn pending_merge(list: &[Node], n: &Node, ends: &[Block], preds: &mut [Vec<Block>]) {
-    let pos = list.iter().position(|x| core::ptr::eq(x, n));
-    if let Some(p) = pos
-        && let Some(Node::Block(next)) = list.get(p + 1)
-    {
-        preds[next.0 as usize].extend_from_slice(ends);
+/// For each block, the blocks control goes to from it, each with the
+/// block's place among that one's predecessors (`preds`, from
+/// [`Func::preds`]): which operand of its φs the edge gives. A block goes
+/// to at most two others, so finding an edge's place this way
+/// ([`edge_index`]) takes constant time, where searching the predecessors
+/// would take time in proportion to them (a loop's first block has one for
+/// every `continue`).
+pub fn successors(preds: &[Vec<Block>]) -> Vec<Vec<(Block, usize)>> {
+    let mut succs = vec![Vec::new(); preds.len()];
+    for (b, ps) in preds.iter().enumerate() {
+        for (k, p) in ps.iter().enumerate() {
+            succs[p.0 as usize].push((Block(b as u32), k));
+        }
+    }
+    succs
+}
+
+/// The place of the edge from `from` to `to` among `to`'s predecessors,
+/// given [`successors`].
+pub fn edge_index(succs: &[Vec<(Block, usize)>], from: Block, to: Block) -> Option<usize> {
+    succs.get(from.0 as usize)?.iter().find(|&&(s, _)| s == to).map(|&(_, k)| k)
+}
+
+/// A step of a sequence of copies ([`sequence_copies`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CopyStep<L> {
+    /// Copy the second location's value to the first.
+    Copy(L, L),
+    /// Save the location's value somewhere new, and say where.
+    Save(L),
+}
+
+/// Turns parallel copies (`(destination, source)`, the destinations all
+/// different) into a sequence of copies, ordered so that no location is
+/// overwritten before every copy that reads it has been made, in time
+/// `O(n log n)` (after Boissinot et al.). `step` makes each copy, or saves
+/// a value to break a cycle of copies (returning where it went; a copy
+/// returns its destination).
+pub fn sequence_copies<L: Ord + Copy>(copies: &[(L, L)], mut step: impl FnMut(CopyStep<L>) -> L) {
+    use alloc::collections::{BTreeMap, BTreeSet};
+    let mut source: BTreeMap<L, L> = BTreeMap::new();
+    // Copies still to read each location's original value, and where that
+    // value is now.
+    let mut uses: BTreeMap<L, usize> = BTreeMap::new();
+    let mut holder: BTreeMap<L, L> = BTreeMap::new();
+    let mut pending: BTreeSet<L> = BTreeSet::new();
+    for &(d, s) in copies {
+        if d == s || !pending.insert(d) {
+            continue;
+        }
+        source.insert(d, s);
+        *uses.entry(s).or_insert(0) += 1;
+        holder.insert(s, s);
+    }
+    // Destinations whose own value nothing reads can be written now.
+    let mut ready: Vec<L> = pending.iter().copied().filter(|d| !uses.contains_key(d)).collect();
+    loop {
+        while let Some(d) = ready.pop() {
+            if !pending.remove(&d) {
+                continue;
+            }
+            let s = source[&d];
+            step(CopyStep::Copy(d, holder[&s]));
+            // `d` holds the value too now, and is written no more.
+            holder.insert(s, d);
+            if let Some(n) = uses.get_mut(&s) {
+                *n -= 1;
+                if *n == 0 && pending.contains(&s) {
+                    ready.push(s);
+                }
+            }
+        }
+        // What is left goes round in cycles: each destination's value is
+        // still to be read. Saving one's value frees it.
+        let Some(&d) = pending.iter().next() else { break };
+        let t = step(CopyStep::Save(d));
+        holder.insert(d, t);
+        ready.push(d);
     }
 }
 

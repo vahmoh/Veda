@@ -53,7 +53,7 @@ fn constant(shader: &Shader, name: &str) -> Vec<Value> {
         .iter()
         .find(|v| shader.name(v.name) == name && v.kind == VarKind::Const)
         .unwrap_or_else(|| panic!("no constant {name}"));
-    v.value.clone().expect("a value")
+    v.value.as_deref().expect("a value").to_vec()
 }
 
 fn floats(v: &[Value]) -> Vec<f32> {
@@ -530,4 +530,101 @@ fn malformed_shaders_never_panic() {
         let _ = compile(Stage::Vertex, &[&src], &Options::default());
         let _ = compile(Stage::Fragment, &[&src], &Options::default());
     }
+}
+
+#[test]
+fn extensions_set_to_warn_warn_when_used() {
+    // `#extension name : warn` enables the extension and warns of each
+    // use; `enable` does not warn.
+    for (behaviour, warns) in [("warn", true), ("enable", false)] {
+        let src = format!(
+            "#extension GL_OES_standard_derivatives : {behaviour}\n#extension GL_EXT_shader_texture_lod : {behaviour}\n\
+             #extension GL_OES_texture_3D : {behaviour}\n#extension GL_EXT_frag_depth : {behaviour}\n\
+             #extension GL_EXT_draw_buffers : {behaviour}\n\
+             precision mediump float; uniform sampler2D t; uniform mediump sampler3D v;\n\
+             void main() {{ gl_FragData[1] = vec4(dFdx(1.0)) + texture2DLodEXT(t, vec2(0.5), 0.0) + texture3D(v, vec3(0.5));\n\
+             gl_FragDepthEXT = float(gl_MaxDrawBuffersEXT); }}"
+        );
+        let c = compile(Stage::Fragment, &[&src], &Options::default());
+        assert!(c.shader.is_some(), "{}", c.log);
+        for what in [
+            "dFdx",
+            "texture2DLodEXT",
+            "texture3D",
+            "sampler3D",
+            "gl_FragDepthEXT",
+            "gl_MaxDrawBuffersEXT",
+            "gl_FragData",
+        ] {
+            let needle = format!("'{what}' uses the extension");
+            assert_eq!(c.log.contains(&needle), warns, "{behaviour} {what}:\n{}", c.log);
+        }
+    }
+}
+
+/// Checks `src` (a vertex shader) on a thread of its own within `secs`
+/// seconds; returns its log.
+fn timed(src: String, secs: f64) -> String {
+    super::on_small_stack(move || {
+        let t = std::time::Instant::now();
+        let c = compile(Stage::Vertex, &[&src], &Options::default());
+        let elapsed = t.elapsed().as_secs_f64();
+        assert!(elapsed < secs, "{elapsed} s:\n{}", c.log);
+        c.log
+    })
+}
+
+#[test]
+fn names_are_found_by_lookup() {
+    // Overloads, case labels and members are looked up, not compared with
+    // each one before them (tens of billions of steps for these).
+    let n = 100_000;
+    let mut src = String::from("#version 300 es\n");
+    for k in 0..n {
+        let (i, j) = (k % 400 + 1, k / 400 + 1);
+        src.push_str(&format!("float f(float a[{i}], float b[{j}]) {{ return 0.0; }}\n"));
+    }
+    src.push_str("void main() { float a[400]; float b[250]; gl_Position = vec4(f(a, b)); }");
+    let log = timed(src, 5.0);
+    assert!(log.is_empty(), "{log}");
+    let n = 200_000;
+    let cases: String = (0..n).map(|k| format!("case {k}: s++;\n")).collect();
+    let src = format!(
+        "#version 300 es\nuniform int k;\nvoid main() {{ int s = 0; switch (k) {{\n{cases}}} gl_Position = vec4(s); }}"
+    );
+    let log = timed(src, 5.0);
+    assert!(log.is_empty(), "{log}");
+    let members: String = (0..n).map(|k| format!("float m{k};\n")).collect();
+    let src = format!("#version 300 es\nstruct S {{\n{members}}};\nvoid main() {{ gl_Position = vec4(1.0); }}");
+    let log = timed(src, 5.0);
+    assert!(log.contains("is too large"), "{log}");
+}
+
+#[test]
+fn default_precisions_are_found_by_lookup() {
+    // Every declaration looks up its type's default precision, which was
+    // searched for among all the precision statements before it (twenty
+    // billion steps for these).
+    let n = 150_000;
+    let mut src = String::from("#version 300 es\n");
+    src.push_str(&"precision highp float;\n".repeat(n));
+    src.push_str("void main() {\n");
+    src.push_str(&"{ int i; }\n".repeat(n));
+    src.push_str("gl_Position = vec4(0.0);\n}\n");
+    let log = timed(src, 5.0);
+    assert!(log.is_empty(), "{log}");
+}
+
+#[test]
+fn members_are_found_by_lookup() {
+    // A member is found by name in a map of the structure's members, not
+    // compared with each of them in turn (ten billion steps for these).
+    let n = 65_000;
+    let members: String = (0..n).map(|k| format!("float m{k};\n")).collect();
+    let reads = format!("x += s.m{};\n", n - 1).repeat(200_000);
+    let src = format!(
+        "#version 300 es\nstruct S {{\n{members}}};\nuniform S s;\nvoid main() {{ float x = 0.0;\n{reads}gl_Position = vec4(x); }}"
+    );
+    let log = timed(src, 5.0);
+    assert!(log.is_empty(), "{log}");
 }

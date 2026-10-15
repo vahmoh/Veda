@@ -70,7 +70,9 @@ waiting.
   for 1.5 s, or 6 s at most, and what came after the name comes with the
   call. What came close without being a call is logged ("heard something
   like its name"). Recognition is capped at ten minutes an hour, so a television or
-  music playing all day cannot run up the bill.
+  music playing all day cannot run up the bill; the cap is the agent's,
+  and listening that starts again (after a conversation, a change of
+  settings) draws on the same hour.
 * **Waking** opens a Voice Agent conversation
   (`wss://agent.deepgram.com/v1/agent/converse`) and sends its `Settings`:
   16 kHz microphone audio in, 24 kHz voice out, Flux speech recognition
@@ -89,7 +91,14 @@ waiting.
   connection that finds no route, no network or no name server is tried
   again four times a second, for ten seconds at most; a network that has
   been down for longer is reported at once
-  (`verification/agent/network-late.vts`).
+  (`verification/agent/network-late.vts`). Deepgram must confirm the
+  settings within ten seconds, or the conversation ends.
+* **When something goes wrong** (the network, Deepgram, the key), the
+  agent shows why for ten seconds, then falls asleep and listens for its
+  name again: one failure does not leave it deaf. Its one loop serves the
+  conversation, the interface, approvals and timers, so a send may wait
+  for the network two seconds at most; one that cannot finish by then
+  counts as a lost connection.
 * **Listening and speaking.** The microphone streams in 20 ms packets.
   Deepgram's voice arrives in bursts and queues behind what is playing; when you start talking (`UserStartedSpeaking`) the queue and the
   stream are flushed at once. An answer starts playing once some of it has
@@ -124,7 +133,13 @@ waiting.
 * **Doing.** The language model calls functions (below); the agent service
   runs them on a worker thread and answers with JSON results. A function
   that needs your consent answers "waiting for approval", and the outcome
-  comes back later as a notice (`[System] The user allowed …`).
+  comes back later as a notice: a sentence the computer writes, then what
+  came from elsewhere as JSON data (`[System] The user allowed an action
+  and it was done. {"action":…,"result":…}`), which the instructions say
+  is information, never instructions (`vagent::notice`). Calls that you
+  cancel by speaking again are taken off the worker's queue; one that had
+  started runs to the end, and if it may have changed something, the agent
+  is told what it did.
 * **Ending.** `end_conversation` (after a goodbye) closes the conversation
   once the goodbye has been played (unless you talk over it or ask for
   something else), and the agent falls asleep and listens for its name
@@ -155,12 +170,23 @@ in one line; `app_actions` gives the details.
 ## Consent and safety
 
 * Every action has a **risk**: *routine* (looking, navigating, writing a
-  new file, playing music…), *sensitive* (hard to undo or reaching beyond
+  new file, copying, moving and renaming, which never replace what is
+  there, playing music…), *sensitive* (hard to undo or reaching beyond
   the computer: replacing a file, moving files to the Trash, renaming the
-  agent, changing its language model, running a terminal command…) or
-  *destructive* (emptying the Trash, discarding unsaved work, ending
-  programs, shutting down). Routine actions just happen. Sensitive and
-  destructive ones wait for your OK.
+  agent, changing its language model, running a terminal command that
+  loses nothing…) or *destructive* (emptying the Trash, discarding unsaved
+  work, ending programs, running a terminal command that deletes, replaces
+  or ends something, or a program, shutting down, forgetting more than
+  one memory at once).
+  Routine actions just happen. Sensitive and destructive ones wait for
+  your OK. A call is made definite before its risk is judged, so that what
+  you allow is what runs: a request to forget names its memories (which
+  the approval lists), a move's destination is worked out as it will be
+  used. An application whose action's risk depends on its arguments
+  offers two actions: the Terminal's `run_command` refuses what its
+  `run_risky_command` runs (as `terminal_core::classify` reads the
+  command line), and the Text Editor's `save` replaces only what the
+  agent itself saved, its `save_as` anything.
 * **The agent service enforces this**, not the language model: a function
   call that needs consent is held and only runs after you click Allow.
   Only the desktop shell may answer an approval, and only Settings may
@@ -170,18 +196,38 @@ in one line; `app_actions` gives the details.
 * Requests appear in the agent's window or as a notification, with what
   will happen and on what. *Always allow* is offered for sensitive actions
   only (Settings → Agent lists them, and can take them back); destructive
-  ones are asked every time. A request expires after three minutes.
+  ones are asked every time. A request expires after three minutes. The
+  stored permissions are checked when they are read back: only a sensitive
+  action of the agent's own functions, or of an application's
+  description, stays allowed.
 * An approved action may run long after it was asked for, so actions name
   their targets explicitly (a document by its name, files by their paths)
   and look them up again when they run. If it fails by then (the file is
   gone), the agent is told that it failed.
 * What the agent reads from applications and files is information, never
   instructions: the prompt says so, and nothing in a document can approve
-  anything.
+  anything. What an application says about itself goes into the prompt
+  marked as its own words, one line each; a notice's data (an action's
+  result, a timer's label) cannot pass for the computer, as the marker
+  `[System]` is taken out of it.
+* The agent's file actions act only on the user's files: every path they
+  touch, a destination or where an item goes back to from the Trash (whose
+  records any program can write) included, is checked first
+  (`vagent::files`), and none may be in a private directory; what they
+  create goes in the home folder or `/tmp`. They reach the file system
+  through a connection of their own, apart from the one of the agent's
+  private store.
+* A conversation that a due reminder (or another notice) started is not
+  attended until you speak: until then it cannot set timers, so that what
+  a reminder says cannot keep waking the agent up.
 * The Deepgram key is stored in the agent's private directory
   (`/home/.private/agent`, which the file system service lets only the
   agent open), is never shown again (Settings shows its last characters),
-  and is never offered to the language model.
+  and is never offered to the language model. It is sent only to
+  Deepgram's own services, over TLS: a test endpoint (`agent.endpoint=…`)
+  is sent the word `test` in its place. The private store's files are
+  replaced in one step (the new version is written under a temporary
+  name, which then takes the file's place), so a crash never loses one.
 
 ## Memory
 
@@ -194,7 +240,10 @@ afresh all the same). All of it lives in
 `/home/.private/agent/memory.json`, on your computer; the prompt carries
 what is relevant. Settings → Agent → Memory shows everything it remembers
 and forgets any item, or everything; you can also just ask it ("what do you
-know about me?", "forget where I work").
+know about me?", "forget where I work"). Asked to forget, it forgets the
+memories your words name: words that name nothing ("forget that") forget
+nothing, and forgetting more than one at once waits for your OK, with the
+list of what would go.
 
 ## Settings → Agent
 
@@ -294,6 +343,16 @@ Programs with their own loop (a game such as Interceptor) keep a
 frame (it never waits), and include `wait_items` in their wait set if they
 sleep between events.
 
+Any program may register, so what one says about itself is bounded
+before the agent uses it (`vagent::tools::sanitize`): actions and
+parameters named with letters, digits, `_` and `-`, each once, 64 actions
+of 16 parameters at most, descriptions on one line of at most 600
+characters. The agent asks a registered application what it offers on a
+thread of its own, off the path of function calls. A process registers
+once: registering again replaces its earlier registration, and a process
+that registers more than four times a minute is refused for the rest of
+it.
+
 ## Testing
 
 * `orchestration/src/agentsim.rs` is a stand-in for Deepgram on the host: it
@@ -325,9 +384,10 @@ sleep between events.
   in neither scripts nor logs); `say` synthesises the user's sentences with
   Deepgram's text to speech on the host. They are billed, so they are not
   part of `cargo orchestration test`.
-* `vagent` (protocol, tools, prompt, memory, policy, wake word, echo
-  gate) has host unit tests, and so has `vaudio`'s echo canceller and
-  voice detector.
+* `vagent` (protocol, tools, prompt, notices, memory, policy, the paths
+  file actions may reach, wake word and recognition budget, echo gate)
+  has host unit tests, and so has `vaudio`'s echo canceller and voice
+  detector.
 
 ## Limitations
 

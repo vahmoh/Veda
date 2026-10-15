@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The runtime on AMD64: how Veda's system calls are made, where programs
-//! and threads start, the C runtime symbols of the user target
+//! and threads start and how a thread frees its own stack as it ends, the
+//! C runtime symbols of the user target
 //! (`x86_64-unknown-linux-musl`), and what programs learn of the processor.
 //! In the driver VM's Linux guest, Linux's system calls (`linux`).
 
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", not(test)))]
 mod crt;
 #[cfg(veda_guest)]
 pub(crate) mod linux;
@@ -47,7 +48,7 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
 
 /// The process entry point (`--entry=_vrt_start`, see `vbuild`). The
 /// kernel passes the bootstrap channel handle in `rdi`.
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", not(test)))]
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn _vrt_start(bootstrap: vabi::RawHandle, _arg: usize) -> ! {
     crate::start::start(bootstrap)
@@ -58,6 +59,34 @@ pub extern "sysv64" fn _vrt_start(bootstrap: vabi::RawHandle, _arg: usize) -> ! 
 #[cfg(not(veda_guest))]
 pub(crate) extern "sysv64" fn thread_entry(arg: usize, _unused: usize) -> ! {
     crate::thread::run(arg)
+}
+
+/// Unmaps `[base, base + len)` of the calling process, the calling thread's
+/// stack, and ends the thread, touching no memory in between: both system
+/// calls are in one block of code that uses no stack. If the unmap fails,
+/// the thread ends all the same.
+///
+/// # Safety
+/// Nothing may use the range afterwards: it is gone once the thread ends.
+#[cfg(not(veda_guest))]
+pub(crate) unsafe fn exit_unmapping(base: usize, len: usize) -> ! {
+    // SAFETY: `vm_unmap(self, base, len)`, then `thread_exit()`; the kernel
+    // preserves the argument registers, and nothing between the two
+    // `syscall`s reads or writes memory.
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            "mov eax, {exit}",
+            "syscall",
+            "ud2",
+            exit = const vabi::nr::THREAD_EXIT,
+            in("rax") vabi::nr::VM_UNMAP,
+            in("rdi") vabi::INVALID_HANDLE as usize,
+            in("rsi") base,
+            in("rdx") len,
+            options(noreturn, nostack),
+        )
+    }
 }
 
 /// The processor's features as Linux's `AT_HWCAP` reports them on x86-64

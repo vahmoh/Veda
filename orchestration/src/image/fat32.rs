@@ -1,15 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A minimal FAT32 formatter that writes a populated volume into memory,
-//! and a reader of files on such a volume (what a test's guest wrote).
+//! A minimal FAT32 formatter, which lays a volume out as its pieces (the
+//! files' data borrowed, not copied), and a reader of files on such a
+//! volume (what a test's guest wrote), a piece at a time.
 //!
 //! Only what the EFI system partition needs is implemented: short (8.3)
 //! upper-case names, nested directories (empty ones too) and regular
 //! files. The result is a spec-conformant volume that OVMF (and Windows,
 //! Linux, ...) can mount.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+
+use super::pieces::{Pieces, ReadAt};
 
 pub const SECTOR: usize = 512;
 const RESERVED_SECTORS: u32 = 32;
@@ -22,15 +26,15 @@ const ATTR_ARCHIVE: u8 = 0x20;
 const ATTR_VOLUME_ID: u8 = 0x08;
 
 #[derive(Default)]
-struct Dir {
-    dirs: BTreeMap<String, Dir>,
-    files: BTreeMap<String, Vec<u8>>,
+struct Dir<'a> {
+    dirs: BTreeMap<String, Dir<'a>>,
+    files: BTreeMap<String, &'a [u8]>,
 }
 
-/// An in-memory directory tree that is serialised by [`Fat32Builder::build`].
+/// An in-memory directory tree that is laid out by [`Fat32Builder::build`].
 #[derive(Default)]
-pub struct Fat32Builder {
-    root: Dir,
+pub struct Fat32Builder<'a> {
+    root: Dir<'a>,
     label: String,
 }
 
@@ -38,7 +42,8 @@ pub struct Fat32Builder {
 const FAT_DATE: u16 = ((2026 - 1980) << 9) | (1 << 5) | 1;
 const FAT_TIME: u16 = 12 << 11;
 
-fn short_name(component: &str) -> Result<[u8; 11], String> {
+/// A component of a path as a directory entry has it (8.3, upper case).
+pub fn short_name(component: &str) -> Result<[u8; 11], String> {
     let upper = component.to_ascii_uppercase();
     let (base, ext) = match upper.rsplit_once('.') {
         Some((b, e)) => (b, e),
@@ -54,14 +59,14 @@ fn short_name(component: &str) -> Result<[u8; 11], String> {
     Ok(name)
 }
 
-impl Fat32Builder {
+impl<'a> Fat32Builder<'a> {
     pub fn new(label: &str) -> Self {
         Self { root: Dir::default(), label: label.to_ascii_uppercase() }
     }
 
     /// Adds a file at `path` (components separated by `/`), creating parent
     /// directories as needed.
-    pub fn add_file(&mut self, path: &str, data: Vec<u8>) -> Result<(), String> {
+    pub fn add_file(&mut self, path: &str, data: &'a [u8]) -> Result<(), String> {
         let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         let file = parts.pop().ok_or("empty path")?;
         let dir = self.dir(&parts)?;
@@ -78,7 +83,7 @@ impl Fat32Builder {
     }
 
     /// The directory at `parts`, made where it is not.
-    fn dir(&mut self, parts: &[&str]) -> Result<&mut Dir, String> {
+    fn dir(&mut self, parts: &[&str]) -> Result<&mut Dir<'a>, String> {
         let mut dir = &mut self.root;
         for p in parts {
             short_name(p)?;
@@ -87,12 +92,12 @@ impl Fat32Builder {
         Ok(dir)
     }
 
-    /// Serialises the volume into exactly `total_sectors` sectors.
+    /// Lays the volume out in exactly `total_sectors` sectors.
     /// `hidden_sectors` is the partition's starting LBA.
-    pub fn build(&self, total_sectors: u32, hidden_sectors: u32) -> Result<Vec<u8>, String> {
+    pub fn build(&self, total_sectors: u32, hidden_sectors: u32) -> Result<Pieces<'a>, String> {
         let geometry = Geometry::choose(total_sectors)?;
         let mut vol = Volume {
-            image: vec![0u8; total_sectors as usize * SECTOR],
+            pieces: Pieces::new(total_sectors as u64 * SECTOR as u64),
             fat: vec![0u32; geometry.cluster_count as usize + 2],
             next_free: 2,
             g: geometry,
@@ -108,7 +113,7 @@ impl Fat32Builder {
         let free = vol.g.cluster_count - used;
         vol.write_boot_sectors(hidden_sectors, free, &self.label);
         vol.write_fats();
-        Ok(vol.image)
+        Ok(vol.pieces)
     }
 }
 
@@ -124,17 +129,18 @@ impl Geometry {
     /// Picks the largest cluster size (up to 4 KiB) that still yields a valid
     /// FAT32 cluster count, following the computation in Microsoft's FAT spec.
     fn choose(total_sectors: u32) -> Result<Self, String> {
+        let too_small = || format!("volume of {total_sectors} sectors is too small for FAT32");
+        let tmp1 = total_sectors.checked_sub(RESERVED_SECTORS).ok_or_else(too_small)?;
         for spc in [8u32, 4, 2, 1] {
-            let tmp1 = total_sectors - RESERVED_SECTORS;
             let tmp2 = (256 * spc + NUM_FATS) / 2;
             let fat_sectors = tmp1.div_ceil(tmp2);
-            let data_sectors = total_sectors - RESERVED_SECTORS - NUM_FATS * fat_sectors;
+            let Some(data_sectors) = tmp1.checked_sub(NUM_FATS * fat_sectors) else { continue };
             let cluster_count = data_sectors / spc;
             if cluster_count >= MIN_FAT32_CLUSTERS + 16 {
                 return Ok(Geometry { total_sectors, sectors_per_cluster: spc, fat_sectors, cluster_count });
             }
         }
-        Err(format!("volume of {total_sectors} sectors is too small for FAT32"))
+        Err(too_small())
     }
 
     fn cluster_bytes(&self) -> usize {
@@ -146,14 +152,14 @@ impl Geometry {
     }
 }
 
-struct Volume {
-    image: Vec<u8>,
+struct Volume<'a> {
+    pieces: Pieces<'a>,
     fat: Vec<u32>,
     next_free: u32,
     g: Geometry,
 }
 
-impl Volume {
+impl<'a> Volume<'a> {
     /// Allocates a contiguous cluster chain big enough for `bytes` (at least
     /// one cluster) and returns its first cluster.
     fn alloc_chain(&mut self, bytes: usize) -> Result<u32, String> {
@@ -169,18 +175,13 @@ impl Volume {
         Ok(first)
     }
 
-    fn cluster_offset(&self, cluster: u32) -> usize {
-        let sector = self.g.data_start_sector() + (cluster - 2) * self.g.sectors_per_cluster;
-        sector as usize * SECTOR
-    }
-
-    fn write_at_cluster(&mut self, cluster: u32, data: &[u8]) {
-        let off = self.cluster_offset(cluster);
-        self.image[off..off + data.len()].copy_from_slice(data);
+    fn cluster_offset(&self, cluster: u32) -> u64 {
+        let sector = self.g.data_start_sector() as u64 + (cluster as u64 - 2) * self.g.sectors_per_cluster as u64;
+        sector * SECTOR as u64
     }
 
     /// Writes `dir` (recursively) and returns its first cluster.
-    fn write_dir(&mut self, dir: &Dir, parent: Option<u32>, label: Option<&str>) -> Result<u32, String> {
+    fn write_dir(&mut self, dir: &Dir<'a>, parent: Option<u32>, label: Option<&str>) -> Result<u32, String> {
         let is_root = parent.is_none();
         let entries = dir.dirs.len() + dir.files.len() + if is_root { 1 } else { 2 };
         let first = self.alloc_chain(entries * 32)?;
@@ -206,11 +207,13 @@ impl Volume {
         for (name, data) in &dir.files {
             let cluster = if data.is_empty() { 0 } else { self.alloc_chain(data.len())? };
             if cluster != 0 {
-                self.write_at_cluster(cluster, data);
+                let at = self.cluster_offset(cluster);
+                self.pieces.put(at, Cow::Borrowed(*data));
             }
             push_entry(&mut buf, &short_name(name)?, ATTR_ARCHIVE, cluster, data.len() as u32);
         }
-        self.write_at_cluster(first, &buf);
+        let at = self.cluster_offset(first);
+        self.pieces.put(at, buf);
         Ok(first)
     }
 
@@ -251,82 +254,145 @@ impl Volume {
         fsinfo[492..496].copy_from_slice(&self.next_free.to_le_bytes());
         fsinfo[508..512].copy_from_slice(&0xAA55_0000u32.to_le_bytes());
 
-        for (sector, data) in [(0usize, &bs), (1, &fsinfo), (6, &bs), (7, &fsinfo)] {
-            self.image[sector * SECTOR..(sector + 1) * SECTOR].copy_from_slice(data);
+        for (sector, data) in [(0u64, &bs), (1, &fsinfo), (6, &bs), (7, &fsinfo)] {
+            self.pieces.put(sector * SECTOR as u64, data.to_vec());
         }
     }
 
+    /// The two FATs, as far as clusters are used (free ones are zeros).
     fn write_fats(&mut self) {
-        let fat_bytes = self.g.fat_sectors as usize * SECTOR;
-        let mut fat = vec![0u8; fat_bytes];
-        for (i, e) in self.fat.iter().enumerate() {
-            fat[i * 4..i * 4 + 4].copy_from_slice(&e.to_le_bytes());
-        }
-        for n in 0..NUM_FATS as usize {
-            let off = (RESERVED_SECTORS as usize) * SECTOR + n * fat_bytes;
-            self.image[off..off + fat_bytes].copy_from_slice(&fat);
+        let used = self.next_free as usize;
+        let fat: Vec<u8> = self.fat[..used].iter().flat_map(|e| e.to_le_bytes()).collect();
+        let fat_bytes = self.g.fat_sectors as u64 * SECTOR as u64;
+        for n in 0..NUM_FATS as u64 {
+            self.pieces.put(RESERVED_SECTORS as u64 * SECTOR as u64 + n * fat_bytes, fat.clone());
         }
     }
 }
 
-/// The file at `path` (8.3 names, any case) on FAT32 `volume`, as the
-/// volume has it: written by [`Fat32Builder`] or by anyone.
-pub fn read_file(volume: &[u8], path: &str) -> Result<Vec<u8>, String> {
-    let u16_at = |at: usize| volume.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
-    let u32_at = |at: usize| volume.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
-    let not_fat32 = || String::from("not a FAT32 file system");
-    if volume.get(82..90) != Some(b"FAT32   ") {
-        return Err(not_fat32());
+/// Where a file is on a FAT32 volume: its directory entry and its data.
+pub struct Located {
+    /// The directory entry (its 32 bytes), from the volume's start.
+    pub entry: u64,
+    /// The file's clusters, in order: where each one starts.
+    pub clusters: Vec<u64>,
+    /// Bytes in a cluster.
+    pub cluster_bytes: usize,
+    /// The file's size, as its entry gives it.
+    pub size: usize,
+}
+
+/// The FAT32 volume of `volume`'s bytes, read a piece at a time.
+struct Reader<'r, R: ReadAt + ?Sized> {
+    volume: &'r R,
+    cluster_bytes: usize,
+    fat_at: u64,
+    data_at: u64,
+    root: u32,
+}
+
+impl<'r, R: ReadAt + ?Sized> Reader<'r, R> {
+    fn new(volume: &'r R) -> Result<Self, String> {
+        let not_fat32 = || String::from("not a FAT32 file system");
+        let boot = volume.bytes(0, SECTOR).map_err(|_| not_fat32())?;
+        if boot[82..90] != *b"FAT32   " {
+            return Err(not_fat32());
+        }
+        let u16_at = |at: usize| u16::from_le_bytes([boot[at], boot[at + 1]]) as u64;
+        let u32_at = |at: usize| u32::from_le_bytes([boot[at], boot[at + 1], boot[at + 2], boot[at + 3]]);
+        let sector = u16_at(11);
+        let cluster_bytes = (sector * boot[13] as u64) as usize;
+        if sector == 0 || cluster_bytes == 0 {
+            return Err(not_fat32());
+        }
+        let fat_at = sector * u16_at(14);
+        let data_at = fat_at + boot[16] as u64 * sector * u32_at(36) as u64;
+        Ok(Reader { volume, cluster_bytes, fat_at, data_at, root: u32_at(44) })
     }
-    let sector = u16_at(11).ok_or_else(not_fat32)?;
-    let cluster_bytes = sector * *volume.get(13).ok_or_else(not_fat32)? as usize;
-    let fat_at = sector * u16_at(14).ok_or_else(not_fat32)?;
-    let fats = *volume.get(16).ok_or_else(not_fat32)? as usize;
-    let data_at = fat_at + fats * sector * u32_at(36).ok_or_else(not_fat32)?;
-    // A chain's clusters, in order; at most as many as the volume has.
-    let chain = |first: usize| -> Result<Vec<u8>, String> {
-        let mut bytes = Vec::new();
+
+    /// Where the clusters of the chain from `first` start, in order.
+    fn chain(&self, first: u32) -> Result<Vec<u64>, String> {
+        let length = self.volume.length()?;
+        let mut clusters = Vec::new();
         let mut cluster = first;
         while (2..0x0FFF_FFF8).contains(&cluster) {
-            let at = data_at + (cluster - 2) * cluster_bytes;
-            bytes.extend_from_slice(volume.get(at..at + cluster_bytes).ok_or("a cluster beyond the volume")?);
-            if bytes.len() > volume.len() {
-                return Err(String::from("a cluster chain that loops"));
+            let at = self.data_at + (cluster as u64 - 2) * self.cluster_bytes as u64;
+            if at + self.cluster_bytes as u64 > length {
+                return Err("a cluster beyond the volume".into());
             }
-            cluster = u32_at(fat_at + cluster * 4).ok_or("a cluster beyond the FAT")? & 0x0FFF_FFFF;
+            clusters.push(at);
+            if clusters.len() as u64 * self.cluster_bytes as u64 > length {
+                return Err("a cluster chain that loops".into());
+            }
+            let next =
+                self.volume.bytes(self.fat_at + cluster as u64 * 4, 4).map_err(|_| "a cluster beyond the FAT")?;
+            cluster = u32::from_le_bytes([next[0], next[1], next[2], next[3]]) & 0x0FFF_FFFF;
+        }
+        Ok(clusters)
+    }
+
+    /// The bytes of the clusters at `clusters`.
+    fn read(&self, clusters: &[u64]) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::with_capacity(clusters.len() * self.cluster_bytes);
+        for &at in clusters {
+            bytes.extend(self.volume.bytes(at, self.cluster_bytes)?);
         }
         Ok(bytes)
-    };
-    let mut entries = chain(u32_at(44).ok_or_else(not_fat32)?)?;
-    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    for (i, part) in parts.iter().enumerate() {
-        let name = short_name(part)?;
-        let entry = entries
-            .as_chunks::<32>()
-            .0
-            .iter()
-            .take_while(|e| e[0] != 0)
-            .find(|e| e[0] != 0xE5 && e[11] != 0x0F && e[11] & ATTR_VOLUME_ID == 0 && e[..11] == name)
-            .ok_or_else(|| format!("{path}: no {part}"))?;
-        let first = (u16::from_le_bytes([entry[20], entry[21]]) as usize) << 16
-            | u16::from_le_bytes([entry[26], entry[27]]) as usize;
-        let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as usize;
-        let last = i + 1 == parts.len();
-        match (entry[11] & ATTR_DIRECTORY != 0, last) {
-            (false, true) => {
-                let mut data = if first == 0 { Vec::new() } else { chain(first)? };
-                if data.len() < size {
-                    return Err(format!("{path}: shorter than its size"));
-                }
-                data.truncate(size);
-                return Ok(data);
-            }
-            (true, false) => entries = chain(first)?,
-            (true, true) => return Err(format!("{path}: a directory")),
-            (false, false) => return Err(format!("{path}: {part} is a file")),
-        }
     }
-    Err(format!("{path}: no file named"))
+
+    /// Finds the file at `path`.
+    fn locate(&self, path: &str) -> Result<Located, String> {
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        let mut dir = self.chain(self.root)?;
+        for (i, part) in parts.iter().enumerate() {
+            let name = short_name(part)?;
+            let entries = self.read(&dir)?;
+            let index = entries
+                .as_chunks::<32>()
+                .0
+                .iter()
+                .take_while(|e| e[0] != 0)
+                .position(|e| e[0] != 0xE5 && e[11] != 0x0F && e[11] & ATTR_VOLUME_ID == 0 && e[..11] == name)
+                .ok_or_else(|| format!("{path}: no {part}"))?;
+            let entry = &entries[index * 32..index * 32 + 32];
+            let first = (u16::from_le_bytes([entry[20], entry[21]]) as u32) << 16
+                | u16::from_le_bytes([entry[26], entry[27]]) as u32;
+            let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as usize;
+            let last = i + 1 == parts.len();
+            match (entry[11] & ATTR_DIRECTORY != 0, last) {
+                (false, true) => {
+                    let clusters = if first == 0 { Vec::new() } else { self.chain(first)? };
+                    if clusters.len() * self.cluster_bytes < size {
+                        return Err(format!("{path}: shorter than its size"));
+                    }
+                    // The entry's place: its cluster of the directory, and
+                    // where in it.
+                    let per_cluster = self.cluster_bytes / 32;
+                    let entry = dir[index / per_cluster] + (index % per_cluster * 32) as u64;
+                    return Ok(Located { entry, clusters, cluster_bytes: self.cluster_bytes, size });
+                }
+                (true, false) => dir = self.chain(first)?,
+                (true, true) => return Err(format!("{path}: a directory")),
+                (false, false) => return Err(format!("{path}: {part} is a file")),
+            }
+        }
+        Err(format!("{path}: no file named"))
+    }
+}
+
+/// Where the file at `path` (8.3 names, any case) is on the FAT32 volume
+/// `volume`, as the volume has it: written by [`Fat32Builder`] or by anyone.
+pub fn locate(volume: &(impl ReadAt + ?Sized), path: &str) -> Result<Located, String> {
+    Reader::new(volume)?.locate(path)
+}
+
+/// The file at `path` on the FAT32 volume `volume`.
+pub fn read_file(volume: &(impl ReadAt + ?Sized), path: &str) -> Result<Vec<u8>, String> {
+    let reader = Reader::new(volume)?;
+    let located = reader.locate(path)?;
+    let mut data = reader.read(&located.clusters)?;
+    data.truncate(located.size);
+    Ok(data)
 }
 
 fn push_entry(buf: &mut Vec<u8>, name: &[u8; 11], attr: u8, cluster: u32, size: u32) {
@@ -360,34 +426,48 @@ mod tests {
     fn reads_back_what_it_wrote() {
         let mut b = Fat32Builder::new("VEDA");
         let big: Vec<u8> = (0..20_000u32).map(|i| i as u8).collect();
-        b.add_file("VEDA/BOOT.CFG", b"run=editor".to_vec()).unwrap();
-        b.add_file("VEDA/BIG.BIN", big.clone()).unwrap();
-        b.add_file("VEDA/EMPTY.TXT", Vec::new()).unwrap();
+        b.add_file("VEDA/BOOT.CFG", b"run=editor").unwrap();
+        b.add_file("VEDA/BIG.BIN", &big).unwrap();
+        b.add_file("VEDA/EMPTY.TXT", b"").unwrap();
         b.add_dir("VEDA/LOGS").unwrap();
-        let img = b.build(64 * 1024 * 1024 / SECTOR as u32, 0).unwrap();
+        let img = b.build(64 * 1024 * 1024 / SECTOR as u32, 0).unwrap().to_vec();
         assert_eq!(read_file(&img, "veda/boot.cfg").unwrap(), b"run=editor");
         assert_eq!(read_file(&img, "VEDA/BIG.BIN").unwrap(), big);
         assert_eq!(read_file(&img, "VEDA/EMPTY.TXT").unwrap(), b"");
         assert!(read_file(&img, "VEDA/LOGS").unwrap_err().contains("a directory"));
         assert!(read_file(&img, "VEDA/LOGS/0001/VEDA.TXT").unwrap_err().contains("no 0001"));
         assert!(read_file(&img, "VEDA/NONE.TXT").is_err());
-        assert!(read_file(&[0; 4096], "VEDA/BOOT.CFG").is_err());
+        assert!(read_file(&vec![0u8; 4096], "VEDA/BOOT.CFG").is_err());
+        // Where the file is: its entry holds its size, its cluster its data.
+        let located = locate(&img, "VEDA/BOOT.CFG").unwrap();
+        let entry = located.entry as usize;
+        assert_eq!(&img[entry..entry + 11], b"BOOT    CFG");
+        assert_eq!(u32::from_le_bytes(img[entry + 28..entry + 32].try_into().unwrap()), 10);
+        let at = located.clusters[0] as usize;
+        assert_eq!(&img[at..at + 10], b"run=editor");
     }
 
     #[test]
     fn builds_volume_with_files() {
         let mut b = Fat32Builder::new("VEDA");
-        b.add_file("EFI/BOOT/LOADER.EFI", vec![0xAB; 10_000]).unwrap();
-        b.add_file("VEDA/BOOT.CFG", b"hello".to_vec()).unwrap();
+        let loader = vec![0xAB; 10_000];
+        b.add_file("EFI/BOOT/LOADER.EFI", &loader).unwrap();
+        b.add_file("VEDA/BOOT.CFG", b"hello").unwrap();
         let sectors = 128 * 1024 * 1024 / SECTOR as u32;
-        let img = b.build(sectors, 2048).unwrap();
+        let img = b.build(sectors, 2048).unwrap().to_vec();
         assert_eq!(img.len(), sectors as usize * SECTOR);
         assert_eq!(&img[510..512], &[0x55, 0xAA]);
         assert_eq!(&img[82..90], b"FAT32   ");
         let g = Geometry::choose(sectors).unwrap();
         assert!(g.cluster_count >= MIN_FAT32_CLUSTERS);
-        // The first FAT entry carries the media descriptor.
+        // The first FAT entry carries the media descriptor, in both FATs.
         let fat0 = RESERVED_SECTORS as usize * SECTOR;
         assert_eq!(&img[fat0..fat0 + 4], &0x0FFF_FFF8u32.to_le_bytes());
+        let fat1 = fat0 + g.fat_sectors as usize * SECTOR;
+        assert_eq!(&img[fat1..fat1 + 4], &0x0FFF_FFF8u32.to_le_bytes());
+        assert_eq!(read_file(&img, "EFI/BOOT/LOADER.EFI").unwrap(), loader);
+        // Too small a volume is refused, not a panic.
+        assert!(Geometry::choose(16).is_err());
+        assert!(Fat32Builder::new("VEDA").build(1000, 0).is_err());
     }
 }

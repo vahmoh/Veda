@@ -30,7 +30,10 @@
 //! The consumer also publishes `played_pos` (frames that have actually
 //! been played) with the moment it got there, which lets a player show an
 //! accurate position and drive a visualiser from the samples that are
-//! audible right now ([`OutputStream::played_now`]).
+//! audible right now ([`OutputStream::played_now`]). Such a pair (and the
+//! capture clock's, below) is published under a sequence count, odd while
+//! it is being written, so that a reader never takes the position of one
+//! moment with the time of another (a seqlock: [`Ring::played`]).
 //!
 //! # Flow control
 //!
@@ -73,7 +76,9 @@ enumeration! {
         TooManyStreams = 4,
         /// A device is already attached.
         Busy = 5,
-        /// Only devmgr may say what is coming.
+        /// The caller may not do that: only devmgr's drivers attach devices
+        /// and say what is coming, and only the voice agent ducks the
+        /// other sound.
         Denied = 6,
     }
 }
@@ -86,7 +91,7 @@ impl core::fmt::Display for AudioError {
             AudioError::NoMemory => "out of memory",
             AudioError::TooManyStreams => "too many streams",
             AudioError::Busy => "device already attached",
-            AudioError::Denied => "only devmgr may say that",
+            AudioError::Denied => "not allowed",
         })
     }
 }
@@ -141,24 +146,6 @@ message! {
         pub event: Event,
         /// Rate of the output device (the service resamples to it).
         pub device_rate: u32,
-    }
-}
-
-message! {
-    /// Progress of one stream, in frames since it was opened.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub struct StreamStatus {
-        /// Frames the client has written.
-        pub written: u64,
-        /// Frames the mixer has taken.
-        pub consumed: u64,
-        /// Frames that have been played (estimate).
-        pub played: u64,
-        /// Time between mixing and playback.
-        pub latency_ns: u64,
-        /// Times the stream ran dry while playing.
-        pub underruns: u32,
-        pub paused: bool,
     }
 }
 
@@ -246,10 +233,6 @@ message! {
         pub input_device: String,
         pub input_rate: u32,
         pub input_channels: u32,
-        /// The microphone is muted for everyone ([`audio::Client::set_input_muted`]).
-        pub input_muted: bool,
-        /// Open capture streams (someone is listening).
-        pub input_streams: u32,
     }
 }
 
@@ -268,20 +251,17 @@ protocol! {
         /// Discards everything queued in the stream (e.g. before a seek).
         /// Returns the new consumed/played position (= frames written).
         5 => fn flush(stream: u32) -> Result<u64, AudioError>;
-        6 => fn stream_status(stream: u32) -> Result<StreamStatus, AudioError>;
         7 => fn status() -> AudioStatus;
         /// Sets the master volume (linear 0..=1) and mute state.
         8 => fn set_master(volume: f32, muted: bool) -> ();
         /// Opens a capture stream from the microphone (closed with `close`
         /// or when the connection closes).
         9 => fn open_input(spec: InputSpec) -> Result<InputHandle, AudioError>;
-        /// Mutes or unmutes the microphone for every capture stream (they
-        /// then receive silence).
-        10 => fn set_input_muted(muted: bool) -> ();
-        /// While on, every other client's streams play quieter (a voice
-        /// assistant in a conversation: music under it, so that it hears
-        /// the user); off again when the connection closes.
-        11 => fn set_ducking(on: bool) -> ();
+        /// While on, every other client's streams play quieter (the voice
+        /// agent in a conversation: music under it, so that it hears the
+        /// user); off again when the connection closes. Only the voice
+        /// agent may (`Denied`).
+        11 => fn set_ducking(on: bool) -> Result<(), AudioError>;
     }
 }
 
@@ -329,7 +309,10 @@ message! {
 }
 
 protocol! {
-    /// Sound drivers attach their output devices to the audio service.
+    /// Sound drivers attach their devices to the audio service. Only the
+    /// drivers devmgr starts may (any other program's connection is
+    /// closed); the test microphone (`testmic`) may attach an input device,
+    /// which a driver's then replaces.
     pub mod audiodev = "audiodev" {
         1 => fn attach(format: DeviceFormat) -> Result<DeviceLink, AudioError>;
         /// Attaches an input (capture) device. `format.max_periods` is
@@ -365,9 +348,11 @@ pub mod ring {
     /// full (u32).
     pub const OFF_OVERRUNS: usize = 76;
     /// Producer of captured audio: the frame position (u64) and the
-    /// monotonic time in ns (u64) at which that frame was recorded.
+    /// monotonic time in ns (u64) at which that frame was recorded ...
     pub const OFF_CAPTURE_POS: usize = 80;
     pub const OFF_CAPTURE_NS: usize = 88;
+    /// ... and their sequence count (u32, odd while they are written).
+    pub const OFF_CAPTURE_SEQ: usize = 96;
     /// Consumer: frames consumed (u64).
     pub const OFF_READ_POS: usize = 128;
     /// Consumer: frames played (u64).
@@ -380,6 +365,9 @@ pub mod ring {
     pub const OFF_UNDERRUNS: usize = 156;
     /// Consumer: frames between `read_pos` and the output (u32).
     pub const OFF_LATENCY: usize = 160;
+    /// Consumer: the sequence count of `played_pos` and `played_ns` (u32,
+    /// odd while they are written).
+    pub const OFF_PLAYED_SEQ: usize = 164;
     /// Where the samples start.
     pub const DATA_OFFSET: usize = 4096;
     pub const MIN_CAPACITY: u32 = 256;
@@ -415,6 +403,12 @@ pub enum Role {
     Consumer,
 }
 
+/// How often a reader tries to read a pair published under a sequence
+/// count before it settles for the last pair it read whole: a writer takes
+/// a few instructions, but may be interrupted half way, and a peer that
+/// never finishes must not hold the reader.
+const SEQ_ATTEMPTS: usize = 16;
+
 /// One side of a shared SPSC ring of interleaved `i16` frames.
 pub struct Ring {
     base: *mut u8,
@@ -425,6 +419,13 @@ pub struct Ring {
     /// Our own position (write for the producer, read for the consumer);
     /// the shared copy is only published, never trusted.
     local: core::cell::Cell<u64>,
+    /// Our own sequence counts of the pairs we publish (the consumer's
+    /// played position, the producer's capture clock).
+    played_seq: core::cell::Cell<u32>,
+    clock_seq: core::cell::Cell<u32>,
+    /// The last pairs read whole from the peer.
+    played_seen: core::cell::Cell<(u64, u64)>,
+    clock_seen: core::cell::Cell<(u64, u64)>,
     _map: Option<Mapping>,
 }
 
@@ -492,7 +493,24 @@ impl Ring {
             core::sync::atomic::fence(Ordering::Release);
             w(ring::OFF_MAGIC, ring::MAGIC);
         }
-        Ring { base, capacity, channels, rate, role, local: core::cell::Cell::new(0), _map: None }
+        Ring::new(base, capacity, channels, rate, role)
+    }
+
+    fn new(base: *mut u8, capacity: u32, channels: u32, rate: u32, role: Role) -> Ring {
+        use core::cell::Cell;
+        Ring {
+            base,
+            capacity,
+            channels,
+            rate,
+            role,
+            local: Cell::new(0),
+            played_seq: Cell::new(0),
+            clock_seq: Cell::new(0),
+            played_seen: Cell::new((0, 0)),
+            clock_seen: Cell::new((0, 0)),
+            _map: None,
+        }
     }
 
     /// Attaches to a ring header in raw memory created by the peer.
@@ -515,13 +533,17 @@ impl Ring {
         {
             return Err(RingError::BadHeader);
         }
-        let ring = Ring { base, capacity, channels, rate, role, local: core::cell::Cell::new(0), _map: None };
-        // Resume from the published position of our own side.
+        let ring = Ring::new(base, capacity, channels, rate, role);
+        // Resume from the published position and counts of our own side
+        // (counts even: nothing is being written).
         let start = match role {
             Role::Producer => ring.u64_at(ring::OFF_WRITE_POS).load(Ordering::Acquire),
             Role::Consumer => ring.u64_at(ring::OFF_READ_POS).load(Ordering::Acquire),
         };
         ring.local.set(start);
+        let even = |off: usize| ring.u32_at(off).load(Ordering::Acquire).wrapping_add(1) & !1;
+        ring.played_seq.set(even(ring::OFF_PLAYED_SEQ));
+        ring.clock_seq.set(even(ring::OFF_CAPTURE_SEQ));
         Ok(ring)
     }
 
@@ -651,19 +673,56 @@ impl Ring {
         self.local.get()
     }
 
+    /// Publishes the pair (`a` at `a_off`, `b` at `b_off`) under the
+    /// sequence count at `seq_off`, whose value this side keeps in `seq`:
+    /// odd while the pair is written, even again once it is whole.
+    fn publish_pair(&self, seq: &core::cell::Cell<u32>, seq_off: usize, pair: [(usize, u64); 2]) {
+        let count = self.u32_at(seq_off);
+        let s = seq.get().wrapping_add(1);
+        count.store(s, Ordering::Relaxed);
+        core::sync::atomic::fence(Ordering::Release);
+        for (off, v) in pair {
+            self.u64_at(off).store(v, Ordering::Relaxed);
+        }
+        let s = s.wrapping_add(1);
+        count.store(s, Ordering::Release);
+        seq.set(s);
+    }
+
+    /// Reads a pair the peer published with [`Ring::publish_pair`]: again
+    /// while it changes under the reader, a few times at most, and else
+    /// the last pair read whole (`seen`).
+    fn read_pair(&self, seen: &core::cell::Cell<(u64, u64)>, seq_off: usize, a_off: usize, b_off: usize) -> (u64, u64) {
+        let count = self.u32_at(seq_off);
+        for _ in 0..SEQ_ATTEMPTS {
+            let s1 = count.load(Ordering::Acquire);
+            let pair = (self.u64_at(a_off).load(Ordering::Relaxed), self.u64_at(b_off).load(Ordering::Relaxed));
+            core::sync::atomic::fence(Ordering::Acquire);
+            if s1 & 1 == 0 && count.load(Ordering::Relaxed) == s1 {
+                seen.set(pair);
+                return pair;
+            }
+            core::hint::spin_loop();
+        }
+        seen.get()
+    }
+
     /// Consumer: publishes how much has been played, and when it got
     /// there. That moment, not the time of publishing: whoever extrapolates
     /// the position must see time pass after the last frame, or the device
     /// running dry looks like the last frames playing on and on.
     pub fn set_played(&self, played: u64, at_ns: u64) {
-        self.u64_at(ring::OFF_PLAYED_POS).store(played, Ordering::Release);
-        self.u64_at(ring::OFF_PLAYED_NS).store(at_ns, Ordering::Release);
+        self.publish_pair(
+            &self.played_seq,
+            ring::OFF_PLAYED_SEQ,
+            [(ring::OFF_PLAYED_POS, played), (ring::OFF_PLAYED_NS, at_ns)],
+        );
     }
 
-    /// `(played frames, timestamp ns)` as published by the consumer.
+    /// `(played frames, timestamp ns)` as published by the consumer, the
+    /// two of one moment.
     pub fn played(&self) -> (u64, u64) {
-        let ns = self.u64_at(ring::OFF_PLAYED_NS).load(Ordering::Acquire);
-        (self.u64_at(ring::OFF_PLAYED_POS).load(Ordering::Acquire), ns)
+        self.read_pair(&self.played_seen, ring::OFF_PLAYED_SEQ, ring::OFF_PLAYED_POS, ring::OFF_PLAYED_NS)
     }
 
     pub fn consumer_flags(&self) -> u32 {
@@ -711,16 +770,34 @@ impl Ring {
     /// Producer of captured audio: publishes that frame `pos` (counted like
     /// the write position) was recorded at monotonic time `ns`.
     pub fn set_capture_clock(&self, pos: u64, ns: u64) {
-        self.u64_at(ring::OFF_CAPTURE_NS).store(ns, Ordering::Release);
-        self.u64_at(ring::OFF_CAPTURE_POS).store(pos, Ordering::Release);
+        self.publish_pair(
+            &self.clock_seq,
+            ring::OFF_CAPTURE_SEQ,
+            [(ring::OFF_CAPTURE_POS, pos), (ring::OFF_CAPTURE_NS, ns)],
+        );
     }
 
-    /// `(frame position, monotonic ns)` as published by the producer
-    /// (`(0, 0)` if it never did).
+    /// `(frame position, monotonic ns)` as published by the producer, the
+    /// two of one moment (`(0, 0)` if it never did).
     pub fn capture_clock(&self) -> (u64, u64) {
-        let pos = self.u64_at(ring::OFF_CAPTURE_POS).load(Ordering::Acquire);
-        (pos, self.u64_at(ring::OFF_CAPTURE_NS).load(Ordering::Acquire))
+        self.read_pair(&self.clock_seen, ring::OFF_CAPTURE_SEQ, ring::OFF_CAPTURE_POS, ring::OFF_CAPTURE_NS)
     }
+}
+
+/// When frame `pos` of a capture ring at `rate` Hz was recorded, by its
+/// capture clock `clock` (frame `clock.0` recorded at `clock.1` ns, as
+/// [`Ring::capture_clock`] gives it); `None` if the producer never
+/// published one. A clock far ahead of `pos` (a producer's mistake, or
+/// worse) cannot overflow the arithmetic: it only makes the moment earlier,
+/// down to 0.
+pub fn recorded_at(clock: (u64, u64), pos: u64, rate: u32) -> Option<u64> {
+    let (clock_pos, clock_ns) = clock;
+    if clock_ns == 0 {
+        return None;
+    }
+    let after = clock_pos.saturating_sub(pos);
+    let back = after as u128 * 1_000_000_000 / rate.max(1) as u128;
+    Some(clock_ns.saturating_sub(back.min(u64::MAX as u128) as u64))
 }
 
 /// The client side of a playback stream: a mapped ring plus its event.
@@ -989,5 +1066,68 @@ mod tests {
         c.set_played(250, 77);
         assert_eq!(p.played(), (250, 77));
         assert!(unsafe { Ring::attach_raw(_mem.0.as_ptr() as *mut u8, 10, Role::Consumer) }.is_err());
+    }
+
+    #[test]
+    fn the_capture_clock_dates_frames() {
+        // Frame 16 000 recorded at 5 s: frame 8 000 half a second before.
+        assert_eq!(recorded_at((16_000, 5_000_000_000), 8_000, 16_000), Some(4_500_000_000));
+        assert_eq!(recorded_at((16_000, 5_000_000_000), 20_000, 16_000), Some(5_000_000_000));
+        assert_eq!(recorded_at((0, 0), 8_000, 16_000), None);
+        // A clock position far ahead does not overflow.
+        assert_eq!(recorded_at((u64::MAX, 5_000_000_000), 0, 8_000), Some(0));
+        assert_eq!(recorded_at((1 << 40, 5_000_000_000), 0, 0), Some(0));
+    }
+
+    #[test]
+    fn pairs_are_read_whole() {
+        let (_mem, p, c) = pair(1024, 1);
+        c.set_played(100, 1_000);
+        p.set_capture_clock(7, 2_000);
+        assert_eq!((p.played(), c.capture_clock()), ((100, 1_000), (7, 2_000)));
+        // A writer interrupted half way (the count odd, one value new):
+        // the reader keeps the last pair it read whole, never the torn one.
+        c.u32_at(ring::OFF_PLAYED_SEQ).fetch_add(1, Ordering::Relaxed);
+        c.u64_at(ring::OFF_PLAYED_POS).store(200, Ordering::Relaxed);
+        assert_eq!(p.played(), (100, 1_000));
+        // A writer that finished in the meantime is read whole.
+        c.u64_at(ring::OFF_PLAYED_NS).store(2_000, Ordering::Relaxed);
+        c.u32_at(ring::OFF_PLAYED_SEQ).fetch_add(1, Ordering::Release);
+        assert_eq!(p.played(), (200, 2_000));
+        // The writer's own count is not the peer's to set: one that the peer
+        // left odd does not make the writer publish odd.
+        p.u32_at(ring::OFF_CAPTURE_SEQ).store(5, Ordering::Relaxed);
+        p.set_capture_clock(8, 3_000);
+        assert_eq!(c.capture_clock(), (8, 3_000));
+        // Another side attaching later resumes the counts even.
+        // SAFETY: `_mem` (the ring's memory) outlives `again`.
+        let again =
+            unsafe { Ring::attach_raw(_mem.0.as_ptr() as *mut u8, ring_bytes(1024, 1), Role::Consumer) }.unwrap();
+        again.set_played(300, 4_000);
+        assert_eq!(p.played(), (300, 4_000));
+    }
+
+    #[test]
+    fn a_reader_never_sees_a_torn_pair() {
+        // A writer thread publishes pairs (n, 2n) as fast as it can while
+        // this one reads them.
+        let (mem, p, c) = pair(1024, 1);
+        let base = mem.0.as_ptr() as usize;
+        let len = ring_bytes(1024, 1);
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                // SAFETY: `mem` outlives the scope; this thread is the only
+                // writer of the consumer's fields.
+                let w = unsafe { Ring::attach_raw(base as *mut u8, len, Role::Consumer) }.unwrap();
+                for n in 1..200_000u64 {
+                    w.set_played(n, 2 * n);
+                }
+            });
+            for _ in 0..200_000 {
+                let (pos, ns) = p.played();
+                assert_eq!(ns, 2 * pos, "a torn pair");
+            }
+        });
+        let _ = c;
     }
 }

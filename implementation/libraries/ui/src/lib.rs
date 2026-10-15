@@ -5,6 +5,8 @@
 //!
 //! * [`window`]: client-side windows on top of the display protocol.
 //! * [`app`]: the event loop ([`run`]) driving an [`App`].
+//! * [`fonts`]: the interface's fonts and the text context the windows of
+//!   a process share ([`SharedText`]).
 //! * [`agent`]: offering an application's abilities to the voice agent.
 //! * [`media`]: widgets for media players (seek bar, play button).
 //! * [`Ui`]: the immediate-mode context passed to `App::update` each frame,
@@ -29,6 +31,7 @@ extern crate alloc;
 pub mod agent;
 pub mod app;
 pub mod file_dialog;
+pub mod fonts;
 pub mod icons;
 pub mod media;
 pub mod menu;
@@ -39,8 +42,9 @@ pub mod ui;
 pub mod widgets;
 pub mod window;
 
-pub use app::{App, Host, load_fonts, run};
+pub use app::{App, Host, run};
 pub use file_dialog::{FileDialog, FileDialogMode, FileDialogResult};
+pub use fonts::{SharedText, load_fonts};
 pub use icons::{Icon, draw_logo};
 pub use menu::{Menu, MenuItem};
 pub use text_input::TextInputResponse;

@@ -30,6 +30,8 @@ pub enum View {
 }
 
 impl View {
+    pub const ALL: [View; 4] = [View::Chase, View::Near, View::Bonnet, View::Bumper];
+
     /// The next view (the camera key cycles through them).
     pub fn next(self) -> View {
         match self {
@@ -37,6 +39,26 @@ impl View {
             View::Near => View::Bonnet,
             View::Bonnet => View::Bumper,
             View::Bumper => View::Chase,
+        }
+    }
+
+    /// As the options show it.
+    pub fn name(self) -> &'static str {
+        match self {
+            View::Chase => "Chase",
+            View::Near => "Near",
+            View::Bonnet => "Bonnet",
+            View::Bumper => "Bumper",
+        }
+    }
+
+    /// As the save file and the voice agent say it.
+    pub fn key(self) -> &'static str {
+        match self {
+            View::Chase => "chase",
+            View::Near => "near",
+            View::Bonnet => "bonnet",
+            View::Bumper => "bumper",
         }
     }
 }
@@ -52,12 +74,9 @@ pub struct Follow {
     fov: f32,
     shake: f32,
     shake_time: f32,
-    /// Looking back over the shoulder.
-    pub behind: bool,
     /// Where the chase camera wanted to be at the last frame, and for which
-    /// view (looking back or not): the spring follows that place as it
-    /// moved since.
-    last: Option<(Vec3, View, bool)>,
+    /// view: the spring follows that place as it moved since.
+    last: Option<(Vec3, View)>,
     /// The direction it turned to look along and the field of view it
     /// widened to at the last frame, followed likewise.
     wanted: Option<(Vec2, f32)>,
@@ -75,7 +94,6 @@ impl Follow {
             fov: 1.05,
             shake: 0.0,
             shake_time: 0.0,
-            behind: false,
             last: None,
             wanted: None,
         };
@@ -95,7 +113,7 @@ impl Follow {
             View::Chase => (7.0 + speed * 0.02, 2.2 + speed * 0.004, 10.0),
             _ => (4.4 + speed * 0.015, 1.6 + speed * 0.003, 8.0),
         };
-        let dir = if self.behind { -self.look } else { self.look };
+        let dir = self.look;
         let base = car.pos + Vec3::Y * 0.6;
         let eye = base - Vec3::new(dir.x, 0.0, dir.y) * back + Vec3::Y * up;
         let target = base + Vec3::new(dir.x, 0.0, dir.y) * ahead + Vec3::Y * 0.5;
@@ -118,7 +136,7 @@ impl Follow {
         self.fov = ease(self.fov, fov_before, fov, 2.0, dt);
         self.wanted = Some((want, fov));
         self.shake_time += dt;
-        self.shake *= (-dt * 3.0).exp();
+        self.shake *= libm::expf(-dt * 3.0);
 
         let mut cam = match self.view {
             View::Chase | View::Near => {
@@ -128,11 +146,11 @@ impl Follow {
                 // change of view, which it eases to from where it is).
                 let w = if self.view == View::Chase { 9.0 } else { 11.0 };
                 let from = match self.last {
-                    Some((at, view, behind)) if view == self.view && behind == self.behind => at,
+                    Some((at, view)) if view == self.view => at,
                     _ => eye,
                 };
                 (self.pos, self.vel) = spring(self.pos, self.vel, from, eye, w, dt);
-                self.last = Some((eye, self.view, self.behind));
+                self.last = Some((eye, self.view));
                 // Never far behind (after a teleport): further than the
                 // spring's own lag at this speed.
                 if self.pos.distance(eye) > 25.0 + 2.0 * speed / w {
@@ -146,12 +164,7 @@ impl Follow {
                 let (eye, ahead) = if self.view == View::Bonnet {
                     (Vec3::new(0.0, 1.35, 0.6), Vec3::new(0.0, 1.2, 20.0))
                 } else {
-                    (Vec3::new(0.0, 0.62, car.spec.half_length + 0.1), Vec3::new(0.0, 0.6, 30.0))
-                };
-                let (eye, ahead) = if self.behind {
-                    (Vec3::new(eye.x, eye.y, -eye.z.abs() + 0.2), Vec3::new(0.0, ahead.y, -ahead.z))
-                } else {
-                    (eye, ahead)
+                    (Vec3::new(0.0, 0.62, car.chassis.half_length + 0.1), Vec3::new(0.0, 0.6, 30.0))
                 };
                 self.pos = m.transform_point3(eye);
                 self.vel = Vec3::ZERO;
@@ -164,7 +177,7 @@ impl Follow {
         if self.shake > 0.01 {
             let t = self.shake_time;
             let s = self.shake * 0.25;
-            cam.eye += Vec3::new((t * 37.0).sin() * s, (t * 43.0).sin() * s * 0.7, (t * 29.0).cos() * s);
+            cam.eye += Vec3::new(libm::sinf(t * 37.0) * s, libm::sinf(t * 43.0) * s * 0.7, libm::cosf(t * 29.0) * s);
         }
         cam
     }
@@ -189,7 +202,7 @@ fn spring(pos: Vec3, vel: Vec3, from: Vec3, to: Vec3, w: f32, dt: f32) -> (Vec3,
     let lag = v * (2.0 / w);
     let c1 = pos - from + lag;
     let c2 = vel - v + c1 * w;
-    let decay = (-w * dt).exp();
+    let decay = libm::expf(-w * dt);
     let left = (c1 + c2 * dt) * decay;
     let rate = (c2 - (c1 + c2 * dt) * w) * decay;
     (to - lag + left, v + rate)
@@ -207,7 +220,7 @@ where
     let from = if dt < 1e-3 { to } else { from };
     // It settles `lag` behind a value going steadily; the rest dies away.
     let lag = (to - from) / (rate * dt);
-    to - lag + (x - from + lag) * (-rate * dt).exp()
+    to - lag + (x - from + lag) * libm::expf(-rate * dt)
 }
 
 /// Keeps `eye` inside the road's walls, above the ground and under a
@@ -252,9 +265,8 @@ pub struct Cinematic {
     length: f32,
     /// Shots so far (which one comes next).
     count: u32,
-    /// A roadside camera's place, and the road sample near it.
+    /// A roadside camera's place.
     spot: Vec3,
-    spot_hint: usize,
 }
 
 impl Default for Cinematic {
@@ -265,7 +277,7 @@ impl Default for Cinematic {
 
 impl Cinematic {
     pub fn new() -> Cinematic {
-        Cinematic { shot: Shot::Helicopter, t: 0.0, length: 7.0, count: 0, spot: Vec3::ZERO, spot_hint: 0 }
+        Cinematic { shot: Shot::Helicopter, t: 0.0, length: 7.0, count: 0, spot: Vec3::ZERO }
     }
 
     /// Films `hero` (`hint`: the road sample it is near) chasing `chased`,
@@ -304,16 +316,16 @@ impl Cinematic {
                 // Over the street (not the blocks beside it), swinging
                 // slowly from behind to one side.
                 let a = self.t * 0.06 + self.count as f32;
-                let s = at.s - 28.0 * a.cos();
+                let s = at.s - 28.0 * libm::cosf(a);
                 let (_, wall) = road.widths(s);
-                let lateral = (at.lateral + 12.0 * a.sin()).clamp(-wall, wall);
+                let lateral = (at.lateral + 12.0 * libm::sinf(a)).clamp(-wall, wall);
                 let mid = (hero.pos + other.pos) * 0.5;
                 (road.point(s, lateral) + lift * 32.0, mid + lift, 0.75)
             }
             Shot::Roadside => {
                 // Zoomed to keep the cars about the same size as they come.
                 let target = hero.pos.lerp(other.pos, 0.3) + lift * 0.8;
-                let fov = 2.0 * (7.0 / self.spot.distance(target).max(1.0)).atan();
+                let fov = 2.0 * libm::atanf(7.0 / self.spot.distance(target).max(1.0));
                 (self.spot, target, fov.clamp(0.22, 1.0))
             }
             Shot::Low => (hero.pos - fwd * 6.5 + side * 1.3 + lift * 0.9, hero.pos + fwd * 25.0 + lift * 1.2, 1.1),
@@ -375,7 +387,6 @@ impl Cinematic {
             let clear = |p: Vec3| world.lamps.iter().all(|l| (l.base - p).xz().length() > 6.0);
             let best = [0.0, 12.0, -12.0, 17.0, -17.0].into_iter().map(spot).find(|&p| clear(p));
             self.spot = best.unwrap_or_else(|| spot(0.0));
-            self.spot_hint = world.road.locate(self.spot, None).index;
         }
     }
 }

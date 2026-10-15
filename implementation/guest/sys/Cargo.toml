@@ -3,18 +3,18 @@
 
 [package]
 name = "guest-sys"
-description = "What the driver VM's programs need of Linux beyond std and rustix: socket options, run-time ioctls, network interfaces"
+description = "What the driver VM's programs share: what they need of Linux beyond std and rustix (socket options, run-time ioctls, sysfs, processes), retries, network interfaces and their frames, their tests' checks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-test = false
 bench = false
 
 [dependencies]
 rustix = { workspace = true }
 libc = { workspace = true }
+vproto = { workspace = true }
 
 [lints]
 workspace = true

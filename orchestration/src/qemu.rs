@@ -11,6 +11,36 @@ use std::process::Command;
 use crate::arch;
 use crate::util::{self, Result};
 
+/// A path as the value of one of QEMU's options, where a comma ends the
+/// value unless it is doubled.
+pub fn option_path(path: &Path) -> String {
+    path.to_string_lossy().replace(',', ",,")
+}
+
+/// Makes the program `cmd` starts (QEMU) end with this process, however
+/// this one ends (a deadline's kill of a script's process among the ways):
+/// Linux kills it when the thread that started it ends, which for
+/// `orchestration` is the main thread, which runs the scripts.
+pub fn ends_with_us(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let parent = std::process::id();
+    // SAFETY: the closure runs in the child between `fork` and `exec`,
+    // where only async-signal-safe functions may be called: `prctl`,
+    // `getppid` and `_exit` are, and it allocates nothing.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The parent may have ended before the signal was asked for.
+            if libc::getppid() as u32 != parent {
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Where to find QEMU and its UEFI firmware.
 pub struct QemuInstall {
     pub binary: PathBuf,
@@ -48,7 +78,7 @@ impl QemuInstall {
             .ok_or(&missing)?;
         let firmware_vars_template =
             std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
-        let code = std::fs::read(&firmware_code).map_err(|e| format!("reading {}: {e}", firmware_code.display()))?;
+        let code = util::read(&firmware_code)?;
         let blank_at_reset = arch::qemu::blank_at_reset(&code);
         Ok(QemuInstall { binary, firmware_code, firmware_vars_template, blank_at_reset })
     }
@@ -86,14 +116,14 @@ impl NetMode {
     }
 }
 
-/// A Unix socket's path as a QEMU option value (`,` would split it).
+/// A Unix socket's path as a QEMU option value.
 pub fn socket_option(path: &Path) -> Result<String> {
     let s = path.to_str().ok_or_else(|| format!("{} is not UTF-8", path.display()))?;
     // A socket's address holds at most 107 bytes of path.
-    if s.contains(',') || s.len() > 107 {
-        return Err(format!("{s}: no socket can be there (a comma, or longer than 107 bytes)"));
+    if s.len() > 107 {
+        return Err(format!("{s}: no socket can be there (its path is longer than 107 bytes)"));
     }
-    Ok(s.to_string())
+    Ok(option_path(path))
 }
 
 /// How the disks are attached.
@@ -204,6 +234,9 @@ pub struct VmConfig {
     pub gdb: bool,
     /// Allow the guest to terminate QEMU with an exit code (tests).
     pub debug_exit: bool,
+    /// The boot disk's format: `raw`, or `qcow2` for an overlay of a
+    /// system's image (see `image::qcow2`).
+    pub boot_format: &'static str,
     /// Disk image holding the user's home directory (serial `veda-home`).
     pub home_disk: Option<PathBuf>,
     /// The boot image is the live system's ISO on a USB stick (read-only,
@@ -253,6 +286,7 @@ impl Default for VmConfig {
             qmp: None,
             gdb: false,
             debug_exit: false,
+            boot_format: "raw",
             home_disk: None,
             usb_stick: false,
             usb_stick_writable: false,
@@ -285,7 +319,7 @@ const HOME_DISK_BYTES: u64 = 64 << 20;
 pub fn prepare_home_disk(path: &Path, fresh: bool) -> Result {
     if fresh || !path.exists() {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            util::create_dir_all(dir)?;
         }
         let f = std::fs::File::create(path).map_err(|e| format!("creating {}: {e}", path.display()))?;
         f.set_len(HOME_DISK_BYTES).map_err(|e| format!("sizing {}: {e}", path.display()))?;
@@ -301,7 +335,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             "if=pflash,format=raw,unit={},{}file={}",
             if ro { 0 } else { 1 },
             if ro { "readonly=on," } else { "" },
-            file.display()
+            option_path(file)
         )
     };
     cmd.args(["-name", "Veda"]);
@@ -309,7 +343,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     // before the devices it translates; and its processors.
     cmd.args(arch::qemu::machine_args(cfg.input == InputDevices::Standard, cfg.iommu));
     for t in &cfg.acpi_tables {
-        cmd.args(["-acpitable", &format!("file={}", t.display())]);
+        cmd.args(["-acpitable", &format!("file={}", option_path(t))]);
     }
     // KVM when the host offers it; otherwise the TCG emulator
     // (multi-threaded, one host thread per vCPU).
@@ -323,10 +357,10 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     if let Some((start, size)) = install.blank_at_reset {
         let blank = util::out_dir().join("firmware-blank.bin");
         if std::fs::metadata(&blank).map(|m| m.len()).ok() != Some(size) {
-            std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
-            std::fs::write(&blank, vec![0u8; size as usize]).map_err(|e| format!("{}: {e}", blank.display()))?;
+            util::create_dir_all(&util::out_dir())?;
+            util::write(&blank, vec![0u8; size as usize])?;
         }
-        cmd.args(["-device", &format!("loader,file={},addr={start:#x},force-raw=on", blank.display())]);
+        cmd.args(["-device", &format!("loader,file={},addr={start:#x},force-raw=on", option_path(&blank))]);
     }
     // The display, at 00:01.0 (where `-vga std` puts it, before any other
     // device takes it), named so that the tablet can be bound to it (see
@@ -367,10 +401,11 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     if cfg.usb_stick {
         // As a PC sees a stick the ISO was written to.
         let readonly = if cfg.usb_stick_writable { "" } else { "readonly=on," };
-        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,{readonly}file={}", disk.display())]);
+        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,{readonly}file={}", option_path(disk))]);
         cmd.args(["-device", "usb-storage,bus=xhci.0,drive=disk0,bootindex=0,removable=on"]);
     } else {
-        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
+        let format = cfg.boot_format;
+        cmd.args(["-drive", &format!("id=disk0,if=none,format={format},file={}", option_path(disk))]);
         // On the machine's AHCI controller, the boot disk on its first
         // port and the home disk on its second.
         match cfg.disk_bus {
@@ -385,7 +420,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         };
     }
     if let Some(home) = &cfg.home_disk {
-        cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
+        cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", option_path(home))]);
         match cfg.disk_bus {
             DiskBus::Virtio => cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=home,serial=veda-home")]),
             DiskBus::Ahci => {
@@ -414,7 +449,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     if cfg.audio {
         match &cfg.audio_wav {
             _ if cfg.audio_silent => cmd.args(["-audiodev", "none,id=audio0"]),
-            Some(wav) => cmd.args(["-audiodev", &format!("wav,id=audio0,path={}", wav.display())]),
+            Some(wav) => cmd.args(["-audiodev", &format!("wav,id=audio0,path={}", option_path(wav))]),
             None => cmd.args(["-audiodev", "sdl,id=audio0"]),
         };
         // With the host's sound system the card also has an input stream:
@@ -461,19 +496,15 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     } else {
         cmd.args(["-display", "none"]);
     }
-    match &cfg.serial_file {
-        Some(path) => cmd.args(["-serial", &format!("file:{}", path.display())]),
+    let serial = match &cfg.serial_file {
+        Some(path) => format!("file,id=serial0,path={}", option_path(path)),
         // The terminal, and a copy in the output directory (for looking at
         // a session afterwards).
-        None => cmd.args([
-            "-chardev",
-            &format!("stdio,id=serial0,logfile={}", util::out_dir().join("serial.log").display()),
-            "-serial",
-            "chardev:serial0",
-        ]),
+        None => format!("stdio,id=serial0,logfile={}", option_path(&util::out_dir().join("serial.log"))),
     };
+    cmd.args(["-chardev", &serial, "-serial", "chardev:serial0"]);
     if let Some(path) = &cfg.qmp {
-        cmd.args(["-qmp", &format!("unix:{},server=on,wait=off", path.display())]);
+        cmd.args(["-qmp", &format!("unix:{},server=on,wait=off", socket_option(path)?)]);
     }
     if cfg.debug_exit {
         cmd.args(["-device", arch::qemu::DEBUG_EXIT]);
@@ -523,12 +554,12 @@ fn virtio(cfg: &VmConfig, spec: &str) -> String {
 pub fn script_vars_file(install: &QemuInstall, variables: &[crate::ovmfvars::Variable]) -> Result<PathBuf> {
     let path = util::out_dir().join("script-vars.fd");
     let template = &install.firmware_vars_template;
-    let mut image = std::fs::read(template).map_err(|e| format!("reading {}: {e}", template.display()))?;
+    let mut image = util::read(template)?;
     if !variables.is_empty() {
         crate::ovmfvars::add(&mut image, variables).map_err(|e| format!("{}: {e}", template.display()))?;
     }
-    std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, image).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    util::create_dir_all(&util::out_dir())?;
+    util::write(&path, image)?;
     Ok(path)
 }
 
@@ -537,9 +568,8 @@ pub fn script_vars_file(install: &QemuInstall, variables: &[crate::ovmfvars::Var
 pub fn vars_file(install: &QemuInstall) -> Result<PathBuf> {
     let path = util::out_dir().join("ovmf-vars.fd");
     if !path.exists() {
-        std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
-        std::fs::copy(&install.firmware_vars_template, &path)
-            .map_err(|e| format!("copying {}: {e}", install.firmware_vars_template.display()))?;
+        util::create_dir_all(&util::out_dir())?;
+        util::copy(&install.firmware_vars_template, &path)?;
     }
     Ok(path)
 }
@@ -560,5 +590,38 @@ mod tests {
         assert_eq!(Screen::new(3840, 2400).map(|s| s.refresh), Ok(50_000));
         assert!(Screen::new(1366, 768).is_err());
         assert!(Screen::new(4096, 2160).is_err());
+    }
+
+    /// Every path in QEMU's options has its commas doubled, and the serial
+    /// log goes through a character device, whose options read them so.
+    #[test]
+    fn paths_in_options_keep_their_commas() {
+        assert_eq!(option_path(Path::new("/a,b/c,,d")), "/a,,b/c,,,,d");
+        let dir = Path::new("/tmp/x,y");
+        let install = QemuInstall {
+            binary: PathBuf::from("qemu-system-x86_64"),
+            firmware_code: dir.join("code.fd"),
+            firmware_vars_template: dir.join("vars.fd"),
+            blank_at_reset: None,
+        };
+        let cfg = VmConfig {
+            gpu: Some(false),
+            serial_file: Some(dir.join("serial.log")),
+            audio_wav: Some(dir.join("audio.wav")),
+            home_disk: Some(dir.join("home.img")),
+            acpi_tables: vec![dir.join("t.aml")],
+            qmp: Some(dir.join("qmp.sock")),
+            boot_format: "qcow2",
+            ..VmConfig::default()
+        };
+        let cmd = command(&install, &dir.join("disk.img"), &dir.join("v.fd"), &cfg).unwrap();
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        for path in args.iter().filter(|a| a.contains("/tmp/x")) {
+            assert!(path.contains("/tmp/x,,y") && !path.contains("/tmp/x,y"), "{path}");
+        }
+        assert!(args.contains(&"id=disk0,if=none,format=qcow2,file=/tmp/x,,y/disk.img".to_string()), "{args:?}");
+        assert!(args.contains(&"file,id=serial0,path=/tmp/x,,y/serial.log".to_string()), "{args:?}");
+        assert!(args.contains(&"wav,id=audio0,path=/tmp/x,,y/audio.wav".to_string()), "{args:?}");
+        assert!(args.windows(2).any(|w| w == ["-serial", "chardev:serial0"]));
     }
 }

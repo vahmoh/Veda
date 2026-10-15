@@ -8,8 +8,10 @@
 //! or the driver VM gets the function: in a memory window of the PCI root
 //! bridge's (its ACPI `_CRS`), where nothing else is (no other function's
 //! BAR, no bridge's window, nothing the firmware reserves for the
-//! motherboard), naturally aligned; a 64-bit BAR above 4 GiB where it can
-//! be, so as to leave the scarce space below to those that must be there.
+//! motherboard), naturally aligned, and on pages of its own, which is how
+//! its driver gets it (a BAR smaller than a page gets a whole one); a
+//! 64-bit BAR above 4 GiB where it can be, so as to leave the scarce space
+//! below to those that must be there.
 //! From the top of the window down: the firmware fills windows from the
 //! bottom, and what devmgr cannot see is there too (the BARs of a GPU's
 //! virtual functions, in extended configuration space, which devmgr does
@@ -24,9 +26,10 @@ use core::ops::Range;
 use vrt::println;
 
 use crate::acpi::Acpi;
-use crate::pci::{Address, ConfigSpace};
+use crate::pci::{Address, ConfigSpace, pages};
 
 const FOUR_GIB: u64 = 1 << 32;
+const PAGE: u64 = vabi::PAGE_SIZE as u64;
 
 /// Places the unplaced memory BARs of `functions`, in the windows of their
 /// root bridges as `acpi` describes them.
@@ -42,7 +45,8 @@ pub fn place(config: &ConfigSpace, functions: &[Address], acpi: Option<&Acpi>) {
             if bar.address == 0 {
                 unplaced.push((a, bar));
             } else {
-                taken.push(bar.address..bar.address + bar.size);
+                // Whole pages: none placed here shares one with it.
+                taken.extend(pages(bar.address, bar.size));
             }
         }
     }
@@ -53,11 +57,20 @@ pub fn place(config: &ConfigSpace, functions: &[Address], acpi: Option<&Acpi>) {
         println!("pci: {} BAR(s) the firmware left unplaced, and no ACPI tables to place them by", unplaced.len());
         return;
     };
-    taken.extend(acpi.motherboard_memory());
+    taken.extend(acpi.motherboard_memory().into_iter().filter_map(|r| pages(r.start, r.end.saturating_sub(r.start))));
     // The largest first: their alignment is the hardest to find.
     unplaced.sort_by_key(|(_, bar)| core::cmp::Reverse(bar.size));
     let mut buses: BTreeMap<u8, Vec<Range<u64>>> = BTreeMap::new();
     for (a, bar) in unplaced {
+        if !bar.size.is_power_of_two() {
+            println!(
+                "pci {:02x}:{:02x}.{}: BAR {} unplaced by the firmware, of {} bytes, which no BAR is: left out",
+                a.bus, a.slot, a.function, bar.index, bar.size
+            );
+            continue;
+        }
+        // The pages it is on are its alone.
+        let span = bar.size.max(PAGE);
         let windows = buses.entry(a.bus).or_insert_with(|| acpi.pci_root_windows(a.bus));
         if windows.is_empty() {
             println!(
@@ -69,14 +82,14 @@ pub fn place(config: &ConfigSpace, functions: &[Address], acpi: Option<&Acpi>) {
         let high = windows.iter().filter(|w| w.start >= FOUR_GIB);
         let low = windows.iter().filter(|w| w.end <= FOUR_GIB);
         let place = if bar.is64 {
-            high.chain(low).find_map(|w| free(w, bar.size, &taken))
+            high.chain(low).find_map(|w| free(w, span, &taken))
         } else {
-            low.clone().find_map(|w| free(w, bar.size, &taken))
+            low.clone().find_map(|w| free(w, span, &taken))
         };
         match place {
             Some(at) => {
                 config.set_bar(a, bar.index, at, bar.is64);
-                taken.push(at..at + bar.size);
+                taken.push(at..at + span);
                 println!(
                     "pci {:02x}:{:02x}.{}: BAR {} ({} KiB) unplaced by the firmware: placed at {:#x}",
                     a.bus,

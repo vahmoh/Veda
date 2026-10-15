@@ -20,7 +20,7 @@ use rustix::io::Errno;
 use rustix::net::netlink::SocketAddrNetlink;
 use rustix::net::{AddressFamily, Protocol, SocketFlags, SocketType, bind, socket_with, sockopt};
 
-pub const NETLINK_ROUTE: i32 = 0;
+/// Generic netlink's protocol (nl80211 is one of its families).
 pub const NETLINK_GENERIC: i32 = 16;
 
 const SOL_NETLINK: i32 = 270;
@@ -28,8 +28,9 @@ const NETLINK_ADD_MEMBERSHIP: i32 = 1;
 const NETLINK_CAP_ACK: i32 = 10;
 const NETLINK_EXT_ACK: i32 = 11;
 
+/// A message's flags: a request; one that asks for an acknowledgement; a
+/// dump (every object the request names, in several messages).
 pub const NLM_F_REQUEST: u16 = 1;
-pub const NLM_F_MULTI: u16 = 2;
 pub const NLM_F_ACK: u16 = 4;
 pub const NLM_F_DUMP: u16 = 0x300;
 const NLMSG_ERROR: u16 = 2;
@@ -73,6 +74,7 @@ impl Builder {
         Builder { buf, nests: Vec::new() }
     }
 
+    /// An attribute of `kind` with `payload`.
     pub fn attr(mut self, kind: u16, payload: &[u8]) -> Builder {
         let len = 4 + payload.len();
         self.buf.extend_from_slice(&(len as u16).to_ne_bytes());
@@ -82,23 +84,23 @@ impl Builder {
         self
     }
 
+    /// An attribute that says something by being there.
     pub fn flag(self, kind: u16) -> Builder {
         self.attr(kind, &[])
     }
 
+    /// An attribute of a number, in the machine's byte order.
     pub fn u8(self, kind: u16, v: u8) -> Builder {
         self.attr(kind, &[v])
     }
 
+    /// An attribute of a number, in the machine's byte order.
     pub fn u16(self, kind: u16, v: u16) -> Builder {
         self.attr(kind, &v.to_ne_bytes())
     }
 
+    /// An attribute of a number, in the machine's byte order.
     pub fn u32(self, kind: u16, v: u32) -> Builder {
-        self.attr(kind, &v.to_ne_bytes())
-    }
-
-    pub fn u64(self, kind: u16, v: u64) -> Builder {
         self.attr(kind, &v.to_ne_bytes())
     }
 
@@ -117,6 +119,7 @@ impl Builder {
         self
     }
 
+    /// Ends the nested attribute [`Builder::nest`] started last.
     pub fn end(mut self) -> Builder {
         if let Some(at) = self.nests.pop() {
             let len = (self.buf.len() - at) as u16;
@@ -149,30 +152,38 @@ impl<'a> Attrs<'a> {
         self.iter().find(|(k, _)| *k == kind).map(|(_, v)| v)
     }
 
+    /// Whether there is an attribute of `kind`.
     pub fn has(&self, kind: u16) -> bool {
         self.get(kind).is_some()
     }
 
+    /// The attributes nested in the first attribute of `kind`.
     pub fn nested(&self, kind: u16) -> Option<Attrs<'a>> {
         self.get(kind).map(Attrs)
     }
 
+    /// The number the first attribute of `kind` holds, in the machine's
+    /// byte order (`None` if it is shorter).
     pub fn u8(&self, kind: u16) -> Option<u8> {
         self.get(kind)?.first().copied()
     }
 
+    /// As [`Attrs::u8`].
     pub fn u16(&self, kind: u16) -> Option<u16> {
         Some(u16::from_ne_bytes(self.get(kind)?.get(..2)?.try_into().ok()?))
     }
 
+    /// As [`Attrs::u8`].
     pub fn u32(&self, kind: u16) -> Option<u32> {
         Some(u32::from_ne_bytes(self.get(kind)?.get(..4)?.try_into().ok()?))
     }
 
+    /// As [`Attrs::u8`].
     pub fn u64(&self, kind: u16) -> Option<u64> {
         Some(u64::from_ne_bytes(self.get(kind)?.get(..8)?.try_into().ok()?))
     }
 
+    /// The text the first attribute of `kind` holds, up to its NUL.
     pub fn string(&self, kind: u16) -> Option<String> {
         let v = self.get(kind)?;
         let end = v.iter().position(|&b| b == 0).unwrap_or(v.len());

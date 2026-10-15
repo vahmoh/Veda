@@ -20,6 +20,7 @@ vproto = { workspace = true }
 vgfx = { workspace = true }
 vfiles = { workspace = true, features = ["thumbnails"] }
 vui = { workspace = true }
+apps-common = { path = "../common" }
 
 [build-dependencies]
 vbuild = { workspace = true }

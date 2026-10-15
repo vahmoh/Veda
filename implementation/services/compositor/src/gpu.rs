@@ -46,6 +46,7 @@ use vrt::object::{Event, Vmo};
 use vrt::sync::Mutex;
 use vrt::time::{Duration, now_ns};
 
+use crate::pixels::Pixels;
 use crate::screen::Screen;
 
 /// How long setting up waits for the `gpu` service to appear (the
@@ -376,6 +377,9 @@ pub(crate) struct Gpu {
     /// The textures, each with what it was made from, as its owner keys
     /// it.
     textures: BTreeMap<Slot, (Texture, u64)>,
+    /// A client's pixels on their way to a texture, copied out of its
+    /// memory first (see `pixels`).
+    scratch: Vec<u32>,
     /// The GPU stopped answering.
     lost: bool,
 }
@@ -482,7 +486,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
     let mut targets = Vec::new();
     for vmo in &p.memory {
         let size = vmo.size().map_err(|_| "a picture is gone")?;
-        let memory = External { handle: vmo.0.raw(), address: 0, size, stride: p.stride, bgr: !p.rgb };
+        let memory = External::handle(vmo.0.raw(), size, p.stride, !p.rgb);
         let rb = gl.gen_renderbuffer();
         gl.bind_renderbuffer(gl::RENDERBUFFER, rb);
         gl.renderbuffer_storage_external(gl::RENDERBUFFER, gl::RGB8, w, h, &memory);
@@ -571,6 +575,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         splash,
         current: 0,
         textures: BTreeMap::new(),
+        scratch: Vec::new(),
         lost: false,
     };
     g.warm_up()?;
@@ -638,8 +643,8 @@ impl Gpu {
         gl.scissor(0, 0, 4, 1);
         gl.clear_color(0x12 as f32 / 255.0, 0x34 as f32 / 255.0, 0x56 as f32 / 255.0, 1.0);
         gl.clear(gl::COLOR_BUFFER_BIT);
-        let fence = gl.backend().fence();
-        if fence == 0 || !gl.backend().wait_fence(fence, CHECK_NS) || self.watch.signaled() < fence {
+        let fence = gl.fence();
+        if fence == 0 || !gl.wait_fence(fence, CHECK_NS) || self.watch.signaled() < fence {
             return Err(format!("{} did not draw", self.renderer));
         }
         let want = if screen.rgb() { 0x56_3412 } else { 0x12_3456 };
@@ -708,7 +713,7 @@ impl Gpu {
     /// Ends the frame: the GPU starts on it. The fence that signals once
     /// it is in the picture, or `None` if the GPU stopped answering.
     pub(crate) fn end(&mut self) -> Option<u64> {
-        let fence = self.gl.backend().fence();
+        let fence = self.gl.fence();
         if fence == 0 {
             self.lost = true;
             return None;
@@ -899,6 +904,12 @@ impl Gpu {
         let from = (r.y * stride + r.x) as usize;
         let to = ((r.bottom() - 1) * stride + r.right()) as usize;
         let Some(part) = pixels.get(from..to) else { return };
+        self.write_part(t, part, stride, r);
+    }
+
+    /// Writes `part`, the pixels of `r` (rows `stride` pixels apart, the
+    /// first at `r`'s top-left corner), into `t` at `r`'s place.
+    fn write_part(&mut self, t: Texture, part: &[u32], stride: i32, r: Rect) {
         // SAFETY: the same memory as bytes (no padding, any alignment).
         let bytes = unsafe { core::slice::from_raw_parts(part.as_ptr() as *const u8, part.len() * 4) };
         let gl = &mut self.gl;
@@ -906,6 +917,23 @@ impl Gpu {
         gl.pixel_storei(gl::UNPACK_ROW_LENGTH, stride);
         gl.tex_sub_image_2d(gl::TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl::RGBA, gl::UNSIGNED_BYTE, bytes);
         gl.pixel_storei(gl::UNPACK_ROW_LENGTH, 0);
+    }
+
+    /// Writes `r` of a client's buffer `p` into `t`, at `r`'s place: copied
+    /// out of the client's memory first (the client may be writing it).
+    /// Whether it was (there may not be the memory to copy it).
+    fn write_client(&mut self, t: Texture, p: &Pixels, r: Rect) -> bool {
+        let r = r.intersect(&Rect::new(0, 0, t.w, t.h));
+        if r.is_empty() {
+            return true;
+        }
+        let mut scratch = core::mem::take(&mut self.scratch);
+        let copied = p.copy_rect((r.x, r.y, r.w, r.h), &mut scratch);
+        if copied {
+            self.write_part(t, &scratch, r.w, r);
+        }
+        self.scratch = scratch;
+        copied
     }
 
     /// The texture in `slot`, made of what `key` says (its owner's key for
@@ -937,29 +965,26 @@ impl Gpu {
         }
     }
 
-    /// A window's contents: its texture brought up to date from `pixels`
-    /// (`w` x `h`, rows `stride` apart) where `changed` says (all of it if
-    /// the texture is new or `all`).
-    pub(crate) fn window(
-        &mut self,
-        id: u32,
-        pixels: &[u32],
-        w: i32,
-        h: i32,
-        stride: i32,
-        all: bool,
-        changed: &[Rect],
-    ) -> Texture {
+    /// A window's contents: its texture brought up to date from its
+    /// client's buffer `p` where `changed` says (all of it if the texture
+    /// is new or `all`). `None` if all of it was to be written and could
+    /// not be: what the texture holds is not the window's (it is written
+    /// again with the next frame).
+    pub(crate) fn window(&mut self, id: u32, p: &Pixels, all: bool, changed: &[Rect]) -> Option<Texture> {
+        let (w, h) = (p.width(), p.height());
         let fresh = !matches!(self.textures.get(&Slot::Window(id)), Some(&(t, _)) if (t.w, t.h) == (w, h));
         let t = self.sized(Slot::Window(id), w, h);
         if fresh || all {
-            self.write(t, pixels, stride, Rect::new(0, 0, w, h));
+            if !self.write_client(t, p, Rect::new(0, 0, w, h)) {
+                self.forget(Slot::Window(id));
+                return None;
+            }
         } else {
             for &r in changed {
-                self.write(t, pixels, stride, r);
+                self.write_client(t, p, r);
             }
         }
-        t
+        Some(t)
     }
 
     /// Whether `slot` has a texture.

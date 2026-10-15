@@ -151,13 +151,14 @@ impl KeyFrame {
     }
 }
 
-/// Verifies the MIC of a received frame over its exact bytes.
+/// Verifies the MIC of a received frame over its exact bytes (a frame too
+/// short to hold one does not verify).
 pub fn verify_mic(raw: &[u8], algo: KeyAlgo, kck: &[u8; 16]) -> bool {
     if raw.len() < FIXED_LEN {
         return false;
     }
     let body_len = u16::from_be_bytes([raw[2], raw[3]]) as usize;
-    if body_len + 4 > raw.len() {
+    if body_len + 4 > raw.len() || body_len + 4 < FIXED_LEN {
         return false;
     }
     let mut copy = raw[..body_len + 4].to_vec();
@@ -310,6 +311,16 @@ mod tests {
         let mut padded = raw.clone();
         padded.extend_from_slice(&[0, 0, 0]);
         assert_eq!(KeyFrame::parse(&padded).unwrap(), f);
+    }
+
+    #[test]
+    fn mics_of_frames_too_short_for_one_do_not_verify() {
+        // A buffer long enough for a MIC whose 802.1X body is not.
+        let mut raw = KeyFrame::new(2 | info::MIC, 1).encode();
+        raw[2..4].copy_from_slice(&10u16.to_be_bytes());
+        assert!(!verify_mic(&raw, KeyAlgo::Sha1, &[1; 16]));
+        raw[2..4].copy_from_slice(&0u16.to_be_bytes());
+        assert!(!verify_mic(&raw, KeyAlgo::Sha256, &[1; 16]));
     }
 
     #[test]

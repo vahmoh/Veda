@@ -26,4 +26,4 @@ wait-serial "(High quality)" 30
 wait-serial "interceptor: ready" 120
 wait-serial " fps, render " 60
 wait 5
-shot target/veda/drivervm-gpu-1.png
+shot target/veda/drivervm-gpu-1.png now

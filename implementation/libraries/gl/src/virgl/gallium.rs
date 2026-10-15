@@ -26,7 +26,8 @@ use std::vec;
 use std::vec::Vec;
 
 use super::host::{load, sym};
-use crate::backend::{External, OutOfMemory};
+use crate::backend::{External, Memory, OutOfMemory};
+use crate::virgl::transport::HostMemory;
 use crate::virgl::{Lost, ResourceArgs, Transport};
 
 type Device = *mut c_void;
@@ -126,6 +127,10 @@ fn lib() -> Option<&'static Lib> {
     .as_ref()
 }
 
+/// What `vr_fence_wait` returns when the fence has not signaled in time
+/// (`VR_TIMEOUT`).
+const TIMEOUT: c_int = -4;
+
 /// Shared memory: 16 MiB of staging and the query area, as virtio-gpu's.
 const SHARED_BYTES: usize = 16 * 1024 * 1024 + 16 * 1024;
 
@@ -135,14 +140,18 @@ pub struct GalliumTransport {
     dev: Device,
     ctx: Ctx,
     caps: Vec<u8>,
-    shared: Box<[u128]>,
+    /// The context's shared memory, which it keeps a pointer to: freed
+    /// after `drop` has destroyed the context.
+    shared: HostMemory,
 }
 
 impl GalliumTransport {
     pub fn new() -> Option<GalliumTransport> {
         let lib = lib()?;
+        let shared = HostMemory::new(SHARED_BYTES)?;
         // SAFETY: calls as renderer.h describes; the shared memory lives as
-        // long as the context (it is dropped after it).
+        // long as the context (`drop` destroys the context before the
+        // memory goes).
         unsafe {
             let dev = match lib.make {
                 Make::Plain(make) => make(),
@@ -153,12 +162,7 @@ impl GalliumTransport {
             }
             let mut caps = vec![0u8; 4096];
             let n = (lib.device_caps)(dev, caps.as_mut_ptr() as *mut c_void, caps.len());
-            let mut shared = vec![0u128; SHARED_BYTES / 16].into_boxed_slice();
-            let ctx = if n > 0 {
-                (lib.context_create)(dev, shared.as_mut_ptr() as *mut u8, SHARED_BYTES)
-            } else {
-                core::ptr::null_mut()
-            };
+            let ctx = if n > 0 { (lib.context_create)(dev, shared.ptr(), shared.len()) } else { core::ptr::null_mut() };
             if ctx.is_null() {
                 (lib.device_destroy)(dev);
                 return None;
@@ -180,8 +184,13 @@ impl Transport for GalliumTransport {
         &self.caps
     }
 
+    /// Veda's renderer clears every resource it creates.
+    fn zeroes_new_resources(&self) -> bool {
+        true
+    }
+
     fn shared(&self) -> (*mut u8, usize) {
-        (self.shared.as_ptr() as *mut u8, SHARED_BYTES)
+        (self.shared.ptr(), self.shared.len())
     }
 
     fn create_resource(&mut self, args: &ResourceArgs, backing: Option<Range<usize>>) -> Result<u32, OutOfMemory> {
@@ -202,15 +211,14 @@ impl Transport for GalliumTransport {
     }
 
     fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
-        if memory.address == 0 {
-            return Err(OutOfMemory);
-        }
+        let Memory::Address(address) = memory.memory() else { return Err(OutOfMemory) };
         let mut id = 0;
-        // SAFETY: as above; the caller keeps the memory for as long as the
-        // context lives (softpipe draws into it).
-        let r = unsafe {
-            (self.lib.resource_import)(self.ctx, args, -1, memory.address as *mut c_void, memory.stride, &mut id)
-        };
+        // SAFETY: a context of this transport, which checks the rest; the
+        // memory stays valid while the resource lives, as
+        // `External::address` requires of its maker (softpipe draws into
+        // it).
+        let r =
+            unsafe { (self.lib.resource_import)(self.ctx, args, -1, address as *mut c_void, memory.stride(), &mut id) };
         if r != 0 {
             std::eprintln!("vgallium: {} ({args:?})", self.error());
             return Err(OutOfMemory);
@@ -245,10 +253,11 @@ impl Transport for GalliumTransport {
         unsafe { (self.lib.fence_signaled)(self.ctx) >= fence }
     }
 
-    fn wait(&mut self, fence: u64) -> Result<(), Lost> {
-        // SAFETY: as above.
-        match unsafe { (self.lib.fence_wait)(self.ctx, fence, u64::MAX) } {
-            0 => Ok(()),
+    fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost> {
+        // SAFETY: a context of this transport.
+        match unsafe { (self.lib.fence_wait)(self.ctx, fence, timeout_ns) } {
+            0 => Ok(true),
+            TIMEOUT => Ok(false),
             _ => Err(Lost),
         }
     }

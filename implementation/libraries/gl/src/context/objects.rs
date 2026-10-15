@@ -9,7 +9,8 @@
 //! Deleting a name frees the name at once, but the object lives on while a
 //! container still refers to it (OpenGL ES 3.0, appendix D.1.3); the
 //! context's own bindings to it are reset instead (appendix D.1.2). Inside
-//! the library objects are known by a [`Key`], which is never reused, so a
+//! the library objects are known by a [`Key`], which no other object takes
+//! while it lives (and, 64 bits wide, none takes again in practice), so a
 //! container cannot end up referring to a different object that took the
 //! name.
 
@@ -23,7 +24,7 @@ use crate::gl;
 use super::{DRAW_BUFFERS, VERTEX_ATTRIBS};
 
 /// An object's identity inside the library.
-pub type Key = u32;
+pub type Key = u64;
 
 struct Entry<T> {
     value: T,
@@ -72,18 +73,28 @@ impl<T> Store<T> {
         self.names.get(&name).copied().flatten()
     }
 
+    /// A key no live object has: the next of a count from 1, skipping
+    /// keys still in use if it ever wraps around.
+    fn new_key(&mut self) -> Key {
+        loop {
+            let key = self.next_key;
+            self.next_key = key.checked_add(1).unwrap_or(1);
+            if !self.objects.contains_key(&key) {
+                return key;
+            }
+        }
+    }
+
     /// Creates an object without a name (the default objects, name 0).
     pub fn create_unnamed(&mut self, value: T) -> Key {
-        let key = self.next_key;
-        self.next_key = self.next_key.wrapping_add(1).max(1);
+        let key = self.new_key();
         self.objects.insert(key, Entry { value, name: None, refs: 1 });
         key
     }
 
     /// Creates the object for `name` (generated or not).
     pub fn create(&mut self, name: u32, value: T) -> Key {
-        let key = self.next_key;
-        self.next_key = self.next_key.wrapping_add(1).max(1);
+        let key = self.new_key();
         self.objects.insert(key, Entry { value, name: Some(name), refs: 1 });
         self.names.insert(name, Some(key));
         key
@@ -106,16 +117,8 @@ impl<T> Store<T> {
         &mut self.objects.get_mut(&key).expect("a live object").value
     }
 
-    pub fn try_get(&self, key: Key) -> Option<&T> {
-        self.objects.get(&key).map(|e| &e.value)
-    }
-
     pub fn try_get_mut(&mut self, key: Key) -> Option<&mut T> {
         self.objects.get_mut(&key).map(|e| &mut e.value)
-    }
-
-    pub fn by_name(&self, name: u32) -> Option<&T> {
-        self.key(name).map(|k| self.get(k))
     }
 
     /// The name of an object (0 once deleted).
@@ -148,16 +151,6 @@ impl<T> Store<T> {
         }
         let dead = self.release(key);
         Some((key, dead))
-    }
-
-    /// All live objects (for teardown).
-    pub fn drain(&mut self) -> Vec<T> {
-        self.names.clear();
-        core::mem::take(&mut self.objects).into_values().map(|e| e.value).collect()
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Key, &mut T)> {
-        self.objects.iter_mut().map(|(k, e)| (*k, &mut e.value))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
@@ -275,9 +268,28 @@ pub struct Image {
     pub height: u32,
     /// Depth (3D) or layers (2D arrays); 1 otherwise.
     pub depth: u32,
-    /// The image's storage when it is not in the texture's main storage:
-    /// a resource of its own, one level deep.
-    pub own: Option<ResourceId>,
+    /// Where its texels are.
+    pub location: Location,
+}
+
+impl Image {
+    /// Whether the image has no texels (a width, height or depth of 0).
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0 || self.depth == 0
+    }
+}
+
+/// Where the texels of a texture image are.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Location {
+    /// In the texture's main storage ([`Storage`]), at the image's level
+    /// (and its face's layer).
+    Storage,
+    /// In a resource of its own, one level deep (an image that does not
+    /// fit the storage).
+    Own(ResourceId),
+    /// Nowhere: the image is empty.
+    Empty,
 }
 
 /// A texture's main storage: a resource holding a mipmap chain.
@@ -454,4 +466,23 @@ pub struct Sync {
     /// The renderer's fence.
     pub fence: u64,
     pub signaled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_are_never_those_of_live_objects() {
+        let mut s: Store<u32> = Store::default();
+        let a = s.create_unnamed(1);
+        // As if every other key had come and gone: the count wraps around
+        // and must step over `a`, which still lives.
+        s.next_key = Key::MAX;
+        let b = s.create_unnamed(2);
+        let c = s.create(7, 3);
+        assert!(a != b && b != c && a != c);
+        assert_eq!([*s.get(a), *s.get(b), *s.get(c)], [1, 2, 3]);
+        assert_eq!(s.key(7), Some(c));
+    }
 }

@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Veda on the real Internet, through QEMU's NAT: nettest's online checks,
+# DNS for public names (and a name that does not exist), UDP, TCP to public
+# servers, HTTP and ping. The network cards' GUI scripts check them against
+# a server of the host's (`nettest local`) and need no Internet; this one
+# does, so it is not part of `cargo orchestration test`:
+#
+#   cargo orchestration script verification/real/internet.vts
+net ethernet
+boot-cmdline "run=nettest"
+fail-on "PANIC"
+fail-on "nettest: FAIL"
+wait-serial "nettest: PASS" 300

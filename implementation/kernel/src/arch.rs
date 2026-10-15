@@ -19,7 +19,7 @@
 //! | `trap` | the registers a trap saves: a system call's arguments and results, page faults, where the code was, descriptions for the log |
 //! | `thread` | a thread's saved context, and switching between threads |
 //! | `paging` | page tables: mappings, address spaces, the kernel's own |
-//! | `mm` | the layout of the kernel's address space, memory the architecture keeps, caches, access to user memory |
+//! | `mm` | the layout of the kernel's address space, memory and registers the architecture keeps, caches, access to user memory |
 //! | `tlb` | TLB shootdowns, of the processors' and of guests' translations |
 //! | `irq` | devices' interrupts: their vectors, lines and MSIs |
 //! | `timer`, `clock` | each CPU's one-shot timer; the clock's counter |

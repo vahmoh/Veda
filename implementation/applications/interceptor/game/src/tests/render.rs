@@ -57,7 +57,7 @@ fn frame_with(c: &mut Context, r: &mut Renderer, cam: &Camera, cars: &[CarView],
     );
     assert_eq!(c.get_error(), gl::NO_ERROR);
     let mut px = vec![0u32; (w * h) as usize];
-    c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+    c.present_to(&mut Present::new(&mut px, w as usize, w, h, true).unwrap());
     px
 }
 
@@ -261,7 +261,6 @@ fn showroom() {
 #[test]
 fn chase_scene() {
     use crate::game::{Car, Game};
-    use crate::vehicle::Spec;
     let Ok(dir) = std::env::var("INTERCEPTOR_CHASE") else { return };
     let (w, h) = (1280, 720);
     let at: f32 = std::env::var("INTERCEPTOR_AT").ok().and_then(|s| s.parse().ok()).unwrap_or(150.0);
@@ -282,14 +281,12 @@ fn chase_scene() {
         let world = World::new();
         let mut r = Renderer::new(&mut c, &world, env, quality).unwrap_or_else(|e| panic!("{e}"));
         let mut game = Game::new(world, env);
-        let mut suspect = Car::on_road(&game.world, Kind::Coupe, Spec::sports(), at + 16.0, 5.7, false, 30.0);
+        let mut suspect = Car::on_road(&game.world, Kind::Coupe, at + 16.0, 5.7, false, 30.0);
         suspect.paint = Vec3::new(0.55, 0.02, 0.02);
-        game.cars.push(suspect);
+        game.add_car(suspect);
         let p = game.player;
-        game.cars[p] = Car::on_road(&game.world, Kind::Police, Spec::interceptor(), at, 2.1, false, 30.0);
-        game.cars[p].paint = Vec3::new(0.02, 0.02, 0.02);
+        game.place_player(at, 30.0);
         game.cars[p].siren = true;
-        game.follow = crate::camera::Follow::new(&game.cars[p].vehicle);
         game.cars[1].controls.throttle = 0.6;
         game.cars[p].controls.throttle = 0.6;
         for k in 0..40 {
@@ -302,7 +299,7 @@ fn chase_scene() {
                         camera: game.camera,
                         cars: &cars,
                         lights: &lights,
-                        time: game.clock,
+                        time: crate::render::shader_time(game.clock()),
                         passing: Passing { rain: game.env.rain, ..Passing::default() },
                     },
                     w as i32,
@@ -311,7 +308,7 @@ fn chase_scene() {
             }
         }
         let mut px = vec![0u32; (w * h) as usize];
-        c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+        c.present_to(&mut Present::new(&mut px, w as usize, w, h, true).unwrap());
         save(&format!("{dir}/chase-{tname}.png"), &px, w, h);
     }
 }
@@ -341,7 +338,7 @@ fn showcase_film() {
             let frame = session.picture(&cars, &lights);
             r.render(&mut c, &frame, w as i32, h as i32);
             let mut px = vec![0u32; (w * h) as usize];
-            c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+            c.present_to(&mut Present::new(&mut px, w as usize, w, h, true).unwrap());
             let (x0, y0) = ((shot % cols) * w, (shot / cols) * h);
             for y in 0..h {
                 let row = ((y0 + y) * w * cols + x0) as usize;
@@ -358,10 +355,8 @@ fn showcase_film() {
 /// (sparks), on one contact sheet.
 #[test]
 fn effects_scene() {
-    use crate::driver::Role;
     use crate::effects::Effects;
-    use crate::game::{Car, Game, STEP};
-    use crate::vehicle::Spec;
+    use crate::game::{Game, STEP};
     let Ok(dir) = std::env::var("INTERCEPTOR_EFFECTS") else { return };
     let (w, h) = (640u32, 360u32);
     let (cols, rows) = (3u32, 3u32);
@@ -375,13 +370,12 @@ fn effects_scene() {
     let mut game = Game::new(world, env);
     let p = game.player;
     let place = |game: &mut Game, s: f32, lateral: f32, turn: f32, speed: f32| {
-        let mut car = Car::on_road(&game.world, Kind::Police, Spec::interceptor(), s, lateral, false, speed);
+        game.place_player(s, speed);
+        let car = &mut game.cars[p];
+        car.put(&game.world, s, lateral, false, speed);
         car.vehicle.yaw += turn;
         car.vehicle.set_speed(speed);
-        car.role = Role::Player;
         car.siren = true;
-        game.cars[p] = car;
-        game.follow = crate::camera::Follow::new(&game.cars[p].vehicle);
     };
     place(&mut game, 150.0, 2.1, 0.0, 28.0);
     let mut fx = Effects::new();
@@ -403,15 +397,16 @@ fn effects_scene() {
         game.update(dt);
         let (cars, lights) = game.frame(dt);
         fx.update(&game, game.camera.eye, dt);
-        sparks_seen += fx.particles.iter().filter(|p| p.kind == crate::effects::Kind::Spark).count();
+        sparks_seen += fx.particles().iter().filter(|p| p.kind == crate::effects::Kind::Spark).count();
         if (k % 15 == 14 || (k > 60 && k % 8 == 0)) && shot < cols * rows {
             let (skids, skids_made) = fx.skids();
-            let passing = Passing { particles: &fx.particles, skids, skids_made, rain: 0.0 };
-            let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time: game.clock, passing };
+            let passing = Passing { particles: fx.particles(), skids, skids_made, rain: 0.0 };
+            let time = crate::render::shader_time(game.clock());
+            let frame = Frame { camera: game.camera, cars: &cars, lights: &lights, time, passing };
             r.render(&mut c, &frame, w as i32, h as i32);
             assert_eq!(c.get_error(), gl::NO_ERROR);
             let mut px = vec![0u32; (w * h) as usize];
-            c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+            c.present_to(&mut Present::new(&mut px, w as usize, w, h, true).unwrap());
             let (x0, y0) = ((shot % cols) * w, (shot / cols) * h);
             for y in 0..h {
                 let row = ((y0 + y) * w * cols + x0) as usize;
@@ -439,12 +434,12 @@ fn signs_scene() {
     let mut views = Vec::new();
     for n in world.neons.iter().take(3) {
         let at = world.road.locate(n.base, None);
-        let face = Vec3::new(n.yaw.sin(), 0.0, n.yaw.cos());
+        let face = Vec3::new(libm::sinf(n.yaw), 0.0, libm::cosf(n.yaw));
         let eye = world.road.point(at.s, 0.0) + face * 30.0 + Vec3::Y * 4.0;
         views.push(Camera { eye, target: n.base + Vec3::Y * 4.0, up: Vec3::Y, fov: 0.9 });
     }
     for b in world.billboards.iter().take(3) {
-        let face = Vec3::new(b.yaw.sin(), 0.0, b.yaw.cos());
+        let face = Vec3::new(libm::sinf(b.yaw), 0.0, libm::cosf(b.yaw));
         let eye = b.base + face * 26.0 + Vec3::Y * 3.0;
         views.push(Camera { eye, target: b.base + Vec3::Y * 7.0, up: Vec3::Y, fov: 0.8 });
     }

@@ -5,6 +5,11 @@
 //! the current one's text, cursor and selection) and what it does
 //! (writing, finding and replacing, undoing, saving), through the same
 //! document operations as the keyboard and menus.
+//!
+//! Writing in a document is routine, and so is saving one, but a routine
+//! `save` never replaces what a file holds unless the agent saved that
+//! itself: replacing the user's work (a file the agent opened, wrote over
+//! and saves) is `save_as`, which asks the user.
 
 use alloc::format;
 use alloc::string::String;
@@ -13,7 +18,7 @@ use alloc::vec::Vec;
 
 use vfiles::path::file_name;
 use vtext::highlight::Language;
-use vtext::{Pos, Selection};
+use vtext::{Document, Pos, Selection};
 use vui::agent::{
     self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, arg_path, arg_str, clip,
     json, show_path,
@@ -73,14 +78,19 @@ pub fn info() -> AppAgentInfo {
                 .build(),
             Action::new(
                 "save",
-                "Saves the current document to its file. An untitled document needs a path for a new file.",
+                "Saves the current document to its file, if that is new or holds only what the agent saved; \
+                 otherwise save_as with the same path does it, asking the user. An untitled document needs a path \
+                 for a new file.",
             )
             .param("path", "string", "Where to save an untitled document (the file must not exist yet)", false)
             .build(),
-            Action::new("save_as", "Saves the current document under another name, replacing any file there")
-                .param("path", "string", "The new file", true)
-                .risk(Risk::Sensitive)
-                .build(),
+            Action::new(
+                "save_as",
+                "Saves the current document to a file, replacing what that file holds (its own file, or another)",
+            )
+            .param("path", "string", "The file", true)
+            .risk(Risk::Sensitive)
+            .build(),
             Action::new("switch_document", "Shows another open document")
                 .param("name", "string", "Its title or file name", true)
                 .build(),
@@ -110,12 +120,37 @@ fn tab_summary(t: &Tab, current: bool) -> Value {
     })
 }
 
+/// At most `max` bytes of the text between `a` and `b` (lines joined with
+/// `\n`, cut at a character), taken from the document where it is; and
+/// whether some was left out.
+fn text_between(doc: &Document, a: Pos, b: Pos, max: usize) -> (String, bool) {
+    let buf = doc.buffer();
+    let mut out = String::new();
+    for line in a.line..=b.line {
+        let text = buf.line(line);
+        let from = if line == a.line { a.col } else { 0 };
+        let to = if line == b.line { b.col } else { text.len() };
+        if line > a.line {
+            if out.len() == max {
+                return (out, true);
+            }
+            out.push('\n');
+        }
+        let (part, cut) = clip(&text[from..to], max - out.len());
+        out.push_str(part);
+        if cut {
+            return (out, true);
+        }
+    }
+    (out, false)
+}
+
 pub fn state(ed: &Editor) -> Value {
     let tab = &ed.tabs[ed.active];
-    let text = tab.doc.text();
-    let (shown, truncated) = clip(&text, MAX_TEXT);
-    let selected = tab.doc.selected_text();
-    let (selected, _) = clip(&selected, 500);
+    let doc = &tab.doc;
+    let (shown, truncated) = text_between(doc, Pos::new(0, 0), doc.buffer().end(), MAX_TEXT);
+    let sel = doc.selection();
+    let (selected, _) = text_between(doc, sel.start(), sel.end(), 500);
     let cursor = tab.doc.cursor();
     let dialog = ed.modal.as_ref().map(|m| match m {
         Modal::Open(_) => "Open file",
@@ -183,6 +218,8 @@ impl Editor {
         }
         tab.doc.mark_saved();
         tab.lossy = false;
+        // What the file holds now is the agent's to replace again.
+        tab.agent_file = true;
         let msg = format!("Saved {}", tab.title);
         self.show_toast(msg, vrt::time::now_ns());
         Ok(())
@@ -368,6 +405,14 @@ impl Editor {
                         return Err("this document has no file yet: give a path such as ~/Documents/notes.txt".into());
                     }
                 };
+                // A routine save never replaces the user's work.
+                if !self.tabs[i].agent_file && self.file_exists(&path) {
+                    return Err(format!(
+                        "saving would replace what {} holds, which the agent did not save: save_as with this path \
+                         saves it, asking the user",
+                        show_path(&path)
+                    ));
+                }
                 self.save_to(i, &path)?;
                 Ok(json!({ "saved": show_path(&path) }))
             }
@@ -398,9 +443,6 @@ impl Editor {
                     ));
                 }
                 let title = tab.title.clone();
-                if matches!(self.modal, Some(Modal::ConfirmClose { .. })) {
-                    self.modal = None;
-                }
                 self.remove_tab(i);
                 Ok(json!({ "closed": title }))
             }
@@ -409,9 +451,7 @@ impl Editor {
                 // whichever is in front by now.
                 let i = self.find_tab(arg_str(args, "name")?, false)?;
                 let title = self.tabs[i].title.clone();
-                if matches!(self.modal, Some(Modal::ConfirmClose { tab, .. } | Modal::SaveAs { tab, .. }) if tab == i) {
-                    self.modal = None;
-                }
+                // A question the user has open about it goes with it.
                 self.remove_tab(i);
                 Ok(json!({ "closed_without_saving": title }))
             }

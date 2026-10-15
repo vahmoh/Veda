@@ -17,7 +17,7 @@ pub fn reserved_memory(tables: &[Table]) -> Vec<(Vec<u16>, Range<u64>)> {
     let regions = match tables.iter().find(|t| t.is(b"DMAR")).map(|t| dmar::parse(&t.data)) {
         Some(Ok(dmar)) => dmar.reserved,
         Some(Err(e)) => {
-            println!("acpi: the DMAR table: {:?}", e);
+            println!("acpi: the DMAR table: {}", e);
             Vec::new()
         }
         None => Vec::new(),
@@ -25,6 +25,16 @@ pub fn reserved_memory(tables: &[Table]) -> Vec<(Vec<u16>, Range<u64>)> {
     regions
         .iter()
         .filter(|r| r.segment == 0)
-        .map(|r| (r.scopes.iter().filter_map(|s| s.source_id()).collect(), r.base..r.limit + 1))
+        .filter_map(|r| {
+            let Some(range) = r.range() else {
+                // The kernel keeps its devices: they cannot be confined.
+                println!(
+                    "acpi: the DMAR table reserves {:#x} to {:#x}, which is not whole pages: its devices stay Veda's",
+                    r.base, r.limit
+                );
+                return None;
+            };
+            Some((r.scopes.iter().filter_map(|s| s.source_id()).collect(), range))
+        })
         .collect()
 }

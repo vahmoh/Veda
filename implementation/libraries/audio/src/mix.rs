@@ -8,8 +8,9 @@
 //! accumulator is `i32`, and gains are Q15 fixed point (`32768` = 1.0).
 //! Gain changes are ramped linearly across a block, which avoids the
 //! clicks of an abrupt step.
-
-use num_traits::Float;
+//!
+//! [`Downmix`] folds the channels of a surround file into stereo, for every
+//! format the [`crate::source`]s decode.
 
 /// Unity gain in Q15.
 pub const UNITY_Q15: i32 = 1 << 15;
@@ -22,32 +23,11 @@ pub fn f32_to_i16(x: f32) -> i16 {
     (v as i32).clamp(-32768, 32767) as i16
 }
 
-/// Converts an `i16` sample to a float in [-1, 1).
-#[inline]
-pub fn i16_to_f32(s: i16) -> f32 {
-    s as f32 * (1.0 / 32768.0)
-}
-
-/// Decibels to a linear amplitude factor.
-pub fn db_to_gain(db: f32) -> f32 {
-    Float::powf(10.0f32, db / 20.0)
-}
-
-/// Linear amplitude factor to decibels (`-inf` is clamped to -144 dB).
-pub fn gain_to_db(gain: f32) -> f32 {
-    if gain <= 1e-7 { -144.0 } else { 20.0 * Float::log10(gain) }
-}
-
 /// Maps a volume slider position (0..=1) to an amplitude factor with a
 /// perceptual (cubic) taper: half way is about -18 dB.
 pub fn slider_to_gain(pos: f32) -> f32 {
     let p = pos.clamp(0.0, 1.0);
     p * p * p
-}
-
-/// Inverse of [`slider_to_gain`].
-pub fn gain_to_slider(gain: f32) -> f32 {
-    Float::cbrt(gain.clamp(0.0, 1.0))
 }
 
 /// A linear gain (clamped to 0..=1) in Q15.
@@ -133,6 +113,50 @@ pub fn convert_channels(src: &[i16], in_channels: usize, out: &mut [i16], out_ch
     frames
 }
 
+/// Folds the channels of a surround layout (the WAVE default order: FL,
+/// FR, C, LFE, BL, BR, SL, SR) into stereo: each channel to the side it is
+/// on, the centre (and the back of seven) to both at -3 dB, the low
+/// frequency effects left out, so that a channel on its own is as loud as
+/// its side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Downmix {
+    /// Left and right weights of each channel.
+    weights: [(f32, f32); 8],
+}
+
+impl Downmix {
+    /// The downmix of `channels` (3 to 8) channels.
+    pub fn new(channels: usize) -> Downmix {
+        const H: f32 = core::f32::consts::FRAC_1_SQRT_2;
+        let layout: &[(f32, f32)] = match channels {
+            3 => &[(1.0, 0.0), (0.0, 1.0), (H, H)],
+            4 => &[(1.0, 0.0), (0.0, 1.0), (H, 0.0), (0.0, H)],
+            5 => &[(1.0, 0.0), (0.0, 1.0), (H, H), (H, 0.0), (0.0, H)],
+            6 => &[(1.0, 0.0), (0.0, 1.0), (H, H), (0.0, 0.0), (H, 0.0), (0.0, H)],
+            7 => &[(1.0, 0.0), (0.0, 1.0), (H, H), (0.0, 0.0), (0.5, 0.5), (H, 0.0), (0.0, H)],
+            _ => &[(1.0, 0.0), (0.0, 1.0), (H, H), (0.0, 0.0), (H, 0.0), (0.0, H), (H, 0.0), (0.0, H)],
+        };
+        let left: f32 = layout.iter().map(|p| p.0).sum();
+        let norm = if left > 0.0 { 1.0 / left } else { 1.0 };
+        let mut weights = [(0.0f32, 0.0f32); 8];
+        for (w, &(l, r)) in weights.iter_mut().zip(layout) {
+            *w = (l * norm, r * norm);
+        }
+        Downmix { weights }
+    }
+
+    /// One frame (its samples as floats in [-1, 1), at most eight) as a
+    /// stereo pair.
+    pub fn frame(&self, samples: impl Iterator<Item = f32>) -> [i16; 2] {
+        let (mut l, mut r) = (0.0f32, 0.0f32);
+        for (s, w) in samples.zip(&self.weights) {
+            l += s * w.0;
+            r += s * w.1;
+        }
+        [f32_to_i16(l), f32_to_i16(r)]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,12 +169,25 @@ mod tests {
         assert_eq!(f32_to_i16(-1.0), -32768);
         assert_eq!(f32_to_i16(-2.0), -32768);
         assert_eq!(f32_to_i16(0.5), 16384);
-        assert!((db_to_gain(-6.0206) - 0.5).abs() < 1e-3);
-        assert!((gain_to_db(0.1) + 20.0).abs() < 1e-3);
-        assert!((gain_to_slider(slider_to_gain(0.37)) - 0.37).abs() < 1e-4);
+        assert!((slider_to_gain(0.5) - 0.125).abs() < 1e-6);
+        assert_eq!(slider_to_gain(2.0), 1.0);
         assert_eq!(gain_q15(1.0), UNITY_Q15);
         assert_eq!(gain_q15(2.0), UNITY_Q15);
         assert_eq!(gain_q15(-1.0), 0);
+    }
+
+    #[test]
+    fn surround_folds_into_stereo() {
+        let d = Downmix::new(6);
+        // Front left on its own stays left; the centre goes to both sides
+        // alike; the low frequency effects are left out.
+        let [l, r] = d.frame([0.5, 0.0, 0.0, 0.0, 0.0, 0.0].into_iter());
+        assert!(l > 6_000 && r == 0, "{l} {r}");
+        let [l, r] = d.frame([0.0, 0.0, 0.5, 0.0, 0.0, 0.0].into_iter());
+        assert!(l == r && l > 4_000, "{l} {r}");
+        assert_eq!(d.frame([0.0, 0.0, 0.0, 0.9, 0.0, 0.0].into_iter()), [0, 0]);
+        // Full scale on every channel does not overflow.
+        assert!(d.frame([1.0; 8].into_iter()).iter().all(|&s| s >= 32_000));
     }
 
     #[test]

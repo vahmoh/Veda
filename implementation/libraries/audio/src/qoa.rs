@@ -23,7 +23,6 @@
 //! Every frame except the last holds 5120 samples per channel, so frames
 //! can be decoded independently, which gives cheap seeking.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::AudioError;
@@ -358,12 +357,14 @@ impl QoaIndex {
     }
 }
 
-/// Decodes a whole file into interleaved samples.
-pub fn decode(data: &[u8]) -> Result<(QoaInfo, Vec<i16>), AudioError> {
+/// Decodes a whole file into interleaved samples (the tests' way to look at
+/// what was encoded; players stream frames through [`QoaIndex`]).
+#[cfg(test)]
+fn decode(data: &[u8]) -> Result<(QoaInfo, Vec<i16>), AudioError> {
     let f = QoaFile::open(data)?;
     let info = f.info();
-    let mut out = vec![0i16; info.frames as usize * info.channels];
-    let mut frame = vec![0i16; FRAME_LEN * info.channels];
+    let mut out = alloc::vec![0i16; info.frames as usize * info.channels];
+    let mut frame = alloc::vec![0i16; FRAME_LEN * info.channels];
     for i in 0..f.frame_count() {
         let n = f.decode_frame(i, &mut frame)?;
         let start = f.frame_start(i) as usize * info.channels;
@@ -476,6 +477,7 @@ fn encode_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use num_traits::Float;
     use rand::{Rng, RngExt, SeedableRng};
     use rand_pcg::Pcg32;

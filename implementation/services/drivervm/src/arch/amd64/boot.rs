@@ -61,10 +61,12 @@ pub struct Load<'a> {
 /// starts in.
 pub fn load(l: &Load) -> Result<VcpuState, String> {
     let image = l.kernel;
+    let too_little = || format!("{} MiB is too little memory for the guest", l.size / MIB);
     let kernel_at = image.preferred_address.max(LEGACY_END);
-    let initrd_at = (l.size - l.initramfs.len() as u64) & !0xFFF;
-    if kernel_at + image.init_size.max(image.protected.len() as u64) > initrd_at {
-        return Err(format!("{} MiB is too little memory for the guest", l.size / MIB));
+    let initrd_at = l.size.checked_sub(l.initramfs.len() as u64).ok_or_else(too_little)? & !0xFFF;
+    let kernel_end = kernel_at.checked_add(image.init_size.max(image.protected.len() as u64));
+    if kernel_end.is_none_or(|end| end > initrd_at) {
+        return Err(too_little());
     }
     if l.cmdline.len() > image.cmdline_size as usize || l.cmdline.len() >= 4096 {
         return Err(String::from("the kernel's command line is too long"));

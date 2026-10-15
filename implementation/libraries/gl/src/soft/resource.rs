@@ -54,11 +54,6 @@ impl core::fmt::Debug for Resource {
     }
 }
 
-/// The dimension of level `l` of a dimension `size` (never below 1).
-pub fn minify(size: u32, l: u32) -> u32 {
-    (size >> l.min(31)).max(1)
-}
-
 impl Resource {
     /// A zeroed resource, or `OutOfMemory`.
     pub fn new(desc: &ResourceDesc) -> Result<Resource, OutOfMemory> {
@@ -79,8 +74,7 @@ impl Resource {
         } else {
             let texel = desc.format.bytes().checked_mul(samples as usize).ok_or(OutOfMemory)?;
             for l in 0..desc.levels.max(1) {
-                let (w, h) = (minify(desc.width, l), minify(desc.height, l));
-                let layers = if desc.target == Target::Texture3D { minify(desc.depth, l) } else { desc.depth.max(1) };
+                let (w, h, layers) = desc.level_size(l);
                 let row = (w as usize).checked_mul(texel).ok_or(OutOfMemory)?;
                 let image = row.checked_mul(h as usize).ok_or(OutOfMemory)?;
                 let size = image.checked_mul(layers as usize).ok_or(OutOfMemory)?;
@@ -94,8 +88,9 @@ impl Resource {
         Ok(Resource { desc: *desc, levels, samples, data })
     }
 
-    pub fn format(&self) -> Format {
-        self.desc.format
+    /// Bytes of a texel of the data transfers move (1 for buffers).
+    pub fn transfer_texel(&self) -> usize {
+        if self.desc.target == Target::Buffer { 1 } else { self.desc.format.bytes() }
     }
 
     /// The level, if it exists.

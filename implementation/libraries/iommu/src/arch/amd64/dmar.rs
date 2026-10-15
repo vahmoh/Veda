@@ -6,9 +6,12 @@
 //! system takes over (Intel VT-d specification, chapter 8).
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
-/// The table's flags.
+/// The table's flags (VT-d 8.1): the platform supports interrupt
+/// remapping.
 pub const INTR_REMAP: u8 = 1 << 0;
+/// The firmware asks the system not to use x2APIC mode.
 pub const X2APIC_OPT_OUT: u8 = 1 << 1;
 
 /// What a device scope names.
@@ -69,11 +72,23 @@ pub struct Reserved {
     pub scopes: Vec<Scope>,
 }
 
+impl Reserved {
+    /// The memory, end exclusive, if it is whole pages (VT-d 8.4). A
+    /// firmware's that is not (its base or the byte after its limit not
+    /// 4 KiB-aligned, its limit below its base or the last byte there is)
+    /// says nothing certain of what its devices use: they cannot be
+    /// confined, and stay the host's. The other devices are unaffected, as
+    /// Linux has it.
+    pub fn range(&self) -> Option<Range<u64>> {
+        let end = self.limit.checked_add(1)?;
+        (self.base.is_multiple_of(4096) && end > self.base && end.is_multiple_of(4096)).then_some(self.base..end)
+    }
+}
+
 /// The table, read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Dmar {
-    /// The host address width (bits).
-    pub address_width: u8,
+    /// [`INTR_REMAP`], [`X2APIC_OPT_OUT`].
     pub flags: u8,
     pub units: Vec<Unit>,
     pub reserved: Vec<Reserved>,
@@ -88,10 +103,10 @@ pub enum DmarError {
 
 impl core::fmt::Display for DmarError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            DmarError::NotDmar => "not a DMAR table",
-            DmarError::Truncated => "the table is cut short",
-        })
+        match self {
+            DmarError::NotDmar => f.write_str("not a DMAR table"),
+            DmarError::Truncated => f.write_str("the table is cut short"),
+        }
     }
 }
 
@@ -138,7 +153,7 @@ pub fn parse(table: &[u8]) -> Result<Dmar, DmarError> {
         return Err(DmarError::NotDmar);
     }
     let len = (u32::from_le_bytes([table[4], table[5], table[6], table[7]]) as usize).min(table.len());
-    let mut dmar = Dmar { address_width: table[36] + 1, flags: table[37], ..Dmar::default() };
+    let mut dmar = Dmar { flags: table[37], ..Dmar::default() };
     let mut at = 48;
     while at + 4 <= len {
         let kind = u16_at(table, at);
@@ -233,7 +248,6 @@ mod tests {
     #[test]
     fn reads_qemus_table() {
         let d = parse(&qemu_table()).unwrap();
-        assert_eq!(d.address_width, 39);
         assert_eq!(d.flags, INTR_REMAP);
         assert_eq!(d.units.len(), 1);
         let u = &d.units[0];
@@ -244,6 +258,7 @@ mod tests {
         assert_eq!(d.ioapic_source(1), None);
         assert_eq!(d.reserved.len(), 1);
         assert_eq!(d.reserved[0].limit, 0x3E0F_FFFF);
+        assert_eq!(d.reserved[0].range(), Some(0x3E00_0000..0x3E10_0000));
         assert_eq!(d.reserved[0].scopes[0].source_id(), Some(0xA0));
         assert_eq!(d.unit_for(0, 0x0200), Some(0));
         assert_eq!(d.unit_for(1, 0x0200), None);
@@ -276,5 +291,29 @@ mod tests {
         t[50] = 0xFF;
         t[51] = 0xFF;
         assert_eq!(parse(&t), Err(DmarError::Truncated));
+        // Any host address width is read without harm.
+        let mut t = qemu_table();
+        t[36] = 0xFF;
+        assert!(parse(&t).is_ok());
+    }
+
+    #[test]
+    fn reserved_memory_is_whole_pages() {
+        // The RMRR's base and limit are 8 and 16 bytes into it, which is
+        // 72 bytes into QEMU's table (after its header and the DRHD).
+        let with = |base: u64, limit: u64| {
+            let mut t = qemu_table();
+            t[72 + 8..72 + 16].copy_from_slice(&base.to_le_bytes());
+            t[72 + 16..72 + 24].copy_from_slice(&limit.to_le_bytes());
+            let d = parse(&t).unwrap();
+            // The table is read whatever the region: only its devices are
+            // affected.
+            assert_eq!(d.units.len(), 1);
+            d.reserved[0].range()
+        };
+        assert_eq!(with(0x1000, 0x1FFF), Some(0x1000..0x2000));
+        for (base, limit) in [(0x1800, 0x1FFF), (0x1000, 0x1FFE), (0x2000, 0x0FFF), (0, u64::MAX), (0x1000, 0xFFF)] {
+            assert_eq!(with(base, limit), None, "{base:#x}-{limit:#x}");
+        }
     }
 }

@@ -14,8 +14,9 @@
 //!
 //! The runtime pieces that only make sense in a real Veda program (entry
 //! point, allocator, panic handler, C symbols) are behind the default
-//! `runtime` feature. Libraries depend on `vrt` with
-//! `default-features = false`, which keeps them unit-testable on the host.
+//! `runtime` feature, and left out of the crate's own unit tests. Libraries
+//! depend on `vrt` with `default-features = false`, which keeps them
+//! unit-testable on the host.
 //!
 //! Programs of the driver VM's Linux guest are built with `--cfg
 //! veda_guest` (their configuration sets it:
@@ -25,7 +26,7 @@
 #![no_std]
 
 extern crate alloc;
-#[cfg(veda_guest)]
+#[cfg(any(test, veda_guest))]
 extern crate std;
 
 pub use alloc::{boxed, format, rc, string, vec};
@@ -34,7 +35,7 @@ pub use vabi;
 #[cfg(target_arch = "x86_64")]
 #[path = "arch/amd64/mod.rs"]
 pub mod arch;
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", not(test)))]
 mod crt;
 pub mod env;
 #[cfg(veda_guest)]
@@ -44,7 +45,7 @@ pub mod io;
 pub mod object;
 pub mod pool;
 pub mod process;
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", not(test)))]
 pub mod start;
 pub mod sync;
 pub mod sys;
@@ -52,36 +53,20 @@ pub mod thread;
 pub mod time;
 pub mod vm;
 
-pub use object::{Channel, Event, Guest, Handle, Interrupt, IoPorts, Message, Process, Resource, Thread, Vcpu, Vmo};
+pub use object::{
+    Channel, Event, Guest, Handle, Interrupt, IoPorts, Message, Port, Process, Resource, Thread, Vcpu, Vmo,
+};
 
-#[cfg(feature = "runtime")]
+// The runtime's pieces are a real program's: a unit test of the crate has
+// the host's allocator, panic handler and C library.
+#[cfg(all(feature = "runtime", not(test)))]
 #[global_allocator]
 static HEAP: heap::Heap = heap::Heap::new();
 
-/// Heap usage: (bytes in use, bytes managed).
-#[cfg(feature = "runtime")]
-pub fn heap_stats() -> (usize, usize) {
-    HEAP.stats()
-}
-
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", not(test)))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Format without allocating in case the heap is what failed.
-    struct Buf {
-        data: [u8; 512],
-        len: usize,
-    }
-    impl core::fmt::Write for Buf {
-        fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            let n = s.len().min(self.data.len() - self.len);
-            self.data[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
-            self.len += n;
-            Ok(())
-        }
-    }
-    let mut b = Buf { data: [0; 512], len: 0 };
-    let _ = core::fmt::write(&mut b, format_args!("panic: {info}\n"));
-    sys::debug_write(&b.data[..b.len]);
+    // Formatted without allocating, in case the heap is what failed.
+    io::log_without_allocating(format_args!("panic: {info}\n"));
     sys::process_exit(vabi::EXIT_CODE_PANICKED)
 }

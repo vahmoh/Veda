@@ -13,9 +13,8 @@
 
 use crate::carmodel::Kind;
 use crate::driver::{Role, Suspect};
-use crate::game::{Car, Event, Game, STEP};
+use crate::game::{Car, CarId, Event, Game, STEP};
 use crate::prelude::*;
-use crate::vehicle::Spec;
 
 /// Further ahead than this, the suspect is getting away (m).
 pub const ESCAPE_GAP: f32 = 380.0;
@@ -49,7 +48,6 @@ pub enum State {
 #[derive(Clone, Copy, Debug)]
 pub struct Wanted {
     pub kind: Kind,
-    pub spec: Spec,
     pub paint: Vec3,
     /// How well it drives (0.8..1.0) and how readily it rams back (0..1).
     pub skill: f32,
@@ -59,7 +57,8 @@ pub struct Wanted {
 /// A pursuit under way.
 #[derive(Clone, Copy, Debug)]
 pub struct Pursuit {
-    pub suspect: usize,
+    /// The suspect's car.
+    pub suspect: CarId,
     pub state: State,
     /// Seconds since it began.
     pub time: f32,
@@ -81,12 +80,12 @@ impl Pursuit {
         let start = game.world.road.wrap(s + ahead);
         let lane = crate::road::Road::lane_center(1, 1.0);
         let speed = speed.max(game.cars[p].vehicle.speed());
-        let mut car = Car::on_road(&game.world, wanted.kind, wanted.spec, start, lane, false, speed);
+        let mut car = Car::on_road(&game.world, wanted.kind, start, lane, false, speed);
         car.paint = wanted.paint;
         let seed = (start * 13.0) as u32 ^ 0x5EED;
-        car.role = Role::Suspect(Suspect::new(lane, wanted.skill, wanted.aggression, p, seed));
-        game.cars.push(car);
-        let suspect = game.cars.len() - 1;
+        let pursuer = game.cars[p].id;
+        car.role = Role::Suspect(Suspect::new(lane, wanted.skill, wanted.aggression, pursuer, seed));
+        let suspect = game.add_car(car);
         Pursuit {
             suspect,
             state: State::Chasing { escaping: 0.0, busting: 0.0 },
@@ -102,9 +101,10 @@ impl Pursuit {
         matches!(self.state, State::Chasing { .. })
     }
 
-    /// How much of the suspect's car is left (1 whole, 0 wrecked).
+    /// How much of the suspect's car is left (1 whole, 0 wrecked; gone,
+    /// nothing).
     pub fn integrity(&self, game: &Game) -> f32 {
-        1.0 - game.cars[self.suspect].damage
+        game.car(self.suspect).map_or(0.0, |c| 1.0 - c.damage)
     }
 
     /// Follows the pursuit through a step of the game, just taken (see
@@ -113,19 +113,26 @@ impl Pursuit {
     pub fn step(&mut self, game: &mut Game) {
         let dt = STEP;
         let State::Chasing { mut escaping, mut busting } = self.state else { return };
+        // Its car taken off the road, it is gone.
+        let Some(i) = game.index(self.suspect) else {
+            self.state = State::Escaped;
+            return;
+        };
         self.time += dt;
         self.since_hit += dt;
-        let (p, i) = (game.player, self.suspect);
+        let (p, suspect) = (game.player, self.suspect);
+        let player = game.cars[p].id;
         // The knocks it took: harder from the police (any police car), and
         // from a wall it was pushed into; a ram by the player counted.
         for k in game.step_events() {
             let Event::Crash { a, b, impact } = game.events[k];
-            let other = match (a == i, b == Some(i)) {
+            let other = match (a == suspect, b == Some(suspect)) {
                 (true, _) => b,
                 (_, true) => Some(a),
                 _ => continue,
             };
-            let police = other.is_some_and(|o| o == p || matches!(game.cars[o].role, Role::Police(_)));
+            let police =
+                other.is_some_and(|o| o == player || game.car(o).is_some_and(|c| matches!(c.role, Role::Police(_))));
             let pushed = other.is_none() && self.since_hit < PUSHED;
             let k = if police {
                 1.0
@@ -137,7 +144,7 @@ impl Pursuit {
             game.cars[i].damage = (game.cars[i].damage + impact.harm() * (FRAGILITY - 1.0) * k).min(1.0);
             if police && impact.speed > 3.0 {
                 self.since_hit = 0.0;
-                if other == Some(p) {
+                if other == Some(player) {
                     self.hits += 1;
                 }
             }
@@ -183,13 +190,7 @@ mod tests {
     use crate::world::World;
 
     fn wanted() -> Wanted {
-        Wanted {
-            kind: Kind::Coupe,
-            spec: Spec::sports(),
-            paint: Vec3::new(0.5, 0.02, 0.02),
-            skill: 0.95,
-            aggression: 0.0,
-        }
+        Wanted { kind: Kind::Coupe, paint: Vec3::new(0.5, 0.02, 0.02), skill: 0.95, aggression: 0.0 }
     }
 
     #[test]
@@ -203,12 +204,11 @@ mod tests {
             if !chase.on() {
                 break;
             }
-            let (s, l) = g.cars[chase.suspect].place(&g.world);
-            let v = g.cars[chase.suspect].vehicle.speed();
+            let suspect = g.car(chase.suspect).expect("the suspect");
+            let (s, l) = suspect.place(&g.world);
+            let v = suspect.vehicle.speed();
             let p = g.player;
-            let mut car = Car::on_road(&g.world, Kind::Police, Spec::interceptor(), s - 6.0, l, false, v + 14.0);
-            car.role = Role::Player;
-            g.cars[p] = car;
+            g.cars[p].put(&g.world, s - 6.0, l, false, v + 14.0);
             for _ in 0..(0.6 / STEP) as usize {
                 g.update_with(STEP, |g| chase.step(g));
             }

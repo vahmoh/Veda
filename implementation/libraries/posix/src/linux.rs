@@ -9,9 +9,7 @@
 //! them for each architecture, under the names and types the layer uses;
 //! the few written here say why.
 
-#![allow(dead_code)]
-
-pub use crate::arch::linux::{Stat, nr};
+pub use crate::arch::linux::{Stat, nr, ucontext};
 
 /// `errno` values.
 pub mod errno {
@@ -31,7 +29,6 @@ pub mod errno {
     pub const EFAULT: isize = linux_raw_sys::errno::EFAULT as isize;
     pub const EBUSY: isize = linux_raw_sys::errno::EBUSY as isize;
     pub const EEXIST: isize = linux_raw_sys::errno::EEXIST as isize;
-    pub const EXDEV: isize = linux_raw_sys::errno::EXDEV as isize;
     pub const ENODEV: isize = linux_raw_sys::errno::ENODEV as isize;
     pub const ENOTDIR: isize = linux_raw_sys::errno::ENOTDIR as isize;
     pub const EISDIR: isize = linux_raw_sys::errno::EISDIR as isize;
@@ -39,18 +36,15 @@ pub mod errno {
     pub const ENFILE: isize = linux_raw_sys::errno::ENFILE as isize;
     pub const EMFILE: isize = linux_raw_sys::errno::EMFILE as isize;
     pub const ENOTTY: isize = linux_raw_sys::errno::ENOTTY as isize;
-    pub const EFBIG: isize = linux_raw_sys::errno::EFBIG as isize;
     pub const ENOSPC: isize = linux_raw_sys::errno::ENOSPC as isize;
     pub const ESPIPE: isize = linux_raw_sys::errno::ESPIPE as isize;
     pub const EROFS: isize = linux_raw_sys::errno::EROFS as isize;
-    pub const EMLINK: isize = linux_raw_sys::errno::EMLINK as isize;
     pub const EPIPE: isize = linux_raw_sys::errno::EPIPE as isize;
     pub const ERANGE: isize = linux_raw_sys::errno::ERANGE as isize;
     pub const ENAMETOOLONG: isize = linux_raw_sys::errno::ENAMETOOLONG as isize;
+    pub const ENOLCK: isize = linux_raw_sys::errno::ENOLCK as isize;
     pub const ENOSYS: isize = linux_raw_sys::errno::ENOSYS as isize;
     pub const ENOTEMPTY: isize = linux_raw_sys::errno::ENOTEMPTY as isize;
-    pub const ELOOP: isize = linux_raw_sys::errno::ELOOP as isize;
-    pub const ETIME: isize = linux_raw_sys::errno::ETIME as isize;
     pub const EILSEQ: isize = linux_raw_sys::errno::EILSEQ as isize;
     pub const ENOTSOCK: isize = linux_raw_sys::errno::ENOTSOCK as isize;
     pub const EOPNOTSUPP: isize = linux_raw_sys::errno::EOPNOTSUPP as isize;
@@ -67,12 +61,14 @@ pub mod o {
     pub const RDWR: u32 = linux_raw_sys::general::O_RDWR;
     pub const CREAT: u32 = linux_raw_sys::general::O_CREAT;
     pub const EXCL: u32 = linux_raw_sys::general::O_EXCL;
-    pub const NOCTTY: u32 = linux_raw_sys::general::O_NOCTTY;
     pub const TRUNC: u32 = linux_raw_sys::general::O_TRUNC;
     pub const APPEND: u32 = linux_raw_sys::general::O_APPEND;
     pub const NONBLOCK: u32 = linux_raw_sys::general::O_NONBLOCK;
+    /// Writes reach persistent storage before they return (`O_SYNC`
+    /// includes `O_DSYNC`'s bit).
+    pub const DSYNC: u32 = linux_raw_sys::general::O_DSYNC;
+    pub const SYNC: u32 = linux_raw_sys::general::O_SYNC;
     pub const DIRECTORY: u32 = linux_raw_sys::general::O_DIRECTORY;
-    pub const NOFOLLOW: u32 = linux_raw_sys::general::O_NOFOLLOW;
     pub const CLOEXEC: u32 = linux_raw_sys::general::O_CLOEXEC;
     pub const PATH: u32 = linux_raw_sys::general::O_PATH;
     /// The kernel's `__O_TMPFILE` bit alone: `O_TMPFILE` adds `O_DIRECTORY`,
@@ -85,7 +81,6 @@ pub mod rwf {
     pub const HIPRI: u32 = linux_raw_sys::general::RWF_HIPRI;
     pub const DSYNC: u32 = linux_raw_sys::general::RWF_DSYNC;
     pub const SYNC: u32 = linux_raw_sys::general::RWF_SYNC;
-    pub const NOWAIT: u32 = linux_raw_sys::general::RWF_NOWAIT;
     pub const APPEND: u32 = linux_raw_sys::general::RWF_APPEND;
     /// Linux 6.9's, newer than `linux-raw-sys`'s headers.
     pub const NOAPPEND: u32 = 0x20;
@@ -97,22 +92,17 @@ pub mod at {
     pub const FDCWD: i32 = linux_raw_sys::general::AT_FDCWD;
     pub const SYMLINK_NOFOLLOW: u32 = linux_raw_sys::general::AT_SYMLINK_NOFOLLOW;
     pub const REMOVEDIR: u32 = linux_raw_sys::general::AT_REMOVEDIR;
-    pub const EACCESS: u32 = linux_raw_sys::general::AT_EACCESS;
-    pub const SYMLINK_FOLLOW: u32 = linux_raw_sys::general::AT_SYMLINK_FOLLOW;
     pub const EMPTY_PATH: u32 = linux_raw_sys::general::AT_EMPTY_PATH;
 }
 
 /// `access` modes.
 pub mod access {
-    pub const F_OK: u32 = linux_raw_sys::general::F_OK;
     pub const X_OK: u32 = linux_raw_sys::general::X_OK;
     pub const W_OK: u32 = linux_raw_sys::general::W_OK;
-    pub const R_OK: u32 = linux_raw_sys::general::R_OK;
 }
 
 /// `st_mode` file types.
 pub mod mode {
-    pub const IFMT: u32 = linux_raw_sys::general::S_IFMT;
     pub const IFIFO: u32 = linux_raw_sys::general::S_IFIFO;
     pub const IFCHR: u32 = linux_raw_sys::general::S_IFCHR;
     pub const IFDIR: u32 = linux_raw_sys::general::S_IFDIR;
@@ -134,8 +124,25 @@ pub mod fcntl {
     pub const DUPFD_QUERY: u32 = linux_raw_sys::general::F_DUPFD_QUERY;
     pub const DUPFD_CLOEXEC: u32 = linux_raw_sys::general::F_DUPFD_CLOEXEC;
     pub const FD_CLOEXEC: u32 = linux_raw_sys::general::FD_CLOEXEC;
-    /// `l_type` of a lock that is not held.
+    /// `l_type`s of a lock: shared, exclusive, not held.
+    pub const F_RDLCK: i16 = linux_raw_sys::general::F_RDLCK as i16;
+    pub const F_WRLCK: i16 = linux_raw_sys::general::F_WRLCK as i16;
     pub const F_UNLCK: i16 = linux_raw_sys::general::F_UNLCK as i16;
+}
+
+/// `flock` operations.
+pub mod flock {
+    pub const SH: u32 = linux_raw_sys::general::LOCK_SH;
+    pub const EX: u32 = linux_raw_sys::general::LOCK_EX;
+    pub const NB: u32 = linux_raw_sys::general::LOCK_NB;
+    pub const UN: u32 = linux_raw_sys::general::LOCK_UN;
+}
+
+/// `sync_file_range` flags.
+pub mod sync_range {
+    pub const WAIT_BEFORE: u32 = linux_raw_sys::general::SYNC_FILE_RANGE_WAIT_BEFORE;
+    pub const WRITE: u32 = linux_raw_sys::general::SYNC_FILE_RANGE_WRITE;
+    pub const WAIT_AFTER: u32 = linux_raw_sys::general::SYNC_FILE_RANGE_WAIT_AFTER;
 }
 
 /// `lseek` origins.
@@ -213,10 +220,6 @@ pub mod clock {
 /// `clone` flags.
 pub mod clone {
     pub const VM: u32 = linux_raw_sys::general::CLONE_VM;
-    pub const FS: u32 = linux_raw_sys::general::CLONE_FS;
-    pub const FILES: u32 = linux_raw_sys::general::CLONE_FILES;
-    pub const SIGHAND: u32 = linux_raw_sys::general::CLONE_SIGHAND;
-    pub const VFORK: u32 = linux_raw_sys::general::CLONE_VFORK;
     pub const THREAD: u32 = linux_raw_sys::general::CLONE_THREAD;
     pub const SETTLS: u32 = linux_raw_sys::general::CLONE_SETTLS;
     pub const PARENT_SETTID: u32 = linux_raw_sys::general::CLONE_PARENT_SETTID;
@@ -230,10 +233,8 @@ pub mod futex {
     pub const WAKE: u32 = linux_raw_sys::general::FUTEX_WAKE;
     pub const REQUEUE: u32 = linux_raw_sys::general::FUTEX_REQUEUE;
     pub const CMP_REQUEUE: u32 = linux_raw_sys::general::FUTEX_CMP_REQUEUE;
-    pub const WAKE_OP: u32 = linux_raw_sys::general::FUTEX_WAKE_OP;
     pub const WAIT_BITSET: u32 = linux_raw_sys::general::FUTEX_WAIT_BITSET;
     pub const WAKE_BITSET: u32 = linux_raw_sys::general::FUTEX_WAKE_BITSET;
-    pub const PRIVATE_FLAG: u32 = linux_raw_sys::general::FUTEX_PRIVATE_FLAG;
     pub const CLOCK_REALTIME: u32 = linux_raw_sys::general::FUTEX_CLOCK_REALTIME;
     pub const CMD_MASK: u32 = linux_raw_sys::general::FUTEX_CMD_MASK as u32;
 }
@@ -254,34 +255,20 @@ pub mod wait {
 
 /// Resource limits.
 pub mod rlimit {
-    pub const CPU: u32 = linux_raw_sys::general::RLIMIT_CPU;
-    pub const FSIZE: u32 = linux_raw_sys::general::RLIMIT_FSIZE;
-    pub const DATA: u32 = linux_raw_sys::general::RLIMIT_DATA;
     pub const STACK: u32 = linux_raw_sys::general::RLIMIT_STACK;
     pub const CORE: u32 = linux_raw_sys::general::RLIMIT_CORE;
     pub const NOFILE: u32 = linux_raw_sys::general::RLIMIT_NOFILE;
-    pub const AS: u32 = linux_raw_sys::general::RLIMIT_AS;
     /// musl's `RLIM_INFINITY`: every bit of the 64-bit limit.
     pub const INFINITY: u64 = u64::MAX;
 }
 
 /// Signals.
 pub mod sig {
-    pub const HUP: u32 = linux_raw_sys::general::SIGHUP;
-    pub const INT: u32 = linux_raw_sys::general::SIGINT;
-    pub const QUIT: u32 = linux_raw_sys::general::SIGQUIT;
-    pub const ILL: u32 = linux_raw_sys::general::SIGILL;
-    pub const TRAP: u32 = linux_raw_sys::general::SIGTRAP;
+    /// The layer's panic handler's, which only Veda's build has.
+    #[cfg_attr(not(target_os = "none"), allow(dead_code))]
     pub const ABRT: u32 = linux_raw_sys::general::SIGABRT;
-    pub const BUS: u32 = linux_raw_sys::general::SIGBUS;
-    pub const FPE: u32 = linux_raw_sys::general::SIGFPE;
     pub const KILL: u32 = linux_raw_sys::general::SIGKILL;
-    pub const USR1: u32 = linux_raw_sys::general::SIGUSR1;
-    pub const SEGV: u32 = linux_raw_sys::general::SIGSEGV;
-    pub const USR2: u32 = linux_raw_sys::general::SIGUSR2;
     pub const PIPE: u32 = linux_raw_sys::general::SIGPIPE;
-    pub const ALRM: u32 = linux_raw_sys::general::SIGALRM;
-    pub const TERM: u32 = linux_raw_sys::general::SIGTERM;
     pub const CHLD: u32 = linux_raw_sys::general::SIGCHLD;
     pub const CONT: u32 = linux_raw_sys::general::SIGCONT;
     pub const STOP: u32 = linux_raw_sys::general::SIGSTOP;
@@ -357,6 +344,7 @@ pub struct Termios {
 
 /// `struct utsname`.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Utsname {
     pub sysname: [u8; 65],
     pub nodename: [u8; 65],
@@ -513,7 +501,6 @@ impl Default for Siginfo {
 
 /// Directory entry types of `getdents64`.
 pub mod dt {
-    pub const FIFO: u8 = linux_raw_sys::general::DT_FIFO as u8;
     pub const CHR: u8 = linux_raw_sys::general::DT_CHR as u8;
     pub const DIR: u8 = linux_raw_sys::general::DT_DIR as u8;
     pub const REG: u8 = linux_raw_sys::general::DT_REG as u8;

@@ -15,26 +15,31 @@
 //! [`source`] assembles a stage: the version line, the build's defines,
 //! the prelude, the program's own code.
 
+use alloc::format;
 use alloc::string::String;
+
+use super::TIME_WRAP;
 
 /// The most dynamic lights a frame passes to the shaders.
 pub const MAX_LIGHTS: usize = 16;
 
 /// A complete shader: `#version`, `defines` (e.g. `"#define TONEMAP\n"`),
-/// the prelude if `lit`, then `body`.
+/// the prelude (with the constants it shares with the renderer) if `lit`,
+/// then `body`.
 pub fn source(defines: &str, lit: bool, body: &str) -> String {
     let mut s = String::from("#version 300 es\nprecision highp float;\nprecision highp int;\n");
     s.push_str(defines);
     if lit {
+        s.push_str(&format!("#define MAX_LIGHTS {MAX_LIGHTS}\n#define TIME_WRAP {TIME_WRAP:.1}\n"));
         s.push_str(PRELUDE);
     }
     s.push_str(body);
     s
 }
 
-/// The frame's uniforms and the lighting.
+/// The frame's uniforms and the lighting (`MAX_LIGHTS` and `TIME_WRAP`
+/// defined before it).
 pub const PRELUDE: &str = r#"
-#define MAX_LIGHTS 16
 layout(std140) uniform Frame {
     mat4 u_viewProj;
     mat4 u_shadowMatrix;
@@ -1018,7 +1023,8 @@ in vec3 a_normal;
 out float v_alpha;
 out float v_across;
 void main() {
-    float age = u_eye.w - a_normal.x;
+    // The time wraps round (TIME_WRAP), ages across it.
+    float age = mod(u_eye.w - a_normal.x, TIME_WRAP);
     float fade = (1.0 - smoothstep(45.0, 75.0, age)) * step(-1.0, age);
     float dist = length(a_pos - u_eye.xyz);
     float seen = 1.0 - min(1.0 - exp(-u_fogColor.w * dist), u_fogParams.z);

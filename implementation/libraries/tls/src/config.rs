@@ -27,7 +27,7 @@ static TLS13_ONLY: &[&SupportedProtocolVersion] = &[&rustls::version::TLS13];
 #[cfg(test)]
 static TLS12_ONLY: &[&SupportedProtocolVersion] = &[&rustls::version::TLS12];
 
-/// The system's wall clock (`vrt::time::unix_time_ns`), for certificate
+/// The system's wall clock (`vrt::time::utc_time_ns`), for certificate
 /// validity checks.
 #[derive(Debug)]
 pub struct SystemClock;

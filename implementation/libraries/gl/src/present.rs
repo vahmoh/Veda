@@ -7,10 +7,10 @@ use core::ops::Range;
 
 use crate::backend::Present;
 
-/// Interpolates two 0xAARRGGBB words with an 8-bit weight (`f` in
-/// 0..=256), two channels at a time.
+/// Interpolates two words of four 8-bit channels (0xAARRGGBB, or RGBA
+/// texels) with an 8-bit weight (`f` in 0..=256), two channels at a time.
 #[inline(always)]
-fn lerp(a: u32, b: u32, f: u32) -> u32 {
+pub(crate) fn lerp(a: u32, b: u32, f: u32) -> u32 {
     let g = 256 - f;
     let rb = ((a & 0x00FF_00FF) * g + (b & 0x00FF_00FF) * f + 0x0080_0080) >> 8;
     let ag = ((a >> 8) & 0x00FF_00FF) * g + ((b >> 8) & 0x00FF_00FF) * f + 0x0080_0080;
@@ -20,9 +20,10 @@ fn lerp(a: u32, b: u32, f: u32) -> u32 {
 /// Writes rows `rows` of `dst`: the image `src` (`sw` x `sh`, rows from the
 /// top, packed) scaled to it, bilinearly (or copied if the sizes match).
 pub fn scale(src: &[u32], sw: usize, sh: usize, dst: &mut Present<'_>, rows: Range<usize>) {
-    let (dw, dh, stride) = (dst.width as usize, dst.height as usize, dst.stride);
-    let at = (rows.start * stride).min(dst.pixels.len());
-    scale_rows(src, sw, sh, dw, dh, &mut dst.pixels[at..], stride, rows);
+    let (dw, dh, stride) = (dst.width() as usize, dst.height() as usize, dst.stride());
+    let pixels = dst.pixels();
+    let at = rows.start.saturating_mul(stride).min(pixels.len());
+    scale_rows(src, sw, sh, dw, dh, &mut pixels[at..], stride, rows);
 }
 
 /// [`scale`] into `out`, which starts at row `rows.start` of a `dw` x `dh`
@@ -71,17 +72,32 @@ mod tests {
     use alloc::vec;
 
     #[test]
+    fn windows_whose_rows_overlap_or_overrun_are_refused() {
+        let mut px = vec![0u32; 12];
+        assert!(Present::new(&mut px, 4, 4, 3, true).is_some());
+        assert!(Present::new(&mut px, 5, 2, 3, true).is_some());
+        // Rows closer than the window is wide would overlap.
+        assert!(Present::new(&mut px, 3, 4, 3, true).is_none());
+        // The last row would end past the pixels.
+        assert!(Present::new(&mut px, 4, 4, 4, true).is_none());
+        assert!(Present::new(&mut px, usize::MAX, 1, 3, true).is_none());
+        // An empty window has no rows to fit.
+        assert!(Present::new(&mut px, 0, 0, 0, true).is_some());
+        assert!(Present::new(&mut [], 7, 7, 0, true).is_some());
+    }
+
+    #[test]
     fn scales_up_and_copies() {
         let src = [0xFF00_0000, 0xFFFF_FFFF];
         let mut px = vec![0u32; 4];
-        let mut dst = Present { pixels: &mut px, stride: 4, width: 4, height: 1, opaque: true };
+        let mut dst = Present::new(&mut px, 4, 4, 1, true).unwrap();
         scale(&src, 2, 1, &mut dst, 0..1);
         // Ends clamp, the middle blends.
         assert_eq!(px[0], 0xFF00_0000);
         assert_eq!(px[3], 0xFFFF_FFFF);
         assert!(px[1] & 0xFF > 0x30 && px[1] & 0xFF < 0x50, "{:#x}", px[1]);
         let mut same = vec![0u32; 2];
-        let mut dst = Present { pixels: &mut same, stride: 2, width: 2, height: 1, opaque: true };
+        let mut dst = Present::new(&mut same, 2, 2, 1, true).unwrap();
         scale(&src, 2, 1, &mut dst, 0..1);
         assert_eq!(same, src);
     }

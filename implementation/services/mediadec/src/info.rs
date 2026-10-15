@@ -8,8 +8,8 @@
 use alloc::vec::Vec;
 
 use vproto::media::{
-    self, AudioStream, Chapter, Colour, MAX_AUDIO_STREAMS, MAX_CHAPTERS, MAX_LANGUAGE, MAX_NAME, MAX_SIDE, MAX_TEXT,
-    MAX_VIDEO_STREAMS, MediaInfo, Rational, VideoStream, bounded,
+    self, AudioStream, Chapter, Colour, MAX_AUDIO_STREAMS, MAX_CHAPTERS, MAX_DURATION_US, MAX_LANGUAGE, MAX_NAME,
+    MAX_SIDE, MAX_TEXT, MAX_VIDEO_STREAMS, MediaInfo, Rational, VideoStream, bounded,
 };
 
 use crate::ffi::{self, KIND_AUDIO, KIND_SUBTITLE, KIND_VIDEO, NO_TIME};
@@ -80,7 +80,7 @@ pub fn media_info(
         .iter()
         .take(MAX_CHAPTERS)
         .map(|(at, title)| Chapter {
-            start_us: at.saturating_sub(start).max(0),
+            start_us: at.saturating_sub(start).clamp(0, MAX_DURATION_US),
             title: bounded(&ffi::text(title), MAX_TEXT),
         })
         .collect();
@@ -89,7 +89,8 @@ pub fn media_info(
     let audio = audio.filter(|i| audio_streams.iter().any(|a| a.index == *i));
     MediaInfo {
         container: bounded(&ffi::text(&info.container), MAX_NAME),
-        duration_us: (info.duration_us != NO_TIME && info.duration_us >= 0).then_some(info.duration_us),
+        // A length beyond the protocol's (a damaged file) is not known.
+        duration_us: (0..=MAX_DURATION_US).contains(&info.duration_us).then_some(info.duration_us),
         seekable: info.seekable != 0,
         bit_rate: info.bit_rate,
         title: bounded(&ffi::text(&info.title), MAX_TEXT),
@@ -174,10 +175,17 @@ mod tests {
         (v.width, v.rotation, v.bit_depth) = (u32::MAX, 45, 99);
         let m = media_info(&info, &[v], &[], Some(7), None);
         assert_eq!(m.duration_us, None);
+        assert!(m.is_valid());
         assert_eq!(m.selected_video, None, "a stream that is not listed");
         assert_eq!((m.video[0].width, m.video[0].rotation, m.video[0].bit_depth), (MAX_SIDE, 0, 16));
         assert_eq!(playable(&m), Err(media::MediaError::Unsupported));
         assert_eq!(playable(&media_info(&info, &[], &[], None, None)), Err(media::MediaError::Corrupt));
         assert_eq!((index(-3), index(4)), (None, Some(4)));
+        // Times beyond the protocol's: not known, or kept within it.
+        info.duration_us = i64::MAX;
+        let m = media_info(&info, &[], &[(i64::MAX, b"Far".to_vec())], None, None);
+        assert_eq!(m.duration_us, None, "longer than any source");
+        assert_eq!(m.chapters[0].start_us, MAX_DURATION_US);
+        assert!(m.is_valid());
     }
 }

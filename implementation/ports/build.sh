@@ -60,6 +60,11 @@ export PATH="$CROSS/bin:$PATH"
 
 BUILD_TRIPLE=$(gcc -dumpmachine)
 
+# What Veda gets of the toolchain names its sources from the toolchain's
+# directory, never where that is on this machine: the file names in
+# assertions' messages (`__FILE__`) and in debug information.
+PREFIX_MAP="-ffile-prefix-map=$ROOT=."
+
 # log, port, patches, stage, quiet and unpack.
 source "$PORTS/common.sh"
 # TARGET and what the ports take from the architecture.
@@ -107,7 +112,7 @@ GCC_OPTIONS=(
 	gcc_cv_libc_provides_ssp=yes
 	# Position-independent libraries (libgcc, libstdc++), as the C library
 	# is, so that -static-pie programs can use them too.
-	"CFLAGS_FOR_TARGET=-g -O2 -fPIE" "CXXFLAGS_FOR_TARGET=-g -O2 -fPIE"
+	"CFLAGS_FOR_TARGET=-g -O2 -fPIE $PREFIX_MAP" "CXXFLAGS_FOR_TARGET=-g -O2 -fPIE $PREFIX_MAP"
 )
 
 # C and C++: GCC is written in C++, so building the native GCC takes a C++
@@ -269,8 +274,10 @@ stage_ffmpeg() {
 	EOF
 	chmod +x "$BUILD/ffmpeg-tools/pkg-config"
 	cd "$b"
-	quiet configure.log "$SRC/ffmpeg/configure" "${FFMPEG_OPTIONS[@]}" \
-		--pkg-config="$BUILD/ffmpeg-tools/pkg-config"
+	# Found on the path, so that the configuration FFmpeg records (and
+	# mediadec carries) names no directory of this machine's.
+	PATH="$BUILD/ffmpeg-tools:$PATH" quiet configure.log "$SRC/ffmpeg/configure" "${FFMPEG_OPTIONS[@]}" \
+		--pkg-config=pkg-config
 	expect_defines config.h "HAVE_PTHREADS 1" "${FFMPEG_ARCH_DEFINES[@]}" \
 		"HAVE_SCHED_GETAFFINITY 1" "HAVE_POSIX_MEMALIGN 1" "CONFIG_GPL 0" "CONFIG_NONFREE 0" \
 		"CONFIG_SWSCALE 1" "CONFIG_SWRESAMPLE 1"
@@ -307,11 +314,11 @@ stage_host_deps() {
 		b=$BUILD/$p-host
 		rm -rf "$b" && mkdir -p "$b" && cd "$b"
 		local extra=()
-		[ $p = gmp ] || extra+=(--with-gmp="$DEPS")
+		[ $p = gmp ] || extra+=(--with-gmp="$DEPS" CC="$TARGET-gcc $PREFIX_MAP")
 		[ $p = mpc ] && extra+=(--with-mpfr="$DEPS")
 		# GMP 6.3's configure checks are not C23, GCC's default since 15
 		# (`void g(){}` called with arguments): C17 for GMP.
-		[ $p = gmp ] && extra+=(CC="$TARGET-gcc -std=gnu17" CC_FOR_BUILD="gcc -std=gnu17")
+		[ $p = gmp ] && extra+=(CC="$TARGET-gcc -std=gnu17 $PREFIX_MAP" CC_FOR_BUILD="gcc -std=gnu17")
 		quiet configure.log "$SRC/$p/configure" --host=$TARGET --build="$BUILD_TRIPLE" --prefix="$DEPS" \
 			--disable-shared --enable-static "${extra[@]}" MAKEINFO=true
 		quiet make.log make -j"$JOBS" MAKEINFO=true
@@ -325,10 +332,10 @@ stage_binutils_native() {
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
 	quiet configure.log "$SRC/binutils/configure" --build="$BUILD_TRIPLE" --host=$TARGET --target=$TARGET \
 		--prefix=/system --with-lib-path=/system/lib --disable-install-libbfd "${BINUTILS_OPTIONS[@]}" \
-		MAKEINFO=true
+		CC="$TARGET-gcc $PREFIX_MAP" CXX="$TARGET-g++ $PREFIX_MAP" MAKEINFO=true
 	quiet make.log make -j"$JOBS" MAKEINFO=true
 }
-stage binutils_native src_binutils binutils_cross musl @BINUTILS_OPTIONS
+stage binutils_native src_binutils binutils_cross musl @BINUTILS_OPTIONS @PREFIX_MAP
 
 # C inside Veda, for now. It finds `as` and `ld` in /system/bin
 # (MD_EXEC_PREFIX in gcc/config/veda.h: --with-as and --with-ld would want
@@ -341,11 +348,16 @@ stage_gcc_native() {
 	quiet configure.log "$SRC/gcc/configure" --build="$BUILD_TRIPLE" --host=$TARGET --target=$TARGET \
 		--prefix=/system --with-build-sysroot="$SYSROOT" \
 		--with-gmp="$DEPS" --with-mpfr="$DEPS" --with-mpc="$DEPS" --enable-languages=c "${GCC_OPTIONS[@]}" \
+		CC="$TARGET-gcc $PREFIX_MAP" CXX="$TARGET-g++ $PREFIX_MAP" \
 		MAKEINFO=true LDFLAGS="-Wl,-z,stack-size=$((64 << 20))"
+	# `gcc -v` says how GCC was configured: from the toolchain's directory
+	# too (the compiler's own directory is configured as `make` starts).
+	quiet make-configure.log make configure-gcc MAKEINFO=true
+	sed -i "s|$ROOT|.|g" gcc/configargs.h
 	quiet make-gcc.log make -j"$JOBS" all-gcc MAKEINFO=true
 	quiet make-libgcc.log make -j"$JOBS" all-target-libgcc MAKEINFO=true
 }
-stage gcc_native src_gcc host_deps binutils_cross gcc_cross libstdcxx_cross musl @GCC_OPTIONS @ROOT
+stage gcc_native src_gcc host_deps binutils_cross gcc_cross libstdcxx_cross musl @GCC_OPTIONS @PREFIX_MAP @ROOT
 
 # /system as the image installs it: the programs (stripped), GCC's own
 # files, the C library and its headers; no documentation, no duplicates.

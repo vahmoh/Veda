@@ -17,13 +17,19 @@
 //! has started, and its progress shows in [`status`] and in the events of a
 //! [`Watcher`]. Once joined, the network service configures the `wlan0`
 //! interface (DHCP and so on) and the usual sockets work over it.
+//!
+//! Changing Wi-Fi (scanning, joining, leaving, the radio switch, saved
+//! networks) is for the desktop, the agent, Settings and the Terminal; the
+//! service refuses it to other programs (`WlanError::Denied`), as it does
+//! the access points' addresses, the saved networks and diagnostics to all
+//! but Settings and the Terminal.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
 pub use vproto::wlan::{
     Band, BssInfo, ConnState, FailReason, LogEntry, NetworkInfo, SavedNetwork, Security, WlanCounters, WlanDiagnostics,
-    WlanError, WlanEvent, WlanStatus, signal_bars, ssid_display,
+    WlanError, WlanEvent, WlanStatus, signal_bars, ssid_display, valid_passphrase, valid_ssid,
 };
 
 use vipc::{Bytes, IpcError};
@@ -97,15 +103,18 @@ pub fn networks() -> Result<Vec<NetworkInfo>, WifiError> {
     with_client(|c| c.networks())
 }
 
-/// Every access point heard recently.
+/// Every access point heard recently (for Settings and the Terminal: their
+/// addresses tell where the machine is).
 pub fn access_points() -> Result<Vec<BssInfo>, WifiError> {
-    with_client(|c| c.access_points())
+    flat(with_client(|c| c.access_points()))
 }
 
 /// Options of [`connect_with`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectOptions {
-    /// Required security (`None`: what the network offers).
+    /// Required security: the [`NetworkInfo::security`] of the network the
+    /// user chose (`None`, for a hidden network: what the network offers).
+    /// Either way a password never goes to an open access point.
     pub security: Option<Security>,
     /// Remember the network and its password.
     pub save: bool,
@@ -145,8 +154,10 @@ pub fn disconnect() -> Result<(), WifiError> {
     flat(with_client(|c| c.disconnect()))
 }
 
+/// The saved networks (for Settings and the Terminal: they tell where the
+/// machine has been).
 pub fn saved() -> Result<Vec<SavedNetwork>, WifiError> {
-    with_client(|c| c.saved())
+    flat(with_client(|c| c.saved()))
 }
 
 pub fn forget(ssid: &[u8]) -> Result<(), WifiError> {
@@ -162,8 +173,9 @@ pub fn set_radio(on: bool) -> Result<(), WifiError> {
     flat(with_client(|c| c.set_radio(on)))
 }
 
+/// The connection log and counters (for Settings and the Terminal).
 pub fn diagnostics() -> Result<WlanDiagnostics, WifiError> {
-    with_client(|c| c.diagnostics())
+    flat(with_client(|c| c.diagnostics()))
 }
 
 /// Waits until [`status`] satisfies `done` or `timeout` passes; returns

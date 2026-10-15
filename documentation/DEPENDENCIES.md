@@ -66,7 +66,7 @@ Linux (the driver VM's kernel).
 
 | Code | Weighed | Why it stays |
 |------|---------|--------------|
-| `vheap`, the allocator of every program | rlsf 0.2, talc 5, dlmalloc | rlsf (a Miri-found undefined behaviour fixed in 2026) and talc (its interface reworked through version 5) are no better proven than `vheap` under its randomised stress test and invariant checks; dlmalloc takes its memory from the C library (`mmap`) on the user target |
+| `vheap`, the allocator of every program | rlsf 0.2, talc 5, dlmalloc | rlsf (a Miri-found undefined behaviour fixed in 2026) and talc (its interface reworked through version 5) are no better proven than `vheap` under its randomised stress test (every allocation's contents checked, resizing, growing the region, giving memory back) and invariant checks (the blocks, the free lists, their bitmaps and the byte counts); dlmalloc takes its memory from the C library (`mmap`) on the user target |
 | The loader's UEFI bindings | r-efi 7 (std's) | r-efi declares the firmware's inputs as mutable pointers, as C's prototypes do, so every GUID and string passed would be cast; the loader binds the calls it makes, typed as the specification reads them, and every boot runs them |
 | `velf` | object 0.40 | About 400 lines of header decoding, bounds- and overflow-checked, would move; the validation, relocation and loading, which are Veda's, would not |
 | `vacpi`, the AML interpreter | acpi 6.1 | acpi has `todo!()` and `unimplemented!()` paths (Load, Match, CopyObject; GPIO and serial-bus resources, which Veda's devices need), no step or depth limits, and handlers that cannot fail: firmware could stop the device manager. `vacpi` is bounded and never panics on firmware |

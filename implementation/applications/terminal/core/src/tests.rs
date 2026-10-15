@@ -186,3 +186,24 @@ fn unicode_text() {
     let s = written(&["\x1b[33m\u{e9}t\u{e9}\x1b[0m"]);
     assert_eq!(style_of(&s, '\u{e9}'), Style::fg(color::YELLOW));
 }
+
+#[test]
+fn bounded_whatever_programs_write() {
+    use crate::screen::{MAX_CELLS, MAX_LINE_CELLS};
+    // A program writing without line breaks: its line breaks at the limit.
+    let mut s = Screen::new();
+    let long = "x".repeat(MAX_LINE_CELLS * 2 + 5);
+    s.write(&long);
+    assert_eq!(s.end() - s.base(), 2);
+    assert_eq!(s.line(s.base()).unwrap().len(), MAX_LINE_CELLS);
+    assert_eq!(s.partial().len(), 5);
+    // Long lines take the place of many short ones.
+    let mut s = Screen::new();
+    for _ in 0..(MAX_CELLS / MAX_LINE_CELLS + 10) {
+        s.write(&"y".repeat(MAX_LINE_CELLS));
+        s.newline();
+    }
+    let kept: usize = (s.base()..s.end()).map(|l| s.line(l).unwrap().len()).sum();
+    assert!(kept <= MAX_CELLS, "{kept} cells kept");
+    assert!(s.base() > 0);
+}

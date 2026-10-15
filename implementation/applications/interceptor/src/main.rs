@@ -157,7 +157,7 @@ fn main() -> i32 {
         }
     };
     app.relight = false;
-    let map = hud::MiniMap::new(&world);
+    let mut map = hud::MiniMap::new(&world);
     let t2 = vrt::time::now_ns();
     vrt::println!(
         "Veda Bay made in {} ms ({} buildings), its pictures in {} ms",
@@ -258,14 +258,14 @@ fn main() -> i32 {
         let (cw, ch) = (canvas.width(), canvas.height());
         {
             let (pixels, stride) = canvas.pixels_mut();
-            let mut dst =
-                Present { pixels, stride: stride as usize, width: cw as u32, height: ch as u32, opaque: true };
-            gl.present_to(&mut dst);
+            if let Some(mut dst) = Present::new(pixels, stride as usize, cw as u32, ch as u32, true) {
+                gl.present_to(&mut dst);
+            }
         }
         let t_shown = vrt::time::now_ns();
         let settings = app.save.settings;
         if app.screen == Screen::Playing {
-            hud::play(&mut canvas, &mut text, &fonts, &app.session, &map, settings.units, app.clock);
+            hud::play(&mut canvas, &mut text, &fonts, &app.session, &mut map, settings.units, app.clock);
         }
         menu::draw(&mut canvas, &mut text, &fonts, &mut app);
         if settings.stats != Stats::Off {

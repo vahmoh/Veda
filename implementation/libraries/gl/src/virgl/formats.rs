@@ -121,49 +121,12 @@ fn candidates(f: Format) -> &'static [(u32, Option<Format>, [u8; 4])] {
 }
 
 /// Whether OpenGL ES 3.0 (with `EXT_color_buffer_float`) renders to a
-/// format.
+/// format: depth and stencil formats, and the color-renderable sized
+/// internal formats'.
 pub fn gl_renderable(f: Format) -> bool {
-    use Format::*;
     match f.class() {
         Class::Depth | Class::DepthStencil | Class::Stencil => true,
-        _ => matches!(
-            f,
-            R8Unorm
-                | Rg8Unorm
-                | Rgbx8Unorm
-                | Rgba8Unorm
-                | Rgba8Srgb
-                | B5G6R5Unorm
-                | Rgba4Unorm
-                | Rgb5A1Unorm
-                | Rgb10A2Unorm
-                | Rgb10A2Uint
-                | R8Uint
-                | R8Sint
-                | Rg8Uint
-                | Rg8Sint
-                | Rgba8Uint
-                | Rgba8Sint
-                | R16Uint
-                | R16Sint
-                | Rg16Uint
-                | Rg16Sint
-                | Rgba16Uint
-                | Rgba16Sint
-                | R32Uint
-                | R32Sint
-                | Rg32Uint
-                | Rg32Sint
-                | Rgba32Uint
-                | Rgba32Sint
-                | R16Float
-                | Rg16Float
-                | Rgba16Float
-                | R32Float
-                | Rg32Float
-                | Rgba32Float
-                | R11G11B10Float
-        ),
+        _ => crate::format::of_format(f).is_some_and(|i| i.renderable || i.float_renderable),
     }
 }
 
@@ -221,4 +184,52 @@ pub fn vertex_format(a: &crate::backend::Attrib) -> u32 {
     };
     // Each family numbers its 1- to 4-component formats consecutively.
     base + n
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{Attrib, AttribType};
+
+    #[test]
+    fn color_renderable_formats_are_the_tables() {
+        use Format::*;
+        for f in [Rgbx8Unorm, Rgba8Srgb, R11G11B10Float, Rgba16Float, Rg32Sint, Rgb10A2Uint, D16Unorm, S8Uint] {
+            assert!(gl_renderable(f), "{f:?}");
+        }
+        for f in [Rgbx8Srgb, Rgb9E5Float, Rgbx16Float, Rgbx32Float, L8Unorm, Rgba8Snorm, Rgbx8Uint] {
+            assert!(!gl_renderable(f), "{f:?}");
+        }
+    }
+
+    #[test]
+    fn vertex_formats_count_up_their_families() {
+        let attrib = |ty, size, normalized, integer| Attrib {
+            buffer: None,
+            offset: 0,
+            stride: 4,
+            size,
+            ty,
+            normalized,
+            integer,
+            divisor: 0,
+            current: [0; 4],
+        };
+        // Values of `enum virgl_formats`.
+        let cases = [
+            (attrib(AttribType::Float, 4, false, false), 31),
+            (attrib(AttribType::Float, 2, false, false), 29),
+            (attrib(AttribType::UnsignedByte, 4, true, false), 67),
+            (attrib(AttribType::UnsignedByte, 4, false, false), 72),
+            (attrib(AttribType::Short, 2, true, false), 57),
+            (attrib(AttribType::Fixed, 4, false, false), 90),
+            (attrib(AttribType::HalfFloat, 4, false, false), 94),
+            (attrib(AttribType::Byte, 4, false, true), 184),
+            (attrib(AttribType::UnsignedInt, 4, false, true), 196),
+            (attrib(AttribType::Int2101010Rev, 4, true, false), 173),
+        ];
+        for (a, want) in cases {
+            assert_eq!(vertex_format(&a), want, "{:?} x{}", a.ty, a.size);
+        }
+    }
 }

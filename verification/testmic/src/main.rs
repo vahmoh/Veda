@@ -11,8 +11,8 @@
 //! microphone had recorded it just now. If the connection drops, the
 //! microphone records silence and the program reconnects.
 //!
-//! Test scripts drive it with `say`, `mic-wav` and `mic-wait` (see
-//! `orchestration/src/automate.rs`).
+//! Test scripts drive it with `say`, `mic-wav`, `mic-silence`, `mic-tone`
+//! and `mic-echo` (see `orchestration/src/script.rs`).
 
 #![no_std]
 #![no_main]

@@ -13,10 +13,14 @@
 //! # Robustness
 //!
 //! The peer is not trusted. Each side keeps its own position privately and
-//! only publishes it; the peer's position is clamped to the ring's
-//! capacity, slot lengths are checked against the slot size, and payloads
-//! are copied out of shared memory before anyone parses them. A broken or
-//! hostile peer can therefore only lose or garble its own frames.
+//! only publishes it; positions are running counts compared modulo 2^64,
+//! so whatever the peer publishes (at attach too) the distance between the
+//! positions is clamped to the ring's capacity. Slot lengths are checked
+//! against the slot size, and payloads are copied out of shared memory
+//! before anyone parses them. Shared memory is only ever read and written
+//! through volatile accesses on raw pointers, never through references, as
+//! the peer may change it at any time. A broken or hostile peer can
+//! therefore only lose or garble its own frames.
 //!
 //! # Wake-ups
 //!
@@ -81,9 +85,6 @@ pub mod kind {
     /// An IEEE 802.11 MAC frame (no FCS). For received frames `meta` is a
     /// [`super::RxInfo`]; for transmitted ones a [`super::TxInfo`].
     pub const IEEE80211: u16 = 2;
-    /// Transmit status of an 802.11 frame (radio to Wi-Fi service, no
-    /// payload, `meta` is a [`super::TxStatus`]).
-    pub const TX_STATUS: u16 = 3;
 }
 
 /// Per-slot metadata besides the payload length.
@@ -129,11 +130,9 @@ impl RxInfo {
 }
 
 /// Transmit request details of an 802.11 frame, packed into
-/// [`SlotMeta::meta`].
+/// [`SlotMeta::meta`] (its first four bytes are reserved, zero).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TxInfo {
-    /// Echoed back in the [`TxStatus`] (0 = no status wanted).
-    pub id: u32,
     /// Data rate in units of 500 kbit/s (0 = the radio chooses).
     pub rate: u8,
     /// Maximum transmission attempts (0 = the radio's default).
@@ -144,36 +143,50 @@ pub struct TxInfo {
 
 impl TxInfo {
     pub fn pack(&self) -> u64 {
-        let id = self.id.to_le_bytes();
-        u64::from_le_bytes([id[0], id[1], id[2], id[3], self.rate, self.retries, self.no_ack as u8, 0])
+        u64::from_le_bytes([0, 0, 0, 0, self.rate, self.retries, self.no_ack as u8, 0])
     }
 
     pub fn unpack(v: u64) -> TxInfo {
         let b = v.to_le_bytes();
-        TxInfo { id: u32::from_le_bytes([b[0], b[1], b[2], b[3]]), rate: b[4], retries: b[5], no_ack: b[6] != 0 }
+        TxInfo { rate: b[4], retries: b[5], no_ack: b[6] != 0 }
     }
 }
 
-/// The outcome of a transmission, packed into [`SlotMeta::meta`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TxStatus {
-    /// The [`TxInfo::id`] of the frame.
-    pub id: u32,
-    /// The receiver acknowledged the frame.
-    pub acked: bool,
-    /// Transmission attempts made.
-    pub attempts: u8,
+/// Copies shared memory at `src` into `dst`, reading it with volatile
+/// accesses (the peer may write it meanwhile: the copy may be garbled, never
+/// undefined).
+///
+/// # Safety
+/// `src` must be valid for reads of `dst.len()` bytes and 8-byte aligned.
+unsafe fn copy_from_shared(src: *const u8, dst: &mut [u8]) {
+    let (words, tail) = dst.as_chunks_mut::<8>();
+    for (i, w) in words.iter_mut().enumerate() {
+        // SAFETY: inside the caller's range, and aligned (a multiple of 8
+        // bytes in).
+        *w = unsafe { (src.add(i * 8) as *const u64).read_volatile() }.to_ne_bytes();
+    }
+    let at = words.len() * 8;
+    for (i, b) in tail.iter_mut().enumerate() {
+        // SAFETY: inside the caller's range.
+        *b = unsafe { src.add(at + i).read_volatile() };
+    }
 }
 
-impl TxStatus {
-    pub fn pack(&self) -> u64 {
-        let id = self.id.to_le_bytes();
-        u64::from_le_bytes([id[0], id[1], id[2], id[3], self.acked as u8, self.attempts, 0, 0])
+/// Copies `src` into shared memory at `dst` with volatile writes.
+///
+/// # Safety
+/// `dst` must be valid for writes of `src.len()` bytes and 8-byte aligned.
+unsafe fn copy_to_shared(dst: *mut u8, src: &[u8]) {
+    let (words, tail) = src.as_chunks::<8>();
+    for (i, w) in words.iter().enumerate() {
+        // SAFETY: inside the caller's range, and aligned (a multiple of 8
+        // bytes in).
+        unsafe { (dst.add(i * 8) as *mut u64).write_volatile(u64::from_ne_bytes(*w)) };
     }
-
-    pub fn unpack(v: u64) -> TxStatus {
-        let b = v.to_le_bytes();
-        TxStatus { id: u32::from_le_bytes([b[0], b[1], b[2], b[3]]), acked: b[4] != 0, attempts: b[5] }
+    let at = words.len() * 8;
+    for (i, &b) in tail.iter().enumerate() {
+        // SAFETY: inside the caller's range.
+        unsafe { dst.add(at + i).write_volatile(b) };
     }
 }
 
@@ -213,8 +226,8 @@ pub struct Ring {
     slot_size: u32,
     role: Role,
     /// Our own running position (write count for the producer, read count
-    /// for the consumer). The shared copy is only published, never read
-    /// back.
+    /// for the consumer), modulo 2^64. The shared copy is only published,
+    /// never read back (but at attach).
     local: core::cell::Cell<u64>,
     /// Malformed frames skipped by the consumer.
     bad: core::cell::Cell<u64>,
@@ -322,8 +335,9 @@ impl Ring {
             bad: core::cell::Cell::new(0),
             _map: None,
         };
-        // Continue from the position we published before (a restarted peer
-        // attaching to a live ring), or from zero.
+        // Continue from the position published for our side (a restarted
+        // peer attaching to a live ring), or from zero. Whatever it is, the
+        // distance to the peer's position is clamped like any other.
         let start = match role {
             Role::Producer => ring.u64_at(layout::OFF_WRITE).load(Ordering::Acquire),
             Role::Consumer => ring.u64_at(layout::OFF_READ).load(Ordering::Acquire),
@@ -363,7 +377,7 @@ impl Ring {
             Role::Consumer => {
                 let r = self.local.get();
                 let w = self.u64_at(layout::OFF_WRITE).load(Ordering::Acquire);
-                r + w.wrapping_sub(r).min(self.slots as u64)
+                r.wrapping_add(w.wrapping_sub(r).min(self.slots as u64))
             }
         }
     }
@@ -376,14 +390,14 @@ impl Ring {
             Role::Producer => {
                 let w = self.local.get();
                 let r = self.u64_at(layout::OFF_READ).load(Ordering::Acquire);
-                w - w.wrapping_sub(r).min(self.slots as u64).min(w)
+                w.wrapping_sub(w.wrapping_sub(r).min(self.slots as u64))
             }
         }
     }
 
-    /// Frames waiting to be consumed.
+    /// Frames waiting to be consumed (at most the ring's slots).
     pub fn queued(&self) -> u32 {
-        (self.write_pos() - self.read_pos()) as u32
+        self.write_pos().wrapping_sub(self.read_pos()).min(self.slots as u64) as u32
     }
 
     /// Free slots (producer side).
@@ -404,31 +418,26 @@ impl Ring {
     /// Producer: appends a frame. Returns `false` (and counts a drop) if
     /// the ring is full or the payload does not fit a slot.
     pub fn push(&self, meta: SlotMeta, payload: &[u8]) -> bool {
-        self.push_with(meta, payload.len(), |buf| buf.copy_from_slice(payload))
-    }
-
-    /// Producer: appends a frame of `len` bytes written by `fill` straight
-    /// into the slot.
-    pub fn push_with(&self, meta: SlotMeta, len: usize, fill: impl FnOnce(&mut [u8])) -> bool {
         debug_assert_eq!(self.role, Role::Producer);
-        if len > self.max_payload() || self.free() == 0 {
+        if payload.len() > self.max_payload() || self.free() == 0 {
             self.u64_at(layout::OFF_DROPPED).fetch_add(1, Ordering::Relaxed);
             return false;
         }
         let w = self.local.get();
         let slot = self.slot(w);
-        // SAFETY: the slot is ours until we publish it (the consumer never
-        // reads past the published write position), and `len` fits.
+        // SAFETY: the slot lies inside the mapping, is 64-byte aligned, and
+        // the payload fits it. A well-behaved consumer does not touch it
+        // before it is published; a hostile one can only garble the frame.
         unsafe {
-            let payload = core::slice::from_raw_parts_mut(slot.add(layout::SLOT_HEADER), len);
-            fill(payload);
-            (slot as *mut u32).write_volatile(len as u32);
+            copy_to_shared(slot.add(layout::SLOT_HEADER), payload);
+            (slot as *mut u32).write_volatile(payload.len() as u32);
             (slot.add(4) as *mut u16).write_volatile(meta.kind);
             (slot.add(6) as *mut u16).write_volatile(meta.flags);
-            (slot.add(8) as *mut u64).write_unaligned(meta.meta);
+            (slot.add(8) as *mut u64).write_volatile(meta.meta);
         }
-        self.local.set(w + 1);
-        self.u64_at(layout::OFF_WRITE).store(w + 1, Ordering::Release);
+        let next = w.wrapping_add(1);
+        self.local.set(next);
+        self.u64_at(layout::OFF_WRITE).store(next, Ordering::Release);
         true
     }
 
@@ -445,24 +454,26 @@ impl Ring {
             }
             let r = self.local.get();
             let slot = self.slot(r);
-            // SAFETY: published slot inside the mapping; values are checked
-            // before use and the payload is copied out.
+            // SAFETY: published slot inside the mapping, 64-byte aligned;
+            // values are checked before use and the payload is copied out.
             let (len, meta) = unsafe {
                 let len = (slot as *const u32).read_volatile() as usize;
                 let meta = SlotMeta {
                     kind: (slot.add(4) as *const u16).read_volatile(),
                     flags: (slot.add(6) as *const u16).read_volatile(),
-                    meta: (slot.add(8) as *const u64).read_unaligned(),
+                    meta: (slot.add(8) as *const u64).read_volatile(),
                 };
                 (len, meta)
             };
             let ok = len <= self.max_payload() && len <= buf.len();
             if ok {
-                // SAFETY: `len` fits both the slot and `buf`.
-                unsafe { core::ptr::copy_nonoverlapping(slot.add(layout::SLOT_HEADER), buf.as_mut_ptr(), len) };
+                // SAFETY: `len` fits both the slot and `buf`; the payload is
+                // 16 bytes into a 64-byte aligned slot.
+                unsafe { copy_from_shared(slot.add(layout::SLOT_HEADER), &mut buf[..len]) };
             }
-            self.local.set(r + 1);
-            self.u64_at(layout::OFF_READ).store(r + 1, Ordering::Release);
+            let next = r.wrapping_add(1);
+            self.local.set(next);
+            self.u64_at(layout::OFF_READ).store(next, Ordering::Release);
             if ok {
                 return Some((meta, len));
             }
@@ -568,12 +579,7 @@ impl Link {
     /// Queues a frame for the peer, waking it if it sleeps. Returns `false`
     /// if the frame was dropped (ring full or frame too large).
     pub fn send(&self, meta: SlotMeta, frame: &[u8]) -> bool {
-        self.send_with(meta, frame.len(), |b| b.copy_from_slice(frame))
-    }
-
-    /// Like [`Link::send`], with the frame written straight into the ring.
-    pub fn send_with(&self, meta: SlotMeta, len: usize, fill: impl FnOnce(&mut [u8])) -> bool {
-        let ok = self.tx.push_with(meta, len, fill);
+        let ok = self.tx.push(meta, frame);
         if ok {
             fence(Ordering::SeqCst);
             if self.tx.take_flag(layout::flags::WAITING_DATA) {
@@ -630,14 +636,10 @@ impl Link {
         self.tx.clear_flag(layout::flags::WAITING_SPACE);
     }
 
-    /// Frames the peer had to drop because our receive ring was full.
+    /// Frames the peer had to drop because our receive ring was full (as
+    /// the peer counts them).
     pub fn peer_dropped(&self) -> u64 {
         self.rx.dropped()
-    }
-
-    /// Frames we dropped because the peer's ring was full.
-    pub fn dropped(&self) -> u64 {
-        self.tx.dropped()
     }
 
     /// Malformed frames skipped while receiving.
@@ -765,9 +767,59 @@ mod tests {
     fn metadata_packing() {
         let rx = RxInfo { channel: 11, band: 1, signal_dbm: -67, noise_dbm: -95, rate: 108 };
         assert_eq!(RxInfo::unpack(rx.pack()), rx);
-        let tx = TxInfo { id: 0xDEAD_BEEF, rate: 2, retries: 7, no_ack: true };
+        let tx = TxInfo { rate: 2, retries: 7, no_ack: true };
         assert_eq!(TxInfo::unpack(tx.pack()), tx);
-        let st = TxStatus { id: 42, acked: true, attempts: 3 };
-        assert_eq!(TxStatus::unpack(st.pack()), st);
+        assert_eq!(tx.pack() & 0xFFFF_FFFF, 0, "reserved bytes");
+    }
+
+    #[test]
+    fn positions_near_the_end_of_their_range() {
+        // A peer that published positions just before 2^64 at attach: the
+        // counts wrap around, frames still flow in order and the ring never
+        // looks more than full.
+        let (mem, p, _) = host_ring(8, 256);
+        let base = mem.as_ptr() as *mut u8;
+        let start = u64::MAX - 3;
+        // SAFETY: writing the shared header in host memory.
+        unsafe {
+            (base.add(layout::OFF_WRITE) as *mut u64).write(start);
+            (base.add(layout::OFF_READ) as *mut u64).write(start);
+        }
+        let len = ring_bytes(8, 256);
+        // SAFETY: `mem` outlives both rings.
+        let p2 = unsafe { Ring::attach_raw(base, len, Role::Producer).unwrap() };
+        let c2 = unsafe { Ring::attach_raw(base, len, Role::Consumer).unwrap() };
+        drop(p);
+        let mut buf = [0u8; 64];
+        for i in 0..20u8 {
+            assert!(p2.push(SlotMeta::ethernet(), &[i; 9]));
+            assert_eq!(c2.queued(), 1);
+            let (_, n) = c2.pop(&mut buf).unwrap();
+            assert_eq!(&buf[..n], &[i; 9]);
+            assert_eq!(p2.free(), 8);
+        }
+        for i in 0..8u8 {
+            assert!(p2.push(SlotMeta::ethernet(), &[i]));
+        }
+        assert!(!p2.push(SlotMeta::ethernet(), &[9]));
+        assert_eq!((c2.queued(), p2.free()), (8, 0));
+        // A consumer position from nowhere: full, never more.
+        // SAFETY: as above.
+        unsafe { (base.add(layout::OFF_READ) as *mut u64).write(start.wrapping_add(1_000)) };
+        assert!(p2.free() <= 8);
+        unsafe { (base.add(layout::OFF_WRITE) as *mut u64).write(3) };
+        assert!(c2.queued() <= 8);
+    }
+
+    #[test]
+    fn frames_of_every_length_survive_the_shared_copies() {
+        let (_mem, p, c) = host_ring(8, 256);
+        let mut buf = [0u8; 240];
+        for len in 0..=240 {
+            let frame: Vec<u8> = (0..len).map(|i| (i * 13 + len) as u8).collect();
+            assert!(p.push(SlotMeta::ethernet(), &frame));
+            let (_, n) = c.pop(&mut buf).unwrap();
+            assert_eq!(&buf[..n], &frame[..]);
+        }
     }
 }

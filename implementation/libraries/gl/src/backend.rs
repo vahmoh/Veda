@@ -15,8 +15,8 @@
 //! Two back ends implement it: the software renderer ([`crate::soft`]) and
 //! the virgl renderer ([`crate::virgl`]), which runs on the GPU.
 
+use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 
 use crate::format::Format;
 
@@ -26,6 +26,18 @@ pub type ResourceId = u32;
 pub type ProgramId = u32;
 /// A query object.
 pub type QueryId = u32;
+
+/// An identifier `ids` holds no entry for: the next of a count from 1 (kept
+/// in `next`), past those still in use once the count wraps around.
+pub(crate) fn unused_id<V>(ids: &alloc::collections::BTreeMap<u32, V>, next: &mut u32) -> u32 {
+    loop {
+        let id = *next;
+        *next = id.checked_add(1).unwrap_or(1);
+        if !ids.contains_key(&id) {
+            return id;
+        }
+    }
+}
 
 /// The renderer could not allocate memory (`GL_OUT_OF_MEMORY`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -57,6 +69,43 @@ pub struct ResourceDesc {
     pub levels: u32,
     /// Samples per pixel (0 for single-sampled).
     pub samples: u32,
+}
+
+/// The bytes a transfer of `region` ([`Backend::write`], [`Backend::read`])
+/// spans: its images `image_pitch` bytes apart, their rows `row_pitch`
+/// apart, each row `region.w` texels of `texel` bytes (a buffer's bytes:
+/// texels of 1 byte, one row). `None` if the pitches are too small for the
+/// rows and images they separate, or the size does not fit in memory.
+pub fn transfer_bytes(region: &Region, texel: usize, row_pitch: usize, image_pitch: usize) -> Option<usize> {
+    let row = (region.w as usize).checked_mul(texel)?;
+    if region.w == 0 || region.h == 0 || region.d == 0 {
+        return Some(0);
+    }
+    let image = (region.h as usize - 1).checked_mul(row_pitch)?.checked_add(row)?;
+    if (region.h > 1 && row_pitch < row) || (region.d > 1 && image_pitch < image) {
+        return None;
+    }
+    (region.d as usize - 1).checked_mul(image_pitch)?.checked_add(image)
+}
+
+/// A dimension of mipmap level `level` of an image `size` wide: halved per
+/// level, never below 1.
+pub fn minify(size: u32, level: u32) -> u32 {
+    (size >> level.min(31)).max(1)
+}
+
+impl ResourceDesc {
+    /// Level `level`'s width and height (a buffer's bytes and 1) and its
+    /// images: 3D slices (halved per level), array layers or cube faces
+    /// (6), 1 otherwise.
+    pub fn level_size(&self, level: u32) -> (u32, u32, u32) {
+        let (w, h) = (minify(self.width, level), minify(self.height, level));
+        match self.target {
+            Target::Buffer => (self.width, 1, 1),
+            Target::Texture3D => (w, h, minify(self.depth, level)),
+            _ => (w, h, self.depth.max(1)),
+        }
+    }
 }
 
 /// One image of a resource.
@@ -488,24 +537,70 @@ pub enum QueryKind {
 /// which the GPU renders into in place. Rows of 32-bit pixels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct External {
-    /// The memory object (a Veda handle the renderer duplicates, keeping
-    /// its own), or 0 ...
-    pub handle: u32,
-    /// ... and its address in this process (host tests).
-    pub address: usize,
+    memory: Memory,
+    size: usize,
+    stride: u32,
+    bgr: bool,
+}
+
+/// Where the memory of an [`External`] is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Memory {
+    /// A memory object: a Veda handle, which the renderer duplicates (the
+    /// caller keeps its own).
+    Handle(u32),
+    /// An address in this process (host tests, whose renderer draws into
+    /// it from its own threads).
+    Address(usize),
+}
+
+impl External {
+    /// `size` bytes of the memory object `handle`, rows of pixels `stride`
+    /// bytes apart, with blue in the low byte of each (`0xXXRRGGBB`) if
+    /// `bgr`, red otherwise.
+    pub fn handle(handle: u32, size: usize, stride: u32, bgr: bool) -> External {
+        External { memory: Memory::Handle(handle), size, stride, bgr }
+    }
+
+    /// `size` bytes at `address` in this process, laid out as for
+    /// [`External::handle`].
+    ///
+    /// # Safety
+    ///
+    /// The memory must be valid for reads and writes of `size` bytes, from
+    /// any thread, for as long as a resource made of it lives, and not be
+    /// accessed otherwise meanwhile but to read what was drawn once a fence
+    /// after the drawing has signaled.
+    pub unsafe fn address(address: *mut u8, size: usize, stride: u32, bgr: bool) -> External {
+        External { memory: Memory::Address(address as usize), size, stride, bgr }
+    }
+
+    /// Where the memory is.
+    pub fn memory(&self) -> Memory {
+        self.memory
+    }
+
     /// Its bytes.
-    pub size: usize,
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
     /// Bytes from one row to the next.
-    pub stride: u32,
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
+
     /// Blue in the low byte of each pixel (`0xXXRRGGBB`); otherwise red.
-    pub bgr: bool,
+    pub fn bgr(&self) -> bool {
+        self.bgr
+    }
 }
 
 /// What a renderer can do.
 #[derive(Clone, Debug)]
 pub struct Caps {
     /// `GL_RENDERER`.
-    pub name: &'static str,
+    pub name: String,
     pub max_texture_size: u32,
     pub max_3d_texture_size: u32,
     pub max_cube_map_size: u32,
@@ -528,6 +623,9 @@ pub struct Caps {
 pub trait Backend {
     fn caps(&self) -> &Caps;
 
+    /// Creates a resource. A new resource reads as zero, every byte of
+    /// every level and layer, whatever the memory it is made of held
+    /// before: never another context's (or application's) old data.
     fn create_resource(&mut self, desc: &ResourceDesc) -> Result<ResourceId, OutOfMemory>;
     fn destroy_resource(&mut self, id: ResourceId);
     /// A render target `desc` (a renderbuffer of 8-bit RGB, single
@@ -539,9 +637,13 @@ pub trait Backend {
     }
 
     /// Writes data laid out in the resource's format (rows `row_pitch`
-    /// bytes apart, slices `image_pitch`) into a region of a level.
+    /// bytes apart, images `image_pitch`; a buffer's bytes are one row)
+    /// into a region of a level. `data` holds at least the bytes
+    /// [`transfer_bytes`] gives; a call with less, or with pitches too
+    /// small for the region, does nothing.
     fn write(&mut self, id: ResourceId, level: u32, region: Region, data: &[u8], row_pitch: usize, image_pitch: usize);
-    /// Reads a region of a level, laid out as for [`Backend::write`].
+    /// Reads a region of a level, laid out as for [`Backend::write`] (and
+    /// as it says, `out` is long enough or nothing is read).
     fn read(
         &mut self,
         id: ResourceId,
@@ -604,25 +706,68 @@ pub trait Backend {
     fn wait_fence(&mut self, fence: u64, timeout_ns: u64) -> bool;
 }
 
-/// Several resources' worth of data, for tests and reads.
-pub type Bytes = Vec<u8>;
-
-/// A window's pixels, as [`Backend::present`] fills them.
+/// A window's pixels, as [`Backend::present`] fills them: `height` rows of
+/// `width` 0xAARRGGBB words, from the top down, `stride` words apart. The
+/// rows never overlap and all lie in the slice ([`Present::new`] sees to
+/// it).
 pub struct Present<'a> {
-    /// 0xAARRGGBB words, rows from the top down.
-    pub pixels: &'a mut [u32],
+    pixels: &'a mut [u32],
+    stride: usize,
+    width: u32,
+    height: u32,
+    opaque: bool,
+}
+
+impl<'a> Present<'a> {
+    /// `width` x `height` pixels in `pixels`, rows `stride` words apart,
+    /// opaque (alpha is 255) or else premultiplied by their alpha; `None`
+    /// unless every row fits, apart from the others: `stride` at least
+    /// `width`, and `pixels` long enough for the last row.
+    pub fn new(pixels: &'a mut [u32], stride: usize, width: u32, height: u32, opaque: bool) -> Option<Present<'a>> {
+        let w = width as usize;
+        let end = (height as usize).checked_sub(1).map_or(Some(0), |last| last.checked_mul(stride)?.checked_add(w));
+        (stride >= w && end.is_some_and(|end| end <= pixels.len())).then_some(Present {
+            pixels,
+            stride,
+            width,
+            height,
+            opaque,
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
     /// Words from one row to the next.
-    pub stride: usize,
-    pub width: u32,
-    pub height: u32,
-    /// Alpha is 255; otherwise colors are premultiplied by it.
-    pub opaque: bool,
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// Whether alpha is 255 (otherwise colors are premultiplied by it).
+    pub fn opaque(&self) -> bool {
+        self.opaque
+    }
+
+    /// The pixels: row `y` starts at `y * stride`.
+    pub fn pixels(&mut self) -> &mut [u32] {
+        self.pixels
+    }
+
+    /// Row `y` (0 at the top): its `width` pixels.
+    pub fn row(&mut self, y: usize) -> &mut [u32] {
+        &mut self.pixels[y * self.stride..][..self.width as usize]
+    }
 }
 
 /// A color as a 0xAARRGGBB word: opaque, or premultiplied by its alpha.
 #[inline]
 pub fn to_argb(c: [f32; 4], opaque: bool) -> u32 {
-    let u = |x: f32| (if x > 0.0 { if x < 1.0 { x } else { 1.0 } } else { 0.0 } * 255.0 + 0.5) as u32;
+    let u = |x: f32| (crate::format::clamp01(x) * 255.0 + 0.5) as u32;
     let a = if opaque { 1.0 } else { c[3] };
     let k = if opaque { 1.0 } else { a };
     (u(a) << 24) | (u(c[0] * k) << 16) | (u(c[1] * k) << 8) | u(c[2] * k)
@@ -640,8 +785,11 @@ pub fn present_by_reading<B: Backend + ?Sized>(
     let Some(format) = b.format_of(color) else { return };
     let tb = format.bytes();
     let row = width as usize * tb;
-    let mut texels = alloc::vec![0u8; row];
-    let mut image = alloc::vec![0u32; width as usize * height as usize];
+    let (Some(mut texels), Some(mut image)) =
+        (crate::pixels::try_zeroed(row), crate::pixels::try_filled(width as usize * height as usize, 0u32))
+    else {
+        return;
+    };
     for y in 0..height as usize {
         // Row 0 of a GL image is the bottom one.
         let src = height as usize - 1 - y;
@@ -653,4 +801,40 @@ pub fn present_by_reading<B: Backend + ?Sized>(
     }
     let rows = 0..dst.height as usize;
     crate::present::scale(&image, width as usize, height as usize, dst, rows);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::collections::BTreeMap;
+    use alloc::vec::Vec;
+
+    #[test]
+    fn identifiers_step_over_those_in_use() {
+        let mut ids = BTreeMap::new();
+        let mut next = 1;
+        for _ in 0..3 {
+            let id = unused_id(&ids, &mut next);
+            ids.insert(id, ());
+        }
+        assert_eq!(ids.keys().copied().collect::<Vec<_>>(), [1, 2, 3]);
+        // Wrapping around, the count skips 1 to 3, which live on.
+        next = u32::MAX;
+        assert_eq!(unused_id(&ids, &mut next), u32::MAX);
+        assert_eq!(unused_id(&ids, &mut next), 4);
+    }
+
+    #[test]
+    fn transfers_span_their_rows_and_images() {
+        let r = Region::new(0, 0, 0, 3, 2, 2);
+        // Rows of 12 bytes 16 apart, images 40 apart: the last row ends at
+        // 40 + 16 + 12.
+        assert_eq!(transfer_bytes(&r, 4, 16, 40), Some(68));
+        // Rows closer than they are long, images closer than their rows.
+        assert_eq!(transfer_bytes(&r, 4, 8, 40), None);
+        assert_eq!(transfer_bytes(&r, 4, 16, 20), None);
+        assert_eq!(transfer_bytes(&Region::bytes(5, 9), 1, 9, 9), Some(9));
+        assert_eq!(transfer_bytes(&Region::new(0, 0, 0, 0, 4, 4), 4, 0, 0), Some(0));
+        assert_eq!(transfer_bytes(&Region::new(0, 0, 0, u32::MAX, u32::MAX, 3), 16, usize::MAX, usize::MAX), None);
+    }
 }

@@ -32,6 +32,8 @@ use vrt::sync::{Condvar, Mutex};
 #[path = "arch/amd64/mod.rs"]
 mod arch;
 mod media;
+mod policy;
+mod ports;
 mod posix;
 
 vrt::entry!(main);
@@ -333,6 +335,7 @@ type Test = (&'static str, fn() -> TestResult);
 fn main() -> i32 {
     match vrt::env::args().get(1).map(|a| a.as_str()) {
         Some("crash") => crash(),
+        Some("limits") => return policy::limits(vrt::env::args().get(2)),
         Some("job") => return posix::job(),
         Some("restricted") => return posix::restricted(),
         Some("wait") => {
@@ -342,8 +345,12 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 21] = [
+    let tests: [Test; 26] = [
         ("ipc primitives", test_ipc_primitives),
+        ("ports", ports::test_ports),
+        ("waiting on many handles", ports::test_many_handles),
+        ("handles on channels", policy::test_channel_handles),
+        ("ipc refusals", policy::test_ipc_refusals),
         ("write-combining memory", test_write_combining_memory),
         ("software interrupts", test_software_interrupts),
         ("sockets", posix::test_sockets),
@@ -362,6 +369,7 @@ fn main() -> i32 {
         ("killing a job", posix::test_kill_job),
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
+        ("what applications may do", policy::test_application_limits),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),
     ];

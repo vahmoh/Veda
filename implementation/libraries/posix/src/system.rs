@@ -5,7 +5,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::error::SysResult;
+use crate::error::{self, SysResult};
 use crate::linux::errno::{EINVAL, EPERM};
 use crate::linux::{Rlimit, Sysinfo, Utsname, prctl, rlimit};
 use crate::{fd, user};
@@ -32,7 +32,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
         domainname: field("(none)"),
     };
     // SAFETY: the program passed a struct utsname.
-    unsafe { core::ptr::write_unaligned(buf as *mut Utsname, u) };
+    unsafe { user::write(buf, u)? };
     Ok(0)
 }
 
@@ -88,10 +88,18 @@ pub unsafe fn prlimit(pid: i32, resource: u32, new: usize, old: usize) -> SysRes
     Ok(0)
 }
 
-pub unsafe fn getrandom(buf: usize, len: usize) -> SysResult {
+/// `getrandom`: the kernel's random bytes, all of them or an error (a
+/// buffer is never left part random, part not). The kernel's generator is
+/// seeded before any program runs, so the flags (`GRND_NONBLOCK`,
+/// `GRND_RANDOM`, `GRND_INSECURE`) change nothing.
+pub unsafe fn getrandom(buf: usize, len: usize, flags: u32) -> SysResult {
+    const KNOWN: u32 = 1 | 2 | 4;
+    if flags & !KNOWN != 0 {
+        return Err(EINVAL);
+    }
     // SAFETY: the program passed `len` bytes.
     let out = unsafe { user::slice_mut(buf, len)? };
-    vrt::object::random_bytes(out);
+    vrt::object::try_random_bytes(out).map_err(error::kernel)?;
     Ok(len)
 }
 

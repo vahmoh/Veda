@@ -34,6 +34,6 @@ click 0.9375 0.8275
 wait-serial "approval 1 allowed" 10
 agent-expect "You are Sam" 20
 wait 2
-shot target/veda/agent-app-settings.png
+shot target/veda/agent-app-settings.png now
 agent-call read_app '{"app":"settings"}' 30
 agent-result '"name":"Sam"'

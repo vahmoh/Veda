@@ -6,7 +6,6 @@
 
 use alloc::format;
 use alloc::string::String;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use vfiles::format::human_size;
@@ -372,12 +371,7 @@ impl Photos {
                 Some(Slot::Ready(p)) => {
                     loading = false;
                     damaged = p.damaged;
-                    Some(Source {
-                        id: Arc::as_ptr(p) as usize,
-                        levels: &p.levels[..],
-                        dims: (p.width(), p.height()),
-                        alpha: p.has_alpha,
-                    })
+                    Some(Source { id: p.id, levels: &p.levels[..], dims: (p.width(), p.height()), alpha: p.has_alpha })
                 }
                 Some(Slot::Failed(m)) => {
                     loading = false;
@@ -388,7 +382,7 @@ impl Photos {
                     Thumb::Ready(th) => {
                         let d = dims.unwrap_or((th.preview.width as u32, th.preview.height as u32));
                         Some(Source {
-                            id: th.preview.pixels.as_ptr() as usize,
+                            id: th.id,
                             levels: core::slice::from_ref(&th.preview),
                             dims: d,
                             alpha: th.has_alpha,
@@ -830,8 +824,9 @@ fn orientation_text(o: Orientation) -> &'static str {
 
 /// Pixels to show for the picture on screen: the decoded picture or its preview.
 struct Source<'a> {
-    /// Identifies the pixels (for the view cache).
-    id: usize,
+    /// Identifies the pixels (for the view cache): the loader's number of the picture or the
+    /// thumbnails, which no other has.
+    id: u64,
     levels: &'a [Bitmap],
     /// Full size of the picture.
     dims: (u32, u32),

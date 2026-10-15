@@ -10,13 +10,14 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use vproto::gpu::{ResourceSpec, gpu};
 use vrt::object::{Event, Vmo};
 use vrt::pool::ThreadPool;
 use vrt::vm::Mapping;
 
-use crate::backend::{External, OutOfMemory};
+use crate::backend::{External, Memory, OutOfMemory};
 use crate::soft::{SoftBackend, Workers};
 use crate::virgl::{Lost, ResourceArgs, Transport, VirglBackend};
 use crate::{Config, Context};
@@ -48,13 +49,6 @@ pub fn context(config: Config) -> Context {
 /// A context on the GPU, if there is one.
 pub fn gpu_context(config: Config) -> Option<Context> {
     backend_context(GpuTransport::connect()?, config)
-}
-
-/// A context through the renderer serving the `gpu` protocol under
-/// `service` (tests start one of their own), waiting up to `wait_ns` for it
-/// to register.
-pub fn gpu_context_on(service: &str, wait_ns: u64, config: Config) -> Option<Context> {
-    backend_context(GpuTransport::connect_to(service, wait_ns)?, config)
 }
 
 fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
@@ -116,6 +110,11 @@ impl GpuTransport {
 
     /// Opens a context through the service `name`, giving it `wait_ns` to
     /// answer (connections to a service not registered yet wait for it).
+    ///
+    /// The renderer is not trusted with this process's memory: a session
+    /// whose areas break the protocol's rules (`vproto::gpu::Session`), or
+    /// whose memory is smaller than they say, is refused before anything of
+    /// it is mapped.
     pub fn connect_to(name: &str, wait_ns: u64) -> Option<GpuTransport> {
         let client = gpu::Client::new(vproto::connect(name).ok()?);
         client.set_timeout(wait_ns);
@@ -128,17 +127,25 @@ impl GpuTransport {
             Err(_) => return None,
         };
         client.set_timeout(CALL_NS);
-        let size = (session.shared_offset + session.shared_size) as usize;
-        let map = Mapping::new(session.memory, size, vabi::map_flags::READ | vabi::map_flags::WRITE).ok()?;
-        let co = session.command_offset as usize;
-        let so = session.shared_offset as usize;
+        let refuse = |why: &str| {
+            vrt::println!("the GPU service ({}) gave a context {why}: it is not used", session.renderer);
+        };
+        let Some(layout) = session.areas().layout(SHARED) else {
+            refuse("whose memory is laid out against the protocol's rules");
+            return None;
+        };
+        if session.memory.size().ok().is_none_or(|size| size < layout.size) {
+            refuse("with less memory than its areas take");
+            return None;
+        }
+        let map = Mapping::new(session.memory, layout.size, vabi::map_flags::READ | vabi::map_flags::WRITE).ok()?;
         Some(GpuTransport {
             client,
             caps: session.caps.0,
             map: Arc::new(map),
-            command: co..co + session.command_size as usize,
-            shared: so..so + session.shared_size as usize,
-            fence_word: session.fence_offset as usize,
+            command: layout.command,
+            shared: layout.shared,
+            fence_word: layout.fence,
             fences: Arc::new(session.fences),
             renderer: session.renderer,
         })
@@ -163,10 +170,18 @@ impl GpuTransport {
 
     /// The last fence that signaled.
     fn last_fence(&self) -> u64 {
-        // SAFETY: the fence word, inside the mapping, aligned; the driver
-        // writes it at any time.
-        unsafe { core::ptr::read_volatile(self.map.as_ptr().add(self.fence_word) as *const u64) }
+        fence_word(&self.map, self.fence_word)
     }
+}
+
+/// The number in a session's fence word at `at`, which the renderer stores
+/// atomically (with release ordering: what it wrote before, such as query
+/// results, is visible once the number is).
+fn fence_word(map: &Mapping, at: usize) -> u64 {
+    // SAFETY: `connect_to` checked that the word lies inside the mapping
+    // (which `map` keeps) at a multiple of 8 from its page-aligned start;
+    // the memory is only ever accessed atomically as a whole word.
+    unsafe { AtomicU64::from_ptr(map.as_ptr().add(at).cast::<u64>()) }.load(Ordering::Acquire)
 }
 
 impl Transport for GpuTransport {
@@ -174,8 +189,14 @@ impl Transport for GpuTransport {
         &self.caps
     }
 
+    /// Veda's renderer clears every resource it creates.
+    fn zeroes_new_resources(&self) -> bool {
+        true
+    }
+
     fn shared(&self) -> (*mut u8, usize) {
-        // SAFETY: the shared area lies inside the mapping.
+        // SAFETY: `connect_to` checked that the shared area lies inside the
+        // mapping.
         (unsafe { self.map.as_ptr().add(self.shared.start) }, self.shared.len())
     }
 
@@ -218,13 +239,15 @@ impl Transport for GpuTransport {
             nr_samples: a.nr_samples,
             flags: a.flags,
         };
+        let Memory::Handle(handle) = memory.memory() else { return Err(OutOfMemory) };
         // The caller keeps its handle: the renderer gets one of its own.
         let theirs = {
-            // SAFETY: borrowed for the duplication, never closed here.
-            let h = core::mem::ManuallyDrop::new(unsafe { vrt::object::Handle::from_raw(memory.handle) });
+            // SAFETY: the caller's handle, borrowed for the duplication and
+            // never closed here (`ManuallyDrop`).
+            let h = core::mem::ManuallyDrop::new(unsafe { vrt::object::Handle::from_raw(handle) });
             Vmo::from_handle(h.duplicate(None).map_err(|_| OutOfMemory)?)
         };
-        match self.client.import(spec, memory.stride, theirs) {
+        match self.client.import(spec, memory.stride(), theirs) {
             Ok(Ok(h)) => Ok(h),
             Ok(Err(e)) => {
                 vrt::println!("{}: cannot render into memory it is given: {}", self.renderer, e);
@@ -239,12 +262,12 @@ impl Transport for GpuTransport {
     }
 
     fn submit(&mut self, commands: &[u32]) -> Result<(), Lost> {
-        let bytes = commands.len() * 4;
-        if bytes > self.command.len() {
+        let Some(bytes) = commands.len().checked_mul(4).filter(|&b| b <= self.command.len()) else {
             return Err(Lost);
-        }
-        // SAFETY: the command area, inside the mapping; the driver reads it
-        // only during the call.
+        };
+        // SAFETY: `bytes` fit in the command area, which `connect_to`
+        // checked lies inside the mapping; the renderer reads it only
+        // during the call (and copies it before it decodes it).
         unsafe {
             core::ptr::copy_nonoverlapping(
                 commands.as_ptr() as *const u8,
@@ -271,16 +294,31 @@ impl Transport for GpuTransport {
         self.last_fence() >= fence
     }
 
-    fn wait(&mut self, fence: u64) -> Result<(), Lost> {
+    fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost> {
+        // A fence the renderer leaves unsignaled for longer than a call may
+        // take, it never will: it has hung.
+        let start = vrt::time::now_ns();
+        let hung = start.saturating_add(CALL_NS);
+        let until = start.saturating_add(timeout_ns).min(hung);
         loop {
             // Clear, then look: a fence signaling in between leaves the
             // event signaled again.
             let _ = self.fences.clear();
             if self.last_fence() >= fence {
-                return Ok(());
+                return Ok(true);
             }
-            if self.fences.wait(vabi::signals::SIGNALED, vrt::time::now_ns() + CALL_NS).is_err() {
-                return lost(&self.renderer, format_args!("left fence {fence} unsignaled"));
+            if vrt::time::now_ns() >= until {
+                // The caller's time is up, or the renderer's.
+                return if until < hung {
+                    Ok(false)
+                } else {
+                    lost(&self.renderer, format_args!("left fence {fence} unsignaled"))
+                };
+            }
+            let woken = self.fences.wait(vabi::signals::SIGNALED, until);
+            if woken.is_err() && vrt::time::now_ns() < until {
+                // Not timed out: the event is gone, and the renderer with it.
+                return lost(&self.renderer, format_args!("took its fences' event away"));
             }
         }
     }
@@ -308,9 +346,7 @@ impl FenceWatch {
 
     /// The last fence that signaled.
     pub fn signaled(&self) -> u64 {
-        // SAFETY: the fence word, inside the mapping, aligned; the driver
-        // writes it at any time.
-        unsafe { core::ptr::read_volatile(self.map.as_ptr().add(self.word) as *const u64) }
+        fence_word(&self.map, self.word)
     }
 }
 

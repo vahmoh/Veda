@@ -18,7 +18,7 @@ use crate::handshake::tests::TestRandom;
 use crate::ie;
 use crate::rsn::Security;
 use crate::scan::parse_bss;
-use crate::station::{Action, Credential, Failure, KeyKind, StaEvent, Station, Target};
+use crate::station::{Action, Credential, Failure, KeyKind, Passage, StaEvent, Station, Target};
 
 const STA_MAC: Mac = [0x02, 0x00, 0x00, 0x57, 0x4C, 0x01];
 const AP_MAC: Mac = [0x02, 0x00, 0x00, 0xA9, 0x00, 0x01];
@@ -63,6 +63,9 @@ impl Mlme {
     }
 }
 
+/// Turns a frame on the air into what arrives instead (none, it, others).
+type Tamper = alloc::boxed::Box<dyn FnMut(&[u8]) -> Vec<Vec<u8>>>;
+
 /// What the managed radio hands the station of a frame from the AP.
 enum Up {
     Frame(Vec<u8>),
@@ -89,6 +92,11 @@ struct Sim {
     ap_events: Vec<ApEvent>,
     /// Every frame the AP transmitted (for replay tests).
     ap_frames: Vec<Vec<u8>>,
+    /// What reaches the station of each frame from the AP (none: the frame
+    /// itself), for tests that tamper with the air.
+    to_sta_filter: Option<Tamper>,
+    /// Frames the station sent the AP, seen on the air.
+    sta_frames: Vec<Vec<u8>>,
 }
 
 fn ap_config(security: Security, pass: &str) -> ApConfig {
@@ -102,6 +110,7 @@ fn ap_config(security: Security, pass: &str) -> ApConfig {
         pmf_required: false,
         h2e: false,
         beacon_interval: 100,
+        strip_rsnxe: false,
     }
 }
 
@@ -124,6 +133,8 @@ impl Sim {
             events: Vec::new(),
             ap_events: Vec::new(),
             ap_frames: Vec::new(),
+            to_sta_filter: None,
+            sta_frames: Vec::new(),
         }
     }
 
@@ -141,6 +152,7 @@ impl Sim {
             match a {
                 Action::Transmit { frame, .. } => {
                     assert!(self.mlme.is_none(), "a managed station transmits frames itself");
+                    self.sta_frames.push(frame.clone());
                     if self.air && self.sta_channel == self.ap.cfg.channel {
                         self.to_ap.push_back(frame);
                     }
@@ -217,11 +229,6 @@ impl Sim {
                 let encrypt = m.tk.is_some();
                 m.protect(f, encrypt)
             }
-            Action::SendEthernet(eth) => {
-                let bssid = self.ap.cfg.bssid;
-                let protected = self.ap.cfg.security != Security::Open;
-                if protected && !m.authorized { None } else { m.data(&bssid, &eth, protected) }
-            }
             _ => None,
         };
         if let Some(f) = out
@@ -282,20 +289,38 @@ impl Sim {
                 let a = self.ap.receive(&f, self.now, &mut self.rng);
                 self.ap_actions(a);
             } else if let Some(f) = self.to_sta.pop_front() {
-                let a = match self.mlme.is_some() {
-                    false => self.sta.receive(&f, -50, self.now, &mut self.rng),
-                    true => match self.mlme_receive(&f) {
-                        Some(Up::Frame(f)) => self.sta.receive(&f, -50, self.now, &mut self.rng),
-                        Some(Up::Ethernet(eth)) => self.sta.receive_ethernet(&eth, self.now, &mut self.rng),
-                        None => Vec::new(),
-                    },
+                let frames = match self.to_sta_filter.as_mut() {
+                    Some(filter) => filter(&f),
+                    None => alloc::vec![f],
                 };
-                self.sta_actions(a);
+                for g in frames {
+                    self.deliver_to_sta(g);
+                }
             } else {
                 return;
             }
         }
         panic!("frames keep bouncing");
+    }
+
+    /// The station (or its managed radio) receives a frame from the AP.
+    fn deliver_to_sta(&mut self, f: Vec<u8>) {
+        let a = match self.mlme.is_some() {
+            false => self.sta.receive(&f, -50, self.now, &mut self.rng),
+            true => match self.mlme_receive(&f) {
+                Some(Up::Frame(f)) => self.sta.receive(&f, -50, self.now, &mut self.rng),
+                Some(Up::Ethernet(eth)) => match self.sta.receive_ethernet(&eth, self.now, &mut self.rng) {
+                    Passage::Pass => {
+                        self.delivered.push(eth);
+                        Vec::new()
+                    }
+                    Passage::Drop => Vec::new(),
+                    Passage::Actions(a) => a,
+                },
+                None => Vec::new(),
+            },
+        };
+        self.sta_actions(a);
     }
 
     fn run(&mut self, ms: u64) {
@@ -349,8 +374,7 @@ impl Sim {
         eth.extend_from_slice(&STA_MAC);
         eth.extend_from_slice(&0x0800u16.to_be_bytes());
         eth.extend_from_slice(b"hello from the station");
-        let a = self.sta.send_ethernet(&eth);
-        self.sta_actions(a);
+        self.send_ethernet(&eth);
         self.pump();
         assert_eq!(self.uplink.last(), Some(&eth), "uplink frame missing");
         let mut back = Vec::new();
@@ -362,6 +386,27 @@ impl Sim {
         self.ap_actions(a);
         self.pump();
         assert_eq!(self.delivered.last(), Some(&back), "downlink frame missing");
+    }
+
+    /// The station sends an Ethernet frame: through its managed radio as
+    /// it is, or as 802.11 frames of its own.
+    fn send_ethernet(&mut self, eth: &[u8]) {
+        match self.sta.send_ethernet(eth) {
+            Passage::Pass => {
+                let air = self.air;
+                let bssid = self.ap.cfg.bssid;
+                let protected = self.ap.cfg.security != Security::Open;
+                let m = self.mlme.as_mut().expect("only a managed station passes frames on");
+                let f = if protected && !m.authorized { None } else { m.data(&bssid, eth, protected) };
+                if let Some(f) = f
+                    && air
+                {
+                    self.to_ap.push_back(f);
+                }
+            }
+            Passage::Drop => {}
+            Passage::Actions(a) => self.sta_actions(a),
+        }
     }
 
     fn broadcast_from_host(&mut self) -> Vec<u8> {
@@ -446,12 +491,12 @@ fn wrong_passwords_are_reported() {
     let mut s = Sim::new(ap_config(Security::Wpa2Personal, "the right one"));
     s.connect("the wrong one", true);
     assert!(s.run_until(20_000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
-    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::WrongPassword)), "{:?}", s.events);
+    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::PasswordNotAccepted)), "{:?}", s.events);
     assert!(s.ap.authorized().is_empty());
     let mut s = Sim::new(ap_config(Security::Wpa3Personal, "the right one"));
     s.connect("the wrong one", true);
     assert!(s.run_until(20_000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
-    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::WrongPassword)), "{:?}", s.events);
+    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::PasswordNotAccepted)), "{:?}", s.events);
 }
 
 #[test]
@@ -668,7 +713,7 @@ fn managed_radio_failures() {
     let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
     s.connect("wrong password!", true);
     assert!(s.run_until(10_000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
-    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::WrongPassword)), "{:?}", s.events);
+    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::PasswordNotAccepted)), "{:?}", s.events);
     // The radio says the AP did not answer.
     let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
     s.air = false;
@@ -697,4 +742,177 @@ fn managed_radio_failures() {
     s.pump();
     assert_eq!(s.mlme.as_ref().unwrap().commands.last(), Some(&"deauthenticate"));
     assert_eq!(s.events.last(), Some(&StaEvent::Disconnected(Failure::Local)));
+}
+
+/// The authentication transaction of a frame, if it is an SAE
+/// authentication frame.
+fn sae_transaction(f: &[u8]) -> Option<u16> {
+    let h = Header::parse(f)?;
+    if !h.fc.is_management() || h.fc.subtype() != mgmt::AUTH {
+        return None;
+    }
+    let a = frame::AuthBody::parse(&f[h.len..])?;
+    (a.algorithm == frame::auth_alg::SAE).then_some(a.transaction)
+}
+
+/// Whether a frame from the AP carries EAPOL in clear.
+fn clear_eapol(f: &[u8]) -> bool {
+    Header::parse(f).is_some_and(|h| {
+        h.fc.is_data()
+            && !h.fc.protected()
+            && frame::parse_snap(&f[h.len..]).is_some_and(|(ethertype, _)| ethertype == eapol::ETHERTYPE)
+    })
+}
+
+/// An unprotected deauthentication from the AP to the station.
+fn forged_deauth(code: u16) -> Vec<u8> {
+    frame::management(mgmt::DEAUTH, &STA_MAC, &AP_MAC, &AP_MAC, 77, &code.to_le_bytes())
+}
+
+#[test]
+fn sae_confirms_that_do_not_verify_are_discarded() {
+    // Before each confirm of the AP's, someone sends one that does not
+    // verify (or a refusal): the station keeps waiting for the real one.
+    for managed in [false, true] {
+        let cfg = ap_config(Security::Wpa3Personal, "bright blue sky");
+        let mut s = if managed { Sim::managed(cfg) } else { Sim::new(cfg) };
+        s.to_sta_filter = Some(alloc::boxed::Box::new(|f: &[u8]| {
+            if sae_transaction(f) != Some(2) {
+                return alloc::vec![f.to_vec()];
+            }
+            let mut bad = f.to_vec();
+            let n = bad.len();
+            bad[n - 1] ^= 0x55;
+            let mut refusal = f.to_vec();
+            let h = Header::parse(f).unwrap().len;
+            // Status code 1 (unspecified failure).
+            refusal[h + 4] = 1;
+            alloc::vec![bad, refusal, f.to_vec()]
+        }));
+        s.connect("bright blue sky", true);
+        assert!(s.run_until(8000, |s| s.connected()), "managed={managed}: {:?}", s.events);
+    }
+}
+
+#[test]
+fn anti_clogging_requests_count_against_the_tries() {
+    // Someone keeps answering the commit with token requests: the attempt
+    // ends after its tries, it does not go on for ever.
+    let mut s = Sim::new(ap_config(Security::Wpa3Personal, "bright blue sky"));
+    s.air = false;
+    s.connect("bright blue sky", true);
+    let token = frame::AuthBody::build(frame::auth_alg::SAE, 1, frame::status::ANTI_CLOGGING_TOKEN_REQ, &[19, 0, 9, 9]);
+    let request = frame::management(mgmt::AUTH, &STA_MAC, &AP_MAC, &AP_MAC, 5, &token);
+    // A request every 200 ms, sooner than the station's timeout: the tries
+    // are what ends it.
+    let mut ended = false;
+    for _ in 0..100 {
+        let a = s.sta.receive(&request, -40, s.now, &mut s.rng);
+        s.sta_actions(a);
+        s.run(200);
+        if s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_))) {
+            ended = true;
+            break;
+        }
+    }
+    assert!(ended, "{:?}", s.events);
+    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::NoResponse)), "{:?}", s.events);
+}
+
+#[test]
+fn repeated_sae_commits_count_against_the_tries() {
+    // The AP's commit comes again and again and its confirm never: the
+    // station answers a bounded number of times, then gives up.
+    let mut s = Sim::new(ap_config(Security::Wpa3Personal, "bright blue sky"));
+    s.to_sta_filter = Some(alloc::boxed::Box::new(|f: &[u8]| match sae_transaction(f) {
+        Some(1) => alloc::vec![f.to_vec(); 20],
+        Some(2) => Vec::new(),
+        _ => alloc::vec![f.to_vec()],
+    }));
+    s.connect("bright blue sky", true);
+    assert!(s.run_until(20_000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
+    let confirms = s.sta_frames.iter().filter(|f| sae_transaction(f) == Some(2)).count();
+    assert!(confirms <= 5, "{confirms} confirms sent");
+}
+
+#[test]
+fn one_deauthentication_in_the_handshake_is_no_verdict_on_the_password() {
+    // Message 3 never comes, and a deauthentication saying "4-way
+    // handshake timeout" does (anyone can send one): the attempt failed,
+    // but nothing says the password was wrong.
+    let mut s = Sim::new(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    let mut eapol_seen = 0;
+    s.to_sta_filter = Some(alloc::boxed::Box::new(move |f: &[u8]| {
+        if clear_eapol(f) {
+            eapol_seen += 1;
+            if eapol_seen > 1 {
+                return Vec::new();
+            }
+        }
+        alloc::vec![f.to_vec()]
+    }));
+    s.connect("correct horse battery", true);
+    s.run(50);
+    assert!(s.events.contains(&StaEvent::Securing), "{:?}", s.events);
+    let a = s.sta.receive(&forged_deauth(reason::FOURWAY_HANDSHAKE_TIMEOUT), -40, s.now, &mut s.rng);
+    s.sta_actions(a);
+    assert_eq!(
+        s.events.last(),
+        Some(&StaEvent::JoinFailed(Failure::Deauthenticated(reason::FOURWAY_HANDSHAKE_TIMEOUT)))
+    );
+}
+
+#[test]
+fn message_3_must_carry_the_advertised_rsn_extension_whatever_the_akm() {
+    // A transition-mode AP advertising SAE hash-to-element (an RSN
+    // Extension element), joined with WPA2: message 3 carries the element.
+    let mut cfg = ap_config(Security::Wpa2Wpa3Personal, "mixed mode pass");
+    cfg.h2e = true;
+    let mut s = Sim::new(cfg.clone());
+    s.connect("mixed mode pass", false);
+    assert!(s.run_until(8000, |s| s.connected()), "{:?}", s.events);
+    assert!(matches!(s.events.last(), Some(StaEvent::Connected { sae: false, .. })));
+    // An AP that leaves it out (a downgrade of what it advertised) is not
+    // joined.
+    cfg.strip_rsnxe = true;
+    let mut s = Sim::new(cfg);
+    s.connect("mixed mode pass", false);
+    assert!(s.run_until(8000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
+    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::HandshakeFailed)), "{:?}", s.events);
+}
+
+#[test]
+fn group_keys_survive_a_pairwise_rekey() {
+    let mut s = Sim::new(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    s.connect("correct horse battery", true);
+    assert!(s.run_until(5000, |s| s.connected()));
+    s.exchange_data();
+    let a = s.ap.rekey_pairwise(&STA_MAC, &mut s.rng, s.now);
+    s.ap_actions(a);
+    s.pump();
+    s.run(10);
+    assert!(s.sta.is_connected());
+    // Unicast with the new pairwise key, broadcast with the group key the
+    // station already had.
+    s.exchange_data();
+    let b = s.broadcast_from_host();
+    assert_eq!(s.delivered.last(), Some(&b));
+}
+
+#[test]
+fn protected_broadcast_deauthentication() {
+    let mut s = Sim::new(ap_config(Security::Wpa2Personal, "password123"));
+    s.connect("password123", true);
+    assert!(s.run_until(5000, |s| s.connected()));
+    // Without a valid BIP MIC: ignored.
+    let a = s.ap.broadcast_deauth(reason::DISASSOC_AP_BUSY, false);
+    s.ap_actions(a);
+    s.pump();
+    s.run(2000);
+    assert!(s.sta.is_connected(), "{:?}", s.events);
+    // Protected: the AP really sends everyone away.
+    let a = s.ap.broadcast_deauth(reason::DISASSOC_AP_BUSY, true);
+    s.ap_actions(a);
+    s.pump();
+    assert_eq!(s.events.last(), Some(&StaEvent::Disconnected(Failure::Deauthenticated(reason::DISASSOC_AP_BUSY))));
 }

@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! [`Document`]: a buffer with a selection, editing commands and grouped
-//! undo/redo.
+//! undo/redo, and a record of which lines its edits touched, from which
+//! views (a [`Layout`](crate::Layout)) update just those lines.
 
+use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::buffer::{Buffer, Pos, end_of, ordered};
 use crate::layout::display_col;
@@ -95,6 +98,43 @@ struct Group {
 /// Maximum number of undo steps kept.
 const UNDO_LIMIT: usize = 1000;
 
+/// How many edits the record of changed lines keeps apart; older ones are
+/// merged into one (see [`Document::changes_since`]).
+const EDITS_KEPT: usize = 32;
+
+/// Source of the documents' identities.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Which lines of a document changed between two of its revisions: the
+/// first `kept_before` lines are as they were, and so are the last
+/// `kept_after` (which may have moved up or down); the lines between are
+/// new.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineChange {
+    /// How many lines at the start are as they were.
+    pub kept_before: usize,
+    /// How many lines at the end are as they were.
+    pub kept_after: usize,
+}
+
+impl LineChange {
+    /// What two changes in a row change together.
+    fn and(self, later: LineChange) -> LineChange {
+        LineChange {
+            kept_before: self.kept_before.min(later.kept_before),
+            kept_after: self.kept_after.min(later.kept_after),
+        }
+    }
+}
+
+/// The lines that edits from revision `from` to revision `to` changed.
+#[derive(Debug, Clone, Copy)]
+struct Edit {
+    from: u64,
+    to: u64,
+    lines: LineChange,
+}
+
 /// Adjusts a position on `line` for the replacement of `a..b` by `len` bytes.
 fn adjust(p: Pos, line: usize, a: usize, b: usize, len: usize) -> Pos {
     if p.line != line || p.col <= a {
@@ -107,15 +147,18 @@ fn adjust(p: Pos, line: usize, a: usize, b: usize, len: usize) -> Pos {
 }
 
 /// An editable text document.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Document {
+    /// Which document this is (copies get identities of their own).
+    id: u64,
     buffer: Buffer,
     sel: Selection,
     /// Display column kept while moving vertically (managed by the view).
     pub goal_x: Option<usize>,
     /// Spaces per indentation level and tab stop.
     pub tab_width: usize,
-    undo: Vec<Group>,
+    /// Undo steps, the oldest first (dropped from the front at the limit).
+    undo: VecDeque<Group>,
     redo: Vec<Group>,
     /// Identity of the current content: new for every edit, restored by
     /// undo/redo, so undoing back to the saved text clears "modified".
@@ -125,6 +168,9 @@ pub struct Document {
     revision: u64,
     /// First line changed since [`Document::take_changed_from`] (`usize::MAX`: none).
     changed_from: usize,
+    /// The lines the latest edits changed, the oldest first: the revisions
+    /// they cover follow one another, the first from the document's start.
+    edits: VecDeque<Edit>,
     /// The last undo group may absorb the next typing/deleting step.
     merge_open: bool,
 }
@@ -132,6 +178,29 @@ pub struct Document {
 impl Default for Document {
     fn default() -> Self {
         Document::new()
+    }
+}
+
+/// A copy is a document of its own: what is recorded of the original's
+/// edits says nothing of the copy's.
+impl Clone for Document {
+    fn clone(&self) -> Document {
+        Document {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            buffer: self.buffer.clone(),
+            sel: self.sel,
+            goal_x: self.goal_x,
+            tab_width: self.tab_width,
+            undo: self.undo.clone(),
+            redo: self.redo.clone(),
+            state: self.state,
+            next_state: self.next_state,
+            saved_state: self.saved_state,
+            revision: self.revision,
+            changed_from: self.changed_from,
+            edits: self.edits.clone(),
+            merge_open: self.merge_open,
+        }
     }
 }
 
@@ -146,19 +215,26 @@ impl Document {
 
     fn from_buffer(buffer: Buffer) -> Document {
         Document {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             buffer,
             sel: Selection::default(),
             goal_x: None,
             tab_width: 4,
-            undo: Vec::new(),
+            undo: VecDeque::new(),
             redo: Vec::new(),
             state: 0,
             next_state: 1,
             saved_state: 0,
             revision: 0,
             changed_from: usize::MAX,
+            edits: VecDeque::new(),
             merge_open: false,
         }
+    }
+
+    /// Which document this is: no other (copies included) has the same.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn buffer(&self) -> &Buffer {
@@ -187,6 +263,35 @@ impl Document {
     pub fn take_changed_from(&mut self) -> Option<usize> {
         let line = core::mem::replace(&mut self.changed_from, usize::MAX);
         (line != usize::MAX).then_some(line)
+    }
+
+    /// Which lines changed since `revision` (one of this document's,
+    /// [`Document::revision`]): `None` for a revision it has not had yet.
+    /// What older edits changed is recorded together, so that the lines
+    /// given may be more than the ones that changed, never fewer.
+    pub fn changes_since(&self, revision: u64) -> Option<LineChange> {
+        if revision > self.revision {
+            return None;
+        }
+        let mut newer = self.edits.iter().filter(|e| e.to > revision).map(|e| e.lines);
+        Some(match newer.next() {
+            Some(first) => newer.fold(first, LineChange::and),
+            None => LineChange { kept_before: self.buffer.line_count(), kept_after: 0 },
+        })
+    }
+
+    /// Records that the lines `first..=last` of the buffer (of `count`
+    /// lines) as it was are replaced, as revision `revision + 1`.
+    fn note_change(&mut self, first: usize, last: usize, count: usize) {
+        let lines = LineChange { kept_before: first, kept_after: count.saturating_sub(last + 1) };
+        let from = self.revision;
+        self.revision += 1;
+        self.edits.push_back(Edit { from, to: self.revision, lines });
+        if self.edits.len() > EDITS_KEPT
+            && let (Some(a), Some(b)) = (self.edits.pop_front(), self.edits.pop_front())
+        {
+            self.edits.push_front(Edit { from: a.from, to: b.to, lines: a.lines.and(b.lines) });
+        }
     }
 
     /// The content differs from what was last saved.
@@ -275,15 +380,27 @@ impl Document {
 
     /// Replaces `a..b` with `text` and returns the change.
     fn apply(&mut self, a: Pos, b: Pos, text: &str) -> Change {
-        let (a, b) = ordered(a, b);
+        let (a, b) = ordered(self.buffer.clamp(a), self.buffer.clamp(b));
+        let count = self.buffer.line_count();
         let removed = if a == b { String::new() } else { self.buffer.delete(a, b) };
         let inserted = if text.contains('\r') { text.replace("\r\n", "\n") } else { text.to_string() };
         if !inserted.is_empty() {
             self.buffer.insert(a, &inserted);
         }
-        self.revision += 1;
+        self.note_change(a.line, b.line, count);
         self.changed_from = self.changed_from.min(a.line);
         Change { at: a, removed, inserted }
+    }
+
+    /// Replaces the text `removed` at `at` with `inserted` again (undoing
+    /// or redoing a change).
+    fn reapply(&mut self, at: Pos, removed: &str, inserted: &str) {
+        let count = self.buffer.line_count();
+        let end = end_of(at, removed);
+        self.buffer.delete(at, end);
+        self.buffer.insert(at, inserted);
+        self.note_change(at.line, end.line, count);
+        self.changed_from = self.changed_from.min(at.line);
     }
 
     /// Records changes as an undo step, merging consecutive typing or
@@ -295,7 +412,7 @@ impl Document {
         self.redo.clear();
         if self.merge_open
             && kind != Kind::Other
-            && let Some(g) = self.undo.last_mut()
+            && let Some(g) = self.undo.back_mut()
             && g.kind == kind
             && g.after == before
             && g.state_after == state_before
@@ -305,9 +422,9 @@ impl Document {
             g.state_after = self.state;
             return;
         }
-        self.undo.push(Group { changes, kind, before, after: self.sel, state_before, state_after: self.state });
+        self.undo.push_back(Group { changes, kind, before, after: self.sel, state_before, state_after: self.state });
         if self.undo.len() > UNDO_LIMIT {
-            self.undo.remove(0);
+            self.undo.pop_front();
         }
         self.merge_open = kind != Kind::Other;
     }
@@ -506,13 +623,10 @@ impl Document {
     // ---- undo ----------------------------------------------------------------
 
     pub fn undo(&mut self) -> bool {
-        let Some(g) = self.undo.pop() else { return false };
+        let Some(g) = self.undo.pop_back() else { return false };
         for c in g.changes.iter().rev() {
-            self.buffer.delete(c.at, end_of(c.at, &c.inserted));
-            self.buffer.insert(c.at, &c.removed);
-            self.changed_from = self.changed_from.min(c.at.line);
+            self.reapply(c.at, &c.inserted, &c.removed);
         }
-        self.revision += 1;
         self.sel = g.before;
         self.state = g.state_before;
         self.goal_x = None;
@@ -524,16 +638,13 @@ impl Document {
     pub fn redo(&mut self) -> bool {
         let Some(g) = self.redo.pop() else { return false };
         for c in &g.changes {
-            self.buffer.delete(c.at, end_of(c.at, &c.removed));
-            self.buffer.insert(c.at, &c.inserted);
-            self.changed_from = self.changed_from.min(c.at.line);
+            self.reapply(c.at, &c.removed, &c.inserted);
         }
-        self.revision += 1;
         self.sel = g.after;
         self.state = g.state_after;
         self.goal_x = None;
         self.merge_open = false;
-        self.undo.push(g);
+        self.undo.push_back(g);
         true
     }
 

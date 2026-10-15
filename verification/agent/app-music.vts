@@ -61,7 +61,7 @@ agent-result '"shuffle":true,"repeat":"one","volume":40,"muted":false'
 agent-result '"up_next":[{"title":"Aurora Drift"}]'
 agent-result '"library":{"songs":7,"albums":1,"artists":1}'
 wait 3
-shot target/veda/agent-app-music.png
+shot target/veda/agent-app-music.png now
 # An album starts from its first song; a song that is not there is refused.
 agent-call use_app '{"app":"music","action":"play","arguments":{"query":"first light","kind":"album"}}' 30
 agent-result '"from":{"album":"First Light"}'

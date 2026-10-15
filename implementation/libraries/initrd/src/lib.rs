@@ -47,6 +47,8 @@ pub enum InitrdError {
     UnsupportedVersion(u32),
     Truncated,
     BadEntry,
+    /// The paths are not in order (or one is there twice).
+    Unsorted,
 }
 
 impl core::fmt::Display for InitrdError {
@@ -56,6 +58,7 @@ impl core::fmt::Display for InitrdError {
             InitrdError::UnsupportedVersion(v) => write!(f, "unsupported VINITRD version {v}"),
             InitrdError::Truncated => f.write_str("archive is truncated"),
             InitrdError::BadEntry => f.write_str("archive entry is out of bounds"),
+            InitrdError::Unsorted => f.write_str("archive entries are not sorted by path"),
         }
     }
 }
@@ -120,8 +123,15 @@ impl<'a> Archive<'a> {
             return Err(InitrdError::Truncated);
         }
         let archive = Archive { data: &data[..total], count, entries_off, strings_off, strings_size };
+        // Every entry in bounds, and the paths in strictly increasing order,
+        // which `find`'s binary search relies on (and no path twice).
+        let mut previous: Option<&str> = None;
         for i in 0..count {
-            archive.entry(i).ok_or(InitrdError::BadEntry)?;
+            let file = archive.entry(i).ok_or(InitrdError::BadEntry)?;
+            if previous.is_some_and(|p| p >= file.path) {
+                return Err(InitrdError::Unsorted);
+            }
+            previous = Some(file.path);
         }
         Ok(archive)
     }
@@ -288,5 +298,21 @@ mod tests {
         let mut img = Builder::new().build();
         img[0] = b'X';
         assert_eq!(Archive::open(&img).unwrap_err(), InitrdError::BadMagic);
+    }
+
+    #[test]
+    fn rejects_entries_out_of_order() {
+        let mut b = Builder::new();
+        b.add("a", vec![1]);
+        b.add("b", vec![2]);
+        let mut img = b.build();
+        // Swap the two entries (32 bytes each, after the 64-byte header).
+        let (first, second) = img[64..128].split_at_mut(32);
+        first.swap_with_slice(second);
+        assert_eq!(Archive::open(&img).unwrap_err(), InitrdError::Unsorted);
+        // The same path twice.
+        let copy: std::vec::Vec<u8> = img[64..96].to_vec();
+        img[96..128].copy_from_slice(&copy);
+        assert_eq!(Archive::open(&img).unwrap_err(), InitrdError::Unsorted);
     }
 }

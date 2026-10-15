@@ -25,4 +25,4 @@ wait-serial "interceptor: softpipe (Low quality)" 90
 wait-serial "interceptor: ready" 180
 wait-serial " fps, render " 60
 wait 4
-shot target/veda/drivervm-renderer-1.png
+shot target/veda/drivervm-renderer-1.png now

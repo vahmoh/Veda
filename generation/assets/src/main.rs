@@ -8,9 +8,10 @@
 //! ```
 //!
 //! Writes `OUT_DIR/wallpapers/*` (installed as `/system/wallpapers`) and
-//! `OUT_DIR/samples/Pictures/*` (copied to `~/Pictures` at boot). Everything is procedural and
-//! deterministic. Only these two directories are touched (other generators share `OUT_DIR`).
-//! The optional `FILTER` renders only files whose name contains it (handy while tuning).
+//! `OUT_DIR/samples/Pictures/*` (copied to `~/Pictures` at boot), and lists them in
+//! `OUT_DIR`'s manifest (see `gencommon::output`), removing what else is there. Everything is
+//! procedural and deterministic. The optional `FILTER` renders only files whose name contains it
+//! (handy while tuning), and leaves the manifest and the other files as they are.
 
 mod noise;
 mod paint;
@@ -20,6 +21,7 @@ mod wallpapers;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use gencommon::output::Output;
 use paint::Buf;
 use vimage::{JpegOptions, Subsampling};
 
@@ -109,17 +111,6 @@ fn psnr(a: &vimage::Image, b: &vimage::Image) -> f64 {
     if mse == 0.0 { f64::INFINITY } else { 10.0 * (255.0 * 255.0 / mse).log10() }
 }
 
-/// Removes the files of a directory this tool owns (not its subdirectories).
-fn clean(dir: &Path) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for e in entries.flatten() {
-            if e.path().is_file() {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
-    }
-}
-
 fn main() {
     let mut args = std::env::args().skip(1);
     let Some(out) = args.next().map(PathBuf::from) else {
@@ -127,15 +118,19 @@ fn main() {
         std::process::exit(2);
     };
     let filter = args.next();
-    let started = Instant::now();
-    if filter.is_none() {
-        for dir in [WALLPAPERS, PICTURES] {
-            clean(&out.join(dir));
-        }
+    if let Err(e) = run(&out, filter.as_deref()) {
+        eprintln!("assetgen: {e}");
+        std::process::exit(1);
     }
+}
+
+/// Renders every item (or those `filter` names) into `out`.
+fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
+    let mut out = Output::new(out)?;
+    let started = Instant::now();
     let mut total = 0usize;
     for (i, item) in items().into_iter().enumerate() {
-        if filter.as_deref().is_some_and(|f| !item.name.contains(f)) {
+        if filter.is_some_and(|f| !item.name.contains(f)) {
             continue;
         }
         let t = Instant::now();
@@ -151,9 +146,7 @@ fn main() {
             Store::Bmp => assert!(quality.is_infinite(), "{} decodes differently", item.name),
             _ => assert!(quality > 35.0, "{} decodes at {quality:.1} dB", item.name),
         }
-        let dir = out.join(item.dir);
-        std::fs::create_dir_all(&dir).expect("creating the output directory");
-        std::fs::write(dir.join(item.name), &bytes).expect("writing the output file");
+        out.write(&format!("{}/{}", item.dir, item.name), &bytes)?;
         // While tuning, `ASSETGEN_PREVIEW=DIR` also writes every image as PNG (as displayed).
         if let Some(preview) = std::env::var_os("ASSETGEN_PREVIEW") {
             let preview = PathBuf::from(preview);
@@ -171,5 +164,9 @@ fn main() {
             t.elapsed().as_secs_f64() * 1000.0
         );
     }
+    if filter.is_none() {
+        out.finish()?;
+    }
     println!("assetgen: {:.1} MiB in {:.1} s", total as f64 / (1024.0 * 1024.0), started.elapsed().as_secs_f64());
+    Ok(())
 }

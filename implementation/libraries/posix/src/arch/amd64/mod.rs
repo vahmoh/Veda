@@ -3,7 +3,7 @@
 
 //! The POSIX layer on AMD64: what Linux's x86-64 ABI has of its own
 //! ([`linux`], [`syscall`]), the thread pointer (the FS base, which `%fs:0`
-//! holds), and the code new threads start in and old ones end with.
+//! holds), and the code new threads start in.
 
 pub mod linux;
 pub mod syscall;
@@ -33,7 +33,7 @@ pub fn thread_entry_address() -> usize {
 
 // A new thread starts here with rdi = rsp = its `Start` (see `thread`):
 // it installs its thread pointer and exit futex, calls its function, and
-// ends.
+// ends (`thread::thread_returned`) if the function returns.
 #[cfg(target_os = "none")]
 core::arch::global_asm!(
     ".global __veda_thread_entry",
@@ -50,32 +50,10 @@ core::arch::global_asm!(
     "    mov rdi, [rbx + 8]",
     "    xor ebp, ebp",
     "    call [rbx]",
-    "    mov eax, {exit}",
-    "    syscall",
+    "    call {returned}",
     "    ud2",
     ".size __veda_thread_entry, . - __veda_thread_entry",
     set_tls = const vabi::nr::THREAD_SET_TLS,
     set_exit_futex = const vabi::nr::THREAD_SET_EXIT_FUTEX,
-    exit = const vabi::nr::THREAD_EXIT,
-);
-
-// `__unmapself(base, size)`: frees the stack the thread runs on and ends
-// the thread, touching no stack in between.
-#[cfg(target_os = "none")]
-core::arch::global_asm!(
-    ".global __veda_unmapself",
-    ".hidden __veda_unmapself",
-    ".type __veda_unmapself, @function",
-    "__veda_unmapself:",
-    "    mov rdx, rsi",
-    "    mov rsi, rdi",
-    "    xor edi, edi",
-    "    mov eax, {unmap}",
-    "    syscall",
-    "    mov eax, {exit}",
-    "    syscall",
-    "    ud2",
-    ".size __veda_unmapself, . - __veda_unmapself",
-    unmap = const vabi::nr::VM_UNMAP,
-    exit = const vabi::nr::THREAD_EXIT,
+    returned = sym crate::thread::thread_returned,
 );

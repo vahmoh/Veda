@@ -204,11 +204,10 @@ fn all_outlines_parse_and_lie_within_head_bbox() {
         let f = font(data);
         let m = *f.metrics();
         let mut nonempty = 0;
-        let mut scratch = OutlineScratch::new();
         for g in 0..f.num_glyphs() {
             let g = GlyphId(g);
             let mut b = BoundsSink::default();
-            f.outline_with(g, &mut b, &mut scratch).unwrap_or_else(|e| panic!("{name}: glyph {} failed: {e}", g.0));
+            f.outline(g, &mut b).unwrap_or_else(|e| panic!("{name}: glyph {} failed: {e}", g.0));
             let Some(cb) = b.bounds else { continue };
             nonempty += 1;
             let fb = flat_bounds(&f, g).unwrap();
@@ -677,12 +676,11 @@ fn exercise(data: &[u8], glyph_step: usize) -> bool {
     let Ok(f) = Font::from_bytes(data) else { return false };
     let _ = (f.family_name(), f.copyright(), f.license(), f.metrics().x_height);
     let mut r = GlyphRasterizer::new();
-    let mut scratch = OutlineScratch::new();
     let n = f.num_glyphs() as usize;
     for g in (0..n.saturating_add(3)).step_by(glyph_step.max(1)) {
         let g = GlyphId(g.min(u16::MAX as usize) as u16);
         let mut b = BoundsSink::default();
-        let _ = f.outline_with(g, &mut b, &mut scratch);
+        let _ = f.outline(g, &mut b);
         let _ = f.advance_width(g);
         let _ = f.kerning(g, GlyphId(g.0.wrapping_add(1)));
         if g.0.is_multiple_of(7) {

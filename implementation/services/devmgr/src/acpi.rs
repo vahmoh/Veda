@@ -30,9 +30,10 @@ const PAGE: u64 = 4096;
 /// Firmware memory, mapped as it is first read: the ACPI tables and the
 /// firmware's variables. The tables, and what the kernel reported as the
 /// firmware's ACPI memory, are RAM and are mapped cached; anything else
-/// AML reads (device registers) uncached. And PCI configuration space, as
-/// devmgr reads it (the host bridge's registers, which a root bridge's
-/// `_CRS` may size its windows by).
+/// AML reads (device registers) uncached, with the accesses its fields'
+/// access types say. And PCI configuration space, as devmgr reads it (the
+/// host bridge's registers, which a root bridge's `_CRS` may size its
+/// windows by).
 pub struct FirmwareMemory {
     mmio: Resource,
     ram: Vec<(u64, u64)>,
@@ -86,46 +87,84 @@ impl FirmwareMemory {
         Some(address + (start - first) as usize)
     }
 
-    fn read_as(&self, address: u64, buf: &mut [u8], cached: bool) -> bool {
+    /// Reads `buf.len()` bytes at `address`: copied if `cached` (RAM), else
+    /// as device registers are, with accesses of `width` bytes (1, 2, 4 or
+    /// 8) one after the other; one its width does not align (in a region
+    /// that is not) is made a byte at a time.
+    fn read_as(&self, address: u64, buf: &mut [u8], cached: bool, width: usize) -> bool {
         let Some(end) = address.checked_add(buf.len() as u64) else { return false };
         let Some(at) = self.window(address, end, cached) else { return false };
         // SAFETY: `at` maps `buf.len()` readable bytes for as long as the
-        // window lives (the life of the process).
+        // window lives (the life of the process); each access is inside
+        // them, and aligned to its width.
         unsafe {
             if cached {
                 core::ptr::copy_nonoverlapping(at as *const u8, buf.as_mut_ptr(), buf.len());
-            } else if at.is_multiple_of(4) && buf.len().is_multiple_of(4) {
-                // Device registers: whole 32-bit reads.
-                for (i, chunk) in buf.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                    let v = core::ptr::read_volatile((at as *const u32).add(i));
-                    chunk.copy_from_slice(&v.to_le_bytes());
-                }
-            } else {
-                for (i, b) in buf.iter_mut().enumerate() {
-                    *b = core::ptr::read_volatile((at as *const u8).add(i));
+                return true;
+            }
+            let width = width.max(1);
+            for (i, chunk) in buf.chunks_mut(width).enumerate() {
+                let p = at + i * width;
+                match chunk.len() {
+                    8 if p.is_multiple_of(8) => {
+                        chunk.copy_from_slice(&core::ptr::read_volatile(p as *const u64).to_le_bytes())
+                    }
+                    4 if p.is_multiple_of(4) => {
+                        chunk.copy_from_slice(&core::ptr::read_volatile(p as *const u32).to_le_bytes())
+                    }
+                    2 if p.is_multiple_of(2) => {
+                        chunk.copy_from_slice(&core::ptr::read_volatile(p as *const u16).to_le_bytes())
+                    }
+                    _ => {
+                        for (j, b) in chunk.iter_mut().enumerate() {
+                            *b = core::ptr::read_volatile((p + j) as *const u8);
+                        }
+                    }
                 }
             }
         }
         true
     }
+
+    fn is_cached(&self, address: u64, len: usize) -> bool {
+        address.checked_add(len as u64).is_some_and(|end| self.is_ram(address, end))
+    }
 }
 
 impl Memory for FirmwareMemory {
+    /// Device registers in whole 32-bit reads where they are aligned.
     fn read(&self, address: u64, buf: &mut [u8]) -> bool {
-        let cached = address.checked_add(buf.len() as u64).is_some_and(|end| self.is_ram(address, end));
-        self.read_as(address, buf, cached)
+        self.read_as(address, buf, self.is_cached(address, buf.len()), 4)
+    }
+
+    fn read_field(&self, address: u64, width: usize, buf: &mut [u8]) -> bool {
+        self.read_as(address, buf, self.is_cached(address, buf.len()), width)
+    }
+
+    fn read_pci(&self, f: PciFunction, offset: u16, buf: &mut [u8]) -> bool {
+        self.read_pci_field(f, offset, 1, buf)
     }
 
     /// Through the configuration mechanism (`arch::config`): segment 0, as
-    /// much of each function's space as it reaches.
-    fn read_pci(&self, f: PciFunction, offset: u16, buf: &mut [u8]) -> bool {
+    /// much of each function's space as it reaches, in accesses of the
+    /// field's width (configuration space has none wider than 4 bytes).
+    fn read_pci_field(&self, f: PciFunction, offset: u16, width: usize, buf: &mut [u8]) -> bool {
         let reach = crate::arch::config::CONFIG_BYTES as usize;
         if f.segment != 0 || f.device > 31 || f.function > 7 || offset as usize + buf.len() > reach {
             return false;
         }
         let a = Address { bus: f.bus, slot: f.device, function: f.function };
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = self.config.read(a, offset + i as u16, 1) as u8;
+        let width = width.clamp(1, 4);
+        for (i, chunk) in buf.chunks_mut(width).enumerate() {
+            let at = offset + (i * width) as u16;
+            if matches!(chunk.len(), 1 | 2 | 4) && at.is_multiple_of(chunk.len() as u16) {
+                let v = self.config.read(a, at, chunk.len() as u8);
+                chunk.copy_from_slice(&v.to_le_bytes()[..chunk.len()]);
+            } else {
+                for (j, b) in chunk.iter_mut().enumerate() {
+                    *b = self.config.read(a, at + j as u16, 1) as u8;
+                }
+            }
         }
         true
     }
@@ -136,7 +175,7 @@ struct Tables<'a>(&'a FirmwareMemory);
 
 impl Memory for Tables<'_> {
     fn read(&self, address: u64, buf: &mut [u8]) -> bool {
-        self.0.read_as(address, buf, true)
+        self.0.read_as(address, buf, true, 1)
     }
 }
 
@@ -179,7 +218,7 @@ impl Acpi {
         let tables = match tables::load(&Tables(&memory), boot.acpi_rsdp) {
             Ok(t) => t,
             Err(e) => {
-                println!("acpi: cannot read the tables: {:?}", e);
+                println!("acpi: cannot read the tables: {}", e);
                 return None;
             }
         };
@@ -197,14 +236,25 @@ impl Acpi {
                 }
             }
         }
+        // The devices' _INI methods finish describing them (a touchpad's id
+        // and connections), as an OS runs them once the tables are loaded.
+        let init = ns.initialize(&memory);
+        if init.failures > 0 {
+            println!("acpi: {} of the devices' _INI and _STA methods failed", init.failures);
+            for (method, e) in &init.failed {
+                println!("acpi: {}: {}", method, e);
+            }
+        }
         let roots = device::pci_roots(&ns, &memory);
         let devices = ns.devices().count();
         println!(
-            "acpi: {} tables, {} of {} with device definitions loaded: {} devices, {} PCI root bridge(s){}",
+            "acpi: {} tables, {} of {} with device definitions loaded: {} devices ({} _INI methods run), {} PCI root \
+             bridge(s){}",
             tables.len(),
             loaded,
             blocks,
             devices,
+            init.ran,
             roots.len(),
             if ns.skipped > 0 {
                 alloc::format!(" ({} conditional definitions left out)", ns.skipped)

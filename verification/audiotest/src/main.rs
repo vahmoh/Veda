@@ -3,18 +3,16 @@
 
 //! `audiotest` — audio checks that run inside Veda.
 //!
-//! * `audiotest record SECS`: records SECS seconds from the microphone
-//!   (16 kHz mono) and logs the level of every second as
-//!   `audiotest: level -23.4 dBFS (peak -10.2 dBFS)`, then
-//!   `audiotest: heard sound` if any second was louder than -45 dBFS and
-//!   `audiotest: PASS`.
-//! * `audiotest echo SECS`: plays a voice-like test signal through the
-//!   speakers while recording with echo cancellation, and logs how much
-//!   quieter the recording is than the signal it would contain without
-//!   cancellation (`audiotest: echo suppressed by 24.0 dB`).
+//! `audiotest record SECS` records SECS seconds from the microphone
+//! (16 kHz mono) and logs the level of every second as `audiotest: level
+//! -23.4 dBFS (peak -10.2 dBFS, 16000 samples)`, then `audiotest: heard
+//! sound` if any second was louder than -45 dBFS and `audiotest: PASS`
+//! (`drivervm-mic.vts` records the driver VM's sound card so).
 //!
 //! Scripts feed the microphone with `say` and `mic-wav` (the `testmic`
-//! device) or use the machine's real microphone.
+//! device) or use the machine's real microphone. Echo cancellation is
+//! checked through the agent, which uses it (`verification/agent/echo.vts`,
+//! the machine's own sound coming back into the microphone).
 
 #![no_std]
 #![no_main]
@@ -23,9 +21,8 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec;
-use alloc::vec::Vec;
 
-use vproto::audio::{InputSpec, InputStream, OutputStream, StreamSpec, audio};
+use vproto::audio::{InputSpec, InputStream, audio};
 use vrt::println;
 use vrt::time::Duration;
 
@@ -116,97 +113,12 @@ fn record(secs: u32) -> i32 {
     0
 }
 
-/// A voice-like test signal: a pitch sweeping 120-220 Hz with harmonics,
-/// in syllable-like bursts.
-fn voice_signal(n: usize) -> Vec<i16> {
-    let mut out = Vec::with_capacity(n);
-    let mut phase = 0f64;
-    for i in 0..n {
-        let t = i as f64 / RATE as f64;
-        let f0 = 170.0 + 50.0 * tri(t * 0.7);
-        phase += f0 / RATE as f64;
-        let mut s = 0.0;
-        for h in 1..8 {
-            s += sin_turns(phase * h as f64) / h as f64;
-        }
-        let env = (0.5 + 0.5 * sin_turns(t * 3.0)).max(0.0);
-        out.push((s * env * 6000.0) as i16);
-    }
-    out
-}
-
-fn tri(x: f64) -> f64 {
-    let f = x - (x as i64) as f64;
-    if f < 0.5 { 4.0 * f - 1.0 } else { 3.0 - 4.0 * f }
-}
-
-/// sin(2 pi x).
-fn sin_turns(x: f64) -> f64 {
-    libm::sin(core::f64::consts::TAU * x)
-}
-
-fn echo(secs: u32) -> i32 {
-    let Some(client) = connect() else { return 1 };
-    if !wait_for_input(&client) {
-        return 1;
-    }
-    let mut spec = InputSpec::mono(RATE, 1000, "audiotest-echo");
-    spec.echo_cancel = true;
-    let mic = match InputStream::open(&client, spec) {
-        Ok(m) => m,
-        Err(e) => {
-            println!("audiotest: FAIL (cannot open the microphone: {:?})", e);
-            return 1;
-        }
-    };
-    let speaker = match OutputStream::open(
-        &client,
-        StreamSpec {
-            rate: RATE,
-            channels: 1,
-            buffer_frames: RATE / 2,
-            notify_frames: 0,
-            name: String::from("audiotest-echo"),
-            paused: false,
-            volume: 1.0,
-        },
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            println!("audiotest: FAIL (cannot play: {:?})", e);
-            return 1;
-        }
-    };
-    let signal = voice_signal((secs * RATE) as usize);
-    let (sig_rms, _) = levels(&signal);
-    let mut played = 0;
-    let mut recorded: Vec<i16> = Vec::with_capacity(signal.len() + RATE as usize);
-    let mut buf = vec![0i16; 1600];
-    let end = vrt::time::deadline_after(Duration::from_secs(secs as u64 + 2));
-    while vrt::time::now_ns() < end {
-        if played < signal.len() {
-            played += speaker.write(&signal[played..]);
-        }
-        let n = mic.read(&mut buf);
-        recorded.extend_from_slice(&buf[..n]);
-        vrt::time::sleep(Duration::from_millis(10));
-    }
-    // Skip the first two seconds while the canceller converges.
-    let start = (2 * RATE as usize).min(recorded.len());
-    let (rec_rms, _) = levels(&recorded[start..]);
-    println!("audiotest: signal {:.1} dBFS, recording after cancellation {:.1} dBFS", sig_rms, rec_rms);
-    println!("audiotest: echo suppressed by {:.1} dB", sig_rms - rec_rms);
-    println!("audiotest: PASS");
-    0
-}
-
 fn main() -> i32 {
     let args = vrt::env::args();
     let mode = args.get(1).map(String::as_str).unwrap_or("record");
     let secs = args.get(2).and_then(|s| s.parse::<u32>().ok()).unwrap_or(5).clamp(1, 600);
     match mode {
         "record" => record(secs),
-        "echo" => echo(secs),
         other => {
             println!("audiotest: unknown mode {}", other);
             2

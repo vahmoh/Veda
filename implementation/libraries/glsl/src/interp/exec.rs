@@ -6,7 +6,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::{ALL, Ins, LANES, MAX_ITERATIONS, Mask, Program};
+use super::{ALL, Ins, LANES, MAX_LOOP_WORK, Mask, Program};
 use crate::ir::TexOp;
 use crate::ops::{self, Op, Ty};
 
@@ -80,7 +80,6 @@ struct LoopFrame {
     entry: Mask,
     brk: Mask,
     cont: Mask,
-    iterations: u32,
 }
 
 /// A register file and the state to run a program on it.
@@ -88,8 +87,14 @@ pub struct Exec {
     pub regs: Vec<Lanes>,
     ifs: Vec<IfFrame>,
     loops: Vec<LoopFrame>,
-    /// A loop hit [`MAX_ITERATIONS`].
+    /// A run went round its loops more than [`MAX_LOOP_WORK`] allows, and
+    /// left them early.
     pub runaway: bool,
+}
+
+/// An index computed at run time (a signed int), clamped to `0..count`.
+fn clamp_index(index: u32, count: u32) -> u32 {
+    if (index as i32) < 0 { 0 } else { index.min(count.saturating_sub(1)) }
 }
 
 impl Exec {
@@ -106,15 +111,6 @@ impl Exec {
         self.run_code(&p.prologue, p, ALL, env);
     }
 
-    /// Copies another register file's prologue results (for workers
-    /// sharing a draw).
-    pub fn copy_prologue(&mut self, p: &Program, from: &Exec) {
-        if self.regs.len() < p.registers {
-            self.regs.resize(p.registers, Lanes::ZERO);
-        }
-        self.regs[..p.uniform_registers].copy_from_slice(&from.regs[..p.uniform_registers]);
-    }
-
     /// Runs the main code for the lanes in `mask` (inputs already in their
     /// registers); returns the lanes not discarded.
     pub fn run(&mut self, p: &Program, mask: Mask, env: &Env<'_>) -> Mask {
@@ -127,6 +123,8 @@ impl Exec {
         let mut exec = mask;
         let mut alive = mask;
         let mut pc = 0usize;
+        // Instructions run again going round loops (see MAX_LOOP_WORK).
+        let mut work = 0u64;
         while pc < code.len() {
             match code[pc] {
                 Ins::If { c, else_pc } => {
@@ -151,19 +149,20 @@ impl Exec {
                     exec = saved & self.running(alive);
                 }
                 Ins::Loop => {
-                    self.loops.push(LoopFrame { entry: exec, brk: 0, cont: 0, iterations: 0 });
+                    self.loops.push(LoopFrame { entry: exec, brk: 0, cont: 0 });
                 }
                 Ins::EndLoop { start_pc } => {
                     let Some(l) = self.loops.last_mut() else { break };
-                    l.iterations += 1;
                     let next = l.entry & alive & !l.brk;
                     l.cont = 0;
-                    if next != 0 && l.iterations < MAX_ITERATIONS {
-                        exec = next;
-                        pc = start_pc as usize + 1;
-                        continue;
-                    }
                     if next != 0 {
+                        let body = pc.saturating_sub(start_pc as usize) as u64;
+                        if work + body <= MAX_LOOP_WORK {
+                            work += body;
+                            exec = next;
+                            pc = start_pc as usize + 1;
+                            continue;
+                        }
                         self.runaway = true;
                     }
                     let entry = l.entry;
@@ -232,47 +231,38 @@ impl Exec {
                 let v = env.uniforms.get(slot as usize).map_or(0, |s| s[comp as usize & 3]);
                 self.regs[d as usize] = Lanes::splat(v);
             }
-            Ins::LoadUniformIndexed { d, base, comp, count, index } => {
+            Ins::LoadUniformIndexed { d, base, comp, stride, count, index } => {
                 let idx = self.regs[index as usize].0;
                 let mut out = [0u32; LANES];
                 for i in 0..LANES {
                     // Clamped to the variable, as a signed index.
-                    let k = (idx[i] as i32).clamp(0, count.max(1) as i32 - 1) as u32;
-                    out[i] = env.uniforms.get((base + k) as usize).map_or(0, |s| s[comp as usize & 3]);
+                    let slot = u64::from(base) + u64::from(clamp_index(idx[i], count)) * u64::from(stride);
+                    let row = usize::try_from(slot).ok().and_then(|s| env.uniforms.get(s));
+                    out[i] = row.map_or(0, |s| s[comp as usize & 3]);
                 }
                 self.regs[d as usize].0 = out;
             }
-            Ins::LoadBlock { d, block, offset, size, index } => {
+            Ins::LoadBlock { d, block, offset } => {
                 let data = env.blocks.get(block as usize).copied().unwrap_or(&[]);
-                let read = |off: u32| -> u32 {
-                    let o = off as usize;
-                    match data.get(o..o + 4) {
-                        Some(b) => u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-                        None => 0,
-                    }
-                };
-                match index {
-                    None => self.regs[d as usize] = Lanes::splat(read(offset)),
-                    Some(r) => {
-                        let idx = self.regs[r as usize].0;
-                        let mut out = [0u32; LANES];
-                        let limit = size.saturating_sub(4).saturating_sub(offset) as i64;
-                        for i in 0..LANES {
-                            // The byte offset, clamped inside the block.
-                            let extra = (idx[i] as i32 as i64).clamp(0, limit.max(0));
-                            out[i] = read(offset + extra as u32);
-                        }
-                        self.regs[d as usize].0 = out;
-                    }
+                self.regs[d as usize] = Lanes::splat(read_word(data, u64::from(offset)));
+            }
+            Ins::LoadBlockIndexed { d, block, offset, stride, count, index } => {
+                let data = env.blocks.get(block as usize).copied().unwrap_or(&[]);
+                let idx = self.regs[index as usize].0;
+                let mut out = [0u32; LANES];
+                for i in 0..LANES {
+                    // The byte offset, clamped inside the block.
+                    let at = u64::from(offset) + u64::from(clamp_index(idx[i], count)) * u64::from(stride);
+                    out[i] = read_word(data, at);
                 }
+                self.regs[d as usize].0 = out;
             }
             Ins::Tex { op } => {
                 let t = &p.tex[op as usize];
+                // A computed index is into the run of `count` samplers from
+                // `index`.
                 let index = match t.index {
-                    Some(r) => {
-                        let v = self.regs[r as usize].0;
-                        v.map(|x| (x as i32).clamp(0, t.op.count.max(1) as i32 - 1) as u32)
-                    }
+                    Some(r) => self.regs[r as usize].0.map(|x| t.op.index.saturating_add(clamp_index(x, t.op.count))),
                     None => [t.op.index; LANES],
                 };
                 // Coordinates (up to four), then a bias, a level or two
@@ -298,7 +288,8 @@ impl Exec {
                     if exec & (1 << i) == 0 {
                         continue;
                     }
-                    let s = index.map_or(t.sampler_index, |v| v[i]);
+                    let s =
+                        index.map_or(t.sampler_index, |v| t.sampler_index.saturating_add(clamp_index(v[i], t.count)));
                     let size = env.textures.size(s, lod[i] as i32);
                     for c in 0..3 {
                         out[c][i] = size[c] as u32;
@@ -340,6 +331,13 @@ impl Exec {
     }
 }
 
+/// The 32-bit little-endian word at byte `at` of a block's buffer (0 past
+/// its end).
+fn read_word(data: &[u8], at: u64) -> u32 {
+    let word = usize::try_from(at).ok().and_then(|o| data.get(o..o.checked_add(4)?));
+    word.map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
 /// The lanes whose bool register is true.
 fn truth(r: &Lanes) -> Mask {
     let mut m = 0;
@@ -350,16 +348,6 @@ fn truth(r: &Lanes) -> Mask {
 }
 
 type L = [u32; LANES];
-
-#[inline(always)]
-fn f(x: u32) -> f32 {
-    f32::from_bits(x)
-}
-
-#[inline(always)]
-fn b(x: bool) -> u32 {
-    0u32.wrapping_sub(u32::from(x))
-}
 
 #[inline(always)]
 fn map1(a: &L, g: impl Fn(u32) -> u32) -> L {
@@ -379,113 +367,94 @@ fn map2(a: &L, c: &L, g: impl Fn(u32, u32) -> u32) -> L {
     d
 }
 
-#[inline(always)]
-fn ff(a: &L, g: impl Fn(f32) -> f32) -> L {
-    map1(a, |x| g(f(x)).to_bits())
-}
-
-#[inline(always)]
-fn fff(a: &L, c: &L, g: impl Fn(f32, f32) -> f32) -> L {
-    map2(a, c, |x, y| g(f(x), f(y)).to_bits())
-}
-
-/// `op` on every lane, exactly as [`ops::eval`] defines it.
+/// `op` on every lane: [`ops::bits`]' definition of it, applied lane by
+/// lane (the operation chosen once, not per lane).
 pub(crate) fn apply(op: Op, ty: Ty, a: &L, c: &L) -> L {
     use Op::*;
+    use ops::bits::*;
     match op {
-        FNeg => map1(a, |x| x ^ 0x8000_0000),
-        FAbs => map1(a, |x| x & 0x7FFF_FFFF),
-        FSign => ff(a, |x| {
-            if x > 0.0 {
-                1.0
-            } else if x < 0.0 {
-                -1.0
-            } else {
-                x
-            }
-        }),
-        FFloor => ff(a, libm::floorf),
-        FCeil => ff(a, libm::ceilf),
-        FTrunc => ff(a, libm::truncf),
-        FRoundEven => ff(a, libm::roundevenf),
-        FFract => ff(a, |x| x - libm::floorf(x)),
-        FSqrt => ff(a, libm::sqrtf),
-        FRsq => ff(a, |x| 1.0 / libm::sqrtf(x)),
-        FExp => ff(a, libm::expf),
-        FLog => ff(a, libm::logf),
-        FExp2 => ff(a, libm::exp2f),
-        FLog2 => ff(a, libm::log2f),
-        FSin => ff(a, libm::sinf),
-        FCos => ff(a, libm::cosf),
-        FTan => ff(a, libm::tanf),
-        FAsin => ff(a, libm::asinf),
-        FAcos => ff(a, libm::acosf),
-        FAtan => ff(a, libm::atanf),
-        FSinh => ff(a, libm::sinhf),
-        FCosh => ff(a, libm::coshf),
-        FTanh => ff(a, libm::tanhf),
-        FAsinh => ff(a, libm::asinhf),
-        FAcosh => ff(a, libm::acoshf),
-        FAtanh => ff(a, libm::atanhf),
-        FAdd => fff(a, c, |x, y| x + y),
-        FSub => fff(a, c, |x, y| x - y),
-        FMul => fff(a, c, |x, y| x * y),
-        FDiv => fff(a, c, |x, y| x / y),
-        FMin => fff(a, c, |x, y| if x < y { x } else { y }),
-        FMax => fff(a, c, |x, y| if x > y { x } else { y }),
-        FPow => fff(a, c, libm::powf),
-        FAtan2 => fff(a, c, libm::atan2f),
-        FLt => map2(a, c, |x, y| b(f(x) < f(y))),
-        FLe => map2(a, c, |x, y| b(f(x) <= f(y))),
-        FEq => map2(a, c, |x, y| b(f(x) == f(y))),
-        FNe => map2(a, c, |x, y| b(f(x) != f(y))),
-        FIsNan => map1(a, |x| b(f(x).is_nan())),
-        FIsInf => map1(a, |x| b(f(x).is_infinite())),
-        INeg => map1(a, |x| (x as i32).wrapping_neg() as u32),
-        INot => map1(a, |x| !x),
-        IAbs => map1(a, |x| (x as i32).wrapping_abs() as u32),
-        ISign => map1(a, |x| (x as i32).signum() as u32),
-        IAdd => map2(a, c, u32::wrapping_add),
-        ISub => map2(a, c, u32::wrapping_sub),
-        IMul => map2(a, c, u32::wrapping_mul),
-        IAnd => map2(a, c, |x, y| x & y),
-        IOr => map2(a, c, |x, y| x | y),
-        IXor => map2(a, c, |x, y| x ^ y),
-        IShl => map2(a, c, |x, y| x.wrapping_shl(y & 31)),
-        IDiv => map2(a, c, |x, y| if y == 0 { !0 } else { (x as i32).wrapping_div(y as i32) as u32 }),
-        UDiv => map2(a, c, |x, y| x.checked_div(y).unwrap_or(!0)),
-        IRem => map2(a, c, |x, y| if y == 0 { !0 } else { (x as i32).wrapping_rem(y as i32) as u32 }),
-        URem => map2(a, c, |x, y| x.checked_rem(y).unwrap_or(!0)),
-        IShr => map2(a, c, |x, y| ((x as i32) >> (y & 31)) as u32),
-        UShr => map2(a, c, |x, y| x >> (y & 31)),
-        IMin => map2(a, c, |x, y| (x as i32).min(y as i32) as u32),
-        UMin => map2(a, c, u32::min),
-        IMax => map2(a, c, |x, y| (x as i32).max(y as i32) as u32),
-        UMax => map2(a, c, u32::max),
-        IEq => map2(a, c, |x, y| b(x == y)),
-        INe => map2(a, c, |x, y| b(x != y)),
-        ILt => map2(a, c, |x, y| b((x as i32) < (y as i32))),
-        ULt => map2(a, c, |x, y| b(x < y)),
-        ILe => map2(a, c, |x, y| b((x as i32) <= (y as i32))),
-        ULe => map2(a, c, |x, y| b(x <= y)),
-        BNot => map1(a, |x| b(x == 0)),
-        BAnd => map2(a, c, |x, y| b(x != 0 && y != 0)),
-        BOr => map2(a, c, |x, y| b(x != 0 || y != 0)),
-        BXor => map2(a, c, |x, y| b((x != 0) != (y != 0))),
-        BEq => map2(a, c, |x, y| b((x != 0) == (y != 0))),
-        FToI => map1(a, |x| ops::f_to_i(f(x)) as u32),
-        FToU => map1(a, |x| ops::f_to_u(f(x))),
-        IToF => map1(a, |x| ((x as i32) as f32).to_bits()),
-        UToF => map1(a, |x| (x as f32).to_bits()),
-        BToF => map1(a, |x| if x != 0 { 1.0f32.to_bits() } else { 0 }),
-        BToI => map1(a, |x| u32::from(x != 0)),
-        FToB => map1(a, |x| b(f(x) != 0.0)),
-        IToB => map1(a, |x| b(x != 0)),
-        Bitcast => {
-            // A bool result normalises (anything non-zero is true).
-            if ty == Ty::Bool { map1(a, |x| b(x != 0)) } else { *a }
-        }
-        FToHalf => map1(a, |x| u32::from(ops::f32_to_f16(f(x)))),
-        HalfToF => map1(a, |x| ops::f16_to_f32(x as u16).to_bits()),
+        FNeg => map1(a, f_neg),
+        FAbs => map1(a, f_abs),
+        FSign => map1(a, f_sign),
+        FFloor => map1(a, f_floor),
+        FCeil => map1(a, f_ceil),
+        FTrunc => map1(a, f_trunc),
+        FRoundEven => map1(a, f_round_even),
+        FFract => map1(a, f_fract),
+        FSqrt => map1(a, f_sqrt),
+        FRsq => map1(a, f_rsq),
+        FExp => map1(a, f_exp),
+        FLog => map1(a, f_log),
+        FExp2 => map1(a, f_exp2),
+        FLog2 => map1(a, f_log2),
+        FSin => map1(a, f_sin),
+        FCos => map1(a, f_cos),
+        FTan => map1(a, f_tan),
+        FAsin => map1(a, f_asin),
+        FAcos => map1(a, f_acos),
+        FAtan => map1(a, f_atan),
+        FSinh => map1(a, f_sinh),
+        FCosh => map1(a, f_cosh),
+        FTanh => map1(a, f_tanh),
+        FAsinh => map1(a, f_asinh),
+        FAcosh => map1(a, f_acosh),
+        FAtanh => map1(a, f_atanh),
+        FAdd => map2(a, c, f_add),
+        FSub => map2(a, c, f_sub),
+        FMul => map2(a, c, f_mul),
+        FDiv => map2(a, c, f_div),
+        FMin => map2(a, c, f_min),
+        FMax => map2(a, c, f_max),
+        FPow => map2(a, c, f_pow),
+        FAtan2 => map2(a, c, f_atan2),
+        FLt => map2(a, c, f_lt),
+        FLe => map2(a, c, f_le),
+        FEq => map2(a, c, f_eq),
+        FNe => map2(a, c, f_ne),
+        FIsNan => map1(a, f_is_nan),
+        FIsInf => map1(a, f_is_inf),
+        INeg => map1(a, i_neg),
+        INot => map1(a, i_not),
+        IAbs => map1(a, i_abs),
+        ISign => map1(a, i_sign),
+        IAdd => map2(a, c, i_add),
+        ISub => map2(a, c, i_sub),
+        IMul => map2(a, c, i_mul),
+        IAnd => map2(a, c, i_and),
+        IOr => map2(a, c, i_or),
+        IXor => map2(a, c, i_xor),
+        IShl => map2(a, c, i_shl),
+        IDiv => map2(a, c, i_div),
+        UDiv => map2(a, c, u_div),
+        IRem => map2(a, c, i_rem),
+        URem => map2(a, c, u_rem),
+        IShr => map2(a, c, i_shr),
+        UShr => map2(a, c, u_shr),
+        IMin => map2(a, c, i_min),
+        UMin => map2(a, c, u_min),
+        IMax => map2(a, c, i_max),
+        UMax => map2(a, c, u_max),
+        IEq => map2(a, c, i_eq),
+        INe => map2(a, c, i_ne),
+        ILt => map2(a, c, i_lt),
+        ULt => map2(a, c, u_lt),
+        ILe => map2(a, c, i_le),
+        ULe => map2(a, c, u_le),
+        BNot => map1(a, b_not),
+        BAnd => map2(a, c, b_and),
+        BOr => map2(a, c, b_or),
+        BXor => map2(a, c, b_xor),
+        BEq => map2(a, c, b_eq),
+        FToI => map1(a, f_to_i_bits),
+        FToU => map1(a, f_to_u_bits),
+        IToF => map1(a, i_to_f),
+        UToF => map1(a, u_to_f),
+        BToF => map1(a, b_to_f),
+        BToI => map1(a, b_to_i),
+        FToB => map1(a, f_to_b),
+        IToB => map1(a, i_to_b),
+        Bitcast => map1(a, |x| bitcast(ty, x)),
+        FToHalf => map1(a, f_to_half),
+        HalfToF => map1(a, half_to_f),
     }
 }

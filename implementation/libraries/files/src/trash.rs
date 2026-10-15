@@ -23,17 +23,24 @@
 //! (put there some other way) have no known origin; info without an item
 //! is ignored, and cleared away when the Trash is emptied.
 //!
+//! Info is a file any program can write, and items are restored for the
+//! user by programs that may reach more than the user's files (the agent,
+//! a system service). So an item is put back only somewhere in the home
+//! folder or `/tmp`, outside the Trash and any `.private` folder
+//! ([`restorable`]), and only a bounded record is read.
+//!
 //! The parts that only handle text (info records, their paths and dates)
 //! are pure and unit-tested on the host.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ops::ControlFlow;
 
 use vrt::time::DateTime;
 
-use crate::fs::{Error, Fs, FsError, Result};
-use crate::path::{file_name, is_within, join, natural_cmp, parent, unique_name};
+use crate::fs::{Error, Fs, FsError, Hook, Progress, Result};
+use crate::path::{HOME, TMP, file_name, is_within, join, natural_cmp, normalize, parent, unique_name};
 
 /// The Trash.
 pub const DIR: &str = "/home/user/.local/share/Trash";
@@ -46,6 +53,9 @@ const INFO_SUFFIX: &str = ".trashinfo";
 const NS_PER_SEC: u64 = 1_000_000_000;
 /// Names tried before giving up when other programs keep taking them.
 const ATTEMPTS: usize = 64;
+/// The largest info record read: a path (at most `MAX_PATH` bytes, each
+/// escaped as three) and a date, with room to spare.
+const MAX_INFO: usize = 3 * vproto::fs::MAX_PATH + 1024;
 
 /// Where an item in the Trash was, and when it was deleted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +152,7 @@ pub fn put(fs: &Fs, path: &str) -> Result<String> {
 
 /// What is known about the item called `name`.
 pub fn info(fs: &Fs, name: &str) -> Option<Info> {
-    let bytes = fs.read(&info_path(name)).ok()?;
+    let bytes = fs.read_limited(&info_path(name), MAX_INFO).ok()?;
     parse_info(core::str::from_utf8(&bytes).ok()?)
 }
 
@@ -161,20 +171,33 @@ pub fn items(fs: &Fs) -> Result<Vec<Item>> {
     Ok(items)
 }
 
-/// How many items are in the Trash.
+/// How many items are in the Trash (from the size of its folder of items,
+/// which is its number of entries: one call, however full the Trash).
 pub fn count(fs: &Fs) -> usize {
-    fs.read_dir(FILES).map_or(0, |e| e.len())
+    fs.stat(FILES).map_or(0, |s| if s.is_dir { s.size as usize } else { 0 })
+}
+
+/// Where an item whose info says it was at `origin` may be restored to:
+/// that path, normalised, if it is in the home folder or `/tmp`, and
+/// neither in the Trash nor in any `.private` folder (see the module's
+/// overview).
+pub fn restorable(origin: &str) -> Option<String> {
+    if !origin.starts_with('/') {
+        return None;
+    }
+    let path = normalize(origin);
+    let inside = [HOME, TMP].iter().any(|place| is_within(&path, place) && path != *place);
+    let private = path.split('/').any(|c| c == ".private");
+    (inside && !private && !is_within(&path, DIR)).then_some(path)
 }
 
 /// Puts the item called `name` back where it was: under a free name like
 /// its own if that one is taken now, in its folder made again if that is
-/// gone. Returns its path.
+/// gone. Returns its path. An item whose info names no place it may go
+/// back to ([`restorable`]) has an unknown origin.
 pub fn restore(fs: &Fs, name: &str) -> Result<String> {
     fs.stat(&join(FILES, name))?;
-    let origin = info(fs, name)
-        .map(|i| i.origin)
-        .filter(|o| o.starts_with('/') && !file_name(o).is_empty() && !is_within(o, DIR))
-        .ok_or(Error::UnknownOrigin)?;
+    let origin = info(fs, name).and_then(|i| restorable(&i.origin)).ok_or(Error::UnknownOrigin)?;
     restore_to(fs, name, parent(&origin), file_name(&origin))
 }
 
@@ -202,13 +225,20 @@ pub fn restore_to(fs: &Fs, name: &str, dir: &str, base: &str) -> Result<String> 
 
 /// Deletes the item called `name` for good.
 pub fn delete(fs: &Fs, name: &str) -> Result<()> {
+    delete_with(fs, name, &mut |_, _| ControlFlow::Continue(())).map(|_| ())
+}
+
+/// Deletes the item called `name` for good, telling `hook` of everything
+/// deleted. Stopped, it leaves the rest of the item in the Trash.
+pub fn delete_with(fs: &Fs, name: &str, hook: Hook) -> Result<Progress> {
     // The item goes before its info: info left alone is ignored.
-    match fs.remove_all(&join(FILES, name)) {
-        Ok(()) | Err(Error::Fs(FsError::NotFound)) => {}
+    let progress = match fs.remove_all_with(&join(FILES, name), hook) {
+        Ok(progress) => progress,
+        Err(Error::Fs(FsError::NotFound)) => Progress::default(),
         Err(e) => return Err(e),
-    }
+    };
     match fs.remove(&info_path(name)) {
-        Ok(()) | Err(Error::Fs(FsError::NotFound)) => Ok(()),
+        Ok(()) | Err(Error::Fs(FsError::NotFound)) => Ok(progress),
         Err(e) => Err(e),
     }
 }
@@ -216,11 +246,29 @@ pub fn delete(fs: &Fs, name: &str) -> Result<()> {
 /// Deletes everything in the Trash for good; returns how many items went.
 /// Whatever cannot be deleted stays, and the first error is returned.
 pub fn empty(fs: &Fs) -> Result<usize> {
+    empty_with(fs, &mut |_, _| ControlFlow::Continue(()))
+}
+
+/// Deletes everything in the Trash for good as [`empty`] does, telling
+/// `hook` of everything deleted (the progress counting from the first
+/// item). Stopped, it leaves the rest in the Trash and fails with
+/// [`Error::Cancelled`].
+pub fn empty_with(fs: &Fs, hook: Hook) -> Result<usize> {
     let mut first = None;
     let mut gone = 0;
+    let mut so_far = Progress::default();
     for e in fs.read_dir(FILES).unwrap_or_default() {
-        match fs.remove_all(&join(FILES, &e.name)) {
-            Ok(()) => gone += 1,
+        let base = so_far;
+        let r = fs.remove_all_with(&join(FILES, &e.name), &mut |path, p| {
+            so_far = base + p;
+            hook(path, so_far)
+        });
+        match r {
+            Ok(_) => gone += 1,
+            Err(Error::Cancelled) => {
+                first = Some(Error::Cancelled);
+                break;
+            }
             Err(err) => {
                 first.get_or_insert(err);
             }
@@ -419,6 +467,37 @@ mod tests {
         assert_eq!(item_name(FILES), None);
         assert_eq!(item_name(&format!("{FILES}x/a")), None);
         assert_eq!(item_name("/home/user/a"), None);
+    }
+
+    #[test]
+    fn items_go_back_only_to_the_users_places() {
+        assert_eq!(restorable("/home/user/Documents/a.txt").as_deref(), Some("/home/user/Documents/a.txt"));
+        assert_eq!(restorable("/tmp/x").as_deref(), Some("/tmp/x"));
+        assert_eq!(restorable("/home/user//Music/./b.qoa").as_deref(), Some("/home/user/Music/b.qoa"));
+        for bad in [
+            // A service's private directory, however the path reaches it.
+            "/home/.private/agent/permissions",
+            "/home/user/../.private/agent/timers",
+            "/home/user/Documents/../../.private/agent",
+            // Any `.private` folder, and places outside the user's.
+            "/home/user/.private/x",
+            "/home/other/x",
+            "/system/bin/init",
+            "/etc/x",
+            "/home/user",
+            "/tmp",
+            "/home",
+            "/",
+            // The Trash itself, and paths that are not absolute.
+            "/home/user/.local/share/Trash/files/x",
+            "home/user/x",
+            "",
+        ] {
+            assert_eq!(restorable(bad), None, "{bad}");
+        }
+        // A record naming somewhere private names no place to go back to.
+        let planted = parse_info("[Trash Info]\nPath=/home/user/%2E%2E/.private/agent/permissions\n").unwrap();
+        assert_eq!(restorable(&planted.origin), None);
     }
 
     #[test]

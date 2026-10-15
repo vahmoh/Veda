@@ -14,25 +14,13 @@
 
 use std::time::Instant;
 
+use guest_sys::checks::Checks;
 use vabi::signals;
 use vrt::object::{Channel, Event, Vmo};
 use vrt::vm::Mapping;
 
-struct Checks {
-    failed: u32,
-}
-
-impl Checks {
-    fn check(&mut self, what: &str, ok: bool) {
-        println!("bridgetest: {} {}", if ok { "ok  " } else { "FAIL" }, what);
-        if !ok {
-            self.failed += 1;
-        }
-    }
-}
-
 fn main() {
-    let mut c = Checks { failed: 0 };
+    let mut c = Checks::new("bridgetest");
 
     // The registry: Veda's, narrowed to what drivers attach to. (Linux
     // may be up before Veda's audio service.)
@@ -64,8 +52,8 @@ fn main() {
     let msg = b.read();
     let ok = matches!(&msg, Ok(m) if m.bytes == b"hello, Veda" && m.handles.len() == 2);
     c.check("the message arrives with both handles", ok);
-    let Ok(mut msg) = msg else { return finish(c) };
-    let (Some(peer), Some(vmo)) = (msg.handles.pop(), msg.handles.pop()) else { return finish(c) };
+    let Ok(mut msg) = msg else { return c.finish() };
+    let (Some(peer), Some(vmo)) = (msg.handles.pop(), msg.handles.pop()) else { return c.finish() };
     let (vmo, peer) = (Vmo::from_handle(vmo), Event::from_handle(peer));
 
     // The VMO, mapped: what is written there is Veda's memory.
@@ -145,13 +133,5 @@ fn main() {
     // Veda's clock, which the guest reads itself.
     let (t0, t1) = (vrt::time::now_ns(), vrt::time::now_ns());
     c.check("Veda's clock runs", t0 > 0 && t1 >= t0);
-    finish(c);
-}
-
-fn finish(c: Checks) {
-    if c.failed == 0 {
-        println!("bridgetest: PASS");
-    } else {
-        println!("bridgetest: FAIL ({} checks)", c.failed);
-    }
+    c.finish();
 }

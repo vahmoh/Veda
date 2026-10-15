@@ -17,6 +17,7 @@ bench = false
 vrt = { workspace = true, default-features = false }
 vabi = { workspace = true }
 vproto = { workspace = true }
+guest-sys = { workspace = true }
 rustix = { workspace = true }
 
 [lints]

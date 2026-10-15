@@ -6,8 +6,9 @@
 //!
 //! A vertex is a position, a normal, two texture coordinates and four
 //! bytes of material parameters ([`Vertex`]); a mesh is vertices with 32-bit
-//! triangle indices. The builders here make boxes, cylinders, lathes and
-//! strips; `road` sweeps profiles along the road.
+//! triangle indices. The builders here make boxes, surfaces of revolution
+//! (cylinders, cones, discs) and spheres; `roadmesh` sweeps profiles along
+//! the road.
 
 use alloc::vec::Vec;
 
@@ -89,14 +90,6 @@ impl Mesh {
         self.indices.extend(other.indices.iter().map(|i| i + base));
     }
 
-    /// Sets every vertex's parameters.
-    pub fn with_params(mut self, params: Params) -> Mesh {
-        for v in &mut self.vertices {
-            v.params = params;
-        }
-        self
-    }
-
     /// The vertices as bytes in the layout of [`STRIDE`].
     pub fn vertex_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.vertices.len() * STRIDE);
@@ -156,12 +149,6 @@ pub fn cuboid(lo: Vec3, hi: Vec3, params: Params) -> Mesh {
     m
 }
 
-/// A cylinder along y from `y0` to `y1` of radius `r`, `sides` around,
-/// smooth sided, with caps if `caps`.
-pub fn cylinder(r: f32, y0: f32, y1: f32, sides: usize, caps: bool, params: Params) -> Mesh {
-    lathe(&[(r, y0), (r, y1)], sides, caps, params)
-}
-
 /// A surface of revolution about y through the profile points `(radius,
 /// y)`, `sides` around, smooth around and with flat caps where the profile
 /// ends off the axis if `caps`.
@@ -190,7 +177,7 @@ pub fn lathe(profile: &[(f32, f32)], sides: usize, caps: bool, params: Params) -
         let nn = normal_2d(i);
         for k in 0..=sides {
             let a = k as f32 / sides as f32 * core::f32::consts::TAU;
-            let (s, c) = a.sin_cos();
+            let (s, c) = libm::sincosf(a);
             m.push(
                 Vec3::new(c * r, y, s * r),
                 Vec3::new(c * nn.x, nn.y, s * nn.x),
@@ -215,7 +202,7 @@ pub fn lathe(profile: &[(f32, f32)], sides: usize, caps: bool, params: Params) -
             let first = m.base();
             for k in 0..=sides {
                 let a = k as f32 / sides as f32 * core::f32::consts::TAU;
-                let (s, c) = a.sin_cos();
+                let (s, c) = libm::sincosf(a);
                 m.push(Vec3::new(c * r, y, s * r), normal, Vec2::new(c * r, s * r), params);
             }
             for k in 0..sides as u32 {
@@ -235,7 +222,8 @@ pub fn sphere(r: f32, rings: usize, sides: usize, params: Params) -> Mesh {
     let profile: Vec<(f32, f32)> = (0..=rings)
         .map(|i| {
             let a = i as f32 / rings as f32 * core::f32::consts::PI;
-            (a.sin() * r, -a.cos() * r)
+            let (s, c) = libm::sincosf(a);
+            (s * r, -c * r)
         })
         .collect();
     let mut m = lathe(&profile, sides, false, params);
@@ -264,7 +252,8 @@ mod tests {
 
     #[test]
     fn lathe_and_sphere_face_out() {
-        for m in [cylinder(1.0, 0.0, 2.0, 12, true, [0; 4]), sphere(2.0, 8, 12, [0; 4])] {
+        // A capped cylinder, and a sphere.
+        for m in [lathe(&[(1.0, 0.0), (1.0, 2.0)], 12, true, [0; 4]), sphere(2.0, 8, 12, [0; 4])] {
             let center = (m.bounds().0 + m.bounds().1) * 0.5;
             for t in m.indices.chunks(3) {
                 let (a, b, c) = (m.vertices[t[0] as usize], m.vertices[t[1] as usize], m.vertices[t[2] as usize]);

@@ -102,9 +102,14 @@ impl Thread {
         }))
     }
 
-    /// A thread that will run user code in `process`.
+    /// A thread that will run user code in `process`. Its kernel stack is
+    /// memory taken on user space's behalf, refused within the kernel's
+    /// reserve (`phys::user_may_use`).
     pub fn new_user(process: &Arc<Process>, name: &str) -> Option<Arc<Thread>> {
         let aspace = process.aspace()?;
+        if !crate::mm::phys::user_may_use(KERNEL_STACK_PAGES * crate::mm::PAGE_SIZE) {
+            return None;
+        }
         let stack = KernelStack::new(KERNEL_STACK_PAGES)?;
         Thread::build(name, Some(process.clone()), Some(aspace), Some(stack), false)
     }

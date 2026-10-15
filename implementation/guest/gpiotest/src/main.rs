@@ -14,21 +14,9 @@ use std::fs::{self, File, OpenOptions};
 use std::mem::size_of;
 use std::os::fd::{FromRawFd, OwnedFd};
 
+use guest_sys::checks::Checks;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::ioctl::{Getter, Opcode, Updater, ioctl, opcode};
-
-struct Checks {
-    failed: u32,
-}
-
-impl Checks {
-    fn check(&mut self, what: &str, ok: bool) {
-        println!("gpiotest: {} {}", if ok { "ok  " } else { "FAIL" }, what);
-        if !ok {
-            self.failed += 1;
-        }
-    }
-}
 
 // Linux's GPIO character device, version 2 (`include/uapi/linux/gpio.h`).
 
@@ -160,11 +148,10 @@ fn edge(line: &OwnedFd) -> Option<LineEvent> {
 }
 
 fn main() {
-    let mut c = Checks { failed: 0 };
+    let mut c = Checks::new("gpiotest");
     let Some((chip, info)) = platform_chip() else {
         c.check("the platform's GPIO controller is a chip of Linux's", false);
-        println!("gpiotest: FAIL");
-        return;
+        return c.finish();
     };
     let label = String::from_utf8_lossy(&info.label).trim_end_matches('\0').to_string();
     c.check(&format!("{label} has the lines up to its last pin (4)"), info.lines == 4);
@@ -172,10 +159,7 @@ fn main() {
     let input = request(&chip, &[1], FLAG_INPUT | FLAG_EDGES);
     c.check("pin 0 is an output, pin 1 an input with its edges", output.is_ok() && input.is_ok());
     c.check("pin 2, which no device is wired to, is not there", request(&chip, &[2], FLAG_INPUT).is_err());
-    let (Ok(output), Ok(input)) = (output, input) else {
-        println!("gpiotest: FAIL");
-        return;
-    };
+    let (Ok(output), Ok(input)) = (output, input) else { return c.finish() };
     c.check("pin 1 is low", level(&input) == Some(false));
     for (high, id) in [(true, RISING), (false, FALLING)] {
         let driven = drive(&output, high);
@@ -189,5 +173,5 @@ fn main() {
     }
     let three = request(&chip, &[3], FLAG_INPUT);
     c.check("pin 3, nothing driving it, is low", three.as_ref().ok().and_then(level) == Some(false));
-    println!("gpiotest: {}", if c.failed == 0 { "PASS" } else { "FAIL" });
+    c.finish();
 }

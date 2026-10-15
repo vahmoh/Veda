@@ -29,6 +29,7 @@ mod expr;
 pub mod lex;
 
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -240,7 +241,10 @@ pub struct Preprocessed {
     pub invariant_all: bool,
 }
 
-/// The most tokens macro expansion may produce in one shader.
+/// The most tokens macro expansion may produce in one shader, counting
+/// every replacement and every expanded macro argument (the work
+/// expansion does, which a hostile shader could otherwise grow
+/// exponentially).
 const MAX_EXPANDED_TOKENS: usize = 1 << 20;
 /// The deepest nesting of macro arguments being expanded.
 const MAX_ARG_DEPTH: usize = 64;
@@ -251,6 +255,9 @@ struct Macro {
     /// `None` for an object-like macro.
     params: Option<Vec<Symbol>>,
     body: Vec<PpTok>,
+    /// For each token of `body` of a function-like macro, the parameter it
+    /// names, if any (found once, when the macro is defined).
+    param_of: Vec<Option<usize>>,
     /// Predefined by the implementation: may not be redefined or undefined.
     predefined: bool,
     /// `__LINE__` or `__FILE__`, whose value depends on where they are used.
@@ -331,6 +338,7 @@ pub fn preprocess(
         version,
         supported,
         macros: BTreeMap::new(),
+        active: Vec::new(),
         conds: Vec::new(),
         out: Vec::new(),
         expanded: 0,
@@ -351,53 +359,44 @@ pub fn preprocess(
 }
 
 /// Reads the `#version` number if the shader starts with one (after white
-/// space and comments), before anything else is done with the source.
+/// space and comments), before anything else is done with the source. The
+/// strings are read where they are, as one stream cut at each string's
+/// first zero byte, however long the comments before the directive.
 fn sniff_version(sources: &[&str]) -> Option<u32> {
-    let mut text = String::new();
-    for s in sources {
-        let s = s.split('\0').next().unwrap_or("");
-        text.push_str(s);
-        if text.len() > 4096 {
-            break;
-        }
-    }
-    let b = text.as_bytes();
-    let mut i = 0;
+    let mut bytes = sources.iter().flat_map(|s| s.bytes().take_while(|&b| b != 0)).peekable();
+    // White space and comments.
     loop {
-        while i < b.len() && b[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if b[i..].starts_with(b"//") {
-            while i < b.len() && b[i] != b'\n' && b[i] != b'\r' {
-                i += 1;
-            }
-        } else if b[i..].starts_with(b"/*") {
-            i += 2 + text[i + 2..].find("*/")? + 2;
-        } else {
+        while bytes.next_if(u8::is_ascii_whitespace).is_some() {}
+        if bytes.next_if_eq(&b'/').is_none() {
             break;
         }
-    }
-    if i >= b.len() || b[i] != b'#' {
-        return None;
-    }
-    i += 1;
-    while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-        i += 1;
-    }
-    if !b[i..].starts_with(b"version") {
-        return None;
-    }
-    i += 7;
-    let start = {
-        while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-            i += 1;
+        match bytes.next()? {
+            b'/' => while bytes.next_if(|&b| b != b'\n' && b != b'\r').is_some() {},
+            b'*' => {
+                let mut star = false;
+                loop {
+                    let b = bytes.next()?;
+                    if star && b == b'/' {
+                        break;
+                    }
+                    star = b == b'*';
+                }
+            }
+            _ => return None,
         }
-        i
-    };
-    while i < b.len() && b[i].is_ascii_digit() {
-        i += 1;
     }
-    text[start..i].parse().ok()
+    let blank = |b: &u8| *b == b' ' || *b == b'\t';
+    bytes.next_if_eq(&b'#')?;
+    while bytes.next_if(blank).is_some() {}
+    for c in *b"version" {
+        bytes.next_if_eq(&c)?;
+    }
+    while bytes.next_if(blank).is_some() {}
+    let mut number: Option<u32> = None;
+    while let Some(d) = bytes.next_if(u8::is_ascii_digit) {
+        number = Some(number.unwrap_or(0).checked_mul(10)?.checked_add(u32::from(d - b'0'))?);
+    }
+    number
 }
 
 struct Preprocessor<'a> {
@@ -406,10 +405,14 @@ struct Preprocessor<'a> {
     names: Names,
     version: Version,
     supported: ExtSet,
-    macros: BTreeMap<Symbol, Macro>,
+    macros: BTreeMap<Symbol, Rc<Macro>>,
+    /// How many expansions of each macro (by symbol index) are being
+    /// rescanned: a macro is not expanded again inside its own expansion.
+    active: Vec<u32>,
     conds: Vec<Cond>,
     out: Vec<PpTok>,
-    /// Tokens produced by macro expansion so far.
+    /// Tokens produced by macro expansion so far (see
+    /// [`MAX_EXPANDED_TOKENS`]).
     expanded: usize,
     /// `#line` adjustments: lines of the physical string
     /// `line_delta_string` are shifted by `line_delta`; every string number
@@ -439,7 +442,8 @@ impl Preprocessor<'_> {
         let define = |pp: &mut Self, name: &str, value: Option<Symbol>, dynamic: Option<Dynamic>| {
             let sym = pp.interner.intern(name);
             let body = value.map(|v| vec![PpTok::new(PpKind::Number(v), Loc::NONE, false)]).unwrap_or_default();
-            pp.macros.insert(sym, Macro { params: None, body, predefined: true, dynamic });
+            let mac = Macro { params: None, body, param_of: Vec::new(), predefined: true, dynamic };
+            pp.macros.insert(sym, Rc::new(mac));
         };
         define(self, "__LINE__", None, Some(Dynamic::Line));
         define(self, "__FILE__", None, Some(Dynamic::File));
@@ -500,7 +504,7 @@ impl Preprocessor<'_> {
                     self.seen_code = true;
                     let mut input = Input { tokens: file, pos: cursor, multiline: true };
                     let mut line = Vec::new();
-                    self.expand(&mut input, &mut Vec::new(), &mut line, 0);
+                    self.expand(&mut input, &mut line, 0);
                     // Every token carries its physical location (expanded
                     // tokens the invocation's); `#line` applies once, here.
                     for mut t in line {
@@ -660,7 +664,7 @@ impl Preprocessor<'_> {
         let resolved = self.resolve_defined(args, loc);
         let mut input = Input { tokens: &resolved, pos: 0, multiline: false };
         let mut tokens = Vec::new();
-        self.expand(&mut input, &mut Vec::new(), &mut tokens, 0);
+        self.expand(&mut input, &mut tokens, 0);
         let tokens = self.resolve_defined(&tokens, loc);
         match expr::evaluate(&tokens, self.interner, self.names.defined) {
             Ok(v) => v != 0,
@@ -736,6 +740,8 @@ impl Preprocessor<'_> {
             warning!(self.diags, loc, "macro names containing '__' are reserved: '{t}'");
         }
         let mut rest = &args[1..];
+        // The parameters, and each one's position.
+        let mut positions: BTreeMap<Symbol, usize> = BTreeMap::new();
         let params = match rest.first() {
             Some(t) if t.is_punct(Punct::LParen) && !t.space => {
                 let mut params = Vec::new();
@@ -746,9 +752,8 @@ impl Preprocessor<'_> {
                             i += 1;
                             break;
                         }
-                        Some(t) if t.ident().is_some() => {
-                            let p = t.ident().unwrap();
-                            if params.contains(&p) {
+                        Some(&PpTok { kind: PpKind::Ident(p), .. }) => {
+                            if positions.insert(p, params.len()).is_some() {
                                 let n = String::from(self.interner.get(p));
                                 error!(self.diags, loc, "duplicate macro parameter '{n}'");
                                 return;
@@ -781,7 +786,11 @@ impl Preprocessor<'_> {
         if let Some(first) = body.first_mut() {
             first.space = false;
         }
-        let new = Macro { params, body, predefined: false, dynamic: None };
+        let param_of = match params {
+            Some(_) => body.iter().map(|t| t.ident().and_then(|s| positions.get(&s).copied())).collect(),
+            None => Vec::new(),
+        };
+        let new = Macro { params, body, param_of, predefined: false, dynamic: None };
         if let Some(old) = self.macros.get(&name) {
             let n = String::from(self.interner.get(name));
             if old.predefined {
@@ -793,7 +802,7 @@ impl Preprocessor<'_> {
                 return;
             }
         }
-        self.macros.insert(name, new);
+        self.macros.insert(name, Rc::new(new));
     }
 
     fn undef(&mut self, args: &[PpTok], loc: Loc) {
@@ -939,7 +948,7 @@ impl Preprocessor<'_> {
     fn line(&mut self, args: &[PpTok], loc: Loc, newline: PpTok) {
         let mut input = Input { tokens: args, pos: 0, multiline: false };
         let mut tokens = Vec::new();
-        self.expand(&mut input, &mut Vec::new(), &mut tokens, 0);
+        self.expand(&mut input, &mut tokens, 0);
         let parsed = expr::evaluate_line(&tokens, self.interner, self.names.defined);
         match parsed {
             Ok((line, string)) => {
@@ -974,7 +983,9 @@ impl Preprocessor<'_> {
                 ctx.pos += 1;
                 return Some(ctx.tokens[ctx.pos - 1]);
             }
+            let name = ctx.name;
             stack.pop();
+            self.enable(name);
         }
         loop {
             let t = *input.tokens.get(input.pos)?;
@@ -1020,25 +1031,63 @@ impl Preprocessor<'_> {
         false
     }
 
-    /// Expands tokens from `input` (and `stack`) into `out`: running text
-    /// up to the end of the line (or across lines inside a macro
-    /// invocation), or all of a fixed list. Tokens keep their physical
-    /// locations; tokens a macro produced take its invocation's.
-    fn expand(&mut self, input: &mut Input<'_>, stack: &mut Vec<Context>, out: &mut Vec<PpTok>, depth: usize) {
-        self.expand_with(input, stack, out, depth, &[]);
+    /// Whether an expansion of `name` is being rescanned (here or around
+    /// the macro argument being expanded).
+    fn disabled(&self, name: Symbol) -> bool {
+        self.active.get(name.index()).is_some_and(|&n| n > 0)
     }
 
-    /// [`Self::expand`], with `outer` naming the macros being expanded
-    /// around this expansion (when expanding a macro argument), which are
-    /// disabled as the ones on `stack` are.
-    fn expand_with(
-        &mut self,
-        input: &mut Input<'_>,
-        stack: &mut Vec<Context>,
-        out: &mut Vec<PpTok>,
-        depth: usize,
-        outer: &[Symbol],
-    ) {
+    /// Marks an expansion of `name` as being rescanned.
+    fn disable(&mut self, name: Symbol) {
+        let i = name.index();
+        if self.active.len() <= i {
+            self.active.resize(i + 1, 0);
+        }
+        self.active[i] += 1;
+    }
+
+    /// Ends an expansion of `name`.
+    fn enable(&mut self, name: Symbol) {
+        if let Some(n) = self.active.get_mut(name.index()) {
+            *n = n.saturating_sub(1);
+        }
+    }
+
+    /// Counts `n` more tokens of expansion work; past the budget, reports
+    /// it and drops the rest of the shader.
+    fn charge(&mut self, n: usize, loc: Loc) -> bool {
+        match self.expanded.checked_add(n) {
+            Some(total) if total <= MAX_EXPANDED_TOKENS => {
+                self.expanded = total;
+                true
+            }
+            _ => {
+                if !self.overflow {
+                    let at = self.map(loc);
+                    error!(self.diags, at, "macro expansion produces too many tokens");
+                }
+                self.overflow = true;
+                false
+            }
+        }
+    }
+
+    /// Expands tokens from `input` into `out`: running text up to the end
+    /// of the line (or across lines inside a macro invocation), or all of a
+    /// fixed list. Tokens keep their physical locations; tokens a macro
+    /// produced take its invocation's. `depth` counts the macro arguments
+    /// being expanded around this one.
+    fn expand(&mut self, input: &mut Input<'_>, out: &mut Vec<PpTok>, depth: usize) {
+        let mut stack = Vec::new();
+        self.expand_on(input, &mut stack, out, depth);
+        // An expansion cut short by an error leaves its macros enabled again.
+        while let Some(ctx) = stack.pop() {
+            self.enable(ctx.name);
+        }
+    }
+
+    /// [`Self::expand`], rescanning the expansions on `stack`.
+    fn expand_on(&mut self, input: &mut Input<'_>, stack: &mut Vec<Context>, out: &mut Vec<PpTok>, depth: usize) {
         while let Some(mut tok) = self.next(input, stack, false) {
             if self.overflow {
                 return;
@@ -1050,11 +1099,11 @@ impl Preprocessor<'_> {
                     continue;
                 }
             };
-            let Some(mac) = self.macros.get(&name) else {
+            let Some(mac) = self.macros.get(&name).cloned() else {
                 out.push(tok);
                 continue;
             };
-            if outer.contains(&name) || stack.iter().any(|c| c.name == name) {
+            if self.disabled(name) {
                 // Met while its own expansion is rescanned: painted.
                 tok.noexpand = true;
                 out.push(tok);
@@ -1074,6 +1123,9 @@ impl Preprocessor<'_> {
             }
             let replacement = match &mac.params {
                 None => {
+                    if !self.charge(mac.body.len(), loc) {
+                        return;
+                    }
                     let mut body = mac.body.clone();
                     for t in body.iter_mut() {
                         t.loc = loc;
@@ -1090,8 +1142,6 @@ impl Preprocessor<'_> {
                         out.push(tok);
                         continue;
                     }
-                    let params = params.clone();
-                    let body = mac.body.clone();
                     let Some(args) = self.collect_args(input, stack, loc) else { return };
                     if !(args.len() == params.len() || (params.is_empty() && args.len() == 1 && args[0].is_empty())) {
                         let n = String::from(self.interner.get(name));
@@ -1107,24 +1157,29 @@ impl Preprocessor<'_> {
                     }
                     // Each argument is fully expanded on its own first, with
                     // the macros being expanded around it still disabled.
-                    let mut disabled: Vec<Symbol> = outer.to_vec();
-                    disabled.extend(stack.iter().map(|c| c.name));
                     let mut expanded_args = Vec::with_capacity(args.len());
                     for arg in &args {
                         let mut arg_input = Input { tokens: arg, pos: 0, multiline: false };
                         let mut arg_out = Vec::new();
-                        self.expand_with(&mut arg_input, &mut Vec::new(), &mut arg_out, depth + 1, &disabled);
-                        if self.overflow {
+                        self.expand(&mut arg_input, &mut arg_out, depth + 1);
+                        if self.overflow || !self.charge(arg_out.len(), loc) {
                             return;
                         }
                         expanded_args.push(arg_out);
                     }
-                    let mut result = Vec::with_capacity(body.len());
-                    for t in &body {
-                        match t.kind {
-                            PpKind::Ident(p) if params.contains(&p) => {
-                                let i = params.iter().position(|&q| q == p).unwrap_or(0);
-                                for (k, a) in expanded_args[i].iter().enumerate() {
+                    // The replacement's length (and the work of scanning the
+                    // body) is counted before the replacement is built: an
+                    // argument used many times could make it huge.
+                    let arg_len = |i: usize| expanded_args.get(i).map_or(0, Vec::len);
+                    let len = mac.param_of.iter().try_fold(0usize, |n, p| n.checked_add(p.map_or(1, arg_len)));
+                    if !self.charge(len.unwrap_or(usize::MAX).max(mac.body.len()), loc) {
+                        return;
+                    }
+                    let mut result = Vec::with_capacity(len.unwrap_or(0));
+                    for (t, p) in mac.body.iter().zip(&mac.param_of) {
+                        match p.and_then(|i| expanded_args.get(i)) {
+                            Some(arg) => {
+                                for (k, a) in arg.iter().enumerate() {
                                     let mut a = *a;
                                     a.loc = loc;
                                     if k == 0 {
@@ -1133,7 +1188,7 @@ impl Preprocessor<'_> {
                                     result.push(a);
                                 }
                             }
-                            _ => {
+                            None => {
                                 let mut t = *t;
                                 t.loc = loc;
                                 result.push(t);
@@ -1146,13 +1201,7 @@ impl Preprocessor<'_> {
                     result
                 }
             };
-            self.expanded += replacement.len();
-            if self.expanded > MAX_EXPANDED_TOKENS {
-                let at = self.map(loc);
-                error!(self.diags, at, "macro expansion produces too many tokens");
-                self.overflow = true;
-                return;
-            }
+            self.disable(name);
             stack.push(Context { name, tokens: replacement, pos: 0 });
         }
     }

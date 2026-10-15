@@ -98,19 +98,15 @@ impl<D: AsRef<[u8]>> Music<D> {
         self.current = tune;
     }
 
-    /// The tune playing (or fading in).
-    pub fn playing(&self) -> Option<usize> {
-        self.current
-    }
-
     /// How intense the action is (0..1): the stems after the first join
     /// in turn as it rises.
     pub fn set_intensity(&mut self, x: f32) {
-        self.intensity = x.clamp(0.0, 1.0);
+        self.intensity = super::level(x);
     }
 
+    /// The volume (0..1; anything not a number, silence).
     pub fn set_volume(&mut self, v: f32) {
-        self.volume = v.clamp(0.0, 1.0);
+        self.volume = super::level(v);
     }
 
     /// Renders `out.len() / 2` stereo frames at [`Music::rate`].

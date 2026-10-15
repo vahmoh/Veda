@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Small pieces drawn over the video: a borderless button that reads on any
-//! picture, the time above the seek bar, and the message that confirms a
-//! key ("+10 s", "Volume 80%").
+//! picture, the time above the seek bar, how far a video that cannot be
+//! sought is, and the message that confirms a key ("+10 s", "Volume 80%").
 
 use vgfx::{Align, Color, Rect};
 use vui::{Cursor, Font, Icon, Ui};
@@ -61,4 +61,16 @@ pub fn toast(ui: &mut Ui, stage: Rect, text: &str, button: &str, accent: Color) 
         ui.set_cursor(Cursor::Hand);
     }
     resp.clicked
+}
+
+/// How far playback is (`fraction`), where the seek bar would be, for a
+/// video that cannot be sought: the bar without its knob, untouchable.
+pub fn progress(ui: &mut Ui, r: Rect, fraction: f32, accent: Color, alpha: f32) {
+    let h = 4;
+    let track = Rect::new(r.x, r.y + r.h / 2 - h / 2, r.w, h);
+    ui.canvas.fill_rounded_rect(track, h as f32 / 2.0, Color::rgba(255, 255, 255, (38.0 * alpha) as u8));
+    let w = (r.w as f32 * fraction.clamp(0.0, 1.0)) as i32;
+    if w > 0 {
+        ui.canvas.fill_rounded_rect(Rect::new(track.x, track.y, w, h), h as f32 / 2.0, accent.fade(alpha));
+    }
 }

@@ -16,7 +16,7 @@
 //!   A line of small text says what is going on only when that helps. When
 //!   the agent needs consent for an action, the request appears at the
 //!   bottom of the window (or, when the window is closed, as a
-//!   notification).
+//!   notification): [`crate::approval`].
 //! * [`draw_orb`]: the agent's tray item, a small ring that does the same.
 
 use alloc::format;
@@ -30,6 +30,7 @@ use vrt::object::Channel;
 use vrt::vm::Mapping;
 use vui::{Font, Icon, Ui, status};
 
+use crate::approval::{self, Choice, Look};
 use crate::presence::{self, RING_WIDTH};
 use crate::{Action, Model, chrome, connect_running, taskbar};
 
@@ -263,31 +264,13 @@ pub fn draw_orb(ui: &mut Ui, r: Rect, a: &AgentModel, now: u64) {
 
 /// The agent's window.
 pub struct AgentWindow {
-    /// "Always allow" ticked on the approval being shown.
-    always: bool,
-}
-
-/// What an approval asks for, in bold over up to two lines (the end of a
-/// longer one is cut); returns the height used. `r` is the first line.
-pub fn approval_title(ui: &mut Ui, r: Rect, text: &str) -> i32 {
-    let th = ui.theme().clone();
-    let font = ui.ctx.font(Font::Bold);
-    let lines = ui.ctx.text.wrap(font, 14.0, text, r.w as f32);
-    if lines.len() <= 1 {
-        ui.label(r, text, Font::Bold, 14.0, th.text, Align::Left);
-        return r.h;
-    }
-    let first = text[lines[0].clone()].trim_end();
-    let rest = text[lines[1].start..].trim();
-    let second = ui.ctx.text.ellipsize(font, 14.0, rest, r.w as f32);
-    ui.label(r, first, Font::Bold, 14.0, th.text, Align::Left);
-    ui.label(r.translate(0, 18), &second, Font::Bold, 14.0, th.text, Align::Left);
-    r.h + 18
+    /// "Always allow" as ticked on the approval being shown.
+    choice: Choice,
 }
 
 impl AgentWindow {
     pub fn new() -> AgentWindow {
-        AgentWindow { always: false }
+        AgentWindow { choice: Choice::default() }
     }
 
     pub fn update(&mut self, ui: &mut Ui, m: &mut Model) {
@@ -345,45 +328,11 @@ impl AgentWindow {
         }
 
         if let Some(req) = approval {
-            self.approval_card(ui, m, &req, Rect::new(14, h - 196, w - 28, 146));
+            approval::card(ui, m, &req, Rect::new(14, h - 196, w - 28, 146), &mut self.choice, Look::Window);
         }
         chrome::popup_frame(&mut ui.canvas);
         // Animate while there is something to animate.
         let rate = if m.agent.active() { 16_000_000 } else { 250_000_000 };
         ui.repaint_at(now + rate);
-    }
-
-    fn approval_card(&mut self, ui: &mut Ui, m: &mut Model, req: &ApprovalRequest, r: Rect) {
-        let th = ui.theme().clone();
-        ui.canvas.fill_rounded_rect(r, 10.0, Color::rgba(255, 255, 255, 18));
-        ui.canvas.stroke_rounded_rect(r, 10.0, 1.0, Color::rgba(255, 255, 255, 30));
-        let ask = format!("{} needs your OK", m.agent.name());
-        ui.label(Rect::new(r.x + 14, r.y + 10, r.w - 28, 16), &ask, Font::Regular, 12.0, th.text_faint, Align::Left);
-        let used = approval_title(ui, Rect::new(r.x + 14, r.y + 28, r.w - 28, 20), &req.action);
-        let dy = used - 20;
-        ui.paragraph(Rect::new(r.x + 14, r.y + 50 + dy, r.w - 28, 40 - dy), &req.detail, 12.5, th.text_dim);
-        let by = r.bottom() - 44;
-        if req.allow_always {
-            ui.checkbox(Rect::new(r.x + 12, by + 4, 130, 26), "Always allow", &mut self.always);
-        }
-        let more = m.agent.approvals.len().saturating_sub(1);
-        if more > 0 && !req.allow_always {
-            ui.label(
-                Rect::new(r.x + 14, by + 4, 120, 26),
-                &format!("+{more} more"),
-                Font::Regular,
-                12.0,
-                th.text_faint,
-                Align::Left,
-            );
-        }
-        if ui.button(Rect::new(r.right() - 186, by, 84, 32), "Deny") {
-            m.push(Action::AgentDecide { id: req.id, allow: false, always: false });
-            self.always = false;
-        }
-        if ui.primary_button(Rect::new(r.right() - 96, by, 84, 32), "Allow") {
-            m.push(Action::AgentDecide { id: req.id, allow: true, always: self.always });
-            self.always = false;
-        }
     }
 }

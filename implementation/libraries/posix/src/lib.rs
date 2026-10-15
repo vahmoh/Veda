@@ -16,18 +16,19 @@
 //! | `mmap` | the kernel's private memory, or a VMO per mapping ([`mem`]) |
 //! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
-//! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`) ([`signal`]) |
+//! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`, `pthread_kill`) ([`signal`]) |
 //!
 //! musl's hooks into this layer are:
 //!
 //! * `_start` stores the bootstrap channel the kernel passed (the entry
 //!   point's first argument) in [`__veda_bootstrap`]; `__init_libc` then calls [`__veda_init`], which
 //!   reads the startup message: the working directory, the descriptors the
-//!   program was given (role `FD + n`), the terminal and the registry;
+//!   program was given (role `FD + n`), the terminal, the registry, and what
+//!   it inherits that is no handle (`inherit`);
 //! * `__veda_syscall(n, a1, ..., a6)` replaces the `syscall` instruction;
 //! * `__clone`, `__set_thread_area` and `__unmapself` jump to
 //!   [`thread::__veda_clone`], [`thread::__veda_set_thread_area`] and
-//!   `__veda_unmapself`;
+//!   [`thread::__veda_unmapself`];
 //! * `posix_spawn` calls [`process::__veda_spawn`].
 //!
 //! What is particular to the architecture (Linux's system call numbers and
@@ -52,6 +53,7 @@ mod error;
 mod fd;
 mod file;
 mod fs;
+mod inherit;
 mod io;
 mod linux;
 mod mem;
@@ -85,11 +87,14 @@ pub extern "C" fn __veda_init() {
     // Thread-local storage is set up: threads can be told apart.
     signal::threads_ready();
     vrt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
+    let entries = vrt::env::vars();
+    let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    signal::inherit(inherited.ignored, inherited.mask);
     vfs::set_cwd(vrt::env::cwd());
     if let Some(h) = vrt::env::take_handle(role::TERMINAL) {
         tty::adopt(Vmo::from_handle(h));
     }
-    io::adopt_startup_fds();
+    io::adopt_startup_fds(&inherited.fds);
 }
 
 /// A Linux system call. Returns its result, or `-errno`.
@@ -100,7 +105,11 @@ pub extern "C" fn __veda_init() {
 pub unsafe extern "C" fn __veda_syscall(n: isize, a: isize, b: isize, c: isize, d: isize, e: isize, f: isize) -> isize {
     let args = [a, b, c, d, e, f].map(|v| v as usize);
     // SAFETY: per the caller.
-    error::encode(unsafe { syscall::dispatch(n as usize, args) })
+    let r = unsafe { syscall::dispatch(n as usize, args) };
+    // Signals another thread sent this one are taken as a system call
+    // returns.
+    signal::deliver_if_any();
+    error::encode(r)
 }
 
 /// The layer's own memory (separate from `malloc`, which calls into the
@@ -113,20 +122,6 @@ static HEAP: vrt::heap::Heap = vrt::heap::Heap::new();
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Formatted without allocating, in case the heap is what failed.
-    struct Buf {
-        data: [u8; 512],
-        len: usize,
-    }
-    impl core::fmt::Write for Buf {
-        fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            let n = s.len().min(self.data.len() - self.len);
-            self.data[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
-            self.len += n;
-            Ok(())
-        }
-    }
-    let mut b = Buf { data: [0; 512], len: 0 };
-    let _ = core::fmt::write(&mut b, format_args!("POSIX layer panic: {info}\n"));
-    vrt::sys::debug_write(&b.data[..b.len]);
+    vrt::io::log_without_allocating(format_args!("POSIX layer panic: {info}\n"));
     process::exit_by_signal(linux::sig::ABRT)
 }

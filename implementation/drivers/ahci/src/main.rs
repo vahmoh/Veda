@@ -5,41 +5,35 @@
 //! controller of QEMU's q35 machine and of most PCs.
 //!
 //! Like `virtio-blk`, every disk is served as the `block` protocol under the
-//! name `block/<serial>` (`vproto::block::service_name`), so the file system
-//! finds the home disk by its serial number whatever the controller.
+//! name `block/<serial>` (`vproto::block::serve`), so the file system finds
+//! the home disk by its serial number whatever the controller.
 //!
 //! The driver uses command slot 0 of each port and processes one request at
 //! a time (the file system issues one at a time anyway): READ/WRITE DMA EXT
 //! with one physical region per request, FLUSH CACHE (EXT), and IDENTIFY
 //! DEVICE for the size and serial number. It waits on an MSI interrupt when
 //! the controller has one, and polls otherwise. ATAPI drives (CD/DVD) and
-//! port multipliers are ignored.
+//! port multipliers are ignored. A controller without 64-bit addressing
+//! gets its ports' memory below 4 GiB.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::ptr::{read_volatile, write_volatile};
+use core::ops::Range;
 use core::sync::atomic::{Ordering, fence};
 
-use vabi::{map_flags, signals};
-use vipc::{Bytes, WaitSet};
-use vproto::block::{BlockError, BlockInfo, MAX_TRANSFER, block, service_name};
-use vproto::pci::pcidev;
+use vproto::block::{self, BlockError, BlockInfo, MAX_TRANSFER, Served};
+use vproto::pci::{DmaBuffer, Registers, pcidev};
 use vrt::object::{Channel, Interrupt};
 use vrt::println;
-use vrt::vm::Mapping;
-use vvirtio::DmaBuffer;
 
 vrt::entry!(main);
 
-/// Handle role of the PCI device channel from `devmgr`.
-const PCIDEV_ROLE: u32 = vabi::startup::role::USER + 10;
 const SECTOR: usize = 512;
 /// The BAR holding the controller's registers (ABAR).
 const ABAR: u8 = 5;
@@ -120,21 +114,19 @@ struct Port {
 }
 
 struct Controller {
-    _bar: Mapping,
-    mmio: *mut u8,
+    /// Its registers (the ABAR).
+    regs: Registers,
     irq: Option<Interrupt>,
     s64a: bool,
 }
 
 impl Controller {
     fn r(&self, off: usize) -> u32 {
-        // SAFETY: a register inside the mapped ABAR.
-        unsafe { read_volatile(self.mmio.add(off) as *const u32) }
+        self.regs.read32(off)
     }
 
     fn w(&self, off: usize, v: u32) {
-        // SAFETY: a register inside the mapped ABAR.
-        unsafe { write_volatile(self.mmio.add(off) as *mut u32, v) }
+        self.regs.write32(off, v)
     }
 
     fn pr(&self, port: usize, off: usize) -> u32 {
@@ -179,7 +171,7 @@ impl Controller {
 
     /// Runs one command on slot 0 of `port` and waits for it. `len` bytes
     /// at `DATA` are sent (`write`) or received.
-    fn exec(&self, port: &Port, cmd: u8, lba: u64, count: u16, len: usize, write: bool) -> Result<(), BlockError> {
+    fn exec(&self, port: &mut Port, cmd: u8, lba: u64, count: u16, len: usize, write: bool) -> Result<(), BlockError> {
         let p = port.index;
         if !self.wait(COMMAND_TIMEOUT_NS, |c| c.pr(p, reg::P_TFD) & (TFD_BSY | TFD_DRQ) == 0) {
             return Err(BlockError::Io);
@@ -191,7 +183,7 @@ impl Controller {
         let dw0 = 5 | if write { 1 << 6 } else { 0 } | (prdtl << 16);
         header[0..4].copy_from_slice(&dw0.to_le_bytes());
         header[8..16].copy_from_slice(&(base + CT as u64).to_le_bytes());
-        port.mem.write(CL, &header);
+        port.mem.write(CL, &header).map_err(|_| BlockError::Invalid)?;
         // Command table: a host-to-device register FIS, then the PRD entry.
         let mut table = [0u8; 0x90];
         table[0] = 0x27;
@@ -207,7 +199,7 @@ impl Controller {
             let dbc = (len as u32 - 1) | (1 << 31);
             table[0x8C..0x90].copy_from_slice(&dbc.to_le_bytes());
         }
-        port.mem.write(CT, &table);
+        port.mem.write(CT, &table).map_err(|_| BlockError::Invalid)?;
         self.pw(p, reg::P_IS, u32::MAX);
         fence(Ordering::SeqCst);
         self.pw(p, reg::P_CI, 1);
@@ -254,17 +246,18 @@ impl Controller {
     }
 }
 
-/// An ATA string: 2 characters per word, high byte first.
-fn ata_string(id: &[u8], from_word: usize, to_word: usize) -> String {
-    let mut s = String::new();
-    for w in from_word..to_word {
-        for b in [id[2 * w + 1], id[2 * w]] {
-            if b.is_ascii_graphic() || b == b' ' {
-                s.push(b as char);
-            }
-        }
-    }
-    String::from(s.trim())
+/// The ATA string in words `words` of identify data `id`: 2 characters a
+/// word, the first in its high byte.
+fn ata_string(id: &[u8], words: Range<usize>) -> String {
+    let bytes: Vec<u8> = id
+        .get(2 * words.start..2 * words.end)
+        .unwrap_or_default()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|w| [w[1], w[0]])
+        .collect();
+    block::device_text(&bytes)
 }
 
 /// Sets up one port; returns the disk on it, if any.
@@ -277,11 +270,13 @@ fn setup_port(c: &Controller, p: usize, dma: &vrt::object::Resource, staggered: 
         println!("port {}: does not stop; ignored", p);
         return None;
     }
-    let mem = DmaBuffer::new(dma, PORT_MEM).ok()?;
-    if !c.s64a && mem.phys() + PORT_MEM as u64 > 1 << 32 {
-        println!("port {}: no 64-bit DMA and no memory below 4 GiB; ignored", p);
+    // A controller without 64-bit addressing reaches only the memory below
+    // 4 GiB.
+    let mem = if c.s64a { DmaBuffer::new(dma, PORT_MEM) } else { DmaBuffer::new_below_4g(dma, PORT_MEM) };
+    let Ok(mem) = mem else {
+        println!("port {}: no DMA memory{}; ignored", p, if c.s64a { "" } else { " below 4 GiB" });
         return None;
-    }
+    };
     let base = mem.phys();
     c.pw(p, reg::P_CLB, (base + CL as u64) as u32);
     c.pw(p, reg::P_CLBU, ((base + CL as u64) >> 32) as u32);
@@ -310,12 +305,11 @@ fn setup_port(c: &Controller, p: usize, dma: &vrt::object::Resource, staggered: 
 
     let mut port =
         Port { index: p, mem, sectors: 0, lba48: false, flush_ext: false, serial: String::new(), model: String::new() };
-    if c.exec(&port, ATA_IDENTIFY, 0, 0, 512, false).is_err() {
+    if c.exec(&mut port, ATA_IDENTIFY, 0, 0, 512, false).is_err() {
         println!("port {}: IDENTIFY DEVICE failed; ignored", p);
         return None;
     }
-    // SAFETY: the device has finished writing the identify data.
-    let id = unsafe { port.mem.bytes(DATA, 512) }.to_vec();
+    let id = port.mem.to_vec(DATA, 512).ok()?;
     let word = |i: usize| u16::from_le_bytes([id[2 * i], id[2 * i + 1]]) as u64;
     // Logical sectors larger than 512 bytes are not supported.
     let w106 = word(106);
@@ -333,8 +327,8 @@ fn setup_port(c: &Controller, p: usize, dma: &vrt::object::Resource, staggered: 
     } else {
         word(60) | word(61) << 16
     };
-    port.serial = ata_string(&id, 10, 20);
-    port.model = ata_string(&id, 27, 47);
+    port.serial = ata_string(&id, 10..20);
+    port.model = ata_string(&id, 27..47);
     if port.sectors == 0 || !port.lba48 {
         // Disks without 48-bit addressing are older than this driver cares for.
         println!("port {}: no 48-bit addressing; ignored", p);
@@ -343,60 +337,35 @@ fn setup_port(c: &Controller, p: usize, dma: &vrt::object::Resource, staggered: 
     Some(port)
 }
 
-/// A disk being served.
-struct Disk<'a> {
-    c: &'a Controller,
-    port: &'a Port,
+/// The controller and the disks on its ports, which it serves.
+struct Ahci {
+    c: Controller,
+    ports: Vec<Port>,
 }
 
-impl Disk<'_> {
-    fn check_range(&self, lba: u64, sectors: u64) -> Result<(), BlockError> {
-        match lba.checked_add(sectors) {
-            Some(end) if end <= self.port.sectors => Ok(()),
-            _ => Err(BlockError::OutOfRange),
-        }
-    }
-}
-
-impl block::Server for Disk<'_> {
-    fn info(&mut self) -> BlockInfo {
-        BlockInfo {
-            sectors: self.port.sectors,
-            sector_size: SECTOR as u32,
-            read_only: false,
-            serial: self.port.serial.clone(),
-        }
-    }
-
-    fn read(&mut self, lba: u64, count: u32) -> Result<Bytes, BlockError> {
+impl block::Disks for Ahci {
+    fn read(&mut self, disk: usize, lba: u64, count: u32) -> Result<Vec<u8>, BlockError> {
+        let port = self.ports.get_mut(disk).ok_or(BlockError::Invalid)?;
         let len = count as usize * SECTOR;
-        if count == 0 || len > MAX_TRANSFER as usize {
-            return Err(BlockError::Invalid);
-        }
-        self.check_range(lba, count as u64)?;
-        self.c.exec(self.port, ATA_READ_DMA_EXT, lba, count as u16, len, false)?;
-        // SAFETY: the device has finished writing the data.
-        Ok(Bytes(unsafe { self.port.mem.bytes(DATA, len) }.to_vec()))
+        self.c.exec(port, ATA_READ_DMA_EXT, lba, count as u16, len, false)?;
+        port.mem.to_vec(DATA, len).map_err(|_| BlockError::Invalid)
     }
 
-    fn write(&mut self, lba: u64, data: Bytes) -> Result<(), BlockError> {
-        let len = data.0.len();
-        if len == 0 || !len.is_multiple_of(SECTOR) || len > MAX_TRANSFER as usize {
-            return Err(BlockError::Invalid);
-        }
-        self.check_range(lba, (len / SECTOR) as u64)?;
-        self.port.mem.write(DATA, &data.0);
-        self.c.exec(self.port, ATA_WRITE_DMA_EXT, lba, (len / SECTOR) as u16, len, true)
+    fn write(&mut self, disk: usize, lba: u64, data: &[u8]) -> Result<(), BlockError> {
+        let port = self.ports.get_mut(disk).ok_or(BlockError::Invalid)?;
+        port.mem.write(DATA, data).map_err(|_| BlockError::Invalid)?;
+        self.c.exec(port, ATA_WRITE_DMA_EXT, lba, (data.len() / SECTOR) as u16, data.len(), true)
     }
 
-    fn flush(&mut self) -> Result<(), BlockError> {
-        let cmd = if self.port.flush_ext { ATA_FLUSH_EXT } else { ATA_FLUSH };
-        self.c.exec(self.port, cmd, 0, 0, 0, false)
+    fn flush(&mut self, disk: usize) -> Result<(), BlockError> {
+        let port = self.ports.get_mut(disk).ok_or(BlockError::Invalid)?;
+        let cmd = if port.flush_ext { ATA_FLUSH_EXT } else { ATA_FLUSH };
+        self.c.exec(port, cmd, 0, 0, 0, false)
     }
 }
 
 fn main() -> i32 {
-    let Some(h) = vrt::env::take_handle(PCIDEV_ROLE) else {
+    let Some(h) = vrt::env::take_handle(vproto::startup::driver::PCIDEV) else {
         println!("no pcidev channel");
         return 1;
     };
@@ -410,20 +379,19 @@ fn main() -> i32 {
         println!("no DMA resource");
         return 1;
     };
-    let Ok(Ok(vmo)) = pci.map_bar(ABAR) else {
-        println!("cannot map the registers (BAR {})", ABAR);
-        return 1;
+    let regs = match Registers::map(&pci, ABAR) {
+        Ok(regs) => regs,
+        Err(e) => {
+            println!("cannot map the registers (BAR {}): {}", ABAR, e);
+            return 1;
+        }
     };
-    let Ok(size) = vmo.size() else { return 1 };
-    let Ok(bar) = Mapping::new(vmo, size, map_flags::READ | map_flags::WRITE) else {
-        println!("cannot map the registers");
-        return 1;
-    };
-    let mut c = Controller { mmio: bar.as_ptr(), _bar: bar, irq: None, s64a: false };
+    let size = regs.len();
     if size < 0x180 {
         println!("register window too small ({} bytes)", size);
         return 1;
     }
+    let mut c = Controller { regs, irq: None, s64a: false };
     let cap = c.r(reg::CAP);
     c.s64a = cap & CAP_S64A != 0;
     // Take the controller from the firmware if it asks for a handoff.
@@ -452,63 +420,30 @@ fn main() -> i32 {
         return 0;
     }
 
-    // One service per disk.
-    let mut listeners: Vec<(Channel, usize)> = Vec::new();
-    for (i, port) in ports.iter().enumerate() {
-        let id = if port.serial.is_empty() { format!("ahci-{}-{}", location, port.index) } else { port.serial.clone() };
-        match vproto::register(&service_name(&id)) {
-            Ok(l) => {
-                println!(
-                    "disk {} at {} port {}: {} MiB ({}){}",
-                    id,
+    let polling = if c.irq.is_some() { "" } else { ", polling" };
+    let served: Vec<Served> = ports
+        .iter()
+        .map(|port| {
+            let info = BlockInfo {
+                sectors: port.sectors,
+                sector_size: SECTOR as u32,
+                read_only: false,
+                serial: port.serial.clone(),
+            };
+            Served {
+                id: block::disk_id(&port.serial, &format!("ahci-{}-{}", location, port.index)),
+                description: format!(
+                    "{} port {}: {} MiB ({}){}",
                     location,
                     port.index,
-                    (port.sectors * SECTOR as u64) >> 20,
+                    info.mib(),
                     port.model,
-                    if c.irq.is_some() { "" } else { ", polling" }
-                );
-                listeners.push((l, i));
+                    polling
+                ),
+                info,
             }
-            Err(e) => println!("cannot register block/{}: {:?}", id, e),
-        }
-    }
-
-    // Keys: listeners are 1..=n, clients start above.
-    let mut clients: BTreeMap<u64, (Channel, usize)> = BTreeMap::new();
-    let mut next = 1000u64;
-    loop {
-        let mut ws = WaitSet::new();
-        for (k, (l, _)) in listeners.iter().enumerate() {
-            ws.add(l.raw(), signals::READABLE | signals::PEER_CLOSED, k as u64 + 1);
-        }
-        for (&k, (ch, _)) in &clients {
-            ws.add(ch.raw(), signals::READABLE | signals::PEER_CLOSED, k);
-        }
-        let Ok(ready) = ws.wait(vabi::DEADLINE_INFINITE) else { continue };
-        for (key, observed) in ready {
-            if key >= 1 && key as usize <= listeners.len() {
-                let (l, disk) = &listeners[key as usize - 1];
-                while let Some(ch) = vproto::accept(l) {
-                    clients.insert(next, (ch, *disk));
-                    next += 1;
-                }
-                continue;
-            }
-            if observed & signals::READABLE != 0 {
-                while let Some((Ok(msg), disk)) = clients.get(&key).map(|(ch, d)| (ch.read(), *d)) {
-                    let mut server = Disk { c: &c, port: &ports[disk] };
-                    match block::dispatch(&mut server, msg) {
-                        Ok(reply) => {
-                            if let Some((ch, _)) = clients.get(&key) {
-                                let _ = reply.send(ch);
-                            }
-                        }
-                        Err(e) => println!("bad request: {}", e),
-                    }
-                }
-            } else if observed & signals::PEER_CLOSED != 0 {
-                clients.remove(&key);
-            }
-        }
-    }
+        })
+        .collect();
+    block::serve(&mut Ahci { c, ports }, &served);
+    1
 }

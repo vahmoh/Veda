@@ -22,6 +22,9 @@ p256 = { workspace = true }
 subtle = { workspace = true }
 base16ct = { workspace = true }
 zeroize = { workspace = true }
+# The security types and key kinds of the Wi-Fi protocols, one definition
+# for the service and the library.
+vproto = { workspace = true }
 
 [lints]
 workspace = true

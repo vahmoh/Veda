@@ -257,6 +257,32 @@ fn multisampling_resolves_edges() {
 }
 
 #[test]
+fn multisampled_framebuffers_are_resolved_only_in_place() {
+    let mut c = context(8, 8);
+    if !multisampling(&mut c) {
+        return;
+    }
+    let rb = c.gen_renderbuffer();
+    c.bind_renderbuffer(gl::RENDERBUFFER, rb);
+    c.renderbuffer_storage_multisample(gl::RENDERBUFFER, 4, gl::RGBA8, 8, 8);
+    let f = c.gen_framebuffer();
+    c.bind_framebuffer(gl::READ_FRAMEBUFFER, f);
+    c.framebuffer_renderbuffer(gl::READ_FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::RENDERBUFFER, rb);
+    // OpenGL ES resolves only into the same rectangle, corner for corner:
+    // one the same size elsewhere, or mirrored, is refused.
+    for [x0, y0, x1, y1] in [[1, 0, 5, 4], [0, 2, 4, 6], [4, 0, 0, 4], [0, 4, 4, 0]] {
+        c.blit_framebuffer(0, 0, 4, 4, x0, y0, x1, y1, gl::COLOR_BUFFER_BIT, gl::NEAREST);
+        assert_eq!(c.get_error(), gl::INVALID_OPERATION, "to {:?}", [x0, y0, x1, y1]);
+    }
+    // Whatever the blit would copy (here nothing: the read framebuffer has
+    // no depth buffer).
+    c.blit_framebuffer(0, 0, 4, 4, 1, 0, 5, 4, gl::DEPTH_BUFFER_BIT, gl::NEAREST);
+    assert_eq!(c.get_error(), gl::INVALID_OPERATION);
+    c.blit_framebuffer(0, 0, 4, 4, 0, 0, 4, 4, gl::COLOR_BUFFER_BIT, gl::NEAREST);
+    no_error(&mut c);
+}
+
+#[test]
 fn blits_scale_and_mirror() {
     let mut c = context(4, 4);
     // A 2x2 source texture in a framebuffer.
@@ -550,12 +576,10 @@ fn renders_into_memory_it_is_given() {
     // Rows of 8 pixels, 12 apart: the memory outlives the contexts.
     let (w, h, stride) = (8i32, 4i32, 12usize);
     let mut picture = vec![0xDEAD_BEEFu32; stride * h as usize];
-    let memory = crate::backend::External {
-        handle: 0,
-        address: picture.as_mut_ptr() as usize,
-        size: picture.len() * 4,
-        stride: stride as u32 * 4,
-        bgr: true,
+    // SAFETY: `picture` outlives the contexts, and is read only after the
+    // last of them has finished and gone.
+    let memory = unsafe {
+        crate::backend::External::address(picture.as_mut_ptr().cast(), picture.len() * 4, stride as u32 * 4, true)
     };
     // A renderer that cannot (the software one) says so.
     let mut soft = Context::new(Box::new(SoftBackend::new(Box::new(StdWorkers(1)))), Config::default());
@@ -613,4 +637,38 @@ fn renders_into_memory_it_is_given() {
             assert_eq!(px & 0xFF_FFFF, want, "({x}, {y}): {px:#010x}");
         }
     }
+}
+
+#[test]
+fn extreme_coordinates_do_not_overflow() {
+    let mut c = context(4, 4);
+    c.clear_color(1.0, 0.0, 0.0, 1.0);
+    c.clear(gl::COLOR_BUFFER_BIT);
+    // Pixels far outside the framebuffer read nothing.
+    let mut out = [7u8; 4];
+    c.read_pixels(i32::MIN, i32::MIN, 1, 1, gl::RGBA, gl::UNSIGNED_BYTE, &mut out[..]);
+    c.read_pixels(i32::MAX, 0, 1, 1, gl::RGBA, gl::UNSIGNED_BYTE, &mut out[..]);
+    no_error(&mut c);
+    assert_eq!(out, [7; 4]);
+    // Blits from and to rectangles spanning every coordinate there is.
+    let (fb, _) = fbo_texture(&mut c, gl::RGBA8, 4, 4);
+    c.bind_framebuffer(gl::READ_FRAMEBUFFER, 0);
+    c.bind_framebuffer(gl::DRAW_FRAMEBUFFER, fb);
+    c.blit_framebuffer(0, 0, 4, 4, i32::MIN, i32::MIN, i32::MAX, i32::MAX, gl::COLOR_BUFFER_BIT, gl::NEAREST);
+    c.blit_framebuffer(i32::MIN, 0, i32::MAX, 4, 4, 0, 0, 4, gl::COLOR_BUFFER_BIT, gl::LINEAR);
+    no_error(&mut c);
+    c.bind_framebuffer(gl::READ_FRAMEBUFFER, fb);
+    // The source's middle pixel, magnified over everything.
+    assert_close(&read_rgba(&mut c, 4, 4), &[255, 0, 0, 255].repeat(16));
+    // Points and lines drawn at the far edge of the viewports there can be.
+    c.bind_framebuffer(gl::FRAMEBUFFER, 0);
+    full(&mut c, "#version 300 es\nprecision mediump float; out vec4 o; void main() { o = vec4(1.0); }");
+    for (x, y) in [(i32::MAX - 2, i32::MAX - 2), (i32::MIN, i32::MIN)] {
+        c.viewport(x, y, 16384, 16384);
+        c.draw_arrays(gl::POINTS, 0, 6);
+        c.draw_arrays(gl::LINES, 0, 6);
+        c.draw_arrays(gl::TRIANGLES, 0, 6);
+    }
+    c.finish();
+    no_error(&mut c);
 }

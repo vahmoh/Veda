@@ -13,8 +13,7 @@
 //! stops it. Programs and applications are started through the launcher.
 //! [`agent`] lets the voice agent run commands and read what they print.
 //!
-//! Usage: `terminal [DIR]` starts in DIR; `terminal -c COMMAND` runs a
-//! command first.
+//! Usage: `terminal [DIR]` starts in DIR.
 
 #![no_std]
 #![no_main]
@@ -30,12 +29,14 @@ mod shell;
 
 use alloc::collections::VecDeque;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use terminal_core::edit::{Edit, LineEditor};
 use terminal_core::screen::{self, Cell, Pos, Screen, Style, color};
+use terminal_core::syntax::redact;
 use vabi::{RawHandle, signals};
 use vfiles::HOME;
 use vfiles::path::display_path;
@@ -88,6 +89,8 @@ const PAGE: usize = 10;
 const QUICK_NS: u64 = 50_000_000;
 /// How many command lines are remembered as the agent may read them.
 const MAX_ECHOES: usize = 1000;
+/// How long a notice (the clipboard refusing a selection) shows.
+const NOTICE_NS: u64 = 4_000_000_000;
 
 /// An incremental search backwards through the history (Ctrl+R).
 struct HistorySearch {
@@ -145,12 +148,11 @@ struct Terminal {
     cwd: String,
     /// The exit status of the last command.
     last_status: i32,
-    /// Command lines as the agent may read them (Wi-Fi passwords hidden), by
-    /// their line on the screen.
+    /// The lines of the screen that show what was typed, as the agent may
+    /// read them (Wi-Fi passwords hidden), by their line on the screen.
     echoes: VecDeque<(u64, String)>,
-    /// The command being typed and the cursor (byte offset) in it.
-    input: String,
-    cursor: usize,
+    /// The line being typed: a command, or a program's input.
+    line: LineEditor,
     /// Position while browsing the history, and the line typed before.
     history_pos: Option<usize>,
     saved_input: String,
@@ -166,7 +168,8 @@ struct Terminal {
     font_size: f32,
     /// Consecutive Tab presses without progress.
     tabs: u32,
-    title: String,
+    /// A short notice in the window's corner, until the time given.
+    notice: Option<(String, u64)>,
     /// A Ctrl+R history search in progress.
     hsearch: Option<HistorySearch>,
     /// The terminal the programs it runs see.
@@ -289,8 +292,7 @@ impl Terminal {
             pending: VecDeque::new(),
             last_status: 0,
             echoes: VecDeque::new(),
-            input: String::new(),
-            cursor: 0,
+            line: LineEditor::new(),
             history_pos: None,
             saved_input: String::new(),
             scroll: 0,
@@ -301,7 +303,7 @@ impl Terminal {
             blink_start: 0,
             font_size: DEFAULT_FONT_SIZE,
             tabs: 0,
-            title: String::new(),
+            notice: None,
             hsearch: None,
         })
     }
@@ -335,7 +337,7 @@ impl Terminal {
             let mut cells = self.screen.partial().to_vec();
             let prompt_len = cells.len();
             if self.console.canonical() && self.console.echo() {
-                cells.extend(screen::cells(&self.input, Style::PLAIN));
+                cells.extend(screen::cells(self.line.text(), Style::PLAIN));
             }
             return (cells, prompt_len);
         }
@@ -344,7 +346,7 @@ impl Terminal {
         let Some(shell) = &self.shell else { return (Vec::new(), 0) };
         let mut cells = shell.prompt();
         let prompt_len = cells.len();
-        cells.extend(screen::cells(&self.input, Style::PLAIN));
+        cells.extend(screen::cells(self.line.text(), Style::PLAIN));
         (cells, prompt_len)
     }
 
@@ -358,10 +360,10 @@ impl Terminal {
             }
             None if self.program_mode() => {
                 let typed = self.console.canonical() && self.console.echo();
-                prompt_len + if typed { self.input[..self.cursor].chars().count() } else { 0 }
+                prompt_len + if typed { self.line.cursor_chars() } else { 0 }
             }
             None if self.shell.is_none() => 0,
-            None => prompt_len + self.input[..self.cursor].chars().count(),
+            None => prompt_len + self.line.cursor_chars(),
         }
     }
 
@@ -378,8 +380,7 @@ impl Terminal {
     /// Ends the history search, putting the match in the input line.
     fn accept_search(&mut self) {
         if let Some(line) = self.hsearch.take().and_then(|s| s.found).and_then(|i| self.history().get(i).cloned()) {
-            self.input = line;
-            self.cursor = self.input.len();
+            self.line.set(&line);
         }
     }
 
@@ -438,41 +439,26 @@ impl Terminal {
     }
 
     fn insert(&mut self, s: &str) {
-        let clean: String = s.chars().filter(|c| !c.is_control()).collect();
-        self.input.insert_str(self.cursor, &clean);
-        self.cursor += clean.len();
+        self.line.apply(Edit::Insert(s));
         self.history_pos = None;
     }
 
-    fn prev_char(&self, i: usize) -> usize {
-        self.input[..i].char_indices().next_back().map(|(p, _)| p).unwrap_or(0)
+    /// Adds a line of the screen that shows what was typed (`cells`), and
+    /// `shown`, how the agent may read it (Wi-Fi passwords hidden).
+    fn push_echo(&mut self, cells: Vec<Cell>, shown: String) {
+        self.screen.push_cells(cells);
+        self.echoes.push_back((self.screen.end() - 1, shown));
+        if self.echoes.len() > MAX_ECHOES {
+            self.echoes.pop_front();
+        }
     }
 
-    fn next_char(&self, i: usize) -> usize {
-        self.input[i..].chars().next().map(|c| i + c.len_utf8()).unwrap_or(i)
-    }
-
-    fn word_left(&self, mut i: usize) -> usize {
-        while i > 0 && self.input[..i].ends_with(' ') {
-            i = self.prev_char(i);
-        }
-        while i > 0 && !self.input[..i].ends_with(' ') && !self.input[..i].ends_with('/') {
-            i = self.prev_char(i);
-        }
-        i
-    }
-
-    fn word_right(&self, mut i: usize) -> usize {
-        while i < self.input.len() && self.input[i..].starts_with(' ') {
-            i = self.next_char(i);
-        }
-        while i < self.input.len() && !self.input[i..].starts_with(' ') && !self.input[i..].starts_with('/') {
-            i = self.next_char(i);
-        }
-        if i < self.input.len() && self.input[i..].starts_with('/') {
-            i += 1;
-        }
-        i
+    /// The live line at the prompt (its first `prompt_len` cells the
+    /// prompt) as the agent may read it: the command typed with its Wi-Fi
+    /// passwords hidden.
+    fn shown_live(&self, live: &[Cell], prompt_len: usize) -> String {
+        let prompt: String = live[..prompt_len.min(live.len())].iter().map(|c| c.ch).collect();
+        format!("{prompt}{}", redact(self.line.text()))
     }
 
     /// Runs the typed line: echoes it and starts it (see
@@ -480,19 +466,14 @@ impl Terminal {
     fn submit(&mut self) {
         // Keys wait while a command runs, so the shell is here.
         let Some(shell) = &mut self.shell else { return };
-        let line = core::mem::take(&mut self.input);
-        self.cursor = 0;
+        let line = self.line.take();
         let prompt = shell.prompt();
-        let redacted = shell.redact(&line);
+        let redacted = redact(&line);
         let shown = format!("{}{redacted}", prompt.iter().map(|c| c.ch).collect::<String>());
         let mut echoed = prompt;
         echoed.extend(screen::cells(&line, Style::PLAIN));
         shell.remember(&line);
-        self.screen.push_cells(echoed);
-        self.echoes.push_back((self.screen.end() - 1, shown));
-        if self.echoes.len() > MAX_ECHOES {
-            self.echoes.pop_front();
-        }
+        self.push_echo(echoed, shown);
         self.history_pos = None;
         self.saved_input.clear();
         self.selection = None;
@@ -585,8 +566,7 @@ impl Terminal {
         self.output.drain_into(&mut self.screen);
         self.screen.write_styled("^C", Style::DIM);
         self.screen.newline();
-        self.input.clear();
-        self.cursor = 0;
+        self.line.clear();
         self.pending.clear();
         self.scroll = 0;
         true
@@ -640,35 +620,35 @@ impl Terminal {
         }
         let pos = match self.history_pos {
             None => {
-                self.saved_input = self.input.clone();
+                self.saved_input = self.line.text().into();
                 len - 1
             }
             Some(p) => p.saturating_sub(1),
         };
         self.history_pos = Some(pos);
-        self.input = self.history()[pos].clone();
-        self.cursor = self.input.len();
+        let line = self.history()[pos].clone();
+        self.line.set(&line);
     }
 
     fn history_down(&mut self) {
         let Some(p) = self.history_pos else { return };
         if p + 1 < self.history().len() {
             self.history_pos = Some(p + 1);
-            self.input = self.history()[p + 1].clone();
+            let line = self.history()[p + 1].clone();
+            self.line.set(&line);
         } else {
             self.history_pos = None;
-            self.input = core::mem::take(&mut self.saved_input);
+            let line = core::mem::take(&mut self.saved_input);
+            self.line.set(&line);
         }
-        self.cursor = self.input.len();
     }
 
     fn complete(&mut self) {
         let Some(shell) = &mut self.shell else { return };
-        let c = shell.complete(&self.input, self.cursor);
+        let c = shell.complete(self.line.text(), self.line.cursor());
         let cols = shell.cols;
         if let Some(rep) = c.replacement {
-            self.input.replace_range(c.start..self.cursor, &rep);
-            self.cursor = c.start + rep.len();
+            self.line.replace_before_cursor(c.start, &rep);
             self.tabs = 0;
             return;
         }
@@ -681,8 +661,9 @@ impl Terminal {
         }
         self.tabs = 0;
         // Show the candidates below a copy of the prompt line, like bash.
-        let (live, _) = self.live_cells();
-        self.screen.push_cells(live);
+        let (live, prompt_len) = self.live_cells();
+        let shown = self.shown_live(&live, prompt_len);
+        self.push_echo(live, shown);
         let colw = c.candidates.iter().map(|s| s.chars().count()).max().unwrap_or(1) + 2;
         let per_row = (cols.max(colw) / colw).max(1);
         let rows = c.candidates.len().div_ceil(per_row);
@@ -701,6 +682,8 @@ impl Terminal {
         self.scroll = 0;
     }
 
+    /// Copies the selection; returns whether there was one (copied, or
+    /// too large for the clipboard, which a notice says).
     fn copy_selection(&mut self, ui: &mut Ui) -> bool {
         let Some((a, b)) = self.selection else { return false };
         let (live, _) = self.live_cells();
@@ -708,7 +691,13 @@ impl Terminal {
         if text.is_empty() {
             return false;
         }
-        ui.set_clipboard(&text);
+        if let Err(e) = apps_common::clipboard::copy(ui, &text) {
+            let mut msg = e.to_string();
+            if let Some(c) = msg.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            self.notice = Some((msg, ui.now() + NOTICE_NS));
+        }
         true
     }
 
@@ -756,8 +745,9 @@ impl Terminal {
         self.job.is_some() && self.console.program_running()
     }
 
-    /// Sends text to the program: in canonical mode it is edited here first
-    /// (each complete line goes when its newline is pasted).
+    /// Sends text to the program: in canonical mode, each complete line
+    /// goes when its newline is pasted, as it is (tabs and all), and the
+    /// rest is edited here.
     fn program_paste(&mut self, text: &str) {
         if !self.console.canonical() {
             self.console.send(text.as_bytes());
@@ -766,19 +756,23 @@ impl Terminal {
         let text = text.replace("\r\n", "\n");
         let mut rest = text.as_str();
         while let Some((line, more)) = rest.split_once('\n') {
-            self.input.insert_str(self.cursor, line);
-            self.cursor = self.input.len();
-            self.program_enter();
+            let at = self.line.cursor();
+            let typed = self.line.take();
+            self.program_line(format!("{}{line}{}", &typed[..at], &typed[at..]));
             rest = more;
         }
-        self.input.insert_str(self.cursor, rest);
-        self.cursor += rest.len();
+        self.insert(rest);
     }
 
     /// Ends the line being typed for the program (Enter in canonical mode).
     fn program_enter(&mut self) {
-        let line = core::mem::take(&mut self.input);
-        self.cursor = 0;
+        let line = self.line.take();
+        self.program_line(line);
+    }
+
+    /// Shows (if the program echoes input) and sends a line typed for the
+    /// program.
+    fn program_line(&mut self, line: String) {
         if self.console.echo() {
             self.screen.write_styled(&line, Style::PLAIN);
         }
@@ -847,48 +841,24 @@ impl Terminal {
         }
         if let Some(c) = k.ch.filter(|_| !ctrl) {
             let mut buf = [0u8; 4];
-            let s = c.encode_utf8(&mut buf);
-            self.input.insert_str(self.cursor, s);
-            self.cursor += s.len();
+            self.insert(c.encode_utf8(&mut buf));
+            return;
+        }
+        if let Some(e) = edit_for(k) {
+            self.line.apply(e);
             return;
         }
         match k.code {
             keys::ENTER | keys::KPENTER => self.program_enter(),
-            keys::BACKSPACE if self.cursor > 0 => {
-                let p = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
-                self.input.replace_range(p..self.cursor, "");
-                self.cursor = p;
-            }
-            keys::DELETE if self.cursor < self.input.len() => {
-                let n = self.next_char(self.cursor);
-                self.input.replace_range(self.cursor..n, "");
-            }
-            keys::LEFT => self.cursor = self.prev_char(self.cursor),
-            keys::RIGHT => self.cursor = self.next_char(self.cursor),
-            keys::HOME => self.cursor = 0,
-            keys::END => self.cursor = self.input.len(),
-            keys::A if ctrl => self.cursor = 0,
-            keys::E if ctrl => self.cursor = self.input.len(),
-            keys::U if ctrl => {
-                self.input.replace_range(..self.cursor, "");
-                self.cursor = 0;
-            }
-            keys::K if ctrl => self.input.truncate(self.cursor),
-            keys::W if ctrl => {
-                let p = self.word_left(self.cursor);
-                self.input.replace_range(p..self.cursor, "");
-                self.cursor = p;
-            }
             keys::L if ctrl => self.clear_screen(),
             keys::C if ctrl => self.console.send(b"\x03"),
             // The end of the input: what was typed goes without a newline;
             // on an empty line the program reads the end of the file.
             keys::D if ctrl => {
-                if self.input.is_empty() {
+                if self.line.is_empty() {
                     self.console.end_input();
                 } else {
-                    let line = core::mem::take(&mut self.input);
-                    self.cursor = 0;
+                    let line = self.line.take();
                     if self.console.echo() {
                         self.screen.write_styled(&line, Style::PLAIN);
                     }
@@ -965,39 +935,8 @@ impl Terminal {
                 self.submit();
                 self.reset_view(now);
             }
-            keys::BACKSPACE => {
-                if self.cursor > 0 {
-                    let p = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
-                    self.input.replace_range(p..self.cursor, "");
-                    self.cursor = p;
-                }
-                self.reset_view(now);
-            }
-            keys::DELETE => {
-                if self.cursor < self.input.len() {
-                    let n = if ctrl { self.word_right(self.cursor) } else { self.next_char(self.cursor) };
-                    self.input.replace_range(self.cursor..n, "");
-                }
-                self.reset_view(now);
-            }
-            keys::LEFT => {
-                self.cursor = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
-                self.reset_view(now);
-            }
-            keys::RIGHT => {
-                self.cursor = if ctrl { self.word_right(self.cursor) } else { self.next_char(self.cursor) };
-                self.reset_view(now);
-            }
             keys::HOME if ctrl => self.scroll = usize::MAX,
             keys::END if ctrl => self.scroll = 0,
-            keys::HOME => {
-                self.cursor = 0;
-                self.reset_view(now);
-            }
-            keys::END => {
-                self.cursor = self.input.len();
-                self.reset_view(now);
-            }
             keys::UP if ctrl || shift => self.scroll = self.scroll.saturating_add(1),
             keys::DOWN if ctrl || shift => self.scroll = self.scroll.saturating_sub(1),
             keys::UP => {
@@ -1014,8 +953,7 @@ impl Terminal {
                 if self.selection.is_some() {
                     self.selection = None;
                 } else {
-                    self.input.clear();
-                    self.cursor = 0;
+                    self.line.clear();
                     self.history_pos = None;
                 }
             }
@@ -1030,11 +968,11 @@ impl Terminal {
             keys::C if ctrl => {
                 if !self.copy_selection(ui) {
                     // Cancel the line, like ^C in a Unix shell.
-                    let (mut live, _) = self.live_cells();
+                    let (mut live, prompt_len) = self.live_cells();
+                    let shown = format!("{}^C", self.shown_live(&live, prompt_len));
                     live.extend(screen::cells("^C", Style::DIM));
-                    self.screen.push_cells(live);
-                    self.input.clear();
-                    self.cursor = 0;
+                    self.push_echo(live, shown);
+                    self.line.clear();
                     self.history_pos = None;
                     self.reset_view(now);
                 }
@@ -1050,20 +988,8 @@ impl Terminal {
                 self.reset_view(now);
             }
             keys::A if ctrl && shift => self.select_all(),
-            keys::A if ctrl => self.cursor = 0,
-            keys::E if ctrl => self.cursor = self.input.len(),
-            keys::U if ctrl => {
-                self.input.replace_range(..self.cursor, "");
-                self.cursor = 0;
-            }
-            keys::K if ctrl => self.input.truncate(self.cursor),
-            keys::W if ctrl => {
-                let p = self.word_left(self.cursor);
-                self.input.replace_range(p..self.cursor, "");
-                self.cursor = p;
-            }
             keys::L if ctrl => self.clear_screen(),
-            keys::D if ctrl && self.input.is_empty() => {
+            keys::D if ctrl && self.line.is_empty() => {
                 if let Some(shell) = &mut self.shell {
                     shell.exit_requested = true;
                 }
@@ -1071,7 +997,12 @@ impl Terminal {
             keys::EQUAL | keys::KPPLUS if ctrl => self.zoom(1.0),
             keys::MINUS | keys::KPMINUS if ctrl => self.zoom(-1.0),
             keys::KEY_0 if ctrl => self.zoom(0.0),
-            _ => {}
+            _ => {
+                if let Some(e) = edit_for(&k) {
+                    self.line.apply(e);
+                    self.reset_view(now);
+                }
+            }
         }
     }
 
@@ -1242,8 +1173,7 @@ impl Terminal {
                 if !self.drag_moved {
                     self.selection = None;
                     if anchor.line == self.screen.end() && anchor.col >= prompt_len && self.hsearch.is_none() {
-                        let idx = anchor.col - prompt_len;
-                        self.cursor = self.input.char_indices().nth(idx).map(|(i, _)| i).unwrap_or(self.input.len());
+                        self.line.set_cursor_chars(anchor.col - prompt_len);
                         self.blink_start = ui.now();
                     }
                 }
@@ -1328,8 +1258,8 @@ impl Terminal {
                     ui.canvas.fill_rect(Rect::new(x0, baseline as i32 + 2, x_of(k) as i32 - x0, 1), fg);
                 }
             }
-            // Cursor.
-            if vr.line == end && self.scroll_follows(l) {
+            // The cursor, on the live line.
+            if vr.line == end {
                 let row_of_cursor = cursor_col / l.cols;
                 if vr.start == row_of_cursor * l.cols {
                     let cx = x_of(cursor_col % l.cols) as i32;
@@ -1386,12 +1316,6 @@ impl Terminal {
                 );
             }
         }
-    }
-
-    /// The cursor is drawn only on the live line; it is always visible
-    /// when that line is on screen.
-    fn scroll_follows(&self, _l: &Layout) -> bool {
-        true
     }
 
     fn menu_items(&self) -> [MenuItem; 9] {
@@ -1500,7 +1424,8 @@ impl App for Terminal {
 }
 
 impl Terminal {
-    /// Draws the frame and the context menu, and updates the title.
+    /// Draws the frame, the notice and the context menu, and updates the
+    /// title.
     fn finish_frame(&mut self, ui: &mut Ui, layout: &Layout, live: &[Cell], cursor_col: usize) {
         // The selection may refer to lines that were cleared.
         if let Some((a, b)) = self.selection
@@ -1509,14 +1434,29 @@ impl Terminal {
             self.selection = None;
         }
         self.draw(ui, layout, live, cursor_col);
+        self.draw_notice(ui);
         self.context_menu(ui);
         // Keep the window title in sync with the working directory.
         let cwd = self.shell.as_ref().map_or(self.cwd.as_str(), |s| s.cwd.as_str());
-        let title = format!("Terminal — {}", display_path(cwd));
-        if title != self.title {
-            let _ = ui.ctx.display.set_title(ui.ctx.window_id, title.clone());
-            self.title = title;
+        ui.set_title(&format!("Terminal — {}", display_path(cwd)));
+    }
+
+    /// The notice at the top right, while it lasts.
+    fn draw_notice(&mut self, ui: &mut Ui) {
+        let Some((text, until)) = &self.notice else { return };
+        if ui.now() >= *until {
+            self.notice = None;
+            return;
         }
+        let until = *until;
+        let t = ui.theme().clone();
+        let w = (ui.measure(text, Font::Regular, t.small_size) as i32 + 24).min(ui.width - 2 * PAD_X);
+        let r = Rect::new(ui.width - SCROLLBAR_W - 8 - w, PAD_Y, w, 28);
+        ui.canvas.fill_rounded_rect(r, 8.0, Color::rgba(40, 42, 54, 240));
+        ui.canvas.stroke_rounded_rect(r, 8.0, 1.0, t.warning);
+        let text = text.clone();
+        ui.label(r.inset(12, 0, 12, 0), &text, Font::Regular, t.small_size, t.text, vui::Align::Left);
+        ui.repaint_at(until);
     }
 }
 
@@ -1558,27 +1498,40 @@ fn key_bytes(k: &KeyPress) -> Option<Vec<u8>> {
     Some(seq.to_vec())
 }
 
+/// The edit a key makes to the line being typed, if it makes one: the same
+/// at the prompt and for a program reading a line.
+fn edit_for(k: &KeyPress) -> Option<Edit<'static>> {
+    let ctrl = k.modifiers & modifiers::CTRL != 0;
+    Some(match k.code {
+        keys::BACKSPACE if ctrl => Edit::BackspaceWord,
+        keys::BACKSPACE => Edit::Backspace,
+        keys::DELETE if ctrl => Edit::DeleteWord,
+        keys::DELETE => Edit::Delete,
+        keys::LEFT if ctrl => Edit::WordLeft,
+        keys::LEFT => Edit::Left,
+        keys::RIGHT if ctrl => Edit::WordRight,
+        keys::RIGHT => Edit::Right,
+        keys::HOME if !ctrl => Edit::Home,
+        keys::END if !ctrl => Edit::End,
+        keys::A if ctrl => Edit::Home,
+        keys::E if ctrl => Edit::End,
+        keys::U if ctrl => Edit::KillToStart,
+        keys::K if ctrl => Edit::KillToEnd,
+        keys::W if ctrl => Edit::BackspaceWord,
+        _ => return None,
+    })
+}
+
+/// The Terminal starts in the folder its argument names (Files' "Open in
+/// Terminal"), or at home. It takes no command to run: what it runs, it
+/// runs with the authority of the user's own hand (`kill -f`), so only the
+/// user, or the agent with the user's consent, gives it commands.
 fn main() -> i32 {
-    let args = vrt::env::args();
-    let mut cwd = String::from(HOME);
-    let mut command: Option<String> = None;
-    let mut i = 1;
-    while i < args.len() {
-        if args[i] == "-c" {
-            command = Some(args[i + 1..].join(" "));
-            break;
-        }
-        cwd = args[i].clone();
-        i += 1;
-    }
-    let Some(mut term) = Terminal::new(&cwd) else {
+    let cwd = vrt::env::args().get(1).cloned().unwrap_or_else(|| String::from(HOME));
+    let Some(term) = Terminal::new(&cwd) else {
         vrt::println!("cannot create events");
         return 1;
     };
-    if let Some(cmd) = command {
-        term.input = cmd;
-        term.submit();
-    }
     let mut spec = WindowSpec::new("Terminal", 880, 560);
     spec.app_id = "terminal".into();
     spec.min_width = 420;

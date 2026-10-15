@@ -119,7 +119,8 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::CLOSE_RANGE => io::close_range(a[0] as u32, a[1] as u32, a[2] as u32),
             nr::NANOSLEEP => time::clock_nanosleep(clock::MONOTONIC, 0, a[0]),
             nr::CLOCK_NANOSLEEP => time::clock_nanosleep(a[0] as u32, a[1] as u32, a[2]),
-            nr::GETPID | nr::GETTID | nr::GETPGID | nr::GETSID | nr::SETSID => Ok(process::pid() as usize),
+            nr::GETPID | nr::GETPGID | nr::GETSID | nr::SETSID => Ok(process::pid() as usize),
+            nr::GETTID => Ok(signal::current_tid() as usize),
             nr::GETPPID => Ok(process::ppid() as usize),
             nr::SETPGID => Ok(0),
             nr::GETUID | nr::GETEUID | nr::GETGID | nr::GETEGID => Ok(vfs::UID as usize),
@@ -147,15 +148,18 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::WAIT4 => process::wait4(fd0, a[1], a[2] as u32, a[3]),
             nr::WAITID => process::waitid(a[0] as u32, a[1] as i32, a[2], a[3] as u32),
             nr::KILL => process::kill(fd0, a[1] as u32),
-            nr::TKILL => signal::send_self(a[1] as u32),
-            nr::TGKILL if fd0 == process::pid() => signal::send_self(a[2] as u32),
+            nr::TKILL => signal::send_to_thread(fd0, a[1] as u32),
+            nr::TGKILL if fd0 == process::pid() => signal::send_to_thread(a[1] as i32, a[2] as u32),
             nr::TGKILL => Err(ESRCH),
             nr::UNAME => system::uname(a[0]),
             nr::FCNTL => io::fcntl(fd0, a[1] as u32, a[2]),
-            nr::FLOCK | nr::FSYNC | nr::FDATASYNC | nr::SYNC_FILE_RANGE | nr::FADVISE64 | nr::READAHEAD => {
-                fd::get(fd0).map(|_| 0)
-            }
-            nr::SYNC | nr::SYNCFS => Ok(0),
+            nr::FLOCK => io::flock(fd0, a[1] as u32),
+            nr::FSYNC | nr::FDATASYNC => io::fsync(fd0),
+            nr::SYNC_FILE_RANGE => io::sync_file_range(fd0, a[1] as i64, a[2] as i64, a[3] as u32),
+            nr::SYNC => io::sync(),
+            nr::SYNCFS => io::syncfs(fd0),
+            // Advice: taken as given.
+            nr::FADVISE64 | nr::READAHEAD => fd::get(fd0).map(|_| 0),
             nr::TRUNCATE => fs::truncate(a[0], a[1] as i64),
             nr::FTRUNCATE => io::ftruncate(fd0, a[1] as i64),
             nr::FALLOCATE => fallocate(fd0, a[1] as u32, a[2] as i64, a[3] as i64),
@@ -205,7 +209,7 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
                 }
                 Ok(0)
             }
-            nr::GETRANDOM => system::getrandom(a[0], a[1]),
+            nr::GETRANDOM => system::getrandom(a[0], a[1], a[2] as u32),
             // musl falls back to the calls above.
             nr::STATX | nr::MEMBARRIER | nr::RSEQ => Err(ENOSYS),
             _ => unsupported(n),

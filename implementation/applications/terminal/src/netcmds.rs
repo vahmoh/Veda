@@ -14,6 +14,7 @@ use terminal_core::screen::{Style, color};
 use vnet::wifi::{self, ConnState, WlanEvent};
 use vnet::{Duration, IpAddr, NetError};
 
+use crate::commands::pad;
 use crate::shell::{INTERRUPTED, Io, Shell};
 
 fn net_err(io: &mut Io, cmd: &str, e: NetError) -> i32 {
@@ -36,14 +37,6 @@ fn bars(n: u8) -> &'static str {
         "\u{2581}\u{2583}\u{2585}\u{2587} ",
         "\u{2581}\u{2583}\u{2585}\u{2587}\u{2588}",
     ][n.min(4) as usize]
-}
-
-fn pad(s: &str, w: usize) -> String {
-    let mut out = String::from(s);
-    for _ in s.chars().count()..w {
-        out.push(' ');
-    }
-    out
 }
 
 fn print_status(io: &mut Io, s: &wifi::WlanStatus) {
@@ -483,22 +476,30 @@ pub fn cmd_route(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
 }
 
 pub fn cmd_curl(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
+    // What may be shown, and what may be saved (`curl URL > FILE`).
+    const SHOWN: usize = 1 << 20;
+    const SAVED: usize = 32 << 20;
     let head_only = args.iter().any(|a| a == "-I");
     let Some(url) = args.iter().skip(1).find(|a| !a.starts_with('-')) else {
         return io.error("curl", "usage: curl [-I] [http[s]://]HOST[:PORT][/PATH]");
     };
     let url = if url.contains("://") { url.clone() } else { format!("http://{url}") };
-    match vweb::http::get(&url, Duration::from_secs(20), 1 << 20) {
+    let terminal = io.is_terminal();
+    match vweb::http::get(&url, Duration::from_secs(20), if terminal { SHOWN } else { SAVED }) {
         Ok(r) => {
             if head_only {
                 io.println(&format!("HTTP/1.1 {} {}", r.status, r.reason));
                 for (k, v) in &r.headers {
                     io.println(&format!("{k}: {v}"));
                 }
+            } else if !terminal {
+                // Into a file or a pipe: the body exactly as it came.
+                io.write(&r.body);
+            } else if terminal_core::text::is_binary(&r.body) {
+                io.error("curl", &format!("binary data ({} bytes): save it with > FILE", r.body.len()));
             } else {
-                let body = String::from_utf8_lossy(&r.body);
-                io.print(&body);
-                if !body.ends_with('\n') {
+                io.write(&r.body);
+                if !r.body.ends_with(b"\n") {
                     io.print("\n");
                 }
             }

@@ -26,7 +26,7 @@ click 0.825 0.97
 wait-serial "state: Listening" 30
 move 0.97 0.08
 wait 3
-shot documentation/images/desktop.png
+shot documentation/images/desktop.png now
 # The agent back to sleep (the ring in its window), and the window closed.
 checkpoint
 click 0.8578 0.61
@@ -86,7 +86,7 @@ click 0.6188 0.8125
 wait-serial "music: playing" 30
 move 0.97 0.08
 wait 6
-shot documentation/images/music.png
+shot documentation/images/music.png now
 key alt-f4
 wait-serial "music exited" 20
 wait 2
@@ -104,7 +104,7 @@ wait-serial "videos: playing Aurora Timelapse" 30
 wait 6
 move 0.66 0.8188
 wait 3
-shot documentation/images/videos.png
+shot documentation/images/videos.png now
 key alt-f4
 wait-serial "videos exited" 20
 wait 2
@@ -172,6 +172,8 @@ wait 40
 move 0.97 0.08
 wait 3
 shot documentation/images/gcc.png
+# The Terminals before this one exited too (with `exit`).
+checkpoint
 key alt-f4
 wait-serial "terminal exited" 20
 wait 2

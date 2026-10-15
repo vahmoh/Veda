@@ -16,6 +16,12 @@
 //! there (or dragged anywhere else) or deleted for good, one by one or by
 //! emptying the Trash. [`agent`] lets the voice agent do the same.
 //!
+//! Copying, moving, deleting and the like run on a thread of their own
+//! ([`ops`]), in the order asked for: the window shows how far they are
+//! and can stop them. The folder shown is listed again when a look at it
+//! says it changed (its time and number of items), when the window comes
+//! to the front, and after an operation.
+//!
 //! Usage: `files [PATH]` opens a folder, or the folder containing a file
 //! with that file selected; `files --empty-trash` opens the Trash and asks
 //! whether to empty it.
@@ -27,6 +33,7 @@ extern crate alloc;
 
 mod agent;
 mod icons;
+mod ops;
 mod view;
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -39,15 +46,15 @@ use core::cmp::Ordering;
 use vfiles::format::{friendly_time, human_size};
 use vfiles::fs::{Error, Space};
 use vfiles::kind::{FileKind, default_app, file_kind, kind_name};
-use vfiles::path::{
-    display_path, extension, file_name, is_read_only, is_within, join, natural_cmp, normalize, parent, resolve,
-};
+use vfiles::path::{display_path, extension, file_name, is_read_only, join, natural_cmp, normalize, parent, resolve};
 use vfiles::thumbs::Thumbnailer;
 use vfiles::{Fs, HOME, trash};
 use vproto::display::modifiers;
-use vproto::init::{LaunchError, launcher};
+use vproto::init::launcher;
 use vproto::input::keys;
 use vui::{App, Ui, WindowSpec};
+
+use ops::{Finished, Job, Outcome, Worker};
 
 vrt::entry!(main);
 
@@ -85,6 +92,8 @@ struct Trashed {
 
 /// How long the notice of a move to the Trash stays.
 const TRASHED_NOTICE_NS: u64 = 8_000_000_000;
+/// How often the folder shown is looked at for changes.
+const POLL_NS: u64 = 3_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SortKey {
@@ -105,8 +114,12 @@ struct Props {
     name: String,
     path: String,
     kind: String,
+    /// A folder's is measured on the operations' thread: until then,
+    /// "Calculating…".
     size: String,
     contents: Option<String>,
+    /// The measuring job, while it is not done.
+    measuring: Option<u64>,
     modified: String,
     read_only: bool,
     is_dir: bool,
@@ -118,8 +131,13 @@ struct Props {
 
 /// A dialog on top of the window.
 enum Dialog {
-    /// Delete these paths for good?
-    ConfirmDelete(Vec<String>),
+    /// Delete these paths for good? (With the question, worked out when it
+    /// was asked.)
+    ConfirmDelete {
+        paths: Vec<String>,
+        title: String,
+        message: String,
+    },
     /// Empty the Trash (of this many items)?
     ConfirmEmpty(usize),
     /// These items do not fit in the Trash: delete them for good?
@@ -133,9 +151,23 @@ enum Dialog {
     OpenUnknown(String),
 }
 
+/// What to do once a job is done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum After {
+    /// Pasted: what arrived is selected; a cut whose items all arrived
+    /// leaves the clipboard.
+    Paste { cut: bool },
+    /// Dropped on a folder.
+    Drop,
+    /// Anything else: the outcome says it all.
+    Show,
+}
+
 /// Items being dragged with the mouse.
 struct Drag {
     paths: Vec<String>,
+    /// One item's icon (folder, program), from the listing.
+    single: Option<(bool, bool)>,
     /// Where the button went down.
     origin: (i32, i32),
     /// The pointer moved far enough to count as a drag.
@@ -177,7 +209,14 @@ struct Files {
     clipboard: Option<(Vec<String>, bool)>,
     dialog: Option<Dialog>,
     thumbs: Option<Thumbnailer>,
+    /// The file operations' thread (see [`ops`]).
+    worker: Option<Worker>,
+    /// The jobs given to it, and what to do when each is done.
+    jobs: Vec<(u64, After)>,
+    /// When the folder was last looked at, and how it looked then: its time
+    /// and number of items.
     last_refresh: u64,
+    listed: Option<(u64, u64)>,
     was_focused: bool,
     /// A text field had keyboard focus last frame.
     typing: bool,
@@ -215,6 +254,13 @@ struct Files {
 /// "1 item", "3 items".
 fn items(n: usize) -> String {
     if n == 1 { "1 item".to_string() } else { format!("{n} items") }
+}
+
+/// Where items at `paths` were, as the log says it: their folder, if they
+/// share one.
+fn folder_of<'a>(mut paths: impl Iterator<Item = &'a str>) -> String {
+    let Some(first) = paths.next().map(vfiles::path::parent) else { return String::new() };
+    if paths.all(|p| vfiles::path::parent(p) == first) { first.to_string() } else { "several folders".to_string() }
 }
 
 /// Where an item in the Trash was deleted from, as shown (`~/Documents`;
@@ -268,7 +314,10 @@ impl Files {
             clipboard: None,
             dialog: None,
             thumbs: Thumbnailer::new(96, 72),
+            worker: Worker::start(),
+            jobs: Vec::new(),
             last_refresh: 0,
+            listed: None,
             was_focused: true,
             typing: false,
             focus_search: false,
@@ -333,7 +382,7 @@ impl Files {
         if failed.iter().any(|(_, e)| e.is_no_space()) {
             let what = if failed.len() == 1 { format!("“{first}”") } else { items(failed.len()) };
             let space = self.fs.space(&self.cwd).map(|s| format!(" ({})", space_text(&s))).unwrap_or_default();
-            let hint = if trash::count(&self.fs) > 0 {
+            let hint = if self.trash_count() > 0 {
                 "Empty the Trash, or delete files you no longer need, and try again."
             } else {
                 "Delete files you no longer need and try again."
@@ -355,11 +404,25 @@ impl Files {
         self.cursor.and_then(|c| self.view.get(c)).and_then(|&i| self.entries.get(i)).map(|e| e.name.clone())
     }
 
+    /// How many items are in the Trash (a look at its folder, whose size is
+    /// its number of items).
+    fn trash_count(&self) -> usize {
+        self.fs.stat(trash::FILES).map_or(0, |s| s.size as usize)
+    }
+
+    /// How the folder shown looks now: its time and number of items.
+    fn stamp(&self) -> Option<(u64, u64)> {
+        self.fs.stat(&self.cwd).ok().map(|s| (s.modified, s.size))
+    }
+
     /// Re-reads the current folder, keeping the selection where possible.
     fn reload(&mut self) {
         let cursor = self.cursor_name();
         // The view indexes the old entries; it is rebuilt below.
         self.view.clear();
+        // Looked at before it is read: a change while it is read shows next
+        // time.
+        self.listed = self.stamp();
         match self.fs.read_dir(&self.cwd) {
             Ok(list) => {
                 let trash_root = self.trash_root();
@@ -411,14 +474,22 @@ impl Files {
     /// Re-reads the current folder; changed or new files get new
     /// thumbnails.
     fn refresh(&mut self) {
-        let before = self.entries.clone();
+        let before: BTreeMap<String, (u64, u64)> =
+            self.entries.iter().map(|e| (e.name.clone(), (e.size, e.modified))).collect();
         self.reload();
-        if before != self.entries
-            && let Some(t) = &mut self.thumbs
-        {
-            for e in self.entries.iter().filter(|e| !before.contains(e)) {
-                t.invalidate(&join(&self.cwd, &e.name));
+        if let Some(t) = &mut self.thumbs {
+            for e in &self.entries {
+                if before.get(&e.name) != Some(&(e.size, e.modified)) {
+                    t.invalidate(&join(&self.cwd, &e.name));
+                }
             }
+        }
+    }
+
+    /// Re-reads the current folder if a look at it says it changed.
+    fn refresh_if_changed(&mut self) {
+        if self.stamp() != self.listed {
+            self.refresh();
         }
     }
 
@@ -442,6 +513,13 @@ impl Files {
             })
             .collect();
         let (sort, asc, entries) = (self.sort, self.ascending, &self.entries);
+        // The types (or, in the Trash, where items were deleted from) are
+        // worked out once, not in every comparison.
+        let kinds: Vec<String> = match sort {
+            SortKey::Kind if trash_root => entries.iter().map(location).collect(),
+            SortKey::Kind => entries.iter().map(|e| kind_name(&e.name, e.is_dir, e.program)).collect(),
+            _ => Vec::new(),
+        };
         v.sort_by(|&a, &b| {
             let (ea, eb) = (&entries[a], &entries[b]);
             // Folders always come first, except in the Trash, which is
@@ -454,10 +532,7 @@ impl Files {
             let ord = match sort {
                 SortKey::Name => Ordering::Equal,
                 SortKey::Size => ea.size.cmp(&eb.size),
-                SortKey::Kind if trash_root => location(ea).cmp(&location(eb)),
-                SortKey::Kind => {
-                    kind_name(&ea.name, ea.is_dir, ea.program).cmp(&kind_name(&eb.name, eb.is_dir, eb.program))
-                }
+                SortKey::Kind => kinds[a].cmp(&kinds[b]),
                 SortKey::Modified if trash_root => ea.deleted.cmp(&eb.deleted),
                 SortKey::Modified => ea.modified.cmp(&eb.modified),
             }
@@ -704,16 +779,7 @@ impl Files {
                 Some(t) => vrt::println!("opened {t} with {what}"),
                 None => vrt::println!("started {what}"),
             },
-            Ok(Err(e)) => {
-                let why = match e {
-                    LaunchError::NotFound => "it is not installed",
-                    LaunchError::BadImage => "it is not a valid program",
-                    LaunchError::NoMemory => "there is not enough memory",
-                    LaunchError::Denied => "permission was denied",
-                    LaunchError::Failed => "it failed to start",
-                };
-                self.error("Can't open", format!("“{what}” could not be started: {why}."));
-            }
+            Ok(Err(e)) => self.error("Can't open", format!("“{what}” could not be started: {e}.")),
             Err(_) => self.error("Can't open", "The application launcher is not responding.".into()),
         }
     }
@@ -894,10 +960,28 @@ impl Files {
             return;
         }
         if permanently || self.in_trash() {
-            self.dialog = Some(Dialog::ConfirmDelete(paths));
+            self.confirm_delete(paths);
         } else {
             self.move_to_trash(paths);
         }
+    }
+
+    /// Asks whether to delete `paths` for good.
+    fn confirm_delete(&mut self, paths: Vec<String>) {
+        let (title, message) = if paths.len() == 1 {
+            let name = self.original_name(&paths[0]);
+            let what = if self.fs.is_dir(&paths[0]) { "folder and everything in it" } else { "file" };
+            (
+                format!("Delete “{name}” permanently?"),
+                format!("This permanently deletes the {what}. This can't be undone."),
+            )
+        } else {
+            (
+                format!("Delete {} items permanently?", paths.len()),
+                "This permanently deletes the selected items. This can't be undone.".to_string(),
+            )
+        };
+        self.dialog = Some(Dialog::ConfirmDelete { paths, title, message });
     }
 
     /// Selects the item that took the place of the cursor's after items
@@ -910,47 +994,30 @@ impl Files {
         }
     }
 
+    /// Gives `job` to the operations' thread, `after` saying what to do
+    /// once it is done; returns its number.
+    fn submit(&mut self, job: Job, after: After) -> Option<u64> {
+        let Some(w) = &mut self.worker else {
+            self.error("Can't do that", "Files cannot work with files without a thread for it.".into());
+            return None;
+        };
+        let id = w.submit(job);
+        self.jobs.push((id, after));
+        Some(id)
+    }
+
     /// Moves `paths` to the Trash; what is too big for the room left is
     /// offered for deleting for good instead.
-    fn move_to_trash(&mut self, paths: Vec<String>) {
-        let (mut moved, mut errors, mut no_room) = (Vec::new(), Vec::new(), Vec::new());
-        for p in &paths {
-            match trash::put(&self.fs, p) {
-                Ok(name) => moved.push((name, p.clone())),
-                Err(e) if e.is_no_space() => no_room.push(p.clone()),
-                Err(e) => errors.push((file_name(p).to_string(), e)),
-            }
-            if let Some(t) = &mut self.thumbs {
-                t.invalidate(p);
-            }
-        }
-        if !moved.is_empty() {
-            vrt::println!("moved {} from {} to the Trash", items(moved.len()), self.cwd);
-            self.trashed = Some(Trashed { items: moved, at: vrt::time::now_ns() });
-        }
-        self.after_removal(self.cursor);
-        if !no_room.is_empty() {
-            self.dialog = Some(Dialog::NoRoomInTrash(no_room));
-        }
-        self.report("Some items could not be moved to the Trash", errors);
+    fn move_to_trash(&mut self, paths: Vec<String>) -> Option<u64> {
+        self.submit(Job::Trash { paths }, After::Show)
     }
 
     /// Puts back what the last move to the Trash took (Ctrl+Z), unless it
     /// has left the Trash since.
     fn undo_trash(&mut self) {
         let Some(t) = self.trashed.take() else { return };
-        let (mut restored, mut errors) = (Vec::new(), Vec::new());
-        for (name, origin) in &t.items {
-            // The name may belong to another item by now.
-            if !trash::info(&self.fs, name).is_some_and(|i| i.origin == *origin) {
-                continue;
-            }
-            match trash::restore(&self.fs, name) {
-                Ok(path) => restored.push(path),
-                Err(e) => errors.push((file_name(origin).to_string(), e)),
-            }
-        }
-        self.restored(restored, errors);
+        let items = t.items.into_iter().map(|(name, origin)| (name, Some(origin))).collect();
+        self.submit(Job::Restore { items }, After::Show);
     }
 
     /// Restores the selected items of the Trash where they were deleted
@@ -967,22 +1034,14 @@ impl Files {
         self.restore_names(names);
     }
 
-    /// Restores the items of the Trash called `names` (their names there);
-    /// returns where they are now.
-    fn restore_names(&mut self, names: Vec<String>) -> Vec<String> {
-        let (mut restored, mut errors) = (Vec::new(), Vec::new());
-        for name in names {
-            match trash::restore(&self.fs, &name) {
-                Ok(path) => restored.push(path),
-                Err(e) => errors.push((self.original_name(&join(trash::FILES, &name)), e)),
-            }
-        }
-        self.restored(restored.clone(), errors);
-        restored
+    /// Restores the items of the Trash called `names` (their names there).
+    fn restore_names(&mut self, names: Vec<String>) -> Option<u64> {
+        let items = names.into_iter().map(|n| (n, None)).collect();
+        self.submit(Job::Restore { items }, After::Show)
     }
 
     /// Reports items put back from the Trash (and those that could not be).
-    fn restored(&mut self, restored: Vec<String>, errors: Vec<(String, Error)>) {
+    fn restored(&mut self, restored: &[String], errors: Vec<(String, Error)>) {
         if !restored.is_empty() {
             vrt::println!("restored {} from the Trash", items(restored.len()));
         }
@@ -1000,48 +1059,24 @@ impl Files {
 
     /// Empty Trash: asks first.
     fn ask_empty_trash(&mut self) {
-        let n = trash::count(&self.fs);
+        let n = self.trash_count();
         if n > 0 {
             self.dialog = Some(Dialog::ConfirmEmpty(n));
         }
     }
 
     /// Deletes everything in the Trash for good.
-    fn empty_trash(&mut self) {
-        match trash::empty(&self.fs) {
-            Ok(n) => vrt::println!("emptied the Trash ({})", items(n)),
-            Err(e) => self.report("The Trash could not be emptied", vec![("Trash".into(), e)]),
-        }
-        self.trashed = None;
-        // A folder of the Trash that was shown is gone with it.
-        if self.in_trash() && !self.trash_root() {
-            self.navigate(trash::FILES, false);
-        }
-        self.after_removal(None);
+    fn empty_trash(&mut self) -> Option<u64> {
+        self.submit(Job::EmptyTrash, After::Show)
     }
 
     /// Deletes `paths` for good (in the Trash: with what is known about
     /// them).
-    fn delete(&mut self, paths: Vec<String>) {
-        let mut errors = Vec::new();
-        for p in &paths {
-            let r = match trash::item_name(p) {
-                Some(name) if parent(p) == trash::FILES => trash::delete(&self.fs, name),
-                _ => self.fs.remove_all(p),
-            };
-            if let Err(e) = r {
-                errors.push((self.original_name(p), e));
-            }
-            if let Some(t) = &mut self.thumbs {
-                t.invalidate(p);
-            }
-        }
-        vrt::println!("deleted {} from {}", items(paths.len() - errors.len()), self.cwd);
-        self.after_removal(self.cursor);
-        self.report("Some items could not be deleted", errors);
+    fn delete(&mut self, paths: Vec<String>) -> Option<u64> {
+        self.submit(Job::Delete { paths }, After::Show)
     }
 
-    fn copy_selection(&mut self, cut: bool) {
+    fn copy_selection(&mut self, ui: &mut Ui, cut: bool) {
         let paths = self.selected_paths();
         if paths.is_empty() {
             return;
@@ -1057,73 +1092,28 @@ impl Files {
             );
             return;
         }
-        // Also put the paths on the text clipboard (for the Terminal).
-        let _ = vproto::connect(vproto::display::display::NAME)
-            .ok()
-            .map(|ch| vproto::display::display::Client::new(ch).set_clipboard(paths.join("\n")));
+        // Also the paths as text (for the Terminal); Files pastes from its
+        // own list, whatever the text clipboard holds.
+        if let Err(e) = apps_common::clipboard::copy(ui, &paths.join("\n")) {
+            vrt::println!("the paths are not on the clipboard: {e}");
+        }
         self.clipboard = Some((paths, cut));
     }
 
     fn paste(&mut self) {
         let Some((paths, cut)) = self.clipboard.clone() else { return };
-        if !self.ensure_changeable("Can't paste") {
-            return;
-        }
-        let (_, failed) = self.paste_paths(&paths, cut);
-        if cut && failed == 0 {
-            self.clipboard = None;
-        }
+        self.paste_paths(&paths, cut);
     }
 
     /// Copies, or moves (`cut`), `paths` into the current folder under free
-    /// names, selects what arrived and reports what could not be pasted.
-    /// Returns the names the items have here, and how many failed.
-    fn paste_paths(&mut self, paths: &[String], cut: bool) -> (Vec<String>, usize) {
-        let mut errors = Vec::new();
-        let mut pasted = Vec::new();
-        for src in paths {
-            let name = file_name(src).to_string();
-            if cut && parent(src) == self.cwd {
-                pasted.push(name);
-                continue;
-            }
-            if is_within(&self.cwd, src) {
-                errors.push((name, Error::IntoItself));
-                continue;
-            }
-            let dir = self.cwd.clone();
-            match self.transfer(src, &dir, !cut) {
-                Ok(target_name) => pasted.push(target_name),
-                Err(e) => errors.push((name, e)),
-            }
+    /// names; when done, what arrived is selected and what could not be
+    /// pasted reported. Refused (with a dialog) where nothing can be put.
+    fn paste_paths(&mut self, paths: &[String], cut: bool) -> Option<u64> {
+        if !self.ensure_changeable("Can't paste") {
+            return None;
         }
-        let verb = if cut { "moved" } else { "pasted" };
-        vrt::println!("{verb} {} into {}", items(pasted.len()), self.cwd);
-        self.search.clear();
-        self.reload();
-        self.selected = pasted.iter().cloned().collect();
-        if let Some(first) = pasted.first() {
-            self.cursor = self.view_index(first);
-            self.anchor = self.cursor;
-            self.reveal_cursor = true;
-        }
-        let failed = errors.len();
-        self.report("Some items could not be pasted", errors);
-        (pasted, failed)
-    }
-
-    /// Moves (or copies) `src` into the folder `dir` under a free name, and
-    /// returns that name. An item leaving the Trash gets back the name it
-    /// was deleted with, and what the Trash knew of it goes.
-    fn transfer(&mut self, src: &str, dir: &str, copy: bool) -> Result<String, Error> {
-        let base = self.original_name(src);
-        if !copy && parent(src) == trash::FILES {
-            return trash::restore_to(&self.fs, file_name(src), dir, &base).map(|p| file_name(&p).to_string());
-        }
-        let name = self.fs.unique_name(dir, &base);
-        let dst = join(dir, &name);
-        let r = if copy { self.fs.copy(src, &dst) } else { self.fs.move_to(src, &dst) };
-        r.map(|()| name)
+        let job = Job::Transfer { paths: paths.to_vec(), dir: self.cwd.clone(), copy: !cut };
+        self.submit(job, After::Paste { cut })
     }
 
     /// Moves (or copies) dragged items into folder `target`. Dropped on the
@@ -1144,37 +1134,13 @@ impl Files {
             self.error("Can't drop here", format!("{} is part of the read-only system image.", display_path(target)));
             return;
         }
-        let mut errors = Vec::new();
-        let (mut moved, mut copied) = (0, 0);
-        for src in &paths {
-            let name = file_name(src).to_string();
-            if src == target || is_within(target, src) {
-                errors.push((name, Error::IntoItself));
-                continue;
-            }
-            // Items from the read-only image can only be copied.
-            let copy = copy || is_read_only(src);
-            if !copy && parent(src) == target {
-                continue;
-            }
-            match self.transfer(src, target, copy) {
-                Ok(_) if copy => copied += 1,
-                Ok(_) => moved += 1,
-                Err(e) => errors.push((name, e)),
-            }
-            if let Some(t) = &mut self.thumbs {
-                t.invalidate(src);
+        // Items from the read-only image can only be copied.
+        let (fixed, rest): (Vec<String>, Vec<String>) = paths.into_iter().partition(|p| is_read_only(p));
+        for (paths, copy) in [(fixed, true), (rest, copy)] {
+            if !paths.is_empty() {
+                self.submit(Job::Transfer { paths, dir: target.to_string(), copy }, After::Drop);
             }
         }
-        if moved > 0 {
-            vrt::println!("moved {} into {target}", items(moved));
-        }
-        if copied > 0 {
-            vrt::println!("copied {} into {target}", items(copied));
-        }
-        self.selected.clear();
-        self.reload();
-        self.report("Some items could not be moved", errors);
     }
 
     fn show_properties(&mut self, path: &str) {
@@ -1190,10 +1156,9 @@ impl Files {
             }
             _ => None,
         };
-        let (size, contents) = if st.is_dir {
-            let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
-            self.measure(path, &mut files, &mut dirs, &mut bytes, 0);
-            (human_size(bytes), Some(format!("{files} files, {dirs} folders")))
+        // What is in a folder is counted on the operations' thread.
+        let (size, measuring) = if st.is_dir {
+            ("Calculating\u{2026}".to_string(), self.submit(Job::Measure { path: path.to_string() }, After::Show))
         } else {
             (format!("{} ({} bytes)", human_size(st.size), st.size), None)
         };
@@ -1202,7 +1167,8 @@ impl Files {
             name,
             path: path.to_string(),
             size,
-            contents,
+            contents: None,
+            measuring,
             modified: friendly_time(st.modified),
             read_only: st.read_only,
             is_dir: st.is_dir,
@@ -1211,17 +1177,112 @@ impl Files {
         }));
     }
 
-    fn measure(&self, dir: &str, files: &mut u64, dirs: &mut u64, bytes: &mut u64, depth: u32) {
-        if depth > 32 {
-            return;
+    /// Stops measuring a folder for a Properties dialog that closed.
+    fn stop_measuring(&mut self, job: u64) {
+        if let Some(w) = &self.worker {
+            if w.progress().is_some_and(|p| p.id == job) {
+                w.cancel();
+            }
+            w.drop_queued(|j| matches!(j, Job::Measure { .. }));
         }
-        for e in self.fs.read_dir(dir).unwrap_or_default() {
-            if e.is_dir {
-                *dirs += 1;
-                self.measure(&join(dir, &e.name), files, dirs, bytes, depth + 1);
-            } else {
-                *files += 1;
-                *bytes += e.size;
+    }
+
+    /// Takes the jobs the operations' thread finished and shows what they
+    /// did; returns them.
+    fn collect_jobs(&mut self) -> Vec<Finished> {
+        let Some(w) = &self.worker else { return Vec::new() };
+        let done = w.take_finished();
+        for f in &done {
+            let after = match self.jobs.iter().position(|(id, _)| *id == f.id) {
+                Some(i) => self.jobs.remove(i).1,
+                None => After::Show,
+            };
+            self.finished(f, after);
+        }
+        done
+    }
+
+    /// Shows what a job did.
+    fn finished(&mut self, f: &Finished, after: After) {
+        match &f.outcome {
+            Outcome::Transferred { dir, copy, arrived, failed } => {
+                let verb = if *copy { "copied" } else { "moved" };
+                vrt::println!("{verb} {} into {dir}", items(arrived.len()));
+                match after {
+                    After::Paste { cut } => {
+                        if *dir == self.cwd {
+                            self.search.clear();
+                            self.reload();
+                            self.selected = arrived.iter().cloned().collect();
+                            if let Some(first) = arrived.first() {
+                                self.cursor = self.view_index(first);
+                                self.anchor = self.cursor;
+                                self.reveal_cursor = true;
+                            }
+                        } else {
+                            self.refresh();
+                        }
+                        if cut && failed.is_empty() && !f.cancelled {
+                            self.clipboard = None;
+                        }
+                        self.report("Some items could not be pasted", failed.clone());
+                    }
+                    _ => {
+                        self.selected.clear();
+                        self.reload();
+                        self.report("Some items could not be moved", failed.clone());
+                    }
+                }
+            }
+            Outcome::Trashed { moved, no_room, failed } => {
+                if let Some(t) = &mut self.thumbs {
+                    for (_, origin) in moved {
+                        t.invalidate(origin);
+                    }
+                }
+                if !moved.is_empty() {
+                    let from = folder_of(moved.iter().map(|(_, origin)| origin.as_str()));
+                    vrt::println!("moved {} from {from} to the Trash", items(moved.len()));
+                    self.trashed = Some(Trashed { items: moved.clone(), at: vrt::time::now_ns() });
+                }
+                self.after_removal(self.cursor);
+                if !no_room.is_empty() {
+                    self.dialog = Some(Dialog::NoRoomInTrash(no_room.clone()));
+                }
+                self.report("Some items could not be moved to the Trash", failed.clone());
+            }
+            Outcome::Restored { restored, failed } => self.restored(restored, failed.clone()),
+            Outcome::Deleted { paths, failed } => {
+                if let Some(t) = &mut self.thumbs {
+                    for p in paths {
+                        t.invalidate(p);
+                    }
+                }
+                vrt::println!("deleted {} from {}", items(paths.len()), folder_of(paths.iter().map(String::as_str)));
+                self.after_removal(self.cursor);
+                self.report("Some items could not be deleted", failed.clone());
+            }
+            Outcome::Emptied(r) => {
+                match r {
+                    Ok(n) => vrt::println!("emptied the Trash ({})", items(*n)),
+                    Err(e) => self.report("The Trash could not be emptied", vec![("Trash".into(), *e)]),
+                }
+                self.trashed = None;
+                // A folder of the Trash that was shown is gone with it.
+                if self.in_trash() && !self.trash_root() {
+                    self.navigate(trash::FILES, false);
+                }
+                self.after_removal(None);
+            }
+            Outcome::Measured { path, files, folders, bytes } => {
+                if let Some(Dialog::Properties(p)) = &mut self.dialog
+                    && p.path == *path
+                    && p.measuring == Some(f.id)
+                {
+                    p.measuring = None;
+                    p.size = if f.cancelled { "Not known".into() } else { human_size(*bytes) };
+                    p.contents = (!f.cancelled).then(|| format!("{files} files, {folders} folders"));
+                }
             }
         }
     }
@@ -1284,8 +1345,8 @@ impl Files {
                 }
                 keys::A if ctrl => self.select_all(),
                 keys::Z if ctrl => self.undo_trash(),
-                keys::C if ctrl => self.copy_selection(false),
-                keys::X if ctrl => self.copy_selection(true),
+                keys::C if ctrl => self.copy_selection(ui, false),
+                keys::X if ctrl => self.copy_selection(ui, true),
                 keys::V if ctrl => self.paste(),
                 keys::N if ctrl && shift => self.new_folder(),
                 keys::N if ctrl => self.new_document(),
@@ -1354,21 +1415,8 @@ impl Files {
     fn dialogs(&mut self, ui: &mut Ui) {
         let Some(dialog) = self.dialog.take() else { return };
         let keep = match &dialog {
-            Dialog::ConfirmDelete(paths) => {
-                let (title, msg) = if paths.len() == 1 {
-                    let name = self.original_name(&paths[0]);
-                    let what = if self.fs.is_dir(&paths[0]) { "folder and everything in it" } else { "file" };
-                    (
-                        format!("Delete “{name}” permanently?"),
-                        format!("This permanently deletes the {what}. This can't be undone."),
-                    )
-                } else {
-                    (
-                        format!("Delete {} items permanently?", paths.len()),
-                        "This permanently deletes the selected items. This can't be undone.".to_string(),
-                    )
-                };
-                match ui.destructive_box(&title, &msg, &["Delete", "Cancel"]) {
+            Dialog::ConfirmDelete { paths, title, message } => {
+                match ui.destructive_box(title, message, &["Delete", "Cancel"]) {
                     Some(0) => {
                         self.delete(paths.clone());
                         false
@@ -1425,7 +1473,13 @@ impl Files {
                     None => true,
                 }
             }
-            Dialog::Properties(p) => !view::properties_dialog(ui, p),
+            Dialog::Properties(p) => {
+                let closed = view::properties_dialog(ui, p);
+                if let (true, Some(job)) = (closed, p.measuring) {
+                    self.stop_measuring(job);
+                }
+                !closed
+            }
         };
         if keep && self.dialog.is_none() {
             self.dialog = Some(dialog);
@@ -1436,16 +1490,22 @@ impl Files {
 impl App for Files {
     fn update(&mut self, ui: &mut Ui) {
         let now = ui.now();
-        // Refresh when the window regains focus and every few seconds.
+        // What the operations' thread finished.
+        self.collect_jobs();
+        // The folder again when the window comes to the front, and when a
+        // look at it every few seconds says it changed.
         let focused = ui.input.focused;
-        if (focused && !self.was_focused) || now.saturating_sub(self.last_refresh) > 3_000_000_000 {
-            if self.rename.is_none() && self.dialog.is_none() {
+        if self.rename.is_none() && self.dialog.is_none() {
+            if focused && !self.was_focused {
                 self.refresh();
+                self.last_refresh = now;
+            } else if now.saturating_sub(self.last_refresh) >= POLL_NS {
+                self.refresh_if_changed();
+                self.last_refresh = now;
             }
-            self.last_refresh = now;
         }
         self.was_focused = focused;
-        ui.repaint_at(self.last_refresh + 3_000_000_000);
+        ui.repaint_at(self.last_refresh + POLL_NS);
         // The notice of a move to the Trash goes away by itself.
         if let Some(t) = &self.trashed
             && now < t.at + TRASHED_NOTICE_NS
@@ -1484,10 +1544,14 @@ impl App for Files {
     }
 
     fn wait_handles(&self) -> Vec<(vabi::RawHandle, u32)> {
-        match &self.thumbs {
-            Some(t) => vec![(t.event_handle(), vabi::signals::SIGNALED)],
-            None => Vec::new(),
+        let mut handles = Vec::new();
+        if let Some(t) = &self.thumbs {
+            handles.push((t.event_handle(), vabi::signals::SIGNALED));
         }
+        if let Some(w) = &self.worker {
+            handles.push((w.event_handle(), vabi::signals::SIGNALED));
+        }
+        handles
     }
 
     fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {

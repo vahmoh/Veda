@@ -290,3 +290,97 @@ fn long_shaders_preprocess_in_linear_time() {
     assert!(out.tokens.len() >= 4500 * 15);
     assert!(secs < 2.0, "{secs} s to preprocess {} bytes", src.len());
 }
+
+#[test]
+fn a_replacement_is_counted_before_it_is_built() {
+    // An argument of 100,000 tokens used 10,000 times would make a billion
+    // tokens (tens of gigabytes) from 220 kB of source.
+    let src = std::format!("#define F(x) {}\nF({})\n", "x ".repeat(10_000), "a ".repeat(100_000));
+    let t = std::time::Instant::now();
+    fails(&src, "too many tokens");
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn expanded_arguments_count_against_the_budget() {
+    // Each level doubles the argument: 2^24 tokens at the top.
+    let mut src = String::from("#define D(x) x x\n");
+    src.push_str(&"D(".repeat(24));
+    src.push('a');
+    src.push_str(&")".repeat(24));
+    let t = std::time::Instant::now();
+    fails(&src, "too many tokens");
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+    // Under the budget it works.
+    let src = std::format!("#define D(x) x x\n{}a{}", "D(".repeat(4), ")".repeat(4));
+    assert_eq!(ok(&src), ["a"; 16].join(" "));
+}
+
+#[test]
+fn long_chains_of_macros_expand_in_linear_time() {
+    // Each macro expands to the next: 200,000 expansions are being
+    // rescanned at the end. Telling whether a name is one of them must not
+    // look through all of them (twenty billion steps).
+    let n = 200_000;
+    let mut src = String::new();
+    for i in 0..n {
+        src.push_str(&std::format!("#define M{i} M{}\n", i + 1));
+    }
+    src.push_str(&std::format!("#define M{n} M0 end\nM0\n"));
+    let t = std::time::Instant::now();
+    // The chain comes back to M0, which is not expanded again.
+    assert_eq!(ok(&src), "M0 end");
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn macros_with_many_parameters_are_linear() {
+    // Duplicate parameters and parameter uses are found by lookup, not by
+    // comparing every pair (tens of billions of steps for 200,000
+    // parameters).
+    let n = 200_000;
+    let params: Vec<String> = (0..n).map(|i| std::format!("p{i}")).collect();
+    let args: Vec<String> = (0..n).map(|i| std::format!("{}", i % 10)).collect();
+    let src = std::format!("#define F({}) {}\nF({})\n", params.join(","), params.join(" "), args.join(","));
+    let t = std::time::Instant::now();
+    let out = ok(&src);
+    assert_eq!(out.len(), 2 * n - 1);
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+    fails("#define F(a, b, a) a\n", "duplicate macro parameter 'a'");
+}
+
+#[test]
+fn deep_if_expressions_are_errors_not_crashes() {
+    for (open, close) in [("- ", ""), ("!", ""), ("(", ")"), ("~(", ")")] {
+        let src = std::format!("#if {}1{}\n#endif\n", open.repeat(100_000), close.repeat(100_000));
+        let log = super::on_small_stack(move || run(&src).1);
+        assert!(log.contains("nests parentheses or unary operators too deeply"), "{log}");
+    }
+    // Within the limit, nesting works.
+    assert_eq!(ok(&std::format!("#if {}1{}\nyes\n#endif\n", "(".repeat(30), ")".repeat(30))), "yes");
+    assert_eq!(ok(&std::format!("#line {}5\nx\n", "- - ".repeat(10))), "x");
+}
+
+#[test]
+fn version_follows_any_amount_of_comments() {
+    // A licence of 5 kB in a string of its own, then `#version 300 es`.
+    let licence = std::format!("/*\n{}*/\n", "This file is distributed under a licence.\n".repeat(120));
+    assert!(licence.len() > 4096);
+    let (_, log, out) = run_strings(&[&licence, "#version 300 es\nuint u;\n"]);
+    assert!(log.is_empty(), "{log}");
+    assert_eq!(out.version, Version::V300);
+    // Line comments, in the same string, longer still.
+    let comments = "// a comment that goes on for a while\n".repeat(400);
+    let (_, log, out) = run_strings(&[&std::format!("{comments}\n  #  version 300 es\n")]);
+    assert!(log.is_empty(), "{log}");
+    assert_eq!(out.version, Version::V300);
+    // A comment cut short, or other tokens first: no version (1.00).
+    let (_, _, out) = run_strings(&["/* not closed #version 300 es"]);
+    assert_eq!(out.version, Version::V100);
+    let (_, log, out) = run_strings(&["x\n#version 300 es\n"]);
+    assert_eq!(out.version, Version::V100);
+    assert!(log.contains("#version must come before anything else"), "{log}");
+    // A number too large for any version.
+    let (_, _, out) = run_strings(&["#version 99999999999999999999 es\n"]);
+    assert_eq!(out.version, Version::V100);
+}

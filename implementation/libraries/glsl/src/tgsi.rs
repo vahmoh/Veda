@@ -37,7 +37,7 @@
 //! run time instead, by adding it to a uniform that is always zero (the
 //! slot after the program's own, which the renderer fills).
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -46,7 +46,7 @@ use core::fmt::Write;
 
 use crate::Stage;
 use crate::builtins::TexLod;
-use crate::ir::{self, Block, BuiltinIn, BuiltinOut, Func, InstId, InstOp, Jump, Node, TexOp, Value};
+use crate::ir::{self, Block, BuiltinIn, BuiltinOut, CopyStep, Func, InstId, InstOp, Jump, Node, TexOp, Value};
 use crate::link::{Interpolation, Linked};
 use crate::ops::Op;
 use crate::types::{Dim, Sampler, Scalar};
@@ -91,8 +91,7 @@ pub fn translate(f: &Func, linked: &Linked, options: &Options) -> Shader {
     let mut t = Translator::new(f, linked, options);
     t.scan();
     t.place();
-    let body = f.body.clone();
-    t.list(&body, &Ctx { end: End::Top, lp: None });
+    t.list(&f.body, &Ctx { end: End::Top, lp: None });
     t.finish()
 }
 
@@ -114,6 +113,9 @@ enum Src {
     /// A uniform block's component: (block, vec4, component).
     Ubo(u32, u32, u8),
 }
+
+/// The most levels of nesting the text's indentation shows.
+const MAX_INDENT: usize = 16;
 
 const SWIZZLE: [&str; 4] = ["xxxx", "yyyy", "zzzz", "wwww"];
 const MASK: [&str; 4] = ["x", "y", "z", "w"];
@@ -189,7 +191,8 @@ struct Translator<'a> {
     f: &'a Func,
     linked: &'a Linked,
     options: &'a Options,
-    preds: Vec<Vec<Block>>,
+    /// Each block's successors ([`ir::successors`]).
+    succs: Vec<Vec<(Block, usize)>>,
     /// Where each value is, once placed.
     loc: Vec<Option<Src>>,
     /// Temporary components allocated.
@@ -215,7 +218,7 @@ struct Translator<'a> {
     outputs: Vec<(u32, String)>,
     output_regs: BTreeMap<OutKey, u32>,
     /// Vertex outputs the code stores, by (register, component).
-    stored: Vec<(u32, u8)>,
+    stored: BTreeSet<(u32, u8)>,
     uses_address: bool,
     /// Whether code reads the always-zero uniform.
     uses_zero: bool,
@@ -238,7 +241,7 @@ impl<'a> Translator<'a> {
             f,
             linked,
             options,
-            preds: f.preds(),
+            succs: ir::successors(&f.preds()),
             loc: vec![None; f.values.len()],
             temps: 0,
             imms: Vec::new(),
@@ -259,7 +262,7 @@ impl<'a> Translator<'a> {
             samplers: BTreeMap::new(),
             outputs: Vec::new(),
             output_regs: BTreeMap::new(),
-            stored: Vec::new(),
+            stored: BTreeSet::new(),
             uses_address: false,
             uses_zero: false,
             broadcast: false,
@@ -289,20 +292,22 @@ impl<'a> Translator<'a> {
                         }
                     }
                     InstOp::LoadBuiltin(bi) => builtins.push(*bi),
-                    InstOp::LoadUniform { slot, .. } => self.uniform_slots = self.uniform_slots.max(slot + 1),
+                    InstOp::LoadUniform { slot, .. } => {
+                        self.uniform_slots = self.uniform_slots.max(slot.saturating_add(1))
+                    }
                     InstOp::LoadUniformIndexed { base, stride, count, .. } => {
-                        let last = base + stride * count.saturating_sub(1);
-                        self.uniform_slots = self.uniform_slots.max(last + 1);
+                        let last = stride.saturating_mul(count.saturating_sub(1)).saturating_add(*base);
+                        self.uniform_slots = self.uniform_slots.max(last.saturating_add(1));
                     }
                     InstOp::LoadBlock { block, .. } => self.blocks.push(*block),
                     InstOp::Tex(op) => {
                         for k in 0..if op.dynamic { op.count } else { 1 } {
-                            self.samplers.insert(op.index + k, op.sampler);
+                            self.samplers.insert(op.index.saturating_add(k), op.sampler);
                         }
                     }
                     InstOp::TexSize { sampler, index, dynamic, count } => {
                         for k in 0..if *dynamic { *count } else { 1 } {
-                            self.samplers.insert(index + k, *sampler);
+                            self.samplers.insert(index.saturating_add(k), *sampler);
                         }
                     }
                     _ => {}
@@ -483,7 +488,9 @@ impl<'a> Translator<'a> {
     // ---- Emission ---------------------------------------------------------
 
     fn line(&mut self, s: &str) {
-        for _ in 0..self.depth {
+        // Indented to show the nesting, up to a point: the text should grow
+        // with the code, not with the code times its depth.
+        for _ in 0..self.depth.min(MAX_INDENT) {
             self.code.push_str("  ");
         }
         self.code.push_str(s);
@@ -574,47 +581,16 @@ impl<'a> Translator<'a> {
     // ---- Control flow -----------------------------------------------------
 
     /// Emits a list; returns whether a `continue` in it may have run (so
-    /// that what follows in the loop body must be skipped).
+    /// that what follows in the loop body must be skipped). It recurses once
+    /// per level of nesting, so a block's work is done out of line.
     fn list(&mut self, list: &[Node], ctx: &Ctx) -> bool {
         let mut continued = false;
-        let mut guards = 0;
+        // Whether a guard skipping the rest of the list is open.
+        let mut guarded = false;
         for (k, n) in list.iter().enumerate() {
             match n {
                 Node::Block(b) => {
-                    for &i in &self.f.blocks[b.0 as usize].insts.clone() {
-                        self.inst(i);
-                    }
-                    match self.f.blocks[b.0 as usize].jump {
-                        Some(Jump::Break) => {
-                            if let Some(lp) = ctx.lp {
-                                self.phi_copies(*b, lp.exit);
-                            }
-                            self.line("BRK");
-                        }
-                        Some(Jump::Continue) => {
-                            if let Some(lp) = ctx.lp {
-                                self.phi_copies(*b, lp.header);
-                                if let Some(flag) = lp.flag {
-                                    let on = self.imm(!0);
-                                    self.mov(flag, on);
-                                }
-                            }
-                            continued = true;
-                        }
-                        Some(Jump::Discard) => self.line("KILL"),
-                        None => match list.get(k + 1) {
-                            Some(Node::Loop(l)) => {
-                                if let Some(h) = ir::first_block(&l.body) {
-                                    self.phi_copies(*b, h);
-                                }
-                            }
-                            Some(_) => {}
-                            None => match ctx.end {
-                                End::Merge(m) | End::Header(m) => self.phi_copies(*b, m),
-                                End::Top => {}
-                            },
-                        },
-                    }
+                    continued |= self.block(*b, list.get(k + 1), ctx);
                     if self.f.blocks[b.0 as usize].jump.is_some() {
                         // Nothing after a jump runs.
                         break;
@@ -637,10 +613,17 @@ impl<'a> Translator<'a> {
                         if k + 1 < list.len()
                             && let Some(flag) = ctx.lp.and_then(|lp| lp.flag)
                         {
-                            // Skip the rest of this list once continued.
+                            // Skip the rest of this list once continued. The
+                            // flag stays set once set, so a guard can end
+                            // where the next begins: guards in sequence skip
+                            // what guards nested in one another would,
+                            // without nesting deeper for every `continue`.
+                            if guarded {
+                                self.close("ENDIF");
+                            }
                             self.open(&format!("UIF {}", Src::Temp(flag).text()));
                             self.reopen("ELSE");
-                            guards += 1;
+                            guarded = true;
                         }
                     }
                 }
@@ -662,19 +645,61 @@ impl<'a> Translator<'a> {
                 }
             }
         }
-        for _ in 0..guards {
+        if guarded {
             self.close("ENDIF");
         }
         continued
     }
 
+    /// A block's instructions, its copies into its successors' φs and its
+    /// jump; whether the jump is a `continue`.
+    #[inline(never)]
+    fn block(&mut self, b: Block, next: Option<&Node>, ctx: &Ctx) -> bool {
+        let f = self.f;
+        for &i in &f.blocks[b.0 as usize].insts {
+            self.inst(i);
+        }
+        match f.blocks[b.0 as usize].jump {
+            Some(Jump::Break) => {
+                if let Some(lp) = ctx.lp {
+                    self.phi_copies(b, lp.exit);
+                }
+                self.line("BRK");
+            }
+            Some(Jump::Continue) => {
+                if let Some(lp) = ctx.lp {
+                    self.phi_copies(b, lp.header);
+                    if let Some(flag) = lp.flag {
+                        let on = self.imm(!0);
+                        self.mov(flag, on);
+                    }
+                }
+                return true;
+            }
+            Some(Jump::Discard) => self.line("KILL"),
+            None => match next {
+                Some(Node::Loop(l)) => {
+                    if let Some(h) = ir::first_block(&l.body) {
+                        self.phi_copies(b, h);
+                    }
+                }
+                Some(_) => {}
+                None => match ctx.end {
+                    End::Merge(m) | End::Header(m) => self.phi_copies(b, m),
+                    End::Top => {}
+                },
+            },
+        }
+        false
+    }
+
     /// Copies into the φs of `succ` for the edge from `from`, ordered so
     /// that no source is overwritten before it is read.
     fn phi_copies(&mut self, from: Block, succ: Block) {
-        let Some(k) = self.preds.get(succ.0 as usize).and_then(|p| p.iter().position(|&x| x == from)) else {
+        let Some(k) = ir::edge_index(&self.succs, from, succ) else {
             return;
         };
-        let mut pending: Vec<(u32, Src)> = Vec::new();
+        let mut pending: Vec<(Src, Src)> = Vec::new();
         for &i in &self.f.blocks[succ.0 as usize].insts {
             let inst = self.f.inst(i);
             if inst.op != InstOp::Phi {
@@ -684,37 +709,32 @@ impl<'a> Translator<'a> {
                 let d = self.temp_of(inst.results[0]);
                 let s = self.at(a);
                 if s != Src::Temp(d) {
-                    pending.push((d, s));
+                    pending.push((Src::Temp(d), s));
                 }
             }
         }
-        while !pending.is_empty() {
-            match pending.iter().position(|&(d, _)| !pending.iter().any(|&(_, s)| s == Src::Temp(d))) {
-                Some(i) => {
-                    let (d, s) = pending.remove(i);
-                    self.mov(d, s);
-                }
-                None => {
-                    // A cycle: save one destination's value first.
-                    let (d, _) = pending[0];
-                    let t = self.fresh();
-                    self.mov(t, Src::Temp(d));
-                    for c in &mut pending {
-                        if c.1 == Src::Temp(d) {
-                            c.1 = Src::Temp(t);
-                        }
-                    }
-                }
+        ir::sequence_copies(&pending, |step| match step {
+            CopyStep::Copy(Src::Temp(d), s) => {
+                self.mov(d, s);
+                Src::Temp(d)
             }
-        }
+            CopyStep::Copy(d, _) => d,
+            CopyStep::Save(d) => {
+                // A cycle: save one destination's value first.
+                let t = self.fresh();
+                self.mov(t, d);
+                Src::Temp(t)
+            }
+        });
     }
 
     // ---- Instructions -----------------------------------------------------
 
     fn inst(&mut self, id: InstId) {
-        let inst = self.f.inst(id).clone();
+        let f = self.f;
+        let inst = f.inst(id);
         match &inst.op {
-            InstOp::Const(_) | InstOp::Phi | InstOp::Nop | InstOp::LoadUniform { .. } | InstOp::LoadInput { .. } => {}
+            InstOp::Const(_) | InstOp::Phi | InstOp::LoadUniform { .. } | InstOp::LoadInput { .. } => {}
             InstOp::LoadBlock { .. } if inst.args.is_empty() => {}
             InstOp::LoadBuiltin(BuiltinIn::FrontFacing) => {
                 // TGSI's face is positive for front faces.
@@ -783,15 +803,16 @@ impl<'a> Translator<'a> {
         let Some(&r) = self.output_regs.get(&key) else { return };
         let s = self.at(v);
         self.copy_to(&format!("OUT[{r}].{}", MASK[comp as usize]), s);
-        self.stored.push((r, comp));
+        self.stored.insert((r, comp));
     }
 
-    /// The index argument clamped to `0..count`.
+    /// The index argument (a signed int) clamped to `0..count`.
     fn clamped_index(&mut self, v: Value, count: u32) -> Src {
         let i = self.at(v);
         if let Src::Imm(c) = i {
-            let k = (self.imms[c as usize] as i32).clamp(0, count.max(1) as i32 - 1);
-            return self.imm(k as u32);
+            let k = self.imms[c as usize];
+            let k = if (k as i32) < 0 { 0 } else { k.min(count.saturating_sub(1)) };
+            return self.imm(k);
         }
         let zero = self.imm(0).text();
         let last = self.imm(count.max(1) - 1).text();
@@ -1454,11 +1475,6 @@ impl<'a> Translator<'a> {
     }
 }
 
-/// Whether 32 bits survive the host's compiler as a float constant: a
-/// normal float, or +0. virglrenderer keeps every temporary as a float,
-/// and a compiler folding constants may flush the others (small integers
-/// read as floats are denormals) or canonicalise them (NaN payloads, such
-/// as `true`, all ones).
 /// Gives each `IF`, `UIF` and `ELSE` (one instruction a line) the
 /// instruction where execution goes on when no invocation takes it: the
 /// matching `ELSE` or `ENDIF`, as `:n`. TGSI's interpreter (softpipe's)
@@ -1496,6 +1512,11 @@ fn label_branches(code: &str) -> String {
     out
 }
 
+/// Whether 32 bits survive the host's compiler as a float constant: a
+/// normal float, or +0. virglrenderer keeps every temporary as a float,
+/// and a compiler folding constants may flush the others (small integers
+/// read as floats are denormals) or canonicalise them (NaN payloads, such
+/// as `true`, all ones).
 fn float_safe(bits: u32) -> bool {
     let e = bits & 0x7F80_0000;
     bits == 0 || (e != 0 && e != 0x7F80_0000)

@@ -9,7 +9,6 @@
 //! the sun's colour; the exposure scales everything before tone mapping.
 
 use crate::prelude::*;
-use crate::render::post::Grade;
 
 /// When a chase happens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,11 +18,53 @@ pub enum TimeOfDay {
     Night,
 }
 
+impl TimeOfDay {
+    pub const ALL: [TimeOfDay; 3] = [TimeOfDay::Day, TimeOfDay::Sunset, TimeOfDay::Night];
+
+    /// As the menus show it.
+    pub fn name(self) -> &'static str {
+        match self {
+            TimeOfDay::Day => "Day",
+            TimeOfDay::Sunset => "Sunset",
+            TimeOfDay::Night => "Night",
+        }
+    }
+
+    /// As the voice agent says it.
+    pub fn key(self) -> &'static str {
+        match self {
+            TimeOfDay::Day => "day",
+            TimeOfDay::Sunset => "sunset",
+            TimeOfDay::Night => "night",
+        }
+    }
+}
+
 /// What the sky is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Weather {
     Clear,
     Rain,
+}
+
+impl Weather {
+    pub const ALL: [Weather; 2] = [Weather::Clear, Weather::Rain];
+
+    /// As the menus show it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Weather::Clear => "Clear",
+            Weather::Rain => "Rain",
+        }
+    }
+
+    /// As the voice agent says it.
+    pub fn key(self) -> &'static str {
+        match self {
+            Weather::Clear => "clear",
+            Weather::Rain => "rain",
+        }
+    }
 }
 
 /// How the sky's cube map is painted.
@@ -75,44 +116,6 @@ pub struct Environment {
 }
 
 impl Environment {
-    /// How the frame is graded after it is drawn.
-    pub fn grade(&self) -> Grade {
-        let mut g = match self.time {
-            TimeOfDay::Day => Grade {
-                exposure: self.exposure,
-                bloom: 0.1,
-                saturation: 1.1,
-                contrast: 1.05,
-                lift: [0.002, 0.003, 0.006],
-                gain: [1.02, 1.0, 0.97],
-                vignette: 0.22,
-            },
-            TimeOfDay::Sunset => Grade {
-                exposure: self.exposure,
-                bloom: 0.18,
-                saturation: 1.15,
-                contrast: 1.06,
-                lift: [0.004, 0.002, 0.006],
-                gain: [1.08, 0.99, 0.88],
-                vignette: 0.28,
-            },
-            TimeOfDay::Night => Grade {
-                exposure: self.exposure,
-                bloom: 0.3,
-                saturation: 1.12,
-                contrast: 1.08,
-                lift: [0.003, 0.005, 0.012],
-                gain: [1.0, 0.98, 1.04],
-                vignette: 0.32,
-            },
-        };
-        if self.weather == Weather::Rain {
-            g.saturation *= 0.85;
-            g.bloom *= 1.3;
-        }
-        g
-    }
-
     /// The look of `time` in `weather`.
     pub fn new(time: TimeOfDay, weather: Weather) -> Environment {
         let mut e = match time {

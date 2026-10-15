@@ -22,7 +22,6 @@ vui = { workspace = true }
 vgfx = { workspace = true }
 libm = { workspace = true }
 vfiles = { workspace = true }
-serde_json = { workspace = true }
 vaudio = { workspace = true }
 videos-core = { path = "core" }
 

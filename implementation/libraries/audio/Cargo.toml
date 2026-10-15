@@ -14,7 +14,6 @@ num-traits = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
-rand_distr = { workspace = true }
 rand_pcg = { workspace = true }
 
 [lints]

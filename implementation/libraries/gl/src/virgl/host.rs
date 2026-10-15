@@ -28,6 +28,7 @@ use std::vec::Vec;
 use std::{println, vec};
 
 use crate::backend::OutOfMemory;
+use crate::virgl::transport::HostMemory;
 use crate::virgl::{Lost, ResourceArgs, Transport};
 
 /// A library loaded into the process.
@@ -41,18 +42,28 @@ unsafe extern "C" {
 
 /// Loads a library: a path, or a name the dynamic linker looks up
 /// (`libEGL.so.1`). Null if it is not there.
+///
+/// # Safety
+///
+/// Loading a library runs its initialisers: the caller trusts the library.
 pub(super) unsafe fn load(name: &str) -> Module {
     let c = CString::new(name).unwrap();
-    // SAFETY: a NUL-terminated name; the caller trusts the library.
-    // RTLD_NOW binds every function the library calls at once: one missing
-    // fails here, not at its first call.
+    // SAFETY: a NUL-terminated name; the library is trusted, as the caller
+    // promises. RTLD_NOW binds every function the library calls at once:
+    // one missing fails here, not at its first call.
     unsafe { dlopen(c.as_ptr(), 2) }
 }
 
 /// A function of a loaded library.
+///
+/// # Safety
+///
+/// `m` is a library [`load`] loaded, and `T` the function pointer type of
+/// the symbol `name` as the library defines it.
 pub(super) unsafe fn sym<T: Copy>(m: Module, name: &str) -> T {
     let c = CString::new(name).unwrap();
-    // SAFETY: the caller gives the symbol's real type.
+    // SAFETY: a loaded library and a NUL-terminated name; `T` is the
+    // symbol's type, as the caller promises, and as large as a pointer.
     unsafe {
         let p = dlsym(m, c.as_ptr());
         assert!(!p.is_null(), "{name} is missing");
@@ -254,7 +265,14 @@ fn call<R: Send + 'static>(f: impl FnOnce(&mut Gpu) -> R + Send + 'static) -> R 
 /// Sets up EGL on the display `dpy` of the library `lib`, with a current
 /// context, as QEMU does: for OpenGL ES if `es`, otherwise for desktop
 /// OpenGL.
+///
+/// # Safety
+///
+/// `lib` is EGL's library, `dpy` null or one of its displays; on the GPU
+/// thread, which the context is made current on.
 unsafe fn start_egl_on(lib: Module, dpy: Dpy, es: bool) -> Option<Egl> {
+    // SAFETY: EGL's functions as its headers declare them, called with the
+    // display (checked not to be null) and arrays ending in EGL_NONE.
     unsafe {
         let initialize: unsafe extern "C" fn(Dpy, *mut i32, *mut i32) -> u32 = sym(lib, "eglInitialize");
         let bind_api: unsafe extern "C" fn(u32) -> u32 = sym(lib, "eglBindAPI");
@@ -325,9 +343,17 @@ fn render_node() -> Option<std::fs::File> {
 
 /// Sets up EGL on a GPU, with a current context, as QEMU's headless
 /// display does: on its render node, through GBM.
+///
+/// # Safety
+///
+/// On the GPU thread (see [`start_egl_on`]), which trusts the system's EGL
+/// and GBM libraries.
 unsafe fn start_egl(es: bool) -> Option<Egl> {
     use std::os::fd::IntoRawFd;
     let node = render_node()?;
+    // SAFETY: the system's libraries, trusted as the caller promises, and
+    // their functions as their headers declare them; GBM keeps the node's
+    // descriptor for as long as the process runs.
     unsafe {
         let gbm_lib = load("libgbm.so.1");
         let egl_lib = load("libEGL.so.1");
@@ -349,7 +375,12 @@ unsafe fn start_egl(es: bool) -> Option<Egl> {
 }
 
 /// Loads virglrenderer and sets up the OpenGL it renders on.
+///
+/// # Safety
+///
+/// As for [`start_egl`]; virglrenderer's library is trusted too.
 unsafe fn open_renderer() -> Option<(Module, Egl)> {
+    // SAFETY: as the caller promises.
     unsafe {
         let vr = load("libvirglrenderer.so.1");
         if vr.is_null() {
@@ -361,7 +392,16 @@ unsafe fn open_renderer() -> Option<(Module, Egl)> {
     }
 }
 
+/// Starts virglrenderer on the OpenGL of [`open_renderer`].
+///
+/// # Safety
+///
+/// Once, on the GPU thread, which every call of virglrenderer's is made on
+/// from then on.
 unsafe fn start() -> Option<Gpu> {
+    // SAFETY: virglrenderer's functions as its header declares them: its
+    // callbacks are this module's (leaked, so that they outlive it) and
+    // read `EGL`, which is set before it starts and never changed again.
     unsafe {
         let (vr, egl) = open_renderer()?;
         EGL = Some(egl);
@@ -426,7 +466,9 @@ unsafe impl Send for SendPtr {}
 pub struct HostTransport {
     ctx: u32,
     caps: Vec<u8>,
-    shared: Box<[u128]>,
+    /// What the GPU thread reads and writes, through `SendPtr`s: freed
+    /// after `drop` has destroyed the context.
+    shared: HostMemory,
     resources: Vec<u32>,
 }
 
@@ -444,19 +486,19 @@ impl HostTransport {
             let r = unsafe { (g.v.context_create)(ctx, 8, name.as_ptr()) };
             (if r == 0 { ctx } else { 0 }, g.caps.clone())
         });
-        if ctx == 0 {
+        let shared = HostMemory::new(SHARED_BYTES);
+        let Some(shared) = shared.filter(|_| ctx != 0) else {
+            if ctx != 0 {
+                // SAFETY: the context just made, which nothing else uses.
+                call(move |g| unsafe { (g.v.context_destroy)(ctx) });
+            }
             return None;
-        }
-        Some(HostTransport {
-            ctx,
-            caps,
-            shared: vec![0u128; SHARED_BYTES / 16].into_boxed_slice(),
-            resources: Vec::new(),
-        })
+        };
+        Some(HostTransport { ctx, caps, shared, resources: Vec::new() })
     }
 
     fn base(&self) -> SendPtr {
-        SendPtr(self.shared.as_ptr() as *mut u8)
+        SendPtr(self.shared.ptr())
     }
 }
 
@@ -466,7 +508,7 @@ impl Transport for HostTransport {
     }
 
     fn shared(&self) -> (*mut u8, usize) {
-        (self.shared.as_ptr() as *mut u8, SHARED_BYTES)
+        (self.shared.ptr(), self.shared.len())
     }
 
     fn create_resource(&mut self, args: &ResourceArgs, backing: Option<Range<usize>>) -> Result<u32, OutOfMemory> {
@@ -557,11 +599,15 @@ impl Transport for HostTransport {
         done()
     }
 
-    fn wait(&mut self, fence: u64) -> Result<(), Lost> {
+    fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost> {
+        let start = std::time::Instant::now();
         while !self.signaled(fence) {
+            if start.elapsed().as_nanos() >= u128::from(timeout_ns) {
+                return Ok(false);
+            }
             std::thread::yield_now();
         }
-        Ok(())
+        Ok(true)
     }
 }
 

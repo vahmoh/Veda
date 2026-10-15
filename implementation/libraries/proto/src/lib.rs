@@ -20,11 +20,13 @@ pub mod fs;
 pub mod gpu;
 pub mod init;
 pub mod input;
+pub mod instance;
 pub mod media;
 pub mod net;
 pub mod netring;
 pub mod pci;
 pub mod shell;
+pub mod startup;
 pub mod tty;
 pub mod wlan;
 

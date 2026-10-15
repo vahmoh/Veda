@@ -13,6 +13,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 
+use apps_common::format::{cstr, uptime};
 use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, json};
 use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 
@@ -29,11 +30,6 @@ struct About {
     info: vabi::SystemInfo,
     last_refresh: u64,
     show_details: bool,
-}
-
-fn cstr(b: &[u8]) -> String {
-    let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-    String::from_utf8_lossy(&b[..n]).trim().into()
 }
 
 impl About {
@@ -74,7 +70,7 @@ impl App for About {
             (Icon::Cpu, "Processor", cstr(&self.info.cpu_brand)),
             (Icon::Grid, "Cores", format!("{} online", self.info.cpu_count)),
             (Icon::Chart, "Memory", self.memory()),
-            (Icon::Clock, "Uptime", fmt_uptime(self.info.uptime_ns)),
+            (Icon::Clock, "Uptime", uptime(self.info.uptime_ns)),
             (
                 Icon::List,
                 "Processes",
@@ -121,7 +117,7 @@ impl App for About {
             "processor": cstr(&i.cpu_brand),
             "cores": i.cpu_count,
             "memory": self.memory(),
-            "uptime": fmt_uptime(i.uptime_ns),
+            "uptime": uptime(i.uptime_ns),
             "processes": i.process_count,
             "threads": i.thread_count,
             "licences_shown": self.show_details,
@@ -146,12 +142,6 @@ impl App for About {
             other => Err(format!("About Veda has no action called {other}")),
         }
     }
-}
-
-fn fmt_uptime(ns: u64) -> String {
-    let s = ns / 1_000_000_000;
-    let (h, m, s) = (s / 3600, (s / 60) % 60, s % 60);
-    if h > 0 { format!("{h} h {m} min") } else { format!("{m} min {s} s") }
 }
 
 fn main() -> i32 {

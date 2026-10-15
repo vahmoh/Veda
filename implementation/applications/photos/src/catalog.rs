@@ -8,14 +8,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use vfiles::kind::is_image;
-use vfiles::path::{join, natural_cmp};
+use vfiles::path::{HOME, join, natural_cmp};
 use vproto::fs::FsError;
 use vproto::vfs;
 
 use crate::loader::{Meta, Thumbs};
 
-/// The default folder.
-pub const PICTURES: &str = "/home/user/Pictures";
+/// The default folder: `~/Pictures`.
+pub fn pictures_dir() -> String {
+    join(HOME, "Pictures")
+}
 
 /// Thumbnail state of an entry.
 pub enum Thumb {
@@ -70,7 +72,7 @@ pub fn split(path: &str) -> (String, String) {
     match path.rsplit_once('/') {
         Some(("", name)) => ("/".into(), name.into()),
         Some((dir, name)) => (dir.into(), name.into()),
-        None => (PICTURES.into(), path.into()),
+        None => (pictures_dir(), path.into()),
     }
 }
 

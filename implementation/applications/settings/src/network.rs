@@ -38,21 +38,12 @@ fn duration(s: u32) -> String {
     }
 }
 
-fn mac(m: &[u8; 6]) -> String {
-    format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
-}
-
 fn bytes(n: u64) -> String {
     match n {
         0..=9_999 => format!("{n} B"),
         10_000..=9_999_999 => format!("{} KB", n / 1000),
         _ => format!("{} MB", n / 1_000_000),
     }
-}
-
-fn passphrase_ok(p: &str) -> bool {
-    let printable = p.bytes().all(|b| (0x20..=0x7E).contains(&b));
-    (printable && (8..=63).contains(&p.len())) || (p.len() == 64 && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 fn capitalize(s: String) -> String {
@@ -157,9 +148,11 @@ impl NetworkPage {
         self.refresh_at
     }
 
-    fn connect(&mut self, ssid: Vec<u8>, password: Option<String>) {
+    /// Joins the network `ssid` the user chose, of `security` (so that the
+    /// password never goes to an open impostor of the same name).
+    fn connect(&mut self, ssid: Vec<u8>, security: Security, password: Option<String>) {
         self.error = None;
-        let opts = wifi::ConnectOptions::default();
+        let opts = wifi::ConnectOptions { security: Some(security), ..wifi::ConnectOptions::default() };
         if let Err(e) = wifi::connect_with(&ssid, password.as_deref(), &opts) {
             self.error = Some((ssid, capitalize(format!("{e}"))));
         }
@@ -262,7 +255,7 @@ impl NetworkPage {
                     "Channel",
                     format!("{} ({})", s.channel, if s.band == wifi::Band::Ghz5 { "5 GHz" } else { "2.4 GHz" }),
                 ),
-                ("Access point", mac(&s.bssid)),
+                ("Access point", vnet::format_mac(&s.bssid)),
                 ("Connected for", duration(s.connected_s)),
             ];
             for (label, value) in rows {
@@ -368,7 +361,7 @@ impl NetworkPage {
                         ui.repaint();
                         self.password.clear();
                     } else {
-                        self.connect(n.ssid.0.clone(), None);
+                        self.connect(n.ssid.0.clone(), n.security, None);
                     }
                 }
             }
@@ -392,12 +385,12 @@ impl NetworkPage {
                     self.reveal = !self.reveal;
                     ui.repaint();
                 }
-                let valid = passphrase_ok(&self.password);
+                let valid = vnet::wifi::valid_passphrase(&self.password);
                 let go =
                     ui.button_full(Rect::new(field.right() + 76, ry + 4, 110, 34), None, "Join", ButtonKind::Primary);
                 if (go || resp.submitted) && valid {
                     let p = core::mem::take(&mut self.password);
-                    self.connect(n.ssid.0.clone(), Some(p));
+                    self.connect(n.ssid.0.clone(), n.security, Some(p));
                 }
                 let msg = match &self.error {
                     Some((s, e)) if *s == n.ssid.0 => e.clone(),
@@ -485,7 +478,7 @@ impl NetworkPage {
             let mut ry = card.y + 52;
             Self::row(ui, ix, ry, iw, "Link", if i.link_up { "Up" } else { "Down" });
             ry += 26;
-            Self::row(ui, ix, ry, iw, "Hardware address", &mac(&i.mac));
+            Self::row(ui, ix, ry, iw, "Hardware address", &vnet::format_mac(&i.mac));
             ry += 26;
             for a in &i.addresses {
                 let label = if a.address.is_ipv4() { "IPv4 address" } else { "IPv6 address" };

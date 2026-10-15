@@ -53,8 +53,6 @@ pub struct SoftProgram {
     /// Vertex shader inputs: each attribute location read and the
     /// registers of its components.
     pub attribs: Vec<(u32, [Option<Reg>; 4])>,
-    /// Attribute locations read (bit mask).
-    pub attrib_mask: u32,
     pub vertex_id: Option<Reg>,
     pub instance_id: Option<Reg>,
     pub position: [Option<Reg>; 4],
@@ -103,7 +101,6 @@ impl SoftProgram {
         let fs = interp::compile(&program.fragment);
         let l = &program.linked;
         let mut attribs: Vec<(u32, [Option<Reg>; 4])> = Vec::new();
-        let mut attrib_mask = 0u32;
         for &(i, r) in &vs.inputs {
             if let Input::Value { slot, comp } = i {
                 match attribs.iter_mut().find(|(l, _)| *l == slot) {
@@ -113,9 +110,6 @@ impl SoftProgram {
                         regs[comp as usize & 3] = Some(r);
                         attribs.push((slot, regs));
                     }
-                }
-                if slot < 32 {
-                    attrib_mask |= 1 << slot;
                 }
             }
         }
@@ -193,7 +187,6 @@ impl SoftProgram {
             vs,
             fs,
             attribs,
-            attrib_mask,
             vertex_id,
             instance_id,
             position,

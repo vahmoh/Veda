@@ -43,6 +43,9 @@ pub struct ApConfig {
     pub h2e: bool,
     /// Beacon interval in time units of 1.024 ms.
     pub beacon_interval: u16,
+    /// Misbehave: leave the RSN Extension element out of message 3 (a
+    /// downgrade the station must notice).
+    pub strip_rsnxe: bool,
 }
 
 impl core::fmt::Debug for ApConfig {
@@ -204,17 +207,6 @@ impl AccessPoint {
         self.mgmt_to(mgmt::BEACON, &frame::BROADCAST, &body)
     }
 
-    /// When [`AccessPoint::tick`] should run next.
-    pub fn next_deadline(&self) -> u64 {
-        let hs = self
-            .stations
-            .values()
-            .filter(|s| s.auth.is_some() && s.state == StaState::Associated)
-            .map(|s| s.hs_deadline)
-            .min();
-        hs.map_or(self.next_beacon, |h| h.min(self.next_beacon))
-    }
-
     /// Beacons and handshake retransmissions.
     pub fn tick(&mut self, now: u64) -> Vec<ApAction> {
         let mut out = Vec::new();
@@ -286,6 +278,21 @@ impl AccessPoint {
             }
             _ => Some(f),
         }
+    }
+
+    /// Starts a new 4-way handshake with an authorized station: new
+    /// pairwise keys, the group keys as they are.
+    pub fn rekey_pairwise(&mut self, sta: &Mac, rng: &mut dyn Random, now: u64) -> Vec<ApAction> {
+        let mut group = self.group.clone();
+        group.gtk_pn = self.gtk_tx_pn + 1;
+        let Some(s) = self.stations.get_mut(sta) else { return Vec::new() };
+        if !s.pmf {
+            group.igtk = None;
+        }
+        let Some(auth) = s.auth.as_mut() else { return Vec::new() };
+        let msg1 = auth.start(group, rng);
+        s.hs_deadline = now + HANDSHAKE_RETRY_MS;
+        self.send_eapol(sta, &msg1)
     }
 
     /// Distributes a new GTK (and IGTK) to every authorized station.
@@ -492,7 +499,10 @@ impl AccessPoint {
         let algo = akm.key_algo().unwrap_or(KeyAlgo::Sha1);
         let mut sta_rsne = alloc::vec![ie::id::RSN, sta_rsne_body.len() as u8];
         sta_rsne.extend_from_slice(sta_rsne_body);
-        let ap_rsnxe = (akm == Akm::Sae && self.pt.is_some()).then(|| alloc::vec![ie::id::RSNX, 1, ie::rsnx::SAE_H2E]);
+        // Message 3 carries the RSN Extension the beacon advertises, for
+        // every AKM.
+        let ap_rsnxe =
+            (self.pt.is_some() && !self.cfg.strip_rsnxe).then(|| alloc::vec![ie::id::RSNX, 1, ie::rsnx::SAE_H2E]);
         let mut auth = Authenticator::new(AuthenticatorConfig {
             algo,
             descriptor_version: eapol::descriptor_version(akm),
@@ -675,8 +685,10 @@ impl AccessPoint {
                 }
                 handshake::Event::InstallPtk { tk } => {
                     if let Some(s) = self.stations.get_mut(sta) {
+                        // A new key: packet numbers start anew both ways.
                         s.tk = Some(tk);
                         s.tx_pn = 0;
+                        s.rx_pn = [None; 17];
                     }
                 }
                 handshake::Event::Completed => {

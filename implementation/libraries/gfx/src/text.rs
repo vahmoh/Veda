@@ -31,12 +31,33 @@ pub struct LineMetrics {
     pub line_height: f32,
 }
 
+/// Where the fonts of Veda's interface are in the system image.
+pub mod font_files {
+    /// Inter, the interface's typeface.
+    pub const INTER: &str = "/system/fonts/Inter-Regular.otf";
+    /// Inter SemiBold: headings, buttons, window titles.
+    pub const INTER_SEMIBOLD: &str = "/system/fonts/Inter-SemiBold.otf";
+    /// JetBrains Mono: code and terminals.
+    pub const JETBRAINS_MONO: &str = "/system/fonts/JetBrainsMono-Regular.ttf";
+    /// JetBrains Mono Bold.
+    pub const JETBRAINS_MONO_BOLD: &str = "/system/fonts/JetBrainsMono-Bold.ttf";
+    /// Lato, the fallback for the characters Inter lacks.
+    pub const LATO: &str = "/system/fonts/Lato-Regular.ttf";
+}
+
 /// Fonts plus a glyph cache.
 pub struct Text {
     fonts: FontCollection<'static>,
     cache: GlyphCache,
     scratch: Vec<PositionedGlyph>,
 }
+
+// Programs share one text context between their threads (behind a lock):
+// it must stay movable between them.
+const _: fn() = || {
+    fn movable<T: Send>() {}
+    movable::<Text>();
+};
 
 impl Default for Text {
     fn default() -> Self {
@@ -47,6 +68,20 @@ impl Default for Text {
 impl Text {
     pub fn new() -> Text {
         Text { fonts: FontCollection::new(), cache: GlyphCache::new(4 << 20), scratch: Vec::new() }
+    }
+
+    /// A text context with the fonts of the files `paths` (see
+    /// [`font_files`]), in fallback order: characters a font lacks are
+    /// looked for in the fonts after it. `read` gives a file's contents, for
+    /// the rest of the program (`None` if it cannot be read). Returns the
+    /// index of each file's font: `None` for a file not read, or not a font.
+    pub fn with_fonts<'p>(
+        paths: &[&'p str],
+        mut read: impl FnMut(&'p str) -> Option<&'static [u8]>,
+    ) -> (Text, Vec<Option<usize>>) {
+        let mut text = Text::new();
+        let indices = paths.iter().map(|path| read(path).and_then(|data| text.add_font(data))).collect();
+        (text, indices)
     }
 
     /// Adds a font (the data must live for the rest of the program; leak a
@@ -97,12 +132,17 @@ impl Text {
         // The layout gives where the line ends.
         let width = scaled.layout_line_into(text, Point::new(x, y), &mut self.scratch) - x;
         let clip = c.clip_rect();
+        // No glyph reaches further than this from its origin (layout takes
+        // no size above 4096).
+        let reach = size.clamp(0.0, 4096.0) as i32 * 2;
+        let outside = |at: i32, from: i32, to: i32| at.saturating_sub(reach) > to || at.saturating_add(reach) < from;
         for g in &self.scratch {
             let Some(f) = self.fonts.font(g.font as usize) else { continue };
             let (ix, bin) = subpixel_position(g.x);
             let iy = g.y as i32;
-            // Skip glyphs that are obviously outside the clip.
-            if iy - (size as i32 * 2) > clip.bottom() || iy + size as i32 * 2 < clip.y {
+            // Skip glyphs that are obviously outside the clip, before their
+            // bitmaps are looked up (or rasterized).
+            if outside(iy, clip.y, clip.bottom()) || outside(ix, clip.x, clip.right()) {
                 continue;
             }
             let bm = self.cache.get(f, g.glyph, size, bin);

@@ -95,7 +95,7 @@ pub fn command(args: &[String]) -> Result {
             set(&ns, &mut host, s)?;
         }
     }
-    let (ns, failed) = load(&tables, &host);
+    let (mut ns, failed) = load(&tables, &host);
     let names: Vec<&str> = tables.iter().map(|(n, _)| n.as_str()).collect();
     println!("tables: {}", names.join(", "));
     for (name, e) in failed {
@@ -104,6 +104,12 @@ pub fn command(args: &[String]) -> Result {
     println!("{} devices; {} conditional definitions left out", ns.devices().count(), ns.skipped);
     for (scope, e) in &ns.skip_reasons {
         println!("  in {scope}: {e}");
+    }
+    // The devices' _INI methods finish describing them, as devmgr runs them.
+    let init = ns.initialize(&host);
+    println!("{} _INI methods ran; {} _INI and _STA methods failed", init.ran, init.failures);
+    for (method, e) in &init.failed {
+        println!("  {method}: {e}");
     }
     println!("PCI configuration space from {source}");
 

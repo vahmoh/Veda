@@ -187,18 +187,63 @@ toolchain (GCC, binutils and musl for Linux, the releases these ports
 pin, unpatched); `cargo orchestration` builds the renderer (ninja) with the
 system.
 
-**smoltcp**: unpredictable protocol numbers. Upstream draws TCP initial
-sequence numbers, DHCP transaction ids, DNS ids, the initial IPv4
+**smoltcp**: six changes, each with tests of its own.
+
+*Unpredictable protocol numbers* (`src/rand.rs`). Upstream draws TCP
+initial sequence numbers, DHCP transaction ids, DNS ids, the initial IPv4
 identification and random source ports from an sPCG32 generator seeded
 with 64 bits, whose state can be recovered from a few outputs: a server
 that sees the initial sequence numbers of its own connections could
 predict those of the machine's other connections and inject data into
 them off-path (RFC 6528 explains the attack). `Config` gains
-`random_key: Option<[u8; 32]>`; with a key, the generator (`src/rand.rs`)
-gives a ChaCha20 keystream (RFC 8439's block function, a 64-bit block
-counter, a zero nonce), and `netd` keys every interface with 32 bytes
-from the kernel's generator. Without one, it is upstream's sPCG32
-exactly, so upstream's tests still pass byte for byte.
+`random_key: Option<[u8; 32]>`; with a key, the generator gives a ChaCha20
+keystream (RFC 8439's block function, a 64-bit block counter, a zero
+nonce), and `netd` keys every interface with 32 bytes from the kernel's
+generator. Without one, it is upstream's sPCG32 exactly, so upstream's
+tests still pass byte for byte.
+
+*Quiet connections* (`src/socket/tcp.rs`). With a timeout set, upstream
+reset any TCP connection whose peer had been silent for longer, an idle
+one included, although `set_timeout` documents the timeout as applying
+only while data waits in the transmit buffer or keep-alive is on: an
+established connection with nothing to say for as long (two minutes in
+`netd`: a terminal session, a WebSocket waiting for news) was cut. The
+timeout now applies only while a SYN, data or a FIN of ours waits for the
+peer's acknowledgement, or keep-alive is on (`awaits_ack`), and counts
+from when that began. And a closed connection tells whether the timeout
+ended it (`has_timed_out`), so that `netd` reports a peer that stopped
+answering as such, and a reset as a reset.
+
+*The lease* (`src/socket/dhcpv4.rs`). The DHCP client tells when the
+lease it accepted ends (`lease_expires_at`); `netd` had read the lease
+from any acknowledgement on the network, another client's included.
+
+*Stable privacy addresses* (`src/iface/interface`, `src/rand.rs`). Given
+`Config::slaac_secret`, the addresses autoconfiguration forms have RFC
+7217 interface identifiers (ChaCha20 keyed with the secret over the prefix
+and the hardware address, RFC 5453's reserved identifiers passed over)
+instead of the EUI-64 one, which carries the hardware address from
+network to network; `Interface::ipv6_address_in` gives an interface's
+address in any /64 prefix the same way (`netd`'s link-local addresses).
+Without a secret, they are upstream's.
+
+*Errors for ping* (`src/socket/icmp.rs`, `src/wire/icmpv4.rs`). An ICMP
+socket bound to an identifier also receives the Destination Unreachable
+and Time Exceeded messages that quote an echo request with that
+identifier, so ping can tell why a request went unanswered, and which
+router said so. And an ICMPv4 error whose quoted packet is cut short is
+parsed: upstream wanted the whole packet, where RFC 792 asks routers for
+its header and first eight bytes, so it dropped the errors about all but
+the shortest packets.
+
+*Neighbors found at once* (`src/iface/neighbor.rs`). Upstream limited
+the rate of ARP requests and neighbor solicitations for the whole cache:
+once it had asked for one neighbor, it asked for no other for a second,
+dropping the packets meant for them. The first connection to the
+Internet after a DNS lookup (the DNS server's address asked for, then the
+gateway's) waited a second for its SYN to be sent again. The rate is
+limited per address, as RFC 1122 has it (2.3.2.1), in a map as large as
+the cache.
 
 **zune-jpeg**: sequential JPEGs with a scan per component. A baseline or
 extended JPEG may code its components in separate scans, one each (T.81,

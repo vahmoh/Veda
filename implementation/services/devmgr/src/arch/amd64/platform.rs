@@ -12,14 +12,11 @@ use alloc::vec::Vec;
 use vabi::irq_flags;
 use vrt::object::{Handle, Interrupt, IoPorts, Resource};
 
+use vproto::startup::drivervm::{I8042_COMMAND, I8042_DATA, I8042_KEYBOARD, I8042_MOUSE};
+
 /// Roles of the keyboard controller's data port, its command port, and its
 /// keyboard's and mouse's interrupts, which the driver VM gets.
-const DRIVERVM_I8042_ROLES: [u32; 4] = [
-    vabi::startup::role::USER + 3,
-    vabi::startup::role::USER + 4,
-    vabi::startup::role::USER + 5,
-    vabi::startup::role::USER + 6,
-];
+const DRIVERVM_I8042_ROLES: [u32; 4] = [I8042_DATA, I8042_COMMAND, I8042_KEYBOARD, I8042_MOUSE];
 
 struct I8042 {
     data: IoPorts,

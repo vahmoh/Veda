@@ -25,8 +25,15 @@
 //! only reads. Inputs (attributes, interpolated varyings, built-ins) are
 //! registers the caller fills; outputs are registers it reads afterwards.
 //!
-//! Loops are cut short after [`MAX_ITERATIONS`] iterations, so that a shader
-//! that never ends cannot hang the program that runs it.
+//! A run (of the prologue, or of the main code on a batch of lanes) goes
+//! round loops at most [`MAX_LOOP_WORK`] instructions' worth, all its loops
+//! together, so that a shader that never ends (or nests loops that end
+//! only after billions of iterations) cannot hang the program that runs
+//! it: past that, every loop is left as it reaches its end, and the run
+//! reports itself a runaway ([`Exec::runaway`]).
+//!
+//! Indices computed at run time are clamped to what they index (uniforms,
+//! blocks, samplers), so a stray index reads nothing else.
 
 mod compile;
 mod exec;
@@ -49,10 +56,13 @@ pub type Mask = u32;
 /// All lanes.
 pub const ALL: Mask = (1 << LANES) - 1;
 
-/// The most iterations a loop runs (per batch of lanes).
-pub const MAX_ITERATIONS: u32 = 1 << 22;
+/// The most instructions a run executes going round loops: each time a
+/// loop goes back to its start, its body's length counts (an inner loop's
+/// first iteration is part of its outer loop's body).
+pub const MAX_LOOP_WORK: u64 = 1 << 26;
 
-/// A register index.
+/// A register index. A program linked by [`crate::program::link`] needs at
+/// most 2^16 − 1 registers (see [`crate::program::MAX_VALUES`]).
 pub type Reg = u16;
 
 /// A bytecode instruction.
@@ -93,22 +103,31 @@ pub enum Ins {
         slot: u32,
         comp: u8,
     },
-    /// Per lane: the uniform at `base + clamp(index, 0, count - 1)`.
+    /// Per lane: the uniform at `base + clamp(index, 0, count - 1) *
+    /// stride`.
     LoadUniformIndexed {
         d: Reg,
         base: u32,
         comp: u8,
+        stride: u32,
         count: u32,
         index: Reg,
     },
-    /// A uniform block's 32 bits at `offset` (plus the per-lane byte offset
-    /// in `index`, clamped to the block).
+    /// Every lane of `d` is a uniform block's 32 bits at `offset`.
     LoadBlock {
         d: Reg,
         block: u32,
         offset: u32,
-        size: u32,
-        index: Option<Reg>,
+    },
+    /// Per lane: a uniform block's 32 bits at `offset + clamp(index, 0,
+    /// count - 1) * stride`.
+    LoadBlockIndexed {
+        d: Reg,
+        block: u32,
+        offset: u32,
+        stride: u32,
+        count: u32,
+        index: Reg,
     },
     /// A texture lookup: [`Program::tex`] holds its description.
     Tex {
@@ -160,7 +179,10 @@ pub struct TexIns {
 #[derive(Clone, Debug)]
 pub struct TexSizeIns {
     pub sampler: Sampler,
+    /// The sampler index; with `index`, the first of `count` that the
+    /// register's value (clamped) chooses among.
     pub sampler_index: u32,
+    pub count: u32,
     pub index: Option<Reg>,
     pub lod: Reg,
     pub results: Vec<Reg>,
@@ -210,6 +232,22 @@ pub struct Program {
 }
 
 impl Program {
+    /// A program that does nothing.
+    pub fn empty() -> Program {
+        Program {
+            prologue: Vec::new(),
+            main: Vec::new(),
+            tex: Vec::new(),
+            tex_size: Vec::new(),
+            registers: 1,
+            uniform_registers: 0,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            discards: false,
+            derivatives: false,
+        }
+    }
+
     /// The register an input goes in, if the program reads it.
     pub fn input(&self, i: Input) -> Option<Reg> {
         self.inputs.iter().find(|(x, _)| *x == i).map(|(_, r)| *r)

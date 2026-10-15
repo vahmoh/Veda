@@ -9,7 +9,7 @@
 //! * [`http`]: HTTP/1.1 requests and responses over any [`Connection`]
 //!   (`Content-Length`, chunked and read-to-close bodies), [`http::fetch`]
 //!   which connects, sends and reads in one call, and [`http::get`] which
-//!   follows redirects.
+//!   follows redirects, each within one time limit as a whole.
 //! * [`ws`]: a WebSocket client (RFC 6455): the opening handshake, masked
 //!   frames, fragmented messages, pings answered automatically, the
 //!   closing handshake, and a non-blocking [`ws::WebSocket::poll`] for
@@ -63,6 +63,9 @@ pub enum WebError {
     TooManyRedirects,
     /// The connection was closed.
     Closed,
+    /// A secure connection ended without the server closing it: what came
+    /// before is genuine, but may have been cut short.
+    Truncated,
     TimedOut,
 }
 
@@ -92,6 +95,7 @@ impl fmt::Display for WebError {
             WebError::TooLarge => f.write_str("the response is too large"),
             WebError::TooManyRedirects => f.write_str("the server redirected too many times"),
             WebError::Closed => f.write_str("the connection was closed"),
+            WebError::Truncated => f.write_str("the secure connection ended early: the response may be incomplete"),
             WebError::TimedOut => f.write_str("the server did not answer in time"),
         }
     }
@@ -100,13 +104,21 @@ impl fmt::Display for WebError {
 /// A byte stream to a server.
 pub trait Connection {
     /// Blocking read (up to the read timeout); `Ok(0)` at the end of the
-    /// stream.
+    /// stream (over TLS: once the server closed it, else
+    /// [`WebError::Truncated`]).
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, WebError>;
     /// Non-blocking read: `Ok(None)` if nothing is available yet.
     fn try_read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, WebError>;
+    /// Blocking write (up to the write timeout).
     fn write_all(&mut self, data: &[u8]) -> Result<(), WebError>;
+    /// Non-blocking write: how much of `data` went out now (over TLS, all
+    /// of it: what the connection does not take now waits, in order, for
+    /// the next write).
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError>;
     /// How long a blocking read may wait (`None`: forever).
     fn set_read_timeout(&mut self, timeout: Option<Duration>);
+    /// How long a blocking write may wait (`None`: forever).
+    fn set_write_timeout(&mut self, timeout: Option<Duration>);
     /// The kernel object that becomes readable when data arrives (for
     /// event loops).
     fn handle(&self) -> RawHandle;
@@ -125,8 +137,16 @@ impl Connection for TcpStream {
         TcpStream::write_all(self, data).map_err(WebError::from)
     }
 
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError> {
+        TcpStream::try_write(self, data).map_err(WebError::from)
+    }
+
     fn set_read_timeout(&mut self, timeout: Option<Duration>) {
         TcpStream::set_read_timeout(self, timeout);
+    }
+
+    fn set_write_timeout(&mut self, timeout: Option<Duration>) {
+        TcpStream::set_write_timeout(self, timeout);
     }
 
     fn handle(&self) -> RawHandle {
@@ -138,6 +158,7 @@ fn tls_error(e: TlsError) -> WebError {
     match e {
         TlsError::TimedOut => WebError::TimedOut,
         TlsError::Closed => WebError::Closed,
+        TlsError::Truncated => WebError::Truncated,
         e => WebError::Tls(e.to_string()),
     }
 }
@@ -155,8 +176,16 @@ impl Connection for TlsStream<TcpStream> {
         TlsStream::write_all(self, data).map_err(tls_error)
     }
 
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError> {
+        TlsStream::try_write(self, data).map(|_| data.len()).map_err(tls_error)
+    }
+
     fn set_read_timeout(&mut self, timeout: Option<Duration>) {
         self.transport_mut().set_read_timeout(timeout);
+    }
+
+    fn set_write_timeout(&mut self, timeout: Option<Duration>) {
+        self.transport_mut().set_write_timeout(timeout);
     }
 
     fn handle(&self) -> RawHandle {
@@ -192,8 +221,16 @@ impl Connection for Conn {
         self.stream().write_all(data)
     }
 
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError> {
+        self.stream().try_write(data)
+    }
+
     fn set_read_timeout(&mut self, timeout: Option<Duration>) {
         self.stream().set_read_timeout(timeout);
+    }
+
+    fn set_write_timeout(&mut self, timeout: Option<Duration>) {
+        self.stream().set_write_timeout(timeout);
     }
 
     fn handle(&self) -> RawHandle {
@@ -223,11 +260,7 @@ pub fn connect(url: &Url, timeout: Duration) -> Result<Conn, WebError> {
     }
     // The handshake gets what is left of the time (at least a second).
     let left = timeout.saturating_sub(start.elapsed()).max(Duration::from_secs(1));
-    tcp.set_read_timeout(Some(left));
-    tcp.set_write_timeout(Some(left));
-    let mut tls = TlsStream::connect(tcp, &url.host, &tls_config()).map_err(tls_error)?;
-    tls.transport_mut().set_read_timeout(None);
-    tls.transport_mut().set_write_timeout(None);
+    let tls = vtls::connect_over(tcp, &url.host, left, &tls_config()).map_err(tls_error)?;
     Ok(Conn::Tls(Box::new(tls)))
 }
 
@@ -269,11 +302,23 @@ pub(crate) mod testconn {
         /// reads).
         pub chunk: usize,
         pub eof: bool,
+        /// Bytes the server still takes before it stops reading (`None`:
+        /// no limit); a blocking write beyond it times out.
+        pub write_room: Option<usize>,
+        /// Read timeouts set, last first.
+        pub read_timeouts: Vec<Option<Duration>>,
     }
 
     impl TestConn {
         pub fn new(input: &[u8], chunk: usize) -> TestConn {
-            TestConn { input: input.iter().copied().collect(), output: Vec::new(), chunk: chunk.max(1), eof: true }
+            TestConn {
+                input: input.iter().copied().collect(),
+                output: Vec::new(),
+                chunk: chunk.max(1),
+                eof: true,
+                write_room: None,
+                read_timeouts: Vec::new(),
+            }
         }
     }
 
@@ -298,11 +343,26 @@ pub(crate) mod testconn {
         }
 
         fn write_all(&mut self, data: &[u8]) -> Result<(), WebError> {
-            self.output.extend_from_slice(data);
+            if self.try_write(data)? < data.len() {
+                return Err(WebError::TimedOut);
+            }
             Ok(())
         }
 
-        fn set_read_timeout(&mut self, _timeout: Option<Duration>) {}
+        fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError> {
+            let n = data.len().min(self.write_room.unwrap_or(usize::MAX));
+            if let Some(room) = &mut self.write_room {
+                *room -= n;
+            }
+            self.output.extend_from_slice(&data[..n]);
+            Ok(n)
+        }
+
+        fn set_read_timeout(&mut self, timeout: Option<Duration>) {
+            self.read_timeouts.insert(0, timeout);
+        }
+
+        fn set_write_timeout(&mut self, _timeout: Option<Duration>) {}
 
         fn handle(&self) -> RawHandle {
             0

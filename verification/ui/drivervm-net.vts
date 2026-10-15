@@ -4,11 +4,11 @@
 # The network through Linux's driver: QEMU's Intel 82576 card goes to the
 # driver VM, as every network card does. Linux's igb drives it, and Veda's
 # network driver for Linux attaches it to Veda's network service as eth0,
-# which gets its address by DHCP; nettest checks DNS, TCP, HTTP and ping
-# through it.
+# which gets its address by DHCP; nettest checks ping, TCP and HTTP through
+# it, against a server of the host's (no Internet needed).
 net ethernet
 nic igb
-boot-cmdline "run=nettest"
+nettest local
 fail-on "PANIC"
 fail-on "drivervm: processor"
 fail-on "nettest: FAIL"

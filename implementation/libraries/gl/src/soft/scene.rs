@@ -15,7 +15,7 @@
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::AtomicU64;
+use core::sync::atomic::{AtomicBool, AtomicU64};
 
 use vglsl::interp::Lanes;
 use vglsl::link::Interpolation;
@@ -68,12 +68,17 @@ pub struct DrawRecord {
     pub uniforms: Vec<[u32; 4]>,
     /// The fragment shader's prologue registers.
     pub prologue: Vec<Lanes>,
-    /// Each uniform block's contents (copied when the draw was recorded).
-    pub blocks: Vec<Vec<u8>>,
-    pub textures: Vec<Option<Sampled>>,
+    /// Each uniform block's contents (copied when the draw was recorded),
+    /// shared with the vertex stage.
+    pub blocks: Arc<Vec<Vec<u8>>>,
+    pub textures: Arc<Vec<Option<Sampled>>>,
     pub state: FragState,
     /// The occlusion query counting the draw's samples.
     pub query: Option<Arc<AtomicU64>>,
+    /// A shader of the draw ran away (it went round its loops more than
+    /// `vglsl::interp::MAX_LOOP_WORK` allows): what is left of it is not
+    /// shaded, lest a shader that never ends take hours over a screen.
+    pub abandoned: AtomicBool,
 }
 
 /// A set-up triangle.
@@ -160,6 +165,8 @@ pub struct Scene {
     pub attrs: Vec<u32>,
     /// Resources the scene reads or writes.
     pub uses: Vec<ResourceId>,
+    /// Commands in the tiles' lists, all told.
+    binned: usize,
 }
 
 impl Scene {
@@ -178,6 +185,7 @@ impl Scene {
             clears: Vec::new(),
             attrs: Vec::new(),
             uses: Vec::new(),
+            binned: 0,
         }
     }
 
@@ -197,9 +205,7 @@ impl Scene {
 
     /// Bytes of primitive data recorded (to bound the scene's memory).
     pub fn size(&self) -> usize {
-        self.attrs.len() * 4
-            + self.tris.len() * core::mem::size_of::<Tri>()
-            + self.bins.iter().map(Vec::len).sum::<usize>() * 8
+        self.attrs.len() * 4 + self.tris.len() * core::mem::size_of::<Tri>() + self.binned * 8
     }
 
     /// Records a clear of the pixels in `rect`.
@@ -233,9 +239,17 @@ impl Scene {
                     }
                 }
                 self.bins[(ty as u32 * self.tiles_x + tx as u32) as usize].push(cmd);
+                self.binned += 1;
             }
         }
     }
+}
+
+/// A vertex as triangle setup reads it: its clip position and varyings.
+trait SetupVertex {
+    fn pos(&self) -> [f32; 4];
+    /// Varying component `k` (below [`MAX_VARYINGS`]).
+    fn var(&self, k: usize) -> f32;
 }
 
 /// A vertex being clipped: clip position and the varyings that
@@ -244,6 +258,30 @@ impl Scene {
 struct ClipVertex {
     pos: [f32; 4],
     vars: [f32; MAX_VARYINGS],
+}
+
+impl SetupVertex for ClipVertex {
+    fn pos(&self) -> [f32; 4] {
+        self.pos
+    }
+
+    fn var(&self, k: usize) -> f32 {
+        self.vars[k]
+    }
+}
+
+/// A post-transform vertex as the vertex stage left it (words: position,
+/// point size, varyings), which unclipped triangles read as it is.
+struct Words<'a>(&'a [u32]);
+
+impl SetupVertex for Words<'_> {
+    fn pos(&self) -> [f32; 4] {
+        [0, 1, 2, 3].map(|i| f32::from_bits(self.0[i]))
+    }
+
+    fn var(&self, k: usize) -> f32 {
+        f32::from_bits(self.0.get(HEAD + k).copied().unwrap_or(0))
+    }
 }
 
 /// The most varying components (16 vec4s).
@@ -340,8 +378,7 @@ impl Setup<'_> {
         }
         let provoking = v[2];
         if codes[0] | codes[1] | codes[2] == 0 {
-            let c = v.map(|x| self.clip_vertex(x));
-            self.emit_triangle(&c[0], &c[1], &c[2], provoking);
+            self.emit_triangle([&Words(v[0]), &Words(v[1]), &Words(v[2])], provoking);
             return;
         }
         // Sutherland-Hodgman against the planes the vertices cross.
@@ -392,12 +429,12 @@ impl Setup<'_> {
             }
         }
         for k in 1..n - 1 {
-            self.emit_triangle(&poly[0], &poly[k], &poly[k + 1], provoking);
+            self.emit_triangle([&poly[0], &poly[k], &poly[k + 1]], provoking);
         }
     }
 
-    fn emit_triangle(&mut self, v0: &ClipVertex, v1: &ClipVertex, v2: &ClipVertex, provoking: &[u32]) {
-        let w = [self.window(&v0.pos), self.window(&v1.pos), self.window(&v2.pos)];
+    fn emit_triangle<V: SetupVertex>(&mut self, verts: [&V; 3], provoking: &[u32]) {
+        let w = verts.map(|v| self.window(&v.pos()));
         let fix = |x: f32| libm::roundevenf(x * SUB as f32) as i64;
         let mut xy = w.map(|p| (fix(p[0]), fix(p[1])));
         let area = (xy[1].0 - xy[0].0) * (xy[2].1 - xy[0].1) - (xy[2].0 - xy[0].0) * (xy[1].1 - xy[0].1);
@@ -423,7 +460,6 @@ impl Setup<'_> {
             xy = [xy[0], xy[2], xy[1]];
         }
         let area = area.abs();
-        let verts = [v0, v1, v2];
         let win = order.map(|i| w[i]);
         // Edge k is opposite vertex k: from vertex k+1 to k+2.
         let mut edges = [[0i64; 3]; 3];
@@ -491,7 +527,7 @@ impl Setup<'_> {
                 a.push(provoking.get(HEAD + k).copied().unwrap_or(0));
             } else {
                 for &i in &order {
-                    a.push((verts[i].vars[k] * w[i][3]).to_bits());
+                    a.push((verts[i].var(k) * w[i][3]).to_bits());
                 }
             }
         }
@@ -551,10 +587,10 @@ impl Setup<'_> {
         let hw = width * 0.5;
         let r = self.clip_rect;
         let bbox = [
-            (libm::floorf(wa[0].min(wb[0]) - hw) as i32 - 1).max(r[0]),
-            (libm::floorf(wa[1].min(wb[1]) - hw) as i32 - 1).max(r[1]),
-            (libm::ceilf(wa[0].max(wb[0]) + hw) as i32 + 1).min(r[2]),
-            (libm::ceilf(wa[1].max(wb[1]) + hw) as i32 + 1).min(r[3]),
+            (libm::floorf(wa[0].min(wb[0]) - hw) as i32).saturating_sub(1).max(r[0]),
+            (libm::floorf(wa[1].min(wb[1]) - hw) as i32).saturating_sub(1).max(r[1]),
+            (libm::ceilf(wa[0].max(wb[0]) + hw) as i32).saturating_add(1).min(r[2]),
+            (libm::ceilf(wa[1].max(wb[1]) + hw) as i32).saturating_add(1).min(r[3]),
         ];
         if bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
             return;
@@ -608,8 +644,8 @@ impl Setup<'_> {
         let bbox = [
             (libm::floorf(win[0] - h) as i32).max(r[0]),
             (libm::floorf(win[1] - h) as i32).max(r[1]),
-            (libm::ceilf(win[0] + h) as i32 + 1).min(r[2]),
-            (libm::ceilf(win[1] + h) as i32 + 1).min(r[3]),
+            (libm::ceilf(win[0] + h) as i32).saturating_add(1).min(r[2]),
+            (libm::ceilf(win[1] + h) as i32).saturating_add(1).min(r[3]),
         ];
         if bbox[0] >= bbox[2] || bbox[1] >= bbox[3] {
             return;

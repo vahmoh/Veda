@@ -86,18 +86,6 @@ pub struct FontMetrics {
     pub is_monospace: bool,
 }
 
-/// Reusable scratch buffers for outline extraction. `ttf-parser` decodes outlines without
-/// allocating, so there is nothing to keep; the type stays for the interface's sake.
-#[derive(Default)]
-pub struct OutlineScratch {}
-
-impl OutlineScratch {
-    /// Creates empty scratch buffers.
-    pub fn new() -> Self {
-        OutlineScratch::default()
-    }
-}
-
 /// A parsed font. Parsing is zero-copy: the font borrows the file data for `'a`.
 ///
 /// Creating a `Font` validates the table directory and the tables needed for metrics, character
@@ -445,22 +433,12 @@ impl<'a> Font<'a> {
         self.kerning.lookup(left.0, right.0)
     }
 
-    /// Emits the outline of `glyph` in font units (y up) to `sink`.
+    /// Emits the outline of `glyph` in font units (y up) to `sink`. `ttf-parser` decodes it
+    /// without allocating.
     ///
     /// Glyphs without contours (e.g. space) emit nothing. On error the sink may have received a
     /// partial outline and should be discarded.
     pub fn outline<S: OutlineSink + ?Sized>(&self, glyph: GlyphId, sink: &mut S) -> Result<(), FontError> {
-        let mut scratch = OutlineScratch::default();
-        self.outline_with(glyph, sink, &mut scratch)
-    }
-
-    /// Like [`Font::outline`], reusing `scratch` buffers.
-    pub fn outline_with<S: OutlineSink + ?Sized>(
-        &self,
-        glyph: GlyphId,
-        sink: &mut S,
-        _scratch: &mut OutlineScratch,
-    ) -> Result<(), FontError> {
         if glyph.0 >= self.num_glyphs {
             return Err(FontError::InvalidGlyph);
         }

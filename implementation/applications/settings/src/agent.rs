@@ -19,6 +19,12 @@
 //! Requests go to the agent service from a background thread (checking the
 //! key and fetching catalogues wait on the network), so the page never
 //! freezes.
+//!
+//! What the user changes is sent once it settles, as the fields changed
+//! ([`Edits`]): the agent's settings are read again and only those fields
+//! written over them, so that a change made meanwhile elsewhere (the voice
+//! agent asking Settings to rename it) stays. Changes not sent yet are sent
+//! when the page is left, and before the window closes.
 
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -34,7 +40,8 @@ use vui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
 
 enum Request {
     Load,
-    SetConfig(AgentConfig),
+    /// Writes these fields over the agent's settings as they are.
+    Edit(Edits),
     SetKey(String),
     CheckKey,
     Catalog,
@@ -73,7 +80,9 @@ struct Link {
     event: Event,
 }
 
-fn agent_running() -> bool {
+/// Whether the agent service is registered (a connection to it otherwise
+/// waits until it is).
+pub fn agent_running() -> bool {
     vproto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == agent::NAME)).unwrap_or(false)).unwrap_or(false)
 }
 
@@ -137,13 +146,24 @@ fn serve(c: &agent::Client, req: Request, q: &Queue) -> bool {
     let push = |r: Reply| q.replies.lock().push(r);
     let reload = match req {
         Request::Load => true,
-        Request::SetConfig(cfg) => match c.set_config(cfg) {
-            Ok(r) => {
-                push(Reply::ConfigSaved(r));
-                true
-            }
-            Err(_) => return false,
-        },
+        Request::Edit(edits) => {
+            // The agent's settings as they are now, with the fields changed
+            // here written over them. (The protocol has no way to write
+            // only some fields, nor to check that nobody wrote between.)
+            let saved = match c.config() {
+                Ok(Ok(mut cfg)) => {
+                    edits.apply(&mut cfg);
+                    match c.set_config(cfg) {
+                        Ok(r) => r,
+                        Err(_) => return false,
+                    }
+                }
+                Ok(Err(e)) => Err(e),
+                Err(_) => return false,
+            };
+            push(Reply::ConfigSaved(saved));
+            true
+        }
         Request::SetKey(k) => match c.set_api_key(k) {
             Ok(r) => {
                 push(Reply::KeySaved(r));
@@ -220,6 +240,96 @@ enum Open {
     Models,
 }
 
+/// Settings changed on the page: the fields, and what they were changed to.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Edits {
+    enabled: Option<bool>,
+    name: Option<String>,
+    listen_model: Option<String>,
+    /// The language model's provider and model, changed together.
+    think: Option<(String, String)>,
+    voice: Option<String>,
+    speed: Option<f32>,
+    listen_for_name: Option<bool>,
+    idle_timeout_s: Option<u32>,
+}
+
+impl Edits {
+    fn is_empty(&self) -> bool {
+        *self == Edits::default()
+    }
+
+    /// Notes what changed from `before` to `after` (over what was noted).
+    fn note(&mut self, before: &AgentConfig, after: &AgentConfig) {
+        if before.enabled != after.enabled {
+            self.enabled = Some(after.enabled);
+        }
+        if before.name != after.name {
+            self.name = Some(after.name.clone());
+        }
+        if before.listen_model != after.listen_model {
+            self.listen_model = Some(after.listen_model.clone());
+        }
+        if (&before.think_provider, &before.think_model) != (&after.think_provider, &after.think_model) {
+            self.think = Some((after.think_provider.clone(), after.think_model.clone()));
+        }
+        if before.voice != after.voice {
+            self.voice = Some(after.voice.clone());
+        }
+        if before.speed != after.speed {
+            self.speed = Some(after.speed);
+        }
+        if before.listen_for_name != after.listen_for_name {
+            self.listen_for_name = Some(after.listen_for_name);
+        }
+        if before.idle_timeout_s != after.idle_timeout_s {
+            self.idle_timeout_s = Some(after.idle_timeout_s);
+        }
+    }
+
+    /// Takes `later`'s changes over these.
+    fn then(&mut self, later: &Edits) {
+        let l = later.clone();
+        self.enabled = l.enabled.or(self.enabled);
+        self.name = l.name.or(self.name.take());
+        self.listen_model = l.listen_model.or(self.listen_model.take());
+        self.think = l.think.or(self.think.take());
+        self.voice = l.voice.or(self.voice.take());
+        self.speed = l.speed.or(self.speed);
+        self.listen_for_name = l.listen_for_name.or(self.listen_for_name);
+        self.idle_timeout_s = l.idle_timeout_s.or(self.idle_timeout_s);
+    }
+
+    /// Writes the fields changed over `c`.
+    fn apply(&self, c: &mut AgentConfig) {
+        if let Some(v) = self.enabled {
+            c.enabled = v;
+        }
+        if let Some(v) = &self.name {
+            c.name = v.clone();
+        }
+        if let Some(v) = &self.listen_model {
+            c.listen_model = v.clone();
+        }
+        if let Some((provider, model)) = &self.think {
+            c.think_provider = provider.clone();
+            c.think_model = model.clone();
+        }
+        if let Some(v) = &self.voice {
+            c.voice = v.clone();
+        }
+        if let Some(v) = self.speed {
+            c.speed = v;
+        }
+        if let Some(v) = self.listen_for_name {
+            c.listen_for_name = v;
+        }
+        if let Some(v) = self.idle_timeout_s {
+            c.idle_timeout_s = v;
+        }
+    }
+}
+
 pub struct AgentPage {
     link: Option<Link>,
     available: bool,
@@ -244,9 +354,13 @@ pub struct AgentPage {
     error: Option<String>,
     loaded: bool,
     refresh_at: u64,
-    /// A change not yet sent (sliders send once they settle), and when.
+    /// Changes not sent yet (sliders send once they settle), and when the
+    /// last was made.
+    edits: Edits,
     dirty: Option<u64>,
-    /// Changes sent and not yet confirmed: the agent's copy is older.
+    /// Changes sent and not yet confirmed (the agent's copy may be older),
+    /// and how many requests carry them.
+    sent: Edits,
     saving: u32,
     /// Show the agent's name again (a name it refused).
     reset_name: bool,
@@ -294,7 +408,9 @@ impl AgentPage {
             error: None,
             loaded: false,
             refresh_at: 0,
+            edits: Edits::default(),
             dirty: None,
+            sent: Edits::default(),
             saving: 0,
             reset_name: false,
             now: 0,
@@ -309,6 +425,11 @@ impl AgentPage {
 
     pub fn wait_handle(&self) -> Option<vabi::RawHandle> {
         self.link.as_ref().map(|l| l.event.raw())
+    }
+
+    /// Deepgram's catalogue, if fetched.
+    pub fn catalog(&self) -> Option<&ModelCatalog> {
+        self.catalog.as_ref()
     }
 
     fn send(&self, r: Request) {
@@ -326,6 +447,9 @@ impl AgentPage {
                         self.available = false;
                         self.checking = false;
                         self.previewing = None;
+                        // Nothing sent reached it.
+                        self.saving = 0;
+                        self.sent = Edits::default();
                     }
                     Reply::State { config, status, memories, permissions } => {
                         self.available = true;
@@ -334,14 +458,12 @@ impl AgentPage {
                             self.reset_name = false;
                         }
                         self.editing_key |= !config.has_key;
-                        match &mut self.config {
-                            // Keep what the user is changing.
-                            Some(c) if self.dirty.is_some() || self.saving > 0 => {
-                                c.has_key = config.has_key;
-                                c.key_hint = config.key_hint;
-                            }
-                            c => *c = Some(config),
-                        }
+                        // The agent's settings, with what the user changed
+                        // and the agent has not confirmed yet over them.
+                        let mut config = config;
+                        self.sent.apply(&mut config);
+                        self.edits.apply(&mut config);
+                        self.config = Some(config);
                         self.status = Some(status);
                         self.memories = memories;
                         self.permissions = permissions;
@@ -349,9 +471,14 @@ impl AgentPage {
                     }
                     Reply::ConfigSaved(r) => {
                         self.saving = self.saving.saturating_sub(1);
+                        if self.saving == 0 {
+                            self.sent = Edits::default();
+                        }
                         if let Err(e) = r {
                             self.error = Some(explain(e));
                             self.reset_name = true;
+                            // What the agent has is shown again.
+                            self.send(Request::Load);
                         }
                     }
                     Reply::KeySaved(r) => match r {
@@ -398,11 +525,7 @@ impl AgentPage {
         if let Some(at) = self.dirty
             && now >= at + SETTLE_NS
         {
-            self.dirty = None;
-            if let Some(c) = self.config.clone() {
-                self.saving += 1;
-                self.send(Request::SetConfig(c));
-            }
+            self.flush();
         }
         // The agent's state changes while the page is open.
         if now >= self.refresh_at {
@@ -420,8 +543,35 @@ impl AgentPage {
     /// Changes a setting; it is saved once it has settled.
     fn change(&mut self, f: impl FnOnce(&mut AgentConfig)) {
         if let Some(c) = &mut self.config {
+            let before = c.clone();
             f(c);
+            self.edits.note(&before, c);
             self.dirty = Some(self.now);
+        }
+    }
+
+    /// Sends the changes not sent yet, settled or not (the page is left, or
+    /// the window closes).
+    pub fn flush(&mut self) {
+        self.dirty = None;
+        if self.edits.is_empty() || self.link.is_none() {
+            return;
+        }
+        let edits = core::mem::take(&mut self.edits);
+        // What was sent before and not confirmed, with these over it.
+        self.sent.then(&edits);
+        self.saving += 1;
+        self.send(Request::Edit(edits));
+    }
+
+    /// Waits (until `deadline`) for the changes sent to be confirmed: the
+    /// window is about to close, and the thread sending them with it.
+    pub fn finish(&mut self, deadline: u64) {
+        while self.saving > 0 && vrt::time::now_ns() < deadline {
+            if let Some(l) = &self.link {
+                let _ = l.event.wait(vabi::signals::SIGNALED, deadline);
+            }
+            self.poll(vrt::time::now_ns());
         }
     }
 

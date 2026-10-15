@@ -10,7 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use vgfx::{Align, Rect};
-use vnet::wifi::{ConnState, NetworkInfo, Security, WlanStatus, signal_bars};
+use vnet::wifi::{self, ConnState, NetworkInfo, Security, WlanStatus, signal_bars};
 use vui::status::Network;
 use vui::{Font, Icon, Ui};
 
@@ -304,12 +304,13 @@ impl WifiFlyout {
             y += 30;
             let msg = error.unwrap_or_default();
             ui.label(Rect::new(x, y + 6, right - x - bw - 8, 20), &msg, Font::Regular, 12.0, t.danger, Align::Left);
-            let valid = vwlan_passphrase_ok(&self.password);
+            let valid = wifi::valid_passphrase(&self.password);
             let submit =
                 (resp.submitted && valid) || (ui.primary_button(Rect::new(right - bw, y, bw, 32), "Connect") && valid);
             if submit {
                 m.push(Action::WifiConnect {
                     ssid: n.ssid.0.clone(),
+                    security: Some(n.security),
                     password: Some(core::mem::take(&mut self.password)),
                     auto: self.auto_connect,
                     hidden: false,
@@ -328,6 +329,7 @@ impl WifiFlyout {
             if ui.primary_button(Rect::new(right - bw, y + 4, bw, 32), "Connect") {
                 m.push(Action::WifiConnect {
                     ssid: n.ssid.0.clone(),
+                    security: Some(n.security),
                     password: None,
                     auto: self.auto_connect || n.saved,
                     hidden: false,
@@ -377,7 +379,7 @@ impl WifiFlyout {
         );
         y += 46;
         let name_ok = (1..=32).contains(&self.hidden_ssid.len());
-        let pw_ok = self.password.is_empty() || vwlan_passphrase_ok(&self.password);
+        let pw_ok = self.password.is_empty() || wifi::valid_passphrase(&self.password);
         if let Some((s, e)) = &m.wifi_error
             && *s == self.hidden_ssid.as_bytes()
         {
@@ -388,17 +390,13 @@ impl WifiFlyout {
             let password = (!self.password.is_empty()).then(|| core::mem::take(&mut self.password));
             m.push(Action::WifiConnect {
                 ssid: self.hidden_ssid.as_bytes().to_vec(),
+                // A hidden network shows nothing of itself: the service
+                // takes what it offers, never open with a password.
+                security: None,
                 password,
                 auto: true,
                 hidden: true,
             });
         }
     }
-}
-
-/// The passphrase rules of WPA (8-63 printable characters, or 64 hex
-/// digits), checked before sending a request.
-fn vwlan_passphrase_ok(p: &str) -> bool {
-    let printable = p.bytes().all(|b| (0x20..=0x7E).contains(&b));
-    (printable && (8..=63).contains(&p.len())) || (p.len() == 64 && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }

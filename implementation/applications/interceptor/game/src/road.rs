@@ -284,7 +284,7 @@ impl Road {
             let b = (at(i + 1) - at(i)).xz().normalize_or(Vec2::Y);
             // Positive to the right: the right of a heading (x, z) on the
             // ground is (-z, x).
-            let turn = a.perp_dot(b).atan2(a.dot(b));
+            let turn = libm::atan2f(a.perp_dot(b), a.dot(b));
             curvature.push(turn / spacing);
         }
         smooth_loop(&mut curvature, 3, 2);
@@ -308,7 +308,7 @@ impl Road {
                 let flat_right = Vec3::new(-f.z, 0.0, f.x).normalize_or(Vec3::X);
                 // Tilt the right vector about the forward one: down on the
                 // inside of the corner.
-                let (sb, cb) = bank[i].sin_cos();
+                let (sb, cb) = libm::sincosf(bank[i]);
                 let right = (flat_right * cb + Vec3::Y * -sb).normalize_or(flat_right);
                 let up = right.cross(f).normalize_or(Vec3::Y);
                 Sample {
@@ -578,14 +578,6 @@ impl Road {
             depth[i] = depth[i].min(run);
         }
         depth
-    }
-
-    /// The largest curvature (absolute) between `s` and `s + ahead` (or
-    /// behind, for a negative distance).
-    pub fn max_curvature(&self, s: f32, ahead: f32) -> f32 {
-        let steps = (ahead.abs() / self.spacing).ceil() as usize;
-        let dir = ahead.signum();
-        (0..=steps).map(|k| self.curvature(s + dir * k as f32 * self.spacing).abs()).fold(0.0, f32::max)
     }
 }
 

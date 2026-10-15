@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "compositor-core"
+description = "What the window system decides, testable on the host: windows, focus and input, who may do what, and the limits clients are held to"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vabi = { workspace = true }
+vgfx = { workspace = true }
+vproto = { workspace = true }
+
+[dev-dependencies]
+vipc = { workspace = true }
+
+[lints]
+workspace = true

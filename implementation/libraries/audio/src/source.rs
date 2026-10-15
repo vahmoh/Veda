@@ -6,14 +6,15 @@
 //! A [`Source`] owns (or borrows, through any `AsRef<[u8]>`) the bytes of a
 //! WAV or QOA file and produces interleaved **stereo** `i16` frames at the
 //! file's own sample rate (mono files are duplicated, surround files are
-//! downmixed). [`probe`] reads the format, duration and tags of a file from
-//! just its first and last few kilobytes, which is what a music library
-//! scanner needs.
+//! downmixed, in either format: [`crate::mix::Downmix`]). [`probe`] reads
+//! the format, duration and tags of a file from just its first and last few
+//! kilobytes, which is what a music library scanner needs.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::AudioError;
+use crate::mix::Downmix;
 use crate::qoa::{self, QoaIndex};
 use crate::tags::Tags;
 use crate::wav::{self, WavInfo};
@@ -220,9 +221,9 @@ impl<D: AsRef<[u8]>> Source<D> {
                             }
                         }
                         _ => {
+                            let downmix = Downmix::new(ch);
                             for (d, s) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src.chunks_exact(ch)) {
-                                d[0] = s[0];
-                                d[1] = s[1];
+                                *d = downmix.frame(s.iter().map(|&x| x as f32 / 32768.0));
                             }
                         }
                     }
@@ -236,11 +237,6 @@ impl<D: AsRef<[u8]>> Source<D> {
             self.pos += n as u64;
         }
         done
-    }
-
-    /// Gives the underlying bytes back.
-    pub fn into_inner(self) -> D {
-        self.data
     }
 }
 
@@ -289,6 +285,23 @@ mod tests {
         let mut part = vec![0i16; 100 * 2];
         assert_eq!(s.read(&mut part), 100);
         assert_eq!(&part[..], &all[5_555 * 2..5_655 * 2]);
+    }
+
+    #[test]
+    fn surround_is_downmixed_in_both_formats() {
+        // Six channels, sound in the centre only: both sides hear it, alike,
+        // in a WAV file and in a QOA one.
+        let frames = 2_000;
+        let pcm: Vec<i16> = (0..frames).flat_map(|i| [0, 0, ((i % 50) as i16 - 25) * 400, 0, 0, 0]).collect();
+        let wav_file = wav::write(&pcm, 6, 48_000, &Tags::default());
+        let qoa_file = qoa::encode(&pcm, 6, 48_000).unwrap();
+        for file in [&wav_file, &qoa_file] {
+            let mut s = Source::open(file.as_slice()).unwrap();
+            let mut out = vec![0i16; frames * 2];
+            assert_eq!(s.read(&mut out), frames);
+            assert!(out.chunks(2).all(|f| f[0] == f[1]), "{:?}", s.format());
+            assert!(out.iter().any(|&x| x.abs() > 2_000), "{:?}", s.format());
+        }
     }
 
     #[test]

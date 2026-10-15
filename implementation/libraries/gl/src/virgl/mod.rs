@@ -10,15 +10,20 @@
 //! OpenGL ES). [`Backend`] already has Gallium's shape, so this is mostly
 //! translation:
 //!
-//! * Resources are host resources. Data moves through a staging buffer in
-//!   memory both sides share (`COPY_TRANSFER3D`), in command order, so an
-//!   update between two draws reaches only the second.
+//! * Resources are host resources, which read as zero when new (the host's
+//!   memory may hold what another context left in it). Data moves through
+//!   a staging buffer in memory both sides share (`COPY_TRANSFER3D`), in
+//!   command order, so an update between two draws reaches only the
+//!   second. Buffers the front end lets go of are kept for new ones once
+//!   the GPU is done with them (`pool`), and resources are destroyed on
+//!   the host only after the commands that may name them are submitted.
 //! * State objects (blend, depth-stencil, rasterizer, samplers, vertex
 //!   layouts, views and surfaces) are created once per distinct state and
-//!   cached; a draw binds them and sets only what changed since the last.
+//!   cached, a bounded number of each kind; a draw binds them and sets only
+//!   what changed since the last.
 //! * Programs become two TGSI shaders ([`vglsl::tgsi`]).
 //! * What the host's commands cannot do directly is drawn: scissored and
-//!   masked clears ([`ops`]). Such draws of the renderer's own stay out of
+//!   masked clears (`ops`). Such draws of the renderer's own stay out of
 //!   the application's occlusion queries.
 //! * Presenting blits the color buffer, flipped and scaled, into a BGRX
 //!   image the size of the window and reads that back: the window's pixels
@@ -32,6 +37,8 @@
 
 pub mod caps;
 mod draw;
+#[cfg(test)]
+pub(crate) mod fake;
 mod feedback;
 pub mod formats;
 #[cfg(all(target_os = "linux", any(test, feature = "host-virgl")))]
@@ -39,13 +46,13 @@ pub mod gallium;
 #[cfg(all(target_os = "linux", any(test, feature = "host-virgl")))]
 pub mod host;
 mod ops;
-mod protocol;
+mod pool;
+pub(crate) mod protocol;
 mod transport;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::backend::*;
@@ -61,9 +68,14 @@ pub use transport::{Lost, ResourceArgs, Transport};
 /// has guest storage of its own.
 const QUERY_AREA: usize = 16 * 1024;
 const QUERY_SLOT: usize = 16;
+/// Bytes of the buffer of zeros new buffers are copied from.
+const ZERO_BYTES: usize = 256 * 1024;
 /// Words kept free in the command buffer for the command that consumes a
 /// staged block.
 const RESERVE_WORDS: usize = 64;
+/// Resources waiting to be destroyed that make the commands naming them go
+/// at once.
+const DOOMED: usize = 64;
 
 /// Why the host cannot be used.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,6 +85,10 @@ pub enum Unsupported {
     /// The host cannot copy between resources and guest memory in the
     /// command stream (`VIRGL_CAP_COPY_TRANSFER` in both directions).
     Transfers,
+    /// The host has fewer draw buffers, vertex attributes or uniform blocks
+    /// than the front end offers applications, or needs uniform blocks
+    /// further apart.
+    Limits,
     /// Too little shared memory.
     Memory,
     /// The device failed.
@@ -82,6 +98,8 @@ pub enum Unsupported {
 /// A resource, as this renderer keeps track of it.
 struct Res {
     desc: ResourceDesc,
+    /// A buffer's bytes on the host (at least `desc.width`: see `pool`).
+    capacity: u32,
     /// The host's format (textures and renderbuffers).
     host: Option<HostFormat>,
     /// Views and surfaces made of it (destroyed with it).
@@ -99,8 +117,8 @@ struct Shadow {
     /// Whether `data` is current (not if the GPU wrote the buffer since).
     valid: bool,
     /// The highest index of ranges looked at, by (offset, count, index
-    /// bytes, restart); `None` if every index is the restart index.
-    ranges: BTreeMap<(usize, u32, u8, bool), Option<u32>>,
+    /// bytes, restart).
+    ranges: BTreeMap<(usize, u32, u8, bool), draw::Highest>,
 }
 
 /// A sampler view's description.
@@ -154,6 +172,11 @@ pub struct VirglBackend {
     staging_used: usize,
     query_slots: Vec<usize>,
     resources: BTreeMap<u32, Res>,
+    /// Buffers kept for new ones.
+    pool: pool::Pool,
+    /// Resources to destroy on the host once the commands that may name
+    /// them have been submitted, with the query result slots to free then.
+    doomed: Vec<(u32, Option<usize>)>,
     /// Object handles: the next new one, and destroyed ones to reuse.
     next_handle: u32,
     free_handles: Vec<u32>,
@@ -193,11 +216,18 @@ impl VirglBackend {
         if !host.has(CAP_COPY_TRANSFER) || !host.has2(CAP2_COPY_TRANSFER_BOTH_DIRECTIONS) {
             return Err(Unsupported::Transfers);
         }
-        let (_, shared) = t.shared();
-        if shared < QUERY_AREA + 1024 * 1024 {
+        use crate::context::{DRAW_BUFFERS, UNIFORM_BUFFER_OFFSET_ALIGNMENT, VERTEX_ATTRIBS};
+        let blocks = vglsl::Options::default().limits.max_uniform_blocks;
+        if !host.meets(DRAW_BUFFERS, VERTEX_ATTRIBS, blocks, UNIFORM_BUFFER_OFFSET_ALIGNMENT) {
+            return Err(Unsupported::Limits);
+        }
+        // Query results are 16-byte records the host writes, which are read
+        // a word at a time: the area they are in starts at a multiple of 16.
+        let (base, shared) = t.shared();
+        if shared < QUERY_AREA + 1024 * 1024 || !(base as usize).is_multiple_of(QUERY_SLOT) {
             return Err(Unsupported::Memory);
         }
-        let staging_size = shared - QUERY_AREA;
+        let staging_size = (shared - QUERY_AREA) / QUERY_SLOT * QUERY_SLOT;
         let args = ResourceArgs {
             target: TARGET_BUFFER,
             format: format::R8_UNORM,
@@ -230,6 +260,8 @@ impl VirglBackend {
             staging_used: 0,
             query_slots: (0..QUERY_AREA / QUERY_SLOT - 1).rev().collect(),
             resources: BTreeMap::new(),
+            pool: pool::Pool::default(),
+            doomed: Vec::new(),
             next_handle: 1,
             free_handles: Vec::new(),
             views: BTreeMap::new(),
@@ -250,16 +282,6 @@ impl VirglBackend {
         })
     }
 
-    /// The host's capabilities.
-    pub fn host(&self) -> &HostCaps {
-        &self.host
-    }
-
-    /// Whether the device has failed (everything since is lost).
-    pub fn is_lost(&self) -> bool {
-        self.lost
-    }
-
     // ---- Commands ---------------------------------------------------------
 
     /// Queues a command.
@@ -272,34 +294,57 @@ impl VirglBackend {
         self.cmds.extend_from_slice(words);
     }
 
-    /// Sends the queued commands. Afterwards the staging buffer is free.
+    /// Sends the queued commands. Afterwards the staging buffer is free;
+    /// resources they were the last to name are destroyed, and buffers
+    /// kept for reuse get a fence to wait for.
     fn submit(&mut self) {
-        if self.cmds.is_empty() {
-            return;
+        self.send();
+        if self.pool.unfenced() {
+            self.fence_now();
         }
-        if !self.lost && self.t.submit(&self.cmds).is_err() {
-            self.lost = true;
-        }
-        self.cmds.clear();
-        self.staging_used = 0;
     }
 
-    /// Sends the queued commands and returns a fence after them.
+    /// Sends the queued commands, and destroys what waited for them.
+    fn send(&mut self) {
+        if !self.cmds.is_empty() {
+            if !self.lost && self.t.submit(&self.cmds).is_err() {
+                self.lost = true;
+            }
+            self.cmds.clear();
+            self.staging_used = 0;
+        }
+        for (id, slot) in core::mem::take(&mut self.doomed) {
+            // A lost context's resources went with it.
+            if !self.lost {
+                self.t.destroy_resource(id);
+            }
+            self.query_slots.extend(slot);
+        }
+    }
+
+    /// Sends the queued commands and returns a fence after them (0 if the
+    /// context is lost).
     fn fence_now(&mut self) -> u64 {
-        self.submit();
+        self.send();
         if self.lost {
             return 0;
         }
-        self.t.fence().unwrap_or_else(|_| {
-            self.lost = true;
-            0
-        })
+        match self.t.fence() {
+            Ok(f) => {
+                self.pool.fenced(f);
+                f
+            }
+            Err(_) => {
+                self.lost = true;
+                0
+            }
+        }
     }
 
     /// Waits until the GPU has done all the work queued.
     fn sync(&mut self) {
         let f = self.fence_now();
-        if !self.lost && self.t.wait(f).is_err() {
+        if !self.lost && self.t.wait(f, u64::MAX).is_err() {
             self.lost = true;
         }
     }
@@ -314,6 +359,7 @@ impl VirglBackend {
 
     fn destroy_object(&mut self, handle: u32) {
         self.emit(CMD_DESTROY_OBJECT, 0, &[handle]);
+        self.state.bound.forget_object(handle);
         self.free_handles.push(handle);
     }
 
@@ -331,22 +377,25 @@ impl VirglBackend {
         at
     }
 
-    /// The shared memory at `at`, `len` bytes. The host does not write the
-    /// staging area except while commands run, which they do not while the
-    /// slice lives.
+    /// The shared memory at `at`, `len` bytes (which callers keep inside
+    /// it). The host does not write the staging area except while commands
+    /// run, which they do not while the slice lives.
     fn shared_mut(&mut self, at: usize, len: usize) -> &mut [u8] {
         let (p, size) = self.t.shared();
-        assert!(at + len <= size);
-        // SAFETY: inside the shared mapping, which the transport keeps
+        assert!(at.checked_add(len).is_some_and(|end| end <= size), "staging past the shared memory");
+        // SAFETY: inside the shared memory, which the transport keeps
         // alive; `&mut self` keeps this the only slice of it.
         unsafe { core::slice::from_raw_parts_mut(p.add(at), len) }
     }
 
-    /// A word of shared memory the host may write at any time.
+    /// A word of shared memory the host may write at any time: of a query
+    /// result's record.
     fn shared_word(&self, at: usize) -> u32 {
         let (p, size) = self.t.shared();
-        assert!(at + 4 <= size);
-        // SAFETY: inside the shared mapping, aligned to 4.
+        assert!(at + 4 <= size && at.is_multiple_of(4), "a word past the shared memory");
+        // SAFETY: inside the shared memory, which starts at a multiple of
+        // 16 (`new` checks), at a multiple of 4; read as the host may be
+        // writing it.
         unsafe { core::ptr::read_volatile(p.add(at) as *const u32) }
     }
 
@@ -370,7 +419,53 @@ impl VirglBackend {
 
     // ---- Resources ------------------------------------------------------------
 
+    /// A resource as `desc` describes it: a buffer the front end let go
+    /// of ([`VirglBackend::take_kept`]), or a new one.
     fn create(&mut self, desc: &ResourceDesc) -> Result<u32, OutOfMemory> {
+        match self.take_kept(desc)? {
+            Some(handle) => Ok(handle),
+            None => self.create_new(desc),
+        }
+    }
+
+    /// What the backend keeps of a resource: its description and, for a
+    /// buffer, the guest's copy of its contents (zeros, as it is new).
+    fn record(desc: &ResourceDesc, capacity: u32, host: Option<HostFormat>) -> Result<Res, OutOfMemory> {
+        let shadow = if desc.target == Target::Buffer {
+            let data = crate::pixels::try_zeroed(desc.width as usize).ok_or(OutOfMemory)?;
+            Some(Shadow { data, valid: true, ranges: BTreeMap::new() })
+        } else {
+            None
+        };
+        Ok(Res { desc: *desc, capacity, host, views: Vec::new(), surfaces: Vec::new(), shadow })
+    }
+
+    /// A buffer of one the front end let go of, if `desc` is a buffer's and
+    /// the GPU is done with one large enough. It holds what it held.
+    fn take_kept(&mut self, desc: &ResourceDesc) -> Result<Option<u32>, OutOfMemory> {
+        if desc.target != Target::Buffer {
+            return Ok(None);
+        }
+        let t = &mut self.t;
+        let Some((handle, capacity)) = self.pool.take(desc.width, |f| t.signaled(f)) else { return Ok(None) };
+        match Self::record(desc, capacity, None) {
+            Ok(record) => {
+                self.resources.insert(handle, record);
+                Ok(Some(handle))
+            }
+            Err(e) => {
+                // Kept again, for another.
+                for gone in self.pool.keep(handle, capacity) {
+                    self.doom(gone, None);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// A resource the host makes anew.
+    fn create_new(&mut self, desc: &ResourceDesc) -> Result<u32, OutOfMemory> {
+        let capacity = pool::Pool::capacity(desc.width);
         let (args, host) = match desc.target {
             Target::Buffer => (
                 ResourceArgs {
@@ -379,7 +474,7 @@ impl VirglBackend {
                     // virglrenderer takes exactly one buffer binding; a GL
                     // buffer may later be bound anywhere.
                     bind: BIND_VERTEX_BUFFER,
-                    width: desc.width.max(1),
+                    width: capacity,
                     height: 1,
                     depth: 1,
                     array_size: 1,
@@ -421,14 +516,9 @@ impl VirglBackend {
                 (args, Some(hf))
             }
         };
-        let shadow = if desc.target == Target::Buffer {
-            let data = crate::pixels::try_zeroed(desc.width as usize).ok_or(OutOfMemory)?;
-            Some(Shadow { data, valid: true, ranges: BTreeMap::new() })
-        } else {
-            None
-        };
+        let record = Self::record(desc, args.width, host)?;
         let handle = self.t.create_resource(&args, Some(self.dummy_backing()))?;
-        self.resources.insert(handle, Res { desc: *desc, host, views: Vec::new(), surfaces: Vec::new(), shadow });
+        self.resources.insert(handle, record);
         Ok(handle)
     }
 
@@ -440,6 +530,13 @@ impl VirglBackend {
 
     fn destroy(&mut self, id: u32) {
         let Some(r) = self.resources.remove(&id) else { return };
+        if r.desc.target == Target::Buffer {
+            // Kept for new buffers (still bound, it may stay so).
+            for gone in self.pool.keep(id, r.capacity) {
+                self.doom(gone, None);
+            }
+            return;
+        }
         for v in r.views {
             if let Some(h) = self.views.remove(&v) {
                 self.destroy_object(h);
@@ -450,10 +547,19 @@ impl VirglBackend {
                 self.destroy_object(h);
             }
         }
-        self.state.forget_resource(id);
-        // Commands naming it must reach the host first.
-        self.submit();
-        self.t.destroy_resource(id);
+        self.doom(id, None);
+    }
+
+    /// Destroys a resource on the host once the commands queued so far,
+    /// which may name it, have been submitted (and frees a query result
+    /// slot then). Bindings naming it are forgotten: the host may give its
+    /// handle to another.
+    fn doom(&mut self, id: u32, slot: Option<usize>) {
+        self.state.bound.forget_resource(id);
+        self.doomed.push((id, slot));
+        if self.doomed.len() >= DOOMED {
+            self.submit();
+        }
     }
 
     /// A surface (a level and layer of a resource), made once. None (0)
@@ -520,13 +626,86 @@ impl VirglBackend {
             }
             s.ranges.clear();
         }
+        self.upload_bytes(id, offset, data.len(), |done, staged| staged.copy_from_slice(&data[done..][..staged.len()]));
+    }
+
+    /// Writes `len` bytes of a buffer from `offset` through staging:
+    /// `fill(done, staged)` fills the staged bytes that go `done` bytes
+    /// after `offset`.
+    fn upload_bytes(&mut self, id: u32, offset: usize, len: usize, mut fill: impl FnMut(usize, &mut [u8])) {
         let mut done = 0;
-        while done < data.len() {
-            let n = (data.len() - done).min(self.staging_size);
+        while done < len {
+            let n = (len - done).min(self.staging_size);
             let at = self.stage(n);
-            self.shared_mut(at, n).copy_from_slice(&data[done..done + n]);
+            fill(done, self.shared_mut(at, n));
             self.transfer(id, 0, [(offset + done) as u32, 0, 0, n as u32, 1, 1], 0, 0, at, true);
             done += n;
+        }
+    }
+
+    // ---- New resources read as zero -------------------------------------------
+
+    /// Makes a new resource read as zero, as `Backend::create_resource`
+    /// promises: the host's memory may hold what another context left in
+    /// it, as GPU drivers recycle freed memory. Images the host can draw
+    /// into are cleared (2D and cube textures: render targets, which have
+    /// few images per level); the rest are written with zeros through
+    /// staging; buffers are copied from a buffer of zeros.
+    fn zero(&mut self, id: u32, d: &ResourceDesc) {
+        match d.target {
+            Target::Buffer => self.zero_buffer(id, d.width as usize),
+            Target::Renderbuffer => self.zero_image(Surface { resource: id, level: 0, layer: 0 }, d),
+            _ => {
+                let Some(hf) = self.resources.get(&id).and_then(|r| r.host) else { return };
+                let depth = matches!(d.format.class(), Class::Depth | Class::DepthStencil | Class::Stencil);
+                let drawn = depth || (formats::gl_renderable(d.format) && hf.renderable);
+                let clears = drawn && matches!(d.target, Target::Texture2D | Target::TextureCube);
+                for level in 0..d.levels.max(1) {
+                    let (w, h, layers) = d.level_size(level);
+                    if clears {
+                        for layer in 0..layers {
+                            self.zero_image(Surface { resource: id, level, layer }, d);
+                        }
+                    } else {
+                        self.upload(id, level, Region::new(0, 0, 0, w, h, layers), |_, _, _, row| row.fill(0));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Zeroes the first `len` bytes of a buffer: copies of a buffer of
+    /// zeros, made once (or, if there is no memory for it, zeros through
+    /// staging).
+    fn zero_buffer(&mut self, id: u32, len: usize) {
+        let zero = match self.internal.zero {
+            Some(z) => Some(z),
+            None => {
+                let desc = ResourceDesc {
+                    target: Target::Buffer,
+                    format: Format::R8Uint,
+                    width: ZERO_BYTES as u32,
+                    height: 1,
+                    depth: 1,
+                    levels: 1,
+                    samples: 0,
+                };
+                let z = self.create(&desc).ok();
+                if let Some(z) = z {
+                    self.upload_bytes(z, 0, ZERO_BYTES, |_, staged| staged.fill(0));
+                }
+                self.internal.zero = z;
+                z
+            }
+        };
+        let Some(zero) = zero else {
+            return self.upload_bytes(id, 0, len, |_, staged| staged.fill(0));
+        };
+        let mut at = 0;
+        while at < len {
+            let n = (len - at).min(ZERO_BYTES);
+            self.emit(CMD_RESOURCE_COPY_REGION, 0, &[id, 0, at as u32, 0, 0, zero, 0, 0, 0, 0, n as u32, 1, 1]);
+            at += n;
         }
     }
 
@@ -604,33 +783,42 @@ impl VirglBackend {
         row_pitch: usize,
         image_pitch: usize,
     ) {
+        let Some(fmt) = self.resources.get(&id).map(|r| r.desc.format) else { return };
+        let sb = fmt.bytes();
+        self.upload(id, level, region, |tf, z, y, row| {
+            let src = &data[z * image_pitch + y * row_pitch..][..region.w as usize * sb];
+            if tf == fmt {
+                row.copy_from_slice(src);
+            } else {
+                for (s, t) in src.chunks_exact(sb).zip(row.chunks_exact_mut(tf.bytes())) {
+                    tf.encode(&fmt.decode(s), t);
+                }
+            }
+        });
+    }
+
+    /// Writes a region of a level as the host keeps it, through staging:
+    /// `fill(format, z, y, row)` fills the staged texels of row `y` of
+    /// image `z` of the region (both counted from its corner), in the
+    /// format transfers use.
+    fn upload(&mut self, id: u32, level: u32, region: Region, mut fill: impl FnMut(Format, usize, usize, &mut [u8])) {
         let Some(r) = self.resources.get(&id) else { return };
         let (Some(hf), fmt) = (r.host, r.desc.format) else { return };
         let tf = hf.transfer_format(fmt);
-        let (sb, tb) = (fmt.bytes(), tf.bytes());
-        let row_bytes = region.w as usize * tb;
+        let row_bytes = region.w as usize * tf.bytes();
         let stride = row_bytes.next_multiple_of(4).max(4);
         for p in self.pieces(region, row_bytes) {
-            let len = stride * (p.h * p.d) as usize;
-            let at = self.stage(len);
-            let dst = self.shared_mut(at, len);
+            let image = stride * p.h as usize;
+            let at = self.stage(image * p.d as usize);
+            let dst = self.shared_mut(at, image * p.d as usize);
             for z in 0..p.d as usize {
                 for y in 0..p.h as usize {
-                    let sz = (p.z - region.z) as usize + z;
-                    let sy = (p.y - region.y) as usize + y;
-                    let src = &data[sz * image_pitch + sy * row_pitch..][..region.w as usize * sb];
-                    let d = &mut dst[(z * p.h as usize + y) * stride..][..row_bytes];
-                    if tf == fmt {
-                        d.copy_from_slice(src);
-                    } else {
-                        for (s, t) in src.chunks_exact(sb).zip(d.chunks_exact_mut(tb)) {
-                            tf.encode(&fmt.decode(s), t);
-                        }
-                    }
+                    let (sz, sy) = ((p.z - region.z) as usize + z, (p.y - region.y) as usize + y);
+                    fill(tf, sz, sy, &mut dst[z * image + y * stride..][..row_bytes]);
                 }
             }
             let b = [p.x, p.y, p.z, p.w, p.h, p.d];
-            self.transfer(id, level, b, stride as u32, (stride * p.h as usize) as u32, at, true);
+            self.transfer(id, level, b, stride as u32, image as u32, at, true);
         }
     }
 
@@ -656,11 +844,17 @@ impl VirglBackend {
         let row_bytes = region.w as usize * tb;
         let stride = row_bytes.next_multiple_of(4).max(4);
         for p in self.pieces(region, row_bytes) {
-            let len = stride * (p.h * p.d) as usize;
+            let image = stride * p.h as usize;
+            let len = image * p.d as usize;
             self.submit();
             let at = self.stage(len);
-            let b = [p.x, p.y, p.z, p.w, p.h, p.d];
-            self.transfer(id, level, b, stride as u32, (stride * p.h as usize) as u32, at, false);
+            // An image per transfer: virglrenderer on desktop OpenGL reads
+            // the slices after the first of a 3D texture as they were
+            // before writes earlier in the same submission.
+            for z in 0..p.d {
+                let b = [p.x, p.y, p.z + z, p.w, p.h, 1];
+                self.transfer(id, level, b, stride as u32, image as u32, at + z as usize * image, false);
+            }
             self.submit();
             let src = self.shared_mut(at, len);
             for z in 0..p.d as usize {
@@ -711,9 +905,9 @@ impl VirglBackend {
             levels: 1,
             samples: 0,
         };
-        let Ok(tmp) = self.create(&desc) else { return };
         let row = region.w as usize * 16;
-        let mut texels = vec![0u8; row * region.h as usize];
+        let Some(mut texels) = crate::pixels::try_zeroed(row * region.h as usize) else { return };
+        let Ok(tmp) = self.create(&desc) else { return };
         for z in 0..region.d {
             let src = Surface { resource: id, level, layer: region.z + z };
             let dst = Surface { resource: tmp, level: 0, layer: 0 };
@@ -745,8 +939,7 @@ impl VirglBackend {
             QueryKind::AnySamplesPassedConservative => QUERY_OCCLUSION_PREDICATE_CONSERVATIVE,
             _ => QUERY_OCCLUSION_PREDICATE,
         };
-        let id = self.next_query;
-        self.next_query += 1;
+        let id = unused_id(&self.queries, &mut self.next_query);
         self.queries.insert(id, Query { kind, parts: Vec::new(), fence: None, overflow: false });
         // Its first part begins at the first draw.
         self.active_query = Some(id);
@@ -911,20 +1104,15 @@ impl VirglBackend {
             self.active_query = None;
         }
         let Some(q) = self.queries.remove(&id) else { return };
-        for p in &q.parts {
-            self.destroy_object(p.object);
-        }
-        self.submit();
         for p in q.parts {
-            self.t.destroy_resource(p.resource);
-            self.query_slots.push(p.slot);
+            self.destroy_object(p.object);
+            self.doom(p.resource, Some(p.slot));
         }
     }
 
     fn drop_program(&mut self, id: ProgramId) {
         self.guest_programs.remove(&id);
         if let Some(p) = self.programs.remove(&id) {
-            self.state.forget_program(&p);
             self.destroy_object(p.vs);
             self.destroy_object(p.fs);
             for h in p.passes {
@@ -950,13 +1138,12 @@ impl VirglBackend {
 
 /// What the front end may use, from the host's limits.
 fn caps_for(h: &HostCaps) -> Caps {
-    // The renderer's name: Mesa's driver of the GPU's ("softpipe", "Mesa
-    // Intel(R) Graphics (ADL GT2)", "virgl (...)" under QEMU).
-    let name: &'static str = Box::leak(alloc::string::String::from(h.renderer_name()).into_boxed_str());
     let max_2d = h.max_texture_2d_size.clamp(2048, 16384);
     let renders = |f: u32| h.can_render(f);
     Caps {
-        name,
+        // Mesa's driver of the GPU's ("softpipe", "Mesa Intel(R) Graphics
+        // (ADL GT2)", "virgl (...)" under QEMU).
+        name: alloc::string::String::from(h.renderer_name()),
         max_texture_size: max_2d,
         max_3d_texture_size: h.max_texture_3d_size.clamp(256, 2048),
         max_cube_map_size: h.max_texture_cube_size.clamp(2048, 16384),
@@ -988,12 +1175,15 @@ impl Backend for VirglBackend {
     }
 
     fn create_resource(&mut self, desc: &ResourceDesc) -> Result<ResourceId, OutOfMemory> {
-        let id = self.create(desc)?;
-        // The front end fills new textures and buffers; render targets start
-        // as zero here, never as what the host's memory held before (another
-        // context's frames).
-        if desc.target == Target::Renderbuffer {
-            self.unqueried(|b| b.zero_render_target(id, desc));
+        // A buffer kept holds what it held; a new resource reads as zero
+        // only where the host makes it so.
+        let (id, zeroed) = match self.take_kept(desc)? {
+            Some(id) => (id, false),
+            None => (self.create_new(desc)?, self.t.zeroes_new_resources()),
+        };
+        if !zeroed {
+            // Clearing may draw: outside the application's queries.
+            self.unqueried(|b| b.zero(id, desc));
         }
         Ok(id)
     }
@@ -1008,7 +1198,7 @@ impl Backend for VirglBackend {
             return Err(OutOfMemory);
         }
         // Kept in the memory's own order, which the host renders.
-        let virgl = if memory.bgr { format::B8G8R8X8_UNORM } else { format::R8G8B8X8_UNORM };
+        let virgl = if memory.bgr() { format::B8G8R8X8_UNORM } else { format::R8G8B8X8_UNORM };
         let args = ResourceArgs {
             target: TARGET_2D,
             format: virgl,
@@ -1021,18 +1211,21 @@ impl Backend for VirglBackend {
         };
         let handle = self.t.import_resource(&args, memory)?;
         let host = formats::HostFormat { virgl, layout: None, swizzle: [0, 1, 2, 3], renderable: true };
-        self.resources.insert(
-            handle,
-            Res { desc: *desc, host: Some(host), views: Vec::new(), surfaces: Vec::new(), shadow: None },
-        );
+        let record =
+            Res { desc: *desc, capacity: 0, host: Some(host), views: Vec::new(), surfaces: Vec::new(), shadow: None };
+        self.resources.insert(handle, record);
         Ok(handle)
     }
 
     fn write(&mut self, id: ResourceId, level: u32, region: Region, data: &[u8], row_pitch: usize, image_pitch: usize) {
-        match self.resources.get(&id).map(|r| r.desc.target) {
-            Some(Target::Buffer) => self.write_buffer(id, region.x as usize, &data[..region.w as usize]),
-            Some(_) => self.write_texture(id, level, region, data, row_pitch, image_pitch),
-            None => {}
+        let Some(d) = self.resources.get(&id).map(|r| r.desc) else { return };
+        let texel = if d.target == Target::Buffer { 1 } else { d.format.bytes() };
+        if transfer_bytes(&region, texel, row_pitch, image_pitch).is_none_or(|n| data.len() < n) {
+            return;
+        }
+        match d.target {
+            Target::Buffer => self.write_buffer(id, region.x as usize, &data[..region.w as usize]),
+            _ => self.write_texture(id, level, region, data, row_pitch, image_pitch),
         }
     }
 
@@ -1045,10 +1238,14 @@ impl Backend for VirglBackend {
         row_pitch: usize,
         image_pitch: usize,
     ) {
-        match self.resources.get(&id).map(|r| r.desc.target) {
-            Some(Target::Buffer) => self.read_buffer(id, region.x as usize, &mut out[..region.w as usize]),
-            Some(_) => self.unqueried(|b| b.read_texture(id, level, region, out, row_pitch, image_pitch)),
-            None => {}
+        let Some(d) = self.resources.get(&id).map(|r| r.desc) else { return };
+        let texel = if d.target == Target::Buffer { 1 } else { d.format.bytes() };
+        if transfer_bytes(&region, texel, row_pitch, image_pitch).is_none_or(|n| out.len() < n) {
+            return;
+        }
+        match d.target {
+            Target::Buffer => self.read_buffer(id, region.x as usize, &mut out[..region.w as usize]),
+            _ => self.unqueried(|b| b.read_texture(id, level, region, out, row_pitch, image_pitch)),
         }
     }
 
@@ -1141,10 +1338,13 @@ impl Backend for VirglBackend {
         if timeout_ns == 0 {
             return false;
         }
-        // Waits longer than asked rather than polling a clock.
-        if self.t.wait(fence).is_err() {
-            self.lost = true;
+        match self.t.wait(fence, timeout_ns) {
+            Ok(signaled) => signaled,
+            // Nothing will ever happen on a lost context.
+            Err(Lost) => {
+                self.lost = true;
+                true
+            }
         }
-        true
     }
 }

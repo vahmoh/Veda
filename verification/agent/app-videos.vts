@@ -21,10 +21,11 @@ wait-serial "videos offers" 10
 agent-call use_app '{"app":"videos","action":"list_videos","arguments":{"query":"aurora"}}' 30
 agent-result '"title":"Aurora Timelapse"'
 agent-result '"total":1'
-# A video by name, heard a little wrong.
+# A video by name, heard a little wrong: the answer comes at once, while
+# it opens, and the player says when it plays.
 agent-call use_app '{"app":"videos","action":"play","arguments":{"video":"the count down video"}}' 30
 agent-result '"title":"Countdown"'
-agent-result '"playback":"playing'
+agent-result '"playback":"opening"'
 wait-serial "videos: playing Countdown" 30
 wait 3
 agent-call use_app '{"app":"videos","action":"pause"}' 30
@@ -55,7 +56,7 @@ agent-result '"picture":"640 × 360 · AV1 · 30 fps"'
 agent-result '"full_screen":true,"volume":40,"muted":false'
 agent-result '"library":{"folder":"~/Videos","videos":3}'
 wait 2
-shot target/veda/agent-app-videos.png
+shot target/veda/agent-app-videos.png now
 agent-call use_app '{"app":"videos","action":"full_screen","arguments":{"on":false}}' 30
 wait-serial "videos: full screen off" 10
 # Back to the library; another video from the start; one that is not there.

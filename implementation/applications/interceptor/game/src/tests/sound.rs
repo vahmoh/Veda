@@ -24,7 +24,6 @@ use crate::carmodel::Kind;
 use crate::env::{Environment, TimeOfDay, Weather};
 use crate::pursuit::{Pursuit, Wanted};
 use crate::sound::Sound;
-use crate::vehicle::Spec;
 use crate::world::World;
 use glam::Vec3;
 
@@ -96,13 +95,7 @@ fn a_chase_sounds() {
     game.start_traffic();
     let p = game.player;
     game.cars[p].siren = true;
-    let wanted = Wanted {
-        kind: Kind::Muscle,
-        spec: Spec::sports(),
-        paint: Vec3::new(0.5, 0.02, 0.02),
-        skill: 0.95,
-        aggression: 0.6,
-    };
+    let wanted = Wanted { kind: Kind::Muscle, paint: Vec3::new(0.5, 0.02, 0.02), skill: 0.95, aggression: 0.6 };
     let mut chase = Pursuit::start(&mut game, &wanted, 60.0, 25.0);
     game.set_autopilot(true, Some(chase.suspect));
     let mut sound = Sound::new();
@@ -184,7 +177,7 @@ fn sound_bench() {
             (850.0, 0.05)
         };
         let engine = EngineState {
-            key: k as u32 + 1,
+            key: k as u64 + 1,
             emitter: Emitter { pos: Vec3::new(0.0, 0.5, -8.0), vel: Vec3::ZERO },
             layout: layouts[k],
             rpm,
@@ -194,7 +187,7 @@ fn sound_bench() {
             boost: false,
             own: true,
         };
-        m.set_scene(Scene { listener: ears, engines: vec![engine], volume: 1.0, ..Scene::default() });
+        m.set_scene(Scene { listener: ears, engines: [engine].into_iter().collect(), volume: 1.0, ..Scene::default() });
     });
     save(&dir, "engines", &pcm);
     // A police car going by at 35 m/s, 6 m away, its siren wailing then
@@ -205,7 +198,7 @@ fn sound_bench() {
         let roof = Emitter { pos: car.pos + Vec3::Y * 1.2, ..car };
         m.set_scene(Scene {
             listener: ears,
-            engines: vec![EngineState {
+            engines: [EngineState {
                 key: 1,
                 emitter: car,
                 layout: Layout::V8Charged,
@@ -215,14 +208,18 @@ fn sound_bench() {
                 limiter: false,
                 boost: false,
                 own: false,
-            }],
-            sirens: vec![SirenState {
+            }]
+            .into_iter()
+            .collect(),
+            sirens: [SirenState {
                 key: 1,
                 emitter: roof,
                 wail: if t < 9.0 { Wail::Wail } else { Wail::Yelp },
                 own: false,
-            }],
-            tires: vec![TireState { key: 1, emitter: car, slip: 0.0, speed: 35.0 }],
+            }]
+            .into_iter()
+            .collect(),
+            tires: [TireState { key: 1, emitter: car, slip: 0.0, speed: 35.0 }].into_iter().collect(),
             wind: 0.0,
             volume: 1.0,
             ..Scene::default()

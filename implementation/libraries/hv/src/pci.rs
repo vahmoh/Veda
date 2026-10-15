@@ -11,16 +11,43 @@
 //! interrupt line register says which GSI that is, as a PC's firmware
 //! leaves it), none otherwise.
 //!
-//! And the function reports no errors to the host: the errors a function
+//! The function reports no errors to the host: the errors a function
 //! signals become the host's system errors, which a PC may turn into NMIs
 //! (as Xen's XSA-59 found). Its SERR# enable and PCI Express error
 //! reporting stay off, whatever the guest writes.
+//!
+//! Of the PCI Express capability, as VFIO has it, only device control and
+//! status and device control 2 are the guest's to write; the rest (link,
+//! slot and root control and their seconds: how the link is trained and
+//! run, which the host's end of it must agree with) is read-only. And of
+//! device control, what would reach past the function is not the guest's:
+//! phantom functions, which would have the function's DMA carry other
+//! functions' requester ids, outside the guest's IOMMU domain, are never
+//! enabled; the maximum payload size stays the one the host set along the
+//! link (a larger one would have the root port take the function's packets
+//! for malformed, a fatal error), the guest reading back its own; the
+//! maximum read request size reaches the function, but never below its
+//! payload size.
+//!
+//! A function-level reset is the host's: it would leave the function
+//! without its BARs, which the guest can neither see nor put back. Neither
+//! the PCI Express capability nor the Advanced Features capability says
+//! the function has one, and a write that would start one does not reach
+//! it; Linux then resets the function through D3hot, after which the host
+//! puts its BARs back.
+//!
+//! What the platform needs to know of the function for this (where those
+//! capabilities and registers are, the payload size the host set) it reads
+//! of it at the guest's first read of its configuration space; until then,
+//! the guest's writes do not reach it (a guest reads a function before it
+//! writes it).
 //!
 //! An Intel integrated GPU has registers that are the platform's too
 //! ([`ConfigSpace::intel_graphics`]); its driver also reads the PC's host
 //! bridge, which the guest has a stand-in for ([`HostBridge`]).
 
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 /// A memory BAR, where the guest has it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,13 +78,36 @@ pub const SIZE: u16 = 256;
 /// The command register's SERR# enable: the function may signal system
 /// errors.
 pub const COMMAND_SERR: u16 = 1 << 8;
-/// The error reporting enables of the PCI Express capability's device
-/// control register (correctable, non-fatal, fatal, unsupported request).
-pub const DEVCTL_ERROR_REPORTING: u16 = 0xF;
-/// Where device control is in the PCI Express capability.
-pub const DEVCTL: u16 = 8;
 /// The PCI Express capability's id.
 pub const CAP_PCI_EXPRESS: u8 = 0x10;
+/// The Advanced Features capability's id (a conventional PCI function's
+/// function-level reset).
+pub const CAP_ADVANCED_FEATURES: u8 = 0x13;
+/// Where device control is in the PCI Express capability.
+pub const DEVCTL: u16 = 8;
+/// The error reporting enables of device control (correctable, non-fatal,
+/// fatal, unsupported request).
+pub const DEVCTL_ERROR_REPORTING: u16 = 0xF;
+/// Where device capabilities and device control 2 are in the PCI Express
+/// capability.
+const DEVCAP: u16 = 4;
+const DEVCTL2: u16 = 0x28;
+/// Device capabilities: the function has a function-level reset.
+const DEVCAP_FLR: u32 = 1 << 28;
+/// Device control's maximum payload size, maximum read request size, and
+/// initiate function-level reset.
+const DEVCTL_PAYLOAD: u16 = 7 << 5;
+const DEVCTL_READ_REQUEST: u16 = 7 << 12;
+const DEVCTL_FLR: u16 = 1 << 15;
+/// What of device control reaches the function as the guest writes it:
+/// relaxed ordering, extended tags, auxiliary power, no snoop. Not the
+/// error reporting enables, phantom functions or a function-level reset.
+const DEVCTL_GUESTS: u16 = 1 << 4 | 1 << 8 | 1 << 10 | 1 << 11;
+/// The Advanced Features capability's capabilities byte (its function-level
+/// reset), and its control (initiate one).
+const AF_CAPABILITIES: u16 = 3;
+const AF_FLR: u32 = 1 << 1;
+const AF_LENGTH: u16 = 6;
 
 /// An Intel integrated GPU's registers that name the PC's memory: its
 /// graphics control (GGC: the size of its stolen memory), the base of its
@@ -76,7 +126,21 @@ const COMMAND_DWORD: u16 = 0x04;
 const HEADER_TYPE_DWORD: u16 = 0x0C;
 const BARS: core::ops::Range<u16> = 0x10..0x28;
 const ROM: u16 = 0x30;
+const CAPABILITIES: u16 = 0x34;
 const INTERRUPT_DWORD: u16 = 0x3C;
+
+/// What the platform learnt of the function at the guest's first read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Learnt {
+    /// Where the PCI Express capability's registers end (its version 1
+    /// has fewer than its version 2), and whether it has device control 2.
+    express_end: u16,
+    control_2: bool,
+    /// Device control as the host left it: the payload size it keeps.
+    devctl: u16,
+    /// Where the Advanced Features capability is, if the function has one.
+    advanced_features: Option<u16>,
+}
 
 /// The configuration space of a function given to a guest.
 #[derive(Debug, Clone)]
@@ -95,11 +159,26 @@ pub struct ConfigSpace {
     /// An Intel integrated GPU's: where the guest's copy of its OpRegion
     /// is (0: it has none).
     intel_graphics: Option<u32>,
+    learnt: Cell<Option<Learnt>>,
+    /// Device control's payload sizes as the guest last wrote them (what it
+    /// reads back of them), once it has.
+    payloads: Option<u16>,
 }
 
 impl ConfigSpace {
     pub fn new(bars: Vec<Bar>, multifunction: bool, pci_express: Option<u16>, intx: Option<(u8, u8)>) -> ConfigSpace {
-        ConfigSpace { bars, multifunction, pci_express, sizing: 0, intx, intel_graphics: None }
+        // Capabilities are at dwords of the space's own.
+        let pci_express = pci_express.map(|at| at & !3).filter(|&at| at >= 0x40 && at + DEVCTL + 4 <= SIZE);
+        ConfigSpace {
+            bars,
+            multifunction,
+            pci_express,
+            sizing: 0,
+            intx,
+            intel_graphics: None,
+            learnt: Cell::new(None),
+            payloads: None,
+        }
     }
 
     /// Makes it an Intel integrated GPU's, whose OpRegion the guest has a
@@ -122,22 +201,66 @@ impl ConfigSpace {
         let sizing = self.sizing & (1 << r) != 0;
         if let Some(b) = self.bars.iter().find(|b| b.index == r) {
             let flags = if b.is64 { 0b100 } else { 0 } | if b.prefetchable { 0b1000 } else { 0 };
-            let base = if sizing { !(b.size - 1) } else { b.address };
+            let base = if sizing { !b.size.wrapping_sub(1) } else { b.address };
             return (base as u32 & 0xFFFF_FFF0) | flags;
         }
         if let Some(b) = self.bars.iter().find(|b| b.is64 && b.index + 1 == r) {
-            return if sizing { (!(b.size - 1) >> 32) as u32 } else { (b.address >> 32) as u32 };
+            return if sizing { (!b.size.wrapping_sub(1) >> 32) as u32 } else { (b.address >> 32) as u32 };
         }
         0
     }
 
+    /// What the platform needs to know of the function, read of it
+    /// (`device` reads its dword at an offset) the first time.
+    fn learn(&self, device: &impl Fn(u16) -> u32) -> Learnt {
+        if let Some(learnt) = self.learnt.get() {
+            return learnt;
+        }
+        let mut learnt = Learnt { express_end: 0, control_2: false, devctl: 0, advanced_features: None };
+        if let Some(at) = self.pci_express {
+            // Its version, and the kind of function: version 1's registers
+            // end after the link's, or (a function in the root complex,
+            // without a link) after device control and status.
+            let flags = device(at) >> 16;
+            let (version, kind) = (flags & 0xF, flags >> 4 & 0xF);
+            let length = match (version, kind) {
+                (2.., _) => 0x3C,
+                (_, 9) => 0x0C,
+                _ => 0x14,
+            };
+            learnt.express_end = (at + length).min(SIZE);
+            learnt.control_2 = version >= 2;
+            learnt.devctl = device(at + DEVCTL) as u16;
+        }
+        // The list of capabilities (at most 48 fit), if the status register
+        // says there is one.
+        if device(COMMAND_DWORD) & (1 << 20) != 0 {
+            let mut at = (device(CAPABILITIES) & 0xFC) as u16;
+            for _ in 0..48 {
+                if at < 0x40 {
+                    break;
+                }
+                let header = device(at);
+                if header as u8 == CAP_ADVANCED_FEATURES {
+                    learnt.advanced_features = Some(at);
+                    break;
+                }
+                at = (header >> 8 & 0xFC) as u16;
+            }
+        }
+        self.learnt.set(Some(learnt));
+        learnt
+    }
+
     /// Reads `width` bytes (1, 2 or 4, aligned) at `offset`; `device`
     /// reads the function's own dword at an offset (aligned).
-    pub fn read(&self, offset: u16, width: u8, device: impl FnOnce(u16) -> u32) -> u32 {
+    pub fn read(&self, offset: u16, width: u8, device: impl Fn(u16) -> u32) -> u32 {
         if !aligned(offset, width) || offset >= SIZE {
             return u32::MAX >> (32 - 8 * width.clamp(1, 4) as u32);
         }
+        let learnt = self.learn(&device);
         let at = offset & !3;
+        let express = self.pci_express;
         let dword = match at {
             HEADER_TYPE_DWORD => {
                 let v = device(at);
@@ -152,6 +275,16 @@ impl ConfigSpace {
                 (device(at) & 0xFFFF_0000) | (pin as u32) << 8 | line as u32
             }
             intel_graphics::ASLS if let Some(opregion) = self.intel_graphics => opregion,
+            // No function-level reset: it is the host's.
+            _ if Some(at) == express.map(|e| e + DEVCAP) => device(at) & !DEVCAP_FLR,
+            _ if Some(at) == learnt.advanced_features => device(at) & !(AF_FLR << (8 * AF_CAPABILITIES)),
+            // Device control, with the payload sizes the guest wrote.
+            _ if Some(at) == express.map(|e| e + DEVCTL) => {
+                let v = device(at);
+                let control = v as u16 & !(DEVCTL_PAYLOAD | DEVCTL_READ_REQUEST | DEVCTL_FLR);
+                let payloads = self.payloads.unwrap_or(v as u16) & (DEVCTL_PAYLOAD | DEVCTL_READ_REQUEST);
+                (v & 0xFFFF_0000) | (control | payloads) as u32
+            }
             _ => device(at),
         };
         part(dword, offset, width)
@@ -174,7 +307,9 @@ impl ConfigSpace {
             }
             return Write::Absorbed;
         }
-        let devctl = self.pci_express.map(|p| (p + DEVCTL) & !3);
+        // Nothing reaches the function before the platform knows what of it
+        // is the guest's.
+        let Some(learnt) = self.learnt.get() else { return Write::Absorbed };
         let platforms = [
             intel_graphics::GGC,
             intel_graphics::BDSM,
@@ -183,6 +318,8 @@ impl ConfigSpace {
             intel_graphics::SWSCI,
             intel_graphics::ASLS,
         ];
+        let express = self.pci_express.filter(|&e| (e..learnt.express_end).contains(&at));
+        let advanced_features = learnt.advanced_features.filter(|&af| (af..af + AF_LENGTH).contains(&offset));
         match at {
             ROM => Write::Absorbed,
             _ if self.intel_graphics.is_some() && platforms.contains(&at) => Write::Absorbed,
@@ -192,12 +329,37 @@ impl ConfigSpace {
             INTERRUPT_DWORD if offset < 0x3E => Write::Absorbed,
             // No system errors, no error messages.
             COMMAND_DWORD => Write::Device { offset, width, value: without(offset, value, COMMAND_SERR as u32) },
-            _ if Some(at) == devctl => {
-                let bits = (DEVCTL_ERROR_REPORTING as u32) << (8 * ((self.pci_express.unwrap_or(0) + DEVCTL) & 3));
-                Write::Device { offset, width, value: without(offset, value, bits) }
-            }
+            _ if let Some(e) = express => match at - e {
+                DEVCTL => self.write_device_control(offset, width, value, &learnt),
+                DEVCTL2 if learnt.control_2 => Write::Device { offset, width, value },
+                _ => Write::Absorbed,
+            },
+            // All it lets one write is the start of a function-level reset.
+            _ if advanced_features.is_some() => Write::Absorbed,
             _ => Write::Device { offset, width, value },
         }
+    }
+
+    /// A write to the dword of device control and status: device control as
+    /// the module's overview says, device status (whose bits a write of 1
+    /// clears) as the guest writes it.
+    fn write_device_control(&mut self, offset: u16, width: u8, value: u32, learnt: &Learnt) -> Write {
+        let shift = 8 * (offset & 3) as u32;
+        let mask = (u32::MAX >> (32 - 8 * width as u32)) << shift;
+        let written = (value << shift) & mask;
+        let guest = written as u16;
+        let control_mask = mask as u16;
+        // What the guest reads back of the payload sizes: what it wrote.
+        let payloads = DEVCTL_PAYLOAD | DEVCTL_READ_REQUEST;
+        let before = self.payloads.unwrap_or(learnt.devctl) & payloads;
+        self.payloads = Some((before & !control_mask) | (guest & control_mask & payloads));
+        // What the function gets: the host's payload size, and read requests
+        // no smaller (nor larger than 4 KiB, the largest there is).
+        let host_payload = learnt.devctl & DEVCTL_PAYLOAD;
+        let read_request = ((guest & DEVCTL_READ_REQUEST) >> 12).min(5).max(host_payload >> 5);
+        let control = (guest & DEVCTL_GUESTS) | host_payload | read_request << 12;
+        let dword = (written & 0xFFFF_0000) | control as u32;
+        Write::Device { offset, width, value: (dword & mask) >> shift }
     }
 }
 
@@ -260,20 +422,37 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    /// A device as Intel's HD Audio controllers are: one 64-bit BAR.
+    /// A device as Intel's HD Audio controllers are: one 64-bit BAR, a PCI
+    /// Express capability at 0x60.
     fn hda() -> ConfigSpace {
         let bar = Bar { index: 0, address: 0xC000_4000, size: 0x4000, is64: true, prefetchable: false };
         ConfigSpace::new(vec![bar], false, Some(0x60), None)
     }
 
-    /// The function's own registers: a header that says multi-function,
-    /// a BAR the device has elsewhere, an INTx pin.
+    /// `c`, once the guest has read it.
+    fn read_once(c: ConfigSpace) -> ConfigSpace {
+        c.read(0x00, 4, device);
+        c
+    }
+
+    /// The function's own registers: a header that says multi-function, a
+    /// BAR the device has elsewhere, an INTx pin; a list of capabilities:
+    /// PCI Express at 0x60 (version 2, in the root complex: with a
+    /// function-level reset, its device control the host's: a maximum
+    /// payload of 256 bytes, read requests of 512, relaxed ordering and no
+    /// snoop), Advanced Features at 0xA0 (with a function-level reset too).
     fn device(at: u16) -> u32 {
         match at {
             0x00 => 0x293E_8086,
+            0x04 => 0x0010_0006,
             0x0C => 0x0080_0010,
             0x10 => 0xFEB4_0004,
+            0x34 => 0x60,
             0x3C => 0x0000_010B,
+            0x60 => 0x0092_A010,
+            0x64 => 0x1000_8000,
+            0x68 => 0x0010_2830,
+            0xA0 => 0x0306_0013,
             _ => 0x1234_5678,
         }
     }
@@ -340,33 +519,100 @@ mod tests {
 
     #[test]
     fn the_function_reports_no_errors() {
-        let mut c = hda();
+        let mut c = read_once(hda());
         // SERR# goes, the rest of the command stays; whatever the width.
         assert_eq!(c.write(0x04, 2, 0x0506), Write::Device { offset: 0x04, width: 2, value: 0x0406 });
         assert_eq!(c.write(0x04, 4, 0xF900_0146), Write::Device { offset: 0x04, width: 4, value: 0xF900_0046 });
         assert_eq!(c.write(0x05, 1, 0x05), Write::Device { offset: 0x05, width: 1, value: 0x04 });
         assert_eq!(c.write(0x04, 1, 0x06), Write::Device { offset: 0x04, width: 1, value: 0x06 });
         // Device control (the PCI Express capability at 0x60): no error
-        // reporting, its other settings as written; device status as is.
-        assert_eq!(c.write(0x68, 2, 0x281F), Write::Device { offset: 0x68, width: 2, value: 0x2810 });
-        assert_eq!(c.write(0x68, 4, 0x000F_201F), Write::Device { offset: 0x68, width: 4, value: 0x000F_2010 });
+        // reporting, its other settings as written (but for the payload
+        // size, the host's); device status as is.
+        assert_eq!(c.write(0x68, 2, 0x281F), Write::Device { offset: 0x68, width: 2, value: 0x2830 });
+        assert_eq!(c.write(0x68, 4, 0x000F_201F), Write::Device { offset: 0x68, width: 4, value: 0x000F_2030 });
+        assert_eq!(c.write(0x68, 1, 0x0F), Write::Device { offset: 0x68, width: 1, value: 0x20 });
         assert_eq!(c.write(0x6A, 2, 0x000F), Write::Device { offset: 0x6A, width: 2, value: 0x000F });
         // Without the capability, nothing there is the platform's.
-        let mut plain = ConfigSpace::new(vec![], false, None, None);
+        let mut plain = read_once(ConfigSpace::new(vec![], false, None, None));
         assert_eq!(plain.write(0x68, 2, 0x281F), Write::Device { offset: 0x68, width: 2, value: 0x281F });
     }
 
     #[test]
-    fn writes_go_to_the_device_but_the_platforms_registers() {
+    fn no_phantom_functions_and_the_hosts_payload_size() {
+        let mut c = read_once(hda());
+        // Phantom functions would have the function's DMA carry other
+        // functions' requester ids: never enabled.
+        assert_eq!(c.write(0x68, 2, 0x2A30), Write::Device { offset: 0x68, width: 2, value: 0x2830 });
+        assert_eq!(c.write(0x69, 1, 0x2A), Write::Device { offset: 0x69, width: 1, value: 0x28 });
+        // A maximum payload of 512 bytes: the function keeps the host's 256,
+        // the guest reads back its own.
+        assert_eq!(c.write(0x68, 2, 0x2850), Write::Device { offset: 0x68, width: 2, value: 0x2830 });
+        assert_eq!(c.read(0x68, 2, device), 0x2850);
+        // Read requests of 4 KiB reach it; of 128 bytes, they would be smaller
+        // than its payloads: 256 then. The guest reads back what it wrote.
+        assert_eq!(c.write(0x69, 1, 0x58), Write::Device { offset: 0x69, width: 1, value: 0x58 });
+        assert_eq!(c.write(0x68, 2, 0x0850), Write::Device { offset: 0x68, width: 2, value: 0x1830 });
+        assert_eq!(c.read(0x68, 4, device), 0x0010_0850);
+        // Device control 2 is the guest's; link control, and the rest of
+        // the capability, are not.
+        assert_eq!(c.write(0x88, 2, 0x0400), Write::Device { offset: 0x88, width: 2, value: 0x0400 });
+        assert_eq!(c.write(0x70, 2, 0x0003), Write::Absorbed);
+        assert_eq!(c.write(0x90, 2, 0x0005), Write::Absorbed);
+        assert_eq!(c.write(0x60, 4, 0), Write::Absorbed);
+    }
+
+    #[test]
+    fn function_level_resets_are_the_hosts() {
+        let mut c = read_once(hda());
+        // Neither capability says the function has one.
+        assert_eq!(c.read(0x64, 4, device), 0x0000_8000);
+        assert_eq!(c.read(0xA3, 1, device), 0x01);
+        assert_eq!(c.read(0xA0, 4, device), 0x0106_0013);
+        // And neither starts one.
+        assert_eq!(c.write(0x68, 2, 0xA830), Write::Device { offset: 0x68, width: 2, value: 0x2830 });
+        assert_eq!(c.read(0x68, 2, device) & 0x8000, 0);
+        assert_eq!(c.write(0xA4, 1, 0x01), Write::Absorbed);
+        assert_eq!(c.write(0xA4, 2, 0x0001), Write::Absorbed);
+        // What follows the capability is the function's.
+        assert_eq!(c.write(0xA8, 4, 1), Write::Device { offset: 0xA8, width: 4, value: 1 });
+    }
+
+    #[test]
+    fn a_first_version_capability_ends_early() {
+        // Version 1, an endpoint: its registers end with the link's (0x14
+        // in), where another capability may start.
+        let v1 = |at: u16| match at {
+            0x60 => 0x0011_7410,
+            _ => device(at),
+        };
+        let c = ConfigSpace::new(vec![], false, Some(0x60), None);
+        c.read(0x00, 4, v1);
+        let mut c = c;
+        assert_eq!(c.write(0x70, 2, 0x0003), Write::Absorbed);
+        assert_eq!(c.write(0x74, 4, 0xFEE0_0000), Write::Device { offset: 0x74, width: 4, value: 0xFEE0_0000 });
+        assert_eq!(c.write(0x88, 2, 0x0400), Write::Device { offset: 0x88, width: 2, value: 0x0400 });
+    }
+
+    #[test]
+    fn nothing_reaches_the_function_before_the_guest_reads_it() {
         let mut c = hda();
+        assert_eq!(c.write(0x04, 2, 0x0006), Write::Absorbed);
+        assert_eq!(c.write(0xA4, 1, 0x01), Write::Absorbed);
+        let mut c = read_once(c);
+        assert_eq!(c.write(0x04, 2, 0x0006), Write::Device { offset: 0x04, width: 2, value: 0x0006 });
+    }
+
+    #[test]
+    fn writes_go_to_the_device_but_the_platforms_registers() {
+        let mut c = read_once(hda());
         assert_eq!(c.write(0x04, 2, 0x0406), Write::Device { offset: 0x04, width: 2, value: 0x0406 });
         assert_eq!(c.write(0x0C, 1, 0x10), Write::Device { offset: 0x0C, width: 1, value: 0x10 });
         assert_eq!(c.write(0x0E, 1, 0x80), Write::Absorbed);
         assert_eq!(c.write(0x30, 4, u32::MAX), Write::Absorbed);
         assert_eq!(c.write(0x3C, 1, 11), Write::Absorbed);
-        assert_eq!(c.write(0x62, 2, 0x81), Write::Device { offset: 0x62, width: 2, value: 0x81 });
+        assert_eq!(c.write(0x42, 2, 0x81), Write::Device { offset: 0x42, width: 2, value: 0x81 });
         assert_eq!(c.write(0x100, 4, 1), Write::Absorbed);
-        assert_eq!(c.write(0x63, 2, 1), Write::Absorbed);
+        assert_eq!(c.write(0x43, 2, 1), Write::Absorbed);
     }
 
     #[test]

@@ -30,8 +30,9 @@
 //! the composed screen. Where the GPU composes (`gpu`), it draws the
 //! splash itself, from the same look: the gradient, the light and the ring
 //! in a shader, the words as textures, over the desktop as it comes in.
-//! A compositor restarted after a crash shows the desktop straight away:
-//! init asks for the sequence (`splash`) only when the system starts.
+//! A compositor restarted after a crash shows the desktop straight away
+//! (once the screen may be drawn into, see `screen`): init asks for the
+//! sequence (`splash`) only when the system starts.
 
 use alloc::vec::Vec;
 use core::f32::consts::PI;
@@ -44,13 +45,14 @@ use vrt::println;
 use vsplash::Ring;
 
 use crate::gpu::{Gpu, Slot, Splash};
-use crate::screen::Screen;
+use crate::screen::{HOLD_NS, Screen};
 
 const MS: u64 = 1_000_000;
 /// The screen stays black this long at most for the screen frames go to
 /// (a driver that is coming but does not show its first picture): then
-/// the sequence goes on, on whatever screen there is.
-const HOLD: u64 = 20_000 * MS;
+/// the sequence goes on, on whatever screen there is (the firmware's
+/// framebuffer is held back just as long, see `screen`).
+const HOLD: u64 = HOLD_NS;
 /// The splash fades in from black; the light gathers around the ring; then
 /// the name, then the tagline, rise into view.
 const FADE_IN: (u64, u64) = (0, 600 * MS);

@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "apps-common"
+description = "What the built-in applications share: the running processes and which are the system's, uptimes and names for people, file-type icons, copying to the clipboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vfiles = { workspace = true }
+vui = { workspace = true }
+
+[lints]
+workspace = true

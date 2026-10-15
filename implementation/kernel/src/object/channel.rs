@@ -7,6 +7,12 @@
 //! to 64 KiB of data plus up to 64 handles) on the other. Messages are
 //! copied into the kernel on write and out on read. Handles move: they leave
 //! the sender's table on write and enter the receiver's table on read.
+//!
+//! A queued message keeps the objects its handles refer to alive, channels
+//! too. No message may hold a channel that can reach, through queued
+//! messages, the channel the message is queued on ([`would_cycle`]): once
+//! every process had closed its handles to them, such channels would keep
+//! each other alive for ever, with nothing left to read the messages.
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -15,14 +21,17 @@ use alloc::vec::Vec;
 use vabi::Error;
 use vabi::signals::{PEER_CLOSED, READABLE, WRITABLE};
 
-use super::Signals;
 use super::handle::Handle;
+use super::{KObject, Signals};
 use crate::sync::SpinLock;
 
 /// Messages queued per endpoint before writers get `ShouldWait`.
 pub const MAX_QUEUED_MESSAGES: usize = 512;
 /// Bytes queued per endpoint before writers get `ShouldWait`.
 pub const MAX_QUEUED_BYTES: usize = 4 << 20;
+/// How many queued handles [`would_cycle`] looks at before it gives up,
+/// refusing the transfer: the safe answer.
+const CYCLE_SEARCH_LIMIT: usize = 4096;
 
 pub struct Message {
     pub data: Vec<u8>,
@@ -73,6 +82,11 @@ impl ChannelEnd {
 
     pub fn signals(&self) -> &Signals {
         &self.pair.signals[self.side]
+    }
+
+    /// Whether `other` is this endpoint or its peer.
+    pub fn same_channel(&self, other: &ChannelEnd) -> bool {
+        Arc::ptr_eq(&self.pair, &other.pair)
     }
 
     /// Queues a message for the peer. On failure the message is handed back
@@ -128,6 +142,55 @@ impl ChannelEnd {
         self.pair.signals[peer].update(0, WRITABLE);
         Ok(msg)
     }
+}
+
+/// Whether queuing a message with `handles` on the channel of `dest` would
+/// let that channel reach itself through queued messages: one of the
+/// handles is an endpoint of it, or of another channel whose queued
+/// messages hold (directly, or through yet other channels' queues) an
+/// endpoint of it. A search that would look at more than
+/// [`CYCLE_SEARCH_LIMIT`] queued handles answers yes.
+pub fn would_cycle(dest: &ChannelEnd, handles: &[Handle]) -> bool {
+    /// Notes the channel of `end` to search; true if it is `target`.
+    fn note(end: &ChannelEnd, target: *const Pair, seen: &mut Vec<*const Pair>, pending: &mut Vec<Arc<Pair>>) -> bool {
+        let pair = Arc::as_ptr(&end.pair);
+        if pair == target {
+            return true;
+        }
+        if !seen.contains(&pair) {
+            seen.push(pair);
+            pending.push(end.pair.clone());
+        }
+        false
+    }
+    let target = Arc::as_ptr(&dest.pair);
+    let mut seen: Vec<*const Pair> = Vec::new();
+    let mut pending: Vec<Arc<Pair>> = Vec::new();
+    for h in handles {
+        if let KObject::Channel(end) = &h.object
+            && note(end, target, &mut seen, &mut pending)
+        {
+            return true;
+        }
+    }
+    let mut looked = 0;
+    while let Some(pair) = pending.pop() {
+        let ends = pair.ends.lock();
+        for msg in ends.iter().flat_map(|e| e.queue.iter()) {
+            looked += msg.handles.len();
+            if looked > CYCLE_SEARCH_LIMIT {
+                return true;
+            }
+            for h in &msg.handles {
+                if let KObject::Channel(end) = &h.object
+                    && note(end, target, &mut seen, &mut pending)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 impl Drop for ChannelEnd {

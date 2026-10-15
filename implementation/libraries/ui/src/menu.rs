@@ -10,7 +10,7 @@ use vgfx::{Align, Color, Rect};
 use vproto::input::keys;
 
 use crate::theme::Font;
-use crate::ui::{Overlay, Ui};
+use crate::ui::{KeyPress, Overlay, Ui};
 
 /// One entry of a menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,11 +209,13 @@ impl<'a> Ui<'a> {
     }
 
     /// A menu bar. Returns `(menu index, item index)` when an item is chosen.
+    /// Under a modal dialog it is inert, as everything outside the dialog is.
     pub fn menu_bar(&mut self, r: Rect, menus: &[Menu]) -> Option<(usize, usize)> {
         let id = self.id("menubar") ^ r.y as u64;
         let t = self.ctx.theme.clone();
+        let inert = self.behind_modal();
         let open = match self.state.open_menu {
-            Some((mid, i)) if mid == id => Some(i),
+            Some((mid, i)) if mid == id && !inert => Some(i),
             _ => None,
         };
         let mut x = r.x + 4;
@@ -225,7 +227,7 @@ impl<'a> Ui<'a> {
             let tr = Rect::new(x, r.y + 3, w, r.h - 6);
             title_rects.push(tr);
             // Titles react even when an overlay is open (so menus can be swept).
-            let over = self.input.pointer.is_some_and(|(px, py)| tr.contains(px, py));
+            let over = !inert && self.input.pointer.is_some_and(|(px, py)| tr.contains(px, py));
             if over && self.input.pressed[0] {
                 new_open = if open == Some(i) { None } else { Some(i) };
             } else if over && open.is_some() && open != Some(i) {
@@ -242,7 +244,8 @@ impl<'a> Ui<'a> {
         // a menu opened this way highlights its first item.
         let n = menus.len();
         let before = new_open;
-        for k in &self.menu_input.keys {
+        let keys: &[KeyPress] = if inert { &[] } else { &self.menu_input.keys };
+        for k in keys {
             new_open = match (k.code, new_open) {
                 (keys::F10, None) if n > 0 => Some(0),
                 (keys::LEFT, Some(i)) => Some((i + n - 1) % n),

@@ -13,7 +13,9 @@ use vui::{Align, Color, Cursor, Font, Icon, Rect, Ui};
 
 use vfiles::format::human_size;
 
-use crate::{HISTORY, Resource, TaskManager, format_uptime};
+use apps_common::format::uptime;
+
+use crate::{HISTORY, Resource, TaskManager};
 
 const CPU_COLOR: Color = Color::hex(0x5B8CFF);
 const MEM_COLOR: Color = Color::hex(0xA77BFF);
@@ -153,7 +155,7 @@ pub fn draw(tm: &mut TaskManager, ui: &mut Ui, r: Rect) {
     ui.separator(side.x + 18, y, side.w - 36);
     y += 14;
     for (icon, label, value) in [
-        (Icon::Clock, "Up time", format_uptime(info.uptime_ns)),
+        (Icon::Clock, "Up time", uptime(info.uptime_ns)),
         (Icon::List, "Processes", info.process_count.to_string()),
         (Icon::Grid, "Threads", info.thread_count.to_string()),
     ] {
@@ -227,7 +229,7 @@ pub fn draw(tm: &mut TaskManager, ui: &mut Ui, r: Rect) {
             tile(ui, Rect::new(p.x, ty, tw, 50), "Utilization", &format!("{:.0}%", tm.cpu_now * 100.0));
             tile(ui, Rect::new(p.x + tw, ty, tw, 50), "Processes", &info.process_count.to_string());
             tile(ui, Rect::new(p.x + 2 * tw, ty, tw, 50), "Threads", &info.thread_count.to_string());
-            tile(ui, Rect::new(p.x + 3 * tw, ty, tw, 50), "Up time", &format_uptime(info.uptime_ns));
+            tile(ui, Rect::new(p.x + 3 * tw, ty, tw, 50), "Up time", &uptime(info.uptime_ns));
             let dy = ty + 66;
             detail(ui, p.x, dy, p.w, "Cores", &format!("{} logical processors", info.cpu_count));
             detail(ui, p.x, dy + 24, p.w, "Model", &tm.cpu_model);

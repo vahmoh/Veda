@@ -4,12 +4,13 @@
 //! Scalar operations and their exact semantics.
 //!
 //! Every computation a shader does is lowered to these operations on
-//! scalars ([`Value`]). [`eval`] defines what each one computes, bit for
-//! bit, and is the single source of truth: constant expressions are folded
-//! with it at compile time, the optimiser folds with it, and the
-//! interpreter's SIMD code is tested against it. Where GLSL ES leaves a
-//! result undefined, the choice made here is the one SSE hardware makes,
-//! so that the interpreter can use the plain instruction:
+//! scalars ([`Value`]). [`bits`] defines what each one computes, bit for
+//! bit, and is the single source of truth: [`eval`] applies it to fold
+//! constant expressions at compile time (and the optimiser to fold what
+//! became constant), and the interpreter applies the same functions to its
+//! lanes. Where GLSL ES leaves a result undefined, the choice made here is
+//! the one SSE hardware makes, so that the interpreter can use the plain
+//! instruction:
 //!
 //! * `min`/`max` return the second operand when either is NaN (`minps`).
 //! * Converting a float that is NaN or out of range to `int` gives
@@ -81,25 +82,6 @@ impl Value {
     /// and `0.0` differs from `-0.0`).
     pub fn same(self, other: Value) -> bool {
         self.ty() == other.ty() && self.bits() == other.bits()
-    }
-
-    fn f(self) -> f32 {
-        match self {
-            Value::F(f) => f,
-            other => f32::from_bits(other.bits()),
-        }
-    }
-
-    fn i(self) -> i32 {
-        self.bits() as i32
-    }
-
-    fn u(self) -> u32 {
-        self.bits()
-    }
-
-    fn b(self) -> bool {
-        self.bits() != 0
     }
 }
 
@@ -253,9 +235,14 @@ impl Op {
         Signature { args, ret }
     }
 
-    /// Number of operands.
-    pub fn arity(self) -> usize {
-        self.signature().args.len()
+    /// The type of the result, given `ret` for the operations that leave
+    /// it to the caller (the integer operations, of either signedness, and
+    /// `Bitcast`).
+    pub fn result(self, ret: Ty) -> Ty {
+        match self.signature().ret {
+            Ty::I32 => ret,
+            t => t,
+        }
     }
 
     /// Whether `op(a, b) == op(b, a)`.
@@ -290,108 +277,345 @@ impl Op {
 /// Computes `op` on `args`. `ret` gives the result type where the
 /// operation does not fix it (the integer operations and `Bitcast`).
 pub fn eval(op: Op, args: &[Value], ret: Ty) -> Value {
+    let a = args.first().map_or(0, |v| v.bits());
+    let b = args.get(1).map_or(0, |v| v.bits());
+    Value::from_bits(op.result(ret), apply(op, ret, a, b))
+}
+
+/// `op` on one scalar's bits (`b` is ignored by operations of one
+/// operand); `ret` as for [`eval`].
+pub fn apply(op: Op, ret: Ty, a: u32, b: u32) -> u32 {
     use Op::*;
-    let a = args.first().copied().unwrap_or(Value::U(0));
-    let b = args.get(1).copied().unwrap_or(Value::U(0));
-    let int = |v: u32| Value::from_bits(ret, v);
+    use bits::*;
     match op {
-        FNeg => Value::F(-a.f()),
-        FAbs => Value::F(f32::from_bits(a.u() & 0x7FFF_FFFF)),
-        FSign => {
-            let x = a.f();
-            Value::F(if x > 0.0 {
-                1.0
-            } else if x < 0.0 {
-                -1.0
-            } else {
-                // 0, -0 and NaN keep themselves (NaN: undefined).
-                x
-            })
-        }
-        FFloor => Value::F(libm::floorf(a.f())),
-        FCeil => Value::F(libm::ceilf(a.f())),
-        FTrunc => Value::F(libm::truncf(a.f())),
-        FRoundEven => Value::F(libm::roundevenf(a.f())),
-        FFract => {
-            let x = a.f();
-            Value::F(x - libm::floorf(x))
-        }
-        FSqrt => Value::F(libm::sqrtf(a.f())),
-        FRsq => Value::F(1.0 / libm::sqrtf(a.f())),
-        FExp => Value::F(libm::expf(a.f())),
-        FLog => Value::F(libm::logf(a.f())),
-        FExp2 => Value::F(libm::exp2f(a.f())),
-        FLog2 => Value::F(libm::log2f(a.f())),
-        FSin => Value::F(libm::sinf(a.f())),
-        FCos => Value::F(libm::cosf(a.f())),
-        FTan => Value::F(libm::tanf(a.f())),
-        FAsin => Value::F(libm::asinf(a.f())),
-        FAcos => Value::F(libm::acosf(a.f())),
-        FAtan => Value::F(libm::atanf(a.f())),
-        FSinh => Value::F(libm::sinhf(a.f())),
-        FCosh => Value::F(libm::coshf(a.f())),
-        FTanh => Value::F(libm::tanhf(a.f())),
-        FAsinh => Value::F(libm::asinhf(a.f())),
-        FAcosh => Value::F(libm::acoshf(a.f())),
-        FAtanh => Value::F(libm::atanhf(a.f())),
-        FAdd => Value::F(a.f() + b.f()),
-        FSub => Value::F(a.f() - b.f()),
-        FMul => Value::F(a.f() * b.f()),
-        FDiv => Value::F(a.f() / b.f()),
+        FNeg => f_neg(a),
+        FAbs => f_abs(a),
+        FSign => f_sign(a),
+        FFloor => f_floor(a),
+        FCeil => f_ceil(a),
+        FTrunc => f_trunc(a),
+        FRoundEven => f_round_even(a),
+        FFract => f_fract(a),
+        FSqrt => f_sqrt(a),
+        FRsq => f_rsq(a),
+        FExp => f_exp(a),
+        FLog => f_log(a),
+        FExp2 => f_exp2(a),
+        FLog2 => f_log2(a),
+        FSin => f_sin(a),
+        FCos => f_cos(a),
+        FTan => f_tan(a),
+        FAsin => f_asin(a),
+        FAcos => f_acos(a),
+        FAtan => f_atan(a),
+        FSinh => f_sinh(a),
+        FCosh => f_cosh(a),
+        FTanh => f_tanh(a),
+        FAsinh => f_asinh(a),
+        FAcosh => f_acosh(a),
+        FAtanh => f_atanh(a),
+        FAdd => f_add(a, b),
+        FSub => f_sub(a, b),
+        FMul => f_mul(a, b),
+        FDiv => f_div(a, b),
+        FMin => f_min(a, b),
+        FMax => f_max(a, b),
+        FPow => f_pow(a, b),
+        FAtan2 => f_atan2(a, b),
+        FLt => f_lt(a, b),
+        FLe => f_le(a, b),
+        FEq => f_eq(a, b),
+        FNe => f_ne(a, b),
+        FIsNan => f_is_nan(a),
+        FIsInf => f_is_inf(a),
+        INeg => i_neg(a),
+        INot => i_not(a),
+        IAbs => i_abs(a),
+        ISign => i_sign(a),
+        IAdd => i_add(a, b),
+        ISub => i_sub(a, b),
+        IMul => i_mul(a, b),
+        IAnd => i_and(a, b),
+        IOr => i_or(a, b),
+        IXor => i_xor(a, b),
+        IShl => i_shl(a, b),
+        IDiv => i_div(a, b),
+        UDiv => u_div(a, b),
+        IRem => i_rem(a, b),
+        URem => u_rem(a, b),
+        IShr => i_shr(a, b),
+        UShr => u_shr(a, b),
+        IMin => i_min(a, b),
+        UMin => u_min(a, b),
+        IMax => i_max(a, b),
+        UMax => u_max(a, b),
+        IEq => i_eq(a, b),
+        INe => i_ne(a, b),
+        ILt => i_lt(a, b),
+        ULt => u_lt(a, b),
+        ILe => i_le(a, b),
+        ULe => u_le(a, b),
+        BNot => b_not(a),
+        BAnd => b_and(a, b),
+        BOr => b_or(a, b),
+        BXor => b_xor(a, b),
+        BEq => b_eq(a, b),
+        FToI => f_to_i_bits(a),
+        FToU => f_to_u_bits(a),
+        IToF => i_to_f(a),
+        UToF => u_to_f(a),
+        BToF => b_to_f(a),
+        BToI => b_to_i(a),
+        FToB => f_to_b(a),
+        IToB => i_to_b(a),
+        Bitcast => bitcast(ret, a),
+        FToHalf => f_to_half(a),
+        HalfToF => half_to_f(a),
+    }
+}
+
+/// What each operation computes, on 32-bit scalars as registers hold them
+/// (`true` is all ones): the one definition [`eval`] and the interpreter's
+/// lanes both apply. Each is small and inlined where it is applied.
+pub mod bits {
+    use super::Ty;
+
+    #[inline(always)]
+    fn f(x: u32) -> f32 {
+        f32::from_bits(x)
+    }
+
+    #[inline(always)]
+    fn bool(x: bool) -> u32 {
+        0u32.wrapping_sub(u32::from(x))
+    }
+
+    /// Operations on one float: `name(x) = expression;`.
+    macro_rules! float1 {
+        ($($name:ident($x:ident) = $e:expr;)*) => {$(
+            #[inline(always)]
+            pub fn $name(a: u32) -> u32 {
+                let $x = f(a);
+                let r: f32 = $e;
+                r.to_bits()
+            }
+        )*};
+    }
+
+    /// Operations on two floats: `name(x, y) = expression;`.
+    macro_rules! float2 {
+        ($($name:ident($x:ident, $y:ident) = $e:expr;)*) => {$(
+            #[inline(always)]
+            pub fn $name(a: u32, b: u32) -> u32 {
+                let ($x, $y) = (f(a), f(b));
+                let r: f32 = $e;
+                r.to_bits()
+            }
+        )*};
+    }
+
+    /// Operations on two 32-bit words: `name(x, y) = expression;`.
+    macro_rules! int2 {
+        ($($name:ident($x:ident, $y:ident) = $e:expr;)*) => {$(
+            #[inline(always)]
+            pub fn $name($x: u32, $y: u32) -> u32 {
+                $e
+            }
+        )*};
+    }
+
+    #[inline(always)]
+    pub fn f_neg(a: u32) -> u32 {
+        a ^ 0x8000_0000
+    }
+
+    #[inline(always)]
+    pub fn f_abs(a: u32) -> u32 {
+        a & 0x7FFF_FFFF
+    }
+
+    float1! {
+        // 0, -0 and NaN keep themselves (NaN: undefined).
+        f_sign(x) = if x > 0.0 { 1.0 } else if x < 0.0 { -1.0 } else { x };
+        f_floor(x) = libm::floorf(x);
+        f_ceil(x) = libm::ceilf(x);
+        f_trunc(x) = libm::truncf(x);
+        f_round_even(x) = libm::roundevenf(x);
+        f_fract(x) = x - libm::floorf(x);
+        f_sqrt(x) = libm::sqrtf(x);
+        f_rsq(x) = 1.0 / libm::sqrtf(x);
+        f_exp(x) = libm::expf(x);
+        f_log(x) = libm::logf(x);
+        f_exp2(x) = libm::exp2f(x);
+        f_log2(x) = libm::log2f(x);
+        f_sin(x) = libm::sinf(x);
+        f_cos(x) = libm::cosf(x);
+        f_tan(x) = libm::tanf(x);
+        f_asin(x) = libm::asinf(x);
+        f_acos(x) = libm::acosf(x);
+        f_atan(x) = libm::atanf(x);
+        f_sinh(x) = libm::sinhf(x);
+        f_cosh(x) = libm::coshf(x);
+        f_tanh(x) = libm::tanhf(x);
+        f_asinh(x) = libm::asinhf(x);
+        f_acosh(x) = libm::acoshf(x);
+        f_atanh(x) = libm::atanhf(x);
+    }
+
+    float2! {
+        f_add(x, y) = x + y;
+        f_sub(x, y) = x - y;
+        f_mul(x, y) = x * y;
+        f_div(x, y) = x / y;
         // minps/maxps: the second operand unless the comparison holds.
-        FMin => Value::F(if a.f() < b.f() { a.f() } else { b.f() }),
-        FMax => Value::F(if a.f() > b.f() { a.f() } else { b.f() }),
-        FPow => Value::F(libm::powf(a.f(), b.f())),
-        FAtan2 => Value::F(libm::atan2f(a.f(), b.f())),
-        FLt => Value::B(a.f() < b.f()),
-        FLe => Value::B(a.f() <= b.f()),
-        FEq => Value::B(a.f() == b.f()),
-        FNe => Value::B(a.f() != b.f()),
-        FIsNan => Value::B(a.f().is_nan()),
-        FIsInf => Value::B(a.f().is_infinite()),
-        INeg => int(a.i().wrapping_neg() as u32),
-        INot => int(!a.u()),
-        IAbs => int(a.i().wrapping_abs() as u32),
-        ISign => int(a.i().signum() as u32),
-        IAdd => int(a.u().wrapping_add(b.u())),
-        ISub => int(a.u().wrapping_sub(b.u())),
-        IMul => int(a.u().wrapping_mul(b.u())),
-        IAnd => int(a.u() & b.u()),
-        IOr => int(a.u() | b.u()),
-        IXor => int(a.u() ^ b.u()),
-        IShl => int(a.u().wrapping_shl(b.u() & 31)),
-        IDiv => int(if b.i() == 0 { !0 } else { a.i().wrapping_div(b.i()) as u32 }),
-        UDiv => int(if b.u() == 0 { !0 } else { a.u() / b.u() }),
-        IRem => int(if b.i() == 0 { !0 } else { a.i().wrapping_rem(b.i()) as u32 }),
-        URem => int(if b.u() == 0 { !0 } else { a.u() % b.u() }),
-        IShr => int((a.i() >> (b.u() & 31)) as u32),
-        UShr => int(a.u() >> (b.u() & 31)),
-        IMin => int(a.i().min(b.i()) as u32),
-        UMin => int(a.u().min(b.u())),
-        IMax => int(a.i().max(b.i()) as u32),
-        UMax => int(a.u().max(b.u())),
-        IEq => Value::B(a.u() == b.u()),
-        INe => Value::B(a.u() != b.u()),
-        ILt => Value::B(a.i() < b.i()),
-        ULt => Value::B(a.u() < b.u()),
-        ILe => Value::B(a.i() <= b.i()),
-        ULe => Value::B(a.u() <= b.u()),
-        BNot => Value::B(!a.b()),
-        BAnd => Value::B(a.b() && b.b()),
-        BOr => Value::B(a.b() || b.b()),
-        BXor => Value::B(a.b() != b.b()),
-        BEq => Value::B(a.b() == b.b()),
-        FToI => Value::I(f_to_i(a.f())),
-        FToU => Value::U(f_to_u(a.f())),
-        IToF => Value::F(a.i() as f32),
-        UToF => Value::F(a.u() as f32),
-        BToF => Value::F(if a.b() { 1.0 } else { 0.0 }),
-        BToI => int(u32::from(a.b())),
-        FToB => Value::B(a.f() != 0.0),
-        IToB => Value::B(a.u() != 0),
-        Bitcast => Value::from_bits(ret, a.bits()),
-        FToHalf => Value::U(u32::from(f32_to_f16(a.f()))),
-        HalfToF => Value::F(f16_to_f32(a.u() as u16)),
+        f_min(x, y) = if x < y { x } else { y };
+        f_max(x, y) = if x > y { x } else { y };
+        f_pow(x, y) = libm::powf(x, y);
+        f_atan2(x, y) = libm::atan2f(x, y);
+    }
+
+    #[inline(always)]
+    pub fn f_lt(a: u32, b: u32) -> u32 {
+        bool(f(a) < f(b))
+    }
+
+    #[inline(always)]
+    pub fn f_le(a: u32, b: u32) -> u32 {
+        bool(f(a) <= f(b))
+    }
+
+    #[inline(always)]
+    pub fn f_eq(a: u32, b: u32) -> u32 {
+        bool(f(a) == f(b))
+    }
+
+    #[inline(always)]
+    pub fn f_ne(a: u32, b: u32) -> u32 {
+        bool(f(a) != f(b))
+    }
+
+    #[inline(always)]
+    pub fn f_is_nan(a: u32) -> u32 {
+        bool(f(a).is_nan())
+    }
+
+    #[inline(always)]
+    pub fn f_is_inf(a: u32) -> u32 {
+        bool(f(a).is_infinite())
+    }
+
+    #[inline(always)]
+    pub fn i_neg(a: u32) -> u32 {
+        (a as i32).wrapping_neg() as u32
+    }
+
+    #[inline(always)]
+    pub fn i_not(a: u32) -> u32 {
+        !a
+    }
+
+    #[inline(always)]
+    pub fn i_abs(a: u32) -> u32 {
+        (a as i32).wrapping_abs() as u32
+    }
+
+    #[inline(always)]
+    pub fn i_sign(a: u32) -> u32 {
+        (a as i32).signum() as u32
+    }
+
+    int2! {
+        i_add(x, y) = x.wrapping_add(y);
+        i_sub(x, y) = x.wrapping_sub(y);
+        i_mul(x, y) = x.wrapping_mul(y);
+        i_and(x, y) = x & y;
+        i_or(x, y) = x | y;
+        i_xor(x, y) = x ^ y;
+        // Shift amounts are taken modulo 32.
+        i_shl(x, y) = x.wrapping_shl(y & 31);
+        i_shr(x, y) = ((x as i32) >> (y & 31)) as u32;
+        u_shr(x, y) = x >> (y & 31);
+        // Division by zero gives all ones; INT_MIN / -1 wraps.
+        i_div(x, y) = if y == 0 { !0 } else { (x as i32).wrapping_div(y as i32) as u32 };
+        u_div(x, y) = x.checked_div(y).unwrap_or(!0);
+        i_rem(x, y) = if y == 0 { !0 } else { (x as i32).wrapping_rem(y as i32) as u32 };
+        u_rem(x, y) = x.checked_rem(y).unwrap_or(!0);
+        i_min(x, y) = (x as i32).min(y as i32) as u32;
+        u_min(x, y) = x.min(y);
+        i_max(x, y) = (x as i32).max(y as i32) as u32;
+        u_max(x, y) = x.max(y);
+        i_eq(x, y) = bool(x == y);
+        i_ne(x, y) = bool(x != y);
+        i_lt(x, y) = bool((x as i32) < (y as i32));
+        u_lt(x, y) = bool(x < y);
+        i_le(x, y) = bool((x as i32) <= (y as i32));
+        u_le(x, y) = bool(x <= y);
+        b_and(x, y) = bool(x != 0 && y != 0);
+        b_or(x, y) = bool(x != 0 || y != 0);
+        b_xor(x, y) = bool((x != 0) != (y != 0));
+        b_eq(x, y) = bool((x != 0) == (y != 0));
+    }
+
+    #[inline(always)]
+    pub fn b_not(a: u32) -> u32 {
+        bool(a == 0)
+    }
+
+    #[inline(always)]
+    pub fn f_to_i_bits(a: u32) -> u32 {
+        super::f_to_i(f(a)) as u32
+    }
+
+    #[inline(always)]
+    pub fn f_to_u_bits(a: u32) -> u32 {
+        super::f_to_u(f(a))
+    }
+
+    #[inline(always)]
+    pub fn i_to_f(a: u32) -> u32 {
+        (a as i32 as f32).to_bits()
+    }
+
+    #[inline(always)]
+    pub fn u_to_f(a: u32) -> u32 {
+        (a as f32).to_bits()
+    }
+
+    #[inline(always)]
+    pub fn b_to_f(a: u32) -> u32 {
+        if a != 0 { 1.0f32.to_bits() } else { 0 }
+    }
+
+    #[inline(always)]
+    pub fn b_to_i(a: u32) -> u32 {
+        u32::from(a != 0)
+    }
+
+    #[inline(always)]
+    pub fn f_to_b(a: u32) -> u32 {
+        bool(f(a) != 0.0)
+    }
+
+    #[inline(always)]
+    pub fn i_to_b(a: u32) -> u32 {
+        bool(a != 0)
+    }
+
+    /// The same bits, but a bool result normalised (anything non-zero is
+    /// true).
+    #[inline(always)]
+    pub fn bitcast(ret: Ty, a: u32) -> u32 {
+        if ret == Ty::Bool { bool(a != 0) } else { a }
+    }
+
+    #[inline(always)]
+    pub fn f_to_half(a: u32) -> u32 {
+        u32::from(super::f32_to_f16(f(a)))
+    }
+
+    #[inline(always)]
+    pub fn half_to_f(a: u32) -> u32 {
+        super::f16_to_f32(a as u16).to_bits()
     }
 }
 

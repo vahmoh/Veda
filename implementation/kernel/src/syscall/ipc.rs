@@ -5,14 +5,15 @@
 
 use alloc::vec::Vec;
 
-use vabi::signals::{SIGNALED, USER_ALL};
-use vabi::{Error, HandleBasicInfo, RawHandle, Rights, WaitItem, info_topic};
+use vabi::signals::{self, SIGNALED, USER_ALL};
+use vabi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, info_topic};
 
-use super::{SysResult, current_process, deadline, get_channel, get_socket, handle, insert, ok};
+use super::{SysResult, current_process, deadline, get_channel, get_port, get_socket, handle, insert, ok};
 use crate::mm::user;
 use crate::object::channel::{self, Message};
 use crate::object::event::Event;
 use crate::object::handle::Handle;
+use crate::object::port::{Observer, Port};
 use crate::object::socket;
 use crate::object::{KObject, new_koid};
 use crate::sched::{self, WakeReason};
@@ -230,7 +231,78 @@ pub fn wait_many(items_ptr: usize, count: usize, d: u64) -> SysResult {
     result.map(|n| (n, None))
 }
 
+/// What a port's handle may do: wait and be waited on, have registrations
+/// made with it and packets taken; never travel to another process, which
+/// would hear of objects it does not have.
+const PORT_RIGHTS: Rights =
+    Rights(Rights::DUPLICATE.0 | Rights::GET_INFO.0 | Rights::WAIT.0 | Rights::READ.0 | Rights::WRITE.0);
+
+pub fn port_create() -> SysResult {
+    ok(insert(KObject::Port(Port::new()), PORT_RIGHTS)? as usize)
+}
+
+/// Kernel memory a registration may cost: it is made only while that much
+/// is left outside the kernel's reserve, as an object is.
+const REGISTRATION_BYTES: u64 = 64;
+
+pub fn wait_async(raw: RawHandle, port_raw: RawHandle, key: u64, signals: u32) -> SysResult {
+    let h = handle(raw, Rights::WAIT)?;
+    let port = get_port(port_raw, Rights::WRITE)?;
+    if matches!(h.object, KObject::Port(_)) {
+        return Err(Error::NotSupported);
+    }
+    let s = h.object.signals().ok_or(Error::NotSupported)?;
+    if signals == 0 {
+        return Err(Error::InvalidArgs);
+    }
+    if !crate::mm::phys::user_may_use(REGISTRATION_BYTES) {
+        return Err(Error::NoMemory);
+    }
+    if !port.reserve() {
+        return Err(Error::LimitReached);
+    }
+    if let Err((o, active)) = s.observe(Observer::new(&port, key, signals)) {
+        o.fire(active);
+    }
+    ok(0)
+}
+
+pub fn wait_async_cancel(raw: RawHandle, port_raw: RawHandle, key: u64) -> SysResult {
+    let h = handle(raw, Rights::WAIT)?;
+    let port = get_port(port_raw, Rights::WRITE)?;
+    if let Some(s) = h.object.signals() {
+        s.forget(&port, key);
+    }
+    port.purge(key);
+    ok(0)
+}
+
+pub fn port_wait(port_raw: RawHandle, packets_ptr: usize, max: usize, d: u64) -> SysResult {
+    let port = get_port(port_raw, Rights::READ)?;
+    if max == 0 || max > vabi::PORT_WAIT_MAX {
+        return Err(Error::InvalidArgs);
+    }
+    let size = core::mem::size_of::<PortPacket>();
+    loop {
+        let packets = port.take(max);
+        if !packets.is_empty() {
+            // SAFETY: viewing plain data as bytes.
+            let bytes = unsafe { core::slice::from_raw_parts(packets.as_ptr() as *const u8, packets.len() * size) };
+            if let Err(e) = user::copy_to_user(packets_ptr as u64, bytes) {
+                // Not given: kept for the next wait.
+                port.put_back(packets);
+                return Err(e);
+            }
+            return ok(packets.len());
+        }
+        let object = KObject::Port(port.clone());
+        let mut observed = [0u32];
+        wait_objects(core::slice::from_ref(&object), &[signals::READABLE], &mut observed, d)?;
+    }
+}
+
 pub fn channel_create(out: usize) -> SysResult {
+    super::may_make_object()?;
     let (a, b) = channel::create();
     let p = current_process()?;
     let mut table = p.handles.lock();
@@ -247,30 +319,43 @@ pub fn channel_create(out: usize) -> SysResult {
     ok(0)
 }
 
+/// Queues a message on a channel. Its handles are the kernel's as soon as
+/// their list has been read, whatever happens next: a write that fails
+/// closes them (as Zircon's does, and as `vrt`'s `Channel::write` expects),
+/// so no failure leaves them in the caller's table without an owner.
+/// Neither endpoint of the channel may travel on it, nor any channel that
+/// could reach it through queued messages ([`channel::would_cycle`]):
+/// `NotSupported`.
 pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
-    let ch = get_channel(raw, Rights::WRITE)?;
-    let data = user::read_vec(bytes as u64, n_bytes, vabi::CHANNEL_MAX_BYTES)?;
+    let ch = get_channel(raw, Rights::WRITE);
     let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
-    // Validate every handle before moving any of them.
     let p = current_process()?;
-    let mut moved = Vec::with_capacity(raws.len());
-    {
+    let taken: Vec<Option<Handle>> = {
         let mut table = p.handles.lock();
-        for (i, &r) in raws.iter().enumerate() {
-            if r == raw || raws[..i].contains(&r) {
-                return Err(Error::InvalidArgs);
-            }
-            let h = table.get(r)?;
-            if !h.rights.contains(Rights::TRANSFER) {
-                return Err(Error::AccessDenied);
-            }
+        raws.iter().map(|&r| table.remove(r).ok()).collect()
+    };
+    // From here on, returning drops what was taken: the handles are closed.
+    let ch = ch?;
+    let mut moved = Vec::with_capacity(taken.len());
+    for (i, h) in taken.into_iter().enumerate() {
+        let Some(h) = h else {
+            // Named twice (taken at its first mention), or not the caller's.
+            return Err(if raws[..i].contains(&raws[i]) { Error::InvalidArgs } else { Error::BadHandle });
+        };
+        if !h.rights.contains(Rights::TRANSFER) {
+            return Err(Error::AccessDenied);
         }
-        for &r in &raws {
-            moved.push(table.remove(r)?);
+        if let KObject::Channel(end) = &h.object
+            && end.same_channel(&ch)
+        {
+            return Err(Error::NotSupported);
         }
+        moved.push(h);
     }
-    // Handles are consumed even if the write fails (like Zircon); the
-    // returned message is dropped here, closing them.
+    if channel::would_cycle(&ch, &moved) {
+        return Err(Error::NotSupported);
+    }
+    let data = user::read_vec(bytes as u64, n_bytes, vabi::CHANNEL_MAX_BYTES)?;
     match ch.write(Message { data, handles: moved }) {
         Ok(()) => ok(0),
         Err((e, msg)) => {
@@ -328,6 +413,7 @@ pub fn channel_read(
 }
 
 pub fn socket_create(out: usize) -> SysResult {
+    super::may_make_object()?;
     let (a, b) = socket::create();
     let p = current_process()?;
     let mut table = p.handles.lock();

@@ -9,14 +9,17 @@
 //! their own, which the mapping keeps alive (the handle is closed at once).
 //! Either way `munmap` and `mprotect` are plain kernel calls on address
 //! ranges. A file mapping is a private copy of the file's bytes: changes
-//! are never written back, and shared writable file mappings are refused.
+//! are never written back, so shared writable file mappings are refused,
+//! and a shared one is mapped through a handle without the right to write,
+//! so that `mprotect` cannot make it writable either (`EACCES`).
 
-use vabi::{Error, map_flags};
+use vabi::{Error, Rights, map_flags};
 use vrt::object::Vmo;
 use vrt::vm;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Object};
+use crate::file::VfsFile;
 use crate::linux::errno::*;
 use crate::linux::mman::*;
 
@@ -55,26 +58,27 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
     if fixed && !addr.is_multiple_of(PAGE) {
         return Err(EINVAL);
     }
-    let file = if flags & MAP_ANONYMOUS != 0 {
+    let desc = if flags & MAP_ANONYMOUS != 0 {
         None
     } else {
         let desc = fd::get(fd)?;
         if !desc.readable() {
             return Err(EACCES);
         }
-        match &desc.object {
-            _ if kind != MAP_PRIVATE && prot & PROT_WRITE != 0 => return Err(ENODEV),
-            Object::File(_) => {}
-            _ => return Err(ENODEV),
+        if !matches!(desc.object, Object::File(_)) {
+            return Err(ENODEV);
+        }
+        // Changes are never written back: a shared mapping of a file can
+        // only be read.
+        if kind != MAP_PRIVATE && prot & PROT_WRITE != 0 {
+            return Err(ENODEV);
         }
         Some(desc)
     };
-    // A file's bytes go in through a writable mapping, then the
-    // protections the program asked for are applied.
-    let initial = if file.is_some() { map_flags::READ | map_flags::WRITE } else { map_prot(prot) };
-    let mut f = initial;
+    // Where the mapping goes, and whether its pages are provided now.
+    let mut place = 0;
     if flags & MAP_POPULATE != 0 {
-        f |= map_flags::COMMIT;
+        place |= map_flags::COMMIT;
     }
     if fixed {
         if flags & MAP_FIXED != 0 && flags & MAP_FIXED_NOREPLACE == 0 {
@@ -84,35 +88,71 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
                 Err(e) => return Err(error::kernel(e)),
             }
         }
-        f |= map_flags::FIXED;
+        place |= map_flags::FIXED;
     }
     let hint = addr & !(PAGE - 1);
-    let mapped = if file.is_none() && kind == MAP_PRIVATE {
-        vm::allocate(None, len, hint, f)
-    } else {
-        Vmo::create(len).and_then(|vmo| vm::map(None, &vmo, 0, len, hint, f))
-    };
-    let at = mapped.map_err(|e| match e {
+    let file = desc.as_deref().and_then(|d| match &d.object {
+        Object::File(f) => Some(f),
+        _ => None,
+    });
+    match (file, kind == MAP_PRIVATE) {
+        (Some(f), private) => map_file(f, offset as u64, len, hint, place, prot, private),
+        (None, true) => vm::allocate(None, len, hint, map_prot(prot) | place).map_err(map_error),
+        (None, false) => Vmo::create(len)
+            .and_then(|vmo| vm::map(None, &vmo, 0, len, hint, map_prot(prot) | place))
+            .map_err(map_error),
+    }
+}
+
+/// The `errno` for a mapping that cannot be made.
+fn map_error(e: Error) -> isize {
+    match e {
         Error::AlreadyExists => EEXIST,
         Error::NoMemory | Error::OutOfRange => ENOMEM,
         e => error::kernel(e),
-    })?;
-    if let Some(desc) = file {
-        let Object::File(file) = &desc.object else { unreachable!() };
-        // SAFETY: the mapping was just made, `len` bytes, writable.
-        let buf = unsafe { core::slice::from_raw_parts_mut(at as *mut u8, len) };
-        if let Err(e) = file.pread(buf, offset as u64) {
-            let _ = vm::unmap(None, at, len);
-            return Err(e);
-        }
-        if map_prot(prot) != initial
-            && let Err(e) = vm::protect(None, at, len, map_prot(prot))
-        {
-            let _ = vm::unmap(None, at, len);
-            return Err(error::kernel(e));
-        }
     }
-    Ok(at)
+}
+
+/// Maps `len` bytes of `file` from `offset`: a copy of them, in a VMO of
+/// the mapping's own. A private mapping is filled in place and then given
+/// the protections asked for. A shared one is filled through a mapping of
+/// its own, then mapped through a handle that cannot write: the kernel then
+/// refuses to make it writable later (`mprotect`), as its changes would
+/// never reach the file.
+fn map_file(file: &VfsFile, offset: u64, len: usize, hint: usize, place: usize, prot: u32, private: bool) -> SysResult {
+    let vmo = Vmo::create(len).map_err(map_error)?;
+    let writable = map_flags::READ | map_flags::WRITE;
+    // Where the file's bytes go in, writable.
+    let fill = if private {
+        vm::map(None, &vmo, 0, len, hint, writable | place)
+    } else {
+        vm::map(None, &vmo, 0, len, 0, writable)
+    }
+    .map_err(map_error)?;
+    // SAFETY: the mapping was just made, `len` bytes, writable, and is
+    // nobody else's.
+    let buf = unsafe { core::slice::from_raw_parts_mut(fill as *mut u8, len) };
+    let filled = file.pread(buf, offset);
+    if private {
+        let protected = filled.and_then(|_| {
+            if map_prot(prot) == writable {
+                return Ok(());
+            }
+            vm::protect(None, fill, len, map_prot(prot)).map_err(error::kernel)
+        });
+        return match protected {
+            Ok(()) => Ok(fill),
+            Err(e) => {
+                let _ = vm::unmap(None, fill, len);
+                Err(e)
+            }
+        };
+    }
+    let _ = vm::unmap(None, fill, len);
+    filled?;
+    let rights = vmo.0.basic_info().map_err(error::kernel)?.rights & !Rights::WRITE.0;
+    let read_only = Vmo::from_handle(vmo.0.duplicate(Some(Rights(rights))).map_err(error::kernel)?);
+    vm::map(None, &read_only, 0, len, hint, map_prot(prot) | place).map_err(map_error)
 }
 
 pub fn munmap(addr: usize, len: usize) -> SysResult {

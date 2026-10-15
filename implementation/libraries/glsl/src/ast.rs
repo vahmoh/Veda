@@ -225,9 +225,12 @@ pub enum Condition {
     Decl { ty: FullType, name: Symbol, init: Expr, loc: Loc },
 }
 
+/// A statement's kind. Large parts are boxed: the parser and the semantic
+/// checks recurse once per nested statement, and keeping the tree's nodes
+/// small keeps their stack frames small.
 #[derive(Debug, Clone)]
 pub enum StmtKind {
-    Declaration(Declaration),
+    Declaration(Box<Declaration>),
     Expr(Expr),
     Empty,
     /// `{ ... }`: a new scope.
@@ -244,7 +247,7 @@ pub enum StmtKind {
     Case(Expr),
     Default,
     While {
-        cond: Condition,
+        cond: Box<Condition>,
         body: Box<Stmt>,
     },
     DoWhile {
@@ -253,8 +256,8 @@ pub enum StmtKind {
     },
     For {
         init: Option<Box<Stmt>>,
-        cond: Option<Condition>,
-        step: Option<Expr>,
+        cond: Option<Box<Condition>>,
+        step: Option<Box<Expr>>,
         body: Box<Stmt>,
     },
     Continue,
@@ -334,7 +337,7 @@ pub enum Callee {
     Name(Symbol),
     /// `Name[N](...)`: an array constructor of a structure type.
     NamedArray(Symbol, Option<Box<Expr>>),
-    Type(TypeSpec),
+    Type(Box<TypeSpec>),
 }
 
 /// An expression.

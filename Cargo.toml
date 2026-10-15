@@ -43,12 +43,15 @@ members = [
     "implementation/services/init",
     "implementation/services/mediadec",
     "implementation/services/vfs",
+    "implementation/services/vfs/core",
     "implementation/services/devmgr",
     "implementation/services/compositor",
+    "implementation/services/compositor/core",
     "implementation/services/netd",
     "implementation/services/wlan",
     "implementation/services/agent",
     "implementation/services/drivervm",
+    "implementation/services/drivervm/core",
     "implementation/applications/about",
     "implementation/applications/shell",
     "implementation/applications/editor",
@@ -62,9 +65,12 @@ members = [
     "implementation/applications/interceptor",
     "implementation/applications/interceptor/game",
     "implementation/applications/videos/core",
+    "implementation/applications/music/core",
     "implementation/applications/terminal/core",
+    "implementation/applications/common",
     "implementation/services/audio",
     "generation/assets",
+    "generation/common",
     "generation/music",
     "generation/videos",
     "implementation/drivers/virtio-blk",
@@ -114,7 +120,6 @@ vabi = { path = "implementation/libraries/abi" }
 bootinfo = { path = "implementation/libraries/bootinfo" }
 initrd = { path = "implementation/libraries/initrd" }
 velf = { path = "implementation/libraries/elf" }
-vposix = { path = "implementation/libraries/posix" }
 vraster = { path = "implementation/libraries/raster" }
 vfont = { path = "implementation/libraries/font" }
 vimage = { path = "implementation/libraries/image" }
@@ -308,7 +313,8 @@ smoltcp = { version = "=0.14.0", default-features = false, features = [
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
-# Set for the programs of the driver VM's Linux guest (.cargo/arch/*/config.toml).
+# Set for the programs of the driver VM's Linux guest
+# (implementation/guest/.cargo/config.toml).
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(veda_guest)"] }
 missing_debug_implementations = "allow"
 

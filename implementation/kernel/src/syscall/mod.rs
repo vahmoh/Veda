@@ -64,6 +64,10 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::OBJECT_SIGNAL => ipc::object_signal(a[0] as RawHandle, a[1] as u32, a[2] as u32),
         nr::OBJECT_WAIT_ONE => ipc::wait_one(a[0] as RawHandle, a[1] as u32, a[2] as u64),
         nr::OBJECT_WAIT_MANY => ipc::wait_many(a[0], a[1], a[2] as u64),
+        nr::PORT_CREATE => ipc::port_create(),
+        nr::OBJECT_WAIT_ASYNC => ipc::wait_async(a[0] as RawHandle, a[1] as RawHandle, a[2] as u64, a[3] as u32),
+        nr::OBJECT_WAIT_ASYNC_CANCEL => ipc::wait_async_cancel(a[0] as RawHandle, a[1] as RawHandle, a[2] as u64),
+        nr::PORT_WAIT => ipc::port_wait(a[0] as RawHandle, a[1], a[2], a[3] as u64),
         nr::CHANNEL_CREATE => ipc::channel_create(a[0]),
         nr::CHANNEL_WRITE => ipc::channel_write(a[0] as RawHandle, a[1], a[2], a[3], a[4]),
         nr::CHANNEL_READ => ipc::channel_read(a[0] as RawHandle, a[1], a[2], a[3], a[4], a[5]),
@@ -115,7 +119,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::IOPORT_WRITE => hw::ioport_write(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::IRQ_CREATE => hw::irq_create(a[0] as RawHandle, a[1], a[2]),
         nr::IRQ_ACK => hw::irq_ack(a[0] as RawHandle),
-        nr::MSI_CREATE => hw::msi_create(a[0] as RawHandle, a[1], a[2]),
+        nr::MSI_CREATE => hw::msi_create(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::IRQ_CREATE_SOFTWARE => hw::irq_create_software(a[0], a[1] as RawHandle),
         nr::IRQ_RAISE => hw::irq_raise(a[0] as RawHandle),
 
@@ -151,8 +155,21 @@ fn handle(raw: RawHandle, rights: Rights) -> Result<Handle, Error> {
     Ok(h)
 }
 
-/// Adds a handle to the current process.
+/// Kernel memory that a new handle and its object may cost: user space may
+/// make one only while that much is left outside the kernel's reserve
+/// (`phys::user_may_use`), so that no process can exhaust the kernel's own
+/// memory by making objects.
+const NEW_OBJECT_BYTES: u64 = 4096;
+
+/// Refuses (`NoMemory`) a new object for user space within the kernel's
+/// reserve.
+fn may_make_object() -> Result<(), Error> {
+    if crate::mm::phys::user_may_use(NEW_OBJECT_BYTES) { Ok(()) } else { Err(Error::NoMemory) }
+}
+
+/// Adds a handle to a new object (or a duplicate) to the current process.
 fn insert(object: KObject, rights: Rights) -> Result<RawHandle, Error> {
+    may_make_object()?;
     current_process()?.handles.lock().insert(Handle { object, rights })
 }
 
@@ -176,6 +193,7 @@ typed_getter!(get_resource, Resource, crate::object::resource::Resource);
 typed_getter!(get_ioports, IoPorts, crate::object::ioport::IoPorts);
 typed_getter!(get_interrupt, Interrupt, crate::object::interrupt::Interrupt);
 typed_getter!(get_event, Event, crate::object::event::Event);
+typed_getter!(get_port, Port, crate::object::port::Port);
 
 /// A process handle argument where 0 means "the calling process".
 fn target_process(raw: RawHandle) -> Result<Arc<Process>, Error> {

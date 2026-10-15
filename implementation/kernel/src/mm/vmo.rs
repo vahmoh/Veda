@@ -69,7 +69,7 @@ impl Vmo {
         if size == 0 || size > (256 << 20) {
             return None;
         }
-        let base = phys::alloc_contiguous(size / PAGE_SIZE, PAGE_SIZE, max_addr)?;
+        let base = phys::alloc_user_contiguous(size / PAGE_SIZE, PAGE_SIZE, max_addr)?;
         let vmo = Vmo::new(size, VmoKind::Contiguous { base }, cache);
         vmo.flush(base, size);
         vmo.committed.store(size, Ordering::Relaxed);
@@ -122,7 +122,7 @@ impl Vmo {
                 if !commit {
                     return None;
                 }
-                let f = phys::alloc_zeroed()?;
+                let f = phys::alloc_user_zeroed()?;
                 self.flush(f, PAGE_SIZE);
                 pages.insert(page, f);
                 self.committed.fetch_add(PAGE_SIZE, Ordering::Relaxed);

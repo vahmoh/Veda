@@ -33,15 +33,19 @@
 
 mod drm;
 
-use std::fs::File;
-use std::io::{self, Read};
+use std::cell::RefCell;
+use std::io;
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
+use guest_sys::idle;
+use guest_sys::retry::{self, Ended};
+use guest_sys::sysfs::link_name;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::time::{ClockId, clock_gettime};
 use vabi::signals;
 use vproto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenMode, Shown, displaydev as protocol};
+use vrt::guest::Watch;
 use vrt::object::{Channel, Event, Vmo};
 use vrt::vm::Mapping;
 
@@ -91,10 +95,6 @@ struct Display {
     on: bool,
     name: String,
     firmware: Vec<u64>,
-}
-
-fn link_name(path: String) -> Option<String> {
-    Some(std::fs::read_link(path).ok()?.file_name()?.to_string_lossy().into_owned())
 }
 
 /// The host's addresses of the memory BARs of the guest's function at
@@ -159,14 +159,6 @@ fn find_card(framebuffer: u64) -> (Card, Output, String) {
             said = true;
         }
         std::thread::sleep(if said { Duration::from_secs(1) } else { Duration::from_millis(200) });
-    }
-}
-
-/// Stays, doing nothing: what it would do cannot be (init would start it
-/// again were it to end).
-fn idle() -> ! {
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
     }
 }
 
@@ -363,11 +355,15 @@ fn veda_time(ns: u64) -> u64 {
     (ns as i64 + (veda as i64 - linux as i64)).max(0) as u64
 }
 
-/// Flips for one compositor until it goes away.
-fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
-    let watch = |handle, signals| vrt::guest::watch(handle, signals).map_err(|e| io::Error::other(format!("{e}")));
-    let mut request = File::from(watch(s.request.raw(), signals::SIGNALED)?);
+/// Flips for one compositor until it goes away ([`Ended::Left`]). An error
+/// ends the session (a watch failed); a display that fails is gone
+/// ([`Ended::Gone`]: the program ends, and is started again).
+fn serve(d: &mut Display, s: &Session) -> Result<Ended, String> {
+    let watch = |handle, signals| Watch::new(handle, signals).map_err(|e| format!("cannot watch the link: {e}"));
+    let request = watch(s.request.raw(), signals::SIGNALED)?;
     let closed = watch(s.link.raw(), signals::PEER_CLOSED)?;
+    let failed = |e| format!("a watch failed ({e}); attaching again");
+    let gone = |e: io::Error| Ended::Gone(format!("{e}"));
     let period = d.mode.period_ns();
     let mut last_seq = 0;
     // A flip on its way to the screen, and the request that came meanwhile
@@ -382,13 +378,17 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
             PollFd::new(&closed, PollFlags::IN),
             PollFd::new(d.card.file(), PollFlags::IN),
         ];
-        poll(&mut fds, None)?;
-        let [requested, closing, flipped] = fds.map(|f| f.revents());
-        if !closing.is_empty() {
-            return Ok(());
+        match poll(&mut fds, None) {
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(e) => return Ok(gone(e.into())),
         }
-        if requested.contains(PollFlags::IN) {
-            let _ = request.read(&mut [0u8; 4]);
+        let [requested, closing, flipped] = fds.map(|f| f.revents());
+        if closed.take(!closing.is_empty()).map_err(failed)?.is_some() {
+            println!("kms: {}: the compositor went away", d.name);
+            return Ok(Ended::Left);
+        }
+        if request.take(!requested.is_empty()).map_err(failed)?.is_some() {
             let _ = s.request.clear();
             let (picture, seq) = s.state.queued();
             if seq != last_seq && (picture as usize) < d.pictures.len() {
@@ -397,7 +397,11 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
             }
         }
         if flipped.contains(PollFlags::IN) {
-            for f in d.card.events()? {
+            let events = match d.card.events() {
+                Ok(events) => events,
+                Err(e) => return Ok(gone(e)),
+            };
+            for f in events {
                 flipping = false;
                 let shown = Shown {
                     seq: f.user_data as u32,
@@ -417,14 +421,15 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
             match d.show(picture, seq) {
                 Ok(()) => flipping = true,
                 Err(e) if e.raw_os_error() == Some(16) => waiting = Some((picture, seq)),
-                Err(e) => return Err(e),
+                Err(e) => return Ok(gone(e)),
             }
         }
     }
 }
 
-fn main() {
-    let mut display: Option<Display> = None;
+/// The display, set up for the compositor's screen once the compositor
+/// says what that is; if it cannot be, the program stays, doing nothing.
+fn set_up() -> Display {
     loop {
         let client = match vproto::connect(protocol::NAME) {
             Ok(ch) => protocol::Client::new(ch),
@@ -433,65 +438,60 @@ fn main() {
                 continue;
             }
         };
-        if display.is_none() {
-            let screen = match client.screen() {
-                Ok(Ok(s)) => s,
-                Ok(Err(DisplayDevError::Denied)) | Err(_) => {
-                    println!("kms: the compositor does not answer");
-                    std::thread::sleep(Duration::from_secs(1));
-                    continue;
-                }
-                Ok(Err(e)) => {
-                    println!("kms: the compositor's screen: {e}");
-                    idle();
-                }
-            };
-            let (card, output, location) = find_card(screen.framebuffer);
-            println!("kms: {} at pci {location}, connector {} on CRTC {}", card.driver, output.connector, output.crtc);
-            match Display::new(card, output, &location, screen) {
-                Ok(d) => {
-                    let how = if matches!(d.shows, Shows::Pictures(_)) { "shown as they are" } else { "copied" };
-                    let millihertz = 1_000_000_000_000 / d.mode.period_ns().max(1);
-                    let (w, h) = d.mode.size();
-                    println!(
-                        "kms: {}: {w}x{h} at {}.{:03} Hz, the compositor's pictures {how}",
-                        d.name,
-                        millihertz / 1000,
-                        millihertz % 1000
-                    );
-                    let p = d.place;
-                    if (p.width, p.height) != (d.width, d.height) {
-                        println!(
-                            "kms: {}: the compositor's {}x{} scaled to {}x{} at ({}, {})",
-                            d.name, d.width, d.height, p.width, p.height, p.x, p.y
-                        );
-                    }
-                    display = Some(d);
-                }
-                Err(e) => {
-                    println!("kms: {e}");
-                    idle();
-                }
+        let screen = match client.screen() {
+            Ok(Ok(s)) => s,
+            Ok(Err(DisplayDevError::Denied)) | Err(_) => {
+                println!("kms: the compositor does not answer");
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
             }
-        }
-        let d = display.as_mut().expect("the display");
-        match attach(d, client) {
-            Ok(session) => {
-                println!("kms: {}: attached to the compositor", d.name);
-                match serve(d, &session) {
-                    Ok(()) => println!("kms: {}: the compositor went away", d.name),
-                    Err(e) => {
-                        println!("kms: {}: {e}", d.name);
-                        return;
-                    }
-                }
+            Ok(Err(e)) => {
+                println!("kms: the compositor's screen: {e}");
+                idle();
             }
+        };
+        let (card, output, location) = find_card(screen.framebuffer);
+        println!("kms: {} at pci {location}, connector {} on CRTC {}", card.driver, output.connector, output.crtc);
+        let d = match Display::new(card, output, &location, screen) {
+            Ok(d) => d,
             Err(e) => {
                 println!("kms: {e}");
-                std::thread::sleep(Duration::from_secs(1));
+                idle();
             }
+        };
+        let how = if matches!(d.shows, Shows::Pictures(_)) { "shown as they are" } else { "copied" };
+        let millihertz = 1_000_000_000_000 / d.mode.period_ns().max(1);
+        let (w, h) = d.mode.size();
+        println!(
+            "kms: {}: {w}x{h} at {}.{:03} Hz, the compositor's pictures {how}",
+            d.name,
+            millihertz / 1000,
+            millihertz % 1000
+        );
+        let p = d.place;
+        if (p.width, p.height) != (d.width, d.height) {
+            println!(
+                "kms: {}: the compositor's {}x{} scaled to {}x{} at ({}, {})",
+                d.name, d.width, d.height, p.width, p.height, p.x, p.y
+            );
         }
+        return d;
     }
+}
+
+fn main() {
+    let display = RefCell::new(set_up());
+    let name = format!("kms: {}", display.borrow().name);
+    let attached = || {
+        let ch = vproto::connect(protocol::NAME).map_err(|e| format!("cannot reach the compositor: {e:?}"))?;
+        let session = attach(&display.borrow(), protocol::Client::new(ch))?;
+        println!("{name}: attached to the compositor");
+        Ok(session)
+    };
+    let why = retry::sessions(&name, attached, |session| serve(&mut display.borrow_mut(), &session));
+    // Linux's display failed: whoever starts the program again sets it up
+    // anew.
+    println!("{name}: {why}");
 }
 
 #[cfg(test)]

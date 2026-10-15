@@ -82,7 +82,7 @@ fn presents_flipped_and_scaled() {
     c.clear_color(0.0, 0.0, 1.0, 1.0);
     c.clear(gl::COLOR_BUFFER_BIT);
     let mut pixels = vec![0u32; 8 * 8];
-    let mut dst = Present { pixels: &mut pixels, stride: 8, width: 8, height: 8, opaque: true };
+    let mut dst = Present::new(&mut pixels, 8, 8, 8, true).unwrap();
     c.present_to(&mut dst);
     // The window's rows count from the top: blue first.
     assert_eq!(pixels[0], 0xFF0000FF);
@@ -97,7 +97,7 @@ fn presents_translucent_windows_premultiplied() {
     c.clear_color(1.0, 0.0, 0.0, 0.5);
     c.clear(gl::COLOR_BUFFER_BIT);
     let mut pixels = vec![0u32; 4];
-    let mut dst = Present { pixels: &mut pixels, stride: 2, width: 2, height: 2, opaque: false };
+    let mut dst = Present::new(&mut pixels, 2, 2, 2, false).unwrap();
     c.present_to(&mut dst);
     // Alpha 128 or 127 (0.5, rounded either way); red 255 times that over
     // 255.

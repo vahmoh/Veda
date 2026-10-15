@@ -10,9 +10,11 @@
 //! makes the socket a terminal to the program (`isatty`, its size, its
 //! modes). While it runs, its output comes to the screen and the keys typed
 //! go to it — a line at a time, edited in the window, in canonical mode;
-//! key by key otherwise. Ctrl+C ends it. Redirections give it files instead
-//! of the terminal, and text piped from or to a built-in command travels
-//! through a socket of its own.
+//! key by key otherwise. What is typed or pasted waits in the [`Console`]
+//! until the program has room for it, so that nothing is lost when it reads
+//! slowly. Ctrl+C ends it. Redirections give it files instead of the
+//! terminal, and text piped from or to a built-in command travels through a
+//! socket of its own; what it pipes on is kept up to [`PIPE_LIMIT`].
 
 use alloc::format;
 use alloc::string::String;
@@ -20,6 +22,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use terminal_core::text::{Capture, Utf8Stream};
 use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, SIGNALED, TERMINATED, WRITABLE};
 use vabi::startup::role;
 use vabi::{Error, map_flags};
@@ -31,16 +34,27 @@ use vrt::process::{Spawn, SpawnError, is_executable};
 use vrt::sync::Mutex;
 
 use crate::job::Output;
+use crate::shell::{INTERRUPTED, PIPE_LIMIT};
+
+/// What was typed for the foreground program and not yet written to it.
+#[derive(Default)]
+struct Typed {
+    bytes: Vec<u8>,
+    /// The end of the input (Ctrl+D) comes after them.
+    end: bool,
+}
 
 /// The terminal side of the programs this window runs.
 pub struct Console {
     /// The terminal's state, shared with its programs.
     pub tty: Tty,
-    /// The window's end of the foreground program's terminal (where typed
-    /// input goes), while one runs.
-    foreground: Mutex<Option<Arc<Socket>>>,
-    /// Wakes the shell waiting for a program (Ctrl+C was pressed).
+    /// Whether a program in the foreground reads the terminal.
+    foreground: AtomicBool,
+    /// Wakes the shell waiting for a program (Ctrl+C was pressed, or input
+    /// was typed).
     wake: Event,
+    /// Typed for the foreground program, waiting for room in its input.
+    typed: Mutex<Typed>,
     /// Input typed for a program that it did not read: the next program
     /// gets it, or else the shell, as from a Unix terminal's buffer.
     unread: Mutex<Vec<u8>>,
@@ -50,8 +64,9 @@ impl Console {
     pub fn new(rows: u16, cols: u16) -> Option<Arc<Console>> {
         Some(Arc::new(Console {
             tty: Tty::create(0, rows, cols)?,
-            foreground: Mutex::new(None),
+            foreground: AtomicBool::new(false),
             wake: Event::create().ok()?,
+            typed: Mutex::new(Typed::default()),
             unread: Mutex::new(Vec::new()),
         }))
     }
@@ -64,23 +79,25 @@ impl Console {
 
     /// Whether a program in the foreground reads the terminal.
     pub fn program_running(&self) -> bool {
-        self.foreground.lock().is_some()
+        self.foreground.load(Ordering::Acquire)
     }
 
-    /// Sends what was typed to the foreground program.
+    /// Sends what was typed to the foreground program: it waits here until
+    /// the program has room for it, never blocking the window.
     pub fn send(&self, bytes: &[u8]) {
-        let fg = self.foreground.lock().clone();
-        if let Some(s) = fg {
-            // The program may have stopped reading: never block the window.
-            let _ = s.write(bytes);
+        if !self.program_running() || bytes.is_empty() {
+            return;
         }
+        self.typed.lock().bytes.extend_from_slice(bytes);
+        let _ = self.wake.signal();
     }
 
     /// Ends the foreground program's input (Ctrl+D): it reads the end of
     /// the file once it has read what is there.
     pub fn end_input(&self) {
-        if let Some(s) = self.foreground.lock().as_ref() {
-            let _ = s.shutdown();
+        if self.program_running() {
+            self.typed.lock().end = true;
+            let _ = self.wake.signal();
         }
     }
 
@@ -104,6 +121,31 @@ impl Console {
     pub fn signals(&self) -> bool {
         self.tty.lflag() & tty::lflag::ISIG != 0
     }
+
+    /// Writes what was typed to the program's input `term`, as much as
+    /// fits; returns whether some is left to write.
+    fn feed(&self, term: &Socket) -> bool {
+        let mut typed = self.typed.lock();
+        while !typed.bytes.is_empty() {
+            match term.write(&typed.bytes) {
+                Ok(n) => {
+                    typed.bytes.drain(..n);
+                }
+                Err(Error::ShouldWait) => return true,
+                // The program closed its input: nothing more goes there.
+                Err(_) => {
+                    typed.bytes.clear();
+                    typed.end = false;
+                    return false;
+                }
+            }
+        }
+        if typed.end {
+            typed.end = false;
+            let _ = term.shutdown();
+        }
+        false
+    }
 }
 
 /// A program's standard input.
@@ -115,7 +157,7 @@ pub enum Input {
     File(Channel),
 }
 
-/// A program's standard output.
+/// Where a program's standard output or error goes.
 pub enum Destination {
     Terminal,
     /// Kept for the next command of a pipe.
@@ -133,6 +175,7 @@ pub struct Run<'a> {
     pub cwd: &'a str,
     pub stdin: Input,
     pub stdout: Destination,
+    pub stderr: Destination,
 }
 
 /// How a program ended.
@@ -142,8 +185,8 @@ pub struct Ended {
     pub status: i32,
     /// What ended it, if it did not exit by itself.
     pub reason: Option<&'static str>,
-    /// Captured standard output.
-    pub captured: Vec<u8>,
+    /// What it wrote for the next command (cut at [`PIPE_LIMIT`]).
+    pub captured: Capture,
 }
 
 /// The message for a program that could not start.
@@ -155,30 +198,17 @@ fn spawn_error(path: &str, e: SpawnError) -> String {
     }
 }
 
-/// Reads what a socket has without waiting: `Some` with the bytes, `None`
-/// at the end of the stream.
-fn drain(s: &Socket, into: &mut Vec<u8>) -> Option<()> {
+/// Reads what a socket has without waiting into `f`: `Some` with the bytes
+/// read, `None` at the end of the stream.
+fn drain(s: &Socket, mut f: impl FnMut(&[u8])) -> Option<()> {
     let mut buf = [0u8; 16 * 1024];
     loop {
         match s.read(&mut buf) {
-            Ok(n) => into.extend_from_slice(&buf[..n]),
+            Ok(n) => f(&buf[..n]),
             Err(Error::ShouldWait) => return Some(()),
             Err(_) => return None,
         }
     }
-}
-
-/// Output for the screen, valid UTF-8 up to a character cut at the end
-/// (kept in `carry` for the next read).
-fn text_of(carry: &mut Vec<u8>) -> String {
-    let valid = match core::str::from_utf8(carry) {
-        Ok(_) => carry.len(),
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        Err(_) => carry.len(),
-    };
-    let text = String::from_utf8_lossy(&carry[..valid]).into_owned();
-    carry.drain(..valid);
-    text
 }
 
 /// What the exit code of a program means to the shell.
@@ -225,12 +255,8 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
     console.tty.set_socket(program_side.0.koid());
     let dup = |s: &Socket| s.duplicate(None).map_err(|e| format!("{e}"));
     // Our own handle to the program's side, to take back what it does not
-    // read of the input typed for it; and the input earlier programs left.
+    // read of the input typed for it.
     let input_side = dup(&program_side)?;
-    let left = core::mem::take(&mut *console.unread.lock());
-    if !left.is_empty() {
-        let _ = term.write(&left);
-    }
     let mut handles: Vec<(u32, Handle)> = Vec::new();
     let mut feed: Option<(Socket, Vec<u8>)> = None;
     match run.stdin {
@@ -242,17 +268,32 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
             feed = Some((ours, text));
         }
     }
+    // One socket for what goes to the next command, whichever streams go
+    // there.
     let mut capture: Option<Socket> = None;
-    match run.stdout {
-        Destination::Terminal => handles.push((role::FD + 1, dup(&program_side)?.into_handle())),
-        Destination::File(ch) => handles.push((role::FD + 1, ch.into_handle())),
-        Destination::Capture => {
-            let (ours, theirs) = Socket::create().map_err(|e| format!("{e}"))?;
-            handles.push((role::FD + 1, theirs.into_handle()));
-            capture = Some(ours);
-        }
+    let mut capture_side: Option<Socket> = None;
+    for (fd, dest) in [(role::FD + 1, run.stdout), (role::FD + 2, run.stderr)] {
+        let handle = match dest {
+            Destination::Terminal => dup(&program_side)?.into_handle(),
+            Destination::File(ch) => ch.into_handle(),
+            Destination::Capture => {
+                let side = match capture_side.take() {
+                    Some(side) => side,
+                    None => {
+                        let (ours, theirs) = Socket::create().map_err(|e| format!("{e}"))?;
+                        capture = Some(ours);
+                        theirs
+                    }
+                };
+                let handle = dup(&side)?.into_handle();
+                capture_side = Some(side);
+                handle
+            }
+        };
+        handles.push((fd, handle));
     }
-    handles.push((role::FD + 2, program_side.into_handle()));
+    drop(capture_side);
+    drop(program_side);
     let registry = vproto::with_registry(|r| r.clone_registry());
     if let Ok(Ok(Ok(ch))) = registry {
         handles.push((role::REGISTRY, ch.into_handle()));
@@ -266,15 +307,24 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
     spawn.args = run.args.iter().map(|a| a.as_bytes()).collect();
     spawn.env = run.env.iter().map(|e| e.as_bytes()).collect();
     spawn.handles = handles;
+    // What earlier programs left unread comes first.
+    let left = core::mem::take(&mut *console.unread.lock());
+    {
+        let mut typed = console.typed.lock();
+        let later = core::mem::take(&mut typed.bytes);
+        typed.bytes = left;
+        typed.bytes.extend_from_slice(&later);
+        typed.end = false;
+    }
     let process: Process = spawn.start(bytes).map_err(|e| spawn_error(run.path, e))?;
     drop(image);
 
-    let term = Arc::new(term);
-    *console.foreground.lock() = Some(term.clone());
+    console.foreground.store(true, Ordering::Release);
     let _ = console.wake.clear();
-    let mut captured = Vec::new();
-    let mut carry = Vec::new();
+    let mut captured = Capture::new(PIPE_LIMIT);
+    let mut screen = Utf8Stream::new();
     let mut term_open = true;
+    let mut typed_left = console.feed(&term);
     let mut killed = false;
     const TERM: u64 = 1;
     const PROCESS: u64 = 2;
@@ -286,7 +336,9 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         ws.add(process.raw(), TERMINATED, PROCESS);
         ws.add(console.wake.raw(), SIGNALED, WAKE);
         if term_open {
-            ws.add(term.raw(), READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, TERM);
+            // Its output, and room for what was typed for it.
+            let room = if typed_left { WRITABLE } else { 0 };
+            ws.add(term.raw(), READABLE | PEER_CLOSED | PEER_WRITE_DISABLED | room, TERM);
         }
         if let Some(c) = &capture {
             ws.add(c.raw(), READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, CAPTURE);
@@ -299,26 +351,32 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         for (key, _) in ready {
             match key {
                 TERM => {
-                    term_open = drain(&term, &mut carry).is_some();
-                    out.raw(&text_of(&mut carry));
+                    term_open = drain(&term, |b| out.raw(&screen.push(b))).is_some();
+                    typed_left = term_open && console.feed(&term);
                 }
                 CAPTURE => {
-                    if drain(capture.as_ref().unwrap(), &mut captured).is_none() {
+                    let mut full = false;
+                    let open = capture.as_ref().and_then(|c| drain(c, |b| full |= !captured.push(b)));
+                    // Full: the program's next write finds the pipe closed,
+                    // and it ends (or carries on without it), as a Unix
+                    // program does when the reader went away.
+                    if open.is_none() || full {
                         capture = None;
                     }
                 }
                 FEED => {
-                    let (s, text) = feed.as_mut().unwrap();
-                    match s.write(text) {
-                        Ok(n) => {
-                            text.drain(..n);
+                    if let Some((s, text)) = &mut feed {
+                        match s.write(text) {
+                            Ok(n) => {
+                                text.drain(..n);
+                            }
+                            Err(Error::ShouldWait) => {}
+                            Err(_) => text.clear(),
                         }
-                        Err(Error::ShouldWait) => {}
-                        Err(_) => text.clear(),
-                    }
-                    if text.is_empty() {
-                        // The end of the input.
-                        feed = None;
+                        if text.is_empty() {
+                            // The end of the input.
+                            feed = None;
+                        }
                     }
                 }
                 WAKE => {
@@ -329,6 +387,7 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
                         let _ = process.kill_tree();
                         killed = true;
                     }
+                    typed_left = term_open && console.feed(&term);
                 }
                 PROCESS => exited = true,
                 _ => {}
@@ -338,22 +397,26 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
             break;
         }
     }
-    *console.foreground.lock() = None;
+    console.foreground.store(false, Ordering::Release);
     // What it wrote last.
-    drain(&term, &mut carry);
-    // What was typed for it and not read stays for the next reader.
+    drain(&term, |b| out.raw(&screen.push(b)));
+    out.raw(&screen.finish());
+    // What was typed for it and not read stays for the next reader: what it
+    // left in its input, then what had no room there yet.
     let mut unread = Vec::new();
-    drain(&input_side, &mut unread);
+    drain(&input_side, |b| unread.extend_from_slice(b));
+    unread.extend_from_slice(&core::mem::take(&mut console.typed.lock().bytes));
     console.unread.lock().extend_from_slice(&unread);
-    let text = text_of(&mut carry);
-    out.raw(&text);
-    if !carry.is_empty() {
-        out.raw(&String::from_utf8_lossy(&carry));
-    }
     if let Some(c) = &capture {
-        drain(c, &mut captured);
+        drain(c, |b| {
+            captured.push(b);
+        });
     }
     let code = process.info().map(|i| i.exit_code).unwrap_or(vabi::EXIT_CODE_CRASHED);
-    let (status, reason) = if killed { (crate::shell::INTERRUPTED, None) } else { ended(code) };
+    let (status, mut reason) = if killed { (INTERRUPTED, None) } else { ended(code) };
+    // Ended by the pipe the shell closed: that is said already.
+    if captured.cut() && reason == Some("Broken pipe") {
+        reason = None;
+    }
     Ok(Ended { status, reason, captured })
 }

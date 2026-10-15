@@ -37,7 +37,7 @@ wait-serial "autopilot on" 10
 wait 6
 agent-call read_app '{"app":"interceptor"}' 30
 agent-result '"suspect_distance_m":'
-shot target/veda/agent-interceptor-1-mission.png
+shot target/veda/agent-interceptor-1-mission.png now
 # Paused and resumed by the agent.
 agent-call use_app '{"app":"interceptor","action":"pause"}' 30
 agent-result '"paused":true'
@@ -45,7 +45,7 @@ wait-serial "screen Paused" 10
 agent-call read_app '{"app":"interceptor"}' 30
 agent-result '"screen":"paused"'
 wait 1
-shot target/veda/agent-interceptor-2-paused.png
+shot target/veda/agent-interceptor-2-paused.png now
 agent-call use_app '{"app":"interceptor","action":"resume"}' 30
 agent-result '"paused":false'
 # The settings: miles an hour, the music lower; nonsense refused.
@@ -69,6 +69,6 @@ agent-result '"started":true'
 agent-call read_app '{"app":"interceptor"}' 30
 agent-result '"mode":"quick chase","time_of_day":"sunset"'
 wait 5
-shot target/veda/agent-interceptor-3-quick.png
+shot target/veda/agent-interceptor-3-quick.png now
 agent-call use_app '{"app":"interceptor","action":"quit_to_menu"}' 30
 agent-result '"screen":"main_menu"'

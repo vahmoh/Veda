@@ -12,6 +12,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use vabi::{VcpuExit, vcpu_exit};
+use vproto::startup::drivervm as roles;
 use vrt::object::{Interrupt, IoPorts, Vcpu};
 use vrt::println;
 use vrt::sync::Mutex;
@@ -19,14 +20,6 @@ use vrt::sync::Mutex;
 use super::i8042::{self, I8042};
 use crate::lines::Lines;
 use crate::machine::exit_code;
-
-/// Roles of the keyboard controller's data port, its command port, and
-/// its keyboard's and mouse's interrupts, if devmgr gives the guest the
-/// controller.
-const I8042_DATA_ROLE: u32 = vabi::startup::role::USER + 3;
-const I8042_COMMAND_ROLE: u32 = vabi::startup::role::USER + 4;
-const I8042_KEYBOARD_ROLE: u32 = vabi::startup::role::USER + 5;
-const I8042_MOUSE_ROLE: u32 = vabi::startup::role::USER + 6;
 
 pub struct Platform {
     /// The keyboard controller, if the guest has it.
@@ -41,10 +34,10 @@ impl Platform {
     pub fn take(lines: &mut Lines) -> Platform {
         let take = |role| vrt::env::take_handle(role);
         let i8042 = match (
-            take(I8042_DATA_ROLE),
-            take(I8042_COMMAND_ROLE),
-            take(I8042_KEYBOARD_ROLE),
-            take(I8042_MOUSE_ROLE),
+            take(roles::I8042_DATA),
+            take(roles::I8042_COMMAND),
+            take(roles::I8042_KEYBOARD),
+            take(roles::I8042_MOUSE),
         ) {
             (Some(data), Some(command), Some(keyboard), Some(mouse)) => {
                 lines.add(i8042::KEYBOARD_GSI, Interrupt::from_handle(keyboard), false);

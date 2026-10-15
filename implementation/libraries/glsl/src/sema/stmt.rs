@@ -4,6 +4,7 @@
 //! Statements.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use super::Sema;
@@ -59,6 +60,9 @@ impl Sema<'_> {
         Some(c)
     }
 
+    /// Checks a statement. As with expressions, the statements that hold
+    /// statements are checked by functions of their own, kept out of line,
+    /// so that each level of nesting takes only the stack it needs.
     fn statement(&mut self, s: &ast::Stmt, out: &mut Vec<Stmt>) {
         let loc = s.loc;
         match &s.kind {
@@ -69,68 +73,16 @@ impl Sema<'_> {
                 }
             }
             StmtKind::Declaration(d) => self.local_declaration(d, out),
-            StmtKind::Compound(stmts) => {
-                self.push_scope();
-                let body = self.statements(stmts);
-                self.pop_scope();
-                out.push(Stmt::Block(body));
-            }
-            StmtKind::If { cond, then, otherwise } => {
-                let c = self.condition(cond);
-                let t = self.scoped(then);
-                let e = otherwise.as_ref().map(|o| self.scoped(o)).unwrap_or_default();
-                if let Some(c) = c {
-                    out.push(Stmt::If(c, t, e));
-                }
-            }
+            StmtKind::Compound(stmts) => self.compound(stmts, out),
+            StmtKind::If { cond, then, otherwise } => self.if_statement(cond, then, otherwise.as_deref(), out),
             StmtKind::Switch { selector, body } => self.switch(selector, body, loc, out),
             StmtKind::Case(_) | StmtKind::Default => {
                 error!(self.diags, loc, "case and default labels can only appear directly in a switch");
             }
-            StmtKind::While { cond, body } => {
-                self.push_scope();
-                let (cond, cond_var) = self.loop_condition(cond);
-                self.enter_loop();
-                let body = self.loop_body(body);
-                self.leave_loop();
-                self.pop_scope();
-                if let Some(c) = cond {
-                    out.push(Stmt::Loop(Box::new(Loop { cond: Some(c), cond_var, step: None, body, do_while: false })));
-                }
-            }
-            StmtKind::DoWhile { body, cond } => {
-                self.enter_loop();
-                let body = self.scoped(body);
-                self.leave_loop();
-                if let Some(c) = self.condition(cond) {
-                    out.push(Stmt::Loop(Box::new(Loop {
-                        cond: Some(c),
-                        cond_var: None,
-                        step: None,
-                        body,
-                        do_while: true,
-                    })));
-                }
-            }
+            StmtKind::While { cond, body } => self.while_statement(cond, body, out),
+            StmtKind::DoWhile { body, cond } => self.do_statement(body, cond, out),
             StmtKind::For { init, cond, step, body } => {
-                self.push_scope();
-                let mut prelude = Vec::new();
-                if let Some(i) = init {
-                    self.statement(i, &mut prelude);
-                }
-                let (c, cond_var) = match cond {
-                    Some(c) => self.loop_condition(c),
-                    None => (Some(self.konst(alloc::vec![ops::Value::B(true)], Type::BOOL, loc)), None),
-                };
-                let step = step.as_ref().and_then(|e| self.expr(e));
-                self.enter_loop();
-                let body = self.loop_body(body);
-                self.leave_loop();
-                self.pop_scope();
-                if let Some(c) = c {
-                    prelude.push(Stmt::Loop(Box::new(Loop { cond: Some(c), cond_var, step, body, do_while: false })));
-                    out.push(Stmt::Block(prelude));
-                }
+                self.for_statement(init.as_deref(), cond.as_deref(), step.as_deref(), body, loc, out);
             }
             StmtKind::Continue => {
                 if self.func.as_ref().is_none_or(|f| f.loops == 0) {
@@ -154,33 +106,107 @@ impl Sema<'_> {
                 self.discards = true;
                 out.push(Stmt::Discard);
             }
-            StmtKind::Return(value) => {
-                let ret = self.func.as_ref().map_or(Type::VOID, |f| f.ret);
-                match value {
-                    None if ret.is_void() => out.push(Stmt::Return(None)),
-                    None => {
-                        let t = self.type_name(ret);
-                        error!(self.diags, loc, "this function must return a '{t}'");
+            StmtKind::Return(value) => self.return_statement(value.as_ref(), loc, out),
+        }
+    }
+
+    #[inline(never)]
+    fn return_statement(&mut self, value: Option<&ast::Expr>, loc: Loc, out: &mut Vec<Stmt>) {
+        let ret = self.func.as_ref().map_or(Type::VOID, |f| f.ret);
+        match value {
+            None if ret.is_void() => out.push(Stmt::Return(None)),
+            None => {
+                let t = self.type_name(ret);
+                error!(self.diags, loc, "this function must return a '{t}'");
+            }
+            Some(e) => {
+                let Some(v) = self.expr(e) else { return };
+                if ret.is_void() {
+                    if v.ty.is_void() {
+                        // `return f();` with a void f: allowed.
+                        out.push(Stmt::Expr(v));
+                        out.push(Stmt::Return(None));
+                    } else {
+                        error!(self.diags, loc, "a void function cannot return a value");
                     }
-                    Some(e) => {
-                        let Some(v) = self.expr(e) else { return };
-                        if ret.is_void() {
-                            if v.ty.is_void() {
-                                // `return f();` with a void f: allowed.
-                                out.push(Stmt::Expr(v));
-                                out.push(Stmt::Return(None));
-                            } else {
-                                error!(self.diags, loc, "a void function cannot return a value");
-                            }
-                        } else if v.ty != ret {
-                            let (a, b) = (self.type_name(ret), self.type_name(v.ty));
-                            error!(self.diags, loc, "returning a '{b}' from a function returning '{a}'");
-                        } else {
-                            out.push(Stmt::Return(Some(v)));
-                        }
-                    }
+                } else if v.ty != ret {
+                    let (a, b) = (self.type_name(ret), self.type_name(v.ty));
+                    error!(self.diags, loc, "returning a '{b}' from a function returning '{a}'");
+                } else {
+                    out.push(Stmt::Return(Some(v)));
                 }
             }
+        }
+    }
+
+    #[inline(never)]
+    fn compound(&mut self, stmts: &[ast::Stmt], out: &mut Vec<Stmt>) {
+        self.push_scope();
+        let body = self.statements(stmts);
+        self.pop_scope();
+        out.push(Stmt::Block(body));
+    }
+
+    #[inline(never)]
+    fn if_statement(&mut self, cond: &ast::Expr, then: &ast::Stmt, otherwise: Option<&ast::Stmt>, out: &mut Vec<Stmt>) {
+        let c = self.condition(cond);
+        let t = self.scoped(then);
+        let e = otherwise.map(|o| self.scoped(o)).unwrap_or_default();
+        if let Some(c) = c {
+            out.push(Stmt::If(c, t, e));
+        }
+    }
+
+    #[inline(never)]
+    fn while_statement(&mut self, cond: &ast::Condition, body: &ast::Stmt, out: &mut Vec<Stmt>) {
+        self.push_scope();
+        let (cond, cond_var) = self.loop_condition(cond);
+        self.enter_loop();
+        let body = self.loop_body(body);
+        self.leave_loop();
+        self.pop_scope();
+        if let Some(c) = cond {
+            out.push(Stmt::Loop(Box::new(Loop { cond: Some(c), cond_var, step: None, body, do_while: false })));
+        }
+    }
+
+    #[inline(never)]
+    fn do_statement(&mut self, body: &ast::Stmt, cond: &ast::Expr, out: &mut Vec<Stmt>) {
+        self.enter_loop();
+        let body = self.scoped(body);
+        self.leave_loop();
+        if let Some(c) = self.condition(cond) {
+            out.push(Stmt::Loop(Box::new(Loop { cond: Some(c), cond_var: None, step: None, body, do_while: true })));
+        }
+    }
+
+    #[inline(never)]
+    fn for_statement(
+        &mut self,
+        init: Option<&ast::Stmt>,
+        cond: Option<&ast::Condition>,
+        step: Option<&ast::Expr>,
+        body: &ast::Stmt,
+        loc: Loc,
+        out: &mut Vec<Stmt>,
+    ) {
+        self.push_scope();
+        let mut prelude = Vec::new();
+        if let Some(i) = init {
+            self.statement(i, &mut prelude);
+        }
+        let (c, cond_var) = match cond {
+            Some(c) => self.loop_condition(c),
+            None => (Some(self.konst([ops::Value::B(true)].into(), Type::BOOL, loc)), None),
+        };
+        let step = step.and_then(|e| self.expr(e));
+        self.enter_loop();
+        let body = self.loop_body(body);
+        self.leave_loop();
+        self.pop_scope();
+        if let Some(c) = c {
+            prelude.push(Stmt::Loop(Box::new(Loop { cond: Some(c), cond_var, step, body, do_while: false })));
+            out.push(Stmt::Block(prelude));
         }
     }
 
@@ -255,7 +281,7 @@ impl Sema<'_> {
             None => None,
         };
         let mut clauses: Vec<Clause> = Vec::new();
-        let mut seen: Vec<u32> = Vec::new();
+        let mut seen: BTreeSet<u32> = BTreeSet::new();
         let mut has_default = false;
         // A clause collects labels until a statement follows them.
         let mut open_labels = false;
@@ -281,11 +307,10 @@ impl Sema<'_> {
                         },
                         _ => None,
                     };
-                    if let Some(v) = value {
-                        if seen.contains(&v.bits()) {
-                            error!(self.diags, s.loc, "duplicate case label");
-                        }
-                        seen.push(v.bits());
+                    if let Some(v) = value
+                        && !seen.insert(v.bits())
+                    {
+                        error!(self.diags, s.loc, "duplicate case label");
                     }
                     if !open_labels {
                         clauses.push(Clause { labels: Vec::new(), body: Vec::new() });

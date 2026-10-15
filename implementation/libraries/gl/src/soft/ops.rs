@@ -5,7 +5,6 @@
 //! the framebuffer, blits (OpenGL ES 3.0 section 4.3.3), mipmap generation
 //! and transform feedback's writes.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::SoftBackend;
@@ -70,7 +69,7 @@ pub fn copy_to_texture(b: &mut SoftBackend, src: &Framebuffer, read: u8, rect: R
         texels
     } else {
         // Convert, values moving as they are stored (sRGB stays encoded).
-        let mut out = vec![0u8; (w * h) as usize * df.bytes()];
+        let Some(mut out) = pixels::try_zeroed(w as usize * h as usize * df.bytes()) else { return };
         for (o, t) in out.chunks_exact_mut(df.bytes()).zip(texels.chunks_exact(sf.bytes())) {
             pixels::raw(df).encode(&pixels::decode_raw(sf, t), o);
         }
@@ -122,10 +121,12 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
         return;
     }
     // Source position of a destination pixel centre (mirroring included).
-    let sx = |x: i32| sx0 + ((x as f32 + 0.5) - dx0 as f32) * (sx1 - sx0) / (dx1 - dx0) as f32;
-    let sy = |y: i32| sy0 + ((y as f32 + 0.5) - dy0 as f32) * (sy1 - sy0) / (dy1 - dy0) as f32;
+    let (dw, dh) = ((i64::from(dx1) - i64::from(dx0)) as f32, (i64::from(dy1) - i64::from(dy0)) as f32);
+    let sx = |x: i32| sx0 + ((x as f32 + 0.5) - dx0 as f32) * (sx1 - sx0) / dw;
+    let sy = |y: i32| sy0 + ((y as f32 + 0.5) - dy0 as f32) * (sy1 - sy0) / dh;
     let src = &blit.src;
-    let (sw, sh) = (src.width as i32, src.height as i32);
+    // The source's size: the framebuffer's, within each image read.
+    let size = |lv: &Level| (src.width.min(lv.width) as i32, src.height.min(lv.height) as i32);
     // Read the whole source first: source and destination may share a
     // resource (other levels or layers).
     let mut writes: Vec<(Surface, u32, u32, Vec<u8>)> = Vec::new();
@@ -135,6 +136,8 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
         let Some(sr) = b.res(ss.resource) else { return };
         let sf = sr.desc.format;
         let integer = sf.is_integer();
+        let Some(slv) = sr.level(ss.level).copied() else { return };
+        let (sw, sh) = size(&slv);
         for att in dst.draw_buffers.iter().flatten() {
             let Some(ds) = dst.colors[*att as usize] else { continue };
             let Some(dr) = b.res(ds.resource) else { continue };
@@ -143,8 +146,52 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
             // the read buffer keep their values.
             let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
             let row = w as usize * df.bytes();
-            let mut buf = vec![0u8; row * h as usize];
+            let Some(mut buf) = pixels::try_zeroed(row * h as usize) else { continue };
             dr.read(ds.level, Region::new(x0 as u32, y0 as u32, ds.layer, w, h, 1), &mut buf, row, row * h as usize);
+            // Nearest texels of the same format move as they are (resolved
+            // if multisampled): decoding and encoding them would give the
+            // same bytes. Unscaled and unmirrored, a row at a time.
+            if (blit.filter == Filter::Nearest || integer) && sf == df && copies_exactly(sf) {
+                let tb = sf.bytes();
+                // Coordinates small enough that `sx` is exact: the source
+                // column of `x` is `x - dx0 + sx0` when unscaled.
+                let small = blit.src_rect.iter().chain(&blit.dst_rect).all(|v| v.unsigned_abs() <= 1 << 20);
+                let [ax0, ay0, ax1, ay1] = blit.src_rect;
+                let unscaled = small && ax1 - ax0 == dx1 - dx0 && ay1 - ay0 == dy1 - dy0;
+                for y in y0..y1 {
+                    let j = libm::floorf(sy(y)) as i32;
+                    if j < 0 || j >= sh {
+                        continue;
+                    }
+                    let out = &mut buf[(y - y0) as usize * row..][..row];
+                    if unscaled && sr.samples == 1 {
+                        // Source columns `x - dx0 + sx0`, those inside it.
+                        let shift = blit.src_rect[0] - dx0;
+                        let (a, b) = ((x0 + shift).max(0), (x1 + shift).min(sw));
+                        if a < b {
+                            let from = slv.at(a as u32, j as u32, ss.layer);
+                            let n = (b - a) as usize * tb;
+                            out[(a - shift - x0) as usize * tb..][..n].copy_from_slice(&sr.data[from..from + n]);
+                        }
+                        continue;
+                    }
+                    for x in x0..x1 {
+                        let i = libm::floorf(sx(x)) as i32;
+                        if i < 0 || i >= sw {
+                            continue;
+                        }
+                        let from = &sr.data[slv.at(i as u32, j as u32, ss.layer)..][..slv.texel];
+                        let to = &mut out[(x - x0) as usize * tb..][..tb];
+                        if sr.samples > 1 {
+                            super::resource::resolve(sf, from, to);
+                        } else {
+                            to.copy_from_slice(from);
+                        }
+                    }
+                }
+                writes.push((ds, w, h, buf));
+                continue;
+            }
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (fx, fy) = (sx(x), sy(y));
@@ -181,26 +228,29 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
             continue;
         }
         let Some(sr) = b.res(ss.resource) else { continue };
+        let Some(slv) = sr.level(ss.level).copied() else { continue };
+        let (sw, sh) = size(&slv);
         let f = sr.desc.format;
         // Depth and stencil copy whole texels (both blits use the same
         // nearest mapping; the formats match).
-        let mut buf = vec![0u8; ((x1 - x0) * (y1 - y0)) as usize * f.bytes()];
+        let Some(mut buf) = pixels::try_zeroed(((x1 - x0) * (y1 - y0)) as usize * f.bytes()) else { continue };
         let Some(dr) = b.res(ds.resource) else { continue };
+        let Some(lv) = dr.level(ds.level).copied().filter(|lv| x1 as u32 <= lv.width && y1 as u32 <= lv.height) else {
+            continue;
+        };
         for y in y0..y1 {
             for x in x0..x1 {
                 let (i, j) = (libm::floorf(sx(x)) as i32, libm::floorf(sy(y)) as i32);
                 let o = (((y - y0) * (x1 - x0) + (x - x0)) as usize) * f.bytes();
                 let (si, sj) = if i < 0 || j < 0 || i >= sw || j >= sh {
                     // Keep the destination's texel.
-                    let lv = dr.levels[ds.level as usize];
                     let p = lv.at(x as u32, y as u32, ds.layer);
                     buf[o..o + f.bytes()].copy_from_slice(&dr.data[p..p + f.bytes()]);
                     continue;
                 } else {
                     (i as u32, j as u32)
                 };
-                let lv = sr.levels[ss.level as usize];
-                let p = lv.at(si, sj, ss.layer);
+                let p = slv.at(si, sj, ss.layer);
                 buf[o..o + f.bytes()].copy_from_slice(&sr.data[p..p + f.bytes()]);
             }
         }
@@ -208,7 +258,6 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
         // copy from the destination.
         let merge = !(blit.depth && blit.stencil) && f.has_depth() && f.has_stencil();
         if merge {
-            let lv = dr.levels[ds.level as usize];
             for y in y0..y1 {
                 for x in x0..x1 {
                     let o = (((y - y0) * (x1 - x0) + (x - x0)) as usize) * f.bytes();
@@ -231,6 +280,22 @@ pub fn blit(b: &mut SoftBackend, blit: &Blit) {
             let row = w as usize * r.desc.format.bytes();
             r.write(s.level, Region::new(x0 as u32, y0 as u32, s.layer, w, h, 1), &buf, row, row * h as usize);
         }
+    }
+}
+
+/// Whether texels of `f` come out of decoding and encoding as they went in,
+/// so that a blit may move them as they are: not where encoding rounds
+/// (half and packed floats, the clamped -128 of signed normalized formats)
+/// or fills an unused component (`X` of RGBX formats).
+fn copies_exactly(f: Format) -> bool {
+    use Format::*;
+    match f.class() {
+        Class::Uint | Class::Sint => {
+            !matches!(f, Rgbx8Uint | Rgbx8Sint | Rgbx16Uint | Rgbx16Sint | Rgbx32Uint | Rgbx32Sint)
+        }
+        Class::Unorm => !matches!(f, Rgbx8Unorm | Rgbx8Srgb),
+        Class::Float => matches!(f, R32Float | Rg32Float | Rgba32Float),
+        _ => false,
     }
 }
 
@@ -259,29 +324,99 @@ pub fn generate_mipmap(b: &mut SoftBackend, id: ResourceId, base: u32, last: u32
 /// vertex's captured components in the program's order) to the buffers'
 /// ranges.
 pub fn write_feedback(b: &mut SoftBackend, p: &SoftProgram, ranges: &[BufferRange], recorded: &[u32]) {
-    let ncap = p.feedback.len();
-    if ncap == 0 {
-        return;
-    }
-    let vertices = recorded.len() / ncap;
     for (bi, range) in ranges.iter().enumerate() {
-        let stride = p.feedback_strides.get(bi).copied().unwrap_or(0);
-        if stride == 0 {
-            continue;
-        }
-        let comps: Vec<usize> =
-            p.feedback.iter().enumerate().filter(|(_, c)| c.buffer as usize == bi).map(|(k, _)| k).collect();
+        let Some(data) = super::vertex::feedback_bytes(p, bi, range.size, recorded) else { continue };
         b.flush_if_uses(range.buffer);
-        let Some(r) = b.res_mut(range.buffer) else { continue };
-        for v in 0..vertices {
-            let at = range.offset + v * stride;
-            if (v + 1) * stride > range.size || at + stride > r.data.len() {
-                break;
+        if let Some(r) = b.res_mut(range.buffer) {
+            let n = data.len();
+            r.write(0, Region::bytes(range.offset, n), &data, n, n);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{Backend, ResourceDesc, Target};
+    use crate::soft::Serial;
+    use alloc::boxed::Box;
+    use alloc::vec;
+
+    /// A blit's result, pixel by pixel as OpenGL ES defines nearest
+    /// filtering (and as the general path computes it): the source texel
+    /// under each destination pixel's centre, if there is one.
+    fn reference(src: &[u8], (sw, sh): (i32, i32), dst: &mut [u8], dw: i32, s: [i32; 4], d: [i32; 4]) {
+        let [sx0, sy0, sx1, sy1] = s.map(|v| v as f32);
+        let [dx0, dy0, dx1, dy1] = d;
+        let (w, h) = ((i64::from(dx1) - i64::from(dx0)) as f32, (i64::from(dy1) - i64::from(dy0)) as f32);
+        for y in dy0.min(dy1).max(0)..dy0.max(dy1).min(dst.len() as i32 / 4 / dw) {
+            for x in dx0.min(dx1).max(0)..dx0.max(dx1).min(dw) {
+                let fx = sx0 + ((x as f32 + 0.5) - dx0 as f32) * (sx1 - sx0) / w;
+                let fy = sy0 + ((y as f32 + 0.5) - dy0 as f32) * (sy1 - sy0) / h;
+                let (i, j) = (libm::floorf(fx) as i32, libm::floorf(fy) as i32);
+                if i >= 0 && j >= 0 && i < sw && j < sh {
+                    let (o, p) = (((y * dw + x) * 4) as usize, ((j * sw + i) * 4) as usize);
+                    dst[o..o + 4].copy_from_slice(&src[p..p + 4]);
+                }
             }
-            for (j, &k) in comps.iter().enumerate() {
-                let o = at + j * 4;
-                r.data[o..o + 4].copy_from_slice(&recorded[v * ncap + k].to_le_bytes());
-            }
+        }
+    }
+
+    #[test]
+    fn texels_copied_as_they_are_land_where_nearest_filtering_puts_them() {
+        let mut b = SoftBackend::new(Box::new(Serial));
+        let image = |b: &mut SoftBackend, w, h| {
+            let desc = ResourceDesc {
+                target: Target::Texture2D,
+                format: Format::Rgba8Unorm,
+                width: w,
+                height: h,
+                depth: 1,
+                levels: 1,
+                samples: 0,
+            };
+            b.create_resource(&desc).unwrap()
+        };
+        let (sw, sh, dw, dh) = (13, 9, 11, 10);
+        let (s, d) = (image(&mut b, sw as u32, sh as u32), image(&mut b, dw as u32, dh as u32));
+        let texels: Vec<u8> = (0..sw * sh * 4).map(|k| (k * 37 % 251) as u8).collect();
+        b.write(s, 0, Region::new(0, 0, 0, sw as u32, sh as u32, 1), &texels, sw as usize * 4, texels.len());
+        let fb = |id, width, height| {
+            let mut f = Framebuffer { width, height, ..Framebuffer::default() };
+            f.colors[0] = Some(Surface { resource: id, level: 0, layer: 0 });
+            f.draw_buffers[0] = Some(0);
+            f
+        };
+        let rects = [
+            ([0, 0, 13, 9], [0, 0, 13, 9]),
+            ([2, 1, 9, 8], [-3, 2, 4, 9]),
+            ([-4, -2, 20, 12], [1, 1, 25, 15]),
+            ([9, 8, 2, 1], [0, 0, 7, 7]),
+            ([0, 0, 13, 9], [10, 9, 0, 0]),
+            ([1, 1, 4, 4], [0, 0, 11, 10]),
+            ([0, 0, 12, 8], [3, 2, 6, 4]),
+        ];
+        for (src_rect, dst_rect) in rects {
+            let zero = vec![0u8; (dw * dh * 4) as usize];
+            b.write(d, 0, Region::new(0, 0, 0, dw as u32, dh as u32, 1), &zero, dw as usize * 4, zero.len());
+            let blit = Blit {
+                src: fb(s, sw as u32, sh as u32),
+                src_color: Some(0),
+                dst: fb(d, dw as u32, dh as u32),
+                src_rect,
+                dst_rect,
+                color: true,
+                depth: false,
+                stencil: false,
+                filter: Filter::Nearest,
+                scissor: None,
+            };
+            super::blit(&mut b, &blit);
+            let mut got = vec![0u8; zero.len()];
+            b.read(d, 0, Region::new(0, 0, 0, dw as u32, dh as u32, 1), &mut got, dw as usize * 4, zero.len());
+            let mut want = zero.clone();
+            reference(&texels, (sw, sh), &mut want, dw, src_rect, dst_rect);
+            assert_eq!(got, want, "{src_rect:?} to {dst_rect:?}");
         }
     }
 }

@@ -28,19 +28,16 @@ pub unsafe fn socketpair(domain: usize, kind: usize, out: usize) -> SysResult {
     if domain != AF_UNIX || kind & !(SOCK_NONBLOCK | SOCK_CLOEXEC) != SOCK_STREAM {
         return Err(EAFNOSUPPORT);
     }
+    if out == 0 {
+        return Err(EFAULT);
+    }
     let (a, b) = Socket::create().map_err(error::kernel)?;
     let status = o::RDWR | (kind & SOCK_NONBLOCK) as u32;
-    let cloexec = kind & SOCK_CLOEXEC != 0;
-    let x = fd::insert(Description::new(Object::Stream(Stream::new(a)), status), cloexec, 0)?;
-    let y = match fd::insert(Description::new(Object::Stream(Stream::new(b)), status), cloexec, 0) {
-        Ok(y) => y,
-        Err(e) => {
-            let _ = fd::remove(x);
-            return Err(e);
-        }
-    };
+    let (x, y) = (Object::Stream(Stream::new(a)), Object::Stream(Stream::new(b)));
     // SAFETY: per the caller.
-    unsafe { user::write::<[i32; 2]>(out, [x, y])? };
+    unsafe {
+        io::install_pair(Description::new(x, status), Description::new(y, status), kind & SOCK_CLOEXEC != 0, out)?
+    };
     Ok(0)
 }
 

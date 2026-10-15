@@ -13,14 +13,16 @@ pub struct HostCaps {
     pub sampler: [u32; 16],
     pub render: [u32; 16],
     pub readback: [u32; 16],
-    pub glsl_level: u32,
     pub max_texture_array_layers: u32,
+    /// Color buffers a framebuffer may have.
     pub max_render_targets: u32,
     pub max_samples: u32,
+    /// Uniform blocks a shader stage may read.
     pub max_uniform_blocks: u32,
     pub point_size: (f32, f32),
     pub line_width: (f32, f32),
     pub max_vertex_attribs: u32,
+    /// Bytes uniform block ranges' offsets are multiples of.
     pub uniform_buffer_offset_alignment: u32,
     pub capability_bits: u32,
     pub capability_bits_v2: u32,
@@ -37,7 +39,6 @@ mod off {
     pub const MAX_VERSION: usize = 0;
     pub const SAMPLER: usize = 4;
     pub const RENDER: usize = 68;
-    pub const GLSL_LEVEL: usize = 264;
     pub const MAX_TEXTURE_ARRAY_LAYERS: usize = 268;
     pub const MAX_RENDER_TARGETS: usize = 280;
     pub const MAX_SAMPLES: usize = 284;
@@ -81,7 +82,6 @@ impl HostCaps {
             sampler: mask(off::SAMPLER),
             render: mask(off::RENDER),
             readback: mask(off::READBACK),
-            glsl_level: u(off::GLSL_LEVEL),
             max_texture_array_layers: u(off::MAX_TEXTURE_ARRAY_LAYERS),
             max_render_targets: u(off::MAX_RENDER_TARGETS),
             max_samples: u(off::MAX_SAMPLES),
@@ -118,6 +118,19 @@ impl HostCaps {
 
     pub fn has2(&self, bit: u32) -> bool {
         self.capability_bits_v2 & bit != 0
+    }
+
+    /// Whether the host offers what OpenGL ES 3.0, as `vgl` has it, asks
+    /// of a renderer: as many draw buffers, vertex attributes and uniform
+    /// blocks a stage, and uniform block ranges at the offsets it lets
+    /// applications choose.
+    pub fn meets(&self, draw_buffers: usize, vertex_attribs: usize, uniform_blocks: u32, ubo_alignment: usize) -> bool {
+        let align = self.uniform_buffer_offset_alignment as usize;
+        self.max_render_targets as usize >= draw_buffers
+            && self.max_vertex_attribs as usize >= vertex_attribs
+            && self.max_uniform_blocks >= uniform_blocks
+            && align > 0
+            && ubo_alignment.is_multiple_of(align)
     }
 
     /// The host renderer's name.

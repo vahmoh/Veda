@@ -7,9 +7,14 @@
 //! [`__veda_clone`]: a kernel thread in this process that starts in
 //! `__veda_thread_entry` (the architecture's, `arch`), which installs the
 //! thread pointer and the thread's exit futex and calls the thread
-//! function. When a thread ends,
-//! the kernel clears its exit futex word and wakes a waiter, which is how
-//! musl knows a joined thread is gone for good (`CLONE_CHILD_CLEARTID`).
+//! function. When a thread ends, the kernel clears its exit futex word and
+//! wakes a waiter, which is how musl knows a joined thread is gone for good
+//! (`CLONE_CHILD_CLEARTID`). A detached thread ends by freeing its own
+//! stack ([`__veda_unmapself`]).
+//!
+//! Each thread has an id of its own in the process (`signal`), which musl
+//! keeps as the owner of the locks it holds: the main thread's is the
+//! process id; `gettid` gives the caller's.
 
 use core::ffi::c_void;
 
@@ -20,7 +25,7 @@ use vrt::sys::call;
 use crate::error::{self, SysResult};
 use crate::linux::errno::*;
 use crate::linux::{Timespec, clone, futex};
-use crate::{process, time, user};
+use crate::{time, user};
 
 /// The start of a new thread, at the top of its stack.
 #[repr(C)]
@@ -29,12 +34,6 @@ struct Start {
     arg: usize,
     tls: usize,
     exit_futex: usize,
-}
-
-/// A thread id for a kernel object id (positive, below 2^30: musl keeps
-/// flags in the high bits of words that hold thread ids).
-pub fn tid_of(koid: u64) -> i32 {
-    ((koid & 0x3fff_ffff) as i32).max(1)
 }
 
 /// `__clone(func, stack, flags, arg, ptid, tls, ctid)`: a new thread in this
@@ -54,7 +53,10 @@ pub unsafe extern "C" fn __veda_clone(
     ctid: usize,
 ) -> i32 {
     let flags = flags as u32;
-    if flags & (clone::VM | clone::THREAD) != clone::VM | clone::THREAD || stack == 0 {
+    // A thread of this process, with thread-local storage of its own (which
+    // is how it is known: the C library's every thread has).
+    let needed = clone::VM | clone::THREAD | clone::SETTLS;
+    if flags & needed != needed || stack == 0 || tls == 0 {
         return -(ENOSYS as i32);
     }
     let name = "pthread";
@@ -64,19 +66,12 @@ pub unsafe extern "C" fn __veda_clone(
     };
     // SAFETY: fresh handle from the kernel.
     let thread = Thread(unsafe { Handle::from_raw(t as u32) });
-    let tid = tid_of(thread.0.koid());
-    if flags & clone::SETTLS != 0 {
-        // A thread that ended without telling (freeing its own stack) may
-        // have had this thread pointer.
-        crate::signal::thread_started(tls);
-    }
-    let block = (stack & !15) - size_of::<Start>();
-    let start = Start {
-        func,
-        arg,
-        tls: if flags & clone::SETTLS != 0 { tls } else { 0 },
-        exit_futex: if flags & clone::CHILD_CLEARTID != 0 { ctid } else { 0 },
+    let tid = match crate::signal::thread_created(tls) {
+        Ok(tid) => tid,
+        Err(e) => return -(e as i32),
     };
+    let block = (stack & !15) - size_of::<Start>();
+    let start = Start { func, arg, tls, exit_futex: if flags & clone::CHILD_CLEARTID != 0 { ctid } else { 0 } };
     // SAFETY: the top of the thread's stack, which is ours until it runs.
     unsafe { core::ptr::write(block as *mut Start, start) };
     // The thread may use its id as soon as it runs.
@@ -91,7 +86,10 @@ pub unsafe extern "C" fn __veda_clone(
     let entry = crate::arch::thread_entry_address();
     match call(nr::THREAD_START, [thread.raw() as usize, entry, block, block, 0, 0]) {
         Ok(_) => tid,
-        Err(e) => -(error::kernel(e) as i32),
+        Err(e) => {
+            crate::signal::thread_not_started(tls);
+            -(error::kernel(e) as i32)
+        }
     }
 }
 
@@ -105,17 +103,38 @@ pub extern "C" fn __veda_set_thread_area(p: *mut c_void) -> i32 {
 }
 
 /// `set_tid_address`: the word the kernel clears when the calling thread
-/// ends. musl calls it once, on the main thread, whose id is the process
-/// id.
+/// ends; returns the thread's id. musl calls it once, on the main thread,
+/// whose id is the process id.
 pub fn set_tid_address(addr: usize) -> SysResult {
     call(nr::THREAD_SET_EXIT_FUTEX, [addr, 0, 0, 0, 0, 0]).map_err(error::kernel)?;
-    Ok(process::pid() as usize)
+    Ok(crate::signal::current_tid() as usize)
 }
 
 /// Ends the calling thread.
 pub fn exit_thread() -> ! {
     crate::signal::thread_exited();
     vrt::sys::thread_exit()
+}
+
+/// Where a thread `__veda_clone` started goes when its function returns
+/// (musl's never do: they end with `exit` or [`__veda_unmapself`]): it
+/// ends.
+#[cfg(target_os = "none")]
+pub(crate) extern "C" fn thread_returned() -> ! {
+    exit_thread()
+}
+
+/// `__unmapself(base, size)`: frees the stack the calling thread runs on,
+/// `size` bytes at `base`, and ends the thread (musl's detached threads end
+/// so); nothing touches the stack once it is unmapped.
+///
+/// # Safety
+/// The range must be the calling thread's stack, which nothing else uses.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __veda_unmapself(base: usize, size: usize) -> ! {
+    crate::signal::thread_exited();
+    // SAFETY: per the caller.
+    unsafe { vrt::thread::exit_unmapping(base, size) }
 }
 
 /// `futex(addr, op, val, timeout, addr2, val3)`.
@@ -140,7 +159,17 @@ pub unsafe fn futex(addr: usize, op: u32, val: u32, timeout: usize, val2: usize,
             if cmd == futex::WAIT_BITSET && val3 == 0 {
                 return Err(EINVAL);
             }
-            match call(nr::FUTEX_WAIT, [addr, val as usize, deadline as usize, 0, 0, 0]) {
+            // A signal for this thread ends the wait, as on Linux: the C
+            // library takes `EINTR` for a spurious wake-up, or acts on a
+            // cancellation, after the handler ran.
+            if !crate::signal::futex_wait_begins(addr) {
+                return Err(EINTR);
+            }
+            let r = call(nr::FUTEX_WAIT, [addr, val as usize, deadline as usize, 0, 0, 0]);
+            if crate::signal::futex_wait_ends() {
+                return Err(EINTR);
+            }
+            match r {
                 Ok(_) => Ok(0),
                 Err(Error::ShouldWait) => Err(EAGAIN),
                 Err(Error::TimedOut) => Err(ETIMEDOUT),

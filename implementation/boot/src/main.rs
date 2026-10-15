@@ -5,8 +5,8 @@
 //!
 //! Responsibilities, in order:
 //!
-//! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.ELF`, `INITRD.IMG` (and the optional
-//!    `VKERNEL.SYM`) from the boot volume,
+//! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.ELF` and `INITRD.IMG` from the boot
+//!    volume,
 //! 2. pick and set a graphics mode (of the display's own shape, where the
 //!    firmware gives its EDID) and clear the screen: it stays blank until
 //!    the window system's splash fades in,
@@ -711,7 +711,6 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     let initrd =
         fw.read_file(root, "\\VEDA\\INITRD.IMG", Some(MemoryKind::Initrd))?.ok_or("\\VEDA\\INITRD.IMG not found")?;
     log!("initrd: {} KiB at {:#x}", initrd.size / 1024, initrd.base);
-    let symbols = fw.read_file(root, "\\VEDA\\VKERNEL.SYM", Some(MemoryKind::Symbols))?.unwrap_or(PhysRegion::EMPTY);
 
     let rsdp_phys = fw.config_table(&ACPI_20_TABLE).or_else(|| fw.config_table(&ACPI_10_TABLE)).unwrap_or(0);
     let boot_time = fw.boot_time();
@@ -844,7 +843,6 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
             kernel,
             framebuffer,
             initrd,
-            symbols,
             rsdp_phys,
             boot_time,
             boot_stack: PhysRegion { base: stack, size: BOOT_STACK_SIZE },

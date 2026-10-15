@@ -25,7 +25,7 @@ wait-serial "videos: decoder stopped (exit" 20
 wait-serial "videos: decoder restarted in" 10
 wait-serial "videos: seek done in" 10
 wait 2
-shot target/veda/videos-restart.png
+shot target/veda/videos-restart.png now
 wait-serial "videos: finished Aurora Timelapse" 30
 reject-serial "videos: decoder keeps stopping"
 reject-serial "videos: cannot"

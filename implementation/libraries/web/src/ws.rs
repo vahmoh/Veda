@@ -6,12 +6,15 @@
 //! [`WebSocket::handshake`] upgrades an HTTP connection; then text and
 //! binary messages flow both ways. Frames from the client are masked with
 //! a fresh random key; frames from the server must not be. Pings are
-//! answered at once and pongs swallowed, so callers only see data and the
-//! close. Fragmented messages are reassembled up to a size limit, and text
-//! must be UTF-8.
+//! answered (the latest one, as RFC 6455 allows) and pongs swallowed, so
+//! callers only see data and the close. Fragmented messages are reassembled
+//! up to a size limit, and text must be UTF-8.
 //!
 //! For event loops, wait on [`WebSocket::handle`] and call
-//! [`WebSocket::poll`] (which never blocks) until it returns `None`.
+//! [`WebSocket::poll`] until it returns `None`. It never blocks: the answers
+//! it owes the server (pongs, the closing frame) go out as far as the
+//! connection takes them, and the rest waits, in order, for the next poll
+//! or send, so a server that stops reading cannot stall the caller.
 
 use alloc::format;
 use alloc::string::String;
@@ -58,19 +61,30 @@ pub enum Message {
     },
 }
 
-/// One parsed frame.
+/// One parsed frame: its payload is `rx[payload]`.
 struct Frame {
     fin: bool,
     opcode: u8,
-    payload: Vec<u8>,
+    payload: core::ops::Range<usize>,
 }
+
+/// Parsed bytes kept at the front of the receive buffer before it is
+/// compacted (moving what is left to its start).
+const COMPACT_AFTER: usize = 64 * 1024;
 
 /// An open WebSocket connection.
 pub struct WebSocket<C: Connection> {
     conn: C,
+    /// Bytes received; `rx[rx_pos..]` are not parsed yet.
     rx: Vec<u8>,
+    rx_pos: usize,
     /// A fragmented message being received: opcode and data so far.
     partial: Option<(u8, Vec<u8>)>,
+    /// Control frames (pongs, the closing frame) or the rest of one, masked,
+    /// waiting to go out: nothing else goes before them.
+    out: Vec<u8>,
+    /// The payload of the latest ping not answered yet.
+    pong: Option<Vec<u8>>,
     close_sent: bool,
     close_received: bool,
     max_message: usize,
@@ -116,7 +130,7 @@ impl<C: Connection> WebSocket<C> {
         }
         head.push_str("\r\n");
         conn.write_all(head.as_bytes())?;
-        let mut r = Reader { conn: &mut conn, buf: Vec::new() };
+        let mut r = Reader { conn: &mut conn, buf: Vec::new(), deadline: None };
         let head_len = r.read_head()?;
         let Head { status, headers: resp_headers, .. } = parse_head(&r.buf[..head_len])?;
         let find = |name: &str| resp_headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
@@ -143,7 +157,10 @@ impl<C: Connection> WebSocket<C> {
         Ok(WebSocket {
             conn,
             rx,
+            rx_pos: 0,
             partial: None,
+            out: Vec::new(),
+            pong: None,
             close_sent: false,
             close_received: false,
             max_message: DEFAULT_MAX_MESSAGE,
@@ -173,26 +190,60 @@ impl<C: Connection> WebSocket<C> {
         self.close_received || self.close_sent
     }
 
+    /// Appends a masked frame to `out`.
+    fn frame(out: &mut Vec<u8>, opcode: u8, payload: &[u8]) {
+        out.reserve(payload.len() + 14);
+        out.push(0x80 | opcode);
+        let len = payload.len();
+        if len < 126 {
+            out.push(0x80 | len as u8);
+        } else if len <= 0xFFFF {
+            out.push(0x80 | 126);
+            out.extend_from_slice(&(len as u16).to_be_bytes());
+        } else {
+            out.push(0x80 | 127);
+            out.extend_from_slice(&(len as u64).to_be_bytes());
+        }
+        let mut mask = [0u8; 4];
+        random_bytes(&mut mask);
+        out.extend_from_slice(&mask);
+        out.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i & 3]));
+    }
+
+    /// Sends the control frames owed: waiting for the connection to take
+    /// them (`block`), or as far as it takes them now. Returns whether none
+    /// is left.
+    fn flush_control(&mut self, block: bool) -> Result<bool, WebError> {
+        // The latest ping is answered once the frames before are out (so
+        // that pings sent faster than we can answer take no more room).
+        if self.out.is_empty()
+            && let Some(p) = self.pong.take()
+            && !self.close_sent
+        {
+            Self::frame(&mut self.out, OP_PONG, &p);
+        }
+        if self.out.is_empty() {
+            return Ok(true);
+        }
+        if block {
+            self.conn.write_all(&self.out)?;
+            self.out.clear();
+            return Ok(true);
+        }
+        let n = self.conn.try_write(&self.out)?.min(self.out.len());
+        self.out.drain(..n);
+        Ok(self.out.is_empty())
+    }
+
+    /// Sends a frame of the caller's (after what is owed), waiting for the
+    /// connection to take it.
     fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), WebError> {
         if self.close_sent {
             return Err(WebError::Closed);
         }
-        let mut frame = Vec::with_capacity(payload.len() + 14);
-        frame.push(0x80 | opcode);
-        let len = payload.len();
-        if len < 126 {
-            frame.push(0x80 | len as u8);
-        } else if len <= 0xFFFF {
-            frame.push(0x80 | 126);
-            frame.extend_from_slice(&(len as u16).to_be_bytes());
-        } else {
-            frame.push(0x80 | 127);
-            frame.extend_from_slice(&(len as u64).to_be_bytes());
-        }
-        let mut mask = [0u8; 4];
-        random_bytes(&mut mask);
-        frame.extend_from_slice(&mask);
-        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i & 3]));
+        self.flush_control(true)?;
+        let mut frame = Vec::new();
+        Self::frame(&mut frame, opcode, payload);
         self.conn.write_all(&frame)
     }
 
@@ -208,27 +259,35 @@ impl<C: Connection> WebSocket<C> {
         self.send_frame(OP_PING, &data[..data.len().min(125)])
     }
 
-    /// Starts the closing handshake (or answers the server's).
-    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), WebError> {
+    /// Queues the closing frame (once).
+    fn queue_close(&mut self, code: u16, reason: &str) {
         if self.close_sent {
-            return Ok(());
+            return;
         }
         let mut payload = Vec::from(code.to_be_bytes());
         payload.extend(reason.as_bytes().iter().take(120));
-        let r = self.send_frame(OP_CLOSE, &payload);
+        Self::frame(&mut self.out, OP_CLOSE, &payload);
         self.close_sent = true;
-        r
     }
 
-    /// Fails the connection: sends a close with `code` and reports `why`.
+    /// Starts the closing handshake (or answers the server's), waiting for
+    /// the connection to take the frame.
+    pub fn close(&mut self, code: u16, reason: &str) -> Result<(), WebError> {
+        self.queue_close(code, reason);
+        self.flush_control(true).map(|_| ())
+    }
+
+    /// Fails the connection: closes it with `code` (without waiting) and
+    /// reports `why`.
     fn fail(&mut self, code: u16, why: &str) -> WebError {
-        let _ = self.close(code, "");
+        self.queue_close(code, "");
+        let _ = self.flush_control(false);
         WebError::Protocol(why.into())
     }
 
-    /// Parses one frame from the receive buffer, if complete.
+    /// Parses one frame at the front of the unparsed bytes, if complete.
     fn take_frame(&mut self) -> Result<Option<Frame>, WebError> {
-        let b = &self.rx;
+        let b = &self.rx[self.rx_pos..];
         if b.len() < 2 {
             return Ok(None);
         }
@@ -240,7 +299,7 @@ impl<C: Connection> WebSocket<C> {
         if b[1] & 0x80 != 0 {
             return Err(self.fail(close_code::PROTOCOL_ERROR, "masked frame from the server"));
         }
-        let (len, mut at) = match b[1] & 0x7F {
+        let (len, mut at): (u64, usize) = match b[1] & 0x7F {
             126 => {
                 if b.len() < 4 {
                     return Ok(None);
@@ -264,58 +323,78 @@ impl<C: Connection> WebSocket<C> {
         if !matches!(opcode, OP_CONTINUATION | OP_TEXT | OP_BINARY | OP_CLOSE | OP_PING | OP_PONG) {
             return Err(self.fail(close_code::PROTOCOL_ERROR, "unknown frame type"));
         }
-        if len > self.max_message as u64 {
-            return Err(self.fail(close_code::TOO_BIG, "message too large"));
-        }
-        let len = len as usize;
-        if self.rx.len() < at + len {
+        let end = usize::try_from(len).ok().filter(|&n| n <= self.max_message).and_then(|n| at.checked_add(n));
+        let Some(end) = end else { return Err(self.fail(close_code::TOO_BIG, "message too large")) };
+        if b.len() < end {
             return Ok(None);
         }
-        let payload = self.rx[at..at + len].to_vec();
-        at += len;
-        self.rx.drain(..at);
+        at += self.rx_pos;
+        let payload = at..self.rx_pos + end;
+        self.rx_pos += end;
         Ok(Some(Frame { fin, opcode, payload }))
+    }
+
+    /// Drops parsed bytes from the receive buffer, now and then (each byte
+    /// is moved a bounded number of times).
+    fn compact(&mut self) {
+        if self.rx_pos == self.rx.len() {
+            self.rx.clear();
+            self.rx_pos = 0;
+        } else if self.rx_pos >= COMPACT_AFTER && self.rx_pos >= self.rx.len() / 2 {
+            self.rx.drain(..self.rx_pos);
+            self.rx_pos = 0;
+        }
     }
 
     /// Turns frames into messages; handles control frames.
     fn next_message(&mut self) -> Result<Option<Message>, WebError> {
+        let message = self.parse_message();
+        self.compact();
+        message
+    }
+
+    fn parse_message(&mut self) -> Result<Option<Message>, WebError> {
         while let Some(f) = self.take_frame()? {
+            let payload = &self.rx[f.payload.clone()];
             match f.opcode {
-                OP_PING => self.send_frame(OP_PONG, &f.payload)?,
+                // Answered with the next flush (only the latest ping).
+                OP_PING => self.pong = Some(payload.to_vec()),
                 OP_PONG => {}
                 OP_CLOSE => {
                     self.close_received = true;
-                    let (code, reason) = if f.payload.len() >= 2 {
-                        let code = u16::from_be_bytes([f.payload[0], f.payload[1]]);
-                        (code, String::from_utf8_lossy(&f.payload[2..]).into_owned())
+                    let (code, reason) = if payload.len() >= 2 {
+                        let code = u16::from_be_bytes([payload[0], payload[1]]);
+                        (code, String::from_utf8_lossy(&payload[2..]).into_owned())
                     } else {
                         (1005, String::new())
                     };
-                    let _ = self.close(close_code::NORMAL, "");
+                    self.queue_close(close_code::NORMAL, "");
                     return Ok(Some(Message::Close { code, reason }));
                 }
                 OP_TEXT | OP_BINARY => {
                     if self.partial.is_some() {
                         return Err(self.fail(close_code::PROTOCOL_ERROR, "new message inside a fragmented one"));
                     }
+                    let data = payload.to_vec();
                     if f.fin {
-                        return self.finish(f.opcode, f.payload).map(Some);
+                        return self.finish(f.opcode, data).map(Some);
                     }
-                    self.partial = Some((f.opcode, f.payload));
+                    self.partial = Some((f.opcode, data));
                 }
                 _ => {
                     // Continuation.
-                    let Some((op, mut data)) = self.partial.take() else {
+                    let Some((op, data)) = self.partial.as_mut() else {
                         return Err(self.fail(close_code::PROTOCOL_ERROR, "continuation without a message"));
                     };
-                    if data.len() + f.payload.len() > self.max_message {
+                    if data.len().saturating_add(payload.len()) > self.max_message {
                         return Err(self.fail(close_code::TOO_BIG, "message too large"));
                     }
-                    data.extend_from_slice(&f.payload);
+                    data.extend_from_slice(payload);
+                    let op = *op;
                     if f.fin {
+                        let (_, data) = self.partial.take().expect("a fragmented message");
                         return self.finish(op, data).map(Some);
                     }
-                    self.partial = Some((op, data));
                 }
             }
         }
@@ -334,8 +413,16 @@ impl<C: Connection> WebSocket<C> {
     }
 
     /// Non-blocking: the next complete message, if one has arrived.
-    /// `Err(Closed)` once the connection is gone.
+    /// `Err(Closed)` once the connection is gone. What is owed the server
+    /// (pongs, the closing frame) goes out as far as the connection takes
+    /// it now.
     pub fn poll(&mut self) -> Result<Option<Message>, WebError> {
+        let message = self.poll_message();
+        self.flush_control(false)?;
+        message
+    }
+
+    fn poll_message(&mut self) -> Result<Option<Message>, WebError> {
         if let Some(m) = self.next_message()? {
             return Ok(Some(m));
         }
@@ -366,10 +453,13 @@ impl<C: Connection> WebSocket<C> {
     }
 
     /// Blocking: waits (up to the connection's read timeout) for the next
-    /// message.
+    /// message. What is owed the server goes out as far as the connection
+    /// takes it, without waiting for it.
     pub fn read(&mut self) -> Result<Message, WebError> {
         loop {
-            if let Some(m) = self.next_message()? {
+            let message = self.next_message();
+            self.flush_control(false)?;
+            if let Some(m) = message? {
                 return Ok(m);
             }
             if self.close_received {
@@ -431,7 +521,10 @@ mod tests {
         WebSocket {
             conn: TestConn::new(server, chunk),
             rx: Vec::new(),
+            rx_pos: 0,
             partial: None,
+            out: Vec::new(),
+            pong: None,
             close_sent: false,
             close_received: false,
             max_message: 1000,
@@ -477,7 +570,11 @@ mod tests {
         fn write_all(&mut self, data: &[u8]) -> Result<(), WebError> {
             (**self).write_all(data)
         }
+        fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError> {
+            (**self).try_write(data)
+        }
         fn set_read_timeout(&mut self, _t: Option<Duration>) {}
+        fn set_write_timeout(&mut self, _t: Option<Duration>) {}
         fn handle(&self) -> RawHandle {
             0
         }
@@ -516,6 +613,54 @@ mod tests {
             assert_eq!(sent[1].0, OP_CLOSE);
             assert!(ws.is_closed());
         }
+    }
+
+    #[test]
+    fn polling_never_waits_for_a_server_that_stopped_reading() {
+        // The server floods pings and reads nothing: polls return at once,
+        // what is owed takes bounded room, and goes out once there is room.
+        let mut server = Vec::new();
+        for i in 0..200u8 {
+            server.extend(frame(true, OP_PING, &[i]));
+        }
+        server.extend(frame(true, OP_TEXT, b"still here"));
+        let mut ws = open(&server, 50);
+        ws.conn.eof = false;
+        ws.conn.write_room = Some(0);
+        let mut got = Vec::new();
+        for _ in 0..100 {
+            if let Some(m) = ws.poll().unwrap() {
+                got.push(m);
+            }
+            assert!(ws.out.len() <= 6 + 125, "{} bytes owed", ws.out.len());
+        }
+        assert_eq!(got, vec![Message::Text("still here".into())]);
+        assert!(ws.conn.output.is_empty());
+        // Room again: the answer to the latest ping goes out, then the
+        // caller's message.
+        ws.conn.write_room = None;
+        ws.send_text("hello").unwrap();
+        let sent = client_frames(&ws.conn.output);
+        assert_eq!(sent, vec![(OP_PONG, vec![199]), (OP_TEXT, b"hello".to_vec())]);
+    }
+
+    #[test]
+    fn many_small_frames_and_huge_lengths() {
+        // Thousands of frames in one buffer, parsed in place.
+        let mut server = Vec::new();
+        for i in 0..5000u32 {
+            server.extend(frame(true, OP_BINARY, &i.to_le_bytes()));
+        }
+        let mut ws = open(&server, 1 << 20);
+        ws.max_message = usize::MAX;
+        for i in 0..5000u32 {
+            assert_eq!(ws.poll().unwrap(), Some(Message::Binary(i.to_le_bytes().to_vec())));
+        }
+        // A length near the top of the range, with no limit on messages:
+        // refused, never an overflow.
+        let mut ws = open(&[0x82, 127, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 64);
+        ws.max_message = usize::MAX;
+        assert!(matches!(ws.poll(), Err(WebError::Protocol(_))));
     }
 
     #[test]

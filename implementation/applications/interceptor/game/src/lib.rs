@@ -14,7 +14,7 @@
 //! | [`scenery`] | the trees, and the harbour bridge's towers and cables |
 //! | [`world`] | all of Veda Bay, made at start-up |
 //! | [`render`] | the pictures, with OpenGL ES 3.0 |
-//! | [`env`] | the time of day and the weather |
+//! | [`env`](mod@env) | the time of day and the weather |
 //! | [`mesh`] | meshes and the shapes they are made of |
 //! | [`roadmesh`], [`groundmesh`] | the road's, the ground's and the sea's meshes |
 //! | [`texgen`] | textures painted at start-up |
@@ -73,13 +73,60 @@ pub mod world;
 mod tests;
 
 /// What most modules use: glam's vector types, their swizzles (`v.xz()`)
-/// and its `FloatExt` (`lerp`, `smoothstep`), and num-traits' `Float` and
-/// `Euclid`, whose float methods (`x.sin()`) `core` lacks. Where `std` is
-/// linked (the tests, and builds alongside the tests' dependencies) its own
-/// methods take precedence, so a glob keeps the import from being reported
-/// unused (and `Euclid::rem_euclid(&x, &y)` is called as a function: its
+/// and its `FloatExt` (`lerp`, `smoothstep`); [`Exact`](prelude::Exact),
+/// the float methods `core` lacks whose results are exact; and num-traits'
+/// `Euclid` (`Euclid::rem_euclid(&x, &y)` is called as a function: its
 /// signature is not std's).
+///
+/// The game must play the same in the host's tests as in Veda, and a
+/// chase magnifies the last bit of any difference into another chase. So
+/// the functions whose results are not exact (`sin`, `atan2`, `exp`,
+/// `powf`...) are called from libm by name on every target
+/// (`libm::sinf(x)`), never as methods: where `std` is linked (the tests)
+/// its own methods, which are its C library's, would take precedence over
+/// any trait's. None is in scope as a method here, so such a call does not
+/// build for Veda. Where `std` is linked the methods of `Exact` are std's,
+/// which give the same results.
 mod prelude {
     pub use glam::{FloatExt, Mat4, Quat, Vec2, Vec3, Vec3Swizzles, Vec4, Vec4Swizzles};
-    pub use num_traits::{Euclid, Float};
+    pub use num_traits::Euclid;
+
+    /// The float methods `core` lacks whose results are exact (rounded
+    /// correctly, or exactly representable), so the same whoever computes
+    /// them; and `powi`, multiplications in the same order everywhere.
+    #[allow(dead_code, reason = "where std is linked its own methods, the same, are called instead")]
+    pub trait Exact {
+        fn sqrt(self) -> Self;
+        fn floor(self) -> Self;
+        fn ceil(self) -> Self;
+        fn round(self) -> Self;
+        fn powi(self, n: i32) -> Self;
+    }
+
+    impl Exact for f32 {
+        #[inline]
+        fn sqrt(self) -> f32 {
+            libm::sqrtf(self)
+        }
+
+        #[inline]
+        fn floor(self) -> f32 {
+            libm::floorf(self)
+        }
+
+        #[inline]
+        fn ceil(self) -> f32 {
+            libm::ceilf(self)
+        }
+
+        #[inline]
+        fn round(self) -> f32 {
+            libm::roundf(self)
+        }
+
+        #[inline]
+        fn powi(self, n: i32) -> f32 {
+            num_traits::float::FloatCore::powi(self, n)
+        }
+    }
 }

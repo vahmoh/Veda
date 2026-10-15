@@ -36,4 +36,4 @@ key ret
 wait-serial "interceptor: softpipe (Low quality)" 90
 wait-serial "interceptor: ready" 180
 wait-serial " fps, render " 60
-shot target/veda/drivervm-renderer-restart.png
+shot target/veda/drivervm-renderer-restart.png now

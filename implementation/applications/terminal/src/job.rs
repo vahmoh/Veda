@@ -7,11 +7,15 @@
 //! A [`Job`] holds the shell while its command runs and hands it back when
 //! the command is done. The command writes to an [`Output`] queue, which the
 //! window drains into its screen; the queue's event wakes the window when
-//! output arrives or the command has finished.
+//! output arrives or the command has finished. The queue holds at most
+//! [`QUEUE_LIMIT`]: when a command writes faster than the window shows it,
+//! the oldest of what waits is left out (the screen would have dropped it
+//! soon after), and a line says how much.
 
+use alloc::collections::VecDeque;
+use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use terminal_core::screen::{Screen, Style};
@@ -25,6 +29,9 @@ use crate::shell::Shell;
 /// The stack of a command's thread (folder walks recurse).
 const STACK: usize = 1 << 20;
 
+/// The most text waiting for the screen (bytes).
+pub const QUEUE_LIMIT: usize = 4 << 20;
+
 /// One change to the screen.
 enum Op {
     Styled(String, Style),
@@ -32,43 +39,103 @@ enum Op {
     Raw(String),
     FinishLine,
     Clear,
+    /// This much text was left out.
+    Skipped(usize),
+}
+
+impl Op {
+    /// The text it carries (bytes).
+    fn len(&self) -> usize {
+        match self {
+            Op::Styled(t, _) | Op::Raw(t) => t.len(),
+            _ => 0,
+        }
+    }
+}
+
+/// What waits for the screen.
+#[derive(Default)]
+struct Queue {
+    ops: VecDeque<Op>,
+    /// The text in `ops` (bytes).
+    bytes: usize,
+}
+
+impl Queue {
+    /// Leaves out the oldest text until half the limit is used (whole
+    /// lines of it), noting how much went: after a clearing of the screen,
+    /// which stays first.
+    fn trim(&mut self) {
+        let target = QUEUE_LIMIT / 2;
+        let start = usize::from(matches!(self.ops.front(), Some(Op::Clear)));
+        let mut skipped = 0;
+        while self.bytes > target && self.ops.len() > start {
+            let excess = self.bytes - target;
+            if let Some(Op::Styled(text, _) | Op::Raw(text)) = self.ops.get_mut(start)
+                && text.len() > excess
+            {
+                // The oldest piece holds what is to go and more: it loses
+                // its first lines.
+                let cut =
+                    text.as_bytes()[excess..].iter().position(|&b| b == b'\n').map_or(text.len(), |i| excess + i + 1);
+                if cut < text.len() {
+                    text.drain(..cut);
+                    self.bytes -= cut;
+                    skipped += cut;
+                    break;
+                }
+            }
+            let Some(op) = self.ops.remove(start) else { break };
+            if let Op::Skipped(n) = op {
+                skipped += n;
+            }
+            self.bytes -= op.len();
+            skipped += op.len();
+        }
+        self.ops.insert(start, Op::Skipped(skipped));
+    }
 }
 
 /// Output on its way from a command to the screen.
 pub struct Output {
-    ops: Mutex<Vec<Op>>,
+    queue: Mutex<Queue>,
     /// Signalled when output arrives or a command finishes.
     event: Event,
 }
 
 impl Output {
     pub fn new() -> Option<Arc<Output>> {
-        Some(Arc::new(Output { ops: Mutex::new(Vec::new()), event: Event::create().ok()? }))
+        Some(Arc::new(Output { queue: Mutex::new(Queue::default()), event: Event::create().ok()? }))
     }
 
     fn push(&self, op: Op) {
-        let mut ops = self.ops.lock();
+        let mut q = self.queue.lock();
         // The window is woken when the queue stops being empty (it drains
         // all of it at once).
-        let wake = ops.is_empty();
+        let wake = q.ops.is_empty();
+        q.bytes += op.len();
         match op {
             // Text in the style of the piece before continues it.
-            Op::Styled(more, style) => match ops.last_mut() {
+            Op::Styled(more, style) => match q.ops.back_mut() {
                 Some(Op::Styled(text, s)) if *s == style => text.push_str(&more),
-                _ => ops.push(Op::Styled(more, style)),
+                _ => q.ops.push_back(Op::Styled(more, style)),
             },
-            Op::Raw(more) => match ops.last_mut() {
+            Op::Raw(more) => match q.ops.back_mut() {
                 Some(Op::Raw(text)) => text.push_str(&more),
-                _ => ops.push(Op::Raw(more)),
+                _ => q.ops.push_back(Op::Raw(more)),
             },
             // What is still queued would be cleared away at once.
             Op::Clear => {
-                ops.clear();
-                ops.push(Op::Clear);
+                q.ops.clear();
+                q.bytes = 0;
+                q.ops.push_back(Op::Clear);
             }
-            op => ops.push(op),
+            op => q.ops.push_back(op),
         }
-        drop(ops);
+        if q.bytes > QUEUE_LIMIT {
+            q.trim();
+        }
+        drop(q);
         if wake {
             self.wake();
         }
@@ -106,13 +173,21 @@ impl Output {
     pub fn drain_into(&self, screen: &mut Screen) {
         // The event first: output that arrives from now on signals it again.
         let _ = self.event.clear();
-        let ops = core::mem::take(&mut *self.ops.lock());
+        let ops = core::mem::take(&mut *self.queue.lock()).ops;
         for op in ops {
             match op {
                 Op::Styled(text, style) => screen.write_styled(&text, style),
                 Op::Raw(text) => screen.write(&text),
                 Op::FinishLine => screen.finish_line(),
                 Op::Clear => screen.clear(),
+                Op::Skipped(n) => {
+                    screen.finish_line();
+                    let note = format!(
+                        "[\u{2026} {} of output left out: it came faster than it could be shown]\n",
+                        vfiles::format::human_size(n as u64)
+                    );
+                    screen.write_styled(&note, Style::DIM);
+                }
             }
         }
     }

@@ -45,6 +45,23 @@ pub struct Process {
 /// Every process ever created that is still referenced somewhere.
 static PROCESSES: SpinLock<Vec<Weak<Process>>> = SpinLock::new(Vec::new());
 
+/// The most threads a process may have.
+pub const MAX_THREADS: usize = 1024;
+/// The most processes that may be alive (not terminated) at once, and the
+/// most of them one process may have started: each holds kernel memory (an
+/// address space, a handle table), so neither one process nor its
+/// descendants may exhaust it.
+pub const MAX_PROCESSES: usize = 4096;
+pub const MAX_CHILDREN: usize = 1024;
+
+/// Whether `parent` may start one more process (`LimitReached` if not).
+pub fn may_create(parent: u64) -> Result<(), vabi::Error> {
+    let all = all();
+    let live = all.iter().filter(|p| !p.is_terminated());
+    let (total, children) = live.fold((0, 0), |(t, c), p| (t + 1, c + usize::from(p.parent_koid == parent)));
+    if total >= MAX_PROCESSES || children >= MAX_CHILDREN { Err(vabi::Error::LimitReached) } else { Ok(()) }
+}
+
 impl Process {
     /// Takes `flags` ([`vabi::restrict`]) from the process, for good.
     pub fn restrict(&self, flags: usize) {
@@ -89,13 +106,18 @@ impl Process {
         matches!(self.state(), ProcessState::Terminated { .. })
     }
 
-    /// Registers a new thread. Fails once the process has terminated.
-    pub fn add_thread(&self, t: Arc<Thread>) -> bool {
+    /// Registers a new thread: `BadState` once the process has terminated,
+    /// `LimitReached` if it has [`MAX_THREADS`] already.
+    pub fn add_thread(&self, t: Arc<Thread>) -> Result<(), vabi::Error> {
         if self.is_terminated() {
-            return false;
+            return Err(vabi::Error::BadState);
         }
-        self.threads.lock().push(t);
-        true
+        let mut threads = self.threads.lock();
+        if threads.len() >= MAX_THREADS {
+            return Err(vabi::Error::LimitReached);
+        }
+        threads.push(t);
+        Ok(())
     }
 
     /// Marks the process running (first thread started).
@@ -215,15 +237,19 @@ pub fn all() -> Vec<Arc<Process>> {
 
 /// The live processes `koid` started, those they started, and so on.
 pub fn descendants(koid: u64) -> Vec<Arc<Process>> {
-    let all = all();
+    // Sorted by parent, each process's children are one run: one pass
+    // over the processes, then a lookup per process found.
+    let mut all = all();
+    all.sort_unstable_by_key(|p| p.parent_koid);
     let mut found: Vec<Arc<Process>> = Vec::new();
     let mut parents = alloc::vec![koid];
     while let Some(parent) = parents.pop() {
-        for p in all.iter().filter(|p| p.parent_koid == parent) {
-            if !found.iter().any(|f| f.koid == p.koid) {
-                parents.push(p.koid);
-                found.push(p.clone());
-            }
+        let first = all.partition_point(|p| p.parent_koid < parent);
+        for p in all[first..].iter().take_while(|p| p.parent_koid == parent) {
+            // Process ids are unique and parents older than their children,
+            // so no process is found twice.
+            parents.push(p.koid);
+            found.push(p.clone());
         }
     }
     found

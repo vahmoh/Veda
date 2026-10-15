@@ -5,14 +5,16 @@
 # the xHCI controller, which goes to the driver VM whole, as USB
 # controllers do. Linux's xhci_hcd finds the adapter, cdc_ether drives it,
 # and Veda's network driver for Linux attaches its interface to Veda's
-# network service, which gets an address by DHCP; nettest checks DNS, TCP,
-# HTTP and ping through it. Then Linux crashes: the controller is reset and
+# network service, which gets an address by DHCP; nettest checks ping, TCP
+# and HTTP through it, against a server of the host's. Then Linux crashes,
+# 30 s after it started (its timer runs from then: the waits for the crash
+# look at all the log, wherever it lands): the controller is reset and
 # given to the next driver VM, which finds the adapter again, and the
 # network service gets its interface back.
 net none
 usb net
-boot-cmdline "drivervm.crash=10"
-boot-cmdline "run=nettest"
+boot-cmdline "drivervm.crash=30"
+nettest local
 fail-on "PANIC"
 fail-on "drivervm: processor"
 fail-on "nettest: FAIL"
@@ -21,9 +23,10 @@ wait-serial "net: usb0 (cdc_ether" 90
 wait-serial "attached as" 30
 wait-serial "nettest: PASS" 300
 reject-serial "iommu: unit at"
-checkpoint
 wait-serial "drivervm: Linux crashed" 60
 wait-serial "devmgr: the driver VM ended: Linux crashed; its devices: " 30
 wait-serial "devmgr: started drivervm again" 30
+# The next driver VM's.
+checkpoint
 wait-serial "net: usb0: attached as eth0" 60
 wait-serial "netd: status: Routable via eth0 (gateway 10.0.4.2)" 60

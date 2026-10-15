@@ -689,3 +689,88 @@ fn program_introspection() {
     assert_eq!(c.get_programiv(p, gl::ACTIVE_ATTRIBUTE_MAX_LENGTH), 2);
     no_error(&mut c);
 }
+
+#[test]
+fn draws_reading_past_their_buffers_draw_nothing() {
+    let mut c = context(4, 4);
+    let p = program(&mut c, VS, FS);
+    c.use_program(p);
+    // A triangle over the framebuffer, its indices, and an instanced
+    // attribute's single element.
+    let tri = [-1.0f32, -1.0, 0.0, 1.0, 3.0, -1.0, 0.0, 1.0, -1.0, 3.0, 0.0, 1.0];
+    buffer_f32(&mut c, gl::ARRAY_BUFFER, &tri);
+    c.vertex_attrib_pointer(0, 4, gl::FLOAT, false, 0, 0);
+    c.enable_vertex_attrib_array(0);
+    let e = c.gen_buffer();
+    c.bind_buffer(gl::ELEMENT_ARRAY_BUFFER, e);
+    c.buffer_data(gl::ELEMENT_ARRAY_BUFFER, &[0, 0, 1, 0, 2, 0], gl::STATIC_DRAW);
+    let covered = |c: &mut Context| {
+        let img = read_rgba(c, 4, 4);
+        c.clear(gl::COLOR_BUFFER_BIT);
+        px(&img, 4, 1, 1) == [255; 4]
+    };
+    c.clear_color(0.0, 0.0, 0.0, 0.0);
+    c.clear(gl::COLOR_BUFFER_BIT);
+    // Indices past the element buffer (or partly past it), vertices past
+    // the array: no error, and nothing drawn.
+    c.draw_elements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, 1 << 20);
+    c.draw_elements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, 2);
+    c.draw_elements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, usize::MAX - 1);
+    c.draw_arrays(gl::TRIANGLES, 1, 3);
+    c.draw_arrays(gl::TRIANGLES, i32::MAX, 3);
+    no_error(&mut c);
+    assert!(!covered(&mut c));
+    // An attribute offset that wraps around, and instances beyond an
+    // instanced array's elements.
+    c.vertex_attrib_pointer(0, 4, gl::FLOAT, false, 16, usize::MAX - 15);
+    c.draw_arrays(gl::TRIANGLES, 0, 3);
+    c.vertex_attrib_pointer(0, 4, gl::FLOAT, false, 16, 0);
+    c.vertex_attrib_divisor(0, 1);
+    c.draw_arrays_instanced(gl::TRIANGLES, 0, 3, 4);
+    no_error(&mut c);
+    assert!(!covered(&mut c));
+    // In range, it draws.
+    c.vertex_attrib_divisor(0, 0);
+    c.draw_elements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, 0);
+    assert!(covered(&mut c));
+}
+
+/// A shader that never ends does not hang its draw: once a batch of it has
+/// gone round its loops as far as one run may, the rest of the draw is left
+/// out, nothing of it drawn. (On the software renderer: on a GPU, its
+/// driver resets a context that hangs.)
+#[test]
+fn shaders_that_never_end_leave_their_draws_out() {
+    if virgl_requested() {
+        return;
+    }
+    // Endless as far as the compiler can tell: `u` is set to 1.
+    let endless_fs = "#version 300 es
+precision highp float;
+uniform float u;
+out vec4 o;
+void main() { float x = 0.0; while (u >= 0.0) { x += 1.0; } o = vec4(x); }";
+    let endless_vs = "#version 300 es
+in vec4 pos;
+uniform float u;
+void main() { vec4 p = pos; while (u >= 0.0) { p.x += 0.5; } gl_Position = p; }";
+    let mut c = context(4, 4);
+    let tri = [-1.0f32, -1.0, 0.0, 1.0, 3.0, -1.0, 0.0, 1.0, -1.0, 3.0, 0.0, 1.0];
+    buffer_f32(&mut c, gl::ARRAY_BUFFER, &tri.repeat(1000));
+    c.vertex_attrib_pointer(0, 4, gl::FLOAT, false, 0, 0);
+    c.enable_vertex_attrib_array(0);
+    c.clear_color(0.0, 0.0, 0.0, 0.0);
+    for (vs, fs, vertices) in [(VS, endless_fs, 3), (endless_vs, FS, 3000)] {
+        let p = program(&mut c, vs, fs);
+        c.use_program(p);
+        let u = c.get_uniform_location(p, "u");
+        c.uniform1f(u, 1.0);
+        c.clear(gl::COLOR_BUFFER_BIT);
+        // Without leaving the draw out, the vertex shader's thousand
+        // batches would each run as far as a run may: hours.
+        c.draw_arrays(gl::TRIANGLES, 0, vertices);
+        no_error(&mut c);
+        let img = read_rgba(&mut c, 4, 4);
+        assert!(img.iter().all(|&b| b == 0), "a draw whose shader ran away draws nothing");
+    }
+}

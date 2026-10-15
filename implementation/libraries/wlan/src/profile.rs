@@ -70,17 +70,9 @@ impl core::fmt::Debug for Profile {
     }
 }
 
-/// Whether `p` is acceptable as a passphrase: 8 to 63 printable ASCII
-/// characters, or exactly 64 hexadecimal digits (the PSK itself).
-pub fn valid_passphrase(p: &str) -> bool {
-    let printable = p.bytes().all(|b| (0x20..=0x7E).contains(&b));
-    (printable && (8..=63).contains(&p.len())) || (p.len() == 64 && p.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
-/// Whether `ssid` is a valid SSID (1 to 32 bytes).
-pub fn valid_ssid(ssid: &[u8]) -> bool {
-    (1..=32).contains(&ssid.len())
-}
+/// What a passphrase and an SSID may be: the protocol's rules, which the
+/// service's clients check before they ask.
+pub use vproto::wlan::{valid_passphrase, valid_ssid};
 
 fn security_name(s: Security) -> &'static str {
     match s {

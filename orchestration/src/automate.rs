@@ -1,140 +1,91 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Scripted, headless runs of Veda in QEMU.
+//! Scripted, headless runs of Veda in QEMU: the interpreter of the
+//! automation scripts (`script` has their language), which drives the
+//! virtual machine through QMP and watches its serial console. It powers
+//! `cargo orchestration shot`, `script` and the integration tests.
 //!
-//! Automation scripts drive the virtual machine through QMP and inspect its
-//! serial console. They power `cargo orchestration shot` and the integration
-//! tests. One command per line; `#` starts a comment:
+//! QEMU lives as long as the run that started it: it is killed when the
+//! run ends however it ends, an error on the way included, and it dies
+//! with the process that started it (a deadline's kill of a script's
+//! process among the ways).
 //!
-//! ```text
-//! wait-serial "desktop ready" 60   # wait for a log line (timeout in s)
-//! wait-serial-count "joined" 3 60  # wait until the text has appeared 3 times
-//! wait 2                           # sleep
-//! shot target/veda/desktop.png     # save a screenshot
-//! expect-black target/veda/a.png   # fail unless a screenshot is black (in a region, as expect-same)
-//! move 0.5 0.5                     # move the pointer (fractions of screen)
-//! click 0.1 0.97 [left|right]      # move + press + release
-//! drag 0.3 0.3 0.6 0.6             # press at A, move to B, release
-//! mouse-down 0.3 0.3 / mouse-up      # press (at a point) and release separately
-//! key ctrl-alt-t                   # press a key combination (QEMU qcodes)
-//! key-down alt / key-up alt         # hold or release a single key
-//! type "hello world"               # type ASCII text
-//! type-env DEEPGRAM_API_KEY        # type an environment variable (a secret: in neither script nor log)
-//! expect-serial "PASS"             # fail unless the log contains the text
-//! reject-serial "panic"            # fail if the log contains the text
-//! fail-on "PANIC"                  # abort later waits as soon as the text appears
-//! reset                            # reboot (disks are kept) until the loader starts; later waits see only new output
-//! checkpoint                       # later waits and expects see only output from now on
-//! link wired off                   # unplug (off) or plug in (on) the wired card's cable
-//! boot-cmdline "run=about"        # extra kernel command line, applied before boot
-//! double-click 0.05 0.44           # two quick clicks
-//! net none                         # network for this run (ethernet or none), applied before boot
-//! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
-//! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
-//! memory 2048                      # the machine's memory for this run (MiB), applied before boot
-//! acpi-table touchpad              # add a table to the firmware's (the machine's: orchestration/src/arch/*/acpitest.rs), applied before boot
-//! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
-//! sound hda                        # the sound card for this run (virtio or hda; hda if the script resets), applied before boot
-//! live [writable]                  # boot the live system (`cargo orchestration iso`) from a USB stick (read-only unless writable), applied before boot
-//! expect-stick VEDA/LOGS/0001/VEDA.TXT "desktop ready"  # fail unless a file on the live system's stick contains the text
-//! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
-//! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out
-//! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
-//! audio silent                     # QEMU's silent sound system: the output is not recorded, the input records silence
-//! expect-audio                     # fail unless the recorded sound output holds more than silence
-//! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
-//! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
-//! requires c-toolchain             # only with the C test programs (`cargo orchestration toolchain`); `test` skips it otherwise
-//! requires native-toolchain        # only with GCC in the image (the same)
-//! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
-//! requires rust-toolchain          # only with the Rust test programs (the same)
-//! say "open the text editor"      # speak into the test microphone (Deepgram TTS, cached) and wait until said
-//! say-async "stop"                 # the same without waiting (to talk over the agent)
-//! mic-wav verification/audio/hello.wav  # play a WAV file into the microphone and wait
-//! mic-silence 2                    # queue seconds of silence
-//! mic-tone 1.5 [6000]              # queue seconds of a voice-like buzz (peak amplitude), for voice detection
-//! mic-echo -6 250                  # the machine's sound output comes back into the microphone (gain dB, delay ms)
-//! mic-wait 30                      # wait until everything queued has been heard
-//! agent-connected 120              # wait until the agent opened a conversation with the simulator
-//! agent-call open_app '{"app":"editor"}'  # the simulated model calls a function; waits for the result
-//! agent-result "opened"            # fail unless the last function result contains the text
-//! agent-result '"page":"processes","shown":1'  # ... or these JSON members, in one object, in any order
-//! agent-mark                       # later agent-expect looks only at messages from now on
-//! agent-expect "InjectUserMessage" 30  # wait until the agent sends a message containing the text
-//! agent-speak 3                    # the simulated agent talks for 3 s (a tone)
-//! agent-interrupt                  # the simulated recogniser hears the user start speaking
-//! agent-send '{"type":"..."}'       # any message from the simulated service
-//! agent-audio 3200                 # fail unless the agent streamed at least this many bytes of microphone audio
-//! agent-asleep                     # boot with the agent asleep (no conversation at start)
-//! agent-hear "Hey Veda, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
-//! agent-hear "Hey Veda. | Hi" 30   # " | " splits it into final transcripts 0.3 s apart (the last ends the utterance)
-//! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
-//! agent-listens-at-most 2          # fail if the agent opened more recognition streams than this
-//! agent-not-listening 20           # wait until the agent has no recognition stream open
-//! agent-mic-quiet -60              # fail if the agent sent microphone audio this loud (dBFS) since agent-mark
-//! agent-mic-heard -30              # fail unless it sent microphone audio at least this loud since agent-mark
-//! ```
+//! A wait (`wait-serial`) is satisfied by a whole line of the serial log
+//! (one whose end has been written) after the last `checkpoint` or `reset`
+//! that holds its text where no earlier wait matched: the matches of waits
+//! are claimed, so that a wait after a repeated action needs a new line.
+//! Expectations (`expect-serial`, `reject-serial`) look at the whole log
+//! since the last checkpoint or reset, and failure patterns (`fail-on`) at
+//! all of it.
 //!
-//! Scripts that use the microphone commands boot with `testmic`, which
-//! connects back to the host (see `mic.rs`). The pointer's and the
+//! Scripts that use the microphone's commands boot with `testmic`, which
+//! connects back to the host (see `mic`). The pointer's and the
 //! keyboard's commands wait, the first time in a boot, until the guest's
 //! tablet or keyboard is Veda's (Linux drives them in the driver VM, which
 //! may come after the desktop).
 
+use std::fs::File;
+use std::io::Read;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::agentsim::AgentSim;
 use crate::arch;
+use crate::checks;
 use crate::mic::{self, MicServer};
-use crate::ovmfvars;
-use crate::qemu::{self, DiskBus, InputDevices, NetMode, QemuInstall, VmConfig};
+use crate::qemu::{self, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
+use crate::script::{Point, Script, Step};
 use crate::util::{self, Result};
-
-use vaudio::wav::{SampleFormat, WavInfo};
 
 /// What Veda's boot loader prints first: a machine that was reset has
 /// started again.
 const LOADER_BANNER: &str = "[vboot] Veda boot loader";
 /// How long a reset may take to reach the loader (it takes about a second).
 const RESTART: Duration = Duration::from_secs(30);
+/// How long a screenshot waits at most for the screen to settle, and how
+/// often it looks meanwhile.
+const SETTLE: Duration = Duration::from_secs(3);
+const SETTLE_STEP: Duration = Duration::from_millis(100);
+/// How long QEMU may take to open its QMP socket.
+const QMP_CONNECT: Duration = Duration::from_secs(20);
+
+/// QEMU, running: killed when this ends, unless it has ended already, and
+/// waited for, so that nothing of it is left behind.
+struct Qemu(Child);
+
+impl Qemu {
+    /// Why QEMU stopped, if it did.
+    fn stopped(&mut self) -> Option<String> {
+        match self.0.try_wait() {
+            Ok(Some(status)) => Some(format!("QEMU exited ({status})")),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for Qemu {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait() {
+            let _ = self.0.kill();
+        }
+        let _ = self.0.wait();
+    }
+}
 
 /// The machine a script drives: QEMU, through QMP.
-pub struct Machine {
-    child: Child,
+struct Machine {
+    // The connection goes first, then QEMU.
     qmp: Qmp,
+    qemu: Qemu,
 }
 
 impl Machine {
-    pub fn screenshot(&mut self, path: &Path) -> Result {
-        self.qmp.screenshot(path)
-    }
-
-    pub fn move_mouse(&mut self, fx: f64, fy: f64) -> Result {
-        self.qmp.move_mouse(fx, fy)
-    }
-
-    pub fn mouse_button(&mut self, button: &str, down: bool) -> Result {
-        self.qmp.mouse_button(button, down)
-    }
-
-    pub fn send_keys(&mut self, combo: &str) -> Result {
-        self.qmp.send_keys(combo)
-    }
-
-    pub fn key_event(&mut self, key: &str, down: bool) -> Result {
-        self.qmp.key_event(key, down)
-    }
-
-    pub fn type_text(&mut self, text: &str) -> Result {
-        self.qmp.type_text(text)
-    }
-
     /// Plugs in or unplugs the wired card's cable.
-    pub fn set_wired_link(&mut self, up: bool) -> Result {
+    fn set_wired_link(&mut self, up: bool) -> Result {
         let name = qemu::WIRED_NIC_ID;
         self.qmp.execute("set_link", serde_json::json!({ "name": name, "up": up })).map(|_| ())
     }
@@ -158,36 +109,110 @@ impl Machine {
         }
     }
 
-    /// Why the machine stopped, if it did.
-    fn stopped(&mut self) -> Option<String> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some(format!("QEMU exited ({status})")),
-            _ => None,
-        }
-    }
-
-    fn finish(&mut self) {
+    /// Asks QEMU to quit, and waits a moment for it (it is killed if it
+    /// does not).
+    fn finish(mut self) {
         self.qmp.quit();
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(5) {
-            if let Ok(Some(_)) = self.child.try_wait() {
+            if let Ok(Some(_)) = self.qemu.0.try_wait() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let _ = self.child.kill();
     }
 }
 
+/// The serial log QEMU writes, as much as has been read of it.
+struct SerialLog {
+    path: PathBuf,
+    file: Option<File>,
+    bytes: Vec<u8>,
+    /// Whether QEMU has stopped: its last line, whole or not, is all there
+    /// will be of it.
+    ended: bool,
+}
+
+impl SerialLog {
+    /// Reads what QEMU has written since the last time.
+    fn refresh(&mut self) {
+        if self.file.is_none() {
+            self.file = File::open(&self.path).ok();
+        }
+        if let Some(file) = self.file.as_mut() {
+            let _ = file.read_to_end(&mut self.bytes);
+        }
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+}
+
+/// Where `needle` is in `log` from byte `from` on, at the first place that
+/// overlaps nothing in `claimed`: `Ok` with the place once its line is
+/// whole (a line feed follows, or the log has `ended`), `Err(true)` if its
+/// line is still being written, `Err(false)` if it is nowhere.
+fn find_line(
+    log: &[u8],
+    from: usize,
+    needle: &str,
+    claimed: &[Range<usize>],
+    ended: bool,
+) -> std::result::Result<Range<usize>, bool> {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return Err(false);
+    }
+    let mut at = from.min(log.len());
+    while let Some(i) = find(&log[at..], needle) {
+        let found = at + i..at + i + needle.len();
+        if !claimed.iter().any(|c| c.start < found.end && found.start < c.end) {
+            return if ended || log[found.end..].contains(&b'\n') { Ok(found) } else { Err(true) };
+        }
+        at = found.start + 1;
+    }
+    Err(false)
+}
+
+/// The places of `needle` in whole lines of `log` from byte `from` on,
+/// none overlapping another.
+fn find_lines(log: &[u8], from: usize, needle: &str, ended: bool) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    let mut at = from.min(log.len());
+    while let Ok(place) = find_line(log, at, needle, &[], ended) {
+        at = place.end;
+        found.push(place);
+    }
+    found
+}
+
+/// Where `needle` first is in `haystack`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let first = *needle.first()?;
+    let mut at = 0;
+    while at + needle.len() <= haystack.len() {
+        let i = haystack[at..=haystack.len() - needle.len()].iter().position(|&b| b == first)?;
+        if haystack[at + i..].starts_with(needle) {
+            return Some(at + i);
+        }
+        at += i + 1;
+    }
+    None
+}
+
 /// A running headless VM under script control.
-pub struct Session {
-    pub m: Machine,
-    pub serial_log: PathBuf,
-    /// Serial log patterns that abort any wait immediately.
-    pub fail_patterns: Vec<String>,
-    /// Byte offset in the serial log where `wait-serial` and `expect-serial`
-    /// start looking (moved past the output of earlier boots by `reset`).
-    since: usize,
+struct Session {
+    machine: Machine,
+    log: SerialLog,
+    /// Serial log patterns that abort any wait immediately, each with how
+    /// far the log has been searched for it.
+    fail_patterns: Vec<(String, usize)>,
+    /// Where waits and expectations start looking: after the last
+    /// checkpoint or reset.
+    checkpoint: usize,
+    /// What earlier waits matched, which later ones do not match again.
+    claimed: Vec<Range<usize>>,
     /// Where this boot's output starts, and whether its pointer and its
     /// keyboard are up.
     boot: usize,
@@ -196,69 +221,141 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn start(install: &QemuInstall, disk: &Path, mut vm: VmConfig) -> Result<Self> {
+    fn start(install: &QemuInstall, disk: &Path, mut vm: VmConfig) -> Result<Self> {
         let out = util::out_dir();
+        util::create_dir_all(&out)?;
         let serial_log = out.join("serial.log");
-        let _ = std::fs::remove_file(&serial_log);
-        // Kernel panics print "PANIC", user-space panics "panicked at".
-        let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
+        util::remove_file(&serial_log)?;
         // QMP's socket, the run's own (no port another run could take).
-        let qmp = out.join("qmp.sock");
-        crate::qemu::socket_option(&qmp)?;
-        let _ = std::fs::remove_file(&qmp);
+        let socket = out.join("qmp.sock");
+        qemu::socket_option(&socket)?;
+        util::remove_file(&socket)?;
         vm.display = false;
         vm.serial_file = Some(serial_log.clone());
-        vm.qmp = Some(qmp.clone());
+        vm.qmp = Some(socket.clone());
         vm.debug_exit = true;
         let vars = qemu::script_vars_file(install, &vm.firmware_variables)?;
         let mut cmd = qemu::command(install, disk, &vars, &vm)?;
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
-        let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
-        let qmp = Qmp::connect(&qmp, Duration::from_secs(20))?;
+        qemu::ends_with_us(&mut cmd);
+        let mut qemu = Qemu(cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?);
+        let qmp = Qmp::connect(&socket, QMP_CONNECT, || qemu.stopped())?;
+        // Kernel panics print "PANIC", user-space panics "panicked at".
+        let fail_patterns = ["PANIC", "panicked at"].map(|p| (p.to_string(), 0)).to_vec();
         Ok(Session {
-            m: Machine { child, qmp },
-            serial_log,
+            machine: Machine { qmp, qemu },
+            log: SerialLog { path: serial_log, file: None, bytes: Vec::new(), ended: false },
             fail_patterns,
-            since: 0,
+            checkpoint: 0,
+            claimed: Vec::new(),
             boot: 0,
             pointer: false,
             keyboard: false,
         })
     }
 
-    fn serial_bytes(&self) -> Vec<u8> {
-        std::fs::read(&self.serial_log).unwrap_or_default()
-    }
-
-    /// The whole serial log.
-    pub fn serial(&self) -> String {
-        String::from_utf8_lossy(&self.serial_bytes()).into_owned()
-    }
-
-    /// The serial log since the last `reset`.
-    pub fn recent(&self) -> String {
-        let b = self.serial_bytes();
-        String::from_utf8_lossy(&b[self.since.min(b.len())..]).into_owned()
+    /// The serial log since the last checkpoint or reset.
+    fn recent(&mut self) -> &[u8] {
+        self.log.refresh();
+        &self.log.bytes[self.checkpoint.min(self.log.bytes.len())..]
     }
 
     /// Makes later waits and expectations look only at output from now on.
-    pub fn checkpoint(&mut self) {
-        self.since = self.serial_bytes().len();
+    fn checkpoint(&mut self) {
+        self.log.refresh();
+        self.checkpoint = self.log.bytes.len();
+    }
+
+    /// The first failure pattern the log holds, if it holds one.
+    fn failed(&mut self) -> Option<String> {
+        let log = &self.log.bytes;
+        for (pattern, searched) in &mut self.fail_patterns {
+            let from = searched.saturating_sub(pattern.len());
+            if find(&log[from.min(log.len())..], pattern.as_bytes()).is_some() {
+                return Some(format!("serial log contains failure pattern \"{pattern}\""));
+            }
+            *searched = log.len();
+        }
+        None
+    }
+
+    /// Looks in the log with `look` until it finds something (`Some`) or
+    /// `timeout` passes (`None`); an error if the log shows a failure
+    /// pattern first, or QEMU stops.
+    fn poll<T>(&mut self, what: &str, timeout: Duration, look: impl Fn(&Session) -> Option<T>) -> Result<Option<T>> {
+        let start = Instant::now();
+        loop {
+            self.log.refresh();
+            if let Some(found) = look(self) {
+                return Ok(Some(found));
+            }
+            if let Some(failure) = self.failed() {
+                return Err(failure);
+            }
+            if let Some(why) = self.machine.qemu.stopped() {
+                // What it wrote before it stopped, its last line too.
+                self.log.ended = true;
+                self.log.refresh();
+                if let Some(found) = look(self) {
+                    return Ok(Some(found));
+                }
+                return Err(self.failed().unwrap_or(format!("{why} before \"{what}\" appeared")));
+            }
+            if start.elapsed() > timeout {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Waits for a whole line holding `needle` after the checkpoint where
+    /// no earlier wait matched, and claims the match.
+    fn wait_serial(&mut self, needle: &str, timeout: Duration) -> Result {
+        let found = self
+            .poll(needle, timeout, |s| find_line(&s.log.bytes, s.checkpoint, needle, &s.claimed, s.log.ended).ok())?;
+        let place = found.ok_or_else(|| format!("timed out after {}s waiting for \"{needle}\"", timeout.as_secs()))?;
+        self.claimed.push(place);
+        Ok(())
+    }
+
+    /// Waits until `needle` has appeared `count` times since the checkpoint
+    /// (in whole lines), and claims them.
+    fn wait_serial_count(&mut self, needle: &str, count: usize, timeout: Duration) -> Result {
+        let enough = |s: &Session| {
+            Some(find_lines(&s.log.bytes, s.checkpoint, needle, s.log.ended)).filter(|f| f.len() >= count)
+        };
+        match self.poll(needle, timeout, enough)? {
+            Some(places) => {
+                self.claimed.extend(places.into_iter().take(count));
+                Ok(())
+            }
+            None => {
+                let seen = find_lines(&self.log.bytes, self.checkpoint, needle, self.log.ended).len();
+                Err(format!("timed out: \"{needle}\" appeared {seen} of {count} times in {}s", timeout.as_secs()))
+            }
+        }
+    }
+
+    /// Waits until a whole line from byte `from` on holds `needle`, for the
+    /// interpreter's own purposes (claiming nothing); whether it did.
+    fn appears(&mut self, from: usize, needle: &str, timeout: Duration) -> Result<bool> {
+        self.poll(needle, timeout, |s| find_line(&s.log.bytes, from, needle, &[], s.log.ended).ok())
+            .map(|f| f.is_some())
     }
 
     /// Resets the machine (a reboot that keeps the disks), and waits until
     /// Veda's boot loader starts again.
-    pub fn reset(&mut self) -> Result {
-        let before = self.serial_bytes().len();
-        self.since = before;
+    fn reset(&mut self) -> Result {
+        self.checkpoint();
+        let before = self.checkpoint;
         self.boot = before;
         self.pointer = false;
         self.keyboard = false;
-        self.m.reset()?;
+        self.machine.reset()?;
         if self.appears(before, LOADER_BANNER, RESTART)? {
             return Ok(());
         }
-        let printed = self.serial_bytes().len().saturating_sub(before);
+        let printed = self.log.bytes.len().saturating_sub(before);
         let what = match printed {
             0 => String::from("the firmware printed nothing"),
             n => format!("the firmware printed {n} bytes, but Veda's boot loader did not start"),
@@ -266,13 +363,8 @@ impl Session {
         Err(format!(
             "the machine did not start again: {what} in the {} s after the reset; {}",
             RESTART.as_secs(),
-            self.m.examine()
+            self.machine.examine()
         ))
-    }
-
-    /// Waits until the serial log contains `needle`.
-    pub fn wait_serial(&mut self, needle: &str, timeout: Duration) -> Result {
-        self.wait_from(self.since, needle, timeout)
     }
 
     /// The first pointer action of a boot waits until the guest's tablet is
@@ -280,7 +372,7 @@ impl Session {
     /// yet when the desktop is ready.
     fn pointer(&mut self) -> Result {
         if !self.pointer {
-            self.wait_from(self.boot, "): tablet", Duration::from_secs(60))?;
+            self.wait_device("): tablet")?;
             self.pointer = true;
         }
         Ok(())
@@ -290,726 +382,320 @@ impl Session {
     /// as the pointer does for its tablet.
     fn keyboard(&mut self) -> Result {
         if !self.keyboard {
-            self.wait_from(self.boot, "): keyboard", Duration::from_secs(60))?;
+            self.wait_device("): keyboard")?;
             self.keyboard = true;
         }
         Ok(())
     }
 
-    /// Waits until the serial log from byte `from` on contains `needle`.
-    fn wait_from(&mut self, from: usize, needle: &str, timeout: Duration) -> Result {
-        match self.appears(from, needle, timeout)? {
+    fn wait_device(&mut self, needle: &str) -> Result {
+        match self.appears(self.boot, needle, Duration::from_secs(60))? {
             true => Ok(()),
-            false => Err(format!("timed out after {}s waiting for \"{needle}\"", timeout.as_secs())),
+            false => Err(format!("timed out after 60s waiting for \"{needle}\"")),
         }
     }
 
-    /// Whether the serial log comes to contain `needle` after byte `from`
-    /// within `timeout`; an error if it shows a failure pattern first, or
-    /// QEMU stops.
-    fn appears(&mut self, from: usize, needle: &str, timeout: Duration) -> Result<bool> {
+    /// A screenshot at `path`: once two taken one after the other are
+    /// alike (the screen has settled), at most for [`SETTLE`], if `settle`;
+    /// else at once.
+    fn shot(&mut self, path: &Path, settle: bool) -> Result {
+        if let Some(dir) = path.parent() {
+            util::create_dir_all(dir)?;
+        }
         let start = Instant::now();
+        let mut previous: Option<Vec<u8>> = None;
         loop {
-            let b = self.serial_bytes();
-            if String::from_utf8_lossy(&b[from.min(b.len())..]).contains(needle) {
-                return Ok(true);
+            self.machine.qmp.screenshot(path)?;
+            if !settle {
+                return Ok(());
             }
-            let log = self.serial();
-            if let Some(p) = self.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
-                return Err(format!("serial log contains failure pattern \"{p}\""));
+            // QEMU writes a picture the same way every time: alike
+            // pictures are alike files.
+            let picture = util::read(path)?;
+            if previous.as_ref() == Some(&picture) {
+                return Ok(());
             }
-            if let Some(why) = self.m.stopped() {
-                return Err(format!("{why} before \"{needle}\" appeared"));
+            if start.elapsed() >= SETTLE {
+                util::status(
+                    "Note",
+                    format!("the screen did not settle in {} s for {}", SETTLE.as_secs(), path.display()),
+                );
+                return Ok(());
             }
-            if start.elapsed() > timeout {
-                return Ok(false);
-            }
-            std::thread::sleep(Duration::from_millis(100));
+            previous = Some(picture);
+            std::thread::sleep(SETTLE_STEP);
         }
     }
 
-    pub fn finish(mut self) {
-        self.m.finish();
+    fn click(&mut self, at: Point, button: &str) -> Result {
+        self.pointer()?;
+        let qmp = &mut self.machine.qmp;
+        qmp.move_mouse(at.x, at.y)?;
+        std::thread::sleep(Duration::from_millis(80));
+        qmp.mouse_button(button, true)?;
+        std::thread::sleep(Duration::from_millis(80));
+        qmp.mouse_button(button, false)
     }
-}
-
-/// Splits a script line into words, honouring double quotes.
-fn words(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut quoted = false;
-    // Single quotes keep double quotes inside (JSON arguments).
-    let mut single = false;
-    let mut any = false;
-    for c in line.chars() {
-        match c {
-            '\'' if !quoted => {
-                single = !single;
-                any = true;
-            }
-            c if single => cur.push(c),
-            '"' => {
-                quoted = !quoted;
-                any = true;
-            }
-            '#' if !quoted => break,
-            c if c.is_whitespace() && !quoted => {
-                if any {
-                    out.push(std::mem::take(&mut cur));
-                    any = false;
-                }
-            }
-            c => {
-                cur.push(c);
-                any = true;
-            }
-        }
-    }
-    if any {
-        out.push(cur);
-    }
-    out
 }
 
 /// A screenshot's path as a script gives it: relative to the workspace, with
 /// `target/veda/` standing for the output directory (`$VEDA_OUT`).
-fn shot_path(w: &[String], i: usize) -> Result<PathBuf> {
-    let given = w.get(i).ok_or("missing file name")?;
+fn shot_path(given: &str) -> PathBuf {
     if let Some(rest) = given.strip_prefix("target/veda/") {
-        return Ok(util::out_dir().join(rest));
+        return util::out_dir().join(rest);
     }
     let path = PathBuf::from(given);
-    Ok(if path.is_absolute() { path } else { util::workspace_root().join(path) })
+    if path.is_absolute() { path } else { util::workspace_root().join(path) }
 }
 
-/// Fails unless the screenshots `a` and `b` are alike, pixel for pixel, in
-/// `region` (fractions of the screen: left, top, right, bottom).
-fn same_pictures(a: &Path, b: &Path, region: [f64; 4]) -> Result {
-    let load = |p: &Path| -> Result<vimage::Image> {
-        let data = std::fs::read(p).map_err(|e| format!("reading {}: {e}", p.display()))?;
-        vimage::decode(&data).map_err(|e| format!("decoding {}: {e:?}", p.display()))
-    };
-    let (first, second) = (load(a)?, load(b)?);
-    if (first.width, first.height) != (second.width, second.height) {
-        return Err(format!("{} and {} differ in size", a.display(), b.display()));
+/// QEMU's recording of the sound output.
+fn recording() -> Result<Vec<u8>> {
+    util::read(&util::out_dir().join("audio.wav"))
+}
+
+/// What a run has besides the machine: the test microphone, the stand-in
+/// for Deepgram, and what the agent's steps remember.
+struct Extras {
+    mic: Option<MicServer>,
+    agent: Option<AgentSim>,
+    /// The result of the last `agent-call`.
+    agent_result: String,
+    /// Where `agent-mark` left the agent's messages and microphone levels.
+    agent_mark: usize,
+    mic_mark: usize,
+}
+
+impl Extras {
+    fn mic(&self) -> Result<&MicServer> {
+        self.mic.as_ref().ok_or_else(|| "this run has no test microphone".to_string())
     }
-    let (w, h) = (first.width as f64, first.height as f64);
-    let x = (region[0] * w) as u32..((region[2] * w) as u32).min(first.width);
-    let y = (region[1] * h) as u32..((region[3] * h) as u32).min(first.height);
-    let mut differing = y
-        .flat_map(|y| x.clone().map(move |x| (x, y)))
-        .filter(|&(x, y)| {
-            let i = (y * first.width + x) as usize;
-            first.pixels[i] != second.pixels[i]
-        })
-        .peekable();
-    match differing.peek().copied() {
-        None => Ok(()),
-        Some((x, y)) => Err(format!(
-            "{} and {} differ in {} pixels, the first at ({x}, {y})",
-            a.display(),
-            b.display(),
-            differing.count()
-        )),
+
+    fn agent(&mut self) -> Result<&mut AgentSim> {
+        self.agent.as_mut().ok_or_else(|| "this run has no agent simulator".to_string())
     }
 }
 
-/// Fails unless the screenshot `p` is black in `region` (fractions of the
-/// screen: left, top, right, bottom).
-fn black_picture(p: &Path, region: [f64; 4]) -> Result {
-    let data = std::fs::read(p).map_err(|e| format!("reading {}: {e}", p.display()))?;
-    let picture = vimage::decode(&data).map_err(|e| format!("decoding {}: {e:?}", p.display()))?;
-    let (w, h) = (picture.width as f64, picture.height as f64);
-    let x = (region[0] * w) as u32..((region[2] * w) as u32).min(picture.width);
-    let y = (region[1] * h) as u32..((region[3] * h) as u32).min(picture.height);
-    let mut lit = y
-        .flat_map(|y| x.clone().map(move |x| (x, y)))
-        .filter(|&(x, y)| picture.pixels[(y * picture.width + x) as usize] & 0xFF_FFFF != 0)
-        .peekable();
-    match lit.peek().copied() {
-        None => Ok(()),
-        Some((x, y)) => {
-            Err(format!("{} is not black: {} pixels are lit, the first at ({x}, {y})", p.display(), lit.count()))
-        }
-    }
-}
-
-fn num(w: &[String], i: usize) -> Result<f64> {
-    w.get(i).ok_or("missing argument")?.parse::<f64>().map_err(|_| format!("'{}' is not a number", w[i]))
-}
-
-/// The `boot-cmdline` arguments of a script (they must be known before the
-/// disk image is built, as the command line is part of it).
-pub fn boot_cmdline(script: &str) -> Vec<String> {
-    script
-        .lines()
-        .map(words)
-        .filter(|w| w.first().is_some_and(|c| c == "boot-cmdline"))
-        .filter_map(|w| w.get(1).cloned())
-        .collect()
-}
-
-/// The network a script asks for with `net` (it must be known before the
-/// machine starts).
-pub fn net_mode(script: &str) -> Result<Option<NetMode>> {
-    let mut mode = None;
-    for w in script.lines().map(words) {
-        if w.first().is_some_and(|c| c == "net") {
-            let m = w.get(1).ok_or("net: missing mode")?;
-            mode = Some(NetMode::parse(m).ok_or(format!("net: unknown mode '{m}'"))?);
-        }
-    }
-    Ok(mode)
-}
-
-/// The keyboard and pointing devices a script asks for with `input`.
-pub fn input_devices(script: &str) -> Result<Option<InputDevices>> {
-    let mut input = None;
-    for w in script.lines().map(words) {
-        if w.first().is_some_and(|c| c == "input") {
-            let v = w.get(1).ok_or("input: missing devices")?;
-            input = Some(InputDevices::parse(v).ok_or(format!("input: unknown devices '{v}' (standard, usb)"))?);
-        }
-    }
-    Ok(input)
-}
-
-/// Whether a script asks for QEMU's 3D GPU (`gpu on`) or plain VGA (`gpu
-/// off`) as the display; `None` if it does not say.
-pub fn gpu(script: &str) -> Result<Option<bool>> {
-    let mut gpu = None;
-    for w in script.lines().map(words) {
-        if w.first().is_some_and(|c| c == "gpu") {
-            gpu = Some(match w.get(1).map(String::as_str) {
-                Some("on") => true,
-                Some("off") => false,
-                other => return Err(format!("gpu: expected on or off, not {}", other.unwrap_or("nothing"))),
-            });
-        }
-    }
-    Ok(gpu)
-}
-
-/// Whether a script starts with the agent asleep (`agent-asleep`) rather
-/// than in a conversation.
-pub fn agent_asleep(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "agent-asleep"))
-}
-
-/// Whether a script boots the live system from a USB stick (`live`).
-pub fn live(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "live"))
-}
-
-/// Whether the live system's stick can be written to (`live writable`).
-pub fn live_writable(script: &str) -> bool {
-    script
-        .lines()
-        .map(words)
-        .any(|w| w.first().is_some_and(|c| c == "live") && w.get(1).is_some_and(|m| m == "writable"))
-}
-
-/// Whether a script talks to the simulated Voice Agent service.
-pub fn needs_agentsim(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.first().is_some_and(|c| c.starts_with("agent-")))
-}
-
-/// Whether a script uses the test microphone.
-pub fn needs_mic(script: &str) -> bool {
-    script.lines().map(words).any(|w| {
-        w.first().is_some_and(|c| {
-            matches!(c.as_str(), "say" | "say-async" | "mic-wav" | "mic-silence" | "mic-tone" | "mic-echo" | "mic-wait")
-        })
-    })
-}
-
-/// The part of the toolchain a script needs (`requires c-toolchain`: the C
-/// test programs the cross compiler builds; `requires native-toolchain`:
-/// GCC in the image; `requires media`: the media decoder; `requires
-/// rust-toolchain`: the Rust test programs), as [`crate::toolchain::built`]
-/// names it.
-pub fn needs_toolchain(script: &str) -> Option<&'static str> {
-    script.lines().map(words).find_map(|w| match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["requires", "c-toolchain", ..] => Some("cross toolchain"),
-        ["requires", "native-toolchain", ..] => Some("native toolchain"),
-        ["requires", "media", ..] => Some("media libraries"),
-        ["requires", "rust-toolchain", ..] => Some("rust toolchain"),
-        _ => None,
-    })
-}
-
-/// Whether a script resets the machine (`reset`), which QEMU must then stay
-/// up across.
-pub fn resets(script: &str) -> bool {
-    script.lines().map(words).any(|w| w == ["reset"])
-}
-
-/// The sound card a script's machine has: the one it asks for with `sound`
-/// (`virtio` or `hda`), if any. A machine the script resets has the HD
-/// Audio card: QEMU's virtio sound card keeps the buffers its streams hold
-/// across a reset, and completes them once the next start has set the card
-/// up again, writing their status into memory that is the next start's by
-/// then (QEMU frees them since its 75d28444c7, of September 2026).
-pub fn sound_card(script: &str) -> Result<Option<String>> {
-    let card =
-        script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned());
-    if !resets(script) {
-        return Ok(card);
-    }
-    match card.as_deref() {
-        None | Some("hda") => Ok(Some("hda".into())),
-        Some(other) => Err(format!(
-            "sound {other}: a script that resets the machine has the HD Audio card (`sound hda`), as QEMU's virtio \
-             sound card completes its buffers from before a reset into the next start's memory"
-        )),
-    }
-}
-
-/// Whether a script plays through the host's loudspeakers and records its
-/// microphone (`audio host`) instead of recording the output to a file.
-pub fn host_audio(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.len() == 2 && w[0] == "audio" && w[1] == "host")
-}
-
-/// Whether a script's sound card has QEMU's silent sound system (`audio
-/// silent`): an input that records silence at the card's pace, and an
-/// output nothing records.
-pub fn silent_audio(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.len() == 2 && w[0] == "audio" && w[1] == "silent")
-}
-
-/// Whether a script asks for QEMU's USB network adapter (`usb net`).
-pub fn usb_net(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.len() == 2 && w[0] == "usb" && w[1] == "net")
-}
-
-/// The machine's memory (MiB), as a script asks with `memory`.
-pub fn memory(script: &str) -> Result<Option<u32>> {
-    let mut mib = None;
-    for w in script.lines().map(words) {
-        if w.first().is_some_and(|c| c == "memory") {
-            let v = w.get(1).ok_or("memory: missing size")?;
-            mib = Some(v.parse().map_err(|_| format!("memory: '{v}' is not a size in MiB"))?);
-        }
-    }
-    Ok(mib)
-}
-
-/// How QEMU attaches the disks, as a script asks with `disk`.
-pub fn disk_bus(script: &str) -> Result<Option<DiskBus>> {
-    let mut bus = None;
-    for w in script.lines().map(words) {
-        if w.first().is_some_and(|c| c == "disk") {
-            let v = w.get(1).ok_or("disk: missing bus")?;
-            bus = Some(DiskBus::parse(v).ok_or(format!("disk: unknown bus '{v}' (virtio, ahci, nvme)"))?);
-        }
-    }
-    Ok(bus)
-}
-
-/// Whether a script needs the machine to itself: the machine's sound
-/// coming back into the microphone (`mic-echo`) must keep in time with it,
-/// as loudspeakers' does, for the echo canceller to take it out, and
-/// machines running beside it put it out of time now and then.
-pub fn alone(script: &str) -> bool {
-    script.lines().any(|l| words(l).first().is_some_and(|w| w == "mic-echo"))
-}
-
-/// The ACPI tables a script adds to QEMU's with `acpi-table NAME` (the
-/// machine's: `arch::acpitest`), written out for QEMU.
-pub fn acpi_tables(script: &str) -> Result<Vec<PathBuf>> {
-    let mut tables = Vec::new();
-    for w in script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "acpi-table")) {
-        let n = w.get(1).ok_or("acpi-table: missing name")?;
-        let table = arch::acpitest::table(n)
-            .ok_or_else(|| format!("acpi-table: no table '{n}' ({})", arch::acpitest::NAMES.join(", ")))?;
-        let path = util::out_dir().join(format!("acpi-{n}.aml"));
-        std::fs::write(&path, table).map_err(|e| format!("{}: {e}", path.display()))?;
-        tables.push(path);
-    }
-    Ok(tables)
-}
-
-/// The variables a script adds to the firmware's store with
-/// `firmware-variable NAME GUID ATTRIBUTES DATA` (UEFI's attributes, in
-/// hex like the data).
-pub fn firmware_variables(script: &str) -> Result<Vec<ovmfvars::Variable>> {
-    let mut variables = Vec::new();
-    for w in script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "firmware-variable")) {
-        let [_, name, guid, attributes, data] = &w[..] else {
-            return Err("firmware-variable: needs a name, a GUID, attributes and data".into());
-        };
-        let guid = ovmfvars::guid(guid).ok_or(format!("firmware-variable: {guid} is not a GUID"))?;
-        let attributes = u32::from_str_radix(attributes.trim_start_matches("0x"), 16)
-            .map_err(|_| format!("firmware-variable: attributes {attributes} are not hex"))?;
-        let data = (0..data.len())
-            .step_by(2)
-            .map(|i| data.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
-            .collect::<Option<Vec<u8>>>()
-            .filter(|d| !d.is_empty())
-            .ok_or(format!("firmware-variable: data {data} is not hex bytes"))?;
-        variables.push(ovmfvars::Variable { name: name.clone(), guid, attributes, data });
-    }
-    Ok(variables)
-}
-
-/// The wired card model a script asks for with `nic`.
-pub fn nic_model(script: &str) -> Option<String> {
-    script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
-}
-
-/// Runs an automation script against a fresh VM booted from `disk`.
+/// Runs `script` against a fresh VM booted from `disk`; returns the serial
+/// log.
 pub fn run_script(
     install: &QemuInstall,
     disk: &Path,
     vm: VmConfig,
-    script: &str,
+    script: &Script,
     mic: Option<MicServer>,
-    mut agent: Option<AgentSim>,
+    agent: Option<AgentSim>,
 ) -> Result<String> {
     let mut s = Session::start(install, disk, vm)?;
-    let mic_ref = || mic.as_ref().ok_or_else(|| "this run has no test microphone".to_string());
-    let mut agent_result = String::new();
-    let mut agent_mark = 0usize;
-    let mut mic_mark = 0usize;
-    let result = (|| -> Result {
-        for (lineno, line) in script.lines().enumerate() {
-            let w = words(line);
-            let Some(cmd) = w.first() else { continue };
-            let ctx = |e: String| format!("script line {}: {e}", lineno + 1);
-            match cmd.as_str() {
-                "wait" => std::thread::sleep(Duration::from_secs_f64(num(&w, 1).map_err(ctx)?)),
-                "wait-serial" => {
-                    let timeout = num(&w, 2).unwrap_or(60.0);
-                    s.wait_serial(w.get(1).ok_or("missing text")?, Duration::from_secs_f64(timeout)).map_err(ctx)?
-                }
-                "wait-serial-count" => {
-                    let needle = w.get(1).ok_or("missing text")?.clone();
-                    let count = num(&w, 2).map_err(ctx)? as usize;
-                    let timeout = Duration::from_secs_f64(num(&w, 3).unwrap_or(60.0));
-                    let start = Instant::now();
-                    loop {
-                        let seen = s.recent().matches(needle.as_str()).count();
-                        if seen >= count {
-                            break;
-                        }
-                        let log = s.serial();
-                        if let Some(p) = s.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
-                            return Err(ctx(format!("serial log contains failure pattern \"{p}\"")));
-                        }
-                        if start.elapsed() > timeout {
-                            return Err(ctx(format!(
-                                "timed out: \"{needle}\" appeared {seen} of {count} times in {}s",
-                                timeout.as_secs()
-                            )));
-                        }
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                }
-                "shot" => {
-                    let path = shot_path(&w, 1)?;
-                    if let Some(dir) = path.parent() {
-                        std::fs::create_dir_all(dir).ok();
-                    }
-                    s.m.screenshot(&path).map_err(ctx)?;
-                    util::status("Screenshot", path.display());
-                }
-                // Two screenshots show the same in a region (fractions of
-                // the screen; all of it if none is given): what came and
-                // went between them left nothing behind.
-                "expect-same" => {
-                    let region = if w.len() >= 7 {
-                        [num(&w, 3)?, num(&w, 4)?, num(&w, 5)?, num(&w, 6)?]
-                    } else {
-                        [0.0, 0.0, 1.0, 1.0]
-                    };
-                    same_pictures(&shot_path(&w, 1)?, &shot_path(&w, 2)?, region).map_err(ctx)?;
-                }
-                // A screenshot is black in a region (fractions of the screen;
-                // all of it if none is given): nothing is shown there yet.
-                "expect-black" => {
-                    let region = if w.len() >= 6 {
-                        [num(&w, 2)?, num(&w, 3)?, num(&w, 4)?, num(&w, 5)?]
-                    } else {
-                        [0.0, 0.0, 1.0, 1.0]
-                    };
-                    black_picture(&shot_path(&w, 1)?, region).map_err(ctx)?;
-                }
-                "move" => {
-                    s.pointer().map_err(ctx)?;
-                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?
-                }
-                "click" => {
-                    s.pointer().map_err(ctx)?;
-                    let button = w.get(3).map(String::as_str).unwrap_or("left");
-                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
-                    std::thread::sleep(Duration::from_millis(80));
-                    s.m.mouse_button(button, true).map_err(ctx)?;
-                    std::thread::sleep(Duration::from_millis(80));
-                    s.m.mouse_button(button, false).map_err(ctx)?;
-                }
-                "drag" => {
-                    s.pointer().map_err(ctx)?;
-                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
-                    std::thread::sleep(Duration::from_millis(80));
-                    s.m.mouse_button("left", true).map_err(ctx)?;
-                    for step in 1..=10 {
-                        let t = step as f64 / 10.0;
-                        let x = num(&w, 1)? + (num(&w, 3)? - num(&w, 1)?) * t;
-                        let y = num(&w, 2)? + (num(&w, 4)? - num(&w, 2)?) * t;
-                        s.m.move_mouse(x, y).map_err(ctx)?;
-                        std::thread::sleep(Duration::from_millis(40));
-                    }
-                    s.m.mouse_button("left", false).map_err(ctx)?;
-                }
-                "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "disk" | "memory" | "usb" | "sound" | "audio" | "requires"
-                | "live" | "input" | "gpu" | "acpi-table" | "firmware-variable" => {}
-                "qmp" => {
-                    let command = w.get(1).ok_or("missing command")?;
-                    let arguments = match w.get(2) {
-                        Some(text) => serde_json::from_str(text).map_err(|e| ctx(format!("arguments: {e}")))?,
-                        None => serde_json::json!({}),
-                    };
-                    s.m.qmp.execute(command, arguments).map(|_| ()).map_err(ctx)?;
-                }
-                "reset" => s.reset().map_err(ctx)?,
-                "checkpoint" => s.checkpoint(),
-                "link" => {
-                    let up = match w.get(2).map(String::as_str) {
-                        Some("on" | "up") => true,
-                        Some("off" | "down") => false,
-                        _ => return Err(ctx("usage: link wired on|off".into())),
-                    };
-                    let name = match w.get(1).map(String::as_str) {
-                        Some("wired") => qemu::WIRED_NIC_ID,
-                        _ => return Err(ctx("usage: link wired on|off".into())),
-                    };
-                    let _ = name;
-                    s.m.set_wired_link(up).map_err(ctx)?;
-                }
-                "mouse-down" => {
-                    s.pointer().map_err(ctx)?;
-                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
-                    std::thread::sleep(Duration::from_millis(80));
-                    s.m.mouse_button("left", true).map_err(ctx)?;
-                }
-                "mouse-up" => s.m.mouse_button("left", false).map_err(ctx)?,
-                "double-click" => {
-                    s.pointer().map_err(ctx)?;
-                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
-                    for _ in 0..2 {
-                        std::thread::sleep(Duration::from_millis(60));
-                        s.m.mouse_button("left", true).map_err(ctx)?;
-                        std::thread::sleep(Duration::from_millis(60));
-                        s.m.mouse_button("left", false).map_err(ctx)?;
-                    }
-                }
-                "key" => {
-                    s.keyboard().map_err(ctx)?;
-                    s.m.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?
-                }
-                "key-down" => {
-                    s.keyboard().map_err(ctx)?;
-                    s.m.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?
-                }
-                "key-up" => s.m.key_event(w.get(1).ok_or("missing key")?, false).map_err(ctx)?,
-                "type" => {
-                    s.keyboard().map_err(ctx)?;
-                    s.m.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?
-                }
-                // Types a secret (an API key) from the environment, so it
-                // appears in neither the script nor the logs.
-                "type-env" => {
-                    let name = w.get(1).ok_or("missing variable name")?;
-                    let value = std::env::var(name).map_err(|_| ctx(format!("${name} is not set")))?;
-                    s.keyboard().map_err(ctx)?;
-                    s.m.type_text(value.trim()).map_err(|_| ctx(format!("cannot type ${name}")))?;
-                }
-                "expect-serial" => {
-                    let needle = w.get(1).ok_or("missing text")?;
-                    if !s.recent().contains(needle.as_str()) {
-                        return Err(ctx(format!("serial log does not contain \"{needle}\"")));
-                    }
-                }
-                // A file the guest wrote on the live system's stick (its
-                // EFI system partition) contains the text.
-                "expect-stick" => {
-                    let path = w.get(1).ok_or("missing path")?;
-                    let needle = w.get(2).ok_or("missing text")?;
-                    let image = std::fs::read(disk).map_err(|e| ctx(format!("{}: {e}", disk.display())))?;
-                    let file = crate::image::esp_file(&image, path).map_err(ctx)?;
-                    if !String::from_utf8_lossy(&file).contains(needle.as_str()) {
-                        return Err(ctx(format!("{path} on the stick does not contain \"{needle}\"")));
-                    }
-                }
-                // The guest's sound output (QEMU records it to a WAV file in
-                // scripts) holds more than silence.
-                "expect-audio" => {
-                    let wav =
-                        std::fs::read(util::out_dir().join("audio.wav")).map_err(|e| ctx(format!("audio.wav: {e}")))?;
-                    let (pcm, ..) = recorded_pcm(&wav).map_err(ctx)?;
-                    let peak =
-                        pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b).unsigned_abs()).max().unwrap_or(0);
-                    if peak < 1000 {
-                        return Err(ctx(format!("the sound output is silent (peak {peak})")));
-                    }
-                }
-                // While it plays, the sound output never drops out: no
-                // stretch of digital silence longer than the limit (20 ms by
-                // default) between the first sound and the last.
-                "expect-audio-gapless" => {
-                    let limit = if w.len() > 1 { num(&w, 1)? } else { 20.0 };
-                    let wav =
-                        std::fs::read(util::out_dir().join("audio.wav")).map_err(|e| ctx(format!("audio.wav: {e}")))?;
-                    let gaps = silent_gaps(&wav, limit).map_err(ctx)?;
-                    if !gaps.is_empty() {
-                        let list: Vec<String> =
-                            gaps.iter().take(5).map(|(at, ms)| format!("{ms:.0} ms at {at:.2} s")).collect();
-                        return Err(ctx(format!(
-                            "the sound output drops out {} time(s): {}",
-                            gaps.len(),
-                            list.join(", ")
-                        )));
-                    }
-                }
-                "reject-serial" => {
-                    let needle = w.get(1).ok_or("missing text")?;
-                    if s.recent().contains(needle.as_str()) {
-                        return Err(ctx(format!("serial log contains \"{needle}\"")));
-                    }
-                }
-                "say" | "say-async" => {
-                    let text = w.get(1).ok_or("missing text")?;
-                    let m = mic_ref().map_err(ctx)?;
-                    let speech = mic::synthesize(text, mic::USER_VOICE).map_err(ctx)?;
-                    m.enqueue(&speech);
-                    m.silence(0.6);
-                    if cmd == "say" {
-                        let secs = speech.len() as f64 / mic::RATE as f64 + 30.0;
-                        m.wait_drained(Duration::from_secs_f64(secs)).map_err(ctx)?;
-                    }
-                }
-                "mic-wav" => {
-                    let path = w.get(1).ok_or("missing file")?;
-                    let m = mic_ref().map_err(ctx)?;
-                    let audio = mic::read_wav(&util::workspace_root().join(path)).map_err(ctx)?;
-                    m.enqueue(&audio);
-                    let secs = audio.len() as f64 / mic::RATE as f64 + 30.0;
-                    m.wait_drained(Duration::from_secs_f64(secs)).map_err(ctx)?;
-                }
-                "mic-silence" => mic_ref().map_err(ctx)?.silence(num(&w, 1).map_err(ctx)?),
-                "mic-tone" => mic_ref().map_err(ctx)?.tone(num(&w, 1).map_err(ctx)?, num(&w, 2).unwrap_or(6000.0)),
-                "mic-echo" => mic_ref().map_err(ctx)?.echo(
-                    util::out_dir().join("audio.wav"),
-                    num(&w, 1).map_err(ctx)?,
-                    num(&w, 2).map_err(ctx)?,
-                ),
-                c if c.starts_with("agent-") => {
-                    let a = agent.as_mut().ok_or_else(|| ctx("this run has no agent simulator".into()))?;
-                    match c {
-                        "agent-connected" => {
-                            a.wait_connected(Duration::from_secs_f64(num(&w, 1).unwrap_or(120.0))).map_err(ctx)?
-                        }
-                        "agent-call" => {
-                            let name = w.get(1).ok_or("missing function name")?;
-                            let args = w.get(2).map(String::as_str).unwrap_or("{}");
-                            let timeout = Duration::from_secs_f64(num(&w, 3).unwrap_or(60.0));
-                            agent_result = a.call(name, args, timeout).map_err(ctx)?;
-                            println!("agent-call {name}: {}", agent_result.chars().take(300).collect::<String>());
-                        }
-                        "agent-result" => {
-                            let needle = w.get(1).ok_or("missing text")?;
-                            if !result_has(&agent_result, needle) {
-                                return Err(ctx(format!(
-                                    "the last result does not contain \"{needle}\": {agent_result}"
-                                )));
-                            }
-                        }
-                        "agent-mark" => {
-                            agent_mark = a.texts().len();
-                            mic_mark = a.mic_levels_len();
-                        }
-                        // What the agent sent of the microphone since the
-                        // mark: never louder than (quiet) or at least (heard)
-                        // this level in dBFS.
-                        "agent-mic-quiet" | "agent-mic-heard" => {
-                            let limit = num(&w, 1).map_err(ctx)? as f32;
-                            let peak = a.mic_peak_since(mic_mark);
-                            let quiet = c == "agent-mic-quiet";
-                            if quiet && peak >= limit {
-                                return Err(ctx(format!(
-                                    "the agent sent microphone audio at {peak:.1} dBFS (limit {limit})"
-                                )));
-                            }
-                            if !quiet && peak < limit {
-                                return Err(ctx(format!(
-                                    "the agent sent no microphone audio louder than {peak:.1} dBFS (wanted {limit})"
-                                )));
-                            }
-                        }
-                        "agent-expect" => {
-                            let needle = w.get(1).ok_or("missing text")?;
-                            let timeout = Duration::from_secs_f64(num(&w, 2).unwrap_or(60.0));
-                            let t = a.wait_text(needle, agent_mark, timeout).map_err(ctx)?;
-                            println!("agent-expect: {}", t.chars().take(300).collect::<String>());
-                        }
-                        "agent-speak" => a.speak(num(&w, 1).map_err(ctx)?).map_err(ctx)?,
-                        "agent-interrupt" => a.send_json(r#"{"type":"UserStartedSpeaking"}"#).map_err(ctx)?,
-                        "agent-hear" => {
-                            let text = w.get(1).ok_or("missing text")?;
-                            a.hear(text, Duration::from_secs_f64(num(&w, 2).unwrap_or(30.0))).map_err(ctx)?
-                        }
-                        "agent-asleep" => {}
-                        "agent-listens" => {
-                            let n = num(&w, 1).map_err(ctx)? as u32;
-                            if a.listen_connections() != n {
-                                return Err(ctx(format!(
-                                    "the agent opened {} recognition streams, not {n}",
-                                    a.listen_connections()
-                                )));
-                            }
-                        }
-                        "agent-listens-at-most" => {
-                            let n = num(&w, 1).map_err(ctx)? as u32;
-                            if a.listen_connections() > n {
-                                return Err(ctx(format!(
-                                    "the agent opened {} recognition streams, more than {n}",
-                                    a.listen_connections()
-                                )));
-                            }
-                        }
-                        "agent-not-listening" => {
-                            a.wait_not_listening(Duration::from_secs_f64(num(&w, 1).unwrap_or(30.0))).map_err(ctx)?
-                        }
-                        "agent-send" => a.send_json(w.get(1).ok_or("missing message")?).map_err(ctx)?,
-                        "agent-audio" => {
-                            let want = num(&w, 1).map_err(ctx)? as usize;
-                            let got = a.audio_bytes();
-                            if got < want {
-                                return Err(ctx(format!("the agent streamed only {got} bytes of microphone audio")));
-                            }
-                        }
-                        other => return Err(ctx(format!("unknown command '{other}'"))),
-                    }
-                }
-                "mic-wait" => {
-                    let timeout = num(&w, 1).unwrap_or(60.0);
-                    mic_ref().map_err(ctx)?.wait_drained(Duration::from_secs_f64(timeout)).map_err(ctx)?;
-                }
-                other => return Err(ctx(format!("unknown command '{other}'"))),
+    let mut extras = Extras { mic, agent, agent_result: String::new(), agent_mark: 0, mic_mark: 0 };
+    let mut result = Ok(());
+    for (line, step) in &script.steps {
+        if let Err(e) = run_step(&mut s, &mut extras, step, disk) {
+            result = Err(format!("script line {line}: {e}"));
+            break;
+        }
+    }
+    s.log.refresh();
+    // Something may also have failed after the last wait.
+    let result = result.and_then(|()| s.failed().map_or(Ok(()), Err));
+    let log = s.log.text();
+    s.machine.finish();
+    result.map(|()| log.clone()).map_err(|e| format!("{e}\n--- serial log ---\n{}", tail(&log, 60)))
+}
+
+/// Takes one step of a script.
+fn run_step(s: &mut Session, x: &mut Extras, step: &Step, disk: &Path) -> Result {
+    match step {
+        Step::Wait(time) => std::thread::sleep(*time),
+        Step::WaitSerial { text, timeout } => s.wait_serial(text, *timeout)?,
+        Step::WaitSerialCount { text, count, timeout } => s.wait_serial_count(text, *count, *timeout)?,
+        Step::Shot { path, settle } => {
+            let path = shot_path(path);
+            s.shot(&path, *settle)?;
+            util::status("Screenshot", path.display());
+        }
+        // Two screenshots show the same in a region: what came and went
+        // between them left nothing behind.
+        Step::ExpectSame { first, second, region } => {
+            checks::same_pictures(&shot_path(first), &shot_path(second), *region)?
+        }
+        // A screenshot is black in a region: nothing is shown there yet.
+        Step::ExpectBlack { shot, region } => checks::black_picture(&shot_path(shot), *region)?,
+        Step::Move(at) => {
+            s.pointer()?;
+            s.machine.qmp.move_mouse(at.x, at.y)?
+        }
+        Step::Click { at, button } => s.click(*at, button)?,
+        Step::DoubleClick(at) => {
+            s.pointer()?;
+            s.machine.qmp.move_mouse(at.x, at.y)?;
+            for _ in 0..2 {
+                std::thread::sleep(Duration::from_millis(60));
+                s.machine.qmp.mouse_button("left", true)?;
+                std::thread::sleep(Duration::from_millis(60));
+                s.machine.qmp.mouse_button("left", false)?;
             }
         }
-        Ok(())
-    })();
-    let log = s.serial();
-    // Something may also have failed after the last wait.
-    let result = result.and_then(|()| match s.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
-        Some(p) => Err(format!("serial log contains failure pattern \"{p}\"")),
-        None => Ok(()),
-    });
-    s.finish();
-    result.map(|_| log.clone()).map_err(|e| format!("{e}\n--- serial log ---\n{}", tail(&log, 60)))
+        Step::Drag { from, to } => {
+            s.pointer()?;
+            let qmp = &mut s.machine.qmp;
+            qmp.move_mouse(from.x, from.y)?;
+            std::thread::sleep(Duration::from_millis(80));
+            qmp.mouse_button("left", true)?;
+            for step in 1..=10 {
+                let t = step as f64 / 10.0;
+                qmp.move_mouse(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t)?;
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            qmp.mouse_button("left", false)?;
+        }
+        Step::MouseDown(at) => {
+            s.pointer()?;
+            s.machine.qmp.move_mouse(at.x, at.y)?;
+            std::thread::sleep(Duration::from_millis(80));
+            s.machine.qmp.mouse_button("left", true)?;
+        }
+        Step::MouseUp => s.machine.qmp.mouse_button("left", false)?,
+        Step::Key(combo) => {
+            s.keyboard()?;
+            s.machine.qmp.send_keys(combo)?
+        }
+        Step::KeyDown(key) => {
+            s.keyboard()?;
+            s.machine.qmp.key_event(key, true)?
+        }
+        Step::KeyUp(key) => s.machine.qmp.key_event(key, false)?,
+        Step::Type(text) => {
+            s.keyboard()?;
+            s.machine.qmp.type_text(text)?
+        }
+        // Types a secret (an API key) from the environment, so it appears
+        // in neither the script nor the logs.
+        Step::TypeEnv(name) => {
+            let value = std::env::var(name).map_err(|_| format!("${name} is not set"))?;
+            s.keyboard()?;
+            s.machine.qmp.type_text(value.trim()).map_err(|e| format!("cannot type ${name}: {e}"))?;
+        }
+        Step::ExpectSerial(needle) => {
+            if find(s.recent(), needle.as_bytes()).is_none() {
+                return Err(format!("serial log does not contain \"{needle}\""));
+            }
+        }
+        Step::RejectSerial(needle) => {
+            if find(s.recent(), needle.as_bytes()).is_some() {
+                return Err(format!("serial log contains \"{needle}\""));
+            }
+        }
+        Step::FailOn(pattern) => s.fail_patterns.push((pattern.clone(), 0)),
+        Step::Reset => s.reset()?,
+        Step::Checkpoint => s.checkpoint(),
+        Step::Link { up } => s.machine.set_wired_link(*up)?,
+        Step::Qmp { command, arguments } => s.machine.qmp.execute(command, arguments.clone()).map(|_| ())?,
+        // A file the guest wrote on the live system's stick (its EFI
+        // system partition) contains the text.
+        Step::ExpectStick { path, text } => {
+            let image = File::open(disk).map_err(|e| format!("{}: {e}", disk.display()))?;
+            let file = crate::image::esp_file(&image, path)?;
+            if !String::from_utf8_lossy(&file).contains(text.as_str()) {
+                return Err(format!("{path} on the stick does not contain \"{text}\""));
+            }
+        }
+        // The guest's sound output (QEMU records it to a WAV file in
+        // scripts) holds more than silence.
+        Step::ExpectAudio => {
+            let peak = checks::recorded_peak(&recording()?)?;
+            if peak < 1000 {
+                return Err(format!("the sound output is silent (peak {peak})"));
+            }
+        }
+        // While it plays, the sound output never drops out: no stretch of
+        // digital silence longer than the limit between the first sound
+        // and the last.
+        Step::ExpectAudioGapless(limit) => {
+            let gaps = checks::silent_gaps(&recording()?, *limit)?;
+            if !gaps.is_empty() {
+                let list: Vec<String> =
+                    gaps.iter().take(5).map(|(at, ms)| format!("{ms:.0} ms at {at:.2} s")).collect();
+                return Err(format!("the sound output drops out {} time(s): {}", gaps.len(), list.join(", ")));
+            }
+        }
+        Step::Say(text) => {
+            let m = x.mic()?;
+            let speech = mic::synthesize(text, mic::USER_VOICE)?;
+            m.enqueue(&speech);
+            m.silence(0.6);
+            m.wait_drained(Duration::from_secs_f64(speech.len() as f64 / mic::RATE as f64 + 30.0))?;
+        }
+        Step::MicWav(file) => {
+            let m = x.mic()?;
+            let audio = mic::read_wav(&util::workspace_root().join(file))?;
+            m.enqueue(&audio);
+            m.wait_drained(Duration::from_secs_f64(audio.len() as f64 / mic::RATE as f64 + 30.0))?;
+        }
+        Step::MicSilence(secs) => x.mic()?.silence(*secs),
+        Step::MicTone { secs, peak } => x.mic()?.tone(*secs, *peak),
+        Step::MicEcho { gain_db, delay_ms } => x.mic()?.echo(util::out_dir().join("audio.wav"), *gain_db, *delay_ms),
+        Step::AgentConnected(timeout) => x.agent()?.wait_connected(*timeout)?,
+        Step::AgentCall { name, arguments, timeout } => {
+            let result = x.agent()?.call(name, arguments, *timeout)?;
+            println!("agent-call {name}: {}", result.chars().take(300).collect::<String>());
+            x.agent_result = result;
+        }
+        Step::AgentResult(needle) => {
+            x.agent()?;
+            if !checks::result_has(&x.agent_result, needle) {
+                return Err(format!("the last result does not contain \"{needle}\": {}", x.agent_result));
+            }
+        }
+        Step::AgentMark => {
+            let a = x.agent()?;
+            let (texts, levels) = (a.texts().len(), a.mic_levels_len());
+            (x.agent_mark, x.mic_mark) = (texts, levels);
+        }
+        // What the agent sent of the microphone since the mark: never
+        // louder than (quiet) or at least (heard) this level in dBFS.
+        Step::AgentMicQuiet(limit) => {
+            let mark = x.mic_mark;
+            let peak = x.agent()?.mic_peak_since(mark);
+            if peak >= *limit {
+                return Err(format!("the agent sent microphone audio at {peak:.1} dBFS (limit {limit})"));
+            }
+        }
+        Step::AgentMicHeard(limit) => {
+            let mark = x.mic_mark;
+            let peak = x.agent()?.mic_peak_since(mark);
+            if peak < *limit {
+                return Err(format!("the agent sent no microphone audio louder than {peak:.1} dBFS (wanted {limit})"));
+            }
+        }
+        Step::AgentExpect { text, timeout } => {
+            let mark = x.agent_mark;
+            let t = x.agent()?.wait_text(text, mark, *timeout)?;
+            println!("agent-expect: {}", t.chars().take(300).collect::<String>());
+        }
+        Step::AgentSpeak(secs) => x.agent()?.speak(*secs)?,
+        Step::AgentInterrupt => x.agent()?.send_json(r#"{"type":"UserStartedSpeaking"}"#)?,
+        Step::AgentHear { text, timeout } => x.agent()?.hear(text, *timeout)?,
+        Step::AgentListens(n) => {
+            let opened = x.agent()?.listen_connections();
+            if opened != *n {
+                return Err(format!("the agent opened {opened} recognition streams, not {n}"));
+            }
+        }
+        Step::AgentListensAtMost(n) => {
+            let opened = x.agent()?.listen_connections();
+            if opened > *n {
+                return Err(format!("the agent opened {opened} recognition streams, more than {n}"));
+            }
+        }
+        Step::AgentNotListening(timeout) => x.agent()?.wait_not_listening(*timeout)?,
+        Step::AgentAudio(want) => {
+            let got = x.agent()?.audio_bytes();
+            if got < *want {
+                return Err(format!("the agent streamed only {got} bytes of microphone audio"));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The last `n` lines of `text`.
@@ -1018,154 +704,59 @@ pub fn tail(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-/// Whether a function's result (JSON) has what a script expects of it: the
-/// members it writes as JSON (`"page":"processes","shown":1`), all in one
-/// object of the result and in any order (an object's members have none).
-/// Values are compared as JSON's: numbers by value (`2` is `2.0`), objects
-/// by the members given, arrays element by element; or else, the text
-/// itself is looked for (a word, a key, the start of a value).
-fn result_has(result: &str, expected: &str) -> bool {
-    use serde_json::{Map, Value};
-    /// Whether `actual` is `expected`, as described above.
-    fn matches(actual: &Value, expected: &Value) -> bool {
-        match (actual, expected) {
-            (Value::Object(a), Value::Object(e)) => has_all(a, e),
-            (Value::Array(a), Value::Array(e)) => a.len() == e.len() && a.iter().zip(e).all(|(a, e)| matches(a, e)),
-            (Value::Number(a), Value::Number(e)) => a.as_f64() == e.as_f64(),
-            _ => actual == expected,
-        }
-    }
-    fn has_all(object: &Map<String, Value>, members: &Map<String, Value>) -> bool {
-        members.iter().all(|(k, v)| object.get(k).is_some_and(|x| matches(x, v)))
-    }
-    /// Whether `value`, or a value in it, is an object with `members`.
-    fn holds(value: &Value, members: &Map<String, Value>) -> bool {
-        match value {
-            Value::Object(o) => has_all(o, members) || o.values().any(|v| holds(v, members)),
-            Value::Array(a) => a.iter().any(|v| holds(v, members)),
-            _ => false,
-        }
-    }
-    match (serde_json::from_str::<Map<String, Value>>(&format!("{{{expected}}}")), serde_json::from_str(result)) {
-        (Ok(members), Ok(value)) => holds(&value, &members),
-        _ => result.contains(expected),
-    }
-}
-
-/// The samples of QEMU's recording of the sound output (`audio.wav`), 16-bit
-/// PCM: the data, the channels and the rate. QEMU leaves the data chunk's
-/// length at zero while it records; that means "to the end".
-fn recorded_pcm(wav: &[u8]) -> std::result::Result<(&[u8], usize, u32), String> {
-    let info = WavInfo::parse(wav).map_err(|e| format!("audio.wav: {e}"))?;
-    if info.format != SampleFormat::S16 {
-        return Err("audio.wav is not 16-bit PCM".into());
-    }
-    Ok((&wav[info.data_offset..info.data_offset + info.data_len], info.channels as usize, info.rate))
-}
-
-/// The stretches of digital silence (every channel exactly zero) longer
-/// than `limit_ms` in QEMU's recording of the sound output, between its
-/// first and last sound: where (s) and how long (ms).
-pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f64)>, String> {
-    let (data, channels, rate) = recorded_pcm(wav)?;
-    let frames: Vec<&[u8]> = data.chunks_exact(2 * channels).collect();
-    let silent = |f: &[u8]| f.iter().all(|&b| b == 0);
-    let loud = |f: &[u8]| f.as_chunks::<2>().0.iter().any(|s| i16::from_le_bytes(*s).unsigned_abs() > 64);
-    let (Some(first), Some(last)) = (frames.iter().position(|f| loud(f)), frames.iter().rposition(|f| loud(f))) else {
-        return Ok(Vec::new());
-    };
-    let mut gaps = Vec::new();
-    let mut run = 0usize;
-    for (i, f) in frames.iter().enumerate().take(last + 1).skip(first) {
-        if silent(f) {
-            run += 1;
-            continue;
-        }
-        let ms = run as f64 * 1000.0 / rate as f64;
-        if ms > limit_ms {
-            gaps.push(((i - run) as f64 / rate as f64, ms));
-        }
-        run = 0;
-    }
-    Ok(gaps)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn wav(samples: &[i16], data_len: Option<u32>) -> Vec<u8> {
-        let mut w = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
-        w.extend_from_slice(&16u32.to_le_bytes());
-        // PCM, 2 channels, 1000 Hz, 4000 bytes/s, 4 bytes/frame, 16 bits.
-        for v in [1u16, 2] {
-            w.extend_from_slice(&v.to_le_bytes());
-        }
-        w.extend_from_slice(&1000u32.to_le_bytes());
-        w.extend_from_slice(&4000u32.to_le_bytes());
-        for v in [4u16, 16] {
-            w.extend_from_slice(&v.to_le_bytes());
-        }
-        w.extend_from_slice(b"data");
-        w.extend_from_slice(&data_len.unwrap_or(samples.len() as u32 * 2).to_le_bytes());
-        for s in samples {
-            w.extend_from_slice(&s.to_le_bytes());
-        }
-        w
+    #[test]
+    fn waits_take_whole_lines_that_no_wait_took() {
+        let log = b"[ 1.0] videos: seek to 0:05\r\n[ 2.0] videos: seek to 0:07\r\n[ 3.0] videos: seek to 0:0";
+        // The first line, then (the first claimed) the second; the third is
+        // still being written.
+        let first = find_line(log, 0, "seek to 0:0", &[], false).unwrap();
+        assert_eq!(&log[first.clone()], b"seek to 0:0");
+        let second = find_line(log, 0, "seek to 0:0", std::slice::from_ref(&first), false).unwrap();
+        assert!(second.start > first.end);
+        assert_eq!(find_line(log, 0, "seek to 0:0", &[first.clone(), second.clone()], false), Err(true));
+        assert_eq!(find_line(log, 0, "rewind", &[], false), Err(false));
+        // Once QEMU has stopped, its last line is whole as it is.
+        assert!(find_line(log, 0, "seek to 0:0", &[first.clone(), second.clone()], true).is_ok());
+        // A wait for less than an earlier wait matched needs a line of its
+        // own too ("0:1" of "going on from 0:15").
+        let going = b"a: going on from 0:15\nb: going on from 0:1\n";
+        let long = find_line(going, 0, "going on from 0:15", &[], false).unwrap();
+        let short = find_line(going, 0, "going on from 0:1", &[long], false).unwrap();
+        assert_eq!(&going[short.start - 3..short.start], b"b: ");
+        // Only after the checkpoint.
+        assert_eq!(find_line(log, 20, "seek to 0:05", &[], false), Err(false));
+        // A prefix of a line is taken once the line is whole: its rest can
+        // then be expected.
+        assert_eq!(find_line(b"devices: 8086:10c9 func", 0, "devices: ", &[], false), Err(true));
+        assert!(find_line(b"devices: 8086:10c9 function-level reset\n", 0, "devices: ", &[], false).is_ok());
+        assert_eq!(find_line(log, 0, "", &[], false), Err(false));
     }
 
     #[test]
-    fn results_are_compared_as_json() {
-        let result =
-            r#"{"ok":true,"result":{"items":8,"pictures":["a.jpg"],"showing":"~/Pictures","x":{"y":1,"z":2}}}"#;
-        // Members in any order, in one object, at any depth.
-        assert!(result_has(result, r#""showing":"~/Pictures","items":8"#));
-        assert!(result_has(result, r#""items":8,"showing":"~/Pictures""#));
-        assert!(result_has(result, r#""ok":true"#));
-        assert!(result_has(result, r#""x":{"z":2}"#), "an object with the members given");
-        assert!(result_has(result, r#""pictures":["a.jpg"]"#));
-        assert!(!result_has(result, r#""showing":"~/Pictures","items":7"#));
-        assert!(!result_has(result, r#""ok":true,"items":8"#), "members of different objects");
-        assert!(!result_has(result, r#""pictures":[]"#));
-        // Numbers by value; arrays element by element, of the same length.
-        let numbers = r#"{"seconds":2.0,"size":20,"up_next":[{"artist":"A","title":"T"}]}"#;
-        assert!(result_has(numbers, r#""seconds":2,"size":20.0"#));
-        assert!(!result_has(numbers, r#""seconds":2.5"#));
-        assert!(result_has(numbers, r#""up_next":[{"title":"T"}]"#));
-        assert!(!result_has(numbers, r#""up_next":[{"title":"T"},{"title":"T"}]"#));
-        // Anything else is looked for as text.
-        assert!(result_has(result, r#""showing":"~/Pic"#));
-        assert!(result_has(result, "Pictures"));
-        assert!(result_has("written", "written"));
-        assert!(!result_has(result, "nothing"));
+    fn counts_are_of_whole_lines() {
+        let log = b"step to 0:1\nstep to 0:1\nstep to 0:1";
+        assert_eq!(find_lines(log, 0, "step to 0:1", false).len(), 2);
+        assert_eq!(find_lines(log, 0, "step to 0:1", true).len(), 3);
+        assert_eq!(find_lines(log, 1, "step to 0:1", false).len(), 1);
+        assert_eq!(find_lines(b"aaaa\n", 0, "aa", false).len(), 2);
     }
 
     #[test]
-    fn silent_gaps_inside_the_sound() {
-        // 1000 frames per second, stereo: silence, sound, a 30 ms
-        // dropout, sound, a 10 ms one, sound, silence.
-        let mut s = vec![0i16; 2 * 50];
-        s.extend(std::iter::repeat_n(3000, 2 * 100));
-        s.extend(std::iter::repeat_n(0, 2 * 30));
-        s.extend(std::iter::repeat_n(-3000, 2 * 100));
-        s.extend(std::iter::repeat_n(0, 2 * 10));
-        s.extend(std::iter::repeat_n(2000, 2 * 100));
-        s.extend(std::iter::repeat_n(0, 2 * 500));
-        let gaps = silent_gaps(&wav(&s, None), 20.0).unwrap();
-        assert_eq!(gaps, [(0.15, 30.0)]);
-        // QEMU's header while recording: no data length.
-        assert_eq!(silent_gaps(&wav(&s, Some(0)), 5.0).unwrap(), [(0.15, 30.0), (0.28, 10.0)]);
-        assert!(silent_gaps(b"RIFF", 20.0).is_err());
+    fn needles_are_found_where_they_first_are() {
+        assert_eq!(find(b"abcabd", b"abd"), Some(3));
+        assert_eq!(find(b"abc", b"abcd"), None);
+        assert_eq!(find(b"", b"a"), None);
+        assert_eq!(find(b"xxa", b"a"), Some(2));
     }
 
     #[test]
-    fn a_machine_that_is_reset_has_the_hd_audio_card() {
-        assert_eq!(sound_card("wait 1\n"), Ok(None));
-        assert_eq!(sound_card("sound virtio\n"), Ok(Some("virtio".into())));
-        assert_eq!(sound_card("wait 1\nreset\n"), Ok(Some("hda".into())));
-        assert_eq!(sound_card("sound hda\nreset\n"), Ok(Some("hda".into())));
-        assert!(sound_card("sound virtio\nreset\n").is_err_and(|e| e.contains("sound hda")));
-        assert!(resets("reset  # and start again\n"));
-        assert!(!resets("reset-later\n# reset\n"));
+    fn screenshots_go_to_the_output_directory() {
+        assert_eq!(shot_path("target/veda/a.png"), util::out_dir().join("a.png"));
+        assert_eq!(shot_path("documentation/images/b.png"), util::workspace_root().join("documentation/images/b.png"));
+        assert_eq!(shot_path("/tmp/c.png"), PathBuf::from("/tmp/c.png"));
     }
 }

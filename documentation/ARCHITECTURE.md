@@ -77,8 +77,9 @@ devices there. The splash's gradient is dark and steps only a few dozen
 times from top to bottom in each colour; it is dithered (an 8x8 ordered
 pattern) so that it shows no bands. `init` asks for the sequence
 (`splash`) and the sound (`startup`) only at system start: a window
-system or shell restarted after a crash shows the desktop at once, and
-quietly.
+system or shell restarted after a crash shows the desktop at once (as
+soon as the screen may be drawn into: see the window system's screen),
+and quietly.
 
 The live system (`cargo orchestration iso`) starts the same way from a USB
 stick or a disc. Its image is a hybrid ISO 9660 image: the boot files in the
@@ -144,7 +145,18 @@ VMOs. *Sockets* are byte streams for pipes and terminals: a 256 KiB buffer
 each way, writes of up to 4096 bytes that are all-or-nothing (as POSIX
 promises for pipes), half-closing to end a stream, and endpoints that can
 be duplicated, so several processes can share one. Threads wait on signals
-of several objects at once (`object_wait_many`).
+of several objects at once: `object_wait_many` registers a thread with
+each of up to 1024 objects for one wait; a *port* keeps registrations
+(`object_wait_async`: a packet with a key once the object's signals are
+active, at once if they are, one packet per registration) and gives a
+waiting thread the packets queued (`port_wait`), so that a wait costs
+what is ready, not how many objects are watched. A port holds at most
+65536 registrations and packets, and its handle cannot travel to another
+process. `vipc`'s `WaitSet`, every service loop's, waits one call at a
+time when it waits once, and on a port when it is kept from one wait to
+the next (the file systems, the network, init and the window system keep
+theirs: a wait then registers only what changed and what fired since the
+last), or holds more handles than one call takes.
 
 **Time.** The monotonic clock counts the processors' clock counter
 (`arch::clock`). On AMD64 that is the TSC, calibrated against the HPET
@@ -192,8 +204,12 @@ has ended and left its stack, which is how thread libraries join threads.
   them with the C library, which the standard library stands on (see
   [Rust on Veda](RUST.md)).
 * **`vrt`** is the runtime each of Veda's own programs links: entry
-  point and startup message, syscall wrappers, heap (TLSF), threads,
-  futex-based locks, time, logging and process creation.
+  point and startup message, syscall wrappers, heap (TLSF over private
+  memory: free pages go back to the system once they have stayed free for
+  a while, and allocations of 4 MiB and more are mappings of their own),
+  threads (each stack with guard pages below it, and freed when the thread
+  ends, whether it was joined or let go), futex-based locks that make no
+  system call uncontended, time, logging and process creation.
 * **Process creation** happens in user space (`vrt::process::Spawn`):
   create a process, map the program's image from VMOs, create a thread, and
   start it with a bootstrap channel carrying the startup message
@@ -217,8 +233,23 @@ has ended and left its stack, which is how thread libraries join threads.
   Protocols are declared with the `vipc` macros, which generate typed client
   stubs and server dispatch code. With every connection the registry hands
   the service the client's identity (process, program name, whether it is
-  a system service or an application), so a service can decide who may do
-  what; system service names cannot be registered by other programs.
+  a system service, an application, or a program the kernel command line
+  asked for, as tests are), so a service can decide who may do what. (A process another started speaks for the process that started it,
+  whose registry channel it was handed a copy of.) System services may
+  register any name, and the names they register stay theirs; any other
+  program registers only names of its own (Music `music`, or names under
+  it: `music/...`), so that none can stand in for a service that has not
+  registered yet. A connection to a service not registered yet waits for
+  it, up to 64 per process.
+* **The launcher** in `init` starts programs and installed applications,
+  lists the running ones and ends them, each with what it started (its
+  job): an application may end
+  applications and what they started, while the system's processes (its
+  services, and what those started, such as drivers) only the system
+  services, the user's tools for managing the system (Task Manager and the
+  Terminal's `kill -f`) and the programs the kernel command line asked for
+  (`systest`). Only system services shut the machine down or restart it,
+  and hear of crashes (`launcher::watch`).
 
 ## Devices (`implementation/services/devmgr`)
 
@@ -226,14 +257,24 @@ has ended and left its stack, which is how thread libraries join threads.
   has one for, matched by vendor and device or by PCI class. A driver gets
   a channel speaking the `pcidev` protocol for exactly its device: that
   device's configuration space (its BAR registers stay as the firmware set
-  them), its BARs mapped, MSI interrupts (or the line its INTx is wired
-  to, where the firmware's `_PRT` says) and DMA memory. Drivers never see
-  other devices. A memory BAR the firmware leaves unplaced (a laptop's
-  does so for its serial bus controllers) devmgr places first, in a
-  window of the PCI root bridge's (`_CRS`) where nothing else is, from
-  the top down; one it cannot place reaches no driver, and no physical
-  VMO reaches the kernel's RAM. A function woken from D3hot that lost its
-  BARs (it resets, unless it says it does not) gets them back.
+  them), its memory BARs mapped, MSI interrupts (as many as the function
+  can raise, no more) or the line its INTx is wired to (where the
+  firmware's `_PRT` says), and DMA memory. Drivers never see other
+  devices: a BAR reaches its driver as the pages it is on, so one on a
+  page another function's BAR is also on reaches none. A memory BAR the
+  firmware leaves unplaced (a laptop's does so for its serial bus
+  controllers) devmgr places first, in a window of the PCI root bridge's
+  (`_CRS`) where nothing else is, from the top down, on pages of its own;
+  one it cannot place reaches no driver, and no physical VMO reaches the
+  kernel's RAM. A function woken from D3hot that lost its BARs (it resets,
+  unless it says it does not) gets them back, as does one its driver (or
+  the driver VM's guest) resets alone (a function-level reset).
+* What a device says of itself steers no driver's accesses elsewhere: the
+  drivers' helpers (`vproto::pci`: the capability list, MSI-X, a BAR's
+  registers, DMA memory; `vvirtio`'s structures, queues and MSI-X table)
+  check every offset a device reports against the BAR or the memory it
+  is in, and refuse a device that describes itself wrongly rather than
+  crash or write past it.
 * **ACPI.** `devmgr` also reads the firmware's ACPI tables (the kernel
   hands `init` the RSDP and the firmware's ACPI memory ranges, `init`
   hands them to `devmgr`), because some devices exist only there: a
@@ -247,25 +288,44 @@ has ended and left its stack, which is how thread libraries join threads.
   configuration space (the registers of the function at the `_ADR` of the
   device a region is in, on its root bridge's bus or below its bridges, as
   ACPICA finds it: an Intel PC's root bridge sizes its windows by its host
-  bridge's). It changes nothing: what a method stores lasts only for that
-  evaluation, and it reads no I/O ports or embedded controller. Definitions
-  inside an `If` outside any method exist only when their condition holds
-  (that is how a board leaves out what its settings turn off); a region
-  whose address depends on a later table is placed when first read, and a
-  name whose data refers to objects defined after it (a `_PRT` package
-  naming interrupt link devices) is evaluated again once they are, as
-  ACPICA does. Every evaluation is bounded. The tables and the firmware's
-  ACPI memory are mapped cached, anything else AML reads uncached. On the
-  laptop this was written for, all of a 480 KiB DSDT and sixteen SSDTs
-  load, every conditional definition with them; `cargo orchestration acpi`
-  shows what devmgr makes of a machine's tables, on the host.
+  bridge's), read with the accesses their fields' access types say (a
+  device's register may answer only to its own width). Once the tables are
+  loaded, it initialises the devices as an OS does: `\_INI`, `\_SB._INI` and
+  the `_INI` of each present device, in ACPICA's order, in one evaluation
+  whose stores every later one starts from (Intel's reference code for a
+  laptop's touchpad gives it its id, I2C address and GPIO pin so, through
+  buffer fields over its resource templates). It changes nothing: what a
+  method stores lasts only for that evaluation (what the `_INI` methods
+  store, for every one after), and it reads no I/O ports or embedded
+  controller. Definitions inside an `If` outside any method exist only when
+  their condition holds (that is how a board leaves out what its settings
+  turn off); a region whose address, or a buffer field whose offset,
+  depends on a later table is placed when first used, and a name whose
+  data refers to objects defined after it (a `_PRT` package naming
+  interrupt link devices) is evaluated again once they are, as ACPICA does.
+  Every evaluation is bounded: in steps, in the bytes of the values it
+  makes and copies (none larger than 1 MiB), in how deep its code and its
+  values nest (which bounds the stack it takes) and in nested calls; so is
+  a table's load as a whole, the initialisation, and the evaluations that
+  answer one question (a device's identity, the root bridges); an owner
+  may bound a phase of its work together (`Namespace::limit`). The tables
+  and the firmware's ACPI memory are mapped cached, anything else AML
+  reads uncached. On the laptop this was written for, all of a 480 KiB
+  DSDT and sixteen SSDTs load, every conditional definition with them;
+  `cargo orchestration acpi` shows what devmgr makes of a machine's
+  tables, on the host.
 * **The IOMMU.** Where the firmware describes one (VT-d), the kernel
   remaps every interrupt: a device's MSI raises an entry that names the
   device, so no other can raise it, and the compatibility format is
   blocked. Devices reach memory untranslated, as without an IOMMU, until
   one is given to a guest. MSIs are therefore made for a PCI function
   (`msi_create` takes a resource naming it, `resource_kind::PCI`), which
-  `devmgr` holds for all of them.
+  `devmgr` holds for all of them; a function has at most as many at once
+  as it can raise, which `devmgr` reads of it and the kernel counts. A device whose reserved memory (an
+  RMRR: memory the firmware goes on using with it) the DMAR table gives
+  as other than whole pages stays the host's (`viommu`'s
+  `Reserved::range`): it could not be confined without knowing that
+  memory. The table's other devices are unaffected, as on Linux.
 * **The driver VM.** Every other device goes to Linux in a virtual machine
   ([the driver VM](DRIVERVM.md)): all but the disks and the platform's own
   functions. `devmgr`
@@ -275,7 +335,9 @@ has ended and left its stack, which is how thread libraries join threads.
   starts when the processors run virtual machines and an IOMMU confines
   devices (the kernel says both in the boot information, `vabi::platform`),
   and the system image has its Linux. When it ends without Linux having
-  powered it off, `devmgr` resets its devices and starts it again.
+  powered it off, `devmgr` resets its devices and starts it again (as it
+  tries again when it does not start), later after each failure in a row,
+  and not after a few.
 * A driver asks for the devices the firmware describes below its PCI
   function (its ACPI companion, found by `_ADR` under the PCI root bridge):
   their ids (`_HID`, `_CID`, `_UID`, `_SUB`), status and resources (`_CRS`:
@@ -313,10 +375,20 @@ has ended and left its stack, which is how thread libraries join threads.
 * `virtio-blk` (QEMU), `ahci` (SATA disks: QEMU's q35 controller, many
   PCs) and `nvme` (NVM Express: the SSDs of most PCs since about 2016,
   QEMU's `nvme`) serve each disk (each namespace of an NVMe controller)
-  through the `block` protocol under the name `block/<serial>`, so clients
-  find a disk by its serial number whatever the controller. `devmgr`
-  matches drivers by vendor and device, and AHCI and NVMe controllers by
-  their PCI class. The live system starts none of them (see Boot).
+  through the `block` protocol under the name `block/<serial>` (where it
+  is, `block/pci-00:04.0`, if it has no serial number), so the VFS finds
+  a disk by its serial number whatever the controller. They share one
+  service loop (`vproto::block::serve`), which checks each request
+  against the disk before its driver sees it (whole sectors, at most
+  32 KiB, all on the disk). Only the VFS may use a disk: anyone else's
+  connection is closed, since reading or writing its sectors would bypass
+  what the VFS decides of who reads and writes which files (`/system`,
+  `/home/.private`). A request a device does not finish in time fails:
+  an AHCI port is restarted, an NVMe controller reset and started again,
+  and a virtio disk reset and given up, so that no command left to a
+  device writes into memory a later one uses. `devmgr` matches drivers by
+  vendor and device, and AHCI and NVMe controllers by their PCI class.
+  The live system starts none of them (see Boot).
 * `nvme` resets the controller and gives it an admin queue pair and one
   I/O queue pair, and runs a request at a time: READ, WRITE and FLUSH, the
   data in one buffer that PRP entries describe (a list past two pages), a
@@ -327,39 +399,82 @@ has ended and left its stack, which is how thread libraries join threads.
   `/tmp` in memory. If a disk with serial `veda-home` is attached, `/home`
   is restored from it at boot and written back half a second after changes
   stop (and before a shutdown from the start menu). The disk holds two
-  snapshot slots with checksums; saves alternate between them, so an
-  interrupted save never damages the previous one. Unchanged sample files
-  are stored as references to the system image.
+  snapshot slots with checksums; a save writes the slot not holding the
+  newest snapshot, data first and header last, so an interrupted save never
+  damages the previous one, and boot restores the newest snapshot that
+  reads back whole, else the other, which is not overwritten until a newer
+  one has replaced the bad one. Snapshots stream to and from the disk a
+  transfer at a time (a second copy of the home directory in memory could
+  be more than memory holds), every disk request has a deadline, and a save
+  that fails is tried again, the changes counting as unsaved meanwhile.
+  Unchanged sample files are stored as references to the system image. The
+  file systems, their snapshots and the access rules are `vfs-core`
+  (`implementation/services/vfs/core`), which the host tests; the service
+  around them is `vfs`.
 * Besides whole-file requests, the VFS opens files as connections of the
   `file` protocol, each an open file description with its own offset;
   duplicates share it, as POSIX descriptors do. A file removed while open
   stays readable and writable through its connections until the last one
-  closes. Stat results carry inode numbers and whether a file is a program
-  (by its first bytes: ELF or `#!`; directory listings say so too), and
-  `/dev` holds `null`, `zero`,
-  `full`, `random` and `urandom`.
+  closes; one moved while open is wherever it is now (into `/home`, it
+  counts against the home disk). Copies of a file (`copy_file`) share its
+  contents until one of them changes, so copying takes neither time nor
+  memory. Directories are listed a page at a time, each page in one message
+  (`read_dir_page`; the client's `read_dir` asks for every page), and a
+  directory's modification time changes whenever an entry is added,
+  removed or renamed, so a program can tell from a stat whether a listing
+  is current; its size is its number of entries. Stat results carry inode
+  numbers and whether a file is a program (by its first bytes: ELF or `#!`;
+  directory listings say so too), and `/dev` holds `null`, `zero`, `full`,
+  `random` and `urandom`.
+* Every path is at most 4096 bytes long (`MAX_PATH`, as Linux's
+  `PATH_MAX`), so every file can be named, and moves that would take a
+  folder's contents deeper are refused. The root, `/home`, `/home/user`,
+  `/tmp` and `/home/.private` cannot be removed, moved or replaced: moving
+  `/home` would take the services' private directories out of the guard
+  that keeps them private. A connection may renounce its access to those
+  directories for good (`renounce_private`); the agent's worker, which acts
+  on the user's files for others, should. Files grow only while memory is
+  left for the rest of the system, and in `/home` while they fit on the
+  home disk. A program holds at most a quarter of the VFS's connections
+  (clients and open files), and all of them together stay within the 1024
+  handles the kernel waits on at once (`vabi::WAIT_MANY_MAX`), as the VFS
+  waits on all of them with one wait set; more are refused (`TooMany`).
 * Applications work with files through `vfiles`: paths (resolving against a
   working directory and `~`, the read-only `/system`, wildcards, natural
-  name order, free names for new items), size and time formatting, a VFS
-  client with whole-file reads and writes, recursive copies, moves and
-  removals and the space left on a file system, the Trash, and, with the
-  `thumbnails` feature, image thumbnails made on a background thread. Its
-  table of file types is the system's only list of which application opens
-  which file: Files, the Terminal's `open`, the desktop icons and the
-  pickers of Photos, Music and Settings all use it.
+  name order, free names for new items, and the user's well-known places,
+  `vfiles::path::PLACES`), size and time formatting, a VFS client and the
+  Trash, and, with the `thumbnails` feature, image thumbnails made on a
+  background thread. The client's calls all have deadlines (a minute, more
+  for whole-file transfers by their size), so a VFS that stops answering
+  fails calls rather than freezes programs. It reads whole files copied,
+  bounded (`read_limited`) or mapped (`map`), writes them, replaces one
+  with another in one step (`replace`), lists directories of any size, and
+  copies, moves, removes and measures whole trees with a stack of its own,
+  however deep they are, files being copied by the VFS; a hook told of
+  every item shows the progress and can stop the walk. Its table of file
+  types is the system's only list of which application opens which file:
+  Files, the Terminal's `open`, the desktop icons and the pickers of
+  Photos, Music and Settings all use it.
 * The Trash (`vfiles::trash`) is the home trash of freedesktop.org's Trash
   specification: deleted items go to `~/.local/share/Trash/files`, and for
   each a `NAME.trashinfo` in `info` records where it was and when it was
   deleted. The info is created first, as a file that must not exist yet,
   which reserves the name against other programs trashing at the same time;
   then the item is renamed into the Trash in one step (`/home` and `/tmp`
-  are one file system). Files deletes to the Trash (Shift+Delete deletes
-  for good), lists it with where each item was deleted from and when, and
-  restores and empties it; the desktop's first icon is the Trash, which
-  shows whether anything is in it and takes items of the desktop dragged
-  onto it. The agent's `files` function and Files' agent actions delete to
-  the Trash with the user's OK, restore without asking, and ask every time
-  before emptying it. The Terminal's `rm` deletes for good, as Unix's does.
+  are one file system). An item is restored only into the home folder or
+  `/tmp`, never into the Trash or a `.private` folder, whatever its info
+  says: info is a file any program can write, and the agent restores with
+  a system service's access. How many items the Trash holds is the size of
+  its folder of items, one stat. Files deletes to the Trash (Shift+Delete
+  deletes for good), lists it with where each item was deleted from and
+  when, and restores and empties it; the desktop's first icon is the
+  Trash, which shows whether anything is in it and takes items of the
+  desktop dragged onto it. The agent's `files` function and Files' agent
+  actions delete to the Trash with the user's OK, restore without asking,
+  and ask every time before emptying it. The Terminal's `rm` deletes for
+  good, as Unix's does. Files copies, moves and deletes on a thread of its
+  own, one operation after another, showing how far it is and stopping
+  when asked.
 
 ## USB
 
@@ -393,7 +508,19 @@ Networking is three layers of processes (details in
 * **`netd`** (on `vnetstack` and smoltcp) runs interfaces, DHCP, IPv6
   autoconfiguration, routes, a caching DNS resolver and the sockets that
   applications use through `vnet`, one channel per socket with
-  credit-based flow control in both directions.
+  credit-based flow control in both directions: what a client has not
+  taken stays in the stack (a TCP connection's window closes), so a slow
+  client holds back only its own sockets.
+
+Both services check who is asking, by the identity the registry gives
+each connection: network devices attach only from the device manager (and
+`wlan`), radios only from the device manager; changing the network's
+configuration is for Settings and the Terminal, and changing Wi-Fi for
+them, the desktop shell and the agent; what tells where the machine is or
+has been (access points' and adapters' addresses, saved networks,
+diagnostics) goes only to Settings and the Terminal. Every process has
+limits on its connections, sockets, lookups and watchers, and a share of
+each is kept for system services.
 
 TLS is not a service: `vtls` (rustls with a pure-Rust cryptography
 provider) runs inside each application, over its `vnet` sockets, so keys
@@ -410,7 +537,11 @@ generator.
 
 The compositor owns the screen and serves three protocols: `display` for
 applications, `input` for input drivers and `displaydev` for a display
-driver.
+driver. What it decides (windows, stacking and focus, input, who may do
+what, the limits clients are held to, what each client hears) is
+`compositor-core` (`implementation/services/compositor/core`), tested on
+the host; the program serves the protocols, maps clients' memory and
+draws.
 
 * **Surfaces.** A client creates a window and attaches two pixel buffers in
   a shared VMO. It draws into the back buffer and `present`s it; the
@@ -418,7 +549,17 @@ driver.
   needed, which paces every client to the display without copying pixels.
   `FrameDone` also says when the frame is seen (the vertical blank it is
   flipped at) and how often frames follow, so that a client can time what
-  it shows to the screen (Videos does).
+  it shows to the screen (Videos does). Buffers attached are shown from
+  their first `present` on (a window being resized shows its last frame
+  meanwhile), and clients hear their sizes (`Configure`) once a frame at
+  most. A minimised window hears it is (`Configure` with `Minimized`); its
+  frames are not composed, and are acknowledged only once it is shown
+  again, so that a minimised video stops where it was.
+* **Clients' memory** is checked as it is attached: sizes in `usize`
+  against the VMO, rows no longer than the buffer is wide plus a little,
+  buffers no larger than the screen. The compositor never borrows it as a
+  Rust slice (the client may be writing it): it copies pixels out through
+  raw pointers.
 * **Composition** is damage driven: changed rectangles are recomposed from
   the bottom up (premultiplied alpha, shadows, rounded corners,
   open/close/minimise animations), at most once per display frame. At
@@ -459,19 +600,53 @@ driver.
   the firmware's framebuffer address, the size and the pixel format must
   match. If the driver goes away, or leaves a flip undone for a second,
   frames go into all its pictures and the firmware's framebuffer, in
-  place, whichever the screen shows.
+  place, whichever the screen shows. Whenever the compositor starts, at
+  the system's start or again after a crash, it draws nothing into the
+  firmware's framebuffer until devmgr says no driver is coming, a driver
+  that keeps that memory only pixels attaches, or 20 s pass: a driver
+  whose memory it is (an Intel GPU's aperture, which its tables point at
+  memory of their own) may have it already. devmgr watches its connections
+  to the compositor and the audio service: when one closes, it connects
+  again and says once more what is coming, so a service started again
+  after a crash hears it within a moment, not after 20 s.
 * **Window kinds** form layers: the desktop, normal and borderless windows,
-  panels (which reserve screen space), popups (closed when they lose focus)
-  and notifications. A focused full-screen window rises above the panels.
-  Decorations are drawn by the compositor, so a hung client can still be
-  moved and closed.
+  panels (which reserve screen space), popups and notifications. A focused
+  full-screen window rises above the panels. An application opens a popup
+  only while one of its windows has the focus, for that window, and no
+  larger than half the screen; the compositor hides it as soon as the
+  focus goes elsewhere (and asks its client to close it). Decorations are
+  drawn by the compositor, so a hung client's window can still be moved.
+  A client that leaves a request to close one of its windows unanswered
+  (asking the compositor for nothing for 5 s) is shown as not responding
+  in the window's title, and asking again closes its connection, which
+  takes its windows away; ending the process is the task manager's.
+* **Who may do what** follows who opened the connection, as `init` vouches
+  for it: the desktop, panels and notifications, managing other windows
+  (activating, minimising, arranging, closing) and the start menu's and
+  agent's keys are the shell's (the system service `shell`); listing the
+  windows is the shell's and the agent's; the clipboard is the focused
+  window's process's (the shell may set it too). Only drivers (devmgr's,
+  and the driver VM's programs, which speak as devmgr) may report input or
+  attach a display. A process has 64 windows and 16 screens' worth of
+  buffers at most; titles are cut at 256 bytes.
+* **Events** to a client that falls behind wait in the compositor, and lose
+  nothing that carries state: pointer motion is merged, the latest size
+  and focus replace older ones, and once a client is far behind a key or
+  button pressed is dropped with its release, never a release without its
+  press. One loop serves everything: each wake-up serves the input drivers
+  first, then each client with requests waiting, a few requests at a time
+  in turn, composing a frame between them when one is due.
 * **Input**: keyboard events go through a keymap (US layout, modifiers, key
   repeat) to the focused window; pointer events go to the window under the
-  pointer, or to the one that grabbed it while a button is held. Dragging a
-  window to the top or a side edge maximises it or snaps it to that half of
-  the screen; Super+arrows do the same from the keyboard and Super+D shows
-  the desktop. Alt+Tab shows the window switcher (live thumbnails), Alt+F4
-  closes, and tapping Super sends `StartMenuKey` to the shell.
+  pointer, or, while a button is held, to the one it was pressed in, which
+  hears of every other button until all are released. Dragging a window to
+  the top or a side edge maximises it or snaps it to that half of the
+  screen; Super+arrows do the same from the keyboard and Super+D shows the
+  desktop (and brings the windows back as they were: maximised, full
+  screen). Alt+Tab shows the window switcher (live thumbnails, as many
+  windows as fit on the screen), Alt+F4 closes, and tapping Super sends
+  `StartMenuKey` to the shell. When an input driver goes away (the driver
+  VM restarting), the keys and buttons it held are released for it.
 
 ## Displays and GPUs
 
@@ -490,7 +665,9 @@ laptop's panel. Displays and GPUs are Linux's, in
   on Veda's clock; scaled by the display engine to a display that has no
   mode of their size (a laptop's panel). Until it attaches, and whenever
   the driver VM is gone, the compositor draws into the firmware's
-  framebuffer.
+  framebuffer, as long as that memory is the screen's: not before it knows
+  so (see the window system's screen), nor once a driver that uses it for
+  its own (i915) has had the display.
 * **GPUs.** The renderer (`implementation/guest/renderer`) carries out
   applications' OpenGL ES command streams on Mesa's Gallium driver of the
   GPU, over the GPU's Linux driver (see below).
@@ -501,20 +678,31 @@ renders on the host's GPU; `verification/ui/drivervm-*.vts` cover both.
 
 ## The desktop shell (`implementation/applications/shell`)
 
-The shell is an ordinary process that the compositor trusts with shell
-surfaces: the desktop (wallpaper and icons), the taskbar (a panel), the
-start menu and calendar (popups) and notifications. Each surface is a
-`vui::Host`; they draw from one shared model and request changes as actions
-(launch an app, activate or minimise a window, toggle a popup) that the
-main loop performs. Running windows come from the compositor
-(`list_windows`, refreshed on `WindowsChanged`); installed applications
-come from the launcher in `init`, which reads the `.app` manifests. The
+The shell is an ordinary process that the compositor trusts, as the
+system service named `shell`, with shell surfaces: the desktop (wallpaper
+and icons), the taskbar (a panel), the start menu and calendar (popups)
+and notifications. Each surface is a `vui::Host`; they draw from one
+shared model and request changes as actions (launch an app, activate or
+minimise a window, toggle a popup) that the main loop performs. Running
+windows come from the compositor (`list_windows`, refreshed on
+`WindowsChanged`); installed applications come from the launcher in
+`init`, which reads the `.app` manifests. The
 shell serves the `shell` protocol so applications can change the wallpaper
 and post notifications; `vproto::shell::ShellLink` makes these calls from a
 background thread, because setting a wallpaper decodes and scales a large
-picture first. When an application crashes (a CPU fault or a panic),
-`init` reports it on the channels handed out by `launcher::watch`, and the
-shell tells the user with a notification.
+picture first, which the shell does on a thread of its own, answering once
+the picture is set (one at a time for each client). A notification an
+application posts shows that application's tile and name, whatever it says
+of itself, and a process posts at most five in ten seconds. When an
+application crashes (a CPU fault or a panic), `init` reports it on the
+channels handed out by `launcher::watch`, and the shell tells the user with
+a notification. Restart and Shut down first ask every application window to
+close, as its close button would (an application with unsaved work asks
+whether to save it), and power off once none is left; what is still open
+after a few seconds is listed, to cancel or to go on without. The shell
+waits at most ten seconds for a service it calls (two minutes for the
+disk to be written before the machine powers off), so that a service that
+hangs cannot freeze the desktop.
 
 ## Graphics and the toolkit
 
@@ -523,7 +711,7 @@ shell tells the user with a notification.
 | `vraster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
 | `vfont` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterized glyphs, a glyph bitmap cache, text layout |
 | `vimage` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding for the build machine's tools (`png`, `jpeg-encoder`) |
-| `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps, shadows, text layout and rendering |
+| `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames |
 | `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
 | `vtext` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
 
@@ -532,6 +720,32 @@ draws widgets, and the widgets report their interactions in the same call.
 State that must survive between frames (focus, scroll offsets, text cursors,
 open menus, animations) lives in a per-window `UiState` keyed by widget ids.
 Frames are drawn only when input arrives or an animation asks for one.
+
+* **What a frame changed.** A frame is drawn whole, but the window compares
+  it with the frame on screen, row by row, and presents only the bands of
+  rows that differ (or nothing, if none does): a caret's blink, a fading
+  hover or a clock's tick costs the compositor that much of a redraw, not
+  the whole window's.
+* **One text context per process.** The windows of a process draw with one
+  text context (`vui::SharedText`): the fonts parsed once, their glyphs
+  rasterized into one cache, behind a lock for threads. The shell has a
+  window for each popup, tooltip and notification, each of which would
+  otherwise parse the fonts and rasterize the same glyphs again.
+* **The keyboard** is an open menu's first, then a modal dialog's: while
+  one is up (from the frame after it appears), the widgets outside it see
+  no keys or typed text and none has the focus, and its content gets them;
+  keys that come as it goes are the window's, in the frame after.
+* **Drawing costs what shows.** Paths are rasterized against the clip
+  rectangle alone, and a shadow draws only its part in it, so a redraw of a
+  small part of a window pays for that part; what drawing keeps (the
+  rasterizer's buffers, the templates of shadows) lasts from frame to frame
+  (`vgfx::DrawCache`). The loops over pixels stay scalar, since QEMU's TCG
+  emulates SSE's integer multiplications and shuffles with slow helpers
+  (`vgfx::color` says how to check the generated code).
+
+The Text Editor keeps its layout of a document up to date line by line:
+the document records which lines its edits changed (`vtext::LineChange`),
+and only those are laid out again.
 
 Icons come in two kinds. The line icons (`vui::Icon`) are paths on a
 24-unit grid, drawn at any size. The status glyphs (`vui::status`: the
@@ -548,32 +762,57 @@ in pure Rust: *Interceptor* (below) is its largest program.
 
 * **The shading language.** `vglsl` preprocesses, parses and checks
   shaders, links programs (attribute, uniform and varying locations,
-  std140 blocks, transform feedback), and lowers each stage to an SSA form
-  over structured control flow, which it optimises. Constants are folded
-  with `vglsl::ops`, the one definition of what every operation computes.
-  Two back ends take the SSA form: bytecode for the software renderer's
-  SIMD interpreter, and TGSI text for virglrenderer (`vglsl::tgsi`).
+  counted as GLSL ES's packing rules count them, std140 blocks, transform
+  feedback), and lowers each stage to an SSA form over structured control
+  flow, which it optimises and verifies. Linking places every variable
+  once (its slots, std140 offsets and samplers), and the SSA form is built
+  from that placement. `vglsl::ops` is the one definition of what every
+  operation computes: constant folding and the interpreter call the same
+  function for each. Two back ends take the SSA form: bytecode for the
+  software renderer's SIMD interpreter, and TGSI text for virglrenderer
+  (`vglsl::tgsi`). Shader source is hostile input, so everything it can
+  grow is bounded (nesting, macro expansion, types' sizes, constant
+  folding, inlining, the code a program comes to, and the loop iterations
+  the interpreter runs for a draw) and every index is clamped to its
+  array: no shader makes the compiler panic, overflow its stack or work
+  without bound, or makes either back end read outside the storage it is
+  given.
 * **The API.** `vgl::Context` has every OpenGL ES 3.0 entry point, as a
   method named after the C function, and checks every call as the
   specification requires; it keeps the GL's objects and state and converts
   pixel data. Vertex and index data always come from buffers (as in
-  WebGL 2). Below it, a `Backend` with Gallium's shape renders: resources,
-  surfaces, and draws described by complete state.
+  WebGL 2), and a draw that would read past the end of one draws nothing:
+  what it would read is undefined, and hosts that check refuse it and give
+  up the context. The context checks what a draw's arguments tell (its
+  indices, and the vertices of arrays and instances); the renderers check
+  the vertices indices name, as they read them. Below it, a `Backend` with
+  Gallium's shape renders: resources, surfaces, and draws described by
+  complete state. A new resource reads as zero on every renderer, never as
+  what another context left in the memory it was given.
 * **The software renderer** (`vgl::soft`) records draws per framebuffer,
   shades vertices, bins triangles into 64-pixel tiles and rasterises the
   tiles in parallel, running fragment shaders on 16 lanes at a time (four
   2x2 quads): 4x multisampling, every ES 3.0 format, ETC2, exact sRGB.
 * **The GPU renderer** (`vgl::virgl`) speaks virglrenderer's protocol,
   which Veda's renderer carries out on the GPU (below), and which
-  virglrenderer replays with a host's OpenGL in vgl's host tests. State objects are made once per distinct state
-  and cached, draws set only what changed, data moves through a staging
-  buffer shared with the device, in command order, and presenting blits
-  the frame (resolved, flipped and scaled) into an image the window's
-  size that is read back ready to copy. What hosts refuse is handled
-  first: draws that would read past a buffer are dropped (ANGLE would
-  give up the context), integer constants are built at run time (the
-  host's compiler flushes them as denormal floats), and separate transform
-  feedback buffers take a pass each on OpenGL ES hosts. So is what would
+  virglrenderer replays with a host's OpenGL in vgl's host tests. State
+  objects are made once per distinct state and cached (a bounded number
+  of each kind, the least recently used going first), draws set only what
+  changed, data moves through a staging buffer shared with the device, in
+  command order, and presenting blits the frame (resolved, flipped and
+  scaled) into an image the window's size that is read back ready to
+  copy. Making a resource and destroying one each take a call to the
+  renderer, which streamed vertices (a buffer re-specified every frame)
+  would make many times a frame: buffers the application lets go of are
+  kept, and new ones are made of them once the GPU has passed the fence
+  after the last commands that could read them; a resource is destroyed
+  on the host only once the commands naming it have been submitted. What
+  hosts refuse is handled first: draws that would read past a buffer are
+  dropped (ANGLE would give up the context), which for indexed draws the
+  renderer tells from a copy of the index buffer kept in guest memory;
+  integer constants are built at run time (the host's compiler flushes
+  them as denormal floats), and separate transform feedback buffers take
+  a pass each on OpenGL ES hosts. So is what would
   end the host: on OpenGL ES, virglrenderer binds a 3D texture's slice to
   a framebuffer with a function ANGLE lacks, and the process aborts. 3D
   textures there are only sampled and written; their slices are read by
@@ -592,19 +831,29 @@ in pure Rust: *Interceptor* (below) is its largest program.
   captured vertices are shaded in guest memory by the software
   renderer's vertex stage (the host still draws what is seen); and blits
   carry a scissor that keeps virglrenderer from turning them into image
-  copies. New render targets are cleared to zero, as the software
-  renderer starts them (the host's memory may hold another context's
-  frames), and stencil-only ones are kept in a depth-stencil format
-  (hosts find stencil-only attachments incomplete), whose depth draws
-  ignore: a test without its attachment is turned off, as OpenGL ES has
-  it pass.
+  copies. On desktop OpenGL, too, virglrenderer reads a 3D texture's
+  slices after the first as they were before writes earlier in the same
+  submission, so images are read back one per transfer. New resources
+  read as zero, as the software renderer's do: Veda's renderer makes them
+  so itself (below); on virglrenderer, whose memory may hold another
+  context's frames, and for a buffer reused from the pool, `vgl` does
+  (the transport says which, `Transport::zeroes_new_resources`):
+  renderbuffers, and 2D and cube images the host can draw into, are
+  cleared, other images written with zeros through staging, and buffers
+  copied from a buffer of zeros. Stencil-only
+  render targets are kept in a depth-stencil format (hosts find
+  stencil-only attachments incomplete), whose depth draws ignore: a test
+  without its attachment is turned off, as OpenGL ES has it pass.
 * **The renderer** (`implementation/guest/renderer`) serves the `gpu`
   protocol from the driver VM: each connection gets a context and a block
   of Veda's memory shared with it (commands, staging, query results, the
-  fence word), and its commands are carried out on one of Mesa's Gallium
-  drivers, over the GPU's Linux driver: iris on i915 or xe (Intel's GPUs),
-  virgl on virtio-gpu (QEMU's, which renders on the host's GPU), or
-  softpipe (`drivervm.renderer=softpipe`, for tests). The program is Mesa's
+  fence word), laid out by rules the protocol states
+  (`vproto::gpu::Session`), which `vgl` checks before it maps the block:
+  the renderer is not trusted with a client's memory. Its commands are
+  carried out on one of Mesa's Gallium drivers, over the GPU's Linux
+  driver: iris on i915 or xe (Intel's GPUs), virgl on virtio-gpu (QEMU's,
+  which renders on the host's GPU), or softpipe
+  (`drivervm.renderer=softpipe`, for tests). The program is Mesa's
   build of the decoder (`decoder/`, C) around its Rust half, which serves
   the protocol over the bridge; `cargo orchestration linux` builds Mesa for the
   guest with a toolchain of its own (`implementation/ports/linux/build.sh`).
@@ -612,8 +861,13 @@ in pure Rust: *Interceptor* (below) is its largest program.
   every word first (a client can fail its own context, never the renderer),
   with Gallium's state cache (`cso_context`) between it and the driver, so
   that a client deleting an object leaves nothing behind that the driver
-  still uses. Commands are copied out of the shared memory before they are
-  decoded. Formats are virgl's, which OpenGL hosts take: 24-bit depth with
+  still uses. Every resource it creates reads as zero before the client
+  has it: the drivers recycle memory freed in the process, which serves
+  every client, and a client must never see another's frames (buffers
+  and images are cleared on the device where the driver can, compressed
+  images on softpipe written with zeros through a mapping,
+  multisampled ones cleared as render targets or depth buffers). Commands
+  are copied out of the shared memory before they are decoded. Formats are virgl's, which OpenGL hosts take: 24-bit depth with
   stencil is `S8_UINT_Z24_UNORM`, depth in the upper bits as
   `GL_UNSIGNED_INT_24_8` packs it. iris has depth only in the lower bits
   (`Z24_UNORM_S8_UINT`), so on iris the renderer keeps those formats that
@@ -632,10 +886,12 @@ in pure Rust: *Interceptor* (below) is its largest program.
   renderer maps it, through a window system of the renderer's own
   (`device.c`). virgl cannot (its host draws into memory of its own).
 
-`vgl::veda::context` renders on the GPU when the `gpu` service exists and
-in software on every CPU otherwise. The difference is large: on the
-Zenbook's processors Interceptor draws 5 frames a second at 640x360, and
-through the driver VM on QEMU's virtual GPU 40 at 1920x1080.
+`vgl::veda::context` renders on the GPU when the `gpu` service exists,
+and its renderer has at least the draw buffers, vertex attributes and
+uniform blocks `vgl` offers applications, and in software on every CPU
+otherwise. The difference is large: on the Zenbook's processors
+Interceptor draws 5 frames a second at 640x360, and through the driver VM
+on QEMU's virtual GPU 40 at 1920x1080.
 
 The virgl renderer is tested on the host: `vgl::virgl::host` calls
 virglrenderer as QEMU does, on OpenGL contexts made as QEMU makes them,
@@ -680,28 +936,35 @@ the same every time), and the land's noise FastNoise Lite's.
   world that every lit shader reads; the sun's shadows come from a shadow
   map snapped to its texels; headlights and light bars are up to sixteen
   dynamic lights. The city, the street lights, the trees and the cars are
-  drawn instanced (about 130 draws a frame). Smoke, spray and sparks are
-  particles; skid marks a ring of decals copied to the GPU as they are
-  made; rain falls through a box that follows the camera, entirely on the
-  GPU. The game starts full screen, and on a GPU renders at the window's
-  full resolution (Full HD on a 1080p screen) whatever that costs. A
-  software renderer gets fewer and smaller of everything, tone mapped in
-  each shader, at a resolution that adapts to the frame rate.
+  drawn instanced (about 130 draws a frame), the buffers of what changes
+  each frame rewritten in place rather than made again. Smoke, spray and
+  sparks are particles; skid marks a ring of decals copied to the GPU as
+  they are made; rain falls through a box that follows the camera,
+  entirely on the GPU. The game starts full screen, and on a GPU renders
+  at the window's full resolution (Full HD on a 1080p screen) whatever
+  that costs. A software renderer gets fewer and smaller of everything,
+  tone mapped in each shader, at a resolution that adapts to the frame
+  rate.
 * **The simulation** steps at 120 Hz whatever the frame rate (frames are
   drawn between the last two steps, and the cameras film the cars as
   drawn: the chase camera's springs are solved rather than stepped, so
   frames of uneven length never move it about behind the car, nor does a
   stall the game does not catch up on): four tyres with a friction circle,
   weight transfer, a gearbox, stability control and anti-lock brakes;
-  collisions between cars' boxes and with the walls. The computer drives
-  the traffic (keeping its distance, yielding to sirens), the suspects
-  (choosing the line with the most room, swerving at the police) and the
-  police (taking its line only while it is clear of all but the suspect,
-  never faster than it can stop behind a car on it, closing with a PIT).
-  A session is a mission, a quick chase, a patrol or the menus' showcase,
-  which the computer drives and a cinematic camera films; its chase
-  follows the game step by step, so that it goes the same however the
-  frames fall.
+  collisions between cars' boxes and with the walls, a car's wheels and
+  box those of its body as drawn. The computer drives the traffic
+  (keeping its distance, yielding to sirens), the suspects (choosing the
+  line with the most room, swerving at the police) and the police (taking
+  its line only while it is clear of all but the suspect, never faster
+  than it can stop behind a car on it, closing with a PIT). Each car has a
+  number of its own, by which what refers to it (a police car's target, a
+  chase's suspect, a crash) finds it, or finds it gone. A session is a
+  mission, a quick chase, a patrol or the menus' showcase, which the
+  computer drives and a cinematic camera films; its chase and its own
+  timers (a patrol's calls, the showcase's next suspect) follow the game
+  step by step, so that it goes the same however the frames fall. Its
+  floating point is libm's on every target, never the host's C
+  library's, so that the host's tests play the very chases Veda plays.
 * **The sounds** are synthesised as the game plays (`game::audio`): each
   engine as its cylinders' firing pulses through its banks' exhaust pipes
   and silencer (a cross-plane V8's burble, a flat six's rasp), sirens
@@ -731,25 +994,38 @@ the same every time), and the land's noise FastNoise Lite's.
   drivers drive them, and `alsa`, Veda's driver for Linux, attaches the
   card to the audio service's private `audiodev` protocol, as a native
   driver would; the service also runs without sound hardware (a null
-  output then consumes audio in real time).
+  output then consumes audio in real time). A device attached hears
+  everything the computer plays or becomes every program's microphone, so
+  only the drivers devmgr starts may attach one (and say a card is
+  coming), by the registry's identity; the test microphone (`testmic`,
+  run by the kernel command line in automated tests) may attach an input
+  device, which a sound card's microphone then replaces. Only the voice
+  agent may duck the other sound.
 * **Recording.** An input device produces into a ring with a capture
-  clock; the service converts it for each capture stream, and runs the
-  echo canceller for streams that ask for it (the agent's microphone) with
-  the mixed output as reference, aligned by the two clocks; such a stream
-  may carry the reference and the uncancelled microphone beside the
-  cleaned one. The device records only while a capture stream is open.
+  clock; the service converts it for each capture stream (a ring's worth
+  at most each pass of its loop), and runs the echo canceller for streams
+  that ask for it (the agent's microphone) with the mixed output as
+  reference, aligned by the two clocks; such a stream may carry the
+  reference and the uncancelled microphone beside the cleaned one. The
+  device records only while a capture stream is open.
 * The `audio` service mixes every client stream: exact rational resampling
   (polyphase windowed sinc in integer arithmetic), ramped gains, click-free
   pause and seek, master volume and mute.
 * PCM never travels in messages. Each stream, and the device link, is a
   single-producer/single-consumer ring of 16-bit frames in a shared VMO,
   with an event for back-pressure and a time-stamped play position, so
-  players get accurate, smoothly extrapolated progress. Each side keeps
-  its own counter and clamps the peer's: a misbehaving client can only
-  garble its own audio.
-* `vaudio` holds the formats (WAV, QOA), the resampler, mixing, an FFT for
-  visualisers, and a synthesiser and sequencer that `generation/music`
-  uses to render the bundled album and the startup sound at build time.
+  players get accurate, smoothly extrapolated progress: a stream's
+  position is stamped with when the device got there (the device's own
+  time, the null output's clock), and position and time are published
+  under a sequence count, so that no reader takes the one of one moment
+  with the other of another (a seqlock, as the capture clock is). Each
+  side keeps its own counters and clamps the peer's: a misbehaving client
+  can only garble its own audio. Mixing and recording allocate nothing
+  once they run.
+* `vaudio` holds the formats (WAV, QOA; surround files of either are
+  downmixed alike), the resampler, mixing, an FFT for visualisers, and a
+  synthesiser and sequencer that `generation/music` uses to render the
+  bundled album and the startup sound at build time.
 * `vaudio` also holds the voice processing for an always-listening
   assistant. `aec::EchoCanceller` removes the loudspeakers' sound from the
   microphone, given the mixed speaker output as reference: a
@@ -759,7 +1035,8 @@ the same every time), and the land's noise FastNoise Lite's.
   estimator (0 to 500 ms) and a residual echo suppressor; it adds 16 ms of
   latency at 16 kHz. `vad::Vad` flags speech every 10 ms (minimum-statistics
   noise floors, a likelihood ratio test, click rejection, hysteresis per
-  utterance), and `level` meters RMS and peak levels in dBFS.
+  utterance), and `level` meters RMS and peak levels in dBFS (the agent's
+  animation of its voice and the microphone uses it).
 
 ## Video
 
@@ -776,7 +1053,7 @@ Videos (Rust, vui)                            mediadec (C program, sandboxed)
           the clock                               through the file channel,
   thumbnail thread: a second decoder              decoders, swscale, swresample
         |  the control channel, a read-only file channel,
-        |  and memory the app made: a frame pool and a sound ring
+        |  and memory the app made: a heartbeat, a frame pool, a sound ring
         +------------------------------------------>
 ```
 
@@ -786,10 +1063,22 @@ Videos (Rust, vui)                            mediadec (C program, sandboxed)
   callbacks on that channel. Before it reads anything, the decoder gives
   up reading the kernel log, creating or seeing processes, and new
   executable memory, for good (`process_restrict`); like every
-  position-independent program, it is loaded at a random address. A file that crashes or hangs the decoder
-  (its heartbeat, in the frame pool, stops for 5 s) costs a restart, at
-  the picture on the screen, which stays up meanwhile; twice at the same
-  place, playback goes on 10 s further.
+  position-independent program, it is loaded at a random address.
+* **A decoder that fails** is killed (with what it started) and started
+  again at the picture on the screen, which stays up meanwhile: one that
+  crashes, does not answer a call in time (a call that fails in any way
+  ends it), stops counting its *heartbeat* for 5 s (a page the app gives
+  it when it starts it, in which it counts every round of its loop, and
+  at least one a second while it waits: it is watched whatever it does,
+  opening a file or playing sound only), or takes more memory than it
+  may (half the machine's, from 256 MiB to 1.5 GiB: more is something
+  wrong with the file). Twice at the same place, playback goes on 10 s
+  further; three times in a minute, the video is given up. The restarted
+  decoder is asked again what the old one was: how much to leave out, or
+  that the window is hidden. Decoders end with Videos: it kills those
+  still running when it ends, and a decoder's watchdog thread ends it
+  when the app's end of the control channel closes (the app crashed or
+  was ended), even while FFmpeg is stuck.
 * **One loop.** The decoder's one thread answers the app between single
   calls into FFmpeg and decodes ahead while there is room: pictures and
   sound wait in queues of their own, and sound comes first when the app
@@ -801,18 +1090,23 @@ Videos (Rust, vui)                            mediadec (C program, sandboxed)
   HDR tone-mapped to BT.709) straight into a slot of the *frame pool*, at
   the size the window shows them, turned upright. The pool is memory the
   app made: a page of state (each slot FREE, WRITING, READY or HELD,
-  changed by compare-and-swap; times, generations, the end and a
-  heartbeat) and the pixels. The app copies the picture it shows to its
-  window, one row at a time; a resize or full screen gives the decoder a
-  new pool, and the old one's pictures are shown until they run out.
+  changed by compare-and-swap; times, generations, the end, and the
+  window's clock, which the decoder reads as one with a sequence number
+  so that it skips converting pictures already late) and the pixels. The
+  app copies the picture it shows to its window, one row at a time; a
+  resize or full screen gives the decoder a new pool, and the old one's
+  pictures are shown until they run out.
 * **Sound** is converted by swresample to 16-bit stereo at the output's
   rate, into a ring of records that say when each is heard. The app's
   audio thread moves it into an output stream and notes where each piece
   came from: what the output has played then says which moment of the
   video is heard. That is the clock pictures follow, smoothed, and held
-  until the sound is heard after starting, and until it stops after
-  pausing. A video without sound (or whose sound ended) follows the
-  system clock.
+  until the sound is heard after starting (the window is woken then), and
+  until it stops after pausing. A video without sound (or whose sound
+  ended) follows the system clock, as does one whose output went with the
+  audio service: the stream is opened again when the service is back
+  (Music's too), and meanwhile the sound is taken from the ring as fast
+  as it would have played, and dropped.
 * **Timing.** For each frame the app knows when it will be seen (from
   `FrameDone`) and so what the clock will say then; it shows the newest
   picture due by then, gives back those passed over, and wakes when the
@@ -823,9 +1117,22 @@ Videos (Rust, vui)                            mediadec (C program, sandboxed)
   every 10 s (`videos: playback: ...`: pictures shown and dropped, the
   offset from the sound, presents a second, drawing time).
 * **Seeking** gives the pool and the ring a new *generation*: what the
-  decoder made for an older one is passed over. Key frame seeks follow a
-  dragged seek bar; an exact seek decodes from the key frame before the
-  target and shows the picture at it, with the sound from there.
+  decoder made for an older one is passed over, and what it made for a
+  newer one waits for the app to hear of it. The engine numbers the
+  generations (the window's seeks, opening and restarts alike) and says
+  which is decoded now and which of the window's seeks it carried out, or
+  could not: the player shows nothing new while its seek is under way,
+  goes on from where it was when the decoder cannot go there, and does
+  not wait for a picture that will not come. Playing starts once a little
+  sound of the new position is queued. Key frame seeks follow a dragged
+  seek bar; an exact seek decodes from the key frame before the target
+  and shows the picture at it, with the sound from there. A source that
+  cannot seek shows how far it is without a seek bar.
+* **Playback** (opening, seeking, starting with the sound, pausing, the
+  end, restarts) is a state machine in `videos-core` that draws nothing
+  and calls no one, tested on the host; the player feeds it what the
+  engine, the audio thread and the pool say, and carries out what it
+  asks.
 * **Tests.** `verification/fakedec` stands in for `mediadec`: it draws its
   pictures and a tone, and crashes, hangs or falls behind when its clip
   asks. `systest` runs FFmpeg's and dav1d's `checkasm` on Veda and checks
@@ -834,35 +1141,48 @@ Videos (Rust, vui)                            mediadec (C program, sandboxed)
 ## The voice agent (`implementation/services/agent`)
 
 The agent service holds the conversation with Deepgram's Voice Agent API
-(a WebSocket over TLS through `vweb` and `vtls`), the microphone and the
+(a WebSocket over TLS through `vweb` and `vtls`, whose writes wait two
+seconds at most, as one loop serves everything), the microphone and the
 voice (two audio streams), and listens for its name while asleep (a local
-voice detector, then Deepgram's streaming recognition). A worker thread
-runs the functions the language model calls: system functions (windows,
-files, volume, Wi-Fi, timers, memory, ...) and applications' actions,
-which every `vui` application offers over the `agentapp` protocol
-(describe, state, invoke) through `vui::App`. Actions that need the
-user's consent wait for an approval from the shell (the agent's window or
-a notification); only the shell may approve and only Settings may change
-the agent's settings, by identity. The agent's settings, Deepgram key,
-memory and permissions live in `/home/.private/agent`, which the file
-system service opens to the agent alone. The decisions that need no I/O
-(the protocol, tools and their risks, the prompt, memory, the approval
-policy, the wake word) are in `vagent`, tested on the host. See
-[The agent](AGENT.md).
+voice detector, then Deepgram's streaming recognition, within an hourly
+budget). A worker thread runs the functions the language model calls:
+system functions (windows, files, volume, Wi-Fi, timers, memory, ...,
+a module each) and applications' actions, which every `vui` application
+offers over the `agentapp` protocol (describe, state, invoke) through
+`vui::App`; a thread of its own asks registered applications what they
+offer, off the path of calls. Actions that need the user's consent wait
+for an approval from the shell (the agent's window or a notification);
+only the shell may approve and only Settings may change the agent's
+settings, by identity (Settings is served on a thread of its own). Their
+outcomes, and due reminders, reach the language model as notices: a
+sentence of the computer's, then what came from elsewhere as data. The
+agent's settings, Deepgram key, memory and permissions live in
+`/home/.private/agent`, which the file system service opens to the agent
+alone; the worker reaches the user's files through a connection of its
+own and checks every path it acts on, so that nothing a document or a
+record in the Trash says can reach that directory. The decisions that
+need no I/O (the protocol, tools and their risks, the paths file actions
+may reach, the prompt, notices, memory, the approval policy, the wake
+word) are in `vagent`, tested on the host. See [The agent](AGENT.md).
 
 ## Testing
 
 * Host unit tests for the libraries with platform-independent logic (ABI,
-  heap, IPC codec, service protocols, ELF loading, the POSIX layer's
-  conversions, math, rasteriser, fonts, image codecs, 2D graphics, text
-  editing, paths and file types, audio, build tool).
+  boot protocol, heap, IPC codec, service protocols, ELF loading, the POSIX
+  layer's conversions, math, rasteriser, fonts, image codecs, 2D graphics,
+  text editing, paths and file types, audio, the hypervisor's guests and
+  the IOMMU's tables, media generators, build tool), all in one Cargo run;
+  the driver VM's programs' on Linux. A test of the build tool's fails if
+  a crate with tests is left out.
 * `systest`, a program that runs inside Veda and exercises kernel objects
   (sockets, memory protection, private memory, exit futexes, ending a job),
   threads, the file system, the launcher, crash reports and the restart of
   the window system, and runs C and C++ programs: `verification/c/posix.c`
   checks the C library and the POSIX layer, `verification/c/cxx.cc` the C++
   library. `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping over
-  Ethernet or Wi-Fi.
+  Ethernet or Wi-Fi; the network cards' scripts have it check ping, TCP
+  and HTTP against a server on the host instead (`nettest local`), so
+  that they need no Internet.
 * Network host tests: the 802.11 protocol and its cryptography against
   published vectors, a station against an access point, two TCP/IP stacks
   over a simulated cable, and the TLS client against a rustls server and
@@ -876,8 +1196,12 @@ policy, the wake word) are in `vagent`, tested on the host. See
   stays the final check of what Linux drives there.
 * GUI automation scripts (`verification/ui/*.vts`) that drive QEMU through
   QMP (mouse, keyboard, waits on log lines, screenshots) and fail on
-  panics. QEMU's machine has an IOMMU, as PCs do, so the driver VM runs in
-  every script, with the pointer, USB, the networks and the display.
+  panics. They are checked whole before the system is built (their
+  language: `orchestration/src/script.rs`); a run builds the system once,
+  and each script's machine boots an overlay of its one disk image, within
+  a deadline. QEMU's machine has an IOMMU, as PCs do, so the driver VM
+  runs in every script, with the pointer, USB, the networks and the
+  display.
   The sound cards' scripts also check QEMU's recording of the output for
   dropouts.
   `drivervm-display.vts` gives the window system a display that flips
@@ -891,9 +1215,11 @@ policy, the wake word) are in `vagent`, tested on the host. See
   through QEMU's virtio-gpu, given to the driver VM.
 * The agent's scripts (`verification/agent/*.vts`) with a stand-in for
   Deepgram on the host and a test microphone fed from the host;
-  `verification/real/` talks to the real Deepgram.
+  `verification/real/` talks to the real Deepgram, and checks the network
+  on the real Internet.
 
-`cargo orchestration test --ui` runs all three.
+`cargo orchestration test --ui` runs the first two; `verification/real/`'s
+scripts, which need the Internet and a Deepgram key, run by hand.
 
 ## Architectures
 

@@ -2,18 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! PCI configuration space access (through the architecture's mechanism,
-//! `arch::config`), bus enumeration, and resetting a function.
+//! `arch::config`), bus enumeration, which BARs a driver may have, and
+//! resetting a function.
 
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vproto::pci::{Bar, DeviceInfo};
+use vproto::pci::{Bar, Capabilities, DeviceInfo, cap};
+use vrt::println;
 use vrt::time::{Duration, sleep};
 
 use crate::arch::config::ConfigAccess;
 
 const CAP_POWER_MANAGEMENT: u8 = 0x01;
 const CAP_PCI_EXPRESS: u8 = 0x10;
+/// What a BAR's mapping reaches is whole pages.
+const PAGE: u64 = vabi::PAGE_SIZE as u64;
 /// PCI Express: Device Capabilities (function-level reset), Device Control
 /// (initiate it), Device Status (transactions pending).
 const DEVCAP: u16 = 4;
@@ -46,6 +50,9 @@ pub struct Placement {
     bars: [u32; 6],
     /// Its power management capability.
     pm: Option<u16>,
+    /// Its PCI Express capability, if it can be reset alone (a
+    /// function-level reset).
+    flr: Option<u16>,
 }
 
 pub struct ConfigSpace {
@@ -241,7 +248,8 @@ impl ConfigSpace {
         for (i, b) in bars.iter_mut().enumerate() {
             *b = self.read32(a, 0x10 + 4 * i as u16);
         }
-        Placement { bars, pm: self.capability(a, CAP_POWER_MANAGEMENT) }
+        let flr = self.capability(a, CAP_PCI_EXPRESS).filter(|&at| self.read32(a, at + DEVCAP) & DEVCAP_FLR != 0);
+        Placement { bars, pm: self.capability(a, CAP_POWER_MANAGEMENT), flr }
     }
 
     /// The function's power state (0 for D0 to 3 for D3hot), if it has the
@@ -252,18 +260,25 @@ impl ConfigSpace {
 
     /// A driver's write of `value` (`width` bytes) at `offset`. A function
     /// woken from D3hot to D0 resets, unless it says it does not (No Soft
-    /// Reset), and its BARs with it: once it is awake (10 ms), they are
-    /// put back where the firmware placed them (`placement`). True if they
-    /// had to be.
+    /// Reset), and its BARs with it; so does one its driver resets (a
+    /// function-level reset, PCI Express's), which a guest's may. Once it
+    /// is back (10 ms after waking, 100 ms after a reset), its BARs are put
+    /// back where the firmware placed them (`placement`), which no driver
+    /// may do. True if they had to be.
     pub fn driver_write(&self, a: Address, placement: &Placement, offset: u16, width: u8, value: u32) -> bool {
         let wakes = placement.pm.is_some_and(|at| {
             offset == at + PMCSR && value & PMCSR_STATE == 0 && self.read(a, at + PMCSR, 2) & PMCSR_STATE == PMCSR_D3HOT
         });
+        let resets = placement.flr.is_some_and(|at| sets(offset, width, value, at + DEVCTL, DEVCTL_FLR));
         self.write(a, offset, width, value);
-        if !wakes {
+        if resets {
+            sleep(Duration::from_millis(100));
+            self.wait_until_it_answers(a);
+        } else if wakes {
+            sleep(Duration::from_millis(10));
+        } else {
             return false;
         }
-        sleep(Duration::from_millis(10));
         let lost = (0..6).any(|i| self.read32(a, 0x10 + 4 * i as u16) != placement.bars[i]);
         if lost {
             for (i, &bar) in placement.bars.iter().enumerate() {
@@ -275,21 +290,27 @@ impl ConfigSpace {
 
     /// Where capability `id` is in the function's list, if it has it.
     pub fn capability(&self, a: Address, id: u8) -> Option<u16> {
-        if self.read(a, 0x06, 2) & (1 << 4) == 0 {
-            return None;
-        }
-        let mut at = (self.read(a, 0x34, 1) & 0xFC) as u16;
-        // At most 48 entries fit in 256 bytes.
-        for _ in 0..48 {
-            if at == 0 {
-                return None;
+        Capabilities::new(|offset| Some(self.read(a, offset, 1) as u8)).find(|c| c.id == id).map(|c| c.offset)
+    }
+
+    /// How many MSIs the function can raise: the entries of its MSI-X
+    /// table and the messages of its MSI capability, of those it has.
+    pub fn msi_vectors(&self, a: Address) -> u32 {
+        let msix = self.capability(a, cap::MSI_X).map_or(0, |at| (self.read(a, at + 2, 2) & 0x7FF) + 1);
+        // Multiple Message Capable: 2^n of them, up to 32.
+        let msi = self.capability(a, cap::MSI).map_or(0, |at| 1 << ((self.read(a, at + 2, 2) >> 1) & 7).min(5));
+        msix + msi
+    }
+
+    /// Waits until the function answers again after a reset, up to a
+    /// second.
+    fn wait_until_it_answers(&self, a: Address) {
+        for _ in 0..100 {
+            if self.read32(a, 0) & 0xFFFF != 0xFFFF {
+                break;
             }
-            if self.read(a, at, 1) as u8 == id {
-                return Some(at);
-            }
-            at = (self.read(a, at + 1, 1) & 0xFC) as u16;
+            sleep(Duration::from_millis(10));
         }
-        None
     }
 
     /// Resets the function to what it was at power-on, but where the
@@ -331,13 +352,7 @@ impl ConfigSpace {
             self.write(a, 0x04, 2, command & COMMAND_DECODE);
             return None;
         };
-        // It answers again within a second.
-        for _ in 0..100 {
-            if self.read32(a, 0) & 0xFFFF != 0xFFFF {
-                break;
-            }
-            sleep(Duration::from_millis(10));
-        }
+        self.wait_until_it_answers(a);
         // Cache line size and latency timer, the BARs, the expansion ROM,
         // the interrupt line; then the command.
         for i in [3usize, 4, 5, 6, 7, 8, 9, 12, 15] {
@@ -384,4 +399,58 @@ impl ConfigSpace {
         }
         found
     }
+}
+
+/// Whether a write of `value` (`width` bytes at `offset`) sets bits `mask`
+/// of the 16-bit register at `register`: whether it covers them, and they
+/// are set in what it writes there.
+fn sets(offset: u16, width: u8, value: u32, register: u16, mask: u32) -> bool {
+    let (mut written, mut covered) = (0u32, 0u32);
+    for byte in 0..2u16 {
+        if let Some(i) = (register + byte).checked_sub(offset).filter(|&i| i < width as u16) {
+            written |= (value >> (8 * i) & 0xFF) << (8 * byte);
+            covered |= 0xFF << (8 * byte);
+        }
+    }
+    mask & covered == mask && written & mask == mask
+}
+
+/// The pages a BAR of `size` bytes at `address` is on, which its mapping
+/// reaches whole; `None` if its end is past the end of the address space.
+pub fn pages(address: u64, size: u64) -> Option<Range<u64>> {
+    let end = address.checked_add(size)?.checked_next_multiple_of(PAGE)?;
+    Some(address & !(PAGE - 1)..end)
+}
+
+/// `info` of function `a` with only the memory BARs a driver may have. A
+/// BAR reaches its driver as the pages it is on: one on a page another
+/// function's BAR is also on (`decoded` has every function's, as placed)
+/// would give its driver that function's registers too, and one whose end
+/// is past the end of the address space is none a device can have.
+pub fn own_pages(a: Address, mut info: DeviceInfo, decoded: &[(Address, Range<u64>)]) -> DeviceInfo {
+    info.bars.retain(|b| {
+        if b.io {
+            return true;
+        }
+        let Some(pages) = pages(b.address, b.size) else {
+            println!(
+                "pci {:02x}:{:02x}.{}: BAR {} ({} bytes at {:#x}) ends past the end of memory: no driver gets it",
+                a.bus, a.slot, a.function, b.index, b.size, b.address
+            );
+            return false;
+        };
+        let shares = decoded.iter().find(|(other, r)| *other != a && r.start < pages.end && pages.start < r.end);
+        match shares {
+            Some((other, _)) => {
+                println!(
+                    "pci {:02x}:{:02x}.{}: BAR {} ({} bytes at {:#x}) shares a page with {:02x}:{:02x}.{}'s: \
+                     no driver gets it",
+                    a.bus, a.slot, a.function, b.index, b.size, b.address, other.bus, other.slot, other.function
+                );
+                false
+            }
+            None => true,
+        }
+    });
+    info
 }

@@ -8,27 +8,11 @@ use alloc::vec::Vec;
 
 use vabi::resource_kind;
 use vabi::startup::role;
+use vproto::startup::devmgr as roles;
 use vrt::object::Handle;
 use vrt::println;
 
-use crate::Init;
-
-/// Handle roles used by system services (beyond the registry).
-pub mod roles {
-    use vabi::startup::role::USER;
-    /// I/O port resource for a driver.
-    pub const IOPORT_RESOURCE: u32 = USER + 1;
-    /// IRQ resource for a driver.
-    pub const IRQ_RESOURCE: u32 = USER + 2;
-    /// MMIO resource for a driver.
-    pub const MMIO_RESOURCE: u32 = USER + 3;
-    /// DMA resource for a driver.
-    pub const DMA_RESOURCE: u32 = USER + 4;
-    /// Hypervisor resource (virtual machines), for the driver VM.
-    pub const HYPERVISOR_RESOURCE: u32 = USER + 5;
-    /// PCI functions (their MSIs, and giving them to virtual machines).
-    pub const PCI_RESOURCE: u32 = USER + 6;
-}
+use crate::{Init, Origin};
 
 /// System services in start order. File systems come first (everything
 /// else loads data through them), then the network and Wi-Fi services
@@ -126,7 +110,7 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
         "shell" if at_boot && !has("startup-sound=off") => alloc::vec!["startup".into()],
         _ => Vec::new(),
     };
-    if let Err(e) = init.spawn(name, &path, &args, handles, true) {
+    if let Err(e) = init.spawn(name, &path, &args, handles, Origin::Service) {
         println!("could not start {}: {:?}", name, e);
     }
 }
@@ -155,14 +139,14 @@ pub fn start_requested(init: &mut Init) {
                 None => (spec, Vec::new()),
             };
             let path = alloc::format!("bin/{name}");
-            match init.spawn(name, &path, &args, Vec::new(), false) {
+            match init.spawn(name, &path, &args, Vec::new(), Origin::Requested) {
                 Ok(_) => {}
                 Err(e) => println!("cannot start {}: {:?}", name, e),
             }
         }
     }
     if cmdline.split_whitespace().any(|a| a == "systest") {
-        match init.spawn("systest", "bin/systest", &[], Vec::new(), false) {
+        match init.spawn("systest", "bin/systest", &[], Vec::new(), Origin::Requested) {
             Ok(_) => {}
             Err(e) => println!("systest: FAIL (cannot start: {:?})", e),
         }

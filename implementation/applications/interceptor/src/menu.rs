@@ -89,7 +89,6 @@ fn side(c: &mut Canvas, text: &mut Text, f: &Fonts, app: &mut App, title: &str, 
 
 /// A column of items from (`x`, `y`), `w` wide and `step` apart, `sel`
 /// highlighted; each a target for the pointer.
-#[allow(clippy::too_many_arguments)]
 fn list(
     c: &mut Canvas,
     text: &mut Text,
@@ -110,7 +109,7 @@ fn list(
         let on = i == sel;
         if on {
             // A bar that brightens in from the left, and a marker.
-            let pulse = 0.85 + 0.15 * (app.clock * 4.0).sin();
+            let pulse = 0.85 + 0.15 * (app.clock * 4.0).sin() as f32;
             c.fill_horizontal_gradient(r, ACCENT.fade(0.55 * pulse), ACCENT.fade(0.05));
             c.fill_rect(rect(r.x as f32, top, 4.0 * s, r.h as f32), ACCENT);
         }
@@ -144,7 +143,7 @@ fn title(c: &mut Canvas, text: &mut Text, f: &Fonts, app: &mut App) {
     c.fill_vertical_gradient(rect(0.0, h * 0.7, w, h * 0.3), Color(0x00020408), Color(0xC0020408));
     let appear = (app.screen_time / 0.8).min(1.0);
     paint::logo(c, text, f, w * 0.5, h * 0.3, 78.0 * s, true);
-    let blink = 0.55 + 0.45 * (app.clock * 3.0).sin();
+    let blink = 0.55 + 0.45 * (app.clock * 3.0).sin() as f32;
     let pill = rect(w * 0.5 - 110.0 * s, h * 0.78 - 30.0 * s, 220.0 * s, 46.0 * s);
     c.fill_rounded_rect(pill, 23.0 * s, Color(0x90020408).fade(appear));
     paint::centered(c, text, f.bold, 18.0 * s, w * 0.5, h * 0.78, "PRESS ENTER", WHITE.fade(blink * appear));
@@ -165,14 +164,10 @@ fn place(m: &Mission) -> &'static str {
 }
 
 fn light(t: TimeOfDay, w: Weather) -> String {
-    let time = match t {
-        TimeOfDay::Day => "DAY",
-        TimeOfDay::Sunset => "SUNSET",
-        TimeOfDay::Night => "NIGHT",
-    };
+    let time = t.name().to_uppercase();
     match w {
-        Weather::Clear => String::from(time),
-        Weather::Rain => format!("{time} · RAIN"),
+        Weather::Clear => time,
+        Weather::Rain => format!("{time} · {}", w.name().to_uppercase()),
     }
 }
 
@@ -261,16 +256,16 @@ fn career_screen(c: &mut Canvas, text: &mut Text, f: &Fonts, app: &mut App) {
     };
     row(c, text, y, "Backup", &backup);
     y += 26.0 * s;
-    let limit = m.limit.map_or(String::from("None"), short);
+    let limit = m.limit.map_or(String::from("None"), career::minutes);
     row(c, text, y, "Time limit", &limit);
     y += 34.0 * s;
     // The targets, and the best so far.
     text.draw(c, f.regular, 14.0 * s, px, y, "Targets", DIM);
     let tx = px + 130.0 * s;
     paint::stars(c, tx, y - 5.0 * s, 7.0 * s, 3);
-    text.draw(c, f.bold, 14.0 * s, tx + 56.0 * s, y, &format!("under {}", short(m.stars[0])), WHITE);
+    text.draw(c, f.bold, 14.0 * s, tx + 56.0 * s, y, &format!("under {}", career::minutes(m.stars[0])), WHITE);
     paint::stars(c, tx + 160.0 * s, y - 5.0 * s, 7.0 * s, 2);
-    text.draw(c, f.bold, 14.0 * s, tx + 216.0 * s, y, &format!("under {}", short(m.stars[1])), WHITE);
+    text.draw(c, f.bold, 14.0 * s, tx + 216.0 * s, y, &format!("under {}", career::minutes(m.stars[1])), WHITE);
     y += 26.0 * s;
     text.draw(c, f.regular, 14.0 * s, px, y, "Best", DIM);
     match app.save.best[sel] {
@@ -292,12 +287,6 @@ fn career_screen(c: &mut Canvas, text: &mut Text, f: &Fonts, app: &mut App) {
         text.draw(c, f.bold, 15.0 * s, px + 24.0 * s, foot, "CATCH THE SUSPECT OF THE MISSION BEFORE", FAINT);
     }
     hints(c, text, f, s, "Up/Down select     Enter start     Esc back");
-}
-
-/// Seconds as "1:20".
-fn short(secs: f32) -> String {
-    let t = secs as u32;
-    format!("{}:{:02}", t / 60, t % 60)
 }
 
 /// A number with its thousands apart ("12 450").

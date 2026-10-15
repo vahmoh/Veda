@@ -16,14 +16,15 @@
 //!
 //! Scripts queue speech with `say "..."`, synthesised by Deepgram's
 //! text-to-speech REST API on the host ([`synthesize`], with the key from
-//! `$DEEPGRAM_API_KEY`). Results are cached under
+//! `$DEEPGRAM_API_KEY`, which goes to curl through a pipe, never into a
+//! file or onto a command line). Results are cached under
 //! `target/veda/tts-cache`, so a phrase is only paid for once.
 
 use std::collections::VecDeque;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,6 +33,7 @@ use vaudio::resample::Resampler;
 use vaudio::wav::{self, SampleFormat, WavInfo};
 
 use crate::util::{self, Result};
+use crate::voice;
 
 /// Sample rate of the test microphone.
 pub const RATE: u32 = 16_000;
@@ -165,29 +167,10 @@ impl MicServer {
         *self.shared.echo.lock().unwrap() = Some(echo);
     }
 
-    /// Something like a voice: a buzz rich in harmonics (like vocal cords)
-    /// with a wandering pitch, in syllables four times a second. Enough for
-    /// a voice detector, though no recogniser would make words of it.
+    /// Queues `secs` of the user's voice-like buzz (see `voice`): enough
+    /// for a voice detector, though no recogniser would make words of it.
     pub fn tone(&self, secs: f64, peak: f64) {
-        use std::f64::consts::TAU;
-        let n = (secs * RATE as f64) as usize;
-        let mut phase = 0.0f64;
-        let samples: Vec<i16> = (0..n)
-            .map(|i| {
-                let t = i as f64 / RATE as f64;
-                let pitch = 130.0 + 25.0 * (t * 1.3 * TAU).sin();
-                phase += TAU * pitch / RATE as f64;
-                let mut buzz = 0.0;
-                let mut k = 1.0;
-                while k * pitch < 4000.0 {
-                    buzz += (phase * k).sin() / k;
-                    k += 1.0;
-                }
-                let syllable = (t * 4.0 * TAU).sin().max(0.0).sqrt();
-                (buzz * (0.1 + 0.9 * syllable) * peak) as i16
-            })
-            .collect();
-        self.enqueue(&samples);
+        self.enqueue(&voice::buzz(voice::USER, RATE, secs, peak));
     }
 
     pub fn silence(&self, secs: f64) {
@@ -283,7 +266,9 @@ fn stream_to(mut stream: TcpStream, shared: &Shared) {
 /// Deepgram's text-to-speech API (needs `$DEEPGRAM_API_KEY`).
 pub fn synthesize(text: &str, voice: &str) -> Result<Vec<i16>> {
     let dir = util::cache_dir().join("tts-cache");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    util::create_dir_all(&dir)?;
+    // The cache's names are FNV-1a hashes of what was said and how: kept
+    // as they are, so that what has been paid for stays found.
     let file = dir.join(format!("{:016x}.pcm", fnv64(&format!("{voice}\0{RATE}\0{text}"))));
     if let Ok(bytes) = std::fs::read(&file)
         && !bytes.is_empty()
@@ -292,11 +277,10 @@ pub fn synthesize(text: &str, voice: &str) -> Result<Vec<i16>> {
     }
     let key = std::env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "`say` needs a Deepgram API key in $DEEPGRAM_API_KEY (or a cached phrase)".to_string())?;
-    let bytes = deepgram_speak(text, voice, &key, &dir)?;
+    let bytes = deepgram_speak(text, voice, &key)?;
     // Runs side by side may cache the same phrase: each writes its own file
     // and moves it in whole.
-    let part = file.with_extension(format!("{}.part", std::process::id()));
-    std::fs::write(&part, &bytes).and_then(|_| std::fs::rename(&part, &file)).map_err(|e| e.to_string())?;
+    util::write_atomically(&file, &bytes)?;
     Ok(pcm_from_bytes(&bytes))
 }
 
@@ -304,59 +288,68 @@ fn pcm_from_bytes(bytes: &[u8]) -> Vec<i16> {
     bytes.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect()
 }
 
-/// Calls `POST /v1/speak` with curl (the key goes in a header file, not on
-/// the command line).
-fn deepgram_speak(text: &str, voice: &str, key: &str, dir: &Path) -> Result<Vec<u8>> {
-    let nonce = fnv64(&format!("{text}{:?}", Instant::now()));
-    let header = dir.join(format!("auth-{nonce:016x}.txt"));
-    let body = dir.join(format!("body-{nonce:016x}.json"));
-    let out = dir.join(format!("out-{nonce:016x}.pcm"));
-    let cleanup = |paths: &[&PathBuf]| {
-        for p in paths {
-            let _ = std::fs::remove_file(p);
-        }
-    };
-    std::fs::write(&header, format!("Authorization: Token {key}\n")).map_err(|e| e.to_string())?;
-    std::fs::write(&body, serde_json::json!({ "text": text }).to_string()).map_err(|e| e.to_string())?;
+/// Deepgram's text-to-speech request for `text` in `voice`, as curl's
+/// arguments: the key's header comes from its standard input (`@-`).
+fn speak_request(text: &str, voice: &str) -> Vec<String> {
     let url =
         format!("https://api.deepgram.com/v1/speak?model={voice}&encoding=linear16&sample_rate={RATE}&container=none");
-    let result = Command::new("curl")
-        .args(["-sS", "--fail-with-body", "-X", "POST", &url, "-H"])
-        .arg(format!("@{}", header.display()))
-        .args(["-H", "Content-Type: application/json", "--data-binary"])
-        .arg(format!("@{}", body.display()))
-        .arg("-o")
-        .arg(&out)
-        .output();
-    let _ = std::fs::remove_file(&header);
-    let output = match result {
-        Ok(o) => o,
-        Err(e) => {
-            cleanup(&[&body, &out]);
-            return Err(format!("running curl: {e}"));
-        }
-    };
-    let bytes = std::fs::read(&out).unwrap_or_default();
-    cleanup(&[&body, &out]);
+    let body = serde_json::json!({ "text": text }).to_string();
+    [
+        "-sS",
+        "--fail-with-body",
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "120",
+        "-X",
+        "POST",
+        &url,
+        "-H",
+        "@-",
+        "-H",
+        "Content-Type: application/json",
+        "--data-raw",
+        &body,
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// Calls `POST /v1/speak` with curl, which reads the header with the key
+/// from a pipe and writes the speech to its standard output.
+fn deepgram_speak(text: &str, voice: &str, key: &str) -> Result<Vec<u8>> {
+    let mut curl = Command::new("curl")
+        .args(speak_request(text, voice))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("running curl: {e}"))?;
+    let header = format!("Authorization: Token {key}\n");
+    let sent = curl.stdin.take().map(|mut stdin| stdin.write_all(header.as_bytes()));
+    let output = curl.wait_with_output().map_err(|e| format!("running curl: {e}"))?;
+    if let Some(Err(e)) = sent {
+        return Err(format!("giving curl the key: {e}"));
+    }
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        let detail = String::from_utf8_lossy(&bytes);
+        let detail = String::from_utf8_lossy(&output.stdout);
         return Err(format!(
             "Deepgram text-to-speech failed: {} {}",
             err.trim(),
             detail.chars().take(200).collect::<String>()
         ));
     }
-    if bytes.len() < 2 {
+    if output.stdout.len() < 2 {
         return Err("Deepgram text-to-speech returned no audio".into());
     }
-    Ok(bytes)
+    Ok(output.stdout)
 }
 
 /// Reads a WAV file (in any of the formats Veda plays) as 16 kHz mono
 /// samples.
 pub fn read_wav(path: &Path) -> Result<Vec<i16>> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let data = util::read(path)?;
     let info = WavInfo::parse(&data).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut stereo = vec![0i16; info.frames as usize * 2];
     let frames = wav::read_stereo(&info, &data, 0, &mut stereo);
@@ -365,6 +358,7 @@ pub fn read_wav(path: &Path) -> Result<Vec<i16>> {
     Ok(Resampler::process_all(info.rate, RATE, 1, &mono))
 }
 
+/// The 64-bit FNV-1a hash of `s`.
 fn fnv64(s: &str) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for b in s.bytes() {
@@ -376,6 +370,20 @@ fn fnv64(s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The key reaches curl through its standard input alone: the
+    /// arguments hold no secret, and nothing is written to a file.
+    #[test]
+    fn the_key_stays_off_the_command_line() {
+        let args = speak_request("hello \"there\"", USER_VOICE);
+        assert!(args.windows(2).any(|w| w == ["-H", "@-"]), "{args:?}");
+        assert!(args.windows(2).any(|w| w[0] == "--data-raw" && w[1] == r#"{"text":"hello \"there\""}"#));
+        assert!(!args.iter().any(|a| a.contains("Token") || a.starts_with("-o")));
+        assert!(args.windows(2).any(|w| w == ["--max-time", "120"]));
+        // The cache keeps the names it had.
+        assert_eq!(fnv64(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv64("a"), 0xaf63_dc4c_8601_ec8c);
+    }
 
     #[test]
     fn streams_queued_audio_in_real_time() {

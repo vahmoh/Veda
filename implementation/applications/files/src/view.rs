@@ -3,9 +3,11 @@
 
 //! Drawing and mouse interaction of the Files window: toolbar with the
 //! breadcrumb path bar and search box, places sidebar, list and grid views,
-//! the Trash's bar and the notice of a move to the Trash, status bar,
-//! context menus and the Properties dialog.
+//! the Trash's bar, the notice of a move to the Trash and the card of the
+//! operation in progress, status bar, context menus and the Properties
+//! dialog.
 
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -18,6 +20,7 @@ use vfiles::{HOME, trash};
 use vui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
 
 use crate::icons;
+use crate::ops::Progress;
 use crate::{Drag, Files, Props, SortKey, TRASHED_NOTICE_NS, ViewMode, location, what};
 
 const TOOLBAR_H: i32 = 56;
@@ -85,13 +88,17 @@ pub fn draw(f: &mut Files, ui: &mut Ui) {
     let (sidebar, main) = body.split_left(SIDEBAR_W);
     let mut typing = false;
     f.drop_target = None;
-    // The notice floats over the items: it takes the pointer first.
+    // The cards float over the items: they take the pointer first.
     let notice = trashed_notice(f, ui, main);
+    let busy = progress_card(f, ui, main, notice.is_some());
     draw_toolbar(f, ui, toolbar, &mut typing);
     draw_sidebar(f, ui, sidebar);
     draw_main(f, ui, main, &mut typing);
     if let Some(n) = &notice {
         draw_notice(ui, n);
+    }
+    if let Some(b) = &busy {
+        draw_progress(ui, b);
     }
     draw_status(f, ui, status);
     f.typing = typing;
@@ -149,11 +156,9 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
             1.0,
             if f.drop_target.is_some() { t.accent } else { t.border_strong },
         );
-        let icon = match &d.paths[..] {
-            [path] => match f.fs.stat(path) {
-                Ok(st) => icons::small_icon(path, st.is_dir, st.executable),
-                Err(_) => icons::small_icon(path, false, false),
-            },
+        let icon = match (&d.paths[..], d.single) {
+            ([path], Some((is_dir, program))) => icons::small_icon(path, is_dir, program),
+            ([path], None) => icons::small_icon(path, false, false),
             _ => Icon::Copy,
         };
         ui.icon(Rect::new(badge.x + 8, badge.y, 20, badge.h), icon, 15.0, t.accent_hover);
@@ -476,6 +481,11 @@ fn draw_sidebar(f: &mut Files, ui: &mut Ui, r: Rect) {
 // ---- main area -------------------------------------------------------------
 
 fn draw_main(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
+    // The items of this folder that are cut (drawn faded), once a frame.
+    let cut: BTreeSet<String> = match &f.clipboard {
+        Some((paths, true)) => paths.iter().filter(|p| parent(p) == f.cwd).map(|p| file_name(p).to_string()).collect(),
+        _ => BTreeSet::new(),
+    };
     let r = if f.in_trash() {
         let (bar, rest) = r.split_top(TRASH_BAR_H);
         draw_trash_bar(f, ui, bar);
@@ -525,7 +535,7 @@ fn draw_main(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
             let count = (rows_r.h / ROW_H + 2) as usize;
             for vi in first..(first + count).min(n) {
                 let rr = Rect::new(rows_r.x, rows_r.y + 4 + vi as i32 * ROW_H - off, rows_r.w, ROW_H);
-                if item(f, ui, vi, rr, false, typing, &mut menu_at) {
+                if item(f, ui, vi, rr, false, typing, &mut menu_at, &cut) {
                     hit = true;
                 }
             }
@@ -558,7 +568,7 @@ fn draw_main(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
                         cell_w,
                         TILE_H,
                     );
-                    if item(f, ui, vi, tile, true, typing, &mut menu_at) {
+                    if item(f, ui, vi, tile, true, typing, &mut menu_at, &cut) {
                         hit = true;
                     }
                 }
@@ -712,6 +722,91 @@ fn draw_notice(ui: &mut Ui, n: &Notice) {
     ui.label(n.undo, "Undo", Font::Bold, t.font_size, t.accent_hover, Align::Center);
 }
 
+/// The card of the operation in progress, with its Cancel button.
+struct Busy {
+    card: Rect,
+    cancel: Rect,
+    text: String,
+    /// How far it is (0..=1), if that is known.
+    fraction: Option<f32>,
+    cancel_hovered: bool,
+    cancelling: bool,
+}
+
+/// What the operation in progress does and how far it is, at the bottom of
+/// the main area (above the notice of a move to the Trash, if that shows):
+/// handles its Cancel button and covers what is under it. `None` when no
+/// operation is in progress.
+fn progress_card(f: &mut Files, ui: &mut Ui, r: Rect, above_notice: bool) -> Option<Busy> {
+    let p: Progress = f.worker.as_ref()?.progress()?;
+    let t = ui.theme().clone();
+    let mut text = if p.cancelling {
+        "Stopping\u{2026}".to_string()
+    } else if p.total > 0 {
+        format!("{} {} of {}: {}", p.verb, (p.done + 1).min(p.total), p.total, p.current)
+    } else {
+        format!("{} {}\u{2026}", p.verb, p.current)
+    };
+    if p.queued > 0 {
+        text.push_str(&format!(" \u{00b7} {} more waiting", p.queued));
+    }
+    let cancel_w = ui.measure("Cancel", Font::Bold, t.font_size) as i32 + 28;
+    let w = (r.w - 32).min(520);
+    let bottom = if above_notice { r.bottom() - 62 - 8 } else { r.bottom() - 18 };
+    let card = Rect::new(r.x + (r.w - w) / 2, bottom - 56, w, 56);
+    let cancel = Rect::new(card.right() - cancel_w - 8, card.y + 11, cancel_w, card.h - 22);
+    let id = ui.id("operation-cancel");
+    let resp = ui.interact(id, cancel);
+    if resp.hovered {
+        ui.set_cursor(Cursor::Hand);
+    }
+    ui.cover(card);
+    if resp.clicked
+        && let Some(w) = &f.worker
+    {
+        w.cancel();
+    }
+    // It moves on by itself: look again soon.
+    let now = ui.now();
+    ui.repaint_at(now + 250_000_000);
+    let fraction = (p.total > 0).then(|| p.done as f32 / p.total as f32);
+    Some(Busy { card, cancel, text, fraction, cancel_hovered: resp.hovered, cancelling: p.cancelling })
+}
+
+fn draw_progress(ui: &mut Ui, b: &Busy) {
+    let t = ui.theme().clone();
+    ui.canvas.draw_shadow(b.card.translate(0, 4), 10, 18, Color::rgba(0, 0, 0, 130));
+    ui.canvas.fill_rounded_rect(b.card, 10.0, Color::hex(0x2E2E36).with_alpha(248));
+    ui.canvas.stroke_rounded_rect(b.card, 10.0, 1.0, t.border_strong);
+    let text_r = Rect::new(b.card.x + 16, b.card.y + 8, b.cancel.x - b.card.x - 24, 22);
+    let font = ui.ctx.font(Font::Regular);
+    let text = ui.ctx.text.ellipsize(font, t.font_size, &b.text, text_r.w as f32);
+    ui.label(text_r, &text, Font::Regular, t.font_size, t.text, Align::Left);
+    let bar = Rect::new(text_r.x, b.card.y + 36, text_r.w, 6);
+    ui.canvas.fill_rounded_rect(bar, 3.0, t.control_hover);
+    match b.fraction {
+        Some(k) => {
+            let done = Rect::new(bar.x, bar.y, ((bar.w as f32 * k) as i32).max(6), bar.h);
+            ui.canvas.fill_rounded_rect(done, 3.0, t.accent);
+        }
+        // How far is not known (measuring): a part that moves.
+        None => {
+            let phase = (ui.now() / 8_000_000) as i32 % (bar.w.max(1) + 60) - 60;
+            let x0 = (bar.x + phase).max(bar.x);
+            let x1 = (bar.x + phase + 60).min(bar.right());
+            if x1 > x0 {
+                ui.canvas.fill_rounded_rect(Rect::new(x0, bar.y, x1 - x0, bar.h), 3.0, t.accent);
+            }
+        }
+    }
+    if !b.cancelling {
+        if b.cancel_hovered {
+            ui.canvas.fill_rounded_rect(b.cancel, t.radius, Color::rgba(255, 255, 255, 18));
+        }
+        ui.label(b.cancel, "Cancel", Font::Bold, t.font_size, t.accent_hover, Align::Center);
+    }
+}
+
 fn empty_state(ui: &mut Ui, r: Rect, icon: Icon, title: &str, message: &str) {
     let t = ui.theme().clone();
     let cy = r.y + r.h / 2 - 50;
@@ -803,6 +898,7 @@ fn item(
     grid: bool,
     typing: &mut bool,
     menu_at: &mut Option<(i32, i32)>,
+    cut_names: &BTreeSet<String>,
 ) -> bool {
     let t = ui.theme().clone();
     let Some(e) = f.entry(vi).cloned() else { return false };
@@ -836,7 +932,14 @@ fn item(
             return true;
         }
         if plain && let Some(origin) = ui.input.pointer {
-            f.drag = Some(Drag { paths: f.selected_paths(), origin, active: false });
+            let paths = f.selected_paths();
+            // One item: its icon, from the listing.
+            let single = match &paths[..] {
+                [one] if *one == path => Some((e.is_dir, e.program)),
+                [one] => f.entries.iter().find(|x| f.path_of(&x.name) == *one).map(|x| (x.is_dir, x.program)),
+                _ => None,
+            };
+            f.drag = Some(Drag { paths, single, origin, active: false });
         }
     }
     // While dragging, folders (other than the dragged items) accept drops.
@@ -868,7 +971,7 @@ fn item(
     if f.cursor == Some(vi) && list_focused && f.selected.len() > 1 {
         ui.canvas.stroke_rounded_rect(inner, if grid { t.radius_large } else { t.radius }, 1.0, t.accent.fade(0.6));
     }
-    let cut = f.clipboard.as_ref().is_some_and(|(paths, cut)| *cut && paths.contains(&path));
+    let cut = cut_names.contains(&e.name);
     let op = if cut { 0.45 } else { 1.0 };
     // Items in the Trash go by the names they were deleted with.
     let name = e.shown_name();
@@ -1062,6 +1165,11 @@ fn draw_status(f: &mut Files, ui: &mut Ui, r: Rect) {
 // ---- context menus ---------------------------------------------------------
 
 fn context_menus(f: &mut Files, ui: &mut Ui) {
+    // The menus are made only while one shows (making them looks at the
+    // selection in the file system).
+    if ui.state.context_menu.is_none() {
+        return;
+    }
     let changeable = f.can_change();
     let can_paste = f.clipboard.is_some() && changeable;
     let (in_trash, trash_root) = (f.in_trash(), f.trash_root());
@@ -1218,8 +1326,8 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
             let d = f.cwd.clone();
             f.open_terminal(&d);
         }
-        Action::Cut => f.copy_selection(true),
-        Action::Copy => f.copy_selection(false),
+        Action::Cut => f.copy_selection(ui, true),
+        Action::Copy => f.copy_selection(ui, false),
         Action::Paste => f.paste(),
         Action::Rename => f.start_rename(),
         Action::Delete => f.delete_selection(false),
@@ -1267,7 +1375,6 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
 
 /// Draws the Properties dialog; returns `true` when it is closed.
 pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
-    let mut closed = ui.input.key(vproto::input::keys::ESC) || ui.input.key(vproto::input::keys::ENTER);
     let rows: Vec<(&str, String)> = {
         let dir = parent(&p.path);
         let location = if trash::contains(dir) {
@@ -1292,7 +1399,9 @@ pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
         v
     };
     let h = 150 + rows.len() as i32 * 30;
-    let clicked = ui.modal(460, h, |ui, card| {
+    ui.modal(460, h, |ui, card| {
+        // The dialog has the keyboard: Esc and Enter close it.
+        let closed = ui.input.key(vproto::input::keys::ESC) || ui.input.key(vproto::input::keys::ENTER);
         let t = ui.theme().clone();
         let inner = card.inset(24, 22, 24, 20);
         let icon_r = Rect::new(inner.x, inner.y, 52, 52);
@@ -1331,8 +1440,6 @@ pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
             );
             y += 30;
         }
-        ui.primary_button(Rect::new(inner.right() - 100, inner.bottom() - 36, 100, 36), "Close")
-    });
-    closed |= clicked;
-    closed
+        ui.primary_button(Rect::new(inner.right() - 100, inner.bottom() - 36, 100, 36), "Close") || closed
+    })
 }

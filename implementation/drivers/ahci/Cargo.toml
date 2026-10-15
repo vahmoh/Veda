@@ -16,9 +16,7 @@ bench = false
 [dependencies]
 vrt = { workspace = true }
 vabi = { workspace = true }
-vipc = { workspace = true }
 vproto = { workspace = true }
-vvirtio = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

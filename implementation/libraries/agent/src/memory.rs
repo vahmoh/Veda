@@ -4,11 +4,14 @@
 //! What the agent remembers about the user.
 //!
 //! * **Facts** the user shared or the agent learned (`remember`), each with
-//!   an id so the user can see and remove them (in Settings, or by asking).
+//!   an id so the user can see and remove them (in Settings, or by asking:
+//!   a request to forget names its facts before anything is removed, and
+//!   one that would remove several waits for the user's approval).
 //! * **Habits**: which applications the user opens and when, counted
 //!   automatically.
-//! * **Recent conversation**, so a new conversation picks up where the
-//!   last one left off.
+//! * **Recent conversation**, so that the agent can tell what was talked
+//!   about (each conversation starts afresh; how the last one ended is in
+//!   the next one's instructions, for reference).
 //!
 //! Everything is stored as JSON in the agent's private directory and
 //! summarised into the agent's prompt ([`Memory::prompt_section`]).
@@ -78,10 +81,53 @@ fn clip(s: &str, n: usize) -> String {
     out
 }
 
-/// Words that say nothing about what a fact is about.
+/// Words that say nothing about what a fact is about (asking to forget
+/// "all of that" names no fact).
 const STOPWORDS: &[&str] = &[
-    "the", "and", "what", "who", "where", "when", "which", "how", "why", "you", "your", "are", "does", "did", "about",
-    "know", "remember", "tell", "that", "this", "with", "for", "from", "have", "has", "user", "users",
+    "the",
+    "and",
+    "what",
+    "who",
+    "where",
+    "when",
+    "which",
+    "how",
+    "why",
+    "you",
+    "your",
+    "are",
+    "does",
+    "did",
+    "about",
+    "know",
+    "remember",
+    "tell",
+    "that",
+    "this",
+    "with",
+    "for",
+    "from",
+    "have",
+    "has",
+    "user",
+    "users",
+    "forget",
+    "forgot",
+    "please",
+    "all",
+    "everything",
+    "anything",
+    "something",
+    "thing",
+    "things",
+    "stuff",
+    "said",
+    "told",
+    "just",
+    "can",
+    "could",
+    "would",
+    "will",
 ];
 
 /// Lower-case words of at least three letters that carry meaning (for
@@ -128,11 +174,10 @@ impl Memory {
         self.facts.len() != before
     }
 
-    /// Forgets every fact matching `query`; returns what was removed.
-    pub fn forget_matching(&mut self, query: &str) -> Vec<Fact> {
-        let hits: Vec<u64> = self.search(query, usize::MAX).iter().map(|f| f.id).collect();
-        let removed: Vec<Fact> = self.facts.iter().filter(|f| hits.contains(&f.id)).cloned().collect();
-        self.facts.retain(|f| !hits.contains(&f.id));
+    /// Forgets the facts with these ids; returns what was removed.
+    pub fn forget_ids(&mut self, ids: &[u64]) -> Vec<Fact> {
+        let removed: Vec<Fact> = self.facts.iter().filter(|f| ids.contains(&f.id)).cloned().collect();
+        self.facts.retain(|f| !ids.contains(&f.id));
         removed
     }
 
@@ -142,13 +187,60 @@ impl Memory {
         self.turns.clear();
     }
 
-    /// Facts sharing words with `query`, best first (all facts for an
-    /// empty query, newest first).
+    /// Makes a call of the memory function's `forget` definite before it is
+    /// classified: the facts it would remove, by id — the one `id` names,
+    /// those `ids` names that exist, or else those matching `text` (none for
+    /// a text without a meaningful word: "forget that" names nothing) — and
+    /// their texts, for an approval to list. Forgetting more than one fact
+    /// asks the user first ([`crate::tools::risk`]), and once allowed
+    /// removes exactly these. Fails if it names no fact.
+    pub fn pin_forget(&self, args: &Value) -> Result<Value, &'static str> {
+        let named: Vec<&Fact> = if let Some(id) = args["id"].as_u64() {
+            self.facts.iter().filter(|f| f.id == id).collect()
+        } else if let Some(ids) = args["ids"].as_array() {
+            let ids: Vec<u64> = ids.iter().filter_map(Value::as_u64).collect();
+            self.facts.iter().filter(|f| ids.contains(&f.id)).collect()
+        } else {
+            self.matching(args["text"].as_str().unwrap_or(""))
+        };
+        if named.is_empty() {
+            return Err(if args["id"].is_u64() || args["ids"].is_array() {
+                "nothing with that id"
+            } else {
+                "nothing matched: search for it, then forget it by its id"
+            });
+        }
+        Ok(json!({
+            "operation": "forget",
+            "ids": named.iter().map(|f| f.id).collect::<Vec<_>>(),
+            "facts": named.iter().map(|f| f.text.as_str()).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Facts sharing a meaningful word with `query`, best first: none for a
+    /// query without one ("that", "it", nothing).
+    pub fn matching(&self, query: &str) -> Vec<&Fact> {
+        let q = words(query);
+        if q.is_empty() {
+            return Vec::new();
+        }
+        self.ranked(&q)
+    }
+
+    /// Facts sharing words with `query`, best first, at most `limit`; for a
+    /// query without a meaningful word, what the agent knows, newest first.
     pub fn search(&self, query: &str, limit: usize) -> Vec<&Fact> {
         let q = words(query);
         if q.is_empty() {
             return self.facts.iter().rev().take(limit).collect();
         }
+        let mut found = self.ranked(&q);
+        found.truncate(limit);
+        found
+    }
+
+    /// Facts sharing a word with the query's words `q`, best first.
+    fn ranked(&self, q: &[String]) -> Vec<&Fact> {
         let mut scored: Vec<(usize, &Fact)> = self
             .facts
             .iter()
@@ -162,7 +254,7 @@ impl Memory {
             })
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.created.cmp(&a.1.created)));
-        scored.into_iter().take(limit).map(|(_, f)| f).collect()
+        scored.into_iter().map(|(_, f)| f).collect()
     }
 
     /// Counts an application being opened at `hour` (0..24, local time).
@@ -326,12 +418,38 @@ mod tests {
         assert_eq!(m.search("my dog", 5)[0].id, c);
         assert_eq!(m.search("", 2).len(), 2);
         assert!(m.search("zebra", 5).is_empty());
-        assert_eq!(m.forget_matching("dog").len(), 1);
+        let pinned = m.pin_forget(&json!({ "operation": "forget", "text": "dog" })).unwrap();
+        assert_eq!(pinned["ids"], json!([c]));
+        assert_eq!(m.forget_ids(&[c]).len(), 1);
         assert!(m.forget(b));
         assert!(!m.forget(b));
         assert_eq!(m.facts.len(), 1);
         assert_eq!(m.remember("New", "weird-kind", 300), 4);
         assert_eq!(m.facts.last().unwrap().kind, "fact");
+    }
+
+    #[test]
+    fn a_vague_forget_names_nothing() {
+        let mut m = Memory::new();
+        m.remember("The user's name is Alex", "fact", 1);
+        m.remember("Alex works at the library", "fact", 2);
+        m.remember("Likes tea", "preference", 3);
+        // Without a meaningful word nothing matches (search still lists
+        // everything, which forgetting must never do).
+        for vague in ["", "that", "it", "forget that", "what you know about me"] {
+            assert!(m.matching(vague).is_empty(), "{vague}");
+            assert!(m.pin_forget(&json!({ "operation": "forget", "text": vague })).is_err(), "{vague}");
+        }
+        assert_eq!(m.search("that", 10).len(), 3);
+        // A text naming several facts names each of them, for the approval.
+        let pinned = m.pin_forget(&json!({ "operation": "forget", "text": "Alex" })).unwrap();
+        assert_eq!(pinned["ids"].as_array().unwrap().len(), 2);
+        assert_eq!(pinned["facts"].as_array().unwrap().len(), 2);
+        // By id: the one named, if it exists.
+        assert_eq!(m.pin_forget(&json!({ "operation": "forget", "id": 3 })).unwrap()["facts"], json!(["Likes tea"]));
+        assert!(m.pin_forget(&json!({ "operation": "forget", "id": 99 })).is_err());
+        assert_eq!(m.pin_forget(&json!({ "operation": "forget", "ids": [1, 99] })).unwrap()["ids"], json!([1]));
+        assert_eq!(m.facts.len(), 3);
     }
 
     #[test]

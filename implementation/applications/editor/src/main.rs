@@ -22,7 +22,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt;
 
+use vfiles::format::human_size;
 use vfiles::path::{file_name, parent};
 use vgfx::{Align, Color, Rect};
 use vproto::display::modifiers;
@@ -41,13 +43,60 @@ vrt::entry!(main);
 const DEFAULT_DIR: &str = "/home/user/Documents";
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const TOAST_NS: u64 = 2_500_000_000;
+/// The largest file the editor opens (bytes).
+const MAX_FILE: u64 = 16 << 20;
+
+/// Why a file could not be opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenError {
+    Fs(FsError),
+    /// The file system did not answer.
+    Service,
+    /// Larger than [`MAX_FILE`] (its size).
+    TooLarge(u64),
+    /// Not text: it holds NUL bytes.
+    Binary,
+    /// Not enough memory for it.
+    NoMemory,
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::Fs(e) => write!(f, "{e}"),
+            OpenError::Service => f.write_str("the file system is not responding"),
+            OpenError::TooLarge(n) => write!(
+                f,
+                "it is too large to open ({}; the Text Editor opens files of up to {})",
+                human_size(*n),
+                human_size(MAX_FILE)
+            ),
+            OpenError::Binary => f.write_str("it is not a text file"),
+            OpenError::NoMemory => f.write_str("there is not enough memory to open it"),
+        }
+    }
+}
 
 /// Reads a text file; invalid UTF-8 is replaced (the flag reports it).
-fn read_text(vfs: &vfs::Client, path: &str) -> Result<(String, bool), FsError> {
-    let (vmo, len) = vfs.read_file(path.into()).map_err(|_| FsError::Io)??;
-    let mut buf = vec![0u8; len as usize];
+/// Files larger than [`MAX_FILE`] and binary files (with NUL bytes) are
+/// refused.
+fn read_text(vfs: &vfs::Client, path: &str) -> Result<(String, bool), OpenError> {
+    let (vmo, len) = match vfs.read_file(path.into()) {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return Err(OpenError::Fs(e)),
+        Err(_) => return Err(OpenError::Service),
+    };
+    if len > MAX_FILE {
+        return Err(OpenError::TooLarge(len));
+    }
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(len as usize).map_err(|_| OpenError::NoMemory)?;
+    buf.resize(len as usize, 0);
     if len > 0 {
-        vmo.read(0, &mut buf).map_err(|_| FsError::Io)?;
+        vmo.read(0, &mut buf).map_err(|_| OpenError::Service)?;
+    }
+    if buf.contains(&0) {
+        return Err(OpenError::Binary);
     }
     Ok(match String::from_utf8(buf) {
         Ok(s) => (s, false),
@@ -66,8 +115,14 @@ fn write_text(vfs: Option<&vfs::Client>, path: &str, text: &str) -> Result<(), S
     }
 }
 
+/// A tab's identity: it stays the same as tabs before it close (which
+/// changes where it is), so that a question about it outlives that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TabId(u64);
+
 /// One open document.
 struct Tab {
+    id: TabId,
     doc: Document,
     path: Option<String>,
     title: String,
@@ -76,12 +131,17 @@ struct Tab {
     read_only: bool,
     /// The file was not valid UTF-8; invalid bytes were replaced.
     lossy: bool,
+    /// What the file holds was saved by the voice agent (or replaced with
+    /// the user's consent): the agent's own `save` may replace it again.
+    /// Anything else in a file the agent replaces only with consent.
+    agent_file: bool,
 }
 
 impl Tab {
-    fn untitled(n: u32) -> Tab {
+    fn untitled(id: TabId, n: u32) -> Tab {
         let title = if n <= 1 { "Untitled".into() } else { format!("Untitled {n}") };
         Tab {
+            id,
             doc: Document::new(),
             path: None,
             title,
@@ -89,11 +149,13 @@ impl Tab {
             view: TextView::new(),
             read_only: false,
             lossy: false,
+            agent_file: false,
         }
     }
 
-    fn from_file(path: &str, text: &str, read_only: bool, lossy: bool) -> Tab {
+    fn from_file(id: TabId, path: &str, text: &str, read_only: bool, lossy: bool) -> Tab {
         Tab {
+            id,
             doc: Document::from_text(text),
             path: Some(path.into()),
             title: file_name(path).into(),
@@ -101,6 +163,7 @@ impl Tab {
             view: TextView::new(),
             read_only,
             lossy,
+            agent_file: false,
         }
     }
 
@@ -118,18 +181,28 @@ impl Tab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Then {
     Nothing,
-    CloseTab(usize),
+    CloseTab(TabId),
     Quit,
 }
 
 enum Modal {
     Open(FileDialog),
-    SaveAs { dialog: FileDialog, tab: usize, then: Then },
-    ConfirmClose { tab: usize, then: Then },
+    SaveAs { dialog: FileDialog, tab: TabId, then: Then },
+    ConfirmClose { tab: TabId, then: Then },
     GotoLine(String),
     Message { title: String, text: String },
     Shortcuts,
     About,
+}
+
+impl Modal {
+    /// The tab a question is about, and what follows it.
+    fn about(&self) -> Option<(TabId, Then)> {
+        match self {
+            Modal::SaveAs { tab, then, .. } | Modal::ConfirmClose { tab, then } => Some((*tab, *then)),
+            _ => None,
+        }
+    }
 }
 
 /// The find (and replace) bar.
@@ -140,12 +213,14 @@ struct Find {
     case_sensitive: bool,
     focus_query: bool,
     /// What `matches` was computed for: (tab, revision, query, case).
-    key: Option<(usize, u64, String, bool)>,
+    key: Option<(TabId, u64, String, bool)>,
     matches: Vec<(Pos, Pos)>,
 }
 
 struct Editor {
     tabs: Vec<Tab>,
+    /// The next tab's id.
+    next_id: u64,
     active: usize,
     modal: Option<Modal>,
     find: Option<Find>,
@@ -155,6 +230,9 @@ struct Editor {
     quitting: bool,
     toast: Option<(String, u64)>,
     first_frame: bool,
+    /// The selection's length in characters, and what it was counted for
+    /// (tab, revision, selection).
+    selected_chars: Option<((TabId, u64, vtext::Selection), usize)>,
 }
 
 const SHORTCUTS: [(&str, &str); 18] = [
@@ -182,7 +260,8 @@ impl Editor {
     fn new(args: &[String]) -> Editor {
         let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
         let mut ed = Editor {
-            tabs: vec![Tab::untitled(1)],
+            tabs: vec![Tab::untitled(TabId(0), 1)],
+            next_id: 1,
             active: 0,
             modal: None,
             find: None,
@@ -192,6 +271,7 @@ impl Editor {
             quitting: false,
             toast: None,
             first_frame: true,
+            selected_chars: None,
         };
         for path in args {
             ed.open_path(path, true);
@@ -203,9 +283,21 @@ impl Editor {
         &mut self.tabs[self.active]
     }
 
+    /// An id for a new tab.
+    fn new_id(&mut self) -> TabId {
+        self.next_id += 1;
+        TabId(self.next_id - 1)
+    }
+
+    /// Where the tab `id` is, if it is still open.
+    fn index_of(&self, id: TabId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id)
+    }
+
     fn new_tab(&mut self) {
         self.untitled += 1;
-        self.tabs.push(Tab::untitled(self.untitled));
+        let id = self.new_id();
+        self.tabs.push(Tab::untitled(id, self.untitled));
         self.active = self.tabs.len() - 1;
     }
 
@@ -231,9 +323,9 @@ impl Editor {
             Ok((text, lossy)) => {
                 let st = vfs.stat(path.into()).ok().and_then(|r| r.ok());
                 let read_only = path.starts_with("/system/") || st.is_some_and(|s| s.read_only);
-                Tab::from_file(path, &text, read_only, lossy)
+                Tab::from_file(self.new_id(), path, &text, read_only, lossy)
             }
-            Err(FsError::NotFound) if create => Tab::from_file(path, "", false, false),
+            Err(OpenError::Fs(FsError::NotFound)) if create => Tab::from_file(self.new_id(), path, "", false, false),
             Err(e) => return self.message("Couldn't open the file", format!("{path}: {e}.")),
         };
         if self.tabs[self.active].is_pristine() {
@@ -261,9 +353,11 @@ impl Editor {
                 let tab = &mut self.tabs[i];
                 tab.doc.mark_saved();
                 tab.lossy = false;
+                // The user saved it: the file holds the user's work now.
+                tab.agent_file = false;
                 let msg = format!("Saved {}", tab.title);
                 self.show_toast(msg, ui.now());
-                self.after(ui, then);
+                self.after(then);
             }
             Err(e) => self.message("Couldn't save the file", format!("{path}: {e}.")),
         }
@@ -273,23 +367,28 @@ impl Editor {
         let tab = &self.tabs[i];
         let dir = if tab.read_only { DEFAULT_DIR.into() } else { tab.dir() };
         let name = if tab.path.is_some() { tab.title.clone() } else { format!("{}.txt", tab.title) };
-        self.modal = Some(Modal::SaveAs { dialog: FileDialog::save("Save As", &dir, &name), tab: i, then });
+        self.modal = Some(Modal::SaveAs { dialog: FileDialog::save("Save As", &dir, &name), tab: tab.id, then });
     }
 
     fn close_tab(&mut self, i: usize) {
         if self.tabs[i].doc.is_modified() {
             self.active = i;
-            self.modal = Some(Modal::ConfirmClose { tab: i, then: Then::CloseTab(i) });
+            let id = self.tabs[i].id;
+            self.modal = Some(Modal::ConfirmClose { tab: id, then: Then::CloseTab(id) });
         } else {
             self.remove_tab(i);
         }
     }
 
+    /// Closes tab `i`. A question about it (the agent closed it while the
+    /// user was asked) goes with it; if it was asked while quitting, the
+    /// next unsaved tab is asked about.
     fn remove_tab(&mut self, i: usize) {
-        self.tabs.remove(i);
+        let id = self.tabs.remove(i).id;
         if self.tabs.is_empty() {
             self.untitled = 1;
-            self.tabs.push(Tab::untitled(1));
+            let id = self.new_id();
+            self.tabs.push(Tab::untitled(id, 1));
         }
         if i < self.active {
             self.active -= 1;
@@ -298,31 +397,56 @@ impl Editor {
         if let Some(f) = &mut self.find {
             f.key = None;
         }
-    }
-
-    fn after(&mut self, ui: &mut Ui, then: Then) {
-        match then {
-            Then::Nothing => {}
-            Then::CloseTab(i) => self.remove_tab(i),
-            Then::Quit => self.request_quit(ui),
+        if let Some((tab, then)) = self.modal.as_ref().and_then(Modal::about)
+            && tab == id
+        {
+            self.modal = None;
+            if then == Then::Quit {
+                self.request_quit();
+            }
         }
     }
 
-    /// Asks about unsaved tabs one by one, then closes the window.
-    fn request_quit(&mut self, ui: &mut Ui) {
+    fn after(&mut self, then: Then) {
+        match then {
+            Then::Nothing => {}
+            Then::CloseTab(id) => {
+                if let Some(i) = self.index_of(id) {
+                    self.remove_tab(i);
+                }
+            }
+            Then::Quit => self.request_quit(),
+        }
+    }
+
+    /// Asks about unsaved tabs one by one, then closes the window (at the
+    /// end of the frame).
+    fn request_quit(&mut self) {
         if let Some(i) = self.tabs.iter().position(|t| t.doc.is_modified()) {
             self.active = i;
-            self.modal = Some(Modal::ConfirmClose { tab: i, then: Then::Quit });
+            let id = self.tabs[i].id;
+            self.modal = Some(Modal::ConfirmClose { tab: id, then: Then::Quit });
         } else {
             self.quitting = true;
-            ui.close_window();
         }
     }
 
     fn command(&mut self, ui: &mut Ui, cmd: Command) {
         let tab = &mut self.tabs[self.active];
         tab.view.command(ui, &mut tab.doc, tab.lang, tab.read_only, cmd);
+        if let Some(problem) = tab.view.take_problem() {
+            self.copy_failed(problem);
+        }
         TextView::focus(ui);
+    }
+
+    /// Says that the selection could not be copied (and so was not cut).
+    fn copy_failed(&mut self, why: String) {
+        let mut why = why;
+        if let Some(c) = why.get_mut(0..1) {
+            c.make_ascii_uppercase();
+        }
+        self.message("Couldn't copy the selection", format!("{why}. Nothing was cut."));
     }
 
     fn zoom(&mut self, delta: f32) {
@@ -419,7 +543,7 @@ impl Editor {
             (0, 3) => self.save(ui, active, Then::Nothing),
             (0, 4) => self.save_as(active, Then::Nothing),
             (0, 6) => self.close_tab(active),
-            (0, 7) => self.request_quit(ui),
+            (0, 7) => self.request_quit(),
             (1, 0) => self.command(ui, Command::Undo),
             (1, 1) => self.command(ui, Command::Redo),
             (1, 3) => self.command(ui, Command::Cut),
@@ -511,7 +635,7 @@ impl Editor {
         let q = ui.text_input(Rect::new(row.x, row.y, input_w, 30), "find-query", &mut f.query, "Find");
 
         // Matches for highlighting and the counter.
-        let key = (*active, tab.doc.revision(), f.query.clone(), f.case_sensitive);
+        let key = (tab.id, tab.doc.revision(), f.query.clone(), f.case_sensitive);
         if f.key.as_ref() != Some(&key) {
             f.matches = tab.doc.buffer().find_all(&f.query, f.case_sensitive, 10_000);
             f.key = Some(key);
@@ -693,8 +817,18 @@ impl Editor {
         let c = doc.cursor();
         let col = vtext::display_col(doc.buffer().line(c.line), c.col, doc.tab_width) + 1;
         let mut left = format!("Ln {}, Col {}", c.line + 1, col);
-        if !doc.selection().is_empty() {
-            let n = doc.selected_text().chars().count();
+        let sel = doc.selection();
+        if !sel.is_empty() {
+            // Counted when the selection or the text changes, in place.
+            let key = (tab.id, doc.revision(), sel);
+            let n = match self.selected_chars {
+                Some((k, n)) if k == key => n,
+                _ => {
+                    let n = selected_chars(doc);
+                    self.selected_chars = Some((key, n));
+                    n
+                }
+            };
             left.push_str(&format!("   ({n} selected)"));
         }
         let size = t.small_size + 0.5;
@@ -749,33 +883,38 @@ impl Editor {
             },
             Modal::SaveAs { dialog, tab, then } => match dialog.show(ui) {
                 Some(FileDialogResult::Chosen(path)) => {
-                    let (tab, then) = (*tab, *then);
-                    let t = &mut self.tabs[tab];
-                    t.title = file_name(&path).into();
-                    t.lang = Language::for_path(&path);
-                    t.path = Some(path);
-                    t.read_only = false;
-                    self.save(ui, tab, then);
+                    let then = *then;
+                    // The tab is still there (a question about a tab goes
+                    // when it closes).
+                    if let Some(i) = self.index_of(*tab) {
+                        let t = &mut self.tabs[i];
+                        t.title = file_name(&path).into();
+                        t.lang = Language::for_path(&path);
+                        t.path = Some(path);
+                        t.read_only = false;
+                        self.save(ui, i, then);
+                    }
                     false
                 }
                 Some(FileDialogResult::Cancelled) => false,
                 None => true,
             },
             Modal::ConfirmClose { tab, then } => {
-                let (tab, then) = (*tab, *then);
-                let text = format!("Do you want to save the changes you made to {}?", self.tabs[tab].title);
+                let (id, then) = (*tab, *then);
+                let Some(i) = self.index_of(id) else { return };
+                let text = format!("Do you want to save the changes you made to {}?", self.tabs[i].title);
                 match ui.message_box("Save changes?", &text, &["Save", "Don't Save", "Cancel"]) {
                     Some(0) => {
-                        self.save(ui, tab, then);
+                        self.save(ui, i, then);
                         false
                     }
                     Some(1) => {
                         match then {
                             Then::Quit => {
-                                self.remove_tab(tab);
-                                self.request_quit(ui);
+                                self.remove_tab(i);
+                                self.request_quit();
                             }
-                            other => self.after(ui, other),
+                            other => self.after(other),
                         }
                         false
                     }
@@ -786,10 +925,11 @@ impl Editor {
             Modal::GotoLine(text) => {
                 let lines = self.tabs[self.active].doc.buffer().line_count();
                 let mut outcome = None;
-                if ui.input.key(keys::ESC) {
-                    outcome = Some(false);
-                }
                 ui.modal(400, 176, |ui, card| {
+                    // The dialog has the keyboard.
+                    if ui.input.key(keys::ESC) {
+                        outcome = Some(false);
+                    }
                     let inner = card.inset(22, 18, 22, 18);
                     ui.heading(Rect::new(inner.x, inner.y, inner.w, 26), "Go to Line");
                     ui.focus_text_input("goto-line");
@@ -829,9 +969,11 @@ impl Editor {
                 )
                 .is_none(),
             Modal::Shortcuts => {
-                let mut done = ui.input.key(keys::ESC);
+                let mut done = false;
                 let t = ui.theme().clone();
                 ui.modal(560, 520, |ui, card| {
+                    // The dialog has the keyboard.
+                    done = ui.input.key(keys::ESC);
                     let inner = card.inset(24, 18, 24, 18);
                     ui.heading(Rect::new(inner.x, inner.y, inner.w, 26), "Keyboard Shortcuts");
                     for (i, (keys, what)) in SHORTCUTS.iter().enumerate() {
@@ -887,10 +1029,13 @@ impl App for Editor {
         let empty: Vec<(Pos, Pos)> = Vec::new();
         let opts = self.opts;
         let Editor { tabs, active, find, .. } = self;
-        let matches =
-            find.as_ref().filter(|f| f.key.as_ref().is_some_and(|k| k.0 == *active)).map_or(&empty, |f| &f.matches);
         let tab = &mut tabs[*active];
+        let matches =
+            find.as_ref().filter(|f| f.key.as_ref().is_some_and(|k| k.0 == tab.id)).map_or(&empty, |f| &f.matches);
         tab.view.update(ui, editor_r, &mut tab.doc, tab.lang, opts, tab.read_only, matches);
+        if let Some(problem) = tab.view.take_problem() {
+            self.copy_failed(problem);
+        }
         self.status_bar(ui, status);
         self.draw_toast(ui, status.y);
 
@@ -904,6 +1049,10 @@ impl App for Editor {
         let dot = if tab.doc.is_modified() { "\u{2022} " } else { "" };
         let title = format!("{dot}{} \u{2014} Text Editor", tab.title);
         ui.set_title(&title);
+        // Nothing is left unsaved that the user wanted kept.
+        if self.quitting {
+            ui.close_window();
+        }
     }
 
     fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
@@ -927,12 +1076,29 @@ impl App for Editor {
             Some(i) => {
                 if self.modal.is_none() {
                     self.active = i;
-                    self.modal = Some(Modal::ConfirmClose { tab: i, then: Then::Quit });
+                    let id = self.tabs[i].id;
+                    self.modal = Some(Modal::ConfirmClose { tab: id, then: Then::Quit });
                 }
                 false
             }
         }
     }
+}
+
+/// The characters selected in `doc`, counted where they are.
+fn selected_chars(doc: &Document) -> usize {
+    let sel = doc.selection();
+    let (a, b) = (sel.start(), sel.end());
+    let buf = doc.buffer();
+    if a.line == b.line {
+        return buf.line(a.line)[a.col..b.col].chars().count();
+    }
+    // Each line break is one character.
+    let mut n = buf.line(a.line)[a.col..].chars().count() + 1;
+    for l in a.line + 1..b.line {
+        n += buf.line(l).chars().count() + 1;
+    }
+    n + buf.line(b.line)[..b.col].chars().count()
 }
 
 fn main() -> i32 {

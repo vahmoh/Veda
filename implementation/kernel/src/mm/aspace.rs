@@ -4,7 +4,7 @@
 //! User address spaces: a page-table hierarchy plus the list of VMO mappings
 //! that it is lazily populated from on page faults.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -17,8 +17,15 @@ use crate::sync::SpinLock;
 
 const USER_START: u64 = vabi::USER_SPACE_START as u64;
 const USER_END: u64 = vabi::USER_SPACE_END as u64;
-/// Where non-fixed mappings are placed by default.
+/// Where non-fixed mappings are placed by default: from here, plus a
+/// random number of pages ([`DYNAMIC_SPAN`]) chosen for each address space.
 const DYNAMIC_BASE: u64 = 0x0000_1000_0000_0000;
+/// How far above [`DYNAMIC_BASE`] an address space's mappings may start:
+/// 2^28 pages (1 TiB), as many places as a program's image has.
+const DYNAMIC_SPAN: u64 = 1 << 40;
+/// Bytes of memory committed between two moments the other CPUs are let
+/// into the kernel (`bkl::relax`).
+const COMMIT_STEP: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Perms {
@@ -95,11 +102,23 @@ pub struct AddressSpace {
     /// The page tables' root.
     root: u64,
     mappings: SpinLock<BTreeMap<u64, Mapping>>,
+    /// Where mappings whose address the caller leaves to the kernel go:
+    /// random for each address space, so that no process's stacks, heaps
+    /// and shared memory are where another's (or the same program's last
+    /// run's) were.
+    dynamic_base: u64,
 }
 
 impl AddressSpace {
     pub fn new() -> Option<Arc<AddressSpace>> {
-        Some(Arc::new(AddressSpace { root: paging::new_user_root()?, mappings: SpinLock::new(BTreeMap::new()) }))
+        let mut random = [0u8; 8];
+        crate::random::fill(&mut random);
+        let pages = u64::from_le_bytes(random) % (DYNAMIC_SPAN / PAGE_SIZE);
+        Some(Arc::new(AddressSpace {
+            root: paging::new_user_root()?,
+            mappings: SpinLock::new(BTreeMap::new()),
+            dynamic_base: DYNAMIC_BASE + pages * PAGE_SIZE,
+        }))
     }
 
     /// Finds a free, page-aligned range of `len` bytes at or above `hint`
@@ -175,6 +194,20 @@ impl AddressSpace {
         if !m.perms.within(m.max) {
             return Err(Error::AccessDenied);
         }
+        // Physical memory is always mapped eagerly; anonymous memory on
+        // request (otherwise on first touch). Inaccessible pages never are.
+        let eager = (commit || !matches!(m.vmo.kind(), VmoKind::Anonymous)) && !m.perms.none();
+        // Anonymous pages are committed (allocated and zeroed) first, before
+        // the mappings are locked, letting the other CPUs into the kernel
+        // between steps: their number is the caller's to choose.
+        if eager && m.vmo.kind() == VmoKind::Anonymous {
+            for off in (0..m.len).step_by(PAGE_SIZE as usize) {
+                m.vmo.page(m.vmo_offset + off, true).ok_or(Error::NoMemory)?;
+                if (off + PAGE_SIZE).is_multiple_of(COMMIT_STEP) {
+                    crate::sync::bkl::relax();
+                }
+            }
+        }
         let mut map = self.mappings.lock();
         m.start = if fixed {
             if addr < USER_START || addr.checked_add(m.len).is_none_or(|e| e > USER_END) {
@@ -185,14 +218,11 @@ impl AddressSpace {
             }
             addr
         } else {
-            let hint = if addr != 0 { addr } else { DYNAMIC_BASE };
+            let hint = if addr != 0 { addr } else { self.dynamic_base };
             Self::find_free(&map, m.len, hint)
                 .or_else(|| Self::find_free(&map, m.len, USER_START))
                 .ok_or(Error::NoMemory)?
         };
-        // Physical memory is always mapped eagerly; anonymous memory on
-        // request (otherwise on first touch). Inaccessible pages never are.
-        let eager = (commit || !matches!(m.vmo.kind(), VmoKind::Anonymous)) && !m.perms.none();
         if eager {
             for off in (0..m.len).step_by(PAGE_SIZE as usize) {
                 let mapped = m
@@ -408,13 +438,12 @@ impl AddressSpace {
     /// counted in every address space that maps them).
     pub fn committed_bytes(&self) -> u64 {
         let map = self.mappings.lock();
-        let mut seen: Vec<u64> = Vec::new();
+        let mut seen = BTreeSet::new();
         let mut total = 0;
         for m in map.values() {
-            if matches!(m.vmo.kind(), VmoKind::Physical { .. }) || seen.contains(&m.vmo.koid) {
+            if matches!(m.vmo.kind(), VmoKind::Physical { .. }) || !seen.insert(m.vmo.koid) {
                 continue;
             }
-            seen.push(m.vmo.koid);
             total += m.vmo.committed_bytes();
         }
         total

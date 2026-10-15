@@ -6,16 +6,24 @@
 //! same shapes from the same formulas and takes what is text or a drawing
 //! (title bars, cursors, the switcher) from bitmaps drawn here.
 
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
+use compositor_core::switcher::Switcher;
+use compositor_core::window::{BUTTON_WIDTH, CORNER_RADIUS, Part, TITLE_HEIGHT};
+use compositor_core::wm::DecorState;
 use num_traits::Float;
 use vgfx::color::{over, scale};
 use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use vproto::display::{Cursor, WindowKind, WindowState};
+use vrt::vm::Mapping;
 
 use crate::gpu::{Gpu, Slot, Texture, rgba};
-use crate::switcher::Switcher;
-use crate::window::{CORNER_RADIUS, Part, TITLE_HEIGHT, Window};
+use crate::pixels::{self, Pixels};
+
+/// A window, its client's buffers mapped here.
+pub type Window = compositor_core::window::Window<Mapping>;
 
 /// Decorated windows' shadows: blurred this far around their frame, which
 /// they are below by this much.
@@ -50,22 +58,37 @@ pub mod theme {
     pub const CLIENT_BACKGROUND: Color = Color::hex(0x1C1C21);
 }
 
+/// How a window is drawn besides its pixels: whether it has the focus,
+/// the caption buttons hovered or pressed, whether its client does not
+/// answer, and where it is in an animation (its opacity, and how far below
+/// its place it is).
+#[derive(Clone, Copy)]
+pub struct Look {
+    pub focused: bool,
+    pub decor: DecorState,
+    pub unresponsive: bool,
+    pub opacity: f32,
+    pub dy: i32,
+}
+
+/// What windows are drawn with: shadows, the title font, cursors.
 pub struct Decor {
     shadow: ShadowTemplate,
     popup_shadow: ShadowTemplate,
     pub text: Text,
     pub title_font: usize,
     cursors: Vec<(Cursor, Bitmap, i32, i32)>,
+    /// A row of a client's pixels, copied out to be blended.
+    row: Vec<u32>,
 }
 
-/// Mouse-interaction state that affects how decorations look.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub struct DecorState {
-    pub hover: Option<(u32, Part)>,
-    pub pressed: Option<(u32, Part)>,
+/// The title a window's title bar shows.
+fn title_text(w: &Window, unresponsive: bool) -> String {
+    if unresponsive { format!("{} (not responding)", w.title) } else { w.title.clone() }
 }
 
 impl Decor {
+    /// Decorations with titles in `title_font` of `text`.
     pub fn new(text: Text, title_font: usize) -> Decor {
         Decor {
             shadow: ShadowTemplate::new(CORNER_RADIUS, SHADOW_BLUR),
@@ -73,35 +96,38 @@ impl Decor {
             text,
             title_font,
             cursors: build_cursors(),
+            row: Vec::new(),
         }
     }
 
+    /// Cursor `c`'s picture and its hot spot.
     pub fn cursor(&self, c: Cursor) -> Option<(&Bitmap, i32, i32)> {
         let c = if c == Cursor::Busy { Cursor::Arrow } else { c };
         self.cursors.iter().find(|(k, ..)| *k == c).or_else(|| self.cursors.first()).map(|(_, b, hx, hy)| (b, *hx, *hy))
     }
 
     /// Draws a complete window (shadow, decorations, client content).
-    pub fn draw_window(&mut self, c: &mut Canvas, w: &Window, focused: bool, st: DecorState, opacity: f32, dy: i32) {
+    pub fn draw_window(&mut self, c: &mut Canvas, w: &Window, look: Look) {
+        let opacity = look.opacity;
         let op = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
         if op == 0 {
             return;
         }
-        let frame = w.frame().translate(0, dy);
-        let client = w.client_rect.translate(0, dy);
+        let frame = w.frame().translate(0, look.dy);
+        let client = w.client_rect.translate(0, look.dy);
         match w.kind {
             WindowKind::Normal if w.decorated() => {
                 let maximized = w.state == WindowState::Maximized;
                 let radius = if maximized { 0 } else { CORNER_RADIUS };
                 if !maximized {
-                    let sc = if focused { theme::SHADOW } else { theme::SHADOW_INACTIVE };
+                    let sc = if look.focused { theme::SHADOW } else { theme::SHADOW_INACTIVE };
                     self.shadow.draw(c, frame.translate(0, SHADOW_DROP), sc.fade(opacity), op < 255);
                 }
                 let title = Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT);
-                self.draw_title_bar(c, w, title, focused, st, opacity);
+                self.draw_title_bar(c, w, title, look);
                 self.draw_client(c, w, client, op, radius);
                 if !maximized {
-                    let bc = if focused { theme::BORDER } else { theme::BORDER_INACTIVE };
+                    let bc = if look.focused { theme::BORDER } else { theme::BORDER_INACTIVE };
                     c.stroke_rounded_rect(frame, radius as f32, 1.0, bc.fade(opacity));
                 }
             }
@@ -115,76 +141,70 @@ impl Decor {
 
     /// A decorated window's title bar in `title`: its background, rounded
     /// at the top unless the window is maximised, its title and buttons.
-    fn draw_title_bar(&mut self, c: &mut Canvas, w: &Window, title: Rect, focused: bool, st: DecorState, opacity: f32) {
+    fn draw_title_bar(&mut self, c: &mut Canvas, w: &Window, title: Rect, look: Look) {
         let radius = if w.state == WindowState::Maximized { 0 } else { CORNER_RADIUS };
-        let tc = if focused { theme::TITLE_ACTIVE } else { theme::TITLE_INACTIVE };
+        let tc = if look.focused { theme::TITLE_ACTIVE } else { theme::TITLE_INACTIVE };
         c.save();
         c.clip_to(title);
         c.fill_rounded_rect(
             Rect::new(title.x, title.y, title.w, TITLE_HEIGHT + radius * 2),
             radius as f32,
-            tc.fade(opacity),
+            tc.fade(look.opacity),
         );
         c.restore();
-        self.draw_title_content(c, w, title, focused, st, opacity);
+        self.draw_title_content(c, w, title, look);
     }
 
     /// A decorated window's title bar alone, as [`Decor::draw_window`]
-    /// draws it (for the GPU's texture).
-    fn title_bitmap(&mut self, w: &Window, focused: bool, st: DecorState) -> Bitmap {
+    /// draws it (for the GPU's texture); `None` if there is not the memory
+    /// for it.
+    fn title_bitmap(&mut self, w: &Window, look: Look) -> Option<Bitmap> {
         let f = w.frame();
-        let mut b = Bitmap::new(f.w.max(1), TITLE_HEIGHT);
+        let mut b = pixels::try_bitmap(f.w.max(1), TITLE_HEIGHT)?;
         let mut c = Canvas::for_bitmap(&mut b);
         c.translate(-f.x, -f.y);
-        self.draw_title_bar(&mut c, w, Rect::new(f.x, f.y, f.w, TITLE_HEIGHT), focused, st, 1.0);
+        self.draw_title_bar(&mut c, w, Rect::new(f.x, f.y, f.w, TITLE_HEIGHT), Look { opacity: 1.0, dy: 0, ..look });
         drop(c);
-        b
+        Some(b)
     }
 
     /// Draws a complete window with the GPU, as [`Decor::draw_window`]
     /// does: its shadow and border by shaders, its title bar from a texture
     /// drawn here (again when it changes), its client's pixels from
     /// `content`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_window_gpu(
-        &mut self,
-        g: &mut Gpu,
-        w: &Window,
-        focused: bool,
-        st: DecorState,
-        opacity: f32,
-        dy: i32,
-        content: Option<Texture>,
-    ) {
-        let opacity = opacity.clamp(0.0, 1.0);
+    pub fn draw_window_gpu(&mut self, g: &mut Gpu, w: &Window, look: Look, content: Option<Texture>) {
+        let opacity = look.opacity.clamp(0.0, 1.0);
         if (opacity * 255.0) as u32 == 0 {
             return;
         }
-        let frame = w.frame().translate(0, dy);
-        let client = w.client_rect.translate(0, dy);
+        let frame = w.frame().translate(0, look.dy);
+        let client = w.client_rect.translate(0, look.dy);
         match w.kind {
             WindowKind::Normal if w.decorated() => {
                 let maximized = w.state == WindowState::Maximized;
                 let radius = if maximized { 0 } else { CORNER_RADIUS };
                 if !maximized {
-                    let sc = if focused { theme::SHADOW } else { theme::SHADOW_INACTIVE };
+                    let sc = if look.focused { theme::SHADOW } else { theme::SHADOW_INACTIVE };
                     let r = frame.translate(0, SHADOW_DROP);
                     let hollow = (opacity * 255.0) as u32 >= 255;
                     g.shadow(r, CORNER_RADIUS as f32, SHADOW_BLUR, rgba(sc.fade(opacity).premul()), hollow);
                 }
-                let key = title_key(w, focused, st);
+                let key = title_key(w, look);
                 let t = match g.cached(Slot::Title(w.id), key) {
-                    Some(t) => t,
-                    None => {
-                        let b = self.title_bitmap(w, focused, st);
-                        g.upload(Slot::Title(w.id), key, &b)
-                    }
+                    Some(t) => Some(t),
+                    None => self.title_bitmap(w, look).map(|b| g.upload(Slot::Title(w.id), key, &b)),
                 };
                 let title = Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT);
-                g.image(t, Rect::new(0, 0, title.w, title.h), title, opacity, false, None);
+                match t {
+                    Some(t) => g.image(t, Rect::new(0, 0, title.w, title.h), title, opacity, false, None),
+                    None => {
+                        let tc = if look.focused { theme::TITLE_ACTIVE } else { theme::TITLE_INACTIVE };
+                        g.fill(title, 0.0, rgba(tc.fade(opacity).premul()));
+                    }
+                }
                 draw_client_gpu(g, w, client, opacity, radius, content);
                 if !maximized {
-                    let bc = if focused { theme::BORDER } else { theme::BORDER_INACTIVE };
+                    let bc = if look.focused { theme::BORDER } else { theme::BORDER_INACTIVE };
                     g.stroke(frame, radius as f32, 1.0, rgba(bc.fade(opacity).premul()));
                 }
             }
@@ -198,20 +218,21 @@ impl Decor {
     }
 
     /// The switcher alone, as [`Decor::draw_switcher`] draws it: a bitmap
-    /// of `s.bounds()` (for the GPU's texture).
-    pub fn switcher_bitmap(&mut self, s: &Switcher, titles: &[&str]) -> Bitmap {
+    /// of `s.bounds()` (for the GPU's texture); `None` if there is not the
+    /// memory for it.
+    pub fn switcher_bitmap(&mut self, s: &Switcher, titles: &[&str], thumbs: &[Option<Bitmap>]) -> Option<Bitmap> {
         let b = s.bounds();
-        let mut bitmap = Bitmap::new(b.w.max(1), b.h.max(1));
+        let mut bitmap = pixels::try_bitmap(b.w.max(1), b.h.max(1))?;
         let mut c = Canvas::for_bitmap(&mut bitmap);
         c.translate(-b.x, -b.y);
-        self.draw_switcher(&mut c, s, titles);
+        self.draw_switcher(&mut c, s, titles, thumbs);
         drop(c);
-        bitmap
+        Some(bitmap)
     }
 
-    /// Draws the Alt+Tab switcher overlay; `titles` are the window titles in
-    /// the switcher's order.
-    pub fn draw_switcher(&mut self, c: &mut Canvas, s: &Switcher, titles: &[&str]) {
+    /// Draws the Alt+Tab switcher overlay; `titles` and `thumbs` are the
+    /// windows' titles and thumbnails in the switcher's order.
+    pub fn draw_switcher(&mut self, c: &mut Canvas, s: &Switcher, titles: &[&str], thumbs: &[Option<Bitmap>]) {
         let panel = s.rect;
         self.popup_shadow.draw(c, panel.translate(0, 10), Color::rgba(0, 0, 0, 150), true);
         c.fill_rounded_rect(panel, 16.0, Color::rgba(30, 30, 38, 242));
@@ -224,7 +245,7 @@ impl Decor {
                 c.stroke_rounded_rect(cell, 12.0, 2.0, theme::ACCENT);
             }
             let bx = s.thumb_box(i);
-            match s.thumbs.get(i).and_then(|t| t.as_ref()) {
+            match thumbs.get(i).and_then(|t| t.as_ref()) {
                 Some(b) => {
                     let r = Rect::new(bx.x + (bx.w - b.width) / 2, bx.y + (bx.h - b.height) / 2, b.width, b.height);
                     c.draw_shadow(r.translate(0, 3), 6, 10, Color::rgba(0, 0, 0, 110));
@@ -241,29 +262,22 @@ impl Decor {
         }
     }
 
-    fn draw_title_content(
-        &mut self,
-        c: &mut Canvas,
-        w: &Window,
-        title: Rect,
-        focused: bool,
-        st: DecorState,
-        opacity: f32,
-    ) {
-        let text_color = if focused { theme::TITLE_TEXT } else { theme::TITLE_TEXT_INACTIVE }.fade(opacity);
+    fn draw_title_content(&mut self, c: &mut Canvas, w: &Window, title: Rect, look: Look) {
+        let opacity = look.opacity;
+        let text_color = if look.focused { theme::TITLE_TEXT } else { theme::TITLE_TEXT_INACTIVE }.fade(opacity);
         let buttons = if w.resizable { 3 } else { 2 };
-        let text_rect =
-            Rect::new(title.x + 16, title.y, title.w - 16 - buttons * crate::window::BUTTON_WIDTH - 8, TITLE_HEIGHT);
+        let text_rect = Rect::new(title.x + 16, title.y, title.w - 16 - buttons * BUTTON_WIDTH - 8, TITLE_HEIGHT);
         let font = self.title_font;
-        self.text.draw_in(c, font, 13.0, text_rect, &w.title, text_color, vgfx::Align::Left);
+        let text = title_text(w, look.unresponsive);
+        self.text.draw_in(c, font, 13.0, text_rect, &text, text_color, vgfx::Align::Left);
         let dy = title.y - w.title_rect().y;
         for part in [Part::Minimize, Part::Maximize, Part::Close] {
             if part == Part::Maximize && !w.resizable {
                 continue;
             }
             let r = w.button_rect(part).translate(0, dy);
-            let hovered = st.hover == Some((w.id, part));
-            let pressed = st.pressed == Some((w.id, part));
+            let hovered = look.decor.hover == Some((w.id, part));
+            let pressed = look.decor.pressed == Some((w.id, part));
             if hovered || pressed {
                 let bg = match (part, pressed) {
                     (Part::Close, _) => theme::CLOSE_HOVER,
@@ -297,75 +311,107 @@ impl Decor {
     /// Copies the client buffer into `dst`, rounding the bottom corners by
     /// `radius` and applying `opacity` (0..=255).
     fn draw_client(&mut self, c: &mut Canvas, w: &Window, dst: Rect, opacity: u32, radius: i32) {
-        let (Some(buf), Some(index)) = (&w.buffers, w.current) else {
+        let Some(src) = Pixels::shown(&w.surface) else {
             if w.decorated() {
                 c.fill_rect(dst, theme::CLIENT_BACKGROUND);
             }
             return;
         };
-        let src = buf.pixels(index);
+        let (bw, bh) = (src.width(), src.height());
         let clip = c.clip_rect();
-        let vis = dst.intersect(&clip).intersect(&Rect::new(dst.x, dst.y, buf.width, buf.height));
+        let vis = dst.intersect(&clip).intersect(&Rect::new(dst.x, dst.y, bw, bh));
         // Areas of the client rect not covered by the buffer (mid-resize).
-        if w.decorated() && (buf.width < dst.w || buf.height < dst.h) {
-            c.fill_rect(Rect::new(dst.x + buf.width, dst.y, dst.w - buf.width, dst.h), theme::CLIENT_BACKGROUND);
-            c.fill_rect(
-                Rect::new(dst.x, dst.y + buf.height, buf.width.min(dst.w), dst.h - buf.height),
-                theme::CLIENT_BACKGROUND,
-            );
+        if w.decorated() && (bw < dst.w || bh < dst.h) {
+            c.fill_rect(Rect::new(dst.x + bw, dst.y, dst.w - bw, dst.h), theme::CLIENT_BACKGROUND);
+            c.fill_rect(Rect::new(dst.x, dst.y + bh, bw.min(dst.w), dst.h - bh), theme::CLIENT_BACKGROUND);
         }
         if vis.is_empty() {
             return;
         }
+        let n = vis.w as usize;
+        if self.row.len() < n {
+            self.row.resize(n, 0);
+        }
         let b = c.bounds();
         let (pixels, stride) = c.pixels_mut();
-        let rad = radius as f32;
         let corner_top = dst.bottom() - radius;
-        // Opaque windows (not fading) are copied row by row, except for
-        // the anti-aliased rounded corners.
-        let copy = w.opaque() && opacity == 255;
+        // Opaque windows (not fading) are copied row by row, except for the
+        // anti-aliased rounded corners. Their pixels' alpha is ignored,
+        // fading or not, as the GPU's shader ignores it.
+        let opaque = w.opaque();
+        let copy = opaque && opacity == 255;
+        let alpha = if opaque { 0xFF00_0000 } else { 0 };
         for y in vis.y..vis.bottom() {
-            let sy = y - dst.y;
-            let srow = &src[(sy * buf.stride) as usize..];
-            let drow = ((y - b.y) * stride - b.x) as isize;
+            let to = ((y - b.y) * stride + vis.x - b.x) as usize;
+            let out = &mut pixels[to..to + n];
             let in_corner_rows = radius > 0 && y >= corner_top;
             if copy && !in_corner_rows {
-                let (from, to, n) = ((vis.x - dst.x) as usize, (drow + vis.x as isize) as usize, vis.w as usize);
-                pixels[to..to + n].copy_from_slice(&srow[from..from + n]);
+                if !src.copy_row(vis.x - dst.x, y - dst.y, out) {
+                    out.fill(theme::CLIENT_BACKGROUND.premul());
+                }
                 continue;
             }
-            for x in vis.x..vis.right() {
-                let sx = x - dst.x;
-                let mut px = srow[sx as usize];
-                if copy {
-                    px |= 0xFF00_0000;
-                }
-                let mut cov = opacity;
-                if in_corner_rows {
-                    let cx = if x < dst.x + radius {
-                        Some(dst.x as f32 + rad)
-                    } else if x >= dst.right() - radius {
-                        Some(dst.right() as f32 - rad)
-                    } else {
-                        None
-                    };
-                    if let Some(cx) = cx {
-                        let fx = x as f32 + 0.5 - cx;
-                        let fy = y as f32 + 0.5 - (dst.bottom() as f32 - rad);
-                        let d = (fx * fx + fy * fy).sqrt();
-                        cov = (cov as f32 * (rad - d + 0.5).clamp(0.0, 1.0)) as u32;
-                    }
-                }
-                if cov == 0 {
-                    continue;
-                }
-                if cov < 255 {
-                    px = scale(px, cov);
-                }
-                let d = &mut pixels[(drow + x as isize) as usize];
-                *d = if px >> 24 == 255 { px } else { over(px, *d) };
+            let line = &mut self.row[..n];
+            if !src.copy_row(vis.x - dst.x, y - dst.y, line) {
+                continue;
+            }
+            if in_corner_rows {
+                blend_corner_row(out, line, alpha, opacity, (vis.x, y), (dst, radius));
+            } else {
+                blend_row(out, line, alpha, opacity);
             }
         }
+    }
+}
+
+/// Blends `src` over `dst`, each pixel's alpha raised by `alpha` (an opaque
+/// window's pixels are opaque) and the whole at `opacity` (of 255).
+///
+/// Kept scalar: vectorised, its multiplies become SSE instructions that
+/// QEMU's TCG emulates with slow helper calls (`core::hint::black_box`
+/// keeps LLVM from doing so; see CODING.md's Performance).
+fn blend_row(dst: &mut [u32], src: &[u32], alpha: u32, opacity: u32) {
+    for (d, &s) in dst.iter_mut().zip(src) {
+        let px = core::hint::black_box(s | alpha);
+        let px = if opacity < 255 { scale(px, opacity) } else { px };
+        *d = if px >> 24 == 255 { px } else { over(px, *d) };
+    }
+}
+
+/// [`blend_row`] for a row through a window's rounded bottom corners: the
+/// row of pixels from (`x`, `y`) on, the window's client area `dst`
+/// rounded by `radius`.
+fn blend_corner_row(
+    dst: &mut [u32],
+    src: &[u32],
+    alpha: u32,
+    opacity: u32,
+    (x, y): (i32, i32),
+    (rect, radius): (Rect, i32),
+) {
+    let rad = radius as f32;
+    let fy = y as f32 + 0.5 - (rect.bottom() as f32 - rad);
+    for (i, (d, &s)) in dst.iter_mut().zip(src).enumerate() {
+        let px_x = x + i as i32;
+        let mut cov = opacity;
+        let cx = if px_x < rect.x + radius {
+            Some(rect.x as f32 + rad)
+        } else if px_x >= rect.right() - radius {
+            Some(rect.right() as f32 - rad)
+        } else {
+            None
+        };
+        if let Some(cx) = cx {
+            let fx = px_x as f32 + 0.5 - cx;
+            let dist = (fx * fx + fy * fy).sqrt();
+            cov = (cov as f32 * (rad - dist + 0.5).clamp(0.0, 1.0)) as u32;
+        }
+        if cov == 0 {
+            continue;
+        }
+        let px = core::hint::black_box(s | alpha);
+        let px = if cov < 255 { scale(px, cov) } else { px };
+        *d = if px >> 24 == 255 { px } else { over(px, *d) };
     }
 }
 
@@ -403,24 +449,25 @@ fn draw_button_glyph(c: &mut Canvas, part: Part, r: Rect, color: Color, maximize
 /// larger), the placeholder.
 fn draw_client_gpu(g: &mut Gpu, w: &Window, dst: Rect, opacity: f32, radius: i32, content: Option<Texture>) {
     let background = rgba(theme::CLIENT_BACKGROUND.premul());
-    let (Some(buf), Some(_), Some(t)) = (&w.buffers, w.current, content) else {
+    let (Some((bw, bh)), Some(t)) = (w.surface.size(), content) else {
         if w.decorated() {
             g.fill(dst, 0.0, background);
         }
         return;
     };
-    if w.decorated() && (buf.width < dst.w || buf.height < dst.h) {
-        g.fill(Rect::new(dst.x + buf.width, dst.y, dst.w - buf.width, dst.h), 0.0, background);
-        g.fill(Rect::new(dst.x, dst.y + buf.height, buf.width.min(dst.w), dst.h - buf.height), 0.0, background);
+    if w.decorated() && (bw < dst.w || bh < dst.h) {
+        g.fill(Rect::new(dst.x + bw, dst.y, dst.w - bw, dst.h), 0.0, background);
+        g.fill(Rect::new(dst.x, dst.y + bh, bw.min(dst.w), dst.h - bh), 0.0, background);
     }
-    let vis = dst.intersect(&Rect::new(dst.x, dst.y, buf.width, buf.height));
+    let vis = dst.intersect(&Rect::new(dst.x, dst.y, bw, bh));
     let round = (radius > 0).then_some((dst, radius as f32));
     g.image(t, Rect::new(0, 0, vis.w, vis.h), vis, opacity, w.opaque(), round);
 }
 
 /// What a decorated window's title bar is drawn from: its texture is
 /// drawn again when this changes (never 0).
-fn title_key(w: &Window, focused: bool, st: DecorState) -> u64 {
+fn title_key(w: &Window, look: Look) -> u64 {
+    let (focused, st) = (look.focused, look.decor);
     let mut h: u64 = 0xCBF2_9CE4_8422_2325;
     let mut eat = |v: u64| h = (h ^ v).wrapping_mul(0x0000_0100_0000_01B3);
     for b in w.title.bytes() {
@@ -436,7 +483,11 @@ fn title_key(w: &Window, focused: bool, st: DecorState) -> u64 {
         Some(Part::Edge(..)) => 6,
     };
     eat(w.frame().w as u64);
-    eat(u64::from(focused) | u64::from(w.resizable) << 1 | u64::from(w.state == WindowState::Maximized) << 2);
+    let maximized = w.state == WindowState::Maximized;
+    eat(u64::from(focused)
+        | u64::from(w.resizable) << 1
+        | u64::from(maximized) << 2
+        | u64::from(look.unresponsive) << 3);
     eat(part(st.hover) | part(st.pressed) << 8);
     h | 1
 }

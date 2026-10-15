@@ -10,17 +10,19 @@ use vabi::RawHandle;
 use vabi::startup::StartupView;
 
 use crate::object::{Channel, Handle};
-use crate::sync::SpinLock;
+use crate::sync::Mutex;
 
 #[derive(Default)]
 pub(crate) struct Startup {
+    // A guest's arguments are Linux's (`std::env::args`).
+    #[cfg_attr(veda_guest, allow(dead_code))]
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub cwd: String,
     pub handles: Vec<(u32, Handle)>,
 }
 
-pub(crate) static STARTUP: SpinLock<Option<Startup>> = SpinLock::new(None);
+pub(crate) static STARTUP: Mutex<Option<Startup>> = Mutex::new(None);
 
 /// Command-line arguments; `args()[0]` is the program name.
 #[cfg(not(veda_guest))]
@@ -32,11 +34,6 @@ pub fn args() -> Vec<String> {
 #[cfg(veda_guest)]
 pub fn args() -> Vec<String> {
     std::env::args().collect()
-}
-
-/// The program name (first argument).
-pub fn program_name() -> String {
-    STARTUP.lock().as_ref().and_then(|s| s.args.first().cloned()).unwrap_or_else(|| "?".to_string())
 }
 
 /// The working directory the program was started in (absolute).

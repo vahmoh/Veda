@@ -8,5 +8,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+vgfx = { workspace = true }
+
 [lints]
 workspace = true

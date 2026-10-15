@@ -14,8 +14,7 @@
 
 use core::f32::consts::PI;
 
-use vgfx::{Bitmap, Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
-use vraster::Rasterizer;
+use vgfx::{Bitmap, Canvas, Color, DrawCache, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
 
 /// The height of a glyph in pixels.
 pub const SIZE: i32 = 20;
@@ -35,18 +34,20 @@ pub struct Layer {
     /// Where the layer's top left goes on the canvas.
     x: i32,
     y: i32,
-    raster: Rasterizer,
+    /// What the layer's drawing and cutting keep between them.
+    cache: DrawCache,
 }
 
 impl Layer {
     /// A layer over `r` of a canvas.
     pub fn new(r: Rect) -> Layer {
-        Layer { bitmap: Bitmap::new(r.w, r.h), x: r.x, y: r.y, raster: Rasterizer::new() }
+        Layer { bitmap: Bitmap::new(r.w, r.h), x: r.x, y: r.y, cache: DrawCache::new() }
     }
 
     /// The layer's canvas, its origin at the layer's top left.
     pub fn canvas(&mut self) -> Canvas<'_> {
-        Canvas::for_bitmap(&mut self.bitmap)
+        let (w, h) = (self.bitmap.width, self.bitmap.height);
+        Canvas::with_cache(&mut self.bitmap.pixels, w, h, w, &mut self.cache)
     }
 
     /// Cuts `path` out of what is drawn: each pixel keeps only as much as
@@ -54,7 +55,7 @@ impl Layer {
     pub fn cut(&mut self, path: &Path) {
         let (w, h) = (self.bitmap.width as u32, self.bitmap.height as u32);
         let pixels = &mut self.bitmap.pixels;
-        self.raster.fill(path, &Transform::IDENTITY, FillRule::NonZero, (w, h), |span| {
+        self.cache.rasterizer().fill(path, &Transform::IDENTITY, FillRule::NonZero, (w, h), |span| {
             let start = (span.y * w + span.x) as usize;
             for i in 0..span.len {
                 let cover = span.coverage_at(i) as u32;

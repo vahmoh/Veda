@@ -1,6 +1,67 @@
+--- a/src/iface/interface/ipv6.rs
++++ b/src/iface/interface/ipv6.rs
+@@ -611,6 +611,30 @@
+     }
+ }
+ 
++impl InterfaceInner {
++    /// Veda: see [`Interface::ipv6_address_in`].
++    pub(crate) fn ipv6_address_in(&self, prefix: &Ipv6Cidr) -> Option<Ipv6Cidr> {
++        let Some(secret) = &self.slaac_secret else {
++            return Ipv6Cidr::from_link_prefix(prefix, self.hardware_addr);
++        };
++        if prefix.prefix_len() != 64 {
++            return None;
++        }
++        let iface: &[u8] = match &self.hardware_addr {
++            #[cfg(feature = "medium-ethernet")]
++            HardwareAddress::Ethernet(a) => a.as_bytes(),
++            #[cfg(feature = "medium-ieee802154")]
++            HardwareAddress::Ieee802154(a) => a.as_bytes(),
++            #[allow(unreachable_patterns)]
++            _ => return None,
++        };
++        let mut octets = prefix.address().octets();
++        let net: [u8; 8] = octets[..8].try_into().unwrap();
++        octets[8..].copy_from_slice(&crate::rand::stable_interface_id(secret, &net, iface));
++        Some(Ipv6Cidr::new(Ipv6Address::from_octets(octets), 64))
++    }
++}
++
+ impl Interface {
+     /// Synchronize the slaac address and router state with the interface state.
+     #[cfg(feature = "proto-ipv6-slaac")]
+@@ -622,7 +646,7 @@
+             .iter()
+             .filter_map(|(prefix, prefixinfo)| {
+                 if prefixinfo.is_valid(timestamp) {
+-                    Ipv6Cidr::from_link_prefix(prefix, self.inner.hardware_addr())
++                    self.inner.ipv6_address_in(prefix)
+                 } else {
+                     None
+                 }
+@@ -635,7 +659,7 @@
+             .iter()
+             .filter_map(|(prefix, prefixinfo)| {
+                 if !prefixinfo.is_valid(timestamp) {
+-                    Ipv6Cidr::from_link_prefix(prefix, self.inner.hardware_addr())
++                    self.inner.ipv6_address_in(prefix)
+                 } else {
+                     None
+                 }
 --- a/src/iface/interface/mod.rs
 +++ b/src/iface/interface/mod.rs
-@@ -168,6 +168,12 @@
+@@ -152,6 +152,9 @@
+     slaac: Slaac,
+     #[cfg(feature = "proto-ipv6-slaac")]
+     slaac_updated: Instant,
++    /// Veda: see [`Config::slaac_secret`].
++    #[cfg(feature = "proto-ipv6")]
++    slaac_secret: Option<[u8; 32]>,
+     routes: Routes,
+     #[cfg(feature = "multicast")]
+     multicast: multicast::State,
+@@ -168,6 +171,12 @@
      /// The seed doesn't have to be cryptographically secure.
      pub random_seed: u64,
  
@@ -13,7 +74,21 @@
      /// Set the Hardware address the interface will use.
      ///
      /// # Panics
-@@ -189,6 +195,7 @@
+@@ -183,17 +192,28 @@
+     /// Enable stateless address autoconfiguration on the interface.
+     #[cfg(feature = "proto-ipv6")]
+     pub slaac: bool,
++
++    /// Veda: a secret for stable privacy addresses (RFC 7217): with one,
++    /// the addresses autoconfiguration forms (and those of
++    /// [`Interface::ipv6_address_in`]) do not reveal the hardware address.
++    /// Supply 32 bytes from a cryptographically secure source. When `None`,
++    /// they embed it (EUI-64), as upstream's.
++    #[cfg(feature = "proto-ipv6")]
++    pub slaac_secret: Option<[u8; 32]>,
+ }
+ 
+ impl Config {
      pub fn new(hardware_addr: HardwareAddress) -> Self {
          Config {
              random_seed: 0,
@@ -21,7 +96,14 @@
              hardware_addr,
              #[cfg(feature = "medium-ieee802154")]
              pan_id: None,
-@@ -224,7 +231,11 @@
+             #[cfg(feature = "proto-ipv6")]
+             slaac: false,
++            #[cfg(feature = "proto-ipv6")]
++            slaac_secret: None,
+         }
+     }
+ }
+@@ -224,7 +244,11 @@
              )
          }
  
@@ -34,9 +116,229 @@
  
          #[cfg(feature = "medium-ieee802154")]
          let mut sequence_no;
+@@ -296,11 +320,22 @@
+                 slaac: Slaac::new(),
+                 #[cfg(feature = "proto-ipv6-slaac")]
+                 slaac_updated: Instant::from_millis(0),
++                #[cfg(feature = "proto-ipv6")]
++                slaac_secret: config.slaac_secret,
+                 rand,
+             },
+         }
+     }
+ 
++    /// Veda: the address of this interface in the /64 `prefix`: a stable
++    /// privacy one with [`Config::slaac_secret`], else from the hardware
++    /// address (EUI-64). `None` for other prefix lengths, or an interface
++    /// without a hardware address.
++    #[cfg(feature = "proto-ipv6")]
++    pub fn ipv6_address_in(&self, prefix: &Ipv6Cidr) -> Option<Ipv6Cidr> {
++        self.inner.ipv6_address_in(prefix)
++    }
++
+     /// Get the socket context.
+     ///
+     /// The context is needed for some socket methods.
+@@ -1202,7 +1237,7 @@
+         }
+ 
+         // The request got dispatched, limit the rate on the cache.
+-        self.neighbor_cache.limit_rate(self.now);
++        self.neighbor_cache.limit_rate(dst_addr, self.now);
+         Err(DispatchError::NeighborPending)
+     }
+ 
+--- a/src/iface/interface/tests/ipv6.rs
++++ b/src/iface/interface/tests/ipv6.rs
+@@ -841,6 +841,56 @@
+     );
+ }
+ 
++/// Veda: with a secret, autoconfigured addresses keep the hardware address
++/// to themselves (RFC 7217).
++#[test]
++#[cfg(all(feature = "proto-ipv6-slaac", feature = "medium-ethernet"))]
++fn test_slaac_stable_privacy_addresses() {
++    let mut device = crate::tests::TestingDevice::new(Medium::Ethernet);
++    let hw = HardwareAddress::Ethernet(EthernetAddress([0x02, 0x02, 0x02, 0x02, 0x02, 0x02]));
++    let mut config = Config::new(hw);
++    config.slaac = true;
++    config.slaac_secret = Some([7; 32]);
++    let mut iface = Interface::new(config, &mut device, Instant::ZERO);
++    let prefix = Ipv6Cidr::new(Ipv6Address::new(0x2001, 0xdb8, 0x3, 0, 0, 0, 0, 0), 64);
++    let router = Ipv6Address::new(0xfe80, 0, 0, 0, 0x5054, 0xff, 0xfe00, 0);
++    let info = NdiscPrefixInformation {
++        prefix: prefix.address(),
++        prefix_len: 64,
++        flags: NdiscPrefixInfoFlags::ADDRCONF,
++        valid_lifetime: Duration::from_secs(600),
++        preferred_lifetime: Duration::from_secs(300),
++    };
++    iface.inner.slaac.process_advertisement(
++        &router,
++        Duration::from_secs(600),
++        Some(info),
++        Instant::ZERO,
++    );
++    iface.poll_maintenance(Instant::ZERO);
++    let formed: std::vec::Vec<Ipv6Cidr> = iface
++        .ip_addrs()
++        .iter()
++        .filter_map(|c| match c {
++            IpCidr::Ipv6(c) if prefix.contains_addr(&c.address()) => Some(*c),
++            _ => None,
++        })
++        .collect();
++    assert_eq!(formed.len(), 1);
++    assert_eq!(Some(formed[0]), iface.ipv6_address_in(&prefix));
++    assert_ne!(Some(formed[0]), Ipv6Cidr::from_link_prefix(&prefix, hw));
++    // Link-local too, and only /64 prefixes.
++    let ll = Ipv6Cidr::new(Ipv6Cidr::LINK_LOCAL_PREFIX.address(), 64);
++    assert_ne!(
++        iface.ipv6_address_in(&ll),
++        Ipv6Cidr::from_link_prefix(&ll, hw)
++    );
++    assert_eq!(
++        iface.ipv6_address_in(&Ipv6Cidr::new(prefix.address(), 48)),
++        None
++    );
++}
++
+ #[rstest]
+ #[case(Medium::Ethernet)]
+ #[cfg(feature = "proto-ipv6-slaac")]
+--- a/src/iface/neighbor.rs
++++ b/src/iface/neighbor.rs
+@@ -45,7 +45,10 @@
+ #[derive(Debug)]
+ pub struct Cache {
+     storage: LinearMap<IpAddress, Neighbor, IFACE_NEIGHBOR_CACHE_COUNT>,
+-    silent_until: Instant,
++    /// Veda: the addresses asked for lately, each with when it may be asked
++    /// for again. The rate is limited per address (RFC 1122, 2.3.2.1), so
++    /// that finding one neighbor does not hold back finding another.
++    silent_until: LinearMap<IpAddress, Instant, IFACE_NEIGHBOR_CACHE_COUNT>,
+ }
+ 
+ impl Cache {
+@@ -59,7 +62,7 @@
+     pub fn new() -> Self {
+         Self {
+             storage: LinearMap::new(),
+-            silent_until: Instant::from_millis(0),
++            silent_until: LinearMap::new(),
+         }
+     }
+ 
+@@ -158,19 +161,34 @@
+             return Answer::Found(hardware_addr);
+         }
+ 
+-        if timestamp < self.silent_until {
+-            Answer::RateLimited
+-        } else {
+-            Answer::NotFound
++        match self.silent_until.get(protocol_addr) {
++            Some(&until) if timestamp < until => Answer::RateLimited,
++            _ => Answer::NotFound,
+         }
+     }
+ 
+-    pub(crate) fn limit_rate(&mut self, timestamp: Instant) {
+-        self.silent_until = timestamp + Self::SILENT_TIME;
++    /// Veda: `protocol_addr` was asked for at `timestamp`: it is not asked
++    /// for again before [`Cache::SILENT_TIME`] has passed.
++    pub(crate) fn limit_rate(&mut self, protocol_addr: IpAddress, timestamp: Instant) {
++        self.silent_until.retain(|_, until| *until > timestamp);
++        let until = timestamp + Self::SILENT_TIME;
++        if let Err((protocol_addr, until)) = self.silent_until.insert(protocol_addr, until) {
++            // As many requests as the cache has entries are outstanding:
++            // the one that ends soonest makes room.
++            let soonest = *self
++                .silent_until
++                .iter()
++                .min_by_key(|(_, until)| **until)
++                .expect("empty neighbor rate limits")
++                .0;
++            self.silent_until.remove(&soonest);
++            let _ = self.silent_until.insert(protocol_addr, until);
++        }
+     }
+ 
+     pub(crate) fn flush(&mut self) {
+-        self.storage.clear()
++        self.storage.clear();
++        self.silent_until.clear();
+     }
+ }
+ 
+@@ -305,7 +323,7 @@
+             Answer::NotFound
+         );
+ 
+-        cache.limit_rate(Instant::from_millis(0));
++        cache.limit_rate(MOCK_IP_ADDR_1.into(), Instant::from_millis(0));
+         assert_eq!(
+             cache.lookup(&MOCK_IP_ADDR_1.into(), Instant::from_millis(100)),
+             Answer::RateLimited
+@@ -317,6 +335,54 @@
+     }
+ 
+     #[test]
++    fn test_hush_per_address() {
++        let mut cache = Cache::new();
++
++        // Asking for one neighbor does not keep another from being asked
++        // for (a DNS server's, then the gateway's).
++        cache.limit_rate(MOCK_IP_ADDR_1.into(), Instant::from_millis(0));
++        assert_eq!(
++            cache.lookup(&MOCK_IP_ADDR_2.into(), Instant::from_millis(10)),
++            Answer::NotFound
++        );
++        cache.limit_rate(MOCK_IP_ADDR_2.into(), Instant::from_millis(10));
++        assert_eq!(
++            cache.lookup(&MOCK_IP_ADDR_1.into(), Instant::from_millis(500)),
++            Answer::RateLimited
++        );
++        assert_eq!(
++            cache.lookup(&MOCK_IP_ADDR_2.into(), Instant::from_millis(1005)),
++            Answer::RateLimited
++        );
++        assert_eq!(
++            cache.lookup(&MOCK_IP_ADDR_1.into(), Instant::from_millis(1005)),
++            Answer::NotFound
++        );
++        // Flushing the cache lets every neighbor be asked for at once.
++        cache.flush();
++        assert_eq!(
++            cache.lookup(&MOCK_IP_ADDR_2.into(), Instant::from_millis(1005)),
++            Answer::NotFound
++        );
++    }
++
++    #[test]
++    fn test_hush_with_many_requests_outstanding() {
++        let mut cache = Cache::new();
++
++        // More requests than the cache has entries: the latest ones are
++        // limited, the earliest makes room.
++        let addr = |i: u8| IpAddress::v4(10, 0, 0, i);
++        let n = IFACE_NEIGHBOR_CACHE_COUNT as u8;
++        for i in 0..=n {
++            cache.limit_rate(addr(i + 1), Instant::from_millis(i as i64));
++        }
++        let now = Instant::from_millis(n as i64 + 1);
++        assert_eq!(cache.lookup(&addr(1), now), Answer::NotFound);
++        assert_eq!(cache.lookup(&addr(n + 1), now), Answer::RateLimited);
++    }
++
++    #[test]
+     fn test_flush() {
+         let mut cache = Cache::new();
+ 
 --- a/src/rand.rs
 +++ b/src/rand.rs
-@@ -1,27 +1,111 @@
+@@ -1,27 +1,181 @@
  #![allow(unsafe_code)]
  #![allow(unused)]
  
@@ -84,6 +386,12 @@
 +
 +/// The ChaCha20 block function (RFC 8439) with a 64-bit block counter.
 +fn chacha20(key: &[u32; 8], counter: u64) -> [u32; 16] {
++    chacha20_with_nonce(key, counter, [0; 2])
++}
++
++/// The ChaCha20 block function with a 64-bit block counter and a 64-bit
++/// nonce.
++fn chacha20_with_nonce(key: &[u32; 8], counter: u64, nonce: [u32; 2]) -> [u32; 16] {
 +    let mut init = [0u32; 16];
 +    init[0] = 0x6170_7865;
 +    init[1] = 0x3320_646e;
@@ -92,6 +400,8 @@
 +    init[4..12].copy_from_slice(key);
 +    init[12] = counter as u32;
 +    init[13] = (counter >> 32) as u32;
++    init[14] = nonce[0];
++    init[15] = nonce[1];
 +    let mut s = init;
 +    for _ in 0..10 {
 +        quarter_round(&mut s, 0, 4, 8, 12);
@@ -107,6 +417,60 @@
 +        s[i] = s[i].wrapping_add(init[i]);
 +    }
 +    s
++}
++
++/// A ChaCha20 key's words.
++fn key_words(bytes: &[u8; 32]) -> [u32; 8] {
++    let mut key = [0u32; 8];
++    for (i, k) in key.iter_mut().enumerate() {
++        *k = u32::from_le_bytes([
++            bytes[4 * i],
++            bytes[4 * i + 1],
++            bytes[4 * i + 2],
++            bytes[4 * i + 3],
++        ]);
++    }
++    key
++}
++
++/// Veda: a stable privacy interface identifier (RFC 7217) for the address
++/// of interface `iface` (its hardware address) in the /64 `prefix`: the
++/// same for the same prefix and interface, unrelated across prefixes, and
++/// revealing nothing of the hardware address, unlike EUI-64. RFC 7217's
++/// F(Prefix, Net_Iface, Network_ID, DAD_Counter, secret_key) is ChaCha20
++/// keyed with `secret`, the prefix its block counter and the interface and
++/// counter its nonce; identifiers RFC 5453 reserves are passed over (the
++/// counter grows).
++pub(crate) fn stable_interface_id(secret: &[u8; 32], prefix: &[u8; 8], iface: &[u8]) -> [u8; 8] {
++    let key = key_words(secret);
++    // The interface (6 bytes for Ethernet; longer addresses folded in).
++    let mut id = [0u8; 6];
++    for (i, b) in iface.iter().enumerate() {
++        id[i % 6] ^= b;
++    }
++    for dad_counter in 0..=u16::MAX {
++        let nonce = [
++            u32::from_le_bytes([id[0], id[1], id[2], id[3]]),
++            u32::from_le_bytes([id[4], id[5], dad_counter as u8, (dad_counter >> 8) as u8]),
++        ];
++        let block = chacha20_with_nonce(&key, u64::from_be_bytes(*prefix), nonce);
++        let iid = (block[0] as u64) << 32 | block[1] as u64;
++        if !is_reserved_interface_id(iid) {
++            return iid.to_be_bytes();
++        }
++    }
++    // 65536 reserved identifiers in a row do not happen with a keyed PRF.
++    [0x0a; 8]
++}
++
++/// Whether RFC 5453 reserves the interface identifier `iid`: the
++/// subnet-router anycast identifier, those of IANA's Ethernet block
++/// (0200:5EFF:FE00:0000 to 0200:5EFF:FEFF:FFFF) and the subnet anycast
++/// identifiers (FDFF:FFFF:FFFF:FF80 to FDFF:FFFF:FFFF:FFFF).
++fn is_reserved_interface_id(iid: u64) -> bool {
++    iid == 0
++        || iid & 0xFFFF_FFFF_FF00_0000 == 0x0200_5EFF_FE00_0000
++        || (0xFDFF_FFFF_FFFF_FF80..=0xFDFF_FFFF_FFFF_FFFF).contains(&iid)
  }
  
  impl Rand {
@@ -114,7 +478,13 @@
 +    /// suitable when the output must be unpredictable.
      pub(crate) const fn new(seed: u64) -> Self {
 -        Self { state: seed }
-+        Self { state: seed, key: None, counter: 0, block: [0; 16], used: 16 }
++        Self {
++            state: seed,
++            key: None,
++            counter: 0,
++            block: [0; 16],
++            used: 16,
++        }
      }
  
 -    pub(crate) fn rand_u32(&mut self) -> u32 {
@@ -128,11 +498,13 @@
 +    /// A generator keyed with 32 bytes from a cryptographically secure
 +    /// source.
 +    pub(crate) fn with_key(bytes: [u8; 32]) -> Self {
-+        let mut key = [0u32; 8];
-+        for (i, k) in key.iter_mut().enumerate() {
-+            *k = u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
++        Self {
++            state: 0,
++            key: Some(key_words(&bytes)),
++            counter: 0,
++            block: [0; 16],
++            used: 16,
 +        }
-+        Self { state: 0, key: Some(key), counter: 0, block: [0; 16], used: 16 }
 +    }
  
 -        let shift = 29 - (s >> 61);
@@ -160,7 +532,7 @@
      }
  
      pub(crate) fn rand_u16(&mut self) -> u16 {
-@@ -38,3 +122,36 @@
+@@ -38,3 +192,85 @@
          }
      }
  }
@@ -168,6 +540,55 @@
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++
++    #[test]
++    fn stable_interface_ids() {
++        let prefix = [0x20, 0x01, 0x0d, 0xb8, 0, 3, 0, 0];
++        let mac = [0x02, 0x02, 0x02, 0x02, 0x02, 0x02];
++        let id = stable_interface_id(&[7; 32], &prefix, &mac);
++        // Stable for a prefix and an interface...
++        assert_eq!(id, stable_interface_id(&[7; 32], &prefix, &mac));
++        // ...unrelated across prefixes, interfaces and secrets...
++        assert_ne!(
++            id,
++            stable_interface_id(&[7; 32], &[0x20, 0x01, 0x0d, 0xb8, 0, 4, 0, 0], &mac)
++        );
++        assert_ne!(
++            id,
++            stable_interface_id(&[7; 32], &prefix, &[0x02, 0x02, 0x02, 0x02, 0x02, 0x03])
++        );
++        assert_ne!(id, stable_interface_id(&[8; 32], &prefix, &mac));
++        // ...and nothing like the EUI-64 identifier.
++        assert_ne!(id, [0x00, 0x02, 0x02, 0xff, 0xfe, 0x02, 0x02, 0x02]);
++        for n in 0..2000u32 {
++            let iid = u64::from_be_bytes(stable_interface_id(&[9; 32], &prefix, &n.to_le_bytes()));
++            assert!(!is_reserved_interface_id(iid));
++        }
++    }
++
++    #[test]
++    fn reserved_interface_ids() {
++        for iid in [
++            0,
++            0x0200_5EFF_FE00_0000,
++            0x0200_5EFF_FE00_5213,
++            0x0200_5EFF_FEFF_FFFF,
++        ] {
++            assert!(is_reserved_interface_id(iid));
++        }
++        for iid in [0xFDFF_FFFF_FFFF_FF80, 0xFDFF_FFFF_FFFF_FFFF] {
++            assert!(is_reserved_interface_id(iid));
++        }
++        for iid in [
++            1,
++            0x0200_5EFF_FD00_0000,
++            0x0200_5EFF_FF00_0000,
++            0xFDFF_FFFF_FFFF_FF7F,
++            0xFE00_0000_0000_0000,
++        ] {
++            assert!(!is_reserved_interface_id(iid));
++        }
++    }
 +
 +    /// RFC 8439, appendix A.1, test vector #1: an all-zero key gives a known
 +    /// keystream (the 64-bit counter layout equals the RFC's with a zero
@@ -197,3 +618,634 @@
 +        }
 +    }
 +}
+--- a/src/socket/dhcpv4.rs
++++ b/src/socket/dhcpv4.rs
+@@ -226,6 +226,17 @@
+         self.retry_config
+     }
+ 
++    /// Veda: when the lease of the address ends (`None` while no address is
++    /// leased): the lease time the server gave in its last acknowledgement
++    /// that the client accepted, capped by
++    /// [`Self::set_max_lease_duration()`]. A renewal moves it.
++    pub fn lease_expires_at(&self) -> Option<Instant> {
++        match &self.state {
++            ClientState::Renewing(state) => Some(state.expires_at),
++            _ => None,
++        }
++    }
++
+     /// Set the outgoing options.
+     pub fn set_outgoing_options(&mut self, options: &'a [DhcpOption<'a>]) {
+         self.outgoing_options = options;
+@@ -1159,6 +1170,10 @@
+             }
+             _ => panic!("Invalid state"),
+         }
++        // Veda: the lease, as the client accepted it.
++        assert_eq!(s.lease_expires_at(), Some(Instant::from_secs(1000)));
++        s.reset();
++        assert_eq!(s.lease_expires_at(), None);
+     }
+ 
+     #[rstest]
+--- a/src/socket/icmp.rs
++++ b/src/socket/icmp.rs
+@@ -480,6 +480,16 @@
+             | (&Endpoint::Ident(bound_ident), &Icmpv4Repr::EchoReply { ident, .. }) => {
+                 ident == bound_ident
+             }
++            // Veda: and Destination Unreachable or Time Exceeded messages
++            // about an Echo Request with that identifier (the request they
++            // quote), so that ping learns why a request went unanswered.
++            (
++                &Endpoint::Ident(bound_ident),
++                &Icmpv4Repr::DstUnreachable { data, header, .. }
++                | &Icmpv4Repr::TimeExceeded { data, header, .. },
++            ) if header.next_header == IpProtocol::Icmp => {
++                quotes_echo_request(data, 8, bound_ident)
++            }
+             _ => false,
+         }
+     }
+@@ -542,6 +552,15 @@
+                 &Endpoint::Ident(bound_ident),
+                 &Icmpv6Repr::EchoRequest { ident, .. } | &Icmpv6Repr::EchoReply { ident, .. },
+             ) => ident == bound_ident,
++            // Veda: and errors about an Echo Request of that identifier
++            // (see accepts_v4).
++            (
++                &Endpoint::Ident(bound_ident),
++                &Icmpv6Repr::DstUnreachable { data, header, .. }
++                | &Icmpv6Repr::TimeExceeded { data, header, .. },
++            ) if header.next_header == IpProtocol::Icmpv6 => {
++                quotes_echo_request(data, 128, bound_ident)
++            }
+             _ => false,
+         }
+     }
+@@ -693,6 +712,13 @@
+     }
+ }
+ 
++/// Veda: whether `data`, what an ICMP error quotes of a packet after its IP
++/// header, is an Echo Request (ICMP type `echo_request`) with identifier
++/// `ident`.
++fn quotes_echo_request(data: &[u8], echo_request: u8, ident: u16) -> bool {
++    data.len() >= 8 && data[0] == echo_request && u16::from_be_bytes([data[4], data[5]]) == ident
++}
++
+ #[cfg(test)]
+ mod tests_common {
+     pub use super::*;
+@@ -978,6 +1004,57 @@
+         );
+         assert!(!socket.can_recv());
+     }
++
++    /// Veda: errors about an echo request of the socket's identifier reach
++    /// it; errors about others' do not.
++    #[rstest]
++    #[case::ethernet(Medium::Ethernet)]
++    #[cfg(feature = "medium-ethernet")]
++    fn test_accepts_errors_about_its_echo_requests(#[case] medium: Medium) {
++        let (mut iface, _, _) = setup(medium);
++        let cx = iface.context();
++        let mut socket = socket(buffer(1), buffer(1));
++        assert_eq!(socket.bind(Endpoint::Ident(0x1234)), Ok(()));
++        let checksum = ChecksumCapabilities::default();
++        for (ident, accepted) in [(0x1234, true), (0x4321, false)] {
++            let request = Icmpv4Repr::EchoRequest {
++                ident,
++                seq_no: 7,
++                data: &[0xaa; 8],
++            };
++            let mut bytes = [0u8; 16];
++            request.emit(&mut Icmpv4Packet::new_unchecked(&mut bytes[..]), &checksum);
++            let header = Ipv4Repr {
++                src_addr: LOCAL_IPV4,
++                dst_addr: REMOTE_IPV4,
++                next_header: IpProtocol::Icmp,
++                payload_len: bytes.len(),
++                hop_limit: 1,
++            };
++            let errors = [
++                Icmpv4Repr::TimeExceeded {
++                    reason: crate::wire::Icmpv4TimeExceeded::TtlExpired,
++                    header,
++                    data: &bytes,
++                },
++                Icmpv4Repr::DstUnreachable {
++                    reason: Icmpv4DstUnreachable::HostUnreachable,
++                    header,
++                    data: &bytes,
++                },
++            ];
++            for error in errors {
++                let ip_repr = Ipv4Repr {
++                    src_addr: REMOTE_IPV4,
++                    dst_addr: LOCAL_IPV4,
++                    next_header: IpProtocol::Icmp,
++                    payload_len: error.buffer_len(),
++                    hop_limit: 0x40,
++                };
++                assert_eq!(socket.accepts_v4(cx, &ip_repr, &error), accepted);
++            }
++        }
++    }
+ }
+ 
+ #[cfg(all(test, feature = "proto-ipv6"))]
+@@ -1270,4 +1347,56 @@
+         );
+         assert!(!socket.can_recv());
+     }
++
++    /// Veda: errors about an echo request of the socket's identifier reach
++    /// it; errors about others' do not.
++    #[rstest]
++    #[case::ethernet(Medium::Ethernet)]
++    #[cfg(feature = "medium-ethernet")]
++    fn test_accepts_errors_about_its_echo_requests(#[case] medium: Medium) {
++        let (mut iface, _, _) = setup(medium);
++        let cx = iface.context();
++        let mut socket = socket(buffer(1), buffer(1));
++        assert_eq!(socket.bind(Endpoint::Ident(0x1234)), Ok(()));
++        let checksum = ChecksumCapabilities::default();
++        for (ident, accepted) in [(0x1234, true), (0x4321, false)] {
++            let request = Icmpv6Repr::EchoRequest {
++                ident,
++                seq_no: 7,
++                data: &[0xaa; 8],
++            };
++            let mut bytes = [0u8; 16];
++            let mut packet = Icmpv6Packet::new_unchecked(&mut bytes[..]);
++            request.emit(&LOCAL_IPV6, &REMOTE_IPV6, &mut packet, &checksum);
++            let header = Ipv6Repr {
++                src_addr: LOCAL_IPV6,
++                dst_addr: REMOTE_IPV6,
++                next_header: IpProtocol::Icmpv6,
++                payload_len: bytes.len(),
++                hop_limit: 1,
++            };
++            let errors = [
++                Icmpv6Repr::TimeExceeded {
++                    reason: crate::wire::Icmpv6TimeExceeded::HopLimitExceeded,
++                    header,
++                    data: &bytes,
++                },
++                Icmpv6Repr::DstUnreachable {
++                    reason: Icmpv6DstUnreachable::AddrUnreachable,
++                    header,
++                    data: &bytes,
++                },
++            ];
++            for error in errors {
++                let ip_repr = Ipv6Repr {
++                    src_addr: REMOTE_IPV6,
++                    dst_addr: LOCAL_IPV6,
++                    next_header: IpProtocol::Icmpv6,
++                    payload_len: error.buffer_len(),
++                    hop_limit: 0x40,
++                };
++                assert_eq!(socket.accepts_v6(cx, &ip_repr, &error), accepted);
++            }
++        }
++    }
+ }
+--- a/src/socket/tcp.rs
++++ b/src/socket/tcp.rs
+@@ -479,6 +479,9 @@
+     timeout: Option<Duration>,
+     /// Interval at which keep-alive packets will be sent.
+     keep_alive: Option<Duration>,
++    /// Veda: the connection was aborted because the timeout expired (see
++    /// [`Socket::has_timed_out`]).
++    expired: bool,
+     /// The time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
+     hop_limit: Option<u8>,
+     /// Address passed to listen(). Listen address is set when listen() is called and
+@@ -596,6 +599,7 @@
+             rx_fin_received: false,
+             timeout: None,
+             keep_alive: None,
++            expired: false,
+             hop_limit: None,
+             listen_endpoint: IpListenEndpoint::default(),
+             tuple: None,
+@@ -733,6 +737,16 @@
+         self.timeout
+     }
+ 
++    /// Veda: whether the connection was aborted because the remote endpoint
++    /// did not answer within the timeout (see
++    /// [set_timeout](#method.set_timeout)): a connection attempt, data or a
++    /// FIN that went unacknowledged, or keep-alive probes unanswered. A
++    /// connection that was reset or closed has not timed out. It holds while
++    /// the socket stays closed, until it is used again.
++    pub fn has_timed_out(&self) -> bool {
++        self.expired
++    }
++
+     /// Return the ACK delay duration.
+     ///
+     /// See also the [set_ack_delay](#method.set_ack_delay) method.
+@@ -795,6 +809,10 @@
+     ///     endpoint exceeds the specified duration between any two packets it sends;
+     ///   * After enabling [keep-alive](#method.set_keep_alive), the remote endpoint exceeds
+     ///     the specified duration between any two packets it sends.
++    ///
++    /// Veda: likewise after [close](#method.close), while the FIN is not acknowledged. A
++    /// connection with none of these pending is idle and does not time out, however long
++    /// it is quiet.
+     pub fn set_timeout(&mut self, duration: Option<Duration>) {
+         self.timeout = duration
+     }
+@@ -842,6 +860,9 @@
+     /// The keep-alive functionality together with the timeout functionality allows to react
+     /// to these error conditions.
+     pub fn set_keep_alive(&mut self, interval: Option<Duration>) {
++        if interval.is_some() {
++            self.start_awaiting_ack();
++        }
+         self.keep_alive = interval;
+         if self.keep_alive.is_some() {
+             // If the connection is idle and we've just set the option, it would not take effect
+@@ -924,6 +945,7 @@
+         self.remote_win_shift = rx_cap_log2.saturating_sub(16) as u8;
+         self.remote_mss = DEFAULT_MSS;
+         self.remote_last_ts = None;
++        self.expired = false;
+         self.ack_delay_timer = AckDelayTimer::Idle;
+         self.challenge_ack_timer = Instant::from_secs(0);
+ 
+@@ -1090,8 +1112,14 @@
+             State::SynSent => self.set_state(State::Closed),
+             // In the SYN-RECEIVED, ESTABLISHED and CLOSE-WAIT states the transmit half
+             // of the connection is open, and needs to be explicitly closed with a FIN.
+-            State::SynReceived | State::Established => self.set_state(State::FinWait1),
+-            State::CloseWait => self.set_state(State::LastAck),
++            State::SynReceived | State::Established => {
++                self.start_awaiting_ack();
++                self.set_state(State::FinWait1)
++            }
++            State::CloseWait => {
++                self.start_awaiting_ack();
++                self.set_state(State::LastAck)
++            }
+             // In the FIN-WAIT-1, FIN-WAIT-2, CLOSING, LAST-ACK, TIME-WAIT and CLOSED states,
+             // the transmit half of the connection is already closed, and no further
+             // action is needed.
+@@ -2289,9 +2317,40 @@
+         }
+     }
+ 
++    /// Veda: whether the remote endpoint owes us an answer: data, a SYN or a FIN
++    /// of ours is not acknowledged yet, or keep-alive probes are sent. Only
++    /// then does the timeout apply (see [set_timeout](#method.set_timeout)): a
++    /// connection on which neither side has anything to say is idle, not
++    /// failed.
++    fn awaits_ack(&self) -> bool {
++        self.keep_alive.is_some()
++            || !self.tx_buffer.is_empty()
++            || matches!(
++                self.state,
++                State::SynSent
++                    | State::SynReceived
++                    | State::FinWait1
++                    | State::Closing
++                    | State::LastAck
++            )
++    }
++
++    /// Veda: the socket is about to wait for an answer (it sends a FIN, or
++    /// keep-alive probes). If it waited for none until now, the remote
++    /// endpoint's silence so far is no failure: the timeout counts from the
++    /// next packet sent, as it does when data is queued on an idle
++    /// connection (see `send_impl`).
++    fn start_awaiting_ack(&mut self) {
++        if !self.awaits_ack() {
++            self.remote_last_ts = None;
++        }
++    }
++
+     fn timed_out(&self, timestamp: Instant) -> bool {
+         match (self.remote_last_ts, self.timeout) {
+-            (Some(remote_last_ts), Some(timeout)) => timestamp >= remote_last_ts + timeout,
++            (Some(remote_last_ts), Some(timeout)) => {
++                self.awaits_ack() && timestamp >= remote_last_ts + timeout
++            }
+             (_, _) => false,
+         }
+     }
+@@ -2470,6 +2529,8 @@
+         if self.timed_out(cx.now()) {
+             // If a timeout expires, we should abort the connection.
+             net_debug!("timeout exceeded");
++            // Veda: and tell why it ended (see has_timed_out).
++            self.expired |= self.state != State::Closed;
+             self.set_state(State::Closed);
+         } else if self.timer.should_retransmit(cx.now()) {
+             if let Timer::Retransmit { .. } = self.timer {
+@@ -2887,7 +2948,9 @@
+             let timeout_poll_at = match (self.remote_last_ts, self.timeout) {
+                 // If we're transmitting or retransmitting data, we need to poll at the moment
+                 // when the timeout would expire.
+-                (Some(remote_last_ts), Some(timeout)) => PollAt::Time(remote_last_ts + timeout),
++                (Some(remote_last_ts), Some(timeout)) if self.awaits_ack() => {
++                    PollAt::Time(remote_last_ts + timeout)
++                }
+                 // Otherwise we have no timeout.
+                 (_, _) => PollAt::Ingress,
+             };
+@@ -5421,6 +5484,8 @@
+             }
+         );
+         assert_eq!(s.state, State::Closed);
++        // Veda: reset, not timed out.
++        assert!(!s.has_timed_out());
+     }
+ 
+     #[test]
+@@ -8599,6 +8664,10 @@
+             ..RECV_TEMPL
+         }));
+         assert_eq!(s.state, State::Closed);
++        // Veda: it says why, until it is used again.
++        assert!(s.has_timed_out());
++        s.listen(LISTEN_END).unwrap();
++        assert!(!s.has_timed_out());
+     }
+ 
+     #[test]
+@@ -8606,10 +8675,8 @@
+         let mut s = socket_established();
+         s.set_timeout(Some(Duration::from_millis(2000)));
+         recv_nothing!(s, time 250);
+-        assert_eq!(
+-            s.socket.poll_at(&mut s.cx),
+-            PollAt::Time(Instant::from_millis(2250))
+-        );
++        // Veda: nothing is unacknowledged, so no timeout is pending.
++        assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Ingress);
+         s.send_slice(b"abcdef").unwrap();
+         assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Now);
+         recv!(s, time 255, Ok(TcpRepr {
+@@ -8639,6 +8706,102 @@
+             ..RECV_TEMPL
+         }));
+         assert_eq!(s.state, State::Closed);
++        assert!(s.has_timed_out());
++    }
++
++    #[test]
++    fn test_established_idle_does_not_time_out() {
++        // Veda: a connection on which nothing is unacknowledged lives on,
++        // however long it is quiet.
++        let mut s = socket_established();
++        s.set_timeout(Some(Duration::from_millis(2000)));
++        recv_nothing!(s, time 250);
++        assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Ingress);
++        recv_nothing!(s, time 2250);
++        recv_nothing!(s, time 60_000);
++        assert_eq!(s.state, State::Established);
++        // Data sent after the quiet time: the timeout counts from it.
++        s.send_slice(b"abcdef").unwrap();
++        recv!(s, time 60_000, Ok(TcpRepr {
++            seq_number: LOCAL_SEQ + 1,
++            ack_number: Some(REMOTE_SEQ + 1),
++            payload:    &b"abcdef"[..],
++            ..RECV_TEMPL
++        }));
++        send!(s, time 60_100, TcpRepr {
++            seq_number: REMOTE_SEQ + 1,
++            ack_number: Some(LOCAL_SEQ + 1 + 6),
++            ..SEND_TEMPL
++        });
++        // Everything acknowledged: quiet again, and no timeout.
++        assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Ingress);
++        recv_nothing!(s, time 120_000);
++        assert_eq!(s.state, State::Established);
++    }
++
++    #[test]
++    fn test_close_after_idle_waits_for_the_fin() {
++        // Veda: closing a connection that was quiet for longer than the
++        // timeout sends the FIN, and gives up only if it is not answered.
++        let mut s = socket_established();
++        s.set_timeout(Some(Duration::from_millis(2000)));
++        recv_nothing!(s, time 250);
++        s.close();
++        recv!(s, time 10_000, Ok(TcpRepr {
++            control:    TcpControl::Fin,
++            seq_number: LOCAL_SEQ + 1,
++            ack_number: Some(REMOTE_SEQ + 1),
++            ..RECV_TEMPL
++        }));
++        assert_eq!(s.state, State::FinWait1);
++        assert_eq!(
++            s.socket.poll_at(&mut s.cx),
++            PollAt::Time(Instant::from_millis(11_000))
++        );
++        recv!(s, time 11_000, Ok(TcpRepr {
++            control:    TcpControl::Fin,
++            seq_number: LOCAL_SEQ + 1,
++            ack_number: Some(REMOTE_SEQ + 1),
++            ..RECV_TEMPL
++        }));
++        recv!(s, time 12_000, Ok(TcpRepr {
++            control:    TcpControl::Rst,
++            seq_number: LOCAL_SEQ + 1 + 1,
++            ack_number: Some(REMOTE_SEQ + 1),
++            ..RECV_TEMPL
++        }));
++        assert_eq!(s.state, State::Closed);
++    }
++
++    #[test]
++    fn test_keep_alive_enabled_after_idle() {
++        // Veda: keep-alive switched on after a quiet time probes first; the
++        // timeout counts from the first probe.
++        let mut s = socket_established();
++        s.set_timeout(Some(Duration::from_millis(100)));
++        recv_nothing!(s, time 50);
++        recv_nothing!(s, time 10_000);
++        s.set_keep_alive(Some(Duration::from_millis(50)));
++        recv!(s, time 10_000, Ok(TcpRepr {
++            seq_number: LOCAL_SEQ,
++            ack_number: Some(REMOTE_SEQ + 1),
++            payload:    &[0],
++            ..RECV_TEMPL
++        }));
++        assert_eq!(s.state, State::Established);
++        recv!(s, time 10_050, Ok(TcpRepr {
++            seq_number: LOCAL_SEQ,
++            ack_number: Some(REMOTE_SEQ + 1),
++            payload:    &[0],
++            ..RECV_TEMPL
++        }));
++        recv!(s, time 10_100, Ok(TcpRepr {
++            control:    TcpControl::Rst,
++            seq_number: LOCAL_SEQ + 1,
++            ack_number: Some(REMOTE_SEQ + 1),
++            ..RECV_TEMPL
++        }));
++        assert_eq!(s.state, State::Closed);
+     }
+ 
+     #[test]
+@@ -8686,6 +8849,7 @@
+         }));
+         recv_nothing!(s, time 205);
+         assert_eq!(s.state, State::Closed);
++        assert!(s.has_timed_out());
+     }
+ 
+     #[test]
+@@ -8705,6 +8869,7 @@
+             ..RECV_TEMPL
+         }));
+         assert_eq!(s.state, State::Closed);
++        assert!(s.has_timed_out());
+     }
+ 
+     #[test]
+@@ -8724,6 +8889,7 @@
+             ..RECV_TEMPL
+         }));
+         assert_eq!(s.state, State::Closed);
++        assert!(s.has_timed_out());
+     }
+ 
+     #[test]
+@@ -8740,6 +8906,8 @@
+             ..RECV_TEMPL
+         }));
+         assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Ingress);
++        // Veda: aborted, not timed out.
++        assert!(!s.has_timed_out());
+     }
+ 
+     // =========================================================================================//
+--- a/src/wire/icmpv4.rs
++++ b/src/wire/icmpv4.rs
+@@ -4,7 +4,7 @@
+ use super::{Error, Result};
+ use crate::phy::ChecksumCapabilities;
+ use crate::wire::ip::checksum;
+-use crate::wire::{Ipv4Packet, Ipv4Repr};
++use crate::wire::{IPV4_HEADER_LEN, Ipv4Packet, Ipv4Repr};
+ 
+ enum_with_unknown! {
+     /// Internet protocol control message type.
+@@ -389,6 +389,23 @@
+     },
+ }
+ 
++/// Veda: the packet an error message quotes, of which routers send the
++/// header and the first 64 bits of its data (RFC 792), or as much as fits
++/// in 576 bytes (RFC 1812): the header must be whole, the rest need not be.
++/// (`Ipv4Packet::new_checked` wants the whole packet, as long as its header
++/// says, which dropped the errors about all but the shortest packets.)
++fn quoted_packet(data: &[u8]) -> Result<Ipv4Packet<&[u8]>> {
++    if data.len() < IPV4_HEADER_LEN {
++        return Err(Error);
++    }
++    let packet = Ipv4Packet::new_unchecked(data);
++    let header_len = packet.header_len() as usize;
++    if header_len < IPV4_HEADER_LEN || header_len > data.len() {
++        return Err(Error);
++    }
++    Ok(packet)
++}
++
+ impl<'a> Repr<'a> {
+     /// Parse an Internet Control Message Protocol version 4 packet and return
+     /// a high-level representation.
+@@ -420,7 +437,8 @@
+             }),
+ 
+             (Message::DstUnreachable, code) => {
+-                let ip_packet = Ipv4Packet::new_checked(packet.data())?;
++                // Veda: the quoted packet may be cut short (see quoted_packet).
++                let ip_packet = quoted_packet(packet.data())?;
+ 
+                 let payload = &packet.data()[ip_packet.header_len() as usize..];
+                 // RFC 792 requires exactly eight bytes to be returned.
+@@ -443,7 +461,8 @@
+             }
+ 
+             (Message::TimeExceeded, code) => {
+-                let ip_packet = Ipv4Packet::new_checked(packet.data())?;
++                // Veda: the quoted packet may be cut short (see quoted_packet).
++                let ip_packet = quoted_packet(packet.data())?;
+ 
+                 let payload = &packet.data()[ip_packet.header_len() as usize..];
+                 // RFC 792 requires exactly eight bytes to be returned.
+@@ -701,4 +720,66 @@
+         assert_eq!(Packet::new_checked(&bytes[..4]), Err(Error));
+         assert!(Packet::new_checked(&bytes[..]).is_ok());
+     }
++
++    /// Veda: routers quote the header of the packet an error is about and
++    /// the first eight bytes of its data (RFC 792), or more, but seldom all
++    /// of it.
++    #[test]
++    fn test_parse_errors_quoting_part_of_a_packet() {
++        use crate::wire::{IpProtocol, Ipv4Address};
++        // An echo request with 56 bytes of data, of which a router quotes
++        // the ICMP header.
++        let header = Ipv4Repr {
++            src_addr: Ipv4Address::new(10, 0, 2, 15),
++            dst_addr: Ipv4Address::new(192, 0, 2, 7),
++            next_header: IpProtocol::Icmp,
++            payload_len: 64,
++            hop_limit: 1,
++        };
++        let request = [0x08, 0x00, 0x00, 0x00, 0x12, 0x34, 0x00, 0x07];
++        for (message, code) in [(Message::TimeExceeded, 0), (Message::DstUnreachable, 1)] {
++            let mut bytes = [0u8; 8 + 20 + 8];
++            let mut packet = Packet::new_unchecked(&mut bytes[..]);
++            packet.set_msg_type(message);
++            packet.set_msg_code(code);
++            let quoted = packet.data_mut();
++            header.emit(
++                &mut Ipv4Packet::new_unchecked(&mut quoted[..20]),
++                &ChecksumCapabilities::default(),
++            );
++            quoted[20..].copy_from_slice(&request);
++            packet.fill_checksum();
++            let packet = Packet::new_unchecked(&bytes[..]);
++            let repr = Repr::parse(&packet, &ChecksumCapabilities::default()).unwrap();
++            let quoted = Ipv4Repr {
++                payload_len: 8,
++                ..header
++            };
++            let expected = match message {
++                Message::TimeExceeded => Repr::TimeExceeded {
++                    reason: TimeExceeded::TtlExpired,
++                    header: quoted,
++                    data: &request,
++                },
++                _ => Repr::DstUnreachable {
++                    reason: DstUnreachable::HostUnreachable,
++                    header: quoted,
++                    data: &request,
++                },
++            };
++            assert_eq!(repr, expected);
++            // The quoted header must be whole, and eight bytes of data
++            // follow it.
++            for len in [8 + 19, 8 + 20 + 7] {
++                let mut short = bytes[..len].to_vec();
++                let mut packet = Packet::new_unchecked(&mut short[..]);
++                packet.fill_checksum();
++                let packet = Packet::new_unchecked(&short[..]);
++                assert_eq!(
++                    Repr::parse(&packet, &ChecksumCapabilities::default()),
++                    Err(Error)
++                );
++            }
++        }
++    }
+ }

@@ -7,14 +7,15 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::{Entry, Sema};
+use super::{Entry, MAX_FOLDED, Sema};
 use crate::ast::{self, BinaryOp, Callee, ExprKind as A, UnaryOp};
-use crate::builtins::{self, Builtin, CallError};
+use crate::builtins::{self, Builtin, BuiltinVar, CallError};
 use crate::diag::{Loc, error};
 use crate::hir::{self, BinOp, ConstValue, Expr, ExprKind as H, FuncId, LogicOp, Swizzle, UnOp, VarKind};
 use crate::intern::Symbol;
 use crate::lower::{self, ConstEmit};
 use crate::ops;
+use crate::pp::Ext;
 use crate::types::{Basic, Element, Scalar, Type};
 use crate::{Stage, Version};
 
@@ -27,46 +28,67 @@ impl Sema<'_> {
     }
 
     /// Checks an expression.
+    ///
+    /// The checks recurse once per level of the tree, which may be as deep
+    /// as the parser allows: each kind of expression is checked by a
+    /// function of its own (kept out of line), whose operands are checked
+    /// first and then handed to a function that does the rest (also out of
+    /// line), so that each level takes only the stack its operands need.
     pub(super) fn expr(&mut self, e: &ast::Expr) -> R {
         let loc = e.loc;
         match &e.kind {
             A::Ident(name) => self.ident(*name, loc),
-            A::Int(v) => Some(self.konst(alloc::vec![ops::Value::I(*v as i32)], Type::INT, loc)),
-            A::Uint(v) => Some(self.konst(alloc::vec![ops::Value::U(*v)], Type::UINT, loc)),
-            A::Float(v) => Some(self.konst(alloc::vec![ops::Value::F(*v)], Type::FLOAT, loc)),
-            A::Bool(b) => Some(self.konst(alloc::vec![ops::Value::B(*b)], Type::BOOL, loc)),
+            A::Int(v) => Some(self.konst([ops::Value::I(*v as i32)].into(), Type::INT, loc)),
+            A::Uint(v) => Some(self.konst([ops::Value::U(*v)].into(), Type::UINT, loc)),
+            A::Float(v) => Some(self.konst([ops::Value::F(*v)].into(), Type::FLOAT, loc)),
+            A::Bool(b) => Some(self.konst([ops::Value::B(*b)].into(), Type::BOOL, loc)),
             A::Unary(op, a) => self.unary(*op, a, loc),
             A::Binary(op, a, b) => self.binary_expr(*op, a, b, loc),
             A::Assign(op, a, b) => self.assign(*op, a, b, loc),
             A::Ternary(c, a, b) => self.ternary(c, a, b, loc),
-            A::Comma(a, b) => {
-                let a = self.expr(a);
-                let b = self.expr(b)?;
-                let a = a?;
-                if self.version == Version::V100 && (a.ty.is_array() || b.ty.is_array()) {
-                    error!(self.diags, loc, "the sequence operator does not apply to arrays in GLSL ES 1.00");
-                    return None;
-                }
-                let ty = b.ty;
-                Some(Expr { kind: H::Sequence(Box::new(a), Box::new(b)), ty, loc })
-            }
+            A::Comma(a, b) => self.sequence(a, b, loc),
             A::Index(a, i) => self.index(a, i, loc),
             A::Field(a, f) => self.field(a, *f, loc),
-            A::Length(a) => {
-                let a = self.expr(a)?;
-                if self.version == Version::V100 {
-                    error!(self.diags, loc, "length() needs GLSL ES 3.00");
-                    return None;
-                }
-                match a.ty.array {
-                    Some(n) => Some(self.konst(alloc::vec![ops::Value::I(n as i32)], Type::INT, loc)),
-                    None => {
-                        error!(self.diags, loc, "length() only applies to arrays");
-                        None
-                    }
-                }
-            }
+            A::Length(a) => self.length(a, loc),
             A::Call(callee, args) => self.call(callee, args, loc),
+        }
+    }
+
+    #[inline(never)]
+    fn sequence(&mut self, a: &ast::Expr, b: &ast::Expr, loc: Loc) -> R {
+        let a = self.expr(a);
+        let b = self.expr(b)?;
+        self.sequence_checked(a?, b, loc)
+    }
+
+    #[inline(never)]
+    fn sequence_checked(&mut self, a: Expr, b: Expr, loc: Loc) -> R {
+        if self.version == Version::V100 && (a.ty.is_array() || b.ty.is_array()) {
+            error!(self.diags, loc, "the sequence operator does not apply to arrays in GLSL ES 1.00");
+            return None;
+        }
+        let ty = b.ty;
+        Some(Expr { kind: H::Sequence(Box::new(a), Box::new(b)), ty, loc })
+    }
+
+    #[inline(never)]
+    fn length(&mut self, a: &ast::Expr, loc: Loc) -> R {
+        let a = self.expr(a)?;
+        self.length_checked(a, loc)
+    }
+
+    #[inline(never)]
+    fn length_checked(&mut self, a: Expr, loc: Loc) -> R {
+        if self.version == Version::V100 {
+            error!(self.diags, loc, "length() needs GLSL ES 3.00");
+            return None;
+        }
+        match a.ty.array {
+            Some(n) => Some(self.konst([ops::Value::I(n as i32)].into(), Type::INT, loc)),
+            None => {
+                error!(self.diags, loc, "length() only applies to arrays");
+                None
+            }
         }
     }
 
@@ -75,9 +97,16 @@ impl Sema<'_> {
             Some(Entry::Var(id)) => {
                 let v = &mut self.vars[id.0 as usize];
                 v.used = true;
-                let ty = v.ty;
-                match v.kind {
+                let (ty, kind) = (v.ty, v.kind);
+                match kind {
                     VarKind::BlockInstance(b) | VarKind::BlockMember(b, _) => self.blocks[b as usize].used = true,
+                    // GLSL ES 1.00's variables from extensions.
+                    VarKind::Builtin(BuiltinVar::FragDepth) if self.version == Version::V100 => {
+                        self.extension_used(Ext::ExtFragDepth, "gl_FragDepthEXT", loc);
+                    }
+                    VarKind::Const if self.interner.get(name) == "gl_MaxDrawBuffersEXT" => {
+                        self.extension_used(Ext::ExtDrawBuffers, "gl_MaxDrawBuffersEXT", loc);
+                    }
                     _ => {}
                 }
                 if let Some(value) = self.const_value(id) {
@@ -105,8 +134,14 @@ impl Sema<'_> {
 
     // ---- Operators -------------------------------------------------------
 
+    #[inline(never)]
     fn unary(&mut self, op: UnaryOp, a: &ast::Expr, loc: Loc) -> R {
         let a = self.expr(a)?;
+        self.unary_checked(op, a, loc)
+    }
+
+    #[inline(never)]
+    fn unary_checked(&mut self, op: UnaryOp, a: Expr, loc: Loc) -> R {
         let b = a.ty.as_basic();
         let numeric = b.and_then(Basic::scalar).is_some_and(Scalar::is_numeric);
         match op {
@@ -160,10 +195,15 @@ impl Sema<'_> {
         }
     }
 
+    #[inline(never)]
     fn binary_expr(&mut self, op: BinaryOp, a: &ast::Expr, b: &ast::Expr, loc: Loc) -> R {
         let l = self.expr(a);
         let r = self.expr(b);
-        let (l, r) = (l?, r?);
+        self.binary_checked(op, l?, r?, loc)
+    }
+
+    #[inline(never)]
+    fn binary_checked(&mut self, op: BinaryOp, l: Expr, r: Expr, loc: Loc) -> R {
         match op {
             BinaryOp::And | BinaryOp::Or => {
                 if l.ty != Type::BOOL || r.ty != Type::BOOL {
@@ -290,10 +330,15 @@ impl Sema<'_> {
         }
     }
 
+    #[inline(never)]
     fn assign(&mut self, op: Option<BinaryOp>, a: &ast::Expr, b: &ast::Expr, loc: Loc) -> R {
         let r = self.expr(b);
         let l = self.expr(a)?;
-        let r = r?;
+        self.assign_checked(op, l, r?, loc)
+    }
+
+    #[inline(never)]
+    fn assign_checked(&mut self, op: Option<BinaryOp>, l: Expr, r: Expr, loc: Loc) -> R {
         if !self.check_lvalue(&l, "assignment") {
             return None;
         }
@@ -329,11 +374,16 @@ impl Sema<'_> {
         }
     }
 
+    #[inline(never)]
     fn ternary(&mut self, c: &ast::Expr, a: &ast::Expr, b: &ast::Expr, loc: Loc) -> R {
         let c = self.expr(c);
         let a = self.expr(a);
         let b = self.expr(b);
-        let (c, a, b) = (c?, a?, b?);
+        self.ternary_checked(c?, a?, b?, loc)
+    }
+
+    #[inline(never)]
+    fn ternary_checked(&mut self, c: Expr, a: Expr, b: Expr, loc: Loc) -> R {
         if c.ty != Type::BOOL {
             error!(self.diags, c.loc, "the condition of '?:' must be a bool");
             return None;
@@ -355,10 +405,24 @@ impl Sema<'_> {
         Some(self.fold(Expr { kind: H::Ternary(Box::new(c), Box::new(a), Box::new(b)), ty, loc }))
     }
 
+    #[inline(never)]
     fn index(&mut self, a: &ast::Expr, i: &ast::Expr, loc: Loc) -> R {
         let base = self.expr(a);
         let idx = self.expr(i);
-        let (base, idx) = (base?, idx?);
+        self.index_checked(base?, idx?, loc)
+    }
+
+    #[inline(never)]
+    fn index_checked(&mut self, base: Expr, idx: Expr, loc: Loc) -> R {
+        // gl_FragData's elements other than the first come from
+        // GL_EXT_draw_buffers in GLSL ES 1.00.
+        if let H::Var(id) = base.kind
+            && self.vars[id.0 as usize].kind == VarKind::Builtin(BuiltinVar::FragData)
+            && self.version == Version::V100
+            && idx.constant().is_none_or(|v| v[0].bits() != 0)
+        {
+            self.extension_used(Ext::ExtDrawBuffers, "gl_FragData", loc);
+        }
         let int_ok = match idx.ty.as_basic() {
             Some(Basic::Scalar(Scalar::Int)) => true,
             Some(Basic::Scalar(Scalar::Uint)) => self.version == Version::V300,
@@ -394,8 +458,14 @@ impl Sema<'_> {
         Some(self.fold(Expr { kind: H::Index(Box::new(base), Box::new(idx)), ty, loc }))
     }
 
+    #[inline(never)]
     fn field(&mut self, a: &ast::Expr, f: Symbol, loc: Loc) -> R {
         let base = self.expr(a)?;
+        self.field_checked(base, f, loc)
+    }
+
+    #[inline(never)]
+    fn field_checked(&mut self, base: Expr, f: Symbol, loc: Loc) -> R {
         if base.ty.is_array() {
             error!(self.diags, loc, "an array has no members (only length())");
             return None;
@@ -403,7 +473,7 @@ impl Sema<'_> {
         match base.ty.element {
             Element::Struct(id) => {
                 let def = self.structs.get(id);
-                match def.fields.iter().position(|x| x.name == f) {
+                match def.field(f) {
                     Some(i) => {
                         let ty = def.fields[i].ty;
                         Some(self.fold(Expr { kind: H::Field(Box::new(base), i as u32), ty, loc }))
@@ -479,6 +549,7 @@ impl Sema<'_> {
 
     // ---- Calls and constructors ------------------------------------------
 
+    #[inline(never)]
     fn call(&mut self, callee: &Callee, args: &[ast::Expr], loc: Loc) -> R {
         // Check the arguments first (an error in one is reported, and the
         // call is dropped).
@@ -490,6 +561,11 @@ impl Sema<'_> {
                 None => failed = true,
             }
         }
+        self.call_checked(callee, checked, failed, loc)
+    }
+
+    #[inline(never)]
+    fn call_checked(&mut self, callee: &Callee, checked: Vec<Expr>, failed: bool, loc: Loc) -> R {
         match callee {
             Callee::Type(spec) => {
                 let ty = self.resolve_type(spec, false)?;
@@ -543,20 +619,15 @@ impl Sema<'_> {
     fn function_call(&mut self, name: Symbol, args: Vec<Expr>, loc: Loc) -> R {
         let types: Vec<Type> = args.iter().map(|a| a.ty).collect();
         // A user function with exactly these parameter types.
-        let user = self.func_names.get(&name).and_then(|ids| {
-            ids.iter().copied().find(|id| {
-                let f = &self.functions[id.0 as usize];
-                f.params.len() == types.len()
-                    && f.params.iter().zip(&types).all(|(v, t)| self.vars[v.0 as usize].ty == *t)
-            })
-        });
-        if let Some(id) = user {
+        let key = (name, types);
+        if let Some(&id) = self.signatures.get(&key) {
             return self.user_call(id, args, loc);
         }
+        let types = key.1;
         let text = self.name(name);
         let ctx = builtins::CallContext { stage: self.stage, version: self.version, enabled: self.enabled };
         match builtins::resolve(&text, &types, &ctx) {
-            Ok(r) => self.builtin_call(r, args, loc),
+            Ok(r) => self.builtin_call(r, args, &text, loc),
             Err(CallError::Unavailable(why)) => {
                 error!(self.diags, loc, "{why}");
                 None
@@ -589,7 +660,10 @@ impl Sema<'_> {
         Some(Expr { kind: H::Call(id, args), ty: ret, loc })
     }
 
-    fn builtin_call(&mut self, r: builtins::Resolved, args: Vec<Expr>, loc: Loc) -> R {
+    fn builtin_call(&mut self, r: builtins::Resolved, args: Vec<Expr>, name: &str, loc: Loc) -> R {
+        if let Some(e) = r.extension {
+            self.extension_used(e, name, loc);
+        }
         for &o in &r.outputs {
             if !self.check_lvalue(&args[o], "an out argument") {
                 return None;
@@ -658,7 +732,7 @@ impl Sema<'_> {
                 error!(self.diags, loc, "an array of {n} elements is constructed from {len} values");
                 return None;
             }
-            let ty = elem.array_of(len);
+            let ty = self.not_too_large(elem.array_of(len), loc)?;
             return Some(self.fold(Expr { kind: H::Construct(args), ty, loc }));
         }
         if let Some(id) = ty.as_struct() {
@@ -719,24 +793,34 @@ impl Sema<'_> {
     // ---- Constant folding ------------------------------------------------
 
     /// Replaces `e` by its value if all its operands are constant and the
-    /// operation can be folded.
+    /// operation can be folded. The components folded are counted: past
+    /// [`MAX_FOLDED`] in a shader, it fails (constant structures built of
+    /// constant structures would otherwise grow without bound).
     pub(super) fn fold(&mut self, e: Expr) -> Expr {
-        match self.fold_value(&e) {
-            Some(v) => Expr { kind: H::Const(v), ty: e.ty, loc: e.loc },
-            None => e,
+        if self.folded > MAX_FOLDED {
+            return e;
         }
+        let Some(v) = self.fold_value(&e) else { return e };
+        self.folded = self.folded.saturating_add(v.len());
+        if self.folded > MAX_FOLDED {
+            error!(self.diags, e.loc, "the shader's constant expressions come to more than {MAX_FOLDED} components");
+            return e;
+        }
+        Expr { kind: H::Const(v.into()), ty: e.ty, loc: e.loc }
     }
 
-    fn fold_value(&mut self, e: &Expr) -> Option<ConstValue> {
-        let c = |x: &Expr| x.constant().cloned();
+    fn fold_value(&mut self, e: &Expr) -> Option<Vec<ops::Value>> {
+        fn c(x: &Expr) -> Option<&[ops::Value]> {
+            x.constant().map(|v| &v[..])
+        }
         let mut emit = ConstEmit;
         match &e.kind {
-            H::Unary(op, a) => Some(lower::unary(&mut emit, *op, a.ty, &c(a)?)),
+            H::Unary(op, a) => Some(lower::unary(&mut emit, *op, a.ty, c(a)?)),
             H::Binary(op, a, b) => {
-                let (x, y) = (c(a)?, c(b)?);
-                // Integer division by zero in a constant expression is
-                // undefined: leave it to run time (and report nothing).
-                Some(lower::binary(&mut emit, *op, a.ty, &x, b.ty, &y, &self.structs))
+                // Integer division by zero is undefined: it folds to what
+                // the code would compute (`ops::eval`: all ones), and nothing
+                // is reported.
+                Some(lower::binary(&mut emit, *op, a.ty, c(a)?, b.ty, c(b)?, &self.structs))
             }
             H::Logic(op, a, b) => {
                 let (x, y) = (c(a)?, c(b)?);
@@ -749,13 +833,13 @@ impl Sema<'_> {
             H::Ternary(cond, a, b) => {
                 let k = c(cond)?;
                 let (x, y) = (c(a)?, c(b)?);
-                Some(if k[0].bits() != 0 { x } else { y })
+                Some(if k[0].bits() != 0 { x.to_vec() } else { y.to_vec() })
             }
             H::Index(base, idx) => {
                 let (v, i) = (c(base)?, c(idx)?);
                 let i = i[0].bits() as usize;
                 let size = e.ty.flat_components(&self.structs) as usize;
-                v.get(i * size..(i + 1) * size).map(<[ops::Value]>::to_vec)
+                v.get(i.checked_mul(size)?..i.checked_add(1)?.checked_mul(size)?).map(<[ops::Value]>::to_vec)
             }
             H::Swizzle(base, s) => {
                 let v = c(base)?;
@@ -763,18 +847,17 @@ impl Sema<'_> {
             }
             H::Field(base, i) => {
                 let v = c(base)?;
-                let id = base.ty.as_struct()?;
-                let fields = &self.structs.get(id).fields;
-                let start: u32 = fields[..*i as usize].iter().map(|f| f.ty.flat_components(&self.structs)).sum();
-                let len = fields[*i as usize].ty.flat_components(&self.structs);
-                v.get(start as usize..(start + len) as usize).map(<[ops::Value]>::to_vec)
+                let def = self.structs.get(base.ty.as_struct()?);
+                let start = def.info.members.get(*i as usize)?.component as usize;
+                let len = def.fields.get(*i as usize)?.ty.flat_components(&self.structs) as usize;
+                v.get(start..start + len).map(<[ops::Value]>::to_vec)
             }
             H::Construct(args) => {
-                let values: Option<Vec<(Type, ConstValue)>> = args.iter().map(|a| Some((a.ty, c(a)?))).collect();
-                Some(lower::construct(&mut emit, e.ty, &values?, &self.structs))
+                let values: Option<Vec<(Type, &[ops::Value])>> = args.iter().map(|a| Some((a.ty, c(a)?))).collect();
+                Some(lower::construct(&mut emit, e.ty, &values?))
             }
             H::Builtin(b, args) if b.constant_foldable() => {
-                let values: Option<Vec<(Type, ConstValue)>> = args.iter().map(|a| Some((a.ty, c(a)?))).collect();
+                let values: Option<Vec<(Type, &[ops::Value])>> = args.iter().map(|a| Some((a.ty, c(a)?))).collect();
                 let (v, out) = lower::builtin(&mut emit, *b, &values?, e.ty);
                 // modf writes its second argument: not a constant expression.
                 if out.is_some() { None } else { Some(v) }

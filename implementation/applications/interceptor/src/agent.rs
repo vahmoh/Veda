@@ -34,15 +34,19 @@ const CONTROLS: &str = "Arrow keys or WASD drive (down brakes, then reverses), S
                         the nitrous, Q switches the siren, H sounds the horn, C changes the camera, R puts the car \
                         back on the road, Esc pauses";
 
-const TIMES: [(&str, TimeOfDay); 3] =
-    [("day", TimeOfDay::Day), ("sunset", TimeOfDay::Sunset), ("night", TimeOfDay::Night)];
-const WEATHERS: [(&str, Weather); 2] = [("clear", Weather::Clear), ("rain", Weather::Rain)];
-const VIEWS: [(&str, CameraView); 4] = [
-    ("chase", CameraView::Chase),
-    ("near", CameraView::Near),
-    ("bonnet", CameraView::Bonnet),
-    ("bumper", CameraView::Bumper),
-];
+/// The times of day, the weathers and the cameras by the names the agent
+/// gives them.
+fn times() -> [(&'static str, TimeOfDay); 3] {
+    TimeOfDay::ALL.map(|t| (t.key(), t))
+}
+
+fn weathers() -> [(&'static str, Weather); 2] {
+    Weather::ALL.map(|w| (w.key(), w))
+}
+
+fn views() -> [(&'static str, CameraView); 4] {
+    CameraView::ALL.map(|v| (v.key(), v))
+}
 
 fn mission_names() -> Vec<&'static str> {
     MISSIONS.iter().map(|m| m.name).collect()
@@ -56,9 +60,9 @@ fn suspect_names() -> Vec<&'static str> {
 pub fn info() -> AppAgentInfo {
     let missions = mission_names();
     let suspects = suspect_names();
-    let times: Vec<&str> = TIMES.iter().map(|t| t.0).collect();
-    let weathers: Vec<&str> = WEATHERS.iter().map(|w| w.0).collect();
-    let views: Vec<&str> = VIEWS.iter().map(|v| v.0).collect();
+    let times = TimeOfDay::ALL.map(TimeOfDay::key);
+    let weathers = Weather::ALL.map(Weather::key);
+    let views = CameraView::ALL.map(CameraView::key);
     agent::info(
         "Interceptor, a 3D police pursuit game in Veda Bay: it starts career missions, quick chases and patrols, \
          pauses, resumes and restarts them, and changes the settings, while the user drives the police car with \
@@ -103,20 +107,6 @@ pub fn info() -> AppAgentInfo {
                 .build(),
         ],
     )
-}
-
-/// `secs` as "1:05".
-fn clock(secs: f32) -> String {
-    let t = secs.max(0.0) as u32;
-    format!("{}:{:02}", t / 60, t % 60)
-}
-
-fn time_name(t: TimeOfDay) -> &'static str {
-    TIMES.iter().find(|x| x.1 == t).map_or("night", |x| x.0)
-}
-
-fn weather_name(w: Weather) -> &'static str {
-    WEATHERS.iter().find(|x| x.1 == w).map_or("clear", |x| x.0)
 }
 
 /// What the game shows.
@@ -174,7 +164,7 @@ pub fn state(app: &App, in_front: bool) -> Value {
         "sound_effects": (s.effects * 100.0).round() as u32,
         "music": (s.music * 100.0).round() as u32,
         "speed_units": s.units.name(),
-        "camera": VIEWS.iter().find(|x| x.1 == s.view).map_or("chase", |x| x.0),
+        "camera": s.view.key(),
         "statistics": s.stats.key(),
         "full_screen": s.fullscreen,
     });
@@ -195,8 +185,8 @@ fn play(app: &App) -> Value {
     let units = app.save.settings.units;
     let mut v = json!({
         "mode": mode,
-        "time_of_day": time_name(s.env().time),
-        "weather": weather_name(s.env().weather),
+        "time_of_day": s.env().time.key(),
+        "weather": s.env().weather.key(),
         "speed": format!("{} {}", units.of(s.game.player().vehicle.speed().abs()).round() as u32, units.name()),
         "siren": s.game.player().siren,
         "nitrous_percent": (s.game.boost.level * 100.0) as u32,
@@ -212,13 +202,13 @@ fn play(app: &App) -> Value {
     }
     if let Some(c) = s.chase {
         let mut chase = json!({
-            "time": clock(c.time),
+            "time": career::minutes(c.time),
             "suspect_distance_m": c.gap.max(0.0).round() as i32,
             "suspect_car_left_percent": (c.integrity(&s.game) * 100.0).max(0.0).round() as u32,
             "hits_landed": c.hits,
         });
         if let Some(left) = s.time_left() {
-            chase["time_left"] = json!(clock(left));
+            chase["time_left"] = json!(career::minutes(left));
         }
         match c.state {
             State::Chasing { escaping, busting } => {
@@ -333,10 +323,10 @@ impl App {
                     q.suspect = pick("suspect", s, &names)?;
                 }
                 if let Some(t) = arg_opt_str(args, "time_of_day") {
-                    q.time = pick("time of day", t, &TIMES)?;
+                    q.time = pick("time of day", t, &times())?;
                 }
                 if let Some(w) = arg_opt_str(args, "weather") {
-                    q.weather = pick("weather", w, &WEATHERS)?;
+                    q.weather = pick("weather", w, &weathers())?;
                 }
                 if let Some(t) = arg_bool(args, "traffic") {
                     q.traffic = t;
@@ -354,13 +344,15 @@ impl App {
                 if busy {
                     return Err(in_progress().into());
                 }
+                // Every choice understood before any is taken.
+                let (mut time, mut weather) = self.patrol;
                 if let Some(t) = arg_opt_str(args, "time_of_day") {
-                    self.patrol.0 = pick("time of day", t, &TIMES)?;
+                    time = pick("time of day", t, &times())?;
                 }
                 if let Some(w) = arg_opt_str(args, "weather") {
-                    self.patrol.1 = pick("weather", w, &WEATHERS)?;
+                    weather = pick("weather", w, &weathers())?;
                 }
-                let (time, weather) = self.patrol;
+                self.patrol = (time, weather);
                 Ok(self.agent_play(Mode::Patrol { time, weather }, in_front))
             }
             "pause" => {
@@ -390,11 +382,8 @@ impl App {
                 Ok(json!({ "paused": false }))
             }
             "restart" => {
-                let mode = match self.session.mode {
-                    Mode::Showcase => {
-                        return Err("Nothing has been played yet: start a mission, a quick chase or a patrol".into());
-                    }
-                    m => m,
+                let Some(mode) = self.last_played else {
+                    return Err("Nothing has been played yet: start a mission, a quick chase or a patrol".into());
                 };
                 Ok(self.agent_play(mode, in_front))
             }
@@ -404,7 +393,9 @@ impl App {
                 Ok(json!({ "screen": "main_menu", "abandoned": abandoned }))
             }
             "change_settings" => {
-                let s = &mut self.save.settings;
+                // Every change understood before any is made: all of them,
+                // or none.
+                let mut s = self.save.settings;
                 let volume = |n: Option<i64>| -> Result<Option<f32>, String> {
                     match n {
                         Some(n) if !(0..=100).contains(&n) => Err("A volume is 0 to 100".into()),
@@ -425,8 +416,7 @@ impl App {
                     changed = true;
                 }
                 if let Some(c) = arg_opt_str(args, "camera") {
-                    s.view = pick("camera", c, &VIEWS)?;
-                    self.session.game.follow.view = s.view;
+                    s.view = pick("camera", c, &views())?;
                     changed = true;
                 }
                 if let Some(v) = arg_opt_str(args, "statistics") {
@@ -434,9 +424,9 @@ impl App {
                     s.stats = pick("statistics setting", v, &options)?;
                     changed = true;
                 }
-                if let Some(b) = arg_bool(args, "full_screen") {
+                let full_screen = arg_bool(args, "full_screen");
+                if let Some(b) = full_screen {
                     s.fullscreen = b;
-                    self.fullscreen = Some(b);
                     changed = true;
                 }
                 if !changed {
@@ -444,7 +434,12 @@ impl App {
                                 full_screen"
                         .into());
                 }
-                self.store_save();
+                if full_screen.is_some() {
+                    self.fullscreen = Some(s.fullscreen);
+                }
+                self.save.settings = s;
+                // Kept, and the camera in play the setting's.
+                self.set_view(s.view);
                 Ok(json!({ "changed": true }))
             }
             other => Err(format!("Interceptor has no action called {other}")),

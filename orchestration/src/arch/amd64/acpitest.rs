@@ -7,13 +7,10 @@
 //! APIC's lines.
 
 use vacpi::asm::{
-    cat, device, dsm, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, name, resource_template, scope, string,
-    uuid,
+    HID_OVER_I2C, cat, device, dsm, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, name, resource_template,
+    scope, string, table as whole, uuid,
 };
 use vacpi::resource::Gpio;
-
-/// HID over I2C's `_DSM`.
-const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
 
 /// The tables [`table`] makes.
 pub const NAMES: &[&str] = &["touchpad", "gpio", "nhlt"];
@@ -78,18 +75,21 @@ pub fn table(name_of: &str) -> Option<Vec<u8>> {
     Some(whole(b"SSDT", 2, b"TESTSSDT", &aml))
 }
 
-/// A table: its header (with the checksum), then `body`.
-fn whole(signature: &[u8; 4], revision: u8, oem_table_id: &[u8; 8], body: &[u8]) -> Vec<u8> {
-    let mut t = Vec::new();
-    t.extend_from_slice(signature);
-    t.extend_from_slice(&((36 + body.len()) as u32).to_le_bytes());
-    t.extend_from_slice(&[revision, 0]);
-    t.extend_from_slice(b"VEDA  ");
-    t.extend_from_slice(oem_table_id);
-    t.extend_from_slice(&1u32.to_le_bytes());
-    t.extend_from_slice(b"VEDA");
-    t.extend_from_slice(&1u32.to_le_bytes());
-    t.extend_from_slice(body);
-    t[9] = 0u8.wrapping_sub(t.iter().fold(0u8, |a, &b| a.wrapping_add(b)));
-    t
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every table is a whole one (its length, its checksum), as the
+    /// driver VM takes a firmware's table only whole; the NHLT keeps the
+    /// name its script finds in Linux's log.
+    #[test]
+    fn the_tables_are_whole() {
+        for name in NAMES {
+            let table = table(name).unwrap_or_else(|| panic!("no table {name}"));
+            assert!(vhv::acpi::is_table(&table), "{name}");
+        }
+        let nhlt = table("nhlt").unwrap();
+        assert_eq!((&nhlt[..4], &nhlt[16..24], nhlt.len()), (&b"NHLT"[..], &b"TESTNHLT"[..], 37));
+        assert_eq!(table("battery"), None);
+    }
 }

@@ -74,15 +74,17 @@ impl Dev {
             .collect()
     }
 
-    /// Reads up to `len` bytes.
-    pub fn read(self, len: usize) -> Vec<u8> {
+    /// Reads up to `len` bytes. Random bytes the kernel cannot give (it is
+    /// short of memory) are an I/O error for the reader, never bytes that
+    /// are not random, nor the end of the file systems' service.
+    pub fn read(self, len: usize) -> Result<Vec<u8>, FsError> {
         match self {
-            Dev::Null => Vec::new(),
-            Dev::Zero | Dev::Full => alloc::vec![0; len],
+            Dev::Null => Ok(Vec::new()),
+            Dev::Zero | Dev::Full => Ok(alloc::vec![0; len]),
             Dev::Random => {
                 let mut v = alloc::vec![0; len];
-                vrt::object::random_bytes(&mut v);
-                v
+                vrt::object::try_random_bytes(&mut v).map_err(|_| FsError::Io)?;
+                Ok(v)
             }
         }
     }

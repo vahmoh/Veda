@@ -17,7 +17,7 @@ key ret
 wait-serial "videos: playing Countdown" 60
 wait-serial "videos: first frame in" 10
 wait 3
-shot target/veda/videos-open-1.png
+shot target/veda/videos-open-1.png now
 # Back to the Terminal: the next video goes to the running player.
 key alt-tab
 wait 2
@@ -27,5 +27,5 @@ wait-serial "handed /home/user/Videos/Aurora Timelapse.mkv to the running player
 wait-serial "videos: opening /home/user/Videos/Aurora Timelapse.mkv" 10
 wait-serial "videos: playing Aurora Timelapse (1280x720 AV1 24 fps, FLAC 48000 Hz, 0:16)" 30
 wait 3
-shot target/veda/videos-open-2.png
+shot target/veda/videos-open-2.png now
 reject-serial "videos: cannot"

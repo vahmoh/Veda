@@ -8,9 +8,16 @@
 //! yet (records arrive in pieces or several at a time, and a handshake
 //! message may span records), decrypted data not read yet, and records
 //! waiting to be sent. Every operation first lets rustls process what was
-//! received, sends whatever it produces (handshake messages, responses to
-//! key updates, alerts), and reads from the transport only when rustls
-//! needs more.
+//! received, queues whatever it produces (handshake messages, responses to
+//! key updates, alerts) and sends it before anything later, and reads from
+//! the transport only when rustls needs more. The blocking operations wait
+//! for the transport to take what is queued; the non-blocking ones
+//! ([`TlsStream::try_read`], [`TlsStream::try_write`]) send what it takes
+//! at once and leave the rest queued.
+//!
+//! The end of the stream is the server's close_notify. A transport that
+//! ends without it may have been cut short by anyone on the path: reading
+//! then fails with [`TlsError::Truncated`] once the data before it is read.
 
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -42,6 +49,10 @@ pub trait Transport {
 
     /// Blocking write of all of `data`.
     fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError>;
+
+    /// Non-blocking write: how much of `data` the transport took now
+    /// (possibly nothing).
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError>;
 }
 
 /// A borrowed transport, so that the caller keeps it after the TLS stream.
@@ -57,6 +68,10 @@ impl<T: Transport + ?Sized> Transport for &mut T {
     fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
         (**self).write_all(data)
     }
+
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError> {
+        (**self).try_write(data)
+    }
 }
 
 impl Transport for vnet::TcpStream {
@@ -70,6 +85,10 @@ impl Transport for vnet::TcpStream {
 
     fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
         vnet::TcpStream::write_all(self, data).map_err(TlsError::from)
+    }
+
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError> {
+        vnet::TcpStream::try_write(self, data).map_err(TlsError::from)
     }
 }
 
@@ -121,11 +140,12 @@ pub struct TlsStream<T: Transport> {
     /// Decrypted application data; `plaintext[plaintext_pos..]` is unread.
     plaintext: Vec<u8>,
     plaintext_pos: usize,
-    /// Records to send.
+    /// Records to send, in order: nothing is sent before them.
     outgoing: Vec<u8>,
     /// The server sent close_notify (no more data will come).
     peer_closed: bool,
-    /// The transport reached the end of its stream.
+    /// The transport reached the end of its stream (without close_notify
+    /// unless `peer_closed`).
     eof: bool,
     /// `close` was called.
     closed: bool,
@@ -178,8 +198,9 @@ impl<T: Transport> TlsStream<T> {
     fn handshake(&mut self) -> Result<(), TlsError> {
         loop {
             match self.drive(Job::Nothing)? {
-                Stop::Idle => return Ok(()),
+                Stop::Idle => return self.flush(),
                 Stop::NeedInput => {
+                    self.flush()?;
                     if self.receive(true)? == Some(0) {
                         return Err(self.fail(Failure::Io(TlsError::Tls(
                             "the server closed the connection during the handshake".to_string(),
@@ -197,7 +218,8 @@ impl<T: Transport> TlsStream<T> {
 
     /// Reads decrypted data, waiting for it (up to the transport's read
     /// timeout). Returns `Ok(0)` once the server has closed the connection
-    /// (close_notify) or the transport has ended.
+    /// (close_notify); fails with [`TlsError::Truncated`] if the transport
+    /// ended without it.
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, TlsError> {
         if buf.is_empty() {
             return Ok(0);
@@ -206,6 +228,7 @@ impl<T: Transport> TlsStream<T> {
             if let Some(n) = self.ready(buf)? {
                 return Ok(n);
             }
+            self.flush()?;
             self.receive(true)?;
         }
     }
@@ -217,16 +240,18 @@ impl<T: Transport> TlsStream<T> {
     /// `vnet::TcpStream`, its `handle()`), call this until it returns
     /// `Ok(None)`. It takes everything the transport has, so the transport
     /// signals readable again only when new data arrives. It may send small
-    /// protocol messages (such as a key update response), but never waits
-    /// for data.
+    /// protocol messages (such as a key update response), as far as the
+    /// transport takes them at once: it never waits.
     pub fn try_read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TlsError> {
         if buf.is_empty() {
             return Ok(Some(0));
         }
         loop {
             if let Some(n) = self.ready(buf)? {
+                self.try_flush()?;
                 return Ok(Some(n));
             }
+            self.try_flush()?;
             if self.receive(false)?.is_none() {
                 return Ok(None);
             }
@@ -251,44 +276,98 @@ impl<T: Transport> TlsStream<T> {
             }
             return Ok(Some(n));
         }
-        if self.peer_closed || self.eof {
+        if self.peer_closed {
             return Ok(Some(0));
+        }
+        if self.eof {
+            return Err(TlsError::Truncated);
         }
         Ok(None)
     }
 
-    /// Encrypts and sends all of `data`.
+    /// Encrypts and sends all of `data`, waiting for the transport to take
+    /// it.
     pub fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
+        for chunk in data.chunks(WRITE_CHUNK) {
+            self.queue(chunk)?;
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Encrypts `data` and sends what the transport takes without waiting;
+    /// the rest is queued, and goes before anything sent later (so that it
+    /// suits small messages, such as a protocol's control messages, which
+    /// must not wait for a peer that stopped reading). Returns whether
+    /// everything went out.
+    pub fn try_write(&mut self, data: &[u8]) -> Result<bool, TlsError> {
+        for chunk in data.chunks(WRITE_CHUNK) {
+            self.queue(chunk)?;
+        }
+        self.try_flush()
+    }
+
+    /// Encrypts `data` into the records to send.
+    fn queue(&mut self, data: &[u8]) -> Result<(), TlsError> {
         if self.closed {
             return Err(TlsError::Closed);
         }
-        for chunk in data.chunks(WRITE_CHUNK) {
-            loop {
-                match self.drive(Job::Send(chunk))? {
-                    Stop::Done => break,
-                    Stop::NeedInput => {
-                        if self.receive(true)? == Some(0) {
-                            return Err(TlsError::Closed);
-                        }
+        loop {
+            match self.drive(Job::Send(data))? {
+                Stop::Done => return Ok(()),
+                Stop::NeedInput => {
+                    self.flush()?;
+                    if self.receive(true)? == Some(0) {
+                        return Err(TlsError::Closed);
                     }
-                    Stop::Idle | Stop::Closed => return Err(TlsError::Closed),
                 }
+                Stop::Idle | Stop::Closed => return Err(TlsError::Closed),
             }
         }
-        Ok(())
+    }
+
+    /// Sends the queued records, waiting for the transport to take them.
+    /// A failure leaves an unknown part sent: the connection is broken.
+    fn flush(&mut self) -> Result<(), TlsError> {
+        if self.outgoing.is_empty() {
+            return Ok(());
+        }
+        match self.transport.write_all(&self.outgoing) {
+            Ok(()) => {
+                self.outgoing.clear();
+                Ok(())
+            }
+            Err(e) => Err(self.fail(Failure::Io(e))),
+        }
+    }
+
+    /// Sends as many of the queued records as the transport takes now.
+    /// Returns whether none is left.
+    fn try_flush(&mut self) -> Result<bool, TlsError> {
+        while !self.outgoing.is_empty() {
+            match self.transport.try_write(&self.outgoing) {
+                Ok(0) => return Ok(false),
+                Ok(n) => {
+                    self.outgoing.drain(..n.min(self.outgoing.len()));
+                }
+                Err(e) => return Err(self.fail(Failure::Io(e))),
+            }
+        }
+        Ok(true)
     }
 
     /// Tells the server that no more data will come (close_notify), best
     /// effort. Reading can continue until the server closes its side;
     /// writing fails from now on. Dropping the stream without closing it
-    /// just ends the transport.
+    /// just ends the transport (which the server should take as a
+    /// truncation).
     pub fn close(&mut self) {
         if self.closed {
             return;
         }
         self.closed = true;
-        if self.failure.is_none() {
-            let _ = self.drive(Job::Close);
+        if self.failure.is_none() && self.drive(Job::Close).is_ok() {
+            let _ = self.flush();
         }
     }
 
@@ -329,7 +408,7 @@ impl<T: Transport> TlsStream<T> {
 
     /// Runs rustls on the received data until it needs more, has nothing
     /// left to do, or has done `job`: decrypted data goes to `plaintext`,
-    /// whatever rustls produces is sent.
+    /// whatever rustls produces is queued to be sent.
     fn drive(&mut self, job: Job<'_>) -> Result<Stop, TlsError> {
         if let Some(e) = &self.failure {
             return Err(e.clone());
@@ -352,22 +431,17 @@ impl<T: Transport> TlsStream<T> {
                     step
                 }
                 Ok(ConnectionState::EncodeTlsData(mut data)) => encode(&mut data, &mut self.outgoing).map(|()| None),
-                Ok(ConnectionState::TransmitTlsData(data)) => match send(&mut self.transport, &mut self.outgoing) {
-                    Ok(()) => {
-                        data.done();
-                        Ok(None)
-                    }
-                    Err(e) => Err(e),
-                },
+                // The records are queued, ahead of anything sent later:
+                // as good as transmitted, in order.
+                Ok(ConnectionState::TransmitTlsData(data)) => {
+                    data.done();
+                    Ok(None)
+                }
                 Ok(ConnectionState::BlockedHandshake) => Ok(Some(Stop::NeedInput)),
                 Ok(ConnectionState::WriteTraffic(mut traffic)) => match job {
                     Job::Nothing => Ok(Some(Stop::Idle)),
-                    Job::Send(data) => encrypt(&mut traffic, data, &mut self.outgoing)
-                        .and_then(|()| send(&mut self.transport, &mut self.outgoing))
-                        .map(|()| Some(Stop::Done)),
-                    Job::Close => close_notify(&mut traffic, &mut self.outgoing)
-                        .and_then(|()| send(&mut self.transport, &mut self.outgoing))
-                        .map(|()| Some(Stop::Done)),
+                    Job::Send(data) => encrypt(&mut traffic, data, &mut self.outgoing).map(|()| Some(Stop::Done)),
+                    Job::Close => close_notify(&mut traffic, &mut self.outgoing).map(|()| Some(Stop::Done)),
                 },
                 Ok(ConnectionState::PeerClosed) => {
                     self.peer_closed = true;
@@ -434,7 +508,8 @@ impl<T: Transport> TlsStream<T> {
         error
     }
 
-    /// Sends the alert rustls queued after an error (best effort).
+    /// Sends the alert rustls queued after an error (best effort: as far
+    /// as the transport takes it at once).
     ///
     /// rustls hands out a queued record before it looks at received data
     /// again, so one call yields the alert without processing the data that
@@ -446,7 +521,14 @@ impl<T: Transport> TlsStream<T> {
             let _ = encode(&mut data, &mut self.outgoing);
         }
         self.incoming.drain(..discard.min(self.incoming.len()));
-        let _ = send(&mut self.transport, &mut self.outgoing);
+        while !self.outgoing.is_empty() {
+            match self.transport.try_write(&self.outgoing) {
+                Ok(n) if n > 0 => {
+                    self.outgoing.drain(..n.min(self.outgoing.len()));
+                }
+                _ => break,
+            }
+        }
     }
 }
 
@@ -505,13 +587,4 @@ fn encrypt_error(e: EncryptError) -> Option<usize> {
         EncryptError::InsufficientSize(InsufficientSizeError { required_size }) => Some(required_size),
         _ => None,
     }
-}
-
-/// Sends (and empties) `out`.
-fn send<T: Transport>(transport: &mut T, out: &mut Vec<u8>) -> Result<(), Failure> {
-    if !out.is_empty() {
-        transport.write_all(out).map_err(Failure::Io)?;
-        out.clear();
-    }
-    Ok(())
 }

@@ -159,8 +159,17 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
             one(0)
         }
         nr::RANDOM => {
-            let r = linux(sys::GETRANDOM, [a[0], a[1], 0, 0, 0, 0]);
-            if r < 0 { Err(Error::Io) } else { one(0) }
+            // Linux may fill less than asked of more than 256 bytes (a
+            // signal came): ask again for the rest.
+            let mut done = 0;
+            while done < a[1] {
+                match linux(sys::GETRANDOM, [a[0] + done, a[1] - done, 0, 0, 0, 0]) {
+                    r if r == -EINTR => {}
+                    r if r <= 0 => return Err(Error::Io),
+                    r => done += r as usize,
+                }
+            }
+            one(0)
         }
         nr::HANDLE_CLOSE => {
             let mut r = b::Close { handle: a[0] as u32, ..b::Close::default() };
@@ -326,16 +335,61 @@ pub(crate) fn bootstrap(role: u32) -> Option<RawHandle> {
     bridge(op::BOOTSTRAP, &mut r).ok().map(|_| r.out)
 }
 
-/// A Linux file descriptor that is readable while one of `signals` of
-/// `handle` is active: so that a program waits on Veda's objects and on
-/// Linux's files at once, with `poll`. Reading it (4 bytes) gives the
-/// signals active then; the next `poll` waits for them again.
-pub fn watch(handle: RawHandle, signals: u32) -> Result<std::os::fd::OwnedFd, Error> {
-    use std::os::fd::FromRawFd;
-    let mut r = b::Watch { handle, signals, ..Default::default() };
-    bridge(op::WATCH, &mut r)?;
-    // SAFETY: the bridge made the file for this program; nothing else owns it.
-    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(r.fd) })
+/// A watch: a Linux file that is readable while one of some signals of a
+/// handle is active, so that a program waits on Veda's objects and on
+/// Linux's files at once, with one `poll` (the watch's file among the
+/// others: [`AsFd`](std::os::fd::AsFd)).
+///
+/// Once `poll` finds its file ready (any of its events), [`Watch::take`]
+/// says what it saw: the signals active then, after which the next `poll`
+/// waits for them again; or that the watch failed, when the monitor did
+/// not keep its wait (it was at its limits) or the handle is gone. A watch
+/// that failed sees nothing more, and its file stays ready (in error): the
+/// program stops polling it, and makes another after a while, or ends what
+/// it was doing.
+#[derive(Debug)]
+pub struct Watch {
+    file: std::fs::File,
+}
+
+impl Watch {
+    /// Watches `signals` of `handle`.
+    pub fn new(handle: RawHandle, signals: u32) -> Result<Watch, Error> {
+        use std::os::fd::FromRawFd;
+        let mut r = b::Watch { handle, signals, ..Default::default() };
+        bridge(op::WATCH, &mut r)?;
+        // SAFETY: the bridge made the file for this program; nothing else
+        // owns it.
+        let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(r.fd) };
+        Ok(Watch { file: std::fs::File::from(fd) })
+    }
+
+    /// What the watch saw, if `ready`: whether `poll` found its file ready
+    /// (readable, or in error: any of its events). The signals active then,
+    /// or `None` if it was not ready; `Io` if the watch failed (see
+    /// [`Watch`]). Its file is read only if it was ready, so this never
+    /// blocks.
+    pub fn take(&self, ready: bool) -> Result<Option<u32>, Error> {
+        use std::io::Read;
+        if !ready {
+            return Ok(None);
+        }
+        let mut observed = [0u8; 4];
+        loop {
+            match (&self.file).read(&mut observed) {
+                Ok(4) => return Ok(Some(u32::from_ne_bytes(observed))),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                // EIO: the monitor's wait failed.
+                _ => return Err(Error::Io),
+            }
+        }
+    }
+}
+
+impl std::os::fd::AsFd for Watch {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.file.as_fd()
+    }
 }
 
 /// A Linux dma-buf of `len` bytes of VMO `vmo` from `offset` (pages),

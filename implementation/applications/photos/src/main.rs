@@ -13,7 +13,9 @@
 //! * [`agent`] lets the voice agent do the same.
 //!
 //! Files are read and decoded on background threads ([`loader`]); the UI thread only scales
-//! ([`render`]) and draws, so it stays responsive under emulation.
+//! ([`render`]) and draws, so it stays responsive under emulation. What decoded pictures may
+//! take follows the machine's memory ([`loader::Budget`]): the neighbours of the picture on
+//! screen are kept decoded only while they fit.
 
 #![no_std]
 #![no_main]
@@ -39,7 +41,7 @@ use vproto::vfs;
 use vui::{App, Font, Icon, Ui, WindowSpec, WindowState};
 
 use crate::catalog::{Entry, Thumb};
-use crate::loader::{Done, Loader, Picture};
+use crate::loader::{Budget, Done, Loader, Picture};
 use crate::render::ViewCache;
 use crate::viewer::{Slideshow, View};
 
@@ -122,7 +124,7 @@ impl Photos {
             current: 0,
             keyboard_nav: false,
             reveal_selection: false,
-            loader: Loader::start(),
+            loader: Loader::start(Budget::for_memory(vrt::object::system_info().map_or(0, |i| i.total_memory))),
             shell: ShellLink::start(),
             vfs: vproto::connect(vfs::NAME).ok().map(vfs::Client::new),
             pictures: Vec::new(),
@@ -241,17 +243,25 @@ impl Photos {
         }
     }
 
+    /// How many neighbours of the picture on screen (on each side) are kept decoded: as many as
+    /// the budget has room for, were they the size of the one on screen.
+    fn neighbours(&self) -> usize {
+        let pixels = self.entries.get(self.current).and_then(|_| self.dims()).map_or(0, |(w, h)| w as u64 * h as u64);
+        self.loader.as_ref().map_or(0, |l| l.budget().neighbours(pixels))
+    }
+
+    /// The places of the picture on screen and of the neighbours kept: the next first.
+    fn nearby(&self) -> impl Iterator<Item = usize> + use<> {
+        let (n, current, kept) = (self.entries.len(), self.current, self.neighbours());
+        [0isize, 1, -1].into_iter().take(kept + 1).filter_map(move |d| {
+            let i = current as isize + d;
+            (i >= 0 && (i as usize) < n).then_some(i as usize)
+        })
+    }
+
     /// Paths of the picture on screen and its neighbours.
     fn neighbourhood(&self) -> Vec<String> {
-        let n = self.entries.len();
-        let mut out = Vec::new();
-        for d in [0isize, 1, -1] {
-            let i = self.current as isize + d;
-            if i >= 0 && (i as usize) < n {
-                out.push(self.entries[i as usize].path.clone());
-            }
-        }
-        out
+        self.nearby().map(|i| self.entries[i].path.clone()).collect()
     }
 
     /// Makes sure picture `index` is decoded, being decoded or queued.
@@ -282,16 +292,22 @@ impl Photos {
         }
     }
 
-    /// Prefetches the neighbours once the picture on screen is done.
+    /// Prefetches the neighbours once the picture on screen is done (those the budget keeps).
     pub fn prefetch(&mut self) {
         let Some(path) = self.entries.get(self.current).map(|e| e.path.clone()) else { return };
         let done = self.pictures.iter().any(|(p, s)| *p == path && !matches!(s, Slot::Loading));
         if done {
-            for d in [1isize, -1] {
-                let i = self.current as isize + d;
-                if i >= 0 && (i as usize) < self.entries.len() {
-                    self.want_picture(i as usize, false);
+            // The picture on screen's size is known now: the neighbours that do not fit go
+            // (and are not decoded, if they are still waiting).
+            let keep = self.neighbourhood();
+            if self.pictures.iter().any(|(p, _)| !keep.contains(p)) {
+                self.pictures.retain(|(p, _)| keep.contains(p));
+                if let Some(l) = &self.loader {
+                    l.retain_pictures(&keep);
                 }
+            }
+            for i in self.nearby().skip(1).collect::<Vec<_>>() {
+                self.want_picture(i, false);
             }
         }
     }
@@ -528,7 +544,7 @@ fn main() -> i32 {
     // opens in the library.
     let args = vrt::env::args();
     let arg = args.get(1).filter(|a| !a.is_empty()).cloned();
-    let mut app = Photos::new(catalog::PICTURES.to_string());
+    let mut app = Photos::new(catalog::pictures_dir());
     let mut file = None;
     if let Some(path) = arg {
         let is_dir = app.vfs.as_ref().and_then(|v| v.stat(path.clone()).ok()?.ok()).is_some_and(|s| s.is_dir);

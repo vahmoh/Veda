@@ -319,24 +319,9 @@ impl Rsne {
     }
 }
 
-/// The security of a network as shown to the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Security {
-    Open,
-    Wep,
-    WpaTkip,
-    Wpa2Personal,
-    Wpa3Personal,
-    Wpa2Wpa3Personal,
-    Enterprise,
-    Owe,
-}
-
-impl Security {
-    pub fn supported(self) -> bool {
-        matches!(self, Security::Open | Security::Wpa2Personal | Security::Wpa3Personal | Security::Wpa2Wpa3Personal)
-    }
-}
+/// The security of a network as shown to the user (the Wi-Fi protocol's
+/// type: what [`Security::supported`] says is what the station joins).
+pub use vproto::wlan::Security;
 
 /// Classifies a BSS from its capability privacy bit and its RSN/WPA
 /// elements.
@@ -443,8 +428,9 @@ pub fn select(ap: &Rsne, allow_sae: bool) -> Result<Selection, SelectError> {
     Ok(Selection { akm, pmf, own_rsne: own.element() })
 }
 
-/// The RSN element of an access point offering `security` (for
-/// [`crate::ap`] and the tests).
+/// The RSN element of an access point offering `security` (for the tests'
+/// access point).
+#[cfg(test)]
 pub fn ap_rsne(security: Security, pmf_required: bool) -> Option<Rsne> {
     let (akms, mut capabilities) = match security {
         Security::Wpa2Personal => {

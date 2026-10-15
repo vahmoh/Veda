@@ -84,19 +84,9 @@ impl Diagnostics {
         self.errors > 0
     }
 
-    /// The number of errors recorded (including dropped ones).
-    pub fn error_count(&self) -> usize {
-        self.errors
-    }
-
     /// Whether the log is full: callers may stop looking for more errors.
     pub fn saturated(&self) -> bool {
         self.list.len() >= MAX_MESSAGES
-    }
-
-    /// The recorded messages.
-    pub fn messages(&self) -> &[Diagnostic] {
-        &self.list
     }
 
     /// The information log: one line per message, `ERROR: 0:12: ...` as most
@@ -118,19 +108,6 @@ impl Diagnostics {
             let _ = writeln!(out, "ERROR: {} more messages not shown", self.dropped);
         }
         out
-    }
-
-    /// Moves `other`'s messages after this one's.
-    pub fn append(&mut self, other: Diagnostics) {
-        self.errors += other.errors;
-        self.dropped += other.dropped;
-        for d in other.list {
-            if self.list.len() >= MAX_MESSAGES {
-                self.dropped += 1;
-            } else {
-                self.list.push(d);
-            }
-        }
     }
 }
 

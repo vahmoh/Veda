@@ -33,9 +33,9 @@ use vgfx::Canvas;
 use vproto::fs::file;
 use vproto::media::pool::slot_flags;
 use vproto::media::{
-    self, AudioSpec, AudioStream, Colour, DecoderInfo, FramePool, MediaError, MediaInfo, OpenOptions, PcmRing,
-    PictureChecksum, Rational, SeekMode, SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, VideoStream, open_flags,
-    pcm,
+    self, AudioSpec, AudioStream, Colour, DecoderInfo, FramePool, Heartbeat, MediaError, MediaInfo, OpenOptions,
+    PcmRing, PictureChecksum, Rational, SeekMode, SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, VideoStream,
+    open_flags, pcm,
 };
 use vrt::object::{Channel, Event, Vmo};
 use vrt::println;
@@ -159,6 +159,8 @@ pub struct Session {
     first_picture: bool,
     first_sound: bool,
     counters: Counters,
+    /// Where it counts its rounds, once the player gave it.
+    heartbeat: Option<Heartbeat>,
 }
 
 impl Session {
@@ -179,55 +181,11 @@ impl Session {
             first_picture: true,
             first_sound: true,
             counters: Counters::default(),
-        }
-    }
-
-    /// The events the loop waits on besides the control channel.
-    pub fn wakes(&self) -> Vec<RawHandle> {
-        let mut v = Vec::new();
-        if let Some(o) = &self.video_out {
-            v.push(o.wake.raw());
-        }
-        if let Some(o) = &self.audio_out
-            && self.video_out.as_ref().is_none_or(|v| v.wake.raw() != o.wake.raw())
-        {
-            v.push(o.wake.raw());
-        }
-        v
-    }
-
-    /// Clears the wake events (after waiting on them).
-    pub fn clear_wakes(&self) {
-        if let Some(o) = &self.video_out {
-            let _ = o.wake.clear();
-        }
-        if let Some(o) = &self.audio_out {
-            let _ = o.wake.clear();
-        }
-    }
-
-    /// Once round the loop.
-    pub fn beat(&self) {
-        if let Some(o) = &self.video_out {
-            o.pool.beat();
+            heartbeat: None,
         }
     }
 
     // ---- the work ------------------------------------------------------------
-
-    /// Does one piece of work; false if there is nothing to do until the
-    /// player frees room or asks something.
-    pub fn work(&mut self) -> bool {
-        if self.opened.is_none() {
-            return false;
-        }
-        self.end_hidden()
-            || (self.sound_low() && (self.place_sound() || self.receive_sound()))
-            || self.place_picture()
-            || self.place_sound()
-            || self.receive_picture()
-            || self.receive_sound()
-    }
 
     /// The player is about to run out of sound: it comes before pictures
     /// (as in `mediadec`).
@@ -521,6 +479,53 @@ impl Session {
         if let Some(out) = &self.video_out {
             out.pool.set_generation(generation);
             out.pool.withdraw_other_generations(generation);
+        }
+    }
+}
+
+impl media::Work for Session {
+    /// Once round the loop.
+    fn beat(&self) {
+        if let Some(h) = &self.heartbeat {
+            h.beat();
+        }
+    }
+
+    /// Does one piece of work; false if there is nothing to do until the
+    /// player frees room or asks something.
+    fn work(&mut self) -> bool {
+        if self.opened.is_none() {
+            return false;
+        }
+        self.end_hidden()
+            || (self.sound_low() && (self.place_sound() || self.receive_sound()))
+            || self.place_picture()
+            || self.place_sound()
+            || self.receive_picture()
+            || self.receive_sound()
+    }
+
+    /// The events the loop waits on besides the control channel.
+    fn wakes(&self) -> Vec<RawHandle> {
+        let mut v = Vec::new();
+        if let Some(o) = &self.video_out {
+            v.push(o.wake.raw());
+        }
+        if let Some(o) = &self.audio_out
+            && self.video_out.as_ref().is_none_or(|v| v.wake.raw() != o.wake.raw())
+        {
+            v.push(o.wake.raw());
+        }
+        v
+    }
+
+    /// Clears the wake events (after waiting on them).
+    fn clear_wakes(&self) {
+        if let Some(o) = &self.video_out {
+            let _ = o.wake.clear();
+        }
+        if let Some(o) = &self.audio_out {
+            let _ = o.wake.clear();
         }
     }
 }
@@ -841,5 +846,10 @@ impl media::media::Server for Session {
 
     fn close(&mut self) {
         self.close_source();
+    }
+
+    fn set_heartbeat(&mut self, heartbeat: Vmo) -> Result<(), MediaError> {
+        self.heartbeat = Some(Heartbeat::map(heartbeat).map_err(|_| MediaError::Invalid)?);
+        Ok(())
     }
 }

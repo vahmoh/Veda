@@ -56,9 +56,9 @@ impl Clock {
         }
         let d = us.saturating_sub(self.base_us);
         Some(if d >= 0 {
-            self.anchor_ns.saturating_add(d as u64 * 1000)
+            self.anchor_ns.saturating_add((d as u64).saturating_mul(1000))
         } else {
-            self.anchor_ns.saturating_sub(d.unsigned_abs() * 1000)
+            self.anchor_ns.saturating_sub(d.unsigned_abs().saturating_mul(1000))
         })
     }
 }
@@ -135,14 +135,26 @@ impl AudioMap {
         }
     }
 
-    /// The stream frame where the sound written so far ends.
-    pub fn end(&self) -> Option<u64> {
-        self.runs.back().map(|r| r.frame + r.frames)
+    /// The media time where the sound kept starts (the first written since
+    /// the map was cleared, until it is heard).
+    pub fn start_us(&self) -> Option<i64> {
+        self.runs.front().map(|r| r.pts_us)
     }
 
     /// The media time where the sound written so far ends.
     pub fn end_us(&self) -> Option<i64> {
         self.runs.back().map(|r| r.pts_us.saturating_add(duration(r.frames, self.rate)))
+    }
+
+    /// How much of what was written is still to be heard (µs), with stream
+    /// frame `played` heard now: from what is heard (or, before any of it
+    /// is, from where it starts) to where it ends. Only what was written
+    /// since the map was last cleared counts: after a seek, the sound of the
+    /// new position alone.
+    pub fn queued_us(&self, played: u64) -> i64 {
+        let Some(end) = self.end_us() else { return 0 };
+        let heard = self.media_at(played).or(self.start_us()).unwrap_or(end);
+        end.saturating_sub(heard).max(0)
     }
 }
 
@@ -246,7 +258,7 @@ mod tests {
         m.push(72_000, 9_000_000, 48_000);
         assert_eq!(m.media_at(72_000), Some(9_000_000));
         assert_eq!(m.media_at(71_999), Some(2_499_979));
-        assert_eq!(m.end(), Some(120_000));
+        assert_eq!(m.start_us(), Some(1_000_000));
         assert_eq!(m.end_us(), Some(10_000_000));
         // Silence after the end counts on.
         assert_eq!(m.media_at(120_000 + 4_800), Some(10_100_000));
@@ -256,6 +268,34 @@ mod tests {
         assert_eq!(m.media_at(100_000), Some(9_583_333));
         m.clear();
         assert_eq!(m.media_at(100_000), None);
+    }
+
+    #[test]
+    fn what_is_queued_counts_from_the_position_sought() {
+        // 2 s of sound were written at stream frames 480 000 on, for a seek
+        // to 30 s: before any of it is heard, all of it is queued, wherever
+        // the clock stood before the seek (that is another generation's).
+        let mut m = AudioMap::new(48_000);
+        assert_eq!(m.queued_us(0), 0, "nothing written");
+        m.push(480_000, 30_000_000, 96_000);
+        assert_eq!(m.queued_us(470_000), 2_000_000);
+        // Half of it heard: the other half is queued.
+        assert_eq!(m.queued_us(528_000), 1_000_000);
+        // All heard, and the output ran on into silence: nothing.
+        assert_eq!(m.queued_us(700_000), 0);
+        // After a backward seek (a cleared map), a little sound counts as
+        // little, not as what is left of a position far ahead.
+        m.clear();
+        m.push(700_000, 1_000_000, 4_800);
+        assert_eq!(m.queued_us(690_000), 100_000);
+    }
+
+    #[test]
+    fn far_times_do_not_overflow() {
+        let c = Clock::running(i64::MIN, 5, 1);
+        assert_eq!(c.when(i64::MAX), Some(u64::MAX));
+        let c = Clock::running(i64::MAX, u64::MAX - 5, 1);
+        assert_eq!(c.when(i64::MIN), Some(0));
     }
 
     #[test]

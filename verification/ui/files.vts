@@ -28,7 +28,7 @@ key ctrl-c
 click 0.08 0.2763
 wait 1
 key ctrl-v
-wait-serial "files: pasted 1 item into /home/user/Documents" 20
+wait-serial "files: copied 1 item into /home/user/Documents" 20
 # Rename it, then create a folder (named while it is created).
 key f2
 wait 1

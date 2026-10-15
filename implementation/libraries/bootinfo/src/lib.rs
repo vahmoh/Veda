@@ -33,7 +33,7 @@ pub use arch::{HHDM_BASE, KERNEL_BASE, memory_type};
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
 
 /// Version of this protocol. Bump on any layout change.
-pub const BOOTINFO_VERSION: u32 = 6;
+pub const BOOTINFO_VERSION: u32 = 7;
 
 /// Maximum length of the kernel command line, in bytes.
 pub const CMDLINE_MAX: usize = 256;
@@ -63,8 +63,6 @@ pub struct BootInfo {
     pub framebuffer: Framebuffer,
     /// The initial ramdisk (a `VINITRD` archive), see the `initrd` crate.
     pub initrd: PhysRegion,
-    /// Optional kernel symbol table produced at build time (may be empty).
-    pub symbols: PhysRegion,
     /// Physical address of the ACPI RSDP, or 0 if the firmware has none.
     pub rsdp_phys: u64,
     /// Wall-clock time read from the firmware just before handoff.
@@ -292,8 +290,6 @@ pub enum MemoryKind {
     BootData = 9,
     /// Defective or otherwise unusable RAM.
     Unusable = 10,
-    /// Kernel symbol table.
-    Symbols = 11,
     /// The firmware's variables ([`variables`]).
     FirmwareVariables = 12,
 }

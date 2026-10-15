@@ -176,11 +176,6 @@ impl Geometry {
             gl.draw_elements_instanced(gl::TRIANGLES, self.count, gl::UNSIGNED_INT, 0, instances);
         }
     }
-
-    pub fn delete(&self, gl: &mut Context) {
-        gl.delete_vertex_arrays(&[self.vao]);
-        gl.delete_buffers(&[self.vbo, self.ibo]);
-    }
 }
 
 /// Points the bound vertex array's shared attributes at the bound array
@@ -215,10 +210,17 @@ pub fn set_instance_layout(gl: &mut Context, floats: usize, offset: usize) {
 /// Floats as little-endian bytes.
 pub fn float_bytes(v: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 4);
+    put_floats(&mut out, v);
+    out
+}
+
+/// Floats as little-endian bytes into `out` (its old bytes gone): what is
+/// refilled every frame, in the same place.
+pub fn put_floats(out: &mut Vec<u8>, v: &[f32]) {
+    out.clear();
     for f in v {
         out.extend_from_slice(&f.to_le_bytes());
     }
-    out
 }
 
 /// A matrix's columns as 16 floats.

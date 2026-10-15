@@ -11,11 +11,14 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use vfiles::format::duration as time;
+use videos_core::control::{self, SeekError};
+use videos_core::playback::Phase;
 use videos_core::text;
 use vui::agent::names::{self, MIN_SCORE, query_words, score};
 use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, json, show_path};
 
-use crate::player::{Phase, Player};
+use crate::player::Player;
 use crate::{OpenAt, Videos};
 
 /// The most videos the agent gets in one list.
@@ -23,10 +26,6 @@ const MAX_VIDEOS: usize = 60;
 /// Words of a request that name no video ("the", "video", "play").
 const FILLER: &[&str] =
     &["the", "a", "an", "my", "video", "videos", "clip", "movie", "film", "play", "watch", "please", "one", "of"];
-/// How long an action waits for a video to open.
-const OPEN_WAIT_NS: u64 = 8_000_000_000;
-/// How long it waits for the library when the app has just started.
-const LIBRARY_WAIT_NS: u64 = 2_000_000_000;
 
 pub fn info() -> AppAgentInfo {
     agent::info(
@@ -74,9 +73,9 @@ pub fn info() -> AppAgentInfo {
 
 /// "playing", "paused", ... as the agent says it.
 fn playback(p: &Player) -> String {
-    match &p.phase {
+    match p.phase() {
         Phase::Opening => "opening".into(),
-        Phase::Seeking if p.want_playing => "playing (seeking)".into(),
+        Phase::Seeking if p.playing() => "playing (seeking)".into(),
         Phase::Seeking => "paused (seeking)".into(),
         Phase::Playing => "playing".into(),
         Phase::Paused => "paused".into(),
@@ -91,17 +90,20 @@ fn now_playing(p: &Player) -> Value {
     let now = vrt::time::now_ns();
     let at = p.position_us(now).max(0) as u64 / 1000;
     let mut v = json!({
-        "title": p.title.as_str(),
+        "title": p.title(),
         "playback": playback(p),
-        "position": text::time(at),
+        "position": time(at),
         "position_seconds": at / 1000,
         "file": show_path(&p.path),
     });
-    if let Some(info) = &p.info {
+    if let Some(info) = p.info() {
         if let Some(d) = info.duration_us {
             let ms = d.max(0) as u64 / 1000;
-            v["duration"] = json!(text::time(ms));
+            v["duration"] = json!(time(ms));
             v["duration_seconds"] = json!(ms / 1000);
+        }
+        if !info.seekable {
+            v["can_seek"] = json!(false);
         }
         v["picture"] = json!(info.video_stream().map_or(String::from("none"), text::picture));
         v["sound"] = json!(info.audio_stream().map_or(String::from("none"), text::sound));
@@ -123,7 +125,7 @@ pub fn state(v: &Videos) -> Value {
     s["library"] = json!({
         "folder": show_path(&v.dir),
         "videos": v.entries.len(),
-        "total_time": text::time(total),
+        "total_time": time(total),
     });
     s["videos"] = json!(v.entries.iter().take(MAX_VIDEOS).map(|e| v.video(e)).collect::<Vec<_>>());
     if v.entries.len() > MAX_VIDEOS {
@@ -139,46 +141,29 @@ impl Videos {
     fn video(&self, e: &crate::library::Entry) -> Value {
         let mut v = json!({ "title": e.title.as_str() });
         if let Some(d) = e.duration_ms() {
-            v["duration"] = json!(text::time(d));
+            v["duration"] = json!(time(d));
         }
         let what = e.description();
         if !what.is_empty() {
             v[if matches!(e.info, Some(Err(_))) { "problem" } else { "picture" }] = what.into();
         }
         if let Some(r) = self.state.resume_of(&e.path).filter(|r| r.size == e.size && r.modified == e.modified) {
-            v["left_at"] = json!(text::time(r.position_ms));
+            v["left_at"] = json!(time(r.position_ms));
         } else if self.state.is_watched(&e.path) {
             v["watched"] = json!(true);
         }
         v
     }
 
-    /// The library, waiting a moment for the first listing when the app has
-    /// just started.
-    fn agent_library(&mut self) {
-        let end = vrt::time::now_ns() + LIBRARY_WAIT_NS;
-        while self.entries.is_empty() && self.list_error.is_none() && !self.listed && vrt::time::now_ns() < end {
-            self.reload();
-            if self.entries.is_empty() {
-                vrt::time::sleep(vrt::time::Duration::from_millis(50));
-            }
-        }
-    }
-
-    /// Waits for the video being opened to open (or fail).
-    fn agent_wait_open(&mut self) -> Result<(), String> {
-        let end = vrt::time::now_ns() + OPEN_WAIT_NS;
-        loop {
-            let now = vrt::time::now_ns();
-            let Some(p) = &mut self.player else { return Err("no video is open".into()) };
-            p.sync(now);
-            if let Phase::Failed(why) = &p.phase {
-                return Err(format!("{} cannot be played: {why}", p.title));
-            }
-            if p.info.is_some() || now > end {
-                return Ok(());
-            }
-            vrt::time::sleep(vrt::time::Duration::from_millis(20));
+    /// What the engine said of the video open since the last frame (it
+    /// may have opened, or failed).
+    fn agent_sync(&mut self) -> Result<(), String> {
+        let now = vrt::time::now_ns();
+        let Some(p) = &mut self.player else { return Ok(()) };
+        p.sync(now);
+        match p.phase() {
+            Phase::Failed(why) => Err(format!("{} cannot be played: {why}", p.title())),
+            _ => Ok(()),
         }
     }
 
@@ -207,8 +192,13 @@ impl Videos {
         }
     }
 
+    /// Runs one of the agent's actions. None waits: an action that opens
+    /// a video answers at once that it is opening (the state says when it
+    /// plays), as the window must go on drawing meanwhile.
     pub(crate) fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
-        self.agent_library();
+        if !self.listed {
+            self.reload();
+        }
         let now = vrt::time::now_ns();
         match action {
             "play" => {
@@ -231,8 +221,7 @@ impl Videos {
                     None => match &mut self.player {
                         Some(p) => {
                             if from == OpenAt::Start {
-                                p.want_playing = true;
-                                p.seek_to(0, vproto::media::SeekMode::Exact, now);
+                                p.start_over(now);
                             } else {
                                 p.play(now);
                             }
@@ -245,12 +234,12 @@ impl Videos {
                         }
                     },
                 }
-                self.agent_wait_open()?;
+                self.agent_sync()?;
                 Ok(self.player.as_ref().map_or(Value::Null, now_playing))
             }
             "pause" => {
                 let p = self.player.as_mut().ok_or("no video is open")?;
-                match p.phase {
+                match p.phase() {
                     Phase::Failed(_) => Err(playback(p)),
                     Phase::Ended => Ok(now_playing(p)),
                     _ => {
@@ -263,39 +252,39 @@ impl Videos {
                 if self.player.is_none() {
                     return Err("no video is open: play one first".into());
                 }
-                self.agent_wait_open()?;
+                self.agent_sync()?;
                 let p = self.player.as_mut().ok_or("no video is open")?;
+                if p.info().is_none() {
+                    return Err("the video is still opening: ask again in a moment".into());
+                }
+                if !p.seekable() {
+                    return Err("this video cannot be sought".into());
+                }
                 let duration = p.duration_us().ok_or("this video cannot be sought (its length is not known)")?;
+                let duration_ms = duration.max(0) as u64 / 1000;
                 let secs = arg_f64(args, "seconds")?;
                 let relative = arg_bool(args, "relative").unwrap_or(false);
-                if !relative && secs < 0.0 {
-                    return Err("'seconds' counts from the start of the video and cannot be negative".into());
-                }
-                let target = if relative { p.position_us(now) as f64 + secs * 1e6 } else { secs * 1e6 };
-                if target >= duration as f64 {
-                    return Err(format!("{} is only {} long", p.title, text::time(duration.max(0) as u64 / 1000)));
-                }
-                let us = target.max(0.0) as i64;
-                p.seek_to(us, vproto::media::SeekMode::Exact, now);
+                let position_ms = p.position_us(now).max(0) as u64 / 1000;
+                let ms = match control::seek_target(position_ms, duration_ms, secs, relative, 0) {
+                    Ok(ms) => ms,
+                    Err(SeekError::BeforeStart) => {
+                        return Err("'seconds' counts from the start of the video and cannot be negative".into());
+                    }
+                    Err(SeekError::PastEnd) => return Err(format!("{} is only {} long", p.title(), time(duration_ms))),
+                    Err(SeekError::NotANumber) => return Err("'seconds' is not a number of seconds".into()),
+                };
+                p.seek_to(ms as i64 * 1000, vproto::media::SeekMode::Exact, now);
                 Ok(json!({
-                    "title": p.title.as_str(),
-                    "position": text::time(us as u64 / 1000),
-                    "duration": text::time(duration.max(0) as u64 / 1000),
+                    "title": p.title(),
+                    "position": time(ms),
+                    "duration": time(duration_ms),
                 }))
             }
             "set_volume" => {
-                let mut level = (self.volume * 100.0 + 0.5) as i64;
-                let mut changed = false;
-                if let Some(l) = arg_opt_int(args, "level")? {
-                    level = l;
-                    changed = true;
-                }
-                if let Some(c) = arg_opt_int(args, "change")? {
-                    level += c;
-                    changed = true;
-                }
-                if changed {
-                    self.set_volume(level.clamp(0, 100) as f32 / 100.0);
+                let current = (self.volume * 100.0 + 0.5) as u32;
+                let level = control::volume(current, arg_opt_int(args, "level")?, arg_opt_int(args, "change")?);
+                if let Some(level) = level {
+                    self.set_volume(level as f32 / 100.0);
                 }
                 if let Some(mute) = arg_bool(args, "mute")
                     && mute != self.muted

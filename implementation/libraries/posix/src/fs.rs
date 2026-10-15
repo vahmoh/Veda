@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 
-use vproto::fs::{Stat, open_flags};
+use vproto::fs::{Space, Stat, device, open_flags};
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -78,7 +78,7 @@ pub fn open_resolved(r: &Resolved, flags: u32) -> Result<alloc::sync::Arc<Descri
         }
         match error::ipc(vfs::with(|c| c.open_file(r.path.clone(), vfs_flags(flags)))?) {
             Ok((channel, _)) => {
-                return Ok(Description::new(Object::File(VfsFile::new(channel)), flags));
+                return Ok(Description::new(Object::File(VfsFile::opened(channel, r.path.clone())), flags));
             }
             // A directory can be opened for reading (to list it, to stat
             // it, as a base for *at calls).
@@ -262,7 +262,7 @@ pub unsafe fn truncate(name: usize, len: i64) -> SysResult {
     // SAFETY: the program passed a string.
     let r = vfs::resolve_at(at::FDCWD, unsafe { user::cstr(name)? })?;
     let (channel, _) = error::ipc(vfs::with(|c| c.open_file(r.path.clone(), open_flags::WRITE))?)?;
-    VfsFile::new(channel).truncate(len)?;
+    VfsFile::opened(channel, r.path).truncate(len)?;
     Ok(0)
 }
 
@@ -309,14 +309,13 @@ pub unsafe fn chmodat(dirfd: i32, name: usize) -> SysResult {
     if st.read_only { Err(EROFS) } else { Ok(0) }
 }
 
-/// What `statfs` reports for a file system.
-fn statfs_of(path: &str) -> Result<Statfs, isize> {
-    let space = error::ipc(vfs::with(|c| c.space(path.into()))?)?;
-    let st: Stat = vfs::stat(path)?;
+/// What `statfs` reports for the file system holding a file whose
+/// metadata is `st`, `space` how full it is.
+fn statfs_for(st: &Stat, space: Space) -> Statfs {
     const BLOCK: u64 = 4096;
     let blocks = space.total / BLOCK;
     let free = space.total.saturating_sub(space.used) / BLOCK;
-    Ok(Statfs {
+    Statfs {
         kind: 0x0102_1994, // TMPFS_MAGIC: a memory file system
         bsize: BLOCK as i64,
         blocks,
@@ -329,7 +328,26 @@ fn statfs_of(path: &str) -> Result<Statfs, isize> {
         frsize: BLOCK as i64,
         flags: if st.read_only { 1 } else { 0 },
         spare: [0; 4],
-    })
+    }
+}
+
+/// How full the file system holding `path` is.
+fn space(path: &str) -> Result<Space, isize> {
+    error::ipc(vfs::with(|c| c.space(path.into()))?)
+}
+
+/// What `statfs` reports for the file system holding `path`.
+fn statfs_of(path: &str) -> Result<Statfs, isize> {
+    Ok(statfs_for(&vfs::stat(path)?, space(path)?))
+}
+
+/// A path on the file system `device` names (`Stat::device`).
+fn device_root(device: u64) -> &'static str {
+    match device {
+        device::SYSTEM => "/system",
+        device::DEV => "/dev",
+        _ => "/",
+    }
 }
 
 pub unsafe fn statfs(name: usize, buf: usize) -> SysResult {
@@ -341,13 +359,27 @@ pub unsafe fn statfs(name: usize, buf: usize) -> SysResult {
     Ok(0)
 }
 
+/// `fstatfs`: the file system of what `fd` is. A file's is where it was
+/// opened (if it is still there) or the one its metadata names; a pipe's
+/// or the terminal's a pipe file system's, with no space.
 pub unsafe fn fstatfs(fd: i32, buf: usize) -> SysResult {
+    const PIPEFS_MAGIC: i64 = 0x5049_5045;
     let desc = fd::get(fd)?;
-    let path = match &desc.object {
-        Object::Dir(d) => d.path.clone(),
-        _ => vfs::cwd(),
+    let s = match &desc.object {
+        Object::Dir(d) => statfs_of(&d.path)?,
+        Object::File(f) => {
+            let st = f.stat()?;
+            let room = match f.path().map(space) {
+                Some(Ok(room)) => room,
+                _ => space(device_root(st.device))?,
+            };
+            statfs_for(&st, room)
+        }
+        Object::Stream(_) => {
+            Statfs { kind: PIPEFS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() }
+        }
+        Object::Null | Object::Log => statfs_of("/dev")?,
     };
-    let s = statfs_of(&path)?;
     // SAFETY: the program passed a `struct statfs`.
     unsafe { user::write(buf, s)? };
     Ok(0)

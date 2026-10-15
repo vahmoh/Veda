@@ -13,20 +13,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use guest_sys::checks::Checks;
+
 const DEVICES: &str = "/sys/bus/pci/devices";
-
-struct Checks {
-    failed: u32,
-}
-
-impl Checks {
-    fn check(&mut self, what: &str, ok: bool) {
-        println!("pcitest: {} {}", if ok { "ok  " } else { "FAIL" }, what);
-        if !ok {
-            self.failed += 1;
-        }
-    }
-}
 
 fn read(path: &Path) -> String {
     fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default()
@@ -89,7 +78,7 @@ fn interrupt_count(irq: &str) -> u64 {
 }
 
 fn main() {
-    let mut c = Checks { failed: 0 };
+    let mut c = Checks::new("pcitest");
     let found = wait_for(Duration::from_secs(10), || !functions().is_empty());
     c.check("the guest's PCI has functions", found);
     // Drivers bind as they probe.
@@ -131,9 +120,5 @@ fn main() {
             );
         }
     }
-    if c.failed == 0 {
-        println!("pcitest: PASS");
-    } else {
-        println!("pcitest: FAIL ({} checks)", c.failed);
-    }
+    c.finish();
 }

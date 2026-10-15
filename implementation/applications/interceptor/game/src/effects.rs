@@ -7,17 +7,19 @@
 //! the cars and their crashes, so that it is tested on the host; drawn by
 //! the renderer.
 //!
-//! Skid marks are kept in a ring: the oldest give way to the newest, and
-//! the renderer copies only the new ones to the GPU.
+//! Particles and skid marks are kept in rings: the oldest give way to the
+//! newest, and the renderer copies only the new marks to the GPU.
 
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use rand::{RngExt, SeedableRng};
 use rand_distr::UnitBall;
 use rand_pcg::Pcg32;
 
-use crate::game::{Event, Game};
+use crate::game::{CarId, Event, Game};
 use crate::prelude::*;
+use crate::render::shader_time;
 
 /// The most particles at once, and skid marks' segments kept.
 pub const MAX_PARTICLES: usize = 2048;
@@ -87,7 +89,7 @@ impl Particle {
 }
 
 /// A segment of a skid mark: from `a` to `b` on the road, made at `born`
-/// (the game's clock), as dark as `dark` (0..1).
+/// (the pictures' time: [`shader_time`]), as dark as `dark` (0..1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Skid {
     pub a: Vec3,
@@ -96,16 +98,17 @@ pub struct Skid {
     pub dark: f32,
 }
 
-/// A car's wheels' last marks, by its id.
+/// A car's wheels' last marks, by its number.
 struct Trail {
-    car: u32,
+    car: CarId,
     last: [Option<Vec3>; 4],
     seen: bool,
 }
 
 /// The passing effects.
 pub struct Effects {
-    pub particles: Vec<Particle>,
+    /// The particles, oldest first.
+    particles: VecDeque<Particle>,
     skids: Vec<Skid>,
     /// Segments made so far (the next goes at `made % MAX_SKIDS`).
     made: u64,
@@ -122,12 +125,17 @@ impl Default for Effects {
 impl Effects {
     pub fn new() -> Effects {
         Effects {
-            particles: Vec::with_capacity(MAX_PARTICLES),
+            particles: VecDeque::with_capacity(MAX_PARTICLES),
             skids: Vec::with_capacity(MAX_SKIDS),
             made: 0,
             trails: Vec::new(),
             rng: Pcg32::seed_from_u64(0xEFFEC7),
         }
+    }
+
+    /// The particles in the air.
+    pub fn particles(&self) -> &VecDeque<Particle> {
+        &self.particles
     }
 
     /// The skid marks' ring, and how many segments were ever made.
@@ -148,13 +156,9 @@ impl Effects {
     fn add(&mut self, p: Particle) {
         if self.particles.len() >= MAX_PARTICLES {
             // The oldest makes way.
-            let oldest = (0..self.particles.len())
-                .max_by(|&a, &b| self.particles[a].spent().total_cmp(&self.particles[b].spent()));
-            if let Some(i) = oldest {
-                self.particles.swap_remove(i);
-            }
+            self.particles.pop_front();
         }
-        self.particles.push(p);
+        self.particles.push_back(p);
     }
 
     /// A random vector in the unit ball.
@@ -170,6 +174,7 @@ impl Effects {
             return;
         }
         let wet = game.env.wetness;
+        let now = shader_time(game.clock());
         for t in &mut self.trails {
             t.seen = false;
         }
@@ -198,7 +203,7 @@ impl Effects {
                     match self.trails[ti].last[w] {
                         Some(last) if last.distance(p) > 4.0 => self.trails[ti].last[w] = Some(p),
                         Some(last) if last.distance(p) >= MARK_STEP => {
-                            self.add_skid(Skid { a: last, b: p, born: game.clock, dark });
+                            self.add_skid(Skid { a: last, b: p, born: now, dark });
                             self.trails[ti].last[w] = Some(p);
                         }
                         Some(_) => {}
@@ -251,8 +256,7 @@ impl Effects {
             if fierce < 5.0 || impact.point.distance(eye) > NEAR {
                 continue;
             }
-            let car = &game.cars[a].vehicle;
-            let vel = Vec3::new(car.vel.x, 0.0, car.vel.y);
+            let vel = game.car(a).map_or(Vec3::ZERO, |c| Vec3::new(c.vehicle.vel.x, 0.0, c.vehicle.vel.y));
             let away = Vec3::new(impact.normal.x, 0.0, impact.normal.y);
             let n = (fierce * 1.2).clamp(4.0, 36.0) as usize;
             for _ in 0..n {
@@ -277,7 +281,7 @@ impl Effects {
             match p.kind {
                 Kind::Smoke | Kind::Spray => {
                     // Slowed by the air, the smoke rising, the spray falling.
-                    p.vel *= (-dt * if p.kind == Kind::Smoke { 1.6 } else { 2.5 }).exp();
+                    p.vel *= libm::expf(-dt * if p.kind == Kind::Smoke { 1.6 } else { 2.5 });
                     p.vel.y += dt * if p.kind == Kind::Smoke { 0.35 } else { -1.5 };
                 }
                 Kind::Spark => {
@@ -304,19 +308,15 @@ impl Effects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::carmodel::Kind as CarKind;
-    use crate::driver::Role;
     use crate::env::{Environment, TimeOfDay, Weather};
-    use crate::game::{Car, STEP};
-    use crate::vehicle::Spec;
+    use crate::game::STEP;
     use crate::world::World;
 
     #[test]
     fn a_sliding_car_smokes_and_marks_the_road() {
         let mut g = Game::new(World::new(), Environment::new(TimeOfDay::Day, Weather::Clear));
         let p = g.player;
-        g.cars[p] = Car::on_road(&g.world, CarKind::Police, Spec::interceptor(), 300.0, 2.1, false, 25.0);
-        g.cars[p].role = Role::Player;
+        g.cars[p].put(&g.world, 300.0, 2.1, false, 25.0);
         let mut fx = Effects::new();
         // Handbrake and steering: the tail slides.
         g.keys.handbrake = true;
@@ -344,12 +344,33 @@ mod tests {
     }
 
     #[test]
+    fn the_oldest_particle_makes_way() {
+        // Puffs made one after another (each told by its size), more than
+        // there is room for: the first made give way.
+        let mut fx = Effects::new();
+        let puff = |k: usize| Particle {
+            kind: Kind::Smoke,
+            pos: Vec3::ZERO,
+            vel: Vec3::ZERO,
+            age: 0.0,
+            life: 2.0,
+            size: k as f32,
+            floor: 0.0,
+        };
+        for k in 0..MAX_PARTICLES + 10 {
+            fx.add(puff(k));
+        }
+        let p = fx.particles();
+        assert_eq!(p.len(), MAX_PARTICLES);
+        assert!(p.iter().map(|p| p.size as usize).eq(10..MAX_PARTICLES + 10));
+    }
+
+    #[test]
     fn crashes_throw_sparks_that_fall() {
         let mut g = Game::new(World::new(), Environment::new(TimeOfDay::Night, Weather::Clear));
         let p = g.player;
         // Straight into the wall of a bend at speed.
-        g.cars[p] = Car::on_road(&g.world, CarKind::Police, Spec::interceptor(), 300.0, 2.1, false, 30.0);
-        g.cars[p].role = Role::Player;
+        g.cars[p].put(&g.world, 300.0, 2.1, false, 30.0);
         g.cars[p].vehicle.yaw += 0.6;
         g.keys.up = true;
         let mut fx = Effects::new();

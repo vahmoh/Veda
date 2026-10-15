@@ -209,9 +209,7 @@ impl Vad {
             let dof = 6.0 * (b - a) as f32;
             bias.push(1.0 / (1.0 - 2.6 / Float::sqrt(dof)).max(0.25));
         }
-        let hann: Vec<f32> = (0..window)
-            .map(|i| (0.5 - 0.5 * Float::cos(core::f64::consts::TAU * i as f64 / window as f64)) as f32)
-            .collect();
+        let hann = crate::fft::hann_periodic(window);
         // Power of a full-scale-normalised sine bin: undo the window and FFT
         // gain, so that band powers are mean squares.
         let wsum: f32 = hann.iter().map(|w| w * w).sum();

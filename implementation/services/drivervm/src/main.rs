@@ -16,8 +16,14 @@
 //!
 //! Programs in the guest reach Veda's objects through the bridge
 //! (`vhv::bridge`): this program keeps the guest's handles and carries out
-//! its operations on them, and gives it a registry narrowed to the
-//! services drivers attach to.
+//! its operations on them, within bounds of what the guest makes Veda keep
+//! (handles, waits, memory, mappings), and gives it a registry narrowed to
+//! the services drivers attach to.
+//!
+//! What the monitor decides that reaches no object of Veda's (the bridge's
+//! books, where the guest's functions and their BARs go, the keyboard
+//! controller's commands) is its library (`drivervm`, `src/lib.rs`), tested
+//! on the host.
 //!
 //! It gives the guest the PCI functions devmgr hands over (`pci`): their
 //! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
@@ -58,6 +64,7 @@ mod variables;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use vproto::startup::drivervm as roles;
 use vrt::object::{Channel, Resource, Vmo};
 use vrt::println;
 
@@ -66,13 +73,6 @@ use machine::{Config, Machine, Pc};
 use variables::FirmwareVariables;
 
 vrt::entry!(main);
-
-/// Startup handle role of the hypervisor resource (devmgr hands it over).
-const HYPERVISOR_RESOURCE: u32 = vabi::startup::role::USER + 1;
-/// Role of the `pcidev` channels of the guest's PCI functions (one each).
-const DEVICE_ROLE: u32 = vabi::startup::role::USER + 2;
-/// Role of the PC's firmware variables, if it has some.
-const VARIABLES_ROLE: u32 = vabi::startup::role::USER + 7;
 
 /// Maps the system image (the initrd), where the guest's kernel is.
 fn system_image() -> Option<initrd::Archive<'static>> {
@@ -102,7 +102,7 @@ fn config() -> Config {
 }
 
 fn main() -> i32 {
-    let Some(hypervisor) = vrt::env::take_handle(HYPERVISOR_RESOURCE).map(Resource::from_handle) else {
+    let Some(hypervisor) = vrt::env::take_handle(roles::HYPERVISOR_RESOURCE).map(Resource::from_handle) else {
         println!("no hypervisor resource");
         return 1;
     };
@@ -116,11 +116,11 @@ fn main() -> i32 {
     };
     let config = config();
     let devices: Vec<Channel> =
-        core::iter::from_fn(|| vrt::env::take_handle(DEVICE_ROLE)).map(Channel::from_handle).collect();
+        core::iter::from_fn(|| vrt::env::take_handle(roles::DEVICE)).map(Channel::from_handle).collect();
     let mut lines = Lines::default();
     let platform = arch::platform::Platform::take(&mut lines);
     let variables =
-        vrt::env::take_handle(VARIABLES_ROLE).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
+        vrt::env::take_handle(roles::VARIABLES).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
     let pc = Pc { devices, platform, lines, variables };
     match Machine::start(&hypervisor, kernel.data, initramfs.data, pc, &config) {
         Ok(machine) => machine.wait(),

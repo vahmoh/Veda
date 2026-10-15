@@ -24,13 +24,14 @@
 //!   voice starving.
 //! * Levels for the interface's animation: how loud the voice that is
 //!   audible *right now* is (from the stream's played position), and how
-//!   loud the microphone is.
+//!   loud the microphone is (with a meter's ballistics: `vaudio::level`).
 
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use vabi::{RawHandle, signals};
+use vaudio::level::{self, LevelMeter};
 use vproto::audio::{InputSpec, InputStream, OutputStream, StreamSpec, audio, ring};
 
 /// Microphone rate (what Deepgram receives).
@@ -56,7 +57,14 @@ const PREBUFFER_RELAX_MS: u32 = 25;
 /// ... or once all of it is here, or this long after that much should have
 /// arrived.
 const PREBUFFER_GRACE_MS: u32 = 150;
+/// The levels the animation shows, from nothing to a voice at its loudest
+/// (dBFS).
+const QUIET_DB: f32 = -50.0;
+const LOUD_DB: f32 = -6.0;
+/// The most voice measured at once: 25 ms.
+const AUDIBLE_MAX: usize = (VOICE_RATE / 40) as usize;
 
+/// The microphone and the voice (see the module documentation).
 pub struct Voice {
     client: audio::Client,
     mic: Option<InputStream>,
@@ -78,33 +86,17 @@ pub struct Voice {
     /// index just after the last one.
     recent: VecDeque<i16>,
     recent_end: u64,
-    mic_level: f32,
+    /// How loud the microphone is.
+    mic_meter: LevelMeter,
     scratch: Vec<i16>,
-}
-
-/// Loudness (0..=1) of samples: RMS mapped from -50..-6 dBFS.
-fn loudness(samples: impl Iterator<Item = i16>) -> f32 {
-    let mut sum = 0f64;
-    let mut n = 0u32;
-    for s in samples {
-        sum += (s as f64) * (s as f64);
-        n += 1;
-    }
-    if n == 0 {
-        return 0.0;
-    }
-    let rms = libm::sqrtf((sum / n as f64) as f32) / 32768.0;
-    if rms < 1e-5 {
-        return 0.0;
-    }
-    let db = 20.0 * libm::log10f(rms);
-    ((db + 50.0) / 44.0).clamp(0.0, 1.0)
 }
 
 impl Voice {
     /// Connects to the audio service (streams are opened on demand).
     pub fn new() -> Option<Voice> {
         let client = audio::Client::new(vproto::connect(audio::NAME).ok()?);
+        let mut mic_meter = LevelMeter::new(MIC_RATE);
+        mic_meter.set_range(QUIET_DB, LOUD_DB);
         Some(Voice {
             client,
             mic: None,
@@ -117,7 +109,7 @@ impl Voice {
             ended: false,
             recent: VecDeque::with_capacity(RECENT),
             recent_end: 0,
-            mic_level: 0.0,
+            mic_meter,
             scratch: vec![0; 4096],
         })
     }
@@ -147,11 +139,12 @@ impl Voice {
         }
     }
 
+    /// Stops listening.
     pub fn close_mic(&mut self) {
         if let Some(m) = self.mic.take() {
             let _ = self.client.close(m.id);
         }
-        self.mic_level = 0.0;
+        self.mic_meter.reset();
     }
 
     /// Takes everything the microphone recorded into `out`, and what was
@@ -177,15 +170,14 @@ impl Voice {
             total += n;
         }
         if total > 0 {
-            let fresh = loudness(out[out.len() - total..].iter().copied());
-            // Rise fast, fall slowly.
-            self.mic_level = if fresh > self.mic_level { fresh } else { self.mic_level * 0.7 + fresh * 0.3 };
+            self.mic_meter.process(&out[out.len() - total..]);
         }
         total
     }
 
+    /// How loud the microphone is (0..=1).
     pub fn mic_level(&self) -> f32 {
-        self.mic_level
+        self.mic_meter.normalized()
     }
 
     fn open_speaker(&mut self) -> bool {
@@ -216,7 +208,9 @@ impl Voice {
 
     /// Makes other sound play quieter (music under a conversation), or not.
     pub fn duck_others(&self, on: bool) {
-        let _ = self.client.set_ducking(on);
+        if !matches!(self.client.set_ducking(on), Ok(Ok(()))) {
+            vrt::println!("the audio service does not duck the other sound");
+        }
     }
 
     /// Closes the voice stream (when the conversation ends).
@@ -339,44 +333,39 @@ impl Voice {
         }
     }
 
-    /// Loudness of the voice audible right now (0..=1).
-    pub fn output_level(&self) -> f32 {
-        let Some(s) = &self.speaker else { return 0.0 };
-        // Once the voice is over, the last samples are not playing on.
+    /// The level (dBFS) of the voice audible right now, over the `window`
+    /// frames (at most [`AUDIBLE_MAX`]) before the stream's played
+    /// position; `None` when none plays (once the voice is over, its last
+    /// samples are not playing on).
+    fn audible_db(&self, window: usize) -> Option<f32> {
+        let s = self.speaker.as_ref()?;
         if !self.speaking() {
-            return 0.0;
+            return None;
         }
+        let window = window.min(AUDIBLE_MAX);
         let played = s.played_now();
-        let window = (VOICE_RATE / 40) as u64; // 25 ms
         let start = self.recent_end.saturating_sub(self.recent.len() as u64);
-        if played < start + window || played > self.recent_end {
-            return 0.0;
+        if played < start + window as u64 || played > self.recent_end {
+            return None;
         }
-        let from = (played - window - start) as usize;
-        loudness(self.recent.range(from..from + window as usize).copied())
+        let from = (played - window as u64 - start) as usize;
+        let mut buf = [0i16; AUDIBLE_MAX];
+        for (dst, &src) in buf.iter_mut().zip(self.recent.range(from..from + window)) {
+            *dst = src;
+        }
+        Some(level::rms_dbfs(&buf[..window]))
+    }
+
+    /// Loudness of the voice audible right now (0..=1), over 25 ms.
+    pub fn output_level(&self) -> f32 {
+        self.audible_db(AUDIBLE_MAX).map_or(0.0, |db| level::normalize(db, QUIET_DB, LOUD_DB))
     }
 
     /// Level of the voice audible right now, over 20 ms (dBFS; -100 when
     /// nothing plays): what the echo gate compares the microphone with when
     /// the audio service does not say what plays.
     pub fn output_db(&self) -> f32 {
-        let Some(s) = &self.speaker else { return -100.0 };
-        // Once the voice is over, silence (not the last 20 ms on and on).
-        if !self.speaking() {
-            return -100.0;
-        }
-        let played = s.played_now();
-        let window = (VOICE_RATE / 50) as u64;
-        let start = self.recent_end.saturating_sub(self.recent.len() as u64);
-        if played < start + window || played > self.recent_end {
-            return -100.0;
-        }
-        let from = (played - window - start) as usize;
-        let mut buf = [0i16; (VOICE_RATE / 50) as usize];
-        for (dst, &src) in buf.iter_mut().zip(self.recent.range(from..from + window as usize)) {
-            *dst = src;
-        }
-        vaudio::level::rms_dbfs(&buf)
+        self.audible_db((VOICE_RATE / 50) as usize).unwrap_or(-100.0)
     }
 
     /// What to wait on: the microphone's event, and the speaker's while

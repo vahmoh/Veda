@@ -7,14 +7,18 @@
 //!
 //! Items of `~/Desktop` can be dragged onto the Trash, or into the home
 //! folder or a folder on the desktop. The icons follow `~/Desktop` and the
-//! Trash as other programs change them (see [`Desktop::stale`]).
+//! Trash as other programs change them (see [`Desktop::stale`]): what a
+//! look at the two folders says (when `~/Desktop` changed and how many
+//! items it has; whether the Trash has any) is compared every few seconds,
+//! and the folder is read again only when that changed.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vfiles::{FileKind, Fs, HOME, trash};
+use vfiles::path::natural_cmp;
+use vfiles::{Fs, HOME, trash};
 use vgfx::{Align, Color, Rect};
 use vui::{Cursor, Icon, MenuItem, Ui};
 
@@ -76,36 +80,40 @@ const DESKTOP_DIR: &str = "/home/user/Desktop";
 /// How far the pointer moves with the button down before it drags.
 const DRAG_START: i32 = 8;
 
-/// Which application opens a file, by extension.
+/// Which application opens a file, by extension, and the icon of its type.
 pub fn app_for_file(name: &str) -> Option<(&'static str, Icon)> {
     let app = vfiles::default_app(name)?;
-    let icon = match vfiles::file_kind(name, false) {
-        FileKind::Image => Icon::Image,
-        FileKind::Audio => Icon::Music,
-        FileKind::Video => Icon::Video,
-        _ => Icon::Document,
-    };
-    Some((app.id, icon))
+    Some((app.id, apps_common::icons::kind_icon(name, false, false)))
 }
 
-/// What the icons show of the file system: whether anything is in the
-/// Trash, and what is in `~/Desktop` (name, folder), in icon order.
-#[derive(Clone, Default, PartialEq, Eq)]
-struct Contents {
+/// What a look at the folders the icons show says: when `~/Desktop` last
+/// changed and how many items it has, and whether the Trash has any.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Stamp {
+    desktop: Option<(u64, u64)>,
     trash_full: bool,
-    desktop: Vec<(String, bool)>,
 }
 
-fn contents(fs: &Fs) -> Contents {
-    let mut desktop: Vec<(String, bool)> = fs
+fn stamp(fs: &Fs) -> Stamp {
+    Stamp {
+        desktop: fs.stat(DESKTOP_DIR).ok().map(|s| (s.modified, s.size)),
+        // A folder's size is how many items it has.
+        trash_full: fs.stat(trash::FILES).is_ok_and(|s| s.size > 0),
+    }
+}
+
+/// What is in `~/Desktop` (name, folder), in icon order: folders first,
+/// then in natural name order.
+fn desktop_items(fs: &Fs) -> Vec<(String, bool)> {
+    let mut items: Vec<(String, bool)> = fs
         .read_dir(DESKTOP_DIR)
         .unwrap_or_default()
         .into_iter()
         .filter(|e| !e.name.starts_with('.'))
         .map(|e| (e.name, e.is_dir))
         .collect();
-    desktop.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
-    Contents { trash_full: trash::count(fs) > 0, desktop }
+    items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| natural_cmp(&a.0, &b.0)));
+    items
 }
 
 /// An icon being dragged.
@@ -144,8 +152,8 @@ pub struct Desktop {
     /// Incremented when `items` changes.
     generation: u64,
     shown: Option<Look>,
-    /// What the icons were made from.
-    contents: Contents,
+    /// What the folders looked like when the icons were made.
+    stamp: Stamp,
     drag: Option<Drag>,
     /// The icon the dragged one is over, if it takes drops.
     target: Option<usize>,
@@ -162,7 +170,7 @@ impl Desktop {
             selected: None,
             generation: 0,
             shown: None,
-            contents: Contents::default(),
+            stamp: Stamp::default(),
             drag: None,
             target: None,
             menu_for: None,
@@ -170,9 +178,10 @@ impl Desktop {
         }
     }
 
-    /// Whether `~/Desktop` or the Trash changed since the icons were made.
+    /// Whether `~/Desktop` or the Trash changed since the icons were made
+    /// (two looks at the folders, not reading them).
     pub fn stale(&self, fs: &Fs) -> bool {
-        contents(fs) != self.contents
+        stamp(fs) != self.stamp
     }
 
     /// An icon is being dragged, or a menu is open: the icons should not
@@ -183,16 +192,17 @@ impl Desktop {
 
     /// Rebuilds the icon list: the Trash, fixed shortcuts and `~/Desktop`.
     pub fn refresh(&mut self, m: &Model, fs: &Fs) {
-        let c = contents(fs);
+        let stamp = stamp(fs);
+        let desktop = desktop_items(fs);
         let mut items = Vec::new();
         if m.app("files").is_some() {
             items.push(Shortcut {
                 label: "Trash".into(),
                 app: "files".into(),
                 args: vec![trash::FILES.into()],
-                icon: if c.trash_full { Icon::TrashFull } else { Icon::Trash },
+                icon: if stamp.trash_full { Icon::TrashFull } else { Icon::Trash },
                 color: "trash".into(),
-                kind: Kind::Trash { full: c.trash_full },
+                kind: Kind::Trash { full: stamp.trash_full },
             });
             items.push(Shortcut {
                 label: "Home".into(),
@@ -215,7 +225,7 @@ impl Desktop {
                 });
             }
         }
-        for (name, is_dir) in &c.desktop {
+        for (name, is_dir) in &desktop {
             let path = format!("{DESKTOP_DIR}/{name}");
             if *is_dir {
                 items.push(Shortcut {
@@ -242,7 +252,7 @@ impl Desktop {
         self.selected =
             selected.and_then(|(label, args)| items.iter().position(|s| s.label == label && s.args == args));
         self.items = items;
-        self.contents = c;
+        self.stamp = stamp;
         self.drag = None;
         self.target = None;
         self.menu_for = None;

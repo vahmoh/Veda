@@ -196,7 +196,7 @@ pub fn billboards(road: &Road, terrain: &Terrain) -> Vec<Billboard> {
         let face = (-Vec3::new(f.x, 0.0, f.z) - Vec3::new(r.x, 0.0, r.z) * (side * 0.45)).normalize_or(Vec3::Z);
         out.push(Billboard {
             base: Vec3::new(p.x, terrain.height(p.x, p.z), p.z),
-            yaw: face.x.atan2(face.z),
+            yaw: libm::atan2f(face.x, face.z),
             design: k % DESIGNS,
         });
         k += 1;
@@ -266,7 +266,7 @@ pub fn neons(road: &Road, blocks: &[Block]) -> Vec<Neon> {
         let to_road = (road.point(at.s, 0.0) - b.base).xz().normalize_or(Vec2::Y);
         let edge = b.size.z * 0.5 - 1.5;
         let base = Vec3::new(b.base.x + to_road.x * edge, b.base.y + b.size.y, b.base.z + to_road.y * edge);
-        out.push(Neon { base, yaw: to_road.x.atan2(to_road.y), color: colors[out.len() % colors.len()] });
+        out.push(Neon { base, yaw: libm::atan2f(to_road.x, to_road.y), color: colors[out.len() % colors.len()] });
     }
     out
 }
@@ -328,7 +328,7 @@ pub fn bridge(road: &Road) -> (Mesh, Vec<Vec3>, Vec<Vec3>) {
     let deck = |s: f32| road.point(s, 0.0).y;
     let high = deck(tower_s[0]).max(deck(tower_s[1])) + 62.0;
     for &ts in &tower_s {
-        let (_, f, r, _) = road.frame(ts);
+        let (_, f, _, _) = road.frame(ts);
         let flat = Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::Z);
         for side in [-1.0f32, 1.0] {
             let foot = road.point(ts, side * out);
@@ -343,7 +343,6 @@ pub fn bridge(road: &Road) -> (Mesh, Vec<Vec3>, Vec<Vec3>) {
             let (a, b) = (Vec3::new(a.x, y, a.z), Vec3::new(b.x, y, b.z));
             m.append(&beam(a, b, 2.4, 3.2, Vec3::Y, steel));
         }
-        let _ = r;
     }
     // The main cables: from the deck at the ends up to the towers' tops,
     // and hung between the towers, low in the middle.

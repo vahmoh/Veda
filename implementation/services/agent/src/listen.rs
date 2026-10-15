@@ -22,20 +22,25 @@
 //! (louder than its usual peaks), so music playing does not keep the
 //! recogniser busy, while someone calling over it still does. Recognition
 //! costs a fraction of a conversation, and a budget caps how long it may
-//! run each hour.
+//! run each hour ([`SharedBudget`]): the agent's, as listening starts anew
+//! at every wake, after every conversation and on every change of
+//! settings.
 
 use alloc::collections::VecDeque;
+use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 use serde_json::json;
 use vabi::{RawHandle, signals};
-use vagent::{deepgram, wake};
+use vagent::deepgram;
+use vagent::wake::{self, Budget};
 use vaudio::vad::Vad;
 use vweb::ws::{Message, WebSocket};
 use vweb::{Conn, WebError};
 
-use crate::session::Connector;
+use crate::session::{self, Connector};
 use crate::voice::MIC_RATE;
 
 /// A detector frame: 20 ms.
@@ -79,6 +84,14 @@ const CALL_REST_NS: u64 = 1_500_000_000;
 /// ... and at most this long.
 const CALL_MAX_NS: u64 = 6_000_000_000;
 
+/// The budget of recognition, which every listener draws on.
+pub type SharedBudget = Rc<RefCell<Budget>>;
+
+/// The agent's budget of recognition, from `now`.
+pub fn budget(now: u64) -> SharedBudget {
+    Rc::new(RefCell::new(Budget::new(BUDGET_NS, HOUR_NS, now)))
+}
+
 /// A call heard while the speaker may still be talking ("Hey Veda," ...
 /// "what time is it?").
 struct Call {
@@ -93,6 +106,7 @@ struct Call {
     words_ns: u64,
 }
 
+/// Listening for the agent's name (see the module documentation).
 pub struct Listener {
     name: String,
     key: String,
@@ -119,14 +133,13 @@ pub struct Listener {
     retry_at: u64,
     /// When listening began.
     since_ns: u64,
-    hour_start: u64,
-    used_ns: u64,
-    over_budget: bool,
+    budget: SharedBudget,
 }
 
 impl Listener {
-    /// Listens for `name`; `url` is Deepgram's (or a simulator's).
-    pub fn new(name: &str, key: &str, url: String, now: u64) -> Listener {
+    /// Listens for `name`; `url` is Deepgram's (or a simulator's), and
+    /// recognition draws on `budget`.
+    pub fn new(name: &str, key: &str, url: String, now: u64, budget: SharedBudget) -> Listener {
         vrt::println!("listening for its name");
         let mut vad = Vad::new(MIC_RATE);
         vad.set_timing(START_MS, 600);
@@ -149,9 +162,7 @@ impl Listener {
             call: None,
             retry_at: 0,
             since_ns: now,
-            hour_start: now,
-            used_ns: 0,
-            over_budget: false,
+            budget,
         }
     }
 
@@ -173,10 +184,10 @@ impl Listener {
 
     /// Takes microphone audio.
     pub fn hear(&mut self, pcm: &[i16], now: u64) {
-        self.partial.extend_from_slice(pcm);
-        let whole = self.partial.len() / FRAME * FRAME;
-        let frames: Vec<i16> = self.partial.drain(..whole).collect();
-        for f in frames.chunks(FRAME) {
+        let mut partial = core::mem::take(&mut self.partial);
+        partial.extend_from_slice(pcm);
+        let whole = partial.len() / FRAME * FRAME;
+        for f in partial[..whole].chunks(FRAME) {
             self.vad.process(f);
             let speaking = self.vad.speaking();
             if speaking {
@@ -215,6 +226,8 @@ impl Listener {
                 }
             }
         }
+        partial.drain(..whole);
+        self.partial = partial;
     }
 
     /// The last tenth of a second is clearly louder than the background's
@@ -231,14 +244,9 @@ impl Listener {
         if now < self.since_ns + WARM_UP_NS {
             return false;
         }
-        if now >= self.hour_start + HOUR_NS {
-            self.hour_start = now;
-            self.used_ns = 0;
-            self.over_budget = false;
-        }
-        if self.used_ns >= BUDGET_NS {
-            if !self.over_budget {
-                self.over_budget = true;
+        let mut budget = self.budget.borrow_mut();
+        if !budget.allows(now) {
+            if budget.report_exhausted() {
                 vrt::println!("listening for its name paused: much speech this hour");
             }
             return false;
@@ -250,7 +258,7 @@ impl Listener {
     fn stop(&mut self, now: u64) {
         if let Some(mut s) = self.stream.take() {
             let _ = s.send_text(&json!({ "type": "CloseStream" }).to_string());
-            self.used_ns += now.saturating_sub(self.started_ns);
+            self.budget.borrow_mut().spend(now.saturating_sub(self.started_ns));
         }
         self.connector = None;
         self.held.clear();
@@ -266,7 +274,10 @@ impl Listener {
         {
             self.connector = None;
             match r {
-                Ok(ws) => self.stream = Some(ws),
+                Ok(mut ws) => {
+                    session::bound_writes(&mut ws);
+                    self.stream = Some(ws);
+                }
                 Err(e) => {
                     vrt::println!("cannot listen for its name: {}", e);
                     let auth = matches!(e, WebError::Status { code: 401 | 403, .. });

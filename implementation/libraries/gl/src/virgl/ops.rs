@@ -41,6 +41,8 @@ pub(super) struct Internal {
     present: Option<(u32, u32, u32)>,
     /// A single-sampled copy of a multisampled color buffer.
     resolve: Option<(u32, u32, u32, Format)>,
+    /// The buffer of zeros new buffers are copied from (see `zero_buffer`).
+    pub(super) zero: Option<u32>,
 }
 
 /// A program copying texels of a 3D texture's slice, unconverted, to the
@@ -240,7 +242,7 @@ impl VirglBackend {
             compare: s.shadow.then_some(Func::Never),
             max_anisotropy: 1.0,
         };
-        let st = self.sampler_state(&sampler);
+        let st = self.sampler_state_kept(&sampler);
         self.internal.missing.insert(key, (r, view, st));
         (view, st)
     }
@@ -257,12 +259,12 @@ impl VirglBackend {
         }
     }
 
-    /// Clears a new render target to zero (color, depth and stencil), as
-    /// the software renderer's start: the host's memory may still hold what
-    /// another context drew.
-    pub(super) fn zero_render_target(&mut self, id: u32, d: &ResourceDesc) {
-        let s = Surface { resource: id, level: 0, layer: 0 };
-        let mut fb = Framebuffer { width: d.width, height: d.height, samples: d.samples, ..Framebuffer::default() };
+    /// Clears an image `s` of a new resource `d` to zero (color, depth and
+    /// stencil), as the software renderer's start: the host's memory may
+    /// still hold what another context drew.
+    pub(super) fn zero_image(&mut self, s: Surface, d: &ResourceDesc) {
+        let (width, height, _) = d.level_size(s.level);
+        let mut fb = Framebuffer { width, height, samples: d.samples, ..Framebuffer::default() };
         let mut c = Clear { color_mask: [true; 4], stencil_mask: 0xFF, ..Clear::default() };
         if matches!(d.format.class(), Class::Depth | Class::DepthStencil | Class::Stencil) {
             if d.format.has_depth() {
@@ -371,16 +373,7 @@ impl VirglBackend {
         if let Some(r) = c.scissor {
             self.set_scissor(r);
         }
-        let raster = Raster {
-            cull: None,
-            front_ccw: true,
-            polygon_offset: None,
-            discard: false,
-            line_width: 1.0,
-            alpha_to_coverage: false,
-            sample_coverage: None,
-        };
-        let rs = self.rasterizer_words(&raster, c.scissor.is_some(), false, fb.samples > 0);
+        let rs = self.rasterizer_words(&PLAIN_RASTER, c.scissor.is_some(), false, fb.samples > 0);
         self.bind_rasterizer(rs);
         let stencil = Stencil {
             func: Func::Always,
@@ -404,19 +397,7 @@ impl VirglBackend {
             let r = c.stencil.unwrap_or(0);
             self.set_stencil_ref(r, r);
         }
-        let blend = Blend {
-            enabled: false,
-            eq_rgb: BlendEq::Add,
-            eq_alpha: BlendEq::Add,
-            src_rgb: BlendFactor::One,
-            dst_rgb: BlendFactor::Zero,
-            src_alpha: BlendFactor::One,
-            dst_alpha: BlendFactor::Zero,
-            color: [0.0; 4],
-            write_mask: c.color_mask,
-            dither: false,
-        };
-        self.bind_blend(blend_words(&blend, false));
+        self.bind_blend(blend_words(&Blend { write_mask: c.color_mask, ..NO_BLEND }, false));
         self.set_sample_mask(!0);
         self.bind_shaders(vs, fs);
         let mut w = vec![SHADER_FRAGMENT, 0];
@@ -461,9 +442,10 @@ impl VirglBackend {
         // blit.
         let scissor = scissor.or_else(|| {
             self.host.has(CAP_COPY_IMAGE).then(|| {
-                let (x0, x1) = (to[0].min(to[0] + to[2]), to[0].max(to[0] + to[2]));
-                let (y0, y1) = (to[1].min(to[1] + to[3]), to[1].max(to[1] + to[3]));
-                Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+                let (x1, y1) = (to[0].saturating_add(to[2]), to[1].saturating_add(to[3]));
+                let (x0, x1) = (to[0].min(x1), to[0].max(x1));
+                let (y0, y1) = (to[1].min(y1), to[1].max(y1));
+                Rect { x: x0, y: y0, w: x1.saturating_sub(x0), h: y1.saturating_sub(y0) }
             })
         });
         let c = |v: i32| v.clamp(0, 0xFFFF) as u32;
@@ -516,7 +498,7 @@ impl VirglBackend {
             b.dst = fb;
             p
         });
-        let r = |x: [i32; 4]| [x[0], x[1], x[2] - x[0], x[3] - x[1]];
+        let r = |x: [i32; 4]| [x[0], x[1], x[2].saturating_sub(x[0]), x[3].saturating_sub(x[1])];
         let (from, to) = (r(b.src_rect), r(b.dst_rect));
         let linear = b.filter == Filter::Linear;
         if b.color
@@ -648,14 +630,9 @@ impl VirglBackend {
             return self.mipmap_volume(id, d, base, last);
         }
         for level in base + 1..=last {
-            let size = |n: u32, l: u32| (n >> l).max(1) as i32;
-            let (sw, sh) = (size(d.width, level - 1), size(d.height, level - 1));
-            let (dw, dh) = (size(d.width, level), size(d.height, level));
-            let layers = match d.target {
-                Target::TextureCube => 6,
-                Target::Texture2DArray => d.depth,
-                _ => 1,
-            };
+            let (sw, sh, layers) = d.level_size(level - 1);
+            let (dw, dh, _) = d.level_size(level);
+            let (sw, sh, dw, dh) = (sw as i32, sh as i32, dw as i32, dh as i32);
             for layer in 0..layers {
                 let src = Surface { resource: id, level: level - 1, layer };
                 let dst = Surface { resource: id, level, layer };
@@ -668,8 +645,8 @@ impl VirglBackend {
         let f = d.format;
         let tb = f.bytes();
         let size = |l: u32| {
-            let s = |n: u32| (n >> l).max(1);
-            Geometry::packed(s(d.width), s(d.height), s(d.depth), tb)
+            let (w, h, depth) = d.level_size(l);
+            Geometry::packed(w, h, depth, tb)
         };
         let mut s = size(base);
         let Some(mut above) = try_zeroed(s.image * s.depth as usize) else { return };
@@ -818,7 +795,7 @@ impl VirglBackend {
     /// format and size).
     pub(super) fn slice_copy(&mut self, s: Surface) -> Option<u32> {
         let d = self.resources.get(&s.resource)?.desc;
-        let (w, h) = ((d.width >> s.level).max(1), (d.height >> s.level).max(1));
+        let (w, h, _) = d.level_size(s.level);
         let g = Geometry::packed(w, h, 1, d.format.bytes());
         let mut texels = try_zeroed(g.image)?;
         let desc = ResourceDesc {
@@ -876,7 +853,7 @@ impl VirglBackend {
     /// flipped and scaled into a BGRA image the window's size, read back
     /// (and premultiplied by alpha for a translucent window).
     pub(super) fn present_image(&mut self, color: u32, width: u32, height: u32, dst: &mut Present<'_>) {
-        if dst.width == 0 || dst.height == 0 {
+        if dst.width() == 0 || dst.height() == 0 {
             return;
         }
         let Some(r) = self.resources.get(&color) else { return };
@@ -886,7 +863,7 @@ impl VirglBackend {
             let Some(r) = self.resolved(color, width, height, format) else { return };
             src = r;
         }
-        let (dw, dh) = (dst.width, dst.height);
+        let (dw, dh, opaque) = (dst.width(), dst.height(), dst.opaque());
         let image = match self.internal.present {
             Some((r, w, h)) if w == dw && h == dh => r,
             other => {
@@ -920,9 +897,13 @@ impl VirglBackend {
             linear,
             None,
         );
-        // Read back the rows, in bands that fit in staging.
+        // Read back the rows, in bands that fit in staging (a window wider
+        // than staging holds is not shown).
         let row = dw as usize * 4;
-        let rows = (self.staging_size / row).max(1) as u32;
+        if row > self.staging_size {
+            return;
+        }
+        let rows = (self.staging_size / row) as u32;
         let mut y = 0;
         while y < dh {
             let h = rows.min(dh - y);
@@ -933,8 +914,8 @@ impl VirglBackend {
             let src = self.shared_mut(at, row * h as usize);
             for k in 0..h as usize {
                 let line = &src[k * row..][..row];
-                let out = &mut dst.pixels[(y as usize + k) * dst.stride..][..dw as usize];
-                if dst.opaque {
+                let out = dst.row(y as usize + k);
+                if opaque {
                     for (o, p) in out.iter_mut().zip(line.as_chunks::<4>().0) {
                         *o = u32::from_le_bytes([p[0], p[1], p[2], 0xFF]);
                     }
@@ -973,10 +954,9 @@ impl VirglBackend {
         };
         let handle = self.t.create_resource(&args, Some(self.dummy_backing()))?;
         let host = super::formats::HostFormat { virgl, layout: None, swizzle: [0, 1, 2, 3], renderable: true };
-        self.resources.insert(
-            handle,
-            Res { desc: *desc, host: Some(host), views: Vec::new(), surfaces: Vec::new(), shadow: None },
-        );
+        let record =
+            Res { desc: *desc, capacity: 0, host: Some(host), views: Vec::new(), surfaces: Vec::new(), shadow: None };
+        self.resources.insert(handle, record);
         Ok(handle)
     }
 

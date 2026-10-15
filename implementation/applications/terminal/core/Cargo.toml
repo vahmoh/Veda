@@ -3,7 +3,7 @@
 
 [package]
 name = "terminal-core"
-description = "What the Terminal shows, testable on the host: its scrollback of styled text and the escape sequences that style it"
+description = "The Terminal's logic, testable on the host: its scrollback and escape sequences, the shell's command language, what a command line may do, line editing and the bytes commands pass on"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -3,13 +3,17 @@
 
 [package]
 name = "videos-core"
-description = "What Videos decides, testable on the host: its clock, the pictures it shows and when, its layout and what it remembers"
+description = "What Videos decides, testable on the host: its playback, clock, the pictures it shows and when, its layout and what it remembers; and the audio output it shares with Music"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+vabi = { workspace = true }
+vipc = { workspace = true }
+vrt = { workspace = true, default-features = false }
 vproto = { workspace = true }
+vfiles = { workspace = true }
 
 [lints]
 workspace = true

@@ -7,10 +7,13 @@
 //! * Each query goes out from a fresh UDP socket with a random source port
 //!   and a random 16-bit id; answers are accepted only from the server
 //!   asked, with the same id and an echo of the question, which makes blind
-//!   spoofing impractical.
+//!   spoofing impractical. The socket is the resolver's own: small, on the
+//!   interface the server is reached through, and not among the sockets of
+//!   applications (it counts against no limit of theirs, and no listing
+//!   shows it).
 //! * Servers are tried in turn with growing timeouts; a server that answers
-//!   SERVFAIL or REFUSED is skipped at once. A lookup gives up after
-//!   [`LOOKUP_TIMEOUT_US`].
+//!   SERVFAIL or REFUSED is skipped at once, and so is one that cannot be
+//!   sent to (no route). A lookup gives up after [`LOOKUP_TIMEOUT_US`].
 //! * CNAME chains inside an answer are followed (at most
 //!   [`MAX_CNAME_CHAIN`] links); the cached lifetime is the shortest TTL on
 //!   the chain, capped at a day. "Name not found" answers are cached too
@@ -23,11 +26,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
-use smoltcp::wire::{DnsPacket, DnsQuestion, DnsRcode, DnsRecord, DnsRecordData};
-use vproto::net::{AddrFamily, DnsCacheEntry, NetError, ResolveResult};
+use smoltcp::iface::SocketHandle;
+use smoltcp::socket::udp;
+use smoltcp::wire::{DnsPacket, DnsQuestion, DnsRcode, DnsRecord, DnsRecordData, IpEndpoint, IpListenEndpoint};
+use vproto::net::{AddrFamily, NetError, ResolveResult};
 
-use crate::Stack;
-use crate::sockets::SockId;
+use crate::sockets::Proto;
+use crate::{IfaceId, Stack};
 
 /// Identifies a lookup in progress.
 pub type ResolveId = u32;
@@ -50,7 +55,25 @@ const EDNS_PAYLOAD: u16 = 1232;
 const TYPE_A: u16 = 1;
 const TYPE_AAAA: u16 = 28;
 const TYPE_OPT: u16 = 41;
-const MAX_PENDING_LOOKUPS: usize = 256;
+/// Most lookups in progress, of all clients together.
+pub const MAX_PENDING_LOOKUPS: usize = 256;
+/// Most DNS servers (configured or overriding).
+pub const MAX_SERVERS: usize = 8;
+/// A query socket's buffers: answers are at most [`EDNS_PAYLOAD`] bytes
+/// (larger ones do not fit, and the next server is asked), queries far
+/// less.
+const QUERY_RX_PACKETS: usize = 4;
+const QUERY_RX_BYTES: usize = 4 * EDNS_PAYLOAD as usize;
+const QUERY_TX_PACKETS: usize = 1;
+const QUERY_TX_BYTES: usize = 512;
+
+/// Whether `servers` can be the DNS servers: a few unicast addresses.
+pub(crate) fn valid_servers(servers: &[IpAddr]) -> bool {
+    servers.len() <= MAX_SERVERS
+        && servers
+            .iter()
+            .all(|s| !s.is_unspecified() && !s.is_multicast() && !matches!(s, IpAddr::V4(a) if a.is_broadcast()))
+}
 
 /// Checks a host name and returns it in canonical form (lower case, no
 /// trailing dot).
@@ -91,9 +114,12 @@ pub(crate) enum Answer {
     Failed(NetError),
 }
 
+/// One query sent to one server, on a socket of the resolver's own.
 #[derive(Debug)]
 struct Attempt {
-    socket: SockId,
+    iface: IfaceId,
+    handle: SocketHandle,
+    port: u16,
     server: SocketAddr,
     txid: u16,
     timeout_at_us: u64,
@@ -494,9 +520,60 @@ impl Stack {
         if let Some(l) = self.dns.lookups.remove(&id) {
             for q in l.queries {
                 if let Some(a) = q.attempt {
-                    self.close(a.socket);
+                    self.dns_close(a);
                 }
             }
+        }
+    }
+
+    /// Opens a query socket towards `server` and sends `msg`.
+    fn dns_send(&mut self, server: SocketAddr, msg: &[u8]) -> Result<(IfaceId, SocketHandle, u16), NetError> {
+        let via = self.route(server.ip())?;
+        let port = self.alloc_port(Proto::Udp)?;
+        let i = self.iface_mut(via).ok_or(NetError::NoRoute)?;
+        let mut s = udp::Socket::new(
+            udp::PacketBuffer::new(
+                alloc::vec![udp::PacketMetadata::EMPTY; QUERY_RX_PACKETS],
+                alloc::vec![0u8; QUERY_RX_BYTES],
+            ),
+            udp::PacketBuffer::new(
+                alloc::vec![udp::PacketMetadata::EMPTY; QUERY_TX_PACKETS],
+                alloc::vec![0u8; QUERY_TX_BYTES],
+            ),
+        );
+        s.bind(IpListenEndpoint { addr: None, port }).map_err(|_| NetError::Internal)?;
+        s.send_slice(msg, IpEndpoint::from(server)).map_err(|e| match e {
+            udp::SendError::BufferFull => NetError::Internal,
+            udp::SendError::Unaddressable => NetError::NoRoute,
+        })?;
+        let handle = i.sockets.add(s);
+        self.socks.reserve(Proto::Udp, port);
+        Ok((via, handle, port))
+    }
+
+    /// Closes a query socket.
+    fn dns_close(&mut self, a: Attempt) {
+        if let Some(i) = self.iface_mut(a.iface) {
+            i.sockets.remove(a.handle);
+        }
+        self.socks.release(Proto::Udp, a.port);
+    }
+
+    /// An interface is going away: queries sent through it are abandoned
+    /// (their sockets go with it) and asked again elsewhere.
+    pub(crate) fn dns_on_iface_removed(&mut self, id: IfaceId) {
+        let mut retry = Vec::new();
+        for (&lid, l) in self.dns.lookups.iter_mut() {
+            for q in &mut l.queries {
+                if q.attempt.as_ref().is_some_and(|a| a.iface == id) {
+                    let a = q.attempt.take().expect("attempt");
+                    self.socks.release(Proto::Udp, a.port);
+                    retry.push(lid);
+                }
+            }
+        }
+        for lid in retry {
+            self.dns_advance(lid);
         }
     }
 
@@ -510,32 +587,10 @@ impl Stack {
         self.dns.flush();
     }
 
-    /// The DNS cache, for diagnostics.
-    pub fn dns_cache(&self) -> Vec<DnsCacheEntry> {
-        let now = self.now_us;
-        let mut out: Vec<DnsCacheEntry> = Vec::new();
-        for ((name, _), e) in &self.dns.cache {
-            if e.expires_us <= now {
-                continue;
-            }
-            let ttl_s = ((e.expires_us - now) / 1_000_000) as u32;
-            let (addresses, negative) = match &e.answer {
-                Answer::Addresses { addrs, .. } => (addrs.clone(), false),
-                _ => (Vec::new(), true),
-            };
-            match out.iter_mut().find(|x| x.name == *name) {
-                Some(x) => {
-                    x.addresses.extend(addresses);
-                    x.ttl_s = x.ttl_s.min(ttl_s);
-                    x.negative &= negative;
-                }
-                None => out.push(DnsCacheEntry { name: name.clone(), addresses, ttl_s, negative }),
-            }
-        }
-        out
-    }
-
-    /// Sends the next attempt of every query of a lookup that needs one.
+    /// Sends the next attempt of every query of a lookup that needs one. A
+    /// server that cannot be sent to is passed over at once, so the next
+    /// one is asked without waiting; a query runs out of servers after
+    /// [`ROUNDS`] rounds through them.
     fn dns_advance(&mut self, id: ResolveId) {
         let now = self.now_us;
         let servers: Vec<SocketAddr> = self.dns_servers().into_iter().take(3).map(|s| SocketAddr::new(s, 53)).collect();
@@ -544,36 +599,43 @@ impl Stack {
             if q.answer.is_some() || q.attempt.is_some() {
                 continue;
             }
-            if servers.is_empty() || q.tries > servers.len().max(1) * ROUNDS {
-                q.answer =
-                    Some(Answer::Failed(if servers.is_empty() { NetError::DnsFailure } else { NetError::TimedOut }));
-                continue;
-            }
-            let server = servers[q.tries % servers.len()];
-            let round = q.tries / servers.len();
-            q.tries += 1;
-            let unspec = crate::sockets::unspecified(server.is_ipv6());
-            let Ok((socket, _)) = self.udp_bind(SocketAddr::new(unspec, 0), 0) else {
-                q.answer = Some(Answer::Failed(NetError::LimitReached));
-                continue;
-            };
-            let txid = self.random_u32() as u16;
-            let msg = build_query(txid, &lookup.name, q.qtype);
-            match self.udp_send(socket, server, &msg) {
-                Ok(()) => {
-                    q.attempt =
-                        Some(Attempt { socket, server, txid, timeout_at_us: now + (FIRST_TIMEOUT_US << round.min(4)) });
-                }
-                Err(e) => {
-                    self.close(socket);
-                    // No route to this server: try the next one at once.
-                    if q.tries >= servers.len() * ROUNDS {
-                        q.answer = Some(Answer::Failed(e));
+            let mut failure = if servers.is_empty() { NetError::DnsFailure } else { NetError::TimedOut };
+            while q.tries < servers.len() * ROUNDS {
+                let server = servers[q.tries % servers.len()];
+                let round = q.tries / servers.len();
+                q.tries += 1;
+                let txid = self.random_u32() as u16;
+                let msg = build_query(txid, &lookup.name, q.qtype);
+                match self.dns_send(server, &msg) {
+                    Ok((iface, handle, port)) => {
+                        let timeout_at_us = now + (FIRST_TIMEOUT_US << round.min(4));
+                        q.attempt = Some(Attempt { iface, handle, port, server, txid, timeout_at_us });
+                        break;
                     }
+                    Err(e) => failure = e,
                 }
+            }
+            if q.attempt.is_none() {
+                q.answer = Some(Answer::Failed(failure));
             }
         }
         self.dns.lookups.insert(id, lookup);
+    }
+
+    /// What arrived for an attempt: an answer, a failure, or nothing yet.
+    fn dns_receive(&mut self, a: &Attempt, name: &str, qtype: u16) -> Option<Result<Answer, Reject>> {
+        let i = self.iface_mut(a.iface)?;
+        let s = i.sockets.get_mut::<udp::Socket>(a.handle);
+        while let Ok((msg, meta)) = s.recv() {
+            if SocketAddr::from(meta.endpoint) != a.server {
+                continue;
+            }
+            match parse_response(msg, a.txid, name, qtype) {
+                Err(Reject::Ignore) => continue,
+                r => return Some(r),
+            }
+        }
+        None
     }
 
     /// Resolver housekeeping: collects answers, handles timeouts, finishes
@@ -581,51 +643,32 @@ impl Stack {
     pub(crate) fn dns_maintain(&mut self) {
         let now = self.now_us;
         let ids: Vec<ResolveId> = self.dns.lookups.keys().copied().collect();
-        let mut buf = alloc::vec![0u8; 4096];
         for id in ids {
             let Some(mut lookup) = self.dns.lookups.remove(&id) else { continue };
             let mut retry = false;
             for q in &mut lookup.queries {
-                let Some(attempt) = &q.attempt else { continue };
-                let (socket, server, txid, timeout_at) =
-                    (attempt.socket, attempt.server, attempt.txid, attempt.timeout_at_us);
-                let mut outcome: Option<Result<Answer, Reject>> = None;
-                while let Some(d) = self.udp_recv(socket, &mut buf) {
-                    if d.from != server {
-                        continue;
-                    }
-                    match parse_response(&buf[..d.len], txid, &lookup.name, q.qtype) {
-                        Err(Reject::Ignore) => continue,
-                        r => {
-                            outcome = Some(r);
-                            break;
-                        }
-                    }
-                }
-                match outcome {
+                let Some(attempt) = q.attempt.take() else { continue };
+                match self.dns_receive(&attempt, &lookup.name, q.qtype) {
                     Some(Ok(answer)) => {
-                        self.close(socket);
-                        q.attempt = None;
+                        self.dns_close(attempt);
                         q.answer = Some(answer);
                     }
                     Some(Err(_)) => {
-                        self.close(socket);
-                        q.attempt = None;
+                        self.dns_close(attempt);
                         retry = true;
                     }
-                    None if now >= timeout_at => {
-                        self.close(socket);
-                        q.attempt = None;
+                    None if now >= attempt.timeout_at_us => {
+                        self.dns_close(attempt);
                         retry = true;
                     }
-                    None => {}
+                    None => q.attempt = Some(attempt),
                 }
             }
             let done = lookup.queries.iter().all(|q| q.answer.is_some());
             if done || now >= lookup.deadline_us {
                 for q in &mut lookup.queries {
                     if let Some(a) = q.attempt.take() {
-                        self.close(a.socket);
+                        self.dns_close(a);
                     }
                     if q.answer.is_none() {
                         q.answer = Some(Answer::Failed(NetError::TimedOut));

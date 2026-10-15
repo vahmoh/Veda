@@ -11,15 +11,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use compositor_core::Wm;
+use compositor_core::window::AnimKind;
 use vgfx::{Canvas, Damage, Rect};
-use vproto::display::{WindowEvent, WindowKind};
+use vproto::display::WindowEvent;
 use vrt::println;
+use vrt::vm::Mapping;
 
-use crate::decor;
+use crate::decor::{self, Look, Window};
 use crate::gpu::{Gpu, Slot};
+use crate::pixels::Pixels;
 use crate::startup::{Moved, Progress};
-use crate::state::{Compositor, Drag};
-use crate::window::{AnimKind, Window};
+use crate::state::Compositor;
 
 /// How long the GPU may take to draw a frame before it counts as stopped.
 const GPU_TIMEOUT_NS: u64 = 2_000_000_000;
@@ -48,47 +51,46 @@ fn animation(w: &Window, now: u64) -> (f32, i32) {
     }
 }
 
+/// How window `w` of `wm` is drawn at `now`.
+fn look(wm: &Wm<Mapping>, w: &Window, now: u64) -> Look {
+    let (opacity, dy) = animation(w, now);
+    Look { focused: wm.focused() == Some(w.id), decor: wm.decor(), unresponsive: wm.unresponsive(w.id), opacity, dy }
+}
+
 impl Compositor {
     // ---- rendering ---------------------------------------------------------
 
+    /// Whether something moves on the screen: the startup sequence, or a
+    /// window's animation.
     pub(crate) fn animating(&self) -> bool {
-        self.startup.as_ref().is_some_and(|s| !s.holding()) || self.windows.values().any(|w| w.anim.is_some())
+        self.startup.as_ref().is_some_and(|s| !s.holding()) || self.wm.animating()
     }
 
     /// Whether a frame is to be composed (when the screen is ready for one).
     pub(crate) fn wants_frame(&self) -> bool {
-        !self.damage.is_empty() || self.animating() || self.screen.needs_frame() || self.gpu_ready.is_some()
+        !self.wm.undamaged()
+            || self.animating()
+            || self.screen.needs_frame()
+            || self.gpu_ready.is_some()
+            || self.wm.configures_due()
     }
 
+    /// Whether a frame is to be composed at `now`.
+    pub(crate) fn frame_due(&self, now: u64) -> bool {
+        self.wants_frame() && now >= self.screen.next_frame(self.last_frame)
+    }
+
+    /// Composes a frame: what changed, as it is when the frame is seen.
     pub(crate) fn composite(&mut self) {
         let real = vrt::time::now_ns();
         // Animations as they are when the frame is seen.
         let now = self.screen.frame_time(real);
-        // Advance animations.
-        let mut finished_close = Vec::new();
-        let ids: Vec<u32> = self.windows.keys().copied().collect();
-        for id in ids {
-            let w = self.windows.get_mut(&id).unwrap();
-            if let Some(a) = w.anim {
-                let r = w.paint_bounds();
-                self.damage.add(r.inflate(4));
-                if a.done(now) {
-                    w.anim = None;
-                    if a.kind == AnimKind::Close {
-                        finished_close.push(id);
-                    }
-                }
-            }
-        }
-        for id in finished_close {
-            self.destroy_window(id);
-        }
-        // A window that came or went under the pointer, or changed, while
-        // the pointer stayed put: the hover and the cursor follow it (a game
-        // opening full screen under the pointer hides it).
-        if self.drag.is_none() && self.window_at(self.pointer.0, self.pointer.1) != self.hover_hit {
-            self.update_hover(false);
-        }
+        self.wm.advance(now);
+        // Clients hear of their sizes once a frame, however often a drag
+        // changed them.
+        self.wm.flush_configures();
+        self.wm.refresh_hover();
+        self.settle();
         self.advance_startup(now);
         self.take_gpu();
         if self.gpu.is_some() && !self.screen.flipping() {
@@ -102,11 +104,8 @@ impl Compositor {
         // Clients may now draw their next frame: theirs is seen when this
         // one is (`now`), the next a period later at the earliest.
         let period_ns = self.screen.period_ns();
-        let owed: Vec<(u32, u8)> =
-            self.windows.iter_mut().filter_map(|(id, w)| w.frame_owed.take().map(|b| (*id, b))).collect();
-        for (id, b) in owed {
-            self.send(id, WindowEvent::FrameDone { shown: b, seen_ns: now, period_ns });
-        }
+        self.wm.frames_done(now, period_ns);
+        self.settle();
         self.last_frame = real;
     }
 
@@ -115,16 +114,12 @@ impl Compositor {
     /// composed anew, the desktop alone.
     fn advance_startup(&mut self, now: u64) {
         let Some(mut s) = self.startup.take() else { return };
-        let progress = Progress { settled: self.screen.settled(), drawn: self.desktop_drawn() };
+        let progress = Progress { settled: self.screen.settled(), drawn: self.wm.desktop_drawn() };
         match s.advance(now, progress, &|| self.describe()) {
-            Moved::Appearing => {
-                if let Some(desktop) = self.windows.iter().find(|(_, w)| w.kind == WindowKind::Desktop) {
-                    self.send(*desktop.0, WindowEvent::Appearing {});
-                }
-            }
+            Moved::Appearing => self.wm.send_to_desktop(WindowEvent::Appearing {}),
             Moved::Over => {
                 let screen = self.screen_rect();
-                self.damage.add(screen);
+                self.wm.add_damage(screen);
                 return;
             }
             Moved::No | Moved::Started => {}
@@ -146,64 +141,66 @@ impl Compositor {
 
     fn composite_cpu(&mut self, now: u64, real: u64) {
         let screen = self.screen_rect();
-        let order = self.paint_order();
-        let rects = self.damage.take();
+        let rects = self.wm.take_damage();
         self.screen.begin_frame(self.startup.as_ref().map(|s| s.layer()));
         // During the startup sequence the screen shows it instead.
         let shown = self.startup.is_none();
+        let Compositor { wm, screen: out, decor, thumbs, cursor, cursor_rect, .. } = self;
+        let order = wm.paint_order();
+        let preview = wm.snap_preview();
         for r in rects {
             let r = r.intersect(&screen);
             if r.is_empty() {
                 continue;
             }
-            let (w, h) = (self.screen.back.width, self.screen.back.height);
-            let mut c = Canvas::new(&mut self.screen.back.pixels, w, h, w);
+            let (w, h) = (out.back.width, out.back.height);
+            let mut c = Canvas::new(&mut out.back.pixels, w, h, w);
             c.clip_to(r);
             // Drawing starts at the topmost window that hides all of `r`:
             // nothing below it (the desktop under a game, say) is visible.
             let covering =
-                order.iter().rposition(|id| self.windows.get(id).is_some_and(|w| w.opaque_rect().contains_rect(&r)));
+                order.iter().rposition(|id| wm.window(*id).is_some_and(|w| w.opaque_rect().contains_rect(&r)));
             if covering.is_none() {
                 decor::draw_background(&mut c, screen);
             }
-            for id in &order[covering.unwrap_or(0)..] {
+            for &id in &order[covering.unwrap_or(0)..] {
                 // The snap preview goes just below the window being dragged.
-                if let (Some((_, preview)), Some(Drag::Move { id: dragged, .. })) = (self.snap, self.drag)
-                    && *id == dragged
+                if let Some((dragged, preview)) = preview
+                    && id == dragged
                     && preview.inflate(8).intersects(&r)
                 {
                     decor::draw_snap_preview(&mut c, preview);
                 }
-                let win = &self.windows[id];
+                let Some(win) = wm.window(id) else { continue };
                 if !win.visible() || !win.paint_bounds().intersects(&r) {
                     continue;
                 }
-                let (opacity, dy) = animation(win, now);
-                self.decor.draw_window(&mut c, win, self.focused == Some(*id), self.decor_state, opacity, dy);
+                decor.draw_window(&mut c, win, look(wm, win, now));
             }
-            if let Some(s) = &self.switcher
+            if let Some(s) = wm.switcher()
                 && s.bounds().intersects(&r)
             {
                 let titles: Vec<&str> =
-                    s.windows.iter().map(|id| self.windows.get(id).map_or("", |w| w.title.as_str())).collect();
-                self.decor.draw_switcher(&mut c, s, &titles);
+                    s.windows.iter().map(|id| wm.window(*id).map_or("", |w| w.title.as_str())).collect();
+                let thumbs = thumbs.as_ref().map_or(&[][..], |(_, t)| t.as_slice());
+                decor.draw_switcher(&mut c, s, &titles, thumbs);
             }
             // Cursor on top.
-            if self.cursor_rect.intersects(&r)
-                && let Some((b, hx, hy)) = self.decor.cursor(self.cursor_shape)
+            if cursor_rect.intersects(&r)
+                && let Some((b, hx, hy)) = decor.cursor(cursor.0)
             {
-                c.draw_bitmap(b, self.pointer.0 - hx, self.pointer.1 - hy, 255);
+                c.draw_bitmap(b, cursor.1.0 - hx, cursor.1.1 - hy, 255);
             }
             drop(c);
             if shown {
-                self.screen.flush(r);
+                out.flush(r);
             }
         }
         // The GPU's copies of the windows, if it composes again, are made
         // anew.
-        for w in self.windows.values_mut() {
-            w.upload.clear();
-            w.upload_all = true;
+        for w in self.wm.windows_mut() {
+            w.surface.upload.clear();
+            w.surface.upload_all = true;
         }
         if let Some(s) = &mut self.startup {
             s.frame(&mut self.screen, now);
@@ -221,9 +218,13 @@ impl Compositor {
     /// The picture is asked for once the GPU has drawn it.
     fn composite_gpu(&mut self, now: u64, real: u64) {
         let screen = self.screen_rect();
-        let Some((target, shown, stale)) = self.screen.gpu_frame() else { return };
+        let Some(mut g) = self.gpu.take() else { return };
+        let Some((target, shown, stale)) = self.screen.gpu_frame() else {
+            self.gpu = Some(g);
+            return;
+        };
         let mut region = Damage::new();
-        for r in self.damage.take() {
+        for r in self.wm.take_damage() {
             region.add(r.intersect(&screen));
         }
         // What the picture lacks of the screen is copied from the picture
@@ -242,7 +243,6 @@ impl Compositor {
         let clip = region.rects().iter().fold(Rect::default(), |a, r| if a.is_empty() { *r } else { a.union(r) });
         let desktop = startup.is_none_or(|(revealing, _, _)| revealing);
         let started = vrt::time::now_ns();
-        let mut g = self.gpu.take().expect("composing with the GPU");
         if let Some(from) = shown
             && !stale.is_empty()
         {
@@ -285,64 +285,67 @@ impl Compositor {
     /// date first.
     fn draw_scene(&mut self, g: &mut Gpu, clip: Rect, now: u64) {
         let screen = self.screen_rect();
-        let order = self.paint_order();
+        let Compositor { wm, decor, thumbs, cursor, cursor_rect, .. } = self;
+        let order: Vec<u32> = wm.paint_order().to_vec();
         let covering =
-            order.iter().rposition(|id| self.windows.get(id).is_some_and(|w| w.opaque_rect().contains_rect(&clip)));
+            order.iter().rposition(|id| wm.window(*id).is_some_and(|w| w.opaque_rect().contains_rect(&clip)));
         if covering.is_none() {
             decor::draw_background_gpu(g, screen);
         }
-        for id in &order[covering.unwrap_or(0)..] {
-            if let (Some((_, preview)), Some(Drag::Move { id: dragged, .. })) = (self.snap, self.drag)
-                && *id == dragged
+        let preview = wm.snap_preview();
+        for &id in &order[covering.unwrap_or(0)..] {
+            if let Some((dragged, preview)) = preview
+                && id == dragged
                 && preview.inflate(8).intersects(&clip)
             {
                 decor::draw_snap_preview_gpu(g, preview);
             }
-            let Some(win) = self.windows.get_mut(id) else { continue };
+            let Some(win) = wm.window_mut(id) else { continue };
             if !win.visible() || !win.paint_bounds().intersects(&clip) {
                 continue;
             }
             // Its pixels, as the GPU has them.
-            let content = match (&win.buffers, win.current) {
-                (Some(b), Some(index)) => {
-                    let changed = win.upload.take();
-                    let all = core::mem::replace(&mut win.upload_all, false);
-                    Some(g.window(*id, b.pixels(index), b.width, b.height, b.stride, all, &changed))
-                }
-                _ => None,
-            };
-            let win = &self.windows[id];
-            let (opacity, dy) = animation(win, now);
-            self.decor.draw_window_gpu(g, win, self.focused == Some(*id), self.decor_state, opacity, dy, content);
+            let changed = win.surface.upload.take();
+            let all = core::mem::replace(&mut win.surface.upload_all, false);
+            let content = Pixels::shown(&win.surface).and_then(|p| g.window(id, &p, all, &changed));
+            if content.is_none() {
+                win.surface.upload_all = true;
+            }
+            let Some(win) = wm.window(id) else { continue };
+            decor.draw_window_gpu(g, win, look(wm, win, now), content);
         }
-        if let Some(s) = &self.switcher
+        if let Some(s) = wm.switcher()
             && s.bounds().intersects(&clip)
         {
-            let key = (s.selected as u64) << 32 | s.windows.len() as u64 | 1 << 63;
+            // Each switcher is drawn anew; one switcher again as its
+            // selection moves.
+            let key = s.serial << 16 | s.selected as u64 | 1 << 63;
             let t = match g.cached(Slot::Switcher, key) {
-                Some(t) => t,
+                Some(t) => Some(t),
                 None => {
                     let titles: Vec<&str> =
-                        s.windows.iter().map(|id| self.windows.get(id).map_or("", |w| w.title.as_str())).collect();
-                    let b = self.decor.switcher_bitmap(s, &titles);
-                    g.upload(Slot::Switcher, key, &b)
+                        s.windows.iter().map(|id| wm.window(*id).map_or("", |w| w.title.as_str())).collect();
+                    let thumbs = thumbs.as_ref().map_or(&[][..], |(_, t)| t.as_slice());
+                    decor.switcher_bitmap(s, &titles, thumbs).map(|b| g.upload(Slot::Switcher, key, &b))
                 }
             };
-            let at = s.bounds();
-            g.image(t, Rect::new(0, 0, at.w, at.h), at, 1.0, false, None);
-        } else if self.switcher.is_none() && g.has(Slot::Switcher) {
+            if let Some(t) = t {
+                let at = s.bounds();
+                g.image(t, Rect::new(0, 0, at.w, at.h), at, 1.0, false, None);
+            }
+        } else if wm.switcher().is_none() && g.has(Slot::Switcher) {
             g.forget(Slot::Switcher);
         }
         // Cursor on top.
-        if self.cursor_rect.intersects(&clip)
-            && let Some((b, hx, hy)) = self.decor.cursor(self.cursor_shape)
+        if cursor_rect.intersects(&clip)
+            && let Some((b, hx, hy)) = decor.cursor(cursor.0)
         {
-            let slot = Slot::Cursor(self.cursor_shape as u32);
+            let slot = Slot::Cursor(cursor.0 as u32);
             let t = match g.cached(slot, 1) {
                 Some(t) => t,
                 None => g.upload(slot, 1, b),
             };
-            let at = Rect::new(self.pointer.0 - hx, self.pointer.1 - hy, t.w, t.h);
+            let at = Rect::new(cursor.1.0 - hx, cursor.1.1 - hy, t.w, t.h);
             g.image(t, Rect::new(0, 0, t.w, t.h), at, 1.0, false, None);
         }
     }
@@ -384,7 +387,7 @@ impl Compositor {
         println!("{}: frames are drawn by the processor from now on", why);
         self.screen.not_drawn();
         let screen = self.screen_rect();
-        self.damage.add(screen);
+        self.wm.add_damage(screen);
     }
 
     /// The GPU stopped while it composed: frames are drawn by the processor,

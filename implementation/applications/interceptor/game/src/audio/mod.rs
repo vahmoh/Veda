@@ -7,11 +7,13 @@
 //! a tunnel, and the cues of the game itself.
 //!
 //! The game describes what is sounding each frame ([`Scene`]): where the
-//! ears are, and each engine, siren and tyre near them; it sends one-off
-//! [`Cue`]s as things happen. The [`Mixer`] renders blocks of stereo
-//! samples from that, on its own thread, easing every parameter across a
-//! block so that nothing clicks. Sounds are placed by distance (falling
-//! off, and duller far away), direction (panned) and motion (Doppler).
+//! ears are, and each engine, siren and tyre near them, in place (a scene
+//! goes to the mixer's thread and is dropped there without touching the
+//! heap); it sends one-off [`Cue`]s as things happen. The [`Mixer`]
+//! renders blocks of stereo samples from that, on its own thread, easing
+//! every parameter across a block so that nothing clicks. Sounds are
+//! placed by distance (falling off, and duller far away), direction
+//! (panned) and motion (Doppler).
 //!
 //! Synthesis rather than recordings: an engine's sound is the sum of its
 //! "orders", the harmonics of its crankshaft's rotation, weighted as its
@@ -26,6 +28,8 @@ pub mod siren;
 use alloc::vec::Vec;
 
 use vaudio::synth::fx::{Limiter, Reverb};
+use vaudio::synth::osc::{Osc, Wave};
+use vaudio::synth::voice::pan_gains;
 
 use crate::prelude::*;
 
@@ -57,7 +61,7 @@ pub struct Emitter {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EngineState {
     /// Which car (so that a voice follows the same engine).
-    pub key: u32,
+    pub key: u64,
     pub emitter: Emitter,
     pub layout: Layout,
     pub rpm: f32,
@@ -75,7 +79,7 @@ pub struct EngineState {
 /// A siren sounding.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SirenState {
-    pub key: u32,
+    pub key: u64,
     pub emitter: Emitter,
     pub wail: Wail,
     /// The player's own (quieter: heard all the time).
@@ -85,7 +89,7 @@ pub struct SirenState {
 /// A car's tyres sliding.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TireState {
-    pub key: u32,
+    pub key: u64,
     pub emitter: Emitter,
     /// How fast they slide (m/s).
     pub slip: f32,
@@ -93,13 +97,66 @@ pub struct TireState {
     pub speed: f32,
 }
 
+/// Up to `N` sounds of a kind, kept in place rather than on the heap.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sounds<T: Copy, const N: usize> {
+    items: [Option<T>; N],
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> Sounds<T, N> {
+    /// None.
+    pub const fn new() -> Self {
+        Sounds { items: [None; N], len: 0 }
+    }
+
+    /// Adds `s`, if there is room for it: true if there was.
+    pub fn push(&mut self, s: T) -> bool {
+        if self.len == N {
+            return false;
+        }
+        self.items[self.len] = Some(s);
+        self.len += 1;
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items[..self.len].iter().flatten()
+    }
+}
+
+impl<T: Copy, const N: usize> Default for Sounds<T, N> {
+    fn default() -> Self {
+        Sounds::new()
+    }
+}
+
+/// The first `N` of the sounds (as many as are heard at once).
+impl<T: Copy, const N: usize> FromIterator<T> for Sounds<T, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut s = Sounds::new();
+        for x in iter.into_iter().take(N) {
+            s.push(x);
+        }
+        s
+    }
+}
+
 /// Everything sounding now.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Scene {
     pub listener: Listener,
-    pub engines: Vec<EngineState>,
-    pub sirens: Vec<SirenState>,
-    pub tires: Vec<TireState>,
+    pub engines: Sounds<EngineState, ENGINES>,
+    pub sirens: Sounds<SirenState, SIRENS>,
+    pub tires: Sounds<TireState, TIRES>,
     /// The player's car scraping along something (0..1).
     pub scrape: f32,
     /// The wind rushing past the ears (m/s).
@@ -178,8 +235,37 @@ impl Listener {
     }
 }
 
-/// Equal-power gains for a pan (-1..1), as the synthesiser's voices pan.
-pub use vaudio::synth::voice::pan_gains;
+/// A pan moving across a block of samples: the equal-power gains (as the
+/// synthesiser's voices pan) at the block's ends, eased between them, so
+/// that the pan law's sines are worked out once a block, not once a
+/// sample.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Panning {
+    left: f32,
+    right: f32,
+    to_left: f32,
+    to_right: f32,
+}
+
+impl Panning {
+    /// From pan `from` to `to` (each -1 left .. 1 right).
+    pub(crate) fn new(from: f32, to: f32) -> Panning {
+        let ((left, right), (l1, r1)) = (pan_gains(from), pan_gains(to));
+        Panning { left, right, to_left: l1 - left, to_right: r1 - right }
+    }
+
+    /// The gains (left, right) a fraction `t` (0..1) through the block.
+    #[inline]
+    pub(crate) fn at(&self, t: f32) -> (f32, f32) {
+        (self.left + self.to_left * t, self.right + self.to_right * t)
+    }
+}
+
+/// `v` as a level (0..1): anything not a number (from a garbled setting)
+/// is silence, rather than making everything after it silent.
+pub fn level(v: f32) -> f32 {
+    if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }
+}
 
 /// A table of one turn of a sine, for the oscillators.
 pub struct SineTable {
@@ -198,7 +284,7 @@ impl Default for SineTable {
 impl SineTable {
     pub fn new() -> SineTable {
         let n = 1usize << TABLE_BITS;
-        SineTable { t: (0..n).map(|i| (i as f32 / n as f32 * core::f32::consts::TAU).sin()).collect() }
+        SineTable { t: (0..n).map(|i| libm::sinf(i as f32 / n as f32 * core::f32::consts::TAU)).collect() }
     }
 
     /// The sine at a phase (a whole turn is 2^32).
@@ -214,23 +300,10 @@ pub fn increment(hz: f32) -> u32 {
     (hz.clamp(0.0, RATE as f32 * 0.49) / RATE as f32 * 4_294_967_296.0) as u32
 }
 
-/// A small, fast random number generator for noise.
-#[derive(Clone, Copy, Debug)]
-pub struct Noise(u32);
-
-impl Noise {
-    pub fn new(seed: u32) -> Noise {
-        Noise(seed | 1)
-    }
-
-    /// White noise in -1..1.
-    #[inline]
-    pub fn sample(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        (self.0 >> 8) as f32 / 8_388_608.0 - 1.0
-    }
+/// A source of white noise (in -1..1, from [`Osc::noise`]) seeded by
+/// `seed`.
+pub(crate) fn noise(seed: u32) -> Osc {
+    Osc::new(Wave::Noise, 0.0, seed)
 }
 
 /// A voice that plays one keyed sound of the scene at a time (an engine,
@@ -238,15 +311,15 @@ impl Noise {
 /// and fades out once the sound leaves the scene, freeing itself.
 pub(crate) trait Voiced {
     /// The sound it plays, if any.
-    fn key(&self) -> Option<u32>;
+    fn key(&self) -> Option<u64>;
     /// Starts playing the sound `key`.
-    fn start(&mut self, key: u32);
+    fn start(&mut self, key: u64);
 }
 
 /// Gives each sound in `keys` a voice: those playing keep theirs, new ones
 /// take a free voice, or wait for one to fade out (so that no voice is
 /// cut off mid-sound).
-fn assign<V: Voiced>(voices: &mut [V], keys: impl Iterator<Item = u32>) {
+fn assign<V: Voiced>(voices: &mut [V], keys: impl Iterator<Item = u64>) {
     for k in keys {
         if voices.iter().any(|v| v.key() == Some(k)) {
             continue;
@@ -305,7 +378,7 @@ impl Mixer {
         assign(&mut self.engines, scene.engines.iter().map(|e| e.key));
         assign(&mut self.sirens, scene.sirens.iter().map(|s| s.key));
         assign(&mut self.tires, scene.tires.iter().map(|t| t.key));
-        self.scene = scene;
+        self.scene = Scene { volume: level(scene.volume), ..scene };
     }
 
     /// Something happens.
@@ -398,23 +471,25 @@ mod tests {
         assert_eq!(rms16(&out), 0.0, "sound out of nothing");
         let ears = Listener { pos: Vec3::ZERO, vel: Vec3::ZERO, right: Vec3::X };
         let car = Emitter { pos: Vec3::new(0.0, 0.5, -6.0), vel: Vec3::ZERO };
-        m.set_scene(Scene {
+        let engine = EngineState {
+            key: 1,
+            emitter: car,
+            layout: Layout::V8,
+            rpm: 3000.0,
+            redline: 6800.0,
+            load: 0.7,
+            limiter: false,
+            boost: false,
+            own: true,
+        };
+        let scene = Scene {
             listener: ears,
-            engines: alloc::vec![EngineState {
-                key: 1,
-                emitter: car,
-                layout: Layout::V8,
-                rpm: 3000.0,
-                redline: 6800.0,
-                load: 0.7,
-                limiter: false,
-                boost: false,
-                own: true,
-            }],
-            sirens: alloc::vec![SirenState { key: 1, emitter: car, wail: Wail::Wail, own: true }],
+            engines: [engine].into_iter().collect(),
+            sirens: [SirenState { key: 1, emitter: car, wail: Wail::Wail, own: true }].into_iter().collect(),
             volume: 1.0,
             ..Scene::default()
-        });
+        };
+        m.set_scene(scene);
         for _ in 0..40 {
             m.render(&mut out);
         }
@@ -426,5 +501,40 @@ mod tests {
         for _ in 0..20 {
             m.render(&mut out);
         }
+        // A volume that is not a number (a garbled setting) is silence,
+        // and does not silence what comes after it.
+        m.set_scene(Scene { volume: f32::NAN, ..scene });
+        for _ in 0..200 {
+            m.render(&mut out);
+        }
+        assert_eq!(rms16(&out), 0.0);
+        m.set_scene(scene);
+        for _ in 0..40 {
+            m.render(&mut out);
+        }
+        assert!(rms16(&out) > 0.02, "silent after a volume that was not a number");
+    }
+
+    #[test]
+    fn a_pan_moves_across_a_block_between_its_ends() {
+        let p = Panning::new(-0.6, 0.8);
+        assert_eq!(p.at(0.0), pan_gains(-0.6));
+        let ((l, r), (l1, r1)) = (p.at(1.0), pan_gains(0.8));
+        assert!((l - l1).abs() < 1e-6 && (r - r1).abs() < 1e-6);
+        // Between, as the pan law has it for as far as a pan moves in a
+        // block (a car crossing in front of the ears at speed).
+        let (l, r) = Panning::new(0.10, 0.16).at(0.5);
+        let (l0, r0) = pan_gains(0.13);
+        assert!((l - l0).abs() < 1e-3 && (r - r0).abs() < 1e-3, "{l} {r} against {l0} {r0}");
+    }
+
+    #[test]
+    fn a_scene_holds_as_many_sounds_as_are_heard() {
+        let tire = |key| TireState { key, emitter: Emitter::default(), slip: 0.0, speed: 10.0 };
+        let tires: Sounds<TireState, TIRES> = (0..10).map(tire).collect();
+        assert_eq!(tires.len(), TIRES);
+        assert!(tires.iter().map(|t| t.key).eq(0..TIRES as u64));
+        let mut few = Sounds::<TireState, 2>::new();
+        assert!(few.push(tire(1)) && few.push(tire(2)) && !few.push(tire(3)));
     }
 }

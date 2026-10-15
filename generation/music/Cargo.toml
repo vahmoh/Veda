@@ -8,17 +8,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-default-run = "musicgen"
-
-[[bin]]
-name = "musicgen"
-path = "src/main.rs"
-
-[[bin]]
-name = "audiocheck"
-path = "src/audiocheck.rs"
 
 [dependencies]
+# What the generators share (a host library of generation/).
+gencommon = { path = "../common" }
 vaudio = { workspace = true }
 vimage = { workspace = true, features = ["encode"] }
 

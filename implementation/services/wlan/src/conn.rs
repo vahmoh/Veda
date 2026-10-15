@@ -8,6 +8,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use vproto::net::format_mac;
 use vproto::netring::{RxInfo, SlotMeta};
 use vproto::wlan::{ConnState, FailReason, WlanError, WlanEvent, ssid_display};
 use vwlan::policy;
@@ -15,6 +16,7 @@ use vwlan::profile::{self, MAX_PROFILES, Profile};
 use vwlan::rsn::Security;
 use vwlan::scan::{Bss, parse_bss};
 use vwlan::station::{Action, Credential, Failure, StaEvent, Target};
+use zeroize::Zeroize;
 
 use crate::Wlan;
 use crate::scan::Scan;
@@ -35,10 +37,6 @@ const MAX_SLEEP_MS: u64 = 1_000;
 /// Only access points heard this recently are joined (an older entry may
 /// be an access point that is gone or out of range).
 const JOIN_FRESH_MS: u64 = 15_000;
-
-pub fn mac_string(m: &[u8; 6]) -> String {
-    format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
-}
 
 /// A network to join.
 #[derive(Clone)]
@@ -78,14 +76,10 @@ impl Request {
         }
     }
 
-    /// Whether `bss` may be used to join this network.
+    /// Whether `bss` may be used to join this network (a passphrase never
+    /// goes to an open access point).
     fn accepts(&self, bss: &Bss) -> bool {
-        let named = bss.ssid == self.ssid;
-        let security_ok = match self.security {
-            Some(s) => policy::security_compatible(s, self.sae_only, bss.security),
-            None => bss.security.supported(),
-        };
-        named && security_ok
+        bss.ssid == self.ssid && policy::may_join(self.security, self.sae_only, self.passphrase.is_some(), bss.security)
     }
 }
 
@@ -103,7 +97,7 @@ pub struct Current {
 
 fn fail_reason(f: Failure) -> FailReason {
     match f {
-        Failure::WrongPassword => FailReason::WrongPassword,
+        Failure::PasswordNotAccepted => FailReason::WrongPassword,
         Failure::NoResponse => FailReason::Timeout,
         Failure::AuthRejected(_) => FailReason::AuthRejected,
         Failure::AssocRejected(_) => FailReason::AssocRejected,
@@ -163,6 +157,11 @@ impl Wlan {
                 managed => self.radio_command(managed, now),
             }
         }
+        self.sync_counters();
+    }
+
+    /// Takes the station's counts into the diagnostics' counters.
+    pub fn sync_counters(&mut self) {
         self.counters.data_tx = self.sta.counters.data_tx;
         self.counters.decrypt_errors = self.sta.counters.decrypt_errors;
         self.counters.replays = self.sta.counters.replays;
@@ -181,14 +180,13 @@ impl Wlan {
             }
             Action::Deauthenticate { bssid, reason } => (r.deauthenticate(bssid, reason), false),
             Action::SendEapol { peer, frame, encrypt } => (r.send_eapol(peer, &frame, encrypt), false),
-            Action::InstallKey { kind, index, key, rsc, peer } => (r.install_key(kind, index, &key, rsc, peer), false),
+            Action::InstallKey { kind, index, mut key, rsc, peer } => {
+                let done = r.install_key(kind, index, &key, rsc, peer);
+                key.zeroize();
+                (done, false)
+            }
             Action::Authorize { peer } => (r.authorize(peer), false),
             Action::SendManagement(f) => (r.send_management(&f), false),
-            // A frame the link has no room for is dropped, as a card drops.
-            Action::SendEthernet(eth) => {
-                r.send_ethernet(&eth);
-                (true, false)
-            }
             _ => (true, false),
         };
         if !done {
@@ -223,7 +221,6 @@ impl Wlan {
                 }
                 self.last_failure = None;
                 self.backoff.remove(&ssid);
-                self.rejected.remove(&ssid);
                 self.idle_scans = 0;
                 self.next_scan_ms = now + CONNECTED_SCAN_MS;
                 self.log(format!(
@@ -231,7 +228,7 @@ impl Wlan {
                     ssid_display(&ssid),
                     security_label(security, sae),
                     if pmf { ", protected management frames" } else { "" },
-                    mac_string(&bssid),
+                    format_mac(&bssid),
                     channel
                 ));
                 self.remember(&request, security, sae);
@@ -275,21 +272,27 @@ impl Wlan {
         }
         if was_connected {
             self.counters.disconnections += 1;
+            if f == Failure::SignalLost {
+                self.counters.beacon_losses += 1;
+            }
             self.log(format!("lost the connection to {}: {}", name, reason));
         } else {
-            if matches!(f, Failure::WrongPassword | Failure::HandshakeFailed | Failure::AuthRejected(_)) {
+            if matches!(f, Failure::PasswordNotAccepted | Failure::HandshakeFailed | Failure::AuthRejected(_)) {
                 self.counters.auth_failures += 1;
             }
             self.log(format!("could not join {}: {}", name, reason));
         }
         let mut req = cur.request;
         match f {
-            Failure::WrongPassword | Failure::Unsupported | Failure::PasswordRequired => {
+            Failure::PasswordNotAccepted | Failure::Unsupported | Failure::PasswordRequired => {
                 if req.manual {
                     self.report_failure(&req.ssid, reason);
-                } else if f == Failure::WrongPassword {
-                    // The saved password no longer works: wait for the user.
-                    self.rejected.insert(req.ssid.clone());
+                }
+                if f == Failure::PasswordNotAccepted {
+                    // Probably a wrong password, though nothing proves it
+                    // (anyone in range could fake the signs): automatic
+                    // joining tries again, after longer and longer pauses.
+                    self.backoff.entry(req.ssid.clone()).or_default().refused(now);
                 }
             }
             _ => {
@@ -336,7 +339,13 @@ impl Wlan {
                 p.hidden |= req.hidden;
             }
             true
-        } else if req.save && self.profiles.len() < MAX_PROFILES {
+        } else if req.save
+            && self.profiles.len() < MAX_PROFILES
+            // A network joined open though a password was given is not
+            // what the user meant to save (the request never takes an open
+            // access point then; this keeps it so).
+            && !(security == Security::Open && req.passphrase.is_some())
+        {
             self.profiles.push(Profile {
                 ssid: req.ssid.clone(),
                 security,
@@ -367,7 +376,7 @@ impl Wlan {
             "{} {} via {} on channel {} ({} dBm)",
             if roaming { "moving within" } else { "joining" },
             ssid_display(&req.ssid),
-            mac_string(&bss.bssid),
+            format_mac(&bss.bssid),
             bss.channel,
             bss.signal_dbm
         ));
@@ -401,7 +410,7 @@ impl Wlan {
         {
             return Err(WlanError::BadPassphrase);
         }
-        let security = r.security.map(crate::scan::from_proto);
+        let security = r.security;
         if security.is_some_and(|s| !s.supported()) {
             return Err(WlanError::Unsupported);
         }
@@ -433,9 +442,9 @@ impl Wlan {
             attempts: 0,
             scanned: false,
         };
-        // Leave the current network first.
+        // Leave the current network first. The user acting is the time to
+        // try again, whatever failed before.
         self.user_disconnected = false;
-        self.rejected.remove(&ssid);
         self.backoff.remove(&ssid);
         self.roam_to = None;
         if self.current.is_some() {
@@ -626,7 +635,7 @@ impl Wlan {
         self.log(format!(
             "signal {} dBm: moving to {} ({} dBm)",
             self.sta.signal_dbm,
-            mac_string(&target.bssid),
+            format_mac(&target.bssid),
             target.signal_dbm
         ));
         self.roam_to = Some((req, target));
@@ -672,11 +681,9 @@ impl Wlan {
         if self.request.is_some() {
             self.try_request(now);
         } else if !self.user_disconnected {
-            let usable: Vec<Profile> =
-                self.profiles.iter().filter(|p| !self.rejected.contains(&p.ssid)).cloned().collect();
             let seen = self.join_candidates(now);
-            if let Some((i, bss)) = policy::choose(&usable, &seen, &self.backoff, now) {
-                let req = Request::from_profile(&usable[i]);
+            if let Some((i, bss)) = policy::choose(&self.profiles, &seen, &self.backoff, now) {
+                let req = Request::from_profile(&self.profiles[i]);
                 let bss = bss.clone();
                 self.start_join(req, bss, false, now);
                 return;
@@ -717,7 +724,6 @@ impl Wlan {
         if self.profiles.len() == before {
             return Err(WlanError::NotFound);
         }
-        self.rejected.remove(ssid);
         self.backoff.remove(ssid);
         let connected_to_it = self.current.as_ref().is_some_and(|c| c.request.ssid == ssid);
         if connected_to_it {

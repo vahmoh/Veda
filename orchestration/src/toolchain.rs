@@ -25,23 +25,30 @@
 //! it): `downloads/` (the verified source archives), `src/` (unpacked and
 //! patched), `build/`, `cross/`, `native/`, `media/` and `rust/`.
 //! Everything is built with `implementation/ports/build.sh`.
+//!
+//! An image build makes things with the toolchain too (the C library's
+//! POSIX layer, the test programs, the media decoder), into the
+//! toolchain's directory, which builds at once share: it holds the
+//! toolchain's lock meanwhile, as `cargo orchestration toolchain` does
+//! while it builds. What it makes is made again when the command that
+//! made it changes, not only its inputs (each output's `util::Recipe`).
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::arch::{self, BARE_TARGET};
 use crate::ports::{self, Port};
-use crate::util::{self, Result};
+use crate::util::{self, Recipe, Result};
 
 /// Where the toolchain is built.
 pub fn root() -> PathBuf {
-    match std::env::var_os("VEDA_TOOLCHAIN") {
-        Some(p) => {
-            let p = PathBuf::from(p);
-            if p.is_absolute() { p } else { util::workspace_root().join(p) }
-        }
-        None => util::workspace_root().join("target").join("toolchain"),
-    }
+    util::env_dir("VEDA_TOOLCHAIN", &["target", "toolchain"])
+}
+
+/// The lock over the toolchain's directory.
+fn lock() -> Result<util::Lock> {
+    util::Lock::exclusive(&root().join(".lock"), "the toolchain")
 }
 
 /// Whether the `cross toolchain`, the `native toolchain`, the `media
@@ -170,7 +177,7 @@ const POSIX_LAYER_EXPORTS: [&str; 22] = [
 /// library for the architecture's bare target; returns its path.
 pub fn posix_library() -> Result<PathBuf> {
     util::status("Building", format!("the POSIX layer ({BARE_TARGET})"));
-    util::run(util::cargo().args([
+    util::run(util::cargo_for(BARE_TARGET).args([
         "rustc",
         "--package",
         "vposix",
@@ -186,9 +193,9 @@ pub fn posix_library() -> Result<PathBuf> {
 /// Links the POSIX layer's static library into the one relocatable object
 /// the C library holds, which exports [`POSIX_LAYER_EXPORTS`] and nothing
 /// else (no Rust or compiler-builtins symbol can clash with the C
-/// library's). `implementation/ports/build.sh` does the same for the first
-/// build.
-pub fn posix_object(lib: &Path, out: &Path) -> Result {
+/// library's), unless it is made already. `implementation/ports/build.sh`
+/// does the same for the first build.
+fn posix_object(lib: &Path, out: &Path) -> Result {
     isolated_object(lib, out, &POSIX_LAYER_EXPORTS)
 }
 
@@ -196,22 +203,30 @@ pub fn posix_object(lib: &Path, out: &Path) -> Result {
 /// `exports` and nothing else globally: its Rust runtime, compiler builtins
 /// (`memcpy` ...) and allocator stay its own, beside the C library's.
 /// Symbols it uses but does not define stay global, for the final link.
+/// Made again when the library, the tools or the exports change.
 fn isolated_object(lib: &Path, out: &Path, exports: &[&str]) -> Result {
+    let mut words: Vec<OsString> = vec!["isolated object".into()];
+    words.extend(exports.iter().map(OsString::from));
+    let (ld, objcopy) = (cross_tool("ld"), cross_tool("objcopy"));
+    let recipe = Recipe::new(out, &words, &[lib, &ld, &objcopy]);
+    if recipe.fresh() {
+        return Ok(());
+    }
     let whole = out.with_extension("all.o");
-    let mut ld = Command::new(cross_tool("ld"));
+    let mut ld = Command::new(&ld);
     ld.args(["-r", "--gc-sections"]);
     for s in exports {
         ld.args(["-u", s]);
     }
     util::run(ld.arg("-o").arg(&whole).arg(lib))?;
-    let mut objcopy = Command::new(cross_tool("objcopy"));
+    let mut objcopy = Command::new(&objcopy);
     objcopy.args(["--strip-debug", "--remove-section=.llvmbc", "--remove-section=.llvmcmd"]);
     for s in exports {
         objcopy.arg(format!("--keep-global-symbol={s}"));
     }
     util::run(objcopy.arg(&whole).arg(out))?;
-    let _ = std::fs::remove_file(&whole);
-    Ok(())
+    util::remove_file(&whole)?;
+    recipe.record()
 }
 
 /// The C library's object of the POSIX layer, as last made.
@@ -222,13 +237,11 @@ fn posix_layer_object() -> PathBuf {
 /// Puts the current POSIX layer into the cross toolchain's C library (and
 /// the native toolchain's, if built), so that C programs built from now
 /// on get it.
-pub fn refresh_posix_layer() -> Result {
+fn refresh_posix_layer() -> Result {
     let object = posix_layer_object();
     let library = posix_library()?;
-    if !is_newer(&object, &[&library]) {
-        std::fs::create_dir_all(object.parent().unwrap()).map_err(|e| format!("{e}"))?;
-        posix_object(&library, &object)?;
-    }
+    util::create_dir_all(&root().join("build"))?;
+    posix_object(&library, &object)?;
     let headers =
         util::workspace_root().join("implementation").join("libraries").join("posix").join("include").join("veda");
     for sysroot in [root().join("cross").join("sysroot"), root().join("native")] {
@@ -239,13 +252,11 @@ pub fn refresh_posix_layer() -> Result {
         // Its own header, `<veda/ipc.h>`.
         if libc.is_file() {
             let dir = sysroot.join("system").join("include").join("veda");
-            std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-            for entry in
-                std::fs::read_dir(&headers).map_err(|e| format!("reading {}: {e}", headers.display()))?.flatten()
-            {
-                let to = dir.join(entry.file_name());
-                if !is_newer(&to, &[&entry.path()]) {
-                    std::fs::copy(entry.path(), &to).map_err(|e| format!("copying to {}: {e}", to.display()))?;
+            util::create_dir_all(&dir)?;
+            for header in util::files_under(&headers)? {
+                let to = dir.join(header.file_name().unwrap_or_default());
+                if !is_newer(&to, &[&header]) {
+                    util::copy(&header, &to)?;
                 }
             }
         }
@@ -263,27 +274,16 @@ const C_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-pie", &["-fPIE", "-s
 /// `(name, executable)`. None without a cross compiler. What they expect of
 /// the architecture is in the headers of
 /// `verification/c/arch/<architecture>/`.
-pub fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
+fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let Some(gcc) = cross_gcc() else { return Ok(Vec::new()) };
     let gxx = cross_tool("g++");
-    refresh_posix_layer()?;
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
     let src = util::workspace_root().join("verification").join("c");
     let arch_headers = src.join("arch").join(arch::NAME);
-    let headers: Vec<PathBuf> = std::fs::read_dir(&arch_headers)
-        .map_err(|e| format!("reading {}: {e}", arch_headers.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .collect();
+    let headers = util::files_under(&arch_headers)?;
     let out = root().join("tests");
-    std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
-    let mut sources: Vec<PathBuf> = std::fs::read_dir(&src)
-        .map_err(|e| format!("reading {}: {e}", src.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "c" || x == "cc"))
-        .collect();
-    sources.sort();
+    util::create_dir_all(&out)?;
+    let sources = util::files_in(&src, &["c", "cc"])?;
     let mut programs = Vec::new();
     for source in sources {
         let stem = source.file_stem().unwrap().to_string_lossy().into_owned();
@@ -293,17 +293,19 @@ pub fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
             let exe = out.join(&name);
             let inputs: Vec<&Path> =
                 [source.as_path(), compiler, &libc].into_iter().chain(headers.iter().map(PathBuf::as_path)).collect();
-            if !is_newer(&exe, &inputs) {
-                util::run(
-                    Command::new(compiler)
-                        .args(["-O2", "-Wall", "-Wextra", "-Werror", "-g0", "-s"])
-                        .arg("-I")
-                        .arg(&arch_headers)
-                        .args(*flags)
-                        .arg("-o")
-                        .arg(&exe)
-                        .arg(&source),
-                )?;
+            let mut cc = Command::new(compiler);
+            cc.args(["-O2", "-Wall", "-Wextra", "-Werror", "-g0", "-s"])
+                .arg(util::c_path_remap())
+                .arg("-I")
+                .arg(&arch_headers)
+                .args(*flags)
+                .arg("-o")
+                .arg(&exe)
+                .arg(&source);
+            let recipe = Recipe::of(&exe, &cc, &inputs);
+            if !recipe.fresh() {
+                util::run(&mut cc)?;
+                recipe.record()?;
             }
             programs.push((name, util::read(&exe)?));
         }
@@ -320,43 +322,49 @@ const RUST_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-fixed", &["-C", "
 /// every one of [`RUST_TEST_VARIANTS`]) for the system image: `(name,
 /// executable)`. None without Rust. They keep their symbols and line
 /// tables, which their backtraces show.
-pub fn rust_tests() -> Result<Vec<(String, Vec<u8>)>> {
+fn rust_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let (Some(rustc), Some(gcc)) = (rustc(), cross_gcc()) else { return Ok(Vec::new()) };
-    refresh_posix_layer()?;
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
     let src = util::workspace_root().join("verification").join("rust");
     let out = root().join("tests").join("rust");
-    std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
-    let mut sources: Vec<PathBuf> = std::fs::read_dir(&src)
-        .map_err(|e| format!("reading {}: {e}", src.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
-        .collect();
-    sources.sort();
+    util::create_dir_all(&out)?;
+    let sources = util::files_in(&src, &["rs"])?;
     let mut programs = Vec::new();
     for source in sources {
         let stem = source.file_stem().unwrap().to_string_lossy().into_owned();
         for (suffix, flags) in RUST_TEST_VARIANTS {
             let name = format!("{stem}{suffix}");
             let exe = out.join(&name);
-            if !is_newer(&exe, &[&source, &rustc, &gcc, &libc]) {
-                util::run(
-                    Command::new(&rustc)
-                        .args(["--edition", "2024", "--target", arch::STD_TARGET, "-D", "warnings"])
-                        .args(["-C", "opt-level=2", "-C", "debuginfo=line-tables-only"])
-                        .arg("-C")
-                        .arg(format!("linker={}", gcc.display()))
-                        .args(*flags)
-                        .arg("-o")
-                        .arg(&exe)
-                        .arg(&source),
-                )?;
+            let mut compile = Command::new(&rustc);
+            compile
+                .args(["--edition", "2024", "--target", arch::STD_TARGET, "-D", "warnings"])
+                .args(["-C", "opt-level=2", "-C", "debuginfo=line-tables-only"])
+                .arg(rust_path_remap())
+                .arg("-C")
+                .arg(format!("linker={}", gcc.display()))
+                .args(*flags)
+                .arg("-o")
+                .arg(&exe)
+                .arg(&source);
+            let recipe = Recipe::of(&exe, &compile, &[&source, &rustc, &gcc, &libc]);
+            if !recipe.fresh() {
+                util::run(&mut compile)?;
+                recipe.record()?;
             }
             programs.push((name, util::read(&exe)?));
         }
     }
     Ok(programs)
+}
+
+/// What rustc is given for the test programs' paths: the checkout's by
+/// the fixed name the build gives it (`util::path_remaps`), so that their
+/// panics name no directory of this machine's.
+fn rust_path_remap() -> OsString {
+    let mut flag = OsString::from("--remap-path-prefix=");
+    flag.push(util::workspace_root());
+    flag.push("=/veda");
+    flag
 }
 
 /// The flags the media decoder's shim is compiled with.
@@ -396,20 +404,19 @@ fn without_c_comments(text: &str) -> String {
 /// exporting `mediadec_main` alone), its C shim, FFmpeg and dav1d, linked
 /// by the cross GCC as a static position-independent program. Built again
 /// when any of it changed.
-pub fn mediadec() -> Result<Option<Vec<u8>>> {
+fn mediadec() -> Result<Option<Vec<u8>>> {
     let (Some(gcc), Some(libraries)) = (cross_gcc(), media_libraries()) else { return Ok(None) };
-    refresh_posix_layer()?;
     let crate_dir = util::workspace_root().join("implementation").join("services").join("mediadec");
     let shim = crate_dir.join("shim");
     let header = shim.join("vmd.h");
     // No floating point crosses the shim: the Rust half passes it otherwise.
-    let text = std::fs::read_to_string(&header).map_err(|e| format!("reading {}: {e}", header.display()))?;
+    let text = util::read_to_string(&header)?;
     let code = without_c_comments(&text);
     if code.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == "float" || w == "double") {
         return Err(format!("{}: no `float` or `double` may cross the shim", header.display()));
     }
     util::status("Building", format!("the media decoder ({BARE_TARGET} and C)"));
-    util::run(util::cargo().args([
+    util::run(util::cargo_for(BARE_TARGET).args([
         "rustc",
         "--package",
         "mediadec",
@@ -421,9 +428,9 @@ pub fn mediadec() -> Result<Option<Vec<u8>>> {
     ]))?;
     let rust_lib = util::target_dir().join(BARE_TARGET).join("release").join("libmediadec.a");
     let out = root().join("build").join("mediadec");
-    std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
+    util::create_dir_all(&out)?;
     let rust_obj = out.join("mediadec-rs.o");
-    if !is_newer(&rust_obj, &[&rust_lib]) {
+    {
         isolated_object(&rust_lib, &rust_obj, &["mediadec_main"])?;
         // What it defines globally must be that and nothing else.
         let nm = Command::new(cross_tool("nm"))
@@ -433,7 +440,7 @@ pub fn mediadec() -> Result<Option<Vec<u8>>> {
             .map_err(|e| format!("running nm: {e}"))?;
         let defined: Vec<String> = String::from_utf8_lossy(&nm.stdout).lines().map(str::to_string).collect();
         if defined != ["mediadec_main"] {
-            let _ = std::fs::remove_file(&rust_obj);
+            util::remove_file(&rust_obj)?;
             return Err(format!("the media decoder's Rust half exports more than mediadec_main: {defined:?}"));
         }
     }
@@ -441,13 +448,7 @@ pub fn mediadec() -> Result<Option<Vec<u8>>> {
     let includes =
         [media.join("ffmpeg").join("system").join("include"), media.join("dav1d").join("system").join("include")];
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
-    let mut sources: Vec<PathBuf> = std::fs::read_dir(&shim)
-        .map_err(|e| format!("reading {}: {e}", shim.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "c"))
-        .collect();
-    sources.sort();
+    let sources = util::files_in(&shim, &["c"])?;
     let headers: Vec<PathBuf> = ["vmd.h", "vmd_internal.h"].iter().map(|h| shim.join(h)).collect();
     let mut objects = Vec::new();
     for source in &sources {
@@ -455,35 +456,46 @@ pub fn mediadec() -> Result<Option<Vec<u8>>> {
         let mut inputs: Vec<&Path> = vec![source, &gcc];
         inputs.extend(headers.iter().map(PathBuf::as_path));
         inputs.extend(libraries.iter().map(PathBuf::as_path));
-        if !is_newer(&object, &inputs) {
-            let mut cc = Command::new(&gcc);
-            cc.args(SHIM_CFLAGS);
-            for i in &includes {
-                cc.arg("-I").arg(i);
-            }
-            util::run(cc.arg("-c").arg("-o").arg(&object).arg(source))?;
+        let mut cc = Command::new(&gcc);
+        cc.args(SHIM_CFLAGS).arg(util::c_path_remap());
+        for i in &includes {
+            cc.arg("-I").arg(i);
+        }
+        cc.arg("-c").arg("-o").arg(&object).arg(source);
+        let recipe = Recipe::of(&object, &cc, &inputs);
+        if !recipe.fresh() {
+            util::run(&mut cc)?;
+            recipe.record()?;
         }
         objects.push(object);
     }
     let exe = out.join("mediadec");
-    let mut inputs: Vec<&Path> = vec![&rust_obj, &libc];
+    let unstripped = out.join("mediadec.debug");
+    let mut inputs: Vec<&Path> = vec![&rust_obj, &libc, &gcc];
     inputs.extend(objects.iter().map(PathBuf::as_path));
     inputs.extend(libraries.iter().map(PathBuf::as_path));
-    if !is_newer(&exe, &inputs) {
-        let unstripped = out.join("mediadec.debug");
-        let mut link = Command::new(&gcc);
-        link.args(["-static-pie", "-pthread", "-Wl,--gc-sections", "-Wl,-z,stack-size=2097152", "-o"]).arg(&unstripped);
-        link.args(&objects).arg(&rust_obj).arg("-Wl,--start-group").args(&libraries).arg("-Wl,--end-group").arg("-lm");
+    let mut link = Command::new(&gcc);
+    link.args(["-static-pie", "-pthread", "-Wl,--gc-sections", "-Wl,-z,stack-size=2097152", "-o"]).arg(&unstripped);
+    link.args(&objects).arg(&rust_obj).arg("-Wl,--start-group").args(&libraries).arg("-Wl,--end-group").arg("-lm");
+    let recipe = Recipe::of(&unstripped, &link, &inputs);
+    if !recipe.fresh() {
         util::run(&mut link)?;
-        // The unstripped program stays, for addr2line.
-        util::run(Command::new(cross_tool("strip")).arg("--strip-all").arg("-o").arg(&exe).arg(&unstripped))?;
+        recipe.record()?;
+    }
+    // The unstripped program stays, for addr2line.
+    let mut strip = Command::new(cross_tool("strip"));
+    strip.arg("--strip-all").arg("-o").arg(&exe).arg(&unstripped);
+    let recipe = Recipe::of(&exe, &strip, &[&unstripped]);
+    if !recipe.fresh() {
+        util::run(&mut strip)?;
+        recipe.record()?;
     }
     Ok(Some(util::read(&exe)?))
 }
 
 /// The media libraries' tests for the system image (`/system/tests/media`):
 /// FFmpeg's and dav1d's checkasm.
-pub fn media_tests() -> Result<Vec<(String, Vec<u8>)>> {
+fn media_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let dir = media_root().join("tests");
     let mut tests = Vec::new();
     for name in ["checkasm-dav1d", "checkasm-ffmpeg"] {
@@ -505,12 +517,12 @@ fn native_layer_note() -> PathBuf {
 /// linked in: when it has changed since they were linked, links them again
 /// (`implementation/ports/build.sh` redoes only that). Without the build
 /// tools it says so and leaves them as they are.
-pub fn relink_native() -> Result {
+fn relink_native() -> Result {
     let object = posix_layer_object();
     if !built("native toolchain") || !object.is_file() {
         return Ok(());
     }
-    let current = ports::sha256_of(&object)?;
+    let current = util::sha256_file(&object)?;
     if std::fs::read_to_string(native_layer_note()).is_ok_and(|linked| linked.trim() == current) {
         return Ok(());
     }
@@ -519,32 +531,94 @@ pub fn relink_native() -> Result {
         return Ok(());
     }
     util::status("Linking", "the C toolchain's programs with the current POSIX layer");
-    command(&[])
+    build(std::thread::available_parallelism().map_or(4, |n| n.get()))
 }
 
 /// The native toolchain's files for the system image: paths relative to
 /// `/system` and their contents. None if it has not been built.
-pub fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
+fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
     let base = root().join("native").join("system");
-    if !base.is_dir() {
+    let mut files = Vec::new();
+    for path in util::files_under(&base)? {
+        let rel = path.strip_prefix(&base).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+        files.push((rel, util::read(&path)?));
+    }
+    Ok(files)
+}
+
+/// What the toolchain gives the system image, at their paths in it: the C
+/// and Rust test programs (`tests/c`, `tests/rust`), the native toolchain
+/// (as `/system` has it), and the media decoder (`bin/mediadec`) and its
+/// libraries' tests (`tests/media`) if `with_mediadec`. The POSIX layer
+/// goes into the C library once, first; all of it is made while this
+/// build holds the toolchain's lock. Says what is missing, and whether
+/// the toolchain is older than its ports.
+pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
+    if cross_gcc().is_none() && !built("native toolchain") {
+        util::status("Note", "no C toolchain, C tests or media decoder in the image (`cargo orchestration toolchain`)");
         return Ok(Vec::new());
     }
-    let mut files = Vec::new();
-    let mut stack = vec![base.clone()];
-    while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                let rel = path.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
-                files.push((rel, util::read(&path)?));
-            }
-        }
+    let _lock = lock()?;
+    check_ports();
+    if cross_gcc().is_some() {
+        refresh_posix_layer()?;
     }
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    relink_native()?;
+    let mut files = Vec::new();
+    files.extend(c_tests()?.into_iter().map(|(name, exe)| (format!("tests/c/{name}"), exe)));
+    files.extend(rust_tests()?.into_iter().map(|(name, exe)| (format!("tests/rust/{name}"), exe)));
+    let native = native_files()?;
+    if native.is_empty() {
+        util::status("Note", "no C toolchain in the image (build it with `cargo orchestration toolchain`)");
+    }
+    files.extend(native);
+    if with_mediadec {
+        match mediadec()? {
+            Some(exe) => files.push(("bin/mediadec".into(), exe)),
+            None => util::status(
+                "Note",
+                "no media decoder in the image: videos do not play (`cargo orchestration toolchain` builds FFmpeg and \
+                 dav1d)",
+            ),
+        }
+        files.extend(media_tests()?.into_iter().map(|(name, exe)| (format!("tests/media/{name}"), exe)));
+    }
     Ok(files)
+}
+
+/// The ports the toolchain is built from, and what builds them, whose
+/// fingerprint `cargo orchestration toolchain` notes.
+fn ports_fingerprint() -> Result<String> {
+    let dir = ports::dir();
+    let names = ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "dav1d", "ffmpeg", "rust"];
+    ports::fingerprint(&names, &[dir.join("build.sh"), dir.join("common.sh"), ports::settings()])
+}
+
+/// Where the fingerprint of the ports the toolchain was built from is.
+fn ports_note() -> PathBuf {
+    root().join("build").join("ports-fingerprint")
+}
+
+/// Says so if the toolchain was built from other ports than
+/// `implementation/ports/` has now.
+fn check_ports() {
+    let now = match ports_fingerprint() {
+        Ok(print) => print,
+        Err(e) => return util::status("Note", format!("the toolchain's ports: {e}")),
+    };
+    match std::fs::read_to_string(ports_note()) {
+        Ok(built) if built == now => {}
+        Ok(_) => util::status(
+            "Note",
+            "the toolchain was built from other ports than implementation/ports/ has now: `cargo orchestration \
+             toolchain` builds it again",
+        ),
+        Err(_) => util::status(
+            "Note",
+            "which ports the toolchain was built from is not known (it was built before that was noted): `cargo \
+             orchestration toolchain` notes it",
+        ),
+    }
 }
 
 /// The ports the toolchain is built from: C's, the media libraries' and
@@ -586,9 +660,9 @@ fn rust_stage0_pins(port: &Port, downloads: &Path) -> Result<Vec<(String, String
         if !out.status.success() {
             return Err(format!("{}: no {top}/src/stage0", archive.display()));
         }
-        std::fs::write(&kept, &out.stdout).map_err(|e| format!("writing {}: {e}", kept.display()))?;
+        util::write(&kept, &out.stdout)?;
     }
-    let text = std::fs::read_to_string(&kept).map_err(|e| format!("reading {}: {e}", kept.display()))?;
+    let text = util::read_to_string(&kept)?;
     Ok(stage0_pins(&text))
 }
 
@@ -653,27 +727,19 @@ pub fn command(args: &[String]) -> Result {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--jobs" | "-j" => {
-                jobs = it.next().and_then(|v| v.parse().ok()).ok_or("--jobs takes a number")?;
-            }
+            "--jobs" | "-j" => jobs = util::jobs(it.next())?,
             other => return Err(format!("unknown option '{other}' (toolchain takes --jobs N)")),
         }
     }
+    // One build at a time (a second would empty the first's build
+    // directories under it), and no image build meanwhile.
+    let _lock = lock()?;
+    build(jobs)
+}
+
+/// Builds the toolchain (`jobs` at a time), holding its lock.
+fn build(jobs: usize) -> Result {
     let started = std::time::Instant::now();
-    // One build at a time: a second would empty the first's build
-    // directories under it.
-    std::fs::create_dir_all(root()).map_err(|e| format!("creating {}: {e}", root().display()))?;
-    let lock_path = root().join(".lock");
-    let lock = std::fs::File::create(&lock_path).map_err(|e| format!("{}: {e}", lock_path.display()))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => {
-            return Err(
-                "another `cargo orchestration toolchain` is building the toolchain: wait for it to finish".into()
-            );
-        }
-        Err(std::fs::TryLockError::Error(e)) => return Err(format!("locking {}: {e}", lock_path.display())),
-    }
     // The tools first: the downloads are large.
     let mut sh = shell()?;
     let downloads = root().join("downloads");
@@ -696,15 +762,17 @@ pub fn command(args: &[String]) -> Result {
         .env("VEDA_RUST_STAGE0", rust_stage0.join(" "))
         .env("JOBS", jobs.to_string());
     util::run(&mut sh)?;
-    // The native programs now have the POSIX layer's object as it is.
+    // The native programs now have the POSIX layer's object as it is, and
+    // the toolchain the ports as they are.
     let object = posix_layer_object();
-    let note = native_layer_note();
-    std::fs::write(&note, ports::sha256_of(&object)?).map_err(|e| format!("writing {}: {e}", note.display()))?;
+    util::write(&native_layer_note(), util::sha256_file(&object)?)?;
+    util::write(&ports_note(), ports_fingerprint()?)?;
     util::status("Finished", format!("the toolchain in {:.0} min", started.elapsed().as_secs_f32() / 60.0));
     Ok(())
 }
 
-/// Whether `target` exists and is newer than every input.
+/// Whether `target` exists and is newer than every input (for what a
+/// command that never changes makes).
 fn is_newer(target: &Path, inputs: &[&Path]) -> bool {
     let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     let Some(t) = modified(target) else { return false };

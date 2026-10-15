@@ -4,9 +4,6 @@
 //! What Linux's ABI has particular to x86-64, as musl uses it: the system
 //! call numbers, `struct stat`, and `arch_prctl`'s codes.
 
-// The ABI's whole tables, not only what the layer uses.
-#![allow(dead_code)]
-
 use crate::linux::Timespec;
 
 /// System call numbers (x86-64's, as musl's `arch/x86_64/bits/syscall.h`
@@ -44,9 +41,6 @@ pub mod nr {
     pub const DUP2: usize = linux_raw_sys::general::__NR_dup2 as usize;
     pub const PAUSE: usize = linux_raw_sys::general::__NR_pause as usize;
     pub const NANOSLEEP: usize = linux_raw_sys::general::__NR_nanosleep as usize;
-    pub const GETITIMER: usize = linux_raw_sys::general::__NR_getitimer as usize;
-    pub const ALARM: usize = linux_raw_sys::general::__NR_alarm as usize;
-    pub const SETITIMER: usize = linux_raw_sys::general::__NR_setitimer as usize;
     pub const GETPID: usize = linux_raw_sys::general::__NR_getpid as usize;
     pub const SOCKET: usize = linux_raw_sys::general::__NR_socket as usize;
     pub const SENDTO: usize = linux_raw_sys::general::__NR_sendto as usize;
@@ -69,7 +63,6 @@ pub mod nr {
     pub const FDATASYNC: usize = linux_raw_sys::general::__NR_fdatasync as usize;
     pub const TRUNCATE: usize = linux_raw_sys::general::__NR_truncate as usize;
     pub const FTRUNCATE: usize = linux_raw_sys::general::__NR_ftruncate as usize;
-    pub const GETDENTS: usize = linux_raw_sys::general::__NR_getdents as usize;
     pub const GETCWD: usize = linux_raw_sys::general::__NR_getcwd as usize;
     pub const CHDIR: usize = linux_raw_sys::general::__NR_chdir as usize;
     pub const FCHDIR: usize = linux_raw_sys::general::__NR_fchdir as usize;
@@ -116,7 +109,6 @@ pub mod nr {
     pub const RT_SIGTIMEDWAIT: usize = linux_raw_sys::general::__NR_rt_sigtimedwait as usize;
     pub const RT_SIGSUSPEND: usize = linux_raw_sys::general::__NR_rt_sigsuspend as usize;
     pub const SIGALTSTACK: usize = linux_raw_sys::general::__NR_sigaltstack as usize;
-    pub const UTIME: usize = linux_raw_sys::general::__NR_utime as usize;
     pub const MKNOD: usize = linux_raw_sys::general::__NR_mknod as usize;
     pub const STATFS: usize = linux_raw_sys::general::__NR_statfs as usize;
     pub const FSTATFS: usize = linux_raw_sys::general::__NR_fstatfs as usize;
@@ -150,13 +142,11 @@ pub mod nr {
     pub const CLOCK_NANOSLEEP: usize = linux_raw_sys::general::__NR_clock_nanosleep as usize;
     pub const EXIT_GROUP: usize = linux_raw_sys::general::__NR_exit_group as usize;
     pub const TGKILL: usize = linux_raw_sys::general::__NR_tgkill as usize;
-    pub const UTIMES: usize = linux_raw_sys::general::__NR_utimes as usize;
     pub const WAITID: usize = linux_raw_sys::general::__NR_waitid as usize;
     pub const OPENAT: usize = linux_raw_sys::general::__NR_openat as usize;
     pub const MKDIRAT: usize = linux_raw_sys::general::__NR_mkdirat as usize;
     pub const MKNODAT: usize = linux_raw_sys::general::__NR_mknodat as usize;
     pub const FCHOWNAT: usize = linux_raw_sys::general::__NR_fchownat as usize;
-    pub const FUTIMESAT: usize = linux_raw_sys::general::__NR_futimesat as usize;
     pub const NEWFSTATAT: usize = linux_raw_sys::general::__NR_newfstatat as usize;
     pub const UNLINKAT: usize = linux_raw_sys::general::__NR_unlinkat as usize;
     pub const RENAMEAT: usize = linux_raw_sys::general::__NR_renameat as usize;
@@ -210,9 +200,15 @@ pub struct Stat {
     pub _unused: [i64; 3],
 }
 
+/// `ucontext_t`, the context a signal handler gets (musl's on x86-64): its
+/// size, and where its signal mask is (`uc_sigmask`, after `uc_flags`,
+/// `uc_link`, `uc_stack` and the 256 bytes of `uc_mcontext`).
+pub mod ucontext {
+    pub const SIZE: usize = 936;
+    pub const SIGMASK: usize = 296;
+}
+
 /// `arch_prctl` codes.
 pub mod arch_prctl {
     pub const SET_FS: u32 = linux_raw_sys::general::ARCH_SET_FS;
-    /// Not among `linux-raw-sys`'s definitions (`asm/prctl.h`).
-    pub const GET_FS: u32 = 0x1003;
 }

@@ -3,7 +3,8 @@
 
 //! Notification bubbles, stacked above the taskbar in the bottom-right
 //! corner. They disappear after a few seconds (not while hovered) or when
-//! clicked.
+//! clicked. A notification an application posted shows that application's
+//! tile and name, whatever it says of itself (see `Shell::notify`).
 //!
 //! The agent's approval requests appear here while its window is closed:
 //! they carry Allow and Deny buttons and stay until answered (or until the
@@ -20,7 +21,8 @@ use vui::{Font, Host, Icon, Ui};
 
 use vproto::agent::ApprovalRequest;
 
-use crate::{Action, Model, apps, chrome, taskbar};
+use crate::approval::{self, Choice, Look};
+use crate::{Model, apps, chrome, taskbar};
 
 const WIDTH: i32 = 360;
 const HEIGHT: i32 = 88;
@@ -30,6 +32,15 @@ const GAP: i32 = 10;
 const LIFETIME_NS: u64 = 6_000_000_000;
 const MAX_SHOWN: usize = 4;
 
+/// The tile a notification shows and who it is from.
+pub struct Sender<'a> {
+    /// The tile's colour key (an application's id) and glyph.
+    pub tile: (&'a str, Icon),
+    /// The application that posted it (shown with its title), if not the
+    /// system.
+    pub name: Option<&'a str>,
+}
+
 /// What a notification shows, and what happened to it this frame.
 struct View {
     title: String,
@@ -37,12 +48,13 @@ struct View {
     icon: Icon,
     /// Tile colour key.
     color: String,
+    /// The application that posted it.
+    from: Option<String>,
     origin: (i32, i32),
     hovered: bool,
     clicked: bool,
-    /// An approval request: its id and whether "always allow" is offered.
-    approval: Option<(u64, bool)>,
-    always: bool,
+    /// An approval request, and "Always allow" as ticked on it.
+    approval: Option<(ApprovalRequest, Choice)>,
 }
 
 impl View {
@@ -50,8 +62,9 @@ impl View {
         let t = ui.theme().clone();
         let (w, h) = (ui.width, ui.height);
         chrome::popup_background(&mut ui.canvas, &m.wallpaper.blurred, self.origin);
-        if let Some((id, allow_always)) = self.approval {
-            self.approval_view(ui, m, id, allow_always);
+        if let Some((req, choice)) = &mut self.approval {
+            let r = ui.rect();
+            self.clicked |= approval::card(ui, m, req, r, choice, Look::Notification);
             chrome::popup_frame(&mut ui.canvas);
             return;
         }
@@ -59,7 +72,22 @@ impl View {
         self.hovered = resp.hovered;
         self.clicked |= resp.clicked;
         apps::draw_tile(&mut ui.canvas, Rect::new(18, (h - 42) / 2, 42, 42), &self.color, self.icon);
-        let text_w = w - 76 - 36;
+        let mut text_w = w - 76 - 36;
+        // Who posted it, at the end of the title's line.
+        if let Some(from) = &self.from {
+            let font = ui.ctx.font(Font::Regular);
+            let from = ui.ctx.text.ellipsize(font, 12.0, from, (text_w / 2) as f32);
+            let fw = ui.measure(&from, Font::Regular, 12.0) as i32;
+            ui.label(
+                Rect::new(76 + text_w - fw, 16, fw + 2, 22),
+                &from,
+                Font::Regular,
+                12.0,
+                t.text_faint,
+                Align::Left,
+            );
+            text_w -= fw + 8;
+        }
         let font = ui.ctx.font(Font::Bold);
         let title = ui.ctx.text.ellipsize(font, 14.0, &self.title, text_w as f32);
         ui.label(Rect::new(76, 16, text_w, 22), &title, Font::Bold, 14.0, t.text, Align::Left);
@@ -69,30 +97,6 @@ impl View {
             ui.set_cursor(vui::Cursor::Hand);
         }
         chrome::popup_frame(&mut ui.canvas);
-    }
-
-    /// An approval request: what the agent wants to do, and the buttons.
-    fn approval_view(&mut self, ui: &mut Ui, m: &mut Model, id: u64, allow_always: bool) {
-        let t = ui.theme().clone();
-        let w = ui.width;
-        let h = ui.height;
-        let now = ui.now();
-        crate::agent::draw_presence(&mut ui.canvas, 38.0, 38.0, 13.0, &m.agent, now);
-        let used = crate::agent::approval_title(ui, Rect::new(68, 14, w - 86, 22), &self.title);
-        let dy = used - 22;
-        ui.paragraph(Rect::new(68, 38 + dy, w - 86, 44 - dy), &self.body, 12.5, t.text_dim);
-        let by = h - 44;
-        if allow_always {
-            ui.checkbox(Rect::new(14, by + 4, 130, 26), "Always allow", &mut self.always);
-        }
-        if ui.button(Rect::new(w - 192, by, 84, 32), "Deny") {
-            m.push(Action::AgentDecide { id, allow: false, always: false });
-            self.clicked = true;
-        }
-        if ui.primary_button(Rect::new(w - 100, by, 84, 32), "Allow") {
-            m.push(Action::AgentDecide { id, allow: true, always: self.always });
-            self.clicked = true;
-        }
     }
 }
 
@@ -105,6 +109,11 @@ struct Note {
 impl Note {
     fn height(&self) -> i32 {
         if self.view.approval.is_some() { APPROVAL_HEIGHT } else { HEIGHT }
+    }
+
+    /// The approval request it shows, if it is one.
+    fn approval_id(&self) -> Option<u64> {
+        self.view.approval.as_ref().map(|(r, _)| r.id)
     }
 }
 
@@ -125,7 +134,7 @@ impl Notifications {
 
     /// Shows an approval request from the agent (until it is answered).
     pub fn post_approval(&mut self, display: &Display, m: &Model, req: &ApprovalRequest) {
-        if self.notes.iter().any(|n| n.view.approval.is_some_and(|(id, _)| id == req.id)) {
+        if self.notes.iter().any(|n| n.approval_id() == Some(req.id)) {
             return;
         }
         let origin = self.origin_for(m.screen, self.notes.len(), APPROVAL_HEIGHT);
@@ -142,11 +151,11 @@ impl Notifications {
                     body: req.detail.clone(),
                     icon: Icon::Info,
                     color: String::new(),
+                    from: None,
                     origin,
                     hovered: false,
                     clicked: false,
-                    approval: Some((req.id, req.allow_always)),
-                    always: false,
+                    approval: Some((req.clone(), Choice::default())),
                 };
                 self.notes.push(Note { host, view, expires: u64::MAX });
             }
@@ -157,7 +166,7 @@ impl Notifications {
     /// Takes an answered or expired approval request away.
     pub fn remove_approval(&mut self, id: u64, screen: Rect) {
         let before = self.notes.len();
-        self.notes.retain(|n| n.view.approval.is_none_or(|(a, _)| a != id));
+        self.notes.retain(|n| n.approval_id() != Some(id));
         if self.notes.len() != before {
             self.relayout(screen);
         }
@@ -172,8 +181,8 @@ impl Notifications {
         }
     }
 
-    /// Shows a notification. `icon` is an icon name (see `vui::Icon::by_name`).
-    pub fn post(&mut self, display: &Display, m: &Model, title: &str, body: &str, icon: &str) {
+    /// Shows a notification from `sender`.
+    pub fn post(&mut self, display: &Display, m: &Model, title: &str, body: &str, sender: Sender) {
         if self.notes.len() >= MAX_SHOWN
             && let Some(i) = self.notes.iter().position(|n| n.view.approval.is_none())
         {
@@ -192,14 +201,13 @@ impl Notifications {
                 let view = View {
                     title: title.into(),
                     body: body.into(),
-                    // An installed application's id shows its own tile.
-                    icon: m.app(icon).map(apps::icon_for).or_else(|| Icon::by_name(icon)).unwrap_or(Icon::Info),
-                    color: icon.into(),
+                    icon: sender.tile.1,
+                    color: sender.tile.0.into(),
+                    from: sender.name.map(String::from),
                     origin,
                     hovered: false,
                     clicked: false,
                     approval: None,
-                    always: false,
                 };
                 self.notes.push(Note { host, view, expires: vrt::time::now_ns() + LIFETIME_NS });
             }

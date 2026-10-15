@@ -57,7 +57,7 @@ impl PlaybackStats {
 
     /// A picture of time `pts_us` was seen while the clock said `clock_us`.
     pub fn offset(&mut self, pts_us: i64, clock_us: i64) {
-        let d = (pts_us - clock_us).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let d = pts_us.saturating_sub(clock_us).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         self.offsets[self.next] = d;
         self.next = (self.next + 1) % OFFSETS;
         self.count = (self.count + 1).min(OFFSETS);
@@ -66,9 +66,14 @@ impl PlaybackStats {
     /// A frame drawn in `draw_ns`, of which copying the picture took
     /// `blit_ns`.
     pub fn drawn(&mut self, draw_ns: u64, blit_ns: u64) {
-        self.draw_ns += draw_ns;
-        self.blit_ns += blit_ns;
-        self.draws += 1;
+        self.draw_ns = self.draw_ns.saturating_add(draw_ns);
+        self.blit_ns = self.blit_ns.saturating_add(blit_ns);
+        self.draws = self.draws.saturating_add(1);
+    }
+
+    /// `n` pictures dropped (counted at most to `u32::MAX`).
+    pub fn add_dropped(&mut self, n: u32) {
+        self.dropped = self.dropped.saturating_add(n);
     }
 
     /// The mean and 95th percentile of the offsets' sizes (µs).
@@ -92,13 +97,14 @@ impl PlaybackStats {
     /// The line for the log, for the window ending at `now_ns`.
     pub fn line(&self, now_ns: u64) -> String {
         let secs = (now_ns.saturating_sub(self.started_ns) as f64 / 1e9).max(0.001);
-        let total = (self.shown + self.dropped).max(1);
+        let total = (self.shown as u64 + self.dropped as u64).max(1);
+        let dropped = self.dropped as u64;
         let mut line = format!(
             "{} pictures shown, {} dropped ({}.{}%), {} late",
             self.shown,
             self.dropped,
-            self.dropped * 100 / total,
-            self.dropped * 1000 / total % 10,
+            dropped * 100 / total,
+            dropped * 1000 / total % 10,
             self.late
         );
         if let Some((mean, p95)) = self.sync() {
@@ -139,6 +145,21 @@ mod tests {
             line,
             "238 pictures shown, 2 dropped (0.8%), 0 late, A/V offset mean +5 ms, p95 5 ms, 24 presents/s, draw 2.0 ms (blit 0.5 ms)"
         );
+    }
+
+    #[test]
+    fn hostile_times_and_counts_do_not_overflow() {
+        let mut s = PlaybackStats::new(0);
+        s.offset(i64::MIN, i64::MAX);
+        s.offset(i64::MAX, i64::MIN);
+        assert_eq!(s.sync(), Some(((i32::MIN as i64 + i32::MAX as i64) / 2, i32::MIN.unsigned_abs() as i64)));
+        s.shown = u32::MAX;
+        s.add_dropped(u32::MAX);
+        s.add_dropped(1);
+        assert_eq!(s.dropped, u32::MAX);
+        assert!(s.line(1).starts_with("4294967295 pictures shown, 4294967295 dropped (50.0%)"));
+        s.drawn(u64::MAX, u64::MAX);
+        s.drawn(1, 1);
     }
 
     #[test]

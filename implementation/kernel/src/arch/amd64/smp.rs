@@ -174,8 +174,19 @@ pub fn halt_others() {
 pub fn start_secondary_cpus(max_cpus: usize) -> usize {
     let platform = super::acpi::PLATFORM.expect();
     let bsp = apic::id();
-    let targets: alloc::vec::Vec<u32> =
-        platform.cpus.iter().map(|c| c.apic_id).filter(|&a| a != bsp).take(max_cpus.saturating_sub(1)).collect();
+    // xAPIC mode addresses APIC ids up to 255 only.
+    let reachable = |&a: &u32| apic::is_x2apic() || a <= 0xFF;
+    let unreachable = platform.cpus.iter().map(|c| c.apic_id).filter(|a| !reachable(a)).count();
+    if unreachable > 0 {
+        crate::kwarn!("smp: {} CPU(s) have APIC ids that xAPIC mode cannot address; they stay off", unreachable);
+    }
+    let targets: alloc::vec::Vec<u32> = platform
+        .cpus
+        .iter()
+        .map(|c| c.apic_id)
+        .filter(|&a| a != bsp && reachable(&a))
+        .take(max_cpus.saturating_sub(1))
+        .collect();
     if targets.is_empty() {
         return 0;
     }

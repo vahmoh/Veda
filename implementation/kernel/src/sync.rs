@@ -132,6 +132,26 @@ pub mod bkl {
     pub fn held_by_me() -> bool {
         LOCKED.load(Ordering::Relaxed) && OWNER.load(Ordering::Relaxed) == percpu::cpu_id_or_boot() + 1
     }
+
+    /// Lets the other CPUs into the kernel for a moment in the middle of a
+    /// long operation (committing, zeroing or copying many pages), so that
+    /// no system call holds the lock for a time a process chooses: releases
+    /// the lock, gives a CPU that waits for it the chance to take it, and
+    /// takes it again. Only between steps that keep no reference into state
+    /// that another CPU may change meanwhile, and with no other lock held
+    /// (a CPU in the kernel may wait for that one while holding this).
+    pub fn relax() {
+        release();
+        // The lock is not fair: taken back at once, it would usually stay
+        // here.
+        for _ in 0..256 {
+            if LOCKED.load(Ordering::Relaxed) {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        acquire();
+    }
 }
 
 /// A value initialised exactly once during boot, then read-only.

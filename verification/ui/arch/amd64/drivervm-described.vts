@@ -8,7 +8,10 @@
 # bus, its interrupt line (GSI 10) and the _DSM that HID over I2C asks for
 # its descriptor's address. devmgr reads it from the PC's tables; the
 # monitor describes it in the guest's, the line given to the guest too; and
-# Linux's ACPI finds it there, its AML loaded without errors.
+# Linux's ACPI finds it there, its AML loaded without errors. The virtio GPU
+# is in QEMU's tables only with it: the script asks for it (and is skipped
+# where QEMU has none).
+gpu on
 acpi-table touchpad
 boot-cmdline "drivervm.run=pcitest drivervm.poweroff"
 fail-on "PANIC"

@@ -4,6 +4,10 @@
 //! The playback engine: a background thread that loads the library,
 //! decodes the current track and streams it to the audio service.
 //!
+//! The stream outlives the audio service (`videos_core::output`): while the
+//! service is away the track waits where it was heard last, and goes on
+//! from there in a new stream when the service is back.
+//!
 //! The UI sends [`Command`]s and reads [`Status`]; the engine signals the
 //! `notify` event when something the UI shows changed (a track loaded or
 //! ended, the library is ready). Decoded audio is also appended to a
@@ -18,7 +22,9 @@ use alloc::vec::Vec;
 
 use vabi::{WaitItem, signals};
 use vaudio::source::Source;
-use vproto::audio::{OutputStream, StreamSpec, audio, ring};
+use vfiles::format::duration as format_time;
+use videos_core::output::{Kept, Output};
+use vproto::audio::{OutputStream, ring};
 use vproto::fs::vfs;
 use vrt::object::Event;
 use vrt::println;
@@ -33,6 +39,8 @@ const CHUNK: usize = 4096;
 const BUFFER_MS: u32 = 700;
 /// Frames of mono history kept for the visualiser.
 const HISTORY: usize = 1 << 16;
+/// How often the position is published while playing (ns).
+const TICK_NS: u64 = 40_000_000;
 
 /// Requests from the UI.
 #[derive(Debug, Clone)]
@@ -98,6 +106,8 @@ pub struct Status {
     pub error: String,
     /// Output device name ("none" without sound hardware).
     pub device: String,
+    /// A stream of the audio service is open (not while it restarts).
+    pub output: bool,
     /// The id of the last `Load` command handled.
     pub load_id: u32,
     /// The id of the last `Seek` command handled.
@@ -203,6 +213,7 @@ impl Shared {
                 ended: 0,
                 error: String::new(),
                 device: String::new(),
+                output: false,
                 load_id: 0,
                 seek_id: 0,
             }),
@@ -241,15 +252,20 @@ impl AsRef<[u8]> for FileData {
 struct Engine {
     shared: Arc<Shared>,
     vfs: Option<vfs::Client>,
-    audio: Option<audio::Client>,
-    stream: Option<OutputStream>,
+    output: Output,
+    /// Whether there was an output, as last published, and its losses as
+    /// last seen.
+    published_output: Option<bool>,
+    losses: u32,
     source: Option<Source<FileData>>,
     playing: bool,
     eof: bool,
     /// Stream "played" count that corresponds to `track_base`.
     stream_base: u64,
     track_base: u64,
-    volume: f32,
+    /// The track's position (frames) as last heard: where it goes on from
+    /// in a new stream.
+    position: u64,
     buf: Vec<i16>,
     /// Title of the loaded track (for the log).
     title: String,
@@ -289,61 +305,65 @@ impl Engine {
         let _ = self.shared.notify.signal();
     }
 
-    /// The stream's current "played" counter.
-    fn stream_played(&self) -> u64 {
-        self.stream.as_ref().map(|s| s.played_now()).unwrap_or(0)
-    }
-
-    fn track_position(&self) -> u64 {
+    /// The track's position (frames): what the stream played of it, or
+    /// without a stream, where it was heard last.
+    fn track_position(&mut self) -> u64 {
         let frames = self.source.as_ref().map(|s| s.frames()).unwrap_or(0);
-        (self.track_base + self.stream_played().saturating_sub(self.stream_base)).min(frames)
+        if let Some(s) = self.output.stream() {
+            self.position = self.track_base + s.played_now().saturating_sub(self.stream_base);
+        }
+        self.position = self.position.min(frames);
+        self.position
     }
 
-    /// Makes sure a stream at `rate` exists and is empty; returns false if
-    /// the audio service is unreachable.
-    fn prepare_stream(&mut self, rate: u32) -> bool {
-        if self.audio.is_none() && service_registered(audio::NAME) {
-            self.audio = vproto::connect(audio::NAME).ok().map(audio::Client::new);
+    /// Makes sure a stream at `rate` exists (if the audio service is
+    /// there) and is empty.
+    fn prepare_stream(&mut self, rate: u32) {
+        self.output.set_rate(rate);
+        match self.output.keep(vrt::time::now_ns()) {
+            Kept::Opened => self.stream_base = 0,
+            Kept::Same => self.stream_base = self.output.flush().unwrap_or(0),
+            Kept::None => {}
         }
-        let Some(audio) = &self.audio else { return false };
-        if let Ok(st) = audio.status() {
-            let device = st.device.clone();
-            self.set_status(|s| s.device = device);
+        self.publish_output();
+    }
+
+    /// A new stream (the audio service came back): the track goes on in it
+    /// from where it was heard last.
+    fn renewed(&mut self) {
+        let at = self.position;
+        let Some(src) = &mut self.source else { return };
+        if self.output.losses() != self.losses {
+            self.losses = self.output.losses();
+            println!("sound output back ({})", self.output.device());
         }
-        if let Some(s) = &self.stream {
-            if s.rate() == rate {
-                return match audio.flush(s.id) {
-                    Ok(Ok(pos)) => {
-                        self.stream_base = pos;
-                        s.ring().set_producer_flags(0);
-                        true
-                    }
-                    _ => false,
-                };
-            }
-            let _ = audio.close(s.id);
-            self.stream = None;
+        let at = at.min(src.frames());
+        src.seek(at);
+        self.track_base = at;
+        self.stream_base = 0;
+        self.eof = false;
+        self.shared.viz.lock().reset(at);
+        self.fill();
+    }
+
+    /// Says whether there is an output, and which device, when that
+    /// changes.
+    fn publish_output(&mut self) {
+        let open = self.output.stream().is_some();
+        if self.published_output == Some(open) {
+            return;
         }
-        let mut spec = StreamSpec::stereo(rate, BUFFER_MS, "Music");
-        spec.paused = true;
-        spec.volume = self.volume;
-        match OutputStream::open(audio, spec) {
-            Ok(s) => {
-                self.stream_base = 0;
-                self.stream = Some(s);
-                true
-            }
-            Err(e) => {
-                println!("cannot open an audio stream: {:?}", e);
-                false
-            }
-        }
+        self.published_output = Some(open);
+        let device = String::from(self.output.device());
+        self.set_status(|s| {
+            s.output = open;
+            s.device = device;
+        });
+        let _ = self.shared.notify.signal();
     }
 
     fn set_paused(&mut self, paused: bool) {
-        if let (Some(a), Some(s)) = (&self.audio, &self.stream) {
-            let _ = a.set_paused(s.id, paused);
-        }
+        self.output.set_paused(paused);
     }
 
     fn load(&mut self, path: String, play: bool, start_ms: u64) {
@@ -356,14 +376,15 @@ impl Engine {
             Err(e) => return self.fail(alloc::format!("cannot play {}: {}", path, e)),
         };
         let rate = src.rate();
-        let start = (start_ms * rate as u64 / 1000).min(src.frames());
+        let start = (start_ms.saturating_mul(rate as u64) / 1000).min(src.frames());
         src.seek(start);
         // Pause the old stream first so its tail does not keep playing.
         self.set_paused(true);
-        if !self.prepare_stream(rate) {
-            return self.fail("the audio service is unavailable".into());
-        }
+        // Without the audio service the track waits, and plays once it is
+        // back.
+        self.prepare_stream(rate);
         self.track_base = start;
+        self.position = start;
         self.eof = false;
         self.shared.viz.lock().reset(start);
         let frames = src.frames();
@@ -377,7 +398,7 @@ impl Engine {
             src.format().name(),
             rate,
             src.file_channels(),
-            library::format_time(frames * 1000 / rate as u64)
+            format_time(frames * 1000 / rate as u64)
         );
         self.source = Some(src);
         self.playing = play;
@@ -399,22 +420,21 @@ impl Engine {
     }
 
     /// The current track position as `m:ss` (for the log).
-    fn position_text(&self) -> String {
+    fn position_text(&mut self) -> String {
         let rate = self.source.as_ref().map(|s| s.rate()).unwrap_or(1).max(1);
-        library::format_time(self.track_position() * 1000 / rate as u64)
+        format_time(self.track_position() * 1000 / rate as u64)
     }
 
     fn seek(&mut self, ms: u64) {
         let Some(src) = &mut self.source else { return };
-        let target = (ms * src.rate() as u64 / 1000).min(src.frames().saturating_sub(1));
-        println!("seek to {}", library::format_time(target * 1000 / src.rate().max(1) as u64));
+        let target = (ms.saturating_mul(src.rate() as u64) / 1000).min(src.frames().saturating_sub(1));
+        println!("seek to {}", format_time(target * 1000 / src.rate().max(1) as u64));
         src.seek(target);
-        let (Some(a), Some(s)) = (&self.audio, &self.stream) else { return };
-        if let Ok(Ok(pos)) = a.flush(s.id) {
+        if let Some(pos) = self.output.flush() {
             self.stream_base = pos;
         }
-        s.ring().set_producer_flags(0);
         self.track_base = target;
+        self.position = target;
         self.eof = false;
         self.shared.viz.lock().reset(target);
         self.fill();
@@ -422,7 +442,7 @@ impl Engine {
 
     /// Decodes into the stream until its ring is full.
     fn fill(&mut self) {
-        let (Some(stream), Some(src)) = (&self.stream, &mut self.source) else { return };
+        let (Some(stream), Some(src)) = (self.output.stream(), &mut self.source) else { return };
         if self.eof {
             return;
         }
@@ -454,7 +474,7 @@ impl Engine {
             }
             Command::Play => {
                 if self.source.is_some() && !self.playing {
-                    if self.eof && self.stream.as_ref().is_some_and(drained) {
+                    if self.eof && self.output.stream().is_some_and(drained) {
                         // Finished: play again from the start.
                         self.seek(0);
                     }
@@ -483,12 +503,7 @@ impl Engine {
                     s.seek_id = id;
                 });
             }
-            Command::Volume(v) => {
-                self.volume = v.clamp(0.0, 1.0);
-                if let (Some(a), Some(s)) = (&self.audio, &self.stream) {
-                    let _ = a.set_volume(s.id, self.volume);
-                }
-            }
+            Command::Volume(v) => self.output.set_volume(v.clamp(0.0, 1.0)),
             Command::AddFile { path, play } => {
                 let known = self.shared.library.lock().tracks.iter().any(|t| t.path == path);
                 if !known {
@@ -544,7 +559,7 @@ impl Engine {
             }
         }
         if initial {
-            println!("library: {} track(s) in {}", tracks.len(), library::MUSIC_DIR);
+            println!("library: {} track(s) in {}", tracks.len(), library::music_dir());
         } else {
             println!("library updated: {} track(s)", tracks.len());
         }
@@ -562,17 +577,26 @@ impl Engine {
         self.rescan(true);
         loop {
             let now = vrt::time::now_ns();
-            let deadline = if self.playing { now + 40_000_000 } else { vabi::DEADLINE_INFINITE };
-            let mut items = [
-                WaitItem { handle: self.shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() },
-                WaitItem {
-                    handle: self.stream.as_ref().map(|s| s.event().raw()).unwrap_or(self.shared.wake.raw()),
-                    signals: signals::SIGNALED,
-                    ..Default::default()
-                },
-            ];
+            let mut deadline = if self.playing { now + TICK_NS } else { vabi::DEADLINE_INFINITE };
+            // Without a stream for the track loaded: the output is tried again.
+            if self.source.is_some()
+                && let Some(at) = self.output.retry_at()
+            {
+                deadline = deadline.min(at.max(now + TICK_NS));
+            }
+            let mut items =
+                vec![WaitItem { handle: self.shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() }];
+            self.output.wait_items(&mut items);
             let _ = vrt::object::wait_many(&mut items, deadline);
             let _ = self.shared.wake.clear();
+            if let Some(s) = self.output.stream() {
+                let _ = s.event().clear();
+            }
+            self.output.observe();
+            if self.source.is_some() && self.output.keep(vrt::time::now_ns()) == Kept::Opened {
+                self.renewed();
+            }
+            self.publish_output();
             loop {
                 let next = self.shared.commands.lock().pop_front();
                 match next {
@@ -586,7 +610,7 @@ impl Engine {
             // Publish the position; detect the end of the track.
             let pos = self.track_position();
             let now = vrt::time::now_ns();
-            let finished = self.playing && self.eof && self.stream.as_ref().is_some_and(drained);
+            let finished = self.playing && self.eof && self.output.stream().is_some_and(drained);
             if finished {
                 println!("finished {}", self.title);
                 self.playing = false;
@@ -618,14 +642,15 @@ pub fn start(shared: Arc<Shared>, volume: f32) -> bool {
             let mut e = Engine {
                 shared,
                 vfs: None,
-                audio: None,
-                stream: None,
+                output: Output::new("Music", 44_100, BUFFER_MS, volume.clamp(0.0, 1.0), true),
+                published_output: None,
+                losses: 0,
                 source: None,
                 playing: false,
                 eof: false,
                 stream_base: 0,
                 track_base: 0,
-                volume,
+                position: 0,
                 buf: vec![0; CHUNK * 2],
                 title: String::new(),
                 listing: Vec::new(),
@@ -640,19 +665,4 @@ pub fn start(shared: Arc<Shared>, volume: f32) -> bool {
 /// 10 ms, the resolution of the service's position reports).
 fn drained(s: &OutputStream) -> bool {
     s.queued() == 0 && s.played_now() + (s.rate() / 100) as u64 >= s.written()
-}
-
-/// True once `name` is registered (waits up to two seconds, since the
-/// registry would otherwise queue our connection forever when the service
-/// does not exist).
-fn service_registered(name: &str) -> bool {
-    let deadline = vrt::time::now_ns() + 2_000_000_000;
-    loop {
-        let found =
-            vproto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false);
-        if found || vrt::time::now_ns() > deadline {
-            return found;
-        }
-        vrt::time::sleep(vrt::time::Duration::from_millis(100));
-    }
 }

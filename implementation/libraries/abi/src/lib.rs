@@ -68,6 +68,11 @@ pub const CHANNEL_MAX_BYTES: usize = 64 * 1024;
 pub const CHANNEL_MAX_HANDLES: usize = 64;
 /// Maximum number of items in one `object_wait_many` call.
 pub const WAIT_MANY_MAX: usize = 1024;
+/// Maximum number of registrations a port holds: those waiting, and those
+/// done whose packets are not yet taken (`object_wait_async`).
+pub const PORT_MAX_REGISTRATIONS: usize = 1 << 16;
+/// Maximum number of packets one `port_wait` call takes.
+pub const PORT_WAIT_MAX: usize = 256;
 /// Maximum length of process and thread names.
 pub const NAME_MAX: usize = 32;
 
@@ -114,7 +119,10 @@ pub mod nr {
     // --- channels -----------------------------------------------------
     /// `channel_create(out: *mut [RawHandle; 2])`.
     pub const CHANNEL_CREATE: usize = 20;
-    /// `channel_write(h, bytes, n_bytes, handles, n_handles)`.
+    /// `channel_write(h, bytes, n_bytes, handles, n_handles)`. The handles
+    /// are consumed once their list is read, closed if the write fails.
+    /// Neither end of the channel may travel on it, nor a channel that
+    /// could reach it through queued messages (`NotSupported`).
     pub const CHANNEL_WRITE: usize = 21;
     /// `channel_read(h, bytes, bytes_cap, handles, handles_cap, out: *mut [u32; 2])`.
     pub const CHANNEL_READ: usize = 22;
@@ -179,6 +187,8 @@ pub mod nr {
     /// `process_create(name, name_len) -> h`.
     pub const PROCESS_CREATE: usize = 60;
     /// `process_start(process, thread, entry, stack, arg_handle, arg1)`.
+    /// The bootstrap handle `arg_handle` is consumed, closed if the start
+    /// fails.
     pub const PROCESS_START: usize = 61;
     /// `process_exit(code) -> !`.
     pub const PROCESS_EXIT: usize = 62;
@@ -230,11 +240,13 @@ pub mod nr {
     pub const IRQ_CREATE: usize = 84;
     /// `irq_ack(h)`: re-arm an interrupt after handling it.
     pub const IRQ_ACK: usize = 85;
-    /// `msi_create(resource, device, out: *mut MsiInfo) -> h`: an MSI of
-    /// PCI function `device` (its requester id: bus << 8 | device << 3 |
-    /// function, on segment 0), which the resource must name
+    /// `msi_create(resource, device, limit, out: *mut MsiInfo) -> h`: an
+    /// MSI of PCI function `device` (its requester id: bus << 8 | device <<
+    /// 3 | function, on segment 0), which the resource must name
     /// ([`resource_kind::PCI`](crate::resource_kind::PCI)). When the IOMMU
-    /// remaps interrupts, only that function can raise it.
+    /// remaps interrupts, only that function can raise it. `LimitReached`
+    /// if the function has `limit` MSIs already (one whose last handle is
+    /// closed no longer counts), or no vector is free.
     pub const MSI_CREATE: usize = 86;
     /// `irq_create_software(flags, ended) -> h`: an interrupt the caller
     /// raises (`irq_raise`), for the lines of an interrupt controller it
@@ -296,6 +308,27 @@ pub mod nr {
     /// then; `irq_ack` unmasks it too). Binding it again moves it; vector
     /// 0 unbinds it (it signals again).
     pub const VCPU_BIND_INTERRUPT: usize = 98;
+    /// `port_create() -> h`: a port, where the signals of many objects are
+    /// waited for at once ([`super::PortPacket`]). Its handle cannot be
+    /// transferred: what it hears of is its process's.
+    pub const PORT_CREATE: usize = 99;
+    /// `object_wait_async(h, port, key, signals)`: once any of `signals`
+    /// is active on `h`'s object (at once, if one is), the port gets a
+    /// packet with `key` and the signals active then, and the
+    /// registration is done: one packet each, registered again for more.
+    /// `h` needs `WAIT`, the port `WRITE`. `LimitReached` if the port holds
+    /// [`super::PORT_MAX_REGISTRATIONS`] already; a port cannot be waited
+    /// for so (`NotSupported`).
+    pub const OBJECT_WAIT_ASYNC: usize = 100;
+    /// `object_wait_async_cancel(h, port, key)`: undoes the registrations
+    /// on `h`'s object with `key`, and drops the packets of `key` the port
+    /// holds. It is not an error that there are none.
+    pub const OBJECT_WAIT_ASYNC_CANCEL: usize = 101;
+    /// `port_wait(port, packets: *mut PortPacket, max, deadline) -> count`:
+    /// waits until the port holds a packet, or `deadline`; takes up to
+    /// `max` (at most [`super::PORT_WAIT_MAX`]), oldest first. The port
+    /// needs `READ`.
+    pub const PORT_WAIT: usize = 102;
 }
 
 /// Error codes returned (negated) by system calls.
@@ -506,6 +539,17 @@ pub mod signals {
     pub const USER_3: u32 = 1 << 27;
 }
 
+/// What a port says of a registration that is done (`port_wait`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PortPacket {
+    /// The key it was registered with.
+    pub key: u64,
+    /// The object's signals then.
+    pub observed: u32,
+    pub _reserved: u32,
+}
+
 /// One entry of an `object_wait_many` call.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -562,6 +606,7 @@ pub enum ObjectType {
     Socket = 9,
     Guest = 10,
     Vcpu = 11,
+    Port = 12,
 }
 
 /// Topics for `object_info`.

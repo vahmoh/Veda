@@ -11,14 +11,14 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use interceptor_game::career::Units;
+use interceptor_game::career::{self, Units};
 use interceptor_game::driver::Role;
 use interceptor_game::game::Game;
 use interceptor_game::pursuit::{self, Pursuit, State};
 use interceptor_game::session::{self, Mode, Phase, Session};
 use interceptor_game::world::World;
 use num_traits::Float;
-use vgfx::{Align, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
+use vgfx::{Align, Bitmap, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
 
 use crate::paint::{self, ACCENT, AMBER, DIM, FAINT, Fonts, GREEN, PANEL, RED, WHITE, centered, rect};
 use crate::perf::{HISTORY, Perf};
@@ -106,7 +106,7 @@ pub fn dashboard(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game, units:
 
     // The siren, above the nitrous.
     if game.player().siren {
-        let blink = (game.clock * 3.2).fract() < 0.5;
+        let blink = (game.clock() * 3.2) % 1.0 < 0.5;
         let (lx, ly) = (cx - r - 6.0 * s, cy - r - 2.0 * s);
         c.fill_rounded_rect(rect(lx - 70.0 * s, ly - 16.0 * s, 70.0 * s, 24.0 * s), 6.0 * s, Color(0x9A06090F));
         c.fill_circle(lx - 56.0 * s, ly - 4.0 * s, 5.0 * s, if blink { RED } else { ACCENT });
@@ -270,14 +270,10 @@ fn pursuit(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game, chase: &Purs
     // The time, or the time left (urgent at the end).
     let (clock, color) = match left {
         Some(l) => {
-            let t = l.ceil() as u32;
             let urgent = l < 20.0 && (l * 2.0).fract() < 0.5;
-            (format!("{}:{:02} LEFT", t / 60, t % 60), if urgent { RED } else { AMBER })
+            (format!("{} LEFT", career::minutes(l.ceil())), if urgent { RED } else { AMBER })
         }
-        None => {
-            let t = chase.time as u32;
-            (format!("{}:{:02}", t / 60, t % 60), DIM)
-        }
+        None => (career::minutes(chase.time), DIM),
     };
     centered(c, text, f.mono_bold, 12.0 * s, cx, py + 22.0 * s, &clock, color);
     // Its car's integrity.
@@ -323,12 +319,18 @@ fn pursuit(c: &mut Canvas, text: &mut Text, f: &Fonts, game: &Game, chase: &Purs
     }
 }
 
-/// The map of Veda Bay: the loop, and the cars that matter on it.
+/// The map of Veda Bay: the loop, and the cars that matter on it. Its
+/// panel and the road change only with the size it is drawn at, so they
+/// are drawn once into a picture of their own, which each frame draws with
+/// the cars over it.
 pub struct MiniMap {
     /// The road's centre line every 16 m, and its extent.
     points: Vec<(f32, f32)>,
     min: (f32, f32),
     max: (f32, f32),
+    /// The panel and the road as last drawn, for a map of that size at
+    /// that scale.
+    drawn: Option<((i32, i32, u32), Bitmap)>,
 }
 
 impl MiniMap {
@@ -337,18 +339,26 @@ impl MiniMap {
         let fold =
             |f: fn(f32, f32) -> f32, init: f32| points.iter().fold((init, init), |(a, b), &(x, z)| (f(a, x), f(b, z)));
         let (min, max) = (fold(f32::min, f32::MAX), fold(f32::max, f32::MIN));
-        MiniMap { points, min, max }
+        MiniMap { points, min, max, drawn: None }
     }
 
-    /// Draws it in `r`.
-    fn draw(&self, c: &mut Canvas, r: Rect, game: &Game, chase: Option<&Pursuit>, clock: f32) {
-        let s = paint::scale(c.height());
-        c.fill_rounded_rect(r, 12.0 * s, PANEL);
+    /// Where a point of the world `(x, z)` is on a map `w` x `h` at scale
+    /// `s` whose top left corner is at `(x0, y0)`.
+    fn mapping(&self, x0: f32, y0: f32, w: f32, h: f32, s: f32) -> impl Fn(f32, f32) -> (f32, f32) + use<> {
         let pad = 14.0 * s;
         let (ex, ez) = (self.max.0 - self.min.0, self.max.1 - self.min.1);
-        let k = ((r.w as f32 - 2.0 * pad) / ex).min((r.h as f32 - 2.0 * pad) / ez);
-        let (ox, oy) = (r.x as f32 + (r.w as f32 - ex * k) * 0.5, r.y as f32 + (r.h as f32 - ez * k) * 0.5);
-        let at = |x: f32, z: f32| (ox + (x - self.min.0) * k, oy + (z - self.min.1) * k);
+        let k = ((w - 2.0 * pad) / ex).min((h - 2.0 * pad) / ez);
+        let (ox, oy) = (x0 + (w - ex * k) * 0.5, y0 + (h - ez * k) * 0.5);
+        let min = self.min;
+        move |x: f32, z: f32| (ox + (x - min.0) * k, oy + (z - min.1) * k)
+    }
+
+    /// The panel and the road, `w` x `h` at scale `s`.
+    fn paint(&self, w: i32, h: i32, s: f32) -> Bitmap {
+        let mut b = Bitmap::new(w, h);
+        let mut c = Canvas::for_bitmap(&mut b);
+        c.fill_rounded_rect(Rect::new(0, 0, w, h), 12.0 * s, PANEL);
+        let at = self.mapping(0.0, 0.0, w as f32, h as f32, s);
         let mut road = Path::new();
         for (i, &(x, z)) in self.points.iter().enumerate() {
             let (px, py) = at(x, z);
@@ -363,6 +373,20 @@ impl MiniMap {
         let thin = StrokeStyle { width: 2.2 * s, ..wide };
         c.stroke_path(&road, &wide, Color(0x60000000));
         c.stroke_path(&road, &thin, Color(0xB0C8D2E0));
+        b
+    }
+
+    /// Draws it in `r` (`clock` the seconds its marks pulse by).
+    fn draw(&mut self, c: &mut Canvas, r: Rect, game: &Game, chase: Option<&Pursuit>, clock: f64) {
+        let s = paint::scale(c.height());
+        let size = (r.w, r.h, s.to_bits());
+        if self.drawn.as_ref().is_none_or(|d| d.0 != size) {
+            self.drawn = Some((size, self.paint(r.w, r.h, s)));
+        }
+        if let Some((_, panel)) = &self.drawn {
+            c.draw_bitmap(panel, r.x, r.y, 255);
+        }
+        let at = self.mapping(r.x as f32, r.y as f32, r.w as f32, r.h as f32, s);
         // The other police, the suspect (pulsing), and the player.
         for (i, car) in game.cars.iter().enumerate() {
             if i != game.player && matches!(car.role, Role::Police(_)) {
@@ -370,10 +394,10 @@ impl MiniMap {
                 c.fill_circle(px, py, 3.5 * s, ACCENT);
             }
         }
-        if let Some(chase) = chase.filter(|c| c.on()) {
-            let v = &game.cars[chase.suspect].vehicle;
+        if let Some(suspect) = chase.filter(|c| c.on()).and_then(|chase| game.car(chase.suspect)) {
+            let v = &suspect.vehicle;
             let (px, py) = at(v.pos.x, v.pos.z);
-            let pulse = (clock * 3.0).fract();
+            let pulse = ((clock * 3.0) % 1.0) as f32;
             c.fill_circle(px, py, (4.0 + 8.0 * pulse) * s, RED.fade(0.5 * (1.0 - pulse)));
             c.fill_circle(px, py, 4.5 * s, RED);
         }
@@ -427,8 +451,16 @@ fn countdown(c: &mut Canvas, text: &mut Text, f: &Fonts, label: &str, t: f32) {
     centered(c, text, f.bold, 110.0 * s * pop, w * 0.5, h * 0.42, label, color.fade(alpha));
 }
 
-/// Everything drawn over play.
-pub fn play(c: &mut Canvas, text: &mut Text, f: &Fonts, session: &Session, map: &MiniMap, units: Units, clock: f32) {
+/// Everything drawn over play (`clock` the seconds its marks pulse by).
+pub fn play(
+    c: &mut Canvas,
+    text: &mut Text,
+    f: &Fonts,
+    session: &Session,
+    map: &mut MiniMap,
+    units: Units,
+    clock: f64,
+) {
     let game = &session.game;
     let s = paint::scale(c.height());
     let w = c.width() as f32;

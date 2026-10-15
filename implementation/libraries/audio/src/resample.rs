@@ -199,6 +199,12 @@ impl Resampler {
         self.buf.extend_from_slice(&input[..n]);
     }
 
+    /// Appends `frames` frames of silence (to play out what the filter
+    /// holds at the end of a stream).
+    pub fn push_silence(&mut self, frames: usize) {
+        self.buf.resize(self.buf.len() + frames * self.channels, 0);
+    }
+
     /// Produces up to `out.len() / channels` frames; returns the number of
     /// frames written.
     pub fn pull(&mut self, out: &mut [i16]) -> usize {
@@ -223,7 +229,13 @@ impl Resampler {
                 let start = (self.newest + 1 - taps) * ch;
                 let x = &self.buf[start..start + taps * ch];
                 let o = &mut out[produced * ch..produced * ch + ch];
-                if ch == 2 {
+                if ch == 1 {
+                    let mut acc = 0i32;
+                    for (k, &v) in c.iter().zip(x) {
+                        acc += *k as i32 * v as i32;
+                    }
+                    o[0] = ((acc + (1 << 13)) >> 14).clamp(-32768, 32767) as i16;
+                } else if ch == 2 {
                     let (mut l, mut r) = (0i32, 0i32);
                     for (k, f) in c.iter().zip(x.as_chunks::<2>().0) {
                         l += *k as i32 * f[0] as i32;
@@ -434,6 +446,21 @@ mod tests {
             assert_eq!(r.pull(&mut out), want);
             assert_eq!(r.input_needed(0), 0);
         }
+    }
+
+    #[test]
+    fn every_channel_count_filters_alike() {
+        // The mono, stereo and general paths compute the same sums.
+        let mono = sine(16_000, 440.0, 4_000, 1);
+        let three: Vec<i16> = mono.iter().flat_map(|&s| [s, s / 2, -s]).collect();
+        let one = Resampler::process_all(16_000, 48_000, 1, &mono);
+        let many = Resampler::process_all(16_000, 48_000, 3, &three);
+        assert_eq!(many.len(), one.len() * 3);
+        assert!(many.chunks(3).zip(&one).all(|(f, &s)| f[0] == s));
+        let mut r = Resampler::new(48_000, 16_000, 1);
+        r.push(&mono);
+        r.push_silence(r.delay_frames());
+        assert_eq!(r.buffered(), mono.len() + r.delay_frames());
     }
 
     #[test]

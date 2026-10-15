@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A tiny client for the QEMU Machine Protocol (QMP), used to automate a
-//! running virtual machine: screenshots, keyboard/mouse input, shutdown.
+//! running virtual machine: screenshots, keyboard/mouse input, shutdown;
+//! and what QEMU's input takes (its key codes and buttons, the keys that
+//! type a character), which scripts are checked against before they run.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -19,16 +21,23 @@ pub struct Qmp {
 }
 
 impl Qmp {
-    /// Connects to QEMU's QMP server at its socket, retrying until
+    /// Connects to QEMU's QMP server at its socket, trying again until
     /// `timeout` expires (QEMU needs a moment to open the socket after
-    /// starting).
-    pub fn connect(socket: &Path, timeout: Duration) -> Result<Self> {
+    /// starting), but not once `stopped` says why QEMU is gone.
+    pub fn connect(socket: &Path, timeout: Duration, mut stopped: impl FnMut() -> Option<String>) -> Result<Self> {
         let start = Instant::now();
         let stream = loop {
             match UnixStream::connect(socket) {
                 Ok(s) => break s,
-                Err(e) if start.elapsed() > timeout => return Err(format!("cannot connect to QMP: {e}")),
-                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+                Err(e) => {
+                    if let Some(why) = stopped() {
+                        return Err(format!("{why} before its QMP socket opened"));
+                    }
+                    if start.elapsed() > timeout {
+                        return Err(format!("cannot connect to QMP at {}: {e}", socket.display()));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
             }
         };
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
@@ -90,50 +99,15 @@ impl Qmp {
         self.execute("send-key", json!({ "keys": keys })).map(|_| ())
     }
 
-    /// Types ASCII text by sending one key press per character.
+    /// Types `text` by sending the keys of each character ([`keys_for`]).
+    /// A character no key types is an error, which does not show the text
+    /// (it may be a secret).
     pub fn type_text(&mut self, text: &str) -> Result {
+        if text.chars().any(|c| keys_for(c).is_none()) {
+            return Err("the text has a character no key types".into());
+        }
         for c in text.chars() {
-            let combo = match c {
-                'a'..='z' | '0'..='9' => c.to_string(),
-                'A'..='Z' => format!("shift-{}", c.to_ascii_lowercase()),
-                ' ' => "spc".into(),
-                '\n' => "ret".into(),
-                '.' => "dot".into(),
-                ',' => "comma".into(),
-                '-' => "minus".into(),
-                '/' => "slash".into(),
-                '!' => "shift-1".into(),
-                '?' => "shift-slash".into(),
-                ':' => "shift-semicolon".into(),
-                ';' => "semicolon".into(),
-                '\'' => "apostrophe".into(),
-                '(' => "shift-9".into(),
-                ')' => "shift-0".into(),
-                '\t' => "tab".into(),
-                '=' => "equal".into(),
-                '+' => "shift-equal".into(),
-                '_' => "shift-minus".into(),
-                '[' => "bracket_left".into(),
-                ']' => "bracket_right".into(),
-                '{' => "shift-bracket_left".into(),
-                '}' => "shift-bracket_right".into(),
-                '\\' => "backslash".into(),
-                '|' => "shift-backslash".into(),
-                '"' => "shift-apostrophe".into(),
-                '<' => "shift-comma".into(),
-                '>' => "shift-dot".into(),
-                '`' => "grave_accent".into(),
-                '~' => "shift-grave_accent".into(),
-                '@' => "shift-2".into(),
-                '#' => "shift-3".into(),
-                '$' => "shift-4".into(),
-                '%' => "shift-5".into(),
-                '^' => "shift-6".into(),
-                '&' => "shift-7".into(),
-                '*' => "shift-8".into(),
-                _ => continue,
-            };
-            self.send_keys(&combo)?;
+            self.send_keys(&keys_for(c).unwrap_or_default())?;
             std::thread::sleep(Duration::from_millis(30));
         }
         Ok(())
@@ -150,7 +124,7 @@ impl Qmp {
         self.execute("input-send-event", json!({ "events": events })).map(|_| ())
     }
 
-    /// Presses or releases a mouse button (`left`, `right`, `middle`).
+    /// Presses or releases a mouse button (one of [`BUTTONS`]).
     pub fn mouse_button(&mut self, button: &str, down: bool) -> Result {
         let event = json!({ "type": "btn", "data": { "button": button, "down": down } });
         self.execute("input-send-event", json!({ "events": [event] })).map(|_| ())
@@ -165,6 +139,230 @@ impl Qmp {
     pub fn quit(&mut self) {
         let _ = self.execute("quit", json!({}));
     }
+}
+
+/// QEMU's key codes (`QKeyCode` in its `qapi/ui.json`), the names the
+/// keyboard's commands take.
+pub const KEY_CODES: &[&str] = &[
+    "unmapped",
+    "shift",
+    "shift_r",
+    "alt",
+    "alt_r",
+    "ctrl",
+    "ctrl_r",
+    "menu",
+    "esc",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "0",
+    "minus",
+    "equal",
+    "backspace",
+    "tab",
+    "q",
+    "w",
+    "e",
+    "r",
+    "t",
+    "y",
+    "u",
+    "i",
+    "o",
+    "p",
+    "bracket_left",
+    "bracket_right",
+    "ret",
+    "a",
+    "s",
+    "d",
+    "f",
+    "g",
+    "h",
+    "j",
+    "k",
+    "l",
+    "semicolon",
+    "apostrophe",
+    "grave_accent",
+    "backslash",
+    "z",
+    "x",
+    "c",
+    "v",
+    "b",
+    "n",
+    "m",
+    "comma",
+    "dot",
+    "slash",
+    "asterisk",
+    "spc",
+    "caps_lock",
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "num_lock",
+    "scroll_lock",
+    "kp_divide",
+    "kp_multiply",
+    "kp_subtract",
+    "kp_add",
+    "kp_enter",
+    "kp_decimal",
+    "sysrq",
+    "kp_0",
+    "kp_1",
+    "kp_2",
+    "kp_3",
+    "kp_4",
+    "kp_5",
+    "kp_6",
+    "kp_7",
+    "kp_8",
+    "kp_9",
+    "less",
+    "f11",
+    "f12",
+    "print",
+    "home",
+    "pgup",
+    "pgdn",
+    "end",
+    "left",
+    "up",
+    "down",
+    "right",
+    "insert",
+    "delete",
+    "stop",
+    "again",
+    "props",
+    "undo",
+    "front",
+    "copy",
+    "open",
+    "paste",
+    "find",
+    "cut",
+    "lf",
+    "help",
+    "meta_l",
+    "meta_r",
+    "compose",
+    "pause",
+    "ro",
+    "hiragana",
+    "henkan",
+    "yen",
+    "muhenkan",
+    "katakanahiragana",
+    "kp_comma",
+    "kp_equals",
+    "power",
+    "sleep",
+    "wake",
+    "audionext",
+    "audioprev",
+    "audiostop",
+    "audioplay",
+    "audiomute",
+    "volumeup",
+    "volumedown",
+    "mediaselect",
+    "mail",
+    "calculator",
+    "computer",
+    "ac_home",
+    "ac_back",
+    "ac_forward",
+    "ac_refresh",
+    "ac_bookmarks",
+    "lang1",
+    "lang2",
+    "f13",
+    "f14",
+    "f15",
+    "f16",
+    "f17",
+    "f18",
+    "f19",
+    "f20",
+    "f21",
+    "f22",
+    "f23",
+    "f24",
+];
+
+/// The buttons of QEMU's pointers (`InputButton`).
+pub const BUTTONS: &[&str] =
+    &["left", "middle", "right", "wheel-up", "wheel-down", "side", "extra", "wheel-left", "wheel-right"];
+
+/// Checks a key combination (key codes joined by `-`, such as `ctrl-alt-t`).
+pub fn check_combo(combo: &str) -> Result {
+    match combo.split('-').find(|key| !KEY_CODES.contains(key)) {
+        Some(key) => Err(format!("'{key}' is not one of QEMU's key codes (such as ret, spc, ctrl, meta_l, f1, a)")),
+        None => Ok(()),
+    }
+}
+
+/// The keys that type `c` on a US keyboard, as a combination for
+/// [`Qmp::send_keys`]; `None` for a character no key types.
+pub fn keys_for(c: char) -> Option<String> {
+    Some(match c {
+        'a'..='z' | '0'..='9' => c.to_string(),
+        'A'..='Z' => format!("shift-{}", c.to_ascii_lowercase()),
+        ' ' => "spc".into(),
+        '\n' => "ret".into(),
+        '.' => "dot".into(),
+        ',' => "comma".into(),
+        '-' => "minus".into(),
+        '/' => "slash".into(),
+        '!' => "shift-1".into(),
+        '?' => "shift-slash".into(),
+        ':' => "shift-semicolon".into(),
+        ';' => "semicolon".into(),
+        '\'' => "apostrophe".into(),
+        '(' => "shift-9".into(),
+        ')' => "shift-0".into(),
+        '\t' => "tab".into(),
+        '=' => "equal".into(),
+        '+' => "shift-equal".into(),
+        '_' => "shift-minus".into(),
+        '[' => "bracket_left".into(),
+        ']' => "bracket_right".into(),
+        '{' => "shift-bracket_left".into(),
+        '}' => "shift-bracket_right".into(),
+        '\\' => "backslash".into(),
+        '|' => "shift-backslash".into(),
+        '"' => "shift-apostrophe".into(),
+        '<' => "shift-comma".into(),
+        '>' => "shift-dot".into(),
+        '`' => "grave_accent".into(),
+        '~' => "shift-grave_accent".into(),
+        '@' => "shift-2".into(),
+        '#' => "shift-3".into(),
+        '$' => "shift-4".into(),
+        '%' => "shift-5".into(),
+        '^' => "shift-6".into(),
+        '&' => "shift-7".into(),
+        '*' => "shift-8".into(),
+        _ => return None,
+    })
 }
 
 /// What a line from QEMU answers: `Some(Ok(value))` for a command's
@@ -188,7 +386,7 @@ mod tests {
     fn replies_and_events() {
         let status = r#"{"return": {"status": "running", "singlestep": false, "running": true}}"#;
         assert_eq!(reply(status).unwrap().unwrap()["status"], "running");
-        let text = r#"{"return": "CPU#0\r\nsaid \"hi\" \u00e9\r\n"}"#;
+        let text = r#"{"return": "CPU#0\r\nsaid \"hi\" é\r\n"}"#;
         assert_eq!(reply(text).unwrap().unwrap(), "CPU#0\r\nsaid \"hi\" é\r\n");
         assert_eq!(reply(r#"{"return": {}}"#).unwrap().unwrap(), json!({}));
         let error = r#"{"error": {"class": "GenericError", "desc": "No such device"}}"#;
@@ -197,5 +395,33 @@ mod tests {
         let event = r#"{"event": "BLOCK_JOB_ERROR", "data": {"error": "nospace"}, "timestamp": {"seconds": 1}}"#;
         assert_eq!(reply(event), None);
         assert_eq!(reply("not json"), None);
+    }
+
+    #[test]
+    fn keys_are_qemus() {
+        for combo in ["ret", "ctrl-alt-t", "meta_l-up", "shift-delete", "ctrl-shift-v", "alt-f4", "kp_enter"] {
+            assert_eq!(check_combo(combo), Ok(()), "{combo}");
+        }
+        assert!(check_combo("ctrl-enter").is_err_and(|e| e.contains("'enter'")));
+        assert!(check_combo("").is_err());
+        // Every key a character is typed with is one of QEMU's.
+        for c in (' '..='~').chain(['\n', '\t']) {
+            let keys = keys_for(c).unwrap_or_else(|| panic!("{c:?} has no keys"));
+            assert_eq!(check_combo(&keys), Ok(()), "{c:?}");
+        }
+        assert_eq!(keys_for('é'), None);
+    }
+
+    #[test]
+    fn connecting_gives_up_once_qemu_has_stopped() {
+        let socket = std::env::temp_dir().join(format!("orchestration-qmp-{}.sock", std::process::id()));
+        let started = Instant::now();
+        let mut asked = 0;
+        let result = Qmp::connect(&socket, Duration::from_secs(20), || {
+            asked += 1;
+            (asked == 3).then(|| String::from("QEMU exited (exit status: 1)"))
+        });
+        assert!(result.is_err_and(|e| e == "QEMU exited (exit status: 1) before its QMP socket opened"));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

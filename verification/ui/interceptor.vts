@@ -9,10 +9,12 @@
 # chase ends on the results screen. The computer takes the wheel before
 # the start, so that every run plays the same chase (the cars, their
 # drivers and the chase step at a fixed rate, whatever the frames): the
-# suspect is taken down 36 s after the start. Taking it later, the chase
-# would last anything from under a minute to eight, by the moment the
-# key landed. Resuming from the pause carries on with that chase (Enter
-# on the pause menu, the hidden pointer resting on another item).
+# suspect is taken down 1:52 after the start, as in the game's host tests
+# (session::tests). Taking it later, the chase would last anything from
+# under a minute to eight, by the moment the key landed. Resuming from the
+# pause carries on with that chase (Enter on the pause menu, the hidden
+# pointer resting on another item). The pictures are moments of a chase
+# (the menus show one too), taken at once.
 boot-cmdline "run=interceptor"
 fail-on "PANIC"
 fail-on "link: "
@@ -22,32 +24,34 @@ fail-on "rendering stops"
 fail-on "cannot change the light"
 wait-serial "interceptor: ready" 120
 wait 4
-shot target/veda/interceptor-1-title.png
+shot target/veda/interceptor-1-title.png now
 key ret
 wait-serial "screen Main" 10
 wait 2
-shot target/veda/interceptor-2-menu.png
+shot target/veda/interceptor-2-menu.png now
 key ret
 wait-serial "screen Career" 10
 wait 2
-shot target/veda/interceptor-3-career.png
+shot target/veda/interceptor-3-career.png now
 key ret
 wait-serial "screen Playing" 10
 key f8
 wait-serial "autopilot on" 10
 wait 1
-shot target/veda/interceptor-4-countdown.png
+shot target/veda/interceptor-4-countdown.png now
 wait 12
-shot target/veda/interceptor-5-chase.png
+shot target/veda/interceptor-5-chase.png now
 key esc
 wait-serial "screen Paused" 10
 wait 2
-shot target/veda/interceptor-6-paused.png
+shot target/veda/interceptor-6-paused.png now
+# The frames counted after the pause are the resumed chase's.
+checkpoint
 key ret
 wait-serial "screen Playing" 10
 wait-serial " fps, render " 30
 wait 5
-shot target/veda/interceptor-7-chase.png
-wait-serial "result: taken down in 0:35.6, 4 hits" 120
+shot target/veda/interceptor-7-chase.png now
+wait-serial "result: taken down in 1:52.1, 6 hits" 240
 wait 4
-shot target/veda/interceptor-8-results.png
+shot target/veda/interceptor-8-results.png now

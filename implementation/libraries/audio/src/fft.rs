@@ -219,9 +219,16 @@ impl RealFft {
     }
 }
 
-/// A Hann window of length `n`.
+/// A Hann window of length `n` (symmetric: both ends zero).
 pub fn hann(n: usize) -> Vec<f32> {
     let d = (n.max(2) - 1) as f64;
+    (0..n).map(|i| (0.5 - 0.5 * Float::cos(core::f64::consts::TAU * i as f64 / d)) as f32).collect()
+}
+
+/// A periodic Hann window of length `n` (one period of the cosine: its
+/// overlapping halves sum to one), for analysis by overlapping frames.
+pub fn hann_periodic(n: usize) -> Vec<f32> {
+    let d = n.max(1) as f64;
     (0..n).map(|i| (0.5 - 0.5 * Float::cos(core::f64::consts::TAU * i as f64 / d)) as f32).collect()
 }
 

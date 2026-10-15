@@ -9,7 +9,10 @@
 # numbers, on a GPIO controller of the platform's, and pin 1's interrupt as
 # a line of the platform's; gpiotest drives pin 0, reads pin 1 and gets its
 # edges as events, through Linux's GPIO character device, devmgr's pads and
-# the interrupt devmgr raises. Pin 2 it does not have.
+# the interrupt devmgr raises. Pin 2 it does not have. The virtio GPU is in
+# QEMU's tables only with it: the script asks for it (and is skipped where
+# QEMU has none).
+gpu on
 acpi-table gpio
 boot-cmdline "drivervm.run=gpiotest drivervm.poweroff"
 fail-on "PANIC"

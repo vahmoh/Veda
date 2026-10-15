@@ -16,7 +16,6 @@ bench = false
 [dependencies]
 vrt = { workspace = true }
 vabi = { workspace = true }
-vipc = { workspace = true }
 vproto = { workspace = true }
 vui = { workspace = true }
 vgfx = { workspace = true }
@@ -25,6 +24,9 @@ rand = { workspace = true }
 rand_pcg = { workspace = true }
 vaudio = { workspace = true }
 vfiles = { workspace = true }
+music-core = { path = "core" }
+# The audio output and the agent's requests Music shares with Videos.
+videos-core = { path = "../videos/core" }
 
 [build-dependencies]
 vbuild = { workspace = true }

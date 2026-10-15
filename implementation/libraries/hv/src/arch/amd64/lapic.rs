@@ -16,8 +16,12 @@
 //! TSC reaches the deadline. The caller tells every operation what the TSC
 //! is (`now`), and asks [`Lapic::timer_deadline`] when to come back.
 //!
-//! A register a guest may not read or write (one that does not exist, or a
-//! value with reserved bits set) is refused: the caller raises `#GP`.
+//! A register a guest may not read or write (one that does not exist), or
+//! a write that sets bits the register reserves, is refused: the caller
+//! raises `#GP`, as the SDM's reserved-bit checking of x2APIC mode has it.
+//! But a local vector table entry keeps only the bits it has, and the ICR
+//! ignores its delivery status, as KVM's do: an OS may write back what it
+//! read of them, read-only bits and all.
 
 /// `IA32_TSC_DEADLINE`.
 pub const MSR_TSC_DEADLINE: u32 = 0x6E0;
@@ -58,6 +62,10 @@ const LVT_MASKED: u32 = 1 << 16;
 /// order of the registers.
 const LVT_WRITABLE: [u32; LVT_COUNT] = [0x7_00FF, 0x1_07FF, 0x1_07FF, 0x1_A7FF, 0x1_A7FF, 0x1_00FF];
 const SVR_ENABLE: u32 = 1 << 8;
+/// The ICR's bits that x2APIC mode reserves (13, 16-17, 20-31), and its
+/// delivery status (12), which it does not have either.
+const ICR_RESERVED: u64 = 1 << 13 | 0b11 << 16 | 0xFFF << 20;
+const ICR_DELIVERY_STATUS: u64 = 1 << 12;
 
 /// Error status bits.
 const ESR_SEND_ILLEGAL: u32 = 1 << 5;
@@ -291,6 +299,10 @@ impl Lapic {
     }
 
     fn write_icr(&mut self, value: u64) -> Write {
+        if value & ICR_RESERVED != 0 {
+            return Write::Refused;
+        }
+        let value = value & !ICR_DELIVERY_STATUS;
         let vector = value as u8;
         let mode = ((value >> 8) & 7) as u8;
         let logical = value & (1 << 11) != 0;
@@ -655,5 +667,15 @@ mod tests {
         assert_eq!(a.write(SELF_IPI, 0x100, 0), Write::Refused);
         assert_eq!(a.write(ID, 0, 0), Write::Refused);
         assert_eq!(a.write(0x831, 0, 0), Write::Refused);
+        // The ICR's, but for its delivery status, which is ignored.
+        for reserved in [1 << 13, 1 << 16, 1 << 17, 1 << 20, 1 << 31] {
+            assert_eq!(a.write(ICR, reserved | 0x40, 0), Write::Refused, "{reserved:#x}");
+        }
+        let ipi = Ipi { delivery: Delivery::Fixed(0x40), destination: Destination::Physical(0) };
+        assert_eq!(a.write(ICR, 1 << 12 | 0x40, 0), Write::Ipi(ipi));
+        assert_eq!(a.read(ICR, 0), Some(0x40));
+        // A local vector table entry keeps the bits it has.
+        assert_eq!(a.write(LVT_ERROR, 1 << 12 | 0xFE, 0), Write::Done);
+        assert_eq!(a.read(LVT_ERROR, 0), Some(0xFE));
     }
 }

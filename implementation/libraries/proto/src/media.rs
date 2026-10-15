@@ -23,6 +23,10 @@
 //! * events each way: the decoder signals `ready` when it published a
 //!   picture or sound (or ended), the application `wake` when it freed a
 //!   slot or read sound.
+//! * the **heartbeat** ([`Heartbeat`]): a page the application makes when it
+//!   starts the decoder, in which the decoder counts its rounds, so that a
+//!   decoder that hangs is seen whatever it was doing (opening a file,
+//!   playing sound only).
 //!
 //! # Generations
 //!
@@ -48,12 +52,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 
+use vabi::{RawHandle, WaitItem, signals};
 use vipc::{enumeration, message, protocol};
 use vrt::object::{Channel, Event, Vmo};
 use vrt::vm::Mapping;
 
 /// The protocol's version, which [`media::Client::hello`] checks.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The role of the control channel among the decoder's startup handles.
 pub const CONTROL_ROLE: u32 = vabi::startup::role::USER;
@@ -75,6 +80,9 @@ pub const MAX_CHECKSUMS: u32 = 1024;
 pub const MAX_SIDE: u32 = 8192;
 /// The most bytes a pool's pixels take.
 pub const MAX_POOL_BYTES: usize = 256 << 20;
+/// The longest a source lasts, and the latest a chapter starts (µs): a
+/// century, far from where µs, ms and ns overflow `i64`.
+pub const MAX_DURATION_US: i64 = 100 * 366 * 86_400 * 1_000_000;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,10 +345,14 @@ message! {
 
 impl MediaInfo {
     /// Whether it keeps to the protocol's limits: what an application
-    /// checks before it believes a decoder.
+    /// checks before it believes a decoder. Times are within
+    /// 0 ..= [`MAX_DURATION_US`], so that the application's arithmetic on
+    /// them cannot overflow.
     pub fn is_valid(&self) -> bool {
         let text = |s: &String, max: usize| s.len() <= max;
-        text(&self.container, MAX_NAME)
+        let time = |t: i64| (0..=MAX_DURATION_US).contains(&t);
+        self.duration_us.is_none_or(time)
+            && text(&self.container, MAX_NAME)
             && text(&self.title, MAX_TEXT)
             && text(&self.artist, MAX_TEXT)
             && self.video.len() <= MAX_VIDEO_STREAMS
@@ -358,7 +370,7 @@ impl MediaInfo {
                 .audio
                 .iter()
                 .all(|a| text(&a.codec, MAX_NAME) && text(&a.language, MAX_LANGUAGE) && text(&a.title, MAX_TEXT))
-            && self.chapters.iter().all(|c| text(&c.title, MAX_TEXT))
+            && self.chapters.iter().all(|c| text(&c.title, MAX_TEXT) && time(c.start_us))
             && self.selected_video.is_none_or(|i| self.video.iter().any(|v| v.index == i))
             && self.selected_audio.is_none_or(|i| self.audio.iter().any(|a| a.index == i))
     }
@@ -493,6 +505,176 @@ protocol! {
         13 => fn stats() -> Stats;
         /// Closes the source.
         14 => fn close() -> ();
+        /// Counts its rounds in `heartbeat` (a [`Heartbeat`]'s page) from
+        /// now on: what the application watches it by.
+        15 => fn set_heartbeat(heartbeat: Vmo) -> Result<(), MediaError>;
+    }
+}
+
+// ---- the decoder's loop ----------------------------------------------------
+
+/// What a decoder does between the application's requests, for [`serve`].
+pub trait Work: media::Server {
+    /// Once round the loop: alive (see [`Heartbeat`]).
+    fn beat(&self);
+    /// Does one piece of work (one call into the decoding library at most,
+    /// so that a request waits no longer); false if there is nothing to do
+    /// until the application asks something or frees room.
+    fn work(&mut self) -> bool;
+    /// The events the application signals when it frees room.
+    fn wakes(&self) -> Vec<RawHandle>;
+    /// Clears them (after waiting on them).
+    fn clear_wakes(&self);
+}
+
+/// The longest a decoder waits without beating (ns): the application takes
+/// a heartbeat that stands still for seconds for a decoder that hangs.
+pub const BEAT_NS: u64 = 1_000_000_000;
+
+/// A decoder's loop: answers the application's requests on `control`
+/// first, then works a piece, beating every round and at least once a
+/// second while it waits. Returns the decoder's exit code: 0 when the
+/// application closed the channel, 1 for a message that is not a request.
+pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
+    loop {
+        // Requests first: each waits at most for one piece of work.
+        loop {
+            match control.read() {
+                Ok(msg) => match media::dispatch(session, msg) {
+                    Ok(reply) => {
+                        if reply.send(control).is_err() {
+                            return 0;
+                        }
+                    }
+                    Err(e) => {
+                        vrt::println!("a request it cannot read ({e:?}): stopping");
+                        return 1;
+                    }
+                },
+                Err(vabi::Error::ShouldWait) => break,
+                Err(_) => return 0,
+            }
+        }
+        session.beat();
+        if session.work() {
+            continue;
+        }
+        let mut items: Vec<WaitItem> = Vec::with_capacity(3);
+        items.push(WaitItem {
+            handle: control.raw(),
+            signals: signals::READABLE | signals::PEER_CLOSED,
+            ..Default::default()
+        });
+        for wake in session.wakes() {
+            items.push(WaitItem { handle: wake, signals: signals::SIGNALED, ..Default::default() });
+        }
+        // Idle, it still beats now and then.
+        match vrt::object::wait_many(&mut items, vrt::time::now_ns() + BEAT_NS) {
+            Ok(_) | Err(vabi::Error::TimedOut) => {}
+            // A handle it cannot wait on (the application sent something
+            // that is not an event): it looks again now and then rather
+            // than spin.
+            Err(_) => vrt::time::sleep(vrt::time::Duration::from_millis(10)),
+        }
+        if items[0].observed & signals::PEER_CLOSED != 0 && items[0].observed & signals::READABLE == 0 {
+            return 0;
+        }
+        session.clear_wakes();
+    }
+}
+
+/// A decoder's watchdog, for a thread of its own: ends the decoder's
+/// process as soon as the application's end of the control channel (the
+/// raw handle `control`) closes, whatever the decoder's loop is doing (the
+/// decoding library may be stuck in a damaged file). Returns only if the
+/// channel cannot be waited on (the decoder is ending).
+pub fn watchdog(control: RawHandle) {
+    loop {
+        let mut item = [WaitItem { handle: control, signals: signals::PEER_CLOSED, ..Default::default() }];
+        match vrt::object::wait_many(&mut item, vabi::DEADLINE_INFINITE) {
+            Ok(_) if item[0].observed & signals::PEER_CLOSED != 0 => vrt::sys::process_exit(0),
+            Ok(_) | Err(vabi::Error::TimedOut) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+// ---- the heartbeat ---------------------------------------------------------
+
+/// A decoder's heartbeat: a page of the application's, in which the
+/// decoder counts every time round its loop, and at least once a second
+/// while it waits. The application makes it when it starts the decoder
+/// ([`media::Client::set_heartbeat`]) and watches the count: a decoder
+/// whose count stands still for seconds hangs, whatever it was doing.
+///
+/// The count is the page's first eight bytes (a little-endian u64); the
+/// application only ever compares it with itself, so a broken decoder can
+/// only make itself look hung.
+pub struct Heartbeat {
+    count: *const AtomicU64,
+    _map: Option<Mapping>,
+}
+
+// SAFETY: the count is only ever accessed atomically.
+unsafe impl Send for Heartbeat {}
+
+impl core::fmt::Debug for Heartbeat {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Heartbeat({})", self.count())
+    }
+}
+
+impl Heartbeat {
+    /// Bytes of the page.
+    pub const BYTES: usize = 4096;
+
+    /// Application: makes a heartbeat. Returns it and the decoder's handle
+    /// to it.
+    pub fn create() -> Result<(Heartbeat, Vmo), SharedError> {
+        let vmo = Vmo::create(Self::BYTES).map_err(|_| SharedError::NoMemory)?;
+        let theirs = vmo.0.duplicate(None).map(Vmo::from_handle).map_err(|_| SharedError::NoMemory)?;
+        let map = Mapping::new(vmo, Self::BYTES, vabi::map_flags::READ | vabi::map_flags::WRITE)
+            .map_err(|_| SharedError::NoMemory)?;
+        // SAFETY: a fresh mapping of a page, kept with the heartbeat.
+        let beat = unsafe { Heartbeat::from_raw(map.as_ptr()) };
+        Ok((Heartbeat { _map: Some(map), ..beat }, theirs))
+    }
+
+    /// Decoder: maps the page the application made (a VMO smaller than a
+    /// page is refused).
+    pub fn map(vmo: Vmo) -> Result<Heartbeat, SharedError> {
+        if vmo.size().map_err(|_| SharedError::BadLayout)? < Self::BYTES {
+            return Err(SharedError::BadLayout);
+        }
+        let map = Mapping::new(vmo, Self::BYTES, vabi::map_flags::READ | vabi::map_flags::WRITE)
+            .map_err(|_| SharedError::NoMemory)?;
+        // SAFETY: the mapping is a page, kept with the heartbeat.
+        let beat = unsafe { Heartbeat::from_raw(map.as_ptr()) };
+        Ok(Heartbeat { _map: Some(map), ..beat })
+    }
+
+    /// A heartbeat in raw memory.
+    ///
+    /// # Safety
+    /// `page` is valid for 8 bytes, 8-byte aligned, and outlives the
+    /// heartbeat.
+    pub unsafe fn from_raw(page: *mut u8) -> Heartbeat {
+        Heartbeat { count: page as *const AtomicU64, _map: None }
+    }
+
+    fn counter(&self) -> &AtomicU64 {
+        // SAFETY: the page outlives `self` (see the constructors).
+        unsafe { &*self.count }
+    }
+
+    /// Decoder: alive (once round its loop).
+    pub fn beat(&self) {
+        self.counter().fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Application: the count so far.
+    pub fn count(&self) -> u64 {
+        self.counter().load(Ordering::Relaxed)
     }
 }
 
@@ -505,7 +687,7 @@ protocol! {
 pub mod pool {
     /// `"VFRM"`.
     pub const MAGIC: u32 = u32::from_le_bytes(*b"VFRM");
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
     /// Written once by the player, which creates the pool.
     pub const OFF_MAGIC: usize = 0;
     pub const OFF_VERSION: usize = 4;
@@ -522,13 +704,8 @@ pub mod pool {
     pub const OFF_FLAGS: usize = 68;
     /// Decoder: the generation `END` is for (u32).
     pub const OFF_END_GENERATION: usize = 72;
-    /// Decoder: the error `FAILED` is for (u32, a [`super::MediaError`]).
-    pub const OFF_ERROR: usize = 76;
     /// Decoder: pictures published (u64).
     pub const OFF_PRODUCED: usize = 80;
-    /// Decoder: bumped every time round its loop, and at least once a
-    /// second (u64).
-    pub const OFF_HEARTBEAT: usize = 88;
     /// Decoder: pictures decoded but dropped unconverted, too late to be
     /// seen (u64): the player counts them as dropped.
     pub const OFF_LATE: usize = 96;
@@ -539,6 +716,9 @@ pub mod pool {
     pub const OFF_CLOCK_NS: usize = 136;
     /// Player: slots it took (u64).
     pub const OFF_CONSUMED: usize = 144;
+    /// Player: the clock's sequence (u64), odd while the player writes
+    /// the two fields above: the decoder reads them as one (a seqlock).
+    pub const OFF_CLOCK_SEQ: usize = 152;
     /// The slots' entries, [`SLOT_SIZE`] bytes each.
     pub const OFF_SLOTS_TABLE: usize = 256;
     pub const SLOT_SIZE: usize = 64;
@@ -583,8 +763,6 @@ pub mod pool {
     pub mod flags {
         /// No more pictures of `OFF_END_GENERATION`.
         pub const END: u32 = 1;
-        /// The decoder failed for good (`OFF_ERROR` says why).
-        pub const FAILED: u32 = 2;
     }
 }
 
@@ -629,12 +807,20 @@ pub struct FramePool {
     side: Side,
     /// The decoder's count of published pictures.
     seq: core::cell::Cell<u64>,
+    /// The player's sequence of its clock (see [`pool::OFF_CLOCK_SEQ`]):
+    /// its own, whatever the decoder writes there.
+    clock_seq: core::cell::Cell<u64>,
     _maps: Option<(Mapping, Mapping)>,
 }
 
 // SAFETY: each side uses its pool from one thread at a time; the shared
 // fields are accessed atomically, pixels only through raw pointers.
 unsafe impl Send for FramePool {}
+
+/// Tries a reader of the player's clock makes before it gives up (a
+/// player that keeps writing, or a hostile one that leaves the sequence
+/// odd).
+const CLOCK_READS: usize = 8;
 
 impl core::fmt::Debug for FramePool {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -727,6 +913,7 @@ impl FramePool {
             slot_bytes,
             side: Side::Player,
             seq: core::cell::Cell::new(0),
+            clock_seq: core::cell::Cell::new(0),
             _maps: None,
         }
     }
@@ -766,10 +953,24 @@ impl FramePool {
         {
             return Err(SharedError::BadLayout);
         }
-        let seq = core::cell::Cell::new(0);
-        let pool =
-            FramePool { state, pixels, slots, width, height, stride, slot_bytes: want_bytes, side, seq, _maps: None };
+        let pool = FramePool {
+            state,
+            pixels,
+            slots,
+            width,
+            height,
+            stride,
+            slot_bytes: want_bytes,
+            side,
+            seq: core::cell::Cell::new(0),
+            clock_seq: core::cell::Cell::new(0),
+            _maps: None,
+        };
         pool.seq.set(pool.u64_at(pool::OFF_PRODUCED).load(Ordering::Acquire));
+        // A player that attaches carries on from the sequence there (made
+        // even, should a writer have stopped half way).
+        let clock_seq = pool.u64_at(pool::OFF_CLOCK_SEQ).load(Ordering::Acquire);
+        pool.clock_seq.set(clock_seq.wrapping_add(clock_seq & 1));
         Ok(pool)
     }
 
@@ -895,27 +1096,30 @@ impl FramePool {
         self.u32_at(pool::OFF_FLAGS).fetch_or(pool::flags::END, Ordering::AcqRel);
     }
 
-    /// Decoder: failed for good with `error`.
-    pub fn set_failed(&self, error: MediaError) {
-        self.u32_at(pool::OFF_ERROR).store(error as u32, Ordering::Release);
-        self.u32_at(pool::OFF_FLAGS).fetch_or(pool::flags::FAILED, Ordering::AcqRel);
-    }
-
-    /// Decoder: alive (once round its loop).
-    pub fn beat(&self) {
-        self.u64_at(pool::OFF_HEARTBEAT).fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Decoder: a picture was dropped, too late to be worth converting.
     pub fn note_late(&self) {
         self.u64_at(pool::OFF_LATE).fetch_add(1, Ordering::Relaxed);
     }
 
     /// Decoder: the media time the player shows now, if it says (µs, and
-    /// the monotonic ns it was at).
+    /// the monotonic ns it was at). The two are read as one: a pair the
+    /// player was writing meanwhile is read again, and after a few tries
+    /// (a player that never finishes writing) there is none.
     pub fn player_clock(&self) -> Option<(i64, u64)> {
-        let ns = self.u64_at(pool::OFF_CLOCK_NS).load(Ordering::Acquire);
-        (ns != 0).then(|| (self.i64_at(pool::OFF_CLOCK_US).load(Ordering::Acquire), ns))
+        let seq = self.u64_at(pool::OFF_CLOCK_SEQ);
+        for _ in 0..CLOCK_READS {
+            let before = seq.load(Ordering::Acquire);
+            if before & 1 == 0 {
+                let us = self.i64_at(pool::OFF_CLOCK_US).load(Ordering::Relaxed);
+                let ns = self.u64_at(pool::OFF_CLOCK_NS).load(Ordering::Relaxed);
+                core::sync::atomic::fence(Ordering::Acquire);
+                if seq.load(Ordering::Relaxed) == before {
+                    return (ns != 0).then_some((us, ns));
+                }
+            }
+            core::hint::spin_loop();
+        }
+        None
     }
 
     // ---- the player's side -------------------------------------------------
@@ -957,7 +1161,8 @@ impl FramePool {
     }
 
     /// Player: frees what a decoder that is gone was writing or had
-    /// published (all but `keep`, the picture shown).
+    /// published (all but `keep`, the picture shown), and forgets that its
+    /// pictures ended.
     pub fn reset(&self, keep: Option<u32>) {
         for s in 0..self.slots {
             if Some(s) != keep {
@@ -973,19 +1178,6 @@ impl FramePool {
         (flags & pool::flags::END != 0).then(|| self.u32_at(pool::OFF_END_GENERATION).load(Ordering::Acquire))
     }
 
-    /// The decoder's error, if it failed for good.
-    pub fn failed(&self) -> Option<MediaError> {
-        let flags = self.u32_at(pool::OFF_FLAGS).load(Ordering::Acquire);
-        (flags & pool::flags::FAILED != 0)
-            .then(|| MediaError::from_code(self.u32_at(pool::OFF_ERROR).load(Ordering::Acquire)))
-    }
-
-    /// The decoder's heartbeat: it moves at least once a second while the
-    /// decoder is alive, working or not.
-    pub fn heartbeat(&self) -> u64 {
-        self.u64_at(pool::OFF_HEARTBEAT).load(Ordering::Acquire)
-    }
-
     /// Pictures published so far.
     pub fn produced(&self) -> u64 {
         self.u64_at(pool::OFF_PRODUCED).load(Ordering::Acquire)
@@ -996,10 +1188,18 @@ impl FramePool {
         self.u64_at(pool::OFF_LATE).load(Ordering::Acquire)
     }
 
-    /// Player: the media time it shows (µs) at `at_ns`.
+    /// Player: the media time it shows (µs) at `at_ns`. The sequence is
+    /// odd while the two are written, so that the decoder never reads a
+    /// time with another's moment.
     pub fn set_clock(&self, media_us: i64, at_ns: u64) {
-        self.i64_at(pool::OFF_CLOCK_US).store(media_us, Ordering::Release);
-        self.u64_at(pool::OFF_CLOCK_NS).store(at_ns, Ordering::Release);
+        let seq = self.u64_at(pool::OFF_CLOCK_SEQ);
+        let s = self.clock_seq.get();
+        seq.store(s.wrapping_add(1), Ordering::Relaxed);
+        core::sync::atomic::fence(Ordering::Release);
+        self.i64_at(pool::OFF_CLOCK_US).store(media_us, Ordering::Relaxed);
+        self.u64_at(pool::OFF_CLOCK_NS).store(at_ns, Ordering::Relaxed);
+        seq.store(s.wrapping_add(2), Ordering::Release);
+        self.clock_seq.set(s.wrapping_add(2));
     }
 }
 
@@ -1055,7 +1255,9 @@ pub mod pcm {
     }
 }
 
-/// A sound record, as the player found it.
+/// A sound record, as the player found it. Where it lies in the ring is
+/// its own (what [`PcmRing::peek`] checked): whatever its other fields say,
+/// [`PcmRing::copy`] reads no further.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Record {
     /// [`pcm::kind::DATA`] or [`pcm::kind::END`].
@@ -1387,10 +1589,22 @@ impl PcmRing {
 
     /// Player: copies up to `out.len() / 2` of `record`'s frames not taken
     /// yet into `out`; returns how many. Take them with [`PcmRing::take`].
+    ///
+    /// It reads only inside the record as [`PcmRing::peek`] found it, and
+    /// only a record that fits this ring, whatever `frames` and `taken`
+    /// were changed to since.
     pub fn copy(&self, record: &Record, out: &mut [i16]) -> usize {
-        let n = ((record.frames - record.taken) as usize).min(out.len() / 2);
-        let from = record.offset + pcm::RECORD_ALIGN + record.taken as usize * 4;
-        // SAFETY: inside the record, which `peek` checked lies in the ring.
+        if record.length < pcm::RECORD_ALIGN || record.offset.saturating_add(record.length) > self.capacity {
+            return 0;
+        }
+        let room = ((record.length - pcm::RECORD_ALIGN) / 4).min(u32::MAX as usize) as u32;
+        let frames = record.frames.min(room);
+        let taken = record.taken.min(frames);
+        let n = ((frames - taken) as usize).min(out.len() / 2);
+        let from = record.offset + pcm::RECORD_ALIGN + taken as usize * 4;
+        // SAFETY: `from .. from + n * 4` lies inside the record (`taken + n`
+        // frames of 4 bytes after its header fit its length), and the
+        // record inside the records (checked above).
         unsafe { core::ptr::copy_nonoverlapping(self.data(from) as *const i16, out.as_mut_ptr(), n * 2) };
         n
     }
@@ -1398,20 +1612,12 @@ impl PcmRing {
     /// Player: takes `frames` frames of `record` (the whole record once all
     /// are taken; an end record at once).
     pub fn take(&self, record: &Record, frames: u32) {
-        let taken = (record.taken + frames).min(record.frames);
+        let taken = record.taken.saturating_add(frames).min(record.frames);
         if taken >= record.frames {
             self.skip(record.length);
         } else {
             self.taken.set(taken);
         }
-    }
-
-    /// Player: drops every record queued.
-    pub fn discard_all(&self) {
-        let w = self.write_pos();
-        self.local.set(w);
-        self.taken.set(0);
-        self.u64_at(pcm::OFF_READ_POS).store(w, Ordering::Release);
     }
 }
 
@@ -1480,12 +1686,48 @@ mod tests {
         assert_eq!(player.end(), Some(2));
         dec.set_generation(3);
         assert_eq!(player.end(), None, "a new generation has not ended");
-        dec.set_failed(MediaError::Corrupt);
-        assert_eq!(player.failed(), Some(MediaError::Corrupt));
+        assert_eq!(dec.player_clock(), None, "the player has not said yet");
         player.set_clock(1234, 99);
         assert_eq!(dec.player_clock(), Some((1234, 99)));
+        player.set_clock(-5, 100);
+        assert_eq!(dec.player_clock(), Some((-5, 100)));
+    }
+
+    #[test]
+    fn the_clock_is_never_read_half_written() {
+        let (_s, _p, player, dec) = pool(2, 64, 64);
+        player.set_clock(1_000_000, 5_000);
+        // The player stopped half way through writing a new pair: the
+        // sequence is odd, and the decoder takes neither half.
+        let seq = player.u64_at(pool::OFF_CLOCK_SEQ);
+        let at = seq.load(Ordering::Relaxed);
+        seq.store(at + 1, Ordering::Relaxed);
+        player.i64_at(pool::OFF_CLOCK_US).store(9_000_000, Ordering::Relaxed);
+        assert_eq!(dec.player_clock(), None);
+        // Finished: the new pair, whole.
+        player.u64_at(pool::OFF_CLOCK_NS).store(6_000, Ordering::Relaxed);
+        seq.store(at + 2, Ordering::Release);
+        assert_eq!(dec.player_clock(), Some((9_000_000, 6_000)));
+        // A player attaching to the pool goes on from an even sequence.
+        seq.store(at + 3, Ordering::Relaxed);
+        let (s, p) = (player.state, player.pixels);
+        // SAFETY: the vectors behind the pool outlive the test.
+        let again = unsafe { FramePool::attach_raw(s, pool::STATE_BYTES, p, 64 * 64 * 4 * 2, Side::Player) }.unwrap();
+        again.set_clock(7, 8);
+        assert_eq!(dec.player_clock(), Some((7, 8)));
+    }
+
+    #[test]
+    fn heartbeats_count() {
+        let mut page = vec![0u64; Heartbeat::BYTES / 8];
+        // SAFETY: `page` outlives both sides.
+        let (app, dec) = unsafe {
+            (Heartbeat::from_raw(page.as_mut_ptr() as *mut u8), Heartbeat::from_raw(page.as_mut_ptr() as *mut u8))
+        };
+        assert_eq!(app.count(), 0);
         dec.beat();
-        assert_eq!(player.heartbeat(), 1);
+        dec.beat();
+        assert_eq!(app.count(), 2);
     }
 
     #[test]
@@ -1590,9 +1832,43 @@ mod tests {
         let r = player.peek().unwrap().unwrap();
         assert_eq!(r.taken, 480);
         assert_eq!(r.next_pts(48_000), 1_010_000);
-        player.discard_all();
+        player.take(&r, r.frames);
         assert_eq!(player.peek(), Ok(None));
         assert!(dec.fits(pcm::MAX_FRAMES));
+    }
+
+    #[test]
+    fn a_record_changed_by_hand_reads_only_its_own_samples() {
+        let (_m, player, dec) = ring(pcm::MIN_CAPACITY);
+        assert!(dec.write(1, 0, 0, &[7; 2 * 8]));
+        assert!(dec.write(1, 0, 0, &[9; 2 * 8]));
+        let mut r = player.peek().unwrap().unwrap();
+        let mut out = vec![0i16; 2 * 4096];
+        // More frames than the record holds, or more taken than it has:
+        // only its own samples are read.
+        r.frames = u32::MAX;
+        assert_eq!(player.copy(&r, &mut out), 8);
+        assert!(out[..16].iter().all(|&s| s == 7));
+        r.taken = u32::MAX - 1;
+        assert_eq!(player.copy(&r, &mut out), 0);
+        r.frames = 8;
+        r.taken = 6;
+        assert_eq!(player.copy(&r, &mut out), 2);
+        // Taking more than there is takes the record.
+        player.take(&r, u32::MAX);
+        assert_eq!(player.peek().unwrap().map(|r| r.frames), Some(8));
+        // A record of a larger ring is not read in a smaller one.
+        let (_m2, big, big_dec) = ring(pcm::MIN_CAPACITY * 4);
+        let fill = vec![1i16; 2 * pcm::MAX_FRAMES as usize];
+        for _ in 0..6 {
+            big_dec.write(1, 0, 0, &fill);
+            let r = big.peek().unwrap().unwrap();
+            big.take(&r, r.frames);
+        }
+        big_dec.write(1, 0, 0, &fill);
+        let far = big.peek().unwrap().unwrap();
+        assert!(far.offset + far.length > pcm::MIN_CAPACITY as usize);
+        assert_eq!(player.copy(&far, &mut out), 0);
     }
 
     #[test]
@@ -1660,7 +1936,7 @@ mod tests {
         };
         let info = MediaInfo {
             container: text(MAX_NAME),
-            duration_us: Some(i64::MAX),
+            duration_us: Some(MAX_DURATION_US),
             seekable: true,
             bit_rate: u64::MAX,
             title: text(MAX_TEXT),
@@ -1668,7 +1944,7 @@ mod tests {
             video: vec![video; MAX_VIDEO_STREAMS],
             audio: vec![audio; MAX_AUDIO_STREAMS],
             subtitles: u32::MAX,
-            chapters: vec![Chapter { start_us: i64::MIN, title: text(MAX_TEXT) }; MAX_CHAPTERS],
+            chapters: vec![Chapter { start_us: MAX_DURATION_US, title: text(MAX_TEXT) }; MAX_CHAPTERS],
             selected_video: Some(u32::MAX),
             selected_audio: Some(u32::MAX),
         };
@@ -1728,6 +2004,17 @@ mod tests {
         info.selected_audio = None;
         info.container = "x".repeat(MAX_NAME + 1);
         assert!(!info.is_valid());
+        info.container = "matroska".into();
+        // Times the player could not do arithmetic on.
+        for bad in [-1, MAX_DURATION_US + 1, i64::MIN, i64::MAX] {
+            info.duration_us = Some(bad);
+            assert!(!info.is_valid(), "a duration of {bad}");
+        }
+        info.duration_us = None;
+        info.chapters = vec![Chapter { start_us: i64::MIN, title: String::new() }];
+        assert!(!info.is_valid(), "a chapter before the start");
+        info.chapters[0].start_us = MAX_DURATION_US;
+        assert!(info.is_valid());
         assert_eq!(bounded("aé", 2), "a");
         assert_eq!(bounded("abc", 8), "abc");
     }

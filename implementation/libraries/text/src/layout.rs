@@ -8,6 +8,11 @@
 //! tabs, which advance to the next tab stop, and characters that take no
 //! cell (accents that combine with the character before, zero-width
 //! characters).
+//!
+//! Laying out walks every character, so a layout of a [`Document`] is kept
+//! and brought up to date after edits ([`Layout::update`]): only the lines
+//! the edits changed are laid out again; the rows of the others are kept,
+//! moved along when lines come or go.
 
 use alloc::vec::Vec;
 
@@ -15,6 +20,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 
 use crate::buffer::{Buffer, Pos};
+use crate::document::{Document, LineChange};
 
 /// Width in cells of `c` when it starts at display column `x`: tabs advance to the next tab
 /// stop, characters of no width (`unicode-width`: combining accents, zero-width spaces and
@@ -51,14 +57,34 @@ pub struct Layout {
     rows: Vec<Row>,
     /// Index of the first row of each line.
     first_row: Vec<usize>,
+    /// The width of each line's widest row, in cells.
+    widths: Vec<usize>,
+    /// The wrap width asked for (`None`: no wrapping).
+    wrap: Option<usize>,
     tab: usize,
     /// Widest row in cells.
     max_width: usize,
+    /// The document laid out and its revision, if a document's.
+    source: Option<(u64, u64)>,
+}
+
+/// Lays out line `index`: its rows (no wider than `wrap` cells, if given)
+/// are appended to `rows`; returns the width of the widest.
+fn lay_out_line(index: usize, line: &str, wrap: Option<usize>, tab: usize, rows: &mut Vec<Row>) -> usize {
+    match wrap {
+        Some(cols) => wrap_line(index, line, cols.max(4), tab, rows),
+        None => {
+            rows.push(Row { line: index, start: 0, end: line.len() });
+            display_col(line, line.len(), tab)
+        }
+    }
 }
 
 /// Splits one line into rows of at most `cols` cells, breaking after spaces
 /// where possible. Spaces may hang past the edge rather than start a row.
-fn wrap_line(index: usize, line: &str, cols: usize, tab: usize, rows: &mut Vec<Row>, max_width: &mut usize) {
+/// Returns the width of the widest row.
+fn wrap_line(index: usize, line: &str, cols: usize, tab: usize, rows: &mut Vec<Row>) -> usize {
+    let mut widest = 0;
     let mut start = 0;
     loop {
         let mut x = 0;
@@ -79,13 +105,14 @@ fn wrap_line(index: usize, line: &str, cols: usize, tab: usize, rows: &mut Vec<R
                 width_at_brk = x;
             }
         }
-        *max_width = (*max_width).max(x);
+        widest = widest.max(x);
         rows.push(Row { line: index, start, end });
         if end >= line.len() {
             break;
         }
         start = end;
     }
+    widest
 }
 
 impl Layout {
@@ -94,18 +121,80 @@ impl Layout {
         let tab = tab.max(1);
         let mut rows = Vec::with_capacity(buf.line_count());
         let mut first_row = Vec::with_capacity(buf.line_count());
-        let mut max_width = 0;
+        let mut widths = Vec::with_capacity(buf.line_count());
         for (i, line) in buf.lines().enumerate() {
             first_row.push(rows.len());
-            match wrap {
-                Some(cols) => wrap_line(i, line, cols.max(4), tab, &mut rows, &mut max_width),
-                None => {
-                    max_width = max_width.max(display_col(line, line.len(), tab));
-                    rows.push(Row { line: i, start: 0, end: line.len() });
-                }
-            }
+            widths.push(lay_out_line(i, line, wrap, tab, &mut rows));
         }
-        Layout { rows, first_row, tab, max_width }
+        let max_width = widths.iter().copied().max().unwrap_or(0);
+        Layout { rows, first_row, widths, wrap, tab, max_width, source: None }
+    }
+
+    /// Lays out `doc`'s buffer as [`Layout::new`] does, to be kept up to
+    /// date with [`Layout::update`].
+    pub fn for_document(doc: &Document, wrap: Option<usize>, tab: usize) -> Layout {
+        Layout { source: Some((doc.id(), doc.revision())), ..Layout::new(doc.buffer(), wrap, tab) }
+    }
+
+    /// Brings the layout up to date with `doc`, wrapping at `wrap` cells
+    /// with tab stops `tab` apart: the lines changed since the revision laid
+    /// out last are laid out again, and the rest are kept. A layout of
+    /// another document, or of other widths, is laid out anew.
+    pub fn update(&mut self, doc: &Document, wrap: Option<usize>, tab: usize) {
+        let change = match self.source {
+            Some((id, revision)) if id == doc.id() && wrap == self.wrap && tab.max(1) == self.tab => {
+                doc.changes_since(revision)
+            }
+            _ => None,
+        };
+        match change {
+            Some(change) => {
+                self.relay(doc.buffer(), change);
+                self.source = Some((doc.id(), doc.revision()));
+            }
+            None => *self = Layout::for_document(doc, wrap, tab),
+        }
+    }
+
+    /// Lays out again the lines of `buf` that `change` says are new; the
+    /// rows of the lines before and after them are kept.
+    fn relay(&mut self, buf: &Buffer, change: LineChange) {
+        let (old_lines, new_lines) = (self.first_row.len(), buf.line_count());
+        // Kept lines are lines both before and after the change has.
+        let before = change.kept_before.min(old_lines).min(new_lines);
+        let after = change.kept_after.min(old_lines - before).min(new_lines - before);
+        let (old_end, new_end) = (old_lines - after, new_lines - after);
+        if before == old_end && before == new_end {
+            return;
+        }
+        let row_at = |line: usize| self.first_row.get(line).copied().unwrap_or(self.rows.len());
+        let (from, to) = (row_at(before), row_at(old_end));
+        let mut rows = Vec::new();
+        let mut first_row = Vec::with_capacity(new_end - before);
+        let mut widths = Vec::with_capacity(new_end - before);
+        let mut widest = 0;
+        for i in before..new_end {
+            first_row.push(from + rows.len());
+            let width = lay_out_line(i, buf.line(i), self.wrap, self.tab, &mut rows);
+            widest = widest.max(width);
+            widths.push(width);
+        }
+        // Where the widest row was is only looked for again when it went
+        // and no new row is as wide (it is mostly typed on, and grows).
+        let widest_went = widest < self.max_width && self.widths[before..old_end].contains(&self.max_width);
+        let added = rows.len();
+        self.rows.splice(from..to, rows);
+        self.first_row.splice(before..old_end, first_row);
+        self.widths.splice(before..old_end, widths);
+        // The kept lines after the change, and their rows, have moved.
+        for row in &mut self.rows[from + added..] {
+            row.line = row.line + new_end - old_end;
+        }
+        for first in &mut self.first_row[new_end..] {
+            *first = *first + from + added - to;
+        }
+        self.max_width =
+            if widest_went { self.widths.iter().copied().max().unwrap_or(0) } else { self.max_width.max(widest) };
     }
 
     pub fn row_count(&self) -> usize {
@@ -222,6 +311,80 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::Selection;
+
+    /// Checks that `l`, kept up to date, is what laying `doc` out anew gives.
+    fn assert_fresh(l: &Layout, doc: &Document, what: &str) {
+        let fresh = Layout::new(doc.buffer(), l.wrap, l.tab);
+        let rows = |l: &Layout| (0..l.row_count()).map(|i| l.row(i)).collect::<Vec<_>>();
+        assert_eq!(rows(l), rows(&fresh), "{what}");
+        assert_eq!(l.first_row, fresh.first_row, "{what}");
+        assert_eq!(l.widths, fresh.widths, "{what}");
+        assert_eq!(l.max_width(), fresh.max_width(), "{what}");
+    }
+
+    #[test]
+    fn layouts_kept_up_to_date_match_new_ones() {
+        let text = "fn main() {\n    let words = \"the quick brown fox jumps over the lazy dog\";\n\n\tlong_line_without_spaces_to_break_anywhere_at_all\n}\n";
+        for wrap in [None, Some(12), Some(30)] {
+            let mut doc = Document::from_text(text);
+            let mut l = Layout::for_document(&doc, wrap, 4);
+            // Typing, line breaks, deleting across lines, pasting many lines,
+            // replacing everywhere, undoing and redoing.
+            let edits: &[fn(&mut Document)] = &[
+                |d| d.set_cursor(Pos::new(1, 8), false),
+                |d| d.type_text("x"),
+                |d| d.type_text("yz "),
+                |d| d.newline(),
+                |d| d.paste("one\ntwo three four five six seven\nthree"),
+                |d| d.set_selection(Selection::new(Pos::new(0, 3), Pos::new(4, 2))),
+                |d| d.delete_selection(),
+                |d| {
+                    d.replace_all("e", "EEEE", true);
+                },
+                |d| {
+                    d.undo();
+                },
+                |d| {
+                    d.undo();
+                    d.undo();
+                },
+                |d| {
+                    d.redo();
+                },
+                |d| d.select_all(),
+                |d| d.paste(""),
+                |d| d.type_text("a\nb\nc"),
+            ];
+            for (i, edit) in edits.iter().enumerate() {
+                edit(&mut doc);
+                l.update(&doc, wrap, 4);
+                assert_fresh(&l, &doc, &alloc::format!("wrap {wrap:?} after edit {i}"));
+            }
+            // Another document, or other widths, are laid out anew.
+            let other = Document::from_text("x\ny");
+            l.update(&other, wrap, 4);
+            assert_fresh(&l, &other, "another document");
+            l.update(&other, Some(8), 2);
+            assert_eq!((l.wrap, l.tab), (Some(8), 2));
+            assert_fresh(&l, &other, "other widths");
+        }
+    }
+
+    #[test]
+    fn many_edits_between_updates_are_recorded_together() {
+        let mut doc = Document::from_text("a\nb\nc\nd\ne\nf\ng\nh");
+        let mut l = Layout::for_document(&doc, Some(10), 4);
+        // More edits than are recorded apart, far down and near the top.
+        for i in 0..100 {
+            doc.set_cursor(Pos::new(if i % 2 == 0 { 7 } else { 1 }, 0), false);
+            doc.type_text("word ");
+        }
+        l.update(&doc, Some(10), 4);
+        assert_fresh(&l, &doc, "after 100 edits");
+        let copy = doc.clone();
+        assert_ne!(copy.id(), doc.id());
+    }
 
     #[test]
     fn no_wrap_rows_are_lines() {

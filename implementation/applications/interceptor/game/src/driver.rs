@@ -19,11 +19,13 @@
 //! * **The police** chase their target: they aim where it will be, and
 //!   once alongside its rear quarter they turn into it (a PIT).
 //!
-//! Drivers see the road through [`Scene`]: every car's place on it,
-//! sorted along it.
+//! Drivers see the road through [`Scene`]: every car's place on it (its
+//! body's middle), in the game's order of its cars, which a driver looks
+//! through for those near its line.
 
 use alloc::vec::Vec;
 
+use crate::game::CarId;
 use crate::prelude::*;
 use crate::road::{Road, Section};
 use crate::vehicle::{Controls, G, Vehicle};
@@ -31,6 +33,8 @@ use crate::vehicle::{Controls, G, Vehicle};
 /// Where a car is on the road, as drivers see it.
 #[derive(Clone, Copy, Debug)]
 pub struct Place {
+    /// Which car it is.
+    pub id: CarId,
     pub s: f32,
     pub lateral: f32,
     /// Speed along the road (negative against it).
@@ -42,13 +46,19 @@ pub struct Place {
     pub siren: bool,
 }
 
-/// Every car's place, for the drivers.
+/// Every car's place, for the drivers: car `i`'s is `places[i]`.
 pub struct Scene {
     pub places: Vec<Place>,
+    /// The loop's length (m).
     pub length: f32,
 }
 
 impl Scene {
+    /// Where car `id`'s place is in `places`, if it is on the road.
+    pub fn find(&self, id: CarId) -> Option<usize> {
+        self.places.iter().position(|p| p.id == id)
+    }
+
     /// The signed distance along the road from `a` to `b`, the short way.
     pub fn gap(&self, a: f32, b: f32) -> f32 {
         let d = Euclid::rem_euclid(&(b - a), &self.length);
@@ -184,22 +194,27 @@ impl Pilot {
         if self.reversing > 0.0 {
             self.reversing -= dt;
             let to = road.point(place.s + dir * 10.0, self.lateral) - car.pos;
-            let ang = to.xz().dot(car.left()).atan2(to.xz().dot(car.forward()));
-            return Controls { brake: 0.7, steer: (-ang * 2.0).clamp(-1.0, 1.0), ..Controls::default() };
+            let ang = libm::atan2f(to.xz().dot(car.left()), to.xz().dot(car.forward()));
+            return Controls {
+                throttle: 0.7,
+                steer: (-ang * 2.0).clamp(-1.0, 1.0),
+                reverse: true,
+                ..Controls::default()
+            };
         }
 
         // Steer for a point ahead on the line.
         let look = 7.0 + speed.abs() * 0.42;
         let target = road.point(place.s + dir * look, self.lateral);
         let to = Vec2::new(target.x - car.pos.x, target.z - car.pos.z);
-        let alpha = to.dot(car.left()).atan2(to.dot(car.forward()));
-        let wheel = (2.0 * car.spec.wheelbase * alpha.sin() / to.length().max(1.0)).atan();
+        let alpha = libm::atan2f(to.dot(car.left()), to.dot(car.forward()));
+        let wheel = libm::atanf(2.0 * car.chassis.wheelbase * libm::sinf(alpha) / to.length().max(1.0));
         // Never sharper than the tyres can follow at this speed (a mildly
         // understeering car's angle for all they grip, whatever the driver
         // plans on): asking more only slides it wide or spins it.
         let v2 = (speed * speed).max(1.0);
         let tyres = car.spec.grip * G;
-        let most = 1.05 * tyres * (car.spec.wheelbase / v2 + 0.02 / G);
+        let most = 1.05 * tyres * (car.chassis.wheelbase / v2 + 0.02 / G);
         let wheel = wheel.clamp(-most, most);
         let lock = car.spec.steer_max / (1.0 + speed.abs() * 0.055);
         let steer = (wheel / lock.max(0.05)).clamp(-1.0, 1.0);
@@ -285,9 +300,10 @@ pub enum Role {
     Traffic(Traffic),
     /// On the run.
     Suspect(Suspect),
-    /// Chasing car `target`.
+    /// Chasing a suspect.
     Police(Police),
-    /// Standing still (a roadblock, a wreck).
+    /// Standing still on its brakes (a roadblock, a wreck, a suspect
+    /// caught).
     Parked,
 }
 
@@ -396,7 +412,7 @@ pub struct Suspect {
     /// How readily it swerves at the police (0..1).
     pub aggression: f32,
     /// The car it runs from.
-    pub pursuer: usize,
+    pub pursuer: CarId,
     /// The lateral it has chosen, and when it next chooses.
     choice: f32,
     rethink: f32,
@@ -408,7 +424,7 @@ pub struct Suspect {
 }
 
 impl Suspect {
-    pub fn new(lateral: f32, skill: f32, aggression: f32, pursuer: usize, seed: u32) -> Suspect {
+    pub fn new(lateral: f32, skill: f32, aggression: f32, pursuer: CarId, seed: u32) -> Suspect {
         Suspect {
             pilot: Pilot::new(lateral),
             skill,
@@ -454,14 +470,15 @@ impl Suspect {
         }
         let mut want = self.choice;
         // The pursuer about to pass or ram: swerve across its path.
-        let them = scene.places[self.pursuer];
-        let behind = scene.gap(them.s, p.s) * p.dir;
-        if self.swerve <= 0.0 && behind > 2.0 && behind < 14.0 && (them.lateral - p.lateral).abs() > 1.0 {
-            // Now and then, as the driver dares (about once a second at
-            // full aggression).
-            if self.roll() < self.aggression * dt * 1.2 {
-                self.swerve = 0.9;
-                self.swerve_to = them.lateral;
+        if let Some(them) = scene.find(self.pursuer).map(|j| scene.places[j]) {
+            let behind = scene.gap(them.s, p.s) * p.dir;
+            if self.swerve <= 0.0 && behind > 2.0 && behind < 14.0 && (them.lateral - p.lateral).abs() > 1.0 {
+                // Now and then, as the driver dares (about once a second at
+                // full aggression).
+                if self.roll() < self.aggression * dt * 1.2 {
+                    self.swerve = 0.9;
+                    self.swerve_to = them.lateral;
+                }
             }
         }
         if self.swerve > 0.0 {
@@ -506,7 +523,7 @@ impl Suspect {
 pub struct Police {
     pub pilot: Pilot,
     /// The car it chases.
-    pub target: usize,
+    pub target: CarId,
     pub skill: f32,
     /// Following this far behind rather than ramming (m): a chase filmed
     /// for the menus, kept going.
@@ -518,16 +535,23 @@ pub struct Police {
 }
 
 impl Police {
-    pub fn new(lateral: f32, target: usize, skill: f32) -> Police {
+    pub fn new(lateral: f32, target: CarId, skill: f32) -> Police {
         Police { pilot: Pilot::new(lateral), target, skill, follow: None, choice: lateral, rethink: 0.0 }
     }
 
-    /// The controls for car `me` this step.
+    /// The controls for car `me` this step (its target gone, it drives
+    /// on in the inner lane at the limit).
     pub fn drive(&mut self, me: usize, road: &Road, scene: &Scene, car: &Vehicle, dt: f32) -> Controls {
         let p = scene.places[me];
-        let t = scene.places[self.target];
-        let gap = scene.gap(p.s, t.s) * p.dir;
         let (paved, _) = road.widths(p.s);
+        let grip = car.spec.grip * G * 0.85 * self.skill;
+        let Some(target) = scene.find(self.target) else {
+            let want = Road::lane_center(0, p.dir);
+            let speed = road.at(p.s).section.speed_limit().min(safe_speed(me, scene, want, 10.0, 6.0, None));
+            return self.pilot.drive(road, car, &p, want, speed, grip, 4.5, dt);
+        };
+        let t = scene.places[target];
+        let gap = scene.gap(p.s, t.s) * p.dir;
         let close = gap.abs() < 30.0;
         // Far behind, its own fastest line: towards the inside of the bend
         // ahead (on its own side where the road is divided).
@@ -568,7 +592,7 @@ impl Police {
         // Through the traffic: its line while that is clear of all but the
         // suspect, else the one with the most room (the siren clears the
         // way, mostly); never faster than it can stop behind a car in it.
-        let target = Some(self.target);
+        let target = Some(target);
         self.rethink -= dt;
         let danger = |lat: f32, secs: f32| meeting(me, scene, lat, secs, target);
         if self.rethink <= 0.0 || danger(self.choice, 2.0) || danger(p.lateral, 2.0) {
@@ -594,7 +618,43 @@ impl Police {
         }
         let (lo, hi) = allowed(road, &p, paved);
         let want = want.clamp(lo, hi);
-        let grip = car.spec.grip * G * 0.85 * self.skill;
         self.pilot.drive(road, car, &p, want, speed, grip, 4.5, dt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::carmodel::Kind;
+    use crate::game::CarId;
+    use crate::vehicle::Ground;
+    use crate::world::World;
+
+    #[test]
+    fn a_driver_stuck_backs_out() {
+        let world = World::new();
+        let road = &world.road;
+        let s = 400.0;
+        let (p, f, r, _) = road.frame(s);
+        let mut car = Vehicle::new(Kind::Saloon, p + r * 2.1, libm::atan2f(f.x, f.z));
+        let place = Place { id: CarId(1), s, lateral: 2.1, along: 0.0, dir: 1.0, length: 4.6, siren: false };
+        let mut pilot = Pilot::new(2.1);
+        let dt = 1.0 / 120.0;
+        // Wanting to go and going nowhere (held against something), it
+        // backs out: in reverse, on the throttle.
+        let mut c = Controls::default();
+        for _ in 0..240 {
+            c = pilot.drive(road, &car, &place, 2.1, 10.0, 6.5, 1.4, dt);
+            if c.reverse {
+                break;
+            }
+        }
+        assert!(c.reverse && c.throttle > 0.5 && c.brake == 0.0, "{c:?}");
+        let flat = |_: Vec3| Ground { height: 0.0, normal: Vec3::Y, grip: 1.0 };
+        for _ in 0..120 {
+            let c = pilot.drive(road, &car, &place, 2.1, 10.0, 6.5, 1.4, dt);
+            car.step(&c, dt, &flat);
+        }
+        assert!(car.speed() < -0.5 && car.gear == -1, "going {} m/s in gear {}", car.speed(), car.gear);
     }
 }

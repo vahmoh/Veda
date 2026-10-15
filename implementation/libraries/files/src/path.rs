@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Absolute, `/`-separated paths as the VFS uses them.
+//! Absolute, `/`-separated paths as the VFS uses them, and the well-known
+//! places among them ([`PLACES`]).
 //!
 //! Paths are plain strings. [`normalize`] and [`resolve`] produce the
 //! canonical form used everywhere else: absolute, no `.` or `..`
@@ -14,8 +15,40 @@ use core::cmp::Ordering;
 
 /// The user's home directory.
 pub const HOME: &str = "/home/user";
+/// The user's desktop: what is in it shows on the desktop.
+pub const DESKTOP: &str = "/home/user/Desktop";
+/// The user's documents (where the Text Editor opens and saves).
+pub const DOCUMENTS: &str = "/home/user/Documents";
+/// The user's pictures (what Photos shows).
+pub const PICTURES: &str = "/home/user/Pictures";
+/// The user's music (what Music plays).
+pub const MUSIC: &str = "/home/user/Music";
+/// The user's videos (what Videos shows).
+pub const VIDEOS: &str = "/home/user/Videos";
 /// The read-only system image.
 pub const SYSTEM: &str = "/system";
+/// Scratch space, which does not outlast a restart.
+pub const TMP: &str = "/tmp";
+
+/// A well-known folder of the user's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    /// Its name for people.
+    pub name: &'static str,
+    pub path: &'static str,
+}
+
+/// The user's places, in the order sidebars list them: the home folder,
+/// then the folders every home has (the VFS makes any missing at every
+/// start).
+pub const PLACES: [Place; 6] = [
+    Place { name: "Home", path: HOME },
+    Place { name: "Desktop", path: DESKTOP },
+    Place { name: "Documents", path: DOCUMENTS },
+    Place { name: "Pictures", path: PICTURES },
+    Place { name: "Music", path: MUSIC },
+    Place { name: "Videos", path: VIDEOS },
+];
 
 /// Normalises an absolute path: collapses `.`, `..` (never above the root)
 /// and repeated or trailing slashes. An empty path becomes `/`.
@@ -315,6 +348,16 @@ mod tests {
         assert_eq!(unique_name("a.txt", is_taken), "a (3).txt");
         assert_eq!(unique_name("New folder", is_taken), "New folder (2)");
         assert_eq!(unique_name(".bashrc", is_taken), ".bashrc (2)");
+    }
+
+    #[test]
+    fn places_are_in_the_home_folder() {
+        assert_eq!(PLACES[0].path, HOME);
+        for place in &PLACES[1..] {
+            assert_eq!(parent(place.path), HOME, "{place:?}");
+            assert_eq!(file_name(place.path), place.name);
+            assert_eq!(normalize(place.path), place.path);
+        }
     }
 
     #[test]

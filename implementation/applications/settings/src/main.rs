@@ -6,6 +6,9 @@
 //! * **Personalization**: a gallery of the system wallpapers (from the desktop
 //!   shell, or `/system/wallpapers` when the shell is not running) and of the
 //!   pictures in `~/Pictures`; clicking one makes it the desktop wallpaper.
+//!   Only the pictures scrolled into view are decoded, and `~/Pictures` is
+//!   read again when the page is shown, the window regains the focus, or F5
+//!   is pressed.
 //! * **Agent**: the voice agent: Deepgram API key, name and voice, language
 //!   and speech models, listening, and what it remembers.
 //! * **Network & Internet**: Wi-Fi (switch, connection, networks in range,
@@ -49,8 +52,14 @@ vrt::entry!(main);
 /// The shell's name for its built-in generated wallpaper.
 const PROCEDURAL: &str = "procedural";
 const WALLPAPER_DIR: &str = "/system/wallpapers";
-const PICTURES_DIR: &str = "/home/user/Pictures";
 const SIDEBAR_W: i32 = 230;
+/// How long closing waits for the agent to take changes still on their way.
+const CLOSE_WAIT_NS: u64 = 2_000_000_000;
+
+/// The user's pictures: `~/Pictures`.
+fn pictures_dir() -> String {
+    vfiles::path::join(vfiles::path::HOME, "Pictures")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -107,19 +116,26 @@ struct Settings {
     net: network::NetworkPage,
     /// Started the first time the Agent page is shown.
     agent: Option<agent::AgentPage>,
+    /// The agent service, for the voice agent's actions.
+    link: control::AgentLink,
+    /// The page shown last frame (leaving one finishes what it was doing).
+    last_section: Section,
+    /// The window had the focus last frame.
+    was_focused: bool,
 }
 
-/// The pictures (files Photos can open) in `dir`, as sorted paths.
+/// The pictures (files Photos can open) in `dir`, as paths in natural name
+/// order (as Files and Photos list them).
 fn images_in(fs: &Fs, dir: &str) -> Vec<String> {
-    let mut v: Vec<String> = fs
+    let mut names: Vec<String> = fs
         .read_dir(dir)
         .unwrap_or_default()
         .into_iter()
         .filter(|e| !e.is_dir && vfiles::kind::is_image(&e.name))
-        .map(|e| vfiles::path::join(dir, &e.name))
+        .map(|e| e.name)
         .collect();
-    v.sort();
-    v
+    names.sort_by(|a, b| vfiles::path::natural_cmp(a, b));
+    names.into_iter().map(|n| vfiles::path::join(dir, &n)).collect()
 }
 
 /// A title for a picture: its file name without the extension, with dashes
@@ -236,7 +252,7 @@ impl Settings {
     fn new(section: Section) -> Settings {
         let fs = Fs::connect();
         let wallpapers = images_in(&fs, WALLPAPER_DIR);
-        let pictures = images_in(&fs, PICTURES_DIR);
+        let pictures = images_in(&fs, &pictures_dir());
         let shell = ShellLink::start();
         if let Some(s) = &shell {
             s.request_wallpapers();
@@ -264,14 +280,44 @@ impl Settings {
             content_h: 600,
             net: network::NetworkPage::new(),
             agent: None,
+            link: control::AgentLink::default(),
+            last_section: section,
+            was_focused: true,
         }
     }
 
-    /// Every wallpaper choice: system wallpapers, then the user's pictures.
-    fn choices(&self) -> Vec<String> {
-        let mut v = self.wallpapers.clone();
-        v.extend(self.pictures.iter().cloned());
-        v
+    /// How many wallpaper choices there are: system wallpapers, then the
+    /// user's pictures.
+    fn choice_count(&self) -> usize {
+        self.wallpapers.len() + self.pictures.len()
+    }
+
+    /// Wallpaper choice `i`.
+    fn choice(&self, i: usize) -> Option<&String> {
+        self.wallpapers.get(i).or_else(|| self.pictures.get(i.checked_sub(self.wallpapers.len())?))
+    }
+
+    /// The page shown changed (from `from`): what the page left was doing is
+    /// finished, and what the new one shows is read again.
+    fn page_changed(&mut self, from: Section) {
+        match from {
+            // Changes not sent yet go now.
+            Section::Agent => {
+                if let Some(p) = &mut self.agent {
+                    p.flush();
+                }
+            }
+            // Pictures not decoded yet are not wanted any more.
+            Section::Personalization => {
+                if let Some(t) = &mut self.thumbs {
+                    t.cancel_queued();
+                }
+            }
+            _ => {}
+        }
+        if self.section == Section::Personalization {
+            self.pictures = images_in(&self.fs, &pictures_dir());
+        }
     }
 
     fn apply(&mut self, path: &str, now: u64) {
@@ -431,8 +477,20 @@ impl Settings {
         mask_corners(ui, r, 8.0, bg);
     }
 
-    /// A gallery of wallpaper choices; returns its height.
-    fn gallery(&mut self, ui: &mut Ui, x: i32, y: i32, w: i32, paths: &[String], first_index: usize) -> i32 {
+    /// A gallery of wallpaper choices; returns its height. Only the tiles
+    /// within `view` (the part of the page on the screen) are drawn, and
+    /// only their pictures decoded.
+    #[allow(clippy::too_many_arguments)]
+    fn gallery(
+        &mut self,
+        ui: &mut Ui,
+        x: i32,
+        y: i32,
+        w: i32,
+        paths: &[String],
+        first_index: usize,
+        view: Rect,
+    ) -> i32 {
         let t = ui.theme().clone();
         let gap = 16;
         let cols = ((w + gap) / (190 + gap)).max(2);
@@ -443,6 +501,9 @@ impl Settings {
         for (i, path) in paths.iter().enumerate() {
             let (col, row) = (i as i32 % cols, i as i32 / cols);
             let tile = Rect::new(x + col * (tile_w + gap), y + row * (tile_h + gap), tile_w, tile_h);
+            if !tile.inflate(8).intersects(&view) {
+                continue;
+            }
             let thumb = Rect::new(tile.x, tile.y, tile.w, thumb_h);
             let id = ui.id(path) ^ 0x6a11;
             let resp = ui.interact(id, tile);
@@ -500,7 +561,7 @@ impl Settings {
         rows * (tile_h + gap)
     }
 
-    fn personalization(&mut self, ui: &mut Ui, r: Rect) -> i32 {
+    fn personalization(&mut self, ui: &mut Ui, r: Rect, view: Rect) -> i32 {
         let t = ui.theme().clone();
         let mut y = Self::page_header(
             ui,
@@ -630,7 +691,9 @@ impl Settings {
         y = card.bottom() + 30;
         Self::section_heading(ui, r.x, y, r.w, "Wallpapers");
         y += 34;
-        let walls = self.wallpapers.clone();
+        // The lists are taken out while their tiles are drawn (drawing one
+        // may need the page), and put back.
+        let walls = core::mem::take(&mut self.wallpapers);
         if walls.is_empty() {
             ui.label(
                 Rect::new(r.x, y, r.w, 22),
@@ -642,7 +705,7 @@ impl Settings {
             );
             y += 40;
         } else {
-            y += self.gallery(ui, r.x, y, r.w, &walls, 0) + 10;
+            y += self.gallery(ui, r.x, y, r.w, &walls, 0, view) + 10;
         }
         Self::section_heading(ui, r.x, y, r.w, "Your pictures");
         ui.label(
@@ -654,13 +717,20 @@ impl Settings {
             Align::Right,
         );
         y += 34;
-        let pics = self.pictures.clone();
+        let pics = core::mem::take(&mut self.pictures);
         if pics.is_empty() {
             let msg = "Pictures you save in your Pictures folder (PNG, JPEG, BMP or QOI) appear here.";
             ui.label(Rect::new(r.x, y, r.w, 22), msg, Font::Regular, t.font_size, t.text_dim, Align::Left);
             y += 40;
         } else {
-            y += self.gallery(ui, r.x, y, r.w, &pics, walls.len());
+            y += self.gallery(ui, r.x, y, r.w, &pics, walls.len(), view);
+        }
+        // Unless the shell sent other wallpapers meanwhile.
+        if self.wallpapers.is_empty() {
+            self.wallpapers = walls;
+        }
+        if self.pictures.is_empty() {
+            self.pictures = pics;
         }
         y - r.y + 10
     }
@@ -883,7 +953,7 @@ impl Settings {
 
     fn handle_keys(&mut self, ui: &mut Ui) {
         let now = ui.now();
-        let n = self.choices().len();
+        let n = self.choice_count();
         for k in ui.input.keys.clone() {
             let idx = SECTIONS.iter().position(|s| s.0 == self.section).unwrap_or(0);
             let ctrl = k.modifiers & modifiers::CTRL != 0;
@@ -898,12 +968,12 @@ impl Settings {
                     self.cursor = Some(self.cursor.map_or(0, |c| (c + 1).min(n - 1)));
                 }
                 keys::ENTER | keys::KPENTER | keys::SPACE if self.section == Section::Personalization => {
-                    if let Some(p) = self.cursor.and_then(|c| self.choices().get(c).cloned()) {
+                    if let Some(p) = self.cursor.and_then(|c| self.choice(c).cloned()) {
                         self.apply(&p, now);
                     }
                 }
                 keys::F5 => {
-                    self.pictures = images_in(&self.fs, PICTURES_DIR);
+                    self.pictures = images_in(&self.fs, &pictures_dir());
                     if let Some(s) = &self.shell {
                         s.request_wallpapers();
                     }
@@ -927,10 +997,12 @@ impl App for Settings {
             }
             self.screen = ui.ctx.display.screen_info().ok();
             self.info_at = now + 1_000_000_000;
-            if self.section == Section::Personalization {
-                self.pictures = images_in(&self.fs, PICTURES_DIR);
-            }
         }
+        // Coming back to the window picks up pictures added meanwhile.
+        if ui.input.focused && !self.was_focused && self.section == Section::Personalization {
+            self.pictures = images_in(&self.fs, &pictures_dir());
+        }
+        self.was_focused = ui.input.focused;
         if matches!(self.section, Section::System | Section::Display) {
             ui.repaint_at(self.info_at);
         }
@@ -966,7 +1038,7 @@ impl App for Settings {
         let used = ui.scroll_area(content, id, h, |ui, off| {
             let r = Rect::new(content.x + 36, content.y + 30 - off, content.w - 72, content.h);
             let used = match section {
-                Section::Personalization => self.personalization(ui, r),
+                Section::Personalization => self.personalization(ui, r, content),
                 Section::Agent => self.agent.as_mut().map_or(0, |p| p.draw(ui, r)),
                 Section::Network => self.net.draw(ui, r),
                 Section::Display => self.display(ui, r),
@@ -984,6 +1056,11 @@ impl App for Settings {
         {
             p.overlay(ui);
         }
+        if self.section != self.last_section {
+            let from = core::mem::replace(&mut self.last_section, self.section);
+            self.page_changed(from);
+            ui.repaint();
+        }
         // A message raised this frame is shown from the next one, so the key
         // that caused it does not also dismiss it.
         if let Some(msg) = self.error.clone().filter(|_| error_at_start) {
@@ -993,6 +1070,15 @@ impl App for Settings {
         } else if self.error.is_some() {
             ui.repaint();
         }
+    }
+
+    fn close_requested(&mut self) -> bool {
+        // Changes to the agent not sent yet go before the window does.
+        if let Some(p) = &mut self.agent {
+            p.flush();
+            p.finish(vrt::time::now_ns() + CLOSE_WAIT_NS);
+        }
+        true
     }
 
     fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {

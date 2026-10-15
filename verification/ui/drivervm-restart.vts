@@ -4,9 +4,11 @@
 # The driver VM starts again when it fails. Among its devices is the wired
 # card (QEMU's 82576, which has a function-level reset); nettest watches
 # the default route, the wired card's. Linux crashes once, as the script
-# asks (`drivervm.crash`): devmgr resets the driver VM's devices and starts
-# a new one, whose drivers attach again: the network service gets the card
-# back. Then the monitor itself is killed, with the same outcome.
+# asks (`drivervm.crash`, 20 s after it started: the waits for the crash
+# look at all the log, wherever it lands): devmgr resets the driver VM's
+# devices and starts a new one, whose drivers attach again: the network
+# service gets the card back. Then the monitor itself is killed, with the
+# same outcome.
 net ethernet
 nic igb
 boot-cmdline "drivervm.crash=20"
@@ -16,7 +18,6 @@ fail-on "drivervm: processor"
 wait-serial "watch: route=eth0 ping=ok dns=ok" 120
 
 # 1. Linux crashes.
-checkpoint
 wait-serial "veda: crashing, as asked" 60
 wait-serial "drivervm: Linux crashed" 30
 wait-serial "devmgr: the driver VM ended: Linux crashed; its devices: " 30

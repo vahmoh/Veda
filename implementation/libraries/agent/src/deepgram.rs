@@ -36,6 +36,24 @@ pub const INPUT_RATE: u32 = 16_000;
 /// Sample rate of the voice received.
 pub const OUTPUT_RATE: u32 = 24_000;
 
+/// Whether `url` is one of Deepgram's own services, reached over TLS: the
+/// only place the API key goes. Any other endpoint (a simulator in tests)
+/// is sent the word `test` in its place.
+pub fn is_deepgram(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("wss://").or_else(|| url.strip_prefix("https://")) else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // No user name before the host ("deepgram.com@elsewhere").
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    let host = host.to_ascii_lowercase();
+    host == "deepgram.com" || host.ends_with(".deepgram.com")
+}
+
 /// Who said something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -44,6 +62,7 @@ pub enum Role {
 }
 
 impl Role {
+    /// The role as the protocol names it.
     pub fn as_str(self) -> &'static str {
         match self {
             Role::User => "user",
@@ -51,6 +70,7 @@ impl Role {
         }
     }
 
+    /// The role a protocol name names.
     pub fn parse(s: &str) -> Option<Role> {
         match s {
             "user" => Some(Role::User),
@@ -74,10 +94,6 @@ pub struct SessionSettings {
     pub functions: Vec<Value>,
     pub voice: String,
     pub speed: f32,
-    /// Earlier conversation, oldest first.
-    pub history: Vec<(Role, String)>,
-    /// Said as soon as the conversation starts.
-    pub greeting: Option<String>,
 }
 
 /// Whether a listen model is a Flux model (API version 2).
@@ -103,7 +119,9 @@ pub fn settings(s: &SessionSettings) -> Value {
     if (s.speed - 1.0).abs() > 0.01 {
         speak["speed"] = speed(s.speed);
     }
-    let mut agent = json!({
+    // Each conversation starts afresh: no earlier turns, no greeting (how
+    // the last one ended is in the prompt, for reference).
+    let agent = json!({
         "listen": { "provider": listen },
         "think": {
             "provider": {
@@ -116,17 +134,6 @@ pub fn settings(s: &SessionSettings) -> Value {
         },
         "speak": { "provider": speak },
     });
-    if !s.history.is_empty() {
-        let messages: Vec<Value> = s
-            .history
-            .iter()
-            .map(|(role, text)| json!({ "type": "History", "role": role.as_str(), "content": text.as_str() }))
-            .collect();
-        agent["context"] = json!({ "messages": messages });
-    }
-    if let Some(g) = &s.greeting {
-        agent["greeting"] = json!(g.as_str());
-    }
     json!({
         "type": "Settings",
         "tags": ["veda"],
@@ -153,15 +160,12 @@ pub fn inject_user_message(content: &str) -> Value {
     json!({ "type": "InjectUserMessage", "content": content })
 }
 
-/// Makes the agent say `message` verbatim (`interrupt` cuts in at once).
-pub fn inject_agent_message(message: &str, interrupt: bool) -> Value {
-    json!({ "type": "InjectAgentMessage", "message": message, "behavior": if interrupt { "interrupt" } else { "queue" } })
-}
-
+/// Replaces the conversation's instructions.
 pub fn update_prompt(prompt: &str) -> Value {
     json!({ "type": "UpdatePrompt", "prompt": prompt })
 }
 
+/// Changes the voice and its speaking rate.
 pub fn update_speak(voice: &str, rate: f32) -> Value {
     let mut provider = json!({ "type": "deepgram", "model": voice });
     if (rate - 1.0).abs() > 0.01 {
@@ -177,10 +181,12 @@ fn speed(rate: f32) -> Value {
     alloc::format!("{rate}").parse::<f64>().map_or(Value::Null, Value::from)
 }
 
+/// Changes the language model.
 pub fn update_think(provider: &str, model: &str) -> Value {
     json!({ "type": "UpdateThink", "think": { "provider": { "type": provider, "model": model } } })
 }
 
+/// Keeps a conversation open while no audio goes out.
 pub fn keep_alive() -> Value {
     json!({ "type": "KeepAlive" })
 }
@@ -556,8 +562,6 @@ mod tests {
             functions: vec![json!({ "name": "open_app", "description": "Opens an app", "parameters": {} })],
             voice: "aura-2-helena-en".into(),
             speed: 1.0,
-            history: vec![(Role::User, "Hi".into()), (Role::Assistant, "Hello!".into())],
-            greeting: None,
         }
     }
 
@@ -575,14 +579,12 @@ mod tests {
         assert_eq!(v.pointer("/agent/think/functions/0/name").and_then(Value::as_str), Some("open_app"));
         assert_eq!(v.pointer("/agent/speak/provider/model").and_then(Value::as_str), Some("aura-2-helena-en"));
         assert!(v.pointer("/agent/speak/provider/speed").is_none());
-        assert_eq!(v.pointer("/agent/context/messages/1/content").and_then(Value::as_str), Some("Hello!"));
-        assert!(v.pointer("/agent/greeting").is_none());
+        // Each conversation starts afresh.
+        assert!(v.pointer("/agent/context").is_none() && v.pointer("/agent/greeting").is_none());
 
         let mut s = sample();
         s.listen_model = "nova-3".into();
         s.speed = 1.2;
-        s.history.clear();
-        s.greeting = Some("Hi there".into());
         let v = settings(&s);
         assert_eq!(v.pointer("/agent/listen/provider/version").and_then(Value::as_str), Some("v1"));
         assert_eq!(v.pointer("/agent/listen/provider/language").and_then(Value::as_str), Some("en"));
@@ -590,8 +592,24 @@ mod tests {
         // As it was set, not as an `f32` widens.
         assert!(v.to_string().contains(r#""speed":1.2,"#) || v.to_string().contains(r#""speed":1.2}"#));
         assert!(update_speak("aura-2-thalia-en", 0.85).to_string().contains(r#""speed":0.85"#));
-        assert!(v.pointer("/agent/context").is_none());
-        assert_eq!(v.pointer("/agent/greeting").and_then(Value::as_str), Some("Hi there"));
+    }
+
+    #[test]
+    fn the_key_goes_only_to_deepgram() {
+        assert!(is_deepgram(AGENT_URL) && is_deepgram(&listen_url(&["Veda"])) && is_deepgram(PROJECTS_URL));
+        assert!(is_deepgram("wss://agent.deepgram.com:443/v1/agent/converse"));
+        for url in [
+            "ws://agent.deepgram.com/v1/agent/converse",
+            "ws://10.0.2.2:5000/",
+            "wss://10.0.2.2:5000/",
+            "wss://agent.deepgram.com.example.org/",
+            "wss://deepgram.com@example.org/",
+            "wss://example.org/?host=agent.deepgram.com",
+            "wss://notdeepgram.com/",
+            "",
+        ] {
+            assert!(!is_deepgram(url), "{url}");
+        }
     }
 
     #[test]

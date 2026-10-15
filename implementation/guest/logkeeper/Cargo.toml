@@ -15,6 +15,7 @@ bench = false
 
 [dependencies]
 vrt = { workspace = true, default-features = false }
+guest-sys = { workspace = true }
 rustix = { workspace = true }
 
 [lints]

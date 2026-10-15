@@ -12,6 +12,23 @@
 //!   the Wi-Fi service for each wireless interface) attach to the stack.
 //!   Frames travel through a [`crate::netring::Link`], never in messages.
 //!
+//! # Who may do what
+//!
+//! The service knows who opened each connection (the registry's client
+//! identity), and:
+//!
+//! * only the device manager (whose drivers, the driver VM's programs
+//!   included, speak as it) and the Wi-Fi service attach devices (the
+//!   connections of others are closed);
+//! * only Settings and the Terminal configure interfaces, renew leases,
+//!   set the DNS servers and flush the DNS cache (`PermissionDenied`
+//!   otherwise), list every socket, and see the interfaces' hardware
+//!   addresses (zeros for everyone else); others list their own sockets;
+//! * limits apply per process, whatever the number of connections: sockets
+//!   (the connections a listener accepts included), lookups in progress,
+//!   status watchers and connections; and of each, a part is kept for
+//!   system services, so that applications together cannot use it all.
+//!
 //! # Sockets
 //!
 //! Every socket is its own channel. The client creates the channel pair,
@@ -26,12 +43,15 @@
 //!
 //! * **Sending.** `netd` grants send credit in bytes
 //!   ([`SocketEvent::Connected`], [`SocketEvent::SendCredit`]). A client may
-//!   only send that many bytes; `netd` grants more as the data enters the
-//!   stack.
+//!   only send that many bytes; `netd` grants more as the stack's send
+//!   buffer frees up (for TCP, what the client may send always fits the
+//!   buffer, so closing the channel delivers everything sent before it).
 //! * **Receiving.** `netd` keeps at most [`RECEIVE_WINDOW`] bytes of
 //!   [`SocketEvent::Data`] (or datagrams) unacknowledged; the client returns
 //!   credit with [`SocketRequest::Consumed`] as its reader takes the data.
-//!   When the client stops reading, TCP's own flow control slows the peer.
+//!   `netd` takes data from the stack only as far as the client's channel
+//!   has room for it: when the client stops reading, the data waits in the
+//!   stack and TCP's own flow control slows the peer.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -46,8 +66,14 @@ use crate::netring::LinkEndpoints;
 pub const MAX_SEND: usize = 16 * 1024;
 /// Unacknowledged received bytes `netd` allows per socket.
 pub const RECEIVE_WINDOW: u32 = 256 * 1024;
-/// Largest UDP payload (an IPv4 datagram of 65535 bytes minus headers).
-pub const MAX_DATAGRAM: usize = 65507;
+/// Largest UDP payload a socket carries: what fits one channel message with
+/// the datagram's address, a little less than an IPv4 datagram's 65507
+/// bytes.
+pub const MAX_DATAGRAM: usize = vabi::CHANNEL_MAX_BYTES - DATAGRAM_MESSAGE_OVERHEAD;
+/// The rest of a [`SocketEvent::Datagram`] or [`SocketRequest::SendTo`]
+/// message: its header, the variant's tag, an IPv6 socket address and the
+/// payload's length.
+const DATAGRAM_MESSAGE_OVERHEAD: usize = vipc::HEADER_LEN + 4 + 27 + 4;
 
 enumeration! {
     /// Why a network operation failed.
@@ -136,7 +162,9 @@ enumeration! {
     /// Which address families a name lookup should return.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum AddrFamily {
-        /// IPv4 and IPv6 (IPv6 first when the machine has IPv6 routes).
+        /// IPv4, and IPv6 when the machine has IPv6 routes; IPv4 addresses
+        /// first (they work through every NAT, while IPv6 often reaches the
+        /// local network only).
         Any = 0,
         V4 = 4,
         V6 = 6,
@@ -149,7 +177,8 @@ message! {
     pub struct TcpOptions {
         /// Send small segments immediately (disables Nagle's algorithm).
         pub nodelay: bool,
-        /// Keep-alive probe interval in milliseconds (0 = off).
+        /// Keep-alive probe interval in milliseconds (0 = off; otherwise at
+        /// least 1000).
         pub keepalive_ms: u32,
         /// Give up connecting after this many milliseconds (0 = 20 s).
         pub connect_timeout_ms: u32,
@@ -206,13 +235,29 @@ union! {
         /// protocol and starts with `credit` bytes of send credit.
         7 => Accepted { socket: Channel, local: SocketAddr, remote: SocketAddr, credit: u32 },
         /// Ping socket: an echo reply. `rtt_us` is the round-trip time.
-        8 => EchoReply { from: IpAddr, seq: u16, ttl: u8, size: u16, rtt_us: u32 },
-        /// Ping socket: an echo request failed (`DestinationUnreachable`,
-        /// `TimeExceeded`, `NoRoute`, `TimedOut`, ...).
+        8 => EchoReply { from: IpAddr, seq: u16, size: u16, rtt_us: u32 },
+        /// Ping socket: an echo request failed: no answer in time
+        /// (`TimedOut`), it could not be sent (`NoRoute`, `NetworkDown`,
+        /// ...), or the router `from` reported it undeliverable
+        /// (`DestinationUnreachable`, `HostUnreachable`) or out of hops
+        /// (`TimeExceeded`).
         9 => EchoFailed { seq: u16, from: Option<IpAddr>, error: NetError },
-        /// TCP: everything sent was acknowledged and the connection closed
-        /// in both directions.
-        10 => Finished {},
+    }
+}
+
+impl SocketEvent {
+    /// Encodes [`SocketEvent::Data`] straight from `data` (the bytes the
+    /// event would encode, without copying `data` into a vector first).
+    pub fn encode_data(data: &[u8], e: &mut vipc::Encoder) {
+        vipc::Encode::encode(2u32, e);
+        vipc::Encode::encode(data, e);
+    }
+
+    /// Encodes [`SocketEvent::Datagram`] straight from `data`.
+    pub fn encode_datagram(from: SocketAddr, data: &[u8], e: &mut vipc::Encoder) {
+        vipc::Encode::encode(3u32, e);
+        vipc::Encode::encode(from, e);
+        vipc::Encode::encode(data, e);
     }
 }
 
@@ -398,23 +443,12 @@ message! {
         pub remote: Option<SocketAddr>,
         /// TCP state name ("ESTABLISHED", ...) or "".
         pub state: String,
-        /// Process id of the owner.
+        /// Process id of the owner (0 for a connection its client closed,
+        /// which finishes on its own).
         pub owner: u64,
         pub interface: String,
         pub rx_queued: u32,
         pub tx_queued: u32,
-    }
-}
-
-message! {
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct DnsCacheEntry {
-        pub name: String,
-        pub addresses: Vec<IpAddr>,
-        /// Seconds left before the entry expires.
-        pub ttl_s: u32,
-        /// A cached "name not found".
-        pub negative: bool,
     }
 }
 
@@ -431,6 +465,11 @@ union! {
 
 /// Event ordinal of [`NetEvent`]s on a watch channel.
 pub const NET_EVENT: u32 = 1;
+
+/// Formats a hardware (MAC) address: `02:00:00:57:4c:01`.
+pub fn format_mac(m: &[u8; 6]) -> String {
+    alloc::format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
+}
 
 protocol! {
     /// The network service.
@@ -456,21 +495,28 @@ protocol! {
 
         /// The overall state.
         10 => fn status() -> NetStatus;
+        /// The interfaces (their hardware addresses are zeros for clients
+        /// other than Settings and the Terminal).
         11 => fn interfaces() -> Vec<InterfaceInfo>;
         12 => fn routes() -> Vec<RouteInfo>;
+        /// The caller's sockets (every socket for Settings and the
+        /// Terminal).
         13 => fn sockets() -> Vec<SocketInfo>;
         /// Sends [`NetEvent`]s (ordinal [`NET_EVENT`]) on `events` until it
         /// is closed.
         14 => fn watch(events: Channel) -> Result<(), NetError>;
-        15 => fn dns_cache() -> Vec<DnsCacheEntry>;
 
-        /// Sets how `interface` obtains its IPv4 configuration.
+        /// Sets how `interface` obtains its IPv4 configuration (Settings and
+        /// the Terminal only).
         20 => fn configure(interface: String, config: IpConfig) -> Result<(), NetError>;
-        /// Restarts DHCP on `interface` (asks for a new lease).
+        /// Restarts DHCP on `interface` (asks for a new lease; Settings and
+        /// the Terminal only).
         21 => fn renew(interface: String) -> Result<(), NetError>;
-        /// Overrides the DNS servers (empty: use the ones DHCP provides).
+        /// Overrides the DNS servers (empty: use the ones DHCP provides;
+        /// Settings and the Terminal only).
         22 => fn set_dns_servers(servers: Vec<IpAddr>) -> Result<(), NetError>;
-        23 => fn flush_dns_cache() -> ();
+        /// Empties the DNS cache (Settings and the Terminal only).
+        23 => fn flush_dns_cache() -> Result<(), NetError>;
     }
 }
 
@@ -613,13 +659,13 @@ mod tests {
         let dest: SocketAddr = "10.0.2.3:53".parse().unwrap();
         let r = SocketRequest::SendTo { dest, data: Bytes(vec![1, 2, 3]) };
         assert_eq!(roundtrip(r.clone()), r);
-        let e = SocketEvent::EchoReply { from: "1.1.1.1".parse().unwrap(), seq: 7, ttl: 57, size: 56, rtt_us: 12_345 };
+        let e = SocketEvent::EchoReply { from: "1.1.1.1".parse().unwrap(), seq: 7, size: 56, rtt_us: 12_345 };
         let mut enc = Encoder::new();
         e.encode(&mut enc);
         let mut d = Decoder::new(&enc.bytes, Vec::new());
         assert!(matches!(
             SocketEvent::decode(&mut d).unwrap(),
-            SocketEvent::EchoReply { seq: 7, ttl: 57, size: 56, rtt_us: 12_345, .. }
+            SocketEvent::EchoReply { seq: 7, size: 56, rtt_us: 12_345, .. }
         ));
         let f = ResolveResult::Found {
             addresses: vec!["2001:db8::1".parse().unwrap(), "192.0.2.1".parse().unwrap()],
@@ -627,6 +673,34 @@ mod tests {
             canonical: "example.com".into(),
         };
         assert_eq!(roundtrip(f.clone()), f);
+    }
+
+    #[test]
+    fn events_encode_straight_from_slices() {
+        let from: SocketAddr = "[2001:db8::1]:5353".parse().unwrap();
+        let payload = vec![7u8; MAX_DATAGRAM];
+        let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
+        SocketEvent::encode_datagram(from, &payload, &mut e);
+        // The largest datagram, from the longest address, fits a message.
+        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
+        let mut d = Decoder::new(&e.bytes[vipc::HEADER_LEN..], Vec::new());
+        match SocketEvent::decode(&mut d).unwrap() {
+            SocketEvent::Datagram { from: f, data } => assert_eq!((f, data.0), (from, payload.clone())),
+            other => panic!("{other:?}"),
+        }
+        let mut e = Encoder::new();
+        SocketEvent::encode_data(b"hello", &mut e);
+        let mut d = Decoder::new(&e.bytes, Vec::new());
+        assert!(matches!(SocketEvent::decode(&mut d).unwrap(), SocketEvent::Data { data } if data.0 == b"hello"));
+        // And a request to send the largest datagram fits too.
+        let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
+        SocketRequest::SendTo { dest: from, data: Bytes(payload) }.encode(&mut e);
+        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
+    }
+
+    #[test]
+    fn macs_are_formatted() {
+        assert_eq!(format_mac(&[2, 0, 0, 0x57, 0x4c, 1]), "02:00:00:57:4c:01");
     }
 
     #[test]

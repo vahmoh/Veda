@@ -7,26 +7,68 @@
 //! picture on screen is always decoded before any prefetching), the other makes thumbnails for
 //! the library and the filmstrip. Results come back through a mutex and an [`Event`] that the
 //! UI waits on (see `App::wait_handles`), so decoding never blocks drawing.
+//!
+//! Pictures take much memory (a 50-megapixel photo some 270 MB with its smaller copies), so what
+//! they may take follows the machine's ([`Budget`]): the decoders refuse pictures larger than a
+//! share of it, and the viewer keeps neighbours decoded only while they fit. A file is mapped,
+//! never copied, and its size checked before it is read; a picture that is decoded for the
+//! viewer gives its thumbnails too, rather than being decoded a second time for them.
 
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use vabi::RawHandle;
 use vgfx::Bitmap;
-use vimage::{Filter, Format, Image, ImageError, Orientation};
+use vimage::{DecodeOptions, Filter, Format, Image, ImageError, Orientation};
 use vproto::fs::FsError;
 use vproto::vfs;
 use vrt::object::Event;
 use vrt::sync::{Condvar, Mutex};
+use vrt::vm::Mapping;
 
 #[allow(unused_imports)]
 use num_traits::Float;
 
 /// Files larger than this are not opened.
 const MAX_FILE: u64 = 128 << 20;
+/// The decoders take pictures of at least this many pixels, whatever the memory.
+const MIN_PIXELS: u64 = 4 << 20;
+
+/// What decoded pictures may take of the machine's memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    /// The decoders refuse pictures of more pixels: one decoded picture with its smaller copies
+    /// takes at most a fifth of the memory.
+    pub max_pixels: u64,
+    /// The pictures kept decoded (the one on screen and its neighbours) take at most this many
+    /// bytes together: a third of the memory.
+    pub kept_bytes: u64,
+}
+
+impl Budget {
+    /// The budget of a machine with `total` bytes of memory.
+    pub fn for_memory(total: u64) -> Budget {
+        let max_pixels = (total / 5).saturating_mul(3) / 16;
+        Budget { max_pixels: max_pixels.clamp(MIN_PIXELS, vimage::MAX_PIXELS), kept_bytes: total / 3 }
+    }
+
+    /// Bytes a decoded picture of `pixels` pixels takes with its smaller copies (4 bytes a pixel,
+    /// and a third more for the halves).
+    pub fn picture_bytes(pixels: u64) -> u64 {
+        pixels.saturating_mul(16) / 3
+    }
+
+    /// Neighbours of the picture on screen (of `pixels` pixels) to keep decoded on each side:
+    /// both while three such pictures fit, the next one while two do, none otherwise.
+    pub fn neighbours(&self, pixels: u64) -> usize {
+        let fit = self.kept_bytes / Budget::picture_bytes(pixels).max(1);
+        fit.saturating_sub(1).min(2) as usize
+    }
+}
 /// Size of a library card thumbnail.
 pub const CARD_W: u32 = 216;
 pub const CARD_H: u32 = 144;
@@ -57,6 +99,8 @@ pub struct Meta {
 
 /// A decoded picture, ready for drawing.
 pub struct Picture {
+    /// Its own number: no other picture decoded has it (what the view cache knows it by).
+    pub id: u64,
     /// Mip chain of premultiplied bitmaps: the full picture first, then halves.
     pub levels: Vec<Bitmap>,
     /// Some pixels are not opaque (drawn over a checkerboard).
@@ -77,6 +121,8 @@ impl Picture {
 
 /// Thumbnails of one picture (premultiplied bitmaps).
 pub struct Thumbs {
+    /// Its own number (as [`Picture::id`]).
+    pub id: u64,
     /// Library card: `CARD_W` x `CARD_H`, cropped to fill, with rounded corners.
     pub card: Bitmap,
     /// Filmstrip: `STRIP_W` x `STRIP_H`, cropped to fill, with rounded corners.
@@ -100,6 +146,18 @@ struct Shared {
     done: Mutex<Vec<Done>>,
     /// The picture the decoder is working on.
     active: Mutex<Option<String>>,
+    /// Thumbnails asked for pictures the picture decoder is decoding or will decode: it makes
+    /// them from what it decoded. (Locked after `pictures`, never before.)
+    with_picture: Mutex<Vec<String>>,
+    budget: Budget,
+    /// The next picture's or thumbnails' number.
+    next_id: AtomicU64,
+}
+
+impl Shared {
+    fn id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// The UI side of the decoding threads.
@@ -109,8 +167,8 @@ pub struct Loader {
 }
 
 impl Loader {
-    /// Starts the two worker threads.
-    pub fn start() -> Option<Loader> {
+    /// Starts the two worker threads, decoding within `budget`.
+    pub fn start(budget: Budget) -> Option<Loader> {
         let event = Event::create().ok()?;
         let shared = Arc::new(Shared {
             pictures: Mutex::new(VecDeque::new()),
@@ -119,6 +177,9 @@ impl Loader {
             thumbs_wake: Condvar::new(),
             done: Mutex::new(Vec::new()),
             active: Mutex::new(None),
+            with_picture: Mutex::new(Vec::new()),
+            budget,
+            next_id: AtomicU64::new(1),
         });
         // The picture on screen matters more than thumbnails; both yield to the UI thread.
         let workers =
@@ -159,13 +220,38 @@ impl Loader {
         self.shared.pictures_wake.notify_one();
     }
 
-    /// Drops queued picture requests for paths not in `keep`.
-    pub fn retain_pictures(&self, keep: &[String]) {
-        self.shared.pictures.lock().retain(|p| keep.contains(p));
+    /// What decoded pictures may take.
+    pub fn budget(&self) -> Budget {
+        self.shared.budget
     }
 
-    /// Asks for the thumbnails of `path`; `first` puts the request at the head of the queue.
+    /// Drops queued picture requests for paths not in `keep`. Thumbnails the picture decoder was
+    /// to make of them go back to the thumbnailer.
+    pub fn retain_pictures(&self, keep: &[String]) {
+        let mut q = self.shared.pictures.lock();
+        q.retain(|p| keep.contains(p));
+        let mut with = self.shared.with_picture.lock();
+        let active = self.shared.active.lock().clone();
+        let orphans: Vec<String> = with.extract_if(.., |p| !q.contains(p) && active.as_ref() != Some(p)).collect();
+        drop((with, q));
+        for p in orphans {
+            self.request_thumbs(&p, false);
+        }
+    }
+
+    /// Asks for the thumbnails of `path`; `first` puts the request at the head of the queue. A
+    /// picture the picture decoder decodes (or will) gives them itself.
     pub fn request_thumbs(&self, path: &str, first: bool) {
+        {
+            let q = self.shared.pictures.lock();
+            if self.shared.active.lock().as_deref() == Some(path) || q.iter().any(|p| p == path) {
+                let mut with = self.shared.with_picture.lock();
+                if !with.iter().any(|p| p == path) {
+                    with.push(path.to_string());
+                }
+                return;
+            }
+        }
         let mut q = self.shared.thumbs.lock();
         if let Some(i) = q.iter().position(|p| p == path) {
             if !first {
@@ -184,7 +270,9 @@ impl Loader {
 
     /// Forgets thumbnail requests that have not started yet; returns their paths.
     pub fn cancel_thumbs(&self) -> Vec<String> {
-        self.shared.thumbs.lock().drain(..).collect()
+        let mut paths: Vec<String> = self.shared.thumbs.lock().drain(..).collect();
+        paths.extend(self.shared.with_picture.lock().drain(..));
+        paths
     }
 
     /// Finished jobs since the last call.
@@ -229,32 +317,35 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
             // Reconnect for the next job.
             vfs = None;
         }
+        let max_pixels = shared.budget.max_pixels;
         let done = match data {
             Err(e) => {
                 let e = e.to_string();
                 if thumbs {
                     Done::Thumbs { path, result: Err(e), meta: None }
                 } else {
+                    take_with_picture(&shared, &path);
                     Done::Picture { path, result: Err(e), meta: None }
                 }
             }
             Ok(data) => {
-                let meta = vimage::read_info(&data).ok().map(|i| Meta {
+                let bytes = data.bytes();
+                let meta = vimage::read_info(bytes).ok().map(|i| Meta {
                     format: i.format,
                     width: i.width,
                     height: i.height,
                     has_alpha: i.has_alpha,
                     orientation: i.orientation,
                     progressive: i.progressive,
-                    file_size: data.len() as u64,
+                    file_size: bytes.len() as u64,
                 });
                 let started = vrt::time::now_ns();
-                let decoded = decode(&data);
+                let decoded = decode(bytes, max_pixels);
                 let decode_ms = (vrt::time::now_ns() - started) / 1_000_000;
                 drop(data);
                 let name = path.rsplit('/').next().unwrap_or("");
                 if thumbs {
-                    let result = decoded.map(|(img, _)| make_thumbs(&img));
+                    let result = decoded.map(|(img, _)| make_thumbs(&img, shared.id()));
                     let total_ms = (vrt::time::now_ns() - started) / 1_000_000;
                     match &result {
                         Ok(_) => vrt::println!("thumbnail of {name}: decoded in {decode_ms} ms, {total_ms} ms in all"),
@@ -262,7 +353,17 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                     }
                     Done::Thumbs { path, result, meta }
                 } else {
-                    let result = decoded.map(|(img, damaged)| Arc::new(make_picture(img, damaged)));
+                    // The thumbnails asked for meanwhile, from what was decoded: before the picture's
+                    // smaller copies are made, so that the preview shows at once.
+                    if take_with_picture(&shared, &path) {
+                        let result = match &decoded {
+                            Ok((img, _)) => Ok(make_thumbs(img, shared.id())),
+                            Err(e) => Err(e.clone()),
+                        };
+                        shared.done.lock().push(Done::Thumbs { path: path.clone(), result, meta });
+                        let _ = event.signal();
+                    }
+                    let result = decoded.map(|(img, damaged)| Arc::new(make_picture(img, damaged, shared.id())));
                     let total_ms = (vrt::time::now_ns() - started) / 1_000_000;
                     match &result {
                         Ok(p) => vrt::println!(
@@ -282,6 +383,14 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
         }
         let _ = event.signal();
     }
+}
+
+/// Whether thumbnails of `path` were asked of the picture decoder (they are then no longer).
+fn take_with_picture(shared: &Shared, path: &str) -> bool {
+    let mut with = shared.with_picture.lock();
+    let asked = with.iter().any(|p| p == path);
+    with.retain(|p| p != path);
+    asked
 }
 
 /// Why a file could not be read.
@@ -304,26 +413,58 @@ impl core::fmt::Display for Failure {
     }
 }
 
-fn read_file(vfs: &vfs::Client, path: &str) -> Result<Vec<u8>, Failure> {
+/// A file as read: the file system's copy of it, mapped (never copied again).
+struct FileData {
+    map: Mapping,
+    len: usize,
+}
+
+impl FileData {
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: a read-only mapping of at least `len` bytes that lives as long as `self`; the
+        // file system does not write the copy it handed over.
+        unsafe { &self.map.as_slice()[..self.len] }
+    }
+}
+
+/// Reads the file at `path`, if it is not too large (its size is asked first).
+fn read_file(vfs: &vfs::Client, path: &str) -> Result<FileData, Failure> {
+    match vfs.stat(path.into()) {
+        Ok(Ok(st)) if st.size > MAX_FILE => return Err(Failure::TooLarge),
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return Err(Failure::Fs(e)),
+        Err(_) => return Err(Failure::Service),
+    }
     let (vmo, len) = match vfs.read_file(path.into()) {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return Err(Failure::Fs(e)),
         Err(_) => return Err(Failure::Service),
     };
+    // The file may have grown since it was looked at.
     if len > MAX_FILE {
         return Err(Failure::TooLarge);
     }
-    let mut buf = Vec::new();
-    buf.try_reserve_exact(len as usize).map_err(|_| Failure::NoMemory)?;
-    buf.resize(len as usize, 0);
-    vmo.read(0, &mut buf).map_err(|_| Failure::Service)?;
-    Ok(buf)
+    let size = vmo.size().map_err(|_| Failure::Service)?;
+    if len as usize > size {
+        return Err(Failure::Service);
+    }
+    let map = Mapping::new(vmo, size.max(4096), vabi::map_flags::READ).map_err(|_| Failure::NoMemory)?;
+    Ok(FileData { map, len: len as usize })
 }
 
-/// Decodes a picture. Files whose only fault is a checksum (common with PNGs written by tools
-/// that do not update CRCs) are decoded without verifying checksums; the flag reports that.
-fn decode(data: &[u8]) -> Result<(Image, bool), String> {
-    vimage::decode_lenient(data).map_err(describe)
+/// Decodes a picture of at most `max_pixels` pixels. Files whose only fault is a checksum
+/// (common with PNGs written by tools that do not update CRCs) are decoded without verifying
+/// checksums; the flag reports that.
+fn decode(data: &[u8], max_pixels: u64) -> Result<(Image, bool), String> {
+    let options = DecodeOptions { max_pixels, ..DecodeOptions::DEFAULT };
+    match vimage::decode_with(data, &options) {
+        Err(ImageError::ChecksumMismatch(_)) => {
+            let lax = DecodeOptions { verify_checksums: false, ..options };
+            vimage::decode_with(data, &lax).map(|img| (img, true))
+        }
+        other => other.map(|img| (img, false)),
+    }
+    .map_err(describe)
 }
 
 /// A decoding error in words for the user.
@@ -333,15 +474,18 @@ fn describe(e: ImageError) -> String {
         ImageError::Truncated => "The file is incomplete: it ends before the picture does.".into(),
         ImageError::Invalid(why) => format!("The file is damaged ({why})."),
         ImageError::Unsupported(what) => format!("This picture uses a feature Photos does not support ({what})."),
-        ImageError::TooLarge { width, height } => format!("The picture is too large ({width} × {height} pixels)."),
+        ImageError::TooLarge { width, height } => {
+            format!("The picture is too large for this computer's memory ({width} × {height} pixels).")
+        }
         ImageError::ChecksumMismatch(_) => "The file is damaged (checksum mismatch).".into(),
         ImageError::OutOfMemory => "There is not enough memory to open this picture.".into(),
         e => format!("The picture could not be decoded ({e})."),
     }
 }
 
-/// Builds the mip chain of a decoded picture.
-fn make_picture(img: Image, damaged: bool) -> Picture {
+/// Builds the mip chain of a decoded picture (as far as there is memory for it: the picture
+/// shows from the levels made).
+fn make_picture(img: Image, damaged: bool, id: u64) -> Picture {
     let has_alpha = img.pixels.iter().any(|p| p >> 24 != 0xFF);
     let mut levels = alloc::vec![Bitmap::from_straight(img.width as i32, img.height as i32, img.pixels)];
     loop {
@@ -349,16 +493,20 @@ fn make_picture(img: Image, damaged: bool) -> Picture {
         if last.width.max(last.height) <= SMALLEST_LEVEL || last.width < 2 || last.height < 2 {
             break;
         }
-        let next = half(last);
+        let Some(next) = half(last) else { break };
         levels.push(next);
     }
-    Picture { levels, has_alpha, damaged }
+    Picture { id, levels, has_alpha, damaged }
 }
 
-/// Halves a premultiplied bitmap with a 2x2 box filter (an odd last row or column is dropped).
-fn half(b: &Bitmap) -> Bitmap {
+/// Halves a premultiplied bitmap with a 2x2 box filter (an odd last row or column is dropped);
+/// `None` without the memory for it.
+fn half(b: &Bitmap) -> Option<Bitmap> {
     let (w, h) = (b.width / 2, b.height / 2);
-    let mut out = Bitmap::new(w, h);
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(w as usize * h as usize).ok()?;
+    pixels.resize(w as usize * h as usize, 0);
+    let mut out = Bitmap { width: w, height: h, pixels };
     let sw = b.width as usize;
     for y in 0..h as usize {
         let r0 = &b.pixels[2 * y * sw..2 * y * sw + 2 * w as usize];
@@ -377,10 +525,10 @@ fn half(b: &Bitmap) -> Bitmap {
             *d = (rb & 0x00FF_00FF) | ((ag & 0x00FF_00FF) << 8);
         }
     }
-    out
+    Some(out)
 }
 
-fn make_thumbs(img: &Image) -> Thumbs {
+fn make_thumbs(img: &Image, id: u64) -> Thumbs {
     let has_alpha = img.pixels.iter().any(|p| p >> 24 != 0xFF);
     // An intermediate size with enough pixels for the crops of any aspect ratio.
     let base = vimage::thumbnail(img, BASE_SIZE, BASE_SIZE, Filter::Bilinear);
@@ -388,7 +536,7 @@ fn make_thumbs(img: &Image) -> Thumbs {
     let strip = finish(vimage::cover(&base, STRIP_W, STRIP_H, Filter::Bilinear), has_alpha, 6.0);
     let preview = vimage::thumbnail(&base, PREVIEW_W, PREVIEW_H, Filter::Bilinear);
     let preview = Bitmap::from_straight(preview.width as i32, preview.height as i32, preview.pixels);
-    Thumbs { card, strip, preview, has_alpha }
+    Thumbs { id, card, strip, preview, has_alpha }
 }
 
 /// Puts a transparent thumbnail on a checkerboard and rounds its corners; returns it

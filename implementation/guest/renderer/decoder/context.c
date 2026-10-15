@@ -16,6 +16,7 @@
 #include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_math.h"
+#include "util/u_surface.h"
 
 bool
 vr_fail(struct vr_context *ctx, const char *fmt, ...)
@@ -284,6 +285,101 @@ add_resource(struct vr_context *ctx, struct pipe_resource *pres, const struct vr
    return VR_OK;
 }
 
+/* Zeros enough for any texel or block (16 bytes at most), and for a
+ * buffer's bytes a piece at a time. */
+static const uint8_t zeros[64 * 1024];
+
+/* Writes zeros over every byte of level `level` of `pres` through a
+ * mapping: for what no clear reaches (a compressed image on a driver that
+ * clears texel by texel). */
+static bool
+zero_by_mapping(struct pipe_context *pipe, struct pipe_resource *pres, unsigned level)
+{
+   unsigned width = u_minify(pres->width0, level);
+   unsigned height = pres->target == PIPE_TEXTURE_1D || pres->target == PIPE_TEXTURE_1D_ARRAY
+                        ? 1
+                        : u_minify(pres->height0, level);
+   unsigned layers = util_num_layers(pres, level);
+   struct pipe_box box;
+   u_box_3d(0, 0, 0, width, height, layers, &box);
+   struct pipe_transfer *t = NULL;
+   uint8_t *map = pipe->texture_map(pipe, pres, level, PIPE_MAP_WRITE | PIPE_MAP_DISCARD_RANGE, &box, &t);
+   if (!map)
+      return false;
+   unsigned rows = util_format_get_nblocksy(pres->format, height);
+   unsigned row_bytes = util_format_get_stride(pres->format, width);
+   for (unsigned z = 0; z < layers; z++) {
+      for (unsigned y = 0; y < rows; y++)
+         memset(map + z * t->layer_stride + y * t->stride, 0, row_bytes);
+   }
+   pipe->texture_unmap(pipe, t);
+   return true;
+}
+
+/* Clears the multisampled image `pres`, which maps nowhere: a render
+ * target or a depth buffer, cleared as such (to zero; depth 0). */
+static bool
+zero_multisampled(struct pipe_context *pipe, struct pipe_resource *pres)
+{
+   struct pipe_surface s;
+   u_surface_default_template(&s, pres);
+   s.first_layer = 0;
+   s.last_layer = util_num_layers(pres, 0) - 1;
+   s.level = 0;
+   if (util_format_is_depth_or_stencil(pres->format)) {
+      if (!pipe->clear_depth_stencil)
+         return false;
+      const struct util_format_description *d = util_format_description(pres->format);
+      unsigned planes = (util_format_has_depth(d) ? PIPE_CLEAR_DEPTH : 0) |
+                        (util_format_has_stencil(d) ? PIPE_CLEAR_STENCIL : 0);
+      pipe->clear_depth_stencil(pipe, &s, planes, 0.0, 0, 0, 0, pres->width0, pres->height0, false);
+      return true;
+   }
+   if (!pipe->clear_render_target)
+      return false;
+   union pipe_color_union black;
+   memset(&black, 0, sizeof(black));
+   pipe->clear_render_target(pipe, &s, &black, 0, 0, pres->width0, pres->height0, false);
+   return true;
+}
+
+/* Has every byte of the new resource `pres` read as zero, whatever its
+ * memory held: drivers recycle memory other contexts freed (Mesa's caches
+ * of buffers keep it within the process, which serves every client), and
+ * a client must not see what another drew. False if it cannot be done. */
+static bool
+zero_resource(struct vr_context *ctx, struct pipe_resource *pres)
+{
+   struct pipe_context *pipe = ctx->pipe;
+   if (pres->target == PIPE_BUFFER) {
+      unsigned size = pres->width0;
+      /* A clear on the device where the driver has one, of whole words. */
+      unsigned cleared = pipe->clear_buffer ? size & ~3u : 0;
+      if (cleared) {
+         uint32_t zero = 0;
+         pipe->clear_buffer(pipe, pres, 0, cleared, &zero, sizeof(zero));
+      }
+      for (unsigned at = cleared; at < size; at += sizeof(zeros))
+         pipe->buffer_subdata(pipe, pres, PIPE_MAP_WRITE, at, MIN2(size - at, sizeof(zeros)), zeros);
+      return true;
+   }
+   if (pres->nr_samples > 1)
+      return zero_multisampled(pipe, pres);
+   for (unsigned level = 0; level <= pres->last_level; level++) {
+      if (pipe->clear_texture && !util_format_is_compressed(pres->format)) {
+         unsigned height = pres->target == PIPE_TEXTURE_1D || pres->target == PIPE_TEXTURE_1D_ARRAY
+                              ? 1
+                              : u_minify(pres->height0, level);
+         struct pipe_box box;
+         u_box_3d(0, 0, 0, u_minify(pres->width0, level), height, util_num_layers(pres, level), &box);
+         pipe->clear_texture(pipe, pres, level, &box, zeros);
+      } else if (!zero_by_mapping(pipe, pres, level)) {
+         return false;
+      }
+   }
+   return true;
+}
+
 VR_API int
 vr_resource_create(struct vr_context *ctx, const struct vr_resource_args *a, uint64_t backing_offset,
                    uint64_t backing_len, uint32_t *id)
@@ -340,6 +436,11 @@ vr_resource_create(struct vr_context *ctx, const struct vr_resource_args *a, uin
       pres = ctx->dev->screen->resource_create(ctx->dev->screen, &t);
       if (!pres) {
          vr_fail(ctx, "the driver could not make a resource");
+         return VR_NO_MEMORY;
+      }
+      if (!zero_resource(ctx, pres)) {
+         pipe_resource_reference(&pres, NULL);
+         vr_fail(ctx, "a new resource could not be cleared");
          return VR_NO_MEMORY;
       }
    }

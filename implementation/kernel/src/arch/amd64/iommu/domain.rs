@@ -136,14 +136,27 @@ impl Domain {
     /// ended); not in another guest's. A device the firmware keeps memory
     /// for (an RMRR: the firmware may go on using it with the device, as a
     /// GPU its stolen memory and the firmware's framebuffer in it) comes
-    /// only if the domain maps that memory where it is: else it stays the
-    /// host's.
+    /// only if the domain maps that memory where it is (the first page
+    /// that it does not ends the search): else it stays the host's, as it
+    /// does if that memory is not whole pages.
     pub fn attach(&mut self, sid: u16) -> Result<(), Error> {
         let iommu = self.iommu();
         let (bus, dev, func) = (sid >> 8, (sid >> 3) & 0x1F, sid & 7);
         let reserved = iommu.dmar.reserved.iter().filter(|r| r.segment == 0);
         for r in reserved.filter(|r| r.scopes.iter().any(|s| s.source_id() == Some(sid))) {
-            if (r.base..=r.limit).step_by(4096).any(|page| self.translate(page) != Some(page)) {
+            let Some(range) = r.range() else {
+                crate::kwarn!(
+                    "iommu: {:02x}:{:02x}.{} has memory the firmware keeps for it ({:#x}-{:#x}) that is not whole \
+                     pages; it stays the host's",
+                    bus,
+                    dev,
+                    func,
+                    r.base,
+                    r.limit
+                );
+                return Err(Error::NotSupported);
+            };
+            if range.step_by(4096).any(|page| self.translate(page) != Some(page)) {
                 crate::kwarn!(
                     "iommu: {:02x}:{:02x}.{} has memory the firmware keeps for it ({:#x}-{:#x}), which the domain \
                      does not have where it is; it stays the host's",

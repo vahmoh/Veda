@@ -12,8 +12,15 @@
 //!
 //! On a syntax error the parser reports it, skips to the end of the
 //! statement or declaration and goes on, so that one compilation finds
-//! several errors. Nesting is bounded: a hostile shader cannot exhaust the
-//! stack.
+//! several errors.
+//!
+//! Nesting is bounded by [`MAX_NESTING`], and so is the depth of the tree:
+//! besides statements, parentheses and operands, every link of a chain the
+//! parser builds in a loop (`a + b + c`, `v.xy.x`, `a[0][1]`, `f(), g()`)
+//! counts a level, since it nests the tree a level deeper. Neither the
+//! parser nor the passes that walk the tree recursively (or drop it) can
+//! exhaust the stack, and the statement and expression functions keep their
+//! rarely needed work out of line, so that each level takes little of it.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -136,14 +143,29 @@ impl Parser<'_> {
     }
 
     fn unexpected<T>(&mut self, wanted: &str) -> PResult<T> {
+        Err(self.syntax_error(wanted))
+    }
+
+    /// Reports a syntax error. Kept out of line: the parser's recursive
+    /// functions call it, and its formatting would grow every frame of the
+    /// recursion.
+    #[cold]
+    #[inline(never)]
+    fn syntax_error(&mut self, wanted: &str) -> Stop {
         let loc = self.loc();
         let found = self.describe(self.peek());
         error!(self.diags, loc, "syntax error: expected {wanted}, found {found}");
-        Err(Stop)
+        Stop
     }
 
     fn expect_punct(&mut self, p: Punct) -> PResult<Loc> {
-        if self.is_punct(p) { Ok(self.bump().loc) } else { self.unexpected(&alloc::format!("'{}'", p.as_str())) }
+        if self.is_punct(p) { Ok(self.bump().loc) } else { Err(self.punct_expected(p)) }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn punct_expected(&mut self, p: Punct) -> Stop {
+        self.syntax_error(&alloc::format!("'{}'", p.as_str()))
     }
 
     fn expect_ident(&mut self) -> PResult<(Symbol, Loc)> {
@@ -160,15 +182,21 @@ impl Parser<'_> {
     /// a [`Self::leave`].
     fn enter(&mut self) -> PResult<()> {
         if self.depth >= MAX_NESTING {
-            if !self.too_deep {
-                let loc = self.loc();
-                error!(self.diags, loc, "the shader nests expressions or statements too deeply");
-            }
-            self.too_deep = true;
-            return Err(Stop);
+            return Err(self.too_deep());
         }
         self.depth += 1;
         Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn too_deep(&mut self) -> Stop {
+        if !self.too_deep {
+            let loc = self.loc();
+            error!(self.diags, loc, "the shader nests expressions or statements too deeply");
+        }
+        self.too_deep = true;
+        Stop
     }
 
     fn leave(&mut self) {
@@ -496,14 +524,25 @@ impl Parser<'_> {
         if self.eat_punct(Punct::RBracket) {
             return Ok(Some(ArraySize::Unsized));
         }
-        let size = self.conditional()?;
+        // The size is an expression, which may hold a type with a size of
+        // its own (`float[float[1](2.0).length()]`): a level of nesting.
+        self.enter()?;
+        let size = self.conditional();
+        self.leave();
+        let size = size?;
         self.expect_punct(Punct::RBracket)?;
         if self.is_punct(Punct::LBracket) {
-            let loc = self.loc();
-            error!(self.diags, loc, "arrays of arrays are not supported in GLSL ES 1.00 and 3.00");
-            return Err(Stop);
+            return Err(self.array_of_arrays());
         }
         Ok(Some(ArraySize::Sized(Box::new(size))))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn array_of_arrays(&mut self) -> Stop {
+        let loc = self.loc();
+        error!(self.diags, loc, "arrays of arrays are not supported in GLSL ES 1.00 and 3.00");
+        Stop
     }
 
     fn struct_spec(&mut self) -> PResult<StructSpec> {
@@ -553,6 +592,7 @@ impl Parser<'_> {
     }
 
     /// A declaration, ending with its semicolon.
+    #[inline(never)]
     fn declaration(&mut self) -> PResult<Declaration> {
         let loc = self.loc();
         // precision <precision> <type>;
@@ -717,113 +757,150 @@ impl Parser<'_> {
         r
     }
 
+    /// A statement's kind, after its location. The statements that hold
+    /// statements are parsed by functions of their own (kept out of line),
+    /// so that the frame each level of nesting takes on the stack is only
+    /// what that statement needs.
     fn statement_inner(&mut self) -> PResult<Stmt> {
         let loc = self.loc();
         let kind = match self.peek() {
-            Tk::Punct(Punct::LBrace) => StmtKind::Compound(self.compound_body()?),
+            Tk::Punct(Punct::LBrace) => self.compound_statement()?,
             Tk::Punct(Punct::Semicolon) => {
                 self.bump();
                 StmtKind::Empty
             }
-            Tk::Kw(Kw::If) => {
-                self.bump();
-                self.expect_punct(Punct::LParen)?;
-                let cond = self.expression()?;
-                self.expect_punct(Punct::RParen)?;
-                let then = Box::new(self.statement()?);
-                let otherwise = if self.eat_kw(Kw::Else) { Some(Box::new(self.statement()?)) } else { None };
-                StmtKind::If { cond, then, otherwise }
-            }
-            Tk::Kw(Kw::Switch) => {
-                self.bump();
-                self.expect_punct(Punct::LParen)?;
-                let selector = self.expression()?;
-                self.expect_punct(Punct::RParen)?;
-                let body = self.compound_body()?;
-                StmtKind::Switch { selector, body }
-            }
-            Tk::Kw(Kw::Case) => {
-                self.bump();
-                let e = self.expression()?;
-                self.expect_punct(Punct::Colon)?;
-                StmtKind::Case(e)
-            }
+            Tk::Kw(Kw::If) => self.if_statement()?,
+            Tk::Kw(Kw::Switch) => self.switch_statement()?,
+            Tk::Kw(Kw::Case) => self.case_label()?,
             Tk::Kw(Kw::Default) => {
                 self.bump();
                 self.expect_punct(Punct::Colon)?;
                 StmtKind::Default
             }
-            Tk::Kw(Kw::While) => {
-                self.bump();
-                self.expect_punct(Punct::LParen)?;
-                let cond = self.condition()?;
-                self.expect_punct(Punct::RParen)?;
-                let body = Box::new(self.statement()?);
-                StmtKind::While { cond, body }
-            }
-            Tk::Kw(Kw::Do) => {
-                self.bump();
-                let body = Box::new(self.statement()?);
-                if !self.eat_kw(Kw::While) {
-                    return self.unexpected("'while'");
-                }
-                self.expect_punct(Punct::LParen)?;
-                let cond = self.expression()?;
-                self.expect_punct(Punct::RParen)?;
-                self.expect_punct(Punct::Semicolon)?;
-                StmtKind::DoWhile { body, cond }
-            }
+            Tk::Kw(Kw::While) => self.while_statement()?,
+            Tk::Kw(Kw::Do) => self.do_statement()?,
             Tk::Kw(Kw::For) => {
-                self.bump();
-                self.expect_punct(Punct::LParen)?;
-                let init = if self.eat_punct(Punct::Semicolon) {
-                    None
-                } else if self.starts_declaration() {
-                    let dloc = self.loc();
-                    let d = self.declaration()?;
-                    Some(Box::new(Stmt { kind: StmtKind::Declaration(d), loc: dloc }))
-                } else {
-                    let eloc = self.loc();
-                    let e = self.expression()?;
-                    self.expect_punct(Punct::Semicolon)?;
-                    Some(Box::new(Stmt { kind: StmtKind::Expr(e), loc: eloc }))
-                };
-                let cond = if self.is_punct(Punct::Semicolon) { None } else { Some(self.condition()?) };
-                self.expect_punct(Punct::Semicolon)?;
-                let step = if self.is_punct(Punct::RParen) { None } else { Some(self.expression()?) };
-                self.expect_punct(Punct::RParen)?;
-                let body = Box::new(self.statement()?);
-                StmtKind::For { init, cond, step, body }
+                // A `for` loop nests twice in the checked shader (a scope for
+                // its declaration around the loop): it counts as two levels.
+                self.enter()?;
+                let kind = self.for_statement();
+                self.leave();
+                kind?
             }
-            Tk::Kw(Kw::Continue) => {
+            Tk::Kw(k @ (Kw::Continue | Kw::Break | Kw::Discard)) => {
                 self.bump();
                 self.expect_punct(Punct::Semicolon)?;
-                StmtKind::Continue
+                match k {
+                    Kw::Continue => StmtKind::Continue,
+                    Kw::Break => StmtKind::Break,
+                    _ => StmtKind::Discard,
+                }
             }
-            Tk::Kw(Kw::Break) => {
-                self.bump();
-                self.expect_punct(Punct::Semicolon)?;
-                StmtKind::Break
-            }
-            Tk::Kw(Kw::Discard) => {
-                self.bump();
-                self.expect_punct(Punct::Semicolon)?;
-                StmtKind::Discard
-            }
-            Tk::Kw(Kw::Return) => {
-                self.bump();
-                let value = if self.is_punct(Punct::Semicolon) { None } else { Some(self.expression()?) };
-                self.expect_punct(Punct::Semicolon)?;
-                StmtKind::Return(value)
-            }
-            _ if self.starts_declaration() => StmtKind::Declaration(self.declaration()?),
-            _ => {
-                let e = self.expression()?;
-                self.expect_punct(Punct::Semicolon)?;
-                StmtKind::Expr(e)
-            }
+            Tk::Kw(Kw::Return) => self.return_statement()?,
+            _ => self.simple_statement()?,
         };
         Ok(Stmt { kind, loc })
+    }
+
+    #[inline(never)]
+    fn compound_statement(&mut self) -> PResult<StmtKind> {
+        Ok(StmtKind::Compound(self.compound_body()?))
+    }
+
+    #[inline(never)]
+    fn case_label(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        let e = self.expression()?;
+        self.expect_punct(Punct::Colon)?;
+        Ok(StmtKind::Case(e))
+    }
+
+    #[inline(never)]
+    fn return_statement(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        let value = if self.is_punct(Punct::Semicolon) { None } else { Some(self.expression()?) };
+        self.expect_punct(Punct::Semicolon)?;
+        Ok(StmtKind::Return(value))
+    }
+
+    /// A declaration or an expression statement.
+    #[inline(never)]
+    fn simple_statement(&mut self) -> PResult<StmtKind> {
+        if self.starts_declaration() {
+            return Ok(StmtKind::Declaration(Box::new(self.declaration()?)));
+        }
+        let e = self.expression()?;
+        self.expect_punct(Punct::Semicolon)?;
+        Ok(StmtKind::Expr(e))
+    }
+
+    #[inline(never)]
+    fn if_statement(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        self.expect_punct(Punct::LParen)?;
+        let cond = self.expression()?;
+        self.expect_punct(Punct::RParen)?;
+        let then = Box::new(self.statement()?);
+        let otherwise = if self.eat_kw(Kw::Else) { Some(Box::new(self.statement()?)) } else { None };
+        Ok(StmtKind::If { cond, then, otherwise })
+    }
+
+    #[inline(never)]
+    fn switch_statement(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        self.expect_punct(Punct::LParen)?;
+        let selector = self.expression()?;
+        self.expect_punct(Punct::RParen)?;
+        let body = self.compound_body()?;
+        Ok(StmtKind::Switch { selector, body })
+    }
+
+    #[inline(never)]
+    fn while_statement(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        self.expect_punct(Punct::LParen)?;
+        let cond = Box::new(self.condition()?);
+        self.expect_punct(Punct::RParen)?;
+        let body = Box::new(self.statement()?);
+        Ok(StmtKind::While { cond, body })
+    }
+
+    #[inline(never)]
+    fn do_statement(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        let body = Box::new(self.statement()?);
+        if !self.eat_kw(Kw::While) {
+            return self.unexpected("'while'");
+        }
+        self.expect_punct(Punct::LParen)?;
+        let cond = self.expression()?;
+        self.expect_punct(Punct::RParen)?;
+        self.expect_punct(Punct::Semicolon)?;
+        Ok(StmtKind::DoWhile { body, cond })
+    }
+
+    #[inline(never)]
+    fn for_statement(&mut self) -> PResult<StmtKind> {
+        self.bump();
+        self.expect_punct(Punct::LParen)?;
+        let init = if self.eat_punct(Punct::Semicolon) {
+            None
+        } else if self.starts_declaration() {
+            let dloc = self.loc();
+            let d = self.declaration()?;
+            Some(Box::new(Stmt { kind: StmtKind::Declaration(Box::new(d)), loc: dloc }))
+        } else {
+            let eloc = self.loc();
+            let e = self.expression()?;
+            self.expect_punct(Punct::Semicolon)?;
+            Some(Box::new(Stmt { kind: StmtKind::Expr(e), loc: eloc }))
+        };
+        let cond = if self.is_punct(Punct::Semicolon) { None } else { Some(Box::new(self.condition()?)) };
+        self.expect_punct(Punct::Semicolon)?;
+        let step = if self.is_punct(Punct::RParen) { None } else { Some(Box::new(self.expression()?)) };
+        self.expect_punct(Punct::RParen)?;
+        let body = Box::new(self.statement()?);
+        Ok(StmtKind::For { init, cond, step, body })
     }
 
     /// A loop condition: an expression or `type name = initializer`.
@@ -844,8 +921,20 @@ impl Parser<'_> {
 
     /// `a, b, ...`
     fn expression(&mut self) -> PResult<Expr> {
-        let mut e = self.assignment()?;
+        let first = self.assignment()?;
+        let depth = self.depth;
+        let r = self.expression_rest(first);
+        self.depth = depth;
+        r
+    }
+
+    /// The operands after the first of a sequence. The syntax tree nests
+    /// one level deeper with each (`a, b, c` is `(a, b), c`), so each counts
+    /// as a level of nesting, however flat the text: every pass that walks
+    /// the tree recursively relies on its depth being bounded.
+    fn expression_rest(&mut self, mut e: Expr) -> PResult<Expr> {
         while self.is_punct(Punct::Comma) {
+            self.enter()?;
             let loc = self.bump().loc;
             let rhs = self.assignment()?;
             e = Expr { kind: ExprKind::Comma(Box::new(e), Box::new(rhs)), loc };
@@ -860,8 +949,15 @@ impl Parser<'_> {
         r
     }
 
+    #[inline(never)]
     fn assignment_inner(&mut self) -> PResult<Expr> {
         let lhs = self.conditional()?;
+        self.assignment_rest(lhs)
+    }
+
+    /// An assignment's operator and right operand, if one follows `lhs`.
+    #[inline(never)]
+    fn assignment_rest(&mut self, lhs: Expr) -> PResult<Expr> {
         let op = match self.peek() {
             Tk::Punct(Punct::Assign) => None,
             Tk::Punct(Punct::AddAssign) => Some(BinaryOp::Add),
@@ -881,11 +977,18 @@ impl Parser<'_> {
         Ok(Expr { kind: ExprKind::Assign(op, Box::new(lhs), Box::new(rhs)), loc })
     }
 
+    #[inline(never)]
     fn conditional(&mut self) -> PResult<Expr> {
         let cond = self.binary(1)?;
         if !self.is_punct(Punct::Question) {
             return Ok(cond);
         }
+        self.conditional_rest(cond)
+    }
+
+    /// `? a : b` after a condition.
+    #[inline(never)]
+    fn conditional_rest(&mut self, cond: Expr) -> PResult<Expr> {
         let loc = self.bump().loc;
         let a = self.expression()?;
         self.expect_punct(Punct::Colon)?;
@@ -894,21 +997,33 @@ impl Parser<'_> {
     }
 
     /// Binary operators of precedence `min` and higher.
+    #[inline(never)]
     fn binary(&mut self, min: u8) -> PResult<Expr> {
-        let mut lhs = self.unary()?;
+        let lhs = self.unary()?;
+        let depth = self.depth;
+        let r = self.binary_rest(lhs, min);
+        self.depth = depth;
+        r
+    }
+
+    /// The operators and right operands after a left operand. Each
+    /// operator nests the expression so far one level deeper (`a + b + c`
+    /// is `(a + b) + c`), and counts as a level of nesting.
+    #[inline(never)]
+    fn binary_rest(&mut self, mut lhs: Expr, min: u8) -> PResult<Expr> {
         loop {
             let Some((op, prec)) = binary_op(self.peek()) else { return Ok(lhs) };
             if prec < min {
                 return Ok(lhs);
             }
-            let loc = self.bump().loc;
             self.enter()?;
-            let rhs = self.binary(prec + 1);
-            self.leave();
-            lhs = Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs?)), loc };
+            let loc = self.bump().loc;
+            let rhs = self.binary(prec + 1)?;
+            lhs = Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), loc };
         }
     }
 
+    #[inline(never)]
     fn unary(&mut self) -> PResult<Expr> {
         let op = match self.peek() {
             Tk::Punct(Punct::Plus) => UnaryOp::Plus,
@@ -926,10 +1041,25 @@ impl Parser<'_> {
         Ok(Expr { kind: ExprKind::Unary(op, Box::new(operand?)), loc })
     }
 
+    #[inline(never)]
     fn postfix(&mut self) -> PResult<Expr> {
-        let mut e = self.primary()?;
+        let e = self.primary()?;
+        let depth = self.depth;
+        let r = self.postfix_rest(e);
+        self.depth = depth;
+        r
+    }
+
+    /// The indices, members, `length()`s, `++` and `--` after a primary
+    /// expression: each nests the expression one level deeper, and counts as
+    /// a level of nesting.
+    #[inline(never)]
+    fn postfix_rest(&mut self, mut e: Expr) -> PResult<Expr> {
         loop {
             let loc = self.loc();
+            if matches!(self.peek(), Tk::Punct(Punct::LBracket | Punct::Dot | Punct::Inc | Punct::Dec)) {
+                self.enter()?;
+            }
             match self.peek() {
                 Tk::Punct(Punct::LBracket) => {
                     self.bump();
@@ -956,9 +1086,7 @@ impl Parser<'_> {
                         self.expect_punct(Punct::RParen)?;
                         e = Expr { kind: ExprKind::Length(Box::new(e)), loc };
                     } else if self.is_punct(Punct::LParen) {
-                        let found = alloc::string::String::from(self.interner.get(name));
-                        error!(self.diags, loc, "'{found}' is not a method: only length() is");
-                        return Err(Stop);
+                        return Err(self.not_a_method(name, loc));
                     } else {
                         e = Expr { kind: ExprKind::Field(Box::new(e), name), loc };
                     }
@@ -976,6 +1104,7 @@ impl Parser<'_> {
         }
     }
 
+    #[inline(never)]
     fn primary(&mut self) -> PResult<Expr> {
         let loc = self.loc();
         let kind = match self.peek() {
@@ -1011,32 +1140,53 @@ impl Parser<'_> {
                     ExprKind::Ident(s)
                 }
             }
-            Tk::Type(_) => {
-                let ty = self.type_spec()?;
-                if !self.is_punct(Punct::LParen) {
-                    return self.unexpected("'(' after a type in an expression");
-                }
-                ExprKind::Call(Callee::Type(ty), self.arguments()?)
-            }
-            Tk::Punct(Punct::LParen) => {
-                self.bump();
-                self.enter()?;
-                let e = self.expression();
-                self.leave();
-                let e = e?;
-                self.expect_punct(Punct::RParen)?;
-                return Ok(e);
-            }
-            Tk::Kw(Kw::Struct) => {
-                error!(self.diags, loc, "a structure cannot be defined in an expression");
-                return Err(Stop);
-            }
+            Tk::Type(_) => self.constructor()?,
+            Tk::Punct(Punct::LParen) => return self.parenthesized(),
+            Tk::Kw(Kw::Struct) => return Err(self.struct_in_expression(loc)),
             _ => return self.unexpected("an expression"),
         };
         Ok(Expr { kind, loc })
     }
 
+    /// A type's constructor: `vec4(...)`, `float[2](...)`.
+    #[inline(never)]
+    fn constructor(&mut self) -> PResult<ExprKind> {
+        let ty = self.type_spec()?;
+        if !self.is_punct(Punct::LParen) {
+            return self.unexpected("'(' after a type in an expression");
+        }
+        Ok(ExprKind::Call(Callee::Type(Box::new(ty)), self.arguments()?))
+    }
+
+    /// `( expression )`.
+    #[inline(never)]
+    fn parenthesized(&mut self) -> PResult<Expr> {
+        self.bump();
+        self.enter()?;
+        let e = self.expression();
+        self.leave();
+        let e = e?;
+        self.expect_punct(Punct::RParen)?;
+        Ok(e)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn not_a_method(&mut self, name: Symbol, loc: Loc) -> Stop {
+        let found = alloc::string::String::from(self.interner.get(name));
+        error!(self.diags, loc, "'{found}' is not a method: only length() is");
+        Stop
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn struct_in_expression(&mut self, loc: Loc) -> Stop {
+        error!(self.diags, loc, "a structure cannot be defined in an expression");
+        Stop
+    }
+
     /// `( args )`; `f()` and `f(void)` have none.
+    #[inline(never)]
     fn arguments(&mut self) -> PResult<Vec<Expr>> {
         self.expect_punct(Punct::LParen)?;
         let mut args = Vec::new();

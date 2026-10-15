@@ -21,59 +21,51 @@ use crate::vfs;
 /// the offset, shared with every process the file was passed to.
 pub struct VfsFile {
     client: Mutex<file::Client>,
+    /// The path it was opened by, if this process opened it (it may have
+    /// been renamed since): which file system it is on.
+    path: Option<String>,
 }
 
 impl VfsFile {
+    /// A file this process was given (its path is not known).
     pub fn new(channel: Channel) -> VfsFile {
-        VfsFile { client: Mutex::new(file::Client::new(channel)) }
+        VfsFile { client: Mutex::new(file::Client::new(channel)), path: None }
+    }
+
+    /// A file this process opened as `path`.
+    pub fn opened(channel: Channel, path: String) -> VfsFile {
+        VfsFile { client: Mutex::new(file::Client::new(channel)), path: Some(path) }
+    }
+
+    /// The path the file was opened by, if this process opened it.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
     }
 
     /// Reads at the offset until `buf` is full or the file ends.
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, isize> {
         let c = self.client.lock();
-        let mut done = 0;
-        while done < buf.len() {
-            let want = (buf.len() - done).min(MAX_IO as usize);
-            let Bytes(data) = error::ipc(c.read(want as u32))?;
-            buf[done..done + data.len()].copy_from_slice(&data);
-            done += data.len();
-            if data.len() < want {
-                break;
-            }
-        }
-        Ok(done)
+        read_chunks(buf, |_, want| error::ipc(c.read(want)).map(|Bytes(data)| data))
     }
 
-    /// Writes all of `data` at the offset (at the end in append mode).
+    /// Writes all of `data` at the offset (at the end in append mode), or
+    /// as much as the file system takes.
     pub fn write(&self, data: &[u8]) -> Result<usize, isize> {
         let c = self.client.lock();
-        for chunk in data.chunks(MAX_IO as usize) {
-            error::ipc(c.write(Bytes(chunk.to_vec())))?;
-        }
-        Ok(data.len())
+        write_chunks(data, |_, chunk| error::ipc(c.write(Bytes(chunk.to_vec()))))
     }
 
+    /// Reads at `offset` until `buf` is full or the file ends, leaving the
+    /// offset alone.
     pub fn pread(&self, buf: &mut [u8], offset: u64) -> Result<usize, isize> {
         let c = self.client.lock();
-        let mut done = 0;
-        while done < buf.len() {
-            let want = (buf.len() - done).min(MAX_IO as usize);
-            let Bytes(data) = error::ipc(c.read_at(offset + done as u64, want as u32))?;
-            buf[done..done + data.len()].copy_from_slice(&data);
-            done += data.len();
-            if data.len() < want {
-                break;
-            }
-        }
-        Ok(done)
+        read_chunks(buf, |done, want| error::ipc(c.read_at(offset + done as u64, want)).map(|Bytes(data)| data))
     }
 
+    /// Writes `data` at `offset`, leaving the offset alone.
     pub fn pwrite(&self, data: &[u8], offset: u64) -> Result<usize, isize> {
         let c = self.client.lock();
-        for (i, chunk) in data.chunks(MAX_IO as usize).enumerate() {
-            error::ipc(c.write_at(offset + (i * MAX_IO as usize) as u64, Bytes(chunk.to_vec())))?;
-        }
-        Ok(data.len())
+        write_chunks(data, |done, chunk| error::ipc(c.write_at(offset + done as u64, Bytes(chunk.to_vec()))))
     }
 
     pub fn seek(&self, offset: i64, whence: u32) -> Result<u64, isize> {
@@ -115,6 +107,53 @@ impl VfsFile {
     }
 }
 
+/// Fills `buf` in reads of at most `MAX_IO` bytes, `read(done, want)`
+/// giving those after the first `done`, until it is full or a read comes
+/// short (the file ended). A reply longer than asked is an I/O error: the
+/// file system cannot be trusted with the rest. An error after some bytes
+/// came ends the read with those, as POSIX has it (the next read reports
+/// it).
+fn read_chunks(buf: &mut [u8], mut read: impl FnMut(usize, u32) -> Result<Vec<u8>, isize>) -> Result<usize, isize> {
+    let mut done = 0;
+    while done < buf.len() {
+        let want = (buf.len() - done).min(MAX_IO as usize);
+        let data = match read(done, want as u32) {
+            Ok(data) if data.len() <= want => data,
+            Ok(_) | Err(_) if done > 0 => break,
+            Ok(_) => return Err(EIO),
+            Err(e) => return Err(e),
+        };
+        buf[done..done + data.len()].copy_from_slice(&data);
+        done += data.len();
+        if data.len() < want {
+            break;
+        }
+    }
+    Ok(done)
+}
+
+/// Writes `data` in pieces of at most `MAX_IO` bytes, `write(done, piece)`
+/// writing those after the first `done` and saying how many it took, until
+/// all are written or a write takes fewer than given (the file system is
+/// full). A count larger than the piece is an I/O error. An error after
+/// some bytes were written ends the write with those, as POSIX has it.
+fn write_chunks(data: &[u8], mut write: impl FnMut(usize, &[u8]) -> Result<u32, isize>) -> Result<usize, isize> {
+    let mut done = 0;
+    for piece in data.chunks(MAX_IO as usize) {
+        let n = match write(done, piece) {
+            Ok(n) if n as usize <= piece.len() => n as usize,
+            Ok(_) | Err(_) if done > 0 => break,
+            Ok(_) => return Err(EIO),
+            Err(e) => return Err(e),
+        };
+        done += n;
+        if n < piece.len() {
+            break;
+        }
+    }
+    Ok(done)
+}
+
 /// The POSIX access mode for VFS open flags.
 pub fn access_mode(flags: u32) -> u32 {
     match (flags & open_flags::READ != 0, flags & open_flags::WRITE != 0) {
@@ -125,55 +164,113 @@ pub fn access_mode(flags: u32) -> u32 {
 }
 
 /// An entry of a directory listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     inode: u64,
     kind: u8,
     name: String,
 }
 
-/// An open directory, read with `getdents64`.
+/// An open directory, read with `getdents64`. The VFS lists it a page at a
+/// time as it is read. Its entries are numbered from 0 (`.`, `..`, then the
+/// VFS's, in the order of their names' bytes); a position, the `d_off` of
+/// the entry before it, is the number of the next entry to read.
 pub struct Directory {
     pub path: String,
-    /// The listing (taken when first read, again after a rewind) and the
-    /// position in it.
-    state: Mutex<(Option<Vec<Entry>>, usize)>,
+    state: Mutex<Listing>,
+}
+
+/// Where the reading of a directory has got.
+#[derive(Default)]
+struct Listing {
+    /// The entries of the page read now; the first is number `first`.
+    entries: Vec<Entry>,
+    first: usize,
+    /// The number of the next entry to read.
+    pos: usize,
+    /// The name the next page starts after, if there is a next page.
+    next: Option<String>,
+    /// The listing has started: `.` and `..` were the first page.
+    started: bool,
+}
+
+impl Listing {
+    /// Makes entry number `pos` one of `entries`, `start` giving `.` and
+    /// `..` and `fetch` the page after a name (its entries, and whether
+    /// more follow): pages are fetched on from the one read now, or from
+    /// the start to go back. False past the last entry.
+    fn reach(
+        &mut self,
+        start: impl FnOnce() -> Result<[Entry; 2], isize>,
+        mut fetch: impl FnMut(&str) -> Result<(Vec<Entry>, bool), isize>,
+    ) -> Result<bool, isize> {
+        if !self.started || self.pos < self.first {
+            self.entries = Vec::from(start()?);
+            self.first = 0;
+            self.next = Some(String::new());
+            self.started = true;
+        }
+        while self.pos >= self.first + self.entries.len() {
+            let Some(after) = &self.next else { return Ok(false) };
+            let (page, more) = fetch(after)?;
+            // A page that does not move on ends the listing.
+            self.next = page.last().map(|e| e.name.clone()).filter(|last| more && last > after);
+            self.first += self.entries.len();
+            self.entries = page;
+        }
+        Ok(true)
+    }
 }
 
 impl Directory {
     pub fn new(path: String) -> Directory {
-        Directory { path, state: Mutex::new((None, 0)) }
+        Directory { path, state: Mutex::new(Listing::default()) }
     }
 
-    fn list(&self) -> Result<Vec<Entry>, isize> {
-        let entries = error::ipc(vfs::with(|c| c.read_dir(self.path.clone()))?)?;
+    /// `.` and `..`.
+    fn dots(&self) -> Result<[Entry; 2], isize> {
         let here = vfs::stat(&self.path)?.inode;
         let up = vfs::stat(path::parent(&self.path)).map(|s| s.inode).unwrap_or(here);
-        let mut out = Vec::with_capacity(entries.len() + 2);
-        out.push(Entry { inode: here, kind: dt::DIR, name: ".".into() });
-        out.push(Entry { inode: up, kind: dt::DIR, name: "..".into() });
-        for e in entries {
-            let kind = if e.is_dir {
-                dt::DIR
-            } else if self.path == "/dev" {
-                dt::CHR
-            } else {
-                dt::REG
-            };
-            out.push(Entry { inode: e.inode.max(1), kind, name: e.name });
-        }
-        Ok(out)
+        Ok([
+            Entry { inode: here, kind: dt::DIR, name: ".".into() },
+            Entry { inode: up, kind: dt::DIR, name: "..".into() },
+        ])
+    }
+
+    /// The VFS's page of entries after `after`, and whether more follow.
+    fn page(&self, after: &str) -> Result<(Vec<Entry>, bool), isize> {
+        let page = error::ipc(vfs::with(|c| c.read_dir_page(self.path.clone(), after.into(), 0))?)?;
+        let entries = page
+            .entries
+            .into_iter()
+            .map(|e| {
+                let kind = if e.is_dir {
+                    dt::DIR
+                } else if self.path == "/dev" {
+                    dt::CHR
+                } else {
+                    dt::REG
+                };
+                Entry { inode: e.inode.max(1), kind, name: e.name }
+            })
+            .collect();
+        Ok((entries, page.more))
     }
 
     /// Fills `buf` with `struct linux_dirent64` records; 0 at the end.
     pub fn getdents64(&self, buf: &mut [u8]) -> Result<usize, isize> {
         let mut st = self.state.lock();
-        if st.0.is_none() {
-            st.0 = Some(self.list()?);
-        }
-        let (entries, pos) = &mut *st;
-        let entries = entries.as_ref().unwrap();
         let mut used = 0;
-        while let Some(e) = entries.get(*pos) {
+        loop {
+            match st.reach(|| self.dots(), |after| self.page(after)) {
+                Ok(true) => {}
+                Ok(false) => break,
+                // What was read comes first; the failure comes again with
+                // the next call.
+                Err(_) if used > 0 => break,
+                Err(e) => return Err(e),
+            }
+            let Some(e) = st.entries.get(st.pos - st.first) else { break };
             let len = record_len(e.name.len());
             if used + len > buf.len() {
                 if used == 0 {
@@ -183,13 +280,13 @@ impl Directory {
             }
             let r = &mut buf[used..used + len];
             r[..8].copy_from_slice(&e.inode.to_le_bytes());
-            r[8..16].copy_from_slice(&((*pos + 1) as i64).to_le_bytes());
+            r[8..16].copy_from_slice(&((st.pos + 1) as i64).to_le_bytes());
             r[16..18].copy_from_slice(&(len as u16).to_le_bytes());
             r[18] = e.kind;
             r[19..19 + e.name.len()].copy_from_slice(e.name.as_bytes());
             r[19 + e.name.len()..].fill(0);
             used += len;
-            *pos += 1;
+            st.pos += 1;
         }
         Ok(used)
     }
@@ -200,14 +297,14 @@ impl Directory {
         let mut st = self.state.lock();
         let new = match whence {
             linux::seek::SET => offset,
-            linux::seek::CUR => st.1 as i64 + offset,
+            linux::seek::CUR => st.pos as i64 + offset,
             _ => return Err(EINVAL),
         };
         let new = usize::try_from(new).map_err(|_| EINVAL)?;
         if new == 0 {
-            st.0 = None;
+            st.started = false;
         }
-        st.1 = new;
+        st.pos = new;
         Ok(new as u64)
     }
 }
@@ -229,6 +326,70 @@ mod tests {
         assert_eq!(record_len(255), 280);
     }
 
+    fn entry(name: &str) -> Entry {
+        Entry { inode: 2, kind: dt::REG, name: name.into() }
+    }
+
+    /// Reads entries from `l` until the end; the names, and how many pages
+    /// were fetched.
+    fn read_all(l: &mut Listing, names: &[String], pages: &mut usize) -> Vec<String> {
+        let mut read = Vec::new();
+        while l.reach(dots, |after| fetch(names, after, pages)).unwrap() {
+            read.push(l.entries[l.pos - l.first].name.clone());
+            l.pos += 1;
+        }
+        read
+    }
+
+    fn dots() -> Result<[Entry; 2], isize> {
+        Ok([entry("."), entry("..")])
+    }
+
+    /// Pages of three of `names`.
+    fn fetch(names: &[String], after: &str, pages: &mut usize) -> Result<(Vec<Entry>, bool), isize> {
+        *pages += 1;
+        let rest: Vec<&String> = names.iter().filter(|n| n.as_str() > after).collect();
+        Ok((rest.iter().take(3).map(|n| entry(n)).collect(), rest.len() > 3))
+    }
+
+    #[test]
+    fn directories_are_read_a_page_at_a_time() {
+        let names: Vec<String> = (0..10).map(|i| alloc::format!("f{i}")).collect();
+        let mut l = Listing::default();
+        let mut pages = 0;
+        let read = read_all(&mut l, &names, &mut pages);
+        let mut expected = alloc::vec![String::from("."), String::from("..")];
+        expected.extend(names.iter().cloned());
+        assert_eq!(read, expected);
+        assert_eq!(pages, 4);
+        // A page at a time is held.
+        assert!(l.entries.len() <= 3);
+        // Going back lists afresh up to where it goes; going on skips.
+        for (pos, name) in [(4, "f2"), (11, "f9"), (0, "."), (7, "f5")] {
+            l.pos = pos;
+            assert!(l.reach(dots, |after| fetch(&names, after, &mut pages)).unwrap());
+            assert_eq!(l.entries[l.pos - l.first].name, name, "{pos}");
+        }
+        l.pos = 12;
+        assert!(!l.reach(dots, |after| fetch(&names, after, &mut pages)).unwrap());
+        // An empty directory has `.` and `..`.
+        let mut l = Listing::default();
+        assert_eq!(read_all(&mut l, &[], &mut pages), [".", ".."]);
+    }
+
+    #[test]
+    fn failures_leave_the_listing_where_it_was() {
+        let names: Vec<String> = (0..5).map(|i| alloc::format!("f{i}")).collect();
+        let mut l = Listing::default();
+        let mut pages = 0;
+        l.pos = 3;
+        assert!(l.reach(dots, |after| fetch(&names, after, &mut pages)).unwrap());
+        l.pos = 5;
+        assert_eq!(l.reach(dots, |_| Err(EINVAL)), Err(EINVAL));
+        assert!(l.reach(dots, |after| fetch(&names, after, &mut pages)).unwrap());
+        assert_eq!(l.entries[l.pos - l.first].name, "f3");
+    }
+
     #[test]
     fn access_modes() {
         assert_eq!(access_mode(open_flags::READ), linux::o::RDONLY);
@@ -236,5 +397,61 @@ mod tests {
         assert_eq!(access_mode(open_flags::WRITE | open_flags::APPEND), linux::o::WRONLY);
         // Appending is not writing: O_RDONLY | O_APPEND reads only.
         assert_eq!(access_mode(open_flags::READ | open_flags::APPEND), linux::o::RDONLY);
+    }
+
+    #[test]
+    fn reads_trust_no_reply_length() {
+        let file: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+        // As a file system that keeps to the protocol.
+        let mut buf = alloc::vec![0u8; 150_000];
+        let n = read_chunks(&mut buf, |done, want| Ok(file[done..done + want as usize].to_vec())).unwrap();
+        assert_eq!((n, &buf[..]), (150_000, &file[..150_000]));
+        // The end of the file comes in the middle of a read.
+        let n = read_chunks(&mut buf, |done, want| {
+            Ok(file[done + 100_000..][..(want as usize).min(100_000 - done)].to_vec())
+        });
+        assert_eq!(n, Ok(100_000));
+        // More than asked: refused, or the end of what came before.
+        assert_eq!(read_chunks(&mut buf, |_, want| Ok(alloc::vec![1; want as usize + 1])), Err(EIO));
+        let mut calls = 0;
+        let n = read_chunks(&mut buf, |_, want| {
+            calls += 1;
+            Ok(alloc::vec![2; want as usize + if calls == 2 { 7 } else { 0 }])
+        });
+        assert_eq!(n, Ok(MAX_IO as usize));
+        // An error after some bytes ends the read with them.
+        let mut calls = 0;
+        let n = read_chunks(&mut buf, |_, want| {
+            calls += 1;
+            if calls == 1 { Ok(alloc::vec![3; want as usize]) } else { Err(EIO) }
+        });
+        assert_eq!(n, Ok(MAX_IO as usize));
+        assert_eq!(read_chunks(&mut buf, |_, _| Err(EINVAL)), Err(EINVAL));
+    }
+
+    #[test]
+    fn writes_count_what_was_written() {
+        let data = alloc::vec![5u8; 3 * MAX_IO as usize + 10];
+        let mut written = Vec::new();
+        let n = write_chunks(&data, |done, piece| {
+            assert_eq!(done, written.len());
+            written.extend_from_slice(piece);
+            Ok(piece.len() as u32)
+        });
+        assert_eq!((n, written.len()), (Ok(data.len()), data.len()));
+        // The file system fills up in the second piece.
+        let n = write_chunks(&data, |done, piece| Ok(if done == 0 { piece.len() as u32 } else { 100 }));
+        assert_eq!(n, Ok(MAX_IO as usize + 100));
+        // It fails in the third: what went before counts.
+        let n = write_chunks(
+            &data,
+            |done, piece| if done < 2 * MAX_IO as usize { Ok(piece.len() as u32) } else { Err(28) },
+        );
+        assert_eq!(n, Ok(2 * MAX_IO as usize));
+        assert_eq!(write_chunks(&data, |_, _| Err(28)), Err(28));
+        // A count larger than the piece.
+        assert_eq!(write_chunks(&data, |_, piece| Ok(piece.len() as u32 + 1)), Err(EIO));
+        // Nothing to write makes no call.
+        assert_eq!(write_chunks(&[], |_, _| panic!("a call for nothing")), Ok(0));
     }
 }

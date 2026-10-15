@@ -8,10 +8,17 @@
 //! time it will be seen at; it shows the newest picture due by then (within
 //! half a refresh, so a picture lands on the blank nearest its time), gives
 //! back the ones it skipped over, and wakes again when the next is due.
+//!
+//! Every seek is a new *generation* (see `vproto::media`). Pictures of
+//! earlier generations are given back; those of a later one (a seek the
+//! decoder carried out before the player heard of it) wait for the player
+//! to catch up.
 
 use alloc::vec::Vec;
 
 use vproto::media::SlotMeta;
+
+use crate::playback::is_newer;
 
 /// A published picture: its slot and what the decoder said of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,9 +40,10 @@ pub struct Choice {
 
 /// Chooses among the `ready` pictures (published, not taken) for a frame
 /// seen at media time `target_us`, given what is `shown` now. Pictures of
-/// other generations are dropped. While nothing of this generation is shown
-/// (after opening or seeking) its first picture is shown whatever its time,
-/// so that the screen shows where playback is.
+/// earlier generations are dropped, those of later ones left alone. While
+/// nothing of this generation is shown (after opening or seeking) its first
+/// picture is shown whatever its time, so that the screen shows where
+/// playback is.
 pub fn choose(
     ready: &[Picture],
     shown: Option<&Picture>,
@@ -48,7 +56,7 @@ pub fn choose(
     for p in ready {
         if p.meta.generation == generation {
             current.push(p);
-        } else {
+        } else if !is_newer(p.meta.generation, generation) {
             choice.drop.push(p.slot);
         }
     }
@@ -125,6 +133,20 @@ mod tests {
         // Paused on a picture, nothing newer is due: it stays.
         let c = choose(&ready[2..], Some(&ready[1]), 2, 2_000_000, 6_000);
         assert_eq!(c.show, None);
+    }
+
+    #[test]
+    fn a_later_generation_waits_for_the_player() {
+        // The decoder carried out seek 3 before the player heard of it:
+        // generation 3's picture stays, generation 1's goes.
+        let ready = vec![pic(0, 1, 5, 0), pic(1, 3, 6, 9_000_000), pic(2, 2, 7, 40_000)];
+        let c = choose(&ready, None, 2, 50_000, 0);
+        assert_eq!(c.show.map(|p| p.slot), Some(2));
+        assert_eq!(c.drop, [0]);
+        // Across the wrap of the numbers.
+        let ready = vec![pic(0, u32::MAX, 1, 0), pic(1, 1, 2, 0)];
+        let c = choose(&ready, None, 0, 0, 0);
+        assert_eq!((c.show, c.drop), (None, vec![0]));
     }
 
     #[test]

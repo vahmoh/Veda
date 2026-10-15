@@ -403,6 +403,7 @@ impl ServerSetup {
             hang_up: false,
             greeting: None,
             tamper: None,
+            write_room: None,
         }
     }
 }
@@ -441,6 +442,9 @@ pub(crate) struct TestServer {
     pub(crate) greeting: Option<Vec<u8>>,
     /// Applied to each batch of bytes sent to the client.
     pub(crate) tamper: Option<Tamper>,
+    /// Bytes the server takes in a non-blocking write before it stops
+    /// reading (`None`: all).
+    pub(crate) write_room: Option<usize>,
 }
 
 impl TestServer {
@@ -513,5 +517,14 @@ impl Transport for TestServer {
             }
         }
         Ok(())
+    }
+
+    fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError> {
+        let n = data.len().min(self.write_room.unwrap_or(usize::MAX));
+        if let Some(room) = &mut self.write_room {
+            *room -= n;
+        }
+        self.write_all(&data[..n])?;
+        Ok(n)
     }
 }

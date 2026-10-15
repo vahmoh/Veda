@@ -18,7 +18,7 @@
 mod expr;
 mod stmt;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -32,7 +32,10 @@ use crate::hir::{
 use crate::intern::{Interner, Symbol};
 use crate::ops;
 use crate::pp::{Ext, ExtSet};
-use crate::types::{Basic, Dim, Element, Field, Precision, Sampler, Scalar, StructDef, StructId, Structs, Type};
+use crate::types::{
+    Basic, Dim, Element, Field, MAX_COMPONENTS, MAX_PRIVATE_COMPONENTS, MAX_STRUCT_DEPTH, Precision, Sampler, Scalar,
+    StructId, Structs, Type,
+};
 use crate::{Stage, Version};
 
 /// What a name stands for in a scope.
@@ -45,7 +48,7 @@ enum Entry {
 }
 
 /// A precision default's key: `float`, `int` or a sampler type.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum PrecKey {
     Float,
     Int,
@@ -55,7 +58,8 @@ enum PrecKey {
 #[derive(Default)]
 struct Scope {
     names: BTreeMap<Symbol, Entry>,
-    precisions: Vec<(PrecKey, Precision)>,
+    /// The default precisions this scope sets (the last for each key).
+    precisions: BTreeMap<PrecKey, Precision>,
 }
 
 /// A parameter as declared: name, type, direction, `const`, precision
@@ -70,7 +74,7 @@ struct FnCtx {
     /// Enclosing switch statements.
     switches: u32,
     /// Calls made (for recursion detection).
-    calls: Vec<FuncId>,
+    calls: BTreeSet<FuncId>,
 }
 
 /// Where qualifiers appear.
@@ -100,11 +104,23 @@ struct Quals {
     row_major: Option<bool>,
 }
 
+/// The most components constant folding may produce in one shader.
+pub(crate) const MAX_FOLDED: usize = 1 << 20;
+
+/// The extensions a shader enabled, and those whose use it asked to be
+/// warned of (`#extension ... : warn`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Extensions {
+    pub enabled: ExtSet,
+    pub warn: ExtSet,
+}
+
 /// The semantic checker's state.
 pub(crate) struct Sema<'d> {
     stage: Stage,
     version: Version,
     enabled: ExtSet,
+    warn: ExtSet,
     limits: Limits,
     interner: Interner,
     diags: &'d mut Diagnostics,
@@ -112,6 +128,10 @@ pub(crate) struct Sema<'d> {
     vars: Vec<Var>,
     functions: Vec<Function>,
     func_names: BTreeMap<Symbol, Vec<FuncId>>,
+    /// User functions by name and parameter types.
+    signatures: BTreeMap<(Symbol, Vec<Type>), FuncId>,
+    /// The uniform blocks' names.
+    block_names: BTreeSet<Symbol>,
     blocks: Vec<UniformBlock>,
     scopes: Vec<Scope>,
     init: Vec<hir::Stmt>,
@@ -121,7 +141,9 @@ pub(crate) struct Sema<'d> {
     default_layout: BlockLayout,
     default_row_major: bool,
     /// Functions called by global initialisers.
-    init_calls: Vec<FuncId>,
+    init_calls: BTreeSet<FuncId>,
+    /// Components produced by constant folding (see [`MAX_FOLDED`]).
+    folded: usize,
 }
 
 /// Checks a parsed shader.
@@ -129,7 +151,7 @@ pub(crate) fn check(
     unit: &ast::TranslationUnit,
     stage: Stage,
     version: Version,
-    enabled: ExtSet,
+    extensions: Extensions,
     invariant_all: bool,
     limits: &Limits,
     interner: Interner,
@@ -138,7 +160,8 @@ pub(crate) fn check(
     let mut s = Sema {
         stage,
         version,
-        enabled,
+        enabled: extensions.enabled,
+        warn: extensions.warn,
         limits: *limits,
         interner,
         diags,
@@ -146,6 +169,8 @@ pub(crate) fn check(
         vars: Vec::new(),
         functions: Vec::new(),
         func_names: BTreeMap::new(),
+        signatures: BTreeMap::new(),
+        block_names: BTreeSet::new(),
         blocks: Vec::new(),
         scopes: vec![Scope::default()],
         init: Vec::new(),
@@ -154,7 +179,8 @@ pub(crate) fn check(
         invariant_all,
         default_layout: BlockLayout::Shared,
         default_row_major: false,
-        init_calls: Vec::new(),
+        init_calls: BTreeSet::new(),
+        folded: 0,
     };
     s.predeclare();
     for item in &unit.items {
@@ -273,31 +299,33 @@ impl Sema<'_> {
         let scope = &mut self.scopes[0];
         match self.stage {
             Stage::Vertex => {
-                scope.precisions.push((PrecKey::Float, Precision::High));
-                scope.precisions.push((PrecKey::Int, Precision::High));
+                scope.precisions.insert(PrecKey::Float, Precision::High);
+                scope.precisions.insert(PrecKey::Int, Precision::High);
             }
-            Stage::Fragment => scope.precisions.push((PrecKey::Int, Precision::Medium)),
+            Stage::Fragment => {
+                scope.precisions.insert(PrecKey::Int, Precision::Medium);
+            }
         }
         for s in lowp_samplers {
-            scope.precisions.push((PrecKey::Sampler(s), Precision::Low));
+            scope.precisions.insert(PrecKey::Sampler(s), Precision::Low);
         }
         // GL_OES_texture_3D and GL_EXT_shadow_samplers give their samplers
         // lowp defaults in GLSL ES 1.00.
         if self.version == Version::V100 {
             if self.enabled.contains(Ext::OesTexture3D) {
                 let s = Sampler::new(Dim::D3, false, Scalar::Float);
-                self.scopes[0].precisions.push((PrecKey::Sampler(s), Precision::Low));
+                self.scopes[0].precisions.insert(PrecKey::Sampler(s), Precision::Low);
             }
             if self.enabled.contains(Ext::ExtShadowSamplers) {
                 let s = Sampler::new(Dim::D2, true, Scalar::Float);
-                self.scopes[0].precisions.push((PrecKey::Sampler(s), Precision::Low));
+                self.scopes[0].precisions.insert(PrecKey::Sampler(s), Precision::Low);
             }
         }
         // Constants.
         for (name, value) in builtins::constants(self.version, &self.limits, self.enabled) {
             let sym = self.sym(name);
             let mut v = self.plain_var(sym, Type::INT, VarKind::Const, Some(Precision::Medium), Loc::NONE);
-            v.value = Some(vec![ops::Value::I(value)]);
+            v.value = Some([ops::Value::I(value)].into());
             let id = self.new_var(v);
             self.scopes[0].names.insert(sym, Entry::Var(id));
         }
@@ -320,7 +348,7 @@ impl Sema<'_> {
             .map(|n| Field { name: self.interner.intern(n), ty: Type::FLOAT, precision: Some(Precision::High) })
             .collect();
         let struct_name = self.sym("gl_DepthRangeParameters");
-        let id = self.structs.add(StructDef { name: Some(struct_name), fields });
+        let id = self.structs.add(Some(struct_name), fields);
         self.scopes[0].names.insert(struct_name, Entry::Struct(id));
         let sym = self.sym("gl_DepthRange");
         let v = self.plain_var(sym, Type::structure(id), VarKind::Uniform, None, Loc::NONE);
@@ -345,7 +373,7 @@ impl Sema<'_> {
     }
 
     fn default_precision(&self, key: PrecKey) -> Option<Precision> {
-        self.scopes.iter().rev().find_map(|s| s.precisions.iter().rev().find(|(k, _)| *k == key).map(|(_, p)| *p))
+        self.scopes.iter().rev().find_map(|s| s.precisions.get(&key).copied())
     }
 
     /// The precision of a declaration of type `t` with `explicit` precision;
@@ -384,7 +412,9 @@ impl Sema<'_> {
             _ => None,
         };
         match ok {
-            Some(key) => self.scopes.last_mut().expect("a scope").precisions.push((key, precision)),
+            Some(key) => {
+                self.scopes.last_mut().expect("a scope").precisions.insert(key, precision);
+            }
             None => error!(self.diags, loc, "a default precision can only be given for float, int or a sampler type"),
         }
     }
@@ -579,7 +609,7 @@ impl Sema<'_> {
                 match size {
                     ast::ArraySize::Sized(e) => {
                         let n = self.array_size(e)?;
-                        Some(element.array_of(n))
+                        self.not_too_large(element.array_of(n), spec.loc)
                     }
                     // `float[] x = ...`: sized by the initializer.
                     ast::ArraySize::Unsized => Some(element.array_of(0)),
@@ -598,7 +628,7 @@ impl Sema<'_> {
             }
             Some(ast::ArraySize::Sized(e)) => {
                 let n = self.array_size(e)?;
-                Some(ty.array_of(n))
+                self.not_too_large(ty.array_of(n), loc)
             }
             Some(ast::ArraySize::Unsized) => {
                 if self.version == Version::V100 {
@@ -608,6 +638,34 @@ impl Sema<'_> {
                 Some(ty.array_of(0))
             }
         }
+    }
+
+    /// `ty`, unless it has more than [`MAX_COMPONENTS`] components (which
+    /// is reported).
+    pub(super) fn not_too_large(&mut self, ty: Type, loc: Loc) -> Option<Type> {
+        let n = ty.flat_components(&self.structs);
+        if n > MAX_COMPONENTS {
+            let t = self.type_name(ty);
+            error!(self.diags, loc, "'{t}' is too large ({n} components; at most {MAX_COMPONENTS})");
+            return None;
+        }
+        Some(ty)
+    }
+
+    /// Whether a variable private to an invocation may be of type `ty`
+    /// (see [`MAX_PRIVATE_COMPONENTS`]); reports why not.
+    fn private_ok(&mut self, ty: Type, loc: Loc) -> bool {
+        let n = ty.flat_components(&self.structs);
+        if n > MAX_PRIVATE_COMPONENTS {
+            let t = self.type_name(ty);
+            error!(
+                self.diags,
+                loc,
+                "a '{t}' is too large for a variable, parameter or result ({n} components; at most {MAX_PRIVATE_COMPONENTS})"
+            );
+            return false;
+        }
+        true
     }
 
     /// An array size: a constant integral expression greater than zero.
@@ -643,6 +701,7 @@ impl Sema<'_> {
 
     fn struct_definition(&mut self, s: &ast::StructSpec) -> Option<StructId> {
         let mut fields: Vec<Field> = Vec::new();
+        let mut names = BTreeSet::new();
         for m in &s.members {
             let q = self.check_quals(&m.qualifiers, QualCtx::StructMember);
             let Some(base) = self.resolve_type(&m.ty, true) else { continue };
@@ -656,7 +715,7 @@ impl Sema<'_> {
                     error!(self.diags, n.loc, "structure members cannot be unsized arrays");
                     continue;
                 }
-                if fields.iter().any(|f| f.name == n.name) {
+                if !names.insert(n.name) {
                     let t = self.name(n.name);
                     error!(self.diags, n.loc, "duplicate structure member '{t}'");
                     continue;
@@ -669,7 +728,13 @@ impl Sema<'_> {
             error!(self.diags, s.loc, "a structure must have at least one member");
             return None;
         }
-        let id = self.structs.add(StructDef { name: s.name.map(|(n, _)| n), fields });
+        let id = self.structs.add(s.name.map(|(n, _)| n), fields);
+        let info = &self.structs.get(id).info;
+        if info.depth > MAX_STRUCT_DEPTH {
+            error!(self.diags, s.loc, "structures are nested more than {MAX_STRUCT_DEPTH} deep");
+            return None;
+        }
+        self.not_too_large(Type::structure(id), s.loc)?;
         if let Some((name, loc)) = s.name
             && !self.declare(name, Entry::Struct(id), loc)
         {
@@ -866,6 +931,9 @@ impl Sema<'_> {
         if matches!(kind, VarKind::Input | VarKind::Output) && !self.interface_type_ok(*ty, kind, storage, q, loc) {
             return;
         }
+        if matches!(kind, VarKind::Global | VarKind::Local) && !self.private_ok(*ty, loc) {
+            return;
+        }
         if kind == VarKind::Const && init.is_none() {
             error!(self.diags, loc, "a const variable needs an initialiser");
             return;
@@ -912,16 +980,21 @@ impl Sema<'_> {
 
     /// Checks the type of a shader input or output.
     fn interface_type_ok(&mut self, ty: Type, kind: VarKind, storage: Option<Storage>, q: &Quals, loc: Loc) -> bool {
+        let v3 = self.version == Version::V300;
+        // Vertex shader outputs and fragment shader inputs that pass
+        // between the stages.
+        let varying =
+            matches!((self.stage, kind), (Stage::Vertex, VarKind::Output) | (Stage::Fragment, VarKind::Input));
         let elem = ty.element_type();
         let b = match elem.as_basic() {
             Some(b) => b,
+            None if v3 && varying => return self.struct_varying_ok(ty, q, loc),
             None => {
                 error!(self.diags, loc, "shader inputs and outputs cannot be structures");
                 return false;
             }
         };
         let scalar = b.scalar();
-        let v3 = self.version == Version::V300;
         let (ok, what) = match (self.version, storage, self.stage) {
             (Version::V100, Some(Storage::Attribute), _) => {
                 (!ty.is_array() && scalar == Some(Scalar::Float), "attributes can only be float, vec2-4 or mat2-4")
@@ -944,14 +1017,50 @@ impl Sema<'_> {
             return false;
         }
         // Integer varyings must be flat (GLSL ES 3.00 4.3.4 / 4.3.6).
-        let varying =
-            matches!((self.stage, kind), (Stage::Vertex, VarKind::Output) | (Stage::Fragment, VarKind::Input));
         if v3 && varying && scalar.is_some_and(Scalar::is_integer) && q.interp != Some(Interp::Flat) {
-            let side = if self.stage == Stage::Vertex { "vertex shader outputs" } else { "fragment shader inputs" };
-            error!(self.diags, loc, "integer {side} must be qualified 'flat'");
+            self.integer_varying_not_flat(loc);
             return false;
         }
         true
+    }
+
+    /// Checks a structure passed between the stages (GLSL ES 3.00 4.3.4 and
+    /// 4.3.6): not an array, its members neither arrays, structures, bools
+    /// nor samplers, and flat if one is an integer.
+    fn struct_varying_ok(&mut self, ty: Type, q: &Quals, loc: Loc) -> bool {
+        let Some(id) = ty.as_struct() else {
+            error!(self.diags, loc, "shader inputs and outputs cannot be arrays of structures");
+            return false;
+        };
+        let members_ok = self
+            .structs
+            .get(id)
+            .fields
+            .iter()
+            .all(|f| f.ty.as_basic().and_then(Basic::scalar).is_some_and(|s| s != Scalar::Bool));
+        if !members_ok {
+            error!(
+                self.diags,
+                loc, "a structure passed between the stages can only have members of non-bool basic types"
+            );
+            return false;
+        }
+        let integer = self
+            .structs
+            .get(id)
+            .fields
+            .iter()
+            .any(|f| f.ty.as_basic().and_then(Basic::scalar).is_some_and(Scalar::is_integer));
+        if integer && q.interp != Some(Interp::Flat) {
+            self.integer_varying_not_flat(loc);
+            return false;
+        }
+        true
+    }
+
+    fn integer_varying_not_flat(&mut self, loc: Loc) {
+        let side = if self.stage == Stage::Vertex { "vertex shader outputs" } else { "fragment shader inputs" };
+        error!(self.diags, loc, "integer {side} (or structures holding integers) must be qualified 'flat'");
     }
 
     fn uniform_block(&mut self, b: &ast::Block) {
@@ -967,7 +1076,7 @@ impl Sema<'_> {
         if q.storage != Some(Storage::Uniform) {
             return;
         }
-        if self.blocks.iter().any(|x| x.name == b.name) {
+        if !self.block_names.insert(b.name) {
             let t = self.name(b.name);
             error!(self.diags, b.loc, "uniform block '{t}' is declared twice");
             return;
@@ -975,6 +1084,7 @@ impl Sema<'_> {
         let layout = q.layout.unwrap_or(self.default_layout);
         let block_row_major = q.row_major.unwrap_or(self.default_row_major);
         let mut members = Vec::new();
+        let mut names = BTreeSet::new();
         for m in &b.members {
             let mq = self.check_quals(&m.qualifiers, QualCtx::BlockMember);
             let Some(base) = self.resolve_type(&m.ty, true) else { continue };
@@ -988,7 +1098,7 @@ impl Sema<'_> {
                     error!(self.diags, n.loc, "block members cannot be void or samplers");
                     continue;
                 }
-                if members.iter().any(|x: &BlockMember| x.name == n.name) {
+                if !names.insert(n.name) {
                     let t = self.name(n.name);
                     error!(self.diags, n.loc, "duplicate block member '{t}'");
                     continue;
@@ -1007,7 +1117,10 @@ impl Sema<'_> {
             return;
         }
         let fields = members.iter().map(|m| Field { name: m.name, ty: m.ty, precision: m.precision }).collect();
-        let sid = self.structs.add(StructDef { name: Some(b.name), fields });
+        let sid = self.structs.add(Some(b.name), fields);
+        if self.not_too_large(Type::structure(sid), b.loc).is_none() {
+            return;
+        }
         let array = match &b.instance {
             Some((_, Some(size), loc)) => match size {
                 ast::ArraySize::Sized(e) => match self.array_size(e) {
@@ -1024,7 +1137,10 @@ impl Sema<'_> {
         let index = self.blocks.len() as u32;
         let mut struct_ty = Type::structure(sid);
         if let Some(n) = array {
-            struct_ty = struct_ty.array_of(n);
+            match self.not_too_large(struct_ty.array_of(n), b.loc) {
+                Some(t) => struct_ty = t,
+                None => return,
+            }
         }
         self.blocks.push(UniformBlock {
             name: b.name,
@@ -1075,6 +1191,9 @@ impl Sema<'_> {
             error!(self.diags, p.loc, "a function cannot return a sampler");
             return None;
         }
+        if !self.private_ok(ret, p.loc) {
+            return None;
+        }
         let ret_precision = self.resolve_precision(ret, rq.precision, p.loc);
         // Parameters.
         let mut params: Vec<ParamInfo> = Vec::new();
@@ -1088,6 +1207,9 @@ impl Sema<'_> {
             }
             if ty.array == Some(0) {
                 error!(self.diags, param.loc, "a parameter cannot be an unsized array");
+                return None;
+            }
+            if !self.private_ok(ty, param.loc) {
                 return None;
             }
             let mode = match q.storage {
@@ -1119,13 +1241,7 @@ impl Sema<'_> {
             }
         }
         // An earlier declaration with the same parameter types.
-        let existing = self.func_names.get(&p.name).and_then(|ids| {
-            ids.iter().copied().find(|id| {
-                let f = &self.functions[id.0 as usize];
-                f.params.len() == types.len()
-                    && f.params.iter().zip(&types).all(|(v, t)| self.vars[v.0 as usize].ty == *t)
-            })
-        });
+        let existing = self.signatures.get(&(p.name, types)).copied();
         if let Some(id) = existing {
             let f = &self.functions[id.0 as usize];
             if f.ret != ret {
@@ -1167,6 +1283,7 @@ impl Sema<'_> {
             v.read_only = constant;
             param_ids.push(self.new_var(v));
         }
+        let types = param_ids.iter().map(|v| self.vars[v.0 as usize].ty).collect();
         self.functions.push(Function {
             name: p.name,
             ret,
@@ -1178,6 +1295,7 @@ impl Sema<'_> {
         });
         let id = FuncId(self.functions.len() as u32 - 1);
         self.func_names.entry(p.name).or_default().push(id);
+        self.signatures.insert((p.name, types), id);
         Some(id)
     }
 
@@ -1193,14 +1311,14 @@ impl Sema<'_> {
                 self.declare(name, Entry::Var(p), loc);
             }
         }
-        self.func = Some(FnCtx { ret, loops: 0, switches: 0, calls: Vec::new() });
+        self.func = Some(FnCtx { ret, loops: 0, switches: 0, calls: BTreeSet::new() });
         // The body shares the parameters' scope.
         let body = self.statements(&f.body);
         let ctx = self.func.take();
         self.pop_scope();
         let func = &mut self.functions[id.0 as usize];
         func.body = Some(body);
-        func.calls = ctx.map(|c| c.calls).unwrap_or_default();
+        func.calls = ctx.map(|c| c.calls.into_iter().collect()).unwrap_or_default();
     }
 
     /// Checks done once the whole shader has been seen.
@@ -1212,15 +1330,17 @@ impl Sema<'_> {
             _ => error!(self.diags, Loc::NONE, "'main' is not defined"),
         }
         // Every function called must be defined.
-        let mut reported = Vec::new();
-        for f in &self.functions {
-            for &c in f.calls.iter().chain(&self.init_calls) {
-                let callee = &self.functions[c.0 as usize];
-                if callee.body.is_none() && !reported.contains(&c) {
-                    reported.push(c);
-                    let n = String::from(self.interner.get(callee.name));
-                    error!(self.diags, callee.loc, "function '{n}' is called but never defined");
-                }
+        let called: BTreeSet<FuncId> = self
+            .functions
+            .iter()
+            .flat_map(|f| f.calls.iter().copied())
+            .chain(self.init_calls.iter().copied())
+            .collect();
+        for c in called {
+            let callee = &self.functions[c.0 as usize];
+            if callee.body.is_none() {
+                let n = String::from(self.interner.get(callee.name));
+                error!(self.diags, callee.loc, "function '{n}' is called but never defined");
             }
         }
         // No recursion (static, through any chain of calls).
@@ -1277,16 +1397,15 @@ impl Sema<'_> {
     /// Records a call from the current function (or a global initialiser).
     fn record_call(&mut self, id: FuncId) {
         match &mut self.func {
-            Some(f) => {
-                if !f.calls.contains(&id) {
-                    f.calls.push(id);
-                }
-            }
-            None => {
-                if !self.init_calls.contains(&id) {
-                    self.init_calls.push(id);
-                }
-            }
+            Some(f) => f.calls.insert(id),
+            None => self.init_calls.insert(id),
+        };
+    }
+
+    /// Warns of a use of `ext` if the shader asked for that.
+    fn extension_used(&mut self, ext: Ext, what: &str, loc: Loc) {
+        if self.warn.contains(ext) {
+            warning!(self.diags, loc, "'{what}' uses the extension {}", ext.name());
         }
     }
 

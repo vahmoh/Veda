@@ -17,7 +17,7 @@ fn parse_src(src: &str) -> (TranslationUnit, Interner, String) {
     let mut interner = Interner::new();
     let mut diags = Diagnostics::new();
     let pre = pp::preprocess(&[src], ExtSet::all(), &mut interner, &mut diags);
-    let toks = lex::tokens(&pre.tokens, pre.version, pre.enabled, &interner, &mut diags);
+    let toks = lex::tokens(&pre.tokens, pre.version, pre.enabled, pre.warn, &interner, &mut diags);
     let unit = parse::parse(&toks, &interner, &mut diags);
     (unit, interner, diags.log())
 }
@@ -290,5 +290,78 @@ fn garbage_does_not_panic() {
         "1 2 3",
     ] {
         let _ = parse_src(src);
+    }
+}
+
+/// Compiles a vertex shader and links it on a thread with a small stack;
+/// returns the logs.
+fn compile_and_link(vs: String) -> String {
+    super::on_small_stack(move || {
+        let o = crate::Options::default();
+        let v = crate::compile(crate::Stage::Vertex, &[&vs], &o);
+        let mut log = v.log;
+        if let Some(v) = v.shader {
+            let fs = "precision mediump float; void main() { gl_FragColor = vec4(1.0); }";
+            let f = crate::compile(crate::Stage::Fragment, &[fs], &o).shader.expect("fs");
+            let r = crate::program::link(&v, &f, &crate::link::Bindings::default(), &o.limits);
+            log.push_str(&r.log);
+            if let Some(p) = r.program {
+                crate::interp::compile(&p.vertex);
+                crate::tgsi::translate(&p.vertex, &p.linked, &crate::tgsi::Options::default());
+            }
+        }
+        log
+    })
+}
+
+#[test]
+fn chains_count_as_nesting() {
+    // Operators, postfix operators and commas chained without parentheses
+    // nest the syntax tree as deep as the chain is long, and every later
+    // pass (and dropping the tree) walks it recursively: each link counts
+    // as a level of nesting, and a long chain is an error, not a crash.
+    let n = 100_000;
+    for body in [
+        format!("float f(float a) {{ return {}a; }}", "a + ".repeat(n)),
+        format!("float f(float a) {{ return {}a; }}", "a * a - ".repeat(n / 2)),
+        format!("float f(vec4 v) {{ return v{}.x; }}", ".xxxx".repeat(n)),
+        format!("float f(float a[2]) {{ return a[0]{}; }}", ".x".repeat(n)),
+        format!("float f(float a) {{ return ({}a); }}", "a, ".repeat(n)),
+        format!("void f(float a) {{ a{}; }}", "++".repeat(n)),
+        format!("void f() {{ float x = float[{}1", "float[".repeat(n)),
+        // A few hundred bytes of macros make a hundred thousand terms.
+        String::from(
+            "#define A a+a+a+a+a+a+a+a+a+a\n#define B A+A+A+A+A+A+A+A+A+A\n#define C B+B+B+B+B+B+B+B+B+B\n\
+             #define D C+C+C+C+C+C+C+C+C+C\n#define E D+D+D+D+D+D+D+D+D+D\nfloat f(float a) { return E; }",
+        ),
+    ] {
+        let log = compile_and_link(format!("{body}\nvoid main() {{}}"));
+        assert!(log.contains("nests expressions or statements too deeply"), "{log}");
+    }
+}
+
+#[test]
+fn deep_programs_within_the_limits_build_on_a_small_stack() {
+    // As deep as the parser accepts, every construct compiles, links and
+    // translates on a thread with the stack Veda gives threads.
+    let d = 100;
+    for body in [
+        format!("float a = 1.0; {} a += 1.0; gl_Position = vec4(a);", "if (a > 0.0) ".repeat(d)),
+        format!("float a = 1.0; {} a += 1.0; gl_Position = vec4(a);", "while (a < 2.0) ".repeat(d)),
+        format!("float a = 1.0; {} a += 1.0; gl_Position = vec4(a);", "for (int i = 0; i < 2; i++) ".repeat(d / 2)),
+        format!("float a = 1.0; {} a += 1.0; {} gl_Position = vec4(a);", "{".repeat(d / 2), "}".repeat(d / 2)),
+        format!("float a = 1.0; gl_Position = vec4({}a);", "- ".repeat(d)),
+        format!("float a = 1.0; gl_Position = vec4({}a);", "a + ".repeat(d)),
+        format!("float a = 1.0; gl_Position = vec4({}a{});", "sin(".repeat(d), ")".repeat(d)),
+        format!("float a = 1.0; gl_Position = vec4({}a);", "a > 0.5 ? a : ".repeat(d)),
+        format!("float a = 1.0; float b; {} a; gl_Position = vec4(b);", "b = ".repeat(d)),
+        format!("float a = 1.0; gl_Position = vec4({}a{});", "(a + ".repeat(d / 3), ")".repeat(d / 3)),
+        format!(
+            "float a = 1.0; bool b = {}true; gl_Position = vec4(b ? a : 0.0);",
+            "a > 0.5 && (a += 1.0) > 0.0 && ".repeat(d / 3)
+        ),
+    ] {
+        let log = compile_and_link(format!("void main() {{ {body} }}"));
+        assert!(log.is_empty(), "{}...\n{log}", &body[..80]);
     }
 }

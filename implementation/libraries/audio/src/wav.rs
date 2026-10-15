@@ -7,8 +7,8 @@
 //! and 32-bit signed), IEEE float (32 and 64-bit), `WAVE_FORMAT_EXTENSIBLE`
 //! headers, 1 to 8 channels and the `LIST/INFO` metadata chunk (title,
 //! artist, album, genre, year, track). [`read_stereo`] converts any of these
-//! to interleaved stereo `i16` (multi-channel files are downmixed), and
-//! [`write`] produces 16-bit PCM files.
+//! to interleaved stereo `i16` (multi-channel files are downmixed:
+//! [`Downmix`]), and [`write`] produces 16-bit PCM files.
 //!
 //! Parsing never panics: truncated files are clamped to the bytes that are
 //! present and malformed headers yield an [`AudioError`].
@@ -16,6 +16,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::mix::Downmix;
 use crate::tags::Tags;
 use crate::{AudioError, le16, le32};
 
@@ -198,27 +199,6 @@ fn parse_list(chunk: &[u8], tags: &mut Tags) {
     }
 }
 
-/// Left/right downmix weights for each channel of a multi-channel layout
-/// (the WAVE default order: FL, FR, C, LFE, BL, BR, SL, SR).
-fn downmix_weights(channels: usize) -> [(f32, f32); 8] {
-    const H: f32 = core::f32::consts::FRAC_1_SQRT_2;
-    let mut w = [(0.0f32, 0.0f32); 8];
-    let layout: &[(f32, f32)] = match channels {
-        3 => &[(1.0, 0.0), (0.0, 1.0), (H, H)],
-        4 => &[(1.0, 0.0), (0.0, 1.0), (H, 0.0), (0.0, H)],
-        5 => &[(1.0, 0.0), (0.0, 1.0), (H, H), (H, 0.0), (0.0, H)],
-        6 => &[(1.0, 0.0), (0.0, 1.0), (H, H), (0.0, 0.0), (H, 0.0), (0.0, H)],
-        7 => &[(1.0, 0.0), (0.0, 1.0), (H, H), (0.0, 0.0), (0.5, 0.5), (H, 0.0), (0.0, H)],
-        _ => &[(1.0, 0.0), (0.0, 1.0), (H, H), (0.0, 0.0), (H, 0.0), (0.0, H), (H, 0.0), (0.0, H)],
-    };
-    let left: f32 = layout.iter().map(|p| p.0).sum();
-    let norm = if left > 0.0 { 1.0 / left } else { 1.0 };
-    for (i, &(l, r)) in layout.iter().enumerate().take(8) {
-        w[i] = (l * norm, r * norm);
-    }
-    w
-}
-
 /// One sample as a float in [-1, 1).
 #[inline]
 fn sample_f32(format: SampleFormat, b: &[u8]) -> f32 {
@@ -287,16 +267,9 @@ pub fn read_stereo(info: &WavInfo, bytes: &[u8], start: u64, out: &mut [i16]) ->
             }
         }
         (f, ch) => {
-            let w = downmix_weights(ch as usize);
+            let d = Downmix::new(ch as usize);
             for (o, frame) in out.as_chunks_mut::<2>().0.iter_mut().zip(data.chunks_exact(ba)) {
-                let (mut l, mut r) = (0.0f32, 0.0f32);
-                for (c, b) in frame.chunks_exact(sb).enumerate().take(8) {
-                    let s = sample_f32(f, b);
-                    l += s * w[c].0;
-                    r += s * w[c].1;
-                }
-                o[0] = crate::mix::f32_to_i16(l);
-                o[1] = crate::mix::f32_to_i16(r);
+                *o = d.frame(frame.chunks_exact(sb).map(|b| sample_f32(f, b)));
             }
         }
     }

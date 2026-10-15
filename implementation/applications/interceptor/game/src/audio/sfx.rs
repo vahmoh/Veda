@@ -17,20 +17,25 @@
 
 use alloc::vec::Vec;
 
+use vaudio::synth::env::Decay;
 use vaudio::synth::filter::{Mode, Svf};
+use vaudio::synth::osc::Osc;
+use vaudio::synth::voice::pan_gains;
 
-use super::{Cue, Listener, Noise, Placing, RATE, Scene, SineTable, TireState, Voiced, increment, pan_gains};
+use super::{
+    Cue, Listener, Panning, Placing, RATE, Scene, SineTable, Sounds, TIRES, TireState, Voiced, increment, noise,
+};
 use num_traits::Float;
 
 /// A voice playing one car's tyres.
 pub struct Tire {
-    key: Option<u32>,
+    key: Option<u64>,
     fresh: bool,
     place: Placing,
     fade: f32,
     slip: f32,
     speed: f32,
-    noise: Noise,
+    noise: Osc,
     roar: Svf,
     squeal: Svf,
     air: Svf,
@@ -48,7 +53,7 @@ impl Tire {
             fade: 0.0,
             slip: 0.0,
             speed: 0.0,
-            noise: Noise::new(seed),
+            noise: noise(seed),
             roar: Svf::new(Mode::LowPass),
             squeal: Svf::new(Mode::BandPass),
             air: Svf::new(Mode::LowPass),
@@ -58,7 +63,14 @@ impl Tire {
     }
 
     /// Mixes this block of the tyres it plays into `l` and `r`.
-    pub fn render(&mut self, sines: &SineTable, ears: &Listener, tires: &[TireState], l: &mut [f32], r: &mut [f32]) {
+    pub fn render(
+        &mut self,
+        sines: &SineTable,
+        ears: &Listener,
+        tires: &Sounds<TireState, TIRES>,
+        l: &mut [f32],
+        r: &mut [f32],
+    ) {
         let Some(key) = self.key else { return };
         let rate = RATE as f32;
         let (to_fade, slip1, speed1, place1) = match tires.iter().find(|t| t.key == key) {
@@ -83,23 +95,24 @@ impl Tire {
         };
         let (roar0, roar1) = (roar_of(speed0), roar_of(speed1));
         let (sq0, sq1) = (squeal_of(slip0, speed0), squeal_of(slip1, speed1));
+        let pan = Panning::new(place0.pan, place1.pan);
         let n = l.len();
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
             self.fade += (to_fade - self.fade) * 0.0006;
-            let roar = self.roar.process(self.noise.sample()) * (roar0 + (roar1 - roar0) * t);
+            let roar = self.roar.process(self.noise.noise()) * (roar0 + (roar1 - roar0) * t);
             let sq = sq0 + (sq1 - sq0) * t;
             let mut v = roar;
             if sq > 1e-4 {
-                self.wander += (self.noise.sample() * 0.5 - self.wander) * 0.0015;
+                self.wander += (self.noise.noise() * 0.5 - self.wander) * 0.0015;
                 let doppler = place0.doppler + (place1.doppler - place0.doppler) * t;
                 self.tone = self.tone.wrapping_add(increment(squeal_hz * (1.0 + self.wander * 0.06) * doppler));
-                let s = self.squeal.process(self.noise.sample()) * 2.5 + sines.at(self.tone) * 0.35;
+                let s = self.squeal.process(self.noise.noise()) * 2.5 + sines.at(self.tone) * 0.35;
                 v += s / (1.0 + s.abs()) * sq;
             }
             let gain = place0.gain + (place1.gain - place0.gain) * t;
             let v = self.air.process(v) * gain * self.fade;
-            let (gl, gr) = pan_gains(place0.pan + (place1.pan - place0.pan) * t);
+            let (gl, gr) = pan.at(t);
             l[i] += v * gl;
             r[i] += v * gr;
         }
@@ -111,11 +124,11 @@ impl Tire {
 }
 
 impl Voiced for Tire {
-    fn key(&self) -> Option<u32> {
+    fn key(&self) -> Option<u64> {
         self.key
     }
 
-    fn start(&mut self, key: u32) {
+    fn start(&mut self, key: u64) {
         self.key = Some(key);
         self.fresh = true;
         self.fade = 0.0;
@@ -124,7 +137,7 @@ impl Voiced for Tire {
 
 /// The wind, a scrape and the rain: sounds of the ears' surroundings.
 pub struct World {
-    noise: Noise,
+    noise: Osc,
     wind: [Svf; 2],
     gust: f32,
     gust_to: f32,
@@ -147,7 +160,7 @@ impl World {
             f
         };
         World {
-            noise: Noise::new(0xA11CE),
+            noise: noise(0xA11CE),
             wind: [svf(Mode::LowPass, 400.0, 0.5), svf(Mode::LowPass, 400.0, 0.5)],
             gust: 1.0,
             gust_to: 1.0,
@@ -186,31 +199,31 @@ impl World {
             if wind > 1e-4 {
                 // Gusts: the level wanders every quarter of a second or so.
                 if self.gust_left == 0 {
-                    self.gust_to = 0.75 + (self.noise.sample() * 0.5 + 0.5) * 0.5;
-                    self.gust_left = (rate * 0.25) as u32 + (self.noise.sample().abs() * rate * 0.3) as u32;
+                    self.gust_to = 0.75 + (self.noise.noise() * 0.5 + 0.5) * 0.5;
+                    self.gust_left = (rate * 0.25) as u32 + (self.noise.noise().abs() * rate * 0.3) as u32;
                 }
                 self.gust_left -= 1;
                 self.gust += (self.gust_to - self.gust) * 0.0002;
                 let g = wind * self.gust * 0.3;
-                a += self.wind[0].process(self.noise.sample()) * g;
-                b += self.wind[1].process(self.noise.sample()) * g;
+                a += self.wind[0].process(self.noise.noise()) * g;
+                b += self.wind[1].process(self.noise.noise()) * g;
             }
             if scrape > 1e-4 {
                 // Metal grinding: bursts of grit, and the panels ringing.
                 if self.grit_left == 0 {
-                    self.grit = 0.3 + self.noise.sample().abs() * 0.7;
-                    self.grit_left = (rate * 0.003) as u32 + (self.noise.sample().abs() * rate * 0.009) as u32;
+                    self.grit = 0.3 + self.noise.noise().abs() * 0.7;
+                    self.grit_left = (rate * 0.003) as u32 + (self.noise.noise().abs() * rate * 0.009) as u32;
                 }
                 self.grit_left -= 1;
-                let x = self.scrape_hp.process(self.noise.sample()) * self.grit;
+                let x = self.scrape_hp.process(self.noise.noise()) * self.grit;
                 let ring: f32 = self.ring.iter_mut().map(|f| f.process(x)).sum();
                 let v = (x * 0.4 + ring * 1.2) * scrape * 0.45;
                 a += v;
                 b += v;
             }
             if rain > 1e-4 {
-                a += self.rain[0].process(self.noise.sample()) * rain * 0.05;
-                b += self.rain[1].process(self.noise.sample()) * rain * 0.05;
+                a += self.rain[0].process(self.noise.noise()) * rain * 0.05;
+                b += self.rain[1].process(self.noise.noise()) * rain * 0.05;
             }
             l[i] += a;
             r[i] += b;
@@ -220,6 +233,39 @@ impl World {
 
 /// How many cues sound at once.
 const CUES: usize = 12;
+
+/// The most envelopes a cue's sounds fade by.
+const ENVELOPES: usize = 7;
+
+/// A cue's envelopes: each falling away from 1 from its start (s) with its
+/// time constant (s); none start at infinity.
+fn envelopes(cue: &Cue) -> [(f32, f32); ENVELOPES] {
+    let mut e = [(f32::INFINITY, 1.0); ENVELOPES];
+    let set: &[(f32, f32)] = match *cue {
+        // The thump's pitch and level, the crunch, the panels, the glass
+        // and its two pings.
+        Cue::Crash { strength, .. } => &[
+            (0.0, 0.07),
+            (0.0, 0.14),
+            (0.0, 0.12 + 0.2 * strength.clamp(0.0, 1.0)),
+            (0.0, 0.3),
+            (0.01, 0.09),
+            (0.03, 0.06),
+            (0.09, 0.05),
+        ],
+        Cue::Move => &[(0.0, 0.025)],
+        Cue::Select => &[(0.0, 0.05), (0.07, 0.07)],
+        Cue::Back => &[(0.0, 0.045), (0.06, 0.06)],
+        // The arpeggio's notes, then the chord's.
+        Cue::Win => &[(0.0, 0.5), (0.11, 0.5), (0.22, 0.5), (0.33, 0.9), (0.33, 0.8), (0.33, 0.7)],
+        Cue::Lose => &[(0.0, 0.35), (0.22, 0.35), (0.44, 0.9)],
+        // The whoosh after its rise, and the thump.
+        Cue::Boost => &[(0.06, 0.35), (0.0, 0.1)],
+        Cue::Horn { .. } | Cue::Count { .. } | Cue::Radio => &[],
+    };
+    e[..set.len()].copy_from_slice(set);
+    e
+}
 
 /// A cue sounding.
 struct Active {
@@ -233,9 +279,11 @@ struct Active {
     gr: f32,
     hz: [f32; 6],
     phases: [u32; 6],
+    /// Its envelopes: when each starts, and its decay (sample by sample).
+    decays: [(f32, Decay); ENVELOPES],
     filters: [Svf; 2],
     air: Svf,
-    noise: Noise,
+    noise: Osc,
     /// A crash's crumpling: the current burst's strength and its length
     /// left (s).
     burst: f32,
@@ -257,8 +305,8 @@ impl Cues {
     pub fn start(&mut self, cue: Cue, ears: &Listener) {
         let rate = RATE as f32;
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        let mut noise = Noise::new(self.seed);
-        let mut rand = |lo: f32, hi: f32| lo + (noise.sample() * 0.5 + 0.5) * (hi - lo);
+        let mut noise = noise(self.seed);
+        let mut rand = |lo: f32, hi: f32| lo + (noise.noise() * 0.5 + 0.5) * (hi - lo);
         let centre = Placing { gain: 1.0, pan: 0.0, doppler: 1.0, cutoff: 18_000.0 };
         let mut hz = [0.0f32; 6];
         let (place, end, gain) = match cue {
@@ -319,6 +367,8 @@ impl Cues {
             gr,
             hz,
             phases: [0; 6],
+            // A decay of a time constant falls to 60 dB in 6.9 of them.
+            decays: envelopes(&cue).map(|(at, tau)| (at, Decay::new(6.9 * tau, rate))),
             filters,
             air,
             noise,
@@ -355,11 +405,6 @@ impl Cues {
         }
         self.active.retain(|a| a.t < a.end);
     }
-}
-
-/// A decay from 1 with time constant `tau` (s), after `t` seconds.
-fn decay(t: f32, tau: f32) -> f32 {
-    if t < 0.0 { 0.0 } else { Float::exp(-t / tau) }
 }
 
 /// An attack over `a` seconds, held until `hold`, released over `rel`.
@@ -399,8 +444,9 @@ impl Active {
         s
     }
 
-    /// A bell-like note at `hz` struck at `at` seconds, ringing for `tau`.
-    fn chime(&mut self, sines: &SineTable, k: usize, hz: f32, at: f32, tau: f32) -> f32 {
+    /// A bell-like note on oscillator `k` at `hz`, struck at `at` seconds,
+    /// ringing as its envelope `level` has it.
+    fn chime(&mut self, sines: &SineTable, k: usize, hz: f32, at: f32, level: f32) -> f32 {
         let t = self.t - at;
         if t < 0.0 {
             return 0.0;
@@ -408,35 +454,44 @@ impl Active {
         self.phases[k] = self.phases[k].wrapping_add(increment(hz));
         let p = self.phases[k];
         let tone = sines.at(p) + 0.35 * sines.at(p.wrapping_mul(2)) + 0.12 * sines.at(p.wrapping_mul(3));
-        tone * decay(t, tau) * (t / 0.003).min(1.0)
+        tone * level * (t / 0.003).min(1.0)
+    }
+
+    /// Its envelopes' levels now, a sample on (0 before each starts).
+    fn envelopes(&mut self) -> [f32; ENVELOPES] {
+        let t = self.t;
+        core::array::from_fn(|k| {
+            let (at, decay) = &mut self.decays[k];
+            if t >= *at { decay.tick() } else { 0.0 }
+        })
     }
 
     fn sample(&mut self, sines: &SineTable) -> f32 {
         let t = self.t;
+        let e = self.envelopes();
         match self.cue {
             Cue::Crash { strength, .. } => {
                 let s = strength.clamp(0.0, 1.0);
                 // The thump: a low tone falling.
-                let thump = self.osc(sines, 0, 38.0 + 55.0 * decay(t, 0.07)) * decay(t, 0.14) * 0.9;
+                let thump = self.osc(sines, 0, 38.0 + 55.0 * e[0]) * e[1] * 0.9;
                 // The crunch: bursts of noise, crumpling.
                 self.burst_left -= 1.0 / RATE as f32;
                 if self.burst_left <= 0.0 && t < 0.06 + 0.3 * s {
-                    self.burst = 0.35 + self.noise.sample().abs() * 0.65;
-                    self.burst_left = 0.004 + self.noise.sample().abs() * 0.025;
+                    self.burst = 0.35 + self.noise.noise().abs() * 0.65;
+                    self.burst_left = 0.004 + self.noise.noise().abs() * 0.025;
                 }
-                let crunch_env = self.burst * decay(t, 0.12 + 0.2 * s);
-                let crunch = self.filters[0].process(self.noise.sample()) * crunch_env * 1.4;
+                let crunch_env = self.burst * e[2];
+                let crunch = self.filters[0].process(self.noise.noise()) * crunch_env * 1.4;
                 // The panels ringing.
                 let (a, b, c) = (self.hz[1], self.hz[2], self.hz[3]);
-                let metal = (self.osc(sines, 1, a) + 0.6 * self.osc(sines, 2, b) + 0.35 * self.osc(sines, 3, c))
-                    * decay(t, 0.3)
-                    * 0.16;
+                let metal =
+                    (self.osc(sines, 1, a) + 0.6 * self.osc(sines, 2, b) + 0.35 * self.osc(sines, 3, c)) * e[3] * 0.16;
                 let mut v = thump + crunch + metal;
                 if s > 0.5 {
                     // Glass: a shatter and its pieces.
-                    let shatter = self.filters[1].process(self.noise.sample()) * decay(t - 0.01, 0.09) * 0.5;
+                    let shatter = self.filters[1].process(self.noise.noise()) * e[4] * 0.5;
                     let (p, q) = (self.hz[4], self.hz[5]);
-                    let pings = self.chime(sines, 4, p, 0.03, 0.06) * 0.15 + self.chime(sines, 5, q, 0.09, 0.05) * 0.12;
+                    let pings = self.chime(sines, 4, p, 0.03, e[5]) * 0.15 + self.chime(sines, 5, q, 0.09, e[6]) * 0.12;
                     v += (shatter + pings) * (s - 0.5) * 2.0;
                 }
                 v
@@ -447,9 +502,9 @@ impl Active {
                 let tone = self.buzz(sines, 0, a, 8) + self.buzz(sines, 1, b, 8);
                 (self.filters[0].process(tone) * 1.6 + tone * 0.25) * env
             }
-            Cue::Move => self.osc(sines, 0, 1318.5) * decay(t, 0.025) * (t / 0.001).min(1.0),
-            Cue::Select => self.chime(sines, 0, 987.8, 0.0, 0.05) + self.chime(sines, 1, 1318.5, 0.07, 0.07),
-            Cue::Back => self.chime(sines, 0, 1174.7, 0.0, 0.045) + self.chime(sines, 1, 880.0, 0.06, 0.06),
+            Cue::Move => self.osc(sines, 0, 1318.5) * e[0] * (t / 0.001).min(1.0),
+            Cue::Select => self.chime(sines, 0, 987.8, 0.0, e[0]) + self.chime(sines, 1, 1318.5, 0.07, e[1]),
+            Cue::Back => self.chime(sines, 0, 1174.7, 0.0, e[0]) + self.chime(sines, 1, 880.0, 0.06, e[1]),
             Cue::Count { last } => {
                 let (hz, hold) = if last { (1760.0, 0.5) } else { (880.0, 0.13) };
                 let env = gate(t, 0.003, hold, if last { 0.2 } else { 0.05 });
@@ -459,10 +514,10 @@ impl Active {
             }
             Cue::Radio => {
                 // Squelch, a chirp, then the open channel's hiss.
-                let squelch = self.filters[0].process(self.noise.sample()) * gate(t, 0.004, 0.06, 0.02) * 0.9;
+                let squelch = self.filters[0].process(self.noise.noise()) * gate(t, 0.004, 0.06, 0.02) * 0.9;
                 let chirp_hz = 1300.0 + 1100.0 * ((t - 0.09) / 0.06).clamp(0.0, 1.0);
                 let chirp = self.osc(sines, 0, chirp_hz) * gate(t - 0.09, 0.003, 0.06, 0.01) * 0.6;
-                let hiss = self.filters[1].process(self.noise.sample()) * gate(t - 0.16, 0.02, 0.24, 0.1) * 0.08;
+                let hiss = self.filters[1].process(self.noise.noise()) * gate(t - 0.16, 0.02, 0.24, 0.1) * 0.08;
                 squelch + chirp + hiss
             }
             Cue::Win => {
@@ -470,18 +525,18 @@ impl Active {
                 let notes = [(523.25, 0.0), (659.25, 0.11), (783.99, 0.22), (1046.5, 0.33)];
                 let mut v = 0.0;
                 for (k, &(hz, at)) in notes.iter().enumerate() {
-                    v += self.chime(sines, k, hz, at, if k == 3 { 0.9 } else { 0.5 });
+                    v += self.chime(sines, k, hz, at, e[k]);
                 }
-                v + self.chime(sines, 4, 1318.5, 0.33, 0.8) * 0.6 + self.chime(sines, 5, 1568.0, 0.33, 0.7) * 0.5
+                v + self.chime(sines, 4, 1318.5, 0.33, e[4]) * 0.6 + self.chime(sines, 5, 1568.0, 0.33, e[5]) * 0.5
             }
             Cue::Lose => {
                 // Falling, darker.
-                let notes = [(392.0, 0.0, 0.35), (311.13, 0.22, 0.35), (261.63, 0.44, 0.9)];
+                let notes = [(392.0, 0.0), (311.13, 0.22), (261.63, 0.44)];
                 let mut v = 0.0;
-                for (k, &(hz, at, tau)) in notes.iter().enumerate() {
+                for (k, &(hz, at)) in notes.iter().enumerate() {
                     let tn = t - at;
                     if tn >= 0.0 {
-                        v += self.buzz(sines, k, hz, 7) * decay(tn, tau) * (tn / 0.01).min(1.0);
+                        v += self.buzz(sines, k, hz, 7) * e[k] * (tn / 0.01).min(1.0);
                     }
                 }
                 self.filters[0].process(v)
@@ -492,9 +547,9 @@ impl Active {
                     let hz = 250.0 * Float::powf(12.0f32, (t / 0.5).min(1.0));
                     self.filters[0].set(hz, 1.6, RATE as f32);
                 }
-                let env = if t < 0.06 { t / 0.06 } else { decay(t - 0.06, 0.35) };
-                let whoosh = self.filters[0].process(self.noise.sample()) * env * 1.6;
-                let thump = self.osc(sines, 0, 55.0) * decay(t, 0.1) * 0.6;
+                let env = if t < 0.06 { t / 0.06 } else { e[0] };
+                let whoosh = self.filters[0].process(self.noise.noise()) * env * 1.6;
+                let thump = self.osc(sines, 0, 55.0) * e[1] * 0.6;
                 whoosh + thump
             }
         }
@@ -556,11 +611,12 @@ mod tests {
                 slip,
                 speed: 20.0,
             };
+            let tires = [s].into_iter().collect();
             let (mut l, mut r) = (vec![0.0; 2048], vec![0.0; 2048]);
             for _ in 0..20 {
                 l.fill(0.0);
                 r.fill(0.0);
-                t.render(&sines, &ears, &[s], &mut l, &mut r);
+                t.render(&sines, &ears, &tires, &mut l, &mut r);
             }
             rms(&l)
         };

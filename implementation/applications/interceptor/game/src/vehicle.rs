@@ -14,14 +14,24 @@
 //! which reins in a car turning faster than its steering asks (off while
 //! the handbrake is held, so that it can still be thrown into a slide).
 //!
+//! A car's mechanical make-up is its kind's [`Spec`]; where its wheels are
+//! and the box it fills, its [`Chassis`], are its body's as drawn (its
+//! kind's shape), so that it drives and crashes as it is seen. Only asking
+//! for it puts a car in reverse ([`Controls::reverse`]).
+//!
 //! Positions are world metres (x, z on the ground, y up); a car's heading
 //! `yaw` points it along `(sin yaw, cos yaw)` in x and z, and a positive
 //! yaw rate turns it left. Car space has +z forward and +x to the left.
 
+use crate::carmodel::{Kind, Shape};
 use crate::prelude::*;
 
 /// Gravity (m/s²).
 pub const G: f32 = 9.81;
+
+/// Slower than this (m/s) a car counts as stopped: its gearbox may change
+/// between forward and reverse.
+pub const STOPPED: f32 = 0.6;
 
 /// Which wheels the engine drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,18 +41,17 @@ pub enum Drive {
     All,
 }
 
-/// A car's mechanical make-up.
+/// A car's mechanical make-up: what its body's shape does not say (the
+/// shape decides where its wheels are and the box it fills: [`Chassis`]).
 #[derive(Clone, Copy, Debug)]
 pub struct Spec {
     pub mass: f32,
     /// Yaw inertia (kg m²).
     pub inertia: f32,
-    pub wheelbase: f32,
-    /// The centre of mass's distance behind the front axle.
-    pub cg_front: f32,
+    /// The share of its weight on the front wheels at rest, and the centre
+    /// of mass's height.
+    pub front_weight: f32,
     pub cg_height: f32,
-    pub track: f32,
-    pub wheel_radius: f32,
     /// The tyres' friction coefficient.
     pub grip: f32,
     pub drive: Drive,
@@ -65,9 +74,6 @@ pub struct Spec {
     pub brake_front: f32,
     /// The front wheels' greatest steering angle (radians).
     pub steer_max: f32,
-    /// Half the body's length and width (for collisions).
-    pub half_length: f32,
-    pub half_width: f32,
 }
 
 impl Spec {
@@ -76,11 +82,8 @@ impl Spec {
         Spec {
             mass: 1850.0,
             inertia: 3400.0,
-            wheelbase: 2.95,
-            cg_front: 1.40,
+            front_weight: 0.525,
             cg_height: 0.55,
-            track: 1.62,
-            wheel_radius: 0.36,
             grip: 1.12,
             drive: Drive::All,
             torque: 600.0,
@@ -95,12 +98,10 @@ impl Spec {
             brake: 21000.0,
             brake_front: 0.62,
             steer_max: 0.62,
-            half_length: 2.52,
-            half_width: 0.96,
         }
     }
 
-    /// A family saloon.
+    /// A family car.
     pub const fn saloon() -> Spec {
         Spec {
             mass: 1500.0,
@@ -122,11 +123,8 @@ impl Spec {
         Spec {
             mass: 1450.0,
             inertia: 2300.0,
-            wheelbase: 2.70,
-            cg_front: 1.28,
+            front_weight: 0.526,
             cg_height: 0.46,
-            track: 1.64,
-            wheel_radius: 0.35,
             grip: 1.2,
             drive: Drive::Rear,
             torque: 480.0,
@@ -137,8 +135,6 @@ impl Spec {
             drag: 0.36,
             downforce: 0.12,
             brake: 19000.0,
-            half_length: 2.28,
-            half_width: 0.97,
             ..Spec::interceptor()
         }
     }
@@ -148,11 +144,8 @@ impl Spec {
         Spec {
             mass: 1500.0,
             inertia: 2300.0,
-            wheelbase: 2.70,
-            cg_front: 1.45,
+            front_weight: 0.463,
             cg_height: 0.42,
-            track: 1.70,
-            wheel_radius: 0.35,
             grip: 1.3,
             drive: Drive::All,
             torque: 700.0,
@@ -163,8 +156,6 @@ impl Spec {
             drag: 0.34,
             downforce: 0.25,
             brake: 22000.0,
-            half_length: 2.30,
-            half_width: 1.01,
             ..Spec::interceptor()
         }
     }
@@ -174,11 +165,8 @@ impl Spec {
         Spec {
             mass: 2600.0,
             inertia: 6000.0,
-            wheelbase: 3.30,
-            cg_front: 1.55,
+            front_weight: 0.530,
             cg_height: 0.85,
-            track: 1.70,
-            wheel_radius: 0.37,
             grip: 0.95,
             drive: Drive::Rear,
             torque: 420.0,
@@ -188,17 +176,21 @@ impl Spec {
             drag: 0.55,
             downforce: 0.0,
             brake: 22000.0,
-            half_length: 2.65,
-            half_width: 1.0,
             ..Spec::interceptor()
         }
     }
 
-    /// Weight on the front and rear axles at rest (N).
-    fn static_loads(&self) -> (f32, f32) {
-        let b = self.wheelbase - self.cg_front;
-        let w = self.mass * G;
-        (w * b / self.wheelbase, w * self.cg_front / self.wheelbase)
+    /// The make-up of a kind of car: the police's interceptor; the family
+    /// cars' (saloons, hatchbacks, estates, SUVs, taxis); a van's; the
+    /// coupe's (and the muscle car's); a supercar's.
+    pub const fn of(kind: Kind) -> Spec {
+        match kind {
+            Kind::Police => Spec::interceptor(),
+            Kind::Saloon | Kind::Hatchback | Kind::Estate | Kind::Suv | Kind::Taxi => Spec::saloon(),
+            Kind::Van => Spec::van(),
+            Kind::Coupe | Kind::Muscle => Spec::sports(),
+            Kind::Supercar => Spec::supercar(),
+        }
     }
 
     /// The engine's torque at `rpm` with the throttle wide open (N m).
@@ -206,6 +198,46 @@ impl Spec {
         let x = (rpm - self.rpm_peak) / (self.rpm_red - self.rpm_idle);
         let shape = (1.0 - 1.6 * x * x).clamp(0.35, 1.0);
         if rpm > self.rpm_red { 0.0 } else { self.torque * shape }
+    }
+}
+
+/// Where a car's wheels are and the box its body fills, from its body's
+/// shape, so that it drives and crashes as it is drawn: its wheels mark
+/// the road under its drawn tyres, and its corners are its body's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Chassis {
+    pub wheelbase: f32,
+    /// The centre of mass's distance behind the front axle.
+    pub cg_front: f32,
+    /// The distance between a pair of wheels' middles, and their radius.
+    pub track: f32,
+    pub wheel_radius: f32,
+    /// Half the body's length and width.
+    pub half_length: f32,
+    pub half_width: f32,
+    /// How far the body's middle (the origin of car space, as the car is
+    /// drawn) is ahead of the centre of mass (m; behind it if negative).
+    pub middle: f32,
+}
+
+impl Chassis {
+    /// The chassis of a body of `shape` with `front_weight` (the share of
+    /// its weight on the front wheels).
+    pub fn new(shape: &Shape, front_weight: f32) -> Chassis {
+        let wheelbase = shape.wheelbase;
+        let cg_front = wheelbase * (1.0 - front_weight);
+        let (front_axle, _) = shape.axles();
+        Chassis {
+            wheelbase,
+            cg_front,
+            track: shape.half_track() * 2.0,
+            wheel_radius: shape.wheel_radius,
+            half_length: shape.length * 0.5,
+            half_width: shape.width * 0.5,
+            // The front axle is `front_axle` ahead of the body's middle and
+            // `cg_front` ahead of the centre of mass.
+            middle: cg_front - front_axle,
+        }
     }
 }
 
@@ -217,6 +249,8 @@ pub struct Controls {
     /// -1 hard right .. 1 hard left.
     pub steer: f32,
     pub handbrake: bool,
+    /// The way the throttle drives it: backwards (reverse) or forwards.
+    pub reverse: bool,
 }
 
 /// What the ground under a point is like.
@@ -233,13 +267,83 @@ pub struct Ground {
 pub fn lateral_grip(alpha: f32) -> f32 {
     let (b, c, e) = (11.0, 1.55, 0.95);
     let ba = b * alpha;
-    (c * (ba - e * (ba - ba.atan())).atan()).sin()
+    libm::sinf(c * libm::atanf(ba - e * (ba - libm::atanf(ba))))
+}
+
+/// Where a car is and how its body sits: what is drawn of it, and what
+/// moves between two of the game's steps.
+#[derive(Clone, Copy, Debug)]
+pub struct Pose {
+    /// The ground point under the centre of mass.
+    pub pos: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub roll: f32,
+    pub up: Vec3,
+    /// The wheels' turn and the front wheels' steering.
+    pub spin: f32,
+    pub steer: f32,
+}
+
+impl Pose {
+    /// `v`'s pose.
+    pub fn of(v: &Vehicle) -> Pose {
+        Pose { pos: v.pos, yaw: v.yaw, pitch: v.pitch, roll: v.roll, up: v.up, spin: v.spin, steer: v.steer }
+    }
+
+    /// The pose a fraction `t` of the way to `o`.
+    pub fn lerp(&self, o: &Pose, t: f32) -> Pose {
+        let mut dyaw = (o.yaw - self.yaw) % core::f32::consts::TAU;
+        if dyaw > core::f32::consts::PI {
+            dyaw -= core::f32::consts::TAU;
+        } else if dyaw < -core::f32::consts::PI {
+            dyaw += core::f32::consts::TAU;
+        }
+        Pose {
+            pos: self.pos.lerp(o.pos, t),
+            yaw: self.yaw + dyaw * t,
+            pitch: self.pitch + (o.pitch - self.pitch) * t,
+            roll: self.roll + (o.roll - self.roll) * t,
+            up: self.up.lerp(o.up, t).normalize_or(Vec3::Y),
+            spin: self.spin + (o.spin - self.spin) * t,
+            steer: self.steer + (o.steer - self.steer) * t,
+        }
+    }
+
+    /// Puts `v` in this pose.
+    pub fn apply(&self, v: &mut Vehicle) {
+        v.pos = self.pos;
+        v.yaw = self.yaw;
+        v.pitch = self.pitch;
+        v.roll = self.roll;
+        v.up = self.up;
+        v.spin = self.spin;
+        v.steer = self.steer;
+    }
+
+    /// Car space (the body's, whose middle is `middle` metres ahead of the
+    /// centre of mass: see [`Chassis::middle`]) to the world, with the
+    /// body's pitch and roll.
+    pub fn transform(&self, middle: f32) -> Mat4 {
+        let (s, c) = libm::sincosf(self.yaw);
+        let fwd = Vec3::new(s, 0.0, c);
+        let up = self.up;
+        let f = (fwd - up * fwd.dot(up)).normalize_or(fwd);
+        let left = up.cross(f).normalize_or(Vec3::X);
+        let basis = Mat4::from_cols(left.extend(0.0), up.extend(0.0), f.extend(0.0), self.pos.extend(1.0));
+        // Pitch about the left axis (nose down positive), roll about the
+        // forward one, both about the centre of mass.
+        basis
+            * Mat4::from_quat(Quat::from_rotation_z(self.roll) * Quat::from_rotation_x(self.pitch))
+            * Mat4::from_translation(Vec3::new(0.0, 0.0, middle))
+    }
 }
 
 /// A car's state.
 #[derive(Clone, Debug)]
 pub struct Vehicle {
     pub spec: Spec,
+    pub chassis: Chassis,
     /// The ground point under the centre of mass.
     pub pos: Vec3,
     pub yaw: f32,
@@ -271,18 +375,18 @@ pub struct Vehicle {
     roll_rate: f32,
     /// The ground's normal, smoothed.
     pub up: Vec3,
-    /// Stability control (on in every car unless switched off).
-    pub esc: bool,
     /// The engine's output as a share of its make's (a nitrous boost
     /// above 1, a tired or held-back engine below).
     pub power: f32,
 }
 
 impl Vehicle {
-    /// A car of `spec` standing at `pos`, heading `yaw`.
-    pub fn new(spec: Spec, pos: Vec3, yaw: f32) -> Vehicle {
+    /// A car of `kind` standing at `pos`, heading `yaw`.
+    pub fn new(kind: Kind, pos: Vec3, yaw: f32) -> Vehicle {
+        let spec = Spec::of(kind);
         Vehicle {
             spec,
+            chassis: Chassis::new(&kind.shape(), spec.front_weight),
             pos,
             yaw,
             vel: Vec2::ZERO,
@@ -303,17 +407,18 @@ impl Vehicle {
             pitch_rate: 0.0,
             roll_rate: 0.0,
             up: Vec3::Y,
-            esc: true,
             power: 1.0,
         }
     }
 
     pub fn forward(&self) -> Vec2 {
-        Vec2::new(self.yaw.sin(), self.yaw.cos())
+        let (s, c) = libm::sincosf(self.yaw);
+        Vec2::new(s, c)
     }
 
     pub fn left(&self) -> Vec2 {
-        Vec2::new(self.yaw.cos(), -self.yaw.sin())
+        let (s, c) = libm::sincosf(self.yaw);
+        Vec2::new(c, -s)
     }
 
     /// Changing gear (the engine's drive is cut for a moment).
@@ -351,7 +456,7 @@ impl Vehicle {
     /// The engine's speed at `v` (m/s) in `gear`.
     fn rpm_for(&self, v: f32, gear: i32) -> f32 {
         let ratio = self.ratio(gear);
-        v / self.spec.wheel_radius * ratio * 60.0 / core::f32::consts::TAU
+        v / self.chassis.wheel_radius * ratio * 60.0 / core::f32::consts::TAU
     }
 
     fn ratio(&self, gear: i32) -> f32 {
@@ -362,8 +467,8 @@ impl Vehicle {
     /// The wheels' places from the centre of mass, in car space (x left,
     /// z forward): front left, front right, rear left, rear right.
     fn wheel_offsets(&self) -> [Vec2; 4] {
-        let s = &self.spec;
-        let (a, b, t) = (s.cg_front, s.wheelbase - s.cg_front, s.track * 0.5);
+        let c = &self.chassis;
+        let (a, b, t) = (c.cg_front, c.wheelbase - c.cg_front, c.track * 0.5);
         [Vec2::new(t, a), Vec2::new(-t, a), Vec2::new(t, -b), Vec2::new(-t, -b)]
     }
 
@@ -371,6 +476,7 @@ impl Vehicle {
     /// `ground` (the ground under any point).
     pub fn step(&mut self, c: &Controls, dt: f32, ground: &dyn Fn(Vec3) -> Ground) {
         let s = self.spec;
+        let ch = self.chassis;
         let f = self.forward();
         let l = self.left();
         let v_long = self.vel.dot(f);
@@ -381,28 +487,25 @@ impl Vehicle {
         // Steering: less lock as the speed rises, and a hand catching a
         // slide (towards where the car is going).
         let lock = s.steer_max / (1.0 + speed * 0.055);
-        let slide = if v_long > 3.0 { (v_lat / v_long.max(1.0)).atan() } else { 0.0 };
+        let slide = if v_long > 3.0 { libm::atanf(v_lat / v_long.max(1.0)) } else { 0.0 };
         let catch = if c.handbrake { 0.0 } else { slide * 0.55 };
         let target = (c.steer * lock + catch).clamp(-s.steer_max, s.steer_max);
         let rate = 3.2 + 3.0 / (1.0 + speed * 0.1);
         self.steer += (target - self.steer).clamp(-rate * dt, rate * dt);
 
-        // Pedals: braking while rolling forward, reverse once stopped.
+        // Pedals: the throttle drives the car the way its driver asks
+        // (backwards in reverse), the brake brakes. Still rolling the other
+        // way, the throttle brakes it until it has stopped; then the
+        // gearbox takes the way asked. Only asking puts a car in reverse:
+        // one held still by its brakes stays still.
         let mut throttle = c.throttle.clamp(0.0, 1.0);
         let mut brake = c.brake.clamp(0.0, 1.0);
-        if self.gear < 0 {
-            // In reverse the brake pedal drives backwards, the throttle
-            // brakes, until it changes direction.
-            if c.throttle > 0.1 && v_long > -0.6 {
-                self.gear = 1;
-            } else {
-                throttle = c.brake;
-                brake = c.throttle;
-            }
-        } else if c.brake > 0.1 && c.throttle < 0.1 && v_long < 0.6 {
-            self.gear = -1;
-            throttle = c.brake;
-            brake = 0.0;
+        let way = if c.reverse { -1.0 } else { 1.0 };
+        if v_long * way < -STOPPED {
+            brake = brake.max(throttle);
+            throttle = 0.0;
+        } else if c.reverse != (self.gear < 0) {
+            self.gear = if c.reverse { -1 } else { 1 };
         }
         self.throttle = throttle;
         self.braking = brake;
@@ -428,12 +531,15 @@ impl Vehicle {
         let free = s.rpm_idle + throttle * (s.rpm_peak - s.rpm_idle) * 0.7;
         let target_rpm =
             if wheel_rpm < free && v_long.abs() < 8.0 { free.max(wheel_rpm) } else { wheel_rpm.max(s.rpm_idle) };
-        self.rpm += (target_rpm - self.rpm) * (1.0 - (-dt * 18.0).exp());
+        self.rpm += (target_rpm - self.rpm) * (1.0 - libm::expf(-dt * 18.0));
         let limiter = self.rpm >= s.rpm_red;
-        let torque =
-            if self.shift > 0.0 || limiter || self.airborne { 0.0 } else { s.engine_torque(self.rpm) * throttle };
+        let torque = if self.shift > 0.0 || limiter || self.airborne {
+            0.0
+        } else {
+            s.engine_torque(self.rpm) * throttle * self.power
+        };
         let drive_dir = if self.gear < 0 { -1.0 } else { 1.0 };
-        let mut drive = torque * ratio * 0.88 / s.wheel_radius * drive_dir;
+        let mut drive = torque * ratio * 0.88 / ch.wheel_radius * drive_dir;
         // Engine braking off the throttle.
         if throttle < 0.05 && self.gear > 0 && v_long > 1.0 {
             drive -= (self.rpm / s.rpm_red) * 900.0 * ratio / 10.0;
@@ -441,13 +547,14 @@ impl Vehicle {
 
         // Loads on the tyres: weight, downforce, and the shift of weight
         // with the accelerations.
-        let (front, rear) = s.static_loads();
+        let weight = s.mass * G;
+        let (front, rear) = (weight * s.front_weight, weight * (1.0 - s.front_weight));
         let down = s.downforce * speed * speed;
-        let shift_long = s.mass * self.accel.y * s.cg_height / s.wheelbase;
-        let shift_lat = s.mass * self.accel.x * s.cg_height / s.track;
+        let shift_long = s.mass * self.accel.y * s.cg_height / ch.wheelbase;
+        let shift_lat = s.mass * self.accel.x * s.cg_height / ch.track;
         let lf = (front + down * 0.45 - shift_long).max(0.0);
         let lr = (rear + down * 0.55 + shift_long).max(0.0);
-        let fb = s.cg_front / s.wheelbase;
+        let fb = ch.cg_front / ch.wheelbase;
         // A positive lateral acceleration (to the left) loads the right.
         let loads = [
             (lf * 0.5 - shift_lat * (1.0 - fb)).max(lf * 0.05),
@@ -485,7 +592,7 @@ impl Vehicle {
             // The wheel's velocity: the body's, plus the turn's.
             let vw = self.vel + Vec2::new(self.yaw_rate * d.y, -self.yaw_rate * d.x);
             let delta = if w < 2 { self.steer } else { 0.0 };
-            let (sd, cd) = delta.sin_cos();
+            let (sd, cd) = libm::sincosf(delta);
             let wf = f * cd + l * sd;
             let wl = l * cd - f * sd;
             let vl = vw.dot(wf);
@@ -499,7 +606,7 @@ impl Vehicle {
                 let v = vw.length();
                 if v > 0.3 { -vw / v * most * 0.75 } else { -vw * most * 0.5 }
             } else {
-                let alpha = vt.atan2(vl.abs().max(1.5));
+                let alpha = libm::atan2f(vt, vl.abs().max(1.5));
                 let mut fy = -most * lateral_grip(alpha);
                 // At a crawl, damp the sideways motion instead.
                 if vw.length() < 1.5 {
@@ -537,17 +644,17 @@ impl Vehicle {
         // speed (a bicycle's, short of what the tyres hold); turning faster
         // than that is the tail stepping out, which braking one wheel
         // reins in, and the engine is cut back.
-        if self.esc && !c.handbrake && !self.airborne && v_long > 5.0 {
+        if !c.handbrake && !self.airborne && v_long > 5.0 {
             // A mildly understeering car's: an understeer gradient of 0.02
             // radians per g.
-            let asked = v_long * self.steer.tan() / (s.wheelbase + 0.02 * v_long * v_long / G);
+            let asked = v_long * libm::tanf(self.steer) / (ch.wheelbase + 0.02 * v_long * v_long / G);
             let most = s.grip * G / v_long;
             let asked = asked.clamp(-most, most);
             let excess = self.yaw_rate - asked;
             // Beyond a margin, and only the tail stepping out (turning more
             // than asked), never a car turning less.
             if excess.abs() > 0.1 + asked.abs() * 0.15 && excess.signum() == self.yaw_rate.signum() {
-                let brake_torque = 0.5 * s.track * s.grip * s.mass * G * 0.25;
+                let brake_torque = 0.5 * ch.track * s.grip * s.mass * G * 0.25;
                 torque_yaw -= excess.signum() * (excess.abs() * s.inertia * 6.0).min(brake_torque);
                 force -= f * (excess.abs().min(0.5) * s.mass * 2.0);
             }
@@ -575,9 +682,9 @@ impl Vehicle {
         self.yaw += self.yaw_rate * dt;
         self.pos.x += self.vel.x * dt;
         self.pos.z += self.vel.y * dt;
-        let k = 1.0 - (-dt / 0.08).exp();
+        let k = 1.0 - libm::expf(-dt / 0.08);
         self.accel += (Vec2::new(accel.dot(self.left()), accel.dot(self.forward())) - self.accel) * k;
-        self.spin += v_long * dt / s.wheel_radius;
+        self.spin += v_long * dt / ch.wheel_radius;
 
         // Up and down: follow the ground, or fly off a crest.
         let g = ground(self.pos);
@@ -605,7 +712,7 @@ impl Vehicle {
             }
         }
         if !self.airborne {
-            self.up = (self.up + (g.normal - self.up) * (1.0 - (-dt * 12.0).exp())).normalize_or(Vec3::Y);
+            self.up = (self.up + (g.normal - self.up) * (1.0 - libm::expf(-dt * 12.0))).normalize_or(Vec3::Y);
         }
 
         // The body on its springs: it dives under braking, squats under
@@ -619,16 +726,14 @@ impl Vehicle {
         self.roll += self.roll_rate * dt;
     }
 
-    /// Car space to the world, with the body's pitch and roll.
+    /// Car space (the body's) to the world, with the body's pitch and roll.
     pub fn transform(&self) -> Mat4 {
-        let fwd = Vec3::new(self.yaw.sin(), 0.0, self.yaw.cos());
-        let up = self.up;
-        let f = (fwd - up * fwd.dot(up)).normalize_or(fwd);
-        let left = up.cross(f).normalize_or(Vec3::X);
-        let basis = Mat4::from_cols(left.extend(0.0), up.extend(0.0), f.extend(0.0), self.pos.extend(1.0));
-        // Pitch about the left axis (nose down positive), roll about the
-        // forward one.
-        basis * Mat4::from_quat(Quat::from_rotation_z(self.roll) * Quat::from_rotation_x(self.pitch))
+        Pose::of(self).transform(self.chassis.middle)
+    }
+
+    /// The middle of its body on the ground (x, z).
+    pub fn middle(&self) -> Vec2 {
+        self.pos.xz() + self.forward() * self.chassis.middle
     }
 
     /// Where its wheels touch the ground (x, z): front left, front right,
@@ -643,10 +748,8 @@ impl Vehicle {
     /// rear right, rear left.
     pub fn corners(&self) -> [Vec2; 4] {
         let (f, l) = (self.forward(), self.left());
-        let (hl, hw) = (self.spec.half_length, self.spec.half_width);
-        // The box's middle is the body's, a little behind the centre of
-        // mass on most cars; close enough to share it.
-        let c = self.pos.xz();
+        let (hl, hw) = (self.chassis.half_length, self.chassis.half_width);
+        let c = self.pos.xz() + f * self.chassis.middle;
         [c + f * hl + l * hw, c + f * hl - l * hw, c - f * hl - l * hw, c - f * hl + l * hw]
     }
 }
@@ -671,9 +774,23 @@ mod tests {
         }
     }
 
+    /// Seconds from a standstill to 100 km/h flat out, with the engine at
+    /// `power`.
+    fn to_100(kind: Kind, power: f32) -> f32 {
+        let mut v = Vehicle::new(kind, Vec3::ZERO, 0.0);
+        v.power = power;
+        let mut at = None;
+        drive(&mut v, Controls { throttle: 1.0, ..Controls::default() }, 20.0, |v, t| {
+            if at.is_none() && v.speed() >= 100.0 / 3.6 {
+                at = Some(t);
+            }
+        });
+        at.expect("never reached 100 km/h")
+    }
+
     #[test]
     fn the_interceptor_accelerates_brakes_and_tops_out_plausibly() {
-        let mut v = Vehicle::new(Spec::interceptor(), Vec3::ZERO, 0.0);
+        let mut v = Vehicle::new(Kind::Police, Vec3::ZERO, 0.0);
         let mut to_100 = None;
         let full = Controls { throttle: 1.0, ..Controls::default() };
         drive(&mut v, full, 60.0, |v, t| {
@@ -701,8 +818,18 @@ mod tests {
     }
 
     #[test]
+    fn more_power_accelerates_harder() {
+        // The nitrous, and a held-back engine.
+        let (normal, boosted, tired) =
+            (to_100(Kind::Police, 1.0), to_100(Kind::Police, 1.5), to_100(Kind::Police, 0.7));
+        std::println!("0-100 km/h in {normal:.2} s, {boosted:.2} s boosted, {tired:.2} s held back");
+        assert!(boosted < normal * 0.85, "boosted {boosted} s, {normal} s without");
+        assert!(tired > normal * 1.15, "held back {tired} s, {normal} s without");
+    }
+
+    #[test]
     fn it_turns_and_holds_a_corner() {
-        let mut v = Vehicle::new(Spec::interceptor(), Vec3::ZERO, 0.0);
+        let mut v = Vehicle::new(Kind::Police, Vec3::ZERO, 0.0);
         v.set_speed(15.0);
         // A steady left turn at 15 m/s: the yaw rate is positive, the car
         // keeps its speed roughly and does not spin.
@@ -717,7 +844,7 @@ mod tests {
 
     #[test]
     fn the_handbrake_swings_the_tail() {
-        let mut v = Vehicle::new(Spec::interceptor(), Vec3::ZERO, 0.0);
+        let mut v = Vehicle::new(Kind::Police, Vec3::ZERO, 0.0);
         v.set_speed(20.0);
         let c = Controls { steer: 1.0, handbrake: true, ..Controls::default() };
         let mut most = 0.0f32;
@@ -729,23 +856,74 @@ mod tests {
     }
 
     #[test]
-    fn straight_at_speed_it_stays_straight_and_reverse_works() {
-        let mut v = Vehicle::new(Spec::sports(), Vec3::ZERO, 0.3);
+    fn straight_at_speed_it_stays_straight() {
+        let mut v = Vehicle::new(Kind::Coupe, Vec3::ZERO, 0.3);
         v.set_speed(60.0);
         drive(&mut v, Controls { throttle: 1.0, ..Controls::default() }, 5.0, |_, _| {});
         assert!((v.yaw - 0.3).abs() < 0.01, "drifted to {}", v.yaw);
-        // Stop, then back up.
-        let mut w = Vehicle::new(Spec::saloon(), Vec3::ZERO, 0.0);
-        drive(&mut w, Controls { brake: 1.0, ..Controls::default() }, 3.0, |_, _| {});
-        assert!(w.speed() < -1.0, "reversing at {}", w.speed());
-        assert_eq!(w.gear, -1);
-        drive(&mut w, Controls { throttle: 1.0, ..Controls::default() }, 3.0, |_, _| {});
+    }
+
+    #[test]
+    fn the_brakes_hold_it_and_only_asking_reverses() {
+        // Rolling, then held on the brakes: it stops and stays put, in a
+        // forward gear.
+        let mut v = Vehicle::new(Kind::Saloon, Vec3::ZERO, 0.0);
+        v.set_speed(8.0);
+        drive(&mut v, Controls { brake: 1.0, ..Controls::default() }, 6.0, |_, _| {});
+        let stopped = v.pos;
+        drive(&mut v, Controls { brake: 1.0, ..Controls::default() }, 6.0, |_, _| {});
+        assert!(v.pos.distance(stopped) < 0.01 && v.speed() == 0.0, "crept {} m", v.pos.distance(stopped));
+        assert!(v.gear >= 1);
+        // Asked to reverse while rolling forward, the throttle brakes it
+        // first; then it backs up.
+        let mut w = Vehicle::new(Kind::Saloon, Vec3::ZERO, 0.0);
+        w.set_speed(6.0);
+        let back = Controls { throttle: 1.0, reverse: true, ..Controls::default() };
+        let mut slowed = false;
+        drive(&mut w, back, 4.0, |w, _| slowed |= w.gear > 0 && w.braking > 0.9);
+        assert!(slowed && w.speed() < -1.0 && w.gear == -1, "reversing at {} in gear {}", w.speed(), w.gear);
+        // And forward again.
+        drive(&mut w, Controls { throttle: 1.0, ..Controls::default() }, 4.0, |_, _| {});
         assert!(w.speed() > 1.0 && w.gear >= 1);
     }
 
     #[test]
+    fn every_kind_drives_and_crashes_as_it_is_drawn() {
+        for kind in Kind::ALL {
+            let shape = kind.shape();
+            let model = crate::carmodel::build(kind);
+            let (yaw, pos) = (0.7, Vec3::new(3.0, 0.0, -2.0));
+            let mut v = Vehicle::new(kind, pos, yaw);
+            v.pitch = 0.02;
+            let m = v.transform();
+            // Its box is its body's: its corners are the drawn body's (in
+            // car space, the mirrors and the police's push bar aside).
+            let (lo, hi) = model.body.bounds();
+            let ends = [Vec2::new(hi.x, hi.z), Vec2::new(lo.x, hi.z), Vec2::new(lo.x, lo.z)];
+            let to_car = Pose { pitch: 0.0, ..Pose::of(&v) }.transform(v.chassis.middle).inverse();
+            let [fl, fr, rr, _] = v.corners();
+            for (corner, end) in [fl, fr, rr].into_iter().zip(ends) {
+                let at = to_car.transform_point3(Vec3::new(corner.x, pos.y, corner.y));
+                let off = (at.xz() - end).abs();
+                assert!(
+                    off.x < 0.12 && off.y < 0.12,
+                    "{kind:?}: a corner at {} in car space, the body's at {end}",
+                    at.xz()
+                );
+            }
+            assert!((v.chassis.half_length * 2.0 - shape.length).abs() < 1e-4);
+            // Its wheels touch the road under its drawn tyres.
+            for (w, at) in v.wheel_points().into_iter().zip(model.wheels) {
+                let drawn = m.transform_point3(at - Vec3::Y * shape.wheel_radius).xz();
+                assert!(w.distance(drawn) < 0.05, "{kind:?}: wheel at {w}, drawn at {drawn}");
+            }
+            assert_eq!(v.chassis.wheel_radius, shape.wheel_radius);
+        }
+    }
+
+    #[test]
     fn over_a_crest_it_flies_and_lands() {
-        let mut v = Vehicle::new(Spec::interceptor(), Vec3::ZERO, 0.0);
+        let mut v = Vehicle::new(Kind::Police, Vec3::ZERO, 0.0);
         v.set_speed(40.0);
         // A ramp up then a drop.
         let ramp = |p: Vec3| {

@@ -67,7 +67,7 @@ pub fn init_platform() {
     acpi::init();
     let platform = acpi::PLATFORM.expect();
     apic::disable_pic();
-    apic::select_mode(platform.lapic_phys);
+    apic::select_mode(platform.lapic_phys, platform.x2apic_opt_out);
     apic::init_local();
     // SAFETY: recording the BSP's APIC id before any IPI is sent.
     unsafe { percpu::set_apic_id(0, apic::id()) };

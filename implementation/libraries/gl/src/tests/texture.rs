@@ -593,3 +593,99 @@ fn rebuilt_storage_keeps_every_image() {
     assert_eq!(shade1(&mut c, "sampler2DArray", "texelFetch(t, ivec3(1, 0, 2), 0)"), [0, 200, 0, 255]);
     assert_eq!(shade1(&mut c, "sampler2DArray", "texelFetch(t, ivec3(0, 0, 1), 1)"), [0, 0, 7, 255]);
 }
+
+#[test]
+fn draws_into_a_level_that_sampling_moves() {
+    // Levels 1 to 3 are defined while the storage has level 0 only, so
+    // each gets a resource of its own; the draw renders into level 3 and
+    // samples the texture, whose storage it rebuilds first (every level
+    // moves into it): the draw must render where level 3 is then.
+    let mut c = context(1, 1);
+    let t = c.gen_texture();
+    c.bind_texture(gl::TEXTURE_2D, t);
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+    let red: Vec<u8> = [255u8, 0, 0, 255].repeat(64);
+    c.tex_image_2d(gl::TEXTURE_2D, 0, gl::RGBA8, 8, 8, 0, gl::RGBA, gl::UNSIGNED_BYTE, &red[..]);
+    for level in 1..4 {
+        let size = 8 >> level;
+        c.tex_image_2d(gl::TEXTURE_2D, level, gl::RGBA8, size, size, 0, gl::RGBA, gl::UNSIGNED_BYTE, None);
+    }
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST_MIPMAP_NEAREST as i32);
+    let fb = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, fb);
+    c.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, t, 3);
+    assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_COMPLETE);
+    // Level 3 is sampled too (a feedback loop): the texture reads as
+    // (0, 0, 0, 1), which the shader makes green.
+    textured(
+        &mut c,
+        "#version 300 es
+        precision highp float; uniform sampler2D t; in vec2 uv; out vec4 color;
+        void main() { color = texture(t, uv) + vec4(0.0, 1.0, 0.0, 0.0); }",
+    );
+    c.viewport(0, 0, 1, 1);
+    c.draw_arrays(gl::TRIANGLES, 0, 6);
+    no_error(&mut c);
+    assert_eq!(read_rgba(&mut c, 1, 1), [0, 255, 0, 255]);
+}
+
+#[test]
+fn empty_images_have_no_place() {
+    // Level 2 is defined first (the storage starts there), then level 0
+    // empty: attaching or sampling it must not reach for a level of the
+    // storage before its first.
+    let mut c = context(1, 1);
+    let t = c.gen_texture();
+    c.bind_texture(gl::TEXTURE_2D, t);
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+    let blue: Vec<u8> = [0u8, 0, 255, 255].repeat(4);
+    c.tex_image_2d(gl::TEXTURE_2D, 2, gl::RGBA8, 2, 2, 0, gl::RGBA, gl::UNSIGNED_BYTE, &blue[..]);
+    c.tex_image_2d(gl::TEXTURE_2D, 0, gl::RGBA8, 0, 0, 0, gl::RGBA, gl::UNSIGNED_BYTE, None);
+    no_error(&mut c);
+    let fb = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, fb);
+    c.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, t, 0);
+    assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
+    c.bind_framebuffer(gl::FRAMEBUFFER, 0);
+    // Sampling from level 2 with mipmaps rebuilds the storage around the
+    // empty level 0, which stays empty.
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_BASE_LEVEL, 2);
+    c.tex_image_2d(gl::TEXTURE_2D, 3, gl::RGB8, 1, 1, 0, gl::RGB, gl::UNSIGNED_BYTE, &[9u8, 9, 9][..]);
+    c.tex_image_2d(gl::TEXTURE_2D, 3, gl::RGBA8, 1, 1, 0, gl::RGBA, gl::UNSIGNED_BYTE, &[0u8, 255, 0, 255][..]);
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST_MIPMAP_NEAREST as i32);
+    assert_eq!(shade1(&mut c, "sampler2D", "texelFetch(t, ivec2(1, 1), 0)"), [0, 0, 255, 255]);
+    assert_eq!(shade1(&mut c, "sampler2D", "texelFetch(t, ivec2(0, 0), 1)"), [0, 255, 0, 255]);
+}
+
+#[test]
+fn pixels_laid_out_as_texels_move_with_their_own_pitches() {
+    // RGBA bytes into an RGBA8 texture and back: the application's rows
+    // (5 pixels long, after a skipped row and pixel) go in as they are, and
+    // come out into rows of 3 pixels, skipping a row, leaving the bytes
+    // between them alone.
+    let mut c = context(2, 2);
+    let mut src = [0u8; 4 * 5 * 3];
+    for (k, (x, y)) in [(1, 1), (2, 1), (1, 2), (2, 2)].into_iter().enumerate() {
+        src[(y * 5 + x) * 4..][..4].copy_from_slice(&[10 * (k as u8 + 1), 1, 2, 255]);
+    }
+    let t = c.gen_texture();
+    c.bind_texture(gl::TEXTURE_2D, t);
+    c.tex_storage_2d(gl::TEXTURE_2D, 1, gl::RGBA8, 2, 2);
+    c.pixel_storei(gl::UNPACK_ROW_LENGTH, 5);
+    c.pixel_storei(gl::UNPACK_SKIP_ROWS, 1);
+    c.pixel_storei(gl::UNPACK_SKIP_PIXELS, 1);
+    c.tex_sub_image_2d(gl::TEXTURE_2D, 0, 0, 0, 2, 2, gl::RGBA, gl::UNSIGNED_BYTE, &src[..]);
+    let fb = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, fb);
+    c.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, t, 0);
+    c.pixel_storei(gl::PACK_ROW_LENGTH, 3);
+    c.pixel_storei(gl::PACK_SKIP_ROWS, 1);
+    // From one pixel left of the framebuffer: that column is not read.
+    let mut out = [0xEEu8; 4 * 3 * 3];
+    c.read_pixels(-1, 0, 3, 2, gl::RGBA, gl::UNSIGNED_BYTE, &mut out[..]);
+    no_error(&mut c);
+    let px = |x: usize, y: usize| &out[(y * 3 + x) * 4..][..4];
+    assert_eq!([px(0, 1), px(1, 1), px(2, 1)], [&[0xEE; 4][..], &[10, 1, 2, 255], &[20, 1, 2, 255]]);
+    assert_eq!([px(0, 2), px(1, 2), px(2, 2)], [&[0xEE; 4][..], &[30, 1, 2, 255], &[40, 1, 2, 255]]);
+    assert!(out[..12].iter().all(|&b| b == 0xEE));
+}

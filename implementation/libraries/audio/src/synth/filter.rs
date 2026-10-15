@@ -3,7 +3,7 @@
 
 //! Filters: a topology-preserving state-variable filter (stable under fast
 //! modulation), RBJ biquads for equalisation, one-pole smoothers and a DC
-//! blocker.
+//! blocker (which the echo canceller uses too).
 
 use core::f32::consts::PI;
 
@@ -164,17 +164,35 @@ impl OnePole {
     }
 }
 
-/// Removes DC offset.
-#[derive(Debug, Clone, Default)]
+/// Removes DC offset: a first-order high-pass filter. What is too small
+/// to matter is flushed to zero, so that silence does not end in denormal
+/// numbers (slow on every processor, and more so under emulation).
+#[derive(Debug, Clone)]
 pub struct DcBlock {
+    pole: f32,
     x1: f32,
     y1: f32,
 }
 
+impl Default for DcBlock {
+    /// A blocker with its pole at 0.995 (about 35 Hz at 44.1 kHz).
+    fn default() -> DcBlock {
+        DcBlock { pole: 0.995, x1: 0.0, y1: 0.0 }
+    }
+}
+
 impl DcBlock {
+    /// A blocker that cuts off below about `cutoff_hz` at `rate` Hz.
+    pub fn with_cutoff(cutoff_hz: f32, rate: u32) -> DcBlock {
+        DcBlock { pole: 1.0 - core::f32::consts::TAU * cutoff_hz / rate as f32, x1: 0.0, y1: 0.0 }
+    }
+
     #[inline(always)]
     pub fn process(&mut self, x: f32) -> f32 {
-        let y = x - self.x1 + 0.995 * self.y1;
+        let mut y = x - self.x1 + self.pole * self.y1;
+        if y.abs() < 1e-15 {
+            y = 0.0;
+        }
         self.x1 = x;
         self.y1 = y;
         y

@@ -3,8 +3,10 @@
 
 //! Integration tests: whole conversations between two stacks over a
 //! simulated cable, with a DHCP server in the harness and a DNS server on
-//! the far stack. The cable can drop frames at random or go dark.
+//! the far stack. The cable can drop frames at random, go dark, or take only
+//! a few frames at a time (a full link).
 
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -12,13 +14,14 @@ use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    DhcpMessageType, DhcpPacket, DhcpRepr, EthernetAddress, EthernetFrame, EthernetProtocol, IpProtocol, Ipv4Packet,
-    Ipv4Repr, UdpPacket, UdpRepr,
+    DhcpMessageType, DhcpPacket, DhcpRepr, EthernetAddress, EthernetFrame, EthernetProtocol, Icmpv6DstUnreachable,
+    Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpProtocol, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr, UdpPacket,
+    UdpRepr,
 };
 use vproto::net::{AddrFamily, Connectivity, DeviceInfo, InterfaceKind, IpConfig, NetError, ResolveResult, TcpOptions};
 
 use crate::dns::tests::{encode_name, response};
-use crate::{IfaceId, PingEvent, SockId, Stack, TcpState};
+use crate::{IfaceId, Link, Links, PingEvent, SockId, Stack, TcpState};
 
 const CLIENT_MAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0x15];
 const SERVER_MAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0x02];
@@ -48,6 +51,53 @@ struct DhcpServer {
     dns: Vec<Ipv4Addr>,
     lease_s: u32,
     requests_seen: u32,
+    /// After each ACK, send one for another client with this lease.
+    forged_lease: Option<u32>,
+}
+
+/// One end of the cable: what arrived for a stack, and what it sent.
+#[derive(Default)]
+struct End {
+    inbox: VecDeque<Vec<u8>>,
+    outbox: VecDeque<Vec<u8>>,
+    /// Frames the end takes before it is full (`usize::MAX`: no limit).
+    room: usize,
+    /// Times the stack found the end full.
+    full: u32,
+}
+
+impl Link for End {
+    fn receive(&mut self, buf: &mut [u8]) -> Option<usize> {
+        loop {
+            let f = self.inbox.pop_front()?;
+            if f.len() <= buf.len() {
+                buf[..f.len()].copy_from_slice(&f);
+                return Some(f.len());
+            }
+        }
+    }
+
+    fn can_send(&self) -> bool {
+        self.outbox.len() < self.room
+    }
+
+    fn send(&mut self, frame: &[u8]) -> bool {
+        if !self.can_send() {
+            self.full += 1;
+            return false;
+        }
+        self.outbox.push_back(frame.to_vec());
+        true
+    }
+}
+
+/// A stack's one link, as [`Links`].
+struct Cable<'a>(IfaceId, &'a mut End);
+
+impl Links for Cable<'_> {
+    fn link(&mut self, id: IfaceId) -> Option<&mut dyn Link> {
+        (id == self.0).then_some(&mut *self.1 as &mut dyn Link)
+    }
 }
 
 struct Net {
@@ -55,6 +105,8 @@ struct Net {
     b: Stack,
     a_eth: IfaceId,
     b_eth: IfaceId,
+    a_end: End,
+    b_end: End,
     now: u64,
     loss: u64,
     dark: bool,
@@ -64,6 +116,8 @@ struct Net {
     dns_sock: SockId,
     dns_mode: DnsMode,
     dns_queries: u32,
+    /// Every frame `a` sends, while `Some`.
+    recorded: Option<Vec<Vec<u8>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,6 +145,8 @@ impl Net {
             b,
             a_eth,
             b_eth,
+            a_end: End { room: usize::MAX, ..End::default() },
+            b_end: End { room: usize::MAX, ..End::default() },
             now: 1_000_000,
             loss: 0,
             dark: false,
@@ -101,10 +157,12 @@ impl Net {
                 dns: vec![SERVER_IP],
                 lease_s: 3600,
                 requests_seen: 0,
+                forged_lease: None,
             },
             dns_sock,
             dns_mode: DnsMode::Answer,
             dns_queries: 0,
+            recorded: None,
         }
     }
 
@@ -117,37 +175,35 @@ impl Net {
 
     fn step(&mut self) {
         self.now += 1000;
-        self.a.poll(self.now);
-        self.b.poll(self.now);
-        let mut to_b = Vec::new();
-        let mut to_a = Vec::new();
-        self.a.transmit_frames(self.a_eth, |f| {
-            to_b.push(f.to_vec());
-            true
-        });
-        self.b.transmit_frames(self.b_eth, |f| {
-            to_a.push(f.to_vec());
-            true
-        });
+        self.a.poll(self.now, &mut Cable(self.a_eth, &mut self.a_end));
+        self.b.poll(self.now, &mut Cable(self.b_eth, &mut self.b_end));
+        let to_b: Vec<Vec<u8>> = self.a_end.outbox.drain(..).collect();
+        if let Some(r) = self.recorded.as_mut() {
+            r.extend(to_b.iter().cloned());
+        }
+        let mut to_a: Vec<Vec<u8>> = self.b_end.outbox.drain(..).collect();
         for f in to_b {
             if self.dark || self.rng.chance(self.loss) {
                 continue;
             }
             if let Some(reply) = self.dhcp_answer(&f) {
-                if !reply.is_empty() {
-                    to_a.push(reply);
-                }
+                to_a.extend(reply);
                 continue;
             }
-            self.b.receive_frame(self.b_eth, &f);
+            self.b_end.inbox.push_back(f);
         }
         for f in to_a {
             if self.dark || self.rng.chance(self.loss) {
                 continue;
             }
-            self.a.receive_frame(self.a_eth, &f);
+            self.a_end.inbox.push_back(f);
         }
         self.serve_dns();
+    }
+
+    /// A frame arrives at `a` from the cable.
+    fn arrive_at_a(&mut self, frame: &[u8]) {
+        self.a_end.inbox.push_back(frame.to_vec());
     }
 
     fn run_until(&mut self, max_ms: u64, mut done: impl FnMut(&mut Net) -> bool) -> bool {
@@ -161,8 +217,9 @@ impl Net {
     }
 
     /// The harness DHCP server: answers DISCOVER with OFFER and REQUEST
-    /// with ACK.
-    fn dhcp_answer(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
+    /// with ACK (the frames to `a`; none: no server). With `forged_lease`,
+    /// every ACK is followed by one for another client.
+    fn dhcp_answer(&mut self, frame: &[u8]) -> Option<Vec<Vec<u8>>> {
         let eth = EthernetFrame::new_checked(frame).ok()?;
         if eth.ethertype() != EthernetProtocol::Ipv4 {
             return None;
@@ -189,6 +246,19 @@ impl Net {
             }
             _ => return None,
         };
+        let mut out = vec![self.dhcp_reply(kind, &req, req.client_hardware_address, self.dhcp.lease_s)];
+        if kind == DhcpMessageType::Ack
+            && let Some(lease_s) = self.dhcp.forged_lease
+        {
+            // Another client's acknowledgement (broadcast), which `a` sees
+            // too.
+            out.push(self.dhcp_reply(kind, &req, EthernetAddress([2, 0, 0, 0, 0, 0x99]), lease_s));
+        }
+        Some(out)
+    }
+
+    /// The server's `kind` answer to `req`, for client `chaddr`.
+    fn dhcp_reply(&self, kind: DhcpMessageType, req: &DhcpRepr, chaddr: EthernetAddress, lease_s: u32) -> Vec<u8> {
         let mut dns = heapless::Vec::new();
         for d in &self.dhcp.dns {
             let _ = dns.push(*d);
@@ -197,7 +267,7 @@ impl Net {
             message_type: kind,
             transaction_id: req.transaction_id,
             secs: 0,
-            client_hardware_address: req.client_hardware_address,
+            client_hardware_address: chaddr,
             client_ip: Ipv4Addr::UNSPECIFIED,
             your_ip: self.dhcp.address,
             server_ip: SERVER_IP,
@@ -211,7 +281,7 @@ impl Net {
             parameter_request_list: None,
             dns_servers: Some(dns),
             max_size: None,
-            lease_duration: Some(self.dhcp.lease_s),
+            lease_duration: Some(lease_s),
             renew_duration: None,
             rebind_duration: None,
             additional_options: &[],
@@ -242,16 +312,16 @@ impl Net {
             },
             &caps,
         );
-        Some(out)
+        out
     }
 
     /// The DNS server on `b`: `*.example` names resolve, `nx.example`
     /// does not exist.
     fn serve_dns(&mut self) {
         let mut buf = vec![0u8; 2048];
-        while let Some(d) = self.b.udp_recv(self.dns_sock, &mut buf) {
+        while let Some((len, from)) = udp_recv(&mut self.b, self.dns_sock, &mut buf) {
             self.dns_queries += 1;
-            let q = &buf[..d.len];
+            let q = &buf[..len];
             let reply = match self.dns_mode {
                 DnsMode::Silent => continue,
                 DnsMode::ServFail => response(q, 2, &[], &[]),
@@ -277,7 +347,7 @@ impl Net {
                     }
                 }
             };
-            let _ = self.b.udp_send(self.dns_sock, d.from, &reply);
+            let _ = self.b.udp_send(self.dns_sock, from, &reply);
         }
     }
 
@@ -295,6 +365,37 @@ impl Net {
         }
         panic!("lookup of {name} never finished");
     }
+}
+
+/// Takes what a TCP connection of `stack` received, up to `buf.len()`.
+fn tcp_recv(stack: &mut Stack, id: SockId, buf: &mut [u8]) -> Result<usize, NetError> {
+    let max = buf.len();
+    stack.tcp_recv_with(id, max, |data| {
+        buf[..data.len()].copy_from_slice(data);
+        data.len()
+    })
+}
+
+/// Takes the next datagram of a UDP socket of `stack`: (length, sender).
+fn udp_recv(stack: &mut Stack, id: SockId, buf: &mut [u8]) -> Option<(usize, SocketAddr)> {
+    let mut got = None;
+    stack.udp_recv_with(id, |from, data| {
+        let n = data.len().min(buf.len());
+        buf[..n].copy_from_slice(&data[..n]);
+        got = Some((n, from));
+        true
+    })?;
+    got
+}
+
+/// Takes the ping results of a ping socket of `stack`.
+fn ping_events(stack: &mut Stack, id: SockId) -> Vec<PingEvent> {
+    let mut out = Vec::new();
+    while let Some(ev) = stack.ping_next(id) {
+        stack.ping_taken(id);
+        out.push(ev);
+    }
+    out
 }
 
 fn qname(q: &[u8]) -> String {
@@ -327,7 +428,7 @@ fn transfer(n: &mut Net, sa: SockId, sb: SockId, data: &[u8], max_ms: u64) {
         }
         n.step();
         loop {
-            let k = n.b.tcp_recv(sb, &mut buf).unwrap();
+            let k = tcp_recv(&mut n.b, sb, &mut buf).unwrap();
             if k == 0 {
                 break;
             }
@@ -366,8 +467,20 @@ fn dhcp_configures_the_interface() {
     let st = n.a.status();
     assert_eq!(st.default_interface, "eth0");
     assert_eq!(st.default_gateway, Some(IpAddr::V4(SERVER_IP)));
-    // IPv6 link-local from the MAC.
-    assert!(info.addresses.iter().any(|a| matches!(a.address, IpAddr::V6(v) if v.segments()[0] == 0xfe80)));
+    // An IPv6 link-local address, which does not give away the MAC (no
+    // EUI-64 identifier: no 02:00:00:ff:fe:00:00:15 in it).
+    let ll = info.addresses.iter().find_map(|a| match a.address {
+        IpAddr::V6(v) if v.segments()[0] == 0xfe80 => Some(v),
+        _ => None,
+    });
+    let ll = ll.expect("a link-local address");
+    assert_ne!(ll.segments()[4..], [0x0000, 0x00ff, 0xfe00, 0x0015]);
+    assert_ne!(&ll.octets()[8..], &[0x00, 0x00, 0x00, 0xff, 0xfe, 0x00, 0x00, 0x15]);
+    // Stable: the same interface on the same network gets the same address.
+    let mut again = Stack::new(b"client seed for tests, 32+ bytes long", 1_000_000);
+    let id = again.add_interface(&device(CLIENT_MAC), true).unwrap();
+    let same = again.interfaces().into_iter().find(|i| i.name == again.interface_name(id).unwrap()).unwrap();
+    assert!(same.addresses.iter().any(|a| a.address == IpAddr::V6(ll)));
 }
 
 #[test]
@@ -399,7 +512,7 @@ fn tcp_round_trip() {
             sent += n.b.tcp_send(sb, &back[sent..]).unwrap();
         }
         n.step();
-        while let Ok(k) = n.a.tcp_recv(sa, &mut buf) {
+        while let Ok(k) = tcp_recv(&mut n.a, sa, &mut buf) {
             if k == 0 {
                 break;
             }
@@ -509,7 +622,7 @@ fn removing_the_interface_aborts_connections() {
     let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
     let _ = accept(&mut n, l);
     n.a.remove_interface(n.a_eth);
-    n.a.poll(n.now + 1000);
+    n.a.poll(n.now + 1000, &mut crate::NoLinks);
     assert_eq!(n.a.tcp_view(sa).unwrap().state, TcpState::Closed { error: Some(NetError::Aborted) });
     assert_eq!(n.a.status().connectivity, Connectivity::Offline);
 }
@@ -561,7 +674,7 @@ fn dns_failures_and_failover() {
     assert_eq!(n.resolve("three.example"), ResolveResult::Failed { error: NetError::DnsFailure });
     assert!(n.now - t0 <= crate::dns::LOOKUP_TIMEOUT_US + 10_000, "lookup must give up in time");
     // Every query socket was closed again.
-    assert_eq!(n.a.socket_infos().len(), 0);
+    assert_eq!(n.a.socket_infos(None).len(), 0);
 }
 
 #[test]
@@ -575,30 +688,166 @@ fn udp_and_ping() {
     let mut buf = [0u8; 64];
     let mut got = None;
     n.run_until(2_000, |n| {
-        got = n.b.udp_recv(sb, &mut buf);
+        got = udp_recv(&mut n.b, sb, &mut buf);
         got.is_some()
     });
-    let d = got.expect("datagram lost");
-    assert_eq!(&buf[..d.len], b"hello");
-    assert_eq!(d.from, SocketAddr::new(IpAddr::V4(CLIENT_IP), local.port()));
+    let (len, from) = got.expect("datagram lost");
+    assert_eq!(&buf[..len], b"hello");
+    assert_eq!(from, SocketAddr::new(IpAddr::V4(CLIENT_IP), local.port()));
     // Ping the server (smoltcp answers echo requests).
     let p = n.a.ping_open(1).unwrap();
-    n.a.ping_send(p, IpAddr::V4(SERVER_IP), 1, 0, 56).unwrap();
+    n.a.ping_send(p, IpAddr::V4(SERVER_IP), 1, 0, 56);
     let mut events = Vec::new();
     n.run_until(2_000, |n| {
-        events.extend(n.a.ping_events(p));
+        events.extend(ping_events(&mut n.a, p));
         !events.is_empty()
     });
     assert!(matches!(events[0], PingEvent::Reply { seq: 1, size: 56, .. }), "{events:?}");
     // An unanswered ping times out.
     n.dark = true;
-    n.a.ping_send(p, IpAddr::V4(SERVER_IP), 2, 0, 56).unwrap();
+    n.a.ping_send(p, IpAddr::V4(SERVER_IP), 2, 0, 56);
     let mut events = Vec::new();
     n.run_until(6_000, |n| {
-        events.extend(n.a.ping_events(p));
+        events.extend(ping_events(&mut n.a, p));
         !events.is_empty()
     });
-    assert_eq!(events, vec![PingEvent::Failed { seq: 2, error: NetError::TimedOut }]);
+    assert_eq!(events, vec![PingEvent::Failed { seq: 2, from: None, error: NetError::TimedOut }]);
+}
+
+#[test]
+fn routers_tell_ping_why_a_request_failed() {
+    // A ping with a TTL of 1: the router (b) says the request ran out of
+    // hops, quoting its header and just the first eight bytes of its data,
+    // as RFC 792 has it (routers may quote more).
+    let mut n = Net::new();
+    assert!(n.configured());
+    let p = n.a.ping_open(1).unwrap();
+    n.recorded = Some(Vec::new());
+    n.a.ping_send(p, "192.0.2.7".parse().unwrap(), 5, 1, 32);
+    let find = |frames: &[Vec<u8>]| {
+        frames.iter().find_map(|f| {
+            let eth = EthernetFrame::new_checked(&f[..]).ok()?;
+            let ip = Ipv4Packet::new_checked(eth.payload()).ok()?;
+            (ip.next_header() == IpProtocol::Icmp).then(|| (eth.src_addr(), ip.payload().to_vec(), ip.dst_addr()))
+        })
+    };
+    let mut request = None;
+    n.run_until(1_000, |n| {
+        request = find(n.recorded.as_deref().unwrap_or_default());
+        request.is_some()
+    });
+    let (a_mac, icmp, dst) = request.expect("the echo request");
+    let caps = ChecksumCapabilities::default();
+    let error = smoltcp::wire::Icmpv4Repr::TimeExceeded {
+        reason: smoltcp::wire::Icmpv4TimeExceeded::TtlExpired,
+        header: Ipv4Repr {
+            src_addr: CLIENT_IP,
+            dst_addr: dst,
+            next_header: IpProtocol::Icmp,
+            payload_len: icmp.len(),
+            hop_limit: 1,
+        },
+        data: &icmp[..8],
+    };
+    let ip = Ipv4Repr {
+        src_addr: SERVER_IP,
+        dst_addr: CLIENT_IP,
+        next_header: IpProtocol::Icmp,
+        payload_len: error.buffer_len(),
+        hop_limit: 64,
+    };
+    let mut frame = vec![0u8; 14 + 20 + error.buffer_len()];
+    let mut eth = EthernetFrame::new_unchecked(&mut frame[..]);
+    eth.set_dst_addr(a_mac);
+    eth.set_src_addr(EthernetAddress(SERVER_MAC));
+    eth.set_ethertype(EthernetProtocol::Ipv4);
+    ip.emit(&mut Ipv4Packet::new_unchecked(&mut frame[14..]), &caps);
+    error.emit(&mut smoltcp::wire::Icmpv4Packet::new_unchecked(&mut frame[34..]), &caps);
+    n.arrive_at_a(&frame);
+    let mut events = Vec::new();
+    n.run_until(1_000, |n| {
+        events.extend(ping_events(&mut n.a, p));
+        !events.is_empty()
+    });
+    assert_eq!(
+        events,
+        vec![PingEvent::Failed { seq: 5, from: Some(IpAddr::V4(SERVER_IP)), error: NetError::TimeExceeded }]
+    );
+}
+
+#[test]
+fn ipv6_errors_tell_ping_why_too() {
+    // A ping to the far end's link-local address, taken off the cable on
+    // its way: the far end says the address is unreachable, quoting it.
+    let mut n = Net::new();
+    assert!(n.configured());
+    let b_ll =
+        n.b.interfaces()
+            .into_iter()
+            .flat_map(|i| i.addresses)
+            .find_map(|a| match a.address {
+                IpAddr::V6(v) if v.is_unicast_link_local() => Some(v),
+                _ => None,
+            })
+            .expect("the far end's link-local address");
+    let p = n.a.ping_open(1).unwrap();
+    n.recorded = Some(Vec::new());
+    n.a.ping_send(p, IpAddr::V6(b_ll), 9, 0, 32);
+    let find = |frames: &[Vec<u8>]| {
+        frames.iter().find_map(|f| {
+            let eth = EthernetFrame::new_checked(&f[..]).ok()?;
+            let ip = Ipv6Packet::new_checked(eth.payload()).ok()?;
+            let icmp = Icmpv6Packet::new_checked(ip.payload()).ok()?;
+            (ip.next_header() == IpProtocol::Icmpv6 && icmp.msg_type() == Icmpv6Message::EchoRequest)
+                .then(|| (eth.src_addr(), ip.payload().to_vec(), ip.src_addr()))
+        })
+    };
+    let mut request = None;
+    n.run_until(1_000, |n| {
+        request = find(n.recorded.as_deref().unwrap_or_default());
+        if request.is_some() {
+            // The far end never gets it (nor answers it).
+            n.b_end.inbox.clear();
+        }
+        request.is_some()
+    });
+    let (a_mac, icmp, a_ll) = request.expect("the echo request");
+    let caps = ChecksumCapabilities::default();
+    let error = Icmpv6Repr::DstUnreachable {
+        reason: Icmpv6DstUnreachable::AddrUnreachable,
+        header: Ipv6Repr {
+            src_addr: a_ll,
+            dst_addr: b_ll,
+            next_header: IpProtocol::Icmpv6,
+            payload_len: icmp.len(),
+            hop_limit: 64,
+        },
+        data: &icmp,
+    };
+    let ip = Ipv6Repr {
+        src_addr: b_ll,
+        dst_addr: a_ll,
+        next_header: IpProtocol::Icmpv6,
+        payload_len: error.buffer_len(),
+        hop_limit: 64,
+    };
+    let mut frame = vec![0u8; 14 + 40 + error.buffer_len()];
+    let mut eth = EthernetFrame::new_unchecked(&mut frame[..]);
+    eth.set_dst_addr(a_mac);
+    eth.set_src_addr(EthernetAddress(SERVER_MAC));
+    eth.set_ethertype(EthernetProtocol::Ipv6);
+    ip.emit(&mut Ipv6Packet::new_unchecked(&mut frame[14..]));
+    error.emit(&b_ll, &a_ll, &mut Icmpv6Packet::new_unchecked(&mut frame[54..]), &caps);
+    n.arrive_at_a(&frame);
+    let mut events = Vec::new();
+    n.run_until(1_000, |n| {
+        events.extend(ping_events(&mut n.a, p));
+        !events.is_empty()
+    });
+    assert_eq!(
+        events,
+        vec![PingEvent::Failed { seq: 9, from: Some(IpAddr::V6(b_ll)), error: NetError::HostUnreachable }]
+    );
 }
 
 #[test]
@@ -618,7 +867,7 @@ fn loopback_connections() {
     let mut buf = [0u8; 8];
     let mut k = 0;
     n.run_until(1_000, |n| {
-        k = n.a.tcp_recv(s, &mut buf).unwrap();
+        k = tcp_recv(&mut n.a, s, &mut buf).unwrap();
         k > 0
     });
     assert_eq!(&buf[..k], b"ping");
@@ -673,7 +922,7 @@ fn hostile_frames_do_not_crash_the_stack() {
             };
             frame[12..14].copy_from_slice(&ty);
         }
-        n.a.receive_frame(n.a_eth, &frame[..len]);
+        n.arrive_at_a(&frame[..len]);
         if round % 64 == 0 {
             n.step();
         }
@@ -721,4 +970,414 @@ fn socket_limit_is_enforced() {
         n.a.close(id);
     }
     assert!(n.a.ping_open(1).is_ok());
+}
+
+/// Connects `a` to a listener on `b` (port `port`, `backlog`): (a's
+/// socket, b's).
+fn pair(n: &mut Net, port: u16) -> (SockId, SockId) {
+    let local: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    let (l, _) = n.b.tcp_listen(local, 4, &TcpOptions::default(), 0).unwrap();
+    let sa = connect(n, SocketAddr::new(IpAddr::V4(SERVER_IP), port));
+    let sb = accept(n, l);
+    (sa, sb)
+}
+
+/// Sends all of `data` from `from` on `stack` (stepping the cable).
+fn send_all(n: &mut Net, on_a: bool, id: SockId, data: &[u8]) {
+    let mut sent = 0;
+    for _ in 0..60_000 {
+        if sent == data.len() {
+            return;
+        }
+        let stack = if on_a { &mut n.a } else { &mut n.b };
+        sent += stack.tcp_send(id, &data[sent..]).unwrap();
+        n.step();
+    }
+    panic!("could not send {} bytes", data.len());
+}
+
+#[test]
+fn idle_connections_outlive_the_user_timeout() {
+    // Nothing waits for an acknowledgement: two quiet minutes and more are
+    // no reason to give up on the peer.
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    transfer(&mut n, sa, sb, &pattern(1000), 5_000);
+    n.run(150_000);
+    assert!(matches!(n.a.tcp_view(sa).unwrap().state, TcpState::Open { .. }), "{:?}", n.a.tcp_view(sa));
+    assert!(matches!(n.b.tcp_view(sb).unwrap().state, TcpState::Open { .. }), "{:?}", n.b.tcp_view(sb));
+    transfer(&mut n, sa, sb, &pattern(5000), 10_000);
+}
+
+#[test]
+fn the_end_of_stream_follows_the_fin_and_the_data_before_it() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    let data = pattern(10_000);
+    send_all(&mut n, false, sb, &data);
+    n.b.tcp_shutdown(sb);
+    // a reads nothing until everything (and the FIN) is there.
+    assert!(n.run_until(5_000, |n| {
+        let v = n.a.tcp_view(sa).unwrap();
+        v.recv_queued == data.len() && n.a.socket_infos(None).iter().any(|i| i.state == "CLOSE-WAIT")
+    }));
+    assert!(!n.a.tcp_view(sa).unwrap().eof, "data before the end of stream");
+    let mut got = Vec::new();
+    let mut buf = vec![0u8; 4096];
+    while let Ok(k) = tcp_recv(&mut n.a, sa, &mut buf) {
+        if k == 0 {
+            break;
+        }
+        got.extend_from_slice(&buf[..k]);
+    }
+    assert!(got == data);
+    // The end of stream shows as soon as the data is taken.
+    assert!(n.a.tcp_view(sa).unwrap().eof);
+}
+
+#[test]
+fn data_received_before_a_normal_close_stays_readable() {
+    // a finishes sending first; b answers and closes too. a's client is
+    // slow: by the time it reads, TIME-WAIT is over and the connection is
+    // closed, but what arrived is still there, then the end of stream.
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    n.a.tcp_shutdown(sa);
+    assert!(n.run_until(5_000, |n| n.b.tcp_view(sb).unwrap().eof));
+    let data = pattern(20_000);
+    send_all(&mut n, false, sb, &data);
+    n.b.tcp_shutdown(sb);
+    n.run(15_000);
+    let v = n.a.tcp_view(sa).unwrap();
+    assert_eq!(v.state, TcpState::Closed { error: None });
+    assert_eq!(v.recv_queued, data.len());
+    assert!(!v.eof);
+    let mut got = Vec::new();
+    let mut buf = vec![0u8; 3000];
+    while let Ok(k) = tcp_recv(&mut n.a, sa, &mut buf) {
+        if k == 0 {
+            break;
+        }
+        got.extend_from_slice(&buf[..k]);
+    }
+    assert!(got == data);
+    assert!(n.a.tcp_view(sa).unwrap().eof);
+}
+
+#[test]
+fn closing_delivers_what_was_sent_then_a_fin() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    let data = pattern(60_000);
+    let mut sent = 0;
+    while sent < data.len() {
+        let k = n.a.tcp_send(sa, &data[sent..]).unwrap();
+        assert!(k > 0, "the send buffer takes 64 KiB");
+        sent += k;
+    }
+    // The client goes away at once; the connection finishes on its own.
+    n.a.close(sa);
+    let mut got = Vec::new();
+    let mut buf = vec![0u8; 8192];
+    assert!(n.run_until(20_000, |n| {
+        while let Ok(k) = tcp_recv(&mut n.b, sb, &mut buf) {
+            if k == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..k]);
+        }
+        n.b.tcp_view(sb).unwrap().eof
+    }));
+    assert!(got == data, "{} of {} bytes", got.len(), data.len());
+}
+
+#[test]
+fn orphans_that_receive_data_are_reset() {
+    // b's client closes the connection while a keeps sending: nobody will
+    // read that, so a is told (RFC 1122).
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    n.b.close(sb);
+    n.run(100);
+    let _ = n.a.tcp_send(sa, b"more for nobody");
+    assert!(n.run_until(5_000, |n| matches!(n.a.tcp_view(sa).unwrap().state, TcpState::Closed { .. })));
+    assert_eq!(n.a.tcp_view(sa).unwrap().state, TcpState::Closed { error: Some(NetError::ConnectionReset) });
+    n.run(100);
+    assert!(n.b.socket_infos(None).iter().all(|i| i.local.is_none_or(|l| l.port() != 7) || i.state == "LISTEN"));
+}
+
+#[test]
+fn orphans_wait_for_the_peer_only_so_long() {
+    // a's client closes; b acknowledges the FIN but never closes its side.
+    // a gives up after the FIN timeout (and resets the connection).
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    n.a.close(sa);
+    assert!(n.run_until(5_000, |n| n.b.tcp_view(sb).unwrap().eof));
+    let a_has = |n: &Net| n.a.socket_infos(None).iter().any(|i| i.kind == vproto::net::SocketKind::Tcp);
+    assert!(a_has(&n), "FIN-WAIT-2");
+    n.run(crate::ORPHAN_TIMEOUT_US / 1000 - 2_000);
+    assert!(a_has(&n), "gone too early");
+    n.run(4_000);
+    assert!(!a_has(&n), "an orphan outlived the FIN timeout");
+    assert!(n.run_until(2_000, |n| matches!(n.b.tcp_view(sb).unwrap().state, TcpState::Closed { .. })));
+    assert_eq!(n.b.tcp_view(sb).unwrap().state, TcpState::Closed { error: Some(NetError::ConnectionReset) });
+}
+
+#[test]
+fn keep_alives_need_at_least_a_second() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let to: SocketAddr = "10.0.2.2:7".parse().unwrap();
+    let opts = |ms| TcpOptions { keepalive_ms: ms, ..TcpOptions::default() };
+    assert_eq!(n.a.tcp_connect(to, &opts(1), 1), Err(NetError::InvalidArgument));
+    assert_eq!(n.a.tcp_connect(to, &opts(999), 1), Err(NetError::InvalidArgument));
+    assert_eq!(
+        n.a.tcp_listen("0.0.0.0:8".parse().unwrap(), 1, &opts(10), 1).map(|_| ()),
+        Err(NetError::InvalidArgument)
+    );
+    assert!(n.a.tcp_connect(to, &opts(1000), 1).is_ok());
+    assert!(n.a.tcp_connect(to, &opts(0), 1).is_ok());
+}
+
+#[test]
+fn unanswered_keep_alives_time_the_connection_out() {
+    // The peer vanishes from a quiet connection: keep-alive finds out, and
+    // the connection timed out (it was not reset).
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    let opts = TcpOptions { keepalive_ms: 1000, ..TcpOptions::default() };
+    let sa = n.a.tcp_connect("10.0.2.2:7".parse().unwrap(), &opts, 1).unwrap();
+    let _sb = accept(&mut n, l);
+    n.run(5_000);
+    assert!(matches!(n.a.tcp_view(sa).unwrap().state, TcpState::Open { .. }));
+    n.dark = true;
+    n.run_until(200_000, |n| matches!(n.a.tcp_view(sa).unwrap().state, TcpState::Closed { .. }));
+    assert_eq!(n.a.tcp_view(sa).unwrap().state, TcpState::Closed { error: Some(NetError::TimedOut) });
+}
+
+#[test]
+fn a_reset_after_our_half_close_is_no_end_of_stream() {
+    // The client finished sending and reads on; the peer resets the
+    // connection instead of finishing it: an error, not the end of the
+    // stream.
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    n.a.tcp_shutdown(sa);
+    n.run(100);
+    n.b.tcp_abort(sb);
+    n.run_until(1_000, |n| matches!(n.a.tcp_view(sa).unwrap().state, TcpState::Closed { .. }));
+    let v = n.a.tcp_view(sa).unwrap();
+    assert_eq!(v.state, TcpState::Closed { error: Some(NetError::ConnectionReset) });
+    assert!(!v.eof);
+}
+
+#[test]
+fn a_listener_holds_at_most_its_backlog() {
+    // A client that does not accept: connections beyond its backlog are
+    // refused instead of piling up.
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 2, &TcpOptions::default(), 0).unwrap();
+    let to: SocketAddr = "10.0.2.2:7".parse().unwrap();
+    let mut conns = Vec::new();
+    for _ in 0..6 {
+        // One after the other, each given time to be established.
+        let c = n.a.tcp_connect(to, &TcpOptions::default(), 1).unwrap();
+        n.run_until(1_000, |n| !matches!(n.a.tcp_view(c).unwrap().state, TcpState::Connecting));
+        conns.push(c);
+    }
+    n.run(100);
+    let open = conns.iter().filter(|&&c| matches!(n.a.tcp_view(c).unwrap().state, TcpState::Open { .. })).count();
+    let refused = conns
+        .iter()
+        .filter(|&&c| n.a.tcp_view(c).unwrap().state == TcpState::Closed { error: Some(NetError::ConnectionRefused) })
+        .count();
+    assert_eq!((open, refused), (2, 4));
+    let waiting = n.b.socket_infos(None).iter().filter(|i| i.kind == vproto::net::SocketKind::Tcp).count();
+    assert_eq!(waiting, 2);
+    // Accepting makes room again.
+    assert!(n.b.tcp_accept(l).is_some());
+    let c = n.a.tcp_connect(to, &TcpOptions::default(), 1).unwrap();
+    assert!(n.run_until(3_000, |n| matches!(n.a.tcp_view(c).unwrap().state, TcpState::Open { .. })));
+}
+
+#[test]
+fn accepted_connections_respect_the_socket_limit() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    while n.b.ping_open(0).is_ok() {}
+    let c = n.a.tcp_connect("10.0.2.2:7".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
+    assert!(n.run_until(3_000, |n| matches!(n.a.tcp_view(c).unwrap().state, TcpState::Closed { .. })));
+    assert_eq!(n.a.tcp_view(c).unwrap().state, TcpState::Closed { error: Some(NetError::ConnectionReset) });
+    assert_eq!(n.b.tcp_accept(l), None);
+    n.run(10);
+    assert!(n.b.socket_infos(None).len() <= crate::MAX_SOCKETS);
+}
+
+#[test]
+fn lookups_need_no_room_in_the_socket_table() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    while n.a.ping_open(1).is_ok() {}
+    assert!(matches!(n.resolve("full.example"), ResolveResult::Found { .. }));
+    // Only the pings are listed: the resolver's sockets are its own.
+    assert!(n.a.socket_infos(None).iter().all(|i| i.kind == vproto::net::SocketKind::Ping));
+}
+
+#[test]
+fn unreachable_dns_servers_are_passed_over_at_once() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    // No IPv6 route: the first server cannot be sent to at all.
+    n.a.set_dns_servers(vec!["2001:db8::53".parse().unwrap(), IpAddr::V4(SERVER_IP)]).unwrap();
+    let t0 = n.now;
+    assert!(matches!(n.resolve("quick.example"), ResolveResult::Found { .. }));
+    assert!(n.now - t0 < 500_000, "the lookup waited {} µs", n.now - t0);
+    // Without any server that can be sent to, it fails at once too.
+    n.a.set_dns_servers(vec!["2001:db8::53".parse().unwrap()]).unwrap();
+    let t0 = n.now;
+    assert!(matches!(n.resolve("none.example"), ResolveResult::Failed { .. }));
+    assert!(n.now - t0 < 500_000, "the lookup waited {} µs", n.now - t0);
+}
+
+#[test]
+fn static_configurations_are_checked() {
+    let mut n = Net::new();
+    let cfg = |dns: Vec<IpAddr>, gateway: Option<IpAddr>| IpConfig::Static {
+        address: "10.0.2.15".parse().unwrap(),
+        prefix_len: 24,
+        gateway,
+        dns,
+    };
+    let bad: [IpAddr; 3] =
+        ["0.0.0.0".parse().unwrap(), "224.0.0.1".parse().unwrap(), "255.255.255.255".parse().unwrap()];
+    for d in bad {
+        assert_eq!(n.a.configure(n.a_eth, cfg(vec![d], None)), Err(NetError::InvalidArgument), "{d}");
+        assert_eq!(n.a.configure(n.a_eth, cfg(vec![], Some(d))), Err(NetError::InvalidArgument), "{d}");
+        assert_eq!(n.a.set_dns_servers(vec![d]), Err(NetError::InvalidArgument), "{d}");
+    }
+    let many: Vec<IpAddr> = (1..=9).map(|k| IpAddr::V4(Ipv4Addr::new(10, 0, 0, k))).collect();
+    assert_eq!(n.a.configure(n.a_eth, cfg(many, None)), Err(NetError::InvalidArgument));
+    assert!(n.a.configure(n.a_eth, cfg(vec![IpAddr::V4(SERVER_IP)], Some(IpAddr::V4(SERVER_IP)))).is_ok());
+}
+
+#[test]
+fn the_lease_is_the_one_the_client_accepted() {
+    // Another client's acknowledgement, broadcast as servers do, must not
+    // change ours.
+    let mut n = Net::new();
+    n.dhcp.forged_lease = Some(5);
+    assert!(n.configured());
+    let info = n.a.interfaces().into_iter().find(|i| i.name == "eth0").unwrap();
+    assert_eq!(info.dhcp.lease_s, 3600);
+    let v4 = info.addresses.iter().find(|a| a.address.is_ipv4()).unwrap();
+    assert!((3590..=3600).contains(&v4.valid_s), "{}", v4.valid_s);
+}
+
+#[test]
+fn a_full_link_holds_frames_back() {
+    // The device takes two frames per step: the stack waits for room
+    // rather than dropping what it has to send.
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    n.a_end.room = 2;
+    let mut blocked = false;
+    let data = pattern(200_000);
+    let mut sent = 0;
+    let mut got = Vec::new();
+    let mut buf = vec![0u8; 8192];
+    for _ in 0..120_000 {
+        if sent < data.len() {
+            sent += n.a.tcp_send(sa, &data[sent..]).unwrap();
+        }
+        n.step();
+        blocked |= n.a.link_blocked(n.a_eth);
+        while let Ok(k) = tcp_recv(&mut n.b, sb, &mut buf) {
+            if k == 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..k]);
+        }
+        if got.len() == data.len() {
+            break;
+        }
+    }
+    assert!(got == data, "{} of {} bytes", got.len(), data.len());
+    assert!(blocked && n.a_end.full == 0, "the stack must not send into a full link");
+    let stats = n.a.interfaces().into_iter().find(|i| i.name == "eth0").unwrap().stats;
+    assert_eq!(stats.tx_dropped, 0);
+}
+
+#[test]
+fn sockets_are_ready_when_something_changes() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    n.run(100);
+    let _ = n.a.take_ready();
+    n.run(100);
+    assert!(n.a.take_ready().is_empty(), "nothing happened");
+    send_all(&mut n, false, sb, b"news");
+    assert!(n.run_until(1_000, |n| n.a.take_ready().contains(&sa)));
+}
+
+#[test]
+fn lookups_survive_the_loss_of_an_interface() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    n.dns_mode = DnsMode::Silent;
+    let id = n.a.resolve("lost.example", AddrFamily::Any).unwrap();
+    n.run(10);
+    n.a.remove_interface(n.a_eth);
+    // A new interface takes the slot of the old one.
+    let again = n.a.add_interface(&device(CLIENT_MAC), true).unwrap();
+    assert_eq!(again, n.a_eth);
+    let r = (0..20_000).find_map(|_| {
+        n.step();
+        n.a.resolve_result(id)
+    });
+    assert!(matches!(r, Some(ResolveResult::Failed { .. })), "{r:?}");
+}
+
+#[test]
+fn received_data_leaves_the_stack_only_as_far_as_it_is_taken() {
+    // The service hands data to a client whose queue may be full: what it
+    // could not pass on stays in the stack (and TCP's window closes).
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (sa, sb) = pair(&mut n, 7);
+    send_all(&mut n, false, sb, &pattern(5000));
+    assert!(n.run_until(2_000, |n| n.a.tcp_view(sa).unwrap().recv_queued == 5000));
+    // Offered, refused: nothing dequeued.
+    assert_eq!(
+        n.a.tcp_recv_with(sa, 1000, |data| {
+            assert_eq!(data.len(), 1000);
+            0
+        }),
+        Ok(0)
+    );
+    assert_eq!(n.a.tcp_view(sa).unwrap().recv_queued, 5000);
+    // Partly taken: the rest stays, in order.
+    assert_eq!(n.a.tcp_recv_with(sa, 4096, |_| 100), Ok(100));
+    let mut buf = vec![0u8; 8192];
+    let k = tcp_recv(&mut n.a, sa, &mut buf).unwrap();
+    assert_eq!(&buf[..k], &pattern(5000)[100..100 + k]);
+    // UDP: a datagram not taken is offered again.
+    let (ua, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
+    let (ub, _) = n.b.udp_bind("0.0.0.0:5001".parse().unwrap(), 0).unwrap();
+    n.a.udp_send(ua, "10.0.2.2:5001".parse().unwrap(), b"datagram").unwrap();
+    assert!(n.run_until(2_000, |n| n.b.udp_recv_with(ub, |_, _| false) == Some(false)));
+    assert_eq!(n.b.udp_recv_with(ub, |_, data| data == b"datagram"), Some(true));
+    assert_eq!(n.b.udp_recv_with(ub, |_, _| true), None);
 }

@@ -191,7 +191,7 @@ pub fn long_mode(rip: u64, cr3: u64, gdt: u64) -> VcpuState {
     VcpuState {
         rip,
         rflags: 0x2,
-        // PE, MP, ET, NE, WP, PG.
+        // PE, MP, ET, NE, WP, AM, PG: Linux's own (its CR0_STATE).
         cr0: 0x8005_0033,
         cr3,
         // PAE.

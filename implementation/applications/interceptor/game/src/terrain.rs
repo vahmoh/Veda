@@ -121,9 +121,6 @@ pub struct Terrain {
 }
 
 impl Terrain {
-    /// The world's corner (the first vertex).
-    pub const ORIGIN: Vec2 = Vec2::new(-HALF_X, -HALF_Z);
-
     /// Shapes the land around `road`.
     pub fn new(road: &Road, seed: u64) -> Terrain {
         let w = (2.0 * HALF_X / CELL) as usize + 1;

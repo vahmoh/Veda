@@ -19,7 +19,6 @@ use crate::env::{TimeOfDay, Weather};
 use crate::prelude::*;
 use crate::pursuit::Wanted;
 use crate::road::{Road, Section};
-use crate::vehicle::Spec;
 
 /// A mission.
 #[derive(Clone, Copy, Debug)]
@@ -55,6 +54,18 @@ const WHITE: Vec3 = Vec3::new(0.85, 0.85, 0.85);
 const BLACK: Vec3 = Vec3::new(0.03, 0.03, 0.035);
 const ORANGE: Vec3 = Vec3::new(0.9, 0.3, 0.02);
 
+/// The suspects' paints, by name (as the radio describes them).
+pub const PAINTS: [(&str, Vec3); 8] = [
+    ("red", RED),
+    ("silver", SILVER),
+    ("yellow", YELLOW),
+    ("green", GREEN),
+    ("blue", BLUE),
+    ("white", WHITE),
+    ("black", BLACK),
+    ("orange", ORANGE),
+];
+
 /// The career's missions, in order.
 pub const MISSIONS: [Mission; 8] = [
     Mission {
@@ -65,7 +76,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::City,
         at: 900.0,
-        wanted: Wanted { kind: Kind::Saloon, spec: Spec::saloon(), paint: SILVER, skill: 0.84, aggression: 0.05 },
+        wanted: Wanted { kind: Kind::Saloon, paint: SILVER, skill: 0.84, aggression: 0.05 },
         ahead: 60.0,
         speed: 14.0,
         traffic: true,
@@ -80,7 +91,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::Hills,
         at: 100.0,
-        wanted: Wanted { kind: Kind::Coupe, spec: Spec::sports(), paint: RED, skill: 0.9, aggression: 0.25 },
+        wanted: Wanted { kind: Kind::Coupe, paint: RED, skill: 0.9, aggression: 0.25 },
         ahead: 70.0,
         speed: 20.0,
         traffic: true,
@@ -96,7 +107,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::City,
         at: 200.0,
-        wanted: Wanted { kind: Kind::Muscle, spec: Spec::sports(), paint: YELLOW, skill: 0.92, aggression: 0.5 },
+        wanted: Wanted { kind: Kind::Muscle, paint: YELLOW, skill: 0.92, aggression: 0.5 },
         ahead: 70.0,
         speed: 18.0,
         traffic: true,
@@ -112,7 +123,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::Coast,
         at: 60.0,
-        wanted: Wanted { kind: Kind::Coupe, spec: Spec::sports(), paint: GREEN, skill: 0.95, aggression: 0.4 },
+        wanted: Wanted { kind: Kind::Coupe, paint: GREEN, skill: 0.95, aggression: 0.4 },
         ahead: 160.0,
         speed: 26.0,
         traffic: true,
@@ -127,7 +138,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::Tunnel,
         at: -450.0,
-        wanted: Wanted { kind: Kind::Muscle, spec: Spec::sports(), paint: BLACK, skill: 0.94, aggression: 0.8 },
+        wanted: Wanted { kind: Kind::Muscle, paint: BLACK, skill: 0.94, aggression: 0.8 },
         ahead: 70.0,
         speed: 24.0,
         traffic: true,
@@ -143,7 +154,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::Bridge,
         at: -700.0,
-        wanted: Wanted { kind: Kind::Supercar, spec: Spec::supercar(), paint: ORANGE, skill: 0.95, aggression: 0.3 },
+        wanted: Wanted { kind: Kind::Supercar, paint: ORANGE, skill: 0.95, aggression: 0.3 },
         ahead: 80.0,
         speed: 25.0,
         traffic: true,
@@ -158,7 +169,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Rain,
         section: Section::City,
         at: -300.0,
-        wanted: Wanted { kind: Kind::Coupe, spec: Spec::sports(), paint: WHITE, skill: 0.95, aggression: 0.5 },
+        wanted: Wanted { kind: Kind::Coupe, paint: WHITE, skill: 0.95, aggression: 0.5 },
         ahead: 80.0,
         speed: 20.0,
         traffic: true,
@@ -173,7 +184,7 @@ pub const MISSIONS: [Mission; 8] = [
         weather: Weather::Clear,
         section: Section::Coast,
         at: 300.0,
-        wanted: Wanted { kind: Kind::Supercar, spec: Spec::supercar(), paint: BLUE, skill: 1.0, aggression: 0.8 },
+        wanted: Wanted { kind: Kind::Supercar, paint: BLUE, skill: 1.0, aggression: 0.8 },
         ahead: 120.0,
         speed: 30.0,
         traffic: true,
@@ -185,10 +196,10 @@ pub const MISSIONS: [Mission; 8] = [
 
 /// The suspects of quick chases and patrol calls.
 pub const SUSPECTS: [(&str, Wanted); 4] = [
-    ("Saloon", Wanted { kind: Kind::Saloon, spec: Spec::saloon(), paint: SILVER, skill: 0.88, aggression: 0.2 }),
-    ("Coupe", Wanted { kind: Kind::Coupe, spec: Spec::sports(), paint: RED, skill: 0.92, aggression: 0.35 }),
-    ("Muscle car", Wanted { kind: Kind::Muscle, spec: Spec::sports(), paint: YELLOW, skill: 0.95, aggression: 0.6 }),
-    ("Supercar", Wanted { kind: Kind::Supercar, spec: Spec::supercar(), paint: BLUE, skill: 0.97, aggression: 0.4 }),
+    ("Saloon", Wanted { kind: Kind::Saloon, paint: SILVER, skill: 0.88, aggression: 0.2 }),
+    ("Coupe", Wanted { kind: Kind::Coupe, paint: RED, skill: 0.92, aggression: 0.35 }),
+    ("Muscle car", Wanted { kind: Kind::Muscle, paint: YELLOW, skill: 0.95, aggression: 0.6 }),
+    ("Supercar", Wanted { kind: Kind::Supercar, paint: BLUE, skill: 0.97, aggression: 0.4 }),
 ];
 
 /// Where a section begins along `road` (its first sample's s).
@@ -366,15 +377,6 @@ impl Default for Save {
     }
 }
 
-fn view_name(v: View) -> &'static str {
-    match v {
-        View::Chase => "chase",
-        View::Near => "near",
-        View::Bonnet => "bonnet",
-        View::Bumper => "bumper",
-    }
-}
-
 impl Save {
     /// Whether mission `i` may be played: the first, and each after one
     /// passed.
@@ -412,7 +414,7 @@ impl Save {
         }
         t.push_str(&format!("effects {:.2}\nmusic {:.2}\n", s.effects, s.music));
         t.push_str(&format!("units {}\n", if s.units == Units::Mph { "mph" } else { "kmh" }));
-        t.push_str(&format!("camera {}\n", view_name(s.view)));
+        t.push_str(&format!("camera {}\n", s.view.key()));
         t.push_str(&format!("statistics {}\n", s.stats.key()));
         t.push_str(&format!("screen {}\n", if s.fullscreen { "full" } else { "window" }));
         t
@@ -435,14 +437,12 @@ impl Save {
                         save.best[n - 1] = Some(Best { stars, time, score });
                     }
                 }
-                ["effects", v] => s.effects = v.parse::<f32>().map_or(s.effects, |v| v.clamp(0.0, 1.0)),
-                ["music", v] => s.music = v.parse::<f32>().map_or(s.music, |v| v.clamp(0.0, 1.0)),
+                ["effects", v] => s.effects = volume(v).unwrap_or(s.effects),
+                ["music", v] => s.music = volume(v).unwrap_or(s.music),
                 ["units", "mph"] => s.units = Units::Mph,
                 ["units", "kmh"] => s.units = Units::Kmh,
                 ["camera", v] => {
-                    if let Some(view) =
-                        [View::Chase, View::Near, View::Bonnet, View::Bumper].into_iter().find(|&w| view_name(w) == *v)
-                    {
+                    if let Some(view) = View::ALL.into_iter().find(|w| w.key() == *v) {
                         s.view = view;
                     }
                 }
@@ -465,10 +465,22 @@ impl Save {
     }
 }
 
+/// A volume as the save file has it (0..1): a number (not "nan", nor an
+/// infinity), held to its range.
+fn volume(text: &str) -> Option<f32> {
+    text.parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
+}
+
 /// `secs` as minutes, seconds and tenths ("1:05.3").
 pub fn clock(secs: f32) -> String {
     let t = (secs.max(0.0) * 10.0) as u32;
     format!("{}:{:02}.{}", t / 600, t / 10 % 60, t % 10)
+}
+
+/// `secs` as minutes and whole seconds, the fraction dropped ("1:05").
+pub fn minutes(secs: f32) -> String {
+    let t = secs.max(0.0) as u32;
+    format!("{}:{:02}", t / 60, t % 60)
 }
 
 #[cfg(test)]
@@ -509,9 +521,14 @@ mod tests {
         assert_eq!((old.stats, old.fullscreen), (Stats::Fps, true));
         assert_eq!(Save::parse("stats on\n").settings.stats, Stats::Detailed);
         assert!(back.unlocked(1) && !back.unlocked(2));
-        // Garbage is ignored.
+        // Garbage is ignored: a volume that is not a number among it.
         let odd = Save::parse("mission 99 3 1 1\nmission 1 7 10 10\neffects loud\nunits furlongs\n");
         assert_eq!(odd, Save::default());
+        for v in ["nan", "NaN", "inf", "-infinity"] {
+            let s = Save::parse(&format!("effects {v}\nmusic {v}\n")).settings;
+            assert_eq!((s.effects, s.music), (Settings::default().effects, Settings::default().music), "{v}");
+        }
+        assert_eq!(Save::parse("music 7\neffects -1\n").settings.music, 1.0);
     }
 
     #[test]
@@ -528,6 +545,6 @@ mod tests {
             std::println!("{}: starts at {s:.0} m ({:?})", m.name, road.at(s).section);
             assert!(m.stars[0] < m.stars[1]);
         }
-        assert_eq!(clock(65.34), "1:05.3");
+        assert_eq!((clock(65.34), minutes(65.94)), (String::from("1:05.3"), String::from("1:05")));
     }
 }

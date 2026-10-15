@@ -7,7 +7,9 @@
 
 use alloc::vec::Vec;
 
-use crate::acpi::{self, read_u8, read_u16, read_u32, read_u64};
+use viommu::amd64::dmar;
+
+use crate::acpi::{self, u8_at, u16_at, u32_at, u64_at};
 use crate::sync::Once;
 
 #[derive(Debug, Clone, Copy)]
@@ -38,8 +40,11 @@ pub struct Platform {
     pub ioapics: Vec<IoApicEntry>,
     pub overrides: Vec<IrqOverride>,
     pub hpet_phys: Option<u64>,
-    /// The DMAR table (its physical address).
-    pub dmar: Option<u64>,
+    /// The DMAR table.
+    pub dmar: Option<&'static [u8]>,
+    /// The firmware asks the system not to use x2APIC mode (the DMAR
+    /// table's flag, which holds with interrupt remapping).
+    pub x2apic_opt_out: bool,
 }
 
 pub static PLATFORM: Once<Platform> = Once::new();
@@ -47,49 +52,44 @@ pub static PLATFORM: Once<Platform> = Once::new();
 /// Where the local APICs are, unless the MADT says otherwise.
 const LAPIC_DEFAULT: u64 = 0xFEE0_0000;
 
-fn parse_madt(addr: u64, p: &mut Platform) {
-    p.lapic_phys = read_u32(addr + 36) as u64;
-    let len = read_u32(addr + 4) as u64;
+/// Reads the MADT `t`'s entries (each its type, its length, then what that
+/// type has; one shorter than its type's is left out).
+fn parse_madt(t: &[u8], p: &mut Platform) {
+    p.lapic_phys = u32_at(t, 36).unwrap_or(0) as u64;
     let mut off = 44;
-    while off + 2 <= len {
-        let ty = read_u8(addr + off);
-        let elen = read_u8(addr + off + 1) as u64;
-        if elen < 2 {
-            break;
-        }
-        let e = addr + off;
+    while let (Some(ty), Some(len)) = (u8_at(t, off), u8_at(t, off + 1)) {
+        let len = len as usize;
+        let Some(e) = t.get(off..off + len).filter(|_| len >= 2) else { break };
         match ty {
-            0 => {
-                let flags = read_u32(e + 4);
-                if flags & 0b11 != 0 {
-                    p.cpus.push(CpuEntry { apic_id: read_u8(e + 3) as u32 });
+            0 if len >= 8 => {
+                if u32_at(e, 4).is_some_and(|flags| flags & 0b11 != 0) {
+                    p.cpus.push(CpuEntry { apic_id: e[3] as u32 });
                 }
             }
-            1 => p.ioapics.push(IoApicEntry {
-                id: read_u8(e + 2),
-                phys: read_u32(e + 4) as u64,
-                gsi_base: read_u32(e + 8),
+            1 if len >= 12 => p.ioapics.push(IoApicEntry {
+                id: e[2],
+                phys: u32_at(e, 4).unwrap_or(0) as u64,
+                gsi_base: u32_at(e, 8).unwrap_or(0),
             }),
-            2 => {
-                let flags = read_u16(e + 8);
+            2 if len >= 10 => {
+                let flags = u16_at(e, 8).unwrap_or(0);
                 p.overrides.push(IrqOverride {
-                    isa_irq: read_u8(e + 3),
-                    gsi: read_u32(e + 4),
+                    isa_irq: e[3],
+                    gsi: u32_at(e, 4).unwrap_or(0),
                     active_low: flags & 0b11 == 0b11,
                     level: (flags >> 2) & 0b11 == 0b11,
                 });
             }
-            5 => p.lapic_phys = read_u64(e + 4),
-            9 => {
-                let flags = read_u32(e + 8);
-                let id = read_u32(e + 4);
+            5 if len >= 12 => p.lapic_phys = u64_at(e, 4).unwrap_or(p.lapic_phys),
+            9 if len >= 16 => {
+                let (id, flags) = (u32_at(e, 4).unwrap_or(0), u32_at(e, 8).unwrap_or(0));
                 if flags & 0b11 != 0 && !p.cpus.iter().any(|c| c.apic_id == id) {
                     p.cpus.push(CpuEntry { apic_id: id });
                 }
             }
             _ => {}
         }
-        off += elen;
+        off += len;
     }
 }
 
@@ -97,7 +97,7 @@ fn parse_madt(addr: u64, p: &mut Platform) {
 pub fn init() {
     let mut p = Platform::default();
     for madt in acpi::find_all(b"APIC") {
-        parse_madt(madt, &mut p);
+        parse_madt(madt.bytes, &mut p);
     }
     if p.cpus.is_empty() {
         crate::kwarn!("acpi: no processors in the tables; assuming a single CPU");
@@ -106,8 +106,11 @@ pub fn init() {
     if p.lapic_phys == 0 {
         p.lapic_phys = LAPIC_DEFAULT;
     }
-    p.hpet_phys = acpi::find_all(b"HPET").last().map(|hpet| read_u64(hpet + 44));
-    p.dmar = acpi::find_all(b"DMAR").filter(|&dmar| acpi::checksum_ok(dmar, read_u32(dmar + 4))).last();
+    // The HPET's registers: the address of the generic address at 40.
+    p.hpet_phys = acpi::find_all(b"HPET").last().and_then(|hpet| u64_at(hpet.bytes, 44));
+    p.dmar = acpi::find_all(b"DMAR").filter(|dmar| dmar.checksum_ok()).last().map(|dmar| dmar.bytes);
+    let dmar_flags = p.dmar.and_then(|dmar| u8_at(dmar, 37)).unwrap_or(0);
+    p.x2apic_opt_out = dmar_flags & dmar::INTR_REMAP != 0 && dmar_flags & dmar::X2APIC_OPT_OUT != 0;
     let info = acpi::ACPI.expect();
     crate::kinfo!(
         "acpi: {} CPU(s), {} I/O APIC(s), {} override(s), hpet={}, mcfg={}, s5={}",

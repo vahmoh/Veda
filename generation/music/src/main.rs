@@ -4,25 +4,28 @@
 //! `musicgen` — composes and renders the sample music shipped with Veda.
 //!
 //! ```text
-//! musicgen OUT_DIR [--wav] [--only N]
+//! musicgen OUT_DIR [--only N]
 //! ```
 //!
 //! Writes `OUT_DIR/samples/Music/<Title>.qoa` for every track of the album
 //! (QOA at 44.1 kHz, with a `VTAG` trailer holding title, artist, album,
 //! genre, year, track number, duration, tempo and cover-art parameters),
 //! the system's startup sound, `OUT_DIR/sounds/startup.wav`, and the music
-//! of the games, `OUT_DIR/games/<game>/`.
-//! `--wav` also writes 16-bit WAV previews to `OUT_DIR/preview/`, and
-//! `--only N` renders just track N. Rendering is deterministic.
+//! of the games, `OUT_DIR/games/<game>/`, and lists them in `OUT_DIR`'s
+//! manifest (see `gencommon::output`), removing what else is there.
+//! `--only N` renders just track N (and leaves the manifest and the other
+//! files as they are), and `MUSICGEN_PREVIEW=DIR` also writes 16-bit WAV
+//! previews of the tracks to DIR. Rendering is deterministic.
 
 mod dsl;
 mod interceptor;
 mod patches;
 mod songs;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use gencommon::output::Output;
 use vaudio::synth;
 use vaudio::tags::Tags;
 
@@ -43,20 +46,34 @@ fn to_i16(mix: &[f32], seed: u64) -> Vec<i16> {
         .collect()
 }
 
-fn db(x: f32) -> f32 {
-    20.0 * x.max(1e-9).log10()
+fn main() {
+    let (mut out, mut only) = (None, None);
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--only" => only = Some(args.next().and_then(|n| n.parse::<u32>().ok()).unwrap_or_else(|| usage())),
+            a if a.starts_with("--") || out.is_some() => usage(),
+            a => out = Some(PathBuf::from(a)),
+        }
+    }
+    let Some(out) = out else { usage() };
+    let preview = std::env::var_os("MUSICGEN_PREVIEW").map(PathBuf::from);
+    if let Err(e) = run(&out, only, preview.as_deref()) {
+        eprintln!("musicgen: {e}");
+        std::process::exit(1);
+    }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let out =
-        PathBuf::from(args.iter().find(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| "target/generated".into()));
-    let wav = args.iter().any(|a| a == "--wav");
-    let only: Option<u32> =
-        args.iter().position(|a| a == "--only").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok());
-    let dir = out.join("samples").join("Music");
-    std::fs::create_dir_all(&dir).expect("cannot create the output directory");
-    let mut written = Vec::new();
+fn usage() -> ! {
+    eprintln!("usage: musicgen OUT_DIR [--only N]");
+    std::process::exit(2);
+}
+
+/// Renders every track (or track `only`) into `out`, and previews of them
+/// into `preview`.
+fn run(out: &Path, only: Option<u32>, preview: Option<&Path>) -> Result<(), String> {
+    let mut out = Output::new(out)?;
+    let mut tracks = 0;
     let mut total_bytes = 0usize;
     for make in songs::all() {
         let t = make();
@@ -81,10 +98,9 @@ fn main() {
         };
         tags.set("bpm", &t.bpm.to_string());
         tags.set("art", t.art);
-        let mut file = vaudio::qoa::encode(&pcm, 2, patches::SR as u32).expect("QOA encoding failed");
+        let mut file = vaudio::qoa::encode(&pcm, 2, patches::SR as u32).map_err(|e| format!("QOA encoding: {e}"))?;
         file.extend(tags.encode_trailer());
-        let name = format!("{}.qoa", t.title);
-        std::fs::write(dir.join(&name), &file).expect("cannot write the track");
+        out.write(&format!("samples/Music/{}.qoa", t.title), &file)?;
         total_bytes += file.len();
         println!(
             "{:>2}. {:<16} {:>4}:{:02}  peak {:5.1} dBFS  loudness {:5.1} dB  gain {:+5.1} dB  limiter {:4.1} dB  clipped {}  {:5.2} MB  ({:.1} s)",
@@ -105,14 +121,13 @@ fn main() {
                 println!("      {:<8} RMS {:6.1} dB  peak {:6.1} dB  ({} notes)", name, rms, peak, p.notes.len());
             }
         }
-        if wav {
-            let pdir = out.join("preview");
-            std::fs::create_dir_all(&pdir).ok();
+        if let Some(dir) = preview {
+            std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
             let w = vaudio::wav::write(&pcm, 2, patches::SR as u32, &tags);
-            std::fs::write(pdir.join(format!("{}.wav", t.title)), w).ok();
+            let path = dir.join(format!("{}.wav", t.title));
+            std::fs::write(&path, w).map_err(|e| format!("writing {}: {e}", path.display()))?;
         }
-        let _ = db(0.0);
-        written.push(name);
+        tracks += 1;
     }
     // A short WAV sample (mono, 22.05 kHz) next to the album.
     if only.is_none() || only == Some(7) {
@@ -131,8 +146,7 @@ fn main() {
             extra: Vec::new(),
         };
         let file = vaudio::wav::write(&pcm, 1, songs::chime::RATE, &tags);
-        let name = String::from("Startup Chime.wav");
-        std::fs::write(dir.join(&name), &file).expect("cannot write the chime");
+        out.write("samples/Music/Startup Chime.wav", &file)?;
         total_bytes += file.len();
         println!(
             " 7. {:<16} {:>4}:{:02}  peak {:5.1} dBFS  (mono WAV, {} Hz)  {:5.2} MB",
@@ -143,7 +157,7 @@ fn main() {
             songs::chime::RATE,
             file.len() as f64 / 1e6
         );
-        written.push(name);
+        tracks += 1;
     }
     // The startup sound (stereo, at the sound devices' rate).
     if only.is_none() {
@@ -157,9 +171,7 @@ fn main() {
             ..Tags::default()
         };
         let file = vaudio::wav::write(&pcm, 2, songs::startup::RATE, &tags);
-        let sounds = out.join("sounds");
-        std::fs::create_dir_all(&sounds).expect("cannot create the sounds directory");
-        std::fs::write(sounds.join("startup.wav"), &file).expect("cannot write the startup sound");
+        out.write("sounds/startup.wav", &file)?;
         println!(
             "    {:<16} {:>4}.{:01} s  peak {:5.1} dBFS  loudness {:5.1} dB  (WAV, {} Hz)  {:5.2} MB",
             "Startup sound",
@@ -171,21 +183,13 @@ fn main() {
             file.len() as f64 / 1e6
         );
     }
-    // The games' music.
+    // The games' music; then what was written is listed, and the rest of
+    // earlier runs goes.
     if only.is_none() {
         println!("Interceptor:");
-        total_bytes += interceptor::write_all(&out);
+        total_bytes += interceptor::write_all(&mut out)?;
+        out.finish()?;
+        println!("{tracks} tracks, {:.2} MB", total_bytes as f64 / 1e6);
     }
-    // Remove stale tracks from earlier runs.
-    if only.is_none() {
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let n = e.file_name().to_string_lossy().into_owned();
-                if !written.contains(&n) {
-                    let _ = std::fs::remove_file(e.path());
-                }
-            }
-        }
-        println!("{} tracks, {:.2} MB", written.len(), total_bytes as f64 / 1e6);
-    }
+    Ok(())
 }

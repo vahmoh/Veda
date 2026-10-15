@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::hv::Access;
 use crate::mm::paging::Cache;
-use crate::mm::{PAGE_SIZE, phys, phys_to_virt};
+use crate::mm::{phys, phys_to_virt};
 
 const READ: u64 = 1 << 0;
 const WRITE: u64 = 1 << 1;
@@ -92,20 +92,6 @@ impl Ept {
             t = e & ADDR_MASK;
         }
         table(t)[index(gpa, 0)] = 0;
-    }
-
-    /// The frame `gpa` is mapped to.
-    #[allow(dead_code)]
-    pub fn translate(&self, gpa: u64) -> Option<u64> {
-        let mut t = self.root;
-        for level in (0..=3).rev() {
-            let e = table(t)[index(gpa, level)];
-            if e & (READ | WRITE | EXECUTE) == 0 {
-                return None;
-            }
-            t = e & ADDR_MASK;
-        }
-        Some(t + (gpa & (PAGE_SIZE - 1)))
     }
 }
 

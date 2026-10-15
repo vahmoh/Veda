@@ -5,7 +5,7 @@
 //! search matches, selection, cursor) and turns keyboard and mouse input
 //! into edits and cursor movement.
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use num_traits::Float;
@@ -105,6 +105,9 @@ pub struct TextView {
     /// Line height of the last frame (for keyboard scrolling).
     lh: i32,
     page_rows: usize,
+    /// What went wrong with the last command, for the window to say (a
+    /// selection too large for the clipboard).
+    problem: Option<String>,
 }
 
 impl TextView {
@@ -123,7 +126,13 @@ impl TextView {
             reveal: true,
             lh: 20,
             page_rows: 20,
+            problem: None,
         }
+    }
+
+    /// What went wrong with the last command, if anything (once).
+    pub fn take_problem(&mut self) -> Option<String> {
+        self.problem.take()
     }
 
     /// The widget id (for focus).
@@ -145,7 +154,11 @@ impl TextView {
     fn ensure_layout(&mut self, doc: &Document, wrap: Option<usize>) -> &Layout {
         let key = (doc.revision(), wrap, doc.tab_width);
         if self.layout.is_none() || self.layout_key != key {
-            self.layout = Some(Layout::new(doc.buffer(), wrap, doc.tab_width));
+            // Only the lines the edits changed are laid out again.
+            match &mut self.layout {
+                Some(layout) => layout.update(doc, wrap, doc.tab_width),
+                None => self.layout = Some(Layout::for_document(doc, wrap, doc.tab_width)),
+            }
             self.layout_key = key;
         }
         self.layout.as_ref().unwrap()
@@ -187,16 +200,22 @@ impl TextView {
             Command::Redo if edit => {
                 doc.redo();
             }
+            // The selection goes only once it is on the clipboard.
             Command::Cut if edit => {
-                let s = doc.cut();
+                let s = doc.selected_text();
                 if !s.is_empty() {
-                    ui.set_clipboard(&s);
+                    match apps_common::clipboard::copy(ui, &s) {
+                        Ok(()) => doc.delete_selection(),
+                        Err(e) => self.problem = Some(e.to_string()),
+                    }
                 }
             }
             Command::Copy => {
                 let s = doc.selected_text();
-                if !s.is_empty() {
-                    ui.set_clipboard(&s);
+                if !s.is_empty()
+                    && let Err(e) = apps_common::clipboard::copy(ui, &s)
+                {
+                    self.problem = Some(e.to_string());
                 }
             }
             Command::Paste if edit => {

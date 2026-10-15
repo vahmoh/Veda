@@ -76,6 +76,8 @@ const PROP_CNT: usize = 0x20;
 /// Bytes of a `struct input_event` on 64-bit Linux: a `timeval`, the type,
 /// the code and the value.
 const EVENT_SIZE: usize = 24;
+/// How often devices are looked for without the kernel's uevents.
+const RESCAN: Duration = Duration::from_secs(2);
 
 // evdev's requests (linux/input.h): their numbers, of type 'E'.
 const EVIOCGID: u8 = 0x02;
@@ -336,15 +338,7 @@ impl Device {
     /// Veda's event for key or button `code` going down or up, if it takes
     /// it.
     fn key(&self, code: u16, pressed: bool) -> Option<InputEvent> {
-        let button = |button| Some(InputEvent::Button { button, pressed });
-        match code {
-            keys::BTN_LEFT => button(0),
-            keys::BTN_RIGHT => button(1),
-            keys::BTN_MIDDLE => button(2),
-            BTN_TOUCH if !self.left && matches!(self.pointer, Pointer::Tablet | Pointer::Touchscreen) => button(0),
-            _ if is_key(code) => Some(InputEvent::Key { code, pressed }),
-            _ => None,
-        }
+        key_event(code, pressed, self.left, self.pointer)
     }
 
     /// The batch of a report, if it has anything: where the pointer went
@@ -401,11 +395,38 @@ impl Device {
     /// Lets go of what it holds (it went away).
     fn let_go(&mut self) -> Vec<InputEvent> {
         let held = std::mem::take(&mut self.held);
-        if let Some(t) = &mut self.touchpad {
-            return t.let_go().into_iter().collect();
-        }
-        held.into_iter().filter_map(|code| self.key(code, false)).collect()
+        let (left, pointer) = (self.left, self.pointer);
+        released(held, self.touchpad.as_mut(), |code| key_event(code, false, left, pointer))
     }
+}
+
+/// Veda's event for key or button `code` going down or up, if it takes it,
+/// for a device that has a left button (`left`), with `pointer`'s axes.
+fn key_event(code: u16, pressed: bool, left: bool, pointer: Pointer) -> Option<InputEvent> {
+    let button = |button| Some(InputEvent::Button { button, pressed });
+    match code {
+        keys::BTN_LEFT => button(0),
+        keys::BTN_RIGHT => button(1),
+        keys::BTN_MIDDLE => button(2),
+        BTN_TOUCH if !left && matches!(pointer, Pointer::Tablet | Pointer::Touchscreen) => button(0),
+        _ if is_key(code) => Some(InputEvent::Key { code, pressed }),
+        _ => None,
+    }
+}
+
+/// The releases of what a device that went held (`held`), as `key` makes
+/// them: a touchpad's (`touchpad`) own button, which its click pressed,
+/// and every key and button it held that is not the pad's own (its other
+/// buttons, a keyboard's keys).
+fn released(
+    held: BTreeSet<u16>,
+    touchpad: Option<&mut Touchpad>,
+    key: impl Fn(u16) -> Option<InputEvent>,
+) -> Vec<InputEvent> {
+    let pad = touchpad.is_some();
+    let mut out: Vec<InputEvent> = touchpad.and_then(|t| t.let_go()).into_iter().collect();
+    out.extend(held.into_iter().filter(|&code| !(pad && Touchpad::handles(code))).filter_map(key));
+    out
 }
 
 /// A socket the kernel's uevents come on: devices that come and go.
@@ -469,24 +490,27 @@ fn connect() -> InputSink {
 
 fn main() {
     let mut sink = connect();
-    // Uevents before the first look, lest a device come in between.
+    // Uevents before the first look, lest a device come in between; without
+    // them, devices are looked for every little while.
     let uevents = match uevents() {
-        Ok(s) => s,
+        Ok(s) => Some(s),
         Err(e) => {
-            println!("input: no uevents: {e}");
-            std::process::exit(1);
+            println!("input: no uevents ({e}): devices are looked for every {} s", RESCAN.as_secs());
+            None
         }
     };
     let mut devices: BTreeMap<u64, Device> = BTreeMap::new();
     let mut caps = false;
     scan(&mut devices, caps);
     let mut buf = vec![0u8; EVENT_SIZE * 64];
+    let timeout = uevents.as_ref().map_or(guest_sys::poll_timeout(RESCAN.as_millis() as i32), |_| None);
     loop {
         let numbers: Vec<u64> = devices.keys().copied().collect();
         // Whether the uevents, then each device, have something.
-        let mut fds = vec![PollFd::new(&uevents, PollFlags::IN)];
+        let mut fds: Vec<PollFd> = uevents.iter().map(|u| PollFd::new(u, PollFlags::IN)).collect();
+        let first = fds.len();
         fds.extend(devices.values().map(|d| PollFd::new(&d.file, PollFlags::IN)));
-        if let Err(e) = poll(&mut fds, None) {
+        if let Err(e) = poll(&mut fds, timeout.as_ref()) {
             if e != Errno::INTR {
                 println!("input: cannot wait: {e}");
                 std::thread::sleep(Duration::from_secs(1));
@@ -497,7 +521,7 @@ fn main() {
         drop(fds);
         let mut gone = Vec::new();
         let was = caps;
-        for (number, _) in numbers.iter().zip(&ready[1..]).filter(|(_, ready)| **ready) {
+        for (number, _) in numbers.iter().zip(&ready[first..]).filter(|(_, ready)| **ready) {
             let Some(d) = devices.get_mut(number) else { continue };
             match d.read(&mut buf) {
                 Ok(batches) => {
@@ -524,8 +548,44 @@ fn main() {
             }
         }
         // A device came, or went (and its number may be another's now).
-        if (ready[0] && input_uevent(&uevents)) || !gone.is_empty() {
+        let came = match &uevents {
+            Some(u) => ready[0] && input_uevent(u),
+            None => true,
+        };
+        if came || !gone.is_empty() {
             scan(&mut devices, caps);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_that_goes_lets_go_of_all_it_held() {
+        let key = |code| key_event(code, false, true, Pointer::None);
+        // A keyboard: its keys.
+        let held = BTreeSet::from([KEY_A, keys::CAPSLOCK]);
+        let up = released(held, None, key);
+        assert_eq!(
+            up,
+            vec![
+                InputEvent::Key { code: KEY_A, pressed: false },
+                InputEvent::Key { code: keys::CAPSLOCK, pressed: false }
+            ]
+        );
+        // A touchpad with buttons of its own, clicked, a finger on it:
+        // the click's button, and its other button; not its tools or touch.
+        let axis = Axis { min: 0, max: 1000, resolution: 10 };
+        let mut pad = Touchpad::new(axis, axis);
+        let mut out = Vec::new();
+        assert!(pad.key(keys::BTN_LEFT, true, 0, &mut out));
+        let held = BTreeSet::from([BTN_TOOL_FINGER, BTN_TOUCH, keys::BTN_LEFT, keys::BTN_RIGHT]);
+        let up = released(held, Some(&mut pad), |code| key_event(code, false, true, Pointer::Touchpad));
+        assert_eq!(
+            up,
+            vec![InputEvent::Button { button: 0, pressed: false }, InputEvent::Button { button: 1, pressed: false }]
+        );
     }
 }

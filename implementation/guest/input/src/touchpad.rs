@@ -91,6 +91,21 @@ impl Touchpad {
         }
     }
 
+    /// Whether key or button `code` is one the pad takes itself: its
+    /// tools (how many fingers touch), its touch, its click (the left
+    /// button); its other buttons are buttons as a mouse's.
+    pub fn handles(code: u16) -> bool {
+        matches!(
+            code,
+            BTN_TOOL_FINGER
+                | BTN_TOOL_DOUBLETAP
+                | BTN_TOOL_TRIPLETAP
+                | BTN_TOOL_QUADTAP
+                | BTN_TOOL_QUINTTAP
+                | BTN_TOUCH
+        ) || code == keys::BTN_LEFT
+    }
+
     /// Takes key or button `code`; false if it is none of the pad's.
     pub fn key(&mut self, code: u16, pressed: bool, time_us: u64, out: &mut Vec<InputEvent>) -> bool {
         let tool = match code {
@@ -332,6 +347,21 @@ mod tests {
         at(&mut p, 500, 300, 1000);
         at(&mut p, 600, 300, 1050);
         assert!(!up(&mut p, BTN_TOOL_FINGER, 1100).iter().any(|e| matches!(e, InputEvent::Button { .. })));
+    }
+
+    #[test]
+    fn the_pad_takes_its_tools_touch_and_click() {
+        for code in [BTN_TOOL_FINGER, BTN_TOOL_DOUBLETAP, BTN_TOOL_TRIPLETAP, BTN_TOOL_QUADTAP, BTN_TOOL_QUINTTAP] {
+            assert!(Touchpad::handles(code), "{code:#x}");
+        }
+        assert!(Touchpad::handles(BTN_TOUCH) && Touchpad::handles(keys::BTN_LEFT));
+        assert!(!Touchpad::handles(keys::BTN_RIGHT) && !Touchpad::handles(keys::BTN_MIDDLE));
+        // What it takes is what `key` takes.
+        let mut p = pad();
+        for code in 0..0x300 {
+            let mut out = Vec::new();
+            assert_eq!(p.key(code, false, 0, &mut out), Touchpad::handles(code), "{code:#x}");
+        }
     }
 
     #[test]

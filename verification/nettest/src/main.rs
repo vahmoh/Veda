@@ -7,9 +7,13 @@
 //!   checks Internet access end to end — DNS, TCP and HTTP to public
 //!   servers, UDP (a DNS query sent by hand) and ping. Needs a real
 //!   Internet connection on the host.
-//! * `nettest local HOST PORT`: fetches `http://HOST:PORT/hello` and expects
-//!   "hello from the host", for a test server on the host machine (QEMU's
-//!   NAT makes the host reachable at the gateway address, 10.0.2.2).
+//! * `nettest local HOST PORT`: checks the network without the Internet:
+//!   pings the gateway, and fetches `http://HOST:PORT/hello`, expecting
+//!   "hello from the host", from a server on the host machine (QEMU's NAT
+//!   makes the host its network's gateway; `gateway` as HOST stands for
+//!   the default route's). The GUI scripts of the network cards run it
+//!   against the server `cargo orchestration` starts (`nettest local` in a
+//!   script).
 //! * `nettest lan`: the online checks, after checking that the address came
 //!   from a real network rather than a hypervisor's NAT (a PC's own), plus
 //!   TCP over IPv6 when there is a global address.
@@ -502,12 +506,30 @@ fn main() -> i32 {
             }),
         ]),
         "local" => {
-            let host = args.get(2).cloned().unwrap_or_else(|| String::from("10.0.2.2"));
-            let port: u16 = args.get(3).and_then(|p| p.parse().ok()).unwrap_or(8080);
-            let url = format!("http://{host}:{port}/hello");
+            let host = args.get(2).cloned().unwrap_or_else(|| String::from("gateway"));
+            let Some(port) = args.get(3).and_then(|p| p.parse::<u16>().ok()) else {
+                println!("usage: nettest local HOST PORT");
+                return 2;
+            };
+            let gateway = || -> Check {
+                let st = vnet::status().map_err(net)?;
+                let gw = st.default_gateway.ok_or("no gateway")?;
+                check_ping(gw)
+            };
+            let hello = || -> Check {
+                let host = match host.as_str() {
+                    "gateway" => match vnet::status().map_err(net)?.default_gateway.ok_or("no gateway")? {
+                        IpAddr::V6(v6) => format!("[{v6}]"),
+                        v4 => format!("{v4}"),
+                    },
+                    other => String::from(other),
+                };
+                check_http(&format!("http://{host}:{port}/hello"), "hello from the host")
+            };
             run(&[
                 ("link", &|| wait_online(Duration::from_secs(60))),
-                ("http local", &|| check_http(&url, "hello from the host")),
+                ("ping gateway", &gateway),
+                ("http local", &hello),
             ])
         }
         "route-watch" => route_watch(),

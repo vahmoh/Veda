@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "drivervm-core"
+description = "What the driver VM's monitor decides that reaches no object of Veda's, testable on the host: the bridge's waits and window, the guest's budget, where its PCI functions go, the keyboard controller's commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vabi = { workspace = true }
+vhv = { workspace = true }
+
+[lints]
+workspace = true

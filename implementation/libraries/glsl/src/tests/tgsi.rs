@@ -282,3 +282,102 @@ fn derivatives_and_selects() {
     assert!(f.text.contains("DDX") && f.text.contains("DDY"), "{}", f.text);
     assert!(f.text.contains("UCMP"), "{}", f.text);
 }
+
+#[test]
+fn constants_and_uniforms_stay_inside_the_program() {
+    // An index constant only once inlined, and far outside the array:
+    // clamped, so nothing past the program's uniforms is declared or read.
+    let (v, _) = both(
+        "#version 300 es\nuniform vec4 u[4]; uniform int k;\nfloat p(int i) { return u[i][k]; }\n\
+         void main() { gl_Position = vec4(p(7) + p(-1) + p(100000)); }",
+        "#version 300 es\nprecision mediump float; out vec4 c; void main() { c = vec4(1.0); }",
+    );
+    // Four slots of `u`, one of `k`, and the zero slot after them.
+    assert!(declared_range(&v.text, "CONST").is_some_and(|n| n <= 5), "{}", v.text);
+    for c in index_after(&v.text, "CONST") {
+        assert!(c <= 5, "CONST[{c}]:\n{}", v.text);
+    }
+}
+
+#[test]
+fn sampler_arrays_declare_only_their_own_samplers() {
+    // A loop over a sampler array next to a cube map: the lookups choose
+    // among the array's samplers only, and each sampler is declared with
+    // its own type.
+    let (_, f) = both(
+        "attribute vec4 p; varying vec2 uv; void main() { uv = p.xy; gl_Position = p; }",
+        "precision mediump float; uniform sampler2D s[2]; uniform samplerCube c; varying vec2 uv;\n\
+         void main() { vec4 a = textureCube(c, vec3(uv, 1.0));\n\
+           for (int i = 0; i < 2; i++) a += texture2D(s[i], uv);\n\
+           gl_FragColor = a; }",
+    );
+    let decls: Vec<&str> = f.text.lines().filter(|l| l.starts_with("DCL SVIEW")).collect();
+    assert_eq!(
+        decls,
+        ["DCL SVIEW[0], 2D, FLOAT", "DCL SVIEW[1], 2D, FLOAT", "DCL SVIEW[2], CUBE, FLOAT"],
+        "{}",
+        f.text
+    );
+    for line in f.text.lines().filter(|l| l.contains("SAMP[2]") && !l.starts_with("DCL")) {
+        assert!(line.contains("CUBE"), "{line}");
+    }
+}
+
+#[test]
+fn phi_copies_in_long_cycles_are_quick() {
+    // A loop rotating five thousand values: its back edge copies each into
+    // the next, one cycle (the copy that can be made first always the
+    // last of those left). Ordering those copies must not take cubic time.
+    let n = 5000;
+    let decls: String = (0..n).map(|k| std::format!("float a{k} = p.x * {k}.0;\n")).collect();
+    let rotate: String = (1..n).rev().map(|k| std::format!("a{k} = a{};\n", k - 1)).collect();
+    let sum: String = (0..n).map(|k| std::format!("s += a{k};\n")).collect();
+    let vs = std::format!(
+        "#version 300 es\nin vec4 p; uniform int m;\nvoid main() {{\n{decls}for (int i = 0; i < m; i++) {{ float t = a{};\n{rotate}a0 = t; }}\n\
+         float s = 0.0;\n{sum}gl_Position = vec4(s);\n}}",
+        n - 1
+    );
+    let t = std::time::Instant::now();
+    both(&vs, "#version 300 es\nprecision mediump float; out vec4 c; void main() { c = vec4(1.0); }");
+    let p =
+        super::ir::program(&vs, "#version 300 es\nprecision mediump float; out vec4 c; void main() { c = vec4(1.0); }");
+    crate::interp::compile(&p.vertex);
+    assert!(t.elapsed().as_secs_f64() < 10.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn loops_left_by_many_jumps_are_linear() {
+    // A loop that many `break`s or `continue`s leave: finding its blocks'
+    // dominators, and each jump's place among its target's predecessors
+    // (for its φ copies), took time quadratic in them; and the TGSI after
+    // each `continue` was guarded inside the guard after the one before,
+    // nesting the text as deep as there were `continue`s.
+    for (jump, n) in [("break", 60_000), ("continue", 5_000)] {
+        let ifs = std::format!("if (v.x > 0.5) {jump};\n").repeat(n);
+        let fs = std::format!(
+            "precision mediump float; uniform vec2 v;\nvoid main() {{\nfloat c = 0.0;\n\
+             for (int i = 0; i < 4; i++) {{\n{ifs}c += 1.0;\n}}\ngl_FragColor = vec4(c);\n}}\n"
+        );
+        let (elapsed, text) = super::on_small_stack(move || {
+            let t = std::time::Instant::now();
+            let p = program("void main() { gl_Position = vec4(0.0); }", &fs);
+            crate::interp::compile(&p.fragment);
+            let text = translate(&p.fragment, &p.linked, &Options::default()).text;
+            (t.elapsed().as_secs_f64(), text)
+        });
+        check(&text);
+        assert!(elapsed < 5.0, "{jump}: {elapsed} s");
+        let mut depth = 0usize;
+        let mut deepest = 0;
+        for l in text.lines() {
+            match l.trim().split([' ', '[']).next().unwrap_or("") {
+                "UIF" | "IF" | "BGNLOOP" => depth += 1,
+                "ENDIF" | "ENDLOOP" => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            deepest = deepest.max(depth);
+        }
+        assert!(deepest <= 4, "{jump}: nested {deepest} deep");
+        assert!(text.len() < 400 * n, "{jump}: {} bytes", text.len());
+    }
+}

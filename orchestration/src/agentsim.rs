@@ -15,12 +15,18 @@
 //! the agent uses to hear its name while asleep: the script decides what
 //! was "heard" (`agent-hear TEXT`) once the agent streams audio to it.
 //!
-//! Script commands (see `automate.rs`): `agent-connected`, `agent-call NAME
+//! Script commands (see `script.rs`): `agent-connected`, `agent-call NAME
 //! ARGS-JSON`, `agent-result TEXT`, `agent-expect TEXT`, `agent-speak
-//! SECONDS`, `agent-interrupt`, `agent-send JSON`, `agent-audio BYTES`,
-//! `agent-hear TEXT`, and `agent-asleep` (the agent is not woken at start).
+//! SECONDS`, `agent-interrupt`, `agent-audio BYTES`, `agent-hear TEXT`, and
+//! `agent-asleep` (the agent is not woken at start).
+//!
+//! Each connection is read by a thread of its own, and written by the
+//! script: neither waits for the other longer than a slice of time, so a
+//! guest slow to read what the script sends never keeps its microphone's
+//! stream from being read.
 
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,6 +38,7 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::{Message, WebSocket};
 
 use crate::util::Result;
+use crate::voice;
 
 /// What the simulator has received.
 #[derive(Default)]
@@ -42,27 +49,55 @@ struct Log {
     audio_bytes: usize,
     /// The level of each piece of microphone audio received (dBFS).
     mic_levels: Vec<f32>,
-    connections: u32,
-    /// Speech recognition: connections, audio received, text messages.
+    /// Speech recognition: connections, and audio received.
     listen_connections: u32,
     listen_audio_bytes: usize,
-    listen_texts: Vec<String>,
 }
 
 /// A WebSocket connection from the agent. Its reader holds the lock only
-/// while it waits for a message, a few milliseconds at a time, so the
-/// script's messages go out between reads, whole.
+/// while it waits for a message, a few milliseconds at a time, and a
+/// writer only while it hands a message over or the socket takes a slice
+/// of it, so reading and writing take turns.
 type Socket = Arc<Mutex<WebSocket<TcpStream>>>;
 
-/// How long a reader waits for a message before letting writers in.
+/// How long a reader waits for a message before letting writers in, and a
+/// writer for the socket to take what it sends before letting the reader
+/// in.
 const READ_SLICE: Duration = Duration::from_millis(10);
+const WRITE_SLICE: Duration = Duration::from_millis(10);
+/// How long a message may take to go out whole: a guest that reads
+/// nothing for so long has stopped.
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A conversation: its connection, and whether the agent has configured
+/// it (sent `Settings`).
+struct Conversation {
+    socket: Socket,
+    configured: AtomicBool,
+}
 
 struct Shared {
     log: Mutex<Log>,
     /// The open conversation.
-    agent: Mutex<Option<Socket>>,
+    agent: Mutex<Option<Arc<Conversation>>>,
     /// The open speech recognition connection.
     listen: Mutex<Option<Socket>>,
+}
+
+/// Clears `slot` when it is dropped, if it still holds `mine` (a later
+/// connection may have taken its place): however the connection ended.
+struct Leaving<'a, T> {
+    slot: &'a Mutex<Option<Arc<T>>>,
+    mine: Arc<T>,
+}
+
+impl<T> Drop for Leaving<'_, T> {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock().unwrap();
+        if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, &self.mine)) {
+            *slot = None;
+        }
+    }
 }
 
 /// The simulated Voice Agent service.
@@ -159,19 +194,23 @@ impl AgentSim {
     }
 
     fn send(&self, message: Message) -> Result {
-        let socket = self.shared.agent.lock().unwrap().clone().ok_or("the agent is not connected to the simulator")?;
-        send(&socket, message)
+        let conversation =
+            self.shared.agent.lock().unwrap().clone().ok_or("the agent is not connected to the simulator")?;
+        send(&conversation.socket, message)
     }
 
     pub fn send_json(&self, json: &str) -> Result {
         self.send(Message::text(json))
     }
 
-    /// Waits until the agent is connected (and configured).
+    /// Waits until the agent is connected, and has configured the
+    /// conversation it has open now (a conversation before it does not
+    /// count).
     pub fn wait_connected(&self, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
-            if self.shared.agent.lock().unwrap().is_some() && self.texts().iter().any(|t| t.contains("\"Settings\"")) {
+            let open = self.shared.agent.lock().unwrap().clone();
+            if open.is_some_and(|c| c.configured.load(Ordering::SeqCst)) {
                 return Ok(());
             }
             if start.elapsed() > timeout {
@@ -230,31 +269,14 @@ impl AgentSim {
         Ok(content(&response).unwrap_or(response))
     }
 
-    /// The agent "speaks" for `secs` seconds: a voice-like buzz at
-    /// 24 kHz (harmonics, a wandering pitch, syllables four times a
-    /// second).
+    /// The agent "speaks" for `secs` seconds: the agent's voice-like buzz
+    /// (see `voice`) at 24 kHz.
     pub fn speak(&self, secs: f64) -> Result {
-        use std::f64::consts::TAU;
         self.send_json(
             r#"{"type":"AgentStartedSpeaking","total_latency":"0.5","tts_latency":"0.1","ttt_latency":"0.4"}"#,
         )?;
-        let n = (secs * 24_000.0) as usize;
-        let mut pcm = Vec::with_capacity(n * 2);
-        let mut phase = 0.0f64;
-        for i in 0..n {
-            let t = i as f64 / 24_000.0;
-            let pitch = 190.0 + 30.0 * (t * 1.1 * TAU).sin();
-            phase += TAU * pitch / 24_000.0;
-            let mut buzz = 0.0;
-            let mut k = 1.0;
-            while k * pitch < 5000.0 {
-                buzz += (phase * k).sin() / k;
-                k += 1.0;
-            }
-            let syllable = (t * 4.0 * TAU + 1.0).sin().max(0.0).sqrt();
-            let s = (buzz * (0.1 + 0.9 * syllable) * 6000.0) as i16;
-            pcm.extend_from_slice(&s.to_le_bytes());
-        }
+        let pcm: Vec<u8> =
+            voice::buzz(voice::AGENT, 24_000, secs, 6000.0).iter().flat_map(|s| s.to_le_bytes()).collect();
         for chunk in pcm.chunks(4800) {
             self.send(Message::binary(chunk.to_vec()))?;
         }
@@ -268,9 +290,33 @@ fn content(response: &str) -> Option<String> {
     serde_json::from_str::<Value>(response).ok()?["content"].as_str().map(String::from)
 }
 
-/// Sends a message on a connection.
+/// Whether an error of the socket's is only that it would wait: the
+/// message stays with tungstenite, and goes out when it is flushed again.
+fn would_wait(e: &tungstenite::Error) -> bool {
+    use std::io::ErrorKind::{TimedOut, WouldBlock};
+    matches!(e, tungstenite::Error::Io(e) if matches!(e.kind(), WouldBlock | TimedOut))
+}
+
+/// Sends a message on a connection: hands it over, then has the socket
+/// take it a slice of time at a time, letting the reader in between.
 fn send(socket: &Socket, message: Message) -> Result {
-    socket.lock().unwrap().send(message).map_err(|e| format!("agent simulator: {e}"))
+    let failed = |e: tungstenite::Error| format!("agent simulator: {e}");
+    match socket.lock().unwrap().write(message) {
+        Err(e) if !would_wait(&e) => return Err(failed(e)),
+        _ => {}
+    }
+    let start = Instant::now();
+    loop {
+        match socket.lock().unwrap().flush() {
+            Ok(()) => return Ok(()),
+            Err(e) if !would_wait(&e) => return Err(failed(e)),
+            Err(_) => {}
+        }
+        if start.elapsed() > SEND_TIMEOUT {
+            return Err(format!("agent simulator: the agent read nothing for {} s", SEND_TIMEOUT.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 /// The next message on a connection, or `None` once it has closed. Pings
@@ -316,12 +362,14 @@ fn serve(stream: TcpStream, shared: &Shared) -> Result {
     };
     let ws = tungstenite::accept_hdr(stream, check).map_err(|e| format!("the WebSocket upgrade: {e}"))?;
     ws.get_ref().set_read_timeout(Some(READ_SLICE)).map_err(|e| e.to_string())?;
+    ws.get_ref().set_write_timeout(Some(WRITE_SLICE)).map_err(|e| e.to_string())?;
     let socket: Socket = Arc::new(Mutex::new(ws));
     if path.starts_with("/v1/listen") {
         return serve_listen(&socket, shared);
     }
-    *shared.agent.lock().unwrap() = Some(socket.clone());
-    shared.log.lock().unwrap().connections += 1;
+    let conversation = Arc::new(Conversation { socket: socket.clone(), configured: AtomicBool::new(false) });
+    *shared.agent.lock().unwrap() = Some(conversation.clone());
+    let _leaving = Leaving { slot: &shared.agent, mine: conversation.clone() };
     send(&socket, Message::text(r#"{"type":"Welcome","request_id":"sim-1"}"#))?;
     while let Some(message) = receive(&socket)? {
         match message {
@@ -330,6 +378,7 @@ fn serve(stream: TcpStream, shared: &Shared) -> Result {
                 shared.log.lock().unwrap().texts.push(text.to_string());
                 if settings {
                     send(&socket, Message::text(r#"{"type":"SettingsApplied"}"#))?;
+                    conversation.configured.store(true, Ordering::SeqCst);
                 }
             }
             Message::Binary(audio) => {
@@ -357,7 +406,6 @@ fn serve(stream: TcpStream, shared: &Shared) -> Result {
             _ => {}
         }
     }
-    *shared.agent.lock().unwrap() = None;
     Ok(())
 }
 
@@ -365,13 +413,12 @@ fn serve(stream: TcpStream, shared: &Shared) -> Result {
 /// script (`agent-hear`). `CloseStream` ends it as Deepgram does.
 fn serve_listen(socket: &Socket, shared: &Shared) -> Result {
     *shared.listen.lock().unwrap() = Some(socket.clone());
+    let _leaving = Leaving { slot: &shared.listen, mine: socket.clone() };
     shared.log.lock().unwrap().listen_connections += 1;
     while let Some(message) = receive(socket)? {
         match message {
             Message::Text(text) => {
-                let close = text.contains("CloseStream");
-                shared.log.lock().unwrap().listen_texts.push(text.to_string());
-                if close {
+                if text.contains("CloseStream") {
                     let _ = send(socket, Message::text(r#"{"type":"Metadata","duration":1.0}"#));
                     let _ =
                         socket.lock().unwrap().close(Some(CloseFrame { code: CloseCode::Normal, reason: "".into() }));
@@ -382,7 +429,6 @@ fn serve_listen(socket: &Socket, shared: &Shared) -> Result {
             _ => {}
         }
     }
-    *shared.listen.lock().unwrap() = None;
     Ok(())
 }
 
@@ -473,6 +519,66 @@ mod tests {
         listen.send(Message::text(r#"{"type":"CloseStream"}"#)).unwrap();
         assert!(text(&mut listen).contains("Metadata"));
         sim.wait_not_listening(Duration::from_secs(10)).unwrap();
+    }
+
+    /// A conversation that ends after another opened leaves the new one
+    /// open; a new conversation counts as connected once it is configured.
+    #[test]
+    fn a_new_conversation_takes_the_place_of_the_old() {
+        let sim = AgentSim::start().unwrap();
+        let mut first = connect(&sim, "/v1/agent/converse", Some("Token k")).unwrap();
+        assert!(text(&mut first).contains("Welcome"));
+        first.send(Message::text(r#"{"type":"Settings"}"#)).unwrap();
+        assert!(text(&mut first).contains("SettingsApplied"));
+        sim.wait_connected(Duration::from_secs(10)).unwrap();
+        // The agent starts again: a second conversation, not yet
+        // configured, does not count.
+        let mut second = connect(&sim, "/v1/agent/converse", Some("Token k")).unwrap();
+        assert!(text(&mut second).contains("Welcome"));
+        let start = Instant::now();
+        while !sim.shared.agent.lock().unwrap().as_ref().is_some_and(|c| !c.configured.load(Ordering::SeqCst)) {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(sim.wait_connected(Duration::from_millis(300)).is_err());
+        // The first one goes: the second stays the conversation.
+        first.close(None).unwrap();
+        while first.read().is_ok() {}
+        drop(first);
+        std::thread::sleep(Duration::from_millis(300));
+        sim.send_json(r#"{"type":"Ping"}"#).unwrap();
+        assert!(text(&mut second).contains("Ping"));
+        second.send(Message::text(r#"{"type":"Settings"}"#)).unwrap();
+        sim.wait_connected(Duration::from_secs(10)).unwrap();
+    }
+
+    /// The script's messages go out a slice at a time: an agent that reads
+    /// none of them keeps sending its microphone's sound, which is read.
+    #[test]
+    fn a_guest_slow_to_read_is_still_heard() {
+        let sim = AgentSim::start().unwrap();
+        let mut agent = connect(&sim, "/v1/agent/converse", Some("Token k")).unwrap();
+        assert!(text(&mut agent).contains("Welcome"));
+        let start = Instant::now();
+        while sim.shared.agent.lock().unwrap().is_none() {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let conversation = sim.shared.agent.lock().unwrap().clone().unwrap();
+        // More than the sockets' buffers hold, which the agent does not read.
+        let sender = std::thread::spawn(move || send(&conversation.socket, Message::binary(vec![0u8; 64 << 20])));
+        std::thread::sleep(Duration::from_millis(300));
+        agent.get_ref().set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        for _ in 0..10 {
+            agent.send(Message::binary(vec![1u8; 640])).unwrap();
+        }
+        let start = Instant::now();
+        while sim.audio_bytes() < 6400 {
+            assert!(start.elapsed() < Duration::from_secs(5), "the microphone's sound was not read");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(agent);
+        assert!(sender.join().unwrap().is_err(), "the agent went away before it read the message");
     }
 
     #[test]

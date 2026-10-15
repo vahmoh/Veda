@@ -3,15 +3,29 @@
 
 //! Desktop wallpapers: loading from image files, a procedural default, and
 //! the blurred copy used for translucent ("mica") shell surfaces.
+//!
+//! Decoding, scaling and blurring a large picture takes seconds, so once the
+//! desktop is up a [`Loader`] does it on a thread of its own: the taskbar,
+//! the menus and the agent's approvals stay responsive meanwhile, whoever
+//! asked for the picture.
 
+use alloc::collections::VecDeque;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use num_traits::Float;
+use vabi::RawHandle;
 use vgfx::Bitmap;
+use vproto::shell::ShellError;
+use vrt::object::Event;
+use vrt::sync::{Condvar, Mutex};
 
 /// Name of the built-in procedural wallpaper (used in place of a path).
 pub const PROCEDURAL: &str = "procedural";
+
+/// The largest picture file taken for a wallpaper (bytes).
+const MAX_FILE: u64 = 64 << 20;
 
 /// The wallpaper at screen resolution plus a heavily blurred version.
 pub struct Wallpaper {
@@ -40,6 +54,28 @@ impl Wallpaper {
         let img = vimage::decode(bytes).ok()?;
         let src = Bitmap::from_straight(img.width as i32, img.height as i32, img.pixels);
         Some(Wallpaper::from_bitmap(path, src.cover(w, h)))
+    }
+
+    /// Reads and decodes the picture at `path` for a `w` x `h` screen (or
+    /// makes the procedural one).
+    pub fn open(vfs: Option<&vproto::vfs::Client>, path: &str, w: i32, h: i32) -> Result<Wallpaper, ShellError> {
+        if path == PROCEDURAL {
+            return Ok(Wallpaper::procedural(w, h));
+        }
+        let vfs = vfs.ok_or(ShellError::Unavailable)?;
+        let st = match vfs.stat(path.into()) {
+            Ok(Ok(st)) => st,
+            Ok(Err(_)) => return Err(ShellError::NotFound),
+            Err(_) => return Err(ShellError::Unavailable),
+        };
+        if st.is_dir {
+            return Err(ShellError::NotFound);
+        }
+        if st.size > MAX_FILE {
+            return Err(ShellError::BadImage);
+        }
+        let bytes = crate::read_file(vfs, path, MAX_FILE).ok_or(ShellError::NotFound)?;
+        Wallpaper::load(path, &bytes, w, h).ok_or(ShellError::BadImage)
     }
 
     /// Deep blue with luminous blooms and a ribbon of light, used when no
@@ -117,4 +153,92 @@ pub fn list(vfs: &vproto::vfs::Client) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// A wallpaper to load: what asked for it (`ticket`), the picture and the
+/// screen it covers.
+struct Request {
+    ticket: u64,
+    path: String,
+    width: i32,
+    height: i32,
+}
+
+/// A wallpaper loaded (or not) for a [`Loader::load`] request.
+pub struct Loaded {
+    pub ticket: u64,
+    pub result: Result<Wallpaper, ShellError>,
+}
+
+struct Shared {
+    requests: Mutex<VecDeque<Request>>,
+    wake: Condvar,
+    done: Mutex<Vec<Loaded>>,
+}
+
+/// Loads wallpapers on a thread of its own; [`Loader::event_handle`] is
+/// signalled when one is ready ([`Loader::take`]).
+pub struct Loader {
+    shared: Arc<Shared>,
+    event: Event,
+}
+
+impl Loader {
+    /// Starts the worker.
+    pub fn start() -> Option<Loader> {
+        let event = Event::create().ok()?;
+        let theirs = Event::from_handle(event.0.duplicate(None).ok()?);
+        let shared = Arc::new(Shared {
+            requests: Mutex::new(VecDeque::new()),
+            wake: Condvar::new(),
+            done: Mutex::new(Vec::new()),
+        });
+        let worker = shared.clone();
+        vrt::thread::Builder::new()
+            .name("wallpaper")
+            .stack_size(256 * 1024)
+            .spawn(move || work(&worker, &theirs))
+            .ok()?;
+        Some(Loader { shared, event })
+    }
+
+    /// Loads the wallpaper at `path` (or [`PROCEDURAL`]) for a `width` x
+    /// `height` screen; the result comes back with `ticket`.
+    pub fn load(&self, ticket: u64, path: &str, width: i32, height: i32) {
+        self.shared.requests.lock().push_back(Request { ticket, path: path.into(), width, height });
+        self.shared.wake.notify_one();
+    }
+
+    /// The wallpapers loaded since the last call.
+    pub fn take(&self) -> Vec<Loaded> {
+        let _ = self.event.clear();
+        core::mem::take(&mut *self.shared.done.lock())
+    }
+
+    /// Signalled when a wallpaper is ready.
+    pub fn event_handle(&self) -> RawHandle {
+        self.event.raw()
+    }
+}
+
+/// The worker: loads what is asked, one at a time.
+fn work(shared: &Shared, ready: &Event) {
+    let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
+    if let Some(c) = &vfs {
+        c.set_timeout(crate::SERVICE_TIMEOUT_NS);
+    }
+    loop {
+        let r = {
+            let mut q = shared.requests.lock();
+            loop {
+                if let Some(r) = q.pop_front() {
+                    break r;
+                }
+                q = shared.wake.wait(q);
+            }
+        };
+        let result = Wallpaper::open(vfs.as_ref(), &r.path, r.width, r.height);
+        shared.done.lock().push(Loaded { ticket: r.ticket, result });
+        let _ = ready.signal();
+    }
 }

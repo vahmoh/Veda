@@ -15,17 +15,35 @@
 //! smoltcp closes a socket the same way after a reset and after a timeout;
 //! the stack tells them apart (refused, reset, timed out) from its own
 //! bookkeeping, so applications get accurate errors.
+//!
+//! Received data is never lost while the client may still read it: a
+//! connection that closed normally keeps what it received after its smoltcp
+//! socket is freed, and its end of stream is the peer's FIN, whatever is
+//! still buffered. Data is handed out in place ([`Stack::tcp_recv_with`],
+//! [`Stack::udp_recv_with`]) and dequeued only as far as the caller took it.
+//!
+//! A connection whose client closed it (an *orphan*) finishes sending on its
+//! own, within bounds: it is reset if the peer sends more data (nobody will
+//! read it), and dropped after [`ORPHAN_TIMEOUT_US`] without progress or when
+//! more than [`MAX_ORPHANS`] are waiting.
+//!
+//! [`Stack::take_ready`] lists the sockets whose state changed since it was
+//! last asked (data arrived, room to send, connected, failed, ...), so the
+//! service attends to those alone.
 
-use alloc::collections::{BTreeMap, VecDeque, btree_map};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque, btree_map};
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use core::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use smoltcp::iface::SocketHandle;
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::socket::{icmp, tcp, udp};
 use smoltcp::time::Duration;
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, Icmpv6Packet, Icmpv6Repr, IpAddress, IpEndpoint, IpListenEndpoint};
+use smoltcp::wire::{
+    Icmpv4DstUnreachable, Icmpv4Packet, Icmpv4Repr, Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpAddress, IpEndpoint,
+    IpListenEndpoint,
+};
 use vproto::net::{NetError, SocketInfo, SocketKind, TcpOptions};
 
 use crate::{IfaceId, Stack};
@@ -39,14 +57,26 @@ const UDP_PACKETS: usize = 64;
 const UDP_BYTES: usize = 64 * 1024;
 const ICMP_PACKETS: usize = 16;
 const ICMP_BYTES: usize = 16 * 1024;
-/// Most sockets of all kinds.
+/// Most sockets of all kinds (connections whose client closed them
+/// included).
 pub const MAX_SOCKETS: usize = 1024;
-/// Most listening sockets per interface for one listener.
+/// Most listening sockets per interface for one listener, and most
+/// connections waiting to be accepted.
 const LISTEN_PER_IFACE: usize = 8;
 const DEFAULT_CONNECT_TIMEOUT_US: u64 = 20_000_000;
-/// Give up on an established connection whose peer acknowledged nothing
-/// for this long.
+/// Give up on a connection whose peer acknowledged nothing for this long
+/// while something was waiting for its acknowledgement.
 const TCP_USER_TIMEOUT: Duration = Duration::from_secs(120);
+/// The shortest keep-alive interval a client may ask for: shorter ones
+/// would flood the network.
+pub const MIN_KEEPALIVE_MS: u32 = 1000;
+/// An orphan (a connection whose client closed it) that makes no progress
+/// for this long is dropped (Linux's FIN timeout is the same).
+pub const ORPHAN_TIMEOUT_US: u64 = 60_000_000;
+/// Most orphans; beyond this, the oldest is dropped.
+pub const MAX_ORPHANS: usize = 256;
+/// Most ping results waiting for the client.
+const MAX_PING_EVENTS: usize = 64;
 const PING_TIMEOUT_US: u64 = 4_000_000;
 const EPHEMERAL_FIRST: u16 = 49152;
 const EPHEMERAL_COUNT: u32 = 16384;
@@ -71,10 +101,15 @@ pub(crate) struct TcpSock {
     pub port: u16,
     pub phase: Phase,
     pub connect_deadline_us: u64,
-    /// We closed or aborted it (so a later `Closed` is expected).
+    /// We sent our FIN (or reset it): a later `Closed` may be the normal
+    /// end.
     pub closed_by_us: bool,
-    /// The client is gone: remove the socket once it is closed.
-    pub orphan: bool,
+    /// We reset it.
+    pub aborted: bool,
+    /// The client is gone, since this time: the connection finishes on its
+    /// own, within bounds.
+    pub orphan_since: Option<u64>,
+    /// When data last moved (received, or acknowledged by the peer).
     pub progress_us: u64,
     pub last_rx_queue: usize,
     pub last_tx_queue: usize,
@@ -83,8 +118,11 @@ pub(crate) struct TcpSock {
     pub remote: Option<SocketAddr>,
     pub idle_timeout_us: u64,
     pub owner: u64,
-    /// Peer finished sending.
+    /// The peer finished sending (its FIN arrived).
     pub peer_fin: bool,
+    /// Received data the client had not taken when the connection closed
+    /// normally (its smoltcp socket is freed by then).
+    pub leftover: VecDeque<u8>,
 }
 
 pub(crate) struct Listener {
@@ -100,6 +138,11 @@ pub(crate) struct UdpSock {
     pub local: SocketAddr,
     pub members: Vec<(IfaceId, SocketHandle)>,
     pub owner: u64,
+    /// Bytes of datagrams received, last seen (to tell new arrivals).
+    pub last_rx: usize,
+    /// A datagram did not fit the send buffer when it held this many bytes:
+    /// the socket is ready again once it holds fewer.
+    pub full_at: Option<usize>,
 }
 
 pub(crate) struct PingSock {
@@ -122,13 +165,17 @@ pub(crate) enum Entry {
 pub(crate) struct Table {
     pub map: BTreeMap<SockId, Entry>,
     next: SockId,
-    /// Reserved local ports and how many sockets use each.
+    /// Reserved local ports and how many sockets use each (the resolver's
+    /// query sockets included).
     ports: BTreeMap<(Proto, u16), u32>,
+    /// Sockets whose state changed since [`Stack::take_ready`] was last
+    /// called.
+    ready: BTreeSet<SockId>,
 }
 
 impl Table {
     pub fn new() -> Table {
-        Table { map: BTreeMap::new(), next: 1, ports: BTreeMap::new() }
+        Table { map: BTreeMap::new(), next: 1, ports: BTreeMap::new(), ready: BTreeSet::new() }
     }
 
     fn insert(&mut self, e: Entry) -> SockId {
@@ -142,11 +189,11 @@ impl Table {
         }
     }
 
-    fn reserve(&mut self, proto: Proto, port: u16) {
+    pub(crate) fn reserve(&mut self, proto: Proto, port: u16) {
         *self.ports.entry((proto, port)).or_insert(0) += 1;
     }
 
-    fn release(&mut self, proto: Proto, port: u16) {
+    pub(crate) fn release(&mut self, proto: Proto, port: u16) {
         if port == 0 {
             return;
         }
@@ -161,6 +208,10 @@ impl Table {
     fn in_use(&self, proto: Proto, port: u16) -> bool {
         self.ports.contains_key(&(proto, port))
     }
+
+    fn mark_ready(&mut self, id: SockId) {
+        self.ready.insert(id);
+    }
 }
 
 /// The state of a TCP connection as seen by the client.
@@ -171,7 +222,8 @@ pub enum TcpState {
         local: SocketAddr,
         remote: SocketAddr,
     },
-    /// Closed, with the reason unless it closed normally.
+    /// Closed, with the reason unless it closed normally (received data may
+    /// still be waiting).
     Closed {
         error: Option<NetError>,
     },
@@ -191,18 +243,22 @@ pub struct TcpView {
     pub send_queued: usize,
 }
 
-/// A received UDP datagram.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UdpDatagram {
-    pub from: SocketAddr,
-    pub len: usize,
-}
-
 /// The outcome of an echo request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PingEvent {
-    Reply { from: IpAddr, seq: u16, size: u16, rtt_us: u32 },
-    Failed { seq: u16, error: NetError },
+    Reply {
+        from: IpAddr,
+        seq: u16,
+        size: u16,
+        rtt_us: u32,
+    },
+    /// The request failed: no answer in time, or a router (`from`) said why
+    /// it could not deliver it.
+    Failed {
+        seq: u16,
+        from: Option<IpAddr>,
+        error: NetError,
+    },
 }
 
 fn tcp_socket() -> tcp::Socket<'static> {
@@ -212,10 +268,10 @@ fn tcp_socket() -> tcp::Socket<'static> {
     )
 }
 
-fn udp_socket() -> udp::Socket<'static> {
+fn udp_socket(packets: usize, bytes: usize) -> udp::Socket<'static> {
     udp::Socket::new(
-        udp::PacketBuffer::new(alloc::vec![udp::PacketMetadata::EMPTY; UDP_PACKETS], alloc::vec![0u8; UDP_BYTES]),
-        udp::PacketBuffer::new(alloc::vec![udp::PacketMetadata::EMPTY; UDP_PACKETS], alloc::vec![0u8; UDP_BYTES]),
+        udp::PacketBuffer::new(alloc::vec![udp::PacketMetadata::EMPTY; packets], alloc::vec![0u8; bytes]),
+        udp::PacketBuffer::new(alloc::vec![udp::PacketMetadata::EMPTY; packets], alloc::vec![0u8; bytes]),
     )
 }
 
@@ -224,6 +280,14 @@ fn icmp_socket() -> icmp::Socket<'static> {
         icmp::PacketBuffer::new(alloc::vec![icmp::PacketMetadata::EMPTY; ICMP_PACKETS], alloc::vec![0u8; ICMP_BYTES]),
         icmp::PacketBuffer::new(alloc::vec![icmp::PacketMetadata::EMPTY; ICMP_PACKETS], alloc::vec![0u8; ICMP_BYTES]),
     )
+}
+
+/// Checks a client's TCP options.
+fn validate(opts: &TcpOptions) -> Result<(), NetError> {
+    if opts.keepalive_ms != 0 && opts.keepalive_ms < MIN_KEEPALIVE_MS {
+        return Err(NetError::InvalidArgument);
+    }
+    Ok(())
 }
 
 fn apply_options(s: &mut tcp::Socket, opts: &TcpOptions) {
@@ -249,6 +313,104 @@ fn state_name(s: tcp::State) -> &'static str {
     }
 }
 
+/// Throws away what a smoltcp socket received.
+fn discard_received(s: &mut tcp::Socket) {
+    // The buffer is a ring: at most two runs.
+    for _ in 0..2 {
+        if s.recv(|data| (data.len(), data.len())).unwrap_or(0) == 0 {
+            break;
+        }
+    }
+}
+
+/// Takes everything still in a smoltcp socket's receive buffer.
+fn take_received(s: &mut tcp::Socket) -> VecDeque<u8> {
+    let mut out = VecDeque::with_capacity(s.recv_queue());
+    // The buffer is a ring: at most two runs.
+    for _ in 0..2 {
+        let n = s
+            .recv(|data| {
+                out.extend(data.iter());
+                (data.len(), data.len())
+            })
+            .unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// What came back for an echo request.
+enum PingAnswer {
+    Reply {
+        seq: u16,
+        size: usize,
+    },
+    /// A router (or the destination) could not deliver it.
+    Error {
+        seq: u16,
+        error: NetError,
+    },
+}
+
+/// What an ICMP packet received by a ping socket of identifier `ident`
+/// says: the reply to a request, or an error about one (whose quoted
+/// request tells which).
+fn ping_answer(packet: &[u8], from: IpAddress, ident: u16) -> Option<PingAnswer> {
+    // The identifier and sequence number of the echo request an error
+    // quotes (ICMP type `request`), after the quoted IP header.
+    let quoted = |data: &[u8], request: u8| {
+        (data.len() >= 8 && data[0] == request && u16::from_be_bytes([data[4], data[5]]) == ident)
+            .then(|| u16::from_be_bytes([data[6], data[7]]))
+    };
+    match from {
+        IpAddress::Ipv4(_) => {
+            let p = Icmpv4Packet::new_checked(packet).ok()?;
+            match Icmpv4Repr::parse(&p, &ChecksumCapabilities::default()).ok()? {
+                Icmpv4Repr::EchoReply { ident: i, seq_no, data } if i == ident => {
+                    Some(PingAnswer::Reply { seq: seq_no, size: data.len() })
+                }
+                Icmpv4Repr::DstUnreachable { reason, data, .. } => {
+                    let error = match reason {
+                        Icmpv4DstUnreachable::HostUnreachable | Icmpv4DstUnreachable::DstHostUnknown => {
+                            NetError::HostUnreachable
+                        }
+                        _ => NetError::DestinationUnreachable,
+                    };
+                    Some(PingAnswer::Error { seq: quoted(data, 8)?, error })
+                }
+                Icmpv4Repr::TimeExceeded { data, .. } => {
+                    Some(PingAnswer::Error { seq: quoted(data, 8)?, error: NetError::TimeExceeded })
+                }
+                _ => None,
+            }
+        }
+        // The checksum was verified when the packet arrived.
+        IpAddress::Ipv6(_) => {
+            let p = Icmpv6Packet::new_checked(packet).ok()?;
+            match p.msg_type() {
+                Icmpv6Message::EchoReply if p.echo_ident() == ident => {
+                    Some(PingAnswer::Reply { seq: p.echo_seq_no(), size: p.payload().len() })
+                }
+                // An error's body: the quoted IPv6 header (40 bytes), then
+                // the request.
+                Icmpv6Message::DstUnreachable | Icmpv6Message::TimeExceeded => {
+                    let error = match (p.msg_type(), p.msg_code()) {
+                        (Icmpv6Message::TimeExceeded, _) => NetError::TimeExceeded,
+                        // Address unreachable.
+                        (_, 3) => NetError::HostUnreachable,
+                        _ => NetError::DestinationUnreachable,
+                    };
+                    let quote = p.payload().get(40..)?;
+                    Some(PingAnswer::Error { seq: quoted(quote, 128)?, error })
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
 /// Whether a local address is acceptable for binding: unspecified, or one
 /// of the machine's addresses.
 fn bind_ok(stack: &Stack, addr: IpAddr) -> bool {
@@ -265,7 +427,7 @@ fn ifaces_for(stack: &Stack, local: IpAddr) -> Vec<IfaceId> {
 }
 
 impl Stack {
-    fn alloc_port(&mut self, proto: Proto) -> Result<u16, NetError> {
+    pub(crate) fn alloc_port(&mut self, proto: Proto) -> Result<u16, NetError> {
         let start = self.random_u32() % EPHEMERAL_COUNT;
         for k in 0..EPHEMERAL_COUNT {
             let port = EPHEMERAL_FIRST + ((start + k) % EPHEMERAL_COUNT) as u16;
@@ -280,14 +442,28 @@ impl Stack {
         if self.socks.map.len() >= MAX_SOCKETS { Err(NetError::LimitReached) } else { Ok(()) }
     }
 
+    /// Sockets in the table (of all clients, and connections whose client
+    /// closed them), at most [`MAX_SOCKETS`].
+    pub fn socket_count(&self) -> usize {
+        self.socks.map.len()
+    }
+
+    /// The sockets whose state changed since the last call (data arrived,
+    /// room to send, connected, closed, an accepted connection, a ping
+    /// result).
+    pub fn take_ready(&mut self) -> Vec<SockId> {
+        core::mem::take(&mut self.socks.ready).into_iter().collect()
+    }
+
     // ---------------------------------------------------------------
     // TCP
 
-    /// Starts a TCP connection to `remote`.
+    /// Starts a TCP connection to `remote` for process `owner`.
     pub fn tcp_connect(&mut self, remote: SocketAddr, opts: &TcpOptions, owner: u64) -> Result<SockId, NetError> {
         if remote.port() == 0 {
             return Err(NetError::InvalidArgument);
         }
+        validate(opts)?;
         self.check_limit()?;
         let id_if = self.route(remote.ip())?;
         let port = self.alloc_port(Proto::Tcp)?;
@@ -313,7 +489,8 @@ impl Stack {
             phase: Phase::Connecting,
             connect_deadline_us: now + timeout,
             closed_by_us: false,
-            orphan: false,
+            aborted: false,
+            orphan_since: None,
             progress_us: now,
             last_rx_queue: 0,
             last_tx_queue: 0,
@@ -323,11 +500,12 @@ impl Stack {
             idle_timeout_us: opts.idle_timeout_ms as u64 * 1000,
             owner,
             peer_fin: false,
+            leftover: VecDeque::new(),
         })))
     }
 
-    /// Listens on `local` (port 0 picks a free one). Returns the listener
-    /// and the address bound.
+    /// Listens on `local` (port 0 picks a free one) for process `owner`.
+    /// Returns the listener and the address bound.
     pub fn tcp_listen(
         &mut self,
         local: SocketAddr,
@@ -335,6 +513,7 @@ impl Stack {
         opts: &TcpOptions,
         owner: u64,
     ) -> Result<(SockId, SocketAddr), NetError> {
+        validate(opts)?;
         self.check_limit()?;
         if !bind_ok(self, local.ip()) {
             return Err(NetError::AddressNotAvailable);
@@ -357,10 +536,15 @@ impl Stack {
         Ok((self.socks.insert(Entry::Listener(l)), local))
     }
 
+    /// Gives a listener listening sockets on interface `id`: as many as its
+    /// backlog has room for, counting the connections not accepted yet, so
+    /// that a client that does not accept holds at most its backlog (further
+    /// connection attempts are refused).
     fn add_listen_members(&mut self, l: &mut Listener, id: IfaceId) {
         let have = l.members.iter().filter(|(i, _)| *i == id).count();
+        let want = l.backlog.saturating_sub(l.accepted.len());
         let Some(i) = self.iface_mut(id) else { return };
-        for _ in have..l.backlog {
+        for _ in have..want {
             let mut s = tcp_socket();
             apply_options(&mut s, &l.opts);
             let ep = if l.local.ip().is_unspecified() {
@@ -374,7 +558,16 @@ impl Stack {
         }
     }
 
-    /// Takes the next accepted connection of a listener.
+    /// The next connection a listener has accepted, without taking it.
+    pub fn tcp_accept_peek(&self, listener: SockId) -> Option<SockId> {
+        match self.socks.map.get(&listener) {
+            Some(Entry::Listener(l)) => l.accepted.front().copied(),
+            _ => None,
+        }
+    }
+
+    /// Takes the next connection a listener has accepted: from now on it is
+    /// the client's.
     pub fn tcp_accept(&mut self, listener: SockId) -> Option<SockId> {
         match self.socks.map.get_mut(&listener) {
             Some(Entry::Listener(l)) => l.accepted.pop_front(),
@@ -401,10 +594,12 @@ impl Stack {
     /// The client's view of a TCP connection.
     pub fn tcp_view(&mut self, id: SockId) -> Option<TcpView> {
         let t = self.tcp_sock(id)?;
-        let (phase, error, local, remote, peer_fin) = (t.phase, t.error, t.local, t.remote, t.peer_fin);
+        let (phase, error, local, remote, peer_fin, leftover) =
+            (t.phase, t.error, t.local, t.remote, t.peer_fin, t.leftover.len());
         let numbers =
             self.with_tcp(id, |s| (s.recv_queue(), s.send_capacity() - s.send_queue(), s.send_queue(), s.may_send()));
         let (recv_queued, send_space, send_queued, may_send) = numbers.unwrap_or((0, 0, 0, false));
+        let recv_queued = recv_queued + leftover;
         let state = match phase {
             Phase::Connecting => TcpState::Connecting,
             Phase::Open => match (local, remote) {
@@ -434,15 +629,38 @@ impl Stack {
         }
     }
 
-    /// Takes received data.
-    pub fn tcp_recv(&mut self, id: SockId, buf: &mut [u8]) -> Result<usize, NetError> {
-        match self.with_tcp(id, |s| if s.can_recv() { s.recv_slice(buf).unwrap_or(0) } else { 0 }) {
-            Some(n) => Ok(n),
-            None => Err(NetError::Closed),
+    /// Offers up to `max` received bytes (a contiguous run) to `take`,
+    /// which returns how many it took; only those are dequeued. Returns the
+    /// number taken (0: nothing received, or `take` took nothing).
+    pub fn tcp_recv_with(
+        &mut self,
+        id: SockId,
+        max: usize,
+        take: impl FnOnce(&[u8]) -> usize,
+    ) -> Result<usize, NetError> {
+        let leftover = match self.socks.map.get_mut(&id) {
+            Some(Entry::Tcp(t)) => &mut t.leftover,
+            _ => return Err(NetError::Closed),
+        };
+        if !leftover.is_empty() {
+            let (run, _) = leftover.as_slices();
+            let k = run.len().min(max);
+            let n = take(&run[..k]).min(k);
+            leftover.drain(..n);
+            return Ok(n);
         }
+        let n = self.with_tcp(id, |s| {
+            s.recv(|data| {
+                let k = data.len().min(max);
+                let n = take(&data[..k]).min(k);
+                (n, n)
+            })
+            .unwrap_or(0)
+        });
+        Ok(n.unwrap_or(0))
     }
 
-    /// Finishes sending (FIN); receiving continues.
+    /// Finishes sending (FIN after the data queued); receiving continues.
     pub fn tcp_shutdown(&mut self, id: SockId) {
         if let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) {
             t.closed_by_us = true;
@@ -454,6 +672,7 @@ impl Stack {
     pub fn tcp_abort(&mut self, id: SockId) {
         if let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) {
             t.closed_by_us = true;
+            t.aborted = true;
         }
         self.with_tcp(id, |s| s.abort());
     }
@@ -465,7 +684,8 @@ impl Stack {
     // ---------------------------------------------------------------
     // UDP
 
-    /// Opens a UDP socket bound to `local` (port 0 picks a free one).
+    /// Opens a UDP socket bound to `local` (port 0 picks a free one) for
+    /// process `owner`.
     pub fn udp_bind(&mut self, local: SocketAddr, owner: u64) -> Result<(SockId, SocketAddr), NetError> {
         self.check_limit()?;
         if !bind_ok(self, local.ip()) {
@@ -476,7 +696,7 @@ impl Stack {
             return Err(NetError::AddressInUse);
         }
         let local = SocketAddr::new(local.ip(), port);
-        let mut u = UdpSock { local, members: Vec::new(), owner };
+        let mut u = UdpSock { local, members: Vec::new(), owner, last_rx: 0, full_at: None };
         for id in ifaces_for(self, local.ip()) {
             self.add_udp_member(&mut u, id);
         }
@@ -489,7 +709,7 @@ impl Stack {
             return;
         }
         let Some(i) = self.iface_mut(id) else { return };
-        let mut s = udp_socket();
+        let mut s = udp_socket(UDP_PACKETS, UDP_BYTES);
         let ep = if u.local.ip().is_unspecified() {
             IpListenEndpoint { addr: None, port: u.local.port() }
         } else {
@@ -517,34 +737,58 @@ impl Stack {
         if data.len() > s.payload_send_capacity() {
             return Err(NetError::MessageTooLarge);
         }
-        s.send_slice(data, IpEndpoint::from(dest)).map_err(|e| match e {
-            udp::SendError::BufferFull => NetError::LimitReached,
-            udp::SendError::Unaddressable => NetError::NoRoute,
-        })
-    }
-
-    /// Takes the next received datagram.
-    pub fn udp_recv(&mut self, id: SockId, buf: &mut [u8]) -> Option<UdpDatagram> {
-        let members = match self.socks.map.get(&id) {
-            Some(Entry::Udp(u)) => u.members.clone(),
-            _ => return None,
-        };
-        for (iface, handle) in members {
-            let Some(i) = self.iface_mut(iface) else { continue };
-            let s = i.sockets.get_mut::<udp::Socket>(handle);
-            if s.can_recv()
-                && let Ok((n, meta)) = s.recv_slice(buf)
-            {
-                return Some(UdpDatagram { from: SocketAddr::from(meta.endpoint), len: n });
+        match s.send_slice(data, IpEndpoint::from(dest)) {
+            Ok(()) => Ok(()),
+            Err(udp::SendError::Unaddressable) => Err(NetError::NoRoute),
+            Err(udp::SendError::BufferFull) => {
+                let queued = self.udp_send_queue(id);
+                if let Some(Entry::Udp(u)) = self.socks.map.get_mut(&id) {
+                    u.full_at = Some(queued);
+                }
+                Err(NetError::LimitReached)
             }
         }
-        None
+    }
+
+    /// Bytes waiting in a UDP socket's send buffers.
+    fn udp_send_queue(&self, id: SockId) -> usize {
+        match self.socks.map.get(&id) {
+            Some(Entry::Udp(u)) => u
+                .members
+                .iter()
+                .filter_map(|&(iface, h)| Some(self.iface(iface)?.sockets.get::<udp::Socket>(h).send_queue()))
+                .sum(),
+            _ => 0,
+        }
+    }
+
+    /// Offers the next received datagram to `take`, which returns whether
+    /// it took it; a datagram not taken stays queued. `None` if none is
+    /// waiting.
+    pub fn udp_recv_with(&mut self, id: SockId, take: impl FnOnce(SocketAddr, &[u8]) -> bool) -> Option<bool> {
+        let members = match self.socks.map.get(&id) {
+            Some(Entry::Udp(u)) => &u.members,
+            _ => return None,
+        };
+        let (iface, handle) = members.iter().copied().find(|&(iface, handle)| {
+            self.iface(iface).is_some_and(|i| i.sockets.get::<udp::Socket>(handle).can_recv())
+        })?;
+        let i = self.iface_mut(iface)?;
+        let s = i.sockets.get_mut::<udp::Socket>(handle);
+        let taken = match s.peek() {
+            Ok((data, meta)) => take(SocketAddr::from(meta.endpoint), data),
+            Err(_) => return None,
+        };
+        if taken {
+            let _ = s.recv();
+        }
+        Some(taken)
     }
 
     // ---------------------------------------------------------------
     // Ping
 
-    /// Opens a ping socket.
+    /// Opens a ping socket for process `owner`.
     pub fn ping_open(&mut self, owner: u64) -> Result<SockId, NetError> {
         self.check_limit()?;
         let ident = self.random_u32() as u16;
@@ -557,38 +801,37 @@ impl Stack {
         })))
     }
 
-    /// Sends an ICMP echo request with `size` payload bytes.
-    pub fn ping_send(&mut self, id: SockId, dest: IpAddr, seq: u16, ttl: u8, size: u16) -> Result<(), NetError> {
+    /// Sends an ICMP echo request with `size` payload bytes. Its outcome,
+    /// a failure to send it included, comes as a [`PingEvent`].
+    pub fn ping_send(&mut self, id: SockId, dest: IpAddr, seq: u16, ttl: u8, size: u16) {
+        if let Err(error) = self.try_ping_send(id, dest, seq, ttl, size) {
+            self.ping_event(id, PingEvent::Failed { seq, from: None, error });
+        }
+    }
+
+    fn try_ping_send(&mut self, id: SockId, dest: IpAddr, seq: u16, ttl: u8, size: u16) -> Result<(), NetError> {
         if size as usize > 8192 {
             return Err(NetError::MessageTooLarge);
         }
         let via = self.route(dest)?;
         let now = self.now_us;
-        let (ident, handle) = {
-            let ident = match self.socks.map.get(&id) {
-                Some(Entry::Ping(p)) => p.ident,
-                _ => return Err(NetError::Closed),
-            };
-            let existing = match self.socks.map.get(&id) {
-                Some(Entry::Ping(p)) => p.members.iter().find(|(i, _)| *i == via).map(|(_, h)| *h),
-                _ => None,
-            };
-            let handle = match existing {
-                Some(h) => h,
-                None => {
-                    let i = self.iface_mut(via).ok_or(NetError::NoRoute)?;
-                    let mut s = icmp_socket();
-                    s.bind(icmp::Endpoint::Ident(ident)).map_err(|_| NetError::Internal)?;
-                    let h = i.sockets.add(s);
-                    if let Some(Entry::Ping(p)) = self.socks.map.get_mut(&id) {
-                        p.members.push((via, h));
-                    }
-                    h
-                }
-            };
-            (ident, handle)
+        let (ident, existing) = match self.socks.map.get(&id) {
+            Some(Entry::Ping(p)) => (p.ident, p.members.iter().find(|(i, _)| *i == via).map(|(_, h)| *h)),
+            _ => return Err(NetError::Closed),
         };
-        let payload: Vec<u8> = (0..size).map(|n| (n as u8).wrapping_add(0x20)).collect();
+        let handle = match existing {
+            Some(h) => h,
+            None => {
+                let i = self.iface_mut(via).ok_or(NetError::NoRoute)?;
+                let mut s = icmp_socket();
+                s.bind(icmp::Endpoint::Ident(ident)).map_err(|_| NetError::Internal)?;
+                let h = i.sockets.add(s);
+                if let Some(Entry::Ping(p)) = self.socks.map.get_mut(&id) {
+                    p.members.push((via, h));
+                }
+                h
+            }
+        };
         let i = self.iface_mut(via).ok_or(NetError::NoRoute)?;
         let caps = ChecksumCapabilities::default();
         let src6 = match dest {
@@ -597,15 +840,23 @@ impl Stack {
         };
         let s = i.sockets.get_mut::<icmp::Socket>(handle);
         s.set_hop_limit(if ttl == 0 { None } else { Some(ttl) });
+        let fill = |buf: &mut [u8]| {
+            for (n, b) in buf.iter_mut().enumerate() {
+                *b = (n as u8).wrapping_add(0x20);
+            }
+        };
+        let mut payload = [0u8; 8192];
+        let payload = &mut payload[..size as usize];
+        fill(payload);
         let sent = match dest {
             IpAddr::V4(d) => {
-                let repr = Icmpv4Repr::EchoRequest { ident, seq_no: seq, data: &payload };
+                let repr = Icmpv4Repr::EchoRequest { ident, seq_no: seq, data: payload };
                 s.send(repr.buffer_len(), IpAddress::Ipv4(d)).map(|buf| {
                     repr.emit(&mut Icmpv4Packet::new_unchecked(buf), &caps);
                 })
             }
             IpAddr::V6(d) => {
-                let repr = Icmpv6Repr::EchoRequest { ident, seq_no: seq, data: &payload };
+                let repr = Icmpv6Repr::EchoRequest { ident, seq_no: seq, data: payload };
                 let src = src6.unwrap_or(Ipv6Addr::UNSPECIFIED);
                 s.send(repr.buffer_len(), IpAddress::Ipv6(d)).map(|buf| {
                     repr.emit(&src, &d, &mut Icmpv6Packet::new_unchecked(buf), &caps);
@@ -622,35 +873,101 @@ impl Stack {
         Ok(())
     }
 
-    /// Takes the ping results since the last call.
-    pub fn ping_events(&mut self, id: SockId) -> Vec<PingEvent> {
-        match self.socks.map.get_mut(&id) {
-            Some(Entry::Ping(p)) => p.events.drain(..).collect(),
-            _ => Vec::new(),
+    /// Queues a ping result for the client (results beyond
+    /// `MAX_PING_EVENTS` that the client has not taken are dropped).
+    fn ping_event(&mut self, id: SockId, ev: PingEvent) {
+        if let Some(Entry::Ping(p)) = self.socks.map.get_mut(&id)
+            && p.events.len() < MAX_PING_EVENTS
+        {
+            p.events.push_back(ev);
+            self.socks.mark_ready(id);
+        }
+    }
+
+    /// The oldest ping result the client has not taken.
+    pub fn ping_next(&self, id: SockId) -> Option<PingEvent> {
+        match self.socks.map.get(&id) {
+            Some(Entry::Ping(p)) => p.events.front().copied(),
+            _ => None,
+        }
+    }
+
+    /// The client took the oldest ping result.
+    pub fn ping_taken(&mut self, id: SockId) {
+        if let Some(Entry::Ping(p)) = self.socks.map.get_mut(&id) {
+            p.events.pop_front();
         }
     }
 
     // ---------------------------------------------------------------
     // Closing and housekeeping
 
-    /// The client closed the socket. TCP connections are shut down
-    /// gracefully and disappear once closed; everything else goes now.
+    /// The client closed the socket. A TCP connection is shut down
+    /// gracefully: the data the client sent is delivered, then a FIN; what
+    /// it had not read is discarded. Everything else goes now.
     pub fn close(&mut self, id: SockId) {
+        let now = self.now_us;
         let Some(entry) = self.socks.map.get_mut(&id) else { return };
         if let Entry::Tcp(t) = entry
             && t.phase != Phase::Closed
             && t.handle.is_some()
         {
-            t.orphan = true;
+            t.orphan_since = Some(now);
             t.closed_by_us = true;
-            self.with_tcp(id, |s| s.close());
+            t.leftover.clear();
+            self.with_tcp(id, |s| {
+                // Nobody will read it: data arriving from now on resets the
+                // connection (RFC 1122, 4.2.2.13).
+                discard_received(s);
+                s.close();
+            });
+            if let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) {
+                t.last_rx_queue = 0;
+            }
+            self.limit_orphans();
             return;
         }
         self.remove_socket(id);
     }
 
+    /// Drops the oldest orphans beyond [`MAX_ORPHANS`].
+    fn limit_orphans(&mut self) {
+        let mut orphans: Vec<(u64, SockId)> = self
+            .socks
+            .map
+            .iter()
+            .filter_map(|(&id, e)| match e {
+                Entry::Tcp(t) => t.orphan_since.map(|since| (since, id)),
+                _ => None,
+            })
+            .collect();
+        if orphans.len() <= MAX_ORPHANS {
+            return;
+        }
+        orphans.sort_unstable();
+        let excess = orphans.len() - MAX_ORPHANS;
+        for &(_, id) in &orphans[..excess] {
+            self.abort_orphan(id);
+        }
+    }
+
+    /// Resets a connection nobody will use any more. It goes once smoltcp
+    /// has sent the RST (the next housekeeping after a poll).
+    fn abort_orphan(&mut self, id: SockId) {
+        let now = self.now_us;
+        if self.with_tcp(id, |s| s.abort()).is_none() {
+            return self.remove_socket(id);
+        }
+        if let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) {
+            t.closed_by_us = true;
+            t.aborted = true;
+            t.orphan_since.get_or_insert(now);
+        }
+    }
+
     fn remove_socket(&mut self, id: SockId) {
         let Some(entry) = self.socks.map.remove(&id) else { return };
+        self.socks.ready.remove(&id);
         match entry {
             Entry::Tcp(t) => {
                 if let Some(h) = t.handle
@@ -666,8 +983,9 @@ impl Stack {
                         i.sockets.remove(h);
                     }
                 }
+                // Connections nobody accepted are reset.
                 for a in l.accepted {
-                    self.remove_socket(a);
+                    self.abort_orphan(a);
                 }
                 self.socks.release(Proto::Tcp, l.local.port());
             }
@@ -696,7 +1014,7 @@ impl Stack {
             Some(Entry::Tcp(t)) => {
                 t.phase = Phase::Closed;
                 t.error.get_or_insert(error);
-                (t.iface, t.handle.take(), t.orphan)
+                (t.iface, t.handle.take(), t.orphan_since.is_some())
             }
             _ => return,
         };
@@ -708,6 +1026,8 @@ impl Stack {
         }
         if orphan {
             self.remove_socket(id);
+        } else {
+            self.socks.mark_ready(id);
         }
     }
 
@@ -719,24 +1039,26 @@ impl Stack {
             match self.socks.map.get(&id) {
                 Some(Entry::Tcp(_)) => self.maintain_tcp(id, now),
                 Some(Entry::Listener(_)) => self.maintain_listener(id, now),
+                Some(Entry::Udp(_)) => self.maintain_udp(id),
                 Some(Entry::Ping(_)) => self.maintain_ping(id, now),
-                _ => {}
+                None => {}
             }
         }
     }
 
     fn maintain_tcp(&mut self, id: SockId, now: u64) {
         let Some(snapshot) = self.with_tcp(id, |s| {
-            (s.state(), s.local_endpoint(), s.remote_endpoint(), s.recv_queue(), s.send_queue(), s.may_recv())
+            (s.state(), s.local_endpoint(), s.remote_endpoint(), s.recv_queue(), s.send_queue(), s.has_timed_out())
         }) else {
-            // Already closed (no smoltcp socket); orphans are removed.
-            if matches!(self.socks.map.get(&id), Some(Entry::Tcp(t)) if t.orphan) {
+            // No smoltcp socket any more: an orphan has nothing left.
+            if matches!(self.socks.map.get(&id), Some(Entry::Tcp(t)) if t.orphan_since.is_some()) {
                 self.remove_socket(id);
             }
             return;
         };
-        let (state, local, remote, rxq, txq, may_recv) = snapshot;
+        let (state, local, remote, rxq, txq, timed_out) = snapshot;
         let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) else { return };
+        let mut ready = rxq > t.last_rx_queue || txq < t.last_tx_queue;
         if rxq != t.last_rx_queue || txq < t.last_tx_queue {
             t.progress_us = now;
         }
@@ -751,55 +1073,84 @@ impl Stack {
         if t.phase == Phase::Connecting && established {
             t.phase = Phase::Open;
             t.progress_us = now;
+            ready = true;
         }
-        if established && !may_recv {
+        // The peer's FIN arrived: these are the states that follow it.
+        let fin =
+            matches!(state, tcp::State::CloseWait | tcp::State::Closing | tcp::State::LastAck | tcp::State::TimeWait);
+        if fin && !t.peer_fin {
             t.peer_fin = true;
+            ready = true;
+        }
+        if let Some(since) = t.orphan_since {
+            // Data after the client closed (nobody will read it), or no
+            // progress for too long: give up on the connection.
+            let stalled = now.saturating_sub(since.max(t.progress_us)) >= ORPHAN_TIMEOUT_US;
+            match state {
+                // Closed (a reset sent), or waiting out TIME-WAIT with
+                // nothing left to deliver (the peer saw our ACK).
+                tcp::State::Closed | tcp::State::TimeWait => self.remove_socket(id),
+                _ if rxq > 0 || stalled => self.abort_orphan(id),
+                _ => {}
+            }
+            return;
         }
         match state {
+            // smoltcp forgets what was received when TIME-WAIT ends: keep
+            // what the client has not read yet (nothing more can arrive).
+            tcp::State::TimeWait if rxq > 0 => {
+                let rest = self.with_tcp(id, take_received).unwrap_or_default();
+                if let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) {
+                    t.leftover.extend(rest);
+                    t.last_rx_queue = 0;
+                }
+            }
             tcp::State::Closed => {
                 let error = match t.phase {
-                    Phase::Connecting => Some(if now >= t.connect_deadline_us {
+                    Phase::Connecting | Phase::Open if t.aborted => None,
+                    Phase::Connecting => Some(if timed_out || now >= t.connect_deadline_us {
                         NetError::TimedOut
                     } else {
                         NetError::ConnectionRefused
                     }),
-                    Phase::Open if t.closed_by_us => None,
-                    Phase::Open => {
-                        Some(if now.saturating_sub(t.progress_us) + 1_000_000 >= TCP_USER_TIMEOUT.total_micros() {
-                            NetError::TimedOut
-                        } else {
-                            NetError::ConnectionReset
-                        })
-                    }
+                    // The normal end: our FIN went, and the peer's came.
+                    Phase::Open if t.closed_by_us && t.peer_fin => None,
+                    // smoltcp gave up on the peer (something of ours went
+                    // unacknowledged, or keep-alive probes unanswered, for
+                    // TCP_USER_TIMEOUT), or the peer reset it, our half
+                    // closed or not.
+                    Phase::Open => Some(if timed_out { NetError::TimedOut } else { NetError::ConnectionReset }),
                     Phase::Closed => t.error,
                 };
                 match error {
                     Some(e) => self.fail_tcp(id, e),
                     None => {
-                        // Closed normally.
-                        let orphan = t.orphan;
+                        // Closed normally: what the client has not read yet
+                        // stays readable.
                         t.phase = Phase::Closed;
                         let (iface, handle) = (t.iface, t.handle.take());
                         if let Some(h) = handle
                             && let Some(i) = self.iface_mut(iface)
                         {
+                            let rest = take_received(i.sockets.get_mut::<tcp::Socket>(h));
                             i.sockets.remove(h);
+                            if let Some(Entry::Tcp(t)) = self.socks.map.get_mut(&id) {
+                                t.leftover.extend(rest);
+                            }
                         }
-                        if orphan {
-                            self.remove_socket(id);
-                        }
+                        self.socks.mark_ready(id);
                     }
                 }
+                return;
             }
-            tcp::State::TimeWait if t.orphan => {
-                // Nothing left to deliver: free it now (the peer saw our ACK).
-                self.remove_socket(id);
-            }
-            tcp::State::SynSent if now >= t.connect_deadline_us => self.fail_tcp(id, NetError::TimedOut),
+            tcp::State::SynSent if now >= t.connect_deadline_us => return self.fail_tcp(id, NetError::TimedOut),
             _ if t.idle_timeout_us > 0 && established && now.saturating_sub(t.progress_us) >= t.idle_timeout_us => {
-                self.fail_tcp(id, NetError::TimedOut)
+                return self.fail_tcp(id, NetError::TimedOut);
             }
             _ => {}
+        }
+        if ready {
+            self.socks.mark_ready(id);
         }
     }
 
@@ -822,6 +1173,9 @@ impl Stack {
         }
         let mut new_ids = Vec::new();
         for (iface, h, local, remote) in accepted {
+            // With the table full, the connection is refused: it stays only
+            // until its RST is sent.
+            let full = self.check_limit().is_err();
             let new = self.socks.insert(Entry::Tcp(TcpSock {
                 iface,
                 handle: Some(h),
@@ -829,7 +1183,8 @@ impl Stack {
                 phase: Phase::Open,
                 connect_deadline_us: now,
                 closed_by_us: false,
-                orphan: false,
+                aborted: false,
+                orphan_since: None,
                 progress_us: now,
                 last_rx_queue: 0,
                 last_tx_queue: 0,
@@ -839,72 +1194,90 @@ impl Stack {
                 idle_timeout_us: 0,
                 owner,
                 peer_fin: false,
+                leftover: VecDeque::new(),
             }));
-            new_ids.push(new);
+            if full {
+                self.abort_orphan(new);
+            } else {
+                new_ids.push(new);
+            }
         }
-        let Some(Entry::Listener(l)) = self.socks.map.get_mut(&id) else { return };
-        l.members = keep;
-        l.accepted.extend(new_ids);
         let mut l = match self.socks.map.remove(&id) {
             Some(Entry::Listener(l)) => l,
             _ => return,
         };
-        // Replace the sockets that turned into connections.
+        l.members = keep;
+        if !new_ids.is_empty() {
+            l.accepted.extend(new_ids);
+            self.socks.mark_ready(id);
+        }
+        // Replace the sockets that turned into connections, as far as the
+        // backlog allows.
         for iface in ifaces_for(self, l.local.ip()) {
             self.add_listen_members(&mut l, iface);
         }
         self.socks.map.insert(id, Entry::Listener(l));
     }
 
+    fn maintain_udp(&mut self, id: SockId) {
+        let Some(Entry::Udp(u)) = self.socks.map.get(&id) else { return };
+        let rx: usize = u
+            .members
+            .iter()
+            .filter_map(|&(iface, h)| Some(self.iface(iface)?.sockets.get::<udp::Socket>(h).recv_queue()))
+            .sum();
+        let tx = if u.full_at.is_some() { self.udp_send_queue(id) } else { 0 };
+        let Some(Entry::Udp(u)) = self.socks.map.get_mut(&id) else { return };
+        // Datagrams arrived, or room to send freed up after a datagram did
+        // not fit.
+        let mut ready = rx > u.last_rx;
+        u.last_rx = rx;
+        if u.full_at.is_some_and(|at| tx < at) {
+            u.full_at = None;
+            ready = true;
+        }
+        if ready {
+            self.socks.mark_ready(id);
+        }
+    }
+
     fn maintain_ping(&mut self, id: SockId, now: u64) {
         let Some(Entry::Ping(p)) = self.socks.map.get(&id) else { return };
         let ident = p.ident;
         let members = p.members.clone();
-        let mut replies = Vec::new();
-        let mut buf = alloc::vec![0u8; ICMP_BYTES];
+        let mut answers = Vec::new();
         for (iface, h) in members {
             let Some(i) = self.iface_mut(iface) else { continue };
             let s = i.sockets.get_mut::<icmp::Socket>(h);
-            while s.can_recv() {
-                let Ok((n, from)) = s.recv_slice(&mut buf) else { break };
-                let caps = ChecksumCapabilities::default();
-                let parsed = match from {
-                    IpAddress::Ipv4(_) => Icmpv4Packet::new_checked(&buf[..n])
-                        .ok()
-                        .and_then(|p| Icmpv4Repr::parse(&p, &caps).ok())
-                        .and_then(|r| match r {
-                            Icmpv4Repr::EchoReply { ident: id_, seq_no, data } if id_ == ident => {
-                                Some((seq_no, data.len()))
-                            }
-                            _ => None,
-                        }),
-                    IpAddress::Ipv6(_) => Icmpv6Packet::new_checked(&buf[..n]).ok().and_then(|p| {
-                        // The checksum was verified when the packet arrived.
-                        match p.msg_type() {
-                            smoltcp::wire::Icmpv6Message::EchoReply if p.echo_ident() == ident => {
-                                Some((p.echo_seq_no(), p.payload().len()))
-                            }
-                            _ => None,
-                        }
-                    }),
-                };
-                if let Some((seq, size)) = parsed {
-                    replies.push((IpAddr::from(from), seq, size));
+            while let Ok((packet, from)) = s.recv() {
+                if let Some(answer) = ping_answer(packet, from, ident) {
+                    answers.push((IpAddr::from(from), answer));
                 }
             }
         }
         let Some(Entry::Ping(p)) = self.socks.map.get_mut(&id) else { return };
-        for (from, seq, size) in replies {
-            if let Some((sent, _)) = p.pending.remove(&seq) {
-                let rtt = now.saturating_sub(sent).min(u32::MAX as u64) as u32;
-                p.events.push_back(PingEvent::Reply { from, seq, size: size as u16, rtt_us: rtt });
-            }
+        let mut events = Vec::new();
+        for (from, answer) in answers {
+            let seq = match answer {
+                PingAnswer::Reply { seq, .. } | PingAnswer::Error { seq, .. } => seq,
+            };
+            let Some((sent, _)) = p.pending.remove(&seq) else { continue };
+            events.push(match answer {
+                PingAnswer::Reply { size, .. } => {
+                    let rtt = now.saturating_sub(sent).min(u32::MAX as u64) as u32;
+                    PingEvent::Reply { from, seq, size: size as u16, rtt_us: rtt }
+                }
+                PingAnswer::Error { error, .. } => PingEvent::Failed { seq, from: Some(from), error },
+            });
         }
         let expired: Vec<u16> =
             p.pending.iter().filter(|(_, (t, _))| now.saturating_sub(*t) >= PING_TIMEOUT_US).map(|(s, _)| *s).collect();
         for seq in expired {
             p.pending.remove(&seq);
-            p.events.push_back(PingEvent::Failed { seq, error: NetError::TimedOut });
+            events.push(PingEvent::Failed { seq, from: None, error: NetError::TimedOut });
+        }
+        for ev in events {
+            self.ping_event(id, ev);
         }
     }
 
@@ -914,6 +1287,9 @@ impl Stack {
         let mut take = |t: u64| best = Some(best.map_or(t, |b| b.min(t)));
         for e in self.socks.map.values() {
             match e {
+                Entry::Tcp(TcpSock { orphan_since: Some(since), handle: Some(_), progress_us, .. }) => {
+                    take((*since).max(*progress_us) + ORPHAN_TIMEOUT_US)
+                }
                 Entry::Tcp(t) if t.phase == Phase::Connecting => take(t.connect_deadline_us),
                 Entry::Tcp(t) if t.phase == Phase::Open && t.idle_timeout_us > 0 => {
                     take(t.progress_us + t.idle_timeout_us)
@@ -987,45 +1363,35 @@ impl Stack {
         }
     }
 
-    /// Records the owning process of a socket (for listings).
-    pub fn set_owner(&mut self, id: SockId, owner: u64) {
-        match self.socks.map.get_mut(&id) {
-            Some(Entry::Tcp(t)) => t.owner = owner,
-            Some(Entry::Listener(l)) => l.owner = owner,
-            Some(Entry::Udp(u)) => u.owner = owner,
-            Some(Entry::Ping(p)) => p.owner = owner,
-            None => {}
-        }
-    }
-
-    /// Whether a socket id is still in the table.
-    pub fn socket_exists(&self, id: SockId) -> bool {
-        self.socks.map.contains_key(&id)
-    }
-
-    /// Every socket, for `netstat`.
-    pub fn socket_infos(&self) -> Vec<SocketInfo> {
+    /// The sockets of process `owner` (or every socket, with `None`), for
+    /// `netstat`. Connections whose client closed them belong to nobody.
+    pub fn socket_infos(&self, owner: Option<u64>) -> Vec<SocketInfo> {
         let mut out = Vec::new();
+        let mine = |o: u64| owner.is_none_or(|w| w == o);
         for e in self.socks.map.values() {
             match e {
-                Entry::Tcp(t) => {
+                Entry::Tcp(t) if t.orphan_since.is_none() || owner.is_none() => {
+                    if !mine(t.owner) {
+                        continue;
+                    }
                     let (state, rxq, txq) =
                         match t.handle.and_then(|h| self.iface(t.iface).map(|i| i.sockets.get::<tcp::Socket>(h))) {
                             Some(s) => (state_name(s.state()), s.recv_queue(), s.send_queue()),
-                            None => ("CLOSED", 0, 0),
+                            None => ("CLOSED", t.leftover.len(), 0),
                         };
                     out.push(SocketInfo {
                         kind: SocketKind::Tcp,
                         local: t.local,
                         remote: t.remote,
                         state: state.into(),
-                        owner: t.owner,
+                        owner: if t.orphan_since.is_some() { 0 } else { t.owner },
                         interface: self.iface(t.iface).map(|i| i.name.clone()).unwrap_or_default(),
                         rx_queued: rxq as u32,
                         tx_queued: txq as u32,
                     });
                 }
-                Entry::Listener(l) => out.push(SocketInfo {
+                Entry::Tcp(_) => {}
+                Entry::Listener(l) if mine(l.owner) => out.push(SocketInfo {
                     kind: SocketKind::TcpListener,
                     local: Some(l.local),
                     remote: None,
@@ -1035,17 +1401,17 @@ impl Stack {
                     rx_queued: l.accepted.len() as u32,
                     tx_queued: 0,
                 }),
-                Entry::Udp(u) => out.push(SocketInfo {
+                Entry::Udp(u) if mine(u.owner) => out.push(SocketInfo {
                     kind: SocketKind::Udp,
                     local: Some(u.local),
                     remote: None,
                     state: String::new(),
                     owner: u.owner,
                     interface: String::new(),
-                    rx_queued: 0,
+                    rx_queued: u.last_rx as u32,
                     tx_queued: 0,
                 }),
-                Entry::Ping(p) => out.push(SocketInfo {
+                Entry::Ping(p) if mine(p.owner) => out.push(SocketInfo {
                     kind: SocketKind::Ping,
                     local: None,
                     remote: None,
@@ -1055,13 +1421,9 @@ impl Stack {
                     rx_queued: p.events.len() as u32,
                     tx_queued: p.pending.len() as u32,
                 }),
+                _ => {}
             }
         }
         out
     }
-}
-
-/// The unspecified address of a family.
-pub fn unspecified(v6: bool) -> IpAddr {
-    if v6 { IpAddr::V6(Ipv6Addr::UNSPECIFIED) } else { IpAddr::V4(Ipv4Addr::UNSPECIFIED) }
 }

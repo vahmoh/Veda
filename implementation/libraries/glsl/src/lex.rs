@@ -350,11 +350,13 @@ fn is_reserved(w: &str, version: Version) -> bool {
 }
 
 /// Converts preprocessed tokens to the language's tokens, ending with
-/// [`Tk::Eof`].
+/// [`Tk::Eof`]. The type names an extension adds warn when it is in
+/// `warn` (`#extension ... : warn`).
 pub fn tokens(
     pp: &[PpTok],
     version: Version,
     enabled: ExtSet,
+    warn: ExtSet,
     interner: &Interner,
     diags: &mut Diagnostics,
 ) -> Vec<Token> {
@@ -366,7 +368,20 @@ pub fn tokens(
                 let w = interner.get(s);
                 match classify(w, version, enabled) {
                     Word::Kw(k) => Tk::Kw(k),
-                    Word::Type(b) => Tk::Type(b),
+                    Word::Type(b) => {
+                        // GLSL ES 1.00's sampler types from extensions.
+                        let ext = match b {
+                            Basic::Sampler(s) if version == Version::V100 && s.dim == Dim::D3 => {
+                                Some(Ext::OesTexture3D)
+                            }
+                            Basic::Sampler(s) if version == Version::V100 && s.shadow => Some(Ext::ExtShadowSamplers),
+                            _ => None,
+                        };
+                        if let Some(e) = ext.filter(|&e| warn.contains(e)) {
+                            warning!(diags, loc, "'{w}' uses the extension {}", e.name());
+                        }
+                        Tk::Type(b)
+                    }
                     Word::Bool(b) => Tk::Bool(b),
                     Word::Reserved => {
                         error!(diags, loc, "'{w}' is a reserved word");

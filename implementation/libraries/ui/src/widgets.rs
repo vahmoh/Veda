@@ -141,12 +141,15 @@ impl<'a> Ui<'a> {
         resp.clicked
     }
 
-    /// Shows `text` below `anchor` after the pointer rests on it briefly.
+    /// Shows `text` below `anchor` after the pointer rests on it briefly
+    /// (call it while the pointer is over `anchor`: a frame without the
+    /// call ends the rest).
     pub fn tooltip(&mut self, id: Id, anchor: Rect, text: &str) {
         if text.is_empty() {
             return;
         }
         let now = self.now();
+        self.tooltip_asked = true;
         let since = match self.state.tooltip {
             Some((tid, t)) if tid == id => t,
             _ => {
@@ -154,7 +157,7 @@ impl<'a> Ui<'a> {
                 now
             }
         };
-        if now - since < 600_000_000 {
+        if now.saturating_sub(since) < 600_000_000 {
             self.repaint_at(since + 600_000_000);
             return;
         }
@@ -465,8 +468,23 @@ impl<'a> Ui<'a> {
 
     /// Shows a modal dialog of the given size centred in the window. `f`
     /// draws its content inside the card rectangle and returns a value
-    /// that is passed through. Everything outside is dimmed and inert.
+    /// that is passed through. Everything outside is dimmed and inert: it
+    /// sees neither the pointer nor the keyboard while the dialog is up, and
+    /// what it put over itself (a tooltip, a menu) is not drawn.
+    ///
+    /// The dialog has the keyboard from the frame after it first appears
+    /// (keys that came before it went to what was there): its content sees
+    /// the keys and typed text in [`Ui::input`], and only its widgets can
+    /// have the focus. Keys meant for the dialog (Esc, say) are read in `f`.
     pub fn modal<R>(&mut self, w: i32, h: i32, f: impl FnOnce(&mut Ui<'a>, Rect) -> R) -> R {
+        if !self.state.modal {
+            // The window's menus close as a dialog appears over it.
+            self.state.open_menu = None;
+            self.state.context_menu = None;
+            self.state.menu_key = None;
+        }
+        self.overlays.clear();
+        self.new_overlay_rects.clear();
         self.canvas.fill_rect(self.rect(), Color::rgba(0, 0, 0, 120));
         let card = self.rect().centered(w.min(self.width - 24), h.min(self.height - 24));
         self.canvas.draw_shadow(card.translate(0, 8), 12, 24, Color::rgba(0, 0, 0, 140));
@@ -474,17 +492,21 @@ impl<'a> Ui<'a> {
         self.canvas.fill_rounded_rect(card, t.radius_large, t.surface);
         self.canvas.stroke_rounded_rect(card, t.radius_large, 1.0, t.border_strong);
         self.modal_shown = true;
-        let was_blocked = self.blocked;
+        let (was_blocked, was_input, was_in_modal) = (self.blocked, self.input, self.in_modal);
         self.blocked = self.input.pointer.is_some_and(|(x, y)| self.state.overlays.iter().any(|o| o.contains(x, y)));
+        // Keys that came before the dialog appeared went to what was there,
+        // and a menu open in it keeps the keyboard.
+        self.input = if self.state.modal && !self.menu_open() { self.menu_input } else { self.quiet };
         self.in_modal = true;
         let out = f(self, card);
-        self.in_modal = false;
+        self.in_modal = was_in_modal;
+        self.input = was_input;
         self.blocked = was_blocked;
         out
     }
 
     /// A standard message box with buttons; returns the index of the button
-    /// pressed this frame (Esc picks the last button).
+    /// pressed this frame (Enter picks the first button, Esc the last).
     pub fn message_box(&mut self, title: &str, message: &str, buttons: &[&str]) -> Option<usize> {
         self.message_box_with(title, message, buttons, ButtonKind::Primary)
     }
@@ -497,10 +519,6 @@ impl<'a> Ui<'a> {
     }
 
     fn message_box_with(&mut self, title: &str, message: &str, buttons: &[&str], first: ButtonKind) -> Option<usize> {
-        let mut result = None;
-        if self.input.key(keys::ESC) {
-            result = Some(buttons.len().saturating_sub(1));
-        }
         let picked = self.modal(440, 190, |ui, card| {
             let inner = card.inset(24, 20, 24, 20);
             ui.heading(Rect::new(inner.x, inner.y, inner.w, 26), title);
@@ -520,9 +538,16 @@ impl<'a> Ui<'a> {
             if ui.input.key(keys::ENTER) {
                 picked = Some(0);
             }
+            if ui.input.key(keys::ESC) {
+                picked = picked.or(Some(buttons.len().saturating_sub(1)));
+            }
             picked
         });
-        picked.or(result)
+        if picked.is_some() {
+            // The box goes: the next frame is drawn without it.
+            self.repaint();
+        }
+        picked
     }
 
     /// Draws an icon.
@@ -547,5 +572,130 @@ impl<'a> Ui<'a> {
         }
         let now = self.now();
         self.repaint_at(now + 50_000_000);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::String;
+    use vproto::input::keys;
+
+    use super::*;
+    use crate::ui::tests::{context, frame, press};
+    use crate::ui::{ANIMATION_FRAMES, Input, UiState};
+    use crate::{Menu, MenuItem};
+
+    const FIELD: Rect = Rect::new(10, 10, 200, 30);
+
+    /// A focused text field, and a message box over it if `show_box`: what
+    /// each answered.
+    fn field_and_box(ui: &mut Ui, text: &mut String, show_box: bool) -> (crate::TextInputResponse, Option<usize>) {
+        let field = ui.text_input(FIELD, "note", text, "");
+        let answer = show_box.then(|| ui.message_box("Save changes?", "Unsaved.", &["Save", "Don't Save", "Cancel"]));
+        (field, answer.flatten())
+    }
+
+    #[test]
+    fn a_modal_dialog_has_the_keyboard() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        let mut text = String::from("draft");
+        frame(&mut ctx, &mut state, &mut input, |ui| {
+            ui.focus_text_input("note");
+            ui.set_text_input_selection("note", 5, 5);
+            field_and_box(ui, &mut text, false)
+        });
+        let mut step = |input: &mut Input, show_box: bool| {
+            frame(&mut ctx, &mut state, input, |ui| field_and_box(ui, &mut text, show_box))
+        };
+        // Keys that came as the box appeared were the field's.
+        press(&mut input, &[keys::ENTER], "a");
+        let (field, answer) = step(&mut input, true);
+        assert_eq!(answer, None);
+        assert!(field.focused && field.changed && field.submitted);
+        // Now the box has the keyboard: Enter is its, and the field, which
+        // keeps its focus behind the box, sees neither it nor typed text.
+        press(&mut input, &[keys::ENTER], "x");
+        let (field, answer) = step(&mut input, true);
+        assert_eq!(answer, Some(0));
+        assert!(!field.focused && !field.changed && !field.submitted);
+        // Esc picks the last button.
+        press(&mut input, &[keys::ESC], "");
+        assert_eq!(step(&mut input, true).1, Some(2));
+        // Keys that come as the box goes are nobody's: the field gets them
+        // in the frame after.
+        press(&mut input, &[], "b");
+        let (field, _) = step(&mut input, false);
+        assert!(!field.focused && !field.changed);
+        let (field, _) = step(&mut input, false);
+        assert!(field.focused && field.changed);
+        assert!(input.text.is_empty());
+        drop(step);
+        assert_eq!(text, "draftab");
+    }
+
+    #[test]
+    fn animations_of_widgets_that_moved_away_are_dropped() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        input.pointer = Some((5, 5));
+        // A button that moves a pixel every frame (a window being resized)
+        // has a new id every frame.
+        for x in 0..1000 {
+            frame(&mut ctx, &mut state, &mut input, |ui| ui.button(Rect::new(x, 0, 80, 30), "OK"));
+        }
+        // Values unused for that many frames go every that many frames.
+        assert!(state.animations.len() < 2 * ANIMATION_FRAMES as usize, "{}", state.animations.len());
+        // One that stays keeps its value however long it rests.
+        let mut hover = 0.0;
+        for _ in 0..1000 {
+            hover = frame(&mut ctx, &mut state, &mut input, |ui| ui.animate(7, 1.0, 8.0));
+        }
+        assert_eq!(hover, 1.0);
+    }
+
+    #[test]
+    fn a_tooltip_waits_each_time_the_pointer_comes_back() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        let anchor = Rect::new(10, 10, 40, 30);
+        let mut at = |input: &mut Input, now: u64, over: bool| {
+            input.now = now;
+            frame(&mut ctx, &mut state, input, |ui| {
+                if over {
+                    ui.tooltip(1, anchor, "Tip");
+                }
+                ui.overlays.len()
+            })
+        };
+        assert_eq!(at(&mut input, 0, true), 0);
+        assert_eq!(at(&mut input, 700_000_000, true), 1);
+        // The pointer leaves and comes back: the tooltip waits again.
+        assert_eq!(at(&mut input, 800_000_000, false), 0);
+        assert_eq!(at(&mut input, 2_000_000_000, true), 0);
+        assert_eq!(at(&mut input, 2_700_000_000, true), 1);
+    }
+
+    #[test]
+    fn under_a_modal_dialog_the_menu_bar_is_inert() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        let menus = [Menu::new("File", alloc::vec![MenuItem::new("Open")])];
+        let draw = |ui: &mut Ui| {
+            ui.menu_bar(Rect::new(0, 0, 480, 32), &menus);
+            ui.modal(200, 100, |_, _| ())
+        };
+        frame(&mut ctx, &mut state, &mut input, draw);
+        // F10 opens no menu behind the dialog, nor does a click on a title.
+        press(&mut input, &[keys::F10], "");
+        frame(&mut ctx, &mut state, &mut input, draw);
+        assert_eq!(state.open_menu, None);
+        input.pointer = Some((20, 16));
+        (input.pressed[0], input.down[0]) = (true, true);
+        frame(&mut ctx, &mut state, &mut input, draw);
+        assert_eq!(state.open_menu, None);
+        // Focus is the dialog's content's alone.
+        state.focus = Some(42);
+        let (inside, outside) = frame(&mut ctx, &mut state, &mut input, |ui| {
+            let outside = ui.focused(42);
+            (ui.modal(200, 100, |ui, _| ui.focused(42)), outside)
+        });
+        assert!(inside && !outside);
     }
 }

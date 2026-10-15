@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "vfs-core"
+description = "The VFS's file systems apart from the service, testable on the host: the in-memory tree, the home directory's snapshots, and who may reach what"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vabi = { workspace = true }
+vproto = { workspace = true }
+
+[lints]
+workspace = true

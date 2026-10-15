@@ -13,7 +13,7 @@ use crate::gl;
 fn query_slot(target: u32) -> Option<usize> {
     match target {
         gl::ANY_SAMPLES_PASSED | gl::ANY_SAMPLES_PASSED_CONSERVATIVE => Some(0),
-        gl::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN => Some(2),
+        gl::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN => Some(1),
         _ => None,
     }
 }

@@ -10,6 +10,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# What the generators share (a host library of generation/).
+gencommon = { path = "../common" }
 rav1e = { workspace = true }
 md-5 = { workspace = true }
 vaudio = { workspace = true }

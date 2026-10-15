@@ -14,6 +14,9 @@
 //! ends one of its sentences. The recogniser does not always spell the name
 //! the same way: one letter off counts too ("Vida"), except for common
 //! words ("very" does not call an agent named Vera).
+//!
+//! Hearing costs: a [`Budget`] caps the speech recognition that listening
+//! for the name may use each hour.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -145,6 +148,52 @@ fn request_before(w: &[String]) -> String {
     w[..end].join(" ")
 }
 
+/// How much speech recognition listening for the name may use: so much in
+/// each period (ten minutes an hour, say), so that a television or music
+/// playing all day cannot run up the bill. It belongs to the agent rather
+/// than to one stretch of listening, which starts anew at every wake, after
+/// every conversation and on every change of settings: what a period used
+/// counts until the period is over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Budget {
+    allowed_ns: u64,
+    period_ns: u64,
+    /// When the current period began, and how much it has used.
+    start_ns: u64,
+    used_ns: u64,
+    /// Running out was reported in this period.
+    reported: bool,
+}
+
+impl Budget {
+    /// `allowed_ns` of recognition in every `period_ns`, the first period
+    /// beginning at `now`.
+    pub fn new(allowed_ns: u64, period_ns: u64, now: u64) -> Budget {
+        Budget { allowed_ns, period_ns: period_ns.max(1), start_ns: now, used_ns: 0, reported: false }
+    }
+
+    /// Whether recognition may start at `now`.
+    pub fn allows(&mut self, now: u64) -> bool {
+        if now.saturating_sub(self.start_ns) >= self.period_ns {
+            self.start_ns = now;
+            self.used_ns = 0;
+            self.reported = false;
+        }
+        self.used_ns < self.allowed_ns
+    }
+
+    /// Records `ns` of recognition.
+    pub fn spend(&mut self, ns: u64) {
+        self.used_ns = self.used_ns.saturating_add(ns);
+    }
+
+    /// True the first time in a period that it is asked after running out
+    /// (to say so once).
+    pub fn report_exhausted(&mut self) -> bool {
+        !core::mem::replace(&mut self.reported, true)
+    }
+}
+
 /// The transcript after its first `skip` words, keeping its punctuation.
 fn after_words(transcript: &str, skip: usize) -> String {
     let mut seen = 0;
@@ -208,6 +257,24 @@ mod tests {
         assert_eq!(addressed("Very good. Very nice.", "Vera"), None);
         assert_eq!(addressed("Now play it", "Nova"), None);
         assert_eq!(addressed("Veda", ""), None);
+    }
+
+    #[test]
+    fn the_budget_lasts_its_period() {
+        const MIN: u64 = 60_000_000_000;
+        let mut b = Budget::new(10 * MIN, 60 * MIN, 0);
+        assert!(b.allows(0));
+        // Ten stretches of a minute, whoever listened: the period's budget.
+        for i in 0..10 {
+            assert!(b.allows(i * MIN));
+            b.spend(MIN);
+        }
+        assert!(!b.allows(20 * MIN));
+        assert!(b.report_exhausted() && !b.report_exhausted());
+        assert!(!b.allows(59 * MIN));
+        // A new period starts afresh.
+        assert!(b.allows(61 * MIN));
+        assert!(b.report_exhausted());
     }
 
     #[test]

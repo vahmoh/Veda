@@ -8,6 +8,11 @@
 //! so the closure may borrow from the caller's stack. Work inside the
 //! closure is divided by participant index or with an atomic counter.
 //!
+//! A pool can be shared between threads (it is `Sync`): runs take turns,
+//! each holding the pool for its whole length, as the workers have one job
+//! at a time. So a job must not call [`ThreadPool::run`] on its own pool:
+//! that run would wait for the one it is part of to end, forever.
+//!
 //! Threads come from [`crate::thread`] and synchronise with the futex-based
 //! [`crate::sync`] primitives, so a pool only works inside Veda; with one
 //! participant no thread is created and no system call is made (host tests).
@@ -41,6 +46,8 @@ struct State {
 }
 
 struct Shared {
+    /// Held for the whole of a run: one run at a time.
+    running: Mutex<()>,
     state: Mutex<State>,
     /// One condition variable per participant (index 0 unused), so that a
     /// specific worker can be woken.
@@ -62,22 +69,14 @@ impl core::fmt::Debug for ThreadPool {
 
 impl ThreadPool {
     /// A pool with `threads` participants (the caller plus `threads - 1`
-    /// workers). Falls back to fewer workers if threads cannot be created.
-    pub fn new(threads: usize) -> ThreadPool {
-        ThreadPool::with_priority(threads, None)
-    }
-
-    /// Like [`ThreadPool::new`], with the workers' scheduling priority (see
-    /// `vabi::priority`). Workers below the system services' priority let
-    /// the compositor run as soon as it wakes, even while every CPU renders.
-    pub fn with_priority(threads: usize, priority: Option<usize>) -> ThreadPool {
-        ThreadPool::named("worker", threads, priority)
-    }
-
-    /// Like [`ThreadPool::with_priority`], naming the workers `name`.
+    /// workers named `name`, with the scheduling `priority` given, see
+    /// `vabi::priority`: workers below the system services' priority let
+    /// the compositor run as soon as it wakes, even while every CPU
+    /// renders). Falls back to no workers if they cannot all be created.
     pub fn named(name: &'static str, threads: usize, priority: Option<usize>) -> ThreadPool {
         let wanted = threads.max(1);
         let shared = Arc::new(Shared {
+            running: Mutex::new(()),
             state: Mutex::new(State { generation: 0, job: None, remaining: 0, shutdown: false }),
             wake: (0..wanted).map(|_| Condvar::new()).collect(),
             done: Condvar::new(),
@@ -111,16 +110,11 @@ impl ThreadPool {
         ThreadPool { shared, threads: count }
     }
 
-    /// A pool sized to the machine's CPU count (capped at 16), with workers
-    /// just below normal priority.
-    pub fn for_system() -> ThreadPool {
-        ThreadPool::named("worker", cpus().min(16), Some(vabi::priority::NORMAL - 2))
-    }
-
     /// A pool without worker threads (runs everything on the caller).
     pub fn single() -> ThreadPool {
         ThreadPool {
             shared: Arc::new(Shared {
+                running: Mutex::new(()),
                 state: Mutex::new(State { generation: 0, job: None, remaining: 0, shutdown: false }),
                 wake: Vec::new(),
                 done: Condvar::new(),
@@ -135,15 +129,20 @@ impl ThreadPool {
     }
 
     /// Runs `f(i)` for every participant `i` in `0..threads()` in parallel
-    /// and waits for all of them.
+    /// and waits for all of them. Calls from several threads take turns; a
+    /// call from inside `f` on the same pool never returns (see the
+    /// module's documentation).
     pub fn run(&self, f: &(dyn Fn(usize) + Sync)) {
         if self.threads <= 1 {
             f(0);
             return;
         }
+        // The workers' one job is this run's until it is over.
+        let _running = self.shared.running.lock();
         // SAFETY: only the lifetime is erased; this function does not return
         // before every worker has finished calling the job (`remaining`
-        // reaches 0), so the reference stays valid while it is used.
+        // reaches 0), so the reference stays valid while it is used, and no
+        // other run replaces the job meanwhile (`running` is held).
         let job: &'static (dyn Fn(usize) + Sync) = unsafe { core::mem::transmute(f) };
         {
             let mut s = self.shared.state.lock();
@@ -159,20 +158,6 @@ impl ThreadPool {
             s = self.shared.done.wait(s);
         }
         s.job = None;
-    }
-
-    /// Runs `f(i)` for `i` in `0..count`, distributing items dynamically.
-    pub fn for_each(&self, count: usize, f: &(dyn Fn(usize) + Sync)) {
-        let next = core::sync::atomic::AtomicUsize::new(0);
-        self.run(&|_| {
-            loop {
-                let i = next.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                if i >= count {
-                    break;
-                }
-                f(i);
-            }
-        });
     }
 }
 

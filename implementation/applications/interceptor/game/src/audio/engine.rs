@@ -17,8 +17,9 @@
 //! with the load, and a supercharger whines with the revs.
 
 use vaudio::synth::filter::{DcBlock, Mode, OnePole, Svf};
+use vaudio::synth::osc::Osc;
 
-use super::{EngineState, Listener, Noise, Placing, RATE, SineTable, Voiced, pan_gains};
+use super::{ENGINES, EngineState, Listener, Panning, Placing, RATE, SineTable, Sounds, Voiced, noise};
 use num_traits::Float;
 
 /// How an engine's cylinders are laid out (what it sounds like).
@@ -200,7 +201,7 @@ impl Pipe {
 
 /// A voice playing one engine.
 pub struct Voice {
-    key: Option<u32>,
+    key: Option<u64>,
     fresh: bool,
     layout: Layout,
     c: Character,
@@ -219,7 +220,7 @@ pub struct Voice {
     load: f32,
     place: Placing,
     fade: f32,
-    noise: Noise,
+    noise: Osc,
     pipes: [Pipe; 2],
     silencer: Svf,
     body: Svf,
@@ -255,7 +256,7 @@ impl Voice {
             load: 0.0,
             place: Placing::default(),
             fade: 0.0,
-            noise: Noise::new(seed),
+            noise: noise(seed),
             pipes: [Pipe::new(), Pipe::new()],
             silencer: Svf::new(Mode::LowPass),
             body: Svf::new(Mode::BandPass),
@@ -287,7 +288,7 @@ impl Voice {
         &mut self,
         sines: &SineTable,
         ears: &Listener,
-        engines: &[EngineState],
+        engines: &Sounds<EngineState, ENGINES>,
         l: &mut [f32],
         r: &mut [f32],
     ) {
@@ -310,7 +311,7 @@ impl Voice {
         }
         // Lifting off from high revs: the exhaust pops for a moment.
         if self.last_load > 0.6 && load1 < 0.1 && rpm1 > 3800.0 {
-            self.crackle = 0.6 + self.noise.sample().abs() * 0.5;
+            self.crackle = 0.6 + self.noise.noise().abs() * 0.5;
         }
         self.last_load = load1;
         let c = &self.c;
@@ -339,6 +340,7 @@ impl Voice {
         let (rpm0, place0) = (self.rpm, self.place);
         let gain_of = |p: &Placing| p.gain * c.gain * 0.5;
         let (g0, g1) = (gain_of(&place0), gain_of(&place1));
+        let pan = Panning::new(place0.pan, place1.pan);
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
             let rpm = rpm0 + (rpm1 - rpm0) * t;
@@ -354,7 +356,7 @@ impl Voice {
             if slot != self.slot {
                 // A firing (or none, while the fuel is cut).
                 self.slot = slot;
-                let mut amp = strength * (1.0 + self.noise.sample() * jitter);
+                let mut amp = strength * (1.0 + self.noise.noise() * jitter);
                 if limiter && self.cut > 0.5 {
                     amp *= 0.06;
                 }
@@ -369,7 +371,7 @@ impl Voice {
             let mut shape = 0.0;
             if self.pulse_step != 0 {
                 shape = sines.at(self.pulse);
-                gas = shape * self.pulse_amp * (1.0 + self.noise.sample() * rasp);
+                gas = shape * self.pulse_amp * (1.0 + self.noise.noise() * rasp);
                 let (next, over) = self.pulse.overflowing_add(self.pulse_step);
                 if over || next >= 0x8000_0000 {
                     self.pulse_step = 0;
@@ -382,12 +384,12 @@ impl Voice {
                 self.crackle -= 1.0 / rate;
                 self.pop -= 1.0 / rate;
                 if self.pop <= 0.0 {
-                    self.pop = 0.04 + self.noise.sample().abs() * 0.11;
-                    self.pop_left = 0.006 + self.noise.sample().abs() * 0.008;
+                    self.pop = 0.04 + self.noise.noise().abs() * 0.11;
+                    self.pop_left = 0.006 + self.noise.noise().abs() * 0.008;
                 }
                 if self.pop_left > 0.0 {
                     self.pop_left -= 1.0 / rate;
-                    gas += self.noise.sample() * 1.4;
+                    gas += self.noise.noise() * 1.4;
                 }
             }
             let (a, b) = if self.pulse_bank == 0 { (gas, 0.0) } else { (0.0, gas) };
@@ -395,9 +397,9 @@ impl Voice {
             let muffled = self.silencer.process(exhaust);
             let mut v = muffled + self.body.process(muffled) * 1.5;
             // The intake's roar and the diesel's clatter follow the firings.
-            v += self.intake.process(self.noise.sample()) * intake * (0.5 + shape);
+            v += self.intake.process(self.noise.noise()) * intake * (0.5 + shape);
             if clatter > 0.0 {
-                v += self.clatter.process(self.noise.sample()) * clatter * shape * shape;
+                v += self.clatter.process(self.noise.noise()) * clatter * shape * shape;
             }
             if whine > 0.0 {
                 let w = self.whine.wrapping_add(super::increment(heard / 60.0 * c.whine.0));
@@ -405,8 +407,7 @@ impl Voice {
                 v += sines.at(w) * whine;
             }
             let v = self.air.process(self.dc.process(v)) * (g0 + (g1 - g0) * t) * self.fade;
-            let pan = place0.pan + (place1.pan - place0.pan) * t;
-            let (gl, gr) = pan_gains(pan);
+            let (gl, gr) = pan.at(t);
             l[i] += v * gl;
             r[i] += v * gr;
         }
@@ -420,11 +421,11 @@ impl Voice {
 }
 
 impl Voiced for Voice {
-    fn key(&self) -> Option<u32> {
+    fn key(&self) -> Option<u64> {
         self.key
     }
 
-    fn start(&mut self, key: u32) {
+    fn start(&mut self, key: u64) {
         self.key = Some(key);
         self.fresh = true;
         self.fade = 0.0;
@@ -455,11 +456,12 @@ mod tests {
         };
         let mut v = Voice::new(3);
         v.start(1);
+        let engines = [e].into_iter().collect();
         let (mut l, mut r) = (vec![0.0; 1024], vec![0.0; 1024]);
         for _ in 0..30 {
             l.fill(0.0);
             r.fill(0.0);
-            v.render(&sines, &ears, &[e], &mut l, &mut r);
+            v.render(&sines, &ears, &engines, &mut l, &mut r);
         }
         assert!(l.iter().chain(&r).all(|x| x.is_finite()));
         rms(&l)

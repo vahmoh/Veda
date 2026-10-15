@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Signal, kill_process};
 
 /// How long kms is paused: longer than the compositor waits for a flip
 /// (a second).
@@ -21,15 +21,6 @@ const PAUSE: Duration = Duration::from_secs(4);
 const SETTLE: Duration = Duration::from_secs(5);
 /// How long to wait for kms to set a mode.
 const WAIT: Duration = Duration::from_secs(120);
-
-/// The process id of `kms`, if it runs.
-fn kms() -> Option<Pid> {
-    std::fs::read_dir("/proc").ok()?.flatten().find_map(|e| {
-        let pid = Pid::from_raw(e.file_name().to_str()?.parse().ok()?)?;
-        let name = std::fs::read_to_string(e.path().join("comm")).ok()?;
-        (name.trim() == "kms").then_some(pid)
-    })
-}
 
 /// Whether a display is on: a connector with a CRTC (kms set its mode).
 fn display_on() -> bool {
@@ -50,7 +41,7 @@ fn main() {
         std::thread::sleep(Duration::from_millis(200));
     }
     std::thread::sleep(SETTLE);
-    let Some(pid) = kms() else {
+    let Some(&pid) = guest_sys::process::named("kms").first() else {
         println!("kmspause: kms does not run");
         return;
     };

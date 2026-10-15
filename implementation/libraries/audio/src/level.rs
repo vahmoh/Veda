@@ -3,14 +3,15 @@
 
 //! Signal levels for meters and animations.
 //!
-//! [`rms_dbfs`] and [`peak_dbfs`] measure a block of 16-bit samples
-//! (relative to full scale: a full-scale square wave is 0 dBFS RMS).
-//! [`LevelMeter`] smooths the RMS level with meter ballistics and holds the
-//! peak for a moment, which suits a circle that pulses with a voice: the
-//! level rises like an RMS detector (smoothing the mean square, so a syllable
-//! shows within a block or two) and falls evenly on a decibel scale, so the
-//! circle shrinks between syllables instead of lingering. The sums are
-//! integer arithmetic; a few transcendental functions per block.
+//! [`rms_dbfs`] measures a block of 16-bit samples (relative to full
+//! scale: a full-scale square wave is 0 dBFS RMS), and [`normalize`] maps a
+//! level to 0..=1 for an animation. [`LevelMeter`] smooths the RMS level
+//! with meter ballistics and holds the peak for a moment, which suits a
+//! circle that pulses with a voice: the level rises like an RMS detector
+//! (smoothing the mean square, so a syllable shows within a block or two)
+//! and falls evenly on a decibel scale, so the circle shrinks between
+//! syllables instead of lingering. The sums are integer arithmetic; a few
+//! transcendental functions per block.
 
 use num_traits::Float;
 
@@ -58,9 +59,20 @@ pub fn rms_dbfs(samples: &[i16]) -> f32 {
 
 /// The peak level of `samples` in dBFS ([`SILENCE_DB`] for silence or an
 /// empty block).
-pub fn peak_dbfs(samples: &[i16]) -> f32 {
+#[cfg(test)]
+fn peak_dbfs(samples: &[i16]) -> f32 {
     let p = measure(samples).1 as f32 / 32768.0;
     power_db(p * p)
+}
+
+/// A level in dBFS mapped linearly to 0..=1: `floor_db` and below to 0,
+/// `ceiling_db` and above to 1 (for animations).
+pub fn normalize(db: f32, floor_db: f32, ceiling_db: f32) -> f32 {
+    let span = ceiling_db - floor_db;
+    if span.is_nan() || span <= 0.0 || db.is_nan() {
+        return 0.0;
+    }
+    ((db - floor_db) / span).clamp(0.0, 1.0)
 }
 
 /// A level meter with attack, release and peak hold (see the module
@@ -86,6 +98,7 @@ pub struct LevelMeter {
     release_s: f32,
     hold_s: f32,
     floor_db: f32,
+    ceiling_db: f32,
 }
 
 impl LevelMeter {
@@ -101,6 +114,7 @@ impl LevelMeter {
             release_s: 0.3,
             hold_s: 1.0,
             floor_db: -60.0,
+            ceiling_db: 0.0,
         }
     }
 
@@ -111,11 +125,12 @@ impl LevelMeter {
         self.release_s = limit(release_s, 0.0, 10.0);
     }
 
-    /// Sets the level that [`normalized`](LevelMeter::normalized) maps to 0
-    /// (default -60 dBFS; 0 dBFS maps to 1). In silence the level settles
-    /// 20 dB below it.
-    pub fn set_floor_db(&mut self, floor_db: f32) {
+    /// Sets the levels that [`normalized`](LevelMeter::normalized) maps to
+    /// 0 and to 1 (default -60 and 0 dBFS). In silence the level settles
+    /// 20 dB below the floor.
+    pub fn set_range(&mut self, floor_db: f32, ceiling_db: f32) {
         self.floor_db = limit(floor_db, SILENCE_DB, -1.0);
+        self.ceiling_db = limit(ceiling_db, self.floor_db + 1.0, 0.0);
     }
 
     /// Back to silence.
@@ -169,10 +184,10 @@ impl LevelMeter {
         self.peak_db
     }
 
-    /// The smoothed level mapped linearly in dB to 0..=1 (the floor to
-    /// 0 dBFS), for animations.
+    /// The smoothed level mapped linearly in dB to 0..=1 (the floor to the
+    /// ceiling: see [`LevelMeter::set_range`]), for animations.
     pub fn normalized(&self) -> f32 {
-        ((self.level_db() - self.floor_db) / -self.floor_db).clamp(0.0, 1.0)
+        normalize(self.level_db(), self.floor_db, self.ceiling_db)
     }
 }
 
@@ -229,8 +244,23 @@ mod tests {
         assert_eq!(m.level_db(), SILENCE_DB);
         // Odd settings are tamed: an instant attack here.
         m.set_ballistics(f32::NAN, f32::INFINITY);
-        m.set_floor_db(f32::NAN);
+        m.set_range(f32::NAN, f32::NAN);
         m.process(&loud);
         assert!((m.level_db() + 9.0).abs() < 1.0 && m.normalized().is_finite(), "{}", m.level_db());
+    }
+
+    #[test]
+    fn maps_a_range_to_animations() {
+        assert_eq!(normalize(-50.0, -50.0, -6.0), 0.0);
+        assert_eq!(normalize(-6.0, -50.0, -6.0), 1.0);
+        assert!((normalize(-28.0, -50.0, -6.0) - 0.5).abs() < 1e-6);
+        assert_eq!(normalize(SILENCE_DB, -50.0, -6.0), 0.0);
+        assert_eq!(normalize(f32::NAN, -50.0, -6.0), 0.0);
+        assert_eq!(normalize(-10.0, -6.0, -50.0), 0.0);
+        let mut m = LevelMeter::new(16_000);
+        m.set_range(-50.0, -6.0);
+        m.process(&sine(0.5, 1600));
+        // -9 dBFS of a -50..-6 range.
+        assert!((m.normalized() - 41.0 / 44.0).abs() < 0.03, "{}", m.normalized());
     }
 }

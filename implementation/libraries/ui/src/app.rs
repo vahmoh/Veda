@@ -5,15 +5,22 @@
 //! [`run`] is the event loop for the common one-window [`App`], which also
 //! serves the voice agent for apps that offer it something (see
 //! [`crate::agent`]).
+//!
+//! A frame is drawn whole, and only what it changed of the frame on screen
+//! is presented: a caret's blink, a fading hover or a clock's tick makes the
+//! compositor redraw that, not the window.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use vabi::{RawHandle, WaitItem, signals};
-use vgfx::Text;
+use vgfx::DrawCache;
 use vproto::display::{Cursor, WindowEvent, WindowSpec};
 
+pub use crate::fonts::load_fonts;
+
 use crate::agent::{AgentServer, AppAgentInfo, Registration};
+use crate::fonts::SharedText;
 use crate::theme::Theme;
 use crate::ui::{Context, Input, Ui, UiState};
 use crate::window::{Display, Window, WindowError, connect};
@@ -94,48 +101,6 @@ impl<A: App> AgentServer for AppAgent<'_, A> {
     }
 }
 
-/// Font files, loaded once per process and shared by every window.
-static FONT_DATA: vrt::sync::Mutex<Option<Vec<Option<&'static [u8]>>>> = vrt::sync::Mutex::new(None);
-
-const FONT_FILES: [&str; 5] = [
-    "/system/fonts/Inter-Regular.otf",
-    "/system/fonts/Inter-SemiBold.otf",
-    "/system/fonts/JetBrainsMono-Regular.ttf",
-    "/system/fonts/JetBrainsMono-Bold.ttf",
-    "/system/fonts/Lato-Regular.ttf",
-];
-
-/// Loads the standard fonts. Order defines the fallback chain: Inter,
-/// Inter SemiBold, JetBrains Mono (+ Bold), Lato. Returns the text renderer
-/// and the indices of the [`crate::Font`] roles.
-pub fn load_fonts() -> (Text, [usize; 4]) {
-    let mut data = FONT_DATA.lock();
-    if data.is_none() {
-        let mut files = Vec::new();
-        let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
-        for path in FONT_FILES {
-            let bytes = vfs.as_ref().and_then(|vfs| {
-                let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;
-                let mut buf = alloc::vec![0u8; len as usize];
-                vmo.read(0, &mut buf).ok()?;
-                Some(&*buf.leak())
-            });
-            files.push(bytes);
-        }
-        *data = Some(files);
-    }
-    let mut text = Text::new();
-    let mut idx = [0usize; 4];
-    for (i, bytes) in data.as_ref().unwrap().iter().enumerate() {
-        if let Some(f) = bytes.and_then(|b| text.add_font(b))
-            && i < 4
-        {
-            idx[i] = f;
-        }
-    }
-    (text, idx)
-}
-
 /// Drives one window: turns window events into UI input, paces frames to the
 /// compositor and calls a drawing function.
 pub struct Host {
@@ -143,6 +108,8 @@ pub struct Host {
     pub ctx: Context,
     pub state: UiState,
     input: Input,
+    /// What drawing keeps from frame to frame.
+    cache: DrawCache,
     cursor: Cursor,
     dirty: bool,
     repaint_at: Option<u64>,
@@ -155,15 +122,18 @@ pub struct Host {
 }
 
 impl Host {
+    /// A window of `spec`, drawing with the process's text context
+    /// ([`SharedText::process`]).
     pub fn new(display: &Display, spec: WindowSpec) -> Result<Host, WindowError> {
         let window = Window::new(display, spec)?;
-        let (text, fonts) = load_fonts();
+        let (text, fonts) = SharedText::process();
         let ctx = Context { text, fonts, theme: Theme::dark(), display: display.clone(), window_id: window.id };
         Ok(Host {
             window,
             ctx,
             state: UiState::default(),
             input: Input { focused: true, ..Default::default() },
+            cache: DrawCache::new(),
             cursor: Cursor::Arrow,
             dirty: true,
             repaint_at: None,
@@ -205,37 +175,40 @@ impl Host {
         let bg = self.ctx.theme.bg;
         let window_state = self.window.state;
         let frame_timing = self.window.frame_timing();
-        let Ok(mut canvas) = self.window.begin_frame() else { return };
+        // What widgets see while an open menu or a modal dialog has the keyboard.
+        let quiet = self.input.without_keys();
+        let Ok(mut canvas) = self.window.begin_frame_with(&mut self.cache) else { return };
         if self.clear {
             canvas.clear(bg);
         }
-        // While a menu is open it has the keyboard: widgets see no keys.
-        let menu_open = self.state.open_menu.is_some() || self.state.context_menu.is_some();
-        let quiet;
-        let input = if menu_open {
-            quiet = self.input.without_keys();
-            &quiet
-        } else {
-            &self.input
-        };
-        let mut ui = Ui::new(canvas, &mut self.ctx, &mut self.state, input);
-        ui.menu_input = &self.input;
+        let mut ui = Ui::for_frame(canvas, &mut self.ctx, &mut self.state, &self.input, &quiet);
         ui.window_state = window_state;
         ui.frame_timing = frame_timing;
         draw(&mut ui);
         ui.finish();
         let (repaint, close, cursor, skip) = (ui.repaint_at, ui.close_requested, ui.cursor, ui.skip_present);
+        let unclaimed = ui.keys_unclaimed;
         drop(ui);
         if !skip {
-            let _ = self.window.present(&[]);
+            self.present();
         }
         if cursor != self.cursor {
             self.cursor = cursor;
             self.window.set_cursor(cursor);
         }
-        self.input.begin_frame();
+        self.input.end_frame(unclaimed);
         self.repaint_at = repaint;
         self.close_requested |= close;
+    }
+
+    /// Presents the frame just drawn: what it changed of the frame on screen,
+    /// or nothing if it changed nothing.
+    fn present(&mut self) {
+        let _ = match self.window.changes() {
+            None => self.window.present(&[]),
+            Some(damage) if damage.is_empty() => Ok(()),
+            Some(damage) => self.window.present(damage.rects()),
+        };
     }
 
     /// Processes pending window events and draws if needed. Events the UI

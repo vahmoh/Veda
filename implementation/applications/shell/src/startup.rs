@@ -34,6 +34,9 @@ const LOOK_NS: u64 = 100_000_000;
 const READY_NS: u64 = 60_000_000_000;
 /// The longest sound a ring holds (frames).
 const MAX_FRAMES: usize = 262_144;
+/// The largest sound file read (bytes): sixteen times what the longest
+/// sound a ring holds takes as 16-bit stereo.
+const MAX_BYTES: u64 = 16 << 20;
 
 enum State {
     /// Waiting for a sound card; the next look at `next`.
@@ -148,7 +151,8 @@ impl StartupSound {
 /// Opens a stream that holds the whole sound, paused, and writes it: the
 /// stream, and how long the sound is (ms).
 fn ready(audio: &audio::Client, vfs: Option<&vfs::Client>) -> Result<(OutputStream, u64), &'static str> {
-    let bytes = vfs.and_then(|v| crate::read_file(v, PATH)).ok_or("cannot read /system/sounds/startup.wav")?;
+    let bytes =
+        vfs.and_then(|v| crate::read_file(v, PATH, MAX_BYTES)).ok_or("cannot read /system/sounds/startup.wav")?;
     let info = WavInfo::parse(&bytes).map_err(|_| "/system/sounds/startup.wav is not a WAV file")?;
     let frames = (info.frames as usize).min(MAX_FRAMES);
     let mut pcm = vec![0i16; frames * 2];

@@ -5,16 +5,14 @@
 
 use alloc::vec::Vec;
 
-use super::{Context, FEEDBACK_BINDINGS, IndexedBinding, Key, UNIFORM_BUFFER_BINDINGS};
+use super::{
+    Context, FEEDBACK_BINDINGS, IndexedBinding, Key, UNIFORM_BUFFER_BINDINGS, UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+};
 use crate::backend::{Region, ResourceDesc, Target};
 use crate::context::objects::{Buffer, Mapping};
 use crate::format::Format;
 use crate::gl;
 use crate::pixels::try_zeroed;
-
-/// `UNIFORM_BUFFER_OFFSET_ALIGNMENT`: what Direct3D 11 needs, so that the
-/// virgl renderer can pass ranges through.
-pub const UNIFORM_BUFFER_OFFSET_ALIGNMENT: usize = 256;
 
 /// The largest buffer (`MAX_ELEMENT_INDEX`-like sanity limit): 2 GiB.
 pub const MAX_BUFFER_SIZE: usize = 1 << 31;

@@ -14,9 +14,23 @@
 //!   with [`lower`] and [`ops`], the single definition of what each
 //!   operation computes.
 //!
-//! [`compile`] runs these stages for one shader, as `glCompileShader` does.
-//! Every stage reports problems as [`diag::Diagnostics`], formatted as
-//! OpenGL information logs; no input, however malformed, makes it panic.
+//! [`compile`] runs these stages for one shader, as `glCompileShader` does,
+//! and [`program::link`] links two into a program for the back ends
+//! ([`interp`] and [`tgsi`]), as `glLinkProgram` does. Every stage reports
+//! problems as [`diag::Diagnostics`], formatted as OpenGL information logs.
+//!
+//! Source is hostile input: applications supply it, and on the GPU path
+//! what it compiles to goes on to the driver VM's renderer. No input,
+//! however malformed or large, makes the compiler panic, overflow its stack
+//! (it runs within the 256 KiB a thread starts with) or work without bound.
+//! The preprocessor bounds macro expansion and `#if` nesting; the parser
+//! bounds nesting ([`parse::MAX_NESTING`]), each link of a chain such as
+//! `a + b + c` counting; the semantic checks bound types' sizes and
+//! constant folding; linking bounds the code a program comes to with every
+//! call inlined ([`ir::build`]) and once optimised ([`program::MAX_VALUES`]);
+//! and the interpreter bounds the loop iterations a draw may run
+//! ([`interp::MAX_LOOP_WORK`]). Within those bounds, each step takes time
+//! and memory near linear in its input.
 
 #![no_std]
 
@@ -96,14 +110,15 @@ pub fn compile(stage: Stage, sources: &[&str], options: &Options) -> Compiled {
     let mut interner = intern::Interner::new();
     let mut diags = diag::Diagnostics::new();
     let pre = pp::preprocess(sources, options.extensions, &mut interner, &mut diags);
-    let tokens = lex::tokens(&pre.tokens, pre.version, pre.enabled, &interner, &mut diags);
+    let tokens = lex::tokens(&pre.tokens, pre.version, pre.enabled, pre.warn, &interner, &mut diags);
     let unit = parse::parse(&tokens, &interner, &mut diags);
     // Checking a tree with syntax errors would mostly report their echoes.
     if diags.has_errors() {
         return Compiled { shader: None, log: diags.log() };
     }
+    let extensions = sema::Extensions { enabled: pre.enabled, warn: pre.warn };
     let shader =
-        sema::check(&unit, stage, pre.version, pre.enabled, pre.invariant_all, &options.limits, interner, &mut diags);
+        sema::check(&unit, stage, pre.version, extensions, pre.invariant_all, &options.limits, interner, &mut diags);
     let ok = !diags.has_errors();
     Compiled { shader: ok.then_some(shader), log: diags.log() }
 }

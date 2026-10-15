@@ -11,9 +11,15 @@ use crate::mm::paging::Cache;
 use crate::mm::user;
 use crate::mm::vmo::Vmo;
 use crate::object::KObject;
+use crate::sync::bkl;
 
 const VMO_RIGHTS: Rights =
     Rights(Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::EXECUTE.0 | Rights::GET_INFO.0);
+
+/// Bytes a long operation (committing, reading or writing a VMO) handles
+/// between two moments it lets the other CPUs into the kernel
+/// ([`bkl::relax`]).
+const STEP: usize = 256 * 1024;
 
 pub fn vmo_create(size: usize, flags: usize) -> SysResult {
     if flags & !(vmo_flags::COMMIT | vmo_flags::WRITE_COMBINING) != 0 {
@@ -22,8 +28,13 @@ pub fn vmo_create(size: usize, flags: usize) -> SysResult {
     let cache = if flags & vmo_flags::WRITE_COMBINING != 0 { Cache::WriteCombining } else { Cache::WriteBack };
     let vmo = Vmo::new_anonymous(size as u64, cache).ok_or(Error::InvalidArgs)?;
     if flags & vmo_flags::COMMIT != 0 {
+        // No other CPU can reach the new VMO: the lock may be let go between
+        // steps.
         for off in (0..vmo.size()).step_by(4096) {
             vmo.page(off, true).ok_or(Error::NoMemory)?;
+            if (off + 4096).is_multiple_of(STEP as u64) {
+                bkl::relax();
+            }
         }
     }
     ok(insert(KObject::Vmo(vmo), VMO_RIGHTS)? as usize)
@@ -31,30 +42,38 @@ pub fn vmo_create(size: usize, flags: usize) -> SysResult {
 
 pub fn vmo_read(raw: RawHandle, offset: usize, buf: usize, len: usize) -> SysResult {
     let vmo = get_vmo(raw, Rights::READ)?;
-    let mut tmp = user::buffer(len.min(256 * 1024))?;
+    let mut tmp = user::buffer(len.min(STEP))?;
     let mut done = 0;
     while done < len {
         let n = (len - done).min(tmp.len());
-        if !vmo.read((offset + done) as u64, &mut tmp[..n]) {
+        if !vmo.read(offset.checked_add(done).ok_or(Error::OutOfRange)? as u64, &mut tmp[..n]) {
             return Err(Error::OutOfRange);
         }
         user::copy_to_user((buf + done) as u64, &tmp[..n])?;
         done += n;
+        // The VMO stays referenced, and each step's user memory is
+        // checked as it is copied.
+        if done < len {
+            bkl::relax();
+        }
     }
     ok(len)
 }
 
 pub fn vmo_write(raw: RawHandle, offset: usize, buf: usize, len: usize) -> SysResult {
     let vmo = get_vmo(raw, Rights::WRITE)?;
-    let mut tmp = user::buffer(len.min(256 * 1024))?;
+    let mut tmp = user::buffer(len.min(STEP))?;
     let mut done = 0;
     while done < len {
         let n = (len - done).min(tmp.len());
         user::copy_from_user(&mut tmp[..n], (buf + done) as u64)?;
-        if !vmo.write((offset + done) as u64, &tmp[..n]) {
+        if !vmo.write(offset.checked_add(done).ok_or(Error::OutOfRange)? as u64, &tmp[..n]) {
             return Err(Error::OutOfRange);
         }
         done += n;
+        if done < len {
+            bkl::relax();
+        }
     }
     ok(len)
 }
@@ -68,9 +87,14 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
     if size == 0 || !r.permits(resource_kind::MMIO, paddr as u64, size as u64) {
         return Err(Error::AccessDenied);
     }
-    // Devices' and the firmware's memory, never the kernel's RAM.
+    // Devices' and the firmware's memory, never the kernel's RAM, nor the
+    // registers the kernel keeps for itself.
     if crate::mm::phys::overlaps_ram(paddr as u64, size as u64) {
         crate::kwarn!("vmo: refused a physical VMO over RAM ({:#x}, {} bytes)", paddr, size);
+        return Err(Error::AccessDenied);
+    }
+    if crate::mm::kvirt::is_kernels(paddr as u64, size as u64) {
+        crate::kwarn!("vmo: refused a physical VMO over the kernel's registers ({:#x}, {} bytes)", paddr, size);
         return Err(Error::AccessDenied);
     }
     let cache = match cache {
@@ -136,6 +160,9 @@ pub fn vmo_pages(res: RawHandle, raw: RawHandle, offset: usize, count: usize, ou
         let bytes: alloc::vec::Vec<u8> = chunk.iter().flat_map(|a| a.to_le_bytes()).collect();
         user::copy_to_user((out + done * 8) as u64, &bytes)?;
         done += chunk.len();
+        if done < count {
+            bkl::relax();
+        }
     }
     ok(count)
 }

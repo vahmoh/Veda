@@ -22,8 +22,8 @@ use core::ptr;
 use vabi::RawHandle;
 use vproto::media::pool::slot_flags;
 use vproto::media::{
-    self, AudioSpec, DecoderInfo, FramePool, MediaError, MediaInfo, OpenOptions, PcmRing, PictureChecksum, SeekMode,
-    SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, open_flags, pcm, video_flags,
+    self, AudioSpec, DecoderInfo, FramePool, Heartbeat, MediaError, MediaInfo, OpenOptions, PcmRing, PictureChecksum,
+    SeekMode, SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, open_flags, pcm, video_flags,
 };
 use vrt::object::{Channel, Event, Vmo};
 use vrt::println;
@@ -276,6 +276,8 @@ pub struct Session {
     counters: Counters,
     /// Decoding threads (0: the decoders' choice).
     threads: u32,
+    /// Where it counts its rounds, once the player gave it.
+    heartbeat: Option<Heartbeat>,
 }
 
 impl Session {
@@ -299,58 +301,11 @@ impl Session {
             first_sound: true,
             counters: Counters::default(),
             threads: 0,
-        }
-    }
-
-    /// The events the loop waits on besides the control channel.
-    pub fn wakes(&self) -> Vec<RawHandle> {
-        let mut v = Vec::new();
-        if let Some(o) = &self.video_out {
-            v.push(o.wake.raw());
-        }
-        if let Some(o) = &self.audio_out
-            && self.video_out.as_ref().is_none_or(|v| v.wake.raw() != o.wake.raw())
-        {
-            v.push(o.wake.raw());
-        }
-        v
-    }
-
-    /// Clears the wake events (after waiting on them).
-    pub fn clear_wakes(&self) {
-        if let Some(o) = &self.video_out {
-            let _ = o.wake.clear();
-        }
-        if let Some(o) = &self.audio_out {
-            let _ = o.wake.clear();
-        }
-    }
-
-    /// Once round the loop.
-    pub fn beat(&self) {
-        if let Some(o) = &self.video_out {
-            o.pool.beat();
+            heartbeat: None,
         }
     }
 
     // ---- the work ------------------------------------------------------------
-
-    /// Does one piece of work; false if there is nothing to do until the
-    /// player frees room or asks something.
-    pub fn work(&mut self) -> bool {
-        if self.opened.is_none() {
-            return false;
-        }
-        self.end_hidden()
-            || (self.sound_low() && (self.place_sound() || self.receive_sound() || self.feed(false) || self.read()))
-            || self.place_picture()
-            || self.place_sound()
-            || self.receive_picture()
-            || self.receive_sound()
-            || self.feed(true)
-            || self.feed(false)
-            || self.read()
-    }
 
     /// The player is about to run out of sound.
     fn sound_low(&self) -> bool {
@@ -849,6 +804,56 @@ impl Session {
     }
 }
 
+impl media::Work for Session {
+    /// Once round the loop.
+    fn beat(&self) {
+        if let Some(h) = &self.heartbeat {
+            h.beat();
+        }
+    }
+
+    /// Does one piece of work; false if there is nothing to do until the
+    /// player frees room or asks something.
+    fn work(&mut self) -> bool {
+        if self.opened.is_none() {
+            return false;
+        }
+        self.end_hidden()
+            || (self.sound_low() && (self.place_sound() || self.receive_sound() || self.feed(false) || self.read()))
+            || self.place_picture()
+            || self.place_sound()
+            || self.receive_picture()
+            || self.receive_sound()
+            || self.feed(true)
+            || self.feed(false)
+            || self.read()
+    }
+
+    /// The events the loop waits on besides the control channel.
+    fn wakes(&self) -> Vec<RawHandle> {
+        let mut v = Vec::new();
+        if let Some(o) = &self.video_out {
+            v.push(o.wake.raw());
+        }
+        if let Some(o) = &self.audio_out
+            && self.video_out.as_ref().is_none_or(|v| v.wake.raw() != o.wake.raw())
+        {
+            v.push(o.wake.raw());
+        }
+        v
+    }
+
+    /// Clears the wake events (after waiting on them).
+    fn clear_wakes(&self) {
+        if let Some(o) = &self.video_out {
+            let _ = o.wake.clear();
+        }
+        if let Some(o) = &self.audio_out {
+            let _ = o.wake.clear();
+        }
+    }
+}
+
 /// Converts `frame` into `slot` of the pool, turned upright by `o`.
 fn convert(out: &mut VideoOut, slot: u32, frame: &Frame, o: Orientation) -> i32 {
     let (w, h, stride) = (out.pool.width(), out.pool.height(), out.pool.stride());
@@ -1183,6 +1188,11 @@ impl media::media::Server for Session {
 
     fn close(&mut self) {
         self.close_source();
+    }
+
+    fn set_heartbeat(&mut self, heartbeat: Vmo) -> Result<(), MediaError> {
+        self.heartbeat = Some(Heartbeat::map(heartbeat).map_err(|_| MediaError::Invalid)?);
+        Ok(())
     }
 }
 

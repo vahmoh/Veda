@@ -67,41 +67,71 @@ fn identity(f: &Func) -> Vec<Value> {
     (0..f.values.len() as u32).map(Value).collect()
 }
 
-/// A constant of the function, created in the entry block if needed.
-fn constant(f: &mut Func, v: ops::Value) -> Value {
-    let entry = super::first_block(&f.body).unwrap_or(Block(0));
-    // Reuse an existing one.
-    for &i in &f.blocks[entry.0 as usize].insts {
-        let inst = &f.insts[i.0 as usize];
-        if let InstOp::Const(c) = inst.op
-            && c.same(v)
-        {
-            return inst.results[0];
+/// The function's constants, by type and bits, all in its entry block;
+/// new ones are made there by [`Constants::get`].
+struct Constants {
+    entry: Block,
+    known: BTreeMap<(ops::Ty, u32), Value>,
+    /// Constants made since the last [`Constants::place`].
+    made: Vec<super::InstId>,
+}
+
+impl Constants {
+    fn of(f: &Func) -> Constants {
+        let entry = super::first_block(&f.body).unwrap_or(Block(0));
+        let mut known = BTreeMap::new();
+        for &i in &f.blocks[entry.0 as usize].insts {
+            let inst = &f.insts[i.0 as usize];
+            if let InstOp::Const(c) = inst.op {
+                known.entry((c.ty(), c.bits())).or_insert(inst.results[0]);
+            }
+        }
+        Constants { entry, known, made: Vec::new() }
+    }
+
+    /// The constant `v`, made if there is none yet.
+    fn get(&mut self, f: &mut Func, v: ops::Value) -> Value {
+        if let Some(&c) = self.known.get(&(v.ty(), v.bits())) {
+            return c;
+        }
+        let id = f.create(InstOp::Const(v), Vec::new(), &[v.ty()]);
+        let c = f.insts[id.0 as usize].results[0];
+        self.known.insert((v.ty(), v.bits()), c);
+        self.made.push(id);
+        c
+    }
+
+    /// Puts the constants made at the start of the entry block (where they
+    /// dominate every use), all at once.
+    fn place(&mut self, f: &mut Func) {
+        if !self.made.is_empty() {
+            let insts = &mut f.blocks[self.entry.0 as usize].insts;
+            insts.splice(0..0, self.made.drain(..));
         }
     }
-    let id = f.create(InstOp::Const(v), Vec::new(), &[v.ty()]);
-    f.blocks[entry.0 as usize].insts.insert(0, id);
-    f.insts[id.0 as usize].results[0]
 }
 
 /// Trivial φs, folding, identities, copies. Returns whether anything
 /// changed.
 pub fn simplify(f: &mut Func) -> bool {
     let mut changed = false;
+    let mut constants = Constants::of(f);
     for _ in 0..64 {
         let mut repl = identity(f);
         let mut any = false;
         let order = f.block_order();
+        let mut args: Vec<Value> = Vec::new();
         for &b in &order {
-            let ids = f.blocks[b.0 as usize].insts.clone();
-            for id in ids {
-                let inst = f.insts[id.0 as usize].clone();
+            for k in 0..f.blocks[b.0 as usize].insts.len() {
+                let id = f.blocks[b.0 as usize].insts[k];
+                let inst = &f.insts[id.0 as usize];
                 let Some(&result) = inst.results.first() else { continue };
                 if repl[result.0 as usize] != result {
                     continue;
                 }
-                let args: Vec<Value> = inst.args.iter().map(|&a| resolve(&repl, a)).collect();
-                let new: Option<Value> = match &inst.op {
+                args.clear();
+                args.extend(inst.args.iter().map(|&a| resolve(&repl, a)));
+                let new: Option<Value> = match inst.op {
                     InstOp::Phi => {
                         // All operands the φ itself or one other value.
                         let mut other = None;
@@ -132,7 +162,7 @@ pub fn simplify(f: &mut Func) -> bool {
                         let ty = f.ty(result);
                         match consts {
                             Some(c) => {
-                                let k = constant(f, ops::eval(*op, &c, ty));
+                                let k = constants.get(f, ops::eval(op, &c, ty));
                                 // The table covers values created since.
                                 while repl.len() < f.values.len() {
                                     let n = repl.len() as u32;
@@ -140,7 +170,7 @@ pub fn simplify(f: &mut Func) -> bool {
                                 }
                                 Some(k)
                             }
-                            None => identity_of(f, *op, &args),
+                            None => identity_of(f, op, &args),
                         }
                     }
                     _ => None,
@@ -153,6 +183,7 @@ pub fn simplify(f: &mut Func) -> bool {
                 }
             }
         }
+        constants.place(f);
         if !any {
             break;
         }
@@ -212,15 +243,57 @@ fn shareable_across_blocks(op: &InstOp) -> bool {
 /// Whether an instruction is a pure computation (no effect, result
 /// determined by its operands).
 fn pure(op: &InstOp) -> bool {
-    !matches!(op, InstOp::StoreOutput { .. } | InstOp::StoreBuiltin(_) | InstOp::Phi | InstOp::Nop)
+    !matches!(op, InstOp::StoreOutput { .. } | InstOp::StoreBuiltin(_) | InstOp::Phi)
 }
 
-/// A key identifying an instruction's computation.
+/// A key identifying an instruction's computation: what it does (its
+/// operation and the operation's parameters, as numbers), its operands and
+/// its results' types.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 struct Key {
-    op: alloc::string::String,
+    op: [u32; 8],
     args: Vec<u32>,
     tys: Vec<u8>,
+}
+
+/// What an instruction does, as numbers (equal for equal operations).
+fn op_key(op: &InstOp) -> [u32; 8] {
+    use super::{BuiltinIn, BuiltinOut};
+    let builtin_in = |b: BuiltinIn| match b {
+        BuiltinIn::VertexId => 0,
+        BuiltinIn::InstanceId => 1,
+        BuiltinIn::FragCoord(c) => 2 + u32::from(c),
+        BuiltinIn::FrontFacing => 6,
+        BuiltinIn::PointCoord(c) => 7 + u32::from(c),
+    };
+    let builtin_out = |b: BuiltinOut| match b {
+        BuiltinOut::Position(c) => u32::from(c),
+        BuiltinOut::PointSize => 4,
+        BuiltinOut::FragDepth => 5,
+    };
+    let sampler = |s: crate::types::Sampler| (s.dim as u32) | u32::from(s.shadow) << 4 | (s.ty as u32) << 5;
+    match *op {
+        InstOp::Const(c) => [0, c.ty() as u32, c.bits(), 0, 0, 0, 0, 0],
+        InstOp::Op(o) => [1, o as u32, 0, 0, 0, 0, 0, 0],
+        InstOp::Select => [2, 0, 0, 0, 0, 0, 0, 0],
+        InstOp::Phi => [3, 0, 0, 0, 0, 0, 0, 0],
+        InstOp::LoadInput { slot, comp } => [4, slot, u32::from(comp), 0, 0, 0, 0, 0],
+        InstOp::LoadBuiltin(b) => [5, builtin_in(b), 0, 0, 0, 0, 0, 0],
+        InstOp::StoreOutput { slot, comp } => [6, slot, u32::from(comp), 0, 0, 0, 0, 0],
+        InstOp::StoreBuiltin(b) => [7, builtin_out(b), 0, 0, 0, 0, 0, 0],
+        InstOp::LoadUniform { slot, comp } => [8, slot, u32::from(comp), 0, 0, 0, 0, 0],
+        InstOp::LoadUniformIndexed { base, comp, stride, count } => [9, base, u32::from(comp), stride, count, 0, 0, 0],
+        InstOp::LoadBlock { block, offset, stride, count } => [10, block, offset, stride, count, 0, 0, 0],
+        InstOp::Tex(t) => {
+            let offset = u32::from_le_bytes([t.offset[0] as u8, t.offset[1] as u8, t.offset[2] as u8, 0]);
+            let flags = u32::from(t.dynamic) | u32::from(t.bias) << 1 | (t.lod as u32) << 2 | u32::from(t.coords) << 8;
+            [11, sampler(t.sampler), t.index, t.count, flags, offset, 0, 0]
+        }
+        InstOp::TexSize { sampler: s, index, dynamic, count } => {
+            [12, sampler(s), index, u32::from(dynamic), count, 0, 0, 0]
+        }
+        InstOp::Deriv { y } => [13, u32::from(y), 0, 0, 0, 0, 0, 0],
+    }
 }
 
 fn key(f: &Func, id: super::InstId) -> Key {
@@ -232,12 +305,7 @@ fn key(f: &Func, id: super::InstId) -> Key {
     {
         args.sort_unstable();
     }
-    let op = match &inst.op {
-        // Constants by type and bits.
-        InstOp::Const(c) => alloc::format!("const {:?} {}", c.ty(), c.bits()),
-        other => alloc::format!("{other:?}"),
-    };
-    Key { op, args, tys: inst.results.iter().map(|&r| f.ty(r) as u8).collect() }
+    Key { op: op_key(&inst.op), args, tys: inst.results.iter().map(|&r| f.ty(r) as u8).collect() }
 }
 
 /// Global value numbering over the structure's dominance.
@@ -390,9 +458,12 @@ fn prune(f: &mut Func) {
 }
 
 fn prune_list(f: &mut Func, list: &mut Vec<Node>) {
-    let mut i = 0;
-    while i < list.len() {
-        match &mut list[i] {
+    // The list is rebuilt as it is walked: removing nodes in place would
+    // move the rest each time.
+    let mut out: Vec<Node> = Vec::with_capacity(list.len());
+    let mut nodes = core::mem::take(list).into_iter();
+    while let Some(mut n) = nodes.next() {
+        match &mut n {
             Node::If(x) => {
                 prune_list(f, &mut x.then);
                 prune_list(f, &mut x.otherwise);
@@ -400,7 +471,9 @@ fn prune_list(f: &mut Func, list: &mut Vec<Node>) {
             Node::Loop(l) => prune_list(f, &mut l.body),
             Node::Block(_) => {}
         }
-        if let Node::If(x) = &list[i] {
+        if let Node::If(x) = &n
+            && let Some(Node::Block(before)) = out.last()
+        {
             let empty = |l: &[Node]| match l {
                 [Node::Block(b)] => {
                     let d = &f.blocks[b.0 as usize];
@@ -408,30 +481,31 @@ fn prune_list(f: &mut Func, list: &mut Vec<Node>) {
                 }
                 _ => false,
             };
-            let merge = match list.get(i + 1) {
-                Some(Node::Block(m)) => Some(*m),
-                _ => None,
-            };
-            let phis = merge.is_some_and(|m| {
-                f.blocks[m.0 as usize].insts.iter().any(|&id| f.insts[id.0 as usize].op == InstOp::Phi)
-            });
-            if empty(&x.then)
-                && empty(&x.otherwise)
-                && !phis
-                && let (Some(Node::Block(before)), Some(m)) = (list.get(i.wrapping_sub(1)), merge)
-            {
-                // Merge `m` into the block before the if.
+            if empty(&x.then) && empty(&x.otherwise) {
+                // The block after the if (lists alternate): merged into the
+                // one before, unless it has φs.
                 let before = *before;
-                let moved = core::mem::take(&mut f.blocks[m.0 as usize].insts);
-                let jump = f.blocks[m.0 as usize].jump.take();
-                f.blocks[before.0 as usize].insts.extend(moved);
-                f.blocks[before.0 as usize].jump = jump;
-                list.drain(i..=i + 1);
+                match nodes.next() {
+                    Some(Node::Block(m))
+                        if !f.blocks[m.0 as usize].insts.iter().any(|&id| f.insts[id.0 as usize].op == InstOp::Phi) =>
+                    {
+                        let moved = core::mem::take(&mut f.blocks[m.0 as usize].insts);
+                        let jump = f.blocks[m.0 as usize].jump.take();
+                        f.blocks[before.0 as usize].insts.extend(moved);
+                        f.blocks[before.0 as usize].jump = jump;
+                    }
+                    Some(next) => {
+                        out.push(n);
+                        out.push(next);
+                    }
+                    None => out.push(n),
+                }
                 continue;
             }
         }
-        i += 1;
+        out.push(n);
     }
+    *list = out;
 }
 
 /// The most instructions a branch may have to be if-converted.
@@ -447,9 +521,11 @@ pub fn if_convert(f: &mut Func) -> bool {
 
 fn if_convert_list(f: &mut Func, list: &mut Vec<Node>) -> bool {
     let mut changed = false;
-    let mut i = 0;
-    while i < list.len() {
-        match &mut list[i] {
+    // The list is rebuilt as it is walked (see `prune_list`).
+    let mut out: Vec<Node> = Vec::with_capacity(list.len());
+    let mut nodes = core::mem::take(list).into_iter();
+    while let Some(mut n) = nodes.next() {
+        match &mut n {
             Node::If(x) => {
                 changed |= if_convert_list(f, &mut x.then);
                 changed |= if_convert_list(f, &mut x.otherwise);
@@ -476,12 +552,16 @@ fn if_convert_list(f: &mut Func, list: &mut Vec<Node>) -> bool {
             });
             ok.then_some(*b)
         };
-        if let Node::If(x) = &list[i]
+        if let Node::If(x) = &n
             && let (Some(t), Some(e)) = (convertible(f, &x.then), convertible(f, &x.otherwise))
-            && let (Some(Node::Block(before)), Some(Node::Block(merge))) =
-                (list.get(i.wrapping_sub(1)), list.get(i + 1))
+            && let Some(Node::Block(before)) = out.last()
         {
-            let (before, merge, cond) = (*before, *merge, x.cond);
+            let (before, cond) = (*before, x.cond);
+            // The block after the if (lists alternate).
+            let Some(Node::Block(merge)) = nodes.next() else {
+                out.push(n);
+                continue;
+            };
             // Hoist both branches, then the merge's φs become selects.
             let mut moved = core::mem::take(&mut f.blocks[t.0 as usize].insts);
             moved.extend(core::mem::take(&mut f.blocks[e.0 as usize].insts));
@@ -489,31 +569,26 @@ fn if_convert_list(f: &mut Func, list: &mut Vec<Node>) -> bool {
             let merge_insts = core::mem::take(&mut f.blocks[merge.0 as usize].insts);
             let mut rest = Vec::new();
             for id in merge_insts {
-                let inst = f.insts[id.0 as usize].clone();
+                let inst = &mut f.insts[id.0 as usize];
                 if inst.op == InstOp::Phi && inst.args.len() == 2 {
                     // Operands in predecessor order: then, else.
-                    let r = inst.results[0];
-                    let ty = f.ty(r);
-                    let _ = ty;
-                    f.insts[id.0 as usize].op = InstOp::Select;
-                    f.insts[id.0 as usize].args = vec![cond, inst.args[0], inst.args[1]];
+                    inst.op = InstOp::Select;
+                    inst.args = vec![cond, inst.args[0], inst.args[1]];
                     f.blocks[before.0 as usize].insts.push(id);
-                } else if inst.op == InstOp::Phi {
-                    // One branch did not reach the merge: impossible here
-                    // (neither jumps), keep it.
-                    rest.push(id);
                 } else {
+                    // Not a φ, or one only one branch reaches (impossible
+                    // here: neither jumps): kept.
                     rest.push(id);
                 }
             }
             let jump = f.blocks[merge.0 as usize].jump.take();
             f.blocks[before.0 as usize].insts.extend(rest);
             f.blocks[before.0 as usize].jump = jump;
-            list.drain(i..=i + 1);
             changed = true;
             continue;
         }
-        i += 1;
+        out.push(n);
     }
+    *list = out;
     changed
 }

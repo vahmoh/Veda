@@ -3,69 +3,21 @@
 
 //! Procedurally generated cover art.
 //!
-//! Every track gets a deterministic cover from a style and a seed. Tracks
-//! made by `musicgen` carry an `art` tag (`style:hue:seed`) chosen to fit
-//! the music; other files get a style derived from a hash of their title.
-//! Covers are drawn with ordinary canvas operations (gradients, circles,
-//! paths), which are cheap even under emulation, on a background thread.
+//! Every track gets a deterministic cover from a style and a seed
+//! (`music_core::cover::CoverSpec`): tracks made by `musicgen` carry an
+//! `art` tag (`style:hue:seed`) chosen to fit the music; other files get a
+//! style derived from a hash of their title. Covers are drawn with ordinary
+//! canvas operations (gradients, circles, paths), which are cheap even
+//! under emulation, on a background thread.
 
 use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
+use music_core::cover::{CoverSpec, Style};
 use num_traits::Float;
 use rand::{RngExt, SeedableRng};
 use rand_pcg::Pcg32;
 use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, StrokeStyle};
-
-/// Cover art styles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Style {
-    Synthwave,
-    Lofi,
-    Aurora,
-    Pixel,
-    Pulse,
-    Waves,
-}
-
-impl Style {
-    fn from_name(s: &str) -> Option<Style> {
-        Some(match s {
-            "synthwave" => Style::Synthwave,
-            "lofi" => Style::Lofi,
-            "aurora" => Style::Aurora,
-            "pixel" => Style::Pixel,
-            "pulse" => Style::Pulse,
-            "waves" => Style::Waves,
-            _ => return None,
-        })
-    }
-}
-
-/// What to draw for a track.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ArtSpec {
-    pub style: Style,
-    /// Base hue in turns (0..1).
-    pub hue: f32,
-    pub seed: u64,
-}
-
-impl ArtSpec {
-    /// From an `art` tag (`style:hue_degrees:seed`) or, failing that, a hash.
-    pub fn new(tag: Option<&str>, hash: u64) -> ArtSpec {
-        if let Some(tag) = tag {
-            let mut it = tag.split(':');
-            if let Some(style) = it.next().and_then(Style::from_name) {
-                let hue = it.next().and_then(|h| h.parse::<f32>().ok()).unwrap_or(0.0) / 360.0;
-                let seed = it.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(hash);
-                return ArtSpec { style, hue, seed };
-            }
-        }
-        let styles = [Style::Synthwave, Style::Lofi, Style::Aurora, Style::Pixel, Style::Pulse, Style::Waves];
-        ArtSpec { style: styles[(hash % 6) as usize], hue: ((hash >> 8) % 360) as f32 / 360.0, seed: hash }
-    }
-}
 
 /// A color from hue (turns; any value wraps around), saturation and value.
 pub fn hsv(h: f32, s: f32, v: f32) -> Color {
@@ -85,8 +37,8 @@ pub fn hsv(h: f32, s: f32, v: f32) -> Color {
 }
 
 /// The two colors that best represent a cover (for backdrops and accents).
-pub fn palette(spec: &ArtSpec) -> (Color, Color) {
-    let h = spec.hue;
+pub fn palette(spec: &CoverSpec) -> (Color, Color) {
+    let h = spec.hue();
     match spec.style {
         Style::Synthwave => (hsv(h, 0.75, 0.55), hsv(h + 0.12, 0.8, 0.95)),
         Style::Lofi => (hsv(h, 0.45, 0.5), hsv(h + 0.08, 0.5, 0.95)),
@@ -98,19 +50,20 @@ pub fn palette(spec: &ArtSpec) -> (Color, Color) {
 }
 
 /// Renders a `size` x `size` cover.
-pub fn render(spec: &ArtSpec, size: i32) -> Bitmap {
+pub fn render(spec: &CoverSpec, size: i32) -> Bitmap {
     let mut bmp = Bitmap::new(size, size);
     {
         let mut c = Canvas::for_bitmap(&mut bmp);
         let mut rng = Pcg32::seed_from_u64(spec.seed);
         let s = size as f32;
+        let hue = spec.hue();
         match spec.style {
-            Style::Synthwave => synthwave(&mut c, s, spec.hue, &mut rng),
-            Style::Lofi => lofi(&mut c, s, spec.hue, &mut rng),
-            Style::Aurora => aurora(&mut c, s, spec.hue, &mut rng),
-            Style::Pixel => pixel(&mut c, s, spec.hue, &mut rng),
-            Style::Pulse => pulse(&mut c, s, spec.hue, &mut rng),
-            Style::Waves => waves(&mut c, s, spec.hue, &mut rng),
+            Style::Synthwave => synthwave(&mut c, s, hue, &mut rng),
+            Style::Lofi => lofi(&mut c, s, hue, &mut rng),
+            Style::Aurora => aurora(&mut c, s, hue, &mut rng),
+            Style::Pixel => pixel(&mut c, s, hue, &mut rng),
+            Style::Pulse => pulse(&mut c, s, hue, &mut rng),
+            Style::Waves => waves(&mut c, s, hue, &mut rng),
         }
         vignette(&mut c, size);
     }

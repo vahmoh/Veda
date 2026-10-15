@@ -70,9 +70,16 @@ pub fn disable_pic() {
     }
 }
 
-/// Selects x2APIC or xAPIC mode (BSP only, before [`init_local`]).
-pub fn select_mode(xapic_phys: u64) {
-    if cpu::features().x2apic {
+/// Selects x2APIC or xAPIC mode (BSP only, before [`init_local`]):
+/// x2APIC where the processor has it, unless the firmware asks the system
+/// not to use it (`opt_out`, the DMAR table's) and has not turned it on
+/// itself (an APIC leaves x2APIC mode only by being turned off).
+pub fn select_mode(xapic_phys: u64, opt_out: bool) {
+    let on = rdmsr(cpu::MSR_APIC_BASE) & (1 << 10) != 0;
+    if cpu::features().x2apic && opt_out && !on {
+        crate::kinfo!("apic: xAPIC mode, as the firmware asks (the DMAR table's x2APIC opt-out)");
+    }
+    if cpu::features().x2apic && (!opt_out || on) {
         X2APIC.store(true, Ordering::Relaxed);
     } else {
         let virt = crate::mm::kvirt::map_mmio(xapic_phys, 4096, crate::mm::paging::Cache::Uncached);

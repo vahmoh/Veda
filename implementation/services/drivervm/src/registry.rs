@@ -6,10 +6,24 @@
 //!
 //! Linux in the driver VM runs a great deal of code Veda did not write,
 //! so it gets no more than its drivers need: it may connect to the
-//! services drivers attach to (and provide the ones it serves); it cannot
-//! reach the files, the agent, or anything else. Connections it opens
-//! carry this process's identity, which `devmgr` started as a driver.
+//! services drivers attach to (and provide the one it serves, `gpu`); it
+//! cannot reach the files, the agent, or anything else. It has at most
+//! [`MAX_CHANNELS`] channels to the registry at a time (each of its
+//! programs takes one), which a thread of their own serves.
+//!
+//! The narrowed registry passes what it allows on through this process's
+//! own registry channel, which `devmgr` started it with: a copy of its own,
+//! which speaks for `devmgr` (`init` attributes every registry channel to
+//! a process). So what the guest connects to, and registers, is
+//! `devmgr`'s: a service sees `devmgr` as the client (`ClientIdentity`),
+//! and the guest's connections that wait for their services count among
+//! `devmgr`'s. The registry's calls are all the narrowing sees, not the
+//! calls the guest then makes on its connections: a service that trusts
+//! `devmgr` with some of them (the compositor's and the audio service's
+//! `expect`, which say what drivers are coming) would take them from the
+//! guest too, until the monitor speaks for itself (see DRIVERVM.md).
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -18,67 +32,108 @@ use vipc::WaitSet;
 use vproto::init::RegistryError;
 use vproto::registry;
 use vrt::object::{Channel, Event};
+use vrt::println;
 use vrt::sync::Mutex;
 
-/// The services the guest may connect to.
-const CONNECT: &[&str] = &["audiodev", "displaydev", "netdev", "wlanphy", "input"];
+/// The services the guest may connect to: those drivers attach to.
+const CONNECT: &[&str] = &[
+    vproto::audio::audiodev::NAME,
+    vproto::displaydev::displaydev::NAME,
+    vproto::net::netdev::NAME,
+    vproto::wlan::wlanphy::NAME,
+    vproto::input::NAME,
+];
 /// The services it may provide.
-const REGISTER: &[&str] = &["gpu"];
+const REGISTER: &[&str] = &[vproto::gpu::gpu::NAME];
+/// The most registry channels the guest has at a time: one for each of its
+/// programs, and some to spare.
+pub const MAX_CHANNELS: usize = 32;
+
+/// The guest's registry channels (our ends), by the keys the waiting set
+/// knows them by; those added since it last looked.
+struct Channels {
+    by_key: BTreeMap<u64, Channel>,
+    next: u64,
+    added: Vec<u64>,
+}
 
 pub struct Registry {
-    /// Our ends of the guest's registry channels.
-    channels: Mutex<Vec<Channel>>,
-    /// Signaled when a channel is added.
+    channels: Mutex<Channels>,
+    /// Signalled when a channel is added.
     added: Event,
 }
 
 impl Registry {
     pub fn new() -> Result<Registry, Error> {
-        Ok(Registry { channels: Mutex::new(Vec::new()), added: Event::create()? })
+        Ok(Registry {
+            channels: Mutex::new(Channels { by_key: BTreeMap::new(), next: 0, added: Vec::new() }),
+            added: Event::create()?,
+        })
     }
 
-    /// A new registry channel for the guest; the end it is to hold.
+    /// A new registry channel for the guest: the end it is to hold
+    /// (`LimitReached` when it has the most).
     pub fn connect(&self) -> Result<Channel, Error> {
+        let mut c = self.channels.lock();
+        if c.by_key.len() >= MAX_CHANNELS {
+            return Err(Error::LimitReached);
+        }
         let (ours, theirs) = Channel::create()?;
-        self.channels.lock().push(ours);
+        c.next += 1;
+        let key = c.next;
+        c.by_key.insert(key, ours);
+        c.added.push(key);
+        drop(c);
         self.added.signal()?;
         Ok(theirs)
     }
 
-    /// Serves the guest's registry channels (on a thread of its own).
+    /// Serves the guest's registry channels (on a thread of its own),
+    /// waiting on them all at once; the set it waits on changes as they
+    /// come and go.
     pub fn run(&self) -> ! {
-        const ADDED: u64 = u64::MAX;
+        const ADDED: u64 = 0;
+        let mut ws = WaitSet::new();
+        ws.add(self.added.raw(), signals::SIGNALED, ADDED);
+        let mut said = false;
         loop {
-            let mut ws = WaitSet::new();
-            ws.add(self.added.raw(), signals::SIGNALED, ADDED);
-            for (i, ch) in self.channels.lock().iter().enumerate() {
-                ws.add(ch.raw(), signals::READABLE | signals::PEER_CLOSED, i as u64);
-            }
-            let Ok(ready) = ws.wait(DEADLINE_INFINITE) else { continue };
-            let mut closed = Vec::new();
+            let ready = match ws.wait(DEADLINE_INFINITE) {
+                Ok(ready) => ready,
+                Err(e) => {
+                    if !said {
+                        println!("the guest's registry cannot wait ({e}); it tries again");
+                        said = true;
+                    }
+                    vrt::time::sleep(vrt::time::Duration::from_millis(10));
+                    continue;
+                }
+            };
             for (key, observed) in ready {
                 if key == ADDED {
                     let _ = self.added.clear();
+                    let mut c = self.channels.lock();
+                    for k in core::mem::take(&mut c.added) {
+                        if let Some(ch) = c.by_key.get(&k) {
+                            ws.add(ch.raw(), signals::READABLE | signals::PEER_CLOSED, k);
+                        }
+                    }
                     continue;
                 }
                 if observed & signals::READABLE != 0 {
                     loop {
-                        let msg = match self.channels.lock().get(key as usize).map(Channel::read) {
+                        let msg = match self.channels.lock().by_key.get(&key).map(Channel::read) {
                             Some(Ok(msg)) => msg,
                             _ => break,
                         };
                         let reply = registry::dispatch(&mut Narrowed(self), msg);
-                        if let (Ok(reply), Some(ch)) = (reply, self.channels.lock().get(key as usize)) {
+                        if let (Ok(reply), Some(ch)) = (reply, self.channels.lock().by_key.get(&key)) {
                             let _ = reply.send(ch);
                         }
                     }
                 } else if observed & signals::PEER_CLOSED != 0 {
-                    closed.push(key as usize);
+                    ws.remove(key);
+                    self.channels.lock().by_key.remove(&key);
                 }
-            }
-            let mut channels = self.channels.lock();
-            for i in closed.into_iter().rev() {
-                channels.remove(i);
             }
         }
     }

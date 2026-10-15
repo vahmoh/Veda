@@ -229,6 +229,16 @@ pub enum Error {
     Busy,
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Error::NoSuchPin => "no pad has that pin number",
+            Error::Registers => "the controller's registers make no sense",
+            Error::Busy => "the pad belongs to the firmware or another engine, or is locked",
+        })
+    }
+}
+
 /// A pad's configuration changed: for the log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Change {
@@ -309,7 +319,8 @@ impl<'a, R: Registers> Pads<'a, R> {
         let end = padbar.checked_add((at.pad + 1) * per_pad);
         let l = self.layout;
         let (lock, _) = l.lock(&at);
-        let group_registers = [lock + 8, l.host_own + at.group * 4 + 4, l.interrupt_enable + at.group * 4 + 4];
+        let group_registers =
+            [lock + 8, l.host_own + at.group * 4 + 4, l.interrupt_enable + at.group * 4 + 4, at.owner.0 + 4];
         if revision == u32::MAX || end.is_none_or(|e| e > regs.len()) || group_registers.iter().any(|&e| e > regs.len())
         {
             return Err(Error::Registers);

@@ -10,10 +10,10 @@
 //! * [`crypto`], [`ccmp`]: key derivation, EAPOL-Key MICs, AES key wrap,
 //!   CCMP-128 and BIP-CMAC-128;
 //! * [`eapol`], [`handshake`]: EAPOL-Key frames and the 4-way and group key
-//!   handshakes (station and access point sides);
+//!   handshakes (the station's side; the access point's for the tests);
 //! * [`sae`]: Simultaneous Authentication of Equals (WPA3-Personal);
-//! * [`scan`], [`station`], [`ap`]: scan results and the station and access
-//!   point state machines;
+//! * [`scan`], [`station`]: scan results and the station state machine (and
+//!   for the tests an access point's, `ap`, to run it against);
 //! * [`profile`], [`policy`]: saved networks, and the choice of network,
 //!   retry delays and roaming.
 //!
@@ -29,7 +29,8 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
-pub mod ap;
+#[cfg(test)]
+pub(crate) mod ap;
 pub mod ccmp;
 pub mod crypto;
 pub mod eapol;

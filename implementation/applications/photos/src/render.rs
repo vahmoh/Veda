@@ -177,7 +177,7 @@ pub fn draw_rounded(canvas: &mut Canvas, b: &Bitmap, x: i32, y: i32, radius: i32
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Key {
-    picture: usize,
+    picture: u64,
     levels: usize,
     x: i32,
     y: i32,
@@ -200,11 +200,11 @@ impl ViewCache {
     }
 
     /// Makes the cache show `dst` (viewport pixels) of a picture placed by `p` in at least
-    /// `quality`. `picture` identifies the pixels (it changes when they do). Returns `true` if it
-    /// had to render.
+    /// `quality`. `picture` identifies the pixels (a number no other pixels have, not an
+    /// address, which a picture freed hands on to the next). Returns `true` if it had to render.
     pub fn update(
         &mut self,
-        picture: usize,
+        picture: u64,
         levels: &[Bitmap],
         (w, h): (u32, u32),
         p: &Placement,

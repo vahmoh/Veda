@@ -24,7 +24,6 @@ pub mod reg {
     pub const IQH: usize = 0x80;
     pub const IQT: usize = 0x88;
     pub const IQA: usize = 0x90;
-    pub const ICS: usize = 0x9C;
     pub const IRTA: usize = 0xB8;
 }
 
@@ -65,9 +64,6 @@ pub mod fsts {
     }
 }
 
-/// `FECTL`: the fault event interrupt is masked.
-pub const FECTL_IM: u32 = 1 << 31;
-
 /// What the capability register says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cap(pub u64);
@@ -88,11 +84,6 @@ impl Cap {
     /// addresses; bit 2: four levels, 48-bit).
     pub fn sagaw(&self) -> u32 {
         ((self.0 >> 8) & 0x1F) as u32
-    }
-
-    /// The widest guest address the unit translates (bits).
-    pub fn mgaw(&self) -> u32 {
-        ((self.0 >> 16) & 0x3F) as u32 + 1
     }
 
     /// Writes to the tables reach the unit only after a write-buffer
@@ -188,8 +179,6 @@ pub fn context_state(entry: [u64; 2]) -> Option<Translation> {
 /// Bits of a second-level page-table entry.
 pub const SL_READ: u64 = 1 << 0;
 pub const SL_WRITE: u64 = 1 << 1;
-/// A leaf that maps a large page (2 MiB at the directory level).
-pub const SL_LARGE: u64 = 1 << 7;
 pub const SL_ADDRESS: u64 = 0x000F_FFFF_FFFF_F000;
 
 /// An interrupt remapping entry (remapped, not posted).
@@ -280,11 +269,11 @@ impl Fault {
     }
 }
 
-/// What a fault reason means (chapter 7 of the specification).
 /// The fault reason of a request from a device with no context entry (one
 /// that is in no domain, as one is once its guest has ended).
 pub const NO_CONTEXT_ENTRY: u8 = 0x2;
 
+/// What a fault reason means (chapter 7 of the specification).
 pub fn fault_reason(reason: u8) -> &'static str {
     match reason {
         0x1 => "the bus has no root entry",
@@ -355,12 +344,11 @@ mod tests {
 
     #[test]
     fn capabilities() {
-        // Domains 2^16, four-level tables, 39-bit guest addresses.
+        // Domains 2^16, four-level tables.
         let cap = Cap(0x0026_0406);
         assert_eq!(cap.domains(), 65536);
         assert!(!cap.caching_mode());
         assert_eq!(cap.sagaw(), 4);
-        assert_eq!(cap.mgaw(), 39);
         assert_eq!(levels(cap.sagaw()), Some((4, 2)));
         assert_eq!(levels(Cap(0x2 << 8).sagaw()), Some((3, 1)));
         assert_eq!(levels(0), None);

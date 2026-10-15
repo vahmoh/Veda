@@ -522,3 +522,120 @@ fn loops_cannot_run_away() {
     e.run(&code, interp::ALL, &env);
     assert!(e.runaway);
 }
+
+#[test]
+fn indices_constant_only_once_inlined_read_inside_the_array() {
+    // `p`'s index is constant once inlined, unchecked: clamped to the
+    // array (7 and -1, as unsigned, to its last element).
+    let table: Vec<u32> = (0..4).flat_map(|k| [0, (k as f32 + 0.5).to_bits(), 0, 0]).collect();
+    let o = run_with(
+        "uniform vec4 u[4];\nfloat p(int i) { return u[i].y; }\nvoid main() { r = vec4(p(7), p(-1), p(2), 0.0); }",
+        lanes(),
+        &[("u[0]", &table)],
+    );
+    for i in 0..LANES {
+        assert_eq!([fx(&o, 0)[i], fx(&o, 1)[i], fx(&o, 2)[i]], [3.5, 3.5, 2.5], "lane {i}");
+    }
+}
+
+#[test]
+fn registers_never_overlap() {
+    // More values live at once than 16-bit register numbers can name: the
+    // compiler must not give two of them one register. (Linking refuses
+    // such a stage; the interpreter's compiler is safe on its own too.)
+    use crate::Stage;
+    use crate::ir::{Func, InstOp, Node};
+    use crate::ops::Ty;
+    let mut f = Func::new(Stage::Vertex);
+    let entry = f.new_block();
+    let load = f.create(InstOp::LoadInput { slot: 0, comp: 0 }, Vec::new(), &[Ty::F32]);
+    f.push(entry, load);
+    let x = f.insts[load.0 as usize].results[0];
+    let mut values = Vec::new();
+    for k in 0..70_000u32 {
+        let c = f.create(InstOp::Const(Value::F(k as f32)), Vec::new(), &[Ty::F32]);
+        f.push(entry, c);
+        let c = f.insts[c.0 as usize].results[0];
+        let add = f.create(InstOp::Op(crate::ops::Op::FAdd), std::vec![x, c], &[Ty::F32]);
+        f.push(entry, add);
+        values.push(f.insts[add.0 as usize].results[0]);
+    }
+    for (k, &v) in values.iter().enumerate() {
+        let store = f.create(InstOp::StoreOutput { slot: k as u32 / 4, comp: (k % 4) as u8 }, std::vec![v], &[]);
+        f.push(entry, store);
+    }
+    f.body = std::vec![Node::Block(entry)];
+    let p = interp::compile(&f);
+    let mut regs: Vec<_> = p.outputs.iter().map(|&(_, r)| r).collect();
+    regs.sort_unstable();
+    regs.dedup();
+    assert!(p.main.is_empty() || regs.len() == values.len(), "{} registers for {} outputs", regs.len(), values.len());
+}
+
+#[test]
+fn nested_loops_cannot_run_away_either() {
+    // Two loops that never end, one in the other: a bound per loop would
+    // let them run 2^44 iterations; the bound is per run.
+    let vs = "#version 300 es\nlayout(location = 0) in float x;\nout vec4 r;\n\
+              void main() { float a = 0.0; while (x >= 0.0) { while (x >= 0.0) { a += 1.0; } a -= 1.0; } r = vec4(a); }";
+    let p = program(vs, FS);
+    let code = interp::compile(&p.vertex);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let env = Env { uniforms: &[], blocks: &[], textures: &NoTextures };
+        let mut e = Exec::new(&code);
+        e.prologue(&code, &env);
+        if let Some(r) = code.input(Input::Value { slot: 0, comp: 0 }) {
+            e.regs[r as usize] = Lanes::from_f32([1.0; LANES]);
+        }
+        e.run(&code, interp::ALL, &env);
+        let _ = tx.send(e.runaway);
+    });
+    let runaway = rx.recv_timeout(std::time::Duration::from_secs(30)).expect("the run ended");
+    assert!(runaway);
+}
+
+/// Textures whose every texel is the sampler index looked up, recording
+/// each lookup's sampler type and indices.
+struct Recording(std::sync::Mutex<Vec<(crate::types::Dim, u32)>>);
+
+impl interp::Textures for Recording {
+    fn sample(&self, op: &crate::ir::TexOp, index: &[u32; LANES], _: &[Lanes], mask: interp::Mask, out: &mut [Lanes]) {
+        for (lane, &k) in index.iter().enumerate() {
+            if mask & (1 << lane) != 0 {
+                self.0.lock().unwrap().push((op.sampler.dim, k));
+            }
+        }
+        for o in out.iter_mut() {
+            *o = Lanes(index.map(|k| (k as f32).to_bits()));
+        }
+    }
+
+    fn size(&self, sampler: u32, _: i32) -> [i32; 3] {
+        [sampler as i32; 3]
+    }
+}
+
+#[test]
+fn sampler_arrays_are_indexed_within_themselves() {
+    // A loop index past the array: clamped to the array, never reaching
+    // the cube map after it (looked up as a 2D texture).
+    let vs = "attribute float x; uniform sampler2D s[3]; uniform samplerCube c;\nvarying vec4 r;\n\
+              void main() { vec4 a = vec4(0.0); for (int i = 0; i < 5; i++) a += texture2DLod(s[i], vec2(x), 0.0);\n\
+              r = a + textureCubeLod(c, vec3(x), 0.0); gl_Position = vec4(1.0); }";
+    let fs = "precision mediump float; varying vec4 r; void main() { gl_FragColor = r; }";
+    let p = program(vs, fs);
+    let code = interp::compile(&p.vertex);
+    let textures = Recording(std::sync::Mutex::new(Vec::new()));
+    let storage = std::vec![[0u32; 4]; p.linked.slots as usize];
+    let env = Env { uniforms: &storage, blocks: &[], textures: &textures };
+    let mut e = Exec::new(&code);
+    e.prologue(&code, &env);
+    e.run(&code, interp::ALL, &env);
+    let cube = p.linked.samplers.iter().position(|s| s.sampler.dim == crate::types::Dim::Cube).unwrap() as u32;
+    let lookups = textures.0.lock().unwrap();
+    assert!(lookups.iter().any(|&(d, _)| d == crate::types::Dim::D2));
+    for &(dim, k) in lookups.iter() {
+        assert_eq!(dim == crate::types::Dim::Cube, k == cube, "a {dim:?} lookup of sampler {k}");
+    }
+}

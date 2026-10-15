@@ -144,7 +144,7 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
     panic::set_framebuffer(&boot.framebuffer);
 
     // Platform: ACPI, interrupt controllers, clocks and timers.
-    acpi::init(boot.rsdp_phys);
+    acpi::init(boot.rsdp_phys, boot.hhdm_limit);
     arch::init_platform();
     log_screen(&boot.screen);
     log_paint(&boot.paint);

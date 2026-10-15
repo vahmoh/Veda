@@ -20,6 +20,12 @@
 //!   `implementation/ports/linux/arch/<architecture>/`). Both go into the
 //!   system image (`linux/kernel`, `linux/initramfs.cpio`), where `drivervm`
 //!   finds them.
+//!
+//! The renderer's Rust half goes to Mesa's build through a place of the
+//! Linux build's own (`build/librenderer.a`), where every build copies the
+//! library it has just built: Mesa links that, whatever target directory
+//! made it. The Linux build is one, which builds at once share: what
+//! changes it (`cargo orchestration linux`, Mesa's builds) holds its lock.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,7 +57,7 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
 /// into a target directory of their own, as their target is that of Veda's
 /// programs ([`guest_target_dir`]).
 pub fn guest_cargo(args: &[&str]) -> Command {
-    let mut cmd = util::cargo();
+    let mut cmd = util::cargo_for(GUEST_TARGET);
     cmd.current_dir(util::workspace_root().join("implementation").join("guest"));
     cmd.args(args).arg("--target-dir").arg(guest_target_dir());
     cmd
@@ -70,13 +76,23 @@ const BUILD_TOOLS: [&str; 14] =
 
 /// Where the guest's kernel is built (`$VEDA_LINUX` overrides it).
 pub fn root() -> PathBuf {
-    match std::env::var_os("VEDA_LINUX") {
-        Some(p) => {
-            let p = PathBuf::from(p);
-            if p.is_absolute() { p } else { util::workspace_root().join(p) }
-        }
-        None => util::workspace_root().join("target").join("linux"),
-    }
+    util::env_dir("VEDA_LINUX", &["target", "linux"])
+}
+
+/// The lock over the Linux build.
+fn lock() -> Result<util::Lock> {
+    util::Lock::exclusive(&root().join(".lock"), "the driver VM's Linux build")
+}
+
+/// The ports the Linux build is made from, and what builds them, whose
+/// fingerprint `cargo orchestration linux` notes.
+fn ports_fingerprint() -> Result<String> {
+    let names = ["zlib", "elfutils", "linux", "binutils", "gcc", "musl", "mesa"];
+    ports::fingerprint(&names, &[ports::dir().join("common.sh"), ports::settings()])
+}
+
+fn ports_note() -> PathBuf {
+    root().join("build").join("ports-fingerprint")
 }
 
 /// The guest's kernel, once built.
@@ -107,33 +123,80 @@ fn renderer_source() -> Result<PathBuf> {
     std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
-/// Keeps the Mesa build in `dir` on the renderer's sources:
-/// `cargo orchestration linux` configured it with where they were, and
-/// should they have moved since (they, or the whole checkout), it is told
-/// where they are now, and builds again only what they reach.
-fn follow_renderer(dir: &Path) -> Result {
-    let info = dir.join("meson-info").join("intro-buildoptions.json");
-    let text = std::fs::read_to_string(&info).map_err(|e| format!("reading {}: {e}", info.display()))?;
-    let options = serde_json::from_str::<serde_json::Value>(&text).map_err(|e| format!("{}: {e}", info.display()))?;
-    let configured = options
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|option| option.get("name").and_then(serde_json::Value::as_str) == Some("veda-renderer"))
-        .and_then(|option| option.get("value").and_then(serde_json::Value::as_str))
-        .ok_or_else(|| format!("{}: Mesa's build has no veda-renderer option", info.display()))?;
-    let source = renderer_source()?;
-    if Path::new(configured) == source {
-        return Ok(());
+/// The options of Mesa's build in `dir` that name the renderer's files
+/// (`veda-renderer`, its sources; `veda-renderer-lib`, its Rust half, for
+/// the guest's build) and what they should be, which differs from what
+/// they are where the checkout or the target directory has moved since
+/// `cargo orchestration linux` configured the build: `-Dname=value` for
+/// each that does.
+fn renderer_options(info: &str, source: &Path, lib: Option<&Path>) -> Result<Vec<std::ffi::OsString>> {
+    let options = serde_json::from_str::<serde_json::Value>(info).map_err(|e| e.to_string())?;
+    let configured = |name: &str| {
+        options
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|option| option.get("name").and_then(serde_json::Value::as_str) == Some(name))
+            .and_then(|option| option.get("value").and_then(serde_json::Value::as_str))
+            .ok_or_else(|| format!("Mesa's build has no {name} option"))
+    };
+    let mut changes = Vec::new();
+    for (name, path) in [("veda-renderer", Some(source)), ("veda-renderer-lib", lib)] {
+        let Some(path) = path else { continue };
+        if Path::new(configured(name)?) != path {
+            let mut option = std::ffi::OsString::from(format!("-D{name}="));
+            option.push(path);
+            changes.push(option);
+        }
     }
-    util::status("Configuring", format!("{} for the renderer at {}", dir.display(), source.display()));
-    let mut option = std::ffi::OsString::from("-Dveda-renderer=");
-    option.push(&source);
-    util::run(Command::new("meson").arg("configure").arg(dir).arg(option))
+    Ok(changes)
 }
 
-/// The renderer's Rust half (`implementation/guest/renderer`), a static
-/// library that Mesa's build links the program around, built.
+/// Keeps the Mesa build in `dir` on the renderer's files: its sources and,
+/// for the guest's build, `lib`, its Rust half (see [`renderer_options`]).
+/// Mesa builds again only what they reach.
+fn follow_renderer(dir: &Path, lib: Option<&Path>) -> Result {
+    let info = dir.join("meson-info").join("intro-buildoptions.json");
+    let text = util::read_to_string(&info)?;
+    let changes = renderer_options(&text, &renderer_source()?, lib).map_err(|e| format!("{}: {e}", info.display()))?;
+    if changes.is_empty() {
+        return Ok(());
+    }
+    util::status("Configuring", format!("{} for the renderer where it is now", dir.display()));
+    util::run(Command::new("meson").arg("configure").arg(dir).args(changes))
+}
+
+/// Where Mesa's build for the guest finds the renderer's Rust half: in the
+/// Linux build, whatever target directory built it.
+fn renderer_lib_place() -> PathBuf {
+    root().join("build").join("librenderer.a")
+}
+
+/// Puts the renderer's Rust half `built` (a static library, which Mesa's
+/// build links the program around) where Mesa's build finds it, unless it
+/// is there already: a copy with its time, so that ninja relinks when it
+/// changes, and only then.
+fn place_renderer_lib(built: &Path) -> Result<PathBuf> {
+    let place = renderer_lib_place();
+    let stamp = |p: &Path| std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
+    let source = stamp(built).ok_or_else(|| format!("{}: not built", built.display()))?;
+    if stamp(&place) != Some(source) {
+        util::create_dir_all(place.parent().unwrap_or(&place))?;
+        let partial = place.with_extension("part");
+        util::copy(built, &partial)?;
+        if let (_, Some(time)) = source {
+            std::fs::File::options()
+                .write(true)
+                .open(&partial)
+                .and_then(|f| f.set_modified(time))
+                .map_err(|e| format!("{}: {e}", partial.display()))?;
+        }
+        util::rename(&partial, &place)?;
+    }
+    Ok(place)
+}
+
+/// The renderer's Rust half (`implementation/guest/renderer`), built.
 fn renderer_lib() -> Result<PathBuf> {
     util::run(&mut guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
     Ok(guest_target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
@@ -147,7 +210,8 @@ pub fn vgallium() -> Result<Option<PathBuf>> {
     if !dir.join("build.ninja").is_file() {
         return Ok(None);
     }
-    follow_renderer(&dir)?;
+    let _lock = lock()?;
+    follow_renderer(&dir, None)?;
     util::status("Building", "the renderer for the host (Mesa)");
     util::ninja(&dir, "src/gallium/targets/veda/vgallium.so")?;
     Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.so")))
@@ -202,20 +266,19 @@ pub fn command(args: &[String]) -> Result {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--jobs" | "-j" => {
-                jobs = it.next().and_then(|v| v.parse().ok()).ok_or("--jobs takes a number")?;
-            }
+            "--jobs" | "-j" => jobs = util::jobs(it.next())?,
             other => return Err(format!("unknown option '{other}' (linux takes --jobs N)")),
         }
     }
     tools()?;
     let started = std::time::Instant::now();
+    let _lock = lock()?;
     let downloads = root().join("downloads");
     for name in ["zlib", "elfutils", "linux", "binutils", "gcc", "musl", "mesa"] {
         ports::fetch(&Port::named(name)?, &downloads)?;
     }
     firmware()?;
-    let lib = renderer_lib()?;
+    let lib = place_renderer_lib(&renderer_lib()?)?;
     let ports = ports::dir();
     util::run(
         Command::new("bash")
@@ -227,8 +290,31 @@ pub fn command(args: &[String]) -> Result {
             .env("VEDA_RENDERER_LIB", &lib)
             .env("JOBS", jobs.to_string()),
     )?;
+    util::write(&ports_note(), ports_fingerprint()?)?;
     util::status("Finished", format!("the driver VM's Linux in {:.0} s", started.elapsed().as_secs_f32()));
     Ok(())
+}
+
+/// Says so if the guest was built from other ports than
+/// `implementation/ports/` has now.
+fn check_ports() {
+    let now = match ports_fingerprint() {
+        Ok(print) => print,
+        Err(e) => return util::status("Note", format!("the driver VM's ports: {e}")),
+    };
+    match std::fs::read_to_string(ports_note()) {
+        Ok(built) if built == now => {}
+        Ok(_) => util::status(
+            "Note",
+            "the driver VM's Linux was built from other ports than implementation/ports/ has now: `cargo \
+             orchestration linux` builds it again",
+        ),
+        Err(_) => util::status(
+            "Note",
+            "which ports the driver VM's Linux was built from is not known (it was built before that was noted): \
+             `cargo orchestration linux` notes it",
+        ),
+    }
 }
 
 /// Builds the guest the first time an image needs it, where this machine
@@ -253,6 +339,7 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     if !built() {
         return Ok(None);
     }
+    check_ports();
     util::status("Building", format!("the driver VM's programs ({GUEST_TARGET})"));
     let mut cmd = guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]);
     for (package, ..) in GUEST_PROGRAMS {
@@ -271,9 +358,11 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     }
     // The renderer: Mesa's build links its decoder and drivers around the
     // Rust half just built (once `cargo orchestration linux` has configured
-    // it).
+    // it), while no other build changes the Linux build.
     if mesa_build().join("build.ninja").is_file() {
-        follow_renderer(&mesa_build())?;
+        let _lock = lock()?;
+        let lib = place_renderer_lib(&bin.join("librenderer.a"))?;
+        follow_renderer(&mesa_build(), Some(&lib))?;
         util::status("Building", "the driver VM's renderer (Mesa)");
         util::ninja(&mesa_build(), "src/gallium/targets/veda/renderer")?;
         let exe = mesa_build().join("src").join("gallium").join("targets").join("veda").join("renderer");
@@ -307,7 +396,7 @@ fn firmware() -> Result<Vec<(String, PathBuf)>> {
     let mut sources = std::collections::BTreeMap::new();
     let mut files = Vec::new();
     for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {
-        let text = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;
+        let text = util::read_to_string(&list)?;
         for (n, line) in text.lines().enumerate() {
             let bad = || format!("{}:{}: not a source or a file: {line}", list.display(), n + 1);
             let words: Vec<&str> = line.split_whitespace().collect();
@@ -337,17 +426,15 @@ fn fetch_firmware(file: &Path, url: &str, sha256: &str, list: &Path) -> Result {
         return Ok(());
     }
     util::status("Downloading", url);
-    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| format!("{e}"))?;
+    util::create_dir_all(file.parent().unwrap_or(file))?;
     let partial = file.with_extension("part");
-    util::run(
-        Command::new("curl").args(["-fL", "--retry", "3", "--silent", "--show-error", "-o"]).arg(&partial).arg(url),
-    )?;
-    let got = ports::sha256_of(&partial)?;
+    util::run(&mut ports::curl(url, &partial))?;
+    let got = util::sha256_file(&partial)?;
     if got != sha256 {
-        let _ = std::fs::remove_file(&partial);
+        util::remove_file(&partial)?;
         return Err(format!("{url}: SHA-256 {got}, expected {sha256} ({})", list.display()));
     }
-    std::fs::rename(&partial, file).map_err(|e| format!("{e}"))
+    util::rename(&partial, file)
 }
 
 /// Archives in the `newc` format of cpio, as Linux unpacks its initial RAM
@@ -445,5 +532,57 @@ pub mod cpio {
             assert_eq!(&header[86..94], b"00000001");
             assert!(bytes.windows(10).any(|w| w == b"TRAILER!!!"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Meson's description of a build's options, as `intro-buildoptions.json`
+    /// has it.
+    fn info(source: &str, lib: &str) -> String {
+        serde_json::json!([
+            { "name": "buildtype", "value": "release" },
+            { "name": "veda-renderer", "value": source },
+            { "name": "veda-renderer-lib", "value": lib },
+        ])
+        .to_string()
+    }
+
+    #[test]
+    fn mesa_follows_the_renderer_where_it_is() {
+        let (source, lib) = (Path::new("/veda/renderer"), Path::new("/veda/target/linux/build/librenderer.a"));
+        let same = info("/veda/renderer", "/veda/target/linux/build/librenderer.a");
+        assert!(renderer_options(&same, source, Some(lib)).unwrap().is_empty());
+        // Configured with the library another target directory built: the
+        // guest's build is told where it is now; the host's has none.
+        let other = info("/veda/renderer", "/home/a/old-target/guest/release/librenderer.a");
+        assert_eq!(
+            renderer_options(&other, source, Some(lib)).unwrap(),
+            ["-Dveda-renderer-lib=/veda/target/linux/build/librenderer.a"]
+        );
+        assert!(renderer_options(&other, source, None).unwrap().is_empty());
+        let moved = info("/old/renderer", "/old/librenderer.a");
+        assert_eq!(renderer_options(&moved, source, Some(lib)).unwrap().len(), 2);
+        assert!(renderer_options("[]", source, None).is_err());
+    }
+
+    #[test]
+    fn the_renderer_library_is_copied_once_with_its_time() {
+        let dir = std::env::temp_dir().join(format!("orchestration-renderer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        util::create_dir_all(&dir).unwrap();
+        let built = dir.join("librenderer.a");
+        util::write(&built, b"first").unwrap();
+        // SAFETY: no other thread of this test program reads VEDA_LINUX.
+        unsafe { std::env::set_var("VEDA_LINUX", dir.join("linux")) };
+        let place = place_renderer_lib(&built).unwrap();
+        unsafe { std::env::remove_var("VEDA_LINUX") };
+        assert_eq!(place, dir.join("linux/build/librenderer.a"));
+        assert_eq!(std::fs::read(&place).unwrap(), b"first");
+        let time = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+        assert_eq!(time(&place), time(&built));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

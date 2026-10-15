@@ -14,12 +14,12 @@ cargo orchestration build              # build everything -> target/veda/veda.im
 cargo orchestration iso                # the live system for a USB stick -> target/veda/veda.iso
 cargo orchestration run                # build and boot in a QEMU window, on a 1920x1080 screen
 cargo orchestration run --resolution 2560x1600   # ... on a larger one
-cargo orchestration run --live         # boot the live system in QEMU from a virtual USB stick
+cargo orchestration run --live         # boot the live system in QEMU from a virtual USB stick (target/veda/stick.iso)
 cargo orchestration run --smp 2 --memory 2048
 cargo orchestration shot --wait 15     # boot headless, save target/veda/screen.png
 cargo orchestration shot --cmdline "run=about"   # also start bin/about at boot
-cargo orchestration script verification/ui/about-interaction.vts   # scripted GUI test
-cargo orchestration test               # host unit tests + in-system integration tests
+cargo orchestration script verification/ui/about-interaction.vts   # scripted GUI test (the language: orchestration/src/script.rs)
+cargo orchestration test               # every crate's unit tests on the host + in-system integration tests
 cargo orchestration test --ui          # ... plus every GUI script in verification/ui and verification/agent (and their arch/amd64), several at once
 cargo orchestration test --ui --jobs 2 # ... two at a time (default: one per five processors)
 cargo orchestration scripts verification/ui/drivervm-audio.vts verification/ui/nvme.vts   # some scripts, built once, side by side
@@ -34,6 +34,7 @@ cargo orchestration run --input usb    # USB keyboard, tablet (behind a hub) and
 cargo orchestration script verification/ui/usb-input.vts   # USB input, with devices plugged in and out
 cargo orchestration script verification/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
 cargo orchestration script verification/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
+cargo orchestration script verification/real/internet.vts      # Veda on the real Internet (nettest's online checks)
 cargo orchestration run --net none     # boot without a network card
 cargo orchestration run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
 cargo orchestration script verification/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
@@ -65,6 +66,20 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
 
 * The serial console (kernel log plus every program's `println!`) is saved
   to `target/veda/serial.log` by `shot`/`script`/`test`.
+* A script is read and checked whole before anything is built: a line that
+  is wrong (an unknown command or value, a malformed number, a key QEMU
+  has not, a character no key types, an unclosed quote) fails the run,
+  with its number, and `scripts` and `test --ui` check every script first.
+  A wait (`wait-serial`) is satisfied by a whole line of the log (its end
+  written) holding its text, after the last `checkpoint` or `reset`, that
+  no earlier wait matched: a wait after a repeated action needs a new
+  line. Lines no wait took (periodic ones, such as a game's frame rate)
+  are left behind with a `checkpoint`, which `expect-serial` and
+  `reject-serial` also look after. `shot` waits until the screen has
+  settled (two screenshots alike, three seconds at most); `shot FILE now`
+  takes the moment, as a game's or a playing video's must be. Each of
+  `test --ui`'s scripts has a deadline, four times its last run (at least
+  five minutes): past it, its process is killed, and QEMU with it.
 * QEMU's display is its standard VGA, and beside it a 3D GPU
   (`virtio-gpu-gl-pci`: virtio-gpu with virgl) when its build has one, as
   distributions' do (on Debian and Ubuntu with `qemu-system-modules-opengl`):
@@ -251,22 +266,58 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
   `verification/real/` talk to the real Deepgram with the key in
   `DEEPGRAM_API_KEY` (`export DEEPGRAM_API_KEY=...`);
   they type it into Settings with
-  `type-env`, so it is in neither the script nor the logs. See
+  `type-env`, so it is in neither the script nor the logs, and the home
+  disk Settings stored it on is removed when the run ends (curl, which
+  synthesises the test user's speech, reads it from a pipe). See
   [The agent](AGENT.md#testing).
 * `--cmdline "run=nettest"` checks the Internet connection from inside
   Veda (`run=NAME:ARG1,ARG2` passes arguments); on a PC with Wi-Fi,
-  `run=nettest:wifi,SSID,PASSWORD` joins a network first.
+  `run=nettest:wifi,SSID,PASSWORD` joins a network first. The network
+  cards' scripts need no Internet: a `nettest local` line has nettest ping
+  the gateway and fetch a page from a server `cargo orchestration` runs on
+  the host (`orchestration/src/hostweb.rs`), which QEMU's NAT makes the
+  gateway; `verification/real/internet.vts` checks the Internet itself.
 * The home directory is kept on its own disk, `target/veda/home.img`,
   across builds and runs; `--fresh-home` starts over with a new one.
-  Scripted runs (`shot`, `script`, `test`) always use a fresh home disk.
-* `--no-generate` reuses the media in `target/generated` instead of running
-  the generators; `--skip PROGRAM` leaves a program out of the image (both
-  help while a component is being worked on).
+  Scripted runs (`shot`, `script`, `test`) always use a fresh home disk
+  (`test-home.img` in `$VEDA_OUT`).
+* The media generators (`generation/`) run when their executable has
+  changed since they last ran (it holds every library they use, the
+  crates' versions too): each writes into a directory of its own,
+  `target/generated/<generator>/` (in `$CARGO_TARGET_DIR`), and lists what
+  it wrote in that directory's `.manifest`, which the image is packed
+  from; what else is there (what an older version wrote) is removed.
+  `--no-generate` reuses what they made last instead of running them;
+  `--skip PROGRAM` leaves a program out of the image (both help while a
+  component is being worked on).
 * Several builds can run concurrently if each uses its own directories:
-  set `CARGO_TARGET_DIR` (cargo output) and `VEDA_OUT` (disk image, serial
-  log, screenshots) to private paths, e.g.
+  set `CARGO_TARGET_DIR` (cargo output and the generated media) and
+  `VEDA_OUT` (disk image, serial log, screenshots) to private paths, e.g.
   `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
-  Paths in automation scripts (`shot FILE`) are relative to the repository.
+  What they share is locked: the toolchain (`target/toolchain`, which an
+  image build adds to: the C library's POSIX layer, the test programs, the
+  media decoder), the driver VM's Linux build (`target/linux`, Mesa's
+  builds among it) and the generated media of a target directory; a build
+  that finds one locked says so and waits. Paths in automation scripts
+  (`shot FILE`) are relative to the repository.
+* Veda's own programs carry nothing of the build machine's file system:
+  they are compiled with the checkout, Cargo's home and the target
+  directory named `/veda`, `/cargo` and `/veda/target` instead
+  (`--remap-path-prefix`, which `cargo orchestration` gives each build of
+  a Veda target through Cargo's configuration; a build of one by hand,
+  without it, compiles again), as are the C and Rust test programs and the
+  media decoder's shim (`-ffile-prefix-map`), and what the ports' builds
+  compile for Veda (`implementation/ports/build.sh`: the native toolchain,
+  its libraries and GMP, MPFR and MPC name their sources from the
+  toolchain's directory; `gcc -v` and FFmpeg's recorded configuration
+  name none of this machine's). `strings target/veda/veda.img | grep -F
+  "$HOME"` finds nothing; a line it finds is a leak to fix.
+* Images are written with their free space left out (sparse files), their
+  boot partition as large as its files and the 64 MiB the logs of a stick
+  may take. `scripts` and `test` write the system's disk image once
+  (`target/veda/system/veda.img`); each script's machine boots a qcow2
+  overlay of it (`boot.qcow2` in its `$VEDA_OUT`) that holds its own boot
+  configuration and what it writes to the disk.
 * smoltcp and zune-jpeg, which Veda changes, are ports: every
   `cargo orchestration` command first has Cargo build them as
   `implementation/ports/` has them, prepared in
@@ -286,7 +337,7 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
 | `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
 | the fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | each application's manifest, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
-| everything under `target/generated/` (build-time generated media) | `/system/<same relative path>` |
+| what the media generators' manifests list (`target/generated/<generator>/`) | `/system/<same relative path>` |
 | `verification/c/*.c` and `*.cc`, compiled by the cross toolchain (each also as `<name>-pie`) | `/system/tests/c/<name>` |
 | `verification/rust/*.rs`, compiled by the toolchain's Rust (each also as `<name>-fixed`) | `/system/tests/rust/<name>` |
 | the native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
@@ -379,7 +430,10 @@ taskbar=false
 * Long-running work must not block `update`: use threads
   (`vrt::thread::spawn`) and signal the UI through an `Event` returned from
   `App::wait_handles`.
-* Files: `vproto::connect(vproto::vfs::NAME)` then `vproto::vfs::Client`
+* Files: `vfiles::Fs::connect()` (whole-file reads, bounded or mapped,
+  writes, listings of any size, copies, moves and removals of whole trees
+  with their progress, every call with a deadline), or the protocol
+  itself: `vproto::connect(vproto::vfs::NAME)` then `vproto::vfs::Client`
   (`read_file` returns a VMO plus length, `write_file`, `read_dir`, ...).
 * Starting other programs: `vproto::launcher::Client` (`launch`, `launch_app`).
 
@@ -427,10 +481,13 @@ test programs in `verification/rust/` are compiled by
 
 Videos (`implementation/applications/videos`) is a `vui` application; what
 it does that can be tested on the host is in
-`implementation/applications/videos/core` (the clock, pacing, choosing
-pictures, skipping, the layout, what it remembers), and the protocol it
-speaks with its decoder, with the frame pool and the sound ring, is
-`vproto::media`. The decoder, `implementation/services/mediadec`, is a C
+`implementation/applications/videos/core` (playback, the clock, pacing,
+choosing pictures, skipping, the layout, what it remembers, and the audio
+output that outlives the audio service, which Music uses too), and the
+protocol it speaks with its decoder, with the heartbeat, the frame pool and
+the sound ring, is `vproto::media`. Music's own is in
+`implementation/applications/music/core` (the order tracks play in, its
+covers). The decoder, `implementation/services/mediadec`, is a C
 program: its Rust half is built for the architecture's bare target
 (`x86_64-unknown-none` on AMD64) and linked with its C shim,
 FFmpeg and dav1d by the cross compiler (`orchestration/src/toolchain.rs`,

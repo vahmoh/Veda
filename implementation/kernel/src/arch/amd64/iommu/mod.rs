@@ -117,7 +117,7 @@ fn publish(iommu: &Iommu, phys: u64, len: u64) {
 pub fn init() {
     let Some(platform) = super::acpi::PLATFORM.get() else { return };
     let Some(table) = platform.dmar else { return };
-    let dmar = match dmar::parse(crate::acpi::table_bytes(table)) {
+    let dmar = match dmar::parse(table) {
         Ok(d) => d,
         Err(e) => {
             crate::kwarn!("iommu: the DMAR table: {}", e);

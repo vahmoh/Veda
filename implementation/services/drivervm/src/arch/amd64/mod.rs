@@ -7,7 +7,11 @@
 //! * [`platform`]: the PC's own devices the guest has (its keyboard
 //!   controller), and the processors' exits that are not hypercalls.
 //! * Where the guest has things below 4 GiB, as a PC has them, and how
-//!   its processors' interrupts and MSIs look.
+//!   its processors' interrupts and MSIs look, and how many it may have.
+//!
+//! What of it reaches no object of Veda's is `drivervm_core::arch`
+//! (`implementation/services/drivervm/core/src/arch/amd64`), tested on the
+//! host.
 
 pub mod boot;
 mod i8042;
@@ -15,6 +19,7 @@ pub mod platform;
 
 use core::ops::Range;
 
+pub use drivervm_core::arch::MAX_MSIS;
 pub use vhv::amd64::memory::{ACPI_AT, ACPI_ROOM, OPREGION_AT};
 pub use vhv::amd64::platform::msi_result;
 

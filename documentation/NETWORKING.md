@@ -23,8 +23,8 @@ talk over kernel channels; the kernel knows nothing about networks.
   autoconfiguration, routing between interfaces, a caching DNS resolver,
   and the sockets applications use. The protocol engine is
   [smoltcp](https://github.com/smoltcp-rs/smoltcp), a port
-  (`implementation/ports/smoltcp`): its release with one documented patch
-  (see below).
+  (`implementation/ports/smoltcp`): its release with documented patches
+  (see Dependencies below).
 * **Applications** use `vnet` (`implementation/libraries/net`): blocking,
   `std::net`-like `TcpStream`, `TcpListener`, `UdpSocket`, name resolution,
   ping, and `vnet::wifi` for Wi-Fi; `vtls`
@@ -35,7 +35,87 @@ talk over kernel channels; the kernel knows nothing about networks.
 Frames travel between processes through shared-memory rings
 (`vproto::netring`): a pair of single-producer/single-consumer rings per
 link with wake-up events, so a frame costs one copy into the ring and one
-out, and a system call only when the other side is asleep.
+out, and a system call only when the other side is asleep. In `netd`,
+smoltcp's device is the ring itself: a frame is copied from the ring into
+the interface's buffer, where smoltcp parses it, and smoltcp builds each
+frame it sends in a buffer that is copied into the ring; when the ring is
+full, `netd` waits for room rather than dropping frames. Neither side
+trusts the other: positions are compared modulo 2^64 and clamped to the
+ring, lengths are checked, and shared memory is only read and written
+through volatile accesses.
+
+## Who may do what
+
+Both services know who opened each connection (the registry's client
+identity, which a process cannot forge), and check it:
+
+* Network devices attach (`netdev`) only from the device manager, whose
+  drivers, the driver VM's programs included, speak as it, and from the
+  Wi-Fi service; radios are offered (`wlanphy`) only by the device
+  manager. Others' connections are closed.
+* Configuring interfaces, renewing leases, setting the DNS servers and
+  flushing the DNS cache are for Settings and the Terminal; so are listing
+  every socket (others list their own) and the interfaces' hardware
+  addresses (zeros for others). The DNS cache is not listed at all: it is
+  a record of every name any program looked up.
+* Changing Wi-Fi (scanning, joining, leaving, the radio switch, saved
+  networks) is for the desktop shell, the agent, Settings and the
+  Terminal. What tells where the machine is or
+  has been, or identifies it — the access points' addresses (BSSIDs), the
+  saved networks, diagnostics, the adapter's address — is for Settings and
+  the Terminal; statuses go to others without those addresses.
+* Limits apply per process, however many connections it opens: `net`
+  connections, sockets (with the connections its listeners accept), lookups
+  in progress, status watchers; and of each, a part is kept for system
+  services, so that applications together cannot use it all. The Wi-Fi
+  service limits connections and watchers the same way.
+
+## Sockets in `netd`
+
+* Flow control is credit-based both ways (see `vproto::net`), and nothing
+  a client is owed is lost when its channel is full (a channel holds a
+  bounded number of messages, whatever their size): received data leaves
+  the stack only once its message is queued to the client, so a client
+  that does not read leaves it in the stack, whose TCP window then closes;
+  an accepted connection, the end of a stream or an error waits until the
+  client's channel has room, which `netd` waits for.
+* A TCP client may send only what fits the stack's send buffer, so what it
+  sent is there the moment it arrives: closing the socket delivers it,
+  then a FIN. The connection then finishes on its own, within bounds: it
+  is reset if the peer sends more (nobody will read it), and dropped after
+  a minute without progress, or when more than 256 such connections wait.
+* The end of a stream is the peer's FIN, whatever is still buffered; what
+  a connection received before it closed stays readable after its smoltcp
+  socket is gone (TIME-WAIT included).
+* An established connection is never given up for being quiet: the
+  timeout (two minutes) applies only while data or a FIN of ours waits for
+  the peer's acknowledgement, or keep-alive probes are sent (at least a
+  second apart). A connection whose peer stopped answering ends timed out,
+  and one the peer reset ends reset, after the client finished sending
+  too (not with the end of the stream).
+* A listener holds at most its backlog of connections not accepted yet;
+  further attempts are refused.
+* Each wake-up attends to what changed: the sockets the stack reports
+  ready (data, room to send, a state change, an accepted connection, a
+  ping result) and those whose client wrote or made room. Lookups' reply
+  channels are waited on like sockets, so a lookup whose client left is
+  dropped at once. The status is worked out again only when something it
+  depends on changed.
+* Ping reports why a request failed: no answer in time, or what a router
+  said (destination or host unreachable, time to live exceeded, with the
+  router's address), so pings with a small TTL find the routers on the
+  way.
+* The resolver asks from small sockets of its own, on the interface the
+  server is reached through (not counted against, nor listed among,
+  applications' sockets), and passes over at once a server it cannot send
+  to.
+* The DHCP lease shown is the one the client accepted from its server's
+  acknowledgement (renewals included), not just any acknowledgement on
+  the network.
+* IPv6 addresses do not embed the hardware address, which would follow
+  the machine from network to network: their interface identifiers, the
+  link-local one included, are stable privacy identifiers (RFC 7217) from
+  a secret `netd` draws when it starts.
 
 ## Components
 
@@ -92,8 +172,13 @@ out, and a system call only when the other side is asleep.
 * **Weak connections** (below -72 dBm) look for an access point of the
   same network that is at least 10 dB stronger and move to it, keeping the
   IP configuration.
-* **A refused password** is not retried until the user connects to the
-  network again (repeated attempts could get the device blocked).
+* **A password the access point does not seem to accept** is retried
+  after longer pauses (1, 5 and 15 minutes, then every hour), since
+  repeated attempts could get the device blocked; connecting by hand tries
+  again at once. Nothing proves a password wrong (the frames that suggest
+  it are not authenticated, and anyone in range could send them), so the
+  network is never given up for good, and the user is told only that the
+  password may be incorrect.
 * **The radio** may go away and come back (the driver reports it, the
   service rejoins); if the driver stops responding to control calls for two
   seconds, the service drops the radio rather than hanging. If the Wi-Fi
@@ -115,11 +200,23 @@ out, and a system call only when the other side is asleep.
   an open access point; a network saved as WPA3, or one where WPA3 was used
   once, is never joined through an access point offering only WPA2; WEP,
   TKIP-only WPA, Enterprise and OWE networks are listed but never joined.
+  A password is never used with an open access point either (an open "evil
+  twin" of a protected network is neither joined nor saved as open): the
+  desktop and Settings say which security the network the user picked has,
+  and a request with a password takes only access points with security.
 * The RSN element the access point sends in the handshake must match the
-  one it advertised.
+  one it advertised, and so must the RSN Extension element: in both and
+  the same, or in neither, whatever the AKM.
+* An SAE frame that does not verify is discarded, as 802.11 says, and the
+  access point's repeated commits and anti-clogging requests count against
+  the attempt's tries, so forged frames can neither end an attempt nor keep
+  it going for ever.
 * Passphrases are checked (8-63 printable characters or 64 hex digits),
   never logged and never returned by the API. The Terminal does not keep
-  them in its history. Session keys are zeroed when a connection ends.
+  them in its history. Session keys are zeroed when a connection ends
+  (with the copies the handshake keeps of what it installed), and so is
+  the decrypted key data of the handshake's messages; a new pairwise key
+  keeps the group keys.
 * The saved-networks file holds the passphrases (needed to rejoin); the
   file system has no access control yet, so any program can read it.
 
@@ -199,7 +296,7 @@ let events = vnet::wifi::Watcher::new()?; // status changes, scans, failures
 let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]); // share it
 let mut tls = vtls::connect("example.com", 443, Duration::from_secs(20), &config)?;
 tls.write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?;
-let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection
+let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection (close_notify)
 ```
 
 ## TLS
@@ -211,9 +308,13 @@ applications: HTTPS, secure WebSockets, anything else over TLS 1.3 or TLS
 * **Protocol.** [rustls](https://github.com/rustls/rustls) 0.23, through
   its `no_std` "unbuffered" API: `TlsStream` keeps the received TLS bytes,
   the decrypted data and the records to send, lets rustls process what
-  arrived, sends what rustls produces and reads from the socket only when
-  rustls needs more. Partial records, several records per read, key
-  updates, session tickets, alerts and close_notify are handled inside.
+  arrived, sends what rustls produces (before anything later) and reads
+  from the socket only when rustls needs more. Partial records, several
+  records per read, key updates, session tickets, alerts and close_notify
+  are handled inside. The end of the stream is the server's close_notify:
+  a connection that just ends may have been cut short by anyone on the
+  path, and reading reports it (`TlsError::Truncated`) once the data
+  before it is read.
 * **Cryptography** is vtls' own rustls provider on pure-Rust crates (no C,
   no assembly): AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 records;
   SHA-256/384 and HMAC, with rustls' HKDF and TLS 1.2 PRF over them; X25519,
@@ -237,7 +338,10 @@ applications: HTTPS, secure WebSockets, anything else over TLS 1.3 or TLS
   reports the same error. Nothing panics on what the network sends.
 * **Event loops** wait for `tls.transport().handle()` to become readable
   and call `try_read` until it returns `Ok(None)`: it decrypts whatever
-  the socket holds without waiting.
+  the socket holds without waiting, and sends what it owes (a key update's
+  answer) as far as the socket takes it at once. `try_write` sends small
+  messages the same way, the rest queued in order, so a server that stops
+  reading cannot stall the loop.
 
 Under QEMU's TCG emulation a full TLS 1.3 handshake with example.com
 (X25519, an ECDSA P-256/P-384 chain) took 115 ms, the network round trip
@@ -251,11 +355,20 @@ yet).
 The protocols are implemented with mature Rust crates where they exist,
 built `no_std`:
 
-* **smoltcp 0.14** (TCP/IP), a port with one patch: its random numbers
-  (TCP initial sequence numbers, DHCP and DNS ids, source ports) come from
-  a ChaCha20 stream keyed from the kernel's generator instead of the
-  predictable upstream sPCG32 (`implementation/ports/smoltcp`; see
-  `implementation/ports/README.md`).
+* **smoltcp 0.14** (TCP/IP), a port (`implementation/ports/smoltcp`; see
+  `implementation/ports/README.md`). Its patch draws the random numbers
+  (TCP initial sequence numbers, DHCP and DNS ids, source ports) from a
+  ChaCha20 stream keyed from the kernel's generator instead of the
+  predictable upstream sPCG32; applies a TCP connection's timeout only
+  while something waits for the peer's acknowledgement (upstream reset
+  every connection quiet for longer than it); tells the lease the DHCP
+  client accepted; forms IPv6 addresses with stable privacy interface
+  identifiers given a secret; lets ping sockets hear the errors about
+  their requests, ICMPv4 errors that quote only part of a packet
+  included; and limits the rate of ARP requests and neighbor
+  solicitations per address (upstream asked for no neighbor for a second
+  after asking for any, so the first connection after a DNS lookup waited
+  a second for the gateway's address).
 * **RustCrypto**: `sha1`, `sha2`, `hmac`, `pbkdf2`, `aes`, `ccm`, `cmac`,
   `aes-kw`, `p256` (SAE), `base16ct` (keys typed in hexadecimal), plus
   `subtle` (constant-time comparisons) and `zeroize`; `chacha20` and
@@ -311,9 +424,14 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
   (frames, RSN, crypto vectors, handshakes, SAE, and
   station-against-access-point runs: every security type, wrong passwords,
   hidden networks, replays, deauthentication, silent access points,
-  reconnection), `vnetstack` (two stacks over a simulated cable: DHCP
-  including lease renewal and server outages, TCP, UDP, DNS, ICMP, IPv6),
-  the profile and policy modules, and `vtls`: the provider against the
+  reconnection, rekeying, and frames forged or altered on the air),
+  `vnetstack` (two stacks over a simulated cable: DHCP including lease
+  renewal, server outages and other clients' acknowledgements, TCP
+  including quiet connections, half closes, closing with data in flight
+  and connections whose client left, UDP, DNS including unreachable
+  servers, ICMP and its errors, IPv6, a full link), the profile and policy
+  modules, smoltcp's own tests with Veda's patch (see
+  `implementation/ports/README.md`), and `vtls`: the provider against the
   vectors above, handshakes with a rustls server in memory (every cipher
   suite, key exchange group and certificate type, data both ways, closing
   from either side, key updates, records split down to single bytes,
@@ -323,13 +441,15 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
   captured on 2026-10-03, verified against the built-in roots.
   `cargo test -p vtls -- --ignored --nocapture` connects to those servers
   for real with each cipher suite and group.
-* **In-system**: `nettest` (`run=nettest`; on a PC with Wi-Fi,
-  `run=nettest:wifi,SSID,PASSWORD`): DNS, UDP, TCP, HTTP and ping over
-  Ethernet or Wi-Fi; `run=nettest:https`: HTTPS requests to example.com
-  (200 and the page) and api.deepgram.com (401 without a key) with the TLS
-  version, cipher suite and handshake time. These checks, and the scripts
-  below, reach real Internet hosts through QEMU's NAT, so the host must be
-  online.
+* **In-system**: `nettest` (`run=nettest`): DNS, UDP, TCP, HTTP and ping
+  over the default route, Ethernet or Wi-Fi; `run=nettest:https`: HTTPS
+  requests to example.com (200 and the page) and api.deepgram.com (401
+  without a key) with the TLS version, cipher suite and handshake time.
+  These checks, and the scripts below, reach real Internet hosts through
+  QEMU's NAT, so the host must be online. `run=nettest:wifi,SSID,PASSWORD`
+  joins a network before its checks: the Wi-Fi service lets `nettest`
+  change Wi-Fi only when the kernel command line started it (the
+  registry's `ClientIdentity::requested`), never when an application did.
 * **GUI and recovery** (`cargo orchestration test --ui`):
   `verification/ui/network-cable.vts` unplugs and replugs the wired card's
   cable (QMP `set_link`) and checks that the default route goes and comes
@@ -360,4 +480,7 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
 * HTTP: one request per connection (`Connection: close`), no compressed
   bodies, cookies or caching (`vweb`'s client serves API calls and
   downloads).
+* IPv6: no temporary addresses (RFC 8981) yet; the stable privacy
+  addresses change when `netd` starts again (its secret is not kept on
+  disk).
 * Encrypting the saved passphrases at rest.

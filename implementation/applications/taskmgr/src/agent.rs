@@ -18,7 +18,10 @@ use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_opt_int, arg_opt_s
 use crate::procs::{self, Row};
 use vfiles::format::human_size;
 
-use crate::{Column, Dialog, Proc, Resource, SAMPLE_NS, TaskManager, format_uptime};
+use apps_common::format::uptime;
+use apps_common::process::{self, Classifier};
+
+use crate::{Column, Dialog, Proc, Resource, SAMPLE_NS, TaskManager};
 
 /// The most processes the agent gets in one list.
 const MAX_PROCS: usize = 60;
@@ -219,7 +222,7 @@ impl TaskManager {
             "memory_percent": share,
             "processes": info.process_count,
             "threads": info.thread_count,
-            "up_time": format_uptime(info.uptime_ns),
+            "up_time": uptime(info.uptime_ns),
             "busiest": busiest,
             "largest": largest,
         })
@@ -250,6 +253,10 @@ impl TaskManager {
             return Err("which application? Give its name or PID".into());
         }
         let tasks = self.tasks()?;
+        // Which are applications': what the launcher started as one, and
+        // what those started (a program run in the Terminal).
+        let classifier = Classifier::from_tasks(&process::list(), Some(&tasks));
+        let is_app = |t: &TaskInfo| !classifier.is_system(t.koid);
         let named = |t: &TaskInfo| {
             name.as_ref().is_none_or(|n| t.name.to_lowercase() == *n || self.title_of(t).to_lowercase() == *n)
         };
@@ -266,7 +273,7 @@ impl TaskManager {
                 if let Some(p) = pid {
                     return Err(format!("no running program has PID {p} (it may have exited)"));
                 }
-                let apps: Vec<String> = tasks.iter().filter(|t| t.is_app).map(|t| self.title_of(t)).collect();
+                let apps: Vec<String> = tasks.iter().filter(|t| is_app(t)).map(|t| self.title_of(t)).collect();
                 return Err(format!(
                     "no running program is called {} (it may have exited); the applications running are: {}",
                     name.as_deref().unwrap_or(""),
@@ -284,7 +291,7 @@ impl TaskManager {
             }
         };
         let (koid, title) = (t.koid, self.title_of(t));
-        if !t.is_app {
+        if !is_app(t) {
             return Err(format!(
                 "{title} is a system process: ending it can stop Veda from working, so Task Manager ends only \
                  applications for the agent"

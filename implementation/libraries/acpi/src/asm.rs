@@ -5,22 +5,48 @@
 //! and those of tests and simulated boards) read like ASL:
 //! `device("SPK1", &cat(&[&name("_HID", &string("CSC3551")), ...]))`.
 //! Each function returns the bytes of one term; `cat` joins them. Names are
-//! ASL text (`\_SB.PC00`, `^GPI0`, `SBUF`); the functions panic on a
-//! malformed one (they are for names written into code).
+//! ASL text (`\_SB.PC00`, `^GPI0`, `SBUF`).
+//!
+//! Most functions are for code written by hand, and panic on what cannot be
+//! written: a malformed name, a string with a NUL in it, a package past the
+//! format's 256 MiB. Those that take what comes from elsewhere (the
+//! firmware's names and ids, which the driver VM's tables pass on) have
+//! fallible versions, which say `None` instead: [`name_string`],
+//! [`try_name`], [`try_device`], [`try_string`],
+//! [`try_gpio_descriptor_of`].
+//!
+//! And whole tables: [`table`] writes one's header, as Veda's tables have
+//! it; the UUIDs of the `_DSM` and `_DSD` objects Veda's tables answer are
+//! here too.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::name::NameString;
 use crate::resource::{Gpio, Spi};
+use crate::tables::HEADER_LEN;
 use crate::value::Value;
 
 /// The bytes of `body` behind its PkgLength, which counts its own bytes:
-/// one for the shortest bodies, two to four for longer ones (up to 256 MiB,
-/// the format's limit).
+/// one for the shortest bodies, two to four for longer ones. Panics past
+/// 256 MiB, the format's limit.
 pub fn pkg(body: &[u8]) -> Vec<u8> {
+    try_pkg(body).expect("an AML package is shorter than 256 MiB")
+}
+
+/// Whether a body of `n` bytes fits a package (with its PkgLength, of at
+/// most four bytes, less than 256 MiB).
+fn fits(n: usize) -> bool {
+    n.checked_add(4).is_some_and(|total| total < 1 << 28)
+}
+
+/// [`pkg`], or `None` past the format's limit.
+fn try_pkg(body: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let n = body.len();
+    if !fits(n) {
+        return None;
+    }
     if n + 1 < 0x40 {
         out.push((n + 1) as u8);
     } else {
@@ -32,17 +58,17 @@ pub fn pkg(body: &[u8]) -> Vec<u8> {
             3
         };
         let total = n + 1 + follow;
-        assert!(total < 1 << 28, "an AML package is shorter than 256 MiB");
         out.push((follow as u8) << 6 | (total & 0xF) as u8);
         out.extend((0..follow).map(|i| (total >> (4 + 8 * i)) as u8));
     }
     out.extend_from_slice(body);
-    out
+    Some(out)
 }
 
-/// A NameString.
-pub fn nm(text: &str) -> Vec<u8> {
-    let n = NameString::parse(text).expect("a malformed name");
+/// A NameString, or `None` if `text` is not a name AML can hold (a
+/// segment that is not a name's, more than 255 of them).
+pub fn name_string(text: &str) -> Option<Vec<u8>> {
+    let n = NameString::parse(text)?;
     let mut out = Vec::new();
     if n.absolute {
         out.push(b'\\');
@@ -52,12 +78,17 @@ pub fn nm(text: &str) -> Vec<u8> {
         0 => out.push(0),
         1 => {}
         2 => out.push(0x2E),
-        k => out.extend([0x2F, k as u8]),
+        k => out.extend([0x2F, u8::try_from(k).ok()?]),
     }
     for s in &n.segs {
         out.extend_from_slice(s);
     }
-    out
+    Some(out)
+}
+
+/// A NameString. Panics on a malformed name.
+pub fn nm(text: &str) -> Vec<u8> {
+    name_string(text).expect("a malformed name")
 }
 
 pub fn cat(parts: &[&[u8]]) -> Vec<u8> {
@@ -76,7 +107,8 @@ pub fn int(v: u64) -> Vec<u8> {
     }
 }
 
-/// A compressed EISA id (`EisaId ("PNP0A08")`).
+/// A compressed EISA id (`EisaId ("PNP0A08")`). Panics if `id` is not
+/// three capital letters and four hexadecimal digits.
 pub fn eisa(id: &str) -> Vec<u8> {
     let b = id.as_bytes();
     let letter = |c: u8| (c - b'@') as u32 & 0x1F;
@@ -85,32 +117,57 @@ pub fn eisa(id: &str) -> Vec<u8> {
     cat(&[&[0x0C], &v.swap_bytes().to_le_bytes()])
 }
 
+/// A string. Panics if it has a NUL, which would end it.
 pub fn string(s: &str) -> Vec<u8> {
-    cat(&[&[0x0D], s.as_bytes(), &[0]])
+    try_string(s).expect("a string without NUL")
 }
 
+/// A string, or `None` if it has a NUL, which would end it.
+pub fn try_string(s: &str) -> Option<Vec<u8>> {
+    (!s.as_bytes().contains(&0)).then(|| cat(&[&[0x0D], s.as_bytes(), &[0]]))
+}
+
+/// A buffer of `bytes`.
 pub fn buffer(bytes: &[u8]) -> Vec<u8> {
     cat(&[&[0x11], &pkg(&cat(&[&int(bytes.len() as u64), bytes]))])
 }
 
+/// A package of `items`: a `Package` of up to 255, a `VarPackage` of more.
 pub fn package(items: &[Vec<u8>]) -> Vec<u8> {
-    cat(&[&[0x12], &pkg(&cat(&[&[items.len() as u8], &items.concat()]))])
+    match u8::try_from(items.len()) {
+        Ok(n) => cat(&[&[0x12], &pkg(&cat(&[&[n], &items.concat()]))]),
+        Err(_) => cat(&[&[0x13], &pkg(&cat(&[&int(items.len() as u64), &items.concat()]))]),
+    }
 }
 
+/// `Scope (name) { body }`.
 pub fn scope(name: &str, body: &[u8]) -> Vec<u8> {
     cat(&[&[0x10], &pkg(&cat(&[&nm(name), body]))])
 }
 
+/// `Device (name) { body }`.
 pub fn device(name: &str, body: &[u8]) -> Vec<u8> {
-    cat(&[&[0x5B, 0x82], &pkg(&cat(&[&nm(name), body]))])
+    try_device(name, body).expect("a well-formed device name")
 }
 
+/// A device, or `None` if `name` is malformed or the body too long.
+pub fn try_device(name: &str, body: &[u8]) -> Option<Vec<u8>> {
+    Some(cat(&[&[0x5B, 0x82], &try_pkg(&cat(&[&name_string(name)?, body]))?]))
+}
+
+/// `Method (name, args) { body }`.
 pub fn method(name: &str, args: u8, body: &[u8]) -> Vec<u8> {
     cat(&[&[0x14], &pkg(&cat(&[&nm(name), &[args], body]))])
 }
 
+/// `Name (n, value)`.
 pub fn name(n: &str, value: &[u8]) -> Vec<u8> {
     cat(&[&[0x08], &nm(n), value])
+}
+
+/// A name, or `None` if `n` is malformed.
+pub fn try_name(n: &str, value: &[u8]) -> Option<Vec<u8>> {
+    Some(cat(&[&[0x08], &name_string(n)?, value]))
 }
 
 /// `External (name, kind, args)` (kind 6 a device, 8 a method).
@@ -118,22 +175,27 @@ pub fn external(n: &str, kind: u8, args: u8) -> Vec<u8> {
     cat(&[&[0x15], &nm(n), &[kind, args]])
 }
 
+/// `If (predicate) { body }`.
 pub fn if_(predicate: &[u8], body: &[u8]) -> Vec<u8> {
     cat(&[&[0xA0], &pkg(&cat(&[predicate, body]))])
 }
 
+/// `Else { body }`, right after an `If`.
 pub fn else_(body: &[u8]) -> Vec<u8> {
     cat(&[&[0xA1], &pkg(body)])
 }
 
+/// `While (predicate) { body }`.
 pub fn while_(predicate: &[u8], body: &[u8]) -> Vec<u8> {
     cat(&[&[0xA2], &pkg(&cat(&[predicate, body]))])
 }
 
+/// `Return (v)`.
 pub fn ret(v: &[u8]) -> Vec<u8> {
     cat(&[&[0xA4], v])
 }
 
+/// `Store (v, target)`.
 pub fn store(v: &[u8], target: &[u8]) -> Vec<u8> {
     cat(&[&[0x70], v, target])
 }
@@ -143,23 +205,17 @@ pub fn binary(op: u8, a: &[u8], b: &[u8], target: &[u8]) -> Vec<u8> {
     cat(&[&[op], a, b, target])
 }
 
+/// `Add (a, b)`, its result not stored.
 pub fn add(a: &[u8], b: &[u8]) -> Vec<u8> {
     binary(0x72, a, b, &[0])
 }
 
+/// `LEqual (a, b)`.
 pub fn lequal(a: &[u8], b: &[u8]) -> Vec<u8> {
     cat(&[&[0x93], a, b])
 }
 
-pub fn lor(a: &[u8], b: &[u8]) -> Vec<u8> {
-    cat(&[&[0x91], a, b])
-}
-
-/// `CreateDWordField (buffer, offset, name)`.
-pub fn create_dword_field(buffer: &str, offset: u64, field: &str) -> Vec<u8> {
-    cat(&[&[0x8A], &nm(buffer), &int(offset), &nm(field)])
-}
-
+/// `OperationRegion (n, space, offset, length)`.
 pub fn region(n: &str, space: u8, offset: &[u8], length: &[u8]) -> Vec<u8> {
     cat(&[&[0x5B, 0x80], &nm(n), &[space], offset, length])
 }
@@ -185,6 +241,7 @@ pub fn field(region: &str, flags: u8, fields: &[(&str, usize)]) -> Vec<u8> {
     cat(&[&[0x5B, 0x81], &pkg(&cat(&[&nm(region), &[flags], &list]))])
 }
 
+/// `Local0`, `Local1`, `Arg0`, `Arg1`, `Arg2`.
 pub const LOCAL0: u8 = 0x60;
 pub const LOCAL1: u8 = 0x61;
 pub const ARG0: u8 = 0x68;
@@ -192,14 +249,17 @@ pub const ARG1: u8 = 0x69;
 pub const ARG2: u8 = 0x6A;
 
 /// The AML of a constant: an integer, a string, a buffer, or a package of
-/// them (`None` for anything else, a reference say).
+/// them (`None` for anything else, a reference say, or what AML cannot
+/// hold: a string with a NUL).
 pub fn constant(v: &Value) -> Option<Vec<u8>> {
     match v {
         Value::Integer(i) => Some(int(*i)),
-        Value::String(s) => Some(string(s)),
-        Value::Buffer(b) => Some(buffer(b)),
-        Value::Package(items) if items.len() <= 0xFF => {
-            Some(package(&items.iter().map(constant).collect::<Option<Vec<_>>>()?))
+        Value::String(s) => try_string(s),
+        // A buffer's size and a package's count take up to 9 bytes.
+        Value::Buffer(b) => fits(b.len() + 9).then(|| buffer(b)),
+        Value::Package(items) => {
+            let items = items.iter().map(constant).collect::<Option<Vec<_>>>()?;
+            fits(items.iter().map(Vec::len).sum::<usize>() + 9).then(|| package(&items))
         }
         _ => None,
     }
@@ -224,11 +284,20 @@ pub fn uuid(text: &str) -> Option<[u8; 16]> {
     Some(u)
 }
 
+/// HID over I2C's `_DSM` (function 1: the HID descriptor's address).
+pub const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
+/// Device properties' UUID (`_DSD`).
+pub const DEVICE_PROPERTIES: &str = "daffd814-6eba-4d8c-8a91-bc9bbf4aa301";
+
 /// A `_DSM` that answers function `function` of `uuid` (at any revision)
 /// with `answer` (an AML term), and function 0 with the functions there
-/// are; anything else with nothing.
+/// are (a bit each, in as many bytes as they take); anything else with
+/// nothing.
 pub fn dsm(uuid: &[u8; 16], function: u8, answer: &[u8]) -> Vec<u8> {
-    let functions = buffer(&[1 | 1 << function]);
+    let mut functions = vec![0u8; function as usize / 8 + 1];
+    functions[0] |= 1;
+    functions[function as usize / 8] |= 1 << (function % 8);
+    let functions = buffer(&functions);
     method(
         "_DSM",
         4,
@@ -245,11 +314,47 @@ pub fn dsm(uuid: &[u8; 16], function: u8, answer: &[u8]) -> Vec<u8> {
     )
 }
 
+// --- Tables ----------------------------------------------------------------
+
+/// The OEM id of Veda's tables.
+pub const OEM_ID: &[u8; 6] = b"VEDA  ";
+
+/// A whole table, as Veda writes them: its header (signature, length,
+/// `revision`, checksum, OEM id [`OEM_ID`], `oem_table_id`, OEM revision 1,
+/// creator `VEDA`, creator revision 1), then `body`.
+pub fn table(signature: &[u8; 4], revision: u8, oem_table_id: &[u8; 8], body: &[u8]) -> Vec<u8> {
+    let mut t = Vec::with_capacity(HEADER_LEN + body.len());
+    t.extend_from_slice(signature);
+    t.extend_from_slice(&((HEADER_LEN + body.len()) as u32).to_le_bytes());
+    t.push(revision);
+    t.push(0);
+    t.extend_from_slice(OEM_ID);
+    t.extend_from_slice(oem_table_id);
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(b"VEDA");
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(body);
+    t[9] = checksum(&t);
+    t
+}
+
+/// What makes `bytes` add up to zero.
+pub fn checksum(bytes: &[u8]) -> u8 {
+    0u8.wrapping_sub(bytes.iter().fold(0u8, |a, &b| a.wrapping_add(b)))
+}
+
 // --- Resource descriptors ---------------------------------------------------
 
-/// A large descriptor: its type, then the length and `body`.
-fn large(kind: u8, body: &[u8]) -> Vec<u8> {
-    cat(&[&[0x80 | kind], &(body.len() as u16).to_le_bytes(), body])
+/// A large descriptor: its type, then the length and `body`; `None` if the
+/// body is longer than a descriptor's.
+fn large(kind: u8, body: &[u8]) -> Option<Vec<u8>> {
+    let len = u16::try_from(body.len()).ok()?;
+    Some(cat(&[&[0x80 | kind], &len.to_le_bytes(), body]))
+}
+
+/// A resource source's name, NUL-terminated: `None` if it has a NUL.
+fn source(name: &str) -> Option<&[u8]> {
+    (!name.as_bytes().contains(&0)).then_some(name.as_bytes())
 }
 
 /// `SpiSerialBusV2 (cs, PolarityLow, FourWireMode, 8, ControllerInitiated,
@@ -267,7 +372,8 @@ pub fn spi_descriptor(cs: u16, speed: u32, controller: &str) -> Vec<u8> {
     })
 }
 
-/// The `SpiSerialBusV2` [`crate::resource::parse`] reads as `s`.
+/// The `SpiSerialBusV2` [`crate::resource::parse`] reads as `s`. Panics
+/// on a controller's name with a NUL.
 pub fn spi_descriptor_of(s: &Spi) -> Vec<u8> {
     let specific = s.three_wire as u16 | (s.cs_active_high as u16) << 1;
     let mut d = vec![2, 0, 2, 2];
@@ -276,19 +382,27 @@ pub fn spi_descriptor_of(s: &Spi) -> Vec<u8> {
     d.extend_from_slice(&s.speed_hz.to_le_bytes());
     d.extend([s.bits, s.cpha as u8, s.cpol as u8]);
     d.extend_from_slice(&s.chip_select.to_le_bytes());
-    d.extend_from_slice(s.controller.as_bytes());
+    d.extend_from_slice(source(&s.controller).expect("a controller's name without NUL"));
     d.push(0);
-    large(0x0E, &d)
+    large(0x0E, &d).expect("a descriptor of at most 64 KiB")
 }
 
 /// `GpioIo` (or `GpioInt`) with one pin. `flags`: the I/O restriction and
 /// sharing (`GpioIo`) or the interrupt's mode, polarity and sharing.
 pub fn gpio_descriptor(interrupt: bool, flags: u16, pull: u8, debounce: u16, pin: u16, controller: &str) -> Vec<u8> {
-    gpio_connection(interrupt, flags, pull, debounce, &[pin], controller)
+    gpio_connection(interrupt, flags, pull, debounce, &[pin], controller).expect("a controller's name without NUL")
 }
 
 /// The `GpioIo` or `GpioInt` [`crate::resource::parse`] reads as `g`.
+/// Panics if it cannot be written ([`try_gpio_descriptor_of`]).
 pub fn gpio_descriptor_of(g: &Gpio) -> Vec<u8> {
+    try_gpio_descriptor_of(g).expect("a GPIO connection a descriptor can hold")
+}
+
+/// The `GpioIo` or `GpioInt` [`crate::resource::parse`] reads as `g`, or
+/// `None` if a descriptor cannot hold it (a controller's name with a NUL,
+/// more pins than 64 KiB of descriptor take).
+pub fn try_gpio_descriptor_of(g: &Gpio) -> Option<Vec<u8>> {
     let flags = if g.interrupt {
         g.edge as u16 | (g.polarity as u16 & 3) << 1 | (g.shared as u16) << 3 | (g.wake as u16) << 4
     } else {
@@ -297,31 +411,35 @@ pub fn gpio_descriptor_of(g: &Gpio) -> Vec<u8> {
     gpio_connection(g.interrupt, flags, g.pull, g.debounce, &g.pins, &g.controller)
 }
 
-fn gpio_connection(interrupt: bool, flags: u16, pull: u8, debounce: u16, pins: &[u16], controller: &str) -> Vec<u8> {
+fn gpio_connection(
+    interrupt: bool,
+    flags: u16,
+    pull: u8,
+    debounce: u16,
+    pins: &[u16],
+    controller: &str,
+) -> Option<Vec<u8>> {
+    let controller = source(controller)?;
     let mut d = vec![1, if interrupt { 0 } else { 1 }, 1, 0];
     d.extend_from_slice(&flags.to_le_bytes());
     d.push(pull);
     d.extend_from_slice(&0u16.to_le_bytes());
     d.extend_from_slice(&debounce.to_le_bytes());
-    // Pin table right after the fixed part (23 bytes in), then the name.
-    let name_at = 23 + 2 * pins.len();
+    // Pin table right after the fixed part (23 bytes in), then the name,
+    // then (none of) the vendor's data: offsets from the descriptor's start.
+    let name_at = u16::try_from(pins.len().checked_mul(2)?.checked_add(23)?).ok()?;
+    let vendor_at = u16::try_from(name_at as usize + controller.len() + 1).ok()?;
     d.extend_from_slice(&23u16.to_le_bytes());
     d.push(0);
-    d.extend_from_slice(&(name_at as u16).to_le_bytes());
-    let vendor_at = name_at + controller.len() + 1;
-    d.extend_from_slice(&(vendor_at as u16).to_le_bytes());
+    d.extend_from_slice(&name_at.to_le_bytes());
+    d.extend_from_slice(&vendor_at.to_le_bytes());
     d.extend_from_slice(&0u16.to_le_bytes());
     for pin in pins {
         d.extend_from_slice(&pin.to_le_bytes());
     }
-    d.extend_from_slice(controller.as_bytes());
+    d.extend_from_slice(controller);
     d.push(0);
     large(0x0C, &d)
-}
-
-/// `Memory32Fixed (ReadWrite, base, length)`.
-pub fn memory32_fixed(base: u32, length: u32) -> Vec<u8> {
-    large(0x06, &cat(&[&[1], &base.to_le_bytes(), &length.to_le_bytes()]))
 }
 
 /// `Interrupt (ResourceConsumer, Level, ActiveLow, Shared) { irq }`.
@@ -334,11 +452,11 @@ pub fn interrupt(irq: u32) -> Vec<u8> {
 /// not.
 pub fn interrupt_of(irq: u32, edge: bool, active_low: bool, shared: bool, wake: bool) -> Vec<u8> {
     let flags = 1 | (edge as u8) << 1 | (active_low as u8) << 2 | (shared as u8) << 3 | (wake as u8) << 4;
-    large(0x09, &cat(&[&[flags, 1], &irq.to_le_bytes()]))
+    large(0x09, &cat(&[&[flags, 1], &irq.to_le_bytes()])).expect("a descriptor of a few bytes")
 }
 
 /// `I2cSerialBusV2 (address, ControllerInitiated, speed, 7- or 10-bit
-/// addressing, controller)`.
+/// addressing, controller)`. Panics on a controller's name with a NUL.
 pub fn i2c_descriptor(address: u16, speed: u32, ten_bit: bool, controller: &str) -> Vec<u8> {
     let mut d = vec![2, 0, 1, 2];
     d.extend_from_slice(&(ten_bit as u16).to_le_bytes());
@@ -346,9 +464,9 @@ pub fn i2c_descriptor(address: u16, speed: u32, ten_bit: bool, controller: &str)
     d.extend_from_slice(&6u16.to_le_bytes());
     d.extend_from_slice(&speed.to_le_bytes());
     d.extend_from_slice(&address.to_le_bytes());
-    d.extend_from_slice(controller.as_bytes());
+    d.extend_from_slice(source(controller).expect("a controller's name without NUL"));
     d.push(0);
-    large(0x0E, &d)
+    large(0x0E, &d).expect("a descriptor of at most 64 KiB")
 }
 
 /// `IO (Decode16, base, base, 1, length)`.
@@ -366,6 +484,7 @@ pub fn irq_no_flags(irq: u8) -> Vec<u8> {
 pub fn word_bus_number(min: u16, max: u16) -> Vec<u8> {
     let fields = [0, min, max, 0, max - min + 1];
     large(0x08, &cat(&[&[2, 0x0C, 0], &fields.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()]))
+        .expect("a descriptor of a few bytes")
 }
 
 /// `DWordMemory (ResourceProducer, PosDecode, MinFixed, MaxFixed,
@@ -374,12 +493,14 @@ pub fn word_bus_number(min: u16, max: u16) -> Vec<u8> {
 pub fn dword_memory(min: u32, max: u32) -> Vec<u8> {
     let fields = [0, min, max, 0, max - min + 1];
     large(0x07, &cat(&[&[0, 0x0C, 1], &fields.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()]))
+        .expect("a descriptor of a few bytes")
 }
 
 /// `QWordMemory (...)`, as [`dword_memory`] for 64-bit addresses.
 pub fn qword_memory(min: u64, max: u64) -> Vec<u8> {
     let fields = [0, min, max, 0, max - min + 1];
     large(0x0A, &cat(&[&[0, 0x0C, 1], &fields.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()]))
+        .expect("a descriptor of a few bytes")
 }
 
 /// A `ResourceTemplate` of `descriptors`: a buffer, with its end tag.
@@ -387,4 +508,5 @@ pub fn resource_template(descriptors: &[u8]) -> Vec<u8> {
     buffer(&cat(&[descriptors, &END_TAG]))
 }
 
+/// The end tag of a resource template (no checksum).
 pub const END_TAG: [u8; 2] = [0x79, 0x00];

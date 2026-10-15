@@ -13,7 +13,12 @@
 //! then), every item is looked up again when the action runs, and they only
 //! change items in the home folder or in `/tmp`. Deleting moves items to the
 //! Trash; only emptying the Trash (or deleting items in it) destroys them,
-//! and that is asked every time.
+//! and that is asked every time. They put nothing where the user could not
+//! (the Trash, the system image): the same checks as the mouse's refuse it.
+//!
+//! The operations run on Files' operations thread, as the user's do: an
+//! action waits for its operation a few seconds, and an operation that
+//! takes longer goes on, the state saying how far it is.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -21,13 +26,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use vfiles::format::{format_time, human_size};
-use vfiles::kind::{EDITOR, default_app, kind_name};
+use vfiles::kind::{EDITOR, FileKind, default_app, file_kind, kind_name};
 use vfiles::path::{extension, file_name, file_stem, is_within, join, parent, resolve};
 use vfiles::{HOME, trash};
 use vui::agent::{
-    self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_opt_str, arg_path, arg_str, clip, json, show_path,
+    self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_list, arg_opt_str, arg_path, arg_str, clip, json, show_path,
 };
 
+use crate::ops::{Finished, Outcome};
 use crate::{Dialog, Entry, Files, Props, Rename, SortKey, ViewMode, items, location, space_text};
 
 /// The most items of a folder (or of a list in a result) the agent gets at
@@ -36,6 +42,8 @@ const MAX_ITEMS: usize = 60;
 /// The other place, besides the home folder, where the agent may change
 /// items.
 const TMP: &str = "/tmp";
+/// How long an action waits for the file operation it started.
+const OPERATION_WAIT_NS: u64 = 8_000_000_000;
 
 pub fn info() -> AppAgentInfo {
     agent::info(
@@ -60,7 +68,7 @@ pub fn info() -> AppAgentInfo {
             Action::new(
                 "open",
                 "Opens an item: a folder is shown, a file opens in its app (pictures in Photos, text in the Text \
-                 Editor, music in Music)",
+                 Editor, music in Music); programs are not started",
             )
             .param("item", "string", "A name in the folder shown, or a path", true)
             .param("in_text_editor", "boolean", "Open the file in the Text Editor, whatever its type", false)
@@ -215,7 +223,7 @@ fn place(path: &str) -> String {
 /// The dialog in front of the window.
 fn dialog(d: &Dialog) -> Value {
     match d {
-        Dialog::ConfirmDelete(paths) => json!({
+        Dialog::ConfirmDelete { paths, .. } => json!({
             "asks_to_delete_for_good": paths.iter().take(MAX_ITEMS).map(|p| place(p)).collect::<Vec<_>>(),
         }),
         Dialog::ConfirmEmpty(n) => json!({ "asks_to_empty_trash": format!("{} in the Trash", items(*n)) }),
@@ -281,10 +289,19 @@ pub fn state(f: &Files) -> Value {
         v["read_only"] = json!(true);
     }
     if !trash_root {
-        let n = trash::count(&f.fs);
+        let n = f.trash_count();
         if n > 0 {
             v["in_trash"] = json!(items(n));
         }
+    }
+    if let Some(p) = f.worker.as_ref().and_then(|w| w.progress()) {
+        v["working_on"] = json!({
+            "doing": p.verb,
+            "items_done": p.done,
+            "of": p.total,
+            "current": p.current.as_str(),
+            "waiting_after_it": p.queued,
+        });
     }
     if let Some(s) = &f.space {
         v["free_space"] = json!(space_text(s));
@@ -302,18 +319,9 @@ pub fn state(f: &Files) -> Value {
     v
 }
 
-/// A list argument: one item per line (or a JSON array of strings).
-fn list_arg(args: &Value, key: &str) -> Vec<String> {
-    let lines: Vec<&str> = match args.get(key) {
-        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
-        Some(Value::String(s)) => s.lines().collect(),
-        _ => Vec::new(),
-    };
-    lines.into_iter().map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
-}
-
 /// A path in an action the user approves. Bare names are refused: they
-/// would mean whichever folder is shown when the user answers.
+/// would mean whichever folder is shown when the user answers. (As
+/// `vui::agent::arg_path` resolves one argument, for an item of a list.)
 fn explicit_path(p: &str, shown: &str) -> Result<String, String> {
     let p = p.trim();
     if !p.contains('/') && !p.starts_with('~') {
@@ -419,10 +427,8 @@ impl Files {
     /// The items of an approved action (see [`Files::target`]), one per
     /// line.
     fn targets(&self, args: &Value, key: &str, changes: bool) -> Result<Vec<String>, String> {
-        let list = list_arg(args, key);
-        if list.is_empty() {
-            return Err(format!("which items? give their full paths in '{key}', one per line"));
-        }
+        let list =
+            arg_list(args, key).map_err(|_| format!("which items? give their full paths in '{key}', one per line"))?;
         let mut paths = Vec::new();
         for p in &list {
             let path = self.target(p, changes)?;
@@ -452,6 +458,29 @@ impl Files {
         }
         self.failed()?;
         Err(format!("{} could not be shown", show_path(path)))
+    }
+
+    /// Waits a while for the operation `id` started, and takes what the
+    /// operations' thread finished: the operation's outcome, or `None` while
+    /// it goes on.
+    fn await_job(&mut self, id: u64) -> Option<Finished> {
+        let done = self.worker.as_ref().is_some_and(|w| w.wait_for(id, vrt::time::now_ns() + OPERATION_WAIT_NS));
+        let finished = self.collect_jobs();
+        if !done {
+            return None;
+        }
+        finished.into_iter().find(|f| f.id == id)
+    }
+
+    /// The answer for an operation that is still going on.
+    fn still_working(&self, what: &str) -> Value {
+        let mut v = json!({ "started": what, "still_working": true });
+        if let Some(p) = self.worker.as_ref().and_then(|w| w.progress()) {
+            v["items_done"] = json!(p.done);
+            v["of"] = json!(p.total);
+        }
+        v["note"] = json!("it goes on in Files, which shows how far it is; the state says when it is done");
+        v
     }
 
     /// Where the window is now, for results.
@@ -546,6 +575,15 @@ impl Files {
                     self.failed()?;
                     return Ok(json!({ "opened": show_path(&path), "with": EDITOR.id }));
                 }
+                // A program would start, and a program can do anything:
+                // opening is routine, starting programs is not.
+                let program = self.fs.stat(&path).is_ok_and(|st| file_kind(&path, st.executable) == FileKind::Program);
+                if default_app(&path).is_none() && program {
+                    return Err(format!(
+                        "{} is a program, which Files does not start for the agent (applications open with open_app)",
+                        show_path(&path)
+                    ));
+                }
                 self.open_file(&path);
                 if matches!(self.dialog, Some(Dialog::OpenUnknown(_))) {
                     self.dialog = None;
@@ -558,6 +596,7 @@ impl Files {
                 self.failed()?;
                 Ok(match default_app(&path) {
                     Some(app) => json!({ "opened": show_path(&path), "with": app.id }),
+                    // An application's manifest.
                     None => json!({ "started": show_path(&path) }),
                 })
             }
@@ -567,7 +606,7 @@ impl Files {
                     return Ok(json!({ "selected": self.selected.len() }));
                 }
                 let mut names: Vec<String> = Vec::new();
-                for wanted in list_arg(args, "names") {
+                for wanted in arg_list(args, "names").unwrap_or_default() {
                     let found = match self.find_name(&wanted) {
                         Some(n) => vec![n],
                         None => {
@@ -649,8 +688,11 @@ impl Files {
                     }
                     self.show_folder(&dir)?;
                 }
-                if self.read_only() {
-                    return Err(format!("{} is part of the read-only system image", show_path(&self.cwd)));
+                // Where the user could make one (not in the Trash, nor in
+                // the system image).
+                if !self.ensure_changeable("Can't create folder") {
+                    self.failed()?;
+                    return Err(format!("no folder can be made in {}", place(&self.cwd)));
                 }
                 let path = self.path_of(name);
                 if self.fs.exists(&path) {
@@ -672,6 +714,11 @@ impl Files {
                     None => self.cwd.clone(),
                 };
                 self.show_properties(&path);
+                // A folder's size is measured first.
+                if let Some(Dialog::Properties(Props { measuring: Some(job), .. })) = &self.dialog {
+                    let job = *job;
+                    self.await_job(job);
+                }
                 match &self.dialog {
                     Some(Dialog::Properties(p)) => Ok(properties(p)),
                     _ => Err(format!("the properties of {} could not be read", show_path(&path))),
@@ -716,25 +763,41 @@ impl Files {
                     return Err(format!("{} cannot be {verb} into itself", show_path(p)));
                 }
                 if cut
-                    && matches!(&self.dialog, Some(Dialog::ConfirmDelete(asked)) if asked.iter().any(|p| paths.contains(p)))
+                    && matches!(&self.dialog, Some(Dialog::ConfirmDelete { paths: asked, .. }) if asked.iter().any(|p| paths.contains(p)))
                 {
                     self.dialog = None;
                 }
                 // As the user would: the folder is shown and the items are
-                // pasted into it.
+                // pasted into it, where Files lets the user paste.
                 if dest != self.cwd {
                     self.show_folder(&dest)?;
                 }
-                let (arrived, _) = self.paste_paths(&paths, cut);
+                let Some(job) = self.paste_paths(&paths, cut) else {
+                    self.failed()?;
+                    return Err(format!("nothing can be {verb} into {}", place(&dest)));
+                };
+                let Some(done) = self.await_job(job) else {
+                    return Ok(self.still_working(&format!(
+                        "{} {}",
+                        if cut { "moving" } else { "copying" },
+                        items(paths.len())
+                    )));
+                };
                 let problems = self.failed().err();
+                let arrived = match done.outcome {
+                    Outcome::Transferred { arrived, .. } => arrived,
+                    _ => Vec::new(),
+                };
                 if arrived.is_empty() {
                     return Err(problems.unwrap_or_else(|| format!("nothing could be {verb}")));
                 }
-                let arrived: Vec<String> =
-                    arrived.iter().take(MAX_ITEMS).map(|n| show_path(&self.path_of(n))).collect();
+                let arrived: Vec<String> = arrived.iter().take(MAX_ITEMS).map(|n| show_path(&join(&dest, n))).collect();
                 let mut v = json!({ (verb): arrived });
                 if let Some(p) = problems {
                     v["problems"] = p.into();
+                }
+                if done.cancelled {
+                    v["stopped"] = json!("the user stopped it before every item was done");
                 }
                 Ok(v)
             }
@@ -763,23 +826,31 @@ impl Files {
                     }
                     // A confirmation the user has open for these items is
                     // answered by this.
-                    if matches!(&self.dialog, Some(Dialog::ConfirmDelete(asked)) if asked.iter().any(|p| group.contains(p)))
+                    if matches!(&self.dialog, Some(Dialog::ConfirmDelete { paths: asked, .. }) if asked.iter().any(|p| group.contains(p)))
                     {
                         self.dialog = None;
                     }
-                    self.move_to_trash(group.clone());
-                    if let Some(Dialog::NoRoomInTrash(left)) = &self.dialog {
-                        let left: Vec<String> = left.iter().map(|p| show_path(p)).collect();
-                        problems.push(format!(
-                            "there is not enough free space to keep {} in the Trash: the user is asked whether to \
-                             delete it for good instead",
-                            left.join(", ")
-                        ));
+                    let Some(job) = self.move_to_trash(group.clone()) else {
+                        self.failed()?;
+                        continue;
+                    };
+                    let Some(done) = self.await_job(job) else {
+                        return Ok(self.still_working(&format!("moving {} to the Trash", items(group.len()))));
+                    };
+                    if let Outcome::Trashed { moved: went, no_room, .. } = &done.outcome {
+                        moved.extend(went.iter().map(|(_, origin)| show_path(origin)));
+                        if !no_room.is_empty() {
+                            let left: Vec<String> = no_room.iter().map(|p| show_path(p)).collect();
+                            problems.push(format!(
+                                "there is not enough free space to keep {} in the Trash: the user is asked whether \
+                                 to delete it for good instead",
+                                left.join(", ")
+                            ));
+                        }
                     }
                     if let Err(e) = self.failed() {
                         problems.push(e);
                     }
-                    moved.extend(group.iter().filter(|p| !self.fs.exists(p)).map(|p| show_path(p)));
                 }
                 if moved.is_empty() {
                     return Err(problems.join("; "));
@@ -791,10 +862,8 @@ impl Files {
                 Ok(v)
             }
             "restore" => {
-                let wanted = list_arg(args, "names");
-                if wanted.is_empty() {
-                    return Err("which items? give their names as the Trash lists them, one per line".into());
-                }
+                let wanted = arg_list(args, "names")
+                    .map_err(|_| "which items? give their names as the Trash lists them, one per line".to_string())?;
                 // As the user would: the Trash is shown and the items
                 // restored from there.
                 self.show_folder(trash::FILES)?;
@@ -805,8 +874,19 @@ impl Files {
                         names.push(name);
                     }
                 }
-                let restored = self.restore_names(names);
+                let count = names.len();
+                let Some(job) = self.restore_names(names) else {
+                    self.failed()?;
+                    return Err("nothing could be restored".into());
+                };
+                let Some(done) = self.await_job(job) else {
+                    return Ok(self.still_working(&format!("restoring {}", items(count))));
+                };
                 let problems = self.failed().err();
+                let restored = match done.outcome {
+                    Outcome::Restored { restored, .. } => restored,
+                    _ => Vec::new(),
+                };
                 if restored.is_empty() {
                     return Err(problems.unwrap_or_else(|| "nothing could be restored".into()));
                 }
@@ -818,7 +898,7 @@ impl Files {
                 Ok(v)
             }
             "empty_trash" => {
-                let wanted = list_arg(args, "names");
+                let wanted = arg_list(args, "names").unwrap_or_default();
                 self.show_folder(trash::FILES)?;
                 if wanted.is_empty() {
                     let n = self.entries.len();
@@ -828,7 +908,13 @@ impl Files {
                     if matches!(self.dialog, Some(Dialog::ConfirmEmpty(_))) {
                         self.dialog = None;
                     }
-                    self.empty_trash();
+                    let Some(job) = self.empty_trash() else {
+                        self.failed()?;
+                        return Err("the Trash could not be emptied".into());
+                    };
+                    if self.await_job(job).is_none() {
+                        return Ok(self.still_working("emptying the Trash"));
+                    }
                     self.failed()?;
                     return Ok(json!({ "emptied": format!("{} deleted for good", items(n)) }));
                 }
@@ -840,14 +926,24 @@ impl Files {
                     }
                 }
                 let names: Vec<String> = paths.iter().map(|p| self.original_name(p)).collect();
-                if matches!(&self.dialog, Some(Dialog::ConfirmDelete(asked)) if asked.iter().any(|p| paths.contains(p)))
+                if matches!(&self.dialog, Some(Dialog::ConfirmDelete { paths: asked, .. }) if asked.iter().any(|p| paths.contains(p)))
                 {
                     self.dialog = None;
                 }
-                self.delete(paths.clone());
+                let Some(job) = self.delete(paths.clone()) else {
+                    self.failed()?;
+                    return Err("nothing could be deleted".into());
+                };
+                let Some(done) = self.await_job(job) else {
+                    return Ok(self.still_working(&format!("deleting {} for good", items(paths.len()))));
+                };
                 let problems = self.failed().err();
+                let deleted = match done.outcome {
+                    Outcome::Deleted { paths, .. } => paths,
+                    _ => Vec::new(),
+                };
                 let gone: Vec<String> =
-                    paths.iter().zip(names).filter(|(p, _)| !self.fs.exists(p)).map(|(_, n)| n).collect();
+                    paths.iter().zip(names).filter(|(p, _)| deleted.contains(p)).map(|(_, n)| n).collect();
                 if gone.is_empty() {
                     return Err(problems.unwrap_or_else(|| "nothing could be deleted".into()));
                 }

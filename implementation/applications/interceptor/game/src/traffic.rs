@@ -5,11 +5,11 @@
 //! busy, in the colours people buy.
 //!
 //! The cars live in a window of road round the player. One that falls too
-//! far behind or gets too far ahead is taken off and put back near the
+//! far behind or gets too far ahead is replaced by a new car near the
 //! window's far end, out of sight, so that the road is always busy where
-//! the player is and nothing appears in view. Cars are moved rather than
-//! removed, so that the other drivers' references to them (a police car's
-//! target) stay valid.
+//! the player is and nothing appears in view. The new car is another (it
+//! has a number of its own), so that what referred to the one gone finds
+//! it gone.
 
 use rand::RngExt;
 use rand::seq::IndexedRandom;
@@ -19,7 +19,6 @@ use crate::carmodel::Kind;
 use crate::driver::{Role, Traffic};
 use crate::prelude::*;
 use crate::road::{Road, Section};
-use crate::vehicle::Spec;
 use crate::world::World;
 
 /// The window round the player: behind, ahead (m).
@@ -39,8 +38,8 @@ pub fn density(section: Section) -> f32 {
     }
 }
 
-/// A kind of car, its make-up and a paint, as traffic in `section`.
-pub fn pick(rng: &mut Pcg32, section: Section) -> (Kind, Spec, Vec3) {
+/// A kind of car and a paint, as traffic in `section`.
+pub fn pick(rng: &mut Pcg32, section: Section) -> (Kind, Vec3) {
     let kinds: &[(Kind, u32)] = match section {
         Section::City => &[
             (Kind::Saloon, 5),
@@ -61,11 +60,6 @@ pub fn pick(rng: &mut Pcg32, section: Section) -> (Kind, Spec, Vec3) {
         ],
     };
     let kind = kinds.choose_weighted(rng, |k| k.1).map_or(kinds[0].0, |k| k.0);
-    let spec = match kind {
-        Kind::Van => Spec::van(),
-        Kind::Coupe => Spec::sports(),
-        _ => Spec::saloon(),
-    };
     // The colours of real traffic: mostly white, black, greys and silver.
     let paints = [
         (Vec3::new(0.80, 0.80, 0.80), 6),
@@ -82,7 +76,7 @@ pub fn pick(rng: &mut Pcg32, section: Section) -> (Kind, Spec, Vec3) {
     if kind == Kind::Taxi {
         paint = Vec3::new(0.85, 0.62, 0.02);
     }
-    (kind, spec, paint)
+    (kind, paint)
 }
 
 /// A traffic car's place, lane and speed for road position `s`: forward

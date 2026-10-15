@@ -1,23 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Deterministic hashing, gradient noise and fractal sums.
+//! Deterministic hashing (the generators' own, `gencommon::hash`),
+//! gradient noise and fractal sums.
 
-/// Integer hash of a lattice point (well mixed, platform independent).
-#[inline]
-pub fn hash(x: i32, y: i32, seed: u32) -> u32 {
-    let mut h =
-        seed.wrapping_mul(0x9E37_79B9) ^ (x as u32).wrapping_mul(0x27D4_EB2D) ^ (y as u32).wrapping_mul(0x1656_67B1);
-    h = (h ^ (h >> 15)).wrapping_mul(0x85EB_CA6B);
-    h = (h ^ (h >> 13)).wrapping_mul(0xC2B2_AE35);
-    h ^ (h >> 16)
-}
-
-/// A hash mapped to `[0, 1)`.
-#[inline]
-pub fn hash01(x: i32, y: i32, seed: u32) -> f32 {
-    (hash(x, y, seed) >> 8) as f32 / (1u32 << 24) as f32
-}
+pub use gencommon::hash::{hash, hash01};
 
 /// `1 / sqrt(2)`.
 const H: f32 = std::f32::consts::FRAC_1_SQRT_2;

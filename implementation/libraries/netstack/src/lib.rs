@@ -4,15 +4,19 @@
 //! `vnetstack` — the network stack behind `netd`.
 //!
 //! The stack owns the interfaces (each a smoltcp [`Interface`] with its own
-//! socket set and frame queues), configures them (DHCPv4, static addresses,
-//! IPv6 link-local and stateless autoconfiguration), picks routes, resolves
-//! names (a caching stub resolver) and implements the socket operations
-//! that `netd` offers to applications.
+//! socket set), configures them (DHCPv4, static addresses, IPv6 link-local
+//! and stateless autoconfiguration), picks routes, resolves names (a caching
+//! stub resolver) and implements the socket operations that `netd` offers
+//! to applications.
 //!
-//! It has no platform code: time is passed in, frames are pushed and pulled
-//! by the caller, and randomness comes from a seed. That keeps every piece
-//! testable on the host, including whole conversations between two stacks
-//! (see the tests).
+//! IPv6 addresses do not embed the hardware address, which would follow the
+//! machine from network to network: their interface identifiers are stable
+//! privacy ones (RFC 7217), from a secret drawn when the stack starts.
+//!
+//! It has no platform code: time is passed in, each interface's frames come
+//! and go through a [`Link`] the caller provides on every poll, and
+//! randomness comes from a seed. That keeps every piece testable on the
+//! host, including whole conversations between two stacks (see the tests).
 
 #![no_std]
 
@@ -27,7 +31,6 @@ mod sockets;
 #[cfg(test)]
 mod tests;
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -39,13 +42,16 @@ use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Cidr, Ipv6Cidr};
 use ventropy::Generator;
 use vproto::net::{
-    AddressInfo, AddressOrigin, Connectivity, DeviceInfo, DhcpInfo, DhcpState, InterfaceInfo, InterfaceKind,
-    InterfaceStats, IpConfig, NetError, NetStatus, NetdevError, RouteInfo,
+    AddressInfo, AddressOrigin, Connectivity, DeviceInfo, DhcpInfo, DhcpState, InterfaceInfo, InterfaceKind, IpConfig,
+    NetError, NetStatus, NetdevError, RouteInfo,
 };
 
-pub use device::QueueDevice;
-pub use dns::{MAX_NAME_LEN, ResolveId, validate_name};
-pub use sockets::{PingEvent, SockId, TcpState, TcpView, UdpDatagram};
+use device::{Frames, Loopback};
+pub use device::{Link, Links, MAX_RX_FRAME, NoLinks, RX_BUDGET};
+pub use dns::{MAX_NAME_LEN, MAX_PENDING_LOOKUPS, ResolveId, validate_name};
+pub use sockets::{
+    MAX_ORPHANS, MAX_SOCKETS, MIN_KEEPALIVE_MS, ORPHAN_TIMEOUT_US, PingEvent, SockId, TcpState, TcpView,
+};
 
 /// Index of an interface; [`LOOPBACK`] is always present.
 pub type IfaceId = usize;
@@ -84,10 +90,19 @@ pub(crate) struct V4Config {
 pub(crate) struct DhcpTrack {
     pub state: DhcpState,
     pub server: Option<Ipv4Addr>,
+    /// The lease as the DHCP client accepted it: its length, and when it
+    /// began (the last acknowledgement, a renewal's included) and ends.
     pub lease_s: u32,
     pub bound_at_us: u64,
+    pub expires_at: Option<Instant>,
     /// When discovery started (to report "no server" after a while).
     pub started_us: u64,
+}
+
+impl DhcpTrack {
+    fn off() -> DhcpTrack {
+        DhcpTrack { state: DhcpState::Off, server: None, lease_s: 0, bound_at_us: 0, expires_at: None, started_us: 0 }
+    }
 }
 
 /// One network interface.
@@ -100,7 +115,11 @@ pub(crate) struct Iface {
     pub link_up: bool,
     pub metric: u32,
     pub config: IpConfig,
-    pub dev: QueueDevice,
+    /// The frame buffers and traffic counts.
+    pub frames: Frames,
+    /// The loopback interface's own link (other interfaces' are the
+    /// caller's).
+    pub loopback: Option<Loopback>,
     pub iface: Interface,
     pub sockets: SocketSet<'static>,
     pub dhcp: Option<SocketHandle>,
@@ -113,9 +132,12 @@ pub(crate) struct Iface {
     /// the address until the server confirms or replaces it, because
     /// smoltcp resets every connection whose address disappears.
     pub reacquiring_since: Option<u64>,
-    /// Lease length of the last DHCP ACK seen on the wire.
-    pub acked_lease_s: u32,
-    pub stats: InterfaceStats,
+    /// Something the user can see may have changed (link, addresses, DHCP):
+    /// look again (see `Stack::detect_changes`).
+    pub changed: bool,
+    /// When smoltcp last changed the autoconfigured IPv6 addresses and
+    /// routes, as last seen.
+    pub slaac_seen: Instant,
     /// Snapshot used to detect changes worth an event.
     pub fingerprint: u64,
 }
@@ -176,16 +198,34 @@ impl Iface {
                 eat(&g.octets());
             }
             for d in &v4.dns {
-                eat(format!("{d}").as_bytes());
+                match d {
+                    IpAddr::V4(a) => eat(&a.octets()),
+                    IpAddr::V6(a) => eat(&a.octets()),
+                }
             }
         }
-        for (c, _) in self.v6_addresses() {
-            eat(&c.address().octets());
+        for c in self.iface.ip_addrs() {
+            if let IpCidr::Ipv6(c) = c {
+                eat(&c.address().octets());
+                eat(&[c.prefix_len()]);
+            }
         }
         if let Some(g) = self.v6_gateway() {
             eat(&g.octets());
         }
         h
+    }
+
+    /// Runs smoltcp on this interface: what its link received, timers, and
+    /// what its sockets have to send.
+    fn run(&mut self, now: Instant, links: &mut dyn Links, id: IfaceId) {
+        let Iface { iface, sockets, frames, loopback, .. } = self;
+        let link: Option<&mut dyn Link> = match loopback {
+            Some(l) => Some(l),
+            None => links.link(id),
+        };
+        let mut device = frames.device(link);
+        iface.poll(now, &mut device, sockets);
     }
 }
 
@@ -197,9 +237,14 @@ pub struct Stack {
     pub(crate) socks: sockets::Table,
     pub(crate) dns: dns::Resolver,
     pub(crate) dns_override: Vec<IpAddr>,
+    /// The secret of the stable privacy IPv6 addresses.
+    slaac_secret: [u8; 32],
     events: Vec<StackEvent>,
     last_status: Option<NetStatus>,
     changed_us: u64,
+    /// Something besides the interfaces' own state changed (an interface
+    /// came or went, the DNS servers were overridden): look at the status.
+    dirty: bool,
 }
 
 impl Stack {
@@ -210,6 +255,8 @@ impl Stack {
         let mut rng = Generator::new();
         rng.mix(seed);
         rng.reseed();
+        let mut slaac_secret = [0u8; 32];
+        rng.fill(&mut slaac_secret);
         let mut stack = Stack {
             ifaces: Vec::new(),
             now_us,
@@ -217,9 +264,11 @@ impl Stack {
             socks: sockets::Table::new(),
             dns: dns::Resolver::new(),
             dns_override: Vec::new(),
+            slaac_secret,
             events: Vec::new(),
             last_status: None,
             changed_us: now_us,
+            dirty: true,
         };
         stack.add_loopback();
         stack
@@ -249,10 +298,10 @@ impl Stack {
     }
 
     fn add_loopback(&mut self) {
-        let mut dev = QueueDevice::new(Medium::Ip, 65535, true);
+        let mut frames = Frames::new(Medium::Ip, 65535, true);
         let mut config = Config::new(HardwareAddress::Ip);
         config.random_key = Some(self.random_key());
-        let mut iface = Interface::new(config, &mut dev, self.instant());
+        let mut iface = Interface::new(config, &mut frames.device(None), self.instant());
         iface.update_ip_addrs(|a| {
             let _ = a.push(IpCidr::new(Ipv4Addr::LOCALHOST.into(), 8));
             let _ = a.push(IpCidr::new(Ipv6Addr::LOCALHOST.into(), 128));
@@ -271,11 +320,12 @@ impl Stack {
                 gateway: None,
                 dns: Vec::new(),
             },
-            dev,
+            frames,
+            loopback: Some(Loopback::default()),
             iface,
             sockets: SocketSet::new(Vec::new()),
             dhcp: None,
-            dhcp_track: DhcpTrack { state: DhcpState::Off, server: None, lease_s: 0, bound_at_us: 0, started_us: 0 },
+            dhcp_track: DhcpTrack::off(),
             v4: Some(V4Config {
                 address: Ipv4Cidr::new(Ipv4Addr::LOCALHOST, 8),
                 gateway: None,
@@ -285,8 +335,8 @@ impl Stack {
             down_since: None,
             last_dhcp_addr: None,
             reacquiring_since: None,
-            acked_lease_s: 0,
-            stats: InterfaceStats::default(),
+            changed: true,
+            slaac_seen: Instant::ZERO,
             fingerprint: 0,
         };
         self.ifaces.push(Some(lo));
@@ -329,15 +379,17 @@ impl Stack {
             return Err(NetdevError::LimitReached);
         }
         let prefix = if info.kind == InterfaceKind::Wireless { "wlan" } else { "eth" };
-        let name = (0..).map(|n| format!("{prefix}{n}")).find(|n| self.find_interface(n).is_none()).unwrap_or_default();
-        let mut dev = QueueDevice::new(Medium::Ethernet, info.mtu as usize + 14, false);
+        let name =
+            (0..).map(|n| alloc::format!("{prefix}{n}")).find(|n| self.find_interface(n).is_none()).unwrap_or_default();
+        let mut frames = Frames::new(Medium::Ethernet, info.mtu as usize + 14, false);
         let hw = HardwareAddress::Ethernet(EthernetAddress(info.mac));
         let mut config = Config::new(hw);
         config.random_key = Some(self.random_key());
         config.slaac = true;
-        let mut iface = Interface::new(config, &mut dev, self.instant());
+        config.slaac_secret = Some(self.slaac_secret);
+        let mut iface = Interface::new(config, &mut frames.device(None), self.instant());
         let link_local = Ipv6Cidr::new(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 64);
-        if let Some(ll) = Ipv6Cidr::from_link_prefix(&link_local, hw) {
+        if let Some(ll) = iface.ipv6_address_in(&link_local) {
             iface.update_ip_addrs(|a| {
                 let _ = a.push(IpCidr::Ipv6(ll));
             });
@@ -352,23 +404,18 @@ impl Stack {
             link_up,
             metric,
             config: IpConfig::Dhcp {},
-            dev,
+            frames,
+            loopback: None,
             iface,
             sockets: SocketSet::new(Vec::new()),
             dhcp: None,
-            dhcp_track: DhcpTrack {
-                state: DhcpState::Off,
-                server: None,
-                lease_s: 0,
-                bound_at_us: 0,
-                started_us: self.now_us,
-            },
+            dhcp_track: DhcpTrack { started_us: self.now_us, ..DhcpTrack::off() },
             v4: None,
             down_since: if link_up { None } else { Some(self.now_us) },
             last_dhcp_addr: None,
             reacquiring_since: None,
-            acked_lease_s: 0,
-            stats: InterfaceStats::default(),
+            changed: true,
+            slaac_seen: Instant::ZERO,
             fingerprint: 0,
         };
         start_dhcp(&mut new, self.now_us);
@@ -384,11 +431,13 @@ impl Stack {
         };
         self.socks_on_iface_added(id);
         self.events.push(StackEvent::InterfaceChanged(name));
+        self.dirty = true;
         Ok(id)
     }
 
     /// Removes an interface (its device went away). Connections through it
-    /// fail with [`NetError::Aborted`].
+    /// fail with [`NetError::Aborted`]; lookups asked through it go
+    /// elsewhere.
     pub fn remove_interface(&mut self, id: IfaceId) {
         if id == LOOPBACK {
             return;
@@ -396,7 +445,9 @@ impl Stack {
         self.socks_on_iface_removed(id);
         if let Some(i) = self.ifaces.get_mut(id).and_then(Option::take) {
             self.events.push(StackEvent::InterfaceChanged(i.name));
+            self.dirty = true;
         }
+        self.dns_on_iface_removed(id);
     }
 
     /// The link of an interface went up or down.
@@ -407,6 +458,7 @@ impl Stack {
             return;
         }
         i.link_up = up;
+        i.changed = true;
         if up {
             i.down_since = None;
             // We may have joined a different network: ask for an address
@@ -425,75 +477,53 @@ impl Stack {
         }
     }
 
-    /// A frame arrived on an interface.
-    pub fn receive_frame(&mut self, id: IfaceId, frame: &[u8]) {
-        if let Some(i) = self.iface_mut(id) {
-            if i.dhcp.is_some()
-                && let Some(lease) = snoop_dhcp_ack(frame)
-            {
-                i.acked_lease_s = lease;
-            }
-            if i.dev.push_rx(frame) {
-                i.stats.rx_packets += 1;
-                i.stats.rx_bytes += frame.len() as u64;
-            } else {
-                i.stats.rx_dropped += 1;
-            }
-        }
-    }
-
-    /// Hands every frame queued for transmission on `id` to `send`, which
-    /// returns `false` if the device dropped it.
-    pub fn transmit_frames(&mut self, id: IfaceId, mut send: impl FnMut(&[u8]) -> bool) {
-        let Some(i) = self.iface_mut(id) else { return };
-        while let Some(frame) = i.dev.tx.pop_front() {
-            if send(&frame) {
-                i.stats.tx_packets += 1;
-                i.stats.tx_bytes += frame.len() as u64;
-            } else {
-                i.stats.tx_dropped += 1;
-            }
-        }
-    }
-
-    /// Frames waiting to be transmitted on `id`.
-    pub fn pending_frames(&self, id: IfaceId) -> usize {
-        self.iface(id).map(|i| i.dev.tx.len()).unwrap_or(0)
-    }
-
-    /// Runs the stack: processes received frames, timers, DHCP, DNS and
-    /// socket housekeeping. Call it after feeding frames or socket
-    /// operations, and again by [`Stack::next_deadline`].
-    pub fn poll(&mut self, now_us: u64) {
+    /// Runs the stack: takes in what the interfaces' links received (a
+    /// bounded number of frames each, [`RX_BUDGET`]), runs timers, DHCP, DNS
+    /// and socket housekeeping, and sends what there is to send as far as
+    /// the links have room. Call it after socket operations, when a link
+    /// has frames or room again, and by [`Stack::next_deadline`].
+    pub fn poll(&mut self, now_us: u64, links: &mut dyn Links) {
         self.now_us = now_us.max(self.now_us);
         let now = self.instant();
-        for id in self.iface_ids() {
-            let i = self.iface_mut(id).unwrap();
-            i.iface.poll(now, &mut i.dev, &mut i.sockets);
+        for id in 0..self.ifaces.len() {
+            let Some(i) = self.ifaces[id].as_mut() else { continue };
+            i.run(now, links, id);
             self.handle_dhcp(id);
             self.check_link_grace(id);
         }
         self.socks_maintain();
         self.dns_maintain();
         // Send what housekeeping produced (DNS queries, accepted
-        // connections' replies, ...).
-        for id in self.iface_ids() {
-            let i = self.iface_mut(id).unwrap();
-            i.iface.poll(now, &mut i.dev, &mut i.sockets);
+        // connections' replies, resets, ...).
+        for id in 0..self.ifaces.len() {
+            if let Some(i) = self.ifaces[id].as_mut() {
+                i.run(now, links, id);
+            }
         }
         self.detect_changes();
     }
 
+    /// Whether interface `id` had more to send than its link took: poll
+    /// again when the link has room.
+    pub fn link_blocked(&self, id: IfaceId) -> bool {
+        self.iface(id).is_some_and(|i| i.frames.blocked)
+    }
+
     /// When [`Stack::poll`] should run next at the latest (monotonic µs),
-    /// or `None` if only new frames or requests need it.
+    /// or `None` if only new frames or requests need it. What waits for a
+    /// full link is not counted: room on the link is the time for it.
     pub fn next_deadline(&mut self) -> Option<u64> {
         let now = self.instant();
+        let now_us = self.now_us;
         let mut best: Option<u64> = None;
         let mut take = |t: u64| best = Some(best.map_or(t, |b| b.min(t)));
-        for id in self.iface_ids() {
-            let i = self.iface_mut(id).unwrap();
+        for id in 0..self.ifaces.len() {
+            let Some(i) = self.ifaces[id].as_mut() else { continue };
             if let Some(at) = i.iface.poll_at(now, &i.sockets) {
-                take(at.total_micros().max(0) as u64);
+                let at = at.total_micros().max(0) as u64;
+                if !(i.frames.blocked && at <= now_us) {
+                    take(at);
+                }
             }
             if let Some(since) = i.down_since
                 && i.v4.is_some()
@@ -517,36 +547,43 @@ impl Stack {
 
     fn handle_dhcp(&mut self, id: IfaceId) {
         let now = self.now_us;
+        let instant = self.instant();
         let i = self.iface_mut(id).unwrap();
         let Some(h) = i.dhcp else { return };
         enum Change {
-            Configured(Ipv4Cidr, Option<Ipv4Addr>, Vec<IpAddr>, Ipv4Addr, u32),
+            Configured(Ipv4Cidr, Option<Ipv4Addr>, Vec<IpAddr>, Ipv4Addr),
             Deconfigured,
         }
-        let change = match i.sockets.get_mut::<dhcpv4::Socket>(h).poll() {
-            Some(dhcpv4::Event::Configured(cfg)) => {
-                let lease = i.acked_lease_s;
-                Some(Change::Configured(
-                    cfg.address,
-                    cfg.router,
-                    cfg.dns_servers.iter().map(|d| IpAddr::V4(*d)).collect(),
-                    cfg.server.identifier,
-                    lease,
-                ))
-            }
+        let socket = i.sockets.get_mut::<dhcpv4::Socket>(h);
+        let change = match socket.poll() {
+            Some(dhcpv4::Event::Configured(cfg)) => Some(Change::Configured(
+                cfg.address,
+                // A gateway must be a unicast address.
+                cfg.router.filter(|r| usable_unicast(*r)),
+                cfg.dns_servers.iter().map(|d| IpAddr::V4(*d)).collect(),
+                cfg.server.identifier,
+            )),
             Some(dhcpv4::Event::Deconfigured) => Some(Change::Deconfigured),
             None => None,
         };
+        // The lease as the client accepted it from the server's
+        // acknowledgement (a renewal moves it).
+        let expires_at = socket.lease_expires_at();
+        if expires_at != i.dhcp_track.expires_at {
+            i.dhcp_track.expires_at = expires_at;
+            if let Some(end) = expires_at {
+                let left = if end > instant { (end - instant).secs() } else { 0 };
+                i.dhcp_track.lease_s = left.min(u32::MAX as u64) as u32;
+                i.dhcp_track.bound_at_us = now;
+            }
+            i.changed = true;
+        }
         match change {
-            Some(Change::Configured(address, gateway, dns, server, lease_s)) => {
+            Some(Change::Configured(address, gateway, dns, server)) => {
                 let v4 = V4Config { address, gateway, dns, origin: AddressOrigin::Dhcp };
-                i.dhcp_track = DhcpTrack {
-                    state: DhcpState::Bound,
-                    server: Some(server),
-                    lease_s,
-                    bound_at_us: now,
-                    started_us: i.dhcp_track.started_us,
-                };
+                i.dhcp_track.state = DhcpState::Bound;
+                i.dhcp_track.server = Some(server);
+                i.changed = true;
                 i.reacquiring_since = None;
                 // Connections made with an earlier lease survive a renewal
                 // or reconnection only if the address stayed the same. Fail
@@ -565,6 +602,7 @@ impl Stack {
             Some(Change::Deconfigured) => {
                 i.dhcp_track.state = DhcpState::Discovering;
                 i.dhcp_track.started_us = now;
+                i.changed = true;
                 if i.reacquiring_since.is_none() {
                     // The lease really ended: the address goes now.
                     let old = apply_v4(i, None);
@@ -579,6 +617,7 @@ impl Stack {
                     && now.saturating_sub(i.dhcp_track.started_us) > 20_000_000
                 {
                     i.dhcp_track.state = DhcpState::NoServer;
+                    i.changed = true;
                 }
             }
         }
@@ -616,6 +655,7 @@ impl Stack {
             i.sockets.get_mut::<dhcpv4::Socket>(h).reset();
             i.dhcp_track.state = DhcpState::Discovering;
             i.dhcp_track.started_us = now;
+            i.changed = true;
         }
     }
 
@@ -631,12 +671,12 @@ impl Stack {
         }
         let v4 = match &config {
             IpConfig::Static { address: IpAddr::V4(a), prefix_len, gateway, dns } => {
-                if *prefix_len > 32 || a.is_unspecified() || a.is_multicast() || a.is_broadcast() || a.is_loopback() {
+                if *prefix_len > 32 || !usable_unicast(*a) || !dns::valid_servers(dns) {
                     return Err(NetError::InvalidArgument);
                 }
                 let gateway = match gateway {
                     None => None,
-                    Some(IpAddr::V4(g)) => Some(*g),
+                    Some(IpAddr::V4(g)) if usable_unicast(*g) => Some(*g),
                     Some(_) => return Err(NetError::InvalidArgument),
                 };
                 Some(V4Config {
@@ -651,6 +691,7 @@ impl Stack {
         };
         stop_dhcp(i);
         i.config = config.clone();
+        i.changed = true;
         let old = apply_v4(i, v4);
         if matches!(config, IpConfig::Dhcp {}) {
             start_dhcp(i, now);
@@ -669,6 +710,7 @@ impl Stack {
         i.sockets.get_mut::<dhcpv4::Socket>(h).reset();
         i.dhcp_track.state = DhcpState::Discovering;
         i.dhcp_track.started_us = now;
+        i.changed = true;
         if i.v4.is_some() {
             i.reacquiring_since = Some(now);
         }
@@ -677,12 +719,12 @@ impl Stack {
 
     /// Overrides the DNS servers (empty: use the configured ones).
     pub fn set_dns_servers(&mut self, servers: Vec<IpAddr>) -> Result<(), NetError> {
-        if servers.len() > 8 || servers.iter().any(|s| s.is_unspecified() || s.is_multicast()) {
+        if !dns::valid_servers(&servers) {
             return Err(NetError::InvalidArgument);
         }
         self.dns_override = servers;
         self.dns.flush();
-        self.events.push(StackEvent::StatusChanged(self.status()));
+        self.dirty = true;
         Ok(())
     }
 
@@ -746,11 +788,12 @@ impl Stack {
             .map(|i| {
                 let mut addresses = Vec::new();
                 if let Some(v4) = &i.v4 {
-                    let valid_s = if v4.origin == AddressOrigin::Dhcp && i.dhcp_track.lease_s > 0 {
-                        let age = ((now - i.dhcp_track.bound_at_us) / 1_000_000) as u32;
-                        i.dhcp_track.lease_s.saturating_sub(age).max(1)
-                    } else {
-                        0
+                    let valid_s = match (v4.origin, i.dhcp_track.expires_at) {
+                        (AddressOrigin::Dhcp, Some(end)) => {
+                            let left = end.total_micros().max(0) as u64 / 1_000_000;
+                            left.saturating_sub(now / 1_000_000).clamp(1, u32::MAX as u64) as u32
+                        }
+                        _ => 0,
                     };
                     addresses.push(AddressInfo {
                         address: IpAddr::V4(v4.address.address()),
@@ -774,9 +817,7 @@ impl Stack {
                 if let Some(g) = i.v6_gateway() {
                     gateways.push(IpAddr::V6(g));
                 }
-                let mut stats = i.stats;
-                stats.rx_dropped += i.dev.rx_dropped;
-                stats.tx_dropped += i.dev.tx_dropped;
+                let stats = i.frames.statistics();
                 InterfaceInfo {
                     name: i.name.clone(),
                     kind: i.kind,
@@ -793,7 +834,7 @@ impl Stack {
                         server: i.dhcp_track.server.map(IpAddr::V4),
                         lease_s: i.dhcp_track.lease_s,
                         age_s: if i.dhcp_track.state == DhcpState::Bound {
-                            ((now - i.dhcp_track.bound_at_us) / 1_000_000) as u32
+                            (now.saturating_sub(i.dhcp_track.bound_at_us) / 1_000_000) as u32
                         } else {
                             0
                         },
@@ -854,17 +895,29 @@ impl Stack {
         out
     }
 
+    /// Reports what changed: interfaces that look different (a cheap
+    /// fingerprint of what the user sees), and the overall status. Only
+    /// after something that can change them happened.
     fn detect_changes(&mut self) {
-        let mut changed = Vec::new();
+        let mut any = core::mem::take(&mut self.dirty);
         for i in self.ifaces.iter_mut().flatten() {
+            let slaac = i.iface.slaac_updated_at();
+            if slaac != i.slaac_seen {
+                i.slaac_seen = slaac;
+                i.changed = true;
+            }
+            if !core::mem::take(&mut i.changed) {
+                continue;
+            }
+            any = true;
             let f = i.compute_fingerprint();
             if f != i.fingerprint {
                 i.fingerprint = f;
-                changed.push(i.name.clone());
+                self.events.push(StackEvent::InterfaceChanged(i.name.clone()));
             }
         }
-        for name in changed {
-            self.events.push(StackEvent::InterfaceChanged(name));
+        if !any {
+            return;
         }
         let status = self.status();
         let mut cmp = status.clone();
@@ -881,9 +934,16 @@ impl Stack {
     }
 }
 
+/// Whether `a` can be a host's address or a gateway: unicast, not this
+/// host's loopback.
+fn usable_unicast(a: Ipv4Addr) -> bool {
+    !(a.is_unspecified() || a.is_multicast() || a.is_broadcast() || a.is_loopback())
+}
+
 /// Applies (or removes, with `None`) an interface's IPv4 configuration:
 /// address and default route. Returns the previous address if it changed.
 fn apply_v4(i: &mut Iface, v4: Option<V4Config>) -> Option<Ipv4Addr> {
+    i.changed = true;
     let old = i.v4.as_ref().map(|v| v.address.address());
     let new_addr = v4.as_ref().map(|v| v.address);
     i.iface.update_ip_addrs(|addrs| {
@@ -922,7 +982,7 @@ fn stop_dhcp(i: &mut Iface) {
     if let Some(h) = i.dhcp.take() {
         i.sockets.remove(h);
     }
-    i.dhcp_track = DhcpTrack { state: DhcpState::Off, server: None, lease_s: 0, bound_at_us: 0, started_us: 0 };
+    i.dhcp_track = DhcpTrack::off();
 }
 
 /// Clears the host bits of an IPv6 address.
@@ -930,29 +990,4 @@ fn mask_v6(a: Ipv6Addr, prefix: u8) -> Ipv6Addr {
     let bits = u128::from_be_bytes(a.octets());
     let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix.min(128) as u32) };
     Ipv6Addr::from((bits & mask).to_be_bytes())
-}
-
-/// The lease length of a DHCP ACK (the DHCP client does not report it).
-fn snoop_dhcp_ack(frame: &[u8]) -> Option<u32> {
-    use smoltcp::wire::{
-        DhcpMessageType, DhcpPacket, DhcpRepr, EthernetFrame, EthernetProtocol, IpProtocol, Ipv4Packet, UdpPacket,
-    };
-    let eth = EthernetFrame::new_checked(frame).ok()?;
-    if eth.ethertype() != EthernetProtocol::Ipv4 {
-        return None;
-    }
-    let ip = Ipv4Packet::new_checked(eth.payload()).ok()?;
-    if ip.next_header() != IpProtocol::Udp {
-        return None;
-    }
-    let udp = UdpPacket::new_checked(ip.payload()).ok()?;
-    if udp.src_port() != 67 || udp.dst_port() != 68 {
-        return None;
-    }
-    let packet = DhcpPacket::new_checked(udp.payload()).ok()?;
-    let repr = DhcpRepr::parse(&packet).ok()?;
-    if repr.message_type != DhcpMessageType::Ack {
-        return None;
-    }
-    repr.lease_duration
 }

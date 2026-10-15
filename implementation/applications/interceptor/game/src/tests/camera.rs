@@ -40,6 +40,7 @@ fn film(world: &Arc<World>, warm: f32, secs: f32, dts: impl Fn(usize) -> f32) ->
     // The time drawn: the game's clock, a step back, and what it has not
     // stepped yet (followed here as the game follows it).
     let mut pending = 0.0f32;
+    let clock = |g: &Game| g.clock() as f32;
     let mut frame = |g: &mut Game, dt: f32| {
         g.update(dt);
         pending = (pending + dt).min(0.1);
@@ -50,16 +51,16 @@ fn film(world: &Arc<World>, warm: f32, secs: f32, dts: impl Fn(usize) -> f32) ->
         let m = views[g.player].transform;
         let ahead = m.z_axis.truncate();
         let ahead = Vec3::new(ahead.x, 0.0, ahead.z).normalize();
-        Sample { t: g.clock - STEP + pending, behind: -(g.camera.eye - m.w_axis.truncate()).dot(ahead) }
+        Sample { t: clock(g) - STEP + pending, behind: -(g.camera.eye - m.w_axis.truncate()).dot(ahead) }
     };
     let smooth = 1.0 / 240.0;
     for _ in 0..(warm / smooth) as usize {
         frame(&mut g, smooth);
     }
-    let end = g.clock + secs;
+    let end = clock(&g) + secs;
     let mut out = Vec::new();
     let mut i = 0;
-    while g.clock < end {
+    while clock(&g) < end {
         out.push(frame(&mut g, dts(i)));
         i += 1;
     }

@@ -14,6 +14,10 @@
 //!   LLVM's linker, which Rust ships (`rust-lld`; Cargo's configuration
 //!   names it). Each program's `build.rs` (via the `vbuild` helper crate)
 //!   supplies the Veda-specific linker options.
+//!
+//! Every build names the build machine's directories by fixed names in
+//! what it compiles (`util::cargo_for`), so that none of them goes into the
+//! image.
 
 use std::path::PathBuf;
 
@@ -102,7 +106,9 @@ fn target_dir() -> PathBuf {
 /// Builds `package` for `target`; returns the path of its executable, `file`.
 fn build(package: &str, target: &str, profile: Profile, file: &str) -> Result<PathBuf> {
     util::status("Building", format!("{package} ({target})"));
-    util::run(util::cargo().args(["build", "--package", package, "--target", target]).args(profile.cargo_flag()))?;
+    util::run(
+        util::cargo_for(target).args(["build", "--package", package, "--target", target]).args(profile.cargo_flag()),
+    )?;
     Ok(target_dir().join(target).join(profile.dir()).join(file))
 }
 
@@ -113,7 +119,7 @@ fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, Pat
         return Ok(Vec::new());
     }
     util::status("Building", format!("{} user-space programs ({USER_TARGET})", programs.len()));
-    let mut cmd = util::cargo();
+    let mut cmd = util::cargo_for(USER_TARGET);
     cmd.args(["build", "--target", USER_TARGET]).args(profile.cargo_flag());
     for p in &programs {
         cmd.args(["--package", p.package]);

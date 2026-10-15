@@ -43,7 +43,7 @@ pub enum Object {
 /// An open file description.
 pub struct Description {
     pub object: Object,
-    /// The access mode and status flags (`O_APPEND`, `O_NONBLOCK`).
+    /// The access mode and status flags (`O_APPEND`, `O_NONBLOCK`, `O_SYNC`).
     flags: AtomicU32,
 }
 
@@ -73,10 +73,16 @@ impl Description {
     pub fn nonblocking(&self) -> bool {
         self.flags() & o::NONBLOCK != 0
     }
+
+    /// Whether writes reach persistent storage before they return
+    /// (`O_SYNC`, `O_DSYNC`).
+    pub fn synchronous(&self) -> bool {
+        self.flags() & o::DSYNC != 0
+    }
 }
 
 /// The flags a description keeps.
-const STATUS_FLAGS: u32 = o::ACCMODE | o::APPEND | o::NONBLOCK | o::PATH;
+const STATUS_FLAGS: u32 = o::ACCMODE | o::APPEND | o::NONBLOCK | o::PATH | o::SYNC | o::DSYNC;
 /// The flags `F_SETFL` changes.
 const SETTABLE: u32 = o::APPEND | o::NONBLOCK;
 

@@ -19,7 +19,8 @@
 //! * [`ClientConfig`] — what a client trusts and offers, shared between
 //!   connections: by default the certificate authorities of the Mozilla
 //!   root program (webpki-roots), TLS 1.3 and 1.2, no ALPN.
-//! * [`connect`] — name lookup, TCP and the handshake in one call.
+//! * [`connect`] — name lookup, TCP and the handshake in one call;
+//!   [`connect_over`] — the handshake over a TCP connection made already.
 //!
 //! The protocol is [rustls](https://github.com/rustls/rustls) 0.23, through
 //! its `no_std` unbuffered API; certificates are verified by rustls-webpki.
@@ -62,11 +63,25 @@ pub fn connect(
     config: &ClientConfig,
 ) -> Result<TlsStream<vnet::TcpStream>, TlsError> {
     let start = vrt::time::Instant::now();
-    let mut tcp = vnet::TcpStream::connect_host(host, port, timeout)?;
+    let tcp = vnet::TcpStream::connect_host(host, port, timeout)?;
     // The handshake gets what is left of the time (at least a second).
     let left = timeout.saturating_sub(start.elapsed()).max(Duration::from_secs(1));
-    tcp.set_read_timeout(Some(left));
-    tcp.set_write_timeout(Some(left));
+    connect_over(tcp, host, left, config)
+}
+
+/// Runs the TLS handshake over `tcp`, a connection to `host` made already,
+/// within `timeout`, verifying the certificate for `host`.
+///
+/// The returned stream's TCP connection has no read or write timeout; set
+/// them through [`TlsStream::transport_mut`] if needed.
+pub fn connect_over(
+    mut tcp: vnet::TcpStream,
+    host: &str,
+    timeout: Duration,
+    config: &ClientConfig,
+) -> Result<TlsStream<vnet::TcpStream>, TlsError> {
+    tcp.set_read_timeout(Some(timeout));
+    tcp.set_write_timeout(Some(timeout));
     let mut tls = TlsStream::connect(tcp, host, config)?;
     tls.transport_mut().set_read_timeout(None);
     tls.transport_mut().set_write_timeout(None);

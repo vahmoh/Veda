@@ -38,6 +38,11 @@ pub fn process_create(name: usize, len: usize) -> SysResult {
     allowed(restrict::NO_PROCESSES)?;
     let name = read_str(name, len, vabi::NAME_MAX * 4)?;
     let parent = current_process()?;
+    process::may_create(parent.koid)?;
+    // An address space and a handle table, from the kernel's memory.
+    if !crate::mm::phys::user_may_use(64 * 1024) {
+        return Err(Error::NoMemory);
+    }
     let p = Process::new(&name, parent.koid).ok_or(Error::NoMemory)?;
     ok(insert(KObject::Process(p), PROCESS_RIGHTS)? as usize)
 }
@@ -53,6 +58,9 @@ fn start_thread(t: &Thread, entry: usize, stack: usize, arg0: u64, arg1: u64) ->
     Ok(())
 }
 
+/// Starts a process's first thread, moving the bootstrap handle `arg` into
+/// the process. The bootstrap handle is the kernel's whatever happens, as
+/// with `channel_write`: a start that fails closes it.
 pub fn process_start(
     proc: RawHandle,
     thread: RawHandle,
@@ -61,6 +69,10 @@ pub fn process_start(
     arg: RawHandle,
     arg1: usize,
 ) -> SysResult {
+    let bootstrap: Option<Handle> = match arg {
+        vabi::INVALID_HANDLE => None,
+        arg => Some(current_process()?.handles.lock().remove(arg)?),
+    };
     let p = get_process(proc, Rights::MANAGE)?;
     let t = get_thread(thread, Rights::MANAGE)?;
     if !t.process.as_ref().is_some_and(|tp| tp.koid == p.koid) {
@@ -69,12 +81,9 @@ pub fn process_start(
     if !is_user_address(entry) || !is_user_address(stack) || t.state() != State::New {
         return Err(Error::InvalidArgs);
     }
-    // Move the bootstrap handle into the new process.
-    let child_handle = if arg != vabi::INVALID_HANDLE {
-        let h: Handle = current_process()?.handles.lock().remove(arg)?;
-        p.handles.lock().insert(h)?
-    } else {
-        vabi::INVALID_HANDLE
+    let child_handle = match bootstrap {
+        Some(h) => p.handles.lock().insert(h)?,
+        None => vabi::INVALID_HANDLE,
     };
     start_thread(&t, entry, stack, child_handle as u64, arg1 as u64)?;
     p.mark_started();
@@ -113,9 +122,7 @@ pub fn thread_create(proc: RawHandle, name: usize, len: usize) -> SysResult {
     let p = target_process(proc)?;
     let name = read_str(name, len, vabi::NAME_MAX * 4)?;
     let t = Thread::new_user(&p, &name).ok_or(Error::NoMemory)?;
-    if !p.add_thread(t.clone()) {
-        return Err(Error::BadState);
-    }
+    p.add_thread(t.clone())?;
     ok(insert(KObject::Thread(t), THREAD_RIGHTS)? as usize)
 }
 

@@ -17,6 +17,7 @@ bench = false
 vrt = { workspace = true }
 vabi = { workspace = true }
 vui = { workspace = true }
+apps-common = { path = "../common" }
 
 [build-dependencies]
 vbuild = { workspace = true }

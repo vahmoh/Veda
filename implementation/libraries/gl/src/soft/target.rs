@@ -6,7 +6,7 @@
 //! (sections 4.1.4 and 4.1.5).
 
 use crate::backend::{Blend, BlendEq, BlendFactor, Func, StencilOp};
-use crate::format::{Class, Format, Texel, linear_to_srgb, srgb_to_linear};
+use crate::format::{Class, Format, Texel, clamp01, linear_to_srgb, srgb_to_linear};
 
 /// A color, depth or stencil image being rendered to.
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +24,7 @@ pub struct RenderTarget {
 // SAFETY: a target points into a resource the renderer keeps alive while
 // the scene renders; workers touch disjoint tiles of it.
 unsafe impl Send for RenderTarget {}
+// SAFETY: as for `Send`: the workers sharing a target write disjoint tiles.
 unsafe impl Sync for RenderTarget {}
 
 impl RenderTarget {
@@ -175,7 +176,7 @@ impl RenderTarget {
     /// The depth value a fragment's depth `z` (in [0, 1]) stores as.
     #[inline(always)]
     pub fn quantize(&self, z: f32) -> DepthValue {
-        let z = if z > 0.0 { if z < 1.0 { z } else { 1.0 } } else { 0.0 };
+        let z = clamp01(z);
         match self.format {
             Format::D16Unorm => DepthValue::Fixed((z * 65535.0 + 0.5) as u32),
             Format::D24Unorm | Format::D24UnormS8Uint => DepthValue::Fixed((f64::from(z) * 16_777_215.0 + 0.5) as u32),
@@ -184,13 +185,18 @@ impl RenderTarget {
     }
 
     /// Where the stencil byte of a sample is.
+    ///
+    /// # Safety
+    /// As for [`RenderTarget::sample`].
     #[inline(always)]
     unsafe fn stencil_ptr(&self, x: u32, y: u32, s: u32) -> *mut u8 {
         // SAFETY: as the caller guarantees.
         let p = unsafe { self.sample(x, y, s) };
         match self.format {
-            // The low byte of the packed word, or the word after the depth.
+            // The word after the depth (inside the sample's 8 bytes).
+            // SAFETY: a sample of this format is 8 bytes.
             Format::D32FloatS8Uint => unsafe { p.add(4) },
+            // The low byte of the packed word, or the only one.
             _ => p,
         }
     }
@@ -239,7 +245,7 @@ fn b4(b: &[u8]) -> [f32; 4] {
 /// A float to an 8-bit unsigned normalized value (clamped, rounded).
 #[inline(always)]
 pub fn unorm8(x: f32) -> u8 {
-    let x = if x > 0.0 { if x < 1.0 { x } else { 1.0 } } else { 0.0 };
+    let x = clamp01(x);
     (x * 255.0 + 0.5) as u8
 }
 
@@ -266,7 +272,7 @@ pub fn stencil_op(op: StencilOp, s: u8, reference: u8) -> u8 {
 /// point targets the inputs are clamped to [0, 1] first (`clamp`).
 #[inline]
 pub fn blend(b: &Blend, src: [f32; 4], dst: [f32; 4], clamp: bool) -> [f32; 4] {
-    let c01 = |v: [f32; 4]| v.map(|x| if x > 0.0 { if x < 1.0 { x } else { 1.0 } } else { 0.0 });
+    let c01 = |v: [f32; 4]| v.map(clamp01);
     let (s, d, k) = if clamp { (c01(src), c01(dst), c01(b.color)) } else { (src, dst, b.color) };
     let factor = |f: BlendFactor, alpha: bool| -> [f32; 4] {
         let rgb = |v: [f32; 3], a: f32| [v[0], v[1], v[2], a];

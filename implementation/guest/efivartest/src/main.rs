@@ -11,6 +11,7 @@
 
 use std::fs;
 
+use guest_sys::checks::Checks;
 use rustix::mount::{MountFlags, mount};
 
 /// The test vendor's GUID.
@@ -22,21 +23,8 @@ const DATA: &[u8] = b"as the PC keeps it";
 /// Where efivarfs goes.
 const MOUNTED: &str = "/efivars";
 
-struct Checks {
-    failed: u32,
-}
-
-impl Checks {
-    fn check(&mut self, what: &str, ok: bool) {
-        println!("efivartest: {} {}", if ok { "ok  " } else { "FAIL" }, what);
-        if !ok {
-            self.failed += 1;
-        }
-    }
-}
-
 fn main() {
-    let mut c = Checks { failed: 0 };
+    let mut c = Checks::new("efivartest");
     let mounted = fs::create_dir_all(MOUNTED)
         .and_then(|()| Ok(mount("efivarfs", MOUNTED, "efivarfs", MountFlags::empty(), None)?));
     if let Err(e) = &mounted {
@@ -61,9 +49,5 @@ fn main() {
     let written = fs::write(format!("{MOUNTED}/VedaNew-{VENDOR}"), [7, 0, 0, 0, 1]);
     c.check("variables cannot be made", written.is_err());
 
-    if c.failed == 0 {
-        println!("efivartest: PASS");
-    } else {
-        println!("efivartest: FAIL ({} checks)", c.failed);
-    }
+    c.finish();
 }

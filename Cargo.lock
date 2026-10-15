@@ -6,6 +6,7 @@ version = 4
 name = "about"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "vabi",
  "vbuild",
  "vrt",
@@ -68,7 +69,6 @@ dependencies = [
 name = "agent"
 version = "0.1.0"
 dependencies = [
- "libm",
  "serde_json",
  "vabi",
  "vagent",
@@ -88,10 +88,8 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
- "vipc",
  "vproto",
  "vrt",
- "vvirtio",
 ]
 
 [[package]]
@@ -117,6 +115,19 @@ name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
+name = "apps-common"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vfiles",
+ "vgfx",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vui",
+]
 
 [[package]]
 name = "arbitrary"
@@ -154,6 +165,7 @@ dependencies = [
 name = "assetgen"
 version = "0.1.0"
 dependencies = [
+ "gencommon",
  "vimage",
 ]
 
@@ -174,9 +186,7 @@ name = "audiotest"
 version = "0.1.0"
 dependencies = [
  "libm",
- "vabi",
  "vbuild",
- "vipc",
  "vproto",
  "vrt",
 ]
@@ -395,6 +405,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 name = "compositor"
 version = "0.1.0"
 dependencies = [
+ "compositor-core",
  "num-traits",
  "vabi",
  "vbuild",
@@ -402,9 +413,18 @@ dependencies = [
  "vgl",
  "vipc",
  "vproto",
- "vraster",
  "vrt",
  "vsplash",
+]
+
+[[package]]
+name = "compositor-core"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vgfx",
+ "vipc",
+ "vproto",
 ]
 
 [[package]]
@@ -633,6 +653,7 @@ name = "drivervm"
 version = "0.1.0"
 dependencies = [
  "bootinfo",
+ "drivervm-core",
  "initrd",
  "vabi",
  "vbuild",
@@ -640,6 +661,14 @@ dependencies = [
  "vipc",
  "vproto",
  "vrt",
+]
+
+[[package]]
+name = "drivervm-core"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vhv",
 ]
 
 [[package]]
@@ -681,8 +710,8 @@ dependencies = [
 name = "editor"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "num-traits",
- "vabi",
  "vbuild",
  "vfiles",
  "vgfx",
@@ -755,7 +784,6 @@ dependencies = [
  "vabi",
  "vbuild",
  "vgfx",
- "vipc",
  "vproto",
  "vrt",
 ]
@@ -810,6 +838,7 @@ checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 name = "files"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "vabi",
  "vbuild",
  "vfiles",
@@ -835,6 +864,10 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
+
+[[package]]
+name = "gencommon"
+version = "0.1.0"
 
 [[package]]
 name = "getrandom"
@@ -908,7 +941,6 @@ dependencies = [
  "guest-sys",
  "rustix",
  "vabi",
- "vipc",
  "vproto",
  "vrt",
 ]
@@ -917,8 +949,8 @@ dependencies = [
 name = "guest-bridgetest"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "vabi",
- "vipc",
  "vproto",
  "vrt",
 ]
@@ -927,6 +959,7 @@ dependencies = [
 name = "guest-efivartest"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "rustix",
 ]
 
@@ -942,6 +975,7 @@ dependencies = [
 name = "guest-init"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "rustix",
 ]
 
@@ -952,13 +986,13 @@ dependencies = [
  "guest-sys",
  "rustix",
  "vproto",
- "vrt",
 ]
 
 [[package]]
 name = "guest-kms"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "rustix",
  "vabi",
  "vproto",
@@ -969,6 +1003,7 @@ dependencies = [
 name = "guest-kmspause"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "rustix",
 ]
 
@@ -976,6 +1011,7 @@ dependencies = [
 name = "guest-logkeeper"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "rustix",
  "vrt",
 ]
@@ -1002,11 +1038,15 @@ dependencies = [
 [[package]]
 name = "guest-pcitest"
 version = "0.1.0"
+dependencies = [
+ "guest-sys",
+]
 
 [[package]]
 name = "guest-renderer"
 version = "0.1.0"
 dependencies = [
+ "guest-sys",
  "vabi",
  "vipc",
  "vproto",
@@ -1019,6 +1059,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "rustix",
+ "vproto",
 ]
 
 [[package]]
@@ -1272,7 +1313,6 @@ name = "mediadec"
 version = "0.1.0"
 dependencies = [
  "vabi",
- "vipc",
  "vproto",
  "vrt",
 ]
@@ -1307,6 +1347,7 @@ dependencies = [
 name = "music"
 version = "0.1.0"
 dependencies = [
+ "music-core",
  "num-traits",
  "rand 0.10.3",
  "rand_pcg",
@@ -1315,16 +1356,21 @@ dependencies = [
  "vbuild",
  "vfiles",
  "vgfx",
- "vipc",
+ "videos-core",
  "vproto",
  "vrt",
  "vui",
 ]
 
 [[package]]
+name = "music-core"
+version = "0.1.0"
+
+[[package]]
 name = "musicgen"
 version = "0.1.0"
 dependencies = [
+ "gencommon",
  "vaudio",
  "vimage",
 ]
@@ -1345,7 +1391,6 @@ dependencies = [
 name = "nettest"
 version = "0.1.0"
 dependencies = [
- "vabi",
  "vbuild",
  "vnet",
  "vrt",
@@ -1440,10 +1485,8 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
- "vipc",
  "vproto",
  "vrt",
- "vvirtio",
 ]
 
 [[package]]
@@ -1456,8 +1499,11 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "orchestration"
 version = "0.1.0"
 dependencies = [
+ "bootinfo",
  "crc32fast",
+ "gencommon",
  "initrd",
+ "libc",
  "serde_json",
  "sha2",
  "tungstenite",
@@ -1465,6 +1511,7 @@ dependencies = [
  "vaudio",
  "vbuild",
  "velf",
+ "vhv",
  "vimage",
 ]
 
@@ -1952,6 +1999,7 @@ dependencies = [
  "vbuild",
  "vfiles",
  "vgfx",
+ "vipc",
  "vnet",
  "vproto",
  "vrt",
@@ -1984,6 +2032,7 @@ dependencies = [
 name = "shell"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "num-traits",
  "vabi",
  "vaudio",
@@ -2081,7 +2130,6 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
- "vgl",
  "vipc",
  "vproto",
  "vrt",
@@ -2091,6 +2139,7 @@ dependencies = [
 name = "taskmgr"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "vabi",
  "vbuild",
  "vfiles",
@@ -2104,11 +2153,11 @@ dependencies = [
 name = "terminal"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "terminal-core",
  "vabi",
  "vbuild",
  "vfiles",
- "vgfx",
  "vipc",
  "vnet",
  "vproto",
@@ -2128,9 +2177,7 @@ dependencies = [
 name = "testmic"
 version = "0.1.0"
 dependencies = [
- "vabi",
  "vbuild",
- "vipc",
  "vnet",
  "vproto",
  "vrt",
@@ -2247,6 +2294,8 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
+ "vfiles",
+ "vproto",
 ]
 
 [[package]]
@@ -2256,7 +2305,6 @@ dependencies = [
  "libm",
  "num-traits",
  "rand 0.10.3",
- "rand_distr",
  "rand_pcg",
 ]
 
@@ -2315,9 +2363,18 @@ dependencies = [
  "initrd",
  "vabi",
  "vbuild",
+ "vfs-core",
  "vipc",
  "vproto",
  "vrt",
+]
+
+[[package]]
+name = "vfs-core"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vproto",
 ]
 
 [[package]]
@@ -2369,6 +2426,7 @@ name = "videogen"
 version = "0.1.0"
 dependencies = [
  "fastnoise-lite",
+ "gencommon",
  "md-5",
  "rand 0.10.3",
  "rand_pcg",
@@ -2385,7 +2443,6 @@ name = "videos"
 version = "0.1.0"
 dependencies = [
  "libm",
- "serde_json",
  "vabi",
  "vaudio",
  "vbuild",
@@ -2402,7 +2459,11 @@ dependencies = [
 name = "videos-core"
 version = "0.1.0"
 dependencies = [
+ "vabi",
+ "vfiles",
+ "vipc",
  "vproto",
+ "vrt",
 ]
 
 [[package]]
@@ -2441,7 +2502,6 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
- "vipc",
  "vproto",
  "vrt",
  "vvirtio",
@@ -2478,7 +2538,6 @@ dependencies = [
  "heapless",
  "smoltcp",
  "ventropy",
- "vipc",
  "vproto",
 ]
 
@@ -2524,6 +2583,9 @@ dependencies = [
 [[package]]
 name = "vsplash"
 version = "0.1.0"
+dependencies = [
+ "vgfx",
+]
 
 [[package]]
 name = "vte"
@@ -2619,6 +2681,7 @@ dependencies = [
  "sha1",
  "sha2",
  "subtle",
+ "vproto",
  "zeroize",
 ]
 
@@ -2781,6 +2844,7 @@ dependencies = [
  "vproto",
  "vrt",
  "vwlan",
+ "zeroize",
 ]
 
 [[package]]

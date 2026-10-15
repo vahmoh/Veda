@@ -15,9 +15,9 @@ test = false
 bench = false
 
 [dependencies]
+guest-sys = { workspace = true }
 vrt = { workspace = true, default-features = false }
 vabi = { workspace = true }
-vipc = { workspace = true }
 vproto = { workspace = true }
 
 [lints]

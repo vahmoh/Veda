@@ -158,6 +158,11 @@ wrapper!(
     Resource
 );
 wrapper!(
+    /// A port: where the signals of many objects are waited for at once
+    /// ([`wait_async`], [`Port::wait_packets`]).
+    Port
+);
+wrapper!(
     /// A virtual machine: a guest-physical address space and its virtual
     /// processors.
     Guest
@@ -166,6 +171,11 @@ wrapper!(
     /// A virtual processor of a [`Guest`].
     Vcpu
 );
+
+/// The bytes [`Channel::read`] first makes room for: most messages fit.
+pub const READ_BYTES: usize = 4096;
+/// The handles [`Channel::read`] first makes room for.
+pub const READ_HANDLES: usize = 16;
 
 /// A message read from a channel.
 #[derive(Debug, Default)]
@@ -218,23 +228,51 @@ impl Channel {
         }
     }
 
-    /// Reads one message of any size without blocking.
+    /// Reads one message of any size without blocking. The buffers are
+    /// sized for most messages ([`READ_BYTES`], [`READ_HANDLES`]); a larger
+    /// one takes a second read into buffers of exactly its size. Neither is
+    /// cleared first: they are filled from what the kernel writes.
     pub fn read(&self) -> Result<Message, Error> {
-        let mut bytes = alloc::vec![0u8; 4096];
-        let mut raws = alloc::vec![0 as RawHandle; 16];
+        let mut bytes: Vec<u8> = Vec::with_capacity(READ_BYTES);
+        let mut raws: Vec<RawHandle> = Vec::with_capacity(READ_HANDLES);
         loop {
-            match self.read_into(&mut bytes, &mut raws) {
-                Ok((n, h)) => {
-                    bytes.truncate(n);
+            let (byte_room, handle_room) = (bytes.capacity(), raws.capacity());
+            let mut actual = [0u32; 2];
+            let r = call(
+                nr::CHANNEL_READ,
+                [
+                    self.raw() as usize,
+                    bytes.as_mut_ptr() as usize,
+                    byte_room,
+                    raws.as_mut_ptr() as usize,
+                    handle_room,
+                    actual.as_mut_ptr() as usize,
+                ],
+            );
+            let (n, h) = (actual[0] as usize, actual[1] as usize);
+            match r {
+                Ok(_) => {
+                    if n > byte_room || h > handle_room {
+                        // Not what the kernel does; nothing to trust.
+                        return Err(Error::Internal);
+                    }
+                    // SAFETY: the kernel wrote the message's `n` bytes and
+                    // `h` handles, which fit (checked above), to the start
+                    // of the buffers.
+                    unsafe {
+                        bytes.set_len(n);
+                        raws.set_len(h);
+                    }
                     // SAFETY: the kernel transferred these handles to us.
-                    let handles = raws[..h].iter().map(|&r| unsafe { Handle::from_raw(r) }).collect();
+                    let handles = raws.into_iter().map(|r| unsafe { Handle::from_raw(r) }).collect();
                     return Ok(Message { bytes, handles });
                 }
-                Err((Error::BufferTooSmall, nb, nh)) => {
-                    bytes.resize(nb.max(bytes.len()), 0);
-                    raws.resize(nh.max(raws.len()), 0);
+                Err(Error::BufferTooSmall) if n > byte_room || h > handle_room => {
+                    // The message stays queued: room for all of it.
+                    bytes.reserve_exact(n);
+                    raws.reserve_exact(h);
                 }
-                Err((e, _, _)) => return Err(e),
+                Err(e) => return Err(e),
             }
         }
     }
@@ -395,6 +433,34 @@ impl Vmo {
     }
 }
 
+impl Port {
+    pub fn create() -> Result<Port, Error> {
+        call(nr::PORT_CREATE, [0; 6]).map(|h| Port(Handle(h as RawHandle)))
+    }
+
+    /// Waits until the port holds a packet or `deadline` passes, and takes
+    /// as many as `out` holds (at most `vabi::PORT_WAIT_MAX`), oldest
+    /// first: how many. `TimedOut` if the deadline passed.
+    pub fn wait_packets(&self, out: &mut [vabi::PortPacket], deadline: u64) -> Result<usize, Error> {
+        let max = out.len().min(vabi::PORT_WAIT_MAX);
+        call(nr::PORT_WAIT, [self.raw() as usize, out.as_mut_ptr() as usize, max, deadline as usize, 0, 0])
+    }
+}
+
+/// Has `port` get a packet with `key` once any of `signals` is active on
+/// `handle`'s object (at once, if one is): one packet, then register again
+/// for more (`vabi::nr::OBJECT_WAIT_ASYNC`).
+pub fn wait_async(handle: RawHandle, port: &Port, key: u64, signals: u32) -> Result<(), Error> {
+    call(nr::OBJECT_WAIT_ASYNC, [handle as usize, port.raw() as usize, key as usize, signals as usize, 0, 0])
+        .map(|_| ())
+}
+
+/// Undoes the registrations of `key` with `port` on `handle`'s object, and
+/// drops the packets of `key` the port holds.
+pub fn wait_async_cancel(handle: RawHandle, port: &Port, key: u64) -> Result<(), Error> {
+    call(nr::OBJECT_WAIT_ASYNC_CANCEL, [handle as usize, port.raw() as usize, key as usize, 0, 0, 0]).map(|_| ())
+}
+
 impl Event {
     pub fn create() -> Result<Event, Error> {
         call(nr::EVENT_CREATE, [0; 6]).map(|h| Event(Handle(h as RawHandle)))
@@ -449,11 +515,13 @@ impl Interrupt {
     }
 
     /// Allocates an MSI vector for PCI function `device` (its requester
-    /// id, which the PCI resource names); returns the interrupt and the
-    /// address/data pair to program into the device.
-    pub fn create_msi(res: &Resource, device: u16) -> Result<(Interrupt, vabi::MsiInfo), Error> {
+    /// id, which the PCI resource names), of which it may have `limit` at
+    /// once; returns the interrupt and the address/data pair to program
+    /// into the device.
+    pub fn create_msi(res: &Resource, device: u16, limit: u32) -> Result<(Interrupt, vabi::MsiInfo), Error> {
         let mut info = vabi::MsiInfo::default();
-        let h = call(nr::MSI_CREATE, [res.raw() as usize, device as usize, &mut info as *mut _ as usize, 0, 0, 0])?;
+        let args = [res.raw() as usize, device as usize, limit as usize, &mut info as *mut _ as usize, 0, 0];
+        let h = call(nr::MSI_CREATE, args)?;
         Ok((Interrupt(Handle(h as RawHandle)), info))
     }
 
@@ -628,9 +696,40 @@ pub fn power(resource: &Resource, action: usize) -> Result<(), Error> {
     call(nr::SYSTEM_POWER, [resource.raw() as usize, action, 0, 0, 0, 0]).map(|_| ())
 }
 
+/// The most bytes one `random` system call gives.
+const RANDOM_CHUNK: usize = 4096;
+
+/// Fills `buf` with output of the kernel's cryptographically secure
+/// generator. A shortage of kernel memory is waited out briefly (a few
+/// tries, a millisecond apart); then, or for any other error, the error is
+/// returned and `buf` must not be used.
+pub fn try_random_bytes(buf: &mut [u8]) -> Result<(), Error> {
+    const TRIES: u32 = 5;
+    for chunk in buf.chunks_mut(RANDOM_CHUNK) {
+        let mut tries = 0;
+        loop {
+            match call(nr::RANDOM, [chunk.as_mut_ptr() as usize, chunk.len(), 0, 0, 0, 0]) {
+                Ok(_) => break,
+                Err(Error::NoMemory) if tries + 1 < TRIES => {
+                    tries += 1;
+                    crate::time::sleep(crate::time::Duration::from_millis(1));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fills `buf` with output of the kernel's cryptographically secure
+/// generator, or ends the program if there is none to be had
+/// ([`try_random_bytes`] says why): it never returns with bytes that are
+/// not random, which keys, nonces and address-space layouts made from them
+/// would not survive.
 pub fn random_bytes(buf: &mut [u8]) {
-    for chunk in buf.chunks_mut(4096) {
-        let _ = call(nr::RANDOM, [chunk.as_mut_ptr() as usize, chunk.len(), 0, 0, 0, 0]);
+    if let Err(e) = try_random_bytes(buf) {
+        crate::io::log_without_allocating(format_args!("cannot get random bytes ({e:?}): ending the program\n"));
+        crate::sys::process_exit(vabi::EXIT_CODE_PANICKED);
     }
 }
 

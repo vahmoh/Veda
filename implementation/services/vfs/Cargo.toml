@@ -20,6 +20,7 @@ vipc = { workspace = true }
 vproto = { workspace = true }
 initrd = { workspace = true }
 crc32fast = { workspace = true }
+vfs-core = { path = "core" }
 
 [build-dependencies]
 vbuild = { workspace = true }

@@ -14,7 +14,9 @@
 //!   ([`player`], [`audio`]); a second decoder makes the library's pictures
 //!   ([`thumbs`]).
 //! * A second `videos FILE` hands the file to the running player
-//!   ([`remote`]); [`agent`] lets the voice agent play and control videos.
+//!   (`vproto::instance`); [`agent`] lets the voice agent play and control
+//!   videos.
+//! * The decoders are processes of their own: they end with Videos.
 //! * What happens is logged concisely (`playing <title> (...)`, `paused at
 //!   m:ss`, `seek to m:ss`, `playback: ...` every 10 s) for the GUI tests.
 //!
@@ -39,7 +41,6 @@ mod decoder;
 mod engine;
 mod library;
 mod player;
-mod remote;
 mod thumbs;
 mod widgets;
 
@@ -51,19 +52,22 @@ use alloc::vec::Vec;
 
 use vabi::{RawHandle, signals};
 use vgfx::ShadowTemplate;
+use videos_core::playback::{EnginePhase, Phase};
 use videos_core::store;
 use vproto::fs::vfs;
+use vproto::instance::{self, Instance};
 use vrt::object::Vmo;
 use vrt::println;
 use vui::{App, FileDialog, FileDialogResult, Ui, WindowSpec, WindowState};
 
-use library::{Card, Entry, VIDEOS_DIR};
-use player::{Phase, Player, Request};
+use library::{Card, Entry};
+use player::{Player, Request};
 
 vrt::entry!(main);
 
-const CONFIG_DIR: &str = "/home/user/.config/videos";
-const STATE_PATH: &str = "/home/user/.config/videos/state";
+/// Where what Videos remembers is kept, in the home folder.
+const CONFIG_DIR: &str = ".config/videos";
+const STATE_FILE: &str = "state";
 /// The window's size when it opens.
 const WINDOW: (u32, u32) = (1100, 680);
 /// Changes are saved this long after the last one (every save rewrites the
@@ -82,6 +86,10 @@ pub struct Videos {
     vfs: Option<vfs::Client>,
     pub(crate) dir: String,
     pub(crate) entries: Vec<Entry>,
+    /// Counted up whenever `entries` are listed again.
+    pub(crate) entries_version: u64,
+    /// The library's rows as last worked out.
+    pub(crate) rows: library::Rows,
     pub(crate) list_error: Option<String>,
     /// The folder was listed at least once.
     pub(crate) listed: bool,
@@ -113,12 +121,17 @@ pub struct Videos {
     /// again.
     want_library: bool,
     want_retry: bool,
+    /// The video open is to be opened again from its start.
+    want_replay: bool,
     screen: (u32, u32),
     /// The window's size (the video's stage).
     stage: (u32, u32),
-    remote: Option<remote::Server>,
+    /// The `videos` service, to which later Videos processes hand files.
+    instance: Option<Instance>,
     activate: bool,
     was_focused: bool,
+    /// The engine's state version last taken.
+    engine_seen: u64,
 }
 
 impl Videos {
@@ -127,7 +140,7 @@ impl Videos {
         sound: Option<Arc<audio::Shared>>,
         thumbs: Option<Arc<thumbs::Shared>>,
         state: store::State,
-        remote: Option<remote::Server>,
+        instance: Option<Instance>,
         folder: Option<String>,
     ) -> Videos {
         let mut v = Videos {
@@ -135,9 +148,11 @@ impl Videos {
             dir: match folder {
                 Some(f) if f.len() > 1 => f.trim_end_matches('/').into(),
                 Some(f) => f,
-                None => VIDEOS_DIR.into(),
+                None => library::videos_dir(),
             },
             entries: Vec::new(),
+            entries_version: 0,
+            rows: library::Rows::default(),
             list_error: None,
             listed: false,
             current: 0,
@@ -161,11 +176,13 @@ impl Videos {
             want_full_screen: None,
             want_library: false,
             want_retry: false,
+            want_replay: false,
             screen: (0, 0),
             stage: WINDOW,
-            remote,
+            instance,
             activate: false,
             was_focused: true,
+            engine_seen: 0,
         };
         v.reload();
         v
@@ -175,6 +192,7 @@ impl Videos {
     /// there.
     pub(crate) fn reload(&mut self) {
         self.listed = true;
+        self.entries_version += 1;
         let Some(vfs) = &self.vfs else {
             self.list_error = Some("The file system is not available.".into());
             return;
@@ -226,12 +244,11 @@ impl Videos {
         let now = vrt::time::now_ns();
         if let Some(p) = &mut self.player
             && p.path == path
-            && !matches!(p.phase, Phase::Failed(_))
+            && !matches!(p.phase(), Phase::Failed(_))
         {
             // Already open: play it.
             if at == OpenAt::Start {
-                p.want_playing = true;
-                p.seek_to(0, vproto::media::SeekMode::Exact, now);
+                p.start_over(now);
             } else {
                 p.play(now);
             }
@@ -327,6 +344,7 @@ impl Videos {
                     self.note_volume(now);
                 }
                 Request::Retry => self.want_retry = true,
+                Request::Replay => self.want_replay = true,
             }
         }
     }
@@ -401,7 +419,7 @@ impl Videos {
 
     fn save_now(&mut self) {
         if self.save_due.take().is_some() && !save_state(self.vfs.as_ref(), &self.state) {
-            println!("cannot save {STATE_PATH}");
+            println!("cannot save {}", state_path());
         }
     }
 
@@ -429,10 +447,10 @@ impl Videos {
     /// Whether videos can be played: not until a decoder runs, once one
     /// could not be started.
     fn sync_engine(&mut self) {
-        let st = self.engine.state();
+        let Some(st) = self.engine.state_since(&mut self.engine_seen) else { return };
         if st.decoder.is_some() {
             self.unavailable = None;
-        } else if st.phase == engine::Phase::Missing && self.unavailable.is_none() {
+        } else if st.phase == EnginePhase::Missing && self.unavailable.is_none() {
             self.unavailable = Some(st.error.unwrap_or_else(|| "The decoder is not installed.".into()));
         }
     }
@@ -440,7 +458,7 @@ impl Videos {
     /// The window's title.
     fn title(&self) -> String {
         match &self.player {
-            Some(p) => format!("{} \u{2014} Videos", p.title),
+            Some(p) => format!("{} \u{2014} Videos", p.title()),
             None => String::from("Videos"),
         }
     }
@@ -478,8 +496,8 @@ impl App for Videos {
         if let Some(t) = &self.thumbs {
             v.push((t.ready.raw(), signals::SIGNALED));
         }
-        if let Some(r) = &self.remote {
-            r.wait_handles(&mut v);
+        if let Some(i) = &self.instance {
+            i.wait_handles(&mut v);
         }
         v
     }
@@ -506,7 +524,7 @@ impl App for Videos {
             }
             _ => {
                 // Another Videos process handed us files to play.
-                let files = self.remote.as_mut().map(|r| r.poll()).unwrap_or_default();
+                let files = self.instance.as_mut().map(|i| i.poll(|_| true)).unwrap_or_default();
                 if let Some(path) = files.into_iter().last() {
                     println!("opening {path}");
                     self.open_path(path, OpenAt::Resume);
@@ -550,6 +568,14 @@ impl App for Videos {
                 self.open_path(path, OpenAt::Resume);
                 ui.repaint();
             }
+            if core::mem::take(&mut self.want_replay)
+                && let Some(path) = self.player.as_ref().map(|p| p.path.clone())
+            {
+                // A video that cannot seek back to its start is opened again.
+                self.close_player();
+                self.open_path(path, OpenAt::Start);
+                ui.repaint();
+            }
             if core::mem::take(&mut self.want_library) {
                 if self.full_screen {
                     self.set_full_screen(ui, false);
@@ -582,10 +608,15 @@ impl App for Videos {
     }
 }
 
+/// The file what Videos remembers is kept in.
+fn state_path() -> String {
+    vfiles::path::join(&vfiles::path::join(vfiles::path::HOME, CONFIG_DIR), STATE_FILE)
+}
+
 /// The state saved last time, or a new one.
 fn load_state(vfs: Option<&vfs::Client>) -> store::State {
     let Some(vfs) = vfs else { return store::State::default() };
-    let Some((vmo, len)) = vfs.read_file(STATE_PATH.into()).ok().and_then(|r| r.ok()) else {
+    let Some((vmo, len)) = vfs.read_file(state_path()).ok().and_then(|r| r.ok()) else {
         return store::State::default();
     };
     let mut buf = vec![0u8; len.min(1 << 20) as usize];
@@ -600,32 +631,16 @@ fn save_state(vfs: Option<&vfs::Client>, state: &store::State) -> bool {
     let Some(vfs) = vfs else { return false };
     let text = state.to_text();
     let data = text.as_bytes();
-    let mut dir = String::new();
+    let mut dir = String::from(vfiles::path::HOME);
     for part in CONFIG_DIR.split('/').filter(|p| !p.is_empty()) {
-        dir.push('/');
-        dir.push_str(part);
+        dir = vfiles::path::join(&dir, part);
         let _ = vfs.mkdir(dir.clone());
     }
     let Ok(vmo) = Vmo::create(data.len().max(1)) else { return false };
     if vmo.write(0, data).is_err() {
         return false;
     }
-    matches!(vfs.write_file(STATE_PATH.into(), vmo, data.len() as u64), Ok(Ok(())))
-}
-
-/// True once `name` is registered (waits up to two seconds, since the
-/// registry would otherwise queue a connection forever when the service
-/// does not exist).
-pub fn service_registered(name: &str) -> bool {
-    let deadline = vrt::time::now_ns() + 2_000_000_000;
-    loop {
-        let found =
-            vproto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false);
-        if found || vrt::time::now_ns() > deadline {
-            return found;
-        }
-        vrt::time::sleep(vrt::time::Duration::from_millis(100));
-    }
+    matches!(vfs.write_file(state_path(), vmo, data.len() as u64), Ok(Ok(())))
 }
 
 const USAGE: &str = "usage: videos [--decoder PATH] [FILE | FOLDER]";
@@ -657,17 +672,13 @@ fn main() -> i32 {
     // The library: the folder given, or the file's (as Photos does).
     let folder = file.take_if(|p| is_dir(p)).or_else(|| file.as_deref().map(|f| vfiles::path::parent(f).into()));
     // One player at a time: a file goes to the player that is running.
-    let mut server = remote::Server::register();
-    if server.is_none()
-        && let Some(p) = &file
-    {
-        if remote::forward(p) {
-            println!("handed {p} to the running player");
+    let server = match instance::start("videos", file.as_deref()) {
+        instance::Start::Serve(server) => server,
+        instance::Start::HandedOver => {
+            println!("handed {} to the running player", file.as_deref().unwrap_or_default());
             return 0;
         }
-        // The other player is gone (or hung): take over.
-        server = remote::Server::register();
-    }
+    };
     let state = load_state(vfs.as_ref());
     let gain = if state.muted { 0.0 } else { vaudio::mix::slider_to_gain(state.volume.min(100) as f32 / 100.0) };
     let sound = audio::start(gain);
@@ -687,5 +698,8 @@ fn main() -> i32 {
     spec.app_id = "videos".into();
     spec.min_width = 640;
     spec.min_height = 420;
-    vui::run(spec, app)
+    let code = vui::run(spec, app);
+    // The decoders are processes of their own, which would outlive Videos.
+    decoder::end_all();
+    code
 }

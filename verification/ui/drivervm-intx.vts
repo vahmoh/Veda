@@ -7,11 +7,11 @@
 # guest's ACPI tables route the card's INTx to it: Linux's e1000 drives the
 # card through the line, which stays masked from when it fires until
 # Linux's end-of-interrupt. The card attaches to the network service and
-# gets an address by DHCP; nettest checks DNS, TCP, HTTP and ping through
-# it.
+# gets an address by DHCP; nettest checks ping, TCP and HTTP through it,
+# against a server of the host's (no Internet needed).
 net ethernet
 nic e1000
-boot-cmdline "run=nettest"
+nettest local
 fail-on "PANIC"
 fail-on "drivervm: processor"
 fail-on "nettest: FAIL"

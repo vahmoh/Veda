@@ -21,7 +21,10 @@
 //! **Positions.** After each block, every stream records where its
 //! consumed audio ends in output frames. As the driver reports output
 //! frames played, these marks turn into a per-stream "played" position
-//! that is published (with a timestamp) in the stream's ring.
+//! that is published in the stream's ring with the moment the output got
+//! there: the driver's own time stamp (the null output's, its clock's), so
+//! that a player extrapolating from it moves on smoothly, not in steps
+//! each time the mixer runs.
 //!
 //! **Ducking.** While a client asks for it (the agent in a conversation),
 //! every other client's streams play quieter, fading down and back up over
@@ -40,8 +43,7 @@ use alloc::vec::Vec;
 use vaudio::mix;
 use vaudio::resample::Resampler;
 use vproto::audio::{
-    AudioError, AudioStatus, DeviceFormat, DeviceLink, Ring, RingError, Role, StreamHandle, StreamSpec, StreamStatus,
-    ring,
+    AudioError, AudioStatus, DeviceFormat, DeviceLink, Ring, RingError, Role, StreamHandle, StreamSpec, ring,
 };
 use vrt::object::{Event, Vmo};
 
@@ -112,8 +114,7 @@ impl Stream {
             return;
         }
         if !self.tail_flushed && self.ring.filled() == 0 {
-            let silence = vec![0i16; self.resampler.delay_frames() * self.ring.channels() as usize];
-            self.resampler.push(&silence);
+            self.resampler.push_silence(self.resampler.delay_frames());
             self.tail_flushed = true;
         }
     }
@@ -194,6 +195,8 @@ pub enum Output {
     Null { started_ns: u64, consumed: u64 },
 }
 
+/// The playback streams, the output and the mixing (see the module
+/// documentation).
 pub struct Mixer {
     pub streams: BTreeMap<u32, Stream>,
     pub output: Output,
@@ -209,6 +212,8 @@ pub struct Mixer {
     duckers: Vec<u64>,
     duck: f32,
     next_id: u32,
+    /// What each stream produced in the block being mixed.
+    produced_by: Vec<(u32, usize)>,
     acc: Vec<i32>,
     out: Vec<i16>,
     input: Vec<i16>,
@@ -224,6 +229,7 @@ fn ring_err(e: RingError) -> AudioError {
 }
 
 impl Mixer {
+    /// A mixer on the null output, without streams.
     pub fn new() -> Mixer {
         let max = MAX_BLOCK * 2;
         Mixer {
@@ -238,6 +244,7 @@ impl Mixer {
             duckers: Vec::new(),
             duck: 1.0,
             next_id: 1,
+            produced_by: Vec::with_capacity(MAX_STREAMS),
             acc: vec![0; max],
             out: vec![0; max],
             // Enough input for MAX_BLOCK output frames at up to 4x the rate.
@@ -341,6 +348,7 @@ impl Mixer {
         }
     }
 
+    /// The output device's name (`"none"` for the null output).
     pub fn device_name(&self) -> &str {
         match &self.output {
             Output::Device { name, .. } => name,
@@ -358,12 +366,26 @@ impl Mixer {
 
     /// Output frames that have been played.
     fn output_played(&self) -> u64 {
+        self.output_clock().0
+    }
+
+    /// Output frames that have been played, and when the output got there:
+    /// the driver's time stamp (0 while it has not reported), or the null
+    /// output's clock.
+    fn output_clock(&self) -> (u64, u64) {
         match &self.output {
-            Output::Device { ring, .. } => ring.played().0.min(self.written),
-            Output::Null { .. } => self.written,
+            Output::Device { ring, .. } => {
+                let (played, at) = ring.played();
+                (played.min(self.written), at)
+            }
+            Output::Null { started_ns, consumed } => {
+                let at = *consumed as u128 * 1_000_000_000 / self.rate as u128;
+                (self.written, started_ns.saturating_add(at.min(u64::MAX as u128) as u64))
+            }
         }
     }
 
+    /// Opens a playback stream for client `owner`.
     pub fn open(&mut self, owner: u64, spec: &StreamSpec) -> Result<StreamHandle, AudioError> {
         if !(8_000..=192_000).contains(&spec.rate) || !(1..=2).contains(&spec.channels) {
             return Err(AudioError::BadFormat);
@@ -415,6 +437,7 @@ impl Mixer {
         self.streams.get_mut(&id).filter(|s| s.owner == owner).ok_or(AudioError::NoSuchStream)
     }
 
+    /// Closes client `owner`'s stream `id`.
     pub fn close(&mut self, owner: u64, id: u32) -> Result<(), AudioError> {
         self.stream(owner, id)?;
         if let Some(s) = self.streams.remove(&id) {
@@ -442,6 +465,7 @@ impl Mixer {
         }
     }
 
+    /// Pauses (fading out first) or resumes a stream.
     pub fn set_paused(&mut self, owner: u64, id: u32, paused: bool) -> Result<(), AudioError> {
         let s = self.stream(owner, id)?;
         if paused {
@@ -458,15 +482,18 @@ impl Mixer {
         Ok(())
     }
 
+    /// Sets a stream's volume (linear, 0..=1; the gain ramps to it).
     pub fn set_volume(&mut self, owner: u64, id: u32, volume: f32) -> Result<(), AudioError> {
         let s = self.stream(owner, id)?;
         s.volume = if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 1.0 };
         Ok(())
     }
 
+    /// Discards what a stream holds; returns its position, now played.
     pub fn flush(&mut self, owner: u64, id: u32) -> Result<u64, AudioError> {
         let written = self.written;
         let rate = self.rate;
+        let (_, at) = self.output_clock();
         let s = self.stream(owner, id)?;
         s.ring.discard_all();
         s.resampler = Resampler::new(s.ring.rate(), rate, s.ring.channels() as usize);
@@ -474,22 +501,9 @@ impl Mixer {
         s.reset_positions(written);
         // Fade the new audio in so it does not click against the old.
         s.gain = 0;
-        s.ring.set_played(s.played, vrt::time::now_ns());
+        s.ring.set_played(s.played, at);
         let _ = s.event.signal();
         Ok(s.played)
-    }
-
-    pub fn stream_status(&mut self, owner: u64, id: u32) -> Result<StreamStatus, AudioError> {
-        let latency_ns = self.latency_ns();
-        let s = self.stream(owner, id)?;
-        Ok(StreamStatus {
-            written: s.ring.write_pos(),
-            consumed: s.ring.read_pos(),
-            played: s.played,
-            latency_ns,
-            underruns: s.underruns,
-            paused: s.paused,
-        })
     }
 
     fn latency_ns(&self) -> u64 {
@@ -497,6 +511,7 @@ impl Mixer {
         pending * 1_000_000_000 / self.rate as u64
     }
 
+    /// The output's part of the audio system's status.
     pub fn status(&self) -> AudioStatus {
         let (period, underruns) = match &self.output {
             Output::Device { ring, period, .. } => (*period, ring.underruns() as u64),
@@ -516,8 +531,6 @@ impl Mixer {
             input_device: String::new(),
             input_rate: 0,
             input_channels: 0,
-            input_muted: false,
-            input_streams: 0,
         }
     }
 
@@ -562,7 +575,7 @@ impl Mixer {
         let step = (1.0 - DUCK_GAIN) * n as f32 / (self.rate as f32 * DUCK_FADE_S);
         self.duck = if self.duck < goal { (self.duck + step).min(goal) } else { (self.duck - step).max(goal) };
         let mut produced_max = 0;
-        let mut produced_by: Vec<(u32, usize)> = Vec::with_capacity(self.streams.len());
+        self.produced_by.clear();
         for (&id, s) in self.streams.iter_mut() {
             if s.paused {
                 continue;
@@ -609,14 +622,14 @@ impl Mixer {
                 let _ = s.event.signal();
             }
             produced_max = produced_max.max(produced);
-            produced_by.push((id, produced));
+            self.produced_by.push((id, produced));
         }
         if produced_max == 0 {
             return 0;
         }
         // Streams that fell short of the block have a gap: an underrun.
         let end = self.written + produced_max as u64;
-        for (id, produced) in produced_by {
+        for &(id, produced) in &self.produced_by {
             let Some(s) = self.streams.get_mut(&id) else { continue };
             let ended = s.ring.producer_flags() & ring::flags::END != 0;
             if produced < produced_max && s.produced_any && !ended {
@@ -691,12 +704,13 @@ impl Mixer {
         if emitted && let Output::Device { data_event, .. } = &self.output {
             let _ = data_event.signal();
         }
-        self.publish(now);
+        self.publish();
     }
 
-    /// Publishes per-stream played positions and wakes writers.
-    fn publish(&mut self, now: u64) {
-        let played_out = self.output_played();
+    /// Publishes per-stream played positions (stamped with the output's
+    /// time: see the module documentation) and wakes writers.
+    fn publish(&mut self) {
+        let (played_out, at) = self.output_clock();
         let latency = self.written.saturating_sub(played_out);
         for s in self.streams.values_mut() {
             while let Some(&(d, p)) = s.marks.front() {
@@ -719,7 +733,7 @@ impl Mixer {
                 None => s.prev_mark.1,
             };
             s.played = s.played.max(pos).min(s.ring.read_pos());
-            s.ring.set_played(s.played, now);
+            s.ring.set_played(s.played, at);
             s.ring.set_latency((latency * s.ring.rate() as u64 / self.rate as u64) as u32);
             s.ring.set_underruns(s.underruns);
             if !s.paused && s.ring.free() >= s.notify_frames {

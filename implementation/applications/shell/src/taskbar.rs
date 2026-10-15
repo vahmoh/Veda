@@ -14,7 +14,7 @@ use vproto::display::WindowState;
 use vui::{Font, Icon, Ui, status};
 
 use crate::tooltip::Tip;
-use crate::{Action, DISMISS_GRACE_NS, Model, agent, apps, chrome, wifi};
+use crate::{Action, Model, PopupKind, agent, apps, chrome, wifi};
 
 /// Height of the taskbar in pixels.
 pub const HEIGHT: i32 = 48;
@@ -124,7 +124,7 @@ impl Taskbar {
         // Start button.
         let r = Rect::new(x, 4, SLOT - 2, h - 8);
         let resp = ui.interact(ui.id("start"), r);
-        Self::button_bg(ui, r, resp.hovered, resp.held, m.start_open);
+        Self::button_bg(ui, r, resp.hovered, resp.held, m.popup == Some(PopupKind::Start));
         if resp.hovered {
             tip = Some(("Start".into(), r.center().0));
         }
@@ -134,8 +134,8 @@ impl Taskbar {
             self.start_pressed_at = ui.now();
         }
         // A click that dismissed the open menu must not reopen it.
-        if resp.clicked && m.start_dismissed_at + DISMISS_GRACE_NS < self.start_pressed_at {
-            m.push(Action::ToggleStart);
+        if resp.clicked && !m.just_dismissed(PopupKind::Start, self.start_pressed_at) {
+            m.push(Action::TogglePopup(PopupKind::Start));
         }
         x += SLOT;
 
@@ -174,7 +174,7 @@ impl Taskbar {
         let show_desktop = Rect::new(w - 10, 0, 10, h);
         let clock = Rect::new(show_desktop.x - 6 - 96, 4, 96, h - 8);
         let resp = ui.interact(ui.id("clock"), clock);
-        Self::button_bg(ui, clock, resp.hovered, resp.held, m.calendar_open);
+        Self::button_bg(ui, clock, resp.hovered, resp.held, m.popup == Some(PopupKind::Calendar));
         let now = vrt::time::DateTime::now();
         let time = format!("{:02}:{:02}", now.hour, now.minute);
         let date = format!("{} {} {}", &now.weekday_name()[..3], now.day, &now.month_name()[..3]);
@@ -187,8 +187,8 @@ impl Taskbar {
             let full = format!("{}, {} {} {}", now.weekday_name(), now.day, now.month_name(), now.year);
             tip = Some((full, clock.center().0));
         }
-        if resp.clicked && m.calendar_dismissed_at + DISMISS_GRACE_NS < self.clock_pressed_at {
-            m.push(Action::ToggleCalendar);
+        if resp.clicked && !m.just_dismissed(PopupKind::Calendar, self.clock_pressed_at) {
+            m.push(Action::TogglePopup(PopupKind::Calendar));
         }
         // Redraw when the minute changes.
         let into_minute = vrt::time::unix_time_ns() % 60_000_000_000;
@@ -198,7 +198,7 @@ impl Taskbar {
         // Volume: click for the volume control, scroll to adjust.
         let vol = Rect::new(clock.x - 44, 4, 40, h - 8);
         let resp = ui.interact(ui.id("volume"), vol);
-        Self::button_bg(ui, vol, resp.hovered, resp.held, m.volume_open);
+        Self::button_bg(ui, vol, resp.hovered, resp.held, m.popup == Some(PopupKind::Volume));
         let (level, muted) = m.audio.as_ref().map_or((1.0, false), |a| (a.master_volume, a.muted));
         match m.audio {
             Some(_) => status::draw_volume(&mut ui.canvas, vol, level, muted, t.text),
@@ -208,8 +208,8 @@ impl Taskbar {
         if resp.pressed {
             self.volume_pressed_at = ui.now();
         }
-        if resp.clicked && m.volume_dismissed_at + DISMISS_GRACE_NS < self.volume_pressed_at {
-            m.push(Action::ToggleVolume);
+        if resp.clicked && !m.just_dismissed(PopupKind::Volume, self.volume_pressed_at) {
+            m.push(Action::TogglePopup(PopupKind::Volume));
         }
         if resp.hovered && ui.input.scroll.1 != 0 && m.audio.is_some() {
             m.push(Action::SetVolume(level + ui.input.scroll.1 as f32 * 0.05, false));
@@ -226,13 +226,13 @@ impl Taskbar {
         // Network: opens the Wi-Fi flyout.
         let net = Rect::new(vol.x - 44, 4, 40, h - 8);
         let resp = ui.interact(ui.id("network"), net);
-        Self::button_bg(ui, net, resp.hovered, resp.held, m.wifi_open);
+        Self::button_bg(ui, net, resp.hovered, resp.held, m.popup == Some(PopupKind::Wifi));
         wifi::draw_icon(ui, net, m);
         if resp.pressed {
             self.network_pressed_at = ui.now();
         }
-        if resp.clicked && m.wifi_dismissed_at + DISMISS_GRACE_NS < self.network_pressed_at {
-            m.push(Action::ToggleWifi);
+        if resp.clicked && !m.just_dismissed(PopupKind::Wifi, self.network_pressed_at) {
+            m.push(Action::TogglePopup(PopupKind::Wifi));
         }
         if resp.hovered {
             tip = Some((wifi::tooltip(m).replace('\n', " \u{00b7} "), net.center().0));

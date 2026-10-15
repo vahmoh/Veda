@@ -8,7 +8,7 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Canvas, Rect};
+use vgfx::{Canvas, Damage, DrawCache, Rect};
 use vproto::display::{self as dp, Cursor, WindowEvent, WindowSpec, WindowState, display};
 use vrt::object::{Channel, Vmo};
 use vrt::vm::Mapping;
@@ -185,15 +185,46 @@ impl Window {
     /// Returns a canvas for the next frame (the buffer that is not on
     /// screen), resizing the surface if the window size changed.
     pub fn begin_frame(&mut self) -> Result<Canvas<'_>, WindowError> {
+        let (pixels, width, height, stride) = self.back_buffer()?;
+        Ok(Canvas::new(pixels, width, height, stride))
+    }
+
+    /// Like [`Window::begin_frame`], drawing with `cache` (kept by the
+    /// caller from frame to frame).
+    pub fn begin_frame_with<'a>(&'a mut self, cache: &'a mut DrawCache) -> Result<Canvas<'a>, WindowError> {
+        let (pixels, width, height, stride) = self.back_buffer()?;
+        Ok(Canvas::with_cache(pixels, width, height, stride, cache))
+    }
+
+    /// The buffer the next frame is drawn into, with its width, height and
+    /// stride.
+    fn back_buffer(&mut self) -> Result<(&mut [u32], i32, i32, i32), WindowError> {
         self.ensure_surface()?;
         let index = self.back_index();
-        let s = self.surface.as_ref().unwrap();
+        let s = self.surface.as_ref().ok_or(WindowError::NoMemory)?;
         let per = (s.stride * s.height) as usize;
         // SAFETY: the mapping holds BUFFERS buffers of `per` pixels; the
         // compositor only reads the one on screen.
         let pixels =
             unsafe { core::slice::from_raw_parts_mut((s.map.as_ptr() as *mut u32).add(per * index as usize), per) };
-        Ok(Canvas::new(pixels, s.width, s.height, s.stride))
+        Ok((pixels, s.width, s.height, s.stride))
+    }
+
+    /// What the frame drawn since `begin_frame` changed of the one on
+    /// screen, in bands of rows; `None` when there is none on screen to
+    /// compare with (the first frame, or the first at a new size). Comparing
+    /// reads both frames, which costs far less than the compositor redrawing,
+    /// recomposing and copying a whole window.
+    pub fn changes(&self) -> Option<Damage> {
+        let shown = self.shown?;
+        let s = self.surface.as_ref()?;
+        let per = (s.stride * s.height) as usize;
+        // SAFETY: the mapping holds BUFFERS buffers of `per` pixels: the one
+        // on screen, which the compositor only reads, and the one the frame
+        // was drawn into, which nothing writes now.
+        let buffer =
+            |i: u8| unsafe { core::slice::from_raw_parts((s.map.as_ptr() as *const u32).add(per * i as usize), per) };
+        Some(Damage::of_changes(buffer(shown), buffer(self.back_index()), s.width, s.height, s.stride as usize))
     }
 
     /// Shows the frame drawn since `begin_frame`. `damage` lists changed
@@ -222,10 +253,6 @@ impl Window {
 
     pub fn set_position(&self, x: i32, y: i32) {
         let _ = self.display.set_position(self.id, x, y);
-    }
-
-    pub fn begin_move(&self) {
-        let _ = self.display.begin_move(self.id);
     }
 }
 

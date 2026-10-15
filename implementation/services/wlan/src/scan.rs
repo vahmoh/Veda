@@ -160,7 +160,7 @@ impl Table {
                 band: band_of(b.channel),
                 channel: b.channel,
                 signal_dbm: b.signal_dbm,
-                security: to_proto(b.security),
+                security: b.security,
                 pmf: b.pmf,
                 age_ms: now.saturating_sub(b.seen_ms).min(u32::MAX as u64) as u32,
             })
@@ -177,7 +177,7 @@ impl Table {
             if b.ssid.is_empty() || b.ssid.iter().all(|&c| c == 0) {
                 continue;
             }
-            let e = groups.entry((b.ssid.clone(), to_proto(b.security))).or_insert((i8::MIN, 0));
+            let e = groups.entry((b.ssid.clone(), b.security)).or_insert((i8::MIN, 0));
             e.0 = e.0.max(b.signal_dbm);
             e.1 += 1;
         }
@@ -196,35 +196,5 @@ impl Table {
             .collect();
         v.sort_by_key(|n| (!n.connected, -(n.signal_dbm as i32)));
         v
-    }
-}
-
-/// The `vproto` form of a security type.
-pub fn to_proto(s: vwlan::rsn::Security) -> Security {
-    use vwlan::rsn::Security as S;
-    match s {
-        S::Open => Security::Open,
-        S::Wep => Security::Wep,
-        S::WpaTkip => Security::WpaTkip,
-        S::Wpa2Personal => Security::Wpa2Personal,
-        S::Wpa3Personal => Security::Wpa3Personal,
-        S::Wpa2Wpa3Personal => Security::Wpa2Wpa3Personal,
-        S::Enterprise => Security::Enterprise,
-        S::Owe => Security::Owe,
-    }
-}
-
-/// The `vwlan` form of a security type.
-pub fn from_proto(s: Security) -> vwlan::rsn::Security {
-    use vwlan::rsn::Security as S;
-    match s {
-        Security::Open => S::Open,
-        Security::Wep => S::Wep,
-        Security::WpaTkip => S::WpaTkip,
-        Security::Wpa2Personal => S::Wpa2Personal,
-        Security::Wpa3Personal => S::Wpa3Personal,
-        Security::Wpa2Wpa3Personal => S::Wpa2Wpa3Personal,
-        Security::Enterprise => S::Enterprise,
-        Security::Owe => S::Owe,
     }
 }

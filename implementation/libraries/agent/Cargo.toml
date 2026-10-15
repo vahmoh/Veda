@@ -12,6 +12,10 @@ license.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 percent-encoding = { workspace = true }
+# The agent protocols' types (the risk of an action, what an application
+# offers), and the paths of the VFS.
+vproto = { workspace = true }
+vfiles = { workspace = true }
 
 [lints]
 workspace = true

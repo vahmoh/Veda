@@ -10,6 +10,13 @@
 //! It also remembers where the RAM is that the kernel owns (free RAM, its
 //! own image, the boot data, the loader's memory it takes back): physical
 //! VMOs, which drivers map devices' memory with, may not reach it.
+//!
+//! Memory that user space asks for (its VMOs' pages, DMA buffers, the
+//! kernel buffers that carry its data) leaves a reserve of frames free for
+//! the kernel's own needs (its heap, page tables, stacks): a process that
+//! takes all the memory it can is refused more, and a page fault it cannot
+//! be given ends it, before the kernel itself runs short, which would
+//! stop the system.
 
 use bootinfo::{MemoryKind, MemoryRegion};
 
@@ -202,9 +209,45 @@ pub fn reclaim(map: &[MemoryRegion], kind: MemoryKind) -> u64 {
     n * PAGE_SIZE
 }
 
+impl Bitmap {
+    /// Frames that allocations for user space leave free: 1/64 of RAM, at
+    /// least 8 MiB and at most 64 MiB.
+    fn reserve(&self) -> u64 {
+        (self.total_usable / 64).clamp(2048, 16384)
+    }
+
+    /// Whether user space may still have `frames` more frames.
+    fn user_may_take(&self, frames: u64) -> bool {
+        self.free.saturating_sub(frames) >= self.reserve()
+    }
+}
+
 /// Allocates one frame (contents undefined).
 pub fn alloc() -> Option<u64> {
     ALLOCATOR.lock().as_mut()?.alloc_one().map(|f| f * PAGE_SIZE)
+}
+
+/// Whether user space may still have `bytes` of memory: false once that
+/// would reach into the kernel's reserve. For memory taken on user space's
+/// behalf from the kernel's heap (buffers for its data, the stacks of its
+/// threads), which has no tier of its own.
+pub fn user_may_use(bytes: u64) -> bool {
+    ALLOCATOR.lock().as_ref().is_some_and(|bm| bm.user_may_take(bytes.div_ceil(PAGE_SIZE)))
+}
+
+/// Allocates one zero-filled frame for user space's memory (a VMO's page),
+/// outside the kernel's reserve.
+pub fn alloc_user_zeroed() -> Option<u64> {
+    let frame = {
+        let mut guard = ALLOCATOR.lock();
+        let bm = guard.as_mut()?;
+        if !bm.user_may_take(1) {
+            return None;
+        }
+        bm.alloc_one()? * PAGE_SIZE
+    };
+    zero_frames(frame, 1);
+    Some(frame)
 }
 
 /// Allocates one zero-filled frame.
@@ -217,8 +260,21 @@ pub fn alloc_zeroed() -> Option<u64> {
 /// Allocates `count` physically contiguous, zeroed frames aligned to
 /// `align` bytes, entirely below `max_addr`.
 pub fn alloc_contiguous(count: u64, align: u64, max_addr: u64) -> Option<u64> {
+    contiguous(count, align, max_addr, false)
+}
+
+/// Like [`alloc_contiguous`], for user space's memory (a DMA buffer):
+/// outside the kernel's reserve.
+pub fn alloc_user_contiguous(count: u64, align: u64, max_addr: u64) -> Option<u64> {
+    contiguous(count, align, max_addr, true)
+}
+
+fn contiguous(count: u64, align: u64, max_addr: u64, user: bool) -> Option<u64> {
     let mut guard = ALLOCATOR.lock();
     let bm = guard.as_mut()?;
+    if user && !bm.user_may_take(count) {
+        return None;
+    }
     let f = bm.alloc_run(count, (align / PAGE_SIZE).max(1), max_addr / PAGE_SIZE)?;
     drop(guard);
     zero_frames(f * PAGE_SIZE, count);

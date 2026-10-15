@@ -6,13 +6,18 @@
 //! * [`Canvas`]: drawing on a borrowed buffer of premultiplied `0xAARRGGBB`
 //!   pixels — rectangles, gradients, anti-aliased rounded rectangles and
 //!   circles, vector paths (through `vraster`), coverage masks, bitmaps
-//!   (with scaling) — all clipped and translated.
-//! * [`Bitmap`]: owned images with resizing and blurring.
+//!   (with scaling) and pictures with rounded corners ([`Picture`]) — all
+//!   clipped and translated, with what drawing keeps between frames in a
+//!   [`DrawCache`].
+//! * [`Bitmap`]: owned images with resizing, downscaling of any picture
+//!   ([`bitmap::downscale`]) and blurring.
 //! * [`ShadowTemplate`]: fast soft shadows.
 //! * [`Text`]: fonts and cached glyph rendering (through `vfont`).
+//! * [`Damage`]: changed rectangles, also found by comparing two frames.
 //!
 //! Everything is integer- and cache-friendly because Veda usually runs
-//! under CPU emulation.
+//! under CPU emulation, and the loops over pixels stay scalar
+//! ([`color`] says why and how to check).
 
 #![no_std]
 
@@ -28,7 +33,7 @@ pub mod shadow;
 pub mod text;
 
 pub use bitmap::Bitmap;
-pub use canvas::{Canvas, Filter};
+pub use canvas::{Canvas, DrawCache, Filter, Picture};
 pub use color::Color;
 pub use geom::{Damage, Rect};
 pub use shadow::ShadowTemplate;
@@ -174,5 +179,34 @@ mod tests {
         d.add(Rect::new(100, 100, 5, 5));
         assert_eq!(d.rects().len(), 2);
         assert_eq!(d.bounds(), Rect::new(0, 0, 105, 105));
+    }
+
+    #[test]
+    fn changes_between_frames_are_found_in_bands() {
+        // 61 pixels wide (an odd one at the end of each row), rows 64 apart.
+        let (w, h, stride) = (61, 50, 64usize);
+        let old: alloc::vec::Vec<u32> = (0..stride * h as usize).map(|i| i as u32).collect();
+        assert!(Damage::of_changes(&old, &old, w, h, stride).is_empty(), "the same frame");
+        let mut new = old.clone();
+        // A caret: two columns over rows 10..30.
+        for y in 10..30 {
+            new[y * stride + 7] ^= 1;
+            new[y * stride + 8] ^= 0x100;
+        }
+        // The last pixel of row 45 and the first of row 46; past the width, nothing counts.
+        new[45 * stride + 60] = 0;
+        new[46 * stride] = 7;
+        new[47 * stride + 62] = 9;
+        let d = Damage::of_changes(&old, &new, w, h, stride);
+        assert_eq!(d.rects(), &[Rect::new(7, 10, 2, 20), Rect::new(0, 45, 61, 2)]);
+        // One pixel of a pair, either one.
+        let mut one = old.clone();
+        one[3 * stride + 33] = 0;
+        assert_eq!(Damage::of_changes(&old, &one, w, h, stride).rects(), &[Rect::new(33, 3, 1, 1)]);
+        one[3 * stride + 33] = old[3 * stride + 33];
+        one[3 * stride + 34] = 0;
+        assert_eq!(Damage::of_changes(&old, &one, w, h, stride).rects(), &[Rect::new(34, 3, 1, 1)]);
+        // Buffers too short for their size are wholly changed.
+        assert_eq!(Damage::of_changes(&old[..100], &new, w, h, stride).rects(), &[Rect::new(0, 0, w, h)]);
     }
 }

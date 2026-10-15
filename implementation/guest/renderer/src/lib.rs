@@ -23,6 +23,12 @@
 //! reaches a GPU's driver as a dma-buf of the VMO, which the GPU reads and
 //! writes through the IOMMU, and softpipe as the VMO mapped here.
 //!
+//! The renderer's clients are Veda's processes, which it knows by the
+//! identity the registry gives their connections: each process has a few
+//! connections at most, and its contexts' memory and the memory it gives
+//! to render into are bounded (so that one cannot take what the others,
+//! and the driver VM's other drivers, need); so are all of them together.
+//!
 //! `renderer [softpipe] [trace | trace=commands]`: softpipe rather than the
 //! GPU, and what to log.
 
@@ -32,6 +38,9 @@ use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
+use guest_sys::idle;
 use vabi::{Rights, map_flags, signals};
 use vipc::{Bytes, WaitSet};
 use vproto::gpu::{GpuError, ResourceSpec, Session, gpu};
@@ -44,9 +53,19 @@ const HEADER: usize = 4096;
 const COMMANDS: usize = 1024 * 1024;
 const MIN_SHARED: u64 = 1024 * 1024;
 const MAX_SHARED: u64 = 64 * 1024 * 1024;
+/// The most connections, of all processes, and of one.
 const MAX_CLIENTS: usize = 64;
-/// Memory from outside a client may have softpipe render into at once (a
-/// display's pictures).
+const PROCESS_CLIENTS: usize = 8;
+/// The most bytes of contexts' memory of one process, and of all.
+const PROCESS_MEMORY: u64 = 256 << 20;
+const TOTAL_MEMORY: u64 = 1 << 30;
+/// The most pieces of memory from outside (a display's pictures) a
+/// process gives to render into, and their bytes; and the bytes of all.
+const PROCESS_IMPORTS: usize = 16;
+const PROCESS_IMPORT_BYTES: u64 = 512 << 20;
+const TOTAL_IMPORT_BYTES: u64 = 1 << 30;
+/// The most pieces of memory from outside a context may have softpipe
+/// render into (mapped here until the context goes, as the decoder needs).
 const MAX_IMPORTS: usize = 4;
 /// How often signaling fences are looked for while some are pending.
 const POLL_NS: u64 = 1_000_000;
@@ -132,8 +151,12 @@ struct Context {
     /// The last fence queued, and the last written to the fence word.
     queued: u64,
     signaled: u64,
-    /// Memory softpipe renders into, mapped while the context lasts.
-    imports: Vec<Mapping>,
+    /// The memory from outside its resources render into, by resource:
+    /// its bytes, and, for softpipe, its mapping here.
+    imports: BTreeMap<u32, (u64, Option<Mapping>)>,
+    /// softpipe's mappings of what its destroyed resources rendered into:
+    /// kept while the context lasts (what it bound may still use them).
+    retired: Vec<Mapping>,
 }
 
 impl Context {
@@ -145,6 +168,22 @@ impl Context {
 
     fn pending(&self) -> bool {
         self.signaled < self.queued
+    }
+
+    /// What it uses: its memory, the memory it renders into.
+    fn usage(&self) -> Usage {
+        let retired: u64 = self.retired.iter().map(|m| m.len() as u64).sum();
+        Usage {
+            clients: 1,
+            memory: self.memory.len() as u64,
+            imports: self.imports.len(),
+            import_bytes: self.imports.values().map(|(bytes, _)| bytes).sum::<u64>() + retired,
+        }
+    }
+
+    /// softpipe's mappings of memory from outside.
+    fn mappings(&self) -> usize {
+        self.imports.values().filter(|(_, m)| m.is_some()).count() + self.retired.len()
     }
 
     /// Writes the number of the last fence that signaled into the fence
@@ -174,12 +213,54 @@ impl Drop for Context {
 struct Client {
     channel: Channel,
     context: Option<Context>,
+    /// Its process (its id; 0 if the registry did not say).
+    process: u64,
+}
+
+/// What clients use of the renderer: connections, their contexts' memory,
+/// the memory they give to render into.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Usage {
+    clients: usize,
+    memory: u64,
+    imports: usize,
+    import_bytes: u64,
+}
+
+impl Usage {
+    fn add(self, other: Usage) -> Usage {
+        Usage {
+            clients: self.clients + other.clients,
+            memory: self.memory + other.memory,
+            imports: self.imports + other.imports,
+            import_bytes: self.import_bytes + other.import_bytes,
+        }
+    }
+}
+
+/// What the clients use but client `except`, of process `process` and of
+/// all.
+fn usage(clients: &[Client], except: usize, process: u64) -> (Usage, Usage) {
+    let mut of_process = Usage::default();
+    let mut of_all = Usage::default();
+    for (_, c) in clients.iter().enumerate().filter(|(i, _)| *i != except) {
+        let used = c.context.as_ref().map_or(Usage { clients: 1, ..Usage::default() }, Context::usage);
+        of_all = of_all.add(used);
+        if c.process == process {
+            of_process = of_process.add(used);
+        }
+    }
+    (of_process, of_all)
 }
 
 /// A client's requests, carried out on the device.
 struct Serve<'a> {
     device: &'a Device,
     context: &'a mut Option<Context>,
+    /// What the client's process's other clients use, and all the other
+    /// clients.
+    process: Usage,
+    all: Usage,
     /// Where commands are copied before they are decoded.
     commands: &'a mut [u32],
     trace: bool,
@@ -221,6 +302,9 @@ impl gpu::Server for Serve<'_> {
         }
         let shared = shared.clamp(MIN_SHARED, MAX_SHARED).next_multiple_of(4096) as usize;
         let size = HEADER + COMMANDS + shared;
+        if self.process.memory + size as u64 > PROCESS_MEMORY || self.all.memory + size as u64 > TOTAL_MEMORY {
+            return Err(GpuError::NoMemory);
+        }
         let no_memory = |_| GpuError::NoMemory;
         let vmo = Vmo::create(size).map_err(no_memory)?;
         let rights = Rights::TRANSFER | Rights::READ | Rights::WRITE | Rights::MAP | Rights::GET_INFO;
@@ -234,7 +318,15 @@ impl gpu::Server for Serve<'_> {
         let ctx =
             unsafe { ffi::vr_context_create(self.device.dev.as_ptr(), memory.as_ptr().add(HEADER + COMMANDS), shared) };
         let ctx = NonNull::new(ctx).ok_or(GpuError::Unavailable)?;
-        *self.context = Some(Context { ctx, memory, fences, queued: 0, signaled: 0, imports: Vec::new() });
+        *self.context = Some(Context {
+            ctx,
+            memory,
+            fences,
+            queued: 0,
+            signaled: 0,
+            imports: BTreeMap::new(),
+            retired: Vec::new(),
+        });
         Ok(Session {
             caps: Bytes(self.device.caps.clone()),
             memory: Vmo::from_handle(memory_theirs),
@@ -265,6 +357,12 @@ impl gpu::Server for Serve<'_> {
         if let Ok(ctx) = self.context() {
             // SAFETY: a live context; the decoder checks the handle.
             unsafe { ffi::vr_resource_destroy(ctx.ctx.as_ptr(), resource) };
+            // What it rendered into is the client's again; softpipe's
+            // mapping of it stays while the context lasts (what the context
+            // bound may still draw into it: the decoder's contract).
+            if let Some((_, mapping)) = ctx.imports.remove(&resource) {
+                ctx.retired.extend(mapping);
+            }
         }
     }
 
@@ -309,40 +407,52 @@ impl gpu::Server for Serve<'_> {
 
     fn import(&mut self, spec: ResourceSpec, stride: u32, memory: Vmo) -> Result<u32, GpuError> {
         let import = self.device.import;
+        let (process, all) = (self.process, self.all);
         let ctx = self.context()?;
         let len = stride as u64 * spec.height as u64;
         if len == 0 || len > 1 << 30 {
             return Err(GpuError::Invalid);
         }
         let len = len.next_multiple_of(4096);
+        let used = process.add(ctx.usage());
+        if used.imports >= PROCESS_IMPORTS
+            || used.import_bytes + len > PROCESS_IMPORT_BYTES
+            || all.import_bytes + ctx.usage().import_bytes + len > TOTAL_IMPORT_BYTES
+        {
+            return Err(GpuError::NoMemory);
+        }
         let mut id = 0;
-        let e = match import {
+        let (e, mapping) = match import {
             ffi::IMPORT_FD => {
                 // The GPU's driver takes the memory as a dma-buf, which keeps
                 // it mapped into the guest; what the driver keeps of it
                 // outlives the descriptor and the handle.
                 let fd = vrt::guest::dmabuf(memory.raw(), 0, len, true).map_err(|_| GpuError::NoMemory)?;
                 // SAFETY: a live context, and a dma-buf of the memory.
-                unsafe {
+                let e = unsafe {
                     ffi::vr_resource_import(ctx.ctx.as_ptr(), &args(&spec), fd.as_raw_fd(), null_mut(), stride, &mut id)
-                }
+                };
+                (e, None)
             }
-            ffi::IMPORT_MEMORY if ctx.imports.len() < MAX_IMPORTS => {
+            ffi::IMPORT_MEMORY if ctx.mappings() < MAX_IMPORTS => {
                 // softpipe draws into it as this program maps it.
                 let map = Mapping::new(memory, len as usize, map_flags::READ | map_flags::WRITE)
                     .map_err(|_| GpuError::NoMemory)?;
                 let at = map.as_ptr().cast::<c_void>();
-                ctx.imports.push(map);
-                // SAFETY: a live context, and memory mapped while it lasts.
-                unsafe { ffi::vr_resource_import(ctx.ctx.as_ptr(), &args(&spec), -1, at, stride, &mut id) }
+                // SAFETY: a live context, and memory mapped while the
+                // context lasts (kept below, if the import is made).
+                let e = unsafe { ffi::vr_resource_import(ctx.ctx.as_ptr(), &args(&spec), -1, at, stride, &mut id) };
+                (e, Some(map))
             }
             ffi::IMPORT_MEMORY => return Err(GpuError::NoMemory),
             _ => return Err(GpuError::Unavailable),
         };
         if e != 0 {
+            // Nothing of it is kept (a mapping made for it goes).
             println!("renderer: memory to render into refused: {}", ctx.error());
             return Err(error_of(e));
         }
+        ctx.imports.insert(id, (len, mapping));
         Ok(id)
     }
 }
@@ -400,15 +510,17 @@ fn open_device(softpipe: bool) -> Option<Device> {
     Some(Device { dev, name, caps, import })
 }
 
-/// Carries out what a client has sent; false if it is to be dropped.
-fn read_client(device: &Device, client: &mut Client, commands: &mut [u32], trace: bool) -> bool {
+/// Carries out what client `i` has sent; false if it is to be dropped.
+fn read_client(device: &Device, clients: &mut [Client], i: usize, commands: &mut [u32], trace: bool) -> bool {
     loop {
-        let msg = match client.channel.read() {
+        let msg = match clients[i].channel.read() {
             Ok(msg) => msg,
             Err(vabi::Error::ShouldWait) => return true,
             Err(_) => return false,
         };
-        let mut serve = Serve { device, context: &mut client.context, commands, trace };
+        let (process, all) = usage(clients, i, clients[i].process);
+        let client = &mut clients[i];
+        let mut serve = Serve { device, context: &mut client.context, process, all, commands, trace };
         match gpu::dispatch(&mut serve, msg) {
             Ok(reply) => {
                 if reply.send(&client.channel).is_err() {
@@ -439,6 +551,8 @@ fn serve(device: &Device, trace: bool) -> ! {
     println!("renderer: serving gpu on {}", device.name);
     let mut commands = vec![0u32; COMMANDS / 4];
     let mut clients: Vec<Client> = Vec::new();
+    // Whether a wait was refused (said once).
+    let mut refused = false;
     const LISTENER: u64 = u64::MAX;
     loop {
         let mut ws = WaitSet::new();
@@ -448,7 +562,19 @@ fn serve(device: &Device, trace: bool) -> ! {
         }
         let pending = clients.iter().any(|c| c.context.as_ref().is_some_and(Context::pending));
         let deadline = if pending { vrt::time::now_ns() + POLL_NS } else { vabi::DEADLINE_INFINITE };
-        let ready = ws.wait(deadline).unwrap_or_default();
+        let ready = match ws.wait(deadline) {
+            Ok(ready) => ready,
+            // The monitor did not keep the wait (at its limits): not again
+            // at once.
+            Err(e) => {
+                if !refused {
+                    println!("renderer: cannot wait ({e}); waiting a little");
+                    refused = true;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                Vec::new()
+            }
+        };
         for ctx in clients.iter_mut().filter_map(|c| c.context.as_mut()) {
             if ctx.pending() {
                 ctx.publish();
@@ -461,26 +587,22 @@ fn serve(device: &Device, trace: bool) -> ! {
             ready.iter().filter(|(k, _)| *k != LISTENER).map(|&(k, o)| (k as usize, o)).collect();
         ready_clients.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
         for (i, observed) in ready_clients {
-            let keep = observed & signals::READABLE == 0 || read_client(device, &mut clients[i], &mut commands, trace);
+            let keep = observed & signals::READABLE == 0 || read_client(device, &mut clients, i, &mut commands, trace);
             if !keep || observed & signals::PEER_CLOSED != 0 {
                 clients.swap_remove(i);
             }
         }
         if ready.iter().any(|&(k, _)| k == LISTENER) {
-            while let Some(channel) = vproto::accept(&listener) {
-                if clients.len() < MAX_CLIENTS {
-                    clients.push(Client { channel, context: None });
+            // Within the most connections, of all and of the process.
+            while let Some((channel, who)) = vproto::accept_with_identity(&listener) {
+                let its = clients.iter().filter(|c| c.process == who.koid).count();
+                if clients.len() < MAX_CLIENTS && its < PROCESS_CLIENTS {
+                    clients.push(Client { channel, context: None, process: who.koid });
+                } else {
+                    println!("renderer: {} (process {}) has the most connections; refused one", who.name, who.koid);
                 }
             }
         }
-    }
-}
-
-/// Waits for ever: a driver of the guest that cannot work here stays,
-/// rather than exiting to be started again every second.
-fn idle() -> ! {
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
     }
 }
 

@@ -3,16 +3,19 @@
 
 //! Music — the Veda music player.
 //!
-//! * A library of the tracks in `/home/user/Music` (QOA and WAV), plus any
-//!   file passed on the command line, which starts playing at once.
+//! * A library of the tracks in `~/Music` (QOA and WAV), plus any file
+//!   passed on the command line, which starts playing at once.
 //! * A now-playing panel with generated cover art, a real-time spectrum
 //!   visualiser driven by the samples being heard, a seek bar with elapsed
 //!   and remaining time, transport controls, shuffle/repeat and volume.
 //! * Decoding happens on a background thread ([`engine`]) that streams to
-//!   the audio service; covers are drawn on another ([`art`]), so the UI
-//!   stays responsive.
+//!   the audio service (and plays on when the service is started again);
+//!   covers are drawn on another ([`art`]), so the UI stays responsive:
+//!   the large one of the track playing and the small ones of the rows on
+//!   the screen, of which only the few used lately are kept.
 //! * The library is rescanned whenever the window regains the focus, and a
-//!   second `music FILE` hands the file to the running player ([`remote`]).
+//!   second `music FILE` hands the file to the running player
+//!   (`vproto::instance`).
 //! * User actions are logged concisely (`playing <title>`, `paused at m:ss`,
 //!   `seek to m:ss`, `volume N%`, ...) for the GUI tests.
 //! * [`agent`] lets the voice agent play, find and control music.
@@ -29,7 +32,6 @@ mod agent;
 mod art;
 mod engine;
 mod library;
-mod remote;
 mod widgets;
 
 use alloc::format;
@@ -38,21 +40,24 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use music_core::cover::{CoverSpec, Recent};
+use music_core::order::{AfterEnd, Order, Repeat};
 use num_traits::Float;
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_pcg::Pcg32;
 use vabi::{RawHandle, signals};
 use vaudio::fft::Analyzer;
+use vfiles::format::duration as format_time;
 use vgfx::{Align, Bitmap, Color, Rect};
 use vproto::input::keys;
+use vproto::instance::{self, Instance};
 use vrt::object::Event;
 use vrt::sync::Mutex;
 use vui::{App, Font, Icon, Ui, WindowSpec, media};
 
-use art::ArtSpec;
 use engine::{Command, PlayState, Shared, Status};
-use library::{Track, format_time};
+use library::Track;
 
 vrt::entry!(main);
 
@@ -65,31 +70,30 @@ const COVER: i32 = 232;
 const THUMB: i32 = 44;
 const SIDEBAR_W: i32 = 304;
 const ROW_H: i32 = 60;
+/// Drawn covers kept: the large ones of the tracks played lately, the
+/// small ones of the rows seen lately (some 200 KiB and 8 KiB each).
+const LARGE_KEPT: usize = 4;
+const THUMBS_KEPT: usize = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Repeat {
-    Off,
-    All,
-    One,
-}
-
-impl Repeat {
-    fn name(self) -> &'static str {
-        match self {
-            Repeat::Off => "off",
-            Repeat::All => "all",
-            Repeat::One => "one",
-        }
-    }
-}
-
-/// Covers rendered by the art thread.
+/// Covers drawn by the art thread, and those wanted.
 struct Covers {
-    specs: Vec<ArtSpec>,
-    large: Vec<Option<Arc<Bitmap>>>,
-    thumbs: Vec<Option<Arc<Bitmap>>>,
-    /// Render this cover next.
-    priority: Option<usize>,
+    /// The large cover of the track playing, if it is wanted; the small
+    /// ones of the rows on the screen.
+    want_large: Option<CoverSpec>,
+    want_thumbs: Vec<CoverSpec>,
+    large: Recent<CoverSpec, Arc<Bitmap>>,
+    thumbs: Recent<CoverSpec, Arc<Bitmap>>,
+}
+
+impl Covers {
+    /// The next cover to draw (true: the large one), the track playing's
+    /// first.
+    fn next_job(&self) -> Option<(CoverSpec, bool)> {
+        if let Some(spec) = self.want_large.filter(|s| !self.large.contains(s)) {
+            return Some((spec, true));
+        }
+        self.want_thumbs.iter().find(|s| !self.thumbs.contains(s)).map(|s| (*s, false))
+    }
 }
 
 /// Makes the corners of a square cover transparent (anti-aliased).
@@ -114,18 +118,15 @@ fn round_corners(b: &mut Bitmap, radius: f32) {
     }
 }
 
-/// The cover-art thread: renders missing covers, most wanted first.
+/// The cover-art thread: draws the covers wanted that are not kept, the
+/// track playing's first.
 fn art_thread(covers: Arc<Mutex<Covers>>, wake: Event, notify: Event) {
     let mut drawn = 0;
     loop {
-        let job = {
-            let c = covers.lock();
-            let missing = |i: &usize| c.large.get(*i).is_some_and(|x| x.is_none());
-            c.priority.filter(missing).or_else(|| (0..c.large.len()).find(missing)).map(|i| (i, c.specs[i]))
-        };
-        let Some((i, spec)) = job else {
+        let job = covers.lock().next_job();
+        let Some((spec, large)) = job else {
             if drawn > 0 {
-                let ready = covers.lock().large.iter().filter(|c| c.is_some()).count();
+                let ready = covers.lock().thumbs.len();
                 vrt::println!("covers: {} ready", ready);
                 drawn = 0;
             }
@@ -134,22 +135,18 @@ fn art_thread(covers: Arc<Mutex<Covers>>, wake: Event, notify: Event) {
             continue;
         };
         drawn += 1;
+        // Small covers are made from the large one, which looks better than
+        // drawing them small.
         let mut big = art::render(&spec, COVER);
         round_corners(&mut big, 14.0);
         let mut thumb = big.resized(THUMB, THUMB);
         round_corners(&mut thumb, 6.0);
         {
             let mut c = covers.lock();
-            // The library may have changed while we were drawing.
-            if c.specs.get(i) != Some(&spec) {
-                continue;
+            if large {
+                c.large.put(spec, Arc::new(big));
             }
-            if let Some(slot) = c.large.get_mut(i) {
-                *slot = Some(Arc::new(big));
-            }
-            if let Some(slot) = c.thumbs.get_mut(i) {
-                *slot = Some(Arc::new(thumb));
-            }
+            c.thumbs.put(spec, Arc::new(thumb));
         }
         let _ = notify.signal();
     }
@@ -158,13 +155,15 @@ fn art_thread(covers: Arc<Mutex<Covers>>, wake: Event, notify: Event) {
 struct Player {
     shared: Arc<Shared>,
     tracks: Vec<Track>,
+    /// Each track's cover.
+    specs: Vec<CoverSpec>,
     covers: Arc<Mutex<Covers>>,
     art_wake: Option<Event>,
     current: Option<usize>,
     selected: Option<usize>,
     shuffle: bool,
     repeat: Repeat,
-    order: Vec<usize>,
+    order: Order,
     /// Volume slider position (0..1, perceptual).
     volume: f32,
     muted: bool,
@@ -182,8 +181,9 @@ struct Player {
     library_gen: u32,
     /// The window had the focus last frame (regaining it rescans).
     was_focused: bool,
-    /// The `music` service (absent in a second, independent player).
-    remote: Option<remote::Server>,
+    /// The `music` service, to which later Music processes hand files
+    /// (absent in a second, independent player).
+    instance: Option<Instance>,
     /// When to log the volume (debounced while the slider moves).
     volume_log_at: Option<u64>,
     volume_logged: i32,
@@ -204,23 +204,24 @@ struct Player {
 }
 
 impl Player {
-    fn new(shared: Arc<Shared>, remote: Option<remote::Server>) -> Player {
+    fn new(shared: Arc<Shared>, instance: Option<Instance>) -> Player {
         let seed = vrt::time::now_ns();
         Player {
             shared,
             tracks: Vec::new(),
+            specs: Vec::new(),
             covers: Arc::new(Mutex::new(Covers {
-                specs: Vec::new(),
-                large: Vec::new(),
-                thumbs: Vec::new(),
-                priority: None,
+                want_large: None,
+                want_thumbs: Vec::new(),
+                large: Recent::new(LARGE_KEPT),
+                thumbs: Recent::new(THUMBS_KEPT),
             })),
             art_wake: None,
             current: None,
             selected: None,
             shuffle: false,
             repeat: Repeat::All,
-            order: Vec::new(),
+            order: Order::default(),
             volume: 0.85,
             muted: false,
             status: Status {
@@ -233,6 +234,7 @@ impl Player {
                 ended: 0,
                 error: String::new(),
                 device: String::new(),
+                output: true,
                 load_id: 0,
                 seek_id: 0,
             },
@@ -247,7 +249,7 @@ impl Player {
             seek_drag: None,
             library_gen: 0,
             was_focused: true,
-            remote,
+            instance,
             volume_log_at: None,
             volume_logged: -1,
             requested: None,
@@ -287,66 +289,59 @@ impl Player {
         }
     }
 
-    /// Replaces the track list, keeping drawn covers and the current and
-    /// selected tracks (matched by path).
+    /// Replaces the track list, keeping the current and selected tracks
+    /// (matched by path); covers drawn are known by what they show, so they
+    /// stay.
     fn set_tracks(&mut self, tracks: Vec<Track>) {
         let path_of = |i: Option<usize>| i.and_then(|i| self.tracks.get(i)).map(|t| t.path.clone());
         let (cur, sel) = (path_of(self.current), path_of(self.selected));
-        {
-            let mut c = self.covers.lock();
-            let (mut specs, mut large, mut thumbs) = (Vec::new(), Vec::new(), Vec::new());
-            for t in &tracks {
-                let spec = ArtSpec::new(t.art.as_deref(), t.seed);
-                let old = self.tracks.iter().position(|o| o.path == t.path).filter(|&i| c.specs.get(i) == Some(&spec));
-                large.push(old.and_then(|i| c.large.get(i).cloned().flatten()));
-                thumbs.push(old.and_then(|i| c.thumbs.get(i).cloned().flatten()));
-                specs.push(spec);
-            }
-            c.specs = specs;
-            c.large = large;
-            c.thumbs = thumbs;
-            c.priority = None;
-        }
+        self.specs = tracks.iter().map(|t| CoverSpec::new(t.art.as_deref(), t.seed)).collect();
         let find = |p: Option<String>| p.and_then(|p| tracks.iter().position(|t| t.path == p));
         self.current = find(cur);
         self.selected = find(sel).or(if tracks.is_empty() { None } else { Some(0) });
         self.tracks = tracks;
         self.rebuild_order();
-        // Start (or wake) the cover renderer.
-        match &self.art_wake {
-            Some(w) => {
-                let _ = w.signal();
-            }
-            None => {
-                if let Ok(wake) = Event::create()
-                    && let (Ok(w2), Ok(n2)) = (wake.0.duplicate(None), self.shared.notify.0.duplicate(None))
-                {
-                    let covers = self.covers.clone();
-                    let (w2, n2) = (Event::from_handle(w2), Event::from_handle(n2));
-                    let ok = vrt::thread::Builder::new()
-                        .name("covers")
-                        .priority(vabi::priority::NORMAL - 2)
-                        .spawn(move || art_thread(covers, w2, n2))
-                        .is_ok();
-                    if ok {
-                        self.art_wake = Some(wake);
-                    }
-                }
+        self.start_art();
+    }
+
+    /// Starts the cover renderer the first time it is needed.
+    fn start_art(&mut self) {
+        if self.art_wake.is_some() {
+            return;
+        }
+        if let Ok(wake) = Event::create()
+            && let (Ok(w2), Ok(n2)) = (wake.0.duplicate(None), self.shared.notify.0.duplicate(None))
+        {
+            let covers = self.covers.clone();
+            let (w2, n2) = (Event::from_handle(w2), Event::from_handle(n2));
+            let ok = vrt::thread::Builder::new()
+                .name("covers")
+                .priority(vabi::priority::NORMAL - 2)
+                .spawn(move || art_thread(covers, w2, n2))
+                .is_ok();
+            if ok {
+                self.art_wake = Some(wake);
             }
         }
     }
 
     fn rebuild_order(&mut self) {
-        let n = self.tracks.len();
-        self.order = (0..n).collect();
-        if self.shuffle && n > 1 {
-            self.order.shuffle(&mut self.rng);
-            // Keep the current track first so "next" moves on from it.
-            if let Some(c) = self.current
-                && let Some(p) = self.order.iter().position(|&i| i == c)
-            {
-                self.order.swap(0, p);
-            }
+        let rng = &mut self.rng;
+        self.order = Order::new(self.tracks.len(), self.shuffle, self.current, |o| o.shuffle(rng));
+    }
+
+    /// Asks the art thread for the covers wanted (the large one of the
+    /// track playing, the small ones of `rows`), if any is not drawn yet.
+    fn want_covers(&mut self, rows: Vec<CoverSpec>) {
+        let large = self.current.and_then(|i| self.specs.get(i)).copied();
+        let missing = {
+            let mut c = self.covers.lock();
+            c.want_large = large;
+            c.want_thumbs = rows;
+            c.next_job().is_some()
+        };
+        if missing && let Some(w) = &self.art_wake {
+            let _ = w.signal();
         }
     }
 
@@ -354,10 +349,6 @@ impl Player {
         let Some(t) = self.tracks.get(i) else { return };
         self.current = Some(i);
         self.selected = Some(i);
-        self.covers.lock().priority = Some(i);
-        if let Some(w) = &self.art_wake {
-            let _ = w.signal();
-        }
         self.shared.send(Command::Volume(self.gain()));
         self.load_seq = self.load_seq.wrapping_add(1).max(1);
         self.shared.send(Command::Load { path: t.path.clone(), play: true, start_ms: 0, id: self.load_seq });
@@ -371,20 +362,8 @@ impl Player {
     }
 
     /// The track `step` positions away in play order (wrapping if `wrap`).
-    fn neighbour(&self, step: i32, wrap: bool) -> Option<usize> {
-        let n = self.order.len() as i32;
-        if n == 0 {
-            return None;
-        }
-        let cur = self.current.and_then(|c| self.order.iter().position(|&i| i == c)).map(|p| p as i32).unwrap_or(-1);
-        let mut p = cur + step;
-        if p < 0 || p >= n {
-            if !wrap {
-                return None;
-            }
-            p = p.rem_euclid(n);
-        }
-        Some(self.order[p as usize])
+    fn neighbour(&self, step: i64, wrap: bool) -> Option<usize> {
+        self.order.neighbour(self.current, step, wrap)
     }
 
     fn next(&mut self, wrap: bool) {
@@ -500,11 +479,7 @@ impl Player {
     }
 
     fn cycle_repeat(&mut self) {
-        self.set_repeat(match self.repeat {
-            Repeat::Off => Repeat::All,
-            Repeat::All => Repeat::One,
-            Repeat::One => Repeat::Off,
-        });
+        self.set_repeat(self.repeat.cycled());
     }
 
     fn set_repeat(&mut self, repeat: Repeat) {
@@ -536,22 +511,19 @@ impl Player {
         }
         if s.ended != self.last_ended {
             self.last_ended = s.ended;
-            match self.repeat {
-                Repeat::One => {
-                    if let Some(c) = self.current {
-                        self.play_index(c);
-                    }
-                }
-                Repeat::All => self.next(true),
-                Repeat::Off => self.next(false),
+            match self.order.after_end(self.current, self.repeat) {
+                AfterEnd::Play(i) => self.play_index(i),
+                AfterEnd::Stop => self.shared.send(Command::Pause),
             }
             return;
         }
         if s.state == PlayState::Error && self.status.state != PlayState::Error {
             vrt::println!("playback error: {}", s.error);
         }
+        // The track playing is looked for only when another plays.
+        let moved = s.path != self.status.path;
         self.status = s;
-        if let Some(i) = self.tracks.iter().position(|t| t.path == self.status.path) {
+        if moved && let Some(i) = self.tracks.iter().position(|t| t.path == self.status.path) {
             self.current = Some(i);
         }
     }
@@ -595,7 +567,7 @@ impl Player {
     }
 
     fn accent(&self) -> (Color, Color) {
-        let spec = self.current.and_then(|i| self.covers.lock().specs.get(i).copied());
+        let spec = self.current.and_then(|i| self.specs.get(i).copied());
         match spec {
             Some(s) => {
                 let (deep, bright) = art::palette(&s);
@@ -636,12 +608,14 @@ impl Player {
             ui.paragraph(msg, "Put .qoa or .wav files in Music in your home folder.", t.small_size + 1.0, t.text_faint);
             return;
         }
-        let thumbs: Vec<Option<Arc<Bitmap>>> = self.covers.lock().thumbs.clone();
         let tracks = &self.tracks;
+        let (specs, covers) = (&self.specs, &self.covers);
         let current = self.current;
         let playing = self.status.state == PlayState::Playing;
         let now_s = (ui.now() / 1_000_000) as f32 / 1000.0;
         let mut selected = self.selected;
+        // The rows drawn: their covers are the small ones wanted.
+        let mut seen = Vec::new();
         let resp = ui.list(list, "library", tracks.len(), ROW_H, &mut selected, |ui, i, rr, st| {
             let tr = &tracks[i];
             let is_current = current == Some(i);
@@ -654,7 +628,11 @@ impl Player {
                 ui.canvas.fill_rounded_rect(inner, 10.0, Color::rgba(255, 255, 255, 10));
             }
             let th = Rect::new(inner.x + 8, inner.y + (inner.h - THUMB) / 2, THUMB, THUMB);
-            match thumbs.get(i).and_then(|b| b.clone()) {
+            let thumb = specs.get(i).and_then(|s| {
+                seen.push(*s);
+                covers.lock().thumbs.get(s).cloned()
+            });
+            match thumb {
                 Some(b) => ui.canvas.draw_bitmap(&b, th.x, th.y, 255),
                 None => ui.canvas.fill_rounded_rect(th, 6.0, Color::rgba(255, 255, 255, 20)),
             }
@@ -679,6 +657,7 @@ impl Player {
             }
         });
         self.selected = selected;
+        self.want_covers(seen);
         if let Some(i) = resp.activated {
             self.play_index(i);
         }
@@ -703,7 +682,8 @@ impl Player {
             self.glow.draw(&mut ui.canvas, cover_r.inflate(grow), accent.with_alpha((25.0 + bass * 95.0) as u8), false);
         }
         self.cover_shadow.draw(&mut ui.canvas, cover_r.translate(0, 10), Color::rgba(0, 0, 0, 150), true);
-        let cover = self.current.and_then(|i| self.covers.lock().large.get(i).and_then(|b| b.clone()));
+        let spec = self.current.and_then(|i| self.specs.get(i));
+        let cover = spec.and_then(|s| self.covers.lock().large.get(s).cloned());
         match cover {
             Some(b) => ui.canvas.draw_bitmap(&b, cover_r.x, cover_r.y, 255),
             None => {
@@ -896,6 +876,9 @@ impl Player {
 
         // Output device.
         let dev = match self.status.device.as_str() {
+            _ if !self.status.output && !self.status.path.is_empty() => {
+                String::from("Waiting for the sound output\u{2026}")
+            }
             "" => String::new(),
             "none" => String::from("No sound device: playing silently"),
             d => format!("Output: {}", d),
@@ -959,8 +942,8 @@ impl App for Player {
 
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
         let mut v = vec![(self.shared.notify.raw(), signals::SIGNALED)];
-        if let Some(r) = &self.remote {
-            r.wait_handles(&mut v);
+        if let Some(i) = &self.instance {
+            i.wait_handles(&mut v);
         }
         v
     }
@@ -968,7 +951,7 @@ impl App for Player {
     fn handle_signaled(&mut self, index: usize, _observed: u32) {
         if index > 0 {
             // Another Music process handed us files to play.
-            let files = self.remote.as_mut().map(|r| r.poll()).unwrap_or_default();
+            let files = self.instance.as_mut().map(|i| i.poll(vfiles::kind::is_playable_audio)).unwrap_or_default();
             for path in files {
                 vrt::println!("opening {}", path);
                 self.shared.send(Command::AddFile { path, play: true });
@@ -1045,17 +1028,13 @@ fn main() -> i32 {
     let args = vrt::env::args();
     let file = args.get(1).filter(|a| !a.starts_with('-')).cloned();
     // One player at a time: a file goes to the player that is running.
-    let mut server = remote::Server::register();
-    if server.is_none()
-        && let Some(p) = &file
-    {
-        if remote::forward(p) {
-            vrt::println!("handed {} to the running player", p);
+    let server = match instance::start("music", file.as_deref()) {
+        instance::Start::Serve(server) => server,
+        instance::Start::HandedOver => {
+            vrt::println!("handed {} to the running player", file.as_deref().unwrap_or_default());
             return 0;
         }
-        // The other player is gone (or hung): take over.
-        server = remote::Server::register();
-    }
+    };
     let player = Player::new(shared.clone(), server);
     if !engine::start(shared.clone(), player.gain()) {
         vrt::println!("cannot start the decoder thread");

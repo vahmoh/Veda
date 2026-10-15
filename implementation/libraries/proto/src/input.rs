@@ -8,6 +8,11 @@
 //! [`REPORT`]. Key codes are Linux evdev codes (see [`keys`]), which is what
 //! Linux's input devices report (the driver VM's `input` driver sends
 //! them as they are) and what PS/2 set-1 scan codes map to.
+//!
+//! The compositor takes input from drivers only: connections opened with
+//! `devmgr`'s identity, which the drivers it starts (and the driver VM's
+//! programs) have; anyone else's is closed at once. When a driver's
+//! connection closes, what it held down (keys, buttons) is released for it.
 
 use alloc::vec::Vec;
 use vipc::union;

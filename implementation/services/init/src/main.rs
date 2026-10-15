@@ -7,12 +7,14 @@
 //!   each only the capabilities it needs (narrow hardware resources).
 //! * Implements the service **registry**: every process gets a registry
 //!   channel; services register by name and clients connect by name.
-//!   Connections to a service that has not registered yet are queued.
-//!   Each connection carries the client's identity (its process, which
-//!   init knows from the registry channel it came through), and names
-//!   registered by system services are reserved for them.
+//!   Connections to a service that has not registered yet are queued (a
+//!   bounded number per process). Each connection carries the client's
+//!   identity (its process, which init knows from the registry channel it
+//!   came through). System services may register any name, and the names
+//!   they register stay theirs; other programs only names of their own.
 //! * Implements the **launcher** service: starting programs and installed
-//!   applications, listing and killing tasks, and power control.
+//!   applications, listing and ending tasks, and power control, each as
+//!   far as the caller's identity allows (see [`Init::end`]).
 
 #![no_std]
 #![no_main]
@@ -45,8 +47,8 @@ vrt::entry!(main);
 enum ConnKind {
     /// A process's registry channel (the koid of the process, if known).
     Registry { owner: u64 },
-    /// A launcher connection.
-    Launcher,
+    /// A launcher connection, and who opened it.
+    Launcher { who: ClientIdentity },
 }
 
 struct Conn {
@@ -54,16 +56,46 @@ struct Conn {
     kind: ConnKind,
 }
 
+/// Why init started a process, which decides what the process may ask of
+/// init.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A system service (restarted if it exits and is restartable).
+    Service,
+    /// A program the kernel command line asked for (`run=`, `systest`):
+    /// chosen by the machine's owner, as the services are, so it may manage
+    /// the system's processes (systest ends the window system to see it
+    /// restarted).
+    Requested,
+    /// An application or program started through the launcher.
+    Launched,
+}
+
 /// A process started by init.
 struct Child {
     name: String,
     process: Process,
-    /// Restart this service if it exits.
-    service: bool,
-    app: bool,
+    origin: Origin,
 }
 
+/// The applications through which the user manages the system, which may
+/// end its processes as well as applications: Task Manager, and the
+/// Terminal's `kill -f` (the programs the Terminal starts speak for it).
+const MANAGERS: [&str; 2] = ["taskmgr", "terminal"];
+
+/// Connections that may wait for a service to register: from one process,
+/// and from all together. A connection beyond them is refused.
+const PENDING_PER_PROCESS: usize = 64;
+const PENDING_MAX: usize = 1024;
+
+/// How far up its parents init looks for whether a process is an
+/// application's (process trees are shallow; an unknown lineage counts as
+/// the system's).
+const MAX_ANCESTORS: usize = 64;
+
 pub struct Init {
+    /// Init's own process id: no one may end init.
+    koid: u64,
     root: Resource,
     initrd: initrd::Archive<'static>,
     initrd_vmo: Vmo,
@@ -110,7 +142,13 @@ impl Init {
             _ => 0,
         };
         match self.children.get(&owner) {
-            Some(c) => ClientIdentity { koid: owner, name: c.name.clone(), service: c.service, app: c.app },
+            Some(c) => ClientIdentity {
+                koid: owner,
+                name: c.name.clone(),
+                service: c.origin == Origin::Service,
+                app: c.origin != Origin::Service,
+                requested: c.origin == Origin::Requested,
+            },
             None => ClientIdentity { koid: owner, ..Default::default() },
         }
     }
@@ -128,7 +166,7 @@ impl Init {
         path: &str,
         args: &[String],
         extra: Vec<(u32, Handle)>,
-        service: bool,
+        origin: Origin,
     ) -> Result<u64, LaunchError> {
         let image = self.image(path).ok_or(LaunchError::NotFound)?;
         let registry = self.new_registry_channel(0).ok_or(LaunchError::NoMemory)?;
@@ -156,8 +194,59 @@ impl Init {
         if let Some(c) = self.conns.get_mut(&self.next_key) {
             c.kind = ConnKind::Registry { owner: koid };
         }
-        self.children.insert(koid, Child { name: name.to_string(), process, service, app: !service });
+        self.children.insert(koid, Child { name: name.to_string(), process, origin });
         Ok(koid)
+    }
+
+    /// Ends process `koid` for `who`, with every process it started (and
+    /// those they started): its job, so that nothing it ran (a decoder, a
+    /// program in a terminal) outlives it. An application may end
+    /// applications and the processes they started; the system's processes
+    /// (its services, and what they started: drivers, the driver VM) only
+    /// the system services, the user's tools for managing the system
+    /// ([`MANAGERS`]) and the programs the kernel command line asked for.
+    /// No one ends init.
+    fn end(&self, who: &ClientIdentity, koid: u64) -> Result<(), LaunchError> {
+        if koid == self.koid {
+            return Err(LaunchError::Denied);
+        }
+        let manages = who.service || who.requested || (who.app && MANAGERS.contains(&who.name.as_str()));
+        let processes = self.root.create(resource_kind::PROCESS, 0, 0).map_err(|_| LaunchError::Failed)?;
+        let opened;
+        let process = match self.children.get(&koid) {
+            Some(child) => &child.process,
+            None => {
+                opened = vrt::object::process_open(&processes, koid).map_err(|_| LaunchError::NotFound)?;
+                &opened
+            }
+        };
+        if !manages && !self.is_application(&processes, process) {
+            println!("{} may not end process {}, which is the system's", who.name, koid);
+            return Err(LaunchError::Denied);
+        }
+        process.kill_tree().map_err(|_| LaunchError::Failed)
+    }
+
+    /// Whether `process` is an application, or descends from one: whether
+    /// the first of its ancestors (itself included) that init started was
+    /// started as an application. A process whose lineage is lost (a parent
+    /// that ended) counts as the system's.
+    fn is_application(&self, processes: &Resource, process: &Process) -> bool {
+        let Ok(info) = process.info() else { return false };
+        let (mut koid, mut parent) = (info.koid, info.parent_koid);
+        for _ in 0..MAX_ANCESTORS {
+            if let Some(child) = self.children.get(&koid) {
+                return child.origin != Origin::Service;
+            }
+            if parent == 0 || parent == self.koid {
+                return false;
+            }
+            let Ok(info) = vrt::object::process_open(processes, parent).and_then(|p| p.info()) else {
+                return false;
+            };
+            (koid, parent) = (info.koid, info.parent_koid);
+        }
+        false
     }
 
     /// Forgets service `name` if the process that registered it is gone (its
@@ -173,22 +262,39 @@ impl Init {
         }
     }
 
-    /// Hands a queued or new connection to a registered service.
-    fn deliver(&mut self, name: &str, server_end: Channel, client: ClientIdentity) {
+    /// Hands a new connection to the service `name`, or queues it until the
+    /// service registers: `Denied` if its process has too many queued
+    /// already (or all processes together have).
+    fn connect(&mut self, name: &str, server_end: Channel, client: ClientIdentity) -> Result<(), RegistryError> {
         self.forget_if_gone(name);
-        if let Some((listener, _)) = self.services.get(name) {
-            match vipc::send_event(listener, LISTENER_CONNECT, (server_end, client)) {
-                Ok(()) => return,
-                Err(_) => {
-                    // The service went away; forget it. The connection is lost
-                    // (the client will see PEER_CLOSED).
-                    println!("service '{}' is gone", name);
-                    self.services.remove(name);
-                    return;
-                }
-            }
+        if self.services.contains_key(name) {
+            self.deliver(name, server_end, client);
+            return Ok(());
+        }
+        // Connections whose clients have gone stop waiting.
+        self.pending.retain(|_, queued| {
+            queued.retain(|(end, _)| !end.wait(signals::PEER_CLOSED, 0).is_ok_and(|s| s & signals::PEER_CLOSED != 0));
+            !queued.is_empty()
+        });
+        let queued = self.pending.values().flatten();
+        let (all, own) = queued.fold((0, 0), |(all, own), (_, c)| (all + 1, own + usize::from(c.koid == client.koid)));
+        if all >= PENDING_MAX || own >= PENDING_PER_PROCESS {
+            println!("{} has too many connections waiting; refused one to '{}'", client.name, name);
+            return Err(RegistryError::Denied);
         }
         self.pending.entry(name.to_string()).or_default().push((server_end, client));
+        Ok(())
+    }
+
+    /// Hands a connection to the registered service `name`.
+    fn deliver(&mut self, name: &str, server_end: Channel, client: ClientIdentity) {
+        let Some((listener, _)) = self.services.get(name) else { return };
+        if vipc::send_event(listener, LISTENER_CONNECT, (server_end, client)).is_err() {
+            // The service went away; forget it. The connection is lost (the
+            // client will see PEER_CLOSED).
+            println!("service '{}' is gone", name);
+            self.services.remove(name);
+        }
     }
 
     fn handle_registry(&mut self, key: u64, msg: vrt::Message) {
@@ -198,13 +304,12 @@ impl Init {
         }
         impl registry::Server for Reg<'_> {
             fn connect(&mut self, name: String, server_end: Channel) -> Result<(), RegistryError> {
+                let client = self.init.identity(self.key);
                 if name == launcher::NAME {
-                    self.init.add_conn(server_end, ConnKind::Launcher);
-                } else {
-                    let client = self.init.identity(self.key);
-                    self.init.deliver(&name, server_end, client);
+                    self.init.add_conn(server_end, ConnKind::Launcher { who: client });
+                    return Ok(());
                 }
-                Ok(())
+                self.init.connect(&name, server_end, client)
             }
 
             fn register(&mut self, name: String, listener: Channel) -> Result<(), RegistryError> {
@@ -212,17 +317,27 @@ impl Init {
                 if self.init.services.contains_key(&name) || name == launcher::NAME || name == registry::NAME {
                     return Err(RegistryError::AlreadyRegistered);
                 }
+                // A system service may register any name, which then stays
+                // the system's. Another program registers only names of its
+                // own (`music`, `music/...`), so that it cannot stand in for
+                // a service that has not registered yet.
                 let client = self.init.identity(self.key);
+                let own = |n: &str| {
+                    !client.name.is_empty()
+                        && n.strip_prefix(client.name.as_str())
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                };
                 if client.service {
                     self.init.reserved.insert(name.clone());
-                } else if self.init.reserved.contains(&name) {
-                    println!("{} may not register the system service name '{}'", client.name, name);
+                } else if self.init.reserved.contains(&name) || !own(&name) {
+                    println!("{} may not register the service name '{}'", client.name, name);
                     return Err(RegistryError::Denied);
                 }
                 println!("service '{}' registered", name);
                 self.init.services.insert(name.clone(), (listener, client.koid));
                 for (ch, client) in self.init.pending.remove(&name).unwrap_or_default() {
-                    self.init.deliver(&name, ch, client);
+                    // Queued again should the service be gone already.
+                    let _ = self.init.connect(&name, ch, client);
                 }
                 Ok(())
             }
@@ -249,20 +364,24 @@ impl Init {
     }
 
     fn handle_launcher(&mut self, key: u64, msg: vrt::Message) {
-        struct Launch<'a>(&'a mut Init);
+        let Some(Conn { kind: ConnKind::Launcher { who }, .. }) = self.conns.get(&key) else { return };
+        struct Launch<'a> {
+            init: &'a mut Init,
+            who: ClientIdentity,
+        }
         impl launcher::Server for Launch<'_> {
             fn launch(&mut self, path: String, args: Vec<String>) -> Result<u64, LaunchError> {
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-                self.0.spawn(&name, &path, &args, Vec::new(), false)
+                self.init.spawn(&name, &path, &args, Vec::new(), Origin::Launched)
             }
 
             fn launch_app(&mut self, id: String, args: Vec<String>) -> Result<u64, LaunchError> {
-                let app = self.0.apps.iter().find(|a| a.id == id).cloned().ok_or(LaunchError::NotFound)?;
-                self.0.spawn(&app.id, &app.exe, &args, Vec::new(), false)
+                let app = self.init.apps.iter().find(|a| a.id == id).cloned().ok_or(LaunchError::NotFound)?;
+                self.init.spawn(&app.id, &app.exe, &args, Vec::new(), Origin::Launched)
             }
 
             fn apps(&mut self) -> Vec<AppInfo> {
-                self.0.apps.clone()
+                self.init.apps.clone()
             }
 
             fn tasks(&mut self) -> Vec<TaskInfo> {
@@ -278,37 +397,47 @@ impl Init {
                         threads: p.threads,
                         memory: p.memory_bytes,
                         cpu_ns: p.cpu_time_ns,
-                        is_app: self.0.children.get(&p.koid).is_some_and(|c| c.app),
+                        is_app: self.init.children.get(&p.koid).is_some_and(|c| c.origin != Origin::Service),
                     })
                     .collect()
             }
 
             fn kill(&mut self, koid: u64) -> Result<(), LaunchError> {
-                if let Some(child) = self.0.children.get(&koid) {
-                    return child.process.kill().map_err(|_| LaunchError::Failed);
-                }
-                let res = self.0.root.create(resource_kind::PROCESS, 0, 0).map_err(|_| LaunchError::Denied)?;
-                let p = vrt::object::process_open(&res, koid).map_err(|_| LaunchError::NotFound)?;
-                p.kill().map_err(|_| LaunchError::Failed)
+                self.init.end(&self.who, koid)
             }
 
+            /// For system services alone (the shell's power menu, the agent).
             fn power(&mut self, action: u32) -> Result<(), LaunchError> {
-                println!("power action {}", action);
-                let res = self.0.root.create(resource_kind::POWER, 0, 0).map_err(|_| LaunchError::Denied)?;
+                if !self.who.service {
+                    println!("{} may not shut down or restart the machine", self.who.name);
+                    return Err(LaunchError::Denied);
+                }
+                println!("power action {} for {}", action, self.who.name);
+                let res = self.init.root.create(resource_kind::POWER, 0, 0).map_err(|_| LaunchError::Denied)?;
                 vrt::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
             }
 
+            /// For system services (the shell tells the user of crashes) and
+            /// the programs the kernel command line asked for (systest).
             fn watch(&mut self) -> Result<Channel, LaunchError> {
                 const MAX_WATCHERS: usize = 16;
-                if self.0.watchers.len() >= MAX_WATCHERS {
+                if !self.who.service && !self.who.requested {
+                    return Err(LaunchError::Denied);
+                }
+                // Watchers that went away make room.
+                self.init
+                    .watchers
+                    .retain(|w| !w.wait(signals::PEER_CLOSED, 0).is_ok_and(|s| s & signals::PEER_CLOSED != 0));
+                if self.init.watchers.len() >= MAX_WATCHERS {
                     return Err(LaunchError::Denied);
                 }
                 let (ours, theirs) = Channel::create().map_err(|_| LaunchError::NoMemory)?;
-                self.0.watchers.push(ours);
+                self.init.watchers.push(ours);
                 Ok(theirs)
             }
         }
-        let reply = launcher::dispatch(&mut Launch(self), msg);
+        let who = who.clone();
+        let reply = launcher::dispatch(&mut Launch { init: self, who }, msg);
         if let (Ok(reply), Some(conn)) = (reply, self.conns.get(&key)) {
             let _ = reply.send(&conn.channel);
         }
@@ -322,7 +451,7 @@ impl Init {
             vabi::EXIT_CODE_PANICKED => println!("{} panicked", child.name),
             _ => println!("{} exited with code {}", child.name, code),
         }
-        if child.app && matches!(code, vabi::EXIT_CODE_CRASHED | vabi::EXIT_CODE_PANICKED) {
+        if child.origin != Origin::Service && matches!(code, vabi::EXIT_CODE_CRASHED | vabi::EXIT_CODE_PANICKED) {
             // Tell the watchers (the shell shows a notification). Watchers
             // that went away are dropped; a full channel just misses this.
             let event = TaskEvent::Crashed { koid, name: child.name.clone() };
@@ -337,7 +466,7 @@ impl Init {
             }
             keep
         });
-        if child.service {
+        if child.origin == Origin::Service {
             self.supervise(&child.name);
         }
     }
@@ -364,8 +493,11 @@ impl Init {
     }
 
     fn run(&mut self) -> ! {
+        // Kept from one wait to the next: its handles (a registry channel
+        // for every process) stay registered with the kernel.
+        let mut ws = WaitSet::new();
         loop {
-            let mut ws = WaitSet::new();
+            ws.clear();
             for (&k, c) in &self.conns {
                 ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
             }
@@ -390,7 +522,7 @@ impl Init {
                         let Ok(msg) = conn.channel.read() else { break };
                         match conn.kind {
                             ConnKind::Registry { .. } => self.handle_registry(key, msg),
-                            ConnKind::Launcher => self.handle_launcher(key, msg),
+                            ConnKind::Launcher { .. } => self.handle_launcher(key, msg),
                         }
                     }
                 } else if observed & signals::PEER_CLOSED != 0 {
@@ -412,6 +544,7 @@ fn main() -> i32 {
     let archive = initrd::Archive::open(bytes).expect("init: the initrd is corrupt");
 
     let mut init = Init {
+        koid: vrt::object::process_self_info().map_or(0, |i| i.koid),
         root,
         initrd: archive,
         initrd_vmo,

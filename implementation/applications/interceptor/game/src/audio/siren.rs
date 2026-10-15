@@ -7,21 +7,19 @@
 //!
 //! The **wail** rises over two seconds and falls over two and a half; the
 //! **yelp** does the same eight times faster, for clearing a way through
-//! traffic; the **hi-lo** alternates two tones, as in Europe. Sirens
-//! started together drift apart, as real ones do, and each is heard with
-//! the Doppler shift of its car going by.
+//! traffic. Sirens started together drift apart, as real ones do, and each
+//! is heard with the Doppler shift of its car going by.
 
 use num_traits::Float;
 use vaudio::synth::filter::{Mode, Svf};
 
-use super::{Listener, Placing, RATE, SineTable, SirenState, Voiced, pan_gains};
+use super::{Listener, Panning, Placing, RATE, SIRENS, SineTable, SirenState, Sounds, Voiced};
 
 /// What a siren plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wail {
     Wail,
     Yelp,
-    HiLo,
 }
 
 impl Wail {
@@ -30,7 +28,6 @@ impl Wail {
         match self {
             Wail::Wail => 4.6,
             Wail::Yelp => 0.36,
-            Wail::HiLo => 1.3,
         }
     }
 
@@ -51,13 +48,6 @@ impl Wail {
         match self {
             Wail::Wail => sweep(640.0, 1480.0),
             Wail::Yelp => sweep(700.0, 1550.0),
-            Wail::HiLo => {
-                if p < 0.5 {
-                    440.0
-                } else {
-                    587.0
-                }
-            }
         }
     }
 }
@@ -68,7 +58,7 @@ const HARMONICS: [f32; 8] = [1.0, 0.06, 0.33, 0.04, 0.2, 0.03, 0.14, 0.02];
 
 /// A voice playing one siren.
 pub struct Voice {
-    key: Option<u32>,
+    key: Option<u64>,
     fresh: bool,
     wail: Wail,
     /// How far through its pattern (0..1).
@@ -101,7 +91,14 @@ impl Voice {
     }
 
     /// Mixes this block of the siren it plays into `l` and `r`.
-    pub fn render(&mut self, sines: &SineTable, ears: &Listener, sirens: &[SirenState], l: &mut [f32], r: &mut [f32]) {
+    pub fn render(
+        &mut self,
+        sines: &SineTable,
+        ears: &Listener,
+        sirens: &Sounds<SirenState, SIRENS>,
+        l: &mut [f32],
+        r: &mut [f32],
+    ) {
         let Some(key) = self.key else { return };
         let rate = RATE as f32;
         let (to_fade, place1) = match sirens.iter().find(|s| s.key == key) {
@@ -121,19 +118,22 @@ impl Voice {
         };
         if self.fresh {
             self.place = place1;
-            // Sirens switched on together soon drift apart.
-            self.at = Float::fract(key as f32 * 0.618_034);
+            // Sirens switched on together soon drift apart (by their cars'
+            // numbers, the keys' low halves).
+            self.at = Float::fract((key as u32) as f32 * 0.618_034);
             self.fresh = false;
         }
         self.air.set(place1.cutoff.min(10_000.0), 0.7, rate);
         let place0 = self.place;
+        let pan = Panning::new(place0.pan, place1.pan);
         let step = 1.0 / (self.wail.period() * rate);
         let n = l.len();
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
             self.fade += (to_fade - self.fade) * 0.0006;
             self.at = Float::fract(self.at + step);
-            // Glide to the pattern's pitch (the hi-lo's steps are not clicks).
+            // Glide to the pattern's pitch (a new pattern starts without a
+            // click).
             self.pitch += (self.wail.pitch(self.at) - self.pitch) * 0.02;
             let doppler = place0.doppler + (place1.doppler - place0.doppler) * t;
             self.phase = self.phase.wrapping_add(super::increment(self.pitch * doppler));
@@ -149,8 +149,7 @@ impl Voice {
             let v = v / (1.0 + v.abs() * 0.6);
             let gain = place0.gain + (place1.gain - place0.gain) * t;
             let v = self.air.process(v) * gain * self.fade * 0.32;
-            let pan = place0.pan + (place1.pan - place0.pan) * t;
-            let (gl, gr) = pan_gains(pan);
+            let (gl, gr) = pan.at(t);
             l[i] += v * gl;
             r[i] += v * gr;
         }
@@ -162,11 +161,11 @@ impl Voice {
 }
 
 impl Voiced for Voice {
-    fn key(&self) -> Option<u32> {
+    fn key(&self) -> Option<u64> {
         self.key
     }
 
-    fn start(&mut self, key: u32) {
+    fn start(&mut self, key: u64) {
         self.key = Some(key);
         self.fresh = true;
         self.fade = 0.0;

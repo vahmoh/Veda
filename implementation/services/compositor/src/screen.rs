@@ -36,10 +36,23 @@
 //! until the screen is settled (the driver's first picture is on it, or
 //! none is coming), the startup sequence leaves the screen black
 //! (`startup`).
+//!
+//! Nothing is drawn into the firmware's framebuffer, whenever the
+//! compositor starts (at system start, or again after a crash), until it
+//! is known to be the screen's still: devmgr says no driver is coming, or
+//! a driver that keeps that memory only pixels attaches (QEMU's VGA), or
+//! [`HOLD_NS`] passes without either. A driver that does not keep it (an
+//! Intel GPU's, whose aperture its tables point at memory of their own)
+//! may have it already when a compositor started again: what the
+//! compositor drew there would land in that memory.
+//!
+//! The memory the screen shows is never borrowed as a Rust slice: the
+//! display reads it, and a driver's copies of it, while frames are written
+//! (pixels are copied in through raw pointers, rows checked to lie on the
+//! screen).
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 
@@ -58,40 +71,66 @@ const FLIP_TIMEOUT_NS: u64 = 1_000_000_000;
 /// display takes that long to come up at most (a laptop's panel takes a
 /// second or more, powering up).
 const MODESET_TIMEOUT_NS: u64 = 10_000_000_000;
+/// How long the firmware's framebuffer is held back at most while nothing
+/// says it is the screen's (see the module's comment); the startup
+/// sequence's splash waits as long for the screen frames go to from then
+/// on.
+pub(crate) const HOLD_NS: u64 = 20_000_000_000;
 
-/// Memory the screen may show: rows of pixels `pitch` bytes apart.
+/// Whether `ns` is the time between two vertical blanks of a display (a
+/// thousand to one a second), as a driver says it.
+fn refresh_period(ns: u64) -> bool {
+    (1_000_000..=1_000_000_000).contains(&ns)
+}
+
+/// Whether `pitch` bytes are rows of whole pixels for a screen `width`
+/// pixels wide.
+pub(crate) fn pitch_fits(pitch: usize, width: i32) -> bool {
+    pitch.is_multiple_of(4) && pitch >= width.max(0) as usize * 4
+}
+
+/// Memory the screen may show: rows of `width` pixels, `pitch` bytes apart
+/// (a multiple of 4: [`pitch_fits`]), `height` of them.
 struct Surface {
     map: Mapping,
     pitch: usize,
+    width: i32,
+    height: i32,
     /// What changed while frames went elsewhere.
     stale: Damage,
 }
 
 impl Surface {
-    /// The pixels of row `y` across `r`.
-    fn row(&mut self, y: i32, r: Rect) -> &mut [u32] {
-        // SAFETY: the mapping covers `pitch * height` bytes, and callers
-        // keep `r` on the screen.
-        unsafe {
-            core::slice::from_raw_parts_mut(
-                (self.map.as_ptr().add(y as usize * self.pitch) as *mut u32).add(r.x as usize),
-                r.w as usize,
-            )
+    /// Where `n` pixels of row `y` from `x` on are, if they are on the
+    /// screen.
+    fn at(&self, x: i32, y: i32, n: usize) -> Option<*mut u32> {
+        let on = x >= 0 && y >= 0 && y < self.height && (x as usize).checked_add(n)? <= self.width as usize;
+        // SAFETY: the mapping covers `pitch * height` bytes, rows of at
+        // least `width` whole pixels; the pixels are on the screen.
+        on.then(|| unsafe { (self.map.as_ptr().add(y as usize * self.pitch) as *mut u32).add(x as usize) })
+    }
+
+    /// Writes `pixels` into row `y` from `x` on, if they are on the screen.
+    fn put(&mut self, x: i32, y: i32, pixels: &[u32]) {
+        if let Some(to) = self.at(x, y, pixels.len()) {
+            // SAFETY: `at` checked that the pixels are the surface's; they
+            // are written, never borrowed (the display reads them).
+            unsafe { core::ptr::copy_nonoverlapping(pixels.as_ptr(), to, pixels.len()) };
         }
     }
 
-    /// Copies `r` of `from` (as large as the screen) into the surface.
-    fn copy(&mut self, from: &Bitmap, r: Rect, rgb: bool) {
+    /// Copies `r` of `from` (as large as the screen) into the surface, red
+    /// and blue swapped if `rgb`.
+    fn copy(&mut self, from: &Bitmap, r: Rect, rgb: bool, row: &mut Vec<u32>) {
         let w = from.width;
         for y in r.y..r.bottom() {
-            let src = &from.pixels[(y * w + r.x) as usize..(y * w + r.right()) as usize];
-            let dst = self.row(y, r);
+            let Some(src) = from.pixels.get((y * w + r.x) as usize..(y * w + r.right()) as usize) else { continue };
             if rgb {
-                for (d, &s) in dst.iter_mut().zip(src) {
-                    *d = swap_red_blue(s);
-                }
+                row.clear();
+                row.extend(src.iter().map(|&s| swap_red_blue(s)));
+                self.put(r.x, y, row);
             } else {
-                dst.copy_from_slice(src);
+                self.put(r.x, y, src);
             }
         }
     }
@@ -100,6 +139,36 @@ impl Surface {
 /// A pixel for a framebuffer that stores red in the low byte.
 fn swap_red_blue(s: u32) -> u32 {
     (s & 0xFF00_FF00) | ((s >> 16) & 0xFF) | ((s & 0xFF) << 16)
+}
+
+/// `layer`'s pixels darkened: `t` parts of 256 of each one's colour,
+/// opaque, in the screen's order (`rgb`).
+///
+/// Kept scalar: vectorised, its multiplies become SSE instructions that
+/// QEMU's TCG emulates with slow helper calls (`core::hint::black_box`
+/// keeps LLVM from doing so; see CODING.md's Performance).
+fn dimmed(out: &mut [u32], layer: &[u32], t: u32, rgb: bool) {
+    for (d, &a) in out.iter_mut().zip(layer) {
+        let a = core::hint::black_box(a);
+        // Red and blue together, then green.
+        let rb = (((a & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
+        let g = (((a & 0x00_FF00) * t) >> 8) & 0x00_FF00;
+        let s = 0xFF00_0000 | rb | g;
+        *d = if rgb { swap_red_blue(s) } else { s };
+    }
+}
+
+/// `under` seen through `over`: `t` parts of 256 of `under`, opaque, in
+/// the screen's order (`rgb`). Kept scalar, as [`dimmed`].
+fn mixed(out: &mut [u32], over: &[u32], under: &[u32], t: u32, rgb: bool) {
+    for ((d, &a), &b) in out.iter_mut().zip(over).zip(under) {
+        let a = core::hint::black_box(a);
+        // Red and blue together, then green.
+        let rb = (((a & 0xFF_00FF) * (256 - t) + (b & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
+        let g = (((a & 0x00_FF00) * (256 - t) + (b & 0x00_FF00) * t) >> 8) & 0x00_FF00;
+        let s = 0xFF00_0000 | rb | g;
+        *d = if rgb { swap_red_blue(s) } else { s };
+    }
 }
 
 /// A display driver's pictures, and the flips between them.
@@ -149,10 +218,18 @@ impl Flips {
     }
 }
 
-/// The surfaces a frame goes into.
-fn targets<'a>(firmware: &'a mut Option<Surface>, flips: &'a mut Option<Flips>) -> Vec<&'a mut Surface> {
-    let Some(f) = flips else { return firmware.iter_mut().collect() };
-    if f.lost { firmware.iter_mut().chain(f.pictures.iter_mut()).collect() } else { vec![&mut f.pictures[f.target]] }
+/// The surfaces a frame goes into: the driver's picture it is for, or
+/// (without a driver, or one that went away) every surface the screen may
+/// show, the firmware's framebuffer while it may be drawn into (`held`
+/// otherwise).
+fn targets<'a>(firmware: &'a mut Option<Surface>, held: bool, flips: &'a mut Option<Flips>) -> Vec<&'a mut Surface> {
+    let firmware = firmware.iter_mut().filter(move |_| !held);
+    let Some(f) = flips else { return firmware.collect() };
+    if f.lost {
+        firmware.chain(f.pictures.iter_mut()).collect()
+    } else {
+        f.pictures.get_mut(f.target).into_iter().collect()
+    }
 }
 
 /// Frames a second, to two decimals, of a screen whose frames take
@@ -181,28 +258,48 @@ pub(crate) struct Screen {
     /// The firmware's framebuffer, until a driver that uses its memory for
     /// its own has the display (`dd::Screen::firmware_kept`).
     firmware: Option<Surface>,
+    /// Until when nothing is drawn into it, while it is not known to be the
+    /// screen's (see the module's comment); `None` once it is.
+    firmware_held: Option<u64>,
     flips: Option<Flips>,
     /// What the frame being composed wrote.
     written: Damage,
     /// The time the last frame was composed for.
     clock: u64,
     coming: Coming,
+    /// A row of pixels on its way to a surface.
+    row: Vec<u32>,
 }
 
 impl Screen {
-    /// The screen on the firmware's framebuffer (`pitch` bytes a row).
-    pub(crate) fn new(fb: Mapping, pitch: usize, rgb: bool, width: i32, height: i32) -> Screen {
+    /// The screen on the firmware's framebuffer (`pitch` bytes a row,
+    /// [`pitch_fits`]), started at `now`: nothing is drawn there yet.
+    pub(crate) fn new(fb: Mapping, pitch: usize, rgb: bool, width: i32, height: i32, now: u64) -> Screen {
+        let mut stale = Damage::new();
+        stale.add(Rect::new(0, 0, width, height));
         Screen {
             back: Bitmap::new(width, height),
             rgb,
-            firmware: Some(Surface { map: fb, pitch, stale: Damage::new() }),
+            firmware: Some(Surface { map: fb, pitch, width, height, stale }),
+            firmware_held: Some(now.saturating_add(HOLD_NS)),
             flips: None,
             written: Damage::new(),
             clock: 0,
             coming: Coming::Unknown,
+            row: Vec::new(),
         }
     }
 
+    /// The firmware's framebuffer is the screen's: frames may go there
+    /// (all of it drawn with the next: it has been stale since the start),
+    /// `why`.
+    fn release_firmware(&mut self, why: &str) {
+        if self.firmware_held.take().is_some() && self.firmware.is_some() {
+            println!("the firmware's framebuffer is drawn into from now on: {}", why);
+        }
+    }
+
+    /// The screen, at the origin.
     pub(crate) fn rect(&self) -> Rect {
         self.back.rect()
     }
@@ -221,7 +318,10 @@ impl Screen {
         let t = match &self.flips {
             Some(f) if !f.lost && f.last.period_ns > 0 && f.last.blank_ns > 0 => {
                 let (period, blank) = (f.last.period_ns, f.last.blank_ns);
-                blank + (now + period / 4).saturating_sub(blank).div_ceil(period).max(1) * period
+                let blanks = now.saturating_add(period / 4).saturating_sub(blank).div_ceil(period).max(1);
+                let t = blank.saturating_add(blanks.saturating_mul(period));
+                // A blank the driver placed far ahead is not believed.
+                if t > now.saturating_add(4 * period) { now } else { t }
             }
             _ => now,
         };
@@ -244,16 +344,17 @@ impl Screen {
     /// startup sequence, the back buffer otherwise).
     pub(crate) fn begin_frame(&mut self, layer: Option<&Bitmap>) {
         self.written.clear();
-        let Screen { back, rgb, firmware, flips, .. } = self;
+        let held = self.firmware_held.is_some();
+        let Screen { back, rgb, firmware, flips, row, .. } = self;
         if let Some(f) = flips
             && !f.lost
         {
             f.target = f.shown.map_or(0, |s| (s + 1) % f.pictures.len());
         }
         let source: &Bitmap = layer.unwrap_or(back);
-        for t in targets(firmware, flips) {
+        for t in targets(firmware, held, flips) {
             for r in t.stale.take() {
-                t.copy(source, r, *rgb);
+                t.copy(source, r, *rgb, row);
             }
         }
     }
@@ -264,9 +365,10 @@ impl Screen {
         if r.is_empty() {
             return;
         }
-        let Screen { back, rgb, firmware, flips, written, .. } = self;
-        for t in targets(firmware, flips) {
-            t.copy(back, r, *rgb);
+        let held = self.firmware_held.is_some();
+        let Screen { back, rgb, firmware, flips, written, row, .. } = self;
+        for t in targets(firmware, held, flips) {
+            t.copy(back, r, *rgb, row);
         }
         written.add(r);
     }
@@ -278,9 +380,10 @@ impl Screen {
         if r.is_empty() {
             return;
         }
-        let Screen { rgb, firmware, flips, written, .. } = self;
-        for t in targets(firmware, flips) {
-            t.copy(layer, r, *rgb);
+        let held = self.firmware_held.is_some();
+        let Screen { rgb, firmware, flips, written, row, .. } = self;
+        for t in targets(firmware, held, flips) {
+            t.copy(layer, r, *rgb, row);
         }
         written.add(r);
     }
@@ -293,18 +396,16 @@ impl Screen {
         if r.is_empty() {
             return;
         }
-        let Screen { rgb, firmware, flips, written, .. } = self;
+        let held = self.firmware_held.is_some();
+        let Screen { rgb, firmware, flips, written, row, .. } = self;
         let (w, t) = (layer.width, fade.min(256));
-        for target in targets(firmware, flips) {
-            for y in r.y..r.bottom() {
-                let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
-                for (d, &a) in target.row(y, r).iter_mut().zip(&layer.pixels[span]) {
-                    // Red and blue together, then green.
-                    let rb = (((a & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
-                    let g = (((a & 0x00_FF00) * t) >> 8) & 0x00_FF00;
-                    let s = 0xFF00_0000 | rb | g;
-                    *d = if *rgb { swap_red_blue(s) } else { s };
-                }
+        row.resize(r.w as usize, 0);
+        for y in r.y..r.bottom() {
+            let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
+            let Some(over) = layer.pixels.get(span) else { continue };
+            dimmed(row, over, t, *rgb);
+            for target in targets(firmware, held, flips) {
+                target.put(r.x, y, row);
             }
         }
         written.add(r);
@@ -317,19 +418,16 @@ impl Screen {
         if r.is_empty() {
             return;
         }
-        let Screen { back, rgb, firmware, flips, written, .. } = self;
+        let held = self.firmware_held.is_some();
+        let Screen { back, rgb, firmware, flips, written, row, .. } = self;
         let (w, t) = (back.width, alpha.min(256));
-        for target in targets(firmware, flips) {
-            for y in r.y..r.bottom() {
-                let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
-                let (over, under) = (&layer.pixels[span.clone()], &back.pixels[span]);
-                for ((d, &a), &b) in target.row(y, r).iter_mut().zip(over).zip(under) {
-                    // Red and blue together, then green.
-                    let rb = (((a & 0xFF_00FF) * (256 - t) + (b & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
-                    let g = (((a & 0x00_FF00) * (256 - t) + (b & 0x00_FF00) * t) >> 8) & 0x00_FF00;
-                    let s = 0xFF00_0000 | rb | g;
-                    *d = if *rgb { swap_red_blue(s) } else { s };
-                }
+        row.resize(r.w as usize, 0);
+        for y in r.y..r.bottom() {
+            let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
+            let (Some(over), Some(under)) = (layer.pixels.get(span.clone()), back.pixels.get(span)) else { continue };
+            mixed(row, over, under, t, *rgb);
+            for target in targets(firmware, held, flips) {
+                target.put(r.x, y, row);
             }
         }
         written.add(r);
@@ -427,19 +525,18 @@ impl Screen {
 
     /// Writes pixel `x` of picture `p`'s first row.
     pub(crate) fn poke(&mut self, p: usize, x: i32, value: u32) {
-        if let Some(f) = self.flips.as_mut()
-            && let Some(s) = f.pictures.get_mut(p)
-        {
-            s.row(0, Rect::new(x, 0, 1, 1))[0] = value;
+        if let Some(at) = self.flips.as_ref().and_then(|f| f.pictures.get(p)).and_then(|s| s.at(x, 0, 1)) {
+            // SAFETY: a pixel of the mapping (`at` checked it).
+            unsafe { core::ptr::write_volatile(at, value) };
             fence(Ordering::SeqCst);
         }
     }
 
     /// Reads pixel `x` of picture `p`'s first row.
     pub(crate) fn peek(&mut self, p: usize, x: i32) -> u32 {
-        match self.flips.as_mut().and_then(|f| f.pictures.get_mut(p)) {
+        match self.flips.as_ref().and_then(|f| f.pictures.get(p)).and_then(|s| s.at(x, 0, 1)) {
             // SAFETY: a pixel of the mapping (the GPU may have written it).
-            Some(s) => unsafe { core::ptr::read_volatile(s.row(0, Rect::new(x, 0, 1, 1)).as_ptr()) },
+            Some(at) => unsafe { core::ptr::read_volatile(at) },
             None => 0,
         }
     }
@@ -474,9 +571,10 @@ impl Screen {
     /// picture is to be shown, or, after it went away, surfaces are to be
     /// brought up to date.
     pub(crate) fn needs_frame(&self) -> bool {
+        let firmware = self.firmware.iter().filter(|_| self.firmware_held.is_none());
         match &self.flips {
-            None => false,
-            Some(f) if f.lost => self.firmware.iter().chain(&f.pictures).any(|s| !s.stale.is_empty()),
+            None => firmware.into_iter().any(|s| !s.stale.is_empty()),
+            Some(f) if f.lost => firmware.chain(&f.pictures).any(|s| !s.stale.is_empty()),
             Some(f) => f.shown.is_none() && f.pending.is_none() && f.drawing.is_none(),
         }
     }
@@ -508,6 +606,9 @@ impl Screen {
         match &coming {
             Coming::Driver { device, .. } => println!("the display's driver is coming ({})", device),
             _ => println!("no driver is coming for the display"),
+        }
+        if coming == Coming::Nothing {
+            self.release_firmware("no driver is coming");
         }
         self.coming = coming;
     }
@@ -543,8 +644,8 @@ impl Screen {
             Some(format!("its picture is {}x{}, the screen {}x{}", screen.width, screen.height, width, height))
         } else if screen.rgbx != self.rgb {
             Some(String::from("its pixels hold their colours in another order"))
-        } else if pitch < width as usize * 4 {
-            Some(format!("{} bytes a row are too few", pitch))
+        } else if !pitch_fits(pitch, width as i32) || pitch > (width as usize * 4).next_multiple_of(4096) {
+            Some(format!("its rows of {} bytes are not rows of {} whole pixels", pitch, width))
         } else if framebuffer == 0 || !screen.firmware.contains(&framebuffer) {
             let at: Vec<String> = screen.firmware.iter().map(|a| format!("{:#x}", a)).collect();
             Some(format!("its picture is at {}, the firmware's framebuffer at {:#x}", at.join(" or "), framebuffer))
@@ -568,7 +669,7 @@ impl Screen {
                 .map_err(|_| DisplayDevError::BadPictures)?;
             let mut stale = Damage::new();
             stale.add(self.rect());
-            pictures.push(Surface { map, pitch, stale });
+            pictures.push(Surface { map, pitch, width: width as i32, height: height as i32, stale });
         }
         let state = FlipState::map(link.state).map_err(|_| DisplayDevError::BadPictures)?;
         println!(
@@ -581,6 +682,8 @@ impl Screen {
         );
         if !screen.firmware_kept && self.firmware.take().is_some() {
             println!("{}: the firmware's framebuffer is its memory from now on: nothing is drawn there", screen.name);
+        } else if screen.firmware_kept {
+            self.release_firmware("its driver keeps it only pixels");
         }
         self.flips = Some(Flips {
             key,
@@ -595,7 +698,10 @@ impl Screen {
             drawing: None,
             seq: 0,
             flipped: false,
-            last: Shown { period_ns: screen.period_ns, ..Shown::default() },
+            last: Shown {
+                period_ns: if refresh_period(screen.period_ns) { screen.period_ns } else { 0 },
+                ..Shown::default()
+            },
             count: 0,
             first_frames: None,
             lost: false,
@@ -635,21 +741,33 @@ impl Screen {
             f.shown = Some(picture);
             f.count += 1;
             f.first_frames.get_or_insert(shown.frames);
-            f.last = Shown { period_ns: if shown.period_ns > 0 { shown.period_ns } else { f.last.period_ns }, ..shown };
+            let period_ns = if refresh_period(shown.period_ns) { shown.period_ns } else { f.last.period_ns };
+            f.last = Shown { period_ns, ..shown };
         }
     }
 
     /// When the waiting flip times out, if one waits: the first, which sets
     /// the display's mode, after as long as that takes.
-    pub(crate) fn timeout(&self) -> Option<u64> {
+    fn timeout(&self) -> Option<u64> {
         let f = self.flips.as_ref().filter(|f| !f.lost)?;
         let limit = if f.count == 0 { MODESET_TIMEOUT_NS } else { FLIP_TIMEOUT_NS };
         f.pending.map(|(_, _, since)| since + limit)
     }
 
+    /// When [`Screen::check`] is due next: a flip times out, or the
+    /// firmware's framebuffer has been held long enough.
+    pub(crate) fn deadline(&self) -> Option<u64> {
+        let held = self.firmware_held.filter(|_| self.firmware.is_some());
+        [self.timeout(), held].into_iter().flatten().min()
+    }
+
     /// Gives up on a driver that does not carry its flips out, until it
-    /// carries out the one it was given up at.
+    /// carries out the one it was given up at; draws into the firmware's
+    /// framebuffer once it has been held long enough.
     pub(crate) fn check(&mut self, now: u64) {
+        if self.firmware_held.is_some_and(|until| now >= until) {
+            self.release_firmware("nothing was said of a driver in time");
+        }
         if self.timeout().is_some_and(|t| now >= t) {
             let Some(f) = &mut self.flips else { return };
             f.late = f.pending.map(|(picture, seq, _)| (picture, seq));
@@ -662,6 +780,8 @@ impl Screen {
     /// was devmgr's, what it said no longer holds.
     pub(crate) fn detach(&mut self, key: u64) {
         if matches!(&self.coming, Coming::Driver { key: k, .. } if *k == key) {
+            // (The firmware's framebuffer stays held: a driver devmgr
+            // started may have its memory all the same.)
             println!("devmgr went away: no driver is coming for the display");
             self.coming = Coming::Nothing;
         }

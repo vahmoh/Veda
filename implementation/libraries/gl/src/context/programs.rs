@@ -50,7 +50,7 @@ pub(crate) struct ProgramObj {
     pub feedback_varyings: Vec<String>,
     pub feedback_separate: bool,
     /// The executable of the last successful link.
-    pub exe: Option<u32>,
+    pub exe: Option<ExeKey>,
     pub link_status: bool,
     pub validate_status: bool,
     pub log: String,
@@ -63,6 +63,9 @@ pub(crate) enum Object {
     Shader(ShaderObj),
     Program(ProgramObj),
 }
+
+/// An executable's identity: no other executable takes it while it lives.
+pub(crate) type ExeKey = u64;
 
 /// A linked program, ready to draw with.
 #[derive(Debug)]
@@ -81,11 +84,11 @@ pub(crate) struct Executable {
 pub(crate) struct Programs {
     pub objects: BTreeMap<u32, Object>,
     next_name: u32,
-    pub exes: BTreeMap<u32, Executable>,
-    next_exe: u32,
+    pub exes: BTreeMap<ExeKey, Executable>,
+    next_exe: ExeKey,
     /// The current program's name (0: none) and its executable.
     pub current: u32,
-    pub current_exe: Option<u32>,
+    pub current_exe: Option<ExeKey>,
 }
 
 impl Default for Programs {
@@ -112,8 +115,19 @@ impl Programs {
         }
     }
 
-    pub fn exe(&self, key: u32) -> &Executable {
+    pub fn exe(&self, key: ExeKey) -> &Executable {
         &self.exes[&key]
+    }
+
+    /// A key no live executable has.
+    fn new_exe_key(&mut self) -> ExeKey {
+        loop {
+            let key = self.next_exe;
+            self.next_exe = key.checked_add(1).unwrap_or(1);
+            if !self.exes.contains_key(&key) {
+                return key;
+            }
+        }
     }
 }
 
@@ -257,7 +271,7 @@ impl Context {
 
     /// The executable of a linked program (`INVALID_OPERATION` if the
     /// program is not linked).
-    fn linked_exe(&mut self, program: u32) -> Option<u32> {
+    fn linked_exe(&mut self, program: u32) -> Option<ExeKey> {
         let p = self.program_obj(program)?;
         match (p.link_status, p.exe) {
             (true, Some(e)) => Some(e),
@@ -517,8 +531,7 @@ impl Context {
             let backend = self.backend.create_program(prog.clone());
             let slots = prog.linked.slots as usize;
             let blocks = prog.linked.blocks.len();
-            let key = self.programs.next_exe;
-            self.programs.next_exe = self.programs.next_exe.wrapping_add(1).max(1);
+            let key = self.programs.new_exe_key();
             self.programs.exes.insert(
                 key,
                 Executable {
@@ -546,13 +559,13 @@ impl Context {
         self.release_exe(old);
     }
 
-    fn retain_exe(&mut self, key: u32) {
+    fn retain_exe(&mut self, key: ExeKey) {
         if let Some(e) = self.programs.exes.get_mut(&key) {
             e.refs += 1;
         }
     }
 
-    fn release_exe(&mut self, key: Option<u32>) {
+    fn release_exe(&mut self, key: Option<ExeKey>) {
         let Some(key) = key else { return };
         let Some(e) = self.programs.exes.get_mut(&key) else { return };
         e.refs -= 1;
@@ -636,7 +649,7 @@ impl Context {
 
     /// A texture unit that samplers of different types use, if any
     /// (section 2.12.9, "Validation").
-    pub(crate) fn sampler_conflict(&self, exe: u32) -> Option<u32> {
+    pub(crate) fn sampler_conflict(&self, exe: ExeKey) -> Option<u32> {
         let e = self.programs.exe(exe);
         let samplers = &e.program.linked.samplers;
         let unit = |i: usize| e.uniforms.get(samplers[i].slot as usize).map_or(0, |s| s[0]);

@@ -1,8 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
+//! The crate's tests: Tiger Lake's pads over a model of a community's
+//! registers.
+
 use core::cell::RefCell;
 use std::collections::BTreeMap;
+use std::string::ToString;
 use std::vec::Vec;
 
 use crate::*;
@@ -194,4 +198,10 @@ fn a_simulated_controller() {
     pads.write(0, true).unwrap();
     pads.clear_interrupt(1).unwrap();
     assert!(!c.line());
+}
+
+#[test]
+fn errors_say_what_is_wrong() {
+    assert_eq!(Error::NoSuchPin.to_string(), "no pad has that pin number");
+    assert_eq!(Error::Busy.to_string(), "the pad belongs to the firmware or another engine, or is locked");
 }

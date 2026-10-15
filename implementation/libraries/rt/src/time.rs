@@ -90,10 +90,42 @@ pub fn utc_time_ns() -> u64 {
     clock_get(clock::UTC)
 }
 
-/// Local time minus UTC, in seconds (to the minute).
-pub fn utc_offset_s() -> i64 {
-    let diff = unix_time_ns() as i64 - utc_time_ns() as i64;
-    (diff / 1_000_000_000 + 30).div_euclid(60) * 60
+/// The name of month `month` (1 to 12, January to December), in English;
+/// a month outside them is taken for the nearest.
+pub fn month_name(month: u8) -> &'static str {
+    const NAMES: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    NAMES[(month.clamp(1, 12) - 1) as usize]
+}
+
+/// How many days month `month` (1 to 12) of `year` has, in the proleptic
+/// Gregorian calendar.
+pub fn days_in_month(year: i32, month: u8) -> u8 {
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// The weekday of the day `days` days after 1970-01-01 (a Thursday): 0 is
+/// Sunday.
+pub fn weekday(days: i64) -> u8 {
+    (days + 4).rem_euclid(7) as u8
 }
 
 /// Days since 1970-01-01 of a date in the proleptic Gregorian calendar
@@ -147,30 +179,54 @@ impl DateTime {
             hour: (rem / 3600) as u8,
             minute: ((rem / 60) % 60) as u8,
             second: (rem % 60) as u8,
-            weekday: ((days + 4).rem_euclid(7)) as u8,
+            weekday: weekday(days),
         }
     }
 
+    /// The month's name ([`month_name`]).
     pub fn month_name(&self) -> &'static str {
-        const NAMES: [&str; 12] = [
-            "January",
-            "February",
-            "March",
-            "April",
-            "May",
-            "June",
-            "July",
-            "August",
-            "September",
-            "October",
-            "November",
-            "December",
-        ];
-        NAMES[(self.month.clamp(1, 12) - 1) as usize]
+        month_name(self.month)
     }
 
+    /// The weekday's name, in English.
     pub fn weekday_name(&self) -> &'static str {
         const NAMES: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         NAMES[self.weekday as usize % 7]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn month_names() {
+        assert_eq!(month_name(1), "January");
+        assert_eq!(month_name(9), "September");
+        assert_eq!(month_name(12), "December");
+        assert_eq!((month_name(0), month_name(13)), ("January", "December"));
+        assert_eq!(DateTime::from_unix(0).month_name(), "January");
+    }
+
+    #[test]
+    fn months_have_their_days() {
+        assert_eq!(days_in_month(2026, 1), 31);
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!((days_in_month(2024, 2), days_in_month(2026, 2)), (29, 28));
+        // Centuries are leap years only every fourth.
+        assert_eq!((days_in_month(1900, 2), days_in_month(2000, 2)), (28, 29));
+        assert_eq!(weekday(days_from_civil(2026, 10, 15)), 4);
+        assert_eq!(weekday(-1), 3);
+    }
+
+    #[test]
+    fn dates_round_trip() {
+        // 2026-10-15 12:34:56 UTC, a Thursday.
+        let d = DateTime::from_unix(1_792_067_696);
+        assert_eq!((d.year, d.month, d.day, d.hour, d.minute, d.second), (2026, 10, 15, 12, 34, 56));
+        assert_eq!(d.weekday_name(), "Thursday");
+        assert_eq!(days_from_civil(2026, 10, 15), 1_792_067_696 / 86_400);
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
     }
 }

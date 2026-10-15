@@ -13,12 +13,14 @@
 //!   caching resolver.
 //! * [`Pinger`] — ICMP echo (what `ping` uses).
 //! * [`status`], [`interfaces`], ... — the state of the network, and
-//!   configuration for the Settings app and the Terminal.
+//!   configuration (for the Settings app and the Terminal: the service
+//!   refuses it to other programs).
 //! * [`wifi`] — Wi-Fi: networks in range, joining, saved networks, events.
 //!
 //! Addresses are the standard `core::net` types. Errors are
 //! [`NetError`]s. Every socket owns a channel to the network service and is
-//! closed when dropped (TCP connections are shut down gracefully).
+//! closed when dropped: a TCP connection is shut down gracefully, the data
+//! written before delivered.
 //!
 //! Applications with an event loop (like `vui` apps) can wait on
 //! [`TcpStream::handle`] and call the non-blocking methods
@@ -45,8 +47,8 @@ pub use ping::{PingReply, Pinger};
 pub use tcp::{TcpListener, TcpStream};
 pub use udp::UdpSocket;
 pub use vproto::net::{
-    AddrFamily, Connectivity, DnsCacheEntry, InterfaceInfo, InterfaceKind, IpConfig, NetError, NetEvent, NetStatus,
-    RouteInfo, SocketInfo, TcpOptions,
+    AddrFamily, Connectivity, InterfaceInfo, InterfaceKind, IpConfig, NetError, NetEvent, NetStatus, RouteInfo,
+    SocketInfo, TcpOptions, format_mac,
 };
 pub use vrt::time::Duration;
 
@@ -146,7 +148,7 @@ pub fn lookup(name: &str, family: AddrFamily, timeout: Duration) -> Result<Looku
     }
 }
 
-/// The addresses of a host (IPv4 first), or of an address literal.
+/// The addresses of a host (IPv4 ones first), or of an address literal.
 pub fn resolve(name: &str) -> Result<Vec<IpAddr>, NetError> {
     lookup(name, AddrFamily::Any, RESOLVE_TIMEOUT).map(|l| l.addresses)
 }
@@ -164,17 +166,15 @@ pub fn routes() -> Result<Vec<RouteInfo>, NetError> {
     with_client(|c| c.routes())
 }
 
-/// Every open socket in the system.
+/// The caller's open sockets (for Settings and the Terminal, every socket
+/// in the system).
 pub fn sockets() -> Result<Vec<SocketInfo>, NetError> {
     with_client(|c| c.sockets())
 }
 
-pub fn dns_cache() -> Result<Vec<DnsCacheEntry>, NetError> {
-    with_client(|c| c.dns_cache())
-}
-
+/// Empties the DNS cache.
 pub fn flush_dns_cache() -> Result<(), NetError> {
-    with_client(|c| c.flush_dns_cache())
+    with_client(|c| c.flush_dns_cache())?
 }
 
 /// Sets how an interface obtains its IPv4 configuration.
@@ -212,9 +212,4 @@ pub fn next_event(ch: &Channel) -> Result<Option<NetEvent>, NetError> {
         Err(vabi::Error::ShouldWait) => Ok(None),
         Err(_) => Err(NetError::Closed),
     }
-}
-
-/// Formats a MAC address.
-pub fn format_mac(m: &[u8; 6]) -> String {
-    alloc::format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
 }

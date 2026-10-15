@@ -17,7 +17,7 @@
 //! | `patrol.qoa` | "Night Shift": F minor, 96 BPM, driving about |
 //! | `pursuit.qoa`, `pursuit-high.qoa` | "Hot Pursuit": E minor, 140 BPM, a chase, in two stems |
 
-use std::path::Path;
+use gencommon::output::Output;
 
 use vaudio::synth::{self, Part, Song};
 
@@ -346,19 +346,17 @@ fn pursuit() -> (Vec<Part>, Vec<Part>, Vec<f64>) {
     (vec![dr, bass, arp, pad], vec![perc, lead, stabs, bells], duck)
 }
 
-/// Writes `mix` as a QOA file.
-fn write(dir: &Path, name: &str, mix: &[f32], seed: u64) -> usize {
+/// Writes `mix` as the QOA file `name` of the game's.
+fn write(out: &mut Output, name: &str, mix: &[f32], seed: u64) -> Result<usize, String> {
     let pcm = crate::to_i16(mix, seed);
-    let file = vaudio::qoa::encode(&pcm, 2, SR as u32).expect("QOA encoding failed");
-    std::fs::write(dir.join(name), &file).expect("cannot write the music");
-    file.len()
+    let file = vaudio::qoa::encode(&pcm, 2, SR as u32).map_err(|e| format!("QOA encoding: {e}"))?;
+    out.write(&format!("games/interceptor/{name}"), &file)?;
+    Ok(file.len())
 }
 
-/// Renders and writes every loop to `out/games/interceptor/`; returns the
-/// bytes written.
-pub fn write_all(out: &Path) -> usize {
-    let dir = out.join("games").join("interceptor");
-    std::fs::create_dir_all(&dir).expect("cannot create the game's music directory");
+/// Renders and writes every loop to `games/interceptor/` of `out`; returns
+/// the bytes written.
+pub fn write_all(out: &mut Output) -> Result<usize, String> {
     let mut bytes = 0;
     let report = |name: &str, stats: &synth::seq::MixStats, size: usize| {
         println!(
@@ -372,7 +370,7 @@ pub fn write_all(out: &Path) -> usize {
     };
     for (name, s, seed) in [("theme.qoa", theme(), 31u64), ("patrol.qoa", patrol(), 37)] {
         let (mix, stats) = second_time(&s);
-        let size = write(&dir, name, &mix, seed);
+        let size = write(out, name, &mix, seed)?;
         report(name, &stats, size);
         bytes += size;
     }
@@ -386,9 +384,9 @@ pub fn write_all(out: &Path) -> usize {
         let mut s = song(140.0, parts, duck.clone());
         s.master.gain_db = Some(full.gain_db);
         let (mix, stats) = second_time(&s);
-        let size = write(&dir, name, &mix, seed);
+        let size = write(out, name, &mix, seed)?;
         report(name, &stats, size);
         bytes += size;
     }
-    bytes
+    Ok(bytes)
 }

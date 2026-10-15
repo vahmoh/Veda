@@ -43,8 +43,6 @@ pub struct TexCall {
     pub offset: bool,
     /// A bias argument follows the coordinate (implicit level only).
     pub bias: bool,
-    /// Components of the coordinate argument.
-    pub coord_size: u8,
 }
 
 /// A built-in function.
@@ -304,6 +302,9 @@ pub struct Resolved {
     pub order: Vec<usize>,
     /// Indices of `out` parameters.
     pub outputs: Vec<usize>,
+    /// The extension the function comes from, in GLSL ES 1.00 (for
+    /// `#extension ... : warn`).
+    pub extension: Option<Ext>,
 }
 
 /// Why a built-in call failed to resolve.
@@ -372,7 +373,9 @@ pub fn resolve(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved,
     let v3 = ctx.version == Version::V300;
     let fs = ctx.stage == Stage::Fragment;
     let n = args.len();
-    let ok = |b: Builtin, ret: Type| Ok(Resolved { builtin: b, ret, order: (0..n).collect(), outputs: Vec::new() });
+    let ok = |b: Builtin, ret: Type| {
+        Ok(Resolved { builtin: b, ret, order: (0..n).collect(), outputs: Vec::new(), extension: None })
+    };
     let same = |i: usize, j: usize| args.get(i) == args.get(j);
 
     // Functions of one genType returning the same type.
@@ -435,9 +438,13 @@ pub fn resolve(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved,
                 return Err(CallError::NoSuchFunction);
             }
             match n {
-                2 if float_n(args[0]).is_some() && same(0, 1) => {
-                    Ok(Resolved { builtin: Modf, ret: args[0], order: alloc::vec![0, 1], outputs: alloc::vec![1] })
-                }
+                2 if float_n(args[0]).is_some() && same(0, 1) => Ok(Resolved {
+                    builtin: Modf,
+                    ret: args[0],
+                    order: alloc::vec![0, 1],
+                    outputs: alloc::vec![1],
+                    extension: None,
+                }),
                 _ => Err(CallError::NoOverload),
             }
         }
@@ -691,7 +698,10 @@ pub fn resolve(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved,
                 return Err(CallError::Unavailable(alloc::format!("'{name}' is only available in fragment shaders")));
             }
             match (n, args.first().and_then(|&t| float_n(t))) {
-                (1, Some(_)) => ok(b, args[0]),
+                (1, Some(_)) => ok(b, args[0]).map(|mut r| {
+                    r.extension = (!v3).then_some(Ext::OesStandardDerivatives);
+                    r
+                }),
                 _ => Err(CallError::NoOverload),
             }
         }
@@ -717,7 +727,7 @@ pub fn resolve(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved,
 /// Two arguments of the same `genType`.
 fn binary_same(args: &[Type], b: Builtin) -> Result<Resolved, CallError> {
     if args.len() == 2 && float_n(args[0]).is_some() && args[0] == args[1] {
-        Ok(Resolved { builtin: b, ret: args[0], order: alloc::vec![0, 1], outputs: Vec::new() })
+        Ok(Resolved { builtin: b, ret: args[0], order: alloc::vec![0, 1], outputs: Vec::new(), extension: None })
     } else {
         Err(CallError::NoOverload)
     }
@@ -727,7 +737,6 @@ fn binary_same(args: &[Type], b: Builtin) -> Result<Resolved, CallError> {
 fn texture(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved, CallError> {
     let v3 = ctx.version == Version::V300;
     let fs = ctx.stage == Stage::Fragment;
-    let vs = ctx.stage == Stage::Vertex;
     // (proj, lod, offset)
     let shape = if v3 {
         match name {
@@ -774,7 +783,6 @@ fn texture(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved, Cal
     if !coord_ok {
         return Err(CallError::NoOverload);
     }
-    let coord_size = coord.and_then(|t| t.as_basic()).map_or(0, Basic::components) as u8;
     // Which combinations exist (GLSL ES 3.00 section 8.8).
     let allowed = match (s.dim, s.shadow) {
         (Dim::Cube, false) => !proj && !offset,
@@ -852,10 +860,9 @@ fn texture(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved, Cal
     if let Some(o) = offset_index {
         order.push(o);
     }
-    let _ = vs;
     let ret = if s.shadow { Type::FLOAT } else { Type::vector(s.ty, 4) };
-    let call = TexCall { sampler: s, lod, proj, offset, bias, coord_size };
-    Ok(Resolved { builtin: Builtin::Texture(call), ret, order, outputs: Vec::new() })
+    let call = TexCall { sampler: s, lod, proj, offset, bias };
+    Ok(Resolved { builtin: Builtin::Texture(call), ret, order, outputs: Vec::new(), extension: None })
 }
 
 /// GLSL ES 1.00's texture functions, with its extensions.
@@ -948,8 +955,7 @@ fn texture_100(name: &str, args: &[Type], ctx: &CallContext) -> Result<Resolved,
             _ => return Err(CallError::NoOverload),
         },
     }
-    let coord_size = size.unwrap_or(0);
     let ret = if s.shadow { Type::FLOAT } else { Type::vector(f, 4) };
-    let call = TexCall { sampler: s, lod, proj, offset: false, bias, coord_size };
-    Ok(Resolved { builtin: Builtin::Texture(call), ret, order, outputs: Vec::new() })
+    let call = TexCall { sampler: s, lod, proj, offset: false, bias };
+    Ok(Resolved { builtin: Builtin::Texture(call), ret, order, outputs: Vec::new(), extension: ext })
 }

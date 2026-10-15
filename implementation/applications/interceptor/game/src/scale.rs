@@ -41,9 +41,10 @@ pub struct Scale {
 
 impl Scale {
     /// Starting at `level`, keeping frames under `target_ms`, never below
-    /// the resolution of `max_level`.
+    /// the resolution of `max_level` (both held to [`SCALES`]).
     pub fn new(level: usize, max_level: usize, target_ms: f32) -> Scale {
-        Scale { level, max_level: max_level.min(SCALES.len() - 1), target_ms, trial: Trial::None, cooldown: 0.0 }
+        let max_level = max_level.min(SCALES.len() - 1);
+        Scale { level: level.min(max_level), max_level, target_ms, trial: Trial::None, cooldown: 0.0 }
     }
 
     /// The divisor now.
@@ -99,6 +100,9 @@ mod tests {
 
     #[test]
     fn keeps_a_lower_resolution_only_if_it_helps() {
+        // Asked for more than there is, the lowest resolution there is.
+        assert_eq!(Scale::new(9, 99, 18.0).divisor(), SCALES[SCALES.len() - 1]);
+        assert_eq!(Scale::new(5, 3, 18.0).level, 3);
         // Slow frames that a lower resolution speeds up: it goes down.
         let mut s = Scale::new(0, 6, 18.0);
         assert!(s.judge(25.0, 2.0));

@@ -8,6 +8,8 @@
 //! arithmetic. `&&` and `||` evaluate their right operand only when it
 //! matters, and errors in an operand that is not evaluated (undefined
 //! names, division by zero) are not reported, as the specification asks.
+//! Parentheses and unary operators nest at most [`MAX_DEPTH`] deep, so
+//! that a hostile expression cannot exhaust the stack.
 
 use alloc::string::String;
 
@@ -27,7 +29,12 @@ pub enum ExprError {
     DivideByZero,
     Overflow,
     ShiftOutOfRange,
+    /// Parentheses or unary operators nested more than [`MAX_DEPTH`] deep.
+    TooDeep,
 }
+
+/// The deepest nesting of parentheses and unary operators accepted.
+pub const MAX_DEPTH: usize = 64;
 
 impl ExprError {
     /// A message for the information log.
@@ -40,6 +47,7 @@ impl ExprError {
             ExprError::DivideByZero => "division by zero in preprocessor expression".into(),
             ExprError::Overflow => "integer overflow in preprocessor expression".into(),
             ExprError::ShiftOutOfRange => "shift by a negative or too large amount".into(),
+            ExprError::TooDeep => "the expression nests parentheses or unary operators too deeply".into(),
         }
     }
 }
@@ -59,7 +67,7 @@ fn spell(k: PpKind, interner: &Interner) -> String {
 
 /// Evaluates a whole `#if` expression.
 pub fn evaluate(tokens: &[PpTok], interner: &Interner, defined: Symbol) -> Result<i64, ExprError> {
-    let mut p = Parser { tokens, pos: 0, interner, defined };
+    let mut p = Parser { tokens, pos: 0, interner, defined, depth: 0 };
     let v = p.expr(true)?;
     match p.peek() {
         None => Ok(v),
@@ -70,7 +78,7 @@ pub fn evaluate(tokens: &[PpTok], interner: &Interner, defined: Symbol) -> Resul
 /// Evaluates `#line`'s operands: a line number and an optional source
 /// string number.
 pub fn evaluate_line(tokens: &[PpTok], interner: &Interner, defined: Symbol) -> Result<(i64, Option<i64>), ExprError> {
-    let mut p = Parser { tokens, pos: 0, interner, defined };
+    let mut p = Parser { tokens, pos: 0, interner, defined, depth: 0 };
     let line = p.expr(true)?;
     if p.peek().is_none() {
         return Ok((line, None));
@@ -104,6 +112,8 @@ struct Parser<'t, 'i> {
     pos: usize,
     interner: &'i Interner,
     defined: Symbol,
+    /// Parentheses and unary operators around the current token.
+    depth: usize,
 }
 
 /// Binary operators by precedence level, lowest first.
@@ -157,11 +167,22 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// Runs `f` one level of nesting deeper.
+    fn nested(&mut self, f: impl FnOnce(&mut Self) -> Result<i64, ExprError>) -> Result<i64, ExprError> {
+        if self.depth >= MAX_DEPTH {
+            return Err(ExprError::TooDeep);
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
+    }
+
     fn unary(&mut self, eval: bool) -> Result<i64, ExprError> {
         match self.peek() {
             Some(PpKind::Punct(op @ (Punct::Plus | Punct::Minus | Punct::Tilde | Punct::Bang))) => {
                 self.pos += 1;
-                let v = self.unary(eval)?;
+                let v = self.nested(|p| p.unary(eval))?;
                 Ok(match op {
                     Punct::Plus => v,
                     Punct::Minus => v.checked_neg().ok_or(ExprError::Overflow)?,
@@ -171,7 +192,7 @@ impl Parser<'_, '_> {
             }
             Some(PpKind::Punct(Punct::LParen)) => {
                 self.pos += 1;
-                let v = self.expr(eval)?;
+                let v = self.nested(|p| p.expr(eval))?;
                 match self.peek() {
                     Some(PpKind::Punct(Punct::RParen)) => {
                         self.pos += 1;

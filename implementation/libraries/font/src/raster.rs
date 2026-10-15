@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
 
 use crate::GlyphId;
-use crate::font::{Font, OutlineScratch};
+use crate::font::Font;
 
 /// Largest supported glyph size in pixels per em.
 pub const MAX_GLYPH_SIZE: f32 = 2048.0;
@@ -232,7 +232,6 @@ impl crate::outline::OutlineSink for GlyphSink<'_> {
 pub struct GlyphRasterizer {
     raster: Rasterizer,
     path: Path,
-    scratch: OutlineScratch,
     emb: Vec<Point>,
     options: RasterOptions,
     lut: [u8; 256],
@@ -256,7 +255,6 @@ impl GlyphRasterizer {
         let mut r = GlyphRasterizer {
             raster: Rasterizer::new(),
             path: Path::new(),
-            scratch: OutlineScratch::default(),
             emb: Vec::new(),
             options,
             lut: [0; 256],
@@ -320,7 +318,7 @@ impl GlyphRasterizer {
         self.path.clear();
         // Lifting by half the darkening keeps flat bottoms exactly on the baseline.
         let mut sink = GlyphSink { path: &mut self.path, scale, dx, lift: dark * 0.5, zones };
-        if font.outline_with(glyph, &mut sink, &mut self.scratch).is_err() {
+        if font.outline(glyph, &mut sink).is_err() {
             self.path.clear();
             return;
         }

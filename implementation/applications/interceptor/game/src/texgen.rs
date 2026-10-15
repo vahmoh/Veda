@@ -110,7 +110,7 @@ pub fn worley(x: usize, y: usize, size: usize, cells: i32, seed: u32) -> (f32, f
 /// sRGB encoding of a linear value.
 pub fn srgb(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
-    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * libm::powf(c, 1.0 / 2.4) - 0.055 }
 }
 
 fn rgb(c: Vec3, a: f32) -> [f32; 4] {
@@ -235,7 +235,7 @@ pub fn walls(size: usize) -> Vec<Image> {
     });
     let metal = Image::from_fn(size, size, |x, y| {
         // Vertical corrugations every 7.5 cm.
-        let ridge = ((x as f32 / size as f32 * 2.0 / 0.075) * core::f32::consts::TAU).sin();
+        let ridge = libm::sinf((x as f32 / size as f32 * 2.0 / 0.075) * core::f32::consts::TAU);
         let n = fbm(x, y, size, 8, 4, 0.5, 66);
         let rust = fbm(x, y, size, 16, 3, 0.6, 67);
         let v = 0.75 + 0.12 * ridge - 0.15 * n;
@@ -278,7 +278,7 @@ pub fn ground(size: usize) -> Vec<Image> {
     });
     let sand = Image::from_fn(size, size, |x, y| {
         let ripples =
-            ((y as f32 / size as f32 * 40.0 + fbm(x, y, size, 4, 3, 0.5, 37) * 6.0) * core::f32::consts::TAU).sin();
+            libm::sinf((y as f32 / size as f32 * 40.0 + fbm(x, y, size, 4, 3, 0.5, 37) * 6.0) * core::f32::consts::TAU);
         let n = fbm(x, y, size, 64, 2, 0.5, 38);
         let v = 0.52 + 0.04 * ripples + 0.06 * n;
         rgb(Vec3::new(v, v * 0.88, v * 0.66), 0.5 + 0.2 * ripples)

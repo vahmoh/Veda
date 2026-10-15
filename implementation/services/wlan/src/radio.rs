@@ -43,7 +43,6 @@ pub struct Radio {
     /// A control call failed or timed out: the driver is not trusted to
     /// work any more and the radio is dropped.
     pub broken: bool,
-    next_id: u32,
 }
 
 impl Radio {
@@ -57,7 +56,7 @@ impl Radio {
             c.set_timeout(CONTROL_TIMEOUT_NS);
             Control::SoftMac(c)
         };
-        Radio { channel, ctl, link, info, state, tuned: None, powered: false, broken: false, next_id: 1 }
+        Radio { channel, ctl, link, info, state, tuned: None, powered: false, broken: false }
     }
 
     /// The managed radio's control (`None` for one that moves frames).
@@ -169,13 +168,8 @@ impl Radio {
         self.done(r)
     }
 
-    pub fn install_key(&mut self, kind: vwlan::station::KeyKind, index: u8, key: &[u8], rsc: u64, peer: Mac) -> bool {
-        use vwlan::station::KeyKind as K;
-        let kind = match kind {
-            K::Pairwise => KeyKind::Pairwise,
-            K::Group => KeyKind::Group,
-            K::Integrity => KeyKind::Integrity,
-        };
+    /// Gives the radio a session key (the caller zeroes its own copy).
+    pub fn install_key(&mut self, kind: KeyKind, index: u8, key: &[u8], rsc: u64, peer: Mac) -> bool {
         let Some(c) = self.mlme() else { return false };
         let r = c.install_key(kind, index, Bytes(key.to_vec()), rsc, peer);
         self.done(r)
@@ -198,22 +192,22 @@ impl Radio {
         self.link.send(SlotMeta::ethernet(), eth)
     }
 
-    pub fn stats(&self) -> Option<PhyStats> {
-        match &self.ctl {
-            Control::SoftMac(c) => c.stats().ok(),
-            Control::Managed(c) => c.stats().ok(),
+    /// The radio's own counts of frames (`None` if it does not answer; a
+    /// call that fails like any other breaks the radio).
+    pub fn stats(&mut self) -> Option<PhyStats> {
+        let r = match &self.ctl {
+            Control::SoftMac(c) => c.stats(),
+            Control::Managed(c) => c.stats(),
+        };
+        if r.is_err() {
+            self.broken = true;
         }
+        r.ok()
     }
 
     /// Queues an 802.11 frame for transmission.
     pub fn send(&mut self, frame: &[u8], no_ack: bool) -> bool {
-        let id = if no_ack {
-            0
-        } else {
-            self.next_id = self.next_id.wrapping_add(1).max(1);
-            self.next_id
-        };
-        let meta = TxInfo { id, rate: 0, retries: 0, no_ack }.pack();
+        let meta = TxInfo { rate: 0, retries: 0, no_ack }.pack();
         self.link.send(SlotMeta { kind: kind::IEEE80211, flags: 0, meta }, frame)
     }
 }

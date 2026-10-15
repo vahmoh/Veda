@@ -3,14 +3,20 @@
 
 //! `cargo orchestration` — the Veda developer tool.
 //!
-//! Run `cargo orchestration help` for the list of commands.
+//! Run `cargo orchestration help` for the list of commands. Its options
+//! are `cli`'s; what goes into the system and its images is `system`'s;
+//! running the tests and the automation scripts is `runner`'s, whose
+//! language is `script`'s and whose interpreter is `automate`.
 
 mod acpi;
 mod agentsim;
 mod arch;
 mod automate;
+mod checks;
+mod cli;
 mod components;
 mod crates;
+mod hostweb;
 mod image;
 #[cfg(test)]
 mod licence;
@@ -20,519 +26,23 @@ mod ovmfvars;
 mod ports;
 mod qemu;
 mod qmp;
+mod runner;
+mod script;
+mod system;
 mod toolchain;
 mod util;
+mod voice;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use components::Profile;
+use cli::{HELP, Options};
 use util::Result;
 
-const HELP: &str = "\
-Veda developer tool
-
-USAGE:
-    cargo orchestration <COMMAND> [OPTIONS]
-
-COMMANDS:
-    build       Build every component and assemble target/veda/veda.img
-    iso         Build every component and write target/veda/veda.iso: a live system
-                that boots a PC from a USB stick (write it with Rufus, or as it is
-                with any image writer); it runs from memory and leaves the PC's
-                disks alone
-    run         Build, then boot Veda in QEMU
-    shot        Boot headless, wait, and save a screenshot (dev aid)
-    script FILE Boot headless and run an automation script (see automate.rs)
-    scripts FILE...
-                Build once, then run the scripts, several at once (--jobs N);
-                each one's log goes to target/veda/test-logs
-    test        Run host unit tests, then the in-system integration tests
-                (--ui also runs the GUI automation scripts in verification/ui
-                and the agent's in verification/agent, several at once: --jobs N)
-    toolchain   Build the toolchain from implementation/ports/: GCC, binutils and
-                musl (a cross compiler for this machine and the native one the
-                image installs in /system), the media libraries, and Rust for
-                Veda's target (needs build tools; see documentation/C.md and
-                RUST.md; --jobs N)
-    linux       Build the Linux kernel of the driver VM from
-                implementation/ports/linux (see documentation/DRIVERVM.md;
-                --jobs N); later builds put it in the image, with the guest's
-                programs
-    acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
-                holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
-                the firmware's variables read as zeros but those given with
-                --set NAME=VALUE; PCI configuration space comes from DIR/pci, or from
-                this machine
-    clean       Remove build outputs
-    doctor      Check that the required tools are installed
-    help        Show this message
-
-Every command but help and clean first prepares the crates of
-implementation/ports/ (smoltcp, zune-jpeg) for Cargo, when a port has
-changed: see implementation/ports/README.md.
-
-BUILD OPTIONS:
-    --debug             Build without optimisations (slow under emulation)
-    --resolution WxH    Screen resolution (default 1920x1080 for run and iso; 1280x800 for
-                        build, shot and the scripts, which are laid out for it). QEMU's
-                        display takes it for its own size; a PC gets its largest mode up to
-                        it, of the display's own shape if the firmware gives its EDID and
-                        has such a mode about as wide
-    --cmdline \"...\"     Extra kernel command line arguments
-    --no-generate       Reuse the media in target/generated instead of regenerating it
-    --skip PROGRAM      Leave a program out of the image (repeatable)
-
-RUN OPTIONS:
-    --smp N             Number of virtual CPUs (default 4)
-    --memory MiB        Guest RAM in MiB (default 1024)
-    --headless          No display window (serial console only)
-    --no-iommu          Leave the IOMMU out of QEMU's machine (it has one, remapping
-                        interrupts, as the driver VM's devices need)
-    --gpu, --no-gpu     Give QEMU's machine a 3D GPU (virtio-gpu with virgl, rendering on the
-                        host's GPU) or not (default: if this QEMU has one)
-    --no-audio          Do not attach a sound device
-    --sound CARD        The sound card: virtio (default) or hda (Intel HD Audio, as most PCs
-                        have)
-    --serial FILE       Write the serial console to FILE instead of the terminal
-    --gdb               Wait for a debugger on localhost:1234
-    --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
-    --fresh-home        Start with a new home directory (deletes target/veda/home.img)
-    --net MODE          Network: ethernet (default, a wired card on QEMU's NAT) or none
-    --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000e, igb
-    --disk-bus BUS      How QEMU attaches the disks: virtio (default), ahci (SATA) or nvme
-    --input DEVICES     Keyboard and pointer: standard (default: the machine's keyboard, a
-                        PC's PS/2 one, and the virtio tablet) or usb (on the xHCI controller: a
-                        keyboard and a tablet behind a hub, and a mouse)
-    --live              Boot the live system (iso) from a USB stick, as a PC would
-
-SCRIPT OPTIONS:
-    --jobs N            How many scripts run at once (scripts, test --ui; default: one per
-                        five processors, at least one)
-
-SHOT OPTIONS:
-    --wait SECS         Seconds to wait before the screenshot (default 10)
-    --until TEXT        Instead, wait until the serial log contains TEXT
-    --out FILE          Output PNG (default target/veda/screen.png)
-
-ISO OPTIONS:
-    --out FILE          The ISO image (default target/veda/veda.iso)
-";
-
-/// Options shared by the build-related commands.
-#[derive(Clone)]
-struct Options {
-    profile: Profile,
-    /// `--resolution` (otherwise each boot has its own: see [`screen`]).
-    resolution: Option<(u32, u32)>,
-    cmdline: String,
-    vm: qemu::VmConfig,
-    wait: f64,
-    until: Option<String>,
-    out: Option<PathBuf>,
-    /// `test`: also run the GUI scripts in `verification/ui` and
-    /// `verification/agent`.
-    ui: bool,
-    /// Run the media generators (off: reuse what `target/generated` has).
-    generate: bool,
-    /// Programs left out of the image.
-    skip: Vec<String>,
-    /// `run`: start with a new, empty home directory.
-    fresh_home: bool,
-    /// `run`, `shot`, `script`: boot the live system from a USB stick.
-    live: bool,
-    /// `script`: the system as `scripts` and `test` built it, instead of
-    /// building it.
-    prebuilt: Option<PathBuf>,
-    /// `scripts`, `test --ui`: how many scripts run at once.
-    jobs: usize,
-    /// The options as given, for the scripts' own runs.
-    given: Vec<String>,
-}
-
-fn parse_options(args: &[String]) -> Result<Options> {
-    let mut o = Options {
-        profile: Profile::Release,
-        resolution: None,
-        cmdline: String::new(),
-        vm: qemu::VmConfig::default(),
-        wait: 10.0,
-        until: None,
-        out: None,
-        ui: false,
-        generate: true,
-        skip: Vec::new(),
-        fresh_home: false,
-        live: false,
-        prebuilt: None,
-        jobs: std::thread::available_parallelism().map_or(1, |n| (n.get() / 5).max(1)),
-        given: args.to_vec(),
-    };
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        let mut value = |name: &str| it.next().cloned().ok_or(format!("{name} needs a value"));
-        match arg.as_str() {
-            "--debug" => o.profile = Profile::Debug,
-            "--release" => o.profile = Profile::Release,
-            "--resolution" => {
-                let v = value(arg)?;
-                o.resolution =
-                    Some(resolution_size(&v).ok_or("--resolution expects WxH, at least 640x480 (such as 1920x1080)")?);
-            }
-            "--live" => o.live = true,
-            "--cmdline" => o.cmdline = value(arg)?,
-            "--smp" => o.vm.cpus = value(arg)?.parse().map_err(|_| "--smp expects a number")?,
-            "--memory" => o.vm.memory_mib = value(arg)?.parse().map_err(|_| "--memory expects MiB")?,
-            "--headless" => o.vm.display = false,
-            "--no-iommu" => o.vm.iommu = false,
-            "--gpu" => o.vm.gpu = Some(true),
-            "--no-gpu" => o.vm.gpu = Some(false),
-            "--no-audio" => o.vm.audio = false,
-            "--sound" => {
-                let card = value(arg)?;
-                if !matches!(card.as_str(), "virtio" | "hda") {
-                    return Err(format!("--sound: unknown card '{card}' (virtio or hda)"));
-                }
-                o.vm.sound = card;
-            }
-            "--serial" => o.vm.serial_file = Some(PathBuf::from(value(arg)?)),
-            "--gdb" => o.vm.gdb = true,
-            "--qemu-arg" => o.vm.extra.push(value(arg)?),
-            "--wait" => o.wait = value(arg)?.parse().map_err(|_| "--wait expects seconds")?,
-            "--until" => o.until = Some(value(arg)?),
-            "--out" => o.out = Some(PathBuf::from(value(arg)?)),
-            "--ui" => o.ui = true,
-            "--prebuilt" => o.prebuilt = Some(PathBuf::from(value(arg)?)),
-            "--jobs" | "-j" => {
-                let v = value(arg)?;
-                o.jobs = v.parse().ok().filter(|&n| n > 0).ok_or(format!("--jobs: not a number of jobs: {v}"))?;
-            }
-            "--no-generate" => o.generate = false,
-            "--skip" => o.skip.push(value(arg)?),
-            "--fresh-home" => o.fresh_home = true,
-            "--net" => {
-                let v = value(arg)?;
-                o.vm.net = qemu::NetMode::parse(&v).ok_or(format!("unknown network mode '{v}'"))?;
-            }
-            "--nic" => o.vm.nic_model = Some(value(arg)?),
-            "--disk-bus" => {
-                let v = value(arg)?;
-                o.vm.disk_bus =
-                    qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, ahci, nvme)"))?;
-            }
-            "--input" => {
-                let v = value(arg)?;
-                o.vm.input =
-                    qemu::InputDevices::parse(&v).ok_or(format!("unknown input devices '{v}' (standard, usb)"))?;
-            }
-            other => return Err(format!("unknown option '{other}' (see `cargo orchestration help`)")),
-        }
-    }
-    Ok(o)
-}
-
-/// The width and height in a resolution such as "1920x1080".
-fn resolution_size(v: &str) -> Option<(u32, u32)> {
-    let (w, h) = v.split_once(['x', 'X'])?;
-    let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
-    (w >= 640 && h >= 480).then_some((w, h))
-}
-
-/// Host tools that generate media into `target/generated` at build time,
-/// with the source directories (the tool and the libraries it uses) whose
-/// changes make it run again.
-const GENERATORS: &[(&str, &[&str])] = &[
-    ("assetgen", &["generation/assets", "implementation/libraries/image"]),
-    ("musicgen", &["generation/music", "implementation/libraries/audio", "implementation/libraries/image"]),
-    (
-        "videogen",
-        &[
-            "generation/videos",
-            "implementation/libraries/gfx",
-            "implementation/libraries/raster",
-            "implementation/libraries/font",
-            "implementation/libraries/audio",
-            "implementation/libraries/image",
-            "implementation/ports/fonts",
-        ],
-    ),
-];
-
-/// Newest modification time of any file under `dir`.
-fn newest_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
-    let mut newest = None;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d).ok()?.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
-                newest = Some(newest.map_or(t, |n: std::time::SystemTime| n.max(t)));
-            }
-        }
-    }
-    newest
-}
-
-/// Runs each generator whose sources changed since its last run.
-fn generate_assets() -> Result {
-    let out = util::generated_dir();
-    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    for (g, sources) in GENERATORS {
-        let stamp = out.join(format!(".{g}.stamp"));
-        let stamp_time = std::fs::metadata(&stamp).and_then(|m| m.modified()).ok();
-        let src_time = sources.iter().filter_map(|s| newest_mtime(&util::workspace_root().join(s))).max();
-        if stamp_time.is_some() && src_time.is_some() && stamp_time >= src_time {
-            continue;
-        }
-        util::status("Generating", format!("media with {g}"));
-        util::run(util::cargo().args(["run", "--quiet", "--release", "--package", g, "--"]).arg(&out))?;
-        std::fs::write(&stamp, b"ok").map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-/// The contents of the boot disk apart from its configuration file.
-struct System {
-    bootloader: Vec<u8>,
-    kernel: Vec<u8>,
-    initrd: Vec<u8>,
-}
-
-/// Builds all components and writes the bootable disk image.
-fn build(o: &Options) -> Result<PathBuf> {
-    let started = std::time::Instant::now();
-    let system = build_system(o)?;
-    let (disk, size) = write_image(o, &system)?;
-    util::status(
-        "Finished",
-        format!(
-            "{} (kernel {}, initrd {}) in {:.1}s",
-            util::human_size(size),
-            util::human_size(system.kernel.len() as u64),
-            util::human_size(system.initrd.len() as u64),
-            started.elapsed().as_secs_f32()
-        ),
-    );
-    Ok(disk)
-}
-
-/// Builds all components and packs the initrd.
-fn build_system(o: &Options) -> Result<System> {
-    let artifacts = components::build_all(o.profile, &o.skip)?;
-    if o.generate {
-        generate_assets()?;
-    }
-
-    util::status("Packing", "initrd");
-    let mut initrd = initrd::builder::Builder::new();
-    for (program, path) in &artifacts.programs {
-        initrd.add(&format!("bin/{}", program.binary), shipped(path, true)?);
-    }
-    // C programs that test the POSIX layer (with a cross compiler only).
-    for (name, exe) in toolchain::c_tests()? {
-        initrd.add(&format!("tests/c/{name}"), exe);
-    }
-    // Rust programs that test its standard library (with Rust only).
-    for (name, exe) in toolchain::rust_tests()? {
-        initrd.add(&format!("tests/rust/{name}"), exe);
-    }
-    // Videos for the stand-in decoder, fakedec (the GUI scripts').
-    let clips = util::workspace_root().join("verification/fakedec/clips");
-    for entry in std::fs::read_dir(&clips).map_err(|e| format!("reading {}: {e}", clips.display()))?.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name != "README.md" {
-            initrd.add(&format!("tests/videos/fake/{name}"), util::read(&entry.path())?);
-        }
-    }
-    // The C toolchain (`cargo orchestration toolchain`): gcc, as, ld, the C
-    // library and its headers, as /system has them.
-    toolchain::relink_native()?;
-    let native = toolchain::native_files()?;
-    if native.is_empty() {
-        util::status("Note", "no C toolchain in the image (build it with `cargo orchestration toolchain`)");
-    }
-    for (path, data) in native {
-        initrd.add(&path, data);
-    }
-    // The media decoder (`cargo orchestration toolchain` builds FFmpeg and
-    // dav1d), which Videos plays videos with, and the media libraries'
-    // tests.
-    if !o.skip.iter().any(|s| s == "mediadec") {
-        match toolchain::mediadec()? {
-            Some(exe) => {
-                initrd.add("bin/mediadec", exe);
-            }
-            None => util::status(
-                "Note",
-                "no media decoder in the image: videos do not play (`cargo orchestration toolchain` builds FFmpeg and \
-                 dav1d)",
-            ),
-        }
-        for (name, exe) in toolchain::media_tests()? {
-            initrd.add(&format!("tests/media/{name}"), exe);
-        }
-    }
-    // The driver VM's Linux (`cargo orchestration linux`, or the first time
-    // an image needs it) and its programs.
-    linux::build_once()?;
-    match linux::guest()? {
-        Some((kernel, initramfs)) => {
-            initrd.add("linux/kernel", kernel);
-            initrd.add("linux/initramfs.cpio", initramfs);
-        }
-        None => util::status(
-            "Note",
-            "no driver VM in the image: nothing but the disks and sound is driven \
-             (`cargo orchestration linux` builds its Linux)",
-        ),
-    }
-    initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
-    // The licence, which About Veda refers to.
-    initrd.add("LICENSE.txt", util::read(&util::workspace_root().join("LICENSE"))?);
-    // The fonts, with their licence (implementation/ports/fonts/X ->
-    // /system/fonts/X), and the generated media at the same relative path;
-    // README files are documentation.
-    for (files, into) in [(ports::dir().join("fonts"), "fonts/"), (util::generated_dir(), "")] {
-        if !files.is_dir() {
-            continue;
-        }
-        let mut stack = vec![files.clone()];
-        while let Some(dir) = stack.pop() {
-            let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.file_name().is_some_and(|n| n != "README.md") {
-                    let rel = path.strip_prefix(&files).unwrap().to_string_lossy().replace('\\', "/");
-                    initrd.add(&format!("{into}{rel}"), util::read(&path)?);
-                }
-            }
-        }
-    }
-    // The applications' manifests, which the start menu lists
-    // (implementation/applications/<name>/<name>.app ->
-    // /system/apps/<name>.app).
-    let applications = util::workspace_root().join("implementation").join("applications");
-    let entries = std::fs::read_dir(&applications).map_err(|e| format!("reading {}: {e}", applications.display()))?;
-    for app in entries.flatten() {
-        let name = format!("{}.app", app.file_name().to_string_lossy());
-        let manifest = app.path().join(&name);
-        if manifest.is_file() {
-            initrd.add(&format!("apps/{name}"), util::read(&manifest)?);
-        }
-    }
-    let initrd = initrd.build();
-    let bootloader = util::read(&artifacts.bootloader)?;
-    let kernel = shipped(&artifacts.kernel, false)?;
-    Ok(System { bootloader, kernel, initrd })
-}
-
-/// The executable at `path` as the system ships it, checked: a Veda
-/// program if `program` (one with `vrt`'s note), and without its symbols
-/// and section headers (`velf::strip`), which the build's own copy keeps
-/// for debugging.
-fn shipped(path: &std::path::Path, program: bool) -> Result<Vec<u8>> {
-    let mut file = util::read(path)?;
-    let invalid = |e: velf::ElfError| format!("{}: {e}", path.display());
-    let kind = velf::Elf::parse_for(&file, arch::MACHINE).map_err(invalid)?.kind();
-    if program && kind != velf::Kind::Veda {
-        return Err(format!("{}: not a Veda program (it lacks the note vrt gives one)", path.display()));
-    }
-    let len = velf::strip(&mut file, arch::MACHINE).map_err(invalid)?;
-    file.truncate(len);
-    Ok(file)
-}
-
-/// The screen of the GUI scripts, of the shots and of the image `build`
-/// writes: the scripts' clicks and the README's pictures are laid out for
-/// it.
-const SCRIPTED_SCREEN: (u32, u32) = (1280, 800);
-
-/// The screen of `run`'s window, and of the live system, which takes a
-/// PC's largest mode up to it.
-const LARGE_SCREEN: (u32, u32) = (1920, 1080);
-
-/// The screen resolution a boot asks for: `--resolution`, else the live
-/// system's or the scripts' (`run` asks for [`LARGE_SCREEN`] itself).
-/// QEMU's display has it for its own size (`qemu::VmConfig::screen`).
-fn screen(o: &Options, live: bool) -> (u32, u32) {
-    o.resolution.unwrap_or(if live { LARGE_SCREEN } else { SCRIPTED_SCREEN })
-}
-
-/// The boot configuration of `o` (screen resolution and kernel command
-/// line), for the disk image or for the live system.
-fn boot_config(o: &Options, live: bool) -> String {
-    let mut cmdline = o.cmdline.clone();
-    if live {
-        // The live system runs from memory and leaves the PC's disks alone.
-        // A PC's clock keeps local time under Windows, so it shows no time
-        // zone.
-        cmdline = format!("live {cmdline}").trim().to_string();
-    } else if !cmdline.split_whitespace().any(|a| a.starts_with("tz="))
-        && let Some(tz) = util::host_utc_offset()
-    {
-        // The machine's clock keeps UTC; local time is the host's, unless the
-        // command line says otherwise.
-        cmdline = format!("{cmdline} tz={tz}").trim().to_string();
-    }
-    let (w, h) = screen(o, live);
-    format!("# Veda boot configuration (read by the UEFI loader)\nresolution={w}x{h}\ncmdline={cmdline}\n")
-}
-
-/// The boot partition's files for `system` with `boot_cfg`.
-fn esp_contents<'a>(system: &'a System, boot_cfg: &'a str) -> image::EspContents<'a> {
-    image::EspContents {
-        bootloader: &system.bootloader,
-        kernel: &system.kernel,
-        initrd: &system.initrd,
-        symbols: &[],
-        boot_cfg,
-    }
-}
-
-/// Writes the disk image of `system` with the boot configuration of `o`
-/// (resolution and kernel command line); returns its path and size.
-fn write_image(o: &Options, system: &System) -> Result<(PathBuf, u64)> {
-    let boot_cfg = boot_config(o, false);
-    let out = util::out_dir();
-    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let disk = out.join("veda.img");
-    util::status("Imaging", disk.display());
-    let size = image::write_disk_image(&disk, &esp_contents(system, &boot_cfg))?;
-    Ok((disk, size))
-}
-
-/// Where `run`, `shot` and `script` keep the live system's ISO image.
-fn live_iso() -> PathBuf {
-    util::out_dir().join("veda.iso")
-}
-
-/// Writes the live system's ISO image of `system` to `path` (see
-/// `image::iso9660`); returns its size.
-fn write_iso(o: &Options, system: &System, path: &std::path::Path) -> Result<u64> {
-    let boot_cfg = boot_config(o, true);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    util::status("Imaging", path.display());
-    image::write_iso_image(path, &esp_contents(system, &boot_cfg))
-}
-
-/// Builds all components and writes the live system's ISO image to `path`.
-fn build_iso(o: &Options, path: &std::path::Path) -> Result {
-    let started = std::time::Instant::now();
-    let system = build_system(o)?;
-    let size = write_iso(o, &system, path)?;
-    util::status("Finished", format!("{} in {:.1}s", util::human_size(size), started.elapsed().as_secs_f32()));
-    Ok(())
-}
-
-/// `iso`: the live system, for a USB stick.
+/// `cargo orchestration iso`: the live system, for a USB stick.
 fn iso(o: &Options) -> Result {
-    let path = o.out.clone().unwrap_or_else(live_iso);
-    build_iso(o, &path)?;
+    let path = o.out.clone().unwrap_or_else(system::iso_image);
+    runner::build_iso(o, &path)?;
     println!(
         "\nWrite it to a USB stick with Rufus (partition scheme GPT, target system UEFI,\n\
          ISO mode), or as it is with any image writer. Start the PC from the stick\n\
@@ -542,21 +52,22 @@ fn iso(o: &Options) -> Result {
     Ok(())
 }
 
+/// `cargo orchestration run`: builds, then boots Veda in a QEMU window.
 fn run(o: &Options) -> Result {
     let install = qemu::QemuInstall::locate()?;
     // A window about as large as a laptop's screen, unless asked otherwise.
-    let o = &Options { resolution: Some(o.resolution.unwrap_or(LARGE_SCREEN)), ..o.clone() };
+    let o = &Options { resolution: Some(o.resolution.unwrap_or(system::LARGE_SCREEN)), ..o.clone() };
     let mut vm = o.vm.clone();
-    let (w, h) = screen(o, o.live);
+    let (w, h) = system::screen(o, o.live);
     vm.screen = qemu::Screen::new(w, h)?;
     let disk = if o.live {
         // A stick with the ISO on it, and no home disk.
-        let iso = live_iso();
-        build_iso(o, &iso)?;
+        let stick = system::live_stick();
+        runner::build_iso(o, &stick)?;
         vm.usb_stick = true;
-        iso
+        stick
     } else {
-        let disk = build(o)?;
+        let disk = runner::build(o)?;
         // The home directory lives on its own disk, kept across builds and runs.
         let home = util::out_dir().join("home.img");
         qemu::prepare_home_disk(&home, o.fresh_home)?;
@@ -569,453 +80,7 @@ fn run(o: &Options) -> Result {
     util::run(&mut cmd)
 }
 
-/// Boots headless and runs an automation script (see `automate.rs`).
-fn script(o: &Options, script: &str) -> Result {
-    match &o.prebuilt {
-        Some(dir) => script_on(o, script, Some(&load_system(dir)?)),
-        None => script_on(o, script, None),
-    }
-}
-
-/// Where `scripts` and `test` keep the system they built, for the scripts'
-/// runs (`--prebuilt`).
-fn system_dir() -> PathBuf {
-    util::out_dir().join("system")
-}
-
-const SYSTEM_PARTS: [&str; 3] = ["bootloader.efi", "kernel.efi", "initrd.img"];
-
-fn save_system(system: &System, dir: &std::path::Path) -> Result {
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    for (name, data) in SYSTEM_PARTS.iter().zip([&system.bootloader, &system.kernel, &system.initrd]) {
-        std::fs::write(dir.join(name), data).map_err(|e| format!("{}: {e}", dir.join(name).display()))?;
-    }
-    Ok(())
-}
-
-fn load_system(dir: &std::path::Path) -> Result<System> {
-    let [bootloader, kernel, initrd] = SYSTEM_PARTS.map(|name| util::read(&dir.join(name)));
-    Ok(System { bootloader: bootloader?, kernel: kernel?, initrd: initrd? })
-}
-
-/// `cargo orchestration scripts FILE...`: builds the system once and runs
-/// the scripts on it.
-fn scripts(o: &Options, files: Vec<PathBuf>) -> Result {
-    let started = std::time::Instant::now();
-    let system = build_system(o)?;
-    util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
-    save_system(&system, &system_dir())?;
-    run_scripts(o, files)
-}
-
-/// Runs `files`, `o.jobs` at a time, each in a process of its own on the
-/// system `system_dir` holds, with a directory of its own (`$VEDA_OUT`: its
-/// disk image, serial log, home disk, firmware variables). Each one's
-/// output goes to `target/veda/test-logs/NAME.log` (and a failing one's
-/// serial log beside it); each result is told as it comes, the longest
-/// scripts (as the last run timed them) first, and those that need the
-/// machine to themselves ([`automate::alone`]) last, one at a time. Fails
-/// if any script did.
-fn run_scripts(o: &Options, mut files: Vec<PathBuf>) -> Result {
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
-    let logs = util::out_dir().join("test-logs");
-    std::fs::create_dir_all(&logs).map_err(|e| format!("{}: {e}", logs.display()))?;
-    let name_of = |p: &PathBuf| p.file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let mut runnable = Vec::new();
-    for path in files.drain(..) {
-        let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-        if let Some(what) = automate::needs_toolchain(&text)
-            && !toolchain::built(what)
-        {
-            util::status(
-                "Skipping",
-                format!("GUI script {} (needs the {what}: `cargo orchestration toolchain`)", name_of(&path)),
-            );
-            continue;
-        }
-        runnable.push((path, automate::alone(&text)));
-    }
-    // The longest first, so that the last to finish are short.
-    let timings_file = logs.join("durations");
-    let timings: std::collections::HashMap<String, f32> = std::fs::read_to_string(&timings_file)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.split_once(' ').and_then(|(n, s)| Some((n.to_string(), s.parse().ok()?))))
-        .collect();
-    let time = |p: &PathBuf| timings.get(&name_of(p)).copied().unwrap_or(60.0);
-    runnable.sort_by(|(a, _), (b, _)| time(b).total_cmp(&time(a)));
-    let (alone, together): (Vec<_>, Vec<_>) = runnable.into_iter().partition(|&(_, alone)| alone);
-    let [alone, together] = [alone, together].map(|b| b.into_iter().map(|(p, _)| p).collect::<Vec<_>>());
-    let total = alone.len() + together.len();
-    let jobs = o.jobs.min(together.len()).max(1);
-    let then = match alone.len() {
-        0 => String::new(),
-        n => format!(", then {n} that need the machine to themselves"),
-    };
-    util::status("Testing", format!("{total} GUI scripts, {jobs} at a time{then}"));
-    // What the scripts' own runs are given: the options but those of this
-    // command.
-    let mut given = Vec::new();
-    let mut it = o.given.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--ui" => {}
-            "--jobs" | "-j" | "--prebuilt" => {
-                it.next();
-            }
-            a if a.ends_with(".vts") => {}
-            _ => given.push(a.clone()),
-        }
-    }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let results: Mutex<Vec<(String, bool, f32)>> = Mutex::new(Vec::new());
-    // Runs `batch`, `jobs` at a time.
-    let run = |batch: Vec<PathBuf>, jobs: usize| {
-        let queue = Mutex::new(batch.into_iter().collect::<VecDeque<_>>());
-        std::thread::scope(|s| {
-            for slot in 0..jobs {
-                let (queue, results, given, exe, logs) = (&queue, &results, &given, &exe, &logs);
-                s.spawn(move || {
-                    let run_dir = util::out_dir().join("jobs").join(slot.to_string());
-                    loop {
-                        // The queue is locked for taking the next only.
-                        let next = queue.lock().unwrap().pop_front();
-                        let Some(path) = next else { break };
-                        let name = name_of(&path);
-                        let log = logs.join(format!("{name}.log"));
-                        let started = std::time::Instant::now();
-                        let ok = std::fs::File::create(&log)
-                            .and_then(|out| {
-                                let err = out.try_clone()?;
-                                std::process::Command::new(exe)
-                                    .arg("script")
-                                    .arg(&path)
-                                    .arg("--prebuilt")
-                                    .arg(system_dir())
-                                    .args(given)
-                                    .env("VEDA_OUT", &run_dir)
-                                    .stdout(out)
-                                    .stderr(err)
-                                    .status()
-                            })
-                            .is_ok_and(|s| s.success());
-                        let secs = started.elapsed().as_secs_f32();
-                        if ok {
-                            util::status("Passed", format!("{name} ({secs:.0} s)"));
-                        } else {
-                            let serial = logs.join(format!("{name}.serial.log"));
-                            let _ = std::fs::copy(run_dir.join("serial.log"), &serial);
-                            let why = std::fs::read_to_string(&log)
-                                .unwrap_or_default()
-                                .lines()
-                                .rev()
-                                .find(|l| l.contains("error:"))
-                                .map(str::to_string)
-                                .unwrap_or_default();
-                            util::failure("Failed", format!("{name} ({secs:.0} s) {why} — {}", log.display()));
-                        }
-                        results.lock().unwrap().push((name, ok, secs));
-                    }
-                });
-            }
-        });
-    };
-    run(together, jobs);
-    run(alone, 1);
-    let results = results.into_inner().unwrap();
-    let mut timings = timings;
-    for (name, _, secs) in &results {
-        timings.insert(name.clone(), *secs);
-    }
-    let mut lines: Vec<String> = timings.iter().map(|(n, s)| format!("{n} {s:.0}")).collect();
-    lines.sort();
-    let _ = std::fs::write(&timings_file, lines.join("\n") + "\n");
-    let failed: Vec<&str> = results.iter().filter(|r| !r.1).map(|r| r.0.as_str()).collect();
-    if failed.is_empty() {
-        util::status("Passed", format!("all {total} GUI scripts"));
-        Ok(())
-    } else {
-        Err(format!("{} of {total} GUI scripts failed: {}", failed.len(), failed.join(", ")))
-    }
-}
-
-/// Runs an automation script on `system`, or on a fresh build if `None`.
-/// Only the boot configuration differs between scripts, so test runs build
-/// the system once and just write a new disk image for each script.
-fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
-    let install = qemu::QemuInstall::locate()?;
-    let mut o = o.clone();
-    // The test microphone's address goes on the command line.
-    let mic = if automate::needs_mic(script) { Some(mic::MicServer::start()?) } else { None };
-    if let Some(m) = &mic {
-        o.cmdline = format!("{} {}", o.cmdline, m.boot_arg()).trim().to_string();
-    }
-    let agent = if automate::needs_agentsim(script) { Some(agentsim::AgentSim::start()?) } else { None };
-    if let Some(a) = &agent {
-        // This computer is the gateway of the guest's network, QEMU's NAT.
-        o.cmdline =
-            format!("{} {}", o.cmdline, a.boot_arg("10.0.2.2", !automate::agent_asleep(script))).trim().to_string();
-    }
-    for extra in automate::boot_cmdline(script) {
-        o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
-    }
-    let o = &o;
-    let live = o.live || automate::live(script);
-    let (w, h) = screen(o, live);
-    let display = qemu::Screen::new(w, h)?;
-    let disk = if live {
-        let iso = live_iso();
-        match system {
-            Some(system) => {
-                write_iso(o, system, &iso)?;
-            }
-            None => build_iso(o, &iso)?,
-        }
-        iso
-    } else {
-        match system {
-            Some(system) => write_image(o, system)?.0,
-            None => build(o)?,
-        }
-    };
-    let mut vm = o.vm.clone();
-    vm.screen = display;
-    vm.audio_wav = (!automate::host_audio(script)).then(|| util::out_dir().join("audio.wav"));
-    if automate::silent_audio(script) {
-        vm.audio_wav = None;
-        vm.audio_silent = true;
-    }
-    // Scripts that reboot the machine need QEMU to stay up across it (and
-    // the HD Audio card, see `automate::sound_card`).
-    vm.allow_reboot = automate::resets(script);
-    if let Some(net) = automate::net_mode(script)? {
-        vm.net = net;
-    }
-    if let Some(card) = automate::sound_card(script)? {
-        vm.sound = card;
-    }
-    if let Some(model) = automate::nic_model(script) {
-        vm.nic_model = Some(model);
-    }
-    if let Some(bus) = automate::disk_bus(script)? {
-        vm.disk_bus = bus;
-    }
-    if let Some(mib) = automate::memory(script)? {
-        vm.memory_mib = mib;
-    }
-    vm.acpi_tables = automate::acpi_tables(script)?;
-    vm.firmware_variables = automate::firmware_variables(script)?;
-    if let Some(input) = automate::input_devices(script)? {
-        vm.input = input;
-    }
-    if let Some(gpu) = automate::gpu(script)? {
-        vm.gpu = Some(gpu);
-    }
-    if automate::usb_net(script) {
-        vm.usb_net = true;
-    }
-    if live {
-        // A stick with the ISO on it, and no home disk.
-        vm.usb_stick = true;
-        vm.usb_stick_writable = automate::live_writable(script);
-    } else {
-        // Every scripted run starts with a new, empty home directory.
-        let home = util::out_dir().join("test-home.img");
-        qemu::prepare_home_disk(&home, true)?;
-        vm.home_disk = Some(home);
-    }
-    let log = automate::run_script(&install, &disk, vm, script, mic, agent)?;
-    println!("--- serial log (tail) ---\n{}", automate::tail(&log, 40));
-    Ok(())
-}
-
-fn shot(o: &Options) -> Result {
-    let out = o.out.clone().unwrap_or_else(|| util::out_dir().join("screen.png"));
-    let wait = match &o.until {
-        Some(text) => format!("wait-serial \"{text}\" 120\nwait 1"),
-        None => format!("wait {}", o.wait),
-    };
-    script(o, &format!("{wait}\nshot \"{}\"\n", out.display()))
-}
-
-/// Library crates with host unit tests (features in parentheses).
-const HOST_TESTED: &[(&str, &[&str])] = &[
-    ("vabi", &[]),
-    ("velf", &[]),
-    ("vposix", &[]),
-    ("mediadec", &[]),
-    ("initrd", &["std"]),
-    ("vheap", &[]),
-    ("vipc", &[]),
-    ("vraster", &[]),
-    ("vfont", &[]),
-    ("vimage", &["encode"]),
-    ("vaudio", &[]),
-    ("vproto", &[]),
-    ("vgfx", &[]),
-    ("vui", &[]),
-    ("vtext", &[]),
-    ("vfiles", &["thumbnails"]),
-    ("ventropy", &[]),
-    ("vnetstack", &[]),
-    ("vnet", &[]),
-    ("vtls", &[]),
-    ("vweb", &[]),
-    ("vagent", &[]),
-    ("vwlan", &[]),
-    ("vacpi", &[]),
-    ("vgpio", &[]),
-    ("vsplash", &[]),
-    ("vglsl", &[]),
-    ("vgl", &[]),
-    ("interceptor-game", &[]),
-    ("videos-core", &[]),
-    ("terminal-core", &[]),
-    ("orchestration", &[]),
-];
-
-fn test(o: &Options) -> Result {
-    // The GUI scripts' pointers and networks are the driver VM's.
-    if o.ui
-        && let Err(why) = linux::runnable()
-    {
-        return Err(format!("the GUI scripts need the driver VM: {why}"));
-    }
-    util::status("Testing", "library unit tests on the host");
-    // Tests of OpenGL ES on the host's GPU drive the system's virglrenderer,
-    // which QEMU's 3D GPU is built on, where QEMU has one.
-    let virgl = qemu::QemuInstall::locate().is_ok_and(|q| q.has_gl_gpu());
-    // On QEMU's GPU, unless `VGL_TEST_RENDERNODE` names another.
-    let node = std::env::var("VGL_TEST_RENDERNODE").ok().filter(|n| !n.is_empty()).or_else(qemu::render_node);
-    for (package, features) in HOST_TESTED {
-        let mut cmd = util::cargo();
-        cmd.args(["test", "--quiet", "--package", package]);
-        if !features.is_empty() {
-            cmd.args(["--features", &features.join(",")]);
-        }
-        util::run(&mut cmd)?;
-    }
-    // The driver VM's programs' logic (touchpads, sound cards' devices, a
-    // display's mode and where pictures go on it, the logs a stick keeps),
-    // on Linux as they run.
-    for package in ["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper"] {
-        util::run(&mut linux::guest_cargo(&["test", "--quiet", "--package", package, "--target", arch::GUEST_TARGET]))?;
-    }
-    // And through Veda's renderer, where it has been built: on softpipe;
-    // on virgl over virglrenderer's test server, as the driver VM's
-    // renderer renders under QEMU; and on this machine's Intel GPU (iris),
-    // as it renders on a PC's.
-    if let Some(dll) = linux::vgallium()? {
-        // As OpenGL hosts keep depth, then as iris does (VR_DEPTH_LOW).
-        for (depth, how) in [("0", ""), ("1", ", depth kept as on iris")] {
-            util::status("Testing", format!("OpenGL ES through Veda's renderer (Mesa's softpipe{how})"));
-            let mut cmd = util::cargo();
-            cmd.args(["test", "--quiet", "--package", "vgl"])
-                .env("VGL_TEST_BACKEND", "gallium")
-                .env("VGL_GALLIUM_DLL", &dll)
-                .env("VR_DEPTH_LOW", depth);
-            util::run(&mut cmd)?;
-        }
-        if let Some(server) = util::find_on_path("virgl_test_server") {
-            util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's virgl, on virglrenderer)");
-            let socket = util::out_dir().join("vtest.sock");
-            let _ = std::fs::remove_file(&socket);
-            std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
-            let mut run = std::process::Command::new(server);
-            run.args(["--multi-clients", "--socket-path"]).arg(&socket);
-            if let Some(node) = &node {
-                run.arg("--rendernode").arg(node);
-            }
-            let mut server = run
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .map_err(|e| format!("starting virgl_test_server: {e}"))?;
-            let started = std::time::Instant::now();
-            while !socket.exists() && started.elapsed() < std::time::Duration::from_secs(10) {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            let mut cmd = util::cargo();
-            cmd.args(["test", "--quiet", "--package", "vgl"])
-                .env("VGL_TEST_BACKEND", "gallium")
-                .env("VGL_GALLIUM_DEVICE", "virgl")
-                .env("VGL_GALLIUM_DLL", &dll)
-                .env("VTEST_SOCKET_NAME", &socket);
-            let result = util::run(&mut cmd);
-            let _ = server.kill();
-            let _ = server.wait();
-            result?;
-        }
-        if linux::intel_gpu() {
-            util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's iris, on this machine's Intel GPU)");
-            // Interceptor's game too: its shadows, sparks and cars on the
-            // GPU.
-            for package in ["vgl", "interceptor-game"] {
-                let mut cmd = util::cargo();
-                cmd.args(["test", "--quiet", "--package", package])
-                    .env("VGL_TEST_BACKEND", "gallium")
-                    .env("VGL_GALLIUM_DEVICE", "iris")
-                    .env("VGL_GALLIUM_DLL", &dll);
-                util::run(&mut cmd)?;
-            }
-        }
-    }
-    if virgl {
-        // QEMU renders on desktop OpenGL, and on OpenGL ES with `gl=es`.
-        for (host, what) in [("desktop", "desktop OpenGL"), ("gles", "OpenGL ES")] {
-            util::status("Testing", format!("OpenGL ES on the host's GPU (QEMU's virglrenderer on {what})"));
-            let mut cmd = util::cargo();
-            cmd.args(["test", "--quiet", "--package", "vgl"])
-                .env("VGL_TEST_BACKEND", "virgl")
-                .env("VGL_TEST_HOST", host);
-            if let Some(node) = &node {
-                cmd.env("VGL_TEST_RENDERNODE", node);
-            }
-            util::run(&mut cmd)?;
-        }
-    }
-    // One build serves every boot below.
-    let started = std::time::Instant::now();
-    let system = build_system(o)?;
-    util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
-    save_system(&system, &system_dir())?;
-    util::status("Testing", "integration tests inside Veda");
-    let mut o = o.clone();
-    o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
-    // The last test restarts the window system; give the desktop a moment
-    // to come back before the screenshot.
-    let checks =
-        "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 600\nwait 3\nshot target/veda/test-desktop.png\n";
-    script_on(&o, checks, Some(&system))?;
-    if o.ui {
-        // The GUI scripts, then the agent's (with the stand-in for Deepgram;
-        // verification/real, which talks to the real one, is left out): each
-        // group's own, and those that hold only on the architecture's
-        // machine (`arch/<architecture>/`).
-        let mut scripts: Vec<PathBuf> = Vec::new();
-        for group in ["ui", "agent"] {
-            let dir = util::workspace_root().join("verification").join(group);
-            let arch_dir = dir.join("arch").join(arch::NAME);
-            for dir in std::iter::once(dir).chain(arch_dir.is_dir().then_some(arch_dir)) {
-                let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
-                    .map_err(|e| format!("reading {}: {e}", dir.display()))?
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().is_some_and(|x| x == "vts"))
-                    .collect();
-                found.sort();
-                scripts.extend(found);
-            }
-        }
-        let mut ui = o.clone();
-        ui.cmdline.clear();
-        run_scripts(&ui, scripts)?;
-    }
-    util::status("Passed", "all tests");
-    Ok(())
-}
-
+/// `cargo orchestration doctor`.
 fn doctor() -> Result {
     let mut ok = true;
     let mut check = |name: &str, r: std::result::Result<String, String>| match r {
@@ -1026,8 +91,7 @@ fn doctor() -> Result {
         }
     };
     println!("Checking the Veda build environment...");
-    let rustc = std::process::Command::new("rustc").arg("--version").output();
-    check("rustc", rustc.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).map_err(|e| e.to_string()));
+    check("rustc", tool_version(std::process::Command::new("rustc").arg("--version")));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();
     let targets = targets.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).map_err(|e| e.to_string());
     for (name, target) in
@@ -1081,15 +145,22 @@ fn doctor() -> Result {
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
+/// What a tool says of its version, if it runs and succeeds.
+fn tool_version(cmd: &mut std::process::Command) -> std::result::Result<String, String> {
+    let out = cmd.output().map_err(|e| format!("cannot run it: {e}"))?;
+    let said = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_string();
+    if out.status.success() {
+        Ok(said(&out.stdout))
+    } else {
+        Err(format!("it fails ({}): {}", out.status, said(&out.stderr)))
+    }
+}
+
 /// The linker of the kernel and of user-space programs
 /// (`components::USER_LINKER`): LLVM's, which comes with Rust's toolchain,
 /// beside the host's libraries.
 fn rust_lld() -> Result<PathBuf> {
-    let out = std::process::Command::new("rustc")
-        .args(["--print", "target-libdir"])
-        .output()
-        .map_err(|e| format!("running rustc: {e}"))?;
-    let libdir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let libdir = PathBuf::from(tool_version(std::process::Command::new("rustc").args(["--print", "target-libdir"]))?);
     let lld = libdir.parent().unwrap_or(&libdir).join("bin").join(components::USER_LINKER);
     if lld.is_file() {
         Ok(lld)
@@ -1112,24 +183,22 @@ fn main() -> ExitCode {
         _ => crates::prepare(),
     };
     let result = prepared.and_then(|()| match cmd {
-        "build" => parse_options(rest).and_then(|o| build(&o).map(|_| ())),
-        "iso" => parse_options(rest).and_then(|o| iso(&o)),
-        "run" => parse_options(rest).and_then(|o| run(&o)),
-        "shot" => parse_options(rest).and_then(|o| shot(&o)),
-        "test" => parse_options(rest).and_then(|o| test(&o)),
+        "build" => cli::parse_options(rest).and_then(|o| runner::build(&o).map(|_| ())),
+        "iso" => cli::parse_options(rest).and_then(|o| iso(&o)),
+        "run" => cli::parse_options(rest).and_then(|o| run(&o)),
+        "shot" => cli::parse_options(rest).and_then(|o| runner::shot(&o)),
+        "test" => cli::parse_options(rest).and_then(|o| runner::test(&o)),
         "scripts" => {
             let files: Vec<PathBuf> = rest.iter().filter(|a| a.ends_with(".vts")).map(PathBuf::from).collect();
             if files.is_empty() {
                 Err("usage: cargo orchestration scripts FILE... [options]".into())
             } else {
-                parse_options(&rest.iter().filter(|a| !a.ends_with(".vts")).cloned().collect::<Vec<_>>())
-                    .and_then(|o| scripts(&o, files))
+                cli::parse_options(&rest.iter().filter(|a| !a.ends_with(".vts")).cloned().collect::<Vec<_>>())
+                    .and_then(|o| runner::scripts(&o, &files))
             }
         }
         "script" => match rest.split_first() {
-            Some((file, opts)) => std::fs::read_to_string(file)
-                .map_err(|e| format!("reading {file}: {e}"))
-                .and_then(|text| parse_options(opts).and_then(|o| script(&o, &text))),
+            Some((file, opts)) => cli::parse_options(opts).and_then(|o| runner::script(&o, file)),
             None => Err("usage: cargo orchestration script FILE [options]".into()),
         },
         "acpi" => acpi::command(rest),
@@ -1149,5 +218,18 @@ fn main() -> ExitCode {
             eprintln!("\x1b[1;31merror:\x1b[0m {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tool_that_fails_is_no_version() {
+        assert!(tool_version(std::process::Command::new("sh").args(["-c", "echo 1.0"])).is_ok_and(|v| v == "1.0"));
+        let failing = tool_version(std::process::Command::new("sh").args(["-c", "echo broken >&2; exit 3"]));
+        assert!(failing.is_err_and(|e| e.contains("broken")));
+        assert!(tool_version(&mut std::process::Command::new("/nonexistent/rustc")).is_err());
     }
 }

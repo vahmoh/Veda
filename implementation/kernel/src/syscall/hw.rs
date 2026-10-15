@@ -80,13 +80,14 @@ pub fn irq_raise(raw: RawHandle) -> SysResult {
     ok(0)
 }
 
-pub fn msi_create(res: RawHandle, device: usize, out: usize) -> SysResult {
+pub fn msi_create(res: RawHandle, device: usize, limit: usize, out: usize) -> SysResult {
     let r = get_resource(res, Rights::NONE)?;
     let device = u16::try_from(device).map_err(|_| Error::InvalidArgs)?;
     if !r.permits(resource_kind::PCI, device as u64, 1) {
         return Err(Error::AccessDenied);
     }
-    let (i, (address, data)) = Interrupt::new_msi(device).ok_or(Error::LimitReached)?;
+    let limit = u32::try_from(limit).unwrap_or(u32::MAX);
+    let (i, (address, data)) = Interrupt::new_msi(device, limit)?;
     let info = MsiInfo { address, data, vector: i.vector as u32 };
     let rights = Rights(Rights::BASIC.0 | Rights::WRITE.0);
     let h = insert(KObject::Interrupt(i), rights)?;

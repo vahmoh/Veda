@@ -58,7 +58,7 @@ mod raster;
 use core::fmt;
 
 pub use cache::{CacheStats, GlyphCache, GlyphKey, SUBPIXEL_BINS, subpixel_position};
-pub use font::{Font, FontMetrics, OutlineFormat, OutlineScratch};
+pub use font::{Font, FontMetrics, OutlineFormat};
 pub use layout::{FontCollection, PositionedGlyph, ScaledFont};
 pub use name::name_id;
 pub use outline::{BoundsSink, OutlineSink, PathSink};

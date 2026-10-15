@@ -27,10 +27,10 @@ pub(crate) mod vertex;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use vglsl::interp::{Env, Exec, Lanes};
 
@@ -69,12 +69,15 @@ const SCENE_LIMIT: usize = 64 << 20;
 /// Draws with at least this many vertices shade them in parallel.
 const PARALLEL_VERTICES: usize = 2048;
 
-/// A raw pointer that may cross threads (the code using it keeps
-/// accesses disjoint).
+/// A raw pointer that may cross threads: the workers of a parallel job
+/// each write a disjoint part of what it points to, which outlives the job.
 #[derive(Clone, Copy)]
 struct SyncPtr<T>(*mut T);
-// SAFETY: see the type's documentation.
+// SAFETY: sending the pointer is sending an address; every use of it
+// dereferences only the part of the memory its worker has to itself.
 unsafe impl<T> Send for SyncPtr<T> {}
+// SAFETY: as for `Send`: shared among the workers, the pointer is never
+// used to reach memory another worker uses.
 unsafe impl<T> Sync for SyncPtr<T> {}
 
 impl<T> SyncPtr<T> {
@@ -107,7 +110,7 @@ impl SoftBackend {
     pub fn new(workers: Box<dyn Workers>) -> SoftBackend {
         SoftBackend {
             caps: Caps {
-                name: "Veda software renderer",
+                name: String::from("Veda software renderer"),
                 max_texture_size: 8192,
                 max_3d_texture_size: 2048,
                 max_cube_map_size: 8192,
@@ -247,12 +250,6 @@ impl SoftBackend {
         for b in bindings {
             let s = b.view.and_then(|v| {
                 let r = self.res(v.resource)?;
-                let dim = match v.target {
-                    Target::Texture3D => vglsl::types::Dim::D3,
-                    Target::TextureCube => vglsl::types::Dim::Cube,
-                    Target::Texture2DArray => vglsl::types::Dim::D2Array,
-                    _ => vglsl::types::Dim::D2,
-                };
                 let levels: Vec<TexLevel> = (v.base_level..=v.max_level)
                     .filter_map(|l| r.level(l))
                     .map(|lv| TexLevel {
@@ -267,15 +264,7 @@ impl SoftBackend {
                 if levels.is_empty() || r.samples > 1 {
                     return None;
                 }
-                Some(Sampled {
-                    levels,
-                    dim,
-                    format: r.desc.format,
-                    texel: r.desc.format.bytes(),
-                    kind: Sampled::kind_of(r.desc.format),
-                    swizzle: v.swizzle,
-                    state: b.sampler,
-                })
+                Some(Sampled::new(&v, b.sampler, r.desc.format, levels))
             });
             if let (Some(v), Some(scene)) = (b.view, self.scene.as_mut())
                 && s.is_some()
@@ -287,45 +276,10 @@ impl SoftBackend {
         out
     }
 
-    /// Copies each uniform block's buffer range (zero-filled to the block's
-    /// size).
-    fn block_contents(&self, program: &SoftProgram, ranges: &[Option<BufferRange>]) -> Vec<Vec<u8>> {
-        let infos = &program.program.linked.blocks;
-        infos
-            .iter()
-            .enumerate()
-            .map(|(i, info)| {
-                let mut v = vec![0u8; info.size as usize];
-                if let Some(Some(r)) = ranges.get(i)
-                    && let Some(res) = self.res(r.buffer)
-                {
-                    let start = r.offset.min(res.data.len());
-                    let end = start.saturating_add(r.size.min(info.size as usize)).min(res.data.len());
-                    v[..end - start].copy_from_slice(&res.data[start..end]);
-                }
-                v
-            })
-            .collect()
+    /// The bytes of a buffer.
+    fn bytes(&self, id: ResourceId) -> Option<&[u8]> {
+        self.res(id).map(|r| r.data.as_slice())
     }
-}
-
-/// Indices of a draw, read from its element buffer (as far as the buffer
-/// goes).
-pub(crate) fn read_indices(data: &[u8], offset: usize, count: u32, ty: IndexType) -> Vec<u32> {
-    let size = ty.bytes();
-    let available = data.len().saturating_sub(offset) / size;
-    let n = (count as usize).min(available);
-    let mut out = Vec::new();
-    if out.try_reserve_exact(n).is_err() {
-        return out;
-    }
-    let b = &data[offset..offset + n * size];
-    match ty {
-        IndexType::U8 => out.extend(b.iter().map(|&x| u32::from(x))),
-        IndexType::U16 => out.extend(b.as_chunks::<2>().0.iter().map(|c| u32::from(u16::from_le_bytes([c[0], c[1]])))),
-        IndexType::U32 => out.extend(b.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))),
-    }
-    out
 }
 
 /// A primitive of the vertex stream: vertex positions, the provoking
@@ -382,6 +336,33 @@ fn assemble(mode: Mode, stream: &[Option<u32>], mut f: impl FnMut(Prim)) {
     }
 }
 
+/// The vertices a draw shades, each once: its distinct indices in order
+/// (or its consecutive vertices), and where each entry of its vertex stream
+/// is among them (`None` at restarts); `None` if there is no memory for
+/// them.
+fn vertices(
+    indices: Option<(&[u8], IndexType)>,
+    info: &DrawInfo,
+    restart: bool,
+) -> Option<(Vec<u32>, Vec<Option<u32>>)> {
+    let mut stream = vertex::stream(indices, info, restart)?;
+    let mut ids = Vec::new();
+    ids.try_reserve_exact(stream.len()).ok()?;
+    ids.extend(stream.iter().flatten());
+    if indices.is_some() {
+        ids.sort_unstable();
+        ids.dedup();
+        for e in &mut stream {
+            *e = e.map(|i| ids.binary_search(&i).map_or(0, |s| s as u32));
+        }
+    } else {
+        for (k, e) in stream.iter_mut().enumerate() {
+            *e = Some(k as u32);
+        }
+    }
+    Some((ids, stream))
+}
+
 impl Backend for SoftBackend {
     fn caps(&self) -> &Caps {
         &self.caps
@@ -412,6 +393,10 @@ impl Backend for SoftBackend {
     }
 
     fn write(&mut self, id: ResourceId, level: u32, region: Region, data: &[u8], row_pitch: usize, image_pitch: usize) {
+        let Some(texel) = self.res(id).map(Resource::transfer_texel) else { return };
+        if transfer_bytes(&region, texel, row_pitch, image_pitch).is_none_or(|n| data.len() < n) {
+            return;
+        }
         self.flush_if_uses(id);
         if let Some(r) = self.res_mut(id) {
             r.write(level, region, data, row_pitch, image_pitch);
@@ -427,6 +412,10 @@ impl Backend for SoftBackend {
         row_pitch: usize,
         image_pitch: usize,
     ) {
+        let Some(texel) = self.res(id).map(Resource::transfer_texel) else { return };
+        if transfer_bytes(&region, texel, row_pitch, image_pitch).is_none_or(|n| out.len() < n) {
+            return;
+        }
         self.flush_if_uses(id);
         if let Some(r) = self.res(id) {
             r.read(level, region, out, row_pitch, image_pitch);
@@ -477,8 +466,7 @@ impl Backend for SoftBackend {
     }
 
     fn create_program(&mut self, program: Arc<vglsl::program::Program>) -> ProgramId {
-        let id = self.next_program;
-        self.next_program = self.next_program.wrapping_add(1).max(1);
+        let id = unused_id(&self.programs, &mut self.next_program);
         self.programs.insert(id, Arc::new(SoftProgram::new(program)));
         id
     }
@@ -490,13 +478,14 @@ impl Backend for SoftBackend {
 
     fn draw(&mut self, state: &DrawState<'_>, info: &DrawInfo) {
         let Some(prog) = self.programs.get(&state.program).cloned() else { return };
-        // Uniform blocks and textures as this draw sees them.
-        let blocks = self.block_contents(&prog, state.blocks);
         let fb = *state.framebuffer;
         if self.scene_for(&fb).is_none() {
             return;
         }
-        let textures = self.sampled(state.textures);
+        // Uniform blocks and textures as this draw sees them, kept with its
+        // record for the fragment stage.
+        let blocks = Arc::new(vertex::block_snapshots(&prog.program, state.blocks, |id| self.bytes(id)));
+        let textures = Arc::new(self.sampled(state.textures));
         let block_refs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
         let tex = DrawTextures { bound: &textures };
         let env = Env { uniforms: state.uniforms, blocks: &block_refs, textures: &tex };
@@ -509,58 +498,33 @@ impl Backend for SoftBackend {
         let prologue = exec.regs[..prog.fs.uniform_registers].to_vec();
         exec.prologue(&prog.vs, &env);
         let vs_prologue = exec.regs[..prog.vs.uniform_registers].to_vec();
-        // Vertex inputs.
+        // Vertex inputs, and the vertices to shade.
         let resources = &self.resources;
-        let get = |id: ResourceId| resources.get(id.checked_sub(1)? as usize)?.as_ref();
-        let fetch: Vec<vertex::Fetch<'_>> = state
-            .attribs
-            .iter()
-            .map(|a| vertex::Fetch {
-                data: a.buffer.and_then(get).map(|r| r.data.as_slice()),
-                offset: a.offset,
-                stride: a.stride as usize,
-                size: a.size,
-                ty: a.ty,
-                normalized: a.normalized,
-                integer: a.integer,
-                divisor: a.divisor,
-                current: a.current,
-            })
-            .collect();
-        // The vertex stream: indices, or consecutive vertices.
-        let stream: Vec<Option<u32>> = match state.index {
-            Some((buffer, ty)) => {
-                let data = get(buffer).map_or(&[][..], |r| r.data.as_slice());
-                let restart = ty.restart();
-                read_indices(data, info.first, info.count, ty)
-                    .into_iter()
-                    .map(|i| if state.primitive_restart && i == restart { None } else { Some(i) })
-                    .collect()
-            }
-            None => (0..info.count).map(|k| Some((info.first as u32).wrapping_add(k))).collect(),
-        };
-        // Each vertex is shaded once: the distinct indices, in order.
-        let mut ids: Vec<u32> = stream.iter().flatten().copied().collect();
-        if state.index.is_some() {
-            ids.sort_unstable();
-            ids.dedup();
-        }
+        let get = |id: ResourceId| Some(resources.get(id.checked_sub(1)? as usize)?.as_ref()?.data.as_slice());
+        let fetch = vertex::fetches(state.attribs, get);
+        let indices = state.index.map(|(b, ty)| (get(b).unwrap_or(&[]), ty));
         let words = vertex::vertex_words(&prog);
         let feedback = state.feedback.filter(|_| !prog.feedback.is_empty());
         let ncap = prog.feedback.len();
-        let mut out: Vec<u32> = Vec::new();
-        let mut captured: Vec<u32> = Vec::new();
-        let mut recorded: Vec<u32> = Vec::new();
-        if out.try_reserve_exact(ids.len() * words).is_err()
-            || (feedback.is_some() && captured.try_reserve_exact(ids.len() * ncap).is_err())
-        {
+        // The vertices' outputs, what they capture, and what transform
+        // feedback records: whole primitives, of every instance.
+        let space = (|| {
+            let (ids, places) = vertices(indices, info, state.primitive_restart)?;
+            let out = crate::pixels::try_filled(ids.len().checked_mul(words)?, 0u32)?;
+            let mut captured = Vec::new();
+            let mut recorded = Vec::new();
+            if feedback.is_some() {
+                captured = crate::pixels::try_filled(ids.len().checked_mul(ncap)?, 0u32)?;
+                let whole =
+                    places.len() / vertex::primitive_vertices(info.mode) * vertex::primitive_vertices(info.mode);
+                recorded.try_reserve_exact(whole.checked_mul(ncap)?.checked_mul(info.instances as usize)?).ok()?;
+            }
+            Some((ids, places, out, captured, recorded))
+        })();
+        let Some((ids, places, mut out, mut captured, mut recorded)) = space else {
             self.exec = Some(exec);
             return;
-        }
-        out.resize(ids.len() * words, 0);
-        if feedback.is_some() {
-            captured.resize(ids.len() * ncap, 0);
-        }
+        };
         let draw_state = FragState {
             depth_stencil: state.depth_stencil,
             blend: state.blend,
@@ -571,7 +535,9 @@ impl Backend for SoftBackend {
                 && prog.frag_depth.is_none()
                 && !(fb.samples > 1 && (state.raster.alpha_to_coverage || state.raster.sample_coverage.is_some())),
         };
-        let scene = self.scene.as_mut().unwrap();
+        let depth_format =
+            fb.depth.and_then(|s| Some(resources.get(s.resource.checked_sub(1)? as usize)?.as_ref()?.desc.format));
+        let Some(scene) = self.scene.as_mut() else { return };
         let draw_index = scene.draws.len() as u32;
         scene.draws.push(DrawRecord {
             program: prog.clone(),
@@ -581,6 +547,7 @@ impl Backend for SoftBackend {
             textures: textures.clone(),
             state: draw_state,
             query: self.active_query.clone(),
+            abandoned: AtomicBool::new(false),
         });
         // Rasterization bounds.
         let fbw = scene.targets.width as i32;
@@ -600,10 +567,11 @@ impl Backend for SoftBackend {
         ];
         let tri_rect =
             [clip_rect[0].max(vpr[0]), clip_rect[1].max(vpr[1]), clip_rect[2].min(vpr[2]), clip_rect[3].min(vpr[3])];
-        let depth_format =
-            fb.depth.and_then(|s| self.resources.get(s.resource as usize - 1)?.as_ref().map(|r| r.desc.format));
         let (point_size, line_width) = (self.caps.point_size, self.caps.line_width);
         let threads = self.workers.threads();
+        let whole = places.len() / vertex::primitive_vertices(info.mode) * vertex::primitive_vertices(info.mode);
+        // A vertex shader that runs away leaves the rest of the draw out.
+        let abandoned = AtomicBool::new(false);
         for instance in 0..info.instances {
             // Shade the vertices.
             let parallel = threads > 1 && ids.len() >= PARALLEL_VERTICES;
@@ -614,7 +582,7 @@ impl Backend for SoftBackend {
                 let out_ptr = SyncPtr(out.as_mut_ptr());
                 let cap_ptr = SyncPtr(captured.as_mut_ptr());
                 let has_cap = feedback.is_some();
-                let (prog_ref, fetch_ref, ids_ref, vsp) = (&prog, &fetch, &ids, &vs_prologue);
+                let (prog_ref, fetch_ref, ids_ref, vsp, gone) = (&prog, &fetch, &ids, &vs_prologue, &abandoned);
                 // The environment is rebuilt in each worker from its
                 // thread-safe parts.
                 let (uniforms, blocks_ref, tex_ref) = (state.uniforms, &block_refs, &tex);
@@ -632,49 +600,40 @@ impl Backend for SoftBackend {
                             break;
                         }
                         let (a, b) = (c * chunk, ((c + 1) * chunk).min(ids_ref.len()));
-                        // SAFETY: chunks are disjoint ranges of `out` and
-                        // `captured`, each handed to one worker.
+                        // SAFETY: chunks are disjoint ranges of `out` (which
+                        // holds `words` per vertex), each handed to one
+                        // worker, which `out` outlives.
                         let o =
                             unsafe { core::slice::from_raw_parts_mut(out_ptr.get().add(a * words), (b - a) * words) };
                         let cap = if has_cap {
+                            // SAFETY: as for `out`; `captured` holds `ncap`
+                            // words per vertex when there is feedback.
                             Some(unsafe {
                                 core::slice::from_raw_parts_mut(cap_ptr.get().add(a * ncap), (b - a) * ncap)
                             })
                         } else {
                             None
                         };
-                        vertex::shade(prog_ref, fetch_ref, &env, &mut ex, &ids_ref[a..b], instance, o, cap);
+                        vertex::shade(prog_ref, fetch_ref, &env, &mut ex, &ids_ref[a..b], instance, o, cap, gone);
                     }
                 };
                 self.workers.run(&job);
             } else {
                 exec.regs[..vs_prologue.len()].copy_from_slice(&vs_prologue);
                 let cap = if feedback.is_some() { Some(&mut captured[..]) } else { None };
-                vertex::shade(&prog, &fetch, &env, &mut exec, &ids, instance, &mut out, cap);
+                vertex::shade(&prog, &fetch, &env, &mut exec, &ids, instance, &mut out, cap, &abandoned);
             }
-            // Where each stream entry's vertex is.
-            let slot = |i: u32| -> u32 {
-                if state.index.is_some() {
-                    ids.binary_search(&i).map_or(0, |s| s as u32)
-                } else {
-                    i.wrapping_sub(info.first as u32)
-                }
-            };
-            let positions: Vec<Option<u32>> = stream.iter().map(|x| x.map(slot)).collect();
+            if abandoned.load(Ordering::Relaxed) {
+                break;
+            }
             // Transform feedback records whole primitives in order.
             if feedback.is_some() {
-                let per = match info.mode {
-                    Mode::Points => 1,
-                    Mode::Lines => 2,
-                    _ => 3,
-                };
-                let whole = positions.len() / per * per;
-                for &p in positions.iter().take(whole).flatten() {
+                for &p in places[..whole].iter().flatten() {
                     let v = p as usize * ncap;
                     recorded.extend_from_slice(&captured[v..v + ncap]);
                 }
             }
-            let scene = self.scene.as_mut().unwrap();
+            let Some(scene) = self.scene.as_mut() else { break };
             let mut setup = Setup {
                 scene,
                 draw: draw_index,
@@ -689,7 +648,7 @@ impl Backend for SoftBackend {
             };
             let vtx = |p: u32| &out[p as usize * words..(p as usize + 1) * words];
             if !state.raster.discard {
-                assemble(info.mode, &positions, |p| match p {
+                assemble(info.mode, &places, |p| match p {
                     Prim::Tri(a, b, c) => setup.triangle([vtx(a), vtx(b), vtx(c)]),
                     Prim::Line(a, b, pv) => setup.line(vtx(a), vtx(b), vtx(pv)),
                     Prim::Point(a) => setup.point(vtx(a)),
@@ -730,8 +689,7 @@ impl Backend for SoftBackend {
     }
 
     fn begin_query(&mut self, _kind: QueryKind) -> QueryId {
-        let id = self.next_query;
-        self.next_query = self.next_query.wrapping_add(1).max(1);
+        let id = unused_id(&self.queries, &mut self.next_query);
         let counter = Arc::new(AtomicU64::new(0));
         self.queries.insert(id, counter.clone());
         self.active_query = Some(counter);
@@ -769,8 +727,8 @@ impl Backend for SoftBackend {
         let Some(r) = self.res(color) else { return };
         let Some(lv) = r.level(0).copied() else { return };
         let (w, h) = (width.min(lv.width) as usize, height.min(lv.height) as usize);
-        let (dw, dh, opaque) = (dst.width as usize, dst.height as usize, dst.opaque);
-        if h == 0 || w == 0 || dw == 0 || dh == 0 || dst.pixels.len() < (dh - 1) * dst.stride + dw {
+        let (dw, dh, opaque, dstride) = (dst.width() as usize, dst.height() as usize, dst.opaque(), dst.stride());
+        if h == 0 || w == 0 || dw == 0 || dh == 0 {
             return;
         }
         // The same size: converted straight into the window. Otherwise into
@@ -778,12 +736,10 @@ impl Backend for SoftBackend {
         let direct = (w, h) == (dw, dh);
         let mut image = Vec::new();
         let (out, stride) = if direct {
-            (dst.pixels.as_mut_ptr(), dst.stride)
+            (dst.pixels().as_mut_ptr(), dstride)
         } else {
-            if image.try_reserve_exact(w * h).is_err() {
-                return;
-            }
-            image.resize(w * h, 0u32);
+            let Some(i) = crate::pixels::try_filled(w * h, 0u32) else { return };
+            image = i;
             (image.as_mut_ptr(), w)
         };
         let format = r.desc.format;
@@ -802,8 +758,11 @@ impl Backend for SoftBackend {
                 for y in first..(first + rows).min(h) {
                     // Row 0 of a GL image is the bottom one.
                     let src = &data[lv.offset + (lv.height as usize - 1 - y) * lv.row..][..w * lv.texel];
-                    // SAFETY: each row of `out` is written by one worker only,
-                    // and the length was checked above.
+                    // SAFETY: row `y` of `out`, `w` words from `y * stride`,
+                    // lies in the window's pixels (rows `stride` apart, at
+                    // least `w` wide, all in its slice: `Present`'s
+                    // invariant) or the image (`w` x `h`); rows do not
+                    // overlap, and each is written by one worker only.
                     let row = unsafe { core::slice::from_raw_parts_mut(out.get().add(y * stride), w) };
                     match (format, samples, opaque) {
                         (crate::format::Format::Rgba8Unorm | crate::format::Format::Rgbx8Unorm, 1, true) => {
@@ -825,7 +784,7 @@ impl Backend for SoftBackend {
         self.workers.run(&job);
         if !direct {
             let next = AtomicUsize::new(0);
-            let (pixels, dstride) = (SyncPtr(dst.pixels.as_mut_ptr()), dst.stride);
+            let pixels = SyncPtr(dst.pixels().as_mut_ptr());
             let image = &image;
             let job = |_: usize| {
                 loop {
@@ -835,8 +794,10 @@ impl Backend for SoftBackend {
                     }
                     let last = (first + rows).min(dh);
                     let len = (last - first - 1) * dstride + dw;
-                    // SAFETY: rows `first..last` of the window are written
-                    // by this worker only; the length was checked above.
+                    // SAFETY: rows `first..last` of the window, which lie in
+                    // its pixels and end before row `last` starts (rows are
+                    // `dstride` apart, at least `dw` wide: `Present`'s
+                    // invariant); written by this worker only.
                     let part = unsafe { core::slice::from_raw_parts_mut(pixels.get().add(first * dstride), len) };
                     crate::present::scale_rows(image, w, h, dw, dh, part, dstride, first..last);
                 }

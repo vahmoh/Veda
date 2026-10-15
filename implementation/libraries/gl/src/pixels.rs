@@ -10,6 +10,7 @@
 //! and read back unconverted, as the specification requires (only sampling,
 //! blending and blits convert them).
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 use crate::context::PixelStore;
@@ -75,9 +76,15 @@ impl<'a> From<&'a mut Vec<u8>> for PixelsMut<'a> {
 /// (sizes come from applications, so running out must be an error, not an
 /// abort).
 pub fn try_zeroed(len: usize) -> Option<Vec<u8>> {
+    try_filled(len, 0)
+}
+
+/// `n` copies of `value`, or `None` if there is not enough memory (as for
+/// [`try_zeroed`]).
+pub fn try_filled<T: Clone>(n: usize, value: T) -> Option<Vec<T>> {
     let mut v = Vec::new();
-    v.try_reserve_exact(len).ok()?;
-    v.resize(len, 0);
+    v.try_reserve_exact(n).ok()?;
+    v.resize(n, value);
     Some(v)
 }
 
@@ -101,9 +108,7 @@ pub struct Layout {
 /// The layout of a box of pixels of `client`'s layout under the storage
 /// modes `store`, or `None` if its size does not fit in memory.
 pub fn layout(client: Client, width: u32, height: u32, depth: u32, store: &PixelStore) -> Option<Layout> {
-    let (n, s) = if client.packed() { (1, client.type_bytes()) } else { (client.components(), client.type_bytes()) };
-    let pixel = n * s;
-    group_layout(pixel, s, width, height, depth, store)
+    group_layout(client.bytes_per_pixel(), client.type_bytes(), width, height, depth, store)
 }
 
 /// [`layout`] for groups of `pixel` bytes made of `element`-byte values.
@@ -206,6 +211,50 @@ pub fn same_layout(client: Client, f: Format) -> bool {
             | (ALPHA, HALF_FLOAT, F::A16Float)
             | (LUMINANCE_ALPHA, HALF_FLOAT, F::L16A16Float)
     )
+}
+
+/// Texels to write to an image (`Backend::write`): `bytes` from `start`
+/// on, rows `row` bytes apart and images `image` apart.
+#[derive(Debug)]
+pub struct Texels<'a> {
+    pub bytes: Cow<'a, [u8]>,
+    pub start: usize,
+    pub row: usize,
+    pub image: usize,
+}
+
+impl<'a> Texels<'a> {
+    /// Tightly packed texels of `width` x `height` images, `texel` bytes
+    /// each.
+    pub fn packed(bytes: impl Into<Cow<'a, [u8]>>, width: u32, height: u32, texel: usize) -> Texels<'a> {
+        let row = width as usize * texel;
+        Texels { bytes: bytes.into(), start: 0, row, image: row * height as usize }
+    }
+
+    /// The bytes from the first texel on.
+    pub fn data(&self) -> &[u8] {
+        self.bytes.get(self.start..).unwrap_or(&[])
+    }
+}
+
+/// Application pixels (`src`, the bytes up to `layout.end`) as `f`'s
+/// texels: the pixels themselves, where they lie, if they are laid out as
+/// the texels are; otherwise converted, tightly packed. `None` if there is
+/// no memory to convert them into.
+pub fn texels<'a>(
+    client: Client,
+    src: Cow<'a, [u8]>,
+    layout: &Layout,
+    width: u32,
+    height: u32,
+    depth: u32,
+    f: Format,
+) -> Option<Texels<'a>> {
+    if same_layout(client, f) {
+        return Some(Texels { bytes: src, start: layout.start, row: layout.row, image: layout.image });
+    }
+    let out = unpack(client, &src, layout, width, height, depth, f)?;
+    Some(Texels::packed(out, width, height, f.bytes()))
 }
 
 /// Converts application pixels (`src`, laid out as `layout` says) to `f`'s

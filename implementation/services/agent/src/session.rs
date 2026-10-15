@@ -10,7 +10,13 @@
 //! out first; microphone audio recorded before Deepgram confirms the
 //! settings is held and sent right after, so the first words are not lost;
 //! messages and voice come back through [`Session::poll`], which never
-//! blocks.
+//! blocks. Deepgram has a few seconds to confirm the settings
+//! ([`Session::overdue`]).
+//!
+//! Sending happens on the agent's one loop, which also serves the
+//! interface, approvals and timers: a write may wait for the network only
+//! briefly ([`bound_writes`]), and one that cannot finish in that time
+//! fails, and the connection with it.
 
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::string::{String, ToString};
@@ -33,6 +39,10 @@ const MAX_PENDING_MIC: usize = 4 * crate::voice::MIC_RATE as usize;
 /// seconds; a keep-alive goes out after this long without audio.
 const KEEP_ALIVE_NS: u64 = 5_000_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long Deepgram has to confirm a conversation's settings.
+const READY_TIMEOUT_NS: u64 = 10_000_000_000;
+/// How long one write may wait for the network to take it.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// A connection that fails for want of a network is tried again after this
 /// long ...
 const NETWORK_RETRY: Duration = Duration::from_millis(250);
@@ -63,6 +73,7 @@ pub struct Connector {
 }
 
 impl Connector {
+    /// Starts connecting to `url`, authenticated with `key`.
     pub fn start(url: String, key: String) -> Option<Connector> {
         let event = Event::create().ok()?;
         let signal = Event::from_handle(event.0.duplicate(None).ok()?);
@@ -96,6 +107,7 @@ impl Connector {
         Some(Connector { result, event })
     }
 
+    /// Signalled when the connection is open, or failed.
     pub fn handle(&self) -> RawHandle {
         self.event.raw()
     }
@@ -104,6 +116,17 @@ impl Connector {
     pub fn take(&self) -> Option<Result<WebSocket<Conn>, WebError>> {
         let _ = self.event.clear();
         self.result.lock().take()
+    }
+}
+
+/// Makes every write on `ws` give up after [`WRITE_TIMEOUT`] without
+/// progress (`WebError::TimedOut`), rather than wait for a stalled network.
+/// A write cut short leaves the connection unusable: whoever sends treats
+/// the error as a lost connection.
+pub fn bound_writes(ws: &mut WebSocket<Conn>) {
+    match ws.connection_mut() {
+        Conn::Plain(tcp) => tcp.set_write_timeout(Some(WRITE_TIMEOUT)),
+        Conn::Tls(tls) => tls.transport_mut().set_write_timeout(Some(WRITE_TIMEOUT)),
     }
 }
 
@@ -153,8 +176,13 @@ pub struct Session {
     pub goodbye_sent: bool,
     /// Message types not understood, each reported once.
     pub unknown: BTreeSet<String>,
-    /// Function calls the user cancelled by speaking again.
+    /// Function calls the user cancelled by speaking again after they had
+    /// started: their results are not wanted as results any more.
     pub cancelled: BTreeSet<String>,
+    /// The user is there: they started the conversation, or have spoken in
+    /// it. A conversation that a notice started (a due reminder) is not
+    /// attended until the user speaks.
+    pub attended: bool,
     pending_mic: VecDeque<i16>,
     pending_inject: Vec<String>,
     last_sent_ns: u64,
@@ -179,7 +207,10 @@ impl Session {
         self.goodbye_sent = false;
     }
 
-    pub fn new(ws: WebSocket<Conn>, now: u64) -> Session {
+    /// The conversation on `ws`, which opened at `now`; `attended` if the
+    /// user started it.
+    pub fn new(mut ws: WebSocket<Conn>, now: u64, attended: bool) -> Session {
+        bound_writes(&mut ws);
         Session {
             ws,
             ready: false,
@@ -192,6 +223,7 @@ impl Session {
             goodbye_sent: false,
             unknown: BTreeSet::new(),
             cancelled: BTreeSet::new(),
+            attended,
             pending_mic: VecDeque::new(),
             pending_inject: Vec::new(),
             last_sent_ns: now,
@@ -204,6 +236,13 @@ impl Session {
         self.ws.handle()
     }
 
+    /// Deepgram has not confirmed the settings in time: a server that
+    /// accepted the connection but does not answer.
+    pub fn overdue(&self, now: u64) -> bool {
+        !self.ready && now.saturating_sub(self.started_ns) > READY_TIMEOUT_NS
+    }
+
+    /// Sends a JSON message.
     pub fn send(&mut self, v: &Value) -> Result<(), WebError> {
         self.last_sent_ns = vrt::time::now_ns();
         self.ws.send_text(&v.to_string())

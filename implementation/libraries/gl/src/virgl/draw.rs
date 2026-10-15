@@ -48,17 +48,79 @@ pub(super) struct Program {
     source: Arc<vglsl::program::Program>,
 }
 
+/// State objects of one kind made on the host, by their words, with when
+/// each was last used. A cache holds a bounded number: state that varies
+/// continuously (line widths, polygon offsets, levels of detail) would
+/// otherwise make objects without end. The least recently used goes first,
+/// never one that is bound.
+pub(super) struct Cache<K> {
+    objects: BTreeMap<K, (u32, u64)>,
+    clock: u64,
+    limit: usize,
+}
+
+impl<K: Ord + Clone> Cache<K> {
+    fn new(limit: usize) -> Cache<K> {
+        Cache { objects: BTreeMap::new(), clock: 0, limit }
+    }
+
+    /// The object of `key`, if one was made (it counts as used now).
+    fn get(&mut self, key: &K) -> Option<u32> {
+        self.clock += 1;
+        let e = self.objects.get_mut(key)?;
+        e.1 = self.clock;
+        Some(e.0)
+    }
+
+    /// Keeps `key`'s new object `h`. Returns the object no longer kept to
+    /// make room, if any: the least recently used of those `bound` does
+    /// not hold.
+    fn insert(&mut self, key: K, h: u32, bound: impl Fn(u32) -> bool) -> Option<u32> {
+        self.clock += 1;
+        let mut evicted = None;
+        if self.objects.len() >= self.limit {
+            let unbound = self.objects.iter().filter(|e| !bound(e.1.0));
+            if let Some((k, &(old, _))) = unbound.min_by_key(|e| e.1.1) {
+                let k = k.clone();
+                self.objects.remove(&k);
+                evicted = Some(old);
+            }
+        }
+        self.objects.insert(key, (h, self.clock));
+        evicted
+    }
+}
+
+/// How many state objects of a kind are kept: more than a draw uses at once
+/// (up to two stages' samplers), and enough that what a program switches
+/// between stays made.
+const CACHED: usize = 64;
+const CACHED_SAMPLERS: usize = 128;
+
 /// State objects made so far, and what is bound.
-#[derive(Default)]
 pub(super) struct States {
-    blend: BTreeMap<[u32; 10], u32>,
-    dsa: BTreeMap<[u32; 4], u32>,
-    rasterizer: BTreeMap<[u32; 8], u32>,
-    samplers: BTreeMap<[u32; 8], u32>,
-    elements: BTreeMap<Vec<u32>, u32>,
+    pub(super) blend: Cache<[u32; 10]>,
+    pub(super) dsa: Cache<[u32; 4]>,
+    pub(super) rasterizer: Cache<[u32; 8]>,
+    pub(super) samplers: Cache<[u32; 8]>,
+    pub(super) elements: Cache<Vec<u32>>,
     pub(super) bound: Bound,
     /// The current values of attributes without arrays, as uploaded.
     current: Vec<[u32; 4]>,
+}
+
+impl Default for States {
+    fn default() -> States {
+        States {
+            blend: Cache::new(CACHED),
+            dsa: Cache::new(CACHED),
+            rasterizer: Cache::new(CACHED),
+            samplers: Cache::new(CACHED_SAMPLERS),
+            elements: Cache::new(CACHED),
+            bound: Bound::default(),
+            current: Vec::new(),
+        }
+    }
 }
 
 /// What the host has bound (empty or zero: unknown).
@@ -93,16 +155,42 @@ impl Bound {
     pub fn vertex_buffers_set(&mut self, w: Vec<u32>) {
         self.vertex_buffers = w;
     }
-}
 
-impl States {
-    /// A resource is gone: bindings may name it (or a handle it had).
-    pub fn forget_resource(&mut self, _id: u32) {
-        self.bound = Bound::default();
+    /// A resource is gone: forgets the bindings that name it, as the host
+    /// may give its handle to a new one.
+    pub fn forget_resource(&mut self, id: u32) {
+        if self.vertex_buffers.as_chunks::<3>().0.iter().any(|b| b[2] == id) {
+            self.vertex_buffers.clear();
+        }
+        if self.index_buffer.first() == Some(&id) {
+            self.index_buffer.clear();
+        }
+        for u in &mut self.ubos {
+            if u.as_chunks::<5>().0.iter().any(|b| b[4] == id) {
+                u.clear();
+            }
+        }
     }
 
-    pub fn forget_program(&mut self, _p: &Program) {
-        self.bound = Bound::default();
+    /// An object is gone: forgets the bindings that name it, as its handle
+    /// may be given to a new one.
+    pub fn forget_object(&mut self, h: u32) {
+        for b in [&mut self.blend, &mut self.dsa, &mut self.rasterizer, &mut self.elements, &mut self.vs, &mut self.fs]
+        {
+            if *b == h {
+                *b = 0;
+            }
+        }
+        // Surfaces (after the count), views and sampler states (after the
+        // stage and the first slot).
+        if self.framebuffer.get(1..).is_some_and(|w| w.contains(&h)) {
+            self.framebuffer.clear();
+        }
+        for list in self.views.iter_mut().chain(&mut self.sampler_states) {
+            if list.get(2..).is_some_and(|w| w.contains(&h)) {
+                list.clear();
+            }
+        }
     }
 }
 
@@ -344,8 +432,7 @@ impl VirglBackend {
             }
         };
         let attribs = vs.attributes.iter().map(|&location| (location, kind_at(location))).collect();
-        let id = self.next_program;
-        self.next_program += 1;
+        let id = unused_id(&self.programs, &mut self.next_program);
         self.programs.insert(
             id,
             Program {
@@ -394,18 +481,43 @@ impl VirglBackend {
 
     // ---- State objects --------------------------------------------------------
 
+    /// Makes a state object of kind `kind` from `words`; returns its
+    /// handle.
+    pub(super) fn create_object(&mut self, kind: u32, words: &[u32]) -> u32 {
+        let h = self.new_handle();
+        let mut c = Vec::with_capacity(1 + words.len());
+        c.push(h);
+        c.extend_from_slice(words);
+        self.emit(CMD_CREATE_OBJECT, kind, &c);
+        h
+    }
+
+    /// The state object of kind `kind` with words `key`, from the cache
+    /// `cache` selects, made if it is not there (and the object that makes
+    /// room for it destroyed).
+    fn cached<K: Ord + Clone + AsRef<[u32]>>(
+        &mut self,
+        cache: fn(&mut States) -> &mut Cache<K>,
+        kind: u32,
+        key: K,
+    ) -> u32 {
+        if let Some(h) = cache(&mut self.state).get(&key) {
+            return h;
+        }
+        let h = self.create_object(kind, key.as_ref());
+        let States { bound, .. } = &self.state;
+        let bound: Vec<u32> = [bound.blend, bound.dsa, bound.rasterizer, bound.elements]
+            .into_iter()
+            .chain(bound.sampler_states.iter().flat_map(|s| s.iter().skip(2).copied()))
+            .collect();
+        if let Some(old) = cache(&mut self.state).insert(key, h, |x| bound.contains(&x)) {
+            self.destroy_object(old);
+        }
+        h
+    }
+
     pub(super) fn bind_blend(&mut self, w: [u32; 10]) {
-        let h = match self.state.blend.get(&w) {
-            Some(&h) => h,
-            None => {
-                let h = self.new_handle();
-                let mut c = vec![h];
-                c.extend_from_slice(&w);
-                self.emit(CMD_CREATE_OBJECT, OBJ_BLEND, &c);
-                self.state.blend.insert(w, h);
-                h
-            }
-        };
+        let h = self.cached(|s| &mut s.blend, OBJ_BLEND, w);
         if self.state.bound.blend != h {
             self.emit(CMD_BIND_OBJECT, OBJ_BLEND, &[h]);
             self.state.bound.blend = h;
@@ -413,15 +525,7 @@ impl VirglBackend {
     }
 
     pub(super) fn bind_dsa(&mut self, w: [u32; 4]) {
-        let h = match self.state.dsa.get(&w) {
-            Some(&h) => h,
-            None => {
-                let h = self.new_handle();
-                self.emit(CMD_CREATE_OBJECT, OBJ_DSA, &[h, w[0], w[1], w[2], w[3]]);
-                self.state.dsa.insert(w, h);
-                h
-            }
-        };
+        let h = self.cached(|s| &mut s.dsa, OBJ_DSA, w);
         if self.state.bound.dsa != h {
             self.emit(CMD_BIND_OBJECT, OBJ_DSA, &[h]);
             self.state.bound.dsa = h;
@@ -429,48 +533,26 @@ impl VirglBackend {
     }
 
     pub(super) fn bind_rasterizer(&mut self, w: [u32; 8]) {
-        let h = match self.state.rasterizer.get(&w) {
-            Some(&h) => h,
-            None => {
-                let h = self.new_handle();
-                let mut c = vec![h];
-                c.extend_from_slice(&w);
-                self.emit(CMD_CREATE_OBJECT, OBJ_RASTERIZER, &c);
-                self.state.rasterizer.insert(w, h);
-                h
-            }
-        };
+        let h = self.cached(|s| &mut s.rasterizer, OBJ_RASTERIZER, w);
         if self.state.bound.rasterizer != h {
             self.emit(CMD_BIND_OBJECT, OBJ_RASTERIZER, &[h]);
             self.state.bound.rasterizer = h;
         }
     }
 
+    /// A sampler state object for a draw's sampler (kept in the cache: a
+    /// draw binds what it gets at once).
     pub(super) fn sampler_state(&mut self, s: &SamplerState) -> u32 {
-        let w = sampler_words(s);
-        if let Some(&h) = self.state.samplers.get(&w) {
-            return h;
-        }
-        let h = self.new_handle();
-        let mut c = vec![h];
-        c.extend_from_slice(&w);
-        self.emit(CMD_CREATE_OBJECT, OBJ_SAMPLER_STATE, &c);
-        self.state.samplers.insert(w, h);
-        h
+        self.cached(|s| &mut s.samplers, OBJ_SAMPLER_STATE, sampler_words(s))
+    }
+
+    /// A sampler state object kept for good (not in the cache).
+    pub(super) fn sampler_state_kept(&mut self, s: &SamplerState) -> u32 {
+        self.create_object(OBJ_SAMPLER_STATE, &sampler_words(s))
     }
 
     pub(super) fn bind_elements(&mut self, w: Vec<u32>) {
-        let h = match self.state.elements.get(&w) {
-            Some(&h) => h,
-            None => {
-                let h = self.new_handle();
-                let mut c = vec![h];
-                c.extend_from_slice(&w);
-                self.emit(CMD_CREATE_OBJECT, OBJ_VERTEX_ELEMENTS, &c);
-                self.state.elements.insert(w, h);
-                h
-            }
-        };
+        let h = self.cached(|s| &mut s.elements, OBJ_VERTEX_ELEMENTS, w);
         if self.state.bound.elements != h {
             self.emit(CMD_BIND_OBJECT, OBJ_VERTEX_ELEMENTS, &[h]);
             self.state.bound.elements = h;
@@ -868,9 +950,24 @@ impl VirglBackend {
     }
 }
 
+/// How many ranges of an index buffer the highest index of is kept: more
+/// than the meshes drawn from one buffer, while draws of every length (a
+/// particle system's) would otherwise keep one each.
+const RANGES_KEPT: usize = 256;
+
+/// The highest index of a range of indices, as far as a draw goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Highest {
+    Index(u32),
+    /// Every index is the restart index: the draw reads no vertex.
+    AllRestart,
+}
+
 impl VirglBackend {
     /// Whether a draw reads only inside its buffers: every vertex and
-    /// instance it fetches, its indices, and its uniform blocks.
+    /// instance it fetches, its indices, its uniform blocks and the ranges
+    /// it captures into; and whether every offset it sends the host fits
+    /// the host's 32 bits. Anything it cannot tell counts as outside.
     fn in_bounds(
         &mut self,
         s: &DrawState<'_>,
@@ -880,31 +977,38 @@ impl VirglBackend {
         block_sizes: &[u32],
     ) -> bool {
         let size = |b: &Self, id: u32| b.resources.get(&id).map_or(0, |r| u64::from(r.desc.width));
-        // The highest vertex index.
+        // Whether `bytes` from `offset` (sent to the host) lie in buffer `id`.
+        let inside = |b: &Self, id: u32, offset: usize, bytes: u64| {
+            u32::try_from(offset).is_ok() && bytes.checked_add(offset as u64).is_some_and(|end| end <= size(b, id))
+        };
+        // The highest vertex index (`None`: no vertex is read).
         let last_vertex = match s.index {
             Some((ib, ty)) => {
-                let end = info.first as u64 + u64::from(info.count) * ty.bytes() as u64;
-                if end > size(self, ib) {
+                let bytes = u64::from(info.count) * ty.bytes() as u64;
+                if !inside(self, ib, info.first, bytes) {
                     return false;
                 }
-                self.max_index(ib, info.first, info.count, ty, s.primitive_restart).map(u64::from)
+                match self.max_index(ib, info.first, info.count, ty, s.primitive_restart) {
+                    Some(Highest::Index(i)) => Some(u64::from(i)),
+                    Some(Highest::AllRestart) => None,
+                    None => return false,
+                }
             }
-            None => Some(info.first as u64 + u64::from(info.count) - 1),
+            None if u32::try_from(info.first).is_err() => return false,
+            None => Some(info.first as u64 + u64::from(info.count.max(1)) - 1),
         };
         let last_instance = u64::from(info.instances.max(1) - 1);
         for &(loc, _) in used {
             let Some(a) = s.attribs.get(loc as usize) else { continue };
             let Some(b) = a.buffer else { continue };
             let element = if a.ty.packed() { 4 } else { u64::from(a.size) * u64::from(a.ty.bytes()) };
-            let last = if a.divisor == 0 {
-                match last_vertex {
-                    Some(v) => v,
-                    None => continue,
-                }
-            } else {
-                last_instance / u64::from(a.divisor)
+            let last = match (a.divisor, last_vertex) {
+                (0, Some(v)) => v,
+                (0, None) => continue,
+                (d, _) => last_instance / u64::from(d),
             };
-            if a.offset as u64 + last * u64::from(a.stride) + element > size(self, b) {
+            let bytes = last.checked_mul(u64::from(a.stride)).and_then(|n| n.checked_add(element));
+            if !bytes.is_some_and(|bytes| inside(self, b, a.offset, bytes)) {
                 return false;
             }
         }
@@ -912,23 +1016,28 @@ impl VirglBackend {
             for &b in stage {
                 let need = block_sizes.get(b as usize).copied().unwrap_or(0) as usize;
                 match s.blocks.get(b as usize).copied().flatten() {
-                    Some(r) if r.size >= need => {}
+                    Some(r)
+                        if r.size >= need
+                            && u32::try_from(r.size).is_ok()
+                            && inside(self, r.buffer, r.offset, r.size as u64) => {}
                     _ => return false,
                 }
             }
         }
-        true
+        let captures = s.feedback.unwrap_or(&[]);
+        captures.iter().all(|r| u32::try_from(r.size).is_ok() && inside(self, r.buffer, r.offset, r.size as u64))
     }
 
-    /// The highest index a draw reads (`None` if all are restarts), from
-    /// the buffer's contents (read back if the GPU wrote them).
-    fn max_index(&mut self, ib: u32, offset: usize, count: u32, ty: IndexType, restart: bool) -> Option<u32> {
+    /// The highest index a draw reads, from the buffer's contents (read
+    /// back if the GPU wrote them); `None` if it cannot be told (the range
+    /// is outside the buffer, or there is no memory to look).
+    fn max_index(&mut self, ib: u32, offset: usize, count: u32, ty: IndexType, restart: bool) -> Option<Highest> {
         let bytes = ty.bytes();
         let key = (offset, count, bytes as u8, restart);
         let valid = self.resources.get(&ib).and_then(|r| r.shadow.as_ref()).map(|s| s.valid)?;
         if !valid {
             let n = self.resources.get(&ib).map_or(0, |r| r.desc.width as usize);
-            let mut data = alloc::vec![0u8; n];
+            let mut data = crate::pixels::try_zeroed(n)?;
             self.read_buffer(ib, 0, &mut data);
             let s = self.resources.get_mut(&ib)?.shadow.as_mut()?;
             s.data = data;
@@ -937,10 +1046,10 @@ impl VirglBackend {
         }
         let s = self.resources.get_mut(&ib)?.shadow.as_mut()?;
         if let Some(&m) = s.ranges.get(&key) {
-            return m;
+            return Some(m);
         }
         let r = ty.restart();
-        let data = s.data.get(offset..offset + count as usize * bytes)?;
+        let data = s.data.get(offset..)?.get(..count as usize * bytes)?;
         let max = data
             .chunks_exact(bytes)
             .map(|c| match bytes {
@@ -950,7 +1059,42 @@ impl VirglBackend {
             })
             .filter(|&i| !(restart && i == r))
             .max();
-        s.ranges.insert(key, max);
-        max
+        let highest = max.map_or(Highest::AllRestart, Highest::Index);
+        if s.ranges.len() >= RANGES_KEPT {
+            s.ranges.pop_first();
+        }
+        s.ranges.insert(key, highest);
+        Some(highest)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::Format;
+    use crate::virgl::fake::Fake;
+
+    #[test]
+    fn index_ranges_looked_at_are_kept_to_a_bounded_number() {
+        let (t, _host) = Fake::new();
+        let mut b = VirglBackend::new(alloc::boxed::Box::new(t)).unwrap();
+        let desc = ResourceDesc {
+            target: Target::Buffer,
+            format: Format::R8Uint,
+            width: 4096,
+            height: 1,
+            depth: 1,
+            levels: 1,
+            samples: 0,
+        };
+        let ib = b.create_resource(&desc).unwrap();
+        let indices: Vec<u8> = (0..2048u16).flat_map(u16::to_le_bytes).collect();
+        b.write(ib, 0, Region::bytes(0, 4096), &indices, 4096, 4096);
+        // Draws of every length, as a particle system's are.
+        for count in 1..=2048 {
+            assert_eq!(b.max_index(ib, 0, count, IndexType::U16, false), Some(Highest::Index(count - 1)));
+        }
+        let kept = b.resources[&ib].shadow.as_ref().unwrap().ranges.len();
+        assert!(kept <= RANGES_KEPT, "{kept} ranges kept");
     }
 }

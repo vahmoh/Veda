@@ -25,6 +25,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use guest_sys::idle;
 use rustix::io::Errno;
 use rustix::mount::{MountFlags, UnmountFlags, mount, unmount};
 
@@ -46,13 +47,6 @@ const READ_EVERY: Duration = Duration::from_millis(250);
 const SYNC_EVERY: Duration = Duration::from_secs(1);
 const O_NONBLOCK: i32 = 0o4000;
 const EPIPE: i32 = 32;
-
-/// Stays, doing nothing (init would start it again were it to end).
-fn idle() -> ! {
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
-    }
-}
 
 /// The disks and partitions on USB (`sdb`, `sda1`), as sysfs has them.
 fn usb_disks() -> Vec<String> {

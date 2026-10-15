@@ -1,22 +1,44 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What the driver VM's programs need of Linux beyond Rust's `std` and
-//! `rustix` (which make their other system calls): socket options `rustix`
-//! does not name ([`setsockopt`]: netlink's, packet sockets'), an `ioctl`
-//! that reads into a buffer of a length chosen at run time ([`ReadInto`]),
-//! timeouts in milliseconds as `poll(2)` takes them ([`poll_timeout`]),
-//! and, in [`netif`], what the network drivers share: interfaces switched
-//! on and off, raw packet sockets.
+//! What the driver VM's programs share.
+//!
+//! What they need of Linux beyond Rust's `std` and `rustix` (which make
+//! their other system calls): socket options `rustix` does not name
+//! ([`setsockopt`]: netlink's, packet sockets'), an `ioctl` that reads into
+//! a buffer of a length chosen at run time ([`ReadInto`]), timeouts in
+//! milliseconds as `poll(2)` takes them ([`poll_timeout`]), what sysfs
+//! says of a device ([`sysfs`]), the processes of a name ([`process`]).
+//!
+//! And what Veda's drivers for Linux share: waiting longer after each
+//! failure, and serving a device's sessions with a service of Veda's
+//! ([`retry`]); staying when they cannot work ([`idle`]); and, in
+//! [`netif`], what the network drivers share: Linux's network interfaces,
+//! switched on and off, raw packet sockets on them, and their frames to
+//! and from Veda. And the guest's test programs' checks ([`checks`]).
 
 use std::ffi::c_void;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
+use std::time::Duration;
 
 use rustix::event::Timespec;
 use rustix::ioctl::{Direction, Ioctl, IoctlOutput, Opcode, opcode};
 
+pub mod checks;
 pub mod netif;
+pub mod process;
+pub mod retry;
+pub mod sysfs;
+
+/// Stays, doing nothing, for ever: what a program of the guest's does when
+/// what it would do cannot be (`init` would start it again, were it to
+/// end).
+pub fn idle() -> ! {
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
+}
 
 /// The timeout `rustix::event::poll` takes for `ms` milliseconds, as
 /// `poll(2)` counts them: negative waits for ever.

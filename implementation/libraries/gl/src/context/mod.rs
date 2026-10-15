@@ -34,6 +34,7 @@ use alloc::vec::Vec;
 pub use objects::*;
 
 use crate::backend::{Backend, BlendEq, BlendFactor, Caps, Cull, Func, StencilOp};
+use crate::format::clamp01;
 use crate::gl;
 
 /// How a context is set up.
@@ -67,6 +68,9 @@ pub const UNIFORM_BUFFER_BINDINGS: usize = 36;
 pub const FEEDBACK_BINDINGS: usize = 4;
 /// Color attachments and draw buffers.
 pub const DRAW_BUFFERS: usize = 4;
+/// `UNIFORM_BUFFER_OFFSET_ALIGNMENT`: what Direct3D 11 needs, so that the
+/// virgl renderer can pass ranges through.
+pub const UNIFORM_BUFFER_OFFSET_ALIGNMENT: usize = 256;
 
 /// Pixel storage modes (`glPixelStorei`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -282,10 +286,10 @@ pub struct Context {
     /// The transform feedback object (`None`: the default one).
     pub(crate) feedback: Option<Key>,
     pub(crate) default_feedback: TransformFeedback,
-    /// The active query of each target: `ANY_SAMPLES_PASSED`,
-    /// `ANY_SAMPLES_PASSED_CONSERVATIVE`,
-    /// `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN`.
-    pub(crate) active_queries: [Option<Key>; 3],
+    /// The active queries: the occlusion query (`ANY_SAMPLES_PASSED` or
+    /// `ANY_SAMPLES_PASSED_CONSERVATIVE`, of which one at a time may be
+    /// active) and `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN`'s.
+    pub(crate) active_queries: [Option<Key>; 2],
     /// The default framebuffer.
     pub(crate) default_fb: DefaultFramebuffer,
     /// Samples per pixel of the default framebuffer (0 or 4).
@@ -335,7 +339,7 @@ impl Context {
             current_attribs: [Current::Float([0.0, 0.0, 0.0, 1.0]); VERTEX_ATTRIBS],
             feedback: None,
             default_feedback: TransformFeedback::default(),
-            active_queries: [None; 3],
+            active_queries: [None; 2],
             default_fb: DefaultFramebuffer::default(),
             default_samples: 0,
             primitives_written: 0,
@@ -350,14 +354,21 @@ impl Context {
         c
     }
 
-    /// The renderer.
-    pub fn backend(&mut self) -> &mut dyn Backend {
-        &mut *self.backend
-    }
-
     /// The renderer's description.
     pub fn caps(&self) -> &Caps {
         self.backend.caps()
+    }
+
+    /// A fence after the work submitted so far, which signals once the
+    /// renderer has done that work ([`Context::wait_fence`]); 0 if the
+    /// renderer can render no more (the GPU's context is lost).
+    pub fn fence(&mut self) -> u64 {
+        self.backend.fence()
+    }
+
+    /// Whether `fence` has signaled, waiting for it up to `timeout_ns`.
+    pub fn wait_fence(&mut self, fence: u64, timeout_ns: u64) -> bool {
+        self.backend.wait_fence(fence, timeout_ns)
     }
 
     /// Records an error (only the first since the last `get_error`).
@@ -410,7 +421,8 @@ impl Context {
 
     // ---- Enable / disable ------------------------------------------------
 
-    fn capability(&mut self, cap: u32) -> Option<&mut bool> {
+    /// The state of an `Enable`/`Disable` capability.
+    pub(crate) fn capability(&mut self, cap: u32) -> Option<&mut bool> {
         let s = &mut self.state;
         Some(match cap {
             gl::BLEND => &mut s.blend,
@@ -682,10 +694,6 @@ impl Context {
     pub fn finish(&mut self) {
         self.backend.finish();
     }
-}
-
-pub(crate) fn clamp01(x: f32) -> f32 {
-    if x > 0.0 { if x < 1.0 { x } else { 1.0 } } else { 0.0 }
 }
 
 /// `GL_NEVER`... as a comparison.

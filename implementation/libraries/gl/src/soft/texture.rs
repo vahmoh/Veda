@@ -18,10 +18,11 @@ use vglsl::ir::TexOp;
 use vglsl::ops::f16_to_f32;
 use vglsl::types::Dim;
 
-use crate::backend::{Filter, Func, SamplerState, Wrap};
+use crate::backend::{Filter, Func, SamplerState, Target, View, Wrap};
 use crate::format::{Class, Format};
 
 pub use crate::format::srgb_to_linear;
+use crate::present::lerp;
 
 /// One mipmap level of a sampled texture.
 #[derive(Clone, Copy, Debug)]
@@ -61,12 +62,26 @@ pub struct Sampled {
 // and unchanged while a draw that samples them runs (they are never written
 // by it: a texture that is also rendered to is not sampled).
 unsafe impl Send for Sampled {}
+// SAFETY: as for `Send`: shared among workers, the texels are only read.
 unsafe impl Sync for Sampled {}
 
 /// Texel values before swizzling: floats, or integers as their bits.
 type Texel4 = [f32; 4];
 
 impl Sampled {
+    /// A texture as a sampler sees it: the levels of view `v` (`levels`,
+    /// its base level first) of texels of `format`, sampled with `state`.
+    pub fn new(v: &View, state: SamplerState, format: Format, levels: Vec<TexLevel>) -> Sampled {
+        let dim = match v.target {
+            Target::Texture3D => Dim::D3,
+            Target::TextureCube => Dim::Cube,
+            Target::Texture2DArray => Dim::D2Array,
+            _ => Dim::D2,
+        };
+        let (texel, kind) = (format.bytes(), Sampled::kind_of(format));
+        Sampled { levels, dim, format, texel, kind, swizzle: v.swizzle, state }
+    }
+
     /// The kind of values a format's texels are.
     pub fn kind_of(f: Format) -> Kind {
         match f.class() {
@@ -452,20 +467,10 @@ fn bilerp(t00: Texel4, t10: Texel4, t01: Texel4, t11: Texel4, a: f32, b: f32) ->
     lerp4(lerp4(t00, t10, a), lerp4(t01, t11, a), b)
 }
 
-/// Interpolates two RGBA8 texels with an 8-bit weight (`f` in 0..=256), two
-/// channels at a time in each word.
-#[inline(always)]
-fn lerp_u8(a: u32, b: u32, f: u32) -> u32 {
-    let g = 256 - f;
-    let rb = ((a & 0x00FF_00FF) * g + (b & 0x00FF_00FF) * f + 0x0080_0080) >> 8;
-    let ga = ((a >> 8) & 0x00FF_00FF) * g + ((b >> 8) & 0x00FF_00FF) * f + 0x0080_0080;
-    (rb & 0x00FF_00FF) | (ga & 0xFF00_FF00)
-}
-
 /// Bilinear interpolation of four RGBA8 texels with 8-bit weights.
 #[inline(always)]
 fn bilerp_u8(t00: u32, t10: u32, t01: u32, t11: u32, fu: u32, fv: u32) -> u32 {
-    lerp_u8(lerp_u8(t00, t10, fu), lerp_u8(t01, t11, fu), fv)
+    lerp(lerp(t00, t10, fu), lerp(t01, t11, fu), fv)
 }
 
 /// A weight in [0, 1] as 0..=256.
@@ -689,7 +694,7 @@ impl DrawTextures<'_> {
                 let (u, v) = (s.f32(lane), tc.f32(lane));
                 let mut texel = t.filter_u8(c.level, c.filter, u, v, op.offset);
                 if let Some((l2, f)) = c.next {
-                    texel = lerp_u8(texel, t.filter_u8(l2, c.filter, u, v, op.offset), weight(f));
+                    texel = lerp(texel, t.filter_u8(l2, c.filter, u, v, op.offset), weight(f));
                 }
                 let bytes = texel.to_le_bytes();
                 let n = |x: u8| f32::from(x) * (1.0 / 255.0);

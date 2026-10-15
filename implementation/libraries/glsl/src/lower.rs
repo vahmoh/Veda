@@ -161,16 +161,16 @@ pub fn binary<E: Emit>(
             (Some(Basic::Matrix(c, rows)), Some(Basic::Vector(_, _))) => mat_vec(e, c, rows, l, r),
             (Some(Basic::Vector(_, _)), Some(Basic::Matrix(c, rows))) => vec_mat(e, c, rows, l, r),
             (Some(Basic::Matrix(k, rows)), Some(Basic::Matrix(c, _))) => mat_mat(e, k, rows, c, l, r),
-            _ => componentwise(e, op, lt, l, rt, r),
+            _ => componentwise(e, op, lt, l, r),
         },
-        _ => componentwise(e, op, lt, l, rt, r),
+        _ => componentwise(e, op, lt, l, r),
     }
 }
 
-fn componentwise<E: Emit>(e: &mut E, op: BinOp, lt: Type, l: &[E::V], rt: Type, r: &[E::V]) -> Vec<E::V> {
-    // Shifts take their type from the left operand; the right operand may
-    // be signed or unsigned (the shift amount is the same bits).
-    let _ = rt;
+/// `l op r` component by component, a scalar operand repeated. The
+/// operation's type is the left operand's (a shift's right operand may be
+/// signed or unsigned: the shift amount is the same bits).
+fn componentwise<E: Emit>(e: &mut E, op: BinOp, lt: Type, l: &[E::V], r: &[E::V]) -> Vec<E::V> {
     let ls = lt.as_basic().and_then(Basic::scalar).unwrap_or(Scalar::Float);
     let o = arith_op(op, ls);
     let ret = ty(ls);
@@ -281,11 +281,10 @@ pub fn unary<E: Emit>(e: &mut E, op: UnOp, t: Type, a: &[E::V]) -> Vec<E::V> {
 
 /// A constructor of `target` from arguments (type, flattened components).
 /// The semantic checks have validated the arguments.
-pub fn construct<E: Emit>(e: &mut E, target: Type, args: &[(Type, Vec<E::V>)], structs: &Structs) -> Vec<E::V> {
+pub fn construct<E: Emit, A: AsRef<[E::V]>>(e: &mut E, target: Type, args: &[(Type, A)]) -> Vec<E::V> {
     // Arrays and structures: the arguments are the elements or members.
     if target.is_array() || target.as_struct().is_some() {
-        let _ = structs;
-        return args.iter().flat_map(|(_, v)| v.iter().copied()).collect();
+        return args.iter().flat_map(|(_, v)| v.as_ref().iter().copied()).collect();
     }
     let Some(b) = target.as_basic() else { return Vec::new() };
     let Some(to) = b.scalar() else { return Vec::new() };
@@ -293,17 +292,17 @@ pub fn construct<E: Emit>(e: &mut E, target: Type, args: &[(Type, Vec<E::V>)], s
     match b {
         Basic::Scalar(_) => {
             let (t, v) = &args[0];
-            vec![convert(e, v[0], arg_scalar(*t), to)]
+            vec![convert(e, v.as_ref()[0], arg_scalar(*t), to)]
         }
         Basic::Vector(_, n) => {
-            if args.len() == 1 && args[0].1.len() == 1 {
+            if args.len() == 1 && args[0].1.as_ref().len() == 1 {
                 let (t, v) = &args[0];
-                let c = convert(e, v[0], arg_scalar(*t), to);
+                let c = convert(e, v.as_ref()[0], arg_scalar(*t), to);
                 return vec![c; n as usize];
             }
             let mut out = Vec::with_capacity(n as usize);
             'args: for (t, v) in args {
-                for &c in v {
+                for &c in v.as_ref() {
                     if out.len() == n as usize {
                         break 'args;
                     }
@@ -318,6 +317,7 @@ pub fn construct<E: Emit>(e: &mut E, target: Type, args: &[(Type, Vec<E::V>)], s
             let one = f(e, 1.0);
             if args.len() == 1 {
                 let (t, v) = &args[0];
+                let v = v.as_ref();
                 if let Some(Basic::Matrix(sc, sr)) = t.as_basic() {
                     // From a matrix: the overlap, then the identity.
                     let (sc, sr) = (sc as usize, sr as usize);
@@ -349,7 +349,7 @@ pub fn construct<E: Emit>(e: &mut E, target: Type, args: &[(Type, Vec<E::V>)], s
             }
             let mut out = Vec::with_capacity(cols * rows);
             'margs: for (t, v) in args {
-                for &c in v {
+                for &c in v.as_ref() {
                     if out.len() == cols * rows {
                         break 'margs;
                     }
@@ -379,14 +379,14 @@ fn dot<E: Emit>(e: &mut E, a: &[E::V], b: &[E::V]) -> E::V {
 /// The components of the result of a built-in function (not a texture
 /// lookup or derivative), from its arguments; for `modf`, also the value
 /// of its `out` argument.
-pub fn builtin<E: Emit>(
+pub fn builtin<E: Emit, A: AsRef<[E::V]>>(
     e: &mut E,
     b: Builtin,
-    args: &[(Type, Vec<E::V>)],
+    args: &[(Type, A)],
     ret: Type,
 ) -> (Vec<E::V>, Option<Vec<E::V>>) {
     use Builtin::*;
-    let a = |i: usize| -> &[E::V] { &args[i].1 };
+    let a = |i: usize| -> &[E::V] { args[i].1.as_ref() };
     let scalar_of = |i: usize| args[i].0.as_basic().and_then(Basic::scalar).unwrap_or(Scalar::Float);
     let n = ret.as_basic().map_or(0, Basic::components) as usize;
     let r = match b {

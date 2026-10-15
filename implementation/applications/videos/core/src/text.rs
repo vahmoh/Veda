@@ -1,28 +1,20 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Times and descriptions for people: `1:05`, `0:04.033`, "720p",
-//! "1280 × 720 · AV1 · 24 fps", "FLAC · 48 kHz · stereo".
+//! Descriptions for people: `0:04.033`, "720p", "1280 × 720 · AV1 ·
+//! 24 fps", "FLAC · 48 kHz · stereo". Lengths and positions (`1:05`) are
+//! `vfiles::format::duration`'s.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 
+use vfiles::format::duration;
 use vproto::media::{AudioStream, Rational, VideoStream};
-
-/// `m:ss`, or `h:mm:ss` from an hour.
-pub fn time(ms: u64) -> String {
-    let s = ms / 1000;
-    if s >= 3600 {
-        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
-    } else {
-        format!("{}:{:02}", s / 60, s % 60)
-    }
-}
 
 /// `m:ss.mmm` (a picture's time).
 pub fn precise(us: i64) -> String {
     let ms = us.max(0) as u64 / 1000;
-    format!("{}.{:03}", time(ms), ms % 1000)
+    format!("{}.{:03}", duration(ms), ms % 1000)
 }
 
 /// The usual name of a picture's size: by its shorter side ("720p", "4K").
@@ -112,10 +104,8 @@ mod tests {
 
     #[test]
     fn times() {
-        assert_eq!(time(0), "0:00");
-        assert_eq!(time(65_999), "1:05");
-        assert_eq!(time(3_725_000), "1:02:05");
         assert_eq!(precise(4_033_333), "0:04.033");
+        assert_eq!(precise(3_725_000_001), "1:02:05.000");
         assert_eq!(precise(-5), "0:00.000");
     }
 

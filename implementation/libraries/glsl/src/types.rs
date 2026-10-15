@@ -8,7 +8,17 @@
 //! (one dimension: neither GLSL ES 1.00 nor 3.00 has arrays of arrays).
 //! Precision qualifiers are not part of a type's identity; they travel
 //! beside it.
+//!
+//! Sizes and layouts are found once per structure, when it is defined
+//! ([`StructInfo`]), so that every question about a type takes constant
+//! time, however deeply structures nest: a hostile shader nesting forty
+//! structures of two members each would otherwise make each question walk
+//! 2^40 members. The semantic checks reject types of more than
+//! [`MAX_COMPONENTS`] components and structures nested more than
+//! [`MAX_STRUCT_DEPTH`] deep, so that no size computed for a type comes
+//! near overflowing 32 bits.
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -157,10 +167,6 @@ impl Basic {
         matches!(self, Basic::Scalar(_))
     }
 
-    pub fn is_vector(self) -> bool {
-        matches!(self, Basic::Vector(..))
-    }
-
     pub fn is_matrix(self) -> bool {
         matches!(self, Basic::Matrix(..))
     }
@@ -206,6 +212,20 @@ impl Precision {
     }
 }
 
+/// The most scalar components (a sampler counting as one) a type may have:
+/// as many as the largest array a shader may declare, of `float`.
+pub const MAX_COMPONENTS: u32 = 1 << 16;
+
+/// The deepest nesting of structures (a structure with a member of
+/// structure type is one deeper than that member's) accepted.
+pub const MAX_STRUCT_DEPTH: u32 = 32;
+
+/// The most components a variable private to an invocation (a global or
+/// local variable, a parameter, a function's result) may have: 64 kB, as
+/// ANGLE allows. Each is a value of its own in the compiled code, and an
+/// index computed at run time chooses among all of them.
+pub const MAX_PRIVATE_COMPONENTS: u32 = 1 << 14;
+
 /// Index of a structure type in [`Structs`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct StructId(pub u32);
@@ -226,6 +246,103 @@ pub struct StructDef {
     /// `None` for an anonymous structure.
     pub name: Option<Symbol>,
     pub fields: Vec<Field>,
+    /// Its sizes, found from its members' when it was defined.
+    pub info: StructInfo,
+    /// Each member's index by name (the first's, should two share a name,
+    /// which the semantic checks report), so that finding a member does
+    /// not take time in proportion to their number.
+    by_name: BTreeMap<Symbol, u32>,
+}
+
+impl StructDef {
+    /// The index of the member called `name`.
+    pub fn field(&self, name: Symbol) -> Option<usize> {
+        self.by_name.get(&name).map(|&k| k as usize)
+    }
+}
+
+/// What a structure's members add up to, and where each member starts.
+/// Sizes saturate at `u32::MAX` (a structure that large is an error, which
+/// the semantic checks report).
+#[derive(Clone, PartialEq, Debug)]
+pub struct StructInfo {
+    /// Scalar components, a sampler counting as one.
+    pub components: u32,
+    /// Rows of four 32-bit words, when every vector, matrix column, scalar
+    /// and sampler takes one ([`Type::rows`]).
+    pub rows: u32,
+    /// Samplers.
+    pub samplers: u32,
+    /// A member is or holds an array.
+    pub contains_array: bool,
+    /// 1 if no member is a structure, else one more than the deepest
+    /// member's.
+    pub depth: u32,
+    /// The std140 base alignment and size, with column-major and with
+    /// row-major matrices.
+    pub std140: [(u32, u32); 2],
+    /// Where each member starts: its first component, row and sampler, and
+    /// its std140 offsets in bytes (column-major, row-major).
+    pub members: Vec<MemberStart>,
+}
+
+/// Where a structure's member starts (see [`StructInfo`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct MemberStart {
+    pub component: u32,
+    pub row: u32,
+    pub sampler: u32,
+    pub std140: [u32; 2],
+}
+
+impl StructInfo {
+    fn of(fields: &[Field], structs: &Structs) -> StructInfo {
+        let mut info = StructInfo {
+            components: 0,
+            rows: 0,
+            samplers: 0,
+            contains_array: false,
+            depth: 1,
+            std140: [(16, 0); 2],
+            members: Vec::with_capacity(fields.len()),
+        };
+        let mut ends = [0u32; 2];
+        for f in fields {
+            let mut start =
+                MemberStart { component: info.components, row: info.rows, sampler: info.samplers, std140: [0; 2] };
+            info.components = info.components.saturating_add(f.ty.flat_components(structs));
+            info.rows = info.rows.saturating_add(f.ty.rows(structs));
+            info.samplers = info.samplers.saturating_add(f.ty.sampler_count(structs));
+            info.contains_array |= f.ty.contains_array(structs);
+            if let Element::Struct(id) = f.ty.element {
+                info.depth = info.depth.max(structs.get(id).info.depth.saturating_add(1));
+            }
+            for (rm, end) in ends.iter_mut().enumerate() {
+                let (align, size) = f.ty.std140(rm == 1, structs);
+                info.std140[rm].0 = info.std140[rm].0.max(align);
+                start.std140[rm] = round_up(*end, align);
+                *end = start.std140[rm].saturating_add(size);
+            }
+            info.members.push(start);
+        }
+        for (rm, end) in ends.into_iter().enumerate() {
+            info.std140[rm].1 = round_up(end, 16);
+        }
+        info
+    }
+
+    /// The member holding flat component `c`, if one does.
+    pub fn member_at(&self, c: u32) -> Option<usize> {
+        if c >= self.components {
+            return None;
+        }
+        self.members.partition_point(|m| m.component <= c).checked_sub(1)
+    }
+}
+
+/// `x` rounded up to a multiple of `align` (a power of two), saturating.
+fn round_up(x: u32, align: u32) -> u32 {
+    x.checked_next_multiple_of(align.max(1)).unwrap_or(u32::MAX)
 }
 
 /// The structures a shader defines.
@@ -235,8 +352,14 @@ pub struct Structs {
 }
 
 impl Structs {
-    pub fn add(&mut self, def: StructDef) -> StructId {
-        self.defs.push(def);
+    /// Defines a structure from its members (all of types defined before).
+    pub fn add(&mut self, name: Option<Symbol>, fields: Vec<Field>) -> StructId {
+        let info = StructInfo::of(&fields, self);
+        let mut by_name = BTreeMap::new();
+        for (k, f) in fields.iter().enumerate() {
+            by_name.entry(f.name).or_insert(k as u32);
+        }
+        self.defs.push(StructDef { name, fields, info, by_name });
         StructId(self.defs.len() as u32 - 1)
     }
 
@@ -313,10 +436,7 @@ impl Type {
 
     /// Whether the type is or contains a sampler.
     pub fn contains_sampler(self, structs: &Structs) -> bool {
-        match self.element {
-            Element::Basic(b) => b.is_sampler(),
-            Element::Struct(id) => structs.get(id).fields.iter().any(|f| f.ty.contains_sampler(structs)),
-        }
+        self.sampler_count(structs) > 0
     }
 
     /// Whether the type is or contains an array.
@@ -324,24 +444,115 @@ impl Type {
         self.array.is_some()
             || match self.element {
                 Element::Basic(_) => false,
-                Element::Struct(id) => structs.get(id).fields.iter().any(|f| f.ty.contains_array(structs)),
+                Element::Struct(id) => structs.get(id).info.contains_array,
             }
     }
 
-    /// Whether the type is or contains a structure.
-    pub fn contains_struct(self) -> bool {
-        matches!(self.element, Element::Struct(_))
+    /// The number of elements: the array's length, or 1.
+    pub fn elements(self) -> u32 {
+        self.array.unwrap_or(1)
+    }
+
+    /// Scalar components of one element (arrays and structures flattened;
+    /// samplers count as one).
+    pub fn element_components(self, structs: &Structs) -> u32 {
+        match self.element {
+            Element::Basic(Basic::Sampler(_)) => 1,
+            Element::Basic(b) => b.components(),
+            Element::Struct(id) => structs.get(id).info.components,
+        }
     }
 
     /// Scalar components in the whole value (arrays and structures
-    /// flattened; samplers count as one).
+    /// flattened; samplers count as one), saturating.
     pub fn flat_components(self, structs: &Structs) -> u32 {
+        self.element_components(structs).saturating_mul(self.elements())
+    }
+
+    /// Rows of four 32-bit words the value takes when every vector, matrix
+    /// column, scalar and sampler takes one (how default-block uniforms
+    /// and varyings are stored), saturating.
+    pub fn rows(self, structs: &Structs) -> u32 {
         let one = match self.element {
-            Element::Basic(Basic::Sampler(_)) => 1,
-            Element::Basic(b) => b.components(),
-            Element::Struct(id) => structs.get(id).fields.iter().map(|f| f.ty.flat_components(structs)).sum(),
+            Element::Basic(Basic::Matrix(c, _)) => u32::from(c),
+            Element::Basic(_) => 1,
+            Element::Struct(id) => structs.get(id).info.rows,
         };
-        one * self.array.unwrap_or(1)
+        one.saturating_mul(self.elements())
+    }
+
+    /// Samplers the value holds, saturating.
+    pub fn sampler_count(self, structs: &Structs) -> u32 {
+        let one = match self.element {
+            Element::Basic(b) => u32::from(b.is_sampler()),
+            Element::Struct(id) => structs.get(id).info.samplers,
+        };
+        one.saturating_mul(self.elements())
+    }
+
+    /// The structures nested in the type: 0 for a basic type.
+    pub fn struct_depth(self, structs: &Structs) -> u32 {
+        match self.element {
+            Element::Basic(_) => 0,
+            Element::Struct(id) => structs.get(id).info.depth,
+        }
+    }
+
+    /// The std140 base alignment and size of the value (row-major matrices
+    /// if `row_major`), saturating.
+    pub fn std140(self, row_major: bool, structs: &Structs) -> (u32, u32) {
+        let (align, size) = match self.element {
+            Element::Basic(b) => match b {
+                Basic::Scalar(_) => (4, 4),
+                Basic::Vector(_, 2) => (8, 8),
+                Basic::Vector(_, 3) => (16, 12),
+                Basic::Vector(_, _) => (16, 16),
+                Basic::Matrix(c, r) => {
+                    // An array of columns (rows if row-major), each a
+                    // vec4-aligned vector.
+                    let n = if row_major { r } else { c };
+                    (16, 16 * u32::from(n))
+                }
+                _ => (4, 4),
+            },
+            Element::Struct(id) => structs.get(id).info.std140[usize::from(row_major)],
+        };
+        match self.array {
+            Some(n) => {
+                let stride = round_up(size, 16).max(round_up(align, 16));
+                (16.max(align), stride.saturating_mul(n))
+            }
+            None => (align, size),
+        }
+    }
+
+    /// The std140 stride of the elements of an array of this type's
+    /// element type.
+    pub fn std140_stride(self, row_major: bool, structs: &Structs) -> u32 {
+        let (align, size) = self.element_type().std140(row_major, structs);
+        round_up(size, 16).max(round_up(align, 16))
+    }
+
+    /// The basic type of flat component `c` of the value (a sampler for
+    /// its one component), if there is one.
+    pub fn component_basic(self, mut c: u32, structs: &Structs) -> Option<Basic> {
+        let mut ty = self;
+        loop {
+            let per = ty.element_components(structs);
+            if c >= per.saturating_mul(ty.elements()) {
+                return None;
+            }
+            c %= per.max(1);
+            match ty.element {
+                Element::Basic(b) => return Some(b),
+                Element::Struct(id) => {
+                    let def = structs.get(id);
+                    let i = def.info.member_at(c)?;
+                    c -= def.info.members[i].component;
+                    ty = def.fields[i].ty;
+                }
+            }
+        }
     }
 
     /// The type's name as written in a shader.

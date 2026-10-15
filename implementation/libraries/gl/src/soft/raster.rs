@@ -19,7 +19,7 @@ use vglsl::types::Scalar;
 
 use super::program::SoftProgram;
 use super::scene::{ClearCmd, Cmd, DrawRecord, LinePrim, PointPrim, SUB, Scene, TILE, Targets, Tri, sample_positions};
-use super::target::{RenderTarget, blend, stencil_op, unorm8};
+use super::target::{DepthValue, RenderTarget, blend, stencil_op, unorm8};
 use super::texture::DrawTextures;
 use crate::backend::Stencil;
 use crate::format::{Class, Format, Texel};
@@ -118,12 +118,10 @@ impl Worker {
         let d = &scene.draws[draw as usize];
         let e = &envs[draw as usize];
         if self.loaded != Some(draw) {
-            let p = &d.program.fs;
             if self.exec.regs.len() < d.program.registers {
                 self.exec.regs.resize(d.program.registers, Lanes::ZERO);
             }
             self.exec.regs[..d.prologue.len()].copy_from_slice(&d.prologue);
-            let _ = p;
             self.loaded = Some(draw);
         }
         let env = Env { uniforms: &d.uniforms, blocks: &e.blocks, textures: &e.textures };
@@ -445,7 +443,17 @@ impl Worker {
         if mask == 0 {
             return;
         }
+        if d.abandoned.load(Ordering::Relaxed) {
+            b.cov = [0; LANES];
+            return;
+        }
         let alive = self.exec.run(&p.fs, mask, env);
+        if core::mem::take(&mut self.exec.runaway) {
+            // Its loops were left early: what it computed is no result.
+            d.abandoned.store(true, Ordering::Relaxed);
+            b.cov = [0; LANES];
+            return;
+        }
         for (lane, c) in b.cov.iter_mut().enumerate() {
             if alive & (1 << lane) == 0 {
                 *c = 0;
@@ -623,7 +631,7 @@ fn depth_stencil(t: &Targets, d: &DrawRecord, b: &mut Block, frag_depth: Option<
     passed
 }
 
-/// Clears the part of `rect` a clear command covers.
+/// Clears the part of `rect` (a tile's) a clear command covers.
 pub fn clear(t: &Targets, c: &ClearCmd, rect: [i32; 4]) {
     let r = intersect(rect, c.rect);
     if r[0] >= r[2] || r[1] >= r[3] {
@@ -641,41 +649,69 @@ pub fn clear(t: &Targets, c: &ClearCmd, rect: [i32; 4]) {
         let n = f.bytes();
         let mut bytes = [0u8; 16];
         f.encode(&texel, &mut bytes[..n]);
-        let full = c.color_mask == [true; 4];
+        if c.color_mask == [true; 4] {
+            // SAFETY: `r` lies in this worker's tile and the framebuffer.
+            unsafe { fill(&target, r, &bytes[..n]) };
+            continue;
+        }
+        let v4 = match texel {
+            Texel::Float(f) => f,
+            Texel::Int(i) => i.map(|x| f32::from_bits(x as u32)),
+            Texel::Uint(u) => u.map(f32::from_bits),
+            Texel::Depth(..) => [0.0; 4],
+        };
         for y in r[1]..r[3] {
             for x in r[0]..r[2] {
                 for s in 0..samples {
                     // SAFETY: the pixel is inside this worker's tile.
-                    unsafe {
-                        if full {
-                            core::ptr::copy_nonoverlapping(bytes.as_ptr(), target.sample(x as u32, y as u32, s), n);
-                        } else {
-                            let v4 = match texel {
-                                Texel::Float(f) => f,
-                                Texel::Int(i) => i.map(|x| f32::from_bits(x as u32)),
-                                Texel::Uint(u) => u.map(f32::from_bits),
-                                Texel::Depth(..) => [0.0; 4],
-                            };
-                            target.store(x as u32, y as u32, s, v4, c.color_mask);
+                    unsafe { target.store(x as u32, y as u32, s, v4, c.color_mask) };
+                }
+            }
+        }
+    }
+    // Depth (and stencil with it, where they share a texel and both are
+    // cleared whole) as whole texels, or sample by sample keeping what the
+    // clear leaves alone.
+    let stencil = c.stencil.zip(t.stencil);
+    let mut stencil_done = false;
+    if let (Some(dv), Some(dt)) = (c.depth, t.depth) {
+        let q = dt.quantize(dv);
+        let whole_stencil = stencil.filter(|(_, st)| st.ptr == dt.ptr && c.stencil_mask & 0xFF == 0xFF);
+        let whole: Option<([u8; 4], usize)> = match (dt.format, q, whole_stencil) {
+            (Format::D16Unorm, DepthValue::Fixed(v), _) => {
+                let b = (v as u16).to_le_bytes();
+                Some(([b[0], b[1], 0, 0], 2))
+            }
+            (Format::D24Unorm, DepthValue::Fixed(v), _) => Some(((v << 8).to_le_bytes(), 4)),
+            (Format::D32Float, DepthValue::Float(f), _) => Some((f.to_bits().to_le_bytes(), 4)),
+            (Format::D24UnormS8Uint, DepthValue::Fixed(v), Some((sv, _))) => {
+                stencil_done = true;
+                Some((((v << 8) | u32::from(sv as u8)).to_le_bytes(), 4))
+            }
+            _ => None,
+        };
+        match whole {
+            // SAFETY: `r` lies in this worker's tile and the framebuffer.
+            Some((b, n)) => unsafe { fill(&dt, r, &b[..n]) },
+            None => {
+                for y in r[1]..r[3] {
+                    for x in r[0]..r[2] {
+                        for s in 0..samples {
+                            // SAFETY: as above.
+                            unsafe { dt.store_depth(x as u32, y as u32, s, q) };
                         }
                     }
                 }
             }
         }
     }
-    if let (Some(dv), Some(dt)) = (c.depth, t.depth) {
-        let q = dt.quantize(dv);
-        for y in r[1]..r[3] {
-            for x in r[0]..r[2] {
-                for s in 0..samples {
-                    // SAFETY: as above.
-                    unsafe { dt.store_depth(x as u32, y as u32, s, q) };
-                }
-            }
-        }
-    }
-    if let (Some(sv), Some(st)) = (c.stencil, t.stencil) {
+    if let (Some((sv, st)), false) = (stencil, stencil_done) {
         let (v, m) = (sv as u8, c.stencil_mask as u8);
+        if m == 0xFF && st.format == Format::S8Uint {
+            // SAFETY: `r` lies in this worker's tile and the framebuffer.
+            unsafe { fill(&st, r, &[v]) };
+            return;
+        }
         for y in r[1]..r[3] {
             for x in r[0]..r[2] {
                 for s in 0..samples {
@@ -686,6 +722,36 @@ pub fn clear(t: &Targets, c: &ClearCmd, rect: [i32; 4]) {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Fills every sample of the pixels of `r` of a target with the bytes of
+/// one sample, a row at a time.
+///
+/// # Safety
+/// `r` lies inside the target, and no other thread touches its pixels.
+unsafe fn fill(t: &RenderTarget, r: [i32; 4], sample: &[u8]) {
+    // A tile's row of pixels of the widest texels (four samples of four
+    // 32-bit components), or as many pixels as fit.
+    let mut row = [0u8; TILE as usize * 64];
+    let pixel = t.texel;
+    let per = row.len() / pixel.max(1);
+    if sample.is_empty() || per == 0 {
+        return;
+    }
+    for p in row[..per * pixel].chunks_exact_mut(sample.len()) {
+        p.copy_from_slice(sample);
+    }
+    for y in r[1]..r[3] {
+        let mut x = r[0];
+        while x < r[2] {
+            let n = ((r[2] - x) as usize).min(per);
+            // SAFETY: pixels `x..x + n` of row `y` are inside the target
+            // and contiguous, `n * pixel` bytes from the first, as the
+            // caller guarantees; `row` holds that many.
+            unsafe { core::ptr::copy_nonoverlapping(row.as_ptr(), t.sample(x as u32, y as u32, 0), n * pixel) };
+            x += n as i32;
         }
     }
 }
@@ -735,7 +801,7 @@ fn depth_only(
     let mut passed = 0;
     let z = |b: &Block, lane: usize| {
         let z = frag_depth.map_or(b.z[lane][0], |f| f.f32(lane));
-        if z > 0.0 { if z < 1.0 { z } else { 1.0 } } else { 0.0 }
+        crate::format::clamp01(z)
     };
     for lane in 0..LANES {
         if b.cov[lane] == 0 {

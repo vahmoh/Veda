@@ -9,7 +9,10 @@
 //! system's log), and Veda's drivers for Linux that the guest's devices
 //! need (`input` for whatever input devices come, `alsa` for sound cards,
 //! `net` for Ethernet cards, `wifi` for Wi-Fi radios, `kms` for displays
-//! and `renderer` for their GPUs), again if they end. With
+//! and `renderer` for their GPUs), again if they end: a second after, and
+//! after each end in a row that came soon after its start twice as long,
+//! up to a minute (so that a driver that cannot work does not start every
+//! second for ever, and one that crashed once is back at once). With
 //! `veda.renderer=softpipe` the renderer renders on softpipe, for tests,
 //! whatever the devices.
 //! Then it runs the programs the kernel's command line names
@@ -22,10 +25,11 @@
 //! killer ends one), for the tests of a driver's.
 
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use guest_sys::retry::Backoff;
 use rustix::mount::{MountFlags, mount};
-use rustix::process::{Pid, Signal, kill_process};
+use rustix::process::{Signal, kill_process};
 use rustix::system::{RebootCommand, reboot};
 
 /// Veda's drivers for Linux, and the PCI classes (their first bytes, as
@@ -52,30 +56,39 @@ fn has_class(classes: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// The longest a driver waits to be started again.
+const MOST_WAIT: Duration = Duration::from_secs(60);
+
 /// Runs driver `name` (from `/bin`, with `args`) on a thread of its own,
-/// and again a second after it ends.
+/// and again after it ends: a second after, twice as long after each end
+/// in a row up to [`MOST_WAIT`]; a second after again once it ran that
+/// long.
 fn keep_running(name: &'static str, args: &'static [&'static str]) {
     std::thread::spawn(move || {
+        let mut backoff = Backoff::new(Duration::from_secs(1), MOST_WAIT);
         loop {
-            match Command::new(format!("/bin/{name}")).args(args).status() {
-                Ok(status) => println!("veda: {name} ended ({status}); starting it again"),
+            let started = Instant::now();
+            let status = match Command::new(format!("/bin/{name}")).args(args).status() {
+                Ok(status) => status,
                 Err(e) => {
                     println!("veda: cannot run {name}: {e}");
                     return;
                 }
+            };
+            if started.elapsed() >= MOST_WAIT {
+                backoff.reset();
             }
-            std::thread::sleep(Duration::from_secs(1));
+            let wait = backoff.delay();
+            println!("veda: {name} ended ({status}); starting it again in {} s", wait.as_secs());
+            std::thread::sleep(wait);
         }
     });
 }
 
 /// Ends the processes called `name`, by SIGKILL.
 fn kill_named(name: &str) {
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Some(pid) = entry.file_name().to_string_lossy().parse().ok().and_then(Pid::from_raw) else { continue };
-        if std::fs::read_to_string(entry.path().join("comm")).is_ok_and(|c| c.trim() == name) {
-            let _ = kill_process(pid, Signal::KILL);
-        }
+    for pid in guest_sys::process::named(name) {
+        let _ = kill_process(pid, Signal::KILL);
     }
 }
 

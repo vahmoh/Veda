@@ -20,6 +20,8 @@ vipc = { workspace = true }
 vproto = { workspace = true }
 vwlan = { workspace = true }
 vfiles = { workspace = true }
+# Session keys handed to the radio are zeroed once given.
+zeroize = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

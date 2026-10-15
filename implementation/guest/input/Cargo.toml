@@ -14,7 +14,6 @@ path = "src/main.rs"
 bench = false
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
 vproto = { workspace = true }
 guest-sys = { workspace = true }
 rustix = { workspace = true }

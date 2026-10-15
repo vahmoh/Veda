@@ -5,15 +5,17 @@
 //! opened explicitly), with metadata read from the first and last few
 //! kilobytes of each file.
 
-use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use vaudio::source;
+use vfiles::path::{HOME, join};
 use vproto::fs::{open_flags, vfs};
 
-/// Where the library lives.
-pub const MUSIC_DIR: &str = "/home/user/Music";
+/// Where the library lives: `~/Music`.
+pub fn music_dir() -> String {
+    join(HOME, "Music")
+}
 /// Bytes read from each end of a file to find its format and tags.
 const PROBE_BYTES: u32 = 8192;
 
@@ -103,13 +105,13 @@ pub struct Entry {
 
 impl Entry {
     pub fn path(&self) -> String {
-        format!("{}/{}", MUSIC_DIR, self.name)
+        join(&music_dir(), &self.name)
     }
 }
 
 /// The audio files in the Music folder (cheap: one directory listing).
 pub fn listing(vfs: &vfs::Client) -> Vec<Entry> {
-    let Ok(Ok(entries)) = vfs.read_dir(MUSIC_DIR.into()) else { return Vec::new() };
+    let Ok(Ok(entries)) = vfs.read_dir(music_dir()) else { return Vec::new() };
     entries
         .into_iter()
         .filter(|e| !e.is_dir && vfiles::kind::is_playable_audio(&e.name))
@@ -126,14 +128,4 @@ pub fn sort(tracks: &mut [Track]) {
             .then(a.number.cmp(&b.number))
             .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
     });
-}
-
-/// `m:ss` (or `h:mm:ss`).
-pub fn format_time(ms: u64) -> String {
-    let s = ms / 1000;
-    if s >= 3600 {
-        format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
-    } else {
-        format!("{}:{:02}", s / 60, s % 60)
-    }
 }

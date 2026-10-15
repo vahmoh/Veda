@@ -12,11 +12,20 @@
 //! * `displaydev` — a display driver hands over pictures it flips between
 //!   at the vertical blank (see `screen`).
 //!
+//! What it decides (windows, focus, input, who may do what) is
+//! `compositor_core`'s, tested on the host; this program serves the
+//! protocols, maps clients' memory and draws.
+//!
 //! Rendering is damage driven: only regions that changed are recomposited,
 //! at most once per display frame: by the GPU, straight into the picture
 //! the display shows next, where a driver flips and the GPU can draw into
 //! its pictures (`gpu`); otherwise by the processor into the back buffer,
 //! which is copied to the screen.
+//!
+//! One loop serves everything, so that no client can hold it: each wake-up
+//! serves the input drivers first, then every client with requests waiting,
+//! a few requests each in turn, composing a frame between them as soon as
+//! one is due.
 
 #![no_std]
 #![no_main]
@@ -25,38 +34,46 @@ extern crate alloc;
 
 mod decor;
 mod gpu;
-mod input;
-mod keymap;
+mod pixels;
 mod render;
 mod screen;
 mod session;
 mod startup;
 mod state;
-mod switcher;
-mod window;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
+use compositor_core::Wm;
+use compositor_core::clients::Identity;
 use vabi::signals;
-use vgfx::{Damage, Rect, Text};
+use vgfx::{Rect, Text};
 use vipc::WaitSet;
 use vproto::display::{Cursor, display};
 use vproto::displaydev::{self, DisplayDevError, Link, displaydev as driver_protocol};
+use vproto::init::ClientIdentity;
 use vproto::input::InputEvent;
 use vrt::object::{Channel, Vmo};
 use vrt::println;
 use vrt::vm::Mapping;
 
-use decor::{Decor, DecorState};
-use keymap::Keyboard;
+use decor::Decor;
 use screen::Screen;
 use session::Session;
 use startup::Startup;
-use state::{Compositor, DisplayClient};
+use state::Compositor;
 
 vrt::entry!(main);
+
+/// How many requests a client has served at a wake-up before the others,
+/// how many reports an input driver, how many requests a display driver,
+/// and how many connections each service accepts.
+const CLIENT_BUDGET: usize = 16;
+const INPUT_BUDGET: usize = 64;
+const DRIVER_BUDGET: usize = 16;
+const ACCEPT_BUDGET: usize = 16;
 
 /// Reads a font file from the system image and leaks it (fonts live forever).
 fn load_font(vfs: &vproto::vfs::Client, path: &str) -> Option<&'static [u8]> {
@@ -66,22 +83,38 @@ fn load_font(vfs: &vproto::vfs::Client, path: &str) -> Option<&'static [u8]> {
     Some(data.leak())
 }
 
-/// A display driver's connection (`displaydev`).
+/// Whether a connection was opened by a driver: devmgr starts the drivers
+/// (and the driver VM, whose programs connect through it) with its own
+/// registry channel, so they speak as devmgr.
+fn is_driver(who: &ClientIdentity) -> bool {
+    who.service && who.name == "devmgr"
+}
+
+/// Logs `what` the first few times, then every hundredth (`count` counts
+/// them), so that a client repeating it cannot flood the log.
+fn log_now_and_then(count: &AtomicU32, what: impl FnOnce()) {
+    let n = count.fetch_add(1, Ordering::Relaxed);
+    if n < 3 || n.is_multiple_of(100) {
+        what();
+    }
+}
+
+static REFUSED_CONNECTIONS: AtomicU32 = AtomicU32::new(0);
+static REFUSED_INPUT: AtomicU32 = AtomicU32::new(0);
+static REFUSED_DRIVERS: AtomicU32 = AtomicU32::new(0);
+static DROPPED_CLIENTS: AtomicU32 = AtomicU32::new(0);
+
+/// A display driver's connection (`displaydev`): only drivers' are
+/// accepted ([`is_driver`]).
 struct DriverLink<'a> {
     screen: &'a mut Screen,
     key: u64,
-    /// A driver's (started by devmgr); nobody else may attach.
-    trusted: bool,
     /// The firmware's framebuffer (physical address).
     framebuffer: u64,
 }
 
 impl driver_protocol::Server for DriverLink<'_> {
     fn attach(&mut self, screen: displaydev::Screen, link: Link) -> Result<(), DisplayDevError> {
-        if !self.trusted {
-            println!("{} cannot have the screen: only drivers may attach", screen.name);
-            return Err(DisplayDevError::Denied);
-        }
         let name = screen.name.clone();
         let result = self.screen.attach(self.key, screen, link, self.framebuffer);
         // A mismatch is told in detail where it is found.
@@ -94,9 +127,6 @@ impl driver_protocol::Server for DriverLink<'_> {
     }
 
     fn screen(&mut self) -> Result<displaydev::ScreenMode, DisplayDevError> {
-        if !self.trusted {
-            return Err(DisplayDevError::Denied);
-        }
         let r = self.screen.rect();
         Ok(displaydev::ScreenMode {
             width: r.w as u32,
@@ -107,11 +137,65 @@ impl driver_protocol::Server for DriverLink<'_> {
     }
 
     fn expect(&mut self, device: Option<String>) -> Result<(), DisplayDevError> {
-        if !self.trusted {
-            return Err(DisplayDevError::Denied);
-        }
         self.screen.expect(self.key, device);
         Ok(())
+    }
+}
+
+/// Serves up to [`CLIENT_BUDGET`] requests of the display client on `key`,
+/// at `now`.
+fn serve_client(comp: &mut Compositor, key: u64, now: u64) {
+    for _ in 0..CLIENT_BUDGET {
+        let Some(msg) = comp.clients.get(&key).and_then(|c| c.read().ok()) else { return };
+        comp.wm.request(key, now);
+        let reply = display::dispatch(&mut Session { comp: &mut *comp, client: key, now }, msg);
+        let sent = match (reply, comp.clients.get(&key)) {
+            (Ok(reply), Some(c)) => reply.send(c),
+            (Ok(_), None) => Ok(()),
+            (Err(e), _) => Err(e),
+        };
+        match sent {
+            Ok(()) => comp.settle(),
+            // Refused (the client was told so): the compositor's answer was
+            // larger than a message, which it never should be.
+            Err(vipc::IpcError::TooLarge) => {
+                println!("an answer to a client was too large to send");
+                comp.settle();
+            }
+            // It left without its answer.
+            Err(vipc::IpcError::PeerClosed) => {
+                comp.drop_client(key);
+                return;
+            }
+            // Answers it does not read (its channel is full), or a message
+            // without a header: it is sent away, its windows with it.
+            Err(e) => {
+                let why = match e {
+                    vipc::IpcError::Kernel(vabi::Error::ShouldWait) => "it does not read its answers",
+                    _ => "what it sent is not a request",
+                };
+                log_now_and_then(&DROPPED_CLIENTS, || {
+                    let name = comp.wm.client(key).map_or("a client", |c| c.identity.name.as_str());
+                    println!("{}'s connection to the window system is closed: {}", name, why);
+                });
+                comp.drop_client(key);
+                return;
+            }
+        }
+    }
+}
+
+/// Serves up to [`INPUT_BUDGET`] reports of the input driver on `key`, at
+/// `now`.
+fn serve_input(comp: &mut Compositor, inputs: &BTreeMap<u64, Channel>, key: u64, now: u64) {
+    for _ in 0..INPUT_BUDGET {
+        let Some(msg) = inputs.get(&key).and_then(|c| c.read().ok()) else { return };
+        if let Ok((_, events)) = vipc::decode_event::<Vec<InputEvent>>(msg) {
+            for ev in events {
+                comp.wm.input(key, ev, now);
+            }
+        }
+        comp.settle();
     }
 }
 
@@ -130,6 +214,10 @@ fn main() -> i32 {
     let info: vabi::KernelBootInfo = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const vabi::KernelBootInfo) };
     let (width, height, pitch) =
         (info.framebuffer_width as i32, info.framebuffer_height as i32, info.framebuffer_pitch as usize);
+    if width <= 0 || height <= 0 || !screen::pitch_fits(pitch, width) {
+        println!("the firmware's framebuffer ({}x{}, {} bytes a row) is not a screen", width, height, pitch);
+        return 1;
+    }
     let fb_size = (pitch * height as usize).next_multiple_of(4096);
     let fb = match Mapping::new(fb_vmo, fb_size, vabi::map_flags::READ | vabi::map_flags::WRITE) {
         Ok(m) => m,
@@ -165,33 +253,17 @@ fn main() -> i32 {
     let driver_listener = vproto::register(driver_protocol::NAME).expect("cannot register the display driver service");
     println!("display {}x{} ready", width, height);
 
+    let started = vrt::time::now_ns();
     let mut comp = Compositor {
-        screen: Screen::new(fb, pitch, info.framebuffer_format == 2, width, height),
+        wm: Wm::new(Rect::new(0, 0, width, height)),
+        screen: Screen::new(fb, pitch, info.framebuffer_format == 2, width, height, started),
         decor: Decor::new(text, title_font),
-        windows: BTreeMap::new(),
-        order: Vec::new(),
-        focused: None,
-        next_id: 1,
-        damage: Damage::new(),
+        events: BTreeMap::new(),
         clients: BTreeMap::new(),
-        shell: None,
-        keyboard: Keyboard::default(),
-        pointer: (width / 2, height / 2),
+        cursor: (Cursor::Arrow, (i32::MIN, i32::MIN)),
         cursor_rect: Rect::default(),
-        cursor_shape: Cursor::Arrow,
-        buttons: 0,
-        drag: None,
-        decor_state: DecorState::default(),
-        hover_window: None,
-        hover_hit: None,
-        last_click: (0, 0, 0, 0, 0),
-        click_count: 0,
-        clipboard: String::new(),
+        thumbs: None,
         last_frame: 0,
-        work_area: Rect::new(0, 0, width, height),
-        switcher: None,
-        snap: None,
-        desktop_shown: Vec::new(),
         startup: None,
         gpu: None,
         gpu_ready: None,
@@ -204,15 +276,16 @@ fn main() -> i32 {
     // dissolves into the desktop once it has drawn itself.
     if vrt::env::args().iter().any(|a| a == "splash") {
         let fonts = (title_font, regular_font);
-        comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, vrt::time::now_ns()));
+        comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, started));
     }
-    comp.update_cursor_rect();
-    comp.damage.add(comp.screen_rect());
+    comp.update_cursor();
+    let screen = comp.screen_rect();
+    comp.wm.add_damage(screen);
     comp.composite();
 
+    // Input drivers' and display drivers' connections.
     let mut inputs: BTreeMap<u64, Channel> = BTreeMap::new();
-    // Display drivers' connections, and whether each is a driver's.
-    let mut drivers: BTreeMap<u64, (Channel, bool)> = BTreeMap::new();
+    let mut drivers: BTreeMap<u64, Channel> = BTreeMap::new();
     let framebuffer = info.framebuffer_phys;
     let mut next_key = 10u64;
     const DISPLAY_KEY: u64 = 1;
@@ -223,6 +296,10 @@ fn main() -> i32 {
     const GPU_FENCE_KEY: u64 = 6;
     const INPUT_BASE: u64 = 1 << 40;
     const DRIVER_BASE: u64 = 1 << 41;
+    const WRITABLE_BASE: u64 = 1 << 42;
+    // Kept from one wait to the next: its handles stay registered with the
+    // kernel, so that a wait costs what is ready, however many clients.
+    let mut ws = WaitSet::new();
     loop {
         let now = vrt::time::now_ns();
         comp.screen.check(now);
@@ -242,22 +319,21 @@ fn main() -> i32 {
             s.release(now, comp.screen.settled());
         }
         let mut deadline = vabi::DEADLINE_INFINITE;
-        if let Some(t) = comp.startup.as_ref().and_then(|s| s.deadline()) {
-            deadline = t;
+        let mut until = |t: Option<u64>| {
+            if let Some(t) = t {
+                deadline = deadline.min(t);
+            }
+        };
+        until(comp.startup.as_ref().and_then(|s| s.deadline()));
+        until(comp.wants_frame().then(|| comp.screen.next_frame(comp.last_frame).max(now)));
+        until(comp.screen.deadline());
+        until(comp.gpu_deadline());
+        until(comp.wm.repeat_deadline());
+        until(comp.wm.liveness_deadline());
+        ws.clear();
+        for (&k, c) in &inputs {
+            ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, INPUT_BASE | k);
         }
-        if comp.wants_frame() {
-            deadline = deadline.min(comp.screen.next_frame(comp.last_frame).max(now));
-        }
-        if let Some(t) = comp.screen.timeout() {
-            deadline = deadline.min(t);
-        }
-        if let Some(t) = comp.gpu_deadline() {
-            deadline = deadline.min(t);
-        }
-        if let Some(r) = comp.keyboard.repeat_deadline() {
-            deadline = deadline.min(r);
-        }
-        let mut ws = WaitSet::new();
         ws.add(display_listener.raw(), signals::READABLE, DISPLAY_KEY);
         ws.add(input_listener.raw(), signals::READABLE, INPUT_KEY);
         ws.add(driver_listener.raw(), signals::READABLE, DRIVER_KEY);
@@ -272,36 +348,68 @@ fn main() -> i32 {
         {
             ws.add(g.fence_event(), signals::SIGNALED, GPU_FENCE_KEY);
         }
-        for (&k, (c, _)) in &drivers {
+        for (&k, c) in &drivers {
             ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, DRIVER_BASE | k);
         }
         for (&k, c) in &comp.clients {
-            ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
+            ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, k);
         }
-        for (&k, c) in &inputs {
-            ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, INPUT_BASE | k);
+        // Windows whose clients fell behind: their events go out as there
+        // is room.
+        for id in comp.wm.blocked() {
+            if let Some(c) = comp.events.get(&id) {
+                ws.add(c.raw(), signals::WRITABLE | signals::PEER_CLOSED, WRITABLE_BASE | u64::from(id));
+            }
         }
-        let ready = ws.wait(deadline).unwrap_or_default();
+        let mut ready = ws.wait(deadline).unwrap_or_default();
+        // The input drivers first: what they report is served first.
+        ready.sort_by_key(|&(key, _)| key & INPUT_BASE == 0);
+        let now = vrt::time::now_ns();
         for (key, observed) in ready {
             match key {
                 DISPLAY_KEY => {
-                    while let Some(ch) = vproto::accept(&display_listener) {
+                    for _ in 0..ACCEPT_BUDGET {
+                        let Some((ch, who)) = vproto::accept_with_identity(&display_listener) else { break };
                         next_key += 1;
-                        comp.clients.insert(next_key, DisplayClient { channel: ch, windows: Vec::new() });
+                        let name = who.name.clone();
+                        let identity = Identity { koid: who.koid, name: who.name, service: who.service };
+                        match comp.wm.connect(next_key, identity, now) {
+                            Ok(()) => {
+                                comp.clients.insert(next_key, ch);
+                            }
+                            Err(_) => log_now_and_then(&REFUSED_CONNECTIONS, || {
+                                println!("{} has as many connections to the window system as it may", name)
+                            }),
+                        }
                     }
                 }
                 INPUT_KEY => {
-                    while let Some(ch) = vproto::accept(&input_listener) {
-                        next_key += 1;
-                        inputs.insert(next_key, ch);
+                    for _ in 0..ACCEPT_BUDGET {
+                        let Some((ch, who)) = vproto::accept_with_identity(&input_listener) else { break };
+                        if is_driver(&who) {
+                            next_key += 1;
+                            inputs.insert(next_key, ch);
+                        } else {
+                            log_now_and_then(&REFUSED_INPUT, || {
+                                println!("{} may not report input: only drivers may", who.name)
+                            });
+                        }
                     }
                 }
                 DRIVER_KEY => {
-                    while let Some((ch, who)) = vproto::accept_with_identity(&driver_listener) {
-                        next_key += 1;
-                        // devmgr starts the drivers with its own registry
-                        // channel: they speak as devmgr.
-                        drivers.insert(next_key, (ch, who.service && who.name == "devmgr"));
+                    for _ in 0..ACCEPT_BUDGET {
+                        let Some((ch, who)) = vproto::accept_with_identity(&driver_listener) else { break };
+                        // Nobody else may attach, nor say what is coming: the
+                        // connection is closed at once (rather than kept, to
+                        // be refused each request).
+                        if is_driver(&who) {
+                            next_key += 1;
+                            drivers.insert(next_key, ch);
+                        } else {
+                            log_now_and_then(&REFUSED_DRIVERS, || {
+                                println!("{} cannot have the screen: only drivers may attach", who.name)
+                            });
+                        }
                     }
                 }
                 FLIP_DONE_KEY => comp.screen.flip_done(),
@@ -314,20 +422,25 @@ fn main() -> i32 {
                         }
                     }
                 }
-                GPU_FENCE_KEY => comp.gpu_signaled(vrt::time::now_ns()),
+                GPU_FENCE_KEY => comp.gpu_signaled(now),
+                k if k & WRITABLE_BASE != 0 => comp.writable((k & !WRITABLE_BASE) as u32),
                 k if k & DRIVER_BASE != 0 => {
                     let k = k & !DRIVER_BASE;
                     if observed & signals::READABLE != 0 {
-                        while let Some(Ok(msg)) = drivers.get(&k).map(|(c, _)| c.read()) {
-                            let trusted = drivers.get(&k).is_some_and(|(_, t)| *t);
-                            let mut link = DriverLink { screen: &mut comp.screen, key: k, trusted, framebuffer };
+                        for _ in 0..DRIVER_BUDGET {
+                            let Some(Ok(msg)) = drivers.get(&k).map(|c| c.read()) else { break };
+                            let mut link = DriverLink { screen: &mut comp.screen, key: k, framebuffer };
                             match driver_protocol::dispatch(&mut link, msg) {
                                 Ok(reply) => {
-                                    if let Some((c, _)) = drivers.get(&k) {
+                                    if let Some(c) = drivers.get(&k) {
                                         let _ = reply.send(c);
                                     }
                                 }
-                                Err(e) => println!("bad display driver request: {}", e),
+                                Err(_) => {
+                                    // Not the protocol: the connection goes.
+                                    drivers.remove(&k);
+                                    comp.screen.detach(k);
+                                }
                             }
                         }
                     } else if observed & signals::PEER_CLOSED != 0 {
@@ -338,67 +451,40 @@ fn main() -> i32 {
                 k if k & INPUT_BASE != 0 => {
                     let k = k & !INPUT_BASE;
                     if observed & signals::READABLE != 0 {
-                        while let Some(Ok(msg)) = inputs.get(&k).map(|c| c.read()) {
-                            if let Ok((_, events)) = vipc::decode_event::<Vec<InputEvent>>(msg) {
-                                for ev in events {
-                                    match ev {
-                                        InputEvent::Absolute { x, y, max_x, max_y } => {
-                                            let px = (x as i64 * width as i64 / max_x.max(1) as i64) as i32;
-                                            let py = (y as i64 * height as i64 / max_y.max(1) as i64) as i32;
-                                            comp.pointer_moved(px, py);
-                                        }
-                                        InputEvent::Motion { dx, dy } => {
-                                            let (x, y) = comp.pointer;
-                                            comp.pointer_moved(x + dx, y + dy);
-                                        }
-                                        InputEvent::Button { button, pressed } => comp.pointer_button(button, pressed),
-                                        InputEvent::Scroll { dx, dy } => comp.scroll(dx, dy),
-                                        InputEvent::Key { code, pressed } => comp.key(code, pressed),
-                                    }
-                                }
-                            }
-                        }
+                        serve_input(&mut comp, &inputs, k, now);
                     } else if observed & signals::PEER_CLOSED != 0 {
+                        // What it held is released for it.
                         inputs.remove(&k);
+                        comp.wm.source_gone(k, now);
+                        comp.settle();
                     }
                 }
                 k => {
                     if observed & signals::READABLE != 0 {
-                        while let Some(Ok(msg)) = comp.clients.get(&k).map(|c| c.channel.read()) {
-                            let mut s = Session { comp: &mut comp, client: k };
-                            match display::dispatch(&mut s, msg) {
-                                Ok(reply) => {
-                                    if let Some(c) = comp.clients.get(&k) {
-                                        let _ = reply.send(&c.channel);
-                                    }
-                                }
-                                Err(e) => println!("bad display request: {}", e),
-                            }
-                        }
+                        serve_client(&mut comp, k, now);
                     } else if observed & signals::PEER_CLOSED != 0 {
-                        // Client gone: remove its windows.
-                        if let Some(c) = comp.clients.remove(&k) {
-                            for id in c.windows {
-                                comp.destroy_window(id);
-                            }
-                        }
-                        if comp.shell == Some(k) {
-                            comp.shell = None;
-                        }
+                        comp.drop_client(k);
+                    }
+                    // A frame due is composed before the next client is
+                    // served.
+                    if comp.frame_due(vrt::time::now_ns()) {
+                        comp.composite();
                     }
                 }
             }
         }
         let now = vrt::time::now_ns();
-        while let Some(out) = comp.keyboard.poll_repeat(now) {
-            comp.deliver_key(out);
+        comp.wm.repeat(now);
+        if comp.wm.liveness_deadline().is_some_and(|t| now >= t) {
+            comp.wm.check_liveness(now);
         }
+        comp.settle();
         // A frame the GPU draws that takes too long.
         if comp.gpu_deadline().is_some_and(|t| now >= t) {
             comp.gpu_signaled(now);
         }
         comp.screen.check(now);
-        if comp.wants_frame() && now >= comp.screen.next_frame(comp.last_frame) {
+        if comp.frame_due(now) {
             comp.composite();
         }
     }

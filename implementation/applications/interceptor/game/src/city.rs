@@ -55,7 +55,7 @@ pub struct Block {
 impl Block {
     /// The footprint's corners (x, z).
     pub fn corners(&self) -> [Vec2; 4] {
-        let (s, c) = self.yaw.sin_cos();
+        let (s, c) = libm::sincosf(self.yaw);
         let along = Vec2::new(c, -s);
         let across = Vec2::new(s, c);
         let (hw, hd) = (self.size.x * 0.5, self.size.z * 0.5);
@@ -93,7 +93,7 @@ fn clear(road: &Road, terrain: &Terrain, corners: &[Vec2; 4], margin: f32) -> bo
 /// clear of it. `None` if it never is (or stands in the water).
 fn place(road: &Road, terrain: &Terrain, s: f32, side: f32, lateral: f32, size: Vec3) -> Option<(Vec3, f32)> {
     let (_, f, _, _) = road.frame(s);
-    let yaw = (-f.z).atan2(f.x);
+    let yaw = libm::atan2f(-f.z, f.x);
     let mut out = lateral + size.z * 0.5;
     for _ in 0..6 {
         let p = road.point(s, side * out);

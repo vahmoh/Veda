@@ -10,15 +10,22 @@
 //! * the **taskbar** ([`taskbar`]): start button, the apps kept on it and
 //!   running ones, clock;
 //! * the **start menu** ([`start`]), **calendar** ([`calendar`]),
-//!   **volume** ([`volume`]) and **network** ([`wifi`]) popups;
+//!   **volume** ([`volume`]) and **network** ([`wifi`]) popups, one at a
+//!   time ([`Popup`]);
 //! * **notifications** ([`notify`]);
 //! * the voice **agent**'s tray item, window and approval requests
-//!   ([`agent`]).
+//!   ([`agent`], [`approval`]);
+//! * **restarting and shutting down** once the applications have closed
+//!   ([`power`]).
 //!
 //! Every surface is a [`vui::Host`] window. Surfaces draw from the shared
 //! [`Model`] and request changes as [`Action`]s, which the main loop performs
 //! after each round of drawing. The shell also serves the `shell` protocol so
-//! applications can change the wallpaper and post notifications.
+//! applications can change the wallpaper (loaded on a thread of its own, the
+//! request answered once it is done) and post notifications (shown as the
+//! application's, and only so many). It waits for the services it calls no
+//! longer than a few seconds, so that one that hangs does not freeze the
+//! desktop.
 
 #![no_std]
 #![no_main]
@@ -26,11 +33,13 @@
 extern crate alloc;
 
 mod agent;
+mod approval;
 mod apps;
 mod calendar;
 mod chrome;
 mod desktop;
 mod notify;
+mod power;
 mod presence;
 mod start;
 mod startup;
@@ -46,22 +55,25 @@ use alloc::vec::Vec;
 
 use vabi::{WaitItem, signals};
 use vgfx::Rect;
+use vipc::{Decode, Encode};
 use vproto::audio::{AudioStatus, audio};
 use vproto::display::{WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
 use vproto::init::{AppInfo, ClientIdentity, TaskEvent, launcher};
 use vproto::shell::{ShellError, shell};
 use vproto::vfs;
-use vrt::object::{Channel, Vmo};
+use vrt::object::{Channel, Message, Vmo};
 use vrt::println;
-use vui::Host;
 use vui::window::Display;
+use vui::{Host, Icon, Ui};
 
-use wallpaper::Wallpaper;
+use wallpaper::{Loader, Wallpaper};
 
 vrt::entry!(main);
 
 /// Where the chosen wallpaper is remembered.
 const WALLPAPER_CONFIG: &str = "/home/user/.config/wallpaper";
+/// The longest wallpaper path remembered (bytes).
+const MAX_WALLPAPER_PATH: u64 = 4096;
 
 /// How often the desktop looks whether `~/Desktop` or the Trash changed.
 const DESKTOP_POLL_NS: u64 = 1_500_000_000;
@@ -69,6 +81,34 @@ const DESKTOP_POLL_NS: u64 = 1_500_000_000;
 /// How long after a popup was dismissed by an outside click a click on its
 /// taskbar button still counts as "close" rather than "open again".
 pub const DISMISS_GRACE_NS: u64 = 250_000_000;
+
+/// How long the shell waits for an answer from the window system, the
+/// launcher or the file system before it carries on without one.
+const SERVICE_TIMEOUT_NS: u64 = 10_000_000_000;
+/// ... and from the audio service.
+const AUDIO_TIMEOUT_NS: u64 = 2_000_000_000;
+/// How long writing the home folder to disk before the power goes may take.
+const SYNC_TIMEOUT_NS: u64 = 120_000_000_000;
+
+/// Connections to the shell's service: in all, and from one process.
+const MAX_CLIENTS: usize = 32;
+const MAX_CLIENTS_EACH: usize = 4;
+/// Notifications a process may post in a period.
+const NOTES_PER_PERIOD: u32 = 5;
+const NOTE_PERIOD_NS: u64 = 10_000_000_000;
+
+/// `shell::set_wallpaper`'s method number: the shell answers it once the
+/// picture is loaded, rather than as `shell::dispatch` would, at once.
+const SET_WALLPAPER: u32 = 1;
+
+/// The taskbar's popups (one is open at a time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupKind {
+    Start,
+    Calendar,
+    Volume,
+    Wifi,
+}
 
 /// A request from a shell surface, performed by the main loop.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,20 +118,18 @@ pub enum Action {
     /// Raises, restores and focuses a window.
     Activate(u32),
     Minimize(u32),
-    ToggleStart,
-    CloseStart,
-    ToggleCalendar,
-    CloseCalendar,
-    ToggleVolume,
-    CloseVolume,
-    ToggleWifi,
-    CloseWifi,
+    /// Opens a popup (closing the one open), or closes it if it is open.
+    TogglePopup(PopupKind),
+    ClosePopup(PopupKind),
     /// Turns the Wi-Fi radio on or off.
     WifiRadio(bool),
     WifiScan,
-    /// Joins a Wi-Fi network.
+    /// Joins a Wi-Fi network: `security` is that of the network chosen from
+    /// the list (`None` for a hidden one), so that the password never goes
+    /// to an open impostor of the same name.
     WifiConnect {
         ssid: Vec<u8>,
+        security: Option<vnet::wifi::Security>,
         password: Option<String>,
         auto: bool,
         hidden: bool,
@@ -117,6 +155,8 @@ pub enum Action {
     SetVolume(f32, bool),
     /// Minimises every window, or restores them if the desktop is showing.
     ShowDesktop,
+    /// Restarts or shuts down (`power::REBOOT`, `power::SHUTDOWN`) once
+    /// the applications have closed.
     Power(u32),
     NextWallpaper,
     /// Re-reads the desktop folder.
@@ -147,15 +187,11 @@ pub struct Model {
     /// A wired interface is connected, and how to describe it.
     pub wired_up: bool,
     pub wired_label: String,
-    pub start_open: bool,
-    pub calendar_open: bool,
-    pub volume_open: bool,
-    pub wifi_open: bool,
-    /// When a popup was last dismissed (see [`DISMISS_GRACE_NS`]).
-    pub start_dismissed_at: u64,
-    pub calendar_dismissed_at: u64,
-    pub volume_dismissed_at: u64,
-    pub wifi_dismissed_at: u64,
+    /// The popup that is open.
+    pub popup: Option<PopupKind>,
+    /// The popup an outside click dismissed last, and when (see
+    /// [`DISMISS_GRACE_NS`]).
+    pub dismissed: Option<(PopupKind, u64)>,
     /// The taskbar button under the pointer, for its tooltip.
     pub tip: Option<tooltip::Tip>,
     /// The voice agent's state.
@@ -171,12 +207,54 @@ impl Model {
     pub fn push(&mut self, a: Action) {
         self.actions.push(a);
     }
+
+    /// Whether a press on `kind`'s button at `pressed_at` is the click that
+    /// dismissed it, which must not open it again.
+    pub fn just_dismissed(&self, kind: PopupKind, pressed_at: u64) -> bool {
+        self.dismissed.is_some_and(|(k, at)| k == kind && pressed_at <= at + DISMISS_GRACE_NS)
+    }
 }
 
-/// An open popup: its window and its UI.
-struct Popup<T> {
+/// What an open popup shows.
+enum PopupUi {
+    Start(start::StartMenu),
+    Calendar(calendar::Calendar),
+    Volume(volume::VolumeFlyout),
+    Wifi(wifi::WifiFlyout),
+}
+
+impl PopupUi {
+    fn update(&mut self, ui: &mut Ui, m: &mut Model) {
+        match self {
+            PopupUi::Start(p) => p.update(ui, m),
+            PopupUi::Calendar(p) => p.update(ui, m),
+            PopupUi::Volume(p) => p.update(ui, m),
+            PopupUi::Wifi(p) => p.update(ui, m),
+        }
+    }
+}
+
+/// The open popup: which it is, its window and what it shows.
+struct Popup {
+    kind: PopupKind,
     host: Host,
-    ui: T,
+    ui: PopupUi,
+}
+
+/// The agent's window.
+struct AgentWin {
+    host: Host,
+    ui: agent::AgentWindow,
+}
+
+/// A connection to the shell's service.
+struct Client {
+    /// Its number (connections come and go).
+    id: u64,
+    channel: Channel,
+    who: ClientIdentity,
+    /// A wallpaper it asked for is being loaded: it asks for one at a time.
+    loading: bool,
 }
 
 struct Shell {
@@ -193,27 +271,38 @@ struct Shell {
     taskbar_host: Host,
     taskbar: taskbar::Taskbar,
     audio: Option<audio::Client>,
-    start: Option<Popup<start::StartMenu>>,
-    calendar: Option<Popup<calendar::Calendar>>,
-    volume: Option<Popup<volume::VolumeFlyout>>,
-    wifi: Option<Popup<wifi::WifiFlyout>>,
+    popup: Option<Popup>,
     /// Wi-Fi events (`None` while the Wi-Fi service is not running).
     wifi_watch: Option<vnet::wifi::Watcher>,
     /// When to next look at the network state (and retry the watcher).
     next_net_poll: u64,
     tooltip: Option<tooltip::Tooltip>,
     notes: notify::Notifications,
+    /// Notifications each process posted in the current period: (process,
+    /// when the period started, how many).
+    note_counts: Vec<(u64, u64, u32)>,
     listener: Option<Channel>,
-    clients: Vec<(Channel, ClientIdentity)>,
+    clients: Vec<Client>,
+    next_client: u64,
+    /// The clients with requests waiting (as the last wait found).
+    ready: Vec<u64>,
     /// Who sent the request being answered.
     caller: ClientIdentity,
+    /// Loads wallpapers (`None` without a thread for it: loaded at once).
+    loader: Option<Loader>,
+    /// Wallpapers being loaded: the ticket, and the client and request to
+    /// answer (`None` for the desktop's own "Next wallpaper").
+    loading: Vec<(u64, Option<(u64, u32)>)>,
+    next_ticket: u64,
+    /// A restart or shutdown waiting for the applications to close.
+    power: Option<power::PowerOff>,
     /// Crash reports from the launcher (`launcher::watch`).
     task_events: Option<Channel>,
     /// Windows minimised by "show desktop", restored by the next click.
     hidden_by_show_desktop: Vec<u32>,
     /// The agent's interface link (`None` while the agent is not running).
     agent: Option<agent::AgentLink>,
-    agent_win: Option<Popup<agent::AgentWindow>>,
+    agent_win: Option<AgentWin>,
     /// When to try attaching the agent's interface again.
     next_agent_try: u64,
     /// The startup sound, until it has played (at system start only).
@@ -227,9 +316,13 @@ pub fn connect_running(name: &str) -> Option<Channel> {
     if names.iter().any(|n| n == name) { vproto::connect(name).ok() } else { None }
 }
 
-/// Reads a whole file.
-pub fn read_file(vfs: &vfs::Client, path: &str) -> Option<Vec<u8>> {
+/// Reads a whole file of at most `max` bytes (`None` for a larger one,
+/// whatever wrote it).
+pub fn read_file(vfs: &vfs::Client, path: &str, max: u64) -> Option<Vec<u8>> {
     let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;
+    if len > max {
+        return None;
+    }
     let mut buf = alloc::vec![0u8; len as usize];
     vmo.read(0, &mut buf).ok()?;
     Some(buf)
@@ -252,14 +345,41 @@ fn write_file(vfs: &vfs::Client, path: &str, data: &[u8]) -> bool {
 }
 
 impl Shell {
-    /// Loads the wallpaper at `path` (or the procedural one).
-    fn load_wallpaper(&self, path: &str) -> Option<Wallpaper> {
+    /// Loads the wallpaper at `path` (or the procedural one) on the
+    /// loader's thread; `asker` is the client and request to answer once it
+    /// is done. Without a loader, it is loaded now: the result.
+    fn load_wallpaper(&mut self, path: &str, asker: Option<(u64, u32)>) -> Option<Result<(), ShellError>> {
         let (w, h) = (self.model.screen.w, self.model.screen.h);
-        if path == wallpaper::PROCEDURAL {
-            return Some(Wallpaper::procedural(w, h));
+        let Some(loader) = &self.loader else {
+            let result = Wallpaper::open(self.vfs.as_ref(), path, w, h).map(|wp| self.set_wallpaper(wp));
+            return Some(result);
+        };
+        self.next_ticket += 1;
+        loader.load(self.next_ticket, path, w, h);
+        self.loading.push((self.next_ticket, asker));
+        None
+    }
+
+    /// Takes the wallpapers the loader has finished: the last becomes the
+    /// wallpaper, and those who asked are answered.
+    fn take_wallpapers(&mut self) {
+        let Some(loader) = &self.loader else { return };
+        for done in loader.take() {
+            let asker = match self.loading.iter().position(|(t, _)| *t == done.ticket) {
+                Some(i) => self.loading.remove(i).1,
+                None => None,
+            };
+            let result = done.result.map(|wp| self.set_wallpaper(wp));
+            if let Err(e) = result {
+                println!("wallpaper not changed: {:?}", e);
+            }
+            if let Some((client, txid)) = asker
+                && let Some(c) = self.clients.iter_mut().find(|c| c.id == client)
+            {
+                c.loading = false;
+                answer_wallpaper(&c.channel, txid, result);
+            }
         }
-        let bytes = read_file(self.vfs.as_ref()?, path)?;
-        Wallpaper::load(path, &bytes, w, h)
     }
 
     fn set_wallpaper(&mut self, wp: Wallpaper) {
@@ -281,24 +401,15 @@ impl Shell {
         let list = self.wallpapers();
         let cur = list.iter().position(|p| *p == self.model.wallpaper.path);
         let next = cur.map_or(0, |i| (i + 1) % list.len());
-        if let Some(wp) = self.load_wallpaper(&list[next]) {
-            self.set_wallpaper(wp);
+        if let Some(Err(e)) = self.load_wallpaper(&list[next].clone(), None) {
+            println!("wallpaper not changed: {:?}", e);
         }
     }
 
     fn invalidate_all(&mut self) {
         self.desktop_host.invalidate();
         self.taskbar_host.invalidate();
-        if let Some(p) = &mut self.start {
-            p.host.invalidate();
-        }
-        if let Some(p) = &mut self.calendar {
-            p.host.invalidate();
-        }
-        if let Some(p) = &mut self.volume {
-            p.host.invalidate();
-        }
-        if let Some(p) = &mut self.wifi {
+        if let Some(p) = &mut self.popup {
             p.host.invalidate();
         }
         self.notes.invalidate_all();
@@ -309,6 +420,9 @@ impl Shell {
     fn refresh_audio(&mut self) {
         if self.audio.is_none() {
             self.audio = connect_running(audio::NAME).map(audio::Client::new);
+            if let Some(a) = &self.audio {
+                a.set_timeout(AUDIO_TIMEOUT_NS);
+            }
         }
         self.model.audio = self.audio.as_ref().and_then(|a| a.status().ok());
         if self.model.audio.is_none() {
@@ -326,7 +440,9 @@ impl Shell {
             st.muted = muted;
         }
         self.taskbar_host.invalidate();
-        if let Some(p) = &mut self.volume {
+        if let Some(p) = &mut self.popup
+            && p.kind == PopupKind::Volume
+        {
             p.host.invalidate();
         }
     }
@@ -337,6 +453,9 @@ impl Shell {
                 list.into_iter().filter(|w| matches!(w.kind, WindowKind::Normal | WindowKind::Borderless)).collect();
         }
         self.taskbar_host.invalidate();
+        if let Some(p) = &mut self.power {
+            p.invalidate();
+        }
     }
 
     fn launch(&mut self, app: &str, args: Vec<String>) {
@@ -345,10 +464,10 @@ impl Shell {
         match launcher.launch_app(app.into(), args) {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                println!("cannot start {app}: {:?}", e);
+                println!("cannot start {app}: {e}");
                 self.post_notification(
                     &format!("Couldn't open {name}"),
-                    &format!("The application failed to start ({e:?})."),
+                    &format!("The application could not be started: {e}."),
                     "warning",
                 );
             }
@@ -356,8 +475,30 @@ impl Shell {
         }
     }
 
+    /// Shows a notification of the system's: `icon` is an installed
+    /// application's id (its tile) or an icon name (see
+    /// `vui::Icon::by_name`).
     fn post_notification(&mut self, title: &str, body: &str, icon: &str) {
-        self.notes.post(&self.display, &self.model, title, body, icon);
+        let glyph = self.model.app(icon).map(apps::icon_for).or_else(|| Icon::by_name(icon)).unwrap_or(Icon::Info);
+        let sender = notify::Sender { tile: (icon, glyph), name: None };
+        self.notes.post(&self.display, &self.model, title, body, sender);
+    }
+
+    /// Whether process `koid` may post another notification now (and
+    /// counts it).
+    fn note_allowed(&mut self, koid: u64, now: u64) -> bool {
+        self.note_counts.retain(|&(_, start, _)| now < start + NOTE_PERIOD_NS);
+        match self.note_counts.iter_mut().find(|e| e.0 == koid) {
+            Some(e) if e.2 >= NOTES_PER_PERIOD => false,
+            Some(e) => {
+                e.2 += 1;
+                true
+            }
+            None => {
+                self.note_counts.push((koid, now, 1));
+                true
+            }
+        }
     }
 
     fn popup_spec(title: &str, r: Rect) -> WindowSpec {
@@ -370,71 +511,57 @@ impl Shell {
         spec
     }
 
-    fn open_start(&mut self) {
-        self.close_calendar();
-        self.close_volume();
-        self.close_wifi();
-        let r = start::placement(self.model.screen);
-        match Host::new(&self.display, Self::popup_spec("Start", r)) {
+    /// Opens popup `kind`, closing the one open.
+    fn open_popup(&mut self, kind: PopupKind) {
+        self.close_popup();
+        let screen = self.model.screen;
+        let (r, title, what) = match kind {
+            PopupKind::Start => (start::placement(screen), "Start", "the start menu"),
+            PopupKind::Calendar => (calendar::placement(screen), "Calendar", "the calendar"),
+            PopupKind::Volume => {
+                self.refresh_audio();
+                (volume::placement(screen), "Volume", "the volume control")
+            }
+            PopupKind::Wifi => {
+                self.refresh_wifi();
+                let _ = vnet::wifi::scan();
+                (wifi::placement(screen), "Network", "the network flyout")
+            }
+        };
+        let origin = (r.x, r.y);
+        let ui = match kind {
+            PopupKind::Start => PopupUi::Start(start::StartMenu::new(origin)),
+            PopupKind::Calendar => PopupUi::Calendar(calendar::Calendar::new(origin)),
+            PopupKind::Volume => PopupUi::Volume(volume::VolumeFlyout::new(origin)),
+            PopupKind::Wifi => PopupUi::Wifi(wifi::WifiFlyout::new(origin)),
+        };
+        match Host::new(&self.display, Self::popup_spec(title, r)) {
             Ok(host) => {
-                self.start = Some(Popup { host, ui: start::StartMenu::new((r.x, r.y)) });
-                self.model.start_open = true;
+                self.popup = Some(Popup { kind, host, ui });
+                self.model.popup = Some(kind);
                 self.taskbar_host.invalidate();
             }
-            Err(e) => println!("cannot open the start menu: {:?}", e),
+            Err(e) => println!("cannot open {what}: {:?}", e),
         }
     }
 
-    fn close_start(&mut self) {
-        if self.start.take().is_some() {
-            self.model.start_open = false;
+    /// Closes the popup that is open.
+    fn close_popup(&mut self) {
+        if self.popup.take().is_some() {
+            self.model.popup = None;
             self.taskbar_host.invalidate();
         }
     }
 
-    fn open_calendar(&mut self) {
-        self.close_start();
-        self.close_volume();
-        self.close_wifi();
-        let r = calendar::placement(self.model.screen);
-        match Host::new(&self.display, Self::popup_spec("Calendar", r)) {
-            Ok(host) => {
-                self.calendar = Some(Popup { host, ui: calendar::Calendar::new((r.x, r.y)) });
-                self.model.calendar_open = true;
-                self.taskbar_host.invalidate();
-            }
-            Err(e) => println!("cannot open the calendar: {:?}", e),
-        }
-    }
-
-    fn close_calendar(&mut self) {
-        if self.calendar.take().is_some() {
-            self.model.calendar_open = false;
-            self.taskbar_host.invalidate();
-        }
-    }
-
-    fn open_volume(&mut self) {
-        self.close_start();
-        self.close_calendar();
-        self.close_wifi();
-        self.refresh_audio();
-        let r = volume::placement(self.model.screen);
-        match Host::new(&self.display, Self::popup_spec("Volume", r)) {
-            Ok(host) => {
-                self.volume = Some(Popup { host, ui: volume::VolumeFlyout::new((r.x, r.y)) });
-                self.model.volume_open = true;
-                self.taskbar_host.invalidate();
-            }
-            Err(e) => println!("cannot open the volume control: {:?}", e),
+    /// Closes popup `kind` if it is the one open.
+    fn close_popup_of(&mut self, kind: PopupKind) {
+        if self.model.popup == Some(kind) {
+            self.close_popup();
         }
     }
 
     fn open_agent(&mut self) {
-        self.close_start();
-        self.close_calendar();
-        self.close_volume();
-        self.close_wifi();
+        self.close_popup();
         let r = agent::placement(self.model.screen);
         let mut spec = WindowSpec::new(self.model.agent.name(), r.w as u32, r.h as u32);
         // A panel: it stays above the windows the agent opens or the user
@@ -446,7 +573,7 @@ impl Shell {
         spec.app_id = "agent".into();
         match Host::new(&self.display, spec) {
             Ok(host) => {
-                self.agent_win = Some(Popup { host, ui: agent::AgentWindow::new() });
+                self.agent_win = Some(AgentWin { host, ui: agent::AgentWindow::new() });
                 self.model.agent.window_open = true;
                 // Approvals now appear in the window.
                 self.notes.remove_approvals(self.model.screen);
@@ -527,40 +654,11 @@ impl Shell {
         }
     }
 
-    fn close_volume(&mut self) {
-        if self.volume.take().is_some() {
-            self.model.volume_open = false;
-            self.taskbar_host.invalidate();
-        }
-    }
-
-    fn open_wifi(&mut self) {
-        self.close_start();
-        self.close_calendar();
-        self.close_volume();
-        self.refresh_wifi();
-        let _ = vnet::wifi::scan();
-        let r = wifi::placement(self.model.screen);
-        match Host::new(&self.display, Self::popup_spec("Network", r)) {
-            Ok(host) => {
-                self.wifi = Some(Popup { host, ui: wifi::WifiFlyout::new((r.x, r.y)) });
-                self.model.wifi_open = true;
-                self.taskbar_host.invalidate();
-            }
-            Err(e) => println!("cannot open the network flyout: {:?}", e),
-        }
-    }
-
-    fn close_wifi(&mut self) {
-        if self.wifi.take().is_some() {
-            self.model.wifi_open = false;
-            self.taskbar_host.invalidate();
-        }
-    }
-
     fn invalidate_network(&mut self) {
         self.taskbar_host.invalidate();
-        if let Some(p) = &mut self.wifi {
+        if let Some(p) = &mut self.popup
+            && p.kind == PopupKind::Wifi
+        {
             p.host.invalidate();
         }
     }
@@ -654,7 +752,7 @@ impl Shell {
                         c.make_ascii_uppercase();
                     }
                     self.model.wifi_error = Some((ssid.0, msg));
-                    if self.wifi.is_none() {
+                    if self.model.popup != Some(PopupKind::Wifi) {
                         self.post_notification(
                             &format!("Couldn't connect to {name}"),
                             &format!("Because {why}."),
@@ -667,9 +765,16 @@ impl Shell {
         }
     }
 
-    fn wifi_connect(&mut self, ssid: Vec<u8>, password: Option<String>, auto: bool, hidden: bool) {
+    fn wifi_connect(
+        &mut self,
+        ssid: Vec<u8>,
+        security: Option<vnet::wifi::Security>,
+        password: Option<String>,
+        auto: bool,
+        hidden: bool,
+    ) {
         self.model.wifi_error = None;
-        let opts = vnet::wifi::ConnectOptions { security: None, save: true, auto_connect: auto, hidden };
+        let opts = vnet::wifi::ConnectOptions { security, save: true, auto_connect: auto, hidden };
         if let Err(e) = vnet::wifi::connect_with(&ssid, password.as_deref(), &opts) {
             let mut msg = format!("{e}");
             if let Some(c) = msg.get_mut(0..1) {
@@ -697,8 +802,7 @@ impl Shell {
 
     /// Shows, replaces or hides the taskbar tooltip.
     fn update_tooltip(&mut self) {
-        let popup_open =
-            self.start.is_some() || self.calendar.is_some() || self.volume.is_some() || self.wifi.is_some();
+        let popup_open = self.popup.is_some();
         let due = self.model.tip.as_ref().filter(|t| !popup_open && vrt::time::now_ns() >= t.since + tooltip::DELAY_NS);
         match due {
             Some(tip) => {
@@ -718,15 +822,14 @@ impl Shell {
     /// Lets every surface process its events and draw.
     fn pump(&mut self) {
         let now = vrt::time::now_ns();
-        let Shell { model, desktop_host, desktop, taskbar_host, taskbar, start, calendar, volume, wifi, notes, .. } =
-            self;
+        let Shell { model, desktop_host, desktop, taskbar_host, taskbar, popup, notes, .. } = self;
         let desktop_events = desktop_host.pump(|ui| desktop.update(ui, model));
         let appearing = desktop_events.iter().any(|e| matches!(e, WindowEvent::Appearing {}));
         let mut windows_changed = false;
         for ev in taskbar_host.pump(|ui| taskbar.update(ui, model)) {
             match ev {
                 WindowEvent::WindowsChanged {} => windows_changed = true,
-                WindowEvent::StartMenuKey {} => model.push(Action::ToggleStart),
+                WindowEvent::StartMenuKey {} => model.push(Action::TogglePopup(PopupKind::Start)),
                 WindowEvent::AgentKey {} => model.push(Action::ToggleAgent),
                 _ => {}
             }
@@ -740,40 +843,14 @@ impl Shell {
                 model.push(Action::CloseAgent);
             }
         }
-        if let Some(p) = start {
+        if let Some(p) = popup {
             let events = p.host.pump(|ui| p.ui.update(ui, model));
+            // Closed by a click outside it (or by the window system).
             if p.host.window.closed || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {})) {
-                model.start_dismissed_at = now;
-                model.push(Action::CloseStart);
+                model.dismissed = Some((p.kind, now));
+                model.push(Action::ClosePopup(p.kind));
             } else if p.host.close_requested {
-                model.push(Action::CloseStart);
-            }
-        }
-        if let Some(p) = calendar {
-            let events = p.host.pump(|ui| p.ui.update(ui, model));
-            if p.host.window.closed || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {})) {
-                model.calendar_dismissed_at = now;
-                model.push(Action::CloseCalendar);
-            } else if p.host.close_requested {
-                model.push(Action::CloseCalendar);
-            }
-        }
-        if let Some(p) = volume {
-            let events = p.host.pump(|ui| p.ui.update(ui, model));
-            if p.host.window.closed || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {})) {
-                model.volume_dismissed_at = now;
-                model.push(Action::CloseVolume);
-            } else if p.host.close_requested {
-                model.push(Action::CloseVolume);
-            }
-        }
-        if let Some(p) = wifi {
-            let events = p.host.pump(|ui| p.ui.update(ui, model));
-            if p.host.window.closed || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {})) {
-                model.wifi_dismissed_at = now;
-                model.push(Action::CloseWifi);
-            } else if p.host.close_requested {
-                model.push(Action::CloseWifi);
+                model.push(Action::ClosePopup(p.kind));
             }
         }
         notes.pump(model);
@@ -789,7 +866,7 @@ impl Shell {
         for action in core::mem::take(&mut self.model.actions) {
             match action {
                 Action::Launch(app, args) => {
-                    self.close_start();
+                    self.close_popup_of(PopupKind::Start);
                     self.launch(&app, args);
                 }
                 Action::Activate(id) => {
@@ -798,38 +875,14 @@ impl Shell {
                 Action::Minimize(id) => {
                     let _ = self.display.minimize_window(id);
                 }
-                Action::ToggleStart => {
-                    if self.start.is_some() {
-                        self.close_start();
+                Action::TogglePopup(kind) => {
+                    if self.model.popup == Some(kind) {
+                        self.close_popup();
                     } else {
-                        self.open_start();
+                        self.open_popup(kind);
                     }
                 }
-                Action::CloseStart => self.close_start(),
-                Action::ToggleCalendar => {
-                    if self.calendar.is_some() {
-                        self.close_calendar();
-                    } else {
-                        self.open_calendar();
-                    }
-                }
-                Action::CloseCalendar => self.close_calendar(),
-                Action::ToggleVolume => {
-                    if self.volume.is_some() {
-                        self.close_volume();
-                    } else {
-                        self.open_volume();
-                    }
-                }
-                Action::CloseVolume => self.close_volume(),
-                Action::ToggleWifi => {
-                    if self.wifi.is_some() {
-                        self.close_wifi();
-                    } else {
-                        self.open_wifi();
-                    }
-                }
-                Action::CloseWifi => self.close_wifi(),
+                Action::ClosePopup(kind) => self.close_popup_of(kind),
                 Action::WifiRadio(on) => {
                     let _ = vnet::wifi::set_radio(on);
                     self.refresh_wifi();
@@ -838,7 +891,9 @@ impl Shell {
                     let _ = vnet::wifi::scan();
                     self.refresh_wifi();
                 }
-                Action::WifiConnect { ssid, password, auto, hidden } => self.wifi_connect(ssid, password, auto, hidden),
+                Action::WifiConnect { ssid, security, password, auto, hidden } => {
+                    self.wifi_connect(ssid, security, password, auto, hidden)
+                }
                 Action::WifiDisconnect => {
                     let _ = vnet::wifi::disconnect();
                     self.refresh_wifi();
@@ -875,20 +930,14 @@ impl Shell {
                     }
                 }
                 Action::OpenNetworkSettings => {
-                    self.close_wifi();
+                    self.close_popup_of(PopupKind::Wifi);
                     self.launch("settings", alloc::vec![String::from("network")]);
                 }
                 Action::SetVolume(v, muted) => self.set_volume(v, muted),
                 Action::ShowDesktop => self.show_desktop(),
                 Action::Power(what) => {
-                    self.close_start();
-                    // Write the home directory to disk before the power goes.
-                    if let Some(vfs) = &self.vfs {
-                        let _ = vfs.sync();
-                    }
-                    if let Some(l) = &self.launcher {
-                        let _ = l.power(what);
-                    }
+                    self.close_popup_of(PopupKind::Start);
+                    self.begin_power_off(what);
                 }
                 Action::NextWallpaper => self.next_wallpaper(),
                 Action::RefreshDesktop => self.refresh_desktop(),
@@ -940,31 +989,126 @@ impl Shell {
         }
     }
 
-    /// Accepts connections and answers `shell` protocol requests.
+    /// Accepts connections (as many as allowed) and answers the `shell`
+    /// protocol requests of the clients that sent any.
     fn serve(&mut self) {
         if let Some(l) = &self.listener {
-            while let Some(client) = vproto::accept_with_identity(l) {
-                self.clients.push(client);
+            while let Some((channel, who)) = vproto::accept_with_identity(l) {
+                let own = self.clients.iter().filter(|c| c.who.koid == who.koid).count();
+                if self.clients.len() >= MAX_CLIENTS || own >= MAX_CLIENTS_EACH {
+                    // Dropped: the client sees the connection closed.
+                    println!("{} has too many connections to the shell; one refused", who.name);
+                    continue;
+                }
+                self.next_client += 1;
+                // Its first requests may be waiting already.
+                self.ready.push(self.next_client);
+                self.clients.push(Client { id: self.next_client, channel, who, loading: false });
             }
         }
-        for (ch, who) in core::mem::take(&mut self.clients) {
-            self.caller = who.clone();
+        for id in core::mem::take(&mut self.ready) {
+            let Some(i) = self.clients.iter().position(|c| c.id == id) else { continue };
+            let mut client = self.clients.swap_remove(i);
+            self.caller = client.who.clone();
             let alive = loop {
-                match ch.read() {
-                    Ok(msg) => match shell::dispatch(self, msg) {
-                        Ok(reply) => {
-                            let _ = reply.send(&ch);
-                        }
-                        Err(e) => println!("bad request: {}", e),
-                    },
+                match client.channel.read() {
+                    Ok(msg) => self.request(&mut client, msg),
                     Err(vabi::Error::ShouldWait) => break true,
                     Err(_) => break false,
                 }
             };
             if alive {
-                self.clients.push((ch, who));
+                self.clients.push(client);
             }
         }
+    }
+
+    /// Answers one request of `client`.
+    fn request(&mut self, client: &mut Client, msg: Message) {
+        if vipc::Header::parse(&msg.bytes).is_ok_and(|h| h.ordinal == SET_WALLPAPER) {
+            return self.wallpaper_request(client, msg);
+        }
+        match shell::dispatch(self, msg) {
+            Ok(reply) => {
+                let _ = reply.send(&client.channel);
+            }
+            Err(e) => println!("bad request: {}", e),
+        }
+    }
+
+    /// `shell::set_wallpaper`: the picture is loaded on the loader's
+    /// thread, and the request answered once it is set. A client asks for
+    /// one wallpaper at a time: a second request while its first loads is
+    /// refused.
+    fn wallpaper_request(&mut self, client: &mut Client, mut msg: Message) {
+        let decoded = vipc::open(&mut msg).and_then(|(h, mut d)| {
+            let path = String::decode(&mut d)?;
+            d.finish()?;
+            Ok((h, path))
+        });
+        let (header, path) = match decoded {
+            Ok(v) => v,
+            Err(_) => {
+                if let Ok(h) = vipc::Header::parse(&msg.bytes) {
+                    let _ = vipc::refuse(&client.channel, h, vipc::Refusal::Malformed);
+                }
+                return;
+            }
+        };
+        if client.loading {
+            return answer_wallpaper(&client.channel, header.txid, Err(ShellError::Unavailable));
+        }
+        match self.load_wallpaper(&path, Some((client.id, header.txid))) {
+            None => client.loading = true,
+            Some(result) => answer_wallpaper(&client.channel, header.txid, result),
+        }
+    }
+
+    /// Restart or Shut down: every application window is asked to close
+    /// first (see [`power`]).
+    fn begin_power_off(&mut self, what: u32) {
+        self.refresh_windows();
+        if self.model.windows.is_empty() {
+            return self.power_off(what);
+        }
+        for w in &self.model.windows {
+            let _ = self.display.close_window(w.id);
+        }
+        self.power = Some(power::PowerOff::new(what, vrt::time::now_ns()));
+    }
+
+    /// Follows a restart or shutdown that waits for the applications: on
+    /// once none is left (or the user says so), off if the user cancels.
+    fn check_power(&mut self) {
+        let Some(p) = &mut self.power else { return };
+        let what = p.what;
+        if self.model.windows.is_empty() {
+            return self.power_off(what);
+        }
+        match p.pump(&self.display, &self.model, vrt::time::now_ns()) {
+            Some(power::Choice::Force) => self.power_off(what),
+            Some(power::Choice::Cancel) => self.power = None,
+            None => {}
+        }
+    }
+
+    /// Writes the home folder to disk and restarts or shuts down.
+    fn power_off(&mut self, what: u32) {
+        self.power = None;
+        if let Some(vfs) = &self.vfs {
+            vfs.set_timeout(SYNC_TIMEOUT_NS);
+            let _ = vfs.sync();
+            vfs.set_timeout(SERVICE_TIMEOUT_NS);
+        }
+        let why = match self.launcher.as_ref().map(|l| l.power(what)) {
+            Some(Ok(Ok(()))) => return,
+            Some(Ok(Err(e))) => e.to_string(),
+            Some(Err(_)) => "the launcher is not responding".to_string(),
+            None => "the launcher is not available".to_string(),
+        };
+        let what = if what == vproto::init::power::REBOOT { "restart" } else { "shut down" };
+        println!("cannot {what}: {why}");
+        self.post_notification(&format!("Couldn't {what}"), &format!("Because {why}."), "warning");
     }
 
     /// Turns the launcher's crash reports into notifications.
@@ -1009,20 +1153,14 @@ impl Shell {
         };
         add_host(&self.desktop_host, &mut items);
         add_host(&self.taskbar_host, &mut items);
-        if let Some(p) = &self.start {
-            add_host(&p.host, &mut items);
-        }
-        if let Some(p) = &self.calendar {
-            add_host(&p.host, &mut items);
-        }
-        if let Some(p) = &self.volume {
-            add_host(&p.host, &mut items);
-        }
-        if let Some(p) = &self.wifi {
+        if let Some(p) = &self.popup {
             add_host(&p.host, &mut items);
         }
         if let Some(p) = &self.agent_win {
             add_host(&p.host, &mut items);
+        }
+        if let Some(h) = self.power.as_ref().and_then(|p| p.host()) {
+            add_host(h, &mut items);
         }
         if let Some(t) = &self.tooltip {
             add_host(t.host(), &mut items);
@@ -1031,6 +1169,9 @@ impl Shell {
             add_host(h, &mut items);
         }
         deadline = deadline.min(self.notes.deadline());
+        if let Some(p) = &self.power {
+            deadline = deadline.min(p.deadline());
+        }
         if let (Some(tip), None) = (&self.model.tip, &self.tooltip) {
             deadline = deadline.min(tip.since + tooltip::DELAY_NS);
         }
@@ -1038,8 +1179,12 @@ impl Shell {
         if let Some(l) = &self.listener {
             items.push(WaitItem { handle: l.raw(), signals: readable, ..Default::default() });
         }
-        for (c, _) in &self.clients {
-            items.push(WaitItem { handle: c.raw(), signals: readable, ..Default::default() });
+        let first_client = items.len();
+        for c in &self.clients {
+            items.push(WaitItem { handle: c.channel.raw(), signals: readable, ..Default::default() });
+        }
+        if let Some(l) = &self.loader {
+            items.push(WaitItem { handle: l.event_handle(), signals: signals::SIGNALED, ..Default::default() });
         }
         if let Some(c) = &self.task_events {
             items.push(WaitItem { handle: c.raw(), signals: readable, ..Default::default() });
@@ -1066,6 +1211,12 @@ impl Shell {
             deadline = 0;
         }
         let _ = vrt::object::wait_many(&mut items, deadline);
+        // The clients to read: those with something to read.
+        for (c, it) in self.clients.iter().zip(items.iter().skip(first_client)) {
+            if it.observed & it.signals != 0 {
+                self.ready.push(c.id);
+            }
+        }
     }
 
     /// Runs until the display goes away (the window system stopped); `init`
@@ -1080,6 +1231,8 @@ impl Shell {
             }
             self.perform_actions();
             self.serve();
+            self.take_wallpapers();
+            self.check_power();
             self.check_tasks();
             self.poll_network();
             self.poll_desktop();
@@ -1119,23 +1272,46 @@ impl Shell {
     }
 }
 
+/// Answers a `shell::set_wallpaper` request.
+fn answer_wallpaper(channel: &Channel, txid: u32, result: Result<(), ShellError>) {
+    let mut e = vipc::Encoder::with_header(SET_WALLPAPER, txid, vipc::FLAG_RESPONSE);
+    result.encode(&mut e);
+    let _ = e.send(channel);
+}
+
 impl shell::Server for Shell {
-    fn set_wallpaper(&mut self, path: String) -> Result<(), ShellError> {
-        if path != wallpaper::PROCEDURAL {
-            let vfs = self.vfs.as_ref().ok_or(ShellError::Unavailable)?;
-            vfs.stat(path.clone()).ok().and_then(|r| r.ok()).ok_or(ShellError::NotFound)?;
-        }
-        let wp = self.load_wallpaper(&path).ok_or(ShellError::BadImage)?;
-        self.set_wallpaper(wp);
-        Ok(())
+    /// Not reached: `Shell::wallpaper_request` answers these once the
+    /// picture is loaded.
+    fn set_wallpaper(&mut self, _path: String) -> Result<(), ShellError> {
+        Err(ShellError::Unavailable)
     }
 
     fn wallpaper(&mut self) -> String {
         self.model.wallpaper.path.clone()
     }
 
+    /// A notification from the caller. A system service's shows the tile it
+    /// names (the agent's ring); an application's shows that it is the
+    /// application's, its tile and its name, whatever it says of itself.
+    /// A process posts at most [`NOTES_PER_PERIOD`] in a period.
     fn notify(&mut self, title: String, body: String, icon: String) {
-        self.post_notification(&title, &body, &icon);
+        let who = self.caller.clone();
+        if !self.note_allowed(who.koid, vrt::time::now_ns()) {
+            println!("{} posts too many notifications; one left out", who.name);
+            return;
+        }
+        if who.service {
+            return self.post_notification(&title, &body, &icon);
+        }
+        let (key, glyph, name) = match self.model.app(&who.name) {
+            Some(app) => (app.id.clone(), apps::icon_for(app), app.name.clone()),
+            None => {
+                let name = if who.name.is_empty() { String::from("A program") } else { who.name.clone() };
+                (String::from("program"), Icon::Info, name)
+            }
+        };
+        let sender = notify::Sender { tile: (&key, glyph), name: Some(&name) };
+        self.notes.post(&self.display, &self.model, &title, &body, sender);
     }
 
     fn wallpapers(&mut self) -> Vec<String> {
@@ -1176,6 +1352,9 @@ fn main() -> i32 {
             return 1;
         }
     };
+    // A window system, launcher or file system that hangs must not freeze
+    // the desktop: calls to them give up after a while.
+    display.set_timeout(SERVICE_TIMEOUT_NS);
     let screen = match display.screen_info() {
         Ok(s) => Rect::new(0, 0, s.width as i32, s.height as i32),
         Err(e) => {
@@ -1185,19 +1364,30 @@ fn main() -> i32 {
     };
     let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
     let launcher = vproto::connect(launcher::NAME).ok().map(launcher::Client::new);
+    if let Some(c) = &vfs {
+        c.set_timeout(SERVICE_TIMEOUT_NS);
+    }
+    if let Some(c) = &launcher {
+        c.set_timeout(SERVICE_TIMEOUT_NS);
+    }
     let task_events = launcher.as_ref().and_then(|l| l.watch().ok()).and_then(|r| r.ok());
     let audio = connect_running(audio::NAME).map(audio::Client::new);
+    if let Some(a) = &audio {
+        a.set_timeout(AUDIO_TIMEOUT_NS);
+    }
     let mut apps = launcher.as_ref().and_then(|l| l.apps().ok()).unwrap_or_default();
     apps::sort(&mut apps);
 
     // The remembered wallpaper, else the first one installed.
-    let saved = vfs.as_ref().and_then(|v| read_file(v, WALLPAPER_CONFIG)).and_then(|b| String::from_utf8(b).ok());
+    let saved = vfs
+        .as_ref()
+        .and_then(|v| read_file(v, WALLPAPER_CONFIG, MAX_WALLPAPER_PATH))
+        .and_then(|b| String::from_utf8(b).ok());
     let installed = vfs.as_ref().map(wallpaper::list).unwrap_or_default();
     let candidates = saved.into_iter().chain(installed.into_iter().take(1));
     let mut wp = None;
     for path in candidates {
-        let bytes = vfs.as_ref().and_then(|v| read_file(v, &path));
-        wp = bytes.and_then(|b| Wallpaper::load(&path, &b, screen.w, screen.h));
+        wp = Wallpaper::open(vfs.as_ref(), &path, screen.w, screen.h).ok();
         if wp.is_some() {
             break;
         }
@@ -1247,19 +1437,16 @@ fn main() -> i32 {
         wifi_error: None,
         wired_up: false,
         wired_label: String::new(),
-        start_open: false,
-        calendar_open: false,
-        volume_open: false,
-        wifi_open: false,
-        start_dismissed_at: 0,
-        calendar_dismissed_at: 0,
-        volume_dismissed_at: 0,
-        wifi_dismissed_at: 0,
+        popup: None,
+        dismissed: None,
         tip: None,
         agent: agent::AgentModel::default(),
         actions: Vec::new(),
     };
     let fs = vfiles::Fs::connect();
+    if let Some(c) = fs.client() {
+        c.set_timeout(SERVICE_TIMEOUT_NS);
+    }
     let mut desktop = desktop::Desktop::new();
     desktop.refresh(&model, &fs);
     let mut shell = Shell {
@@ -1274,17 +1461,21 @@ fn main() -> i32 {
         taskbar_host,
         taskbar: taskbar::Taskbar::new(),
         audio,
-        start: None,
-        calendar: None,
-        volume: None,
-        wifi: None,
+        popup: None,
         wifi_watch: None,
         next_net_poll: 0,
         tooltip: None,
         notes: notify::Notifications::new(),
+        note_counts: Vec::new(),
         listener,
         clients: Vec::new(),
+        next_client: 0,
+        ready: Vec::new(),
         caller: ClientIdentity::default(),
+        loader: Loader::start(),
+        loading: Vec::new(),
+        next_ticket: 0,
+        power: None,
         agent: None,
         agent_win: None,
         next_agent_try: 0,

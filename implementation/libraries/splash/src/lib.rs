@@ -22,6 +22,8 @@
 #[cfg(test)]
 extern crate std;
 
+use vgfx::color::{keep_scalar, lerp_px};
+
 #[cfg(test)]
 mod tests;
 
@@ -31,13 +33,10 @@ pub const BOTTOM: u32 = 0x12_1A35;
 /// The ring's colour.
 pub const RING: u32 = 0xFF_FFFF;
 
-/// `a` mixed with `b`, `t` parts of 256 of `b`.
+/// `a` mixed with `b`, `t` parts of 256 of `b` (`t` at most 256), each
+/// channel rounded down: `vgfx`'s mixing of pixels, without alpha.
 pub fn mix(a: u32, b: u32, t: u32) -> u32 {
-    let channel = |s: u32| {
-        let (x, y) = ((a >> s) & 0xFF, (b >> s) & 0xFF);
-        ((x * (256 - t) + y * t) >> 8) << s
-    };
-    channel(16) | channel(8) | channel(0)
+    lerp_px(a, b, t.min(256)) & 0xFF_FFFF
 }
 
 /// The ordered-dither (8x8 Bayer) pattern at pixel (`x`, `y`), 0 to 63:
@@ -72,6 +71,9 @@ pub fn background(y: u32, h: u32, x: u32, out: &mut [u32]) {
         let t = bayer(x + i as u32, y);
         let step = |(whole, from): (u32, u32)| whole + u32::from(t >= from);
         *px = step(r) << 16 | step(g) << 8 | step(b);
+        // Vectorised, the pattern takes shuffles, which are slow under
+        // emulation (see `vgfx::color`).
+        keep_scalar();
     }
 }
 
@@ -130,5 +132,6 @@ pub fn row(w: u32, h: u32, y: u32, out: &mut [u32]) {
         if cover > 0 {
             *px = mix(*px, RING, cover);
         }
+        keep_scalar();
     }
 }

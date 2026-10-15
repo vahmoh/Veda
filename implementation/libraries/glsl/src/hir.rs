@@ -9,6 +9,7 @@
 //! expressions are folded. The IR builder lowers it to SSA.
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::Stage;
@@ -29,8 +30,9 @@ pub struct VarId(pub u32);
 pub struct FuncId(pub u32);
 
 /// A constant value: its scalar components, flattened in order (array
-/// elements, structure members, matrix columns).
-pub type ConstValue = Vec<ops::Value>;
+/// elements, structure members, matrix columns). Shared: every use of a
+/// constant variable refers to its one value.
+pub type ConstValue = Arc<[ops::Value]>;
 
 /// How a parameter passes its value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -18,6 +18,14 @@
 //! an SA Query to check on the AP otherwise); and a connection whose AP
 //! stops being heard is dropped.
 //!
+//! Nothing proves a password wrong: SAE and the 4-way handshake fail the
+//! same way when someone interferes. An SAE frame that does not verify is
+//! discarded (as 802.11 says), resends prompted by the AP's frames count
+//! against the attempt's tries, and [`Failure::PasswordNotAccepted`] is
+//! reported only for the pattern a wrong password makes (the AP answered,
+//! then never accepted what we computed from the password), for the caller
+//! to retry with patience rather than give up on the network.
+//!
 //! A station of a *managed* radio ([`Station::managed`]) decides and
 //! authenticates the same, but the radio is the MLME: it sends the
 //! authentication and association frames ([`Action::Authenticate`],
@@ -30,6 +38,8 @@
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use zeroize::Zeroize;
 
 use crate::ccmp::{self, CCMP_OVERHEAD};
 use crate::crypto::{KeyAlgo, Random, pbkdf2_psk, psk_from_hex};
@@ -92,8 +102,11 @@ pub struct Target {
 /// Why joining failed or a connection ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
-    /// The password is wrong (the handshake or SAE confirm failed).
-    WrongPassword,
+    /// The access point does not seem to accept the password: it answered,
+    /// but never confirmed SAE, or kept asking the 4-way handshake anew
+    /// (and gave up on it). Probably a wrong password; but these frames
+    /// are not authenticated, so it can be forged.
+    PasswordNotAccepted,
     /// No answer from the AP.
     NoResponse,
     /// The AP refused authentication (status code).
@@ -135,16 +148,8 @@ pub enum StaEvent {
     Disconnected(Failure),
 }
 
-/// The keys a managed radio is given.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyKind {
-    /// The pairwise key (CCMP-128), index 0.
-    Pairwise,
-    /// A group key (CCMP-128), index 1 to 3.
-    Group,
-    /// The integrity group key (BIP-CMAC-128), index 4 or 5.
-    Integrity,
-}
+/// The keys a managed radio is given (the Wi-Fi protocol's type).
+pub use vproto::wlan::KeyKind;
 
 /// What the caller must do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,8 +206,20 @@ pub enum Action {
     },
     /// Managed radios: send a management frame (protected by the radio).
     SendManagement(Vec<u8>),
-    /// Managed radios: send an Ethernet frame.
-    SendEthernet(Vec<u8>),
+}
+
+/// What becomes of an Ethernet frame on its way between the network stack
+/// and the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Passage {
+    /// Managed radios: pass the frame on as it is (to the radio, or to the
+    /// network stack).
+    Pass,
+    /// It goes nowhere (not connected, or not a frame to pass on).
+    Drop,
+    /// The station's own business: do these (a soft MAC radio's frames,
+    /// the handshakes' EAPOL).
+    Actions(Vec<Action>),
 }
 
 /// Counters for diagnostics.
@@ -230,7 +247,6 @@ struct Keys {
 
 impl Drop for Keys {
     fn drop(&mut self) {
-        use zeroize::Zeroize;
         self.tk.zeroize();
         for (k, _) in self.gtk.values_mut() {
             k.zeroize();
@@ -373,7 +389,6 @@ impl Station {
     }
 
     fn forget_pmk(&mut self) {
-        use zeroize::Zeroize;
         if let Some(p) = self.pmk.as_mut() {
             p.zeroize();
         }
@@ -566,17 +581,17 @@ impl Station {
 
     /// Sends an Ethernet frame (destination, source, EtherType, payload)
     /// to the network. Frames are dropped unless connected.
-    pub fn send_ethernet(&mut self, eth: &[u8]) -> Vec<Action> {
+    pub fn send_ethernet(&mut self, eth: &[u8]) -> Passage {
         if !self.is_connected() || eth.len() < 14 {
-            return Vec::new();
+            return Passage::Drop;
         }
         if self.managed {
             self.counters.data_tx += 1;
-            return alloc::vec![Action::SendEthernet(eth.to_vec())];
+            return Passage::Pass;
         }
-        let dst: Mac = eth[0..6].try_into().unwrap();
+        let dst: Mac = eth[0..6].try_into().unwrap_or_default();
         let ethertype = u16::from_be_bytes([eth[12], eth[13]]);
-        self.send_data(&dst, ethertype, &eth[14..])
+        Passage::Actions(self.send_data(&dst, ethertype, &eth[14..]))
     }
 
     fn send_data(&mut self, dst: &Mac, ethertype: u16, payload: &[u8]) -> Vec<Action> {
@@ -671,9 +686,9 @@ impl Station {
             }
             Phase::SaeConfirm { tries, deadline, .. } if now >= *deadline => {
                 if *tries >= MAX_TRIES {
-                    // The AP answered our commit but never confirmed: the
-                    // passwords differ.
-                    return self.fail(Failure::WrongPassword);
+                    // The AP answered our commit but never confirmed it:
+                    // probably the passwords differ.
+                    return self.fail(Failure::PasswordNotAccepted);
                 }
                 *tries += 1;
                 *deadline = now + SAE_TIMEOUT_MS;
@@ -721,20 +736,25 @@ impl Station {
         }
     }
 
+    /// Whether the 4-way handshake failed the way a wrong password makes it
+    /// fail: message 1 came again (the AP did not accept our message 2) and
+    /// message 3 never did.
+    fn password_not_accepted(&self) -> bool {
+        self.supplicant.as_ref().is_some_and(|s| s.awaiting_msg3()) && self.msg1_seen >= 2
+    }
+
     fn handshake_timed_out(&mut self) -> Vec<Action> {
-        // Message 1 kept coming but message 3 never did: the AP could not
-        // verify our message 2, i.e. the passphrase.
-        let wrong = self.supplicant.as_ref().is_some_and(|s| s.awaiting_msg3()) && self.msg1_seen >= 2;
-        self.fail(if wrong { Failure::WrongPassword } else { Failure::HandshakeFailed })
+        let f = if self.password_not_accepted() { Failure::PasswordNotAccepted } else { Failure::HandshakeFailed };
+        self.fail(f)
     }
 
     /// Managed radios: the access point did not answer an authentication
     /// or an association.
     pub fn mlme_timeout(&mut self, _now: u64) -> Vec<Action> {
         match self.phase {
-            // It answered our commit but never confirmed: the passwords
-            // differ.
-            Phase::SaeConfirm { .. } => self.fail(Failure::WrongPassword),
+            // It answered our commit but never confirmed it: probably the
+            // passwords differ.
+            Phase::SaeConfirm { .. } => self.fail(Failure::PasswordNotAccepted),
             Phase::OpenAuth { .. } | Phase::SaeCommit { .. } | Phase::Assoc { .. } => self.fail(Failure::NoResponse),
             _ => Vec::new(),
         }
@@ -762,23 +782,24 @@ impl Station {
     }
 
     /// Managed radios: an Ethernet frame the radio received (checked and
-    /// decrypted by it): EAPOL for the handshake, data for the network.
-    pub fn receive_ethernet(&mut self, eth: &[u8], now: u64, rng: &mut dyn Random) -> Vec<Action> {
+    /// decrypted by it): EAPOL for the handshake, data for the network
+    /// stack ([`Passage::Pass`]).
+    pub fn receive_ethernet(&mut self, eth: &[u8], now: u64, rng: &mut dyn Random) -> Passage {
         if !self.managed || eth.len() < 14 || self.target.is_none() {
-            return Vec::new();
+            return Passage::Drop;
         }
         let ethertype = u16::from_be_bytes([eth[12], eth[13]]);
         if ethertype == eapol::ETHERTYPE {
             if eth[6..12] != self.bssid() {
-                return Vec::new();
+                return Passage::Drop;
             }
-            return self.receive_eapol(&eth[14..], now, rng);
+            return Passage::Actions(self.receive_eapol(&eth[14..], now, rng));
         }
         if !self.is_connected() {
-            return Vec::new();
+            return Passage::Drop;
         }
         self.counters.data_rx += 1;
-        alloc::vec![Action::Deliver(eth.to_vec())]
+        Passage::Pass
     }
 
     /// Handles a received frame.
@@ -830,7 +851,12 @@ impl Station {
             Phase::SaeCommit { .. } if a.algorithm == auth_alg::SAE && a.transaction == 1 => {
                 match a.status {
                     status::ANTI_CLOGGING_TOKEN_REQ => {
-                        // Send the commit again with the AP's token.
+                        // Send the commit again with the AP's token: a try
+                        // like any other (anyone can ask for a token).
+                        let Phase::SaeCommit { tries, .. } = self.phase else { unreachable!() };
+                        if tries >= MAX_TRIES {
+                            return self.fail(Failure::NoResponse);
+                        }
                         let token = if a.rest.len() > 2 { a.rest[2..].to_vec() } else { Vec::new() };
                         let Phase::SaeCommit { sae, tries, .. } = core::mem::replace(&mut self.phase, Phase::Idle)
                         else {
@@ -845,8 +871,8 @@ impl Station {
                             token
                         };
                         let act = self.sae_commit_frame(&sae, Some(&token));
-                        self.phase =
-                            Phase::SaeCommit { sae, tries, deadline: now + SAE_TIMEOUT_MS, token: Some(token) };
+                        let deadline = now + self.sae_timeout();
+                        self.phase = Phase::SaeCommit { sae, tries: tries + 1, deadline, token: Some(token) };
                         alloc::vec![act]
                     }
                     status::SUCCESS | status::SAE_HASH_TO_ELEMENT => {
@@ -871,26 +897,28 @@ impl Station {
                 }
             }
             Phase::SaeConfirm { sae, .. } if a.algorithm == auth_alg::SAE && a.transaction == 2 => {
-                if a.status != status::SUCCESS {
-                    return self.fail(Failure::AuthRejected(a.status));
+                // Only a confirm that verifies counts: anything else is
+                // discarded (IEEE 802.11-2020, 12.4.8.6.6), whoever sent it.
+                if a.status != status::SUCCESS || sae.verify_confirm(a.rest).is_err() {
+                    return Vec::new();
                 }
-                match sae.verify_confirm(a.rest) {
-                    Ok(()) => {
-                        let (pmk, _) = sae.keys().expect("keys after commit");
-                        self.pmk = Some(pmk);
-                        self.start_assoc(now)
-                    }
-                    Err(_) => self.fail(Failure::WrongPassword),
-                }
+                let Some((pmk, _)) = sae.keys() else { return self.fail(Failure::HandshakeFailed) };
+                self.pmk = Some(pmk);
+                self.start_assoc(now)
             }
             Phase::SaeConfirm { .. } if a.algorithm == auth_alg::SAE && a.transaction == 1 => {
-                // The AP repeated its commit: resend our confirm.
+                // The AP repeated its commit (or someone pretends to): resend
+                // our confirm, as a try of the attempt.
+                let Phase::SaeConfirm { tries, .. } = self.phase else { unreachable!() };
+                if tries >= MAX_TRIES {
+                    return self.fail(Failure::PasswordNotAccepted);
+                }
                 let Phase::SaeConfirm { mut sae, tries, deadline } = core::mem::replace(&mut self.phase, Phase::Idle)
                 else {
                     unreachable!()
                 };
                 let act = self.sae_confirm_frame(&mut sae);
-                self.phase = Phase::SaeConfirm { sae, tries, deadline };
+                self.phase = Phase::SaeConfirm { sae, tries: tries + 1, deadline };
                 act.into_iter().collect()
             }
             _ => Vec::new(),
@@ -923,7 +951,9 @@ impl Station {
             own_rsne: own,
             own_rsnxe: rsnx_own,
             ap_rsne: t.bss.rsne.clone().unwrap_or_default(),
-            ap_rsnxe: if akm == Akm::Sae { t.bss.rsnx.clone() } else { None },
+            // Message 3 must carry the RSN Extension the AP advertised, or
+            // none if it advertised none, whatever the AKM.
+            ap_rsnxe: t.bss.rsnx.clone(),
             pmf: self.pmf,
         }));
         self.phase = Phase::Handshake { deadline: now + HANDSHAKE_TIMEOUT_MS };
@@ -989,17 +1019,17 @@ impl Station {
             f[h.len..].to_vec()
         };
         let code = frame::reason_code(&body).unwrap_or(reason::UNSPECIFIED);
-        // A deauthentication during the handshake with "4-way handshake
-        // timeout" after repeated message 1s means the AP rejected our
-        // message 2: the passphrase is wrong.
+        // The AP ending the handshake ("4-way handshake timeout") after it
+        // sent message 1 again (it did not accept our message 2) is what a
+        // wrong password looks like. One frame alone proves nothing.
         if matches!(self.phase, Phase::Handshake { .. })
-            && self.msg1_seen >= 1
+            && self.password_not_accepted()
             && matches!(
                 code,
                 reason::FOURWAY_HANDSHAKE_TIMEOUT | reason::PREV_AUTH_NOT_VALID | reason::IEEE_802_1X_AUTH_FAILED
             )
         {
-            return self.fail(Failure::WrongPassword);
+            return self.fail(Failure::PasswordNotAccepted);
         }
         self.fail(Failure::Deauthenticated(code))
     }
@@ -1199,19 +1229,31 @@ impl Station {
             }
             match ev {
                 HsEvent::Send(frame) => out.extend(self.send_data(&bssid, eapol::ETHERTYPE, &frame)),
-                HsEvent::InstallPtk { tk } => {
-                    self.keys = Some(Keys { tk, tx_pn: 0, rx_pn: [None; 17], gtk: BTreeMap::new(), igtk: None });
-                }
-                HsEvent::InstallGtk { key_id, key, rsc } => {
-                    if let (Some(k), Ok(key)) = (self.keys.as_mut(), <[u8; 16]>::try_from(key.as_slice())) {
+                HsEvent::InstallPtk { tk } => match self.keys.as_mut() {
+                    // A new pairwise key for the connection (a rekey): the
+                    // group keys stay, the packet numbers start anew.
+                    Some(k) => {
+                        k.tk = tk;
+                        k.tx_pn = 0;
+                        k.rx_pn = [None; 17];
+                    }
+                    None => {
+                        self.keys = Some(Keys { tk, tx_pn: 0, rx_pn: [None; 17], gtk: BTreeMap::new(), igtk: None })
+                    }
+                },
+                HsEvent::InstallGtk { key_id, mut key, rsc } => {
+                    if let (Some(k), Ok(gtk)) = (self.keys.as_mut(), <[u8; 16]>::try_from(key.as_slice())) {
                         // The RSC is the last PN the AP used: frames must
                         // carry a larger one.
                         let last = if rsc == 0 { None } else { Some(rsc.saturating_sub(1)) };
-                        k.gtk.insert(key_id, (key, last));
+                        if let Some((mut old, _)) = k.gtk.insert(key_id, (gtk, last)) {
+                            old.zeroize();
+                        }
                         if self.is_connected() {
                             self.counters.group_rekeys += 1;
                         }
                     }
+                    key.zeroize();
                 }
                 HsEvent::InstallIgtk { key_id, key, ipn } => {
                     if let Some(k) = self.keys.as_mut() {
@@ -1246,11 +1288,13 @@ impl Station {
                 self.ptk_installed = true;
                 alloc::vec![key(KeyKind::Pairwise, 0, &tk, 0)]
             }
-            HsEvent::InstallGtk { key_id, key: gtk, rsc } => {
+            HsEvent::InstallGtk { key_id, key: mut gtk, rsc } => {
                 if self.is_connected() {
                     self.counters.group_rekeys += 1;
                 }
-                alloc::vec![key(KeyKind::Group, key_id, &gtk, rsc)]
+                let action = key(KeyKind::Group, key_id, &gtk, rsc);
+                gtk.zeroize();
+                alloc::vec![action]
             }
             HsEvent::InstallIgtk { key_id, key: igtk, ipn } => {
                 alloc::vec![key(KeyKind::Integrity, key_id as u8, &igtk, ipn)]

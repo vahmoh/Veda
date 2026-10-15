@@ -34,10 +34,6 @@ pub struct Config {
     pub listen_for_name: bool,
     /// Seconds of silence that end a conversation.
     pub idle_timeout_s: u32,
-    /// Another Voice Agent endpoint (a local simulator in tests). Only the
-    /// kernel command line sets it.
-    #[serde(skip)]
-    pub endpoint: Option<String>,
 }
 
 impl Default for Config {
@@ -52,7 +48,6 @@ impl Default for Config {
             speed: 1.0,
             listen_for_name: true,
             idle_timeout_s: DEFAULT_IDLE_S,
-            endpoint: None,
         }
     }
 }
@@ -119,7 +114,6 @@ impl Config {
             speed: v["speed"].as_f64().map(|f| f as f32).unwrap_or(d.speed),
             listen_for_name: v["listen_for_name"].as_bool().unwrap_or(d.listen_for_name),
             idle_timeout_s: v["idle_timeout_s"].as_u64().map(|n| n.min(600) as u32).unwrap_or(d.idle_timeout_s),
-            endpoint: None,
         };
         if c.validate().is_ok() { c } else { d }
     }
@@ -150,7 +144,6 @@ mod tests {
         let back = Config::from_json(&c.to_json());
         assert_eq!(back, c);
         assert!(c.to_json().contains("\"speed\": 1.2,"));
-        assert!(!c.to_json().contains("endpoint"));
         assert_eq!(Config::from_json("garbage"), Config::default());
         assert_eq!(Config::from_json(r#"{"name":""}"#).name, DEFAULT_NAME);
         // An invalid stored value falls back to the defaults.

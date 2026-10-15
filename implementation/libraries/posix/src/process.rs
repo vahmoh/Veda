@@ -4,10 +4,17 @@
 //! Processes: ids, starting programs (`posix_spawn`), waiting for them,
 //! `kill` and exit.
 //!
-//! There is no `fork`: Veda creates a process from a program image. A
-//! process id is the process's kernel object id (as [`thread::tid_of`]
-//! keeps thread ids); the processes this one started are its children, the
-//! only ones it can wait for or signal.
+//! There is no `fork`: Veda creates a process from a program image, and
+//! gives it what `exec` keeps on Linux: the descriptors not marked
+//! close-on-exec, as the file actions leave them, the working directory,
+//! the signals ignored and the signal mask, as the attributes change them
+//! (`inherit` says how what is not a handle travels). A process id is the
+//! process's kernel object id, cut to the 30 bits thread ids have ([`pid_of`]:
+//! the main thread's id is its process's); the processes this one started
+//! are its children, the only ones it can wait for or signal. Cut so, ids
+//! repeat after 2^30 kernel objects: a child never gets the id of another
+//! child this one has not waited for (the process made for it is dropped
+//! before it runs, and another made in its place).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -23,10 +30,17 @@ use vrt::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
+use crate::inherit::{Inherited, Pseudo};
 use crate::linux::errno::*;
 use crate::linux::{Rusage, Siginfo, Timeval, sig, wait};
-use crate::thread::tid_of;
-use crate::{fs, path, tty, user, vfs};
+use crate::{fs, path, signal, tty, user, vfs};
+
+/// The process id for a process's kernel object id (positive, below 2^30:
+/// it is its main thread's id too, and musl keeps flags in the high bits of
+/// words that hold thread ids).
+pub fn pid_of(koid: u64) -> i32 {
+    ((koid & 0x3fff_ffff) as i32).max(1)
+}
 
 static PID: AtomicI32 = AtomicI32::new(0);
 
@@ -36,14 +50,14 @@ pub fn pid() -> i32 {
     if p != 0 {
         return p;
     }
-    let p = vrt::object::process_self_info().map_or(1, |i| tid_of(i.koid));
+    let p = vrt::object::process_self_info().map_or(1, |i| pid_of(i.koid));
     PID.store(p, Ordering::Relaxed);
     p
 }
 
 /// The id of the process that started this one.
 pub fn ppid() -> i32 {
-    vrt::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { tid_of(i.parent_koid) })
+    vrt::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { pid_of(i.parent_koid) })
 }
 
 /// The processes this one started and has not waited for.
@@ -92,6 +106,43 @@ const FDOP_OPEN: i32 = 3;
 const FDOP_CHDIR: i32 = 4;
 const FDOP_FCHDIR: i32 = 5;
 
+/// musl's `posix_spawnattr_t`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SpawnAttr {
+    flags: i32,
+    pgrp: i32,
+    /// The signals to have their default disposition (`SETSIGDEF`).
+    default: [u64; 16],
+    /// The signal mask to start with (`SETSIGMASK`).
+    mask: [u64; 16],
+    prio: i32,
+    pol: i32,
+    func: usize,
+    pad: [u8; 56],
+}
+
+/// `POSIX_SPAWN_SETSIGDEF`: signals of [`SpawnAttr::default`] are not
+/// ignored in the child.
+const SETSIGDEF: i32 = 4;
+/// `POSIX_SPAWN_SETSIGMASK`: the child's mask is [`SpawnAttr::mask`], not
+/// the caller's.
+const SETSIGMASK: i32 = 8;
+// The other attributes change nothing on Veda: there are no process groups
+// or sessions to put a process in (`SETPGROUP`, `SETSID`), one user
+// (`RESETIDS`), and no scheduling policies (`SETSCHEDPARAM`,
+// `SETSCHEDULER`, which musl does not apply on Linux either).
+
+impl SpawnAttr {
+    /// The signals a child ignores, and its mask, when the caller ignores
+    /// `ignored` and has `mask` itself.
+    fn signals(&self, ignored: u64, mask: u64) -> (u64, u64) {
+        let ignored = if self.flags & SETSIGDEF != 0 { ignored & !self.default[0] } else { ignored };
+        let mask = if self.flags & SETSIGMASK != 0 { self.mask[0] } else { mask };
+        (ignored, mask)
+    }
+}
+
 /// The descriptors and directory of a process about to start.
 struct ChildState {
     fds: BTreeMap<i32, (Arc<Description>, bool)>,
@@ -136,12 +187,17 @@ impl ChildState {
         Ok(())
     }
 
-    /// The handles that carry the child's descriptors.
-    fn handles(&self) -> Result<Vec<(u32, Handle)>, isize> {
+    /// What carries the child's descriptors: handles, and what it inherits
+    /// otherwise. A descriptor numbered beyond what a handle's role can say
+    /// makes it fail (`EMFILE`) rather than go missing.
+    fn handles(&self, inherited: &mut Inherited) -> Result<Vec<(u32, Handle)>, isize> {
         let mut out = Vec::new();
         for (&n, (d, cloexec)) in &self.fds {
-            if *cloexec || n < 0 || n as u32 >= role::MAX_FDS {
+            if *cloexec {
                 continue;
+            }
+            if n < 0 || n as u32 >= role::MAX_FDS {
+                return Err(EMFILE);
             }
             let h = match &d.object {
                 // The access the descriptor has and no more: the read end of
@@ -157,9 +213,19 @@ impl ChildState {
                     s.socket.0.duplicate(Some(vabi::Rights(rights))).map_err(error::kernel)?
                 }
                 Object::File(f) => f.duplicate()?.into_handle(),
-                // Directories, the empty input and the log stay behind
-                // (the child gets the defaults for 0, 1 and 2).
-                _ => continue,
+                // What no handle carries.
+                Object::Dir(dir) => {
+                    inherited.fds.push((n, Pseudo::Dir(dir.path.clone())));
+                    continue;
+                }
+                Object::Null => {
+                    inherited.fds.push((n, Pseudo::Null));
+                    continue;
+                }
+                Object::Log => {
+                    inherited.fds.push((n, Pseudo::Log));
+                    continue;
+                }
             };
             out.push((role::FD + n as u32, h));
         }
@@ -172,6 +238,7 @@ fn spawn_errno(e: SpawnError) -> isize {
     match e {
         SpawnError::NotExecutable | SpawnError::BadElf(_) | SpawnError::Incompatible => ENOEXEC,
         SpawnError::TooLarge => E2BIG,
+        SpawnError::Refused => EAGAIN,
         SpawnError::Kernel(vabi::Error::NoMemory) => ENOMEM,
         SpawnError::Kernel(e) => error::kernel(e),
     }
@@ -179,11 +246,16 @@ fn spawn_errno(e: SpawnError) -> isize {
 
 /// Starts the program at `name` with the descriptors and working directory
 /// left by the file actions `ops`, which are carried out first, as the
-/// child would (a relative `name` is found from the directory they leave).
+/// child would (a relative `name` is found from the directory they leave),
+/// and the signal state the attributes `attr` leave.
 ///
 /// # Safety
 /// The arguments are those of musl's `posix_spawn`.
-unsafe fn spawn(res: usize, name: usize, ops: usize, argv: usize, envp: usize) -> Result<(), isize> {
+unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, envp: usize) -> Result<(), isize> {
+    // SAFETY: musl passes its attributes (zero if the program gave none).
+    let attr: SpawnAttr = unsafe { user::read(attr)? };
+    let (ignored, mask) = attr.signals(signal::ignored(), signal::current_mask());
+    let mut inherited = Inherited { ignored, mask, fds: Vec::new() };
     let mut child = ChildState {
         fds: fd::snapshot().into_iter().map(|(n, d, cloexec)| (n, (d, cloexec))).collect(),
         cwd: vfs::cwd(),
@@ -210,7 +282,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, argv: usize, envp: usize) -
         return Err(EACCES);
     }
 
-    let mut handles = child.handles()?;
+    let mut handles = child.handles(&mut inherited)?;
     // A registry connection of its own; the terminal's state.
     let registry = vproto::with_registry(|r| r.clone_registry()).map_err(|_| EIO)?;
     match registry {
@@ -234,12 +306,16 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, argv: usize, envp: usize) -
     let (args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
     let name = path::file_name(&path);
     let name = &name[..name.floor_char_boundary(vabi::NAME_MAX)];
+    let entries = inherited.entries();
     let mut spawn = Spawn::new(name).path(&path).cwd(&child.cwd);
     spawn.args = args;
     spawn.env = env;
     spawn.handles = handles;
+    spawn.inherited = entries.iter().map(String::as_str).collect();
+    let unused = |koid: u64| !CHILDREN.lock().contains_key(&pid_of(koid));
+    spawn.accept = Some(&unused);
     let process = spawn.start(bytes).map_err(spawn_errno)?;
-    let pid = tid_of(process.0.koid());
+    let pid = pid_of(process.0.koid());
     CHILDREN.lock().insert(pid, process);
     if res != 0 {
         // SAFETY: the program passed where to store the id.
@@ -259,12 +335,12 @@ pub unsafe extern "C" fn __veda_spawn(
     res: usize,
     path: usize,
     ops: usize,
-    _attr: usize,
+    attr: usize,
     argv: usize,
     envp: usize,
 ) -> i32 {
     // SAFETY: per the caller.
-    match unsafe { spawn(res, path, ops, argv, envp) } {
+    match unsafe { spawn(res, path, ops, attr, argv, envp) } {
         Ok(()) => 0,
         Err(e) => e as i32,
     }
@@ -355,19 +431,29 @@ pub unsafe fn waitid(kind: u32, id: i32, info: usize, options: u32) -> SysResult
     Ok(0)
 }
 
-/// `kill`: this process, or a child (which ends at once, whatever the
-/// signal, except signal 0 which only checks that it exists).
+/// `kill`: this process, a child, or (`-1`) every child; signal 0 only
+/// checks that they exist. Signals do not cross processes: a child ends at
+/// once on a signal that ends a process by default, and is left alone on
+/// the others. Each process is the one member of its process group (its
+/// id is the group's, `getpgid`), so `-pid` means `pid`.
 pub fn kill(pid: i32, s: u32) -> SysResult {
     if s >= sig::NSIG {
         return Err(EINVAL);
     }
-    if pid == self::pid() || pid == 0 || pid == -1 {
-        return crate::signal::send_self(s);
+    let me = self::pid();
+    if pid == 0 || pid == me || pid == -me {
+        return signal::send_self(s);
     }
     let children = CHILDREN.lock();
-    let proc = children.get(&pid.abs()).ok_or(ESRCH)?;
-    if s != 0 {
-        proc.kill().map_err(error::kernel)?;
+    let targets: Vec<&Process> =
+        if pid == -1 { children.values().collect() } else { children.get(&pid.wrapping_abs()).into_iter().collect() };
+    if targets.is_empty() {
+        return Err(ESRCH);
+    }
+    if s != 0 && signal::terminates(s) {
+        for p in targets {
+            p.kill().map_err(error::kernel)?;
+        }
     }
     Ok(0)
 }
@@ -393,6 +479,36 @@ mod tests {
         // musl's struct fdop: two pointers, five ints, then `char path[]`.
         assert_eq!(FDOP_PATH, 36);
         assert_eq!(size_of::<FdOp>(), 40);
+    }
+
+    #[test]
+    fn spawn_attributes_are_laid_out_as_musl_has_them() {
+        use core::mem::offset_of;
+        // Two ints, two 128-byte sigset_ts, two ints, a pointer and its
+        // padding to 64 bytes.
+        assert_eq!(offset_of!(SpawnAttr, default), 8);
+        assert_eq!(offset_of!(SpawnAttr, mask), 136);
+        assert_eq!(offset_of!(SpawnAttr, func), 272);
+        assert_eq!(size_of::<SpawnAttr>(), 336);
+    }
+
+    #[test]
+    fn children_inherit_signals_as_the_attributes_say() {
+        let pipe = 1 << (sig::PIPE - 1);
+        let chld = 1 << (sig::CHLD - 1);
+        let none =
+            SpawnAttr { flags: 0, pgrp: 0, default: [0; 16], mask: [0; 16], prio: 0, pol: 0, func: 0, pad: [0; 56] };
+        // Without attributes: what the caller ignores and blocks.
+        assert_eq!(none.signals(pipe | chld, chld), (pipe | chld, chld));
+        // Some back to their default, another mask.
+        let mut attr = none;
+        attr.flags = SETSIGDEF | SETSIGMASK;
+        attr.default[0] = pipe;
+        attr.mask[0] = pipe;
+        assert_eq!(attr.signals(pipe | chld, chld), (chld, pipe));
+        // Set, but not asked for: no effect.
+        attr.flags = 0;
+        assert_eq!(attr.signals(pipe, 0), (pipe, 0));
     }
 
     #[test]

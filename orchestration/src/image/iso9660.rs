@@ -12,8 +12,12 @@
 //! system comes last: an El Torito size of 0, used when it is too large to
 //! record, means "up to the end of the disc".
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::ops::Range;
+
+use super::pieces::Pieces;
 
 /// Bytes in an ISO 9660 logical block.
 pub const BLOCK: usize = 2048;
@@ -92,6 +96,7 @@ fn both16(v: u16) -> [u8; 4] {
 }
 
 /// The bytes of block `b`.
+#[cfg(test)]
 fn blocks(b: u32) -> Range<usize> {
     b as usize * BLOCK..(b as usize + 1) * BLOCK
 }
@@ -164,10 +169,10 @@ impl<'a> IsoBuilder<'a> {
         Ok(dir)
     }
 
-    /// Serialises the image. `boot_image` makes the FAT file system given
+    /// Lays the image out. `boot_image` lays out the FAT file system given
     /// the disk sector it starts at (its partition's start, which its boot
     /// sector records); it goes last, padded to a whole block.
-    pub fn build(&self, boot_image: impl FnOnce(u32) -> Result<Vec<u8>, String>) -> Result<Vec<u8>, String> {
+    pub fn build(&self, boot_image: impl FnOnce(u32) -> Result<Pieces<'a>, String>) -> Result<Pieces<'a>, String> {
         // Blocks 16-18: the primary volume descriptor, the El Torito boot
         // record and the terminator; then the boot catalog and the two path
         // tables, one block each.
@@ -198,16 +203,15 @@ impl<'a> IsoBuilder<'a> {
         }
         // And the FAT file system.
         let boot_block = next;
-        let mut boot = boot_image(boot_block * (BLOCK / DISK_SECTOR) as u32)?;
-        if boot.is_empty() || boot.len() % DISK_SECTOR != 0 {
+        let boot = boot_image(boot_block * (BLOCK / DISK_SECTOR) as u32)?;
+        if boot.len() == 0 || boot.len() % DISK_SECTOR as u64 != 0 {
             return Err("the boot image must be whole disk sectors".into());
         }
-        let boot_sectors = (boot.len() / DISK_SECTOR) as u32;
-        boot.resize(boot.len().next_multiple_of(BLOCK), 0);
-        let total = boot_block + (boot.len() / BLOCK) as u32;
-        let mut image = vec![0u8; total as usize * BLOCK];
-        let at = boot_block as usize * BLOCK;
-        image[at..at + boot.len()].copy_from_slice(&boot);
+        let boot_sectors = u32::try_from(boot.len() / DISK_SECTOR as u64).map_err(|_| "the boot image is too large")?;
+        let total = boot_block + boot.len().div_ceil(BLOCK as u64) as u32;
+        let mut image = Pieces::new(total as u64 * BLOCK as u64);
+        image.place(boot_block as u64 * BLOCK as u64, boot);
+        let at = |block: u32| block as u64 * BLOCK as u64;
 
         // Directory extents and file data.
         for (d, p) in dirs.iter().enumerate() {
@@ -222,15 +226,14 @@ impl<'a> IsoBuilder<'a> {
             for (name, data) in &p.dir.files {
                 let b = file_block[&(d, name.as_str())];
                 entries.push((name, dir_record(file_id(name).as_bytes(), b, data.len() as u32, false)));
-                let at = b as usize * BLOCK;
-                image[at..at + data.len()].copy_from_slice(data);
+                image.put(at(b), Cow::Borrowed(*data));
             }
             entries.sort_by_key(|(name, _)| sort_key(name));
             records.extend(entries.into_iter().flat_map(|(_, r)| r));
             if records.len() > BLOCK {
                 return Err(format!("directory '{}' has too many entries for one block", p.name));
             }
-            image[blocks(p.block)][..records.len()].copy_from_slice(&records);
+            image.put(at(p.block), records);
         }
 
         // Path tables.
@@ -243,11 +246,12 @@ impl<'a> IsoBuilder<'a> {
         if l.len() > BLOCK {
             return Err("too many directories for a one-block path table".into());
         }
-        image[blocks(l_table)][..l.len()].copy_from_slice(&l);
-        image[blocks(m_table)][..m.len()].copy_from_slice(&m);
+        let path_table_len = l.len();
+        image.put(at(l_table), l);
+        image.put(at(m_table), m);
 
         // The primary volume descriptor.
-        let pvd = &mut image[blocks(pvd_block)];
+        let mut pvd = vec![0u8; BLOCK];
         pvd[0] = 1;
         pvd[1..6].copy_from_slice(b"CD001");
         pvd[6] = 1;
@@ -258,7 +262,7 @@ impl<'a> IsoBuilder<'a> {
         pvd[120..124].copy_from_slice(&both16(1));
         pvd[124..128].copy_from_slice(&both16(1));
         pvd[128..132].copy_from_slice(&both16(BLOCK as u16));
-        pvd[132..140].copy_from_slice(&both32(l.len() as u32));
+        pvd[132..140].copy_from_slice(&both32(path_table_len as u32));
         pvd[140..144].copy_from_slice(&l_table.to_le_bytes());
         pvd[148..152].copy_from_slice(&m_table.to_be_bytes());
         pvd[156..190].copy_from_slice(&dir_record(&[0], dirs[0].block, BLOCK as u32, true));
@@ -267,20 +271,23 @@ impl<'a> IsoBuilder<'a> {
             pvd[at..at + 16].copy_from_slice(date);
         }
         pvd[881] = 1;
+        image.put(at(pvd_block), pvd);
 
         // El Torito: the boot record points at the catalog, whose default
         // entry is the FAT file system. Its size counts 512-byte sectors; one
         // too large to record is 0 (to UEFI: "to the end of the disc").
-        let record = &mut image[blocks(record_block)];
+        let mut record = vec![0u8; BLOCK];
         record[1..6].copy_from_slice(b"CD001");
         record[6] = 1;
         record[7..30].copy_from_slice(b"EL TORITO SPECIFICATION");
         record[71..75].copy_from_slice(&catalog.to_le_bytes());
-        let end = &mut image[blocks(end_block)];
+        image.put(at(record_block), record);
+        let mut end = vec![0u8; BLOCK];
         end[0] = 255;
         end[1..6].copy_from_slice(b"CD001");
         end[6] = 1;
-        let cat = &mut image[blocks(catalog)];
+        image.put(at(end_block), end);
+        let mut cat = vec![0u8; BLOCK];
         cat[0] = 1;
         cat[1] = PLATFORM_EFI;
         cat[4..8].copy_from_slice(b"VEDA");
@@ -292,11 +299,12 @@ impl<'a> IsoBuilder<'a> {
         let count = u16::try_from(boot_sectors).unwrap_or(0);
         cat[38..40].copy_from_slice(&count.to_le_bytes());
         cat[40..44].copy_from_slice(&boot_block.to_le_bytes());
+        image.put(at(catalog), cat);
 
         // The partition table: the FAT file system is the EFI system
         // partition of a stick the image is written to.
         let start = boot_block as u64 * (BLOCK / DISK_SECTOR) as u64;
-        let mbr = &mut image[..DISK_SECTOR];
+        let mut mbr = vec![0u8; DISK_SECTOR];
         mbr[440..444].copy_from_slice(b"VEDA");
         let entry = &mut mbr[446..462];
         entry[1..4].copy_from_slice(&chs(start));
@@ -306,6 +314,7 @@ impl<'a> IsoBuilder<'a> {
         entry[12..16].copy_from_slice(&boot_sectors.to_le_bytes());
         mbr[510] = 0x55;
         mbr[511] = 0xAA;
+        image.put(0, mbr);
         Ok(image)
     }
 }
@@ -363,9 +372,12 @@ mod tests {
         let image = b
             .build(|s| {
                 start = s;
-                Ok(vec![0xFA; boot_bytes])
+                let mut boot = Pieces::new(boot_bytes as u64);
+                boot.put(0, vec![0xFA; boot_bytes]);
+                Ok(boot)
             })
-            .unwrap();
+            .unwrap()
+            .to_vec();
         (image, start)
     }
 

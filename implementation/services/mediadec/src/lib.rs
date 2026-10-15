@@ -14,7 +14,9 @@
 //! ([`vproto::media::CONTROL_ROLE`]), and no registry: it reaches no file,
 //! service or network but what the player sends it. Its one thread answers
 //! the player and does the work between requests (`session`); FFmpeg's and
-//! dav1d's own threads decode. It ends when the player closes the channel.
+//! dav1d's own threads decode. It ends when the player closes the channel,
+//! or goes away: a watchdog thread ends it then even while its own thread
+//! is stuck in FFmpeg.
 //!
 //! * [`source`]: what FFmpeg reads through (the file the player sent).
 //! * [`info`]: what a source holds, as the protocol says it.
@@ -25,8 +27,9 @@
 //!
 //! Its Rust and the C library each keep their own: this half is made one
 //! object that exports nothing but [`mediadec_main`] (as the POSIX layer is),
-//! allocates with musl's `malloc`, and creates no threads of its own (a
-//! thread of `vrt`'s would have no C thread state).
+//! allocates with musl's `malloc`, and creates its one thread of its own,
+//! the watchdog, with the C library's `pthread_create` (a thread of `vrt`'s
+//! would have no C thread state).
 
 #![no_std]
 
@@ -43,20 +46,15 @@ pub mod source;
 
 #[cfg(target_os = "none")]
 mod program {
-    use alloc::vec::Vec;
     use core::alloc::{GlobalAlloc, Layout};
     use core::ffi::c_void;
 
-    use vabi::{RawHandle, WaitItem, signals};
+    use vabi::RawHandle;
     use vproto::media;
     use vrt::object::{Channel, Handle};
     use vrt::println;
 
     use crate::session::{MAX_ALLOC, Session};
-
-    /// The longest it waits without beating (ns): the player takes a decoder
-    /// whose heartbeat stops for some seconds as hung.
-    const BEAT_NS: u64 = 1_000_000_000;
 
     unsafe extern "C" {
         fn malloc(size: usize) -> *mut c_void;
@@ -66,6 +64,23 @@ mod program {
         fn posix_memalign(out: *mut *mut c_void, align: usize, size: usize) -> i32;
         /// The POSIX layer's (`<veda/ipc.h>`).
         fn veda_startup_handle(role: u32, out: *mut RawHandle) -> i32;
+        /// musl's (`pthread_t` is an `unsigned long`).
+        fn pthread_create(
+            thread: *mut usize,
+            attr: *const c_void,
+            start: extern "C" fn(*mut c_void) -> *mut c_void,
+            arg: *mut c_void,
+        ) -> i32;
+    }
+
+    /// The watchdog's thread (`media::watchdog`): ends the decoder as soon
+    /// as the player's end of the control channel (`control`, a raw handle)
+    /// closes, whatever the decoder's own thread is doing (FFmpeg may be
+    /// stuck in a damaged file). The player kills a decoder it gives up on
+    /// itself; this ends one whose player crashed or was ended.
+    extern "C" fn watchdog(control: *mut c_void) -> *mut c_void {
+        media::watchdog(control as usize as RawHandle);
+        core::ptr::null_mut()
     }
 
     /// musl's `malloc`, shared with FFmpeg: one heap, safe from any thread.
@@ -134,21 +149,7 @@ mod program {
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
         // Formatted without allocating, in case the heap is what failed.
-        struct Buf {
-            data: [u8; 512],
-            len: usize,
-        }
-        impl core::fmt::Write for Buf {
-            fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                let n = s.len().min(self.data.len() - self.len);
-                self.data[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
-                self.len += n;
-                Ok(())
-            }
-        }
-        let mut b = Buf { data: [0; 512], len: 0 };
-        let _ = core::fmt::write(&mut b, format_args!("panic: {info}\n"));
-        vrt::sys::debug_write(&b.data[..b.len]);
+        vrt::io::log_without_allocating(format_args!("panic: {info}\n"));
         vrt::sys::process_exit(vabi::EXIT_CODE_PANICKED)
     }
 
@@ -166,6 +167,12 @@ mod program {
         }
         // SAFETY: the handle was just taken from the startup message.
         let control = Channel::from_handle(unsafe { Handle::from_raw(raw) });
+        let mut thread = 0usize;
+        // SAFETY: the watchdog only waits on the handle, which stays open
+        // while the decoder runs (it ends with it).
+        if unsafe { pthread_create(&mut thread, core::ptr::null(), watchdog, raw as usize as *mut c_void) } != 0 {
+            println!("cannot start its watchdog");
+        }
         // Before any input is read: no kernel log, no processes, no new
         // executable memory, whatever a damaged file makes of the decoder.
         if let Err(e) = vrt::process::restrict(vabi::restrict::ALL) {
@@ -173,45 +180,6 @@ mod program {
             return 1;
         }
         let mut session = Session::new(control.raw());
-        loop {
-            // Requests first: each waits at most for one call into FFmpeg.
-            loop {
-                match control.read() {
-                    Ok(msg) => match media::media::dispatch(&mut session, msg) {
-                        Ok(reply) => {
-                            if reply.send(&control).is_err() {
-                                return 0;
-                            }
-                        }
-                        Err(e) => {
-                            println!("a request it cannot read ({e:?}): stopping");
-                            return 1;
-                        }
-                    },
-                    Err(vabi::Error::ShouldWait) => break,
-                    Err(_) => return 0,
-                }
-            }
-            session.beat();
-            if session.work() {
-                continue;
-            }
-            let mut items: Vec<WaitItem> = Vec::with_capacity(3);
-            items.push(WaitItem {
-                handle: control.raw(),
-                signals: signals::READABLE | signals::PEER_CLOSED,
-                ..Default::default()
-            });
-            for wake in session.wakes() {
-                items.push(WaitItem { handle: wake, signals: signals::SIGNALED, ..Default::default() });
-            }
-            // Idle, it still beats now and then: the player takes a silent
-            // heartbeat for a hung decoder.
-            let _ = vrt::object::wait_many(&mut items, vrt::time::now_ns() + BEAT_NS);
-            if items[0].observed & signals::PEER_CLOSED != 0 && items[0].observed & signals::READABLE == 0 {
-                return 0;
-            }
-            session.clear_wakes();
-        }
+        media::serve(&control, &mut session)
     }
 }

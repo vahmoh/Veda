@@ -75,7 +75,8 @@ Each one came from what the alternatives would cost.
    bugs), and Linux boots in about 0.1 s. The one device of the PC's own the
    guest reaches is the keyboard controller (the i8042), whose two ports the
    monitor reads and writes for it (the processor says which port and
-   what value: nothing to decode), all but what would reset the machine.
+   what value: nothing to decode), giving it only the commands Linux's
+   drivers of it give, none of which would reset the machine.
 
 4. **The kernel keeps to mechanism.** `vkernel` gives a monitor process
    `Guest` objects (a guest-physical address space of VMOs, and later the
@@ -127,10 +128,10 @@ Each one came from what the alternatives would cost.
 | Hypervisor logic | `implementation/libraries/hv` (`vhv`) | the platform's ABI, the bridge's ABI, a given function's configuration space; on AMD64 (`implementation/libraries/hv/src/arch/amd64`) the virtual local APIC, the guests' `cpuid`, the platform's discovery and Linux's boot protocol (host-tested) |
 | IOMMU logic | `implementation/libraries/iommu` (`viommu`) | on AMD64 (`implementation/libraries/iommu/src/arch/amd64`) the DMAR table; the units' registers, tables, entries and descriptors (host-tested) |
 | Device manager | `implementation/services/devmgr` | which devices go to the driver VM (all but Veda's own), their `pcidev` channels, resetting them and starting the driver VM again |
-| Monitor | `implementation/services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
+| Monitor | `implementation/services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry; what it decides that reaches no object of Veda's (the bridge's books, the guest's budget, where functions and their BARs go, the keyboard controller's commands) in `drivervm-core` (`implementation/services/drivervm/core`), host-tested |
 | Guest kernel | `implementation/ports/linux` | Linux with the Veda platform: `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` (`veda.patch`); on AMD64 `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` (`arch/amd64/veda.patch`) |
-| Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, network interfaces among it; `netlink`); their Linux system calls are `rustix`'s |
+| Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches (`Watch`) |
+| Guest programs | `implementation/guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: what `rustix` does not do, retries and sessions with Veda's services, network interfaces and their frames, the tests' checks; `netlink`); their Linux system calls are `rustix`'s |
 | Build | `orchestration/src/linux.rs`, `implementation/ports/linux/build.sh` | `cargo orchestration linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `implementation/ports/linux/firmware.txt` and the architecture's (`implementation/ports/linux/arch/amd64/firmware.txt`); the image's `linux/` |
 
 ### The platform
@@ -205,9 +206,12 @@ its device. Through it the monitor gets what giving the function away
 takes, and nothing more: its configuration space, its BARs, its MSIs,
 and a resource that names it (`resource_kind::PCI`, by requester id),
 which only the driver VM's functions have, and the memory the firmware
-keeps for it (below). A function the monitor cannot give it lets go of at
-once: `devmgr` keeps it, and neither resets it when the driver VM ends
-nor offers it to the next.
+keeps for it (below). A function is given whole or not at all: its BARs
+and the memory the firmware keeps for it are mapped into the guest, then
+its DMA joins the guest's domain, and if any of it cannot be, what was
+done is undone. A function the monitor cannot give it lets go of at
+once, nothing of it the guest's: `devmgr` keeps it, and neither resets it
+when the driver VM ends nor offers it to the next.
 
 **DMA.** The kernel drives the IOMMU
 (`implementation/kernel/src/arch/amd64/iommu`, Intel VT-d). At boot every
@@ -231,7 +235,12 @@ interrupts, whatever the guest writes into its MSI or MSI-X registers.
 I/O APIC entries are remappable too, validated as the I/O APIC's. An MSI
 of the guest's function is an `Interrupt` object bound to a virtual
 processor (`vcpu_bind_interrupt`): the kernel raises the guest's vector at
-its local APIC straight from the interrupt, without the monitor. So is an
+its local APIC straight from the interrupt, without the monitor. Each
+takes one of the vectors all devices' interrupts share, so the guest has
+as many as a function's MSI or MSI-X capability says it can send, and 128
+for all its functions at once (on AMD64: two thirds of the kernel's 192),
+each made when the guest first routes it and freed, its vector the host's
+again, when the guest lets go of it (`PCI_MSI` with vector 0). So is an
 interrupt line the guest has (an I/O APIC input, any of them: device
 interrupts take vectors from one pool): an edge as an MSI; a
 level-triggered line is masked when it fires and raised as a
@@ -358,6 +367,21 @@ function reports none. The monitor turns its SERR# enable and its PCI
 Express error reporting off before the guest runs, and they stay off,
 whatever the guest writes.
 
+**PCI Express.** Of a function's PCI Express capability, as VFIO has
+it, the guest writes only device control and status and device control
+2; the link's, the slot's and the root's registers, which the host's end
+of the link must agree with, are read-only (`vhv::pci`). In device
+control, phantom functions are never enabled (they would have the
+function's DMA carry other functions' requester ids, outside the guest's
+IOMMU domain), and the maximum payload size stays the one the host set
+along the link, the guest reading back its own; the maximum read request
+size is the guest's, never below the payload size. A function-level reset
+is the host's: it would leave the function without its BARs, which the
+guest can neither see nor put back. Neither the PCI Express capability
+nor the Advanced Features capability says the function has one, and a
+write that would start one does not reach it; Linux then resets the
+function through D3hot, after which devmgr puts its BARs back (above).
+
 What a function needs for this, and the limits for now: MSIs (or MSI-X),
 or an INTx the firmware routes on a root bus (QEMU's 82540EM, its
 `e1000`, has only that; a function behind a bridge needs MSIs, which a
@@ -389,10 +413,17 @@ as a PC's are behind its IOMMU, and Veda's virtio drivers accept it
 A driver for Linux is a program of the guest's, written as a Veda driver
 is, against Linux's device interface instead of the hardware. The guest's
 `init` starts the ones its devices need (by PCI class; `input` always),
-and again if they end. A driver waits on Linux's files and Veda's objects
-at once: a *watch* (`vrt::guest::watch`) is a file that is readable while
-a handle's signals are, so one `poll` takes a card's socket, a channel of
-Veda's and a ring's wake-up event.
+and again if they end: a second after, longer after each end in a row
+that came soon after its start, up to a minute, so that a driver that
+cannot work is not started every second for ever. A driver waits on
+Linux's files and Veda's objects at once: a *watch* (`vrt::guest::Watch`)
+is a file that is readable while a handle's signals are, so one `poll`
+takes a card's socket, a channel of Veda's and a ring's wake-up event. A
+watch fails when the monitor does not keep its wait (at its limits, or
+the handle gone), and says so: the driver ends its session with the
+service, and attaches again, later after each failure in a row
+(`guest_sys::retry`), as it does when the service goes away and comes
+back.
 
 **Input** (`implementation/guest/input`). The keyboards, mice, touchpads,
 tablets and touchscreens Linux drives, on USB, PS/2, virtio or wherever its
@@ -417,14 +448,20 @@ itself: it has no console, and SysRq is only `/proc/sysrq-trigger`'s.
 its two interrupts; no DMA, so no IOMMU is needed). Linux's i8042, atkbd
 and psmouse drive it, a touchpad's protocol among them (Synaptics',
 ALPS', Elantech's...), and its devices reach Veda through `input`. The
-controller also drives the processor's reset line, so the monitor, which
-carries out each of the guest's accesses to the two ports, keeps what
-would pulse it or write it low (the output port's value goes with the
-reset and A20 lines high); the ports around them (0x61, with the NMIs'
-switches) the guest does not reach. The guest's ACPI tables describe the
-controller as a PC's firmware does (`PNP0303` and `PNP0F13`, at its ports
-and GSIs 1 and 12), and Linux's i8042 finds it through ACPI's Plug and
-Play; its interrupts are edges, routed by `GSI`.
+controller also drives the processor's reset line and the A20 gate,
+through its output port, which a command writes with the next data byte
+and other commands pulse; so the monitor, which carries out each of the
+guest's accesses to the two ports, gives the controller only the commands
+Linux's i8042 driver gives (reading and writing its configuration, its
+self-tests, its ports on and off, the bytes it sends the keyboard and the
+mouse through it, its multiplexer's), none of which touches the output
+port, and drops the rest; a data byte goes as it is, the keyboard's or a
+command's parameter, never the output port's (`drivervm_core::arch::i8042`
+follows which, and is tested on the host). The ports around them (0x61,
+with the NMIs' switches) the guest does not reach. The guest's ACPI
+tables describe the controller as a PC's firmware does (`PNP0303` and
+`PNP0F13`, at its ports and GSIs 1 and 12), and Linux's i8042 finds it
+through ACPI's Plug and Play; its interrupts are edges, routed by `GSI`.
 
 **Sound** (`implementation/guest/alsa`). Linux's first playback device,
 through ALSA's kernel interface (the PCM and control ioctls, without alsa-lib),
@@ -450,7 +487,9 @@ scales), unmuted: the volume is the audio service's.
 A card that records (its first capture device) is the device's input too:
 a thread of its own reads the card a period at a time into the input
 ring, stamped with the card's count as playback is, from when the audio
-service opens the input until it closes it.
+service opens the input until it closes it. A card that cannot play (it
+does not take 48 kHz, 16-bit stereo) waits for Linux's cards to change (a
+USB card plugged in), rather than the driver ending to be started again.
 
 The cards are Linux's to drive whole: HD Audio controllers
 (`snd-hda-intel`, its codecs' drivers: Realtek's and the generic one) and
@@ -473,7 +512,11 @@ network device (`netdev`), as Veda's own drivers attach theirs: its frames
 go between a raw packet socket on the interface (every frame it receives,
 multicast too; none it sends) and the device's ring, a copy each way, and
 its carrier is the link's. Linux has no IP stack in the driver VM: it
-moves frames and answers nothing on the network itself.
+moves frames and answers nothing on the network itself. A card is known
+by its interface's index, which Linux gives no other (a name it gives
+again: a USB adapter plugged in again is `eth0` again, and served anew);
+one that cannot be used yet is tried again, later each time, as is a
+radio.
 
 **Wi-Fi** (`implementation/guest/wifi`). Each of Linux's Wi-Fi radios is
 offered to Veda's Wi-Fi service as a *managed* radio
@@ -523,7 +566,10 @@ Mesa's Gallium driver of the GPU over the GPU's Linux driver, on its render
 node: iris on i915 or xe, virgl on virtio-gpu (QEMU's, whose virglrenderer
 renders on the host's GPU), softpipe when asked (`drivervm.renderer=softpipe`,
 for tests). Each connection gets a context and a block of Veda's memory
-shared with it, which the renderer maps through the bridge; the decoder
+shared with it, which the renderer maps through the bridge (a process has
+a few connections, its contexts' memory and the memory it gives to render
+into are bounded, as are all of them together: the registry says which
+process a connection is); the decoder
 (`decoder/`, C) checks every command before Gallium's calls carry it out,
 and gives each driver the shaders as it takes them (virgl's conventions
 are a fragment's position at the pixel's centre and its facing as a
@@ -598,14 +644,49 @@ all of it, comes when the list grows.
 | `vrt::object::Channel::write(bytes, handles)` | `ioctl(VEDA_IOC_CHANNEL_WRITE)`: copies the buffers in, checks the file holds the handles | moves the guest's handles out of its table, writes the message |
 | `wait_many(items, deadline)` | `VEDA_IOC_WAIT`: finished at once, or sleeps until the ring says | polls; or keeps the wait for its waiter thread, which writes the result and raises the callback vector |
 | `Mapping::new(vmo)` | `VEDA_IOC_VMO_MAP`, then `mmap` | maps the VMO into the window of guest-physical memory |
-| `vrt::guest::watch(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait, and reads its result | an ordinary wait (cancelled when the file closes) |
+| `vrt::guest::Watch::new(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait, and reads its result (an error if the wait failed) | an ordinary wait (cancelled when the file closes) |
 | `vrt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, DMA addresses for importers' devices or mapped for the processor | maps the VMO into the window, as for a program; unmaps it when the dma-buf goes |
 | `vrt::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ`: copies the bytes out | reads Veda's log, as `log_read` does |
 
 A guest program's handles are its own: the guest's kernel lets a file use
 only handles it made or received, and closes what is left when the file
 closes. The registry the guest gets lets it connect only to services that
-drivers attach to, and register only services it provides.
+drivers attach to, and register only services it provides, through 32
+channels at most (one for each of its programs).
+
+What the guest makes Veda keep is bounded, and an operation beyond a
+bound is refused (`LimitReached`), so that whatever Linux does, the
+monitor and the kernel keep what Veda's memory can hold:
+
+* its handles: 16384 (those in messages it sent itself among them);
+* its waits that go on: the items of all of them are one wait of the
+  kernel's (`vabi::WAIT_MANY_MAX`, less the waiter's own event), and they
+  and the waits finished but not in the ring yet are at most what the
+  ring holds (a guest that takes nothing from it cannot make the monitor
+  keep more). Closing a handle a wait names ends the wait at once, as
+  cancelling one does, so that a closed channel's peer sees it closed;
+* Veda's memory, a quarter of the PC's (512 MiB at least): the VMOs it
+  makes (by their size, while it holds them or a message on its way to it
+  does; they commit their pages as they are used, never at once), the
+  messages it sends itself until it reads them, and what it maps into its
+  window; a VMO it hands Veda (to a service, which bounds what it keeps of
+  a client) is Veda's once the guest has no other handle of it
+  (`drivervm_core::ledger`);
+* its mappings in the window: 4096, each in the free range that fits it
+  best (`drivervm_core::window`).
+
+The narrowed registry passes what it allows on through the monitor's own
+registry channel, which `devmgr` started it with: a copy of its own, so
+that the guest's connections and services are `devmgr`'s (a service sees
+`devmgr` as the client, and they count among its connections that wait for
+their services). A service that trusts `devmgr` with some of its calls (the
+compositor's and the audio service's `expect`, which say what drivers are
+coming) would take them from the guest too: the narrowing sees the
+registry's calls, not those the guest then makes on its connections. The
+monitor is to speak for itself: `init` would attribute a registry channel
+to the process `devmgr` starts as the driver VM's monitor (and know it as
+the system's, which may register the `gpu` service), which `devmgr` would
+then hand it in place of a copy of its own.
 
 ## What others learned
 
@@ -642,11 +723,12 @@ where Veda stands:
    frontends attacked through races in revoking grants
    ([XSA-396](https://xenbits.xen.org/xsa/advisory-396.html)). The
    monitor copies a request out of guest memory before it checks it,
-   keeps the ring's indices itself (the guest's only clamp them), and
-   bounds what a guest can make it keep: handles, and waits, pending or
-   finished (a guest that collects nothing cannot grow the monitor,
-   whose memory is Veda's). Veda's shared rings already trust no peer's
-   position.
+   keeps the ring's indices itself (the guest's only clamp them, and the
+   head is released after the entries it says are there), and bounds
+   what a guest can make it keep: handles, waits, pending or finished (a
+   guest that collects nothing cannot grow the monitor, whose memory is
+   Veda's), Veda's memory and its mappings (see [The bridge](#the-bridge)).
+   Veda's shared rings already trust no peer's position.
 3. **No ambient access to the host's memory.** Qubes replaced a display
    protocol that needed the host to map any of a guest's pages with
    grants; Linux got virtio DMA through grants. The guest reaches the VMOs
@@ -790,9 +872,13 @@ The display and the GPU are QEMU's VGA and its virtio-gpu
 (with `gpu on`; it renders on the host's GPU the firmware showed its
 screen on, or the one `VEDA_RENDERNODE` names, such as
 `/dev/dri/renderD129`), and `drivervm.renderer=softpipe` has the
-renderer render on softpipe without a GPU. The renderer's decoder is tested on the host too, through vgl's
-tests (on softpipe, and on Mesa's virgl over virglrenderer's test
-server). The logic that touches no hardware
-(`vhv`: the APIC, `cpuid`, the boot protocol, a function's configuration
-space; `viommu`: the DMAR table, the units' structures) is unit-tested on
+renderer render on softpipe without a GPU. The renderer's decoder is
+tested on the host too, through vgl's tests (on softpipe, and on Mesa's
+virgl over virglrenderer's test server). The logic that touches no
+hardware (`vhv`: the APIC, `cpuid`, the boot protocol, a function's
+configuration space; `viommu`: the DMAR table, the units' structures;
+`drivervm-core`: the bridge's books, the guest's budget and window, where
+functions and their BARs go, the keyboard controller's commands; the
+guest's programs': touchpads, sound cards' devices, a display's mode,
+the logs a stick keeps, network interfaces, retries) is unit-tested on
 the host.

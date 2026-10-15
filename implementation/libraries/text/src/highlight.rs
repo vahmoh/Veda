@@ -527,6 +527,12 @@ fn markdown(line: &str, mut st: State, s: &mut Spans) -> State {
         lead
     };
     let b = line.as_bytes();
+    // The first `](` at or after where it was looked for, and the `)` after
+    // it: kept until passed, so that a line of many `[` is searched once
+    // rather than to its end for every one. Without a `)` after it, no link
+    // can follow at all.
+    let mut link: Option<(usize, Option<usize>)> = None;
+    let mut no_links = false;
     while i < b.len() {
         match b[i] {
             b'`' => {
@@ -542,13 +548,17 @@ fn markdown(line: &str, mut st: State, s: &mut Spans) -> State {
             }
             b'[' => {
                 // [text](url)
-                if let Some(mid) = line[i..].find("](")
-                    && let Some(end) = line[i + mid..].find(')')
-                {
-                    s.mark(i, i + mid + 1, Token::Function);
-                    s.mark(i + mid + 1, i + mid + end + 1, Token::Link);
-                    i += mid + end + 1;
-                    continue;
+                if !no_links && link.is_none_or(|(mid, _)| mid < i) {
+                    link = line[i..].find("](").map(|m| (i + m, line[i + m..].find(')').map(|e| i + m + e)));
+                }
+                match link {
+                    Some((mid, Some(end))) => {
+                        s.mark(i, mid + 1, Token::Function);
+                        s.mark(mid + 1, end + 1, Token::Link);
+                        i = end + 1;
+                        continue;
+                    }
+                    _ => no_links = true,
                 }
                 i += 1;
             }
@@ -661,6 +671,33 @@ mod tests {
         assert_eq!(m[1], [tok("-", Token::Keyword), tok("`code`", Token::String), tok("**bold**", Token::Keyword)]);
         assert_eq!(m[3], [tok("let x;", Token::String)]);
         assert_eq!(m[5], [tok("[docs]", Token::Function), tok("(http://x)", Token::Link)]);
+    }
+
+    #[test]
+    fn markdown_links_are_found_in_one_pass() {
+        let m = spans(Language::Markdown, &["[a [b](c) and [d](e) [f] (g) [h](i"]);
+        assert_eq!(
+            m[0],
+            [
+                tok("[a [b]", Token::Function),
+                tok("(c)", Token::Link),
+                tok("[d]", Token::Function),
+                tok("(e)", Token::Link),
+            ]
+        );
+        // Brackets that open no link, as many as a line can hold: looking
+        // for each one's `](` to the end of the line took a minute; once, a
+        // few milliseconds.
+        let started = std::time::Instant::now();
+        let line = "[".repeat(500_000) + "](";
+        let mut out = Vec::new();
+        highlight_line(Language::Markdown, &line, State::default(), &mut out);
+        assert_eq!(out, [Span { start: 0, end: line.len(), token: Token::Text }]);
+        let line = "[x".repeat(300_000) + "](y";
+        out.clear();
+        highlight_line(Language::Markdown, &line, State::default(), &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
     }
 
     #[test]

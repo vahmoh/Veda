@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
+//! The crate's tests: resource templates, names, loading, initialising and
+//! evaluating AML written with the assembler (as firmware writes it), and
+//! the tables from the RSDP.
+
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -744,6 +748,18 @@ fn tables_from_the_rsdp() {
     assert_eq!(names, [*b"FACP", *b"SSDT", *b"DSDT"]);
     assert!(tables.iter().all(|t| t.checksum_ok()));
     assert_eq!(crate::tables::load(&ram, 0x200).unwrap_err(), crate::tables::TableError::NoRsdp);
+    // The walk a reader that maps the tables itself makes: their headers only.
+    let entries: Vec<_> =
+        crate::tables::entries(&ram, 0x100).unwrap().map(|e| (e.address, e.signature, e.length)).collect();
+    assert_eq!(entries, [(0x2000, *b"FACP", 148), (0x4000, *b"SSDT", 36)]);
+    assert_eq!(crate::tables::dsdt_address(&fadt), Some(0x3000));
+    // A FADT too short for the DSDT's addresses names none (and is not read
+    // past).
+    let short = table(b"FACP", &[0; 4]);
+    ram.put(0x2000, &short);
+    let names: Vec<[u8; 4]> = crate::tables::load(&ram, 0x100).unwrap().iter().map(|t| t.signature()).collect();
+    assert_eq!(names, [*b"FACP", *b"SSDT"]);
+    assert_eq!(crate::tables::dsdt_address(&short), None);
 }
 
 #[test]
@@ -786,4 +802,550 @@ fn package_lengths_of_every_size() {
             other => panic!("{size}: {other:?}"),
         }
     }
+}
+
+// --- Control flow -------------------------------------------------------------
+
+/// An operator and its operands (and target, if it has one).
+fn op(code: u8, operands: &[&[u8]]) -> Vec<u8> {
+    let mut v = vec![code];
+    for o in operands {
+        v.extend_from_slice(o);
+    }
+    v
+}
+
+/// `Buffer (size) {}`: a buffer of zeros.
+fn zeros(size: u64) -> Vec<u8> {
+    cat(&[&[0x11], &pkg(&int(size))])
+}
+
+#[test]
+fn an_inner_if_does_not_take_the_else_of_the_if_around_it() {
+    // Method (NEST, 2) { If (Arg0) { If (Arg1) { Return (1) } } Else { Return (2) } Return (3) }
+    let nest =
+        method("NEST", 2, &cat(&[&if_(&[ARG0], &if_(&[ARG1], &ret(&int(1)))), &else_(&ret(&int(2))), &ret(&int(3))]));
+    // Switch (Arg0) { Case (1) { If (Arg1) { Return (0x11) } } Case (2) { Return (0x22) }
+    // Default { Return (0x33) } } Return (0x44), as iasl compiles it: in a While (One), each case
+    // an If in the Else of the one before, and a Break after them.
+    let t = nm("_T_0");
+    let switch = method(
+        "SWCH",
+        2,
+        &cat(&[
+            &name("_T_0", &int(0)),
+            &while_(
+                &[0x01],
+                &cat(&[
+                    &store(&[ARG0], &t),
+                    &if_(&lequal(&t, &int(1)), &if_(&[ARG1], &ret(&int(0x11)))),
+                    &else_(&cat(&[&if_(&lequal(&t, &int(2)), &ret(&int(0x22))), &else_(&ret(&int(0x33)))])),
+                    &[0xA5],
+                ]),
+            ),
+            &ret(&int(0x44)),
+        ]),
+    );
+    // And outside methods: If (One) { If (Zero) { Device (DEVA) {} } } Else { Device (DEVB) {} }
+    let conditional = cat(&[&if_(&[0x01], &if_(&[0x00], &device("DEVA", &[]))), &else_(&device("DEVB", &[]))]);
+    let mut ns = Namespace::new();
+    ns.load(&cat(&[&nest, &switch, &conditional]), &crate::NoMemory).unwrap();
+    let call =
+        |m: &str, a: u64, b: u64| ns.evaluate(&path(m), &[Value::Integer(a), Value::Integer(b)], &crate::NoMemory);
+    assert_eq!(call("\\NEST", 1, 0), Ok(Value::Integer(3)));
+    assert_eq!(call("\\NEST", 1, 1), Ok(Value::Integer(1)));
+    assert_eq!(call("\\NEST", 0, 1), Ok(Value::Integer(2)));
+    assert_eq!(call("\\SWCH", 1, 0), Ok(Value::Integer(0x44)));
+    assert_eq!(call("\\SWCH", 1, 1), Ok(Value::Integer(0x11)));
+    assert_eq!(call("\\SWCH", 2, 0), Ok(Value::Integer(0x22)));
+    assert_eq!(call("\\SWCH", 7, 0), Ok(Value::Integer(0x33)));
+    assert!(ns.get(&path("\\DEVA")).is_none() && ns.get(&path("\\DEVB")).is_none());
+}
+
+// --- Initialisation -----------------------------------------------------------
+
+/// A laptop's touchpad as Intel's reference code describes it: a
+/// placeholder `_HID`, and resource templates whose I2C address and GPIO
+/// pin its `_INI` fills in from the firmware's settings, through buffer
+/// fields over them; present from Windows 8 on (`OSYS`, which `\_SB._INI`
+/// sets).
+fn touchpad() -> (Namespace, Ram) {
+    let create_word = |buffer: &str, at: u64, field: &str| op(0x8B, &[&nm(buffer), &int(at), &nm(field)]);
+    let ini = method(
+        "_INI",
+        0,
+        &cat(&[
+            &if_(
+                &lequal(&nm("TPDT"), &int(1)),
+                &cat(&[&store(&string("ELAN0662"), &nm("_HID")), &store(&int(0x15), &nm("BADR"))]),
+            ),
+            &store(&nm("GPDI"), &nm("INT1")),
+        ]),
+    );
+    // If (LLess (OSYS, 0x07DC)) { Return (Zero) } Return (0x0F)
+    let sta =
+        method("_STA", 0, &cat(&[&if_(&op(0x95, &[&nm("OSYS"), &int(0x07DC)]), &ret(&int(0))), &ret(&int(0x0F))]));
+    let crs = method("_CRS", 0, &ret(&op(0x84, &[&nm("SBFB"), &nm("SBFG"), &[0]])));
+    let tpd0 = device(
+        "TPD0",
+        &cat(&[
+            &name("_HID", &string("XXXX0000")),
+            &name("_CID", &string("PNP0C50")),
+            &name("SBFB", &resource_template(&i2c_descriptor(0, 400_000, false, "\\_SB.PC00.I2C1"))),
+            &name("SBFG", &resource_template(&gpio_descriptor(true, 0, 0, 0, 0, "\\_SB.GPI0"))),
+            // The I2C address 16 bytes into its descriptor, the GPIO pin 23.
+            &create_word("SBFB", 16, "BADR"),
+            &create_word("SBFG", 23, "INT1"),
+            &ini,
+            &sta,
+            &crs,
+        ]),
+    );
+    let dsdt = cat(&[
+        &region("GNVS", 0, &int(0x5000), &int(0x10)),
+        &field("GNVS", 0x10, &[("OSYS", 16), ("TPDT", 8), ("GPDI", 16)]),
+        &scope(
+            "\\_SB",
+            &cat(&[
+                &method("_INI", 0, &store(&int(0x07DF), &nm("OSYS"))),
+                &device(
+                    "PC00",
+                    &cat(&[
+                        &name("_HID", &eisa("PNP0A08")),
+                        &device("I2C1", &cat(&[&name("_ADR", &int(0x0015_0001)), &tpd0])),
+                    ]),
+                ),
+            ]),
+        ),
+    ]);
+    let mut ram = Ram::default();
+    // OSYS 0 until \_SB._INI says Windows 2015; the touchpad ELAN's (TPDT 1), on GPIO pin 0x137.
+    ram.put(0x5000, &[0, 0, 1, 0x37, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut ns = Namespace::new();
+    ns.load(&dsdt, &ram).unwrap();
+    (ns, ram)
+}
+
+#[test]
+fn initialisation_finishes_describing_a_touchpad() {
+    let (mut ns, ram) = touchpad();
+    let tp = path("\\_SB.PC00.I2C1.TPD0");
+    let i2c_address = |r: &[Resource]| match &r[0] {
+        Resource::I2c(i) => (i.address, i.speed_hz, i.controller.clone()),
+        other => panic!("{other:?}"),
+    };
+    let pins = |r: &[Resource]| match &r[1] {
+        Resource::Gpio(g) => g.pins.clone(),
+        other => panic!("{other:?}"),
+    };
+    // As loaded: the placeholder, not present (before Windows 8), nothing in its templates.
+    let id = device::identify(&ns, &tp, &ram);
+    assert_eq!((id.hid.as_deref(), id.present()), (Some("XXXX0000"), false));
+    let r = device::resources(&ns, &tp, &ram).unwrap();
+    assert_eq!((i2c_address(&r).0, pins(&r)), (0, vec![0]));
+
+    let done = ns.initialize(&ram);
+    assert_eq!(done, crate::aml::Initialized { ran: 2, failures: 0, failed: Vec::new() });
+    let id = device::identify(&ns, &tp, &ram);
+    assert_eq!((id.hid.as_deref(), id.present()), (Some("ELAN0662"), true));
+    assert_eq!(id.cids, [String::from("PNP0C50")]);
+    let r = device::resources(&ns, &tp, &ram).unwrap();
+    assert_eq!(i2c_address(&r), (0x15, 400_000, String::from("\\_SB.PC00.I2C1")));
+    assert_eq!(pins(&r), [0x137]);
+
+    // What an evaluation stores still stays in it: the next one starts from
+    // what initialisation left.
+    let set =
+        scope("\\_SB.PC00.I2C1.TPD0", &method("SETA", 0, &cat(&[&store(&int(0x99), &nm("BADR")), &ret(&nm("BADR"))])));
+    ns.load(&set, &ram).unwrap();
+    assert_eq!(eval(&ns, "\\_SB.PC00.I2C1.TPD0.SETA", &ram), Ok(Value::Integer(0x99)));
+    assert_eq!(eval(&ns, "\\_SB.PC00.I2C1.TPD0.BADR", &ram), Ok(Value::Integer(0x15)));
+    assert_eq!(eval(&ns, "\\OSYS", &ram), Ok(Value::Integer(0x07DF)));
+}
+
+#[test]
+fn initialisation_looks_below_present_or_functioning_devices_only() {
+    let flag = |n: &str| method("_INI", 0, &store(&int(1), &nm(n)));
+    let aml = cat(&[
+        &name("F0", &int(0)),
+        &name("F1", &int(0)),
+        &name("F2", &int(0)),
+        &name("F3", &int(0)),
+        // Neither present nor functioning: its children are not looked at.
+        &device("GONE", &cat(&[&name("_STA", &int(0)), &device("KID0", &flag("\\F0"))])),
+        // Functioning but not present (a bridge): its _INI does not run, its children's do.
+        &device("BRDG", &cat(&[&name("_STA", &int(8)), &device("KID1", &flag("\\F1")), &flag("\\F2")])),
+        // An _STA that fails is passed over; the devices below are looked at.
+        &device(
+            "FAIL",
+            &cat(&[&method("_STA", 0, &ret(&op(0x85, &[&int(1), &int(0), &[0]]))), &device("KID3", &flag("\\F3"))]),
+        ),
+    ]);
+    let mut ns = Namespace::new();
+    ns.load(&aml, &crate::NoMemory).unwrap();
+    let done = ns.initialize(&crate::NoMemory);
+    assert_eq!((done.ran, done.failures), (2, 1));
+    assert_eq!(done.failed, [(path("\\FAIL._STA"), Error::DivideByZero)]);
+    let flags: Vec<_> = ["\\F0", "\\F1", "\\F2", "\\F3"].iter().map(|f| eval(&ns, f, &crate::NoMemory)).collect();
+    assert_eq!(flags, [0, 1, 0, 1].map(|v| Ok(Value::Integer(v))));
+}
+
+#[test]
+fn a_buffer_fields_offset_may_wait_for_a_later_table() {
+    // CreateDWordField (BUF0, \IDX0, FLD0), \IDX0 defined in the next table.
+    let first = cat(&[
+        &name("BUF0", &buffer(&[1, 2, 3, 4, 5, 6, 7, 8])),
+        &op(0x8A, &[&nm("BUF0"), &nm("\\IDX0"), &nm("FLD0")]),
+    ]);
+    let mut ns = Namespace::new();
+    ns.load(&first, &crate::NoMemory).unwrap();
+    assert!(matches!(
+        ns.get(&path("\\FLD0")),
+        Some(Object::BufferField { bits: crate::aml::Bits::Deferred { .. }, .. })
+    ));
+    assert_eq!(eval(&ns, "\\FLD0", &crate::NoMemory), Err(Error::NoSuchName(path("\\IDX0"))));
+    ns.load(&name("IDX0", &int(4)), &crate::NoMemory).unwrap();
+    assert_eq!(eval(&ns, "\\FLD0", &crate::NoMemory), Ok(Value::Integer(0x0807_0605)));
+}
+
+// --- Bounds ---------------------------------------------------------------------
+
+#[test]
+fn nesting_is_bounded() {
+    let m = &crate::NoMemory;
+    // Add (Add (... Add (1, 1) ..., 1), 1), so many deep, in a method.
+    let nested = |depth: usize| (0..depth).fold(int(1), |inner, _| add(&inner, &int(1)));
+    let mut ns = Namespace::new();
+    ns.load(&cat(&[&method("DEEP", 0, &ret(&nested(300))), &method("FINE", 0, &ret(&nested(200)))]), m).unwrap();
+    assert_eq!(eval(&ns, "\\DEEP", m), Err(Error::Limit));
+    assert_eq!(eval(&ns, "\\FINE", m), Ok(Value::Integer(201)));
+    // Definitions nested as deep, at load.
+    let devices = (0..300).fold(Vec::new(), |inner, _| device("NEST", &inner));
+    assert_eq!(Namespace::new().load(&devices, m), Err(Error::Limit));
+    // Values nested deeper by a loop: Local0 = Package () { Local0 }, Arg0 times.
+    let count = |body: &[u8]| while_(&op(0x95, &[&[LOCAL1], &[ARG0]]), &cat(&[body, &[0x75, LOCAL1]]));
+    let wrap = method("WRAP", 1, &cat(&[&count(&store(&package(&[vec![LOCAL0]]), &[LOCAL0])), &ret(&[LOCAL1])]));
+    // And by storing a package into its own element: Local0[0] = Local0.
+    let into = method(
+        "INTO",
+        1,
+        &cat(&[
+            &store(&package(&[int(0)]), &[LOCAL0]),
+            &count(&store(&[LOCAL0], &op(0x88, &[&[LOCAL0], &int(0), &[0]]))),
+            &ret(&[LOCAL1]),
+        ]),
+    );
+    let mut ns = Namespace::new();
+    ns.load(&cat(&[&wrap, &into]), m).unwrap();
+    let run = |method: &str, n: u64| ns.evaluate(&path(method), &[Value::Integer(n)], m);
+    assert_eq!(run("\\WRAP", 200), Ok(Value::Integer(200)));
+    assert_eq!(run("\\WRAP", 300), Err(Error::Limit));
+    assert_eq!(run("\\INTO", 200), Ok(Value::Integer(200)));
+    assert_eq!(run("\\INTO", 300), Err(Error::Limit));
+}
+
+#[test]
+fn the_deepest_code_allowed_runs_on_a_small_stack() {
+    // What the nesting limit bounds: code as deep as it allows takes some
+    // 250 KiB of stack in an optimised build (devmgr's is 1 MiB).
+    let m = &crate::NoMemory;
+    let nested = |inner: Vec<u8>, depth: usize| (0..depth).fold(inner, |inner, _| add(&inner, &int(1)));
+    // Expressions 250 deep; Ifs 250 deep; 31 calls nested, each through
+    // expressions 5 deep.
+    let mut calls = Vec::new();
+    for i in 0..31 {
+        let callee = if i == 30 { int(1) } else { nm(&alloc::format!("M{:03}", i + 1)) };
+        calls.extend(method(&alloc::format!("M{:03}", i), 0, &ret(&nested(callee, 5))));
+    }
+    let aml = cat(&[
+        &method("EXPR", 0, &ret(&nested(int(1), 250))),
+        &method("IFS_", 0, &(0..250).fold(ret(&int(7)), |inner, _| if_(&[0x01], &inner))),
+        &calls,
+    ]);
+    // And at load, definitions nested 120 deep, the innermost a name whose
+    // data nests 130 deeper: the two count together.
+    let deep = (0..120).fold(name("DATA", &nested(int(1), 130)), |inner, _| device("NEST", &inner));
+    let results = std::thread::Builder::new()
+        .stack_size(512 << 10)
+        .spawn(move || {
+            let mut ns = Namespace::new();
+            ns.load(&aml, m).unwrap();
+            ns.load(&deep, m).unwrap();
+            let data = alloc::format!("\\{}DATA", "NEST.".repeat(120));
+            ["\\EXPR", "\\IFS_", "\\M000", &data].map(|p| eval(&ns, p, m))
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(results, [251, 7, 156, 131].map(|v| Ok(Value::Integer(v))));
+}
+
+#[test]
+fn values_and_their_copies_are_bounded() {
+    let m = &crate::NoMemory;
+    // Local0 = Buffer (1) {}; While (One) { Local0 = Concatenate (Local0, Local0) }: doubling.
+    let double = method(
+        "DBLE",
+        0,
+        &cat(&[&store(&buffer(&[0]), &[LOCAL0]), &while_(&[0x01], &op(0x73, &[&[LOCAL0], &[LOCAL0], &[LOCAL0]]))]),
+    );
+    // ToHexString of a buffer of 1 MiB: 5 MiB of text.
+    let hex = method("HEXS", 0, &ret(&op(0x98, &[&zeros(1 << 20), &[0]])));
+    // A copy of 1 MiB each time round a loop: Local1 = Local0.
+    let copy =
+        method("COPY", 0, &cat(&[&store(&zeros(1 << 20), &[LOCAL0]), &while_(&[0x01], &store(&[LOCAL0], &[LOCAL1]))]));
+    // Bytes of a buffer of 1 MiB read where they are, fifty thousand times:
+    // Local0 = DerefOf (Index (BIG, Local1)).
+    let read = cat(&[
+        &name("BIG_", &zeros(1 << 20)),
+        &method(
+            "READ",
+            0,
+            &cat(&[
+                &while_(
+                    &op(0x95, &[&[LOCAL1], &int(50_000)]),
+                    &cat(&[
+                        &store(&op(0x83, &[&op(0x88, &[&nm("BIG_"), &[LOCAL1], &[0]])]), &[LOCAL0]),
+                        &[0x75, LOCAL1],
+                    ]),
+                ),
+                &ret(&[LOCAL1]),
+            ]),
+        ),
+    ]);
+    let mut ns = Namespace::new();
+    ns.load(&cat(&[&double, &hex, &copy, &read]), m).unwrap();
+    assert_eq!(eval(&ns, "\\DBLE", m), Err(Error::Limit));
+    assert_eq!(eval(&ns, "\\HEXS", m), Err(Error::Limit));
+    assert_eq!(eval(&ns, "\\COPY", m), Err(Error::Limit));
+    assert_eq!(eval(&ns, "\\READ", m), Ok(Value::Integer(50_000)));
+}
+
+#[test]
+fn a_load_is_bounded_as_a_whole() {
+    let m = &crate::NoMemory;
+    // Names whose data each take most of what one evaluation may.
+    let spin =
+        method("SPIN", 0, &cat(&[&while_(&op(0x95, &[&[LOCAL0], &int(150_000)]), &[0x75, LOCAL0]), &ret(&[LOCAL0])]));
+    let names: Vec<u8> = (0..8).flat_map(|i| name(&alloc::format!("N{i:03}"), &nm("SPIN"))).collect();
+    let mut ns = Namespace::new();
+    assert_eq!(ns.load(&cat(&[&spin, &names]), m), Err(Error::Limit));
+    // What was defined before the load ran out stays.
+    assert_eq!(eval(&ns, "\\N000", m), Ok(Value::Integer(150_000)));
+    assert!(ns.get(&path("\\N007")).is_none());
+}
+
+#[test]
+fn evaluations_together_are_bounded_as_their_owner_says() {
+    let m = &crate::NoMemory;
+    let mut ns = Namespace::new();
+    ns.load(&cat(&[&method("LOOP", 0, &while_(&[0x01], &[])), &method("ONE_", 0, &ret(&int(1)))]), m).unwrap();
+    assert_eq!(ns.left(), None);
+    ns.limit(Some((1000, u64::MAX)));
+    assert_eq!(eval(&ns, "\\LOOP", m), Err(Error::Limit));
+    // The loop took what was left.
+    assert_eq!(ns.left(), Some((0, u64::MAX)));
+    assert_eq!(eval(&ns, "\\ONE_", m), Err(Error::Limit));
+    ns.limit(None);
+    assert_eq!(eval(&ns, "\\ONE_", m), Ok(Value::Integer(1)));
+}
+
+#[test]
+fn firmware_values_that_overflow_are_errors() {
+    let m = &crate::NoMemory;
+    let outside = Err(Error::Type("a field inside its buffer"));
+    let aml = cat(&[
+        &name("BUF_", &buffer(&[0; 8])),
+        // CreateDWordField (BUF, 0x2000000000000000, FFFF): its bit offset is past 64 bits.
+        &method(
+            "FAR_",
+            0,
+            &cat(&[&op(0x8A, &[&nm("BUF_"), &int(0x2000_0000_0000_0000), &nm("FFFF")]), &ret(&nm("FFFF"))]),
+        ),
+        // CreateField (BUF, 0xFFFFFFFFFFFFFFF0, 0x20, GGGG): its end is.
+        &method(
+            "WRAP",
+            0,
+            &cat(&[
+                &[0x5B, 0x13],
+                &nm("BUF_"),
+                &int(0xFFFF_FFFF_FFFF_FFF0),
+                &int(0x20),
+                &nm("GGGG"),
+                &ret(&nm("GGGG")),
+            ]),
+        ),
+        &method(
+            "SET_",
+            0,
+            &cat(&[
+                &[0x5B, 0x13],
+                &nm("BUF_"),
+                &int(0xFFFF_FFFF_FFFF_FFF0),
+                &int(0x20),
+                &nm("GGGG"),
+                &store(&int(1), &nm("GGGG")),
+            ]),
+        ),
+        // A _PRT whose pin is Ones, and one whose pin is INTA#.
+        &scope(
+            "\\_SB",
+            &device(
+                "PCI0",
+                &cat(&[
+                    &name("_HID", &eisa("PNP0A08")),
+                    &name(
+                        "_PRT",
+                        &package(&[
+                            package(&[int(0x0003_FFFF), int(u64::MAX), int(0), int(0x11)]),
+                            package(&[int(0x0003_FFFF), int(0), int(0), int(0x10)]),
+                        ]),
+                    ),
+                ]),
+            ),
+        ),
+    ]);
+    let mut ns = Namespace::new();
+    ns.load(&aml, m).unwrap();
+    assert_eq!(eval(&ns, "\\FAR_", m), outside);
+    assert_eq!(eval(&ns, "\\WRAP", m), outside);
+    assert_eq!(eval(&ns, "\\SET_", m), outside);
+    let roots = device::pci_roots(&ns, m);
+    let route = |pin| device::pci_interrupt(&ns, &roots, (0, 3), pin, m);
+    assert_eq!(route(1), Some(device::IntxRoute { gsi: 0x10, level: true, active_low: true }));
+    // Pin 0 is no INTx.
+    assert_eq!(route(0), None);
+}
+
+// --- Access widths ----------------------------------------------------------------
+
+/// Firmware memory that says how it was read: the address (or offset) and
+/// width of each access to a field.
+#[derive(Default)]
+struct Watched {
+    ram: Ram,
+    accesses: core::cell::RefCell<Vec<(u64, usize)>>,
+}
+
+impl Memory for Watched {
+    fn read(&self, address: u64, buf: &mut [u8]) -> bool {
+        self.ram.read(address, buf)
+    }
+
+    fn read_field(&self, address: u64, width: usize, buf: &mut [u8]) -> bool {
+        let mut accesses = self.accesses.borrow_mut();
+        accesses.extend((0..buf.len() / width).map(|i| (address + (i * width) as u64, width)));
+        self.ram.read(address, buf)
+    }
+
+    fn read_pci_field(&self, function: PciFunction, offset: u16, width: usize, buf: &mut [u8]) -> bool {
+        let mut accesses = self.accesses.borrow_mut();
+        accesses.extend((0..buf.len() / width).map(|i| ((offset as usize + i * width) as u64, width)));
+        self.ram.read_pci(function, offset, buf)
+    }
+}
+
+#[test]
+fn fields_are_read_with_their_access_widths() {
+    let dsdt = cat(&[
+        &region("DEVR", 0, &int(0x6000), &int(0x10)),
+        // DWordAcc: REGA, 32, REGB, 8; ByteAcc: Offset (8), REGC, 16.
+        &field("DEVR", 0x03, &[("REGA", 32), ("REGB", 8)]),
+        &field("DEVR", 0x01, &[("", 64), ("REGC", 16)]),
+        // WordAcc in the host bridge's configuration space: Offset (0x40), PCIW, 16.
+        &scope(
+            "\\_SB",
+            &device(
+                "PC00",
+                &cat(&[
+                    &name("_HID", &eisa("PNP0A08")),
+                    &region("HBUS", 2, &int(0), &int(0x100)),
+                    &field("HBUS", 0x02, &[("", 0x40 * 8), ("PCIW", 16)]),
+                ]),
+            ),
+        ),
+    ]);
+    let mut memory = Watched::default();
+    memory.ram.put(0x6000, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    memory.ram.put_pci((0, 0, 0), 0x40, &[0x34, 0x12]);
+    let mut ns = Namespace::new();
+    ns.load(&dsdt, &memory).unwrap();
+    let read = |name: &str| {
+        memory.accesses.borrow_mut().clear();
+        let v = eval(&ns, name, &memory);
+        (v, memory.accesses.borrow().clone())
+    };
+    assert_eq!(read("\\REGA"), (Ok(Value::Integer(0x0403_0201)), vec![(0x6000, 4)]));
+    assert_eq!(read("\\REGB"), (Ok(Value::Integer(5)), vec![(0x6004, 4)]));
+    assert_eq!(read("\\REGC"), (Ok(Value::Integer(0x0A09)), vec![(0x6008, 1), (0x6009, 1)]));
+    assert_eq!(read("\\_SB.PC00.PCIW"), (Ok(Value::Integer(0x1234)), vec![(0x40, 2)]));
+}
+
+// --- What Veda writes ---------------------------------------------------------
+
+#[test]
+fn names_are_checked_as_aml_has_them() {
+    assert_eq!(crate::name::seg("_SB"), Some(*b"_SB_"));
+    for bad in ["", "TOOLONG", "1ABC", "ab", "A-B", "A B", "É"] {
+        assert_eq!(crate::name::seg(bad), None, "{bad}");
+    }
+    assert!(NameString::parse("\\_SB.pc00").is_none());
+    assert_eq!(name_string("\\_SB.PC00"), Some(nm("\\_SB.PC00")));
+    assert_eq!(name_string("^^bad"), None);
+    assert_eq!(name_string(&vec!["ABCD"; 256].join(".")), None);
+    assert_eq!(try_string("a\0b"), None);
+    assert_eq!(try_name("A.B..C", &int(1)), None);
+    assert_eq!(try_device("TPD0", &[]), Some(device("TPD0", &[])));
+    let mut g = Gpio {
+        interrupt: false,
+        pins: vec![1],
+        controller: "\\_SB.GP\0".into(),
+        pull: 0,
+        restriction: 0,
+        edge: false,
+        polarity: 0,
+        shared: false,
+        wake: false,
+        debounce: 0,
+    };
+    assert_eq!(try_gpio_descriptor_of(&g), None);
+    g.controller = "\\_SB.GPI0".into();
+    g.pins = vec![7; 40_000];
+    assert_eq!(try_gpio_descriptor_of(&g), None);
+}
+
+#[test]
+fn packages_of_more_than_255_elements() {
+    let m = &crate::NoMemory;
+    let v = Value::Package((0..300).map(Value::Integer).collect());
+    let mut ns = Namespace::new();
+    ns.load(&name("PINS", &constant(&v).unwrap()), m).unwrap();
+    assert_eq!(eval(&ns, "\\PINS", m), Ok(v));
+    // A string with a NUL is no constant AML can hold.
+    assert_eq!(constant(&Value::String("a\0b".into())), None);
+}
+
+#[test]
+fn a_dsm_answers_functions_past_the_first_byte() {
+    let u = uuid(HID_OVER_I2C).unwrap();
+    let mut ns = Namespace::new();
+    ns.load(&device("DEV9", &dsm(&u, 9, &int(0x99))), &crate::NoMemory).unwrap();
+    let call = |function: u64| {
+        let args = [Value::Buffer(u.to_vec()), Value::Integer(1), Value::Integer(function), Value::Package(vec![])];
+        ns.evaluate(&path("\\DEV9._DSM"), &args, &crate::NoMemory)
+    };
+    assert_eq!(call(0), Ok(Value::Buffer(vec![0x01, 0x02])));
+    assert_eq!(call(9), Ok(Value::Integer(0x99)));
+}
+
+#[test]
+fn veda_writes_whole_tables() {
+    let t = table(b"SSDT", 2, b"TESTSSDT", &device("DEV0", &[]));
+    let t = crate::tables::Table { address: 0, data: t };
+    assert!(t.checksum_ok());
+    assert_eq!((t.signature(), t.oem_table_id().as_str(), t.data.len()), (*b"SSDT", "TESTSSDT", 36 + t.aml().len()));
+    assert_eq!(&t.data[10..16], OEM_ID);
+    // A table too short for its header says nothing, and fails nothing.
+    let short = crate::tables::Table { address: 0, data: vec![b'D', b'S'] };
+    assert_eq!((short.signature(), short.aml(), short.oem_table_id().as_str()), ([0; 4], &[][..], ""));
 }

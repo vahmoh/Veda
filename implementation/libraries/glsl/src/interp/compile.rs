@@ -12,14 +12,18 @@
 //!    active lanes (through a scratch register and a masked copy).
 //! 4. Registers: inputs get registers of their own; everything else is
 //!    allocated by linear scan over the code's positions, a value used in
-//!    a loop it was defined before being kept to the loop's end.
+//!    a loop it was defined before being kept to the loop's end. A program
+//!    [`crate::program::link`] accepts never needs more registers than
+//!    [`Reg`] numbers; one that would (which nothing links) compiles to a
+//!    program that does nothing, rather than to registers that overlap.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::Reverse;
 
 use super::{Input, Ins, Output, Program, Reg, TexIns, TexSizeIns};
-use crate::ir::{Block, Func, InstId, InstOp, Jump, Node, Value};
+use crate::ir::{Block, CopyStep, Func, InstId, InstOp, Jump, Node, Value};
 use crate::ops::Ty;
 
 /// Compiles a stage's (optimised) IR.
@@ -42,18 +46,79 @@ enum Slot {
 /// An instruction with symbolic operands.
 #[derive(Clone, Debug)]
 enum Sym {
-    Op { op: crate::ops::Op, ty: Ty, d: Slot, a: Slot, b: Slot },
-    Select { d: Slot, c: Slot, a: Slot, b: Slot },
-    Const { d: Slot, bits: u32 },
-    Copy { d: Slot, s: Slot },
-    CopyMasked { d: Slot, s: Slot },
-    LoadUniform { d: Slot, slot: u32, comp: u8 },
-    LoadUniformIndexed { d: Slot, base: u32, comp: u8, count: u32, index: Slot },
-    LoadBlock { d: Slot, block: u32, offset: u32, size: u32, index: Option<Slot> },
-    Tex { op: crate::ir::TexOp, index: Option<Slot>, args: Vec<Slot>, results: Vec<Slot> },
-    TexSize { sampler: crate::types::Sampler, sampler_index: u32, index: Option<Slot>, lod: Slot, results: Vec<Slot> },
-    Deriv { d: Slot, a: Slot, y: bool },
-    If { c: Slot },
+    Op {
+        op: crate::ops::Op,
+        ty: Ty,
+        d: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    Select {
+        d: Slot,
+        c: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    Const {
+        d: Slot,
+        bits: u32,
+    },
+    Copy {
+        d: Slot,
+        s: Slot,
+    },
+    CopyMasked {
+        d: Slot,
+        s: Slot,
+    },
+    LoadUniform {
+        d: Slot,
+        slot: u32,
+        comp: u8,
+    },
+    LoadUniformIndexed {
+        d: Slot,
+        base: u32,
+        comp: u8,
+        stride: u32,
+        count: u32,
+        index: Slot,
+    },
+    LoadBlock {
+        d: Slot,
+        block: u32,
+        offset: u32,
+    },
+    LoadBlockIndexed {
+        d: Slot,
+        block: u32,
+        offset: u32,
+        stride: u32,
+        count: u32,
+        index: Slot,
+    },
+    Tex {
+        op: crate::ir::TexOp,
+        index: Option<Slot>,
+        args: Vec<Slot>,
+        results: Vec<Slot>,
+    },
+    TexSize {
+        sampler: crate::types::Sampler,
+        sampler_index: u32,
+        count: u32,
+        index: Option<Slot>,
+        lod: Slot,
+        results: Vec<Slot>,
+    },
+    Deriv {
+        d: Slot,
+        a: Slot,
+        y: bool,
+    },
+    If {
+        c: Slot,
+    },
     Else,
     EndIf,
     Loop,
@@ -74,6 +139,7 @@ impl Sym {
             | Sym::LoadUniform { d, .. }
             | Sym::LoadUniformIndexed { d, .. }
             | Sym::LoadBlock { d, .. }
+            | Sym::LoadBlockIndexed { d, .. }
             | Sym::Deriv { d, .. } => vec![*d],
             Sym::Tex { results, .. } | Sym::TexSize { results, .. } => results.clone(),
             _ => Vec::new(),
@@ -87,8 +153,7 @@ impl Sym {
             Sym::Copy { s, .. } => vec![*s],
             // A masked copy keeps the inactive lanes: it reads its target.
             Sym::CopyMasked { d, s } => vec![*s, *d],
-            Sym::LoadUniformIndexed { index, .. } => vec![*index],
-            Sym::LoadBlock { index, .. } => index.iter().copied().collect(),
+            Sym::LoadUniformIndexed { index, .. } | Sym::LoadBlockIndexed { index, .. } => vec![*index],
             Sym::Tex { index, args, .. } => index.iter().chain(args).copied().collect(),
             Sym::TexSize { index, lod, .. } => index.iter().copied().chain([*lod]).collect(),
             Sym::Deriv { a, .. } => vec![*a],
@@ -101,6 +166,8 @@ impl Sym {
 struct Compiler<'a> {
     f: &'a Func,
     preds: Vec<Vec<Block>>,
+    /// Each block's successors ([`crate::ir::successors`]).
+    succs: Vec<Vec<(Block, usize)>>,
     uniform: Vec<bool>,
     prologue: Vec<Sym>,
     main: Vec<Sym>,
@@ -117,9 +184,11 @@ struct Compiler<'a> {
 
 impl<'a> Compiler<'a> {
     fn new(f: &'a Func) -> Compiler<'a> {
+        let preds = f.preds();
         Compiler {
             f,
-            preds: f.preds(),
+            succs: crate::ir::successors(&preds),
+            preds,
             uniform: vec![false; f.values.len()],
             prologue: Vec::new(),
             main: Vec::new(),
@@ -170,16 +239,15 @@ impl<'a> Compiler<'a> {
             }
             InstOp::Select => Sym::Select { d, c: a(0), a: a(1), b: a(2) },
             InstOp::LoadUniform { slot, comp } => Sym::LoadUniform { d, slot: *slot, comp: *comp },
-            InstOp::LoadUniformIndexed { base, comp, count, .. } => {
-                Sym::LoadUniformIndexed { d, base: *base, comp: *comp, count: *count, index: a(0) }
+            InstOp::LoadUniformIndexed { base, comp, stride, count } => {
+                Sym::LoadUniformIndexed { d, base: *base, comp: *comp, stride: *stride, count: *count, index: a(0) }
             }
-            InstOp::LoadBlock { block, offset, count, .. } => Sym::LoadBlock {
-                d,
-                block: *block,
-                offset: *offset,
-                size: *count,
-                index: if inst.args.is_empty() { None } else { Some(a(0)) },
-            },
+            InstOp::LoadBlock { block, offset, .. } if inst.args.is_empty() => {
+                Sym::LoadBlock { d, block: *block, offset: *offset }
+            }
+            InstOp::LoadBlock { block, offset, stride, count } => {
+                Sym::LoadBlockIndexed { d, block: *block, offset: *offset, stride: *stride, count: *count, index: a(0) }
+            }
             InstOp::Deriv { y } => {
                 self.derivatives = true;
                 Sym::Deriv { d, a: a(0), y: *y }
@@ -208,33 +276,37 @@ impl<'a> Compiler<'a> {
 
     fn main(&mut self) {
         self.find_masked();
-        let body = self.f.body.clone();
-        self.list(&body, &Ctx::TOP);
+        let f = self.f;
+        self.list(&f.body, &Ctx::TOP);
     }
 
     /// Marks values defined in a loop and used outside it.
     fn find_masked(&mut self) {
-        // The loops around each block (innermost last), by loop number.
-        let mut block_loops: Vec<Vec<u32>> = vec![Vec::new(); self.f.blocks.len()];
-        let mut counter = 0u32;
-        fn walk(list: &[Node], stack: &mut Vec<u32>, counter: &mut u32, out: &mut Vec<Vec<u32>>) {
+        // Loops are numbered in the order they start, so that the loops
+        // inside loop `l` are numbered `l + 1` to `last[l]`; each block
+        // records only its innermost loop (rather than all the loops around
+        // it, which would take memory in proportion to blocks times depth).
+        let mut innermost: Vec<Option<u32>> = vec![None; self.f.blocks.len()];
+        let mut last: Vec<u32> = Vec::new();
+        fn walk(list: &[Node], inside: Option<u32>, innermost: &mut [Option<u32>], last: &mut Vec<u32>) {
             for n in list {
                 match n {
-                    Node::Block(b) => out[b.0 as usize] = stack.clone(),
+                    Node::Block(b) => innermost[b.0 as usize] = inside,
                     Node::If(i) => {
-                        walk(&i.then, stack, counter, out);
-                        walk(&i.otherwise, stack, counter, out);
+                        walk(&i.then, inside, innermost, last);
+                        walk(&i.otherwise, inside, innermost, last);
                     }
                     Node::Loop(l) => {
-                        stack.push(*counter);
-                        *counter += 1;
-                        walk(&l.body, stack, counter, out);
-                        stack.pop();
+                        let number = last.len() as u32;
+                        last.push(number);
+                        walk(&l.body, Some(number), innermost, last);
+                        let end = last.len() as u32 - 1;
+                        last[number as usize] = end;
                     }
                 }
             }
         }
-        walk(&self.f.body, &mut Vec::new(), &mut counter, &mut block_loops);
+        walk(&self.f.body, None, &mut innermost, &mut last);
         let mut def_block = vec![Block(0); self.f.values.len()];
         for b in self.f.block_order() {
             for &i in &self.f.blocks[b.0 as usize].insts {
@@ -247,20 +319,18 @@ impl<'a> Compiler<'a> {
             if self.uniform[v.0 as usize] {
                 return;
             }
-            let def_loops = &block_loops[def_block[v.0 as usize].0 as usize];
-            let use_loops = &block_loops[use_block.0 as usize];
             // Used outside the innermost loop it is defined in.
-            if let Some(inner) = def_loops.last()
-                && !use_loops.contains(inner)
-            {
-                masked[v.0 as usize] = true;
+            if let Some(l) = innermost[def_block[v.0 as usize].0 as usize] {
+                let inside = innermost[use_block.0 as usize].is_some_and(|u| l <= u && u <= last[l as usize]);
+                if !inside {
+                    masked[v.0 as usize] = true;
+                }
             }
         };
         let mut masked = core::mem::take(&mut self.masked);
         for b in self.f.block_order() {
-            for (k, &i) in self.f.blocks[b.0 as usize].insts.iter().enumerate() {
+            for &i in &self.f.blocks[b.0 as usize].insts {
                 let inst = self.f.inst(i);
-                let _ = k;
                 if inst.op == InstOp::Phi {
                     // A φ operand is used at the end of its predecessor.
                     for (j, &a) in inst.args.iter().enumerate() {
@@ -296,9 +366,9 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit_value_inst(&mut self, i: InstId) {
-        let inst = self.f.inst(i).clone();
+        let inst = self.f.inst(i);
         match &inst.op {
-            InstOp::Phi | InstOp::Nop => {}
+            InstOp::Phi => {}
             InstOp::LoadInput { slot, comp } => {
                 self.inputs.push((Input::Value { slot: *slot, comp: *comp }, inst.results[0]));
             }
@@ -320,7 +390,7 @@ impl<'a> Compiler<'a> {
                 self.main.push(Sym::Tex { op: *op, index, args, results: results.clone() });
                 self.finish_masked(&inst.results, &results);
             }
-            InstOp::TexSize { sampler, index, dynamic, .. } => {
+            InstOp::TexSize { sampler, index, dynamic, count } => {
                 let (idx, lod) = if *dynamic {
                     (Some(Slot::V(inst.args[0])), Slot::V(inst.args[1]))
                 } else {
@@ -330,6 +400,7 @@ impl<'a> Compiler<'a> {
                 self.main.push(Sym::TexSize {
                     sampler: *sampler,
                     sampler_index: *index,
+                    count: *count,
                     index: idx,
                     lod,
                     results: results.clone(),
@@ -376,7 +447,7 @@ impl<'a> Compiler<'a> {
 
     /// Copies into the φs of `succ` for the edge from `from`.
     fn phi_copies(&mut self, from: Block, succ: Block) {
-        let Some(k) = self.preds[succ.0 as usize].iter().position(|&p| p == from) else { return };
+        let Some(k) = crate::ir::edge_index(&self.succs, from, succ) else { return };
         let mut copies: Vec<(Value, Value)> = Vec::new();
         for &i in &self.f.blocks[succ.0 as usize].insts {
             let inst = self.f.inst(i);
@@ -396,72 +467,28 @@ impl<'a> Compiler<'a> {
     /// Masked parallel copies, ordered so that no source is overwritten
     /// before it is read; a cycle saves one value in a scratch register.
     fn parallel_copies(&mut self, copies: Vec<(Value, Value)>) {
-        let mut pending: Vec<(Slot, Slot)> = copies.into_iter().map(|(d, s)| (Slot::V(d), Slot::V(s))).collect();
-        while !pending.is_empty() {
-            match pending.iter().position(|&(d, _)| !pending.iter().any(|&(_, s)| s == d)) {
-                Some(i) => {
-                    let (d, s) = pending.remove(i);
-                    self.main.push(Sym::CopyMasked { d, s });
-                }
-                None => {
-                    // Every destination is still to be read: save one.
-                    let (d, _) = pending[0];
-                    self.scratch += 1;
-                    let t = Slot::Scratch(self.scratch - 1);
-                    self.main.push(Sym::Copy { d: t, s: d });
-                    for c in &mut pending {
-                        if c.1 == d {
-                            c.1 = t;
-                        }
-                    }
-                }
+        let copies: Vec<(Slot, Slot)> = copies.into_iter().map(|(d, s)| (Slot::V(d), Slot::V(s))).collect();
+        crate::ir::sequence_copies(&copies, |step| match step {
+            CopyStep::Copy(d, s) => {
+                self.main.push(Sym::CopyMasked { d, s });
+                d
             }
-        }
+            CopyStep::Save(d) => {
+                self.scratch += 1;
+                let t = Slot::Scratch(self.scratch - 1);
+                self.main.push(Sym::Copy { d: t, s: d });
+                t
+            }
+        });
     }
 
+    /// Lays out a list of the structure. It recurses once per level of
+    /// nesting (which may be deep once calls are inlined), so a block's work
+    /// is done out of line, keeping each level's frame small.
     fn list(&mut self, list: &[Node], ctx: &Ctx) {
         for (k, n) in list.iter().enumerate() {
             match n {
-                Node::Block(b) => {
-                    for &i in &self.f.blocks[b.0 as usize].insts.clone() {
-                        self.emit_value_inst(i);
-                    }
-                    let jump = self.f.blocks[b.0 as usize].jump;
-                    let next = list.get(k + 1);
-                    match jump {
-                        Some(Jump::Break) => {
-                            if let Some(exit) = ctx.loop_exit() {
-                                self.phi_copies(*b, exit);
-                            }
-                            self.main.push(Sym::Break);
-                        }
-                        Some(Jump::Continue) => {
-                            if let Some(h) = ctx.loop_header() {
-                                self.phi_copies(*b, h);
-                            }
-                            self.main.push(Sym::Continue);
-                        }
-                        Some(Jump::Discard) => {
-                            self.discards = true;
-                            self.main.push(Sym::Discard);
-                        }
-                        None => match next {
-                            Some(Node::Loop(l)) => {
-                                if let Some(h) = crate::ir::first_block(&l.body) {
-                                    self.phi_copies(*b, h);
-                                }
-                            }
-                            Some(_) => {}
-                            // The end of a list: into the merge block, or
-                            // back to the loop's header.
-                            None => match ctx.end {
-                                End::Merge(merge) => self.phi_copies(*b, merge),
-                                End::Header(header) => self.phi_copies(*b, header),
-                                End::Top => {}
-                            },
-                        },
-                    }
-                }
+                Node::Block(b) => self.block(*b, list.get(k + 1), ctx),
                 Node::If(i) => {
                     let merge = match list.get(k + 1) {
                         Some(Node::Block(m)) => *m,
@@ -491,6 +518,49 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// A block's instructions, its copies into its successors' φs and its
+    /// jump.
+    #[inline(never)]
+    fn block(&mut self, b: Block, next: Option<&Node>, ctx: &Ctx) {
+        let f = self.f;
+        for &i in &f.blocks[b.0 as usize].insts {
+            self.emit_value_inst(i);
+        }
+        match f.blocks[b.0 as usize].jump {
+            Some(Jump::Break) => {
+                if let Some(exit) = ctx.loop_exit() {
+                    self.phi_copies(b, exit);
+                }
+                self.main.push(Sym::Break);
+            }
+            Some(Jump::Continue) => {
+                if let Some(h) = ctx.loop_header() {
+                    self.phi_copies(b, h);
+                }
+                self.main.push(Sym::Continue);
+            }
+            Some(Jump::Discard) => {
+                self.discards = true;
+                self.main.push(Sym::Discard);
+            }
+            None => match next {
+                Some(Node::Loop(l)) => {
+                    if let Some(h) = crate::ir::first_block(&l.body) {
+                        self.phi_copies(b, h);
+                    }
+                }
+                Some(_) => {}
+                // The end of a list: into the merge block, or back to the
+                // loop's header.
+                None => match ctx.end {
+                    End::Merge(merge) => self.phi_copies(b, merge),
+                    End::Header(header) => self.phi_copies(b, header),
+                    End::Top => {}
+                },
+            },
+        }
+    }
+
     // ---- Registers -----------------------------------------------------------
 
     fn finish(self) -> Program {
@@ -512,7 +582,7 @@ impl<'a> Compiler<'a> {
                 kept[v.0 as usize] = true;
             }
         }
-        let mut regs: BTreeMap<Slot, Reg> = BTreeMap::new();
+        let mut regs: BTreeMap<Slot, usize> = BTreeMap::new();
         let pro_intervals = intervals(&self.prologue, &[], |s| matches!(s, Slot::V(v) if kept[v.0 as usize]));
         let uniform_registers = allocate(&pro_intervals, 0, &mut regs);
         // Inputs: registers of their own after the prologue's.
@@ -520,20 +590,26 @@ impl<'a> Compiler<'a> {
         for &(_, v) in &self.inputs {
             regs.entry(Slot::V(v)).or_insert_with(|| {
                 next += 1;
-                (next - 1) as Reg
+                next - 1
             });
         }
         // Main code: linear scan, with values read by outputs kept to the
         // end.
-        let outputs: Vec<Value> = self.outputs.iter().map(|&(_, v)| v).collect();
+        let outputs: BTreeSet<Value> = self.outputs.iter().map(|&(_, v)| v).collect();
         let main_intervals = intervals(&self.main, &self.loops, |s| match s {
             Slot::V(v) => outputs.contains(v),
             _ => false,
         });
         let main_intervals: Vec<(Slot, usize, usize)> =
             main_intervals.into_iter().filter(|(s, _, _)| !regs.contains_key(s)).collect();
-        let registers = allocate(&main_intervals, next, &mut regs);
-        let reg = |s: &Slot| -> Reg { regs.get(s).copied().unwrap_or(0) };
+        let registers = allocate(&main_intervals, next, &mut regs).max(next).max(1);
+        // Register and lookup numbers must fit their 16 bits (they do in
+        // every program linking accepts).
+        let lookups = self.main.iter().filter(|s| matches!(s, Sym::Tex { .. } | Sym::TexSize { .. })).count();
+        if registers > usize::from(Reg::MAX) + 1 || lookups > usize::from(u16::MAX) + 1 {
+            return Program::empty();
+        }
+        let reg = |s: &Slot| -> Reg { regs.get(s).map_or(0, |&r| r as Reg) };
         let mut tex = Vec::new();
         let mut tex_size = Vec::new();
         let lower = |syms: &[Sym], tex: &mut Vec<TexIns>, tex_size: &mut Vec<TexSizeIns>| -> Vec<Ins> {
@@ -551,19 +627,22 @@ impl<'a> Compiler<'a> {
                     Sym::Copy { d, s } => Ins::Copy { d: reg(d), s: reg(s) },
                     Sym::CopyMasked { d, s } => Ins::CopyMasked { d: reg(d), s: reg(s) },
                     Sym::LoadUniform { d, slot, comp } => Ins::LoadUniform { d: reg(d), slot: *slot, comp: *comp },
-                    Sym::LoadUniformIndexed { d, base, comp, count, index } => Ins::LoadUniformIndexed {
+                    Sym::LoadUniformIndexed { d, base, comp, stride, count, index } => Ins::LoadUniformIndexed {
                         d: reg(d),
                         base: *base,
                         comp: *comp,
+                        stride: *stride,
                         count: *count,
                         index: reg(index),
                     },
-                    Sym::LoadBlock { d, block, offset, size, index } => Ins::LoadBlock {
+                    Sym::LoadBlock { d, block, offset } => Ins::LoadBlock { d: reg(d), block: *block, offset: *offset },
+                    Sym::LoadBlockIndexed { d, block, offset, stride, count, index } => Ins::LoadBlockIndexed {
                         d: reg(d),
                         block: *block,
                         offset: *offset,
-                        size: *size,
-                        index: index.as_ref().map(reg),
+                        stride: *stride,
+                        count: *count,
+                        index: reg(index),
                     },
                     Sym::Tex { op, index, args, results } => {
                         tex.push(TexIns {
@@ -574,10 +653,11 @@ impl<'a> Compiler<'a> {
                         });
                         Ins::Tex { op: (tex.len() - 1) as u16 }
                     }
-                    Sym::TexSize { sampler, sampler_index, index, lod, results } => {
+                    Sym::TexSize { sampler, sampler_index, count, index, lod, results } => {
                         tex_size.push(TexSizeIns {
                             sampler: *sampler,
                             sampler_index: *sampler_index,
+                            count: *count,
                             index: index.as_ref().map(reg),
                             lod: reg(lod),
                             results: results.iter().map(reg).collect(),
@@ -633,7 +713,7 @@ impl<'a> Compiler<'a> {
             main,
             tex,
             tex_size,
-            registers: registers.max(next).max(1),
+            registers,
             uniform_registers,
             inputs,
             outputs,
@@ -681,7 +761,9 @@ impl Ctx {
 
 /// Live intervals (first and last position) of every slot in `code`;
 /// `keep` slots live to the end. A slot live into a loop it was defined
-/// before (or used across iterations) lives to the loop's end.
+/// before (or used across iterations) lives to the loop's end, and one
+/// defined in a loop and used after it lives through the whole loop
+/// (lanes that left early keep their value while the others go on).
 fn intervals(code: &[Sym], loops: &[(usize, usize)], keep: impl Fn(&Slot) -> bool) -> Vec<(Slot, usize, usize)> {
     let mut span: BTreeMap<Slot, (usize, usize)> = BTreeMap::new();
     for (pc, s) in code.iter().enumerate() {
@@ -692,30 +774,49 @@ fn intervals(code: &[Sym], loops: &[(usize, usize)], keep: impl Fn(&Slot) -> boo
         }
     }
     let end = code.len();
+    // The innermost loop around each position, and each loop's parent
+    // (loops nest: they are the structure's).
+    let mut order: Vec<usize> = (0..loops.len()).collect();
+    order.sort_by_key(|&i| loops[i].0);
+    let mut innermost: Vec<Option<usize>> = vec![None; end];
+    let mut parent: Vec<Option<usize>> = vec![None; loops.len()];
+    let mut open: Vec<usize> = Vec::new();
+    let mut next = 0;
+    for (pc, slot) in innermost.iter_mut().enumerate() {
+        while open.last().is_some_and(|&l| loops[l].1 < pc) {
+            open.pop();
+        }
+        while let Some(&l) = order.get(next).filter(|&&l| loops[l].0 == pc) {
+            parent[l] = open.last().copied();
+            open.push(l);
+            next += 1;
+        }
+        *slot = open.last().copied();
+    }
+    // The outermost loop around position `p` that is not around `q`.
+    let outermost = |p: usize, q: usize| -> Option<usize> {
+        let mut found = None;
+        let mut l = innermost.get(p).copied().flatten();
+        while let Some(x) = l {
+            let (ls, le) = loops[x];
+            if ls <= q && q <= le {
+                break;
+            }
+            found = Some(x);
+            l = parent[x];
+        }
+        found
+    };
     let mut out: Vec<(Slot, usize, usize)> = span
         .into_iter()
         .map(|(s, (a, b))| {
-            let mut b = if keep(&s) { end } else { b };
-            // Loops: a value live into a loop stays live through it (it
-            // is needed again next iteration); a value defined in a loop
-            // and used after it lives through the whole loop (lanes that
-            // left early keep their value while the others go on).
-            let mut a = a;
-            let mut changed = true;
-            while changed {
-                changed = false;
-                for &(ls, le) in loops {
-                    if a < ls && b >= ls && b < le {
-                        b = le;
-                        changed = true;
-                    }
-                    if a > ls && a <= le && b > le {
-                        a = ls;
-                        changed = true;
-                    }
-                }
-            }
-            (s, a, b)
+            let b = if keep(&s) { end } else { b };
+            // Each end moves out of the loops around it that are not
+            // around the other; that is already where the other's moves
+            // leave it.
+            let nb = outermost(b, a).map_or(b, |l| loops[l].1);
+            let na = outermost(a, b).map_or(a, |l| loops[l].0);
+            (s, na, nb)
         })
         .collect();
     out.sort_by_key(|&(_, a, _)| a);
@@ -724,29 +825,26 @@ fn intervals(code: &[Sym], loops: &[(usize, usize)], keep: impl Fn(&Slot) -> boo
 
 /// Linear-scan allocation from register `first`; returns one past the
 /// highest register used.
-fn allocate(intervals: &[(Slot, usize, usize)], first: usize, regs: &mut BTreeMap<Slot, Reg>) -> usize {
-    let mut active: Vec<(usize, Reg)> = Vec::new(); // (end, register)
-    let mut free: Vec<Reg> = Vec::new();
+fn allocate(intervals: &[(Slot, usize, usize)], first: usize, regs: &mut BTreeMap<Slot, usize>) -> usize {
+    // Intervals still live, by end (earliest first), and registers free.
+    let mut active: BinaryHeap<Reverse<(usize, usize)>> = BinaryHeap::new();
+    let mut free: Vec<usize> = Vec::new();
     let mut next = first;
     for &(slot, start, end) in intervals {
         // Expire intervals that ended before this one starts.
-        active.retain(|&(e, r)| {
-            if e < start {
-                free.push(r);
-                false
-            } else {
-                true
+        while let Some(&Reverse((e, r))) = active.peek() {
+            if e >= start {
+                break;
             }
+            active.pop();
+            free.push(r);
+        }
+        let r = free.pop().unwrap_or_else(|| {
+            next += 1;
+            next - 1
         });
-        let r = match free.pop() {
-            Some(r) => r,
-            None => {
-                next += 1;
-                (next - 1) as Reg
-            }
-        };
         regs.insert(slot, r);
-        active.push((end, r));
+        active.push(Reverse((end, r)));
     }
     next
 }

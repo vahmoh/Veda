@@ -47,8 +47,9 @@ use crate::sync::SpinLock;
 pub enum Source {
     /// An interrupt line, by its GSI (ACPI's number for it).
     Gsi { gsi: u32, level: bool },
-    /// A message-signalled interrupt (of a PCI function).
-    Msi,
+    /// A message-signalled interrupt of PCI function `device` (its
+    /// requester id).
+    Msi { device: u16 },
     /// Raised by a program: no vector of the machine's.
     Software { level: bool },
 }
@@ -150,14 +151,25 @@ impl Interrupt {
 
     /// Allocates a vector for an MSI of PCI function `device`, and the
     /// address and data that raise it (which only that function may use,
-    /// when the IOMMU remaps interrupts).
-    pub fn new_msi(device: u16) -> Option<(Arc<Interrupt>, (u64, u32))> {
+    /// when the IOMMU remaps interrupts): `LimitReached` if the function
+    /// has `limit` MSIs already (those whose objects are gone do not
+    /// count), or no vector is free.
+    pub fn new_msi(device: u16, limit: u32) -> Result<(Arc<Interrupt>, (u64, u32)), Error> {
         let mut table = VECTORS.lock();
-        let vector = free_vector(&table)?;
-        let irq = Interrupt::new(vector, Source::Msi);
-        table[vector as usize] = Some(Slot { irq: Arc::downgrade(&irq), source: Source::Msi });
+        let live = table
+            .iter()
+            .flatten()
+            .filter(|s| s.irq.strong_count() > 0 && matches!(s.source, Source::Msi { device: d } if d == device))
+            .count();
+        if live >= limit as usize {
+            return Err(Error::LimitReached);
+        }
+        let vector = free_vector(&table).ok_or(Error::LimitReached)?;
+        let source = Source::Msi { device };
+        let irq = Interrupt::new(vector, source);
+        table[vector as usize] = Some(Slot { irq: Arc::downgrade(&irq), source });
         drop(table);
-        Some((irq, irq::msi_message(vector, device)))
+        Ok((irq, irq::msi_message(vector, device)))
     }
 
     /// Re-arms the interrupt after the driver has serviced it: a line is

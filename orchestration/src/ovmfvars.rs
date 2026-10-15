@@ -38,9 +38,15 @@ const ADDED: u8 = 0x3F;
 /// The store header: its GUID, size, format, state and two reserved fields.
 const STORE_HEADER: usize = 28;
 
-/// A GUID as it is written (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), as
-/// UEFI lays it out (its first three fields little-endian).
+/// A GUID as it is written (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, in
+/// hexadecimal digits), as UEFI lays it out (its first three fields
+/// little-endian); `None` for anything else.
 pub fn guid(s: &str) -> Option<[u8; 16]> {
+    // Digits and dashes only (no signs, no other characters): every
+    // character is then one byte.
+    if !s.bytes().all(|b| b == b'-' || b.is_ascii_hexdigit()) {
+        return None;
+    }
     let parts: Vec<&str> = s.split('-').collect();
     let [a, b, c, d, e] = parts[..] else { return None };
     if [a.len(), b.len(), c.len(), d.len(), e.len()] != [8, 4, 4, 4, 12] {
@@ -156,6 +162,12 @@ mod tests {
         assert_eq!(guid("02f9af02-7734-4233-b43d"), None);
         assert_eq!(guid("02f9af0-27734-4233-b43d-93fe5aa35db3"), None);
         assert_eq!(guid("02f9af02-7734-4233-b43d-93fe5aa35dbx"), None);
+        // Neither a sign nor a character of more than one byte, which would
+        // shift the fields.
+        assert_eq!(guid("+2f9af02-7734-4233-b43d-93fe5aa35db3"), None);
+        assert_eq!(guid("02f9af02-7734-4233-b43d-93fe5aa35é3"), None);
+        assert_eq!(guid("02f9af02-7734-4233-bé3-93fe5aa35db3"), None);
+        assert_eq!(guid("ééééé"), None);
     }
 
     #[test]

@@ -12,9 +12,10 @@ use vrt::object::Socket;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
+use crate::inherit::Pseudo;
 use crate::linux::errno::*;
 use crate::linux::{self, Flock, Iovec, Pollfd, fcntl, ioctl, o, poll, rwf};
-use crate::{time, tty, user};
+use crate::{time, tty, user, vfs};
 
 /// Reads into `buf` from `desc` (at `offset` for `pread`).
 fn read_desc(desc: &Description, buf: &mut [u8], offset: Option<u64>) -> SysResult {
@@ -59,7 +60,64 @@ pub unsafe fn read(fd: i32, buf: usize, len: usize) -> SysResult {
 pub unsafe fn write(fd: i32, buf: usize, len: usize) -> SysResult {
     let desc = fd::get(fd)?;
     // SAFETY: as above.
-    write_desc(&desc, unsafe { user::slice(buf, len)? }, None)
+    let n = write_desc(&desc, unsafe { user::slice(buf, len)? }, None)?;
+    settle(&desc, n, false)
+}
+
+/// After `n` bytes were written to `desc`: brings them to persistent
+/// storage before the call returns if the descriptor asks for that
+/// (`O_SYNC`, `O_DSYNC`) or the call does (`synced`: `RWF_SYNC`,
+/// `RWF_DSYNC`).
+fn settle(desc: &Description, n: usize, synced: bool) -> SysResult {
+    if n > 0 && (synced || desc.synchronous()) && matches!(desc.object, Object::File(_)) {
+        sync_all()?;
+    }
+    Ok(n)
+}
+
+/// Has the VFS bring every change to persistent storage now (it otherwise
+/// does so within seconds of the last change).
+fn sync_all() -> SysResult {
+    error::ipc(vfs::with(|c| c.sync())?).map(|()| 0)
+}
+
+/// `fsync` and `fdatasync`: the changes of the file `fd` is (with every
+/// other) reach persistent storage before it returns. Pipes, the terminal
+/// and the like have none: `EINVAL`, as on Linux.
+pub fn fsync(fd: i32) -> SysResult {
+    match fd::get(fd)?.object {
+        Object::File(_) | Object::Dir(_) => sync_all(),
+        Object::Stream(_) | Object::Null | Object::Log => Err(EINVAL),
+    }
+}
+
+/// `syncfs`: the changes of the file system `fd` is on (with every other)
+/// reach persistent storage before it returns.
+pub fn syncfs(fd: i32) -> SysResult {
+    fd::get(fd)?;
+    sync_all()
+}
+
+/// `sync`: every change reaches persistent storage before it returns. It
+/// has no way to fail.
+pub fn sync() -> SysResult {
+    let _ = sync_all();
+    Ok(0)
+}
+
+/// `sync_file_range`: writing a range out (`SYNC_FILE_RANGE_WRITE`) brings
+/// the file's changes (with every other) to persistent storage; waiting for
+/// writes in progress (the other flags) has nothing to wait for.
+pub fn sync_file_range(fd: i32, offset: i64, len: i64, flags: u32) -> SysResult {
+    use crate::linux::sync_range::{WAIT_AFTER, WAIT_BEFORE, WRITE};
+    if flags & !(WAIT_BEFORE | WRITE | WAIT_AFTER) != 0 || offset < 0 || len < 0 || offset.checked_add(len).is_none() {
+        return Err(EINVAL);
+    }
+    match fd::get(fd)?.object {
+        Object::File(_) if flags & WRITE != 0 => sync_all(),
+        Object::File(_) | Object::Dir(_) => Ok(0),
+        Object::Stream(_) | Object::Null | Object::Log => Err(ESPIPE),
+    }
 }
 
 pub unsafe fn pread(fd: i32, buf: usize, len: usize, offset: i64) -> SysResult {
@@ -73,7 +131,8 @@ pub unsafe fn pwrite(fd: i32, buf: usize, len: usize, offset: i64) -> SysResult 
     let desc = fd::get(fd)?;
     let at = u64::try_from(offset).map_err(|_| EINVAL)?;
     // SAFETY: as above.
-    write_desc(&desc, unsafe { user::slice(buf, len)? }, Some(at))
+    let n = write_desc(&desc, unsafe { user::slice(buf, len)? }, Some(at))?;
+    settle(&desc, n, false)
 }
 
 /// The buffers of an `iovec` array.
@@ -154,19 +213,31 @@ pub unsafe fn readv(fd: i32, iov: usize, count: usize, offset: Option<i64>) -> S
 
 pub unsafe fn writev(fd: i32, iov: usize, count: usize, offset: Option<i64>) -> SysResult {
     let desc = fd::get(fd)?;
+    // SAFETY: per the caller.
+    let n = unsafe { write_vectored(&desc, iov, count, offset)? };
+    settle(&desc, n, false)
+}
+
+/// Writes the program's `count` buffers at `iov` to `desc` in turn (at
+/// `offset`, or the file's own), as `writev` does.
+///
+/// # Safety
+/// `iov` must be where the program keeps `count` iovecs, each a buffer of
+/// its own.
+unsafe fn write_vectored(desc: &Description, iov: usize, count: usize, offset: Option<i64>) -> SysResult {
     let mut at = offset.map(|o| u64::try_from(o).map_err(|_| EINVAL)).transpose()?;
     // SAFETY: as above.
     let vecs = unsafe { iovecs(iov, count)? };
     // One write for streams, so that the pieces stay together.
     if matches!(desc.object, Object::Stream(_) | Object::Log) && vecs.len() > 1 {
         // SAFETY: as above.
-        return write_desc(&desc, &unsafe { gather(&vecs)? }, at);
+        return write_desc(desc, &unsafe { gather(&vecs)? }, at);
     }
     let mut total = 0;
     for v in vecs {
         // SAFETY: as above.
         let buf = unsafe { user::slice(v.base as usize, v.len)? };
-        let n = match write_desc(&desc, buf, at) {
+        let n = match write_desc(desc, buf, at) {
             Ok(n) => n,
             // What was written counts.
             Err(_) if total > 0 => break,
@@ -183,18 +254,18 @@ pub unsafe fn writev(fd: i32, iov: usize, count: usize, offset: Option<i64>) -> 
 
 /// Whether a call of `preadv2` (`write` false) or `pwritev2` on a
 /// descriptor (`appending` or not) can be made as its flags (`RWF_*`) ask.
-/// It can with those that change nothing here: `RWF_HIPRI` (a hint),
-/// `RWF_DSYNC` and `RWF_SYNC` (every write reaches the VFS as it is made,
-/// so `fsync` has nothing to do), and for a read the append flags, which
-/// do not concern it. A write can also be made with `RWF_NOAPPEND`, except
-/// in append mode, where the VFS writes at the end. Not with `RWF_APPEND`
-/// for a write, or with `RWF_NOWAIT`.
+/// It can with `RWF_HIPRI` (a hint), `RWF_DSYNC` and `RWF_SYNC` (a write
+/// then reaches persistent storage before the call returns; a read has
+/// nothing to do for them), and for a read the append flags, which do not
+/// concern it. A write can also be made with `RWF_NOAPPEND`, except in
+/// append mode, where the VFS writes at the end. Not with `RWF_APPEND` for
+/// a write, or with `RWF_NOWAIT`.
 fn rwf_possible(flags: u32, write: bool, appending: bool) -> bool {
-    let nothing = rwf::HIPRI | rwf::DSYNC | rwf::SYNC;
+    let always = rwf::HIPRI | rwf::DSYNC | rwf::SYNC;
     if write {
-        flags & !(nothing | rwf::NOAPPEND) == 0 && !(appending && flags & rwf::NOAPPEND != 0)
+        flags & !(always | rwf::NOAPPEND) == 0 && !(appending && flags & rwf::NOAPPEND != 0)
     } else {
-        flags & !(nothing | rwf::APPEND | rwf::NOAPPEND) == 0
+        flags & !(always | rwf::APPEND | rwf::NOAPPEND) == 0
     }
 }
 
@@ -221,12 +292,13 @@ pub unsafe fn preadv2(fd: i32, iov: usize, count: usize, offset: i64, flags: u32
 /// # Safety
 /// As [`writev`].
 pub unsafe fn pwritev2(fd: i32, iov: usize, count: usize, offset: i64, flags: u32) -> SysResult {
-    let appending = fd::get(fd)?.flags() & o::APPEND != 0;
-    if !rwf_possible(flags, true, appending) {
+    let desc = fd::get(fd)?;
+    if !rwf_possible(flags, true, desc.flags() & o::APPEND != 0) {
         return Err(EOPNOTSUPP);
     }
     // SAFETY: per the caller.
-    unsafe { writev(fd, iov, count, (offset != -1).then_some(offset)) }
+    let n = unsafe { write_vectored(&desc, iov, count, (offset != -1).then_some(offset))? };
+    settle(&desc, n, flags & (rwf::SYNC | rwf::DSYNC) != 0)
 }
 
 pub fn lseek(fd: i32, offset: i64, whence: u32) -> SysResult {
@@ -260,9 +332,12 @@ pub fn dup3(old: i32, new: i32, flags: u32, dup2: bool) -> SysResult {
     Ok(new as usize)
 }
 
+/// `close_range`. `CLOSE_RANGE_UNSHARE` changes nothing: a process's
+/// threads always share its one table.
 pub fn close_range(first: u32, last: u32, flags: u32) -> SysResult {
+    const UNSHARE: u32 = 2;
     const CLOEXEC: u32 = 4;
-    if first > last || flags & !CLOEXEC != 0 {
+    if first > last || flags & !(UNSHARE | CLOEXEC) != 0 {
         return Err(EINVAL);
     }
     if flags & CLOEXEC != 0 {
@@ -273,26 +348,52 @@ pub fn close_range(first: u32, last: u32, flags: u32) -> SysResult {
     Ok(0)
 }
 
-pub fn pipe2(fds: usize, flags: u32) -> SysResult {
+/// Installs `a` and `b` at the lowest free descriptors and stores those at
+/// `out`, the program's `int[2]`; nothing stays installed if that fails.
+///
+/// # Safety
+/// `out` must be null or the program's `int[2]`.
+pub(crate) unsafe fn install_pair(
+    a: Arc<Description>,
+    b: Arc<Description>,
+    cloexec: bool,
+    out: usize,
+) -> Result<(), isize> {
+    let x = fd::insert(a, cloexec, 0)?;
+    let y = match fd::insert(b, cloexec, 0) {
+        Ok(y) => y,
+        Err(e) => {
+            let _ = fd::remove(x);
+            return Err(e);
+        }
+    };
+    // SAFETY: per the caller.
+    if let Err(e) = unsafe { user::write::<[i32; 2]>(out, [x, y]) } {
+        let _ = fd::remove(x);
+        let _ = fd::remove(y);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// `pipe2`.
+///
+/// # Safety
+/// `fds` must be null or the program's `int[2]`.
+pub unsafe fn pipe2(fds: usize, flags: u32) -> SysResult {
     if flags & !(o::CLOEXEC | o::NONBLOCK) != 0 {
         return Err(EINVAL);
+    }
+    if fds == 0 {
+        return Err(EFAULT);
     }
     let (a, b) = Socket::create().map_err(error::kernel)?;
     let status = flags & o::NONBLOCK;
     // A pipe: one end only reads, the other only writes.
     let reader = Description::new(Object::Stream(crate::stream::Stream::new(a)), o::RDONLY | status);
     let writer = Description::new(Object::Stream(crate::stream::Stream::new(b)), o::WRONLY | status);
-    let cloexec = flags & o::CLOEXEC != 0;
-    let r = fd::insert(reader, cloexec, 0)?;
-    let w = match fd::insert(writer, cloexec, 0) {
-        Ok(w) => w,
-        Err(e) => {
-            let _ = fd::remove(r);
-            return Err(e);
-        }
-    };
-    // SAFETY: the program passed an `int[2]`.
-    unsafe { user::write::<[i32; 2]>(fds, [r, w])? };
+    // SAFETY: per the caller.
+    unsafe { install_pair(reader, writer, flags & o::CLOEXEC != 0, fds)? };
     Ok(0)
 }
 
@@ -300,6 +401,10 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
     match cmd {
         fcntl::DUPFD | fcntl::DUPFD_CLOEXEC => {
             let desc = fd::get(fd)?;
+            // Beyond the limit on descriptors (or negative), as on Linux.
+            if arg >= fd::MAX_FDS {
+                return Err(EINVAL);
+            }
             fd::insert(desc, cmd == fcntl::DUPFD_CLOEXEC, arg).map(|n| n as usize)
         }
         // Whether `arg` refers to the same open file description.
@@ -318,18 +423,54 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
             desc.set_status(arg as u32);
             Ok(0)
         }
-        // There are no locks between processes: every lock is granted.
+        // There are no advisory locks between processes (`lock`): as none
+        // is ever held, none is in the way.
         fcntl::GETLK => {
-            fd::get(fd)?;
+            let desc = fd::get(fd)?;
             // SAFETY: the program passed a `struct flock`.
             let mut l: Flock = unsafe { user::read(arg)? };
+            lock(&desc, l.kind)?;
             l.kind = fcntl::F_UNLCK;
             // SAFETY: as above.
             unsafe { user::write(arg, l)? };
             Ok(0)
         }
-        fcntl::SETLK | fcntl::SETLKW => fd::get(fd).map(|_| 0),
+        fcntl::SETLK | fcntl::SETLKW => {
+            let desc = fd::get(fd)?;
+            // SAFETY: the program passed a `struct flock`.
+            let l: Flock = unsafe { user::read(arg)? };
+            match l.kind {
+                fcntl::F_UNLCK => Ok(0),
+                kind => lock(&desc, kind).and(Err(ENOLCK)),
+            }
+        }
         fcntl::GETOWN | fcntl::SETOWN => Ok(0),
+        _ => Err(EINVAL),
+    }
+}
+
+/// Checks a request for a record lock of `kind` (`F_RDLCK`, `F_WRLCK`) on
+/// `desc`. Advisory locks between processes need a party they share, which
+/// the VFS is not yet: rather than let two processes both "hold" a lock (a
+/// lock file, a database), every lock is refused with `ENOLCK`, which says
+/// that the system has no room for locks; unlocking succeeds.
+fn lock(desc: &Description, kind: i16) -> Result<(), isize> {
+    match kind {
+        fcntl::F_RDLCK if !desc.readable() => Err(EBADF),
+        fcntl::F_WRLCK if !desc.writable() => Err(EBADF),
+        fcntl::F_RDLCK | fcntl::F_WRLCK => Ok(()),
+        _ => Err(EINVAL),
+    }
+}
+
+/// `flock`: whole-file locks, refused as record locks are (see [`lock`]);
+/// unlocking succeeds.
+pub fn flock(fd: i32, operation: u32) -> SysResult {
+    use crate::linux::flock::{EX, NB, SH, UN};
+    fd::get(fd)?;
+    match operation & !NB {
+        UN => Ok(0),
+        SH | EX => Err(ENOLCK),
         _ => Err(EINVAL),
     }
 }
@@ -443,10 +584,10 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
             return Ok(ready);
         }
         if waits.is_empty() {
-            // Nothing can become ready: just wait out the time.
-            match deadline {
-                Some(d) => vrt::time::sleep_until(d),
-                None => crate::signal::pause_forever(),
+            // Nothing can become ready: wait out the time, unless a signal
+            // handler runs first.
+            if crate::signal::sleep_until(deadline.unwrap_or(vabi::DEADLINE_INFINITE)) {
+                return Err(EINTR);
             }
             continue;
         }
@@ -533,8 +674,9 @@ pub unsafe fn select(n: i32, readfds: usize, writefds: usize, exceptfds: usize, 
 }
 
 /// Installs the descriptors a process was started with: role `FD + n`
-/// handles are sockets (pipes, the terminal) or `file` connections.
-pub fn adopt_startup_fds() {
+/// handles are sockets (pipes, the terminal) or `file` connections, and
+/// `pseudo` those that are no kernel object (`inherit`).
+pub fn adopt_startup_fds(pseudo: &[(i32, Pseudo)]) {
     for role in vrt::env::handle_roles() {
         let Some(n) = startup::role::fd(role) else { continue };
         let Some(h) = vrt::env::take_handle(role) else { continue };
@@ -556,6 +698,14 @@ pub fn adopt_startup_fds() {
             continue;
         };
         let _ = fd::replace(n as i32, desc, false);
+    }
+    for (n, fd) in pseudo {
+        let desc = match fd {
+            Pseudo::Dir(path) => Description::new(Object::Dir(crate::file::Directory::new(path.clone())), o::RDONLY),
+            Pseudo::Null => Description::new(Object::Null, o::RDWR),
+            Pseudo::Log => Description::new(Object::Log, o::RDWR),
+        };
+        let _ = fd::replace(*n, desc, false);
     }
     // Standard streams nobody gave: input is empty, output goes to the
     // kernel log.
@@ -579,9 +729,69 @@ mod tests {
         assert!(rwf_possible(rwf::HIPRI | rwf::DSYNC | rwf::SYNC, true, true));
         // Appending, or reading only what is there, is not done.
         assert!(!rwf_possible(rwf::APPEND, true, false));
-        assert!(!rwf_possible(rwf::NOWAIT, true, false) && !rwf_possible(rwf::NOWAIT, false, false));
+        let nowait = linux_raw_sys::general::RWF_NOWAIT;
+        assert!(!rwf_possible(nowait, true, false) && !rwf_possible(nowait, false, false));
         // The append flags do not concern a read.
         assert!(rwf_possible(rwf::APPEND | rwf::NOAPPEND, false, false));
         assert!(!rwf_possible(0x100, false, false) && !rwf_possible(0x100, true, false));
+    }
+
+    /// A descriptor of the empty input, in the table (which the tests share).
+    fn null(mode: u32) -> (i32, Arc<Description>) {
+        let desc = Description::new(Object::Null, mode);
+        (fd::insert(desc.clone(), false, 0).unwrap(), desc)
+    }
+
+    #[test]
+    fn advisory_locks_are_refused_and_unlocks_succeed() {
+        use crate::linux::flock::{EX, NB, SH, UN};
+        let (rw, _) = null(o::RDWR);
+        let (ro, _) = null(o::RDONLY);
+        assert_eq!(flock(rw, EX), Err(ENOLCK));
+        assert_eq!(flock(rw, SH | NB), Err(ENOLCK));
+        assert_eq!(flock(rw, UN), Ok(0));
+        assert_eq!(flock(rw, 0), Err(EINVAL));
+        let lock_with = |fd: i32, cmd: u32, kind: i16| {
+            let mut l = Flock { kind, ..Default::default() };
+            // SAFETY: a `struct flock` of the test's.
+            let r = unsafe { fcntl(fd, cmd, &mut l as *mut Flock as usize) };
+            (r, l.kind)
+        };
+        assert_eq!(lock_with(rw, fcntl::SETLK, fcntl::F_WRLCK).0, Err(ENOLCK));
+        assert_eq!(lock_with(rw, fcntl::SETLKW, fcntl::F_RDLCK).0, Err(ENOLCK));
+        assert_eq!(lock_with(rw, fcntl::SETLK, fcntl::F_UNLCK).0, Ok(0));
+        // A lock the descriptor's access does not allow, or no lock at all.
+        assert_eq!(lock_with(ro, fcntl::SETLK, fcntl::F_WRLCK).0, Err(EBADF));
+        assert_eq!(lock_with(rw, fcntl::SETLK, 7).0, Err(EINVAL));
+        // No lock is ever held, so none is in the way.
+        assert_eq!(lock_with(rw, fcntl::GETLK, fcntl::F_WRLCK), (Ok(0), fcntl::F_UNLCK));
+        assert_eq!(lock_with(rw, fcntl::GETLK, fcntl::F_UNLCK).0, Err(EINVAL));
+        let _ = (fd::remove(rw), fd::remove(ro));
+    }
+
+    #[test]
+    fn only_files_are_synced() {
+        let (fd, _) = null(o::RDWR);
+        assert_eq!(fsync(fd), Err(EINVAL));
+        assert_eq!(sync_file_range(fd, 0, 10, crate::linux::sync_range::WRITE), Err(ESPIPE));
+        assert_eq!(sync_file_range(fd, 0, 10, 8), Err(EINVAL));
+        assert_eq!(sync_file_range(fd, -1, 10, 0), Err(EINVAL));
+        assert_eq!(sync_file_range(fd, i64::MAX, 10, 0), Err(EINVAL));
+        let _ = fd::remove(fd);
+        assert_eq!(fsync(fd), Err(EBADF));
+    }
+
+    #[test]
+    fn a_pair_is_not_left_installed_when_its_numbers_cannot_be_stored() {
+        let a = Description::new(Object::Null, o::RDWR);
+        let b = Description::new(Object::Null, o::RDWR);
+        // SAFETY: a null pointer, which is refused.
+        assert_eq!(unsafe { install_pair(a.clone(), b.clone(), false, 0) }, Err(EFAULT));
+        assert!(fd::snapshot().iter().all(|(_, d, _)| !Arc::ptr_eq(d, &a) && !Arc::ptr_eq(d, &b)));
+        let mut out = [0i32; 2];
+        // SAFETY: an `int[2]` of the test's.
+        unsafe { install_pair(a.clone(), b, true, out.as_mut_ptr() as usize).unwrap() };
+        assert!(Arc::ptr_eq(&fd::get(out[0]).unwrap(), &a) && fd::cloexec(out[1]) == Ok(true));
+        let _ = (fd::remove(out[0]), fd::remove(out[1]));
     }
 }

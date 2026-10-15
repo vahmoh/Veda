@@ -18,16 +18,22 @@
 //!   and `netd` takes care of DHCP, DNS and routing as for any interface.
 //! * Applications (the desktop's Wi-Fi menu, Settings, the Terminal) use
 //!   the `wlan` protocol: networks in range, connect and disconnect, saved
-//!   networks, the radio switch, status events and diagnostics.
+//!   networks, the radio switch, status events and diagnostics. Who may do
+//!   what depends on who asks (see `vproto::wlan`): radios come only from
+//!   the device manager; the desktop shell, the agent, Settings and the
+//!   Terminal change Wi-Fi; Settings and the Terminal alone see access
+//!   points' addresses, saved networks and diagnostics.
 //!
 //! Saved networks are joined automatically. Failed attempts are retried
 //! with growing delays, a lost connection is re-established (on another
 //! access point of the same network if the first is gone), and a weak
 //! connection moves to a clearly stronger access point. A saved password
-//! that stops working is not retried until the user connects again.
+//! the access point does not seem to accept is retried after longer pauses
+//! (nothing proves it wrong: anyone in range could fake the evidence).
 //!
-//! Everything runs on one thread around a single wait. Calls to the driver
-//! have a timeout, so a hung driver cannot freeze the service.
+//! Everything runs on one thread around a single wait, which never skips
+//! the driver's events or the clients, however busy the links are. Calls to
+//! the driver have a timeout, so a hung driver cannot freeze the service.
 
 #![no_std]
 #![no_main]
@@ -40,7 +46,7 @@ mod radio;
 mod scan;
 mod store;
 
-use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -48,8 +54,9 @@ use vabi::signals;
 use vfiles::fs::Fs;
 use vipc::Decode;
 use vipc::WaitSet;
-use vproto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
-use vproto::netring::{Link, LinkEndpoints, RxInfo, kind};
+use vproto::init::ClientIdentity;
+use vproto::net::{DeviceAttachment, DeviceInfo, InterfaceKind, format_mac};
+use vproto::netring::{Link, LinkEndpoints, RxInfo, SlotMeta, kind};
 use vproto::wlan::{
     ConnState, FailReason, LogEntry, MLME_EVENT, MlmeEvent, PhyError, PhyInfo, RADIO_STATE_EVENT, RadioState,
     WLAN_EVENT, WlanCounters, WlanEvent, WlanStatus, wlan, wlanphy,
@@ -58,7 +65,7 @@ use vrt::object::Channel;
 use vrt::println;
 use vwlan::policy::Backoff;
 use vwlan::profile::Profile;
-use vwlan::station::Station;
+use vwlan::station::{Passage, Station};
 
 use conn::{Current, Request};
 use radio::Radio;
@@ -68,10 +75,16 @@ vrt::entry!(main);
 
 /// Lines kept in the connection log.
 const LOG_LINES: usize = 200;
-/// Status watchers.
+/// Status watchers, of all processes and of one.
 const MAX_WATCHERS: usize = 32;
-/// Client connections.
+const MAX_WATCHERS_PER_PROCESS: usize = 4;
+/// Client connections, of all processes and of one.
 const MAX_CLIENTS: usize = 64;
+const MAX_CLIENTS_PER_PROCESS: usize = 8;
+/// Of each, what only system services may take, so that applications
+/// together cannot shut the desktop out.
+const RESERVED_WATCHERS: usize = 8;
+const RESERVED_CLIENTS: usize = 16;
 /// Requests handled per client per loop iteration.
 const CLIENT_BUDGET: usize = 16;
 /// Frames taken from each link per loop iteration.
@@ -107,13 +120,61 @@ impl vwlan::crypto::Random for KernelRandom {
     }
 }
 
+/// What a client may do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rights {
+    /// Scan, join and leave networks, switch the radio, change saved
+    /// networks: the desktop shell, the agent, Settings and the Terminal;
+    /// and `nettest`, when the kernel command line started it.
+    pub change: bool,
+    /// See what tells where the machine is or has been, or identifies it
+    /// (access points' addresses, saved networks, diagnostics, the
+    /// adapter's address): Settings and the Terminal.
+    pub inspect: bool,
+    /// A system service (it may take what is kept for them).
+    pub service: bool,
+}
+
+impl Rights {
+    fn of(who: &ClientIdentity) -> Rights {
+        let system = who.service && matches!(who.name.as_str(), "shell" | "agent");
+        let tools = who.app && matches!(who.name.as_str(), "settings" | "terminal");
+        // The in-system tests join the network they are told to (`run=
+        // nettest:wifi,...`); started by an application, nettest may not.
+        let test = who.requested && who.name == "nettest";
+        Rights { change: system || tools || test, inspect: tools, service: who.service }
+    }
+}
+
+/// Whether one more of a shared resource (`used` of `max`) may go to a
+/// client: system services may take the last `reserved`, others not.
+fn room(service: bool, used: usize, max: usize, reserved: usize) -> bool {
+    used < if service { max } else { max.saturating_sub(reserved) }
+}
+
+/// An application's connection.
+struct Client {
+    channel: Channel,
+    /// Its process.
+    owner: u64,
+    rights: Rights,
+}
+
+/// A status watcher.
+struct Watcher {
+    channel: Channel,
+    owner: u64,
+    /// Sees the addresses in statuses.
+    inspect: bool,
+}
+
 pub struct Wlan {
     phy_listener: Channel,
     api_listener: Channel,
     /// Driver connections waiting for their `attach`.
     pending_phys: BTreeMap<u64, Channel>,
-    clients: BTreeMap<u64, Channel>,
-    watchers: Vec<Channel>,
+    clients: BTreeMap<u64, Client>,
+    watchers: Vec<Watcher>,
     next_key: u64,
     fs: Fs,
     pub rng: KernelRandom,
@@ -132,10 +193,9 @@ pub struct Wlan {
     /// Background scans since the last connection (they slow down).
     pub idle_scans: u32,
     pub profiles: Vec<Profile>,
+    /// Retry delays, by network (failures, and passwords the access point
+    /// did not seem to accept).
     pub backoff: BTreeMap<Vec<u8>, Backoff>,
-    /// Saved networks whose password was refused: not joined automatically
-    /// until the user connects to them again.
-    pub rejected: BTreeSet<Vec<u8>>,
     /// A network to join once it is found (asked for by the user, or a
     /// lost connection to an unsaved network).
     pub request: Option<Request>,
@@ -188,20 +248,38 @@ impl Wlan {
         ok
     }
 
-    /// Sends an event to every watcher, dropping those that went away.
+    /// Sends an event to every watcher, dropping those that went away. A
+    /// status goes without the addresses to those that may not see them.
     pub fn notify(&mut self, ev: WlanEvent) {
-        self.watchers.retain(|w| vipc::send_event(w, WLAN_EVENT, ev.clone()).is_ok());
+        self.watchers.retain(|w| {
+            let ev = match &ev {
+                WlanEvent::StatusChanged { status } if !w.inspect => {
+                    WlanEvent::StatusChanged { status: without_addresses(status.clone()) }
+                }
+                other => other.clone(),
+            };
+            vipc::send_event(&w.channel, WLAN_EVENT, ev).is_ok()
+        });
     }
 
-    pub fn add_watcher(&mut self, ch: Channel) -> bool {
-        if self.watchers.len() >= MAX_WATCHERS {
+    /// Adds a status watcher of process `owner` (sent the status at once);
+    /// `false` if it has as many as it may, or the channel is closed.
+    pub fn add_watcher(&mut self, ch: Channel, owner: u64, rights: Rights) -> bool {
+        let inspect = rights.inspect;
+        let mine = self.watchers.iter().filter(|w| w.owner == owner).count();
+        if !room(rights.service, self.watchers.len(), MAX_WATCHERS, RESERVED_WATCHERS)
+            || mine >= MAX_WATCHERS_PER_PROCESS
+        {
             return false;
         }
-        let status = self.status(now_ms());
+        let mut status = self.status(now_ms());
+        if !inspect {
+            status = without_addresses(status);
+        }
         if vipc::send_event(&ch, WLAN_EVENT, WlanEvent::StatusChanged { status }).is_err() {
             return false;
         }
-        self.watchers.push(ch);
+        self.watchers.push(Watcher { channel: ch, owner, inspect });
         true
     }
 
@@ -247,7 +325,7 @@ impl Wlan {
             s.band = radio::band_of(c.bss.channel);
             s.channel = c.bss.channel;
             s.signal_dbm = if c.state == ConnState::Connected { self.sta.signal_dbm } else { c.bss.signal_dbm };
-            s.security = scan::to_proto(c.bss.security);
+            s.security = c.bss.security;
             s.connected_s = c.connected_ms.map_or(0, |t| (now.saturating_sub(t) / 1000) as u32);
         }
         s
@@ -279,17 +357,27 @@ impl Wlan {
     // Radio drivers
 
     fn accept(&mut self) {
-        while let Some(ch) = vproto::accept(&self.phy_listener) {
+        while let Some((ch, who)) = vproto::accept_with_identity(&self.phy_listener) {
+            // Radios come from the device manager: its drivers, the driver
+            // VM's programs included, speak as it.
+            if !(who.service && who.name == "devmgr") {
+                println!("{} may not offer a radio; refused", who.name);
+                continue;
+            }
             if self.pending_phys.len() < MAX_PENDING_PHYS {
                 let k = self.key();
                 self.pending_phys.insert(k, ch);
             }
         }
-        while let Some(ch) = vproto::accept(&self.api_listener) {
-            if self.clients.len() < MAX_CLIENTS {
-                let k = self.key();
-                self.clients.insert(k, ch);
+        while let Some((ch, who)) = vproto::accept_with_identity(&self.api_listener) {
+            let mine = self.clients.values().filter(|c| c.owner == who.koid).count();
+            if !room(who.service, self.clients.len(), MAX_CLIENTS, RESERVED_CLIENTS) || mine >= MAX_CLIENTS_PER_PROCESS
+            {
+                println!("{} has too many connections; refused one", who.name);
+                continue;
             }
+            let k = self.key();
+            self.clients.insert(k, Client { channel: ch, owner: who.koid, rights: Rights::of(&who) });
         }
     }
 
@@ -343,7 +431,7 @@ impl Wlan {
                 "Wi-Fi adapter {} ({}), MAC {}, {} channels",
                 info.driver,
                 info.location,
-                conn::mac_string(&info.mac),
+                format_mac(&info.mac),
                 info.channels.len()
             ));
             self.radio = Some(Radio::new(channel, control, link, info, state));
@@ -526,42 +614,65 @@ impl Wlan {
 
     /// Handles up to `budget` frames of the radio's.
     fn receive_frames_up_to(&mut self, budget: usize, now: u64) {
+        // The frame buffer is lent out while the frame is handled.
+        let mut frame = core::mem::take(&mut self.frame);
         for _ in 0..budget {
-            let Some(r) = self.radio.as_ref() else { return };
-            let Some((meta, len)) = r.link.recv(&mut self.frame) else { return };
+            let Some(r) = self.radio.as_ref() else { break };
+            let Some((meta, len)) = r.link.recv(&mut frame) else { break };
             let managed = r.managed();
-            let frame = self.frame[..len].to_vec();
+            let frame = &frame[..len];
             match meta.kind {
-                kind::IEEE80211 => self.radio_frame(&frame, RxInfo::unpack(meta.meta), now),
+                kind::IEEE80211 => self.radio_frame(frame, RxInfo::unpack(meta.meta), now),
                 // A managed radio's data, and the handshakes' EAPOL.
-                kind::ETHERNET if managed => {
-                    let actions = self.sta.receive_ethernet(&frame, now, &mut self.rng);
-                    self.station_actions(actions, now);
-                }
+                kind::ETHERNET if managed => match self.sta.receive_ethernet(frame, now, &mut self.rng) {
+                    Passage::Pass => {
+                        self.counters.data_rx += 1;
+                        if let Some(nd) = &self.netdev {
+                            nd.link.send(SlotMeta::ethernet(), frame);
+                        }
+                    }
+                    Passage::Drop => {}
+                    Passage::Actions(actions) => self.station_actions(actions, now),
+                },
                 _ => {}
             }
         }
+        self.frame = frame;
+    }
+
+    /// Whether frames from `netd` wait in their ring: a soft MAC radio is
+    /// off the network's channel for a scan (a managed radio keeps what it
+    /// is given while it scans).
+    fn holding_frames(&self) -> bool {
+        self.sta.is_connected() && self.scan.is_some() && !self.radio.as_ref().is_some_and(|r| r.managed())
     }
 
     /// Frames from `netd` for the network.
     fn forward_from_netd(&mut self, now: u64) {
-        // A managed radio keeps what it sends while it scans.
-        let on_channel = self.scan.is_none() || self.radio.as_ref().is_some_and(|r| r.managed());
+        let mut frame = core::mem::take(&mut self.frame);
         for _ in 0..FRAME_BUDGET {
-            let connected = self.sta.is_connected();
-            if connected && !on_channel {
-                // Off channel for a scan: frames wait in the ring.
-                return;
+            if self.holding_frames() {
+                break;
             }
-            let Some(nd) = self.netdev.as_ref() else { return };
-            let Some((meta, len)) = nd.link.recv(&mut self.frame) else { return };
-            if meta.kind != kind::ETHERNET || !connected {
+            let Some(nd) = self.netdev.as_ref() else { break };
+            let Some((meta, len)) = nd.link.recv(&mut frame) else { break };
+            if meta.kind != kind::ETHERNET || !self.sta.is_connected() {
                 continue;
             }
-            let eth = self.frame[..len].to_vec();
-            let actions = self.sta.send_ethernet(&eth);
-            self.station_actions(actions, now);
+            match self.sta.send_ethernet(&frame[..len]) {
+                // A frame the link has no room for is dropped, as a card
+                // drops.
+                Passage::Pass => {
+                    if let Some(r) = self.radio.as_mut() {
+                        r.send_ethernet(&frame[..len]);
+                    }
+                    self.sync_counters();
+                }
+                Passage::Drop => {}
+                Passage::Actions(actions) => self.station_actions(actions, now),
+            }
         }
+        self.frame = frame;
     }
 
     // ---------------------------------------------------------------
@@ -569,8 +680,9 @@ impl Wlan {
 
     fn handle_client(&mut self, key: u64, now: u64) {
         for _ in 0..CLIENT_BUDGET {
-            let Some(ch) = self.clients.get(&key) else { return };
-            let msg = match ch.read() {
+            let Some(c) = self.clients.get(&key) else { return };
+            let (owner, rights) = (c.owner, c.rights);
+            let msg = match c.channel.read() {
                 Ok(m) => m,
                 Err(vabi::Error::ShouldWait) => return,
                 Err(_) => {
@@ -578,11 +690,11 @@ impl Wlan {
                     return;
                 }
             };
-            let mut s = api::Session { w: self, now };
+            let mut s = api::Session { w: self, now, owner, rights };
             match wlan::dispatch(&mut s, msg) {
                 Ok(reply) => {
-                    if let Some(ch) = self.clients.get(&key) {
-                        let _ = reply.send(ch);
+                    if let Some(c) = self.clients.get(&key) {
+                        let _ = reply.send(&c.channel);
                     }
                 }
                 Err(e) => {
@@ -610,20 +722,21 @@ impl Wlan {
         if let Some(nd) = &self.netdev {
             ws.add(nd.channel().raw(), signals::PEER_CLOSED, KEY_NETD);
             ws.add(nd.link.wake_event().raw(), signals::SIGNALED, KEY_NETD_LINK);
-            sleep &= nd.link.prepare_wait(false);
+            // Frames held back for a scan are no reason to stay awake: the
+            // scan's timer wakes the service.
+            sleep &= nd.link.prepare_wait(false) || self.holding_frames();
         }
         let mut dynamic: Vec<(u64, u64)> = Vec::new();
-        for (&k, ch) in self.pending_phys.iter().chain(self.clients.iter()) {
+        let channels = self.pending_phys.iter().chain(self.clients.iter().map(|(k, c)| (k, &c.channel)));
+        for (&k, ch) in channels {
             let wk = KEY_DYNAMIC + dynamic.len() as u64;
             ws.add(ch.raw(), signals::READABLE | signals::PEER_CLOSED, wk);
             dynamic.push((wk, k));
         }
-        let ready = if sleep {
-            let deadline_ms = self.next_deadline(now);
-            ws.wait(deadline_ms.saturating_mul(1_000_000)).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        // With frames waiting, look without sleeping: the driver's events,
+        // the clients and new drivers are attended to all the same.
+        let deadline = if sleep { self.next_deadline(now).saturating_mul(1_000_000) } else { 0 };
+        let ready = ws.wait(deadline).unwrap_or_default();
         if let Some(r) = &self.radio {
             r.link.finish_wait();
         }
@@ -674,6 +787,14 @@ impl Wlan {
     }
 }
 
+/// A status without what tells where the machine is or identifies it: the
+/// access point's and the adapter's addresses.
+pub fn without_addresses(mut s: WlanStatus) -> WlanStatus {
+    s.bssid = [0; 6];
+    s.mac = [0; 6];
+    s
+}
+
 fn main() -> i32 {
     let (Ok(phy_listener), Ok(api_listener)) = (vproto::register(wlanphy::NAME), vproto::register(wlan::NAME)) else {
         println!("cannot register the Wi-Fi services");
@@ -703,7 +824,6 @@ fn main() -> i32 {
         idle_scans: 0,
         profiles,
         backoff: BTreeMap::new(),
-        rejected: BTreeSet::new(),
         request: None,
         current: None,
         roam_to: None,

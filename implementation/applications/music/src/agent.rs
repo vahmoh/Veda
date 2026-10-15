@@ -12,24 +12,24 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use music_core::order::Repeat;
+use vfiles::format::duration as format_time;
+use videos_core::control::{self, SeekError};
 use vui::agent::names::{MIN_SCORE, query_words, score};
 use vui::agent::{
     self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, arg_str, json, show_path,
 };
 
+use crate::Player;
 use crate::engine::PlayState;
-use crate::library::{Track, format_time};
-use crate::{Player, Repeat};
+use crate::library::Track;
 
 /// The most songs the agent gets in one list.
 const MAX_SONGS: usize = 60;
 /// The most album names in the state.
 const MAX_ALBUMS: usize = 30;
 /// How many of the songs that play next the state lists.
-const UP_NEXT: i32 = 5;
-/// How long an action waits for the library when the player has just
-/// started (it scans the Music folder first).
-const LIBRARY_WAIT_NS: u64 = 2_000_000_000;
+const UP_NEXT: usize = 5;
 /// Words of a request that say what kind of music is wanted, not which.
 const FILLER: &[&str] =
     &["the", "a", "an", "song", "songs", "track", "tracks", "album", "music", "by", "some", "please", "play", "called"];
@@ -202,15 +202,15 @@ pub fn state(p: &Player) -> Value {
 
 impl Player {
     /// Takes the library and the playback status from the engine, as a
-    /// frame does (waiting a moment for the first scan of the Music folder
-    /// when the player has just started).
-    fn agent_sync(&mut self) {
-        let end = vrt::time::now_ns() + LIBRARY_WAIT_NS;
-        while self.tracks.is_empty() && self.shared.library.lock().generation == 0 && vrt::time::now_ns() < end {
-            vrt::time::sleep(vrt::time::Duration::from_millis(20));
-        }
+    /// frame does. Nothing waits: right after the player starts, while the
+    /// Music folder is first read, the library is said to be loading.
+    fn agent_sync(&mut self) -> Result<(), String> {
         self.sync_library();
         self.sync_status();
+        if self.tracks.is_empty() && self.shared.library.lock().generation == 0 {
+            return Err("the music library is still being read: ask again in a moment".into());
+        }
+        Ok(())
     }
 
     /// Where the current song is (ms), as of now: the engine's position
@@ -230,17 +230,8 @@ impl Player {
     /// The songs that play next on their own (after the current one).
     fn up_next(&self) -> Vec<Value> {
         let brief = |t: &Track| json!({ "title": t.title.as_str(), "artist": t.artist.as_str() });
-        if self.repeat == Repeat::One {
-            return self.current_track().map(brief).into_iter().collect();
-        }
-        let mut out = Vec::new();
-        for step in 1..=UP_NEXT {
-            match self.neighbour(step, self.repeat == Repeat::All) {
-                Some(i) if Some(i) != self.current => out.push(brief(&self.tracks[i])),
-                _ => break,
-            }
-        }
-        out
+        let next = self.order.up_next(self.current, self.repeat, UP_NEXT);
+        next.iter().filter_map(|&i| self.tracks.get(i)).map(brief).collect()
     }
 
     /// The song playing (or paused) and where it is, for results.
@@ -297,7 +288,7 @@ impl Player {
     }
 
     pub(crate) fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
-        self.agent_sync();
+        self.agent_sync()?;
         match action {
             "play" => {
                 if self.tracks.is_empty() {
@@ -362,14 +353,15 @@ impl Player {
                 let (title, duration) = (t.title.clone(), t.duration_ms);
                 let secs = arg_f64(args, "seconds")?;
                 let relative = arg_bool(args, "relative").unwrap_or(false);
-                if !relative && secs < 0.0 {
-                    return Err("'seconds' counts from the start of the song and cannot be negative".into());
-                }
-                let target = if relative { self.position_ms() as f64 + secs * 1000.0 } else { secs * 1000.0 };
-                if target >= duration as f64 {
-                    return Err(format!("{title} is only {} long", format_time(duration)));
-                }
-                let ms = (target.max(0.0) as u64).min(duration.saturating_sub(500));
+                // Not right at the end: a moment of the song still plays.
+                let ms = match control::seek_target(self.position_ms(), duration, secs, relative, 500) {
+                    Ok(ms) => ms,
+                    Err(SeekError::BeforeStart) => {
+                        return Err("'seconds' counts from the start of the song and cannot be negative".into());
+                    }
+                    Err(SeekError::PastEnd) => return Err(format!("{title} is only {} long", format_time(duration))),
+                    Err(SeekError::NotANumber) => return Err("'seconds' is not a number of seconds".into()),
+                };
                 self.seek_to(ms);
                 Ok(json!({
                     "title": title,
@@ -397,18 +389,10 @@ impl Player {
                 Ok(json!({ "repeat": mode.name() }))
             }
             "set_volume" => {
-                let mut level = (self.volume * 100.0 + 0.5) as i64;
-                let mut changed = false;
-                if let Some(l) = arg_opt_int(args, "level")? {
-                    level = l;
-                    changed = true;
-                }
-                if let Some(c) = arg_opt_int(args, "change")? {
-                    level += c;
-                    changed = true;
-                }
-                if changed {
-                    self.set_volume(level.clamp(0, 100) as f32 / 100.0);
+                let current = (self.volume * 100.0 + 0.5) as u32;
+                if let Some(level) = control::volume(current, arg_opt_int(args, "level")?, arg_opt_int(args, "change")?)
+                {
+                    self.set_volume(level as f32 / 100.0);
                 }
                 if let Some(mute) = arg_bool(args, "mute")
                     && mute != self.muted

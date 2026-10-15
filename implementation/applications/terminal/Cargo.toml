@@ -18,12 +18,12 @@ vrt = { workspace = true }
 vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
-vgfx = { workspace = true }
 vfiles = { workspace = true }
 vui = { workspace = true }
 vnet = { workspace = true }
 vweb = { workspace = true }
 terminal-core = { path = "core" }
+apps-common = { path = "../common" }
 
 [build-dependencies]
 vbuild = { workspace = true }

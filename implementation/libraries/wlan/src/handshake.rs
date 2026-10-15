@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The 4-way handshake and the group key handshake (IEEE 802.11-2020,
-//! 12.7.6 and 12.7.7): the station side ([`Supplicant`]) and the access
-//! point side ([`Authenticator`]).
+//! 12.7.6 and 12.7.7): the station side ([`Supplicant`]), and for the tests
+//! the access point side (`Authenticator`).
 //!
 //! The supplicant applies the checks the standard requires before it uses
 //! anything from the AP:
@@ -11,7 +11,8 @@
 //! * message 3 must carry message 1's ANonce, a larger replay counter and
 //!   a valid MIC;
 //! * the RSN element in message 3 must equal the one the AP advertised in
-//!   its beacon or probe response (and likewise the RSN Extension);
+//!   its beacon or probe response, and so must the RSN Extension element:
+//!   present in both and equal, or in neither, whatever the AKM;
 //! * the key descriptor version must match the negotiated AKM;
 //! * key data must be encrypted and contain the GTK (and the IGTK when
 //!   management frames are protected);
@@ -23,8 +24,12 @@ use alloc::vec::Vec;
 
 use zeroize::Zeroize;
 
-use crate::crypto::{KeyAlgo, Ptk, Random, aes_unwrap, aes_wrap, derive_ptk};
-use crate::eapol::{self, Gtk, Igtk, KeyData, KeyFrame, info, verify_mic};
+#[cfg(test)]
+use crate::crypto::aes_wrap;
+use crate::crypto::{KeyAlgo, Ptk, Random, aes_unwrap, derive_ptk};
+#[cfg(test)]
+use crate::eapol;
+use crate::eapol::{Gtk, Igtk, KeyData, KeyFrame, info, verify_mic};
 use crate::frame::Mac;
 
 /// What a handshake asks the caller to do.
@@ -119,6 +124,22 @@ pub struct Supplicant {
     pub mic_failures: u32,
 }
 
+/// The copies of the installed keys it keeps (to tell a retransmission from
+/// a new key) are zeroed with it, as the PTKs and the PMK are.
+impl Drop for Supplicant {
+    fn drop(&mut self) {
+        if let Some(tk) = &mut self.installed_tk {
+            tk.zeroize();
+        }
+        if let Some((_, gtk)) = &mut self.installed_gtk {
+            gtk.zeroize();
+        }
+        if let Some((_, igtk)) = &mut self.installed_igtk {
+            igtk.zeroize();
+        }
+    }
+}
+
 impl Supplicant {
     pub fn new(cfg: SupplicantConfig) -> Supplicant {
         Supplicant {
@@ -197,8 +218,12 @@ impl Supplicant {
         if !f.has(info::ENCRYPTED) {
             return Err(HandshakeError::BadKeyData);
         }
-        let plain = aes_unwrap(kek, &f.data).ok_or(HandshakeError::BadKeyData)?;
-        KeyData::parse(&plain).map_err(|_| HandshakeError::BadKeyData)
+        let mut plain = aes_unwrap(kek, &f.data).ok_or(HandshakeError::BadKeyData)?;
+        let kd = KeyData::parse(&plain).map_err(|_| HandshakeError::BadKeyData);
+        // The keys it holds are copied out; the decrypted data does not
+        // linger.
+        plain.zeroize();
+        kd
     }
 
     fn msg3(&mut self, f: &KeyFrame, raw: &[u8]) -> Result<Vec<Event>, HandshakeError> {
@@ -212,12 +237,7 @@ impl Supplicant {
             return Err(HandshakeError::BadMic);
         }
         let kd = Self::decrypt_key_data(f, &tptk.kek)?;
-        if kd.rsne.first() != Some(&self.cfg.ap_rsne) {
-            return Err(HandshakeError::RsnMismatch);
-        }
-        if let Some(adv) = &self.cfg.ap_rsnxe
-            && kd.rsnxe.as_ref() != Some(adv)
-        {
+        if kd.rsne.first() != Some(&self.cfg.ap_rsne) || kd.rsnxe != self.cfg.ap_rsnxe {
             return Err(HandshakeError::RsnMismatch);
         }
         let gtk = kd.gtk.ok_or(HandshakeError::BadKeyData)?;
@@ -247,7 +267,9 @@ impl Supplicant {
     fn install_group(&mut self, gtk: Gtk, igtk: Option<Igtk>, rsc: u64) -> Vec<Event> {
         let mut out = Vec::new();
         if self.installed_gtk.as_ref().map(|(id, k)| (*id, k.as_slice())) != Some((gtk.key_id, gtk.key.as_slice())) {
-            self.installed_gtk = Some((gtk.key_id, gtk.key.clone()));
+            if let Some((_, mut old)) = self.installed_gtk.replace((gtk.key_id, gtk.key.clone())) {
+                old.zeroize();
+            }
             out.push(Event::InstallGtk { key_id: gtk.key_id, key: gtk.key, rsc });
         }
         if let Some(i) = igtk
@@ -283,6 +305,7 @@ impl Supplicant {
 }
 
 /// The group keys an access point hands out.
+#[cfg(test)]
 #[derive(Clone)]
 pub struct GroupKeys {
     pub gtk_id: u8,
@@ -292,6 +315,7 @@ pub struct GroupKeys {
     pub igtk: Option<(u16, [u8; 16], u64)>,
 }
 
+#[cfg(test)]
 impl Drop for GroupKeys {
     fn drop(&mut self) {
         self.gtk.zeroize();
@@ -302,6 +326,7 @@ impl Drop for GroupKeys {
 }
 
 /// What the authenticator needs to know.
+#[cfg(test)]
 #[derive(Clone)]
 pub struct AuthenticatorConfig {
     pub algo: KeyAlgo,
@@ -316,12 +341,14 @@ pub struct AuthenticatorConfig {
     pub sta_rsne: Vec<u8>,
 }
 
+#[cfg(test)]
 impl Drop for AuthenticatorConfig {
     fn drop(&mut self) {
         self.pmk.zeroize();
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AState {
     Idle,
@@ -332,9 +359,12 @@ enum AState {
 }
 
 /// Most transmissions of one handshake message.
+#[cfg(test)]
 pub const MAX_ATTEMPTS: u32 = 4;
 
-/// The access point side of the handshakes.
+/// The access point side of the handshakes (for the tests: Veda is never
+/// an access point).
+#[cfg(test)]
 pub struct Authenticator {
     cfg: AuthenticatorConfig,
     state: AState,
@@ -345,6 +375,7 @@ pub struct Authenticator {
     group: Option<GroupKeys>,
 }
 
+#[cfg(test)]
 impl Authenticator {
     pub fn new(cfg: AuthenticatorConfig) -> Authenticator {
         Authenticator { cfg, state: AState::Idle, replay: 0, anonce: [0; 32], ptk: None, attempts: 0, group: None }
@@ -694,6 +725,31 @@ pub(crate) mod tests {
         let m3 = sent(&auth.receive(&m2).unwrap());
         assert_eq!(sta.receive(&m3, &mut rng), Err(HandshakeError::RsnMismatch));
         assert!(!sta.is_complete());
+    }
+
+    #[test]
+    fn message_3_must_match_the_advertised_rsn_extension_both_ways() {
+        let rsnxe = alloc::vec![crate::ie::id::RSNX, 1, crate::ie::rsnx::SAE_H2E];
+        // Advertised but left out of message 3, and the other way round.
+        for (advertised, in_msg3) in [(Some(rsnxe.clone()), None), (None, Some(rsnxe.clone()))] {
+            let mut rng = TestRandom(7);
+            let (mut sta, mut auth) = pair(Security::Wpa2Personal, [3; 32], [3; 32]);
+            sta.cfg.ap_rsnxe = advertised;
+            auth.cfg.ap_rsnxe = in_msg3;
+            let m1 = auth.start(group(1, 0x61), &mut rng);
+            let m2 = sent(&sta.receive(&m1, &mut rng).unwrap());
+            let m3 = sent(&auth.receive(&m2).unwrap());
+            assert_eq!(sta.receive(&m3, &mut rng), Err(HandshakeError::RsnMismatch));
+        }
+        // Advertised and sent: fine.
+        let mut rng = TestRandom(8);
+        let (mut sta, mut auth) = pair(Security::Wpa2Personal, [3; 32], [3; 32]);
+        sta.cfg.ap_rsnxe = Some(rsnxe.clone());
+        auth.cfg.ap_rsnxe = Some(rsnxe);
+        let m1 = auth.start(group(1, 0x61), &mut rng);
+        let m2 = sent(&sta.receive(&m1, &mut rng).unwrap());
+        let m3 = sent(&auth.receive(&m2).unwrap());
+        assert!(sta.receive(&m3, &mut rng).unwrap().contains(&Event::Completed));
     }
 
     #[test]

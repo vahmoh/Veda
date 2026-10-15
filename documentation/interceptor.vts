@@ -43,4 +43,4 @@ wait-serial "screen Playing" 10
 key f8
 wait-serial "autopilot on" 10
 wait 9
-shot documentation/images/interceptor.png
+shot documentation/images/interceptor.png now

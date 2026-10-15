@@ -19,7 +19,8 @@
 //! is, and the compositor checks it against its framebuffer. A driver that
 //! sets the mode itself (Linux's, in the driver VM) sets the compositor's
 //! ([`displaydev::screen`]). The compositor accepts drivers only
-//! (connections from `devmgr`, which starts them).
+//! (connections from `devmgr`, which starts them): it closes anyone else's
+//! connection at once.
 //!
 //! # Flips
 //!
@@ -57,6 +58,14 @@
 //! a driver, the driver VM's Linux's). So nothing moves on a screen a
 //! driver is about to take over, and the startup splash is first seen on
 //! the screen the desktop will be.
+//!
+//! Whenever a compositor starts (at the system's start, or again after a
+//! crash), it draws nothing into the firmware's framebuffer until it is
+//! told that no driver is coming, or a driver that keeps that memory only
+//! pixels ([`Screen::firmware_kept`]) attaches, or twenty seconds pass: a
+//! driver that does not keep it may have it already. A compositor started
+//! again hears what is coming as soon as `devmgr` says it again, on a
+//! connection of its own.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -101,7 +110,9 @@ message! {
         pub name: String,
         pub width: u32,
         pub height: u32,
-        /// Bytes from one row of a picture to the next.
+        /// Bytes from one row of a picture to the next: whole pixels (a
+        /// multiple of 4), the screen's width at least, and that rounded up
+        /// to a 4096-byte page at most.
         pub stride: u32,
         /// Red in the low byte of each pixel (otherwise blue: `0xXXRRGGBB`).
         pub rgbx: bool,

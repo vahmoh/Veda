@@ -24,11 +24,12 @@
 //! The videos are AV1 (rav1e: 8-bit 4:2:0, BT.709, limited range) and FLAC
 //! (48 kHz stereo, 16 bits) in Matroska. Every key frame starts a group of
 //! pictures that is encoded on its own, all of them in parallel; the output
-//! is the same on every run. Files are written under a temporary name and
-//! renamed, so a stopped run never leaves half a file. The optional
-//! `FILTER` makes only the videos whose file name contains it (handy while
-//! tuning), and `VIDEOGEN_PREVIEW=DIR` also writes PNGs of a picture a
-//! second, as drawn and as decoded, and every video's MD5 list.
+//! is the same on every run. Files are written whole or not at all, and
+//! listed in `OUT_DIR`'s manifest (see `gencommon::output`), what else is
+//! there removed. The optional `FILTER` makes only the videos whose file
+//! name contains it (handy while tuning; the manifest and the other files
+//! stay as they are), and `VIDEOGEN_PREVIEW=DIR` also writes PNGs of a
+//! picture a second, as drawn and as decoded, and every video's MD5 list.
 
 mod aurora;
 mod av1;
@@ -43,6 +44,8 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use gencommon::output;
 
 /// The fonts the countdown is set in.
 pub const INTER: &[u8] = include_bytes!("../../../implementation/ports/fonts/Inter-Regular.otf");
@@ -240,33 +243,12 @@ fn mux(film: &Film, video: &av1::Video, sound: Option<&flac::Flac>) -> Result<Ve
     mkv::mux(&movie).map_err(|e| format!("{}: {e}", film.file))
 }
 
-/// Writes `bytes` to `path` under a temporary name, then renames it.
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.part"));
-    std::fs::write(&tmp, bytes).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("renaming {}: {e}", tmp.display()))
-}
-
 fn write_png(dir: &Path, name: &str, pixels: &[u32], width: usize) -> Result<(), String> {
     let image = vimage::Image::from_pixels(width as u32, (pixels.len() / width) as u32, pixels.to_vec())
         .map_err(|e| e.to_string())?;
     let png = vimage::encode_png(&image).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     std::fs::write(dir.join(name), png).map_err(|e| format!("writing a preview: {e}"))
-}
-
-/// Removes what earlier runs left in a directory this tool owns: files it
-/// did not write now, and temporary files.
-fn clean(dir: &Path, keep: &[&str]) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if e.path().is_file() && !keep.contains(&name.as_str()) {
-                let _ = std::fs::remove_file(e.path());
-            }
-        }
-    }
 }
 
 fn mb(bytes: usize) -> f64 {
@@ -280,18 +262,7 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
     if films.is_empty() {
         return Err(format!("no video matches {:?}", filter.unwrap_or("")));
     }
-    // Remove temporary files of a stopped run first.
-    for dir in [VIDEOS, TESTS] {
-        let dir = out.join(dir);
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                if e.file_name().to_string_lossy().ends_with(".part") {
-                    let _ = std::fs::remove_file(e.path());
-                }
-            }
-        }
-        std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    }
+    let mut out = output::Output::new(out)?;
 
     // The largest pictures first, then the sound.
     let mut jobs = Vec::new();
@@ -335,7 +306,7 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
         }
         let sound = sounds[i].take().map(|pcm| flac::encode(&pcm, 2, RATE));
         let bytes = mux(film, &video, sound.as_ref())?;
-        write_atomically(&out.join(VIDEOS).join(film.file), &bytes)?;
+        out.write(&format!("{VIDEOS}/{}", film.file), &bytes)?;
         if let Some(dir) = &preview {
             let text: String = video.md5.iter().map(|d| format!("{}\n", hex(d))).collect();
             std::fs::write(dir.join(format!("{}.md5", film.title)), text)
@@ -367,18 +338,16 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
 
     if let Some((bytes, md5)) = countdown {
         let text: String = md5.iter().map(|d| format!("{}\n", hex(d))).collect();
-        write_atomically(&out.join(TESTS).join("Countdown.md5"), text.as_bytes())?;
+        out.write(&format!("{TESTS}/Countdown.md5"), text.as_bytes())?;
         println!("  {:<38} {} pictures", format!("{TESTS}/Countdown.md5"), md5.len());
         let truncated = &bytes[..bytes.len() * 3 / 5];
-        write_atomically(&out.join(TESTS).join("Truncated.mkv"), truncated)?;
+        out.write(&format!("{TESTS}/Truncated.mkv"), truncated)?;
         println!("  {:<38} 60% of Countdown.mkv  {:5.2} MB", format!("{TESTS}/Truncated.mkv"), mb(truncated.len()));
         written += 2;
         total += text.len() + truncated.len();
     }
     if filter.is_none() {
-        let names: Vec<&str> = films.iter().map(|f| f.file).collect();
-        clean(&out.join(VIDEOS), &names);
-        clean(&out.join(TESTS), &["Countdown.md5", "Truncated.mkv"]);
+        out.finish()?;
     }
     println!("videogen: {written} files, {:.2} MB in {:.1} s", mb(total), started.elapsed().as_secs_f64());
     Ok(())
@@ -481,18 +450,5 @@ mod tests {
         assert_eq!(flac::decode::decode(&flac_file).unwrap().pcm, pcm);
         let cues = segment.iter().find(|e| e.id == id::CUES).unwrap().children();
         assert_eq!(cues.len(), 3);
-    }
-
-    #[test]
-    fn files_appear_whole_or_not_at_all() {
-        let dir = std::env::temp_dir().join(format!("videogen-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("Some File.mkv");
-        write_atomically(&path, b"first").unwrap();
-        write_atomically(&path, b"second").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"second");
-        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
-        assert_eq!(names, ["Some File.mkv"]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

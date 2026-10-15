@@ -8,126 +8,134 @@
 //! stands for a handle of this process that the guest was given or made.
 //! Operations are the system calls of their names, carried out on those
 //! handles; handles that messages carry move between the table and Veda's
-//! channels. A wait that cannot finish at once goes on in the waiter
-//! thread (`run_waits`), which writes what it observed into the guest's
-//! request when it finishes, reports it in the notification ring, and
-//! raises the guest's interrupt. Pending waits name the guest's handles
-//! as the guest does, and are resolved against the table at each round:
-//! a handle the guest closes meanwhile ends its wait (`BadHandle`).
+//! channels. What the guest makes Veda keep is bounded: its handles, and
+//! its budget (`drivervm_core::ledger`) of Veda's memory (the VMOs it makes,
+//! which commit their pages as they are used, the messages it sends itself)
+//! and of mappings in its window (`drivervm_core::window`).
+//!
+//! A wait that cannot finish at once goes on in the waiter thread
+//! (`run_waits`), which waits on all of them at once (`drivervm_core::waits`),
+//! and when one finishes writes what it observed into the guest's request,
+//! reports it in the notification ring and raises the guest's interrupt.
+//! Pending waits name the guest's handles as the guest does, and are
+//! resolved against the table at each round: closing a handle a wait names
+//! ends the wait (`BadHandle`), and the round, as cancelling a wait does,
+//! so that what the waiter waited on goes at once if that was its last
+//! handle (a channel's peer sees it closed).
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::mem::ManuallyDrop;
 
-use vabi::{Error, RawHandle, Rights, WaitItem, map_flags, signals};
+use drivervm_core::ledger::Ledger;
+use drivervm_core::waits::{self, Pending, Round, Wait};
+use drivervm_core::window::Window;
+use vabi::{Error, RawHandle, Rights, WaitItem, map_flags, signals, vmo_flags};
 use vhv::bridge::{self as b, op};
 use vrt::object::{Channel, Event, Guest, Handle, Vcpu, Vmo};
+use vrt::println;
 use vrt::sync::Mutex;
 
 use crate::memory::{GuestMemory, Plain};
 use crate::registry::Registry;
 
-/// The most handles a guest holds at a time.
+/// The most handles a guest holds at a time (those in messages it sent
+/// itself among them).
 const MAX_HANDLES: usize = 16384;
 /// The most bytes a VMO the guest makes may have.
 const MAX_VMO: u64 = 1 << 30;
+/// The flags a VMO the guest makes may have: write-combining (a display's
+/// pictures). Its pages are committed as they are used, within its budget.
+const VMO_FLAGS: u32 = vmo_flags::WRITE_COMBINING as u32;
+/// The most mappings in the guest's window.
+const MAX_MAPPINGS: u32 = 4096;
+/// The guest's budget of Veda's memory is a quarter of the PC's, and at
+/// least this (a display's pictures and a few contexts of the renderer's,
+/// counted as made and as mapped, on a small machine).
+const MIN_BUDGET: u64 = 512 << 20;
 /// VMOs the guest maps go in this range of its physical address space,
 /// beyond its RAM.
 pub const WINDOW_BASE: u64 = 64 << 30;
 pub const WINDOW_SIZE: u64 = 64 << 30;
+const PAGE: u64 = 4096;
 
+/// The bridge: the guest's handles and its books, its waits, its window
+/// and its registry.
 pub struct Bridge {
     table: Mutex<Table>,
     waits: Mutex<Waits>,
-    /// Signaled when the waits change, for the waiter thread.
+    /// Signalled when the waits change, for the waiter thread.
     wake: Event,
-    windows: Mutex<Windows>,
+    windows: Mutex<Window>,
     registry: Registry,
 }
 
-/// The guest's handles, by the numbers it knows them by.
+/// A handle of the guest's: this process's, and the kernel's id of its
+/// object where the ledger may know it (0 elsewhere).
+struct Entry {
+    handle: Handle,
+    koid: u64,
+}
+
+/// The guest's handles, by the numbers it knows them by, and its books.
 struct Table {
     next: u32,
-    handles: BTreeMap<u32, Handle>,
+    handles: BTreeMap<u32, Entry>,
+    ledger: Ledger,
 }
 
 impl Table {
-    fn insert(&mut self, h: Handle) -> Result<u32, Error> {
-        if self.handles.len() >= MAX_HANDLES {
+    /// Whether `n` more handles fit (those in messages the guest sent
+    /// itself are its too).
+    fn room(&self, n: usize) -> Result<(), Error> {
+        if self.handles.len() + self.ledger.queued_handles() as usize + n > MAX_HANDLES {
             return Err(Error::LimitReached);
         }
+        Ok(())
+    }
+
+    fn insert(&mut self, handle: Handle, koid: u64) -> Result<u32, Error> {
+        self.room(1)?;
         loop {
             self.next = self.next.wrapping_add(1).max(1);
             if !self.handles.contains_key(&self.next) {
-                self.handles.insert(self.next, h);
+                self.handles.insert(self.next, Entry { handle, koid });
                 return Ok(self.next);
             }
         }
     }
 
+    fn entry(&self, id: u32) -> Result<&Entry, Error> {
+        self.handles.get(&id).ok_or(Error::BadHandle)
+    }
+
     fn raw(&self, id: u32) -> Result<RawHandle, Error> {
-        self.handles.get(&id).map(Handle::raw).ok_or(Error::BadHandle)
+        self.entry(id).map(|e| e.handle.raw())
     }
 
-    /// `items` with this process's handles for the guest's.
+    /// Takes handle `id` out of the guest's table, closed: the ledger is
+    /// told, and the handle is the caller's to drop.
+    fn close(&mut self, id: u32) -> Result<Handle, Error> {
+        let e = self.handles.remove(&id).ok_or(Error::BadHandle)?;
+        self.ledger.closed(e.koid);
+        Ok(e.handle)
+    }
+
+    /// `items` with this process's handles for the guest's, nothing
+    /// observed yet.
     fn resolve(&self, items: &[WaitItem]) -> Result<Vec<WaitItem>, Error> {
-        items.iter().map(|i| Ok(WaitItem { handle: self.raw(i.handle)?, ..*i })).collect()
+        items.iter().map(|i| Ok(WaitItem { handle: self.raw(i.handle)?, observed: 0, ..*i })).collect()
     }
 }
 
-/// A wait that goes on: its items (with the guest's handle numbers), and
-/// where they are in the guest.
-#[derive(Clone)]
-struct Pending {
-    key: u64,
-    items_gpa: u64,
-    items: Vec<WaitItem>,
-    deadline: u64,
-}
-
+/// The waits that go on, those finished, and the ring they are reported in.
 struct Waits {
-    pending: Vec<Pending>,
+    pending: Pending,
     /// Finished waits the ring has had no room for yet.
     done: VecDeque<b::Completion>,
     /// The ring (guest-physical) and the interrupt that announces it.
     ring: Option<(u64, u8)>,
     head: u32,
-}
-
-/// The ranges of the window that VMOs are mapped at.
-struct Windows {
-    free: Vec<(u64, u64)>,
-    used: BTreeMap<u64, u64>,
-}
-
-impl Windows {
-    fn take(&mut self, len: u64) -> Option<u64> {
-        let i = self.free.iter().position(|&(_, l)| l >= len)?;
-        let (start, l) = self.free[i];
-        if l == len {
-            self.free.remove(i);
-        } else {
-            self.free[i] = (start + len, l - len);
-        }
-        self.used.insert(start, len);
-        Some(start)
-    }
-
-    fn give_back(&mut self, start: u64) -> Option<u64> {
-        let len = self.used.remove(&start)?;
-        self.free.push((start, len));
-        self.free.sort_unstable();
-        // Neighbours join again.
-        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(self.free.len());
-        for &(s, l) in &self.free {
-            match merged.last_mut() {
-                Some((ms, ml)) if *ms + *ml == s => *ml += l,
-                _ => merged.push((s, l)),
-            }
-        }
-        self.free = merged;
-        Some(len)
-    }
 }
 
 /// A handle of the table, seen as an object of type `T` (not closed when
@@ -159,13 +167,22 @@ fn status(r: Result<(), Error>) -> u32 {
     }
 }
 
+/// The guest's budget of Veda's memory: a quarter of the PC's, at least
+/// [`MIN_BUDGET`].
+fn budget() -> u64 {
+    let total = vrt::object::system_info().map(|i| i.total_memory).unwrap_or(0);
+    (total / 4).max(MIN_BUDGET)
+}
+
 impl Bridge {
     pub fn new() -> Result<Bridge, Error> {
+        let budget = budget();
+        println!("the guest may keep {} MiB of Veda's memory through the bridge", budget >> 20);
         Ok(Bridge {
-            table: Mutex::new(Table { next: 0, handles: BTreeMap::new() }),
-            waits: Mutex::new(Waits { pending: Vec::new(), done: VecDeque::new(), ring: None, head: 0 }),
+            table: Mutex::new(Table { next: 0, handles: BTreeMap::new(), ledger: Ledger::new(budget, MAX_MAPPINGS) }),
+            waits: Mutex::new(Waits { pending: Pending::default(), done: VecDeque::new(), ring: None, head: 0 }),
             wake: Event::create()?,
-            windows: Mutex::new(Windows { free: alloc::vec![(WINDOW_BASE, WINDOW_SIZE)], used: BTreeMap::new() }),
+            windows: Mutex::new(Window::new(WINDOW_BASE..WINDOW_BASE + WINDOW_SIZE)),
             registry: Registry::new()?,
         })
     }
@@ -184,9 +201,7 @@ impl Bridge {
         }
         match op {
             op::SETUP => request(memory, gpa, |r: &mut b::Setup| r.status = status(self.setup(memory, r))),
-            op::CLOSE => request(memory, gpa, |r: &mut b::Close| {
-                r.status = status(self.table.lock().handles.remove(&r.handle).map(drop).ok_or(Error::BadHandle))
-            }),
+            op::CLOSE => request(memory, gpa, |r: &mut b::Close| r.status = status(self.close(r.handle))),
             op::DUPLICATE => request(memory, gpa, |r: &mut b::Duplicate| r.status = status(self.duplicate(r))),
             op::OBJECT_INFO => request(memory, gpa, |r: &mut b::ObjectInfo| r.status = status(self.object_info(r))),
             op::SIGNAL => request(memory, gpa, |r: &mut b::Signal| {
@@ -198,12 +213,7 @@ impl Bridge {
                     r.status = e as u32;
                 }
             }),
-            op::CANCEL => request(memory, gpa, |r: &mut b::Cancel| {
-                let mut waits = self.waits.lock();
-                let before = waits.pending.len();
-                waits.pending.retain(|p| p.key != r.key);
-                r.status = if waits.pending.len() < before { b::OK } else { Error::NotFound as u32 };
-            }),
+            op::CANCEL => request(memory, gpa, |r: &mut b::Cancel| r.status = status(self.cancel(r.key))),
             op::CHANNEL_CREATE => request(memory, gpa, |r: &mut b::ChannelCreate| {
                 r.status = status(self.channel_create(r));
             }),
@@ -226,15 +236,7 @@ impl Bridge {
                 r.status = status(self.vmo_copy(memory, r, op == op::VMO_WRITE));
             }),
             op::VMO_MAP => request(memory, gpa, |r: &mut b::VmoMap| r.status = status(self.vmo_map(guest, r))),
-            op::VMO_UNMAP => request(memory, gpa, |r: &mut b::VmoMap| {
-                let len = self.windows.lock().used.get(&r.gpa).copied();
-                r.status = status(match len {
-                    Some(len) if len == r.len => guest.unmap(r.gpa, len as usize).map(|_| {
-                        self.windows.lock().give_back(r.gpa);
-                    }),
-                    _ => Err(Error::NotFound),
-                });
-            }),
+            op::VMO_UNMAP => request(memory, gpa, |r: &mut b::VmoMap| r.status = status(self.vmo_unmap(guest, r))),
             op::BOOTSTRAP => request(memory, gpa, |r: &mut b::Bootstrap| r.status = status(self.bootstrap(r))),
             op::CLOCK => request(memory, gpa, |r: &mut b::Clock| {
                 r.status = status(vrt::time::clock_info().map(|info| r.info = info));
@@ -244,27 +246,43 @@ impl Bridge {
         }
     }
 
+    /// A handle the ledger does not know into the guest's table.
     fn insert(&self, h: Handle) -> Result<u32, Error> {
-        self.table.lock().insert(h)
+        self.table.lock().insert(h, 0)
     }
 
     fn setup(&self, memory: &GuestMemory, r: &b::Setup) -> Result<(), Error> {
-        if !r.ring.is_multiple_of(4096) || !memory.contains(r.ring, 4096) || !crate::arch::is_interrupt_vector(r.vector)
+        if !r.ring.is_multiple_of(PAGE) || !memory.contains(r.ring, PAGE) || !crate::arch::is_interrupt_vector(r.vector)
         {
             return Err(Error::InvalidArgs);
         }
         let mut waits = self.waits.lock();
         waits.ring = Some((r.ring, r.vector as u8));
         waits.head = 0;
+        drop(waits);
+        // Waits that finished before there was a ring go into it.
+        let _ = self.wake.signal();
+        Ok(())
+    }
+
+    /// Closes the guest's handle `id`: a wait that names it ends.
+    fn close(&self, id: u32) -> Result<(), Error> {
+        let handle = self.table.lock().close(id)?;
+        drop(handle);
+        if self.waits.lock().pending.names(id) {
+            let _ = self.wake.signal();
+        }
         Ok(())
     }
 
     fn duplicate(&self, r: &mut b::Duplicate) -> Result<(), Error> {
         let mut table = self.table.lock();
-        let raw = table.raw(r.handle)?;
+        let (raw, koid) = table.entry(r.handle).map(|e| (e.handle.raw(), e.koid))?;
+        table.room(1)?;
         let rights = (r.rights != 0).then_some(Rights(r.rights));
         let h = view(raw, |h| h).duplicate(rights)?;
-        r.out = table.insert(h)?;
+        r.out = table.insert(h, koid)?;
+        table.ledger.duplicated(koid);
         Ok(())
     }
 
@@ -278,11 +296,14 @@ impl Bridge {
     }
 
     fn channel_create(&self, r: &mut b::ChannelCreate) -> Result<(), Error> {
-        let (a, c) = Channel::create()?;
         let mut table = self.table.lock();
-        let first = table.insert(a.into_handle())?;
-        match table.insert(c.into_handle()) {
+        table.room(2)?;
+        let (a, c) = Channel::create()?;
+        let (ka, kc) = (a.0.basic_info()?.koid, c.0.basic_info()?.koid);
+        let first = table.insert(a.into_handle(), ka)?;
+        match table.insert(c.into_handle(), kc) {
             Ok(second) => {
+                table.ledger.made_channel(ka, kc);
                 r.out = [first, second];
                 Ok(())
             }
@@ -304,17 +325,29 @@ impl Bridge {
         }
         let ids: Vec<u32> = ids.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect();
         let mut table = self.table.lock();
-        let channel = table.raw(r.handle)?;
+        let (channel, channel_koid) = table.entry(r.handle).map(|e| (e.handle.raw(), e.koid))?;
         // Every handle checked before any moves, as the kernel does.
         for (i, id) in ids.iter().enumerate() {
             if *id == r.handle || ids[..i].contains(id) {
                 return Err(Error::InvalidArgs);
             }
-            table.raw(*id)?;
+            table.entry(*id)?;
         }
-        let handles: Vec<Handle> = ids.iter().filter_map(|id| table.handles.remove(id)).collect();
+        // A message to the guest itself is charged; nothing moves if it
+        // does not fit its budget.
+        table.ledger.may_send(channel_koid, r.bytes_len)?;
+        let moved: Vec<Entry> = ids.iter().filter_map(|id| table.handles.remove(id)).collect();
+        let koids: Vec<u64> = moved.iter().map(|e| e.koid).collect();
+        let handles: Vec<Handle> = moved.into_iter().map(|e| e.handle).collect();
         r.consumed = 1;
-        view(channel, Channel::from_handle).write(&bytes, handles)
+        let written = view(channel, Channel::from_handle).write(&bytes, handles);
+        table.ledger.sent(channel_koid, r.bytes_len, &koids, written.is_ok());
+        drop(table);
+        // A wait that names a handle that went is over, as if it was closed.
+        if self.waits.lock().pending.names_any(&ids) {
+            let _ = self.wake.signal();
+        }
+        written
     }
 
     fn channel_read(&self, memory: &GuestMemory, r: &mut b::ChannelRead) -> Result<(), Error> {
@@ -326,16 +359,29 @@ impl Bridge {
         let mut bytes = alloc::vec![0u8; cap_bytes as usize];
         let mut raws = alloc::vec![0 as RawHandle; cap_handles as usize];
         let mut table = self.table.lock();
-        let channel = view(table.raw(r.handle)?, Channel::from_handle);
-        match channel.read_into(&mut bytes, &mut raws) {
+        let (raw, channel_koid) = table.entry(r.handle).map(|e| (e.handle.raw(), e.koid))?;
+        match view(raw, Channel::from_handle).read_into(&mut bytes, &mut raws) {
             Ok((n, h)) => {
-                // SAFETY: the kernel gave us these handles.
-                let received: Vec<Handle> = raws[..h].iter().map(|&raw| unsafe { Handle::from_raw(raw) }).collect();
+                // A message the guest sent itself: its handles were the
+                // guest's already, and are again.
+                let known = table.ledger.read(channel_koid, n as u32, h as u32);
+                // The objects of the ledger's a message may bring back are
+                // known by their ids.
+                let look = table.ledger.knows_any();
                 let mut ids = Vec::with_capacity(h);
-                for handle in received {
+                for &raw in &raws[..h] {
+                    // SAFETY: the kernel gave us this handle.
+                    let handle = unsafe { Handle::from_raw(raw) };
+                    let koid = if look { handle.basic_info().map_or(0, |i| i.koid) } else { 0 };
+                    table.ledger.received(koid);
                     // A handle that does not fit the table is dropped.
-                    ids.push(table.insert(handle).unwrap_or(0));
+                    ids.push(table.insert(handle, koid).unwrap_or_else(|_| {
+                        table.ledger.closed(koid);
+                        0
+                    }));
                 }
+                table.ledger.arrived(known);
+                drop(table);
                 let id_bytes: Vec<u8> = ids.iter().flat_map(|id| id.to_le_bytes()).collect();
                 memory.write(r.bytes, &bytes[..n]);
                 memory.write(r.handles, &id_bytes);
@@ -351,12 +397,22 @@ impl Bridge {
         }
     }
 
+    /// A VMO for the guest, within its budget: write-combining if it asks,
+    /// committed as it is used (never at once).
     fn vmo_create(&self, r: &mut b::Vmo) -> Result<(), Error> {
-        if r.size == 0 || r.size > MAX_VMO {
+        if r.size == 0 || r.size > MAX_VMO || r.flags & !VMO_FLAGS != 0 {
             return Err(Error::InvalidArgs);
         }
-        let vmo = Vmo::create_with(r.size as usize, r.flags as usize)?;
-        r.handle = self.insert(vmo.into_handle())?;
+        let size = r.size.next_multiple_of(PAGE);
+        let mut table = self.table.lock();
+        table.room(1)?;
+        if !table.ledger.fits(size) {
+            return Err(Error::LimitReached);
+        }
+        let vmo = Vmo::create_with(size as usize, r.flags as usize)?;
+        let koid = vmo.0.basic_info()?.koid;
+        table.ledger.made_vmo(koid, size)?;
+        r.handle = table.insert(vmo.into_handle(), koid).inspect_err(|_| table.ledger.closed(koid))?;
         Ok(())
     }
 
@@ -382,20 +438,48 @@ impl Bridge {
         }
     }
 
+    /// Maps a VMO into the window, within the guest's budget.
     fn vmo_map(&self, guest: &Guest, r: &mut b::VmoMap) -> Result<(), Error> {
-        if r.len == 0 || !r.len.is_multiple_of(4096) || !r.offset.is_multiple_of(4096) {
+        if r.len == 0 || !r.len.is_multiple_of(PAGE) || !r.offset.is_multiple_of(PAGE) {
             return Err(Error::InvalidArgs);
         }
         let flags = (r.flags as usize & map_flags::WRITE) | map_flags::READ;
-        let table = self.table.lock();
+        let mut table = self.table.lock();
         let vmo = view(table.raw(r.handle)?, Vmo::from_handle);
-        let gpa = self.windows.lock().take(r.len).ok_or(Error::NoMemory)?;
+        table.ledger.map(r.len)?;
+        let Some(gpa) = self.windows.lock().take(r.len) else {
+            table.ledger.unmapped(r.len);
+            return Err(Error::NoMemory);
+        };
         if let Err(e) = guest.map(&vmo, r.offset as usize, r.len as usize, gpa, flags) {
-            self.windows.lock().give_back(gpa);
+            let mut windows = self.windows.lock();
+            windows.unuse(gpa, r.len);
+            windows.free(gpa, r.len);
+            table.ledger.unmapped(r.len);
             return Err(e);
         }
         r.gpa = gpa;
         Ok(())
+    }
+
+    /// Undoes a mapping of the window, of exactly its range: no other
+    /// mapping takes the range, and no other unmapping finds it, until it
+    /// is unmapped (or, if it could not be, it is the mapping's again).
+    fn vmo_unmap(&self, guest: &Guest, r: &b::VmoMap) -> Result<(), Error> {
+        if !self.windows.lock().unuse(r.gpa, r.len) {
+            return Err(Error::NotFound);
+        }
+        match guest.unmap(r.gpa, r.len as usize) {
+            Ok(()) => {
+                self.windows.lock().free(r.gpa, r.len);
+                self.table.lock().ledger.unmapped(r.len);
+                Ok(())
+            }
+            Err(e) => {
+                self.windows.lock().reuse(r.gpa, r.len);
+                Err(e)
+            }
+        }
     }
 
     fn bootstrap(&self, r: &mut b::Bootstrap) -> Result<(), Error> {
@@ -406,6 +490,15 @@ impl Bridge {
         Ok(())
     }
 
+    /// Gives up a pending wait: the waiter waits on it no more.
+    fn cancel(&self, key: u64) -> Result<(), Error> {
+        if !self.waits.lock().pending.cancel(key) {
+            return Err(Error::NotFound);
+        }
+        let _ = self.wake.signal();
+        Ok(())
+    }
+
     /// A wait: finished at once if it can be, else it goes on in the
     /// waiter thread ([`b::PENDING`]).
     fn wait(&self, memory: &GuestMemory, r: &mut b::Wait) -> Result<(), Error> {
@@ -413,6 +506,10 @@ impl Bridge {
             return Err(Error::InvalidArgs);
         }
         let size = core::mem::size_of::<WaitItem>() as u64;
+        // The items are the guest's memory (so their addresses below are).
+        if !memory.contains(r.items, r.count as u64 * size) {
+            return Err(Error::Fault);
+        }
         let mut items: Vec<WaitItem> = Vec::with_capacity(r.count as usize);
         for i in 0..r.count as u64 {
             items.push(memory.read_obj::<WaitItem>(r.items + i * size).ok_or(Error::Fault)?);
@@ -428,116 +525,152 @@ impl Bridge {
             Ok(_) | Err(Error::TimedOut) => {}
             Err(e) => return Err(e),
         }
-        // Waits that are pending, or finished and not yet in the ring, are
-        // at most what the ring holds: a guest that takes nothing from it
-        // cannot make the monitor (Veda's memory) keep more.
         let mut waits = self.waits.lock();
-        if waits.pending.len() + waits.done.len() >= b::ring::CAPACITY as usize {
-            return Err(Error::LimitReached);
-        }
-        waits.pending.push(Pending { key: r.key, items_gpa: r.items, items, deadline: r.deadline });
+        let finished = waits.done.len();
+        waits.pending.admit(Wait::new(r.key, r.items, items, r.deadline), finished)?;
         drop(waits);
         r.status = b::PENDING;
-        self.wake.signal()
+        let _ = self.wake.signal();
+        Ok(())
     }
 
     /// The waiter thread: waits on every pending wait at once (and on the
     /// event that says they changed), finishes those whose signals came,
     /// whose deadline passed or whose handles went, and reports them.
     pub fn run_waits(&self, memory: &GuestMemory, notify: &Vcpu) -> ! {
+        // Whether finished waits wait for room in the ring.
+        let mut unposted = false;
+        let mut said = false;
         loop {
-            // The waits as they are now (never with the table's lock: a
-            // wait takes the two the other way round).
-            let snapshot: Vec<Pending> = self.waits.lock().pending.clone();
+            // The waits as they are now (never with the table's lock held).
+            let snapshot: Vec<Wait> = self.waits.lock().pending.waits().to_vec();
             let mut items =
                 alloc::vec![WaitItem { handle: self.wake.raw(), signals: signals::SIGNALED, ..WaitItem::default() }];
-            let mut spans = BTreeMap::new();
-            let mut gone = Vec::new();
-            let mut deadline = u64::MAX;
+            // Each wait's items among them, by the wait's place in the
+            // snapshot; and the waits that cannot be waited on.
+            let mut spans = Vec::with_capacity(snapshot.len());
+            let mut failed: Vec<Option<Error>> = alloc::vec![None; snapshot.len()];
+            // Finished waits the ring had no room for are posted again
+            // soon, as the guest takes others from it.
+            let mut deadline = if unposted { vrt::time::now_ns().saturating_add(1_000_000) } else { u64::MAX };
             {
                 let table = self.table.lock();
-                for p in &snapshot {
-                    match table.resolve(&p.items) {
+                for (i, w) in snapshot.iter().enumerate() {
+                    match table.resolve(&w.items) {
                         Ok(resolved) => {
-                            spans.insert(p.key, (items.len(), resolved.len()));
+                            spans.push(items.len()..items.len() + resolved.len());
                             items.extend(resolved);
-                            deadline = deadline.min(p.deadline);
+                            deadline = deadline.min(w.deadline);
                         }
-                        Err(_) => gone.push(p.key),
+                        Err(e) => {
+                            spans.push(0..0);
+                            failed[i] = Some(e);
+                        }
                     }
                 }
             }
-            if gone.is_empty() {
-                // (A handle closed meanwhile fails the whole wait: the
-                // next round finds it gone.)
-                let _ = vrt::object::wait_many(&mut items, deadline);
-            }
+            // (Admitted, the items fit one wait: `waits::MAX_ITEMS`.)
+            let waited = if failed.iter().all(Option::is_none) {
+                vrt::object::wait_many(&mut items, deadline)
+            } else {
+                // A handle closed meanwhile: the waits it ends end now.
+                Ok(0)
+            };
             let _ = self.wake.clear();
+            match waited {
+                Ok(_) | Err(Error::TimedOut) => {}
+                // A handle closed after it was resolved: the next round
+                // finds it gone.
+                Err(Error::BadHandle) => {}
+                // A wait names what cannot be waited on, or the kernel
+                // could not wait: each wait is polled alone.
+                Err(e) => {
+                    let mut any = false;
+                    for i in 0..spans.len() {
+                        if failed[i].is_some() {
+                            continue;
+                        }
+                        match vrt::object::wait_many(&mut items[spans[i].clone()], 0) {
+                            Ok(_) | Err(Error::TimedOut) => {}
+                            Err(e) => {
+                                failed[i] = Some(e);
+                                any = true;
+                            }
+                        }
+                    }
+                    if !any {
+                        if !said {
+                            println!("the bridge's waiter cannot wait ({e}); it tries again");
+                            said = true;
+                        }
+                        vrt::time::sleep(vrt::time::Duration::from_millis(10));
+                    }
+                }
+            }
             let now = vrt::time::now_ns();
             let mut waits = self.waits.lock();
-            for mut p in core::mem::take(&mut waits.pending) {
-                let status = if gone.contains(&p.key) {
-                    Error::BadHandle as u32
-                } else {
-                    // A wait that came meanwhile was not waited on yet.
-                    let Some(&(at, len)) = spans.get(&p.key) else {
-                        waits.pending.push(p);
-                        continue;
-                    };
-                    let observed = &items[at..at + len];
-                    if !observed.iter().any(|o| o.observed & o.signals != 0) && now < p.deadline {
-                        waits.pending.push(p);
-                        continue;
-                    }
-                    for (mine, seen) in p.items.iter_mut().zip(observed) {
-                        mine.observed = seen.observed;
-                    }
-                    if p.items.iter().any(|i| i.observed & i.signals != 0) { b::OK } else { Error::TimedOut as u32 }
+            for mut w in waits.pending.take() {
+                // Its place in the snapshot, if it was in it.
+                let at = snapshot.iter().position(|s| s.id() == w.id());
+                let round = match at {
+                    None => Round::Missed,
+                    Some(i) => failed[i].map_or(Round::Waited, Round::Failed),
                 };
-                let satisfied = p.items.iter().filter(|i| i.observed & i.signals != 0).count() as u32;
-                let size = core::mem::size_of::<WaitItem>() as u64;
-                for (i, item) in p.items.iter().enumerate() {
-                    // Only the observed signals go back; the guest's
-                    // handle numbers stay as it wrote them.
-                    memory.write_obj(p.items_gpa + i as u64 * size + 8, &item.observed);
+                let observed = at.map_or(&[][..], |i| &items[spans[i].clone()]);
+                match w.outcome(round, observed, now) {
+                    None => waits.pending.restore(w),
+                    Some(done) => {
+                        if round == Round::Waited {
+                            for (i, item) in w.items.iter().enumerate() {
+                                // Only the observed signals go back; the
+                                // guest's handle numbers stay as it wrote
+                                // them.
+                                if let Some(at) = waits::observed_at(w.items_gpa, i) {
+                                    memory.write_obj(at, &item.observed);
+                                }
+                            }
+                        }
+                        waits.done.push_back(done);
+                    }
                 }
-                waits.done.push_back(b::Completion { key: p.key, status, satisfied });
             }
-            if self.post(&mut waits, memory)
+            if post(&mut waits, memory)
                 && let Some((_, vector)) = waits.ring
             {
                 let _ = notify.interrupt(vector);
             }
+            unposted = waits.ring.is_some() && !waits.done.is_empty();
         }
     }
+}
 
-    /// Moves finished waits into the ring as far as it has room; whether
-    /// any moved.
-    fn post(&self, waits: &mut Waits, memory: &GuestMemory) -> bool {
-        let Some((ring, _)) = waits.ring else { return false };
-        let mut moved = false;
-        while let Some(c) = waits.done.front().copied() {
-            let tail = memory.read_obj::<u32>(ring + b::ring::TAIL as u64).unwrap_or(0);
-            if waits.head.wrapping_sub(tail) >= b::ring::CAPACITY {
-                break;
-            }
-            let slot = (waits.head % b::ring::CAPACITY) as u64;
-            memory.write_obj(ring + b::ring::ENTRIES as u64 + slot * b::ring::ENTRY_SIZE as u64, &c);
-            waits.head = waits.head.wrapping_add(1);
-            memory.write_obj(ring + b::ring::HEAD as u64, &waits.head);
-            waits.done.pop_front();
-            moved = true;
-        }
-        moved
+/// Moves finished waits into the ring as far as it has room: the entries
+/// first, then the head that says they are there, released after them;
+/// whether any moved.
+fn post(waits: &mut Waits, memory: &GuestMemory) -> bool {
+    let Some((ring, _)) = waits.ring else { return false };
+    let Some(tail) = memory.load_acquire(ring + b::ring::TAIL as u64) else { return false };
+    let mut head = waits.head;
+    while head.wrapping_sub(tail) < b::ring::CAPACITY
+        && let Some(c) = waits.done.pop_front()
+    {
+        let slot = (head % b::ring::CAPACITY) as u64;
+        memory.write_obj(ring + b::ring::ENTRIES as u64 + slot * b::ring::ENTRY_SIZE as u64, &c);
+        head = head.wrapping_add(1);
     }
+    if head == waits.head {
+        return false;
+    }
+    waits.head = head;
+    memory.store_release(ring + b::ring::HEAD as u64, head)
 }
 
 /// Finishes a wait at once: what was observed goes back into the guest's
 /// items.
 fn finish(memory: &GuestMemory, r: &mut b::Wait, items: &[WaitItem], satisfied: u32, st: u32) -> Result<(), Error> {
-    let size = core::mem::size_of::<WaitItem>() as u64;
     for (i, item) in items.iter().enumerate() {
-        if !memory.write_obj(r.items + i as u64 * size + 8, &item.observed) {
+        let at = waits::observed_at(r.items, i).ok_or(Error::Fault)?;
+        if !memory.write_obj(at, &item.observed) {
             return Err(Error::Fault);
         }
     }

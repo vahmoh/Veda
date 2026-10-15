@@ -561,10 +561,7 @@ fn material(s: &Shape, k: usize, z: f32, top: f32) -> u8 {
         if z < s.a - pillar && z > s.c + pillar * 0.6 && (z - b).abs() > 0.05 {
             return part::GLASS;
         }
-        if z <= s.cowl && z >= s.deck && !(z < s.a && z > s.c) {
-            // The A and C pillars.
-            return part::TRIM;
-        }
+        // The pillars, and the trim before and behind the windows.
         return part::TRIM;
     }
     // The top: windscreen, roof, rear window.

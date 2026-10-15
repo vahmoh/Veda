@@ -11,7 +11,7 @@
 sound hda
 input usb
 net ethernet
-boot-cmdline "run=nettest"
+nettest local
 fail-on "PANIC"
 fail-on "nettest: FAIL"
 wait-serial "iommu: 1 VT-d unit(s): interrupts remapped" 30

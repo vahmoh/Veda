@@ -60,8 +60,10 @@ returns one line at most, and lines typed ahead stay for whoever reads
 next: the program, a program it started, or the shell once it has ended.
 A program can turn that off with `termios` and read keys one by one
 (`VMIN` and `VTIME` work as POSIX says). Ctrl+C ends it, with the programs
-it started; Ctrl+D ends its input. `>`, `>>` and `<` give it files, `|`
-connects it with other programs and built-in commands.
+it started; Ctrl+D ends its input. `<`, `>`, `>>`, `2>`, `2>>`, `&>` and
+`2>&1` give it files, `|` (and `|&`, which takes its errors too) connects
+it with other programs and built-in commands; a pipe holds at most 16 MiB
+of what one command passes the next.
 
 ## How it works
 
@@ -77,7 +79,10 @@ auxiliary vector (program headers, entry point, page size, 16 random bytes,
 the hardware capabilities). It also sends the startup message every Veda
 process gets, which for an ELF program carries the working directory and
 the handles: the registry, the terminal, and the files and streams that
-become its descriptors (role `FD + n`).
+become its descriptors (role `FD + n`); and, from a POSIX program that
+starts another, what the new one's POSIX layer inherits that is no handle
+(the signals it ignores, its signal mask, descriptors of directories:
+`implementation/libraries/posix/src/inherit.rs`).
 
 **The C library** is musl 1.2.6 (`implementation/ports/musl`). It is Linux's
 C library almost unchanged: where it would make a Linux system call, it
@@ -99,11 +104,12 @@ services:
 | `/dev/tty`, `/dev/stdin`, `/dev/fd/N` | the program's own descriptors |
 | pipes, the terminal | socket endpoints: kernel byte streams that several processes can share |
 | `isatty`, window size, `termios` | the terminal's shared state page (`vproto::tty`) |
-| `mmap`, `mprotect`, `munmap`, `madvise` | private anonymous memory is the kernel's private memory, whose pages are freed as soon as they are unmapped (parts of mappings too) or dropped with `MADV_DONTNEED`; files are mapped as private copies; any part of a mapping can be protected or unmapped |
-| threads (`pthread_create`) | kernel threads; the thread pointer in `FS`; `pthread_join` through the thread's exit futex |
+| `mmap`, `mprotect`, `munmap`, `madvise` | private anonymous memory is the kernel's private memory, whose pages are freed as soon as they are unmapped (parts of mappings too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared (through a handle that cannot write, so `mprotect` cannot make them writable: changes would never reach the file); any part of a mapping can be protected or unmapped |
+| `fsync`, `fdatasync`, `sync`, `syncfs`, `O_SYNC`, `RWF_SYNC` | the VFS saves what changed to the home disk at once (it otherwise does so a few seconds after the last change) |
+| threads (`pthread_create`) | kernel threads; the thread pointer in `FS`; thread ids of the process's own, the main thread's its process id; `pthread_join` through the thread's exit futex; a detached thread frees its own stack as it ends |
 | futexes | kernel futexes |
-| `posix_spawn`, `waitpid` | processes started from the program image, with the descriptors the file actions leave |
-| signals | `raise`, `abort`, `SIGPIPE` and handlers, per-thread masks |
+| `posix_spawn`, `waitpid` | processes started from the program image, with the descriptors the file actions leave, the signals ignored and the signal mask (as the attributes set them); a process id is its kernel object id cut to 30 bits, and a child never gets the id of another child not yet waited for (`EAGAIN` in the rare case none can be had) |
+| signals | `raise`, `abort`, `SIGPIPE`, `pthread_kill` and handlers, per-thread masks |
 | clocks, sleeping | the kernel's clocks |
 | `stat` | the VFS's metadata: inode numbers, times, and "executable" for programs |
 
@@ -114,7 +120,10 @@ its own heap (`vrt`'s), not from `malloc`, which calls into it.
 
 **Veda's own interfaces** are there too, for C programs that are Veda
 services or talk to them directly (`<veda/ipc.h>`): handles, channels and
-the service registry (`veda_service_register`, `_accept`, `_connect`),
+the service registry (`veda_service_register`, `_accept`, `_connect`;
+a program registers only names of its own, its name or names under it,
+`NAME/...`, where its name is that of the program that speaks for it: the
+Terminal's, `terminal`, for a program the Terminal runs),
 waiting on several objects at once (`veda_wait`), memory objects
 (`veda_vmo_create`, `_map`) and events, and the handles a program was
 started with for a role of its own (`veda_startup_handle`: `mediadec`
@@ -145,15 +154,32 @@ and wakes a waiter on, once the thread has left its stack).
 * **No `fork` or `exec`.** Processes are started with `posix_spawn`.
   Software that forks needs porting to it; most build tools and browsers
   already use `posix_spawn` or `vfork`+`exec`, which ports to it directly.
-  A started program inherits at most 62 descriptors (more fail with
-  `EMFILE`): open files that children need not have with `O_CLOEXEC`.
+  A started program inherits at most 62 descriptors that are kernel
+  objects (files, pipes, the terminal), and none numbered 256 or more
+  (either fails with `EMFILE`): open files that children need not have
+  with `O_CLOEXEC`. It inherits what `exec` keeps of the signals (those
+  ignored, and the mask), as `POSIX_SPAWN_SETSIGDEF` and
+  `POSIX_SPAWN_SETSIGMASK` change them; the other attributes (process
+  groups, sessions, ids, scheduling) change nothing.
 * **No `/bin/sh` yet.** The Terminal's shell is part of the Terminal, so
   `system` and `popen`, which run their command with `/bin/sh -c`, fail
   with `ENOENT`.
 * **Signals are synchronous.** A program gets the signals it raises
-  itself (`raise`, `abort`, `SIGPIPE`). Other processes end a program
-  instead of signalling it (`kill` does that to children); `alarm` and
-  interval timers are not available.
+  itself (`raise`, `abort`, `SIGPIPE`) and those its threads send each
+  other (`pthread_kill`, `tgkill`, and the C library's for
+  `pthread_cancel`, `setrlimit` and the `set*id` calls), which a thread
+  takes as its next system call returns. They end its wait if it waits for
+  signals (`sigsuspend`, `sigwait`, `pause`, a `poll` of nothing) or on a
+  lock, a condition or a thread (`EINTR`, after the handler); other
+  blocking calls, such as a read from a pipe, carry on, and the signal
+  waits for them. Other processes end a program instead of signalling it:
+  `kill` ends a child with a signal that ends a process by default and
+  leaves it alone with another. `alarm` and interval timers are not
+  available.
+* **No file locks between processes.** `fcntl`'s `F_SETLK` and `F_SETLKW`
+  and `flock` fail with `ENOLCK` (unlocking succeeds), rather than let two
+  programs both believe they hold a lock; software that relies on them
+  (SQLite's default locking) needs porting until the VFS arbitrates locks.
 * **No links.** Veda's file system has neither hard nor symbolic links;
   `link` and `symlink` fail, `readlink` finds none.
 * **No permissions.** Files have no owners or permission bits: a program
@@ -269,7 +295,9 @@ upstream archive each `port.toml` names plus the patch beside it.
   compiles it with GCC inside Veda and runs it.
 * `implementation/libraries/elf` (the ELF loader's checks and the stack
   layout) and `implementation/libraries/posix` (paths, structures, flag
-  conversions) are unit-tested on the host.
+  conversions, file reads and writes against the VFS's replies, locks,
+  thread ids and signal state, what spawned programs inherit) are
+  unit-tested on the host.
 
 `cargo orchestration test --ui` runs them; the scripts that need the
 toolchain are skipped when it has not been built.

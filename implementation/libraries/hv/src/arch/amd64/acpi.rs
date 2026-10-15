@@ -55,7 +55,7 @@ mod tests {
     use vacpi::resource::Resource;
 
     use super::*;
-    use crate::acpi::{Machine, tables};
+    use crate::acpi::{Machine, describe};
 
     #[test]
     fn a_pcs_keyboard_controller() {
@@ -70,7 +70,7 @@ mod tests {
             pci_high: 0..1,
             firmware_tables: &[],
         };
-        let t = tables(&m);
+        let t = describe(&m).tables;
         assert!(t.len() <= super::super::memory::ACPI_ROOM);
         // The FADT's boot architecture flags.
         assert_eq!(&t[96..100], b"FACP");

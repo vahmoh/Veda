@@ -14,6 +14,10 @@
 //! bytes show. The `vte` crate (Alacritty's parser of the DEC/ECMA-48
 //! state machine) reads the sequences. [`Screen::write_styled`] writes
 //! plain text in a given style.
+//!
+//! What is kept is bounded whatever programs write: at most [`MAX_LINES`]
+//! lines and [`MAX_CELLS`] cells (the oldest go first), a line breaking
+//! after [`MAX_LINE_CELLS`].
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -24,11 +28,18 @@ use vte::{Params, Parser, Perform};
 /// Maximum number of lines kept in the scrollback.
 pub const MAX_LINES: usize = 10_000;
 
+/// The longest line kept: a program writing on without a line break has
+/// its line broken there, so that one line cannot grow without bound.
+pub const MAX_LINE_CELLS: usize = 8192;
+
+/// The most cells the scrollback keeps in all (about 12 MiB): with long
+/// lines, fewer than [`MAX_LINES`] lines are kept.
+pub const MAX_CELLS: usize = 1 << 20;
+
 /// Tab stops are every `TAB_WIDTH` columns.
 const TAB_WIDTH: usize = 8;
 
 /// Indices into the 16-colour palette (the classic ANSI order).
-#[allow(dead_code)]
 pub mod color {
     pub const BLACK: u8 = 0;
     pub const RED: u8 = 1;
@@ -104,6 +115,8 @@ pub struct Screen {
     lines: VecDeque<Vec<Cell>>,
     /// Absolute number of `lines[0]` (grows as old lines are dropped).
     base: u64,
+    /// The cells of `lines`, in all.
+    cells: usize,
     /// The line currently being written (not yet terminated).
     partial: Vec<Cell>,
     /// Where the next character goes in `partial`.
@@ -127,6 +140,7 @@ impl Screen {
         Screen {
             lines: VecDeque::new(),
             base: 0,
+            cells: 0,
             partial: Vec::new(),
             col: 0,
             style: Style::PLAIN,
@@ -156,6 +170,7 @@ impl Screen {
     pub fn clear(&mut self) {
         self.base += self.lines.len() as u64;
         self.lines.clear();
+        self.cells = 0;
         self.partial.clear();
         self.col = 0;
         self.style = Style::PLAIN;
@@ -164,9 +179,12 @@ impl Screen {
     }
 
     fn push_line(&mut self, line: Vec<Cell>) {
+        self.cells += line.len();
         self.lines.push_back(line);
-        while self.lines.len() > MAX_LINES {
-            self.lines.pop_front();
+        while self.lines.len() > MAX_LINES || (self.cells > MAX_CELLS && self.lines.len() > 1) {
+            if let Some(old) = self.lines.pop_front() {
+                self.cells -= old.len();
+            }
             self.base += 1;
         }
     }
@@ -200,8 +218,12 @@ impl Screen {
         &self.partial
     }
 
-    /// Writes `c` at the cursor, over what is there.
+    /// Writes `c` at the cursor, over what is there; past
+    /// [`MAX_LINE_CELLS`], on a new line.
     fn place(&mut self, c: Cell) {
+        if self.col >= MAX_LINE_CELLS {
+            self.newline();
+        }
         if self.col < self.partial.len() {
             self.partial[self.col] = c;
         } else {

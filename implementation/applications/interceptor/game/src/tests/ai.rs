@@ -7,8 +7,7 @@
 use crate::carmodel::Kind;
 use crate::driver::{Police, Role, Suspect};
 use crate::env::{Environment, TimeOfDay, Weather};
-use crate::game::{Car, Event, Game, STEP};
-use crate::vehicle::Spec;
+use crate::game::{Car, CarId, Event, Game, STEP};
 use crate::world::World;
 
 fn game() -> Game {
@@ -65,19 +64,20 @@ fn traffic_flows() {
     }
 }
 
-/// Puts a suspect `ahead` metres in front of the player, at `speed`.
-fn suspect(g: &mut Game, ahead: f32, speed: f32) -> usize {
+/// Puts a suspect `ahead` metres in front of the player, at `speed`: its
+/// number, and where it is in the game's cars (none are taken off here).
+fn suspect(g: &mut Game, ahead: f32, speed: f32) -> (CarId, usize) {
     let s = g.cars[g.player].place(&g.world).0 + ahead;
-    let mut car = Car::on_road(&g.world, Kind::Coupe, Spec::sports(), s, 2.1, false, speed);
-    car.role = Role::Suspect(Suspect::new(2.1, 0.95, 0.5, g.player, 7));
-    g.cars.push(car);
-    g.cars.len() - 1
+    let mut car = Car::on_road(&g.world, Kind::Coupe, s, 2.1, false, speed);
+    car.role = Role::Suspect(Suspect::new(2.1, 0.95, 0.5, g.player().id, 7));
+    let id = g.add_car(car);
+    (id, g.cars.len() - 1)
 }
 
 #[test]
 fn a_suspect_runs_fast_and_free() {
     let mut g = game();
-    let i = suspect(&mut g, 40.0, 25.0);
+    let (id, i) = suspect(&mut g, 40.0, 25.0);
     let start = g.cars[i].place(&g.world).0;
     let mut walls = 0;
     let mut last = start;
@@ -85,7 +85,7 @@ fn a_suspect_runs_fast_and_free() {
     run(&mut g, 120.0, |g| {
         for e in &g.events {
             let Event::Crash { a, b, impact } = e;
-            if *a == i && b.is_none() && impact.speed > 4.0 {
+            if *a == id && b.is_none() && impact.speed > 4.0 {
                 walls += 1;
             }
         }
@@ -106,11 +106,11 @@ fn a_suspect_runs_fast_and_free() {
 fn the_police_catch_up() {
     let mut g = game();
     // As a pursuit starts: the suspect a little ahead, both at speed.
-    let i = suspect(&mut g, 50.0, 25.0);
+    let (id, i) = suspect(&mut g, 50.0, 25.0);
     g.cars[g.player].vehicle.set_speed(25.0);
     // The player's car, driven by the computer as police.
-    let p = g.player;
-    g.cars[p].role = Role::Police(Police::new(2.1, i, 1.1));
+    let (p, me) = (g.player, g.player().id);
+    g.cars[p].role = Role::Police(Police::new(2.1, id, 1.1));
     g.cars[p].siren = true;
     let mut closest = f32::MAX;
     let mut touched = false;
@@ -119,7 +119,7 @@ fn the_police_catch_up() {
         closest = closest.min(d);
         touched |= g.events.iter().any(|e| {
             let Event::Crash { a, b, .. } = e;
-            (*a == p && *b == Some(i)) || (*a == i && *b == Some(p))
+            (*a == me && *b == Some(id)) || (*a == id && *b == Some(me))
         });
     });
     let end = g.world.road.delta(g.cars[p].place(&g.world).0, g.cars[i].place(&g.world).0);
@@ -139,15 +139,15 @@ fn a_chase_through_traffic_has_few_bad_crashes() {
     // either of them, which wreck cars, stay rare.
     let mut g = game();
     g.start_traffic();
-    let i = suspect(&mut g, 60.0, 22.0);
+    let (id, i) = suspect(&mut g, 60.0, 22.0);
     g.cars[g.player].vehicle.set_speed(22.0);
-    g.set_autopilot(true, Some(i));
-    let p = g.player;
+    g.set_autopilot(true, Some(id));
+    let (p, me) = (g.player, g.player().id);
     let mut hard = 0;
     run(&mut g, 120.0, |g| {
         for e in &g.events {
             let Event::Crash { a, b, impact } = e;
-            let involved = [*a, b.unwrap_or(usize::MAX)].iter().any(|&c| c == p || c == i);
+            let involved = [Some(*a), *b].into_iter().flatten().any(|c| c == me || c == id);
             if involved && impact.speed > 15.0 {
                 hard += 1;
             }

@@ -26,17 +26,24 @@
 //!
 //! The tables go where the guest's memory map has room for them
 //! ([`Machine::at`]); the boot parameters say where the RSDP is.
+//!
+//! What the PC's firmware describes comes from devmgr, as text: what of it
+//! the tables cannot hold (a name that is not an ACPI name, an id with a
+//! NUL in it, more GPIO pins than a descriptor takes) is left out of them,
+//! and said ([`describe`]).
 
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use alloc::string::String;
 use vacpi::asm::{
-    cat, device, dsm, dword_memory, eisa, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, name, package,
-    qword_memory, resource_template, scope, spi_descriptor_of, string, word_bus_number,
+    DEVICE_PROPERTIES, OEM_ID, cat, checksum, device, dsm, dword_memory, eisa, i2c_descriptor, int, interrupt_of, name,
+    package, qword_memory, resource_template, scope, spi_descriptor_of, string, table, try_device,
+    try_gpio_descriptor_of, try_name, try_string, word_bus_number,
 };
 use vacpi::resource::Spi;
+use vacpi::tables::HEADER_LEN as HEADER;
 
 /// A GPIO connection, as [`Resource::Gpio`] holds it.
 pub use vacpi::resource::Gpio;
@@ -114,11 +121,8 @@ pub struct GpioInterrupt {
     pub active_low: bool,
 }
 
-/// Device properties' UUID (`_DSD`).
-const DEVICE_PROPERTIES: &str = "daffd814-6eba-4d8c-8a91-bc9bbf4aa301";
-
 /// HID over I2C's `_DSM` (function 1: the HID descriptor's address).
-pub const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
+pub use vacpi::asm::HID_OVER_I2C;
 
 /// The bytes `ToUUID` makes of a UUID's text.
 pub use vacpi::asm::uuid;
@@ -149,24 +153,33 @@ pub struct Machine<'a> {
     pub firmware_tables: &'a [Vec<u8>],
 }
 
-const OEM_ID: &[u8; 6] = b"VEDA  ";
 const OEM_TABLE_ID: &[u8; 8] = b"DRIVERVM";
-const HEADER: usize = 36;
 /// The FADT of ACPI 6.5, whole.
 const FADT_LENGTH: usize = 276;
 
 /// FADT flags: hardware-reduced ACPI.
 const HW_REDUCED_ACPI: u32 = 1 << 20;
 
+/// The tables, and what they leave out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Description {
+    /// The tables, to be written at [`Machine::at`].
+    pub tables: Vec<u8>,
+    /// What of the machine they leave out, as it cannot be described: for
+    /// the monitor to say.
+    pub left_out: Vec<String>,
+}
+
 /// The tables, to be written at [`Machine::at`]: the RSDP, the XSDT, the
 /// FADT, the DSDT and the firmware's, one after the other, each at a
-/// multiple of 16.
-pub fn tables(m: &Machine) -> Vec<u8> {
+/// multiple of 16; and what of the machine they leave out.
+pub fn describe(m: &Machine) -> Description {
+    let mut left_out = Vec::new();
     let xsdt_at = m.at + 48;
     let xsdt_length = HEADER + 8 * (1 + m.firmware_tables.len());
     let fadt_at = (xsdt_at + xsdt_length as u64).next_multiple_of(16);
     let dsdt_at = (fadt_at + FADT_LENGTH as u64).next_multiple_of(16);
-    let dsdt = table(b"DSDT", 2, &dsdt(m));
+    let dsdt = table(b"DSDT", 2, OEM_TABLE_ID, &dsdt(m, &mut left_out));
     let mut end = dsdt_at + dsdt.len() as u64;
     let firmware_at: Vec<u64> = m
         .firmware_tables
@@ -182,16 +195,16 @@ pub fn tables(m: &Machine) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&rsdp(xsdt_at));
     out.resize((xsdt_at - m.at) as usize, 0);
-    out.extend_from_slice(&table(b"XSDT", 1, &listed));
+    out.extend_from_slice(&table(b"XSDT", 1, OEM_TABLE_ID, &listed));
     out.resize((fadt_at - m.at) as usize, 0);
-    out.extend_from_slice(&table(b"FACP", 6, &fadt(m, dsdt_at)));
+    out.extend_from_slice(&table(b"FACP", 6, OEM_TABLE_ID, &fadt(m, dsdt_at)));
     out.resize((dsdt_at - m.at) as usize, 0);
     out.extend_from_slice(&dsdt);
     for (t, at) in m.firmware_tables.iter().zip(firmware_at) {
         out.resize((at - m.at) as usize, 0);
         out.extend_from_slice(t);
     }
-    out
+    Description { tables: out, left_out }
 }
 
 /// Whether `bytes` are a whole table, as one of the firmware's must be to
@@ -200,28 +213,6 @@ pub fn is_table(bytes: &[u8]) -> bool {
     bytes.len() >= HEADER
         && u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize == bytes.len()
         && checksum(bytes) == 0
-}
-
-/// A table: its header (with the checksum), then `body`.
-fn table(signature: &[u8; 4], revision: u8, body: &[u8]) -> Vec<u8> {
-    let mut t = Vec::with_capacity(HEADER + body.len());
-    t.extend_from_slice(signature);
-    t.extend_from_slice(&((HEADER + body.len()) as u32).to_le_bytes());
-    t.push(revision);
-    t.push(0);
-    t.extend_from_slice(OEM_ID);
-    t.extend_from_slice(OEM_TABLE_ID);
-    t.extend_from_slice(&1u32.to_le_bytes());
-    t.extend_from_slice(b"VEDA");
-    t.extend_from_slice(&1u32.to_le_bytes());
-    t.extend_from_slice(body);
-    t[9] = checksum(&t);
-    t
-}
-
-/// What makes `bytes` sum to zero.
-fn checksum(bytes: &[u8]) -> u8 {
-    0u8.wrapping_sub(bytes.iter().fold(0u8, |a, &b| a.wrapping_add(b)))
 }
 
 /// The RSDP of ACPI 2.0 and later, which points to the XSDT.
@@ -253,19 +244,28 @@ fn fadt(m: &Machine, dsdt_at: u64) -> Vec<u8> {
     f[HEADER..].to_vec()
 }
 
-/// The DSDT's definitions.
-fn dsdt(m: &Machine) -> Vec<u8> {
-    let mut sb = pci_root(m);
+/// The DSDT's definitions; what cannot be described goes to `left_out`.
+fn dsdt(m: &Machine, left_out: &mut Vec<String>) -> Vec<u8> {
+    let mut sb = pci_root(m, left_out);
     for c in m.gpio {
-        sb.extend_from_slice(&gpio_controller(c));
+        match gpio_controller(c) {
+            Some(d) => sb.extend_from_slice(&d),
+            None => left_out.push(format!("the GPIO controller {:?}: its name is no ACPI name", c.name)),
+        }
     }
     sb.extend_from_slice(&m.platform.devices);
     scope("\\_SB", &sb)
 }
 
+/// Whether `text` is a name a device or an object of one can have: one
+/// segment.
+fn is_name(text: &str) -> bool {
+    vacpi::name::seg(text).is_some()
+}
+
 /// The PCI root: bus 0, the windows the BARs are in, the functions and
 /// where their INTx go.
-fn pci_root(m: &Machine) -> Vec<u8> {
+fn pci_root(m: &Machine, left_out: &mut Vec<String>) -> Vec<u8> {
     let crs = cat(&[
         &word_bus_number(0, 0),
         &dword_memory(m.pci_low.start as u32, (m.pci_low.end - 1) as u32),
@@ -283,6 +283,11 @@ fn pci_root(m: &Machine) -> Vec<u8> {
         .iter()
         .filter_map(|f| {
             let (pin, gsi) = f.intx?;
+            if !(1..=4).contains(&pin) {
+                let (slot, function) = (f.devfn >> 3, f.devfn & 7);
+                left_out.push(format!("00:{slot:02x}.{function}'s INTx: pin {pin} is none of INTA# to INTD#"));
+                return None;
+            }
             let all_functions = (f.devfn as u64 >> 3) << 16 | 0xFFFF;
             Some(package(&[int(all_functions), int(pin as u64 - 1), int(0), int(gsi as u64)]))
         })
@@ -294,19 +299,35 @@ fn pci_root(m: &Machine) -> Vec<u8> {
         let path = format!("\\_SB.PCI0.{}", function_name(f.devfn));
         let address = (f.devfn as u64 >> 3) << 16 | (f.devfn as u64 & 7);
         let mut fd = name("_ADR", &int(address));
-        for (n, value) in &f.data {
-            fd.extend_from_slice(&name(n, value));
-        }
+        data(&mut fd, &f.data, &path, left_out);
         for c in &f.children {
-            fd.extend_from_slice(&child(c, &path));
+            match child(c, &path, left_out) {
+                Some(d) => fd.extend_from_slice(&d),
+                None => left_out.push(format!("a device below {path}: {:?} is no ACPI name", c.name)),
+            }
         }
         body.extend_from_slice(&device(&function_name(f.devfn), &fd));
     }
     device("PCI0", &body)
 }
 
-/// A GPIO controller of the platform's.
-fn gpio_controller(c: &GpioController) -> Vec<u8> {
+/// Constant objects (`name`, AML term) of the device at `path`, added to
+/// `body` as names of its, but those whose name is no ACPI name.
+fn data(body: &mut Vec<u8>, data: &[(String, Vec<u8>)], path: &str, left_out: &mut Vec<String>) {
+    for (n, value) in data {
+        match try_name(n, value).filter(|_| is_name(n)) {
+            Some(d) => body.extend_from_slice(&d),
+            None => left_out.push(format!("{path}'s data {n:?}: no ACPI name")),
+        }
+    }
+}
+
+/// A GPIO controller of the platform's: `None` if its name is no ACPI
+/// name.
+fn gpio_controller(c: &GpioController) -> Option<Vec<u8>> {
+    if !is_name(&c.name) {
+        return None;
+    }
     let lines: Vec<u8> =
         c.interrupts.iter().flat_map(|i| interrupt_of(i.gsi, i.edge, i.active_low, false, false)).collect();
     let numbers = |pins: &mut dyn Iterator<Item = u16>| package(&pins.map(|p| int(p as u64)).collect::<Vec<_>>());
@@ -315,7 +336,7 @@ fn gpio_controller(c: &GpioController) -> Vec<u8> {
         package(&[string("veda,interrupt-pins"), numbers(&mut c.interrupts.iter().map(|i| i.pin))]),
     ]);
     let dsd = package(&[vacpi::asm::buffer(&uuid(DEVICE_PROPERTIES).unwrap_or_default()), properties]);
-    device(
+    try_device(
         &c.name,
         &cat(&[
             &name("_HID", &string(GPIO_CONTROLLER)),
@@ -331,64 +352,80 @@ fn function_name(devfn: u8) -> String {
     format!("S{:02X}", devfn)
 }
 
-/// An id: compressed when it is an EISA one (`PNP0C50`), else a string.
-fn id(text: &str) -> Vec<u8> {
+/// An id: compressed when it is an EISA one (`PNP0C50`), else a string;
+/// `None` if it has a NUL, which no AML string can hold.
+fn id(text: &str) -> Option<Vec<u8>> {
     let b = text.as_bytes();
     let eisa_form =
         b.len() == 7 && b[..3].iter().all(u8::is_ascii_uppercase) && b[3..].iter().all(u8::is_ascii_hexdigit);
-    if eisa_form { eisa(text) } else { string(text) }
+    if eisa_form { Some(eisa(text)) } else { try_string(text) }
 }
 
-/// A described device below the function at `parent`.
-fn child(c: &Child, parent: &str) -> Vec<u8> {
+/// A described device below the function at `parent`: `None` if its name
+/// is no ACPI name. What of it cannot be described goes to `left_out`.
+fn child(c: &Child, parent: &str, left_out: &mut Vec<String>) -> Option<Vec<u8>> {
+    if !is_name(&c.name) {
+        return None;
+    }
+    let path = format!("{parent}.{}", c.name);
+    let mut say = |what: &str| left_out.push(format!("{path}: {what} cannot be described"));
     let mut body = Vec::new();
     if let Some(hid) = &c.hid {
-        body.extend_from_slice(&name("_HID", &id(hid)));
+        match id(hid) {
+            Some(v) => body.extend_from_slice(&name("_HID", &v)),
+            None => say(&format!("its _HID {hid:?}")),
+        }
     }
-    match c.cids.as_slice() {
+    let mut cids = Vec::new();
+    for cid in &c.cids {
+        match id(cid) {
+            Some(v) => cids.push(v),
+            None => say(&format!("its _CID {cid:?}")),
+        }
+    }
+    match cids.as_slice() {
         [] => {}
-        [one] => body.extend_from_slice(&name("_CID", &id(one))),
-        many => body.extend_from_slice(&name("_CID", &package(&many.iter().map(|c| id(c)).collect::<Vec<_>>()))),
+        [one] => body.extend_from_slice(&name("_CID", one)),
+        many => body.extend_from_slice(&name("_CID", &package(many))),
     }
     if let Some(uid) = &c.uid {
-        let value = uid.parse::<u64>().map(int).unwrap_or_else(|_| string(uid));
-        body.extend_from_slice(&name("_UID", &value));
+        match uid.parse::<u64>().map(int).ok().or_else(|| try_string(uid)) {
+            Some(v) => body.extend_from_slice(&name("_UID", &v)),
+            None => say(&format!("its _UID {uid:?}")),
+        }
     }
     if let Some(sub) = &c.sub {
-        body.extend_from_slice(&name("_SUB", &string(sub)));
+        match try_string(sub) {
+            Some(v) => body.extend_from_slice(&name("_SUB", &v)),
+            None => say(&format!("its _SUB {sub:?}")),
+        }
     }
-    let descriptors: Vec<u8> = c
-        .resources
-        .iter()
-        .flat_map(|r| match r {
-            &Resource::I2c { address, speed_hz, ten_bit } => i2c_descriptor(address, speed_hz, ten_bit, parent),
+    let mut descriptors = Vec::new();
+    for r in &c.resources {
+        match r {
+            &Resource::I2c { address, speed_hz, ten_bit } => {
+                descriptors.extend(i2c_descriptor(address, speed_hz, ten_bit, parent));
+            }
             &Resource::Spi { chip_select, speed_hz, bits, cpol, cpha, cs_active_high, three_wire } => {
                 let controller = parent.into();
-                spi_descriptor_of(&Spi {
-                    controller,
-                    chip_select,
-                    speed_hz,
-                    bits,
-                    cpol,
-                    cpha,
-                    cs_active_high,
-                    three_wire,
-                })
+                let spi = Spi { controller, chip_select, speed_hz, bits, cpol, cpha, cs_active_high, three_wire };
+                descriptors.extend(spi_descriptor_of(&spi));
             }
             &Resource::Interrupt { gsi, edge, active_low, shared, wake } => {
-                interrupt_of(gsi, edge, active_low, shared, wake)
+                descriptors.extend(interrupt_of(gsi, edge, active_low, shared, wake));
             }
-            Resource::Gpio(g) => gpio_descriptor_of(g),
-        })
-        .collect();
+            Resource::Gpio(g) => match try_gpio_descriptor_of(g) {
+                Some(d) => descriptors.extend(d),
+                None => say(&format!("its GPIO connection to {:?}", g.controller)),
+            },
+        }
+    }
     body.extend_from_slice(&name("_CRS", &resource_template(&descriptors)));
     if let (Some(address), Some(hid)) = (c.hid_descriptor, uuid(HID_OVER_I2C)) {
         body.extend_from_slice(&dsm(&hid, 1, &int(address as u64)));
     }
-    for (n, value) in &c.data {
-        body.extend_from_slice(&name(n, value));
-    }
-    device(&c.name, &body)
+    data(&mut body, &c.data, &path, left_out);
+    try_device(&c.name, &body)
 }
 
 #[cfg(test)]
@@ -420,7 +457,7 @@ mod tests {
             pci_high: 0..1,
             firmware_tables: &[],
         };
-        let t = tables(&m);
+        let t = describe(&m).tables;
         assert!(t.len() <= ROOM);
         let sum = |b: &[u8]| b.iter().fold(0u8, |a, &x| a.wrapping_add(x));
         assert_eq!((&t[..8], sum(&t[..20]), sum(&t[..36])), (&b"RSD PTR "[..], 0, 0));
@@ -480,7 +517,7 @@ mod tests {
             pci_high: 0..1,
             firmware_tables: &[],
         };
-        let t = tables(&m);
+        let t = describe(&m).tables;
         let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
         let len = u32::from_le_bytes(t[dsdt + 4..dsdt + 8].try_into().unwrap()) as usize;
         let mut ns = Namespace::new();
@@ -569,7 +606,7 @@ mod tests {
             pci_high: 0..1,
             firmware_tables: &[],
         };
-        let t = tables(&m);
+        let t = describe(&m).tables;
         let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
         let len = u32::from_le_bytes(t[dsdt + 4..dsdt + 8].try_into().unwrap()) as usize;
         let mut ns = Namespace::new();
@@ -601,8 +638,95 @@ mod tests {
     }
 
     #[test]
+    fn what_cannot_be_described_is_left_out_and_said() {
+        // What devmgr says of the PC, as text: names that are no ACPI
+        // names, ids with NULs, a connection of more pins than a descriptor
+        // holds, a pin that is no INTx's; and a controller of 300 pins.
+        let many_pins = Gpio {
+            interrupt: false,
+            pins: alloc::vec![1; 40_000],
+            controller: String::from("\\_SB.GPI0"),
+            pull: 0,
+            restriction: 0,
+            edge: false,
+            polarity: 0,
+            shared: false,
+            wake: false,
+            debounce: 0,
+        };
+        let touchpad = Child {
+            name: String::from("TPD0"),
+            hid: Some(String::from("ELAN\0")),
+            cids: alloc::vec![String::from("PNP0C50"), String::from("A\0B")],
+            uid: Some(String::from("x\0")),
+            sub: None,
+            resources: alloc::vec![
+                Resource::Gpio(many_pins),
+                Resource::I2c { address: 0x15, speed_hz: 400_000, ten_bit: false }
+            ],
+            hid_descriptor: None,
+            data: alloc::vec![(String::from("BAD-"), int(1)), (String::from("_DSD"), int(2))],
+        };
+        let unnamed = Child { name: String::from("toolong"), ..touchpad.clone() };
+        let functions = [Function {
+            devfn: 0x18,
+            intx: Some((0, 22)),
+            data: alloc::vec![(String::from("\\XYZ"), int(3))],
+            children: alloc::vec![touchpad, unnamed],
+        }];
+        let gpio = [
+            GpioController { name: String::from("GP100"), uid: 256, pins: alloc::vec![1], interrupts: Vec::new() },
+            GpioController { name: String::from("GPI0"), uid: 0, pins: (0..300).collect(), interrupts: Vec::new() },
+        ];
+        let m = Machine {
+            functions: &functions,
+            gpio: &gpio,
+            platform: &Platform::default(),
+            at: AT,
+            pci_low: 0xC000_0000..0xFEC0_0000,
+            pci_high: 0..1,
+            firmware_tables: &[],
+        };
+        let d = describe(&m);
+        assert_eq!(
+            d.left_out,
+            [
+                "00:03.0's INTx: pin 0 is none of INTA# to INTD#",
+                "\\_SB.PCI0.S18's data \"\\\\XYZ\": no ACPI name",
+                "\\_SB.PCI0.S18.TPD0: its _HID \"ELAN\\0\" cannot be described",
+                "\\_SB.PCI0.S18.TPD0: its _CID \"A\\0B\" cannot be described",
+                "\\_SB.PCI0.S18.TPD0: its _UID \"x\\0\" cannot be described",
+                "\\_SB.PCI0.S18.TPD0: its GPIO connection to \"\\\\_SB.GPI0\" cannot be described",
+                "\\_SB.PCI0.S18.TPD0's data \"BAD-\": no ACPI name",
+                "a device below \\_SB.PCI0.S18: \"toolong\" is no ACPI name",
+                "the GPIO controller \"GP100\": its name is no ACPI name",
+            ]
+        );
+        // The rest is there, as an OS reads it.
+        let t = &d.tables;
+        let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
+        let len = u32::from_le_bytes(t[dsdt + 4..dsdt + 8].try_into().unwrap()) as usize;
+        let mut ns = Namespace::new();
+        ns.load(&t[dsdt + HEADER..dsdt + len], &NoMemory).unwrap();
+        let at = |p| Path::parse(p).unwrap();
+        let tp = at("\\_SB.PCI0.S18.TPD0");
+        let id = device::identify(&ns, &tp, &NoMemory);
+        assert_eq!((id.hid, id.cids, id.uid), (None, alloc::vec![String::from("PNP0C50")], None));
+        let r = device::resources(&ns, &tp, &NoMemory).unwrap();
+        assert!(matches!(&r[..], [Resource2::I2c(i)] if i.address == 0x15));
+        assert_eq!(ns.evaluate(&at("\\_SB.PCI0.S18.TPD0._DSD"), &[], &NoMemory), Ok(vacpi::value::Value::Integer(2)));
+        assert!(ns.get(&at("\\_SB.PCI0._PRT")).is_none());
+        let Ok(vacpi::value::Value::Package(dsd)) = ns.evaluate(&at("\\_SB.GPI0._DSD"), &[], &NoMemory) else {
+            panic!()
+        };
+        let vacpi::value::Value::Package(properties) = &dsd[1] else { panic!() };
+        let vacpi::value::Value::Package(pins) = &properties[0] else { panic!() };
+        assert!(matches!(&pins[1], vacpi::value::Value::Package(p) if p.len() == 300));
+    }
+
+    #[test]
     fn the_firmwares_tables_come_whole() {
-        let nhlt = table(b"NHLT", 0, &[1, 2, 3, 4, 5]);
+        let nhlt = table(b"NHLT", 0, b"TESTNHLT", &[1, 2, 3, 4, 5]);
         assert!(is_table(&nhlt));
         let (mut cut, mut wrong) = (nhlt.clone(), nhlt.clone());
         cut.pop();
@@ -620,7 +744,7 @@ mod tests {
             pci_high: 0..1,
             firmware_tables: &firmware_tables,
         };
-        let t = tables(&m);
+        let t = describe(&m).tables;
         let u64_at = |at: usize| u64::from_le_bytes(t[at..at + 8].try_into().unwrap());
         // The XSDT lists the FADT, then the firmware's table, which is as
         // it was; every table adds up.

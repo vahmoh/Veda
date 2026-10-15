@@ -7,9 +7,11 @@
 //!   insertion, deletion, word boundaries and search.
 //! * [`Document`]: a buffer with a [`Selection`], editing commands
 //!   (typing, deletion, indentation, comments, line moves, replace) and
-//!   grouped undo/redo, plus modification tracking.
+//!   grouped undo/redo, plus modification tracking and a record of the
+//!   lines edits changed ([`LineChange`]).
 //! * [`Layout`]: soft-wrap layout of a buffer into visual rows on a
-//!   monospace grid, with hit testing and vertical cursor movement.
+//!   monospace grid, with hit testing and vertical cursor movement; a
+//!   document's is kept up to date line by line.
 //! * [`highlight`]: incremental syntax highlighting for a few languages.
 //!
 //! The crate is pure logic without I/O, so all of it is unit-tested on the
@@ -28,5 +30,5 @@ pub mod highlight;
 mod layout;
 
 pub use buffer::{Buffer, LineEnding, Pos};
-pub use document::{Document, Motion, Selection};
+pub use document::{Document, LineChange, Motion, Selection};
 pub use layout::{Layout, Row, char_width, display_col};

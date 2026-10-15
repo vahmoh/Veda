@@ -15,13 +15,13 @@ bench = false
 
 [dependencies]
 vrt = { workspace = true }
-vabi = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
 num-traits = { workspace = true }
 vtext = { workspace = true }
 vfiles = { workspace = true }
 vui = { workspace = true }
+apps-common = { path = "../common" }
 
 [build-dependencies]
 vbuild = { workspace = true }

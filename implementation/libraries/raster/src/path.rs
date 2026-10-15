@@ -440,6 +440,24 @@ impl Path {
         }
         let sign = if area > 0.0 { 1.0 } else { -1.0 };
         let (hx, hy) = (strength_x * 0.5, strength_y * 0.5);
+        // How far a point `p` moves between the different points `prev`
+        // before it and `next` after it.
+        let shift_of = |prev: Point, p: Point, next: Point| -> Option<Point> {
+            let (ui, uo) = ((p - prev).normalize()?, (next - p).normalize()?);
+            let ni = Point::new(ui.y, -ui.x) * sign;
+            let no = Point::new(uo.y, -uo.x) * sign;
+            let mut shift = ni + no;
+            let d = 1.0 + ui.dot(uo);
+            if d > 1e-3 {
+                shift = shift * (1.0 / d);
+            }
+            // Limit the miter at sharp corners to twice the strength.
+            let len2 = shift.length_squared();
+            if len2 > 4.0 {
+                shift = shift * (2.0 / libm::sqrtf(len2));
+            }
+            Some(Point::new(shift.x * hx, shift.y * hy))
+        };
         scratch.clear();
         scratch.resize(self.points.len(), Point::ZERO);
         let mut ranges = ContourRanges { verbs: &self.verbs, vi: 0, pi: 0 };
@@ -451,36 +469,31 @@ impl Path {
             if n < 3 {
                 continue;
             }
-            for i in 0..n {
-                let p = pts[i];
-                let mut j = (i + n - 1) % n;
-                let mut steps = 0;
-                while pts[j] == p && steps < n {
-                    j = (j + n - 1) % n;
-                    steps += 1;
+            // Equal points in a row (a malformed font may repeat one any
+            // number of times) move together, by their neighbours on either
+            // side of the run: the contour is walked run by run, from one
+            // that starts where a point differs from the one before it.
+            // Runs of a contour all of one point do not move.
+            let Some(first) = (0..n).find(|&i| pts[i] != pts[(i + n - 1) % n]) else {
+                continue;
+            };
+            let mut start = first;
+            loop {
+                let p = pts[start];
+                let mut len = 1;
+                while pts[(start + len) % n] == p {
+                    len += 1;
                 }
-                let mut k = (i + 1) % n;
-                steps = 0;
-                while pts[k] == p && steps < n {
-                    k = (k + 1) % n;
-                    steps += 1;
+                let end = (start + len) % n;
+                if let Some(shift) = shift_of(pts[(start + n - 1) % n], p, pts[end]) {
+                    for i in start..start + len {
+                        scratch[s + i % n] = shift;
+                    }
                 }
-                let (Some(ui), Some(uo)) = ((p - pts[j]).normalize(), (pts[k] - p).normalize()) else {
-                    continue;
-                };
-                let ni = Point::new(ui.y, -ui.x) * sign;
-                let no = Point::new(uo.y, -uo.x) * sign;
-                let mut shift = ni + no;
-                let d = 1.0 + ui.dot(uo);
-                if d > 1e-3 {
-                    shift = shift * (1.0 / d);
+                start = end;
+                if start == first {
+                    break;
                 }
-                // Limit the miter at sharp corners to twice the strength.
-                let len2 = shift.length_squared();
-                if len2 > 4.0 {
-                    shift = shift * (2.0 / libm::sqrtf(len2));
-                }
-                scratch[s + i] = Point::new(shift.x * hx, shift.y * hy);
             }
         }
         for (p, d) in self.points.iter_mut().zip(scratch.iter()) {
@@ -590,6 +603,75 @@ mod tests {
         let last = a.points().last().unwrap();
         assert!((last.x + 10.0).abs() < 1e-4 && last.y.abs() < 1e-4);
         assert_eq!(a.verbs().len(), 3); // move + 2 quarter arcs
+    }
+
+    /// How [`Path::embolden`] moves the points of one closed polygon, written
+    /// out plainly: each point by its nearest different neighbours.
+    fn embolden_reference(pts: &[Point], strength: f32) -> Vec<Point> {
+        let n = pts.len();
+        let area: f64 = (0..n)
+            .map(|i| pts[i].x as f64 * pts[(i + 1) % n].y as f64 - pts[(i + 1) % n].x as f64 * pts[i].y as f64)
+            .sum();
+        let sign = if area > 0.0 { 1.0 } else { -1.0 };
+        let mut out = pts.to_vec();
+        for i in 0..n {
+            let p = pts[i];
+            let prev = (1..n).map(|k| pts[(i + n - k) % n]).find(|&q| q != p);
+            let next = (1..n).map(|k| pts[(i + k) % n]).find(|&q| q != p);
+            let (Some(prev), Some(next)) = (prev, next) else { continue };
+            let (ui, uo) = ((p - prev).normalize().unwrap(), (next - p).normalize().unwrap());
+            let mut shift = Point::new(ui.y, -ui.x) * sign + Point::new(uo.y, -uo.x) * sign;
+            let d = 1.0 + ui.dot(uo);
+            if d > 1e-3 {
+                shift = shift * (1.0 / d);
+            }
+            if shift.length_squared() > 4.0 {
+                shift = shift * (2.0 / libm::sqrtf(shift.length_squared()));
+            }
+            out[i] = p + shift * (strength * 0.5);
+        }
+        out
+    }
+
+    #[test]
+    fn repeated_points_move_with_their_neighbours() {
+        let corners = [Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(12.0, 7.0), Point::new(3.0, 9.0)];
+        // Every corner repeated from once to four times, the run of the first
+        // also split across the contour's start.
+        for repeats in [[1, 1, 1, 1], [2, 1, 3, 1], [4, 4, 1, 2], [1, 3, 3, 3]] {
+            for rotate in 0..4 {
+                let mut pts: Vec<Point> =
+                    corners.iter().zip(repeats).flat_map(|(&c, k)| core::iter::repeat_n(c, k)).collect();
+                let turn = rotate.min(pts.len() - 1);
+                pts.rotate_left(turn);
+                let mut p = Path::new();
+                p.polygon(&pts);
+                p.embolden(2.0, 2.0);
+                assert_eq!(p.points(), &embolden_reference(&pts, 2.0)[..], "{repeats:?} rotated {rotate}");
+            }
+        }
+    }
+
+    #[test]
+    fn emboldening_a_contour_of_one_point_repeated_takes_one_pass() {
+        // Malformed glyphs may repeat a point any number of times: each run
+        // is walked once (walked from every point, this took a minute).
+        let started = std::time::Instant::now();
+        let mut pts = alloc::vec![Point::new(5.0, 5.0); 200_000];
+        pts.extend([Point::new(9.0, 5.0), Point::new(9.0, 9.0)]);
+        let mut p = Path::new();
+        p.polygon(&pts);
+        p.embolden(1.0, 1.0);
+        let moved = p.points()[0];
+        assert!(moved != Point::new(5.0, 5.0) && moved.is_finite());
+        assert!(p.points()[..200_000].iter().all(|&q| q == moved));
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        // A contour of one point alone stays where it is.
+        let mut q = Path::new();
+        q.polygon(&alloc::vec![Point::new(1.0, 2.0); 1000]);
+        q.rect(10.0, 10.0, 5.0, 5.0);
+        q.embolden(1.0, 1.0);
+        assert!(q.points()[..1000].iter().all(|&r| r == Point::new(1.0, 2.0)));
     }
 
     #[test]

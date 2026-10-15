@@ -6,9 +6,11 @@
 //! One request per connection (`Connection: close`), which is all the
 //! system's clients need (API calls and downloads). Response heads and the
 //! sizes of chunks are parsed by `httparse`; bodies may be
-//! `Content-Length`, chunked or read-to-close, and are limited to a
-//! caller-chosen size. [`fetch`] makes one request; [`get`] follows
-//! redirects.
+//! `Content-Length`, chunked or read-to-close (over TLS only if the server
+//! closes the secure session: anything else may be cut short), and are
+//! limited to a caller-chosen size. [`fetch`] makes one request; [`get`]
+//! follows redirects; each finishes within its time limit as a whole, a
+//! server that trickles its answer included.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -58,6 +60,26 @@ impl Response {
     }
 }
 
+/// When a request must be done, on a clock (the system's, or a test's).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Deadline {
+    at: u64,
+    clock: fn() -> u64,
+}
+
+impl Deadline {
+    /// `timeout` from now on the system's clock.
+    fn after(timeout: Duration) -> Deadline {
+        Deadline { at: vrt::time::deadline_after(timeout), clock: vrt::time::now_ns }
+    }
+
+    /// The time left, or `TimedOut`.
+    fn left(&self) -> Result<Duration, WebError> {
+        let now = (self.clock)();
+        if now >= self.at { Err(WebError::TimedOut) } else { Ok(Duration::from_nanos(self.at - now)) }
+    }
+}
+
 /// Writes a request. `headers` must not contain line breaks (they are
 /// rejected); `Host`, `Connection` and `Content-Length` are added, and
 /// `User-Agent` and `Accept-Encoding: identity` unless `headers` has them
@@ -100,11 +122,16 @@ pub fn write_request<C: Connection>(
 pub(crate) struct Reader<'a, C: Connection> {
     pub conn: &'a mut C,
     pub buf: Vec<u8>,
+    /// When all reading must be done, if it must.
+    pub deadline: Option<Deadline>,
 }
 
 impl<C: Connection> Reader<'_, C> {
     /// Reads more into the buffer; `Ok(false)` at the end of the stream.
     pub fn fill(&mut self) -> Result<bool, WebError> {
+        if let Some(d) = self.deadline {
+            self.conn.set_read_timeout(Some(d.left()?));
+        }
         let mut chunk = [0u8; 4096];
         let n = self.conn.read(&mut chunk)?;
         self.buf.extend_from_slice(&chunk[..n]);
@@ -159,9 +186,19 @@ pub(crate) fn parse_head(bytes: &[u8]) -> Result<Head, WebError> {
 }
 
 /// Reads a response to a `method` request (bodies at most `max_body`
-/// bytes).
+/// bytes), each read within the connection's read timeout.
 pub fn read_response<C: Connection>(conn: &mut C, method: &str, max_body: usize) -> Result<Response, WebError> {
-    let mut r = Reader { conn, buf: Vec::new() };
+    read_response_until(conn, method, max_body, None)
+}
+
+/// Reads a response, all of it by `deadline` if there is one.
+pub(crate) fn read_response_until<C: Connection>(
+    conn: &mut C,
+    method: &str,
+    max_body: usize,
+    deadline: Option<Deadline>,
+) -> Result<Response, WebError> {
+    let mut r = Reader { conn, buf: Vec::new(), deadline };
     loop {
         let head_len = r.read_head()?;
         let Head { status, reason, headers } = parse_head(&r.buf[..head_len])?;
@@ -246,7 +283,7 @@ fn read_chunked<C: Connection>(r: &mut Reader<'_, C>, max_body: usize) -> Result
 }
 
 /// Connects to the server of `url`, sends one request and reads the
-/// response.
+/// response, all within `timeout`.
 pub fn fetch(
     method: &str,
     url: &str,
@@ -255,19 +292,21 @@ pub fn fetch(
     timeout: Duration,
     max_body: usize,
 ) -> Result<Response, WebError> {
-    request(method, &Url::parse(url)?, headers, body, timeout, max_body)
+    request(method, &Url::parse(url)?, headers, body, Deadline::after(timeout), max_body)
 }
 
 /// Fetches `url` with `GET`, following up to five redirects, to `http` and
 /// `https` URLs (relative ones resolved against the URL that redirected).
-/// `timeout` bounds each connection and `max_body` each body.
+/// `timeout` bounds the whole of it, redirects included, and `max_body`
+/// each body.
 pub fn get(url: &str, timeout: Duration, max_body: usize) -> Result<Response, WebError> {
     let mut url = Url::parse(url)?;
+    let deadline = Deadline::after(timeout);
     for _ in 0..=MAX_REDIRECTS {
         if !matches!(url.scheme.as_str(), "http" | "https") {
             return Err(WebError::BadUrl);
         }
-        let response = request("GET", &url, &[("Accept", "*/*")], &[], timeout, max_body)?;
+        let response = request("GET", &url, &[("Accept", "*/*")], &[], deadline, max_body)?;
         match response.header("location") {
             Some(to) if matches!(response.status, 301 | 302 | 303 | 307 | 308) => url = url.join(to)?,
             _ => return Ok(response),
@@ -277,19 +316,19 @@ pub fn get(url: &str, timeout: Duration, max_body: usize) -> Result<Response, We
 }
 
 /// Connects to the server of `url`, sends one request and reads the
-/// response.
+/// response, all by `deadline`.
 fn request(
     method: &str,
     url: &Url,
     headers: &[(&str, &str)],
     body: &[u8],
-    timeout: Duration,
+    deadline: Deadline,
     max_body: usize,
 ) -> Result<Response, WebError> {
-    let mut conn = crate::connect(url, timeout)?;
-    conn.set_read_timeout(Some(timeout));
+    let mut conn = crate::connect(url, deadline.left()?)?;
+    conn.set_write_timeout(Some(deadline.left()?));
     write_request(&mut conn, method, url, headers, body)?;
-    read_response(&mut conn, method, max_body)
+    read_response_until(&mut conn, method, max_body, Some(deadline))
 }
 
 #[cfg(test)]
@@ -359,6 +398,56 @@ mod tests {
         assert!(matches!(read_response(&mut c, "GET", 100), Err(WebError::Protocol(_))));
         let mut c = TestConn::new(b"", 7);
         assert_eq!(read_response(&mut c, "GET", 100), Err(WebError::Closed));
+    }
+
+    #[test]
+    fn a_trickling_server_runs_out_of_time() {
+        use core::sync::atomic::{AtomicU64, Ordering};
+        // A clock that moves a second each time it is read.
+        static NOW: AtomicU64 = AtomicU64::new(0);
+        fn clock() -> u64 {
+            NOW.fetch_add(1_000_000_000, Ordering::Relaxed)
+        }
+        let deadline = Deadline { at: 10_000_000_000, clock };
+        // A byte per read: each read is quick, the whole is not.
+        let mut c = TestConn::new(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nslow body...", 1);
+        assert_eq!(read_response_until(&mut c, "GET", 1000, Some(deadline)), Err(WebError::TimedOut));
+        // Each read gets the time that is left, less and less.
+        assert!(c.read_timeouts.len() >= 2);
+        assert!(c.read_timeouts.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn read_to_close_bodies_need_a_proper_end() {
+        // Over TLS, a connection that just ends may have been cut short.
+        struct Cut(TestConn);
+        impl Connection for Cut {
+            fn read(&mut self, buf: &mut [u8]) -> Result<usize, WebError> {
+                match self.0.read(buf)? {
+                    0 => Err(WebError::Truncated),
+                    n => Ok(n),
+                }
+            }
+            fn try_read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, WebError> {
+                self.0.try_read(buf)
+            }
+            fn write_all(&mut self, data: &[u8]) -> Result<(), WebError> {
+                self.0.write_all(data)
+            }
+            fn try_write(&mut self, data: &[u8]) -> Result<usize, WebError> {
+                self.0.try_write(data)
+            }
+            fn set_read_timeout(&mut self, _: Option<Duration>) {}
+            fn set_write_timeout(&mut self, _: Option<Duration>) {}
+            fn handle(&self) -> vabi::RawHandle {
+                0
+            }
+        }
+        let mut c = Cut(TestConn::new(b"HTTP/1.1 200 OK\r\n\r\nall of it?", 4));
+        assert_eq!(read_response(&mut c, "GET", 100), Err(WebError::Truncated));
+        // A body of a known length is complete before the end.
+        let mut c = Cut(TestConn::new(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", 4));
+        assert_eq!(read_response(&mut c, "GET", 100).unwrap().body, b"ok");
     }
 
     #[test]

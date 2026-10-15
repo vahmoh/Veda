@@ -3,7 +3,10 @@
 
 //! State shared by the agent's threads: settings, the Deepgram key, memory,
 //! permissions, the catalogue of applications and timers — all persisted in
-//! the private directory.
+//! the private directory. What is read back is checked like any file: the
+//! catalogue is bounded as applications' own descriptions are when they
+//! register, and only permissions for sensitive actions the agent knows of
+//! are kept.
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -12,7 +15,8 @@ use alloc::vec::Vec;
 use serde_json::{Value, json};
 use vagent::config::Config;
 use vagent::memory::Memory;
-use vagent::policy::Permissions;
+use vagent::policy::{self, Permissions};
+use vagent::{notice, tools};
 use vproto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
 
 use vrt::object::Event;
@@ -28,6 +32,10 @@ pub struct Timer {
     pub due: u64,
 }
 
+/// The longest label of a timer.
+const MAX_LABEL: usize = 120;
+
+/// What the agent's threads share (see the module documentation).
 pub struct Shared {
     pub store: Store,
     pub config: Config,
@@ -135,17 +143,20 @@ impl Shared {
         let config = store.read(store::CONFIG).map(|t| Config::from_json(&t)).unwrap_or_default();
         let key = store.read(store::KEY).map(|k| k.trim().to_string()).filter(|k| vagent::config::valid_key(k));
         let memory = store.read(store::MEMORY).map(|t| Memory::from_json(&t)).unwrap_or_default();
-        let permissions = store.read(store::PERMISSIONS).map(|t| Permissions::from_json(&t)).unwrap_or_default();
         let mut apps = BTreeMap::new();
         if let Some(v) = store.read(APPS).and_then(|t| serde_json::from_str::<Value>(&t).ok())
             && let Some(m) = v.as_object()
         {
             for (id, info) in m.iter() {
                 if let Some(info) = info_from_json(info) {
-                    apps.insert(id.to_string(), info);
+                    apps.insert(id.to_string(), tools::sanitize(info));
                 }
             }
         }
+        let permissions = store
+            .read(store::PERMISSIONS)
+            .map(|t| Permissions::from_json(&t, &|k| policy::known_key(k, &apps)))
+            .unwrap_or_default();
         let mut timers = Vec::new();
         let mut next_timer = 1;
         if let Some(v) = store.read(store::TIMERS).and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -153,11 +164,13 @@ impl Shared {
         {
             for t in list {
                 if let (Some(id), Some(due)) = (t["id"].as_u64(), t["due"].as_u64()) {
-                    timers.push(Timer { id, label: t["label"].as_str().unwrap_or("").to_string(), due });
-                    next_timer = next_timer.max(id + 1);
+                    let label = notice::untrusted_line(t["label"].as_str().unwrap_or(""), MAX_LABEL);
+                    timers.push(Timer { id, label, due });
+                    next_timer = next_timer.max(id.saturating_add(1));
                 }
             }
         }
+        timers.sort_by_key(|t| t.due);
         Shared {
             store,
             config,
@@ -179,12 +192,14 @@ impl Shared {
         }
     }
 
+    /// Stores the settings, and tells the main loop they changed.
     pub fn save_config(&mut self) {
         self.store.write(store::CONFIG, &self.config.to_json());
         self.config_generation += 1;
         self.signal_change();
     }
 
+    /// Stores (or removes) the Deepgram key, and tells the main loop.
     pub fn save_key(&mut self) {
         match &self.key {
             Some(k) => {
@@ -196,14 +211,17 @@ impl Shared {
         self.signal_change();
     }
 
+    /// Stores what the agent remembers.
     pub fn save_memory(&self) {
         self.store.write(store::MEMORY, &self.memory.to_json());
     }
 
+    /// Stores the actions the user always allows.
     pub fn save_permissions(&self) {
         self.store.write(store::PERMISSIONS, &self.permissions.to_json());
     }
 
+    /// Keeps what application `id` offers ([`tools::sanitize`]d already).
     pub fn set_app(&mut self, id: &str, info: AppAgentInfo) {
         if self.apps.get(id) == Some(&info) {
             return;
@@ -218,15 +236,20 @@ impl Shared {
         self.signal_change();
     }
 
-    pub fn add_timer(&mut self, label: &str, due: u64) -> u64 {
+    /// Adds a timer due at `due` (Unix seconds); returns its id and its
+    /// label as kept: one line, without the notices' marker (the language
+    /// model chose it, from whatever it was told).
+    pub fn add_timer(&mut self, label: &str, due: u64) -> (u64, String) {
         let id = self.next_timer;
         self.next_timer += 1;
-        self.timers.push(Timer { id, label: label.chars().take(120).collect(), due });
+        let label = notice::untrusted_line(label, MAX_LABEL);
+        self.timers.push(Timer { id, label: label.clone(), due });
         self.timers.sort_by_key(|t| t.due);
         self.save_timers();
-        id
+        (id, label)
     }
 
+    /// Removes timer `id`; returns it.
     pub fn remove_timer(&mut self, id: u64) -> Option<Timer> {
         let i = self.timers.iter().position(|t| t.id == id)?;
         let t = self.timers.remove(i);
@@ -234,6 +257,7 @@ impl Shared {
         Some(t)
     }
 
+    /// Stores the timers.
     pub fn save_timers(&self) {
         let list: Vec<Value> =
             self.timers.iter().map(|t| json!({ "id": t.id, "label": t.label.as_str(), "due": t.due })).collect();

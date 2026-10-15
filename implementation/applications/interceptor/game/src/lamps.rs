@@ -74,7 +74,7 @@ pub fn place(road: &Road) -> Vec<Lamp> {
                 for j in 0..3 {
                     let s = s + j as f32 * spacing / 3.0;
                     let (p, f, r, u) = road.frame(s);
-                    let yaw = f.x.atan2(f.z);
+                    let yaw = libm::atan2f(f.x, f.z);
                     for lateral in [-3.6f32, 3.6] {
                         let head = p + r * lateral + u * 6.9;
                         out.push(Lamp {
@@ -92,7 +92,7 @@ pub fn place(road: &Road) -> Vec<Lamp> {
                 // On the median, an arm over each carriageway.
                 let (p, _, _, _) = road.frame(s);
                 let base = p;
-                let yaw = flat_r.x.atan2(flat_r.z);
+                let yaw = libm::atan2f(flat_r.x, flat_r.z);
                 let reach = flat_r * 4.6;
                 let top = Vec3::Y * (HEIGHT + 1.0);
                 let color = if sample.section == Section::Bridge { WARM * 1.6 } else { SODIUM * 2.0 };
@@ -120,7 +120,7 @@ pub fn place(road: &Road) -> Vec<Lamp> {
                     let lateral = if city { sample.paved + 0.9 } else { sample.wall + 0.5 } * side;
                     let base = road.point(s, lateral);
                     let inward = flat_r * -side;
-                    let yaw = inward.x.atan2(inward.z);
+                    let yaw = libm::atan2f(inward.x, inward.z);
                     let head = base + Vec3::Y * HEIGHT + inward * ARM;
                     let color = if city { WARM * 2.2 } else { SODIUM * 2.2 };
                     out.push(Lamp { kind: Kind::Post, base, yaw, heads: [head, head], color, radius: 21.0 });

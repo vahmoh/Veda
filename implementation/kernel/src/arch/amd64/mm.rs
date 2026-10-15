@@ -13,6 +13,11 @@ use super::cpu;
 /// where the trampoline that starts the other CPUs runs (`smp`).
 pub const RESERVED_BELOW: u64 = 0x10_0000;
 
+/// Physical addresses no driver may map, besides the registers the kernel
+/// maps for itself (`kvirt::map_mmio` notes those): the processors' local
+/// APICs' window, which is also where devices' interrupt messages go.
+pub const RESERVED_MMIO: core::ops::Range<u64> = 0xFEE0_0000..0xFF00_0000;
+
 /// The kernel's window for devices' registers (PML4 slot 384).
 pub const MMIO_BASE: u64 = 0xFFFF_C000_0000_0000;
 pub const MMIO_SIZE: u64 = 64 << 30;

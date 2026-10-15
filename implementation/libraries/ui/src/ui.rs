@@ -8,14 +8,21 @@
 //! (`if ui.button(r, "Save") { ... }`). State that must survive between
 //! frames (focus, scroll offsets, text cursors, open menus) lives in
 //! [`UiState`], keyed by widget [`Id`]s.
+//!
+//! The keyboard is an open menu's while one is, then a modal dialog's while
+//! one is up (one shown in the previous frame): widgets outside it see no
+//! keys or typed text ([`Ui::input`]), none of them has the focus
+//! ([`Ui::focused`]), and the dialog's content gets the keys
+//! ([`Ui::modal`]).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Align, Canvas, Color, Rect, Text};
+use vgfx::{Align, Canvas, Color, Rect};
 use vproto::display::{Cursor, WindowEvent, WindowState, modifiers};
 
+use crate::fonts::SharedText;
 use crate::theme::{Font, Theme};
 use crate::window::{Display, FrameTiming};
 
@@ -63,9 +70,21 @@ pub struct Input {
 
 impl Input {
     /// A copy without key presses and typed text, given to widgets while a
-    /// menu has the keyboard.
+    /// menu or a modal dialog has the keyboard.
     pub fn without_keys(&self) -> Input {
-        Input { text: String::new(), keys: Vec::new(), ..self.clone() }
+        Input {
+            pointer: self.pointer,
+            down: self.down,
+            pressed: self.pressed,
+            released: self.released,
+            clicks: self.clicks,
+            scroll: self.scroll,
+            text: String::new(),
+            keys: Vec::new(),
+            modifiers: self.modifiers,
+            focused: self.focused,
+            now: self.now,
+        }
     }
 
     /// Clears the per-frame fields.
@@ -75,6 +94,17 @@ impl Input {
         self.scroll = (0, 0);
         self.text.clear();
         self.keys.clear();
+    }
+
+    /// Ends a frame: clears what it used, but for the keys and typed text
+    /// that were nobody's (`unclaimed`, [`Ui::keys_unclaimed`]), which the
+    /// next frame gets.
+    pub(crate) fn end_frame(&mut self, unclaimed: bool) {
+        let kept = unclaimed.then(|| (core::mem::take(&mut self.text), core::mem::take(&mut self.keys)));
+        self.begin_frame();
+        if let Some((text, keys)) = kept {
+            (self.text, self.keys) = (text, keys);
+        }
     }
 
     /// Returns `true` if the event must be applied in a fresh frame (so
@@ -141,11 +171,6 @@ impl Input {
         self.keys.iter().any(|k| k.code == code)
     }
 
-    /// A key pressed together with Ctrl.
-    pub fn ctrl_key(&self, code: u16) -> bool {
-        self.keys.iter().any(|k| k.code == code && k.modifiers & modifiers::CTRL != 0)
-    }
-
     pub fn ctrl(&self) -> bool {
         self.modifiers & modifiers::CTRL != 0
     }
@@ -168,6 +193,17 @@ pub struct TextEditState {
     pub blink_start: u64,
 }
 
+/// How many frames an animated value outlives its last use (see
+/// [`UiState`]'s `animations`).
+pub(crate) const ANIMATION_FRAMES: u64 = 256;
+
+/// A value [`Ui::animate`] moves, and the frame that last asked for it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Animation {
+    value: f32,
+    frame: u64,
+}
+
 /// State that survives between frames.
 #[derive(Default)]
 pub struct UiState {
@@ -185,16 +221,25 @@ pub struct UiState {
     pub menu_key: Option<(usize, Option<(i32, i32)>)>,
     /// Overlay rectangles drawn last frame (they capture the pointer).
     pub overlays: Vec<Rect>,
-    /// A modal dialog was shown last frame.
+    /// A modal dialog was shown last frame: it has the keyboard, and
+    /// everything outside it is inert.
     pub modal: bool,
     pub tooltip: Option<(Id, u64)>,
     /// The title last set with `Ui::set_title`.
     pub title: String,
+    /// The values [`Ui::animate`] moves, by widget. A widget's id may
+    /// change as it moves (a button's comes from its rectangle), so values
+    /// no frame asked for in [`ANIMATION_FRAMES`] go: no longer drawn,
+    /// their widgets are at rest.
+    pub(crate) animations: BTreeMap<Id, Animation>,
+    /// Frames finished.
+    frames: u64,
 }
 
 /// Fonts and other per-window resources shared by all frames.
 pub struct Context {
-    pub text: Text,
+    /// The text context, the process's (shared by its windows).
+    pub text: SharedText,
     pub fonts: [usize; 4],
     pub theme: Theme,
     pub display: Display,
@@ -219,11 +264,14 @@ pub struct Ui<'a> {
     pub ctx: &'a mut Context,
     /// Per-window persistent widget state.
     pub state: &'a mut UiState,
-    /// This frame's input. While a menu is open its keys and typed text are
-    /// withheld from widgets: the menu has the keyboard.
+    /// This frame's input. While a menu is open, or a modal dialog is up
+    /// and this is outside it, its keys and typed text are withheld: the
+    /// menu, or the dialog, has the keyboard.
     pub input: &'a Input,
-    /// This frame's complete input, for menus.
+    /// This frame's complete input, for menus and the dialog's content.
     pub(crate) menu_input: &'a Input,
+    /// This frame's input without keys and typed text.
+    pub(crate) quiet: &'a Input,
     pub width: i32,
     pub height: i32,
     pub(crate) cursor: Cursor,
@@ -232,8 +280,18 @@ pub struct Ui<'a> {
     pub(crate) new_overlay_rects: Vec<Rect>,
     /// Pointer input is hidden from widgets (covered by an overlay/modal).
     pub(crate) blocked: bool,
+    /// What is drawn now is a modal dialog's content.
     pub(crate) in_modal: bool,
+    /// A modal dialog was shown in this frame.
     pub(crate) modal_shown: bool,
+    /// The keyboard was a modal dialog's as the frame began.
+    keyboard_modal: bool,
+    /// A tooltip was asked for in this frame (see [`Ui::tooltip`]).
+    pub(crate) tooltip_asked: bool,
+    /// The keyboard was a modal dialog's, and none was shown in the frame
+    /// (it went): its keys and typed text were nobody's, and are the next
+    /// frame's (see [`Input::end_frame`]), which follows at once.
+    pub(crate) keys_unclaimed: bool,
     pub(crate) salt: u64,
     pub(crate) close_requested: bool,
     pub(crate) skip_present: bool,
@@ -269,6 +327,7 @@ impl<'a> Ui<'a> {
             state,
             input,
             menu_input: input,
+            quiet: input,
             width,
             height,
             cursor: Cursor::Arrow,
@@ -278,6 +337,9 @@ impl<'a> Ui<'a> {
             blocked,
             in_modal: false,
             modal_shown: false,
+            keyboard_modal: false,
+            tooltip_asked: false,
+            keys_unclaimed: false,
             salt: 0,
             close_requested: false,
             skip_present: false,
@@ -286,8 +348,39 @@ impl<'a> Ui<'a> {
         }
     }
 
+    /// Starts a frame of a window's UI with this frame's complete `input`,
+    /// and `quiet`, its copy without keys and typed text
+    /// ([`Input::without_keys`]), which is what widgets see while the
+    /// keyboard is another's: an open menu's, or a modal dialog's (see
+    /// [`Ui::modal`]).
+    pub(crate) fn for_frame(
+        canvas: Canvas<'a>,
+        ctx: &'a mut Context,
+        state: &'a mut UiState,
+        input: &'a Input,
+        quiet: &'a Input,
+    ) -> Ui<'a> {
+        let taken = state.open_menu.is_some() || state.context_menu.is_some() || state.modal;
+        let modal = state.modal && state.open_menu.is_none() && state.context_menu.is_none();
+        let mut ui = Ui::new(canvas, ctx, state, if taken { quiet } else { input });
+        ui.menu_input = input;
+        ui.quiet = quiet;
+        ui.keyboard_modal = modal;
+        ui
+    }
+
     pub fn theme(&self) -> &Theme {
         &self.ctx.theme
+    }
+
+    /// Whether a menu is open (it has the keyboard).
+    pub(crate) fn menu_open(&self) -> bool {
+        self.state.open_menu.is_some() || self.state.context_menu.is_some()
+    }
+
+    /// Whether a modal dialog is up and what is drawn now is outside it.
+    pub(crate) fn behind_modal(&self) -> bool {
+        self.state.modal && !self.in_modal
     }
 
     pub fn rect(&self) -> Rect {
@@ -415,8 +508,10 @@ impl<'a> Ui<'a> {
         }
     }
 
+    /// Whether widget `id` has the keyboard focus: while a modal dialog is
+    /// up, only its content can have it.
     pub fn focused(&self, id: Id) -> bool {
-        self.state.focus == Some(id)
+        self.state.focus == Some(id) && !self.behind_modal()
     }
 
     pub fn focus(&mut self, id: Id) {
@@ -425,19 +520,20 @@ impl<'a> Ui<'a> {
 
     /// Smoothly animates a per-widget value towards `target` (0..=1).
     pub fn animate(&mut self, id: Id, target: f32, speed_per_sec: f32) -> f32 {
-        let key = id ^ 0x5bd1_e995;
-        let v = self.state.floats.get(&key).copied().unwrap_or(target);
-        if (v - target).abs() < 0.001 {
-            self.state.floats.insert(key, target);
+        let frame = self.state.frames;
+        let a = self.state.animations.entry(id).or_insert(Animation { value: target, frame });
+        a.frame = frame;
+        if (a.value - target).abs() < 0.001 {
+            a.value = target;
             return target;
         }
         // Frames arrive irregularly; assume ~30 fps steps.
         let step = speed_per_sec / 30.0;
-        let nv = if v < target { (v + step).min(target) } else { (v - step).max(target) };
-        self.state.floats.insert(key, nv);
+        a.value = if a.value < target { (a.value + step).min(target) } else { (a.value - step).max(target) };
+        let value = a.value;
         let now = self.now();
         self.repaint_at(now + 30_000_000);
-        nv
+        value
     }
 
     // ---- text --------------------------------------------------------------
@@ -451,11 +547,6 @@ impl<'a> Ui<'a> {
     /// Body text in the default style.
     pub fn text(&mut self, r: Rect, text: &str) {
         let (size, color) = (self.ctx.theme.font_size, self.ctx.theme.text);
-        self.label(r, text, Font::Regular, size, color, Align::Left);
-    }
-
-    pub fn dim_text(&mut self, r: Rect, text: &str) {
-        let (size, color) = (self.ctx.theme.font_size, self.ctx.theme.text_dim);
         self.label(r, text, Font::Regular, size, color, Align::Left);
     }
 
@@ -476,16 +567,21 @@ impl<'a> Ui<'a> {
 
     // ---- clipboard ---------------------------------------------------------
 
+    /// Puts `text` on the clipboard (the window system takes it while this
+    /// window's process has the focus).
     pub fn set_clipboard(&mut self, text: &str) {
         let _ = self.ctx.display.set_clipboard(String::from(text));
     }
 
+    /// The clipboard's text: empty unless this window's process has the
+    /// focus (the window system shows the clipboard to it alone).
     pub fn clipboard(&mut self) -> String {
-        self.ctx.display.get_clipboard().unwrap_or_default()
+        self.ctx.display.get_clipboard().ok().and_then(Result::ok).unwrap_or_default()
     }
 
-    /// Finishes the frame: draws overlays and records what they cover.
-    /// Finishes the frame (called by the runner after drawing).
+    /// Finishes the frame (called by the runner after drawing): draws the
+    /// overlays and records what they cover, and what of the frame's input
+    /// was nobody's.
     pub fn finish(&mut self) {
         let overlays = core::mem::take(&mut self.overlays);
         for o in overlays {
@@ -502,9 +598,73 @@ impl<'a> Ui<'a> {
         }
         self.state.overlays = core::mem::take(&mut self.new_overlay_rects);
         self.state.modal = self.modal_shown;
+        let keys = &self.menu_input;
+        self.keys_unclaimed =
+            self.keyboard_modal && !self.modal_shown && (!keys.keys.is_empty() || !keys.text.is_empty());
+        if self.keys_unclaimed {
+            self.repaint();
+        }
         // Releasing the button anywhere ends any press interaction.
         if self.input.released[0] && !self.input.down[0] {
             self.state.active = None;
         }
+        // The pointer rests on no widget with a tooltip: the next one waits.
+        if !self.tooltip_asked {
+            self.state.tooltip = None;
+        }
+        let state = &mut *self.state;
+        state.frames += 1;
+        if state.frames.is_multiple_of(ANIMATION_FRAMES) {
+            let now = state.frames;
+            state.animations.retain(|_, a| now - a.frame < ANIMATION_FRAMES);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use alloc::rc::Rc;
+    use alloc::vec;
+
+    use super::*;
+
+    /// A window's context without fonts or a display: nothing in the tests
+    /// may call the compositor.
+    pub(crate) fn context() -> Context {
+        let channel = vrt::object::Channel::from_handle(vrt::object::Handle::invalid());
+        Context {
+            text: SharedText::new(vgfx::Text::new()),
+            fonts: [0; 4],
+            theme: Theme::dark(),
+            display: Rc::new(vproto::display::display::Client::new(channel)),
+            window_id: 0,
+        }
+    }
+
+    /// Draws a frame with `input`, and ends it, as a [`crate::Host`] does;
+    /// returns what `draw` returns.
+    pub(crate) fn frame<R>(
+        ctx: &mut Context,
+        state: &mut UiState,
+        input: &mut Input,
+        draw: impl FnOnce(&mut Ui) -> R,
+    ) -> R {
+        let mut pixels = vec![0u32; 480 * 360];
+        let quiet = input.without_keys();
+        let mut ui = Ui::for_frame(Canvas::new(&mut pixels, 480, 360, 480), ctx, state, input, &quiet);
+        let out = draw(&mut ui);
+        ui.finish();
+        let unclaimed = ui.keys_unclaimed;
+        drop(ui);
+        input.end_frame(unclaimed);
+        out
+    }
+
+    /// Adds the keys `codes` and the typed `text` to `input`.
+    pub(crate) fn press(input: &mut Input, codes: &[u16], text: &str) {
+        for &code in codes {
+            input.keys.push(KeyPress { code, modifiers: 0, repeat: false, ch: None });
+        }
+        input.text.push_str(text);
     }
 }

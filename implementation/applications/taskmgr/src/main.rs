@@ -10,8 +10,10 @@
 //!   across all CPUs) and memory use, with summary tiles.
 //!
 //! The kernel is sampled once a second; CPU percentages are computed from
-//! the differences between consecutive samples. [`agent`] lets the voice
-//! agent read the processes and the load, and end applications.
+//! the differences between consecutive samples. Which processes are
+//! applications' and which the system's is `apps_common::process`'s
+//! classification, init's own. [`agent`] lets the voice agent read the
+//! processes and the load, and end applications.
 
 #![no_std]
 #![no_main]
@@ -26,6 +28,8 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use apps_common::format::cstr;
+use apps_common::process::{self, Classifier};
 use vproto::display::modifiers;
 use vproto::init::{AppInfo, LaunchError, launcher};
 use vproto::input::keys;
@@ -36,10 +40,6 @@ vrt::entry!(main);
 /// Seconds of history kept for the graphs.
 pub const HISTORY: usize = 60;
 const SAMPLE_NS: u64 = 1_000_000_000;
-
-/// Core services, used to tell applications from system processes when the
-/// launcher (which knows) cannot be asked.
-const CORE_SERVICES: &[&str] = &["init", "vfs", "devmgr", "compositor", "audio", "shell"];
 
 /// True for device drivers (shown with a chip icon), the driver VM's
 /// monitor among them.
@@ -60,6 +60,7 @@ pub struct Proc {
     pub cpu_ns: u64,
     /// CPU usage over the last interval, 0..=100 (of all CPUs).
     pub cpu: f32,
+    /// An application's (or started by one), not the system's.
     pub is_app: bool,
 }
 
@@ -110,24 +111,6 @@ pub struct TaskManager {
     pub rows: Vec<procs::Row>,
 }
 
-fn cstr(b: &[u8]) -> String {
-    let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-    String::from_utf8_lossy(&b[..n]).trim().to_string()
-}
-
-/// `1:02:03` or `12:34`.
-pub fn format_uptime(ns: u64) -> String {
-    let s = ns / 1_000_000_000;
-    let (d, h, m, s) = (s / 86_400, (s / 3600) % 24, (s / 60) % 60, s % 60);
-    if d > 0 {
-        alloc::format!("{d}d {h}:{m:02}:{s:02}")
-    } else if h > 0 {
-        alloc::format!("{h}:{m:02}:{s:02}")
-    } else {
-        alloc::format!("{m}:{s:02}")
-    }
-}
-
 impl TaskManager {
     fn new() -> TaskManager {
         let mut tm = TaskManager {
@@ -171,17 +154,12 @@ impl TaskManager {
         let Ok(info) = vrt::object::system_info() else { return };
         self.cpu_model = cstr(&info.cpu_brand);
         self.version = cstr(&info.version);
-        let mut list = alloc::vec![vabi::ProcessInfo::default(); 512];
-        let n = vrt::object::process_list(&mut list).unwrap_or(0).min(list.len());
-        list.truncate(n);
+        let mut list = process::list();
+        // Which processes are applications' (what the launcher started as
+        // one, and what those started), from all of them.
+        let tasks = self.launcher().and_then(|l| l.tasks().ok());
+        let classifier = Classifier::from_tasks(&list, tasks.as_deref());
         list.retain(|p| p.state == vabi::process_state::RUNNING);
-        // Which processes are applications (started on request) according
-        // to the launcher; everything else (services, drivers) is a system
-        // process.
-        let app_koids: Option<Vec<u64>> = match self.launcher().map(|l| l.tasks()) {
-            Some(Ok(tasks)) => Some(tasks.iter().filter(|t| t.is_app).map(|t| t.koid).collect()),
-            _ => None,
-        };
         let cpus = info.cpu_count.max(1) as f64;
         let (cpu_now, prev_cpu) = match &self.last {
             Some((t0, idle0, per)) if info.uptime_ns > *t0 => {
@@ -197,10 +175,7 @@ impl TaskManager {
             per.insert(p.koid, p.cpu_time_ns);
             let name = p.name().to_string();
             let app = self.apps.iter().find(|a| a.id == name);
-            let is_app = match &app_koids {
-                Some(koids) => koids.contains(&p.koid),
-                None => app.is_some() && !CORE_SERVICES.contains(&name.as_str()),
-            };
+            let is_app = !classifier.is_system(p.koid);
             let cpu = match &prev_cpu {
                 Some((dt, prev)) => {
                     let before = prev.get(&p.koid).copied().unwrap_or(p.cpu_time_ns);
@@ -265,14 +240,10 @@ impl TaskManager {
         };
         match r {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                let why = match e {
-                    LaunchError::NotFound => "the process has already exited",
-                    LaunchError::Denied => "permission was denied",
-                    _ => "the system refused",
-                };
-                self.dialog = Some(Dialog::Error(alloc::format!("The process could not be ended: {why}.")));
+            Ok(Err(LaunchError::NotFound)) => {
+                self.dialog = Some(Dialog::Error("The process could not be ended: it has already exited.".into()));
             }
+            Ok(Err(e)) => self.dialog = Some(Dialog::Error(alloc::format!("The process could not be ended: {e}."))),
             Err(_) => self.dialog = Some(Dialog::Error("The application launcher is not responding.".into())),
         }
         // Give the kernel a moment to tear the process down, then refresh.

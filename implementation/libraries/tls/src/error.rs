@@ -30,6 +30,9 @@ pub enum TlsError {
     Closed,
     /// The transport's time limit ran out.
     TimedOut,
+    /// The connection ended without the server's close_notify: what was
+    /// read is genuine, but anyone on the path could have cut it short.
+    Truncated,
     /// The server name is neither a DNS name nor an IP address.
     InvalidServerName(String),
 }
@@ -42,6 +45,9 @@ impl fmt::Display for TlsError {
             TlsError::BadCertificate(e) => write!(f, "the server's certificate is not trusted: {e}"),
             TlsError::Closed => f.write_str("the secure connection is closed"),
             TlsError::TimedOut => f.write_str("the secure connection timed out"),
+            TlsError::Truncated => {
+                f.write_str("the secure connection ended without the server closing it: data may be missing")
+            }
             TlsError::InvalidServerName(name) => write!(f, "{name:?} is not a valid server name"),
         }
     }

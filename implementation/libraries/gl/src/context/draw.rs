@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 
 use vglsl::types::{Basic, Dim, Scalar};
 
-use super::{Context, TEXTURE_UNITS, VERTEX_ATTRIBS};
+use super::programs::ExeKey;
+use super::{Context, Key, TEXTURE_UNITS, VERTEX_ATTRIBS};
 use crate::backend::{
     Attrib, AttribType, Blend, BufferRange, DepthStencil, DrawInfo, DrawState, Framebuffer, IndexType, Mode, Raster,
     Rect, Stencil, TextureBinding, Viewport,
@@ -58,6 +59,25 @@ fn sampler_target(dim: Dim) -> usize {
         Dim::Cube => 1,
         Dim::D3 => 2,
         Dim::D2Array => 3,
+    }
+}
+
+/// Textures a draw also renders to (`fb`, as it is once the textures are
+/// ready) sample as (0, 0, 0, 1): sampling an image the draw writes is a
+/// feedback loop.
+fn break_feedback_loops(fb: &Framebuffer, textures: &mut [TextureBinding]) {
+    for t in textures {
+        let Some(v) = t.view else { continue };
+        let renders_to = fb
+            .colors
+            .iter()
+            .flatten()
+            .chain(fb.depth.iter())
+            .chain(fb.stencil.iter())
+            .any(|surf| surf.resource == v.resource && (v.base_level..=v.max_level).contains(&surf.level));
+        if renders_to {
+            t.view = None;
+        }
     }
 }
 
@@ -127,10 +147,9 @@ impl Context {
                 return self.err(gl::INVALID_OPERATION);
             }
         }
-        let fb = match self.draw_state_framebuffer() {
-            Ok(fb) => fb,
-            Err(_) => return self.err(gl::INVALID_FRAMEBUFFER_OPERATION),
-        };
+        if self.draw_state_framebuffer().is_err() {
+            return self.err(gl::INVALID_FRAMEBUFFER_OPERATION);
+        }
         // No program: nothing is drawn (OpenGL ES 3.0 leaves it undefined).
         let Some(exe) = self.programs.current_exe else { return };
         // The arrays the program reads come from buffers, which must not be
@@ -167,10 +186,24 @@ impl Context {
             },
             _ => None,
         };
+        // What reading past the end of a buffer does is undefined (hosts
+        // that check refuse it, and lose the context): such a draw draws
+        // nothing.
+        let indices = element_buffer.zip(index_type).zip(elements).map(|((k, t), (_, offset))| (k, t, offset));
+        if !self.reads_inside(exe, first as u32, count as u32, instances as u32, indices) {
+            return;
+        }
         self.fill_builtin_uniforms(exe);
         let mut scratch = core::mem::take(&mut self.scratch);
+        // The textures are made ready first: that can move their images,
+        // which the framebuffer may render into.
+        self.prepare_textures(exe, &mut scratch.textures);
+        let Ok(fb) = self.draw_state_framebuffer() else {
+            self.scratch = scratch;
+            return;
+        };
+        break_feedback_loops(&fb, &mut scratch.textures);
         self.resolve_attribs(&mut scratch.attribs);
-        self.resolve_textures(exe, &fb, &mut scratch.textures);
         self.resolve_blocks(exe, &mut scratch.blocks);
         let has_feedback = feedback && self.resolve_feedback(exe, &mut scratch.feedback);
         let s = &self.state;
@@ -249,8 +282,50 @@ impl Context {
         }
     }
 
+    /// Whether a draw reads only inside its buffers, as far as that is
+    /// known without their contents: its indices (`indices`: the element
+    /// buffer, their type and their offset), the vertices of a draw of
+    /// arrays, and the instances of instanced arrays. (Which vertices an
+    /// indexed draw reads depends on the indices: the renderers see to
+    /// those.)
+    fn reads_inside(
+        &self,
+        exe: ExeKey,
+        first: u32,
+        count: u32,
+        instances: u32,
+        indices: Option<(Key, IndexType, usize)>,
+    ) -> bool {
+        let fits = |offset: usize, last: u64, stride: u64, bytes: u64, size: usize| {
+            let end =
+                last.checked_mul(stride).and_then(|n| n.checked_add(bytes)).and_then(|n| n.checked_add(offset as u64));
+            end.is_some_and(|e| e <= size as u64)
+        };
+        if let Some((k, ty, offset)) = indices {
+            let size = self.buffers.get(k).size;
+            if !fits(offset, u64::from(count), ty.bytes() as u64, 0, size) {
+                return false;
+            }
+        }
+        let used = self.used_attribs(exe);
+        for (a, _) in self.vao().attribs.iter().zip(used).filter(|&(a, used)| used && a.enabled) {
+            let Some(k) = a.buffer else { continue };
+            let last = match (a.divisor, indices) {
+                (0, None) => u64::from(first) + u64::from(count) - 1,
+                (0, Some(_)) => continue,
+                (d, _) => u64::from(instances - 1) / u64::from(d),
+            };
+            let t = super::vertex::attrib_type(a.ty).unwrap_or(AttribType::Float);
+            let bytes = if t.packed() { 4 } else { u64::from(t.bytes()) * u64::from(a.size) };
+            if !fits(a.offset, last, u64::from(a.effective_stride()), bytes, self.buffers.get(k).size) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// The attribute locations a program reads.
-    fn used_attribs(&self, exe: u32) -> [bool; VERTEX_ATTRIBS] {
+    fn used_attribs(&self, exe: ExeKey) -> [bool; VERTEX_ATTRIBS] {
         let mut used = [false; VERTEX_ATTRIBS];
         for a in &self.programs.exe(exe).program.linked.attributes {
             let cols = match a.ty.as_basic() {
@@ -266,7 +341,7 @@ impl Context {
     }
 
     /// Writes the values of built-in uniforms (`gl_DepthRange`).
-    fn fill_builtin_uniforms(&mut self, exe: u32) {
+    fn fill_builtin_uniforms(&mut self, exe: ExeKey) {
         let [near, far] = self.state.depth_range;
         let e = self.programs.exes.get_mut(&exe).unwrap();
         let program = e.program.clone();
@@ -286,7 +361,8 @@ impl Context {
         out.clear();
         for (i, a) in self.vao().attribs.iter().enumerate() {
             let buffer = if a.enabled { a.buffer.and_then(|k| self.buffers.get(k).resource) } else { None };
-            // An enabled array of an empty buffer reads as zero.
+            // An enabled array the program does not read may have an empty
+            // buffer (one it reads cannot: see `reads_inside`).
             let current = match (a.enabled, self.current_attribs[i]) {
                 (true, _) => [0; 4],
                 (false, c) => c.bits(),
@@ -306,10 +382,11 @@ impl Context {
         }
     }
 
-    /// Each sampler's texture and sampler state. Incomplete textures,
-    /// textures whose type does not suit the sampler, and textures the draw
-    /// also renders to sample as (0, 0, 0, 1).
-    fn resolve_textures(&mut self, exe: u32, fb: &Framebuffer, out: &mut Vec<TextureBinding>) {
+    /// Each sampler's texture, made ready to sample (complete, and its
+    /// levels in one resource: see `finalize`), and its sampler state.
+    /// Incomplete textures and textures whose type does not suit the
+    /// sampler sample as (0, 0, 0, 1).
+    fn prepare_textures(&mut self, exe: ExeKey, out: &mut Vec<TextureBinding>) {
         out.clear();
         let samplers = self.programs.exe(exe).program.linked.samplers.clone();
         for s in samplers {
@@ -327,7 +404,7 @@ impl Context {
             };
             let state = super::textures::sampler_state(&params);
             let mut view = self.texture_view(key, &params);
-            if let Some(v) = view {
+            if view.is_some() {
                 let tex = self.textures.get(key);
                 let (base, _) = Self::level_range(tex);
                 let format = tex.image(0, base).map(|i| i.internal.format);
@@ -342,14 +419,7 @@ impl Context {
                     }
                     _ => false,
                 };
-                // Sampling an image the draw writes is a feedback loop.
-                let renders_to = fb
-                    .colors
-                    .iter()
-                    .flatten()
-                    .chain(fb.depth.iter())
-                    .any(|surf| surf.resource == v.resource && (v.base_level..=v.max_level).contains(&surf.level));
-                if !suits || renders_to {
+                if !suits {
                     view = None;
                 }
             }
@@ -358,7 +428,7 @@ impl Context {
     }
 
     /// Each uniform block's buffer range.
-    fn resolve_blocks(&self, exe: u32, out: &mut Vec<Option<BufferRange>>) {
+    fn resolve_blocks(&self, exe: ExeKey, out: &mut Vec<Option<BufferRange>>) {
         out.clear();
         let x = self.programs.exe(exe);
         for &binding in &x.block_bindings {
@@ -375,7 +445,7 @@ impl Context {
     }
 
     /// Bytes per vertex each transform feedback buffer receives.
-    pub(crate) fn feedback_strides(&self, exe: u32) -> Vec<usize> {
+    pub(crate) fn feedback_strides(&self, exe: ExeKey) -> Vec<usize> {
         let l = &self.programs.exe(exe).program.linked;
         let bytes = |f: &vglsl::link::Feedback| f.components as usize * 4;
         if l.feedback_separate {
@@ -411,7 +481,7 @@ impl Context {
 
     /// The ranges the next vertices are recorded into (after the ones
     /// recorded so far).
-    fn resolve_feedback(&self, exe: u32, out: &mut Vec<BufferRange>) -> bool {
+    fn resolve_feedback(&self, exe: ExeKey, out: &mut Vec<BufferRange>) -> bool {
         out.clear();
         let written = self.tf().vertices as usize;
         for (i, stride) in self.feedback_strides(exe).into_iter().enumerate() {

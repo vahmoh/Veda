@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! GUID Partition Table disk image writer.
+//! GUID Partition Table disk images: written (as their pieces), and read
+//! for where their EFI system partition is.
 
 use super::fat32::SECTOR;
+use super::pieces::{Pieces, ReadAt};
 
 /// Type GUID of an EFI System Partition.
 const ESP_TYPE_GUID: [u8; 16] = guid(0xC12A7328, 0xF81F, 0x11D2, [0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B]);
@@ -25,11 +27,11 @@ pub struct Partition<'a> {
     pub name: &'a str,
     pub type_guid: [u8; 16],
     /// Volume contents; the partition is exactly this many bytes.
-    pub data: &'a [u8],
+    pub data: Pieces<'a>,
 }
 
 impl<'a> Partition<'a> {
-    pub fn esp(data: &'a [u8]) -> Self {
+    pub fn esp(data: Pieces<'a>) -> Self {
         Partition { name: "EFI System", type_guid: ESP_TYPE_GUID, data }
     }
 }
@@ -37,28 +39,23 @@ impl<'a> Partition<'a> {
 /// First LBA of the first partition (1 MiB alignment).
 pub const FIRST_PARTITION_LBA: u64 = 2048;
 
-/// Builds a complete GPT disk containing `parts`, laid out back to back on
-/// 1 MiB boundaries.
-pub fn build_disk(parts: &[Partition]) -> Vec<u8> {
+/// Lays out a complete GPT disk containing `parts`, back to back on 1 MiB
+/// boundaries.
+pub fn build_disk(parts: Vec<Partition<'_>>) -> Pieces<'_> {
     let align = |lba: u64| lba.div_ceil(2048) * 2048;
     let mut lba = FIRST_PARTITION_LBA;
     let mut ranges = Vec::new();
-    for p in parts {
-        assert_eq!(p.data.len() % SECTOR, 0, "partition data must be whole sectors");
-        let sectors = (p.data.len() / SECTOR) as u64;
+    for p in &parts {
+        assert_eq!(p.data.len() % SECTOR as u64, 0, "partition data must be whole sectors");
+        let sectors = p.data.len() / SECTOR as u64;
         ranges.push((lba, lba + sectors - 1));
         lba = align(lba + sectors);
     }
     let total_sectors = lba + 2048; // room for the backup GPT, 1 MiB aligned
-    let mut disk = vec![0u8; total_sectors as usize * SECTOR];
-
-    for (p, &(start, _)) in parts.iter().zip(&ranges) {
-        let off = start as usize * SECTOR;
-        disk[off..off + p.data.len()].copy_from_slice(p.data);
-    }
+    let mut disk = Pieces::new(total_sectors * SECTOR as u64);
 
     // Protective MBR.
-    let mbr = &mut disk[0..SECTOR];
+    let mut mbr = vec![0u8; SECTOR];
     let pe = &mut mbr[446..462];
     pe[1..4].copy_from_slice(&[0x00, 0x02, 0x00]);
     pe[4] = 0xEE;
@@ -67,6 +64,7 @@ pub fn build_disk(parts: &[Partition]) -> Vec<u8> {
     pe[12..16].copy_from_slice(&((total_sectors - 1).min(u32::MAX as u64) as u32).to_le_bytes());
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
+    disk.put(0, mbr);
 
     // Partition entry array.
     let mut entries = vec![0u8; ENTRY_COUNT * ENTRY_SIZE];
@@ -84,8 +82,8 @@ pub fn build_disk(parts: &[Partition]) -> Vec<u8> {
     let last_lba = total_sectors - 1;
     let backup_entries_lba = last_lba - ENTRY_SECTORS;
 
-    let header = |my_lba: u64, alt_lba: u64, entries_lba: u64| -> [u8; SECTOR] {
-        let mut h = [0u8; SECTOR];
+    let header = |my_lba: u64, alt_lba: u64, entries_lba: u64| -> Vec<u8> {
+        let mut h = vec![0u8; SECTOR];
         h[0..8].copy_from_slice(b"EFI PART");
         h[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
         h[12..16].copy_from_slice(&92u32.to_le_bytes());
@@ -103,15 +101,39 @@ pub fn build_disk(parts: &[Partition]) -> Vec<u8> {
         h
     };
 
-    let primary = header(1, last_lba, 2);
-    let backup = header(last_lba, 1, backup_entries_lba);
-    disk[SECTOR..2 * SECTOR].copy_from_slice(&primary);
-    disk[2 * SECTOR..2 * SECTOR + entries.len()].copy_from_slice(&entries);
-    let be = backup_entries_lba as usize * SECTOR;
-    disk[be..be + entries.len()].copy_from_slice(&entries);
-    let bh = last_lba as usize * SECTOR;
-    disk[bh..bh + SECTOR].copy_from_slice(&backup);
+    let sector = SECTOR as u64;
+    disk.put(sector, header(1, last_lba, 2));
+    disk.put(2 * sector, entries.clone());
+    disk.put(backup_entries_lba * sector, entries);
+    disk.put(last_lba * sector, header(last_lba, 1, backup_entries_lba));
+    for (p, (start, _)) in parts.into_iter().zip(ranges) {
+        disk.place(start * sector, p.data);
+    }
     disk
+}
+
+/// Where the EFI system partition of the GPT disk `disk` is: its first
+/// byte and its length.
+pub fn esp(disk: &(impl ReadAt + ?Sized)) -> Result<(u64, u64), String> {
+    let header = disk.bytes(SECTOR as u64, SECTOR)?;
+    if header[0..8] != *b"EFI PART" {
+        return Err("no GUID partition table".into());
+    }
+    let u32_at = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap()) as u64;
+    let u64_at = |at: usize| u64::from_le_bytes(header[at..at + 8].try_into().unwrap());
+    let (entries_lba, count, size) = (u64_at(72), u32_at(80), u32_at(84));
+    if !(128..=4096).contains(&size) || count > 1024 {
+        return Err("a GUID partition table with entries of no known size".into());
+    }
+    let entries = disk.bytes(entries_lba * SECTOR as u64, (count * size) as usize)?;
+    let entry =
+        entries.chunks_exact(size as usize).find(|e| e[0..16] == ESP_TYPE_GUID).ok_or("no EFI system partition")?;
+    let (start, end) =
+        (u64::from_le_bytes(entry[32..40].try_into().unwrap()), u64::from_le_bytes(entry[40..48].try_into().unwrap()));
+    if end < start {
+        return Err("an EFI system partition that ends before it starts".into());
+    }
+    Ok((start * SECTOR as u64, (end - start + 1) * SECTOR as u64))
 }
 
 /// A deterministic (reproducible) RFC 4122 version-4-shaped GUID.
@@ -133,21 +155,35 @@ fn pseudo_guid(seed: u64) -> [u8; 16] {
 mod tests {
     use super::*;
 
+    /// UEFI's CRC is CRC-32 of ISO-HDLC (IEEE 802.3), whose check value
+    /// (of "123456789") is CBF43926.
     #[test]
-    fn crc32_known_value() {}
+    fn crc32_known_value() {
+        assert_eq!(crc32fast::hash(b"123456789"), 0xCBF4_3926);
+    }
 
     #[test]
     fn disk_layout() {
-        let part = vec![0x11u8; 4 * 1024 * 1024];
-        let disk = build_disk(&[Partition::esp(&part)]);
+        let data = vec![0x11u8; 4 * 1024 * 1024];
+        let mut part = Pieces::new(data.len() as u64);
+        part.put(0, &data[..]);
+        let disk = build_disk(vec![Partition::esp(part)]).to_vec();
         assert_eq!(&disk[SECTOR..SECTOR + 8], b"EFI PART");
         assert_eq!(disk[2048 * SECTOR], 0x11);
         let last = disk.len() - SECTOR;
         assert_eq!(&disk[last..last + 8], b"EFI PART");
-        // Header CRC must verify.
-        let mut h = disk[SECTOR..SECTOR + 92].to_vec();
-        let stored = u32::from_le_bytes(h[16..20].try_into().unwrap());
-        h[16..20].fill(0);
-        assert_eq!(crc32fast::hash(&h), stored);
+        // Both headers' CRCs verify, and so does the entry array's.
+        for at in [SECTOR, last] {
+            let mut h = disk[at..at + 92].to_vec();
+            let stored = u32::from_le_bytes(h[16..20].try_into().unwrap());
+            h[16..20].fill(0);
+            assert_eq!(crc32fast::hash(&h), stored);
+            let entries_crc = u32::from_le_bytes(h[88..92].try_into().unwrap());
+            let lba = u64::from_le_bytes(h[72..80].try_into().unwrap()) as usize;
+            assert_eq!(crc32fast::hash(&disk[lba * SECTOR..lba * SECTOR + ENTRY_COUNT * ENTRY_SIZE]), entries_crc);
+        }
+        // The partition is where the table says.
+        assert_eq!(esp(&disk), Ok((2048 * SECTOR as u64, 4 * 1024 * 1024)));
+        assert!(esp(&vec![0u8; 4096]).is_err());
     }
 }

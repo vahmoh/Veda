@@ -4,11 +4,13 @@
 //! Capture: the input device and the capture streams.
 //!
 //! An input driver produces frames into its link ring and signals
-//! `data_event`; [`Capture::run`] then takes every waiting frame, converts
-//! it to each stream's channel count and rate, and writes it into the
-//! stream's ring (the service is the producer there). A client that does
-//! not keep up loses the newest frames, which are counted as overruns; it
-//! can never block the device or the other streams.
+//! `data_event`; [`Capture::run`] then takes the waiting frames (a ring's
+//! capacity at most each pass, so that a driver producing without end
+//! cannot hold the service's loop), converts them to each stream's channel
+//! count and rate, and writes them into the stream's ring (the service is
+//! the producer there). A client that does not keep up loses the newest
+//! frames, which are counted as overruns; it can never block the device or
+//! the other streams.
 //!
 //! **Echo cancellation.** Streams opened with `echo_cancel` (16 kHz mono,
 //! for voice assistants) share one path: the microphone is converted to
@@ -33,7 +35,9 @@ use alloc::vec::Vec;
 
 use vaudio::mix;
 use vaudio::resample::Resampler;
-use vproto::audio::{AudioError, DeviceFormat, InputHandle, InputLink, InputSpec, Ring, RingError, Role, ring};
+use vproto::audio::{
+    AudioError, DeviceFormat, InputHandle, InputLink, InputSpec, Ring, RingError, Role, recorded_at, ring,
+};
 use vrt::object::Event;
 
 use crate::mixer::Mixer;
@@ -52,6 +56,7 @@ const ECHO_REPORT_NS: u64 = 60_000_000_000;
 const ECHO_TAIL_MS: u32 = 250;
 /// Largest block taken from the device at once.
 const MAX_BLOCK: usize = 4096;
+/// Capture streams open at most, and per client.
 pub const MAX_INPUT_STREAMS: usize = 16;
 const MAX_INPUT_STREAMS_PER_CLIENT: usize = 4;
 
@@ -89,13 +94,19 @@ struct EchoPath {
     /// canceller's output.
     side: VecDeque<(i16, i16)>,
     report_at_ns: u64,
+    /// Scratch, kept from delivery to delivery: what was playing, the
+    /// cleaned microphone, and the streams' interleaved frames.
+    reference: Vec<i16>,
+    cleaned: Vec<i16>,
+    wide: Vec<i16>,
+    two: Vec<i16>,
 }
 
+/// The input device and the capture streams.
 pub struct Capture {
     device: Option<Device>,
     streams: BTreeMap<u32, InStream>,
     next_id: u32,
-    pub muted: bool,
     echo: Option<EchoPath>,
     raw: Vec<i16>,
     converted: Vec<i16>,
@@ -110,12 +121,12 @@ fn ring_err(e: RingError) -> AudioError {
 }
 
 impl Capture {
+    /// Capture without an input device or streams.
     pub fn new() -> Capture {
         Capture {
             device: None,
             streams: BTreeMap::new(),
             next_id: 1,
-            muted: false,
             echo: None,
             raw: vec![0; MAX_BLOCK * 2],
             converted: vec![0; MAX_BLOCK * 2],
@@ -164,6 +175,8 @@ impl Capture {
         self.device = None;
     }
 
+    /// The input device's name (`"none"` without one), rate and channels
+    /// (0 without one).
     pub fn device_name(&self) -> &str {
         self.device.as_ref().map_or("none", |d| d.name.as_str())
     }
@@ -174,10 +187,6 @@ impl Capture {
 
     pub fn device_channels(&self) -> u32 {
         self.device.as_ref().map_or(0, |d| d.channels as u32)
-    }
-
-    pub fn stream_count(&self) -> usize {
-        self.streams.len()
     }
 
     /// True if an echo-cancelled stream needs the playback reference.
@@ -205,6 +214,7 @@ impl Capture {
         }
     }
 
+    /// Opens a capture stream for client `owner`.
     pub fn open(&mut self, owner: u64, spec: &InputSpec) -> Result<InputHandle, AudioError> {
         // Echo-cancelled streams have up to three channels: the cleaned
         // microphone, what was playing, the microphone as recorded.
@@ -242,6 +252,10 @@ impl Capture {
                 pending_end_ns: 0,
                 side,
                 report_at_ns: 0,
+                reference: Vec::new(),
+                cleaned: Vec::new(),
+                wide: Vec::new(),
+                two: Vec::new(),
             });
         }
         self.streams.insert(
@@ -261,6 +275,7 @@ impl Capture {
         Ok(InputHandle { id, ring: vmo, event: client_event, device_rate })
     }
 
+    /// Closes client `owner`'s capture stream `id`.
     pub fn close(&mut self, owner: u64, id: u32) -> Result<(), AudioError> {
         if !self.streams.get(&id).is_some_and(|s| s.owner == owner) {
             return Err(AudioError::NoSuchStream);
@@ -272,6 +287,7 @@ impl Capture {
         Ok(())
     }
 
+    /// Closes every capture stream of a client that disconnected.
     pub fn close_owner(&mut self, owner: u64) {
         let before = self.streams.len();
         self.streams.retain(|_, s| s.owner != owner);
@@ -287,37 +303,37 @@ impl Capture {
         self.update_wanted();
     }
 
-    /// Delivers everything the device recorded to the streams.
+    /// Delivers what the device recorded to the streams: at most a ring's
+    /// capacity each pass; if more is waiting, the device's event is left
+    /// signalled, so that the loop comes back for it after its other work.
     pub fn run(&mut self, mixer: &Mixer, now: u64) {
         let Some(dev) = &self.device else { return };
         let _ = dev.data_event.clear();
         let dch = dev.channels;
         let rate = dev.rate;
-        loop {
+        let mut budget = dev.ring.capacity() as usize;
+        while budget > 0 {
             let Some(dev) = &self.device else { return };
             let waiting = dev.ring.filled() as usize;
             if waiting == 0 {
-                break;
+                return;
             }
-            let n = waiting.min(MAX_BLOCK);
-            // When the newest frame in the ring was recorded; the frames
-            // taken now end `after` frames before it.
-            let (clock_pos, clock_ns) = dev.ring.capture_clock();
+            let n = waiting.min(MAX_BLOCK).min(budget);
+            // When the newest frame in the ring was recorded, and so the
+            // last of those taken now.
+            let clock = dev.ring.capture_clock();
             let got = dev.ring.read(&mut self.raw[..n * dch]);
             if got == 0 {
-                break;
+                return;
             }
-            let end_pos = dev.ring.read_pos();
-            let end_ns = if clock_ns == 0 {
-                now
-            } else {
-                let after = clock_pos.saturating_sub(end_pos);
-                clock_ns.saturating_sub(after * 1_000_000_000 / rate as u64)
-            };
-            if self.muted {
-                self.raw[..got * dch].fill(0);
-            }
+            budget -= got;
+            let end_ns = recorded_at(clock, dev.ring.read_pos(), rate).unwrap_or(now);
             self.deliver(got, dch, end_ns, mixer);
+        }
+        if let Some(dev) = &self.device
+            && dev.ring.filled() > 0
+        {
+            let _ = dev.data_event.signal();
         }
     }
 
@@ -365,35 +381,33 @@ impl Capture {
             // The reference that was playing while these samples were
             // recorded (the newest pending sample was recorded at
             // `pending_end_ns`).
-            let mut reference = vec![0i16; whole];
+            echo.reference.resize(whole, 0);
             let backlog_ns = (echo.pending.len() - whole) as u64 * 1_000_000_000 / ECHO_RATE as u64;
-            mixer.reference(echo.pending_end_ns.saturating_sub(backlog_ns), &mut reference);
-            let mut cleaned = vec![0i16; whole];
+            mixer.reference(echo.pending_end_ns.saturating_sub(backlog_ns), &mut echo.reference);
+            echo.cleaned.resize(whole, 0);
             for (i, chunk) in echo.pending[..whole].chunks_exact(frame).enumerate() {
-                let r = &reference[i * frame..(i + 1) * frame];
-                echo.canceller.process(chunk, r, &mut cleaned[i * frame..(i + 1) * frame]);
+                let r = &echo.reference[i * frame..(i + 1) * frame];
+                echo.canceller.process(chunk, r, &mut echo.cleaned[i * frame..(i + 1) * frame]);
             }
             // Beside the cleaned microphone (for the streams that want
             // them): what was playing and the microphone as recorded.
             let widest = self.streams.values().filter(|s| s.echo_cancel).map(|s| s.ring.channels()).max();
-            let mut wide = Vec::new();
+            echo.wide.clear();
+            echo.two.clear();
             if widest.is_some_and(|c| c > 1) {
-                wide.reserve(whole * 3);
-                for ((&c, &r), &m) in cleaned.iter().zip(&reference).zip(&echo.pending[..whole]) {
+                for ((&c, &r), &m) in echo.cleaned.iter().zip(&echo.reference).zip(&echo.pending[..whole]) {
                     echo.side.push_back((r, m));
                     let (r, m) = echo.side.pop_front().unwrap_or((0, 0));
-                    wide.extend_from_slice(&[c, r, m]);
+                    echo.wide.extend_from_slice(&[c, r, m]);
+                    echo.two.extend_from_slice(&[c, r]);
                 }
             }
             echo.pending.drain(..whole);
             for s in self.streams.values_mut().filter(|s| s.echo_cancel) {
                 match s.ring.channels() {
-                    1 => write_stream(s, &cleaned, end_ns),
-                    2 => {
-                        let two: Vec<i16> = wide.as_chunks::<3>().0.iter().flat_map(|f| [f[0], f[1]]).collect();
-                        write_stream(s, &two, end_ns);
-                    }
-                    _ => write_stream(s, &wide, end_ns),
+                    1 => write_stream(s, &echo.cleaned, end_ns),
+                    2 => write_stream(s, &echo.two, end_ns),
+                    _ => write_stream(s, &echo.wide, end_ns),
                 }
             }
             if end_ns >= echo.report_at_ns {

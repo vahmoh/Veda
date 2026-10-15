@@ -39,7 +39,7 @@ wait 1
 agent-call use_app '{"app":"interceptor","action":"resume"}' 30
 agent-result '"paused":false'
 wait 3
-shot target/veda/agent-games-1-in-front.png
+shot target/veda/agent-games-1-in-front.png now
 agent-call read_app '{"app":"interceptor"}' 30
 agent-result '"screen":"playing"'
 agent-call use_app '{"app":"interceptor","action":"quit_to_menu"}' 30
@@ -52,4 +52,4 @@ agent-call read_app '{"app":"about"}' 30
 agent-result '"version":"Veda 0.1.0"'
 agent-result '"licences_shown":true'
 wait 2
-shot target/veda/agent-games-7-about.png
+shot target/veda/agent-games-7-about.png now

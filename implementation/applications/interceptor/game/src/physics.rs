@@ -105,7 +105,11 @@ pub fn collide_walls(world: &World, v: &mut Vehicle, hint: usize) -> Option<Impa
     let center = road.locate(v.pos, Some(hint));
     let side = center.lateral.signum();
     let mut hardest: Option<Impact> = None;
-    for corner in v.corners() {
+    // Each corner where it is now: one in a wall moves the car out, and
+    // the others with it (two corners in one wall push it out once).
+    let offsets = v.corners().map(|c| c - v.pos.xz());
+    for offset in offsets {
+        let corner = v.pos.xz() + offset;
         let p = Vec3::new(corner.x, v.pos.y, corner.y);
         let at = road.locate(p, Some(center.index));
         let (_, wall) = road.widths(at.s);
@@ -148,14 +152,15 @@ pub fn collide_walls(world: &World, v: &mut Vehicle, hint: usize) -> Option<Impa
 
 /// The box's projection's half length on `axis`.
 fn radius(v: &Vehicle, axis: Vec2) -> f32 {
-    v.spec.half_length * v.forward().dot(axis).abs() + v.spec.half_width * v.left().dot(axis).abs()
+    v.chassis.half_length * v.forward().dot(axis).abs() + v.chassis.half_width * v.left().dot(axis).abs()
 }
 
 /// Separates `a` and `b` if their boxes overlap and exchanges the impulse
 /// of their crash. Returns it, if they crashed.
 pub fn collide_cars(a: &mut Vehicle, b: &mut Vehicle) -> Option<Impact> {
-    let d = b.pos.xz() - a.pos.xz();
-    let reach = a.spec.half_length + a.spec.half_width + b.spec.half_length + b.spec.half_width;
+    // Between the boxes' middles.
+    let d = b.middle() - a.middle();
+    let reach = a.chassis.half_length + a.chassis.half_width + b.chassis.half_length + b.chassis.half_width;
     if d.length_squared() > reach * reach || (a.pos.y - b.pos.y).abs() > 2.0 {
         return None;
     }
@@ -176,9 +181,9 @@ pub fn collide_cars(a: &mut Vehicle, b: &mut Vehicle) -> Option<Impact> {
     // The point of contact: the corner of one box deepest into the other.
     let point = if axis < 2 {
         // An axis of a's: b's corner furthest back along n.
-        b.corners().into_iter().min_by(|p, q| p.dot(n).total_cmp(&q.dot(n))).unwrap_or(b.pos.xz())
+        b.corners().into_iter().min_by(|p, q| p.dot(n).total_cmp(&q.dot(n))).unwrap_or(b.middle())
     } else {
-        a.corners().into_iter().max_by(|p, q| p.dot(n).total_cmp(&q.dot(n))).unwrap_or(a.pos.xz())
+        a.corners().into_iter().max_by(|p, q| p.dot(n).total_cmp(&q.dot(n))).unwrap_or(a.middle())
     };
     // Apart, by their masses.
     let (ia, ib) = (1.0 / a.spec.mass, 1.0 / b.spec.mass);
@@ -213,15 +218,16 @@ pub fn collide_cars(a: &mut Vehicle, b: &mut Vehicle) -> Option<Impact> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vehicle::{Controls, Spec};
+    use crate::carmodel::Kind;
+    use crate::vehicle::Controls;
 
     #[test]
     fn a_rear_corner_hit_spins_the_car() {
         // b drives along +z; a, alongside on its left with its nose by b's
         // rear wheel, steers into b's rear quarter: b turns (a PIT).
-        let mut b = Vehicle::new(Spec::sports(), Vec3::new(0.0, 0.0, 10.0), 0.0);
+        let mut b = Vehicle::new(Kind::Coupe, Vec3::new(0.0, 0.0, 10.0), 0.0);
         b.set_speed(25.0);
-        let mut a = Vehicle::new(Spec::interceptor(), Vec3::new(2.8, 0.0, 6.5), -0.3);
+        let mut a = Vehicle::new(Kind::Police, Vec3::new(2.8, 0.0, 6.5), -0.3);
         a.set_speed(26.0);
         let flat = |_: Vec3| Ground { height: 0.0, normal: Vec3::Y, grip: 1.0 };
         let mut hit = None;
@@ -249,8 +255,8 @@ mod tests {
         // A car driving straight at the wall from the middle of the road.
         let s = 400.0;
         let (p, f, r, _) = road.frame(s);
-        let yaw_out = r.x.atan2(r.z);
-        let mut v = Vehicle::new(Spec::interceptor(), p + r * 5.0, yaw_out);
+        let yaw_out = libm::atan2f(r.x, r.z);
+        let mut v = Vehicle::new(Kind::Police, p + r * 5.0, yaw_out);
         v.set_speed(15.0);
         let mut hint = road.locate(v.pos, None).index;
         let mut crashed = false;
@@ -265,5 +271,33 @@ mod tests {
         let (_, wall) = road.widths(at.s);
         assert!(at.lateral.abs() < wall, "through the wall: {}", at.lateral);
         let _ = f;
+    }
+
+    #[test]
+    fn two_corners_in_a_wall_push_the_car_out_once() {
+        // Nose first into the wall of a straight, both front corners 20 cm
+        // into it: it comes back to the wall, not twice as far.
+        let world = World::new();
+        let road = &world.road;
+        let s = (0..road.len())
+            .map(|i| i as f32 * road.spacing())
+            .find(|&s| {
+                (-30..=30).all(|d| road.curvature(s + d as f32).abs() < 2e-4)
+                    && (-30..=30).all(|d| !road.divided(s + d as f32))
+            })
+            .expect("a straight");
+        let (p, _, r, _) = road.frame(s);
+        let (_, wall) = road.widths(s);
+        let mut v = Vehicle::new(Kind::Police, p, libm::atan2f(r.x, r.z));
+        let reach = v.chassis.middle + v.chassis.half_length;
+        v.pos = p + r * (wall + 0.2 - reach);
+        let hint = road.locate(v.pos, None).index;
+        let deepest = |v: &Vehicle| {
+            let lateral = |c: &Vec2| road.locate(Vec3::new(c.x, v.pos.y, c.y), Some(hint)).lateral;
+            v.corners().iter().map(lateral).fold(f32::MIN, f32::max)
+        };
+        assert!((deepest(&v) - (wall + 0.2)).abs() < 0.02, "{} into a wall at {wall}", deepest(&v));
+        assert!(collide_walls(&world, &mut v, hint).is_none(), "standing, it hit nothing");
+        assert!((deepest(&v) - wall).abs() < 0.02, "pushed out to {} from a wall at {wall}", deepest(&v));
     }
 }

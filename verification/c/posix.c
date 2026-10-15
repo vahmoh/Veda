@@ -63,6 +63,13 @@ static void report(const char *name, int ok, const char *fmt, ...)
 		report(name, ok_, __VA_ARGS__); \
 	} while (0)
 
+/* The order of two ints, for qsort and bsearch. */
+static int compare_ints(const void *a, const void *b)
+{
+	int x = *(const int *)a, y = *(const int *)b;
+	return (x > y) - (x < y);
+}
+
 static void check_stdio_and_strings(void)
 {
 	char buf[128];
@@ -72,13 +79,13 @@ static void check_stdio_and_strings(void)
 	CHECK("strtod", d == 2500.0, "got %f", d);
 	long l = strtol("-0x7f", 0, 16);
 	CHECK("strtol", l == -127, "got %ld", l);
-	int v[] = { 5, 3, 9, 1, 7 };
-	int (*cmp)(const void *, const void *) = 0;
-	(void)cmp;
-	for (int i = 0; i < 5; i++)
-		for (int j = i + 1; j < 5; j++)
-			if (v[j] < v[i]) { int t = v[i]; v[i] = v[j]; v[j] = t; }
-	CHECK("arrays", v[0] == 1 && v[4] == 9, "unsorted");
+	int v[] = { 5, 3, 9, 1, 7, -2, 9 };
+	qsort(v, 7, sizeof v[0], compare_ints);
+	int key = 7;
+	const int *found = bsearch(&key, v, 7, sizeof v[0], compare_ints);
+	CHECK("qsort and bsearch",
+	      v[0] == -2 && v[1] == 1 && v[2] == 3 && v[3] == 5 && v[4] == 7 && v[5] == 9 && v[6] == 9 && found == &v[4],
+	      "sorted to %d %d %d %d %d %d %d, 7 at %p", v[0], v[1], v[2], v[3], v[4], v[5], v[6], (const void *)found);
 	struct utsname u;
 	CHECK("uname", uname(&u) == 0 && !strcmp(u.sysname, "Veda") && !strcmp(u.machine, VEDA_MACHINE),
 	      "sysname '%s' machine '%s'", u.sysname, u.machine);

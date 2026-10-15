@@ -20,6 +20,16 @@ vaudio = { workspace = true }
 serde_json = { workspace = true }
 crc32fast = { workspace = true }
 tungstenite = { workspace = true }
+bootinfo = { workspace = true }
+libc = { workspace = true }
+# The generators' manifests, which the image is packed from.
+gencommon = { path = "../generation/common" }
+
+[dev-dependencies]
+# The checks of screenshots are tested on pictures the tests make.
+vimage = { workspace = true, features = ["encode"] }
+# The test tables are whole tables, as the driver VM takes the firmware's.
+vhv = { workspace = true }
 
 [lints]
 workspace = true

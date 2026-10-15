@@ -4,8 +4,10 @@
 //! State queries (OpenGL ES 3.0 section 6.1): `Get*`, strings and the
 //! implementation's limits.
 
-use super::buffers::UNIFORM_BUFFER_OFFSET_ALIGNMENT;
-use super::{Context, DRAW_BUFFERS, FEEDBACK_BINDINGS, TEXTURE_UNITS, UNIFORM_BUFFER_BINDINGS, VERTEX_ATTRIBS};
+use super::{
+    Context, DRAW_BUFFERS, FEEDBACK_BINDINGS, TEXTURE_UNITS, UNIFORM_BUFFER_BINDINGS, UNIFORM_BUFFER_OFFSET_ALIGNMENT,
+    VERTEX_ATTRIBS,
+};
 use crate::gl;
 
 /// A state value as the specification types it.
@@ -291,32 +293,14 @@ impl Context {
                 };
                 enm(if pname == gl::IMPLEMENTATION_COLOR_READ_FORMAT { f } else { t })
             }
-            _ => {
-                if self.capability_state(pname).is_some() {
-                    return self.capability_state(pname).map(boolean);
+            // The `Enable`/`Disable` capabilities.
+            _ => match self.capability(pname) {
+                Some(&mut on) => boolean(on),
+                None => {
+                    self.err(gl::INVALID_ENUM);
+                    return None;
                 }
-                self.err(gl::INVALID_ENUM);
-                return None;
-            }
-        })
-    }
-
-    /// An `Enable`/`Disable` capability's state.
-    fn capability_state(&self, cap: u32) -> Option<bool> {
-        let s = &self.state;
-        Some(match cap {
-            gl::BLEND => s.blend,
-            gl::CULL_FACE => s.cull_face,
-            gl::DEPTH_TEST => s.depth_test,
-            gl::DITHER => s.dither,
-            gl::POLYGON_OFFSET_FILL => s.polygon_offset_fill,
-            gl::PRIMITIVE_RESTART_FIXED_INDEX => s.primitive_restart,
-            gl::RASTERIZER_DISCARD => s.rasterizer_discard,
-            gl::SAMPLE_ALPHA_TO_COVERAGE => s.sample_alpha_to_coverage,
-            gl::SAMPLE_COVERAGE => s.sample_coverage,
-            gl::SCISSOR_TEST => s.scissor_test,
-            gl::STENCIL_TEST => s.stencil_test,
-            _ => return None,
+            },
         })
     }
 
@@ -476,7 +460,7 @@ impl Context {
         use alloc::string::String;
         Some(match name {
             gl::VENDOR => String::from("Veda"),
-            gl::RENDERER => String::from(self.backend.caps().name),
+            gl::RENDERER => self.backend.caps().name.clone(),
             gl::VERSION => String::from("OpenGL ES 3.0 Veda"),
             gl::SHADING_LANGUAGE_VERSION => String::from("OpenGL ES GLSL ES 3.00 Veda"),
             gl::EXTENSIONS => extensions(self).join(" "),
