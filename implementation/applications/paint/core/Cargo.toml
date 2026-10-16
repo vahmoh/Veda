@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "paint-core"
+description = "What Paint does to pictures, testable on the host: strokes, fills, shapes, text, selections, transforms and effects, tiled undo, the view and its rendering, files and what it remembers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libm = { workspace = true }
+vgfx = { workspace = true }
+vraster = { workspace = true }
+vfiles = { workspace = true }
+vimage = { workspace = true, features = ["encode"] }
+
+[lints]
+workspace = true

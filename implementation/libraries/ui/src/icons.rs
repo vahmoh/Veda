@@ -104,6 +104,36 @@ pub enum Icon {
     MicOff,
     /// The voice agent: a circle in a ring.
     Agent,
+    /// A pocket calculator: its display above a grid of keys.
+    Calculator,
+    /// A paintbrush: painting (Paint).
+    Brush,
+    /// An eraser block on a line.
+    Eraser,
+    /// A paint bucket pouring: filling an area.
+    Fill,
+    /// An eyedropper: picking a colour from a picture.
+    Eyedropper,
+    /// Two crossed corners: cropping.
+    Crop,
+    /// A capital T: writing text.
+    Text,
+    /// A dashed rectangle: selecting part of a picture.
+    Select,
+    /// A spray can: airbrushing.
+    Spray,
+    /// A square and a circle: shapes.
+    Shapes,
+    /// Two arrows, one each way: swapping two things.
+    Swap,
+    /// The key that deletes leftwards: an arrow-shaped key with a cross.
+    Backspace,
+    /// A clock turning back: what was done before.
+    History,
+    /// Two triangles mirrored across an upright line: mirroring left to right.
+    FlipHorizontal,
+    /// Two triangles mirrored across a level line: mirroring top to bottom.
+    FlipVertical,
 }
 
 /// Stroke-based icon geometry on a 24x24 grid; `filled` parts are filled.
@@ -542,6 +572,111 @@ fn build(icon: Icon) -> Builder {
             b.circle(12.0, 12.0, 8.5);
             b.circle(12.0, 12.0, 4.0);
         }
+        Icon::Calculator => {
+            b.rrect(5.0, 2.5, 14.0, 19.0, 2.5);
+            b.rrect(8.0, 5.5, 8.0, 4.0, 1.0);
+            for y in [13.25, 17.5] {
+                for x in [8.75, 12.0, 15.25] {
+                    b.dot(x, y, 1.15);
+                }
+            }
+        }
+        Icon::Brush => {
+            // The handle, slanting up to the right, its ferrule, and the bristles curving down to
+            // their tip at the bottom left.
+            b.poly(&[(19.0, 2.6), (21.4, 5.0), (14.6, 11.8), (12.2, 9.4)], true);
+            b.poly(&[(12.2, 9.4), (10.6, 11.0), (13.0, 13.4), (14.6, 11.8)], false);
+            b.stroke.move_to(10.6, 11.0);
+            b.stroke.cubic_to(7.0, 11.0, 6.5, 14.0, 6.0, 16.5);
+            b.stroke.cubic_to(5.6, 18.5, 4.8, 19.8, 3.0, 21.0);
+            b.stroke.cubic_to(8.5, 21.0, 12.8, 19.0, 13.0, 13.4);
+        }
+        Icon::Eraser => {
+            b.poly(&[(13.5, 3.5), (20.5, 10.5), (11.0, 20.0), (7.0, 20.0), (3.5, 16.5)], true);
+            b.line(8.0, 9.0, 15.0, 16.0);
+            b.line(11.0, 20.0, 20.5, 20.0);
+        }
+        Icon::Fill => {
+            // A bucket on its side, its open top to the left, a drop falling from its lip.
+            b.poly(&[(10.5, 3.0), (19.0, 11.5), (12.0, 18.5), (3.5, 10.0)], true);
+            b.line(3.5, 10.0, 19.0, 11.5);
+            b.line(10.5, 3.0, 8.0, 0.5);
+            b.stroke.move_to(20.5, 14.0);
+            b.stroke.cubic_to(22.5, 17.0, 22.5, 19.5, 20.5, 19.5);
+            b.stroke.cubic_to(18.5, 19.5, 18.5, 17.0, 20.5, 14.0);
+            b.stroke.close();
+        }
+        Icon::Eyedropper => {
+            // The bulb at the top right, the collar across, the tube down to the tip.
+            b.stroke.move_to(13.0, 8.0);
+            b.stroke.line_to(16.0, 5.0);
+            b.stroke.cubic_to(17.5, 3.5, 19.5, 3.5, 20.5, 4.5);
+            b.stroke.cubic_to(21.5, 5.5, 21.5, 7.5, 20.0, 9.0);
+            b.stroke.line_to(17.0, 12.0);
+            b.line(11.5, 6.5, 18.5, 13.5);
+            b.poly(&[(15.5, 10.5), (7.0, 19.0), (4.0, 20.0), (5.0, 17.0), (13.5, 8.5)], false);
+        }
+        Icon::Crop => {
+            b.poly(&[(6.5, 2.5), (6.5, 17.5), (21.5, 17.5)], false);
+            b.poly(&[(2.5, 6.5), (17.5, 6.5), (17.5, 21.5)], false);
+        }
+        Icon::Text => {
+            b.poly(&[(5.0, 7.5), (5.0, 4.0), (19.0, 4.0), (19.0, 7.5)], false);
+            b.line(12.0, 4.0, 12.0, 20.0);
+            b.line(9.0, 20.0, 15.0, 20.0);
+        }
+        Icon::Select => {
+            // A dashed rectangle: its corners, and a dash in the middle of each side.
+            for (x0, y0, x1, y1) in [(3.5, 7.0, 3.5, 3.5), (3.5, 3.5, 7.0, 3.5), (17.0, 3.5, 20.5, 3.5)] {
+                b.line(x0, y0, x1, y1);
+            }
+            b.poly(&[(20.5, 3.5), (20.5, 7.0)], false);
+            b.poly(&[(3.5, 17.0), (3.5, 20.5), (7.0, 20.5)], false);
+            b.poly(&[(17.0, 20.5), (20.5, 20.5), (20.5, 17.0)], false);
+            b.line(10.5, 3.5, 13.5, 3.5);
+            b.line(10.5, 20.5, 13.5, 20.5);
+            b.line(3.5, 10.5, 3.5, 13.5);
+            b.line(20.5, 10.5, 20.5, 13.5);
+        }
+        Icon::Spray => {
+            b.rrect(3.5, 10.0, 9.5, 11.5, 2.0);
+            b.rrect(5.5, 6.5, 5.5, 3.5, 1.0);
+            b.line(11.0, 8.25, 13.0, 8.25);
+            for (x, y) in [(16.5, 8.25), (19.5, 5.5), (19.5, 11.0), (21.5, 8.25), (17.5, 3.0), (17.5, 13.5)] {
+                b.dot(x, y, 1.1);
+            }
+        }
+        Icon::Shapes => {
+            b.rrect(3.0, 10.5, 10.5, 10.5, 1.5);
+            b.circle(15.0, 9.0, 6.0);
+        }
+        Icon::Swap => {
+            b.line(4.0, 8.0, 19.0, 8.0);
+            b.poly(&[(15.5, 4.5), (19.0, 8.0), (15.5, 11.5)], false);
+            b.line(20.0, 16.0, 5.0, 16.0);
+            b.poly(&[(8.5, 12.5), (5.0, 16.0), (8.5, 19.5)], false);
+        }
+        Icon::Backspace => {
+            b.poly(&[(8.5, 5.0), (20.5, 5.0), (20.5, 19.0), (8.5, 19.0), (2.5, 12.0)], true);
+            b.line(11.0, 9.0, 17.0, 15.0);
+            b.line(17.0, 9.0, 11.0, 15.0);
+        }
+        Icon::FlipHorizontal | Icon::FlipVertical => {
+            // Drawn either side of an upright axis; turned a quarter for the vertical one.
+            let turn = |(x, y): (f32, f32)| if icon == Icon::FlipVertical { (y, x) } else { (x, y) };
+            for (y0, y1) in [(2.5, 5.0), (8.0, 10.5), (13.5, 16.0), (19.0, 21.5)] {
+                let (p, q) = (turn((12.0, y0)), turn((12.0, y1)));
+                b.line(p.0, p.1, q.0, q.1);
+            }
+            b.poly(&[(9.0, 5.0), (9.0, 19.0), (2.5, 19.0)].map(turn), true);
+            b.fill_poly(&[(15.0, 5.0), (15.0, 19.0), (21.5, 19.0)].map(turn));
+        }
+        Icon::History => {
+            // A clock face whose rim turns back into an arrow at the top left.
+            b.arc(12.0, 12.0, 8.5, 225.0, 300.0);
+            b.poly(&[(3.0, 4.5), (6.0, 6.0), (7.5, 2.8)], false);
+            b.poly(&[(12.0, 7.5), (12.0, 12.0), (15.0, 14.0)], false);
+        }
         Icon::Lock => {
             b.rrect(5.0, 11.0, 14.0, 10.0, 2.0);
             b.arc(12.0, 11.0, 4.5, 180.0, 180.0);
@@ -615,7 +750,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 81] = [
+    pub const ALL: [Icon; 96] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -697,6 +832,21 @@ impl Icon {
         Icon::Mic,
         Icon::MicOff,
         Icon::Agent,
+        Icon::Calculator,
+        Icon::Brush,
+        Icon::Eraser,
+        Icon::Fill,
+        Icon::Eyedropper,
+        Icon::Crop,
+        Icon::Text,
+        Icon::Select,
+        Icon::Spray,
+        Icon::Shapes,
+        Icon::Swap,
+        Icon::Backspace,
+        Icon::History,
+        Icon::FlipHorizontal,
+        Icon::FlipVertical,
     ];
 
     /// Looks an icon up by its manifest name (`apps/*.app` `icon=` field).
@@ -727,6 +877,8 @@ impl Icon {
             "calendar" => Icon::Calendar,
             "palette" => Icon::Palette,
             "warning" => Icon::Warning,
+            "calculator" | "calc" => Icon::Calculator,
+            "brush" | "paint" => Icon::Brush,
             _ => return None,
         })
     }
@@ -734,6 +886,8 @@ impl Icon {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use vgfx::Bitmap;
 
@@ -748,5 +902,48 @@ mod tests {
         assert_eq!(alpha(48, 24), 255, "the stem");
         assert_eq!(alpha(18, 52), 255, "the arc's left");
         assert_eq!(alpha(56, 35), 0, "between them");
+    }
+
+    #[test]
+    fn every_icon_draws_on_its_grid() {
+        // At 48 pixels in the middle of 64: something is drawn, nothing beyond the grid's square
+        // but the half stroke and anti-aliasing at its edge.
+        for icon in Icon::ALL {
+            let mut b = Bitmap::new(64, 64);
+            icon.draw(&mut Canvas::for_bitmap(&mut b), Rect::new(8, 8, 48, 48), 48.0, Color::WHITE);
+            let drawn: std::vec::Vec<(i32, i32)> =
+                (0..64).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| b.get(x, y) != 0).collect();
+            assert!(drawn.len() > 40, "{icon:?} draws {} pixels", drawn.len());
+            assert!(
+                drawn.iter().all(|&(x, y)| (6..58).contains(&x) && (6..58).contains(&y)),
+                "{icon:?} leaves its grid"
+            );
+        }
+        assert_eq!(Icon::by_name("calculator"), Some(Icon::Calculator));
+        assert_eq!(Icon::by_name("paint"), Some(Icon::Brush));
+    }
+
+    /// Every icon at 16, 24 and 48 pixels, white on the theme's background, for a person to look
+    /// at: `cargo test -p vui icon_gallery -- --ignored` writes `target/visual/vui-icons.png`
+    /// (from the workspace's root).
+    #[test]
+    #[ignore]
+    fn icon_gallery() {
+        const COLUMNS: i32 = 8;
+        const CELL: (i32, i32) = (128, 64);
+        let rows = (Icon::ALL.len() as i32 + COLUMNS - 1) / COLUMNS;
+        let mut sheet = Bitmap::filled(COLUMNS * CELL.0, rows * CELL.1, crate::Theme::dark().bg.premul());
+        let mut c = Canvas::for_bitmap(&mut sheet);
+        for (i, icon) in Icon::ALL.iter().enumerate() {
+            let (x, y) = ((i as i32 % COLUMNS) * CELL.0, (i as i32 / COLUMNS) * CELL.1);
+            icon.draw(&mut c, Rect::new(x + 8, y + 24, 16, 16), 16.0, Color::WHITE);
+            icon.draw(&mut c, Rect::new(x + 32, y + 20, 24, 24), 24.0, Color::WHITE);
+            icon.draw(&mut c, Rect::new(x + 68, y + 8, 48, 48), 48.0, Color::WHITE);
+        }
+        drop(c);
+        let image = vimage::Image::from_pixels(sheet.width as u32, sheet.height as u32, sheet.pixels).unwrap();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/visual");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("vui-icons.png"), vimage::encode_png(&image).unwrap()).unwrap();
     }
 }

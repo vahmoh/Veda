@@ -318,6 +318,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "calculator"
+version = "0.1.0"
+dependencies = [
+ "apps-common",
+ "calculator-core",
+ "vbuild",
+ "vfiles",
+ "vgfx",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "calculator-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "num-integer",
+ "num-rational",
+ "num-traits",
+]
+
+[[package]]
 name = "cc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1544,6 +1568,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "paint"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "paint-core",
+ "vabi",
+ "vbuild",
+ "vfiles",
+ "vgfx",
+ "vimage",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "paint-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "vfiles",
+ "vgfx",
+ "vimage",
+ "vraster",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2636,6 +2687,7 @@ dependencies = [
  "vabi",
  "vfiles",
  "vgfx",
+ "vimage",
  "vipc",
  "vproto",
  "vraster",

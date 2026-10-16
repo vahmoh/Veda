@@ -15,9 +15,11 @@
 //! | QOI  | [`qoi`] |
 //!
 //! Scaling is [`fast_image_resize`]'s convolution, alpha-correct and using
-//! the processor's SIMD where it has it. With the `encode` feature (the
-//! build machine's tools), [`encode_png`] (the `png` crate), [`encode_jpeg`]
-//! (`jpeg-encoder`) and [`encode_qoi`] write pictures.
+//! the processor's SIMD where it has it. With the `encode` feature, which
+//! needs no `std` (Paint saves with it in Veda; the build machine's tools
+//! make pictures with it), [`encode_png`] (deflated by `miniz_oxide`),
+//! [`encode_jpeg`] (`jpeg-encoder`), [`encode_qoi`] and [`encode_bmp`]
+//! write pictures, and [`encode`] in any [`Format`].
 //!
 //! What this crate adds is Veda's side: one [`Image`] type in the
 //! framebuffer's pixel layout, limits on what a file can make it allocate,
@@ -64,7 +66,10 @@ mod ops;
 mod tests;
 
 #[cfg(feature = "encode")]
-pub use encode::{JpegOptions, Subsampling, encode_jpeg, encode_png, encode_qoi};
+pub use encode::{
+    IDAT_MAX, JpegOptions, PngOptions, Subsampling, encode, encode_bmp, encode_jpeg, encode_png, encode_png_with,
+    encode_qoi,
+};
 pub use error::ImageError;
 pub use image::{Image, Orientation};
 pub use ops::{

@@ -68,6 +68,10 @@ members = [
     "implementation/applications/music/core",
     "implementation/applications/terminal/core",
     "implementation/applications/common",
+    "implementation/applications/calculator",
+    "implementation/applications/calculator/core",
+    "implementation/applications/paint",
+    "implementation/applications/paint/core",
     "implementation/services/audio",
     "generation/assets",
     "generation/common",
@@ -226,6 +230,11 @@ base16ct = { version = "1.0.0", default-features = false, features = ["alloc"] }
 # num-traits' `Float` (`use num_traits::Float;` gives `x.sqrt()`, `x.sin()`).
 libm = "0.2.16"
 num-traits = { version = "0.2.19", default-features = false, features = ["libm"] }
+# The Calculator's exact arithmetic: fractions of 128-bit integers that
+# add, multiply and divide exactly and say when they would overflow, and
+# whole roots of integers (num's crates, without std).
+num-rational = { version = "0.4.2", default-features = false }
+num-integer = { version = "0.1.47", default-features = false }
 # Vectors, matrices and quaternions for 3D graphics (Interceptor). Without
 # std it takes its float functions from libm.
 glam = { version = "0.34.1", default-features = false, features = ["nostd-libm"] }
@@ -272,15 +281,19 @@ qoi = { version = "0.4.1", default-features = false, features = ["alloc"] }
 fast_image_resize = { version = "6.1.0", default-features = false, features = ["no_std"] }
 # Pixel buffers seen as the bytes the image libraries read and write.
 bytemuck = { version = "1.25.2", default-features = false }
-# Image encoding, on the build machine only (generated pictures, test
-# output): PNG (the `image` crate's) and JPEG with progressive scans; and
-# zlib for the image tests' hand-made PNGs.
+# Image encoding (vimage's `encode` feature), without std: Paint's saved
+# pictures in Veda, and generated pictures and test output on the build
+# machine. JPEG with progressive scans; PNG's zlib stream from miniz_oxide
+# (the `flate2` crate's deflate), which also makes the image tests'
+# hand-made PNGs. The `png` crate (the `image` crate's) reads the encoder's
+# PNGs back in vimage's tests: it needs std.
 png = "0.18.1"
-jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
-miniz_oxide = "0.9.1"
+jpeg-encoder = { version = "0.7.1", default-features = false }
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 # CRC-32 (IEEE 802.3): the VFS's snapshots of the home directory, GPT
-# headers and hand-made PNGs. Without std it picks its fastest code when
-# it is compiled (slicing by 16 tables on a plain x86-64).
+# headers and the chunks of the PNGs vimage writes. Without std it picks
+# its fastest code when it is compiled (slicing by 16 tables on a plain
+# x86-64).
 crc32fast = { version = "1.5.2", default-features = false }
 # The TCP/IP stack, which Veda builds with a security patch: a port
 # (implementation/ports/smoltcp), like zune-jpeg.

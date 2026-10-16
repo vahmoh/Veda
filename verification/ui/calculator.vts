@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Calculator (1280x800 screen): an expression typed, its result, a result
+# carried on, the keypad clicked, then Scientific, Programmer and the
+# converter, from the keyboard.
+boot-cmdline "run=calculator"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started calculator" 60
+wait 5
+type "12*(3+4"
+wait 1
+shot target/veda/calculator-1-typing.png
+key ret
+wait 1
+shot target/veda/calculator-2-result.png
+# The result carried on, then the keypad: 7, ×, 2, =.
+type "/4"
+key ret
+click 0.3813 0.5988
+click 0.618 0.5988
+click 0.4602 0.7675
+click 0.618 0.8525
+wait 1
+shot target/veda/calculator-3-keypad.png
+# Scientific: an exact sine and the history beside a wider window.
+key alt-2
+wait 1
+key esc
+type "sin(30)+2^10"
+wait 1
+shot target/veda/calculator-4-scientific.png
+key ret
+# Programmer: hexadecimal (F5), bitwise operators.
+key alt-3
+wait 1
+key f5
+type "ff and f0"
+wait 1
+shot target/veda/calculator-5-programmer.png
+key ret
+# The converter: 25 metres in feet.
+key alt-4
+wait 1
+type "25"
+wait 1
+shot target/veda/calculator-6-converter.png
+reject-serial "calculator crashed"

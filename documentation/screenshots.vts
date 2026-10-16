@@ -6,13 +6,13 @@
 #   cargo orchestration script documentation/screenshots.vts
 #
 # which writes documentation/images/*.png. Applications are started from
-# the start menu's search and the Terminal, so only Music's play button and
-# a few things on the taskbar are clicked by position. The machine is on
-# QEMU's wired network, and the agent talks to the stand-in for Deepgram.
-# GCC and the video decoder must be in the image
-# (`cargo orchestration toolchain`). Interceptor's picture has a script of
-# its own, shot at 1920x1200 and scaled to 1280x800
-# (`documentation/interceptor.vts`).
+# the start menu's search and the Terminal, so only Music's play button,
+# Paint's tools, the Calculator's maximize button and a few things on the
+# taskbar are clicked by position. The machine is on QEMU's wired network,
+# and the agent talks to the stand-in for Deepgram. GCC and the video
+# decoder must be in the image (`cargo orchestration toolchain`).
+# Interceptor's picture has a script of its own, shot at 1920x1200 and
+# scaled to 1280x800 (`documentation/interceptor.vts`).
 requires native-toolchain
 agent-asleep
 fail-on "PANIC"
@@ -143,6 +143,77 @@ wait 8
 shot documentation/images/files.png
 key alt-f4
 wait-serial "files exited" 20
+wait 2
+
+# Paint: Retro Sunset with stars drawn in its sky and a greeting written on
+# it. The Terminal starts Paint with the picture; the tools, colours and
+# options are clicked by position, and the picture is drawn on at 100%.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "run paint 'Pictures/Retro Sunset.bmp' && exit"
+key ret
+wait-serial "opened /home/user/Pictures/Retro Sunset.bmp" 30
+wait 2
+# White stars, filled, each placed with Enter.
+key o
+click 0.4438 0.16
+click 0.1148 0.2075
+click 0.6078 0.1263
+drag 0.6875 0.3125 0.7219 0.3675
+key ret
+drag 0.7531 0.4075 0.7688 0.4325
+key ret
+drag 0.6328 0.3 0.6484 0.325
+key ret
+drag 0.2578 0.4375 0.2703 0.4575
+key ret
+# The greeting, in white bold at 56 pixels.
+key t
+click 0.1094 0.2075
+click 0.2977 0.2075
+click 0.2344 0.2975
+type "Hello, Veda!"
+key esc
+move 0.97 0.08
+wait 3
+shot documentation/images/paint.png
+# Undone, so that Paint closes without asking to save.
+key ctrl-z
+key ctrl-z
+key ctrl-z
+key ctrl-z
+key ctrl-z
+key ctrl-z
+wait 1
+key alt-f4
+wait-serial "paint exited" 20
+wait 2
+
+# The Calculator, maximized (its history beside the keys), in Scientific
+# mode, after a few calculations typed on the keyboard.
+key meta_l
+wait 2
+type "calculator"
+key ret
+wait-serial "started calculator" 30
+wait 3
+click 0.6102 0.0575
+wait 3
+key alt-2
+type "10!="
+type "sin(30)+cos(60)="
+type "2^64="
+type "0.1+0.2="
+type "(1+sqrt(5))/2="
+move 0.97 0.08
+wait 3
+shot documentation/images/calculator.png
+key alt-f4
+wait-serial "calculator exited" 20
 wait 2
 
 # GCC in the Terminal: a C program with a mistake, which GCC finds. It runs

@@ -49,12 +49,12 @@ dependency's reason beside it.
 | Networking | `smoltcp` (a port), `httparse`, `percent-encoding`, `base64ct` | TCP/IP; HTTP/1.x heads and chunk sizes; URL components; WebSocket keys |
 | TLS | `rustls`, `rustls-webpki`, `webpki-roots` | HTTPS and secure WebSockets, with a `CryptoProvider` on RustCrypto (`implementation/libraries/tls`) |
 | Cryptography | RustCrypto: `sha1`, `sha2`, `hmac`, `pbkdf2`, `hkdf`, `aes`, `aes-gcm`, `ccm`, `cmac`, `aes-kw`, `chacha20`, `chacha20poly1305`, `blake2`, `p256`, `p384`, `crypto-bigint`, `base16ct`; `x25519-dalek`, `ed25519-dalek`; `subtle`, `zeroize` | Wi-Fi security, TLS, the kernel's random numbers, Wi-Fi keys typed as hex |
-| Data | `serde`, `serde_json`, `crc32fast` | The agent's protocols, applications' agent actions and saved settings; the checksums of home snapshots and GPT headers |
+| Data | `serde`, `serde_json`, `crc32fast` | The agent's protocols, applications' agent actions and saved settings; the checksums of home snapshots, GPT headers and PNG chunks |
 | Text | `ttf-parser`, `unicode-segmentation`, `unicode-width`, `vte` | Font files; where a caret stands and how wide a character is; terminal escape sequences |
-| Numbers | `libm`, `num-traits`, `glam`, `rand`, `rand_pcg`, `rand_distr`, `fastnoise-lite` | Float functions; 3D maths; random numbers that are the same everywhere for a seed; noise |
-| Images | `zune-jpeg` (a port), `zune-png`, `zune-bmp`, `zune-inflate`, `qoi`, `fast_image_resize`, `bytemuck` | Decoding and scaling pictures |
+| Numbers | `libm`, `num-traits`, `num-rational`, `num-integer`, `glam`, `rand`, `rand_pcg`, `rand_distr`, `fastnoise-lite` | Float functions; the Calculator's exact fractions; 3D maths; random numbers that are the same everywhere for a seed; noise |
+| Images | `zune-jpeg` (a port), `zune-png`, `zune-bmp`, `zune-inflate`, `qoi`, `fast_image_resize`, `bytemuck`, `jpeg-encoder`, `miniz_oxide` | Decoding and scaling pictures; encoding them (JPEG, and PNG's deflate) |
 | Linux | `linux-raw-sys`; `rustix`, `libc` | The Linux ABI the POSIX layer gives musl; the driver VM's programs' system calls |
-| Build machine only | `png`, `jpeg-encoder`, `miniz_oxide`, `rav1e`, `md-5`, `tungstenite` | Generated pictures and sample videos, test output, the stand-in for Deepgram's Voice Agent API |
+| Build machine only | `png`, `rav1e`, `md-5`, `tungstenite` | Test output, and a second decoder for the PNGs Veda writes; sample videos; the stand-in for Deepgram's Voice Agent API |
 
 C and C++ come as ports too: GCC, binutils and musl (the toolchain),
 FFmpeg and dav1d (video decoding), Mesa (the driver VM's renderer) and
@@ -98,6 +98,14 @@ Linux (the driver VM's kernel).
 | `vglsl` | naga 30 (`glsl-in`), glsl, glsl-lang | naga's GLSL front end needs `std` (pp-rs) and reads only GLSL 4.40 and later, not OpenGL ES's; none has a TGSI or CPU back end |
 | Half-precision floats (`vglsl::ops`) | half 2.7 | half quiets signalling NaNs that Veda's TGSI lowering keeps, so the GPU and the interpreter would disagree; core's `f16` takes over once stable |
 | `vgl`'s renderer, ETC2/EAC, sRGB and packed floats, virgl encoder | rayon, texture2ddecoder, fast-srgb8 | rayon needs `std`; texture2ddecoder truncates EAC to 8 bits, which OpenGL ES keeps at 11; fast-srgb8 is approximate |
+| `vimage`'s PNG and BMP writers | png 0.18, image | Both need `std` (their encoders write to `std::io::Write`); the writers are the formats' headers and chunks and PNG's row filters, around `miniz_oxide`'s deflate, and the tests read what they write with png as well as zune-png |
+
+### Applications
+
+| Code | Weighed | Why it stays |
+|------|---------|--------------|
+| The Calculator's expressions (`calculator-core`) | meval, evalexpr, fasteval | They work in floats (evalexpr by default in 64-bit integers and floats), where the Calculator keeps fractions and multiples of π exact: 0.1 + 0.2 is 0.3, and the sine of π is 0. The fractions are num-rational's |
+| Paint's tools, history and effects (`paint-core`) | imageproc | It needs `std` and works on the `image` crate's buffers; Paint's tools draw with `vraster` and `vgfx` into Veda's premultiplied pixels, and its undo keeps only the tiles an edit changed |
 
 ### Audio, media and tools
 

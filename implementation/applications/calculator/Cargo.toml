@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "calculator"
+description = "Calculator: Standard, Scientific and Programmer modes and a unit converter, with exact arithmetic, a live result, history and memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "calculator"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vfiles = { workspace = true }
+vui = { workspace = true }
+apps-common = { path = "../common" }
+calculator-core = { path = "core" }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

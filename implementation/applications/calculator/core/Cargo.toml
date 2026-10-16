@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "calculator-core"
+description = "What the Calculator works out and decides, testable on the host: exact numbers and their functions, expressions from text to value, Programmer mode's words, units, the keys' edits, the display, history, memory and what it remembers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libm = { workspace = true }
+num-traits = { workspace = true }
+num-integer = { workspace = true }
+num-rational = { workspace = true }
+
+[lints]
+workspace = true

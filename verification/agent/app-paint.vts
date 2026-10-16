@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Paint's agent interface, with a simulated Voice Agent service: the agent
+# starts a picture, draws shapes, a line and text, fills, reads a colour,
+# undoes, and saves a new file, as the user would with the mouse; the
+# window shows each step. Opening another picture over unsaved changes is
+# refused, and throwing them away waits for the user's OK.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Paint starts for the agent and describes itself.
+agent-call app_actions '{"app":"paint"}' 60
+agent-result draw_shape
+wait-serial "paint offers" 10
+agent-call use_app '{"app":"paint","action":"new_picture","arguments":{"width":640,"height":400,"background":"sky blue"}}' 30
+agent-result '"width":640,"height":400,"background":"sky blue"'
+agent-call use_app '{"app":"paint","action":"draw_shape","arguments":{"shape":"circle","from_x":420,"from_y":40,"to_x":560,"to_y":180,"color":"orange","fill":"yellow","line_width":6}}' 30
+agent-result '"drew":"Ellipse"'
+agent-call use_app '{"app":"paint","action":"draw_shape","arguments":{"shape":"rectangle","from_x":0,"from_y":300,"to_x":640,"to_y":400,"color":"forest green","fill":"green"}}' 30
+agent-result '"drew":"Rectangle"'
+agent-call use_app '{"app":"paint","action":"draw_line","arguments":{"points":["60,300","120,200","180,300"],"color":"brown","size":8}}' 30
+agent-result '"points":3'
+agent-call use_app '{"app":"paint","action":"draw_text","arguments":{"text":"Sunny day","x":40,"y":40,"size":44,"color":"white","font":"bold"}}' 30
+agent-result '"wrote":"Sunny day"'
+agent-call use_app '{"app":"paint","action":"color_at","arguments":{"x":490,"y":110}}' 30
+agent-result '"name":"yellow"'
+agent-call use_app '{"app":"paint","action":"fill","arguments":{"x":300,"y":20,"color":"navy"}}' 30
+agent-result '"color":"navy"'
+agent-call use_app '{"app":"paint","action":"undo"}' 30
+agent-result '"undo":["Fill"]'
+agent-call use_app '{"app":"paint","action":"draw_shape","arguments":{"shape":"blob","from_x":0,"from_y":0,"to_x":1,"to_y":1}}' 30
+agent-result "no shape called blob"
+agent-call read_app '{"app":"paint"}' 30
+agent-result '"width":640,"height":400,"unsaved_changes":true'
+agent-result '"recent_changes":["Ellipse","Rectangle","Brush stroke","Text"]'
+# Saving a new picture needs a path for a new file.
+agent-call use_app '{"app":"paint","action":"save"}' 30
+agent-result "no file yet"
+agent-call use_app '{"app":"paint","action":"save","arguments":{"path":"~/Pictures/Sunny.png"}}' 30
+agent-result '"saved":"~/Pictures/Sunny.png","format":"PNG"'
+wait-serial "the agent saved /home/user/Pictures/Sunny.png" 10
+agent-call read_app '{"app":"paint"}' 30
+agent-result '"name":"Sunny.png","file":"~/Pictures/Sunny.png"'
+agent-result '"unsaved_changes":false'
+wait 2
+shot target/veda/agent-app-paint.png
+# Over unsaved changes, another picture is refused; throwing them away
+# waits for the user.
+agent-call use_app '{"app":"paint","action":"effect","arguments":{"effect":"sepia"}}' 30
+agent-result '"applied":"Sepia","to":"the picture"'
+agent-call use_app '{"app":"paint","action":"open_picture","arguments":{"path":"~/Pictures/Lighthouse.jpg"}}' 30
+agent-result "unsaved changes"
+agent-call use_app '{"app":"paint","action":"discard_changes","arguments":{"name":"Sunny.png"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested" 10

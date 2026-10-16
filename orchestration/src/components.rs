@@ -67,6 +67,8 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "files", binary: "files" },
     Program { package: "settings", binary: "settings" },
     Program { package: "editor", binary: "editor" },
+    Program { package: "calculator", binary: "calculator" },
+    Program { package: "paint", binary: "paint" },
     Program { package: "shell", binary: "shell" },
 ];
 

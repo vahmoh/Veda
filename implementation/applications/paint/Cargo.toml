@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "paint"
+description = "Paint: draw and edit pictures with brushes, shapes, text, selections and effects, unlimited undo, and PNG, JPEG, BMP and QOI files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "paint"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vimage = { workspace = true, features = ["encode"] }
+vfiles = { workspace = true }
+vui = { workspace = true }
+libm = { workspace = true }
+paint-core = { path = "core" }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

@@ -3,15 +3,16 @@
 
 [package]
 name = "vimage"
-description = "Image decoding and resampling on zune's JPEG, PNG and BMP decoders, qoi and fast_image_resize"
+description = "Image decoding, resampling and encoding on zune's JPEG, PNG and BMP decoders, qoi, fast_image_resize, miniz_oxide and jpeg-encoder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [features]
-# Encoding to PNG, JPEG and QOI, for the tools that make pictures on the
-# build machine (the PNG encoder needs std).
-encode = ["dep:png", "dep:jpeg-encoder"]
+# Encoding to PNG, JPEG, QOI and BMP, without std: for programs that save
+# pictures in Veda (Paint) and for the tools that make them on the build
+# machine.
+encode = ["dep:miniz_oxide", "dep:crc32fast", "dep:jpeg-encoder"]
 
 [dependencies]
 bytemuck = { workspace = true }
@@ -22,13 +23,17 @@ zune-core = { workspace = true }
 zune-inflate = { workspace = true }
 zune-jpeg = { workspace = true }
 zune-png = { workspace = true }
-png = { workspace = true, optional = true }
+miniz_oxide = { workspace = true, optional = true }
+crc32fast = { workspace = true, optional = true }
 jpeg-encoder = { workspace = true, optional = true }
 
 [dev-dependencies]
 crc32fast = { workspace = true }
 jpeg-encoder = { workspace = true }
 miniz_oxide = { workspace = true }
+# A second PNG decoder, the `image` crate's, that the encoder's files are
+# read back with as well as with zune-png.
+png = { workspace = true }
 
 [lints]
 workspace = true

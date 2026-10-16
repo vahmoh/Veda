@@ -868,3 +868,82 @@ fn encoders_round_trip() {
     let file = encode_jpeg(&opaque, &JpegOptions { exif: Some(tiff), ..JpegOptions::default() }).unwrap();
     assert_eq!(read_info(&file).unwrap().orientation, Orientation::Rotate270);
 }
+
+/// Reads a PNG with the `png` crate, a decoder of its own, into Veda's pixels.
+#[cfg(feature = "encode")]
+fn png_crate_decode(file: &[u8]) -> Image {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(file)).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(frame.bit_depth, png::BitDepth::Eight);
+    let pixels = buf[..frame.buffer_size()]
+        .chunks_exact(frame.color_type.samples())
+        .map(|s| match *s {
+            [r, g, b] => argb(255, r as u32, g as u32, b as u32),
+            [r, g, b, a] => argb(a as u32, r as u32, g as u32, b as u32),
+            _ => unreachable!("RGB or RGBA"),
+        })
+        .collect();
+    Image::from_pixels(frame.width, frame.height, pixels).unwrap()
+}
+
+#[cfg(feature = "encode")]
+#[test]
+fn pngs_read_back_with_both_decoders_at_every_level() {
+    use crate::{PngOptions, encode_png_with};
+    let rgba = Image::from_fn(37, 23, |x, y| argb((x * 7 + y * 3) % 256, x * 6, y * 11, (x ^ y) * 9 % 256));
+    let opaque = photo(64, 48);
+    for level in 0..=10 {
+        for image in [&rgba, &opaque] {
+            let file = encode_png_with(image, &PngOptions { level }).unwrap();
+            assert_eq!(&decode(&file).unwrap(), image, "level {level}");
+            assert_eq!(&png_crate_decode(&file), image, "level {level}");
+        }
+    }
+    // Compressed: a smooth opaque picture takes far less than its samples.
+    let smooth = Image::from_fn(256, 128, |x, y| argb(255, x, y * 2, 128));
+    let file = crate::encode_png(&smooth).unwrap();
+    assert!(file.len() < 256 * 128 * 3 / 10, "{} bytes", file.len());
+    // A stream longer than one chunk is split into several IDATs, each read.
+    let noisy = noise(400, 300, 0xC0FFEE);
+    let file = encode_png_with(&noisy, &PngOptions { level: 0 }).unwrap();
+    let idats = file.windows(4).filter(|w| *w == b"IDAT").count();
+    assert!(idats >= (400 * 300 * 4) / crate::IDAT_MAX, "{idats} IDAT chunks");
+    assert_eq!(decode(&file).unwrap(), noisy);
+    assert_eq!(png_crate_decode(&file), noisy);
+}
+
+/// An RGBA picture of pseudo-random pixels (incompressible).
+#[cfg(feature = "encode")]
+fn noise(width: u32, height: u32, seed: u64) -> Image {
+    let mut rng = Rng(seed);
+    Image::from_fn(width, height, |_, _| rng.next() as u32)
+}
+
+#[cfg(feature = "encode")]
+#[test]
+fn bmps_round_trip_with_and_without_alpha() {
+    use crate::{encode, encode_bmp};
+    // Odd widths pad 24-bit rows to four bytes.
+    for width in [1, 2, 3, 5, 31] {
+        let opaque = Image::from_fn(width, 7, |x, y| argb(255, x * 8, y * 30, 200));
+        let file = encode_bmp(&opaque).unwrap();
+        assert_eq!(file[28], 24, "24 bits a pixel");
+        assert_eq!(file.len(), 54 + (width as usize * 3).div_ceil(4) * 4 * 7);
+        assert_eq!(decode(&file).unwrap(), opaque, "width {width}");
+        let rgba = Image::from_fn(width, 4, |x, y| argb(x * 40 % 256, 255, y * 60, x));
+        let file = encode_bmp(&rgba).unwrap();
+        assert_eq!(file[28], 32, "32 bits a pixel");
+        assert_eq!(decode(&file).unwrap(), rgba, "width {width}");
+        assert!(read_info(&file).unwrap().has_alpha);
+    }
+    // Every format through the one entry point, and nothing from nothing.
+    let picture = photo(24, 16);
+    for format in [Format::Png, Format::Bmp, Format::Qoi] {
+        assert_eq!(decode(&encode(&picture, format).unwrap()).unwrap(), picture, "{format:?}");
+        assert!(encode(&Image::new(0, 3), format).is_err());
+    }
+    assert!(mean_error(&decode(&encode(&picture, Format::Jpeg).unwrap()).unwrap(), &picture) < 6.0);
+    let short = Image { width: 4, height: 4, pixels: vec![0; 3] };
+    assert!(encode(&short, Format::Png).is_err() && encode(&short, Format::Bmp).is_err());
+}

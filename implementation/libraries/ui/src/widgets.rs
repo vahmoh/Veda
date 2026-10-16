@@ -674,6 +674,27 @@ mod tests {
     }
 
     #[test]
+    fn esc_closes_a_menu_with_the_pointer_on_its_title() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        let menus = [Menu::new("File", alloc::vec![MenuItem::new("Open")])];
+        let draw = |ui: &mut Ui| ui.menu_bar(Rect::new(0, 0, 480, 32), &menus);
+        // A click on the title opens the menu and leaves the pointer there.
+        input.pointer = Some((20, 16));
+        (input.pressed[0], input.down[0]) = (true, true);
+        frame(&mut ctx, &mut state, &mut input, draw);
+        (input.released[0], input.down[0]) = (true, false);
+        frame(&mut ctx, &mut state, &mut input, draw);
+        assert!(state.open_menu.is_some());
+        press(&mut input, &[keys::ESC], "");
+        frame(&mut ctx, &mut state, &mut input, draw);
+        assert_eq!(state.open_menu, None);
+        // A click on the title opens it again.
+        (input.pressed[0], input.down[0]) = (true, true);
+        frame(&mut ctx, &mut state, &mut input, draw);
+        assert!(state.open_menu.is_some());
+    }
+
+    #[test]
     fn under_a_modal_dialog_the_menu_bar_is_inert() {
         let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
         let menus = [Menu::new("File", alloc::vec![MenuItem::new("Open")])];

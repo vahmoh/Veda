@@ -8,7 +8,8 @@ rename it) is not an application you open: it is always there, a small
 ring at the right of the taskbar, asleep until you call it. You talk to it
 as you would to a person in the room; it answers in its own voice and does things on the
 computer for you (opens and arranges applications, writes in the Text
-Editor, works with files, plays music, changes settings, sets timers)
+Editor, draws in Paint, works with files, plays music, changes settings,
+sets timers)
 through the same operations the keyboard and mouse use. It remembers what
 you tell it about yourself, and it asks before doing anything that is hard
 to undo.

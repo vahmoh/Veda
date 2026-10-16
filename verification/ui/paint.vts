@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Paint (1280x800 screen): a brush stroke, a filled ellipse, text, a
+# selection moved, an effect undone, and the picture saved as a PNG and
+# opened again.
+boot-cmdline "run=paint"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started paint" 60
+wait 5
+# A red brush stroke.
+click 0.6438 0.1263
+drag 0.2344 0.375 0.4688 0.4375
+wait 1
+# A blue ellipse, placed with Enter, then filled with yellow.
+click 0.4438 0.1288
+click 0.7695 0.1263
+drag 0.5078 0.3125 0.6641 0.5
+wait 1
+shot target/veda/paint-1-shape.png
+key ret
+click 0.275 0.1438
+click 0.6797 0.1263
+click 0.5859 0.4063
+wait 1
+# Black text.
+click 0.3344 0.1438
+click 0.5359 0.1263
+click 0.2344 0.625
+type "Hello, Veda!"
+key ctrl-ret
+wait 1
+shot target/veda/paint-2-drawn.png
+# A selection moved down, then placed.
+click 0.1266 0.1438
+drag 0.2031 0.3375 0.3281 0.475
+drag 0.2656 0.4 0.2656 0.65
+wait 1
+shot target/veda/paint-3-moved.png
+key esc
+key esc
+# Inverted, then undone.
+key ctrl-shift-i
+wait 2
+key ctrl-z
+wait 1
+# Saved as a PNG.
+key ctrl-s
+wait 2
+key ctrl-a
+type "Drawing.png"
+key ret
+wait-serial "saved /home/user/Pictures/Drawing.png" 60
+wait 2
+shot target/veda/paint-4-saved.png
+# Opened again.
+key ctrl-o
+wait 2
+type "Drawing.png"
+key ret
+wait-serial "opened /home/user/Pictures/Drawing.png" 60
+wait 2
+shot target/veda/paint-5-opened.png
+reject-serial "paint crashed"

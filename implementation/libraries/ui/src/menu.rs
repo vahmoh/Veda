@@ -269,8 +269,10 @@ impl<'a> Ui<'a> {
                 if let Some(item) = self.run_dropdown(rect, &menus[i].items, &mut close) {
                     result = Some((i, item));
                 }
-                // A press on the title bar row toggles handled above.
+                // A press on the title bar row toggles handled above. Esc closes the menu even
+                // with the pointer resting on its title, where the click that opened it left it.
                 if close
+                    && self.input.pressed[0]
                     && self.input.pointer.is_some_and(|(px, py)| title_rects.iter().any(|t| t.contains(px, py)))
                     && result.is_none()
                 {

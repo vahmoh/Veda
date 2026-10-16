@@ -710,7 +710,7 @@ hangs cannot freeze the desktop.
 |---------|------|
 | `vraster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
 | `vfont` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterized glyphs, a glyph bitmap cache, text layout |
-| `vimage` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding for the build machine's tools (`png`, `jpeg-encoder`) |
+| `vimage` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding, for Paint and the build machine's tools: PNG and BMP by Veda's writers (PNG's deflate by `miniz_oxide`), JPEG by `jpeg-encoder`, QOI by `qoi` |
 | `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames |
 | `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
 | `vtext` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
@@ -754,6 +754,44 @@ size of the taskbar's tray: solid shapes on a 20-pixel grid whose straight
 edges fall on whole pixels, so that they stay crisp on a 1x screen. Each is
 drawn into a small layer first, where a slash or a badge (the agent's ring
 uses them too) cuts a gap into what it crosses.
+
+## Paint and the Calculator (`implementation/applications/{paint,calculator}`)
+
+Each keeps what it works out in a `no_std` library of its own, tested on
+the host (`paint-core`, `calculator-core`); the program around it has the
+window, the files and the agent's actions, which run the same code as the
+keyboard and mouse.
+
+* **Exact numbers.** The Calculator's numbers are fractions of 128-bit
+  integers (`num-rational`), fractions times π, or 64-bit floats where
+  nothing exact will do (most roots, logarithms and sines). Sums,
+  products, quotients and whole powers of fractions stay fractions, so
+  0.1 + 0.2 is 0.3, 1 ÷ 3 × 3 is 1 and the sine of π is 0; an operation
+  whose exact result would not fit gives the float, never a wrong
+  fraction. Fractions are written out by long division, every digit
+  right, and floats to 15 significant digits.
+* **Expressions** are parsed by precedence climbing, written with the
+  keys' signs (×, √, π) or the keyboard's (`*`, `sqrt`, `pi`), with
+  products side by side (2π) and parentheses closed at the end. They are
+  worked out as numbers or, in Programmer mode, as two's-complement words
+  of 8 to 64 bits in any of four bases, with bitwise operators, shifts and
+  rotations. The converter's units are fractions of their kind's base
+  unit, exact where their definitions are (an inch is 0.0254 m),
+  temperatures with their offsets.
+* **Undo in tiles.** Paint's history keeps, for each step, only the 64x64
+  tiles it changed, within a budget of an eighth of the machine's memory
+  (32 MB to 512 MB); undo and redo swap them with the picture's. An edit
+  under way (a stroke, a shape still being shaped, text being typed, a
+  piece of the picture being moved, an effect's preview) is drawn afresh
+  from those tiles as it changes. A stroke's coverage is kept in a mask,
+  so a semi-transparent stroke that crosses itself does not darken there.
+* **The picture on screen.** Each pixel of the window shows the picture's
+  pixel under it: whole pixels zoomed in (with a pixel grid from 800%),
+  and zoomed out, pixels of halved copies of the picture, made when first
+  needed and kept, over a checkerboard where the picture is transparent.
+  Pictures are read and written on a thread of their own (PNG, JPEG, BMP
+  and QOI, by `vimage`), so that the window answers while a large one is
+  encoded.
 
 ## OpenGL ES and the GPU (`implementation/libraries/{glsl,gl}`, `implementation/guest/renderer`)
 
@@ -1170,8 +1208,9 @@ word) are in `vagent`, tested on the host. See [The agent](AGENT.md).
 * Host unit tests for the libraries with platform-independent logic (ABI,
   boot protocol, heap, IPC codec, service protocols, ELF loading, the POSIX
   layer's conversions, math, rasteriser, fonts, image codecs, 2D graphics,
-  text editing, paths and file types, audio, the hypervisor's guests and
-  the IOMMU's tables, media generators, build tool), all in one Cargo run;
+  text editing, Paint's editing and the Calculator's arithmetic, paths and
+  file types, audio, the hypervisor's guests and the IOMMU's tables, media
+  generators, build tool), all in one Cargo run;
   the driver VM's programs' on Linux. A test of the build tool's fails if
   a crate with tests is left out.
 * `systest`, a program that runs inside Veda and exercises kernel objects

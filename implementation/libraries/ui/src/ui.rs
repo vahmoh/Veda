@@ -50,11 +50,19 @@ pub struct KeyPress {
     pub ch: Option<char>,
 }
 
+/// The most pointer positions [`Input::moves`] keeps between two frames.
+pub const MAX_MOVES: usize = 4096;
+
 /// Input accumulated since the previous frame.
 #[derive(Debug, Clone, Default)]
 pub struct Input {
     /// Pointer position (window coordinates), `None` when outside.
     pub pointer: Option<(i32, i32)>,
+    /// Every position the pointer moved or was pressed at since the previous frame, in order
+    /// (the last one is [`Input::pointer`]), so that what draws with the pointer follows its
+    /// path rather than one point a frame. At most [`MAX_MOVES`]: past that, positions are
+    /// dropped until the next frame.
+    pub moves: Vec<(i32, i32)>,
     pub down: [bool; 3],
     pub pressed: [bool; 3],
     pub released: [bool; 3],
@@ -74,6 +82,7 @@ impl Input {
     pub fn without_keys(&self) -> Input {
         Input {
             pointer: self.pointer,
+            moves: self.moves.clone(),
             down: self.down,
             pressed: self.pressed,
             released: self.released,
@@ -89,6 +98,7 @@ impl Input {
 
     /// Clears the per-frame fields.
     pub fn begin_frame(&mut self) {
+        self.moves.clear();
         self.pressed = [false; 3];
         self.released = [false; 3];
         self.scroll = (0, 0);
@@ -121,7 +131,10 @@ impl Input {
 
     pub fn apply(&mut self, ev: &WindowEvent) {
         match ev {
-            WindowEvent::PointerMove { x, y } => self.pointer = Some((*x, *y)),
+            WindowEvent::PointerMove { x, y } => {
+                self.pointer = Some((*x, *y));
+                self.record_move(*x, *y);
+            }
             WindowEvent::PointerLeave {} => {
                 if !self.down.iter().any(|d| *d) {
                     self.pointer = None;
@@ -130,6 +143,7 @@ impl Input {
             WindowEvent::PointerButton { x, y, button, pressed, clicks } => {
                 let b = (*button as usize).min(2);
                 self.pointer = Some((*x, *y));
+                self.record_move(*x, *y);
                 self.down[b] = *pressed;
                 if *pressed {
                     self.pressed[b] = true;
@@ -164,6 +178,13 @@ impl Input {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Adds a position to [`Input::moves`] (not one that repeats the last).
+    fn record_move(&mut self, x: i32, y: i32) {
+        if self.moves.len() < MAX_MOVES && self.moves.last() != Some(&(x, y)) {
+            self.moves.push((x, y));
         }
     }
 
@@ -658,6 +679,26 @@ pub(crate) mod tests {
         drop(ui);
         input.end_frame(unclaimed);
         out
+    }
+
+    #[test]
+    fn a_frame_sees_every_position_the_pointer_passed() {
+        let mut input = Input::default();
+        let moved = |x, y| WindowEvent::PointerMove { x, y };
+        for ev in [moved(1, 1), moved(5, 2), moved(5, 2), moved(9, 4)] {
+            input.apply(&ev);
+        }
+        input.apply(&WindowEvent::PointerButton { x: 10, y: 4, button: 0, pressed: true, clicks: 1 });
+        assert_eq!(input.moves, [(1, 1), (5, 2), (9, 4), (10, 4)], "in order, without repeats");
+        assert_eq!(input.pointer, Some((10, 4)));
+        assert_eq!(input.without_keys().moves, input.moves);
+        input.end_frame(false);
+        assert!(input.moves.is_empty());
+        for i in 0..MAX_MOVES as i32 + 10 {
+            input.apply(&moved(i, 0));
+        }
+        assert_eq!(input.moves.len(), MAX_MOVES);
+        assert_eq!(input.pointer, Some((MAX_MOVES as i32 + 9, 0)), "the pointer itself follows on");
     }
 
     /// Adds the keys `codes` and the typed `text` to `input`.

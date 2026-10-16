@@ -32,7 +32,7 @@ In Veda, the agent is a first-class user of the system:
   (typed parameters and a risk level) and report what they show as JSON.
   The agent calls those actions, which run the same code as the keyboard
   and mouse: no screen scraping, no simulated clicks. The built-in
-  applications offer more than 70 actions.
+  applications offer more than 100 actions.
 * **Consent enforced by the system.** Every action is *routine*,
   *sensitive* or *destructive*. The agent service, not the language model,
   holds the last two until you allow them. Only the desktop shell can
@@ -173,6 +173,14 @@ protocols, the voice pipeline, consent, memory and testing.
   <tr>
     <td align="center">Videos, AV1 decoded by dav1d</td>
     <td align="center">Agent Settings</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="documentation/images/paint.png" width="100%" align="top" alt="Paint with a synthwave sunset open, white stars drawn in its sky and Hello, Veda! written over it"></td>
+    <td width="50%"><img src="documentation/images/calculator.png" width="100%" align="top" alt="The Calculator in Scientific mode showing the golden ratio, its history beside the keys"></td>
+  </tr>
+  <tr>
+    <td align="center">Paint, drawing on a picture</td>
+    <td align="center">Calculator, exact and scientific</td>
   </tr>
   <tr>
     <td width="50%"><img src="documentation/images/gcc.png" width="100%" align="top" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
