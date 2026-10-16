@@ -26,6 +26,7 @@ extern crate std;
 
 mod device;
 mod dns;
+mod firewall;
 mod route;
 mod sockets;
 #[cfg(test)]
@@ -49,6 +50,7 @@ use vproto::net::{
 use device::{Frames, Loopback};
 pub use device::{Link, Links, MAX_RX_FRAME, NoLinks, RX_BUDGET};
 pub use dns::{MAX_NAME_LEN, MAX_PENDING_LOOKUPS, ResolveId, validate_name};
+pub use firewall::{Firewall, LOG_LEN as FIREWALL_LOG_LEN, LogEntry as FirewallLogEntry};
 pub use sockets::{
     MAX_ORPHANS, MAX_SOCKETS, MIN_KEEPALIVE_MS, ORPHAN_TIMEOUT_US, PingEvent, SockId, TcpState, TcpView,
 };
@@ -217,14 +219,29 @@ impl Iface {
     }
 
     /// Runs smoltcp on this interface: what its link received, timers, and
-    /// what its sockets have to send.
-    fn run(&mut self, now: Instant, links: &mut dyn Links, id: IfaceId) {
-        let Iface { iface, sockets, frames, loopback, .. } = self;
+    /// what its sockets have to send; what comes from and goes to other
+    /// machines, through `firewall`.
+    fn run(&mut self, now: Instant, now_us: u64, links: &mut dyn Links, id: IfaceId, firewall: &mut Firewall) {
+        let Iface { iface, sockets, frames, loopback, name, .. } = self;
+        // The firewall's view of the interface's addresses, for the poll.
+        let mut addrs = [IpCidr::Ipv4(Ipv4Cidr::new(Ipv4Addr::UNSPECIFIED, 0)); 8];
+        let mut count = 0;
+        for (slot, c) in addrs.iter_mut().zip(iface.ip_addrs()) {
+            *slot = *c;
+            count += 1;
+        }
+        let medium = frames.medium();
+        let gate = loopback.is_none().then(|| device::Gate {
+            firewall,
+            place: firewall::Place { name, addrs: &addrs[..count] },
+            medium,
+            now_us,
+        });
         let link: Option<&mut dyn Link> = match loopback {
             Some(l) => Some(l),
             None => links.link(id),
         };
-        let mut device = frames.device(link);
+        let mut device = frames.device(link, gate);
         iface.poll(now, &mut device, sockets);
     }
 }
@@ -245,6 +262,9 @@ pub struct Stack {
     /// Something besides the interfaces' own state changed (an interface
     /// came or went, the DNS servers were overridden): look at the status.
     dirty: bool,
+    /// What other machines may start with this one (off until
+    /// [`Stack::set_firewall`]).
+    pub(crate) firewall: Firewall,
 }
 
 impl Stack {
@@ -269,6 +289,7 @@ impl Stack {
             last_status: None,
             changed_us: now_us,
             dirty: true,
+            firewall: Firewall::new(),
         };
         stack.add_loopback();
         stack
@@ -301,7 +322,7 @@ impl Stack {
         let mut frames = Frames::new(Medium::Ip, 65535, true);
         let mut config = Config::new(HardwareAddress::Ip);
         config.random_key = Some(self.random_key());
-        let mut iface = Interface::new(config, &mut frames.device(None), self.instant());
+        let mut iface = Interface::new(config, &mut frames.device(None, None), self.instant());
         iface.update_ip_addrs(|a| {
             let _ = a.push(IpCidr::new(Ipv4Addr::LOCALHOST.into(), 8));
             let _ = a.push(IpCidr::new(Ipv6Addr::LOCALHOST.into(), 128));
@@ -387,7 +408,7 @@ impl Stack {
         config.random_key = Some(self.random_key());
         config.slaac = true;
         config.slaac_secret = Some(self.slaac_secret);
-        let mut iface = Interface::new(config, &mut frames.device(None), self.instant());
+        let mut iface = Interface::new(config, &mut frames.device(None, None), self.instant());
         let link_local = Ipv6Cidr::new(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 64);
         if let Some(ll) = iface.ipv6_address_in(&link_local) {
             iface.update_ip_addrs(|a| {
@@ -487,7 +508,7 @@ impl Stack {
         let now = self.instant();
         for id in 0..self.ifaces.len() {
             let Some(i) = self.ifaces[id].as_mut() else { continue };
-            i.run(now, links, id);
+            i.run(now, self.now_us, links, id, &mut self.firewall);
             self.handle_dhcp(id);
             self.check_link_grace(id);
         }
@@ -497,13 +518,14 @@ impl Stack {
         // connections' replies, resets, ...).
         for id in 0..self.ifaces.len() {
             if let Some(i) = self.ifaces[id].as_mut() {
-                i.run(now, links, id);
+                i.run(now, self.now_us, links, id, &mut self.firewall);
             }
         }
         // What that took in (frames that came back on the loopback
         // interface) is for the sockets now, not at the next poll.
         self.socks_maintain();
         self.detect_changes();
+        self.firewall.sweep(self.now_us);
     }
 
     /// Whether interface `id` had more to send than its link took: poll

@@ -15,6 +15,9 @@
 //! * [`status`], [`interfaces`], ... — the state of the network, and
 //!   configuration (for the Settings app and the Terminal: the service
 //!   refuses it to other programs).
+//! * [`watch_firewall`], [`answer_firewall`] — the firewall's questions
+//!   about applications that start listening, and their answers (for the
+//!   desktop shell alone).
 //! * [`wifi`] — Wi-Fi: networks in range, joining, saved networks, events.
 //!
 //! Addresses are the standard `core::net` types. Errors are
@@ -47,8 +50,9 @@ pub use ping::{PingReply, Pinger};
 pub use tcp::{TcpListener, TcpStream};
 pub use udp::UdpSocket;
 pub use vproto::net::{
-    AddrFamily, Connectivity, InterfaceInfo, InterfaceKind, IpConfig, NetError, NetEvent, NetStatus, RouteInfo,
-    SocketInfo, TcpOptions, format_mac,
+    AddrFamily, AppRule, Connectivity, FirewallConfig, FirewallEvent, FirewallNotice, FirewallProtocol,
+    FirewallQuestion, FirewallReason, FirewallStats, InterfaceInfo, InterfaceKind, IpConfig, NetError, NetEvent,
+    NetStatus, PortRule, RouteInfo, Scope, SocketInfo, TcpOptions, format_mac,
 };
 pub use vrt::time::Duration;
 
@@ -177,19 +181,77 @@ pub fn flush_dns_cache() -> Result<(), NetError> {
     with_client(|c| c.flush_dns_cache())?
 }
 
-/// Sets how an interface obtains its IPv4 configuration.
+/// Sets how an interface obtains its IPv4 configuration (Settings only).
 pub fn configure(interface: &str, config: IpConfig) -> Result<(), NetError> {
     with_client(|c| c.configure(String::from(interface), config.clone()))?
 }
 
-/// Asks an interface's DHCP server for a new lease.
+/// Asks an interface's DHCP server for a new lease (Settings only).
 pub fn renew(interface: &str) -> Result<(), NetError> {
     with_client(|c| c.renew(String::from(interface)))?
 }
 
-/// Overrides the DNS servers (empty: automatic).
+/// Overrides the DNS servers (empty: automatic; Settings only).
 pub fn set_dns_servers(servers: &[IpAddr]) -> Result<(), NetError> {
     with_client(|c| c.set_dns_servers(servers.to_vec()))?
+}
+
+/// The firewall's settings (Settings and the Terminal only).
+pub fn firewall() -> Result<FirewallConfig, NetError> {
+    with_client(|c| c.firewall())?
+}
+
+/// Replaces the firewall's settings (Settings only).
+pub fn set_firewall(config: &FirewallConfig) -> Result<(), NetError> {
+    with_client(|c| c.set_firewall(config.clone()))?
+}
+
+/// What the firewall turned away lately, oldest first (Settings and the
+/// Terminal only).
+pub fn firewall_log() -> Result<Vec<FirewallEvent>, NetError> {
+    with_client(|c| c.firewall_log())?
+}
+
+/// The firewall's counts since the system started (Settings and the
+/// Terminal only).
+pub fn firewall_stats() -> Result<FirewallStats, NetError> {
+    with_client(|c| c.firewall_stats())?
+}
+
+/// The questions about applications waiting for the user's answer
+/// (Settings and the Terminal only).
+pub fn firewall_questions() -> Result<Vec<FirewallQuestion>, NetError> {
+    with_client(|c| c.firewall_questions())?
+}
+
+/// A channel that receives [`FirewallNotice`]s: the questions to ask the
+/// user, and those settled (the desktop shell only). Wait for it to be
+/// readable, then call [`next_firewall_notice`].
+pub fn watch_firewall() -> Result<Channel, NetError> {
+    with_client(|c| {
+        let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
+        Ok(c.watch_firewall(theirs)?.map(|()| ours))
+    })?
+}
+
+/// Takes the next notice from a [`watch_firewall`] channel without
+/// blocking. `Err(Closed)` means the service went away (watch again
+/// later).
+pub fn next_firewall_notice(ch: &Channel) -> Result<Option<FirewallNotice>, NetError> {
+    match ch.read() {
+        Ok(msg) => match vipc::decode_event::<FirewallNotice>(msg) {
+            Ok((_, notice)) => Ok(Some(notice)),
+            Err(_) => Ok(None),
+        },
+        Err(vabi::Error::ShouldWait) => Ok(None),
+        Err(_) => Err(NetError::Closed),
+    }
+}
+
+/// The user's answer to the question about `app`: where it may accept
+/// connections from, `None` for nowhere (the desktop shell only).
+pub fn answer_firewall(app: &str, from: Option<Scope>) -> Result<(), NetError> {
+    with_client(|c| c.answer_firewall(app.into(), from))?
 }
 
 /// A channel that receives [`NetEvent`]s whenever the network changes. Wait

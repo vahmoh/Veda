@@ -3,8 +3,8 @@
 
 //! The rules that keep one process from harming others: what the kernel
 //! does with handles that travel on channels, how a server answers a request
-//! it cannot serve, and what the launcher and the registry let an
-//! application do.
+//! it cannot serve, what the launcher and the registry let an application
+//! do, and who may change how the network is set up.
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -179,6 +179,43 @@ pub fn test_application_limits() -> TestResult {
     check(bits & verdict::WATCH_DENIED != 0, "an application may not hear of crashes")?;
     check(bits & verdict::FOREIGN_NAME_DENIED != 0, "an application may not register another's name")?;
     check(koid_of("audio")? == Some(audio), "the audio service still runs as it did")
+}
+
+/// Only Settings changes how the network is set up (its interfaces, its
+/// DNS servers, its firewall), and only Settings and the Terminal read the
+/// firewall: the network service refuses them to a system service, as to
+/// any other program.
+pub fn test_network_configuration() -> TestResult {
+    use vproto::net::{FirewallConfig, IpConfig, NetError, Scope, net};
+    let c = net::Client::new(vproto::connect(net::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let refused = |r: Result<Result<(), NetError>, IpcError>| r == Ok(Err(NetError::PermissionDenied));
+    check(
+        matches!(c.firewall(), Ok(Err(NetError::PermissionDenied))),
+        "the firewall's settings are refused to a service",
+    )?;
+    check(
+        matches!(c.firewall_log(), Ok(Err(NetError::PermissionDenied))),
+        "the firewall's log is refused to a service",
+    )?;
+    let off = FirewallConfig { enabled: false, ..FirewallConfig::default() };
+    check(refused(c.set_firewall(off)), "a service may not turn the firewall off")?;
+    // The questions about applications that listen, and their answers, are
+    // the desktop shell's.
+    check(
+        matches!(c.firewall_questions(), Ok(Err(NetError::PermissionDenied))),
+        "the firewall's questions are refused to a service",
+    )?;
+    let (_ours, theirs) = Channel::create().map_err(|e| alloc::format!("{e:?}"))?;
+    check(refused(c.watch_firewall(theirs)), "a service may not hear the firewall's questions")?;
+    check(
+        refused(c.answer_firewall("systest".into(), Some(Scope::Anywhere {}))),
+        "a service may not answer the firewall's questions",
+    )?;
+    check(
+        refused(c.set_dns_servers(vec!["192.0.2.53".parse().map_err(|_| "an address")?])),
+        "a service may not change the DNS servers",
+    )?;
+    check(refused(c.configure("lo".into(), IpConfig::Dhcp {})), "a service may not configure an interface")
 }
 
 /// `systest limits KOID`: the application side of

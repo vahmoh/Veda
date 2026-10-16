@@ -8,9 +8,11 @@
 //!
 //! The agent's approval requests appear here while its window is closed:
 //! they carry Allow and Deny buttons and stay until answered (or until the
-//! request expires).
+//! request expires). So do the firewall's questions ([`crate::firewall`]),
+//! a few at a time, the others waiting their turn.
 
 use vgfx::{Align, Rect};
+use vnet::FirewallQuestion;
 use vproto::display::{WindowKind, WindowSpec};
 use vrt::println;
 use vui::window::Display;
@@ -19,15 +21,18 @@ use vui::{Font, Host, Icon, Ui};
 use vproto::agent::ApprovalRequest;
 
 use crate::approval::{self, Choice, Look};
-use crate::{Model, apps, chrome, taskbar};
+use crate::{Model, apps, chrome, firewall, taskbar};
 
 const WIDTH: i32 = 360;
 const HEIGHT: i32 = 88;
-/// Height of an approval request.
+/// Height of an approval request (a firewall question's fits what it
+/// says).
 const APPROVAL_HEIGHT: i32 = 136;
 const GAP: i32 = 10;
 const LIFETIME_NS: u64 = 6_000_000_000;
 const MAX_SHOWN: usize = 4;
+/// Firewall questions shown at once.
+const MAX_QUESTIONS_SHOWN: usize = 2;
 
 /// The tile a notification shows and who it is from.
 pub struct Sender<'a> {
@@ -52,6 +57,9 @@ struct View {
     clicked: bool,
     /// An approval request, and "Always allow" as ticked on it.
     approval: Option<(ApprovalRequest, Choice)>,
+    /// A firewall question, "From anywhere" as ticked on it, and when its
+    /// buttons start to take clicks.
+    question: Option<(FirewallQuestion, bool, u64)>,
 }
 
 impl View {
@@ -62,6 +70,12 @@ impl View {
         if let Some((req, choice)) = &mut self.approval {
             let r = ui.rect();
             self.clicked |= approval::card(ui, m, req, r, choice, Look::Notification);
+            chrome::popup_frame(&mut ui.canvas);
+            return;
+        }
+        if let Some((q, anywhere, armed_at)) = &mut self.question {
+            let r = ui.rect();
+            self.clicked |= firewall::card(ui, m, q, r, anywhere, *armed_at);
             chrome::popup_frame(&mut ui.canvas);
             return;
         }
@@ -101,16 +115,28 @@ struct Note {
     host: Host,
     view: View,
     expires: u64,
+    height: i32,
 }
 
 impl Note {
     fn height(&self) -> i32 {
-        if self.view.approval.is_some() { APPROVAL_HEIGHT } else { HEIGHT }
+        self.height
     }
 
     /// The approval request it shows, if it is one.
     fn approval_id(&self) -> Option<u64> {
         self.view.approval.as_ref().map(|(r, _)| r.id)
+    }
+
+    /// The application the firewall question it shows is about, if it is
+    /// one.
+    fn question_app(&self) -> Option<&str> {
+        self.view.question.as_ref().map(|(q, ..)| q.app.as_str())
+    }
+
+    /// A notification that goes away by itself.
+    fn passing(&self) -> bool {
+        self.view.approval.is_none() && self.view.question.is_none()
     }
 }
 
@@ -153,10 +179,58 @@ impl Notifications {
                     hovered: false,
                     clicked: false,
                     approval: Some((req.clone(), Choice::default())),
+                    question: None,
                 };
-                self.notes.push(Note { host, view, expires: u64::MAX });
+                self.notes.push(Note { host, view, expires: u64::MAX, height: APPROVAL_HEIGHT });
             }
             Err(e) => println!("cannot show an approval request: {:?}", e),
+        }
+    }
+
+    /// Shows the firewall's questions as `m` has them, the oldest first and
+    /// [`MAX_QUESTIONS_SHOWN`] at a time, and takes away those settled.
+    pub fn show_questions(&mut self, display: &Display, m: &Model) {
+        let before = self.notes.len();
+        self.notes.retain(|n| n.question_app().is_none_or(|app| m.firewall.iter().any(|q| q.app == app)));
+        if self.notes.len() != before {
+            self.relayout(m.screen);
+        }
+        for q in &m.firewall {
+            if self.notes.iter().filter(|n| n.question_app().is_some()).count() >= MAX_QUESTIONS_SHOWN {
+                break;
+            }
+            if !self.notes.iter().any(|n| n.question_app() == Some(q.app.as_str())) {
+                self.post_question(display, m, q);
+            }
+        }
+    }
+
+    fn post_question(&mut self, display: &Display, m: &Model, q: &FirewallQuestion) {
+        let height = firewall::height(m, q, WIDTH);
+        let origin = self.origin_for(m.screen, self.notes.len(), height);
+        let mut spec = WindowSpec::new("Firewall", WIDTH as u32, height as u32);
+        spec.kind = WindowKind::Notification;
+        spec.x = origin.0;
+        spec.y = origin.1;
+        spec.resizable = false;
+        spec.app_id = "shell".into();
+        match Host::new(display, spec) {
+            Ok(host) => {
+                let view = View {
+                    title: String::new(),
+                    body: String::new(),
+                    icon: Icon::Lock,
+                    color: String::new(),
+                    from: None,
+                    origin,
+                    hovered: false,
+                    clicked: false,
+                    approval: None,
+                    question: Some((q.clone(), false, vrt::time::now_ns() + firewall::ARM_NS)),
+                };
+                self.notes.push(Note { host, view, expires: u64::MAX, height });
+            }
+            Err(e) => println!("cannot show the firewall's question: {:?}", e),
         }
     }
 
@@ -181,7 +255,7 @@ impl Notifications {
     /// Shows a notification from `sender`.
     pub fn post(&mut self, display: &Display, m: &Model, title: &str, body: &str, sender: Sender) {
         if self.notes.len() >= MAX_SHOWN
-            && let Some(i) = self.notes.iter().position(|n| n.view.approval.is_none())
+            && let Some(i) = self.notes.iter().position(Note::passing)
         {
             self.notes.remove(i);
             self.relayout(m.screen);
@@ -205,8 +279,9 @@ impl Notifications {
                     hovered: false,
                     clicked: false,
                     approval: None,
+                    question: None,
                 };
-                self.notes.push(Note { host, view, expires: vrt::time::now_ns() + LIFETIME_NS });
+                self.notes.push(Note { host, view, expires: vrt::time::now_ns() + LIFETIME_NS, height: HEIGHT });
             }
             Err(e) => println!("cannot show a notification: {:?}", e),
         }

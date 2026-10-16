@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The firewall's question (1280x800). A program the firewall's settings say
+# nothing about starts listening for connections from other machines
+# (nettest, on port 8080): the network service asks, and the desktop shows
+# the question in a notification until it is answered. Allowed from
+# anywhere, the answer becomes the program's rule, which the network
+# service keeps: after a restart the program listens again and nobody is
+# asked. Settings shows the rule and changes it to No.
+fail-on "PANIC"
+boot-cmdline "run=settings:network"
+boot-cmdline "run=nettest:listen,8080"
+wait-serial "desktop ready" 120
+wait-serial "started settings" 60
+wait-serial "nettest: listening on 0.0.0.0:8080" 60
+wait-serial "firewall: asking whether nettest may accept connections (TCP port 8080)" 30
+# The buttons take clicks a moment after the question appears.
+wait 3
+shot target/veda/firewall-question-1.png
+# From anywhere, then Allow.
+click 0.7703 0.889
+click 0.9469 0.8875
+wait-serial "firewall: nettest may accept connections from anywhere (the user's answer)" 20
+wait 2
+shot target/veda/firewall-question-2.png
+# The answer outlives a restart: nobody is asked again.
+reset
+wait-serial "firewall: settings read from the home disk: on, stealth, pings unanswered, 1 application let in" 120
+wait-serial "started settings" 60
+wait-serial "nettest: listening on 0.0.0.0:8080" 60
+wait 4
+reject-serial "firewall: asking"
+# Settings has the rule, and turns it to No.
+key meta_l-up
+wait 4
+drag 0.9935 0.2 0.9935 0.55
+wait 2
+shot target/veda/firewall-question-3.png
+click 0.6945 0.5775
+wait-serial "firewall: settings changed by settings: on, stealth, pings unanswered, 0 applications let in, 1 refused" 20
+wait 2
+shot target/veda/firewall-question-4.png

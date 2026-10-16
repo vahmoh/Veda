@@ -564,14 +564,28 @@ Networking is three layers of processes (details in
   credit (the service reads no more of a socket's datagrams to send while
   256 KiB of them wait). A listener's connections, a connection's bytes
   and a socket's datagrams go to whichever process takes them first.
+  The stack's firewall judges every packet from another machine before
+  smoltcp does: replies come in, and a new connection or datagram only
+  where a port rule, or the rule of the application whose socket is on
+  the port, lets it in; in stealth mode closed ports give no answer;
+  pings, new connections and fragments are limited, and packets no host
+  sends dropped. `netd` keeps the applications its rules keep off the
+  network from it, and keeps the settings in its private directory on the
+  home disk. When an application its rules say nothing about starts
+  listening, it asks the user, through the desktop shell, whether it may
+  (see [the firewall](NETWORKING.md#the-firewall)).
 
 Both services check who is asking, by the identity the registry gives
 each connection: network devices attach only from the device manager (and
 `wlan`), radios only from the device manager; changing the network's
-configuration is for Settings and the Terminal, and changing Wi-Fi for
-them, the desktop shell and the agent; what tells where the machine is or
-has been (access points' and adapters' addresses, saved networks,
-diagnostics) goes only to Settings and the Terminal. Every process has
+configuration (its interfaces, its DNS servers, its firewall) is for
+Settings alone, since the programs the Terminal runs speak for it, and
+changing Wi-Fi for Settings, the Terminal, the desktop shell and the
+agent; what tells where the machine is or has been (access points' and
+adapters' addresses, saved networks, diagnostics), and the firewall's
+settings and log, go only to Settings and the Terminal; the firewall's
+questions go to the desktop shell, which alone answers them, about the
+applications asked about only. Every process has
 limits on its connections, sockets, lookups and watchers, and a share of
 each is kept for system services.
 
@@ -749,7 +763,10 @@ application posts shows that application's tile and name, whatever it says
 of itself, and a process posts at most five in ten seconds. When an
 application crashes (a CPU fault or a panic), `init` reports it on the
 channels handed out by `launcher::watch`, and the shell tells the user with
-a notification. Restart and Shut down first ask every application window to
+a notification. The network service's firewall asks, through the shell
+alone, whether an application that started listening may accept
+connections: the question stays as a notification until it is answered,
+and its buttons take clicks only a second after it appears. Restart and Shut down first ask every application window to
 close, as its close button would (an application with unsaved work asks
 whether to save it), and power off once none is left; what is still open
 after a few seconds is listed, to cancel or to go on without. The shell
@@ -1366,7 +1383,7 @@ of their own (see Architectures above).
 | `implementation/libraries/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
 | `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `implementation/libraries/frames` | the searches of the kernel's bitmap of physical memory frames, a word at a time |
-| `implementation/libraries/netstack`, `implementation/libraries/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
+| `implementation/libraries/netstack`, `implementation/libraries/net` | the TCP/IP stack around smoltcp, with its firewall, and the networking API for applications |
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |

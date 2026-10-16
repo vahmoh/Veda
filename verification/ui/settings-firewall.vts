@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Settings → Network & Internet → Firewall (1280x800). The network service
+# starts with the defaults, nothing saved; stealth mode off and on again,
+# pings answered from the local network, and an application let in each
+# reach it from Settings, and it logs what changed. It keeps them on the
+# home disk, where no application reaches them: after a restart it reads
+# the same settings back.
+fail-on "PANIC"
+boot-cmdline "run=settings:network"
+wait-serial "desktop ready" 120
+wait-serial "started settings" 60
+expect-serial "firewall: no settings saved; the defaults hold"
+wait 4
+key meta_l-up
+wait 4
+# The firewall's cards, below Wi-Fi and the interfaces.
+drag 0.9935 0.2 0.9935 0.55
+wait 2
+shot target/veda/settings-firewall-1.png
+# Stealth mode off, then on again.
+click 0.936 0.265
+wait-serial "firewall: settings changed by settings: on, pings unanswered" 20
+click 0.936 0.265
+wait-serial "firewall: settings changed by settings: on, stealth, pings unanswered" 20
+# Pings answered from the local network.
+click 0.826 0.391
+wait-serial "pings answered from the local network" 20
+# The music application let in, from the local network.
+click 0.469 0.639
+type "music"
+click 0.778 0.639
+wait-serial "1 application let in" 20
+wait 2
+shot target/veda/settings-firewall-2.png
+# The settings outlive a restart.
+reset
+wait-serial "firewall: settings read from the home disk: on, stealth, pings answered from the local network, 1 application let in" 120
+wait-serial "started settings" 60

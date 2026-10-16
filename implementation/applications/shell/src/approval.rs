@@ -45,9 +45,10 @@ pub enum Look {
     Notification,
 }
 
-/// What an approval asks for, in bold over up to two lines (the end of a
-/// longer one is cut); returns the height used. `r` is the first line.
-fn title(ui: &mut Ui, r: Rect, text: &str) -> i32 {
+/// What an approval (or another question) asks, in bold over up to two
+/// lines (the end of a longer one is cut); returns the height used. `r` is
+/// the first line.
+pub fn title(ui: &mut Ui, r: Rect, text: &str) -> i32 {
     let th = ui.theme().clone();
     let font = ui.ctx.font(Font::Bold);
     let lines = ui.ctx.text.wrap(font, 14.0, text, r.w as f32);

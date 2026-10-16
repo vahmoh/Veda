@@ -25,6 +25,9 @@
 //!   handshake time.
 //! * `nettest wifi SSID [PASSWORD]`: joins a Wi-Fi network through the
 //!   Wi-Fi service, then runs the online checks over it.
+//! * `nettest listen PORT`: listens for TCP connections on PORT from other
+//!   machines, as a server does, and reports each one, forever: what the
+//!   firewall asks the user about (`verification/ui/firewall-question.vts`).
 //! * `nettest route-watch`: reports every change of what a user would
 //!   notice — the interface of the default route, whether the gateway
 //!   answers pings, whether DNS answers — as `watch: route=... ping=...
@@ -383,6 +386,28 @@ fn dns_probe(server: IpAddr, id: u16) -> String {
     String::from("fail")
 }
 
+/// `nettest listen PORT`: takes connections from other machines on PORT
+/// forever, reporting each.
+fn listen(port: u16) -> i32 {
+    let listener = match vnet::TcpListener::bind(SocketAddr::new(IpAddr::V4(vnet::Ipv4Addr::UNSPECIFIED), port), 8) {
+        Ok(l) => l,
+        Err(e) => {
+            println!("nettest: cannot listen on port {port}: {e}");
+            return 1;
+        }
+    };
+    println!("nettest: listening on {}", listener.local_addr());
+    loop {
+        match listener.accept() {
+            Ok((_, from)) => println!("nettest: connection from {from}"),
+            Err(e) => {
+                println!("nettest: accept failed: {e}");
+                return 1;
+            }
+        }
+    }
+}
+
 /// `nettest route-watch`: reports changes forever.
 fn route_watch() -> ! {
     println!("watch: started");
@@ -533,6 +558,13 @@ fn main() -> i32 {
             ])
         }
         "route-watch" => route_watch(),
+        "listen" => {
+            let Some(port) = args.get(2).and_then(|p| p.parse::<u16>().ok()) else {
+                println!("usage: nettest listen PORT");
+                return 2;
+            };
+            listen(port)
+        }
         "wifi" => {
             let Some(ssid) = args.get(2).map(|s| s.replace('+', " ")) else {
                 println!("usage: nettest wifi SSID [PASSWORD]");

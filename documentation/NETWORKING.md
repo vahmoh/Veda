@@ -57,11 +57,19 @@ identity, which a process cannot forge), and check it:
   drivers, the driver VM's programs included, speak as it, and from the
   Wi-Fi service; radios are offered (`wlanphy`) only by the device
   manager. Others' connections are closed.
-* Configuring interfaces, renewing leases, setting the DNS servers and
-  flushing the DNS cache are for Settings and the Terminal; so are listing
-  every socket (others list their own) and the interfaces' hardware
-  addresses (zeros for others). The DNS cache is not listed at all: it is
-  a record of every name any program looked up.
+* Changing how the network is set up (configuring interfaces, renewing
+  leases, setting the DNS servers, the firewall's settings) is for
+  Settings alone. The programs run in the Terminal speak for it (they
+  have its identity), and it runs whatever the user asks: the Terminal
+  only reads. Settings and the Terminal flush the DNS cache, read the
+  firewall's settings, log and counts, list every socket (others list
+  their own) and see the interfaces' hardware addresses (zeros for
+  others). The DNS cache is not listed at all: it is a record of every
+  name any program looked up.
+* The firewall's questions (whether an application may accept
+  connections from other machines) go to the desktop shell alone, and it
+  alone answers them, about the applications asked about only; Settings
+  and the Terminal see the questions waiting.
 * Changing Wi-Fi (scanning, joining, leaving, the radio switch, saved
   networks) is for the desktop shell, the agent, Settings and the
   Terminal. What tells where the machine is or
@@ -136,12 +144,111 @@ identity, which a process cannot forge), and check it:
   link-local one included, are stable privacy identifiers (RFC 7217) from
   a secret `netd` draws when it starts.
 
+## The firewall
+
+The stack filters what comes from other machines before smoltcp sees it,
+on every interface but loopback (`implementation/libraries/netstack/src/firewall.rs`),
+and `netd` applies the settings (`vproto::net::FirewallConfig`), which
+Settings changes.
+
+* **The defaults**: on; nothing comes in that this machine did not ask
+  for; stealth; pings unanswered; a log. They hold from the moment `netd`
+  starts until it has read the saved settings.
+* **What always comes in**: replies. The segments of a connection go to
+  smoltcp, which takes those of connections it has; a UDP datagram comes
+  in from where this machine sent one in the last three minutes; DHCP's
+  answers; the ICMP errors that tell TCP and ping what became of their
+  packets (unreachable, time exceeded, IPv6's packet too big); IPv6's
+  router and neighbour discovery, from the link itself (a hop limit of
+  255, which no router passes on).
+* **What rules let in**: a new connection (a SYN alone) or a datagram for
+  a port comes in when a port rule opens the port to where it comes from,
+  or the application whose socket is on the port accepts connections from
+  there. A rule says where from: anywhere, the local network (the
+  subnets of the interface it comes in on, and the link-local addresses),
+  or a prefix. A port rule that closes a port wins over both, and "block
+  all incoming connections" sets every rule that lets something in
+  aside. New connections let in from one address are limited to 20, then
+  10 a second, and from all addresses together to 200, then 100 a second.
+* **Stealth**: smoltcp answers what comes for a port nothing uses (a
+  reset, "port unreachable"), which shows that the machine is there; in
+  stealth mode that is dropped instead, and so are such answers on their
+  way out (a reset for a connection this machine sent nothing on, "port
+  unreachable", "protocol unreachable"), so that a scan finds nothing.
+  Without it, closed ports answer as closed; ports that a socket uses
+  but no rule opens stay silent either way.
+* **Pings** are answered from nobody (the default), the local network or
+  anywhere: to one address 5, then one a second; to all together 50, then
+  20 a second.
+* **Applications kept off the network** may not use it at all: their
+  connections, pings and name lookups (but for `localhost` and address
+  literals: a lookup tells the DNS servers the name) are refused
+  (`PermissionDenied`, which C programs see as `EACCES`), their datagrams
+  to other machines are dropped, and their connections are reset when the
+  rule is set. Nothing from other machines reaches their sockets, whatever
+  port rule opens the port. They still reach the machine itself, on the
+  loopback interface.
+* **What no host sends** is dropped, the firewall on or off: a source
+  address that is the machine's own, loopback, multicast or broadcast
+  (IPv6's unspecified address only for duplicate address detection and
+  listener reports), a loopback destination, impossible TCP flags (a SYN
+  with a FIN or a reset, a segment with neither SYN, ACK nor reset: a
+  scan's "null", "FIN" and "Xmas" probes), port 0, IPv6's type 0 routing
+  header, ICMP redirects, router solicitations and timestamps, and
+  protocols other than TCP, UDP and ICMP.
+* **Fragments**: smoltcp reassembles IPv4 datagrams, whose ports are in
+  the first piece only. The first piece is judged as the whole datagram
+  would be and must hold its whole transport header; the others come in
+  for a minute after a first piece of their datagram did, unless they
+  would rewrite its TCP header (RFC 1858). IPv6 fragments, which smoltcp
+  does not reassemble, are dropped.
+* **The log** keeps the last 256 things turned away, repeats within a
+  second counted into one (a scan from one address is one entry), with
+  why, the interface, the other machine, the port and the application;
+  and counts since the system started. Settings shows the latest, with a
+  "Let in" for an application that was not reached; the Terminal's
+  `firewall log` lists them. `netd` writes each change of the settings,
+  and who made it, to the system log.
+* **Where they are kept**: `/home/.private/netd/firewall`, the network
+  service's private directory, which the file system opens to no other
+  program, so that no application can read the rules or change them to
+  let itself in. A thread of `netd`'s own reads and writes it, so that the
+  service never waits on the file system; a new file is written beside
+  the old and takes its place, and one that does not read back whole and
+  valid is not used (the defaults hold).
+* **Names**: rules name applications as the system knows them, by their
+  ids (`music`, `terminal`). The programs run in the Terminal speak for
+  it: a rule about `terminal` is about them all.
+* **The question**: when an application the settings say nothing about
+  (no rule for it, either way, and not kept off the network) starts
+  taking what other machines start, with a listener or a datagram socket
+  on a port of its choosing (one on a port the system picked is a
+  client's, whose replies come in anyway), not on loopback alone, `netd`
+  asks the user whether it may: unless the firewall is off or blocks
+  everything incoming, which no answer would change. Until the user
+  answers, nothing from other machines reaches it. The desktop shell
+  shows the question as a notification that stays until it is answered:
+  "Don't allow", or "Allow" from the local network (from anywhere, ticked).
+  Its buttons take clicks a second after it appears, so that a click
+  aimed at what was there just before, or a window timed to put one
+  there, does not answer it. The answer becomes the application's rule,
+  kept as Settings' changes are; "Don't allow" is a rule too, so the
+  application is not asked again. Settings lists the questions waiting at
+  the top of its applications, where a choice answers them as well, and
+  every rule there is No, Local network or Anywhere; removing one has the
+  user asked again the next time. `netd` takes answers from the shell
+  alone (`answer_firewall`), and only about the applications it asked
+  about: an answer sets that application's rule and nothing else. One
+  question waits per application, sixteen at most, and none is asked
+  before the saved settings are read (they may answer it). System
+  services are part of the system: nobody is asked about them.
+
 ## Components
 
 | Path | What it is |
 |------|------------|
-| `implementation/services/netd` | the network service (`net` and `netdev` protocols) |
-| `implementation/libraries/netstack` | `vnetstack`: interfaces, DHCP, SLAAC, routes, DNS, sockets on smoltcp |
+| `implementation/services/netd` | the network service (`net` and `netdev` protocols), and where it keeps the firewall's settings (`store.rs`) |
+| `implementation/libraries/netstack` | `vnetstack`: interfaces, DHCP, SLAAC, routes, DNS, sockets on smoltcp, and the firewall (`firewall.rs`) |
 | `implementation/services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
 | `implementation/libraries/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
 | `implementation/guest/net`, `implementation/guest/wifi` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios |
@@ -151,7 +258,8 @@ identity, which a process cannot forge), and check it:
 | `implementation/libraries/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
 | `implementation/libraries/entropy`, `implementation/kernel/src/random.rs` | the kernel's random number generator |
 | `verification/nettest` | in-system network checks |
-| `verification/ui/drivervm-net.vts`, `e1000e.vts`, `drivervm-usb.vts`, `network-cable.vts` | GUI scripts: Linux's drivers of QEMU's network cards, and a cable pulled |
+| `implementation/applications/shell/src/firewall.rs` | the firewall's question, as the desktop shows it |
+| `verification/ui/drivervm-net.vts`, `e1000e.vts`, `drivervm-usb.vts`, `network-cable.vts`, `settings-firewall.vts`, `firewall-question.vts` | GUI scripts: Linux's drivers of QEMU's network cards, a cable pulled, the firewall changed in Settings, and its question answered |
 
 ## Wi-Fi
 
@@ -290,10 +398,17 @@ the user's networks and the connection policy.
 * **Settings → Network & Internet**: the Wi-Fi connection in detail,
   networks in range, saved networks (automatic connection, forget), every
   interface with its addresses, gateway, DNS servers, DHCP lease and
-  traffic, and the Wi-Fi diagnostics log.
+  traffic, the firewall (on and off, blocking everything incoming,
+  stealth, pings, the applications let in, not let in or kept off the
+  network, the questions waiting, port rules, and what was turned away
+  lately), and the Wi-Fi diagnostics log.
+* **The firewall's question**: a notification asks whether an
+  application that started listening may accept connections (see
+  [The firewall](#the-firewall)).
 * **Terminal**: `wifi` (`status`, `scan`, `list`, `connect SSID
   [PASSWORD]`, `disconnect`, `saved`, `forget`, `auto`, `on`, `off`,
-  `aps`, `log`), `ifconfig`, `ping`, `nslookup`, `netstat`, `route`,
+  `aps`, `log`), `ifconfig`, `ping`, `nslookup`, `netstat`, `firewall`
+  (`log`, `stats`, and the questions waiting: it only reads), `route`,
   `curl`.
 
 ### For applications
@@ -451,7 +566,10 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
   renewal, server outages and other clients' acknowledgements, TCP
   including quiet connections, half closes, closing with data in flight
   and connections whose client left, UDP, DNS including unreachable
-  servers, ICMP and its errors, IPv6, a full link), the profile and policy
+  servers, ICMP and its errors, IPv6, a full link; the firewall: what it
+  lets in and turns away, stealth, pings, replies, fragments, floods,
+  forged packets and its log, packet by packet and between the two
+  stacks), the profile and policy
   modules, smoltcp's own tests with Veda's patch (see
   `implementation/ports/README.md`), and `vtls`: the provider against the
   vectors above, handshakes with a rustls server in memory (every cipher
@@ -479,9 +597,22 @@ PRF vector and RSA signatures made by OpenSSL; the kernel's generator
   checks that the network comes back with it;
   `verification/ui/drivervm-net.vts` and `e1000e.vts` run Linux's drivers
   of QEMU's Intel 82576 and 82574L, and `drivervm-usb.vts` of its USB
-  network adapter.
+  network adapter; `verification/ui/settings-firewall.vts` changes the
+  firewall in Settings and checks that `netd` applies the changes and
+  reads them back after a restart; `verification/ui/firewall-question.vts`
+  starts a program that listens (`run=nettest:listen,8080`), answers the
+  question on the desktop, checks that nobody is asked again after a
+  restart, and changes the answer in Settings. `systest` checks that a
+  program other than Settings may not change the network's configuration
+  or read the firewall, and that one other than the desktop shell may not
+  hear or answer its questions.
 
 ## Limitations and next steps
+
+* The firewall has no profiles per network (home, public), and no rules
+  for what goes out but per application. The programs run in the
+  Terminal share its name, so rules cannot tell them apart, and its
+  question is about them all.
 
 * Wi-Fi hardware is Linux's, through the driver VM: Intel's AX211 has its
   firmware so far (`implementation/ports/linux/firmware.txt`); other cards

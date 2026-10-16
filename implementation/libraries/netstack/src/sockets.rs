@@ -44,7 +44,7 @@ use smoltcp::wire::{
     Icmpv4DstUnreachable, Icmpv4Packet, Icmpv4Repr, Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpAddress, IpEndpoint,
     IpListenEndpoint,
 };
-use vproto::net::{NetError, SocketInfo, SocketKind, TcpOptions};
+use vproto::net::{FirewallProtocol, NetError, SocketInfo, SocketKind, TcpOptions};
 
 use crate::{IfaceId, Stack};
 
@@ -533,7 +533,9 @@ impl Stack {
             return Err(NetError::AddressNotAvailable);
         }
         self.socks.reserve(Proto::Tcp, port);
-        Ok((self.socks.insert(Entry::Listener(l)), local))
+        let id = self.socks.insert(Entry::Listener(l));
+        self.firewall.add_receiver(id, FirewallProtocol::Tcp, port);
+        Ok((id, local))
     }
 
     /// Gives a listener listening sockets on interface `id`: as many as its
@@ -615,6 +617,14 @@ impl Stack {
             send_space: if may_send { send_space } else { 0 },
             send_queued,
         })
+    }
+
+    /// Where a TCP connection goes (or comes from), once that is known.
+    pub fn tcp_remote(&self, id: SockId) -> Option<SocketAddr> {
+        match self.socks.map.get(&id) {
+            Some(Entry::Tcp(t)) => t.remote,
+            _ => None,
+        }
     }
 
     /// Appends data to a connection's send buffer; returns how much fit.
@@ -715,7 +725,9 @@ impl Stack {
             self.add_udp_member(&mut u, id);
         }
         self.socks.reserve(Proto::Udp, port);
-        Ok((self.socks.insert(Entry::Udp(u)), local))
+        let id = self.socks.insert(Entry::Udp(u));
+        self.firewall.add_receiver(id, FirewallProtocol::Udp, port);
+        Ok((id, local))
     }
 
     fn add_udp_member(&mut self, u: &mut UdpSock, id: IfaceId) {
@@ -1018,6 +1030,7 @@ impl Stack {
                     self.abort_orphan(a);
                 }
                 self.socks.release(Proto::Tcp, l.local.port());
+                self.firewall.remove_receiver(id);
             }
             Entry::Udp(u) => {
                 for (iface, h) in u.members {
@@ -1026,6 +1039,7 @@ impl Stack {
                     }
                 }
                 self.socks.release(Proto::Udp, u.local.port());
+                self.firewall.remove_receiver(id);
             }
             Entry::Ping(p) => {
                 for (iface, h) in p.members {

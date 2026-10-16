@@ -20,10 +20,22 @@
 //! * only the device manager (whose drivers, the driver VM's programs
 //!   included, speak as it) and the Wi-Fi service attach devices (the
 //!   connections of others are closed);
-//! * only Settings and the Terminal configure interfaces, renew leases,
-//!   set the DNS servers and flush the DNS cache (`PermissionDenied`
-//!   otherwise), list every socket, and see the interfaces' hardware
-//!   addresses (zeros for everyone else); others list their own sockets;
+//! * only Settings changes how the network is set up: it configures
+//!   interfaces, renews leases, sets the DNS servers and sets the firewall
+//!   (`PermissionDenied` for everyone else). The programs run in the
+//!   Terminal speak for it, so the Terminal, which runs whatever the user
+//!   asks, only looks: Settings and the Terminal flush the DNS cache, read
+//!   the firewall's settings, log and counts, list every socket, and see the
+//!   interfaces' hardware addresses (zeros for everyone else); others list
+//!   their own sockets;
+//! * the firewall ([`FirewallConfig`]) decides what other machines may
+//!   start with this one, and which applications may use the network at
+//!   all (`PermissionDenied` for those it keeps off);
+//! * when an application its settings say nothing about starts taking
+//!   connections from other machines, the user is asked whether it may
+//!   ([`FirewallQuestion`]): only the desktop shell hears the questions and
+//!   answers them, and an answer sets nothing but the rule for the
+//!   application asked about;
 //! * limits apply per process, whatever the number of connections: sockets
 //!   (the connections a listener accepts included), lookups in progress,
 //!   status watchers and connections; and of each, a part is kept for
@@ -520,6 +532,308 @@ union! {
 /// Event ordinal of [`NetEvent`]s on a watch channel.
 pub const NET_EVENT: u32 = 1;
 
+// ---------------------------------------------------------------------
+// The firewall
+
+/// Most rules of each kind in a [`FirewallConfig`].
+pub const MAX_FIREWALL_RULES: usize = 256;
+/// Longest application name a firewall rule takes, in bytes.
+pub const MAX_APP_NAME: usize = 64;
+
+enumeration! {
+    /// The transport protocol a port rule is for.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum FirewallProtocol {
+        Tcp = 1,
+        Udp = 2,
+    }
+}
+
+union! {
+    /// Where a firewall rule lets traffic come from.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Scope {
+        /// Any address.
+        1 => Anywhere {},
+        /// The networks of the interface it comes in on: the subnets of its
+        /// addresses, and the link-local ones (IPv4's 169.254.0.0/16, IPv6's
+        /// fe80::/10).
+        2 => LocalNetwork {},
+        /// The addresses whose first `len` bits are `address`'s.
+        3 => Prefix { address: IpAddr, len: u8 },
+    }
+}
+
+impl Scope {
+    /// Reads `anywhere` (or `any`), `local`, or a prefix (`192.0.2.0/24`;
+    /// an address alone is a prefix of its whole length).
+    pub fn parse(text: &str) -> Option<Scope> {
+        match text {
+            "anywhere" | "any" => return Some(Scope::Anywhere {}),
+            "local" => return Some(Scope::LocalNetwork {}),
+            _ => {}
+        }
+        let (address, len) = match text.split_once('/') {
+            Some((a, l)) => (a.parse::<IpAddr>().ok()?, l.parse::<u8>().ok()?),
+            None => {
+                let a = text.parse::<IpAddr>().ok()?;
+                (a, if a.is_ipv4() { 32 } else { 128 })
+            }
+        };
+        let scope = Scope::Prefix { address, len };
+        scope.is_valid().then_some(scope)
+    }
+
+    /// Whether a prefix is no longer than its address.
+    fn is_valid(&self) -> bool {
+        match self {
+            Scope::Prefix { address: IpAddr::V4(_), len } => *len <= 32,
+            Scope::Prefix { address: IpAddr::V6(_), len } => *len <= 128,
+            _ => true,
+        }
+    }
+}
+
+impl core::fmt::Display for Scope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Scope::Anywhere {} => f.write_str("anywhere"),
+            Scope::LocalNetwork {} => f.write_str("the local network"),
+            Scope::Prefix { address, len } => write!(f, "{address}/{len}"),
+        }
+    }
+}
+
+message! {
+    /// Whether an application accepts connections and datagrams from other
+    /// machines, and from where.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct AppRule {
+        /// The application, by the name the system knows it by: an
+        /// application's id (`music`), or `terminal` for the programs run in
+        /// the Terminal, which speak for it.
+        pub app: String,
+        /// Where what it receives may come from (`None`: nowhere, which the
+        /// user chose; the application is not asked about again).
+        pub from: Option<Scope>,
+    }
+}
+
+message! {
+    /// Ports opened to other machines, or closed to them, whatever program
+    /// uses them.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PortRule {
+        pub protocol: FirewallProtocol,
+        /// The first and the last port of the range (the same for one port).
+        pub first: u16,
+        pub last: u16,
+        /// Where the traffic comes from.
+        pub from: Scope,
+        /// Let it in; otherwise turn it away, whatever lets it in elsewhere.
+        pub allow: bool,
+    }
+}
+
+impl PortRule {
+    /// Whether the rule is about `port` of `protocol`.
+    pub fn covers(&self, protocol: FirewallProtocol, port: u16) -> bool {
+        self.protocol == protocol && (self.first..=self.last).contains(&port)
+    }
+}
+
+message! {
+    /// The firewall's settings, which Settings changes and `netd` keeps on
+    /// the home disk ([`FirewallConfig::default`] holds until it has them).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FirewallConfig {
+        /// Off, nothing is filtered (packets no host sends are still
+        /// dropped).
+        pub enabled: bool,
+        /// Only replies to what this machine sent come in: no rule lets
+        /// anything else in.
+        pub block_incoming: bool,
+        /// What nobody asked for gets no answer: a closed port neither resets
+        /// a connection nor says it is unreachable, so that a scan finds
+        /// nothing.
+        pub stealth: bool,
+        /// Who gets an answer to a ping (`None`: nobody).
+        pub ping: Option<Scope>,
+        /// Keep a record of what was turned away.
+        pub log: bool,
+        /// Applications that accept connections from other machines, and
+        /// those the user chose not to let in (the first rule for an
+        /// application decides).
+        pub incoming: Vec<AppRule>,
+        /// Applications kept off the network (they still reach the machine
+        /// itself, through the loopback interface).
+        pub blocked: Vec<String>,
+        /// Ports opened or closed to other machines.
+        pub ports: Vec<PortRule>,
+    }
+}
+
+impl Default for FirewallConfig {
+    /// On: nothing comes in that this machine did not ask for, nothing
+    /// answers a scan or a ping, and what is turned away is recorded.
+    fn default() -> FirewallConfig {
+        FirewallConfig {
+            enabled: true,
+            block_incoming: false,
+            stealth: true,
+            ping: None,
+            log: true,
+            incoming: Vec::new(),
+            blocked: Vec::new(),
+            ports: Vec::new(),
+        }
+    }
+}
+
+impl FirewallConfig {
+    /// Whether the settings may be applied: `InvalidArgument` for more than
+    /// [`MAX_FIREWALL_RULES`] rules of a kind, an application name that is
+    /// empty, longer than [`MAX_APP_NAME`] or not printable, a prefix longer
+    /// than its address, or a port range that is empty or starts at 0.
+    pub fn check(&self) -> Result<(), NetError> {
+        let name_ok = |n: &str| !n.is_empty() && n.len() <= MAX_APP_NAME && !n.chars().any(char::is_control);
+        let ok = self.incoming.len() <= MAX_FIREWALL_RULES
+            && self.blocked.len() <= MAX_FIREWALL_RULES
+            && self.ports.len() <= MAX_FIREWALL_RULES
+            && self.ping.as_ref().is_none_or(Scope::is_valid)
+            && self.incoming.iter().all(|r| name_ok(&r.app) && r.from.as_ref().is_none_or(Scope::is_valid))
+            && self.blocked.iter().all(|n| name_ok(n))
+            && self.ports.iter().all(|r| r.first >= 1 && r.first <= r.last && r.from.is_valid());
+        if ok { Ok(()) } else { Err(NetError::InvalidArgument) }
+    }
+
+    /// Whether `app` may use the network.
+    pub fn allows_network(&self, app: &str) -> bool {
+        !self.enabled || !self.blocked.iter().any(|b| b == app)
+    }
+
+    /// Where the sockets of `app` accept what other machines start from:
+    /// `None` for nowhere (no rule for it, a rule that lets it in from
+    /// nowhere, or it is kept off the network).
+    pub fn incoming_for(&self, app: &str) -> Option<Scope> {
+        if !self.allows_network(app) {
+            return None;
+        }
+        self.incoming.iter().find(|r| r.app == app).and_then(|r| r.from)
+    }
+
+    /// Whether the user is to be asked about `app`, which takes connections
+    /// from other machines: the firewall is on, lets something in, and its
+    /// settings say nothing about the application (neither a rule for it
+    /// nor keeping it off the network).
+    pub fn undecided(&self, app: &str) -> bool {
+        self.enabled
+            && !self.block_incoming
+            && !self.blocked.iter().any(|b| b == app)
+            && !self.incoming.iter().any(|r| r.app == app)
+    }
+}
+
+message! {
+    /// An application that started taking connections or datagrams from
+    /// other machines, about which the firewall's settings say nothing:
+    /// until the user answers, nothing from other machines reaches it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FirewallQuestion {
+        /// The application (as [`AppRule::app`] names it).
+        pub app: String,
+        /// What it listens with: the protocol and the port (the first, if it
+        /// listens on several).
+        pub protocol: FirewallProtocol,
+        pub port: u16,
+        /// When it was asked (Unix time, seconds).
+        pub at: u64,
+    }
+}
+
+union! {
+    /// Notifications on a [`net::Client::watch_firewall`] channel.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum FirewallNotice {
+        /// The user is to be asked about an application.
+        1 => Asked { question: FirewallQuestion },
+        /// The question about `app` needs no answer any more: it was
+        /// answered (on the desktop or in Settings), or the settings changed
+        /// so that it does not matter.
+        2 => Settled { app: String },
+    }
+}
+
+/// Event ordinal of [`FirewallNotice`]s on a firewall watch channel.
+pub const FIREWALL_NOTICE: u32 = 1;
+
+enumeration! {
+    /// Why the firewall turned something away.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum FirewallReason {
+        /// A connection or a datagram from another machine that no rule lets
+        /// in.
+        NotAllowed = 1,
+        /// A connection or a datagram for a port nothing uses, unanswered in
+        /// stealth mode: most likely a scan.
+        Probe = 2,
+        /// A ping that gets no answer.
+        Ping = 3,
+        /// A packet no host sends: a forged source address (this machine's,
+        /// loopback, multicast), impossible TCP flags, a protocol or a message
+        /// the machine does not take.
+        Invalid = 4,
+        /// More new connections or pings from one address, or from all of
+        /// them, than the firewall lets through.
+        RateLimited = 5,
+        /// A piece of a fragmented packet whose first piece was not let in,
+        /// or one that could hide where the packet goes.
+        Fragment = 6,
+        /// An application kept off the network reached for it, or what came
+        /// in was for one.
+        AppBlocked = 7,
+    }
+}
+
+message! {
+    /// What the firewall turned away; repeats within a second of each other
+    /// count into one.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct FirewallEvent {
+        /// When it last happened (Unix time, seconds).
+        pub at: u64,
+        pub reason: FirewallReason,
+        /// The interface it came in on ("" for what an application sent).
+        pub interface: String,
+        /// The IP protocol (6 TCP, 17 UDP, 1 ICMP, 58 ICMPv6).
+        pub protocol: u8,
+        /// The other machine (port 0 for a protocol without ports).
+        pub remote: SocketAddr,
+        /// This machine's port (0 if none).
+        pub port: u16,
+        /// The application concerned ("" if none).
+        pub app: String,
+        /// How many times.
+        pub count: u32,
+    }
+}
+
+message! {
+    /// The firewall's counts since the system started.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct FirewallStats {
+        /// Connections and datagrams from other machines that rules let in.
+        pub allowed: u64,
+        pub not_allowed: u64,
+        pub probes: u64,
+        pub pings: u64,
+        pub invalid: u64,
+        pub rate_limited: u64,
+        pub fragments: u64,
+        pub app_blocked: u64,
+    }
+}
+
 /// Formats a hardware (MAC) address: `02:00:00:57:4c:01`.
 pub fn format_mac(m: &[u8; 6]) -> String {
     alloc::format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
@@ -572,17 +886,41 @@ protocol! {
         /// is closed.
         14 => fn watch(events: Channel) -> Result<(), NetError>;
 
-        /// Sets how `interface` obtains its IPv4 configuration (Settings and
-        /// the Terminal only).
+        /// Sets how `interface` obtains its IPv4 configuration (Settings
+        /// only).
         20 => fn configure(interface: String, config: IpConfig) -> Result<(), NetError>;
-        /// Restarts DHCP on `interface` (asks for a new lease; Settings and
-        /// the Terminal only).
+        /// Restarts DHCP on `interface` (asks for a new lease; Settings only).
         21 => fn renew(interface: String) -> Result<(), NetError>;
         /// Overrides the DNS servers (empty: use the ones DHCP provides;
-        /// Settings and the Terminal only).
+        /// Settings only).
         22 => fn set_dns_servers(servers: Vec<IpAddr>) -> Result<(), NetError>;
         /// Empties the DNS cache (Settings and the Terminal only).
         23 => fn flush_dns_cache() -> Result<(), NetError>;
+
+        /// The firewall's settings (Settings and the Terminal only).
+        30 => fn firewall() -> Result<FirewallConfig, NetError>;
+        /// Replaces the firewall's settings, which `netd` keeps from then on
+        /// (Settings only; `InvalidArgument` for what
+        /// [`FirewallConfig::check`] refuses).
+        31 => fn set_firewall(config: FirewallConfig) -> Result<(), NetError>;
+        /// What the firewall turned away lately, oldest first (Settings and
+        /// the Terminal only).
+        32 => fn firewall_log() -> Result<Vec<FirewallEvent>, NetError>;
+        /// The firewall's counts (Settings and the Terminal only).
+        33 => fn firewall_stats() -> Result<FirewallStats, NetError>;
+        /// The questions waiting for the user's answer (Settings and the
+        /// Terminal only).
+        34 => fn firewall_questions() -> Result<Vec<FirewallQuestion>, NetError>;
+        /// Sends [`FirewallNotice`]s (ordinal [`FIREWALL_NOTICE`]) on
+        /// `events`, those of the questions waiting first, until it is
+        /// closed or another takes its place (the desktop shell only, which
+        /// asks the user).
+        35 => fn watch_firewall(events: Channel) -> Result<(), NetError>;
+        /// The user's answer to the question about `app`: where it may
+        /// accept connections from (`None`: nowhere). It becomes the
+        /// application's rule, kept as Settings' changes are (the desktop
+        /// shell only; `InvalidArgument` if no question about `app` waits).
+        36 => fn answer_firewall(app: String, from: Option<Scope>) -> Result<(), NetError>;
     }
 }
 
@@ -739,6 +1077,136 @@ mod tests {
             canonical: "example.com".into(),
         };
         assert_eq!(roundtrip(f.clone()), f);
+    }
+
+    fn rules() -> FirewallConfig {
+        FirewallConfig {
+            enabled: true,
+            block_incoming: false,
+            stealth: false,
+            ping: Some(Scope::LocalNetwork {}),
+            log: true,
+            incoming: vec![
+                AppRule { app: "music".to_string(), from: Some(Scope::LocalNetwork {}) },
+                AppRule {
+                    app: "terminal".to_string(),
+                    from: Some(Scope::Prefix { address: "2001:db8::".parse().unwrap(), len: 32 }),
+                },
+                AppRule { app: "photos".to_string(), from: None },
+            ],
+            blocked: vec!["videos".to_string()],
+            ports: vec![PortRule {
+                protocol: FirewallProtocol::Tcp,
+                first: 8000,
+                last: 8080,
+                from: Scope::Anywhere {},
+                allow: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn firewall_settings_round_trip_and_are_checked() {
+        let c = rules();
+        assert_eq!(roundtrip(c.clone()), c);
+        assert_eq!(c.check(), Ok(()));
+        let e = FirewallEvent {
+            at: 1_790_000_000,
+            reason: FirewallReason::Probe,
+            interface: "eth0".to_string(),
+            protocol: 6,
+            remote: "198.51.100.7:40000".parse().unwrap(),
+            port: 22,
+            app: String::new(),
+            count: 3,
+        };
+        assert_eq!(roundtrip(e.clone()), e);
+        let bad = |f: &dyn Fn(&mut FirewallConfig)| {
+            let mut c = rules();
+            f(&mut c);
+            c.check()
+        };
+        assert_eq!(bad(&|c| c.blocked.push(String::new())), Err(NetError::InvalidArgument));
+        assert_eq!(bad(&|c| c.blocked.push("a\nb".to_string())), Err(NetError::InvalidArgument));
+        assert_eq!(bad(&|c| c.blocked.push("x".repeat(MAX_APP_NAME + 1))), Err(NetError::InvalidArgument));
+        assert_eq!(bad(&|c| c.ports[0].first = 0), Err(NetError::InvalidArgument));
+        assert_eq!(bad(&|c| c.ports[0].last = 7999), Err(NetError::InvalidArgument));
+        assert_eq!(
+            bad(&|c| c.ping = Some(Scope::Prefix { address: "10.0.0.0".parse().unwrap(), len: 33 })),
+            Err(NetError::InvalidArgument)
+        );
+        assert_eq!(bad(&|c| c.blocked = vec!["x".to_string(); MAX_FIREWALL_RULES + 1]), Err(NetError::InvalidArgument));
+        assert_eq!(
+            bad(&|c| c.incoming[1].from = Some(Scope::Prefix { address: "2001:db8::".parse().unwrap(), len: 129 })),
+            Err(NetError::InvalidArgument)
+        );
+        let q = FirewallQuestion { app: "terminal".to_string(), protocol: FirewallProtocol::Udp, port: 5353, at: 7 };
+        assert_eq!(roundtrip(q.clone()), q);
+        let asked = FirewallNotice::Asked { question: q };
+        assert_eq!(roundtrip(asked.clone()), asked);
+        let settled = FirewallNotice::Settled { app: "terminal".to_string() };
+        assert_eq!(roundtrip(settled.clone()), settled);
+    }
+
+    #[test]
+    fn the_default_firewall_lets_nothing_in_and_answers_nothing() {
+        let d = FirewallConfig::default();
+        assert!(d.enabled && d.stealth && d.log && !d.block_incoming);
+        assert_eq!(d.ping, None);
+        assert!(d.incoming.is_empty() && d.ports.is_empty() && d.blocked.is_empty());
+        assert_eq!(d.incoming_for("music"), None);
+        assert!(d.allows_network("music"));
+    }
+
+    #[test]
+    fn applications_are_let_in_and_kept_out_by_name() {
+        let mut c = rules();
+        assert_eq!(c.incoming_for("music"), Some(Scope::LocalNetwork {}));
+        assert_eq!(c.incoming_for("editor"), None);
+        // Not let in, as the user answered.
+        assert_eq!(c.incoming_for("photos"), None);
+        assert!(!c.allows_network("videos") && c.allows_network("music"));
+        // Kept off the network: nothing comes in for it either.
+        c.blocked.push("music".to_string());
+        assert_eq!(c.incoming_for("music"), None);
+        // The firewall off keeps no one off.
+        c.enabled = false;
+        assert!(c.allows_network("videos"));
+        let r = &c.ports[0];
+        assert!(r.covers(FirewallProtocol::Tcp, 8000) && r.covers(FirewallProtocol::Tcp, 8080));
+        assert!(!r.covers(FirewallProtocol::Tcp, 8081) && !r.covers(FirewallProtocol::Udp, 8000));
+    }
+
+    #[test]
+    fn the_user_is_asked_only_about_applications_the_settings_say_nothing_of() {
+        let mut c = rules();
+        // A rule either way, or kept off the network: decided.
+        for app in ["music", "terminal", "photos", "videos"] {
+            assert!(!c.undecided(app), "{app}");
+        }
+        assert!(c.undecided("editor"));
+        // Nothing comes in whatever the answer: no question.
+        c.block_incoming = true;
+        assert!(!c.undecided("editor"));
+        c.block_incoming = false;
+        c.enabled = false;
+        assert!(!c.undecided("editor"));
+    }
+
+    #[test]
+    fn scopes_read_and_print() {
+        assert_eq!(Scope::parse("any"), Some(Scope::Anywhere {}));
+        assert_eq!(Scope::parse("local"), Some(Scope::LocalNetwork {}));
+        let p = Scope::parse("192.0.2.0/24").unwrap();
+        assert_eq!(p, Scope::Prefix { address: "192.0.2.0".parse().unwrap(), len: 24 });
+        assert_eq!(p.to_string(), "192.0.2.0/24");
+        assert_eq!(
+            Scope::parse("2001:db8::1"),
+            Some(Scope::Prefix { address: "2001:db8::1".parse().unwrap(), len: 128 })
+        );
+        assert_eq!(Scope::parse("10.0.0.0/33"), None);
+        assert_eq!(Scope::parse("somewhere"), None);
+        assert_eq!(Scope::LocalNetwork {}.to_string(), "the local network");
     }
 
     #[test]

@@ -202,7 +202,11 @@ in one line; `app_actions` gives the details.
   Only the desktop shell may answer an approval, and only Settings may
   change the agent's settings: both are recognised by their process
   identity, which init attaches to every connection (system service names
-  cannot be taken by other programs).
+  cannot be taken by other programs). The firewall the agent cannot touch
+  at all: Settings offers it no action for it, the network service takes
+  its settings from Settings alone, and the answers to its questions
+  (whether an application may accept connections) from the desktop shell
+  alone, whose buttons the agent cannot press.
 * Requests appear in the agent's window or as a notification, with what
   will happen and on what. *Always allow* is offered for sensitive actions
   only (Settings → Agent lists them, and can take them back); destructive

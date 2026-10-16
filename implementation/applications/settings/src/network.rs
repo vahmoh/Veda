@@ -3,7 +3,7 @@
 
 //! The "Network & Internet" page: the Wi-Fi switch and connection, the
 //! networks in range, saved networks, every interface with its addresses,
-//! and diagnostics.
+//! the firewall ([`crate::firewall`]), and diagnostics.
 
 use vnet::wifi::{self, ConnState, NetworkInfo, SavedNetwork, Security, WlanDiagnostics, WlanStatus, signal_bars};
 use vnet::{Connectivity, InterfaceInfo, InterfaceKind, NetStatus};
@@ -68,6 +68,7 @@ pub struct NetworkPage {
     error: Option<(Vec<u8>, String)>,
     /// Something changed during drawing: draw again.
     dirty: bool,
+    firewall: crate::firewall::FirewallPanel,
 }
 
 impl NetworkPage {
@@ -87,6 +88,7 @@ impl NetworkPage {
             reveal: false,
             error: None,
             dirty: false,
+            firewall: crate::firewall::FirewallPanel::new(),
         }
     }
 
@@ -119,6 +121,11 @@ impl NetworkPage {
 
     /// Takes in events and refreshes when due. Returns when to look again.
     pub fn poll(&mut self, now: u64) -> u64 {
+        let firewall_at = self.firewall.poll(now);
+        self.poll_network(now).min(firewall_at)
+    }
+
+    fn poll_network(&mut self, now: u64) -> u64 {
         let mut events = false;
         if let Some(w) = &self.watch {
             loop {
@@ -189,6 +196,7 @@ impl NetworkPage {
             y = self.saved_card(ui, r.x, y, r.w);
         }
         y = self.interfaces_card(ui, r.x, y, r.w);
+        y = self.firewall.draw(ui, r.x, y, r.w);
         if self.wifi.is_some() {
             y = self.diagnostics_card(ui, r.x, y, r.w);
         }

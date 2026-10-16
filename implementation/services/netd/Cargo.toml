@@ -19,6 +19,7 @@ vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 vnetstack = { workspace = true }
+vfiles = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

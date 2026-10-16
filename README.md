@@ -112,9 +112,11 @@ protocols, the voice pipeline, consent, memory and testing.
   *Interceptor* shows it off, full screen: a bay city with its traffic,
   physically based lighting, shadows, bloom and 4x multisampling.
 * **Networking.** A network service with IPv4 and IPv6, DHCP, DNS, TCP,
-  UDP and ICMP, and a Wi-Fi service that joins WPA2, WPA3 and open
-  networks with management frame protection, remembers them, reconnects
-  and roams. Linux's drivers only move frames and never see a password.
+  UDP and ICMP, and a firewall that lets in only what this computer asked
+  for and what you allow, in stealth by default, asking you when an
+  application starts listening; and a Wi-Fi service
+  that joins WPA2, WPA3 and open networks with management frame
+  protection, remembers them, reconnects and roams. Linux's drivers only move frames and never see a password.
   Applications get TLS 1.3 and 1.2 from `vtls`, with certificates checked
   against Mozilla's roots. See [Networking](documentation/NETWORKING.md).
 * **Audio.** A mixing service with echo-cancelled recording and ducking,

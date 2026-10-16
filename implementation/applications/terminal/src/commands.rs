@@ -293,6 +293,14 @@ pub static BUILTINS: &[Builtin] = &[
         run: crate::netcmds::cmd_netstat,
     },
     Builtin {
+        name: "firewall",
+        aliases: &[],
+        group: Group::Network,
+        usage: "firewall [log | stats]",
+        help: "Show the firewall's settings, what it turned away lately, or its counts (Settings changes them)",
+        run: crate::netcmds::cmd_firewall,
+    },
+    Builtin {
         name: "route",
         aliases: &[],
         group: Group::Network,

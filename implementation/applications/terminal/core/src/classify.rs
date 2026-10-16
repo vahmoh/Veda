@@ -184,7 +184,9 @@ fn builtin_effect(name: &str, args: &[Option<&str>], words: &[Word], reading: &R
     match name {
         "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "grep" | "find" | "tree" | "stat" | "df" | "ps" | "apps"
         | "uptime" | "free" | "sysinfo" | "date" | "dmesg" | "whoami" | "hostname" | "help" | "echo" | "clear"
-        | "sleep" | "env" | "which" | "ifconfig" | "ping" | "nslookup" | "netstat" | "route" | "curl" => Effect::Looks,
+        | "sleep" | "env" | "which" | "ifconfig" | "ping" | "nslookup" | "netstat" | "route" | "curl" | "firewall" => {
+            Effect::Looks
+        }
         "cd" | "mkdir" | "touch" | "edit" | "sync" | "logger" | "export" | "unset" => Effect::Changes,
         // `history -c` forgets the history.
         "history" if args.iter().any(|a| a.is_none_or(|a| a == "-c")) => Effect::Destroys,
@@ -262,9 +264,9 @@ mod tests {
             const NAMES: &[&str] = &[
                 "ls", "cd", "pwd", "cat", "head", "tail", "wc", "grep", "find", "tree", "mkdir", "rmdir", "rm", "cp",
                 "mv", "touch", "stat", "edit", "open", "sync", "df", "ps", "kill", "run", "apps", "wifi", "ifconfig",
-                "ping", "nslookup", "netstat", "route", "curl", "uptime", "free", "sysinfo", "date", "dmesg", "logger",
-                "whoami", "hostname", "help", "echo", "clear", "sleep", "history", "env", "export", "unset", "which",
-                "exit",
+                "ping", "nslookup", "netstat", "route", "curl", "firewall", "uptime", "free", "sysinfo", "date",
+                "dmesg", "logger", "whoami", "hostname", "help", "echo", "clear", "sleep", "history", "env", "export",
+                "unset", "which", "exit",
             ];
             match name {
                 "del" => Some("rm"),
@@ -332,6 +334,9 @@ mod tests {
             "history",
             "ping -c 2 example.org",
             "curl example.org",
+            // The Terminal only reads the firewall: Settings changes it.
+            "firewall",
+            "firewall log",
             "ls > /dev/null 2>&1",
             "ls x 2>/dev/null",
             "ls x 2> ../../dev/null",

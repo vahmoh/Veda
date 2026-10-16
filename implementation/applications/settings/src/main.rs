@@ -12,18 +12,21 @@
 //! * **Agent**: the voice agent: Deepgram API key, name and voice, language
 //!   and speech models, listening, and what it remembers.
 //! * **Network & Internet**: Wi-Fi (switch, connection, networks in range,
-//!   saved networks), interfaces and addresses, Wi-Fi diagnostics.
+//!   saved networks), interfaces and addresses, the firewall (what other
+//!   machines may reach, which applications may use the network, what was
+//!   turned away), Wi-Fi diagnostics.
 //! * **Display**: the screen resolution and the work area left by panels.
 //! * **System**: version, processor, memory and uptime, refreshed live.
 //! * **About**: version information and licences.
 //!
 //! [`control`] lets the voice agent show pages and change its own voice,
-//! name and language model.
+//! name and language model; nothing lets it change the firewall.
 //!
 //! Usage: `settings [personalization|agent|network|display|system|about]`.
 
 mod agent;
 mod control;
+mod firewall;
 mod network;
 
 use vgfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};

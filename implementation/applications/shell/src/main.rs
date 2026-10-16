@@ -15,6 +15,8 @@
 //! * **notifications** ([`notify`]);
 //! * the voice **agent**'s tray item, window and approval requests
 //!   ([`agent`], [`approval`]);
+//! * the **firewall**'s questions: whether an application may accept
+//!   connections from other machines ([`firewall`]);
 //! * **restarting and shutting down** once the applications have closed
 //!   ([`power`]).
 //!
@@ -33,6 +35,7 @@ mod apps;
 mod calendar;
 mod chrome;
 mod desktop;
+mod firewall;
 mod notify;
 mod power;
 mod presence;
@@ -140,6 +143,12 @@ pub enum Action {
     },
     /// Turns the agent's microphone off (or on).
     AgentMute(bool),
+    /// The user's answer to the firewall's question about an application:
+    /// where it may accept connections from (`None`: nowhere).
+    FirewallAnswer {
+        app: String,
+        from: Option<vnet::Scope>,
+    },
     /// Sets the master volume (0..=1) and mute state.
     SetVolume(f32, bool),
     /// Minimises every window, or restores them if the desktop is showing.
@@ -185,6 +194,9 @@ pub struct Model {
     pub tip: Option<tooltip::Tip>,
     /// The voice agent's state.
     pub agent: agent::AgentModel,
+    /// The firewall's questions waiting for the user's answer, the oldest
+    /// first.
+    pub firewall: Vec<vnet::FirewallQuestion>,
     pub actions: Vec<Action>,
 }
 
@@ -263,6 +275,9 @@ struct Shell {
     popup: Option<Popup>,
     /// Wi-Fi events (`None` while the Wi-Fi service is not running).
     wifi_watch: Option<vnet::wifi::Watcher>,
+    /// The firewall's questions (`None` while the network service is not
+    /// running).
+    firewall_watch: Option<Channel>,
     /// When to next look at the network state (and retry the watcher).
     next_net_poll: u64,
     tooltip: Option<tooltip::Tooltip>,
@@ -675,9 +690,10 @@ impl Shell {
         if now < self.next_net_poll {
             return;
         }
-        // Every second while the Wi-Fi service is away (it may be
-        // restarting), otherwise every five.
-        self.next_net_poll = now + if self.wifi_watch.is_none() { 1_000_000_000 } else { 5_000_000_000 };
+        // Every second while the Wi-Fi or the network service is away (it
+        // may be restarting), otherwise every five.
+        let away = self.wifi_watch.is_none() || self.firewall_watch.is_none();
+        self.next_net_poll = now + if away { 1_000_000_000 } else { 5_000_000_000 };
         let (up, label) = match vnet::interfaces() {
             Ok(list) => match list
                 .iter()
@@ -697,6 +713,47 @@ impl Shell {
             self.wifi_watch = vnet::wifi::Watcher::new().ok();
             self.refresh_wifi();
         }
+        if self.firewall_watch.is_none()
+            && let Ok(ch) = vnet::watch_firewall()
+        {
+            // The questions waiting come first on it: those known before
+            // may have been settled meanwhile.
+            self.firewall_watch = Some(ch);
+            self.model.firewall.clear();
+            self.notes.show_questions(&self.display, &self.model);
+        }
+    }
+
+    /// Takes the firewall's notices: questions to ask, and those settled.
+    fn check_firewall(&mut self) {
+        let Some(ch) = &self.firewall_watch else { return };
+        let mut notices = Vec::new();
+        let gone = loop {
+            match vnet::next_firewall_notice(ch) {
+                Ok(Some(n)) => notices.push(n),
+                Ok(None) => break false,
+                Err(_) => break true,
+            }
+        };
+        if !gone && notices.is_empty() {
+            return;
+        }
+        if gone {
+            // The network service went away, and its questions with it.
+            self.firewall_watch = None;
+            self.model.firewall.clear();
+        }
+        for n in notices {
+            match n {
+                vnet::FirewallNotice::Asked { question } => {
+                    if !self.model.firewall.iter().any(|q| q.app == question.app) {
+                        self.model.firewall.push(question);
+                    }
+                }
+                vnet::FirewallNotice::Settled { app } => self.model.firewall.retain(|q| q.app != app),
+            }
+        }
+        self.notes.show_questions(&self.display, &self.model);
     }
 
     /// Handles Wi-Fi events: status changes, finished scans, failures.
@@ -917,6 +974,16 @@ impl Shell {
                     if let Some(a) = &self.agent {
                         a.set_muted(muted);
                     }
+                }
+                Action::FirewallAnswer { app, from } => {
+                    if let Err(e) = vnet::answer_firewall(&app, from) {
+                        // Watched again, the service says which questions
+                        // still wait.
+                        println!("the firewall did not take the answer about {app}: {e}");
+                        self.firewall_watch = None;
+                    }
+                    self.model.firewall.retain(|q| q.app != app);
+                    self.notes.show_questions(&self.display, &self.model);
                 }
                 Action::OpenNetworkSettings => {
                     self.close_popup_of(PopupKind::Wifi);
@@ -1181,6 +1248,9 @@ impl Shell {
         if let Some(w) = &self.wifi_watch {
             items.push(WaitItem { handle: w.handle().raw(), signals: readable, ..Default::default() });
         }
+        if let Some(ch) = &self.firewall_watch {
+            items.push(WaitItem { handle: ch.raw(), signals: readable, ..Default::default() });
+        }
         match &self.agent {
             Some(a) => {
                 items.push(WaitItem { handle: a.events_handle(), signals: readable, ..Default::default() });
@@ -1226,6 +1296,7 @@ impl Shell {
             self.poll_network();
             self.poll_desktop();
             self.check_wifi();
+            self.check_firewall();
             self.check_agent();
             self.play_startup_sound();
             self.wait();
@@ -1435,6 +1506,7 @@ fn run() -> i32 {
         dismissed: None,
         tip: None,
         agent: agent::AgentModel::default(),
+        firewall: Vec::new(),
         actions: Vec::new(),
     };
     let fs = vfiles::Fs::connect();
@@ -1457,6 +1529,7 @@ fn run() -> i32 {
         audio,
         popup: None,
         wifi_watch: None,
+        firewall_watch: None,
         next_net_poll: 0,
         tooltip: None,
         notes: notify::Notifications::new(),

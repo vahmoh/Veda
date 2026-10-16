@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Network commands: `wifi`, `ifconfig`, `ping`, `nslookup`, `netstat`,
-//! `route` and `curl`. They talk to the network and Wi-Fi services through
-//! `vnet`; every wait is bounded, and the long ones (pinging, scanning,
-//! joining a network) stop between steps after Ctrl+C.
+//! `firewall`, `route` and `curl`. They talk to the network and Wi-Fi
+//! services through `vnet`; every wait is bounded, and the long ones
+//! (pinging, scanning, joining a network) stop between steps after Ctrl+C.
+//! `firewall` only reads: the programs run here speak for the Terminal, so
+//! Settings alone changes the firewall.
 
 use terminal_core::screen::{Style, color};
 use vnet::wifi::{self, ConnState, WlanEvent};
@@ -453,6 +455,135 @@ pub fn cmd_netstat(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
             0
         }
         Err(e) => net_err(io, "netstat", e),
+    }
+}
+
+/// `firewall [log | stats]`: the firewall's settings, what it turned away
+/// lately, or its counts.
+pub fn cmd_firewall(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
+    let result = match args.get(1).map(String::as_str) {
+        None | Some("show") => vnet::firewall().map(|c| {
+            let questions = vnet::firewall_questions().unwrap_or_default();
+            show_firewall(io, &c, &questions)
+        }),
+        Some("log") => vnet::firewall_log().map(|log| show_firewall_log(io, &log)),
+        Some("stats") => vnet::firewall_stats().map(|s| show_firewall_stats(io, &s)),
+        Some(other) => {
+            return io.error("firewall", &format!("no subcommand '{other}': usage: firewall [log | stats]"));
+        }
+    };
+    match result {
+        Ok(()) => 0,
+        Err(e) => net_err(io, "firewall", e),
+    }
+}
+
+fn show_firewall(io: &mut Io, c: &vnet::FirewallConfig, questions: &[vnet::FirewallQuestion]) {
+    let onoff = |b: bool| if b { "on" } else { "off" };
+    io.println(&format!("Firewall: {}", onoff(c.enabled)));
+    if c.enabled {
+        let incoming = if c.block_incoming {
+            "everything blocked: only replies come in"
+        } else {
+            "other machines reach only what is allowed below"
+        };
+        io.println(&format!("  Incoming: {incoming}"));
+        io.println(&format!("  Stealth:  {} (closed ports and scans get no answer)", onoff(c.stealth)));
+        let pings = match &c.ping {
+            None => String::from("unanswered"),
+            Some(s) => format!("answered from {s}"),
+        };
+        io.println(&format!("  Pings:    {pings}"));
+        io.println(&format!("  Log:      {}", onoff(c.log)));
+    }
+    if !questions.is_empty() {
+        io.styled("Waiting for your answer (on the desktop, or in Settings):\n", Style::DIM);
+        for q in questions {
+            let proto = if q.protocol == vnet::FirewallProtocol::Tcp { "TCP" } else { "UDP" };
+            io.println(&format!("  {}asks to accept connections ({proto} port {})", pad(&q.app, 16), q.port));
+        }
+    }
+    if !c.incoming.is_empty() {
+        io.styled("Applications that accept connections, or not:\n", Style::DIM);
+        for r in &c.incoming {
+            match &r.from {
+                Some(scope) => io.println(&format!("  {}from {scope}", pad(&r.app, 16))),
+                None => io.println(&format!("  {}not let in", pad(&r.app, 16))),
+            }
+        }
+    }
+    if !c.blocked.is_empty() {
+        io.styled("Applications kept off the network:\n", Style::DIM);
+        for app in &c.blocked {
+            io.println(&format!("  {app}"));
+        }
+    }
+    if !c.ports.is_empty() {
+        io.styled("Port rules:\n", Style::DIM);
+        for r in &c.ports {
+            let proto = if r.protocol == vnet::FirewallProtocol::Tcp { "TCP" } else { "UDP" };
+            let ports = if r.first == r.last { format!("{}", r.first) } else { format!("{}-{}", r.first, r.last) };
+            let verdict = if r.allow { "open" } else { "closed" };
+            io.println(&format!("  {}{verdict} from {}", pad(&format!("{proto} {ports}"), 16), r.from));
+        }
+    }
+    io.hint("Settings changes the firewall (Network & Internet).");
+}
+
+fn show_firewall_log(io: &mut Io, log: &[vnet::FirewallEvent]) {
+    if log.is_empty() {
+        io.println("Nothing turned away.");
+        return;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    io.styled(
+        "AGO     REASON          PROTO   REMOTE                                  PORT   APP          COUNT\n",
+        Style::DIM,
+    );
+    for e in log.iter().rev() {
+        let reason = match e.reason {
+            vnet::FirewallReason::NotAllowed => "not allowed",
+            vnet::FirewallReason::Probe => "probe",
+            vnet::FirewallReason::Ping => "ping",
+            vnet::FirewallReason::Invalid => "invalid",
+            vnet::FirewallReason::RateLimited => "rate limited",
+            vnet::FirewallReason::Fragment => "fragment",
+            vnet::FirewallReason::AppBlocked => "app blocked",
+        };
+        let proto = match e.protocol {
+            6 => String::from("tcp"),
+            17 => String::from("udp"),
+            1 => String::from("icmp"),
+            58 => String::from("icmpv6"),
+            n => format!("ip/{n}"),
+        };
+        let port = if e.port == 0 { String::from("-") } else { e.port.to_string() };
+        let app = if e.app.is_empty() { "-" } else { e.app.as_str() };
+        io.println(&format!(
+            "{}{}{}{}{}{}{}",
+            pad(&format!("{}s", now.saturating_sub(e.at)), 8),
+            pad(reason, 16),
+            pad(&proto, 8),
+            pad(&e.remote.to_string(), 40),
+            pad(&port, 7),
+            pad(app, 13),
+            e.count
+        ));
+    }
+}
+
+fn show_firewall_stats(io: &mut Io, s: &vnet::FirewallStats) {
+    for (label, n) in [
+        ("Let in by a rule", s.allowed),
+        ("Not allowed", s.not_allowed),
+        ("Probes of closed ports", s.probes),
+        ("Pings unanswered", s.pings),
+        ("Invalid or forged", s.invalid),
+        ("Too many at once", s.rate_limited),
+        ("Fragments", s.fragments),
+        ("From applications kept off", s.app_blocked),
+    ] {
+        io.println(&format!("{}{n}", pad(label, 30)));
     }
 }
 

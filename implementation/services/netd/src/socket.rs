@@ -30,6 +30,7 @@
 //! has room.
 
 use alloc::collections::VecDeque;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
@@ -156,6 +157,13 @@ pub struct Conn {
     /// The socket is finished (error reported or the stream ended): drop
     /// it once the client closes the channel.
     pub done: bool,
+    /// The application the socket is for, by the name the system knows it
+    /// by: the firewall's rules name it.
+    pub app: String,
+    /// The application may use the network (the firewall keeps it off
+    /// otherwise: what it sends elsewhere than the machine itself is
+    /// dropped).
+    network: bool,
 }
 
 impl Bytes {
@@ -165,7 +173,7 @@ impl Bytes {
 }
 
 impl Conn {
-    fn new(channel: Channel, id: SockId, kind: Kind, owner: u64) -> Conn {
+    fn new(channel: Channel, id: SockId, kind: Kind, owner: u64, app: String) -> Conn {
         Conn {
             channel,
             id,
@@ -178,37 +186,55 @@ impl Conn {
             gone: false,
             forgotten: false,
             done: false,
+            app,
+            network: true,
         }
     }
 
     /// A TCP connection being made.
-    pub fn tcp(channel: Channel, id: SockId, owner: u64) -> Conn {
-        Conn::new(channel, id, Kind::Tcp { announced: false, eof_sent: false, shutdown: false }, owner)
+    pub fn tcp(channel: Channel, id: SockId, owner: u64, app: String) -> Conn {
+        Conn::new(channel, id, Kind::Tcp { announced: false, eof_sent: false, shutdown: false }, owner, app)
     }
 
     /// A TCP connection being made whose bytes go on a kernel socket, of
     /// which `end` is the service's end.
-    pub fn tcp_bytes(channel: Channel, end: Socket, id: SockId, owner: u64) -> Conn {
-        Conn::new(channel, id, Kind::Bytes(Bytes::new(end, false)), owner)
+    pub fn tcp_bytes(channel: Channel, end: Socket, id: SockId, owner: u64, app: String) -> Conn {
+        Conn::new(channel, id, Kind::Bytes(Bytes::new(end, false)), owner, app)
     }
 
     /// A TCP listener; its connections' bytes go on kernel sockets with
     /// `bytes`.
-    pub fn listener(channel: Channel, id: SockId, owner: u64, bytes: bool) -> Conn {
-        Conn::new(channel, id, Kind::Listener { bytes }, owner)
+    pub fn listener(channel: Channel, id: SockId, owner: u64, bytes: bool, app: String) -> Conn {
+        Conn::new(channel, id, Kind::Listener { bytes }, owner, app)
     }
 
     /// A UDP socket; with credit (`metered`), its first pump grants the
     /// initial send credit.
-    pub fn udp(channel: Channel, id: SockId, owner: u64, metered: bool) -> Conn {
+    pub fn udp(channel: Channel, id: SockId, owner: u64, metered: bool, app: String) -> Conn {
         let credit_due = if metered { UDP_SEND_WINDOW } else { 0 };
         let kind = Kind::Udp { pending: VecDeque::new(), pending_bytes: 0, credit_due, metered };
-        Conn::new(channel, id, kind, owner)
+        Conn::new(channel, id, kind, owner, app)
     }
 
     /// A ping socket.
-    pub fn ping(channel: Channel, id: SockId, owner: u64) -> Conn {
-        Conn::new(channel, id, Kind::Ping, owner)
+    pub fn ping(channel: Channel, id: SockId, owner: u64, app: String) -> Conn {
+        Conn::new(channel, id, Kind::Ping, owner, app)
+    }
+
+    /// Whether the socket takes what other machines start: a listener, or
+    /// a UDP socket.
+    pub fn receives(&self) -> bool {
+        matches!(self.kind, Kind::Listener { .. } | Kind::Udp { .. })
+    }
+
+    /// Whether the socket is a TCP connection.
+    pub fn is_connection(&self) -> bool {
+        matches!(self.kind, Kind::Tcp { .. } | Kind::Bytes(_))
+    }
+
+    /// Whether the application may use the network, as the firewall says.
+    pub fn set_network(&mut self, may: bool) {
+        self.network = may;
     }
 
     /// Whether the client must be heard: requests are read only from a
@@ -360,13 +386,22 @@ impl Conn {
                     Err(_) => {}
                 }
             }
-            (Kind::Udp { pending, pending_bytes, metered, .. }, SocketRequest::SendTo { dest, data }) => {
+            (Kind::Udp { pending, pending_bytes, credit_due, metered }, SocketRequest::SendTo { dest, data }) => {
                 let n = data.0.len();
                 if n > vproto::net::MAX_DATAGRAM || (*metered && n as u32 > self.credit_out) {
                     return self.violation(stack);
                 }
                 if *metered {
                     self.credit_out -= n as u32;
+                }
+                if !self.network && !dest.ip().is_loopback() {
+                    // Kept off the network: dropped, its credit returned as
+                    // if sent.
+                    stack.note_app_blocked(17, dest, &self.app);
+                    if *metered {
+                        *credit_due += n as u32;
+                    }
+                    return;
                 }
                 *pending_bytes += n;
                 pending.push_back((dest, data.0));
@@ -621,8 +656,10 @@ impl Conn {
                 stack.close(new);
                 continue;
             };
-            if *room == 0 {
-                // The owner has as many sockets as it may: refuse it.
+            // The owner has as many sockets as it may, or its application is
+            // kept off the network (the firewall turns away what comes for
+            // it before it is a connection): refuse it.
+            if *room == 0 || (!self.network && !remote.ip().is_loopback()) {
                 stack.tcp_accept(self.id);
                 stack.tcp_abort(new);
                 stack.close(new);
@@ -643,7 +680,9 @@ impl Conn {
                 }
                 stack.tcp_accept(self.id);
                 *room -= 1;
-                accepted.push(Conn::new(ours, new, Kind::Bytes(Bytes::new(end, true)), self.owner));
+                let mut conn = Conn::new(ours, new, Kind::Bytes(Bytes::new(end, true)), self.owner, self.app.clone());
+                conn.network = self.network;
+                accepted.push(conn);
                 continue;
             }
             let Ok((ours, theirs)) = Channel::create() else { return Sent::Yes };
@@ -657,9 +696,10 @@ impl Conn {
             }
             stack.tcp_accept(self.id);
             *room -= 1;
-            let mut conn =
-                Conn::new(ours, new, Kind::Tcp { announced: true, eof_sent: false, shutdown: false }, self.owner);
+            let kind = Kind::Tcp { announced: true, eof_sent: false, shutdown: false };
+            let mut conn = Conn::new(ours, new, kind, self.owner, self.app.clone());
             conn.credit_out = credit;
+            conn.network = self.network;
             accepted.push(conn);
         }
         Sent::Yes
@@ -695,7 +735,13 @@ impl Conn {
             let mut sent = Sent::Yes;
             let mut len = 0;
             let channel = &self.channel;
+            let network = self.network;
             let taken = stack.udp_recv_with(self.id, |from, data| {
+                if !network && !from.ip().is_loopback() {
+                    // Kept off the network: what came before that is
+                    // dropped.
+                    return true;
+                }
                 len = data.len();
                 sent = events.send(channel, |e| SocketEvent::encode_datagram(from, data, e));
                 sent == Sent::Yes

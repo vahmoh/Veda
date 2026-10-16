@@ -20,6 +20,7 @@ use smoltcp::time::Instant;
 use vproto::net::InterfaceStats;
 
 use crate::IfaceId;
+use crate::firewall::{Firewall, Place};
 
 /// The largest frame an interface receives: what a device link's slot
 /// holds. Frames may exceed the MTU: a hypervisor bridged to a host whose
@@ -151,10 +152,16 @@ impl Frames {
     }
 
     /// The device smoltcp polls, over `link` (`None`: no device attached,
-    /// so nothing moves).
-    pub fn device<'a>(&'a mut self, link: Option<&'a mut dyn Link>) -> LinkDevice<'a> {
+    /// so nothing moves), through the firewall's `gate` (`None`: none, as
+    /// for the loopback interface).
+    pub fn device<'a>(&'a mut self, link: Option<&'a mut dyn Link>, gate: Option<Gate<'a>>) -> LinkDevice<'a> {
         self.blocked = false;
-        LinkDevice { link, frames: self, budget: RX_BUDGET }
+        LinkDevice { link, frames: self, budget: RX_BUDGET, gate }
+    }
+
+    /// What the interface's frames are (Ethernet, or bare IP packets).
+    pub fn medium(&self) -> Medium {
+        self.medium
     }
 
     /// The statistics with the link's own counts.
@@ -166,12 +173,23 @@ impl Frames {
     }
 }
 
+/// The firewall, as an interface's device has it: what it receives and
+/// sends passes it ([`Firewall::inbound`], [`Firewall::outbound`]).
+pub struct Gate<'a> {
+    pub firewall: &'a mut Firewall,
+    pub place: Place<'a>,
+    pub medium: Medium,
+    pub now_us: u64,
+}
+
 /// smoltcp's device: the link, and the interface's buffers.
 pub struct LinkDevice<'a> {
     link: Option<&'a mut dyn Link>,
     frames: &'a mut Frames,
-    /// Frames still to be taken in this poll.
+    /// Frames still to be taken in this poll (those the firewall drops
+    /// included).
     budget: usize,
+    gate: Option<Gate<'a>>,
 }
 
 impl Drop for LinkDevice<'_> {
@@ -193,14 +211,15 @@ impl phy::RxToken for RxToken<'_> {
 }
 
 /// Room for a frame to send: smoltcp builds it in the interface's send
-/// buffer, which then goes to the link.
-pub struct TxToken<'a> {
+/// buffer, which then goes to the link (if the firewall lets it).
+pub struct TxToken<'a, 'g> {
     link: &'a mut dyn Link,
     buf: &'a mut [u8],
     stats: &'a mut InterfaceStats,
+    gate: Option<&'a mut Gate<'g>>,
 }
 
-impl phy::TxToken for TxToken<'_> {
+impl phy::TxToken for TxToken<'_, '_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let Some(buf) = self.buf.get_mut(..len) else {
             // Larger than the device's capabilities allow: smoltcp does not
@@ -210,6 +229,11 @@ impl phy::TxToken for TxToken<'_> {
             return f(&mut alloc::vec![0u8; len]);
         };
         let r = f(buf);
+        if let Some(g) = self.gate
+            && !g.firewall.outbound(buf, g.medium, g.now_us)
+        {
+            return r;
+        }
         if self.link.send(buf) {
             self.stats.tx_packets += 1;
             self.stats.tx_bytes += len as u64;
@@ -220,37 +244,44 @@ impl phy::TxToken for TxToken<'_> {
     }
 }
 
-impl phy::Device for LinkDevice<'_> {
+impl<'g> phy::Device for LinkDevice<'g> {
     type RxToken<'b>
         = RxToken<'b>
     where
         Self: 'b;
     type TxToken<'b>
-        = TxToken<'b>
+        = TxToken<'b, 'g>
     where
         Self: 'b;
 
-    fn receive(&mut self, _now: Instant) -> Option<(RxToken<'_>, TxToken<'_>)> {
-        if self.budget == 0 {
-            return None;
-        }
+    fn receive(&mut self, _now: Instant) -> Option<(RxToken<'_>, TxToken<'_, 'g>)> {
         let link = self.link.as_deref_mut()?;
         let Frames { rx, tx, stats, .. } = &mut *self.frames;
-        let n = link.receive(rx)?.min(rx.len());
-        self.budget -= 1;
-        stats.rx_packets += 1;
-        stats.rx_bytes += n as u64;
-        Some((RxToken(&rx[..n]), TxToken { link, buf: tx, stats }))
+        loop {
+            if self.budget == 0 {
+                return None;
+            }
+            let n = link.receive(rx)?.min(rx.len());
+            self.budget -= 1;
+            stats.rx_packets += 1;
+            stats.rx_bytes += n as u64;
+            if let Some(g) = &mut self.gate
+                && !g.firewall.inbound(&rx[..n], g.medium, &g.place, g.now_us)
+            {
+                continue;
+            }
+            return Some((RxToken(&rx[..n]), TxToken { link, buf: tx, stats, gate: self.gate.as_mut() }));
+        }
     }
 
-    fn transmit(&mut self, _now: Instant) -> Option<TxToken<'_>> {
+    fn transmit(&mut self, _now: Instant) -> Option<TxToken<'_, 'g>> {
         let link = self.link.as_deref_mut()?;
         if !link.can_send() {
             self.frames.blocked = true;
             return None;
         }
         let Frames { tx, stats, .. } = &mut *self.frames;
-        Some(TxToken { link, buf: tx, stats })
+        Some(TxToken { link, buf: tx, stats, gate: self.gate.as_mut() })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {

@@ -18,7 +18,10 @@ use smoltcp::wire::{
     Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpProtocol, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr, UdpPacket,
     UdpRepr,
 };
-use vproto::net::{AddrFamily, Connectivity, DeviceInfo, InterfaceKind, IpConfig, NetError, ResolveResult, TcpOptions};
+use vproto::net::{
+    AddrFamily, Connectivity, DeviceInfo, FirewallConfig, FirewallReason, InterfaceKind, IpConfig, NetError,
+    ResolveResult, Scope, TcpOptions,
+};
 
 use crate::dns::tests::{encode_name, response};
 use crate::{IfaceId, Link, Links, PingEvent, SockId, Stack, TcpState};
@@ -1464,4 +1467,102 @@ fn received_data_leaves_the_stack_only_as_far_as_it_is_taken() {
     assert!(n.run_until(2_000, |n| n.b.udp_recv_with(ub, |_, _| false) == Some(false)));
     assert_eq!(n.b.udp_recv_with(ub, |_, data| data == b"datagram"), Some(true));
     assert_eq!(n.b.udp_recv_with(ub, |_, _| true), None);
+}
+
+/// b, behind a firewall of the default settings, as `change` makes them.
+fn guard_b(n: &mut Net, change: impl FnOnce(&mut FirewallConfig)) {
+    let mut c = FirewallConfig::default();
+    change(&mut c);
+    n.b.set_firewall(c);
+}
+
+#[test]
+fn the_firewall_keeps_out_connections_nobody_allowed() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    guard_b(&mut n, |_| {});
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    let s = n.a.tcp_connect("10.0.2.2:7".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
+    n.run(2_000);
+    assert_eq!(n.a.tcp_view(s).unwrap().state, TcpState::Connecting);
+    assert!(n.b.tcp_accept(l).is_none());
+    assert!(n.b.firewall_stats().not_allowed >= 1);
+    // Open to the local network: the SYN sent again gets through.
+    n.b.set_exposure(l, Some(Scope::LocalNetwork {}), "echo");
+    assert!(n.run_until(6_000, |n| matches!(n.a.tcp_view(s).unwrap().state, TcpState::Open { .. })));
+    accept(&mut n, l);
+    assert!(n.b.firewall_log().any(|e| e.event.port == 7 && e.event.reason == FirewallReason::NotAllowed));
+}
+
+#[test]
+fn closed_ports_refuse_unless_stealth_hides_them() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    guard_b(&mut n, |c| c.stealth = false);
+    let s = n.a.tcp_connect("10.0.2.2:9".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
+    n.run_until(3_000, |n| matches!(n.a.tcp_view(s).unwrap().state, TcpState::Closed { .. }));
+    assert_eq!(n.a.tcp_view(s).unwrap().state, TcpState::Closed { error: Some(NetError::ConnectionRefused) });
+    // In stealth mode, no reset: the machine does not show itself.
+    guard_b(&mut n, |_| {});
+    let s = n.a.tcp_connect("10.0.2.2:9".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
+    n.run(3_000);
+    assert_eq!(n.a.tcp_view(s).unwrap().state, TcpState::Connecting);
+    assert!(n.b.firewall_stats().probes >= 1);
+}
+
+#[test]
+fn what_this_machine_asked_for_comes_back_through_its_firewall() {
+    let mut n = Net::new();
+    // a behind a firewall from the start: DHCP's answers, and DNS's, come in.
+    n.a.set_firewall(FirewallConfig::default());
+    assert!(n.configured());
+    assert!(matches!(n.resolve("www.example"), ResolveResult::Found { .. }));
+    let (sa, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
+    let (sb, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), 0).unwrap();
+    n.a.udp_send(sa, "10.0.2.2:5000".parse().unwrap(), b"question").unwrap();
+    let mut buf = [0u8; 64];
+    let mut got = None;
+    n.run_until(2_000, |n| {
+        got = udp_recv(&mut n.b, sb, &mut buf);
+        got.is_some()
+    });
+    let (_, from) = got.expect("the question never came");
+    n.b.udp_send(sb, from, b"answer").unwrap();
+    let mut back = None;
+    n.run_until(2_000, |n| {
+        back = udp_recv(&mut n.a, sa, &mut buf);
+        back.is_some()
+    });
+    assert_eq!(back.map(|(len, _)| &buf[..len]), Some(&b"answer"[..]));
+    // What nobody asked for, to another of a's ports, does not come in.
+    let (sc, port) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
+    n.b.udp_send(sb, SocketAddr::new(IpAddr::V4(CLIENT_IP), port.port()), b"unasked").unwrap();
+    n.run(500);
+    assert!(udp_recv(&mut n.a, sc, &mut buf).is_none());
+    assert!(n.a.firewall_stats().not_allowed >= 1);
+    // a's own connections to b work as ever.
+    let (_, _) = pair(&mut n, 8);
+}
+
+#[test]
+fn pings_are_answered_only_from_where_allowed() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    guard_b(&mut n, |_| {});
+    let p = n.a.ping_open(1).unwrap();
+    n.a.ping_send(p, IpAddr::V4(SERVER_IP), 1, 0, 56);
+    let mut events = Vec::new();
+    n.run_until(6_000, |n| {
+        events.extend(ping_events(&mut n.a, p));
+        !events.is_empty()
+    });
+    assert!(matches!(events[0], PingEvent::Failed { seq: 1, error: NetError::TimedOut, .. }), "{events:?}");
+    guard_b(&mut n, |c| c.ping = Some(Scope::LocalNetwork {}));
+    n.a.ping_send(p, IpAddr::V4(SERVER_IP), 2, 0, 56);
+    let mut events = Vec::new();
+    n.run_until(2_000, |n| {
+        events.extend(ping_events(&mut n.a, p));
+        !events.is_empty()
+    });
+    assert!(matches!(events[0], PingEvent::Reply { seq: 2, .. }), "{events:?}");
 }

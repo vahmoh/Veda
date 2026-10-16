@@ -1402,6 +1402,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vipc",
  "vnetstack",
  "vproto",

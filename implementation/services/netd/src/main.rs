@@ -8,9 +8,23 @@
 //!   connection) attach through the `netdev` protocol; their frames flow
 //!   through shared rings, which the stack reads and writes directly.
 //! * Applications use the `net` protocol: sockets (each its own channel),
-//!   name resolution, status and configuration. Configuration, and seeing
-//!   other processes' sockets and the hardware addresses, is for Settings
-//!   and the Terminal alone.
+//!   name resolution, status and configuration. Changing the configuration
+//!   (the interfaces', the DNS servers, the firewall's) is for Settings
+//!   alone; reading the firewall, and seeing other processes' sockets and
+//!   the hardware addresses, for Settings and the Terminal.
+//! * The firewall (`vnetstack`'s) decides what other machines may start
+//!   with this one; `netd` tells it which sockets are open to them, as
+//!   their applications' rules say, and keeps the applications the rules
+//!   keep off the network from it: their connections, pings and lookups are
+//!   refused, and their datagrams to other machines dropped. Its settings
+//!   are kept on the home disk, where no application reaches them
+//!   (`store`); until they are read, the defaults let nothing in.
+//! * When an application the settings say nothing about starts taking
+//!   connections from other machines, the user is asked whether it may:
+//!   the desktop shell, alone, hears the question and answers it, and the
+//!   answer becomes the application's rule. Until then nothing reaches the
+//!   application; one question waits per application, and none is asked
+//!   before the saved settings are read (they may answer it).
 //! * The protocol work itself — interfaces, DHCP, IPv6 autoconfiguration,
 //!   routing, DNS, TCP, UDP, ICMP — happens in `vnetstack` (smoltcp
 //!   underneath).
@@ -29,6 +43,7 @@
 extern crate alloc;
 
 mod socket;
+mod store;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -39,8 +54,9 @@ use vabi::signals;
 use vnetstack::{IfaceId, MAX_PENDING_LOOKUPS, MAX_SOCKETS, ResolveId, SockId, Stack, StackEvent};
 use vproto::init::ClientIdentity;
 use vproto::net::{
-    AddrFamily, DeviceInfo, InterfaceInfo, IpConfig, NET_EVENT, NetError, NetEvent, NetStatus, NetdevError,
-    RESOLVE_RESULT, RouteInfo, SocketInfo, TcpOptions, format_mac, net, netdev,
+    AddrFamily, AppRule, DeviceInfo, FIREWALL_NOTICE, FirewallConfig, FirewallEvent, FirewallNotice, FirewallProtocol,
+    FirewallQuestion, FirewallStats, InterfaceInfo, IpConfig, NET_EVENT, NetError, NetEvent, NetStatus, NetdevError,
+    RESOLVE_RESULT, RouteInfo, Scope, SocketInfo, TcpOptions, format_mac, net, netdev,
 };
 use vproto::netring::{self, LinkEndpoints, SlotMeta, kind};
 use vrt::object::{Channel, Socket};
@@ -82,6 +98,8 @@ const RESEED_NS: u64 = 300_000_000_000;
 /// datagrams before they are dropped (Linux gives up on a neighbor that
 /// does not answer after as long).
 const LINGER_US: u64 = 3_000_000;
+/// Questions about applications waiting for the user's answer.
+const MAX_QUESTIONS: usize = 16;
 
 /// Wait-set keys: the kind of handle in the high bits, its key below.
 const NET_LISTENER: u64 = 0;
@@ -93,6 +111,8 @@ const SOCKET: u64 = 1 << 59;
 const LOOKUP: u64 = 1 << 60;
 /// The kernel socket a connection's bytes go on.
 const BYTES: u64 = 1 << 61;
+/// The firewall store's channel.
+const STORE: u64 = 1 << 62;
 const KEY: u64 = (1 << 56) - 1;
 
 /// A device's frame link, as the stack reads and writes it.
@@ -154,8 +174,12 @@ impl vnetstack::Links for DeviceLinks<'_> {
 struct Client {
     channel: Channel,
     who: ClientIdentity,
-    /// Settings or the Terminal: may configure, and see everything.
+    /// Settings or the Terminal: may see everything.
     manager: bool,
+    /// Settings: may change the configuration too.
+    settings: bool,
+    /// The desktop shell: asks the user the firewall's questions.
+    shell: bool,
 }
 
 /// Whether one more of a shared resource (`used` of `max`) may go to a
@@ -213,6 +237,23 @@ struct Netd {
     lingering: BTreeMap<SockId, u64>,
     events: Events,
     next_key: u64,
+    /// The firewall's settings, as applied.
+    firewall: FirewallConfig,
+    /// Where they are kept (`None` if its thread could not start).
+    store: Option<store::Store>,
+    /// Settings changed them since the service started: what the store
+    /// reads after that is older.
+    firewall_changed: bool,
+    /// The saved settings were read (or there is no store): questions may
+    /// be asked.
+    settings_read: bool,
+    /// Questions waiting for the user's answer, by application.
+    questions: BTreeMap<String, FirewallQuestion>,
+    /// Applications to ask about once the saved settings are read, with
+    /// what they listen with.
+    deferred: BTreeMap<String, (FirewallProtocol, u16)>,
+    /// The desktop shell's channel for the questions.
+    asker: Option<Channel>,
     last_reseed: u64,
 }
 
@@ -230,6 +271,18 @@ fn may_attach(who: &ClientIdentity) -> bool {
 /// Whether `who` manages the network: Settings and the Terminal.
 fn manages(who: &ClientIdentity) -> bool {
     who.app && matches!(who.name.as_str(), "settings" | "terminal")
+}
+
+/// The time now, in Unix seconds.
+fn unix_s() -> u64 {
+    vrt::time::unix_time_ns() / 1_000_000_000
+}
+
+fn protocol_name(p: FirewallProtocol) -> &'static str {
+    match p {
+        FirewallProtocol::Tcp => "TCP",
+        FirewallProtocol::Udp => "UDP",
+    }
 }
 
 impl Netd {
@@ -261,6 +314,102 @@ impl Netd {
         self.usage(owner).sockets += 1;
         self.sockets.insert(id, conn);
         self.work.insert(id);
+    }
+
+    /// Applies the firewall's settings: to the stack, and to every socket,
+    /// where it is open to other machines from, and whether its application
+    /// may use the network (a connection of one the settings now keep off
+    /// it, to elsewhere than the machine itself, is reset).
+    fn apply_firewall(&mut self, config: FirewallConfig) {
+        self.firewall = config;
+        self.stack.set_firewall(self.firewall.clone());
+        let ids: Vec<SockId> = self.sockets.keys().copied().collect();
+        for id in ids {
+            let Some(conn) = self.sockets.get_mut(&id) else { continue };
+            let may = self.firewall.allows_network(&conn.app);
+            conn.set_network(may);
+            if conn.receives() {
+                self.stack.set_exposure(id, self.firewall.incoming_for(&conn.app), &conn.app);
+            }
+            if !may && conn.is_connection() && self.stack.tcp_remote(id).is_some_and(|r| !r.ip().is_loopback()) {
+                self.stack.tcp_abort(id);
+                self.work.insert(id);
+            }
+        }
+        // Questions the settings now answer, or make pointless.
+        let settled: Vec<String> = self.questions.keys().filter(|app| !self.firewall.undecided(app)).cloned().collect();
+        for app in settled {
+            self.questions.remove(&app);
+            self.tell_asker(FirewallNotice::Settled { app });
+        }
+    }
+
+    /// `app` takes connections from other machines (with `protocol` on
+    /// `port`): the user is asked whether it may, if the settings say
+    /// nothing about it and nobody asked yet.
+    fn ask(&mut self, app: &str, protocol: FirewallProtocol, port: u16) {
+        if !self.firewall.undecided(app) || self.questions.contains_key(app) {
+            return;
+        }
+        if !self.settings_read {
+            // The saved settings may answer it.
+            if self.deferred.len() < MAX_QUESTIONS {
+                self.deferred.entry(app.into()).or_insert((protocol, port));
+            }
+            return;
+        }
+        if self.questions.len() >= MAX_QUESTIONS {
+            println!("firewall: too many questions waiting; {app} is not asked about");
+            return;
+        }
+        println!("firewall: asking whether {app} may accept connections ({} port {port})", protocol_name(protocol));
+        let question = FirewallQuestion { app: app.into(), protocol, port, at: unix_s() };
+        self.questions.insert(app.into(), question.clone());
+        self.tell_asker(FirewallNotice::Asked { question });
+    }
+
+    /// Tells the desktop shell, if it listens.
+    fn tell_asker(&mut self, notice: FirewallNotice) {
+        if let Some(ch) = &self.asker
+            && matches!(vipc::send_event(ch, FIREWALL_NOTICE, notice), Err(vipc::IpcError::PeerClosed))
+        {
+            self.asker = None;
+        }
+    }
+
+    /// The saved settings are read (or will not be): the questions held
+    /// back are asked, those they leave open.
+    fn settings_now_read(&mut self) {
+        if self.settings_read {
+            return;
+        }
+        self.settings_read = true;
+        for (app, (protocol, port)) in core::mem::take(&mut self.deferred) {
+            self.ask(&app, protocol, port);
+        }
+    }
+
+    /// What the firewall's store says: the settings it read.
+    fn store_heard(&mut self, observed: u32) {
+        let Some(store) = &self.store else { return };
+        match store.take_loaded() {
+            Some(store::Loaded::Saved(config)) if !self.firewall_changed => {
+                println!("firewall: settings read from the home disk: {}", summary(&config));
+                self.apply_firewall(config);
+            }
+            // Settings changed them first.
+            Some(store::Loaded::Saved(_)) => {}
+            Some(store::Loaded::Missing) => println!("firewall: no settings saved; the defaults hold"),
+            Some(store::Loaded::Unreadable) => {
+                println!("firewall: the saved settings are unreadable; the defaults hold")
+            }
+            None if observed & signals::PEER_CLOSED != 0 => {
+                println!("firewall: the store stopped; changes from now on are not kept");
+                self.store = None;
+            }
+            None => return,
+        }
+        self.settings_now_read();
     }
 
     /// The client closed a socket: the stack finishes it (a TCP connection
@@ -374,7 +523,9 @@ impl Netd {
             let k = self.key();
             self.usage(who.koid).clients += 1;
             let manager = manages(&who);
-            self.clients.insert(k, Client { channel: ch, who, manager });
+            let settings = who.app && who.name == "settings";
+            let shell = who.service && who.name == "shell";
+            self.clients.insert(k, Client { channel: ch, who, manager, settings, shell });
         }
     }
 
@@ -390,8 +541,12 @@ impl Netd {
             /// The client's process.
             owner: u64,
             manager: bool,
+            settings: bool,
+            shell: bool,
             /// A system service.
             service: bool,
+            /// The client's name, which the firewall's rules use.
+            app: String,
         }
         impl Session<'_> {
             fn check_quota(&self) -> Result<(), NetError> {
@@ -406,6 +561,50 @@ impl Netd {
             fn check_manager(&self) -> Result<(), NetError> {
                 if self.manager { Ok(()) } else { Err(NetError::PermissionDenied) }
             }
+
+            /// Only Settings changes how the network is set up: the programs
+            /// run in the Terminal speak for it.
+            fn check_settings(&self) -> Result<(), NetError> {
+                if self.settings { Ok(()) } else { Err(NetError::PermissionDenied) }
+            }
+
+            /// Whether the client may reach `remote` (`PermissionDenied`,
+            /// noted, if the firewall keeps it off the network).
+            fn may_reach(&mut self, protocol: u8, remote: SocketAddr) -> Result<(), NetError> {
+                if remote.ip().is_loopback() || self.netd.firewall.allows_network(&self.app) {
+                    return Ok(());
+                }
+                self.netd.stack.note_app_blocked(protocol, remote, &self.app);
+                Err(NetError::PermissionDenied)
+            }
+
+            /// A new socket of the client's: where it is open to other
+            /// machines from, and whether it may use the network.
+            fn track(&mut self, mut conn: Conn) {
+                conn.set_network(self.netd.firewall.allows_network(&self.app));
+                if conn.receives() {
+                    let from = self.netd.firewall.incoming_for(&self.app);
+                    self.netd.stack.set_exposure(conn.id, from, &self.app);
+                }
+                self.netd.add_socket(conn);
+            }
+
+            /// A socket bound to `local` (asked for; `bound` taken): one that
+            /// takes what other machines start, a listener or a datagram
+            /// socket on a port of the application's choosing (one on a port
+            /// the system picked is a client's, whose replies come in
+            /// anyway), has the user asked whether the application may. A
+            /// system service is part of the system: nobody is asked.
+            fn listens(&mut self, protocol: FirewallProtocol, local: SocketAddr, bound: SocketAddr) {
+                let server = protocol == FirewallProtocol::Tcp || local.port() != 0;
+                if server && !local.ip().is_loopback() && !self.service {
+                    self.netd.ask(&self.app, protocol, bound.port());
+                }
+            }
+
+            fn check_shell(&self) -> Result<(), NetError> {
+                if self.shell { Ok(()) } else { Err(NetError::PermissionDenied) }
+            }
         }
         impl net::Server for Session<'_> {
             fn tcp_connect(
@@ -415,8 +614,9 @@ impl Netd {
                 socket: Channel,
             ) -> Result<(), NetError> {
                 self.check_quota()?;
+                self.may_reach(6, remote)?;
                 let id = self.netd.stack.tcp_connect(remote, &options, self.owner)?;
-                self.netd.add_socket(Conn::tcp(socket, id, self.owner));
+                self.track(Conn::tcp(socket, id, self.owner, self.app.clone()));
                 Ok(())
             }
 
@@ -428,8 +628,9 @@ impl Netd {
                 bytes: Socket,
             ) -> Result<(), NetError> {
                 self.check_quota()?;
+                self.may_reach(6, remote)?;
                 let id = self.netd.stack.tcp_connect(remote, &options, self.owner)?;
-                self.netd.add_socket(Conn::tcp_bytes(socket, bytes, id, self.owner));
+                self.track(Conn::tcp_bytes(socket, bytes, id, self.owner, self.app.clone()));
                 Ok(())
             }
 
@@ -442,7 +643,8 @@ impl Netd {
             ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
-                self.netd.add_socket(Conn::listener(listener, id, self.owner, false));
+                self.track(Conn::listener(listener, id, self.owner, false, self.app.clone()));
+                self.listens(FirewallProtocol::Tcp, local, bound);
                 Ok(bound)
             }
 
@@ -455,28 +657,33 @@ impl Netd {
             ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
-                self.netd.add_socket(Conn::listener(listener, id, self.owner, true));
+                self.track(Conn::listener(listener, id, self.owner, true, self.app.clone()));
+                self.listens(FirewallProtocol::Tcp, local, bound);
                 Ok(bound)
             }
 
             fn udp_bind(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
-                self.netd.add_socket(Conn::udp(socket, id, self.owner, true));
+                self.track(Conn::udp(socket, id, self.owner, true, self.app.clone()));
+                self.listens(FirewallProtocol::Udp, local, bound);
                 Ok(bound)
             }
 
             fn udp_bind_unmetered(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
-                self.netd.add_socket(Conn::udp(socket, id, self.owner, false));
+                self.track(Conn::udp(socket, id, self.owner, false, self.app.clone()));
+                self.listens(FirewallProtocol::Udp, local, bound);
                 Ok(bound)
             }
 
             fn ping_open(&mut self, socket: Channel) -> Result<(), NetError> {
                 self.check_quota()?;
+                // Pings reach other machines alone.
+                self.may_reach(1, SocketAddr::new(IpAddr::V4(core::net::Ipv4Addr::UNSPECIFIED), 0))?;
                 let id = self.netd.stack.ping_open(self.owner)?;
-                self.netd.add_socket(Conn::ping(socket, id, self.owner));
+                self.track(Conn::ping(socket, id, self.owner, self.app.clone()));
                 Ok(())
             }
 
@@ -485,6 +692,12 @@ impl Netd {
                 let shared = room(self.service, self.netd.lookups.len(), MAX_PENDING_LOOKUPS, RESERVED_LOOKUPS);
                 if !shared || mine >= MAX_LOOKUPS_PER_PROCESS {
                     return Err(NetError::LimitReached);
+                }
+                // A lookup asks the DNS servers, which the name reaches: an
+                // application kept off the network could tell them anything
+                // through it. What the machine knows itself it may ask.
+                if name != "localhost" && name.parse::<IpAddr>().is_err() {
+                    self.may_reach(17, SocketAddr::new(IpAddr::V4(core::net::Ipv4Addr::UNSPECIFIED), 53))?;
                 }
                 let id = self.netd.stack.resolve(&name, family)?;
                 self.netd.usage(self.owner).lookups += 1;
@@ -530,20 +743,20 @@ impl Netd {
             }
 
             fn configure(&mut self, interface: String, config: IpConfig) -> Result<(), NetError> {
-                self.check_manager()?;
+                self.check_settings()?;
                 let id = self.netd.stack.find_interface(&interface).ok_or(NetError::InvalidArgument)?;
                 println!("{}: configuration set to {:?}", interface, config);
                 self.netd.stack.configure(id, config)
             }
 
             fn renew(&mut self, interface: String) -> Result<(), NetError> {
-                self.check_manager()?;
+                self.check_settings()?;
                 let id = self.netd.stack.find_interface(&interface).ok_or(NetError::InvalidArgument)?;
                 self.netd.stack.renew(id)
             }
 
             fn set_dns_servers(&mut self, servers: Vec<IpAddr>) -> Result<(), NetError> {
-                self.check_manager()?;
+                self.check_settings()?;
                 self.netd.stack.set_dns_servers(servers)
             }
 
@@ -552,15 +765,96 @@ impl Netd {
                 self.netd.stack.flush_dns_cache();
                 Ok(())
             }
+
+            fn firewall(&mut self) -> Result<FirewallConfig, NetError> {
+                self.check_manager()?;
+                Ok(self.netd.firewall.clone())
+            }
+
+            fn set_firewall(&mut self, config: FirewallConfig) -> Result<(), NetError> {
+                self.check_settings()?;
+                config.check()?;
+                println!("firewall: settings changed by {}: {}", self.app, summary(&config));
+                self.netd.firewall_changed = true;
+                self.netd.apply_firewall(config);
+                if let Some(store) = &self.netd.store {
+                    store.save(&self.netd.firewall);
+                }
+                Ok(())
+            }
+
+            fn firewall_log(&mut self) -> Result<Vec<FirewallEvent>, NetError> {
+                self.check_manager()?;
+                // The stack's clock is netd's: when each happened, in Unix
+                // time.
+                let (now, unix_s) = (now_us(), vrt::time::unix_time_ns() / 1_000_000_000);
+                let at = |us: u64| unix_s.saturating_sub(now.saturating_sub(us) / 1_000_000);
+                Ok(self
+                    .netd
+                    .stack
+                    .firewall_log()
+                    .map(|e| FirewallEvent { at: at(e.at_us), ..e.event.clone() })
+                    .collect())
+            }
+
+            fn firewall_stats(&mut self) -> Result<FirewallStats, NetError> {
+                self.check_manager()?;
+                Ok(self.netd.stack.firewall_stats())
+            }
+
+            fn firewall_questions(&mut self) -> Result<Vec<FirewallQuestion>, NetError> {
+                self.check_manager()?;
+                Ok(self.netd.questions.values().cloned().collect())
+            }
+
+            /// The desktop shell's channel for the questions (a shell
+            /// started again takes the place of the one before).
+            fn watch_firewall(&mut self, events: Channel) -> Result<(), NetError> {
+                self.check_shell()?;
+                for question in self.netd.questions.values() {
+                    let _ = vipc::send_event(
+                        &events,
+                        FIREWALL_NOTICE,
+                        FirewallNotice::Asked { question: question.clone() },
+                    );
+                }
+                self.netd.asker = Some(events);
+                Ok(())
+            }
+
+            /// The user's answer, as the desktop shell asked: the rule for
+            /// the application asked about, and nothing else.
+            fn answer_firewall(&mut self, app: String, from: Option<Scope>) -> Result<(), NetError> {
+                self.check_shell()?;
+                if !self.netd.questions.contains_key(&app) {
+                    return Err(NetError::InvalidArgument);
+                }
+                let mut config = self.netd.firewall.clone();
+                config.incoming.retain(|r| r.app != app);
+                config.incoming.push(AppRule { app: app.clone(), from });
+                config.check()?;
+                match from {
+                    Some(scope) => println!("firewall: {app} may accept connections from {scope} (the user's answer)"),
+                    None => println!("firewall: {app} may not accept connections (the user's answer)"),
+                }
+                self.netd.firewall_changed = true;
+                self.netd.apply_firewall(config);
+                if let Some(store) = &self.netd.store {
+                    store.save(&self.netd.firewall);
+                }
+                Ok(())
+            }
         }
         for _ in 0..CLIENT_BUDGET {
             let Some(c) = self.clients.get(&key) else { return };
-            let (owner, manager, service) = (c.who.koid, c.manager, c.who.service);
+            let (owner, manager, settings, shell, service) =
+                (c.who.koid, c.manager, c.settings, c.shell, c.who.service);
+            let app = c.who.name.clone();
             let msg = match c.channel.read() {
                 Ok(m) => m,
                 Err(_) => return,
             };
-            let mut s = Session { netd: self, owner, manager, service };
+            let mut s = Session { netd: self, owner, manager, settings, shell, service, app };
             match net::dispatch(&mut s, msg) {
                 Ok(reply) => {
                     if let Some(c) = self.clients.get(&key) {
@@ -749,6 +1043,9 @@ impl Netd {
         for (&id, l) in &self.lookups {
             ws.add(l.reply.raw(), signals::PEER_CLOSED, LOOKUP | id as u64);
         }
+        if let Some(store) = &self.store {
+            ws.add(store.channel().raw(), signals::READABLE | signals::PEER_CLOSED, STORE);
+        }
         let deadline = if busy {
             0
         } else {
@@ -772,6 +1069,7 @@ impl Netd {
             match key & !KEY {
                 _ if key == NET_LISTENER => self.accept_clients(),
                 _ if key == DEV_LISTENER => self.accept_devices(),
+                _ if key == STORE => self.store_heard(observed),
                 // Frames or room: the next poll sees to them.
                 DEVICE_LINK => {}
                 DEVICE => {
@@ -827,10 +1125,42 @@ impl Netd {
     }
 }
 
+/// The firewall's settings, in a line of the log.
+fn summary(c: &FirewallConfig) -> String {
+    if !c.enabled {
+        return String::from("off");
+    }
+    let ping = match &c.ping {
+        None => String::from("pings unanswered"),
+        Some(s) => alloc::format!("pings answered from {s}"),
+    };
+    let count = |n: usize, one: &str, many: &str| alloc::format!("{n} {}", if n == 1 { one } else { many });
+    let let_in = c.incoming.iter().filter(|r| r.from.is_some()).count();
+    let refused = c.incoming.len() - let_in;
+    alloc::format!(
+        "on{}{}, {ping}, {} let in{}, {} kept off the network, {}{}",
+        if c.block_incoming { ", everything incoming blocked" } else { "" },
+        if c.stealth { ", stealth" } else { "" },
+        count(let_in, "application", "applications"),
+        if refused > 0 { alloc::format!(", {refused} refused") } else { String::new() },
+        count(c.blocked.len(), "application", "applications"),
+        count(c.ports.len(), "port rule", "port rules"),
+        if c.log { "" } else { ", no log" },
+    )
+}
+
 fn main() -> i32 {
     let mut seed = [0u8; 64];
     vrt::object::random_bytes(&mut seed);
-    let stack = Stack::new(&seed, now_us());
+    let mut stack = Stack::new(&seed, now_us());
+    // Until the saved settings are read, the defaults: nothing comes in
+    // that this machine did not ask for.
+    let firewall = FirewallConfig::default();
+    stack.set_firewall(firewall.clone());
+    let store = store::Store::start();
+    if store.is_none() {
+        println!("firewall: its store could not start; the defaults hold, and changes are not kept");
+    }
     let (Ok(net_listener), Ok(dev_listener)) = (vproto::register(net::NAME), vproto::register(netdev::NAME)) else {
         println!("cannot register the network services");
         return 1;
@@ -852,6 +1182,13 @@ fn main() -> i32 {
         events: Events::new(),
         next_key: 16,
         last_reseed: vrt::time::now_ns(),
+        firewall,
+        settings_read: store.is_none(),
+        store,
+        firewall_changed: false,
+        questions: BTreeMap::new(),
+        deferred: BTreeMap::new(),
+        asker: None,
     };
     netd.run()
 }

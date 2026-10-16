@@ -364,12 +364,13 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 28] = [
+    let tests: [Test; 29] = [
         ("ipc primitives", test_ipc_primitives),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
         ("handles on channels", policy::test_channel_handles),
         ("shared channels", policy::test_shared_channels),
+        ("network configuration", policy::test_network_configuration),
         ("ipc refusals", policy::test_ipc_refusals),
         ("write-combining memory", test_write_combining_memory),
         ("software interrupts", test_software_interrupts),
