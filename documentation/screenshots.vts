@@ -7,8 +7,7 @@
 #
 # which writes documentation/images/*.png. Applications are started from
 # the start menu's search and the Terminal, so only Music's play button,
-# Paint's tools, the Calculator's maximize button and a few things on the
-# taskbar are clicked by position. The machine is on QEMU's wired network,
+# Paint's tools and a few things on the taskbar are clicked by position. The machine is on QEMU's wired network,
 # and the agent talks to the stand-in for Deepgram. GCC and the video
 # decoder must be in the image (`cargo orchestration toolchain`).
 # Interceptor's picture has a script of its own, shot at 1920x1200 and
@@ -193,15 +192,13 @@ key alt-f4
 wait-serial "paint exited" 20
 wait 2
 
-# The Calculator, maximized (its history beside the keys), in Scientific
-# mode, after a few calculations typed on the keyboard.
+# The Calculator, at the size it opens at, in Scientific mode, after a few
+# calculations typed on the keyboard.
 key meta_l
 wait 2
 type "calculator"
 key ret
 wait-serial "started calculator" 30
-wait 3
-click 0.6102 0.0575
 wait 3
 key alt-2
 type "10!="

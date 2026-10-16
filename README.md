@@ -13,7 +13,7 @@ An operating system written in Rust, with a voice agent built into the system.
 [![Written in Rust](https://img.shields.io/badge/written%20in-Rust-b7410e?logo=rust&logoColor=white)](documentation/RUST.md)
 [![Runs on x86-64 PCs and QEMU](https://img.shields.io/badge/runs%20on-x86--64%20PCs%20%26%20QEMU-555)](#quick-start)
 
-[Quick start](#quick-start) · [Make an app agentic](#make-an-app-agentic) · [Architecture](#architecture) · [Documentation](#documentation)
+[Screenshots](#screenshots) · [Quick start](#quick-start) · [Make an app agentic](#make-an-app-agentic) · [Architecture](#architecture) · [Documentation](#documentation)
 
 </div>
 
@@ -38,36 +38,33 @@ and the applications.
   </tr>
 </table>
 
-<p align="center">
-  <img src="documentation/images/desktop.png" alt="The Veda desktop, with the agent's window open and listening">
-</p>
+## Screenshots
 
-<details>
-<summary><b>More screenshots</b></summary>
-<br>
 <table>
   <tr>
-    <td width="50%"><img src="documentation/images/editor.png" alt="The Text Editor showing a Rust program with syntax highlighting"><p align="center">Text Editor, highlighting Rust</p></td>
-    <td width="50%"><img src="documentation/images/photos.png" alt="Photos showing a library of eight pictures"><p align="center">Photos, the picture library</p></td>
+    <td colspan="2"><p align="center"><b>Desktop</b></p><img src="documentation/images/desktop.png" alt="The Veda desktop, with the agent's window open and listening"></td>
   </tr>
   <tr>
-    <td><img src="documentation/images/music.png" alt="Music playing a song, with cover art and a spectrum visualiser"><p align="center">Music, with its visualiser</p></td>
-    <td><img src="documentation/images/files.png" alt="Files showing pictures as thumbnails, with the Trash in its sidebar"><p align="center">Files, with thumbnails</p></td>
+    <td width="50%"><p align="center"><b>Text Editor</b></p><img src="documentation/images/editor.png" alt="The Text Editor showing a Rust program with syntax highlighting"></td>
+    <td width="50%"><p align="center"><b>Photos</b></p><img src="documentation/images/photos.png" alt="Photos showing a library of eight pictures"></td>
   </tr>
   <tr>
-    <td><img src="documentation/images/videos.png" alt="Videos playing an aurora timelapse, a picture from further on above its seek bar"><p align="center">Videos, AV1 decoded by dav1d</p></td>
-    <td><img src="documentation/images/agent-settings.png" alt="Settings on the agent's page: its Deepgram key, its name, voice and speaking rate, and its language model"><p align="center">The agent's settings</p></td>
+    <td><p align="center"><b>Music</b></p><img src="documentation/images/music.png" alt="Music playing a song, with cover art and a spectrum visualiser"></td>
+    <td><p align="center"><b>Files</b></p><img src="documentation/images/files.png" alt="Files showing pictures as thumbnails, with the Trash in its sidebar"></td>
   </tr>
   <tr>
-    <td><img src="documentation/images/paint.png" alt="Paint with a synthwave sunset open, white stars drawn in its sky and Hello, Veda! written over it"><p align="center">Paint, drawing on a picture</p></td>
-    <td><img src="documentation/images/calculator.png" alt="The Calculator in Scientific mode showing the golden ratio, its history beside the keys"><p align="center">Calculator, exact and scientific</p></td>
+    <td><p align="center"><b>Videos</b></p><img src="documentation/images/videos.png" alt="Videos playing an aurora timelapse, a picture from further on above its seek bar"></td>
+    <td><p align="center"><b>Settings</b></p><img src="documentation/images/agent-settings.png" alt="Settings on the agent's page: its Deepgram key, its name, voice and speaking rate, and its language model"></td>
   </tr>
   <tr>
-    <td><img src="documentation/images/gcc.png" alt="The Terminal, where GCC names an undeclared variable in a C program"><p align="center">GCC 16 in the Terminal</p></td>
-    <td><img src="documentation/images/interceptor.png" alt="Interceptor: a chase at sunset on a road through the trees of the hills"><p align="center"><i>Interceptor</i>, in OpenGL ES 3.0</p></td>
+    <td><p align="center"><b>Paint</b></p><img src="documentation/images/paint.png" alt="Paint with a synthwave sunset open, white stars drawn in its sky and Hello, Veda! written over it"></td>
+    <td><p align="center"><b>Calculator</b></p><img src="documentation/images/calculator.png" alt="The Calculator in Scientific mode showing the golden ratio"></td>
+  </tr>
+  <tr>
+    <td><p align="center"><b>Terminal</b></p><img src="documentation/images/gcc.png" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
+    <td><p align="center"><b>Interceptor</b></p><img src="documentation/images/interceptor.png" alt="Interceptor: a chase at sunset on a road through the trees of the hills"></td>
   </tr>
 </table>
-</details>
 
 ## Quick start
 
