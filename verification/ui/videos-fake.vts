@@ -96,7 +96,9 @@ wait-serial "videos: finished Crash at 6 s" 30
 key esc
 wait-serial-count "videos: showing the library" 2 10
 # The decoder hangs at 5 s: its heartbeat stops, and the watchdog starts it
-# again (twice, then past the place).
+# again there. It hangs again (under way, or before it has answered the
+# restart's calls: a stop at the same place either way), and playback goes
+# on past the place.
 key home
 key right
 key right

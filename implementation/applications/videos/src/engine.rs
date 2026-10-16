@@ -177,6 +177,14 @@ enum Failure {
     Dead(String),
 }
 
+/// Why a decoder started again did not take up the video.
+enum NotResumed {
+    /// It stopped again, as [`Failure::Dead`] says why.
+    Stopped(String),
+    /// It could not be started, or it refused: the error for the window.
+    Failed(String),
+}
+
 struct Engine {
     shared: Arc<Shared>,
     sound: Option<Arc<audio::Shared>>,
@@ -669,7 +677,23 @@ impl Engine {
     /// Starts the decoder again: where `at_us` says (a seek it died on), or
     /// where the picture on the screen is. `memory`: it stopped for taking
     /// too much memory.
+    ///
+    /// One that stops again before it has taken up the video (it can hang
+    /// or crash as soon as it decodes, before it has answered the restart's
+    /// last calls) stopped where it was going, and is started again as one
+    /// that stopped there later would be: whatever the timing, twice at one
+    /// place goes on further along, and one that keeps stopping is given up.
     fn restart(&mut self, why: &str, at_us: Option<i64>, memory: bool) {
+        let mut again = self.restart_once(why, at_us, memory);
+        while let Some((why, at_us)) = again {
+            again = self.restart_once(&why, Some(at_us), false);
+        }
+    }
+
+    /// Starts the decoder again once (see [`Engine::restart`]): if it
+    /// stopped again before it had taken up the video, why, and where it
+    /// was going.
+    fn restart_once(&mut self, why: &str, at_us: Option<i64>, memory: bool) -> Option<(String, i64)> {
         let shown = at_us.unwrap_or_else(|| self.shared.shown_us.load(Ordering::Acquire));
         println!("decoder stopped ({why}) at {}: restarting", time(shown));
         let began = vrt::time::now_ns();
@@ -678,10 +702,8 @@ impl Engine {
         while self.restarts.front().is_some_and(|&t| began - t > 60_000_000_000) {
             self.restarts.pop_front();
         }
-        if self.open.is_none() {
-            // Nothing open: started again when needed.
-            return;
-        }
+        // Nothing open: started again when needed.
+        self.open.as_ref()?;
         if self.restarts.len() >= MAX_RESTARTS {
             println!("decoder keeps stopping: given up");
             self.open = None;
@@ -694,7 +716,7 @@ impl Engine {
                 s.phase = EnginePhase::Failed;
                 s.error = Some(error.into());
             });
-            return;
+            return None;
         }
         self.restarts.push_back(began);
         self.set_state(|s| {
@@ -713,8 +735,10 @@ impl Engine {
             Ok(()) => {
                 println!("decoder restarted in {} ms", (vrt::time::now_ns() - began) / 1_000_000);
                 self.set_state(|s| s.phase = EnginePhase::Ready);
+                None
             }
-            Err(e) => {
+            Err(NotResumed::Stopped(why)) => Some((why, resume)),
+            Err(NotResumed::Failed(e)) => {
                 println!("decoder could not be restarted: {e}");
                 self.open = None;
                 self.decoder = None;
@@ -722,17 +746,18 @@ impl Engine {
                     s.phase = EnginePhase::Failed;
                     s.error = Some(e);
                 });
+                None
             }
         }
     }
 
-    fn resume_after_restart(&mut self, shown_us: i64) -> Result<(), String> {
-        self.spawn()?;
+    fn resume_after_restart(&mut self, shown_us: i64) -> Result<(), NotResumed> {
+        self.spawn().map_err(NotResumed::Failed)?;
         let failed = |f: Failure| match f {
-            Failure::Refused(e) => String::from(sentence(e)),
-            Failure::Dead(why) => format!("The decoder stopped again ({why})."),
+            Failure::Refused(e) => NotResumed::Failed(String::from(sentence(e))),
+            Failure::Dead(why) => NotResumed::Stopped(why),
         };
-        let open = self.open.as_ref().ok_or("nothing open")?;
+        let open = self.open.as_ref().ok_or_else(|| NotResumed::Failed(String::from("nothing open")))?;
         // What the failed decoder was writing or had published is free
         // again, its pictures' end forgotten; the picture the window holds
         // stays on the screen.
@@ -741,7 +766,9 @@ impl Engine {
             view.reset(held);
         }
         let (playing, pool_size) = (open.playing, open.pool.as_ref().map(|(_, _, v)| (v.width(), v.height())));
-        let Ok(Ok(source)) = open.file.duplicate() else { return Err("The file could not be read.".into()) };
+        let Ok(Ok(source)) = open.file.duplicate() else {
+            return Err(NotResumed::Failed("The file could not be read.".into()));
+        };
         let info = self.open_in_decoder(source).map_err(failed)?;
         if let Some(open) = &mut self.open {
             open.info = Arc::new(info);

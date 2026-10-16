@@ -500,7 +500,10 @@ fn sync_objects() {
     let mut c = context(1, 1);
     let s = c.fence_sync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0);
     assert!(c.is_sync(s));
-    assert_eq!(c.client_wait_sync(s, gl::SYNC_FLUSH_COMMANDS_BIT, 1_000_000), gl::CONDITION_SATISFIED);
+    // Up to 10 s: a host GPU busy with other work (the other tests, which
+    // run at the same time, or virtual machines) can take far longer than
+    // a millisecond to reach the fence.
+    assert_eq!(c.client_wait_sync(s, gl::SYNC_FLUSH_COMMANDS_BIT, 10_000_000_000), gl::CONDITION_SATISFIED);
     assert_eq!(c.client_wait_sync(s, 0, 0), gl::ALREADY_SIGNALED);
     assert_eq!(c.get_synciv(s, gl::SYNC_STATUS), gl::SIGNALED as i32);
     c.wait_sync(s, 0, gl::TIMEOUT_IGNORED);
