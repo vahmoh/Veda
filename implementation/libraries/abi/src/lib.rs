@@ -117,7 +117,8 @@ pub mod nr {
     pub const OBJECT_WAIT_MANY: usize = 16;
 
     // --- channels -----------------------------------------------------
-    /// `channel_create(out: *mut [RawHandle; 2])`.
+    /// `channel_create(out: *mut [RawHandle; 2], flags)` (see
+    /// [`channel_flags`](crate::channel_flags)).
     pub const CHANNEL_CREATE: usize = 20;
     /// `channel_write(h, bytes, n_bytes, handles, n_handles)`. The handles
     /// are consumed once their list is read, closed if the write fails.
@@ -130,14 +131,28 @@ pub mod nr {
     // --- sockets ------------------------------------------------------
     /// `socket_create(out: *mut [RawHandle; 2])`.
     pub const SOCKET_CREATE: usize = 23;
-    /// `socket_write(h, buf, len) -> bytes written` (see
-    /// [`SOCKET_ATOMIC_WRITE`](crate::SOCKET_ATOMIC_WRITE)).
+    /// `socket_write(h, buf, len, handles, n_handles) -> bytes written`
+    /// (see [`SOCKET_ATOMIC_WRITE`](crate::SOCKET_ATOMIC_WRITE)). The
+    /// handles (at most [`CHANNEL_MAX_HANDLES`](crate::CHANNEL_MAX_HANDLES),
+    /// none for `n_handles` 0) go with the first byte, which there must be,
+    /// as a channel's message carries them: consumed once their list is
+    /// read, closed if no byte goes. Neither endpoint of the socket may go,
+    /// nor what could reach it through what is queued (`NotSupported`); a
+    /// direction holds at most 1024 handles waiting (`LimitReached`).
     pub const SOCKET_WRITE: usize = 24;
-    /// `socket_read(h, buf, len) -> bytes read`; `PeerClosed` at the end of
-    /// the stream.
+    /// `socket_read(h, buf, len, handles, handles_cap, out: *mut [u32; 2])
+    /// -> bytes read`; `PeerClosed` at the end of the stream. A read takes
+    /// the handles of one write at most (those of the write whose first
+    /// byte it reads) and ends before the next write's; up to `handles_cap`
+    /// of them go into the caller's table (their values at `handles`), the
+    /// rest are closed (all of them for `handles_cap` 0). `out` (if not 0)
+    /// gets how many went in and how many were closed.
     pub const SOCKET_READ: usize = 25;
     /// `socket_shutdown(h)`: this endpoint writes no more.
     pub const SOCKET_SHUTDOWN: usize = 26;
+    /// `socket_peek(h, buf, len) -> bytes`: what `socket_read` would read,
+    /// left to be read (the handles stay with it).
+    pub const SOCKET_PEEK: usize = 27;
 
     // --- events -------------------------------------------------------
     /// `event_create() -> h`.
@@ -201,7 +216,7 @@ pub mod nr {
     pub const THREAD_START: usize = 65;
     /// `thread_exit() -> !`.
     pub const THREAD_EXIT: usize = 66;
-    /// `thread_set_priority(h, priority)`.
+    /// `thread_set_priority(h, priority)`; `h` 0 is the calling thread.
     pub const THREAD_SET_PRIORITY: usize = 67;
     /// `thread_set_tls(value)`: the calling thread's thread pointer, through
     /// which it finds its thread-local storage (see [`arch`](crate::arch)).
@@ -739,6 +754,17 @@ pub struct VmoInfo {
     pub _reserved: u32,
 }
 
+/// Flags for `channel_create`.
+pub mod channel_flags {
+    /// Both endpoints may be duplicated (`handle_duplicate`), as a
+    /// socket's may: several processes can hold one, each message written
+    /// on the other end is read by one of them (as processes share a
+    /// listening socket's queue of connections), and the other end sees
+    /// `PEER_CLOSED` once every handle to it is closed. Without it, an
+    /// endpoint has one handle at a time.
+    pub const SHARED: u32 = 1 << 0;
+}
+
 /// Flags for `vmo_create`.
 pub mod vmo_flags {
     /// Commit (allocate) all pages immediately instead of on first touch.
@@ -916,6 +942,21 @@ pub const fn exit_signal(code: i64) -> Option<u32> {
     }
 }
 
+/// Whether a process that ended with `code` crashed: a CPU fault, a panic
+/// (`vrt`'s), or for a POSIX program a signal that a fault of its own
+/// raises: `SIGABRT` (from `abort`, as a Rust panic in a program on the
+/// standard library raises it), `SIGSEGV`, `SIGBUS`, `SIGILL` or `SIGFPE`.
+/// A process ended by another (killed) did not crash.
+pub const fn crashed(code: i64) -> bool {
+    match code {
+        EXIT_CODE_CRASHED | EXIT_CODE_PANICKED => true,
+        c if c < EXIT_CODE_SIGNALED && c >= EXIT_CODE_SIGNALED - 64 => {
+            matches!(EXIT_CODE_SIGNALED - c, 4 | 6 | 7 | 8 | 11)
+        }
+        _ => false,
+    }
+}
+
 /// Boot-time information the kernel hands to `init` in a VMO.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -955,4 +996,21 @@ pub mod platform {
     /// An IOMMU confines devices' DMA and remaps their interrupts: PCI
     /// functions can be given to guests.
     pub const IOMMU: u32 = 1 << 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn faults_are_crashes_and_being_ended_is_not() {
+        assert!(crashed(EXIT_CODE_CRASHED) && crashed(EXIT_CODE_PANICKED));
+        // `abort` (a Rust panic on the standard library), a bad access.
+        assert!(crashed(EXIT_CODE_SIGNALED - 6) && crashed(EXIT_CODE_SIGNALED - 11));
+        // Killed, or ended by another's signal; a plain exit.
+        for code in [EXIT_CODE_KILLED, EXIT_CODE_SIGNALED - 9, EXIT_CODE_SIGNALED - 15, 0, 1, -1] {
+            assert!(!crashed(code), "{code}");
+        }
+        assert_eq!(exit_signal(EXIT_CODE_SIGNALED - 6), Some(6));
+    }
 }

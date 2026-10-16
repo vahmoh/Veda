@@ -6,8 +6,9 @@
 //! Each test prints `<name> ... ok|FAILED: reason` and the final line is `PASS`
 //! or `FAIL (n failed)`; the kernel log prefixes every line with the program
 //! name, so the serial log reads `systest: PASS`. `cargo orchestration test`
-//! boots the system with `systest` on the kernel command line and checks the
-//! log.
+//! boots the system with `run=systest:host,ADDRESS,TCP-PORT,UDP-PORT` on the
+//! kernel command line (the servers of the host machine's that the network
+//! checks reach; `systest` alone runs them without) and checks the log.
 
 #![no_std]
 #![no_main]
@@ -218,7 +219,25 @@ fn test_threads_and_locks() -> TestResult {
         ready = state.1.wait(ready);
     }
     drop(ready);
-    waker.join().map_err(|e| e.to_string())
+    waker.join().map_err(|e| e.to_string())?;
+
+    // A thread sets its own priority (as the standard library's threads,
+    // whose handles the C library keeps, do).
+    let wanted = vabi::priority::NORMAL - 1;
+    let (set, done) =
+        (Arc::new(Event::create().map_err(|e| e.to_string())?), Event::create().map_err(|e| e.to_string())?);
+    let (theirs, finish) = (set.clone(), Event::from_handle(done.0.duplicate(None).map_err(|e| e.to_string())?));
+    let thread = vrt::thread::spawn(move || {
+        let r = vrt::thread::set_priority(wanted);
+        let _ = theirs.signal();
+        let _ = finish.wait(vabi::signals::SIGNALED, vabi::DEADLINE_INFINITE);
+        r
+    });
+    set.wait(vabi::signals::SIGNALED, vabi::DEADLINE_INFINITE).map_err(|e| e.to_string())?;
+    let priority = thread.thread().info().map_err(|e| e.to_string())?.priority;
+    let _ = done.signal();
+    thread.join().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    check(priority == wanted as u32, "a thread's priority, set by itself")
 }
 
 fn test_ipc_primitives() -> TestResult {
@@ -345,11 +364,12 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 26] = [
+    let tests: [Test; 28] = [
         ("ipc primitives", test_ipc_primitives),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
         ("handles on channels", policy::test_channel_handles),
+        ("shared channels", policy::test_shared_channels),
         ("ipc refusals", policy::test_ipc_refusals),
         ("write-combining memory", test_write_combining_memory),
         ("software interrupts", test_software_interrupts),
@@ -364,6 +384,7 @@ fn main() -> i32 {
         ("vfs open files", posix::test_vfs_open_files),
         ("c programs", posix::test_c_programs),
         ("rust programs", posix::test_rust_programs),
+        ("crates on the standard library", posix::test_std_crates),
         ("media checkasm", media::test_checkasm),
         ("media decoder", media::test_decoder),
         ("killing a job", posix::test_kill_job),

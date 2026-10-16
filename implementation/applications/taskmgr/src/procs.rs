@@ -4,9 +4,6 @@
 //! The Processes tab: a sortable, searchable table of running processes
 //! grouped into applications and system processes.
 
-use alloc::format;
-use alloc::string::ToString;
-use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use vproto::input::keys;

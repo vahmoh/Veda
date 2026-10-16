@@ -10,11 +10,8 @@
 //! bar previews go before cards (the pointer waits for them), and the file
 //! they come from stays open between them.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vabi::map_flags;
 use vproto::fs::{open_flags, vfs};
@@ -260,7 +257,7 @@ impl Worker {
         }
         let len = (stride as usize * h as usize * 4).next_multiple_of(4096);
         let map = Mapping::new(t.pixels, len, map_flags::READ).ok()?;
-        let mut pixels = alloc::vec![0u32; w as usize * h as usize];
+        let mut pixels = vec![0u32; w as usize * h as usize];
         for y in 0..h as usize {
             // SAFETY: the mapping holds `h` rows of `stride` pixels; they are
             // copied, never borrowed (the decoder could still write them).

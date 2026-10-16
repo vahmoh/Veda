@@ -58,6 +58,10 @@ pub mod role {
     pub const FD: u32 = 0x100;
     /// File descriptors that can be passed at startup.
     pub const MAX_FDS: u32 = 0x100;
+    /// The second handle of file descriptor `n`, which has two (role
+    /// `FD_EXTRA + n`): a network connection's channel to the network
+    /// service, beside the socket its bytes go on.
+    pub const FD_EXTRA: u32 = 0x200;
     /// First application-defined role.
     pub const USER: u32 = 0x1000;
 

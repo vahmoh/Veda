@@ -15,10 +15,8 @@
 //! Only shapes and numbers here; what the agent is doing decides which
 //! (see `agent::draw_presence`).
 
-use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
 
-use num_traits::Float;
 use vgfx::{Canvas, Color, FillRule, Path};
 
 /// The ring's width relative to its radius.

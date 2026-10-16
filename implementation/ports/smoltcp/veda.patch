@@ -815,7 +815,22 @@
  }
 --- a/src/socket/tcp.rs
 +++ b/src/socket/tcp.rs
-@@ -479,6 +479,9 @@
+@@ -297,6 +297,14 @@
+     },
+ }
+ 
++/// Veda: the furthest right edge of the receive window advertised, `max`
++/// before an advertisement of window `win` (scaled by `shift`) at `ack`.
++fn max_edge(max: Option<TcpSeqNumber>, ack: Option<TcpSeqNumber>, win: u16, shift: u8) -> Option<TcpSeqNumber> {
++    let Some(ack) = ack else { return max };
++    let edge = ack + ((win as usize) << shift);
++    Some(max.map_or(edge, |max| max.max(edge)))
++}
++
+ const ACK_DELAY_DEFAULT: Duration = Duration::from_millis(10);
+ const CLOSE_DELAY: Duration = Duration::from_millis(10_000);
+ 
+@@ -479,6 +487,9 @@
      timeout: Option<Duration>,
      /// Interval at which keep-alive packets will be sent.
      keep_alive: Option<Duration>,
@@ -825,7 +840,22 @@
      /// The time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
      hop_limit: Option<u8>,
      /// Address passed to listen(). Listen address is set when listen() is called and
-@@ -596,6 +599,7 @@
+@@ -500,6 +511,14 @@
+     remote_last_ack: Option<TcpSeqNumber>,
+     /// The last window length sent.
+     remote_last_win: u16,
++    /// Veda: the furthest right edge of the receive window advertised. A
++    /// window is advertised in units of the window scale, rounded down, so
++    /// an advertisement can end short of an earlier one (by less than a
++    /// unit), up to which the remote may have sent already: those octets fit
++    /// the buffer (it had the room when the earlier window was advertised),
++    /// and are accepted, not dropped for the remote to send again once its
++    /// retransmission timer expires.
++    remote_max_edge: Option<TcpSeqNumber>,
+     /// The sending window scaling factor advertised to remotes which support RFC 1323.
+     /// It is zero if the window <= 64KiB and/or the remote does not support it.
+     remote_win_shift: u8,
+@@ -596,6 +615,7 @@
              rx_fin_received: false,
              timeout: None,
              keep_alive: None,
@@ -833,7 +863,15 @@
              hop_limit: None,
              listen_endpoint: IpListenEndpoint::default(),
              tuple: None,
-@@ -733,6 +737,16 @@
+@@ -604,6 +624,7 @@
+             remote_last_seq: TcpSeqNumber::default(),
+             remote_last_ack: None,
+             remote_last_win: 0,
++            remote_max_edge: None,
+             remote_win_len: 0,
+             remote_win_shift: rx_cap_log2.saturating_sub(16) as u8,
+             remote_win_scale: None,
+@@ -733,6 +754,16 @@
          self.timeout
      }
  
@@ -850,7 +888,19 @@
      /// Return the ACK delay duration.
      ///
      /// See also the [set_ack_delay](#method.set_ack_delay) method.
-@@ -795,6 +809,10 @@
+@@ -779,7 +810,10 @@
+         let next_ack = self.remote_seq_no + self.rx_buffer.len();
+ 
+         let last_win = (self.remote_last_win as usize) << self.remote_win_shift;
+-        let last_win_adjusted = last_ack + last_win - next_ack;
++        // Veda: octets up to an earlier, further edge may have come (see
++        // `remote_max_edge`).
++        let last_edge = last_ack + last_win;
++        let last_win_adjusted = if next_ack > last_edge { 0 } else { last_edge - next_ack };
+ 
+         Some(u16::try_from(last_win_adjusted >> self.remote_win_shift).unwrap_or(u16::MAX))
+     }
+@@ -795,6 +829,10 @@
      ///     endpoint exceeds the specified duration between any two packets it sends;
      ///   * After enabling [keep-alive](#method.set_keep_alive), the remote endpoint exceeds
      ///     the specified duration between any two packets it sends.
@@ -861,7 +911,7 @@
      pub fn set_timeout(&mut self, duration: Option<Duration>) {
          self.timeout = duration
      }
-@@ -842,6 +860,9 @@
+@@ -842,6 +880,9 @@
      /// The keep-alive functionality together with the timeout functionality allows to react
      /// to these error conditions.
      pub fn set_keep_alive(&mut self, interval: Option<Duration>) {
@@ -871,7 +921,13 @@
          self.keep_alive = interval;
          if self.keep_alive.is_some() {
              // If the connection is idle and we've just set the option, it would not take effect
-@@ -924,6 +945,7 @@
+@@ -919,11 +960,13 @@
+         self.remote_last_seq = TcpSeqNumber::default();
+         self.remote_last_ack = None;
+         self.remote_last_win = 0;
++        self.remote_max_edge = None;
+         self.remote_win_len = 0;
+         self.remote_win_scale = None;
          self.remote_win_shift = rx_cap_log2.saturating_sub(16) as u8;
          self.remote_mss = DEFAULT_MSS;
          self.remote_last_ts = None;
@@ -879,7 +935,7 @@
          self.ack_delay_timer = AckDelayTimer::Idle;
          self.challenge_ack_timer = Instant::from_secs(0);
  
-@@ -1090,8 +1112,14 @@
+@@ -1090,8 +1133,14 @@
              State::SynSent => self.set_state(State::Closed),
              // In the SYN-RECEIVED, ESTABLISHED and CLOSE-WAIT states the transmit half
              // of the connection is open, and needs to be explicitly closed with a FIN.
@@ -896,7 +952,28 @@
              // In the FIN-WAIT-1, FIN-WAIT-2, CLOSING, LAST-ACK, TIME-WAIT and CLOSED states,
              // the transmit half of the connection is already closed, and no further
              // action is needed.
-@@ -2289,9 +2317,40 @@
+@@ -1491,6 +1540,8 @@
+         // segments, is right-shifted by [advertised scale value] bits[...]
+         reply_repr.window_len = self.scaled_window();
+         self.remote_last_win = reply_repr.window_len;
++        self.remote_max_edge =
++            max_edge(self.remote_max_edge, reply_repr.ack_number, reply_repr.window_len, self.remote_win_shift);
+ 
+         // If the remote supports selective acknowledgement, add the option to the outgoing
+         // segment.
+@@ -1705,7 +1756,10 @@
+ 
+         let window_start = self.remote_seq_no + self.rx_buffer.len();
+         let window_end = if let Some(last_ack) = self.remote_last_ack {
+-            last_ack + ((self.remote_last_win as usize) << self.remote_win_shift)
++            // Veda: the window last advertised, or the furthest one
++            // advertised, if that goes further (see `remote_max_edge`).
++            let edge = last_ack + ((self.remote_last_win as usize) << self.remote_win_shift);
++            self.remote_max_edge.map_or(edge, |max| max.max(edge))
+         } else {
+             window_start
+         };
+@@ -2289,9 +2343,40 @@
          }
      }
  
@@ -938,7 +1015,7 @@
              (_, _) => false,
          }
      }
-@@ -2470,6 +2529,8 @@
+@@ -2470,6 +2555,8 @@
          if self.timed_out(cx.now()) {
              // If a timeout expires, we should abort the connection.
              net_debug!("timeout exceeded");
@@ -947,7 +1024,15 @@
              self.set_state(State::Closed);
          } else if self.timer.should_retransmit(cx.now()) {
              if let Timer::Retransmit { .. } = self.timer {
-@@ -2887,7 +2948,9 @@
+@@ -2826,6 +2913,7 @@
+             .max(repr.seq_number + repr.segment_len());
+         self.remote_last_ack = repr.ack_number;
+         self.remote_last_win = repr.window_len;
++        self.remote_max_edge = max_edge(self.remote_max_edge, repr.ack_number, repr.window_len, self.remote_win_shift);
+ 
+         if repr.segment_len() > 0 {
+             self.rtte
+@@ -2887,7 +2975,9 @@
              let timeout_poll_at = match (self.remote_last_ts, self.timeout) {
                  // If we're transmitting or retransmitting data, we need to poll at the moment
                  // when the timeout would expire.
@@ -958,7 +1043,67 @@
                  // Otherwise we have no timeout.
                  (_, _) => PollAt::Ingress,
              };
-@@ -5421,6 +5484,8 @@
+@@ -4754,6 +4844,59 @@
+     }
+ 
+     #[test]
++    fn test_established_keeps_octets_up_to_an_earlier_edge() {
++        // Veda: a window advertised in units of the window scale (4 octets
++        // here), rounded down, can end short of an earlier one; what the
++        // remote sent up to the earlier edge is kept.
++        let mut s = socket_established();
++        s.rx_buffer = SocketBuffer::new(vec![0; 4000]);
++        s.assembler = Assembler::new();
++        s.remote_win_scale = Some(0);
++        s.remote_win_shift = 2;
++        s.remote_last_win = 1000;
++        s.remote_max_edge = Some(REMOTE_SEQ + 1 + 4000);
++        send!(
++            s,
++            TcpRepr {
++                seq_number: REMOTE_SEQ + 1,
++                ack_number: Some(LOCAL_SEQ + 1),
++                payload: &b"abcdef"[..],
++                ..SEND_TEMPL
++            }
++        );
++        // 3994 octets of room: 998 units, which end 2 octets short.
++        recv!(
++            s,
++            [TcpRepr {
++                seq_number: LOCAL_SEQ + 1,
++                ack_number: Some(REMOTE_SEQ + 1 + 6),
++                window_len: 998,
++                ..RECV_TEMPL
++            }]
++        );
++        let rest = vec![b'x'; 3994];
++        send!(
++            s,
++            TcpRepr {
++                seq_number: REMOTE_SEQ + 1 + 6,
++                ack_number: Some(LOCAL_SEQ + 1),
++                payload: &rest,
++                ..SEND_TEMPL
++            }
++        );
++        recv!(
++            s,
++            [TcpRepr {
++                seq_number: LOCAL_SEQ + 1,
++                ack_number: Some(REMOTE_SEQ + 1 + 4000),
++                window_len: 0,
++                ..RECV_TEMPL
++            }]
++        );
++        assert_eq!(s.rx_buffer.len(), 4000);
++    }
++
++    #[test]
+     fn test_established_send() {
+         let mut s = socket_established();
+         // First roundtrip after establishing.
+@@ -5421,6 +5564,8 @@
              }
          );
          assert_eq!(s.state, State::Closed);
@@ -967,7 +1112,7 @@
      }
  
      #[test]
-@@ -8599,6 +8664,10 @@
+@@ -8599,6 +8744,10 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -978,7 +1123,7 @@
      }
  
      #[test]
-@@ -8606,10 +8675,8 @@
+@@ -8606,10 +8755,8 @@
          let mut s = socket_established();
          s.set_timeout(Some(Duration::from_millis(2000)));
          recv_nothing!(s, time 250);
@@ -991,7 +1136,7 @@
          s.send_slice(b"abcdef").unwrap();
          assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Now);
          recv!(s, time 255, Ok(TcpRepr {
-@@ -8639,6 +8706,102 @@
+@@ -8639,6 +8786,102 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1094,7 +1239,7 @@
      }
  
      #[test]
-@@ -8686,6 +8849,7 @@
+@@ -8686,6 +8929,7 @@
          }));
          recv_nothing!(s, time 205);
          assert_eq!(s.state, State::Closed);
@@ -1102,7 +1247,7 @@
      }
  
      #[test]
-@@ -8705,6 +8869,7 @@
+@@ -8705,6 +8949,7 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1110,7 +1255,7 @@
      }
  
      #[test]
-@@ -8724,6 +8889,7 @@
+@@ -8724,6 +8969,7 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1118,7 +1263,7 @@
      }
  
      #[test]
-@@ -8740,6 +8906,8 @@
+@@ -8740,6 +8986,8 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Ingress);

@@ -13,10 +13,6 @@
 //! told. A cancelled call that would have asked the user, or ended the
 //! conversation, does nothing.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 use vagent::deepgram;
 use vagent::notice::Notice;

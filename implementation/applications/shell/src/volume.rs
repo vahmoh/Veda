@@ -3,8 +3,6 @@
 
 //! The volume flyout opened from the speaker icon on the taskbar.
 
-use alloc::format;
-
 use vgfx::{Align, Rect};
 use vui::{Font, Ui, status};
 

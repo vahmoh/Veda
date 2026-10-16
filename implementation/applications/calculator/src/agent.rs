@@ -8,11 +8,6 @@
 //!
 //! Everything is routine but clearing the history, which forgets calculations for good.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use calculator_core::format::{Style, format, fraction_text};
 use calculator_core::units::{CATEGORIES, find_unit};
 use calculator_core::{AngleUnit, Base, Calculator, Key, Mode, Number, WordSize, format_word};

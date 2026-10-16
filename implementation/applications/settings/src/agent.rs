@@ -26,16 +26,12 @@
 //! agent asking Settings to rename it) stays. Changes not sent yet are sent
 //! when the page is left, and before the window closes.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 
-use num_traits::Float;
 use vproto::agent::{AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, agent};
 use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
 use vui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
 
 enum Request {
@@ -68,15 +64,13 @@ enum Reply {
     Failed(AgentError),
 }
 
-struct Queue {
-    requests: Mutex<VecDeque<Request>>,
-    wake: Condvar,
-    replies: Mutex<Vec<Reply>>,
-}
-
-/// Talks to the agent service from a background thread.
+/// Talks to the agent service from a background thread, which ends with
+/// it.
 struct Link {
-    q: Arc<Queue>,
+    requests: Sender<Request>,
+    replies: Receiver<Reply>,
+    /// A refresh waits to be done: another would only repeat it.
+    refresh_queued: Arc<AtomicBool>,
     event: Event,
 }
 
@@ -90,60 +84,55 @@ impl Link {
     fn start() -> Option<Link> {
         let event = Event::create().ok()?;
         let signal = Event::from_handle(event.0.duplicate(None).ok()?);
-        let q = Arc::new(Queue {
-            requests: Mutex::new(VecDeque::new()),
-            wake: Condvar::new(),
-            replies: Mutex::new(Vec::new()),
-        });
-        let wq = q.clone();
-        vrt::thread::Builder::new().name("agent-link").spawn(move || worker(wq, signal)).ok()?;
-        Some(Link { q, event })
+        let (requests, todo) = mpsc::channel();
+        let (answers, replies) = mpsc::channel();
+        let refresh_queued = Arc::new(AtomicBool::new(false));
+        let queued = refresh_queued.clone();
+        std::thread::Builder::new()
+            .name("agent-link".into())
+            .spawn(move || worker(todo, answers, &queued, signal))
+            .ok()?;
+        Some(Link { requests, replies, refresh_queued, event })
     }
 
     fn send(&self, r: Request) {
-        let mut q = self.q.requests.lock();
         // Refreshes pile up while a slow request (checking the key) runs.
-        if matches!(r, Request::Load) && q.iter().any(|x| matches!(x, Request::Load)) {
+        if matches!(r, Request::Load) && self.refresh_queued.swap(true, Ordering::AcqRel) {
             return;
         }
-        q.push_back(r);
-        drop(q);
-        self.q.wake.notify_one();
+        let _ = self.requests.send(r);
     }
 
     fn take(&self) -> Vec<Reply> {
+        // Cleared first: what is answered meanwhile signals it again.
         let _ = self.event.clear();
-        core::mem::take(&mut *self.q.replies.lock())
+        self.replies.try_iter().collect()
     }
 }
 
-fn worker(q: Arc<Queue>, event: Event) {
+fn worker(todo: Receiver<Request>, replies: Sender<Reply>, refresh_queued: &AtomicBool, event: Event) {
     let mut client: Option<agent::Client> = None;
-    loop {
-        let req = {
-            let mut r = q.requests.lock();
-            loop {
-                if let Some(x) = r.pop_front() {
-                    break x;
-                }
-                r = q.wake.wait(r);
-            }
-        };
+    for req in todo {
+        if matches!(req, Request::Load) {
+            refresh_queued.store(false, Ordering::Release);
+        }
         if client.is_none() && agent_running() {
             client = vproto::connect(agent::NAME).ok().map(agent::Client::new);
         }
-        let answered = client.as_ref().is_some_and(|c| serve(c, req, &q));
+        let answered = client.as_ref().is_some_and(|c| serve(c, req, &replies));
         if !answered {
             client = None;
-            q.replies.lock().push(Reply::Unavailable);
+            let _ = replies.send(Reply::Unavailable);
         }
         let _ = event.signal();
     }
 }
 
 /// Performs one request; false if the agent did not answer.
-fn serve(c: &agent::Client, req: Request, q: &Queue) -> bool {
-    let push = |r: Reply| q.replies.lock().push(r);
+fn serve(c: &agent::Client, req: Request, replies: &Sender<Reply>) -> bool {
+    let push = |r: Reply| {
+        let _ = replies.send(r);
+    };
     let reload = match req {
         Request::Load => true,
         Request::Edit(edits) => {

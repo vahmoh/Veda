@@ -22,9 +22,11 @@ use crate::arch;
 use crate::ports::{self, Port};
 use crate::util::{self, Result};
 
-/// The crates Veda builds as ports, by the names of their ports (which are
-/// the crates').
-pub const CRATES: [&str; 2] = ["smoltcp", "zune-jpeg"];
+/// The crates Veda builds as ports, by the names of their ports: a crate's
+/// own, or, for an older release of a crate the workspace has two releases
+/// of, its name and that release's (`getrandom-0.3`).
+pub const CRATES: [&str; 10] =
+    ["smoltcp", "zune-jpeg", "libc", "getrandom", "getrandom-0.3", "rustix", "errno", "socket2", "mio", "tokio"];
 
 /// The programs that preparing them takes: for the downloads, and for
 /// `implementation/ports/crates.sh`.
@@ -73,7 +75,7 @@ pub fn prepare() -> Result {
         changed = true;
         Some(lock)
     };
-    let text = config_text();
+    let text = config_text()?;
     if std::fs::read_to_string(&config).ok().as_deref() != Some(text.as_str()) {
         // Whole, for a Cargo that reads it meanwhile.
         let partial = config.with_extension("part");
@@ -159,8 +161,10 @@ fn unpack(root: &Path) -> Result {
     )
 }
 
-/// `config.toml`: the crates, for Cargo, in place of their releases.
-fn config_text() -> String {
+/// `config.toml`: the crates, for Cargo, in place of their releases. A
+/// port named otherwise than its crate is a patch of that crate (its
+/// `package`), of the release the port has.
+fn config_text() -> Result<String> {
     let mut text = String::from(
         "# Written by `cargo orchestration` (orchestration/src/crates.rs): Cargo\n\
          # builds the crates in implementation/ports/ as they are prepared here,\n\
@@ -171,9 +175,13 @@ fn config_text() -> String {
          [patch.crates-io]\n",
     );
     for name in CRATES {
-        text.push_str(&format!("{name} = {{ path = \"{DIRECTORY}/src/{name}\" }}\n"));
+        let package = Port::named(name)?.name;
+        let rename = if package == name { String::new() } else { format!(", package = \"{package}\"") };
+        // Quoted: a port's name may have a dot (`getrandom-0.3`), which TOML
+        // takes for a table's.
+        text.push_str(&format!("\"{name}\" = {{ path = \"{DIRECTORY}/src/{name}\"{rename} }}\n"));
     }
-    text
+    Ok(text)
 }
 
 /// Fails unless Cargo.lock has every crate as prepared: at its port's
@@ -184,11 +192,11 @@ fn check_lock() -> Result {
     let lock = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     for name in CRATES {
         let port = Port::named(name)?;
-        if !locked_from_path(&lock, name, &port.version) {
+        if !locked_from_path(&lock, &port.name, &port.version) {
             return Err(format!(
-                "Cargo does not build {name} {} from implementation/ports/{name}: the workspace must depend \
-                 on that version (`{name} = {{ version = \"={}\", ... }}` in Cargo.toml)",
-                port.version, port.version
+                "Cargo does not build {} {} from implementation/ports/{name}: the workspace must depend on that \
+                 version (`{} = {{ version = \"={}\", ... }}` in Cargo.toml)",
+                port.name, port.version, port.name, port.version
             ));
         }
     }
@@ -236,10 +244,10 @@ mod tests {
     fn cargo_finds_each_crate_where_it_is_prepared() {
         // Cargo takes the paths of a configuration file from the directory
         // above the file's own.
-        let text = config_text();
+        let text = config_text().unwrap();
         for name in CRATES {
-            let line = text.lines().find(|l| l.starts_with(&format!("{name} = "))).expect("a patch for each crate");
-            let path = line.split('"').nth(1).expect("a path");
+            let line = text.lines().find(|l| l.starts_with(&format!("\"{name}\" = "))).expect("a patch for each crate");
+            let path = line.split('"').nth(3).expect("a path");
             assert_eq!(root().parent().unwrap().join(path), root().join("src").join(name));
         }
     }

@@ -17,7 +17,7 @@ use vabi::startup::role;
 use vabi::{Error, Rights, map_flags, nr};
 use vipc::Bytes;
 use vproto::fs::{FsError, file, open_flags, seek, vfs};
-use vrt::object::{Process, Socket, Vmo};
+use vrt::object::{Channel, Process, Socket, Vmo};
 use vrt::process::Spawn;
 use vrt::sys::call;
 use vrt::vm;
@@ -78,7 +78,64 @@ pub fn test_sockets() -> TestResult {
     d.read(&mut sink).map_err(s)?;
     check(c.write(&[1u8; 4096]) == Err(Error::ShouldWait), "a 4096-byte write is not split")?;
     check(c.write(&[1u8; 2000]).map_err(s)? == 2000, "a smaller one fits")?;
-    check(d.wait(READABLE, 0).is_ok(), "readable")
+    check(d.wait(READABLE, 0).is_ok(), "readable")?;
+    test_socket_handles()
+}
+
+/// Handles with a socket's bytes (what Unix domain sockets send
+/// descriptors with): they come with the first byte written with them; a
+/// read takes one write's at most and ends before the next's; a look
+/// leaves them; a read that does not ask for them closes them; whoever
+/// holds the endpoint reads them; and nothing goes that would keep itself
+/// alive.
+fn test_socket_handles() -> TestResult {
+    let (c, d) = Socket::create().map_err(s)?;
+    // Each handle a socket's end: closing it is seen at its peer.
+    let (p1, q1) = Socket::create().map_err(s)?;
+    let (p2, q2) = Socket::create().map_err(s)?;
+    check(c.write_with(b"ab", alloc::vec![p1.into_handle()]).map_err(s)? == 2, "a write with a handle")?;
+    c.write(b"cd").map_err(s)?;
+    check(c.write_with(b"ef", alloc::vec![p2.into_handle()]).map_err(s)? == 2, "another")?;
+    let mut buf = [0u8; 16];
+    let (n, handles, closed) = d.read_with(&mut buf, 4).map_err(s)?;
+    check(n == 4 && &buf[..4] == b"abcd" && handles.len() == 1 && closed == 0, "one write's handles, up to the next")?;
+    check(handles[0].koid() != 0 && q1.wait(PEER_CLOSED, 0).is_err(), "the handle came, its object alive")?;
+    drop(handles);
+    check(q1.wait(PEER_CLOSED, 0).is_ok(), "closing it closes it")?;
+    check(d.peek(&mut buf).map_err(s)? == 2 && &buf[..2] == b"ef", "a look")?;
+    let d2 = d.duplicate(None).map_err(s)?;
+    let (n, handles, _) = d2.read_with(&mut buf, 4).map_err(s)?;
+    check(n == 2 && handles.len() == 1, "the handles stay through a look, for whoever holds the endpoint")?;
+    drop(handles);
+    check(q2.wait(PEER_CLOSED, 0).is_ok(), "the second handle")?;
+
+    // A read that does not ask closes them; so does one with no room.
+    let (p3, q3) = Socket::create().map_err(s)?;
+    c.write_with(b"x", alloc::vec![p3.into_handle()]).map_err(s)?;
+    check(d.read(&mut buf).map_err(s)? == 1 && q3.wait(PEER_CLOSED, 0).is_ok(), "an unasked-for handle is closed")?;
+    let (p4, q4) = Socket::create().map_err(s)?;
+    let (p5, q5) = Socket::create().map_err(s)?;
+    c.write_with(b"y", alloc::vec![p4.into_handle(), p5.into_handle()]).map_err(s)?;
+    let (n, handles, closed) = d.read_with(&mut buf, 1).map_err(s)?;
+    check(n == 1 && handles.len() == 1 && closed == 1, "handles beyond the room are closed")?;
+    check(q4.wait(PEER_CLOSED, 0).is_err() && q5.wait(PEER_CLOSED, 0).is_ok(), "the first kept, the other closed")?;
+    drop(handles);
+
+    // Handles go with bytes; an endpoint of the socket cannot go over it,
+    // nor a channel whose queued message holds one.
+    let (p6, _q6) = Socket::create().map_err(s)?;
+    check(c.write_with(b"", alloc::vec![p6.into_handle()]) == Err(Error::InvalidArgs), "no byte to go with")?;
+    let c2 = c.duplicate(None).map_err(s)?;
+    check(c.write_with(b"z", alloc::vec![c2.into_handle()]) == Err(Error::NotSupported), "itself")?;
+    let (x, y) = Channel::create().map_err(s)?;
+    x.write(b"", alloc::vec![d.duplicate(None).map_err(s)?.into_handle()]).map_err(s)?;
+    check(c.write_with(b"z", alloc::vec![y.into_handle()]) == Err(Error::NotSupported), "a channel that reaches it")?;
+    // The other way round: a socket whose bytes hold a channel's end
+    // cannot go on that channel.
+    let (e, f) = Socket::create().map_err(s)?;
+    let (g, h) = Channel::create().map_err(s)?;
+    e.write_with(b"!", alloc::vec![h.into_handle()]).map_err(s)?;
+    check(g.write(b"", alloc::vec![f.into_handle()]) == Err(Error::NotSupported), "a socket that reaches the channel")
 }
 
 /// `vm_protect` works on parts of mappings and never grants more than the
@@ -411,10 +468,25 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
     Ok((code, String::from_utf8_lossy(&out).into_owned()))
 }
 
+/// The host machine's servers, when the kernel command line named them
+/// (`run=systest:host,ADDRESS,TCP-PORT,UDP-PORT`, which `cargo orchestration
+/// test` gives): the arguments that have the checks of the C library and of
+/// Rust's standard library reach them too.
+fn host_args() -> Vec<String> {
+    let args = vrt::env::args();
+    match args.get(1..5) {
+        Some([host, address, tcp, udp]) if host == "host" => {
+            alloc::vec![host.clone(), address.clone(), tcp.clone(), udp.clone()]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// C and C++ programs built by the cross toolchain run, linked at a fixed
 /// address and position-independent: the smallest one, then the checks of
-/// the C library and the POSIX layer (`verification/c/posix.c`) and of the
-/// C++ library (`verification/c/cxx.cc`).
+/// the C library and the POSIX layer (`verification/c/posix.c`, with the
+/// host's servers when there are some) and of the C++ library
+/// (`verification/c/cxx.cc`).
 pub fn test_c_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/c/hello".into()).map_err(s)?.is_err() {
@@ -432,11 +504,14 @@ pub fn test_c_programs() -> TestResult {
 
         // The checks of the C library and the POSIX layer, and of the C++
         // library.
+        let host = host_args();
         for checks in ["posix", "cxx"] {
             let program = format!("{checks}{variant}");
             let dir = format!("/tmp/{program}-test");
             let _ = fs.mkdir(dir.clone());
-            let (code, out) = run_c(&format!("/system/tests/c/{program}"), &[], &dir)?;
+            let args: Vec<&str> =
+                if checks == "posix" { host.iter().map(String::as_str).collect() } else { Vec::new() };
+            let (code, out) = run_c(&format!("/system/tests/c/{program}"), &args, &dir)?;
             for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
                 vrt::println!("{program}: {line}");
             }
@@ -449,18 +524,21 @@ pub fn test_c_programs() -> TestResult {
 
 /// Rust programs built by Rust's toolchain run, position-independent (as
 /// Rust links them for Veda) and at a fixed address: the checks of its
-/// standard library (`verification/rust/stdlib.rs`).
+/// standard library (`verification/rust/stdlib.rs`, with the host's servers
+/// when there are some).
 pub fn test_rust_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/rust/stdlib".into()).map_err(s)?.is_err() {
         vrt::println!("rust programs: none in this image (no Rust toolchain was built)");
         return Ok(());
     }
+    let host = host_args();
+    let args: Vec<&str> = host.iter().map(String::as_str).collect();
     for variant in ["", "-fixed"] {
         let program = format!("stdlib{variant}");
         let dir = format!("/tmp/{program}-test");
         let _ = fs.mkdir(dir.clone());
-        let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &[], &dir)?;
+        let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &args, &dir)?;
         for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
             vrt::println!("{program}: {line}");
         }
@@ -468,4 +546,19 @@ pub fn test_rust_programs() -> TestResult {
         check(passed, &format!("{program} checks failed (exit code {code})"))?;
     }
     Ok(())
+}
+
+/// Crates that need Rust's standard library work as Veda's ports of them
+/// have them: libc, getrandom (both releases), rand, rustix, tempfile and
+/// tokio, on the C library's epoll, eventfd and sockets
+/// (`verification/stdcrates`, a program on the standard library).
+pub fn test_std_crates() -> TestResult {
+    let dir = String::from("/tmp/stdcrates-test");
+    let _ = vfs_client()?.mkdir(dir.clone());
+    let (code, out) = run_c("/system/bin/stdcrates", &[], &dir)?;
+    for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
+        vrt::println!("stdcrates: {line}");
+    }
+    let passed = code == 0 && out.contains("PASS: 0 failed");
+    check(passed, &format!("stdcrates checks failed (exit code {code})"))
 }

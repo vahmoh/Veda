@@ -14,12 +14,9 @@
 //! never copied, and its size checked before it is read; a picture that is decoded for the
 //! viewer gives its thumbnails too, rather than being decoded a second time for them.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vabi::RawHandle;
 use vgfx::Bitmap;
@@ -29,9 +26,6 @@ use vproto::vfs;
 use vrt::object::Event;
 use vrt::sync::{Condvar, Mutex};
 use vrt::vm::Mapping;
-
-#[allow(unused_imports)]
-use num_traits::Float;
 
 /// Files larger than this are not opened.
 const MAX_FILE: u64 = 128 << 20;
@@ -348,8 +342,8 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                     let result = decoded.map(|(img, _)| make_thumbs(&img, shared.id()));
                     let total_ms = (vrt::time::now_ns() - started) / 1_000_000;
                     match &result {
-                        Ok(_) => vrt::println!("thumbnail of {name}: decoded in {decode_ms} ms, {total_ms} ms in all"),
-                        Err(e) => vrt::println!("no thumbnail for {name}: {e}"),
+                        Ok(_) => println!("thumbnail of {name}: decoded in {decode_ms} ms, {total_ms} ms in all"),
+                        Err(e) => println!("no thumbnail for {name}: {e}"),
                     }
                     Done::Thumbs { path, result, meta }
                 } else {
@@ -366,12 +360,12 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                     let result = decoded.map(|(img, damaged)| Arc::new(make_picture(img, damaged, shared.id())));
                     let total_ms = (vrt::time::now_ns() - started) / 1_000_000;
                     match &result {
-                        Ok(p) => vrt::println!(
+                        Ok(p) => println!(
                             "opened {name} ({}x{}): decoded in {decode_ms} ms, ready in {total_ms} ms",
                             p.width(),
                             p.height()
                         ),
-                        Err(e) => vrt::println!("cannot open {name}: {e}"),
+                        Err(e) => println!("cannot open {name}: {e}"),
                     }
                     Done::Picture { path, result, meta }
                 }
@@ -487,7 +481,7 @@ fn describe(e: ImageError) -> String {
 /// shows from the levels made).
 fn make_picture(img: Image, damaged: bool, id: u64) -> Picture {
     let has_alpha = img.pixels.iter().any(|p| p >> 24 != 0xFF);
-    let mut levels = alloc::vec![Bitmap::from_straight(img.width as i32, img.height as i32, img.pixels)];
+    let mut levels = vec![Bitmap::from_straight(img.width as i32, img.height as i32, img.pixels)];
     loop {
         let last = &levels[levels.len() - 1];
         if last.width.max(last.height) <= SMALLEST_LEVEL || last.width < 2 || last.height < 2 {

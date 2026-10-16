@@ -3,9 +3,6 @@
 
 //! The library: a grid of thumbnail cards for the pictures in the folder.
 
-use alloc::format;
-use alloc::string::String;
-
 use vfiles::format::human_size;
 use vgfx::{Align, Color, Rect};
 use vproto::input::keys;

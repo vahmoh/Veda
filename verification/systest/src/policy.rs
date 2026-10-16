@@ -57,6 +57,40 @@ pub fn test_channel_handles() -> TestResult {
     Ok(())
 }
 
+/// A channel's end has one handle at a time, unless the channel was made
+/// shared: then several handles (several processes) hold it, each message
+/// is read by one of them, and the other end sees `PEER_CLOSED` only once
+/// the last of them is closed.
+pub fn test_shared_channels() -> TestResult {
+    let err = |e: Error| e.to_string();
+    let (a, _b) = Channel::create().map_err(err)?;
+    check(a.0.duplicate(None).err() == Some(Error::AccessDenied), "a channel's end has one handle")?;
+    let mut out = [0u32; 2];
+    check(
+        vrt::sys::call(vabi::nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, 1 << 7, 0, 0, 0, 0])
+            == Err(Error::InvalidArgs),
+        "unknown flags are refused",
+    )?;
+    let (inbox, writer) = Channel::create_shared().map_err(err)?;
+    let other = Channel::from_handle(inbox.0.duplicate(None).map_err(err)?);
+    writer.write(b"1", vec![]).map_err(err)?;
+    writer.write(b"2", vec![]).map_err(err)?;
+    let first = inbox.read().map_err(err)?;
+    let second = other.read().map_err(err)?;
+    check(first.bytes == b"1" && second.bytes == b"2", "each message is read by one holder, in order")?;
+    check(inbox.read().err() == Some(Error::ShouldWait) && other.read().err() == Some(Error::ShouldWait), "and once")?;
+    // A shared end travels like any other, and stays shared.
+    let (c, d) = Channel::create().map_err(err)?;
+    c.write(b"", vec![other.into_handle()]).map_err(err)?;
+    let moved = d.read().map_err(err)?.handles.pop().map(Channel::from_handle).ok_or("no handle came")?;
+    check(moved.0.duplicate(None).is_ok(), "a shared end that travelled may be duplicated")?;
+    drop(inbox);
+    check(writer.wait(vabi::signals::PEER_CLOSED, 0).is_err(), "an end some handle still holds is open")?;
+    drop(moved);
+    check(writer.wait(vabi::signals::PEER_CLOSED, 0).is_ok(), "closing the last handle closes it")?;
+    Ok(())
+}
+
 vipc::protocol! {
     /// A server whose answers can be too large to send.
     mod big = "systest/big" {

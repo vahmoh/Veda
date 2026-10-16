@@ -19,8 +19,6 @@
 //! sound is not played: a sound well after the desktop appeared would come
 //! out of nowhere. The stream is closed once the sound has played.
 
-use alloc::vec;
-
 use vaudio::wav::{self, WavInfo};
 use vproto::audio::{OutputStream, StreamSpec, audio, ring};
 use vproto::vfs;

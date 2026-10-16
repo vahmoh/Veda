@@ -5,8 +5,11 @@
 //!
 //! Small allocations (up to 2 KiB) come from per-size-class slabs carved out
 //! of direct-mapped 4 KiB frames; freed blocks go on intrusive free lists.
-//! Larger allocations take physically contiguous frames directly. All memory
-//! is addressed through the direct map, so no page-table work is needed.
+//! Larger allocations take physically contiguous frames directly, zeroed only
+//! when asked for zeroed memory (`alloc_zeroed`): what is filled at once (a
+//! message's bytes, a socket's buffer growing) is not written twice. All
+//! memory is addressed through the direct map, so no page-table work is
+//! needed.
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
@@ -74,6 +77,27 @@ unsafe impl GlobalAlloc for KernelHeap {
             slabs.heads[class] = unsafe { (*block).next };
             slabs.in_use += CLASSES[class];
             return block as *mut u8;
+        }
+        let pages = (layout.size() as u64).div_ceil(PAGE_SIZE);
+        match phys::alloc_contiguous_unzeroed(pages, (layout.align() as u64).max(PAGE_SIZE), u64::MAX) {
+            Some(p) => {
+                self.slabs.lock().in_use += (pages * PAGE_SIZE) as usize;
+                phys_to_virt(p) as *mut u8
+            }
+            None => null_mut(),
+        }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let size = layout.size().max(layout.align()).max(1);
+        if class_index(size).is_some() && layout.align() <= 2048 {
+            // SAFETY: as `alloc`; a slab's block is zeroed here.
+            let block = unsafe { self.alloc(layout) };
+            if !block.is_null() {
+                // SAFETY: the block holds `layout.size()` bytes.
+                unsafe { core::ptr::write_bytes(block, 0, layout.size()) };
+            }
+            return block;
         }
         let pages = (layout.size() as u64).div_ceil(PAGE_SIZE);
         match phys::alloc_contiguous(pages, (layout.align() as u64).max(PAGE_SIZE), u64::MAX) {

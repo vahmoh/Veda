@@ -20,11 +20,6 @@
 //! goes, or hides it all. The voice agent can start, pause and change
 //! things too ([`agent`]).
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod app;
 mod hud;
@@ -34,9 +29,7 @@ mod perf;
 mod speakers;
 mod store;
 
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
+use std::sync::Arc;
 
 use interceptor_game::career::Stats;
 use interceptor_game::render::{Quality, Renderer};
@@ -53,8 +46,6 @@ use perf::{Perf, Phases};
 use speakers::Speakers;
 use store::Store;
 
-vrt::entry!(main);
-
 /// The frame time the software renderer keeps to (ms): about 29 frames
 /// a second.
 const SOFTWARE_TARGET_MS: f32 = 34.4;
@@ -68,7 +59,7 @@ fn internal_size(w: i32, h: i32, scale: Option<&Scale>) -> (i32, i32) {
 
 /// Waits until the window can take a frame, keeping the events that
 /// arrive meanwhile in `pending` (for the next frame); false if it closed.
-fn wait_for_window(window: &mut Window, pending: &mut alloc::vec::Vec<WindowEvent>) -> bool {
+fn wait_for_window(window: &mut Window, pending: &mut Vec<WindowEvent>) -> bool {
     while !window.can_draw() {
         let mut items = [WaitItem {
             handle: window.event_channel().raw(),
@@ -89,11 +80,16 @@ fn wait_for_window(window: &mut Window, pending: &mut alloc::vec::Vec<WindowEven
     true
 }
 
-fn main() -> i32 {
+fn main() {
+    std::process::exit(run());
+}
+
+/// Runs the program; its exit code.
+fn run() -> i32 {
     let display = match connect() {
         Ok(d) => d,
         Err(e) => {
-            vrt::println!("cannot connect to the display: {:?}", e);
+            println!("cannot connect to the display: {:?}", e);
             return 1;
         }
     };
@@ -108,7 +104,7 @@ fn main() -> i32 {
     let mut window = match Window::new(&display, spec) {
         Ok(w) => w,
         Err(e) => {
-            vrt::println!("cannot create a window: {:?}", e);
+            println!("cannot create a window: {:?}", e);
             return 1;
         }
     };
@@ -121,7 +117,7 @@ fn main() -> i32 {
     let fonts = paint::Fonts { regular: fonts[0], bold: fonts[1], mono: fonts[2], mono_bold: fonts[3] };
 
     // Events that came while a frame waited for the window.
-    let mut pending = alloc::vec::Vec::new();
+    let mut pending = Vec::new();
     // A loading screen while the world is made.
     for _ in 0..2 {
         let _ = window.poll_events();
@@ -143,7 +139,7 @@ fn main() -> i32 {
     // that costs: the frame rate shows it); a software renderer starts at
     // half of it, and goes up or down to keep to its frame rate.
     let mut scale = (quality == Quality::Low).then(|| Scale::new(4, 6, SOFTWARE_TARGET_MS));
-    vrt::println!("{} ({:?} quality)", renderer_name, quality);
+    println!("{} ({:?} quality)", renderer_name, quality);
 
     let t0 = vrt::time::now_ns();
     let world = Arc::new(World::new());
@@ -152,20 +148,20 @@ fn main() -> i32 {
     let mut renderer = match Renderer::new(&mut gl, &world, app.session.env(), quality) {
         Ok(r) => r,
         Err(e) => {
-            vrt::println!("{}", e);
+            println!("{}", e);
             return 1;
         }
     };
     app.relight = false;
     let mut map = hud::MiniMap::new(&world);
     let t2 = vrt::time::now_ns();
-    vrt::println!(
+    println!(
         "Veda Bay made in {} ms ({} buildings), its pictures in {} ms",
         (t1 - t0) / 1_000_000,
         world.blocks.len(),
         (t2 - t1) / 1_000_000
     );
-    vrt::println!("ready");
+    println!("ready");
 
     let start = vrt::time::now_ns();
     let mut last = start;
@@ -223,7 +219,7 @@ fn main() -> i32 {
         }
         if app.screen != screen {
             screen = app.screen;
-            vrt::println!("screen {:?}", screen);
+            println!("screen {:?}", screen);
         }
         let now = vrt::time::now_ns();
         // Never a negative frame (from a clock read on another processor a
@@ -234,7 +230,7 @@ fn main() -> i32 {
         if app.relight {
             app.relight = false;
             if let Err(e) = renderer.set_environment(&mut gl, app.session.env()) {
-                vrt::println!("cannot change the light: {}", e);
+                println!("cannot change the light: {}", e);
             }
         }
         let frozen = matches!(app.screen, Screen::Paused(_) | Screen::Options(_, Back::Pause));
@@ -321,17 +317,9 @@ fn main() -> i32 {
             if t_end - log_since >= 5_000_000_000 {
                 log_since = t_end;
                 let longest = perf.report();
-                vrt::println!(
+                println!(
                     "{:.1} fps, render {:.1} ms, show {:.1} ms, {}x{} -> {}x{}, {} draws; {}",
-                    perf.fps,
-                    perf.render_ms,
-                    perf.show_ms,
-                    iw,
-                    ih,
-                    cw,
-                    ch,
-                    renderer.stats.draws,
-                    longest
+                    perf.fps, perf.render_ms, perf.show_ms, iw, ih, cw, ch, renderer.stats.draws, longest
                 );
             }
             // Every two seconds, the software renderer's resolution as the
@@ -342,7 +330,7 @@ fn main() -> i32 {
                 let secs = (t_end - judged) as f32 / 1e9;
                 judged = t_end;
                 if scale.judge(1000.0 / perf.fps.max(1.0), secs) {
-                    vrt::println!("{:.1} fps: rendering at 1/{} of the window", perf.fps, scale.divisor());
+                    println!("{:.1} fps: rendering at 1/{} of the window", perf.fps, scale.divisor());
                 }
             }
         }

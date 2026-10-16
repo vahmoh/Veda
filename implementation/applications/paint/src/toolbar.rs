@@ -4,8 +4,6 @@
 //! The toolbar (Undo and Redo, the tools, the shapes, the colours and the palette) and, under
 //! it, the options of the tool in hand.
 
-use alloc::format;
-
 use paint_core::fill::Reach;
 use paint_core::settings::{CUSTOM, FontChoice, Settings, Tool, palette};
 use paint_core::shapes::{Kind, Paint, Shape};
@@ -206,10 +204,10 @@ pub fn toolbar(ui: &mut Ui, r: Rect, s: &mut Settings, can_undo: bool, can_redo:
     let size = 20;
     let step = size + 3;
     let room = (r.right() - x - 46) / step;
-    let colors: alloc::vec::Vec<Color> = palette().collect();
+    let colors: Vec<Color> = palette().collect();
     let columns = (colors.len() as i32 / 2).min(room.max(0));
     let custom_cols = ((room - columns - 1).max(0)).min(CUSTOM as i32 / 2);
-    let mut cells: alloc::vec::Vec<(Rect, Option<Color>)> = alloc::vec::Vec::new();
+    let mut cells: Vec<(Rect, Option<Color>)> = Vec::new();
     for row in 0..2 {
         for col in 0..columns {
             let c = colors[(row * colors.len() as i32 / 2 + col) as usize];
@@ -267,7 +265,7 @@ fn slider(ui: &mut Ui, x: i32, r: Rect, label: &str, id: &str, value: &mut f32, 
 /// Buttons of which one is chosen; returns the width they took, and the choice if it changed.
 pub fn segmented(ui: &mut Ui, x: i32, r: Rect, id: &str, options: &[&str], chosen: usize) -> (i32, Option<usize>) {
     let t = ui.theme().clone();
-    let widths: alloc::vec::Vec<i32> = options.iter().map(|o| ui.measure(o, Font::Regular, 13.0) as i32 + 20).collect();
+    let widths: Vec<i32> = options.iter().map(|o| ui.measure(o, Font::Regular, 13.0) as i32 + 20).collect();
     let total: i32 = widths.iter().sum::<i32>() + 4;
     let outer = Rect::new(x, r.y + 6, total, r.h - 12);
     ui.canvas.fill_rounded_rect(outer, t.radius, t.control);
@@ -362,7 +360,7 @@ pub fn options(ui: &mut Ui, r: Rect, s: &mut Settings, selection: bool) -> Optio
         Tool::Picker => hint(ui, x, "Click to pick the primary colour, right-click the secondary."),
         Tool::Text => {
             let chosen = FontChoice::ALL.iter().position(|f| *f == s.font).unwrap_or(0);
-            let names: alloc::vec::Vec<&str> = FontChoice::ALL.iter().map(|f| f.name()).collect();
+            let names: Vec<&str> = FontChoice::ALL.iter().map(|f| f.name()).collect();
             let (w, picked) = segmented(ui, x, r, "text-font", &names, chosen);
             if let Some(p) = picked {
                 s.font = FontChoice::ALL[p];

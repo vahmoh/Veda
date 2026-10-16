@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "stdcrates"
+description = "Checks that crates which need Rust's standard library work on Veda, as its ports of libc, getrandom, rustix and tokio have them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stdcrates"
+test = false
+bench = false
+
+[dependencies]
+libc = { workspace = true }
+rustix = { workspace = true }
+getrandom = { workspace = true }
+getrandom-0-3 = { workspace = true }
+rand = { workspace = true, features = ["std", "thread_rng"] }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

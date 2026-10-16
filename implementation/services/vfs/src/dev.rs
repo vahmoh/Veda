@@ -58,6 +58,7 @@ impl Dev {
             device: device::DEV,
             executable: false,
             char_device: dev.is_some(),
+            socket: false,
         }
     }
 
@@ -70,6 +71,7 @@ impl Dev {
                 modified: 0,
                 inode: d.inode(),
                 executable: false,
+                socket: false,
             })
             .collect()
     }

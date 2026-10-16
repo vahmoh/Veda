@@ -43,7 +43,7 @@ use vproto::net::{
     RESOLVE_RESULT, RouteInfo, SocketInfo, TcpOptions, format_mac, net, netdev,
 };
 use vproto::netring::{self, LinkEndpoints, SlotMeta, kind};
-use vrt::object::Channel;
+use vrt::object::{Channel, Socket};
 use vrt::println;
 
 use socket::{Conn, Events};
@@ -78,6 +78,10 @@ const CLIENT_BUDGET: usize = 32;
 const MAX_SKIPPED: usize = 64;
 /// Reseed the stack's generator with kernel entropy this often.
 const RESEED_NS: u64 = 300_000_000_000;
+/// How long a UDP socket its client closed waits for the stack to send its
+/// datagrams before they are dropped (Linux gives up on a neighbor that
+/// does not answer after as long).
+const LINGER_US: u64 = 3_000_000;
 
 /// Wait-set keys: the kind of handle in the high bits, its key below.
 const NET_LISTENER: u64 = 0;
@@ -87,6 +91,8 @@ const DEVICE_LINK: u64 = 1 << 57;
 const CLIENT: u64 = 1 << 58;
 const SOCKET: u64 = 1 << 59;
 const LOOKUP: u64 = 1 << 60;
+/// The kernel socket a connection's bytes go on.
+const BYTES: u64 = 1 << 61;
 const KEY: u64 = (1 << 56) - 1;
 
 /// A device's frame link, as the stack reads and writes it.
@@ -201,6 +207,10 @@ struct Netd {
     /// Sockets to attend to on the next pump (their client wrote or made
     /// room, or they are new).
     work: BTreeSet<SockId>,
+    /// UDP sockets whose client closed them, attended to after every poll
+    /// until the stack has sent their datagrams, and by when they are
+    /// dropped all the same (µs).
+    lingering: BTreeMap<SockId, u64>,
     events: Events,
     next_key: u64,
     last_reseed: u64,
@@ -259,6 +269,7 @@ impl Netd {
         if let Some(conn) = self.sockets.remove(&id) {
             self.stack.close(id);
             self.work.remove(&id);
+            self.lingering.remove(&id);
             self.release(conn.owner, |u| u.sockets -= 1);
         }
     }
@@ -409,6 +420,19 @@ impl Netd {
                 Ok(())
             }
 
+            fn tcp_connect_bytes(
+                &mut self,
+                remote: SocketAddr,
+                options: TcpOptions,
+                socket: Channel,
+                bytes: Socket,
+            ) -> Result<(), NetError> {
+                self.check_quota()?;
+                let id = self.netd.stack.tcp_connect(remote, &options, self.owner)?;
+                self.netd.add_socket(Conn::tcp_bytes(socket, bytes, id, self.owner));
+                Ok(())
+            }
+
             fn tcp_listen(
                 &mut self,
                 local: SocketAddr,
@@ -418,14 +442,34 @@ impl Netd {
             ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
-                self.netd.add_socket(Conn::listener(listener, id, self.owner));
+                self.netd.add_socket(Conn::listener(listener, id, self.owner, false));
+                Ok(bound)
+            }
+
+            fn tcp_listen_bytes(
+                &mut self,
+                local: SocketAddr,
+                backlog: u32,
+                options: TcpOptions,
+                listener: Channel,
+            ) -> Result<SocketAddr, NetError> {
+                self.check_quota()?;
+                let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
+                self.netd.add_socket(Conn::listener(listener, id, self.owner, true));
                 Ok(bound)
             }
 
             fn udp_bind(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
                 let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
-                self.netd.add_socket(Conn::udp(socket, id, self.owner));
+                self.netd.add_socket(Conn::udp(socket, id, self.owner, true));
+                Ok(bound)
+            }
+
+            fn udp_bind_unmetered(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
+                self.check_quota()?;
+                let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
+                self.netd.add_socket(Conn::udp(socket, id, self.owner, false));
                 Ok(bound)
             }
 
@@ -536,11 +580,14 @@ impl Netd {
     // Sockets, lookups, events
 
     /// Attends to the sockets with something to do: those the stack reports
-    /// ready, and those whose client wrote, made room or is new. A socket
-    /// waiting for its client's room is left alone until it has it.
+    /// ready, those whose client wrote, made room or is new, and those that
+    /// linger. A socket waiting for its client's room is left alone until it
+    /// has it.
     fn pump_sockets(&mut self) {
         let mut work = core::mem::take(&mut self.work);
         work.extend(self.stack.take_ready());
+        work.extend(self.lingering.keys());
+        let now = now_us();
         let mut accepted = Vec::new();
         for id in work {
             let Some(conn) = self.sockets.get_mut(&id) else { continue };
@@ -550,8 +597,17 @@ impl Netd {
             let owner = conn.owner;
             let mut room = MAX_SOCKETS_PER_PROCESS.saturating_sub(self.usage.get(&owner).map_or(0, |u| u.sockets));
             conn.pump(&mut self.stack, &mut self.events, &mut room, &mut accepted);
+            let (finished, lingers) = (conn.finished(&self.stack), conn.lingers());
             for conn in accepted.drain(..) {
                 self.add_socket(conn);
+            }
+            // Its clients are gone, and all they sent is in the stack, which
+            // finishes a connection; or a UDP socket's datagrams are sent, or
+            // waited for long enough.
+            if finished || self.lingering.get(&id).is_some_and(|&until| now >= until) {
+                self.close_socket(id);
+            } else if lingers {
+                self.lingering.entry(id).or_insert(now + LINGER_US);
             }
         }
     }
@@ -683,7 +739,12 @@ impl Netd {
             if s.blocked {
                 want |= signals::WRITABLE;
             }
-            ws.add(s.channel.raw(), want, SOCKET | id as u64);
+            if s.channel_heard() {
+                ws.add(s.channel.raw(), want, SOCKET | id as u64);
+            }
+            if let Some((end, want)) = s.bytes_wait() {
+                ws.add(end, want, BYTES | id as u64);
+            }
         }
         for (&id, l) in &self.lookups {
             ws.add(l.reply.raw(), signals::PEER_CLOSED, LOOKUP | id as u64);
@@ -691,7 +752,10 @@ impl Netd {
         let deadline = if busy {
             0
         } else {
-            match self.stack.next_deadline() {
+            // A lingering socket is dropped in time, whatever the stack waits
+            // for.
+            let lingering = self.lingering.values().min().copied();
+            match self.stack.next_deadline().into_iter().chain(lingering).min() {
                 Some(t) => t.saturating_mul(1000),
                 None => vabi::DEADLINE_INFINITE,
             }
@@ -726,6 +790,12 @@ impl Netd {
                     }
                 }
                 SOCKET => self.socket_signalled(k as SockId, observed),
+                BYTES => {
+                    if let Some(conn) = self.sockets.get_mut(&(k as SockId)) {
+                        conn.bytes_signalled(observed);
+                        self.work.insert(k as SockId);
+                    }
+                }
                 LOOKUP => self.cancel_lookup(k as ResolveId),
                 _ => {}
             }
@@ -744,7 +814,15 @@ impl Netd {
             self.work.insert(id);
         }
         if !open || (observed & signals::PEER_CLOSED != 0 && observed & signals::READABLE == 0) {
-            self.close_socket(id);
+            // A connection whose bytes its clients still hold, or that has
+            // theirs still to send, goes on without its channel, as a UDP
+            // socket with datagrams to send does.
+            if conn.outlives_channel(&self.stack) {
+                conn.forget_channel();
+                self.work.insert(id);
+            } else {
+                self.close_socket(id);
+            }
         }
     }
 }
@@ -770,6 +848,7 @@ fn main() -> i32 {
         watchers: Vec::new(),
         usage: BTreeMap::new(),
         work: BTreeSet::new(),
+        lingering: BTreeMap::new(),
         events: Events::new(),
         next_key: 16,
         last_reseed: vrt::time::now_ns(),

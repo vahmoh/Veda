@@ -7,10 +7,6 @@
 //! [`super::DESKTOP_TIMEOUT_NS`]): one that hangs does not hold up the
 //! agent.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 use vproto::display::{WindowInfo, WindowKind};
 

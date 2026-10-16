@@ -16,8 +16,8 @@
 //! again is refused for a while ([`RegistrationLimit`]), and so are
 //! registrations beyond those waiting to be asked.
 
-use alloc::collections::VecDeque;
-use alloc::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vagent::policy::RegistrationLimit;
 use vproto::agent::{AgentError, agentapp};
@@ -71,7 +71,7 @@ impl Registrar {
         }
         let mut s = self.0.state.lock();
         if s.waiting.len() >= MAX_WAITING || !s.limit.admit(who.koid, vrt::time::now_ns()) {
-            vrt::println!("{} registers too often; refused", who.name);
+            println!("{} registers too often; refused", who.name);
             return Err(AgentError::Busy);
         }
         s.waiting.push_back((who.clone(), channel));
@@ -98,11 +98,11 @@ fn describe_registrations(inner: &Inner, shared: &Mutex<Shared>, links: &Links) 
         client.set_timeout(worker::APP_TIMEOUT_NS);
         match worker::describe(&client) {
             Ok(info) => {
-                vrt::println!("{} offers {} action(s)", who.name, info.actions.len());
+                println!("{} offers {} action(s)", who.name, info.actions.len());
                 shared.lock().set_app(&who.name, info);
                 links.push(NewLink { id: who.name, koid: who.koid, client });
             }
-            Err(e) => vrt::println!("{} did not describe itself: {:?}", who.name, e),
+            Err(e) => println!("{} did not describe itself: {:?}", who.name, e),
         }
     }
 }

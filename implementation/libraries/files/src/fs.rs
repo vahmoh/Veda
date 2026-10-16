@@ -722,6 +722,7 @@ mod tests {
                     modified: 0,
                     inode: 0,
                     executable: false,
+                    socket: false,
                 })
                 .collect();
             Ok(DirPage { entries, more: rest.next().is_some() })

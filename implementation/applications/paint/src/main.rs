@@ -10,11 +10,6 @@
 //! the dialogs ([`dialogs`], [`colors`]), files opened and saved on a thread of their own
 //! ([`files`]), and [`agent`], which lets the voice agent draw.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod canvas;
 mod colors;
@@ -22,10 +17,7 @@ mod dialogs;
 mod files;
 mod toolbar;
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
+use std::path::Path;
 
 use paint_core::Document;
 use paint_core::codec::{self, format_of};
@@ -43,11 +35,10 @@ use colors::{ColorDialog, Target};
 use dialogs::{Adjust, AdjustKind, Background, CanvasSize, NewPicture, ResizePicture};
 use files::{Done, Files};
 
-vrt::entry!(main);
-
 const PICTURES: &str = "/home/user/Pictures";
-const CONFIG_DIR: &str = "/home/user/.config/paint";
 const SETTINGS_FILE: &str = "/home/user/.config/paint/settings";
+/// The largest settings file read (bytes).
+const SETTINGS_MAX: usize = 64 * 1024;
 /// How long after a change of the settings they are written (ns).
 const SAVE_SETTINGS_NS: u64 = 2_000_000_000;
 const TOAST_NS: u64 = 2_400_000_000;
@@ -118,6 +109,8 @@ struct PaintApp {
     settings: Settings,
     canvas: Canvas,
     files: Option<Files>,
+    /// Pictures the voice agent opens and saves while it waits (the window's own go through
+    /// [`files`]).
     fs: vfiles::Fs,
     modal: Option<Modal>,
     /// The picture copied (the window system's clipboard holds text only).
@@ -140,9 +133,7 @@ struct PaintApp {
 impl PaintApp {
     fn new(path: Option<&str>) -> PaintApp {
         let (budget, max_pixels) = limits();
-        let fs = vfiles::Fs::connect();
-        let settings_written = fs
-            .read_limited(SETTINGS_FILE, 64 * 1024)
+        let settings_written = apps_common::store::read(Path::new(SETTINGS_FILE), SETTINGS_MAX)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default();
         let settings = Settings::from_text(&settings_written);
@@ -151,7 +142,7 @@ impl PaintApp {
             settings,
             canvas: Canvas::new(),
             files: Files::start(),
-            fs,
+            fs: vfiles::Fs::connect(),
             modal: None,
             clipboard: None,
             toast: None,
@@ -189,9 +180,9 @@ impl PaintApp {
         if text == self.settings_written {
             return;
         }
-        let _ = self.fs.mkdir_all(CONFIG_DIR);
-        if self.fs.write(SETTINGS_FILE, text.as_bytes()).is_ok() {
-            self.settings_written = text;
+        match apps_common::store::write(Path::new(SETTINGS_FILE), text.as_bytes()) {
+            Ok(()) => self.settings_written = text,
+            Err(e) => eprintln!("could not save the settings: {e}"),
         }
     }
 
@@ -243,7 +234,7 @@ impl PaintApp {
         self.doc = Document::new(w, h, background, self.budget);
         self.canvas.fit_next = true;
         self.agent_file = false;
-        vrt::println!("new picture {w}x{h}");
+        println!("new picture {w}x{h}");
     }
 
     /// Saves to the picture's file, or asks where; then `then`.
@@ -979,14 +970,14 @@ fn window_size(w: u32, h: u32) -> (u32, u32) {
     (width, height)
 }
 
-fn main() -> i32 {
-    let args = vrt::env::args();
-    let app = PaintApp::new(args.get(1).map(String::as_str));
+fn main() {
+    let path = std::env::args().nth(1);
+    let app = PaintApp::new(path.as_deref());
     let screen = vui::window::connect().ok().and_then(|d| d.screen_info().ok());
     let (w, h) = screen.map_or((1180, 680), |s| window_size(s.width, s.height));
     let mut spec = WindowSpec::new("Paint", w, h);
     spec.min_width = 640;
     spec.min_height = 460;
     spec.app_id = "paint".into();
-    vui::run(spec, app)
+    std::process::exit(vui::run(spec, app));
 }

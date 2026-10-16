@@ -11,10 +11,6 @@
 //! [`end_all`] ends those still running when Videos ends (one that hangs in
 //! FFmpeg would otherwise run on for good).
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vabi::map_flags;
 use vproto::fs::{FsError, vfs};
 use vproto::media::{self, Heartbeat, media::Client};

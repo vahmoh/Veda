@@ -15,18 +15,11 @@
 //! classification, init's own. [`agent`] lets the voice agent read the
 //! processes and the load, and end applications.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod perf;
 mod procs;
 
-use alloc::collections::{BTreeMap, VecDeque};
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use std::collections::{BTreeMap, VecDeque};
 
 use apps_common::format::cstr;
 use apps_common::process::{self, Classifier};
@@ -34,8 +27,6 @@ use vproto::display::modifiers;
 use vproto::init::{AppInfo, LaunchError, launcher};
 use vproto::input::keys;
 use vui::{App, Icon, Rect, Ui, WindowSpec};
-
-vrt::entry!(main);
 
 /// Seconds of history kept for the graphs.
 pub const HISTORY: usize = 60;
@@ -243,7 +234,7 @@ impl TaskManager {
             Ok(Err(LaunchError::NotFound)) => {
                 self.dialog = Some(Dialog::Error("The process could not be ended: it has already exited.".into()));
             }
-            Ok(Err(e)) => self.dialog = Some(Dialog::Error(alloc::format!("The process could not be ended: {e}."))),
+            Ok(Err(e)) => self.dialog = Some(Dialog::Error(format!("The process could not be ended: {e}."))),
             Err(_) => self.dialog = Some(Dialog::Error("The application launcher is not responding.".into())),
         }
         // Give the kernel a moment to tear the process down, then refresh.
@@ -258,12 +249,12 @@ impl TaskManager {
             Dialog::ConfirmKill { koid, title, system } => {
                 let (heading, message) = if *system {
                     (
-                        alloc::format!("End system process “{title}”?"),
+                        format!("End system process “{title}”?"),
                         "This process is part of Veda. Ending it can make the system unstable or stop it from working."
                             .to_string(),
                     )
                 } else {
-                    (alloc::format!("End “{title}”?"), "Unsaved work in this app will be lost.".to_string())
+                    (format!("End “{title}”?"), "Unsaved work in this app will be lost.".to_string())
                 };
                 match ui.message_box(&heading, &message, &["End task", "Cancel"]) {
                     Some(0) => {
@@ -376,11 +367,11 @@ impl App for TaskManager {
     }
 }
 
-fn main() -> i32 {
+fn main() {
     let tm = TaskManager::new();
     let mut spec = WindowSpec::new("Task Manager", 900, 600);
     spec.app_id = "taskmgr".into();
     spec.min_width = 640;
     spec.min_height = 420;
-    vui::run(spec, tm)
+    std::process::exit(vui::run(spec, tm));
 }

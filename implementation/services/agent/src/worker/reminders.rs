@@ -6,9 +6,6 @@
 //! `crate::timers`). A timer's label is kept as one line without the
 //! notices' marker: the language model chose it, from whatever it was told.
 
-use alloc::format;
-use alloc::string::String;
-
 use serde_json::{Value, json};
 
 use super::{Ctx, desktop};

@@ -449,9 +449,12 @@ impl Init {
         match code {
             vabi::EXIT_CODE_CRASHED => println!("{} crashed", child.name),
             vabi::EXIT_CODE_PANICKED => println!("{} panicked", child.name),
+            // A POSIX program's fault: a program on the standard library
+            // that panics aborts.
+            c if vabi::crashed(c) => println!("{} crashed (signal {})", child.name, vabi::exit_signal(c).unwrap_or(0)),
             _ => println!("{} exited with code {}", child.name, code),
         }
-        if child.origin != Origin::Service && matches!(code, vabi::EXIT_CODE_CRASHED | vabi::EXIT_CODE_PANICKED) {
+        if child.origin != Origin::Service && vabi::crashed(code) {
             // Tell the watchers (the shell shows a notification). Watchers
             // that went away are dropped; a full channel just misses this.
             let event = TaskEvent::Crashed { koid, name: child.name.clone() };

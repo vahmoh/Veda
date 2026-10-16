@@ -5,9 +5,11 @@
 //! and threads start and how a thread frees its own stack as it ends, the
 //! C runtime symbols of the user target
 //! (`x86_64-unknown-linux-musl`), and what programs learn of the processor.
-//! In the driver VM's Linux guest, Linux's system calls (`linux`).
+//! In the driver VM's Linux guest, Linux's system calls (`linux`). On the
+//! standard library (`x86_64-unknown-veda`) programs and threads start as
+//! it starts them, and the C library has the C runtime's symbols.
 
-#[cfg(all(feature = "runtime", not(test)))]
+#[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 mod crt;
 #[cfg(veda_guest)]
 pub(crate) mod linux;
@@ -48,7 +50,7 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
 
 /// The process entry point (`--entry=_vrt_start`, see `vbuild`). The
 /// kernel passes the bootstrap channel handle in `rdi`.
-#[cfg(all(feature = "runtime", not(test)))]
+#[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 #[unsafe(no_mangle)]
 pub extern "sysv64" fn _vrt_start(bootstrap: vabi::RawHandle, _arg: usize) -> ! {
     crate::start::start(bootstrap)
@@ -56,7 +58,7 @@ pub extern "sysv64" fn _vrt_start(bootstrap: vabi::RawHandle, _arg: usize) -> ! 
 
 /// Where the threads [`crate::thread::Builder`] spawns start: the kernel
 /// passes the thread's argument in `rdi`.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub(crate) extern "sysv64" fn thread_entry(arg: usize, _unused: usize) -> ! {
     crate::thread::run(arg)
 }
@@ -68,7 +70,7 @@ pub(crate) extern "sysv64" fn thread_entry(arg: usize, _unused: usize) -> ! {
 ///
 /// # Safety
 /// Nothing may use the range afterwards: it is gone once the thread ends.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub(crate) unsafe fn exit_unmapping(base: usize, len: usize) -> ! {
     // SAFETY: `vm_unmap(self, base, len)`, then `thread_exit()`; the kernel
     // preserves the argument registers, and nothing between the two

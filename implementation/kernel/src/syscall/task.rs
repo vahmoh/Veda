@@ -155,8 +155,11 @@ pub fn thread_exit() -> SysResult {
     sched::exit_current()
 }
 
+/// Sets a thread's priority; handle 0 is the calling thread's (a thread
+/// library that keeps its threads' handles to itself lets a thread set its
+/// own).
 pub fn thread_set_priority(raw: RawHandle, prio: usize) -> SysResult {
-    let t = get_thread(raw, Rights::MANAGE)?;
+    let t = if raw == vabi::INVALID_HANDLE { sched::current() } else { get_thread(raw, Rights::MANAGE)? };
     if prio == 0 || prio > vabi::priority::REALTIME {
         return Err(Error::InvalidArgs);
     }

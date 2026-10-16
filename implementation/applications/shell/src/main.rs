@@ -27,11 +27,6 @@
 //! longer than a few seconds, so that one that hangs does not freeze the
 //! desktop.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod approval;
 mod apps;
@@ -49,10 +44,6 @@ mod volume;
 mod wallpaper;
 mod wifi;
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use vabi::{WaitItem, signals};
 use vgfx::Rect;
 use vipc::{Decode, Encode};
@@ -67,8 +58,6 @@ use vui::window::Display;
 use vui::{Host, Icon, Ui};
 
 use wallpaper::{Loader, Wallpaper};
-
-vrt::entry!(main);
 
 /// Where the chosen wallpaper is remembered.
 const WALLPAPER_CONFIG: &str = "/home/user/.config/wallpaper";
@@ -323,7 +312,7 @@ pub fn read_file(vfs: &vfs::Client, path: &str, max: u64) -> Option<Vec<u8>> {
     if len > max {
         return None;
     }
-    let mut buf = alloc::vec![0u8; len as usize];
+    let mut buf = vec![0u8; len as usize];
     vmo.read(0, &mut buf).ok()?;
     Some(buf)
 }
@@ -931,7 +920,7 @@ impl Shell {
                 }
                 Action::OpenNetworkSettings => {
                     self.close_popup_of(PopupKind::Wifi);
-                    self.launch("settings", alloc::vec![String::from("network")]);
+                    self.launch("settings", vec![String::from("network")]);
                 }
                 Action::SetVolume(v, muted) => self.set_volume(v, muted),
                 Action::ShowDesktop => self.show_desktop(),
@@ -1344,7 +1333,12 @@ impl shell::Server for Shell {
     }
 }
 
-fn main() -> i32 {
+fn main() {
+    std::process::exit(run());
+}
+
+/// Runs the program; its exit code.
+fn run() -> i32 {
     let display = match vui::window::connect() {
         Ok(d) => d,
         Err(e) => {

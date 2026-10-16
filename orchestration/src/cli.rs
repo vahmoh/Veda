@@ -32,6 +32,11 @@ COMMANDS:
     test        Run host unit tests, then the in-system integration tests
                 (--ui also runs the GUI automation scripts in verification/ui
                 and the agent's in verification/agent, several at once: --jobs N)
+    clippy      Check every crate with Clippy, warnings as errors, each for what it
+                is built for: the crates with host tests (their tests too), the
+                loader, the kernel and the POSIX layer, the programs on vrt for the
+                user target, and those on Rust's standard library for Veda's own
+                target, with the toolchain's Clippy
     toolchain   Build the toolchain from implementation/ports/: GCC, binutils and
                 musl (a cross compiler for this machine and the native one the
                 image installs in /system), the media libraries, and Rust for

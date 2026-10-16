@@ -3,8 +3,6 @@
 
 //! `volume`: the sound's volume and mute, set through the audio service.
 
-use alloc::string::String;
-
 use serde_json::{Value, json};
 use vproto::audio::audio;
 

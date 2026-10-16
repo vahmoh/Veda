@@ -3,10 +3,6 @@
 
 //! `wifi`: the Wi-Fi radio and networks, through the Wi-Fi service.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 use vnet::wifi;
 use vproto::wlan::ConnState;

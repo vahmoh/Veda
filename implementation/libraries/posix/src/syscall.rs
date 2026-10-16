@@ -9,7 +9,7 @@ use crate::error::SysResult;
 use crate::fd::{self, Object};
 use crate::linux::errno::*;
 use crate::linux::{Timespec, clock, nr};
-use crate::{fs, io, mem, process, signal, socket, system, thread, time, user, vfs};
+use crate::{epoll, eventfd, fs, io, mem, process, signal, socket, system, thread, time, user, vfs};
 
 /// Deadline (monotonic ns) of a relative timeout, `None` for none.
 unsafe fn deadline_ts(ts: usize) -> Result<Option<u64>, isize> {
@@ -61,9 +61,67 @@ fn unsupported(n: usize) -> SysResult {
 /// The arguments are the program's: pointers must be valid for the call.
 pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
     // SAFETY: forwarded to the caller.
-    if let Some(result) = unsafe { crate::arch::syscall::dispatch(n, a) } {
-        return result;
+    let r = unsafe { crate::arch::syscall::dispatch(n, a) }.unwrap_or_else(|| unsafe { generic(n, a) });
+    // A program met a descriptor not ready, or emptied or filled it: the
+    // epoll instances watching it look at it again (an edge-triggered one
+    // reports it once it is ready again, whatever happened meanwhile).
+    // SAFETY: the call's own arguments, which it used.
+    if reads_or_writes(n) && epoll::watching() && (r == Err(EAGAIN) || unsafe { short(n, a, &r) }) {
+        fd::not_ready(a[0] as i32);
     }
+    r
+}
+
+/// Whether read or write call `n` moved fewer bytes than it was asked to,
+/// but some: what tells its descriptor was emptied (all there was read) or
+/// filled (all there was room for written). Edge-triggered epoll's users
+/// count on that as on Linux: tokio, after such a read or write, waits for
+/// the next event before it reads or writes again.
+///
+/// # Safety
+/// `a` must be the call's arguments, which it used.
+unsafe fn short(n: usize, a: [usize; 6], r: &SysResult) -> bool {
+    let Ok(done) = *r else { return false };
+    // SAFETY (whole match): per the caller, the buffers' descriptions are
+    // the program's.
+    let asked = unsafe {
+        match n {
+            nr::READ | nr::WRITE | nr::RECVFROM | nr::SENDTO => a[2],
+            nr::READV | nr::WRITEV => io::iovecs(a[1], a[2]).map(|v| v.iter().map(|v| v.len).sum()).unwrap_or(0),
+            nr::RECVMSG | nr::SENDMSG => user::read::<crate::linux::Msghdr>(a[1])
+                .and_then(|m| io::iovecs(m.iov, m.iovlen))
+                .map(|v| v.iter().map(|v| v.len).sum())
+                .unwrap_or(0),
+            _ => return false,
+        }
+    };
+    0 < done && done < asked
+}
+
+/// Whether call `n` reads or writes the descriptor its first argument is.
+fn reads_or_writes(n: usize) -> bool {
+    matches!(
+        n,
+        nr::READ
+            | nr::WRITE
+            | nr::READV
+            | nr::WRITEV
+            | nr::RECVFROM
+            | nr::SENDTO
+            | nr::RECVMSG
+            | nr::SENDMSG
+            | nr::RECVMMSG
+            | nr::SENDMMSG
+            | nr::ACCEPT
+            | nr::ACCEPT4
+    )
+}
+
+/// The calls of Linux's generic ABI.
+///
+/// # Safety
+/// As [`dispatch`].
+unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
     let fd0 = a[0] as i32;
     // SAFETY (whole match): the arguments are passed on as the program gave
     // them, each call documenting what it requires of them.
@@ -103,13 +161,31 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
             nr::PWRITEV2 => io::pwritev2(fd0, a[1], a[2], a[3] as i64, a[5] as u32),
             nr::FACCESSAT | nr::FACCESSAT2 => fs::faccessat(fd0, a[1], a[2] as u32),
             nr::PIPE2 => io::pipe2(a[0], a[1] as u32),
-            nr::SOCKETPAIR => socket::socketpair(a[0], a[1], a[3]),
-            nr::SOCKET => Err(EAFNOSUPPORT),
-            nr::SENDTO => socket::sendto(fd0, a[1], a[2], a[3] as u32, a[4]),
-            nr::RECVFROM => socket::recvfrom(fd0, a[1], a[2], a[3] as u32, a[5]),
+            nr::SOCKETPAIR => socket::socketpair(a[0], a[1], a[2], a[3]),
+            nr::SOCKET => socket::socket(a[0], a[1], a[2]),
+            nr::BIND => socket::bind(fd0, a[1], a[2]),
+            nr::CONNECT => socket::connect(fd0, a[1], a[2]),
+            nr::LISTEN => socket::listen(fd0, a[1] as i32),
+            nr::ACCEPT => socket::accept4(fd0, a[1], a[2], 0),
+            nr::ACCEPT4 => socket::accept4(fd0, a[1], a[2], a[3] as u32),
+            nr::GETSOCKNAME => socket::name(fd0, a[1], a[2], false),
+            nr::GETPEERNAME => socket::name(fd0, a[1], a[2], true),
+            nr::SETSOCKOPT => socket::setsockopt(fd0, a[1] as u32, a[2] as u32, a[3], a[4]),
+            nr::GETSOCKOPT => socket::getsockopt(fd0, a[1] as u32, a[2] as u32, a[3], a[4]),
+            nr::SENDTO => socket::sendto(fd0, a[1], a[2], a[3] as u32, a[4], a[5]),
+            nr::RECVFROM => socket::recvfrom(fd0, a[1], a[2], a[3] as u32, a[4], a[5]),
             nr::SENDMSG => socket::sendmsg(fd0, a[1], a[2] as u32),
             nr::RECVMSG => socket::recvmsg(fd0, a[1], a[2] as u32),
+            nr::SENDMMSG => socket::sendmmsg(fd0, a[1], a[2], a[3] as u32),
+            nr::RECVMMSG => socket::recvmmsg(fd0, a[1], a[2], a[3] as u32, deadline_ts(a[4])?),
             nr::SHUTDOWN => socket::shutdown(fd0, a[1] as u32),
+            nr::EPOLL_CREATE1 => epoll::epoll_create1(a[0] as u32),
+            nr::EPOLL_CTL => epoll::epoll_ctl(fd0, a[1] as u32, a[2] as i32, a[3]),
+            // The signal mask stays as it is, as with `ppoll`.
+            nr::EPOLL_PWAIT => epoll::epoll_wait(fd0, a[1], a[2] as i32, epoll::deadline_ms(a[3] as i32)),
+            nr::EPOLL_PWAIT2 => epoll::epoll_wait(fd0, a[1], a[2] as i32, deadline_ts(a[3])?),
+            nr::EVENTFD2 => eventfd::eventfd2(a[0] as u32, a[1] as u32),
+            nr::PIDFD_OPEN => process::pidfd_open(fd0, a[1] as u32),
             nr::SCHED_YIELD => {
                 vrt::thread::yield_now();
                 Ok(0)

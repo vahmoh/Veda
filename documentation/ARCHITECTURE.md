@@ -136,15 +136,29 @@ handle the VMO was mapped with allows; parts of mappings can be unmapped.
 one mapping: its pages are freed as soon as they are unmapped, and
 `vm_decommit` frees them while the mapping stays (they read as zeros
 afterwards), which is what C's `munmap` and `madvise` need. Frames are freed
-only after the TLB shootdown that makes them unreachable. The kernel half
-of every address space is shared.
+only after the TLB shootdown that makes them unreachable. They come from a
+bitmap: a single frame from where the last one was found, a run of them (a
+DMA buffer, or the kernel heap's allocation of more than 2 KiB, such as the
+buffer of a system call that carries data) as low as one fits, looked for a
+word of the bitmap at a time (`vframes`), as the frames in use below the
+first run can be most of memory. The kernel half of every address space is
+shared.
 
 **IPC.** Channels carry messages of up to 64 KiB plus up to 64 handles.
-Bulk data (window buffers, audio rings, file contents) travels in shared
-VMOs. *Sockets* are byte streams for pipes and terminals: a 256 KiB buffer
-each way, writes of up to 4096 bytes that are all-or-nothing (as POSIX
-promises for pipes), half-closing to end a stream, and endpoints that can
-be duplicated, so several processes can share one. Threads wait on signals
+An endpoint has one handle at a time, unless its channel was made shared
+(`channel_flags::SHARED`): then, as a socket's, it can be duplicated, so
+several processes hold it, each message read by one of them (the POSIX
+layer's sockets, which processes share). Bulk data (window buffers, audio
+rings, file contents) travels in shared VMOs. *Sockets* are byte streams
+for pipes, terminals, the POSIX layer's Unix domain stream sockets and
+its TCP connections' bytes: a 256 KiB buffer each way, writes of up to
+4096 bytes that are all-or-nothing (as POSIX promises for pipes),
+half-closing to end a stream, endpoints that can be duplicated, so several
+processes can share one, and handles that travel with the bytes they were
+written with (a read takes one write's at most, and ends before the
+next's), as descriptors do over Linux's Unix domain sockets. No channel or
+socket may carry a handle that would keep it alive through what is queued
+(`object::would_cycle`). Threads wait on signals
 of several objects at once: `object_wait_many` registers a thread with
 each of up to 1024 objects for one wait; a *port* keeps registrations
 (`object_wait_async`: a packet with a key once the object's signals are
@@ -193,23 +207,35 @@ has ended and left its stack, which is how thread libraries join threads.
 
 * **Executables.** Every program, and the kernel, is a static ELF64
   executable for the System V ABI (x86-64's on AMD64); only the loader is
-  a PE/COFF image, the one format UEFI's firmware starts. Veda's own
-  programs are built with `#![no_std]` for Linux's musl target, which gives
-  stable Rust hard-float SSE code (the kernel is soft-float), and linked by
-  `rust-lld` with nothing of Linux's or musl's: position-independent, their
-  relative relocations packed (`DT_RELR`), and marked by a note
-  (`velf::veda`). C programs are static ELF64 executables too, built with
-  GCC and musl (see [C on Veda](C.md)). So are programs on Rust's standard
-  library: Rust compiles them for its own target for Veda, and GCC links
-  them with the C library, which the standard library stands on (see
-  [Rust on Veda](RUST.md)).
-* **`vrt`** is the runtime each of Veda's own programs links: entry
-  point and startup message, syscall wrappers, heap (TLSF over private
-  memory: free pages go back to the system once they have stayed free for
-  a while, and allocations of 4 MiB and more are mappings of their own),
-  threads (each stack with guard pages below it, and freed when the thread
-  ends, whether it was joined or let go), futex-based locks that make no
-  system call uncontended, time, logging and process creation.
+  a PE/COFF image, the one format UEFI's firmware starts. Veda's programs
+  are of two kinds (see [Rust on Veda](RUST.md)):
+  * **on Rust's standard library**: the applications, and the services
+    that gain from it (the shell, the agent). Rust compiles them for its
+    own target for Veda, and GCC links them with the C library, which the
+    standard library stands on: they are POSIX programs, as C programs
+    are (static ELF64 executables built with GCC and musl; see
+    [C on Veda](C.md));
+  * **on `vrt` alone**: what the standard library stands on or runs
+    before (`init`, the file system, the network stack), what drives
+    hardware (the device manager, drivers, the driver VM) and what must
+    answer in time (the window system, the sound mixer). They are built
+    with `#![no_std]` for Linux's musl target, which gives stable Rust
+    hard-float SSE code (the kernel is soft-float), and linked by
+    `rust-lld` with nothing of Linux's or musl's: position-independent,
+    their relative relocations packed (`DT_RELR`), and marked by a note
+    (`velf::veda`).
+* **`vrt`** is Veda's runtime: syscall wrappers and kernel objects, heap
+  (TLSF over private memory: free pages go back to the system once they
+  have stayed free for a while, and allocations of 4 MiB and more are
+  mappings of their own), threads (each stack with guard pages below it,
+  and freed when the thread ends, whether it was joined or let go),
+  futex-based locks that make no system call uncontended, time, logging
+  and process creation; for a program on `vrt` alone, also its entry point
+  and startup message. In a program on the standard library, which links
+  it too, the standard library is the runtime (entry point, panics,
+  threads), the C library's POSIX layer has the startup handles and gives
+  it a registry channel of the program's own (`veda_registry`), and its
+  heap stays the global allocator.
 * **Process creation** happens in user space (`vrt::process::Spawn`):
   create a process, map the program's image from VMOs, create a thread, and
   start it with a bootstrap channel carrying the startup message
@@ -223,12 +249,18 @@ has ended and left its stack, which is how thread libraries join threads.
   gives where the failing code is in its program's image, which for
   Veda's programs is its address in the executable that `target/` keeps
   with its symbols (the system image's copies have none).
-* **C programs** run on musl, whose system calls go to `vposix`
-  (`implementation/libraries/posix`), a POSIX layer in Rust linked into the
-  C library: files are the VFS's open files, pipes and terminals are
-  sockets, threads are kernel threads, `posix_spawn` starts processes. The
-  Terminal runs them with a terminal of their own (canonical line editing,
-  `termios`, Ctrl+C). See [C on Veda](C.md).
+* **C programs** and programs on Rust's standard library run on musl,
+  whose system calls go to `vposix` (`implementation/libraries/posix`), a
+  POSIX layer in Rust linked into the C library: files are the VFS's open
+  files, pipes and terminals are sockets, network sockets are `netd`'s
+  and names its resolver's, Unix domain sockets are named by the VFS and
+  are kernel sockets and channels between programs (descriptors travel
+  on them), sockets of both kinds go to other processes, which share
+  them, `epoll` waits with a kernel port (so tokio runs), threads are
+  kernel threads, `posix_spawn` starts processes, and the standard output
+  and error of a program started without them (by `init`) are the system
+  log, a line at a time. The Terminal runs them with a terminal of their
+  own (canonical line editing, `termios`, Ctrl+C). See [C on Veda](C.md).
 * **Services** register with the registry in `init`; clients connect by name.
   Protocols are declared with the `vipc` macros, which generate typed client
   stubs and server dispatch code. With every connection the registry hands
@@ -426,6 +458,19 @@ has ended and left its stack, which is how thread libraries join threads.
   numbers and whether a file is a program (by its first bytes: ELF or `#!`;
   directory listings say so too), and `/dev` holds `null`, `zero`, `full`,
   `random` and `urandom`.
+* A POSIX program's Unix domain socket bound to a path is a node of the
+  writable file system (`bind_socket`), which `stat` and listings show
+  and `remove` takes away, and which the home disk does not keep; one bound
+  to an abstract name (Linux's) has the name, apart for each type of
+  socket, in the VFS's abstract namespace while it is open. The VFS
+  keeps the socket's inbox, a shared channel whose other end the program
+  holds (and every process the socket went to, which take what comes on
+  it in turn), and writes on it the connections to the socket once it
+  listens (with the end the connecting program made: the bytes then go
+  between the two programs, past the VFS) and the datagrams sent to it; a
+  full inbox makes connecting and sending wait. Who connects or sends is
+  told to the other end: the process, as it says, and the name of its
+  socket, if the same program bound it.
 * Every path is at most 4096 bytes long (`MAX_PATH`, as Linux's
   `PATH_MAX`), so every file can be named, and moves that would take a
   folder's contents deeper are refused. The root, `/home`, `/home/user`,
@@ -507,10 +552,18 @@ Networking is three layers of processes (details in
   to `netd` as `wlan0`.
 * **`netd`** (on `vnetstack` and smoltcp) runs interfaces, DHCP, IPv6
   autoconfiguration, routes, a caching DNS resolver and the sockets that
-  applications use through `vnet`, one channel per socket with
-  credit-based flow control in both directions: what a client has not
-  taken stays in the stack (a TCP connection's window closes), so a slow
-  client holds back only its own sockets.
+  applications use through `vnet` (and C programs and programs on Rust's
+  standard library through the POSIX layer's sockets, `std::net`'s), one
+  channel per socket with credit-based flow control in both directions:
+  what a client has not taken stays in the stack (a TCP connection's
+  window closes), so a slow client holds back only its own sockets. The
+  POSIX layer's sockets go to other processes, which share them, so it
+  opens them otherwise: their channels are shared, a TCP connection's
+  bytes go on a kernel socket between the program and the service, whose
+  buffers are the flow control, and a UDP socket's datagrams go without
+  credit (the service reads no more of a socket's datagrams to send while
+  256 KiB of them wait). A listener's connections, a connection's bytes
+  and a socket's datagrams go to whichever process takes them first.
 
 Both services check who is asking, by the identity the registry gives
 each connection: network devices attach only from the device manager (and
@@ -1216,12 +1269,15 @@ word) are in `vagent`, tested on the host. See [The agent](AGENT.md).
 * `systest`, a program that runs inside Veda and exercises kernel objects
   (sockets, memory protection, private memory, exit futexes, ending a job),
   threads, the file system, the launcher, crash reports and the restart of
-  the window system, and runs C and C++ programs: `verification/c/posix.c`
-  checks the C library and the POSIX layer, `verification/c/cxx.cc` the C++
-  library. `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping over
-  Ethernet or Wi-Fi; the network cards' scripts have it check ping, TCP
-  and HTTP against a server on the host instead (`nettest local`), so
-  that they need no Internet.
+  the window system, and runs C, C++ and Rust programs:
+  `verification/c/posix.c` checks the C library and the POSIX layer,
+  `verification/c/cxx.cc` the C++ library, `verification/rust/stdlib.rs`
+  Rust's standard library on them, and `verification/stdcrates` crates
+  that need it, as Veda's ports of their foundations have them.
+  `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping over Ethernet or
+  Wi-Fi; the network cards' scripts have it check ping, TCP and HTTP
+  against a server on the host instead (`nettest local`), so that they
+  need no Internet.
 * Network host tests: the 802.11 protocol and its cryptography against
   published vectors, a station against an access point, two TCP/IP stacks
   over a simulated cable, and the TLS client against a rustls server and
@@ -1309,6 +1365,7 @@ of their own (see Architectures above).
 | `implementation/guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `implementation/libraries/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
 | `implementation/libraries/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
+| `implementation/libraries/frames` | the searches of the kernel's bitmap of physical memory frames, a word at a time |
 | `implementation/libraries/netstack`, `implementation/libraries/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
@@ -1316,7 +1373,7 @@ of their own (see Architectures above).
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
 | `implementation/ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Rust, its compiler and standard library for Veda's target; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa; the crates smoltcp and zune-jpeg, which Cargo builds in place of their releases; and the fonts, unmodified |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`) |
-| `verification/` | in-system tests, C and C++ test programs (`verification/c`) and GUI automation scripts |
+| `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`) and GUI automation scripts |
 | `generation/` | host programs: media generators |
 | `orchestration/` | build orchestration, disk image creation, QEMU automation |
 | `documentation/` | documentation |

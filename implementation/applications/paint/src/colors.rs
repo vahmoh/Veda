@@ -8,8 +8,6 @@
 //! The square is drawn into a picture once for each hue (integer arithmetic for each of its
 //! pixels), and the hues' bar once.
 
-use alloc::string::String;
-
 use paint_core::color::{self, Hsv};
 use paint_core::settings::Settings;
 use vgfx::{Align, Bitmap, Color, Rect};
@@ -202,7 +200,7 @@ impl ColorDialog {
             if before != self.alpha {
                 self.hex = color::hex(self.color());
             }
-            let percent = alloc::format!("{}%", libm::roundf(self.alpha / 2.55) as i32);
+            let percent = format!("{}%", libm::roundf(self.alpha / 2.55) as i32);
             ui.label(Rect::new(sq.right() + 40, ay, 60, 24), &percent, Font::Bold, 13.0, t.text, Align::Left);
 
             // The colours made before.

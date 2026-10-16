@@ -5,9 +5,6 @@
 //! opened explicitly), with metadata read from the first and last few
 //! kilobytes of each file.
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use vaudio::source;
 use vfiles::path::{HOME, join};
 use vproto::fs::{open_flags, vfs};

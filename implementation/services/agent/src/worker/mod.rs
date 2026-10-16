@@ -36,11 +36,8 @@ mod wallpaper;
 mod wifi;
 mod windows;
 
-use alloc::collections::{BTreeMap, VecDeque};
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use serde_json::Value;
 use vabi::RawHandle;
@@ -220,7 +217,7 @@ fn user_files() -> vfiles::Fs {
     match fs.renounce_private() {
         Ok(()) => fs,
         Err(e) => {
-            vrt::println!("the file system did not take the worker's private access away ({e}): no file actions");
+            println!("the file system did not take the worker's private access away ({e}): no file actions");
             vfiles::Fs::unavailable()
         }
     }

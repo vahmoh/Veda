@@ -135,6 +135,12 @@ impl Stream {
 
     /// [`write`](Self::write), raising `SIGPIPE` or not (`MSG_NOSIGNAL`).
     pub fn send(&self, data: &[u8], nonblock: bool, sigpipe: bool) -> Result<usize, isize> {
+        self.send_until(data, nonblock, sigpipe, vabi::DEADLINE_INFINITE)
+    }
+
+    /// [`send`](Self::send), waiting for room until `deadline` at most:
+    /// then `EAGAIN` (a socket's send time-out, as on Linux), or what went.
+    pub fn send_until(&self, data: &[u8], nonblock: bool, sigpipe: bool, deadline: u64) -> Result<usize, isize> {
         let mut done = 0;
         // An error after some bytes went: those are the result.
         let failed = |done: usize, e: isize| if done > 0 { Ok(done) } else { Err(e) };
@@ -142,11 +148,11 @@ impl Stream {
             match self.socket.write(&data[done..]) {
                 Ok(n) => done += n,
                 Err(Error::ShouldWait) if nonblock => return failed(done, EAGAIN),
-                Err(Error::ShouldWait) => {
-                    if let Err(e) = self.socket.wait(WRITABLE | PEER_CLOSED, vabi::DEADLINE_INFINITE) {
-                        return failed(done, error::kernel(e));
-                    }
-                }
+                Err(Error::ShouldWait) => match self.socket.wait(WRITABLE | PEER_CLOSED, deadline) {
+                    Ok(_) => {}
+                    Err(Error::TimedOut) => return failed(done, EAGAIN),
+                    Err(e) => return failed(done, error::kernel(e)),
+                },
                 Err(Error::PeerClosed | Error::BadState) => {
                     if sigpipe {
                         signal::raise(crate::linux::sig::PIPE);
@@ -157,6 +163,20 @@ impl Stream {
             }
         }
         Ok(done)
+    }
+
+    /// Another handle to the endpoint, for another process, with the
+    /// access a descriptor has and no more: the read end of a pipe cannot
+    /// be written there either.
+    pub fn shared_handle(&self, readable: bool, writable: bool) -> Result<vrt::object::Handle, isize> {
+        let mut rights = self.socket.0.basic_info().map_err(error::kernel)?.rights;
+        if !readable {
+            rights &= !vabi::Rights::READ.0;
+        }
+        if !writable {
+            rights &= !vabi::Rights::WRITE.0;
+        }
+        self.socket.0.duplicate(Some(vabi::Rights(rights))).map_err(error::kernel)
     }
 
     /// Bytes that can be read without waiting.

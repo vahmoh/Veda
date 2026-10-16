@@ -19,11 +19,6 @@
 //!   notification): [`crate::approval`].
 //! * [`draw_orb`]: the agent's tray item, a small ring that does the same.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
-use num_traits::Float;
 use vgfx::{Align, Canvas, Color, Rect};
 use vproto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
 use vrt::object::Channel;
@@ -313,7 +308,7 @@ impl AgentWindow {
             if matches!(m.agent.state(), Some(AgentState::Off | AgentState::Error)) {
                 let link = Rect::new(w / 2 - 70, y + 44, 140, 30);
                 if ui.button(link, "Open Settings") {
-                    m.push(Action::Launch("settings".into(), alloc::vec!["agent".into()]));
+                    m.push(Action::Launch("settings".into(), vec!["agent".into()]));
                 }
             }
         }

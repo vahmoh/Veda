@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libc: Rust's bindings of the C library, which crates that need the
+# standard library use beside it (directly, or through rustix and
+# getrandom) in Veda's programs on it. A crate: its release on crates.io,
+# which Cargo builds.
+name = "libc"
+version = "0.2.190"
+url = "https://static.crates.io/crates/libc/libc-0.2.190.crate"
+sha256 = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+license = "MIT OR Apache-2.0"

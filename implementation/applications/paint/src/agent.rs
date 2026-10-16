@@ -15,11 +15,6 @@
 //! unsaved changes (`discard_changes`) destructive. Opening or starting a picture over unsaved
 //! changes is refused: the agent saves them or discards them first.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use paint_core::Document;
 use paint_core::codec::{self, format_of};
 use paint_core::color;
@@ -329,7 +324,7 @@ fn write(app: &mut PaintApp, path: &str, format: vimage::Format) -> Result<Value
     app.fs.write(path, &bytes).map_err(|e| format!("{} could not be written: {e}", show_path(path)))?;
     app.doc.saved_version(version, path, format);
     app.agent_file = true;
-    vrt::println!("the agent saved {path}");
+    println!("the agent saved {path}");
     Ok(json!({ "saved": show_path(path), "format": format.name(), "bytes": bytes.len() }))
 }
 

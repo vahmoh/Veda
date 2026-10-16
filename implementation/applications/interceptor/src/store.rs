@@ -5,9 +5,6 @@
 //! settings, in `~/.config/interceptor/save` (the text of
 //! [`Save::to_text`]), read at start and written whenever they change.
 
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use interceptor_game::career::Save;
 use vproto::fs::vfs;
 use vrt::object::Vmo;
@@ -37,14 +34,14 @@ impl Store {
         let Some(stat) = vfs.stat(PATH.into()).ok().and_then(|r| r.ok()) else { return Save::default() };
         if stat.size > MOST {
             // Not read (and replaced at the next save).
-            vrt::println!("{PATH} is too large to be a save: ignored");
+            println!("{PATH} is too large to be a save: ignored");
             return Save::default();
         }
         let Some((vmo, len)) = vfs.read_file(PATH.into()).ok().and_then(|r| r.ok()) else {
             return Save::default();
         };
         // No more than was looked at, should it have grown since.
-        let mut buf: Vec<u8> = alloc::vec![0; len.min(MOST) as usize];
+        let mut buf: Vec<u8> = vec![0; len.min(MOST) as usize];
         if vmo.read(0, &mut buf).is_err() {
             return Save::default();
         }

@@ -1,0 +1,18 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -64,4 +64,4 @@
+ [lints.rust.unexpected_cfgs]
+ level = "warn"
+ priority = 0
+-check-cfg = ['cfg(target_os, values("cygwin"))']
++check-cfg = ['cfg(target_os, values("cygwin", "veda"))']
+--- a/src/unix.rs
++++ b/src/unix.rs
+@@ -91,6 +91,7 @@
+     #[cfg_attr(
+         any(
+             target_os = "linux",
++            target_os = "veda",
+             target_os = "hurd",
+             target_os = "redox",
+             target_os = "dragonfly",

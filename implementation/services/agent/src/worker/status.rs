@@ -3,8 +3,6 @@
 
 //! `get_status`: the time, the open windows, the volume and the network.
 
-use alloc::format;
-
 use serde_json::{Value, json};
 
 use super::{Ctx, now_text, windows::windows_json};

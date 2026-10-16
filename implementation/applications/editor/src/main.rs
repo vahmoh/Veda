@@ -10,18 +10,9 @@
 //! the find bar and the status bar; [`agent`] lets the voice agent read and
 //! write documents.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod view;
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 use core::fmt;
 
 use vfiles::format::human_size;
@@ -37,8 +28,6 @@ use vtext::{Document, Pos};
 use vui::{App, FileDialog, FileDialogResult, Font, Icon, Menu, MenuItem, Ui, WindowSpec};
 
 use view::{Command, TextView, ViewOptions};
-
-vrt::entry!(main);
 
 const DEFAULT_DIR: &str = "/home/user/Documents";
 const DEFAULT_FONT_SIZE: f32 = 14.0;
@@ -1101,12 +1090,12 @@ fn selected_chars(doc: &Document) -> usize {
     n + buf.line(b.line)[..b.col].chars().count()
 }
 
-fn main() -> i32 {
+fn main() {
     let args = vrt::env::args();
     let editor = Editor::new(args.get(1..).unwrap_or(&[]));
     let mut spec = WindowSpec::new("Text Editor", 980, 680);
     spec.min_width = 480;
     spec.min_height = 320;
     spec.app_id = "editor".into();
-    vui::run(spec, editor)
+    std::process::exit(vui::run(spec, editor));
 }

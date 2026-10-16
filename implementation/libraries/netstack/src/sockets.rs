@@ -623,10 +623,18 @@ impl Stack {
         if t.phase == Phase::Closed {
             return Err(t.error.unwrap_or(NetError::Closed));
         }
-        match self.with_tcp(id, |s| s.send_slice(data)) {
-            Some(Ok(n)) => Ok(n),
-            Some(Err(_)) | None => Err(NetError::Closed),
+        let sent = match self.with_tcp(id, |s| s.send_slice(data)) {
+            Some(Ok(n)) => n,
+            Some(Err(_)) | None => return Err(NetError::Closed),
+        };
+        // What is queued now has been seen: an acknowledgement that takes
+        // some of it, even in the same poll, makes the socket ready.
+        if let (Some(queued), Some(Entry::Tcp(t))) =
+            (self.with_tcp(id, |s| s.send_queue()), self.socks.map.get_mut(&id))
+        {
+            t.last_tx_queue = t.last_tx_queue.max(queued);
         }
+        Ok(sent)
     }
 
     /// Offers up to `max` received bytes (a contiguous run) to `take`,
@@ -657,6 +665,12 @@ impl Stack {
             })
             .unwrap_or(0)
         });
+        // What is left has been seen: data that comes after it, even in the
+        // same poll, makes the socket ready.
+        if let (Some(left), Some(Entry::Tcp(t))) = (self.with_tcp(id, |s| s.recv_queue()), self.socks.map.get_mut(&id))
+        {
+            t.last_rx_queue = t.last_rx_queue.min(left);
+        }
         Ok(n.unwrap_or(0))
     }
 
@@ -751,7 +765,8 @@ impl Stack {
     }
 
     /// Bytes waiting in a UDP socket's send buffers.
-    fn udp_send_queue(&self, id: SockId) -> usize {
+    /// Bytes of datagrams a UDP socket was given and has not sent yet.
+    pub fn udp_send_queue(&self, id: SockId) -> usize {
         match self.socks.map.get(&id) {
             Some(Entry::Udp(u)) => u
                 .members
@@ -781,8 +796,23 @@ impl Stack {
         };
         if taken {
             let _ = s.recv();
+            // What is left has been seen: a datagram that comes after it,
+            // even in the same poll, makes the socket ready.
+            let left: usize = self.udp_recv_queue(id);
+            if let Some(Entry::Udp(u)) = self.socks.map.get_mut(&id) {
+                u.last_rx = u.last_rx.min(left);
+            }
         }
         Some(taken)
+    }
+
+    /// Bytes of the datagrams a UDP socket has received and not given out.
+    fn udp_recv_queue(&self, id: SockId) -> usize {
+        let Some(Entry::Udp(u)) = self.socks.map.get(&id) else { return 0 };
+        u.members
+            .iter()
+            .filter_map(|&(iface, h)| Some(self.iface(iface)?.sockets.get::<udp::Socket>(h).recv_queue()))
+            .sum()
     }
 
     // ---------------------------------------------------------------
@@ -1221,11 +1251,7 @@ impl Stack {
 
     fn maintain_udp(&mut self, id: SockId) {
         let Some(Entry::Udp(u)) = self.socks.map.get(&id) else { return };
-        let rx: usize = u
-            .members
-            .iter()
-            .filter_map(|&(iface, h)| Some(self.iface(iface)?.sockets.get::<udp::Socket>(h).recv_queue()))
-            .sum();
+        let rx = self.udp_recv_queue(id);
         let tx = if u.full_at.is_some() { self.udp_send_queue(id) } else { 0 };
         let Some(Entry::Udp(u)) = self.socks.map.get_mut(&id) else { return };
         // Datagrams arrived, or room to send freed up after a datagram did

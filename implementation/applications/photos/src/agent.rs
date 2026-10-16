@@ -9,11 +9,6 @@
 //! Nothing here needs the user's consent: Photos never changes or deletes files (turning a
 //! picture only turns the view), and the wallpaper is easily changed back.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
-
 use vfiles::format::human_size;
 use vfiles::kind::is_image;
 use vfiles::path::file_stem;

@@ -7,16 +7,20 @@ These rules apply to every crate in the repository.
 
 ## Language and dependencies
 
-* Rust 2024 edition, **stable** toolchain (tested with 1.99). No nightly
-  features, no `RUSTC_BOOTSTRAP`.
+* Rust 2024 edition, **stable** toolchain (tested with 1.99): the
+  development machine's, and the toolchain's, which is the same release
+  built with Veda's target for the programs on Rust's standard library
+  ([Rust on Veda](RUST.md)). No nightly features, no `RUSTC_BOOTSTRAP`.
 * **Proven libraries first.** Where a mature, widely used Rust
   implementation exists (of a protocol, of cryptography, of a file format,
   of text handling, of numerical code, of an ABI), Veda uses it rather than
   writing its own; Veda's own code is what is particular to Veda and the
   glue that fits libraries to it. [Libraries](DEPENDENCIES.md) lists the
   libraries in use, and what Veda keeps of its own and why. A new
-  dependency must build `no_std` (see Library crates), be declared in the
-  workspace's `[workspace.dependencies]`, and come with a reason; avoid
+  dependency of a library or of a program on `vrt` must build `no_std`
+  (see Library crates); a program on the standard library may use crates
+  that need it. Every dependency is declared in the workspace's
+  `[workspace.dependencies]`, and comes with a reason; avoid
   crates with large dependency trees, and a second generation of a crate
   family already used. Measure what it adds to a program: programs are
   linked without whole-program LTO, so what a crate makes reachable
@@ -24,9 +28,19 @@ These rules apply to every crate in the repository.
   every program that calls it. A library that is wrong is fixed, not
   worked around in silence: it becomes a port (`implementation/ports/`, as
   smoltcp and zune-jpeg are: its release with an explained patch, which
-  Cargo builds in its place), and the bug is reported upstream. `core`,
-  `alloc` and (for host tools and the driver VM's Linux programs only) `std`
-  are available.
+  Cargo builds in its place), and the bug is reported upstream. `core`
+  and `alloc` are available everywhere, `std` to the programs on Rust's
+  standard library (applications, and the services that gain from it),
+  the host tools and the driver VM's Linux programs.
+* **Programs on the standard library, or on `vrt` alone.** An application,
+  or a service that gains from threads, channels, files and errors of the
+  standard library's or from crates that need it, is a program on the
+  standard library (`Program::std` in `orchestration/src/components.rs`).
+  What the standard library stands on or runs before (`init`, the file
+  system, the network stack), what drives hardware (the device manager,
+  drivers, the driver VM) and what must answer in time (the window
+  system, the sound mixer) stays on `vrt` alone (`Program::native`). See
+  [Rust on Veda](RUST.md).
 * **Rust only**, performance-critical code included (see Performance below).
   Third-party software that Veda builds (the toolchain: GCC, binutils,
   musl, and Rust for Veda's own target; ...) comes as *ports*
@@ -97,17 +111,21 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
 |-----------|--------|-------|
 | `implementation/boot/` (UEFI loader) | `x86_64-unknown-uefi` | freestanding, soft-float, PE/COFF (the format UEFI's firmware starts) |
 | `implementation/kernel/` | `x86_64-unknown-none` | freestanding, soft-float, ELF64 executable linked at its address |
-| user space (`implementation/libraries/`, `implementation/services/`, `implementation/drivers/`, `implementation/applications/`) | `x86_64-unknown-linux-musl`, `#![no_std]` | hard-float SSE2, position-independent ELF64 executables with nothing of Linux's or musl's, linked by `rust-lld` |
+| user space on `vrt` alone (`implementation/libraries/`, the system services in `implementation/services/`, `implementation/drivers/`) | `x86_64-unknown-linux-musl`, `#![no_std]` | hard-float SSE2, position-independent ELF64 executables with nothing of Linux's or musl's, linked by `rust-lld` |
+| user space on Rust's standard library (`implementation/applications/`, the services that use it) | `x86_64-unknown-veda` (the `rust` port's) | static position-independent ELF executables on the C library, linked by `x86_64-veda-gcc`; Veda's libraries in them as they are, `no_std` |
 | `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | the System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | static ELF executables on musl |
-| programs on Rust's standard library (`verification/rust`) | `x86_64-unknown-veda` (the `rust` port's) | static ELF executables on the C library, linked by `x86_64-veda-gcc` |
+| the standard library's tests (`verification/rust`) | `x86_64-unknown-veda` | as above, and each also at a fixed address |
 | the driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | static, on Linux; built from `implementation/guest/` (its `.cargo/config.toml`), into `target/guest` |
 | `orchestration/`, host tools | host (`std`) | |
 
 ## Library crates
 
 * Libraries are `#![no_std]` (plus `extern crate alloc;` when they allocate)
-  so they can run inside Veda **and** be unit-tested on the host.
+  so they can run inside Veda, in programs on `vrt` and on the standard
+  library alike, **and** be unit-tested on the host. A part only programs
+  on the standard library have is under `#[cfg(target_os = "veda")]`, with
+  `extern crate std;` (`apps_common::store`).
   Tests use `#[cfg(test)] extern crate std;`, never `cfg_attr(not(test), no_std)`.
 * Floating-point functions such as `sqrt`, `sin`, `floor` or `powf` are **not**
   available in `core` on stable. Use `libm` (`libm::sinf(x)`), or num-traits'
@@ -119,9 +137,9 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
   has no `std`, with `cargo build -p <crate> --target x86_64-unknown-none`
   (`.cargo/arch/amd64/config.toml` makes the RustCrypto and dalek crates
   use their portable code there, as LLVM cannot build their SIMD code for
-  it). Building Veda (`cargo orchestration build`), whose programs link
-  without `std`, is the final check. `vimage` runs only in user space and
-  does not build soft-float (`fast_image_resize`'s SIMD code).
+  it). Building Veda (`cargo orchestration build`), whose programs on
+  `vrt` link without `std`, is the final check. `vimage` runs only in user
+  space and does not build soft-float (`fast_image_resize`'s SIMD code).
 
 ## Pixels and colors
 
@@ -153,6 +171,9 @@ optimisations (`--release` is the default for `cargo orchestration`).
 ## Formatting and testing
 
 * `cargo fmt` (see `rustfmt.toml`, `max_width = 120`).
+* `cargo orchestration clippy`: Clippy, warnings as errors, over every
+  crate as Veda builds it (the programs on the standard library with the
+  toolchain's Clippy, which knows Veda's target).
 * Unit tests live next to the code (`#[cfg(test)] mod tests`). Run them with
   `cargo test -p <crate>`; `cargo orchestration test` runs the full suite
   plus the QEMU integration tests.

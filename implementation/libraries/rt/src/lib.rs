@@ -22,11 +22,20 @@
 //! veda_guest` (their configuration sets it:
 //! `implementation/guest/.cargo/config.toml`): their system calls then go
 //! through the bridge (`guest`), and threads are Linux's (`std`'s).
+//!
+//! Programs on Rust's standard library, built for Veda's own target
+//! (`target_os = "veda"`, on the C library), link `vrt` too, for Veda's
+//! objects and services. The standard library is their runtime there (the
+//! entry point, the panic handler, the C symbols) and their threads are its
+//! own ([`thread`]); the C library's POSIX layer holds the handles the
+//! process started with, which [`env`] asks it for. `vrt`'s heap stays the
+//! global allocator (the `runtime` feature), so that a program allocates as
+//! Veda's others do.
 
 #![no_std]
 
 extern crate alloc;
-#[cfg(any(test, veda_guest))]
+#[cfg(any(test, veda_guest, target_os = "veda"))]
 extern crate std;
 
 pub use alloc::{boxed, format, rc, string, vec};
@@ -35,7 +44,7 @@ pub use vabi;
 #[cfg(target_arch = "x86_64")]
 #[path = "arch/amd64/mod.rs"]
 pub mod arch;
-#[cfg(all(feature = "runtime", not(test)))]
+#[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 mod crt;
 pub mod env;
 #[cfg(veda_guest)]
@@ -45,7 +54,7 @@ pub mod io;
 pub mod object;
 pub mod pool;
 pub mod process;
-#[cfg(all(feature = "runtime", not(test)))]
+#[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 pub mod start;
 pub mod sync;
 pub mod sys;
@@ -58,12 +67,13 @@ pub use object::{
 };
 
 // The runtime's pieces are a real program's: a unit test of the crate has
-// the host's allocator, panic handler and C library.
+// the host's allocator, panic handler and C library, and a program on the
+// standard library its panic handler and C library.
 #[cfg(all(feature = "runtime", not(test)))]
 #[global_allocator]
 static HEAP: heap::Heap = heap::Heap::new();
 
-#[cfg(all(feature = "runtime", not(test)))]
+#[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Formatted without allocating, in case the heap is what failed.

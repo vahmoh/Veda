@@ -12,10 +12,6 @@
 //! destination is worked out as it is used, and one that exists is refused
 //! before anything is done.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 use vagent::files::{self as paths, HOME};
 use vfiles::path::{file_name, parent};

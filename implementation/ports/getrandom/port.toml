@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# getrandom: random bytes from the operating system, for the crates that
+# need them (rand, tempfile, uuid, ...) in Veda's programs on the standard
+# library. A crate: its release on crates.io, which Cargo builds. Its
+# releases before this one are the port getrandom-0.3.
+name = "getrandom"
+version = "0.4.3"
+url = "https://static.crates.io/crates/getrandom/getrandom-0.4.3.crate"
+sha256 = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+license = "MIT OR Apache-2.0"

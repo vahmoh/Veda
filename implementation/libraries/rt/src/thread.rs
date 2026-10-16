@@ -16,26 +16,29 @@
 //! threads and lets them go (a service with a thread per connection, a
 //! [pool](crate::pool) dropped) gives every stack back.
 //!
-//! In a guest of the driver VM, threads are Linux's (`std`'s): the
-//! program's runtime is Linux's there.
+//! On the standard library (in a guest of the driver VM, and in Veda's own
+//! programs on it) threads are the standard library's, which the C library
+//! starts and joins: the program's runtime is its own there. A priority
+//! asked for then is the one a thread sets itself as it starts (Linux's
+//! threads keep theirs: they are Linux's business).
 
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use alloc::boxed::Box;
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use alloc::sync::Arc;
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use vabi::{Error, nr};
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use vabi::{map_flags, signals};
 
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use crate::object::{Handle, Thread};
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use crate::sync::Mutex;
 use crate::sys::call;
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 use crate::vm;
 
 /// Default stack size for spawned threads.
@@ -44,18 +47,18 @@ pub const DEFAULT_STACK: usize = 256 * 1024;
 const MIN_STACK: usize = 16 * 1024;
 
 /// [`Packet::state`]: the thread runs, and its handle is there.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 const RUNNING: u32 = 0;
 /// The thread has stored its result and ends leaving its stack to the
 /// handle.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 const FINISHED: u32 = 1;
 /// The handle is gone: the thread frees its stack as it ends.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 const DETACHED: u32 = 2;
 
 /// What a thread and its handle share.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 struct Packet<T> {
     /// [`RUNNING`], then [`FINISHED`] (by the thread) or [`DETACHED`] (by
     /// the handle), whichever comes first.
@@ -65,14 +68,14 @@ struct Packet<T> {
 
 /// A thread's stack: its guard region, then the stack proper, one private
 /// mapping.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 #[derive(Debug, Clone, Copy)]
 struct Stack {
     base: usize,
     len: usize,
 }
 
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 impl Stack {
     /// A stack of `size` bytes (a multiple of the page size) and its guard.
     fn new(size: usize) -> Result<Stack, Error> {
@@ -96,7 +99,7 @@ impl Stack {
 
 /// What a new thread starts with: its body, which runs the closure, stores
 /// its result and says whether the handle is gone, and its stack.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 struct Start {
     body: Box<dyn FnOnce() -> bool + Send>,
     stack: Stack,
@@ -104,7 +107,7 @@ struct Start {
 
 /// A thread [`Builder::spawn`] started: joining it gives its result;
 /// dropping it detaches the thread (see the module's documentation).
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub struct JoinHandle<T> {
     thread: Thread,
     packet: Arc<Packet<T>>,
@@ -113,7 +116,7 @@ pub struct JoinHandle<T> {
     stack: Option<Stack>,
 }
 
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 impl<T> JoinHandle<T> {
     /// Waits for the thread to finish and returns its result.
     pub fn join(mut self) -> Result<T, Error> {
@@ -132,7 +135,7 @@ impl<T> JoinHandle<T> {
     }
 }
 
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 impl<T> Drop for JoinHandle<T> {
     fn drop(&mut self) {
         let Some(stack) = self.stack.take() else { return };
@@ -151,11 +154,11 @@ impl<T> Drop for JoinHandle<T> {
     }
 }
 
-/// A thread of the guest (Linux's).
-#[cfg(veda_guest)]
+/// A thread of the standard library's.
+#[cfg(any(veda_guest, target_os = "veda"))]
 pub struct JoinHandle<T>(std::thread::JoinHandle<T>);
 
-#[cfg(veda_guest)]
+#[cfg(any(veda_guest, target_os = "veda"))]
 impl<T> JoinHandle<T> {
     /// Waits for the thread to finish and returns its result.
     pub fn join(self) -> Result<T, Error> {
@@ -165,7 +168,7 @@ impl<T> JoinHandle<T> {
 
 /// A thread [`Builder::spawn`] started, from the architecture's thread
 /// entry point (`arch`): `arg` is the [`Start`] it leaked.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub(crate) fn run(arg: usize) -> ! {
     let (body, stack) = {
         // SAFETY: `arg` is the box leaked by `Builder::spawn`, ours now.
@@ -221,7 +224,7 @@ impl Builder {
     }
 
     /// Starts a thread running `f`.
-    #[cfg(not(veda_guest))]
+    #[cfg(not(any(veda_guest, target_os = "veda")))]
     pub fn spawn<F, T>(self, f: F) -> Result<JoinHandle<T>, Error>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -274,18 +277,24 @@ impl Builder {
     }
 
     /// Starts a thread running `f`.
-    #[cfg(veda_guest)]
+    #[cfg(any(veda_guest, target_os = "veda"))]
     pub fn spawn<F, T>(self, f: F) -> Result<JoinHandle<T>, Error>
     where
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        // Priorities are Linux's business in the guest.
-        let _ = self.priority;
+        // Priorities are Linux's business in the guest; on Veda a thread
+        // sets its own (the C library keeps its handle).
+        let priority = if cfg!(veda_guest) { None } else { self.priority };
         std::thread::Builder::new()
             .name(self.name.into())
             .stack_size(self.stack_size)
-            .spawn(f)
+            .spawn(move || {
+                if let Some(p) = priority {
+                    let _ = set_priority(p);
+                }
+                f()
+            })
             .map(JoinHandle)
             .map_err(|_| Error::NoMemory)
     }
@@ -300,6 +309,12 @@ where
     Builder::new().spawn(f).expect("failed to spawn thread")
 }
 
+/// Sets the calling thread's scheduling priority (see `vabi::priority`):
+/// for a thread the standard library started, which [`Builder`] did not.
+pub fn set_priority(priority: usize) -> Result<(), Error> {
+    call(nr::THREAD_SET_PRIORITY, [vabi::INVALID_HANDLE as usize, priority, 0, 0, 0, 0]).map(|_| ())
+}
+
 /// Gives up the rest of this time slice.
 pub fn yield_now() {
     let _ = call(nr::YIELD, [0; 6]);
@@ -311,7 +326,7 @@ pub fn yield_now() {
 ///
 /// # Safety
 /// Nothing may use the range afterwards: it is gone once the thread ends.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub unsafe fn exit_unmapping(base: usize, len: usize) -> ! {
     // SAFETY: per the caller.
     unsafe { crate::arch::exit_unmapping(base, len) }

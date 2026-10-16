@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 
-use vabi::{Error, HandleBasicInfo, ProcessInfo, RawHandle, Rights, WaitItem, info_topic, nr};
+use vabi::{Error, HandleBasicInfo, ProcessInfo, RawHandle, Rights, ThreadInfo, WaitItem, info_topic, nr};
 
 use crate::sys::{self, call, call2};
 
@@ -186,8 +186,20 @@ pub struct Message {
 
 impl Channel {
     pub fn create() -> Result<(Channel, Channel), Error> {
+        Channel::create_with(0)
+    }
+
+    /// A channel whose endpoints may be duplicated ([`Handle::duplicate`]),
+    /// so that several processes hold one: each message written on the
+    /// other end is read by one of them (see
+    /// [`vabi::channel_flags::SHARED`]).
+    pub fn create_shared() -> Result<(Channel, Channel), Error> {
+        Channel::create_with(vabi::channel_flags::SHARED)
+    }
+
+    fn create_with(flags: u32) -> Result<(Channel, Channel), Error> {
         let mut out = [0u32; 2];
-        call(nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, 0, 0, 0, 0, 0])?;
+        call(nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, flags as usize, 0, 0, 0, 0])?;
         // SAFETY: the kernel just gave us both handles.
         Ok(unsafe { (Channel(Handle::from_raw(out[0])), Channel(Handle::from_raw(out[1]))) })
     }
@@ -310,9 +322,52 @@ impl Socket {
     }
 
     /// Reads what is buffered, up to `buf.len()` bytes, without blocking.
-    /// `PeerClosed` marks the end of the stream.
+    /// `PeerClosed` marks the end of the stream. Handles that came with the
+    /// bytes are closed.
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
         call(nr::SOCKET_READ, [self.raw() as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0])
+    }
+
+    /// [`write`](Self::write), with `handles` going with the first byte of
+    /// `data` (which there must be): they come out with the read that
+    /// reaches it. They are consumed even on error (closed when no byte
+    /// goes).
+    pub fn write_with(&self, data: &[u8], handles: Vec<Handle>) -> Result<usize, Error> {
+        let raws: Vec<RawHandle> = handles.into_iter().map(Handle::into_raw).collect();
+        call(
+            nr::SOCKET_WRITE,
+            [self.raw() as usize, data.as_ptr() as usize, data.len(), raws.as_ptr() as usize, raws.len(), 0],
+        )
+    }
+
+    /// [`read`](Self::read), and the handles that came with the bytes it
+    /// read (those of one write at most: the read ends before the next
+    /// write's): up to `cap` of them, and how many more were closed.
+    pub fn read_with(&self, buf: &mut [u8], cap: usize) -> Result<(usize, Vec<Handle>, usize), Error> {
+        let cap = cap.min(vabi::CHANNEL_MAX_HANDLES);
+        let mut raws: Vec<RawHandle> = alloc::vec![vabi::INVALID_HANDLE; cap];
+        let mut actual = [0u32; 2];
+        let n = call(
+            nr::SOCKET_READ,
+            [
+                self.raw() as usize,
+                buf.as_mut_ptr() as usize,
+                buf.len(),
+                raws.as_mut_ptr() as usize,
+                cap,
+                actual.as_mut_ptr() as usize,
+            ],
+        )?;
+        let got = (actual[0] as usize).min(cap);
+        // SAFETY: the kernel put these handles in our table for us.
+        let handles = raws[..got].iter().map(|&r| unsafe { Handle::from_raw(r) }).collect();
+        Ok((n, handles, actual[1] as usize))
+    }
+
+    /// Copies what [`read`](Self::read) would read into `buf`, and leaves
+    /// it to be read.
+    pub fn peek(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        call(nr::SOCKET_PEEK, [self.raw() as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0])
     }
 
     /// Writes all of `data`, waiting for room as needed.
@@ -472,6 +527,25 @@ impl Event {
 
     pub fn clear(&self) -> Result<(), Error> {
         self.0.signal(vabi::signals::SIGNALED, 0)
+    }
+}
+
+impl Thread {
+    /// The thread's state, priority and processor time.
+    pub fn info(&self) -> Result<ThreadInfo, Error> {
+        let mut info = ThreadInfo::default();
+        call(
+            nr::OBJECT_INFO,
+            [
+                self.raw() as usize,
+                info_topic::THREAD,
+                &mut info as *mut _ as usize,
+                core::mem::size_of_val(&info),
+                0,
+                0,
+            ],
+        )?;
+        Ok(info)
     }
 }
 

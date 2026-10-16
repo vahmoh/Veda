@@ -27,6 +27,10 @@ pub fn fs(e: FsError) -> isize {
         FsError::TooMany => ENFILE,
         FsError::NotEmpty => ENOTEMPTY,
         FsError::Denied => EACCES,
+        FsError::IsSocket => ENXIO,
+        FsError::Refused => ECONNREFUSED,
+        FsError::WrongType => EPROTOTYPE,
+        FsError::Busy => EAGAIN,
     }
 }
 

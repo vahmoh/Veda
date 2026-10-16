@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# socket2: sockets with every option the C library has, which tokio (and
+# other crates) build theirs with in Veda's programs on the standard
+# library. A crate: its release on crates.io, which Cargo builds.
+name = "socket2"
+version = "0.6.5"
+url = "https://static.crates.io/crates/socket2/socket2-0.6.5.crate"
+sha256 = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+license = "MIT OR Apache-2.0"

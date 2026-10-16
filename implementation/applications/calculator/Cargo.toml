@@ -17,13 +17,9 @@ bench = false
 vrt = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
-vfiles = { workspace = true }
 vui = { workspace = true }
 apps-common = { path = "../common" }
 calculator-core = { path = "core" }
-
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

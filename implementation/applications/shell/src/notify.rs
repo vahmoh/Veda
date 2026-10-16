@@ -10,9 +10,6 @@
 //! they carry Allow and Deny buttons and stay until answered (or until the
 //! request expires).
 
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vgfx::{Align, Rect};
 use vproto::display::{WindowKind, WindowSpec};
 use vrt::println;

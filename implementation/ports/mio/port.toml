@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# mio: the event loop under tokio (epoll and eventfd, on Veda as on Linux)
+# in Veda's programs on the standard library. A crate: its release on
+# crates.io, which Cargo builds.
+name = "mio"
+version = "1.2.4"
+url = "https://static.crates.io/crates/mio/mio-1.2.4.crate"
+sha256 = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+license = "MIT"

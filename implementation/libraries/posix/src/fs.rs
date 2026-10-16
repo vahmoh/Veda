@@ -120,7 +120,11 @@ pub fn stat_desc(desc: &Description) -> Result<linux::Stat, isize> {
         Object::Dir(d) => vfs::to_linux(&vfs::stat(&d.path)?),
         Object::Stream(s) if s.is_tty() => pseudo(linux::mode::IFCHR | 0o620, s.koid),
         Object::Stream(s) => pseudo(linux::mode::IFIFO | 0o600, s.koid),
-        Object::Null | Object::Log => pseudo(linux::mode::IFCHR | 0o666, 0),
+        Object::Inet(s) => pseudo(linux::mode::IFSOCK | 0o777, s.id()),
+        Object::Unix(s) => pseudo(linux::mode::IFSOCK | 0o777, s.id()),
+        // Linux's anonymous inodes have no type.
+        Object::EventFd(_) | Object::Epoll(_) | Object::Pidfd(_) => pseudo(0o600, 0),
+        Object::Null | Object::Log(_) => pseudo(linux::mode::IFCHR | 0o666, 0),
     })
 }
 
@@ -361,9 +365,13 @@ pub unsafe fn statfs(name: usize, buf: usize) -> SysResult {
 
 /// `fstatfs`: the file system of what `fd` is. A file's is where it was
 /// opened (if it is still there) or the one its metadata names; a pipe's
-/// or the terminal's a pipe file system's, with no space.
+/// or the terminal's a pipe file system's, a network socket's a socket file
+/// system's, and an eventfd's or epoll instance's that of anonymous inodes,
+/// with no space.
 pub unsafe fn fstatfs(fd: i32, buf: usize) -> SysResult {
     const PIPEFS_MAGIC: i64 = 0x5049_5045;
+    const SOCKFS_MAGIC: i64 = 0x534f_434b;
+    const ANON_INODE_FS_MAGIC: i64 = 0x0904_1934;
     let desc = fd::get(fd)?;
     let s = match &desc.object {
         Object::Dir(d) => statfs_of(&d.path)?,
@@ -378,7 +386,13 @@ pub unsafe fn fstatfs(fd: i32, buf: usize) -> SysResult {
         Object::Stream(_) => {
             Statfs { kind: PIPEFS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() }
         }
-        Object::Null | Object::Log => statfs_of("/dev")?,
+        Object::Inet(_) | Object::Unix(_) => {
+            Statfs { kind: SOCKFS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() }
+        }
+        Object::EventFd(_) | Object::Epoll(_) | Object::Pidfd(_) => {
+            Statfs { kind: ANON_INODE_FS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() }
+        }
+        Object::Null | Object::Log(_) => statfs_of("/dev")?,
     };
     // SAFETY: the program passed a `struct statfs`.
     unsafe { user::write(buf, s)? };

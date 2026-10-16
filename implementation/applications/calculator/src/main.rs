@@ -14,18 +14,11 @@
 //! Backspace, Delete for CE, Esc for C, F9 to change a sign, the arrows to move in the
 //! expression, Ctrl+C and Ctrl+V, Ctrl+H for the history and Alt+1 to Alt+4 for the modes.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod display;
 mod keypad;
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
+use std::path::Path;
 
 use calculator_core::keypad::{Action, Options};
 use calculator_core::units::{CATEGORIES, convert};
@@ -37,10 +30,7 @@ use vui::{App, Font, Icon, MenuItem, Ui, WindowSpec};
 
 use display::Drawn;
 
-vrt::entry!(main);
-
 /// Where the Calculator keeps what it remembers.
-const CONFIG_DIR: &str = "/home/user/.config/calculator";
 const STATE_FILE: &str = "/home/user/.config/calculator/state";
 /// The largest state file read (bytes): a full history is some 10 KB.
 const STATE_MAX: usize = 256 * 1024;
@@ -87,7 +77,6 @@ const SHORTCUTS: [(&str, &str); 17] = [
 
 /// What the Calculator remembers, kept in its file.
 struct Store {
-    fs: vfiles::Fs,
     /// What the file holds (so that nothing is written that is already there).
     written: String,
     /// When to write next, if something changed.
@@ -96,11 +85,11 @@ struct Store {
 
 impl Store {
     fn open() -> Store {
-        Store { fs: vfiles::Fs::connect(), written: String::new(), due: None }
+        Store { written: String::new(), due: None }
     }
 
     fn load(&mut self) -> Calculator {
-        match self.fs.read_limited(STATE_FILE, STATE_MAX) {
+        match apps_common::store::read(Path::new(STATE_FILE), STATE_MAX) {
             Ok(bytes) => {
                 self.written = String::from_utf8_lossy(&bytes).into_owned();
                 store::load(&self.written)
@@ -116,10 +105,9 @@ impl Store {
         if text == self.written {
             return;
         }
-        let _ = self.fs.mkdir_all(CONFIG_DIR);
-        match self.fs.write(STATE_FILE, text.as_bytes()) {
+        match apps_common::store::write(Path::new(STATE_FILE), text.as_bytes()) {
             Ok(()) => self.written = text,
-            Err(e) => vrt::println!("could not save the state: {e}"),
+            Err(e) => eprintln!("could not save the state: {e}"),
         }
     }
 }
@@ -989,12 +977,12 @@ impl App for CalcApp {
     }
 }
 
-fn main() -> i32 {
+fn main() {
     let app = CalcApp::new();
-    vrt::println!("{} mode", app.calc.mode().name());
+    println!("{} mode", app.calc.mode().name());
     let mut spec = WindowSpec::new("Calculator", 420, 660);
     spec.min_width = 320;
     spec.min_height = 500;
     spec.app_id = "calculator".into();
-    vui::run(spec, app)
+    std::process::exit(vui::run(spec, app));
 }

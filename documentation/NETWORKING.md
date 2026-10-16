@@ -31,6 +31,10 @@ talk over kernel channels; the kernel knows nothing about networks.
   (`implementation/libraries/tls`) for TLS over a `TcpStream`, inside the
   application's own process; and `vweb` (`implementation/libraries/web`)
   for HTTP and WebSocket clients over either (HTTPS, secure WebSockets).
+  C programs, and programs on Rust's standard library (`std::net`), use
+  the POSIX layer's sockets (`implementation/libraries/posix/src/inet.rs`),
+  which are `netd`'s sockets too, and look names up with its resolver
+  (see [C on Veda](C.md)).
 
 Frames travel between processes through shared-memory rings
 (`vproto::netring`): a pair of single-producer/single-consumer rings per
@@ -79,6 +83,16 @@ identity, which a process cannot forge), and check it:
   that does not read leaves it in the stack, whose TCP window then closes;
   an accepted connection, the end of a stream or an error waits until the
   client's channel has room, which `netd` waits for.
+* The POSIX layer's sockets go to other processes, which share their
+  channels, and credit would go to whichever process read it. So a TCP
+  connection's bytes go on a kernel socket between the program and
+  `netd`, whose buffers are the flow control (what does not fit stays in
+  the stack, whose window closes), and its channel brings only the
+  connection and its failure; a UDP socket's datagrams go without credit,
+  `netd` reading no more of them from its channel while 256 KiB of them
+  wait to be sent, and sending those a program sent before it closed the
+  socket (for three seconds at most, as long as Linux waits for a neighbor
+  that does not answer).
 * A TCP client may send only what fits the stack's send buffer, so what it
   sent is there the moment it arrives: closing the socket delivers it,
   then a FIN. The connection then finishes on its own, within bounds: it
@@ -97,10 +111,15 @@ identity, which a process cannot forge), and check it:
   further attempts are refused.
 * Each wake-up attends to what changed: the sockets the stack reports
   ready (data, room to send, a state change, an accepted connection, a
-  ping result) and those whose client wrote or made room. Lookups' reply
+  ping result; data after what `netd` took, or room after what it queued,
+  however soon it comes) and those whose client wrote or made room. Lookups' reply
   channels are waited on like sockets, so a lookup whose client left is
   dropped at once. The status is worked out again only when something it
   depends on changed.
+* What crosses the loopback interface is taken in at once: a poll that
+  leaves frames on their way back makes the next poll due now, and
+  sockets are told of what a poll's last round brought them, so a
+  connection to the machine itself waits for no timer.
 * Ping reports why a request failed: no answer in time, or what a router
   said (destination or host unreachable, time to live exceeded, with the
   router's address), so pings with a small TTL find the routers on the
@@ -368,7 +387,10 @@ built `no_std`:
   included; and limits the rate of ARP requests and neighbor
   solicitations per address (upstream asked for no neighbor for a second
   after asking for any, so the first connection after a DNS lookup waited
-  a second for the gateway's address).
+  a second for the gateway's address); and takes what comes up to the
+  furthest edge of the receive window it advertised (a window rounded to
+  the scale's units can end short of an earlier one, and what the sender
+  sent past that end waited a second to be sent again).
 * **RustCrypto**: `sha1`, `sha2`, `hmac`, `pbkdf2`, `aes`, `ccm`, `cmac`,
   `aes-kw`, `p256` (SAE), `base16ct` (keys typed in hexadecimal), plus
   `subtle` (constant-time comparisons) and `zeroize`; `chacha20` and

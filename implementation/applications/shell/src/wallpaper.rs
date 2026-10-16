@@ -9,12 +9,9 @@
 //! the menus and the agent's approvals stay responsive meanwhile, whoever
 //! asked for the picture.
 
-use alloc::collections::VecDeque;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
-use num_traits::Float;
 use vabi::RawHandle;
 use vgfx::Bitmap;
 use vproto::shell::ShellError;
@@ -148,7 +145,7 @@ pub fn list(vfs: &vproto::vfs::Client) -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(Ok(entries)) = vfs.read_dir("/system/wallpapers".into()) {
         for e in entries.iter().filter(|e| !e.is_dir && vfiles::kind::is_image(&e.name)) {
-            out.push(alloc::format!("/system/wallpapers/{}", e.name));
+            out.push(format!("/system/wallpapers/{}", e.name));
         }
     }
     out.sort();

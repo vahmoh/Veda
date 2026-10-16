@@ -5,8 +5,6 @@
 //! so a tooltip is a small window of the notification layer (which never
 //! takes the keyboard focus) placed just above the hovered button.
 
-use alloc::string::String;
-
 use vgfx::{Align, Color, Rect};
 use vproto::display::{WindowKind, WindowSpec};
 use vui::window::Display;

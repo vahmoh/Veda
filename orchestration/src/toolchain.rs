@@ -19,7 +19,9 @@
 //! * **Rust**: its compiler, which runs on this machine, and its standard
 //!   library for this machine and for Veda's own target
 //!   (`arch::STD_TARGET`), where it stands on the C library (see
-//!   `documentation/RUST.md`); it builds the Rust test programs.
+//!   `documentation/RUST.md`), with its Clippy and its standard library's
+//!   source; it builds Veda's programs on the standard library
+//!   ([`std_rust`]) and the Rust test programs.
 //!
 //! Everything lives under `target/toolchain` (`$VEDA_TOOLCHAIN` overrides
 //! it): `downloads/` (the verified source archives), `src/` (unpacked and
@@ -88,18 +90,197 @@ pub fn rustc() -> Option<PathBuf> {
     (rustc.is_file() && std.is_dir()).then_some(rustc)
 }
 
-/// For `cargo orchestration doctor`: whether Rust, which is optional, has
-/// been built (`Ok`), and if not, whether it can be (`Err`).
+/// What builds Veda's programs on Rust's standard library: the toolchain's
+/// compiler, and the C toolchain's driver, which links them with the C
+/// library.
+pub struct StdRust {
+    rustc: PathBuf,
+    linker: PathBuf,
+}
+
+impl StdRust {
+    /// Cargo for Veda's own target (`arch::STD_TARGET`) with the toolchain's
+    /// compiler (build scripts and procedural macros too) and linker, in
+    /// [`std_target_dir`], the build machine's paths remapped as for Veda's
+    /// other programs.
+    pub fn cargo_for_programs(&self) -> Command {
+        let mut cmd = util::cargo_for(arch::STD_TARGET);
+        cmd.env("RUSTC", &self.rustc)
+            .env(cargo_target_env(arch::STD_TARGET, "LINKER"), &self.linker)
+            .env("CARGO_TARGET_DIR", std_target_dir());
+        c_compilers(&mut cmd);
+        cmd
+    }
+
+    /// `cargo clippy` with the toolchain's Clippy (`cargo-clippy` runs
+    /// Cargo with its driver in place of the compiler), for Veda's own
+    /// target, which the build machine's Clippy does not know.
+    pub fn cargo_clippy(&self) -> Result<Command> {
+        let clippy = self.rustc.with_file_name("cargo-clippy");
+        if !clippy.is_file() {
+            return Err(format!(
+                "the toolchain has no Clippy ({}): `cargo orchestration toolchain` builds it again with it",
+                clippy.display()
+            ));
+        }
+        let mut cmd = Command::new(clippy);
+        cmd.current_dir(util::workspace_root())
+            .arg("clippy")
+            .env("RUSTC", &self.rustc)
+            .env(cargo_target_env(arch::STD_TARGET, "LINKER"), &self.linker)
+            .env("CARGO_TARGET_DIR", std_target_dir());
+        c_compilers(&mut cmd);
+        Ok(cmd)
+    }
+
+    /// What tells one build of the toolchain's Rust from another: its
+    /// compiler's and its standard library's files for Veda (names, sizes,
+    /// times), which a build of the same release does not otherwise change.
+    fn fingerprint(&self) -> Result<String> {
+        let libs = rust_root().join("lib").join("rustlib").join(arch::STD_TARGET).join("lib");
+        let mut files = util::files_under(&libs)?;
+        files.push(self.rustc.clone());
+        files.sort();
+        let mut print = String::new();
+        for f in files {
+            let meta = std::fs::metadata(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+            let time = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+            print.push_str(&format!("{} {} {}\n", f.display(), meta.len(), time.map_or(0, |t| t.as_nanos())));
+        }
+        Ok(print)
+    }
+}
+
+/// Where Veda's programs on the standard library are built: a target
+/// directory of their own, as what the toolchain's compiler builds for this
+/// machine (build scripts, procedural macros) is its own too.
+pub fn std_target_dir() -> PathBuf {
+    util::target_dir().join("std")
+}
+
+/// Empties [`std_target_dir`] if the toolchain's Rust has been built again
+/// since it was filled: crates compiled against another build of the
+/// standard library do not link with this one, and Cargo, which knows a
+/// compiler by its version alone, would keep them.
+fn forget_other_builds(rust: &StdRust) -> Result {
+    let dir = std_target_dir();
+    let note = dir.join("toolchain-fingerprint");
+    let now = rust.fingerprint()?;
+    if std::fs::read_to_string(&note).is_ok_and(|built| built == now) {
+        return Ok(());
+    }
+    if dir.exists() {
+        util::status("Removing", format!("{}: built with another build of the toolchain's Rust", dir.display()));
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("removing {}: {e}", dir.display()))?;
+    }
+    util::create_dir_all(&dir)?;
+    util::write_atomically(&note, &now)
+}
+
+/// Removes `binaries`, programs on the standard library linked in
+/// `profile_dir`, if they were linked with another POSIX layer than the C
+/// library has now, so that Cargo links them again with it: it does not see
+/// the C library change. What it linked is `deps/<binary>-<hash>`, which
+/// the binary is a copy of: without it, Cargo builds the program again (but
+/// not the crates the program depends on). A note in `profile_dir` says
+/// which layer they were linked with.
+pub fn forget_old_links(profile_dir: &Path, binaries: &[&str]) -> Result {
+    let note = profile_dir.join("posix-layer");
+    let object = posix_layer_object();
+    let meta = std::fs::metadata(&object).map_err(|e| format!("{}: {e}", object.display()))?;
+    let time = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+    let now = format!("{} {}\n", meta.len(), time.map_or(0, |t| t.as_nanos()));
+    if std::fs::read_to_string(&note).is_ok_and(|linked| linked == now) {
+        return Ok(());
+    }
+    let linked = |name: &str| -> bool {
+        // `<binary>-<hash>`, the crate's name as rustc has it.
+        name.rsplit_once('-').is_some_and(|(stem, hash)| {
+            hash.len() == 16
+                && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                && binaries.iter().any(|b| b.replace('-', "_") == stem)
+        })
+    };
+    let deps = profile_dir.join("deps");
+    let mut gone: Vec<PathBuf> = binaries.iter().map(|b| profile_dir.join(b)).collect();
+    if let Ok(entries) = std::fs::read_dir(&deps) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_str().is_some_and(linked) {
+                gone.push(entry.path());
+            }
+        }
+    }
+    for path in gone {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("removing {}: {e}", path.display())),
+        }
+    }
+    util::create_dir_all(profile_dir)?;
+    util::write_atomically(&note, &now)
+}
+
+/// Names the C toolchain's compilers and archiver for Veda's own target
+/// where the `cc` crate looks for them (`CC_<target>` and the others), so
+/// that a crate that compiles C or C++ for it compiles them for Veda.
+fn c_compilers(cmd: &mut Command) {
+    let target = arch::STD_TARGET.replace('-', "_");
+    for (variable, tool) in [("CC", "gcc"), ("CXX", "g++"), ("AR", "ar")] {
+        cmd.env(format!("{variable}_{target}"), cross_tool(tool));
+    }
+}
+
+/// Cargo's environment variable for a setting of `target`'s
+/// (`CARGO_TARGET_<TRIPLE>_<SETTING>`).
+fn cargo_target_env(target: &str, setting: &str) -> String {
+    format!("CARGO_TARGET_{}_{setting}", target.to_uppercase().replace(['-', '.'], "_"))
+}
+
+/// The toolchain's Rust, for Veda's programs on the standard library; without
+/// it, an error that says how to build it.
+pub fn std_rust_tools() -> Result<StdRust> {
+    match (rustc(), cross_gcc()) {
+        (Some(rustc), Some(linker)) => Ok(StdRust { rustc, linker }),
+        _ => Err(format!(
+            "Veda's programs on Rust's standard library are built with the toolchain's Rust, which is not built \
+             ({}): build it once with `cargo orchestration toolchain` (about half an hour; documentation/RUST.md)",
+            rust_root().display()
+        )),
+    }
+}
+
+/// The toolchain's Rust for building Veda's programs on the standard
+/// library, with the C library's POSIX layer, which they link, up to date;
+/// the toolchain's lock is held until the build has done with it.
+pub fn std_rust() -> Result<(util::Lock, StdRust)> {
+    let rust = std_rust_tools()?;
+    let lock = lock()?;
+    check_ports();
+    refresh_posix_layer()?;
+    forget_other_builds(&rust)?;
+    Ok((lock, rust))
+}
+
+/// For `cargo orchestration doctor`: whether Rust for Veda's own target and
+/// the C toolchain that links its programs have been built (`Ok`), as
+/// Veda's programs on the standard library need, and if not, whether they
+/// can be (`Err`).
 pub fn rust_status() -> std::result::Result<String, String> {
-    if rustc().is_some() {
+    if let (Some(rustc), Some(_)) = (rustc(), cross_gcc()) {
         let version = Port::named("rust").map(|p| p.version).unwrap_or_default();
-        return Ok(format!("Rust {version} for {} ({})", arch::STD_TARGET, rust_root().display()));
+        let clippy = if rustc.with_file_name("clippy-driver").is_file() {
+            ""
+        } else {
+            ", without Clippy: `cargo orchestration toolchain` builds it again with it"
+        };
+        return Ok(format!("Rust {version} for {} ({}){clippy}", arch::STD_TARGET, rust_root().display()));
     }
     let how = match shell() {
-        Ok(_) => "`cargo orchestration toolchain` builds it".to_string(),
+        Ok(_) => "`cargo orchestration toolchain` builds it (about half an hour)".to_string(),
         Err(e) => format!("`cargo orchestration toolchain` builds it, but {e}"),
     };
-    Err(format!("not built (optional: Rust's standard library on Veda); {how}"))
+    Err(format!("not built (Veda's programs on Rust's standard library need it); {how}"))
 }
 
 /// Where the media libraries (dav1d, FFmpeg) and their tests are.
@@ -148,10 +329,12 @@ fn cross_tool(name: &str) -> PathBuf {
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
 /// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
-const POSIX_LAYER_EXPORTS: [&str; 22] = [
+const POSIX_LAYER_EXPORTS: [&str; 25] = [
     "__veda_syscall",
     "__veda_init",
     "__veda_spawn",
+    "__veda_lookup_name",
+    "__veda_dns_servers",
     "__veda_clone",
     "__veda_set_thread_area",
     "__veda_unmapself",
@@ -159,6 +342,7 @@ const POSIX_LAYER_EXPORTS: [&str; 22] = [
     "veda_close",
     "veda_duplicate",
     "veda_startup_handle",
+    "veda_registry",
     "veda_service_register",
     "veda_service_accept",
     "veda_service_connect",

@@ -3,10 +3,6 @@
 
 //! The pictures of one folder, and small helpers for paths and sizes.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vfiles::kind::is_image;
 use vfiles::path::{HOME, join, natural_cmp};
 use vproto::fs::FsError;

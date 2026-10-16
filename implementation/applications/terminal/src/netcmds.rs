@@ -6,10 +6,6 @@
 //! `vnet`; every wait is bounded, and the long ones (pinging, scanning,
 //! joining a network) stop between steps after Ctrl+C.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use terminal_core::screen::{Style, color};
 use vnet::wifi::{self, ConnState, WlanEvent};
 use vnet::{Duration, IpAddr, NetError};

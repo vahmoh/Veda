@@ -5,10 +5,6 @@
 //! down, and the running programs (of which the agent may end only
 //! applications).
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 
 use super::{Ctx, launcher};

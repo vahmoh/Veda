@@ -18,10 +18,6 @@
 //!   worker's queue; those that had started run to the end, and what they
 //!   did is told (see [`crate::approvals`]).
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vagent::deepgram::{self, Role, ServerMessage};
 use vagent::gate::{self, Verdict};
 use vagent::notice::Notice;
@@ -193,7 +189,7 @@ impl Agent {
         let c = self.config();
         deepgram::settings(&deepgram::SessionSettings {
             listen_model: c.listen_model.clone(),
-            keyterms: alloc::vec![c.name.clone()],
+            keyterms: vec![c.name.clone()],
             think_provider: c.think_provider.clone(),
             think_model: c.think_model.clone(),
             prompt: self.build_prompt(),
@@ -488,7 +484,7 @@ impl Agent {
         if self.session.is_none()
             && let Some(l) = &mut self.listener
         {
-            l.hear(&self.mic_buf, vrt::time::now_ns());
+            l.hear(&self.mic_buf, &self.playing_buf, &self.recorded_buf, vrt::time::now_ns());
             return;
         }
         if self.session.is_none() {

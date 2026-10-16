@@ -12,9 +12,7 @@
 //! connections (Settings opens one for each change it makes for the
 //! agent), in turn, sharing the agent's state.
 
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::sync::Arc;
 
 use vabi::{WaitItem, signals};
 use vagent::config::{self, Config};
@@ -44,8 +42,8 @@ fn log_fetch(url: &str, start: u64, bytes: Option<usize>) {
     let ms = (vrt::time::now_ns() - start) / 1_000_000;
     let path = url.split('?').next().unwrap_or(url);
     match bytes {
-        Some(b) => vrt::println!("{path}: {b} bytes in {ms} ms"),
-        None => vrt::println!("{path}: failed after {ms} ms"),
+        Some(b) => println!("{path}: {b} bytes in {ms} ms"),
+        None => println!("{path}: failed after {ms} ms"),
     }
 }
 
@@ -97,7 +95,7 @@ fn serve(incoming: &Incoming, admin: &Admin, added: &Event) {
             if conns.len() < MAX_CONNECTIONS {
                 conns.push((channel, who));
             } else {
-                vrt::println!("too many connections from Settings; one is closed");
+                println!("too many connections from Settings; one is closed");
             }
         }
         items.clear();
@@ -170,7 +168,7 @@ impl Session<'_> {
 
     /// GET with the key; maps failures to agent errors.
     fn get(&self, url: &str) -> Result<String, AgentError> {
-        let auth = alloc::format!("Token {}", self.key()?);
+        let auth = format!("Token {}", self.key()?);
         let start = vrt::time::now_ns();
         let r = vweb::http::fetch("GET", url, &[("Authorization", &auth)], &[], NET_TIMEOUT, 4 << 20);
         log_fetch(url, start, r.as_ref().map(|r| r.body.len()).ok());
@@ -178,11 +176,11 @@ impl Session<'_> {
             Ok(r) if r.status == 401 || r.status == 403 => Err(AgentError::BadKey),
             Ok(r) if (200..300).contains(&r.status) => Ok(r.text()),
             Ok(r) => {
-                vrt::println!("Deepgram answered {} for {}", r.status, url);
+                println!("Deepgram answered {} for {}", r.status, url);
                 Err(AgentError::Network)
             }
             Err(e) => {
-                vrt::println!("cannot reach Deepgram: {}", e);
+                println!("cannot reach Deepgram: {}", e);
                 Err(AgentError::Network)
             }
         }
@@ -242,12 +240,12 @@ impl agent::Server for Session<'_> {
             idle_timeout_s: c.idle_timeout_s,
         };
         if let Err(e) = new.validate() {
-            vrt::println!("refused settings: {}", e);
+            println!("refused settings: {}", e);
             return Err(AgentError::BadConfig);
         }
         s.config = new;
         s.save_config();
-        vrt::println!("settings changed");
+        println!("settings changed");
         Ok(())
     }
 
@@ -257,7 +255,7 @@ impl agent::Server for Session<'_> {
         if key.is_empty() {
             s.key = None;
             s.save_key();
-            vrt::println!("Deepgram key removed");
+            println!("Deepgram key removed");
             return Ok(());
         }
         if !config::valid_key(&key) {
@@ -265,7 +263,7 @@ impl agent::Server for Session<'_> {
         }
         s.key = Some(key);
         s.save_key();
-        vrt::println!("Deepgram key stored");
+        println!("Deepgram key stored");
         Ok(())
     }
 
@@ -273,7 +271,7 @@ impl agent::Server for Session<'_> {
         let text = self.get(deepgram::PROJECTS_URL)?;
         let v = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
         let name = v.pointer("/projects/0/name").and_then(|n| n.as_str()).unwrap_or("your project");
-        Ok(alloc::format!("The key works ({name})."))
+        Ok(format!("The key works ({name})."))
     }
 
     fn catalog(&mut self) -> Result<ModelCatalog, AgentError> {
@@ -293,7 +291,7 @@ impl agent::Server for Session<'_> {
                     detail: if v.accent.is_empty() {
                         v.description
                     } else {
-                        alloc::format!("{}, {}", v.accent, v.description)
+                        format!("{}, {}", v.accent, v.description)
                     },
                 })
                 .collect(),
@@ -313,7 +311,7 @@ impl agent::Server for Session<'_> {
         if voice.is_empty() || voice.len() > 80 || !voice.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err(AgentError::BadConfig);
         }
-        let auth = alloc::format!("Token {}", self.key()?);
+        let auth = format!("Token {}", self.key()?);
         let body = deepgram::speak_body(PREVIEW);
         let url = deepgram::speak_url(&voice);
         let start = vrt::time::now_ns();
@@ -327,7 +325,7 @@ impl agent::Server for Session<'_> {
         );
         log_fetch(&url, start, r.as_ref().map(|r| r.body.len()).ok());
         let r = r.map_err(|e: WebError| {
-            vrt::println!("voice preview failed: {}", e);
+            println!("voice preview failed: {}", e);
             AgentError::Network
         })?;
         match r.status {
@@ -363,7 +361,7 @@ impl agent::Server for Session<'_> {
         let mut s = self.admin.shared.lock();
         s.memory.forget_all();
         s.save_memory();
-        vrt::println!("memory erased");
+        println!("memory erased");
         Ok(())
     }
 

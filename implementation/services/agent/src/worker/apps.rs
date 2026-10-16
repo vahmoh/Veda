@@ -12,10 +12,6 @@
 //! and two instances would take turns for ever. The agent works with the
 //! newest.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 use vabi::RawHandle;
 use vagent::policy;

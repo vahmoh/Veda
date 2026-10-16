@@ -12,17 +12,33 @@
 //! credit) is sent again when the channel has room, which the service waits
 //! for. A TCP client may only send what fits the stack's send buffer, so
 //! what it sent is in the stack the moment it arrives: closing its channel
-//! loses none of it.
+//! loses none of it. A client that closed its channel is sent nothing more,
+//! but what it sent before is handled all the same (its last data, its
+//! shutdown, its last datagrams, which the socket stays for until the stack
+//! has sent them, a few seconds at most), however soon the service finds
+//! the channel closed.
+//!
+//! A TCP connection whose bytes go on a kernel socket (the POSIX layer's,
+//! which processes share: see `vproto::net`) is moved between the stack and
+//! that socket as far as each has room. What its clients wrote before they
+//! closed their end is sent all the same: the connection is closed once the
+//! end is gone and all of it is in the stack. An error is reported on the
+//! channel before the service closes its end of the kernel socket, so that a
+//! client that finds the stream ended finds the error too. A UDP socket
+//! without credit stops reading its client's datagrams while those it has
+//! not sent yet are many, and writes received datagrams while the channel
+//! has room.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
-use vabi::Error;
+use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
+use vabi::{Error, RawHandle};
 use vipc::{Encode, Encoder};
 use vnetstack::{PingEvent, SockId, Stack, TcpState};
-use vproto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest};
-use vrt::object::Channel;
+use vproto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest, UDP_UNMETERED_WINDOW};
+use vrt::object::{Channel, Socket};
 
 /// Bytes of datagrams a UDP client may send ahead of what the stack has
 /// taken.
@@ -76,14 +92,45 @@ enum Kind {
         /// The client finished sending.
         shutdown: bool,
     },
-    Listener,
+    /// A TCP connection whose bytes go on a kernel socket.
+    Bytes(Bytes),
+    /// Its connections are of the `Bytes` kind, or else `Tcp`.
+    Listener {
+        bytes: bool,
+    },
     Udp {
-        /// Datagrams from the client not yet taken by the stack.
+        /// Datagrams from the client not yet taken by the stack, and their
+        /// bytes.
         pending: VecDeque<(SocketAddr, Vec<u8>)>,
+        pending_bytes: usize,
         /// Credit earned back (datagrams the stack took), not yet returned.
         credit_due: u32,
+        /// The client has credit (else the channel's room is the flow
+        /// control).
+        metered: bool,
     },
     Ping,
+}
+
+/// A TCP connection's bytes on a kernel socket.
+struct Bytes {
+    /// The service's end; `None` once the connection failed (which its
+    /// clients see as the end of the stream, the error reported first).
+    end: Option<Socket>,
+    /// `Connected` was sent.
+    announced: bool,
+    /// The end of the received stream was passed on: this end stopped
+    /// writing.
+    eof_sent: bool,
+    /// The clients' stream ended (their end stopped writing, or all of
+    /// them closed it), and the connection's after it.
+    shutdown: bool,
+    /// Received bytes wait for room in the kernel socket.
+    full: bool,
+    /// The clients' bytes wait for room in the stack.
+    held: bool,
+    /// Every client closed its end of the kernel socket.
+    gone: bool,
 }
 
 /// One socket channel.
@@ -101,14 +148,37 @@ pub struct Conn {
     failure: Option<NetError>,
     /// The client's queue was full: wait until it has room.
     pub blocked: bool,
+    /// The client closed its channel: nothing more is sent to it.
+    gone: bool,
+    /// The client closed its channel, and the socket goes on (see
+    /// [`Conn::outlives_channel`]): the channel is not waited on.
+    forgotten: bool,
     /// The socket is finished (error reported or the stream ended): drop
     /// it once the client closes the channel.
     pub done: bool,
 }
 
+impl Bytes {
+    fn new(end: Socket, announced: bool) -> Bytes {
+        Bytes { end: Some(end), announced, eof_sent: false, shutdown: false, full: false, held: false, gone: false }
+    }
+}
+
 impl Conn {
     fn new(channel: Channel, id: SockId, kind: Kind, owner: u64) -> Conn {
-        Conn { channel, id, kind, owner, credit_out: 0, rx_outstanding: 0, failure: None, blocked: false, done: false }
+        Conn {
+            channel,
+            id,
+            kind,
+            owner,
+            credit_out: 0,
+            rx_outstanding: 0,
+            failure: None,
+            blocked: false,
+            gone: false,
+            forgotten: false,
+            done: false,
+        }
     }
 
     /// A TCP connection being made.
@@ -116,14 +186,24 @@ impl Conn {
         Conn::new(channel, id, Kind::Tcp { announced: false, eof_sent: false, shutdown: false }, owner)
     }
 
-    /// A TCP listener.
-    pub fn listener(channel: Channel, id: SockId, owner: u64) -> Conn {
-        Conn::new(channel, id, Kind::Listener, owner)
+    /// A TCP connection being made whose bytes go on a kernel socket, of
+    /// which `end` is the service's end.
+    pub fn tcp_bytes(channel: Channel, end: Socket, id: SockId, owner: u64) -> Conn {
+        Conn::new(channel, id, Kind::Bytes(Bytes::new(end, false)), owner)
     }
 
-    /// A UDP socket; its first pump grants the initial send credit.
-    pub fn udp(channel: Channel, id: SockId, owner: u64) -> Conn {
-        Conn::new(channel, id, Kind::Udp { pending: VecDeque::new(), credit_due: UDP_SEND_WINDOW }, owner)
+    /// A TCP listener; its connections' bytes go on kernel sockets with
+    /// `bytes`.
+    pub fn listener(channel: Channel, id: SockId, owner: u64, bytes: bool) -> Conn {
+        Conn::new(channel, id, Kind::Listener { bytes }, owner)
+    }
+
+    /// A UDP socket; with credit (`metered`), its first pump grants the
+    /// initial send credit.
+    pub fn udp(channel: Channel, id: SockId, owner: u64, metered: bool) -> Conn {
+        let credit_due = if metered { UDP_SEND_WINDOW } else { 0 };
+        let kind = Kind::Udp { pending: VecDeque::new(), pending_bytes: 0, credit_due, metered };
+        Conn::new(channel, id, kind, owner)
     }
 
     /// A ping socket.
@@ -132,9 +212,91 @@ impl Conn {
     }
 
     /// Whether the client must be heard: requests are read only from a
-    /// socket that is not finished.
+    /// socket that is not finished, and not from a UDP socket without credit
+    /// while the datagrams it has not sent yet are many.
     pub fn wants_requests(&self) -> bool {
-        !self.done
+        match &self.kind {
+            Kind::Udp { pending_bytes, metered: false, .. } => !self.done && *pending_bytes < UDP_UNMETERED_WINDOW,
+            _ => !self.done,
+        }
+    }
+
+    /// The kernel socket a connection's bytes go on, and what of it to wait
+    /// for: room for the bytes received, the clients' bytes while the stack
+    /// has room for them, and the clients' going.
+    pub fn bytes_wait(&self) -> Option<(RawHandle, u32)> {
+        let Kind::Bytes(b) = &self.kind else { return None };
+        let end = b.end.as_ref()?;
+        let mut want = 0;
+        if b.full {
+            want |= WRITABLE;
+        }
+        if !b.shutdown && !b.held {
+            want |= READABLE | PEER_WRITE_DISABLED;
+        }
+        if !b.gone {
+            want |= PEER_CLOSED;
+        }
+        (want != 0).then(|| (end.raw(), want))
+    }
+
+    /// The kernel socket of a connection's bytes raised `observed`.
+    pub fn bytes_signalled(&mut self, observed: u32) {
+        if let Kind::Bytes(b) = &mut self.kind {
+            if observed & WRITABLE != 0 {
+                b.full = false;
+            }
+            if observed & PEER_CLOSED != 0 {
+                b.gone = true;
+            }
+        }
+    }
+
+    /// Whether the socket goes on when its client closes the channel: a
+    /// connection whose bytes its clients still hold, or that has theirs
+    /// still to send; a UDP socket with datagrams still to send, here or in
+    /// the stack (closing it drops those).
+    pub fn outlives_channel(&self, stack: &Stack) -> bool {
+        match &self.kind {
+            Kind::Bytes(b) => b.end.is_some() && !(b.gone && b.shutdown),
+            Kind::Udp { pending, .. } => !pending.is_empty() || stack.udp_send_queue(self.id) > 0,
+            _ => false,
+        }
+    }
+
+    /// The client closed the channel of a socket that goes on (see
+    /// [`Conn::outlives_channel`]): nothing more is sent on the channel, nor
+    /// waited for on it.
+    pub fn forget_channel(&mut self) {
+        self.gone = true;
+        self.forgotten = true;
+        // Nor is its room waited for.
+        self.blocked = false;
+    }
+
+    /// Whether the channel is waited on.
+    pub fn channel_heard(&self) -> bool {
+        !self.forgotten
+    }
+
+    /// Whether the socket is over for the service: a connection's clients
+    /// closed the kernel socket of its bytes, and those are all in the stack
+    /// (which finishes the connection), or it failed with its channel
+    /// closed; a UDP socket's client closed its channel, and its datagrams
+    /// are all sent (closing it drops what it has not).
+    pub fn finished(&self, stack: &Stack) -> bool {
+        match &self.kind {
+            Kind::Bytes(b) => (b.gone && b.shutdown) || (self.forgotten && (self.done || b.end.is_none())),
+            Kind::Udp { pending, .. } => self.forgotten && pending.is_empty() && stack.udp_send_queue(self.id) == 0,
+            _ => false,
+        }
+    }
+
+    /// Whether the socket is to be looked at after every poll until it is
+    /// finished: a UDP socket whose client closed its channel, whose
+    /// datagrams the stack says nothing of sending.
+    pub fn lingers(&self) -> bool {
+        self.forgotten && matches!(self.kind, Kind::Udp { .. })
     }
 
     /// Records an error for the client; it is reported on the next pump.
@@ -147,7 +309,7 @@ impl Conn {
     /// The client broke the protocol: its TCP stream is no longer what it
     /// meant to send, so the connection is reset rather than ended.
     fn violation(&mut self, stack: &mut Stack) {
-        if matches!(self.kind, Kind::Tcp { .. }) {
+        if matches!(self.kind, Kind::Tcp { .. } | Kind::Bytes(_)) {
             stack.tcp_abort(self.id);
         }
         self.fail(NetError::ProtocolViolation);
@@ -164,6 +326,14 @@ impl Conn {
             };
             if self.done || self.failure.is_some() {
                 continue;
+            }
+            if !self.wants_requests() {
+                // Read on once the datagrams waiting have gone (after this
+                // one, handled as the others).
+                if let Ok((_, req)) = vipc::decode_event::<SocketRequest>(msg) {
+                    self.handle(stack, req);
+                }
+                return true;
             }
             match vipc::decode_event::<SocketRequest>(msg) {
                 Ok((_, req)) => self.handle(stack, req),
@@ -190,25 +360,32 @@ impl Conn {
                     Err(_) => {}
                 }
             }
-            (Kind::Udp { pending, .. }, SocketRequest::SendTo { dest, data }) => {
+            (Kind::Udp { pending, pending_bytes, metered, .. }, SocketRequest::SendTo { dest, data }) => {
                 let n = data.0.len();
-                if n > vproto::net::MAX_DATAGRAM || n as u32 > self.credit_out {
+                if n > vproto::net::MAX_DATAGRAM || (*metered && n as u32 > self.credit_out) {
                     return self.violation(stack);
                 }
-                self.credit_out -= n as u32;
+                if *metered {
+                    self.credit_out -= n as u32;
+                }
+                *pending_bytes += n;
                 pending.push_back((dest, data.0));
             }
-            (Kind::Tcp { .. } | Kind::Udp { .. }, SocketRequest::Consumed { bytes }) => {
+            (Kind::Tcp { .. } | Kind::Udp { metered: true, .. }, SocketRequest::Consumed { bytes }) => {
                 self.rx_outstanding = self.rx_outstanding.saturating_sub(bytes);
             }
+            // Credit a datagram socket without it does not owe.
+            (Kind::Udp { metered: false, .. }, SocketRequest::Consumed { .. }) => {}
             (Kind::Tcp { shutdown, .. }, SocketRequest::Shutdown {}) => {
                 if !*shutdown {
                     *shutdown = true;
                     stack.tcp_shutdown(self.id);
                 }
             }
-            (Kind::Tcp { .. }, SocketRequest::Abort {}) => stack.tcp_abort(self.id),
-            (Kind::Tcp { .. }, SocketRequest::SetNoDelay { nodelay }) => stack.tcp_set_nodelay(self.id, nodelay),
+            (Kind::Tcp { .. } | Kind::Bytes(_), SocketRequest::Abort {}) => stack.tcp_abort(self.id),
+            (Kind::Tcp { .. } | Kind::Bytes(_), SocketRequest::SetNoDelay { nodelay }) => {
+                stack.tcp_set_nodelay(self.id, nodelay)
+            }
             (Kind::Ping, SocketRequest::Echo { dest, seq, ttl, size }) => {
                 stack.ping_send(self.id, dest, seq, ttl, size)
             }
@@ -221,28 +398,38 @@ impl Conn {
     /// owner may have (for the connections a listener accepts); accepted
     /// connections are added to `accepted`.
     pub fn pump(&mut self, stack: &mut Stack, events: &mut Events, room: &mut usize, accepted: &mut Vec<Conn>) {
-        if self.done {
+        // What goes on without the channel goes on (see `outlives_channel`).
+        if self.done || (self.gone && !self.forgotten && !matches!(self.kind, Kind::Bytes(_))) {
             return;
         }
         if self.failure.is_none() {
             let sent = match self.kind {
                 Kind::Tcp { .. } => self.pump_tcp(stack, events),
-                Kind::Listener => self.pump_listener(stack, events, room, accepted),
+                Kind::Bytes(_) => self.pump_bytes(stack, events),
+                Kind::Listener { bytes } => self.pump_listener(stack, events, room, accepted, bytes),
                 Kind::Udp { .. } => self.pump_udp(stack, events),
                 Kind::Ping => self.pump_ping(stack, events),
             };
             match sent {
                 Sent::Yes => {}
                 Sent::Full => return self.blocked = true,
-                Sent::Gone => return self.done = true,
+                // The client closed its channel, perhaps after its last
+                // requests: those are still to be handled, and the socket
+                // closed after them (see `handle_requests`), not finished
+                // here.
+                Sent::Gone => return self.gone = true,
             }
         }
-        // The error that ends the socket, after everything before it.
+        // The error that ends the socket, after everything before it; then
+        // the end of a connection's bytes, which its clients see end.
         if let Some(error) = self.failure {
             match events.send(&self.channel, |e| SocketEvent::Error { error }.encode(e)) {
                 Sent::Yes | Sent::Gone => {
                     self.failure = None;
                     self.done = true;
+                    if let Kind::Bytes(b) = &mut self.kind {
+                        b.end = None;
+                    }
                 }
                 Sent::Full => self.blocked = true,
             }
@@ -326,12 +513,105 @@ impl Conn {
         Sent::Yes
     }
 
+    fn pump_bytes(&mut self, stack: &mut Stack, events: &mut Events) -> Sent {
+        let id = self.id;
+        let Some(view) = stack.tcp_view(id) else {
+            self.fail(NetError::Closed);
+            return Sent::Yes;
+        };
+        let Kind::Bytes(b) = &mut self.kind else { return Sent::Yes };
+        match view.state {
+            TcpState::Connecting => return Sent::Yes,
+            TcpState::Open { local, remote } if !b.announced => {
+                match events.send(&self.channel, |e| SocketEvent::Connected { local, remote, credit: 0 }.encode(e)) {
+                    Sent::Full => return Sent::Full,
+                    // Nobody hears it (the clients closed the channel): the
+                    // bytes go on all the same.
+                    Sent::Yes | Sent::Gone => b.announced = true,
+                }
+            }
+            _ => {}
+        }
+        let (closed, error) = match view.state {
+            TcpState::Closed { error } => (true, error),
+            _ => (false, None),
+        };
+        let Some(end) = &b.end else { return Sent::Yes };
+        // Received bytes, as far as the kernel socket has room.
+        while !b.full {
+            let mut full = false;
+            let n = stack
+                .tcp_recv_with(id, CHUNK, |data| match end.write(data) {
+                    Ok(n) => n,
+                    Err(Error::ShouldWait) => {
+                        full = true;
+                        0
+                    }
+                    // Nobody reads any more: dropped, as on Linux data that
+                    // comes to a socket closed.
+                    Err(_) => data.len(),
+                })
+                .unwrap_or(0);
+            b.full = full;
+            if n == 0 {
+                break;
+            }
+        }
+        let Some(view) = stack.tcp_view(id) else { return Sent::Yes };
+        if view.recv_queued == 0 {
+            if let Some(error) = error {
+                // After what was received, the error; then the end, which the
+                // clients see end (see `pump`).
+                if b.gone {
+                    b.shutdown = true;
+                }
+                self.fail(error);
+                return Sent::Yes;
+            }
+            // The end of the received stream, once all of it went on.
+            if !b.eof_sent && (view.eof || closed) {
+                let _ = end.shutdown();
+                b.eof_sent = true;
+            }
+        }
+        // The clients' bytes, as far as the stack has room: all of them, and
+        // then their stream's end, however soon the clients went.
+        b.held = false;
+        let mut chunk = [0u8; CHUNK];
+        while !b.shutdown && !closed {
+            let room = stack.tcp_view(id).map_or(0, |v| v.send_space).min(CHUNK);
+            if room == 0 {
+                b.held = true;
+                break;
+            }
+            match end.read(&mut chunk[..room]) {
+                // The room asked for: all of it fits.
+                Ok(n) => {
+                    let _ = stack.tcp_send(id, &chunk[..n]);
+                }
+                Err(Error::ShouldWait) => break,
+                // The clients' stream ended: they stopped writing, or every
+                // one of them closed it.
+                Err(_) => {
+                    stack.tcp_shutdown(id);
+                    b.shutdown = true;
+                }
+            }
+        }
+        if closed && b.gone {
+            // Nowhere to send what is left.
+            b.shutdown = true;
+        }
+        Sent::Yes
+    }
+
     fn pump_listener(
         &mut self,
         stack: &mut Stack,
         events: &mut Events,
         room: &mut usize,
         accepted: &mut Vec<Conn>,
+        bytes: bool,
     ) -> Sent {
         while let Some(new) = stack.tcp_accept_peek(self.id) {
             let view = stack.tcp_view(new);
@@ -346,6 +626,24 @@ impl Conn {
                 stack.tcp_accept(self.id);
                 stack.tcp_abort(new);
                 stack.close(new);
+                continue;
+            }
+            if bytes {
+                // A connection its clients may share: a shared channel, and a
+                // kernel socket for its bytes.
+                let (Ok((ours, theirs)), Ok((end, theirs_end))) = (Channel::create_shared(), Socket::create()) else {
+                    return Sent::Yes;
+                };
+                let ev = SocketEvent::AcceptedBytes { socket: theirs, bytes: theirs_end, local, remote };
+                match events.send(&self.channel, |e| ev.encode(e)) {
+                    Sent::Yes => {}
+                    // Still queued: offered again (on new ends) when the
+                    // client has room.
+                    other => return other,
+                }
+                stack.tcp_accept(self.id);
+                *room -= 1;
+                accepted.push(Conn::new(ours, new, Kind::Bytes(Bytes::new(end, true)), self.owner));
                 continue;
             }
             let Ok((ours, theirs)) = Channel::create() else { return Sent::Yes };
@@ -368,9 +666,32 @@ impl Conn {
     }
 
     fn pump_udp(&mut self, stack: &mut Stack, events: &mut Events) -> Sent {
-        // Received datagrams, within the client's window and its channel's
-        // room; a datagram is taken from the stack only once it is queued.
-        while self.rx_outstanding < RECEIVE_WINDOW {
+        let metered = matches!(self.kind, Kind::Udp { metered: true, .. });
+        // The client's datagrams first: those it sent before it closed the
+        // channel go all the same.
+        if let Kind::Udp { pending, pending_bytes, credit_due, metered } = &mut self.kind {
+            while let Some((dest, data)) = pending.pop_front() {
+                if let Err(NetError::LimitReached) = stack.udp_send(self.id, dest, &data) {
+                    // The stack's buffer is full: it says when it has sent
+                    // some.
+                    pending.push_front((dest, data));
+                    break;
+                }
+                // Sent, or undeliverable and dropped, as on any system.
+                *pending_bytes -= data.len();
+                if *metered {
+                    *credit_due += data.len() as u32;
+                }
+            }
+        }
+        if self.forgotten {
+            // Nobody to hear what comes.
+            return Sent::Yes;
+        }
+        // Received datagrams, within the client's window (if it has credit)
+        // and its channel's room; a datagram is taken from the stack only
+        // once it is queued.
+        while !metered || self.rx_outstanding < RECEIVE_WINDOW {
             let mut sent = Sent::Yes;
             let mut len = 0;
             let channel = &self.channel;
@@ -381,20 +702,12 @@ impl Conn {
             });
             match taken {
                 None => break,
-                Some(true) => self.rx_outstanding += len as u32,
+                Some(true) if metered => self.rx_outstanding += len as u32,
+                Some(true) => {}
                 Some(false) => return sent,
             }
         }
-        let Kind::Udp { pending, credit_due } = &mut self.kind else { return Sent::Yes };
-        while let Some((dest, data)) = pending.pop_front() {
-            if let Err(NetError::LimitReached) = stack.udp_send(self.id, dest, &data) {
-                // The stack's buffer is full: it says when it has sent some.
-                pending.push_front((dest, data));
-                break;
-            }
-            // Sent, or undeliverable and dropped, as on any system.
-            *credit_due += data.len() as u32;
-        }
+        let Kind::Udp { credit_due, .. } = &mut self.kind else { return Sent::Yes };
         if *credit_due > 0 {
             let bytes = *credit_due;
             match events.send(&self.channel, |e| SocketEvent::SendCredit { bytes }.encode(e)) {

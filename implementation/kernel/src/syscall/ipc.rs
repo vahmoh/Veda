@@ -6,7 +6,7 @@
 use alloc::vec::Vec;
 
 use vabi::signals::{self, SIGNALED, USER_ALL};
-use vabi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, info_topic};
+use vabi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, channel_flags, info_topic};
 
 use super::{SysResult, current_process, deadline, get_channel, get_port, get_socket, handle, insert, ok};
 use crate::mm::user;
@@ -21,9 +21,11 @@ use crate::sched::{self, WakeReason};
 const CHANNEL_RIGHTS: Rights = Rights(
     Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0 | Rights::SIGNAL.0 | Rights::GET_INFO.0,
 );
-/// Socket endpoints, unlike channels, may be duplicated (shared by several
-/// processes, as a pipe or terminal is).
+/// Socket endpoints may be duplicated (shared by several processes, as a
+/// pipe or terminal is); a channel's only when it was made shared
+/// ([`channel_flags::SHARED`]).
 const SOCKET_RIGHTS: Rights = Rights(CHANNEL_RIGHTS.0 | Rights::DUPLICATE.0);
+const SHARED_CHANNEL_RIGHTS: Rights = SOCKET_RIGHTS;
 
 pub fn handle_close(raw: RawHandle) -> SysResult {
     let h = current_process()?.handles.lock().remove(raw)?;
@@ -301,13 +303,17 @@ pub fn port_wait(port_raw: RawHandle, packets_ptr: usize, max: usize, d: u64) ->
     }
 }
 
-pub fn channel_create(out: usize) -> SysResult {
+pub fn channel_create(out: usize, flags: u32) -> SysResult {
+    if flags & !channel_flags::SHARED != 0 {
+        return Err(Error::InvalidArgs);
+    }
     super::may_make_object()?;
+    let rights = if flags & channel_flags::SHARED != 0 { SHARED_CHANNEL_RIGHTS } else { CHANNEL_RIGHTS };
     let (a, b) = channel::create();
     let p = current_process()?;
     let mut table = p.handles.lock();
-    let ha = table.insert(Handle { object: KObject::Channel(a), rights: CHANNEL_RIGHTS })?;
-    let hb = match table.insert(Handle { object: KObject::Channel(b), rights: CHANNEL_RIGHTS }) {
+    let ha = table.insert(Handle { object: KObject::Channel(a), rights })?;
+    let hb = match table.insert(Handle { object: KObject::Channel(b), rights }) {
         Ok(h) => h,
         Err(e) => {
             let _ = table.remove(ha);
@@ -323,36 +329,17 @@ pub fn channel_create(out: usize) -> SysResult {
 /// their list has been read, whatever happens next: a write that fails
 /// closes them (as Zircon's does, and as `vrt`'s `Channel::write` expects),
 /// so no failure leaves them in the caller's table without an owner.
-/// Neither endpoint of the channel may travel on it, nor any channel that
-/// could reach it through queued messages ([`channel::would_cycle`]):
-/// `NotSupported`.
+/// Neither endpoint of the channel may travel on it, nor any channel or
+/// socket that could reach it through what is queued
+/// ([`crate::object::would_cycle`]): `NotSupported`.
 pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
     let ch = get_channel(raw, Rights::WRITE);
     let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
-    let p = current_process()?;
-    let taken: Vec<Option<Handle>> = {
-        let mut table = p.handles.lock();
-        raws.iter().map(|&r| table.remove(r).ok()).collect()
-    };
+    let taken = take_handles(&raws)?;
     // From here on, returning drops what was taken: the handles are closed.
     let ch = ch?;
-    let mut moved = Vec::with_capacity(taken.len());
-    for (i, h) in taken.into_iter().enumerate() {
-        let Some(h) = h else {
-            // Named twice (taken at its first mention), or not the caller's.
-            return Err(if raws[..i].contains(&raws[i]) { Error::InvalidArgs } else { Error::BadHandle });
-        };
-        if !h.rights.contains(Rights::TRANSFER) {
-            return Err(Error::AccessDenied);
-        }
-        if let KObject::Channel(end) = &h.object
-            && end.same_channel(&ch)
-        {
-            return Err(Error::NotSupported);
-        }
-        moved.push(h);
-    }
-    if channel::would_cycle(&ch, &moved) {
+    let moved = transferable(&raws, taken)?;
+    if crate::object::would_cycle(ch.queues(), &moved) {
         return Err(Error::NotSupported);
     }
     let data = user::read_vec(bytes as u64, n_bytes, vabi::CHANNEL_MAX_BYTES)?;
@@ -379,10 +366,8 @@ pub fn channel_read(
     // lost to a bad pointer.
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let check = |ptr: usize, len: usize| aspace.ensure_range(ptr as u64, len as u64, true);
-    if !check(actual, 8)
-        || !check(bytes, bytes_cap.min(vabi::CHANNEL_MAX_BYTES))
-        || !check(handles_ptr, handles_cap * 4)
-    {
+    let out = user::UserRange::writable(bytes as u64, bytes_cap.min(vabi::CHANNEL_MAX_BYTES))?;
+    if !check(actual, 8) || !check(handles_ptr, handles_cap * 4) {
         return Err(Error::Fault);
     }
     let msg = match ch.read(bytes_cap, handles_cap) {
@@ -405,7 +390,7 @@ pub fn channel_read(
             }
         }
     }
-    user::copy_to_user(bytes as u64, &msg.data)?;
+    out.write(0, &msg.data)?;
     let hv: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
     user::copy_to_user(handles_ptr as u64, &hv)?;
     user::write(actual as u64, &[msg.data.len() as u32, values.len() as u32])?;
@@ -430,31 +415,112 @@ pub fn socket_create(out: usize) -> SysResult {
     ok(0)
 }
 
-/// The most one `socket_read` or `socket_write` moves: the bytes go through
-/// a kernel buffer. Larger requests are partly done (writes of up to
-/// [`socket::ATOMIC_WRITE`] bytes stay whole).
+/// The most one `socket_read` or `socket_write` moves, straight between the
+/// caller's memory and the socket's buffer: it bounds how long one call
+/// holds the kernel's lock. Larger requests are partly done (writes of up
+/// to [`socket::ATOMIC_WRITE`] bytes stay whole).
 const SOCKET_CHUNK: usize = 64 * 1024;
 
-pub fn socket_write(raw: RawHandle, buf: usize, len: usize) -> SysResult {
-    let s = get_socket(raw, Rights::WRITE)?;
-    let n = len.min(SOCKET_CHUNK);
-    let data = user::read_vec(buf as u64, n, SOCKET_CHUNK)?;
-    ok(s.write(&data)?)
+/// Takes the handles `raws` names out of the caller's table (`None` for
+/// one it does not have).
+fn take_handles(raws: &[RawHandle]) -> Result<Vec<Option<Handle>>, Error> {
+    let p = current_process()?;
+    let mut table = p.handles.lock();
+    Ok(raws.iter().map(|&r| table.remove(r).ok()).collect())
 }
 
-pub fn socket_read(raw: RawHandle, buf: usize, len: usize) -> SysResult {
+/// The handles taken for a transfer, if each was the caller's, named once,
+/// and may be transferred.
+fn transferable(raws: &[RawHandle], taken: Vec<Option<Handle>>) -> Result<Vec<Handle>, Error> {
+    let mut moved = Vec::with_capacity(taken.len());
+    for (i, h) in taken.into_iter().enumerate() {
+        let Some(h) = h else {
+            // Named twice (taken at its first mention), or not the caller's.
+            return Err(if raws[..i].contains(&raws[i]) { Error::InvalidArgs } else { Error::BadHandle });
+        };
+        if !h.rights.contains(Rights::TRANSFER) {
+            return Err(Error::AccessDenied);
+        }
+        moved.push(h);
+    }
+    Ok(moved)
+}
+
+/// Writes to a socket, and with the first byte the handles named (as a
+/// channel's message carries them: the kernel's once their list is read,
+/// closed if no byte goes). None of them may reach the socket through what
+/// is queued ([`crate::object::would_cycle`]): `NotSupported`.
+pub fn socket_write(raw: RawHandle, buf: usize, len: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
+    let s = get_socket(raw, Rights::WRITE);
+    let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
+    let taken = take_handles(&raws)?;
+    // From here on, returning drops what was taken: the handles are closed.
+    let s = s?;
+    let moved = transferable(&raws, taken)?;
+    if crate::object::would_cycle(s.queues(), &moved) {
+        return Err(Error::NotSupported);
+    }
+    let n = len.min(SOCKET_CHUNK);
+    let from = user::UserRange::readable(buf as u64, n)?;
+    ok(s.write_with(n, moved, |at, to| from.read(at, to))?)
+}
+
+/// Reads from a socket, and the handles that came with the bytes read, of
+/// which up to `handles_cap` go into the caller's table (their values at
+/// `handles_ptr`) and the rest are closed; `actual` (if not 0) gets how many
+/// went in and how many were closed (`[u32; 2]`).
+pub fn socket_read(
+    raw: RawHandle,
+    buf: usize,
+    len: usize,
+    handles_ptr: usize,
+    handles_cap: usize,
+    actual: usize,
+) -> SysResult {
     let s = get_socket(raw, Rights::READ)?;
     let n = len.min(SOCKET_CHUNK).min(s.readable_bytes().max(1));
-    // Validate the buffer first so that bytes taken from the socket are
+    // Validate the buffers first so that what is taken from the socket is
     // never lost to a bad pointer.
-    let aspace = current_process()?.aspace().ok_or(Error::BadState)?;
-    if !aspace.ensure_range(buf as u64, n as u64, true) {
+    let p = current_process()?;
+    let aspace = p.aspace().ok_or(Error::BadState)?;
+    let check = |ptr: usize, len: usize| len == 0 || aspace.ensure_range(ptr as u64, len as u64, true);
+    let handles_cap = handles_cap.min(vabi::CHANNEL_MAX_HANDLES);
+    let out = user::UserRange::writable(buf as u64, n)?;
+    if !check(handles_ptr, handles_cap * 4) || !check(actual, if actual == 0 { 0 } else { 8 }) {
         return Err(Error::Fault);
     }
-    let mut data = user::buffer(n)?;
-    let got = s.read(&mut data)?;
-    user::copy_to_user(buf as u64, &data[..got])?;
+    let (got, mut handles) = s.read_with(n, |at, bytes| out.write(at, bytes))?;
+    let closed = handles.split_off(handles_cap.min(handles.len()));
+    let mut values = Vec::with_capacity(handles.len());
+    {
+        let mut table = p.handles.lock();
+        for h in handles {
+            match table.insert(h) {
+                Ok(v) => values.push(v),
+                // Out of handle slots: the remaining handles are closed.
+                Err(_) => values.push(vabi::INVALID_HANDLE),
+            }
+        }
+    }
+    let dropped = closed.len();
+    drop(closed);
+    if !values.is_empty() {
+        let hv: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        user::copy_to_user(handles_ptr as u64, &hv)?;
+    }
+    if actual != 0 {
+        user::write(actual as u64, &[values.len() as u32, dropped as u32])?;
+    }
     ok(got)
+}
+
+/// Copies what a socket holds to be read, leaving it there (`socket_read`
+/// would read as much), without the handles that came with it.
+pub fn socket_peek(raw: RawHandle, buf: usize, len: usize) -> SysResult {
+    let s = get_socket(raw, Rights::READ)?;
+    let n = len.min(SOCKET_CHUNK).min(s.readable_bytes().max(1));
+    let out = user::UserRange::writable(buf as u64, n)?;
+    ok(s.peek_with(n, |at, bytes| out.write(at, bytes))?)
 }
 
 pub fn socket_shutdown(raw: RawHandle) -> SysResult {

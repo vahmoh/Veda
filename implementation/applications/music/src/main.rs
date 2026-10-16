@@ -23,26 +23,16 @@
 //! Keyboard: Space play/pause, Left/Right seek 5 s, Up/Down volume, N next,
 //! P previous, S shuffle, R repeat, M mute.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod art;
 mod engine;
 mod library;
 mod widgets;
 
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec;
-use alloc::vec::Vec;
+use std::sync::Arc;
 
 use music_core::cover::{CoverSpec, Recent};
 use music_core::order::{AfterEnd, Order, Repeat};
-use num_traits::Float;
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_pcg::Pcg32;
@@ -58,8 +48,7 @@ use vui::{App, Font, Icon, Ui, WindowSpec, media};
 
 use engine::{Command, PlayState, Shared, Status};
 use library::Track;
-
-vrt::entry!(main);
+use num_traits::Float;
 
 /// Spectrum bands drawn.
 const BANDS: usize = 40;
@@ -127,7 +116,7 @@ fn art_thread(covers: Arc<Mutex<Covers>>, wake: Event, notify: Event) {
         let Some((spec, large)) = job else {
             if drawn > 0 {
                 let ready = covers.lock().thumbs.len();
-                vrt::println!("covers: {} ready", ready);
+                println!("covers: {} ready", ready);
                 drawn = 0;
             }
             let _ = wake.wait(signals::SIGNALED, vabi::DEADLINE_INFINITE);
@@ -441,20 +430,20 @@ impl Player {
         let percent = (self.volume * 100.0 + 0.5) as i32;
         if percent != self.volume_logged {
             self.volume_logged = percent;
-            vrt::println!("volume {}%", percent);
+            println!("volume {}%", percent);
         }
     }
 
     fn toggle_mute(&mut self) {
         self.muted = !self.muted;
         self.shared.send(Command::Volume(self.gain()));
-        vrt::println!("{}", if self.muted { "muted" } else { "unmuted" });
+        println!("{}", if self.muted { "muted" } else { "unmuted" });
     }
 
     fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
         self.rebuild_order();
-        vrt::println!("shuffle {}", if self.shuffle { "on" } else { "off" });
+        println!("shuffle {}", if self.shuffle { "on" } else { "off" });
     }
 
     fn handle_keys(&mut self, ui: &Ui, list_focused: bool) {
@@ -484,7 +473,7 @@ impl Player {
 
     fn set_repeat(&mut self, repeat: Repeat) {
         self.repeat = repeat;
-        vrt::println!("repeat {}", repeat.name());
+        println!("repeat {}", repeat.name());
     }
 
     /// Reacts to engine status changes (a track ended, errors).
@@ -518,7 +507,7 @@ impl Player {
             return;
         }
         if s.state == PlayState::Error && self.status.state != PlayState::Error {
-            vrt::println!("playback error: {}", s.error);
+            println!("playback error: {}", s.error);
         }
         // The track playing is looked for only when another plays.
         let moved = s.path != self.status.path;
@@ -953,7 +942,7 @@ impl App for Player {
             // Another Music process handed us files to play.
             let files = self.instance.as_mut().map(|i| i.poll(vfiles::kind::is_playable_audio)).unwrap_or_default();
             for path in files {
-                vrt::println!("opening {}", path);
+                println!("opening {}", path);
                 self.shared.send(Command::AddFile { path, play: true });
                 self.activate = true;
             }
@@ -1006,7 +995,7 @@ impl App for Player {
         }
         if now - self.perf_start > 10_000_000_000 {
             if self.perf_frames > 30 {
-                vrt::println!(
+                println!(
                     "ui: {} frames in {} s, {} us per frame",
                     self.perf_frames,
                     (now - self.perf_start) / 1_000_000_000,
@@ -1020,9 +1009,14 @@ impl App for Player {
     }
 }
 
-fn main() -> i32 {
+fn main() {
+    std::process::exit(run());
+}
+
+/// Runs the program; its exit code.
+fn run() -> i32 {
     let Some(shared) = Shared::new() else {
-        vrt::println!("cannot create events");
+        println!("cannot create events");
         return 1;
     };
     let args = vrt::env::args();
@@ -1031,13 +1025,13 @@ fn main() -> i32 {
     let server = match instance::start("music", file.as_deref()) {
         instance::Start::Serve(server) => server,
         instance::Start::HandedOver => {
-            vrt::println!("handed {} to the running player", file.as_deref().unwrap_or_default());
+            println!("handed {} to the running player", file.as_deref().unwrap_or_default());
             return 0;
         }
     };
     let player = Player::new(shared.clone(), server);
     if !engine::start(shared.clone(), player.gain()) {
-        vrt::println!("cannot start the decoder thread");
+        println!("cannot start the decoder thread");
         return 1;
     }
     if let Some(path) = file {

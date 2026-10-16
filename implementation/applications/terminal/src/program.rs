@@ -16,11 +16,8 @@
 //! terminal, and text piped from or to a built-in command travels through a
 //! socket of its own; what it pipes on is kept up to [`PIPE_LIMIT`].
 
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use terminal_core::text::{Capture, Utf8Stream};
 use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, SIGNALED, TERMINATED, WRITABLE};

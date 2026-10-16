@@ -16,11 +16,8 @@
 //! controls changed, and wakes when the next picture is due: a 24 fps video
 //! is presented 24 times a second on a screen that refreshes 75 times.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use vfiles::format::duration as time;
 use vgfx::{Align, Bitmap, Color, Filter, Rect};

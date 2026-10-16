@@ -10,24 +10,40 @@
 //! | Object | Behind it | Passed to children as |
 //! |--------|-----------|-----------------------|
 //! | [`Object::File`] | a `file` connection to the VFS (which keeps the offset) | a duplicated connection |
-//! | [`Object::Dir`] | a directory's path | (not passed) |
+//! | [`Object::Dir`] | a directory's path | its path, in the startup message |
 //! | [`Object::Stream`] | a socket endpoint: a pipe or the terminal | a duplicated handle |
-//! | [`Object::Null`] | nothing: reads end at once, writes vanish | (not passed) |
-//! | [`Object::Log`] | the kernel log (output of programs without a terminal) | (not passed) |
+//! | [`Object::Inet`] | a socket of the network service (TCP, UDP): a channel to it, and a connection's socket endpoint for its bytes | the channel, shared, a connection's endpoint too, and what makes it a socket ([`crate::carry`]); one still connecting not passed |
+//! | [`Object::Unix`] | a Unix domain socket: a connection's socket endpoint or channel, an inbox the VFS writes on | the one that carries it, shared, and what makes it a socket ([`crate::carry`]) |
+//! | [`Object::EventFd`] | a counter of the layer's (`eventfd`), and an event object | (not passed) |
+//! | [`Object::Epoll`] | an interest list of the layer's (`epoll`), and a port | (not passed) |
+//! | [`Object::Pidfd`] | a child process (`pidfd_open`): readable once it has ended | (not passed) |
+//! | [`Object::Null`] | nothing: reads end at once, writes vanish | itself, in the startup message |
+//! | [`Object::Log`] | the kernel log (output of programs without a terminal) | itself, in the startup message |
 //!
 //! The table itself is per process; descriptors carry only the close-on-exec
 //! flag.
+//!
+//! A description tells the `epoll` instances that watch it when it changes
+//! in ways the kernel's signals do not say ([`Description::changed`]): a
+//! program met it not ready (`EAGAIN`) or emptied or filled it, an eventfd
+//! was written to.
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use vrt::object::Process;
 use vrt::sync::Mutex;
 
+use crate::epoll::{Epoll, Watcher};
+use crate::eventfd::EventFd;
 use crate::file::{Directory, VfsFile};
+use crate::inet::Inet;
 use crate::linux::errno::{EBADF, EMFILE};
 use crate::linux::o;
+use crate::log::Log;
 use crate::stream::Stream;
+use crate::unix::Unix;
 
 /// Descriptors per process (`RLIMIT_NOFILE`).
 pub const MAX_FDS: usize = 1024;
@@ -36,8 +52,13 @@ pub enum Object {
     File(VfsFile),
     Dir(Directory),
     Stream(Stream),
+    Inet(Inet),
+    Unix(Unix),
+    EventFd(EventFd),
+    Epoll(Epoll),
+    Pidfd(Process),
     Null,
-    Log,
+    Log(Log),
 }
 
 /// An open file description.
@@ -45,11 +66,55 @@ pub struct Description {
     pub object: Object,
     /// The access mode and status flags (`O_APPEND`, `O_NONBLOCK`, `O_SYNC`).
     flags: AtomicU32,
+    /// Advanced as it changes in ways the kernel's signals do not say, which
+    /// edge-triggered `epoll` compares.
+    seq: AtomicU64,
+    /// The `epoll` instances watching it, to be told of those changes.
+    watchers: Mutex<Vec<(Weak<Watcher>, u64)>>,
 }
 
 impl Description {
     pub fn new(object: Object, flags: u32) -> Arc<Description> {
-        Arc::new(Description { object, flags: AtomicU32::new(flags & STATUS_FLAGS) })
+        Arc::new(Description {
+            object,
+            flags: AtomicU32::new(flags & STATUS_FLAGS),
+            seq: AtomicU64::new(0),
+            watchers: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// How often it changed in ways the kernel's signals do not say.
+    pub fn seq(&self) -> u64 {
+        self.seq.load(Ordering::Acquire)
+    }
+
+    /// It changed in a way the kernel's signals do not say: the `epoll`
+    /// instances watching it look at it again.
+    pub fn changed(&self) {
+        self.seq.fetch_add(1, Ordering::AcqRel);
+        let watchers: Vec<(Weak<Watcher>, u64)> = {
+            let mut w = self.watchers.lock();
+            if w.is_empty() {
+                return;
+            }
+            w.retain(|(watcher, _)| watcher.strong_count() > 0);
+            w.clone()
+        };
+        for (watcher, key) in watchers {
+            if let Some(watcher) = watcher.upgrade() {
+                watcher.kick(key);
+            }
+        }
+    }
+
+    /// An `epoll` instance watches it, as `key`.
+    pub fn watch(&self, watcher: Weak<Watcher>, key: u64) {
+        self.watchers.lock().push((watcher, key));
+    }
+
+    /// An `epoll` instance no longer watches it as `key`.
+    pub fn unwatch(&self, watcher: &Arc<Watcher>, key: u64) {
+        self.watchers.lock().retain(|(w, k)| !(*k == key && core::ptr::eq(w.as_ptr(), Arc::as_ptr(watcher))));
     }
 
     pub fn flags(&self) -> u32 {
@@ -138,6 +203,26 @@ pub fn remove(fd: i32) -> Result<(), isize> {
     };
     drop(old);
     Ok(())
+}
+
+/// The descriptor `fd` was met not ready (`EAGAIN`), or emptied or filled
+/// by a read or write: the `epoll` instances watching it look at it again.
+pub fn not_ready(fd: i32) {
+    if let Ok(desc) = get(fd) {
+        desc.changed();
+    }
+}
+
+/// Writes what is left of a line on every log descriptor (as the program
+/// ends: see [`crate::log`]).
+pub fn flush_logs() {
+    // At the program's end, another thread may hold the lock for ever.
+    let Some(t) = TABLE.try_lock() else { return };
+    for slot in t.slots.iter().flatten() {
+        if let Object::Log(log) = &slot.desc.object {
+            log.flush();
+        }
+    }
 }
 
 /// Closes every descriptor in `first..=last` (`close_range`).

@@ -42,6 +42,8 @@
 //! mic-silence 2                    # queue seconds of silence
 //! mic-tone 1.5 [6000]              # queue seconds of a voice-like buzz (peak amplitude), for voice detection
 //! mic-echo -6 250                  # the machine's sound output comes back into the microphone (gain dB, delay ms)
+//! mic-music "Neon Horizon" -6      # a sample track plays into the microphone beside what is queued (gain dB), as music elsewhere in the room would
+//! mic-music off                    # stop it (it also stops at its end)
 //! agent-connected 120              # wait until the agent opened a conversation with the simulator
 //! agent-call open_app '{"app":"editor"}' [60]  # the simulated model calls a function; waits for the result
 //! agent-result "opened"            # fail unless the last function result contains the text
@@ -276,6 +278,9 @@ pub enum Step {
         gain_db: f64,
         delay_ms: f64,
     },
+    /// A sample track (its title, and gain in dB) playing in the room, or
+    /// none.
+    MicMusic(Option<(String, f64)>),
     AgentConnected(Duration),
     AgentCall {
         name: String,
@@ -351,7 +356,12 @@ impl Script {
         self.any(|s| {
             matches!(
                 s,
-                Step::Say(_) | Step::MicWav(_) | Step::MicSilence(_) | Step::MicTone { .. } | Step::MicEcho { .. }
+                Step::Say(_)
+                    | Step::MicWav(_)
+                    | Step::MicSilence(_)
+                    | Step::MicTone { .. }
+                    | Step::MicEcho { .. }
+                    | Step::MicMusic(_)
             )
         })
     }
@@ -660,6 +670,10 @@ impl Line {
                 }
                 Step::MicEcho { gain_db, delay_ms }
             }
+            "mic-music" => match self.text("track title")?.as_str() {
+                "off" => Step::MicMusic(None),
+                title => Step::MicMusic(Some((title.into(), self.optional_number("gain (dB)")?.unwrap_or(0.0)))),
+            },
             "agent-connected" => Step::AgentConnected(self.seconds(Some(120.0))?),
             "agent-call" => {
                 let name = self.text("function name")?;
@@ -856,6 +870,14 @@ mod tests {
         );
         assert_eq!(steps("link wired off"), [Step::Link { up: false }]);
         assert_eq!(
+            steps("mic-music \"Neon Horizon\" -6\nmic-music Rain\nmic-music off"),
+            [
+                Step::MicMusic(Some(("Neon Horizon".into(), -6.0))),
+                Step::MicMusic(Some(("Rain".into(), 0.0))),
+                Step::MicMusic(None)
+            ]
+        );
+        assert_eq!(
             steps(r#"agent-call open_app '{"app":"editor"}'"#),
             [Step::AgentCall {
                 name: "open_app".into(),
@@ -892,6 +914,8 @@ mod tests {
             ("expect-stick VEDA/../X \"y\"", "not a path"),
             ("mic-tone 1 40000", "peak"),
             ("mic-echo -6", "missing delay"),
+            ("mic-music", "missing track title"),
+            ("mic-music Rain loud", "not a number"),
             ("net wifi", "unknown network"),
             ("requires gcc", "unknown requirement"),
             ("usb disk", "unknown USB device"),
@@ -963,6 +987,9 @@ mod tests {
         assert!(script.needs_mic() && script.needs_agent() && script.alone() && script.types_secret());
         let plain = Script::parse("wait 1\nkey ret\n").unwrap();
         assert!(!plain.needs_mic() && !plain.needs_agent() && !plain.alone() && !plain.types_secret());
+        // Music in the room keeps no time with the machine.
+        let music = Script::parse("mic-music Rain -6\n").unwrap();
+        assert!(music.needs_mic() && !music.alone());
     }
 
     /// Every script in the repository is one the interpreter runs.

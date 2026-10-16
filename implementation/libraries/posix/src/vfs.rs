@@ -74,6 +74,8 @@ pub const UID: u32 = vrt::process::UID;
 pub fn to_linux(st: &Stat) -> linux::Stat {
     let (kind, perms, nlink) = if st.is_dir {
         (mode::IFDIR, 0o755, 2)
+    } else if st.socket {
+        (mode::IFSOCK, 0o755, 1)
     } else if st.char_device {
         (mode::IFCHR, 0o666, 1)
     } else if st.executable {
@@ -122,5 +124,7 @@ mod tests {
         assert_eq!(to_linux(&dir).nlink, 2);
         let null = Stat { char_device: true, inode: 3, ..Default::default() };
         assert_eq!(to_linux(&null).mode, 0o20666);
+        let socket = Stat { socket: true, ..Default::default() };
+        assert_eq!(to_linux(&socket).mode, 0o140755);
     }
 }

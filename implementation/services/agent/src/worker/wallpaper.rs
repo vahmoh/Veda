@@ -3,10 +3,6 @@
 
 //! `wallpaper`: the desktop's picture, through the desktop shell.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 
 use super::{Ctx, desktop, show};

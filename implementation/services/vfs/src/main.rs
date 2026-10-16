@@ -28,6 +28,12 @@
 //! last of them; one moved while open is wherever it is now (a file moved
 //! into `/home` counts against the home disk from then on).
 //!
+//! **Unix domain sockets.** A POSIX program's socket bound to a path is a
+//! node of the writable file system, which `stat` shows and `remove` takes
+//! away; the VFS keeps what it needs to hand the socket what comes for it,
+//! connections and datagrams (see [`sockets`]). Sockets are not kept on the
+//! home disk: they are no more once the system restarts.
+//!
 //! **Private directories.** `/home/.private/<service>` belongs to the
 //! system service of that name (as the registry identifies the client):
 //! only it can see and change what is inside, and `.private` does not
@@ -51,6 +57,7 @@ extern crate alloc;
 
 mod dev;
 mod persist;
+mod sockets;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::rc::Rc;
@@ -60,13 +67,17 @@ use core::cell::{Cell, RefCell};
 
 use vabi::signals;
 use vipc::{Bytes, WaitSet};
-use vproto::fs::{DirEntry, DirPage, FsError, MAX_IO, Space, Stat, device, file, open_flags, seek, vfs};
+use vproto::fs::{
+    DirEntry, DirPage, FsError, MAX_DATAGRAM, MAX_IO, MAX_SOCKET_NAME, SocketAddress, SocketDatagram, SocketPeer,
+    Space, Stat, device, file, open_flags, seek, socket_kind, vfs,
+};
 use vproto::init::ClientIdentity;
-use vrt::object::{Channel, Vmo};
+use vrt::object::{Channel, Handle, Vmo};
 use vrt::println;
 
 use dev::Dev;
 use persist::Store;
+use sockets::Sockets;
 use vfs_core::access::{self, Connections, PRIVATE};
 use vfs_core::snapshot::{self, Samples};
 use vfs_core::tree::{self, Data, Kind, Node, NodeId, Tree};
@@ -153,6 +164,8 @@ struct Fs {
     /// Nodes removed while open, forgotten when the last closes.
     orphans: BTreeSet<(Mount, NodeId)>,
     connections: Connections,
+    /// The Unix domain sockets bound to paths.
+    sockets: Sockets,
     /// The size of `/home`'s snapshot, while known: changes move it by what
     /// they add to the snapshot and take from it, and every save measures
     /// it afresh, so that checking a write against the home disk does not
@@ -208,8 +221,14 @@ impl Fs {
     }
 
     /// Disposes of a node taken out of its tree: now, or when the last
-    /// thing that has it open closes it.
+    /// thing that has it open closes it. A socket's program may go on
+    /// with it, without its name in the file system.
     fn dispose(&mut self, m: Mount, node: NodeId) {
+        if let Ok(t) = self.tree(m)
+            && let Some(Node { kind: Kind::Socket(id), .. }) = t.node(node)
+        {
+            self.sockets.unlinked(*id);
+        }
         if self.open.contains_key(&(m, node)) {
             self.orphans.insert((m, node));
         } else if let Ok(t) = self.tree_mut(m) {
@@ -308,9 +327,9 @@ impl Fs {
         r
     }
 
-    /// Creates a file or directory (`kind`), if there is room for it:
-    /// memory for its node, and in `/home` room on the home disk for its
-    /// record and contents.
+    /// Creates a file, directory or socket (`kind`), if there is room for
+    /// it: memory for its node, and in `/home` room on the home disk for
+    /// its record and contents (a socket has none).
     fn create_node(&mut self, m: Mount, comps: &[&str], kind: Kind) -> Result<NodeId, FsError> {
         let t = self.tree(m)?;
         // What is there, and what cannot be made, are said before what
@@ -324,13 +343,12 @@ impl Fs {
         let (name, dirs) = comps.split_last().ok_or(FsError::Exists)?;
         t.lookup(dirs)?;
         self.memory_for(NODE_MEMORY + name.len())?;
-        let record = in_home(m, comps).then(|| {
-            let stored = match &kind {
-                Kind::File(d) => Some(self.stored(d)),
-                Kind::Dir(_) => None,
-            };
-            snapshot::record_len(snapshot::path_len(comps), stored)
-        });
+        let record = match &kind {
+            _ if !in_home(m, comps) => None,
+            Kind::File(d) => Some(snapshot::record_len(snapshot::path_len(comps), Some(self.stored(d)))),
+            Kind::Dir(_) => Some(snapshot::record_len(snapshot::path_len(comps), None)),
+            Kind::Socket(_) => None,
+        };
         if let Some(record) = record {
             self.reserve(record)?;
         }
@@ -456,6 +474,7 @@ impl Fs {
         // What its record stores, if it is in /home and is to be emptied.
         let stored = match self.tree(m)?.node(node).map(|n| &n.kind) {
             Some(Kind::Dir(_)) => return Err(FsError::IsDir),
+            Some(Kind::Socket(_)) => return Err(FsError::IsSocket),
             Some(Kind::File(d)) if flags & open_flags::TRUNCATE != 0 && !d.bytes().is_empty() => {
                 Some(self.node_in_home(m, node).then(|| self.stored(d)))
             }
@@ -536,7 +555,15 @@ impl Session<'_> {
             DEV => Dev::list().len() as u64,
             _ => self.fs.system.stat(tree::ROOT).map_or(0, |s| s.size),
         };
-        DirEntry { name: name.into(), is_dir: true, size, modified: 0, inode: tree::ROOT, executable: false }
+        DirEntry {
+            name: name.into(),
+            is_dir: true,
+            size,
+            modified: 0,
+            inode: tree::ROOT,
+            executable: false,
+            socket: false,
+        }
     }
 
     /// Renames `from` to `to`, replacing what is there if asked to.
@@ -579,6 +606,7 @@ impl Session<'_> {
             {
                 removed += match t.node(old).map(|n| &n.kind) {
                     Some(Kind::File(d)) => snapshot::record_len(p2, Some(self.fs.stored(d))),
+                    Some(Kind::Socket(_)) => 0,
                     _ => snapshot::record_len(p2, None),
                 };
             }
@@ -698,11 +726,11 @@ impl vfs::Server for Session<'_> {
         let record = match in_home(m, &comps) {
             true => {
                 let t = self.fs.tree(m)?;
-                let stored = match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
-                    Some(Kind::File(d)) => Some(self.fs.stored(d)),
-                    _ => None,
-                };
-                snapshot::record_len(snapshot::path_len(&comps), stored)
+                match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
+                    Some(Kind::File(d)) => snapshot::record_len(snapshot::path_len(&comps), Some(self.fs.stored(d))),
+                    Some(Kind::Socket(_)) => 0,
+                    _ => snapshot::record_len(snapshot::path_len(&comps), None),
+                }
             }
             false => 0,
         };
@@ -720,8 +748,12 @@ impl vfs::Server for Session<'_> {
     fn read_file(&mut self, path: String) -> Result<(Vmo, u64), FsError> {
         let (m, comps) = self.resolve(&path)?;
         let t = self.fs.tree(m).map_err(|_| FsError::Invalid)?;
-        let Some(Node { kind, .. }) = t.node(t.lookup(&comps)?) else { return Err(FsError::NotFound) };
-        let Kind::File(d) = kind else { return Err(FsError::IsDir) };
+        let d = match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
+            Some(Kind::File(d)) => d,
+            Some(Kind::Dir(_)) => return Err(FsError::IsDir),
+            Some(Kind::Socket(_)) => return Err(FsError::IsSocket),
+            None => return Err(FsError::NotFound),
+        };
         let bytes = d.bytes();
         let vmo = Vmo::create(bytes.len().max(1)).map_err(|_| FsError::NoSpace)?;
         vmo.write(0, bytes).map_err(|_| FsError::Io)?;
@@ -745,7 +777,11 @@ impl vfs::Server for Session<'_> {
         // What the record of the file there stores, if it is in /home.
         let mut stored = None;
         if let Some(node) = existing {
-            let Some(Node { kind: Kind::File(d), .. }) = t.node(node) else { return Err(FsError::IsDir) };
+            let d = match t.node(node).map(|n| &n.kind) {
+                Some(Kind::File(d)) => d,
+                Some(Kind::Socket(_)) => return Err(FsError::IsSocket),
+                _ => return Err(FsError::IsDir),
+            };
             if in_home(m, &comps) {
                 stored = Some(self.fs.stored(d));
                 self.fs.reserve((len as usize).saturating_sub(self.fs.stored(d)))?;
@@ -869,6 +905,7 @@ impl vfs::Server for Session<'_> {
         let contents = match t.node(t.lookup(&c1)?).map(|n| &n.kind) {
             Some(Kind::File(d)) => d.share(),
             Some(Kind::Dir(_)) => return Err(FsError::IsDir),
+            Some(Kind::Socket(_)) => return Err(FsError::IsSocket),
             None => return Err(FsError::NotFound),
         };
         self.fs.create_node(m2, &c2, Kind::File(contents))?;
@@ -878,6 +915,94 @@ impl vfs::Server for Session<'_> {
     fn renounce_private(&mut self) -> Result<(), FsError> {
         *self.renounced = true;
         Ok(())
+    }
+
+    fn bind_socket(
+        &mut self,
+        at: SocketAddress,
+        kind: u32,
+        name: Bytes,
+        koid: u64,
+        inbox: Channel,
+    ) -> Result<u64, FsError> {
+        if !matches!(kind, socket_kind::STREAM | socket_kind::DATAGRAM | socket_kind::SEQPACKET)
+            || name.0.is_empty()
+            || name.0.len() > MAX_SOCKET_NAME
+            || at.abstract_name.0.len() >= MAX_SOCKET_NAME
+        {
+            return Err(FsError::Invalid);
+        }
+        let owner = self.who.koid;
+        if at.is_abstract() {
+            return self.fs.sockets.bind_abstract(owner, koid, kind, at.abstract_name.0, name.0, inbox);
+        }
+        let (m, comps) = self.resolve(&at.path)?;
+        if m != Mount::Ram {
+            // `/system` and `/dev` take nothing new.
+            let exists = match m {
+                Mount::Dev => Dev::find(&comps).is_ok(),
+                _ => self.fs.tree(m)?.lookup(&comps).is_ok(),
+            };
+            return Err(if exists { FsError::Exists } else { FsError::ReadOnly });
+        }
+        let id = self.fs.sockets.reserve(owner)?;
+        let node = self.fs.create_node(m, &comps, Kind::Socket(id))?;
+        Ok(self.fs.sockets.bind(owner, koid, kind, name.0, inbox, node))
+    }
+
+    fn listen_socket(&mut self, id: u64) -> Result<(), FsError> {
+        self.fs.sockets.listen(id, self.who.koid)
+    }
+
+    fn connect_socket(
+        &mut self,
+        to: SocketAddress,
+        kind: u32,
+        from: u64,
+        koid: u64,
+        ends: Vec<Handle>,
+    ) -> Result<SocketPeer, FsError> {
+        let id = self.socket_at(&to, kind)?;
+        let me = self.fs.sockets.peer(from, self.who.koid, koid);
+        self.fs.sockets.connect(id, kind, me, ends)
+    }
+
+    fn send_to_socket(
+        &mut self,
+        to: SocketAddress,
+        from: u64,
+        koid: u64,
+        data: Bytes,
+        rights: Bytes,
+        handles: Vec<Handle>,
+    ) -> Result<(), FsError> {
+        if data.0.len() > MAX_DATAGRAM {
+            return Err(FsError::Invalid);
+        }
+        let id = self.socket_at(&to, socket_kind::DATAGRAM)?;
+        let from = self.fs.sockets.peer(from, self.who.koid, koid);
+        self.fs.sockets.send(id, SocketDatagram { from, data, rights, handles })
+    }
+}
+
+impl Session<'_> {
+    /// The socket bound at `to`: at its path (`Refused` for something else
+    /// there, as Linux has it), or to its abstract name, of `kind`'s
+    /// (`Refused` for none).
+    fn socket_at(&mut self, to: &SocketAddress, kind: u32) -> Result<u64, FsError> {
+        if to.is_abstract() {
+            return self.fs.sockets.find_abstract(kind, &to.abstract_name.0);
+        }
+        let (m, comps) = self.resolve(&to.path)?;
+        if m == Mount::Dev {
+            return Dev::find(&comps).and(Err(FsError::Refused));
+        }
+        let t = self.fs.tree(m)?;
+        match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
+            Some(Kind::Socket(id)) => Ok(*id),
+            Some(_) => Err(FsError::Refused),
+            None => Err(FsError::NotFound),
+        }
     }
 }
 
@@ -1078,6 +1203,7 @@ fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
         open: BTreeMap::new(),
         orphans: BTreeSet::new(),
         connections: Connections::new(),
+        sockets: Sockets::new(),
         home_len: Cell::new(None),
     }
 }

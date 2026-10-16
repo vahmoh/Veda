@@ -5,10 +5,6 @@
 //! arrives naming its facts by id (made definite before it was classified:
 //! `vagent::memory::Memory::pin_forget`), and removes exactly those.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use serde_json::{Value, json};
 use vagent::tools;
 

@@ -30,11 +30,6 @@
 //! full screen or the player, 0-9 jump to that tenth, comma/period a picture
 //! back/forward, Home/End.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod audio;
 mod decoder;
@@ -44,11 +39,7 @@ mod player;
 mod thumbs;
 mod widgets;
 
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec;
-use alloc::vec::Vec;
+use std::sync::Arc;
 
 use vabi::{RawHandle, signals};
 use vgfx::ShadowTemplate;
@@ -62,8 +53,6 @@ use vui::{App, FileDialog, FileDialogResult, Ui, WindowSpec, WindowState};
 
 use library::{Card, Entry};
 use player::{Player, Request};
-
-vrt::entry!(main);
 
 /// Where what Videos remembers is kept, in the home folder.
 const CONFIG_DIR: &str = ".config/videos";
@@ -645,7 +634,12 @@ fn save_state(vfs: Option<&vfs::Client>, state: &store::State) -> bool {
 
 const USAGE: &str = "usage: videos [--decoder PATH] [FILE | FOLDER]";
 
-fn main() -> i32 {
+fn main() {
+    std::process::exit(run());
+}
+
+/// Runs the program; its exit code.
+fn run() -> i32 {
     let args = vrt::env::args();
     let mut decoder = String::from(engine::DECODER);
     let mut file = None;

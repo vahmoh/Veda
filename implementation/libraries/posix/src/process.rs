@@ -20,7 +20,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use vabi::startup::role;
 use vabi::{WaitItem, signals};
@@ -32,7 +32,7 @@ use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
 use crate::inherit::{Inherited, Pseudo};
 use crate::linux::errno::*;
-use crate::linux::{Rusage, Siginfo, Timeval, sig, wait};
+use crate::linux::{Rusage, Siginfo, Timeval, o, sig, wait};
 use crate::{fs, path, signal, tty, user, vfs};
 
 /// The process id for a process's kernel object id (positive, below 2^30:
@@ -42,17 +42,26 @@ pub fn pid_of(koid: u64) -> i32 {
     ((koid & 0x3fff_ffff) as i32).max(1)
 }
 
-static PID: AtomicI32 = AtomicI32::new(0);
+static KOID: AtomicU64 = AtomicU64::new(0);
+
+/// This process's kernel object id: what services know it by (0 if it
+/// cannot be had).
+pub fn koid() -> u64 {
+    let k = KOID.load(Ordering::Relaxed);
+    if k != 0 {
+        return k;
+    }
+    let k = vrt::object::process_self_info().map_or(0, |i| i.koid);
+    KOID.store(k, Ordering::Relaxed);
+    k
+}
 
 /// This process's id.
 pub fn pid() -> i32 {
-    let p = PID.load(Ordering::Relaxed);
-    if p != 0 {
-        return p;
+    match koid() {
+        0 => 1,
+        k => pid_of(k),
     }
-    let p = vrt::object::process_self_info().map_or(1, |i| pid_of(i.koid));
-    PID.store(p, Ordering::Relaxed);
-    p
 }
 
 /// The id of the process that started this one.
@@ -65,11 +74,13 @@ static CHILDREN: Mutex<BTreeMap<i32, Process>> = Mutex::new(BTreeMap::new());
 
 /// Ends the process with `code` (`exit`).
 pub fn exit(code: i32) -> ! {
+    crate::fd::flush_logs();
     vrt::sys::process_exit((code & 0xff) as i64)
 }
 
 /// Ends the process as killed by signal `s`.
 pub fn exit_by_signal(s: u32) -> ! {
+    crate::fd::flush_logs();
     vrt::sys::process_exit(vabi::EXIT_CODE_SIGNALED - s as i64)
 }
 
@@ -202,17 +213,20 @@ impl ChildState {
             let h = match &d.object {
                 // The access the descriptor has and no more: the read end of
                 // a pipe cannot be written in the child either.
-                Object::Stream(s) => {
-                    let mut rights = s.socket.0.basic_info().map_err(error::kernel)?.rights;
-                    if !d.readable() {
-                        rights &= !vabi::Rights::READ.0;
-                    }
-                    if !d.writable() {
-                        rights &= !vabi::Rights::WRITE.0;
-                    }
-                    s.socket.0.duplicate(Some(vabi::Rights(rights))).map_err(error::kernel)?
-                }
+                Object::Stream(s) => s.shared_handle(d.readable(), d.writable())?,
                 Object::File(f) => f.duplicate()?.into_handle(),
+                // A socket: the handles that carry it (none, one, or a
+                // connection's two), and what makes them a socket.
+                Object::Unix(_) | Object::Inet(_) => {
+                    let Some(socket) = crate::carry::for_child(d)? else { continue };
+                    inherited.sockets.push((n, socket.entry));
+                    let mut handles = socket.handles.into_iter();
+                    let Some(first) = handles.next() else { continue };
+                    if let Some(second) = handles.next() {
+                        out.push((role::FD_EXTRA + n as u32, second));
+                    }
+                    first
+                }
                 // What no handle carries.
                 Object::Dir(dir) => {
                     inherited.fds.push((n, Pseudo::Dir(dir.path.clone())));
@@ -222,10 +236,13 @@ impl ChildState {
                     inherited.fds.push((n, Pseudo::Null));
                     continue;
                 }
-                Object::Log => {
+                Object::Log(_) => {
                     inherited.fds.push((n, Pseudo::Log));
                     continue;
                 }
+                // An eventfd, an epoll instance and a child's descriptor are
+                // the program's alone.
+                Object::EventFd(_) | Object::Epoll(_) | Object::Pidfd(_) => continue,
             };
             out.push((role::FD + n as u32, h));
         }
@@ -255,7 +272,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     // SAFETY: musl passes its attributes (zero if the program gave none).
     let attr: SpawnAttr = unsafe { user::read(attr)? };
     let (ignored, mask) = attr.signals(signal::ignored(), signal::current_mask());
-    let mut inherited = Inherited { ignored, mask, fds: Vec::new() };
+    let mut inherited = Inherited { ignored, mask, ..Inherited::default() };
     let mut child = ChildState {
         fds: fd::snapshot().into_iter().map(|(n, d, cloexec)| (n, (d, cloexec))).collect(),
         cwd: vfs::cwd(),
@@ -347,6 +364,20 @@ pub unsafe extern "C" fn __veda_spawn(
 }
 
 // --- waiting ---------------------------------------------------------------
+
+/// `pidfd_open`: a descriptor of child `pid`, readable once it has ended,
+/// which `poll` and `epoll` can wait for (as tokio waits for its children).
+/// Only a child has one: the other processes are not this one's to watch.
+/// It is close-on-exec, as on Linux.
+pub fn pidfd_open(pid: i32, flags: u32) -> SysResult {
+    if flags & !o::NONBLOCK != 0 {
+        return Err(EINVAL);
+    }
+    let child = CHILDREN.lock().get(&pid).map(|p| p.0.duplicate(None));
+    let handle = child.ok_or(ESRCH)?.map_err(error::kernel)?;
+    let desc = Description::new(Object::Pidfd(Process(handle)), o::RDWR | (flags & o::NONBLOCK));
+    fd::insert(desc, true, 0).map(|n| n as usize)
+}
 
 /// The children `pid` selects (`wait4`'s convention: -1 or a process
 /// group means any).

@@ -210,6 +210,8 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
             let items = unsafe { core::slice::from_raw_parts_mut(a[0] as *mut WaitItem, a[1]) };
             wait(items, a[2] as u64).map(|n| (n, 0))
         }
+        // The bridge makes channels of one handle per end.
+        nr::CHANNEL_CREATE if a[1] != 0 => Err(Error::NotSupported),
         nr::CHANNEL_CREATE => {
             let mut r = b::ChannelCreate::default();
             bridge(op::CHANNEL_CREATE, &mut r)?;

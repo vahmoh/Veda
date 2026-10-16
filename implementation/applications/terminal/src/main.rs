@@ -15,11 +15,6 @@
 //!
 //! Usage: `terminal [DIR]` starts in DIR.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod commands;
 mod job;
@@ -27,12 +22,9 @@ mod netcmds;
 mod program;
 mod shell;
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use terminal_core::edit::{Edit, LineEditor};
 use terminal_core::screen::{self, Cell, Pos, Screen, Style, color};
@@ -48,8 +40,6 @@ use vui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
 use job::{Job, Output};
 use program::Console;
 use shell::Shell;
-
-vrt::entry!(main);
 
 /// Terminal background and default text colour.
 const BG: Color = Color::hex(0x121216);
@@ -1371,7 +1361,7 @@ impl App for Terminal {
     }
 
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
-        alloc::vec![(self.output.handle(), signals::SIGNALED)]
+        vec![(self.output.handle(), signals::SIGNALED)]
     }
 
     fn handle_signaled(&mut self, _index: usize, _observed: u32) {
@@ -1472,7 +1462,7 @@ fn key_bytes(k: &KeyPress) -> Option<Vec<u8>> {
     if k.modifiers & modifiers::CTRL != 0
         && let Some(c) = letter(k.code)
     {
-        return Some(alloc::vec![c - b'a' + 1]);
+        return Some(vec![c - b'a' + 1]);
     }
     if let Some(c) = k.ch {
         let mut buf = [0u8; 4];
@@ -1526,10 +1516,15 @@ fn edit_for(k: &KeyPress) -> Option<Edit<'static>> {
 /// Terminal"), or at home. It takes no command to run: what it runs, it
 /// runs with the authority of the user's own hand (`kill -f`), so only the
 /// user, or the agent with the user's consent, gives it commands.
-fn main() -> i32 {
+fn main() {
+    std::process::exit(run());
+}
+
+/// Runs the program; its exit code.
+fn run() -> i32 {
     let cwd = vrt::env::args().get(1).cloned().unwrap_or_else(|| String::from(HOME));
     let Some(term) = Terminal::new(&cwd) else {
-        vrt::println!("cannot create events");
+        println!("cannot create events");
         return 1;
     };
     let mut spec = WindowSpec::new("Terminal", 880, 560);

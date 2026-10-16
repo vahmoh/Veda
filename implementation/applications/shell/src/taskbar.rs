@@ -5,10 +5,6 @@
 //! in their manifests) and running ones in the middle, and the agent,
 //! network, volume and clock buttons on the right.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vgfx::{Align, Color, Rect};
 use vproto::display::WindowState;
 use vui::{Font, Icon, Ui, status};
@@ -75,7 +71,7 @@ fn items(m: &Model) -> Vec<Item> {
             let app = m.app(&w.app_id);
             let icon = app.map(apps::icon_for).or_else(|| Icon::by_name(&w.app_id)).unwrap_or(Icon::Grid);
             let name = app.map_or_else(|| w.title.clone(), |a| a.name.clone());
-            items.push(Item { key, app: w.app_id.clone(), name, icon, windows: alloc::vec![win] });
+            items.push(Item { key, app: w.app_id.clone(), name, icon, windows: vec![win] });
         }
     }
     items

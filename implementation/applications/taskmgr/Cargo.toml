@@ -22,8 +22,6 @@ vui = { workspace = true }
 vfiles = { workspace = true }
 apps-common = { path = "../common" }
 
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

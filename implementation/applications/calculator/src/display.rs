@@ -25,7 +25,7 @@ pub struct Drawn {
     pub line: Rect,
     pub x: f32,
     pub size: f32,
-    pub text: alloc::string::String,
+    pub text: String,
 }
 
 /// The size the large line is drawn at to fit `width`, and its width at that size.
@@ -63,9 +63,9 @@ pub fn draw(ui: &mut Ui, r: Rect, screen: &Screen, memory: bool) -> Drawn {
 
     // The large line: the expression with its open parentheses, or the result.
     let text = if screen.main.is_empty() { "0" } else { screen.main.as_str() };
-    let ghost: alloc::string::String = ")".repeat(screen.ghost);
+    let ghost = ")".repeat(screen.ghost);
     let max = (main.h as f32 * 0.82).min(MAIN_MAX);
-    let whole = alloc::format!("{text}{ghost}");
+    let whole = format!("{text}{ghost}");
     let (size, width) = fit(ui, &whole, max, main.w as f32);
     let text_w = ui.measure(text, Font::Regular, size);
     // Too wide even at the smallest size: the end shows, or the caret.
@@ -107,13 +107,13 @@ pub fn draw(ui: &mut Ui, r: Rect, screen: &Screen, memory: bool) -> Drawn {
         ui.label(below, e, Font::Bold, 15.0, t.danger, Align::Right);
     } else if let Some(p) = &screen.preview {
         let font = ui.ctx.font(Font::Regular);
-        let shown = ui.ctx.text.ellipsize(font, 20.0, &alloc::format!("= {p}"), below.w as f32);
+        let shown = ui.ctx.text.ellipsize(font, 20.0, &format!("= {p}"), below.w as f32);
         ui.label(below, &shown, Font::Regular, 20.0, t.text_dim, Align::Right);
     }
     if ui.hovered(main) {
         ui.set_cursor(Cursor::Text);
     }
-    Drawn { line: main, x, size, text: alloc::string::String::from(text) }
+    Drawn { line: main, x, size, text: String::from(text) }
 }
 
 /// The byte of the large line nearest `px` (a window x), to put the caret there.

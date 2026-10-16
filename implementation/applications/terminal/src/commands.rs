@@ -18,11 +18,6 @@
 mod session;
 mod system;
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use terminal_core::screen::{Style, color};
 use terminal_core::text::{Counts, LastLines, LineSplitter, is_binary, trim_line_end};
 use vproto::fs::{DirEntry, MAX_IO, file, open_flags};
@@ -715,6 +710,9 @@ fn print_entry_long(io: &mut Io, e: &DirEntry) {
     if e.is_dir {
         let items = if e.size == 1 { "1 item".to_string() } else { format!("{} items", e.size) };
         io.styled(&rpad(&items, 10), Style::DIM);
+    } else if e.socket {
+        // A program's Unix domain socket: it has no size.
+        io.styled(&rpad("socket", 10), Style::DIM);
     } else {
         io.print(&rpad(&human_size(e.size), 10));
     }
@@ -722,16 +720,27 @@ fn print_entry_long(io: &mut Io, e: &DirEntry) {
     io.styled(&e.name, entry_style(&e.name, e.is_dir, e.executable));
     if e.is_dir {
         io.styled("/", entry_style(&e.name, true, false));
+    } else if e.socket {
+        io.styled("=", Style::DIM);
     }
     io.print("\n");
+}
+
+/// An entry's name as a wide listing shows it: a directory's with a slash,
+/// a socket's with `=` (as `ls -F` marks them).
+fn marked_name(e: &DirEntry) -> String {
+    match (e.is_dir, e.socket) {
+        (true, _) => format!("{}/", e.name),
+        (_, true) => format!("{}=", e.name),
+        _ => e.name.clone(),
+    }
 }
 
 fn print_wide(sh: &Shell, io: &mut Io, entries: &[DirEntry]) {
     if entries.is_empty() {
         return;
     }
-    let names: Vec<String> =
-        entries.iter().map(|e| if e.is_dir { format!("{}/", e.name) } else { e.name.clone() }).collect();
+    let names: Vec<String> = entries.iter().map(marked_name).collect();
     let colw = names.iter().map(|n| n.chars().count()).max().unwrap_or(1) + 2;
     let per_row = (sh.cols.max(colw) / colw).max(1);
     let rows = names.len().div_ceil(per_row);
@@ -776,6 +785,7 @@ fn cmd_ls(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 modified: st.modified,
                 inode: st.inode,
                 executable: st.executable,
+                socket: st.socket,
             };
             print_entry_long(io, &e);
             continue;

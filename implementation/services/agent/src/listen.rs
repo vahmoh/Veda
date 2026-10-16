@@ -16,26 +16,39 @@
 //! conversation.
 //!
 //! The detector is [`vaudio::vad::Vad`]; music or a television can seem
-//! like speech to it. When recognition heard no words for a while, the
-//! sound it was given is taken for such a background: until it stops,
-//! recognition starts again only for a sound that stands out from it
-//! (louder than its usual peaks), so music playing does not keep the
-//! recogniser busy, while someone calling over it still does. Recognition
-//! costs a fraction of a conversation, and a budget caps how long it may
-//! run each hour ([`SharedBudget`]): the agent's, as listening starts anew
-//! at every wake, after every conversation and on every change of
-//! settings.
+//! like speech to it. What the computer plays itself (music, a video)
+//! comes back into the microphone too. The audio service cancels most of
+//! it, but what is left still sounds like speech, and gets louder with the
+//! music. So while something plays, recognition starts only for a sound
+//! louder than that sound's echo can be, as the conversation's echo gate
+//! decides ([`vagent::gate`]): in the microphone as recorded too, since
+//! someone calling over the music adds sound to the room, and what the
+//! canceller lets through does not.
+//!
+//! Other sound — a television, music from elsewhere — reaches the
+//! recogniser. When it heard no words for a while, the sound it was given
+//! is taken for such a background ([`vagent::wake::Background`]): until
+//! it stops, recognition starts again only for a sound that stands out
+//! from it (louder than its usual peaks), so the television does not keep
+//! the recogniser busy, while someone calling over it still does. It
+//! stops when the sound has been well below its usual level for longer
+//! than a pause between songs, not when the detector hears nothing like
+//! speech for a while, which a quiet passage of the music does.
+//!
+//! Recognition costs a fraction of a conversation, and a budget caps how
+//! long it may run each hour ([`SharedBudget`]): the agent's, as listening
+//! starts anew at every wake, after every conversation and on every change
+//! of settings.
 
-use alloc::collections::VecDeque;
-use alloc::rc::Rc;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
 
 use serde_json::json;
 use vabi::{RawHandle, signals};
 use vagent::deepgram;
-use vagent::wake::{self, Budget};
+use vagent::gate::{EchoGate, Verdict};
+use vagent::wake::{self, Background, Budget};
 use vaudio::vad::Vad;
 use vweb::ws::{Message, WebSocket};
 use vweb::{Conn, WebError};
@@ -62,14 +75,10 @@ const HOUR_NS: u64 = 3_600_000_000_000;
 const RETRY_NS: u64 = 30_000_000_000;
 /// Recognition also stops after this long without a word (music).
 const WORDLESS_NS: u64 = 8_000_000_000;
-/// Over such sound, recognition starts again only for a sound this much
-/// louder than its usual peaks ...
-const STAND_OUT_DB: f32 = 10.0;
-/// ... the loudest tenth of the last ten seconds (music builds up).
+/// The levels kept to judge such sound by: ten seconds' (music builds up).
 const BACKGROUND_FRAMES: usize = 500;
-/// Such sound has stopped once the detector heard nothing like speech for
-/// this long.
-const BACKGROUND_GONE_NS: u64 = 5_000_000_000;
+/// A sound stands out from it when its last tenth of a second does.
+const RECENT_FRAMES: usize = 5;
 /// Speech starts an utterance after this long (ms): a name takes longer,
 /// a knock or a cough does not.
 const START_MS: u32 = 200;
@@ -112,8 +121,13 @@ pub struct Listener {
     key: String,
     url: String,
     vad: Vad,
-    /// Audio not yet a whole frame.
+    /// Audio not yet a whole frame, and beside it what was playing and the
+    /// microphone as recorded (empty if the audio service does not say).
     partial: Vec<i16>,
+    partial_playing: Vec<i16>,
+    partial_recorded: Vec<i16>,
+    /// Tells the echo of what the computer plays from someone in the room.
+    gate: EchoGate,
     preroll: VecDeque<i16>,
     /// Audio waiting for the connection.
     held: Vec<i16>,
@@ -124,8 +138,9 @@ pub struct Listener {
     last_words_ns: u64,
     /// The level of each recent frame (dBFS), newest last.
     levels: VecDeque<f32>,
-    /// The sound going on held no words (see the module documentation).
-    wordless: bool,
+    /// The sound going on that held no words (see the module
+    /// documentation), while it goes on.
+    background: Option<Background>,
     /// What was said in this stretch of speech (final transcripts).
     heard: String,
     /// A call waiting for the rest of its sentence.
@@ -140,7 +155,7 @@ impl Listener {
     /// Listens for `name`; `url` is Deepgram's (or a simulator's), and
     /// recognition draws on `budget`.
     pub fn new(name: &str, key: &str, url: String, now: u64, budget: SharedBudget) -> Listener {
-        vrt::println!("listening for its name");
+        println!("listening for its name");
         let mut vad = Vad::new(MIC_RATE);
         vad.set_timing(START_MS, 600);
         Listener {
@@ -149,6 +164,9 @@ impl Listener {
             url,
             vad,
             partial: Vec::new(),
+            partial_playing: Vec::new(),
+            partial_recorded: Vec::new(),
+            gate: EchoGate::new(),
             preroll: VecDeque::with_capacity(PREROLL),
             held: Vec::new(),
             connector: None,
@@ -157,7 +175,7 @@ impl Listener {
             last_speech_ns: 0,
             last_words_ns: 0,
             levels: VecDeque::with_capacity(BACKGROUND_FRAMES),
-            wordless: false,
+            background: None,
             heard: String::new(),
             call: None,
             retry_at: 0,
@@ -182,12 +200,23 @@ impl Listener {
         self.connector.is_some() || self.stream.is_some()
     }
 
-    /// Takes microphone audio.
-    pub fn hear(&mut self, pcm: &[i16], now: u64) {
+    /// Takes echo-cancelled microphone audio, and what was playing and the
+    /// microphone as recorded at the same moments (empty if unknown).
+    pub fn hear(&mut self, pcm: &[i16], playing: &[i16], recorded: &[i16], now: u64) {
+        use vaudio::level::rms_dbfs;
         let mut partial = core::mem::take(&mut self.partial);
         partial.extend_from_slice(pcm);
+        self.partial_playing.extend_from_slice(playing);
+        self.partial_recorded.extend_from_slice(recorded);
         let whole = partial.len() / FRAME * FRAME;
-        for f in partial[..whole].chunks(FRAME) {
+        for (k, f) in partial[..whole].chunks(FRAME).enumerate() {
+            let at = k * FRAME..(k + 1) * FRAME;
+            let level = rms_dbfs(f);
+            // All the computer plays counts as its own voice here: none of
+            // it is someone calling.
+            let playing_db = self.partial_playing.get(at.clone()).map_or(-100.0, rms_dbfs);
+            let recorded_db = self.partial_recorded.get(at).map_or(level, rms_dbfs);
+            let echo = self.gate.packet(level, recorded_db, playing_db, playing_db) == Verdict::Hold;
             self.vad.process(f);
             let speaking = self.vad.speaking();
             if speaking {
@@ -196,17 +225,19 @@ impl Listener {
             if self.levels.len() == BACKGROUND_FRAMES {
                 self.levels.pop_front();
             }
-            self.levels.push_back(vaudio::level::rms_dbfs(f));
-            if self.wordless && now.saturating_sub(self.last_speech_ns) > BACKGROUND_GONE_NS {
-                // The wordless sound stopped.
-                self.wordless = false;
+            self.levels.push_back(level);
+            if let Some(b) = &mut self.background
+                && !b.hear(level, now)
+            {
+                println!("the sound without words stopped");
+                self.background = None;
             }
             if self.recognising() {
                 if self.held.len() + f.len() <= HOLD_MAX {
                     self.held.extend_from_slice(f);
                 }
-            } else if speaking && (!self.wordless || self.stands_out()) && self.may_recognise(now) {
-                vrt::println!("someone is speaking");
+            } else if speaking && !echo && (self.background.is_none() || self.stands_out()) && self.may_recognise(now) {
+                println!("someone is speaking");
                 self.held.clear();
                 self.held.extend(self.preroll.drain(..));
                 self.held.extend_from_slice(f);
@@ -228,16 +259,17 @@ impl Listener {
         }
         partial.drain(..whole);
         self.partial = partial;
+        let side = whole.min(self.partial_playing.len());
+        self.partial_playing.drain(..side);
+        let side = whole.min(self.partial_recorded.len());
+        self.partial_recorded.drain(..side);
     }
 
     /// The last tenth of a second is clearly louder than the background's
-    /// usual peaks (the loudest tenth of the last seconds).
+    /// usual peaks ([`wake::stands_out`]).
     fn stands_out(&self) -> bool {
-        let mut sorted: Vec<f32> = self.levels.iter().copied().collect();
-        sorted.sort_by(f32::total_cmp);
-        let peaks = sorted.get(sorted.len() * 9 / 10).copied().unwrap_or(-100.0);
-        let now = self.levels.iter().rev().take(5).copied().fold(-100.0, f32::max);
-        now > peaks + STAND_OUT_DB
+        let window: Vec<f32> = self.levels.iter().copied().collect();
+        wake::stands_out(&window, &window[window.len().saturating_sub(RECENT_FRAMES)..])
     }
 
     fn may_recognise(&mut self, now: u64) -> bool {
@@ -247,7 +279,7 @@ impl Listener {
         let mut budget = self.budget.borrow_mut();
         if !budget.allows(now) {
             if budget.report_exhausted() {
-                vrt::println!("listening for its name paused: much speech this hour");
+                println!("listening for its name paused: much speech this hour");
             }
             return false;
         }
@@ -279,7 +311,7 @@ impl Listener {
                     self.stream = Some(ws);
                 }
                 Err(e) => {
-                    vrt::println!("cannot listen for its name: {}", e);
+                    println!("cannot listen for its name: {}", e);
                     let auth = matches!(e, WebError::Status { code: 401 | 403, .. });
                     self.retry_at = now + if auth { 10 * RETRY_NS } else { RETRY_NS };
                     self.held.clear();
@@ -353,7 +385,7 @@ impl Listener {
             }
         }
         for m in near_misses {
-            vrt::println!("heard something like its name, not a call: \"{}\"", m);
+            println!("heard something like its name, not a call: \"{}\"", m);
         }
         // A call wakes the agent once the speaker has finished the sentence:
         // the recogniser heard them pause (after just the name, the detector
@@ -367,19 +399,19 @@ impl Listener {
         if finished {
             let said = self.call.take().map(|c| c.said);
             self.stop(now);
-            vrt::println!("woken by its name");
+            println!("woken by its name");
             return said;
         }
         if failed {
-            vrt::println!("listening for its name: the connection ended");
+            println!("listening for its name: the connection ended");
             self.stop(now);
             self.retry_at = now + RETRY_NS / 6;
         } else if self.recognising() && self.call.is_none() {
             let wordless = self.stream.is_some() && now.saturating_sub(self.last_words_ns) > WORDLESS_NS;
-            if wordless && !self.wordless {
-                vrt::println!("sound without words; listening for its name over it");
+            if wordless && self.background.is_none() {
+                println!("sound without words; listening for its name over it");
+                self.background = Background::new(self.levels.iter().copied(), now);
             }
-            self.wordless |= wordless;
             if wordless
                 || now.saturating_sub(self.last_speech_ns) > QUIET_NS
                 || now.saturating_sub(self.started_ns) > STREAM_MAX_NS

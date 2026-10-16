@@ -31,11 +31,6 @@
 //! * **State** ([`shared`]): settings, the key, memory, permissions and
 //!   timers live in the agent's private directory ([`store`]).
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod admin;
 mod approvals;
 mod conversation;
@@ -50,11 +45,8 @@ mod ui;
 mod voice;
 mod worker;
 
-use alloc::collections::{BTreeMap, VecDeque};
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use vabi::{WaitItem, signals};
 use vagent::deepgram;
@@ -73,8 +65,6 @@ use shared::Shared;
 use ui::Ui;
 use voice::Voice;
 use worker::Worker;
-
-vrt::entry!(main);
 
 /// How often the interface's live levels are refreshed.
 const LIVE_PERIOD_NS: u64 = 33_000_000;
@@ -330,7 +320,12 @@ impl Agent {
     }
 }
 
-fn main() -> i32 {
+fn main() {
+    std::process::exit(run());
+}
+
+/// Runs the program; its exit code.
+fn run() -> i32 {
     // Options from the kernel command line (handed down by init):
     // `agent.endpoint=ws://10.0.2.2:5000/` talks to a local simulator. The
     // Deepgram key goes only to Deepgram's own services, over TLS

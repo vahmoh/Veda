@@ -10,8 +10,6 @@
 //! request that expires or is answered elsewhere takes its tick with it,
 //! and the next request, for whatever action, starts unticked.
 
-use alloc::format;
-
 use vgfx::{Align, Color, Rect};
 use vproto::agent::ApprovalRequest;
 use vui::{Font, Ui};

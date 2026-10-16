@@ -3,8 +3,6 @@
 
 //! The calendar flyout opened from the taskbar clock.
 
-use alloc::format;
-
 use vgfx::{Align, Color, Rect};
 use vrt::time::{DateTime, days_from_civil, days_in_month, month_name, weekday};
 use vui::{Font, Icon, Ui};

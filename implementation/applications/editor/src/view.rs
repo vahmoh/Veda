@@ -5,10 +5,6 @@
 //! search matches, selection, cursor) and turns keyboard and mouse input
 //! into edits and cursor movement.
 
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-
-use num_traits::Float;
 use vgfx::{Align, Color, Rect};
 use vproto::display::modifiers;
 use vproto::input::keys;
@@ -663,7 +659,7 @@ impl TextView {
                 ui.canvas.fill_rect(Rect::new(text.x, y, text.w, lh), Color::rgba(255, 255, 255, 8));
             }
             if opts.line_numbers && row.start == 0 {
-                let n = alloc::format!("{}", row.line + 1);
+                let n = format!("{}", row.line + 1);
                 let c = if row.line == sel.cursor.line { t.text_dim } else { t.text_faint.with_alpha(170) };
                 let nr = Rect::new(r.x, y, gutter - 18, lh);
                 ui.label(nr, &n, Font::Mono, size - 1.0, c, Align::Right);

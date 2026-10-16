@@ -108,7 +108,10 @@ pub fn build(o: &Options) -> Result<System> {
     util::status("Packing", "initrd");
     let mut initrd = initrd::builder::Builder::new();
     for (program, path) in &artifacts.programs {
-        initrd.add(&format!("bin/{}", program.binary), shipped(path, true)?);
+        // A program on the standard library is a POSIX program, which the C
+        // library starts; one on `vrt` alone carries its note.
+        let kind = if program.std { velf::Kind::Posix } else { velf::Kind::Veda };
+        initrd.add(&format!("bin/{}", program.binary), shipped(path, Some(kind))?);
     }
     // What the toolchain makes for the image: the C and Rust test programs,
     // the C toolchain itself (gcc, as, ld, the C library and its headers, as
@@ -179,20 +182,29 @@ pub fn build(o: &Options) -> Result<System> {
     }
     let initrd = initrd.build();
     let bootloader = util::read(&artifacts.bootloader)?;
-    let kernel = shipped(&artifacts.kernel, false)?;
+    let kernel = shipped(&artifacts.kernel, None)?;
     Ok(System { bootloader, kernel, initrd })
 }
 
-/// The executable at `path` as the system ships it, checked: a Veda
-/// program if `program` (one with `vrt`'s note), and without its symbols
-/// and section headers (`velf::strip`), which the build's own copy keeps
-/// for debugging.
-fn shipped(path: &Path, program: bool) -> Result<Vec<u8>> {
+/// The executable at `path` as the system ships it, checked: of `kind`, if
+/// given (a Veda program has `vrt`'s note, a POSIX program none), and
+/// without its symbols and section headers (`velf::strip`), which the
+/// build's own copy keeps for debugging.
+fn shipped(path: &Path, kind: Option<velf::Kind>) -> Result<Vec<u8>> {
     let mut file = util::read(path)?;
     let invalid = |e: velf::ElfError| format!("{}: {e}", path.display());
-    let kind = velf::Elf::parse_for(&file, arch::MACHINE).map_err(invalid)?.kind();
-    if program && kind != velf::Kind::Veda {
-        return Err(format!("{}: not a Veda program (it lacks the note vrt gives one)", path.display()));
+    let found = velf::Elf::parse_for(&file, arch::MACHINE).map_err(invalid)?.kind();
+    match kind {
+        Some(velf::Kind::Veda) if found != velf::Kind::Veda => {
+            return Err(format!("{}: not a Veda program (it lacks the note vrt gives one)", path.display()));
+        }
+        Some(velf::Kind::Posix) if found != velf::Kind::Posix => {
+            return Err(format!(
+                "{}: a program on the standard library, but marked as a Veda program (by vrt's runtime)",
+                path.display()
+            ));
+        }
+        _ => {}
     }
     let len = velf::strip(&mut file, arch::MACHINE).map_err(invalid)?;
     file.truncate(len);

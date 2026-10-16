@@ -42,6 +42,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("mediadec", &[]),
     ("initrd", &["std"]),
     ("vheap", &[]),
+    ("vframes", &[]),
     ("vipc", &[]),
     ("vraster", &[]),
     ("vfont", &[]),
@@ -87,7 +88,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 /// own: `vrt`'s tests turn on its default `runtime` feature, which Cargo
 /// would otherwise unify into the build of `vrt` that the POSIX layer's
 /// tests link (a second panic handler and allocator beside `std`'s).
-const HOST_TESTED_ALONE: &[&str] = &["vrt"];
+pub const HOST_TESTED_ALONE: &[&str] = &["vrt"];
 
 /// The driver VM's programs with tests, which run on Linux, as the
 /// programs do (`implementation/guest/`, on musl).
@@ -100,8 +101,14 @@ const NOT_TESTED: &[(&str, &str)] = &[];
 
 /// The command that runs the host's unit tests.
 fn host_tests() -> std::process::Command {
+    host_crates(&["test", "--quiet"])
+}
+
+/// Cargo's `args` for the crates with host unit tests together (but
+/// [`HOST_TESTED_ALONE`]), with the features their tests need.
+pub fn host_crates(args: &[&str]) -> std::process::Command {
     let mut cmd = util::cargo();
-    cmd.args(["test", "--quiet"]);
+    cmd.args(args);
     for (package, _) in HOST_TESTED {
         cmd.args(["--package", package]);
     }
@@ -150,8 +157,10 @@ pub fn test(o: &Options) -> Result {
     system::save(o, &system, &system::system_dir())?;
     drop(system);
     util::status("Testing", "integration tests inside Veda");
+    // The servers of this computer's that the network checks reach.
+    let host = HostWeb::start()?;
     let mut systest = o.clone();
-    systest.cmdline = format!("{} systest", o.cmdline).trim().to_string();
+    systest.cmdline = format!("{} {}", o.cmdline, host.systest_arg()).trim().to_string();
     // The last test restarts the window system; give the desktop a moment
     // to come back before the screenshot.
     let checks = Script::parse(

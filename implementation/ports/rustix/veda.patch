@@ -1,0 +1,1173 @@
+--- a/build.rs
++++ b/build.rs
+@@ -110,7 +110,8 @@
+             || arch.starts_with("mips"))
+             && !rustix_use_experimental_asm);
+     if libc {
+-        if (os == "linux" || os == "android") && !cfg_no_linux_raw {
++        // Veda's C library has Linux's interface (and its numbers).
++        if (os == "linux" || os == "android" || os == "veda") && !cfg_no_linux_raw {
+             use_feature("linux_raw_dep");
+         }
+ 
+@@ -144,7 +145,7 @@
+     if apple {
+         use_feature("apple");
+     }
+-    if os == "linux" || os == "l4re" || os == "android" || os == "emscripten" {
++    if os == "linux" || os == "l4re" || os == "android" || os == "emscripten" || os == "veda" {
+         use_feature("linux_like");
+     }
+     if os == "solaris" || os == "illumos" {
+@@ -156,8 +157,9 @@
+ 
+     // Add some additional common target combinations.
+ 
+-    // Android and "regular" Linux both use the Linux kernel.
+-    if os == "android" || os == "linux" {
++    // Android and "regular" Linux both use the Linux kernel; so do the
++    // programs on Veda's C library, which carries Linux's system calls out.
++    if os == "android" || os == "linux" || os == "veda" {
+         use_feature("linux_kernel");
+     }
+ 
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -191,7 +191,7 @@
+ [dev-dependencies.tempfile]
+ version = "3.5.0"
+ 
+-[target.'cfg(all(any(target_os = "linux", target_os = "android"), any(rustix_use_libc, miri, not(all(target_os = "linux", any(target_endian = "little", any(target_arch = "s390x", target_arch = "powerpc")), any(target_arch = "arm", all(target_arch = "aarch64", target_pointer_width = "64"), target_arch = "riscv64", all(rustix_use_experimental_asm, target_arch = "powerpc"), all(rustix_use_experimental_asm, target_arch = "powerpc64"), all(rustix_use_experimental_asm, target_arch = "s390x"), all(rustix_use_experimental_asm, target_arch = "mips"), all(rustix_use_experimental_asm, target_arch = "mips32r6"), all(rustix_use_experimental_asm, target_arch = "mips64"), all(rustix_use_experimental_asm, target_arch = "mips64r6"), target_arch = "x86", all(target_arch = "x86_64", target_pointer_width = "64")))))))'.dependencies.linux-raw-sys]
++[target.'cfg(all(any(target_os = "linux", target_os = "android", target_os = "veda"), any(rustix_use_libc, miri, not(all(target_os = "linux", any(target_endian = "little", any(target_arch = "s390x", target_arch = "powerpc")), any(target_arch = "arm", all(target_arch = "aarch64", target_pointer_width = "64"), target_arch = "riscv64", all(rustix_use_experimental_asm, target_arch = "powerpc"), all(rustix_use_experimental_asm, target_arch = "powerpc64"), all(rustix_use_experimental_asm, target_arch = "s390x"), all(rustix_use_experimental_asm, target_arch = "mips"), all(rustix_use_experimental_asm, target_arch = "mips32r6"), all(rustix_use_experimental_asm, target_arch = "mips64"), all(rustix_use_experimental_asm, target_arch = "mips64r6"), target_arch = "x86", all(target_arch = "x86_64", target_pointer_width = "64")))))))'.dependencies.linux-raw-sys]
+ version = "0.12"
+ features = [
+     "general",
+@@ -281,10 +281,9 @@
+     "cfg(thumb_mode)",
+     "cfg(wasi)",
+     "cfg(wasi_ext)",
++    'cfg(target_os, values("veda"))',
+     "cfg(wasip2)",
+     'cfg(target_arch, values("xtensa"))',
+     'cfg(target_os, values("cygwin"))',
+ ]
+ 
+-[hints]
+-mostly-unused = true
+--- a/src/backend/libc/c.rs
++++ b/src/backend/libc/c.rs
+@@ -165,10 +165,10 @@
+     target_os = "emscripten"
+ ))]
+ pub(super) use {pread64 as pread, pwrite64 as pwrite};
+-#[cfg(any(target_os = "linux", target_os = "hurd", target_os = "emscripten"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "hurd", target_os = "emscripten"))]
+ pub(super) use {preadv64 as preadv, pwritev64 as pwritev};
+ 
+-#[cfg(all(target_os = "linux", any(target_env = "gnu", target_env = "uclibc")))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), any(target_env = "gnu", target_env = "uclibc")))]
+ pub(super) unsafe fn prlimit(
+     pid: pid_t,
+     resource: __rlimit_resource_t,
+@@ -188,7 +188,7 @@
+     prlimit64(pid, resource, new_limit, old_limit)
+ }
+ 
+-#[cfg(all(target_os = "linux", target_env = "musl"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "musl"))]
+ pub(super) unsafe fn prlimit(
+     pid: pid_t,
+     resource: c_int,
+@@ -317,7 +317,7 @@
+ pub(super) use readwrite_pv::{preadv, pwritev};
+ 
+ // glibc added `preadv64v2` and `pwritev64v2` in version 2.26.
+-#[cfg(all(target_os = "linux", target_env = "gnu"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+ mod readwrite_pv64v2 {
+     use super::*;
+ 
+@@ -399,14 +399,14 @@
+         }
+     }
+ }
+-#[cfg(all(target_os = "linux", target_env = "gnu"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+ pub(super) use readwrite_pv64v2::{preadv64v2 as preadv2, pwritev64v2 as pwritev2};
+ 
+ // On non-glibc, assume we don't have `pwritev2`/`preadv2` in libc and use
+ // `c::syscall` instead.
+ #[cfg(any(
+     target_os = "android",
+-    all(target_os = "linux", not(target_env = "gnu")),
++    all(any(target_os = "linux", target_os = "veda"), not(target_env = "gnu")),
+ ))]
+ mod readwrite_pv64v2 {
+     use super::*;
+@@ -470,7 +470,7 @@
+ }
+ #[cfg(any(
+     target_os = "android",
+-    all(target_os = "linux", not(target_env = "gnu")),
++    all(any(target_os = "linux", target_os = "veda"), not(target_env = "gnu")),
+ ))]
+ pub(super) use readwrite_pv64v2::{preadv64v2 as preadv2, pwritev64v2 as pwritev2};
+ 
+--- a/src/backend/libc/fs/syscalls.rs
++++ b/src/backend/libc/fs/syscalls.rs
+@@ -512,7 +512,7 @@
+     }
+ }
+ 
+-#[cfg(all(target_os = "linux", target_env = "gnu"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+ pub(crate) fn renameat2(
+     old_dirfd: BorrowedFd<'_>,
+     old_path: &CStr,
+@@ -544,7 +544,7 @@
+ 
+ #[cfg(any(
+     target_os = "android",
+-    all(target_os = "linux", not(target_env = "gnu")),
++    all(any(target_os = "linux", target_os = "veda"), not(target_env = "gnu")),
+ ))]
+ #[inline]
+ pub(crate) fn renameat2(
+@@ -1908,7 +1908,7 @@
+ #[cfg(all(linux_kernel, target_pointer_width = "64"))]
+ const SYS_OPENAT2: i64 = 437;
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn sendfile(
+     out_fd: BorrowedFd<'_>,
+     in_fd: BorrowedFd<'_>,
+--- a/src/backend/libc/fs/types.rs
++++ b/src/backend/libc/fs/types.rs
+@@ -68,15 +68,15 @@
+         const RESOLVE_BENEATH = bitcast!(c::AT_RESOLVE_BENEATH);
+ 
+         /// `AT_STATX_SYNC_AS_STAT`
+-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
++        #[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+         const STATX_SYNC_AS_STAT = bitcast!(c::AT_STATX_SYNC_AS_STAT);
+ 
+         /// `AT_STATX_FORCE_SYNC`
+-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
++        #[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+         const STATX_FORCE_SYNC = bitcast!(c::AT_STATX_FORCE_SYNC);
+ 
+         /// `AT_STATX_DONT_SYNC`
+-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
++        #[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+         const STATX_DONT_SYNC = bitcast!(c::AT_STATX_DONT_SYNC);
+ 
+         /// <https://docs.rs/bitflags/*/bitflags/#externally-defined-flags>
+@@ -273,7 +273,7 @@
+         /// `O_FSYNC`
+         #[cfg(any(
+             bsd,
+-            all(target_os = "linux", not(target_env = "musl")),
++            all(any(target_os = "linux", target_os = "veda"), not(target_env = "musl")),
+         ))]
+         const FSYNC = bitcast!(c::O_FSYNC);
+ 
+@@ -817,7 +817,7 @@
+             target_os = "haiku",
+             target_os = "hurd",
+             target_os = "l4re",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "wasi",
+         )))]
+         const NO_HIDE_STALE = bitcast!(c::FALLOC_FL_NO_HIDE_STALE);
+@@ -911,7 +911,7 @@
+         const RDONLY = c::ST_RDONLY as u64;
+ 
+         /// `ST_RELATIME`
+-        #[cfg(any(target_os = "android", all(target_os = "linux", target_env = "gnu")))]
++        #[cfg(any(target_os = "android", all(any(target_os = "linux", target_os = "veda"), target_env = "gnu")))]
+         const RELATIME = c::ST_RELATIME as u64;
+ 
+         /// `ST_SYNCHRONOUS`
+@@ -1137,7 +1137,7 @@
+ 
+ /// `__fsword_t`
+ #[cfg(all(
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+     not(target_env = "musl"),
+     not(target_arch = "s390x"),
+ ))]
+@@ -1145,14 +1145,14 @@
+ 
+ /// `__fsword_t`
+ #[cfg(all(
+-    any(target_os = "android", all(target_os = "linux", target_env = "musl")),
++    any(target_os = "android", all(any(target_os = "linux", target_os = "veda"), target_env = "musl")),
+     target_pointer_width = "32",
+ ))]
+ pub type FsWord = u32;
+ 
+ /// `__fsword_t`
+ #[cfg(all(
+-    any(target_os = "android", all(target_os = "linux", target_env = "musl")),
++    any(target_os = "android", all(any(target_os = "linux", target_os = "veda"), target_env = "musl")),
+     not(target_arch = "s390x"),
+     target_pointer_width = "64",
+ ))]
+@@ -1161,12 +1161,12 @@
+ /// `__fsword_t`
+ // s390x uses `u32` for `statfs` entries on glibc, even though `__fsword_t` is
+ // `u64`.
+-#[cfg(all(target_os = "linux", target_arch = "s390x", target_env = "gnu"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), target_arch = "s390x", target_env = "gnu"))]
+ pub type FsWord = u32;
+ 
+ /// `__fsword_t`
+ // s390x uses `u64` for `statfs` entries on musl.
+-#[cfg(all(target_os = "linux", target_arch = "s390x", target_env = "musl"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), target_arch = "s390x", target_env = "musl"))]
+ pub type FsWord = u64;
+ 
+ /// `copyfile_state_t`—State for use with [`fcopyfile`].
+--- a/src/backend/libc/mm/syscalls.rs
++++ b/src/backend/libc/mm/syscalls.rs
+@@ -4,7 +4,7 @@
+ use super::types::Advice;
+ #[cfg(any(linux_kernel, freebsdlike, netbsdlike))]
+ use super::types::MlockAllFlags;
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ use super::types::MremapFlags;
+ use super::types::{MapFlags, MprotectFlags, MsyncFlags, ProtFlags};
+ #[cfg(linux_kernel)]
+@@ -23,7 +23,7 @@
+     // On Linux platforms, `MADV_DONTNEED` has the same value as
+     // `POSIX_MADV_DONTNEED` but different behavior. We remap it to a different
+     // value, and check for it here.
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     if let Advice::LinuxDontNeed = advice {
+         return unsafe { ret(c::madvise(addr, len, c::MADV_DONTNEED)) };
+     }
+@@ -131,7 +131,7 @@
+ ///
+ /// `mremap` is primarily unsafe due to the `old_address` parameter, as
+ /// anything working with memory pointed to by raw pointers is unsafe.
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ pub(crate) unsafe fn mremap(
+     old_address: *mut c::c_void,
+     old_size: usize,
+@@ -151,7 +151,7 @@
+ /// `mremap_fixed` is primarily unsafe due to the `old_address` and
+ /// `new_address` parameters, as anything working with memory pointed to by raw
+ /// pointers is unsafe.
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ pub(crate) unsafe fn mremap_fixed(
+     old_address: *mut c::c_void,
+     old_size: usize,
+--- a/src/backend/libc/mm/types.rs
++++ b/src/backend/libc/mm/types.rs
+@@ -260,7 +260,7 @@
+     }
+ }
+ 
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ bitflags! {
+     /// `MREMAP_*` flags for use with [`mremap`].
+     ///
+@@ -374,7 +374,7 @@
+     // `MADV_DONTNEED` has the same value as `POSIX_MADV_DONTNEED`. We don't
+     // have a separate `posix_madvise` from `madvise`, so we expose a special
+     // value which we special-case.
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     LinuxDontNeed = bitcast!(i32::MAX),
+ 
+     /// `MADV_DONTNEED`
+--- a/src/backend/libc/net/msghdr.rs
++++ b/src/backend/libc/net/msghdr.rs
+@@ -18,7 +18,7 @@
+         target_os = "android",
+         target_os = "redox",
+         all(
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             not(target_env = "musl"),
+             not(all(target_env = "uclibc", any(target_arch = "arm", target_arch = "mips")))
+         )
+@@ -36,7 +36,7 @@
+         target_os = "android",
+         target_os = "redox",
+         all(
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             not(target_env = "musl"),
+             not(all(target_env = "uclibc", any(target_arch = "arm", target_arch = "mips")))
+         )
+--- a/src/backend/libc/net/read_sockaddr.rs
++++ b/src/backend/libc/net/read_sockaddr.rs
+@@ -11,7 +11,7 @@
+ use crate::net::addr::SocketAddrLen;
+ #[cfg(linux_kernel)]
+ use crate::net::netlink::SocketAddrNetlink;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::net::xdp::{SocketAddrXdp, SocketAddrXdpFlags};
+ use crate::net::{AddressFamily, Ipv4Addr, Ipv6Addr, SocketAddrAny, SocketAddrV4, SocketAddrV6};
+ use core::mem::size_of;
+@@ -233,7 +233,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn read_sockaddr_xdp(addr: &SocketAddrAny) -> Result<SocketAddrXdp, Errno> {
+     if addr.address_family() != AddressFamily::XDP {
+--- a/src/backend/libc/net/sockopt.rs
++++ b/src/backend/libc/net/sockopt.rs
+@@ -16,7 +16,7 @@
+ use crate::net::sockopt::Timeout;
+ #[cfg(linux_kernel)]
+ use crate::net::sockopt::{Ipv4PathMtuDiscovery, Ipv6PathMtuDiscovery};
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::net::xdp::{XdpMmapOffsets, XdpOptionsFlags, XdpRingOffset, XdpStatistics, XdpUmemReg};
+ #[cfg(not(any(
+     apple,
+@@ -53,12 +53,12 @@
+ use crate::net::RawProtocol;
+ #[cfg(any(linux_kernel, target_os = "fuchsia"))]
+ use crate::net::SocketAddrV4;
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ use crate::net::TxTimeFlags;
+ use crate::net::{Ipv4Addr, Ipv6Addr, SocketType};
+ #[cfg(linux_kernel)]
+ use crate::net::{SocketAddrV6, UCred};
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ use crate::time::ClockId;
+ use crate::utils::as_mut_ptr;
+ #[cfg(feature = "alloc")]
+@@ -83,7 +83,7 @@
+ use c::TCP_KEEPIDLE;
+ use core::mem::{size_of, MaybeUninit};
+ use core::time::Duration;
+-#[cfg(all(linux_raw_dep, target_os = "linux"))]
++#[cfg(all(linux_raw_dep, any(target_os = "linux", target_os = "veda")))]
+ use linux_raw_sys::xdp::{xdp_mmap_offsets, xdp_statistics, xdp_statistics_v1};
+ 
+ #[inline]
+@@ -458,19 +458,19 @@
+         .map(|raw| RawProtocol::new(raw).map(Protocol::from_raw))
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn socket_cookie(fd: BorrowedFd<'_>) -> io::Result<u64> {
+     getsockopt(fd, c::SOL_SOCKET, c::SO_COOKIE)
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn socket_incoming_cpu(fd: BorrowedFd<'_>) -> io::Result<u32> {
+     getsockopt(fd, c::SOL_SOCKET, c::SO_INCOMING_CPU)
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn set_socket_incoming_cpu(fd: BorrowedFd<'_>, value: u32) -> io::Result<()> {
+     setsockopt(fd, c::SOL_SOCKET, c::SO_INCOMING_CPU, value)
+@@ -1096,7 +1096,7 @@
+     getsockopt(fd, c::SOL_SOCKET, c::SO_PEERCRED)
+ }
+ 
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ #[inline]
+ pub(crate) fn set_txtime(
+     fd: BorrowedFd<'_>,
+@@ -1114,7 +1114,7 @@
+     )
+ }
+ 
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ #[inline]
+ pub(crate) fn get_txtime(fd: BorrowedFd<'_>) -> io::Result<(ClockId, TxTimeFlags)> {
+     let txtime: c::sock_txtime = getsockopt(fd, c::SOL_SOCKET, c::SO_TXTIME)?;
+@@ -1125,37 +1125,37 @@
+     ))
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn set_xdp_umem_reg(fd: BorrowedFd<'_>, value: XdpUmemReg) -> io::Result<()> {
+     setsockopt(fd, c::SOL_XDP, c::XDP_UMEM_REG, value)
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn set_xdp_umem_fill_ring_size(fd: BorrowedFd<'_>, value: u32) -> io::Result<()> {
+     setsockopt(fd, c::SOL_XDP, c::XDP_UMEM_FILL_RING, value)
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn set_xdp_umem_completion_ring_size(fd: BorrowedFd<'_>, value: u32) -> io::Result<()> {
+     setsockopt(fd, c::SOL_XDP, c::XDP_UMEM_COMPLETION_RING, value)
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn set_xdp_tx_ring_size(fd: BorrowedFd<'_>, value: u32) -> io::Result<()> {
+     setsockopt(fd, c::SOL_XDP, c::XDP_TX_RING, value)
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn set_xdp_rx_ring_size(fd: BorrowedFd<'_>, value: u32) -> io::Result<()> {
+     setsockopt(fd, c::SOL_XDP, c::XDP_RX_RING, value)
+ }
+ 
+-#[cfg(all(linux_raw_dep, target_os = "linux"))]
++#[cfg(all(linux_raw_dep, any(target_os = "linux", target_os = "veda")))]
+ #[inline]
+ pub(crate) fn xdp_mmap_offsets(fd: BorrowedFd<'_>) -> io::Result<XdpMmapOffsets> {
+     // The kernel will write `xdp_mmap_offsets` or `xdp_mmap_offsets_v1` to the
+@@ -1242,7 +1242,7 @@
+     }
+ }
+ 
+-#[cfg(all(linux_raw_dep, target_os = "linux"))]
++#[cfg(all(linux_raw_dep, any(target_os = "linux", target_os = "veda")))]
+ #[inline]
+ pub(crate) fn xdp_statistics(fd: BorrowedFd<'_>) -> io::Result<XdpStatistics> {
+     let mut optlen = size_of::<xdp_statistics>().try_into().unwrap();
+@@ -1285,7 +1285,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub(crate) fn xdp_options(fd: BorrowedFd<'_>) -> io::Result<XdpOptionsFlags> {
+     getsockopt(fd, c::SOL_XDP, c::XDP_OPTIONS)
+--- a/src/backend/libc/net/syscalls.rs
++++ b/src/backend/libc/net/syscalls.rs
+@@ -3,13 +3,13 @@
+ use super::read_sockaddr::initialize_family_to_unspec;
+ use super::send_recv::{RecvFlags, SendFlags};
+ use crate::backend::c;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::backend::conv::ret_u32;
+ use crate::backend::conv::{borrowed_fd, ret, ret_owned_fd, ret_send_recv, send_recv_len};
+ use crate::fd::{BorrowedFd, OwnedFd};
+ use crate::io;
+ use crate::net::addr::SocketAddrArg;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::net::MMsgHdr;
+ use crate::net::{
+     AddressFamily, Protocol, Shutdown, SocketAddrAny, SocketAddrBuf, SocketFlags, SocketType,
+@@ -264,7 +264,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn sendmmsg(
+     sockfd: BorrowedFd<'_>,
+     msgs: &mut [MMsgHdr<'_>],
+--- a/src/backend/libc/param/auxv.rs
++++ b/src/backend/libc/param/auxv.rs
+@@ -1,14 +1,14 @@
+ use crate::backend::c;
+ #[cfg(any(
+     all(target_os = "android", target_pointer_width = "64"),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+ ))]
+ use crate::ffi::CStr;
+ 
+ // `getauxval` wasn't supported in glibc until 2.16.
+ #[cfg(any(
+     all(target_os = "android", target_pointer_width = "64"),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+ ))]
+ weak!(fn getauxval(c::c_ulong) -> *mut c::c_void);
+ 
+@@ -25,7 +25,7 @@
+ 
+ #[cfg(any(
+     all(target_os = "android", target_pointer_width = "64"),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+ ))]
+ #[inline]
+ pub(crate) fn linux_hwcap() -> (usize, usize) {
+@@ -42,7 +42,7 @@
+ 
+ #[cfg(any(
+     all(target_os = "android", target_pointer_width = "64"),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+ ))]
+ #[inline]
+ pub(crate) fn linux_minsigstksz() -> usize {
+@@ -55,7 +55,7 @@
+ 
+ #[cfg(any(
+     all(target_os = "android", target_pointer_width = "64"),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+ ))]
+ #[inline]
+ pub(crate) fn linux_execfn() -> &'static CStr {
+--- a/src/backend/libc/process/syscalls.rs
++++ b/src/backend/libc/process/syscalls.rs
+@@ -3,7 +3,7 @@
+ use crate::backend::c;
+ #[cfg(not(any(target_os = "fuchsia", target_os = "wasi")))]
+ use crate::backend::conv::borrowed_fd;
+-#[cfg(any(target_os = "linux", feature = "fs"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), feature = "fs"))]
+ use crate::backend::conv::c_str;
+ #[cfg(all(feature = "alloc", feature = "fs", not(target_os = "wasi")))]
+ use crate::backend::conv::ret_discarded_char_ptr;
+@@ -23,9 +23,9 @@
+ use crate::backend::conv::{ret, ret_c_int};
+ #[cfg(not(any(target_os = "fuchsia", target_os = "wasi")))]
+ use crate::fd::BorrowedFd;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::fd::{AsRawFd as _, OwnedFd, RawFd};
+-#[cfg(any(target_os = "linux", feature = "fs"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), feature = "fs"))]
+ use crate::ffi::CStr;
+ #[cfg(feature = "fs")]
+ use crate::fs::Mode;
+@@ -76,7 +76,7 @@
+ )))]
+ use crate::process::{WaitId, WaitIdOptions, WaitIdStatus};
+ use core::mem::MaybeUninit;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use {
+     super::super::conv::ret_owned_fd, crate::process::PidfdFlags, crate::process::PidfdGetfdFlags,
+ };
+@@ -402,9 +402,9 @@
+         WaitId::All => _waitid_all(options),
+         WaitId::Pid(pid) => _waitid_pid(pid, options),
+         WaitId::Pgid(pgid) => _waitid_pgid(pgid, options),
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "veda"))]
+         WaitId::PidFd(fd) => _waitid_pidfd(fd, options),
+-        #[cfg(not(target_os = "linux"))]
++        #[cfg(not(any(target_os = "linux", target_os = "veda")))]
+         WaitId::__EatLifetime(_) => unreachable!(),
+     }
+ }
+@@ -487,7 +487,7 @@
+     Ok(unsafe { cvt_waitid_status(status) })
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ fn _waitid_pidfd(fd: BorrowedFd<'_>, options: WaitIdOptions) -> io::Result<Option<WaitIdStatus>> {
+     // `waitid` can return successfully without initializing the struct (no
+@@ -606,7 +606,7 @@
+     ret(c::procctl(idtype, id, option, data))
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn pidfd_open(pid: Pid, flags: PidfdFlags) -> io::Result<OwnedFd> {
+     syscall! {
+         fn pidfd_open(
+@@ -622,7 +622,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn pidfd_send_signal(pidfd: BorrowedFd<'_>, sig: Signal) -> io::Result<()> {
+     syscall! {
+         fn pidfd_send_signal(
+@@ -642,7 +642,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn pidfd_getfd(
+     pidfd: BorrowedFd<'_>,
+     targetfd: RawFd,
+@@ -664,7 +664,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn pivot_root(new_root: &CStr, put_old: &CStr) -> io::Result<()> {
+     syscall! {
+         fn pivot_root(
+--- a/src/backend/libc/system/syscalls.rs
++++ b/src/backend/libc/system/syscalls.rs
+@@ -4,7 +4,7 @@
+ use crate::backend::c;
+ #[cfg(not(target_os = "wasi"))]
+ use crate::backend::conv::ret_infallible;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::system::RebootCommand;
+ use core::mem::MaybeUninit;
+ #[cfg(linux_kernel)]
+@@ -105,7 +105,7 @@
+     }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) fn reboot(cmd: RebootCommand) -> io::Result<()> {
+     unsafe { ret(c::reboot(cmd as i32)) }
+ }
+--- a/src/fs/constants.rs
++++ b/src/fs/constants.rs
+@@ -51,7 +51,7 @@
+     use super::*;
+     use crate::backend::c;
+     // Rust's libc crate lacks statx for Non-glibc targets.
+-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
++    #[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+     use crate::fs::{Statx, StatxTimestamp};
+ 
+     #[test]
+@@ -305,7 +305,7 @@
+         }
+ 
+         // Rust's libc crate lacks statx for Non-glibc targets.
+-        #[cfg(all(target_os = "linux", target_env = "gnu"))]
++        #[cfg(all(any(target_os = "linux", target_os = "veda"), target_env = "gnu"))]
+         {
+             check_renamed_type!(StatxTimestamp, statx_timestamp);
+             check_renamed_struct_field!(StatxTimestamp, statx_timestamp, tv_sec);
+--- a/src/fs/mod.rs
++++ b/src/fs/mod.rs
+@@ -51,7 +51,7 @@
+ #[cfg(linux_kernel)]
+ mod raw_dir;
+ mod seek_from;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ mod sendfile;
+ #[cfg(not(target_os = "espidf"))]
+ mod special;
+@@ -117,7 +117,7 @@
+ #[cfg(linux_kernel)]
+ pub use raw_dir::{RawDir, RawDirEntry};
+ pub use seek_from::SeekFrom;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub use sendfile::sendfile;
+ #[cfg(not(target_os = "espidf"))]
+ pub use special::*;
+--- a/src/ioctl/mod.rs
++++ b/src/ioctl/mod.rs
+@@ -295,7 +295,7 @@
+ // On libc Linux with GNU libc or uclibc, this is an `unsigned long`.
+ #[cfg(all(
+     not(linux_raw),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+     any(target_env = "gnu", target_env = "uclibc")
+ ))]
+ type _Opcode = c::c_ulong;
+@@ -303,7 +303,7 @@
+ // Musl uses `c_int`.
+ #[cfg(all(
+     not(linux_raw),
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+     not(target_env = "gnu"),
+     not(target_env = "uclibc")
+ ))]
+--- a/src/mm/mmap.rs
++++ b/src/mm/mmap.rs
+@@ -14,7 +14,7 @@
+ pub use backend::mm::types::MlockAllFlags;
+ #[cfg(linux_kernel)]
+ pub use backend::mm::types::MlockFlags;
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ pub use backend::mm::types::MremapFlags;
+ pub use backend::mm::types::{MapFlags, MprotectFlags, ProtFlags};
+ 
+@@ -194,7 +194,7 @@
+ ///  - [Linux]
+ ///
+ /// [Linux]: https://man7.org/linux/man-pages/man2/mremap.2.html
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ #[inline]
+ pub unsafe fn mremap(
+     old_address: *mut c_void,
+@@ -228,7 +228,7 @@
+ ///  - [Linux]
+ ///
+ /// [Linux]: https://man7.org/linux/man-pages/man2/mremap.2.html
+-#[cfg(any(target_os = "emscripten", target_os = "linux"))]
++#[cfg(any(target_os = "emscripten", any(target_os = "linux", target_os = "veda")))]
+ #[inline]
+ #[doc(alias = "mremap")]
+ pub unsafe fn mremap_fixed(
+--- a/src/net/send_recv/msg.rs
++++ b/src/net/send_recv/msg.rs
+@@ -2,7 +2,7 @@
+ 
+ #![allow(unsafe_code)]
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::backend::net::msghdr::noaddr_msghdr;
+ use crate::backend::{self, c};
+ use crate::fd::{AsFd, BorrowedFd, OwnedFd};
+@@ -152,7 +152,7 @@
+     /// whichever clock was configured on the socket with [`set_txtime`].
+     ///
+     /// [`set_txtime`]: crate::net::sockopt::set_txtime
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     #[doc(alias = "SCM_TXTIME")]
+     TxTime(u64),
+ }
+@@ -167,7 +167,7 @@
+             Self::ScmRights(slice) => cmsg_space!(ScmRights(slice.len())),
+             #[cfg(linux_kernel)]
+             Self::ScmCredentials(_) => cmsg_space!(ScmCredentials(1)),
+-            #[cfg(target_os = "linux")]
++            #[cfg(any(target_os = "linux", target_os = "veda"))]
+             Self::TxTime(_) => cmsg_space!(TxTime(1)),
+         }
+     }
+@@ -310,7 +310,7 @@
+                 };
+                 self.push_ancillary(ucred_bytes, c::SOL_SOCKET as _, c::SCM_CREDENTIALS as _)
+             }
+-            #[cfg(target_os = "linux")]
++            #[cfg(any(target_os = "linux", target_os = "veda"))]
+             SendAncillaryMessage::TxTime(tx_time) => {
+                 let tx_time_bytes = unsafe {
+                     slice::from_raw_parts(addr_of!(tx_time).cast::<u8>(), size_of_val(&tx_time))
+@@ -633,14 +633,14 @@
+ 
+ /// An ABI-compatible wrapper for `mmsghdr`, for sending multiple messages with
+ /// [sendmmsg].
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[repr(transparent)]
+ pub struct MMsgHdr<'a> {
+     raw: c::mmsghdr,
+     _phantom: PhantomData<&'a mut ()>,
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ impl<'a> MMsgHdr<'a> {
+     /// Constructs a new message with no destination address.
+     pub fn new(iov: &'a [IoSlice<'_>], control: &'a mut SendAncillaryBuffer<'_, '_, '_>) -> Self {
+@@ -756,7 +756,7 @@
+ ///
+ /// [Linux]: https://man7.org/linux/man-pages/man2/sendmmsg.2.html
+ #[inline]
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub fn sendmmsg<Fd: AsFd>(
+     socket: Fd,
+     msgs: &mut [MMsgHdr<'_>],
+--- a/src/net/socket_addr_any.rs
++++ b/src/net/socket_addr_any.rs
+@@ -213,7 +213,7 @@
+                     return addr.fmt(f);
+                 }
+             }
+-            #[cfg(target_os = "linux")]
++            #[cfg(any(target_os = "linux", target_os = "veda"))]
+             AddressFamily::XDP => {
+                 if let Ok(addr) = crate::net::xdp::SocketAddrXdp::try_from(self.clone()) {
+                     return addr.fmt(f);
+--- a/src/net/sockopt.rs
++++ b/src/net/sockopt.rs
+@@ -143,9 +143,9 @@
+ #![doc(alias = "getsockopt")]
+ #![doc(alias = "setsockopt")]
+ 
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ use crate::clockid::ClockId;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::net::xdp::{XdpMmapOffsets, XdpOptionsFlags, XdpStatistics, XdpUmemReg};
+ #[cfg(not(any(
+     apple,
+@@ -175,7 +175,7 @@
+ use crate::net::SocketAddrV4;
+ #[cfg(linux_kernel)]
+ use crate::net::SocketAddrV6;
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ use crate::net::TxTimeFlags;
+ use crate::net::{Ipv4Addr, Ipv6Addr, SocketType};
+ use crate::{backend, io};
+@@ -696,7 +696,7 @@
+ /// See the [module-level documentation] for more.
+ ///
+ /// [module-level documentation]: self#references-for-get_socket_-and-set_socket_-functions
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ #[doc(alias = "SO_COOKIE")]
+ pub fn socket_cookie<Fd: AsFd>(fd: Fd) -> io::Result<u64> {
+@@ -708,7 +708,7 @@
+ /// See the [module-level documentation] for more.
+ ///
+ /// [module-level documentation]: self#references-for-get_socket_-and-set_socket_-functions
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ #[doc(alias = "SO_INCOMING_CPU")]
+ pub fn socket_incoming_cpu<Fd: AsFd>(fd: Fd) -> io::Result<u32> {
+@@ -720,7 +720,7 @@
+ /// See the [module-level documentation] for more.
+ ///
+ /// [module-level documentation]: self#references-for-get_socket_-and-set_socket_-functions
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ #[doc(alias = "SO_INCOMING_CPU")]
+ pub fn set_socket_incoming_cpu<Fd: AsFd>(fd: Fd, value: u32) -> io::Result<()> {
+@@ -1694,14 +1694,14 @@
+ }
+ 
+ /// `getsockopt(fd, SOL_SOCKET, SO_TXTIME)` — Get transmission timing configuration.
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ #[doc(alias = "SO_TXTIME")]
+ pub fn get_txtime<Fd: AsFd>(fd: Fd) -> io::Result<(ClockId, TxTimeFlags)> {
+     backend::net::sockopt::get_txtime(fd.as_fd())
+ }
+ 
+ /// `setsockopt(fd, SOL_SOCKET, SO_TXTIME)` — Configure transmission timing.
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ #[doc(alias = "SO_TXTIME")]
+ pub fn set_txtime<Fd: AsFd>(fd: Fd, clockid: ClockId, flags: TxTimeFlags) -> io::Result<()> {
+     backend::net::sockopt::set_txtime(fd.as_fd(), clockid, flags)
+@@ -1715,7 +1715,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-umem-reg-setsockopt
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[doc(alias = "XDP_UMEM_REG")]
+ pub fn set_xdp_umem_reg<Fd: AsFd>(fd: Fd, value: XdpUmemReg) -> io::Result<()> {
+     backend::net::sockopt::set_xdp_umem_reg(fd.as_fd(), value)
+@@ -1727,7 +1727,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-rx-tx-umem-fill-umem-completion-ring-setsockopts
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[doc(alias = "XDP_UMEM_FILL_RING")]
+ pub fn set_xdp_umem_fill_ring_size<Fd: AsFd>(fd: Fd, value: u32) -> io::Result<()> {
+     backend::net::sockopt::set_xdp_umem_fill_ring_size(fd.as_fd(), value)
+@@ -1739,7 +1739,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-rx-tx-umem-fill-umem-completion-ring-setsockopts
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[doc(alias = "XDP_UMEM_COMPLETION_RING")]
+ pub fn set_xdp_umem_completion_ring_size<Fd: AsFd>(fd: Fd, value: u32) -> io::Result<()> {
+     backend::net::sockopt::set_xdp_umem_completion_ring_size(fd.as_fd(), value)
+@@ -1751,7 +1751,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-rx-tx-umem-fill-umem-completion-ring-setsockopts
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[doc(alias = "XDP_TX_RING")]
+ pub fn set_xdp_tx_ring_size<Fd: AsFd>(fd: Fd, value: u32) -> io::Result<()> {
+     backend::net::sockopt::set_xdp_tx_ring_size(fd.as_fd(), value)
+@@ -1763,7 +1763,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-rx-tx-umem-fill-umem-completion-ring-setsockopts
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[doc(alias = "XDP_RX_RING")]
+ pub fn set_xdp_rx_ring_size<Fd: AsFd>(fd: Fd, value: u32) -> io::Result<()> {
+     backend::net::sockopt::set_xdp_rx_ring_size(fd.as_fd(), value)
+@@ -1775,7 +1775,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html
+-#[cfg(all(linux_raw_dep, target_os = "linux"))]
++#[cfg(all(linux_raw_dep, any(target_os = "linux", target_os = "veda")))]
+ #[doc(alias = "XDP_MMAP_OFFSETS")]
+ pub fn xdp_mmap_offsets<Fd: AsFd>(fd: Fd) -> io::Result<XdpMmapOffsets> {
+     backend::net::sockopt::xdp_mmap_offsets(fd.as_fd())
+@@ -1787,7 +1787,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-statistics-getsockopt
+-#[cfg(all(linux_raw_dep, target_os = "linux"))]
++#[cfg(all(linux_raw_dep, any(target_os = "linux", target_os = "veda")))]
+ #[doc(alias = "XDP_STATISTICS")]
+ pub fn xdp_statistics<Fd: AsFd>(fd: Fd) -> io::Result<XdpStatistics> {
+     backend::net::sockopt::xdp_statistics(fd.as_fd())
+@@ -1799,7 +1799,7 @@
+ ///   - [Linux]
+ ///
+ /// [Linux]: https://www.kernel.org/doc/html/next/networking/af_xdp.html#xdp-options-getsockopt
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[doc(alias = "XDP_OPTIONS")]
+ pub fn xdp_options<Fd: AsFd>(fd: Fd) -> io::Result<XdpOptionsFlags> {
+     backend::net::sockopt::xdp_options(fd.as_fd())
+--- a/src/net/types.rs
++++ b/src/net/types.rs
+@@ -755,7 +755,7 @@
+     #[cfg(any(apple, linux_kernel, target_os = "emscripten", target_os = "fuchsia"))]
+     pub const VSOCK: Self = Self(c::AF_VSOCK as _);
+     /// `AF_XDP`
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     pub const XDP: Self = Self(c::AF_XDP as _);
+ 
+     /// Constructs a `AddressFamily` from a raw integer.
+@@ -1721,7 +1721,7 @@
+     }
+ }
+ 
+-#[cfg(all(target_os = "linux", feature = "time"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "time"))]
+ bitflags! {
+     /// Flags for use with [`set_txtime`].
+     ///
+@@ -1737,7 +1737,7 @@
+ }
+ 
+ /// `AF_XDP` related types and constants.
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub mod xdp {
+     use crate::backend::net::read_sockaddr::read_sockaddr_xdp;
+     use crate::fd::{AsRawFd, BorrowedFd};
+@@ -2049,7 +2049,7 @@
+         pub options: XdpDescOptions,
+     }
+ 
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     bitflags! {
+         /// `XDP_*` constants for use in [`XdpDesc`].
+         ///
+@@ -2105,7 +2105,7 @@
+ 
+     #[test]
+     fn test_sizes() {
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "veda"))]
+         use crate::backend::c;
+         use crate::ffi::c_int;
+         use crate::net::addr::SocketAddrStorage;
+@@ -2136,11 +2136,11 @@
+         #[cfg(linux_kernel)]
+         static_assertions::assert_eq_size!(UCred, libc::ucred);
+ 
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "veda"))]
+         static_assertions::assert_eq_size!(super::xdp::XdpUmemReg, c::xdp_umem_reg);
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "veda"))]
+         static_assertions::assert_eq_size!(super::xdp::XdpOptions, c::xdp_options);
+-        #[cfg(target_os = "linux")]
++        #[cfg(any(target_os = "linux", target_os = "veda"))]
+         static_assertions::assert_eq_size!(super::xdp::XdpDesc, c::xdp_desc);
+     }
+ }
+--- a/src/param/auxv.rs
++++ b/src/param/auxv.rs
+@@ -3,7 +3,7 @@
+     linux_raw,
+     any(
+         all(target_os = "android", target_pointer_width = "64"),
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     )
+ ))]
+ use crate::ffi::CStr;
+@@ -59,7 +59,7 @@
+     linux_raw,
+     any(
+         all(target_os = "android", target_pointer_width = "64"),
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     )
+ ))]
+ #[inline]
+@@ -80,7 +80,7 @@
+     linux_raw,
+     any(
+         all(target_os = "android", target_pointer_width = "64"),
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     )
+ ))]
+ #[inline]
+@@ -101,7 +101,7 @@
+     linux_raw,
+     any(
+         all(target_os = "android", target_pointer_width = "64"),
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     )
+ ))]
+ #[inline]
+--- a/src/process/mod.rs
++++ b/src/process/mod.rs
+@@ -26,11 +26,11 @@
+ mod ioctl;
+ #[cfg(not(any(target_os = "espidf", target_os = "wasi")))]
+ mod kill;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ mod pidfd;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ mod pidfd_getfd;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ mod pivot_root;
+ #[cfg(linux_kernel)]
+ mod prctl;
+@@ -88,11 +88,11 @@
+ pub use ioctl::*;
+ #[cfg(not(any(target_os = "espidf", target_os = "wasi")))]
+ pub use kill::*;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub use pidfd::*;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub use pidfd_getfd::*;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub use pivot_root::*;
+ #[cfg(linux_kernel)]
+ pub use prctl::*;
+--- a/src/process/wait.rs
++++ b/src/process/wait.rs
+@@ -11,7 +11,7 @@
+ use bitflags::bitflags;
+ use core::fmt;
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::fd::BorrowedFd;
+ 
+ #[cfg(linux_raw)]
+@@ -394,13 +394,13 @@
+     Pgid(Option<Pid>),
+ 
+     /// Wait for a specific process file descriptor.
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     #[doc(alias = "P_PIDFD")]
+     PidFd(BorrowedFd<'a>),
+ 
+     /// Eat the lifetime for non-Linux platforms.
+     #[doc(hidden)]
+-    #[cfg(not(target_os = "linux"))]
++    #[cfg(not(any(target_os = "linux", target_os = "veda")))]
+     __EatLifetime(core::marker::PhantomData<&'a ()>),
+ }
+ 
+--- a/src/pty.rs
++++ b/src/pty.rs
+@@ -23,7 +23,7 @@
+ ))]
+ use {crate::ffi::CString, alloc::vec::Vec};
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::{fd::FromRawFd as _, ioctl};
+ 
+ bitflags::bitflags! {
+@@ -191,16 +191,16 @@
+ ///  - [Linux]
+ ///
+ /// [Linux]: https://man7.org/linux/man-pages/man2/ioctl_tty.2.html
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[inline]
+ pub fn ioctl_tiocgptpeer<Fd: AsFd>(fd: Fd, flags: OpenptFlags) -> io::Result<OwnedFd> {
+     unsafe { ioctl::ioctl(fd, Tiocgptpeer(flags)) }
+ }
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ struct Tiocgptpeer(OpenptFlags);
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ unsafe impl ioctl::Ioctl for Tiocgptpeer {
+     type Output = OwnedFd;
+ 
+--- a/src/system.rs
++++ b/src/system.rs
+@@ -3,7 +3,7 @@
+ #![allow(unsafe_code)]
+ 
+ use crate::backend;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ use crate::backend::c;
+ use crate::ffi::CStr;
+ #[cfg(not(any(
+@@ -196,7 +196,7 @@
+ }
+ 
+ /// Reboot command for use with [`reboot`].
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+ #[repr(i32)]
+ #[non_exhaustive]
+@@ -248,7 +248,7 @@
+ ///  - [Linux]
+ ///
+ /// [Linux]: https://man7.org/linux/man-pages/man2/reboot.2.html
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub fn reboot(cmd: RebootCommand) -> io::Result<()> {
+     backend::system::syscalls::reboot(cmd)
+ }

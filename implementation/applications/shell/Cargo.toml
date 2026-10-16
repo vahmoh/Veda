@@ -19,7 +19,6 @@ vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
-num-traits = { workspace = true }
 vimage = { workspace = true }
 vfiles = { workspace = true }
 vui = { workspace = true }
@@ -27,8 +26,6 @@ vnet = { workspace = true }
 vaudio = { workspace = true }
 apps-common = { path = "../common" }
 
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

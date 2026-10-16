@@ -873,6 +873,90 @@ fn loopback_connections() {
     assert_eq!(&buf[..k], b"ping");
 }
 
+/// Polls as the network service does: once, then again only while the
+/// stack's deadline has come (the clock standing still): what crosses the
+/// loopback interface must not wait for a timer. Returns the sockets the
+/// stack reported ready.
+fn poll_as_the_service(stack: &mut Stack, now: u64) -> Vec<SockId> {
+    let mut ready = Vec::new();
+    for _ in 0..1000 {
+        stack.poll(now, &mut crate::NoLinks);
+        ready.extend(stack.take_ready());
+        if stack.next_deadline().is_none_or(|t| t > now) {
+            return ready;
+        }
+    }
+    panic!("the stack never settles");
+}
+
+/// What comes after what the service saw makes a socket ready, even when it
+/// arrives first thing in a poll, before anything looked at the socket
+/// again: data after what was taken, as much as before or less, and room an
+/// acknowledgement frees after more was queued. (The network service moves
+/// what comes as it comes, and hears of it from nothing else.)
+#[test]
+fn what_comes_after_the_last_taken_makes_a_socket_ready() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let (ua, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
+    let (ub, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), 0).unwrap();
+    let to_b = SocketAddr::new(IpAddr::V4(SERVER_IP), 5000);
+    let mut buf = [0u8; 8];
+    // Each time, the next is on the cable when `b` takes the last.
+    n.a.udp_send(ua, to_b, b"who?").unwrap();
+    assert!(n.run_until(1_000, |n| n.b.take_ready().contains(&ub)), "datagram 0");
+    for round in 1..4 {
+        n.a.udp_send(ua, to_b, b"who?").unwrap();
+        n.step();
+        assert_eq!(udp_recv(&mut n.b, ub, &mut buf).map(|(k, _)| k), Some(4));
+        assert!(n.run_until(1_000, |n| n.b.take_ready().contains(&ub)), "datagram {round}");
+    }
+    let (ta, tb) = pair(&mut n, 7);
+    assert_eq!(n.a.tcp_send(ta, b"ping"), Ok(4));
+    assert!(n.run_until(1_000, |n| n.b.take_ready().contains(&tb)), "bytes 0");
+    for round in 1..4 {
+        // Acknowledged, so that the next goes at once.
+        assert!(n.run_until(1_000, |n| n.a.tcp_view(ta).unwrap().send_queued == 0));
+        assert_eq!(n.a.tcp_send(ta, b"ping"), Ok(4));
+        n.step();
+        assert_eq!(tcp_recv(&mut n.b, tb, &mut buf), Ok(4));
+        assert!(n.run_until(1_000, |n| n.b.take_ready().contains(&tb)), "bytes {round}");
+    }
+    // An acknowledgement on its way to `a`, and more queued before it
+    // arrives.
+    n.run(100);
+    assert_eq!(n.a.tcp_send(ta, b"ping"), Ok(4));
+    assert!(n.run_until(1_000, |n| !n.a_end.inbox.is_empty()), "no acknowledgement");
+    let _ = n.a.take_ready();
+    assert_eq!(n.a.tcp_send(ta, b"pingping"), Ok(8));
+    n.step();
+    assert!(n.a.take_ready().contains(&ta), "the room freed went unnoticed");
+}
+
+#[test]
+fn loopback_traffic_waits_for_no_timer() {
+    let mut s = Stack::new(b"loopback seed for tests, 32+ bytes", 1_000_000);
+    let now = 1_000_000;
+    // A datagram, which arrives in the poll that sends it.
+    let (a, _) = s.udp_bind("127.0.0.1:0".parse().unwrap(), 0).unwrap();
+    let (b, b_addr) = s.udp_bind("127.0.0.1:0".parse().unwrap(), 0).unwrap();
+    poll_as_the_service(&mut s, now);
+    s.udp_send(a, b_addr, b"hi").unwrap();
+    assert!(poll_as_the_service(&mut s, now).contains(&b));
+    let mut buf = [0u8; 8];
+    assert_eq!(udp_recv(&mut s, b, &mut buf).map(|(n, _)| n), Some(2));
+    // A connection, made and used while the clock stands still.
+    let (l, _) = s.tcp_listen("127.0.0.1:8080".parse().unwrap(), 2, &TcpOptions::default(), 0).unwrap();
+    let c = s.tcp_connect("127.0.0.1:8080".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
+    poll_as_the_service(&mut s, now);
+    let server = s.tcp_accept(l).expect("the connection is accepted at once");
+    assert!(matches!(s.tcp_view(c).unwrap().state, TcpState::Open { .. }));
+    assert_eq!(s.tcp_send(c, b"ping").unwrap(), 4);
+    assert!(poll_as_the_service(&mut s, now).contains(&server));
+    assert_eq!(tcp_recv(&mut s, server, &mut buf), Ok(4));
+    assert_eq!(&buf[..4], b"ping");
+}
+
 #[test]
 fn routes_prefer_wired_interfaces() {
     let mut n = Net::new();

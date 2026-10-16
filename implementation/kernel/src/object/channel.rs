@@ -8,11 +8,19 @@
 //! copied into the kernel on write and out on read. Handles move: they leave
 //! the sender's table on write and enter the receiver's table on read.
 //!
+//! An endpoint has one handle at a time, unless the channel was made
+//! shared (`vabi::channel_flags::SHARED`): then its endpoints' handles can
+//! be duplicated, so several processes hold one, as they hold a socket's.
+//! Each message queued on it is read by one of them, and the other
+//! endpoint sees `PEER_CLOSED` once every handle to it is closed (an
+//! endpoint ends when the last reference to it goes).
+//!
 //! A queued message keeps the objects its handles refer to alive, channels
-//! too. No message may hold a channel that can reach, through queued
-//! messages, the channel the message is queued on ([`would_cycle`]): once
-//! every process had closed its handles to them, such channels would keep
-//! each other alive for ever, with nothing left to read the messages.
+//! too. No message may hold a channel (or socket) that can reach, through
+//! what is queued, the channel the message is queued on
+//! ([`super::would_cycle`]): once every process had closed its handles to
+//! them, such objects would keep each other alive for ever, with nothing
+//! left to read the messages.
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -29,9 +37,6 @@ use crate::sync::SpinLock;
 pub const MAX_QUEUED_MESSAGES: usize = 512;
 /// Bytes queued per endpoint before writers get `ShouldWait`.
 pub const MAX_QUEUED_BYTES: usize = 4 << 20;
-/// How many queued handles [`would_cycle`] looks at before it gives up,
-/// refusing the transfer: the safe answer.
-const CYCLE_SEARCH_LIMIT: usize = 4096;
 
 pub struct Message {
     pub data: Vec<u8>,
@@ -84,9 +89,16 @@ impl ChannelEnd {
         &self.pair.signals[self.side]
     }
 
-    /// Whether `other` is this endpoint or its peer.
-    pub fn same_channel(&self, other: &ChannelEnd) -> bool {
-        Arc::ptr_eq(&self.pair, &other.pair)
+    /// What identifies the channel's queues ([`super::would_cycle`]).
+    pub fn queues(&self) -> *const () {
+        Arc::as_ptr(&self.pair) as *const ()
+    }
+
+    /// The objects the handles of the messages queued on the channel refer
+    /// to, both ways.
+    pub fn queued(&self) -> Vec<KObject> {
+        let ends = self.pair.ends.lock();
+        ends.iter().flat_map(|e| e.queue.iter()).flat_map(|m| m.handles.iter()).map(|h| h.object.clone()).collect()
     }
 
     /// Queues a message for the peer. On failure the message is handed back
@@ -142,55 +154,6 @@ impl ChannelEnd {
         self.pair.signals[peer].update(0, WRITABLE);
         Ok(msg)
     }
-}
-
-/// Whether queuing a message with `handles` on the channel of `dest` would
-/// let that channel reach itself through queued messages: one of the
-/// handles is an endpoint of it, or of another channel whose queued
-/// messages hold (directly, or through yet other channels' queues) an
-/// endpoint of it. A search that would look at more than
-/// [`CYCLE_SEARCH_LIMIT`] queued handles answers yes.
-pub fn would_cycle(dest: &ChannelEnd, handles: &[Handle]) -> bool {
-    /// Notes the channel of `end` to search; true if it is `target`.
-    fn note(end: &ChannelEnd, target: *const Pair, seen: &mut Vec<*const Pair>, pending: &mut Vec<Arc<Pair>>) -> bool {
-        let pair = Arc::as_ptr(&end.pair);
-        if pair == target {
-            return true;
-        }
-        if !seen.contains(&pair) {
-            seen.push(pair);
-            pending.push(end.pair.clone());
-        }
-        false
-    }
-    let target = Arc::as_ptr(&dest.pair);
-    let mut seen: Vec<*const Pair> = Vec::new();
-    let mut pending: Vec<Arc<Pair>> = Vec::new();
-    for h in handles {
-        if let KObject::Channel(end) = &h.object
-            && note(end, target, &mut seen, &mut pending)
-        {
-            return true;
-        }
-    }
-    let mut looked = 0;
-    while let Some(pair) = pending.pop() {
-        let ends = pair.ends.lock();
-        for msg in ends.iter().flat_map(|e| e.queue.iter()) {
-            looked += msg.handles.len();
-            if looked > CYCLE_SEARCH_LIMIT {
-                return true;
-            }
-            for h in &msg.handles {
-                if let KObject::Channel(end) = &h.object
-                    && note(end, target, &mut seen, &mut pending)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 impl Drop for ChannelEnd {

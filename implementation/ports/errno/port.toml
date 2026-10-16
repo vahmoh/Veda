@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# errno: the C library's errno, which rustix reads on the C library (and
+# crates use themselves) in Veda's programs on the standard library. A
+# crate: its release on crates.io, which Cargo builds.
+name = "errno"
+version = "0.3.14"
+url = "https://static.crates.io/crates/errno/errno-0.3.14.crate"
+sha256 = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+license = "MIT OR Apache-2.0"

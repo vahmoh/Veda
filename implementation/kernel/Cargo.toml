@@ -19,6 +19,7 @@ vabi = { workspace = true }
 velf = { workspace = true }
 initrd = { workspace = true }
 ventropy = { workspace = true }
+vframes = { workspace = true }
 vhv = { workspace = true }
 vacpi = { workspace = true }
 viommu = { workspace = true }

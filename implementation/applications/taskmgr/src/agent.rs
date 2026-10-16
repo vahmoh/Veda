@@ -6,10 +6,6 @@
 //! processes, showing the performance graphs, ending applications), through
 //! the same table, pages and launcher calls as the window.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use vproto::init::TaskInfo;

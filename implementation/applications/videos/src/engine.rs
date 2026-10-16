@@ -21,12 +21,9 @@
 //! Calls to the decoder block, so they are made here, never on the
 //! window's thread.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI64, Ordering};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vabi::{WaitItem, signals};
 use videos_core::layout;

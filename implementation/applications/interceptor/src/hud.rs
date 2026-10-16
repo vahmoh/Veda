@@ -7,17 +7,12 @@
 //! the radio's words, the countdown, a patrol's tally; and the loading
 //! screen, the frame rate with what renders, and the statistics.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use interceptor_game::career::{self, Units};
 use interceptor_game::driver::Role;
 use interceptor_game::game::Game;
 use interceptor_game::pursuit::{self, Pursuit, State};
 use interceptor_game::session::{self, Mode, Phase, Session};
 use interceptor_game::world::World;
-use num_traits::Float;
 use vgfx::{Align, Bitmap, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
 
 use crate::paint::{self, ACCENT, AMBER, DIM, FAINT, Fonts, GREEN, PANEL, RED, WHITE, centered, rect};

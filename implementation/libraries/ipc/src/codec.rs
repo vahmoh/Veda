@@ -13,7 +13,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vrt::object::{Channel, Event, Handle, Interrupt, IoPorts, Process, Resource, Thread, Vmo};
+use vrt::object::{Channel, Event, Handle, Interrupt, IoPorts, Process, Resource, Socket, Thread, Vmo};
 
 /// Decoding failure (malformed or hostile message).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -481,7 +481,7 @@ macro_rules! handle_type {
     )*};
 }
 
-handle_type!(Channel, Vmo, Event, Process, Thread, Interrupt, IoPorts, Resource);
+handle_type!(Channel, Vmo, Event, Process, Thread, Interrupt, IoPorts, Resource, Socket);
 
 /// Declares a struct whose fields are encoded in order.
 ///

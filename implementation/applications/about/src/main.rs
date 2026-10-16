@@ -4,20 +4,9 @@
 //! About Veda: the system's version, hardware and licences. The voice
 //! agent reads what the window shows and can show the licences.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
-use alloc::format;
-use alloc::string::String;
-use alloc::vec;
-
 use apps_common::format::{cstr, uptime};
 use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, json};
 use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
-
-vrt::entry!(main);
 
 /// What "Show licences" shows.
 const LICENCES: &str = "Veda © 2026 Vahid Mohammadi is free software: you can redistribute it and/or modify it \
@@ -144,9 +133,12 @@ impl App for About {
     }
 }
 
-fn main() -> i32 {
+fn main() {
     let mut spec = WindowSpec::new("About Veda", 560, 540);
     spec.resizable = false;
     spec.app_id = "about".into();
-    vui::run(spec, About { info: vabi::SystemInfo::default(), last_refresh: 0, show_details: false })
+    std::process::exit(vui::run(
+        spec,
+        About { info: vabi::SystemInfo::default(), last_refresh: 0, show_details: false },
+    ));
 }

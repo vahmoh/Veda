@@ -1,0 +1,977 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -983,6 +983,7 @@
+ level = "warn"
+ priority = 0
+ check-cfg = [
++    'cfg(target_os, values("veda"))',
+     "cfg(fuzzing)",
+     "cfg(loom)",
+     "cfg(mio_unsupported_force_poll_poll)",
+--- a/src/fs/file.rs
++++ b/src/fs/file.rs
+@@ -992,7 +992,7 @@
+             feature = "io-uring",
+             feature = "rt",
+             feature = "fs",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         ))]
+         {
+             if let Ok(handle) = crate::runtime::Handle::try_current() {
+@@ -1025,7 +1025,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     ))]
+     async fn uring_read(
+         mut fd: crate::io::uring::utils::ArcFd,
+@@ -1066,7 +1066,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     ))]
+     async fn lazy_init_read(std: Arc<StdFile>, buf: Buf, max_buf_size: usize) -> (Operation, Buf) {
+         let handle = crate::runtime::Handle::current();
+--- a/src/fs/open_options.rs
++++ b/src/fs/open_options.rs
+@@ -97,7 +97,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux"
++        any(target_os = "linux", target_os = "veda")
+     ))]
+     Uring(UringOpenOptions),
+ }
+@@ -125,7 +125,7 @@
+             feature = "io-uring",
+             feature = "rt",
+             feature = "fs",
+-            target_os = "linux"
++            any(target_os = "linux", target_os = "veda")
+         ))]
+         let inner = Kind::Uring(UringOpenOptions::new());
+         #[cfg(not(all(
+@@ -133,7 +133,7 @@
+             feature = "io-uring",
+             feature = "rt",
+             feature = "fs",
+-            target_os = "linux"
++            any(target_os = "linux", target_os = "veda")
+         )))]
+         let inner = Kind::Std(StdOpenOptions::new());
+ 
+@@ -175,7 +175,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 opts.read(read);
+@@ -219,7 +219,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 opts.write(write);
+@@ -292,7 +292,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 opts.append(append);
+@@ -339,7 +339,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 opts.truncate(truncate);
+@@ -389,7 +389,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 opts.create(create);
+@@ -446,7 +446,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 opts.create_new(create_new);
+@@ -529,7 +529,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux"
++                any(target_os = "linux", target_os = "veda")
+             ))]
+             Kind::Uring(opts) => {
+                 let handle = crate::runtime::Handle::current();
+@@ -600,7 +600,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux"
++                    any(target_os = "linux", target_os = "veda")
+                 ))]
+                 Kind::Uring(opts) => {
+                     opts.mode(mode);
+@@ -645,7 +645,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux"
++                    any(target_os = "linux", target_os = "veda")
+                 ))]
+                 Kind::Uring(opts) => {
+                     opts.custom_flags(flags);
+--- a/src/fs/rename.rs
++++ b/src/fs/rename.rs
+@@ -18,7 +18,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     ))]
+     {
+         use crate::io::uring::rename::Rename;
+--- a/src/fs/write.rs
++++ b/src/fs/write.rs
+@@ -32,7 +32,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux"
++        any(target_os = "linux", target_os = "veda")
+     ))]
+     {
+         let handle = crate::runtime::Handle::current();
+@@ -53,7 +53,7 @@
+     feature = "io-uring",
+     feature = "rt",
+     feature = "fs",
+-    target_os = "linux"
++    any(target_os = "linux", target_os = "veda")
+ ))]
+ async fn write_uring(path: &Path, mut buf: OwnedBuf) -> io::Result<()> {
+     use crate::{fs::OpenOptions, runtime::driver::op::Op};
+--- a/src/io/interest.rs
++++ b/src/io/interest.rs
+@@ -14,7 +14,7 @@
+ const AIO: usize = 0b0100;
+ #[cfg(target_os = "freebsd")]
+ const LIO: usize = 0b1000;
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+ const PRIORITY: usize = 0b0001_0000;
+ // error is available on all platforms, but behavior is platform-specific
+ // mio does not have this interest
+@@ -66,8 +66,8 @@
+     pub const ERROR: Interest = Interest(ERROR);
+ 
+     /// Returns a `Interest` set representing priority completion interests.
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
+-    #[cfg_attr(docsrs, doc(cfg(any(target_os = "linux", target_os = "android"))))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
++    #[cfg_attr(docsrs, doc(cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))))]
+     pub const PRIORITY: Interest = Interest(PRIORITY);
+ 
+     /// Returns true if the value includes readable interest.
+@@ -144,8 +144,8 @@
+     /// let both = Interest::READABLE | Interest::PRIORITY;
+     /// assert!(both.is_priority());
+     /// ```
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
+-    #[cfg_attr(docsrs, doc(cfg(any(target_os = "linux", target_os = "android"))))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
++    #[cfg_attr(docsrs, doc(cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))))]
+     pub const fn is_priority(self) -> bool {
+         self.0 & PRIORITY != 0
+     }
+@@ -222,7 +222,7 @@
+             mio_add(&mut mio, mio::Interest::WRITABLE);
+         }
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         if self.is_priority() {
+             mio_add(&mut mio, mio::Interest::PRIORITY);
+         }
+@@ -259,7 +259,7 @@
+         match self {
+             Interest::READABLE => Ready::READABLE | Ready::READ_CLOSED,
+             Interest::WRITABLE => Ready::WRITABLE | Ready::WRITE_CLOSED,
+-            #[cfg(any(target_os = "linux", target_os = "android"))]
++            #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+             Interest::PRIORITY => Ready::PRIORITY | Ready::READ_CLOSED,
+             Interest::ERROR => Ready::ERROR,
+             _ => Ready::EMPTY,
+@@ -303,7 +303,7 @@
+             separator = true;
+         }
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         if self.is_priority() {
+             if separator {
+                 write!(fmt, " | ")?;
+--- a/src/io/poll_evented.rs
++++ b/src/io/poll_evented.rs
+@@ -125,7 +125,7 @@
+     }
+ 
+     /// Returns a reference to the registration.
+-    #[cfg(any(feature = "net", all(feature = "process", target_os = "linux")))]
++    #[cfg(any(feature = "net", all(feature = "process", any(target_os = "linux", target_os = "veda"))))]
+     pub(crate) fn registration(&self) -> &Registration {
+         &self.registration
+     }
+@@ -139,7 +139,7 @@
+     }
+ 
+     /// Re-register under new runtime with `interest`.
+-    #[cfg(all(feature = "process", target_os = "linux"))]
++    #[cfg(all(feature = "process", any(target_os = "linux", target_os = "veda")))]
+     pub(crate) fn reregister(&mut self, interest: Interest) -> io::Result<()> {
+         let io = self.io.as_mut().unwrap(); // As io shouldn't ever be None, just unwrap here.
+         let _ = self.registration.deregister(io);
+@@ -194,7 +194,7 @@
+                                 // epoll
+                                 target_os = "android",
+                                 target_os = "illumos",
+-                                target_os = "linux",
++                                any(target_os = "linux", target_os = "veda"),
+                                 target_os = "redox",
+                                 // kqueue
+                                 target_os = "dragonfly",
+@@ -248,7 +248,7 @@
+                                 // epoll
+                                 target_os = "android",
+                                 target_os = "illumos",
+-                                target_os = "linux",
++                                any(target_os = "linux", target_os = "veda"),
+                                 target_os = "redox",
+                                 // kqueue
+                                 target_os = "dragonfly",
+--- a/src/io/ready.rs
++++ b/src/io/ready.rs
+@@ -9,7 +9,7 @@
+ const WRITABLE: usize = 0b0_10;
+ const READ_CLOSED: usize = 0b0_0100;
+ const WRITE_CLOSED: usize = 0b0_1000;
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+ const PRIORITY: usize = 0b1_0000;
+ const ERROR: usize = 0b10_0000;
+ 
+@@ -37,20 +37,20 @@
+     pub const WRITE_CLOSED: Ready = Ready(WRITE_CLOSED);
+ 
+     /// Returns a `Ready` representing priority readiness.
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
+-    #[cfg_attr(docsrs, doc(cfg(any(target_os = "linux", target_os = "android"))))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
++    #[cfg_attr(docsrs, doc(cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))))]
+     pub const PRIORITY: Ready = Ready(PRIORITY);
+ 
+     /// Returns a `Ready` representing error readiness.
+     pub const ERROR: Ready = Ready(ERROR);
+ 
+     /// Returns a `Ready` representing readiness for all operations.
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+     pub const ALL: Ready =
+         Ready(READABLE | WRITABLE | READ_CLOSED | WRITE_CLOSED | ERROR | PRIORITY);
+ 
+     /// Returns a `Ready` representing readiness for all operations.
+-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
++    #[cfg(not(any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub const ALL: Ready = Ready(READABLE | WRITABLE | READ_CLOSED | WRITE_CLOSED | ERROR);
+ 
+     // Must remain crate-private to avoid adding a public dependency on Mio.
+@@ -88,7 +88,7 @@
+             ready |= Ready::ERROR;
+         }
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         {
+             if event.is_priority() {
+                 ready |= Ready::PRIORITY;
+@@ -185,8 +185,8 @@
+     /// assert!(!Ready::WRITABLE.is_priority());
+     /// assert!(Ready::PRIORITY.is_priority());
+     /// ```
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
+-    #[cfg_attr(docsrs, doc(cfg(any(target_os = "linux", target_os = "android"))))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
++    #[cfg_attr(docsrs, doc(cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))))]
+     pub fn is_priority(self) -> bool {
+         self.contains(Ready::PRIORITY)
+     }
+@@ -248,7 +248,7 @@
+             ready |= Ready::WRITE_CLOSED;
+         }
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         if interest.is_priority() {
+             ready |= Ready::PRIORITY;
+             ready |= Ready::READ_CLOSED;
+@@ -314,7 +314,7 @@
+             .field("is_write_closed", &self.is_write_closed())
+             .field("is_error", &self.is_error());
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         fmt.field("is_priority", &self.is_priority());
+ 
+         fmt.finish()
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -488,7 +488,7 @@
+     feature = "taskdump",
+     not(doc),
+     not(all(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         any(
+             target_arch = "aarch64",
+             target_arch = "x86",
+--- a/src/macros/cfg.rs
++++ b/src/macros/cfg.rs
+@@ -158,7 +158,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux"
++                    any(target_os = "linux", target_os = "veda")
+                 )
+             ))]
+             #[cfg_attr(docsrs, doc(cfg(any(
+@@ -170,7 +170,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux"
++                    any(target_os = "linux", target_os = "veda")
+                 )
+             ))))]
+             $item
+@@ -190,7 +190,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux"
++                    any(target_os = "linux", target_os = "veda")
+                 )
+             ))]
+             $item
+@@ -210,7 +210,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux"
++                    any(target_os = "linux", target_os = "veda")
+                 )
+             )))]
+             $item
+@@ -350,7 +350,7 @@
+                     feature = "io-uring",
+                     feature = "rt",
+                     feature = "fs",
+-                    target_os = "linux",
++                    any(target_os = "linux", target_os = "veda"),
+                 )
+             ))]
+             #[cfg_attr(
+@@ -362,7 +362,7 @@
+                         feature = "io-uring",
+                         feature = "rt",
+                         feature = "fs",
+-                        target_os = "linux",
++                        any(target_os = "linux", target_os = "veda"),
+                     )
+                 )))
+             )]
+@@ -513,7 +513,7 @@
+                 tokio_unstable,
+                 feature = "taskdump",
+                 feature = "rt",
+-                target_os = "linux",
++                any(target_os = "linux", target_os = "veda"),
+                 any(
+                     target_arch = "aarch64",
+                     target_arch = "x86",
+@@ -527,7 +527,7 @@
+                     tokio_unstable,
+                     feature = "taskdump",
+                     feature = "rt",
+-                    target_os = "linux",
++                    any(target_os = "linux", target_os = "veda"),
+                     any(
+                         target_arch = "aarch64",
+                         target_arch = "x86",
+@@ -548,7 +548,7 @@
+                 tokio_unstable,
+                 feature = "taskdump",
+                 feature = "rt",
+-                target_os = "linux",
++                any(target_os = "linux", target_os = "veda"),
+                 any(
+                     target_arch = "aarch64",
+                     target_arch = "x86",
+@@ -743,7 +743,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux",
++                any(target_os = "linux", target_os = "veda"),
+             ))]
+             $item
+         )*
+--- a/src/net/tcp/socket.rs
++++ b/src/net/tcp/socket.rs
+@@ -168,7 +168,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "wasi",
+@@ -181,7 +181,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "wasi",
+@@ -530,7 +530,7 @@
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd",
+@@ -543,7 +543,7 @@
+             target_os = "dragonfly",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd",
+@@ -568,7 +568,7 @@
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd",
+@@ -581,7 +581,7 @@
+             target_os = "dragonfly",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd",
+@@ -718,10 +718,10 @@
+     /// Gets the value for the `SO_BINDTODEVICE` option on this socket
+     ///
+     /// This value gets the socket binded device's interface name.
+-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux",))]
++    #[cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"),))]
+     #[cfg_attr(
+         docsrs,
+-        doc(cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux",)))
++        doc(cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"),)))
+     )]
+     pub fn device(&self) -> io::Result<Option<Vec<u8>>> {
+         self.inner.device()
+@@ -734,10 +734,10 @@
+     /// works for some socket types, particularly `AF_INET` sockets.
+     ///
+     /// If `interface` is `None` or an empty string it removes the binding.
+-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda")))]
+     #[cfg_attr(
+         docsrs,
+-        doc(cfg(all(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))))
++        doc(cfg(all(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda")))))
+     )]
+     pub fn bind_device(&self, interface: Option<&[u8]>) -> io::Result<()> {
+         self.inner.bind_device(interface)
+--- a/src/net/tcp/stream.rs
++++ b/src/net/tcp/stream.rs
+@@ -1196,7 +1196,7 @@
+     /// # }
+     /// ```
+     #[cfg(any(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "android",
+         target_os = "fuchsia",
+         target_os = "cygwin",
+@@ -1204,7 +1204,7 @@
+     #[cfg_attr(
+         docsrs,
+         doc(cfg(any(
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "android",
+             target_os = "fuchsia",
+             target_os = "cygwin"
+@@ -1236,7 +1236,7 @@
+     /// # }
+     /// ```
+     #[cfg(any(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "android",
+         target_os = "fuchsia",
+         target_os = "cygwin",
+@@ -1244,7 +1244,7 @@
+     #[cfg_attr(
+         docsrs,
+         doc(cfg(any(
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "android",
+             target_os = "fuchsia",
+             target_os = "cygwin"
+--- a/src/net/udp.rs
++++ b/src/net/udp.rs
+@@ -1983,7 +1983,7 @@
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd",
+@@ -1996,7 +1996,7 @@
+             target_os = "dragonfly",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd",
+@@ -2021,7 +2021,7 @@
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd",
+@@ -2034,7 +2034,7 @@
+             target_os = "dragonfly",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd",
+@@ -2216,10 +2216,10 @@
+     /// Gets the value for the `SO_BINDTODEVICE` option on this socket
+     ///
+     /// This value gets the socket-bound device's interface name.
+-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux",))]
++    #[cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"),))]
+     #[cfg_attr(
+         docsrs,
+-        doc(cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux",)))
++        doc(cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"),)))
+     )]
+     pub fn device(&self) -> io::Result<Option<Vec<u8>>> {
+         self.as_socket().device()
+@@ -2232,10 +2232,10 @@
+     /// works for some socket types, particularly `AF_INET` sockets.
+     ///
+     /// If `interface` is `None` or an empty string it removes the binding.
+-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda")))]
+     #[cfg_attr(
+         docsrs,
+-        doc(cfg(all(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))))
++        doc(cfg(all(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda")))))
+     )]
+     pub fn bind_device(&self, interface: Option<&[u8]>) -> io::Result<()> {
+         self.as_socket().bind_device(interface)
+--- a/src/net/unix/pipe.rs
++++ b/src/net/unix/pipe.rs
+@@ -120,7 +120,7 @@
+ /// ```
+ #[derive(Clone, Debug)]
+ pub struct OpenOptions {
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+     read_write: bool,
+     unchecked: bool,
+ }
+@@ -131,7 +131,7 @@
+     /// All options are initially set to `false`.
+     pub fn new() -> OpenOptions {
+         OpenOptions {
+-            #[cfg(any(target_os = "linux", target_os = "android"))]
++            #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+             read_write: false,
+             unchecked: false,
+         }
+@@ -168,8 +168,8 @@
+     ///     .read_write(true)
+     ///     .open_receiver("path/to/a/fifo");
+     /// ```
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
+-    #[cfg_attr(docsrs, doc(cfg(any(target_os = "linux", target_os = "android"))))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
++    #[cfg_attr(docsrs, doc(cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))))]
+     pub fn read_write(&mut self, value: bool) -> &mut Self {
+         self.read_write = value;
+         self
+@@ -264,7 +264,7 @@
+             .write(pipe_end == PipeEnd::Sender)
+             .custom_flags(libc::O_NONBLOCK);
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         if self.read_write {
+             options.read(true).write(true);
+         }
+--- a/src/net/unix/socket.rs
++++ b/src/net/unix/socket.rs
+@@ -127,7 +127,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd"
+         ))]
+@@ -139,7 +139,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd"
+         )))]
+--- a/src/net/unix/ucred.rs
++++ b/src/net/unix/ucred.rs
+@@ -34,7 +34,7 @@
+ }
+ 
+ #[cfg(any(
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+     target_os = "redox",
+     target_os = "android",
+     target_os = "openbsd",
+@@ -79,7 +79,7 @@
+ pub(crate) use self::impl_nto::get_peer_cred;
+ 
+ #[cfg(any(
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+     target_os = "redox",
+     target_os = "android",
+     target_os = "openbsd",
+@@ -95,7 +95,7 @@
+     #[cfg(target_os = "openbsd")]
+     use libc::sockpeercred as ucred;
+     #[cfg(any(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "redox",
+         target_os = "android",
+         target_os = "haiku",
+--- a/src/process/unix/mod.rs
++++ b/src/process/unix/mod.rs
+@@ -27,7 +27,7 @@
+ mod reap;
+ use reap::Reaper;
+ 
+-#[cfg(all(target_os = "linux", feature = "rt"))]
++#[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "rt"))]
+ mod pidfd_reaper;
+ 
+ use crate::io::{AsyncRead, AsyncWrite, PollEvented, ReadBuf};
+@@ -105,7 +105,7 @@
+ #[must_use = "futures do nothing unless polled"]
+ pub(crate) enum Child {
+     SignalReaper(Reaper<StdChild, GlobalOrphanQueue, Signal>),
+-    #[cfg(all(target_os = "linux", feature = "rt"))]
++    #[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "rt"))]
+     PidfdReaper(pidfd_reaper::PidfdReaper<StdChild, GlobalOrphanQueue>),
+ }
+ 
+@@ -120,7 +120,7 @@
+     let stdout = child.stdout.take().map(stdio).transpose()?;
+     let stderr = child.stderr.take().map(stdio).transpose()?;
+ 
+-    #[cfg(all(target_os = "linux", feature = "rt"))]
++    #[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "rt"))]
+     match pidfd_reaper::PidfdReaper::new(child, GlobalOrphanQueue) {
+         Ok(pidfd_reaper) => {
+             return Ok(SpawnedChild {
+@@ -148,7 +148,7 @@
+     pub(crate) fn id(&self) -> u32 {
+         match self {
+             Self::SignalReaper(signal_reaper) => signal_reaper.id(),
+-            #[cfg(all(target_os = "linux", feature = "rt"))]
++            #[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "rt"))]
+             Self::PidfdReaper(pidfd_reaper) => pidfd_reaper.id(),
+         }
+     }
+@@ -156,7 +156,7 @@
+     fn std_child(&mut self) -> &mut StdChild {
+         match self {
+             Self::SignalReaper(signal_reaper) => signal_reaper.inner_mut(),
+-            #[cfg(all(target_os = "linux", feature = "rt"))]
++            #[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "rt"))]
+             Self::PidfdReaper(pidfd_reaper) => pidfd_reaper.inner_mut(),
+         }
+     }
+@@ -178,7 +178,7 @@
+     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+         match Pin::into_inner(self) {
+             Self::SignalReaper(signal_reaper) => Pin::new(signal_reaper).poll(cx),
+-            #[cfg(all(target_os = "linux", feature = "rt"))]
++            #[cfg(all(any(target_os = "linux", target_os = "veda"), feature = "rt"))]
+             Self::PidfdReaper(pidfd_reaper) => Pin::new(pidfd_reaper).poll(cx),
+         }
+     }
+--- a/src/runtime/builder.rs
++++ b/src/runtime/builder.rs
+@@ -386,7 +386,7 @@
+             feature = "io-uring",
+             feature = "rt",
+             feature = "fs",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         ))]
+         self.enable_io_uring();
+ 
+--- a/src/runtime/context.rs
++++ b/src/runtime/context.rs
+@@ -68,7 +68,7 @@
+         tokio_unstable,
+         feature = "taskdump",
+         feature = "rt",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         any(
+             target_arch = "aarch64",
+             target_arch = "x86",
+@@ -114,7 +114,7 @@
+                 tokio_unstable,
+                 feature = "taskdump",
+                 feature = "rt",
+-                target_os = "linux",
++                any(target_os = "linux", target_os = "veda"),
+                 any(
+                     target_arch = "aarch64",
+                     target_arch = "x86",
+--- a/src/runtime/handle.rs
++++ b/src/runtime/handle.rs
+@@ -354,7 +354,7 @@
+             tokio_unstable,
+             feature = "taskdump",
+             feature = "rt",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             any(
+                 target_arch = "aarch64",
+                 target_arch = "x86",
+@@ -386,7 +386,7 @@
+             tokio_unstable,
+             feature = "taskdump",
+             feature = "rt",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             any(
+                 target_arch = "aarch64",
+                 target_arch = "x86",
+@@ -420,7 +420,7 @@
+             tokio_unstable,
+             feature = "taskdump",
+             feature = "rt",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             any(
+                 target_arch = "aarch64",
+                 target_arch = "x86",
+--- a/src/runtime/io/driver.rs
++++ b/src/runtime/io/driver.rs
+@@ -57,7 +57,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     ))]
+     pub(crate) uring_context: Mutex<UringContext>,
+ 
+@@ -66,7 +66,7 @@
+         feature = "io-uring",
+         feature = "rt",
+         feature = "fs",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     ))]
+     pub(crate) uring_probe: OnceCell<Option<io_uring::Probe>>,
+ }
+@@ -141,7 +141,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux",
++                any(target_os = "linux", target_os = "veda"),
+             ))]
+             uring_context: Mutex::new(UringContext::new()),
+             #[cfg(all(
+@@ -149,7 +149,7 @@
+                 feature = "io-uring",
+                 feature = "rt",
+                 feature = "fs",
+-                target_os = "linux",
++                any(target_os = "linux", target_os = "veda"),
+             ))]
+             uring_probe: OnceCell::new(),
+         };
+@@ -228,7 +228,7 @@
+             feature = "io-uring",
+             feature = "rt",
+             feature = "fs",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         ))]
+         {
+             let mut guard = handle.get_uring().lock();
+--- a/src/runtime/local_runtime/runtime.rs
++++ b/src/runtime/local_runtime/runtime.rs
+@@ -233,7 +233,7 @@
+             tokio_unstable,
+             feature = "taskdump",
+             feature = "rt",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             any(
+                 target_arch = "aarch64",
+                 target_arch = "x86",
+--- a/src/runtime/runtime.rs
++++ b/src/runtime/runtime.rs
+@@ -350,7 +350,7 @@
+             tokio_unstable,
+             feature = "taskdump",
+             feature = "rt",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             any(
+                 target_arch = "aarch64",
+                 target_arch = "x86",
+--- a/src/runtime/scheduler/current_thread/mod.rs
++++ b/src/runtime/scheduler/current_thread/mod.rs
+@@ -569,7 +569,7 @@
+     #[cfg(all(
+         tokio_unstable,
+         feature = "taskdump",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         any(
+             target_arch = "aarch64",
+             target_arch = "x86",
+--- a/src/signal/unix.rs
++++ b/src/signal/unix.rs
+@@ -17,10 +17,10 @@
+ use std::sync::OnceLock;
+ use std::task::{Context, Poll};
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "illumos")))]
++#[cfg(not(any(any(target_os = "linux", target_os = "veda"), target_os = "illumos")))]
+ pub(crate) struct OsStorage([SignalInfo; 33]);
+ 
+-#[cfg(any(target_os = "linux", target_os = "illumos"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "illumos"))]
+ pub(crate) struct OsStorage(Box<[SignalInfo]>);
+ 
+ impl OsStorage {
+@@ -32,13 +32,13 @@
+ impl Default for OsStorage {
+     fn default() -> Self {
+         // There are reliable signals ranging from 1 to 33 available on every Unix platform.
+-        #[cfg(not(any(target_os = "linux", target_os = "illumos")))]
++        #[cfg(not(any(any(target_os = "linux", target_os = "veda"), target_os = "illumos")))]
+         let inner = std::array::from_fn(|_| SignalInfo::default());
+ 
+         // On Linux and illumos, there are additional real-time signals
+         // available. (This is also likely true on Solaris, but this should be
+         // verified before being enabled.)
+-        #[cfg(any(target_os = "linux", target_os = "illumos"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "illumos"))]
+         let inner = std::iter::repeat_with(SignalInfo::default)
+             .take(libc::SIGRTMAX() as usize)
+             .collect();
+--- a/src/task/local.rs
++++ b/src/task/local.rs
+@@ -427,7 +427,7 @@
+                     tokio_unstable,
+                     feature = "taskdump",
+                     feature = "rt",
+-                    target_os = "linux",
++                    any(target_os = "linux", target_os = "veda"),
+                     any(
+                         target_arch = "aarch64",
+                         target_arch = "x86",
+--- a/src/task/spawn.rs
++++ b/src/task/spawn.rs
+@@ -196,7 +196,7 @@
+             tokio_unstable,
+             feature = "taskdump",
+             feature = "rt",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             any(
+                 target_arch = "aarch64",
+                 target_arch = "x86",

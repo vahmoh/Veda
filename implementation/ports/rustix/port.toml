@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# rustix: safe bindings of POSIX and Linux system calls, which crates that
+# need the standard library use (tempfile, for one) in Veda's programs on
+# it. A crate: its release on crates.io, which Cargo builds.
+name = "rustix"
+version = "1.1.5"
+url = "https://static.crates.io/crates/rustix/rustix-1.1.5.crate"
+sha256 = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"

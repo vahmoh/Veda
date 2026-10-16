@@ -2,21 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Opening and saving pictures on a thread of their own: decoding or encoding a large picture
-//! takes seconds under emulation, and the window stays responsive meanwhile. Results come back
-//! through a mutex and an [`Event`] that the window waits on (see `App::wait_handles`).
+//! takes seconds under emulation, and the window stays responsive meanwhile. The thread takes
+//! jobs from one channel and gives back what it did on another, signalling an [`Event`] that
+//! the window waits on (see `App::wait_handles`); it ends with the window's side.
+//!
+//! Pictures move through `vfiles`, in one piece of shared memory each way.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::cell::Cell;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::Instant;
 
 use paint_core::codec::{self, Opened};
 use vabi::RawHandle;
 use vgfx::Bitmap;
 use vimage::Format;
 use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
 
 /// The largest file opened (bytes).
 const MAX_FILE: usize = 256 << 20;
@@ -35,18 +36,13 @@ pub enum Done {
     Saved { path: String, format: Format, version: u64, result: Result<usize, String> },
 }
 
-struct Shared {
-    jobs: Mutex<VecDeque<Job>>,
-    wake: Condvar,
-    done: Mutex<Vec<Done>>,
-    /// Jobs asked for and not yet taken back.
-    pending: Mutex<usize>,
-}
-
 /// The window's side of the worker.
 pub struct Files {
-    shared: Arc<Shared>,
+    jobs: Sender<Job>,
+    done: Receiver<Done>,
     event: Event,
+    /// Jobs asked for and not yet taken back.
+    pending: Cell<usize>,
 }
 
 impl Files {
@@ -54,26 +50,30 @@ impl Files {
     pub fn start() -> Option<Files> {
         let event = Event::create().ok()?;
         let signal = Event::from_handle(event.0.duplicate(None).ok()?);
-        let shared = Arc::new(Shared {
-            jobs: Mutex::new(VecDeque::new()),
-            wake: Condvar::new(),
-            done: Mutex::new(Vec::new()),
-            pending: Mutex::new(0),
-        });
-        let worker = shared.clone();
-        vrt::thread::Builder::new()
-            .name("paint-files")
+        let (jobs, todo) = mpsc::channel();
+        let (finished, done) = mpsc::channel();
+        thread::Builder::new()
+            .name("paint-files".into())
             .stack_size(512 * 1024)
-            .priority(vabi::priority::NORMAL - 1)
-            .spawn(move || work(&worker, &signal))
+            .spawn(move || {
+                // Behind the window, which draws as it works.
+                let _ = vrt::thread::set_priority(vabi::priority::NORMAL - 1);
+                let fs = vfiles::Fs::connect();
+                for job in todo {
+                    if finished.send(work(&fs, job)).is_err() {
+                        break;
+                    }
+                    let _ = signal.signal();
+                }
+            })
             .ok()?;
-        Some(Files { shared, event })
+        Some(Files { jobs, done, event, pending: Cell::new(0) })
     }
 
     fn ask(&self, job: Job) {
-        *self.shared.pending.lock() += 1;
-        self.shared.jobs.lock().push_back(job);
-        self.shared.wake.notify_one();
+        if self.jobs.send(job).is_ok() {
+            self.pending.set(self.pending.get() + 1);
+        }
     }
 
     /// Reads and decodes `path` (a picture of at most `max_pixels`).
@@ -88,16 +88,16 @@ impl Files {
 
     /// What finished since the last call.
     pub fn take(&self) -> Vec<Done> {
+        // Cleared first: what finishes meanwhile signals it again.
         let _ = self.event.clear();
-        let done = core::mem::take(&mut *self.shared.done.lock());
-        let mut pending = self.shared.pending.lock();
-        *pending = pending.saturating_sub(done.len());
+        let done: Vec<Done> = self.done.try_iter().collect();
+        self.pending.set(self.pending.get().saturating_sub(done.len()));
         done
     }
 
     /// Whether a job is under way.
     pub fn busy(&self) -> bool {
-        *self.shared.pending.lock() > 0
+        self.pending.get() > 0
     }
 
     /// Signalled when a job has finished.
@@ -106,57 +106,40 @@ impl Files {
     }
 }
 
-fn work(shared: &Shared, signal: &Event) {
-    let fs = vfiles::Fs::connect();
-    loop {
-        let job = {
-            let mut q = shared.jobs.lock();
-            loop {
-                if let Some(j) = q.pop_front() {
-                    break j;
-                }
-                q = shared.wake.wait(q);
+/// Does `job`, saying in the log what it did and how long it took.
+fn work(fs: &vfiles::Fs, job: Job) -> Done {
+    let started = Instant::now();
+    let ms = || started.elapsed().as_millis();
+    match job {
+        Job::Open { path, max_pixels } => {
+            let result = fs
+                .read_limited(&path, MAX_FILE)
+                .map_err(|e| match e {
+                    vfiles::fs::Error::TooLarge => format!("it is larger than {} MB", MAX_FILE >> 20),
+                    e => e.to_string(),
+                })
+                .and_then(|bytes| codec::decode(&bytes, max_pixels).map_err(|e| e.to_string()));
+            match &result {
+                Ok(o) => println!(
+                    "opened {path} ({}x{} {}) in {} ms",
+                    o.picture.width,
+                    o.picture.height,
+                    o.format.name(),
+                    ms()
+                ),
+                Err(e) => println!("cannot open {path}: {e}"),
             }
-        };
-        let started = vrt::time::now_ns();
-        let done = match job {
-            Job::Open { path, max_pixels } => {
-                let result = fs
-                    .read_limited(&path, MAX_FILE)
-                    .map_err(|e| match e {
-                        vfiles::fs::Error::TooLarge => format!("it is larger than {} MB", MAX_FILE >> 20),
-                        e => e.to_string(),
-                    })
-                    .and_then(|bytes| codec::decode(&bytes, max_pixels).map_err(|e| e.to_string()));
-                match &result {
-                    Ok(o) => vrt::println!(
-                        "opened {path} ({}x{} {}) in {} ms",
-                        o.picture.width,
-                        o.picture.height,
-                        o.format.name(),
-                        (vrt::time::now_ns() - started) / 1_000_000
-                    ),
-                    Err(e) => vrt::println!("cannot open {path}: {e}"),
-                }
-                Done::Opened { path, result }
+            Done::Opened { path, result }
+        }
+        Job::Save { path, picture, format, version } => {
+            let result = codec::encode(&picture, format, JPEG_QUALITY)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| fs.write(&path, &bytes).map(|()| bytes.len()).map_err(|e| e.to_string()));
+            match &result {
+                Ok(n) => println!("saved {path} ({n} bytes, {}) in {} ms", format.name(), ms()),
+                Err(e) => println!("cannot save {path}: {e}"),
             }
-            Job::Save { path, picture, format, version } => {
-                let result = codec::encode(&picture, format, JPEG_QUALITY)
-                    .map_err(|e| e.to_string())
-                    .and_then(|bytes| fs.write(&path, &bytes).map(|()| bytes.len()).map_err(|e| e.to_string()));
-                match &result {
-                    Ok(n) => vrt::println!(
-                        "saved {path} ({} bytes, {}) in {} ms",
-                        n,
-                        format.name(),
-                        (vrt::time::now_ns() - started) / 1_000_000
-                    ),
-                    Err(e) => vrt::println!("cannot save {path}: {e}"),
-                }
-                Done::Saved { path, format, version, result }
-            }
-        };
-        shared.done.lock().push(done);
-        let _ = signal.signal();
+            Done::Saved { path, format, version, result }
+        }
     }
 }

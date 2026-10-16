@@ -22,21 +22,10 @@
 //!
 //! Usage: `settings [personalization|agent|network|display|system|about]`.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod control;
 mod network;
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
-use num_traits::Float;
 use vgfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};
 use vproto::display::{ScreenInfo, modifiers};
 use vproto::init::launcher;
@@ -46,8 +35,6 @@ use vui::{Align, App, ButtonKind, Color, Cursor, Font, Icon, Rect, Ui, WindowSpe
 use vfiles::Fs;
 use vfiles::thumbs::Thumbnailer;
 use vproto::shell::{ShellLink, ShellReply};
-
-vrt::entry!(main);
 
 /// The shell's name for its built-in generated wallpaper.
 const PROCEDURAL: &str = "procedural";
@@ -356,12 +343,12 @@ impl Settings {
                     self.applying = None;
                     match result {
                         Ok(()) => {
-                            vrt::println!("wallpaper changed to {path}");
+                            println!("wallpaper changed to {path}");
                             self.current = path;
                             self.applied_until = now + 3_000_000_000;
                         }
                         Err(e) => {
-                            vrt::println!("cannot change the wallpaper to {path}: {e}");
+                            println!("cannot change the wallpaper to {path}: {e}");
                             self.error = Some(e.to_string());
                             if self.shell_state == ShellState::Available {
                                 link.request_wallpapers();
@@ -1111,8 +1098,8 @@ impl App for Settings {
     }
 }
 
-fn main() -> i32 {
-    let section = match vrt::env::args().get(1).map(|s| s.to_ascii_lowercase()) {
+fn main() {
+    let section = match std::env::args().nth(1).map(|s| s.to_ascii_lowercase()) {
         Some(s) if s.starts_with("agent") || s.starts_with("voice") => Section::Agent,
         Some(s) if s.starts_with("disp") => Section::Display,
         Some(s) if s.starts_with("net") || s.starts_with("wi") => Section::Network,
@@ -1125,5 +1112,5 @@ fn main() -> i32 {
     spec.app_id = "settings".into();
     spec.min_width = 720;
     spec.min_height = 460;
-    vui::run(spec, app)
+    std::process::exit(vui::run(spec, app));
 }

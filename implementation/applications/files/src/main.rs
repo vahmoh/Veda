@@ -26,22 +26,13 @@
 //! with that file selected; `files --empty-trash` opens the Trash and asks
 //! whether to empty it.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod icons;
 mod ops;
 mod view;
 
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 use core::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 
 use vfiles::format::{friendly_time, human_size};
 use vfiles::fs::{Error, Space};
@@ -55,8 +46,6 @@ use vproto::input::keys;
 use vui::{App, Ui, WindowSpec};
 
 use ops::{Finished, Job, Outcome, Worker};
-
-vrt::entry!(main);
 
 /// One directory entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -371,7 +360,7 @@ impl Files {
 
     /// Shows an error dialog (and notes the error in the system log).
     fn error(&mut self, title: &str, message: String) {
-        vrt::println!("{title}: {}", message.replace('\n', "; "));
+        println!("{title}: {}", message.replace('\n', "; "));
         self.dialog = Some(Dialog::Error { title: title.into(), message });
     }
 
@@ -776,8 +765,8 @@ impl Files {
         };
         match r {
             Ok(Ok(_)) => match target {
-                Some(t) => vrt::println!("opened {t} with {what}"),
-                None => vrt::println!("started {what}"),
+                Some(t) => println!("opened {t} with {what}"),
+                None => println!("started {what}"),
             },
             Ok(Err(e)) => self.error("Can't open", format!("“{what}” could not be started: {e}.")),
             Err(_) => self.error("Can't open", "The application launcher is not responding.".into()),
@@ -878,7 +867,7 @@ impl Files {
     fn make_folder(&mut self, name: &str) -> bool {
         match self.fs.mkdir(&self.path_of(name)) {
             Ok(()) => {
-                vrt::println!("created folder {}", self.path_of(name));
+                println!("created folder {}", self.path_of(name));
                 self.search.clear();
                 self.reload();
                 self.select_name(name);
@@ -898,7 +887,7 @@ impl Files {
         let name = self.fs.unique_name(&self.cwd, "New document.txt");
         match self.fs.write(&self.path_of(&name), b"") {
             Ok(()) => {
-                vrt::println!("created document {}", self.path_of(&name));
+                println!("created document {}", self.path_of(&name));
                 self.search.clear();
                 self.reload();
                 self.select_name(&name);
@@ -937,7 +926,7 @@ impl Files {
         }
         match self.fs.rename(&from, &to) {
             Ok(()) => {
-                vrt::println!("renamed {from} to {new}");
+                println!("renamed {from} to {new}");
                 if let Some(t) = &mut self.thumbs {
                     t.invalidate(&from);
                 }
@@ -1043,7 +1032,7 @@ impl Files {
     /// Reports items put back from the Trash (and those that could not be).
     fn restored(&mut self, restored: &[String], errors: Vec<(String, Error)>) {
         if !restored.is_empty() {
-            vrt::println!("restored {} from the Trash", items(restored.len()));
+            println!("restored {} from the Trash", items(restored.len()));
         }
         self.after_removal(self.cursor);
         // Items put back into the folder shown are selected.
@@ -1095,7 +1084,7 @@ impl Files {
         // Also the paths as text (for the Terminal); Files pastes from its
         // own list, whatever the text clipboard holds.
         if let Err(e) = apps_common::clipboard::copy(ui, &paths.join("\n")) {
-            vrt::println!("the paths are not on the clipboard: {e}");
+            println!("the paths are not on the clipboard: {e}");
         }
         self.clipboard = Some((paths, cut));
     }
@@ -1207,7 +1196,7 @@ impl Files {
         match &f.outcome {
             Outcome::Transferred { dir, copy, arrived, failed } => {
                 let verb = if *copy { "copied" } else { "moved" };
-                vrt::println!("{verb} {} into {dir}", items(arrived.len()));
+                println!("{verb} {} into {dir}", items(arrived.len()));
                 match after {
                     After::Paste { cut } => {
                         if *dir == self.cwd {
@@ -1242,7 +1231,7 @@ impl Files {
                 }
                 if !moved.is_empty() {
                     let from = folder_of(moved.iter().map(|(_, origin)| origin.as_str()));
-                    vrt::println!("moved {} from {from} to the Trash", items(moved.len()));
+                    println!("moved {} from {from} to the Trash", items(moved.len()));
                     self.trashed = Some(Trashed { items: moved.clone(), at: vrt::time::now_ns() });
                 }
                 self.after_removal(self.cursor);
@@ -1258,13 +1247,13 @@ impl Files {
                         t.invalidate(p);
                     }
                 }
-                vrt::println!("deleted {} from {}", items(paths.len()), folder_of(paths.iter().map(String::as_str)));
+                println!("deleted {} from {}", items(paths.len()), folder_of(paths.iter().map(String::as_str)));
                 self.after_removal(self.cursor);
                 self.report("Some items could not be deleted", failed.clone());
             }
             Outcome::Emptied(r) => {
                 match r {
-                    Ok(n) => vrt::println!("emptied the Trash ({})", items(*n)),
+                    Ok(n) => println!("emptied the Trash ({})", items(*n)),
                     Err(e) => self.report("The Trash could not be emptied", vec![("Trash".into(), *e)]),
                 }
                 self.trashed = None;
@@ -1567,7 +1556,7 @@ impl App for Files {
     }
 }
 
-fn main() -> i32 {
+fn main() {
     let args = vrt::env::args();
     let empty_trash = args.get(1).is_some_and(|a| a == "--empty-trash");
     let start = match args.get(1) {
@@ -1583,5 +1572,5 @@ fn main() -> i32 {
     spec.app_id = "files".into();
     spec.min_width = 560;
     spec.min_height = 360;
-    vui::run(spec, files)
+    std::process::exit(vui::run(spec, files));
 }

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! What Linux's ABI has particular to x86-64, as musl uses it: the system
-//! call numbers, `struct stat`, and `arch_prctl`'s codes.
+//! call numbers, `struct stat`, `struct epoll_event`, and `arch_prctl`'s
+//! codes.
 
 use crate::linux::Timespec;
 
@@ -43,12 +44,20 @@ pub mod nr {
     pub const NANOSLEEP: usize = linux_raw_sys::general::__NR_nanosleep as usize;
     pub const GETPID: usize = linux_raw_sys::general::__NR_getpid as usize;
     pub const SOCKET: usize = linux_raw_sys::general::__NR_socket as usize;
+    pub const CONNECT: usize = linux_raw_sys::general::__NR_connect as usize;
+    pub const ACCEPT: usize = linux_raw_sys::general::__NR_accept as usize;
     pub const SENDTO: usize = linux_raw_sys::general::__NR_sendto as usize;
     pub const RECVFROM: usize = linux_raw_sys::general::__NR_recvfrom as usize;
     pub const SENDMSG: usize = linux_raw_sys::general::__NR_sendmsg as usize;
     pub const RECVMSG: usize = linux_raw_sys::general::__NR_recvmsg as usize;
     pub const SHUTDOWN: usize = linux_raw_sys::general::__NR_shutdown as usize;
+    pub const BIND: usize = linux_raw_sys::general::__NR_bind as usize;
+    pub const LISTEN: usize = linux_raw_sys::general::__NR_listen as usize;
+    pub const GETSOCKNAME: usize = linux_raw_sys::general::__NR_getsockname as usize;
+    pub const GETPEERNAME: usize = linux_raw_sys::general::__NR_getpeername as usize;
     pub const SOCKETPAIR: usize = linux_raw_sys::general::__NR_socketpair as usize;
+    pub const SETSOCKOPT: usize = linux_raw_sys::general::__NR_setsockopt as usize;
+    pub const GETSOCKOPT: usize = linux_raw_sys::general::__NR_getsockopt as usize;
     pub const CLONE: usize = linux_raw_sys::general::__NR_clone as usize;
     pub const FORK: usize = linux_raw_sys::general::__NR_fork as usize;
     pub const VFORK: usize = linux_raw_sys::general::__NR_vfork as usize;
@@ -134,6 +143,7 @@ pub mod nr {
     pub const FUTEX: usize = linux_raw_sys::general::__NR_futex as usize;
     pub const SCHED_SETAFFINITY: usize = linux_raw_sys::general::__NR_sched_setaffinity as usize;
     pub const SCHED_GETAFFINITY: usize = linux_raw_sys::general::__NR_sched_getaffinity as usize;
+    pub const EPOLL_CREATE: usize = linux_raw_sys::general::__NR_epoll_create as usize;
     pub const GETDENTS64: usize = linux_raw_sys::general::__NR_getdents64 as usize;
     pub const SET_TID_ADDRESS: usize = linux_raw_sys::general::__NR_set_tid_address as usize;
     pub const FADVISE64: usize = linux_raw_sys::general::__NR_fadvise64 as usize;
@@ -141,6 +151,8 @@ pub mod nr {
     pub const CLOCK_GETRES: usize = linux_raw_sys::general::__NR_clock_getres as usize;
     pub const CLOCK_NANOSLEEP: usize = linux_raw_sys::general::__NR_clock_nanosleep as usize;
     pub const EXIT_GROUP: usize = linux_raw_sys::general::__NR_exit_group as usize;
+    pub const EPOLL_WAIT: usize = linux_raw_sys::general::__NR_epoll_wait as usize;
+    pub const EPOLL_CTL: usize = linux_raw_sys::general::__NR_epoll_ctl as usize;
     pub const TGKILL: usize = linux_raw_sys::general::__NR_tgkill as usize;
     pub const WAITID: usize = linux_raw_sys::general::__NR_waitid as usize;
     pub const OPENAT: usize = linux_raw_sys::general::__NR_openat as usize;
@@ -160,15 +172,22 @@ pub mod nr {
     pub const SET_ROBUST_LIST: usize = linux_raw_sys::general::__NR_set_robust_list as usize;
     pub const SYNC_FILE_RANGE: usize = linux_raw_sys::general::__NR_sync_file_range as usize;
     pub const UTIMENSAT: usize = linux_raw_sys::general::__NR_utimensat as usize;
+    pub const EPOLL_PWAIT: usize = linux_raw_sys::general::__NR_epoll_pwait as usize;
+    pub const EVENTFD: usize = linux_raw_sys::general::__NR_eventfd as usize;
     pub const FALLOCATE: usize = linux_raw_sys::general::__NR_fallocate as usize;
+    pub const ACCEPT4: usize = linux_raw_sys::general::__NR_accept4 as usize;
+    pub const EVENTFD2: usize = linux_raw_sys::general::__NR_eventfd2 as usize;
+    pub const EPOLL_CREATE1: usize = linux_raw_sys::general::__NR_epoll_create1 as usize;
     pub const DUP3: usize = linux_raw_sys::general::__NR_dup3 as usize;
     pub const PIPE2: usize = linux_raw_sys::general::__NR_pipe2 as usize;
     pub const PREADV: usize = linux_raw_sys::general::__NR_preadv as usize;
     pub const PWRITEV: usize = linux_raw_sys::general::__NR_pwritev as usize;
     pub const PREADV2: usize = linux_raw_sys::general::__NR_preadv2 as usize;
     pub const PWRITEV2: usize = linux_raw_sys::general::__NR_pwritev2 as usize;
+    pub const RECVMMSG: usize = linux_raw_sys::general::__NR_recvmmsg as usize;
     pub const PRLIMIT64: usize = linux_raw_sys::general::__NR_prlimit64 as usize;
     pub const SYNCFS: usize = linux_raw_sys::general::__NR_syncfs as usize;
+    pub const SENDMMSG: usize = linux_raw_sys::general::__NR_sendmmsg as usize;
     pub const GETCPU: usize = linux_raw_sys::general::__NR_getcpu as usize;
     pub const RENAMEAT2: usize = linux_raw_sys::general::__NR_renameat2 as usize;
     pub const GETRANDOM: usize = linux_raw_sys::general::__NR_getrandom as usize;
@@ -177,6 +196,17 @@ pub mod nr {
     pub const RSEQ: usize = linux_raw_sys::general::__NR_rseq as usize;
     pub const CLOSE_RANGE: usize = linux_raw_sys::general::__NR_close_range as usize;
     pub const FACCESSAT2: usize = linux_raw_sys::general::__NR_faccessat2 as usize;
+    pub const PIDFD_OPEN: usize = linux_raw_sys::general::__NR_pidfd_open as usize;
+    pub const EPOLL_PWAIT2: usize = linux_raw_sys::general::__NR_epoll_pwait2 as usize;
+}
+
+/// `struct epoll_event`, which x86-64 packs: the data right after the
+/// events.
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EpollEvent {
+    pub events: u32,
+    pub data: u64,
 }
 
 /// `struct stat` (the kernel's, which is also musl's on x86-64).

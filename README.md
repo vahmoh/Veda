@@ -136,9 +136,12 @@ protocols, the voice pipeline, consent, memory and testing.
   POSIX layer in Rust. A cross compiler also builds C and C++ programs
   for Veda on the development machine. See [C on Veda](documentation/C.md).
 * **Rust's standard library.** The toolchain builds Rust from its release,
-  with Veda among the compiler's targets: programs that use the standard
-  library (threads, files, processes, panics with backtraces) run on Veda,
-  where it stands on the C library. See
+  with Veda among the compiler's targets, and Veda's applications are
+  written on it: threads, channels, files, processes, TCP and UDP
+  sockets, panics with backtraces, and the crates that need it, beside
+  Veda's own libraries.
+  It stands on the C library; what it stands on (the kernel, `init`, the
+  file system, drivers, the window system) is `no_std`. See
   [Rust on Veda](documentation/RUST.md).
 
 ## Screenshots
@@ -216,12 +219,16 @@ Veda is built on an x86-64 PC with Linux.
   `libmpc-dev`, `python3-mako` and `python3-packaging`), and KVM's nested
   virtualization (`kvm_intel nested=1`). See
   [the driver VM](documentation/DRIVERVM.md#testing).
-* Optional: a [Deepgram](https://deepgram.com) API key for the agent, and
-  your distribution's build tools for the toolchain, which
+* Your distribution's build tools for the toolchain, which
   `cargo orchestration toolchain` builds once: C (see
   [C on Veda](documentation/C.md#the-toolchain)), with `nasm` for the video
-  decoders it builds too, and Rust, with CMake (see
-  [Rust on Veda](documentation/RUST.md#the-toolchain)).
+  decoders it builds too, and Rust for Veda's target, with CMake (see
+  [Rust on Veda](documentation/RUST.md#the-toolchain)); on Debian and
+  Ubuntu: `build-essential`, `m4`, `bison`, `flex`, `curl`, `libgmp-dev`,
+  `libmpfr-dev`, `libmpc-dev`, `nasm`, `meson`, `ninja-build`, `cmake` and
+  `python3`. Veda's applications are written on Rust's standard library,
+  and built with it.
+* Optional: a [Deepgram](https://deepgram.com) API key for the agent.
 
 Check the environment:
 
@@ -231,9 +238,16 @@ cargo orchestration doctor
 
 ### Build and run
 
-First, build the driver VM's Linux (its kernel, a cross compiler and
-Mesa), which takes a while. Without it, Veda boots with no keyboard,
-mouse, sound or network.
+First, build the toolchain (GCC, binutils and musl for Veda, Rust for
+Veda's target, and the video decoders), once, in about half an hour:
+
+```bash
+cargo orchestration toolchain
+```
+
+Then the driver VM's Linux (its kernel, a cross compiler and Mesa), which
+takes a while too. Without it, Veda boots with no keyboard, mouse, sound
+or network.
 
 ```bash
 cargo orchestration linux
@@ -248,15 +262,6 @@ cargo orchestration run
 This builds every component, writes `target/veda/veda.img` and boots it
 in a QEMU window at 1920x1080. The first build also renders the sample
 pictures, music and videos. Later builds are incremental.
-
-Videos plays videos with FFmpeg and dav1d, which the toolchain builds
-(it needs `nasm`), with GCC for the image and Rust for Veda's target (with
-CMake). Build it once, in about half an hour, and the images built after
-it include the decoder:
-
-```bash
-cargo orchestration toolchain
-```
 
 ```bash
 cargo orchestration run --resolution 1280x800 --smp 4 --memory 2048

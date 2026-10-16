@@ -10,7 +10,6 @@
 //! canvas operations (gradients, circles, paths), which are cheap even
 //! under emulation, on a background thread.
 
-use alloc::vec::Vec;
 use core::f32::consts::TAU;
 
 use music_core::cover::{CoverSpec, Style};

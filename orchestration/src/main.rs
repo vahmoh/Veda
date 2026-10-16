@@ -20,6 +20,7 @@ mod hostweb;
 mod image;
 #[cfg(test)]
 mod licence;
+mod lint;
 mod linux;
 mod mic;
 mod ovmfvars;
@@ -109,6 +110,7 @@ fn doctor() -> Result {
         );
     }
     check("linker", rust_lld().map(|p| p.display().to_string()));
+    check("rust toolchain", toolchain::rust_status());
     check("ported crates", crates::status());
     match qemu::QemuInstall::locate() {
         Ok(q) => {
@@ -133,10 +135,6 @@ fn doctor() -> Result {
     match toolchain::media_status() {
         Ok(v) => println!("  [ok]   media decoders: {v}"),
         Err(e) => println!("  [--]   media decoders: {e}"),
-    }
-    match toolchain::rust_status() {
-        Ok(v) => println!("  [ok]   rust toolchain: {v}"),
-        Err(e) => println!("  [--]   rust toolchain: {e}"),
     }
     match linux::status() {
         Ok(v) => println!("  [ok]   driver vm: {v}"),
@@ -203,6 +201,7 @@ fn main() -> ExitCode {
         },
         "acpi" => acpi::command(rest),
         "toolchain" => toolchain::command(rest),
+        "clippy" => lint::command(rest),
         "linux" => linux::command(rest),
         "clean" => util::run(util::cargo().arg("clean")),
         "doctor" => doctor(),

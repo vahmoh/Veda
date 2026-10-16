@@ -20,11 +20,6 @@
 //! action waits for its operation a few seconds, and an operation that
 //! takes longer goes on, the state saying how far it is.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use vfiles::format::{format_time, human_size};
 use vfiles::kind::{EDITOR, FileKind, default_app, file_kind, kind_name};
 use vfiles::path::{extension, file_name, file_stem, is_within, join, parent, resolve};

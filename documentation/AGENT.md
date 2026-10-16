@@ -54,26 +54,35 @@ waiting.
   while nobody speaks. When someone does, the speech (with 0.6 s from
   before, so the first word is not cut) is streamed to Deepgram's Nova-3
   recogniser, with the agent's name as a key term, until three seconds of
-  quiet, eight seconds without a word, or a minute. Sound that brought no
-  words (music, a television) is then taken for a background: until it
-  has stopped for five seconds, only a sound clearly louder than its usual
-  peaks starts recognition again, so music playing does not keep the recogniser
-  busy, while calling over it still works. The detector learns the room
-  for 1.6 s whenever listening starts, and speech must last 0.2 s. `vagent::wake`
-  decides whether a transcript calls the agent ("Hey Veda, …", "… Veda?")
-  or only mentions it ("I told Anna about Veda"): the name starts or ends
-  one of its sentences, so other words before it (a song) do not matter,
-  and one letter off counts ("Vida"), common words aside (an agent called
-  Vera does not answer to "very"). A call wakes the agent once the
-  sentence is over: the recogniser often finishes "Hey Veda," on its own,
-  so the listener goes on until the speaker pauses after the rest (after
-  just the name, until the detector hears them stop too), or no words came
-  for 1.5 s, or 6 s at most, and what came after the name comes with the
-  call. What came close without being a call is logged ("heard something
-  like its name"). Recognition is capped at ten minutes an hour, so a television or
-  music playing all day cannot run up the bill; the cap is the agent's,
-  and listening that starts again (after a conversation, a change of
-  settings) draws on the same hour.
+  quiet, eight seconds without a word, or a minute. What the computer plays
+  itself (music, a video) comes back into the microphone: the echo canceller
+  removes most of it, but what is left still sounds like speech to the
+  detector, and grows louder with the music. So while something plays, only
+  a sound louder than its echo can be starts recognition, as the echo gate
+  decides in a conversation (below): someone calling over the music makes
+  the microphone as recorded louder, what the canceller lets through does
+  not. Other sound that brought no words (a television, music from
+  elsewhere) is taken for a background: until it stops, only a sound clearly
+  louder than its usual peaks starts recognition again, so it does not keep
+  the recogniser busy, while calling over it still works. It stops once it
+  has been 15 dB quieter than usual for five seconds, longer than the pause
+  between two songs: a quiet passage of the music, which the detector takes
+  for nobody speaking, is not its end. The detector learns the room for
+  1.6 s whenever listening starts, and speech must last 0.2 s.
+  `vagent::wake` decides whether a transcript calls the agent
+  ("Hey Veda, …", "… Veda?") or only mentions it ("I told Anna about Veda"):
+  the name starts or ends one of its sentences, so other words before it (a
+  song) do not matter, and one letter off counts ("Vida"), common words
+  aside (an agent called Vera does not answer to "very"). A call wakes the
+  agent once the sentence is over: the recogniser often finishes "Hey Veda,"
+  on its own, so the listener goes on until the speaker pauses after the
+  rest (after just the name, until the detector hears them stop too), or no
+  words came for 1.5 s, or 6 s at most, and what came after the name comes
+  with the call. What came close without being a call is logged ("heard
+  something like its name"). Recognition is capped at ten minutes an hour,
+  so a television or music playing all day cannot run up the bill; the cap
+  is the agent's, and listening that starts again (after a conversation, a
+  change of settings) draws on the same hour.
 * **Waking** opens a Voice Agent conversation
   (`wss://agent.deepgram.com/v1/agent/converse`) and sends its `Settings`:
   16 kHz microphone audio in, 24 kHz voice out, Flux speech recognition
@@ -365,9 +374,10 @@ it.
   `agent-result TEXT` (in the function's result; JSON members such as
   `'"page":"processes","shown":1'` are found in any order), `agent-mark` and
   `agent-expect TEXT` (in what the agent sent), `agent-speak SECONDS`,
-  `agent-interrupt`, `agent-hear TEXT`, `agent-listens N` (and
-  `agent-not-listening`, until no recognition stream is open),
-  `agent-asleep` (start asleep), `agent-mic-quiet DB` and
+  `agent-interrupt`, `agent-hear TEXT`, `agent-listens N` and
+  `agent-listens-at-most N` (the recognition streams opened),
+  `agent-not-listening` (until none is open), `agent-asleep` (start
+  asleep), `agent-mic-quiet DB` and
   `agent-mic-heard DB` (how loud the microphone audio the agent sent was).
   The test microphone (`mic-silence`, `mic-tone`, `say TEXT`,
   `mic-wav FILE`) feeds the agent's microphone through `testmic`;
@@ -376,6 +386,9 @@ it.
   (`verification/agent/echo.vts`); the suite runs such scripts after the
   others, one at a time, as machines running beside them put the echo out
   of time now and then, which the echo canceller must then learn anew.
+  `mic-music TITLE GAIN` plays one of the sample tracks into it beside the
+  rest, as another device in the room would: the echo canceller knows
+  nothing of it (`verification/agent/wake-background.vts`).
   To see how a real machine echoes, a script with `audio host` plays
   through the host's loudspeakers and records its microphone instead
   (not part of the tests: it is audible).
@@ -386,7 +399,8 @@ it.
   Deepgram's text to speech on the host. They are billed, so they are not
   part of `cargo orchestration test`.
 * `vagent` (protocol, tools, prompt, notices, memory, policy, the paths
-  file actions may reach, wake word and recognition budget, echo gate)
+  file actions may reach, wake word, recognition budget and backgrounds,
+  echo gate)
   has host unit tests, and so has `vaudio`'s echo canceller and voice
   detector.
 
@@ -395,9 +409,10 @@ it.
 * English only (Flux and the name detector's key term are English).
 * Speech recognition can mishear; the agent is told so and asks when a
   word seems out of place, but a misheard name can wake it, or not.
-* To talk over the agent (or music playing) you need to be louder at the
-  microphone than its echo: with loud speakers right next to it, speak up
-  (or use headphones).
+* To talk over the agent (or music playing), or to call it while the
+  computer plays music, you need to be louder at the microphone than the
+  echo: with loud speakers right next to it, speak up (or use
+  headphones).
 * The agent needs the Internet and a Deepgram account; asleep, only the
   name listener's short recognitions are billed, but every conversation
   minute is.

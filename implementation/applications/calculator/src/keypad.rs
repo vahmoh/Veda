@@ -7,8 +7,6 @@
 //! A key pressed on the keyboard lights up on screen for a moment, as if it had been clicked,
 //! so that what was typed can be seen.
 
-use alloc::vec::Vec;
-
 use calculator_core::keypad::{self, Label, Layout, Look, Pad};
 use vgfx::{Align, Color, Rect};
 use vproto::display::Cursor;

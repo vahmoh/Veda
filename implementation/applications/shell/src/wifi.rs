@@ -5,10 +5,6 @@
 //! and off, the networks in range, joining one (with its password), leaving
 //! it, and a link to the network settings.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vgfx::{Align, Rect};
 use vnet::wifi::{self, ConnState, NetworkInfo, Security, WlanStatus, signal_bars};
 use vui::status::Network;

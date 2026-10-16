@@ -6,9 +6,7 @@
 //! shows it ([`crate::hud::performance`]); the log has the longest frame
 //! every few seconds, and what it went to.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::String;
+use std::collections::VecDeque;
 
 use interceptor_game::render::{Quality, device_name};
 

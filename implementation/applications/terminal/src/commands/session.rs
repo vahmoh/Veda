@@ -4,9 +4,6 @@
 //! The commands of the shell itself: `help`, `echo`, `clear`, `sleep`,
 //! `history`, `env`, `export`, `unset`, `which` and `exit`.
 
-use alloc::format;
-use alloc::string::String;
-
 use terminal_core::screen::{Style, color};
 
 use super::{BUILTINS, Builtin, Group, find, pad, usage};

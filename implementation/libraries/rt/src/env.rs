@@ -2,16 +2,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Program arguments, environment and the handles received at startup.
+//!
+//! A Veda program reads them from the startup message on the bootstrap
+//! channel ([`adopt`], which `vrt`'s entry point calls). A program on the
+//! standard library (`target_os = "veda"`) does not: the C library's POSIX
+//! layer has read it, and keeps the descriptors, the terminal and the
+//! registry for itself. Its arguments, environment and working directory
+//! are then the standard library's, a handle of an application's role
+//! (`role::USER` and above) is the layer's to give, and a registry channel
+//! is one of the program's own, which the layer asks `init` for: what goes
+//! through it is the program's, as through the layer's.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::object::Handle;
+#[cfg(not(target_os = "veda"))]
 use vabi::RawHandle;
+#[cfg(not(target_os = "veda"))]
 use vabi::startup::StartupView;
 
-use crate::object::{Channel, Handle};
+#[cfg(not(target_os = "veda"))]
+use crate::object::Channel;
+#[cfg(not(target_os = "veda"))]
 use crate::sync::Mutex;
 
+#[cfg(not(target_os = "veda"))]
 #[derive(Default)]
 pub(crate) struct Startup {
     // A guest's arguments are Linux's (`std::env::args`).
@@ -22,33 +38,59 @@ pub(crate) struct Startup {
     pub handles: Vec<(u32, Handle)>,
 }
 
+#[cfg(not(target_os = "veda"))]
 pub(crate) static STARTUP: Mutex<Option<Startup>> = Mutex::new(None);
 
 /// Command-line arguments; `args()[0]` is the program name.
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub fn args() -> Vec<String> {
     STARTUP.lock().as_ref().map(|s| s.args.clone()).unwrap_or_default()
 }
 
 /// Command-line arguments; `args()[0]` is the program name.
-#[cfg(veda_guest)]
+#[cfg(any(veda_guest, target_os = "veda"))]
 pub fn args() -> Vec<String> {
-    std::env::args().collect()
+    std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect()
 }
 
 /// The working directory the program was started in (absolute).
+#[cfg(not(target_os = "veda"))]
 pub fn cwd() -> String {
     STARTUP.lock().as_ref().map(|s| s.cwd.clone()).filter(|c| !c.is_empty()).unwrap_or_else(|| "/".to_string())
 }
 
+/// The program's working directory (absolute).
+#[cfg(target_os = "veda")]
+pub fn cwd() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|d| d.into_os_string().into_string().ok())
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "/".to_string())
+}
+
 /// Looks up an environment variable.
+#[cfg(not(target_os = "veda"))]
 pub fn var(key: &str) -> Option<String> {
     STARTUP.lock().as_ref()?.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
+/// Looks up an environment variable.
+#[cfg(target_os = "veda")]
+pub fn var(key: &str) -> Option<String> {
+    std::env::var_os(key).map(|v| v.to_string_lossy().into_owned())
+}
+
 /// All environment variables.
+#[cfg(not(target_os = "veda"))]
 pub fn vars() -> Vec<(String, String)> {
     STARTUP.lock().as_ref().map(|s| s.env.clone()).unwrap_or_default()
+}
+
+/// All environment variables.
+#[cfg(target_os = "veda")]
+pub fn vars() -> Vec<(String, String)> {
+    std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned())).collect()
 }
 
 /// Takes the first startup handle with the given role
@@ -62,7 +104,7 @@ pub fn take_handle(role: u32) -> Option<Handle> {
 
 /// Takes the first startup handle with the given role
 /// (see `vabi::startup::role`).
-#[cfg(not(veda_guest))]
+#[cfg(not(any(veda_guest, target_os = "veda")))]
 pub fn take_handle(role: u32) -> Option<Handle> {
     let mut guard = STARTUP.lock();
     let s = guard.as_mut()?;
@@ -70,7 +112,38 @@ pub fn take_handle(role: u32) -> Option<Handle> {
     Some(s.handles.remove(i).1)
 }
 
+/// Takes the handle the program started with in `role` (`role::USER` and
+/// above), each once, from the POSIX layer; for `role::REGISTRY`, a new
+/// registry channel of the program's own (see the module's documentation).
+#[cfg(target_os = "veda")]
+pub fn take_handle(role: u32) -> Option<Handle> {
+    use vabi::startup::role;
+    let mut raw = vabi::INVALID_HANDLE;
+    // SAFETY: the layer writes a handle to `raw` when it succeeds.
+    let status = unsafe {
+        if role == role::REGISTRY { layer::veda_registry(&mut raw) } else { layer::veda_startup_handle(role, &mut raw) }
+    };
+    // SAFETY: the layer gave us this handle.
+    (status == 0).then(|| unsafe { Handle::from_raw(raw) })
+}
+
+/// The POSIX layer's calls, in the C library (`<veda/ipc.h>`).
+#[cfg(target_os = "veda")]
+mod layer {
+    use core::ffi::c_int;
+
+    use vabi::RawHandle;
+
+    unsafe extern "C" {
+        /// Takes the handle the program started with in `role`.
+        pub fn veda_startup_handle(role: u32, out: *mut RawHandle) -> c_int;
+        /// A registry channel of the program's own.
+        pub fn veda_registry(out: *mut RawHandle) -> c_int;
+    }
+}
+
 /// Roles of the handles that have not been taken yet.
+#[cfg(not(target_os = "veda"))]
 pub fn handle_roles() -> Vec<u32> {
     STARTUP.lock().as_ref().map(|s| s.handles.iter().map(|(r, _)| *r).collect()).unwrap_or_default()
 }
@@ -79,11 +152,13 @@ pub fn handle_roles() -> Vec<u32> {
 /// the process and keeps what it says for [`args`], [`vars`], [`cwd`] and
 /// [`take_handle`]. `vrt`'s entry point does this for Rust programs; C
 /// programs' POSIX layer, which has an entry point of its own, calls it.
+#[cfg(not(target_os = "veda"))]
 pub fn adopt(bootstrap: RawHandle) {
     *STARTUP.lock() = Some(read_startup(bootstrap));
 }
 
 /// Decodes the startup message on the bootstrap channel.
+#[cfg(not(target_os = "veda"))]
 fn read_startup(bootstrap: RawHandle) -> Startup {
     if bootstrap == vabi::INVALID_HANDLE {
         return Startup::default();

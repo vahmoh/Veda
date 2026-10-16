@@ -25,8 +25,6 @@ vweb = { workspace = true }
 terminal-core = { path = "core" }
 apps-common = { path = "../common" }
 
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

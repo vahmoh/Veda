@@ -4,10 +4,6 @@
 //! The viewer: one picture, fitted to the window or zoomed and panned, with a toolbar,
 //! navigation arrows, a filmstrip, an info panel, a full-screen mode and a slideshow.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vfiles::format::human_size;
 use vgfx::{Align, Bitmap, Color, Rect};
 use vimage::Orientation;
@@ -16,8 +12,6 @@ use vproto::input::keys;
 use vui::{ButtonKind, Cursor, Font, Icon, Ui};
 
 #[allow(unused_imports)]
-use num_traits::Float;
-
 use crate::catalog::{self, Thumb};
 use crate::library::empty_state;
 use crate::loader::{STRIP_H, STRIP_W};
@@ -247,13 +241,13 @@ impl Photos {
         self.slideshow = Some(Slideshow { interval, next_at: None });
         self.pending_fullscreen = Some(true);
         self.show_toast("Slideshow: press any key to stop", Icon::Play);
-        vrt::println!("slideshow started: {} s a picture", interval / 1_000_000_000);
+        println!("slideshow started: {} s a picture", interval / 1_000_000_000);
     }
 
     /// Ends a slideshow (the picture on screen stays).
     pub fn stop_slideshow(&mut self) {
         if self.slideshow.take().is_some() {
-            vrt::println!("slideshow stopped");
+            println!("slideshow stopped");
         }
     }
 

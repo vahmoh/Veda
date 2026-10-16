@@ -12,10 +12,8 @@
 //! music's longer queue topped up. Without an audio service (or sound
 //! hardware) the thread ends, and the game plays on silently.
 
-use alloc::sync::Arc;
-use alloc::vec;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use interceptor_game::audio::music::Music;
 use interceptor_game::audio::{Cue, Mixer, RATE, Scene};
@@ -152,12 +150,11 @@ fn load_music() -> (Music<FileData>, Vec<(Tune, usize)>) {
         return (music, tunes);
     };
     for (tune, stems) in TUNES {
-        let files: Option<Vec<FileData>> =
-            stems.iter().map(|s| read_file(&vfs, &alloc::format!("{DIR}/{s}"))).collect();
+        let files: Option<Vec<FileData>> = stems.iter().map(|s| read_file(&vfs, &format!("{DIR}/{s}"))).collect();
         match files.map(|f| music.add(f)) {
             Some(Ok(n)) => tunes.push((tune, n)),
-            Some(Err(e)) => vrt::println!("cannot play the {:?} music: {}", tune, e),
-            None => vrt::println!("no {:?} music in {}", tune, DIR),
+            Some(Err(e)) => println!("cannot play the {:?} music: {}", tune, e),
+            None => println!("no {:?} music in {}", tune, DIR),
         }
     }
     (music, tunes)
@@ -180,7 +177,7 @@ fn registered(name: &str) -> bool {
 fn run(shared: &Shared) {
     let audio = registered(audio::NAME).then(|| vproto::connect(audio::NAME).ok().map(audio::Client::new)).flatten();
     let Some(audio) = audio else {
-        vrt::println!("no sound: the audio service is unavailable");
+        println!("no sound: the audio service is unavailable");
         return;
     };
     let spec = StreamSpec {
@@ -195,7 +192,7 @@ fn run(shared: &Shared) {
     let effects = match OutputStream::open(&audio, spec) {
         Ok(s) => s,
         Err(e) => {
-            vrt::println!("no sound: cannot open a stream ({:?})", e);
+            println!("no sound: cannot open a stream ({:?})", e);
             return;
         }
     };
@@ -205,7 +202,7 @@ fn run(shared: &Shared) {
     } else {
         OutputStream::open(&audio, StreamSpec::stereo(music.rate(), MUSIC_MS, "Interceptor music")).ok()
     };
-    vrt::println!("sound: {} tunes", tunes.len());
+    println!("sound: {} tunes", tunes.len());
     let mut mixer = Mixer::new();
     let mut block = vec![0i16; BLOCK * 2];
     let mut music_block = vec![0i16; MUSIC_BLOCK * 2];
@@ -261,7 +258,7 @@ fn run(shared: &Shared) {
         if now.saturating_sub(since) >= 20_000_000_000 {
             let secs = now.saturating_sub(since) as f64 / 1e9;
             let u = effects.ring().underruns();
-            vrt::println!(
+            println!(
                 "sound: mixing takes {:.1}% of a CPU, {:.0} wakes a second, {} underruns",
                 busy as f64 / 1e7 / secs,
                 wakes as f64 / secs,

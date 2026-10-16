@@ -5,10 +5,6 @@
 //! networks in range, saved networks, every interface with its addresses,
 //! and diagnostics.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vnet::wifi::{self, ConnState, NetworkInfo, SavedNetwork, Security, WlanDiagnostics, WlanStatus, signal_bars};
 use vnet::{Connectivity, InterfaceInfo, InterfaceKind, NetStatus};
 use vui::status::Network;
@@ -518,7 +514,7 @@ impl NetworkPage {
         let lines: Vec<String> = match (&self.diag, self.show_diag) {
             (Some(d), true) => {
                 let c = &d.counters;
-                let mut v = alloc::vec![
+                let mut v = vec![
                     format!(
                         "Scans {} \u{00b7} attempts {} \u{00b7} connections {} \u{00b7} disconnections {} \u{00b7} authentication failures {}",
                         c.scans, c.connect_attempts, c.connections, c.disconnections, c.auth_failures

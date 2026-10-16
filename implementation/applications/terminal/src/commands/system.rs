@@ -5,11 +5,6 @@
 //! `uptime`, `free`, `sysinfo`, `date`, `dmesg`, `logger`, `whoami` and
 //! `hostname`.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use apps_common::format::{cstr, uptime};
 use apps_common::process::{self, Classifier};
 use terminal_core::screen::{Style, color};
@@ -387,7 +382,7 @@ pub(super) fn cmd_logger(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let mut any = false;
     for line in text.lines().map(str::trim_end).filter(|l| !l.is_empty()) {
         // The kernel prefixes each line with the process name ("terminal").
-        vrt::println!("{line}");
+        println!("{line}");
         any = true;
     }
     if any { 0 } else { usage(io, "logger") }

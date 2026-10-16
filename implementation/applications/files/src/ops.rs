@@ -14,11 +14,9 @@
 //! `Fs::remove_all`) run to their end; once they report progress and take a
 //! cancel hook, [`Context::step`] is where that goes.
 
-use alloc::collections::VecDeque;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vabi::RawHandle;
 use vfiles::fs::Error;

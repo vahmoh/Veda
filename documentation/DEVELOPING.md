@@ -50,7 +50,8 @@ cargo orchestration script verification/ui/drivervm-renderer.vts   # Interceptor
 cargo orchestration script verification/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
 cargo orchestration script verification/agent/app-interceptor.vts   # ... and for the voice agent
 VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
-cargo orchestration toolchain          # build the toolchain from implementation/ports/ (GCC, binutils, musl; Rust) -> target/toolchain
+cargo orchestration toolchain          # build the toolchain from implementation/ports/ (GCC, binutils, musl; Rust) -> target/toolchain (needed once, before the first build)
+cargo orchestration clippy             # Clippy over every crate as it is built (the programs on the standard library with the toolchain's)
 cargo orchestration script verification/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
 cargo orchestration script verification/ui/rust-programs.vts   # Rust's standard library on Veda: its checks, in the Terminal
 cargo orchestration linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
@@ -333,7 +334,7 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
 
 | Source | Installed as |
 |--------|--------------|
-| every program listed in `orchestration/src/components.rs` (`PROGRAMS`), without its symbols, which `target/x86_64-unknown-linux-musl/` keeps | `/system/bin/<name>` |
+| every program listed in `orchestration/src/components.rs` (`PROGRAMS`), without its symbols, which the build keeps: `target/x86_64-unknown-linux-musl/` for the programs on `vrt` alone, `target/std/x86_64-unknown-veda/` for those on the standard library | `/system/bin/<name>` |
 | `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
 | the fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | each application's manifest, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
@@ -344,9 +345,11 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg and dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*` (videos for the stand-in decoder) | `/system/tests/videos/fake/` |
 
-The C and Rust test programs, the toolchain and the decoder need
-`cargo orchestration toolchain` (see [C on Veda](C.md) and
-[Rust on Veda](RUST.md)); without it, the build says so and leaves them out.
+Building Veda needs the toolchain (`cargo orchestration toolchain`, once):
+its applications are programs on Rust's standard library, which the
+toolchain's Rust builds (see [Rust on Veda](RUST.md)), and it makes the C
+and Rust test programs, the native C toolchain and the video decoder too
+(see [C on Veda](C.md)).
 With `cargo orchestration linux` done, the image also holds the driver VM's
 Linux: `/system/linux/kernel` (the architecture's image of it: a bzImage on
 AMD64) and `/system/linux/initramfs.cpio`, made of the programs in
@@ -357,20 +360,16 @@ directory at boot (`/system/samples/Pictures/x.png` →
 
 ## Writing an application
 
+Applications are programs on Rust's standard library, with Veda's
+libraries ([Rust on Veda](RUST.md)):
+
 1. Create a crate under `implementation/applications/<name>`, add it to the
    workspace `members` in `Cargo.toml` and to `PROGRAMS` in
-   `orchestration/src/components.rs`.
-2. `Cargo.toml` depends on `vrt`, `vabi`, `vui` (and others as needed) and has
-   `vbuild` as a build dependency; `build.rs` is `fn main() { vbuild::user_program(); }`.
+   `orchestration/src/components.rs`, as `Program::std("<name>")`.
+2. `Cargo.toml` depends on `vrt`, `vabi`, `vui` (and others as needed).
 3. `src/main.rs`:
 
 ```rust
-#![no_std]
-#![no_main]
-extern crate alloc;
-
-vrt::entry!(main);
-
 struct MyApp { /* state */ }
 
 impl vui::App for MyApp {
@@ -381,10 +380,10 @@ impl vui::App for MyApp {
     }
 }
 
-fn main() -> i32 {
+fn main() {
     let mut spec = vui::WindowSpec::new("My App", 800, 560);
     spec.app_id = "myapp".into();
-    vui::run(spec, MyApp { })
+    std::process::exit(vui::run(spec, MyApp { }));
 }
 ```
 
@@ -427,15 +426,31 @@ taskbar=false
 * The window: `ui.set_title`, `ui.window_state()` and
   `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
   (bring it to the front), `ui.close_window()`.
-* Long-running work must not block `update`: use threads
-  (`vrt::thread::spawn`) and signal the UI through an `Event` returned from
-  `App::wait_handles`.
-* Files: `vfiles::Fs::connect()` (whole-file reads, bounded or mapped,
-  writes, listings of any size, copies, moves and removals of whole trees
-  with their progress, every call with a deadline), or the protocol
-  itself: `vproto::connect(vproto::vfs::NAME)` then `vproto::vfs::Client`
-  (`read_file` returns a VMO plus length, `write_file`, `read_dir`, ...).
+* Long-running work must not block `update`: give it to a thread
+  (`std::thread`, which sets its own priority with
+  `vrt::thread::set_priority`) through a channel (`std::sync::mpsc`), and
+  have it signal an `Event` the window waits on (`App::wait_handles`):
+  `implementation/applications/paint/src/files.rs` is a compact example.
+* Files: an application's own small ones (settings, state) with
+  `std::fs`, through `apps_common::store` (reads within a limit,
+  replacement in one step). Pictures, music and other large files with
+  `vfiles::Fs::connect()` (whole-file reads, bounded or mapped, in one
+  piece of shared memory; writes, listings of any size, copies, moves and
+  removals of whole trees with their progress, every call with a
+  deadline), or the protocol itself: `vproto::connect(vproto::vfs::NAME)`
+  then `vproto::vfs::Client` (`read_file` returns a VMO plus length,
+  `write_file`, `read_dir`, ...).
 * Starting other programs: `vproto::launcher::Client` (`launch`, `launch_app`).
+
+### Programs on `vrt` alone
+
+System services and drivers that the standard library stands on, or that
+drive hardware or must answer in time, are `no_std` programs on `vrt`
+(`Program::native`): their `Cargo.toml` has `vbuild` as a build
+dependency, `build.rs` is `fn main() { vbuild::user_program(); }`, and
+`src/main.rs` starts with `#![no_std]`, `#![no_main]`, `extern crate
+alloc;` and `vrt::entry!(main);` (a `main` that returns `()`, an `i32`
+or a `Result`). They log with `vrt::println!`.
 
 ### Programs without `vui`
 

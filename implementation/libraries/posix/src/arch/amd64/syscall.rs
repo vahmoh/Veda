@@ -12,7 +12,7 @@ use super::linux::{arch_prctl as prctl, nr};
 use crate::error::{self, SysResult};
 use crate::linux::errno::*;
 use crate::linux::{Timeval, at, o};
-use crate::{fs, io, process, signal, time, user};
+use crate::{epoll, eventfd, fs, io, process, signal, time, user};
 
 /// Runs Linux system call `n` if it is one of x86-64's own; `None` for the
 /// others.
@@ -56,6 +56,11 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> Option<SysResult> {
             nr::CHMOD | nr::CHOWN | nr::LCHOWN => fs::chmodat(at::FDCWD, a[0]),
             nr::TIME => time::time(a[0]),
             nr::ARCH_PRCTL => arch_prctl(a[0] as u32, a[1]),
+            // The size is a hint, which only has to be positive.
+            nr::EPOLL_CREATE if (a[0] as i32) > 0 => epoll::epoll_create1(0),
+            nr::EPOLL_CREATE => Err(EINVAL),
+            nr::EPOLL_WAIT => epoll::epoll_wait(fd0, a[1], a[2] as i32, epoll::deadline_ms(a[3] as i32)),
+            nr::EVENTFD => eventfd::eventfd2(a[0] as u32, 0),
             _ => return None,
         }
     })

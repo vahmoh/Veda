@@ -12,10 +12,7 @@
 //! values, Enter chooses, Esc goes back; pointing selects, clicking
 //! chooses.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::sync::Arc;
 
 use glam::Vec3;
 use interceptor_game::audio::{Cue, Emitter};
@@ -25,7 +22,6 @@ use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::session::{Mode, Phase, Quick, Session};
 use interceptor_game::sound::Sound;
 use interceptor_game::world::World;
-use num_traits::Float;
 use vgfx::Rect;
 use vproto::input::keys;
 
@@ -193,7 +189,7 @@ impl App {
     /// Writes the save file (the best results and the settings).
     pub(crate) fn store_save(&mut self) {
         if !self.store.store(&self.save) {
-            vrt::println!("cannot save the settings and results");
+            println!("cannot save the settings and results");
         }
     }
 
@@ -220,7 +216,7 @@ impl App {
                     1 => String::from("One unit"),
                     n => format!("{n} units"),
                 };
-                alloc::vec![
+                vec![
                     Item::setting("SUSPECT", SUSPECTS[q.suspect].0.into()),
                     Item::setting("TIME OF DAY", q.time.name().into()),
                     Item::setting("WEATHER", q.weather.name().into()),
@@ -230,13 +226,13 @@ impl App {
                     Item::button("BACK"),
                 ]
             }
-            Screen::Patrol(_) => alloc::vec![
+            Screen::Patrol(_) => vec![
                 Item::setting("TIME OF DAY", self.patrol.0.name().into()),
                 Item::setting("WEATHER", self.patrol.1.name().into()),
                 Item::button("START PATROL"),
                 Item::button("BACK"),
             ],
-            Screen::Options(..) => alloc::vec![
+            Screen::Options(..) => vec![
                 Item::setting("SOUND EFFECTS", format!("{}%", (s.effects * 100.0).round() as u32)),
                 Item::setting("MUSIC", format!("{}%", (s.music * 100.0).round() as u32)),
                 Item::setting("SPEED IN", s.units.name().into()),
@@ -256,7 +252,7 @@ impl App {
     fn result_buttons(&self) -> Vec<&'static str> {
         let next =
             self.result.and_then(|r| r.mission).is_some_and(|m| m + 1 < MISSIONS.len() && self.save.unlocked(m + 1));
-        if next { alloc::vec!["NEXT MISSION", "RETRY", "MENU"] } else { alloc::vec!["RETRY", "MENU"] }
+        if next { vec!["NEXT MISSION", "RETRY", "MENU"] } else { vec!["RETRY", "MENU"] }
     }
 
     /// The item selected.
@@ -349,7 +345,7 @@ impl App {
                 let on = !game.autopilot;
                 let target = self.session.chase.filter(|c| c.on()).map(|c| c.suspect);
                 self.session.game.set_autopilot(on, target);
-                vrt::println!("autopilot {}", if on { "on" } else { "off" });
+                println!("autopilot {}", if on { "on" } else { "off" });
             }
             keys::F11 => self.toggle_fullscreen(),
             _ => {}
@@ -583,7 +579,7 @@ impl App {
             if best {
                 self.store_save();
             }
-            vrt::println!(
+            println!(
                 "result: {} in {}, {} hits, {} stars",
                 outcome.ending.title().to_lowercase(),
                 interceptor_game::career::clock(outcome.time),

@@ -8,7 +8,6 @@ version = "0.1.0"
 dependencies = [
  "apps-common",
  "vabi",
- "vbuild",
  "vrt",
  "vui",
 ]
@@ -73,7 +72,6 @@ dependencies = [
  "vabi",
  "vagent",
  "vaudio",
- "vbuild",
  "vfiles",
  "vipc",
  "vnet",
@@ -323,8 +321,6 @@ version = "0.1.0"
 dependencies = [
  "apps-common",
  "calculator-core",
- "vbuild",
- "vfiles",
  "vgfx",
  "vproto",
  "vrt",
@@ -735,8 +731,6 @@ name = "editor"
 version = "0.1.0"
 dependencies = [
  "apps-common",
- "num-traits",
- "vbuild",
  "vfiles",
  "vgfx",
  "vproto",
@@ -794,11 +788,9 @@ dependencies = [
 [[package]]
 name = "errno"
 version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -834,6 +826,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrand"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -864,7 +862,6 @@ version = "0.1.0"
 dependencies = [
  "apps-common",
  "vabi",
- "vbuild",
  "vfiles",
  "vgfx",
  "vproto",
@@ -907,8 +904,6 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
  "libc",
@@ -919,8 +914,6 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1205,9 +1198,7 @@ dependencies = [
  "glam",
  "interceptor-game",
  "libm",
- "num-traits",
  "vabi",
- "vbuild",
  "vgfx",
  "vgl",
  "vproto",
@@ -1276,8 +1267,6 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 [[package]]
 name = "libc"
 version = "0.2.190"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1368,6 +1357,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "1.2.4"
+dependencies = [
+ "libc",
+ "wasi",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "music"
 version = "0.1.0"
 dependencies = [
@@ -1377,7 +1375,6 @@ dependencies = [
  "rand_pcg",
  "vabi",
  "vaudio",
- "vbuild",
  "vfiles",
  "vgfx",
  "videos-core",
@@ -1571,10 +1568,10 @@ dependencies = [
 name = "paint"
 version = "0.1.0"
 dependencies = [
+ "apps-common",
  "libm",
  "paint-core",
  "vabi",
- "vbuild",
  "vfiles",
  "vgfx",
  "vimage",
@@ -1626,9 +1623,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "photos"
 version = "0.1.0"
 dependencies = [
- "num-traits",
  "vabi",
- "vbuild",
  "vfiles",
  "vgfx",
  "vimage",
@@ -1636,6 +1631,12 @@ dependencies = [
  "vrt",
  "vui",
 ]
+
+[[package]]
+name = "pin-project-lite"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "png"
@@ -1904,7 +1905,7 @@ dependencies = [
  "getrandom 0.2.17",
  "libc",
  "untrusted",
- "windows-sys",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1919,14 +1920,12 @@ dependencies = [
 [[package]]
 name = "rustix"
 version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2045,9 +2044,7 @@ dependencies = [
 name = "settings"
 version = "0.1.0"
 dependencies = [
- "num-traits",
  "vabi",
- "vbuild",
  "vfiles",
  "vgfx",
  "vipc",
@@ -2084,10 +2081,8 @@ name = "shell"
 version = "0.1.0"
 dependencies = [
  "apps-common",
- "num-traits",
  "vabi",
  "vaudio",
- "vbuild",
  "vfiles",
  "vgfx",
  "vimage",
@@ -2103,6 +2098,16 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
 
 [[package]]
 name = "signature"
@@ -2142,10 +2147,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stdcrates"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "libc",
+ "rand 0.10.3",
+ "rustix",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "subtle"
@@ -2192,12 +2218,24 @@ version = "0.1.0"
 dependencies = [
  "apps-common",
  "vabi",
- "vbuild",
  "vfiles",
  "vgfx",
  "vproto",
  "vrt",
  "vui",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2207,7 +2245,6 @@ dependencies = [
  "apps-common",
  "terminal-core",
  "vabi",
- "vbuild",
  "vfiles",
  "vipc",
  "vnet",
@@ -2248,6 +2285,31 @@ name = "thiserror-impl"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "tokio"
+version = "1.53.3"
+dependencies = [
+ "bytes",
+ "libc",
+ "mio",
+ "pin-project-lite",
+ "signal-hook-registry",
+ "socket2",
+ "tokio-macros",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2407,6 +2469,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vframes"
+version = "0.1.0"
+
+[[package]]
 name = "vfs"
 version = "0.1.0"
 dependencies = [
@@ -2496,7 +2562,6 @@ dependencies = [
  "libm",
  "vabi",
  "vaudio",
- "vbuild",
  "vfiles",
  "vgfx",
  "videos-core",
@@ -2568,6 +2633,7 @@ dependencies = [
  "vacpi",
  "velf",
  "ventropy",
+ "vframes",
  "vhv",
  "viommu",
 ]
@@ -2807,12 +2873,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-link"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
 name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
 dependencies = [
  "windows-targets",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link",
 ]
 
 [[package]]

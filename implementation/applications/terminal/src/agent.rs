@@ -17,11 +17,6 @@
 //! Command lines read back by the agent have Wi-Fi passwords hidden, as in
 //! the command history.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use terminal_core::classify::Effect;
 use terminal_core::syntax::redact;
 use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, arg_str, clip, json, show_path};

@@ -3,9 +3,6 @@
 
 //! The start menu: search, pinned apps, the full app list and power options.
 
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vgfx::{Align, Color, Rect};
 use vproto::init::{AppInfo, power};
 use vproto::input::keys;
@@ -192,7 +189,7 @@ impl StartMenu {
         let mut results: Vec<&AppInfo> = m.apps.iter().filter(|a| apps::matches(a, &self.query)).collect();
         results.sort_by_key(|a| (apps::rank(a, &self.query), a.name.to_lowercase()));
         if results.is_empty() {
-            let msg = alloc::format!("No apps match \u{201c}{}\u{201d}", self.query.trim());
+            let msg = format!("No apps match \u{201c}{}\u{201d}", self.query.trim());
             ui.label(Rect::new(body.x, body.y + 40, body.w, 24), &msg, Font::Regular, 14.0, t.text_dim, Align::Center);
             return;
         }

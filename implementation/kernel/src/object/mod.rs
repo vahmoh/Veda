@@ -213,6 +213,27 @@ impl KObject {
         }
     }
 
+    /// What identifies the queues of a channel or a socket (the two
+    /// endpoints share them), for [`would_cycle`]; `None` for an object
+    /// that queues no handles.
+    fn queues(&self) -> Option<*const ()> {
+        match self {
+            KObject::Channel(o) => Some(o.queues()),
+            KObject::Socket(o) => Some(o.queues()),
+            _ => None,
+        }
+    }
+
+    /// The objects the handles queued in a channel's messages, or with a
+    /// socket's bytes, refer to (both directions).
+    fn queued(&self) -> Vec<KObject> {
+        match self {
+            KObject::Channel(o) => o.queued(),
+            KObject::Socket(o) => o.queued(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The object's signal word, if it is waitable.
     pub fn signals(&self) -> Option<&Signals> {
         match self {
@@ -226,4 +247,49 @@ impl KObject {
             KObject::Vmo(_) | KObject::IoPorts(_) | KObject::Resource(_) | KObject::Guest(_) | KObject::Vcpu(_) => None,
         }
     }
+}
+
+/// How many queued handles [`would_cycle`] looks at before it gives up,
+/// refusing the transfer: the safe answer.
+const CYCLE_SEARCH_LIMIT: usize = 4096;
+
+/// Whether queuing `handles` in the channel or socket whose queues are
+/// `target` (a message on a channel, handles with a socket's bytes) would
+/// let it reach itself through what is queued: one of the handles is an
+/// endpoint of it, or of another channel or socket whose queues hold
+/// (directly, or through yet others' queues) an endpoint of it. Once every
+/// process had closed its handles to them, such objects would keep each
+/// other alive for ever, with nothing left to read what is queued. A
+/// search that would look at more than [`CYCLE_SEARCH_LIMIT`] queued
+/// handles answers yes.
+pub fn would_cycle(target: *const (), handles: &[handle::Handle]) -> bool {
+    let mut seen: Vec<*const ()> = Vec::new();
+    let mut pending: Vec<KObject> = Vec::new();
+    // Notes an object to search; true if it is the target.
+    let mut note = |object: &KObject, pending: &mut Vec<KObject>| -> bool {
+        let Some(queues) = object.queues() else { return false };
+        if queues == target {
+            return true;
+        }
+        if !seen.contains(&queues) {
+            seen.push(queues);
+            pending.push(object.clone());
+        }
+        false
+    };
+    for h in handles {
+        if note(&h.object, &mut pending) {
+            return true;
+        }
+    }
+    let mut looked = 0;
+    while let Some(object) = pending.pop() {
+        for queued in object.queued() {
+            looked += 1;
+            if looked > CYCLE_SEARCH_LIMIT || note(&queued, &mut pending) {
+                return true;
+            }
+        }
+    }
+    false
 }

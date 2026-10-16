@@ -15,8 +15,6 @@
 //! then takes the file's place (the file system's `replace`), so a crash
 //! leaves the old file or the new one, never neither.
 
-use alloc::string::String;
-
 use vfiles::fs::{Error, Fs, FsError};
 
 /// The agent's private directory.
@@ -44,18 +42,18 @@ impl Store {
     pub fn open() -> Store {
         let fs = Fs::connect();
         if let Err(e) = fs.mkdir_all(DIR) {
-            vrt::println!("cannot create {}: {}", DIR, e);
+            println!("cannot create {}: {}", DIR, e);
         }
         Store { fs }
     }
 
     fn path(name: &str) -> String {
-        alloc::format!("{DIR}/{name}")
+        format!("{DIR}/{name}")
     }
 
     /// Where a new version of `name` is written before it takes its place.
     fn temporary(name: &str) -> String {
-        alloc::format!("{DIR}/{name}.new")
+        format!("{DIR}/{name}.new")
     }
 
     /// A stored text file, if it exists. A file that is missing while a new
@@ -67,7 +65,7 @@ impl Store {
             Ok(bytes) => bytes,
             Err(Error::Fs(FsError::NotFound)) => {
                 let bytes = self.fs.read(&Self::temporary(name)).ok()?;
-                vrt::println!("recovered {} from an interrupted save", name);
+                println!("recovered {} from an interrupted save", name);
                 self.replace(name);
                 bytes
             }
@@ -79,7 +77,7 @@ impl Store {
     /// Replaces a stored file in one step (see the module documentation).
     pub fn write(&self, name: &str, text: &str) -> bool {
         if let Err(e) = self.fs.write(&Self::temporary(name), text.as_bytes()) {
-            vrt::println!("cannot save {}: {}", name, e);
+            println!("cannot save {}: {}", name, e);
             return false;
         }
         self.replace(name)
@@ -95,7 +93,7 @@ impl Store {
             },
             None => Error::Unavailable,
         };
-        vrt::println!("cannot save {}: {}", name, result);
+        println!("cannot save {}: {}", name, result);
         false
     }
 

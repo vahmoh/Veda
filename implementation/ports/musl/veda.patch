@@ -32,6 +32,286 @@
  	info.dlpi_phdr  = (void *)aux[AT_PHDR];
  	info.dlpi_phnum = aux[AT_PHNUM];
  	info.dlpi_adds  = 0;
+--- a/src/network/lookup_name.c
++++ b/src/network/lookup_name.c
+@@ -98,138 +98,11 @@
+ 	return cnt ? cnt : badfam;
+ }
+ 
+-struct dpc_ctx {
+-	struct address *addrs;
+-	char *canon;
+-	int cnt;
+-	int rrtype;
+-};
+-
+-#define RR_A 1
+-#define RR_CNAME 5
+-#define RR_AAAA 28
+-
+-#define ABUF_SIZE 4800
+-
+-static int dns_parse_callback(void *c, int rr, const void *data, int len, const void *packet, int plen)
+-{
+-	char tmp[256];
+-	int family;
+-	struct dpc_ctx *ctx = c;
+-	if (rr == RR_CNAME) {
+-		if (__dn_expand(packet, (const unsigned char *)packet + plen,
+-		    data, tmp, sizeof tmp) > 0 && is_valid_hostname(tmp))
+-			strcpy(ctx->canon, tmp);
+-		return 0;
+-	}
+-	if (ctx->cnt >= MAXADDRS) return 0;
+-	if (rr != ctx->rrtype) return 0;
+-	switch (rr) {
+-	case RR_A:
+-		if (len != 4) return -1;
+-		family = AF_INET;
+-		break;
+-	case RR_AAAA:
+-		if (len != 16) return -1;
+-		family = AF_INET6;
+-		break;
+-	}
+-	ctx->addrs[ctx->cnt].family = family;
+-	ctx->addrs[ctx->cnt].scopeid = 0;
+-	memcpy(ctx->addrs[ctx->cnt++].addr, data, len);
+-	return 0;
+-}
+-
+-static int name_from_dns(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family, const struct resolvconf *conf)
+-{
+-	unsigned char qbuf[2][280], abuf[2][ABUF_SIZE];
+-	const unsigned char *qp[2] = { qbuf[0], qbuf[1] };
+-	unsigned char *ap[2] = { abuf[0], abuf[1] };
+-	int qlens[2], alens[2], qtypes[2];
+-	int i, nq = 0;
+-	struct dpc_ctx ctx = { .addrs = buf, .canon = canon };
+-	static const struct { int af; int rr; } afrr[2] = {
+-		{ .af = AF_INET6, .rr = RR_A },
+-		{ .af = AF_INET, .rr = RR_AAAA },
+-	};
+-
+-	for (i=0; i<2; i++) {
+-		if (family != afrr[i].af) {
+-			qlens[nq] = __res_mkquery(0, name, 1, afrr[i].rr,
+-				0, 0, 0, qbuf[nq], sizeof *qbuf);
+-			if (qlens[nq] == -1)
+-				return 0;
+-			qtypes[nq] = afrr[i].rr;
+-			qbuf[nq][3] = 0; /* don't need AD flag */
+-			/* Ensure query IDs are distinct. */
+-			if (nq && qbuf[nq][0] == qbuf[0][0])
+-				qbuf[nq][0]++;
+-			nq++;
+-		}
+-	}
+-
+-	if (__res_msend_rc(nq, qp, qlens, ap, alens, sizeof *abuf, conf) < 0)
+-		return EAI_SYSTEM;
+-
+-	for (i=0; i<nq; i++) {
+-		if (alens[i] < 4 || (abuf[i][3] & 15) == 2) return EAI_AGAIN;
+-		if ((abuf[i][3] & 15) == 3) return 0;
+-		if ((abuf[i][3] & 15) != 0) return EAI_FAIL;
+-	}
+-
+-	for (i=nq-1; i>=0; i--) {
+-		ctx.rrtype = qtypes[i];
+-		if (alens[i] > sizeof(abuf[i])) alens[i] = sizeof abuf[i];
+-		__dns_parse(abuf[i], alens[i], dns_parse_callback, &ctx);
+-	}
+-
+-	if (ctx.cnt) return ctx.cnt;
+-	return EAI_NODATA;
+-}
+-
+-static int name_from_dns_search(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family)
+-{
+-	char search[256];
+-	struct resolvconf conf;
+-	size_t l, dots;
+-	char *p, *z;
+-
+-	if (__get_resolv_conf(&conf, search, sizeof search) < 0) return -1;
+-
+-	/* Count dots, suppress search when >=ndots or name ends in
+-	 * a dot, which is an explicit request for global scope. */
+-	for (dots=l=0; name[l]; l++) if (name[l]=='.') dots++;
+-	if (dots >= conf.ndots || name[l-1]=='.') *search = 0;
+-
+-	/* Strip final dot for canon, fail if multiple trailing dots. */
+-	if (name[l-1]=='.') l--;
+-	if (!l || name[l-1]=='.') return EAI_NONAME;
+-
+-	/* This can never happen; the caller already checked length. */
+-	if (l >= 256) return EAI_NONAME;
+-
+-	/* Name with search domain appended is setup in canon[]. This both
+-	 * provides the desired default canonical name (if the requested
+-	 * name is not a CNAME record) and serves as a buffer for passing
+-	 * the full requested name to name_from_dns. */
+-	memcpy(canon, name, l);
+-	canon[l] = '.';
+-
+-	for (p=search; *p; p=z) {
+-		for (; isspace(*p); p++);
+-		for (z=p; *z && !isspace(*z); z++);
+-		if (z==p) break;
+-		if (z-p < 256 - l - 1) {
+-			memcpy(canon+l+1, p, z-p);
+-			canon[z-p+1+l] = 0;
+-			int cnt = name_from_dns(buf, canon, canon, family, &conf);
+-			if (cnt) return cnt;
+-		}
+-	}
+-
+-	canon[l] = 0;
+-	return name_from_dns(buf, canon, name, family, &conf);
+-}
++/* Veda: names are looked up by the network service, whose resolver
++   caches answers, knows the DNS servers and gives the addresses in the
++   order they are best tried in (the POSIX layer's resolve.rs). Fills buf
++   and canon; returns the number of addresses or an EAI_* error. */
++hidden int __veda_lookup_name(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family);
+ 
+ static const struct policy {
+ 	unsigned char addr[16];
+@@ -307,7 +180,7 @@
+ 
+ int __lookup_name(struct address buf[static MAXADDRS], char canon[static 256], const char *name, int family, int flags)
+ {
+-	int cnt = 0, i, j;
++	int cnt = 0, i, j, ordered = 0;
+ 
+ 	*canon = 0;
+ 	if (name) {
+@@ -331,7 +204,10 @@
+ 	if (!cnt) cnt = name_from_numeric(buf, name, family);
+ 	if (!cnt && !(flags & AI_NUMERICHOST)) {
+ 		cnt = name_from_hosts(buf, canon, name, family);
+-		if (!cnt) cnt = name_from_dns_search(buf, canon, name, family);
++		if (!cnt) {
++			cnt = __veda_lookup_name(buf, canon, name, family);
++			ordered = 1;
++		}
+ 	}
+ 	if (cnt<=0) return cnt ? cnt : EAI_NONAME;
+ 
+@@ -358,8 +234,9 @@
+ 	}
+ 
+ 	/* No further processing is needed if there are fewer than 2
+-	 * results or if there are only IPv4 results. */
+-	if (cnt<2 || family==AF_INET) return cnt;
++	 * results or if there are only IPv4 results, or if the network
++	 * service has put them in order. */
++	if (cnt<2 || family==AF_INET || ordered) return cnt;
+ 	for (i=0; i<cnt; i++) if (buf[i].family != AF_INET) break;
+ 	if (i==cnt) return cnt;
+ 
+--- a/src/network/resolvconf.c
++++ b/src/network/resolvconf.c
+@@ -6,89 +6,20 @@
+ #include <stdlib.h>
+ #include <netinet/in.h>
+ 
++/* Veda: the DNS servers are the network service's (those DHCP gave, or
++   those set in Settings); there is no /etc/resolv.conf. Fills ns with at
++   most max of them; returns how many (the POSIX layer's resolve.rs). */
++hidden int __veda_dns_servers(struct address *ns, int max);
++
+ int __get_resolv_conf(struct resolvconf *conf, char *search, size_t search_sz)
+ {
+-	char line[256];
+-	unsigned char _buf[256];
+-	FILE *f, _f;
+-	int nns = 0;
+-
+ 	conf->ndots = 1;
+ 	conf->timeout = 5;
+ 	conf->attempts = 2;
+ 	if (search) *search = 0;
+ 
+-	f = __fopen_rb_ca("/etc/resolv.conf", &_f, _buf, sizeof _buf);
+-	if (!f) switch (errno) {
+-	case ENOENT:
+-	case ENOTDIR:
+-	case EACCES:
+-		goto no_resolv_conf;
+-	default:
+-		return -1;
+-	}
+-
+-	while (fgets(line, sizeof line, f)) {
+-		char *p, *z;
+-		if (!strchr(line, '\n') && !feof(f)) {
+-			/* Ignore lines that get truncated rather than
+-			 * potentially misinterpreting them. */
+-			int c;
+-			do c = getc(f);
+-			while (c != '\n' && c != EOF);
+-			continue;
+-		}
+-		if (!strncmp(line, "options", 7) && isspace(line[7])) {
+-			p = strstr(line, "ndots:");
+-			if (p && isdigit(p[6])) {
+-				p += 6;
+-				unsigned long x = strtoul(p, &z, 10);
+-				if (z != p) conf->ndots = x > 15 ? 15 : x;
+-			}
+-			p = strstr(line, "attempts:");
+-			if (p && isdigit(p[9])) {
+-				p += 9;
+-				unsigned long x = strtoul(p, &z, 10);
+-				if (z != p) conf->attempts = x > 10 ? 10 : x;
+-			}
+-			p = strstr(line, "timeout:");
+-			if (p && (isdigit(p[8]) || p[8]=='.')) {
+-				p += 8;
+-				unsigned long x = strtoul(p, &z, 10);
+-				if (z != p) conf->timeout = x > 60 ? 60 : x;
+-			}
+-			continue;
+-		}
+-		if (!strncmp(line, "nameserver", 10) && isspace(line[10])) {
+-			if (nns >= MAXNS) continue;
+-			for (p=line+11; isspace(*p); p++);
+-			for (z=p; *z && !isspace(*z); z++);
+-			*z=0;
+-			if (__lookup_ipliteral(conf->ns+nns, p, AF_UNSPEC) > 0)
+-				nns++;
+-			continue;
+-		}
+-
+-		if (!search) continue;
+-		if ((strncmp(line, "domain", 6) && strncmp(line, "search", 6))
+-		    || !isspace(line[6]))
+-			continue;
+-		for (p=line+7; isspace(*p); p++);
+-		size_t l = strlen(p);
+-		/* This can never happen anyway with chosen buffer sizes. */
+-		if (l >= search_sz) continue;
+-		memcpy(search, p, l+1);
+-	}
+-
+-	__fclose_ca(f);
+-
+-no_resolv_conf:
+-	if (!nns) {
+-		__lookup_ipliteral(conf->ns, "127.0.0.1", AF_UNSPEC);
+-		nns = 1;
+-	}
+-
+-	conf->nns = nns;
+-
+-	return 0;
++	/* Without a DNS server, a query fails at once rather than wait for
++	   an answer from nowhere. */
++	conf->nns = __veda_dns_servers(conf->ns, MAXNS);
++	return conf->nns ? 0 : -1;
+ }
 --- a/src/process/posix_spawn.c
 +++ b/src/process/posix_spawn.c
 @@ -1,219 +1,60 @@

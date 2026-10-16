@@ -17,11 +17,6 @@
 //! take follows the machine's memory ([`loader::Budget`]): the neighbours of the picture on
 //! screen are kept decoded only while they fit.
 
-#![no_std]
-#![no_main]
-
-extern crate alloc;
-
 mod agent;
 mod catalog;
 mod library;
@@ -29,10 +24,7 @@ mod loader;
 mod render;
 mod viewer;
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::sync::Arc;
 
 use vabi::RawHandle;
 use vgfx::{Align, Color, Rect, ShadowTemplate};
@@ -44,8 +36,6 @@ use crate::catalog::{Entry, Thumb};
 use crate::loader::{Budget, Done, Loader, Picture};
 use crate::render::ViewCache;
 use crate::viewer::{Slideshow, View};
-
-vrt::entry!(main);
 
 /// At most this many pictures keep their thumbnails in memory (about 0.6 MB each).
 const MAX_THUMBS: usize = 240;
@@ -195,7 +185,7 @@ impl Photos {
         }
         self.reload();
         self.reveal_selection = true;
-        vrt::println!("showing {} pictures in {}", self.entries.len(), self.dir);
+        println!("showing {} pictures in {}", self.entries.len(), self.dir);
     }
 
     /// Opens picture `index` in the viewer.
@@ -539,7 +529,7 @@ impl App for Photos {
     }
 }
 
-fn main() -> i32 {
+fn main() {
     // `photos [PATH]`: a picture opens in the viewer with its folder in the library; a folder
     // opens in the library.
     let args = vrt::env::args();
@@ -570,10 +560,10 @@ fn main() -> i32 {
         };
         app.open(index);
     }
-    vrt::println!("showing {} pictures in {}", app.entries.len(), app.dir);
+    println!("showing {} pictures in {}", app.entries.len(), app.dir);
     let mut spec = WindowSpec::new("Photos", WINDOW_SIZE.0 as u32, WINDOW_SIZE.1 as u32);
     spec.min_width = 560;
     spec.min_height = 380;
     spec.app_id = "photos".into();
-    vui::run(spec, app)
+    std::process::exit(vui::run(spec, app));
 }

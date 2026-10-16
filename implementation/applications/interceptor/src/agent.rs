@@ -12,17 +12,11 @@
 //! [`serve`] answers the agent between frames; [`Link`] registers the game
 //! with the agent service.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
-
 use interceptor_game::camera::View as CameraView;
 use interceptor_game::career::{self, MISSIONS, SUSPECTS, Stats, Units};
 use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::pursuit::State;
 use interceptor_game::session::{self, Mode, Phase, Quick};
-use num_traits::Float;
 use vui::agent::{self, Action, AgentServer, AppAgentInfo, Value, arg_bool, arg_opt_int, arg_opt_str, json};
 
 pub use vui::agent::Registration as Link;

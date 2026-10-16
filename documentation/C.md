@@ -90,7 +90,9 @@ calls `__veda_syscall`, and a handful of entry points that cannot be C
 (thread creation, the thread pointer, a thread freeing its own stack) jump
 into the POSIX layer. `_start` stores the bootstrap channel the kernel
 passes, and `__init_libc` calls the POSIX layer to set itself up before any
-constructor runs. `posix_spawn` is Veda's own (there is no `fork`).
+constructor runs. `posix_spawn` is Veda's own (there is no `fork`). Names
+are the network service's to look up: `getaddrinfo` and `gethostbyname`
+ask its resolver, and musl's own DNS client asks the DNS servers it uses.
 
 **The POSIX layer** (`implementation/libraries/posix`, crate `vposix`) is
 written in Rust and carries out Linux system calls with Veda's objects and
@@ -103,6 +105,13 @@ services:
 | `/dev/null`, `zero`, `full`, `random`, `urandom` | devices of the VFS |
 | `/dev/tty`, `/dev/stdin`, `/dev/fd/N` | the program's own descriptors |
 | pipes, the terminal | socket endpoints: kernel byte streams that several processes can share |
+| TCP and UDP sockets, over IPv4 and IPv6 | sockets of the network service (`netd`), each a channel to it, a connection's bytes going on a socket endpoint between the program and the service, as a pipe's do: `connect` (waiting for the connection, or `EINPROGRESS` and then `poll` and `SO_ERROR`), `bind`, `listen`, `accept4`, `send`, `recv` and their message forms (`MSG_PEEK`, `MSG_WAITALL`, `MSG_DONTWAIT`, `MSG_TRUNC`), `shutdown`, `getsockname`, `getpeername`, and the options of sockets, TCP and IP that programs set (time-outs, `TCP_NODELAY`, keep-alives, `SO_LINGER`, `SO_ERROR`...); `poll`, `select` and `FIONREAD` on them. An IPv6 socket reaches IPv4 too, through mapped addresses (`::ffff:a.b.c.d`), unless it is `IPV6_V6ONLY`. Sockets go to the programs a program starts and over Unix domain sockets, and the processes that hold one share it, as pre-forking servers and `inetd` share theirs: each connection goes to whichever accepts it first, each byte to whichever reads it and each datagram to whichever receives it |
+| Unix domain sockets: stream, datagram and seqpacket | a socket bound to a path is a node of the VFS (`stat` says `S_IFSOCK`, `unlink` takes it away), which hands it the connections to it and the datagrams sent to it; one bound to an abstract name (Linux's: a `sun_path` that starts with a NUL) has it in the VFS's abstract namespace while it is open, and binding the family alone picks one (autobind). A connection is a socket endpoint, as a pipe is, or for seqpacket a channel, between the two programs; `socketpair` makes one directly. `bind`, `listen`, `accept4`, `connect`, the send and receive calls and their message forms (`MSG_PEEK`, `MSG_WAITALL`, `MSG_TRUNC`, `MSG_CMSG_CLOEXEC`), `shutdown`, `getsockname`, `getpeername`, `SO_PEERCRED`, `SO_PASSCRED`, the time-outs; `poll`, `epoll` and `FIONREAD` on them. Descriptors travel with what is sent (`SCM_RIGHTS`): files, pipes, the terminal, sockets (Unix domain ones of every kind, TCP and UDP ones), directories and child processes' descriptors; on a stream with the bytes they were sent with, as on Linux, whichever process holds it; who sent a message comes with it when asked (`SCM_CREDENTIALS`). Every Unix domain socket goes to the programs a program starts too, and the processes that hold one share it: a listener's connections, and a datagram socket's datagrams, go to whichever takes them first |
+| `getaddrinfo`, `gethostbyname` | the network service's resolver, which caches answers, knows `localhost` and gives the addresses in the order they are best tried in (IPv4 first); `/etc/hosts` first, if there is one |
+| `res_query`, `res_send`, `getnameinfo`'s reverse lookups | musl's DNS client, over the layer's sockets, to the DNS servers the network service uses (those DHCP gave, or those set in Settings): there is no `/etc/resolv.conf` |
+| `epoll` | the layer's interest lists, each with a port of the kernel's, which its descriptors' objects signal: a wait costs what changed, however many descriptors are registered. Level-triggered, edge-triggered (as on Linux: a descriptor is reported again once a read or write found it not ready, or emptied or filled it, and it is ready anew; each write to an eventfd is an event) and one-shot registrations of pipes, sockets, eventfds and child processes' descriptors |
+| `eventfd` | a counter of the layer's, with an event object for `poll`, `epoll` and blocking reads and writes (`EFD_SEMAPHORE`, `EFD_NONBLOCK`) |
+| `pidfd_open` | a child process's handle: readable once the child has ended (what tokio waits for its children with) |
 | `isatty`, window size, `termios` | the terminal's shared state page (`vproto::tty`) |
 | `mmap`, `mprotect`, `munmap`, `madvise` | private anonymous memory is the kernel's private memory, whose pages are freed as soon as they are unmapped (parts of mappings too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared (through a handle that cannot write, so `mprotect` cannot make them writable: changes would never reach the file); any part of a mapping can be protected or unmapped |
 | `fsync`, `fdatasync`, `sync`, `syncfs`, `O_SYNC`, `RWF_SYNC` | the VFS saves what changed to the home disk at once (it otherwise does so a few seconds after the last change) |
@@ -125,11 +134,13 @@ a program registers only names of its own, its name or names under it,
 `NAME/...`, where its name is that of the program that speaks for it: the
 Terminal's, `terminal`, for a program the Terminal runs),
 waiting on several objects at once (`veda_wait`), memory objects
-(`veda_vmo_create`, `_map`) and events, and the handles a program was
+(`veda_vmo_create`, `_map`) and events, the handles a program was
 started with for a role of its own (`veda_startup_handle`: `mediadec`
 takes its control channel so, from Videos, which starts it with nothing
-else). They are the kernel's calls but for
-the registry's, made by the POSIX layer
+else), and a registry channel of the program's own, for a library that
+speaks the registry's protocol itself (`veda_registry`: Veda's libraries
+in a Rust program on the standard library). They are the kernel's calls
+but for the registry's, made by the POSIX layer
 (`implementation/libraries/posix/src/native.rs`); every call returns 0 or a
 count, or a negative Veda error number. A program speaks a protocol by
 writing its messages itself: a 12-byte header (method, transaction, request
@@ -143,7 +154,9 @@ when keys are typed. Programs a program starts inherit all of it.
 
 **The kernel** has what a POSIX environment needs: sockets (byte streams
 with shareable endpoints, a bounded buffer, all-or-nothing writes up to
-4096 bytes, and half-closing for the end of input), memory protection of
+4096 bytes, half-closing for the end of input, and handles that travel
+with the bytes they were written with, as descriptors do over Unix domain
+sockets), memory protection of
 parts of mappings that never exceeds what the VMO's handle allows, private
 memory whose pages can be freed while it stays mapped (what allocators do
 with `madvise`), and each thread's exit futex (a word the kernel clears,
@@ -186,10 +199,56 @@ and wakes a waiter on, once the thread has left its stack).
   file (ELF or `#!`) is executable, everything else is not; `chmod` and
   `chown` change nothing. Programs run as user 1000.
 * **Static linking only**: no shared libraries, no `dlopen`.
-* **No network sockets yet** (`socket` fails with `EAFNOSUPPORT`).
-  `socketpair` works, with `send`, `recv`, `sendmsg`, `recvmsg` and
-  `shutdown`, but without `MSG_PEEK`, out-of-band data or passing
-  descriptors.
+* **Network sockets are TCP and UDP**, over IPv4 and IPv6: no raw or
+  ICMP sockets (`ping` is the network service's), no multicast, no
+  out-of-band data and no ancillary data (`sendmsg`'s control messages,
+  `IP_PKTINFO`). A stream socket binds when it listens: `bind` records
+  the address (`getsockname` says it, port 0 still 0) and `listen`
+  reports what `bind` would (`EADDRINUSE`, ...); one bound before it
+  connects connects from the address and port the service picks. A UDP
+  socket's sends wait for room in its channel to the service, not in a
+  send buffer. Every socket is passed to the programs a program starts
+  and can be sent over Unix domain sockets, but for one still connecting
+  (a child does not get it, and `sendmsg` refuses it with `EOPNOTSUPP`);
+  its options, and its reading being shut down, go as they are when it
+  goes (changed afterwards, they change in one process only), a datagram
+  looked at with `MSG_PEEK` stays with the process that looked, a
+  connection's failure is reported to the process that hears of it first
+  (the others see its stream end), and `SO_LINGER` with no time resets a
+  connection at close only if it never went to another process. An
+  edge-triggered `epoll` reports a listening or UDP socket when a
+  connection or a datagram comes to wait where none did, not each one
+  that comes while others wait (accepting or receiving until `EAGAIN`, as
+  `epoll` asks, misses none). There is no list of the interfaces
+  (`getifaddrs`, which asks Linux's netlink).
+* **Unix domain sockets** are named by paths and, as on Linux, by
+  abstract names, which are apart for each type of socket and free again
+  once their socket is closed (a NUL and five hex digits when the system
+  picks one: binding the family alone, or connecting or sending datagrams
+  from a socket not bound with `SO_PASSCRED`). A datagram is at most 56
+  KiB (`EMSGSIZE`), and a datagram socket connected to another receives
+  from others too. Connections waiting to be accepted, and
+  datagrams not yet received, wait in a queue of a few hundred, whatever
+  backlog `listen` asks for. `SO_PEERCRED` and `SCM_CREDENTIALS` say the
+  process the other end says it is (every program is user 1000).
+  Every socket is passed to the programs a program starts and can be
+  sent over sockets, and is closed once every process that has it closed
+  it; but its options, and its being shut down, go as they are when it
+  goes (changed afterwards, they change in one process only), a message
+  looked at with `MSG_PEEK` stays with the process that looked, and a
+  connected socket's copy does not keep the name its socket is bound to.
+  A socket node outlives its socket, as on Linux, until it is removed,
+  and is not kept on the home disk.
+* **`epoll` takes pipes, sockets, eventfds and child processes'
+  descriptors.** Files and the like, which are always ready, cannot be
+  added (`EPERM`, as Linux says of files), nor can an epoll descriptor be
+  added to another, or itself be polled. `epoll_pwait` leaves the signal
+  mask as it is, as `ppoll` and `pselect` do. Epoll instances, eventfds
+  and child processes' descriptors are not passed to the programs a
+  program starts.
+* **No `/etc/resolv.conf`.** Programs that read it themselves to find the
+  DNS servers find none; `getaddrinfo` and the C library's resolver ask
+  the network service.
 * **C only inside Veda, for now**: the image has no C++ compiler. The cross
   toolchain compiles C++ for Veda, with libstdc++.
 * **The Terminal shows text with colours**, with carriage returns and line
@@ -277,14 +336,46 @@ upstream archive each `port.toml` names plus the patch beside it.
 
 ## Tests
 
-* `verification/c/posix.c` checks the C library and the POSIX layer (the
+* `verification/c/posix.c` checks the C library and the POSIX layer: the
   startup, standard I/O, the heap, `mmap` and `madvise`, files,
   directories, pipes, threads and TLS, clocks, signals, `posix_spawn` and
-  wait statuses), and `verification/c/cxx.cc` the C++ library: exceptions
+  wait statuses, the network, `epoll` and `eventfd`, and Unix domain
+  sockets. The network is
+  TCP and UDP on the loopback interface (a connection made without
+  waiting, then `poll`; `accept4`, the message calls, the end of a
+  stream, a refused connection, a datagram cut short), names
+  (`getaddrinfo`, `getnameinfo`), and the host machine's web server and
+  UDP echo through QEMU's network, which `cargo orchestration test` starts
+  and names to `systest`. `epoll` and `eventfd`: an eventfd's counts and
+  its semaphore mode, level- and edge-triggered and one-shot registrations
+  of pipes, socket pairs, TCP sockets and eventfds, changing and removing
+  them, a wait woken by another thread, time-outs, and files refused.
+  Unix domain sockets: a listener bound to a path (`stat`, a listing, a
+  name taken, `ENXIO` from `open`), connections (`poll` and `epoll` on the
+  listener, names, `SO_PEERCRED`, `MSG_PEEK`, the end of a stream,
+  `ECONNREFUSED` and `ENOENT` once the listener and its name are gone),
+  datagrams from sockets with names and without, cut short and connected,
+  `EPROTOTYPE`, seqpacket and datagram pairs, and descriptors sent over
+  them (`SCM_RIGHTS`: room for fewer, one write's at most per read, to a
+  child process) and who sent a message (`SCM_CREDENTIALS`); abstract
+  names (their length, a NUL in one, taken while open and free once
+  closed, apart for each type, from a child, names picked for the family
+  alone and for `SO_PASSCRED`, and replies to them). Sockets shared with
+  children: a Unix domain listener and a TCP one (non-blocking, which the
+  children find so and `poll`, one finding a connection taken by the
+  other) that two children accept a connection each from, the listener
+  open until the last process closes it; a listener sent to a child over
+  a socket; a seqpacket pair's end and a datagram socket bound to a path
+  in a child. Connections and UDP sockets shared with children: a TCP
+  connection as a child's standard input and output, one that a child and
+  the parent both write to, one sent to a child over a socket, and a UDP
+  socket that two children receive a datagram each from and answer on.
+  `verification/c/cxx.cc` checks the C++ library: exceptions
   (across threads too), run-time types, static constructors, containers,
   streams, threads. `systest` runs them inside Veda with
   `verification/c/hello.c`, each linked both at a fixed address and
-  position-independent, and tests the kernel's sockets, memory protection,
+  position-independent, and tests the kernel's sockets (the handles that
+  travel with their bytes too), memory protection,
   private memory and exit futexes and the VFS's open files. What they
   expect of the architecture (the machine `uname` names, as Linux does) is
   in `verification/c/arch/<architecture>/`.

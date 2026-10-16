@@ -10,9 +10,6 @@
 //! (`Shell::power_off`). Windows still open after [`CLOSE_WAIT_NS`] are
 //! listed on a card, from which the user cancels, or powers off anyway.
 
-use alloc::format;
-use alloc::string::String;
-
 use vgfx::{Align, Rect};
 use vproto::display::{WindowKind, WindowSpec};
 use vproto::init::power;
@@ -78,7 +75,7 @@ impl PowerOff {
             spec.app_id = "shell".into();
             match Host::new(display, spec) {
                 Ok(host) => self.card = Some((host, (x, y))),
-                Err(e) => vrt::println!("cannot show the apps still open: {:?}", e),
+                Err(e) => println!("cannot show the apps still open: {:?}", e),
             }
         }
         let (host, origin) = self.card.as_mut()?;

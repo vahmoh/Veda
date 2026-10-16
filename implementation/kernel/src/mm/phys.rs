@@ -5,7 +5,8 @@
 //!
 //! A bitmap with one bit per 4 KiB frame (1 = in use) covering all RAM. A
 //! rolling search hint makes single-frame allocation fast in the common case;
-//! contiguous allocations (DMA buffers, large kernel objects) scan for runs.
+//! contiguous allocations (DMA buffers, large kernel objects) look for the
+//! lowest run, a word of the bitmap at a time (`vframes`).
 //!
 //! It also remembers where the RAM is that the kernel owns (free RAM, its
 //! own image, the boot data, the loader's memory it takes back): physical
@@ -125,25 +126,12 @@ impl Bitmap {
     }
 
     fn alloc_run(&mut self, count: u64, align: u64, max_frame: u64) -> Option<u64> {
-        let align = align.max(1);
         let limit = self.frames.min(max_frame);
-        let mut start = 0u64;
-        while start + count <= limit {
-            if !start.is_multiple_of(align) {
-                start = start.next_multiple_of(align);
-                continue;
-            }
-            match (start..start + count).find(|&f| self.is_used(f)) {
-                Some(used) => start = (used + 1).next_multiple_of(align),
-                None => {
-                    for f in start..start + count {
-                        self.set(f, true);
-                    }
-                    return Some(start);
-                }
-            }
+        let start = vframes::find_run(self.words, count, align, limit)?;
+        for f in start..start + count {
+            self.set(f, true);
         }
-        None
+        Some(start)
     }
 }
 
@@ -260,13 +248,23 @@ pub fn alloc_zeroed() -> Option<u64> {
 /// Allocates `count` physically contiguous, zeroed frames aligned to
 /// `align` bytes, entirely below `max_addr`.
 pub fn alloc_contiguous(count: u64, align: u64, max_addr: u64) -> Option<u64> {
+    let f = contiguous(count, align, max_addr, false)?;
+    zero_frames(f, count);
+    Some(f)
+}
+
+/// Like [`alloc_contiguous`], with the frames as they were: for memory its
+/// user writes before reading (the kernel heap's allocations).
+pub fn alloc_contiguous_unzeroed(count: u64, align: u64, max_addr: u64) -> Option<u64> {
     contiguous(count, align, max_addr, false)
 }
 
 /// Like [`alloc_contiguous`], for user space's memory (a DMA buffer):
 /// outside the kernel's reserve.
 pub fn alloc_user_contiguous(count: u64, align: u64, max_addr: u64) -> Option<u64> {
-    contiguous(count, align, max_addr, true)
+    let f = contiguous(count, align, max_addr, true)?;
+    zero_frames(f, count);
+    Some(f)
 }
 
 fn contiguous(count: u64, align: u64, max_addr: u64, user: bool) -> Option<u64> {
@@ -276,8 +274,6 @@ fn contiguous(count: u64, align: u64, max_addr: u64, user: bool) -> Option<u64> 
         return None;
     }
     let f = bm.alloc_run(count, (align / PAGE_SIZE).max(1), max_addr / PAGE_SIZE)?;
-    drop(guard);
-    zero_frames(f * PAGE_SIZE, count);
     Some(f * PAGE_SIZE)
 }
 

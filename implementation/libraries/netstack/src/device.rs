@@ -83,6 +83,13 @@ pub struct Loopback {
 /// Most frames on their way through the loopback interface.
 const LOOPBACK_QUEUE: usize = 64;
 
+impl Loopback {
+    /// Whether frames wait to come back.
+    pub fn pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+}
+
 impl Link for Loopback {
     fn receive(&mut self, buf: &mut [u8]) -> Option<usize> {
         let frame = self.queue.pop_front()?;

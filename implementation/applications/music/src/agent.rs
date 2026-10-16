@@ -7,11 +7,6 @@
 //! its own volume), through the same player operations as the buttons and
 //! keys.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use music_core::order::Repeat;
 use vfiles::format::duration as format_time;
 use videos_core::control::{self, SeekError};

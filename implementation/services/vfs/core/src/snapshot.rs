@@ -157,10 +157,12 @@ pub fn write(ram: &Tree, samples: &Samples, out: &mut impl Sink) {
     }
 }
 
-/// Writes the record of node `id`, whose path is `path`.
+/// Writes the record of node `id`, whose path is `path` (none for a
+/// socket, which is no more once the system restarts).
 fn record(ram: &Tree, id: NodeId, path: &str, samples: &Samples, out: &mut impl Sink) {
     let Some(node) = ram.node(id) else { return };
     match &node.kind {
+        Kind::Socket(_) => {}
         Kind::Dir(_) => {
             out.u8(R_DIR);
             out.str(path);
@@ -226,6 +228,7 @@ pub fn subtree_len(ram: &Tree, id: NodeId, path_len: usize, samples: &Samples) -
                 todo.extend(children.iter().map(|(name, &c)| (c, len + 1 + name.len())));
             }
             Kind::File(d) => total += record_len(len, Some(stored_len(d, samples))),
+            Kind::Socket(_) => {}
         }
     }
     total
@@ -402,6 +405,7 @@ mod tests {
                     todo.extend(c.iter().map(|(name, &child)| (format!("{path}/{name}"), child)));
                 }
                 Kind::File(d) => out.push((path, Some(d.bytes().to_vec()), node.modified)),
+                Kind::Socket(_) => {}
             }
         }
         out.sort();
@@ -442,6 +446,25 @@ mod tests {
         let mut again = Vec::new();
         write(&back, &s, &mut again);
         assert_eq!(again, bytes);
+    }
+
+    #[test]
+    fn sockets_are_not_kept() {
+        let s = samples();
+        let mut t = home(&s);
+        let user = t.lookup(&["home", "user"]).unwrap();
+        let (before, nodes) = (len(&t, &s), t.measure(user).nodes);
+        let sock = t.create(&["home", "user", "app.sock"], Kind::Socket(7)).unwrap();
+        // Nothing of it is written, or counted, wherever it is.
+        assert_eq!(len(&t, &s), before);
+        assert_eq!(t.measure(user).nodes, nodes);
+        assert_eq!(subtree_len(&t, sock, 30, &s), 0);
+        let mut bytes = Vec::new();
+        write(&t, &s, &mut bytes);
+        let mut back = fresh();
+        read(&mut &bytes[..], bytes.len() as u64, &mut back, &s).unwrap();
+        assert!(back.lookup(&["home", "user", "app.sock"]).is_err());
+        assert_eq!(contents(&back), contents(&t));
     }
 
     #[test]

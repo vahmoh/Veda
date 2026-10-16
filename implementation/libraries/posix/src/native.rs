@@ -94,6 +94,24 @@ pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> 
     }
 }
 
+/// A registry channel of the program's own, beside the layer's: a program
+/// in Rust on the standard library reaches services through it with Veda's
+/// own libraries (`vproto`), as a Veda program does through the channel it
+/// starts with. Whatever goes through it is the program's, as through the
+/// layer's (`init` knows it for the same process).
+///
+/// # Safety
+/// `out` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn veda_registry(out: *mut RawHandle) -> c_int {
+    match vproto::with_registry(|r| r.clone_registry()) {
+        // SAFETY: as the caller promises.
+        Ok(Ok(Ok(ch))) => unsafe { give(out, Ok(ch.0.into_raw() as usize)) },
+        Ok(Ok(Err(_))) => fail(Error::AccessDenied),
+        _ => fail(Error::PeerClosed),
+    }
+}
+
 /// Registers the program as the provider of service `name`; connections
 /// to it arrive on `*listener` ([`veda_service_accept`]).
 ///

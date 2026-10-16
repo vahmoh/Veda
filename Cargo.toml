@@ -16,6 +16,7 @@ members = [
     "implementation/libraries/font",
     "implementation/libraries/image",
     "implementation/libraries/heap",
+    "implementation/libraries/frames",
     "implementation/libraries/build",
     "implementation/libraries/rt",
     "implementation/libraries/ipc",
@@ -85,6 +86,7 @@ members = [
     "verification/testmic",
     "verification/audiotest",
     "verification/fakedec",
+    "verification/stdcrates",
     "implementation/guest/init",
     "implementation/guest/bridgetest",
     "implementation/guest/pcitest",
@@ -128,6 +130,7 @@ vraster = { path = "implementation/libraries/raster" }
 vfont = { path = "implementation/libraries/font" }
 vimage = { path = "implementation/libraries/image" }
 vheap = { path = "implementation/libraries/heap" }
+vframes = { path = "implementation/libraries/frames" }
 vbuild = { path = "implementation/libraries/build" }
 vrt = { path = "implementation/libraries/rt" }
 vipc = { path = "implementation/libraries/ipc" }
@@ -215,6 +218,18 @@ rustix = { version = "1.1.5", default-features = false, features = ["std", "even
 # C's interfaces for the few Linux calls rustix does not make (socket
 # options of netlink and packet sockets), through the guest's musl.
 libc = { version = "0.2.190", default-features = false }
+# Random bytes from the operating system, in the two releases crates use
+# (rand 0.10 the newer, rand 0.9 and others the older): what
+# verification/stdcrates checks of Veda's ports of them (implementation/
+# ports/getrandom and getrandom-0.3), as of libc's and rustix's, and of
+# tempfile, which stands on them.
+getrandom = { version = "=0.4.3", default-features = false, features = ["std"] }
+getrandom-0-3 = { package = "getrandom", version = "=0.3.4", default-features = false, features = ["std"] }
+tempfile = { version = "3.27.0", default-features = false, features = ["getrandom"] }
+# The asynchronous runtime of Rust's ecosystem, on Veda's epoll, eventfd and
+# sockets (implementation/ports/tokio, and mio and socket2 under it): what
+# verification/stdcrates checks of them, and what crates built on it need.
+tokio = { version = "=1.53.3", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "macros", "io-util", "sync", "process"] }
 # HTTP/1.x message parsing (no_std).
 httparse = { version = "1.10", default-features = false }
 # Percent-encoding of URL components: the `url` crate's own, without its
@@ -326,9 +341,11 @@ smoltcp = { version = "=0.14.0", default-features = false, features = [
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
-# Set for the programs of the driver VM's Linux guest
-# (implementation/guest/.cargo/config.toml).
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(veda_guest)"] }
+# `veda_guest` is set for the programs of the driver VM's Linux guest
+# (implementation/guest/.cargo/config.toml); `target_os = "veda"` is the
+# operating system of Veda's own target for programs on the standard library
+# (the toolchain's Rust knows it, the build machine's does not).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(veda_guest)", 'cfg(target_os, values("veda"))'] }
 missing_debug_implementations = "allow"
 
 [workspace.lints.clippy]

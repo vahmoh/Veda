@@ -19,8 +19,6 @@ vabi = { workspace = true }
 vui = { workspace = true }
 apps-common = { path = "../common" }
 
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

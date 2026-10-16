@@ -105,6 +105,10 @@ int veda_service_register(const char *name, veda_handle_t *listener);
 /* Fails with VEDA_ESHOULD_WAIT if no connection waits. */
 int veda_service_accept(veda_handle_t listener, veda_handle_t *channel);
 int veda_service_connect(const char *name, veda_handle_t *channel);
+/* A registry channel of the program's own, for a library that speaks the
+ * registry's protocol itself (Rust's `vproto`); what goes through it is
+ * the program's, as through the calls above. */
+int veda_registry(veda_handle_t *out);
 
 /* Channels. Handles written move to the receiver (closed if the write
  * fails). A read takes one message without waiting: *len and *count get

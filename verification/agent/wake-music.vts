@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # The agent asleep while music plays, its sound coming back into the
-# microphone as from loudspeakers: the music does not keep the name
-# listener's recogniser busy (its start may stand out once), and calling
-# the agent over it still wakes it, without what was heard before the
-# call. During the conversation the music plays quieter (ducked).
+# microphone as from loudspeakers: the music starts no recognition (what
+# the echo canceller leaves of it is no louder than its echo can be), and
+# calling the agent over it, louder than that, still wakes it, without
+# what was heard before the call. During the conversation the music plays
+# quieter (ducked).
 agent-asleep
 # Only the music comes back (no startup sound).
 boot-cmdline "startup-sound=off"
@@ -21,11 +22,7 @@ wait 1
 click 0.6188 0.8125
 wait-serial "music: playing Neon Horizon" 30
 wait 30
-agent-listens-at-most 2
-reject-serial "much speech this hour"
-# Called over the music, once nothing it stood out with is still being
-# listened to (a stream open then would hear the call as it is).
-agent-not-listening 20
+agent-listens 0
 checkpoint
 mic-tone 2 16000
 wait-serial "someone is speaking" 20

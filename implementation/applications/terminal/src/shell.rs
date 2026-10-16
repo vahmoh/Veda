@@ -18,11 +18,8 @@
 //! the rest of the command line is skipped, and commands that take long
 //! check it as they go.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use terminal_core::classify::{self, Effect, Lookup};
 use terminal_core::edit;
@@ -347,7 +344,7 @@ impl Shell {
     pub fn new(cwd: &str) -> Shell {
         let fs = Fs::connect();
         let cwd = if fs.is_dir(cwd) { normalize(cwd) } else { HOME.to_string() };
-        let env = alloc::vec![
+        let env = vec![
             ("HOME".to_string(), HOME.to_string()),
             ("USER".to_string(), "user".to_string()),
             ("HOSTNAME".to_string(), "veda".to_string()),

@@ -22,10 +22,8 @@ vimage = { workspace = true, features = ["encode"] }
 vfiles = { workspace = true }
 vui = { workspace = true }
 libm = { workspace = true }
+apps-common = { path = "../common" }
 paint-core = { path = "core" }
-
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

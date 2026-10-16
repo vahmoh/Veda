@@ -18,6 +18,11 @@
 //! A directory's modification time changes whenever an entry is added to
 //! it, removed from it or renamed in it, as POSIX's do, so that a program
 //! can tell from a stat whether a listing it has is still current.
+//!
+//! Besides files and directories, the writable file system holds the Unix
+//! domain sockets POSIX programs bind to paths: nodes that name a socket
+//! of the service's ([`Kind::Socket`]), which have no contents and are not
+//! kept on the home disk.
 
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
@@ -105,10 +110,13 @@ impl Data {
     }
 }
 
-/// A file and its contents, or a directory and its entries by name.
+/// A file and its contents, a directory and its entries by name, or a
+/// Unix domain socket.
 pub enum Kind {
     File(Data),
     Dir(BTreeMap<String, NodeId>),
+    /// The socket bound there: the service's id for it.
+    Socket(u64),
 }
 
 impl Kind {
@@ -123,7 +131,7 @@ impl Kind {
     }
 }
 
-/// A file or directory.
+/// A file, directory or socket.
 pub struct Node {
     /// The directory it is in (the root's is itself). A node taken out of
     /// the tree keeps the one it was in.
@@ -138,7 +146,8 @@ pub struct Node {
 pub struct Extent {
     /// Bytes of its files.
     pub bytes: usize,
-    /// Its files and directories, its root included.
+    /// Its files and directories, its root included: what the home disk
+    /// keeps a record of (sockets are not kept).
     pub nodes: usize,
     /// How much longer than its root's path the longest path in it is, in
     /// bytes (`/a/bc` is 5 bytes below its root's); 0 for a file.
@@ -211,7 +220,7 @@ impl Tree {
     fn children(&self, id: NodeId) -> Result<&BTreeMap<String, NodeId>, FsError> {
         match self.nodes.get(&id).map(|n| &n.kind) {
             Some(Kind::Dir(children)) => Ok(children),
-            Some(Kind::File(_)) => Err(FsError::NotDir),
+            Some(Kind::File(_) | Kind::Socket(_)) => Err(FsError::NotDir),
             None => Err(FsError::NotFound),
         }
     }
@@ -262,8 +271,8 @@ impl Tree {
         self.insert(parent, name, Kind::File(data))
     }
 
-    /// Creates a file or directory (`kind`) at `comps`, whose directory must
-    /// exist.
+    /// Creates a file, directory or socket (`kind`) at `comps`, whose
+    /// directory must exist.
     pub fn create(&mut self, comps: &[&str], kind: Kind) -> Result<NodeId, FsError> {
         // What is there already is reported as such, even where nothing
         // can be made (as POSIX file systems do: `mkdir -p` relies on it).
@@ -287,6 +296,7 @@ impl Tree {
         let (size, is_dir, executable) = match &n.kind {
             Kind::File(d) => (d.bytes().len() as u64, false, is_program(d.bytes())),
             Kind::Dir(c) => (c.len() as u64, true, false),
+            Kind::Socket(_) => (0, false, false),
         };
         Ok(Stat {
             size,
@@ -297,6 +307,7 @@ impl Tree {
             device: self.device,
             executable,
             char_device: false,
+            socket: matches!(n.kind, Kind::Socket(_)),
         })
     }
 
@@ -307,12 +318,13 @@ impl Tree {
         let mut todo = vec![(id, 0usize)];
         while let Some((n, depth)) = todo.pop() {
             let Some(node) = self.nodes.get(&n) else { continue };
-            extent.nodes += 1;
             extent.depth = extent.depth.max(depth);
             match &node.kind {
                 Kind::File(d) => extent.bytes = extent.bytes.saturating_add(d.bytes().len()),
                 Kind::Dir(children) => todo.extend(children.iter().map(|(name, &c)| (c, depth + 1 + name.len()))),
+                Kind::Socket(_) => continue,
             }
+            extent.nodes += 1;
         }
         extent
     }
@@ -334,6 +346,7 @@ impl Tree {
                 modified: s.modified,
                 inode: child,
                 executable: s.executable,
+                socket: s.socket,
             })
         }))
     }
@@ -565,7 +578,7 @@ mod tests {
     }
 
     fn entry(name: &str) -> DirEntry {
-        DirEntry { name: name.into(), is_dir: false, size: 0, modified: 0, inode: 2, executable: false }
+        DirEntry { name: name.into(), is_dir: false, size: 0, modified: 0, inode: 2, executable: false, socket: false }
     }
 
     #[test]
@@ -702,7 +715,7 @@ mod tests {
         assert!(!d.is_shared() && d.copy_cost() == 0);
         let read = |t: &Tree, id| match &t.node(id).unwrap().kind {
             Kind::File(d) => d.bytes().to_vec(),
-            Kind::Dir(_) => unreachable!(),
+            Kind::Dir(_) | Kind::Socket(_) => unreachable!(),
         };
         assert_eq!((read(&t, a), read(&t, b)), (b"abc".to_vec(), b"abcd".to_vec()));
         // The original is its own again.
@@ -742,6 +755,32 @@ mod tests {
         assert_eq!(t.stat(f), Err(FsError::NotFound));
         assert_eq!(t.measure(f), Extent::default());
         assert_eq!(t.entries_after(f, "").err(), Some(FsError::NotFound));
+    }
+
+    #[test]
+    fn sockets_are_nodes_without_contents() {
+        let mut t = tree();
+        t.mkdir_all(&["tmp"]).unwrap();
+        let sock = t.create(&c("/tmp/app.sock"), Kind::Socket(42)).unwrap();
+        let s = t.stat(sock).unwrap();
+        assert!(s.socket && !s.is_dir && !s.executable && s.size == 0);
+        let tmp = t.lookup(&["tmp"]).unwrap();
+        let listed: Vec<DirEntry> = t.entries_after(tmp, "").unwrap().collect();
+        assert!(listed.len() == 1 && listed[0].socket && listed[0].name == "app.sock");
+        // Nothing is inside one, and no file or socket can be made where
+        // one is.
+        assert_eq!(t.lookup(&c("/tmp/app.sock/x")), Err(FsError::NotDir));
+        assert_eq!(t.create(&c("/tmp/app.sock/x"), Kind::file()), Err(FsError::NotDir));
+        assert_eq!(t.create(&c("/tmp/app.sock"), Kind::Socket(43)), Err(FsError::Exists));
+        // It moves, is replaced and removed as a file is.
+        t.rename(&c("/tmp/app.sock"), &c("/tmp/b.sock"), false).unwrap();
+        assert!(matches!(t.node(t.lookup(&c("/tmp/b.sock")).unwrap()).unwrap().kind, Kind::Socket(42)));
+        t.add_file(&c("/tmp/f"), Data::empty()).unwrap();
+        assert_eq!(t.rename(&c("/tmp/f"), &c("/tmp/b.sock"), true), Ok(Some(sock)));
+        assert_eq!(t.measure(tmp).nodes, 2);
+        let f = t.unlink(&c("/tmp/b.sock")).unwrap();
+        t.forget(f);
+        assert_eq!(t.entries_after(tmp, "").unwrap().count(), 0);
     }
 
     #[test]

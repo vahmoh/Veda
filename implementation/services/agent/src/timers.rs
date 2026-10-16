@@ -8,8 +8,6 @@
 //! timer and keep the agent waking up by itself (see
 //! [`crate::conversation`]).
 
-use alloc::vec::Vec;
-
 use vagent::notice::Notice;
 use vproto::shell::shell;
 use vrt::println;

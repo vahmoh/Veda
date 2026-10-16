@@ -1,0 +1,1174 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -200,9 +200,9 @@
+ pub use socket::InterfaceIndexOrAddress;
+ pub use socket::Socket;
+ pub use sockref::SockRef;
+-#[cfg(all(feature = "all", target_os = "linux"))]
++#[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+ pub use sys::CcidEndpoints;
+-#[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++#[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+ pub use sys::SockFilter;
+ 
+ /// Specification of the communication domain for a socket.
+@@ -275,7 +275,7 @@
+     /// Type corresponding to `SOCK_DCCP`.
+     ///
+     /// Used for the DCCP protocol.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub const DCCP: Type = Type(sys::SOCK_DCCP);
+ 
+     /// Type corresponding to `SOCK_SEQPACKET`.
+@@ -335,16 +335,16 @@
+     /// Protocol corresponding to `UDP`.
+     pub const UDP: Protocol = Protocol(sys::IPPROTO_UDP);
+ 
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     /// Protocol corresponding to `MPTCP`.
+     pub const MPTCP: Protocol = Protocol(sys::IPPROTO_MPTCP);
+ 
+     /// Protocol corresponding to `DCCP`.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub const DCCP: Protocol = Protocol(sys::IPPROTO_DCCP);
+ 
+     /// Protocol corresponding to `SCTP`.
+-    #[cfg(all(feature = "all", any(target_os = "freebsd", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "freebsd", any(target_os = "linux", target_os = "veda"))))]
+     pub const SCTP: Protocol = Protocol(sys::IPPROTO_SCTP);
+ 
+     /// Protocol corresponding to `UDPLITE`.
+@@ -354,7 +354,7 @@
+             target_os = "android",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         )
+     ))]
+     pub const UDPLITE: Protocol = Protocol(sys::IPPROTO_UDPLITE);
+@@ -534,7 +534,7 @@
+         target_os = "illumos",
+         target_os = "ios",
+         target_os = "visionos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "tvos",
+@@ -566,7 +566,7 @@
+             target_os = "illumos",
+             target_os = "ios",
+             target_os = "visionos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "tvos",
+--- a/src/socket.rs
++++ b/src/socket.rs
+@@ -264,7 +264,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "cygwin",
+@@ -278,7 +278,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "cygwin",
+@@ -753,7 +753,7 @@
+         target_os = "fuchsia",
+         target_os = "hurd",
+         target_os = "illumos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_os = "cygwin",
+@@ -781,7 +781,7 @@
+             target_os = "fuchsia",
+             target_os = "hurd",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "espidf",
+@@ -815,7 +815,7 @@
+     target_os = "freebsd",
+     target_os = "fuchsia",
+     target_os = "illumos",
+-    target_os = "linux",
++    any(target_os = "linux", target_os = "veda"),
+     target_os = "netbsd",
+     target_os = "openbsd",
+     target_os = "cygwin",
+@@ -831,7 +831,7 @@
+             target_os = "fuchsia",
+             target_os = "hurd",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "espidf",
+@@ -1003,7 +1003,7 @@
+     /// For more information about this option, see [`set_passcred`].
+     ///
+     /// [`set_passcred`]: Socket::set_passcred
+-    #[cfg(any(target_os = "linux", target_os = "cygwin"))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "cygwin"))]
+     pub fn passcred(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), sys::SOL_SOCKET, sys::SO_PASSCRED)
+@@ -1015,7 +1015,7 @@
+     ///
+     /// If this option is enabled, enables the receiving of the `SCM_CREDENTIALS`
+     /// control messages.
+-    #[cfg(any(target_os = "linux", target_os = "cygwin"))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "cygwin"))]
+     pub fn set_passcred(&self, passcred: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -1034,7 +1034,7 @@
+     /// [`set_priority`]: Socket::set_priority
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "linux", target_os = "android", target_os = "fuchsia")
++        any(any(target_os = "linux", target_os = "veda"), target_os = "android", target_os = "fuchsia")
+     ))]
+     pub fn priority(&self) -> io::Result<u32> {
+         unsafe {
+@@ -1049,7 +1049,7 @@
+     /// queueing discipline.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "linux", target_os = "android", target_os = "fuchsia")
++        any(any(target_os = "linux", target_os = "veda"), target_os = "android", target_os = "fuchsia")
+     ))]
+     pub fn set_priority(&self, priority: u32) -> io::Result<()> {
+         unsafe {
+@@ -1267,7 +1267,7 @@
+     /// For more information about this option, see [`set_ip_transparent_v4`].
+     ///
+     /// [`set_ip_transparent_v4`]: Socket::set_ip_transparent_v4
+-    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++    #[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub fn ip_transparent_v4(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), sys::IPPROTO_IP, libc::IP_TRANSPARENT)
+@@ -1290,7 +1290,7 @@
+     ///
+     /// TProxy redirection with the iptables TPROXY target also
+     /// requires that this option be set on the redirected socket.
+-    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++    #[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub fn set_ip_transparent_v4(&self, transparent: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -1497,7 +1497,7 @@
+     /// For more information about this option, see [`set_multicast_all_v4`].
+     ///
+     /// [`set_multicast_all_v4`]: Socket::set_multicast_all_v4
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn multicast_all_v4(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), sys::IPPROTO_IP, libc::IP_MULTICAST_ALL)
+@@ -1515,7 +1515,7 @@
+     /// messages only from the groups that have been explicitly
+     /// joined (for example via the `IP_ADD_MEMBERSHIP` option) on
+     /// this particular socket.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_multicast_all_v4(&self, all: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -1742,7 +1742,7 @@
+         any(
+             target_os = "android",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "windows",
+         )
+     ))]
+@@ -1814,9 +1814,9 @@
+             setsockopt(
+                 self.as_raw(),
+                 sys::IPPROTO_IPV6,
+-                #[cfg(target_os = "linux")]
++                #[cfg(any(target_os = "linux", target_os = "veda"))]
+                 sys::IPV6_HDRINCL,
+-                #[cfg(not(target_os = "linux"))]
++                #[cfg(not(any(target_os = "linux", target_os = "veda")))]
+                 sys::IP_HDRINCL,
+                 included as c_int,
+             )
+@@ -1828,7 +1828,7 @@
+     /// For more information about this option, see [`set_ip_transparent_v6`].
+     ///
+     /// [`set_ip_transparent_v6`]: Socket::set_ip_transparent_v6
+-    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++    #[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub fn ip_transparent_v6(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), sys::IPPROTO_IPV6, libc::IPV6_TRANSPARENT)
+@@ -1851,7 +1851,7 @@
+     ///
+     /// TProxy redirection with the iptables TPROXY target also
+     /// requires that this option be set on the redirected socket.
+-    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++    #[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub fn set_ip_transparent_v6(&self, transparent: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -1946,7 +1946,7 @@
+     /// For more information about this option, see [`set_multicast_all_v6`].
+     ///
+     /// [`set_multicast_all_v6`]: Socket::set_multicast_all_v6
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn multicast_all_v6(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), sys::IPPROTO_IPV6, libc::IPV6_MULTICAST_ALL)
+@@ -1964,7 +1964,7 @@
+     /// messages only from the groups that have been explicitly
+     /// joined (for example via the `IPV6_ADD_MEMBERSHIP` option) on
+     /// this particular socket.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_multicast_all_v6(&self, all: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2218,7 +2218,7 @@
+     /// Get the value for the `IP6T_SO_ORIGINAL_DST` option on this socket.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "linux", target_os = "windows")
++        any(target_os = "android", any(target_os = "linux", target_os = "veda"), target_os = "windows")
+     ))]
+     pub fn original_dst_v6(&self) -> io::Result<SockAddr> {
+         sys::original_dst_v6(self.as_raw())
+@@ -2264,7 +2264,7 @@
+             target_os = "illumos",
+             target_os = "ios",
+             target_os = "visionos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "tvos",
+@@ -2297,7 +2297,7 @@
+             target_os = "illumos",
+             target_os = "ios",
+             target_os = "visionos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "tvos",
+--- a/src/sys/unix.rs
++++ b/src/sys/unix.rs
+@@ -25,7 +25,7 @@
+         target_os = "watchos",
+         target_os = "illumos",
+         target_os = "solaris",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "android",
+     )
+ ))]
+@@ -38,7 +38,7 @@
+         target_os = "freebsd",
+         target_os = "ios",
+         target_os = "visionos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "tvos",
+         target_os = "watchos",
+@@ -80,7 +80,7 @@
+ pub(crate) use libc::AF_UNIX;
+ pub(crate) use libc::{AF_INET, AF_INET6};
+ // Used in `Type`.
+-#[cfg(all(feature = "all", target_os = "linux"))]
++#[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+ pub(crate) use libc::SOCK_DCCP;
+ #[cfg(all(
+     feature = "all",
+@@ -99,11 +99,11 @@
+ pub(crate) use libc::SOCK_SEQPACKET;
+ pub(crate) use libc::{SOCK_DGRAM, SOCK_STREAM};
+ // Used in `Protocol`.
+-#[cfg(all(feature = "all", target_os = "linux"))]
++#[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+ pub(crate) use libc::IPPROTO_DCCP;
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ pub(crate) use libc::IPPROTO_MPTCP;
+-#[cfg(all(feature = "all", any(target_os = "freebsd", target_os = "linux")))]
++#[cfg(all(feature = "all", any(target_os = "freebsd", any(target_os = "linux", target_os = "veda"))))]
+ pub(crate) use libc::IPPROTO_SCTP;
+ #[cfg(all(
+     feature = "all",
+@@ -111,7 +111,7 @@
+         target_os = "android",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+     )
+ ))]
+ pub(crate) use libc::IPPROTO_UDPLITE;
+@@ -137,7 +137,7 @@
+ // Used in `Socket`.
+ #[cfg(not(any(target_os = "nto", target_os = "nuttx")))]
+ pub(crate) use libc::ipv6_mreq as Ipv6Mreq;
+-#[cfg(all(feature = "all", target_os = "linux"))]
++#[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+ pub(crate) use libc::IPV6_HDRINCL;
+ #[cfg(all(
+     feature = "all",
+@@ -231,11 +231,11 @@
+     target_os = "watchos",
+ ))]
+ pub(crate) use libc::SO_LINGER_SEC as SO_LINGER;
+-#[cfg(any(target_os = "linux", target_os = "cygwin"))]
++#[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "cygwin"))]
+ pub(crate) use libc::SO_PASSCRED;
+ #[cfg(all(
+     feature = "all",
+-    any(target_os = "linux", target_os = "android", target_os = "fuchsia")
++    any(any(target_os = "linux", target_os = "veda"), target_os = "android", target_os = "fuchsia")
+ ))]
+ pub(crate) use libc::SO_PRIORITY;
+ pub(crate) use libc::{
+@@ -310,7 +310,7 @@
+         target_os = "illumos",
+         target_os = "ios",
+         target_os = "visionos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "tvos",
+@@ -390,12 +390,12 @@
+ const MAX_BUF_LEN: usize = c_int::MAX as usize - 1;
+ 
+ // TCP_CA_NAME_MAX isn't defined in user space include files(not in libc)
+-#[cfg(all(feature = "all", any(target_os = "freebsd", target_os = "linux")))]
++#[cfg(all(feature = "all", any(target_os = "freebsd", any(target_os = "linux", target_os = "veda"))))]
+ const TCP_CA_NAME_MAX: usize = 16;
+ 
+ #[cfg(any(
+     all(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         any(
+             target_env = "gnu",
+             all(target_env = "uclibc", target_pointer_width = "64")
+@@ -407,7 +407,7 @@
+ 
+ #[cfg(any(
+     all(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         any(
+             target_env = "musl",
+             target_env = "ohos",
+@@ -444,12 +444,12 @@
+     /// Domain for low-level packet interface, corresponding to `AF_PACKET`.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub const PACKET: Domain = Domain(libc::AF_PACKET);
+ 
+     /// Domain for low-level VSOCK interface, corresponding to `AF_VSOCK`.
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub const VSOCK: Domain = Domain(libc::AF_VSOCK);
+ }
+ 
+@@ -459,9 +459,9 @@
+     libc::AF_INET6,
+     #[cfg(not(target_os = "wasi"))]
+     libc::AF_UNIX,
+-    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
++    #[cfg(any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda")))]
+     libc::AF_PACKET,
+-    #[cfg(any(target_os = "android", target_os = "linux"))]
++    #[cfg(any(target_os = "android", any(target_os = "linux", target_os = "veda")))]
+     libc::AF_VSOCK,
+     libc::AF_UNSPEC, // = 0.
+ );
+@@ -478,7 +478,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "cygwin",
+@@ -500,7 +500,7 @@
+             target_os = "fuchsia",
+             target_os = "hurd",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "redox",
+@@ -520,7 +520,7 @@
+         target_os = "fuchsia",
+         target_os = "hurd",
+         target_os = "illumos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_os = "redox",
+@@ -536,7 +536,7 @@
+     Type,
+     libc::SOCK_STREAM,
+     libc::SOCK_DGRAM,
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     libc::SOCK_DCCP,
+     #[cfg(not(any(
+         target_os = "redox",
+@@ -561,7 +561,7 @@
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd"
+     ))]
+@@ -571,7 +571,7 @@
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "fuchsia",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd"
+     ))]
+@@ -587,11 +587,11 @@
+     libc::IPPROTO_ICMPV6,
+     libc::IPPROTO_TCP,
+     libc::IPPROTO_UDP,
+-    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "veda"))]
+     libc::IPPROTO_MPTCP,
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     libc::IPPROTO_DCCP,
+-    #[cfg(all(feature = "all", any(target_os = "freebsd", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "freebsd", any(target_os = "linux", target_os = "veda"))))]
+     libc::IPPROTO_SCTP,
+     #[cfg(all(
+         feature = "all",
+@@ -599,7 +599,7 @@
+             target_os = "android",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         )
+     ))]
+     libc::IPPROTO_UDPLITE,
+@@ -641,7 +641,7 @@
+     /// 'transmission confirmation'.
+     ///
+     /// On Unix this corresponds to the `MSG_CONFIRM` flag.
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub const fn is_confirm(self) -> bool {
+         self.0 & libc::MSG_CONFIRM != 0
+     }
+@@ -654,7 +654,7 @@
+     /// On Unix this corresponds to the `MSG_DONTROUTE` flag.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "linux", target_os = "cygwin"),
++        any(target_os = "android", any(target_os = "linux", target_os = "veda"), target_os = "cygwin"),
+     ))]
+     pub const fn is_dontroute(self) -> bool {
+         self.0 & libc::MSG_DONTROUTE != 0
+@@ -670,11 +670,11 @@
+         s.field("is_out_of_band", &self.is_out_of_band());
+         #[cfg(not(target_os = "espidf"))]
+         s.field("is_truncated", &self.is_truncated());
+-        #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++        #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+         s.field("is_confirm", &self.is_confirm());
+         #[cfg(all(
+             feature = "all",
+-            any(target_os = "android", target_os = "linux", target_os = "cygwin"),
++            any(target_os = "android", any(target_os = "linux", target_os = "veda"), target_os = "cygwin"),
+         ))]
+         s.field("is_dontroute", &self.is_dontroute());
+         s.finish()
+@@ -812,7 +812,7 @@
+     /// This function can never fail. In a future version of this library it will be made
+     /// infallible.
+     #[allow(unsafe_op_in_unsafe_fn)]
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub fn vsock(cid: u32, port: u32) -> SockAddr {
+         let mut storage = SockAddrStorage::zeroed();
+         {
+@@ -827,7 +827,7 @@
+ 
+     /// Returns this address VSOCK CID/port if it is in the `AF_VSOCK` family,
+     /// otherwise return `None`.
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub fn as_vsock_address(&self) -> Option<(u32, u32)> {
+         if self.family() == libc::AF_VSOCK as sa_family_t {
+             // Safety: if the ss_family field is AF_VSOCK then storage must be a sockaddr_vm.
+@@ -852,7 +852,7 @@
+                     // Abstract addresses only exist on Linux.
+                     // NOTE: although Fuchsia does define `AF_UNIX` it's not actually implemented.
+                     // See https://github.com/rust-lang/socket2/pull/403#discussion_r1123557978
+-                    || (cfg!(not(any(target_os = "linux", target_os = "android", target_os = "cygwin")))
++                    || (cfg!(not(any(any(target_os = "linux", target_os = "veda"), target_os = "android", target_os = "cygwin")))
+                     && storage.sun_path[0] == 0)
+             })
+             .unwrap_or_default()
+@@ -925,14 +925,14 @@
+     pub fn as_abstract_namespace(&self) -> Option<&[u8]> {
+         // NOTE: although Fuchsia does define `AF_UNIX` it's not actually implemented.
+         // See https://github.com/rust-lang/socket2/pull/403#discussion_r1123557978
+-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "cygwin"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android", target_os = "cygwin"))]
+         {
+             self.as_sockaddr_un().and_then(|storage| {
+                 (self.len() > offset_of_path(storage) as _ && storage.sun_path[0] == 0)
+                     .then(|| self.path_bytes(storage, true))
+             })
+         }
+-        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "cygwin")))]
++        #[cfg(not(any(any(target_os = "linux", target_os = "veda"), target_os = "android", target_os = "cygwin")))]
+         None
+     }
+ }
+@@ -1296,7 +1296,7 @@
+         target_os = "illumos",
+         target_os = "ios",
+         target_os = "visionos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "tvos",
+@@ -1461,7 +1461,7 @@
+ 
+ #[cfg(all(
+     feature = "all",
+-    any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++    any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+ ))]
+ pub(crate) fn original_dst_v4(fd: RawSocket) -> io::Result<SockAddr> {
+     // Safety: `getsockopt` initialises the `SockAddr` for us.
+@@ -1483,7 +1483,7 @@
+ ///
+ /// This value contains the original destination IPv6 address of the connection
+ /// redirected using `ip6tables` `REDIRECT` or `TPROXY`.
+-#[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++#[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+ pub(crate) fn original_dst_v6(fd: RawSocket) -> io::Result<SockAddr> {
+     // Safety: `getsockopt` initialises the `SockAddr` for us.
+     unsafe {
+@@ -1518,7 +1518,7 @@
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "netbsd",
+             target_os = "openbsd",
+             target_os = "cygwin",
+@@ -1534,7 +1534,7 @@
+         target_os = "freebsd",
+         target_os = "fuchsia",
+         target_os = "illumos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_os = "cygwin",
+@@ -1686,7 +1686,7 @@
+             target_os = "android",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "cygwin",
+         )
+     ))]
+@@ -1706,7 +1706,7 @@
+             // TODO: add FreeBSD.
+             // target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         )
+     ))]
+     pub fn domain(&self) -> io::Result<Domain> {
+@@ -1721,7 +1721,7 @@
+             target_os = "android",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         )
+     ))]
+     pub fn protocol(&self) -> io::Result<Option<Protocol>> {
+@@ -1742,7 +1742,7 @@
+     /// On Linux this function requires the `CAP_NET_ADMIN` capability.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn mark(&self) -> io::Result<u32> {
+         unsafe {
+@@ -1760,7 +1760,7 @@
+     /// On Linux this function requires the `CAP_NET_ADMIN` capability.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn set_mark(&self, mark: u32) -> io::Result<()> {
+         unsafe {
+@@ -1780,7 +1780,7 @@
+     /// [`set_tcp_cork`]: crate::Socket::set_tcp_cork
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn tcp_cork(&self) -> io::Result<bool> {
+         unsafe {
+@@ -1797,7 +1797,7 @@
+     /// then queued data is automatically transmitted.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn set_tcp_cork(&self, cork: bool) -> io::Result<()> {
+         unsafe {
+@@ -1820,7 +1820,7 @@
+         any(
+             target_os = "android",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "cygwin",
+         )
+     ))]
+@@ -1842,7 +1842,7 @@
+         any(
+             target_os = "android",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "cygwin",
+         )
+     ))]
+@@ -1864,7 +1864,7 @@
+     /// [`set_tcp_thin_linear_timeouts`]: crate::Socket::set_tcp_thin_linear_timeouts
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn tcp_thin_linear_timeouts(&self) -> io::Result<bool> {
+         unsafe {
+@@ -1884,7 +1884,7 @@
+     /// The kernel will modify the retransmission to avoid the very high latencies that thin stream suffer because of exponential backoff.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn set_tcp_thin_linear_timeouts(&self, timeouts: bool) -> io::Result<()> {
+         unsafe {
+@@ -1902,7 +1902,7 @@
+     /// For more information about this option, see [`set_tcp_notsent_lowat`].
+     ///
+     /// [`set_tcp_notsent_lowat`]: crate::Socket::set_tcp_notsent_lowat
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub fn tcp_notsent_lowat(&self) -> io::Result<u32> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), libc::IPPROTO_TCP, libc::TCP_NOTSENT_LOWAT)
+@@ -1914,7 +1914,7 @@
+     ///
+     /// If set the kernel will limit the amount of _unsent_ data in the sendbuffer.
+     /// This differs from `set_send_buffer_size` which limits the sum of unsent and unacknowledged data.
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub fn set_tcp_notsent_lowat(&self, lowat: u32) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -1931,7 +1931,7 @@
+     /// This value gets the socket binded device's interface name.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn device(&self) -> io::Result<Option<Vec<u8>>> {
+         // TODO: replace with `MaybeUninit::uninit_array` once stable.
+@@ -1963,7 +1963,7 @@
+     /// If `interface` is `None` or an empty string it removes the binding.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn bind_device(&self, interface: Option<&[u8]>) -> io::Result<()> {
+         let (value, len) = if let Some(interface) = interface {
+@@ -2016,7 +2016,7 @@
+             target_os = "watchos",
+             target_os = "illumos",
+             target_os = "solaris",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "android",
+         )
+     ))]
+@@ -2036,7 +2036,7 @@
+             setsockopt(self.as_raw(), IPPROTO_IP, libc::IP_BOUND_IF, index)
+         }
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android",))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android",))]
+         unsafe {
+             setsockopt(
+                 self.as_raw(),
+@@ -2067,7 +2067,7 @@
+             target_os = "watchos",
+             target_os = "illumos",
+             target_os = "solaris",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "android",
+         )
+     ))]
+@@ -2087,7 +2087,7 @@
+             setsockopt(self.as_raw(), IPPROTO_IPV6, libc::IPV6_BOUND_IF, index)
+         }
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android",))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android",))]
+         unsafe {
+             setsockopt(
+                 self.as_raw(),
+@@ -2113,7 +2113,7 @@
+             target_os = "watchos",
+             target_os = "illumos",
+             target_os = "solaris",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "android",
+         )
+     ))]
+@@ -2130,7 +2130,7 @@
+         let index =
+             unsafe { getsockopt::<libc::c_uint>(self.as_raw(), IPPROTO_IP, libc::IP_BOUND_IF)? };
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android",))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android",))]
+         let index = unsafe {
+             getsockopt::<libc::c_uint>(self.as_raw(), libc::SOL_SOCKET, libc::SO_BINDTOIFINDEX)?
+         };
+@@ -2153,7 +2153,7 @@
+             target_os = "watchos",
+             target_os = "illumos",
+             target_os = "solaris",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "android",
+         )
+     ))]
+@@ -2171,7 +2171,7 @@
+             getsockopt::<libc::c_uint>(self.as_raw(), IPPROTO_IPV6, libc::IPV6_BOUND_IF)?
+         };
+ 
+-        #[cfg(any(target_os = "linux", target_os = "android",))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android",))]
+         let index = unsafe {
+             getsockopt::<libc::c_uint>(self.as_raw(), libc::SOL_SOCKET, libc::SO_BINDTOIFINDEX)?
+         };
+@@ -2184,7 +2184,7 @@
+     /// For more information about this option, see [`set_cpu_affinity`].
+     ///
+     /// [`set_cpu_affinity`]: crate::Socket::set_cpu_affinity
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn cpu_affinity(&self) -> io::Result<usize> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), libc::SOL_SOCKET, libc::SO_INCOMING_CPU)
+@@ -2195,7 +2195,7 @@
+     /// Set value for the `SO_INCOMING_CPU` option on this socket.
+     ///
+     /// Sets the CPU affinity of the socket.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_cpu_affinity(&self, cpu: usize) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2291,7 +2291,7 @@
+     /// [`set_freebind_v4`]: crate::Socket::set_freebind_v4
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn freebind_v4(&self) -> io::Result<bool> {
+         unsafe {
+@@ -2309,7 +2309,7 @@
+     /// to bind to it.
+     #[cfg(all(
+         feature = "all",
+-        any(target_os = "android", target_os = "fuchsia", target_os = "linux")
++        any(target_os = "android", target_os = "fuchsia", any(target_os = "linux", target_os = "veda"))
+     ))]
+     pub fn set_freebind_v4(&self, freebind: bool) -> io::Result<()> {
+         unsafe {
+@@ -2329,7 +2329,7 @@
+     /// [`set_freebind_v4`].
+     ///
+     /// [`set_freebind_v4`]: crate::Socket::set_freebind_v4
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub fn freebind_v6(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt::<c_int>(self.as_raw(), libc::SOL_IPV6, libc::IPV6_FREEBIND)
+@@ -2367,7 +2367,7 @@
+     /// #     enable_freebind(&socket)
+     /// # }
+     /// ```
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     pub fn set_freebind_v6(&self, freebind: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2406,7 +2406,7 @@
+             target_os = "freebsd",
+             target_os = "ios",
+             target_os = "visionos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "tvos",
+             target_os = "watchos",
+@@ -2458,7 +2458,7 @@
+         .map(|_| length as usize)
+     }
+ 
+-    #[cfg(all(feature = "all", any(target_os = "android", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "android", any(target_os = "linux", target_os = "veda"))))]
+     fn _sendfile(
+         &self,
+         file: RawFd,
+@@ -2545,7 +2545,7 @@
+         any(
+             target_os = "android",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "cygwin",
+         )
+     ))]
+@@ -2573,7 +2573,7 @@
+         any(
+             target_os = "android",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "cygwin",
+         )
+     ))]
+@@ -2596,7 +2596,7 @@
+     /// and allow or disallow certain types of data to come through the socket.
+     ///
+     /// For more information about this option, see [filter](https://www.kernel.org/doc/html/v5.12/networking/filter.html)
+-    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++    #[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub fn attach_filter(&self, filters: &[SockFilter]) -> io::Result<()> {
+         let prog = libc::sock_fprog {
+             len: filters.len() as u16,
+@@ -2619,7 +2619,7 @@
+     /// For more information about this option, see [`attach_filter`]
+     ///
+     /// [`attach_filter`]: crate::Socket::attach_filter
+-    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++    #[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+     pub fn detach_filter(&self) -> io::Result<()> {
+         unsafe { setsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_DETACH_FILTER, 0) }
+     }
+@@ -2630,7 +2630,7 @@
+     /// Therefore, there is no corresponding `set` helper.
+     ///
+     /// For more information about this option, see [Linux patch](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5daab9db7b65df87da26fd8cfa695fb9546a1ddb)
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn cookie(&self) -> io::Result<u64> {
+         unsafe { getsockopt::<libc::c_ulonglong>(self.as_raw(), libc::SOL_SOCKET, libc::SO_COOKIE) }
+     }
+@@ -2647,7 +2647,7 @@
+             target_os = "dragonfly",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd",
+@@ -2673,7 +2673,7 @@
+             target_os = "dragonfly",
+             target_os = "freebsd",
+             target_os = "fuchsia",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd",
+@@ -2697,7 +2697,7 @@
+     /// For more information about this option, see [`set_tcp_congestion`].
+     ///
+     /// [`set_tcp_congestion`]: crate::Socket::set_tcp_congestion
+-    #[cfg(all(feature = "all", any(target_os = "freebsd", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "freebsd", any(target_os = "linux", target_os = "veda"))))]
+     pub fn tcp_congestion(&self) -> io::Result<Vec<u8>> {
+         let mut payload: [u8; TCP_CA_NAME_MAX] = [0; TCP_CA_NAME_MAX];
+         let mut len = payload.len() as libc::socklen_t;
+@@ -2717,7 +2717,7 @@
+     ///
+     /// The value must be a valid TCP congestion control algorithm name of the
+     /// platform. For example, Linux may supports "reno", "cubic".
+-    #[cfg(all(feature = "all", any(target_os = "freebsd", target_os = "linux")))]
++    #[cfg(all(feature = "all", any(target_os = "freebsd", any(target_os = "linux", target_os = "veda"))))]
+     pub fn set_tcp_congestion(&self, tcp_ca_name: &[u8]) -> io::Result<()> {
+         syscall!(setsockopt(
+             self.as_raw(),
+@@ -2739,7 +2739,7 @@
+     ///
+     /// [`connect`]: crate::Socket::connect
+     /// [`bind`]: crate::Socket::bind
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_dccp_service(&self, code: u32) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2756,7 +2756,7 @@
+     /// For more information about this option see [`set_dccp_service`]
+     ///
+     /// [`set_dccp_service`]: crate::Socket::set_dccp_service
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_service(&self) -> io::Result<u32> {
+         unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_SERVICE) }
+     }
+@@ -2764,7 +2764,7 @@
+     /// Set value for the `DCCP_SOCKOPT_CCID` option on this socket.
+     ///
+     /// This option sets both the TX and RX CCIDs at the same time.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_dccp_ccid(&self, ccid: u8) -> io::Result<()> {
+         unsafe { setsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_CCID, ccid) }
+     }
+@@ -2774,7 +2774,7 @@
+     /// For more information about this option see [`set_dccp_ccid`].
+     ///
+     /// [`set_dccp_ccid`]: crate::Socket::set_dccp_ccid
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_tx_ccid(&self) -> io::Result<u32> {
+         unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_TX_CCID) }
+     }
+@@ -2784,7 +2784,7 @@
+     /// For more information about this option see [`set_dccp_ccid`].
+     ///
+     /// [`set_dccp_ccid`]: crate::Socket::set_dccp_ccid
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_xx_ccid(&self) -> io::Result<u32> {
+         unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_RX_CCID) }
+     }
+@@ -2793,7 +2793,7 @@
+     ///
+     /// Enables a listening socket to hold timewait state when closing the
+     /// connection. This option must be set after `accept` returns.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_dccp_server_timewait(&self, hold_timewait: bool) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2810,7 +2810,7 @@
+     /// For more information see [`set_dccp_server_timewait`]
+     ///
+     /// [`set_dccp_server_timewait`]: crate::Socket::set_dccp_server_timewait
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_server_timewait(&self) -> io::Result<bool> {
+         unsafe {
+             getsockopt(
+@@ -2828,7 +2828,7 @@
+     /// the entire packet and that only fully covered application data is
+     /// accepted by the receiver. Hence, when using this feature on the sender,
+     /// it must be enabled at the receiver too, with suitable choice of CsCov.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_dccp_send_cscov(&self, level: u32) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2845,7 +2845,7 @@
+     /// For more information on this option see [`set_dccp_send_cscov`].
+     ///
+     /// [`set_dccp_send_cscov`]: crate::Socket::set_dccp_send_cscov
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_send_cscov(&self) -> io::Result<u32> {
+         unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_SEND_CSCOV) }
+     }
+@@ -2855,7 +2855,7 @@
+     /// This option is only useful when combined with [`set_dccp_send_cscov`].
+     ///
+     /// [`set_dccp_send_cscov`]: crate::Socket::set_dccp_send_cscov
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_dccp_recv_cscov(&self, level: u32) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2872,7 +2872,7 @@
+     /// For more information on this option see [`set_dccp_recv_cscov`].
+     ///
+     /// [`set_dccp_recv_cscov`]: crate::Socket::set_dccp_recv_cscov
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_recv_cscov(&self) -> io::Result<u32> {
+         unsafe { getsockopt(self.as_raw(), libc::SOL_DCCP, libc::DCCP_SOCKOPT_RECV_CSCOV) }
+     }
+@@ -2881,7 +2881,7 @@
+     ///
+     /// This option sets the maximum length of the output queue. A zero value is
+     /// interpreted as unbounded queue length.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_dccp_qpolicy_txqlen(&self, length: u32) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2898,7 +2898,7 @@
+     /// For more information on this option see [`set_dccp_qpolicy_txqlen`].
+     ///
+     /// [`set_dccp_qpolicy_txqlen`]: crate::Socket::set_dccp_qpolicy_txqlen
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_qpolicy_txqlen(&self) -> io::Result<u32> {
+         unsafe {
+             getsockopt(
+@@ -2918,7 +2918,7 @@
+     /// of writing.
+     ///
+     /// [documentation]: https://www.kernel.org/doc/html/latest/networking/dccp.html
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_available_ccids<const N: usize>(&self) -> io::Result<CcidEndpoints<N>> {
+         let mut endpoints = [0; N];
+         let mut length = endpoints.len() as libc::socklen_t;
+@@ -2936,7 +2936,7 @@
+     ///
+     /// This option retrieves the current maximum packet size (application
+     /// payload size) in bytes.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn dccp_cur_mps(&self) -> io::Result<u32> {
+         unsafe {
+             getsockopt(
+@@ -2950,7 +2950,7 @@
+     /// Get the value for the `SO_BUSY_POLL` option on this socket.
+     ///
+     /// On Linux this function requires the `CAP_NET_ADMIN` capability.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn busy_poll(&self) -> io::Result<u32> {
+         unsafe { getsockopt(self.as_raw(), libc::SOL_SOCKET, libc::SO_BUSY_POLL) }
+     }
+@@ -2958,7 +2958,7 @@
+     /// Set the value for the `SO_BUSY_POLL` option on this socket.
+     ///
+     /// On Linux this function requires the `CAP_NET_ADMIN` capability.
+-    #[cfg(all(feature = "all", target_os = "linux"))]
++    #[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+     pub fn set_busy_poll(&self, busy_poll: u32) -> io::Result<()> {
+         unsafe {
+             setsockopt(
+@@ -2976,7 +2976,7 @@
+ /// See [`Socket::attach_filter`].
+ ///
+ /// [`Socket::attach_filter`]: crate::Socket::attach_filter
+-#[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++#[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+ #[repr(transparent)]
+ pub struct SockFilter {
+     // This field is only read indirectly by transmutes / pointer casts, so
+@@ -2985,7 +2985,7 @@
+     filter: libc::sock_filter,
+ }
+ 
+-#[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++#[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+ impl SockFilter {
+     /// Create new `SockFilter`.
+     pub const fn new(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
+@@ -2995,7 +2995,7 @@
+     }
+ }
+ 
+-#[cfg(all(feature = "all", any(target_os = "linux", target_os = "android")))]
++#[cfg(all(feature = "all", any(any(target_os = "linux", target_os = "veda"), target_os = "android")))]
+ impl std::fmt::Debug for SockFilter {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         f.debug_struct("SockFilter").finish_non_exhaustive()
+@@ -3005,14 +3005,14 @@
+ /// See [`Socket::dccp_available_ccids`].
+ ///
+ /// [`Socket::dccp_available_ccids`]: crate::Socket::dccp_available_ccids
+-#[cfg(all(feature = "all", target_os = "linux"))]
++#[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+ #[derive(Debug)]
+ pub struct CcidEndpoints<const N: usize> {
+     endpoints: [u8; N],
+     length: u32,
+ }
+ 
+-#[cfg(all(feature = "all", target_os = "linux"))]
++#[cfg(all(feature = "all", any(target_os = "linux", target_os = "veda")))]
+ impl<const N: usize> std::ops::Deref for CcidEndpoints<N> {
+     type Target = [u8];
+ 

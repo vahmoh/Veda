@@ -7,26 +7,40 @@
  * exits with the number of failed checks (0: all passed). `systest` runs it
  * inside Veda in a scratch directory, with its standard output on a pipe.
  *
- * `posix child MODE` is the program run by the spawning checks. */
+ * `posix child MODE` is the program run by the spawning checks; `posix host
+ * ADDRESS TCP-PORT UDP-PORT` runs the checks with the host machine's
+ * servers too (see check_network). */
 
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -490,8 +504,1053 @@ static void check_veda_interfaces(void)
 	}
 }
 
-static int child(const char *mode)
+/* An IPv4 socket address. */
+static struct sockaddr_in ipv4(in_addr_t addr, int port)
 {
+	return (struct sockaddr_in){ .sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = addr };
+}
+
+/* TCP and UDP on the loopback interface, names, and, when systest names
+ * them, the host machine's servers: a web server that answers GET /hello
+ * with "hello from the host", and a UDP echo. */
+static void check_network(const char *host, int tcp_port, int udp_port)
+{
+	int one = 1;
+	char buf[256] = { 0 };
+	struct sockaddr_in addr = ipv4(htonl(INADDR_LOOPBACK), 0);
+	socklen_t len = sizeof addr;
+	int server = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("socket", server >= 0 && setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one) == 0,
+	      "socket %d", server);
+	CHECK("bind and listen",
+	      bind(server, (struct sockaddr *)&addr, sizeof addr) == 0 && listen(server, 4) == 0 &&
+		      getsockname(server, (struct sockaddr *)&addr, &len) == 0 && addr.sin_port != 0,
+	      "port %d", ntohs(addr.sin_port));
+	/* A connection made without waiting: in progress, then writable. */
+	int client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	int r = connect(client, (struct sockaddr *)&addr, sizeof addr);
+	CHECK("connect without waiting", r == 0 || errno == EINPROGRESS, "connect returned %d", r);
+	struct pollfd pfd = { .fd = client, .events = POLLOUT };
+	int err = -1;
+	socklen_t errlen = sizeof err;
+	CHECK("poll for the connection",
+	      poll(&pfd, 1, 5000) == 1 && (pfd.revents & POLLOUT) &&
+		      getsockopt(client, SOL_SOCKET, SO_ERROR, &err, &errlen) == 0 && err == 0,
+	      "revents %#x, error %d", pfd.revents, err);
+	struct sockaddr_in peer, mine;
+	socklen_t peerlen = sizeof peer, minelen = sizeof mine;
+	int conn = accept4(server, (struct sockaddr *)&peer, &peerlen, SOCK_CLOEXEC);
+	CHECK("accept", conn >= 0 && getsockname(client, (struct sockaddr *)&mine, &minelen) == 0 &&
+	      peer.sin_port == mine.sin_port && peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK),
+	      "connection %d from port %d", conn, ntohs(peer.sin_port));
+	CHECK("TCP_NODELAY", setsockopt(conn, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one) == 0, "refused");
+	/* Both ways, through poll and the message calls. */
+	const char hello[] = "hello, network";
+	CHECK("send", send(client, hello, sizeof hello, MSG_NOSIGNAL) == sizeof hello, "short send");
+	pfd = (struct pollfd){ .fd = conn, .events = POLLIN };
+	int pending = 0;
+	CHECK("poll for data", poll(&pfd, 1, 5000) == 1 && (pfd.revents & POLLIN) &&
+	      ioctl(conn, FIONREAD, &pending) == 0 && pending == sizeof hello, "revents %#x, %d bytes",
+	      pfd.revents, pending);
+	CHECK("recv", recv(conn, buf, sizeof buf, 0) == sizeof hello && !strcmp(buf, hello), "got '%s'", buf);
+	struct iovec iov[2] = { { "back", 4 }, { " again", 6 } };
+	struct msghdr mh = { .msg_iov = iov, .msg_iovlen = 2 };
+	CHECK("sendmsg", sendmsg(conn, &mh, 0) == 10, "short sendmsg");
+	pfd = (struct pollfd){ .fd = client, .events = POLLIN };
+	memset(buf, 0, sizeof buf);
+	CHECK("read", poll(&pfd, 1, 5000) == 1 && read(client, buf, sizeof buf) == 10 && !strcmp(buf, "back again"),
+	      "got '%s'", buf);
+	CHECK("nothing more without waiting", recv(client, buf, sizeof buf, MSG_DONTWAIT) < 0 && errno == EAGAIN,
+	      "a read did not fail");
+	/* The end of the stream. */
+	CHECK("shutdown", shutdown(client, SHUT_WR) == 0, "failed");
+	CHECK("end of stream", recv(conn, buf, sizeof buf, 0) == 0, "no end");
+	close(conn);
+	close(client);
+	/* A port nobody listens on refuses. */
+	close(server);
+	int refused = socket(AF_INET, SOCK_STREAM, 0);
+	CHECK("connection refused", connect(refused, (struct sockaddr *)&addr, sizeof addr) < 0 && errno == ECONNREFUSED,
+	      "connected");
+	close(refused);
+
+	/* Datagrams. */
+	int u1 = socket(AF_INET, SOCK_DGRAM, 0), u2 = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	struct sockaddr_in a1 = ipv4(htonl(INADDR_LOOPBACK), 0), a2 = a1, from;
+	socklen_t l1 = sizeof a1, l2 = sizeof a2, fromlen = sizeof from;
+	CHECK("bind datagram sockets",
+	      bind(u1, (struct sockaddr *)&a1, sizeof a1) == 0 && bind(u2, (struct sockaddr *)&a2, sizeof a2) == 0 &&
+		      getsockname(u1, (struct sockaddr *)&a1, &l1) == 0 && getsockname(u2, (struct sockaddr *)&a2, &l2) == 0,
+	      "ports %d %d", ntohs(a1.sin_port), ntohs(a2.sin_port));
+	CHECK("sendto", sendto(u1, "datagram", 8, 0, (struct sockaddr *)&a2, sizeof a2) == 8, "short sendto");
+	memset(buf, 0, sizeof buf);
+	r = recvfrom(u2, buf, sizeof buf, 0, (struct sockaddr *)&from, &fromlen);
+	CHECK("recvfrom", r == 8 && !strcmp(buf, "datagram") && from.sin_port == a1.sin_port &&
+	      fromlen == sizeof from, "got %d bytes '%s' from port %d", r, buf, ntohs(from.sin_port));
+	/* A datagram cut short says so. */
+	CHECK("sendto", sendto(u2, "a longer datagram", 17, 0, (struct sockaddr *)&a1, sizeof a1) == 17, "short");
+	char small[4];
+	struct iovec piece = { small, sizeof small };
+	struct msghdr m2 = { .msg_name = &from, .msg_namelen = sizeof from, .msg_iov = &piece, .msg_iovlen = 1 };
+	r = recvmsg(u1, &m2, 0);
+	CHECK("recvmsg of a longer datagram", r == 4 && (m2.msg_flags & MSG_TRUNC) && !memcmp(small, "a lo", 4) &&
+	      from.sin_port == a2.sin_port, "got %d, flags %#x", r, m2.msg_flags);
+	close(u1);
+	close(u2);
+
+	/* Names. */
+	struct addrinfo hints = { .ai_socktype = SOCK_STREAM }, *res = 0;
+	int gai = getaddrinfo("localhost", "80", &hints, &res);
+	struct sockaddr_in *first = res ? (struct sockaddr_in *)res->ai_addr : 0;
+	CHECK("getaddrinfo", gai == 0 && first && res->ai_family == AF_INET &&
+	      first->sin_addr.s_addr == htonl(INADDR_LOOPBACK) && ntohs(first->sin_port) == 80, "%s", gai_strerror(gai));
+	if (res)
+		freeaddrinfo(res);
+	res = 0;
+	gai = getaddrinfo("no such host", 0, &hints, &res);
+	CHECK("getaddrinfo of no name", gai == EAI_NONAME, "%s", gai_strerror(gai));
+	if (res)
+		freeaddrinfo(res);
+	char name[64];
+	struct sockaddr_in lo = ipv4(htonl(INADDR_LOOPBACK), 0);
+	CHECK("getnameinfo", getnameinfo((struct sockaddr *)&lo, sizeof lo, name, sizeof name, 0, 0, NI_NUMERICHOST) == 0 &&
+	      !strcmp(name, "127.0.0.1"), "got '%s'", name);
+
+	/* The host machine's servers. */
+	if (!host) {
+		printf("# the host: no servers were named\n");
+		return;
+	}
+	struct sockaddr_in web = ipv4(inet_addr(host), tcp_port), echo = ipv4(inet_addr(host), udp_port);
+	/* The network comes up after the system starts (its card is the
+	   driver VM's): until it does, a connection fails at once. */
+	int s = -1;
+	for (int i = 0; i < 240; i++) {
+		s = socket(AF_INET, SOCK_STREAM, 0);
+		if (connect(s, (struct sockaddr *)&web, sizeof web) == 0)
+			break;
+		int down = errno == ENETDOWN || errno == ENETUNREACH || errno == EHOSTUNREACH;
+		close(s);
+		s = -1;
+		if (!down)
+			break;
+		usleep(250000);
+	}
+	CHECK("connect to the host", s >= 0, "%s:%d", host, tcp_port);
+	if (s < 0)
+		return;
+	char request[128];
+	int n = snprintf(request, sizeof request, "GET /hello HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host);
+	CHECK("request to the host", write(s, request, n) == n, "short write");
+	char response[1024] = { 0 };
+	size_t got = 0;
+	ssize_t k;
+	while (got + 1 < sizeof response && (k = read(s, response + got, sizeof response - 1 - got)) > 0)
+		got += k;
+	CHECK("the host's answer", !strncmp(response, "HTTP/1.1 200 OK", 15) && strstr(response, "\r\n\r\nhello from the host\n"),
+	      "got '%s'", response);
+	close(s);
+	int u = socket(AF_INET, SOCK_DGRAM, 0);
+	struct timeval tv = { .tv_sec = 2 };
+	setsockopt(u, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+	r = -1;
+	/* A datagram may be lost: a few tries. */
+	for (int i = 0; i < 5 && r < 0; i++) {
+		sendto(u, "echo from C", 11, 0, (struct sockaddr *)&echo, sizeof echo);
+		fromlen = sizeof from;
+		r = recvfrom(u, buf, sizeof buf, 0, (struct sockaddr *)&from, &fromlen);
+	}
+	CHECK("the host's echo", r == 11 && !memcmp(buf, "echo from C", 11) && from.sin_addr.s_addr == echo.sin_addr.s_addr &&
+	      from.sin_port == echo.sin_port, "got %d bytes", r);
+	close(u);
+}
+
+/* Writes to an eventfd after a moment, from another thread. */
+static void *write_later(void *arg)
+{
+	usleep(50000);
+	uint64_t one = 1;
+	if (write(*(int *)arg, &one, 8) != 8)
+		return (void *)1;
+	return 0;
+}
+
+/* Waits up to a second for one event of `ep`: its data, or -1. */
+static long long one_event(int ep, uint32_t *events)
+{
+	struct epoll_event out[4];
+	if (epoll_wait(ep, out, 4, 1000) != 1)
+		return -1;
+	*events = out[0].events;
+	return (long long)out[0].data.u64;
+}
+
+/* eventfd and epoll: an eventfd's counts and its semaphore mode, level- and
+ * edge-triggered and one-shot registrations of pipes, socket pairs, TCP
+ * sockets and eventfds, changing and removing them, a wait woken by
+ * another thread, time-outs. */
+static void check_epoll(void)
+{
+	uint64_t v = 0;
+	int e = eventfd(3, EFD_CLOEXEC | EFD_NONBLOCK);
+	CHECK("eventfd", e >= 0 && read(e, &v, 8) == 8 && v == 3 && read(e, &v, 8) < 0 && errno == EAGAIN,
+	      "read %llu", (unsigned long long)v);
+	v = 2;
+	int added = write(e, &v, 8) == 8 && write(e, &v, 8) == 8 && read(e, &v, 8) == 8 && v == 4;
+	CHECK("eventfd adds", added, "read %llu", (unsigned long long)v);
+	CHECK("eventfd's short read", read(e, &v, 4) < 0 && errno == EINVAL, "a 4-byte read worked");
+	int sem = eventfd(2, EFD_SEMAPHORE | EFD_NONBLOCK);
+	int semaphore = read(sem, &v, 8) == 8 && v == 1 && read(sem, &v, 8) == 8 && v == 1 &&
+			read(sem, &v, 8) < 0 && errno == EAGAIN;
+	CHECK("eventfd as a semaphore", semaphore, "read %llu", (unsigned long long)v);
+	close(sem);
+	struct pollfd pfd = { .fd = e, .events = POLLIN | POLLOUT };
+	CHECK("poll of an eventfd", poll(&pfd, 1, 0) == 1 && pfd.revents == POLLOUT, "revents %#x", pfd.revents);
+
+	int ep = epoll_create1(EPOLL_CLOEXEC);
+	int p[2];
+	CHECK("epoll_create1", ep >= 0 && pipe2(p, O_NONBLOCK) == 0 && fcntl(ep, F_GETFD) == FD_CLOEXEC, "failed");
+	struct epoll_event ev = { .events = EPOLLIN, .data.u64 = 7 }, out[4];
+	CHECK("epoll_ctl", epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) == 0, "failed");
+	CHECK("adding twice", epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) < 0 && errno == EEXIST, "added again");
+	struct timespec t0, t1;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	int n = epoll_wait(ep, out, 4, 50);
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+	CHECK("epoll_wait's time-out", n == 0 && ms >= 45 && ms < 2000, "%d events after %ld ms", n, ms);
+	char buf[16];
+	uint32_t events = 0;
+	/* Level-triggered: reported while readable. */
+	CHECK("a write", write(p[1], "x", 1) == 1, "failed");
+	int level = one_event(ep, &events) == 7 && (events & EPOLLIN) && one_event(ep, &events) == 7;
+	CHECK("level-triggered", level, "events %#x", events);
+	CHECK("read, not ready", read(p[0], buf, sizeof buf) == 1 && epoll_wait(ep, out, 4, 0) == 0, "still ready");
+	/* Edge-triggered: once, until it is ready anew. */
+	ev = (struct epoll_event){ .events = EPOLLIN | EPOLLET, .data.u64 = 8 };
+	CHECK("EPOLL_CTL_MOD", epoll_ctl(ep, EPOLL_CTL_MOD, p[0], &ev) == 0, "failed");
+	CHECK("a write", write(p[1], "ab", 2) == 2, "failed");
+	int edge = one_event(ep, &events) == 8 && epoll_wait(ep, out, 4, 0) == 0;
+	CHECK("edge-triggered", edge, "events %#x", events);
+	CHECK("drained", read(p[0], buf, sizeof buf) == 2 && read(p[0], buf, sizeof buf) < 0 && errno == EAGAIN, "?");
+	CHECK("a write", write(p[1], "c", 1) == 1, "failed");
+	CHECK("edge-triggered, anew", one_event(ep, &events) == 8, "no event");
+	/* The end of a pipe's input. */
+	close(p[1]);
+	CHECK("hang-up", one_event(ep, &events) == 8 && (events & EPOLLHUP), "events %#x", events);
+	int deleted = epoll_ctl(ep, EPOLL_CTL_DEL, p[0], 0) == 0 && epoll_ctl(ep, EPOLL_CTL_DEL, p[0], 0) < 0 &&
+		      errno == ENOENT;
+	CHECK("EPOLL_CTL_DEL", deleted, "failed");
+	close(p[0]);
+
+	/* Each write to an eventfd is an event, read or not: what async
+	   runtimes' wakers count on. */
+	ev = (struct epoll_event){ .events = EPOLLIN | EPOLLET, .data.u64 = 9 };
+	v = 1;
+	int edges = epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) == 0 && epoll_wait(ep, out, 4, 0) == 0 &&
+		    write(e, &v, 8) == 8 && one_event(ep, &events) == 9 && epoll_wait(ep, out, 4, 0) == 0 &&
+		    write(e, &v, 8) == 8 && one_event(ep, &events) == 9;
+	CHECK("an eventfd's writes", edges, "events %#x", events);
+	pthread_t writer;
+	CHECK("a wait woken by another thread",
+	      pthread_create(&writer, 0, write_later, &e) == 0 && one_event(ep, &events) == 9 &&
+		      pthread_join(writer, 0) == 0,
+	      "no event");
+	epoll_ctl(ep, EPOLL_CTL_DEL, e, 0);
+
+	/* One-shot: once, until changed. */
+	int s[2];
+	ev = (struct epoll_event){ .events = EPOLLIN | EPOLLONESHOT, .data.u64 = 10 };
+	int once = socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0 && epoll_ctl(ep, EPOLL_CTL_ADD, s[0], &ev) == 0 &&
+		   write(s[1], "x", 1) == 1 && one_event(ep, &events) == 10 && epoll_wait(ep, out, 4, 0) == 0 &&
+		   epoll_ctl(ep, EPOLL_CTL_MOD, s[0], &ev) == 0 && one_event(ep, &events) == 10;
+	CHECK("one-shot", once, "events %#x", events);
+	close(s[0]);
+	close(s[1]);
+
+	/* A TCP connection: the listener readable with it, the client
+	   writable once it is made, then readable with what comes. */
+	int server = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	struct sockaddr_in addr = ipv4(htonl(INADDR_LOOPBACK), 0);
+	socklen_t len = sizeof addr;
+	int listening = server >= 0 && bind(server, (struct sockaddr *)&addr, sizeof addr) == 0 &&
+			listen(server, 4) == 0 && getsockname(server, (struct sockaddr *)&addr, &len) == 0;
+	ev = (struct epoll_event){ .events = EPOLLIN | EPOLLET, .data.u64 = 11 };
+	CHECK("a listener", listening && epoll_ctl(ep, EPOLL_CTL_ADD, server, &ev) == 0, "failed");
+	int client = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	int r = connect(client, (struct sockaddr *)&addr, sizeof addr);
+	ev = (struct epoll_event){ .events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET, .data.u64 = 12 };
+	CHECK("connecting", (r == 0 || errno == EINPROGRESS) && epoll_ctl(ep, EPOLL_CTL_ADD, client, &ev) == 0,
+	      "failed");
+	/* Both events come, in either order. */
+	int listener_ready = 0, client_writable = 0;
+	for (int i = 0; i < 4 && !(listener_ready && client_writable); i++) {
+		n = epoll_wait(ep, out, 4, 1000);
+		for (int j = 0; j < n; j++) {
+			listener_ready |= out[j].data.u64 == 11 && (out[j].events & EPOLLIN);
+			client_writable |= out[j].data.u64 == 12 && (out[j].events & EPOLLOUT);
+		}
+	}
+	CHECK("a connection's events", listener_ready && client_writable, "listener %d, client %d", listener_ready,
+	      client_writable);
+	int conn = accept4(server, 0, 0, SOCK_NONBLOCK);
+	CHECK("accept4", conn >= 0 && accept4(server, 0, 0, SOCK_NONBLOCK) < 0 && errno == EAGAIN, "failed");
+	CHECK("send", send(conn, "hello", 5, MSG_NOSIGNAL) == 5, "failed");
+	int readable = one_event(ep, &events) == 12 && (events & EPOLLIN) && recv(client, buf, sizeof buf, 0) == 5;
+	CHECK("readable with what came", readable, "events %#x", events);
+	close(conn);
+	/* Edge-triggered events may come that say nothing new (as on Linux):
+	   the peer's end is among the next few. */
+	int ended = 0;
+	for (int i = 0; i < 4 && !ended; i++)
+		ended = one_event(ep, &events) == 12 && (events & EPOLLRDHUP);
+	CHECK("the peer's end", ended && recv(client, buf, sizeof buf, 0) == 0, "events %#x", events);
+	close(client);
+	close(server);
+
+	/* What is always ready cannot be added, as on Linux. */
+	int file = open("notes.txt", O_RDONLY);
+	ev = (struct epoll_event){ .events = EPOLLIN };
+	CHECK("files cannot be added", file >= 0 && epoll_ctl(ep, EPOLL_CTL_ADD, file, &ev) < 0 && errno == EPERM,
+	      "added");
+	close(file);
+	close(e);
+	close(ep);
+}
+
+/* A Unix domain socket's address for `path`, and its length. */
+static socklen_t unix_addr(struct sockaddr_un *a, const char *path)
+{
+	memset(a, 0, sizeof *a);
+	a->sun_family = AF_UNIX;
+	snprintf(a->sun_path, sizeof a->sun_path, "%s", path);
+	return offsetof(struct sockaddr_un, sun_path) + strlen(path) + 1;
+}
+
+/* Sends the byte `what` over `s` with the `n` descriptors at `fds`. */
+static int send_fds(int s, char what, const int *fds, int n)
+{
+	struct iovec iov = { &what, 1 };
+	union {
+		struct cmsghdr h;
+		char buf[CMSG_SPACE(sizeof(int) * 4)];
+	} u;
+	struct msghdr m = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = u.buf,
+			    .msg_controllen = CMSG_SPACE(sizeof(int) * n) };
+	struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+	c->cmsg_level = SOL_SOCKET;
+	c->cmsg_type = SCM_RIGHTS;
+	c->cmsg_len = CMSG_LEN(sizeof(int) * n);
+	memcpy(CMSG_DATA(c), fds, sizeof(int) * n);
+	return sendmsg(s, &m, 0) == 1 ? 0 : -1;
+}
+
+/* Receives up to `len` bytes from `s` into `buf`, and the descriptors that
+   come with them into `fds`, with room for `room` of them: how many bytes
+   came (-1 on failure); `*got` how many descriptors, `*flags` the
+   message's flags. */
+static ssize_t recv_fds(int s, char *buf, size_t len, int *fds, int room, int *got, int *flags)
+{
+	struct iovec iov = { buf, len };
+	union {
+		struct cmsghdr h;
+		char buf[CMSG_SPACE(sizeof(int) * 8)];
+	} u;
+	struct msghdr m = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = u.buf,
+			    .msg_controllen = room ? CMSG_SPACE(sizeof(int) * room) : 0 };
+	ssize_t n = recvmsg(s, &m, MSG_CMSG_CLOEXEC);
+	*got = 0;
+	*flags = m.msg_flags;
+	if (n < 0)
+		return n;
+	for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
+		if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS)
+			continue;
+		int k = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+		memcpy(fds + *got, CMSG_DATA(c), sizeof(int) * k);
+		*got += k;
+	}
+	return n;
+}
+
+/* Unix domain sockets: a listener named by a path, which stat shows as a
+ * socket; connections to it, peeking, credentials, the end of a stream;
+ * datagram sockets with names and without; seqpacket and datagram pairs;
+ * descriptors sent over them (SCM_RIGHTS), in this process and to a child,
+ * and who sent a message (SCM_CREDENTIALS). */
+static void check_unix_sockets(void)
+{
+	char path[64], dpath[64], buf[256];
+	snprintf(path, sizeof path, "/tmp/posix-%d.sock", (int)getpid());
+	snprintf(dpath, sizeof dpath, "/tmp/posix-%d.dgram", (int)getpid());
+	unlink(path);
+	unlink(dpath);
+	struct sockaddr_un a, b;
+	socklen_t alen = unix_addr(&a, path), len;
+	int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	struct stat st;
+	int bound = listener >= 0 && bind(listener, (struct sockaddr *)&a, alen) == 0 && stat(path, &st) == 0;
+	CHECK("a socket bound to a path", bound && S_ISSOCK(st.st_mode), "mode %o", bound ? st.st_mode : 0);
+	int other = socket(AF_UNIX, SOCK_STREAM, 0);
+	CHECK("binding a name taken", bind(other, (struct sockaddr *)&a, alen) < 0 && errno == EADDRINUSE, "bound");
+	CHECK("opening a socket", open(path, O_RDONLY) < 0 && errno == ENXIO, "opened");
+	DIR *dir = opendir("/tmp");
+	int typed = 0;
+	for (struct dirent *e; dir && (e = readdir(dir));)
+		typed |= !strcmp(e->d_name, path + strlen("/tmp/")) && e->d_type == DT_SOCK;
+	if (dir)
+		closedir(dir);
+	CHECK("a socket in a listing", typed, "no DT_SOCK entry");
+	len = sizeof b;
+	int named = getsockname(listener, (struct sockaddr *)&b, &len) == 0 && len == alen && !strcmp(b.sun_path, path);
+	CHECK("getsockname", named, "length %u, '%s'", len, b.sun_path);
+	CHECK("connecting to a socket not listening",
+	      connect(other, (struct sockaddr *)&a, alen) < 0 && errno == ECONNREFUSED, "connected");
+	close(other);
+	struct pollfd pfd = { .fd = listener, .events = POLLIN };
+	CHECK("listen", listen(listener, 8) == 0 && poll(&pfd, 1, 0) == 0, "a connection is waiting");
+	int ep = epoll_create1(EPOLL_CLOEXEC);
+	struct epoll_event ev = { .events = EPOLLIN | EPOLLET, .data.u64 = 21 }, out[2];
+	CHECK("a listener in epoll", epoll_ctl(ep, EPOLL_CTL_ADD, listener, &ev) == 0 && epoll_wait(ep, out, 2, 0) == 0,
+	      "failed");
+
+	int client = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	CHECK("connect", client >= 0 && connect(client, (struct sockaddr *)&a, alen) == 0, "failed");
+	CHECK("a listener with a connection", poll(&pfd, 1, 1000) == 1 && pfd.revents == POLLIN, "revents %#x",
+	      pfd.revents);
+	int n_ev = epoll_wait(ep, out, 2, 1000);
+	CHECK("its edge", n_ev == 1 && out[0].data.u64 == 21 && (out[0].events & EPOLLIN), "%d events", n_ev);
+	close(ep);
+	len = sizeof b;
+	int conn = accept4(listener, (struct sockaddr *)&b, &len, SOCK_CLOEXEC);
+	CHECK("accept4", conn >= 0 && len == sizeof(sa_family_t), "length %u", len);
+	len = sizeof b;
+	CHECK("getpeername", getpeername(client, (struct sockaddr *)&b, &len) == 0 && !strcmp(b.sun_path, path),
+	      "'%s'", b.sun_path);
+	struct ucred cred;
+	socklen_t clen = sizeof cred;
+	int credited = getsockopt(conn, SOL_SOCKET, SO_PEERCRED, &cred, &clen) == 0 && clen == sizeof cred &&
+		       cred.pid == getpid() && cred.uid == getuid() && cred.gid == getgid();
+	CHECK("SO_PEERCRED", credited, "pid %d, uid %u", (int)cred.pid, cred.uid);
+	int avail = 0;
+	int peeked = write(client, "hello", 5) == 5 && recv(conn, buf, sizeof buf, MSG_PEEK) == 5 &&
+		     ioctl(conn, FIONREAD, &avail) == 0 && avail == 5;
+	CHECK("MSG_PEEK", peeked && read(conn, buf, sizeof buf) == 5 && !memcmp(buf, "hello", 5), "avail %d", avail);
+	pfd = (struct pollfd){ .fd = conn, .events = POLLIN | POLLRDHUP };
+	int ended = shutdown(client, SHUT_WR) == 0 && poll(&pfd, 1, 1000) == 1 && (pfd.revents & POLLRDHUP) &&
+		    read(conn, buf, sizeof buf) == 0;
+	CHECK("the end of a stream", ended, "revents %#x", pfd.revents);
+	close(conn);
+	CHECK("writing to a closed peer",
+	      send(client, "x", 1, MSG_NOSIGNAL) < 0 && errno == EPIPE, "wrote");
+	close(client);
+	close(listener);
+	client = socket(AF_UNIX, SOCK_STREAM, 0);
+	CHECK("a closed listener refuses", connect(client, (struct sockaddr *)&a, alen) < 0 && errno == ECONNREFUSED,
+	      "connected");
+	CHECK("a name removed", unlink(path) == 0 && connect(client, (struct sockaddr *)&a, alen) < 0 &&
+	      errno == ENOENT, "connected");
+	close(client);
+
+	/* Datagrams, from a socket with a name and one without. */
+	int dg = socket(AF_UNIX, SOCK_DGRAM, 0), sender = socket(AF_UNIX, SOCK_DGRAM, 0);
+	socklen_t dlen = unix_addr(&b, dpath);
+	CHECK("a datagram socket", dg >= 0 && bind(dg, (struct sockaddr *)&b, dlen) == 0, "bind failed");
+	CHECK("sendto", sendto(sender, "unnamed", 7, 0, (struct sockaddr *)&b, dlen) == 7, "failed");
+	struct sockaddr_un from;
+	len = sizeof from;
+	ssize_t n = recvfrom(dg, buf, sizeof buf, 0, (struct sockaddr *)&from, &len);
+	CHECK("a datagram from nobody", n == 7 && len == 0, "%zd bytes, address of %u", n, len);
+	listener = socket(AF_UNIX, SOCK_STREAM, 0);
+	bind(listener, (struct sockaddr *)&a, alen);
+	listen(listener, 1);
+	CHECK("a datagram to a stream socket",
+	      sendto(sender, "x", 1, 0, (struct sockaddr *)&a, alen) < 0 && errno == EPROTOTYPE, "sent");
+	close(listener);
+	unlink(path);
+	int named_sender = socket(AF_UNIX, SOCK_DGRAM, 0);
+	bind(named_sender, (struct sockaddr *)&a, alen);
+	sendto(named_sender, "a long datagram", 15, 0, (struct sockaddr *)&b, dlen);
+	avail = 0;
+	len = sizeof from;
+	int sized = ioctl(dg, FIONREAD, &avail) == 0 && avail == 15;
+	n = recvfrom(dg, buf, 4, MSG_TRUNC, (struct sockaddr *)&from, &len);
+	CHECK("a datagram cut short", sized && n == 15 && !strcmp(from.sun_path, path), "%zd bytes from '%s', avail %d",
+	      n, from.sun_path, avail);
+	CHECK("connected datagrams", connect(named_sender, (struct sockaddr *)&b, dlen) == 0 &&
+	      send(named_sender, "again", 5, 0) == 5 && recv(dg, buf, sizeof buf, 0) == 5, "failed");
+	close(named_sender);
+	close(sender);
+	close(dg);
+	unlink(path);
+	unlink(dpath);
+
+	/* Pairs of the other types: messages keep their bounds. */
+	int sp[2];
+	struct iovec iov = { buf, 3 };
+	struct msghdr m = { .msg_iov = &iov, .msg_iovlen = 1 };
+	int packets = socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sp) == 0 && write(sp[0], "first", 5) == 5 &&
+		      write(sp[0], "second", 6) == 6 && recvmsg(sp[1], &m, 0) == 3 && (m.msg_flags & MSG_TRUNC) &&
+		      read(sp[1], buf, sizeof buf) == 6;
+	CHECK("seqpacket pairs", packets, "flags %#x", m.msg_flags);
+	CHECK("a seqpacket connection's end", shutdown(sp[0], SHUT_WR) == 0 && read(sp[1], buf, sizeof buf) == 0,
+	      "no end");
+	close(sp[0]);
+	close(sp[1]);
+	int dgrams = socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK, 0, sp) == 0 && write(sp[0], "a", 1) == 1 &&
+		     write(sp[0], "bc", 2) == 2 && read(sp[1], buf, sizeof buf) == 1 && read(sp[1], buf, sizeof buf) == 2 &&
+		     read(sp[1], buf, sizeof buf) < 0 && errno == EAGAIN;
+	CHECK("datagram pairs", dgrams, "failed");
+	close(sp[0]);
+	close(sp[1]);
+
+	/* Descriptors: a pipe's end sent over a stream, which the receiver
+	   writes into; two sent where there is room for one; two messages'
+	   descriptors not in one read. */
+	int p[2], fds[8], got = 0, flags = 0;
+	int sent = socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0 && pipe(p) == 0 && send_fds(sp[0], 'P', &p[1], 1) == 0;
+	n = recv_fds(sp[1], buf, sizeof buf, fds, 4, &got, &flags);
+	int passed = sent && n == 1 && buf[0] == 'P' && got == 1 && fds[0] != p[1] && fcntl(fds[0], F_GETFD) == FD_CLOEXEC &&
+		     write(fds[0], "through", 7) == 7 && read(p[0], buf, sizeof buf) == 7 && !memcmp(buf, "through", 7);
+	CHECK("SCM_RIGHTS", passed, "%zd bytes, %d descriptors", n, got);
+	if (got > 0)
+		close(fds[0]);
+	/* Room for one descriptor (CMSG_SPACE rounds it to a 64-bit word)
+	   holds two, as on Linux: the third is closed. */
+	int three[3] = { p[0], p[1], p[0] };
+	n = send_fds(sp[0], 'T', three, 3) == 0 ? recv_fds(sp[1], buf, sizeof buf, fds, 1, &got, &flags) : -1;
+	CHECK("descriptors that do not fit", n == 1 && got == 2 && (flags & MSG_CTRUNC), "%d descriptors, flags %#x",
+	      got, flags);
+	for (int i = 0; i < got; i++)
+		close(fds[i]);
+	int two = send_fds(sp[0], '1', &p[0], 1) == 0 && send_fds(sp[0], '2', &p[1], 1) == 0;
+	n = recv_fds(sp[1], buf, sizeof buf, fds, 4, &got, &flags);
+	int first = n == 1 && buf[0] == '1' && got == 1;
+	if (got > 0)
+		close(fds[0]);
+	n = recv_fds(sp[1], buf, sizeof buf, fds, 4, &got, &flags);
+	CHECK("a read takes one message's descriptors", two && first && n == 1 && buf[0] == '2' && got == 1,
+	      "second read: %zd bytes, %d descriptors", n, got);
+	if (got > 0)
+		close(fds[0]);
+	int one = 1;
+	setsockopt(sp[1], SOL_SOCKET, SO_PASSCRED, &one, sizeof one);
+	write(sp[0], "c", 1);
+	union {
+		struct cmsghdr h;
+		char buf[CMSG_SPACE(sizeof(struct ucred))];
+	} u;
+	iov = (struct iovec){ buf, sizeof buf };
+	m = (struct msghdr){ .msg_iov = &iov, .msg_iovlen = 1, .msg_control = u.buf, .msg_controllen = sizeof u.buf };
+	struct cmsghdr *c = recvmsg(sp[1], &m, 0) == 1 ? CMSG_FIRSTHDR(&m) : 0;
+	struct ucred *uc = c && c->cmsg_type == SCM_CREDENTIALS ? (struct ucred *)CMSG_DATA(c) : 0;
+	CHECK("SCM_CREDENTIALS", uc && uc->pid == getpid() && uc->uid == getuid(), "%s", c ? "other data" : "none");
+	close(sp[0]);
+	close(sp[1]);
+
+	/* Over datagrams, and to a child, which writes into the pipe end it
+	   receives. */
+	int dgram_fds = socketpair(AF_UNIX, SOCK_DGRAM, 0, sp) == 0 && send_fds(sp[0], 'D', &p[1], 1) == 0 &&
+			recv_fds(sp[1], buf, sizeof buf, fds, 4, &got, &flags) == 1 && got == 1;
+	CHECK("SCM_RIGHTS over datagrams", dgram_fds, "%d descriptors", got);
+	if (got > 0)
+		close(fds[0]);
+	close(sp[0]);
+	close(sp[1]);
+	socketpair(AF_UNIX, SOCK_STREAM, 0, sp);
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, sp[1], 3);
+	char *argv[] = { "posix", "child", "fds", 0 };
+	pid_t pid;
+	int r = posix_spawn(&pid, program, &fa, 0, argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	close(sp[1]);
+	int status = 0;
+	int to_child = r == 0 && send_fds(sp[0], 'C', &p[1], 1) == 0 && read(sp[0], buf, 1) == 1 &&
+		       waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	close(p[1]);
+	n = read(p[0], buf, sizeof buf);
+	CHECK("SCM_RIGHTS to a child", to_child && n == 14 && !memcmp(buf, "from the child", 14), "status %#x, %zd bytes",
+	      status, n);
+	close(p[0]);
+	close(sp[0]);
+}
+
+/* An abstract name's address (Linux's: a NUL, then the name's `n` bytes,
+   as many as the length says), and its length. */
+static socklen_t abstract_addr(struct sockaddr_un *a, const char *name, size_t n)
+{
+	memset(a, 0, sizeof *a);
+	a->sun_family = AF_UNIX;
+	memcpy(a->sun_path + 1, name, n);
+	return offsetof(struct sockaddr_un, sun_path) + 1 + n;
+}
+
+/* Linux's abstract names: a listener and connections by name, from this
+ * process and from a child; the name's length, NULs in names, a name taken
+ * while its socket is open and free again once it is closed, apart for
+ * each type; names chosen for a socket bound to the family alone, and for
+ * one that says who sends (SO_PASSCRED). */
+static void check_unix_abstract(void)
+{
+	char name[64], buf[64];
+	int n = snprintf(name, sizeof name, "posix-%d", (int)getpid());
+	struct sockaddr_un a, b, from;
+	socklen_t alen = abstract_addr(&a, name, n), len = sizeof b;
+	int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int bound = listener >= 0 && bind(listener, (struct sockaddr *)&a, alen) == 0 && listen(listener, 4) == 0 &&
+		    getsockname(listener, (struct sockaddr *)&b, &len) == 0;
+	CHECK("an abstract name", bound && len == alen && b.sun_path[0] == 0 && !memcmp(b.sun_path + 1, name, n),
+	      "length %u", len);
+	int other = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("an abstract name taken", bind(other, (struct sockaddr *)&a, alen) < 0 && errno == EADDRINUSE, "bound");
+	int dg = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	CHECK("names apart for each type", bind(dg, (struct sockaddr *)&a, alen) == 0, "failed");
+	close(dg);
+	/* One NUL more is another name. */
+	struct sockaddr_un longer;
+	char with_nul[64];
+	memcpy(with_nul, name, n);
+	with_nul[n] = 0;
+	socklen_t llen = abstract_addr(&longer, with_nul, n + 1);
+	CHECK("a NUL in a name", bind(other, (struct sockaddr *)&longer, llen) == 0, "taken");
+	CHECK("no file", access(name, F_OK) < 0, "a file is there");
+
+	int client = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	len = sizeof b;
+	int connected = connect(client, (struct sockaddr *)&a, alen) == 0 &&
+			getpeername(client, (struct sockaddr *)&b, &len) == 0 && len == alen && b.sun_path[0] == 0;
+	int conn = accept4(listener, 0, 0, SOCK_CLOEXEC);
+	int talked = conn >= 0 && write(client, "hi", 2) == 2 && read(conn, buf, sizeof buf) == 2;
+	CHECK("connecting to an abstract name", connected && talked, "length %u", len);
+	close(conn);
+	close(client);
+	char *argv[] = { "posix", "child", "abstract", name, 0 };
+	pid_t pid;
+	int status = 0;
+	int spawned = posix_spawn(&pid, program, 0, 0, argv, environ) == 0;
+	conn = spawned ? accept4(listener, 0, 0, SOCK_CLOEXEC) : -1;
+	ssize_t got = conn >= 0 ? read(conn, buf, sizeof buf) : -1;
+	int child_ok = spawned && waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	CHECK("an abstract name from a child", child_ok && got == 14 && !memcmp(buf, "from the child", 14),
+	      "status %#x, %zd bytes", status, got);
+	close(conn);
+	/* Free again once its socket is closed. */
+	close(listener);
+	client = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("a closed socket's name refuses",
+	      connect(client, (struct sockaddr *)&a, alen) < 0 && errno == ECONNREFUSED, "connected");
+	int again = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("and is free again", bind(again, (struct sockaddr *)&a, alen) == 0, "taken");
+	close(again);
+	close(client);
+	close(other);
+
+	/* Names chosen: a NUL and five hex digits, which datagrams say. */
+	struct sockaddr_un family = { .sun_family = AF_UNIX };
+	int x = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0), y = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	struct sockaddr_un xa;
+	socklen_t xlen = sizeof xa;
+	int chosen = bind(x, (struct sockaddr *)&family, sizeof(sa_family_t)) == 0 &&
+		     getsockname(x, (struct sockaddr *)&xa, &xlen) == 0 &&
+		     xlen == offsetof(struct sockaddr_un, sun_path) + 6 && xa.sun_path[0] == 0;
+	for (int i = 1; chosen && i < 6; i++)
+		chosen = xa.sun_path[i] && strchr("0123456789abcdef", xa.sun_path[i]);
+	CHECK("a name chosen", chosen, "length %u", xlen);
+	int y_named = bind(y, (struct sockaddr *)&family, sizeof(sa_family_t)) == 0;
+	struct sockaddr_un ya;
+	socklen_t ylen = sizeof ya;
+	getsockname(y, (struct sockaddr *)&ya, &ylen);
+	len = sizeof from;
+	int replied = y_named && sendto(x, "ping", 4, 0, (struct sockaddr *)&ya, ylen) == 4 &&
+		      recvfrom(y, buf, sizeof buf, 0, (struct sockaddr *)&from, &len) == 4 && len == xlen &&
+		      !memcmp(&from, &xa, xlen) && sendto(y, "pong", 4, 0, (struct sockaddr *)&from, len) == 4 &&
+		      recv(x, buf, sizeof buf, 0) == 4 && !memcmp(buf, "pong", 4);
+	CHECK("a reply to a name chosen", replied, "from length %u", len);
+	int one = 1, passer = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	len = sizeof from;
+	int passing = setsockopt(passer, SOL_SOCKET, SO_PASSCRED, &one, sizeof one) == 0 &&
+		      sendto(passer, "who", 3, 0, (struct sockaddr *)&xa, xlen) == 3 &&
+		      recvfrom(x, buf, sizeof buf, 0, (struct sockaddr *)&from, &len) == 3;
+	CHECK("SO_PASSCRED names its socket", passing && len == xlen && from.sun_path[0] == 0, "from length %u", len);
+	close(passer);
+	close(x);
+	close(y);
+}
+
+/* Starts this program as a child in `mode`, with `fd` as its descriptor 3;
+   its process id, or -1. */
+static pid_t spawn_with(int fd, const char *mode)
+{
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, fd, 3);
+	char *argv[] = { "posix", "child", (char *)mode, 0 };
+	pid_t pid;
+	int r = posix_spawn(&pid, program, &fa, 0, argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	return r == 0 ? pid : -1;
+}
+
+/* Starts this program as a child in `mode`, with `fd` as its standard
+   input and output (as inetd gives a connection); its process id, or -1. */
+static pid_t spawn_stdio(int fd, const char *mode)
+{
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_adddup2(&fa, fd, 0);
+	posix_spawn_file_actions_adddup2(&fa, fd, 1);
+	char *argv[] = { "posix", "child", (char *)mode, 0 };
+	pid_t pid;
+	int r = posix_spawn(&pid, program, &fa, 0, argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	return r == 0 ? pid : -1;
+}
+
+/* Reads `s` to its end into `buf` (room for `cap - 1` bytes, then a NUL):
+   how many bytes. */
+static ssize_t read_all(int s, char *buf, size_t cap)
+{
+	size_t got = 0;
+	ssize_t n;
+	while (got < cap - 1 && (n = read(s, buf + got, cap - 1 - got)) > 0)
+		got += n;
+	buf[got] = 0;
+	return got;
+}
+
+/* Whether child `pid` exited with status 0. */
+static int exited_well(pid_t pid)
+{
+	int status = 0;
+	return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/* Greets connection `c` with this process's id, and closes it. */
+static int greet(int c)
+{
+	char buf[32];
+	int n = snprintf(buf, sizeof buf, "accepted by %d", (int)getpid());
+	int ok = c >= 0 && write(c, buf, n) == n;
+	close(c);
+	return ok;
+}
+
+/* Connects `s` to `to` and reads its greeting: the process id that
+   accepted it, or -1. */
+static long greeted(int s, const struct sockaddr *to, socklen_t len)
+{
+	char buf[32];
+	ssize_t n = s >= 0 && connect(s, to, len) == 0 ? read(s, buf, sizeof buf - 1) : -1;
+	close(s);
+	if (n <= 12)
+		return -1;
+	buf[n] = 0;
+	return strncmp(buf, "accepted by ", 12) ? -1 : atol(buf + 12);
+}
+
+/* Whether `by`, the processes that accepted two connections, are the two
+   children `kids`, one each. */
+static int one_each(const long *by, const pid_t *kids)
+{
+	return by[0] > 0 && by[1] > 0 && by[0] != by[1] && (by[0] == kids[0] || by[0] == kids[1]) &&
+	       (by[1] == kids[0] || by[1] == kids[1]);
+}
+
+/* A TCP connection on the loopback interface: `*client` connected to
+   `*server`'s end, which `listener` accepted; whether it was made. */
+static int tcp_pair(int listener, const struct sockaddr_in *at, int *client, int *server)
+{
+	*client = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	*server = *client >= 0 && connect(*client, (const struct sockaddr *)at, sizeof *at) == 0 ?
+			  accept4(listener, 0, 0, SOCK_CLOEXEC) :
+			  -1;
+	return *server >= 0;
+}
+
+/* Connections and datagram sockets shared with other processes: a
+ * connection given to a child as its standard input and output (as inetd
+ * gives it), this process's copy closed at once; one that a child and this
+ * process both write to, in turn; one sent to a child over a socket; and a
+ * UDP socket that two children receive from, each datagram going to one of
+ * them. */
+static void check_shared_connections(void)
+{
+	struct sockaddr_in at = ipv4(htonl(INADDR_LOOPBACK), 0);
+	socklen_t len = sizeof at;
+	int listener = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int listening = listener >= 0 && bind(listener, (struct sockaddr *)&at, sizeof at) == 0 &&
+			listen(listener, 8) == 0 && getsockname(listener, (struct sockaddr *)&at, &len) == 0;
+	char buf[128];
+	int client = -1, server = -1;
+
+	int made = listening && tcp_pair(listener, &at, &client, &server);
+	pid_t kid = made ? spawn_stdio(server, "upper") : -1;
+	close(server);
+	ssize_t n = kid > 0 && write(client, "hello, child\n", 13) == 13 && shutdown(client, SHUT_WR) == 0 ?
+			    read_all(client, buf, sizeof buf) :
+			    -1;
+	CHECK("a connection as a child's standard input and output",
+	      exited_well(kid) && n == 13 && !strcmp(buf, "HELLO, CHILD\n"), "%zd bytes: '%s'", n, n > 0 ? buf : "");
+	close(client);
+
+	made = listening && tcp_pair(listener, &at, &client, &server);
+	kid = made ? spawn_with(server, "say") : -1;
+	int said = exited_well(kid) && write(server, "and the parent\n", 15) == 15;
+	close(server);
+	n = said ? read_all(client, buf, sizeof buf) : -1;
+	CHECK("a connection a child and this process write to", n == 30 && !strcmp(buf, "from the child\nand the parent\n"),
+	      "%zd bytes: '%s'", n, n > 0 ? buf : "");
+	close(client);
+
+	int sp[2];
+	made = listening && tcp_pair(listener, &at, &client, &server) &&
+	       socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp) == 0;
+	kid = made ? spawn_with(sp[1], "upper-sent") : -1;
+	int sent = kid > 0 && send_fds(sp[0], 'C', &server, 1) == 0;
+	close(server);
+	n = sent && write(client, "sent over\n", 10) == 10 && shutdown(client, SHUT_WR) == 0 ?
+		    read_all(client, buf, sizeof buf) :
+		    -1;
+	CHECK("a connection sent to a child", exited_well(kid) && n == 10 && !strcmp(buf, "SENT OVER\n"),
+	      "%zd bytes: '%s'", n, n > 0 ? buf : "");
+	close(client);
+	if (made) {
+		close(sp[0]);
+		close(sp[1]);
+	}
+	close(listener);
+
+	/* Two children receive from one UDP socket: a datagram each, which
+	   they answer with their process ids. */
+	struct sockaddr_in u = ipv4(htonl(INADDR_LOOPBACK), 0), me = u;
+	len = sizeof u;
+	int shared = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0), asker = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	int bound = shared >= 0 && bind(shared, (struct sockaddr *)&u, sizeof u) == 0 &&
+		    getsockname(shared, (struct sockaddr *)&u, &len) == 0 &&
+		    bind(asker, (struct sockaddr *)&me, sizeof me) == 0;
+	/* A datagram lost fails the check rather than holding it up for
+	   ever; the children find the time-out set as it was. */
+	struct timeval wait = { 10, 0 };
+	setsockopt(asker, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+	setsockopt(shared, SOL_SOCKET, SO_RCVTIMEO, &wait, sizeof wait);
+	pid_t kids[2] = { bound ? spawn_with(shared, "udp-reply") : -1, bound ? spawn_with(shared, "udp-reply") : -1 };
+	close(shared);
+	long by[2] = { -1, -1 };
+	for (int i = 0; i < 2 && kids[0] > 0 && kids[1] > 0; i++) {
+		n = sendto(asker, "who?", 4, 0, (struct sockaddr *)&u, sizeof u) == 4 ? recv(asker, buf, sizeof buf - 1, 0) : -1;
+		buf[n > 0 ? n : 0] = 0;
+		by[i] = n > 12 && !strncmp(buf, "answered by ", 12) ? atol(buf + 12) : -1;
+	}
+	int exited = exited_well(kids[0]) & exited_well(kids[1]);
+	CHECK("a UDP socket two children receive from", bound && exited && one_each(by, kids),
+	      "answered by %ld and %ld; children %d and %d", by[0], by[1], (int)kids[0], (int)kids[1]);
+	close(asker);
+}
+
+/* Sockets shared with other processes, as pre-forking servers share them:
+ * a Unix domain listener and a TCP one (which the children find
+ * non-blocking, as it was given), from which the children this process
+ * starts accept, each connection going to one of them, and which stay open
+ * until the last of them closes; a listener sent over a socket; and the
+ * other kinds of Unix domain sockets, which go to a child as well. */
+static void check_shared_sockets(void)
+{
+	char path[64];
+	snprintf(path, sizeof path, "/tmp/posix-shared-%d", (int)getpid());
+	unlink(path);
+	struct sockaddr_un a;
+	socklen_t alen = unix_addr(&a, path);
+	int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int listening = listener >= 0 && bind(listener, (struct sockaddr *)&a, alen) == 0 && listen(listener, 8) == 0;
+	pid_t kids[2] = { spawn_with(listener, "accept"), spawn_with(listener, "accept") };
+	long by[2];
+	for (int i = 0; i < 2; i++)
+		by[i] = greeted(socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0), (struct sockaddr *)&a, alen);
+	int exited = exited_well(kids[0]) & exited_well(kids[1]);
+	CHECK("a Unix domain listener shared with children", listening && exited && one_each(by, kids),
+	      "accepted by %ld and %ld; children %d and %d", by[0], by[1], (int)kids[0], (int)kids[1]);
+	/* Still this process's once they are gone; closed once it closes it. */
+	int c = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int conn = c >= 0 && connect(c, (struct sockaddr *)&a, alen) == 0 ? accept4(listener, 0, 0, SOCK_CLOEXEC) : -1;
+	CHECK("the listener's own process accepts too", conn >= 0, "errno %d", errno);
+	close(conn);
+	close(c);
+	close(listener);
+	c = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("closed once every process closed it", connect(c, (struct sockaddr *)&a, alen) < 0 && errno == ECONNREFUSED,
+	      "connected");
+	close(c);
+	unlink(path);
+
+	/* A TCP listener, non-blocking: the children poll it, and one of them
+	   finds each connection taken by the other first. */
+	struct sockaddr_in t = ipv4(htonl(INADDR_LOOPBACK), 0);
+	socklen_t tlen = sizeof t;
+	int tcp = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+	listening = tcp >= 0 && bind(tcp, (struct sockaddr *)&t, sizeof t) == 0 && listen(tcp, 8) == 0 &&
+		    getsockname(tcp, (struct sockaddr *)&t, &tlen) == 0;
+	kids[0] = spawn_with(tcp, "accept-polling");
+	kids[1] = spawn_with(tcp, "accept-polling");
+	for (int i = 0; i < 2; i++)
+		by[i] = greeted(socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0), (struct sockaddr *)&t, sizeof t);
+	exited = exited_well(kids[0]) & exited_well(kids[1]);
+	CHECK("a TCP listener shared with children", listening && exited && one_each(by, kids),
+	      "accepted by %ld and %ld; children %d and %d", by[0], by[1], (int)kids[0], (int)kids[1]);
+
+	/* Sent over a socket to a child, which accepts from it. */
+	int sp[2];
+	int paired = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp) == 0;
+	pid_t kid = paired ? spawn_with(sp[1], "accept-sent") : -1;
+	long got = kid > 0 && send_fds(sp[0], 'L', &tcp, 1) == 0 ?
+			   greeted(socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0), (struct sockaddr *)&t, sizeof t) :
+			   -1;
+	CHECK("a listener sent to a child", exited_well(kid) && got == kid, "accepted by %ld, child %d", got, (int)kid);
+	close(sp[0]);
+	close(sp[1]);
+	close(tcp);
+
+	/* A seqpacket socket pair's end: the child sends back what comes. */
+	char buf[64];
+	paired = socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sp) == 0;
+	kid = paired ? spawn_with(sp[1], "echo-packet") : -1;
+	ssize_t n = kid > 0 && send(sp[0], "ping", 4, 0) == 4 ? recv(sp[0], buf, sizeof buf, 0) : -1;
+	CHECK("a seqpacket socket to a child", exited_well(kid) && n == 4 && !memcmp(buf, "ping", 4), "%zd bytes", n);
+	close(sp[0]);
+	close(sp[1]);
+
+	/* A datagram socket bound to a path: the child receives, and replies
+	   from it. */
+	snprintf(path, sizeof path, "/tmp/posix-dgram-%d", (int)getpid());
+	unlink(path);
+	alen = unix_addr(&a, path);
+	int d = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0), me = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	struct sockaddr_un mine = { .sun_family = AF_UNIX }, from;
+	socklen_t len = sizeof from;
+	int bound = d >= 0 && bind(d, (struct sockaddr *)&a, alen) == 0 &&
+		    bind(me, (struct sockaddr *)&mine, sizeof(sa_family_t)) == 0;
+	kid = bound ? spawn_with(d, "reply-datagram") : -1;
+	close(d);
+	n = kid > 0 && sendto(me, "ping", 4, 0, (struct sockaddr *)&a, alen) == 4 ?
+		    recvfrom(me, buf, sizeof buf, 0, (struct sockaddr *)&from, &len) :
+		    -1;
+	CHECK("a bound datagram socket to a child",
+	      exited_well(kid) && n == 4 && !memcmp(buf, "ping", 4) && len == alen && !memcmp(&from, &a, alen),
+	      "%zd bytes from length %u", n, len);
+	close(me);
+	unlink(path);
+}
+
+static int child(const char *mode, const char *arg)
+{
+	if (!strcmp(mode, "accept")) {
+		/* Descriptor 3 listens: one connection, greeted. */
+		return greet(accept4(3, 0, 0, SOCK_CLOEXEC)) ? 0 : 1;
+	}
+	if (!strcmp(mode, "accept-polling")) {
+		/* Descriptor 3 listens without waiting, as it was given: a
+		   connection another process took first is waited for again. */
+		if (!(fcntl(3, F_GETFL) & O_NONBLOCK))
+			return 1;
+		for (;;) {
+			struct pollfd p = { .fd = 3, .events = POLLIN };
+			if (poll(&p, 1, 20000) != 1)
+				return 2;
+			int c = accept4(3, 0, 0, SOCK_CLOEXEC);
+			if (c >= 0)
+				return greet(c) ? 0 : 3;
+			if (errno != EAGAIN)
+				return 4;
+		}
+	}
+	if (!strcmp(mode, "accept-sent")) {
+		/* A listener comes over the stream socket of descriptor 3. */
+		char byte;
+		int fd = -1, got = 0, flags = 0;
+		if (recv_fds(3, &byte, 1, &fd, 1, &got, &flags) != 1 || got != 1)
+			return 1;
+		/* It came non-blocking: wait for the connection. */
+		struct pollfd p = { .fd = fd, .events = POLLIN };
+		return poll(&p, 1, 20000) == 1 && greet(accept4(fd, 0, 0, SOCK_CLOEXEC)) ? 0 : 2;
+	}
+	if (!strcmp(mode, "upper")) {
+		/* Its standard input and output are a connection: what comes,
+		   in capitals, until it ends. */
+		char buf[64];
+		ssize_t n;
+		while ((n = read(0, buf, sizeof buf)) > 0) {
+			for (ssize_t i = 0; i < n; i++)
+				buf[i] = buf[i] >= 'a' && buf[i] <= 'z' ? buf[i] - 'a' + 'A' : buf[i];
+			if (write(1, buf, n) != n)
+				return 1;
+		}
+		return n == 0 ? 0 : 2;
+	}
+	if (!strcmp(mode, "say")) {
+		/* Descriptor 3 is a connection: the child's line on it. */
+		return write(3, "from the child\n", 15) == 15 ? 0 : 1;
+	}
+	if (!strcmp(mode, "upper-sent")) {
+		/* A connection comes over the stream socket of descriptor 3:
+		   what comes on it, in capitals, until it ends. */
+		char byte, buf[64];
+		int fd = -1, got = 0, flags = 0;
+		if (recv_fds(3, &byte, 1, &fd, 1, &got, &flags) != 1 || got != 1)
+			return 1;
+		ssize_t n;
+		while ((n = read(fd, buf, sizeof buf)) > 0) {
+			for (ssize_t i = 0; i < n; i++)
+				buf[i] = buf[i] >= 'a' && buf[i] <= 'z' ? buf[i] - 'a' + 'A' : buf[i];
+			if (write(fd, buf, n) != n)
+				return 2;
+		}
+		return n == 0 ? 0 : 3;
+	}
+	if (!strcmp(mode, "udp-reply")) {
+		/* Descriptor 3 is a UDP socket: one datagram, answered with
+		   this process's id. */
+		char buf[64];
+		struct sockaddr_in from;
+		socklen_t len = sizeof from;
+		if (recvfrom(3, buf, sizeof buf, 0, (struct sockaddr *)&from, &len) < 0)
+			return 1;
+		int n = snprintf(buf, sizeof buf, "answered by %d", (int)getpid());
+		return sendto(3, buf, n, 0, (struct sockaddr *)&from, len) == n ? 0 : 2;
+	}
+	if (!strcmp(mode, "echo-packet")) {
+		char buf[64];
+		ssize_t n = recv(3, buf, sizeof buf, 0);
+		return n > 0 && send(3, buf, n, 0) == n ? 0 : 1;
+	}
+	if (!strcmp(mode, "reply-datagram")) {
+		char buf[64];
+		struct sockaddr_un from;
+		socklen_t len = sizeof from;
+		ssize_t n = recvfrom(3, buf, sizeof buf, 0, (struct sockaddr *)&from, &len);
+		return n > 0 && sendto(3, buf, n, 0, (struct sockaddr *)&from, len) == n ? 0 : 1;
+	}
+	if (!strcmp(mode, "abstract") && arg) {
+		/* The parent listens on the abstract name `arg`. */
+		struct sockaddr_un a;
+		socklen_t len = abstract_addr(&a, arg, strlen(arg));
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (s < 0 || connect(s, (struct sockaddr *)&a, len) != 0)
+			return 1;
+		return write(s, "from the child", 14) == 14 ? 0 : 2;
+	}
+	if (!strcmp(mode, "fds")) {
+		/* Descriptor 3 is a stream socket: a pipe's end comes over it,
+		   and the child writes into it, then says so. */
+		char byte;
+		int fd = -1, got = 0, flags = 0;
+		if (recv_fds(3, &byte, 1, &fd, 1, &got, &flags) != 1 || got != 1)
+			return 1;
+		if (write(fd, "from the child", 14) != 14)
+			return 2;
+		close(fd);
+		return write(3, "!", 1) == 1 ? 0 : 3;
+	}
 	if (!strcmp(mode, "echo")) {
 		printf("child says hello %s\n", getenv("VEDA_TEST") ? getenv("VEDA_TEST") : "(no env)");
 		return 7;
@@ -508,7 +1567,7 @@ static int child(const char *mode)
 int main(int argc, char **argv)
 {
 	if (argc >= 3 && !strcmp(argv[1], "child"))
-		return child(argv[2]);
+		return child(argv[2], argc >= 4 ? argv[3] : 0);
 	/* Where this program is, for the checks that start it again. */
 	const char *self = (const char *)getauxval(AT_EXECFN);
 	snprintf(program, sizeof program, "%s", self && *self == '/' ? self : "/system/tests/c/posix");
@@ -526,6 +1585,15 @@ int main(int argc, char **argv)
 	check_signals();
 	check_processes();
 	check_veda_interfaces();
+	check_epoll();
+	check_unix_sockets();
+	check_unix_abstract();
+	check_shared_sockets();
+	check_shared_connections();
+	if (argc >= 5 && !strcmp(argv[1], "host"))
+		check_network(argv[2], atoi(argv[3]), atoi(argv[4]));
+	else
+		check_network(0, 0, 0);
 	printf("%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
 	return failures;
 }

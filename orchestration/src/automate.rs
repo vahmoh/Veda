@@ -634,6 +634,11 @@ fn run_step(s: &mut Session, x: &mut Extras, step: &Step, disk: &Path) -> Result
         Step::MicSilence(secs) => x.mic()?.silence(*secs),
         Step::MicTone { secs, peak } => x.mic()?.tone(*secs, *peak),
         Step::MicEcho { gain_db, delay_ms } => x.mic()?.echo(util::out_dir().join("audio.wav"), *gain_db, *delay_ms),
+        Step::MicMusic(Some((title, gain_db))) => {
+            let track = mic::read_sample_track(title)?;
+            x.mic()?.room_sound(&track, *gain_db);
+        }
+        Step::MicMusic(None) => x.mic()?.room_quiet(),
         Step::AgentConnected(timeout) => x.agent()?.wait_connected(*timeout)?,
         Step::AgentCall { name, arguments, timeout } => {
             let result = x.agent()?.call(name, arguments, *timeout)?;

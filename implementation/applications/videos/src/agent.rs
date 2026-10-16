@@ -6,11 +6,6 @@
 //! seeking, the player's volume, full screen, back to the library), through
 //! the same operations as the buttons and keys.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
-
 use vfiles::format::duration as time;
 use videos_core::control::{self, SeekError};
 use videos_core::playback::Phase;

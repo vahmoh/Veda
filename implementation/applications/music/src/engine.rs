@@ -14,11 +14,8 @@
 //! [`VizHistory`], from which the UI computes the spectrum of the samples
 //! that are being heard right now.
 
-use alloc::collections::VecDeque;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec;
-use alloc::vec::Vec;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vabi::{WaitItem, signals};
 use vaudio::source::Source;
@@ -283,7 +280,7 @@ impl Engine {
         let vfs = self.vfs.as_ref().ok_or("the file system is unavailable")?;
         let (vmo, len) = match vfs.read_file(path.into()) {
             Ok(Ok(v)) => v,
-            Ok(Err(e)) => return Err(alloc::format!("{e}")),
+            Ok(Err(e)) => return Err(format!("{e}")),
             Err(_) => return Err("the file system is unavailable".into()),
         };
         let size = vmo.size().map_err(|_| "cannot map the file")?;
@@ -369,11 +366,11 @@ impl Engine {
     fn load(&mut self, path: String, play: bool, start_ms: u64) {
         let data = match self.read_file(&path) {
             Ok(d) => d,
-            Err(e) => return self.fail(alloc::format!("cannot open {}: {}", path, e)),
+            Err(e) => return self.fail(format!("cannot open {}: {}", path, e)),
         };
         let mut src = match Source::open(data) {
             Ok(s) => s,
-            Err(e) => return self.fail(alloc::format!("cannot play {}: {}", path, e)),
+            Err(e) => return self.fail(format!("cannot play {}: {}", path, e)),
         };
         let rate = src.rate();
         let start = (start_ms.saturating_mul(rate as u64) / 1000).min(src.frames());

@@ -488,7 +488,10 @@ stage_rust() {
 	host = ["$RUST_HOST"]
 	target = ["$RUST_HOST", "$RUST_TARGET"]
 	docs = false
-	extended = false
+	# Besides the compiler and the standard library: Clippy, which checks
+	# Veda's programs for their target.
+	extended = true
+	tools = ["clippy"]
 	vendor = true
 	locked-deps = true
 	submodules = false
@@ -517,6 +520,16 @@ stage_rust() {
 	echo 'fn main() { println!("hello"); }' > "$b/hello.rs"
 	quiet "$b/hello.log" "$RUST/bin/rustc" --edition 2024 --target "$RUST_TARGET" \
 		-C linker="$CROSS/bin/$TARGET-gcc" -o "$b/hello" "$b/hello.rs"
+	# ... and Clippy checks it.
+	quiet "$b/clippy.log" "$RUST/bin/clippy-driver" --edition 2024 --target "$RUST_TARGET" \
+		--emit=metadata -D warnings -o "$b/hello.rmeta" "$b/hello.rs"
+	# The standard library's source, as Veda patches it, where Rust's
+	# releases install it (their rust-src): editors read its definitions
+	# there. The release has its crates vendored already; Rust's own step
+	# would vendor them again with Cargo in the source tree, which is in
+	# Veda's checkout (see the Cargo above).
+	mkdir -p "$RUST/lib/rustlib/src/rust"
+	cp -a "$SRC/rust/library" "$RUST/lib/rustlib/src/rust/library"
 	# What built it (some 9 GB) is not needed once Rust is installed: this
 	# stage builds it all again when it runs again. The logs stay.
 	find "$b" -mindepth 1 -maxdepth 1 ! -name '*.log' -exec rm -rf {} +

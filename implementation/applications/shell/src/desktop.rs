@@ -12,11 +12,6 @@
 //! items it has; whether the Trash has any) is compared every few seconds,
 //! and the folder is read again only when that changed.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
-
 use vfiles::path::natural_cmp;
 use vfiles::{Fs, HOME, trash};
 use vgfx::{Align, Color, Rect};

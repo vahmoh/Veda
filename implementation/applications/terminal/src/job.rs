@@ -12,11 +12,9 @@
 //! the oldest of what waits is left out (the screen would have dropped it
 //! soon after), and a line says how much.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use terminal_core::screen::{Screen, Style};
 use vabi::{RawHandle, signals};

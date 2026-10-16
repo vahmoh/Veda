@@ -36,7 +36,9 @@
 //! ([`net::Client::tcp_connect`], ...). Both sides then exchange
 //! [`SocketRequest`]s (client to `netd`) and [`SocketEvent`]s (`netd` to
 //! client) as plain messages on that channel. Closing the channel closes the
-//! socket (a TCP connection is shut down gracefully).
+//! socket: a TCP connection is shut down gracefully, and the datagrams a UDP
+//! socket was sent go out first, if the stack can send them within a few
+//! seconds.
 //!
 //! Data flow is credit-based in both directions, which bounds the memory a
 //! socket can pin in the kernel:
@@ -52,13 +54,42 @@
 //!   `netd` takes data from the stack only as far as the client's channel
 //!   has room for it: when the client stops reading, the data waits in the
 //!   stack and TCP's own flow control slows the peer.
+//!
+//! # Sockets that processes share
+//!
+//! Credit belongs to whoever took it off the channel, so a socket that
+//! speaks the protocol above has one client. The POSIX layer's sockets,
+//! which processes share as they share them on Linux, open sockets that
+//! need no credit:
+//!
+//! * **TCP with its bytes on a kernel socket**
+//!   ([`net::Client::tcp_connect_bytes`], [`net::Client::tcp_listen_bytes`],
+//!   whose connections arrive as [`SocketEvent::AcceptedBytes`]). The
+//!   connection's bytes go both ways on a kernel socket of which the client
+//!   holds one end: its buffers are the flow control, whoever holds the end
+//!   reads and writes, and a reader who stops reading leaves the data in the
+//!   stack (TCP's window closes).
+//!   The end of the received stream is the kernel socket's (`netd` stops
+//!   writing), and the client's end of its stream is its end's (it stops
+//!   writing, or every holder closes it). The channel carries only
+//!   [`SocketEvent::Connected`], and [`SocketEvent::Error`], after which
+//!   `netd` closes its end of the kernel socket; and the requests
+//!   [`SocketRequest::Abort`] and [`SocketRequest::SetNoDelay`].
+//! * **UDP without credit** ([`net::Client::udp_bind_unmetered`]). The
+//!   channel's room is the flow control both ways: `netd` writes a
+//!   datagram while the channel has room for it (otherwise it waits in the
+//!   stack, which drops what does not fit, as UDP may), and stops reading
+//!   [`SocketRequest::SendTo`]s while the datagrams it has not sent yet are
+//!   more than [`UDP_UNMETERED_WINDOW`] bytes, so that a client sending
+//!   too fast waits for room in the channel. Each datagram is one message,
+//!   which any process holding the channel may take.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
 use vipc::{Bytes, enumeration, message, protocol, union};
-use vrt::object::Channel;
+use vrt::object::{Channel, Socket};
 
 use crate::netring::LinkEndpoints;
 
@@ -66,6 +97,9 @@ use crate::netring::LinkEndpoints;
 pub const MAX_SEND: usize = 16 * 1024;
 /// Unacknowledged received bytes `netd` allows per socket.
 pub const RECEIVE_WINDOW: u32 = 256 * 1024;
+/// Bytes of datagrams a UDP socket without credit may have waiting in
+/// `netd` to be sent before it stops reading the socket's requests.
+pub const UDP_UNMETERED_WINDOW: usize = 256 * 1024;
 /// Largest UDP payload a socket carries: what fits one channel message with
 /// the datagram's address, a little less than an IPv4 datagram's 65507
 /// bytes.
@@ -242,6 +276,26 @@ union! {
         /// (`DestinationUnreachable`, `HostUnreachable`) or out of hops
         /// (`TimeExceeded`).
         9 => EchoFailed { seq: u16, from: Option<IpAddr>, error: NetError },
+        /// TCP listener of [`net::Client::tcp_listen_bytes`]: a new
+        /// connection, whose bytes go on `bytes` (see the module's
+        /// documentation) and its news and requests on `socket`.
+        10 => AcceptedBytes { socket: Channel, bytes: Socket, local: SocketAddr, remote: SocketAddr },
+    }
+}
+
+impl SocketRequest {
+    /// Encodes [`SocketRequest::Send`] straight from `data` (the bytes the
+    /// request would encode, without copying `data` into a vector first).
+    pub fn encode_send(data: &[u8], e: &mut vipc::Encoder) {
+        vipc::Encode::encode(1u32, e);
+        vipc::Encode::encode(data, e);
+    }
+
+    /// Encodes [`SocketRequest::SendTo`] straight from `data`.
+    pub fn encode_send_to(dest: SocketAddr, data: &[u8], e: &mut vipc::Encoder) {
+        vipc::Encode::encode(2u32, e);
+        vipc::Encode::encode(dest, e);
+        vipc::Encode::encode(data, e);
     }
 }
 
@@ -486,6 +540,18 @@ protocol! {
         /// Opens a UDP socket bound to `local` (port 0 picks a free port).
         /// The initial send credit arrives as a [`SocketEvent::SendCredit`].
         3 => fn udp_bind(local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError>;
+        /// Like [`tcp_connect`](net::Client::tcp_connect), but the
+        /// connection's bytes go on `bytes`, the service's end of a kernel
+        /// socket, and `socket` carries the rest, without credit (see the
+        /// module's documentation).
+        6 => fn tcp_connect_bytes(remote: SocketAddr, options: TcpOptions, socket: Channel, bytes: Socket) -> Result<(), NetError>;
+        /// Like [`tcp_listen`](net::Client::tcp_listen), its connections
+        /// arriving as [`SocketEvent::AcceptedBytes`].
+        7 => fn tcp_listen_bytes(local: SocketAddr, backlog: u32, options: TcpOptions, listener: Channel) -> Result<SocketAddr, NetError>;
+        /// Like [`udp_bind`](net::Client::udp_bind), without credit: the
+        /// channel's room is the flow control (see the module's
+        /// documentation).
+        8 => fn udp_bind_unmetered(local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError>;
         /// Opens a ping socket (ICMP echo).
         4 => fn ping_open(socket: Channel) -> Result<(), NetError>;
         /// Looks up `name` (a host name, or an address literal). One
@@ -694,8 +760,17 @@ mod tests {
         assert!(matches!(SocketEvent::decode(&mut d).unwrap(), SocketEvent::Data { data } if data.0 == b"hello"));
         // And a request to send the largest datagram fits too.
         let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
-        SocketRequest::SendTo { dest: from, data: Bytes(payload) }.encode(&mut e);
+        SocketRequest::SendTo { dest: from, data: Bytes(payload.clone()) }.encode(&mut e);
         assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
+        // Requests encoded from slices are the requests themselves.
+        let mut e = Encoder::new();
+        SocketRequest::encode_send_to(from, &payload, &mut e);
+        let mut d = Decoder::new(&e.bytes, Vec::new());
+        assert_eq!(SocketRequest::decode(&mut d).unwrap(), SocketRequest::SendTo { dest: from, data: Bytes(payload) });
+        let mut e = Encoder::new();
+        SocketRequest::encode_send(b"hello", &mut e);
+        let mut d = Decoder::new(&e.bytes, Vec::new());
+        assert_eq!(SocketRequest::decode(&mut d).unwrap(), SocketRequest::Send { data: Bytes(b"hello".to_vec()) });
     }
 
     #[test]

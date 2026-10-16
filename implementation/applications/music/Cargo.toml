@@ -28,8 +28,6 @@ music-core = { path = "core" }
 # The audio output and the agent's requests Music shares with Videos.
 videos-core = { path = "../videos/core" }
 
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

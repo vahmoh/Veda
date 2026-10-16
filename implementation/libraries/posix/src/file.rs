@@ -246,6 +246,8 @@ impl Directory {
             .map(|e| {
                 let kind = if e.is_dir {
                     dt::DIR
+                } else if e.socket {
+                    dt::SOCK
                 } else if self.path == "/dev" {
                     dt::CHR
                 } else {

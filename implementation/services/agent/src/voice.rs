@@ -26,9 +26,7 @@
 //!   audible *right now* is (from the stream's played position), and how
 //!   loud the microphone is (with a meter's ballistics: `vaudio::level`).
 
-use alloc::collections::VecDeque;
-use alloc::vec;
-use alloc::vec::Vec;
+use std::collections::VecDeque;
 
 use vabi::{RawHandle, signals};
 use vaudio::level::{self, LevelMeter};
@@ -133,7 +131,7 @@ impl Voice {
                 true
             }
             Err(e) => {
-                vrt::println!("cannot open the microphone: {:?}", e);
+                println!("cannot open the microphone: {:?}", e);
                 false
             }
         }
@@ -200,7 +198,7 @@ impl Voice {
                 true
             }
             Err(e) => {
-                vrt::println!("cannot open the speaker: {:?}", e);
+                println!("cannot open the speaker: {:?}", e);
                 false
             }
         }
@@ -209,7 +207,7 @@ impl Voice {
     /// Makes other sound play quieter (music under a conversation), or not.
     pub fn duck_others(&self, on: bool) {
         if !matches!(self.client.set_ducking(on), Ok(Ok(()))) {
-            vrt::println!("the audio service does not duck the other sound");
+            println!("the audio service does not duck the other sound");
         }
     }
 
@@ -239,10 +237,7 @@ impl Voice {
                 self.ran_dry = true;
                 if self.prebuffer_ms < PREBUFFER_MAX_MS {
                     self.prebuffer_ms = (self.prebuffer_ms + PREBUFFER_STEP_MS).min(PREBUFFER_MAX_MS);
-                    vrt::println!(
-                        "the voice ran dry mid-answer; gathering {} ms before playing now",
-                        self.prebuffer_ms
-                    );
+                    println!("the voice ran dry mid-answer; gathering {} ms before playing now", self.prebuffer_ms);
                 }
             }
             self.gathering_since = Some(vrt::time::now_ns());

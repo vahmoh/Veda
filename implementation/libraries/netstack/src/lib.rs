@@ -500,6 +500,9 @@ impl Stack {
                 i.run(now, links, id);
             }
         }
+        // What that took in (frames that came back on the loopback
+        // interface) is for the sockets now, not at the next poll.
+        self.socks_maintain();
         self.detect_changes();
     }
 
@@ -511,7 +514,9 @@ impl Stack {
 
     /// When [`Stack::poll`] should run next at the latest (monotonic µs),
     /// or `None` if only new frames or requests need it. What waits for a
-    /// full link is not counted: room on the link is the time for it.
+    /// full link is not counted: room on the link is the time for it. Frames
+    /// on their way back through the loopback interface are taken in at
+    /// once: no timer of the stack's would.
     pub fn next_deadline(&mut self) -> Option<u64> {
         let now = self.instant();
         let now_us = self.now_us;
@@ -519,6 +524,9 @@ impl Stack {
         let mut take = |t: u64| best = Some(best.map_or(t, |b| b.min(t)));
         for id in 0..self.ifaces.len() {
             let Some(i) = self.ifaces[id].as_mut() else { continue };
+            if i.loopback.as_ref().is_some_and(Loopback::pending) {
+                take(now_us);
+            }
             if let Some(at) = i.iface.poll_at(now, &i.sockets) {
                 let at = at.total_micros().max(0) as u64;
                 if !(i.frames.blocked && at <= now_us) {

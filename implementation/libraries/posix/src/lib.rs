@@ -13,6 +13,9 @@
 //! |-------|------|
 //! | files, directories | the VFS service: a `file` connection per open file ([`file`]) |
 //! | pipes, `socketpair`, the terminal | socket endpoints ([`stream`], [`socket`], [`tty`]) |
+//! | TCP and UDP sockets, names | the network service: a channel per socket ([`inet`], [`socket`]), its resolver ([`resolve`]) |
+//! | Unix domain sockets | socket nodes of the VFS, which hand them connections and datagrams; socket endpoints and channels between the programs ([`unix`]) |
+//! | `epoll`, `eventfd` | a port per epoll instance ([`epoll`]); a counter of the layer's with an event ([`eventfd`]) |
 //! | `mmap` | the kernel's private memory, or a VMO per mapping ([`mem`]) |
 //! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
@@ -29,7 +32,11 @@
 //! * `__clone`, `__set_thread_area` and `__unmapself` jump to
 //!   [`thread::__veda_clone`], [`thread::__veda_set_thread_area`] and
 //!   [`thread::__veda_unmapself`];
-//! * `posix_spawn` calls [`process::__veda_spawn`].
+//! * `posix_spawn` calls [`process::__veda_spawn`];
+//! * `__lookup_name` (`getaddrinfo`, `gethostbyname`) has the network
+//!   service look names up ([`resolve::__veda_lookup_name`]), and
+//!   `__get_resolv_conf` takes the DNS servers it uses
+//!   ([`resolve::__veda_dns_servers`]).
 //!
 //! What is particular to the architecture (Linux's system call numbers and
 //! the calls only it has, the thread pointer, where threads start) is in
@@ -49,18 +56,26 @@ extern crate std;
 #[cfg(target_arch = "x86_64")]
 #[path = "arch/amd64/mod.rs"]
 mod arch;
+mod carry;
+mod epoll;
 mod error;
+mod eventfd;
 mod fd;
 mod file;
 mod fs;
+mod inet;
 mod inherit;
 mod io;
 mod linux;
+mod log;
 mod mem;
 mod native;
+mod netd;
 mod path;
 mod process;
+mod resolve;
 mod signal;
+mod sockaddr;
 mod socket;
 mod stream;
 mod syscall;
@@ -68,6 +83,7 @@ mod system;
 mod thread;
 mod time;
 mod tty;
+mod unix;
 mod user;
 mod vfs;
 
@@ -94,7 +110,7 @@ pub extern "C" fn __veda_init() {
     if let Some(h) = vrt::env::take_handle(role::TERMINAL) {
         tty::adopt(Vmo::from_handle(h));
     }
-    io::adopt_startup_fds(&inherited.fds);
+    io::adopt_startup_fds(&inherited);
 }
 
 /// A Linux system call. Returns its result, or `-errno`.

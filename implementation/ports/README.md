@@ -42,12 +42,21 @@ name of its code generator, the assembler of the media libraries) is in
 
 ## Crates
 
-smoltcp and zune-jpeg are Rust crates. Each one's release is its
+smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio and
+tokio are Rust crates. libc, getrandom, rustix and errno are what crates
+that need Rust's standard library stand on to reach the operating system,
+and tokio, with mio and socket2 under it, is the asynchronous runtime of
+Rust's ecosystem; their releases do not know Veda: their ports let such
+crates build and run in Veda's programs on the standard library (see their
+patches below). Each one's release is its
 archive on crates.io (the `.crate` that Cargo itself would download; the
 SHA-256 that `port.toml` pins is crates.io's checksum of it). The
 workspace depends on the release by its version, as on any crate
-(smoltcp's is `version = "=0.14.0"` in `Cargo.toml`), and Cargo builds
-the port in its place:
+(smoltcp's is `version = "=0.14.0"` in `Cargo.toml`), or has it among the
+crates it depends on, and Cargo builds the port in its place. A crate the
+workspace has two releases of has a port for each: the older's directory
+is named for its release (`getrandom-0.3`), and its patch in Cargo's
+configuration gives the crate's name as its `package`:
 
 * Every `cargo orchestration` command first prepares the crates
   (`orchestration/src/crates.rs`): when a port has changed, it downloads and
@@ -108,7 +117,11 @@ the native GCC's libraries.
 (`implementation/libraries/posix`) up; `posix_spawn` asks the layer to
 start the program; `dl_iterate_phdr` names a program by the path it was
 started from (`AT_EXECFN`) rather than `/proc/self/exe`, which Veda does
-not have (backtraces read the program's symbols from it). For AMD64:
+not have (backtraces read the program's symbols from it); names that are
+not in `/etc/hosts` are looked up by the network service's resolver
+(`__lookup_name` asks the layer, and keeps the order of the addresses it
+gives), and musl's DNS client asks the DNS servers the service uses
+(`__get_resolv_conf`), as there is no `/etc/resolv.conf`. For AMD64:
 system calls go to the layer instead of the `syscall` instruction
 (`arch/x86_64/syscall_arch.h`); `_start` keeps the bootstrap channel
 (`crt_arch.h`); thread creation, the thread pointer, a thread freeing its
@@ -152,7 +165,10 @@ Rust is built with its LLVM, for the architecture's code generator
 alone, by the release before it (its stage 0), as Rust's releases are;
 its Cargo runs from outside Veda's checkout, whose `.cargo/config.toml`
 (the crates' `[patch]`) must not reach Rust's build, with the release's
-own configuration (its vendored crates) instead.
+own configuration (its vendored crates) instead. With the compiler and the
+standard library it installs Clippy, and the standard library's source
+as Veda patches it, copied where Rust's `rust-src` puts it (Rust's own step
+vendors its crates again with Cargo in the source tree).
 
 **dav1d**: none. It is built as released (meson, with a cross file for
 Veda's target and the architecture's assembler: nasm on AMD64), static,
@@ -187,7 +203,7 @@ toolchain (GCC, binutils and musl for Linux, the releases these ports
 pin, unpatched); `cargo orchestration` builds the renderer (ninja) with the
 system.
 
-**smoltcp**: six changes, each with tests of its own.
+**smoltcp**: seven changes, each with tests of its own.
 
 *Unpredictable protocol numbers* (`src/rand.rs`). Upstream draws TCP
 initial sequence numbers, DHCP transaction ids, DNS ids, the initial IPv4
@@ -213,6 +229,18 @@ peer's acknowledgement, or keep-alive is on (`awaits_ack`), and counts
 from when that began. And a closed connection tells whether the timeout
 ended it (`has_timed_out`), so that `netd` reports a peer that stopped
 answering as such, and a reset as a reset.
+
+*Windows that end short* (`src/socket/tcp.rs`). A receive window is
+advertised in units of the window scale, rounded down, so an
+advertisement can end a few octets short of an earlier one, up to which
+the sender may already have sent. Upstream dropped those octets as out of
+the window, and the sender, which had sent them, sent them again only once
+its retransmission timer expired, a second at least: a transfer over the
+loopback interface (whose 64 KiB buffers scale windows by 2) stalled for
+that long now and then. A connection now keeps the furthest edge it
+advertised (`remote_max_edge`) and takes what comes up to it, as RFC 7323
+(2.4) has a receiver do, since it must not shrink its window: those octets
+fit, as the buffer had the room when that edge was advertised.
 
 *The lease* (`src/socket/dhcpv4.rs`). The DHCP client tells when the
 lease it accepted ends (`lease_expires_at`); `netd` had read the lease
@@ -264,6 +292,47 @@ BGRA) are written three bytes a pixel (`color_convert_cymk_to_rgb` and
 `color_convert_ycck_to_rgb` in `src/worker.rs`); `vimage` converts them
 to RGB, which is right.
 
+**libc**: Veda's target (`target_os = "veda"`) takes Linux's definitions
+on musl, as the rust port's patch has the copy that Rust's standard library
+builds with take them: Veda's C library is musl, with Linux's interface,
+which the POSIX layer carries out. Wherever the release names Linux
+beside other systems (the modules of Linux's and of Linux-like systems,
+their threads' calls), it names Veda too; `build.rs` counts Veda among the
+targets that have only a recent musl, and among the operating systems the
+compiler is told of (`check-cfg`).
+
+**getrandom** (0.4) and **getrandom-0.3**: Veda's target among the systems
+whose C library has `getrandom()` (`src/backends.rs`), which it then calls
+without a fallback (Veda's always has it: the POSIX layer gives it the
+kernel's generator), with libc as a dependency there, and errno where
+Linux's is; and the constant `INT_MAX`, which libc deprecates, as
+`c_int::MAX`, so that the crates build without a warning.
+
+**rustix**: on the C library (its `libc` backend, which it takes for any
+system but Linux), Veda is Linux's kernel behind musl, as rustix already
+supports Linux with `rustix_use_libc`: `build.rs` gives Veda its
+`linux_like` and `linux_kernel` configurations, with `linux-raw-sys` for
+Linux's constants, and every `target_os = "linux"` of its sources outside
+the `linux_raw` backend reads `any(target_os = "linux", target_os =
+"veda")`. Its `[hints]`, which only a nightly Cargo takes, go: Cargo warns
+of them for a crate it builds from a path.
+
+**errno**: Veda's target reads errno where Linux's C library keeps it
+(`__errno_location`).
+
+**socket2**, **mio** and **tokio**: Veda is Linux behind musl, as for
+rustix: every `target_os = "linux"` of their sources outside comments
+reads `any(target_os = "linux", target_os = "veda")`, so that they take
+Linux's ways (mio's `epoll` selector and `eventfd` waker, `accept4` and
+`SOCK_NONBLOCK`; tokio's `pidfd_open` for its children; socket2's options),
+which the POSIX layer carries out; Cargo's `check-cfg` names Veda among
+the operating systems (mio, tokio). The exception is Unix sockets' abstract
+names, which Veda's standard library does not have (`std::os::linux`;
+its C library does): mio's `src/sys/unix/uds/mod.rs` and tokio's
+`src/net/unix/{listener,socketaddr,stream}.rs` stay as released, and with
+them Unix domain sockets as other Unix systems have them, named by paths
+(tokio's credentials, `peer_cred`, are Linux's: `SO_PEERCRED`).
+
 ## Updating a port
 
 1. Download the new release and its signature; check the signature
@@ -293,8 +362,10 @@ The ports keep their licences: GCC and binutils GPL-3.0-or-later (libgcc
 with the GCC Runtime Library Exception), GMP, MPFR and MPC
 LGPL-3.0-or-later, musl MIT, Rust MIT or Apache-2.0 (its compiler's LLVM
 Apache-2.0 with LLVM's exceptions), FFmpeg LGPL-2.1-or-later, dav1d
-BSD-2-Clause, the parts of Mesa the renderer uses MIT, smoltcp 0BSD, and
-zune-jpeg MIT, Apache-2.0 or Zlib. Distributing Veda's image, which
+BSD-2-Clause, the parts of Mesa the renderer uses MIT, smoltcp 0BSD,
+zune-jpeg MIT, Apache-2.0 or Zlib, libc, getrandom, errno and socket2 MIT
+or Apache-2.0, rustix Apache-2.0 with LLVM's exception, Apache-2.0 or
+MIT, and mio and tokio MIT. Distributing Veda's image, which
 contains them, means offering their source: the archives `port.toml`
 names and the patches here. The fonts are under the SIL Open Font
 License 1.1, whose text the image carries with them

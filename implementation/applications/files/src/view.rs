@@ -7,11 +7,7 @@
 //! operation in progress, status bar, context menus and the Properties
 //! dialog.
 
-use alloc::collections::BTreeSet;
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
+use std::collections::BTreeSet;
 
 use vfiles::format::{friendly_time, human_size};
 use vfiles::kind::{FileKind, file_kind, kind_name};

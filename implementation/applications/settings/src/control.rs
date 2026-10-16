@@ -16,10 +16,6 @@
 //! the service), and the catalogue fetched once (it waits on the network)
 //! and kept.
 
-use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
-use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use vproto::agent::{AgentConfig, AgentError, ModelCatalog, ModelChoice, agent};

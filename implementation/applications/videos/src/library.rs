@@ -8,10 +8,6 @@
 //! The rows of cards are worked out again only when the videos, where they
 //! were left, or the number of columns change.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vfiles::format::duration as time;
 use vfiles::kind::{FileKind, TYPES, VIDEOS, is_video};
 use vfiles::path::{HOME, display_path, join, natural_cmp};

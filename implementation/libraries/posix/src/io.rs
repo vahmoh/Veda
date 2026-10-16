@@ -6,15 +6,17 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
-use vabi::{WaitItem, startup};
-use vrt::object::Socket;
+use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, TERMINATED, WRITABLE};
+use vabi::{RawHandle, WaitItem, startup};
+use vrt::object::{Channel, Socket};
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
-use crate::inherit::Pseudo;
+use crate::inet::Recv;
+use crate::inherit::{Inherited, Pseudo};
 use crate::linux::errno::*;
 use crate::linux::{self, Flock, Iovec, Pollfd, fcntl, ioctl, o, poll, rwf};
+use crate::log::Log;
 use crate::{time, tty, user, vfs};
 
 /// Reads into `buf` from `desc` (at `offset` for `pread`).
@@ -25,10 +27,21 @@ fn read_desc(desc: &Description, buf: &mut [u8], offset: Option<u64>) -> SysResu
     match (&desc.object, offset) {
         (Object::File(f), None) => f.read(buf),
         (Object::File(f), Some(at)) => f.pread(buf, at),
-        (Object::Stream(_) | Object::Null | Object::Log, Some(_)) => Err(ESPIPE),
+        (
+            Object::Stream(_) | Object::Inet(_) | Object::Unix(_) | Object::EventFd(_) | Object::Null | Object::Log(_),
+            Some(_),
+        ) => Err(ESPIPE),
         (Object::Stream(s), None) => s.read(buf, desc.nonblocking()),
+        (Object::EventFd(e), None) => e.read(buf, desc.nonblocking()),
+        (Object::Epoll(_) | Object::Pidfd(_), _) => Err(EINVAL),
+        (Object::Inet(s), None) => {
+            s.recv(&mut [buf], Recv { nonblock: desc.nonblocking(), ..Recv::default() }).map(|r| r.len)
+        }
+        (Object::Unix(s), None) => {
+            s.recv(&mut [buf], Recv { nonblock: desc.nonblocking(), ..Recv::default() }).map(|r| r.len)
+        }
         (Object::Dir(_), _) => Err(EISDIR),
-        (Object::Null | Object::Log, None) => Ok(0),
+        (Object::Null | Object::Log(_), None) => Ok(0),
     }
 }
 
@@ -40,12 +53,24 @@ fn write_desc(desc: &Description, data: &[u8], offset: Option<u64>) -> SysResult
     match (&desc.object, offset) {
         (Object::File(f), None) => f.write(data),
         (Object::File(f), Some(at)) => f.pwrite(data, at),
-        (Object::Stream(_) | Object::Null | Object::Log, Some(_)) => Err(ESPIPE),
+        (
+            Object::Stream(_) | Object::Inet(_) | Object::Unix(_) | Object::EventFd(_) | Object::Null | Object::Log(_),
+            Some(_),
+        ) => Err(ESPIPE),
         (Object::Stream(s), None) => s.write(data, desc.nonblocking()),
+        (Object::EventFd(e), None) => {
+            let n = e.write(data, desc.nonblocking())?;
+            // Each write is an event to edge-triggered epoll.
+            desc.changed();
+            Ok(n)
+        }
+        (Object::Epoll(_) | Object::Pidfd(_), _) => Err(EINVAL),
+        (Object::Inet(s), None) => s.send(data, None, desc.nonblocking(), false),
+        (Object::Unix(s), None) => s.send(data, None, &[], desc.nonblocking(), false),
         (Object::Dir(_), _) => Err(EISDIR),
         (Object::Null, None) => Ok(data.len()),
-        (Object::Log, None) => {
-            vrt::sys::debug_write(data);
+        (Object::Log(log), None) => {
+            log.write(data);
             Ok(data.len())
         }
     }
@@ -87,7 +112,14 @@ fn sync_all() -> SysResult {
 pub fn fsync(fd: i32) -> SysResult {
     match fd::get(fd)?.object {
         Object::File(_) | Object::Dir(_) => sync_all(),
-        Object::Stream(_) | Object::Null | Object::Log => Err(EINVAL),
+        Object::Stream(_)
+        | Object::Inet(_)
+        | Object::Unix(_)
+        | Object::EventFd(_)
+        | Object::Epoll(_)
+        | Object::Pidfd(_)
+        | Object::Null
+        | Object::Log(_) => Err(EINVAL),
     }
 }
 
@@ -116,7 +148,14 @@ pub fn sync_file_range(fd: i32, offset: i64, len: i64, flags: u32) -> SysResult 
     match fd::get(fd)?.object {
         Object::File(_) if flags & WRITE != 0 => sync_all(),
         Object::File(_) | Object::Dir(_) => Ok(0),
-        Object::Stream(_) | Object::Null | Object::Log => Err(ESPIPE),
+        Object::Stream(_)
+        | Object::Inet(_)
+        | Object::Unix(_)
+        | Object::EventFd(_)
+        | Object::Epoll(_)
+        | Object::Pidfd(_)
+        | Object::Null
+        | Object::Log(_) => Err(ESPIPE),
     }
 }
 
@@ -163,7 +202,8 @@ pub(crate) unsafe fn gather(vecs: &[Iovec]) -> Result<Vec<u8>, isize> {
 /// Reads from `desc` into the program's buffers `vecs` in turn (`readv`,
 /// `recvmsg`). From a stream as Linux reads a pipe, waiting (unless
 /// `nonblock`) only while nothing has come, and from the terminal in
-/// canonical mode one line at most. An error after some bytes came ends it
+/// canonical mode one line at most; from a network socket what it has (one
+/// datagram from a datagram socket). An error after some bytes came ends it
 /// with those.
 ///
 /// # Safety
@@ -176,6 +216,20 @@ pub(crate) unsafe fn read_vectored(
 ) -> SysResult {
     if !desc.readable() {
         return Err(EBADF);
+    }
+    if matches!(desc.object, Object::Inet(_) | Object::Unix(_)) {
+        if at.is_some() {
+            return Err(ESPIPE);
+        }
+        // SAFETY: per the caller.
+        let mut bufs: Vec<&mut [u8]> =
+            vecs.iter().map(|v| unsafe { user::slice_mut(v.base as usize, v.len) }).collect::<Result<_, _>>()?;
+        let how = Recv { nonblock, ..Recv::default() };
+        return match &desc.object {
+            Object::Unix(s) => s.recv(&mut bufs, how).map(|r| r.len),
+            Object::Inet(s) => s.recv(&mut bufs, how).map(|r| r.len),
+            _ => unreachable!(),
+        };
     }
     let lines = matches!(&desc.object, Object::Stream(s) if s.reads_lines());
     let mut total = 0;
@@ -228,8 +282,13 @@ unsafe fn write_vectored(desc: &Description, iov: usize, count: usize, offset: O
     let mut at = offset.map(|o| u64::try_from(o).map_err(|_| EINVAL)).transpose()?;
     // SAFETY: as above.
     let vecs = unsafe { iovecs(iov, count)? };
-    // One write for streams, so that the pieces stay together.
-    if matches!(desc.object, Object::Stream(_) | Object::Log) && vecs.len() > 1 {
+    // One write for streams, so that the pieces stay together (a datagram
+    // socket's are one datagram).
+    if matches!(
+        desc.object,
+        Object::Stream(_) | Object::Inet(_) | Object::Unix(_) | Object::EventFd(_) | Object::Log(_)
+    ) && vecs.len() > 1
+    {
         // SAFETY: as above.
         return write_desc(desc, &unsafe { gather(&vecs)? }, at);
     }
@@ -306,8 +365,13 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) -> SysResult {
     match &desc.object {
         Object::File(f) => f.seek(offset, whence).map(|o| o as usize),
         Object::Dir(d) => d.seek(offset, whence).map(|o| o as usize),
-        Object::Stream(_) => Err(ESPIPE),
-        Object::Null | Object::Log => Ok(0),
+        Object::Stream(_)
+        | Object::Inet(_)
+        | Object::Unix(_)
+        | Object::EventFd(_)
+        | Object::Epoll(_)
+        | Object::Pidfd(_) => Err(ESPIPE),
+        Object::Null | Object::Log(_) => Ok(0),
     }
 }
 
@@ -488,6 +552,8 @@ pub unsafe fn ioctl(fd: i32, request: u32, arg: usize) -> SysResult {
         ioctl::FIONREAD => {
             let n = match &desc.object {
                 Object::Stream(s) => s.available(),
+                Object::Inet(s) => s.available(),
+                Object::Unix(s) => s.available(),
                 Object::File(f) => {
                     let size = f.stat()?.size;
                     let at = f.seek(0, linux::seek::CUR)?;
@@ -516,37 +582,166 @@ pub fn ftruncate(fd: i32, len: i64) -> SysResult {
     }
 }
 
-/// What `poll` reports for one descriptor right now, and how to wait for
-/// more if it is a stream.
-fn poll_one(p: &Pollfd) -> (i16, Option<(Arc<Description>, u32)>) {
-    let Ok(desc) = fd::get(p.fd) else { return (poll::NVAL, None) };
-    let want_in = p.events & (poll::IN | poll::RDNORM) != 0;
-    let want_out = p.events & (poll::OUT | poll::WRNORM) != 0;
+/// What `poll` and `epoll` wait on: an object, kept open while they do.
+pub(crate) enum Waitable {
+    /// An object its description keeps: a stream's socket endpoint, an
+    /// eventfd's event.
+    Desc(Arc<Description>),
+    /// A network socket's channel, a Unix domain socket's inbox or
+    /// messages.
+    Channel(Arc<Channel>),
+    /// A Unix domain stream socket's connection.
+    Stream(Arc<crate::unix::StreamConn>),
+    /// A TCP connection's bytes: a kernel socket's endpoint.
+    Bytes(Arc<crate::stream::Stream>),
+}
+
+impl Waitable {
+    pub(crate) fn handle(&self) -> Option<RawHandle> {
+        match self {
+            Waitable::Desc(d) => match &d.object {
+                Object::Stream(s) => Some(s.socket.raw()),
+                Object::EventFd(e) => Some(e.event.raw()),
+                Object::Pidfd(p) => Some(p.raw()),
+                _ => None,
+            },
+            Waitable::Channel(c) => Some(c.raw()),
+            Waitable::Stream(c) => Some(c.stream.socket.raw()),
+            Waitable::Bytes(s) => Some(s.socket.raw()),
+        }
+    }
+}
+
+/// What a description is ready for now.
+pub(crate) struct Ready {
+    /// `epoll`'s events, which are `poll`'s too: `EPOLLIN` and `EPOLLRDNORM`,
+    /// `EPOLLOUT` and `EPOLLWRNORM`, `EPOLLRDHUP` (the peer writes no
+    /// more), `EPOLLHUP`, `EPOLLERR`.
+    pub events: u32,
+    /// What to wait on for more, and for which of its signals: those that
+    /// make it ready for what is asked and is not, and those that change it
+    /// otherwise (a hang-up, a message on a network socket's channel).
+    pub wait: Option<(Waitable, u32)>,
+    /// How often it changed in ways its readiness may not show, for
+    /// edge-triggered `epoll`.
+    pub seq: u64,
+}
+
+/// What `desc` is ready for now, asked whether it can be read (`want_in`)
+/// and written (`want_out`) without waiting.
+pub(crate) fn readiness(desc: &Arc<Description>, want_in: bool, want_out: bool) -> Ready {
+    use crate::linux::epoll::{ERR, HUP, IN, OUT, RDHUP, RDNORM, WRNORM};
+    let seq = desc.seq();
     match &desc.object {
         Object::Stream(s) => {
             let (readable, hup, writable) = s.readiness();
-            let mut r = 0;
-            if want_in && readable {
-                r |= p.events & (poll::IN | poll::RDNORM);
+            let mut events = 0;
+            if readable {
+                events |= IN | RDNORM;
             }
-            if want_out && writable && !hup {
-                r |= p.events & (poll::OUT | poll::WRNORM);
+            if writable && !hup {
+                events |= OUT | WRNORM;
             }
             if hup {
-                r |= if desc.writable() && !desc.readable() { poll::ERR } else { poll::HUP };
+                // The read end of a pipe whose writers are gone has the end
+                // of its input; the write end, nobody to write to.
+                events |= if desc.writable() && !desc.readable() { ERR } else { HUP | RDHUP };
             }
-            let mut signals = PEER_CLOSED | PEER_WRITE_DISABLED;
-            if want_in {
+            let mut signals = 0;
+            if !hup {
+                signals |= PEER_CLOSED | PEER_WRITE_DISABLED;
+            }
+            if want_in && !readable {
                 signals |= READABLE;
             }
-            if want_out {
+            if want_out && !writable && !hup {
                 signals |= WRITABLE;
             }
-            (r, Some((desc.clone(), signals)))
+            let wait = (signals != 0).then(|| (Waitable::Desc(desc.clone()), signals));
+            Ready { events, wait, seq }
         }
+        Object::Inet(s) => {
+            let now = s.readiness(want_in, want_out);
+            let mut events = 0;
+            if now.input {
+                events |= IN | RDNORM;
+            }
+            if now.output {
+                events |= OUT | WRNORM;
+            }
+            if now.read_hangup {
+                events |= RDHUP;
+            }
+            if now.hangup {
+                events |= HUP;
+            }
+            if now.error {
+                events |= ERR;
+            }
+            Ready { events, wait: now.wait, seq: seq.wrapping_add(now.seq) }
+        }
+        Object::Unix(s) => {
+            let now = s.readiness(want_in, want_out);
+            let mut events = 0;
+            if now.input {
+                events |= IN | RDNORM;
+            }
+            if now.output {
+                events |= OUT | WRNORM;
+            }
+            if now.read_hangup {
+                events |= RDHUP;
+            }
+            if now.hangup {
+                events |= HUP;
+            }
+            Ready { events, wait: now.wait, seq }
+        }
+        Object::EventFd(e) => {
+            let (readable, writable) = e.readiness();
+            let mut events = 0;
+            if readable {
+                events |= IN | RDNORM;
+            }
+            if writable {
+                events |= OUT | WRNORM;
+            }
+            let mut signals = 0;
+            if want_in && !readable {
+                signals |= crate::eventfd::READABLE;
+            }
+            if want_out && !writable {
+                signals |= crate::eventfd::WRITABLE;
+            }
+            let wait = (signals != 0).then(|| (Waitable::Desc(desc.clone()), signals));
+            Ready { events, wait, seq }
+        }
+        // A child's descriptor: readable once it has ended.
+        Object::Pidfd(p) => {
+            let ended = p.wait(TERMINATED, 0).is_ok();
+            let events = if ended { IN | RDNORM } else { 0 };
+            let wait = (want_in && !ended).then(|| (Waitable::Desc(desc.clone()), TERMINATED));
+            Ready { events, wait, seq }
+        }
+        // Another epoll instance is never ready here: they do not nest.
+        Object::Epoll(_) => Ready { events: 0, wait: None, seq },
         // Files and the rest never make a reader or writer wait.
-        _ => (p.events & (poll::IN | poll::RDNORM | poll::OUT | poll::WRNORM), None),
+        Object::File(_) | Object::Dir(_) | Object::Null | Object::Log(_) => {
+            Ready { events: IN | RDNORM | OUT | WRNORM, wait: None, seq }
+        }
     }
+}
+
+/// What `poll` reports for one descriptor right now, and how to wait for
+/// more.
+fn poll_one(p: &Pollfd) -> (i16, Option<(Waitable, u32)>) {
+    let Ok(desc) = fd::get(p.fd) else { return (poll::NVAL, None) };
+    let asked = p.events as u16 as u32;
+    let want_in = p.events & (poll::IN | poll::RDNORM | poll::RDHUP) != 0;
+    let want_out = p.events & (poll::OUT | poll::WRNORM) != 0;
+    let now = readiness(&desc, want_in, want_out);
+    let always = crate::linux::epoll::ERR | crate::linux::epoll::HUP;
+    ((now.events & (asked | always)) as i16, now.wait)
 }
 
 /// `poll`: waits until a descriptor is ready or `deadline` (monotonic ns,
@@ -562,7 +757,7 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
     let mut pfds = read_all()?;
     loop {
         let mut ready = 0;
-        let mut waits: Vec<(Arc<Description>, u32)> = Vec::new();
+        let mut waits: Vec<(Waitable, u32)> = Vec::new();
         for p in pfds.iter_mut() {
             if p.fd < 0 {
                 p.revents = 0;
@@ -593,11 +788,8 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
         }
         let mut items: Vec<WaitItem> = waits
             .iter()
-            .filter_map(|(d, sig)| match &d.object {
-                Object::Stream(s) => {
-                    Some(WaitItem { handle: s.socket.raw(), signals: *sig, observed: 0, _reserved: 0 })
-                }
-                _ => None,
+            .filter_map(|(w, signals)| {
+                Some(WaitItem { handle: w.handle()?, signals: *signals, observed: 0, _reserved: 0 })
             })
             .collect();
         match vrt::object::wait_many(&mut items, deadline.unwrap_or(vabi::DEADLINE_INFINITE)) {
@@ -674,9 +866,18 @@ pub unsafe fn select(n: i32, readfds: usize, writefds: usize, exceptfds: usize, 
 }
 
 /// Installs the descriptors a process was started with: role `FD + n`
-/// handles are sockets (pipes, the terminal) or `file` connections, and
-/// `pseudo` those that are no kernel object (`inherit`).
-pub fn adopt_startup_fds(pseudo: &[(i32, Pseudo)]) {
+/// handles are kernel sockets (pipes, the terminal), `file` connections, or
+/// what carries the sockets `inherited` says; `inherited` also says the
+/// descriptors that are no kernel object.
+pub fn adopt_startup_fds(inherited: &Inherited) {
+    for (n, socket) in &inherited.sockets {
+        let Some(n) = u32::try_from(*n).ok().filter(|&n| n < startup::role::MAX_FDS) else { continue };
+        let roles = [startup::role::FD + n, startup::role::FD_EXTRA + n];
+        let handles = roles.into_iter().map_while(vrt::env::take_handle).collect();
+        if let Some(desc) = crate::carry::from_parent(socket, handles) {
+            let _ = fd::replace(n as i32, desc, false);
+        }
+    }
     for role in vrt::env::handle_roles() {
         let Some(n) = startup::role::fd(role) else { continue };
         let Some(h) = vrt::env::take_handle(role) else { continue };
@@ -699,18 +900,19 @@ pub fn adopt_startup_fds(pseudo: &[(i32, Pseudo)]) {
         };
         let _ = fd::replace(n as i32, desc, false);
     }
-    for (n, fd) in pseudo {
+    for (n, fd) in &inherited.fds {
         let desc = match fd {
             Pseudo::Dir(path) => Description::new(Object::Dir(crate::file::Directory::new(path.clone())), o::RDONLY),
             Pseudo::Null => Description::new(Object::Null, o::RDWR),
-            Pseudo::Log => Description::new(Object::Log, o::RDWR),
+            Pseudo::Log => Description::new(Object::Log(Log::new()), o::RDWR),
         };
         let _ = fd::replace(*n, desc, false);
     }
     // Standard streams nobody gave: input is empty, output goes to the
     // kernel log.
-    for (n, object) in [(0, Object::Null), (1, Object::Log), (2, Object::Log)] {
+    for n in 0..=2 {
         if fd::get(n).is_err() {
+            let object = if n == 0 { Object::Null } else { Object::Log(Log::new()) };
             let _ = fd::replace(n, Description::new(object, o::RDWR), false);
         }
     }

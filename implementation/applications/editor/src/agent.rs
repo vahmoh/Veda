@@ -11,11 +11,6 @@
 //! itself: replacing the user's work (a file the agent opened, wrote over
 //! and saves) is `save_as`, which asks the user.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
-
 use vfiles::path::file_name;
 use vtext::highlight::Language;
 use vtext::{Document, Pos, Selection};

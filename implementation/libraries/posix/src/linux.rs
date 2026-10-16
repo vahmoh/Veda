@@ -9,7 +9,7 @@
 //! them for each architecture, under the names and types the layer uses;
 //! the few written here say why.
 
-pub use crate::arch::linux::{Stat, nr, ucontext};
+pub use crate::arch::linux::{EpollEvent, Stat, nr, ucontext};
 
 /// `errno` values.
 pub mod errno {
@@ -51,6 +51,27 @@ pub mod errno {
     pub const EAFNOSUPPORT: isize = linux_raw_sys::errno::EAFNOSUPPORT as isize;
     pub const EISCONN: isize = linux_raw_sys::errno::EISCONN as isize;
     pub const ETIMEDOUT: isize = linux_raw_sys::errno::ETIMEDOUT as isize;
+    pub const EDOM: isize = linux_raw_sys::errno::EDOM as isize;
+    pub const EDESTADDRREQ: isize = linux_raw_sys::errno::EDESTADDRREQ as isize;
+    pub const EMSGSIZE: isize = linux_raw_sys::errno::EMSGSIZE as isize;
+    pub const ENOPROTOOPT: isize = linux_raw_sys::errno::ENOPROTOOPT as isize;
+    pub const EPROTONOSUPPORT: isize = linux_raw_sys::errno::EPROTONOSUPPORT as isize;
+    pub const EPROTO: isize = linux_raw_sys::errno::EPROTO as isize;
+    pub const EADDRINUSE: isize = linux_raw_sys::errno::EADDRINUSE as isize;
+    pub const EADDRNOTAVAIL: isize = linux_raw_sys::errno::EADDRNOTAVAIL as isize;
+    pub const ENETDOWN: isize = linux_raw_sys::errno::ENETDOWN as isize;
+    pub const ENETUNREACH: isize = linux_raw_sys::errno::ENETUNREACH as isize;
+    pub const ECONNABORTED: isize = linux_raw_sys::errno::ECONNABORTED as isize;
+    pub const ECONNRESET: isize = linux_raw_sys::errno::ECONNRESET as isize;
+    pub const ENOBUFS: isize = linux_raw_sys::errno::ENOBUFS as isize;
+    pub const ENOTCONN: isize = linux_raw_sys::errno::ENOTCONN as isize;
+    pub const ECONNREFUSED: isize = linux_raw_sys::errno::ECONNREFUSED as isize;
+    pub const EHOSTUNREACH: isize = linux_raw_sys::errno::EHOSTUNREACH as isize;
+    pub const EALREADY: isize = linux_raw_sys::errno::EALREADY as isize;
+    pub const EINPROGRESS: isize = linux_raw_sys::errno::EINPROGRESS as isize;
+    pub const EPROTOTYPE: isize = linux_raw_sys::errno::EPROTOTYPE as isize;
+    pub const ESOCKTNOSUPPORT: isize = linux_raw_sys::errno::ESOCKTNOSUPPORT as isize;
+    pub const ETOOMANYREFS: isize = linux_raw_sys::errno::ETOOMANYREFS as isize;
 }
 
 /// `open` flags.
@@ -107,6 +128,7 @@ pub mod mode {
     pub const IFCHR: u32 = linux_raw_sys::general::S_IFCHR;
     pub const IFDIR: u32 = linux_raw_sys::general::S_IFDIR;
     pub const IFREG: u32 = linux_raw_sys::general::S_IFREG;
+    pub const IFSOCK: u32 = linux_raw_sys::general::S_IFSOCK;
 }
 
 /// `fcntl` commands and descriptor flags.
@@ -201,6 +223,8 @@ pub mod poll {
     pub const NVAL: i16 = linux_raw_sys::general::POLLNVAL as i16;
     pub const RDNORM: i16 = linux_raw_sys::general::POLLRDNORM as i16;
     pub const WRNORM: i16 = linux_raw_sys::general::POLLWRNORM as i16;
+    /// The peer finished sending (or this end stopped reading).
+    pub const RDHUP: i16 = linux_raw_sys::general::POLLRDHUP as i16;
 }
 
 /// Clocks of `clock_gettime`.
@@ -428,6 +452,160 @@ pub mod msg {
     pub const DONTWAIT: u32 = linux_raw_sys::net::MSG_DONTWAIT;
     pub const WAITALL: u32 = linux_raw_sys::net::MSG_WAITALL;
     pub const NOSIGNAL: u32 = linux_raw_sys::net::MSG_NOSIGNAL;
+    /// A datagram was longer than the buffer (and, asked for, its length).
+    pub const TRUNC: u32 = linux_raw_sys::net::MSG_TRUNC;
+    /// Ancillary data was cut short: it did not fit.
+    pub const CTRUNC: u32 = linux_raw_sys::net::MSG_CTRUNC;
+    /// Descriptors received (`SCM_RIGHTS`) are closed on `exec`.
+    pub const CMSG_CLOEXEC: u32 = linux_raw_sys::net::MSG_CMSG_CLOEXEC;
+    /// `recvmmsg`: wait for the first message alone (Linux's, which
+    /// `linux-raw-sys`'s headers do not have).
+    pub const WAITFORONE: u32 = 0x10000;
+}
+
+/// `epoll`'s events, flags and operations. The events are `poll`'s.
+pub mod epoll {
+    pub const IN: u32 = linux_raw_sys::general::EPOLLIN;
+    pub const OUT: u32 = linux_raw_sys::general::EPOLLOUT;
+    pub const ERR: u32 = linux_raw_sys::general::EPOLLERR;
+    pub const HUP: u32 = linux_raw_sys::general::EPOLLHUP;
+    pub const RDNORM: u32 = linux_raw_sys::general::EPOLLRDNORM;
+    pub const WRNORM: u32 = linux_raw_sys::general::EPOLLWRNORM;
+    pub const RDHUP: u32 = linux_raw_sys::general::EPOLLRDHUP;
+    pub const EXCLUSIVE: u32 = linux_raw_sys::general::EPOLLEXCLUSIVE;
+    pub const ONESHOT: u32 = linux_raw_sys::general::EPOLLONESHOT;
+    pub const ET: u32 = linux_raw_sys::general::EPOLLET;
+    pub const CTL_ADD: u32 = linux_raw_sys::general::EPOLL_CTL_ADD;
+    pub const CTL_DEL: u32 = linux_raw_sys::general::EPOLL_CTL_DEL;
+    pub const CTL_MOD: u32 = linux_raw_sys::general::EPOLL_CTL_MOD;
+    pub const CLOEXEC: u32 = linux_raw_sys::general::EPOLL_CLOEXEC;
+}
+
+/// `eventfd`'s flags.
+pub mod efd {
+    pub const SEMAPHORE: u32 = linux_raw_sys::general::EFD_SEMAPHORE;
+    pub const CLOEXEC: u32 = linux_raw_sys::general::EFD_CLOEXEC;
+    pub const NONBLOCK: u32 = linux_raw_sys::general::EFD_NONBLOCK;
+}
+
+/// Sockets: address families, types, levels and options.
+pub mod sock {
+    pub const AF_UNSPEC: u16 = linux_raw_sys::net::AF_UNSPEC as u16;
+    pub const AF_UNIX: u16 = linux_raw_sys::net::AF_UNIX as u16;
+    pub const AF_INET: u16 = linux_raw_sys::net::AF_INET as u16;
+    pub const AF_INET6: u16 = linux_raw_sys::net::AF_INET6 as u16;
+    pub const STREAM: u32 = linux_raw_sys::net::SOCK_STREAM;
+    pub const DGRAM: u32 = linux_raw_sys::net::SOCK_DGRAM;
+    pub const SEQPACKET: u32 = linux_raw_sys::net::SOCK_SEQPACKET;
+    /// The flags `socket`'s type may carry beside the type itself.
+    pub const NONBLOCK: u32 = linux_raw_sys::general::O_NONBLOCK;
+    pub const CLOEXEC: u32 = linux_raw_sys::general::O_CLOEXEC;
+    pub const IPPROTO_IP: u32 = linux_raw_sys::net::IPPROTO_IP as u32;
+    pub const IPPROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
+    pub const IPPROTO_UDP: u32 = linux_raw_sys::net::IPPROTO_UDP as u32;
+    pub const IPPROTO_IPV6: u32 = linux_raw_sys::net::IPPROTO_IPV6 as u32;
+    pub const SOL_SOCKET: u32 = linux_raw_sys::net::SOL_SOCKET;
+    pub const SO_REUSEADDR: u32 = linux_raw_sys::net::SO_REUSEADDR;
+    pub const SO_TYPE: u32 = linux_raw_sys::net::SO_TYPE;
+    pub const SO_ERROR: u32 = linux_raw_sys::net::SO_ERROR;
+    pub const SO_BROADCAST: u32 = linux_raw_sys::net::SO_BROADCAST;
+    pub const SO_SNDBUF: u32 = linux_raw_sys::net::SO_SNDBUF;
+    pub const SO_RCVBUF: u32 = linux_raw_sys::net::SO_RCVBUF;
+    pub const SO_KEEPALIVE: u32 = linux_raw_sys::net::SO_KEEPALIVE;
+    pub const SO_OOBINLINE: u32 = linux_raw_sys::net::SO_OOBINLINE;
+    pub const SO_LINGER: u32 = linux_raw_sys::net::SO_LINGER;
+    pub const SO_REUSEPORT: u32 = linux_raw_sys::net::SO_REUSEPORT;
+    pub const SO_RCVLOWAT: u32 = linux_raw_sys::net::SO_RCVLOWAT;
+    pub const SO_SNDLOWAT: u32 = linux_raw_sys::net::SO_SNDLOWAT;
+    pub const SO_RCVTIMEO: u32 = linux_raw_sys::net::SO_RCVTIMEO;
+    pub const SO_SNDTIMEO: u32 = linux_raw_sys::net::SO_SNDTIMEO;
+    pub const SO_ACCEPTCONN: u32 = linux_raw_sys::net::SO_ACCEPTCONN;
+    pub const SO_PROTOCOL: u32 = linux_raw_sys::net::SO_PROTOCOL;
+    pub const SO_DOMAIN: u32 = linux_raw_sys::net::SO_DOMAIN;
+    pub const SO_PASSCRED: u32 = linux_raw_sys::net::SO_PASSCRED;
+    pub const SO_PEERCRED: u32 = linux_raw_sys::net::SO_PEERCRED;
+    /// Ancillary data: descriptors, and who sent a message.
+    pub const SCM_RIGHTS: u32 = linux_raw_sys::net::SCM_RIGHTS;
+    pub const SCM_CREDENTIALS: u32 = linux_raw_sys::net::SCM_CREDENTIALS;
+    pub const TCP_NODELAY: u32 = linux_raw_sys::net::TCP_NODELAY;
+    pub const TCP_MAXSEG: u32 = linux_raw_sys::net::TCP_MAXSEG;
+    pub const TCP_KEEPIDLE: u32 = linux_raw_sys::net::TCP_KEEPIDLE;
+    pub const TCP_KEEPINTVL: u32 = linux_raw_sys::net::TCP_KEEPINTVL;
+    pub const TCP_KEEPCNT: u32 = linux_raw_sys::net::TCP_KEEPCNT;
+    pub const IP_TOS: u32 = linux_raw_sys::net::IP_TOS;
+    pub const IP_TTL: u32 = linux_raw_sys::net::IP_TTL;
+    pub const IPV6_UNICAST_HOPS: u32 = linux_raw_sys::net::IPV6_UNICAST_HOPS;
+    pub const IPV6_V6ONLY: u32 = linux_raw_sys::net::IPV6_V6ONLY;
+    pub const SHUT_RD: u32 = linux_raw_sys::net::SHUT_RD;
+    pub const SHUT_WR: u32 = linux_raw_sys::net::SHUT_WR;
+    pub const SHUT_RDWR: u32 = linux_raw_sys::net::SHUT_RDWR;
+}
+
+/// `struct sockaddr_in`: the port and address in network byte order.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SockaddrIn {
+    pub family: u16,
+    pub port: [u8; 2],
+    pub addr: [u8; 4],
+    pub zero: [u8; 8],
+}
+
+/// `struct sockaddr_in6`: the port, flow label and address in network byte
+/// order.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SockaddrIn6 {
+    pub family: u16,
+    pub port: [u8; 2],
+    pub flowinfo: [u8; 4],
+    pub addr: [u8; 16],
+    pub scope_id: u32,
+}
+
+/// `struct sockaddr_un`: a path (`sun_path`), not always ended by a NUL.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SockaddrUn {
+    pub family: u16,
+    pub path: [u8; 108],
+}
+
+/// `struct ucred` (`SO_PEERCRED`, `SCM_CREDENTIALS`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ucred {
+    pub pid: i32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// `struct cmsghdr`: the header of an ancillary message, which its data
+/// follows (aligned as the header is).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Cmsghdr {
+    /// The header's and the data's bytes.
+    pub len: usize,
+    pub level: i32,
+    pub kind: i32,
+}
+
+/// `struct mmsghdr` (`sendmmsg`, `recvmmsg`): a message, and how many bytes
+/// went or came.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Mmsghdr {
+    pub hdr: Msghdr,
+    pub len: u32,
+}
+
+/// `struct linger`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Linger {
+    pub onoff: i32,
+    pub linger: i32,
 }
 
 /// `struct pollfd`.
@@ -504,6 +682,7 @@ pub mod dt {
     pub const CHR: u8 = linux_raw_sys::general::DT_CHR as u8;
     pub const DIR: u8 = linux_raw_sys::general::DT_DIR as u8;
     pub const REG: u8 = linux_raw_sys::general::DT_REG as u8;
+    pub const SOCK: u8 = linux_raw_sys::general::DT_SOCK as u8;
 }
 
 /// `prctl` options.
@@ -538,6 +717,16 @@ mod tests {
         assert_eq!(offset_of!(Msghdr, iov), 16);
         assert_eq!(offset_of!(Msghdr, control), 32);
         assert_eq!(offset_of!(Msghdr, flags), 48);
+        assert_eq!(size_of::<SockaddrIn>(), 16);
+        assert_eq!(size_of::<SockaddrIn6>(), 28);
+        assert_eq!(offset_of!(SockaddrIn6, scope_id), 24);
+        assert_eq!(size_of::<Linger>(), 8);
+        assert_eq!(size_of::<SockaddrUn>(), 110);
+        assert_eq!(size_of::<Ucred>(), 12);
+        assert_eq!(size_of::<Cmsghdr>(), 16);
+        assert_eq!(offset_of!(Cmsghdr, kind), 12);
+        assert_eq!(size_of::<Mmsghdr>(), 64);
+        assert_eq!(size_of::<EpollEvent>(), 12);
     }
 
     #[test]

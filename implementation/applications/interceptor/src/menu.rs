@@ -6,14 +6,10 @@
 //! chase's and a patrol's choices, the options, the pause menu and the
 //! results.
 
-use alloc::format;
-use alloc::string::String;
-
 use interceptor_game::career::{self, Ending, MISSIONS, Mission};
 use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::road::Section;
 use interceptor_game::session::describe;
-use num_traits::Float;
 use vgfx::{Align, Canvas, Color, Rect, Text};
 
 use crate::app::{App, Item, MAIN, Screen};

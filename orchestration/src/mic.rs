@@ -12,7 +12,10 @@
 //! With `mic-echo GAIN DELAY`, the machine's own sound output (the WAV
 //! file QEMU records) comes back into the microphone, delayed and quieter,
 //! as loudspeakers next to a microphone would: the agent must not hear
-//! itself.
+//! itself. With `mic-music TITLE GAIN`, one of Veda's sample tracks (as
+//! `musicgen` made it) plays into the microphone beside what is queued, as
+//! music on another device in the room would: the machine plays nothing
+//! of it, so its echo canceller knows nothing of it.
 //!
 //! Scripts queue speech with `say "..."`, synthesised by Deepgram's
 //! text-to-speech REST API on the host ([`synthesize`], with the key from
@@ -29,6 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use vaudio::qoa::{self, QoaFile};
 use vaudio::resample::Resampler;
 use vaudio::wav::{self, SampleFormat, WavInfo};
 
@@ -47,6 +51,23 @@ struct Shared {
     connected: AtomicBool,
     stop: AtomicBool,
     echo: Mutex<Option<Echo>>,
+    room: Mutex<Option<Room>>,
+}
+
+/// A sound from elsewhere in the room, heard once beside what is queued.
+struct Room {
+    sound: Vec<i16>,
+    /// The next sample heard.
+    at: usize,
+}
+
+impl Room {
+    /// The next sample heard (silence once it has ended).
+    fn next(&mut self) -> i16 {
+        let Some(&s) = self.sound.get(self.at) else { return 0 };
+        self.at += 1;
+        s
+    }
 }
 
 /// The machine's sound output, coming back into the microphone.
@@ -130,6 +151,7 @@ impl MicServer {
             connected: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             echo: Mutex::new(None),
+            room: Mutex::new(None),
         });
         let s = shared.clone();
         std::thread::Builder::new()
@@ -165,6 +187,21 @@ impl MicServer {
         echo.refill();
         echo.delay_line = VecDeque::from(vec![0i16; delay]);
         *self.shared.echo.lock().unwrap() = Some(echo);
+    }
+
+    /// From now on `sound` (16 kHz) plays into the microphone once,
+    /// `gain_db` louder (negative: quieter), beside what is queued: a sound
+    /// from elsewhere in the room, such as music on another device. It
+    /// replaces the one playing.
+    pub fn room_sound(&self, sound: &[i16], gain_db: f64) {
+        let gain = 10f64.powf(gain_db / 20.0);
+        let sound = sound.iter().map(|&s| (s as f64 * gain).clamp(-32768.0, 32767.0) as i16).collect();
+        *self.shared.room.lock().unwrap() = Some(Room { sound, at: 0 });
+    }
+
+    /// Stops the sound from elsewhere in the room.
+    pub fn room_quiet(&self) {
+        *self.shared.room.lock().unwrap() = None;
     }
 
     /// Queues `secs` of the user's voice-like buzz (see `voice`): enough
@@ -242,9 +279,11 @@ fn stream_to(mut stream: TcpStream, shared: &Shared) {
                 e.refill();
             }
             let mut q = shared.queue.lock().unwrap();
+            let mut room = shared.room.lock().unwrap();
             for _ in 0..CHUNK {
                 let back = echo.as_mut().and_then(|e| e.delay_line.pop_front()).unwrap_or(0);
-                let s = q.pop_front().unwrap_or(0).saturating_add(back);
+                let beside = room.as_mut().map_or(0, Room::next);
+                let s = q.pop_front().unwrap_or(0).saturating_add(back).saturating_add(beside);
                 packet.extend_from_slice(&s.to_le_bytes());
             }
         }
@@ -358,6 +397,34 @@ pub fn read_wav(path: &Path) -> Result<Vec<i16>> {
     Ok(Resampler::process_all(info.rate, RATE, 1, &mono))
 }
 
+/// A QOA file as 16 kHz mono samples (all its channels mixed).
+pub fn read_qoa(path: &Path) -> Result<Vec<i16>> {
+    let data = util::read(path)?;
+    let file = QoaFile::open(&data).map_err(|e| format!("{}: {e}", path.display()))?;
+    let info = file.info();
+    let mut frame = vec![0i16; qoa::FRAME_LEN * info.channels];
+    let mut mono = Vec::with_capacity(info.frames as usize);
+    for i in 0..file.frame_count() {
+        let n = file.decode_frame(i, &mut frame).map_err(|e| format!("{}: {e}", path.display()))?;
+        mono.extend(frame[..n * info.channels].chunks_exact(info.channels).map(|c| {
+            let sum: i32 = c.iter().map(|&s| s as i32).sum();
+            (sum / info.channels as i32) as i16
+        }));
+    }
+    Ok(Resampler::process_all(info.rate, RATE, 1, &mono))
+}
+
+/// One of Veda's sample tracks, by its title, as `musicgen` made it (16 kHz
+/// mono).
+pub fn read_sample_track(title: &str) -> Result<Vec<i16>> {
+    let dir = util::generated_dir().join("musicgen").join("samples").join("Music");
+    let path = dir.join(format!("{title}.qoa"));
+    if !path.is_file() {
+        return Err(format!("no sample track \"{title}\" in {} (musicgen makes them)", dir.display()));
+    }
+    read_qoa(&path)
+}
+
 /// The 64-bit FNV-1a hash of `s`.
 fn fnv64(s: &str) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
@@ -429,6 +496,41 @@ mod tests {
         assert!((rms - 5657.0).abs() < 60.0, "{rms}");
         assert!(crossings.abs_diff(1975) <= 4, "{crossings}");
         assert!(read_wav(Path::new("/nonexistent.wav")).is_err());
+    }
+
+    #[test]
+    fn a_sound_in_the_room_plays_beside_what_is_queued() {
+        let mic = MicServer::start().unwrap();
+        let port: u16 = mic.boot_arg().split(',').nth(1).unwrap().parse().unwrap();
+        // Queued before connecting, so that both start with the first packet.
+        mic.enqueue(&[1000; 320]);
+        mic.room_sound(&[400; 640], -6.0);
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut got = vec![0u8; 2 * 960];
+        std::io::Read::read_exact(&mut conn, &mut got).unwrap();
+        let samples = pcm_from_bytes(&got);
+        // The queue and the room (6 dB quieter) at once, then the room alone
+        // until it ends, then silence: it plays once.
+        assert!(samples[..320].iter().all(|&s| s == 1000 + 200), "{:?}", &samples[..4]);
+        assert!(samples[320..640].iter().all(|&s| s == 200), "{:?}", &samples[320..324]);
+        assert!(samples[640..].iter().all(|&s| s == 0));
+        mic.room_sound(&[300; 32_000], 0.0);
+        mic.room_quiet();
+        assert!(mic.shared.room.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn qoa_files_become_the_microphones_rate() {
+        let path = std::env::temp_dir().join(format!("veda-mic-{}.qoa", std::process::id()));
+        std::fs::write(&path, qoa::encode(&tone(44_100, 2, 1.0), 2, 44_100).unwrap()).unwrap();
+        let read = read_qoa(&path);
+        let _ = std::fs::remove_file(&path);
+        let samples = read.unwrap();
+        assert!(samples.len().abs_diff(RATE as usize) <= 1, "{}", samples.len());
+        let (rms, crossings) = measure(&samples[100..15_900]);
+        assert!((rms - 5657.0).abs() < 120.0, "{rms}");
+        assert!(crossings.abs_diff(1975) <= 4, "{crossings}");
+        assert!(read_sample_track("No Such Track").is_err_and(|e| e.contains("No Such Track")));
     }
 
     #[test]

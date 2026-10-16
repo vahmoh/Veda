@@ -1,0 +1,116 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -148,6 +148,7 @@
+ level = "warn"
+ priority = 0
+ check-cfg = [
++    'cfg(target_os, values("veda"))',
+     "cfg(mio_unsupported_force_poll_poll)",
+     "cfg(mio_unsupported_force_waker_pipe)",
+ ]
+--- a/src/interest.rs
++++ b/src/interest.rs
+@@ -48,7 +48,7 @@
+     pub const LIO: Interest = Interest(unsafe { NonZeroU8::new_unchecked(LIO) });
+ 
+     /// Returns a `Interest` set representing priority completion interests.
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+     pub const PRIORITY: Interest = Interest(unsafe { NonZeroU8::new_unchecked(PRIORITY) });
+ 
+     /// Add together two `Interest`.
+@@ -186,7 +186,7 @@
+                 one = true
+             }
+         }
+-        #[cfg(any(target_os = "linux", target_os = "android"))]
++        #[cfg(any(any(target_os = "linux", target_os = "veda"), target_os = "android"))]
+         {
+             if self.is_priority() {
+                 if one {
+--- a/src/sys/unix/mod.rs
++++ b/src/sys/unix/mod.rs
+@@ -20,7 +20,7 @@
+         any(
+             target_os = "android",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+             target_os = "redox",
+         )
+     ), path = "selector/epoll.rs")]
+@@ -69,7 +69,7 @@
+             target_os = "fuchsia",
+             target_os = "hermit",
+             target_os = "illumos",
+-            target_os = "linux",
++            any(target_os = "linux", target_os = "veda"),
+         )
+     ), path = "waker/eventfd.rs")]
+     #[cfg_attr(all(
+--- a/src/sys/unix/net.rs
++++ b/src/sys/unix/net.rs
+@@ -19,7 +19,7 @@
+         target_os = "freebsd",
+         target_os = "hurd",
+         target_os = "illumos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_os = "solaris",
+--- a/src/sys/unix/pipe.rs
++++ b/src/sys/unix/pipe.rs
+@@ -15,7 +15,7 @@
+         target_os = "freebsd",
+         target_os = "fuchsia",
+         target_os = "hurd",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_os = "illumos",
+--- a/src/sys/unix/selector/poll.rs
++++ b/src/sys/unix/selector/poll.rs
+@@ -469,9 +469,9 @@
+ #[cfg(target_os = "horizon")]
+ type PollFlagInt = libc::c_int;
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(any(target_os = "linux", target_os = "veda"))]
+ const POLLRDHUP: PollFlagInt = libc::POLLRDHUP;
+-#[cfg(not(target_os = "linux"))]
++#[cfg(not(any(target_os = "linux", target_os = "veda")))]
+ const POLLRDHUP: PollFlagInt = 0;
+ 
+ #[cfg(not(target_os = "wasi"))]
+--- a/src/sys/unix/tcp.rs
++++ b/src/sys/unix/tcp.rs
+@@ -69,7 +69,7 @@
+         target_os = "fuchsia",
+         target_os = "hurd",
+         target_os = "illumos",
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "netbsd",
+         target_os = "openbsd",
+         target_os = "solaris",
+--- a/src/sys/unix/uds/listener.rs
++++ b/src/sys/unix/uds/listener.rs
+@@ -27,14 +27,14 @@
+     ))]
+     let backlog = 128;
+     #[cfg(any(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "freebsd",
+         target_os = "openbsd",
+         target_vendor = "apple"
+     ))]
+     let backlog = -1;
+     #[cfg(not(any(
+-        target_os = "linux",
++        any(target_os = "linux", target_os = "veda"),
+         target_os = "freebsd",
+         target_os = "openbsd",
+         target_vendor = "apple",

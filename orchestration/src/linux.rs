@@ -85,10 +85,14 @@ fn lock() -> Result<util::Lock> {
 }
 
 /// The ports the Linux build is made from, and what builds them, whose
-/// fingerprint `cargo orchestration linux` notes.
+/// fingerprint `cargo orchestration linux` notes. Of the toolchain's ports
+/// (binutils, GCC, musl) only the releases count: the guest's toolchain is
+/// built from them as their authors released them, without Veda's patches.
 fn ports_fingerprint() -> Result<String> {
-    let names = ["zlib", "elfutils", "linux", "binutils", "gcc", "musl", "mesa"];
-    ports::fingerprint(&names, &[ports::dir().join("common.sh"), ports::settings()])
+    let dir = ports::dir();
+    let mut extra = vec![dir.join("common.sh"), ports::settings()];
+    extra.extend(["binutils", "gcc", "musl"].map(|name| dir.join(name).join("port.toml")));
+    ports::fingerprint(&["zlib", "elfutils", "linux", "mesa"], &extra)
 }
 
 fn ports_note() -> PathBuf {

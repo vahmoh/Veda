@@ -8,9 +8,7 @@
 //! register, and only permissions for sensitive actions the agent knows of
 //! are kept.
 
-use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 use vagent::config::Config;

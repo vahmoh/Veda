@@ -16,7 +16,10 @@
 //! words ("very" does not call an agent named Vera).
 //!
 //! Hearing costs: a [`Budget`] caps the speech recognition that listening
-//! for the name may use each hour.
+//! for the name may use each hour. And a sound that held no words (music,
+//! a television) is a [`Background`]: while it goes on, only a sound that
+//! [stands out](stands_out) from it is listened to, so that it does not
+//! keep the recogniser busy.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -194,6 +197,75 @@ impl Budget {
     }
 }
 
+/// Over a [`Background`], a sound must be this much louder than the
+/// background's usual peaks to be listened to ...
+pub const STAND_OUT_DB: f32 = 10.0;
+/// ... than the loudest tenth of the levels of the last seconds (music
+/// builds up).
+const PEAKS: f32 = 0.9;
+/// A background has stopped once it has been this much quieter than its
+/// usual level ...
+pub const BACKGROUND_GONE_DB: f32 = 15.0;
+/// ... for this long: longer than the pause between two songs.
+pub const BACKGROUND_GONE_NS: u64 = 5_000_000_000;
+
+/// The level below which `share` of `levels` lie (`None` for none).
+fn quantile(levels: impl Iterator<Item = f32>, share: f32) -> Option<f32> {
+    let mut sorted: Vec<f32> = levels.collect();
+    sorted.sort_by(f32::total_cmp);
+    let i = ((sorted.len() as f32 * share) as usize).min(sorted.len().checked_sub(1)?);
+    Some(sorted[i])
+}
+
+/// Whether the newest of `recent` levels (dBFS) are clearly louder than
+/// the usual peaks of `window`, the levels of the last seconds that hold
+/// them: the loudest of `recent` is [`STAND_OUT_DB`] above the loudest tenth
+/// of `window`. A call over music does; the music's usual loud moments do
+/// not (once maybe, as it grows much louder than it has been: a quiet
+/// start).
+pub fn stands_out(window: &[f32], recent: &[f32]) -> bool {
+    let peaks = quantile(window.iter().copied(), PEAKS).unwrap_or(f32::NEG_INFINITY);
+    let now = recent.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    now > peaks + STAND_OUT_DB
+}
+
+/// A sound going on that held no words — music, a television — as the
+/// listener found it: of its usual level until it stops. It stops once the
+/// sound has been [`BACKGROUND_GONE_DB`] below that level for
+/// [`BACKGROUND_GONE_NS`], whatever a voice detector makes of it: quiet
+/// passages of music sound like nobody speaking, but are not its end, and a
+/// detector that took them for it would have the next loud passage listened
+/// to as speech again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Background {
+    /// Its usual level (dBFS): the median of the sound when it was found.
+    usual_db: f32,
+    /// When it was last heard near that level.
+    heard_ns: u64,
+}
+
+impl Background {
+    /// The sound of `levels` (dBFS, of the last seconds), found at `now` to
+    /// hold no words; `None` without levels.
+    pub fn new(levels: impl Iterator<Item = f32>, now: u64) -> Option<Background> {
+        Some(Background { usual_db: quantile(levels, 0.5)?, heard_ns: now })
+    }
+
+    /// Its usual level (dBFS).
+    pub fn usual_db(&self) -> f32 {
+        self.usual_db
+    }
+
+    /// Takes the level of the sound at `now`: whether the background goes
+    /// on.
+    pub fn hear(&mut self, level_db: f32, now: u64) -> bool {
+        if level_db >= self.usual_db - BACKGROUND_GONE_DB {
+            self.heard_ns = now;
+        }
+        now.saturating_sub(self.heard_ns) <= BACKGROUND_GONE_NS
+    }
+}
+
 /// The transcript after its first `skip` words, keeping its punctuation.
 fn after_words(transcript: &str, skip: usize) -> String {
     let mut seen = 0;
@@ -275,6 +347,68 @@ mod tests {
         // A new period starts afresh.
         assert!(b.allows(61 * MIN));
         assert!(b.report_exhausted());
+    }
+
+    /// 20 ms frames of `ms` milliseconds, from `start` (ns), each at the
+    /// level `level(i)` for frame `i`.
+    fn frames(start: u64, ms: u64, level: impl Fn(u64) -> f32) -> impl Iterator<Item = (u64, f32)> {
+        (0..ms / 20).map(move |i| (start + i * 20_000_000, level(i)))
+    }
+
+    /// Music: beats between -14 and -26 dBFS.
+    fn music(i: u64) -> f32 {
+        if i % 15 < 5 { -14.0 } else { -26.0 }
+    }
+
+    /// A background found over ten seconds of music, at `at`.
+    fn over_music(at: u64) -> Background {
+        let levels: Vec<f32> = frames(0, 10_000, music).map(|(_, l)| l).collect();
+        Background::new(levels.into_iter(), at).unwrap()
+    }
+
+    #[test]
+    fn music_goes_on_through_quiet_passages_and_pauses() {
+        const S: u64 = 1_000_000_000;
+        let mut b = over_music(10 * S);
+        assert_eq!(b.usual_db(), -26.0);
+        // A quiet bridge (10 dB under the music) for half a minute, then the
+        // pause between two songs, then the next song.
+        let quiet = frames(10 * S, 30_000, |i| if i % 50 == 0 { -30.0 } else { -36.0 });
+        let pause = frames(40 * S, 2_000, |_| -96.0);
+        let next = frames(42 * S, 10_000, music);
+        assert!(quiet.chain(pause).chain(next).all(|(t, l)| b.hear(l, t)), "the music went on");
+    }
+
+    #[test]
+    fn a_background_stops_when_the_sound_does() {
+        const S: u64 = 1_000_000_000;
+        let mut b = over_music(10 * S);
+        // The music is stopped: the room's quiet, which ends it after five
+        // seconds, not before.
+        let silence: Vec<(u64, f32)> = frames(10 * S, 8_000, |_| -70.0).collect();
+        let going_on: Vec<bool> = silence.iter().map(|&(t, l)| b.hear(l, t)).collect();
+        let stopped = going_on.iter().position(|on| !on).expect("it stopped");
+        let after = silence[stopped].0 - 10 * S;
+        assert!((BACKGROUND_GONE_NS..BACKGROUND_GONE_NS + 100_000_000).contains(&after), "after {after} ns");
+        // Turned down, it goes on; turned far down, it is as good as
+        // stopped (a new background is found if it goes on without words).
+        let mut b = over_music(10 * S);
+        assert!(frames(10 * S, 6_000, |i| music(i) - 20.0).all(|(t, l)| b.hear(l, t)));
+        let mut b = over_music(10 * S);
+        assert!(!frames(10 * S, 6_000, |i| music(i) - 35.0).all(|(t, l)| b.hear(l, t)));
+    }
+
+    #[test]
+    fn a_call_stands_out_from_music() {
+        let window: Vec<f32> = frames(0, 10_000, music).map(|(_, l)| l).collect();
+        // The music's own loud moments do not; someone calling over it does.
+        assert!(!stands_out(&window, &[-14.0, -15.0]));
+        assert!(!stands_out(&window, &[-5.0]));
+        assert!(stands_out(&window, &[-20.0, -3.0]));
+        // Over quiet, anything louder than the quiet's peaks by enough does.
+        let quiet = [-80.0f32; 500];
+        assert!(stands_out(&quiet, &[-60.0]) && !stands_out(&quiet, &[-75.0]));
+        assert!(stands_out(&[], &[-90.0]), "no window: no background to stand out from");
     }
 
     #[test]

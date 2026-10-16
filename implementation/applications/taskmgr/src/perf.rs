@@ -4,9 +4,7 @@
 //! The Performance tab: a resource list with sparklines on the left and a
 //! large history graph with summary tiles for the selected resource.
 
-use alloc::collections::VecDeque;
-use alloc::format;
-use alloc::string::{String, ToString};
+use std::collections::VecDeque;
 
 use vgfx::{LineJoin, Path, StrokeStyle};
 use vui::{Align, Color, Cursor, Font, Icon, Rect, Ui};
@@ -242,8 +240,7 @@ pub fn draw(tm: &mut TaskManager, ui: &mut Ui, r: Rect) {
             tile(ui, Rect::new(p.x + 3 * tw, ty, tw, 50), "Usage", &format!("{mem_pct:.1}%"));
             // The largest processes (their resident pages, which may include
             // memory shared with other processes).
-            let mut top: alloc::vec::Vec<(String, u64)> =
-                tm.procs.iter().map(|p| (p.title.clone(), p.memory)).collect();
+            let mut top: Vec<(String, u64)> = tm.procs.iter().map(|p| (p.title.clone(), p.memory)).collect();
             top.sort_by_key(|e| core::cmp::Reverse(e.1));
             let dy = ty + 64;
             ui.label(

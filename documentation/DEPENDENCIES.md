@@ -14,16 +14,21 @@ dependency's reason beside it.
 
 ## What a library must fit
 
-* **No standard library.** Veda's own components are `no_std` with
-  `alloc`. User space is ELF64 executables built for Linux's musl target
-  but linked with nothing of Linux's or musl's, so a crate that takes
-  `cfg(target_os = "linux")` or `cfg(unix)` paths to system calls or the C
-  library on that target (`x86_64-unknown-linux-musl`), or detects the
-  processor through `std`, does not fit either. The kernel and the loader
-  are soft-float and freestanding, where crates run their portable code
-  (`.cargo/arch/amd64/config.toml` chooses it). The build machine's
-  tools (`orchestration`, `generation/`) and the driver VM's Linux programs
-  have `std`.
+* **The standard library only where it is.** Veda's libraries and its
+  programs on `vrt` alone are `no_std` with `alloc`: those programs are
+  ELF64 executables built for Linux's musl target but linked with nothing
+  of Linux's or musl's, so a crate that takes `cfg(target_os = "linux")`
+  or `cfg(unix)` paths to system calls or the C library on that target
+  (`x86_64-unknown-linux-musl`), or detects the processor through `std`,
+  does not fit them either. The kernel and the loader are soft-float and
+  freestanding, where crates run their portable code
+  (`.cargo/arch/amd64/config.toml` chooses it). Veda's programs on Rust's
+  standard library (its applications, and the services that use it), the
+  build machine's tools (`orchestration`, `generation/`) and the driver
+  VM's Linux programs have `std`: a crate that needs it fits them, if it
+  works on Veda's own target, where the standard library stands on the C
+  library ([Rust on Veda](RUST.md#limits) lists what it lacks: `fork`,
+  multicast, asynchronous signals).
 * **Little in every program.** Programs are linked statically and without
   whole-program LTO, so what a crate makes reachable is in every program
   that calls it. Measured on Veda's programs:
@@ -54,6 +59,7 @@ dependency's reason beside it.
 | Numbers | `libm`, `num-traits`, `num-rational`, `num-integer`, `glam`, `rand`, `rand_pcg`, `rand_distr`, `fastnoise-lite` | Float functions; the Calculator's exact fractions; 3D maths; random numbers that are the same everywhere for a seed; noise |
 | Images | `zune-jpeg` (a port), `zune-png`, `zune-bmp`, `zune-inflate`, `qoi`, `fast_image_resize`, `bytemuck`, `jpeg-encoder`, `miniz_oxide` | Decoding and scaling pictures; encoding them (JPEG, and PNG's deflate) |
 | Linux | `linux-raw-sys`; `rustix`, `libc` | The Linux ABI the POSIX layer gives musl; the driver VM's programs' system calls |
+| The standard library's crates on Veda | `libc`, `getrandom`, `rustix`, `errno`, `tokio`, `mio`, `socket2` (ports that know Veda's target), `tempfile` | What crates that need the standard library stand on, in Veda's programs on it: the C library, random bytes, system calls, temporary files, and tokio, the asynchronous runtime, on the C library's epoll and eventfd (mio's) and sockets (socket2's); `verification/stdcrates` checks them in Veda |
 | Build machine only | `png`, `rav1e`, `md-5`, `tungstenite` | Test output, and a second decoder for the PNGs Veda writes; sample videos; the stand-in for Deepgram's Voice Agent API |
 
 C and C++ come as ports too: GCC, binutils and musl (the toolchain),

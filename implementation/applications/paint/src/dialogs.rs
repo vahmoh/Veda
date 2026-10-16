@@ -4,9 +4,6 @@
 //! The dialogs that ask for numbers: a new picture's size, resizing, the canvas's size, and the
 //! effects with settings (shown on the picture as they change).
 
-use alloc::format;
-use alloc::string::{String, ToString};
-
 use paint_core::Document;
 use paint_core::effects::Effect;
 use paint_core::transform::{Anchor, MAX_SIDE, Resample};

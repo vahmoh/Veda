@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# getrandom 0.3, which crates still use beside 0.4 (rand 0.9, for one): a
+# port of its own, as the workspace has both releases. A crate: its
+# release on crates.io, which Cargo builds.
+name = "getrandom"
+version = "0.3.4"
+url = "https://static.crates.io/crates/getrandom/getrandom-0.3.4.crate"
+sha256 = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+license = "MIT OR Apache-2.0"

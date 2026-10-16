@@ -22,10 +22,8 @@
 //! shared between threads); the window's thread and the engine send
 //! [`Command`]s.
 
-use alloc::collections::VecDeque;
-use alloc::sync::Arc;
-use alloc::vec;
-use alloc::vec::Vec;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 use vabi::{WaitItem, signals};
 use videos_core::clock::{AudioMap, ClockModel};

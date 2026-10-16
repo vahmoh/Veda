@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Music from elsewhere in the room: another device plays it, so the
+# machine's echo canceller knows nothing of it. The name listener hears
+# its start, and once that brought no words takes it for a background,
+# which does not keep the recogniser busy; when the music stops, so does
+# the background (music starting again is listened to again); and calling
+# the agent over it still wakes it.
+agent-asleep
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 2
+wait-serial "listening for its name" 30
+# The music starts: listened to, and a background once eight seconds
+# brought no words.
+mic-music "Neon Horizon" -6
+wait-serial "someone is speaking" 20
+wait-serial "sound without words; listening for its name over it" 20
+# It stops for longer than a pause between songs: so does the background.
+mic-music off
+wait-serial "the sound without words stopped" 15
+# It starts again: listened to again, a background again.
+checkpoint
+mic-music "Neon Horizon" -6
+wait-serial "someone is speaking" 20
+wait-serial "sound without words; listening for its name over it" 20
+wait 20
+# Over it, only what stands out is listened to: its two starts, and once
+# maybe as it grows louder than its quiet beginning.
+agent-listens-at-most 3
+agent-not-listening 20
+checkpoint
+mic-tone 2 16000
+wait-serial "someone is speaking" 20
+agent-hear "Hey Veda, stop the music." 30
+wait-serial "woken by its name" 20
+agent-connected 60
+agent-expect "Hey Veda, stop the music." 20

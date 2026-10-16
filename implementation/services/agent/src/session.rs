@@ -18,10 +18,8 @@
 //! briefly ([`bound_writes`]), and one that cannot finish in that time
 //! fails, and the connection with it.
 
-use alloc::collections::{BTreeSet, VecDeque};
-use alloc::string::{String, ToString};
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use serde_json::Value;
 use vabi::RawHandle;
@@ -82,7 +80,7 @@ impl Connector {
         vrt::thread::Builder::new()
             .name("connect")
             .spawn(move || {
-                let auth = alloc::format!("Token {key}");
+                let auth = format!("Token {key}");
                 let first = vrt::time::now_ns();
                 let mut waited = false;
                 let r = loop {
@@ -92,7 +90,7 @@ impl Connector {
                     match &r {
                         Err(e) if wanted && coming_up(e, first) => {
                             if !waited {
-                                vrt::println!("cannot reach Deepgram yet ({e}): the network is still coming up");
+                                println!("cannot reach Deepgram yet ({e}): the network is still coming up");
                                 waited = true;
                             }
                             vrt::time::sleep(NETWORK_RETRY);
@@ -201,7 +199,7 @@ impl Session {
     /// The conversation goes on after all.
     pub fn cancel_end(&mut self) {
         if self.end_requested_at.take().is_some() {
-            vrt::println!("the conversation goes on");
+            println!("the conversation goes on");
         }
         self.goodbye_started = false;
         self.goodbye_sent = false;
@@ -307,11 +305,9 @@ impl Session {
                 None => return Ok(None),
                 Some(Message::Text(t)) => match deepgram::parse_server_message(&t) {
                     Ok(m) => return Ok(Some(Incoming::Message(m))),
-                    Err(e) => vrt::println!(
-                        "ignoring a malformed message ({}): {}",
-                        e,
-                        t.chars().take(120).collect::<String>()
-                    ),
+                    Err(e) => {
+                        println!("ignoring a malformed message ({}): {}", e, t.chars().take(120).collect::<String>())
+                    }
                 },
                 Some(Message::Binary(b)) => {
                     let mut pcm = Vec::with_capacity(b.len() / 2 + 1);

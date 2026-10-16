@@ -9,9 +9,6 @@
 //! sleep and mutes it. Settings' connections are handed to Settings' own
 //! thread ([`crate::admin`]).
 
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use vagent::deepgram;
 use vproto::agent::{
     AgentConfig, AgentError, AgentEvent, AgentStatus, MemoryItem, ModelCatalog, Permission, UiLink, agent,
