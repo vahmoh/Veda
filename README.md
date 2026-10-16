@@ -192,6 +192,12 @@ a stand-in for Deepgram, so they are offline, deterministic and free.
 | [Libraries](documentation/DEPENDENCIES.md) | What Veda builds on, and what it keeps of its own |
 | [Coding conventions](documentation/CODING.md) | How the code is written |
 
+## Contributing
+
+Contributions are welcome. [Contributing](CONTRIBUTING.md) covers how to
+propose a change, the standards it meets, and how it is tested and
+reviewed.
+
 ## License
 
 Veda is free software under the

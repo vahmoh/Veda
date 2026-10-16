@@ -5,7 +5,9 @@
 
 How to build, run and test Veda, how its system image is laid out, and how
 to write programs for it. [Coding conventions](CODING.md) has the rules the
-code follows, and [Architecture](ARCHITECTURE.md) the design.
+code follows, [Architecture](ARCHITECTURE.md) the design, and
+[Contributing](../CONTRIBUTING.md) how changes are proposed, tested and
+reviewed.
 
 **Contents:** [Commands](#commands) · [Running in QEMU](#running-in-qemu) · [The live system](#the-live-system) · [Scripts and tests](#scripts-and-tests) · [Reading the logs](#reading-the-logs) · [Builds](#builds) · [The system image](#the-system-image) · [Writing an application](#writing-an-application) · [Performance notes](#performance-notes)
 
