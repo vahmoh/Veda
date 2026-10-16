@@ -3,376 +3,276 @@
 
 # Ports
 
-Third-party software Veda builds from source: the C toolchain (see
-[documentation/C.md](../../documentation/C.md)), Rust (see
-[documentation/RUST.md](../../documentation/RUST.md)), FFmpeg and dav1d,
-which `mediadec` decodes videos with, Mesa, for the renderer, and the Rust
-crates that Veda changes (see Crates below). Veda's own code is Rust; what
-is written in C comes as a port, as do Rust itself and a crate that Veda
-changes: the upstream release, unchanged but for a patch that is kept
-small, readable and explained. The fonts Veda ships are here too, as
-released (see Fonts below).
+Third-party software that Veda builds from source. Veda's own code is
+Rust; C code, Rust itself and any crate Veda changes come as ports: the
+upstream release, pinned by its SHA-256 and changed only by a small,
+readable and explained patch. The fonts Veda ships are here too, as
+released.
+
+**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [Driver VM](#driver-vm) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
+
+## How ports are built
 
 Each port is a directory:
 
-* `port.toml`: the name, version, download address, the SHA-256 of the
-  archive and the licence. `cargo orchestration` downloads the archive
-  (`cargo orchestration toolchain` the toolchain's,
-  `cargo orchestration linux` the driver VM's, every command the crates')
-  and refuses one whose hash differs; for Rust also the release that builds
-  it (its stage 0: its compiler, standard library and Cargo for this
-  machine), as the release's `src/stage0` pins them by SHA-256.
-* `veda.patch`: the changes for Veda, applied with `patch -p1` to the
-  unpacked archive.
-* `arch/<architecture>/veda.patch`: the changes for Veda on that
-  architecture, applied after `veda.patch` (binutils, GCC, musl, Rust and
-  Linux have one for AMD64); and what else the port takes from the
-  architecture (the driver VM kernel's options,
-  `linux/arch/amd64/veda.config`).
+| File | What it holds |
+|------|---------------|
+| `port.toml` | The name, version, download address, the archive's SHA-256 and the licence |
+| `veda.patch` | Veda's changes, applied with `patch -p1` to the unpacked archive |
+| `arch/<architecture>/` | The architecture's `veda.patch`, applied after the port's, and its other files, such as the driver VM kernel's options |
 
-`build.sh` builds the C toolchain, the media libraries and Rust (run by
-`cargo orchestration toolchain`), `linux/build.sh` the driver VM's Linux, its
-toolchain and Mesa's build (`cargo orchestration linux`), and `crates.sh`
-prepares the crates (below); the comments at the top of each list what
-it expects and makes. They build for the architecture `cargo orchestration`
-names (`VEDA_ARCH`): what the scripts take from it (the target triples,
-musl's, Meson's, FFmpeg's and Linux's names for it, Rust's target and LLVM's
-name of its code generator, the assembler of the media libraries) is in
-`arch/<architecture>/settings.sh`.
+The `cargo orchestration` command that builds a port downloads its archive
+first, refusing one whose SHA-256 differs from the pin. For Rust it also
+fetches its stage 0 (the compiler, standard library and Cargo of the
+release that builds it), checked against the SHA-256s in the release's
+`src/stage0`.
+
+The scripts (`build.sh`, `linux/build.sh`, `crates.sh`; `common.sh`
+holds what they share) list what they expect and make in their opening
+comments. They build for the architecture `cargo orchestration` names
+(`VEDA_ARCH`), with its settings from `arch/<architecture>/settings.sh`
+(target triples, the names other projects give the architecture, the
+media libraries' assembler). A stage runs again only when its inputs
+change.
+
+## Toolchain
+
+`cargo orchestration toolchain` builds these with `build.sh`, in
+`target/toolchain`, as [C on Veda](../../documentation/C.md#the-toolchain)
+and [Rust on Veda](../../documentation/RUST.md#the-toolchain) describe.
+
+| Port | Version | Licence | What Veda uses it for |
+|------|---------|---------|-----------------------|
+| `binutils` | 2.47 | GPL-3.0-or-later | Assembler, linker, object file tools |
+| `gcc` | 16.2.0 | GPL-3.0-or-later WITH GCC-exception-3.1 | C and C++ (cross), C (native) |
+| `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | GMP LGPL-3.0-or-later OR GPL-2.0-or-later; MPFR and MPC LGPL-3.0-or-later | The native GCC's libraries |
+| `musl` | 1.2.6 | MIT | The C library |
+| `rust` | 1.99.0 | MIT OR Apache-2.0; its LLVM Apache-2.0 WITH LLVM-exception | Compiler, standard library for Veda's target, Clippy |
+| `dav1d` | 1.5.4 | BSD-2-Clause | AV1, in FFmpeg |
+| `ffmpeg` | 9.0.2 | LGPL-2.1-or-later | `mediadec`, the sandboxed decoder of Videos |
+
+What the patches change:
+
+* **binutils**: `veda` in `config.sub`; on AMD64, `x86_64-veda` in BFD
+  (`x86_64_elf64_vec`), gas and ld (`elf_x86_64`, with code on pages of its
+  own, as on Linux).
+* **gcc**: Veda's target in `config.sub`, `gcc/config.gcc`,
+  `libgcc/config.host`, `gcc/config/veda.h` (`/system/lib`, static
+  linking, `rcrt1.o` for `-static-pie`, musl's types) and `veda.opt`
+  (`-pthread`, `-rdynamic`, `-posix`); no `fixincludes` for musl's
+  headers; libstdc++ checks Veda's C library as Linux's when cross
+  compiled. On AMD64, `gcc/config/i386/veda.h`: the System V x86-64 ABI,
+  the stack protector's canary where musl keeps it.
+* **gmp**, **mpfr**, **mpc**: `config.sub` knows `veda`.
+* **musl**: `__init_libc` sets the POSIX layer up, `posix_spawn` asks it to
+  start the program, `dl_iterate_phdr` names the program by `AT_EXECFN`
+  (there is no `/proc/self/exe`), names not in `/etc/hosts` go to the
+  network service's resolver (`__lookup_name`), and musl's DNS client to
+  its DNS servers (`__get_resolv_conf`). On AMD64, system calls, `_start`
+  (the bootstrap channel) and the thread routines (`src/thread/x86_64/*.s`)
+  go through the layer; `vfork` takes the generic version, which fails:
+  there is no `fork`. See [C on Veda](../../documentation/C.md#how-it-works).
+* **rust**: Veda's target in the compiler (`Os::Veda`,
+  `spec/base/veda.rs`; on AMD64 `x86_64-unknown-veda`, linked by
+  `x86_64-veda-gcc`, in `STAGE0_MISSING_TARGETS`) and in `library/std`,
+  which takes the code of the systems whose C library has what Veda's has;
+  Linux's definitions on musl in the vendored `libc` (`vendor/libc-*`;
+  `build.sh` updates its `.cargo-checksum.json`); GCC's unwinder in
+  `library/unwind`, shared with C++; `AT_EXECFN` for `library/backtrace`.
+  See [Rust on Veda](../../documentation/RUST.md#how-it-works).
+* **ffmpeg**: `veda` as a `--target-os` in `configure`. **dav1d**: none.
+
+dav1d (8- and 16-bit) and FFmpeg are built static, with the architecture's
+assembler (nasm on AMD64) and their `checkasm`, which `systest` runs on
+Veda, into `target/toolchain/media`, as only `mediadec` links them. FFmpeg
+has only the demuxers, decoders (AV1 through dav1d), parsers, bitstream
+filter, scaler and resampler that `mediadec` uses. It stays LGPL:
+`build.sh` checks that `config.h` has `CONFIG_GPL 0` and
+`CONFIG_NONFREE 0`, and that the assembly, threads and dav1d were found.
+
+## Driver VM
+
+`cargo orchestration linux` builds these with `linux/build.sh`, in
+`target/linux`, for the [driver VM](../../documentation/DRIVERVM.md).
+
+| Port | Version | Licence | What Veda uses it for |
+|------|---------|---------|-----------------------|
+| `linux` | 7.2.9 | GPL-2.0-only | The driver VM's kernel |
+| `mesa` | 26.2.4 | MIT (the parts the renderer uses) | OpenGL ES in the renderer: Gallium, NIR, Intel's shader compiler |
+| `zlib` | 1.3.2 | Zlib | Compression, for libelf |
+| `elfutils` | 0.196 | LGPL-3.0-or-later OR GPL-2.0-or-later | libelf for objtool, the kernel's build tool, so the build machine needs none |
+
+What the patches change:
+
+* **linux**: the Veda platform (`veda.patch`, and `arch/amd64/veda.patch`),
+  whose files [The pieces](../../documentation/DRIVERVM.md#the-pieces)
+  lists. The kernel is `allnoconfig` with the options of `veda.config` and
+  `arch/<architecture>/veda.config`, and the build fails if one does not
+  take. `firmware.txt` and `arch/<architecture>/firmware.txt` list the
+  firmware it loads, with each file's source and SHA-256.
+* **zlib**, **elfutils**: none; built static for the build machine.
+* **mesa**: Veda's renderer (`implementation/guest/renderer`) is a target
+  of Mesa's build (`src/gallium/targets/veda`): the guest's program around
+  its Rust half (`veda-renderer-lib`), and `vgallium.so` for the OpenGL ES
+  tests on the build machine (softpipe, virgl over virglrenderer's test
+  server, iris). Gallium is built without an OpenGL API
+  (`with_gfx_compute`), with the renderer's small libdrm; the static
+  program does without Mesa's build id and links Gallium's stand-ins for
+  video. iris is built without what needs Mesa's OpenCL compiler (LLVM):
+  indirect draws generated on the GPU, and blorp's indirect copies (its
+  bounds check is in NIR instead). `linux/build.sh` configures Mesa
+  (Meson) with the guest's toolchain, built from the same binutils, GCC
+  and musl releases without Veda's patches; `cargo orchestration` builds
+  the renderer (Ninja) with the system.
 
 ## Crates
 
-smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio and
-tokio are Rust crates. libc, getrandom, rustix and errno are what crates
-that need Rust's standard library stand on to reach the operating system,
-and tokio, with mio and socket2 under it, is the asynchronous runtime of
-Rust's ecosystem; their releases do not know Veda: their ports let such
-crates build and run in Veda's programs on the standard library (see their
-patches below). Each one's release is its
-archive on crates.io (the `.crate` that Cargo itself would download; the
-SHA-256 that `port.toml` pins is crates.io's checksum of it). The
-workspace depends on the release by its version, as on any crate
-(smoltcp's is `version = "=0.14.0"` in `Cargo.toml`), or has it among the
-crates it depends on, and Cargo builds the port in its place. A crate the
-workspace has two releases of has a port for each: the older's directory
-is named for its release (`getrandom-0.3`), and its patch in Cargo's
-configuration gives the crate's name as its `package`:
+Rust crates that Veda changes. The releases of all but smoltcp and
+zune-jpeg do not know Veda; their ports let the crates on top of them run
+in Veda's programs on the standard library.
 
-* Every `cargo orchestration` command first prepares the crates
-  (`orchestration/src/crates.rs`): when a port has changed, it downloads and
-  checks the release, and `crates.sh` unpacks it and applies the port's
-  patches in `implementation/ports/.crates/src/<crate>`, which Git ignores.
-* `cargo orchestration` writes `implementation/ports/.crates/config.toml`,
-  which has Cargo build those in place of the releases (a
-  `[patch.crates-io]`, which `.cargo/config.toml` includes), and checks that
-  `Cargo.lock` has them.
+| Port | Version | Licence | What Veda uses it for |
+|------|---------|---------|-----------------------|
+| `smoltcp` | 0.14.0 | 0BSD | `netd`'s TCP/IP stack (`vnetstack`) |
+| `zune-jpeg` | 0.5.15 | MIT OR Apache-2.0 OR Zlib | `vimage`'s JPEG decoder |
+| `libc` | 0.2.190 | MIT OR Apache-2.0 | Bindings of the C library |
+| `getrandom`, `getrandom-0.3` | 0.4.3, 0.3.4 | MIT OR Apache-2.0 | Random bytes; 0.3 for crates still on it (`rand` 0.9) |
+| `rustix` | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | POSIX and Linux system calls |
+| `errno` | 0.3.14 | MIT OR Apache-2.0 | The C library's `errno` |
+| `socket2` | 0.6.5 | MIT OR Apache-2.0 | Sockets, under `tokio` |
+| `mio` | 1.2.4 | MIT | The event loop under `tokio` |
+| `tokio` | 1.53.3 | MIT | The asynchronous runtime |
 
-Cargo reads them before it builds anything, so they are kept outside
-`target/` and `cargo clean` (removing `implementation/ports/.crates` has
-them prepared anew). Where they are not ready, in a new checkout or while a
-port that has changed is prepared again, Cargo resolves the releases as
-published, and `Cargo.lock` shows them so, until a `cargo orchestration`
-command has prepared them: in a new checkout, run one
-(`cargo orchestration doctor`) before Cargo itself (`cargo test -p ...`,
-rust-analyzer).
+A crate's release is its `.crate` archive on crates.io, pinned by
+crates.io's checksum. The workspace depends on its version, directly
+(`version = "=0.14.0"` for smoltcp in `Cargo.toml`) or through another
+crate, and Cargo builds the port instead:
 
-A crate's own tests run apart from the workspace, which leaves the
-crates out, from the repository's root:
+1. Every `cargo orchestration` command first prepares the crates
+   (`orchestration/src/crates.rs`): it downloads and checks a changed
+   port's release, and `crates.sh` unpacks and patches it in
+   `implementation/ports/.crates/src/<crate>`, which Git ignores.
+2. It writes `implementation/ports/.crates/config.toml`, a
+   `[patch.crates-io]` that `.cargo/config.toml` includes, and checks that
+   `Cargo.lock` has the prepared crates.
+
+When the workspace has two releases of a crate, the older one's port is
+named for its release (`getrandom-0.3`), and its entry in the patch names
+the crate as its `package`. The prepared crates are kept outside
+`target/` and `cargo clean`, as Cargo reads them before it builds
+anything; removing `implementation/ports/.crates` has them prepared anew.
+
+> [!IMPORTANT]
+> Until the crates are prepared, Cargo resolves their releases as
+> published, and `Cargo.lock` shows them so. In a new checkout, run a
+> `cargo orchestration` command (`cargo orchestration doctor`) before
+> Cargo itself (`cargo test -p ...`, rust-analyzer).
+
+A crate's own tests run outside the workspace, from the repository's
+root:
 
 ```bash
 cargo test --lib --manifest-path implementation/ports/.crates/src/smoltcp/Cargo.toml --target-dir target/ports
 ```
 
+What the patches change:
+
+* **smoltcp**: seven changes, each with tests of its own.
+  * **Unpredictable protocol numbers** (`src/rand.rs`): given
+    `Config::random_key`, initial sequence numbers, DHCP and DNS ids, IPv4
+    identification and source ports come from ChaCha20, not the
+    predictable sPCG32 (RFC 6528); `netd` keys it from the kernel's
+    generator.
+  * **Quiet connections** (`src/socket/tcp.rs`): the timeout runs only
+    while a SYN, data or a FIN of ours awaits acknowledgement or
+    keep-alive is on (`awaits_ack`), so idle connections stay up;
+    `has_timed_out` tells a timeout from a reset.
+  * **Windows that end short** (`src/socket/tcp.rs`): data up to the
+    furthest edge advertised (`remote_max_edge`) is accepted, as RFC 7323
+    (2.4) has it, even when a rounded-down window ends short of it.
+  * **The lease** (`src/socket/dhcpv4.rs`): `lease_expires_at` gives the
+    end of the lease the client accepted; `netd` had read leases from any
+    acknowledgement on the network.
+  * **Stable privacy addresses** (`src/iface/interface`, `src/rand.rs`):
+    given `Config::slaac_secret`, autoconfigured addresses get RFC 7217
+    identifiers, not EUI-64 ones, which carry the hardware address between
+    networks; `Interface::ipv6_address_in` forms `netd`'s link-local
+    addresses.
+  * **Errors for ping** (`src/socket/icmp.rs`, `src/wire/icmpv4.rs`): ICMP
+    sockets receive the Destination Unreachable and Time Exceeded messages
+    quoting their echo requests, and ICMPv4 errors quoting only a packet's
+    start (RFC 792) are parsed.
+  * **Neighbours found at once** (`src/iface/neighbor.rs`): ARP requests
+    and Neighbor Solicitations are rate-limited per address (RFC 1122,
+    2.3.2.1), not for the whole cache.
+* **zune-jpeg**: sequential JPEGs with a scan per component (T.81, A.2.2),
+  as jpeg-encoder writes baseline files with optimised Huffman tables,
+  decode instead of coming out as stripes (`single_component_scan_rows` in
+  `src/mcu.rs`, tested by `vimage`'s `jpegs_with_a_scan_per_component`),
+  and `src/lib.rs` loses a `#![macro_use]` that rustc warns will become an
+  error. Left as released, as `vimage` does not use it: CMYK and YCCK
+  pictures converted to RGBA or BGRA come out three bytes a pixel
+  (`src/worker.rs`).
+* **libc**: Veda takes Linux's definitions on musl, as in Rust's vendored
+  copy: wherever the release names Linux beside other systems, it names
+  Veda too; `build.rs` counts Veda among the targets with only a recent
+  musl and in `check-cfg`.
+* **getrandom**, **getrandom-0.3**: `src/backends.rs` calls the C library's
+  `getrandom()`, which the POSIX layer always provides, without a fallback,
+  reading errno as on Linux; libc's deprecated `INT_MAX` becomes
+  `c_int::MAX`.
+* **rustix**: on its `libc` backend, Veda is Linux's kernel behind musl, as
+  with `rustix_use_libc`: `build.rs` gives it `linux_like` and
+  `linux_kernel` (with `linux-raw-sys`'s constants), and every
+  `target_os = "linux"` outside the `linux_raw` backend names Veda too. Its
+  `[hints]` go, as Cargo warns about them for a crate built from a path.
+* **errno**: read where Linux's C library keeps it (`__errno_location`).
+* **socket2**, **mio**, **tokio**: every `target_os = "linux"` outside
+  comments names Veda too, so they take Linux's code (`epoll`, `eventfd`,
+  `accept4`, `SOCK_NONBLOCK`, `pidfd_open`, socket options), which the
+  POSIX layer carries out; mio and tokio add Veda to `check-cfg`. Their
+  Unix domain sockets (mio's `src/sys/unix/uds/mod.rs`, tokio's
+  `src/net/unix/{listener,socketaddr,stream}.rs`) stay as released, named
+  by paths, as Veda's standard library has no abstract names
+  (`std::os::linux`); tokio's `peer_cred` is Linux's `SO_PEERCRED`.
+
 ## Fonts
 
-`fonts/` holds the fonts Veda ships: Inter, Lato and JetBrains Mono,
-unmodified, with their licence (`OFL.txt`) and a README that gives each
-one's copyright. There is nothing to build or patch:
-`cargo orchestration build` installs them in `/system/fonts` as they are,
-and `vfont`'s tests and `videogen` read them from here.
-
-## The patches
-
-**binutils**: `veda` in `config.sub`; for AMD64, `x86_64-veda` in BFD
-(`x86_64_elf64_vec`), gas (ELF) and ld (`elf_x86_64`, with code on pages
-of its own, as on Linux).
-
-**gcc**: `veda` in `config.sub`; `gcc/config/veda.h` (the system's
-macros, `/system/lib` for start files and libraries, static linking:
-`crt1.o` or, with `-static-pie`, `rcrt1.o`; musl's type definitions),
-`gcc/config/veda.opt` (`-pthread`, `-rdynamic`, `-posix`; and
-`veda.opt.urls`, its links to GCC's manual), the system's entries in
-`gcc/config.gcc` and `libgcc/config.host`, no `fixincludes` for musl's
-headers, and libstdc++ checking Veda's C library as it checks Linux's when
-cross compiled (`libstdc++-v3/crossconfig.m4`, and the same line in the
-`configure` generated from it). For AMD64: `x86_64-veda`'s entries in
-`gcc/config.gcc` and `libgcc/config.host`, and `gcc/config/i386/veda.h`
-(the System V x86-64 ABI, the stack protector's canary where musl keeps
-it).
-
-**gmp, mpfr, mpc**: `config.sub` knows `veda`, so they build for Veda as
-the native GCC's libraries.
-
-**musl**: `__init_libc` sets the POSIX layer
-(`implementation/libraries/posix`) up; `posix_spawn` asks the layer to
-start the program; `dl_iterate_phdr` names a program by the path it was
-started from (`AT_EXECFN`) rather than `/proc/self/exe`, which Veda does
-not have (backtraces read the program's symbols from it); names that are
-not in `/etc/hosts` are looked up by the network service's resolver
-(`__lookup_name` asks the layer, and keeps the order of the addresses it
-gives), and musl's DNS client asks the DNS servers the service uses
-(`__get_resolv_conf`), as there is no `/etc/resolv.conf`. For AMD64:
-system calls go to the layer instead of the `syscall` instruction
-(`arch/x86_64/syscall_arch.h`); `_start` keeps the bootstrap channel
-(`crt_arch.h`); thread creation, the thread pointer, a thread freeing its
-own stack and cancellable system calls go through the layer
-(`src/thread/x86_64/*.s`); `vfork` falls back to the generic version
-(which fails: there is no `fork`).
-
-**rust**: Veda as a target of Rust's compiler and of its standard library,
-which stands on the C library there. The compiler: Veda among its systems
-(`Os::Veda`) and `spec/base/veda.rs`: the `unix` family,
-`target_env = "musl"`, no dynamic linking, programs static and
-position-independent by default (`-static-pie`), thread-local storage,
-unwind tables; for AMD64, `x86_64-unknown-veda`
-(`spec/targets/x86_64_unknown_veda.rs`), linked by `x86_64-veda-gcc`,
-which bootstrap builds though its stage 0 does not know it
-(`STAGE0_MISSING_TARGETS`). The standard library (`library/std`) takes on
-Veda the ways of the systems whose C library has what Veda's has:
-futexes for its locks and thread parking (`FUTEX_WAIT_BITSET` with
-absolute deadlines, which the POSIX layer carries out),
-`clock_nanosleep`, `getrandom`, `pipe2`, `preadv` and `pwritev` (1024
-vectors at most, the layer's limit), `fstatat` and `openat` in
-directories (`remove_dir_all` without races), `fdatasync`, `posix_spawn`
-for every process (there is no `fork`; its `addchdir_np` linked
-directly, as with musl on Linux), `SOCK_CLOEXEC`, `accept4` and
-`MSG_NOSIGNAL`; `current_exe` from the loader's `AT_EXECFN` (there is no
-`/proc`); neither thread names, nor file locks (`Unsupported`), nor a
-stack-overflow handler (a fault ends the program); and
-`std::os::veda::fs::MetadataExt`. The `libc` crate, the standard
-library's bindings of the C library, vendored in `vendor/libc-*` (the
-copy Rust's build compiles): Veda's C library has Linux's interface, so
-each of the crate's conditions on `target_os = "linux"` that can hold
-with musl holds for Veda too (those for glibc, uClibc and 32-bit time
-stay as they are), and its musl is a recent one (`musl_v1_2_3`);
-`build.sh` gives the files the patch changes their new SHA-256 in the
-crate's `.cargo-checksum.json`, which Cargo checks. `library/unwind`:
-GCC's unwinder, which is in libgcc (GCC is built for static linking
-alone), as C++'s exceptions have it: a program in Rust and C++ has one
-unwinder. `library/backtrace`: a program's symbols and lines come from
-its own file, found through `AT_EXECFN` (there is no `/proc/self/maps`).
-Rust is built with its LLVM, for the architecture's code generator
-alone, by the release before it (its stage 0), as Rust's releases are;
-its Cargo runs from outside Veda's checkout, whose `.cargo/config.toml`
-(the crates' `[patch]`) must not reach Rust's build, with the release's
-own configuration (its vendored crates) instead. With the compiler and the
-standard library it installs Clippy, and the standard library's source
-as Veda patches it, copied where Rust's `rust-src` puts it (Rust's own step
-vendors its crates again with Cargo in the source tree).
-
-**dav1d**: none. It is built as released (meson, with a cross file for
-Veda's target and the architecture's assembler: nasm on AMD64), static,
-for 8- and 16-bit pictures, with its `checkasm`.
-
-**ffmpeg**: `veda` as a `--target-os` in `configure`, beside `linux`. It
-is built with `--disable-everything` and then only the demuxers, decoders
-(AV1 through dav1d), parsers and bitstream filter `mediadec` uses, without
-programs, devices, filters or network, and as LGPL: `build.sh` checks
-that `config.h` has `CONFIG_GPL 0` and `CONFIG_NONFREE 0`, and that the
-assembly, threads and dav1d were found. Its `checkasm` is built too.
-Both libraries are installed apart from the C toolchain
-(`target/toolchain/media`), since only `mediadec` links them; `systest`
-runs both `checkasm` programs on Veda.
-
-**mesa**: Veda's renderer (`implementation/guest/renderer`), which carries
-out the OpenGL ES command streams of applications on Mesa's Gallium drivers
-in the driver VM, is a target of Mesa's build: `src/gallium/targets/veda`,
-compiling the decoder the `veda-renderer` option names, links the
-renderer's program for the guest around its Rust half
-(`veda-renderer-lib`) and, for the machine that builds it, `vgallium.so`
-(the decoder on softpipe and on virgl over virglrenderer's test server)
-for the OpenGL ES tests. Gallium's own state handling is built without
-any OpenGL API (`with_gfx_compute`), with the renderer's small libdrm
-(`implementation/guest/renderer/drm`); the program, static, has no dynamic
-linker that would tell Mesa its build id, which it does without, and links
-Gallium's stand-ins for video. iris, Intel's driver, is built without what
-needs Mesa's OpenCL compiler (LLVM): generating indirect draws on the GPU,
-and blorp's indirect copies (its bounds check is written in NIR instead).
-`linux/build.sh` configures Mesa (meson) with the driver VM's own
-toolchain (GCC, binutils and musl for Linux, the releases these ports
-pin, unpatched); `cargo orchestration` builds the renderer (ninja) with the
-system.
-
-**smoltcp**: seven changes, each with tests of its own.
-
-*Unpredictable protocol numbers* (`src/rand.rs`). Upstream draws TCP
-initial sequence numbers, DHCP transaction ids, DNS ids, the initial IPv4
-identification and random source ports from an sPCG32 generator seeded
-with 64 bits, whose state can be recovered from a few outputs: a server
-that sees the initial sequence numbers of its own connections could
-predict those of the machine's other connections and inject data into
-them off-path (RFC 6528 explains the attack). `Config` gains
-`random_key: Option<[u8; 32]>`; with a key, the generator gives a ChaCha20
-keystream (RFC 8439's block function, a 64-bit block counter, a zero
-nonce), and `netd` keys every interface with 32 bytes from the kernel's
-generator. Without one, it is upstream's sPCG32 exactly, so upstream's
-tests still pass byte for byte.
-
-*Quiet connections* (`src/socket/tcp.rs`). With a timeout set, upstream
-reset any TCP connection whose peer had been silent for longer, an idle
-one included, although `set_timeout` documents the timeout as applying
-only while data waits in the transmit buffer or keep-alive is on: an
-established connection with nothing to say for as long (two minutes in
-`netd`: a terminal session, a WebSocket waiting for news) was cut. The
-timeout now applies only while a SYN, data or a FIN of ours waits for the
-peer's acknowledgement, or keep-alive is on (`awaits_ack`), and counts
-from when that began. And a closed connection tells whether the timeout
-ended it (`has_timed_out`), so that `netd` reports a peer that stopped
-answering as such, and a reset as a reset.
-
-*Windows that end short* (`src/socket/tcp.rs`). A receive window is
-advertised in units of the window scale, rounded down, so an
-advertisement can end a few octets short of an earlier one, up to which
-the sender may already have sent. Upstream dropped those octets as out of
-the window, and the sender, which had sent them, sent them again only once
-its retransmission timer expired, a second at least: a transfer over the
-loopback interface (whose 64 KiB buffers scale windows by 2) stalled for
-that long now and then. A connection now keeps the furthest edge it
-advertised (`remote_max_edge`) and takes what comes up to it, as RFC 7323
-(2.4) has a receiver do, since it must not shrink its window: those octets
-fit, as the buffer had the room when that edge was advertised.
-
-*The lease* (`src/socket/dhcpv4.rs`). The DHCP client tells when the
-lease it accepted ends (`lease_expires_at`); `netd` had read the lease
-from any acknowledgement on the network, another client's included.
-
-*Stable privacy addresses* (`src/iface/interface`, `src/rand.rs`). Given
-`Config::slaac_secret`, the addresses autoconfiguration forms have RFC
-7217 interface identifiers (ChaCha20 keyed with the secret over the prefix
-and the hardware address, RFC 5453's reserved identifiers passed over)
-instead of the EUI-64 one, which carries the hardware address from
-network to network; `Interface::ipv6_address_in` gives an interface's
-address in any /64 prefix the same way (`netd`'s link-local addresses).
-Without a secret, they are upstream's.
-
-*Errors for ping* (`src/socket/icmp.rs`, `src/wire/icmpv4.rs`). An ICMP
-socket bound to an identifier also receives the Destination Unreachable
-and Time Exceeded messages that quote an echo request with that
-identifier, so ping can tell why a request went unanswered, and which
-router said so. And an ICMPv4 error whose quoted packet is cut short is
-parsed: upstream wanted the whole packet, where RFC 792 asks routers for
-its header and first eight bytes, so it dropped the errors about all but
-the shortest packets.
-
-*Neighbors found at once* (`src/iface/neighbor.rs`). Upstream limited
-the rate of ARP requests and neighbor solicitations for the whole cache:
-once it had asked for one neighbor, it asked for no other for a second,
-dropping the packets meant for them. The first connection to the
-Internet after a DNS lookup (the DNS server's address asked for, then the
-gateway's) waited a second for its SYN to be sent again. The rate is
-limited per address, as RFC 1122 has it (2.3.2.1), in a map as large as
-the cache.
-
-**zune-jpeg**: sequential JPEGs with a scan per component. A baseline or
-extended JPEG may code its components in separate scans, one each (T.81,
-A.2.2), each holding its component's data units in raster order: for a
-picture whose chroma is subsampled, the luma scan has twice the rows of
-MCUs. Upstream decoded every scan for as many rows as the picture has MCU
-rows, and placed each row of luma blocks two block rows apart, so these
-pictures came out as stripes (libjpeg decodes them correctly);
-jpeg-encoder, for one, writes every baseline JPEG with optimized Huffman
-tables this way. A scan of one component is decoded for its component's
-rows of data units (`single_component_scan_rows` in `src/mcu.rs`), each
-8 lines of the component's plane; other pictures decode as before
-(`vimage`'s `jpegs_with_a_scan_per_component` test checks it). And
-`src/lib.rs` loses a crate-level `#![macro_use]`, which does nothing
-there, and which rustc warns will become an error. Left as it is, as
-`vimage` does not use it: CMYK and YCCK pictures converted to RGBA (or
-BGRA) are written three bytes a pixel (`color_convert_cymk_to_rgb` and
-`color_convert_ycck_to_rgb` in `src/worker.rs`); `vimage` converts them
-to RGB, which is right.
-
-**libc**: Veda's target (`target_os = "veda"`) takes Linux's definitions
-on musl, as the rust port's patch has the copy that Rust's standard library
-builds with take them: Veda's C library is musl, with Linux's interface,
-which the POSIX layer carries out. Wherever the release names Linux
-beside other systems (the modules of Linux's and of Linux-like systems,
-their threads' calls), it names Veda too; `build.rs` counts Veda among the
-targets that have only a recent musl, and among the operating systems the
-compiler is told of (`check-cfg`).
-
-**getrandom** (0.4) and **getrandom-0.3**: Veda's target among the systems
-whose C library has `getrandom()` (`src/backends.rs`), which it then calls
-without a fallback (Veda's always has it: the POSIX layer gives it the
-kernel's generator), with libc as a dependency there, and errno where
-Linux's is; and the constant `INT_MAX`, which libc deprecates, as
-`c_int::MAX`, so that the crates build without a warning.
-
-**rustix**: on the C library (its `libc` backend, which it takes for any
-system but Linux), Veda is Linux's kernel behind musl, as rustix already
-supports Linux with `rustix_use_libc`: `build.rs` gives Veda its
-`linux_like` and `linux_kernel` configurations, with `linux-raw-sys` for
-Linux's constants, and every `target_os = "linux"` of its sources outside
-the `linux_raw` backend reads `any(target_os = "linux", target_os =
-"veda")`. Its `[hints]`, which only a nightly Cargo takes, go: Cargo warns
-of them for a crate it builds from a path.
-
-**errno**: Veda's target reads errno where Linux's C library keeps it
-(`__errno_location`).
-
-**socket2**, **mio** and **tokio**: Veda is Linux behind musl, as for
-rustix: every `target_os = "linux"` of their sources outside comments
-reads `any(target_os = "linux", target_os = "veda")`, so that they take
-Linux's ways (mio's `epoll` selector and `eventfd` waker, `accept4` and
-`SOCK_NONBLOCK`; tokio's `pidfd_open` for its children; socket2's options),
-which the POSIX layer carries out; Cargo's `check-cfg` names Veda among
-the operating systems (mio, tokio). The exception is Unix sockets' abstract
-names, which Veda's standard library does not have (`std::os::linux`;
-its C library does): mio's `src/sys/unix/uds/mod.rs` and tokio's
-`src/net/unix/{listener,socketaddr,stream}.rs` stay as released, and with
-them Unix domain sockets as other Unix systems have them, named by paths
-(tokio's credentials, `peer_cred`, are Linux's: `SO_PEERCRED`).
+[`fonts/`](fonts/README.md) holds Inter, Lato and JetBrains Mono,
+unmodified, under the SIL Open Font License 1.1 (`OFL.txt`); its README
+gives each one's copyright. Nothing is built or patched:
+`cargo orchestration build` installs them in `/system/fonts`, licence
+included, and `vfont`'s tests and `videogen` read them from here.
 
 ## Updating a port
 
-1. Download the new release and its signature; check the signature
-   against the project's keys (GNU: the GNU keyring; musl: its key on
-   musl.libc.org; Rust: its release key, on rust-lang.org, whose
-   signature also vouches for the archive's `src/stage0`, which pins the
-   release that builds it). A crate's release, its archive on crates.io,
-   has no signature: its SHA-256 is the checksum crates.io's index gives
-   it (which a `Cargo.lock` with the release shows).
-2. Put the new version, address and SHA-256 into `port.toml`, and a
-   crate's version into the workspace's `Cargo.toml` too.
-3. Unpack the release, apply the old `veda.patch` (and then each
-   architecture's `arch/<architecture>/veda.patch`) and resolve what no
-   longer applies; then make the patches again (`diff -ruN a b`, paths
-   starting at the release's top directory: `veda.patch` against the
-   pristine release, an architecture's against the release with
-   `veda.patch` applied). What only an architecture needs goes in its
-   patch.
-4. `cargo orchestration toolchain` rebuilds what changed
-   (`cargo orchestration linux` the driver VM's; any `cargo orchestration`
-   command prepares a crate again, and its own tests run as Crates above
-   shows); then `cargo orchestration test`.
+1. Download the new release and check its signature against the
+   project's keys: the GNU keyring, musl's key on musl.libc.org, Rust's
+   release key on rust-lang.org (which also vouches for the archive's
+   `src/stage0`). A crate on crates.io has no signature: its SHA-256 is
+   the checksum crates.io's index gives, which a `Cargo.lock` with the
+   release shows.
+2. Put the new version, address and SHA-256 in `port.toml`, and a crate's
+   version in the workspace's `Cargo.toml` too.
+3. Unpack the release, apply the old `veda.patch`, then each
+   `arch/<architecture>/veda.patch`, and resolve what no longer applies.
+   Make the patches again with `diff -ruN a b`, paths starting at the
+   release's top directory: `veda.patch` against the pristine release, an
+   architecture's against the release with `veda.patch` applied (what only
+   an architecture needs goes there).
+4. Rebuild with the port's command, which rebuilds what changed (run a
+   crate's own tests as [Crates](#crates) shows), then run
+   `cargo orchestration test`.
 
 ## Licences
 
-The ports keep their licences: GCC and binutils GPL-3.0-or-later (libgcc
-with the GCC Runtime Library Exception), GMP, MPFR and MPC
-LGPL-3.0-or-later, musl MIT, Rust MIT or Apache-2.0 (its compiler's LLVM
-Apache-2.0 with LLVM's exceptions), FFmpeg LGPL-2.1-or-later, dav1d
-BSD-2-Clause, the parts of Mesa the renderer uses MIT, smoltcp 0BSD,
-zune-jpeg MIT, Apache-2.0 or Zlib, libc, getrandom, errno and socket2 MIT
-or Apache-2.0, rustix Apache-2.0 with LLVM's exception, Apache-2.0 or
-MIT, and mio and tokio MIT. Distributing Veda's image, which
-contains them, means offering their source: the archives `port.toml`
-names and the patches here. The fonts are under the SIL Open Font
-License 1.1, whose text the image carries with them
-(`/system/fonts/OFL.txt`).
+The ports keep their licences, given in the tables above. Distributing
+Veda's image means offering the source of the ports it contains: the
+archives `port.toml` names and the patches here.
+[Licensing](../../documentation/LICENSING.md) covers Veda as a whole.
 
-Some of the formats FFmpeg decodes (H.264, HEVC and AAC among them) are
-covered by patents in some countries. The software licences do not
-grant those; whoever distributes Veda where they apply decides whether
-licences are needed (or builds FFmpeg without those decoders: their
-names are in `build.sh`).
+> [!NOTE]
+> Some formats FFmpeg decodes (H.264, HEVC and AAC among them) are covered
+> by patents in some countries, which the software licences do not grant.
+> Whoever distributes Veda there decides whether licences are needed, or
+> leaves those decoders out of `build.sh`.

@@ -3,329 +3,241 @@
 
 # Developing Veda
 
-This guide explains how to build, run and test Veda, and how to write
-programs for it. Read `documentation/CODING.md` (conventions) and
-`documentation/ARCHITECTURE.md` (design) first.
+How to build, run and test Veda, how its system image is laid out, and how
+to write programs for it. [Coding conventions](CODING.md) has the rules the
+code follows, and [Architecture](ARCHITECTURE.md) the design.
 
-## Everyday commands
+**Contents:** [Commands](#commands) · [Running in QEMU](#running-in-qemu) · [The live system](#the-live-system) · [Scripts and tests](#scripts-and-tests) · [Reading the logs](#reading-the-logs) · [Builds](#builds) · [The system image](#the-system-image) · [Writing an application](#writing-an-application) · [Performance notes](#performance-notes)
 
-```text
-cargo orchestration build              # build everything -> target/veda/veda.img
-cargo orchestration iso                # the live system for a USB stick -> target/veda/veda.iso
-cargo orchestration run                # build and boot in a QEMU window, on a 1920x1080 screen
-cargo orchestration run --resolution 2560x1600   # ... on a larger one
-cargo orchestration run --live         # boot the live system in QEMU from a virtual USB stick (target/veda/stick.iso)
-cargo orchestration run --smp 2 --memory 2048
-cargo orchestration shot --wait 15     # boot headless, save target/veda/screen.png
-cargo orchestration shot --cmdline "run=about"   # also start bin/about at boot
-cargo orchestration script verification/ui/about-interaction.vts   # scripted GUI test (the language: orchestration/src/script.rs)
-cargo orchestration test               # every crate's unit tests on the host + in-system integration tests
-cargo orchestration test --ui          # ... plus every GUI script in verification/ui and verification/agent (and their arch/amd64), several at once
-cargo orchestration test --ui --jobs 2 # ... two at a time (default: one per five processors)
-cargo orchestration scripts verification/ui/drivervm-audio.vts verification/ui/nvme.vts   # some scripts, built once, side by side
-cargo orchestration script documentation/screenshots.vts   # retake the README screenshots
-cargo orchestration script documentation/interceptor.vts --resolution 1920x1200   # ... and Interceptor's, then scaled to 1280x800
-cargo orchestration run --disk-bus ahci                # QEMU with SATA disks
-cargo orchestration run --disk-bus nvme                # ... with NVM Express disks
-cargo orchestration script verification/ui/nvme.vts    # starting from NVMe, the home directory on NVMe
-cargo orchestration run --sound hda    # Intel HD Audio, as most PCs have
-cargo orchestration script verification/ui/drivervm-audio.vts   # HD Audio, Linux's: music plays and reaches the recording
-cargo orchestration run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
-cargo orchestration script verification/ui/usb-input.vts   # USB input, with devices plugged in and out
-cargo orchestration script verification/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
-cargo orchestration script verification/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
-cargo orchestration script verification/real/internet.vts      # Veda on the real Internet (nettest's online checks)
-cargo orchestration run --net none     # boot without a network card
-cargo orchestration run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
-cargo orchestration script verification/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
-cargo orchestration script verification/ui/drivervm-compose.vts   # ... its frames drawn by a GPU (the renderer on softpipe; slow)
-cargo orchestration script verification/ui/drivervm-gpu.vts       # Interceptor on the host's GPU, through Mesa's virgl in the driver VM
-VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (desktop OpenGL)
-VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on OpenGL ES
-VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
-VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.so)
-VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
-VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p interceptor-game   # ... on this PC's Intel GPU, as `cargo orchestration test` does where there is one
-cargo orchestration script verification/ui/drivervm-renderer.vts   # Interceptor through the renderer in the driver VM, on softpipe
-cargo orchestration script verification/ui/interceptor.vts   # Interceptor: the title, the menus, a mission (the computer drives), the results
-cargo orchestration script verification/agent/app-interceptor.vts   # ... and for the voice agent
-VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game   # Interceptor's game on the host: world, drivers, sounds, pictures
-cargo orchestration toolchain          # build the toolchain from implementation/ports/ (GCC, binutils, musl; Rust) -> target/toolchain (needed once, before the first build)
-cargo orchestration clippy             # Clippy over every crate as it is built (the programs on the standard library with the toolchain's)
-cargo orchestration script verification/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
-cargo orchestration script verification/ui/rust-programs.vts   # Rust's standard library on Veda: its checks, in the Terminal
-cargo orchestration linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
-cargo orchestration run --no-iommu     # QEMU without its IOMMU: no device goes to the driver VM
-cargo orchestration run --cmdline "drivervm=off"    # ... or no driver VM at all
-cargo orchestration script verification/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
-cargo orchestration script verification/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
-cargo orchestration script verification/ui/arch/amd64/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
-cargo orchestration script verification/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
-cargo orchestration script verification/ui/arch/amd64/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
-cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
+## Commands
+
+Each is `cargo orchestration COMMAND`, run in the repository;
+`cargo orchestration help` has the details.
+
+| Command | What it does |
+|---------|--------------|
+| `doctor` | Checks the tools, and says what is built |
+| `toolchain` | Builds GCC, binutils, musl, the media libraries and Rust for Veda into `target/toolchain`: once, before the first build |
+| `linux` | Rebuilds the driver VM's Linux, its toolchain and Mesa in `target/linux` (the first build builds them, given the tools) |
+| `build` | Builds `target/veda/veda.img` |
+| `run` | Builds, then boots Veda in a QEMU window |
+| `iso` | Writes [the live system](#the-live-system), `target/veda/veda.iso` |
+| `shot` | Boots headless and saves `target/veda/screen.png` |
+| `script FILE` | Boots headless and runs a [script](#scripts-and-tests) |
+| `scripts FILE...` | Builds once, then runs the scripts side by side (logs in `target/veda/test-logs`) |
+| `test` | Runs the [tests](#scripts-and-tests); `--ui` adds the scripts |
+| `clippy` | Clippy over every crate as it is built, warnings as errors |
+| `acpi DIR` | What devmgr makes of a PC's ACPI tables (see [Reading the logs](#reading-the-logs)) |
+| `clean` | Removes build outputs |
+
+Their options (of values separated by `|`, the first is the default):
+
+* **Building:** `--debug` (no optimisations), `--resolution WxH`,
+  `--cmdline "..."` (kernel arguments, 256 bytes at most with the
+  build's), `--no-generate` (reuse the generated media), `--skip PROGRAM`
+  (leave a program out; repeatable).
+* **QEMU:** `--smp N` (default 4), `--memory MiB` (default 1024),
+  `--headless`, `--serial FILE`, `--gdb` (a debugger on localhost:1234),
+  `--qemu-arg ARG` (repeatable), `--gpu` or `--no-gpu` (default: a 3D GPU
+  if QEMU has one), `--no-iommu`, `--sound virtio|hda`, `--no-audio`,
+  `--net ethernet|none`, `--nic virtio-net-pci|e1000e|igb`,
+  `--disk-bus virtio|ahci|nvme`, `--input standard|usb`, `--fresh-home`,
+  `--live`.
+* **Scripts:** `--jobs N`, how many scripts run at once (default: one per
+  five processors); for `toolchain` and `linux`, how many build jobs.
+* **`shot` and `iso`:** `--wait SECS` (default 10) or `--until TEXT` (in
+  the serial log), and `--out FILE`.
+
+## Running in QEMU
+
+`run`'s screen is 1920x1080; the scripts', `shot`'s and `build`'s image's
+is 1280x800, which the scripts' clicks and the README's pictures are laid
+out for. QEMU's display offers the screen's size as its EDID's preferred
+mode, so the firmware starts in it and Linux drives it at 75 Hz. A
+`--resolution` is at least 640x480 and at most 4095x4095, its width a
+multiple of 8; above about six
+million pixels the rate drops (56 Hz at 3840x2160).
+
+* **Display and GPU.** QEMU's VGA flips once Linux drives it. Where QEMU
+  has a 3D GPU (`virtio-gpu-gl-pci`; `qemu-system-modules-opengl` on
+  Debian and Ubuntu), the driver VM gets it for Veda's renderer; without
+  it, OpenGL ES renders in software. The GPU renders on the host's:
+  through `-display gtk,gl=on` in the window, and headless through
+  `-display egl-headless`, on the GPU the firmware showed its screen on or
+  the render node `VEDA_RENDERNODE` names.
+* **Sound.** `--sound hda` is the ICH9's HD Audio controller, which Linux
+  drives in the driver VM, as on a PC. Scripts that reset the machine use
+  it, as QEMU's virtio sound card, before its commit 75d28444c7 (September
+  2026), writes buffers held across a reset into the next start's memory.
+* **USB input.** `--input usb` replaces the PS/2 controller and the virtio
+  tablet with a hub (a keyboard and a tablet on it) and a mouse on an xHCI
+  controller. Scripts say `input usb`, and plug devices in and out with
+  `qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'`
+  and `qmp device_del '{"id":"kbd2"}'`.
+* **Home directory.** It is kept across builds and runs on its own disk,
+  `target/veda/home.img`, until `--fresh-home`; `shot`, `script` and
+  `test` use a fresh one (`test-home.img` in `$VEDA_OUT`).
+* **Kernel command line.** `run=NAME` has `init` start `/system/bin/NAME`
+  after the system services, the quickest way to try an application
+  (`run=NAME:ARG1,ARG2` passes arguments). `run=nettest` checks the
+  Internet from inside Veda (`run=nettest:wifi,SSID,PASSWORD` joins a
+  Wi-Fi network first); `drivervm=off` starts no
+  [driver VM](DRIVERVM.md); `startup-sound=off` (also in an image's
+  `BOOT.CFG`) leaves out the startup sound, as the scripts that record the
+  sound output or feed it to the microphone do.
+
+## The live system
+
+`cargo orchestration iso` writes a hybrid ISO image
+(`orchestration/src/image/iso9660.rs`) that boots with UEFI from a disc,
+or from a stick written by Rufus (in ISO mode) or as it is. It boots with
+`live` on the kernel command line (no disk driver; `/home` in memory), at
+1920x1080 or the screen's largest mode below it, and with no time zone, as
+a PC's clock keeps local time under Windows. `run --live` boots it in QEMU
+from a virtual USB stick (`target/veda/stick.iso`), and scripts with a
+`live` line (`verification/ui/live-usb.vts`).
+
+The stick keeps the logs of the last eight starts, synced every second, so
+they hold what happened even when the screen showed nothing:
+`VEDA/LOGS/NNNN/VEDA.TXT` (Veda's log, with Linux's console) and
+`LINUX.TXT` (the driver VM's Linux's whole log, its display drivers'
+debugging messages too). Its EFI system partition mounts as `VEDA` on any
+computer. Scripts boot from a writable stick with `live writable` and
+check its logs with `expect-stick` (`verification/ui/live-logs.vts`).
+
+## Scripts and tests
+
+`cargo orchestration test` runs the unit tests on the host, then `systest`
+inside Veda; `--ui` adds the scripts of `verification/ui/` (the desktop,
+the applications and the devices; `arch/amd64/`: a PC's machine only) and
+`verification/agent/` (with a stand-in for Deepgram, and a microphone fed
+from the host by `testmic`). Those in `verification/real/`, run by hand,
+use the real Internet and Deepgram, with the key in `DEEPGRAM_API_KEY`
+([The agent](AGENT.md#testing)).
+
+A script (`.vts`) drives QEMU and checks the log and the screen, as its
+opening comment says. `orchestration/src/script.rs` documents the
+language, such as how a `wait-serial` matches lines after a `checkpoint`
+and how `shot` waits (three seconds at most) for the screen to settle.
+Scripts are checked whole before anything is built: a wrong line fails
+the run, with its number.
+
+* **Resets.** `reset` restarts the machine as a PC does, its memory kept,
+  and fails if Veda's loader does not start again, saying what the
+  firmware printed and where each processor is. QEMU's loader blanks, at
+  every reset, the page from which OVMF before edk2's e4f99a8554 reads a
+  processor count and a memory map (`blank_at_reset`,
+  `orchestration/src/arch/amd64/qemu.rs`).
+* **Outputs.** `shot`, `script` and `test` save the serial console (the
+  kernel's log and every program's `println!`) to
+  `target/veda/serial.log`, and headless runs' sound to
+  `target/veda/audio.wav`, where `expect-audio-gapless` fails on digital
+  silence over 20 ms, as when a driver falls behind. A script's paths are
+  relative to the repository; those under `target/veda/` follow
+  `$VEDA_OUT`. `scripts` and `test` write the system's image once
+  (`target/veda/system/veda.img`), and each machine boots a qcow2 overlay
+  of it (`boot.qcow2` in its `$VEDA_OUT`).
+* **Deadlines.** A script of `test --ui` is killed, with its QEMU, past
+  four times its last run (at least five minutes).
+* **The network.** The network cards' scripts check it against a server on
+  the host (`nettest local`, `orchestration/src/hostweb.rs`), without the
+  Internet.
+
+```bash
+cargo orchestration script documentation/screenshots.vts                         # the README's screenshots
+cargo orchestration script documentation/interceptor.vts --resolution 1920x1200  # Interceptor's: scale it to 1280x800
 ```
 
-* The serial console (kernel log plus every program's `println!`) is saved
-  to `target/veda/serial.log` by `shot`/`script`/`test`.
-* A script is read and checked whole before anything is built: a line that
-  is wrong (an unknown command or value, a malformed number, a key QEMU
-  has not, a character no key types, an unclosed quote) fails the run,
-  with its number, and `scripts` and `test --ui` check every script first.
-  A wait (`wait-serial`) is satisfied by a whole line of the log (its end
-  written) holding its text, after the last `checkpoint` or `reset`, that
-  no earlier wait matched: a wait after a repeated action needs a new
-  line. Lines no wait took (periodic ones, such as a game's frame rate)
-  are left behind with a `checkpoint`, which `expect-serial` and
-  `reject-serial` also look after. `shot` waits until the screen has
-  settled (two screenshots alike, three seconds at most); `shot FILE now`
-  takes the moment, as a game's or a playing video's must be. Each of
-  `test --ui`'s scripts has a deadline, four times its last run (at least
-  five minutes): past it, its process is killed, and QEMU with it.
-* QEMU's display is its standard VGA, and beside it a 3D GPU
-  (`virtio-gpu-gl-pci`: virtio-gpu with virgl) when its build has one, as
-  distributions' do (on Debian and Ubuntu with `qemu-system-modules-opengl`):
-  the window then uses `-display gtk,gl=on` (the host's desktop OpenGL),
-  and headless runs `-display egl-headless` (the host's EGL, on the GPU the
-  firmware showed its screen on, where the host has several, such as a
-  laptop's integrated one, or on the one whose render node
-  `VEDA_RENDERNODE` names, such as `/dev/dri/renderD129`). `--no-gpu`
-  leaves the GPU out and `--gpu` insists on it. OpenGL ES programs render on it through Veda's renderer, in the
-  driver VM, which gets it, and in software without it.
-* Where QEMU has the 3D GPU, `cargo orchestration test` also runs the OpenGL
-  ES tests on the host's GPU, through the system's virglrenderer
-  (`libvirglrenderer1` on Debian and Ubuntu), which QEMU runs: on desktop
-  OpenGL, as QEMU renders, and on OpenGL ES, through EGL on headless
-  QEMU's GPU (`VGL_TEST_RENDERNODE` names another).
-  Once the driver VM's Linux is built (`cargo orchestration linux`, which
-  builds Mesa for the host too), the tests also run through Veda's renderer:
-  on softpipe, and on Mesa's virgl over virglrenderer's test server
-  (`virgl_test_server`, in `virgl-server` on Debian and Ubuntu), as the
-  driver VM's renderer renders under QEMU.
-  Interceptor's game saves what it shows and plays to a directory named by
-  an environment variable: `INTERCEPTOR_SHOTS` (views round the bay at each
-  time of day, `INTERCEPTOR_ONLY` to choose, `INTERCEPTOR_SIZE`),
-  `INTERCEPTOR_CHASE` (chases by day, night, sunset and in the rain),
-  `INTERCEPTOR_FILM` (the menus' showcase on a contact sheet),
-  `INTERCEPTOR_EFFECTS` (smoke, skid marks and sparks), `INTERCEPTOR_SIGNS`
-  (the billboards and neon signs), `INTERCEPTOR_SOUNDS` (a chase, each
-  engine, a police car going by, every cue: WAV files with spectrograms);
-  `INTERCEPTOR_TIMING=1` times making the world and its pictures.
-* QEMU's window (GTK) takes the pointer as absolute from power-on: the
-  tablet is bound to the display, so a click never grabs the mouse.
-* `run`'s screen is 1920x1080; the scripts' and shots' is 1280x800, which
-  their clicks and the README's pictures are laid out for. QEMU's display
-  has the screen's size for its own (its EDID's preferred mode), so the
-  firmware starts in it and Linux drives it at 75 Hz. `--resolution WxH`
-  sets either: a width that is a multiple of 8, up to 4095x4095; beyond
-  about six million pixels the display runs slower than 75 Hz (56 Hz at
-  3840x2160), as fast as QEMU's EDID can describe it.
-* A script's `reset` restarts the machine as a PC's reset does, its memory
-  kept, and waits until Veda's loader starts again; if it does not, the
-  script fails saying what the firmware printed, how QEMU runs and where
-  each processor is. OVMF before edk2's e4f99a8554 (December 2025, so
-  Ubuntu 26.04's) reads a processor count and a memory map from a page of
-  memory it leaves to the system, at every boot: after a reset it could
-  take what Veda left there for six processors, and wait for ever for the
-  two that are not. QEMU's loader blanks that page at every
-  reset (`blank_at_reset` in `orchestration/src/arch/amd64/qemu.rs` finds it
-  in the firmware).
-* `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME` after the
-  system services, which is the quickest way to test an application.
-* `cargo orchestration iso` writes a hybrid ISO image
-  (`orchestration/src/image/iso9660.rs`) that boots with UEFI from a disc,
-  from a stick Rufus made from it in ISO mode, and from a stick it was
-  written to as it is. Its boot configuration puts `live` on the kernel
-  command line (no disk driver starts; `/home` stays in memory), asks for
-  1920x1080 or the screen's largest mode below it (`--resolution` changes
-  it), and adds no time zone, as a PC's clock keeps local time under
-  Windows. Scripts boot it with a `live` line
-  (`verification/ui/live-usb.vts`); `--out FILE` writes it elsewhere.
-* A stick the live system started from keeps the logs of its last eight
-  starts: `VEDA/LOGS/NNNN/VEDA.TXT` (Veda's log, Linux's console among it)
-  and `LINUX.TXT` (the driver VM's Linux's whole log, its display drivers'
-  debugging messages too), synced every second, so they hold what
-  happened even when the screen showed nothing. Read them on any computer
-  (the stick's EFI system partition mounts as `VEDA`). Scripts boot from a
-  stick that can be written to with `live writable`, and check what it
-  keeps with `expect-stick` (`verification/ui/live-logs.vts`).
-* `--input usb` replaces QEMU's PS/2 controller and virtio tablet with
-  USB devices on an xHCI controller: a hub with a keyboard and a tablet,
-  and a mouse. Scripts ask for
-  it with an `input usb` line, and plug devices in and out with `qmp`
-  commands (`qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'`
-  and `qmp device_del '{"id":"kbd2"}'`). Linux, which drives them in the
-  driver VM, logs each device it finds (`usb 1-2.3: new full-speed USB
-  device ...`, then its product's name), and Veda's input driver for Linux
-  each input device (`input: QEMU QEMU USB Keyboard (usb 0627:0001):
-  keyboard`).
-* Headless runs record audio to `target/veda/audio.wav`. A script's
-  `expect-audio-gapless` fails if that sound drops out while it plays
-  (digital silence over 20 ms between the first sound and the last),
-  which is what a driver that falls behind sounds like.
-* At the start, `devmgr: coming: the display's driver: ...; sound: ...`
-  says what the window system and the audio service wait for (the devices
-  given to the driver VM, or `none`), and `compositor: the splash fades
-  in (the screen black for N ms)` when the display's driver showed its
-  first picture (or `... did not show its first picture in 20 s` if it
-  never did; Linux's own log says whether its first commit kept the
-  firmware's setup: `keeping the firmware's pipe bpp 24`, and no `PPS 0
-  turn panel power off`). The sequence then logs `compositor: the desktop
-  appears (N ms after the splash faded in)` (with `the shell did not say
-  the desktop may appear` first if the startup sound was not ready in
-  time), and ends with `compositor: desktop shown after N ms (B ms black;
-  F frames, R a second; ...)`, counted from the window system's start:
-  how long the screen stayed black, then the splash (at least 2.1 s, and
-  until the desktop has drawn itself), how smoothly it ran, and where its
-  frames went: into the
-  firmware's framebuffer, or flipped by a display driver, with how many
-  flips over how many vertical blanks (as many as there were blanks: not
-  a frame missed), and whether the GPU or the processor drew them. Where
-  a driver flips, `compositor: frames are drawn by the GPU (...) from now
-  on` says when the GPU took over, or `frames stay with the processor:`
-  why it did not; a frame the GPU took long over is logged too. The boot
-  loader's clearing of the screen is reported by the kernel (`boot: the
-  loader cleared the screen in N ms; ...`, with the framebuffer's memory
-  type: firmware leaves it uncached, and the loader paints it
-  write-combining), and so
-  is its mode (`boot: the firmware's screen modes: ..., 1920x1200
-  (chosen), ...; the display's own: 3840x2400`: a mode of the display's
-  shape, where the firmware gives the display's EDID and has one).
-  `shell: startup sound: playing` says
-  the sound started (as the desktop appeared), or why not.
-  `verification/ui/startup.vts` checks both, and that the sound reaches the
-  recording. Its look is in
-  `implementation/services/compositor/src/startup.rs` (timings, colours,
-  the tagline); the sound is `generation/music/src/songs/startup.rs`.
-  `startup-sound=off` on the kernel command line (`--cmdline`, or the
-  `BOOT.CFG` of an image) leaves the sound out; the scripts that check a
-  recording of the sound output, or feed it back into the microphone, boot
-  with it.
-* Displays and GPUs are Linux's, in the driver VM, as are input devices,
-  USB and networks: `dmesg drivervm` shows what Linux and Veda's drivers
-  for Linux say (the display `kms` drives, its mode, whether it shows the
-  compositor's pictures as they are or copies them, and scaled to what; the
-  GPU the renderer serves `gpu` on; the input devices `input` takes, the
-  cards `net` attaches), and `dmesg compositor` the display attaching.
-  QEMU's VGA is a display that flips once Linux drives it.
-  `expect-same A.png B.png [left top right bottom]` fails unless two
-  screenshots are alike, pixel for pixel, in a region (fractions of the
-  screen): `verification/ui/drivervm-display.vts` checks with it that a
-  window that came and went left nothing behind in either picture.
-  Screenshots that a script saves under `target/veda/` go to `$VEDA_OUT`
-  when that is set.
-* `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
-  codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
-  line input, otherwise), which Linux drives in the driver VM, as it does
-  a PC's sound. When sound plays wrongly on a PC, Linux's log, which
-  Veda's carries (`drivervm: linux:` lines), says what Linux made of it:
-  `dmesg snd_hda` its controllers and codecs, `dmesg cs35l41` a laptop's
-  speaker amplifiers (their firmware, the speaker id, which codec they
-  bound to), `dmesg alsa` Veda's driver for Linux (the card it attached,
-  and underruns). Scripts that reset the machine have this card: QEMU's
-  virtio sound card keeps the buffers its streams hold across a reset,
-  and completes them once the next start has set it up again, writing
-  into memory that is the next start's by then (QEMU frees them since its
-  commit 75d28444c7, of September 2026).
-* `dmesg devmgr` starts with what the firmware's ACPI tables gave
-  (`devmgr: acpi: N tables, ...`, and the conditional definitions left
-  out when their condition reads what the interpreter does not), then,
-  for each driver's device with devices of its own in the tables, which
-  ones (`acpi: 00:1e.3 is \_SB.PC00.SPI1, with ...`). `gpio:` lines show
-  a GPIO controller's register windows and every pad `devmgr` set up for
-  a driver, with its configuration before and after, and the pins that
-  interrupt; the driver VM's monitor says which of them the guest has
-  (`'s GPIO pin 303 interrupts on the guest's GSI 256`), and Linux's
-  controller how many (`veda-gpio VEDA0001:00: 4 pins, 1 interrupting`).
-  The loader says how many of the firmware's variables it took (`[vboot]
-  variables: ...`, on the serial port only), the monitor how many the
-  guest has and which it read (`drivervm: the guest read the firmware
-  variable ...`), and which of the firmware's tables come with a function
-  (`... comes with the firmware's NHLT (7054 bytes)`), the memory the
-  firmware keeps for one (`the memory the firmware keeps for it at
-  0x64000000-0x687fffff`), and what an Intel GPU gets besides (`its
-  OpRegion is the guest's at 0xc0000`, `the PC's host bridge (8086:4621)
-  is at the guest's 00:00.0`); i915 says which firmware it loaded and how
-  it found the stolen memory. Linux's SOF says
-  what it found (`DMICs detected in NHLT tables: 4`, the topology it
-  loads), and `alsa` which device it records (`records
-  (/dev/snd/pcmC0D6c, 4 channels)`).
-  Before booting a machine, `cargo orchestration acpi
-  DIR` shows what devmgr makes of its ACPI tables, on the host, with the
-  interpreter devmgr runs: copy them first (`sudo cp -r
-  /sys/firmware/acpi/tables DIR`, under Linux). It lists the PCI root
-  bridges' windows (where devmgr places BARs the firmware left unplaced),
-  what the motherboard reserves, and for each function on a root bus its
-  ACPI device, its INTx route and the devices below it, with anything
-  that could not be evaluated. The variables the tables keep in the
-  firmware's memory, which Linux does not show, read as zeros (so devices
-  they enable may be missing), but those given with `--set NAME=VALUE`; PCI configuration space comes from
-  `DIR/pci/BB:DD.F` files (`/sys/bus/pci/devices/*/config`; all of it as
-  root), else from this machine.
-* The agent's scripts (`verification/agent/`) talk to a stand-in for
-  Deepgram that `cargo orchestration` starts on the host, and feed the
-  agent's microphone from the host (`testmic`). The scripts in
-  `verification/real/` talk to the real Deepgram with the key in
-  `DEEPGRAM_API_KEY` (`export DEEPGRAM_API_KEY=...`);
-  they type it into Settings with
-  `type-env`, so it is in neither the script nor the logs, and the home
-  disk Settings stored it on is removed when the run ends (curl, which
-  synthesises the test user's speech, reads it from a pipe). See
-  [The agent](AGENT.md#testing).
-* `--cmdline "run=nettest"` checks the Internet connection from inside
-  Veda (`run=NAME:ARG1,ARG2` passes arguments); on a PC with Wi-Fi,
-  `run=nettest:wifi,SSID,PASSWORD` joins a network first. The network
-  cards' scripts need no Internet: a `nettest local` line has nettest ping
-  the gateway and fetch a page from a server `cargo orchestration` runs on
-  the host (`orchestration/src/hostweb.rs`), which QEMU's NAT makes the
-  gateway; `verification/real/internet.vts` checks the Internet itself.
-* The home directory is kept on its own disk, `target/veda/home.img`,
-  across builds and runs; `--fresh-home` starts over with a new one.
-  Scripted runs (`shot`, `script`, `test`) always use a fresh home disk
-  (`test-home.img` in `$VEDA_OUT`).
-* The media generators (`generation/`) run when their executable has
-  changed since they last ran (it holds every library they use, the
-  crates' versions too): each writes into a directory of its own,
-  `target/generated/<generator>/` (in `$CARGO_TARGET_DIR`), and lists what
-  it wrote in that directory's `.manifest`, which the image is packed
-  from; what else is there (what an older version wrote) is removed.
-  `--no-generate` reuses what they made last instead of running them;
-  `--skip PROGRAM` leaves a program out of the image (both help while a
-  component is being worked on).
-* Several builds can run concurrently if each uses its own directories:
-  set `CARGO_TARGET_DIR` (cargo output and the generated media) and
-  `VEDA_OUT` (disk image, serial log, screenshots) to private paths, e.g.
+Where QEMU has the 3D GPU, `test` also runs the OpenGL ES tests on the
+host's GPU through the system's virglrenderer (`libvirglrenderer1` on
+Debian and Ubuntu); once the driver VM's Linux is built, also through
+Veda's renderer, on softpipe, on Mesa's virgl over `virgl_test_server`
+(`virgl-server`), and on the machine's Intel GPU if it has one. By
+hand:
+
+```bash
+VGL_TEST_BACKEND=virgl cargo test -p vgl                      # on the host's GPU (desktop OpenGL)
+VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on OpenGL ES
+VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
+VGL_TEST_BACKEND=gallium cargo test -p vgl                    # through Veda's renderer on softpipe
+VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl     # ... with depth kept as on iris
+VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p interceptor-game   # ... on an Intel GPU
+VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game        # Interceptor's game: world, drivers, sounds, pictures
+```
+
+Interceptor's game tests save pictures and sounds to the directory
+`INTERCEPTOR_SHOTS` or another variable of
+`implementation/applications/interceptor/game/src/tests/` names.
+
+## Reading the logs
+
+In Veda's Terminal, `dmesg TEXT` shows the log's lines that contain TEXT.
+Displays, GPUs, input, USB, networks and a PC's sound are Linux's, in the
+driver VM; its log comes in Veda's (`drivervm: linux:`).
+
+| Startup line | Says |
+|--------------|------|
+| `boot: the loader cleared the screen in N ms; ...` | How long it took, with the framebuffer's memory type (uncached by the firmware, write-combining for the loader) |
+| `boot: the firmware's screen modes: ..., 1920x1200 (chosen), ...` | The mode chosen, of the display's shape where the firmware gives its EDID |
+| `devmgr: coming: the display's driver: ...; sound: ...` | What the window system and the audio service wait for, or `none` |
+| `compositor: the splash fades in (...)` | The display driver's first picture, or `... did not show its first picture in 20 s` |
+| `compositor: the desktop appears (...)` | After `the shell did not say the desktop may appear` if the startup sound was late |
+| `compositor: desktop shown after N ms (...)` | From the window system's start: time black, the splash (at least 2.1 s), frame rate, and frames: in the firmware's framebuffer or a driver's flips (as many as vertical blanks: none missed), by the GPU or the processor |
+| `compositor: frames are drawn by the GPU (...)` | The GPU took over, or `frames stay with the processor:` why not |
+| `shell: startup sound: playing` | The sound started, or why not |
+
+Linux's first commit kept the firmware's setup if it logs
+`keeping the firmware's pipe bpp 24` and no
+`PPS 0 turn panel power off`. The startup's look is in
+`implementation/services/compositor/src/startup.rs`, its sound in
+`generation/music/src/songs/startup.rs`.
+
+| `dmesg` | Shows |
+|---------|-------|
+| `drivervm` | Linux and Veda's drivers for Linux (the display `kms` drives, its mode, whether it copies or scales the compositor's pictures; the GPU `gpu` serves; what `input` and `net` attach), and what the monitor gives the guest: GPIO pins, the firmware's variables and tables (`... comes with the firmware's NHLT`), an Intel GPU's OpRegion and host bridge |
+| `compositor` | The display attaching |
+| `snd_hda`, `cs35l41`, `alsa` | Linux's sound controllers and codecs; a laptop's speaker amplifiers; Veda's sound driver for Linux (the card, underruns, the device it records) |
+| `devmgr` | The ACPI tables (`devmgr: acpi: N tables, ...`, and the conditional definitions left out), each driver's device's devices in them (`acpi: 00:1e.3 is \_SB.PC00.SPI1, ...`), and `gpio:` a controller's register windows, the pads set up for drivers and the pins that interrupt |
+
+`cargo orchestration acpi DIR` runs devmgr's interpreter on the host over
+a PC's ACPI tables (`sudo cp -r /sys/firmware/acpi/tables DIR`): the PCI
+root bridges' windows (where devmgr places BARs the firmware left
+unplaced), what the motherboard reserves, and each root bus function's
+ACPI device, INTx route and devices below it. The firmware's variables
+read as zeros unless set with `--set NAME=VALUE`, so devices they enable
+may be missing; PCI configuration space comes from `DIR/pci/BB:DD.F`
+files (copies of `/sys/bus/pci/devices/*/config`, whole as root), else
+from this machine.
+
+## Builds
+
+> [!IMPORTANT]
+> In a new checkout, run a `cargo orchestration` command (such as
+> `doctor`) before Cargo itself (`cargo test -p ...`, rust-analyzer).
+> Every command but `help` and `clean` has Cargo build the crates among the
+> ports (smoltcp, zune-jpeg, tokio and others: "Crates" in
+> `implementation/ports/README.md`) as patched; until then, Cargo builds
+> their releases.
+
+* **Generated media.** A generator in `generation/` runs when its
+  executable (with every library it uses) has changed. It writes into
+  `target/generated/<generator>/` (in `$CARGO_TARGET_DIR`), lists what it
+  wrote in its `.manifest`, which the image is packed from, and removes
+  anything else there.
+* **Builds side by side.** Give each its own `CARGO_TARGET_DIR` (Cargo's
+  output, generated media) and `VEDA_OUT` (image, serial log,
+  screenshots):
   `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
-  What they share is locked: the toolchain (`target/toolchain`, which an
-  image build adds to: the C library's POSIX layer, the test programs, the
-  media decoder), the driver VM's Linux build (`target/linux`, Mesa's
-  builds among it) and the generated media of a target directory; a build
-  that finds one locked says so and waits. Paths in automation scripts
-  (`shot FILE`) are relative to the repository.
-* Veda's own programs carry nothing of the build machine's file system:
-  they are compiled with the checkout, Cargo's home and the target
-  directory named `/veda`, `/cargo` and `/veda/target` instead
-  (`--remap-path-prefix`, which `cargo orchestration` gives each build of
-  a Veda target through Cargo's configuration; a build of one by hand,
-  without it, compiles again), as are the C and Rust test programs and the
-  media decoder's shim (`-ffile-prefix-map`), and what the ports' builds
-  compile for Veda (`implementation/ports/build.sh`: the native toolchain,
-  its libraries and GMP, MPFR and MPC name their sources from the
-  toolchain's directory; `gcc -v` and FFmpeg's recorded configuration
-  name none of this machine's). `strings target/veda/veda.img | grep -F
-  "$HOME"` finds nothing; a line it finds is a leak to fix.
-* Images are written with their free space left out (sparse files), their
-  boot partition as large as its files and the 64 MiB the logs of a stick
-  may take. `scripts` and `test` write the system's disk image once
-  (`target/veda/system/veda.img`); each script's machine boots a qcow2
-  overlay of it (`boot.qcow2` in its `$VEDA_OUT`) that holds its own boot
-  configuration and what it writes to the disk.
-* smoltcp and zune-jpeg, which Veda changes, are ports: every
-  `cargo orchestration` command first has Cargo build them as
-  `implementation/ports/` has them, prepared in
-  `implementation/ports/.crates` (see "Crates" in
-  `implementation/ports/README.md`). In a new checkout, run one
-  (`cargo orchestration doctor`) before Cargo itself (`cargo test -p ...`,
-  rust-analyzer), which until then builds their releases as published.
+  A build waits, saying so, for what they share: the toolchain
+  (`target/toolchain`, which image builds add to), the driver VM's Linux
+  and Mesa (`target/linux`), and a target directory's generated media.
+* **No paths of the build machine.** Programs name the checkout, Cargo's
+  home and the target directory `/veda`, `/cargo` and `/veda/target`
+  (`--remap-path-prefix` through Cargo's configuration, so a build by hand
+  compiles again; `-ffile-prefix-map` for C and in
+  `implementation/ports/build.sh`).
+  `strings target/veda/veda.img | grep -F "$HOME"` finds nothing; a line
+  it finds is a leak to fix.
 
 ## The system image
 
@@ -334,202 +246,162 @@ cargo orchestration acpi target/acpi   # what devmgr makes of a PC's ACPI tables
 
 | Source | Installed as |
 |--------|--------------|
-| every program listed in `orchestration/src/components.rs` (`PROGRAMS`), without its symbols, which the build keeps: `target/x86_64-unknown-linux-musl/` for the programs on `vrt` alone, `target/std/x86_64-unknown-veda/` for those on the standard library | `/system/bin/<name>` |
-| `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
-| the fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
-| each application's manifest, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
-| what the media generators' manifests list (`target/generated/<generator>/`) | `/system/<same relative path>` |
-| `verification/c/*.c` and `*.cc`, compiled by the cross toolchain (each also as `<name>-pie`) | `/system/tests/c/<name>` |
-| `verification/rust/*.rs`, compiled by the toolchain's Rust (each also as `<name>-fixed`) | `/system/tests/rust/<name>` |
-| the native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
-| `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg and dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
-| `verification/fakedec/clips/*` (videos for the stand-in decoder) | `/system/tests/videos/fake/` |
+| The programs in `PROGRAMS` (`orchestration/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `vrt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
+| `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
+| The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
+| The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
+| What the generators' manifests list | `/system/<same relative path>` |
+| `verification/c/*.c` and `*.cc`, by the cross toolchain (also as `<name>-pie`), for `systest` and the scripts | `/system/tests/c/<name>` |
+| `verification/rust/*.rs`, by the toolchain's Rust (also as `<name>-fixed`), the same | `/system/tests/rust/<name>` |
+| The native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
+| `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
+| `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |
+| The driver VM's Linux, once built: its kernel (a bzImage on AMD64) and the programs of `implementation/guest/` | `/system/linux/kernel`, `/system/linux/initramfs.cpio` |
 
-Building Veda needs the toolchain (`cargo orchestration toolchain`, once):
-its applications are programs on Rust's standard library, which the
-toolchain's Rust builds (see [Rust on Veda](RUST.md)), and it makes the C
-and Rust test programs, the native C toolchain and the video decoder too
-(see [C on Veda](C.md)).
-With `cargo orchestration linux` done, the image also holds the driver VM's
-Linux: `/system/linux/kernel` (the architecture's image of it: a bzImage on
-AMD64) and `/system/linux/initramfs.cpio`, made of the programs in
-`implementation/guest/` (see [the driver VM](DRIVERVM.md)). Files under
-`samples/` in the system image are also copied into the user's home
-directory at boot (`/system/samples/Pictures/x.png` →
-`/home/user/Pictures/x.png`).
+At boot, the image's `samples/` is copied into the home directory
+(`/system/samples/Pictures/x.png` → `/home/user/Pictures/x.png`). Images
+leave out their free space (sparse files); the boot partition holds its
+files and the 64 MiB a stick's logs may take.
 
 ## Writing an application
 
 Applications are programs on Rust's standard library, with Veda's
-libraries ([Rust on Veda](RUST.md)):
+libraries ([Rust on Veda](RUST.md)).
 
-1. Create a crate under `implementation/applications/<name>`, add it to the
-   workspace `members` in `Cargo.toml` and to `PROGRAMS` in
+1. Create a crate in `implementation/applications/<name>`, and add it to
+   the workspace's `members` in `Cargo.toml` and to `PROGRAMS` in
    `orchestration/src/components.rs`, as `Program::std("<name>")`.
-2. `Cargo.toml` depends on `vrt`, `vabi`, `vui` (and others as needed).
-3. `src/main.rs`:
+2. Its `Cargo.toml` depends on `vrt`, `vabi`, `vui` and others as needed.
+3. Write `src/main.rs`:
 
-```rust
-struct MyApp { /* state */ }
+   ```rust
+   struct MyApp { /* state */ }
 
-impl vui::App for MyApp {
-    fn update(&mut self, ui: &mut vui::Ui) {
-        // Draw and handle input for one frame. ui.rect() is the client area.
-        let r = ui.rect().centered(200, 40);
-        if ui.primary_button(r, "Hello") { /* ... */ }
-    }
-}
+   impl vui::App for MyApp {
+       fn update(&mut self, ui: &mut vui::Ui) {
+           // Draw and handle input for one frame. ui.rect() is the client area.
+           let r = ui.rect().centered(200, 40);
+           if ui.primary_button(r, "Hello") { /* ... */ }
+       }
+   }
 
-fn main() {
-    let mut spec = vui::WindowSpec::new("My App", 800, 560);
-    spec.app_id = "myapp".into();
-    std::process::exit(vui::run(spec, MyApp { }));
-}
-```
+   fn main() {
+       let mut spec = vui::WindowSpec::new("My App", 800, 560);
+       spec.app_id = "myapp".into();
+       std::process::exit(vui::run(spec, MyApp { }));
+   }
+   ```
 
-4. Add a manifest, `<name>.app` beside the crate's `Cargo.toml`, so the
-   start menu lists it:
+4. Add a manifest for the start menu, `<name>.app` beside `Cargo.toml`.
+   `icon` names a vector icon (`vui::Icon::by_name`); `pinned=true` puts
+   the application in the start menu's pinned grid, and `taskbar=true`
+   keeps it on the taskbar when it is not running:
 
-```text
-name=My App
-exe=/system/bin/myapp
-icon=document
-category=Accessories
-description=What it does
-pinned=false
-taskbar=false
-```
+   ```text
+   name=My App
+   exe=/system/bin/myapp
+   icon=document
+   category=Accessories
+   description=What it does
+   pinned=false
+   taskbar=false
+   ```
 
-`icon` names are mapped to vector icons by `vui::Icon::by_name`;
-`pinned=true` puts the app in the start menu's pinned grid, and
-`taskbar=true` keeps it on the taskbar when it is not running.
-
-5. Make it agent-compatible: implement `App::agent_info` (a summary and
-   the actions it offers, with their risk), `App::agent_state` (what the
-   window shows, as JSON) and `App::agent_invoke` (run an action through
-   the same code as the keyboard and mouse). `vui::run` registers the
-   application with the agent; see
+5. Make it agent-compatible with `App::agent_info` (a summary, and the
+   actions with their risk), `App::agent_state` (what the window shows, as
+   JSON) and `App::agent_invoke` (runs an action through the keyboard's and
+   mouse's code); `vui::run` registers it with the agent. See
    [The agent](AGENT.md#making-an-application-agent-compatible).
 
-### The `vui` toolkit in brief
+### The `vui` toolkit
 
-* `Ui` is immediate mode: widgets take explicit `Rect`s and return their
+* **Immediate mode.** Widgets take explicit `Rect`s and return their
   interaction (`button` → `bool`, `text_input` → `TextInputResponse`,
-  `list` → `ListResponse`, `menu_bar` → chosen item, ...). `vgfx::Rect` has
-  `split_top/left/right/bottom`, `inset`, `centered` for layout.
-* `ui.canvas` is a `vgfx::Canvas` for custom drawing (fills, gradients,
-  rounded rectangles, paths, bitmaps, shadows); `ui.ctx.text` draws text.
-* `ui.input` holds this frame's input (pointer, buttons, keys, typed text,
-  scroll). Key codes are `vproto::input::keys`.
-* Animations: call `ui.repaint_at(deadline_ns)` (or `ui.repaint()`); frames
-  are otherwise drawn only when events arrive.
-* The window: `ui.set_title`, `ui.window_state()` and
+  `list` → `ListResponse`, `menu_bar` → the chosen item, ...);
+  `vgfx::Rect` has `split_top/left/right/bottom`, `inset` and `centered`.
+* **Drawing and input.** `ui.canvas` is a `vgfx::Canvas` for custom
+  drawing, `ui.ctx.text` draws text, and `ui.input` holds the frame's
+  pointer, buttons, keys (`vproto::input::keys`), typed text and scroll.
+* **Frames** are drawn when events arrive; `ui.repaint_at(deadline_ns)` or
+  `ui.repaint()` asks for more.
+* **The window.** `ui.set_title`, `ui.window_state()`,
   `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
-  (bring it to the front), `ui.close_window()`.
-* Long-running work must not block `update`: give it to a thread
-  (`std::thread`, which sets its own priority with
-  `vrt::thread::set_priority`) through a channel (`std::sync::mpsc`), and
-  have it signal an `Event` the window waits on (`App::wait_handles`):
-  `implementation/applications/paint/src/files.rs` is a compact example.
-* Files: an application's own small ones (settings, state) with
-  `std::fs`, through `apps_common::store` (reads within a limit,
-  replacement in one step). Pictures, music and other large files with
-  `vfiles::Fs::connect()` (whole-file reads, bounded or mapped, in one
-  piece of shared memory; writes, listings of any size, copies, moves and
-  removals of whole trees with their progress, every call with a
-  deadline), or the protocol itself: `vproto::connect(vproto::vfs::NAME)`
-  then `vproto::vfs::Client` (`read_file` returns a VMO plus length,
-  `write_file`, `read_dir`, ...).
-* Starting other programs: `vproto::launcher::Client` (`launch`, `launch_app`).
+  (to the front), `ui.close_window()`.
+* **Long-running work** must not block `update`: give it to a
+  `std::thread` (which sets its priority with `vrt::thread::set_priority`)
+  through a `std::sync::mpsc` channel, and have it signal an `Event` the
+  window waits on (`App::wait_handles`), as
+  `implementation/applications/paint/src/files.rs` does.
+* **Files.** Small ones of the application's own (settings, state) go
+  through `std::fs` and `apps_common::store` (reads within a limit,
+  replacement in one step). Pictures, music and other large ones go
+  through `vfiles::Fs::connect()` (whole files in shared memory, bounded
+  or mapped; listings of any size; trees copied, moved and removed with
+  their progress; a deadline on every call), or the protocol,
+  `vproto::vfs::Client` on `vproto::connect(vproto::vfs::NAME)`
+  (`read_file` returns a VMO and a length).
+* **Other programs** start through `vproto::launcher::Client` (`launch`,
+  `launch_app`).
+* **Without the toolkit,** games and other full-screen renderers use
+  `vui::window::Window`: `begin_frame()` returns a `Canvas` for the back
+  buffer, `present()` shows it, `poll_events()` returns `WindowEvent`s,
+  and `can_draw()` says when the compositor is ready for the next frame.
 
 ### Programs on `vrt` alone
 
-System services and drivers that the standard library stands on, or that
-drive hardware or must answer in time, are `no_std` programs on `vrt`
-(`Program::native`): their `Cargo.toml` has `vbuild` as a build
+Services and drivers that the standard library stands on, that drive
+hardware or that must answer in time are `no_std` programs on `vrt`
+(`Program::native`). Their `Cargo.toml` has `vbuild` as a build
 dependency, `build.rs` is `fn main() { vbuild::user_program(); }`, and
-`src/main.rs` starts with `#![no_std]`, `#![no_main]`, `extern crate
-alloc;` and `vrt::entry!(main);` (a `main` that returns `()`, an `i32`
-or a `Result`). They log with `vrt::println!`.
+`src/main.rs` starts with `#![no_std]`, `#![no_main]`,
+`extern crate alloc;` and `vrt::entry!(main);` (a `main` returning `()`,
+an `i32` or a `Result`). They log with `vrt::println!`.
 
-### Programs without `vui`
+### Programs in C and on Rust's standard library
 
-Games and other full-screen renderers can use `vui::window::Window`
-directly: `begin_frame()` returns a `Canvas` for the back buffer,
-`present()` shows it, `poll_events()` returns `WindowEvent`s and
-`can_draw()` says when the compositor is ready for the next frame.
+Both are static ELF executables on the C library (musl) that run from the
+Terminal like any command. GCC compiles C inside Veda, or on the
+development machine as the cross compiler (`<target>-gcc` for the
+architecture's C target); the
+toolchain's Rust compiles for Veda's target (`x86_64-unknown-veda` on
+AMD64), and the cross compiler links ([C on Veda](C.md),
+[Rust on Veda](RUST.md), which covers Cargo too).
 
-### Programs in C
-
-C programs are compiled with GCC, inside Veda or on the development machine
-with the cross compiler, `target/toolchain/cross/bin/x86_64-veda-gcc` on
-AMD64 (`<target>-gcc`, for the architecture's C target):
-
-```text
+```bash
 target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
-```
-
-They are static ELF executables on musl and run from the Terminal like any
-command. [C on Veda](C.md) describes the environment, what is different
-from Linux, and how the toolchain is built and tested. The test programs
-in `verification/c/` are compiled by `cargo orchestration build` and
-installed in `/system/tests/c`, for `systest` and the GUI scripts to run.
-
-### Programs on Rust's standard library
-
-Programs that use Rust's standard library are compiled on the
-development machine by the toolchain's Rust, for Veda's target
-(`x86_64-unknown-veda` on AMD64), and linked by the cross compiler:
-
-```text
 target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C linker=target/toolchain/cross/bin/x86_64-veda-gcc -O -o hello hello.rs
 ```
 
-They are static ELF executables on the C library, as C programs are.
-[Rust on Veda](RUST.md) describes building them with Cargo, how the
-standard library works on Veda, and how Rust is built and tested. The
-test programs in `verification/rust/` are compiled by
-`cargo orchestration build` and installed in `/system/tests/rust`, for
-`systest` and the GUI scripts to run.
-
 ### Videos and its decoder
 
-Videos (`implementation/applications/videos`) is a `vui` application; what
-it does that can be tested on the host is in
-`implementation/applications/videos/core` (playback, the clock, pacing,
-choosing pictures, skipping, the layout, what it remembers, and the audio
-output that outlives the audio service, which Music uses too), and the
-protocol it speaks with its decoder, with the heartbeat, the frame pool and
-the sound ring, is `vproto::media`. Music's own is in
-`implementation/applications/music/core` (the order tracks play in, its
-covers). The decoder, `implementation/services/mediadec`, is a C
-program: its Rust half is built for the architecture's bare target
-(`x86_64-unknown-none` on AMD64) and linked with its C shim,
-FFmpeg and dav1d by the cross compiler (`orchestration/src/toolchain.rs`,
-`mediadec()`), so it exists only once `cargo orchestration toolchain` built
-the media libraries (`cargo orchestration doctor` says whether they are).
+Videos (`implementation/applications/videos`) is a `vui` application;
+`videos/core`, tested on the host, has its playback, clock, pacing,
+choice of pictures, skipping, layout and memory, and the audio output that
+outlives the audio service, which Music shares. It speaks `vproto::media`
+with its decoder (a heartbeat, a frame pool, a sound ring).
 
-Without it, `verification/fakedec` stands in: `videos --decoder
-/system/bin/fakedec FILE` plays the text files in
-`/system/tests/videos/fake` (see `verification/fakedec/src/clip.rs`),
-drawing a timecode and playing a tone, and crashing, hanging or falling
-behind when a clip asks; `verification/ui/videos-fake.vts` runs Videos
-through all of that. The scripts that need the real decoder say
-`requires media`.
+The decoder, `implementation/services/mediadec`, is a C program: its Rust
+half, built for the bare target (`x86_64-unknown-none` on AMD64), is
+linked with its C shim, FFmpeg and dav1d by the cross compiler
+(`mediadec()` in `orchestration/src/toolchain.rs`), once `toolchain` has
+built the media libraries (`doctor` says whether it has). Scripts that
+need it say `requires media`. Without it, `verification/fakedec` stands
+in: `videos --decoder /system/bin/fakedec FILE` plays a text file of
+`/system/tests/videos/fake` (`verification/fakedec/src/clip.rs`) as a
+timecode and a tone, crashing, hanging or falling behind when the clip
+asks (`verification/ui/videos-fake.vts`).
 
-The sample videos (`samples/Videos`, copied to `~/Videos`) are made at
-build time by `generation/videos`: scenes drawn with `vgfx` and sound made
-with `vaudio`, encoded with rav1e (AV1, on the build machine only) and a
-FLAC encoder of its own into Matroska. It also writes
-`/system/tests/videos/Countdown.md5`, the encoder's MD5 of every picture,
-which `systest` checks the decoder against, and a truncated copy for the
-error scripts. Every picture's key frame group is encoded in parallel
-(about 25 s on a 20-core machine); `VIDEOGEN_PREVIEW=DIR` also writes
-PNGs of what was drawn and decoded.
+`generation/videos` makes the sample videos (`samples/Videos`, copied to
+`~/Videos`) with rav1e (AV1, on the build machine only) and a FLAC
+encoder of its own, and writes `/system/tests/videos/Countdown.md5`, every
+picture's MD5, for `systest` to check the decoder against, with a
+truncated copy for the error scripts. `VIDEOGEN_PREVIEW=DIR` adds PNGs of
+what was drawn and decoded.
 
 ## Performance notes
 
-Veda usually runs under QEMU's TCG emulator (no hardware
-virtualisation), which is several times slower than native code. Keep
-per-frame work proportional to what changed, avoid per-pixel floating point
-in hot loops, and render 3D scenes at a modest internal resolution.
+QEMU runs Veda on KVM where the host has it, and otherwise on its TCG
+emulator, several times slower than native code. Keep per-frame work
+proportional to what changed, avoid per-pixel floating point in hot loops,
+and render 3D scenes at a modest internal resolution. The rules for hot
+loops are in [Coding conventions](CODING.md#performance).
