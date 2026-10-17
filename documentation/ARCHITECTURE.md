@@ -72,7 +72,7 @@ the splash dissolves into the lock screen instead
 the sound only at system start: a window system or shell restarted after
 a crash shows the desktop (or the lock screen) at once, silently.
 
-**The live system** (`cargo orchestration iso`) is a hybrid ISO 9660 image
+**The live system** (`cargo automation iso`) is a hybrid ISO 9660 image
 that starts the same way from a disc, or from a USB stick it is written to
 or copied onto (as Rufus does). `live` on the kernel command line makes
 `devmgr` start no disk driver and `vfs` keep `/home` in memory, so the
@@ -153,7 +153,7 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 Every program, and the kernel, is a static ELF64 executable for the System
 V ABI; only the loader is PE/COFF, the format UEFI starts. Programs are of
-two kinds (see [Rust on Veda](RUST.md)); `orchestration/src/components.rs`
+two kinds (see [Rust on Veda](RUST.md)); `automation/src/components.rs`
 says which each is:
 
 | Kind | Programs | Built |
@@ -224,7 +224,7 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   AML interpreter that initialises devices as ACPICA does but changes
   nothing and reads no I/O port or embedded controller. A driver can ask
   for the devices described below its PCI function, with their resources;
-  `cargo orchestration acpi` shows, on the host, what `devmgr` makes of a
+  `cargo automation acpi` shows, on the host, what `devmgr` makes of a
   machine's tables.
 - **GPIO.** `devmgr` drives the GPIO pins of a driver's devices on its
   behalf, and no others (`gpio`: Intel's Tiger Lake-LP pads, which Alder
@@ -613,7 +613,7 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
 (Intel's GPUs), virgl on virtio-gpu (QEMU's), or softpipe for tests
 (`drivervm.renderer=softpipe`). It is Mesa's build of a decoder
 (`decoder/`, C) around a Rust half that serves the protocol, built by
-`cargo orchestration linux`.
+`cargo automation linux`.
 
 - **Sessions.** Each connection gets a context and a block of shared memory
   (commands, staging, query results, the fence word), laid out as
@@ -659,8 +659,8 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
   allocate nothing once they run.
 - **The `audio` library** holds the formats (WAV, QOA), resampling,
   mixing, an FFT, the synthesiser and sequencer with which
-  `generation/music` renders the album and the startup sound, and voice
-  processing:
+  `implementation/generation/music` renders the album and the startup
+  sound, and voice processing:
 
 | Part | What it does |
 |------|--------------|
@@ -774,9 +774,9 @@ the actions every `ui` application offers over the `agentapp` protocol
 
 | Command | Runs |
 |---------|------|
-| `cargo orchestration test` | the host's unit tests, the driver VM programs' tests on Linux, the `gl` tests on the host's GPU through virglrenderer and through the renderer's decoder where the machine has them, then `systest` inside Veda |
-| `cargo orchestration test --ui` | also every GUI and agent script |
-| `cargo orchestration script verification/real/...` | by hand: the scripts that need the Internet and a Deepgram key |
+| `cargo automation test` | the host's unit tests, the driver VM programs' tests on Linux, the `gl` tests on the host's GPU through virglrenderer and through the renderer's decoder where the machine has them, then `systest` inside Veda |
+| `cargo automation test --ui` | also every GUI and agent script |
+| `cargo automation script verification/real/...` | by hand: the scripts that need the Internet and a Deepgram key |
 
 - **Host unit tests** cover every library with platform-independent logic,
   in one Cargo run (`rt`'s in one of its own), and a test of the build
@@ -791,7 +791,7 @@ the actions every `ui` application offers over the `agentapp` protocol
   and ping, against a server on the host in the network cards' scripts
   (`nettest local`).
 - **GUI scripts** (`verification/ui/*.vts`, in the language of
-  `orchestration/src/script.rs`) drive QEMU through QMP (mouse, keyboard,
+  `automation/src/script.rs`) drive QEMU through QMP (mouse, keyboard,
   waits on log lines, screenshots) and fail on panics. All are checked
   before the system is built, once, and each boots an overlay of the disk
   image within a deadline. QEMU's machine has an IOMMU, so the driver VM
@@ -822,7 +822,7 @@ crate's in its `src/`), reached through its `arch` module
 | `implementation/libraries/{hv,iommu}` | the guests' local APIC, CPUID, memory map, platform discovery and Linux's boot protocol; Intel VT-d's tables (on every host, for the tests) |
 | `implementation/services/{devmgr,drivervm,init}` | the PC's own devices (keyboard controller, DMAR), the guest's memory map and boot, the I/O ports and IRQs `init` hands out |
 | `verification/{systest,c,ui}` | what the tests expect of the architecture, and the GUI scripts that hold only on QEMU's PC |
-| `orchestration/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
+| `automation/` | the Rust and C targets, the loader's boot path, QEMU's PC (q35, OVMF), its ACPI test tables |
 | `.cargo/`, `implementation/ports/` | Cargo's settings of the targets; the ports' settings, patches (binutils, GCC, musl, Linux) and the driver VM kernel's options |
 
 ## Repository layout
@@ -856,7 +856,7 @@ Libraries are crates named after their directory
 | `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`splash`), the desktop shell (`desktop`), the lock screen (`lock`) and what they share (`common`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), and the fonts, unmodified |
+| `implementation/generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), GUI and agent scripts |
-| `generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |
-| `orchestration/` | build orchestration, disk image creation, QEMU automation |
+| `automation/` | build automation, disk image creation, driving QEMU |
 | `documentation/` | documentation |

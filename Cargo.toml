@@ -4,7 +4,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "orchestration",
+    "automation",
     "implementation/bootloader",
     "implementation/kernel",
     "implementation/libraries/abi",
@@ -76,10 +76,10 @@ members = [
     "implementation/shell/lock/core",
     "implementation/shell/splash",
     "implementation/services/audio",
-    "generation/assets",
-    "generation/common",
-    "generation/music",
-    "generation/videos",
+    "implementation/generation/assets",
+    "implementation/generation/common",
+    "implementation/generation/music",
+    "implementation/generation/videos",
     "implementation/drivers/nvme",
     "verification/systest",
     "verification/nettest",
@@ -103,16 +103,16 @@ members = [
     "implementation/guests/linux/input",
     "implementation/guests/linux/renderer",
 ]
-# The crates in implementation/ports/, as `cargo orchestration` prepares them
+# The crates in implementation/ports/, as `cargo automation` prepares them
 # for Cargo, are not members (their own tests and dev-dependencies stay out
 # of this workspace): see "Crates" in implementation/ports/README.md. Nor is
 # anything in target/, such as the release of Rust that the toolchain is
 # built from.
 exclude = ["implementation/ports/.crates", "target"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
-# inside Veda is cross-built by `cargo orchestration build`, which knows the
+# inside Veda is cross-built by `cargo automation build`, which knows the
 # correct target for every component.
-default-members = ["orchestration"]
+default-members = ["automation"]
 
 [workspace.package]
 version = "0.1.0"
@@ -187,13 +187,14 @@ webpki-roots = { version = "1.0.9", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
-# MD5 for generation/videos only: FLAC's STREAMINFO signature and the
-# sample videos' picture fingerprints (what FFmpeg's decoder checks them
-# against).
+# MD5 for implementation/generation/videos only: FLAC's STREAMINFO
+# signature and the sample videos' picture fingerprints (what FFmpeg's
+# decoder checks them against).
 md-5 = { version = "0.11.0", default-features = false }
-# AV1 encoding for generation/videos only (the sample videos, made on the
-# build machine; never in the image): Veda decodes AV1, but has no encoder
-# of its own. No assembly, no threads, so it encodes the same everywhere.
+# AV1 encoding for implementation/generation/videos only (the sample
+# videos, made on the build machine; never in the image): Veda decodes
+# AV1, but has no encoder of its own. No assembly, no threads, so it
+# encodes the same everywhere.
 rav1e = { version = "0.8.1", default-features = false }
 ed25519-dalek = { version = "3", default-features = false }
 p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh"] }
@@ -205,7 +206,7 @@ crypto-bigint = { version = "0.7.5", default-features = false, features = ["allo
 # the same every time.
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
-# A WebSocket server for `orchestration`'s stand-in for Deepgram's Voice
+# A WebSocket server for `automation`'s stand-in for Deepgram's Voice
 # Agent API, on the build machine only: RFC 6455's handshake, frames and
 # closing handshake (same sha1 and rand generations as above).
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }

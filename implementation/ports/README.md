@@ -21,7 +21,7 @@ Each port is a directory:
 | `veda.patch` | Veda's changes, applied with `patch -p1` to the unpacked archive |
 | `architectures/<architecture>/` | The architecture's `veda.patch`, applied after the port's, and its other files, such as the driver VM kernel's options |
 
-The `cargo orchestration` command that builds a port downloads its archive
+The `cargo automation` command that builds a port downloads its archive
 first, refusing one whose SHA-256 differs from the pin. For Rust it also
 fetches its stage 0 (the compiler, standard library and Cargo of the
 release that builds it), checked against the SHA-256s in the release's
@@ -29,7 +29,7 @@ release that builds it), checked against the SHA-256s in the release's
 
 The scripts (`build.sh`, `linux/build.sh`, `crates.sh`; `common.sh`
 holds what they share) list what they expect and make in their opening
-comments. They build for the architecture `cargo orchestration` names
+comments. They build for the architecture `cargo automation` names
 (`VEDA_ARCH`), with its settings from
 `architectures/<architecture>/settings.sh` (target triples, the names
 other projects give the architecture, the media libraries' assembler). A
@@ -37,7 +37,7 @@ stage runs again only when its inputs change.
 
 ## Toolchain
 
-`cargo orchestration toolchain` builds these with `build.sh`, in
+`cargo automation toolchain` builds these with `build.sh`, in
 `target/toolchain`, as [C on Veda](../../documentation/C.md#the-toolchain)
 and [Rust on Veda](../../documentation/RUST.md#the-toolchain) describe.
 
@@ -92,7 +92,7 @@ filter, scaler and resampler that `mediadec` uses. It stays LGPL:
 
 ## Driver VM
 
-`cargo orchestration linux` builds these with `linux/build.sh`, in
+`cargo automation linux` builds these with `linux/build.sh`, in
 `target/linux`, for the [driver VM](../../documentation/DRIVERVM.md).
 
 | Port | Version | Licence | What Veda uses it for |
@@ -124,7 +124,7 @@ What the patches change:
   indirect draws generated on the GPU, and blorp's indirect copies (its
   bounds check is in NIR instead). `linux/build.sh` configures Mesa
   (Meson) with the guest's toolchain, built from the same binutils, GCC
-  and musl releases without Veda's patches; `cargo orchestration` builds
+  and musl releases without Veda's patches; `cargo automation` builds
   the renderer (Ninja) with the system.
 
 ## Crates
@@ -150,8 +150,8 @@ crates.io's checksum. The workspace depends on its version, directly
 (`version = "=0.14.0"` for smoltcp in `Cargo.toml`) or through another
 crate, and Cargo builds the port instead:
 
-1. Every `cargo orchestration` command first prepares the crates
-   (`orchestration/src/crates.rs`): it downloads and checks a changed
+1. Every `cargo automation` command first prepares the crates
+   (`automation/src/crates.rs`): it downloads and checks a changed
    port's release, and `crates.sh` unpacks and patches it in
    `implementation/ports/.crates/src/<crate>`, which Git ignores.
 2. It writes `implementation/ports/.crates/config.toml`, a
@@ -160,7 +160,7 @@ crate, and Cargo builds the port instead:
    a newer release, and checks that `Cargo.lock` has the prepared crates.
 
 Without the patch, as in a new checkout until step 2 (Cargo first runs
-for `cargo orchestration` itself), Cargo drops the ports' entries from
+for `cargo automation` itself), Cargo drops the ports' entries from
 `Cargo.lock` and takes each crate's newest release that the requirements
 on it allow. A crate the workspace depends on directly keeps the `=`
 before its port's version in `Cargo.toml`, which holds it there; step 3
@@ -176,7 +176,7 @@ anything; removing `implementation/ports/.crates` has them prepared anew.
 > [!IMPORTANT]
 > Until the crates are prepared, Cargo resolves their releases as
 > published, and `Cargo.lock` shows them so. In a new checkout, run a
-> `cargo orchestration` command (`cargo orchestration doctor`) before
+> `cargo automation` command (`cargo automation doctor`) before
 > Cargo itself (`cargo test -p ...`, rust-analyzer).
 
 A crate's own tests run outside the workspace, from the repository's
@@ -252,7 +252,7 @@ What the patches change:
 [`fonts/`](fonts/README.md) holds Inter, Lato and JetBrains Mono,
 unmodified, under the SIL Open Font License 1.1 (`OFL.txt`); its README
 gives each one's copyright. Nothing is built or patched:
-`cargo orchestration build` installs them in `/system/fonts`, licence
+`cargo automation build` installs them in `/system/fonts`, licence
 included, and `font`'s tests and `videogen` read them from here.
 
 ## Updating a port
@@ -273,7 +273,7 @@ included, and `font`'s tests and `videogen` read them from here.
    only an architecture needs goes there).
 4. Rebuild with the port's command, which rebuilds what changed (run a
    crate's own tests as [Crates](#crates) shows), then run
-   `cargo orchestration test`.
+   `cargo automation test`.
 
 ## Licences
 

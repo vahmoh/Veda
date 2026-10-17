@@ -10,8 +10,8 @@
 //! each of theirs.
 //!
 //! `GL_GALLIUM_DLL` names the library; by default it is where Mesa's build
-//! for this machine leaves it (`cargo orchestration linux` configures that
-//! build, `cargo orchestration test` brings the library up to date). With
+//! for this machine leaves it (`cargo automation linux` configures that
+//! build, `cargo automation test` brings the library up to date). With
 //! `GL_GALLIUM_DEVICE=virgl` the decoder renders on virgl, over
 //! virglrenderer's test server (`virgl_test_server`, at `VTEST_SOCKET_NAME`),
 //! as the driver VM's renderer does under QEMU, and with

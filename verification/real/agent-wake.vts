@@ -5,9 +5,9 @@
 # after the key is set in Settings the agent listens for its name; a
 # sentence that only mentions it does not wake it, one addressed to it
 # does, and the agent answers it. Uses (and is billed to) the key in
-# $DEEPGRAM_API_KEY, so it is not part of `cargo orchestration test`:
+# $DEEPGRAM_API_KEY, so it is not part of `cargo automation test`:
 #
-#   cargo orchestration script verification/real/agent-wake.vts
+#   cargo automation script verification/real/agent-wake.vts
 fail-on "PANIC"
 boot-cmdline "run=settings:agent"
 mic-silence 1

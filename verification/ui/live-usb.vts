@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# The live system (`cargo orchestration iso`) started from a USB stick, as a
+# The live system (`cargo automation iso`) started from a USB stick, as a
 # PC starts it: the desktop comes up with the home directory in memory, and
 # no disk driver of Veda's runs, so the computer's disk (the run gives it
 # one, an NVM Express disk) is never touched.

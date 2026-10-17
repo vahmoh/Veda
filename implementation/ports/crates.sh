@@ -4,9 +4,9 @@
 
 # Prepares the crates among the ports for Cargo: unpacks each one's
 # release and applies its patches, as Cargo then builds it in place of the
-# release. `cargo orchestration` runs it, once it has downloaded and verified
+# release. `cargo automation` runs it, once it has downloaded and verified
 # the releases, whenever one of these ports has changed; see
-# orchestration/src/crates.rs and "Crates" in README.md.
+# automation/src/crates.rs and "Crates" in README.md.
 #
 # Arguments: the crates (the names of their ports).
 #

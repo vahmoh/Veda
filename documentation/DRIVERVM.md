@@ -85,7 +85,7 @@ memory and their devices.
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; shared code (`sys`, `netlink`) |
-| Build | `orchestration/src/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo orchestration linux`](#building) |
+| Build | `automation/src/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo automation linux`](#building) |
 
 ## The platform
 
@@ -454,7 +454,7 @@ NVK) are not in yet, and go in with their firmware.
 
 ## Building
 
-`cargo orchestration linux [--jobs N]` builds the guest's kernel, a C and
+`cargo automation linux [--jobs N]` builds the guest's kernel, a C and
 C++ toolchain for its programs (Linux on musl) and Mesa into
 `target/linux`. It needs the packages the
 [README](../README.md#quick-start) installs, and checks for `gcc`, `g++`,
@@ -489,12 +489,12 @@ QEMU's machine has an Intel IOMMU that remaps interrupts, with the virtio
 functions behind it as a PC's are (`iommu_platform`, so modern ones
 only; Veda's virtio drivers accept `VIRTIO_F_ACCESS_PLATFORM`). Every
 script runs the driver VM, and the GUI scripts need it:
-`cargo orchestration test --ui` says why when it cannot run.
+`cargo automation test --ui` says why when it cannot run.
 
 ```bash
-cargo orchestration script verification/ui/drivervm-restart.vts   # Linux crashes, then its monitor is killed; the wired card comes back
-cargo orchestration run --no-iommu                  # no IOMMU in QEMU: no PCI function goes to the driver VM
-cargo orchestration run --cmdline "drivervm=off"    # no driver VM at all
+cargo automation script verification/ui/drivervm-restart.vts   # Linux crashes, then its monitor is killed; the wired card comes back
+cargo automation run --no-iommu                  # no IOMMU in QEMU: no PCI function goes to the driver VM
+cargo automation run --cmdline "drivervm=off"    # no driver VM at all
 ```
 
 Its options are on the kernel command line:
@@ -512,7 +512,7 @@ Its options are on the kernel command line:
 | `drivervm.cmdline=...` | Added to Linux's command line, commas for spaces; `veda.kill=NAME:SECONDS` ends a guest program by SIGKILL |
 | `drivervm.renderer=softpipe` | The renderer renders on softpipe, without a GPU |
 
-Scripts (`orchestration/src/script.rs`) can add a firmware variable to
+Scripts (`automation/src/script.rs`) can add a firmware variable to
 OVMF's store (`firmware-variable`) or an ACPI table (`acpi-table`), a USB
 network adapter (`usb net`), USB keyboards, mice and a tablet in place of
 PS/2 and the virtio tablet (`input usb`), and virtio-gpu (`gpu on`),

@@ -7,9 +7,9 @@
 # user's voice is synthesised by Deepgram on the host and fed to the test
 # microphone): a question, opening an application, and saying goodbye.
 # Uses (and is billed to) the key in $DEEPGRAM_API_KEY, so it is not part
-# of `cargo orchestration test`:
+# of `cargo automation test`:
 #
-#   cargo orchestration script verification/real/agent-deepgram.vts
+#   cargo automation script verification/real/agent-deepgram.vts
 fail-on "PANIC"
 boot-cmdline "run=settings:agent"
 mic-silence 1

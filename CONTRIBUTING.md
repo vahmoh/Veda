@@ -15,9 +15,9 @@ follows, and [Architecture](documentation/ARCHITECTURE.md) the design.
 
 - **Found a bug?** Open an issue with the steps, what happened and what
   you expected, the commit (`git rev-parse --short HEAD`) and what
-  `cargo orchestration doctor` says. Attach the log:
+  `cargo automation doctor` says. Attach the log:
   `target/veda/serial.log` after `script`, `shot` or `test`, the file
-  `cargo orchestration run --serial FILE` writes, or `VEDA/LOGS/` on a live
+  `cargo automation run --serial FILE` writes, or `VEDA/LOGS/` on a live
   system's stick.
 - **Planning more than a fix?** Open an issue first for a new service,
   protocol or application, a change to who may do what, or a new
@@ -34,23 +34,23 @@ Linux are built once.
 
 1. **Branch** from an up-to-date `main` of your fork.
 2. **Make one change**, with its tests and documentation. In a new
-   checkout, run a `cargo orchestration` command (such as `doctor`) before
+   checkout, run a `cargo automation` command (such as `doctor`) before
    Cargo itself, so that Cargo builds the crates Veda patches
    ([Builds](documentation/DEVELOPING.md#builds)).
 3. **Iterate** on what you changed:
 
    ```bash
-   cargo test -p netstack                                           # one crate's unit tests, on the host
-   cargo orchestration script verification/ui/firewall-question.vts  # one GUI script, headless
-   cargo orchestration run --cmdline run=settings                    # boot with an application started
+   cargo test -p netstack                                         # one crate's unit tests, on the host
+   cargo automation script verification/ui/firewall-question.vts  # one GUI script, headless
+   cargo automation run --cmdline run=settings                    # boot with an application started
    ```
 
 4. **Check everything** before you open a pull request:
 
    ```bash
-   cargo fmt --all --check         # formatting, as rustfmt.toml sets it
-   cargo orchestration clippy      # Clippy over every crate as Veda builds it, warnings as errors
-   cargo orchestration test --ui   # unit tests, systest inside Veda, then every GUI and agent script
+   cargo fmt --all --check      # formatting, as rustfmt.toml sets it
+   cargo automation clippy      # Clippy over every crate as Veda builds it, warnings as errors
+   cargo automation test --ui   # unit tests, systest inside Veda, then every GUI and agent script
    ```
 
 ## Engineering standards
@@ -122,9 +122,9 @@ A change is finished when it is tested where it could break:
 | What changed | Test it with | Run it with |
 |--------------|--------------|-------------|
 | Logic: parsing, protocols, state, maths | Unit tests beside the code | `cargo test -p <crate>` |
-| The kernel, services, the POSIX layer, the standard library | `systest`, and the C and Rust test programs | `cargo orchestration test` |
-| Applications, the shell, devices, recovery | A GUI script in `verification/ui` | `cargo orchestration script FILE` |
-| What the agent does | An agent script in `verification/agent` | `cargo orchestration script FILE` |
+| The kernel, services, the POSIX layer, the standard library | `systest`, and the C and Rust test programs | `cargo automation test` |
+| Applications, the shell, devices, recovery | A GUI script in `verification/ui` | `cargo automation script FILE` |
+| What the agent does | An agent script in `verification/agent` | `cargo automation script FILE` |
 
 - **A fix comes with the test that catches it,** checked to fail without
   the fix.
@@ -137,10 +137,10 @@ A change is finished when it is tested where it could break:
 - **Break things on purpose.** Crashes, restarts and pulled cables have
   scripts, so that recovery is tested like any other feature.
 - **A new crate with host tests** goes in `HOST_TESTED`
-  (`orchestration/src/runner.rs`); a test fails until it is there.
+  (`automation/src/runner.rs`); a test fails until it is there.
 
 [Scripts and tests](documentation/DEVELOPING.md#scripts-and-tests) covers
-the scripts, whose language `orchestration/src/script.rs` documents.
+the scripts, whose language `automation/src/script.rs` documents.
 
 ## Documentation
 
@@ -199,12 +199,12 @@ Open a pull request against `main` from a branch of your fork, and say:
 - **How you tested it**: the commands and scripts you ran, and what you
   could not test (hardware you do not have, say).
 - **What it looks like**, for a visible change: a screenshot
-  (`cargo orchestration shot`, or a script's `shot`).
+  (`cargo automation shot`, or a script's `shot`).
 
 Before asking for a review:
 
-- [ ] `cargo fmt --all --check` and `cargo orchestration clippy` pass
-- [ ] `cargo orchestration test --ui` passes
+- [ ] `cargo fmt --all --check` and `cargo automation clippy` pass
+- [ ] `cargo automation test --ui` passes
 - [ ] New behaviour has tests, and a fix the test that catches it
 - [ ] The documents that describe the change are up to date
 - [ ] New files start with their licence header
@@ -251,7 +251,7 @@ says).
   ```
 
   To a file you change substantially, you may add a line of your own
-  below those there. `cargo orchestration test` checks every file.
+  below those there. `cargo automation test` checks every file.
 - **Code from elsewhere is not copied in.** Third-party software is a port
   (`implementation/ports/`): its release, pinned by its SHA-256, with a
   small, explained patch

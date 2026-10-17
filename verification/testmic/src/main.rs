@@ -12,7 +12,7 @@
 //! microphone records silence and the program reconnects.
 //!
 //! Test scripts drive it with `say`, `mic-wav`, `mic-silence`, `mic-tone`
-//! and `mic-echo` (see `orchestration/src/script.rs`).
+//! and `mic-echo` (see `automation/src/script.rs`).
 
 #![no_std]
 #![no_main]

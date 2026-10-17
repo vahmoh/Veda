@@ -5,7 +5,7 @@
 //!
 //! Each test prints `<name> ... ok|FAILED: reason` and the final line is `PASS`
 //! or `FAIL (n failed)`; the kernel log prefixes every line with the program
-//! name, so the serial log reads `systest: PASS`. `cargo orchestration test`
+//! name, so the serial log reads `systest: PASS`. `cargo automation test`
 //! boots the system with `run=systest:host,ADDRESS,TCP-PORT,UDP-PORT` on the
 //! kernel command line (the servers of the host machine's that the network
 //! checks reach; `systest` alone runs them without) and checks the log.

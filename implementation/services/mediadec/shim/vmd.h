@@ -11,7 +11,7 @@
  * behind plain integers and opaque objects. No floating-point value
  * crosses it: the Rust half is built for the architecture's bare target
  * (<architecture>-unknown-none), which may pass them otherwise than GCC
- * (`cargo orchestration` refuses `float` and `double` here).
+ * (`cargo automation` refuses `float` and `double` here).
  *
  * Times are microseconds. Objects are made by the shim and freed by it.
  */

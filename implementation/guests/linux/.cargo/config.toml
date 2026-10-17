@@ -3,7 +3,7 @@
 
 # The driver VM's programs (this directory's crates): Linux's, on musl. Cargo
 # reads this file on top of the checkout's (.cargo/config.toml) when it runs
-# here, as `cargo orchestration` runs it for them:
+# here, as `cargo automation` runs it for them:
 #
 #   cargo build --release --target x86_64-unknown-linux-musl --package guest-init
 #

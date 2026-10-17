@@ -63,17 +63,17 @@ reports as a crash.
 
 > [!IMPORTANT]
 > Building Veda needs the toolchain's Rust, as its applications are
-> programs on the standard library: run `cargo orchestration toolchain`
+> programs on the standard library: run `cargo automation toolchain`
 > once (about half an hour).
 
-`cargo orchestration build` builds every program that
-`orchestration/src/components.rs` lists as `Program::std` (those on `rt`
+`cargo automation build` builds every program that
+`automation/src/components.rs` lists as `Program::std` (those on `rt`
 alone are `Program::native`) in `target/std`, with the toolchain's Rust
 and the C toolchain's driver, after bringing the C library's POSIX layer
 up to date. It empties `target/std` when the toolchain's Rust is built
 again (Cargo knows a compiler only by its version), and links the
 programs again when the POSIX layer changes, which Cargo does not see.
-`cargo orchestration clippy` uses the toolchain's Clippy: the development
+`cargo automation clippy` uses the toolchain's Clippy: the development
 machine's does not know Veda's target.
 
 By hand, the toolchain's compiler builds for Veda and the C toolchain's
@@ -95,7 +95,7 @@ Build scripts and procedural macros run on the development machine, with
 the standard library the toolchain builds for it too. A crate that
 compiles C finds Veda's compiler where the `cc` crate looks:
 `CC_x86_64_unknown_veda=x86_64-veda-gcc` (and `CXX_`, `AR_`), which
-`cargo orchestration` sets for Veda's programs.
+`cargo automation` sets for Veda's programs.
 
 A program is a static ELF executable, as C programs are,
 position-independent by default (`-static-pie`) or at a fixed address
@@ -179,7 +179,7 @@ Rust programs share the limits of C programs
 
 ## The toolchain
 
-`cargo orchestration toolchain` builds Rust after the C toolchain
+`cargo automation toolchain` builds Rust after the C toolchain
 ([C on Veda](C.md#the-toolchain)) from the `rust` port: the release's
 source, `rustc-1.99.0-src.tar.xz`, pinned by its SHA-256 (its signature
 was checked against the Rust project's release key when it was pinned),
@@ -189,7 +189,7 @@ and Veda's patches for the compiler's target, the standard library, the
 Rust's build program, `x.py`, then works in `target/toolchain/build/rust`:
 
 1. The previous release (stage 0) builds it:
-   `cargo orchestration toolchain` downloads its compiler, standard
+   `cargo automation toolchain` downloads its compiler, standard
    library and Cargo, checked against the SHA-256 the release's
    `src/stage0` gives them.
 2. LLVM is built with the architecture's code generator alone (X86 on
@@ -216,7 +216,7 @@ CMake (for LLVM) and Python 3 (for `x.py`) are among the toolchain's
   files, threads, processes and pipes to sockets (Unix domain, TCP and
   UDP, shared with child processes, and the host's servers through QEMU),
   names, panics, backtraces and a deep stack, and that file locks,
-  `pre_exec` and `exec` fail. `cargo orchestration build` compiles it
+  `pre_exec` and `exec` fail. `cargo automation build` compiles it
   twice into `/system/tests/rust`: position-independent (`stdlib`) and at
   a fixed address (`stdlib-fixed`).
 - **`verification/stdcrates`** (`/system/bin/stdcrates` in the image)
@@ -228,4 +228,4 @@ CMake (for LLVM) and Python 3 (for `x.py`) are among the toolchain's
   agent's (`verification/agent`).
 
 `systest` runs `stdlib`, `stdlib-fixed` and `stdcrates` inside Veda;
-`cargo orchestration test` runs `systest`, and `--ui` adds the scripts.
+`cargo automation test` runs `systest`, and `--ui` adds the scripts.

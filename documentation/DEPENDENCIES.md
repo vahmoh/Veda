@@ -108,6 +108,6 @@ Linux (the driver VM's kernel).
 | `audio`: WAV, QOA, resampler, FFT, echo canceller, mixing, synthesiser | hound, symphonia, qoaudio, rubato, rustfft, sonora-aec3: need `std`; dasp: no release since 2020; fundsp: the synthesiser's instruments are what Veda's music sounds like |
 | `audio`'s voice activity detector | earshot 1.2: to be evaluated on recorded speech before replacing a tuned detector |
 | `videogen`'s FLAC encoder, Matroska muxer and YUV conversion | flacenc: older RustCrypto and `heapless` generations; webm-iterable: no Rust Matroska writer is mature; yuvutils-rs: Veda's YUV is exact on its test colours |
-| `orchestration`'s disk images, QMP client and command line | fatfs: cannot set hidden sectors; hadris-iso: young; gpt: random GUIDs by default, where Veda's images are reproducible; qapi: generated types for eight commands; cpio, lexopt: weighed too |
+| `automation`'s disk images, QMP client and command line | fatfs: cannot set hidden sectors; hadris-iso: young; gpt: random GUIDs by default, where Veda's images are reproducible; qapi: generated types for eight commands; cpio, lexopt: weighed too |
 | The asset generators' noise | fastnoise-lite: the generators' own noise is the look of Veda's wallpapers and photos |
 | The compositor's keyboard layout | pc-keyboard 0.9: US only today; it can decode other layouts once a layout setting exists |

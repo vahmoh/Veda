@@ -22,10 +22,11 @@ published.
 The animations are Veda's own, not look-alikes:
 
 * **The hero's sky** is the *Aurora* wallpaper
-  (`generation/assets/src/wallpapers.rs`), its blooms and three ribbons
-  (their cores, filaments, halos and curtains of rays) rewritten as a WebGL
-  shader so that the ribbons flow. It is drawn below the screen's
-  resolution, as it is all soft light, and only while it is in view.
+  (`implementation/generation/assets/src/wallpapers.rs`), its blooms and
+  three ribbons (their cores, filaments, halos and curtains of rays)
+  rewritten as a WebGL shader so that the ribbons flow. It is drawn below
+  the screen's resolution, as it is all soft light, and only while it is
+  in view.
 * **The ring and its light** are the boot splash and the startup sequence
   (`implementation/shell/splash`,
   `implementation/services/compositor/src/startup.rs`): the same

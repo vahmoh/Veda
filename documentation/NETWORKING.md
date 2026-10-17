@@ -387,7 +387,7 @@ over a `net::TcpStream`.
 
 ## Testing
 
-**On the host**, `cargo orchestration test` runs:
+**On the host**, `cargo automation test` runs:
 
 | Tests | Cover |
 |-------|-------|
@@ -413,7 +413,7 @@ must be online. `wlan` lets `nettest` change Wi-Fi only when the kernel
 command line started it (the registry's `ClientIdentity::requested`),
 never when an application did.
 
-**GUI and recovery** scripts (`cargo orchestration test --ui`), in
+**GUI and recovery** scripts (`cargo automation test --ui`), in
 `verification/ui/`:
 
 | Script | Checks |

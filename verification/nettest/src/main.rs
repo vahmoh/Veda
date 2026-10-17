@@ -12,7 +12,7 @@
 //!   "hello from the host", from a server on the host machine (QEMU's NAT
 //!   makes the host its network's gateway; `gateway` as HOST stands for
 //!   the default route's). The GUI scripts of the network cards run it
-//!   against the server `cargo orchestration` starts (`nettest local` in a
+//!   against the server `cargo automation` starts (`nettest local` in a
 //!   script).
 //! * `nettest lan`: the online checks, after checking that the address came
 //!   from a real network rather than a hypervisor's NAT (a PC's own), plus

@@ -6,7 +6,7 @@
 //! called directly, on OpenGL contexts made as QEMU makes them.
 //!
 //! QEMU runs the system's virglrenderer on desktop OpenGL, through EGL;
-//! headless, on the GPU of a render node, through GBM: `cargo orchestration`
+//! headless, on the GPU of a render node, through GBM: `cargo automation`
 //! gives it the one the firmware showed its screen on, where the host has
 //! several. So do the tests (`GL_TEST_RENDERNODE` names another node, such
 //! as `/dev/dri/renderD129`), and on OpenGL ES with `GL_TEST_HOST=gles`, as
@@ -314,7 +314,7 @@ unsafe fn start_egl_on(lib: Module, dpy: Dpy, es: bool) -> Option<Egl> {
 
 /// Opens the render node of the GPU to render on: `GL_TEST_RENDERNODE`;
 /// else, where the host has several, the one the firmware showed its
-/// screen on, as `cargo orchestration` gives QEMU; else the first that
+/// screen on, as `cargo automation` gives QEMU; else the first that
 /// opens.
 fn render_node() -> Option<std::fs::File> {
     let open = |path: &std::path::Path| std::fs::File::options().read(true).write(true).open(path);

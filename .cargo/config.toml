@@ -4,7 +4,7 @@
 # What Cargo is told of each architecture's targets (their linkers and
 # flags) is in .cargo/architectures/<architecture>/config.toml. The crates in
 # implementation/ports/ take the place of their releases once
-# `cargo orchestration` has prepared them, in
+# `cargo automation` has prepared them, in
 # implementation/ports/.crates/config.toml (see "Crates" in
 # implementation/ports/README.md).
 include = [
@@ -13,6 +13,6 @@ include = [
 ]
 
 [alias]
-# `cargo orchestration <command>` drives every development workflow (build,
+# `cargo automation <command>` drives every development workflow (build,
 # run, test).
-orchestration = "run --quiet --package orchestration --"
+automation = "run --quiet --package automation --"

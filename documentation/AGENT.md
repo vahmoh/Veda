@@ -297,16 +297,16 @@ Any program may register, so the agent bounds what one says about itself
 
 | Tests | What they check | Run by |
 |-------|-----------------|--------|
-| Host unit tests | `agent-core`, and the `audio` library's echo canceller and voice detector | `cargo orchestration test` |
-| `verification/agent/` | The agent in Veda, with a stand-in for Deepgram: offline, free, deterministic | `cargo orchestration test --ui` |
+| Host unit tests | `agent-core`, and the `audio` library's echo canceller and voice detector | `cargo automation test` |
+| `verification/agent/` | The agent in Veda, with a stand-in for Deepgram: offline, free, deterministic | `cargo automation test --ui` |
 | `verification/real/agent-*.vts` | The agent with the real Deepgram, which bills them | By hand |
 
-The stand-in, `orchestration/src/agentsim.rs`, speaks the Voice Agent and
+The stand-in, `automation/src/agentsim.rs`, speaks the Voice Agent and
 streaming recognition protocols: it answers `Settings`, records what the
 agent sends, and sends function calls, voice and interruptions. Scripts
 drive it with `agent-*` commands, and the agent's microphone (`testmic`)
 with `mic-*` commands and `say` (Deepgram's text to speech, on the host),
-all listed in `orchestration/src/script.rs`. Scripts with `mic-echo` (the
+all listed in `automation/src/script.rs`. Scripts with `mic-echo` (the
 machine's output fed back into the microphone) run alone, after the others.
 
 The real tests type the key from `$DEEPGRAM_API_KEY` into Settings with
@@ -314,7 +314,7 @@ The real tests type the key from `$DEEPGRAM_API_KEY` into Settings with
 
 ```bash
 export DEEPGRAM_API_KEY=...
-cargo orchestration script verification/real/agent-deepgram.vts
+cargo automation script verification/real/agent-deepgram.vts
 ```
 
 ## Limitations

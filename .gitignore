@@ -3,7 +3,7 @@
 
 /target
 /out
-# The crates in implementation/ports/, as `cargo orchestration` prepares them
+# The crates in implementation/ports/, as `cargo automation` prepares them
 # for Cargo
 /implementation/ports/.crates/
 # Tool working copies (git worktrees of parallel work)

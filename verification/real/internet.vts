@@ -5,9 +5,9 @@
 # DNS for public names (and a name that does not exist), UDP, TCP to public
 # servers, HTTP and ping. The network cards' GUI scripts check them against
 # a server of the host's (`nettest local`) and need no Internet; this one
-# does, so it is not part of `cargo orchestration test`:
+# does, so it is not part of `cargo automation test`:
 #
-#   cargo orchestration script verification/real/internet.vts
+#   cargo automation script verification/real/internet.vts
 net ethernet
 boot-cmdline "run=nettest"
 fail-on "PANIC"

@@ -42,7 +42,7 @@ dependencies to its errors, tests and licence headers.
 * **The standard library, or `rt` alone.** Applications, and services
   that gain from the standard library's threads, channels, files and
   errors or from crates that need it, are programs on the standard library
-  (`Program::std` in `orchestration/src/components.rs`). What the standard
+  (`Program::std` in `automation/src/components.rs`). What the standard
   library stands on or runs before (`init`, the file system, the network
   stack), what drives hardware (the device manager, drivers, the driver
   VM) and what must answer in time (the window system, the sound mixer)
@@ -58,7 +58,7 @@ own.
 * **Its own directory.** A crate keeps such code in
   `src/architectures/<architecture>/`
   (`implementation/kernel/src/architectures/amd64`,
-  `orchestration/src/architectures/amd64` and others). Nothing outside
+  `automation/src/architectures/amd64` and others). Nothing outside
   those directories names an architecture's instructions, registers,
   system call numbers or calling conventions, or its platform's devices (a
   PC's interrupt controllers, timers, keyboard controller and IOMMU);
@@ -67,7 +67,7 @@ own.
 * **One module, `arch`.** The rest of the crate reaches that code only
   through `arch`, whose items every architecture provides with the same
   names and meanings. The kernel's (`implementation/kernel/src/arch.rs`)
-  and `orchestration`'s (`orchestration/src/arch.rs`) document their
+  and `automation`'s (`automation/src/arch.rs`) document their
   interface in a table. Its vocabulary is architecture-neutral: the
   clock's counter, not the TSC; a thread's TLS pointer, not its FS base.
   Code in `src/architectures/<architecture>/` may use the rest of its crate.
@@ -81,9 +81,9 @@ own.
     (`elf::amd64`, `iommu::amd64`, `hv::amd64`), compiled on every host
     for host tests and build tools too; `NATIVE` names the one of the
     architecture compiled for, where a crate needs it.
-  * Build scripts and tools (`build.rs`, `build`, `orchestration`) run on
+  * Build scripts and tools (`build.rs`, `build`, `automation`) run on
     the build machine, but their architecture is the one Veda is built for
-    (a build script's `TARGET`, `orchestration`'s `arch`), never the one
+    (a build script's `TARGET`, `automation`'s `arch`), never the one
     they run on.
 * **Outside `src/`,** what tools read from places of their own is in each
   place's `architectures/<architecture>/`, where the tool allows it:
@@ -99,7 +99,7 @@ own.
 
 ## Targets
 
-On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
+On AMD64 (`automation/src/architectures/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
@@ -111,7 +111,7 @@ On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
 | C programs | `x86_64-veda` (GCC) | Static ELF executables on musl |
 | The standard library's tests (`verification/rust`) | `x86_64-unknown-veda` | As above, each also at a fixed address |
 | The driver VM's programs (`implementation/guests/linux/`) | `x86_64-unknown-linux-musl` | Static, on Linux; built from `implementation/guests/linux/` (its `.cargo/config.toml`) into `target/guest` |
-| `orchestration/`, host tools | The host's (`std`) | |
+| `automation/`, host tools | The host's (`std`) | |
 
 ## Library crates
 
@@ -133,7 +133,7 @@ On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
   `cargo build -p <crate> --target x86_64-unknown-none`
   (`.cargo/architectures/amd64/config.toml` gives the RustCrypto and dalek
   crates their portable code there, as LLVM cannot build their SIMD code
-  for it). Building Veda (`cargo orchestration build`), whose programs on
+  for it). Building Veda (`cargo automation build`), whose programs on
   `rt` link without `std`, is the final check. `image`, for user space
   only, does not build soft-float (`fast_image_resize`'s SIMD code), nor
   does `shell-common`, which decodes wallpapers with it.
@@ -156,7 +156,7 @@ emulates SSE integer multiplies and shuffles with slow helper calls, so a
 loop LLVM auto-vectorises can run several times slower than its scalar
 form: check the generated code of hot loops, and keep them scalar where
 needed. Always build the OS with optimisations (`--release`,
-`cargo orchestration`'s default).
+`cargo automation`'s default).
 
 ## Robustness and errors
 
@@ -169,11 +169,11 @@ needed. Always build the OS with optimisations (`--release`,
 ## Formatting and testing
 
 * `cargo fmt` (`rustfmt.toml`: `max_width = 120`).
-* `cargo orchestration clippy`: Clippy over every crate as Veda builds it,
+* `cargo automation clippy`: Clippy over every crate as Veda builds it,
   warnings as errors (the programs on the standard library with the
   toolchain's Clippy, which knows Veda's target).
 * Unit tests live next to the code (`#[cfg(test)] mod tests`).
-  `cargo test -p <crate>` runs them; `cargo orchestration test` runs the
+  `cargo test -p <crate>` runs them; `cargo automation test` runs the
   full suite, with the integration tests in QEMU.
 
 ## Licence headers
@@ -202,6 +202,6 @@ SPDX tags in the file's comment syntax:
   videos, test vectors, JSON, `documentation/website/CNAME`), as do
   `Cargo.lock`, which Cargo writes, licence texts, and the ports' patches,
   which change other projects' files.
-* **A test** of `orchestration`'s (`orchestration/src/licence.rs`), run by
-  `cargo orchestration test`, checks every file of the repository, and
+* **A test** of `automation`'s (`automation/src/licence.rs`), run by
+  `cargo automation test`, checks every file of the repository, and
   every new one Git does not ignore.

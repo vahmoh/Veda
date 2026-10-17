@@ -13,8 +13,8 @@ reviewed.
 
 ## Commands
 
-Each is `cargo orchestration COMMAND`, run in the repository;
-`cargo orchestration help` has the details.
+Each is `cargo automation COMMAND`, run in the repository;
+`cargo automation help` has the details.
 
 | Command | What it does |
 |---------|--------------|
@@ -89,8 +89,8 @@ million pixels the rate drops (56 Hz at 3840x2160).
 
 ## The live system
 
-`cargo orchestration iso` writes a hybrid ISO image
-(`orchestration/src/image/iso9660.rs`) that boots with UEFI from a disc,
+`cargo automation iso` writes a hybrid ISO image
+(`automation/src/image/iso9660.rs`) that boots with UEFI from a disc,
 or from a stick written by Rufus (in ISO mode) or as it is. It boots with
 `live` on the kernel command line (no disk driver; `/home` in memory), at
 1920x1080 or the screen's largest mode below it, and with no time zone, as
@@ -109,7 +109,7 @@ check its logs with `expect-stick` (`verification/ui/live-logs.vts`).
 
 ## Scripts and tests
 
-`cargo orchestration test` runs the unit tests on the host, then `systest`
+`cargo automation test` runs the unit tests on the host, then `systest`
 inside Veda; `--ui` adds the scripts of `verification/ui/` (the desktop,
 the applications and the devices; `architectures/amd64/`: a PC's machine
 only) and `verification/agent/` (with a stand-in for Deepgram, and a
@@ -118,7 +118,7 @@ run by hand, use the real Internet and Deepgram, with the key in
 `DEEPGRAM_API_KEY` ([The agent](AGENT.md#testing)).
 
 A script (`.vts`) drives QEMU and checks the log and the screen, as its
-opening comment says. `orchestration/src/script.rs` documents the
+opening comment says. `automation/src/script.rs` documents the
 language, such as how a `wait-serial` matches lines after a `checkpoint`
 and how `shot` waits (three seconds at most) for the screen to settle.
 Scripts are checked whole before anything is built: a wrong line fails
@@ -129,7 +129,7 @@ the run, with its number.
   firmware printed and where each processor is. QEMU's loader blanks, at
   every reset, the page from which OVMF before edk2's e4f99a8554 reads a
   processor count and a memory map (`blank_at_reset`,
-  `orchestration/src/architectures/amd64/qemu.rs`).
+  `automation/src/architectures/amd64/qemu.rs`).
 * **Outputs.** `shot`, `script` and `test` save the serial console (the
   kernel's log and every program's `println!`) to
   `target/veda/serial.log`, and headless runs' sound to
@@ -142,12 +142,12 @@ the run, with its number.
 * **Deadlines.** A script of `test --ui` is killed, with its QEMU, past
   four times its last run (at least five minutes).
 * **The network.** The network cards' scripts check it against a server on
-  the host (`nettest local`, `orchestration/src/hostweb.rs`), without the
+  the host (`nettest local`, `automation/src/hostweb.rs`), without the
   Internet.
 
 ```bash
-cargo orchestration script documentation/screenshots.vts                         # the README's screenshots
-cargo orchestration script documentation/interceptor.vts --resolution 1920x1200  # Interceptor's: scale it to 1280x800
+cargo automation script documentation/screenshots.vts                         # the README's screenshots
+cargo automation script documentation/interceptor.vts --resolution 1920x1200  # Interceptor's: scale it to 1280x800
 ```
 
 Where QEMU has the 3D GPU, `test` also runs the OpenGL ES tests on the
@@ -194,7 +194,7 @@ Linux's first commit kept the firmware's setup if it logs
 `keeping the firmware's pipe bpp 24` and no
 `PPS 0 turn panel power off`. The startup's look is in
 `implementation/services/compositor/src/startup.rs`, its sound in
-`generation/music/src/songs/startup.rs`.
+`implementation/generation/music/src/songs/startup.rs`.
 
 | `dmesg` | Shows |
 |---------|-------|
@@ -203,7 +203,7 @@ Linux's first commit kept the firmware's setup if it logs
 | `snd_hda`, `cs35l41`, `alsa` | Linux's sound controllers and codecs; a laptop's speaker amplifiers; Veda's sound driver for Linux (the card, underruns, the device it records) |
 | `devmgr` | The ACPI tables (`devmgr: acpi: N tables, ...`, and the conditional definitions left out), each driver's device's devices in them (`acpi: 00:1e.3 is \_SB.PC00.SPI1, ...`), and `gpio:` a controller's register windows, the pads set up for drivers and the pins that interrupt |
 
-`cargo orchestration acpi DIR` runs devmgr's interpreter on the host over
+`cargo automation acpi DIR` runs devmgr's interpreter on the host over
 a PC's ACPI tables (`sudo cp -r /sys/firmware/acpi/tables DIR`): the PCI
 root bridges' windows (where devmgr places BARs the firmware left
 unplaced), what the motherboard reserves, and each root bus function's
@@ -216,18 +216,18 @@ from this machine.
 ## Builds
 
 > [!IMPORTANT]
-> In a new checkout, run a `cargo orchestration` command (such as
+> In a new checkout, run a `cargo automation` command (such as
 > `doctor`) before Cargo itself (`cargo test -p ...`, rust-analyzer).
 > Every command but `help` and `clean` has Cargo build the crates among the
 > ports (smoltcp, zune-jpeg, tokio and others: "Crates" in
 > `implementation/ports/README.md`) as patched; until then, Cargo builds
 > their releases.
 
-* **Generated media.** A generator in `generation/` runs when its
-  executable (with every library it uses) has changed. It writes into
-  `target/generated/<generator>/` (in `$CARGO_TARGET_DIR`), lists what it
-  wrote in its `.manifest`, which the image is packed from, and removes
-  anything else there.
+* **Generated media.** A generator in `implementation/generation/` runs
+  when its executable (with every library it uses) has changed. It
+  writes into `target/generated/<generator>/` (in `$CARGO_TARGET_DIR`),
+  lists what it wrote in its `.manifest`, which the image is packed
+  from, and removes anything else there.
 * **Builds side by side.** Give each its own `CARGO_TARGET_DIR` (Cargo's
   output, generated media) and `VEDA_OUT` (image, serial log,
   screenshots):
@@ -245,12 +245,12 @@ from this machine.
 
 ## The system image
 
-`cargo orchestration build` puts these into the initrd, mounted at
+`cargo automation build` puts these into the initrd, mounted at
 `/system`:
 
 | Source | Installed as |
 |--------|--------------|
-| The programs in `PROGRAMS` (`orchestration/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
+| The programs in `PROGRAMS` (`automation/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
@@ -274,7 +274,7 @@ libraries ([Rust on Veda](RUST.md)).
 
 1. Create a crate in `implementation/applications/<name>`, and add it to
    the workspace's `members` in `Cargo.toml` and to `PROGRAMS` in
-   `orchestration/src/components.rs`, as `Program::std("<name>")`.
+   `automation/src/components.rs`, as `Program::std("<name>")`.
 2. Its `Cargo.toml` depends on `rt`, `abi`, `ui` and others as needed.
 3. Write `src/main.rs`:
 
@@ -389,7 +389,7 @@ with its decoder (a heartbeat, a frame pool, a sound ring).
 The decoder, `implementation/services/mediadec`, is a C program: its Rust
 half, built for the bare target (`x86_64-unknown-none` on AMD64), is
 linked with its C shim, FFmpeg and dav1d by the cross compiler
-(`mediadec()` in `orchestration/src/toolchain.rs`), once `toolchain` has
+(`mediadec()` in `automation/src/toolchain.rs`), once `toolchain` has
 built the media libraries (`doctor` says whether it has). Scripts that
 need it say `requires media`. Without it, `verification/fakedec` stands
 in: `videos --decoder /system/bin/fakedec FILE` plays a text file of
@@ -397,12 +397,12 @@ in: `videos --decoder /system/bin/fakedec FILE` plays a text file of
 timecode and a tone, crashing, hanging or falling behind when the clip
 asks (`verification/ui/videos-fake.vts`).
 
-`generation/videos` makes the sample videos (`samples/Videos`, copied to
-`~/Videos`) with rav1e (AV1, on the build machine only) and a FLAC
-encoder of its own, and writes `/system/tests/videos/Countdown.md5`, every
-picture's MD5, for `systest` to check the decoder against, with a
-truncated copy for the error scripts. `VIDEOGEN_PREVIEW=DIR` adds PNGs of
-what was drawn and decoded.
+`implementation/generation/videos` makes the sample videos
+(`samples/Videos`, copied to `~/Videos`) with rav1e (AV1, on the build
+machine only) and a FLAC encoder of its own, and writes
+`/system/tests/videos/Countdown.md5`, every picture's MD5, for `systest`
+to check the decoder against, with a truncated copy for the error
+scripts. `VIDEOGEN_PREVIEW=DIR` adds PNGs of what was drawn and decoded.
 
 ## Performance notes
 

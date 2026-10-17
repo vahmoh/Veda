@@ -469,7 +469,7 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
 }
 
 /// The host machine's servers, when the kernel command line named them
-/// (`run=systest:host,ADDRESS,TCP-PORT,UDP-PORT`, which `cargo orchestration
+/// (`run=systest:host,ADDRESS,TCP-PORT,UDP-PORT`, which `cargo automation
 /// test` gives): the arguments that have the checks of the C library and of
 /// Rust's standard library reach them too.
 fn host_args() -> Vec<String> {

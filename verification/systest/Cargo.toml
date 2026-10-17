@@ -3,7 +3,7 @@
 
 [package]
 name = "systest"
-description = "In-system integration tests for Veda (run by `cargo orchestration test`)"
+description = "In-system integration tests for Veda (run by `cargo automation test`)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

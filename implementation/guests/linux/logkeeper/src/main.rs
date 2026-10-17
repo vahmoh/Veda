@@ -11,7 +11,7 @@
 //!
 //! The stick is a USB disk with a FAT32 file system named `VEDA` that has
 //! a `VEDA/LOGS` directory: the live system's image has one
-//! (`cargo orchestration iso`), so the stick it is written to keeps the
+//! (`cargo automation iso`), so the stick it is written to keeps the
 //! logs; other disks are left alone. Each start of the system gets a
 //! directory of its own there, numbered (`VEDA/LOGS/0007`), with `VEDA.TXT`
 //! and `LINUX.TXT` in it; the oldest go, so that [`KEPT`] starts' are kept

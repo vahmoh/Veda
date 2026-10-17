@@ -4,8 +4,8 @@
  * vedaos.org: the page's motion, in Veda's own visual language:
  *
  * - the hero's sky is the Aurora wallpaper
- *   (generation/assets/src/wallpapers.rs) brought to life in a WebGL
- *   shader; the ring's light is CSS;
+ *   (implementation/generation/assets/src/wallpapers.rs) brought to life
+ *   in a WebGL shader; the ring's light is CSS;
  * - the agent's figure (OS1's ring and the coil from "Her") is a port of
  *   implementation/applications/shell/src/presence.rs and the states of
  *   implementation/applications/shell/src/agent.rs;

@@ -91,10 +91,10 @@ The driver VM also needs KVM's nested virtualization (`kvm_intel nested=1`).
 Then build Veda and boot it:
 
 ```bash
-cargo orchestration doctor      # check the tools
-cargo orchestration toolchain   # once, about half an hour: GCC, musl and Rust for Veda
-cargo orchestration linux       # once: the driver VM's Linux and Mesa
-cargo orchestration run         # build Veda and boot it in QEMU
+cargo automation doctor      # check the tools
+cargo automation toolchain   # once, about half an hour: GCC, musl and Rust for Veda
+cargo automation linux       # once: the driver VM's Linux and Mesa
+cargo automation run         # build Veda and boot it in QEMU
 ```
 
 Add a [Deepgram](https://deepgram.com) API key in **Settings → Agent**, then
@@ -102,7 +102,7 @@ say **"Hey Veda"**, click the ring on the taskbar or press **Super+Space**.
 Try *"Play Neon Horizon"*, *"Show me the lighthouse photo, full screen"* or
 *"Delete the City Lights photo"* (it asks you first).
 
-**On a PC:** `cargo orchestration iso` writes a live system for a USB stick.
+**On a PC:** `cargo automation iso` writes a live system for a USB stick.
 Start it in UEFI mode, with VT-x and VT-d on and Secure Boot off. It runs
 from memory and leaves the PC's disks alone; see
 [what it supports](documentation/DRIVERVM.md#status).
@@ -174,8 +174,8 @@ FFmpeg, dav1d, glam and [more](documentation/DEPENDENCIES.md).
 ## Testing
 
 ```bash
-cargo orchestration test        # unit tests on the host, then integration tests inside Veda
-cargo orchestration test --ui   # plus the GUI and agent scripts
+cargo automation test        # unit tests on the host, then integration tests inside Veda
+cargo automation test --ui   # plus the GUI and agent scripts
 ```
 
 The scripts click through the desktop and the applications, and break

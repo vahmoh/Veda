@@ -208,7 +208,7 @@ program the Terminal runs.
 
 ## The toolchain
 
-`cargo orchestration toolchain` builds it once, in about half an hour on a
+`cargo automation toolchain` builds it once, in about half an hour on a
 recent PC (C a quarter of an hour, Rust as long again). It checks the
 archives it downloads against the SHA-256 each
 `implementation/ports/*/port.toml` pins (their GPG signatures were checked
@@ -228,7 +228,7 @@ settings (`implementation/ports/architectures/<architecture>/settings.sh`) in
 
 Later builds redo what changed: each stage keeps a fingerprint of what
 went into it, and where (a toolchain directory that has moved is built
-again). When the POSIX layer changes, `cargo orchestration build` puts it
+again). When the POSIX layer changes, `cargo automation build` puts it
 into the C library and links the native programs (GCC, binutils) again,
 without recompiling them. It installs the C test programs in
 `/system/tests/c` and the native toolchain in `/system`: about 80 MB,
@@ -237,7 +237,7 @@ which Veda keeps in memory (compiling is comfortable in QEMU's default
 
 ### Packages
 
-`cargo orchestration toolchain` checks for these first and names any that
+`cargo automation toolchain` checks for these first and names any that
 are missing.
 
 | For | Tools | Debian and Ubuntu packages |
@@ -291,6 +291,6 @@ contains is each `port.toml`'s archive plus the patches beside it.
 - **Unit tests** of `implementation/libraries/elf` and
   `implementation/libraries/posix` run on the host.
 
-`cargo orchestration test` runs the unit tests and `systest`, `--ui` adds
+`cargo automation test` runs the unit tests and `systest`, `--ui` adds
 the scripts, and what needs the toolchain is skipped when it has not been
 built.

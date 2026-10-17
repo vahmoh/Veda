@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "automation"
+description = "Veda build automation: cross-builds every component, creates the disk image and runs QEMU"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+initrd = { workspace = true, features = ["std"] }
+elf = { workspace = true }
+build = { workspace = true }
+sha2 = { workspace = true }
+image = { workspace = true }
+acpi = { workspace = true }
+audio = { workspace = true }
+serde_json = { workspace = true }
+crc32fast = { workspace = true }
+tungstenite = { workspace = true }
+bootinfo = { workspace = true }
+libc = { workspace = true }
+# The generators' manifests, which the image is packed from.
+gencommon = { path = "../implementation/generation/common" }
+
+[dev-dependencies]
+# The checks of screenshots are tested on pictures the tests make.
+image = { workspace = true, features = ["encode"] }
+# The test tables are whole tables, as the driver VM takes the firmware's.
+hv = { workspace = true }
+
+[lints]
+workspace = true
