@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use abi::RawHandle;
-use agent::policy;
-use agent::tools::{self, Risk, names};
+use agent_core::policy;
+use agent_core::tools::{self, Risk, names};
 use proto::display::display;
 use proto::init::launcher;
 use proto::shell::shell;
@@ -211,7 +211,7 @@ struct Ctx {
 /// apart from the private store's ([`crate::store`]): the paths the worker
 /// acts on come from the language model, from documents and from the
 /// Trash's records, and although every one is checked
-/// ([`agent::files`]), this connection needs no access to private
+/// ([`agent_core::files`]), this connection needs no access to private
 /// directories at all, so it gives that access up, for good: the file
 /// system then treats it as an application's. A connection that could not
 /// give it up is not used: file actions then fail.
@@ -299,7 +299,7 @@ impl Ctx {
         };
         let args = pinned.as_ref().unwrap_or(args);
         let fs = &self.fs;
-        let exists = |p: &str| agent::files::resolve(p).map(|p| fs.exists(&p)).unwrap_or(false);
+        let exists = |p: &str| agent_core::files::resolve(p).map(|p| fs.exists(&p)).unwrap_or(false);
         let risk = tools::risk(name, args, &exists);
         let key = policy::key(policy::SYSTEM, &format!("{name}.{}", args["operation"].as_str().unwrap_or("")));
         if !approved && self.needs_approval(&key, risk) {

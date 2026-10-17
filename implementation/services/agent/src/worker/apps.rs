@@ -13,8 +13,8 @@
 //! newest.
 
 use abi::RawHandle;
-use agent::policy;
-use agent::tools::{self, names};
+use agent_core::policy;
+use agent_core::tools::{self, names};
 use ipc::IpcError;
 use proto::agent::{AppAgentInfo, agentapp};
 use proto::init::AppInfo;
@@ -169,7 +169,8 @@ impl Ctx {
     /// front.
     pub(super) fn open_app(&mut self, args: &Value) -> Result<Value, String> {
         let app = self.app_arg(args)?;
-        let file = args["file"].as_str().filter(|f| !f.trim().is_empty()).map(agent::files::resolve).transpose()?;
+        let file =
+            args["file"].as_str().filter(|f| !f.trim().is_empty()).map(agent_core::files::resolve).transpose()?;
         // An open application without a file to open comes to the front.
         if file.is_none()
             && let Some(id) = self.find_window(&app.id)

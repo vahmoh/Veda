@@ -14,9 +14,9 @@
 
 use std::sync::Arc;
 
-use ::agent::config::{self, Config};
-use ::agent::deepgram;
 use abi::{WaitItem, signals};
+use agent_core::config::{self, Config};
+use agent_core::deepgram;
 use proto::agent::{
     AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, UiLink, agent,
 };

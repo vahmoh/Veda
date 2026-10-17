@@ -13,7 +13,7 @@
 //!   microphone closed and other sound back up.
 //! * A conversation that a notice started (a due reminder) is not attended
 //!   until the user speaks: until then, nothing that would wake the agent
-//!   again runs (`agent::tools::allowed_unattended`).
+//!   again runs (`agent_core::tools::allowed_unattended`).
 //! * The user cancelling calls by speaking again takes them out of the
 //!   worker's queue; those that had started run to the end, and what they
 //!   did is told (see [`crate::approvals`]).
@@ -22,13 +22,13 @@
 //!   ([`Agent::user_active`]), so that the screen does not lock in the
 //!   middle of a conversation held hands-free. Nothing the agent hears
 //!   while it only listens for its name counts, nor does a conversation a
-//!   notice started (`agent::presence` says why).
+//!   notice started (`agent_core::presence` says why).
 
-use agent::deepgram::{self, Role, ServerMessage};
-use agent::gate::{self, Verdict};
-use agent::notice::Notice;
-use agent::prompt::{self, PromptContext};
-use agent::tools;
+use agent_core::deepgram::{self, Role, ServerMessage};
+use agent_core::gate::{self, Verdict};
+use agent_core::notice::Notice;
+use agent_core::prompt::{self, PromptContext};
+use agent_core::tools;
 use proto::agent::AgentState;
 use rt::println;
 
@@ -521,7 +521,8 @@ impl Agent {
 
     /// The microphone as Deepgram should hear it: 20 ms at a time, through
     /// the echo gate, so that what is left of the agent's own voice after
-    /// echo cancellation is silence to the recogniser (see `agent::gate`).
+    /// echo cancellation is silence to the recogniser (see
+    /// `agent_core::gate`).
     fn gate_mic(&mut self) -> Vec<i16> {
         use audio::level::rms_dbfs;
         self.mic_pending.extend_from_slice(&self.mic_buf);
@@ -574,7 +575,7 @@ impl Agent {
 
     /// Ends quiet (or unconfirmed) conversations, finishes the agent's
     /// turns, tells the window system when the user is there
-    /// (`agent::presence`), brings settings that changed into the
+    /// (`agent_core::presence`), brings settings that changed into the
     /// conversation, and rests again once an error has been shown.
     pub(crate) fn housekeeping(&mut self, now: u64) {
         /// How long to wait for a goodbye after the agent asked to end.

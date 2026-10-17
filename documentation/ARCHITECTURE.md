@@ -750,8 +750,8 @@ the actions every `ui` application offers over the `agentapp` protocol
 - **The lock.** While the screen is locked, the agent neither listens for
   its name nor holds a conversation ([The lock screen](#the-lock-screen)).
   While it is unlocked, the agent tells the window system that the user is
-  there as they talk with it (`agent::presence`), which counts as input
-  for the idle lock: in a conversation they asked for (a click,
+  there as they talk with it (`agent_core::presence`), which counts as
+  input for the idle lock: in a conversation they asked for (a click,
   Super+Space, its name), when Deepgram hears them start to speak and
   gives their words, and while its voice answers. Nothing it hears while
   it only listens for its name counts, its name included, nor anything in
@@ -763,10 +763,10 @@ the actions every `ui` application offers over the `agentapp` protocol
   live in `/home/.private/agent`. The worker reaches the user's files
   through a connection of its own, which has given up private access, and
   checks every path.
-- **`agent`** (`implementation/libraries/agent`) holds the decisions that
-  need no I/O (the protocol, the tools and their risks, the paths file
-  actions may reach, the prompt, memory, the approval policy, the wake
-  word), tested on the host.
+- **`agent-core`** (`implementation/services/agent/core`) holds the
+  decisions that need no I/O (the protocol, the tools and their risks, the
+  paths file actions may reach, the prompt, memory, the approval policy,
+  the wake word), tested on the host.
 
 ## Testing
 
@@ -852,7 +852,6 @@ Libraries are crates named after their directory
 | `implementation/libraries/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
-| `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
 | `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`splash`), the desktop shell (`desktop`), the lock screen (`lock`) and what they share (`common`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |

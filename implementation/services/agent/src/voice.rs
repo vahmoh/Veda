@@ -7,7 +7,7 @@
 //!   the agent can listen while it talks (and be interrupted) without
 //!   hearing itself. Beside the cleaned microphone the audio service
 //!   delivers what was playing when it was recorded and the microphone as
-//!   recorded, for the echo gate (`agent::gate`).
+//!   recorded, for the echo gate (`agent_core::gate`).
 //! * The voice: a 24 kHz mono playback stream. Deepgram's speech arrives in
 //!   bursts, at times ahead of what plays and at times behind; what does
 //!   not fit in the stream's ring waits in a queue. An answer starts

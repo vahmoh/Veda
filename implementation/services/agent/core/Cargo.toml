@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "agent"
-description = "The voice agent's logic: the Deepgram Voice Agent protocol, tools, memory, configuration and the approval policy"
+name = "agent-core"
+description = "What the voice agent decides without I/O, testable on the host: the Deepgram Voice Agent protocol, tools, memory, configuration and the approval policy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

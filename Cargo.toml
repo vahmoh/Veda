@@ -32,7 +32,6 @@ members = [
     "implementation/libraries/tls",
     "implementation/libraries/wlan",
     "implementation/libraries/web",
-    "implementation/libraries/agent",
     "implementation/libraries/acpi",
     "implementation/libraries/gpio",
     "implementation/libraries/glsl",
@@ -49,6 +48,7 @@ members = [
     "implementation/services/netd",
     "implementation/services/wlan",
     "implementation/services/agent",
+    "implementation/services/agent/core",
     "implementation/services/drivervm",
     "implementation/services/drivervm/core",
     "implementation/applications/about",
@@ -146,7 +146,6 @@ net = { path = "implementation/libraries/net" }
 tls = { path = "implementation/libraries/tls" }
 wlan = { path = "implementation/libraries/wlan" }
 web = { path = "implementation/libraries/web" }
-agent = { path = "implementation/libraries/agent" }
 acpi = { path = "implementation/libraries/acpi" }
 gpio = { path = "implementation/libraries/gpio" }
 splash = { path = "implementation/shell/splash" }

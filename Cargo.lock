@@ -76,19 +76,8 @@ dependencies = [
 name = "agent"
 version = "0.1.0"
 dependencies = [
- "files",
- "percent-encoding",
- "proto",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "agentd"
-version = "0.1.0"
-dependencies = [
  "abi",
- "agent",
+ "agent-core",
  "audio",
  "files",
  "ipc",
@@ -97,6 +86,17 @@ dependencies = [
  "rt",
  "serde_json",
  "web",
+]
+
+[[package]]
+name = "agent-core"
+version = "0.1.0"
+dependencies = [
+ "files",
+ "percent-encoding",
+ "proto",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

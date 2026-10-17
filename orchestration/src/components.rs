@@ -84,7 +84,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("about"),
     Program::std("interceptor"),
     Program::native("audiod").named("audio"),
-    Program::std("agentd").named("agent"),
+    Program::std("agent"),
     Program::std("music"),
     Program::std("videos"),
     Program::std("photos"),

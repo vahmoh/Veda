@@ -9,7 +9,7 @@
 //! sleep and mutes it. Settings' connections are handed to Settings' own
 //! thread ([`crate::admin`]).
 
-use ::agent::deepgram;
+use agent_core::deepgram;
 use proto::agent::{
     AgentConfig, AgentError, AgentEvent, AgentStatus, MemoryItem, ModelCatalog, Permission, UiLink, agent,
 };

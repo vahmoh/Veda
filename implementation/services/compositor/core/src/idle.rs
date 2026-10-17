@@ -16,7 +16,7 @@
 //!   (`display::user_active`: they talk with it, hands-free), which counts
 //!   as input; nobody else may, since a program could otherwise keep an
 //!   unattended computer unlocked for ever. What counts as the user there
-//!   is the agent's to decide (`agent::presence`).
+//!   is the agent's to decide (`agent_core::presence`).
 //! * **A window keeps the screen awake** while its client asks
 //!   (`display::keep_awake`: a video playing, a slideshow, a game in play)
 //!   and while it can be seen: neither minimised nor closing, and not

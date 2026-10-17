@@ -9,7 +9,7 @@
 //! answer slowly or never; so a thread of its own asks, off the path of
 //! function calls, and hands the worker the application's link once it
 //! answered ([`crate::worker::Links`]). What it said is kept for the
-//! agent's instructions (bounded first: `agent::tools::sanitize`).
+//! agent's instructions (bounded first: `agent_core::tools::sanitize`).
 //!
 //! A process registers once: a new registration of the same process
 //! replaces its previous one (in the worker). One registering again and
@@ -19,7 +19,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use agent::policy::RegistrationLimit;
+use agent_core::policy::RegistrationLimit;
 use proto::agent::{AgentError, agentapp};
 use proto::init::ClientIdentity;
 use rt::object::Channel;

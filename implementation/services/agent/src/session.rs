@@ -22,8 +22,8 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use abi::RawHandle;
-use agent::deepgram::{self, ServerMessage};
-use agent::presence::Presence;
+use agent_core::deepgram::{self, ServerMessage};
+use agent_core::presence::Presence;
 use net::NetError;
 use rt::object::Event;
 use rt::sync::Mutex;
@@ -183,7 +183,7 @@ pub struct Session {
     /// attended until the user speaks.
     pub attended: bool,
     /// What it has shown of the user, for the window system's idle lock
-    /// (see `agent::presence`).
+    /// (see `agent_core::presence`).
     pub presence: Presence,
     pending_mic: VecDeque<i16>,
     pending_inject: Vec<String>,

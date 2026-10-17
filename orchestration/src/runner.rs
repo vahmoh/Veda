@@ -57,7 +57,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("netstack", &[]),
     ("tls", &[]),
     ("web", &[]),
-    ("agent", &[]),
+    ("agent-core", &[]),
     ("wlan", &[]),
     ("acpi", &[]),
     ("gpio", &[]),

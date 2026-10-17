@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `agent` — the logic of the voice agent that lives in Veda.
+//! `agent-core` — the logic of the voice agent that lives in Veda.
 //!
 //! The agent service (`implementation/services/agent`) does the I/O —
 //! audio, the network, talking to applications — and uses this crate for

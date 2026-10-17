@@ -22,7 +22,7 @@
 //!   Anything above routine risk waits for the user's approval
 //!   ([`approvals`]), which the shell asks for — in the agent's window
 //!   when it is open, otherwise in a notification — and the outcome is told
-//!   to the agent ([`agent::notice`](::agent::notice)). Timers wake it when
+//!   to the agent ([`agent_core::notice`]). Timers wake it when
 //!   they are due ([`timers`]).
 //! * **Who may do what** is decided by the registry's identity of each
 //!   connection ([`server`]): any program may register its abilities
@@ -49,9 +49,9 @@ mod worker;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use ::agent::deepgram;
-use ::agent::gate::EchoGate;
 use abi::{WaitItem, signals};
+use agent_core::deepgram;
+use agent_core::gate::EchoGate;
 use proto::agent::{AgentEvent, AgentState, AgentStatus, agent};
 use rt::object::Channel;
 use rt::println;
@@ -141,7 +141,7 @@ struct Agent {
 }
 
 impl Agent {
-    fn config(&self) -> ::agent::config::Config {
+    fn config(&self) -> agent_core::config::Config {
         self.shared.lock().config.clone()
     }
 
@@ -345,7 +345,7 @@ fn run() -> i32 {
     // Options from the kernel command line (handed down by init):
     // `agent.endpoint=ws://10.0.2.2:5000/` talks to a local simulator. The
     // Deepgram key goes only to Deepgram's own services, over TLS
-    // (`agent::deepgram::is_deepgram`); any other endpoint is sent the
+    // (`agent_core::deepgram::is_deepgram`); any other endpoint is sent the
     // word "test" in its place.
     let mut endpoint = String::from(deepgram::AGENT_URL);
     let mut wake_at_start = false;

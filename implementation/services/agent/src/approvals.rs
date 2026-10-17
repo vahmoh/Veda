@@ -4,7 +4,7 @@
 //! What becomes of function calls: their results go back to the language
 //! model; calls that need the user's consent wait for the shell's answer;
 //! the outcome of an allowed action is told as a notice, with what the
-//! action said as data ([`agent::notice`]).
+//! action said as data ([`agent_core::notice`]).
 //!
 //! Calls the user cancelled by speaking again (`FunctionCallCancelled`) are
 //! taken out of the worker's queue if they have not started; one that had
@@ -13,9 +13,9 @@
 //! told. A cancelled call that would have asked the user, or ended the
 //! conversation, does nothing.
 
-use agent::deepgram;
-use agent::notice::Notice;
-use agent::tools::{self, Risk};
+use agent_core::deepgram;
+use agent_core::notice::Notice;
+use agent_core::tools::{self, Risk};
 use proto::agent::{AgentError, AgentEvent, AgentState, ApprovalRequest};
 use rt::println;
 use serde_json::{Value, json};
