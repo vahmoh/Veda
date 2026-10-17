@@ -76,7 +76,6 @@
 //! boot-cmdline "run=about"         # extra kernel command line (adds up)
 //! net none                         # network: ethernet or none
 //! nic e1000e                       # QEMU's model of the wired card
-//! disk nvme                        # how QEMU attaches the disks: virtio or nvme
 //! memory 2048                      # the machine's memory (MiB)
 //! acpi-table touchpad              # add a table to the firmware's (orchestration/src/architectures/*/acpitest.rs; adds up)
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store (adds up)
@@ -101,7 +100,7 @@ use serde_json::Value;
 
 use crate::arch;
 use crate::ovmfvars::{self, Variable};
-use crate::qemu::{DiskBus, InputDevices, NetMode};
+use crate::qemu::{InputDevices, NetMode};
 use crate::qmp;
 use crate::util::Result;
 
@@ -121,7 +120,6 @@ pub struct Boot {
     pub cmdline: Vec<String>,
     pub net: Option<NetMode>,
     pub nic: Option<String>,
-    pub disk: Option<DiskBus>,
     /// The machine's memory (MiB).
     pub memory: Option<u32>,
     /// `acpi-table`: the names of `arch::acpitest`'s tables.
@@ -719,12 +717,6 @@ impl Line {
                 boot.nic = Some(model);
                 return Ok(None);
             }
-            "disk" => {
-                once("disk")?;
-                let bus = self.text("bus")?;
-                boot.disk = Some(DiskBus::parse(&bus).ok_or(format!("unknown disk bus '{bus}' (virtio, nvme)"))?);
-                return Ok(None);
-            }
             "memory" => {
                 once("memory")?;
                 let mib: u32 = self.count("a size in MiB")?;
@@ -942,7 +934,7 @@ mod tests {
     #[test]
     fn how_the_machine_starts() {
         let script = Script::parse(
-            "boot-cmdline \"run=a\"\nnet none\nnic igb\ndisk nvme\nmemory 2048\nacpi-table touchpad\nacpi-table nhlt\n\
+            "boot-cmdline \"run=a\"\nnet none\nnic igb\nmemory 2048\nacpi-table touchpad\nacpi-table nhlt\n\
              firmware-variable A 02f9af02-7734-4233-b43d-93fe5aa35db3 0x7 0a0b\nsound virtio\naudio silent\n\
              live writable\ninput usb\nusb net\ngpu on\nnettest local\nagent-asleep\nrequires media\n\
              boot-cmdline \"b=c\"\nwait 1\n",
@@ -950,7 +942,7 @@ mod tests {
         .unwrap();
         let boot = &script.boot;
         assert_eq!(boot.cmdline, ["run=a", "b=c"]);
-        assert_eq!((boot.net, boot.nic.as_deref(), boot.disk), (Some(NetMode::None), Some("igb"), Some(DiskBus::Nvme)));
+        assert_eq!((boot.net, boot.nic.as_deref()), (Some(NetMode::None), Some("igb")));
         assert_eq!(
             (boot.memory, boot.acpi_tables.as_slice()),
             (Some(2048), &["touchpad".to_string(), "nhlt".into()][..])

@@ -21,7 +21,6 @@ members = [
     "implementation/libraries/rt",
     "implementation/libraries/ipc",
     "implementation/libraries/proto",
-    "implementation/libraries/virtio",
     "implementation/libraries/gfx",
     "implementation/libraries/ui",
     "implementation/libraries/text",
@@ -81,7 +80,6 @@ members = [
     "generation/common",
     "generation/music",
     "generation/videos",
-    "implementation/drivers/virtio-blk",
     "implementation/drivers/nvme",
     "verification/systest",
     "verification/nettest",
@@ -137,7 +135,6 @@ vbuild = { path = "implementation/libraries/build" }
 vrt = { path = "implementation/libraries/rt" }
 vipc = { path = "implementation/libraries/ipc" }
 vproto = { path = "implementation/libraries/proto" }
-vvirtio = { path = "implementation/libraries/virtio" }
 vgfx = { path = "implementation/libraries/gfx" }
 vui = { path = "implementation/libraries/ui" }
 vtext = { path = "implementation/libraries/text" }

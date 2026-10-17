@@ -49,7 +49,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vimage", &["encode"]),
     ("vaudio", &[]),
     ("vproto", &[]),
-    ("vvirtio", &[]),
     ("vgfx", &[]),
     ("vui", &[]),
     ("vtext", &[]),
@@ -549,9 +548,6 @@ fn script_on(o: &Options, script: &Script, prebuilt: Option<&Path>) -> Result {
     }
     if let Some(model) = &boot.nic {
         vm.nic_model = Some(model.clone());
-    }
-    if let Some(bus) = boot.disk {
-        vm.disk_bus = bus;
     }
     if let Some(mib) = boot.memory {
         vm.memory_mib = mib;

@@ -4,10 +4,10 @@
 //! `nvme` — the driver for NVM Express disks: the SSDs of most PCs since
 //! about 2016, and QEMU's `nvme`.
 //!
-//! Like `virtio-blk`, every namespace is served as the `block` protocol
-//! under `block/<serial>` (`vproto::block::serve`; the controller's serial
-//! number, to which a namespace other than the first adds `-n<id>`), so the
-//! file system finds the home disk by its serial number whatever the disk.
+//! Every namespace is served as the `block` protocol under `block/<serial>`
+//! (`vproto::block::serve`; the controller's serial number, to which a
+//! namespace other than the first adds `-n<id>`), so the file system finds
+//! the home disk by its serial number whatever the disk.
 //!
 //! The controller is reset and given an admin queue pair and one I/O queue
 //! pair, and the driver runs a request at a time (the file system issues

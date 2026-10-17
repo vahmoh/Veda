@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # The home directory survives a reboot (1280x800): write a note on the
-# desktop, restart the machine, and open it again from there.
+# desktop, restart the machine, and open it again from there. The disks
+# are NVM Express ones: the firmware reads the boot loader and system from
+# one, and Veda's nvme driver serves the home disk, the other.
 fail-on "PANIC"
 wait-serial "desktop ready" 90
+expect-serial "devmgr: started nvme for"
+expect-serial "nvme: disk veda-home at"
 expect-serial "home directory new, on the home disk"
 # The Terminal creates Note.txt on the desktop and opens it in the Text
 # Editor; write a line and save.
@@ -31,3 +35,4 @@ double-click 0.0469 0.4425
 wait-serial "started editor" 30
 wait 5
 shot target/veda/persist-after-reboot.png
+reject-serial "failed:"

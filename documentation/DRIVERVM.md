@@ -423,7 +423,7 @@ are the boundary.
 
 ## Status
 
-Veda's only drivers of its own are for disks (NVMe, virtio-blk).
+Veda's only driver of its own is for disks (NVMe).
 The scripts are in `verification/ui`.
 
 | Phase | State |

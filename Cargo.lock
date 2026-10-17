@@ -2677,17 +2677,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "virtio-blk"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vproto",
- "vrt",
- "vvirtio",
-]
-
-[[package]]
 name = "vkernel"
 version = "0.1.0"
 dependencies = [
@@ -2821,15 +2810,6 @@ dependencies = [
  "vipc",
  "vproto",
  "vraster",
- "vrt",
-]
-
-[[package]]
-name = "vvirtio"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vproto",
  "vrt",
 ]
 

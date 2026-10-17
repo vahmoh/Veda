@@ -83,20 +83,8 @@ use pci::{Address, ConfigSpace, Placement};
 
 vrt::entry!(main);
 
-/// Which driver handles which device.
-struct DriverMatch {
-    vendor: u16,
-    devices: &'static [u16],
-    driver: &'static str,
-}
-
-const DRIVERS: &[DriverMatch] = &[
-    // virtio block (transitional and modern)
-    DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
-];
-
 /// Drivers for whole device classes: (class, subclass, programming
-/// interface, driver). Consulted when no vendor/device entry matches.
+/// interface, driver).
 const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     // NVM Express controllers (the SSDs of most PCs since about 2016)
     (0x01, 0x08, 0x02, "nvme"),
@@ -104,7 +92,7 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
 
 /// Disk drivers. A live system (started with `live`) starts none of them:
 /// it runs from memory and never touches the computer's disks.
-const DISK_DRIVERS: [&str; 2] = ["virtio-blk", "nvme"];
+const DISK_DRIVERS: [&str; 1] = ["nvme"];
 
 /// What the firmware's AML may spend in all as the devices are placed and
 /// described at the start: steps, and bytes of values made or copied (each
@@ -114,14 +102,10 @@ const STARTUP_AML: (u64, u64) = (16_000_000, 256 << 20);
 
 /// The driver for a device, if any.
 fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
-    DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)).map(|m| m.driver).or_else(
-        || {
-            CLASS_DRIVERS
-                .iter()
-                .find(|(c, s, p, _)| (*c, *s, *p) == (info.class, info.subclass, info.prog_if))
-                .map(|(_, _, _, d)| *d)
-        },
-    )
+    CLASS_DRIVERS
+        .iter()
+        .find(|(c, s, p, _)| (*c, *s, *p) == (info.class, info.subclass, info.prog_if))
+        .map(|(_, _, _, d)| *d)
 }
 
 /// Whether Veda keeps a function rather than give it to the driver VM: the

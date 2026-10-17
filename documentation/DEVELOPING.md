@@ -43,8 +43,7 @@ Their options (of values separated by `|`, the first is the default):
   `--qemu-arg ARG` (repeatable), `--gpu` or `--no-gpu` (default: a 3D GPU
   if QEMU has one), `--no-iommu`, `--sound virtio|hda`, `--no-audio`,
   `--net ethernet|none`, `--nic virtio-net-pci|e1000e|igb`,
-  `--disk-bus virtio|nvme`, `--input standard|usb`, `--fresh-home`,
-  `--live`.
+  `--input standard|usb`, `--fresh-home`, `--live`.
 * **Scripts:** `--jobs N`, how many scripts run at once (default: one per
   five processors); for `toolchain` and `linux`, how many build jobs.
 * **`shot` and `iso`:** `--wait SECS` (default 10) or `--until TEXT` (in

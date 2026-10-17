@@ -126,25 +126,6 @@ pub fn socket_option(path: &Path) -> Result<String> {
     Ok(option_path(path))
 }
 
-/// How the disks are attached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiskBus {
-    /// virtio-blk (QEMU's default here).
-    Virtio,
-    /// NVM Express controllers, one a disk (as most PCs have).
-    Nvme,
-}
-
-impl DiskBus {
-    pub fn parse(s: &str) -> Option<DiskBus> {
-        match s {
-            "virtio" => Some(DiskBus::Virtio),
-            "nvme" => Some(DiskBus::Nvme),
-            _ => None,
-        }
-    }
-}
-
 /// The keyboard and pointing devices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputDevices {
@@ -240,8 +221,6 @@ pub struct VmConfig {
     /// unless `usb_stick_writable`), not the boot disk.
     pub usb_stick: bool,
     pub usb_stick_writable: bool,
-    /// How the boot and home disks are attached.
-    pub disk_bus: DiskBus,
     /// ACPI tables added to the firmware's (tests' descriptions of devices).
     pub acpi_tables: Vec<PathBuf>,
     /// Variables added to the firmware's store, for a scripted run's.
@@ -287,7 +266,6 @@ impl Default for VmConfig {
             home_disk: None,
             usb_stick: false,
             usb_stick_writable: false,
-            disk_bus: DiskBus::Virtio,
             acpi_tables: Vec::new(),
             firmware_variables: Vec::new(),
             input: InputDevices::Standard,
@@ -401,21 +379,14 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,{readonly}file={}", option_path(disk))]);
         cmd.args(["-device", "usb-storage,bus=xhci.0,drive=disk0,bootindex=0,removable=on"]);
     } else {
+        // Each disk on an NVM Express controller of its own, as on most PCs.
         let format = cfg.boot_format;
         cmd.args(["-drive", &format!("id=disk0,if=none,format={format},file={}", option_path(disk))]);
-        match cfg.disk_bus {
-            DiskBus::Virtio => {
-                cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot")])
-            }
-            DiskBus::Nvme => cmd.args(["-device", "nvme,drive=disk0,bootindex=0,serial=veda-boot"]),
-        };
+        cmd.args(["-device", "nvme,drive=disk0,bootindex=0,serial=veda-boot"]);
     }
     if let Some(home) = &cfg.home_disk {
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", option_path(home))]);
-        match cfg.disk_bus {
-            DiskBus::Virtio => cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=home,serial=veda-home")]),
-            DiskBus::Nvme => cmd.args(["-device", "nvme,drive=home,serial=veda-home"]),
-        };
+        cmd.args(["-device", "nvme,drive=home,serial=veda-home"]);
     }
     match cfg.input {
         InputDevices::Standard => {
@@ -528,7 +499,7 @@ pub fn render_node() -> Option<String> {
         .map(|n| format!("/dev/dri/{n}"))
 }
 
-/// A virtio device of `spec`'s (`virtio-blk-pci,drive=...`): behind the
+/// A virtio device of `spec`'s (`virtio-net-pci,netdev=...`): behind the
 /// machine's IOMMU when it has one, as devices are on a PC that has one, so
 /// that a device can go to a virtual machine of Veda's (whose addresses
 /// only the IOMMU turns into the machine's). Translated devices are modern

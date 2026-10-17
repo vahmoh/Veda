@@ -210,14 +210,14 @@ firmware's ACPI tables. It starts Veda's drivers for the disks and gives
 every other device to Linux in [the driver VM](DRIVERVM.md).
 
 - **PCI.** A driver gets a `pcidev` channel for exactly its device (matched
-  by vendor and device, or by class): its configuration space, its memory
+  by its class): its configuration space, its memory
   BARs, its MSIs or INTx line, and DMA memory. A BAR reaches its driver as
   the pages it is on, so one that shares a page with another function's BAR
   reaches none. `devmgr` places the BARs the firmware left unplaced, and
   puts back those a function loses (waking from D3hot, or reset alone).
-- **Devices are not trusted.** The drivers' helpers (`vproto::pci`,
-  `vvirtio`) check every offset a device reports against the memory it is
-  in, and refuse a device that describes itself wrongly.
+- **Devices are not trusted.** The drivers' helpers (`vproto::pci`) check
+  every offset a device reports against the memory it is in, and refuse a
+  device that describes itself wrongly.
 - **ACPI.** Some devices exist only in the ACPI tables (a laptop's touchpad
   and speaker amplifiers, the GPIO pins wired to them). `vacpi`
   (`implementation/libraries/acpi`) evaluates them with a small, bounded
@@ -249,7 +249,7 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
 
 ## Storage and files
 
-- **Disks.** `virtio-blk` (QEMU) and `nvme` (NVM Express) serve each disk
+- **Disks.** `nvme` (NVM Express) serves each disk
   through the `block` protocol as `block/<serial>`, so the VFS finds a disk
   by its serial number whatever the controller. One service loop
   (`vproto::block::serve`) checks every request (whole sectors, at most
@@ -845,7 +845,6 @@ Libraries are crates named after their directory with a `v` before it
 | `implementation/libraries/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
 | `implementation/libraries/{glsl,gl}` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
 | `implementation/libraries/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
-| `implementation/libraries/virtio` | virtio device access shared by the drivers |
 | `implementation/libraries/{acpi,gpio}` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `implementation/libraries/{hv,iommu}` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI, and each architecture's virtual devices, boot protocol and IOMMU tables |
 | `implementation/libraries/{netstack,net}` | the TCP/IP stack around smoltcp, with its firewall, and the networking API for applications |
