@@ -4,8 +4,8 @@
 //! `wlan` — the Wi-Fi service.
 //!
 //! * Radio drivers offer their radios through `wlanphy`. Linux's, in the
-//!   driver VM (`implementation/guest/wifi`), are *managed* radios: they
-//!   scan, join access points, encrypt and move Ethernet frames on the
+//!   driver VM (`implementation/guests/linux/wifi`), are *managed* radios:
+//!   they scan, join access points, encrypt and move Ethernet frames on the
 //!   service's commands. A radio that only moves raw 802.11 frames and
 //!   tunes itself ("soft MAC") the service drives too, though no driver
 //!   offers one now.

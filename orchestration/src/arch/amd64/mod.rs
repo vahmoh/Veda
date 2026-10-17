@@ -33,7 +33,7 @@ pub const BARE_TARGET: &str = "x86_64-unknown-none";
 
 /// Rust's target of the driver VM's programs: Linux's, on musl. It is the
 /// user-space programs' too: these are built apart, with musl
-/// (`implementation/guest/.cargo/config.toml`).
+/// (`implementation/guests/linux/.cargo/config.toml`).
 pub const GUEST_TARGET: &str = "x86_64-unknown-linux-musl";
 
 /// Rust's target of programs that use its standard library on Veda, on the C

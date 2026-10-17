@@ -258,7 +258,7 @@ from this machine.
 | The native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |
-| The driver VM's Linux, once built: its kernel (a bzImage on AMD64) and the programs of `implementation/guest/` | `/system/linux/kernel`, `/system/linux/initramfs.cpio` |
+| The driver VM's Linux, once built: its kernel (a bzImage on AMD64) and the programs of `implementation/guests/linux/` | `/system/linux/kernel`, `/system/linux/initramfs.cpio` |
 
 At boot, the image's `samples/` is copied into the home directory
 (`/system/samples/Pictures/x.png` → `/home/user/Pictures/x.png`). Images

@@ -15,7 +15,7 @@
 # veda_guest`: their Veda runtime then makes its system calls through the
 # bridge (see implementation/libraries/rt/src/guest.rs).
 [build]
-target-dir = "../../target/guest"
+target-dir = "../../../target/guest"
 
 [target.x86_64-unknown-linux-musl]
 rustflags = ["--cfg", "veda_guest", "-C", "link-self-contained=yes"]

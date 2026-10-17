@@ -91,7 +91,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 pub const HOST_TESTED_ALONE: &[&str] = &["vrt"];
 
 /// The driver VM's programs with tests, which run on Linux, as the
-/// programs do (`implementation/guest/`, on musl).
+/// programs do (`implementation/guests/linux/`, on musl).
 const GUEST_TESTED: &[&str] = &["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper", "guest-sys", "guest-wifi"];
 
 /// Crates with tests that `test` does not run, each with the reason: one
@@ -707,7 +707,7 @@ mod tests {
         let without: Vec<&&str> = listed.iter().filter(|p| !with_tests.contains(p)).collect();
         assert!(without.is_empty(), "listed crates without tests (or not in the workspace): {without:?}");
         // The guest's crates run on Linux, the others on the host.
-        let guest_dir = util::workspace_root().join("implementation").join("guest");
+        let guest_dir = util::workspace_root().join("implementation").join("guests").join("linux");
         for (name, dir) in &members {
             let guest = dir.starts_with(&guest_dir);
             let host = HOST_TESTED.iter().any(|(p, _)| p == name) || HOST_TESTED_ALONE.contains(&name.as_str());

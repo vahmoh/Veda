@@ -111,12 +111,12 @@ What the patches change:
   take. `firmware.txt` and `arch/<architecture>/firmware.txt` list the
   firmware it loads, with each file's source and SHA-256.
 * **zlib**, **elfutils**: none; built static for the build machine.
-* **mesa**: Veda's renderer (`implementation/guest/renderer`) is a target
-  of Mesa's build (`src/gallium/targets/veda`): the guest's program around
-  its Rust half (`veda-renderer-lib`), and `vgallium.so` for the OpenGL ES
-  tests on the build machine (softpipe, virgl over virglrenderer's test
-  server, iris). Gallium is built without an OpenGL API
-  (`with_gfx_compute`), with the renderer's small libdrm; the static
+* **mesa**: Veda's renderer (`implementation/guests/linux/renderer`) is a
+  target of Mesa's build (`src/gallium/targets/veda`): the guest's program
+  around its Rust half (`veda-renderer-lib`), and `vgallium.so` for the
+  OpenGL ES tests on the build machine (softpipe, virgl over
+  virglrenderer's test server, iris). Gallium is built without an OpenGL
+  API (`with_gfx_compute`), with the renderer's small libdrm; the static
   program does without Mesa's build id and links Gallium's stand-ins for
   video. iris is built without what needs Mesa's OpenCL compiler (LLVM):
   indirect draws generated on the GPU, and blorp's indirect copies (its

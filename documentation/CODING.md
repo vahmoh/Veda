@@ -109,7 +109,7 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
 | `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | The System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | Static ELF executables on musl |
 | The standard library's tests (`verification/rust`) | `x86_64-unknown-veda` | As above, each also at a fixed address |
-| The driver VM's programs (`implementation/guest/`) | `x86_64-unknown-linux-musl` | Static, on Linux; built from `implementation/guest/` (its `.cargo/config.toml`) into `target/guest` |
+| The driver VM's programs (`implementation/guests/linux/`) | `x86_64-unknown-linux-musl` | Static, on Linux; built from `implementation/guests/linux/` (its `.cargo/config.toml`) into `target/guest` |
 | `orchestration/`, host tools | The host's (`std`) | |
 
 ## Library crates
@@ -188,9 +188,9 @@ SPDX tags in the file's comment syntax:
 
 * **The licence** is Veda's, the GPL version 3 (`LICENSE`), but for the
   code that Mesa's build compiles with Mesa: the driver VM's renderer
-  (`implementation/guest/renderer/decoder`,
-  `implementation/guest/renderer/drm`) is under the MIT licence, as Mesa
-  is.
+  (`implementation/guests/linux/renderer/decoder`,
+  `implementation/guests/linux/renderer/drm`) is under the MIT licence, as
+  Mesa is.
 * **The year** is the one the file was first published in.
 * **Only what has to be first** comes before the header: a script's `#!`
   line, an HTML page's `<!doctype html>`, an XML declaration. In C, C++ and

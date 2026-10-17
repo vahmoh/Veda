@@ -3,10 +3,11 @@
 
 //! Veda's renderer on the host, for tests (`VGL_TEST_BACKEND=gallium`):
 //! the decoder that carries out virgl command streams on a Gallium driver
-//! (`implementation/guest/renderer`), built with Mesa as `vgallium.so`
-//! around softpipe, Mesa's reference rasterizer. In the driver VM the same
-//! decoder runs the GPU for the `gpu` service's clients; here the tests
-//! call it directly, a device and context of its own for each of theirs.
+//! (`implementation/guests/linux/renderer`), built with Mesa as
+//! `vgallium.so` around softpipe, Mesa's reference rasterizer. In the
+//! driver VM the same decoder runs the GPU for the `gpu` service's clients;
+//! here the tests call it directly, a device and context of its own for
+//! each of theirs.
 //!
 //! `VGL_GALLIUM_DLL` names the library; by default it is where Mesa's build
 //! for this machine leaves it (`cargo orchestration linux` configures that
@@ -42,7 +43,7 @@ enum Make {
 }
 
 /// The library's functions
-/// (`implementation/guest/renderer/decoder/renderer.h`).
+/// (`implementation/guests/linux/renderer/decoder/renderer.h`).
 struct Lib {
     make: Make,
     device_destroy: unsafe extern "C" fn(Device),

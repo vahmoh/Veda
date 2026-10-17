@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # The driver VM's bridge: a Linux program in the guest uses Veda's IPC
-# through vrt, as a Veda program does (implementation/guest/bridgetest). It
-# sees Veda's registry narrowed to the services drivers attach to, sends a
-# VMO and an event over a channel, maps the VMO, and waits on events and
-# channels (with deadlines, and woken by another thread).
+# through vrt, as a Veda program does
+# (implementation/guests/linux/bridgetest). It sees Veda's registry
+# narrowed to the services drivers attach to, sends a VMO and an event over
+# a channel, maps the VMO, and waits on events and channels (with
+# deadlines, and woken by another thread).
 boot-cmdline "drivervm.run=bridgetest drivervm.poweroff"
 fail-on "PANIC"
 fail-on "bridgetest: FAIL"

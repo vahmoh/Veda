@@ -22,7 +22,7 @@ Other parts keep their own licences:
 
 | Part | Licence | Source |
 |------|---------|--------|
-| The driver VM's renderer: its C code, which Mesa's build compiles with Mesa | The MIT licence, as Mesa is | `implementation/guest/renderer/decoder` and `implementation/guest/renderer/drm` |
+| The driver VM's renderer: its C code, which Mesa's build compiles with Mesa | The MIT licence, as Mesa is | `implementation/guests/linux/renderer/decoder` and `implementation/guests/linux/renderer/drm` |
 | Fonts (Inter, Lato, JetBrains Mono) | The SIL Open Font License 1.1 | `implementation/ports/fonts/` |
 | Device firmware that the driver VM's Linux loads into devices (`implementation/ports/linux/firmware.txt` and `implementation/ports/linux/arch/amd64/firmware.txt`); it runs on the devices, not in Veda | From the Linux firmware collection, the terms its `WHENCE` gives each file's maker (who allow its redistribution); from Sound Open Firmware's releases (sof-bin: Intel's signed builds of the audio DSP's firmware), the BSD licence and Intel's patent licence in its `LICENCE.Intel` | The Linux firmware collection and Sound Open Firmware's releases, unmodified |
 | The crates Veda changes | smoltcp: the 0BSD licence; zune-jpeg: the MIT, Apache 2.0 or zlib licence, at the choice of whoever uses it | The releases that `implementation/ports/smoltcp` and `implementation/ports/zune-jpeg` name, with the patches beside them |

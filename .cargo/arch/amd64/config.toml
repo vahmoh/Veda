@@ -27,7 +27,7 @@ rustflags = [
 # (`link-self-contained=no`); `vrt` starts them, and `vbuild` gives the
 # linker the rest (see implementation/libraries/build). The driver VM's
 # Linux programs, on this target too, are built apart, with musl:
-# implementation/guest/.cargo/config.toml.
+# implementation/guests/linux/.cargo/config.toml.
 [target.x86_64-unknown-linux-musl]
 linker = "rust-lld"
 rustflags = ["-C", "link-self-contained=no"]

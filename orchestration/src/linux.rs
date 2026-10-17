@@ -13,13 +13,13 @@
 //!   this machine (`vgallium.so`, the renderer's decoder on softpipe, virgl
 //!   and iris, for the OpenGL ES tests).
 //! * Once it is built, every image build also builds the guest's programs
-//!   (`implementation/guest/`: Rust for Linux on musl, static; the renderer,
-//!   Mesa's build around its Rust half) and packs them into the initial RAM
-//!   file system the kernel starts with, with the firmware its drivers load
-//!   (`implementation/ports/linux/firmware.txt`, and the architecture's in
-//!   `implementation/ports/linux/arch/<architecture>/`). Both go into the
-//!   system image (`linux/kernel`, `linux/initramfs.cpio`), where `drivervm`
-//!   finds them.
+//!   (`implementation/guests/linux/`: Rust for Linux on musl, static; the
+//!   renderer, Mesa's build around its Rust half) and packs them into the
+//!   initial RAM file system the kernel starts with, with the firmware its
+//!   drivers load (`implementation/ports/linux/firmware.txt`, and the
+//!   architecture's in `implementation/ports/linux/arch/<architecture>/`).
+//!   Both go into the system image (`linux/kernel`, `linux/initramfs.cpio`),
+//!   where `drivervm` finds them.
 //!
 //! The renderer's Rust half goes to Mesa's build through a place of the
 //! Linux build's own (`build/librenderer.a`), where every build copies the
@@ -51,14 +51,14 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-input", "input", "bin/input"),
 ];
 
-/// Cargo, for the driver VM's programs (`implementation/guest/`), running
-/// `args`: in their directory, so that their configuration is read
-/// (`implementation/guest/.cargo/config.toml`: musl, and `veda_guest`), and
-/// into a target directory of their own, as their target is that of Veda's
-/// programs ([`guest_target_dir`]).
+/// Cargo, for the driver VM's programs (`implementation/guests/linux/`),
+/// running `args`: in their directory, so that their configuration is read
+/// (`implementation/guests/linux/.cargo/config.toml`: musl, and
+/// `veda_guest`), and into a target directory of their own, as their target
+/// is that of Veda's programs ([`guest_target_dir`]).
 pub fn guest_cargo(args: &[&str]) -> Command {
     let mut cmd = util::cargo_for(GUEST_TARGET);
-    cmd.current_dir(util::workspace_root().join("implementation").join("guest"));
+    cmd.current_dir(util::workspace_root().join("implementation").join("guests").join("linux"));
     cmd.args(args).arg("--target-dir").arg(guest_target_dir());
     cmd
 }
@@ -120,10 +120,10 @@ fn mesa_host_build() -> PathBuf {
     root().join("build").join("mesa-host")
 }
 
-/// The renderer's sources (`implementation/guest/renderer`), whose decoder
-/// and libdrm Mesa's builds compile.
+/// The renderer's sources (`implementation/guests/linux/renderer`), whose
+/// decoder and libdrm Mesa's builds compile.
 fn renderer_source() -> Result<PathBuf> {
-    let dir = util::workspace_root().join("implementation").join("guest").join("renderer");
+    let dir = util::workspace_root().join("implementation").join("guests").join("linux").join("renderer");
     std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
@@ -200,7 +200,7 @@ fn place_renderer_lib(built: &Path) -> Result<PathBuf> {
     Ok(place)
 }
 
-/// The renderer's Rust half (`implementation/guest/renderer`), built.
+/// The renderer's Rust half (`implementation/guests/linux/renderer`), built.
 fn renderer_lib() -> Result<PathBuf> {
     util::run(&mut guest_cargo(&["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
     Ok(guest_target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))

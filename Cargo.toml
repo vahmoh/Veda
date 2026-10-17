@@ -87,21 +87,21 @@ members = [
     "verification/audiotest",
     "verification/fakedec",
     "verification/stdcrates",
-    "implementation/guest/init",
-    "implementation/guest/bridgetest",
-    "implementation/guest/pcitest",
-    "implementation/guest/gpiotest",
-    "implementation/guest/efivartest",
-    "implementation/guest/kmspause",
-    "implementation/guest/logkeeper",
-    "implementation/guest/sys",
-    "implementation/guest/alsa",
-    "implementation/guest/net",
-    "implementation/guest/netlink",
-    "implementation/guest/wifi",
-    "implementation/guest/kms",
-    "implementation/guest/input",
-    "implementation/guest/renderer",
+    "implementation/guests/linux/init",
+    "implementation/guests/linux/bridgetest",
+    "implementation/guests/linux/pcitest",
+    "implementation/guests/linux/gpiotest",
+    "implementation/guests/linux/efivartest",
+    "implementation/guests/linux/kmspause",
+    "implementation/guests/linux/logkeeper",
+    "implementation/guests/linux/sys",
+    "implementation/guests/linux/alsa",
+    "implementation/guests/linux/net",
+    "implementation/guests/linux/netlink",
+    "implementation/guests/linux/wifi",
+    "implementation/guests/linux/kms",
+    "implementation/guests/linux/input",
+    "implementation/guests/linux/renderer",
 ]
 # The crates in implementation/ports/, as `cargo orchestration` prepares them
 # for Cargo, are not members (their own tests and dev-dependencies stay out
@@ -155,8 +155,8 @@ vglsl = { path = "implementation/libraries/glsl" }
 vgl = { path = "implementation/libraries/gl" }
 vhv = { path = "implementation/libraries/hv" }
 viommu = { path = "implementation/libraries/iommu" }
-guest-sys = { path = "implementation/guest/sys" }
-guest-netlink = { path = "implementation/guest/netlink" }
+guest-sys = { path = "implementation/guests/linux/sys" }
+guest-netlink = { path = "implementation/guests/linux/netlink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
@@ -342,9 +342,9 @@ smoltcp = { version = "=0.14.0", default-features = false, features = [
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 # `veda_guest` is set for the programs of the driver VM's Linux guest
-# (implementation/guest/.cargo/config.toml); `target_os = "veda"` is the
-# operating system of Veda's own target for programs on the standard library
-# (the toolchain's Rust knows it, the build machine's does not).
+# (implementation/guests/linux/.cargo/config.toml); `target_os = "veda"` is
+# the operating system of Veda's own target for programs on the standard
+# library (the toolchain's Rust knows it, the build machine's does not).
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(veda_guest)", 'cfg(target_os, values("veda"))'] }
 missing_debug_implementations = "allow"
 

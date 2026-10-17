@@ -11,8 +11,8 @@
 #   VEDA_PORTS   the ports directory
 #   VEDA_ARCH    the architecture built for (../arch/$VEDA_ARCH/settings.sh)
 #   VEDA_LINUX   where to build; downloads/ holds the verified archives
-#   VEDA_RENDERER      the renderer (implementation/guest/renderer), whose
-#                decoder and libdrm Mesa's build compiles
+#   VEDA_RENDERER      the renderer (implementation/guests/linux/renderer),
+#                whose decoder and libdrm Mesa's build compiles
 #   VEDA_RENDERER_LIB  its Rust half, which Mesa's build links the program
 #                around
 #   JOBS         parallel jobs (default: the number of processors)
@@ -214,8 +214,8 @@ stage libstdcxx gcc musl
 
 # --- Mesa, for the renderer -------------------------------------------------------
 
-# The guest's renderer (implementation/guest/renderer) carries out the
-# OpenGL ES command streams of Veda's applications on Mesa's Gallium
+# The guest's renderer (implementation/guests/linux/renderer) carries out
+# the OpenGL ES command streams of Veda's applications on Mesa's Gallium
 # drivers, over the GPU's Linux driver: softpipe (no GPU), virgl (QEMU's
 # virtio-gpu), iris (Intel's GPUs). The stage configures Mesa's build for
 # the guest, and for this machine the same decoder as a library

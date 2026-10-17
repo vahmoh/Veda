@@ -20,8 +20,8 @@
 //!
 //! Programs of the driver VM's Linux guest are built with `--cfg
 //! veda_guest` (their configuration sets it:
-//! `implementation/guest/.cargo/config.toml`): their system calls then go
-//! through the bridge (`guest`), and threads are Linux's (`std`'s).
+//! `implementation/guests/linux/.cargo/config.toml`): their system calls
+//! then go through the bridge (`guest`), and threads are Linux's (`std`'s).
 //!
 //! Programs on Rust's standard library, built for Veda's own target
 //! (`target_os = "veda"`, on the C library), link `vrt` too, for Veda's

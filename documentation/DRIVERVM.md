@@ -84,7 +84,7 @@ memory and their devices.
 | `drivervm-core` | `implementation/services/drivervm/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `arch/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `implementation/guest` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; shared code (`sys`, `netlink`) |
+| Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; shared code (`sys`, `netlink`) |
 | Build | `orchestration/src/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo orchestration linux`](#building) |
 
 ## The platform
@@ -281,15 +281,15 @@ are). When a watch fails (the monitor's limits, or the handle gone) or
 the service goes away, the driver ends its session and attaches again,
 later after each failure in a row (`guest_sys::retry`).
 
-**Input** (`implementation/guest/input`). Every evdev device is grabbed,
-so Linux acts on no key, and what a device reports up to its
+**Input** (`implementation/guests/linux/input`). Every evdev device is
+grabbed, so Linux acts on no key, and what a device reports up to its
 `SYN_REPORT` goes to the compositor's `input` service in one batch:
 evdev's key codes (which are Veda's), relative motion, and absolute
 positions as fractions of their range. Touchpad fingers become pointer
 motion, two-finger scrolling and tap clicks.
 
-**Sound** (`implementation/guest/alsa`). Linux's first playback device
-that is not a display's is the audio service's output (`audiodev`),
+**Sound** (`implementation/guests/linux/alsa`). Linux's first playback
+device that is not a display's is the audio service's output (`audiodev`),
 through ALSA's kernel interface without alsa-lib. The driver plays the
 service's mixed output a period (10 ms) at a time, a few periods ahead,
 paced by the card's interrupts; an underrun makes the queue a period
@@ -302,43 +302,44 @@ and the generic codec drivers), virtio sound, and a laptop's CS35L41
 amplifiers on SPI as the codec's side codecs (`serial-multi-instantiate`,
 `cs35l41_hda`).
 
-**Network** (`implementation/guest/net`). Each Ethernet interface, of a
-PCI or USB device, is a `netdev` device of Veda's network service: frames
-go between a raw packet socket and the device's ring, a copy each way.
-Linux has no IP stack here; it moves frames and answers nothing.
+**Network** (`implementation/guests/linux/net`). Each Ethernet interface,
+of a PCI or USB device, is a `netdev` device of Veda's network service:
+frames go between a raw packet socket and the device's ring, a copy each
+way. Linux has no IP stack here; it moves frames and answers nothing.
 
-**Wi-Fi** (`implementation/guest/wifi`). Each radio is a *managed* radio
-of Veda's Wi-Fi service ([Networking](NETWORKING.md)): Linux's 802.11
-stack is its MLME through nl80211, while the service decides what to
-join, does SAE and the key handshakes, and gives Linux only the session
+**Wi-Fi** (`implementation/guests/linux/wifi`). Each radio is a *managed*
+radio of Veda's Wi-Fi service ([Networking](NETWORKING.md)): Linux's
+802.11 stack is its MLME through nl80211, while the service decides what
+to join, does SAE and the key handshakes, and gives Linux only the session
 keys. There is no supplicant in the guest. The driver's netlink socket
 owns the connection, so if the driver ends, Linux leaves the network.
 
-**Display** (`implementation/guest/kms`). The display whose memory holds
-the firmware's framebuffer (named by a BAR's host address, `veda.device=`)
-is the screen the compositor flips (`displaydev`). At the first frame the
-driver sets, with atomic modesetting, the compositor's screen size if the
-display has it, else the display's own mode, scaled and centred. That
-commit keeps the display as the firmware set it up, so a laptop's panel
-stays on: Veda's i915 change keeps the firmware's bits a colour (8 at
-least), and `kms` leaves `max bpc` alone, as either change would take a
-full mode set. The compositor's pictures are Veda's memory, imported as
-dma-bufs and scanned out through the IOMMU without snooping the
-processor's caches, so they are write-combining memory (QEMU's standard
-VGA copies them, as does a driver that cannot import). Flip timestamps,
-on Linux's monotonic clock, are Veda's too: both follow the TSC.
+**Display** (`implementation/guests/linux/kms`). The display whose
+memory holds the firmware's framebuffer (named by a BAR's host address,
+`veda.device=`) is the screen the compositor flips (`displaydev`). At
+the first frame the driver sets, with atomic modesetting, the
+compositor's screen size if the display has it, else the display's own
+mode, scaled and centred. That commit keeps the display as the firmware
+set it up, so a laptop's panel stays on: Veda's i915 change keeps the
+firmware's bits a colour (8 at least), and `kms` leaves `max bpc` alone,
+as either change would take a full mode set. The compositor's pictures
+are Veda's memory, imported as dma-bufs and scanned out through the
+IOMMU without snooping the processor's caches, so they are
+write-combining memory (QEMU's standard VGA copies them, as does a
+driver that cannot import). Flip timestamps, on Linux's monotonic clock,
+are Veda's too: both follow the TSC.
 
-**GPU** (`implementation/guest/renderer`). The renderer serves `gpu`, in
-which `vgl` sends virgl's commands, on Mesa's Gallium driver over the
-GPU's Linux driver: iris on i915, virgl on QEMU's virtio-gpu (which
-renders on the host's GPU), or softpipe for tests. Each connection gets a
-context and shared memory, bounded per process and in total. The decoder
-(`decoder/`, C) checks every command before Gallium carries it out, and
-adapts shaders to each driver's conventions (`decoder/conventions.c`).
-The compositor's pictures reach the GPU as dma-bufs, so it composes the
-screen in place (with virgl, the compositor composes on the processor).
-A renderer that ends is started again, and the compositor sets the GPU up
-again, three times at most.
+**GPU** (`implementation/guests/linux/renderer`). The renderer serves
+`gpu`, in which `vgl` sends virgl's commands, on Mesa's Gallium driver
+over the GPU's Linux driver: iris on i915, virgl on QEMU's virtio-gpu
+(which renders on the host's GPU), or softpipe for tests. Each connection
+gets a context and shared memory, bounded per process and in total. The
+decoder (`decoder/`, C) checks every command before Gallium carries it
+out, and adapts shaders to each driver's conventions
+(`decoder/conventions.c`). The compositor's pictures reach the GPU as
+dma-bufs, so it composes the screen in place (with virgl, the compositor
+composes on the processor). A renderer that ends is started again, and the
+compositor sets the GPU up again, three times at most.
 
 **USB.** Linux drives the controllers, their hubs and every device on
 them: keyboards, mice and tablets for `input`, network adapters for `net`
@@ -346,9 +347,9 @@ them: keyboards, mice and tablets for `input`, network adapters for `net`
 which no service of Veda's uses yet. USB disks it reads only to find the
 live system's stick; disks are Veda's, which has no USB disk driver yet.
 
-**The system's log** (`implementation/guest/logkeeper`). Started first
-where there is a USB controller, `logkeeper` keeps each start's logs on
-the live system's stick (a FAT32 file system named `VEDA` with a
+**The system's log** (`implementation/guests/linux/logkeeper`). Started
+first where there is a USB controller, `logkeeper` keeps each start's logs
+on the live system's stick (a FAT32 file system named `VEDA` with a
 `VEDA/LOGS` directory): Veda's log, read through the bridge (`LOG_READ`),
 and Linux's whole log (`/dev/kmsg`, DRM debugging messages included), in
 `VEDA/LOGS/0007/VEDA.TXT` and `LINUX.TXT`, synced every second, for the

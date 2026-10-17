@@ -239,8 +239,8 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   Linux powering it off, `devmgr` resets its devices and starts it again,
   later after each failure in a row, and not after a few.
 - **USB** is Linux's: input devices reach the window system through `input`
-  (`implementation/guest/input`), network adapters reach `netd` through
-  `net`. Veda has no driver for USB disks yet.
+  (`implementation/guests/linux/input`), network adapters reach `netd`
+  through `net`. Veda has no driver for USB disks yet.
 
 ## Storage and files
 
@@ -301,7 +301,7 @@ the detail.
 
 | Layer | Processes | Does |
 |-------|-----------|------|
-| Drivers | `net`, `wifi` (`implementation/guest/`), in the driver VM | move Ethernet frames through shared-memory rings (`vproto::netring`) that neither side trusts; `wifi` offers Linux's radios as *managed* radios, which scan, join and encrypt on `wlan`'s commands |
+| Drivers | `net`, `wifi` (`implementation/guests/linux/`), in the driver VM | move Ethernet frames through shared-memory rings (`vproto::netring`) that neither side trusts; `wifi` offers Linux's radios as *managed* radios, which scan, join and encrypt on `wlan`'s commands |
 | Wi-Fi | `wlan`, on `vwlan` | chooses networks, authenticates (open system or SAE), runs the key handshakes and gives the radio only the session keys, keeps saved networks, reconnects and roams; each radio is `wlan0` to `netd` |
 | Network | `netd`, on `vnetstack` and smoltcp | interfaces, DHCP, IPv6 autoconfiguration, routes, a caching DNS resolver, sockets, the firewall |
 
@@ -394,14 +394,14 @@ tested on the host.
 Displays and GPUs are Linux's, in [the driver VM](DRIVERVM.md), as are
 their drivers' quirks and firmware.
 
-- **Displays.** `kms` (`implementation/guest/kms`) drives the display whose
-  memory holds the firmware's framebuffer, through Linux's KMS, and
-  attaches it to the compositor through `displaydev`. The compositor draws
-  into write-combining VMOs that Linux shows as they are (as dma-bufs),
-  flipped at the vertical blank, the flips' times on Veda's clock, and
-  scaled on a display that has no mode of their size.
-- **GPUs.** The renderer (`implementation/guest/renderer`) carries out
-  applications' OpenGL ES on Mesa's Gallium driver of the GPU (see
+- **Displays.** `kms` (`implementation/guests/linux/kms`) drives the
+  display whose memory holds the firmware's framebuffer, through Linux's
+  KMS, and attaches it to the compositor through `displaydev`. The
+  compositor draws into write-combining VMOs that Linux shows as they are
+  (as dma-bufs), flipped at the vertical blank, the flips' times on Veda's
+  clock, and scaled on a display that has no mode of their size.
+- **GPUs.** The renderer (`implementation/guests/linux/renderer`) carries
+  out applications' OpenGL ES on Mesa's Gallium driver of the GPU (see
   [OpenGL ES and the GPU](#opengl-es-and-the-gpu)). Under QEMU the driver
   VM gets QEMU's VGA (Linux's bochs driver) and a virtio-gpu (Mesa's
   virgl), whose virglrenderer renders on the host's GPU.
@@ -501,7 +501,7 @@ and in software on every CPU otherwise.
 | virglrenderer's new resources may hold another context's frames | zeroes them itself (`Transport::zeroes_new_resources` says whether the host does), and buffers reused from its pool |
 | Stencil-only attachments are incomplete | keeps stencil in a depth-stencil format |
 
-**The renderer** (`implementation/guest/renderer`) serves the `gpu`
+**The renderer** (`implementation/guests/linux/renderer`) serves the `gpu`
 protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
 (Intel's GPUs), virgl on virtio-gpu (QEMU's), or softpipe for tests
 (`drivervm.renderer=softpipe`). It is Mesa's build of a decoder
@@ -736,7 +736,7 @@ Libraries are crates named after their directory with a `v` before it
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
-| `implementation/guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
+| `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), and the fonts, unmodified |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), GUI and agent scripts |
 | `generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |

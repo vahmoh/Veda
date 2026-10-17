@@ -4,13 +4,13 @@
 //! The GPU protocol: 3D rendering on the GPU.
 //!
 //! Veda's renderer serves it, in the driver VM
-//! (`implementation/guest/renderer`), on Mesa's Gallium driver of the GPU
-//! over the GPU's Linux driver. Each connection gets a context of its own:
-//! the client (an OpenGL ES implementation, `vgl`) creates resources
-//! (buffers, textures) and submits command streams in virglrenderer's
-//! protocol, which the renderer carries out on Gallium. Contexts are
-//! isolated from each other: a context names resources by handles the
-//! renderer assigned to it, and resolves only its own.
+//! (`implementation/guests/linux/renderer`), on Mesa's Gallium driver of
+//! the GPU over the GPU's Linux driver. Each connection gets a context of
+//! its own: the client (an OpenGL ES implementation, `vgl`) creates
+//! resources (buffers, textures) and submits command streams in
+//! virglrenderer's protocol, which the renderer carries out on Gallium.
+//! Contexts are isolated from each other: a context names resources by
+//! handles the renderer assigned to it, and resolves only its own.
 //!
 //! [`gpu::open`] gives the client the renderer's capabilities and a block of
 //! memory shared with it:

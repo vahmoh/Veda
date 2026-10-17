@@ -23,7 +23,7 @@ this repository.
 
 | Path | What it is |
 |------|------------|
-| `implementation/guest/net`, `implementation/guest/wifi` | In [the driver VM](DRIVERVM.md): `net` offers Linux's network cards to `netd` (`netdev`), `wifi` Linux's Wi-Fi radios to `wlan` as *managed* radios, which join access points on `wlan`'s commands |
+| `implementation/guests/linux/net`, `implementation/guests/linux/wifi` | In [the driver VM](DRIVERVM.md): `net` offers Linux's network cards to `netd` (`netdev`), `wifi` Linux's Wi-Fi radios to `wlan` as *managed* radios, which join access points on `wlan`'s commands |
 | `implementation/services/wlan` | `wlan`, the Wi-Fi service (`wlan` and `wlanphy` protocols): what to join and when, authentication, the key handshakes, saved networks |
 | `implementation/libraries/wlan` | `vwlan`: 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, the saved-network format, the connection policy |
 | `implementation/services/netd` | `netd`, the network service (`net` and `netdev` protocols), and the firewall's settings store (`store.rs`) |
