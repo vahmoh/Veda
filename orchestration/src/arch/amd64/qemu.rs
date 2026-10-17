@@ -84,12 +84,6 @@ pub fn machine_args(keyboard: bool, iommu: bool) -> Vec<String> {
     args
 }
 
-/// The bus of port `port` of the machine's AHCI controller: the ICH9's,
-/// built in, whose six ports are `ide.0` to `ide.5`.
-pub fn ahci_port(port: u32) -> String {
-    format!("ide.{port}")
-}
-
 /// The machine's HD Audio controller: the ICH9's.
 pub const HDA_CONTROLLER: &str = "ich9-intel-hda";
 

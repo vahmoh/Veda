@@ -72,7 +72,6 @@ pub const PROGRAMS: &[Program] = &[
     Program::native("devmgr"),
     Program::native("drivervm"),
     Program::native("virtio-blk"),
-    Program::native("ahci"),
     Program::native("nvme"),
     Program::native("netd"),
     Program::native("wlan"),

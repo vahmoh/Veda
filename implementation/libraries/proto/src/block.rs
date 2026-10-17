@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(device_text(b"    "), "");
         assert_eq!(disk_id("veda-home", "pci-00:04.0"), "veda-home");
         assert_eq!(disk_id("", "pci-00:04.0"), "pci-00:04.0");
-        assert_eq!(service_name(&disk_id("", "ahci-00:1f.2-0")), "block/ahci-00:1f.2-0");
+        assert_eq!(service_name(&disk_id("", "nvme-00:05.0")), "block/nvme-00:05.0");
     }
 
     #[test]

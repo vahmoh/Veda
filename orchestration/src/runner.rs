@@ -567,14 +567,14 @@ fn script_on(o: &Options, script: &Script, prebuilt: Option<&Path>) -> Result {
     vm.usb_net |= boot.usb_net;
     let home = util::out_dir().join("test-home.img");
     if live {
-        // A stick with the ISO on it, and no home disk.
+        // A stick with the ISO on it.
         vm.usb_stick = true;
         vm.usb_stick_writable = boot.live == Some(Live::Writable);
-    } else {
-        // Every scripted run starts with a new, empty home directory.
-        qemu::prepare_home_disk(&home, true)?;
-        vm.home_disk = Some(home.clone());
     }
+    // Every scripted run starts with a new, empty home disk, which the live
+    // system leaves alone, as it does a PC's disks.
+    qemu::prepare_home_disk(&home, true)?;
+    vm.home_disk = Some(home.clone());
     let result = automate::run_script(&install, &disk, vm, script, mic, agent);
     drop(web);
     // A secret typed in (an API key Settings stored) is not left on a disk.

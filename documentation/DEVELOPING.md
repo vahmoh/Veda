@@ -43,7 +43,7 @@ Their options (of values separated by `|`, the first is the default):
   `--qemu-arg ARG` (repeatable), `--gpu` or `--no-gpu` (default: a 3D GPU
   if QEMU has one), `--no-iommu`, `--sound virtio|hda`, `--no-audio`,
   `--net ethernet|none`, `--nic virtio-net-pci|e1000e|igb`,
-  `--disk-bus virtio|ahci|nvme`, `--input standard|usb`, `--fresh-home`,
+  `--disk-bus virtio|nvme`, `--input standard|usb`, `--fresh-home`,
   `--live`.
 * **Scripts:** `--jobs N`, how many scripts run at once (default: one per
   five processors); for `toolchain` and `linux`, how many build jobs.
@@ -96,8 +96,9 @@ or from a stick written by Rufus (in ISO mode) or as it is. It boots with
 `live` on the kernel command line (no disk driver; `/home` in memory), at
 1920x1080 or the screen's largest mode below it, and with no time zone, as
 a PC's clock keeps local time under Windows. `run --live` boots it in QEMU
-from a virtual USB stick (`target/veda/stick.iso`), and scripts with a
-`live` line (`verification/ui/live-usb.vts`).
+from a virtual USB stick (`target/veda/stick.iso`), and so do scripts with
+a `live` line, on a machine with a disk for it to leave alone
+(`verification/ui/live-usb.vts`).
 
 The stick keeps the logs of the last eight starts, synced every second, so
 they hold what happened even when the screen showed nothing:

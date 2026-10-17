@@ -247,14 +247,14 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
 
 ## Storage and files
 
-- **Disks.** `virtio-blk` (QEMU), `ahci` (SATA) and `nvme` (NVM Express)
-  serve each disk through the `block` protocol as `block/<serial>`, so the
-  VFS finds a disk by its serial number whatever the controller. One
-  service loop (`vproto::block::serve`) checks every request (whole
-  sectors, at most 32 KiB, on the disk). Only the VFS may use a disk, since
-  raw sectors would bypass its access rules. A request a device does not
-  finish in time fails and the device is reset, so that no command left to
-  it writes into memory a later one uses.
+- **Disks.** `virtio-blk` (QEMU) and `nvme` (NVM Express) serve each disk
+  through the `block` protocol as `block/<serial>`, so the VFS finds a disk
+  by its serial number whatever the controller. One service loop
+  (`vproto::block::serve`) checks every request (whole sectors, at most
+  32 KiB, on the disk). Only the VFS may use a disk, since raw sectors would
+  bypass its access rules. A request a device does not finish in time fails
+  and the device is reset, so that no command left to it writes into memory
+  a later one uses.
 - **The VFS** (`vfs`) serves `/system` read-only from the initrd, keeps
   `/home` and `/tmp` in memory, and has `null`, `zero`, `full`, `random`
   and `urandom` in `/dev`. With a disk whose serial is `veda-home`, `/home`

@@ -81,16 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ahci"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vproto",
- "vrt",
-]
-
-[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

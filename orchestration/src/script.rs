@@ -76,7 +76,7 @@
 //! boot-cmdline "run=about"         # extra kernel command line (adds up)
 //! net none                         # network: ethernet or none
 //! nic e1000e                       # QEMU's model of the wired card
-//! disk nvme                        # how QEMU attaches the disks: virtio, ahci or nvme
+//! disk nvme                        # how QEMU attaches the disks: virtio or nvme
 //! memory 2048                      # the machine's memory (MiB)
 //! acpi-table touchpad              # add a table to the firmware's (orchestration/src/arch/*/acpitest.rs; adds up)
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store (adds up)
@@ -722,7 +722,7 @@ impl Line {
             "disk" => {
                 once("disk")?;
                 let bus = self.text("bus")?;
-                boot.disk = Some(DiskBus::parse(&bus).ok_or(format!("unknown disk bus '{bus}' (virtio, ahci, nvme)"))?);
+                boot.disk = Some(DiskBus::parse(&bus).ok_or(format!("unknown disk bus '{bus}' (virtio, nvme)"))?);
                 return Ok(None);
             }
             "memory" => {

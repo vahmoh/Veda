@@ -98,15 +98,13 @@ const DRIVERS: &[DriverMatch] = &[
 /// Drivers for whole device classes: (class, subclass, programming
 /// interface, driver). Consulted when no vendor/device entry matches.
 const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
-    // SATA controllers in AHCI mode (QEMU q35, most PCs)
-    (0x01, 0x06, 0x01, "ahci"),
     // NVM Express controllers (the SSDs of most PCs since about 2016)
     (0x01, 0x08, 0x02, "nvme"),
 ];
 
 /// Disk drivers. A live system (started with `live`) starts none of them:
 /// it runs from memory and never touches the computer's disks.
-const DISK_DRIVERS: [&str; 3] = ["virtio-blk", "ahci", "nvme"];
+const DISK_DRIVERS: [&str; 2] = ["virtio-blk", "nvme"];
 
 /// What the firmware's AML may spend in all as the devices are placed and
 /// described at the start: steps, and bytes of values made or copied (each

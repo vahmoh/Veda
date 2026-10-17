@@ -88,7 +88,7 @@ RUN OPTIONS:
     --fresh-home        Start with a new home directory (deletes target/veda/home.img)
     --net MODE          Network: ethernet (default, a wired card on QEMU's NAT) or none
     --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000e, igb
-    --disk-bus BUS      How QEMU attaches the disks: virtio (default), ahci (SATA) or nvme
+    --disk-bus BUS      How QEMU attaches the disks: virtio (default) or nvme
     --input DEVICES     Keyboard and pointer: standard (default: the machine's keyboard, a
                         PC's PS/2 one, and the virtio tablet) or usb (on the xHCI controller: a
                         keyboard and a tablet behind a hub, and a mouse)
@@ -215,8 +215,7 @@ pub fn parse_options(args: &[String]) -> Result<Options> {
             "--nic" => o.vm.nic_model = Some(value(arg)?),
             "--disk-bus" => {
                 let v = value(arg)?;
-                o.vm.disk_bus =
-                    qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, ahci, nvme)"))?;
+                o.vm.disk_bus = qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, nvme)"))?;
             }
             "--input" => {
                 let v = value(arg)?;

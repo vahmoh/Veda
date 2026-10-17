@@ -131,8 +131,6 @@ pub fn socket_option(path: &Path) -> Result<String> {
 pub enum DiskBus {
     /// virtio-blk (QEMU's default here).
     Virtio,
-    /// SATA disks on the machine's AHCI controller (as many PCs have).
-    Ahci,
     /// NVM Express controllers, one a disk (as most PCs have).
     Nvme,
 }
@@ -141,7 +139,6 @@ impl DiskBus {
     pub fn parse(s: &str) -> Option<DiskBus> {
         match s {
             "virtio" => Some(DiskBus::Virtio),
-            "ahci" | "sata" => Some(DiskBus::Ahci),
             "nvme" => Some(DiskBus::Nvme),
             _ => None,
         }
@@ -406,16 +403,10 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     } else {
         let format = cfg.boot_format;
         cmd.args(["-drive", &format!("id=disk0,if=none,format={format},file={}", option_path(disk))]);
-        // On the machine's AHCI controller, the boot disk on its first
-        // port and the home disk on its second.
         match cfg.disk_bus {
             DiskBus::Virtio => {
                 cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot")])
             }
-            DiskBus::Ahci => cmd.args([
-                "-device",
-                &format!("ide-hd,bus={},drive=disk0,bootindex=0,serial=veda-boot", arch::qemu::ahci_port(0)),
-            ]),
             DiskBus::Nvme => cmd.args(["-device", "nvme,drive=disk0,bootindex=0,serial=veda-boot"]),
         };
     }
@@ -423,9 +414,6 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", option_path(home))]);
         match cfg.disk_bus {
             DiskBus::Virtio => cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=home,serial=veda-home")]),
-            DiskBus::Ahci => {
-                cmd.args(["-device", &format!("ide-hd,bus={},drive=home,serial=veda-home", arch::qemu::ahci_port(1))])
-            }
             DiskBus::Nvme => cmd.args(["-device", "nvme,drive=home,serial=veda-home"]),
         };
     }

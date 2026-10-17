@@ -82,7 +82,6 @@ members = [
     "generation/music",
     "generation/videos",
     "implementation/drivers/virtio-blk",
-    "implementation/drivers/ahci",
     "implementation/drivers/nvme",
     "verification/systest",
     "verification/nettest",
