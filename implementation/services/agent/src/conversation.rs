@@ -17,6 +17,12 @@
 //! * The user cancelling calls by speaking again takes them out of the
 //!   worker's queue; those that had started run to the end, and what they
 //!   did is told (see [`crate::approvals`]).
+//! * While the user talks in a conversation they asked for, and while the
+//!   agent's voice answers, the window system hears that the user is there
+//!   ([`Agent::user_active`]), so that the screen does not lock in the
+//!   middle of a conversation held hands-free. Nothing the agent hears
+//!   while it only listens for its name counts, nor does a conversation a
+//!   notice started (`vagent::presence` says why).
 
 use vagent::deepgram::{self, Role, ServerMessage};
 use vagent::gate::{self, Verdict};
@@ -75,6 +81,7 @@ impl Agent {
         let listen = wanted
             && key.is_some()
             && !self.muted
+            && !self.locked
             && self.state == AgentState::Asleep
             && self.session.is_none()
             && self.connector.is_none();
@@ -99,10 +106,19 @@ impl Agent {
     }
 
     /// Starts a conversation (if none is running); `attended` if the user
-    /// asked for it (a click, its name), not a notice.
+    /// asked for it (a click, its name), not a notice. None starts while the
+    /// screen is locked: it waits for it to be unlocked (see [`crate::lock`]).
     pub(crate) fn wake(&mut self, reason: &str, attended: bool) {
+        if self.locked {
+            println!("not waking ({reason}): the screen is locked");
+            self.wake_on_unlock |= attended;
+            return;
+        }
         if let Some(s) = &mut self.session {
             s.attended |= attended;
+            if attended {
+                s.presence.ask();
+            }
             return;
         }
         if self.connector.is_some() {
@@ -297,6 +313,9 @@ impl Agent {
     fn handle_message(&mut self, m: ServerMessage) {
         let now = vrt::time::now_ns();
         let unix = vrt::time::unix_time_ns() / 1_000_000_000;
+        if let Some(s) = &mut self.session {
+            s.presence.heard(&m);
+        }
         match m {
             ServerMessage::Welcome { request_id } => println!("connected to Deepgram (request {request_id})"),
             ServerMessage::SettingsApplied => {
@@ -554,8 +573,9 @@ impl Agent {
     }
 
     /// Ends quiet (or unconfirmed) conversations, finishes the agent's
-    /// turns, brings settings that changed into the conversation, and rests
-    /// again once an error has been shown.
+    /// turns, tells the window system when the user is there
+    /// (`vagent::presence`), brings settings that changed into the
+    /// conversation, and rests again once an error has been shown.
     pub(crate) fn housekeeping(&mut self, now: u64) {
         /// How long to wait for a goodbye after the agent asked to end.
         const END_GRACE_NS: u64 = 5_000_000_000;
@@ -565,7 +585,9 @@ impl Agent {
         let speaking = self.voice.as_ref().is_some_and(Voice::speaking);
         let mut end = false;
         let mut error = None;
+        let mut present = false;
         if let Some(s) = &mut self.session {
+            present = s.presence.tell(now, speaking);
             if s.overdue(now) {
                 println!("Deepgram did not confirm the conversation's settings in time");
                 error = Some("Deepgram did not answer. Check the network connection.");
@@ -598,6 +620,9 @@ impl Agent {
             if s.keep_alive(now).is_err() {
                 error = Some(LOST);
             }
+        }
+        if present {
+            self.user_active();
         }
         if error.is_some() {
             self.end_conversation(error);

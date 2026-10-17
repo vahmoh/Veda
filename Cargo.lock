@@ -145,6 +145,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures",
+ "password-hash",
+ "zeroize",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -790,7 +803,7 @@ name = "errno"
 version = "0.3.14"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1291,6 +1304,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "lock"
+version = "0.1.0"
+dependencies = [
+ "lock-core",
+ "shell-common",
+ "vabi",
+ "vgfx",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vsplash",
+ "vui",
+ "zeroize",
+]
+
+[[package]]
+name = "lock-core"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "libm",
+ "vgfx",
+ "vproto",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1593,6 +1632,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "password-hash"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aab41826031698d6ffcd9cff78ef56ef998e39dc7e5067cdfebe373842d4723b"
+dependencies = [
+ "phc",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1619,6 +1667,16 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "phc"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44dc769b75f93afdddd8c7fa12d685292ddeff1e66f7f0f3a234cf1818afe892"
+dependencies = [
+ "base64ct",
+ "ctutils",
+]
 
 [[package]]
 name = "photos"
@@ -1926,7 +1984,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2053,6 +2111,7 @@ dependencies = [
  "vproto",
  "vrt",
  "vui",
+ "zeroize",
 ]
 
 [[package]]
@@ -2082,6 +2141,7 @@ name = "shell"
 version = "0.1.0"
 dependencies = [
  "apps-common",
+ "shell-common",
  "vabi",
  "vaudio",
  "vfiles",
@@ -2092,6 +2152,19 @@ dependencies = [
  "vproto",
  "vrt",
  "vui",
+]
+
+[[package]]
+name = "shell-common"
+version = "0.1.0"
+dependencies = [
+ "num-traits",
+ "vabi",
+ "vfiles",
+ "vgfx",
+ "vimage",
+ "vproto",
+ "vrt",
 ]
 
 [[package]]

@@ -42,7 +42,7 @@ In Veda's terms:
 |------|--------|-----|
 | Networking | `smoltcp` (a port), `httparse`, `percent-encoding`, `base64ct` | TCP/IP; HTTP/1.x heads and chunk sizes; URL components; WebSocket keys |
 | TLS | `rustls`, `rustls-webpki`, `webpki-roots` | HTTPS and secure WebSockets, with `vtls`'s `CryptoProvider` on RustCrypto |
-| Cryptography | RustCrypto: `sha1`, `sha2`, `hmac`, `pbkdf2`, `hkdf`, `aes`, `aes-gcm`, `ccm`, `cmac`, `aes-kw`, `chacha20`, `chacha20poly1305`, `blake2`, `p256`, `p384`, `crypto-bigint`, `base16ct`; `x25519-dalek`, `ed25519-dalek`; `subtle`, `zeroize` | Wi-Fi security, TLS, the kernel's random numbers, Wi-Fi keys typed as hex |
+| Cryptography | RustCrypto: `sha1`, `sha2`, `hmac`, `pbkdf2`, `hkdf`, `aes`, `aes-gcm`, `ccm`, `cmac`, `aes-kw`, `chacha20`, `chacha20poly1305`, `blake2`, `p256`, `p384`, `crypto-bigint`, `base16ct`, `argon2` (with `password-hash`, `phc`); `x25519-dalek`, `ed25519-dalek`; `subtle`, `zeroize` | Wi-Fi security, TLS, the kernel's random numbers, Wi-Fi keys typed as hex; the lock screen's password (Argon2id in the PHC string format) |
 | Data | `serde`, `serde_json`, `crc32fast` | The agent's protocols, applications' agent actions, saved settings; checksums of home snapshots, GPT headers and PNG chunks |
 | Text | `ttf-parser`, `unicode-segmentation`, `unicode-width`, `vte` | Font files; grapheme boundaries and character widths; terminal escape sequences |
 | Numbers | `libm`, `num-traits`, `num-rational`, `num-integer`, `glam`, `rand`, `rand_pcg`, `rand_distr`, `fastnoise-lite` | Float functions; the Calculator's exact fractions; 3D maths; seeded random numbers, the same everywhere; noise |

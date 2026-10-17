@@ -114,7 +114,7 @@ impl Compositor {
     /// composed anew, the desktop alone.
     fn advance_startup(&mut self, now: u64) {
         let Some(mut s) = self.startup.take() else { return };
-        let progress = Progress { settled: self.screen.settled(), drawn: self.wm.desktop_drawn() };
+        let progress = Progress { settled: self.screen.settled(), drawn: self.wm.screen_drawn() };
         match s.advance(now, progress, &|| self.describe()) {
             Moved::Appearing => self.wm.send_to_desktop(WindowEvent::Appearing {}),
             Moved::Over => {
@@ -156,10 +156,11 @@ impl Compositor {
             let (w, h) = (out.back.width, out.back.height);
             let mut c = Canvas::new(&mut out.back.pixels, w, h, w);
             c.clip_to(r);
-            // Drawing starts at the topmost window that hides all of `r`:
-            // nothing below it (the desktop under a game, say) is visible.
-            let covering =
-                order.iter().rposition(|id| wm.window(*id).is_some_and(|w| w.opaque_rect().contains_rect(&r)));
+            // Drawing starts at the topmost window shown that hides all of
+            // `r`: nothing below it (the desktop under a game, say) is
+            // visible. While the screen is locked, only lock screens are
+            // shown, over the backdrop.
+            let covering = wm.covering(r);
             if covering.is_none() {
                 decor::draw_background(&mut c, screen);
             }
@@ -172,7 +173,7 @@ impl Compositor {
                     decor::draw_snap_preview(&mut c, preview);
                 }
                 let Some(win) = wm.window(id) else { continue };
-                if !win.visible() || !win.paint_bounds().intersects(&r) {
+                if !wm.shown(win) || !win.paint_bounds().intersects(&r) {
                     continue;
                 }
                 decor.draw_window(&mut c, win, look(wm, win, now));
@@ -292,8 +293,7 @@ impl Compositor {
         let screen = self.screen_rect();
         let Compositor { wm, decor, thumbs, cursor, cursor_rect, .. } = self;
         let order: Vec<u32> = wm.paint_order().to_vec();
-        let covering =
-            order.iter().rposition(|id| wm.window(*id).is_some_and(|w| w.opaque_rect().contains_rect(&clip)));
+        let covering = wm.covering(clip);
         if covering.is_none() {
             decor::draw_background_gpu(g, screen);
         }
@@ -305,10 +305,10 @@ impl Compositor {
             {
                 decor::draw_snap_preview_gpu(g, preview);
             }
-            let Some(win) = wm.window_mut(id) else { continue };
-            if !win.visible() || !win.paint_bounds().intersects(&clip) {
+            if !wm.window(id).is_some_and(|w| wm.shown(w) && w.paint_bounds().intersects(&clip)) {
                 continue;
             }
+            let Some(win) = wm.window_mut(id) else { continue };
             // Its pixels, as the GPU has them.
             let changed = win.surface.upload.take();
             let all = core::mem::replace(&mut win.surface.upload_all, false);

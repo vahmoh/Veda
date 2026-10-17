@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The idle lock and the agent, with a simulated Voice Agent service:
+# Settings' Lock screen page chooses to lock after one minute without
+# input, and nothing is pressed or moved after that. The user talking in
+# the conversation, and the agent's voice answering, keep the screen
+# unlocked past the minute; once the conversation is over, what the agent
+# overhears while it listens for its name does not, and the screen locks
+# about a minute after its voice stopped. (No password is set: Enter wakes
+# the lock screen, and Enter again unlocks it.)
+fail-on "PANIC"
+boot-cmdline "run=settings:lock"
+wait-serial "desktop ready" 120
+mic-silence 1
+wait-serial "started settings" 60
+agent-connected 120
+wait-serial "state: Listening" 30
+wait 4
+# "1 minute", beside "Never", under "Lock automatically after".
+click 0.4453 0.7038
+wait-serial "lock: the screen locks after 1 minute without input" 30
+agent-interrupt
+checkpoint
+# The user takes a turn every half a minute: past the minute since the
+# click, the screen is still unlocked.
+wait 30
+agent-interrupt
+wait 30
+agent-interrupt
+wait 15
+reject-serial "no input for"
+reject-serial "lock: the screen is locked"
+# The agent answers at length: past the minute since the user's last turn,
+# its voice has kept the screen unlocked.
+agent-speak 40
+wait-serial "state: Speaking" 10
+wait 55
+reject-serial "no input for"
+reject-serial "lock: the screen is locked"
+# The conversation ends, and the agent listens for its name again. Talk
+# it overhears then is no input: the screen locks a minute after the
+# agent's voice, not a minute after the talk.
+checkpoint
+agent-call end_conversation '{}' 30
+wait-serial "agent: conversation ended" 20
+wait-serial "listening for its name" 20
+mic-silence 3
+mic-tone 1.5
+wait-serial "someone is speaking" 20
+agent-hear "I was telling Anna about my day." 30
+mic-silence 6
+wait-serial "compositor: no input for 60 s: the screen locks" 50
+wait-serial "lock: the screen is locked" 20
+wait-serial "agent: the screen is locked: not listening" 10
+reject-serial "woken by its name"
+wait 3
+key ret
+wait 2
+key ret
+wait-serial "lock: unlocked (no password is set)" 30
+wait-serial "agent: the screen is unlocked" 10
+reject-serial "PANIC"

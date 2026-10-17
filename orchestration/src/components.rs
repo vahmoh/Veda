@@ -92,6 +92,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("calculator"),
     Program::std("paint"),
     Program::std("shell"),
+    Program::std("lock"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

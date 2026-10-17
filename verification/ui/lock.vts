@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The lock screen (1280x800): a password set in Settings, the screen locked
+# with Super+L, wrong passwords refused until the lock screen makes the next
+# wait, the right one unlocking it; then locked again from the start menu.
+fail-on "PANIC"
+boot-cmdline "run=settings:lock"
+wait-serial "desktop ready" 90
+wait-serial "started settings" 60
+wait 4
+# The page's first field has the keyboard; Tab goes to the next.
+type "veda1234"
+key tab
+type "veda1234"
+key ret
+wait-serial "lock: the password was set" 60
+wait 2
+shot target/veda/lock-1-settings.png
+key meta_l-l
+wait-serial "lock: the screen is locked" 20
+wait 3
+shot target/veda/lock-2-resting.png
+# The key that wakes the resting screen is the password's first.
+type "n"
+wait 2
+shot target/veda/lock-3-asking.png
+type "ope"
+key ret
+wait-serial "lock: a wrong password (1 since the right one)" 30
+wait 2
+shot target/veda/lock-4-wrong.png
+# Four wrong passwords cost nothing; the fifth makes the next wait.
+type "nope"
+key ret
+wait-serial "lock: a wrong password (2 since the right one)" 30
+type "nope"
+key ret
+wait-serial "lock: a wrong password (3 since the right one)" 30
+type "nope"
+key ret
+wait-serial "lock: a wrong password (4 since the right one)" 30
+type "nope"
+key ret
+wait-serial "lock: a wrong password (5 since the right one): the next waits 30 s" 30
+checkpoint
+wait 2
+shot target/veda/lock-5-waiting.png
+# Nothing typed meanwhile is taken.
+type "veda1234"
+key ret
+wait 30
+reject-serial "lock: unlocked"
+type "veda1234"
+key ret
+wait-serial "lock: unlocked (the password is right)" 30
+wait 3
+shot target/veda/lock-6-unlocked.png
+# The start menu's lock, next to Settings and the power button.
+key meta_l
+wait 2
+click 0.6273 0.885
+wait-serial "lock: the screen is locked" 20
+wait 2
+type "veda1234"
+key ret
+wait-serial "lock: unlocked (the password is right)" 30
+reject-serial "PANIC"

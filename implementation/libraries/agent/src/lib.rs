@@ -27,6 +27,8 @@
 //! * [`wake`]: recognising the agent's name in what it hears, and the
 //!   budget of recognition.
 //! * [`gate`]: keeping the agent from hearing its own voice.
+//! * [`presence`]: what in a conversation tells the window system that the
+//!   user is there, so that the screen does not lock while they talk.
 
 #![no_std]
 
@@ -39,6 +41,7 @@ pub mod gate;
 pub mod memory;
 pub mod notice;
 pub mod policy;
+pub mod presence;
 pub mod prompt;
 pub mod tools;
 pub mod wake;

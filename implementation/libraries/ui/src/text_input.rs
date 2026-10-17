@@ -92,7 +92,7 @@ impl<'a> Ui<'a> {
     /// A text box editing `value`. Clicking focuses it; typing, arrows,
     /// Home/End, Backspace/Delete, Shift-selection, Ctrl+A/C/X/V work.
     pub fn text_input(&mut self, r: Rect, id_label: &str, value: &mut String, placeholder: &str) -> TextInputResponse {
-        self.edit_line(r, id_label, value, placeholder, false)
+        self.edit_line(r, id_label, value, placeholder, false, true)
     }
 
     /// A text box for a password: shows a bullet per character unless
@@ -105,7 +105,21 @@ impl<'a> Ui<'a> {
         placeholder: &str,
         reveal: bool,
     ) -> TextInputResponse {
-        self.edit_line(r, id_label, value, placeholder, !reveal)
+        self.edit_line(r, id_label, value, placeholder, !reveal, true)
+    }
+
+    /// A text box for a secret typed at the keyboard alone, such as the
+    /// lock screen's password: a bullet per character, nothing copied or
+    /// cut to the clipboard, and nothing pasted from it either (what was
+    /// copied before the screen was locked is not for whoever is at it).
+    pub fn secret_input(
+        &mut self,
+        r: Rect,
+        id_label: &str,
+        value: &mut String,
+        placeholder: &str,
+    ) -> TextInputResponse {
+        self.edit_line(r, id_label, value, placeholder, true, false)
     }
 
     fn edit_line(
@@ -115,6 +129,7 @@ impl<'a> Ui<'a> {
         value: &mut String,
         placeholder: &str,
         mask: bool,
+        paste: bool,
     ) -> TextInputResponse {
         // With `mask`, what is measured and drawn is one bullet per
         // character; offsets are converted between the two strings.
@@ -230,7 +245,7 @@ impl<'a> Ui<'a> {
                             }
                         }
                     }
-                    keys::V if ctrl => {
+                    keys::V if ctrl && paste => {
                         let clip = self.clipboard();
                         let clip: String = clip.chars().filter(|c| !c.is_control()).collect();
                         value.replace_range(s0..s1, &clip);

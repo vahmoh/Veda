@@ -35,6 +35,7 @@ mod admin;
 mod approvals;
 mod conversation;
 mod listen;
+mod lock;
 mod registrar;
 mod server;
 mod session;
@@ -58,6 +59,7 @@ use vrt::sync::Mutex;
 
 use admin::SettingsServer;
 use approvals::Approval;
+use lock::LockWatch;
 use registrar::Registrar;
 use server::Conn;
 use session::{Connector, Session};
@@ -129,6 +131,13 @@ struct Agent {
     budget: listen::SharedBudget,
     /// When the error shown is over, and the agent rests again.
     rest_at: Option<u64>,
+    /// The screen is locked (see [`lock`]): taken so until the window
+    /// system says otherwise.
+    locked: bool,
+    lock_watch: LockWatch,
+    /// A conversation the user asked for while the screen was locked, which
+    /// starts once it is unlocked.
+    wake_on_unlock: bool,
 }
 
 impl Agent {
@@ -191,7 +200,10 @@ impl Agent {
         const VOICE: u64 = 5;
         // Settings or applications changed (housekeeping looks every pass).
         const CHANGED: u64 = 6;
+        // The window system tells the lock.
+        const LOCK: u64 = 7;
         const CONN: u64 = 1 << 32;
+        self.check_lock(vrt::time::now_ns());
         self.rest();
         if self.wake_at_start {
             self.wake("start-up option", true);
@@ -211,6 +223,9 @@ impl Agent {
                 add(e.raw(), signals::SIGNALED, CHANGED);
             }
             add(self.worker.handle(), signals::SIGNALED, WORKER);
+            if let Some(h) = self.lock_watch.handle() {
+                add(h, signals::READABLE | signals::PEER_CLOSED, LOCK);
+            }
             if let Some(c) = &self.connector {
                 add(c.handle(), signals::SIGNALED, CONNECTOR);
             }
@@ -231,7 +246,7 @@ impl Agent {
                 add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, CONN + k);
             }
             let active = self.session.is_some() || self.connector.is_some();
-            let mut deadline = self.next_timer_ns(now);
+            let mut deadline = self.next_timer_ns(now).min(self.lock_watch.deadline());
             if active {
                 deadline = deadline.min(now + if self.ui.is_some() { LIVE_PERIOD_NS } else { 250_000_000 });
             }
@@ -284,7 +299,7 @@ impl Agent {
                             let _ = e.clear();
                         }
                     }
-                    VOICE => {}
+                    VOICE | LOCK => {}
                     k => {
                         let key = k - CONN;
                         if !self.serve(key)
@@ -312,6 +327,7 @@ impl Agent {
                 v.pump();
             }
             let now = vrt::time::now_ns();
+            self.check_lock(now);
             self.housekeeping(now);
             self.check_timers();
             self.expire_approvals(now);
@@ -431,6 +447,9 @@ fn run() -> i32 {
         listen_retry_at: 0,
         budget: listen::budget(vrt::time::now_ns()),
         rest_at: None,
+        locked: true,
+        lock_watch: LockWatch::default(),
+        wake_on_unlock: false,
     };
     agent.run(listener)
 }

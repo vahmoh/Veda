@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "lock"
+description = "The lock screen: the system service that shows it while the screen is locked, asks for the password and unlocks the screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lock"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vui = { workspace = true }
+vsplash = { workspace = true }
+zeroize = { workspace = true, features = ["alloc"] }
+lock-core = { path = "core" }
+shell-common = { path = "../common" }
+
+[lints]
+workspace = true

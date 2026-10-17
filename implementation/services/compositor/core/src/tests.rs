@@ -28,6 +28,9 @@ const OTHER: u64 = 4;
 const APP_TOO: u64 = 5;
 /// An application named like the shell.
 const IMPOSTOR: u64 = 6;
+/// The lock service, and an application named like it.
+const LOCK: u64 = 7;
+const LOCK_IMPOSTOR: u64 = 8;
 /// The input driver's connection.
 const MOUSE: u64 = 100;
 
@@ -35,8 +38,8 @@ fn identity(name: &str, service: bool, koid: u64) -> Identity {
     Identity { koid, name: name.into(), service }
 }
 
-/// A window manager with the shell, the agent and three applications
-/// connected (two connections of the same process).
+/// A window manager with the shell, the agent, the lock service and three
+/// applications connected (two connections of the same process).
 fn wm() -> Wm<()> {
     let mut wm = Wm::new(SCREEN);
     for (key, id) in [
@@ -46,6 +49,8 @@ fn wm() -> Wm<()> {
         (OTHER, identity("music", false, 13)),
         (APP_TOO, identity("files", false, 12)),
         (IMPOSTOR, identity("shell", false, 14)),
+        (LOCK, identity("lock", true, 15)),
+        (LOCK_IMPOSTOR, identity("lock", false, 16)),
     ] {
         wm.connect(key, id, 0).unwrap();
     }
@@ -679,4 +684,447 @@ fn applications_cannot_leave_the_shell_without_windows() {
     wm.connect(9999, identity("late", false, 9999), 0).unwrap();
     assert_eq!(wm.create_window(9999, spec(WindowKind::Normal, 10, 10), 0), Err(DisplayError::NoMemory));
     assert!(wm.create_window(SHELL, spec(WindowKind::Notification, 10, 10), 0).is_ok());
+}
+
+// ---- the lock ------------------------------------------------------------------------------
+
+/// A lock screen of the lock service's, drawn: its id.
+fn lock_screen(wm: &mut Wm<()>) -> u32 {
+    let id = wm.create_window(LOCK, spec(WindowKind::Lock, 1280, 800), 0).unwrap();
+    draw(wm, LOCK, id, 1280, 800);
+    id
+}
+
+/// The windows on the screen, bottom to top.
+fn shown(wm: &Wm<()>) -> Vec<u32> {
+    wm.paint_order().iter().copied().filter(|id| wm.window(*id).is_some_and(|w| wm.shown(w))).collect()
+}
+
+#[test]
+fn only_the_lock_service_draws_lock_screens_and_unlocks() {
+    let mut wm = wm();
+    for client in [APP, SHELL, AGENT, LOCK_IMPOSTOR] {
+        assert_eq!(wm.create_window(client, spec(WindowKind::Lock, 1280, 800), 0), Err(DisplayError::Denied));
+    }
+    wm.lock(SHELL, 0).unwrap();
+    for client in [APP, SHELL, AGENT, LOCK_IMPOSTOR] {
+        assert_eq!(wm.unlock(client, 1), Err(DisplayError::Denied));
+    }
+    assert!(wm.locked());
+    // A lock screen covers the screen, whatever size it asks for.
+    let id = wm.create_window(LOCK, spec(WindowKind::Lock, 100, 100), 1).unwrap();
+    assert_eq!(wm.window(id).unwrap().client_rect, SCREEN);
+    assert_eq!(wm.unlock(LOCK, 2), Ok(()));
+    assert!(!wm.locked());
+}
+
+#[test]
+fn the_system_locks_the_screen_and_applications_do_not() {
+    for client in [SHELL, AGENT, LOCK] {
+        let mut wm = wm();
+        assert_eq!(wm.lock(client, 0), Ok(()));
+        assert!(wm.locked());
+    }
+    let mut wm = wm();
+    for client in [APP, OTHER, IMPOSTOR, LOCK_IMPOSTOR] {
+        assert_eq!(wm.lock(client, 0), Err(DisplayError::Denied));
+    }
+    assert!(!wm.locked());
+    // The system's services watch the lock; applications do not.
+    assert_eq!(wm.may_watch_lock(AGENT), Ok(()));
+    assert_eq!(wm.may_watch_lock(LOCK), Ok(()));
+    assert_eq!(wm.may_watch_lock(APP), Err(DisplayError::Denied));
+    assert_eq!(wm.may_watch_lock(LOCK_IMPOSTOR), Err(DisplayError::Denied));
+}
+
+#[test]
+fn a_locked_screen_shows_the_lock_screen_alone() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    draw(&mut wm, APP, app, 600, 400);
+    wm.advance(1_000_000_000);
+    assert!(shown(&wm).contains(&app));
+    let c = wm.window(app).unwrap().client_rect;
+    // The window hides the desktop below it (but for its rounded corners).
+    let inside = Rect::new(c.x, c.y, c.w, c.h / 2);
+    assert!(wm.covering(inside).is_some());
+    wm.take_damage();
+    wm.lock(SHELL, 1).unwrap();
+    // At once: the whole screen is drawn again, from the backdrop.
+    assert!(wm.take_damage().iter().any(|r| r.contains_rect(&SCREEN)));
+    assert!(shown(&wm).is_empty());
+    assert_eq!(wm.covering(inside), None);
+    assert!(!wm.screen_drawn());
+    let lock = lock_screen(&mut wm);
+    assert_eq!(shown(&wm), [lock]);
+    assert!(wm.screen_drawn());
+    // The pointer reaches it alone, and so does the wheel.
+    assert_eq!(wm.window_at(c.x + 5, c.y + 5).map(|(id, _)| id), Some(lock));
+    sent(&mut wm);
+    wm.pointer_moved(c.x + 5, c.y + 5);
+    wm.scroll(0, 1);
+    assert!(sent(&mut wm).iter().all(|(to, _)| *to == lock));
+    wm.unlock(LOCK, 2).unwrap();
+    assert!(shown(&wm).contains(&app));
+}
+
+#[test]
+fn a_locked_screen_hears_the_keyboard_alone() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    wm.lock(SHELL, 1).unwrap();
+    assert!(sent_to(&mut wm, app).contains(&WindowEvent::Focus { focused: false }));
+    let lock = lock_screen(&mut wm);
+    assert_eq!(wm.focused(), Some(lock));
+    sent(&mut wm);
+    wm.key(keys::A, true, 2);
+    wm.key(keys::A, false, 2);
+    let events = sent(&mut wm);
+    assert!(events.iter().all(|(to, _)| *to == lock));
+    assert!(events.iter().any(|(_, e)| matches!(e, WindowEvent::Key { code: keys::A, pressed: true, .. })));
+    // The window system's shortcuts do nothing: no switcher, no closing,
+    // no desktop, and the shell hears neither Super nor Super+Space.
+    chord(&mut wm, keys::LEFTALT, keys::TAB, 3);
+    assert!(wm.switcher().is_none());
+    chord(&mut wm, keys::LEFTALT, keys::F4, 4);
+    chord(&mut wm, keys::LEFTMETA, keys::SPACE, 5);
+    chord(&mut wm, keys::LEFTMETA, keys::D, 6);
+    chord(&mut wm, keys::LEFTMETA, keys::L, 7);
+    wm.key(keys::LEFTMETA, true, 8);
+    wm.key(keys::LEFTMETA, false, 8);
+    let events = sent(&mut wm);
+    assert!(events.iter().all(|(to, _)| *to == lock), "{events:?}");
+    assert!(!events.iter().any(|(_, e)| matches!(
+        e,
+        WindowEvent::CloseRequested {} | WindowEvent::StartMenuKey {} | WindowEvent::AgentKey {}
+    )));
+    assert_eq!(wm.window(app).unwrap().state, WindowState::Normal);
+}
+
+#[test]
+fn super_l_locks_the_screen() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    chord(&mut wm, keys::LEFTMETA, keys::L, 1);
+    assert!(wm.locked());
+    assert_eq!(wm.focused(), None);
+    // The press was the window system's, not the application's.
+    let events = sent_to(&mut wm, app);
+    assert!(!events.iter().any(|e| matches!(e, WindowEvent::Key { code: keys::L, .. })), "{events:?}");
+}
+
+#[test]
+fn nothing_takes_the_focus_from_the_lock_screen() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    wm.lock(SHELL, 1).unwrap();
+    let lock = lock_screen(&mut wm);
+    // Not the shell activating a window, a window opening, nor a popup.
+    wm.activate(SHELL, app, 2).unwrap();
+    let other = wm.create_window(OTHER, spec(WindowKind::Normal, 300, 200), 3).unwrap();
+    assert_eq!(wm.create_window(OTHER, spec(WindowKind::Popup, 100, 100), 4), Err(DisplayError::Denied));
+    assert_eq!(wm.focused(), Some(lock));
+    // Nor a click where a window is.
+    let c = wm.window(other).unwrap().client_rect;
+    wm.pointer_moved(c.x + 10, c.y + 10);
+    wm.pointer_button(0, true, 5);
+    wm.pointer_button(0, false, 6);
+    assert_eq!(wm.focused(), Some(lock));
+    // Applications cannot reach the clipboard meanwhile.
+    assert_eq!(wm.clipboard(APP), Err(DisplayError::Denied));
+    assert_eq!(wm.set_clipboard(OTHER, "typed".into()), Err(DisplayError::Denied));
+}
+
+#[test]
+fn unlocking_gives_the_keyboard_back() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    let popup = wm.create_window(APP, spec(WindowKind::Popup, 200, 300), 0).unwrap();
+    wm.lock(AGENT, 1).unwrap();
+    // The popup went with the focus.
+    assert!(wm.window(popup).unwrap().dismissed);
+    let lock = lock_screen(&mut wm);
+    wm.unlock(LOCK, 2).unwrap();
+    assert_eq!(wm.focused(), Some(app));
+    // The lock screen is drawn (fading out) until its service closes it.
+    assert!(wm.window(lock).is_some_and(|w| wm.shown(w)));
+    wm.destroy(LOCK, lock, 3).unwrap();
+    assert_eq!(wm.focused(), Some(app));
+}
+
+#[test]
+fn the_lock_outlasts_its_screen() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    wm.lock(SHELL, 1).unwrap();
+    lock_screen(&mut wm);
+    // The lock service crashes: the screen stays locked, showing nothing
+    // but the backdrop, and the keyboard is nobody's.
+    wm.disconnect(LOCK);
+    assert!(wm.locked() && wm.focused().is_none());
+    assert!(shown(&wm).is_empty() && !wm.screen_drawn());
+    let c = wm.window(app).unwrap().client_rect;
+    assert_eq!(wm.window_at(c.x + 5, c.y + 5), None);
+    // Started again, its new screen has the keyboard.
+    wm.connect(LOCK, identity("lock", true, 17), 2).unwrap();
+    let lock = lock_screen(&mut wm);
+    assert_eq!(wm.focused(), Some(lock));
+    wm.unlock(LOCK, 3).unwrap();
+    assert_eq!(wm.focused(), Some(app));
+}
+
+#[test]
+fn a_window_system_started_locked_shows_nothing_until_it_is_unlocked() {
+    let mut wm = wm();
+    wm.lock_at_start();
+    let back = wm.create_window(SHELL, spec(WindowKind::Desktop, 1280, 800), 0).unwrap();
+    let bar = wm.create_window(SHELL, spec_at(WindowKind::Panel, Rect::new(0, 752, 1280, 48)), 0).unwrap();
+    draw(&mut wm, SHELL, back, 1280, 800);
+    draw(&mut wm, SHELL, bar, 1280, 48);
+    // The desktop has drawn itself, but what the screen shows has not.
+    assert!(wm.desktop_drawn() && !wm.screen_drawn());
+    assert!(shown(&wm).is_empty());
+    lock_screen(&mut wm);
+    assert!(wm.screen_drawn());
+    wm.unlock(LOCK, 1).unwrap();
+    assert!(wm.screen_drawn() && shown(&wm).contains(&back));
+}
+
+#[test]
+fn locking_ends_a_move_and_the_switcher() {
+    let mut wm = wm();
+    let id = desktop(&mut wm);
+    let t = wm.window(id).unwrap().title_rect();
+    let before = wm.window(id).unwrap().client_rect;
+    wm.pointer_moved(t.x + 100, t.y + 10);
+    wm.pointer_button(0, true, 0);
+    wm.lock(SHELL, 1).unwrap();
+    wm.pointer_moved(t.x + 400, t.y + 300);
+    wm.pointer_button(0, false, 2);
+    assert_eq!(wm.window(id).unwrap().client_rect, before);
+    wm.unlock(LOCK, 3).unwrap();
+    wm.create_window(OTHER, spec(WindowKind::Normal, 300, 200), 4).unwrap();
+    wm.key(keys::LEFTALT, true, 5);
+    wm.key(keys::TAB, true, 5);
+    assert!(wm.switcher().is_some());
+    wm.lock(AGENT, 6).unwrap();
+    assert!(wm.switcher().is_none());
+    // Alt's release, after unlocking, chooses nothing either.
+    wm.unlock(LOCK, 7).unwrap();
+    let focused = wm.focused();
+    wm.key(keys::LEFTALT, false, 8);
+    assert_eq!(wm.focused(), focused);
+}
+
+#[test]
+fn windows_behind_the_lock_wait_for_their_frames() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    draw(&mut wm, APP, app, 600, 400);
+    wm.frames_done(10, 16);
+    assert!(sent_to(&mut wm, app).contains(&WindowEvent::FrameDone { shown: 0, seen_ns: 10, period_ns: 16 }));
+    wm.lock(SHELL, 1).unwrap();
+    let lock = lock_screen(&mut wm);
+    wm.take_damage();
+    // Its frames go unseen: not composed, not acknowledged.
+    wm.present(APP, app, 1, Vec::new()).unwrap();
+    wm.frames_done(20, 16);
+    assert!(!sent_to(&mut wm, app).iter().any(|e| matches!(e, WindowEvent::FrameDone { .. })));
+    // The lock screen's are.
+    wm.present(LOCK, lock, 1, Vec::new()).unwrap();
+    wm.frames_done(30, 16);
+    assert!(sent_to(&mut wm, lock).iter().any(|e| matches!(e, WindowEvent::FrameDone { .. })));
+    // Unlocked, the window's frame is acknowledged with the next.
+    wm.unlock(LOCK, 2).unwrap();
+    wm.frames_done(40, 16);
+    assert!(sent_to(&mut wm, app).contains(&WindowEvent::FrameDone { shown: 1, seen_ns: 40, period_ns: 16 }));
+}
+
+// ---- the idle lock -------------------------------------------------------------------------
+
+/// A second, in the window manager's time (ns).
+const S: u64 = 1_000_000_000;
+
+#[test]
+fn only_the_lock_service_sets_the_idle_timeout() {
+    let mut wm = wm();
+    for client in [SHELL, AGENT, APP, LOCK_IMPOSTOR] {
+        assert_eq!(wm.set_idle_timeout(client, 60), Err(DisplayError::Denied));
+    }
+    // Until it does, the screen never locks for want of input.
+    assert_eq!(wm.idle_deadline(), None);
+    assert!(!wm.check_idle(1000 * S) && !wm.locked());
+    wm.input(MOUSE, InputEvent::Motion { dx: 1, dy: 0 }, 1000 * S);
+    assert_eq!(wm.set_idle_timeout(LOCK, 60), Ok(()));
+    assert_eq!(wm.idle_deadline(), Some(1060 * S));
+    // Set again (the lock service reconnected), it counts from the same
+    // input: a service that restarts does not hold the lock off.
+    wm.set_idle_timeout(LOCK, 300).unwrap();
+    assert_eq!(wm.idle_deadline(), Some(1300 * S));
+    // 0: never.
+    wm.set_idle_timeout(LOCK, 0).unwrap();
+    assert_eq!(wm.idle_deadline(), None);
+    assert!(!wm.check_idle(5000 * S) && !wm.locked());
+}
+
+#[test]
+fn the_screen_locks_once_no_input_has_come_for_the_idle_timeout() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    wm.set_idle_timeout(LOCK, 60).unwrap();
+    // Every kind of input starts the time again.
+    let events = [
+        InputEvent::Key { code: keys::A, pressed: true },
+        InputEvent::Key { code: keys::A, pressed: false },
+        InputEvent::Motion { dx: 3, dy: 0 },
+        InputEvent::Absolute { x: 10, y: 10, max_x: 1280, max_y: 800 },
+        InputEvent::Button { button: 0, pressed: true },
+        InputEvent::Button { button: 0, pressed: false },
+        InputEvent::Scroll { dx: 0, dy: 1 },
+    ];
+    let mut t = 0;
+    for ev in events {
+        t += 50 * S;
+        assert!(!wm.check_idle(t), "{ev:?}");
+        wm.input(MOUSE, ev, t);
+        assert_eq!(wm.idle_deadline(), Some(t + 60 * S));
+    }
+    sent(&mut wm);
+    assert!(!wm.check_idle(t + 60 * S - 1) && !wm.locked());
+    assert!(wm.check_idle(t + 60 * S));
+    assert!(wm.locked());
+    // As any lock does, it takes the keyboard from the application.
+    assert!(sent_to(&mut wm, app).contains(&WindowEvent::Focus { focused: false }));
+    // While it is locked, there is nothing to wait for.
+    assert_eq!(wm.idle_deadline(), None);
+    assert!(!wm.check_idle(t + 1000 * S));
+}
+
+#[test]
+fn unlocking_starts_the_idle_time_again() {
+    let mut wm = wm();
+    desktop(&mut wm);
+    wm.set_idle_timeout(LOCK, 60).unwrap();
+    chord(&mut wm, keys::LEFTMETA, keys::L, 10 * S);
+    lock_screen(&mut wm);
+    // Long after the last key, the user unlocks: the time counts from then.
+    wm.unlock(LOCK, 500 * S).unwrap();
+    assert_eq!(wm.idle_deadline(), Some(560 * S));
+    assert!(!wm.check_idle(559 * S));
+    assert!(wm.check_idle(560 * S) && wm.locked());
+}
+
+#[test]
+fn a_window_keeps_the_screen_awake_while_its_client_asks() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    draw(&mut wm, APP, app, 600, 400);
+    wm.set_idle_timeout(LOCK, 60).unwrap();
+    // A client's own normal and borderless windows only.
+    assert_eq!(wm.keep_awake(OTHER, app, true), Err(DisplayError::NoSuchWindow));
+    let popup = wm.create_window(APP, spec(WindowKind::Popup, 100, 100), 0).unwrap();
+    assert_eq!(wm.keep_awake(APP, popup, true), Err(DisplayError::Invalid));
+    wm.destroy(APP, popup, 0).unwrap();
+    let borderless = wm.create_window(OTHER, spec(WindowKind::Borderless, 100, 100), 0).unwrap();
+    assert_eq!(wm.keep_awake(OTHER, borderless, true), Ok(()));
+    wm.keep_awake(OTHER, borderless, false).unwrap();
+    // A video plays for ten minutes, nothing pressed: the screen stays
+    // awake.
+    assert_eq!(wm.keep_awake(APP, app, true), Ok(()));
+    assert!(wm.kept_awake());
+    assert_eq!(wm.idle_deadline(), None);
+    assert!(!wm.check_idle(600 * S) && !wm.locked());
+    // It ends: the time is due at once, to note when, and counts whole
+    // from then.
+    wm.keep_awake(APP, app, false).unwrap();
+    assert!(!wm.kept_awake());
+    assert_eq!(wm.idle_deadline(), Some(0));
+    assert!(!wm.check_idle(601 * S));
+    assert_eq!(wm.idle_deadline(), Some(661 * S));
+    assert!(!wm.check_idle(660 * S) && !wm.locked());
+    assert!(wm.check_idle(661 * S) && wm.locked());
+}
+
+#[test]
+fn a_window_that_cannot_be_seen_does_not_keep_the_screen_awake() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    draw(&mut wm, APP, app, 600, 400);
+    wm.set_idle_timeout(LOCK, 60).unwrap();
+    wm.keep_awake(APP, app, true).unwrap();
+    // Minimised, it is not seen; restored, it is again.
+    wm.minimize(SHELL, app, S).unwrap();
+    assert!(!wm.kept_awake());
+    assert!(!wm.check_idle(2 * S));
+    wm.activate(APP, app, 3 * S).unwrap();
+    assert!(wm.kept_awake());
+    // A window over part of it leaves it seen ...
+    let small = wm.create_window(OTHER, spec(WindowKind::Normal, 200, 100), 4 * S).unwrap();
+    draw(&mut wm, OTHER, small, 200, 100);
+    wm.advance(10 * S);
+    assert!(wm.kept_awake());
+    // ... one that hides all of it does not.
+    let big = wm.create_window(OTHER, spec(WindowKind::Normal, 600, 400), 11 * S).unwrap();
+    wm.arrange(SHELL, big, dp::arrangement::MAXIMIZE, 11 * S).unwrap();
+    let c = wm.window(big).unwrap().client_rect;
+    draw(&mut wm, OTHER, big, c.w as u32, c.h as u32);
+    wm.advance(20 * S);
+    assert!(!wm.kept_awake());
+    // It goes: the window is seen again, until it closes.
+    wm.destroy(OTHER, big, 21 * S).unwrap();
+    wm.advance(30 * S);
+    assert!(wm.kept_awake());
+    assert!(!wm.check_idle(90 * S));
+    wm.destroy(APP, app, 100 * S).unwrap();
+    assert!(!wm.kept_awake());
+    // The compositor's next look notes it, and the time counts from then.
+    assert!(!wm.check_idle(100 * S));
+    assert!(!wm.check_idle(159 * S));
+    assert!(wm.check_idle(160 * S) && wm.locked());
+}
+
+#[test]
+fn only_the_agent_says_the_user_is_there() {
+    let mut wm = wm();
+    desktop(&mut wm);
+    wm.set_idle_timeout(LOCK, 60).unwrap();
+    wm.input(MOUSE, InputEvent::Motion { dx: 1, dy: 0 }, 10 * S);
+    // Not the shell, the lock service, applications, nor one named like
+    // the agent: the time counts on from the input.
+    let named_like_the_agent = 9;
+    wm.connect(named_like_the_agent, identity("agent", false, 17), 0).unwrap();
+    for client in [SHELL, LOCK, APP, IMPOSTOR, LOCK_IMPOSTOR, named_like_the_agent] {
+        assert_eq!(wm.user_active(client, 50 * S), Err(DisplayError::Denied));
+    }
+    assert_eq!(wm.idle_deadline(), Some(70 * S));
+    // The agent's word starts it again, as input does ...
+    assert_eq!(wm.user_active(AGENT, 50 * S), Ok(()));
+    assert_eq!(wm.idle_deadline(), Some(110 * S));
+    assert!(!wm.check_idle(109 * S) && !wm.locked());
+    // ... and never moves it back.
+    wm.input(MOUSE, InputEvent::Motion { dx: 1, dy: 0 }, 80 * S);
+    wm.user_active(AGENT, 60 * S).unwrap();
+    assert_eq!(wm.idle_deadline(), Some(140 * S));
+    assert!(wm.check_idle(140 * S) && wm.locked());
+    // Locked, it does nothing: the screen stays locked, and the time
+    // starts again only as the user unlocks it.
+    lock_screen(&mut wm);
+    assert_eq!(wm.user_active(AGENT, 150 * S), Ok(()));
+    assert!(wm.locked());
+    assert_eq!(wm.idle_deadline(), None);
+    wm.unlock(LOCK, 300 * S).unwrap();
+    assert_eq!(wm.idle_deadline(), Some(360 * S));
+}
+
+#[test]
+fn full_screen_alone_does_not_keep_the_screen_awake() {
+    let mut wm = wm();
+    let app = desktop(&mut wm);
+    draw(&mut wm, APP, app, 600, 400);
+    wm.set_window_state(APP, app, WindowState::Fullscreen, 0).unwrap();
+    wm.set_idle_timeout(LOCK, 60).unwrap();
+    // A film paused full screen, or a picture: the screen locks all the
+    // same.
+    assert!(!wm.kept_awake());
+    assert!(wm.check_idle(60 * S) && wm.locked());
 }

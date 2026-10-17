@@ -248,6 +248,9 @@ pub struct UiState {
     pub tooltip: Option<(Id, u64)>,
     /// The title last set with `Ui::set_title`.
     pub title: String,
+    /// Whether the window keeps the screen awake, as last asked with
+    /// `Ui::keep_awake`.
+    pub keep_awake: bool,
     /// The values [`Ui::animate`] moves, by widget. A widget's id may
     /// change as it moves (a button's comes from its rectangle), so values
     /// no frame asked for in [`ANIMATION_FRAMES`] go: no longer drawn,
@@ -494,6 +497,17 @@ impl<'a> Ui<'a> {
         if self.state.title != title {
             self.state.title = title.into();
             let _ = self.ctx.display.set_title(self.ctx.window_id, title.into());
+        }
+    }
+
+    /// Keeps the screen from locking for want of input while `awake`, as
+    /// long as the window can be seen: for while something plays (a video,
+    /// a slideshow), not merely while the window is open
+    /// (`display::keep_awake`). A no-op when it is unchanged.
+    pub fn keep_awake(&mut self, awake: bool) {
+        if self.state.keep_awake != awake {
+            self.state.keep_awake = awake;
+            let _ = self.ctx.display.keep_awake(self.ctx.window_id, awake);
         }
     }
 

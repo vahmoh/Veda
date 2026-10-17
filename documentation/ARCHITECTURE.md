@@ -18,7 +18,7 @@ who may call what, and links to each subsystem's own document.
   [Storage and files](#storage-and-files), [Networking](#networking)
 - **Graphics:** [The window system](#the-window-system),
   [Displays and GPUs](#displays-and-gpus),
-  [The desktop shell](#the-desktop-shell),
+  [The shell](#the-shell), [The lock screen](#the-lock-screen),
   [Graphics and the toolkit](#graphics-and-the-toolkit),
   [OpenGL ES and the GPU](#opengl-es-and-the-gpu)
 - **Media and applications:** [Audio](#audio), [Video](#video),
@@ -54,6 +54,7 @@ who may call what, and links to each subsystem's own document.
 | `netd`, `wlan` | the network and Wi-Fi services | yes |
 | `devmgr` | devices, drivers and the driver VM | no: it owns the running drivers |
 | `compositor` | the window system | yes |
+| `lock` | the lock screen | yes |
 | `audio` | the sound mixer | yes |
 | `agent` | the voice agent | yes |
 | `shell` | the desktop shell | yes |
@@ -65,9 +66,11 @@ says no driver is coming (`displaydev::expect`). The splash
 (`vsplash`) then fades in, and the desktop dissolves in with the startup
 sound once the desktop and the taskbar have each presented a frame, the
 splash has been up for 2.1 s and the shell has the sound ready (3 s at
-most). `init` asks for the sequence and the sound only at system start: a
-window system or shell restarted after a crash shows the desktop at once,
-silently.
+most). With a password set, the window system is still locked then, and
+the splash dissolves into the lock screen instead
+([The lock screen](#the-lock-screen)). `init` asks for the sequence and
+the sound only at system start: a window system or shell restarted after
+a crash shows the desktop (or the lock screen) at once, silently.
 
 **The live system** (`cargo orchestration iso`) is a hybrid ISO 9660 image
 that starts the same way from a disc, or from a USB stick it is written to
@@ -342,8 +345,8 @@ tested on the host.
   as a game does) and `present`s it. `FrameDone` comes once the compositor
   has taken the frame, freeing the buffer before it, pacing every client
   to the display without copying pixels, and says when the frame is seen.
-  A minimised window's frames are neither composed nor acknowledged until
-  it is shown again. Clients' memory is checked when attached and never
+  The frames of a window that cannot be seen (minimised, or behind the
+  lock) are neither composed nor acknowledged until it is shown again. Clients' memory is checked when attached and never
   borrowed as a Rust slice, since the client may be writing it.
 - **Composition** is damage driven, at most once per display frame. Where
   a display flips and the GPU can draw into its pictures, the GPU composes
@@ -375,10 +378,43 @@ tested on the host.
 - **Who may do what**, by identity: the desktop, panels, notifications,
   managing other windows and the start menu's and agent's keys are the
   shell's; listing the windows is the shell's and the agent's; the
-  clipboard is the focused window's process's (the shell may set it too).
-  Only drivers (`devmgr`'s, and the driver VM's programs, which speak as
-  `devmgr`) report input or attach a display. A process has at most 64
-  windows and 16 screens' worth of buffers.
+  clipboard is the focused window's process's (the shell may set it too);
+  lock screens, unlocking and the idle timeout are the lock service's,
+  locking is the shell's, the agent's and the lock service's, and saying
+  that the user is there the agent's; a client keeps the screen awake only
+  from its own windows. Only drivers
+  (`devmgr`'s, and the driver VM's programs, which speak as `devmgr`)
+  report input or attach a display. A process has at most 64 windows and
+  16 screens' worth of buffers.
+- **The lock** (`compositor-core`'s `lock`). While the screen is locked,
+  the compositor draws only the lock service's windows (`WindowKind::Lock`,
+  above every other layer), over a backdrop of its own until one has drawn
+  itself; only they take the focus and the pointer, and the window keys do
+  nothing. It locks at once when asked (`display::lock`) or on Super+L,
+  ending a move, the switcher and popups; it unlocks only for the lock
+  service (`display::unlock`), the focus going back to the window that had
+  it. With the lock screen installed, `init` starts it locked (`locked`),
+  after a crash too. System services watch the lock (`display::watch_lock`):
+  each hears how it is, then every change.
+- **The idle lock** (`compositor-core`'s `idle`). The compositor also locks
+  once no input has come for the time the lock service sets
+  (`display::set_idle_timeout`, 0 for never, as until it is set). The time
+  counts from the last input from a driver, the last unlock, or the moment
+  the screen stopped being kept awake, so that a film that ends leaves the
+  user the whole time; setting it again does not start it again, so that a
+  lock service that keeps restarting cannot hold the lock off. A window
+  keeps the screen awake while its client asks (`display::keep_awake`:
+  Videos while a video plays, Photos during a slideshow, Interceptor while
+  a game is in play) and while it can be seen: neither minimised nor
+  hidden whole by a window above it. Being full screen is not enough, so
+  that a film paused and left full screen, or a picture, does not keep an
+  unattended computer unlocked; as with Android's `FLAG_KEEP_SCREEN_ON` and
+  Wayland's idle inhibitors, the application says when something plays.
+  The agent alone may say that the user is there (`display::user_active`,
+  doing nothing while the screen is locked), which counts as input: it
+  does while the user talks with it, so that a conversation held
+  hands-free does not end as the screen locks, and never for what it
+  overhears ([The voice agent](#the-voice-agent)).
 - **Events and input.** Events to a client that falls behind wait in the
   compositor, merged so that nothing that carries state is lost (a press is
   dropped only with its release). One loop serves the input drivers first,
@@ -406,9 +442,23 @@ their drivers' quirks and firmware.
   VM gets QEMU's VGA (Linux's bochs driver) and a virtio-gpu (Mesa's
   virgl), whose virglrenderer renders on the host's GPU.
 
-## The desktop shell
+## The shell
 
-The shell (`implementation/applications/shell`) is an ordinary process that
+What the user sees of the system, apart from the applications, is
+`implementation/shell/`'s: the splash's picture, the desktop and the lock
+screen, each trusted by the window system for different things, and what
+they share.
+
+| Component | What it is |
+|-----------|------------|
+| `splash` (`vsplash`) | the startup splash's picture (a dark gradient and the Veda ring), which the compositor draws as the system starts, by the processor and the GPU alike |
+| `desktop` (`shell`) | the desktop shell: the system service `shell` |
+| `lock` (`lock`), `lock/core` (`lock-core`) | the lock screen: the system service `lock`, and what it decides, tested on the host |
+| `common` (`shell-common`) | what the desktop and the lock screen share: the wallpaper and its blurred copy, and OS1's ring and coil |
+
+### The desktop shell
+
+The shell (`implementation/shell/desktop`) is an ordinary process that
 the compositor trusts as the system service `shell`. Its surfaces (the
 desktop, the taskbar, the start menu and calendar, notifications) are
 `vui::Host`s that draw from one shared model and change it through actions
@@ -422,10 +472,65 @@ refreshed on `WindowsChanged`), installed applications from the launcher.
   firewall's questions, whose buttons take clicks only a second after they
   appear.
 - **Restart and Shut down** ask every application window to close, as its
-  close button would, and power off once none is left.
+  close button would, and power off once none is left. **Lock**, in the
+  start menu beside Settings and the power button, asks the compositor to
+  lock the screen.
 - **Timeouts.** The shell waits at most ten seconds for a service it calls
   (two minutes for the disk to be written before power-off), so that a
   hung service cannot freeze the desktop.
+
+### The lock screen
+
+The lock service (`implementation/shell/lock`) shows the lock screen
+while the screen is locked, asks for the password, and alone unlocks the
+screen. The compositor keeps the lock ([The window system](#the-window-system));
+the service watches it and shows its window whenever it is locked.
+
+- **The password** is Settings' to set, change and remove, through the
+  `lock` protocol (`vproto::lock`), giving the one set now each time.
+  The service keeps only a salted Argon2id hash of it, in the PHC string
+  format (19 MiB of memory and two passes, OWASP's choice), in its private
+  directory (`/home/.private/lock`), written whole under another name and
+  put in place in one step. A record read back is checked: only Argon2id
+  1.3, and parameters within what checking may cost.
+- **Checking** runs on a thread of its own, so that the screen keeps
+  drawing (a light runs round the ring) while Argon2 takes its fraction of
+  a second. The comparison is constant-time, and what was typed is wiped
+  from memory once checked. The field takes the keyboard alone: nothing is
+  copied from it or pasted into it (`vui`'s `secret_input`).
+- **Wrong passwords** cost nothing for the first four; each one after that
+  makes the next wait, 30 s, then 1, 5 and 15 minutes (`lock_core::throttle`).
+  The count is kept on disk, so that restarting the service (or the
+  computer) gains nothing; Settings' wrong passwords count too.
+- **At start**, with a password set, the lock screen asks for it; with
+  none, the service unlocks the screen at once, and the desktop appears as
+  it would without a lock. Locked later, the lock screen shows either way;
+  with no password, Enter unlocks it.
+- **Locking by itself.** Settings chooses how long the screen waits without
+  input before it locks: never, or 1, 5, 15 or 30 minutes
+  (`lock::set_idle_timeout`; Settings alone reads and chooses it, and only
+  those times are taken), kept in the private directory. Until a time is
+  chosen it follows the password (`lock_core::idle`): 5 minutes while one
+  is set, never while none is. A password says the computer is to be kept
+  from others, which an unattended unlocked screen defeats, and the major
+  desktops lock an idle one by default; without one, the lock screen keeps
+  nothing from anyone, and locking it unasked would only interrupt. The
+  service tells the compositor the time (`display::set_idle_timeout`)
+  whenever it reaches it, after a restart of either, and whenever the time
+  changes; the compositor keeps it, and what holds it off
+  ([The window system](#the-window-system)).
+- **Failing safe.** A lock service that crashes leaves the screen locked,
+  showing the compositor's backdrop, until `init` starts it again; a
+  compositor that crashes starts again locked; a record that is there but
+  cannot be read lets no password unlock the screen. The agent stops
+  listening while the screen is locked ([The voice agent](#the-voice-agent)).
+- **What it shows.** Resting, the wallpaper (the desktop's) under a veil,
+  the time large and the date; a key or a click raises the card, over the
+  wallpaper blurred: the user's picture in the ring of Veda's figure, the
+  password field and a line for what the user should know (a wrong
+  password, the wait, Caps Lock). Unlocking, the ring swells and fades and
+  the screen fades out over the desktop. Its states, timings and layout
+  are `lock-core`'s, tested on the host on screens from 640x480 to 4K.
 
 ## Graphics and the toolkit
 
@@ -639,6 +744,18 @@ the actions every `vui` application offers over the `agentapp` protocol
 - **Consent, by identity.** Actions that need consent wait for an approval
   that only the shell may give; only Settings may change the agent's
   settings.
+- **The lock.** While the screen is locked, the agent neither listens for
+  its name nor holds a conversation ([The lock screen](#the-lock-screen)).
+  While it is unlocked, the agent tells the window system that the user is
+  there as they talk with it (`vagent::presence`), which counts as input
+  for the idle lock: in a conversation they asked for (a click,
+  Super+Space, its name), when Deepgram hears them start to speak and
+  gives their words, and while its voice answers. Nothing it hears while
+  it only listens for its name counts, its name included, nor anything in
+  a conversation that a notice started (a reminder that came due): the
+  microphone hears whatever is said near the computer (a television,
+  people in the room), and if that counted, an unattended computer would
+  stay unlocked while anyone talked near it.
 - **Private store.** The settings, the Deepgram key, memory and permissions
   live in `/home/.private/agent`. The worker reaches the user's files
   through a connection of its own, which has given up private access, and
@@ -723,7 +840,6 @@ Libraries are crates named after their directory with a `v` before it
 | `implementation/libraries/{ipc,proto}` | message encoding and the service protocols |
 | `implementation/libraries/{raster,font,image}` | vector rasterisation, fonts, images |
 | `implementation/libraries/{gfx,ui,text}` | 2D drawing, the GUI toolkit, the text editing model |
-| `implementation/libraries/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
 | `implementation/libraries/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
 | `implementation/libraries/{glsl,gl}` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
 | `implementation/libraries/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
@@ -736,6 +852,7 @@ Libraries are crates named after their directory with a `v` before it
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
 | `implementation/libraries/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
+| `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`splash`), the desktop shell (`desktop`), the lock screen (`lock`) and what they share (`common`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), and the fonts, unmodified |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), GUI and agent scripts |

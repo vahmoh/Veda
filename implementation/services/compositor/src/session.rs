@@ -110,4 +110,29 @@ impl display::Server for Session<'_> {
     fn close_window(&mut self, id: u32) -> Result<(), DisplayError> {
         self.comp.wm.close(self.client, id, self.now)
     }
+
+    fn lock(&mut self) -> Result<(), DisplayError> {
+        self.comp.wm.lock(self.client, self.now)
+    }
+
+    fn unlock(&mut self) -> Result<(), DisplayError> {
+        self.comp.wm.unlock(self.client, self.now)
+    }
+
+    fn watch_lock(&mut self, events: Channel) -> Result<(), DisplayError> {
+        self.comp.wm.may_watch_lock(self.client)?;
+        self.comp.watch_lock(events)
+    }
+
+    fn set_idle_timeout(&mut self, seconds: u32) -> Result<(), DisplayError> {
+        self.comp.wm.set_idle_timeout(self.client, seconds)
+    }
+
+    fn keep_awake(&mut self, id: u32, awake: bool) -> Result<(), DisplayError> {
+        self.comp.wm.keep_awake(self.client, id, awake)
+    }
+
+    fn user_active(&mut self) -> Result<(), DisplayError> {
+        self.comp.wm.user_active(self.client, self.now)
+    }
 }

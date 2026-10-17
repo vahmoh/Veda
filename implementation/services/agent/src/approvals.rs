@@ -96,6 +96,10 @@ impl Agent {
                 tools::ok(Value::Null)
             }
             Outcome::Approval(p) => self.ask(p),
+            Outcome::Lock => match self.lock_screen() {
+                Ok(()) => tools::ok(serde_json::json!({ "locked": true })),
+                Err(e) => tools::error(e),
+            },
         };
         println!("result {} {}", name, content.chars().take(200).collect::<String>());
         self.send(&deepgram::function_response(&id, &name, &content));

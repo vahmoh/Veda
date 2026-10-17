@@ -4,7 +4,8 @@
 //! The rules that keep one process from harming others: what the kernel
 //! does with handles that travel on channels, how a server answers a request
 //! it cannot serve, what the launcher and the registry let an application
-//! do, and who may change how the network is set up.
+//! do, who may change how the network is set up, and who may lock and
+//! unlock the screen.
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -246,4 +247,45 @@ pub fn limits(target: Option<&String>) -> i32 {
     // Stay until the verdict is read (the channel's other end closes).
     let _ = report.wait(vabi::signals::PEER_CLOSED, vrt::time::deadline_after(vrt::time::Duration::from_secs(20)));
     i32::from(bits != verdict::ALL)
+}
+
+/// The lock is the system's: a program may neither lock nor unlock the
+/// screen, nor watch the lock, nor set the lock screen's password or when
+/// it locks by itself (Settings alone may), nor keep the screen awake from
+/// a window not its own. On a fresh system no password is set, and the
+/// lock service unlocks the screen the window system starts locked.
+pub fn test_the_lock() -> TestResult {
+    use vproto::display::{DisplayError, display};
+    use vproto::lock::{LockError, lock};
+    let d = display::Client::new(vproto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    check(matches!(d.lock(), Ok(Err(DisplayError::Denied))), "a program may not lock the screen")?;
+    check(matches!(d.unlock(), Ok(Err(DisplayError::Denied))), "a program may not unlock the screen")?;
+    let (_ours, theirs) = Channel::create().map_err(|e| e.to_string())?;
+    check(matches!(d.watch_lock(theirs), Ok(Err(DisplayError::Denied))), "a program may not watch the lock")?;
+    // Asked for never, which would change nothing on a fresh system were
+    // it taken.
+    let idle = d.set_idle_timeout(0);
+    check(matches!(idle, Ok(Err(DisplayError::Denied))), "a program may not set the idle timeout")?;
+    let awake = d.keep_awake(u32::MAX, true);
+    check(matches!(awake, Ok(Err(DisplayError::NoSuchWindow))), "a program keeps the screen awake from its windows")?;
+    let active = d.user_active();
+    check(matches!(active, Ok(Err(DisplayError::Denied))), "a program may not say that the user is there")?;
+    let l = lock::Client::new(vproto::connect(lock::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let set = l.set_password(String::new(), "veda1234".into());
+    check(matches!(set, Ok(Err(LockError::Denied))), "a program may not set the lock screen's password")?;
+    check(matches!(l.idle_timeout(), Ok(Err(LockError::Denied))), "a program may not read when the screen locks")?;
+    let idle = l.set_idle_timeout(0);
+    check(matches!(idle, Ok(Err(LockError::Denied))), "a program may not choose when the screen locks")?;
+    let start = vrt::time::Instant::now();
+    loop {
+        let s = l.status().map_err(|e| e.to_string())?;
+        check(!s.password, "no password is set on a fresh system")?;
+        if !s.locked {
+            return Ok(());
+        }
+        if start.elapsed().as_millis() > 20_000 {
+            return Err("the lock service did not unlock the screen".into());
+        }
+        vrt::time::sleep(vrt::time::Duration::from_millis(100));
+    }
 }

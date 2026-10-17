@@ -17,6 +17,8 @@
 //!   ([`agent`], [`approval`]);
 //! * the **firewall**'s questions: whether an application may accept
 //!   connections from other machines ([`firewall`]);
+//! * **locking the screen** (the start menu's lock), which the window
+//!   system does and the lock screen undoes (`implementation/shell/lock`);
 //! * **restarting and shutting down** once the applications have closed
 //!   ([`power`]).
 //!
@@ -38,15 +40,14 @@ mod desktop;
 mod firewall;
 mod notify;
 mod power;
-mod presence;
 mod start;
 mod startup;
 mod taskbar;
 mod tooltip;
 mod volume;
-mod wallpaper;
 mod wifi;
 
+use shell_common::wallpaper::{self, Loader, Wallpaper};
 use vabi::{WaitItem, signals};
 use vgfx::Rect;
 use vipc::{Decode, Encode};
@@ -59,13 +60,6 @@ use vrt::object::{Channel, Message, Vmo};
 use vrt::println;
 use vui::window::Display;
 use vui::{Host, Icon, Ui};
-
-use wallpaper::{Loader, Wallpaper};
-
-/// Where the chosen wallpaper is remembered.
-const WALLPAPER_CONFIG: &str = "/home/user/.config/wallpaper";
-/// The longest wallpaper path remembered (bytes).
-const MAX_WALLPAPER_PATH: u64 = 4096;
 
 /// How often the desktop looks whether `~/Desktop` or the Trash changed.
 const DESKTOP_POLL_NS: u64 = 1_500_000_000;
@@ -153,6 +147,8 @@ pub enum Action {
     SetVolume(f32, bool),
     /// Minimises every window, or restores them if the desktop is showing.
     ShowDesktop,
+    /// Locks the screen.
+    Lock,
     /// Restarts or shuts down (`power::REBOOT`, `power::SHUTDOWN`) once
     /// the applications have closed.
     Power(u32),
@@ -320,18 +316,6 @@ pub fn connect_running(name: &str) -> Option<Channel> {
     if names.iter().any(|n| n == name) { vproto::connect(name).ok() } else { None }
 }
 
-/// Reads a whole file of at most `max` bytes (`None` for a larger one,
-/// whatever wrote it).
-pub fn read_file(vfs: &vfs::Client, path: &str, max: u64) -> Option<Vec<u8>> {
-    let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;
-    if len > max {
-        return None;
-    }
-    let mut buf = vec![0u8; len as usize];
-    vmo.read(0, &mut buf).ok()?;
-    Some(buf)
-}
-
 /// Replaces a file's contents, creating parent directories as needed.
 fn write_file(vfs: &vfs::Client, path: &str, data: &[u8]) -> bool {
     let mut dir = String::new();
@@ -388,7 +372,7 @@ impl Shell {
 
     fn set_wallpaper(&mut self, wp: Wallpaper) {
         if let Some(vfs) = &self.vfs {
-            write_file(vfs, WALLPAPER_CONFIG, wp.path.as_bytes());
+            write_file(vfs, wallpaper::CONFIG, wp.path.as_bytes());
         }
         self.model.wallpaper = wp;
         self.model.wallpaper_generation += 1;
@@ -991,6 +975,12 @@ impl Shell {
                 }
                 Action::SetVolume(v, muted) => self.set_volume(v, muted),
                 Action::ShowDesktop => self.show_desktop(),
+                Action::Lock => {
+                    self.close_popup_of(PopupKind::Start);
+                    if !matches!(self.display.lock(), Ok(Ok(()))) {
+                        println!("the window system did not lock the screen");
+                    }
+                }
                 Action::Power(what) => {
                     self.close_popup_of(PopupKind::Start);
                     self.begin_power_off(what);
@@ -1443,21 +1433,7 @@ fn run() -> i32 {
     let mut apps = launcher.as_ref().and_then(|l| l.apps().ok()).unwrap_or_default();
     apps::sort(&mut apps);
 
-    // The remembered wallpaper, else the first one installed.
-    let saved = vfs
-        .as_ref()
-        .and_then(|v| read_file(v, WALLPAPER_CONFIG, MAX_WALLPAPER_PATH))
-        .and_then(|b| String::from_utf8(b).ok());
-    let installed = vfs.as_ref().map(wallpaper::list).unwrap_or_default();
-    let candidates = saved.into_iter().chain(installed.into_iter().take(1));
-    let mut wp = None;
-    for path in candidates {
-        wp = Wallpaper::open(vfs.as_ref(), &path, screen.w, screen.h).ok();
-        if wp.is_some() {
-            break;
-        }
-    }
-    let wallpaper = wp.unwrap_or_else(|| Wallpaper::procedural(screen.w, screen.h));
+    let wallpaper = wallpaper::chosen(vfs.as_ref(), screen.w, screen.h);
 
     let mut spec = WindowSpec::new("Desktop", screen.w as u32, screen.h as u32);
     spec.kind = WindowKind::Desktop;

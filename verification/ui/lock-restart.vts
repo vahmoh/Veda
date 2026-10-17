@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The lock outlasts what keeps it (1280x800), with a password set. The lock
+# service is ended while the screen is locked: the screen stays locked
+# until init starts the service again, which shows the lock screen again.
+# Then the window system is ended while the screen is unlocked: it starts
+# again locked, and the lock screen asks for the password.
+fail-on "PANIC"
+boot-cmdline "run=settings:lock"
+wait-serial "desktop ready" 90
+wait-serial "started settings" 60
+wait 4
+type "veda1234"
+key tab
+type "veda1234"
+key ret
+wait-serial "lock: the password was set" 60
+checkpoint
+# The Terminal ends the lock service a few seconds after the screen locks.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "sleep 4; kill -f lock"
+key ret
+key meta_l-l
+wait-serial "lock: the screen is locked" 20
+wait-serial "restarting lock" 30
+wait-serial "lock: ready (a password is set)" 30
+wait-serial "lock: the screen is locked" 30
+# Locked all along: nothing unlocked it while the service was away.
+reject-serial "compositor: the screen is unlocked"
+wait 3
+shot target/veda/lock-restart.png
+type "veda1234"
+key ret
+wait-serial "lock: unlocked (the password is right)" 30
+# The keyboard is the Terminal's again: it ends the window system.
+wait 3
+checkpoint
+type "sleep 3; kill -f compositor"
+key ret
+wait-serial "restarting compositor" 30
+wait-serial "lock: the screen is locked" 30
+wait-serial "desktop ready" 60
+reject-serial "compositor: the screen is unlocked"
+wait 3
+shot target/veda/lock-restart-compositor.png
+type "veda1234"
+key ret
+wait-serial "lock: unlocked (the password is right)" 30

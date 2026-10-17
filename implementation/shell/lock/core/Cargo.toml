@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "lock-core"
+description = "What the lock screen decides, tested on the host: its password's record, the wait after wrong passwords, how long the screen waits without input, its states and its layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2 = { workspace = true }
+libm = { workspace = true }
+vgfx = { workspace = true }
+vproto = { workspace = true }
+
+[lints]
+workspace = true

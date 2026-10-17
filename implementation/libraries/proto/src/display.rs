@@ -24,6 +24,27 @@
 //! notifications, managing other windows and hearing the shell's keys are
 //! the shell's (the system service `shell`), listing the windows the
 //! shell's and the agent's, the clipboard the focused window's process's.
+//!
+//! **The lock.** While the screen is locked, the window system draws only
+//! the lock screen's windows (the system service `lock`'s), and only they
+//! hear the keyboard and the pointer; its own shortcuts do nothing. It
+//! locks at once when asked (by the shell, the agent or the lock service,
+//! or with Super+L), and only the lock service unlocks it. A window
+//! system started with the lock screen installed starts locked, after a
+//! crash too: it is for the lock service to unlock it, at once if no
+//! password is set. Until a lock screen has drawn itself, the window
+//! system draws its own backdrop, so nothing is shown that the lock hides.
+//!
+//! **The idle lock.** The window system also locks the screen once no
+//! input has come for the time the lock service sets (`set_idle_timeout`;
+//! never until it does), unless a window keeps the screen awake: one whose
+//! client asks it to (`keep_awake`, while a video plays, say) and that can
+//! be seen. Being full screen is not enough, so that a film paused and left
+//! full screen does not keep an unattended computer unlocked. The agent
+//! alone may say that the user is there (`user_active`), which counts as
+//! input: it does while the user talks with it in a conversation they asked
+//! for, and never for what it overhears while it listens for its name, so
+//! that talk near an unattended computer does not keep it unlocked.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -71,6 +92,10 @@ enumeration! {
         Popup = 5,
         /// A notification bubble (shell only), above windows, no focus.
         Notification = 6,
+        /// The lock screen (the lock service only): the whole screen, above
+        /// everything. While the screen is locked only lock screens are
+        /// drawn, and only they hear the keyboard and the pointer.
+        Lock = 7,
     }
 }
 
@@ -240,6 +265,19 @@ union! {
 /// Ordinal of window events on the event channel.
 pub const EVENT: u32 = 1;
 
+union! {
+    /// Notices on a channel given to [`display::Client::watch_lock`].
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum LockNotice {
+        /// The screen is locked, or not: the first notice says how it is
+        /// as the channel is taken, each one after that a change.
+        1 => Changed { locked: bool },
+    }
+}
+
+/// Event ordinal of [`LockNotice`]s on a lock watch channel.
+pub const LOCK_NOTICE: u32 = 1;
+
 protocol! {
     /// The window system.
     pub mod display = "display" {
@@ -294,5 +332,34 @@ protocol! {
         /// been seen long enough (telling it [`WindowEvent::Appearing`]).
         /// Without it, it waits a little, then dissolves all the same.
         25 => fn desktop_ready() -> Result<(), DisplayError>;
+        /// Locks the screen at once (see the module's documentation): the
+        /// shell, the agent and the lock service may (`Denied` for others).
+        26 => fn lock() -> Result<(), DisplayError>;
+        /// The lock service only: unlocks the screen (`Denied` for others).
+        27 => fn unlock() -> Result<(), DisplayError>;
+        /// Sends [`LockNotice`]s (ordinal [`LOCK_NOTICE`]) on `events`:
+        /// whether the screen is locked, then every change, until it is
+        /// closed. System services only (`Denied` for others); `NoMemory`
+        /// past a few watchers.
+        28 => fn watch_lock(events: Channel) -> Result<(), DisplayError>;
+        /// The lock service only (`Denied` for others): locks the screen
+        /// once no input has come for `seconds` (0: never), unless a window
+        /// keeps it awake (`keep_awake`). The time counts from the last
+        /// input, unlock or moment the screen stopped being kept awake. It
+        /// holds until it is set again, and goes with the window system:
+        /// the lock service sets it again as it reconnects.
+        29 => fn set_idle_timeout(seconds: u32) -> Result<(), DisplayError>;
+        /// While `awake`, window `id` keeps the screen from locking for
+        /// want of input, as long as it can be seen: neither minimised nor
+        /// hidden whole by a window above it. For an application while
+        /// something plays (a video, a slideshow, a game), not merely while
+        /// it is open. A client's own normal and borderless windows only
+        /// (`NoSuchWindow` for another's, `Invalid` for other kinds).
+        30 => fn keep_awake(id: u32, awake: bool) -> Result<(), DisplayError>;
+        /// The agent only (`Denied` for others): the user is there, though
+        /// no input came (they talk with it, hands-free), which counts as
+        /// input for the idle lock. It does nothing while the screen is
+        /// locked.
+        31 => fn user_active() -> Result<(), DisplayError>;
     }
 }

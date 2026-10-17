@@ -34,7 +34,7 @@ and the applications.
   <tr>
     <td width="33%" valign="top"><b>A microkernel in Rust</b><br>Capabilities, SMP, and services in user space that restart by themselves. Applications get Rust's standard library.</td>
     <td width="33%" valign="top"><b>Linux's drivers, contained</b><br>Linux drives the hardware in a VM on Veda's own hypervisor, held in by the IOMMU and restarted if it crashes.</td>
-    <td width="33%" valign="top"><b>A complete desktop</b><br>A compositing window system, OpenGL ES 3.0, GCC in the Terminal, WPA3 Wi-Fi and a firewall that asks first.</td>
+    <td width="33%" valign="top"><b>A complete desktop</b><br>A compositing window system, a lock screen, OpenGL ES 3.0, GCC in the Terminal, WPA3 Wi-Fi and a firewall that asks first.</td>
   </tr>
 </table>
 
@@ -63,6 +63,10 @@ and the applications.
   <tr>
     <td><p align="center"><b>Terminal</b></p><img src="documentation/images/gcc.png" alt="The Terminal, where GCC names an undeclared variable in a C program"></td>
     <td><p align="center"><b>Interceptor</b></p><img src="documentation/images/interceptor.png" alt="Interceptor: a chase at sunset on a road through the trees of the hills"></td>
+  </tr>
+  <tr>
+    <td><p align="center"><b>Lock screen</b></p><img src="documentation/images/lock.png" alt="The lock screen: the time and the date large over the wallpaper, and how to unlock"></td>
+    <td><p align="center"><b>Unlocking</b></p><img src="documentation/images/lock-password.png" alt="The lock screen asking for the password over the wallpaper blurred: the user's picture in Veda's ring, the password half typed"></td>
   </tr>
 </table>
 

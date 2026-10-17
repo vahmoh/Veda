@@ -21,6 +21,7 @@ pub mod gpu;
 pub mod init;
 pub mod input;
 pub mod instance;
+pub mod lock;
 pub mod media;
 pub mod net;
 pub mod netring;

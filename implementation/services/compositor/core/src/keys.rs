@@ -4,8 +4,9 @@
 //! The keyboard: keys go to the focused window, but for the window
 //! system's own shortcuts: Alt+Tab (the switcher), Alt+F4 (close),
 //! Super+arrows (snap, maximise, restore, minimise), Super+D (the desktop),
-//! Super alone (the start menu) and Super+Space (the agent), the last two
-//! told to the shell.
+//! Super+L (the lock), Super alone (the start menu) and Super+Space (the
+//! agent), the last two told to the shell. While the screen is locked, the
+//! lock screen hears every key, and no shortcut does anything.
 
 use alloc::vec::Vec;
 
@@ -25,9 +26,22 @@ impl<M> Wm<M> {
         let mods = out.modifiers;
         let alt = mods & modifiers::ALT != 0;
         let super_ = mods & modifiers::SUPER != 0;
+        let tapped = self.keyboard.take_meta_tap(code, pressed);
+        if self.locked {
+            // The lock screen's alone, as the user typed it (but for Super
+            // tapped, which the shell would hear).
+            if !tapped {
+                self.deliver_key(out);
+            }
+            return;
+        }
         // Super tapped on its own: the start menu.
-        if self.keyboard.take_meta_tap(code, pressed) {
+        if tapped {
             self.send_to_shell(WindowEvent::StartMenuKey {});
+            return;
+        }
+        if pressed && super_ && code == keys::L {
+            self.lock_now();
             return;
         }
         if pressed && alt && code == keys::TAB {

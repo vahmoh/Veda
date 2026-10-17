@@ -24,6 +24,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use vabi::RawHandle;
 use vagent::deepgram::{self, ServerMessage};
+use vagent::presence::Presence;
 use vnet::NetError;
 use vrt::object::Event;
 use vrt::sync::Mutex;
@@ -181,6 +182,9 @@ pub struct Session {
     /// it. A conversation that a notice started (a due reminder) is not
     /// attended until the user speaks.
     pub attended: bool,
+    /// What it has shown of the user, for the window system's idle lock
+    /// (see `vagent::presence`).
+    pub presence: Presence,
     pending_mic: VecDeque<i16>,
     pending_inject: Vec<String>,
     last_sent_ns: u64,
@@ -222,6 +226,7 @@ impl Session {
             unknown: BTreeSet::new(),
             cancelled: BTreeSet::new(),
             attended,
+            presence: Presence::new(attended),
             pending_mic: VecDeque::new(),
             pending_inject: Vec::new(),
             last_sent_ns: now,

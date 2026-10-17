@@ -276,6 +276,12 @@ impl Window {
     pub fn set_position(&self, x: i32, y: i32) {
         let _ = self.display.set_position(self.id, x, y);
     }
+
+    /// Keeps the screen from locking for want of input while `awake`, as
+    /// long as the window can be seen (`display::keep_awake`).
+    pub fn keep_awake(&self, awake: bool) {
+        let _ = self.display.keep_awake(self.id, awake);
+    }
 }
 
 impl Drop for Window {

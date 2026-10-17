@@ -27,12 +27,19 @@
 //! Ending its process is the launcher's (the task manager's), not the
 //! window system's.
 //!
+//! **The lock** (see [`crate::lock`]): while the screen is locked, only
+//! the lock service's windows are drawn and hear input, and nothing else
+//! takes the focus ([`Wm::focus`] refuses it). It also locks once no
+//! input has come for a while, unless a window keeps it awake (see
+//! [`crate::idle`]).
+//!
 //! **Sizes and states** reach a client as `Configure` events: one a frame
 //! at most for each window ([`Wm::flush_configures`]), however often the
 //! user's drag changes its size, and with `Minimized` when it goes to the
-//! taskbar. A window that cannot be seen is not composed again for its
-//! frames, and hears that they were shown (`FrameDone`) only once it can
-//! be seen again, so that a minimised video stops at the frame it was at.
+//! taskbar. A window that cannot be seen (minimised, or behind the lock) is
+//! not composed again for its frames, and hears that they were shown
+//! (`FrameDone`) only once it can be seen again, so that a minimised video
+//! stops at the frame it was at, and nothing draws for a locked screen.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
@@ -186,6 +193,18 @@ pub struct Wm<M> {
     dropped: Vec<u64>,
     /// Windows whose clients did not answer a request to close them.
     unresponsive: BTreeSet<u32>,
+    /// The screen is locked (see [`crate::lock`]), and the window that had
+    /// the focus as it was, which has it again once it is unlocked.
+    pub(crate) locked: bool,
+    pub(crate) unlocked_focus: Option<u32>,
+    /// The idle lock (see [`crate::idle`]): how long the screen waits
+    /// without input before it locks (ns; 0: never), since when it has
+    /// waited, whether it was kept awake at the last look, and the windows
+    /// whose clients ask to keep it awake.
+    pub(crate) idle_timeout: u64,
+    pub(crate) idle_since: u64,
+    pub(crate) idle_held: bool,
+    pub(crate) awake: BTreeSet<u32>,
     /// When the last frame is seen, and how often frames follow.
     frame: (u64, u64),
     /// The time of what is being done (ns): animations start then.
@@ -228,6 +247,12 @@ impl<M> Wm<M> {
             destroyed: Vec::new(),
             dropped: Vec::new(),
             unresponsive: BTreeSet::new(),
+            locked: false,
+            unlocked_focus: None,
+            idle_timeout: 0,
+            idle_since: 0,
+            idle_held: false,
+            awake: BTreeSet::new(),
             frame: (0, 0),
             now: 0,
         }
@@ -384,7 +409,7 @@ impl<M> Wm<M> {
         }
     }
 
-    fn role(&self, key: u64) -> Role {
+    pub(crate) fn role(&self, key: u64) -> Role {
         self.clients.get(&key).map_or(Role::App, |c| c.role)
     }
 
@@ -393,7 +418,7 @@ impl<M> Wm<M> {
     }
 
     /// Window `id`, if it is `client`'s.
-    fn own(&self, client: u64, id: u32) -> Result<&Window<M>, DisplayError> {
+    pub(crate) fn own(&self, client: u64, id: u32) -> Result<&Window<M>, DisplayError> {
         self.windows.get(&id).filter(|w| w.client == client).ok_or(DisplayError::NoSuchWindow)
     }
 
@@ -410,8 +435,12 @@ impl<M> Wm<M> {
         let caller = self.clients.get(&client).ok_or(DisplayError::Denied)?;
         let (role, koid) = (caller.role, caller.identity.koid);
         let kind = spec.kind;
-        // The desktop, panels and notifications are the shell's.
+        // The desktop, panels and notifications are the shell's; lock
+        // screens the lock service's.
         if matches!(kind, WindowKind::Desktop | WindowKind::Panel | WindowKind::Notification) && role != Role::Shell {
+            return Err(DisplayError::Denied);
+        }
+        if kind == WindowKind::Lock && role != Role::Lock {
             return Err(DisplayError::Denied);
         }
         // An application's popup is for its window that has the focus.
@@ -461,7 +490,7 @@ impl<M> Wm<M> {
         // The client may know its size already; it is told before it can
         // draw its first frame all the same.
         self.tell(id);
-        if matches!(kind, WindowKind::Normal | WindowKind::Borderless | WindowKind::Popup) {
+        if matches!(kind, WindowKind::Normal | WindowKind::Borderless | WindowKind::Popup | WindowKind::Lock) {
             self.raise(id);
             self.focus(Some(id));
         } else {
@@ -506,7 +535,7 @@ impl<M> Wm<M> {
     fn place(&self, kind: WindowKind, w: i32, h: i32, at: Option<(i32, i32)>) -> (Rect, bool) {
         let tb = if kind == WindowKind::Normal { TITLE_HEIGHT } else { 0 };
         match (kind, at) {
-            (WindowKind::Desktop, _) => (self.screen(), false),
+            (WindowKind::Desktop | WindowKind::Lock, _) => (self.screen(), false),
             (WindowKind::Popup, Some((x, y))) => (onto(self.screen(), Rect::new(x, y, w, h)), false),
             (_, Some((x, y))) => (Rect::new(x, y + tb, w, h), false),
             (_, None) => (auto_rect(self.work_area, w, h, tb), true),
@@ -551,12 +580,13 @@ impl<M> Wm<M> {
     pub fn present(&mut self, client: u64, id: u32, index: u8, damage: Vec<dp::Rect>) -> Result<(), DisplayError> {
         self.own(client, id)?;
         let rects = damage.into_iter().map(limits::rect).collect::<Result<Vec<Rect>, DisplayError>>()?;
+        let shown = self.windows.get(&id).is_some_and(|w| self.shown(w));
         let Some(w) = self.windows.get_mut(&id) else { return Err(DisplayError::NoSuchWindow) };
         let p = w.surface.present(index, &rects)?;
         self.owed.insert(id);
-        // A window that cannot be seen is not composed again; its frame is
-        // acknowledged once it can be.
-        if !w.visible() {
+        // A window that cannot be seen (minimised, or behind the lock) is
+        // not composed again; its frame is acknowledged once it can be.
+        if !shown {
             return Ok(());
         }
         let c = w.client_rect;
@@ -900,6 +930,7 @@ impl<M> Wm<M> {
         self.animated.remove(&id);
         self.asked.remove(&id);
         self.owed.remove(&id);
+        self.awake.remove(&id);
         self.desktop_shown.retain(|&x| x != id);
         self.destroyed.push(id);
         if self.hover_window == Some(id) {
@@ -983,6 +1014,7 @@ impl<M> Wm<M> {
             WindowKind::Panel => 2,
             WindowKind::Popup => 4,
             WindowKind::Notification => 5,
+            WindowKind::Lock => 6,
         }
     }
 
@@ -1030,9 +1062,10 @@ impl<M> Wm<M> {
     }
 
     /// Gives the keyboard to window `id` (or to none). Popups the focus is
-    /// not in (or below) are hidden.
+    /// not in (or below) are hidden. While the screen is locked, nothing but
+    /// a lock screen takes it.
     pub(crate) fn focus(&mut self, id: Option<u32>) {
-        if self.focused == id {
+        if self.focused == id || id.is_some_and(|i| self.windows.get(&i).is_none_or(|w| !self.reachable(w))) {
             return;
         }
         let old_root = self.focus_root();
@@ -1063,8 +1096,13 @@ impl<M> Wm<M> {
         self.notify_shell();
     }
 
-    /// Focuses the topmost normal window that can be seen.
+    /// Focuses the topmost normal window that can be seen (while the
+    /// screen is locked, the topmost lock screen).
     pub(crate) fn focus_top(&mut self) {
+        if self.locked {
+            let top = self.top_lock();
+            return self.focus(top);
+        }
         let top = self
             .order
             .iter()
@@ -1361,7 +1399,7 @@ impl<M> Wm<M> {
     pub fn frames_done(&mut self, seen: u64, period: u64) {
         self.frame = (seen, period);
         let shown: Vec<u32> =
-            self.owed.iter().copied().filter(|id| self.windows.get(id).is_some_and(|w| w.visible())).collect();
+            self.owed.iter().copied().filter(|id| self.windows.get(id).is_some_and(|w| self.shown(w))).collect();
         for id in shown {
             self.release_frame(id);
         }

@@ -270,7 +270,16 @@ fn main() -> i32 {
         gpu_setup: None,
         gpu_tried: None,
         gpu_losses: 0,
+        lock_watchers: Vec::new(),
+        told_locked: false,
     };
+    // With the lock screen installed, the window system starts locked, at
+    // system start and after a crash alike: the lock service unlocks it
+    // (at once, if no password is set).
+    if vrt::env::args().iter().any(|a| a == "locked") {
+        comp.wm.lock_at_start();
+        comp.told_locked = true;
+    }
     // At system start (not after a restart), the screen stays black until
     // the display is up, then the splash fades in, comes to life and
     // dissolves into the desktop once it has drawn itself.
@@ -330,6 +339,7 @@ fn main() -> i32 {
         until(comp.gpu_deadline());
         until(comp.wm.repeat_deadline());
         until(comp.wm.liveness_deadline());
+        until(comp.wm.idle_deadline());
         ws.clear();
         for (&k, c) in &inputs {
             ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, INPUT_BASE | k);
@@ -477,6 +487,10 @@ fn main() -> i32 {
         comp.wm.repeat(now);
         if comp.wm.liveness_deadline().is_some_and(|t| now >= t) {
             comp.wm.check_liveness(now);
+        }
+        // After everything that may have kept the screen awake, or stopped.
+        if comp.wm.check_idle(now) {
+            println!("no input for {} s: the screen locks", comp.wm.idle_timeout() / 1_000_000_000);
         }
         comp.settle();
         // A frame the GPU draws that takes too long.

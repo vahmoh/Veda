@@ -149,8 +149,9 @@ impl StartupSound {
 /// Opens a stream that holds the whole sound, paused, and writes it: the
 /// stream, and how long the sound is (ms).
 fn ready(audio: &audio::Client, vfs: Option<&vfs::Client>) -> Result<(OutputStream, u64), &'static str> {
-    let bytes =
-        vfs.and_then(|v| crate::read_file(v, PATH, MAX_BYTES)).ok_or("cannot read /system/sounds/startup.wav")?;
+    let bytes = vfs
+        .and_then(|v| shell_common::read_file(v, PATH, MAX_BYTES))
+        .ok_or("cannot read /system/sounds/startup.wav")?;
     let info = WavInfo::parse(&bytes).map_err(|_| "/system/sounds/startup.wav is not a WAV file")?;
     let frames = (info.frames as usize).min(MAX_FRAMES);
     let mut pcm = vec![0i16; frames * 2];

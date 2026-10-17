@@ -23,10 +23,10 @@ pub const DOUBLE_CLICK_NS: u64 = 400_000_000;
 
 impl<M> Wm<M> {
     /// The topmost window the pointer reaches at the point, and the part of
-    /// it there.
+    /// it there (while the screen is locked, a lock screen's).
     pub fn window_at(&self, x: i32, y: i32) -> Option<(u32, Part)> {
         self.order.iter().rev().find_map(|id| {
-            let w = self.windows.get(id).filter(|w| w.interactive())?;
+            let w = self.windows.get(id).filter(|w| w.interactive() && self.reachable(w))?;
             w.hit(x, y).map(|part| (*id, part))
         })
     }
@@ -262,6 +262,8 @@ impl<M> Wm<M> {
                 self.focus(Some(id));
             }
             WindowKind::Popup => self.focus(Some(id)),
+            // A lock screen keeps the keyboard it has.
+            WindowKind::Lock => self.focus(Some(id)),
             // Pressing the desktop, a panel or a notification closes popups.
             WindowKind::Desktop | WindowKind::Panel | WindowKind::Notification => self.close_popups(),
         }

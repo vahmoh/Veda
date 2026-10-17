@@ -96,6 +96,9 @@ pub enum Outcome {
     Approval(Pending),
     /// The agent wants to end the conversation.
     End,
+    /// The agent locks the screen. The main loop does, then gives the
+    /// conversation the result, which reaches it before the lock ends it.
+    Lock,
 }
 
 /// A finished call.
@@ -331,6 +334,7 @@ impl Ctx {
             names::NOTIFY => self.notify(args),
             names::TIMER => self.timer(args),
             names::MEMORY => self.memory(args),
+            names::SYSTEM if args["operation"].as_str() == Some("lock") => return Outcome::Lock,
             names::SYSTEM => self.system(args),
             names::TASKS => self.tasks(args),
             names::END_CONVERSATION => return Outcome::End,

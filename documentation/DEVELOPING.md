@@ -186,6 +186,8 @@ driver VM; its log comes in Veda's (`drivervm: linux:`).
 | `compositor: the desktop appears (...)` | After `the shell did not say the desktop may appear` if the startup sound was late |
 | `compositor: desktop shown after N ms (...)` | From the window system's start: time black, the splash (at least 2.1 s), frame rate, and frames: in the firmware's framebuffer or a driver's flips (as many as vertical blanks: none missed), by the GPU or the processor |
 | `compositor: frames are drawn by the GPU (...)` | The GPU took over, or `frames stay with the processor:` why not |
+| `lock: ready (...)` | Whether a password is set; then `lock: unlocked (no password is set)` as the window system starts locked, or `lock: the screen is locked` and the lock screen asks for it |
+| `lock: the screen locks after N minutes without input` | The idle timeout the window system was told (or `... does not lock for want of input`); `compositor: no input for N s: the screen locks` when it does |
 | `shell: startup sound: playing` | The sound started, or why not |
 
 Linux's first commit kept the firmware's setup if it logs

@@ -1,17 +1,24 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Desktop wallpapers: loading from image files, a procedural default, and
-//! the blurred copy used for translucent ("mica") shell surfaces.
+//! Wallpapers: loading from image files, a procedural default, and the
+//! heavily blurred copy that the desktop's translucent ("mica") surfaces
+//! and the lock screen show.
 //!
-//! Decoding, scaling and blurring a large picture takes seconds, so once the
-//! desktop is up a [`Loader`] does it on a thread of its own: the taskbar,
-//! the menus and the agent's approvals stay responsive meanwhile, whoever
-//! asked for the picture.
+//! Decoding, scaling and blurring a large picture takes seconds, so a
+//! [`Loader`] does it on a thread of its own: the desktop's taskbar, menus
+//! and the agent's approvals, and the lock screen's password field, stay
+//! responsive meanwhile, whoever asked for the picture.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
+use alloc::collections::VecDeque;
+use alloc::format;
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
+// Float math under `no_std` (std, linked into host tests, has these inherently).
+#[allow(unused_imports)]
+use num_traits::Float;
 use vabi::RawHandle;
 use vgfx::Bitmap;
 use vproto::shell::ShellError;
@@ -23,6 +30,16 @@ pub const PROCEDURAL: &str = "procedural";
 
 /// The largest picture file taken for a wallpaper (bytes).
 const MAX_FILE: u64 = 64 << 20;
+
+/// How long the loader waits for the file system before it carries on
+/// without the picture.
+const VFS_TIMEOUT_NS: u64 = 10_000_000_000;
+
+/// Where the desktop shell remembers the wallpaper chosen (its path), for
+/// itself and for the lock screen.
+pub const CONFIG: &str = "/home/user/.config/wallpaper";
+/// The longest wallpaper path remembered (bytes).
+pub const MAX_PATH: u64 = 4096;
 
 /// The wallpaper at screen resolution plus a heavily blurred version.
 pub struct Wallpaper {
@@ -140,6 +157,26 @@ impl Wallpaper {
     }
 }
 
+/// The path of the wallpaper the user chose, as the desktop shell
+/// remembers it ([`CONFIG`]), if it remembers one.
+pub fn remembered(vfs: &vproto::vfs::Client) -> Option<String> {
+    crate::read_file(vfs, CONFIG, MAX_PATH).and_then(|b| String::from_utf8(b).ok())
+}
+
+/// The wallpaper the user chose, for a `w` x `h` screen: the one
+/// remembered, else the first installed, else (none can be read) the
+/// procedural one.
+pub fn chosen(vfs: Option<&vproto::vfs::Client>, w: i32, h: i32) -> Wallpaper {
+    let saved = vfs.and_then(remembered);
+    let installed = vfs.map(list).unwrap_or_default();
+    for path in saved.into_iter().chain(installed.into_iter().take(1)) {
+        if let Ok(wp) = Wallpaper::open(vfs, &path, w, h) {
+            return wp;
+        }
+    }
+    Wallpaper::procedural(w, h)
+}
+
 /// Wallpaper files shipped with the system, sorted by name.
 pub fn list(vfs: &vproto::vfs::Client) -> Vec<String> {
     let mut out = Vec::new();
@@ -222,7 +259,7 @@ impl Loader {
 fn work(shared: &Shared, ready: &Event) {
     let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
     if let Some(c) = &vfs {
-        c.set_timeout(crate::SERVICE_TIMEOUT_NS);
+        c.set_timeout(VFS_TIMEOUT_NS);
     }
     loop {
         let r = {
@@ -237,5 +274,35 @@ fn work(shared: &Shared, ready: &Event) {
         let result = Wallpaper::open(vfs.as_ref(), &r.path, r.width, r.height);
         shared.done.lock().push(Loaded { ticket: r.ticket, result });
         let _ = ready.signal();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_procedural_wallpaper_fills_the_screen_the_same_every_time() {
+        let a = Wallpaper::procedural(64, 40);
+        assert_eq!((a.image.width, a.image.height), (64, 40));
+        assert_eq!((a.blurred.width, a.blurred.height), (64, 40));
+        assert!(a.image.pixels.iter().all(|p| p >> 24 == 0xFF), "opaque");
+        assert_eq!(a.path, PROCEDURAL);
+        assert!(a.image.pixels == Wallpaper::procedural(64, 40).image.pixels);
+    }
+
+    #[test]
+    fn the_blurred_copy_is_the_pictures_size_and_soft() {
+        // A white square on black: blurred, its edge spreads.
+        let mut b = Bitmap::filled(80, 48, 0xFF00_0000);
+        for y in 16..32 {
+            for x in 32..48 {
+                b.pixels[(y * 80 + x) as usize] = 0xFFFF_FFFF;
+            }
+        }
+        let wp = Wallpaper::from_bitmap("square.png", b);
+        assert_eq!((wp.blurred.width, wp.blurred.height), (80, 48));
+        let level = |x: i32, y: i32| wp.blurred.get(x, y) & 0xFF;
+        assert!(level(40, 24) > level(26, 24) && level(26, 24) > 0, "{} {}", level(40, 24), level(26, 24));
     }
 }

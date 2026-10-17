@@ -8,6 +8,8 @@
 //! * A player: the video on a black stage, the controls over it (they go
 //!   while it plays), full screen, a seek bar with previews, and where each
 //!   video was left remembered between runs (`~/.config/videos/state`).
+//!   While a video plays, the screen does not lock for want of input
+//!   (`Ui::keep_awake`).
 //! * The decoding is done by `mediadec` (FFmpeg and dav1d) in a process of
 //!   its own that reaches nothing but what it is sent ([`engine`]); pictures
 //!   come through shared memory and are shown in time with the sound
@@ -587,6 +589,9 @@ impl App for Videos {
         }
         let title = self.title();
         ui.set_title(&title);
+        // The screen stays awake while a video plays, but not while it is
+        // paused or over, nor in the library.
+        ui.keep_awake(self.player.as_ref().is_some_and(Player::playing));
         if let Some(due) = self.save_due {
             if now >= due {
                 self.save_now();

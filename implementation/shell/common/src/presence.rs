@@ -12,11 +12,16 @@
 //!   into what lies behind it. Turned to face the viewer and brought closer,
 //!   it becomes the ring: OS1 starting up.
 //!
-//! Only shapes and numbers here; what the agent is doing decides which
-//! (see `agent::draw_presence`).
+//! Only shapes and numbers here: what the agent is doing decides which the
+//! desktop shows (its `agent::draw_presence`), and the lock screen draws
+//! the ring around the user.
 
+use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
 
+// Float math under `no_std` (std, linked into host tests, has these inherently).
+#[allow(unused_imports)]
+use num_traits::Float;
 use vgfx::{Canvas, Color, FillRule, Path};
 
 /// The ring's width relative to its radius.
@@ -309,4 +314,29 @@ pub fn coil(c: &mut Canvas, cx: f32, cy: f32, scale: f32, spin: f32, turn: f32, 
         run.push(i + 1);
     }
     draw(c, &run, run_level);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_ring_is_drawn_round_its_centre() {
+        let mut b = vgfx::Bitmap::new(100, 100);
+        ring(&mut Canvas::for_bitmap(&mut b), 50.0, 50.0, 30.0, 6.0, 0.0, 0.0, Color::WHITE);
+        let alpha = |x: i32, y: i32| b.get(x, y) >> 24;
+        // On the band, all round it; nothing in the hole or beyond.
+        for (x, y) in [(80, 50), (20, 50), (50, 80), (50, 20)] {
+            assert_eq!(alpha(x, y), 255, "({x}, {y})");
+        }
+        assert_eq!(alpha(50, 50), 0);
+        assert_eq!(alpha(50, 90), 0);
+    }
+
+    #[test]
+    fn the_coil_turned_to_face_the_viewer_is_the_rings_size() {
+        // Its near end, as large as it then appears, is the ring.
+        let r = 64.0;
+        assert!((coil_scale(r) * WIND * NEAR - r).abs() < 1e-3);
+    }
 }

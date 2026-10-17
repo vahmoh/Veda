@@ -24,8 +24,8 @@ vfiles = { workspace = true }
 vui = { workspace = true }
 vnet = { workspace = true }
 vaudio = { workspace = true }
-apps-common = { path = "../common" }
-
+apps-common = { path = "../../applications/common" }
+shell-common = { path = "../common" }
 
 [lints]
 workspace = true

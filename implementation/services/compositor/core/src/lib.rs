@@ -7,6 +7,9 @@
 //! * [`wm`]: the window manager ([`Wm`]): windows, stacking and focus,
 //!   window states and snapping, popups, who may do what, clients that do
 //!   not answer, and what each client hears.
+//! * [`lock`]: the locked screen, which shows and hears the lock screen
+//!   alone; [`idle`]: locking it once no input has come for a while,
+//!   unless a window keeps the screen awake.
 //! * [`pointer`] and [`keys`]: the pointer and the keyboard, and the window
 //!   system's shortcuts; [`input`]: input drivers' events, and what each
 //!   holds down; [`keymap`]: the keyboard's layout, modifiers and repeat;
@@ -25,10 +28,12 @@ extern crate std;
 
 pub mod buffers;
 pub mod clients;
+pub mod idle;
 pub mod input;
 pub mod keymap;
 pub mod keys;
 pub mod limits;
+pub mod lock;
 pub mod outbox;
 pub mod pointer;
 pub mod switcher;

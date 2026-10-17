@@ -114,8 +114,9 @@ fn test_launcher() -> TestResult {
 
 /// The supervisor in `init` restarts crashed system services: once the
 /// desktop is up, kill the compositor, then wait for a new one to answer
-/// display requests and for the desktop shell (which loses its windows with
-/// it) to come back.
+/// display requests, for the desktop shell (which loses its windows with
+/// it) to come back, and for the lock service to unlock the new one, which
+/// starts locked (no password is set).
 fn test_service_restart() -> TestResult {
     use vproto::display::display;
     let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
@@ -162,7 +163,18 @@ fn test_service_restart() -> TestResult {
         }
         let shell = koid_of(&l, "shell")?;
         if shell.is_some() && shell != shell_before && shell_up() {
+            break;
+        }
+        wait();
+    }
+    use vproto::lock::lock;
+    let lock = lock::Client::new(vproto::connect(lock::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    loop {
+        if !lock.status().map_err(|e| e.to_string())?.locked {
             return Ok(());
+        }
+        if start.elapsed().as_millis() > 40_000 {
+            return Err("the lock service did not unlock the new compositor".into());
         }
         wait();
     }
@@ -364,7 +376,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 29] = [
+    let tests: [Test; 30] = [
         ("ipc primitives", test_ipc_primitives),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
@@ -392,6 +404,7 @@ fn main() -> i32 {
         ("giving abilities up", posix::test_process_restrict),
         ("launcher", test_launcher),
         ("what applications may do", policy::test_application_limits),
+        ("the lock", policy::test_the_lock),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),
     ];

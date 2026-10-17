@@ -133,8 +133,9 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
   (`.cargo/arch/amd64/config.toml` gives the RustCrypto and dalek crates
   their portable code there, as LLVM cannot build their SIMD code for it).
   Building Veda (`cargo orchestration build`), whose programs on `vrt`
-  link without `std`, is the final check. `vimage`, for user space only, does not build soft-float
-  (`fast_image_resize`'s SIMD code).
+  link without `std`, is the final check. `vimage`, for user space only,
+  does not build soft-float (`fast_image_resize`'s SIMD code), nor does
+  `shell-common`, which decodes wallpapers with it.
 
 ## Pixels and colours
 

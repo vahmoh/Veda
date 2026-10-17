@@ -22,6 +22,7 @@ vgfx = { workspace = true }
 vfiles = { workspace = true, features = ["thumbnails"] }
 vui = { workspace = true }
 vnet = { workspace = true }
+zeroize = { workspace = true, features = ["alloc"] }
 
 [lints]
 workspace = true

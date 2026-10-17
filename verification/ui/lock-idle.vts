@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The idle lock (1280x800): Settings' Lock screen page chooses to lock
+# automatically after one minute; with nothing pressed or moved after that,
+# the screen locks by itself once the minute is up, and not before. With no
+# password set, Enter wakes the lock screen and Enter again unlocks it.
+fail-on "PANIC"
+boot-cmdline "run=settings:lock"
+wait-serial "desktop ready" 90
+wait-serial "started settings" 60
+wait 4
+# "1 minute", beside "Never", under "Lock automatically after".
+click 0.4453 0.7038
+wait-serial "lock: the screen locks after 1 minute without input" 30
+checkpoint
+wait 2
+shot target/veda/lock-idle-1-settings.png
+# No input from the click on: the screen locks a minute after it.
+wait 45
+reject-serial "lock: the screen is locked"
+wait-serial "compositor: no input for 60 s: the screen locks" 40
+wait-serial "lock: the screen is locked" 20
+wait 3
+shot target/veda/lock-idle-2-locked.png
+key ret
+wait 2
+key ret
+wait-serial "lock: unlocked (no password is set)" 30
+reject-serial "PANIC"

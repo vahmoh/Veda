@@ -8,8 +8,8 @@
 //!   directly).
 //! * The viewer ([`viewer`]) shows one picture: fitted to the window or zoomed (wheel, `+`/`-`,
 //!   `0`, `1`) and panned by dragging, rotated with `R`, with a filmstrip, an info panel, a
-//!   full-screen mode (`F11` or a double-click) and a full-screen slideshow (`S`). It can make
-//!   the picture the wallpaper.
+//!   full-screen mode (`F11` or a double-click) and a full-screen slideshow (`S`), which keeps
+//!   the screen from locking for want of input. It can make the picture the wallpaper.
 //! * [`agent`] lets the voice agent do the same.
 //!
 //! Files are read and decoded on background threads ([`loader`]); the UI thread only scales
@@ -499,6 +499,9 @@ impl App for Photos {
         }
         self.draw_toast(ui);
         self.sync_title(ui);
+        // A slideshow keeps the screen awake; a picture alone, even full
+        // screen, does not.
+        ui.keep_awake(self.slideshow.is_some());
     }
 
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {

@@ -3,7 +3,8 @@
 
 //! `system` and `tasks`: what the computer is, restarting and shutting it
 //! down, and the running programs (of which the agent may end only
-//! applications).
+//! applications). Locking the screen is the main loop's
+//! ([`super::Outcome::Lock`]).
 
 use serde_json::{Value, json};
 

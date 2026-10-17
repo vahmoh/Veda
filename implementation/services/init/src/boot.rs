@@ -17,15 +17,17 @@ use crate::{Init, Origin};
 /// System services in start order. File systems come first (everything
 /// else loads data through them), then the network and Wi-Fi services
 /// (drivers attach to them as they start), device management and drivers,
-/// the window system, audio, the voice agent and the desktop shell.
-const SERVICES: [&str; 8] = ["vfs", "netd", "wlan", "devmgr", "compositor", "audio", "agent", "shell"];
+/// the window system and the lock screen (which unlocks it), audio, the
+/// voice agent and the desktop shell.
+const SERVICES: [&str; 9] = ["vfs", "netd", "wlan", "devmgr", "compositor", "lock", "audio", "agent", "shell"];
 
 /// Services that are started again if they exit. They hold no state other
 /// processes cannot recover: drivers reconnect to a restarted compositor,
-/// network or Wi-Fi service, and the shell rebuilds its windows. (The file
-/// system and the device manager are not restarted: one holds the user's
-/// files, the other owns the running drivers.)
-pub const RESTARTABLE: [&str; 6] = ["compositor", "shell", "audio", "netd", "wlan", "agent"];
+/// network or Wi-Fi service, the shell rebuilds its windows, and the lock
+/// screen shows itself again on the screen the window system kept locked.
+/// (The file system and the device manager are not restarted: one holds
+/// the user's files, the other owns the running drivers.)
+pub const RESTARTABLE: [&str; 7] = ["compositor", "lock", "shell", "audio", "netd", "wlan", "agent"];
 
 fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
@@ -95,7 +97,9 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     // options of its own (`devmgr.NAME=VALUE`). At system start the window
     // system plays the startup sequence (`splash`) and the shell the
     // startup sound (`startup`, unless `startup-sound=off`); started again,
-    // they do neither.
+    // they do neither. With the lock screen installed, the window system
+    // starts locked (`locked`), at system start and after a crash alike:
+    // the lock service unlocks it, at once if no password is set.
     let cmdline = cmdline(init);
     let has = |option: &str| cmdline.split_whitespace().any(|a| a == option);
     let args: Vec<alloc::string::String> = match name {
@@ -106,7 +110,16 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
             .map(Into::into)
             .collect(),
         "vfs" if has("live") => alloc::vec!["live".into()],
-        "compositor" if at_boot => alloc::vec!["splash".into()],
+        "compositor" => {
+            let mut args = Vec::new();
+            if at_boot {
+                args.push("splash".into());
+            }
+            if init.initrd.find("bin/lock").is_some() {
+                args.push("locked".into());
+            }
+            args
+        }
         "shell" if at_boot && !has("startup-sound=off") => alloc::vec!["startup".into()],
         _ => Vec::new(),
     };

@@ -19,6 +19,10 @@
 //! renders are shown in a corner ([`perf`]); F3 adds where frames' time
 //! goes, or hides it all. The voice agent can start, pause and change
 //! things too ([`agent`]).
+//!
+//! While a game is in play the screen does not lock for want of input
+//! (`display::keep_awake`), since the computer may be driving; on the
+//! menus and paused, it may.
 
 mod agent;
 mod app;
@@ -182,6 +186,8 @@ fn run() -> i32 {
     // was (it selects what it moves onto, not what comes under it).
     let mut cursor = Cursor::Arrow;
     let mut pointer = None;
+    // Whether the window keeps the screen awake: while a game is in play.
+    let mut awake = false;
     loop {
         let mut events = core::mem::take(&mut pending);
         events.extend(window.poll_events());
@@ -222,6 +228,12 @@ fn run() -> i32 {
         if app.screen != screen {
             screen = app.screen;
             println!("screen {:?}", screen);
+        }
+        // The computer may be driving (F8), with nothing pressed for long;
+        // the menus and a paused game let the screen lock.
+        if (app.screen == Screen::Playing) != awake {
+            awake = !awake;
+            window.keep_awake(awake);
         }
         let now = vrt::time::now_ns();
         // Never a negative frame (from a clock read on another processor a

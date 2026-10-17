@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "shell-common"
+description = "What the shell's programs share: the wallpaper and its blurred copy, and OS1's ring and coil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vimage = { workspace = true }
+vfiles = { workspace = true }
+num-traits = { workspace = true }
+
+[lints]
+workspace = true

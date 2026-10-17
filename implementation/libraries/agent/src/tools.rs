@@ -278,8 +278,8 @@ pub fn definitions() -> Vec<Value> {
         ),
         function(
             SYSTEM,
-            "System information, restarting or shutting down the computer.",
-            &[choice("operation", "What to do", true, &["info", "restart", "shutdown"])],
+            "System information, locking the screen (you stop listening until it is unlocked), restarting or shutting down the computer.",
+            &[choice("operation", "What to do", true, &["info", "lock", "restart", "shutdown"])],
             true,
         ),
         function(
@@ -656,6 +656,8 @@ mod tests {
         assert_eq!(r("files", json!({ "operation": "write", "path": "~/Documents/a.txt" })), Risk::Sensitive);
         assert_eq!(r("system", json!({ "operation": "shutdown" })), Risk::Destructive);
         assert_eq!(r("system", json!({ "operation": "info" })), Risk::Routine);
+        // Locking keeps everything as it is, and the user unlocks it.
+        assert_eq!(r("system", json!({ "operation": "lock" })), Risk::Routine);
         assert_eq!(r("wifi", json!({ "operation": "off" })), Risk::Sensitive);
         assert_eq!(r("memory", json!({ "operation": "forget_all" })), Risk::Destructive);
         assert_eq!(r("open_app", json!({ "app": "editor" })), Risk::Routine);

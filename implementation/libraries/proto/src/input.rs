@@ -54,12 +54,16 @@ impl InputSink {
         Ok(InputSink { channel: crate::connect(NAME)? })
     }
 
-    /// Sends a batch of events. Events that cannot be delivered (the service
-    /// is restarting, or is too far behind to queue more) are dropped.
+    /// Sends a batch of events. A batch that finds the service gone goes to
+    /// its successor, on the new connection (which the registry holds until
+    /// it registers), so that what was pressed as the window system started
+    /// again is not lost (a lock screen's password starts with it). Events
+    /// the service is too far behind to queue are dropped.
     pub fn report(&mut self, events: Vec<InputEvent>) {
-        if let Err(vipc::IpcError::PeerClosed) = report(&self.channel, events)
+        if let Err(vipc::IpcError::PeerClosed) = report(&self.channel, events.clone())
             && let Ok(ch) = crate::connect(NAME)
         {
+            let _ = report(&ch, events);
             self.channel = ch;
         }
     }

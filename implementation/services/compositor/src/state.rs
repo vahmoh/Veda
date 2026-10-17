@@ -9,15 +9,17 @@
 //! driver's events, a frame), [`Compositor::settle`] carries out what it
 //! decided: its events go out on the windows' channels, the channels and
 //! textures of windows that are gone go too, connections it gave up on are
-//! closed, and the cursor follows the pointer.
+//! closed, the services watching the lock hear whether it changed, and the
+//! cursor follows the pointer.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use compositor_core::Wm;
 use compositor_core::outbox::Write;
+use vabi::signals;
 use vgfx::{Bitmap, Rect};
-use vproto::display::{self as dp, Cursor, WindowEvent};
+use vproto::display::{self as dp, Cursor, DisplayError, LockNotice, WindowEvent};
 use vrt::object::Channel;
 use vrt::println;
 use vrt::vm::Mapping;
@@ -27,6 +29,10 @@ use crate::gpu::{Gpu, Pending};
 use crate::pixels::{self, Pixels};
 use crate::screen::Screen;
 use crate::startup::Startup;
+
+/// How many channels may watch the lock at once (the system's services
+/// that do: the lock service, the agent).
+const LOCK_WATCHERS_MAX: usize = 8;
 
 /// The window system (see the module's comment).
 pub(crate) struct Compositor {
@@ -57,6 +63,22 @@ pub(crate) struct Compositor {
     /// How many times the GPU stopped while it composed: it is set up
     /// again after the first few (its renderer ended and started again).
     pub(crate) gpu_losses: u32,
+    /// The channels on which system services watch the lock, and whether
+    /// the screen was locked when they were last told.
+    pub(crate) lock_watchers: Vec<Channel>,
+    pub(crate) told_locked: bool,
+}
+
+/// Tells a lock watcher whether the screen is locked: false if it cannot
+/// be told (it has gone, or does not read what it is told), and is dropped,
+/// so that it watches again and hears how it is then.
+fn tell_lock(channel: &Channel, locked: bool) -> bool {
+    vipc::send_event(channel, dp::LOCK_NOTICE, LockNotice::Changed { locked }).is_ok()
+}
+
+/// Whether the service watching on `channel` has gone (closed it).
+fn gone(channel: &Channel) -> bool {
+    channel.wait(signals::PEER_CLOSED, 0).is_ok_and(|s| s & signals::PEER_CLOSED != 0)
 }
 
 /// Writes `ev` on `channel`, a window's event channel.
@@ -91,8 +113,30 @@ impl Compositor {
             println!("a client did not answer and was asked again: its connection is closed");
             self.clients.remove(&key);
         }
+        if self.wm.locked() != self.told_locked {
+            let locked = self.wm.locked();
+            self.told_locked = locked;
+            println!("the screen is {}", if locked { "locked" } else { "unlocked" });
+            self.lock_watchers.retain(|c| tell_lock(c, locked));
+        }
         self.update_cursor();
         self.update_thumbnails();
+    }
+
+    /// A system service watches the lock on `events`: it hears how it is
+    /// now, then every change ([`Compositor::settle`]).
+    pub(crate) fn watch_lock(&mut self, events: Channel) -> Result<(), DisplayError> {
+        if self.lock_watchers.len() >= LOCK_WATCHERS_MAX {
+            // Those whose services went away make room.
+            self.lock_watchers.retain(|c| !gone(c));
+        }
+        if self.lock_watchers.len() >= LOCK_WATCHERS_MAX {
+            return Err(DisplayError::NoMemory);
+        }
+        if tell_lock(&events, self.told_locked) {
+            self.lock_watchers.push(events);
+        }
+        Ok(())
     }
 
     /// Window `id`'s channel has room again.

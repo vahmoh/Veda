@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The agent locks the screen when asked, with a simulated Voice Agent
+# service: the call's result reaches the conversation, which ends as the
+# screen locks, and the agent stops listening until the screen is unlocked
+# (no password is set: Enter unlocks it).
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call system '{"operation":"lock"}' 30
+agent-result '"locked":true'
+wait-serial "agent: the screen is locked: not listening" 10
+wait-serial "lock: the screen is locked" 10
+wait-serial "agent: conversation ended" 10
+wait 3
+shot target/veda/agent-lock.png
+key spc
+wait 1
+key ret
+wait-serial "lock: unlocked (no password is set)" 20
+wait-serial "agent: the screen is unlocked" 10

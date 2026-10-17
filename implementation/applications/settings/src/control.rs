@@ -28,12 +28,12 @@ use crate::{SECTIONS, Section, Settings};
 const CALL_TIMEOUT_NS: u64 = 3_000_000_000;
 const CATALOG_TIMEOUT_NS: u64 = 20_000_000_000;
 
-const PAGES: [&str; 6] = ["personalization", "agent", "network", "display", "system", "about"];
+const PAGES: [&str; 7] = ["personalization", "lock", "agent", "network", "display", "system", "about"];
 
 pub fn info() -> AppAgentInfo {
     api::info(
-        "System settings: the wallpaper, the agent's voice, name and language model, network, display, system \
-         details and version.",
+        "System settings: the wallpaper, the lock screen's password (which only the user types), the agent's \
+         voice, name and language model, network, display, system details and version.",
         vec![
             Action::new("show_page", "Shows a page of Settings").choice("page", "The page", true, &PAGES).build(),
             Action::new("set_agent_voice", "Changes how the agent (you) sounds: its voice, its speaking rate, or both")
@@ -63,6 +63,7 @@ pub fn info() -> AppAgentInfo {
 fn section_name(s: Section) -> &'static str {
     match s {
         Section::Personalization => "personalization",
+        Section::Lock => "lock",
         Section::Agent => "agent",
         Section::Network => "network",
         Section::Display => "display",

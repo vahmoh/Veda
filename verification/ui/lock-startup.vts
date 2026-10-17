@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# With a password set, the system starts at the lock screen (1280x800): the
+# password is kept across a restart, the splash dissolves into the lock
+# screen rather than the desktop, and the password unlocks it.
+fail-on "PANIC"
+boot-cmdline "run=settings:lock"
+wait-serial "desktop ready" 90
+wait-serial "started settings" 60
+wait 4
+type "veda1234"
+key tab
+type "veda1234"
+key ret
+wait-serial "lock: the password was set" 60
+# Time for the home folder to reach the disk.
+wait 3
+reset
+wait-serial "lock: ready (a password is set)" 90
+wait-serial "lock: the screen is locked" 90
+wait-serial "compositor: the desktop appears" 90
+reject-serial "compositor: the screen is unlocked"
+wait 3
+shot target/veda/lock-startup.png
+type "veda1234"
+key ret
+wait-serial "lock: unlocked (the password is right)" 30
+wait 3
+shot target/veda/lock-startup-unlocked.png

@@ -9,8 +9,14 @@
 //!   it lists, activates, minimises, arranges and closes them, and hears
 //!   the shell's keys (the start menu's and the agent's).
 //! * The voice agent (the system service named `agent`) may list the
-//!   windows, to tell the user what is on the screen.
-//! * Every other client has its own windows and nothing else.
+//!   windows, to tell the user what is on the screen, lock the screen, and
+//!   say that the user is there while they talk with it (see
+//!   [`crate::idle`]).
+//! * The lock screen (the system service named `lock`) draws the lock
+//!   screen, and alone unlocks it (see [`crate::lock`]) and sets how long
+//!   the screen waits without input before it locks (see [`crate::idle`]).
+//! * Every other client has its own windows and nothing else (which may
+//!   keep the screen awake while they can be seen).
 //!
 //! Which process a connection belongs to counts too: limits are each
 //! process's, whatever number of connections it opens, and the clipboard
@@ -23,6 +29,7 @@ use alloc::string::String;
 pub enum Role {
     Shell,
     Agent,
+    Lock,
     App,
 }
 
@@ -43,6 +50,7 @@ impl Identity {
         match (self.service, self.name.as_str()) {
             (true, "shell") => Role::Shell,
             (true, "agent") => Role::Agent,
+            (true, "lock") => Role::Lock,
             _ => Role::App,
         }
     }
@@ -81,8 +89,10 @@ mod tests {
     fn only_system_services_have_their_roles() {
         assert_eq!(who("shell", true, 5).role(), Role::Shell);
         assert_eq!(who("agent", true, 6).role(), Role::Agent);
+        assert_eq!(who("lock", true, 9).role(), Role::Lock);
         // An application of the same name is an application.
         assert_eq!(who("shell", false, 7).role(), Role::App);
+        assert_eq!(who("lock", false, 10).role(), Role::App);
         assert_eq!(who("files", false, 8).role(), Role::App);
     }
 

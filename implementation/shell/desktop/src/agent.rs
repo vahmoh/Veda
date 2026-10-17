@@ -9,7 +9,7 @@
 //!   decide on approvals, mute).
 //! * [`AgentWindow`]: the agent's window, deliberately minimal: the
 //!   taskbar's own background and a white ring, OS1's from "Her" (see
-//!   [`crate::presence`]). The ring breathes while the agent listens,
+//!   `shell_common::presence`). The ring breathes while the agent listens,
 //!   trembles and glows with its voice while it speaks, and a light runs
 //!   around it while it thinks; waking up, it is the film's coil, which
 //!   turns to face the user and becomes the ring when the agent is ready.
@@ -19,6 +19,7 @@
 //!   notification): [`crate::approval`].
 //! * [`draw_orb`]: the agent's tray item, a small ring that does the same.
 
+use shell_common::presence::{self, RING_WIDTH};
 use vgfx::{Align, Canvas, Color, Rect};
 use vproto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
 use vrt::object::Channel;
@@ -26,7 +27,6 @@ use vrt::vm::Mapping;
 use vui::{Font, Icon, Ui, status};
 
 use crate::approval::{self, Choice, Look};
-use crate::presence::{self, RING_WIDTH};
 use crate::{Action, Model, chrome, connect_running, taskbar};
 
 /// The window's size.

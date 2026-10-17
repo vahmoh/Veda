@@ -98,7 +98,7 @@ The agent's own functions (`vagent::tools`):
 | `volume`, `wifi`, `wallpaper` | Sound, Wi-Fi networks, the wallpaper |
 | `notify`, `timer` | A notification; timers and reminders (they wake the agent) |
 | `memory` | Remember, search and forget what it knows about you |
-| `system`, `tasks` | System details, restart and shut down; running programs |
+| `system`, `tasks` | System details, lock the screen, restart and shut down; running programs |
 | `end_conversation` | Go back to sleep once its goodbye has played (unless you talk over it or ask for more) |
 
 Applications' own actions run through `use_app`: "open the shopping list
@@ -128,7 +128,7 @@ needs it is held, and runs only after you click Allow.
   init attaches to every connection (system service names cannot be taken
   by other programs).
 * **Requests** appear in the agent's window
-  (`implementation/applications/shell/src/agent.rs`), or as notifications
+  (`implementation/shell/desktop/src/agent.rs`), or as notifications
   while it is closed, show what will happen and on what, and expire after
   three minutes. *Always allow* is offered for sensitive actions only, and
   Settings can take it back. Stored permissions are checked when read back:
@@ -153,6 +153,29 @@ needs it is held, and runs only after you click Allow.
 * **Reminders.** Until you speak, a conversation that a due reminder (or
   another notice) started cannot set timers, so a reminder cannot keep
   waking the agent.
+* **Not while the screen is locked.** The agent watches the lock
+  (`display::watch_lock`, `implementation/services/agent/src/lock.rs`): as
+  the screen locks, a conversation ends and the agent stops listening for
+  its name, so that nobody at a locked computer can ask it for what the
+  lock keeps from them. It takes the screen for locked until the window
+  system says otherwise, as it starts and while the window system is away.
+  A reminder that comes due meanwhile is told once the screen is unlocked.
+  Asked to lock the screen, it gives the conversation the result first;
+  the lock then ends the conversation.
+* **Talking counts as input; overhearing does not.** The screen locks
+  after a while without input, and a conversation held hands-free gives
+  none, so the agent tells the window system that you are there
+  (`display::user_active`, which only the agent may call;
+  `vagent::presence`): in a conversation you asked for (a click,
+  Super+Space, its name), whenever Deepgram hears you start to speak and
+  gives your words, and while its voice answers. Nothing it hears while it
+  only listens for its name counts, its name included, nor anything in a
+  conversation that a reminder (or another notice) started, whoever speaks
+  in it: the microphone hears whatever is said near the computer (a
+  television, people in the room), and if that counted, an unattended
+  computer would stay unlocked while anyone talked near it. A conversation
+  you asked for is yours, as a film you play is: talk in it holds the lock
+  off until it ends.
 * **The Deepgram key** stays in the agent's private directory
   (`/home/.private/agent`, which the file system service lets only the
   agent open). It is never shown again (Settings shows its last characters)
@@ -305,3 +328,6 @@ cargo orchestration script verification/real/agent-deepgram.vts
 * The agent needs the Internet and a Deepgram account. Asleep, only the
   name listener's short recognitions are billed; every conversation minute
   is.
+* Talk that reaches a conversation you left going (a television near the
+  computer) keeps it going, and with it the screen unlocked: say goodbye,
+  or lock the screen, as you leave.

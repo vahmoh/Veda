@@ -15,6 +15,11 @@
 //! rest of the sentence becomes the first thing the user said in the
 //! conversation.
 //!
+//! Nothing it hears, the agent's name included, tells the window system
+//! that the user is there: it hears whatever is said near the computer,
+//! which would otherwise keep an unattended one from locking (see
+//! `vagent::presence`).
+//!
 //! The detector is [`vaudio::vad::Vad`]; music or a television can seem
 //! like speech to it. What the computer plays itself (music, a video)
 //! comes back into the microphone too. The audio service cancels most of

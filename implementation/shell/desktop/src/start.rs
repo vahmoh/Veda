@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The start menu: search, pinned apps, the full app list and power options.
+//! The start menu: search, pinned apps, the full app list, locking the
+//! screen and power options.
 
 use vgfx::{Align, Color, Rect};
 use vproto::init::{AppInfo, power};
@@ -306,7 +307,7 @@ impl StartMenu {
         resp.clicked
     }
 
-    /// User, settings and power.
+    /// The user, and locking the screen, settings and power.
     fn footer(&mut self, ui: &mut Ui, m: &mut Model, r: Rect) {
         let t = ui.theme().clone();
         ui.canvas.fill_rect(r, Color::rgba(0, 0, 0, 46));
@@ -324,6 +325,10 @@ impl StartMenu {
         let settings_r = Rect::new(power_r.x - 46, cy - 19, 38, 38);
         if ui.icon_button(settings_r, Icon::Settings, "Settings") && m.app("settings").is_some() {
             m.push(Action::Launch("settings".into(), Vec::new()));
+        }
+        let lock_r = Rect::new(settings_r.x - 46, cy - 19, 38, 38);
+        if ui.icon_button(lock_r, Icon::Lock, "Lock") {
+            m.push(Action::Lock);
         }
         let menu = [MenuItem::new("Restart"), MenuItem::new("Shut down")];
         match ui.context_menu("power", &menu) {

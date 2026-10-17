@@ -9,6 +9,11 @@
 //!   Only the pictures scrolled into view are decoded, and `~/Pictures` is
 //!   read again when the page is shown, the window regains the focus, or F5
 //!   is pressed.
+//! * **Lock screen**: the password the lock screen asks for, set, changed
+//!   and removed through the lock service ([`lock`]), and how long the
+//!   screen waits without input before it locks by itself: never, or 1, 5,
+//!   15 or 30 minutes (until one is chosen, 5 minutes with a password set
+//!   and never without).
 //! * **Agent**: the voice agent: Deepgram API key, name and voice, language
 //!   and speech models, listening, and what it remembers.
 //! * **Network & Internet**: Wi-Fi (switch, connection, networks in range,
@@ -22,11 +27,12 @@
 //! [`control`] lets the voice agent show pages and change its own voice,
 //! name and language model; nothing lets it change the firewall.
 //!
-//! Usage: `settings [personalization|agent|network|display|system|about]`.
+//! Usage: `settings [personalization|lock|agent|network|display|system|about]`.
 
 mod agent;
 mod control;
 mod firewall;
+mod lock;
 mod network;
 
 use vgfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};
@@ -54,6 +60,7 @@ fn pictures_dir() -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Personalization,
+    Lock,
     Agent,
     Network,
     Display,
@@ -61,8 +68,9 @@ enum Section {
     About,
 }
 
-const SECTIONS: [(Section, &str, Icon, &str); 6] = [
+const SECTIONS: [(Section, &str, Icon, &str); 7] = [
     (Section::Personalization, "Personalization", Icon::Palette, "Wallpaper"),
+    (Section::Lock, "Lock screen", Icon::Lock, "Password, locking"),
     (Section::Agent, "Agent", Icon::Agent, "Voice, model, memory"),
     (Section::Network, "Network & Internet", Icon::Wifi, "Wi-Fi, Ethernet, status"),
     (Section::Display, "Display", Icon::Monitor, "Resolution, work area"),
@@ -106,6 +114,8 @@ struct Settings {
     net: network::NetworkPage,
     /// Started the first time the Agent page is shown.
     agent: Option<agent::AgentPage>,
+    /// Started the first time the Lock screen page is shown.
+    lock: Option<lock::LockPage>,
     /// The agent service, for the voice agent's actions.
     link: control::AgentLink,
     /// The page shown last frame (leaving one finishes what it was doing).
@@ -270,6 +280,7 @@ impl Settings {
             content_h: 600,
             net: network::NetworkPage::new(),
             agent: None,
+            lock: None,
             link: control::AgentLink::default(),
             last_section: section,
             was_focused: true,
@@ -295,6 +306,12 @@ impl Settings {
             Section::Agent => {
                 if let Some(p) = &mut self.agent {
                     p.flush();
+                }
+            }
+            // What was typed goes.
+            Section::Lock => {
+                if let Some(p) = &mut self.lock {
+                    p.leave();
                 }
             }
             // Pictures not decoded yet are not wanted any more.
@@ -1007,6 +1024,9 @@ impl App for Settings {
             let next = self.agent.get_or_insert_with(agent::AgentPage::new).poll(now);
             ui.repaint_at(next);
         }
+        if self.section == Section::Lock {
+            self.lock.get_or_insert_with(lock::LockPage::new).poll();
+        }
         // Keys go to the error message while it is shown.
         let error_at_start = self.error.is_some();
         if !error_at_start {
@@ -1018,6 +1038,7 @@ impl App for Settings {
         let section = self.section;
         let id = match section {
             Section::Personalization => "content-p",
+            Section::Lock => "content-l",
             Section::Agent => "content-g",
             Section::Network => "content-n",
             Section::Display => "content-d",
@@ -1029,6 +1050,7 @@ impl App for Settings {
             let r = Rect::new(content.x + 36, content.y + 30 - off, content.w - 72, content.h);
             let used = match section {
                 Section::Personalization => self.personalization(ui, r, content),
+                Section::Lock => self.lock.as_mut().map_or(0, |p| p.draw(ui, r)),
                 Section::Agent => self.agent.as_mut().map_or(0, |p| p.draw(ui, r)),
                 Section::Network => self.net.draw(ui, r),
                 Section::Display => self.display(ui, r),
@@ -1063,10 +1085,14 @@ impl App for Settings {
     }
 
     fn close_requested(&mut self) -> bool {
-        // Changes to the agent not sent yet go before the window does.
+        // Changes to the agent not sent yet go before the window does, and
+        // passwords typed go.
         if let Some(p) = &mut self.agent {
             p.flush();
             p.finish(vrt::time::now_ns() + CLOSE_WAIT_NS);
+        }
+        if let Some(p) = &mut self.lock {
+            p.leave();
         }
         true
     }
@@ -1097,6 +1123,9 @@ impl App for Settings {
         if let Some(h) = self.agent.as_ref().and_then(|p| p.wait_handle()) {
             v.push((h, vabi::signals::SIGNALED));
         }
+        if let Some(h) = self.lock.as_ref().and_then(|p| p.wait_handle()) {
+            v.push((h, vabi::signals::SIGNALED));
+        }
         v
     }
 }
@@ -1104,6 +1133,7 @@ impl App for Settings {
 fn main() {
     let section = match std::env::args().nth(1).map(|s| s.to_ascii_lowercase()) {
         Some(s) if s.starts_with("agent") || s.starts_with("voice") => Section::Agent,
+        Some(s) if s.starts_with("lock") || s.starts_with("pass") => Section::Lock,
         Some(s) if s.starts_with("disp") => Section::Display,
         Some(s) if s.starts_with("net") || s.starts_with("wi") => Section::Network,
         Some(s) if s.starts_with("sys") => Section::System,

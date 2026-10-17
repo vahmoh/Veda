@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Input drivers' events (`vproto::input`), and what each driver's
-//! connection holds down.
+//! connection holds down. Each event starts the idle time again (see
+//! [`crate::idle`]).
 //!
 //! A driver that goes away (the driver VM restarting, say) cannot release
 //! what it held: the keys and buttons it held are released for it, so that
@@ -27,6 +28,7 @@ impl<M> Wm<M> {
     /// Driver connection `source` reports `ev` at `now`.
     pub fn input(&mut self, source: u64, ev: InputEvent, now: u64) {
         self.now = now;
+        self.active(now);
         match ev {
             InputEvent::Key { code, pressed } => {
                 let held = self.sources.entry(source).or_default();
