@@ -214,10 +214,10 @@ linux-raw-sys = { version = "0.12.1", default-features = false, features = ["gen
 # polling, sockets of every family, ioctls, mappings): the Bytecode
 # Alliance's safe bindings, which make the calls themselves on Linux,
 # without libc, and type their files, flags and errors.
-rustix = { version = "1.1.5", default-features = false, features = ["std", "event", "fs", "mm", "mount", "net", "process", "system", "time"] }
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "event", "fs", "mm", "mount", "net", "process", "system", "time"] }
 # C's interfaces for the few Linux calls rustix does not make (socket
 # options of netlink and packet sockets), through the guest's musl.
-libc = { version = "0.2.190", default-features = false }
+libc = { version = "=0.2.190", default-features = false }
 # Random bytes from the operating system, in the two releases crates use
 # (rand 0.10 the newer, rand 0.9 and others the older): what
 # verification/stdcrates checks of Veda's ports of them (implementation/

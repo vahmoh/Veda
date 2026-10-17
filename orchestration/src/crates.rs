@@ -14,6 +14,13 @@
 //! are kept outside `target/` (and `cargo clean`), as Cargo reads them
 //! before it builds anything; until a checkout has them, Cargo takes the
 //! releases as published.
+//!
+//! Resolving the workspace without them, Cargo drops their entries from
+//! Cargo.lock and takes each crate's newest release that the requirements
+//! on it allow, as a new checkout's first run of Cargo (the `cargo run`
+//! behind `cargo orchestration`) does. Cargo.toml holds the crates the
+//! workspace depends on directly at their ports' versions (`=`);
+//! [`prepare`] moves the others back to theirs.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,6 +41,9 @@ const TOOLS: [&str; 6] = ["curl", "bash", "tar", "gzip", "patch", "sha256sum"];
 
 /// Their directory in `implementation/ports/`.
 const DIRECTORY: &str = ".crates";
+
+/// The source of their releases, crates.io, as Cargo.lock names it.
+const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 /// Where they are prepared: `downloads/` (the verified releases), `src/`
 /// (each crate, unpacked and patched), `stamps/` (the fingerprints of
@@ -86,10 +96,35 @@ pub fn prepare() -> Result {
     if changed {
         // Cargo resolved the workspace for this command without the crates
         // as they are now: it resolves it again (downloading nothing), and
-        // Cargo.lock has them.
+        // takes the port of each crate that Cargo.lock has at its version.
         util::run(util::cargo().args(["update", "--workspace", "--quiet"]))?;
     }
+    move_back()?;
     check_lock()
+}
+
+/// Moves back to its port's version each crate that Cargo.lock has from
+/// crates.io at another version: one that Cargo resolved without the patch,
+/// to the newest release the workspace allowed, and that
+/// `cargo update --workspace`, which unlocks only the workspace's own
+/// packages, leaves there.
+fn move_back() -> Result {
+    let path = util::workspace_root().join("Cargo.lock");
+    for name in CRATES {
+        let port = Port::named(name)?;
+        let (package, version) = (&port.name, &port.version);
+        // Read for each crate, as moving one changes it.
+        let lock = util::read_to_string(&path)?;
+        if let Some(release) = release_in_place_of(&lock, package, version) {
+            util::status("Moving", format!("{package} {release} back to {version} (implementation/ports/{name})"));
+            // With the patch, that version is the port's. Should something
+            // in the workspace exclude it, Cargo says what, and check_lock()
+            // fails.
+            let spec = format!("{package}@{release}");
+            let _ = util::run(util::cargo().args(["update", "--quiet", "--package", &spec, "--precise", version]));
+        }
+    }
+    Ok(())
 }
 
 /// For `cargo orchestration doctor`: the crates, as Cargo builds them
@@ -204,18 +239,51 @@ fn check_lock() -> Result {
 }
 
 /// Whether `lock`, a Cargo.lock, has the package `name` at `version` from
-/// no registry or repository: from a path, as a patch of ours is. (A
-/// patch that Cargo leaves unused is no package: it is listed apart, under
-/// `[[patch.unused]]`.)
+/// no registry or repository: from a path, as a patch of ours is.
 fn locked_from_path(lock: &str, name: &str, version: &str) -> bool {
-    let (name, version) = (format!("name = \"{name}\""), format!("version = \"{version}\""));
-    lock.split("\n\n").any(|entry| {
-        let lines: Vec<&str> = entry.lines().collect();
-        lines.first() == Some(&"[[package]]")
-            && lines.contains(&name.as_str())
-            && lines.contains(&version.as_str())
-            && !lines.iter().any(|l| l.starts_with("source = "))
-    })
+    locked(lock, name).contains(&(version, None))
+}
+
+/// The release of the crate `name` that `lock`, a Cargo.lock, has from
+/// crates.io in place of its port at `version`: another version
+/// semver-compatible with the port's (Cargo takes one release of those).
+fn release_in_place_of<'a>(lock: &'a str, name: &str, version: &str) -> Option<&'a str> {
+    let range = semver_range(version);
+    locked(lock, name)
+        .into_iter()
+        .find(|&(v, source)| source == Some(CRATES_IO) && v != version && semver_range(v) == range)
+        .map(|(v, _)| v)
+}
+
+/// The versions of the package `name` that `lock`, a Cargo.lock, has, each
+/// with its source: none for a path's. (A patch that Cargo leaves unused is
+/// no package: it is listed apart, under `[[patch.unused]]`.)
+fn locked<'a>(lock: &'a str, name: &str) -> Vec<(&'a str, Option<&'a str>)> {
+    let name = format!("name = \"{name}\"");
+    lock.split("\n\n")
+        .filter_map(|entry| {
+            let lines: Vec<&str> = entry.lines().collect();
+            if lines.first() != Some(&"[[package]]") || !lines.contains(&name.as_str()) {
+                return None;
+            }
+            let value =
+                |key: &str| lines.iter().find_map(|l| l.strip_prefix(key)?.strip_prefix(" = \"")?.strip_suffix('"'));
+            Some((value("version")?, value("source")))
+        })
+        .collect()
+}
+
+/// What the versions semver-compatible with `version` share: its numbers
+/// up to the first that is not 0 (`0.2` of `0.2.190`, `1` of `1.53.3`).
+fn semver_range(version: &str) -> String {
+    let mut range = Vec::new();
+    for number in version.split(['-', '+']).next().unwrap_or(version).split('.') {
+        range.push(number);
+        if number != "0" {
+            break;
+        }
+    }
+    range.join(".")
 }
 
 #[cfg(test)]
@@ -238,6 +306,28 @@ mod tests {
                       source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
                       [[patch.unused]]\nname = \"zune-jpeg\"\nversion = \"0.5.15\"\n";
         assert!(!locked_from_path(unused, "zune-jpeg", "0.5.15"));
+    }
+
+    #[test]
+    fn cargo_lock_tells_the_release_in_place_of_a_port() {
+        let lock = "[[package]]\nname = \"getrandom\"\nversion = \"0.2.17\"\n\
+                    source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
+                    [[package]]\nname = \"getrandom\"\nversion = \"0.4.4\"\n\
+                    source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n\
+                    [[package]]\nname = \"libc\"\nversion = \"0.2.190\"\n\n\
+                    [[package]]\nname = \"mio\"\nversion = \"1.2.5\"\n\
+                    source = \"git+https://github.com/tokio-rs/mio#0123abcd\"\n\n";
+        assert_eq!(release_in_place_of(lock, "getrandom", "0.4.3"), Some("0.4.4"));
+        // 0.2.17 and 0.4.4 are of other ranges than 0.3.4's.
+        assert_eq!(release_in_place_of(lock, "getrandom", "0.3.4"), None);
+        // The port itself.
+        assert_eq!(release_in_place_of(lock, "libc", "0.2.190"), None);
+        // No patch of crates.io takes the place of a repository's crate.
+        assert_eq!(release_in_place_of(lock, "mio", "1.2.4"), None);
+        assert_eq!(semver_range("0.2.190"), "0.2");
+        assert_eq!(semver_range("1.53.3"), "1");
+        assert_eq!(semver_range("0.0.3"), "0.0.3");
+        assert_eq!(semver_range("1.0.0-alpha.5"), "1");
     }
 
     #[test]

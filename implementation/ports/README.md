@@ -153,8 +153,17 @@ crate, and Cargo builds the port instead:
    port's release, and `crates.sh` unpacks and patches it in
    `implementation/ports/.crates/src/<crate>`, which Git ignores.
 2. It writes `implementation/ports/.crates/config.toml`, a
-   `[patch.crates-io]` that `.cargo/config.toml` includes, and checks that
-   `Cargo.lock` has the prepared crates.
+   `[patch.crates-io]` that `.cargo/config.toml` includes.
+3. It moves back to its port's version any crate that Cargo has moved to
+   a newer release, and checks that `Cargo.lock` has the prepared crates.
+
+Without the patch, as in a new checkout until step 2 (Cargo first runs
+for `cargo orchestration` itself), Cargo drops the ports' entries from
+`Cargo.lock` and takes each crate's newest release that the requirements
+on it allow. A crate the workspace depends on directly keeps the `=`
+before its port's version in `Cargo.toml`, which holds it there; step 3
+is for the others (errno, socket2, mio), which the workspace reaches only
+through other crates.
 
 When the workspace has two releases of a crate, the older one's port is
 named for its release (`getrandom-0.3`), and its entry in the patch names
