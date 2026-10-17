@@ -37,6 +37,7 @@ wait-serial "videos: seek done in" 10
 wait 1
 click 0.7625 0.8188
 wait-serial "videos: seek to 0:0" 10
+wait-serial "videos: seek done in" 10
 wait 1
 # Paused, a picture forward and one back.
 key spc

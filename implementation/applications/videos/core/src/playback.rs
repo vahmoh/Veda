@@ -599,7 +599,8 @@ impl Playback {
 
     // ---- what the user asks ----------------------------------------------------
 
-    /// Plays (or resumes).
+    /// Plays (or resumes). While waiting for the decoder it plays once the
+    /// wait is over, from where it goes, and says so now.
     pub fn play(&mut self, now: u64) {
         match self.phase {
             Phase::Ended => {
@@ -621,13 +622,23 @@ impl Playback {
                 self.phase = Phase::Playing;
                 self.stats_restart(now);
             }
-            Phase::Opening | Phase::Seeking | Phase::Restarting => self.want_playing = true,
+            Phase::Opening | Phase::Seeking | Phase::Restarting if !self.want_playing => {
+                self.want_playing = true;
+                let at = self.position_us(now);
+                self.log(format!("resumed at {}", time(at)));
+            }
             _ => {}
         }
     }
 
     /// Pauses (the picture follows the sound already sent until it stops).
+    /// While waiting for the decoder it stays paused once the wait is over,
+    /// where it goes, and says so now.
     pub fn pause(&mut self, now: u64) {
+        if self.want_playing && self.waiting() {
+            let at = self.position_us(now);
+            self.log(format!("paused at {}", time(at)));
+        }
         self.want_playing = false;
         if self.phase == Phase::Playing {
             let at = self.position_us(now);
@@ -1208,6 +1219,53 @@ mod tests {
         p.see_sound(sound(8, 130_000));
         p.advance(14 * MS);
         assert_eq!(p.phase(), &Phase::Playing);
+    }
+
+    #[test]
+    fn play_or_pause_during_a_seek_is_said_at_once_and_done_after_it() {
+        let (mut p, mut st) = opened(true, true);
+        p.see_pictures(Pictures { shown: Some(picture(7, 3_000_000)), pool: true, ..Pictures::default() });
+        p.see_sound(sound(7, 200_000));
+        p.advance(2 * MS);
+        p.pause(3 * MS);
+        p.take_effects();
+        // Paused, back to the start, and the space bar before the decoder is
+        // there (a new frame pool can hold it up).
+        p.seek_to(0, SeekMode::Exact, 10 * MS);
+        p.toggle(11 * MS);
+        assert!(p.playing(), "the button shows pause");
+        let effects = p.take_effects();
+        assert_eq!(logs(&effects), ["seek to 0:00", "resumed at 0:00"]);
+        assert!(!effects.contains(&Effect::Engine(Ask::Play)), "nothing plays before the seek is done");
+        p.play(12 * MS);
+        assert_eq!(p.take_effects(), [], "already to play: nothing to say");
+        // The seek done (generation 8), its picture up and some sound queued.
+        st.generation = 8;
+        st.seeked = p.seeks();
+        p.sync(&st, 170 * MS);
+        p.see_pictures(Pictures { shown: Some(picture(8, 0)), pool: true, ..Pictures::default() });
+        p.see_sound(sound(8, 200_000));
+        p.advance(173 * MS);
+        assert_eq!(p.phase(), &Phase::Playing);
+        let effects = p.take_effects();
+        assert_eq!(logs(&effects), ["seek done in 163 ms"]);
+        assert!(effects.contains(&Effect::Engine(Ask::Play)) && effects.contains(&Effect::Sound(SoundAsk::Play)));
+        // Playing, five seconds on, and the space bar again before the decoder
+        // is there: it stays paused there.
+        p.seek_to(5_000_000, SeekMode::Exact, 200 * MS);
+        p.toggle(201 * MS);
+        assert!(!p.playing());
+        assert_eq!(logs(&p.take_effects()), ["seek to 0:05", "paused at 0:05"]);
+        p.pause(202 * MS);
+        assert_eq!(p.take_effects(), [], "already to pause: nothing to say");
+        st.generation = 9;
+        st.seeked = p.seeks();
+        p.sync(&st, 250 * MS);
+        p.see_pictures(Pictures { shown: Some(picture(9, 5_000_000)), pool: true, ..Pictures::default() });
+        p.advance(251 * MS);
+        assert_eq!(p.phase(), &Phase::Paused);
+        assert_eq!(p.position_us(251 * MS), 5_000_000);
+        assert!(engine_asks(&mut p).contains(&Ask::Pause));
     }
 
     #[test]

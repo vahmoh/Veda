@@ -31,12 +31,17 @@ wait 3
 agent-call use_app '{"app":"videos","action":"pause"}' 30
 agent-result '"playback":"paused"'
 wait-serial "videos: paused at 0:0" 10
+# A seek answers at once too. Each is waited for before the next request,
+# since a "seek done" line does not say which seek it ends (and during a
+# seek, play would answer "playing (seeking)").
 agent-call use_app '{"app":"videos","action":"seek","arguments":{"seconds":8}}' 30
 agent-result '"position":"0:08"'
 wait-serial "videos: seek to 0:08" 10
+wait-serial "videos: seek done in" 10
 agent-call use_app '{"app":"videos","action":"seek","arguments":{"seconds":-5,"relative":true}}' 30
 agent-result '"position":"0:03"'
 wait-serial "videos: seek to 0:03" 10
+wait-serial "videos: seek done in" 10
 agent-call use_app '{"app":"videos","action":"seek","arguments":{"seconds":600}}' 30
 agent-result "is only 0:12 long"
 agent-call use_app '{"app":"videos","action":"play"}' 30
