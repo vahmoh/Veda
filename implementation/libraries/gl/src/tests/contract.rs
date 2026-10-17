@@ -5,7 +5,7 @@
 //! on the software renderer and on the virgl renderer through a fake host
 //! whose memory starts out holding stale data, as a GPU driver's recycled
 //! memory does; and through Veda's renderer, where the tests run on it
-//! (`VGL_TEST_BACKEND=gallium`).
+//! (`GL_TEST_BACKEND=gallium`).
 
 use std::boxed::Box;
 use std::vec;
@@ -26,7 +26,7 @@ fn backends() -> Vec<(&'static str, Box<dyn Backend>, Option<fake::Shared>)> {
     #[allow(unused_mut)]
     let mut all = vec![("soft", soft, None), ("virgl", virgl, Some(host))];
     #[cfg(target_os = "linux")]
-    if std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium") {
+    if std::env::var("GL_TEST_BACKEND").is_ok_and(|v| v == "gallium") {
         let t = crate::virgl::gallium::GalliumTransport::new().expect("Veda's renderer is not available");
         all.push(("gallium", Box::new(VirglBackend::new(Box::new(t)).unwrap()), None));
     }
@@ -126,14 +126,14 @@ fn what_resources_held_does_not_show_in_new_ones() {
     }
 }
 
-/// A program linked by `vglsl` (vertex attribute `pos` at location 0).
-pub fn linked(vs: &str, fs: &str) -> std::sync::Arc<vglsl::program::Program> {
-    let options = vglsl::Options::default();
-    let vs = vglsl::compile(vglsl::Stage::Vertex, &[vs], &options).shader.expect("the vertex shader compiles");
-    let fs = vglsl::compile(vglsl::Stage::Fragment, &[fs], &options).shader.expect("the fragment shader compiles");
+/// A program linked by `glsl` (vertex attribute `pos` at location 0).
+pub fn linked(vs: &str, fs: &str) -> std::sync::Arc<glsl::program::Program> {
+    let options = glsl::Options::default();
+    let vs = glsl::compile(glsl::Stage::Vertex, &[vs], &options).shader.expect("the vertex shader compiles");
+    let fs = glsl::compile(glsl::Stage::Fragment, &[fs], &options).shader.expect("the fragment shader compiles");
     let bindings =
-        vglsl::link::Bindings { attributes: vec![("pos".into(), 0)], feedback: Vec::new(), feedback_separate: false };
-    std::sync::Arc::new(vglsl::program::link(&vs, &fs, &bindings, &options.limits).program.expect("the program links"))
+        glsl::link::Bindings { attributes: vec![("pos".into(), 0)], feedback: Vec::new(), feedback_separate: false };
+    std::sync::Arc::new(glsl::program::link(&vs, &fs, &bindings, &options.limits).program.expect("the program links"))
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! Shared styling of shell surfaces: translucent "mica" backgrounds sampled
 //! from the blurred wallpaper, and rounded window corners.
 
-use vgfx::{Bitmap, Canvas, Color, Rect};
+use gfx::{Bitmap, Canvas, Color, Rect};
 
 /// Corner radius of popups (start menu, calendar, notifications).
 pub const POPUP_RADIUS: i32 = 12;
@@ -71,15 +71,15 @@ pub fn round_corners(c: &mut Canvas, radius: i32) {
             }
             for (x, y) in [(cx, cy), (w - 1 - cx, cy), (cx, h - 1 - cy), (w - 1 - cx, h - 1 - cy)] {
                 let p = &mut pixels[(y * stride + x) as usize];
-                *p = vgfx::color::scale(*p, cov);
+                *p = gfx::color::scale(*p, cov);
             }
         }
     }
 }
 
 /// Text with a soft dark shadow, legible on any wallpaper.
-pub fn shadowed_label(ui: &mut vui::Ui, r: Rect, text: &str, size: f32, align: vgfx::Align) {
-    let font = ui.ctx.font(vui::Font::Regular);
+pub fn shadowed_label(ui: &mut ui::Ui, r: Rect, text: &str, size: f32, align: gfx::Align) {
+    let font = ui.ctx.font(ui::Font::Regular);
     ui.ctx.text.draw_in(&mut ui.canvas, font, size, r.translate(0, 1), text, Color::rgba(0, 0, 0, 150), align);
     ui.ctx.text.draw_in(&mut ui.canvas, font, size, r, text, Color::WHITE, align);
 }

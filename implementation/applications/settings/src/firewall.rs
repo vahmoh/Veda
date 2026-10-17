@@ -19,11 +19,11 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use vnet::{
+use net::{
     AppRule, FirewallConfig, FirewallEvent, FirewallProtocol, FirewallQuestion, FirewallReason, FirewallStats,
     NetError, PortRule, Scope,
 };
-use vui::{Align, ButtonKind, Font, Icon, Rect, Ui};
+use ui::{Align, ButtonKind, Font, Icon, Rect, Ui};
 
 /// How often the log and the counts are read again while shown.
 const REFRESH_NS: u64 = 2_000_000_000;
@@ -119,10 +119,10 @@ impl FirewallPanel {
 
     /// Reads the settings, the log and the counts again.
     pub fn refresh(&mut self) {
-        self.config = vnet::firewall().ok();
-        self.questions = vnet::firewall_questions().unwrap_or_default();
-        self.log = vnet::firewall_log().unwrap_or_default();
-        self.stats = vnet::firewall_stats().unwrap_or_default();
+        self.config = net::firewall().ok();
+        self.questions = net::firewall_questions().unwrap_or_default();
+        self.log = net::firewall_log().unwrap_or_default();
+        self.stats = net::firewall_stats().unwrap_or_default();
         self.dirty = true;
     }
 
@@ -139,7 +139,7 @@ impl FirewallPanel {
     fn change(&mut self, f: impl FnOnce(&mut FirewallConfig)) {
         let Some(mut c) = self.config.clone() else { return };
         f(&mut c);
-        match vnet::set_firewall(&c) {
+        match net::set_firewall(&c) {
             Ok(()) => {
                 self.error = None;
                 self.config = Some(c);

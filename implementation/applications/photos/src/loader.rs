@@ -18,14 +18,14 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vabi::RawHandle;
-use vgfx::Bitmap;
-use vimage::{DecodeOptions, Filter, Format, Image, ImageError, Orientation};
-use vproto::fs::FsError;
-use vproto::vfs;
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
-use vrt::vm::Mapping;
+use abi::RawHandle;
+use gfx::Bitmap;
+use image::{DecodeOptions, Filter, Format, Image, ImageError, Orientation};
+use proto::fs::FsError;
+use proto::vfs;
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
+use rt::vm::Mapping;
 
 /// Files larger than this are not opened.
 const MAX_FILE: u64 = 128 << 20;
@@ -47,7 +47,7 @@ impl Budget {
     /// The budget of a machine with `total` bytes of memory.
     pub fn for_memory(total: u64) -> Budget {
         let max_pixels = (total / 5).saturating_mul(3) / 16;
-        Budget { max_pixels: max_pixels.clamp(MIN_PIXELS, vimage::MAX_PIXELS), kept_bytes: total / 3 }
+        Budget { max_pixels: max_pixels.clamp(MIN_PIXELS, image::MAX_PIXELS), kept_bytes: total / 3 }
     }
 
     /// Bytes a decoded picture of `pixels` pixels takes with its smaller copies (4 bytes a pixel,
@@ -177,11 +177,11 @@ impl Loader {
         });
         // The picture on screen matters more than thumbnails; both yield to the UI thread.
         let workers =
-            [("picture-decoder", false, vabi::priority::NORMAL - 1), ("thumbnailer", true, vabi::priority::NORMAL - 2)];
+            [("picture-decoder", false, abi::priority::NORMAL - 1), ("thumbnailer", true, abi::priority::NORMAL - 2)];
         for (name, thumbs, priority) in workers {
             let s = shared.clone();
             let ev = Event::from_handle(event.0.duplicate(None).ok()?);
-            vrt::thread::Builder::new()
+            rt::thread::Builder::new()
                 .name(name)
                 .stack_size(512 * 1024)
                 .priority(priority)
@@ -301,7 +301,7 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
             }
         };
         if vfs.is_none() {
-            vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+            vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         }
         let data = match &vfs {
             Some(client) => read_file(client, &path),
@@ -324,7 +324,7 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
             }
             Ok(data) => {
                 let bytes = data.bytes();
-                let meta = vimage::read_info(bytes).ok().map(|i| Meta {
+                let meta = image::read_info(bytes).ok().map(|i| Meta {
                     format: i.format,
                     width: i.width,
                     height: i.height,
@@ -333,14 +333,14 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                     progressive: i.progressive,
                     file_size: bytes.len() as u64,
                 });
-                let started = vrt::time::now_ns();
+                let started = rt::time::now_ns();
                 let decoded = decode(bytes, max_pixels);
-                let decode_ms = (vrt::time::now_ns() - started) / 1_000_000;
+                let decode_ms = (rt::time::now_ns() - started) / 1_000_000;
                 drop(data);
                 let name = path.rsplit('/').next().unwrap_or("");
                 if thumbs {
                     let result = decoded.map(|(img, _)| make_thumbs(&img, shared.id()));
-                    let total_ms = (vrt::time::now_ns() - started) / 1_000_000;
+                    let total_ms = (rt::time::now_ns() - started) / 1_000_000;
                     match &result {
                         Ok(_) => println!("thumbnail of {name}: decoded in {decode_ms} ms, {total_ms} ms in all"),
                         Err(e) => println!("no thumbnail for {name}: {e}"),
@@ -358,7 +358,7 @@ fn worker(shared: Arc<Shared>, event: Event, thumbs: bool) {
                         let _ = event.signal();
                     }
                     let result = decoded.map(|(img, damaged)| Arc::new(make_picture(img, damaged, shared.id())));
-                    let total_ms = (vrt::time::now_ns() - started) / 1_000_000;
+                    let total_ms = (rt::time::now_ns() - started) / 1_000_000;
                     match &result {
                         Ok(p) => println!(
                             "opened {name} ({}x{}): decoded in {decode_ms} ms, ready in {total_ms} ms",
@@ -442,7 +442,7 @@ fn read_file(vfs: &vfs::Client, path: &str) -> Result<FileData, Failure> {
     if len as usize > size {
         return Err(Failure::Service);
     }
-    let map = Mapping::new(vmo, size.max(4096), vabi::map_flags::READ).map_err(|_| Failure::NoMemory)?;
+    let map = Mapping::new(vmo, size.max(4096), abi::map_flags::READ).map_err(|_| Failure::NoMemory)?;
     Ok(FileData { map, len: len as usize })
 }
 
@@ -451,10 +451,10 @@ fn read_file(vfs: &vfs::Client, path: &str) -> Result<FileData, Failure> {
 /// checksums; the flag reports that.
 fn decode(data: &[u8], max_pixels: u64) -> Result<(Image, bool), String> {
     let options = DecodeOptions { max_pixels, ..DecodeOptions::DEFAULT };
-    match vimage::decode_with(data, &options) {
+    match image::decode_with(data, &options) {
         Err(ImageError::ChecksumMismatch(_)) => {
             let lax = DecodeOptions { verify_checksums: false, ..options };
-            vimage::decode_with(data, &lax).map(|img| (img, true))
+            image::decode_with(data, &lax).map(|img| (img, true))
         }
         other => other.map(|img| (img, false)),
     }
@@ -525,10 +525,10 @@ fn half(b: &Bitmap) -> Option<Bitmap> {
 fn make_thumbs(img: &Image, id: u64) -> Thumbs {
     let has_alpha = img.pixels.iter().any(|p| p >> 24 != 0xFF);
     // An intermediate size with enough pixels for the crops of any aspect ratio.
-    let base = vimage::thumbnail(img, BASE_SIZE, BASE_SIZE, Filter::Bilinear);
-    let card = finish(vimage::cover(&base, CARD_W, CARD_H, Filter::Bilinear), has_alpha, 10.0);
-    let strip = finish(vimage::cover(&base, STRIP_W, STRIP_H, Filter::Bilinear), has_alpha, 6.0);
-    let preview = vimage::thumbnail(&base, PREVIEW_W, PREVIEW_H, Filter::Bilinear);
+    let base = image::thumbnail(img, BASE_SIZE, BASE_SIZE, Filter::Bilinear);
+    let card = finish(image::cover(&base, CARD_W, CARD_H, Filter::Bilinear), has_alpha, 10.0);
+    let strip = finish(image::cover(&base, STRIP_W, STRIP_H, Filter::Bilinear), has_alpha, 6.0);
+    let preview = image::thumbnail(&base, PREVIEW_W, PREVIEW_H, Filter::Bilinear);
     let preview = Bitmap::from_straight(preview.width as i32, preview.height as i32, preview.pixels);
     Thumbs { id, card, strip, preview, has_alpha }
 }

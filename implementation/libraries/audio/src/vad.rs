@@ -103,7 +103,7 @@ impl VadState {
 /// A voice activity detector (see the module documentation).
 ///
 /// ```
-/// use vaudio::vad::{Vad, VadState};
+/// use audio::vad::{Vad, VadState};
 ///
 /// let mut vad = Vad::new(16_000);
 /// assert_eq!(vad.process(&[0i16; 160]), VadState::Silence);
@@ -793,7 +793,7 @@ mod tests {
 
     /// Processing time per second of audio on the host, with the level
     /// meter's for comparison. Run with
-    /// `cargo test --release -p vaudio vad::tests::bench -- --ignored --nocapture`.
+    /// `cargo test --release -p audio vad::tests::bench -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn bench_cpu_time() {

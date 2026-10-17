@@ -5,8 +5,8 @@
 
 use alloc::vec::Vec;
 
-use vabi::signals::{self, SIGNALED, USER_ALL};
-use vabi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, channel_flags, info_topic};
+use abi::signals::{self, SIGNALED, USER_ALL};
+use abi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, channel_flags, info_topic};
 
 use super::{SysResult, current_process, deadline, get_channel, get_port, get_socket, handle, insert, ok};
 use crate::ipc::channel::{self, Message};
@@ -62,7 +62,7 @@ pub fn handle_replace(raw: RawHandle, rights: u32) -> SysResult {
 pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysResult {
     // The invalid handle names the calling process (it may always learn
     // about itself).
-    let h = if raw == vabi::INVALID_HANDLE {
+    let h = if raw == abi::INVALID_HANDLE {
         if !matches!(topic, info_topic::HANDLE_BASIC | info_topic::PROCESS) {
             return Err(Error::InvalidArgs);
         }
@@ -97,7 +97,7 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
         info_topic::VMO => match &h.object {
             KObject::Vmo(v) => {
                 let info =
-                    vabi::VmoInfo { size: v.size(), committed_bytes: v.committed_bytes(), flags: 0, _reserved: 0 };
+                    abi::VmoInfo { size: v.size(), committed_bytes: v.committed_bytes(), flags: 0, _reserved: 0 };
                 write(as_bytes(&info))
             }
             _ => Err(Error::WrongType),
@@ -105,7 +105,7 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
         info_topic::THREAD => match &h.object {
             KObject::Thread(t) => {
                 let s = t.sched.lock();
-                let info = vabi::ThreadInfo {
+                let info = abi::ThreadInfo {
                     koid: t.koid,
                     state: s.state as u32,
                     priority: s.priority as u32,
@@ -118,8 +118,7 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
         },
         info_topic::SOCKET => match &h.object {
             KObject::Socket(s) => {
-                let info =
-                    vabi::SocketInfo { readable: s.readable_bytes() as u64, writable: s.writable_bytes() as u64 };
+                let info = abi::SocketInfo { readable: s.readable_bytes() as u64, writable: s.writable_bytes() as u64 };
                 write(as_bytes(&info))
             }
             _ => Err(Error::WrongType),
@@ -203,11 +202,11 @@ pub fn wait_one(raw: RawHandle, signals: u32, d: u64) -> SysResult {
 }
 
 pub fn wait_many(items_ptr: usize, count: usize, d: u64) -> SysResult {
-    if count == 0 || count > vabi::WAIT_MANY_MAX {
+    if count == 0 || count > abi::WAIT_MANY_MAX {
         return Err(Error::InvalidArgs);
     }
     let size = core::mem::size_of::<WaitItem>();
-    let bytes = user::read_vec(items_ptr as u64, count * size, vabi::WAIT_MANY_MAX * size)?;
+    let bytes = user::read_vec(items_ptr as u64, count * size, abi::WAIT_MANY_MAX * size)?;
     let mut items: Vec<WaitItem> = bytes
         .chunks_exact(size)
         // SAFETY: WaitItem is plain data valid for any bit pattern.
@@ -281,7 +280,7 @@ pub fn wait_async_cancel(raw: RawHandle, port_raw: RawHandle, key: u64) -> SysRe
 
 pub fn port_wait(port_raw: RawHandle, packets_ptr: usize, max: usize, d: u64) -> SysResult {
     let port = get_port(port_raw, Rights::READ)?;
-    if max == 0 || max > vabi::PORT_WAIT_MAX {
+    if max == 0 || max > abi::PORT_WAIT_MAX {
         return Err(Error::InvalidArgs);
     }
     let size = core::mem::size_of::<PortPacket>();
@@ -327,14 +326,14 @@ pub fn channel_create(out: usize, flags: u32) -> SysResult {
 
 /// Queues a message on a channel. Its handles are the kernel's as soon as
 /// their list has been read, whatever happens next: a write that fails
-/// closes them (as Zircon's does, and as `vrt`'s `Channel::write` expects),
+/// closes them (as Zircon's does, and as `rt`'s `Channel::write` expects),
 /// so no failure leaves them in the caller's table without an owner.
 /// Neither endpoint of the channel may travel on it, nor any channel or
 /// socket that could reach it through what is queued
 /// ([`crate::ipc::would_cycle`]): `NotSupported`.
 pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
     let ch = get_channel(raw, Rights::WRITE);
-    let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
+    let raws = user::read_u32s(handles_ptr as u64, n_handles, abi::CHANNEL_MAX_HANDLES)?;
     let taken = take_handles(&raws)?;
     // From here on, returning drops what was taken: the handles are closed.
     let ch = ch?;
@@ -342,7 +341,7 @@ pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: 
     if crate::ipc::would_cycle(ch.queues(), &moved) {
         return Err(Error::NotSupported);
     }
-    let data = user::read_vec(bytes as u64, n_bytes, vabi::CHANNEL_MAX_BYTES)?;
+    let data = user::read_vec(bytes as u64, n_bytes, abi::CHANNEL_MAX_BYTES)?;
     match ch.write(Message { data, handles: moved }) {
         Ok(()) => ok(0),
         Err((e, msg)) => {
@@ -366,7 +365,7 @@ pub fn channel_read(
     // lost to a bad pointer.
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let check = |ptr: usize, len: usize| aspace.ensure_range(ptr as u64, len as u64, true);
-    let out = user::UserRange::writable(bytes as u64, bytes_cap.min(vabi::CHANNEL_MAX_BYTES))?;
+    let out = user::UserRange::writable(bytes as u64, bytes_cap.min(abi::CHANNEL_MAX_BYTES))?;
     if !check(actual, 8) || !check(handles_ptr, handles_cap * 4) {
         return Err(Error::Fault);
     }
@@ -386,7 +385,7 @@ pub fn channel_read(
             match table.insert(h) {
                 Ok(v) => values.push(v),
                 // Out of handle slots: the remaining handles are dropped.
-                Err(_) => values.push(vabi::INVALID_HANDLE),
+                Err(_) => values.push(abi::INVALID_HANDLE),
             }
         }
     }
@@ -452,7 +451,7 @@ fn transferable(raws: &[RawHandle], taken: Vec<Option<Handle>>) -> Result<Vec<Ha
 /// is queued ([`crate::ipc::would_cycle`]): `NotSupported`.
 pub fn socket_write(raw: RawHandle, buf: usize, len: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
     let s = get_socket(raw, Rights::WRITE);
-    let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
+    let raws = user::read_u32s(handles_ptr as u64, n_handles, abi::CHANNEL_MAX_HANDLES)?;
     let taken = take_handles(&raws)?;
     // From here on, returning drops what was taken: the handles are closed.
     let s = s?;
@@ -484,7 +483,7 @@ pub fn socket_read(
     let p = current_process()?;
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let check = |ptr: usize, len: usize| len == 0 || aspace.ensure_range(ptr as u64, len as u64, true);
-    let handles_cap = handles_cap.min(vabi::CHANNEL_MAX_HANDLES);
+    let handles_cap = handles_cap.min(abi::CHANNEL_MAX_HANDLES);
     let out = user::UserRange::writable(buf as u64, n)?;
     if !check(handles_ptr, handles_cap * 4) || !check(actual, if actual == 0 { 0 } else { 8 }) {
         return Err(Error::Fault);
@@ -498,7 +497,7 @@ pub fn socket_read(
             match table.insert(h) {
                 Ok(v) => values.push(v),
                 // Out of handle slots: the remaining handles are closed.
-                Err(_) => values.push(vabi::INVALID_HANDLE),
+                Err(_) => values.push(abi::INVALID_HANDLE),
             }
         }
     }

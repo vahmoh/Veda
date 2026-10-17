@@ -18,9 +18,9 @@
 
 use core::ffi::c_void;
 
-use vabi::{Error, nr};
-use vrt::object::{Handle, Thread};
-use vrt::sys::call;
+use abi::{Error, nr};
+use rt::object::{Handle, Thread};
+use rt::sys::call;
 
 use crate::error::{self, SysResult};
 use crate::linux::errno::*;
@@ -113,7 +113,7 @@ pub fn set_tid_address(addr: usize) -> SysResult {
 /// Ends the calling thread.
 pub fn exit_thread() -> ! {
     crate::signal::thread_exited();
-    vrt::sys::thread_exit()
+    rt::sys::thread_exit()
 }
 
 /// Where a thread `__veda_clone` started goes when its function returns
@@ -134,7 +134,7 @@ pub(crate) extern "C" fn thread_returned() -> ! {
 pub unsafe extern "C" fn __veda_unmapself(base: usize, size: usize) -> ! {
     crate::signal::thread_exited();
     // SAFETY: per the caller.
-    unsafe { vrt::thread::exit_unmapping(base, size) }
+    unsafe { rt::thread::exit_unmapping(base, size) }
 }
 
 /// `futex(addr, op, val, timeout, addr2, val3)`.
@@ -143,7 +143,7 @@ pub unsafe fn futex(addr: usize, op: u32, val: u32, timeout: usize, val2: usize,
     match cmd {
         futex::WAIT | futex::WAIT_BITSET => {
             let deadline = if timeout == 0 {
-                vabi::DEADLINE_INFINITE
+                abi::DEADLINE_INFINITE
             } else {
                 // SAFETY: the program passed a timespec.
                 let t: Timespec = unsafe { user::read(timeout)? };

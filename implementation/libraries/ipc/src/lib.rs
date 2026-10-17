@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vipc` — typed inter-process communication for Veda.
+//! `ipc` — typed inter-process communication for Veda.
 //!
 //! * [`codec`]: the binary encoding (`Encode`/`Decode`) plus the `message!`,
 //!   `enumeration!` and `union!` macros for declaring wire types.
@@ -35,11 +35,11 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::fmt;
 
+pub use abi::DEADLINE_INFINITE;
+use abi::{Error, RawHandle, WaitItem};
 pub use codec::{Bytes, Decode, DecodeError, Decoder, Encode, Encoder};
-pub use vabi::DEADLINE_INFINITE;
-use vabi::{Error, RawHandle, WaitItem};
-pub use vrt::object::{Channel, Handle, Message, Port};
-pub use vrt::time::now_ns;
+pub use rt::object::{Channel, Handle, Message, Port};
+pub use rt::time::now_ns;
 
 /// Size of the message header.
 pub const HEADER_LEN: usize = 12;
@@ -87,7 +87,7 @@ pub enum IpcError {
     /// The server does not implement the requested method.
     UnknownMethod(u32),
     /// The message is larger than a channel carries
-    /// (`vabi::CHANNEL_MAX_BYTES`, `vabi::CHANNEL_MAX_HANDLES`), so it was
+    /// (`abi::CHANNEL_MAX_BYTES`, `abi::CHANNEL_MAX_HANDLES`), so it was
     /// not sent.
     TooLarge,
     /// The server answered that it could not serve the request.
@@ -174,7 +174,7 @@ impl Encoder {
     /// the requester is sent an error response in its place, so that its
     /// call fails rather than waits for ever.
     pub fn send(self, ch: &Channel) -> Result<(), IpcError> {
-        if self.bytes.len() > vabi::CHANNEL_MAX_BYTES || self.handles.len() > vabi::CHANNEL_MAX_HANDLES {
+        if self.bytes.len() > abi::CHANNEL_MAX_BYTES || self.handles.len() > abi::CHANNEL_MAX_HANDLES {
             if let Ok(h) = Header::parse(&self.bytes)
                 && h.flags & FLAG_RESPONSE != 0
             {
@@ -209,7 +209,7 @@ pub fn open(msg: &mut Message) -> Result<(Header, Decoder<'_>), IpcError> {
 
 /// Sends a request and waits for the response with the same transaction id.
 pub fn call(ch: &Channel, request: Encoder, txid: u32) -> Result<Message, IpcError> {
-    call_until(ch, request, txid, vabi::DEADLINE_INFINITE)
+    call_until(ch, request, txid, abi::DEADLINE_INFINITE)
 }
 
 /// Like [`call`], but gives up at `deadline` (kernel time in nanoseconds)
@@ -251,7 +251,7 @@ pub fn decode_event<T: Decode>(mut msg: Message) -> Result<(u32, T), IpcError> {
 /// Declares an RPC protocol.
 ///
 /// ```ignore
-/// vipc::protocol! {
+/// ipc::protocol! {
 ///     /// File system service.
 ///     pub mod vfs = "vfs" {
 ///         1 => fn stat(path: String) -> Result<FileInfo, FsError>;
@@ -388,7 +388,7 @@ macro_rules! protocol {
 /// every handle registered for it and unregistered after. A set waited on
 /// again (a service's loop keeps one, [`WaitSet::clear`]ing and filling it
 /// each time round), or one of more handles than a call takes
-/// (`vabi::WAIT_MANY_MAX`), keeps its handles registered with a port
+/// (`abi::WAIT_MANY_MAX`), keeps its handles registered with a port
 /// instead (`object_wait_async`): a wait then costs what changed since the
 /// last one and what is ready, however many handles the set holds. Where
 /// there are no ports (the driver VM's guest, whose calls the monitor's
@@ -442,7 +442,7 @@ impl WaitSet {
     /// result means the deadline passed.
     pub fn wait(&mut self, deadline: u64) -> Result<Vec<(u64, u32)>, Error> {
         let again = core::mem::replace(&mut self.waited, true);
-        if self.port.is_none() && !self.no_port && (again || self.items.len() > vabi::WAIT_MANY_MAX) {
+        if self.port.is_none() && !self.no_port && (again || self.items.len() > abi::WAIT_MANY_MAX) {
             match Port::create() {
                 Ok(port) => self.port = Some((port, Registry::default())),
                 Err(_) => self.no_port = true,
@@ -458,13 +458,13 @@ impl WaitSet {
         let plan = registry.plan(&wanted);
         for (handle, kernel_key) in plan.cancel {
             // A handle closed took its registrations with it.
-            let _ = vrt::object::wait_async_cancel(handle, port, kernel_key);
+            let _ = rt::object::wait_async_cancel(handle, port, kernel_key);
         }
         for (w, kernel_key) in plan.register {
-            vrt::object::wait_async(w.handle, port, kernel_key, w.signals)?;
+            rt::object::wait_async(w.handle, port, kernel_key, w.signals)?;
             registry.armed(kernel_key);
         }
-        let mut packets = [vabi::PortPacket::default(); vabi::PORT_WAIT_MAX];
+        let mut packets = [abi::PortPacket::default(); abi::PORT_WAIT_MAX];
         loop {
             let n = match port.wait_packets(&mut packets, deadline) {
                 Ok(n) => n,
@@ -484,27 +484,27 @@ impl WaitSet {
     /// them in calls of as many as it takes).
     fn wait_many(&mut self, deadline: u64) -> Result<Vec<(u64, u32)>, Error> {
         if self.items.is_empty() {
-            vrt::time::sleep_until(deadline);
+            rt::time::sleep_until(deadline);
             return Ok(Vec::new());
         }
-        let max = vabi::WAIT_MANY_MAX;
+        let max = abi::WAIT_MANY_MAX;
         if self.items.len() <= max {
-            match vrt::object::wait_many(&mut self.items, deadline) {
+            match rt::object::wait_many(&mut self.items, deadline) {
                 Ok(_) | Err(Error::TimedOut) => {}
                 Err(e) => return Err(e),
             }
             return Ok(self.ready(self.items.len()));
         }
         for chunk in self.items.chunks_mut(max) {
-            let _ = vrt::object::wait_many(chunk, 0);
+            let _ = rt::object::wait_many(chunk, 0);
         }
         let ready = self.ready(self.items.len());
         if !ready.is_empty() {
             return Ok(ready);
         }
         // Nothing ready among many handles: block on a short timeout.
-        let short = vrt::time::now_ns().saturating_add(2_000_000).min(deadline);
-        let _ = vrt::object::wait_many(&mut self.items[..max], short);
+        let short = rt::time::now_ns().saturating_add(2_000_000).min(deadline);
+        let _ = rt::object::wait_many(&mut self.items[..max], short);
         Ok(self.ready(max))
     }
 

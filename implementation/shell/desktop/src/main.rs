@@ -22,7 +22,7 @@
 //! * **restarting and shutting down** once the applications have closed
 //!   ([`power`]).
 //!
-//! Every surface is a [`vui::Host`] window. Surfaces draw from the shared
+//! Every surface is a [`ui::Host`] window. Surfaces draw from the shared
 //! [`Model`] and request changes as [`Action`]s, which the main loop performs
 //! after each round of drawing. The shell also serves the `shell` protocol so
 //! applications can change the wallpaper (loaded on a thread of its own, the
@@ -47,19 +47,19 @@ mod tooltip;
 mod volume;
 mod wifi;
 
+use abi::{WaitItem, signals};
+use gfx::Rect;
+use ipc::{Decode, Encode};
+use proto::audio::{AudioStatus, audio};
+use proto::display::{WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
+use proto::init::{AppInfo, ClientIdentity, TaskEvent, launcher};
+use proto::shell::{ShellError, shell};
+use proto::vfs;
+use rt::object::{Channel, Message, Vmo};
+use rt::println;
 use shell_common::wallpaper::{self, Loader, Wallpaper};
-use vabi::{WaitItem, signals};
-use vgfx::Rect;
-use vipc::{Decode, Encode};
-use vproto::audio::{AudioStatus, audio};
-use vproto::display::{WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
-use vproto::init::{AppInfo, ClientIdentity, TaskEvent, launcher};
-use vproto::shell::{ShellError, shell};
-use vproto::vfs;
-use vrt::object::{Channel, Message, Vmo};
-use vrt::println;
-use vui::window::Display;
-use vui::{Host, Icon, Ui};
+use ui::window::Display;
+use ui::{Host, Icon, Ui};
 
 /// How often the desktop looks whether `~/Desktop` or the Trash changed.
 const DESKTOP_POLL_NS: u64 = 1_500_000_000;
@@ -115,7 +115,7 @@ pub enum Action {
     /// to an open impostor of the same name.
     WifiConnect {
         ssid: Vec<u8>,
-        security: Option<vnet::wifi::Security>,
+        security: Option<net::wifi::Security>,
         password: Option<String>,
         auto: bool,
         hidden: bool,
@@ -141,7 +141,7 @@ pub enum Action {
     /// where it may accept connections from (`None`: nowhere).
     FirewallAnswer {
         app: String,
-        from: Option<vnet::Scope>,
+        from: Option<net::Scope>,
     },
     /// Sets the master volume (0..=1) and mute state.
     SetVolume(f32, bool),
@@ -173,9 +173,9 @@ pub struct Model {
     /// The audio system's state (`None` without the audio service).
     pub audio: Option<AudioStatus>,
     /// The Wi-Fi state (`None` without the Wi-Fi service).
-    pub wifi: Option<vnet::wifi::WlanStatus>,
+    pub wifi: Option<net::wifi::WlanStatus>,
     /// Wi-Fi networks in range.
-    pub wifi_networks: Vec<vnet::wifi::NetworkInfo>,
+    pub wifi_networks: Vec<net::wifi::NetworkInfo>,
     /// The last failed connection attempt: SSID and why.
     pub wifi_error: Option<(Vec<u8>, String)>,
     /// A wired interface is connected, and how to describe it.
@@ -192,7 +192,7 @@ pub struct Model {
     pub agent: agent::AgentModel,
     /// The firewall's questions waiting for the user's answer, the oldest
     /// first.
-    pub firewall: Vec<vnet::FirewallQuestion>,
+    pub firewall: Vec<net::FirewallQuestion>,
     pub actions: Vec<Action>,
 }
 
@@ -258,7 +258,7 @@ struct Shell {
     display: Display,
     vfs: Option<vfs::Client>,
     /// The files of the desktop and the Trash.
-    fs: vfiles::Fs,
+    fs: files::Fs,
     launcher: Option<launcher::Client>,
     model: Model,
     desktop_host: Host,
@@ -270,7 +270,7 @@ struct Shell {
     audio: Option<audio::Client>,
     popup: Option<Popup>,
     /// Wi-Fi events (`None` while the Wi-Fi service is not running).
-    wifi_watch: Option<vnet::wifi::Watcher>,
+    wifi_watch: Option<net::wifi::Watcher>,
     /// The firewall's questions (`None` while the network service is not
     /// running).
     firewall_watch: Option<Channel>,
@@ -312,8 +312,8 @@ struct Shell {
 /// Connects to a service only if it is running: a call to a service that
 /// never registers would wait forever.
 pub fn connect_running(name: &str) -> Option<Channel> {
-    let names = vproto::with_registry(|r| r.list()).ok()?.ok()?;
-    if names.iter().any(|n| n == name) { vproto::connect(name).ok() } else { None }
+    let names = proto::with_registry(|r| r.list()).ok()?.ok()?;
+    if names.iter().any(|n| n == name) { proto::connect(name).ok() } else { None }
 }
 
 /// Replaces a file's contents, creating parent directories as needed.
@@ -465,7 +465,7 @@ impl Shell {
 
     /// Shows a notification of the system's: `icon` is an installed
     /// application's id (its tile) or an icon name (see
-    /// `vui::Icon::by_name`).
+    /// `ui::Icon::by_name`).
     fn post_notification(&mut self, title: &str, body: &str, icon: &str) {
         let glyph = self.model.app(icon).map(apps::icon_for).or_else(|| Icon::by_name(icon)).unwrap_or(Icon::Info);
         let sender = notify::Sender { tile: (icon, glyph), name: None };
@@ -512,7 +512,7 @@ impl Shell {
             }
             PopupKind::Wifi => {
                 self.refresh_wifi();
-                let _ = vnet::wifi::scan();
+                let _ = net::wifi::scan();
                 (wifi::placement(screen), "Network", "the network flyout")
             }
         };
@@ -592,7 +592,7 @@ impl Shell {
 
     /// Attaches the agent's interface and takes its events.
     fn check_agent(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         if self.agent.is_none() && now >= self.next_agent_try {
             self.next_agent_try = now + 2_000_000_000;
             self.agent = agent::AgentLink::connect();
@@ -617,8 +617,8 @@ impl Shell {
         let changed = !events.is_empty();
         for ev in events {
             match ev {
-                vproto::agent::AgentEvent::Status { status } => self.model.agent.set_status(status, now),
-                vproto::agent::AgentEvent::Approval { request } => {
+                proto::agent::AgentEvent::Status { status } => self.model.agent.set_status(status, now),
+                proto::agent::AgentEvent::Approval { request } => {
                     if !self.model.agent.approvals.iter().any(|r| r.id == request.id) {
                         if self.agent_win.is_none() {
                             self.notes.post_approval(&self.display, &self.model, &request);
@@ -626,7 +626,7 @@ impl Shell {
                         self.model.agent.approvals.push(request);
                     }
                 }
-                vproto::agent::AgentEvent::ApprovalDone { id } => {
+                proto::agent::AgentEvent::ApprovalDone { id } => {
                     self.model.agent.approvals.retain(|r| r.id != id);
                     self.notes.remove_approval(id, self.model.screen);
                 }
@@ -653,10 +653,10 @@ impl Shell {
 
     /// Re-reads the Wi-Fi status and the networks in range.
     fn refresh_wifi(&mut self) {
-        match vnet::wifi::status() {
+        match net::wifi::status() {
             Ok(s) => {
                 self.model.wifi = Some(s);
-                self.model.wifi_networks = vnet::wifi::networks().unwrap_or_default();
+                self.model.wifi_networks = net::wifi::networks().unwrap_or_default();
             }
             Err(_) => {
                 self.model.wifi = None;
@@ -670,7 +670,7 @@ impl Shell {
     /// Looks at the wired network, and (re)connects to the Wi-Fi service's
     /// events if needed. Runs every few seconds.
     fn poll_network(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         if now < self.next_net_poll {
             return;
         }
@@ -678,10 +678,10 @@ impl Shell {
         // may be restarting), otherwise every five.
         let away = self.wifi_watch.is_none() || self.firewall_watch.is_none();
         self.next_net_poll = now + if away { 1_000_000_000 } else { 5_000_000_000 };
-        let (up, label) = match vnet::interfaces() {
+        let (up, label) = match net::interfaces() {
             Ok(list) => match list
                 .iter()
-                .find(|i| i.kind == vnet::InterfaceKind::Ethernet && i.link_up && !i.gateways.is_empty())
+                .find(|i| i.kind == net::InterfaceKind::Ethernet && i.link_up && !i.gateways.is_empty())
             {
                 Some(i) => (true, format!("Wired: {} connected", i.name)),
                 None => (false, String::new()),
@@ -693,12 +693,12 @@ impl Shell {
             self.model.wired_label = label;
             self.invalidate_network();
         }
-        if self.wifi_watch.is_none() && vnet::wifi::available() {
-            self.wifi_watch = vnet::wifi::Watcher::new().ok();
+        if self.wifi_watch.is_none() && net::wifi::available() {
+            self.wifi_watch = net::wifi::Watcher::new().ok();
             self.refresh_wifi();
         }
         if self.firewall_watch.is_none()
-            && let Ok(ch) = vnet::watch_firewall()
+            && let Ok(ch) = net::watch_firewall()
         {
             // The questions waiting come first on it: those known before
             // may have been settled meanwhile.
@@ -713,7 +713,7 @@ impl Shell {
         let Some(ch) = &self.firewall_watch else { return };
         let mut notices = Vec::new();
         let gone = loop {
-            match vnet::next_firewall_notice(ch) {
+            match net::next_firewall_notice(ch) {
                 Ok(Some(n)) => notices.push(n),
                 Ok(None) => break false,
                 Err(_) => break true,
@@ -729,12 +729,12 @@ impl Shell {
         }
         for n in notices {
             match n {
-                vnet::FirewallNotice::Asked { question } => {
+                net::FirewallNotice::Asked { question } => {
                     if !self.model.firewall.iter().any(|q| q.app == question.app) {
                         self.model.firewall.push(question);
                     }
                 }
-                vnet::FirewallNotice::Settled { app } => self.model.firewall.retain(|q| q.app != app),
+                net::FirewallNotice::Settled { app } => self.model.firewall.retain(|q| q.app != app),
             }
         }
         self.notes.show_questions(&self.display, &self.model);
@@ -759,23 +759,23 @@ impl Shell {
         }
         for ev in events {
             match ev {
-                vnet::wifi::WlanEvent::StatusChanged { status } => {
+                net::wifi::WlanEvent::StatusChanged { status } => {
                     let changed_network = self.model.wifi.as_ref().map(|s| (s.state, s.ssid.clone()))
                         != Some((status.state, status.ssid.clone()));
-                    if status.state == vnet::wifi::ConnState::Connected {
+                    if status.state == net::wifi::ConnState::Connected {
                         self.model.wifi_error = None;
                     }
                     self.model.wifi = Some(status);
                     if changed_network {
-                        self.model.wifi_networks = vnet::wifi::networks().unwrap_or_default();
+                        self.model.wifi_networks = net::wifi::networks().unwrap_or_default();
                     }
                     self.invalidate_network();
                 }
-                vnet::wifi::WlanEvent::ScanDone {} => {
-                    self.model.wifi_networks = vnet::wifi::networks().unwrap_or_default();
+                net::wifi::WlanEvent::ScanDone {} => {
+                    self.model.wifi_networks = net::wifi::networks().unwrap_or_default();
                     self.invalidate_network();
                 }
-                vnet::wifi::WlanEvent::ConnectFailed { ssid, name, reason } => {
+                net::wifi::WlanEvent::ConnectFailed { ssid, name, reason } => {
                     let why = format!("{reason}");
                     let mut msg = why.clone();
                     if let Some(c) = msg.get_mut(0..1) {
@@ -798,14 +798,14 @@ impl Shell {
     fn wifi_connect(
         &mut self,
         ssid: Vec<u8>,
-        security: Option<vnet::wifi::Security>,
+        security: Option<net::wifi::Security>,
         password: Option<String>,
         auto: bool,
         hidden: bool,
     ) {
         self.model.wifi_error = None;
-        let opts = vnet::wifi::ConnectOptions { security, save: true, auto_connect: auto, hidden };
-        if let Err(e) = vnet::wifi::connect_with(&ssid, password.as_deref(), &opts) {
+        let opts = net::wifi::ConnectOptions { security, save: true, auto_connect: auto, hidden };
+        if let Err(e) = net::wifi::connect_with(&ssid, password.as_deref(), &opts) {
             let mut msg = format!("{e}");
             if let Some(c) = msg.get_mut(0..1) {
                 c.make_ascii_uppercase();
@@ -833,7 +833,7 @@ impl Shell {
     /// Shows, replaces or hides the taskbar tooltip.
     fn update_tooltip(&mut self) {
         let popup_open = self.popup.is_some();
-        let due = self.model.tip.as_ref().filter(|t| !popup_open && vrt::time::now_ns() >= t.since + tooltip::DELAY_NS);
+        let due = self.model.tip.as_ref().filter(|t| !popup_open && rt::time::now_ns() >= t.since + tooltip::DELAY_NS);
         match due {
             Some(tip) => {
                 if self.tooltip.as_ref().map(|t| t.label()) != Some(tip.label.as_str()) {
@@ -851,7 +851,7 @@ impl Shell {
 
     /// Lets every surface process its events and draw.
     fn pump(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let Shell { model, desktop_host, desktop, taskbar_host, taskbar, popup, notes, .. } = self;
         let desktop_events = desktop_host.pump(|ui| desktop.update(ui, model));
         let appearing = desktop_events.iter().any(|e| matches!(e, WindowEvent::Appearing {}));
@@ -914,18 +914,18 @@ impl Shell {
                 }
                 Action::ClosePopup(kind) => self.close_popup_of(kind),
                 Action::WifiRadio(on) => {
-                    let _ = vnet::wifi::set_radio(on);
+                    let _ = net::wifi::set_radio(on);
                     self.refresh_wifi();
                 }
                 Action::WifiScan => {
-                    let _ = vnet::wifi::scan();
+                    let _ = net::wifi::scan();
                     self.refresh_wifi();
                 }
                 Action::WifiConnect { ssid, security, password, auto, hidden } => {
                     self.wifi_connect(ssid, security, password, auto, hidden)
                 }
                 Action::WifiDisconnect => {
-                    let _ = vnet::wifi::disconnect();
+                    let _ = net::wifi::disconnect();
                     self.refresh_wifi();
                 }
                 Action::ToggleAgent => {
@@ -960,7 +960,7 @@ impl Shell {
                     }
                 }
                 Action::FirewallAnswer { app, from } => {
-                    if let Err(e) = vnet::answer_firewall(&app, from) {
+                    if let Err(e) = net::answer_firewall(&app, from) {
                         // Watched again, the service says which questions
                         // still wait.
                         println!("the firewall did not take the answer about {app}: {e}");
@@ -988,10 +988,10 @@ impl Shell {
                 Action::NextWallpaper => self.next_wallpaper(),
                 Action::RefreshDesktop => self.refresh_desktop(),
                 Action::Trash(path) => {
-                    match vfiles::trash::put(&self.fs, &path) {
+                    match files::trash::put(&self.fs, &path) {
                         Ok(_) => println!("moved {} to the Trash", path),
                         Err(e) => {
-                            let name = vfiles::path::file_name(&path);
+                            let name = files::path::file_name(&path);
                             let title = format!("Couldn't move “{name}” to the Trash");
                             self.post_notification(&title, &format!("Because {e}."), "files");
                         }
@@ -999,12 +999,12 @@ impl Shell {
                     self.refresh_desktop();
                 }
                 Action::MoveInto(path, dir) => {
-                    let name = vfiles::path::file_name(&path).to_string();
-                    let to = vfiles::path::join(&dir, &self.fs.unique_name(&dir, &name));
+                    let name = files::path::file_name(&path).to_string();
+                    let to = files::path::join(&dir, &self.fs.unique_name(&dir, &name));
                     match self.fs.move_to(&path, &to) {
                         Ok(()) => println!("moved {} into {}", path, dir),
                         Err(e) => {
-                            let into = vfiles::path::display_path(&dir);
+                            let into = files::path::display_path(&dir);
                             let title = format!("Couldn't move “{name}” into {into}");
                             self.post_notification(&title, &format!("Because {e}."), "files");
                         }
@@ -1025,7 +1025,7 @@ impl Shell {
     /// changed (Files, the Terminal and the agent change them too), unless
     /// an icon is being dragged or a menu is open.
     fn poll_desktop(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         if now < self.next_desktop_poll {
             return;
         }
@@ -1039,7 +1039,7 @@ impl Shell {
     /// protocol requests of the clients that sent any.
     fn serve(&mut self) {
         if let Some(l) = &self.listener {
-            while let Some((channel, who)) = vproto::accept_with_identity(l) {
+            while let Some((channel, who)) = proto::accept_with_identity(l) {
                 let own = self.clients.iter().filter(|c| c.who.koid == who.koid).count();
                 if self.clients.len() >= MAX_CLIENTS || own >= MAX_CLIENTS_EACH {
                     // Dropped: the client sees the connection closed.
@@ -1059,7 +1059,7 @@ impl Shell {
             let alive = loop {
                 match client.channel.read() {
                     Ok(msg) => self.request(&mut client, msg),
-                    Err(vabi::Error::ShouldWait) => break true,
+                    Err(abi::Error::ShouldWait) => break true,
                     Err(_) => break false,
                 }
             };
@@ -1071,7 +1071,7 @@ impl Shell {
 
     /// Answers one request of `client`.
     fn request(&mut self, client: &mut Client, msg: Message) {
-        if vipc::Header::parse(&msg.bytes).is_ok_and(|h| h.ordinal == SET_WALLPAPER) {
+        if ipc::Header::parse(&msg.bytes).is_ok_and(|h| h.ordinal == SET_WALLPAPER) {
             return self.wallpaper_request(client, msg);
         }
         match shell::dispatch(self, msg) {
@@ -1087,7 +1087,7 @@ impl Shell {
     /// one wallpaper at a time: a second request while its first loads is
     /// refused.
     fn wallpaper_request(&mut self, client: &mut Client, mut msg: Message) {
-        let decoded = vipc::open(&mut msg).and_then(|(h, mut d)| {
+        let decoded = ipc::open(&mut msg).and_then(|(h, mut d)| {
             let path = String::decode(&mut d)?;
             d.finish()?;
             Ok((h, path))
@@ -1095,8 +1095,8 @@ impl Shell {
         let (header, path) = match decoded {
             Ok(v) => v,
             Err(_) => {
-                if let Ok(h) = vipc::Header::parse(&msg.bytes) {
-                    let _ = vipc::refuse(&client.channel, h, vipc::Refusal::Malformed);
+                if let Ok(h) = ipc::Header::parse(&msg.bytes) {
+                    let _ = ipc::refuse(&client.channel, h, ipc::Refusal::Malformed);
                 }
                 return;
             }
@@ -1120,7 +1120,7 @@ impl Shell {
         for w in &self.model.windows {
             let _ = self.display.close_window(w.id);
         }
-        self.power = Some(power::PowerOff::new(what, vrt::time::now_ns()));
+        self.power = Some(power::PowerOff::new(what, rt::time::now_ns()));
     }
 
     /// Follows a restart or shutdown that waits for the applications: on
@@ -1131,7 +1131,7 @@ impl Shell {
         if self.model.windows.is_empty() {
             return self.power_off(what);
         }
-        match p.pump(&self.display, &self.model, vrt::time::now_ns()) {
+        match p.pump(&self.display, &self.model, rt::time::now_ns()) {
             Some(power::Choice::Force) => self.power_off(what),
             Some(power::Choice::Cancel) => self.power = None,
             None => {}
@@ -1152,7 +1152,7 @@ impl Shell {
             Some(Err(_)) => "the launcher is not responding".to_string(),
             None => "the launcher is not available".to_string(),
         };
-        let what = if what == vproto::init::power::REBOOT { "restart" } else { "shut down" };
+        let what = if what == proto::init::power::REBOOT { "restart" } else { "shut down" };
         println!("cannot {what}: {why}");
         self.post_notification(&format!("Couldn't {what}"), &format!("Because {why}."), "warning");
     }
@@ -1164,11 +1164,11 @@ impl Shell {
         let alive = loop {
             match ch.read() {
                 Ok(msg) => {
-                    if let Ok((_, TaskEvent::Crashed { name, .. })) = vipc::decode_event::<TaskEvent>(msg) {
+                    if let Ok((_, TaskEvent::Crashed { name, .. })) = ipc::decode_event::<TaskEvent>(msg) {
                         crashed.push(name);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => break true,
+                Err(abi::Error::ShouldWait) => break true,
                 Err(_) => break false,
             }
         };
@@ -1192,7 +1192,7 @@ impl Shell {
     /// Blocks until a surface, client or timer needs attention.
     fn wait(&mut self) {
         let mut items: Vec<WaitItem> = Vec::new();
-        let mut deadline = vabi::DEADLINE_INFINITE;
+        let mut deadline = abi::DEADLINE_INFINITE;
         let mut add_host = |h: &Host, items: &mut Vec<WaitItem>| {
             items.push(h.wait_item());
             deadline = deadline.min(h.deadline());
@@ -1246,7 +1246,7 @@ impl Shell {
                 items.push(WaitItem { handle: a.events_handle(), signals: readable, ..Default::default() });
                 // The tray's orb moves while the agent talks or listens.
                 if self.model.agent.active() {
-                    deadline = deadline.min(vrt::time::now_ns() + 33_000_000);
+                    deadline = deadline.min(rt::time::now_ns() + 33_000_000);
                 }
             }
             None => deadline = deadline.min(self.next_agent_try),
@@ -1255,11 +1255,11 @@ impl Shell {
         if let Some(s) = &self.startup {
             deadline = deadline.min(s.deadline());
         }
-        items.truncate(vabi::WAIT_MANY_MAX);
+        items.truncate(abi::WAIT_MANY_MAX);
         if !self.model.actions.is_empty() {
             deadline = 0;
         }
-        let _ = vrt::object::wait_many(&mut items, deadline);
+        let _ = rt::object::wait_many(&mut items, deadline);
         // The clients to read: those with something to read.
         for (c, it) in self.clients.iter().zip(items.iter().skip(first_client)) {
             if it.observed & it.signals != 0 {
@@ -1304,7 +1304,7 @@ impl Shell {
             self.refresh_audio();
         }
         if let Some(s) = &mut self.startup {
-            if s.poll(self.audio.as_ref(), self.vfs.as_ref(), vrt::time::now_ns()) {
+            if s.poll(self.audio.as_ref(), self.vfs.as_ref(), rt::time::now_ns()) {
                 self.desktop_may_appear();
             }
             if self.startup.as_ref().is_some_and(|s| s.done()) {
@@ -1324,7 +1324,7 @@ impl Shell {
 
 /// Answers a `shell::set_wallpaper` request.
 fn answer_wallpaper(channel: &Channel, txid: u32, result: Result<(), ShellError>) {
-    let mut e = vipc::Encoder::with_header(SET_WALLPAPER, txid, vipc::FLAG_RESPONSE);
+    let mut e = ipc::Encoder::with_header(SET_WALLPAPER, txid, ipc::FLAG_RESPONSE);
     result.encode(&mut e);
     let _ = e.send(channel);
 }
@@ -1346,7 +1346,7 @@ impl shell::Server for Shell {
     /// A process posts at most [`NOTES_PER_PERIOD`] in a period.
     fn notify(&mut self, title: String, body: String, icon: String) {
         let who = self.caller.clone();
-        if !self.note_allowed(who.koid, vrt::time::now_ns()) {
+        if !self.note_allowed(who.koid, rt::time::now_ns()) {
             println!("{} posts too many notifications; one left out", who.name);
             return;
         }
@@ -1372,7 +1372,7 @@ impl shell::Server for Shell {
         if !(self.caller.service && self.caller.name == "agent") {
             return Err(ShellError::Unavailable);
         }
-        use vproto::display::arrangement;
+        use proto::display::arrangement;
         let r = match action.as_str() {
             "show_desktop" => {
                 self.show_desktop();
@@ -1400,7 +1400,7 @@ fn main() {
 
 /// Runs the program; its exit code.
 fn run() -> i32 {
-    let display = match vui::window::connect() {
+    let display = match ui::window::connect() {
         Ok(d) => d,
         Err(e) => {
             println!("cannot connect to the display: {:?}", e);
@@ -1417,8 +1417,8 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
-    let launcher = vproto::connect(launcher::NAME).ok().map(launcher::Client::new);
+    let vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
+    let launcher = proto::connect(launcher::NAME).ok().map(launcher::Client::new);
     if let Some(c) = &vfs {
         c.set_timeout(SERVICE_TIMEOUT_NS);
     }
@@ -1462,7 +1462,7 @@ fn run() -> i32 {
         }
     };
 
-    let listener = vproto::register(shell::NAME).ok();
+    let listener = proto::register(shell::NAME).ok();
     if listener.is_none() {
         println!("cannot register the shell service");
     }
@@ -1485,7 +1485,7 @@ fn run() -> i32 {
         firewall: Vec::new(),
         actions: Vec::new(),
     };
-    let fs = vfiles::Fs::connect();
+    let fs = files::Fs::connect();
     if let Some(c) = fs.client() {
         c.set_timeout(SERVICE_TIMEOUT_NS);
     }
@@ -1523,10 +1523,7 @@ fn run() -> i32 {
         agent_win: None,
         next_agent_try: 0,
         // Started with the system: the startup sound as the desktop appears.
-        startup: vrt::env::args()
-            .iter()
-            .any(|a| a == "startup")
-            .then(|| startup::StartupSound::new(vrt::time::now_ns())),
+        startup: rt::env::args().iter().any(|a| a == "startup").then(|| startup::StartupSound::new(rt::time::now_ns())),
         task_events,
         hidden_by_show_desktop: Vec::new(),
     };

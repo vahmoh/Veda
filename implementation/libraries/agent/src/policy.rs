@@ -19,8 +19,8 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use proto::agent::AppAgentInfo;
 use serde_json::{Value, json};
-use vproto::agent::AppAgentInfo;
 
 use crate::tools::{self, Risk};
 
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn only_known_sensitive_actions_are_read_back() {
-        use vproto::agent::ActionSpec;
+        use proto::agent::ActionSpec;
         let action = |name: &str, risk| ActionSpec {
             name: name.into(),
             description: String::new(),

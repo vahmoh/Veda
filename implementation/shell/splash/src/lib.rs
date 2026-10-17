@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vsplash` — the startup splash's picture: a dark gradient with the
+//! `splash` — the startup splash's picture: a dark gradient with the
 //! Veda logo (OS1's white ring from "Her").
 //!
 //! The window system fades it in from black once the system has its
@@ -22,7 +22,7 @@
 #[cfg(test)]
 extern crate std;
 
-use vgfx::color::{keep_scalar, lerp_px};
+use gfx::color::{keep_scalar, lerp_px};
 
 #[cfg(test)]
 mod tests;
@@ -34,7 +34,7 @@ pub const BOTTOM: u32 = 0x12_1A35;
 pub const RING: u32 = 0xFF_FFFF;
 
 /// `a` mixed with `b`, `t` parts of 256 of `b` (`t` at most 256), each
-/// channel rounded down: `vgfx`'s mixing of pixels, without alpha.
+/// channel rounded down: `gfx`'s mixing of pixels, without alpha.
 pub fn mix(a: u32, b: u32, t: u32) -> u32 {
     lerp_px(a, b, t.min(256)) & 0xFF_FFFF
 }
@@ -72,7 +72,7 @@ pub fn background(y: u32, h: u32, x: u32, out: &mut [u32]) {
         let step = |(whole, from): (u32, u32)| whole + u32::from(t >= from);
         *px = step(r) << 16 | step(g) << 8 | step(b);
         // Vectorised, the pattern takes shuffles, which are slow under
-        // emulation (see `vgfx::color`).
+        // emulation (see `gfx::color`).
         keep_scalar();
     }
 }

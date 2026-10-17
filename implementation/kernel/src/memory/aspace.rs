@@ -8,15 +8,15 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::Error;
+use abi::Error;
 
 use super::paging::{self, Cache, Flags};
 use super::vmo::{Frames, Vmo, VmoKind};
 use super::{PAGE_SIZE, page_align_down};
 use crate::synchronization::SpinLock;
 
-const USER_START: u64 = vabi::USER_SPACE_START as u64;
-const USER_END: u64 = vabi::USER_SPACE_END as u64;
+const USER_START: u64 = abi::USER_SPACE_START as u64;
+const USER_END: u64 = abi::USER_SPACE_END as u64;
 /// Where non-fixed mappings are placed by default: from here, plus a
 /// random number of pages ([`DYNAMIC_SPAN`]) chosen for each address space.
 const DYNAMIC_BASE: u64 = 0x0000_1000_0000_0000;
@@ -36,7 +36,7 @@ pub struct Perms {
 
 impl Perms {
     pub fn from_map_flags(flags: usize) -> Perms {
-        use vabi::map_flags::*;
+        use abi::map_flags::*;
         Perms { read: flags & READ != 0, write: flags & WRITE != 0, exec: flags & EXECUTE != 0 }
     }
 

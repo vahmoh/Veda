@@ -3,8 +3,8 @@
 
 //! Visual checks: render sample text with every bundled font to PNG files for inspection.
 //!
-//! Run with `cargo test -p vfont -- --ignored --nocapture`; images are written to
-//! `target/agents/vfont/samples/` (relative to the workspace root).
+//! Run with `cargo test -p font -- --ignored --nocapture`; images are written to
+//! `target/agents/font/samples/` (relative to the workspace root).
 
 use alloc::format;
 use alloc::string::String;
@@ -86,7 +86,7 @@ impl Canvas {
     }
 
     pub fn save(&self, name: &str) {
-        let dir = String::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../target/agents/vfont/samples"));
+        let dir = String::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../target/agents/font/samples"));
         std::fs::create_dir_all(&dir).unwrap();
         let path = format!("{dir}/{name}");
         std::fs::write(&path, encode_png(self.width, self.height, &self.rgb)).unwrap();

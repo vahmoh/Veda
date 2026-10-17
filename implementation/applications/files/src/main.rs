@@ -11,7 +11,7 @@
 //! cut/copy/paste, properties. Everything works from the keyboard as well
 //! as the mouse; `/system` is shown read-only.
 //!
-//! The Trash ([`vfiles::trash`]) is a place of its own: its items are
+//! The Trash ([`files::trash`]) is a place of its own: its items are
 //! listed with where they were deleted from and when, and can be restored
 //! there (or dragged anywhere else) or deleted for good, one by one or by
 //! emptying the Trash. [`agent`] lets the voice agent do the same.
@@ -34,16 +34,16 @@ mod view;
 use core::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use vfiles::format::{friendly_time, human_size};
-use vfiles::fs::{Error, Space};
-use vfiles::kind::{FileKind, default_app, file_kind, kind_name};
-use vfiles::path::{display_path, extension, file_name, is_read_only, join, natural_cmp, normalize, parent, resolve};
-use vfiles::thumbs::Thumbnailer;
-use vfiles::{Fs, HOME, trash};
-use vproto::display::modifiers;
-use vproto::init::launcher;
-use vproto::input::keys;
-use vui::{App, Ui, WindowSpec};
+use files::format::{friendly_time, human_size};
+use files::fs::{Error, Space};
+use files::kind::{FileKind, default_app, file_kind, kind_name};
+use files::path::{display_path, extension, file_name, is_read_only, join, natural_cmp, normalize, parent, resolve};
+use files::thumbs::Thumbnailer;
+use files::{Fs, HOME, trash};
+use proto::display::modifiers;
+use proto::init::launcher;
+use proto::input::keys;
+use ui::{App, Ui, WindowSpec};
 
 use ops::{Finished, Job, Outcome, Worker};
 
@@ -75,7 +75,7 @@ impl Entry {
 struct Trashed {
     /// Each item's name in the Trash, and where it was.
     items: Vec<(String, String)>,
-    /// When (`vrt::time::now_ns`).
+    /// When (`rt::time::now_ns`).
     at: u64,
 }
 
@@ -248,8 +248,8 @@ fn items(n: usize) -> String {
 /// Where items at `paths` were, as the log says it: their folder, if they
 /// share one.
 fn folder_of<'a>(mut paths: impl Iterator<Item = &'a str>) -> String {
-    let Some(first) = paths.next().map(vfiles::path::parent) else { return String::new() };
-    if paths.all(|p| vfiles::path::parent(p) == first) { first.to_string() } else { "several folders".to_string() }
+    let Some(first) = paths.next().map(files::path::parent) else { return String::new() };
+    if paths.all(|p| files::path::parent(p) == first) { first.to_string() } else { "several folders".to_string() }
 }
 
 /// Where an item in the Trash was deleted from, as shown (`~/Documents`;
@@ -353,7 +353,7 @@ impl Files {
 
     fn launcher(&mut self) -> Option<&launcher::Client> {
         if self.launcher.is_none() {
-            self.launcher = vproto::connect(launcher::NAME).ok().map(launcher::Client::new);
+            self.launcher = proto::connect(launcher::NAME).ok().map(launcher::Client::new);
         }
         self.launcher.as_ref()
     }
@@ -1232,7 +1232,7 @@ impl Files {
                 if !moved.is_empty() {
                     let from = folder_of(moved.iter().map(|(_, origin)| origin.as_str()));
                     println!("moved {} from {from} to the Trash", items(moved.len()));
-                    self.trashed = Some(Trashed { items: moved.clone(), at: vrt::time::now_ns() });
+                    self.trashed = Some(Trashed { items: moved.clone(), at: rt::time::now_ns() });
                 }
                 self.after_removal(self.cursor);
                 if !no_room.is_empty() {
@@ -1455,7 +1455,7 @@ impl Files {
                 ) {
                     Some(0) => {
                         let p = path.clone();
-                        self.launch(vfiles::kind::EDITOR.exe, vec![p]);
+                        self.launch(files::kind::EDITOR.exe, vec![p]);
                         false
                     }
                     Some(_) => false,
@@ -1513,7 +1513,7 @@ impl App for Files {
             ui.repaint();
         }
         // Keys belong to a dialog or a focused text field. (While a menu is
-        // open, vui gives it the keyboard and widgets see no keys.)
+        // open, `ui` gives it the keyboard and widgets see no keys.)
         if !dialog_at_start
             && !self.typing
             && self.rename.is_none()
@@ -1532,32 +1532,32 @@ impl App for Files {
         }
     }
 
-    fn wait_handles(&self) -> Vec<(vabi::RawHandle, u32)> {
+    fn wait_handles(&self) -> Vec<(abi::RawHandle, u32)> {
         let mut handles = Vec::new();
         if let Some(t) = &self.thumbs {
-            handles.push((t.event_handle(), vabi::signals::SIGNALED));
+            handles.push((t.event_handle(), abi::signals::SIGNALED));
         }
         if let Some(w) = &self.worker {
-            handles.push((w.event_handle(), vabi::signals::SIGNALED));
+            handles.push((w.event_handle(), abi::signals::SIGNALED));
         }
         handles
     }
 
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Files::agent_invoke(self, action, args)
     }
 }
 
 fn main() {
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let empty_trash = args.get(1).is_some_and(|a| a == "--empty-trash");
     let start = match args.get(1) {
         _ if empty_trash => trash::FILES.to_string(),
@@ -1572,5 +1572,5 @@ fn main() {
     spec.app_id = "files".into();
     spec.min_width = 560;
     spec.min_height = 360;
-    std::process::exit(vui::run(spec, files));
+    std::process::exit(ui::run(spec, files));
 }

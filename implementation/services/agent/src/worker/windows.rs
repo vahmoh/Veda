@@ -7,8 +7,8 @@
 //! [`super::DESKTOP_TIMEOUT_NS`]): one that hangs does not hold up the
 //! agent.
 
+use proto::display::{WindowInfo, WindowKind};
 use serde_json::{Value, json};
-use vproto::display::{WindowInfo, WindowKind};
 
 use super::{Ctx, desktop, window_system};
 

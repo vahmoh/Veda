@@ -71,10 +71,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use vabi::Error;
-use vipc::{enumeration, message, protocol};
-use vrt::object::{Event, Vmo};
-use vrt::vm::Mapping;
+use abi::Error;
+use ipc::{enumeration, message, protocol};
+use rt::object::{Event, Vmo};
+use rt::vm::Mapping;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,7 +239,7 @@ impl FlipState {
         if vmo.size()? < state::SIZE {
             return Err(Error::InvalidArgs);
         }
-        let map = Mapping::new(vmo, state::SIZE, vabi::map_flags::READ | vabi::map_flags::WRITE)?;
+        let map = Mapping::new(vmo, state::SIZE, abi::map_flags::READ | abi::map_flags::WRITE)?;
         Ok(FlipState { map })
     }
 

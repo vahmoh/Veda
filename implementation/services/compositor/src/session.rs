@@ -10,9 +10,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use compositor_core::buffers::Buffers;
-use vproto::display::{self as dp, Cursor, DisplayError, ScreenInfo, WindowInfo, WindowSpec, WindowState, display};
-use vrt::object::{Channel, Vmo};
-use vrt::vm::Mapping;
+use proto::display::{self as dp, Cursor, DisplayError, ScreenInfo, WindowInfo, WindowSpec, WindowState, display};
+use rt::object::{Channel, Vmo};
+use rt::vm::Mapping;
 
 use crate::state::Compositor;
 
@@ -42,7 +42,7 @@ impl display::Server for Session<'_> {
     ) -> Result<(), DisplayError> {
         let memory = buffers.size().map_err(|_| DisplayError::BadBuffer)?;
         let layout = self.comp.wm.buffer_layout(self.client, id, (width, height), stride, count, memory)?;
-        let map = Mapping::new(buffers, layout.bytes().next_multiple_of(4096), vabi::map_flags::READ)
+        let map = Mapping::new(buffers, layout.bytes().next_multiple_of(4096), abi::map_flags::READ)
             .map_err(|_| DisplayError::NoMemory)?;
         self.comp.wm.attach(self.client, id, Buffers { layout, memory: map })
     }

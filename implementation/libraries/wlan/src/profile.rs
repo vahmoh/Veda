@@ -72,7 +72,7 @@ impl core::fmt::Debug for Profile {
 
 /// What a passphrase and an SSID may be: the protocol's rules, which the
 /// service's clients check before they ask.
-pub use vproto::wlan::{valid_passphrase, valid_ssid};
+pub use proto::wlan::{valid_passphrase, valid_ssid};
 
 fn security_name(s: Security) -> &'static str {
     match s {

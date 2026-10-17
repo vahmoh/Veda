@@ -3,8 +3,8 @@
 
 //! The volume flyout opened from the speaker icon on the taskbar.
 
-use vgfx::{Align, Rect};
-use vui::{Font, Ui, status};
+use gfx::{Align, Rect};
+use ui::{Font, Ui, status};
 
 use crate::{Action, Model, chrome, taskbar};
 
@@ -30,7 +30,7 @@ impl VolumeFlyout {
         let t = ui.theme().clone();
         let w = ui.width;
         chrome::popup_background(&mut ui.canvas, &m.wallpaper.blurred, self.origin);
-        if ui.input.key(vproto::input::keys::ESC) {
+        if ui.input.key(proto::input::keys::ESC) {
             ui.close_window();
         }
         let Some(audio) = m.audio.clone() else {

@@ -31,17 +31,17 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vabi::startup::role;
-use vabi::{resource_kind, signals};
-use vipc::WaitSet;
-use vproto::init::{
+use abi::startup::role;
+use abi::{resource_kind, signals};
+use ipc::WaitSet;
+use proto::init::{
     AppInfo, ClientIdentity, LISTENER_CONNECT, LaunchError, RegistryError, TASK_EVENT, TaskEvent, TaskInfo, launcher,
     registry,
 };
-use vrt::object::{Channel, Handle, Process, Resource, Vmo};
-use vrt::println;
+use rt::object::{Channel, Handle, Process, Resource, Vmo};
+use rt::println;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// What a channel served by init speaks.
 enum ConnKind {
@@ -170,7 +170,7 @@ impl Init {
     ) -> Result<u64, LaunchError> {
         let image = self.image(path).ok_or(LaunchError::NotFound)?;
         let registry = self.new_registry_channel(0).ok_or(LaunchError::NoMemory)?;
-        let mut spawn = vrt::process::Spawn::new(name).handle(role::REGISTRY, registry.into_handle());
+        let mut spawn = rt::process::Spawn::new(name).handle(role::REGISTRY, registry.into_handle());
         for a in args {
             spawn = spawn.arg(a);
         }
@@ -181,10 +181,10 @@ impl Init {
         let process = spawn.start(image).map_err(|e| {
             println!("failed to start {}: {}", path, e);
             match e {
-                vrt::process::SpawnError::NotExecutable
-                | vrt::process::SpawnError::BadElf(_)
-                | vrt::process::SpawnError::Incompatible => LaunchError::BadImage,
-                vrt::process::SpawnError::Kernel(vabi::Error::NoMemory) => LaunchError::NoMemory,
+                rt::process::SpawnError::NotExecutable
+                | rt::process::SpawnError::BadElf(_)
+                | rt::process::SpawnError::Incompatible => LaunchError::BadImage,
+                rt::process::SpawnError::Kernel(abi::Error::NoMemory) => LaunchError::NoMemory,
                 _ => LaunchError::Failed,
             }
         })?;
@@ -216,7 +216,7 @@ impl Init {
         let process = match self.children.get(&koid) {
             Some(child) => &child.process,
             None => {
-                opened = vrt::object::process_open(&processes, koid).map_err(|_| LaunchError::NotFound)?;
+                opened = rt::object::process_open(&processes, koid).map_err(|_| LaunchError::NotFound)?;
                 &opened
             }
         };
@@ -241,7 +241,7 @@ impl Init {
             if parent == 0 || parent == self.koid {
                 return false;
             }
-            let Ok(info) = vrt::object::process_open(processes, parent).and_then(|p| p.info()) else {
+            let Ok(info) = rt::object::process_open(processes, parent).and_then(|p| p.info()) else {
                 return false;
             };
             (koid, parent) = (info.koid, info.parent_koid);
@@ -289,7 +289,7 @@ impl Init {
     /// Hands a connection to the registered service `name`.
     fn deliver(&mut self, name: &str, server_end: Channel, client: ClientIdentity) {
         let Some((listener, _)) = self.services.get(name) else { return };
-        if vipc::send_event(listener, LISTENER_CONNECT, (server_end, client)).is_err() {
+        if ipc::send_event(listener, LISTENER_CONNECT, (server_end, client)).is_err() {
             // The service went away; forget it. The connection is lost (the
             // client will see PEER_CLOSED).
             println!("service '{}' is gone", name);
@@ -297,7 +297,7 @@ impl Init {
         }
     }
 
-    fn handle_registry(&mut self, key: u64, msg: vrt::Message) {
+    fn handle_registry(&mut self, key: u64, msg: rt::Message) {
         struct Reg<'a> {
             init: &'a mut Init,
             key: u64,
@@ -363,7 +363,7 @@ impl Init {
         }
     }
 
-    fn handle_launcher(&mut self, key: u64, msg: vrt::Message) {
+    fn handle_launcher(&mut self, key: u64, msg: rt::Message) {
         let Some(Conn { kind: ConnKind::Launcher { who }, .. }) = self.conns.get(&key) else { return };
         struct Launch<'a> {
             init: &'a mut Init,
@@ -385,11 +385,11 @@ impl Init {
             }
 
             fn tasks(&mut self) -> Vec<TaskInfo> {
-                let mut infos = alloc::vec![vabi::ProcessInfo::default(); 256];
-                let n = vrt::object::process_list(&mut infos).unwrap_or(0).min(infos.len());
+                let mut infos = alloc::vec![abi::ProcessInfo::default(); 256];
+                let n = rt::object::process_list(&mut infos).unwrap_or(0).min(infos.len());
                 infos[..n]
                     .iter()
-                    .filter(|p| p.state == vabi::process_state::RUNNING)
+                    .filter(|p| p.state == abi::process_state::RUNNING)
                     .map(|p| TaskInfo {
                         koid: p.koid,
                         name: p.name().to_string(),
@@ -414,7 +414,7 @@ impl Init {
                 }
                 println!("power action {} for {}", action, self.who.name);
                 let res = self.init.root.create(resource_kind::POWER, 0, 0).map_err(|_| LaunchError::Denied)?;
-                vrt::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
+                rt::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
             }
 
             /// For system services (the shell tells the user of crashes) and
@@ -447,19 +447,19 @@ impl Init {
         let Some(child) = self.children.remove(&koid) else { return };
         let code = child.process.info().map(|i| i.exit_code).unwrap_or(0);
         match code {
-            vabi::EXIT_CODE_CRASHED => println!("{} crashed", child.name),
-            vabi::EXIT_CODE_PANICKED => println!("{} panicked", child.name),
+            abi::EXIT_CODE_CRASHED => println!("{} crashed", child.name),
+            abi::EXIT_CODE_PANICKED => println!("{} panicked", child.name),
             // A POSIX program's fault: a program on the standard library
             // that panics aborts.
-            c if vabi::crashed(c) => println!("{} crashed (signal {})", child.name, vabi::exit_signal(c).unwrap_or(0)),
+            c if abi::crashed(c) => println!("{} crashed (signal {})", child.name, abi::exit_signal(c).unwrap_or(0)),
             _ => println!("{} exited with code {}", child.name, code),
         }
-        if child.origin != Origin::Service && vabi::crashed(code) {
+        if child.origin != Origin::Service && abi::crashed(code) {
             // Tell the watchers (the shell shows a notification). Watchers
             // that went away are dropped; a full channel just misses this.
             let event = TaskEvent::Crashed { koid, name: child.name.clone() };
             self.watchers
-                .retain(|w| !matches!(vipc::send_event(w, TASK_EVENT, event.clone()), Err(vipc::IpcError::PeerClosed)));
+                .retain(|w| !matches!(ipc::send_event(w, TASK_EVENT, event.clone()), Err(ipc::IpcError::PeerClosed)));
         }
         // Drop the services it provided.
         self.services.retain(|name, (_, owner)| {
@@ -483,7 +483,7 @@ impl Init {
             println!("warning: system service {} is no longer running", name);
             return;
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let history = self.restarts.entry(name.to_string()).or_default();
         history.retain(|&t| now - t < WINDOW_NS);
         if history.len() >= MAX_RESTARTS {
@@ -507,7 +507,7 @@ impl Init {
             for (&koid, c) in &self.children {
                 ws.add(c.process.raw(), signals::TERMINATED, CHILD_KEY | koid);
             }
-            let ready = match ws.wait(vabi::DEADLINE_INFINITE) {
+            let ready = match ws.wait(abi::DEADLINE_INFINITE) {
                 Ok(r) => r,
                 Err(e) => {
                     println!("wait failed: {}", e);
@@ -538,22 +538,22 @@ impl Init {
 
 fn main() -> i32 {
     println!("starting Veda {}", env!("CARGO_PKG_VERSION"));
-    let root = Resource::from_handle(vrt::env::take_handle(role::ROOT_RESOURCE).expect("init: no root resource"));
-    let initrd_vmo = Vmo::from_handle(vrt::env::take_handle(role::INITRD).expect("init: no initrd"));
+    let root = Resource::from_handle(rt::env::take_handle(role::ROOT_RESOURCE).expect("init: no root resource"));
+    let initrd_vmo = Vmo::from_handle(rt::env::take_handle(role::INITRD).expect("init: no initrd"));
     let size = initrd_vmo.size().expect("init: initrd size");
-    let addr = initrd_vmo.map(0, size, vabi::map_flags::READ).expect("init: cannot map the initrd");
+    let addr = initrd_vmo.map(0, size, abi::map_flags::READ).expect("init: cannot map the initrd");
     // SAFETY: the read-only mapping lives for the rest of init's life.
     let bytes: &'static [u8] = unsafe { core::slice::from_raw_parts(addr as *const u8, size) };
     let archive = initrd::Archive::open(bytes).expect("init: the initrd is corrupt");
 
     let mut init = Init {
-        koid: vrt::object::process_self_info().map_or(0, |i| i.koid),
+        koid: rt::object::process_self_info().map_or(0, |i| i.koid),
         root,
         initrd: archive,
         initrd_vmo,
-        framebuffer: vrt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
-        boot_info: vrt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
-        firmware_variables: vrt::env::take_handle(role::FIRMWARE_VARIABLES).map(Vmo::from_handle),
+        framebuffer: rt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
+        boot_info: rt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
+        firmware_variables: rt::env::take_handle(role::FIRMWARE_VARIABLES).map(Vmo::from_handle),
         services: BTreeMap::new(),
         reserved: BTreeSet::new(),
         pending: BTreeMap::new(),

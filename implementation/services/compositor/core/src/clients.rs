@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The window system's clients: who each connection is, as `init` vouches
-//! for it (`vproto::init::ClientIdentity`), and so what it may do.
+//! for it (`proto::init::ClientIdentity`), and so what it may do.
 //!
 //! * The desktop shell (the system service named `shell`) draws the
 //!   desktop, the taskbar and notifications, and manages every window:

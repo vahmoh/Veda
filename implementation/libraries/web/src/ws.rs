@@ -21,10 +21,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use abi::RawHandle;
 use base64ct::{Base64, Encoding};
+use rt::time::Duration;
 use sha1::{Digest, Sha1};
-use vabi::RawHandle;
-use vrt::time::Duration;
 
 use crate::http::{Head, Reader, parse_head};
 use crate::{Conn, Connection, Url, WebError, random_bytes};

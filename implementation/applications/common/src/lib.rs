@@ -13,8 +13,8 @@
 //!   standard library.
 //!
 //! These belong with the libraries they extend: the process lists with
-//! `vproto`'s launcher protocol, the formats with `vrt` and `vfiles`, the
-//! icons and the clipboard with `vui`. The pure parts are tested on the
+//! `proto`'s launcher protocol, the formats with `rt` and `files`, the
+//! icons and the clipboard with `ui`. The pure parts are tested on the
 //! host.
 
 #![no_std]

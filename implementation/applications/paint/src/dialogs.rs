@@ -4,13 +4,13 @@
 //! The dialogs that ask for numbers: a new picture's size, resizing, the canvas's size, and the
 //! effects with settings (shown on the picture as they change).
 
+use gfx::{Align, Color, Rect};
 use paint_core::Document;
 use paint_core::effects::Effect;
 use paint_core::transform::{Anchor, MAX_SIDE, Resample};
-use vgfx::{Align, Color, Rect};
-use vproto::display::Cursor;
-use vproto::input::keys;
-use vui::{Font, Ui};
+use proto::display::Cursor;
+use proto::input::keys;
+use ui::{Font, Ui};
 
 use crate::toolbar::segmented;
 
@@ -31,7 +31,7 @@ fn side(text: &str, what: &str) -> Result<i32, String> {
 }
 
 /// A labelled number field; returns its response.
-fn field(ui: &mut Ui, x: i32, y: i32, label: &str, id: &str, value: &mut String, unit: &str) -> vui::TextInputResponse {
+fn field(ui: &mut Ui, x: i32, y: i32, label: &str, id: &str, value: &mut String, unit: &str) -> ui::TextInputResponse {
     let t = ui.theme().clone();
     ui.label(Rect::new(x, y, 80, 34), label, Font::Regular, t.font_size, t.text_dim, Align::Left);
     let resp = ui.text_input(Rect::new(x + 80, y, 110, 34), id, value, "");

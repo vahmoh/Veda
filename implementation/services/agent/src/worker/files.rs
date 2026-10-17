@@ -6,16 +6,16 @@
 //! The paths come from the language model, and the places items are
 //! restored to from the Trash's records, which any program can write: each
 //! one an action acts on — its source, its destination, where a restored
-//! item goes — is resolved by [`vagent::files`] first, so that nothing
+//! item goes — is resolved by [`agent::files`] first, so that nothing
 //! reaches a private directory, and what is created goes in the home folder
 //! or `/tmp`. Copies, moves and renames never replace what is there: the
 //! destination is worked out as it is used, and one that exists is refused
 //! before anything is done.
 
+use agent::files::{self as paths, HOME};
+use files::path::{file_name, parent};
+use files::trash;
 use serde_json::{Value, json};
-use vagent::files::{self as paths, HOME};
-use vfiles::path::{file_name, parent};
-use vfiles::trash;
 
 use super::{Ctx, show};
 
@@ -27,7 +27,7 @@ impl Ctx {
     pub(super) fn files(&mut self, args: &Value) -> Result<Value, String> {
         let op = args["operation"].as_str().unwrap_or("");
         let path = paths::resolve(args["path"].as_str().unwrap_or("~"))?;
-        let err = |e: vfiles::Error| e.to_string();
+        let err = |e: files::Error| e.to_string();
         match op {
             "list" => {
                 let entries = self.fs.read_dir(&path).map_err(err)?;
@@ -35,7 +35,7 @@ impl Ctx {
                     .iter()
                     .filter(|e| !e.name.starts_with('.'))
                     .take(150)
-                    .map(|e| json!({ "name": e.name.as_str(), "folder": e.is_dir, "size": vfiles::format::human_size(e.size) }))
+                    .map(|e| json!({ "name": e.name.as_str(), "folder": e.is_dir, "size": files::format::human_size(e.size) }))
                     .collect();
                 Ok(json!({ "folder": show(&path), "entries": list, "total": entries.len() }))
             }
@@ -51,9 +51,9 @@ impl Ctx {
                 Ok(json!({
                     "path": show(&path),
                     "folder": st.is_dir,
-                    "size": vfiles::format::human_size(st.size),
-                    "modified": vfiles::format::format_time(st.modified),
-                    "kind": vfiles::kind::kind_name(file_name(&path), st.is_dir, st.executable),
+                    "size": files::format::human_size(st.size),
+                    "modified": files::format::format_time(st.modified),
+                    "kind": files::kind::kind_name(file_name(&path), st.is_dir, st.executable),
                 }))
             }
             "read" => {
@@ -68,12 +68,12 @@ impl Ctx {
                     }
                     Err(_) => Ok(json!({
                         "path": show(&path),
-                        "kind": vfiles::kind::kind_name(
+                        "kind": files::kind::kind_name(
                             file_name(&path),
                             false,
                             self.fs.stat(&path).is_ok_and(|st| st.executable),
                         ),
-                        "size": vfiles::format::human_size(bytes.len() as u64),
+                        "size": files::format::human_size(bytes.len() as u64),
                         "note": "not a text file; open it in its application instead",
                     })),
                 }
@@ -134,7 +134,7 @@ impl Ctx {
                             "name": i.original_name(),
                             "folder": i.is_dir,
                             "deleted_from": from.unwrap_or_else(|| "not known".into()),
-                            "deleted": vfiles::format::format_time(i.deleted()),
+                            "deleted": files::format::format_time(i.deleted()),
                         })
                     })
                     .collect();
@@ -179,7 +179,7 @@ impl Ctx {
             if e.name.starts_with('.') {
                 continue;
             }
-            let p = vfiles::path::join(dir, &e.name);
+            let p = files::path::join(dir, &e.name);
             if e.name.to_lowercase().contains(what) {
                 out.push(show(&p));
             }

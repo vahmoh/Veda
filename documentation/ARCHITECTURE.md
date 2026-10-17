@@ -28,10 +28,10 @@ who may call what, and links to each subsystem's own document.
 
 ## Boot
 
-1. The firmware (OVMF under QEMU) loads the loader, `vboot`
-   (`implementation/boot/`), from UEFI's boot path for the architecture
+1. The firmware (OVMF under QEMU) loads the loader
+   (`implementation/bootloader/`) from UEFI's boot path for the architecture
    (`\EFI\BOOT\BOOTX64.EFI` on AMD64) on the EFI system partition.
-2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.ELF` and `INITRD.IMG`, picks a
+2. The loader reads `\VEDA\BOOT.CFG`, `KERNEL.ELF` and `INITRD.IMG`, picks a
    GOP mode near `BOOT.CFG`'s size in the display's own shape, and clears
    the screen through a write-combining mapping. It loads the kernel,
    builds its page tables (identity map, direct map at
@@ -63,7 +63,7 @@ who may call what, and links to each subsystem's own document.
 The screen stays black until the screen the desktop will be on is ready:
 the driver VM's display driver has shown its first picture, or `devmgr`
 says no driver is coming (`displaydev::expect`). The splash
-(`vsplash`) then fades in, and the desktop dissolves in with the startup
+(`splash`) then fades in, and the desktop dissolves in with the startup
 sound once the desktop and the taskbar have each presented a frame, the
 splash has been up for 2.1 s and the shell has the sound ready (3 s at
 most). With a password set, the window system is still locked then, and
@@ -81,7 +81,7 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 ## The kernel
 
-`vkernel` (`implementation/kernel/`):
+`kernel` (`implementation/kernel/`):
 
 | Module | Responsibility |
 |--------|----------------|
@@ -102,7 +102,7 @@ logs (see [the driver VM](DRIVERVM.md)).
   contention low. Per-object spinlocks catch accidental recursion; TLB
   shootdowns are acknowledged without the BKL, so they cannot deadlock.
 - **Capabilities.** Everything user space can touch is a kernel object
-  reached through a per-process handle with rights (`vabi::Rights`); there
+  reached through a per-process handle with rights (`abi::Rights`); there
   is no ambient authority. Hardware access needs *resource* handles:
   `init` holds the root resource and derives narrow ones (an I/O port
   range, one IRQ, one MMIO range) for each driver. A process handle with
@@ -131,7 +131,7 @@ logs (see [the driver VM](DRIVERVM.md)).
   keeps registrations (`object_wait_async`) and queues a packet for each
   that fires (`port_wait`), so a wait costs what is ready, not what is
   watched; it holds at most 65536 registrations, and its handle cannot
-  leave its process. `vipc`'s
+  leave its process. `ipc`'s
   `WaitSet`, the core of every service loop, uses one when it is kept from
   one wait to the next.
 - **Time.** On AMD64 the monotonic clock counts the TSC, calibrated against
@@ -159,17 +159,17 @@ says which each is:
 | Kind | Programs | Built |
 |------|----------|-------|
 | On Rust's standard library (`Program::std`) | the applications, and the services that gain from it (the shell, the agent) | for Veda's own Rust target, linked by GCC with the C library: POSIX programs, as C programs are |
-| On `vrt` alone (`Program::native`, `#![no_std]`) | what the standard library stands on or runs before (`init`, the file system, the network stack), what drives hardware and what must answer in time (the window system, the sound mixer) | for Linux's musl target (hard-float SSE; the kernel is soft-float), linked by `rust-lld` with nothing of Linux's or musl's: position-independent, `DT_RELR`-packed, marked by a `velf::veda` note |
+| On `rt` alone (`Program::native`, `#![no_std]`) | what the standard library stands on or runs before (`init`, the file system, the network stack), what drives hardware and what must answer in time (the window system, the sound mixer) | for Linux's musl target (hard-float SSE; the kernel is soft-float), linked by `rust-lld` with nothing of Linux's or musl's: position-independent, `DT_RELR`-packed, marked by a `elf::veda` note |
 
-- **`vrt`** (`implementation/libraries/rt`) is Veda's runtime: system
+- **`rt`** (`implementation/libraries/rt`) is Veda's runtime: system
   calls and kernel objects, the heap (TLSF over private memory, returning
   pages that stay free to the system), threads with guard pages, futex
   locks that make no system call uncontended, time, logging and process
   creation. In
   a program on the standard library, the standard library is the runtime
   (entry point, panics, threads) and the POSIX layer holds the startup
-  handles, but `vrt`'s heap stays the global allocator.
-- **Process creation** happens in user space (`vrt::process::Spawn`):
+  handles, but `rt`'s heap stays the global allocator.
+- **Process creation** happens in user space (`rt::process::Spawn`):
   create a process, map the program's image, and start a thread with a
   bootstrap channel carrying the startup message (arguments, environment,
   working directory, role-tagged handles). A position-independent program
@@ -177,18 +177,18 @@ says which each is:
   gives the failing address within the program's image (`target/` keeps
   Veda's programs with their symbols).
 - **POSIX.** C programs and programs on the standard library run on musl,
-  whose system calls go to `vposix` (`implementation/libraries/posix`), a
+  whose system calls go to `posix` (`implementation/libraries/posix`), a
   POSIX layer in Rust: files are the VFS's, pipes and terminals kernel
   sockets, network sockets `netd`'s, Unix domain sockets named by the VFS,
   `epoll` a kernel port and threads kernel threads; `posix_spawn` starts
   processes (see [C on Veda](C.md)).
 - **Services** register by name with the registry in `init`, and clients
   connect by name; a connection to a service not registered yet waits for
-  it (up to 64 per process). Protocols are declared with `vipc`'s macros,
+  it (up to 64 per process). Protocols are declared with `ipc`'s macros,
   which generate typed client stubs and server dispatch code; every
   request is answered, and events travel on a channel of their own.
 - **Identity.** With each connection the registry gives the service the
-  client's identity (`vproto::init::ClientIdentity`: process, program name,
+  client's identity (`proto::init::ClientIdentity`: process, program name,
   and whether it is a system service, an application or a program the
   kernel command line asked for), which no process can forge; services
   decide who may do what by it. A program that a process starts itself
@@ -215,11 +215,11 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   the pages it is on, so one that shares a page with another function's BAR
   reaches none. `devmgr` places the BARs the firmware left unplaced, and
   puts back those a function loses (waking from D3hot, or reset alone).
-- **Devices are not trusted.** The drivers' helpers (`vproto::pci`) check
+- **Devices are not trusted.** The drivers' helpers (`proto::pci`) check
   every offset a device reports against the memory it is in, and refuse a
   device that describes itself wrongly.
 - **ACPI.** Some devices exist only in the ACPI tables (a laptop's touchpad
-  and speaker amplifiers, the GPIO pins wired to them). `vacpi`
+  and speaker amplifiers, the GPIO pins wired to them). `acpi`
   (`implementation/libraries/acpi`) evaluates them with a small, bounded
   AML interpreter that initialises devices as ACPICA does but changes
   nothing and reads no I/O port or embedded controller. A driver can ask
@@ -227,7 +227,7 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   `cargo orchestration acpi` shows, on the host, what `devmgr` makes of a
   machine's tables.
 - **GPIO.** `devmgr` drives the GPIO pins of a driver's devices on its
-  behalf, and no others (`vgpio`: Intel's Tiger Lake-LP pads, which Alder
+  behalf, and no others (`gpio`: Intel's Tiger Lake-LP pads, which Alder
   Lake-P kept), refusing pads the firmware owns or locked. It raises each
   pin's interrupt from its controller's line with `irq_raise`: an
   interrupt a program raises, which reaches a driver or a guest's processor
@@ -252,7 +252,7 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
 - **Disks.** `nvme` (NVM Express) serves each disk
   through the `block` protocol as `block/<serial>`, so the VFS finds a disk
   by its serial number whatever the controller. One service loop
-  (`vproto::block::serve`) checks every request (whole sectors, at most
+  (`proto::block::serve`) checks every request (whole sectors, at most
   32 KiB, on the disk). Only the VFS may use a disk, since raw sectors would
   bypass its access rules. A request a device does not finish in time fails
   and the device is reset, so that no command left to it writes into memory
@@ -287,12 +287,12 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   disk. The VFS waits on all its connections at once, so they stay within
   the 1024 handles of one kernel wait, and a program holds at most a
   quarter of them (`TooMany`).
-- **`vfiles`** is how applications use files: paths, formatting,
+- **`files`** is how applications use files: paths, formatting,
   thumbnails, tree walks of any depth, and a VFS client whose calls have
   deadlines, so that a VFS that stops answering fails calls rather than
   freezes programs. Its table of file types is the system's only list of
   which application opens which file.
-- **The Trash** (`vfiles::trash`) is freedesktop.org's home trash. An
+- **The Trash** (`files::trash`) is freedesktop.org's home trash. An
   item's `.trashinfo` is created first, as a file that must not exist yet,
   to reserve its name; then the item is renamed in. Items are restored only
   into the home folder or `/tmp`, whatever their info says, since any
@@ -306,11 +306,11 @@ the detail.
 
 | Layer | Processes | Does |
 |-------|-----------|------|
-| Drivers | `net`, `wifi` (`implementation/guests/linux/`), in the driver VM | move Ethernet frames through shared-memory rings (`vproto::netring`) that neither side trusts; `wifi` offers Linux's radios as *managed* radios, which scan, join and encrypt on `wlan`'s commands |
-| Wi-Fi | `wlan`, on `vwlan` | chooses networks, authenticates (open system or SAE), runs the key handshakes and gives the radio only the session keys, keeps saved networks, reconnects and roams; each radio is `wlan0` to `netd` |
-| Network | `netd`, on `vnetstack` and smoltcp | interfaces, DHCP, IPv6 autoconfiguration, routes, a caching DNS resolver, sockets, the firewall |
+| Drivers | `net`, `wifi` (`implementation/guests/linux/`), in the driver VM | move Ethernet frames through shared-memory rings (`proto::netring`) that neither side trusts; `wifi` offers Linux's radios as *managed* radios, which scan, join and encrypt on `wlan`'s commands |
+| Wi-Fi | `wlan`, on the `wlan` library | chooses networks, authenticates (open system or SAE), runs the key handshakes and gives the radio only the session keys, keeps saved networks, reconnects and roams; each radio is `wlan0` to `netd` |
+| Network | `netd`, on `netstack` and smoltcp | interfaces, DHCP, IPv6 autoconfiguration, routes, a caching DNS resolver, sockets, the firewall |
 
-- **Sockets.** Each `vnet` socket is a channel with credit-based flow
+- **Sockets.** Each `net` socket is a channel with credit-based flow
   control both ways, so a slow client holds back only its own sockets; the
   POSIX layer's sockets, which processes share, carry TCP bytes on kernel
   sockets instead.
@@ -327,7 +327,7 @@ the detail.
   firewall's settings and log, go only to Settings and the Terminal. Every
   process has limits on its connections, sockets, lookups and watchers,
   with a share of each kept for system services.
-- **TLS** is not a service: `vtls` (rustls with a pure-Rust cryptography
+- **TLS** is not a service: `tls` (rustls with a pure-Rust cryptography
   provider) runs inside each application, so keys and plaintext never
   leave its process.
 - **Failures.** Calls from a service to a driver have timeouts, and drivers
@@ -453,7 +453,7 @@ they share.
 
 | Component | What it is |
 |-----------|------------|
-| `splash` (`vsplash`) | the startup splash's picture (a dark gradient and the Veda ring), which the compositor draws as the system starts, by the processor and the GPU alike |
+| `splash` (`splash`) | the startup splash's picture (a dark gradient and the Veda ring), which the compositor draws as the system starts, by the processor and the GPU alike |
 | `desktop` (`shell`) | the desktop shell: the system service `shell` |
 | `lock` (`lock`), `lock/core` (`lock-core`) | the lock screen: the system service `lock`, and what it decides, tested on the host |
 | `common` (`shell-common`) | what the desktop and the lock screen share: the wallpaper and its blurred copy, and OS1's ring and coil |
@@ -463,7 +463,7 @@ they share.
 The shell (`implementation/shell/desktop`) is an ordinary process that
 the compositor trusts as the system service `shell`. Its surfaces (the
 desktop, the taskbar, the start menu and calendar, notifications) are
-`vui::Host`s that draw from one shared model and change it through actions
+`ui::Host`s that draw from one shared model and change it through actions
 the main loop performs. Windows come from the compositor (`list_windows`,
 refreshed on `WindowsChanged`), installed applications from the launcher.
 
@@ -489,7 +489,7 @@ screen. The compositor keeps the lock ([The window system](#the-window-system));
 the service watches it and shows its window whenever it is locked.
 
 - **The password** is Settings' to set, change and remove, through the
-  `lock` protocol (`vproto::lock`), giving the one set now each time.
+  `lock` protocol (`proto::lock`), giving the one set now each time.
   The service keeps only a salted Argon2id hash of it, in the PHC string
   format (19 MiB of memory and two passes, OWASP's choice), in its private
   directory (`/home/.private/lock`), written whole under another name and
@@ -499,7 +499,7 @@ the service watches it and shows its window whenever it is locked.
   drawing (a light runs round the ring) while Argon2 takes its fraction of
   a second. The comparison is constant-time, and what was typed is wiped
   from memory once checked. The field takes the keyboard alone: nothing is
-  copied from it or pasted into it (`vui`'s `secret_input`).
+  copied from it or pasted into it (`ui`'s `secret_input`).
 - **Wrong passwords** cost nothing for the first four; each one after that
   makes the next wait, 30 s, then 1, 5 and 15 minutes (`lock_core::throttle`).
   The count is kept on disk, so that restarting the service (or the
@@ -538,57 +538,57 @@ the service watches it and shows its window whenever it is locked.
 
 | Library | Role |
 |---------|------|
-| `vraster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
-| `vfont` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterised glyphs, a glyph bitmap cache, text layout |
-| `vimage` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding, for Paint and the build machine's tools: PNG and BMP by Veda's writers (PNG's deflate by `miniz_oxide`), JPEG by `jpeg-encoder`, QOI by `qoi` |
-| `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames |
-| `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
-| `vtext` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
+| `raster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
+| `font` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterised glyphs, a glyph bitmap cache, text layout |
+| `image` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding, for Paint and the build machine's tools: PNG and BMP by Veda's writers (PNG's deflate by `miniz_oxide`), JPEG by `jpeg-encoder`, QOI by `qoi` |
+| `gfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames |
+| `ui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
+| `text` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
 
-In `vui`, the application's `update` lays out and draws the widgets each
+In `ui`, the application's `update` lays out and draws the widgets each
 frame, and they report their interactions in the same call; state that
 outlives a frame lives in a per-window `UiState` keyed by widget ids.
 Frames are drawn only when input arrives or an animation asks for one.
 
 - **Only what changed is presented.** A window compares each frame with
   the one on screen and presents only the bands of rows that differ.
-- **One text context per process** (`vui::SharedText`): the fonts are
+- **One text context per process** (`ui::SharedText`): the fonts are
   parsed once, and their glyphs rasterised into one cache.
 - **Drawing costs what shows.** Paths are rasterised against the clip
   rectangle alone, and what drawing keeps lasts from frame to frame
-  (`vgfx::DrawCache`). The loops over pixels stay scalar, since QEMU's TCG
+  (`gfx::DrawCache`). The loops over pixels stay scalar, since QEMU's TCG
   emulates SSE's integer multiplications and shuffles with slow helpers
-  (`vgfx::color` says how to check the generated code).
-- **Icons.** Line icons (`vui::Icon`) are paths on a 24-unit grid; the
-  tray's status glyphs (`vui::status`) sit on a 20-pixel grid, their edges
+  (`gfx::color` says how to check the generated code).
+- **Icons.** Line icons (`ui::Icon`) are paths on a 24-unit grid; the
+  tray's status glyphs (`ui::status`) sit on a 20-pixel grid, their edges
   on whole pixels.
 
 ## OpenGL ES and the GPU
 
-Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `vgl`
-(`implementation/libraries/gl`), in pure Rust. `vgl::veda::context`
+Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `gl`
+(`implementation/libraries/gl`), in pure Rust. `gl::veda::context`
 renders on the GPU when the `gpu` service exists and its renderer has at
-least the draw buffers, vertex attributes and uniform blocks `vgl` offers,
+least the draw buffers, vertex attributes and uniform blocks `gl` offers,
 and in software on every CPU otherwise.
 
-- **Shaders.** `vglsl` (`implementation/libraries/glsl`) parses, checks and
+- **Shaders.** `glsl` (`implementation/libraries/glsl`) parses, checks and
   links shaders and lowers each stage to an SSA form, which it optimises
-  and verifies; `vglsl::ops` defines every operation once, for constant
+  and verifies; `glsl::ops` defines every operation once, for constant
   folding and the interpreter alike. Its back ends emit bytecode for the
   software renderer and TGSI for virglrenderer. Shader source is hostile
   input: everything it can grow is bounded and every index clamped, so no
   shader can make the compiler panic or work without bound, or a back end
   read outside its storage.
-- **The API.** `vgl::Context` has every OpenGL ES 3.0 entry point, as a
+- **The API.** `gl::Context` has every OpenGL ES 3.0 entry point, as a
   method named after the C function, checked as the specification
   requires. Vertex and index data always come from buffers (as in
   WebGL 2), and a draw that would read past one draws nothing. Below it, a
   `Backend` with Gallium's shape renders, and a new resource always reads
   as zero.
-- **The software renderer** (`vgl::soft`) bins triangles into 64-pixel
+- **The software renderer** (`gl::soft`) bins triangles into 64-pixel
   tiles, rasterises the tiles in parallel and shades 16 fragments at a
   time, with 4x multisampling, every ES 3.0 format, ETC2 and exact sRGB.
-- **The GPU renderer** (`vgl::virgl`) speaks virglrenderer's protocol: it
+- **The GPU renderer** (`gl::virgl`) speaks virglrenderer's protocol: it
   caches state objects, sends only what changed, moves data through a
   shared staging buffer and reuses released buffers once the GPU has
   passed their fence. Before it reads a frame back it waits on its own
@@ -596,7 +596,7 @@ and in software on every CPU otherwise.
   works around what virglrenderer's hosts get wrong (QEMU renders on the
   host's desktop OpenGL, or on ANGLE's OpenGL ES when headless):
 
-| Host behaviour | What `vgl::virgl` does |
+| Host behaviour | What `gl::virgl` does |
 |----------------|------------------------|
 | ANGLE gives up the context on a draw that reads past a buffer | drops such draws, checking indices against a copy of the index buffer in guest memory |
 | The host's compiler flushes integer constants as denormal floats | builds integer constants at run time |
@@ -617,7 +617,7 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
 
 - **Sessions.** Each connection gets a context and a block of shared memory
   (commands, staging, query results, the fence word), laid out as
-  `vproto::gpu::Session` states, which `vgl` checks before mapping it: the
+  `proto::gpu::Session` states, which `gl` checks before mapping it: the
   renderer is not trusted with a client's memory.
 - **Checking.** Commands are copied out of the shared memory and checked
   word by word before Gallium's calls carry them out: a client can fail its
@@ -657,9 +657,10 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
   progress smoothly. Each side clamps the other's counters, so a
   misbehaving client can only garble its own audio. Mixing and recording
   allocate nothing once they run.
-- **`vaudio`** holds the formats (WAV, QOA), resampling, mixing, an FFT,
-  the synthesiser and sequencer with which `generation/music` renders the
-  album and the startup sound, and voice processing:
+- **The `audio` library** holds the formats (WAV, QOA), resampling,
+  mixing, an FFT, the synthesiser and sequencer with which
+  `generation/music` renders the album and the startup sound, and voice
+  processing:
 
 | Part | What it does |
 |------|--------------|
@@ -671,7 +672,7 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
 
 Videos (`implementation/applications/videos`) plays videos with FFmpeg and
 dav1d, decoded in a sandboxed process, `mediadec`
-(`implementation/services/mediadec`), over `vproto::media`. In the app, the
+(`implementation/services/mediadec`), over `proto::media`. In the app, the
 window shows pictures, an engine thread runs the decoder, an audio thread
 feeds the audio service and keeps the clock, and a second decoder makes
 thumbnails. In `mediadec`, a Rust half serves the protocol and a C shim is
@@ -736,11 +737,11 @@ which run the same code as the keyboard and mouse.
 ## The voice agent
 
 The agent service (`implementation/services/agent`) holds the conversation
-with Deepgram's Voice Agent API (a WebSocket over TLS through `vweb` and
-`vtls`), the microphone and the voice, and listens for its name while
+with Deepgram's Voice Agent API (a WebSocket over TLS through `web` and
+`tls`), the microphone and the voice, and listens for its name while
 asleep (a local voice detector, then Deepgram's streaming recognition). A
 worker thread runs what the language model calls: system functions and
-the actions every `vui` application offers over the `agentapp` protocol
+the actions every `ui` application offers over the `agentapp` protocol
 (describe, state, invoke). [The agent](AGENT.md) describes it in full.
 
 - **Consent, by identity.** Actions that need consent wait for an approval
@@ -749,7 +750,7 @@ the actions every `vui` application offers over the `agentapp` protocol
 - **The lock.** While the screen is locked, the agent neither listens for
   its name nor holds a conversation ([The lock screen](#the-lock-screen)).
   While it is unlocked, the agent tells the window system that the user is
-  there as they talk with it (`vagent::presence`), which counts as input
+  there as they talk with it (`agent::presence`), which counts as input
   for the idle lock: in a conversation they asked for (a click,
   Super+Space, its name), when Deepgram hears them start to speak and
   gives their words, and while its voice answers. Nothing it hears while
@@ -762,7 +763,7 @@ the actions every `vui` application offers over the `agentapp` protocol
   live in `/home/.private/agent`. The worker reaches the user's files
   through a connection of its own, which has given up private access, and
   checks every path.
-- **`vagent`** (`implementation/libraries/agent`) holds the decisions that
+- **`agent`** (`implementation/libraries/agent`) holds the decisions that
   need no I/O (the protocol, the tools and their risks, the paths file
   actions may reach, the prompt, memory, the approval policy, the wake
   word), tested on the host.
@@ -773,12 +774,12 @@ the actions every `vui` application offers over the `agentapp` protocol
 
 | Command | Runs |
 |---------|------|
-| `cargo orchestration test` | the host's unit tests, the driver VM programs' tests on Linux, the `vgl` tests on the host's GPU through virglrenderer and through the renderer's decoder where the machine has them, then `systest` inside Veda |
+| `cargo orchestration test` | the host's unit tests, the driver VM programs' tests on Linux, the `gl` tests on the host's GPU through virglrenderer and through the renderer's decoder where the machine has them, then `systest` inside Veda |
 | `cargo orchestration test --ui` | also every GUI and agent script |
 | `cargo orchestration script verification/real/...` | by hand: the scripts that need the Internet and a Deepgram key |
 
 - **Host unit tests** cover every library with platform-independent logic,
-  in one Cargo run (`vrt`'s in one of its own), and a test of the build
+  in one Cargo run (`rt`'s in one of its own), and a test of the build
   tool's fails if a crate with tests is left out. The network's check
   802.11 and its cryptography against published vectors, a station against
   an access point, two TCP/IP stacks over a simulated cable, and TLS
@@ -797,7 +798,7 @@ the actions every `vui` application offers over the `agentapp` protocol
   runs in every script. The agent's scripts (`verification/agent/*.vts`)
   talk to a stand-in for Deepgram, with a test microphone fed from the
   host.
-- **Simulated hardware.** `vgpio::sim` is a GPIO controller as its
+- **Simulated hardware.** `gpio::sim` is a GPIO controller as its
   registers behave, which `devmgr` drives when a test's ACPI table
   describes one (`drivervm-gpio.vts`).
 
@@ -810,7 +811,7 @@ crate's in its `src/`), reached through its `arch` module
 
 | Component | What is AMD64's (`architectures/amd64/`) |
 |-----------|------------------------------------------|
-| `implementation/boot/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
+| `implementation/bootloader/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
 | `implementation/kernel/` | see `arch` in [The kernel](#the-kernel) |
 | `implementation/libraries/bootinfo` | the address space the loader hands over, and how the kernel is entered |
 | `implementation/libraries/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
@@ -826,14 +827,14 @@ crate's in its `src/`), reached through its `arch` module
 
 ## Repository layout
 
-Libraries are crates named after their directory with a `v` before it
-(`implementation/libraries/rt` is `vrt`), but for `bootinfo` and `initrd`.
+Libraries are crates named after their directory
+(`implementation/libraries/rt` is `rt`).
 [Libraries](DEPENDENCIES.md) lists the third-party ones Veda builds on.
 
 | Path | Contents |
 |------|----------|
-| `implementation/boot/` | UEFI loader (`vboot`) |
-| `implementation/kernel/` | microkernel (`vkernel`) |
+| `implementation/bootloader/` | UEFI loader (`bootloader`) |
+| `implementation/kernel/` | microkernel (`kernel`) |
 | `implementation/libraries/{abi,bootinfo,initrd,elf}` | shared formats and the kernel ABI |
 | `implementation/libraries/{rt,heap,build}` | user runtime, allocator, build helper |
 | `implementation/libraries/frames` | the searches of the kernel's bitmap of physical memory frames, a word at a time |

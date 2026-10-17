@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 
-use vglsl::types::{Basic, Dim, Scalar};
+use glsl::types::{Basic, Dim, Scalar};
 
 use super::programs::ExeKey;
 use super::{Context, Key, TEXTURE_UNITS, VERTEX_ATTRIBS};
@@ -447,7 +447,7 @@ impl Context {
     /// Bytes per vertex each transform feedback buffer receives.
     pub(crate) fn feedback_strides(&self, exe: ExeKey) -> Vec<usize> {
         let l = &self.programs.exe(exe).program.linked;
-        let bytes = |f: &vglsl::link::Feedback| f.components as usize * 4;
+        let bytes = |f: &glsl::link::Feedback| f.components as usize * 4;
         if l.feedback_separate {
             l.feedback.iter().map(bytes).collect()
         } else {

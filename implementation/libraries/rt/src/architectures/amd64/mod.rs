@@ -17,7 +17,7 @@ pub(crate) mod linux;
 /// The machine's name, as `uname -m` gives it.
 pub const MACHINE: &str = "x86_64";
 
-/// Makes Veda system call `n` (see `vabi::arch`): its status, and its
+/// Makes Veda system call `n` (see `abi::arch`): its status, and its
 /// second result.
 ///
 /// # Safety
@@ -48,11 +48,11 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
     (ret, rdx)
 }
 
-/// The process entry point (`--entry=_vrt_start`, see `vbuild`). The
+/// The process entry point (`--entry=_rt_start`, see `build`). The
 /// kernel passes the bootstrap channel handle in `rdi`.
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 #[unsafe(no_mangle)]
-pub extern "sysv64" fn _vrt_start(bootstrap: vabi::RawHandle, _arg: usize) -> ! {
+pub extern "sysv64" fn _rt_start(bootstrap: abi::RawHandle, _arg: usize) -> ! {
     crate::start::start(bootstrap)
 }
 
@@ -81,9 +81,9 @@ pub(crate) unsafe fn exit_unmapping(base: usize, len: usize) -> ! {
             "mov eax, {exit}",
             "syscall",
             "ud2",
-            exit = const vabi::nr::THREAD_EXIT,
-            in("rax") vabi::nr::VM_UNMAP,
-            in("rdi") vabi::INVALID_HANDLE as usize,
+            exit = const abi::nr::THREAD_EXIT,
+            in("rax") abi::nr::VM_UNMAP,
+            in("rdi") abi::INVALID_HANDLE as usize,
             in("rsi") base,
             in("rdx") len,
             options(noreturn, nostack),
@@ -97,7 +97,7 @@ pub(crate) fn hwcap() -> u64 {
     core::arch::x86_64::__cpuid(1).edx as u64
 }
 
-/// The clock's counter (the TSC), as [`vabi::ClockInfo`] describes it.
+/// The clock's counter (the TSC), as [`abi::ClockInfo`] describes it.
 #[cfg(veda_guest)]
 pub(crate) fn clock_ticks() -> u64 {
     // SAFETY: RDTSC is always available.

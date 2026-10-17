@@ -3,7 +3,7 @@
 
 //! The global allocator.
 //!
-//! Small and medium allocations come from a TLSF allocator (`vheap`) over a
+//! Small and medium allocations come from a TLSF allocator (`heap`) over a
 //! large reserved region of private memory (`vm::allocate`), whose pages the
 //! kernel provides on first touch; the TLSF region grows through it as
 //! needed. Allocations of 4 MiB and more get a private mapping each, so
@@ -26,8 +26,8 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 
-use vabi::map_flags;
-use vheap::Tlsf;
+use abi::map_flags;
+use heap::Tlsf;
 
 use crate::sync::Mutex;
 use crate::vm;
@@ -95,7 +95,7 @@ impl Large {
     ) -> bool {
         const ENTRY: usize = core::mem::size_of::<LargeEntry>();
         if self.len == self.cap {
-            let cap = (self.cap * 2).max(vabi::PAGE_SIZE / ENTRY);
+            let cap = (self.cap * 2).max(abi::PAGE_SIZE / ENTRY);
             let Some(at) = cap.checked_mul(ENTRY).and_then(map) else { return false };
             if self.at != 0 {
                 // SAFETY: both arrays hold at least `len` entries, and
@@ -202,12 +202,12 @@ impl Heap {
 
 /// Whether an allocation of `layout` gets a mapping of its own.
 fn is_large(layout: Layout) -> bool {
-    layout.size() >= LARGE_THRESHOLD && layout.align() <= vabi::PAGE_SIZE
+    layout.size() >= LARGE_THRESHOLD && layout.align() <= abi::PAGE_SIZE
 }
 
 /// The bytes a large allocation of `layout` takes: whole pages.
 fn large_size(layout: Layout) -> Option<usize> {
-    layout.size().checked_next_multiple_of(vabi::PAGE_SIZE)
+    layout.size().checked_next_multiple_of(abi::PAGE_SIZE)
 }
 
 /// Private memory, zero-filled, its pages provided as they are touched.
@@ -246,7 +246,7 @@ impl Heap {
 #[cold]
 fn invalid_free(ptr: *mut u8) -> ! {
     crate::io::log_without_allocating(format_args!("heap: {ptr:p} is not an allocation in use (freed twice?)\n"));
-    crate::sys::process_exit(vabi::EXIT_CODE_PANICKED)
+    crate::sys::process_exit(abi::EXIT_CODE_PANICKED)
 }
 
 // SAFETY: TLSF hands out disjoint, correctly aligned blocks (zero-filled
@@ -276,7 +276,7 @@ unsafe impl GlobalAlloc for Heap {
         s.freed += layout.size();
         if s.freed >= RELEASE_INTERVAL {
             s.freed = 0;
-            s.tlsf.release_idle(vabi::PAGE_SIZE, RELEASE_MIN, |p, len| vm::decommit(None, p as usize, len).is_ok());
+            s.tlsf.release_idle(abi::PAGE_SIZE, RELEASE_MIN, |p, len| vm::decommit(None, p as usize, len).is_ok());
         }
     }
 
@@ -325,7 +325,7 @@ mod tests {
     fn large_allocations_are_freed_once() {
         let mut large = Large::new();
         let mut gone = Vec::new();
-        let page = vabi::PAGE_SIZE;
+        let page = abi::PAGE_SIZE;
         // More than the first array holds, in no order.
         let mut addrs: Vec<usize> = (0..1000usize).map(|i| (i * 7919 % 1000 + 1) * (8 << 20)).collect();
         for &a in &addrs {

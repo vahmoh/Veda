@@ -321,7 +321,7 @@ impl Rsne {
 
 /// The security of a network as shown to the user (the Wi-Fi protocol's
 /// type: what [`Security::supported`] says is what the station joins).
-pub use vproto::wlan::Security;
+pub use proto::wlan::Security;
 
 /// Classifies a BSS from its capability privacy bit and its RSN/WPA
 /// elements.

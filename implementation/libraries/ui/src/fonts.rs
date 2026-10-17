@@ -16,9 +16,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vgfx::text::font_files;
-use vgfx::{Align, Canvas, Color, LineMetrics, Rect, Text};
-use vrt::sync::Mutex;
+use gfx::text::font_files;
+use gfx::{Align, Canvas, Color, LineMetrics, Rect, Text};
+use rt::sync::Mutex;
 
 /// The interface's font files in fallback order; the first four are the
 /// [`Font`](crate::Font) roles: Inter, Inter SemiBold, JetBrains Mono and
@@ -42,7 +42,7 @@ static PROCESS_TEXT: Mutex<Option<(SharedText, [usize; 4])>> = Mutex::new(None);
 /// The font files' contents, read from the system image the first time.
 fn font_data() -> [Option<&'static [u8]>; FONT_FILES.len()] {
     *FONT_DATA.lock().get_or_insert_with(|| {
-        let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
+        let vfs = proto::connect(proto::vfs::NAME).ok().map(proto::vfs::Client::new);
         FONT_FILES.map(|path| {
             let vfs = vfs.as_ref()?;
             let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;

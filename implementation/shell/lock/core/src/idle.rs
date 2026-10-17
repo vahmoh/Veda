@@ -5,7 +5,7 @@
 //! are taken, what it is until the user chooses one, and the record of the
 //! choice.
 //!
-//! * **The times** are `vproto::lock`'s `IDLE_CHOICES_S`: never, or 1, 5,
+//! * **The times** are `proto::lock`'s `IDLE_CHOICES_S`: never, or 1, 5,
 //!   15 or 30 minutes. Nothing else is taken, from Settings or from disk.
 //! * **Until the user chooses**, it follows the password: `DEFAULT_IDLE_S`
 //!   (5 minutes) while one is set, never while none is. A password says
@@ -21,7 +21,7 @@
 use alloc::format;
 use alloc::string::String;
 
-use vproto::lock::{DEFAULT_IDLE_S, IDLE_CHOICES_S, LockError};
+use proto::lock::{DEFAULT_IDLE_S, IDLE_CHOICES_S, LockError};
 
 /// Whether the screen may wait `seconds` without input before it locks.
 pub fn acceptable(seconds: u32) -> Result<(), LockError> {

@@ -26,10 +26,10 @@ use alloc::vec::Vec;
 use core::ops::Range;
 use core::ptr::{read_volatile, write_volatile};
 
-use vabi::{PAGE_SIZE, map_flags};
-use vipc::{IpcError, enumeration, message, protocol, union};
-use vrt::object::{Interrupt, Resource, Vmo};
-use vrt::vm::Mapping;
+use abi::{PAGE_SIZE, map_flags};
+use ipc::{IpcError, enumeration, message, protocol, union};
+use rt::object::{Interrupt, Resource, Vmo};
+use rt::vm::Mapping;
 
 message! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,7 +471,7 @@ pub enum MapError {
     /// or none a driver may have).
     Pci(PciError),
     /// The kernel would not map it.
-    Kernel(vabi::Error),
+    Kernel(abi::Error),
 }
 
 impl core::fmt::Display for MapError {
@@ -589,16 +589,16 @@ pub struct DmaBuffer {
 
 impl DmaBuffer {
     /// `len` bytes (whole pages) of zeroed memory.
-    pub fn new(dma: &Resource, len: usize) -> Result<DmaBuffer, vabi::Error> {
+    pub fn new(dma: &Resource, len: usize) -> Result<DmaBuffer, abi::Error> {
         DmaBuffer::mapped(Vmo::create_contiguous(dma, len)?)
     }
 
     /// The same below 4 GiB, for devices limited to 32-bit addresses.
-    pub fn new_below_4g(dma: &Resource, len: usize) -> Result<DmaBuffer, vabi::Error> {
+    pub fn new_below_4g(dma: &Resource, len: usize) -> Result<DmaBuffer, abi::Error> {
         DmaBuffer::mapped(Vmo::create_contiguous_below_4g(dma, len)?)
     }
 
-    fn mapped(vmo: Vmo) -> Result<DmaBuffer, vabi::Error> {
+    fn mapped(vmo: Vmo) -> Result<DmaBuffer, abi::Error> {
         let (len, phys) = (vmo.size()?, vmo.phys_addr(0)?);
         let map = Mapping::new(vmo, len, map_flags::READ | map_flags::WRITE)?;
         Ok(DmaBuffer { map, phys })
@@ -619,27 +619,27 @@ impl DmaBuffer {
 
     /// Where the `len` bytes at `offset` are mapped, if they are all inside
     /// it.
-    fn at(&self, offset: usize, len: usize) -> Result<*mut u8, vabi::Error> {
-        let bytes = inside(offset, len, self.len()).ok_or(vabi::Error::OutOfRange)?;
+    fn at(&self, offset: usize, len: usize) -> Result<*mut u8, abi::Error> {
+        let bytes = inside(offset, len, self.len()).ok_or(abi::Error::OutOfRange)?;
         // SAFETY: inside the mapping.
         Ok(unsafe { self.map.as_ptr().add(bytes.start) })
     }
 
     /// Where the value of type `T` at `offset` is mapped, if it is inside it
     /// and aligned to its size.
-    fn value<T>(&self, offset: usize) -> Result<*mut T, vabi::Error> {
+    fn value<T>(&self, offset: usize) -> Result<*mut T, abi::Error> {
         let p = self.at(offset, size_of::<T>())?;
-        if p.addr().is_multiple_of(size_of::<T>()) { Ok(p as *mut T) } else { Err(vabi::Error::InvalidArgs) }
+        if p.addr().is_multiple_of(size_of::<T>()) { Ok(p as *mut T) } else { Err(abi::Error::InvalidArgs) }
     }
 
-    fn load<T: Copy>(&self, offset: usize) -> Result<T, vabi::Error> {
+    fn load<T: Copy>(&self, offset: usize) -> Result<T, abi::Error> {
         let p = self.value::<T>(offset)?;
         // SAFETY: a value inside the mapping, aligned to its size; read as
         // it is now, whoever wrote it.
         Ok(unsafe { read_volatile(p) })
     }
 
-    fn store<T: Copy>(&mut self, offset: usize, value: T) -> Result<(), vabi::Error> {
+    fn store<T: Copy>(&mut self, offset: usize, value: T) -> Result<(), abi::Error> {
         let p = self.value::<T>(offset)?;
         // SAFETY: as in `load`; written in one access, which the device
         // sees whole.
@@ -648,7 +648,7 @@ impl DmaBuffer {
     }
 
     /// Copies the bytes at `offset` into `out`.
-    pub fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), vabi::Error> {
+    pub fn read(&self, offset: usize, out: &mut [u8]) -> Result<(), abi::Error> {
         let from = self.at(offset, out.len())?;
         // SAFETY: `out.len()` bytes inside the mapping, copied to memory of
         // this process's own, which is no part of it.
@@ -657,15 +657,15 @@ impl DmaBuffer {
     }
 
     /// The `len` bytes at `offset`, copied out.
-    pub fn to_vec(&self, offset: usize, len: usize) -> Result<Vec<u8>, vabi::Error> {
-        inside(offset, len, self.len()).ok_or(vabi::Error::OutOfRange)?;
+    pub fn to_vec(&self, offset: usize, len: usize) -> Result<Vec<u8>, abi::Error> {
+        inside(offset, len, self.len()).ok_or(abi::Error::OutOfRange)?;
         let mut bytes = alloc::vec![0; len];
         self.read(offset, &mut bytes)?;
         Ok(bytes)
     }
 
     /// Copies `data` to `offset`.
-    pub fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), vabi::Error> {
+    pub fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), abi::Error> {
         let to = self.at(offset, data.len())?;
         // SAFETY: as in `read`, the other way; `&mut self` keeps this
         // process's other writers of it out meanwhile.
@@ -675,28 +675,28 @@ impl DmaBuffer {
 
     /// The 16-bit value at `offset`, as it is now (its device may be
     /// writing it).
-    pub fn read16(&self, offset: usize) -> Result<u16, vabi::Error> {
+    pub fn read16(&self, offset: usize) -> Result<u16, abi::Error> {
         self.load(offset).map(u16::from_le)
     }
 
     /// The 32-bit value at `offset`, as it is now.
-    pub fn read32(&self, offset: usize) -> Result<u32, vabi::Error> {
+    pub fn read32(&self, offset: usize) -> Result<u32, abi::Error> {
         self.load(offset).map(u32::from_le)
     }
 
     /// Writes the 16-bit `value` at `offset`, in one access (its device may
     /// be reading it).
-    pub fn write16(&mut self, offset: usize, value: u16) -> Result<(), vabi::Error> {
+    pub fn write16(&mut self, offset: usize, value: u16) -> Result<(), abi::Error> {
         self.store(offset, value.to_le())
     }
 
     /// Writes the 32-bit `value` at `offset`, in one access.
-    pub fn write32(&mut self, offset: usize, value: u32) -> Result<(), vabi::Error> {
+    pub fn write32(&mut self, offset: usize, value: u32) -> Result<(), abi::Error> {
         self.store(offset, value.to_le())
     }
 
     /// Writes the 64-bit `value` at `offset`, in one access.
-    pub fn write64(&mut self, offset: usize, value: u64) -> Result<(), vabi::Error> {
+    pub fn write64(&mut self, offset: usize, value: u64) -> Result<(), abi::Error> {
         self.store(offset, value.to_le())
     }
 }

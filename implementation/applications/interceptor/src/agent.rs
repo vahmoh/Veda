@@ -17,9 +17,9 @@ use interceptor_game::career::{self, MISSIONS, SUSPECTS, Stats, Units};
 use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::pursuit::State;
 use interceptor_game::session::{self, Mode, Phase, Quick};
-use vui::agent::{self, Action, AgentServer, AppAgentInfo, Value, arg_bool, arg_opt_int, arg_opt_str, json};
+use ui::agent::{self, Action, AgentServer, AppAgentInfo, Value, arg_bool, arg_opt_int, arg_opt_str, json};
 
-pub use vui::agent::Registration as Link;
+pub use ui::agent::Registration as Link;
 
 use crate::app::{App, Back, Screen};
 

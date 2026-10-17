@@ -3,13 +3,13 @@
 
 //! Painting the films' pictures: a floating-point RGB canvas (in the
 //! generators' colours, `gencommon::colour`), vector paths composited
-//! through `vraster` with a colour per pixel, soft lights, text outlines
-//! from `vfont`, and the step down to 8-bit pixels.
+//! through `raster` with a colour per pixel, soft lights, text outlines
+//! from `font`, and the step down to 8-bit pixels.
 
+use font::{Font, PathSink};
 pub use gencommon::colour::{Rgb, add, gradient, hex, mix, scale, smoothstep};
 use gencommon::hash::hash01;
-use vfont::{Font, PathSink};
-use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
+use raster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
 
 /// Rolls bright light off smoothly instead of clipping it.
 pub fn tonemap(c: Rgb) -> Rgb {

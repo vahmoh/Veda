@@ -12,10 +12,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use abi::RawHandle;
 use lock_core::password::{Record, SALT_LEN};
-use vabi::RawHandle;
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 use zeroize::Zeroizing;
 
 /// A password to check or to set.
@@ -74,7 +74,7 @@ impl Hasher {
         let shared =
             Arc::new(Shared { jobs: Mutex::new(VecDeque::new()), wake: Condvar::new(), done: Mutex::new(Vec::new()) });
         let worker = shared.clone();
-        vrt::thread::Builder::new().name("hasher").stack_size(256 * 1024).spawn(move || work(&worker, &theirs)).ok()?;
+        rt::thread::Builder::new().name("hasher").stack_size(256 * 1024).spawn(move || work(&worker, &theirs)).ok()?;
         Some(Hasher { shared, event })
     }
 

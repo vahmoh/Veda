@@ -16,7 +16,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vrt::time::Duration;
+use rt::time::Duration;
 
 use crate::{Connection, Url, WebError};
 
@@ -70,7 +70,7 @@ pub(crate) struct Deadline {
 impl Deadline {
     /// `timeout` from now on the system's clock.
     fn after(timeout: Duration) -> Deadline {
-        Deadline { at: vrt::time::deadline_after(timeout), clock: vrt::time::now_ns }
+        Deadline { at: rt::time::deadline_after(timeout), clock: rt::time::now_ns }
     }
 
     /// The time left, or `TimedOut`.
@@ -439,7 +439,7 @@ mod tests {
             }
             fn set_read_timeout(&mut self, _: Option<Duration>) {}
             fn set_write_timeout(&mut self, _: Option<Duration>) {}
-            fn handle(&self) -> vabi::RawHandle {
+            fn handle(&self) -> abi::RawHandle {
                 0
             }
         }

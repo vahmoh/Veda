@@ -321,7 +321,7 @@ fn cmsg_align(len: usize) -> usize {
 
 /// Descriptors one message carries at most: the handles a channel message
 /// takes.
-const MAX_RIGHTS: usize = vabi::CHANNEL_MAX_HANDLES;
+const MAX_RIGHTS: usize = abi::CHANNEL_MAX_HANDLES;
 
 /// The descriptors a message's ancillary data sends (`SCM_RIGHTS`, in
 /// order). Credentials (`SCM_CREDENTIALS`) are checked: a program says who
@@ -833,7 +833,7 @@ pub unsafe fn getsockopt(fd: i32, level: u32, name: u32, value: usize, len: usiz
         (SOL_SOCKET, SO_OOBINLINE) => int(o.oob_inline as i32),
         // What the service keeps for a socket.
         (SOL_SOCKET, SO_SNDBUF) => int(SEND_BUFFER),
-        (SOL_SOCKET, SO_RCVBUF) => int(vproto::net::RECEIVE_WINDOW as i32),
+        (SOL_SOCKET, SO_RCVBUF) => int(proto::net::RECEIVE_WINDOW as i32),
         (SOL_SOCKET, SO_RCVLOWAT | SO_SNDLOWAT) => int(1),
         (SOL_SOCKET, SO_LINGER) => {
             let l = Linger { onoff: o.linger.is_some() as i32, linger: o.linger.unwrap_or(0) as i32 };

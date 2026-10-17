@@ -35,15 +35,15 @@ mod firewall;
 mod lock;
 mod network;
 
-use vgfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};
-use vproto::display::{ScreenInfo, modifiers};
-use vproto::init::launcher;
-use vproto::input::keys;
-use vui::{Align, App, ButtonKind, Color, Cursor, Font, Icon, Rect, Ui, WindowSpec};
+use gfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};
+use proto::display::{ScreenInfo, modifiers};
+use proto::init::launcher;
+use proto::input::keys;
+use ui::{Align, App, ButtonKind, Color, Cursor, Font, Icon, Rect, Ui, WindowSpec};
 
-use vfiles::Fs;
-use vfiles::thumbs::Thumbnailer;
-use vproto::shell::{ShellLink, ShellReply};
+use files::Fs;
+use files::thumbs::Thumbnailer;
+use proto::shell::{ShellLink, ShellReply};
 
 /// The shell's name for its built-in generated wallpaper.
 const PROCEDURAL: &str = "procedural";
@@ -54,7 +54,7 @@ const CLOSE_WAIT_NS: u64 = 2_000_000_000;
 
 /// The user's pictures: `~/Pictures`.
 fn pictures_dir() -> String {
-    vfiles::path::join(vfiles::path::HOME, "Pictures")
+    files::path::join(files::path::HOME, "Pictures")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +102,7 @@ struct Settings {
     applied_until: u64,
     error: Option<String>,
     thumbs: Option<Thumbnailer>,
-    info: vabi::SystemInfo,
+    info: abi::SystemInfo,
     info_at: u64,
     screen: Option<ScreenInfo>,
     licence: Option<String>,
@@ -131,11 +131,11 @@ fn images_in(fs: &Fs, dir: &str) -> Vec<String> {
         .read_dir(dir)
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| !e.is_dir && vfiles::kind::is_image(&e.name))
+        .filter(|e| !e.is_dir && files::kind::is_image(&e.name))
         .map(|e| e.name)
         .collect();
-    names.sort_by(|a, b| vfiles::path::natural_cmp(a, b));
-    names.into_iter().map(|n| vfiles::path::join(dir, &n)).collect()
+    names.sort_by(|a, b| files::path::natural_cmp(a, b));
+    names.into_iter().map(|n| files::path::join(dir, &n)).collect()
 }
 
 /// A title for a picture: its file name without the extension, with dashes
@@ -143,7 +143,7 @@ fn images_in(fs: &Fs, dir: &str) -> Vec<String> {
 /// → "Misty forest").
 fn title_of(path: &str) -> String {
     let mut out = String::new();
-    for (i, c) in vfiles::path::file_stem(path).chars().enumerate() {
+    for (i, c) in files::path::file_stem(path).chars().enumerate() {
         let c = if c == '-' || c == '_' { ' ' } else { c };
         if i == 0 { out.extend(c.to_uppercase()) } else { out.push(c) }
     }
@@ -271,7 +271,7 @@ impl Settings {
             applied_until: 0,
             error: None,
             thumbs: Thumbnailer::new(320, 200),
-            info: vrt::object::system_info().unwrap_or_default(),
+            info: rt::object::system_info().unwrap_or_default(),
             info_at: 0,
             screen: None,
             licence,
@@ -389,7 +389,7 @@ impl Settings {
     }
 
     fn launch_app(&self, id: &str) {
-        if let Ok(ch) = vproto::connect(launcher::NAME) {
+        if let Ok(ch) = proto::connect(launcher::NAME) {
             let _ = launcher::Client::new(ch).launch_app(id.into(), Vec::new());
         }
     }
@@ -882,7 +882,7 @@ impl Settings {
         let t = ui.theme().clone();
         let mut y = r.y;
         // The Veda logo: the ring.
-        vui::draw_logo(&mut ui.canvas, Rect::new(r.x, y + 4, 64, 64));
+        ui::draw_logo(&mut ui.canvas, Rect::new(r.x, y + 4, 64, 64));
         ui.label(Rect::new(r.x + 88, y, r.w - 88, 40), "Veda", Font::Bold, t.title_size + 4.0, t.text, Align::Left);
         let version = cstr(&self.info.version);
         ui.label(
@@ -999,7 +999,7 @@ impl App for Settings {
             th.collect();
         }
         if now >= self.info_at {
-            if let Ok(i) = vrt::object::system_info() {
+            if let Ok(i) = rt::object::system_info() {
                 self.info = i;
             }
             self.screen = ui.ctx.display.screen_info().ok();
@@ -1089,7 +1089,7 @@ impl App for Settings {
         // passwords typed go.
         if let Some(p) = &mut self.agent {
             p.flush();
-            p.finish(vrt::time::now_ns() + CLOSE_WAIT_NS);
+            p.finish(rt::time::now_ns() + CLOSE_WAIT_NS);
         }
         if let Some(p) = &mut self.lock {
             p.leave();
@@ -1097,34 +1097,34 @@ impl App for Settings {
         true
     }
 
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(control::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         control::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Settings::agent_invoke(self, action, args)
     }
 
-    fn wait_handles(&self) -> Vec<(vabi::RawHandle, u32)> {
+    fn wait_handles(&self) -> Vec<(abi::RawHandle, u32)> {
         let mut v = Vec::new();
         if let Some(s) = &self.shell {
-            v.push((s.event_handle(), vabi::signals::SIGNALED));
+            v.push((s.event_handle(), abi::signals::SIGNALED));
         }
         if let Some(t) = &self.thumbs {
-            v.push((t.event_handle(), vabi::signals::SIGNALED));
+            v.push((t.event_handle(), abi::signals::SIGNALED));
         }
         if let Some(h) = self.net.wait_handle() {
-            v.push((h, vabi::signals::READABLE | vabi::signals::PEER_CLOSED));
+            v.push((h, abi::signals::READABLE | abi::signals::PEER_CLOSED));
         }
         if let Some(h) = self.agent.as_ref().and_then(|p| p.wait_handle()) {
-            v.push((h, vabi::signals::SIGNALED));
+            v.push((h, abi::signals::SIGNALED));
         }
         if let Some(h) = self.lock.as_ref().and_then(|p| p.wait_handle()) {
-            v.push((h, vabi::signals::SIGNALED));
+            v.push((h, abi::signals::SIGNALED));
         }
         v
     }
@@ -1145,5 +1145,5 @@ fn main() {
     spec.app_id = "settings".into();
     spec.min_width = 720;
     spec.min_height = 460;
-    std::process::exit(vui::run(spec, app));
+    std::process::exit(ui::run(spec, app));
 }

@@ -27,24 +27,24 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::{DEADLINE_INFINITE, Error, signals};
-use vipc::WaitSet;
-use vproto::init::RegistryError;
-use vproto::registry;
-use vrt::object::{Channel, Event};
-use vrt::println;
-use vrt::sync::Mutex;
+use abi::{DEADLINE_INFINITE, Error, signals};
+use ipc::WaitSet;
+use proto::init::RegistryError;
+use proto::registry;
+use rt::object::{Channel, Event};
+use rt::println;
+use rt::sync::Mutex;
 
 /// The services the guest may connect to: those drivers attach to.
 const CONNECT: &[&str] = &[
-    vproto::audio::audiodev::NAME,
-    vproto::displaydev::displaydev::NAME,
-    vproto::net::netdev::NAME,
-    vproto::wlan::wlanphy::NAME,
-    vproto::input::NAME,
+    proto::audio::audiodev::NAME,
+    proto::displaydev::displaydev::NAME,
+    proto::net::netdev::NAME,
+    proto::wlan::wlanphy::NAME,
+    proto::input::NAME,
 ];
 /// The services it may provide.
-const REGISTER: &[&str] = &[vproto::gpu::gpu::NAME];
+const REGISTER: &[&str] = &[proto::gpu::gpu::NAME];
 /// The most registry channels the guest has at a time: one for each of its
 /// programs, and some to spare.
 pub const MAX_CHANNELS: usize = 32;
@@ -104,7 +104,7 @@ impl Registry {
                         println!("the guest's registry cannot wait ({e}); it tries again");
                         said = true;
                     }
-                    vrt::time::sleep(vrt::time::Duration::from_millis(10));
+                    rt::time::sleep(rt::time::Duration::from_millis(10));
                     continue;
                 }
             };
@@ -147,7 +147,7 @@ impl registry::Server for Narrowed<'_> {
         if !CONNECT.contains(&name.as_str()) {
             return Err(RegistryError::Denied);
         }
-        match vproto::with_registry(|r| r.connect(name, server_end)) {
+        match proto::with_registry(|r| r.connect(name, server_end)) {
             Ok(Ok(result)) => result,
             _ => Err(RegistryError::Denied),
         }
@@ -157,14 +157,14 @@ impl registry::Server for Narrowed<'_> {
         if !REGISTER.contains(&name.as_str()) {
             return Err(RegistryError::Denied);
         }
-        match vproto::with_registry(|r| r.register(name, listener)) {
+        match proto::with_registry(|r| r.register(name, listener)) {
             Ok(Ok(result)) => result,
             _ => Err(RegistryError::Denied),
         }
     }
 
     fn list(&mut self) -> Vec<String> {
-        let all = match vproto::with_registry(|r| r.list()) {
+        let all = match proto::with_registry(|r| r.list()) {
             Ok(Ok(names)) => names,
             _ => Vec::new(),
         };

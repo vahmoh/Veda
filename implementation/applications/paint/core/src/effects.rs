@@ -11,8 +11,8 @@
 
 use alloc::vec::Vec;
 
-use vgfx::color::keep_scalar;
-use vgfx::{Bitmap, Rect};
+use gfx::color::keep_scalar;
+use gfx::{Bitmap, Rect};
 
 use crate::color::unpremultiply;
 
@@ -58,7 +58,7 @@ impl Effect {
 
 /// The straight-alpha pixel `s` premultiplied again.
 fn premultiply(s: u32) -> u32 {
-    vgfx::color::premultiply(s)
+    gfx::color::premultiply(s)
 }
 
 /// Applies `f` to the straight colour (red, green, blue, 0 to 255 each) of every pixel of `r`.

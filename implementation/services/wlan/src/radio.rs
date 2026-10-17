@@ -6,14 +6,14 @@
 
 use alloc::vec::Vec;
 
-use vipc::Bytes;
-use vproto::netring::{Link, SlotMeta, TxInfo, kind};
-use vproto::wlan::{
+use ipc::Bytes;
+use proto::netring::{Link, SlotMeta, TxInfo, kind};
+use proto::wlan::{
     Band, ChannelInfo, KeyKind, PhyError, PhyInfo, PhyStats, RadioState, channel_flags, phy_caps, wlanmlme_ctl,
     wlanphy_ctl,
 };
-use vrt::object::Channel;
-use vwlan::frame::Mac;
+use rt::object::Channel;
+use wlan::frame::Mac;
 
 /// How long a control call to the driver may take before the radio is
 /// considered broken (a hung driver must not freeze the service).
@@ -71,14 +71,14 @@ impl Radio {
         self.state == RadioState::Ready && !self.broken
     }
 
-    /// The radio joins access points itself (see `vproto::wlan`).
+    /// The radio joins access points itself (see `proto::wlan`).
     pub fn managed(&self) -> bool {
         self.info.caps & phy_caps::MANAGED != 0
     }
 
     /// Whether a control call did what it asked; a call that failed or
     /// timed out breaks the radio.
-    fn done<T>(&mut self, result: Result<Result<T, PhyError>, vipc::IpcError>) -> bool {
+    fn done<T>(&mut self, result: Result<Result<T, PhyError>, ipc::IpcError>) -> bool {
         match result {
             Ok(Ok(_)) => true,
             Ok(Err(_)) => false,

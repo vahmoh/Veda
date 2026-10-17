@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `velf` — Veda's executables: ELF64.
+//! `elf` — Veda's executables: ELF64.
 //!
 //! Every program Veda runs, and its kernel, is a static ELF64 executable for
 //! the System V ABI of its processor (x86-64's on AMD64):
@@ -65,9 +65,9 @@ pub struct Machine {
 #[cfg(target_arch = "x86_64")]
 pub const NATIVE: Machine = amd64::MACHINE;
 
-/// The note that marks a Veda program, one built on Veda's runtime (`vrt`,
+/// The note that marks a Veda program, one built on Veda's runtime (`rt`,
 /// which carries it): its loader relocates it, makes its RELRO read-only,
-/// and starts it with Veda's startup message (`vabi::startup`). POSIX
+/// and starts it with Veda's startup message (`abi::startup`). POSIX
 /// programs have none. Its descriptor is the version of these conventions
 /// the program follows ([`VERSION`](veda::VERSION), little-endian), so that
 /// a loader refuses a program of others ([`Kind`]).

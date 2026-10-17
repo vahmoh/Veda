@@ -17,7 +17,7 @@
 //! the monitor (a [`hypercall`] with the same request, its pointers made
 //! guest-physical addresses of the driver's copies). Every request starts
 //! with the operation's status: [`OK`], a Veda error code
-//! (`vabi::Error`), or [`PENDING`] for a wait the monitor finishes later,
+//! (`abi::Error`), or [`PENDING`] for a wait the monitor finishes later,
 //! through the notification ring.
 //!
 //! A VMO a program maps is mapped by the monitor into a window of
@@ -74,12 +74,12 @@ pub const OK: u32 = 0;
 pub const PENDING: u32 = u32::MAX;
 
 /// The most bytes a channel message carries, and handles: the kernel's.
-pub const MAX_BYTES: u32 = vabi::CHANNEL_MAX_BYTES as u32;
-pub const MAX_HANDLES: u32 = vabi::CHANNEL_MAX_HANDLES as u32;
+pub const MAX_BYTES: u32 = abi::CHANNEL_MAX_BYTES as u32;
+pub const MAX_HANDLES: u32 = abi::CHANNEL_MAX_HANDLES as u32;
 /// The most items a wait takes: the kernel's most for one wait. One that
 /// does not finish at once goes on within what the monitor waits on at
 /// once, its own event besides (`LimitReached` beyond).
-pub const MAX_WAIT_ITEMS: u32 = vabi::WAIT_MANY_MAX as u32;
+pub const MAX_WAIT_ITEMS: u32 = abi::WAIT_MANY_MAX as u32;
 /// The most bytes one VMO read or write moves.
 pub const MAX_COPY: u64 = 64 * 1024;
 
@@ -135,7 +135,7 @@ pub struct Signal {
 
 /// [`op::WAIT`]: waits until a signal of an item is active, or the
 /// deadline (Veda's monotonic time) passes; `items` points at `count`
-/// `vabi::WaitItem`s, whose `observed` fields are filled in.
+/// `abi::WaitItem`s, whose `observed` fields are filled in.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Wait {
@@ -214,7 +214,7 @@ pub struct ChannelWrite {
 
 /// [`op::CHANNEL_READ`]: reads the next message into buffers of the given
 /// capacities; the lengths say what it held (also when the buffers were
-/// too small, `vabi::Error::BufferTooSmall`, and it stays queued).
+/// too small, `abi::Error::BufferTooSmall`, and it stays queued).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChannelRead {
@@ -236,7 +236,7 @@ pub struct EventCreate {
     pub out: u32,
 }
 
-/// [`op::VMO_CREATE`] (`flags`: `vabi::vmo_flags`) and [`op::VMO_SIZE`].
+/// [`op::VMO_CREATE`] (`flags`: `abi::vmo_flags`) and [`op::VMO_SIZE`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Vmo {
@@ -258,7 +258,7 @@ pub struct VmoCopy {
     pub len: u64,
 }
 
-/// [`op::VMO_MAP`] and [`op::VMO_UNMAP`]: `flags` are `vabi::map_flags`
+/// [`op::VMO_MAP`] and [`op::VMO_UNMAP`]: `flags` are `abi::map_flags`
 /// (read, write). For a program, `gpa` is where to `mmap` `/dev/veda`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -273,7 +273,7 @@ pub struct VmoMap {
 }
 
 /// [`op::BOOTSTRAP`]: the handle the guest starts with in `role`
-/// (`vabi::startup::role`: the registry). Each request makes a new one.
+/// (`abi::startup::role`: the registry). Each request makes a new one.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Bootstrap {
@@ -284,13 +284,13 @@ pub struct Bootstrap {
 }
 
 /// [`op::CLOCK`]: how Veda's clocks follow the processor's clock counter,
-/// which the guest reads as Veda does (`vabi::ClockInfo`).
+/// which the guest reads as Veda does (`abi::ClockInfo`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Clock {
     pub status: u32,
     pub _reserved: u32,
-    pub info: vabi::ClockInfo,
+    pub info: abi::ClockInfo,
 }
 
 /// [`op::LOG_READ`]: up to `len` bytes of Veda's log (every program's
@@ -334,9 +334,9 @@ const _: () = {
     // The kernel's limits, as they are (no bits lost), and as Linux's bridge
     // driver has them too (`MAX_BYTES`, `MAX_HANDLES`, `MAX_WAIT_ITEMS` in
     // `drivers/virt/veda/bridge.c`).
-    assert!(MAX_BYTES as usize == vabi::CHANNEL_MAX_BYTES && MAX_BYTES == 64 * 1024);
-    assert!(MAX_HANDLES as usize == vabi::CHANNEL_MAX_HANDLES && MAX_HANDLES == 64);
-    assert!(MAX_WAIT_ITEMS as usize == vabi::WAIT_MANY_MAX && MAX_WAIT_ITEMS == 1024);
+    assert!(MAX_BYTES as usize == abi::CHANNEL_MAX_BYTES && MAX_BYTES == 64 * 1024);
+    assert!(MAX_HANDLES as usize == abi::CHANNEL_MAX_HANDLES && MAX_HANDLES == 64);
+    assert!(MAX_WAIT_ITEMS as usize == abi::WAIT_MANY_MAX && MAX_WAIT_ITEMS == 1024);
     assert!(core::mem::size_of::<Setup>() == 16);
     assert!(core::mem::size_of::<Wait>() == 40);
     assert!(core::mem::size_of::<ChannelWrite>() == 40);

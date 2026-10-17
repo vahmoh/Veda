@@ -8,10 +8,10 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use vproto::wlan::{BssInfo, NetworkInfo, Security, signal_bars, ssid_display};
-use vwlan::frame::Mac;
-use vwlan::profile::Profile;
-use vwlan::scan::{Bss, probe_request};
+use proto::wlan::{BssInfo, NetworkInfo, Security, signal_bars, ssid_display};
+use wlan::frame::Mac;
+use wlan::profile::Profile;
+use wlan::scan::{Bss, probe_request};
 
 use crate::radio::{Radio, band_of};
 
@@ -155,7 +155,7 @@ impl Table {
             .entries
             .values()
             .map(|b| BssInfo {
-                ssid: vipc::Bytes(b.ssid.clone()),
+                ssid: ipc::Bytes(b.ssid.clone()),
                 bssid: b.bssid,
                 band: band_of(b.channel),
                 channel: b.channel,
@@ -187,7 +187,7 @@ impl Table {
                 name: ssid_display(&ssid),
                 saved: profiles.iter().any(|p| p.ssid == ssid),
                 connected: connected == Some(ssid.as_slice()),
-                ssid: vipc::Bytes(ssid),
+                ssid: ipc::Bytes(ssid),
                 security,
                 signal_dbm,
                 bars: signal_bars(signal_dbm),

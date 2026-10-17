@@ -13,10 +13,10 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::{RawHandle, signals};
-use vrt::object::Channel;
+use abi::{RawHandle, signals};
+use rt::object::Channel;
 
-vipc::protocol! {
+ipc::protocol! {
     /// The running instance of an application, to which another hands what
     /// it was asked to open; registered under the application's name.
     pub mod instance = "instance" {
@@ -118,7 +118,7 @@ impl Instance {
                             let _ = reply.send(c);
                         }
                     }
-                    Err(vabi::Error::ShouldWait) => break true,
+                    Err(abi::Error::ShouldWait) => break true,
                     Err(_) => break false,
                 }
             }
@@ -132,18 +132,18 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn request(path: &str) -> vrt::Message {
-        let mut e = vipc::Encoder::with_header(1, 5, vipc::FLAG_REQUEST);
-        vipc::Encode::encode(path, &mut e);
-        vrt::Message { bytes: e.bytes, handles: vec![] }
+    fn request(path: &str) -> rt::Message {
+        let mut e = ipc::Encoder::with_header(1, 5, ipc::FLAG_REQUEST);
+        ipc::Encode::encode(path, &mut e);
+        rt::Message { bytes: e.bytes, handles: vec![] }
     }
 
     fn answer(accept: &impl Fn(&str) -> bool, path: &str) -> (bool, Vec<String>) {
         let mut files = Vec::new();
         let reply = instance::dispatch(&mut Handler { accept, files: &mut files }, request(path)).unwrap();
-        let mut msg = vrt::Message { bytes: reply.bytes, handles: vec![] };
-        let (_, mut d) = vipc::open(&mut msg).unwrap();
-        (<bool as vipc::Decode>::decode(&mut d).unwrap(), files)
+        let mut msg = rt::Message { bytes: reply.bytes, handles: vec![] };
+        let (_, mut d) = ipc::open(&mut msg).unwrap();
+        (<bool as ipc::Decode>::decode(&mut d).unwrap(), files)
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! * [`net`] (service `"net"`): what applications use — TCP and UDP sockets,
 //!   ping, name resolution, the state of interfaces and routes, and (for
 //!   the Settings app and the Terminal) interface configuration. Most
-//!   applications use the `vnet` library, which wraps this protocol in
+//!   applications use the `net` library, which wraps this protocol in
 //!   `TcpStream`-like types.
 //! * [`netdev`] (service `"netdev"`): network devices (Ethernet drivers, and
 //!   the Wi-Fi service for each wireless interface) attach to the stack.
@@ -100,8 +100,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
-use vipc::{Bytes, enumeration, message, protocol, union};
-use vrt::object::{Channel, Socket};
+use ipc::{Bytes, enumeration, message, protocol, union};
+use rt::object::{Channel, Socket};
 
 use crate::netring::LinkEndpoints;
 
@@ -115,11 +115,11 @@ pub const UDP_UNMETERED_WINDOW: usize = 256 * 1024;
 /// Largest UDP payload a socket carries: what fits one channel message with
 /// the datagram's address, a little less than an IPv4 datagram's 65507
 /// bytes.
-pub const MAX_DATAGRAM: usize = vabi::CHANNEL_MAX_BYTES - DATAGRAM_MESSAGE_OVERHEAD;
+pub const MAX_DATAGRAM: usize = abi::CHANNEL_MAX_BYTES - DATAGRAM_MESSAGE_OVERHEAD;
 /// The rest of a [`SocketEvent::Datagram`] or [`SocketRequest::SendTo`]
 /// message: its header, the variant's tag, an IPv6 socket address and the
 /// payload's length.
-const DATAGRAM_MESSAGE_OVERHEAD: usize = vipc::HEADER_LEN + 4 + 27 + 4;
+const DATAGRAM_MESSAGE_OVERHEAD: usize = ipc::HEADER_LEN + 4 + 27 + 4;
 
 enumeration! {
     /// Why a network operation failed.
@@ -298,32 +298,32 @@ union! {
 impl SocketRequest {
     /// Encodes [`SocketRequest::Send`] straight from `data` (the bytes the
     /// request would encode, without copying `data` into a vector first).
-    pub fn encode_send(data: &[u8], e: &mut vipc::Encoder) {
-        vipc::Encode::encode(1u32, e);
-        vipc::Encode::encode(data, e);
+    pub fn encode_send(data: &[u8], e: &mut ipc::Encoder) {
+        ipc::Encode::encode(1u32, e);
+        ipc::Encode::encode(data, e);
     }
 
     /// Encodes [`SocketRequest::SendTo`] straight from `data`.
-    pub fn encode_send_to(dest: SocketAddr, data: &[u8], e: &mut vipc::Encoder) {
-        vipc::Encode::encode(2u32, e);
-        vipc::Encode::encode(dest, e);
-        vipc::Encode::encode(data, e);
+    pub fn encode_send_to(dest: SocketAddr, data: &[u8], e: &mut ipc::Encoder) {
+        ipc::Encode::encode(2u32, e);
+        ipc::Encode::encode(dest, e);
+        ipc::Encode::encode(data, e);
     }
 }
 
 impl SocketEvent {
     /// Encodes [`SocketEvent::Data`] straight from `data` (the bytes the
     /// event would encode, without copying `data` into a vector first).
-    pub fn encode_data(data: &[u8], e: &mut vipc::Encoder) {
-        vipc::Encode::encode(2u32, e);
-        vipc::Encode::encode(data, e);
+    pub fn encode_data(data: &[u8], e: &mut ipc::Encoder) {
+        ipc::Encode::encode(2u32, e);
+        ipc::Encode::encode(data, e);
     }
 
     /// Encodes [`SocketEvent::Datagram`] straight from `data`.
-    pub fn encode_datagram(from: SocketAddr, data: &[u8], e: &mut vipc::Encoder) {
-        vipc::Encode::encode(3u32, e);
-        vipc::Encode::encode(from, e);
-        vipc::Encode::encode(data, e);
+    pub fn encode_datagram(from: SocketAddr, data: &[u8], e: &mut ipc::Encoder) {
+        ipc::Encode::encode(3u32, e);
+        ipc::Encode::encode(from, e);
+        ipc::Encode::encode(data, e);
     }
 }
 
@@ -1047,7 +1047,7 @@ mod tests {
     use super::*;
     use alloc::string::ToString;
     use alloc::vec;
-    use vipc::{Decode, Decoder, Encode, Encoder};
+    use ipc::{Decode, Decoder, Encode, Encoder};
 
     fn roundtrip<T: Encode + Decode>(v: T) -> T {
         let mut e = Encoder::new();
@@ -1213,11 +1213,11 @@ mod tests {
     fn events_encode_straight_from_slices() {
         let from: SocketAddr = "[2001:db8::1]:5353".parse().unwrap();
         let payload = vec![7u8; MAX_DATAGRAM];
-        let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
+        let mut e = Encoder::with_header(0, 0, ipc::FLAG_EVENT);
         SocketEvent::encode_datagram(from, &payload, &mut e);
         // The largest datagram, from the longest address, fits a message.
-        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
-        let mut d = Decoder::new(&e.bytes[vipc::HEADER_LEN..], Vec::new());
+        assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES);
+        let mut d = Decoder::new(&e.bytes[ipc::HEADER_LEN..], Vec::new());
         match SocketEvent::decode(&mut d).unwrap() {
             SocketEvent::Datagram { from: f, data } => assert_eq!((f, data.0), (from, payload.clone())),
             other => panic!("{other:?}"),
@@ -1227,9 +1227,9 @@ mod tests {
         let mut d = Decoder::new(&e.bytes, Vec::new());
         assert!(matches!(SocketEvent::decode(&mut d).unwrap(), SocketEvent::Data { data } if data.0 == b"hello"));
         // And a request to send the largest datagram fits too.
-        let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
+        let mut e = Encoder::with_header(0, 0, ipc::FLAG_EVENT);
         SocketRequest::SendTo { dest: from, data: Bytes(payload.clone()) }.encode(&mut e);
-        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
+        assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES);
         // Requests encoded from slices are the requests themselves.
         let mut e = Encoder::new();
         SocketRequest::encode_send_to(from, &payload, &mut e);

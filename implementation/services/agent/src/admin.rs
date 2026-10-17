@@ -14,18 +14,18 @@
 
 use std::sync::Arc;
 
-use vabi::{WaitItem, signals};
-use vagent::config::{self, Config};
-use vagent::deepgram;
-use vproto::agent::{
+use ::agent::config::{self, Config};
+use ::agent::deepgram;
+use abi::{WaitItem, signals};
+use proto::agent::{
     AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, UiLink, agent,
 };
-use vproto::audio::{OutputStream, StreamSpec, audio, ring};
-use vproto::init::ClientIdentity;
-use vrt::object::{Channel, Event};
-use vrt::sync::Mutex;
-use vrt::time::Duration;
-use vweb::WebError;
+use proto::audio::{OutputStream, StreamSpec, audio, ring};
+use proto::init::ClientIdentity;
+use rt::object::{Channel, Event};
+use rt::sync::Mutex;
+use rt::time::Duration;
+use web::WebError;
 
 use crate::registrar::Registrar;
 use crate::shared::Shared;
@@ -39,7 +39,7 @@ const MAX_CONNECTIONS: usize = 16;
 /// Logs how long a request to Deepgram took (the path only: queries can
 /// be long).
 fn log_fetch(url: &str, start: u64, bytes: Option<usize>) {
-    let ms = (vrt::time::now_ns() - start) / 1_000_000;
+    let ms = (rt::time::now_ns() - start) / 1_000_000;
     let path = url.split('?').next().unwrap_or(url);
     match bytes {
         Some(b) => println!("{path}: {b} bytes in {ms} ms"),
@@ -72,7 +72,7 @@ impl SettingsServer {
         });
         let theirs = incoming.clone();
         let admin = Admin { shared, status, registrar };
-        vrt::thread::Builder::new().name("settings").spawn(move || serve(&theirs, &admin, &added)).ok()?;
+        rt::thread::Builder::new().name("settings").spawn(move || serve(&theirs, &admin, &added)).ok()?;
         Some(SettingsServer(incoming))
     }
 
@@ -105,7 +105,7 @@ fn serve(incoming: &Incoming, admin: &Admin, added: &Event) {
             signals: signals::READABLE | signals::PEER_CLOSED,
             ..Default::default()
         }));
-        let _ = vrt::object::wait_many(&mut items, vabi::DEADLINE_INFINITE);
+        let _ = rt::object::wait_many(&mut items, abi::DEADLINE_INFINITE);
         // The connections' items follow the event's, in order.
         let mut item = items.iter().skip(1);
         conns.retain(|(channel, who)| {
@@ -125,7 +125,7 @@ fn serve_connection(admin: &Admin, channel: &Channel, who: &ClientIdentity) -> b
                     let _ = reply.send(channel);
                 }
             }
-            Err(vabi::Error::ShouldWait) => return true,
+            Err(abi::Error::ShouldWait) => return true,
             Err(_) => return false,
         }
     }
@@ -169,8 +169,8 @@ impl Session<'_> {
     /// GET with the key; maps failures to agent errors.
     fn get(&self, url: &str) -> Result<String, AgentError> {
         let auth = format!("Token {}", self.key()?);
-        let start = vrt::time::now_ns();
-        let r = vweb::http::fetch("GET", url, &[("Authorization", &auth)], &[], NET_TIMEOUT, 4 << 20);
+        let start = rt::time::now_ns();
+        let r = web::http::fetch("GET", url, &[("Authorization", &auth)], &[], NET_TIMEOUT, 4 << 20);
         log_fetch(url, start, r.as_ref().map(|r| r.body.len()).ok());
         match r {
             Ok(r) if r.status == 401 || r.status == 403 => Err(AgentError::BadKey),
@@ -314,8 +314,8 @@ impl agent::Server for Session<'_> {
         let auth = format!("Token {}", self.key()?);
         let body = deepgram::speak_body(PREVIEW);
         let url = deepgram::speak_url(&voice);
-        let start = vrt::time::now_ns();
-        let r = vweb::http::fetch(
+        let start = rt::time::now_ns();
+        let r = web::http::fetch(
             "POST",
             &url,
             &[("Authorization", &auth), ("Content-Type", "application/json")],
@@ -382,7 +382,7 @@ impl agent::Server for Session<'_> {
 
 /// Plays 24 kHz mono PCM and waits until it has been heard.
 fn play(pcm: &[i16]) {
-    let Some(client) = vproto::connect(audio::NAME).ok().map(audio::Client::new) else { return };
+    let Some(client) = proto::connect(audio::NAME).ok().map(audio::Client::new) else { return };
     let spec = StreamSpec {
         rate: deepgram::OUTPUT_RATE,
         channels: 1,
@@ -394,15 +394,15 @@ fn play(pcm: &[i16]) {
     };
     let Ok(stream) = OutputStream::open(&client, spec) else { return };
     let mut pos = 0;
-    let end = vrt::time::deadline_after(Duration::from_secs(20));
-    while pos < pcm.len() && vrt::time::now_ns() < end {
-        stream.wait_writable(2400, vrt::time::deadline_after(Duration::from_millis(200)));
+    let end = rt::time::deadline_after(Duration::from_secs(20));
+    while pos < pcm.len() && rt::time::now_ns() < end {
+        stream.wait_writable(2400, rt::time::deadline_after(Duration::from_millis(200)));
         pos += stream.write(&pcm[pos..]);
     }
     // Nothing follows: played out, the stream has ended, not run short.
     stream.ring().set_producer_flags(ring::flags::END);
-    while stream.played_now() < stream.written() && vrt::time::now_ns() < end {
-        vrt::time::sleep(Duration::from_millis(50));
+    while stream.played_now() < stream.written() && rt::time::now_ns() < end {
+        rt::time::sleep(Duration::from_millis(50));
     }
     let _ = client.close(stream.id);
 }

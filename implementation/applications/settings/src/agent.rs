@@ -30,9 +30,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use vproto::agent::{AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, agent};
-use vrt::object::Event;
-use vui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
+use proto::agent::{AgentConfig, AgentError, AgentStatus, MemoryItem, ModelCatalog, ModelChoice, Permission, agent};
+use rt::object::Event;
+use ui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
 
 enum Request {
     Load,
@@ -77,7 +77,7 @@ struct Link {
 /// Whether the agent service is registered (a connection to it otherwise
 /// waits until it is).
 pub fn agent_running() -> bool {
-    vproto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == agent::NAME)).unwrap_or(false)).unwrap_or(false)
+    proto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == agent::NAME)).unwrap_or(false)).unwrap_or(false)
 }
 
 impl Link {
@@ -117,7 +117,7 @@ fn worker(todo: Receiver<Request>, replies: Sender<Reply>, refresh_queued: &Atom
             refresh_queued.store(false, Ordering::Release);
         }
         if client.is_none() && agent_running() {
-            client = vproto::connect(agent::NAME).ok().map(agent::Client::new);
+            client = proto::connect(agent::NAME).ok().map(agent::Client::new);
         }
         let answered = client.as_ref().is_some_and(|c| serve(c, req, &replies));
         if !answered {
@@ -412,7 +412,7 @@ impl AgentPage {
         self.send(Request::Load);
     }
 
-    pub fn wait_handle(&self) -> Option<vabi::RawHandle> {
+    pub fn wait_handle(&self) -> Option<abi::RawHandle> {
         self.link.as_ref().map(|l| l.event.raw())
     }
 
@@ -556,11 +556,11 @@ impl AgentPage {
     /// Waits (until `deadline`) for the changes sent to be confirmed: the
     /// window is about to close, and the thread sending them with it.
     pub fn finish(&mut self, deadline: u64) {
-        while self.saving > 0 && vrt::time::now_ns() < deadline {
+        while self.saving > 0 && rt::time::now_ns() < deadline {
             if let Some(l) = &self.link {
-                let _ = l.event.wait(vabi::signals::SIGNALED, deadline);
+                let _ = l.event.wait(abi::signals::SIGNALED, deadline);
             }
-            self.poll(vrt::time::now_ns());
+            self.poll(rt::time::now_ns());
         }
     }
 
@@ -574,7 +574,7 @@ impl AgentPage {
             match (&self.status, &self.config) {
                 (Some(_), Some(c)) if !c.enabled => format!("{} is switched off.", c.name),
                 (Some(_), Some(c)) if !c.has_key => format!("{} needs a Deepgram API key to talk.", c.name),
-                (Some(s), _) if !s.detail.is_empty() && matches!(s.state, vproto::agent::AgentState::Error) => {
+                (Some(s), _) if !s.detail.is_empty() && matches!(s.state, proto::agent::AgentState::Error) => {
                     s.detail.clone()
                 }
                 (Some(_), Some(c)) if c.listen_for_name => {
@@ -788,7 +788,7 @@ impl AgentPage {
                 let resp = ui.interact(ui.id(&format!("voice-{}", v.id)), rr);
                 ui.row_background(
                     rr,
-                    vui::RowState { selected: v.id == c.voice, hovered: resp.hovered, focused: false },
+                    ui::RowState { selected: v.id == c.voice, hovered: resp.hovered, focused: false },
                 );
                 ui.label(Rect::new(rr.x + 12, rr.y, 130, 38), &v.name, Font::Bold, t.font_size, t.text, Align::Left);
                 let detail = ui.ctx.text.ellipsize(font, t.small_size, &v.detail, (rr.w - 160 - 50) as f32);
@@ -894,7 +894,7 @@ impl AgentPage {
                 let rr = Rect::new(ix, row, iw, 34);
                 let resp = ui.interact(ui.id(&format!("model-{}-{}", m.provider, m.id)), rr);
                 let selected = m.id == c.think_model && m.provider == c.think_provider;
-                ui.row_background(rr, vui::RowState { selected, hovered: resp.hovered, focused: false });
+                ui.row_background(rr, ui::RowState { selected, hovered: resp.hovered, focused: false });
                 ui.label(
                     Rect::new(rr.x + 12, rr.y, rr.w - 200, 34),
                     &m.name,
@@ -933,7 +933,7 @@ impl AgentPage {
             let rr = Rect::new(ix, row, iw, 34);
             let resp = ui.interact(ui.id(&format!("listen-{}", l.id)), rr);
             let selected = l.id == c.listen_model;
-            ui.row_background(rr, vui::RowState { selected, hovered: resp.hovered, focused: false });
+            ui.row_background(rr, ui::RowState { selected, hovered: resp.hovered, focused: false });
             ui.label(Rect::new(rr.x + 12, rr.y, 160, 34), &l.name, Font::Regular, t.font_size, t.text, Align::Left);
             ui.label(
                 Rect::new(rr.x + 170, rr.y, rr.w - 180, 34),

@@ -4,14 +4,14 @@
 //! The terminal: `isatty`, its size and its modes (`termios`).
 //!
 //! A program run by the Terminal gets the terminal's shared state
-//! (`vproto::tty`) at startup; its descriptors that are the terminal's
+//! (`proto::tty`) at startup; its descriptors that are the terminal's
 //! socket endpoint are the terminal.
 
 use alloc::sync::Arc;
 
-use vproto::tty::{self, Tty};
-use vrt::object::Vmo;
-use vrt::sync::Mutex;
+use proto::tty::{self, Tty};
+use rt::object::Vmo;
+use rt::sync::Mutex;
 
 use crate::fd::{self, Object};
 use crate::linux::errno::{EINVAL, ENOTTY};

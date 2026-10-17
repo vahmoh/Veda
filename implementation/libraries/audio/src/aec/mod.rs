@@ -255,7 +255,7 @@ impl Fifo {
 /// documentation).
 ///
 /// ```
-/// use vaudio::aec::EchoCanceller;
+/// use audio::aec::EchoCanceller;
 ///
 /// let mut aec = EchoCanceller::new(16_000, 250);
 /// let (mic, played) = ([0i16; 160], [0i16; 160]);

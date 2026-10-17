@@ -14,14 +14,14 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vfiles = { workspace = true }
-vui = { workspace = true }
-vnet = { workspace = true }
-vweb = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+files = { workspace = true }
+ui = { workspace = true }
+net = { workspace = true }
+web = { workspace = true }
 terminal-core = { path = "core" }
 apps-common = { path = "../common" }
 

@@ -13,7 +13,7 @@
 //! released, other buttons doing nothing meanwhile. A press while the
 //! pointer is grabbed is never taken for a new one elsewhere.
 
-use vproto::display::{Cursor, WindowEvent, WindowKind, WindowState};
+use proto::display::{Cursor, WindowEvent, WindowKind, WindowState};
 
 use crate::window::{Part, Snap, TITLE_HEIGHT};
 use crate::wm::{Click, Drag, Wm};
@@ -50,7 +50,7 @@ impl<M> Wm<M> {
                 if let Some(w) = self.windows.get_mut(&id) {
                     let before = w.paint_bounds();
                     let ny = (y - dy).max(area.y + TITLE_HEIGHT).min(area.bottom() - 8);
-                    w.client_rect = vgfx::Rect::new(x - dx, ny, w.client_rect.w, w.client_rect.h);
+                    w.client_rect = gfx::Rect::new(x - dx, ny, w.client_rect.w, w.client_rect.h);
                     w.auto_placed = false;
                     let after = w.paint_bounds();
                     self.damage.add(before);
@@ -71,7 +71,7 @@ impl<M> Wm<M> {
     /// Window `id`, resized from `start` by `edge`, the pointer having
     /// moved by `delta`: no smaller than its client allows, no larger than
     /// the screen.
-    fn resize(&mut self, id: u32, edge: (i8, i8), start: vgfx::Rect, (ddx, ddy): (i32, i32)) {
+    fn resize(&mut self, id: u32, edge: (i8, i8), start: gfx::Rect, (ddx, ddy): (i32, i32)) {
         let max = self.limits.window();
         let Some(w) = self.windows.get_mut(&id) else { return };
         let before = w.paint_bounds();

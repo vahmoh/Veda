@@ -12,8 +12,8 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use raster::Point;
 use unicode_segmentation::GraphemeCursor;
-use vraster::Point;
 
 use crate::GlyphId;
 use crate::font::Font;

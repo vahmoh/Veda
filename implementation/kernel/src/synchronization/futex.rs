@@ -10,7 +10,7 @@
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 
-use vabi::Error;
+use abi::Error;
 
 use super::SpinLock;
 use crate::memory::user;

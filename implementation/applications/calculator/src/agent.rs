@@ -11,7 +11,7 @@
 use calculator_core::format::{Style, format, fraction_text};
 use calculator_core::units::{CATEGORIES, find_unit};
 use calculator_core::{AngleUnit, Base, Calculator, Key, Mode, Number, WordSize, format_word};
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_f64, arg_opt_str, arg_str, json};
+use ui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_f64, arg_opt_str, arg_str, json};
 
 /// The calculations the agent is shown, the latest last.
 const HISTORY_SHOWN: usize = 10;

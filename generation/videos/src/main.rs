@@ -244,9 +244,9 @@ fn mux(film: &Film, video: &av1::Video, sound: Option<&flac::Flac>) -> Result<Ve
 }
 
 fn write_png(dir: &Path, name: &str, pixels: &[u32], width: usize) -> Result<(), String> {
-    let image = vimage::Image::from_pixels(width as u32, (pixels.len() / width) as u32, pixels.to_vec())
+    let image = image::Image::from_pixels(width as u32, (pixels.len() / width) as u32, pixels.to_vec())
         .map_err(|e| e.to_string())?;
-    let png = vimage::encode_png(&image).map_err(|e| e.to_string())?;
+    let png = image::encode_png(&image).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     std::fs::write(dir.join(name), png).map_err(|e| format!("writing a preview: {e}"))
 }

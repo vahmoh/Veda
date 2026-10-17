@@ -7,7 +7,7 @@
 //! services:
 //!
 //! * `display` — clients create windows, attach shared pixel buffers and
-//!   present frames (see `vproto::display`);
+//!   present frames (see `proto::display`);
 //! * `input` — device drivers report keyboard and pointer events;
 //! * `displaydev` — a display driver hands over pictures it flips between
 //!   at the vertical blank (see `screen`).
@@ -46,18 +46,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use abi::signals;
 use compositor_core::Wm;
 use compositor_core::clients::Identity;
-use vabi::signals;
-use vgfx::{Rect, Text};
-use vipc::WaitSet;
-use vproto::display::{Cursor, display};
-use vproto::displaydev::{self, DisplayDevError, Link, displaydev as driver_protocol};
-use vproto::init::ClientIdentity;
-use vproto::input::InputEvent;
-use vrt::object::{Channel, Vmo};
-use vrt::println;
-use vrt::vm::Mapping;
+use gfx::{Rect, Text};
+use ipc::WaitSet;
+use proto::display::{Cursor, display};
+use proto::displaydev::{self, DisplayDevError, Link, displaydev as driver_protocol};
+use proto::init::ClientIdentity;
+use proto::input::InputEvent;
+use rt::object::{Channel, Vmo};
+use rt::println;
+use rt::vm::Mapping;
 
 use decor::Decor;
 use screen::Screen;
@@ -65,7 +65,7 @@ use session::Session;
 use startup::Startup;
 use state::Compositor;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// How many requests a client has served at a wake-up before the others,
 /// how many reports an input driver, how many requests a display driver,
@@ -76,7 +76,7 @@ const DRIVER_BUDGET: usize = 16;
 const ACCEPT_BUDGET: usize = 16;
 
 /// Reads a font file from the system image and leaks it (fonts live forever).
-fn load_font(vfs: &vproto::vfs::Client, path: &str) -> Option<&'static [u8]> {
+fn load_font(vfs: &proto::vfs::Client, path: &str) -> Option<&'static [u8]> {
     let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;
     let mut data = alloc::vec![0u8; len as usize];
     vmo.read(0, &mut data).ok()?;
@@ -158,12 +158,12 @@ fn serve_client(comp: &mut Compositor, key: u64, now: u64) {
             Ok(()) => comp.settle(),
             // Refused (the client was told so): the compositor's answer was
             // larger than a message, which it never should be.
-            Err(vipc::IpcError::TooLarge) => {
+            Err(ipc::IpcError::TooLarge) => {
                 println!("an answer to a client was too large to send");
                 comp.settle();
             }
             // It left without its answer.
-            Err(vipc::IpcError::PeerClosed) => {
+            Err(ipc::IpcError::PeerClosed) => {
                 comp.drop_client(key);
                 return;
             }
@@ -171,7 +171,7 @@ fn serve_client(comp: &mut Compositor, key: u64, now: u64) {
             // without a header: it is sent away, its windows with it.
             Err(e) => {
                 let why = match e {
-                    vipc::IpcError::Kernel(vabi::Error::ShouldWait) => "it does not read its answers",
+                    ipc::IpcError::Kernel(abi::Error::ShouldWait) => "it does not read its answers",
                     _ => "what it sent is not a request",
                 };
                 log_now_and_then(&DROPPED_CLIENTS, || {
@@ -190,7 +190,7 @@ fn serve_client(comp: &mut Compositor, key: u64, now: u64) {
 fn serve_input(comp: &mut Compositor, inputs: &BTreeMap<u64, Channel>, key: u64, now: u64) {
     for _ in 0..INPUT_BUDGET {
         let Some(msg) = inputs.get(&key).and_then(|c| c.read().ok()) else { return };
-        if let Ok((_, events)) = vipc::decode_event::<Vec<InputEvent>>(msg) {
+        if let Ok((_, events)) = ipc::decode_event::<Vec<InputEvent>>(msg) {
             for ev in events {
                 comp.wm.input(key, ev, now);
             }
@@ -200,18 +200,18 @@ fn serve_input(comp: &mut Compositor, inputs: &BTreeMap<u64, Channel>, key: u64,
 }
 
 fn main() -> i32 {
-    use vabi::startup::role;
+    use abi::startup::role;
     let (Some(fb_vmo), Some(info_vmo)) = (
-        vrt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
-        vrt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
+        rt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
+        rt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
     ) else {
         println!("no framebuffer");
         return 1;
     };
-    let mut raw = [0u8; core::mem::size_of::<vabi::KernelBootInfo>()];
+    let mut raw = [0u8; core::mem::size_of::<abi::KernelBootInfo>()];
     let _ = info_vmo.read(0, &mut raw);
     // SAFETY: plain data written by the kernel.
-    let info: vabi::KernelBootInfo = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const vabi::KernelBootInfo) };
+    let info: abi::KernelBootInfo = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const abi::KernelBootInfo) };
     let (width, height, pitch) =
         (info.framebuffer_width as i32, info.framebuffer_height as i32, info.framebuffer_pitch as usize);
     if width <= 0 || height <= 0 || !screen::pitch_fits(pitch, width) {
@@ -219,7 +219,7 @@ fn main() -> i32 {
         return 1;
     }
     let fb_size = (pitch * height as usize).next_multiple_of(4096);
-    let fb = match Mapping::new(fb_vmo, fb_size, vabi::map_flags::READ | vabi::map_flags::WRITE) {
+    let fb = match Mapping::new(fb_vmo, fb_size, abi::map_flags::READ | abi::map_flags::WRITE) {
         Ok(m) => m,
         Err(e) => {
             println!("cannot map the framebuffer: {}", e);
@@ -230,8 +230,8 @@ fn main() -> i32 {
     let mut text = Text::new();
     // The fonts' indices: Inter SemiBold (titles), Inter Regular.
     let mut fonts = [None; 3];
-    if let Ok(ch) = vproto::connect(vproto::vfs::NAME) {
-        let vfs = vproto::vfs::Client::new(ch);
+    if let Ok(ch) = proto::connect(proto::vfs::NAME) {
+        let vfs = proto::vfs::Client::new(ch);
         for (i, path) in
             ["/system/fonts/Inter-SemiBold.otf", "/system/fonts/Inter-Regular.otf", "/system/fonts/Lato-Regular.ttf"]
                 .iter()
@@ -248,12 +248,12 @@ fn main() -> i32 {
         println!("warning: no fonts available, titles will be blank");
     }
 
-    let display_listener = vproto::register(display::NAME).expect("cannot register the display service");
-    let input_listener = vproto::register(vproto::input::NAME).expect("cannot register the input service");
-    let driver_listener = vproto::register(driver_protocol::NAME).expect("cannot register the display driver service");
+    let display_listener = proto::register(display::NAME).expect("cannot register the display service");
+    let input_listener = proto::register(proto::input::NAME).expect("cannot register the input service");
+    let driver_listener = proto::register(driver_protocol::NAME).expect("cannot register the display driver service");
     println!("display {}x{} ready", width, height);
 
-    let started = vrt::time::now_ns();
+    let started = rt::time::now_ns();
     let mut comp = Compositor {
         wm: Wm::new(Rect::new(0, 0, width, height)),
         screen: Screen::new(fb, pitch, info.framebuffer_format == 2, width, height, started),
@@ -276,14 +276,14 @@ fn main() -> i32 {
     // With the lock screen installed, the window system starts locked, at
     // system start and after a crash alike: the lock service unlocks it
     // (at once, if no password is set).
-    if vrt::env::args().iter().any(|a| a == "locked") {
+    if rt::env::args().iter().any(|a| a == "locked") {
         comp.wm.lock_at_start();
         comp.told_locked = true;
     }
     // At system start (not after a restart), the screen stays black until
     // the display is up, then the splash fades in, comes to life and
     // dissolves into the desktop once it has drawn itself.
-    if vrt::env::args().iter().any(|a| a == "splash") {
+    if rt::env::args().iter().any(|a| a == "splash") {
         let fonts = (title_font, regular_font);
         comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, started));
     }
@@ -310,7 +310,7 @@ fn main() -> i32 {
     // kernel, so that a wait costs what is ready, however many clients.
     let mut ws = WaitSet::new();
     loop {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         comp.screen.check(now);
         // A driver that flips gives pictures the GPU may draw into: it is
         // set up for them (once for each driver's), and no longer for the
@@ -327,7 +327,7 @@ fn main() -> i32 {
         if let Some(s) = &mut comp.startup {
             s.release(now, comp.screen.settled());
         }
-        let mut deadline = vabi::DEADLINE_INFINITE;
+        let mut deadline = abi::DEADLINE_INFINITE;
         let mut until = |t: Option<u64>| {
             if let Some(t) = t {
                 deadline = deadline.min(t);
@@ -374,12 +374,12 @@ fn main() -> i32 {
         let mut ready = ws.wait(deadline).unwrap_or_default();
         // The input drivers first: what they report is served first.
         ready.sort_by_key(|&(key, _)| key & INPUT_BASE == 0);
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         for (key, observed) in ready {
             match key {
                 DISPLAY_KEY => {
                     for _ in 0..ACCEPT_BUDGET {
-                        let Some((ch, who)) = vproto::accept_with_identity(&display_listener) else { break };
+                        let Some((ch, who)) = proto::accept_with_identity(&display_listener) else { break };
                         next_key += 1;
                         let name = who.name.clone();
                         let identity = Identity { koid: who.koid, name: who.name, service: who.service };
@@ -395,7 +395,7 @@ fn main() -> i32 {
                 }
                 INPUT_KEY => {
                     for _ in 0..ACCEPT_BUDGET {
-                        let Some((ch, who)) = vproto::accept_with_identity(&input_listener) else { break };
+                        let Some((ch, who)) = proto::accept_with_identity(&input_listener) else { break };
                         if is_driver(&who) {
                             next_key += 1;
                             inputs.insert(next_key, ch);
@@ -408,7 +408,7 @@ fn main() -> i32 {
                 }
                 DRIVER_KEY => {
                     for _ in 0..ACCEPT_BUDGET {
-                        let Some((ch, who)) = vproto::accept_with_identity(&driver_listener) else { break };
+                        let Some((ch, who)) = proto::accept_with_identity(&driver_listener) else { break };
                         // Nobody else may attach, nor say what is coming: the
                         // connection is closed at once (rather than kept, to
                         // be refused each request).
@@ -477,13 +477,13 @@ fn main() -> i32 {
                     }
                     // A frame due is composed before the next client is
                     // served.
-                    if comp.frame_due(vrt::time::now_ns()) {
+                    if comp.frame_due(rt::time::now_ns()) {
                         comp.composite();
                     }
                 }
             }
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         comp.wm.repeat(now);
         if comp.wm.liveness_deadline().is_some_and(|t| now >= t) {
             comp.wm.check_liveness(now);

@@ -6,7 +6,7 @@
 //! A program typed at the prompt (found on `PATH`, or named by a path) runs
 //! as a child of the terminal, and the shell waits for it. Its standard
 //! streams are the terminal: one end of a socket pair whose other end the
-//! terminal keeps, plus the terminal's state page (`vproto::tty`), which
+//! terminal keeps, plus the terminal's state page (`proto::tty`), which
 //! makes the socket a terminal to the program (`isatty`, its size, its
 //! modes). While it runs, its output comes to the screen and the keys typed
 //! go to it — a line at a time, edited in the window, in canonical mode;
@@ -19,16 +19,16 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, SIGNALED, TERMINATED, WRITABLE};
+use abi::startup::role;
+use abi::{Error, map_flags};
+use ipc::WaitSet;
+use proto::fs::vfs;
+use proto::tty::{self, Tty};
+use rt::object::{Channel, Event, Handle, Process, Socket};
+use rt::process::{Spawn, SpawnError, is_executable};
+use rt::sync::Mutex;
 use terminal_core::text::{Capture, Utf8Stream};
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, SIGNALED, TERMINATED, WRITABLE};
-use vabi::startup::role;
-use vabi::{Error, map_flags};
-use vipc::WaitSet;
-use vproto::fs::vfs;
-use vproto::tty::{self, Tty};
-use vrt::object::{Channel, Event, Handle, Process, Socket};
-use vrt::process::{Spawn, SpawnError, is_executable};
-use vrt::sync::Mutex;
 
 use crate::job::Output;
 use crate::shell::{INTERRUPTED, PIPE_LIMIT};
@@ -210,7 +210,7 @@ fn drain(s: &Socket, mut f: impl FnMut(&[u8])) -> Option<()> {
 
 /// What the exit code of a program means to the shell.
 fn ended(code: i64) -> (i32, Option<&'static str>) {
-    match vabi::exit_signal(code) {
+    match abi::exit_signal(code) {
         None => ((code & 0xff) as i32, None),
         Some(s) => {
             let what = match s {
@@ -232,14 +232,14 @@ fn ended(code: i64) -> (i32, Option<&'static str>) {
 /// (`interrupt`, with [`Console::wake`]) ends it.
 pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) -> Result<Ended, String> {
     // The program's image.
-    let fs = vproto::connect(vfs::NAME).map(vfs::Client::new).map_err(|_| "the file system is unavailable")?;
+    let fs = proto::connect(vfs::NAME).map(vfs::Client::new).map_err(|_| "the file system is unavailable")?;
     let (vmo, size) = match fs.read_file(run.path.into()) {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return Err(format!("{}: {e}", run.path)),
         Err(_) => return Err("the file system is not responding".into()),
     };
-    let image = vrt::vm::Mapping::new(vmo, (size as usize).max(1), map_flags::READ)
-        .map_err(|e| format!("{}: {e}", run.path))?;
+    let image =
+        rt::vm::Mapping::new(vmo, (size as usize).max(1), map_flags::READ).map_err(|e| format!("{}: {e}", run.path))?;
     // SAFETY: a read-only mapping of a VMO made for us alone.
     let bytes = unsafe { &image.as_slice()[..size as usize] };
     if !is_executable(bytes) {
@@ -291,7 +291,7 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
     }
     drop(capture_side);
     drop(program_side);
-    let registry = vproto::with_registry(|r| r.clone_registry());
+    let registry = proto::with_registry(|r| r.clone_registry());
     if let Ok(Ok(Ok(ch))) = registry {
         handles.push((role::REGISTRY, ch.into_handle()));
     }
@@ -343,7 +343,7 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         if let Some((s, _)) = &feed {
             ws.add(s.raw(), WRITABLE | PEER_CLOSED, FEED);
         }
-        let Ok(ready) = ws.wait(vabi::DEADLINE_INFINITE) else { break };
+        let Ok(ready) = ws.wait(abi::DEADLINE_INFINITE) else { break };
         let mut exited = false;
         for (key, _) in ready {
             match key {
@@ -409,7 +409,7 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
             captured.push(b);
         });
     }
-    let code = process.info().map(|i| i.exit_code).unwrap_or(vabi::EXIT_CODE_CRASHED);
+    let code = process.info().map(|i| i.exit_code).unwrap_or(abi::EXIT_CODE_CRASHED);
     let (status, mut reason) = if killed { (INTERRUPTED, None) } else { ended(code) };
     // Ended by the pipe the shell closed: that is said already.
     if captured.cut() && reason == Some("Broken pipe") {

@@ -14,12 +14,12 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
-vtext = { workspace = true }
-vfiles = { workspace = true }
-vui = { workspace = true }
+rt = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+text = { workspace = true }
+files = { workspace = true }
+ui = { workspace = true }
 apps-common = { path = "../common" }
 
 

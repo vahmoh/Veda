@@ -20,7 +20,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
-use vabi::Error;
+use abi::Error;
 
 use super::{Access, Vcpu};
 use crate::arch::hv::GuestTables;

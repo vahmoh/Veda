@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vwlan` — IEEE 802.11 for Veda.
+//! `wlan` — IEEE 802.11 for Veda.
 //!
 //! The protocol side of Wi-Fi, independent of any radio:
 //!

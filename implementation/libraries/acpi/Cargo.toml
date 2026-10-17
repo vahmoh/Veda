@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vacpi"
+name = "acpi"
 description = "ACPI for Veda's device manager: the firmware's tables, an AML interpreter for the devices they describe, and resource templates"
 version.workspace = true
 edition.workspace = true

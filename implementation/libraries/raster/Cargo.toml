@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vraster"
+name = "raster"
 description = "Anti-aliased vector path rasterizer shared by the font engine and 2D graphics"
 version.workspace = true
 edition.workspace = true

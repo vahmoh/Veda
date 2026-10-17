@@ -12,7 +12,7 @@ mod rain;
 mod skyline;
 pub mod startup;
 
-use vaudio::synth::{Part, Song};
+use audio::synth::{Part, Song};
 
 /// A finished arrangement plus its metadata.
 pub struct Track {

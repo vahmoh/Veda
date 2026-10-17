@@ -9,7 +9,7 @@
 //!   service's commands. A radio that only moves raw 802.11 frames and
 //!   tunes itself ("soft MAC") the service drives too, though no driver
 //!   offers one now.
-//! * The service decides the rest with `vwlan`: what to join, SAE, the
+//! * The service decides the rest with `wlan`: what to join, SAE, the
 //!   4-way and group key handshakes (the radio gets the session keys
 //!   only), management frame protection; for a soft MAC radio, scanning,
 //!   authentication, association and CCMP encryption too.
@@ -19,7 +19,7 @@
 //! * Applications (the desktop's Wi-Fi menu, Settings, the Terminal) use
 //!   the `wlan` protocol: networks in range, connect and disconnect, saved
 //!   networks, the radio switch, status events and diagnostics. Who may do
-//!   what depends on who asks (see `vproto::wlan`): radios come only from
+//!   what depends on who asks (see `proto::wlan`): radios come only from
 //!   the device manager; the desktop shell, the agent, Settings and the
 //!   Terminal change Wi-Fi; Settings and the Terminal alone see access
 //!   points' addresses, saved networks and diagnostics.
@@ -50,28 +50,28 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::signals;
-use vfiles::fs::Fs;
-use vipc::Decode;
-use vipc::WaitSet;
-use vproto::init::ClientIdentity;
-use vproto::net::{DeviceAttachment, DeviceInfo, InterfaceKind, format_mac};
-use vproto::netring::{Link, LinkEndpoints, RxInfo, SlotMeta, kind};
-use vproto::wlan::{
+use ::wlan::policy::Backoff;
+use ::wlan::profile::Profile;
+use ::wlan::station::{Passage, Station};
+use abi::signals;
+use files::fs::Fs;
+use ipc::Decode;
+use ipc::WaitSet;
+use proto::init::ClientIdentity;
+use proto::net::{DeviceAttachment, DeviceInfo, InterfaceKind, format_mac};
+use proto::netring::{Link, LinkEndpoints, RxInfo, SlotMeta, kind};
+use proto::wlan::{
     ConnState, FailReason, LogEntry, MLME_EVENT, MlmeEvent, PhyError, PhyInfo, RADIO_STATE_EVENT, RadioState,
     WLAN_EVENT, WlanCounters, WlanEvent, WlanStatus, wlan, wlanphy,
 };
-use vrt::object::Channel;
-use vrt::println;
-use vwlan::policy::Backoff;
-use vwlan::profile::Profile;
-use vwlan::station::{Passage, Station};
+use rt::object::Channel;
+use rt::println;
 
 use conn::{Current, Request};
 use radio::Radio;
 use scan::{Scan, Table};
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// Lines kept in the connection log.
 const LOG_LINES: usize = 200;
@@ -108,15 +108,15 @@ const KEY_NETD_LINK: u64 = 6;
 const KEY_DYNAMIC: u64 = 100;
 
 pub fn now_ms() -> u64 {
-    vrt::time::now_ns() / 1_000_000
+    rt::time::now_ns() / 1_000_000
 }
 
 /// The kernel's random number generator, for nonces and SAE.
 pub struct KernelRandom;
 
-impl vwlan::crypto::Random for KernelRandom {
+impl ::wlan::crypto::Random for KernelRandom {
     fn fill(&mut self, buf: &mut [u8]) {
-        vrt::object::random_bytes(buf);
+        rt::object::random_bytes(buf);
     }
 }
 
@@ -202,14 +202,14 @@ pub struct Wlan {
     /// The network being joined or joined.
     pub current: Option<Current>,
     /// Join this access point once the current connection is left.
-    pub roam_to: Option<(Request, vwlan::scan::Bss)>,
+    pub roam_to: Option<(Request, ::wlan::scan::Bss)>,
     /// Look around (scan) before joining anything automatically: set when
     /// a connection is lost, as the access point may be gone and others
     /// of the network may be on other channels.
     pub rescan_first: bool,
     /// Access points that stopped answering, and when: they are not joined
     /// again until heard after that.
-    pub unresponsive: BTreeMap<vwlan::frame::Mac, u64>,
+    pub unresponsive: BTreeMap<::wlan::frame::Mac, u64>,
     /// The Wi-Fi switch.
     pub radio_on: bool,
     /// The user disconnected: do not join anything automatically.
@@ -258,7 +258,7 @@ impl Wlan {
                 }
                 other => other.clone(),
             };
-            vipc::send_event(&w.channel, WLAN_EVENT, ev).is_ok()
+            ipc::send_event(&w.channel, WLAN_EVENT, ev).is_ok()
         });
     }
 
@@ -276,7 +276,7 @@ impl Wlan {
         if !inspect {
             status = without_addresses(status);
         }
-        if vipc::send_event(&ch, WLAN_EVENT, WlanEvent::StatusChanged { status }).is_err() {
+        if ipc::send_event(&ch, WLAN_EVENT, WlanEvent::StatusChanged { status }).is_err() {
             return false;
         }
         self.watchers.push(Watcher { channel: ch, owner, inspect });
@@ -304,13 +304,13 @@ impl Wlan {
             state,
             adapter,
             mac,
-            ssid: vipc::Bytes(Vec::new()),
+            ssid: ipc::Bytes(Vec::new()),
             name: String::new(),
             bssid: [0; 6],
-            band: vproto::wlan::Band::Ghz2,
+            band: proto::wlan::Band::Ghz2,
             channel: 0,
             signal_dbm: 0,
-            security: vproto::wlan::Security::Open,
+            security: proto::wlan::Security::Open,
             last_failure: self.last_failure,
             connected_s: 0,
             scanning: self.scan.is_some(),
@@ -319,8 +319,8 @@ impl Wlan {
             && state != ConnState::NoAdapter
             && state != ConnState::RadioOff
         {
-            s.ssid = vipc::Bytes(c.request.ssid.clone());
-            s.name = vproto::wlan::ssid_display(&c.request.ssid);
+            s.ssid = ipc::Bytes(c.request.ssid.clone());
+            s.name = proto::wlan::ssid_display(&c.request.ssid);
             s.bssid = c.bss.bssid;
             s.band = radio::band_of(c.bss.channel);
             s.channel = c.bss.channel;
@@ -344,7 +344,7 @@ impl Wlan {
                     || old.last_failure != s.last_failure
                     || old.scanning != s.scanning
                     || old.adapter != s.adapter
-                    || vproto::wlan::signal_bars(old.signal_dbm) != vproto::wlan::signal_bars(s.signal_dbm)
+                    || proto::wlan::signal_bars(old.signal_dbm) != proto::wlan::signal_bars(s.signal_dbm)
             }
         };
         if changed {
@@ -357,7 +357,7 @@ impl Wlan {
     // Radio drivers
 
     fn accept(&mut self) {
-        while let Some((ch, who)) = vproto::accept_with_identity(&self.phy_listener) {
+        while let Some((ch, who)) = proto::accept_with_identity(&self.phy_listener) {
             // Radios come from the device manager: its drivers, the driver
             // VM's programs included, speak as it.
             if !(who.service && who.name == "devmgr") {
@@ -369,7 +369,7 @@ impl Wlan {
                 self.pending_phys.insert(k, ch);
             }
         }
-        while let Some((ch, who)) = vproto::accept_with_identity(&self.api_listener) {
+        while let Some((ch, who)) = proto::accept_with_identity(&self.api_listener) {
             let mine = self.clients.values().filter(|c| c.owner == who.koid).count();
             if !room(who.service, self.clients.len(), MAX_CLIENTS, RESERVED_CLIENTS) || mine >= MAX_CLIENTS_PER_PROCESS
             {
@@ -411,7 +411,7 @@ impl Wlan {
         let Some(ch) = self.pending_phys.get(&key) else { return };
         let msg = match ch.read() {
             Ok(m) => m,
-            Err(vabi::Error::ShouldWait) => return,
+            Err(abi::Error::ShouldWait) => return,
             Err(_) => {
                 self.pending_phys.remove(&key);
                 return;
@@ -473,7 +473,7 @@ impl Wlan {
         loop {
             let Some(r) = self.radio.as_ref() else { return };
             match r.channel.read() {
-                Ok(mut msg) => match vipc::open(&mut msg) {
+                Ok(mut msg) => match ipc::open(&mut msg) {
                     Ok((h, mut d)) if h.ordinal == RADIO_STATE_EVENT => match RadioState::decode(&mut d) {
                         Ok(state) => self.radio_state(state, now),
                         Err(_) => println!("bad radio state from the radio driver"),
@@ -484,7 +484,7 @@ impl Wlan {
                     },
                     _ => println!("unexpected message from the radio driver"),
                 },
-                Err(vabi::Error::ShouldWait) => break,
+                Err(abi::Error::ShouldWait) => break,
                 Err(_) => {
                     self.radio_gone(now);
                     return;
@@ -545,7 +545,7 @@ impl Wlan {
             // the access point.
             self.sta = self.new_station();
             self.connection_ended(
-                if connected { vwlan::station::Failure::SignalLost } else { vwlan::station::Failure::NoResponse },
+                if connected { ::wlan::station::Failure::SignalLost } else { ::wlan::station::Failure::NoResponse },
                 connected,
                 now,
             );
@@ -684,7 +684,7 @@ impl Wlan {
             let (owner, rights) = (c.owner, c.rights);
             let msg = match c.channel.read() {
                 Ok(m) => m,
-                Err(vabi::Error::ShouldWait) => return,
+                Err(abi::Error::ShouldWait) => return,
                 Err(_) => {
                     self.clients.remove(&key);
                     return;
@@ -796,7 +796,7 @@ pub fn without_addresses(mut s: WlanStatus) -> WlanStatus {
 }
 
 fn main() -> i32 {
-    let (Ok(phy_listener), Ok(api_listener)) = (vproto::register(wlanphy::NAME), vproto::register(wlan::NAME)) else {
+    let (Ok(phy_listener), Ok(api_listener)) = (proto::register(wlanphy::NAME), proto::register(wlan::NAME)) else {
         println!("cannot register the Wi-Fi services");
         return 1;
     };

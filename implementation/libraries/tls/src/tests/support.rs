@@ -48,7 +48,7 @@ pub(crate) fn test_fill(buf: &mut [u8]) {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     for chunk in buf.chunks_mut(32) {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let block = Sha256::new().chain_update(b"vtls test randomness").chain_update(n.to_le_bytes()).finalize();
+        let block = Sha256::new().chain_update(b"tls test randomness").chain_update(n.to_le_bytes()).finalize();
         chunk.copy_from_slice(&block[..chunk.len()]);
     }
 }

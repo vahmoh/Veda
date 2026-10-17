@@ -5,8 +5,8 @@
 
 use alloc::string::String;
 
-use vproto::display::modifiers;
-use vproto::input::keys;
+use proto::display::modifiers;
+use proto::input::keys;
 
 /// Delay before a held key starts repeating.
 pub const REPEAT_DELAY_NS: u64 = 450_000_000;
@@ -113,14 +113,14 @@ pub struct KeyOutput {
     pub pressed: bool,
     /// A repeat of a key held down.
     pub repeat: bool,
-    /// The modifiers down (`vproto::display::modifiers`).
+    /// The modifiers down (`proto::display::modifiers`).
     pub modifiers: u32,
     /// The character it types (empty if none).
     pub text: String,
 }
 
 impl Keyboard {
-    /// The modifiers down (`vproto::display::modifiers`).
+    /// The modifiers down (`proto::display::modifiers`).
     pub fn modifiers(&self) -> u32 {
         let mut m = 0;
         if self.shift > 0 {

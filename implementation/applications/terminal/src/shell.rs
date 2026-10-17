@@ -21,20 +21,20 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use proto::fs::{FsError, MAX_IO, Stat, file, open_flags};
+use proto::init::{AppInfo, launcher};
+use rt::object::Channel;
 use terminal_core::classify::{self, Effect, Lookup};
 use terminal_core::edit;
 use terminal_core::screen::{Cell, Style, cells, color};
 use terminal_core::syntax::{self, Command, Lexer, Routes, Sink, Word};
 use terminal_core::text::{Capture, Utf8Stream};
-use vproto::fs::{FsError, MAX_IO, Stat, file, open_flags};
-use vproto::init::{AppInfo, launcher};
-use vrt::object::Channel;
 
 use crate::commands;
 use crate::job::Output;
 use crate::program::{self, Console, Destination, Input, Run};
-use vfiles::path::{display_path, file_name, glob_match, has_wildcards, is_read_only, normalize, resolve};
-use vfiles::{Fs, HOME, default_app};
+use files::path::{display_path, file_name, glob_match, has_wildcards, is_read_only, normalize, resolve};
+use files::{Fs, HOME, default_app};
 
 /// Shown after an operation failed because the disk is full.
 const NO_SPACE_HINT: &str = "The disk is full: delete files you no longer need ('df' shows how much space is left).";
@@ -73,7 +73,7 @@ struct FileOut {
     /// What was written and not sent yet.
     buf: Vec<u8>,
     /// Why writing failed.
-    error: Option<vfiles::Error>,
+    error: Option<files::Error>,
     /// The file (device, inode): a command must not read it while it
     /// writes it.
     id: (u64, u64),
@@ -97,18 +97,18 @@ impl FileOut {
         let mut sent = 0;
         while self.buf.len() - sent >= least {
             let n = (self.buf.len() - sent).min(MAX_IO as usize);
-            match f.write(vipc::Bytes(self.buf[sent..sent + n].to_vec())) {
+            match f.write(ipc::Bytes(self.buf[sent..sent + n].to_vec())) {
                 Ok(Ok(w)) if w > 0 => sent += w as usize,
                 Ok(Ok(_)) => {
-                    self.fail(vfiles::Error::Fs(FsError::Io));
+                    self.fail(files::Error::Fs(FsError::Io));
                     return;
                 }
                 Ok(Err(e)) => {
-                    self.fail(vfiles::Error::Fs(e));
+                    self.fail(files::Error::Fs(e));
                     return;
                 }
                 Err(_) => {
-                    self.fail(vfiles::Error::Ipc);
+                    self.fail(files::Error::Ipc);
                     return;
                 }
             }
@@ -116,7 +116,7 @@ impl FileOut {
         self.buf.drain(..sent);
     }
 
-    fn fail(&mut self, e: vfiles::Error) {
+    fn fail(&mut self, e: files::Error) {
         self.error = Some(e);
         self.file = None;
         self.buf = Vec::new();
@@ -220,7 +220,7 @@ impl Io<'_> {
 
     /// Writes `cmd: what: error` for a failed file operation (with a hint
     /// when the disk is full); returns exit status 1.
-    pub fn fs_error(&mut self, cmd: &str, what: &str, e: &vfiles::Error) -> i32 {
+    pub fn fs_error(&mut self, cmd: &str, what: &str, e: &files::Error) -> i32 {
         let status = self.error(cmd, &format!("{what}: {e}"));
         if e.is_no_space() {
             self.hint(NO_SPACE_HINT);
@@ -255,7 +255,7 @@ impl Io<'_> {
     /// Ends the command's output: sends what is left to its files, and
     /// returns what goes to the next command and the files that could not
     /// be written (named as typed).
-    fn finish(mut self) -> (Capture, Vec<(String, vfiles::Error)>) {
+    fn finish(mut self) -> (Capture, Vec<(String, files::Error)>) {
         let rest = self.screen.finish();
         if !rest.is_empty() {
             self.out.raw(&rest);
@@ -321,7 +321,7 @@ impl Lookup for ShellLookup<'_> {
 
     fn exists(&self, path: &str) -> bool {
         // A file system that does not answer may hold anything.
-        !matches!(self.0.fs.stat(path), Err(vfiles::Error::Fs(FsError::NotFound)))
+        !matches!(self.0.fs.stat(path), Err(files::Error::Fs(FsError::NotFound)))
     }
 
     fn is_dir(&self, path: &str) -> bool {
@@ -496,7 +496,7 @@ impl Shell {
 
     pub fn launcher(&mut self) -> Option<&launcher::Client> {
         if self.launcher.is_none() {
-            self.launcher = vproto::connect(launcher::NAME).ok().map(launcher::Client::new);
+            self.launcher = proto::connect(launcher::NAME).ok().map(launcher::Client::new);
         }
         self.launcher.as_ref()
     }
@@ -1009,7 +1009,7 @@ fn pipe_cut(out: &Output, name: &str) {
     );
 }
 
-fn launch_result(r: Result<Result<u64, vproto::init::LaunchError>, vipc::IpcError>) -> Result<u64, String> {
+fn launch_result(r: Result<Result<u64, proto::init::LaunchError>, ipc::IpcError>) -> Result<u64, String> {
     match r {
         Ok(Ok(koid)) => Ok(koid),
         Ok(Err(e)) => Err(e.to_string()),

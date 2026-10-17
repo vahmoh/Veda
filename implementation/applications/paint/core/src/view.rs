@@ -4,7 +4,7 @@
 //! Where the picture is in its window: its zoom and its position, and the way between the
 //! window's pixels and the picture's.
 
-use vgfx::Rect;
+use gfx::Rect;
 
 /// The zoom levels the zoom keys step through.
 pub const ZOOMS: [f32; 20] = [

@@ -45,12 +45,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use abi::signals;
 use guest_sys::retry::{self, Ended};
+use proto::audio::{DeviceFormat, Ring, Role, audiodev};
+use rt::guest::Watch;
+use rt::object::{Channel, Event};
 use rustix::event::{PollFd, PollFlags, poll};
-use vabi::signals;
-use vproto::audio::{DeviceFormat, Ring, Role, audiodev};
-use vrt::guest::Watch;
-use vrt::object::{Channel, Event};
 
 use cards::Card;
 use pcm::{Pcm, Stream};
@@ -78,7 +78,7 @@ struct Output {
 /// Connects to the audio service and attaches the card, its periods
 /// `period` frames long (and its input, with periods of `capture` frames).
 fn attach(name: &str, period: u32, capture: Option<u32>) -> Result<(Channel, Output, Option<Input>), String> {
-    let ch = vproto::connect(audiodev::NAME).map_err(|e| format!("no audio service: {e:?}"))?;
+    let ch = proto::connect(audiodev::NAME).map_err(|e| format!("no audio service: {e:?}"))?;
     let client = audiodev::Client::new(ch);
     let format = |period_frames| DeviceFormat {
         name: format!("{name} (Linux)"),

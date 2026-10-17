@@ -10,9 +10,9 @@
 //! worked out.
 
 use calculator_core::Screen;
-use vgfx::{Align, Color, Rect};
-use vproto::display::Cursor;
-use vui::{Font, Ui};
+use gfx::{Align, Color, Rect};
+use proto::display::Cursor;
+use ui::{Font, Ui};
 
 /// The large line's sizes, from its largest to its smallest.
 const MAIN_MAX: f32 = 46.0;

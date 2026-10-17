@@ -5,8 +5,8 @@
 //! picture, the time above the seek bar, how far a video that cannot be
 //! sought is, and the message that confirms a key ("+10 s", "Volume 80%").
 
-use vgfx::{Align, Color, Rect};
-use vui::{Cursor, Font, Icon, Ui};
+use gfx::{Align, Color, Rect};
+use ui::{Cursor, Font, Icon, Ui};
 
 /// A button of an icon and a label on a translucent background, faded by
 /// `alpha`. True when clicked.

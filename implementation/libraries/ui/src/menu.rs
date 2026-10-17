@@ -6,8 +6,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Align, Color, Rect};
-use vproto::input::keys;
+use gfx::{Align, Color, Rect};
+use proto::input::keys;
 
 use crate::theme::Font;
 use crate::ui::{KeyPress, Overlay, Ui};

@@ -20,9 +20,9 @@
 //! the user talks with it ([`Agent::user_active`]), which counts as input
 //! for the idle lock, on the connection that watches the lock.
 
-use vproto::display::{LOCK_NOTICE, LockNotice, display};
-use vrt::object::Channel;
-use vrt::println;
+use proto::display::{LOCK_NOTICE, LockNotice, display};
+use rt::object::Channel;
+use rt::println;
 
 use crate::Agent;
 
@@ -47,24 +47,24 @@ pub(crate) struct LockWatch {
 
 impl LockWatch {
     /// The channel to wait on, while there is one.
-    pub(crate) fn handle(&self) -> Option<vabi::RawHandle> {
+    pub(crate) fn handle(&self) -> Option<abi::RawHandle> {
         self.channel.as_ref().map(|c| c.raw())
     }
 
     /// When to try to watch again, while the agent does not.
     pub(crate) fn deadline(&self) -> u64 {
-        if self.channel.is_some() { vabi::DEADLINE_INFINITE } else { self.next_try }
+        if self.channel.is_some() { abi::DEADLINE_INFINITE } else { self.next_try }
     }
 }
 
 /// A channel on which the window system tells the lock, if it runs, and
 /// the connection that asked for it.
 fn watch() -> Option<(Channel, display::Client)> {
-    let names = vproto::with_registry(|r| r.list()).ok()?.ok()?;
+    let names = proto::with_registry(|r| r.list()).ok()?.ok()?;
     if !names.iter().any(|n| n == display::NAME) {
         return None;
     }
-    let client = display::Client::new(vproto::connect(display::NAME).ok()?);
+    let client = display::Client::new(proto::connect(display::NAME).ok()?);
     client.set_timeout(2_000_000_000);
     let (ours, theirs) = Channel::create().ok()?;
     match client.watch_lock(theirs) {
@@ -79,7 +79,7 @@ fn watch() -> Option<(Channel, display::Client)> {
 impl Agent {
     /// Locks the screen (the `system` function's `lock`).
     pub(crate) fn lock_screen(&self) -> Result<(), &'static str> {
-        let client = vproto::connect(display::NAME).map(display::Client::new);
+        let client = proto::connect(display::NAME).map(display::Client::new);
         let Ok(client) = client else { return Err("the window system is not available") };
         client.set_timeout(2_000_000_000);
         match client.lock() {
@@ -89,7 +89,7 @@ impl Agent {
     }
 
     /// Tells the window system that the user is there, as input would (see
-    /// `vagent::presence` for when): while it watches the lock, which it
+    /// `agent::presence` for when): while it watches the lock, which it
     /// does whenever the window system runs.
     pub(crate) fn user_active(&mut self) {
         let Some(d) = &self.lock_watch.display else { return };
@@ -113,12 +113,11 @@ impl Agent {
         let gone = loop {
             match ch.read() {
                 Ok(msg) => {
-                    if let Ok((LOCK_NOTICE, LockNotice::Changed { locked: l })) = vipc::decode_event::<LockNotice>(msg)
-                    {
+                    if let Ok((LOCK_NOTICE, LockNotice::Changed { locked: l })) = ipc::decode_event::<LockNotice>(msg) {
                         locked = Some(l);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => break false,
+                Err(abi::Error::ShouldWait) => break false,
                 Err(_) => break true,
             }
         };

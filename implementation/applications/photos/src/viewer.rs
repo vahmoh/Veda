@@ -4,12 +4,12 @@
 //! The viewer: one picture, fitted to the window or zoomed and panned, with a toolbar,
 //! navigation arrows, a filmstrip, an info panel, a full-screen mode and a slideshow.
 
-use vfiles::format::human_size;
-use vgfx::{Align, Bitmap, Color, Rect};
-use vimage::Orientation;
-use vproto::display::modifiers;
-use vproto::input::keys;
-use vui::{ButtonKind, Cursor, Font, Icon, Ui};
+use files::format::human_size;
+use gfx::{Align, Bitmap, Color, Rect};
+use image::Orientation;
+use proto::display::modifiers;
+use proto::input::keys;
+use ui::{ButtonKind, Cursor, Font, Icon, Ui};
 
 #[allow(unused_imports)]
 use crate::catalog::{self, Thumb};
@@ -650,8 +650,8 @@ impl Photos {
                 let mp = (m.width as u64 * m.height as u64) as f32 / 1_000_000.0;
                 rows.push(("Dimensions", format!("{} × {} pixels  ·  {:.1} MP", m.width, m.height, mp)));
                 let kind = match (m.format, m.progressive) {
-                    (vimage::Format::Jpeg, true) => String::from("JPEG image, progressive"),
-                    (vimage::Format::Png, true) => String::from("PNG image, interlaced"),
+                    (image::Format::Jpeg, true) => String::from("JPEG image, progressive"),
+                    (image::Format::Png, true) => String::from("PNG image, interlaced"),
                     (f, _) => format!("{} image", f.name()),
                 };
                 rows.push(("Type", kind));

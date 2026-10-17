@@ -27,9 +27,9 @@ pub mod siren;
 
 use alloc::vec::Vec;
 
-use vaudio::synth::fx::{Limiter, Reverb};
-use vaudio::synth::osc::{Osc, Wave};
-use vaudio::synth::voice::pan_gains;
+use audio::synth::fx::{Limiter, Reverb};
+use audio::synth::osc::{Osc, Wave};
+use audio::synth::voice::pan_gains;
 
 use crate::prelude::*;
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vnetstack` — the network stack behind `netd`.
+//! `netstack` — the network stack behind `netd`.
 //!
 //! The stack owns the interfaces (each a smoltcp [`Interface`] with its own
 //! socket set), configures them (DHCPv4, static addresses, IPv6 link-local
@@ -36,16 +36,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use entropy::Generator;
+use proto::net::{
+    AddressInfo, AddressOrigin, Connectivity, DeviceInfo, DhcpInfo, DhcpState, InterfaceInfo, InterfaceKind, IpConfig,
+    NetError, NetStatus, NetdevError, RouteInfo,
+};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::Medium;
 use smoltcp::socket::dhcpv4;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Cidr, Ipv6Cidr};
-use ventropy::Generator;
-use vproto::net::{
-    AddressInfo, AddressOrigin, Connectivity, DeviceInfo, DhcpInfo, DhcpState, InterfaceInfo, InterfaceKind, IpConfig,
-    NetError, NetStatus, NetdevError, RouteInfo,
-};
 
 use device::{Frames, Loopback};
 pub use device::{Link, Links, MAX_RX_FRAME, NoLinks, RX_BUDGET};

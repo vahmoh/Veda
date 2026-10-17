@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `mediadec` — the media decoder: FFmpeg and dav1d in a sandboxed process,
-//! which Videos plays videos with (`vproto::media`).
+//! which Videos plays videos with (`proto::media`).
 //!
 //! The program is C's world (a static ELF program on musl, over Veda's POSIX
 //! layer), as FFmpeg needs; this crate is its Rust half, built for the
@@ -11,7 +11,7 @@
 //! `main()` in the shim hands the program to [`mediadec_main`].
 //!
 //! The player starts it with one handle, the control channel
-//! ([`vproto::media::CONTROL_ROLE`]), and no registry: it reaches no file,
+//! ([`proto::media::CONTROL_ROLE`]), and no registry: it reaches no file,
 //! service or network but what the player sends it. Its one thread answers
 //! the player and does the work between requests (`session`); FFmpeg's and
 //! dav1d's own threads decode. It ends when the player closes the channel,
@@ -28,7 +28,7 @@
 //! Its Rust and the C library each keep their own: this half is made one
 //! object that exports nothing but [`mediadec_main`] (as the POSIX layer is),
 //! allocates with musl's `malloc`, and creates its one thread of its own,
-//! the watchdog, with the C library's `pthread_create` (a thread of `vrt`'s
+//! the watchdog, with the C library's `pthread_create` (a thread of `rt`'s
 //! would have no C thread state).
 
 #![no_std]
@@ -49,10 +49,10 @@ mod program {
     use core::alloc::{GlobalAlloc, Layout};
     use core::ffi::c_void;
 
-    use vabi::RawHandle;
-    use vproto::media;
-    use vrt::object::{Channel, Handle};
-    use vrt::println;
+    use abi::RawHandle;
+    use proto::media;
+    use rt::object::{Channel, Handle};
+    use rt::println;
 
     use crate::session::{MAX_ALLOC, Session};
 
@@ -149,8 +149,8 @@ mod program {
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
         // Formatted without allocating, in case the heap is what failed.
-        vrt::io::log_without_allocating(format_args!("panic: {info}\n"));
-        vrt::sys::process_exit(vabi::EXIT_CODE_PANICKED)
+        rt::io::log_without_allocating(format_args!("panic: {info}\n"));
+        rt::sys::process_exit(abi::EXIT_CODE_PANICKED)
     }
 
     /// The program, from the shim's `main()`: answers the player and decodes
@@ -175,7 +175,7 @@ mod program {
         }
         // Before any input is read: no kernel log, no processes, no new
         // executable memory, whatever a damaged file makes of the decoder.
-        if let Err(e) = vrt::process::restrict(vabi::restrict::ALL) {
+        if let Err(e) = rt::process::restrict(abi::restrict::ALL) {
             println!("cannot give up what it does without ({e:?})");
             return 1;
         }

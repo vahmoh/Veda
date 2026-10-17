@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vimage"
+name = "image"
 description = "Image decoding, resampling and encoding on zune's JPEG, PNG and BMP decoders, qoi, fast_image_resize, miniz_oxide and jpeg-encoder"
 version.workspace = true
 edition.workspace = true

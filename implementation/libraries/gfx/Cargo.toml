@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vgfx"
+name = "gfx"
 description = "Veda 2D graphics: blending, shapes, shadows, images and text on pixel surfaces"
 version.workspace = true
 edition.workspace = true
@@ -11,8 +11,8 @@ license.workspace = true
 [dependencies]
 libm = { workspace = true }
 num-traits = { workspace = true }
-vraster = { workspace = true }
-vfont = { workspace = true }
+raster = { workspace = true }
+font = { workspace = true }
 
 [lints]
 workspace = true

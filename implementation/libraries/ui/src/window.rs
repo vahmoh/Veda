@@ -8,17 +8,17 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Canvas, Damage, DrawCache, Rect};
-use vproto::display::{self as dp, Cursor, WindowEvent, WindowSpec, WindowState, display};
-use vrt::object::{Channel, Vmo};
-use vrt::vm::Mapping;
+use gfx::{Canvas, Damage, DrawCache, Rect};
+use proto::display::{self as dp, Cursor, WindowEvent, WindowSpec, WindowState, display};
+use rt::object::{Channel, Vmo};
+use rt::vm::Mapping;
 
 /// Errors creating or driving a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowError {
     /// The display service is unavailable.
     NoDisplay,
-    Ipc(vipc::IpcError),
+    Ipc(ipc::IpcError),
     Display(dp::DisplayError),
     NoMemory,
 }
@@ -28,7 +28,7 @@ pub type Display = Rc<display::Client>;
 
 /// Connects to the compositor.
 pub fn connect() -> Result<Display, WindowError> {
-    let ch = vproto::connect(display::NAME).map_err(|_| WindowError::NoDisplay)?;
+    let ch = proto::connect(display::NAME).map_err(|_| WindowError::NoDisplay)?;
     Ok(Rc::new(display::Client::new(ch)))
 }
 
@@ -119,7 +119,7 @@ impl Window {
         loop {
             match self.events.read() {
                 Ok(msg) => {
-                    if let Ok((_, ev)) = vipc::decode_event::<WindowEvent>(msg) {
+                    if let Ok((_, ev)) = ipc::decode_event::<WindowEvent>(msg) {
                         match &ev {
                             WindowEvent::Configure { width, height, state } => {
                                 self.width = *width as i32;
@@ -140,7 +140,7 @@ impl Window {
                         out.push(ev);
                     }
                 }
-                Err(vabi::Error::PeerClosed) => {
+                Err(abi::Error::PeerClosed) => {
                     self.closed = true;
                     break;
                 }
@@ -185,7 +185,7 @@ impl Window {
         let bytes = (stride * h * 4) as usize * self.buffers as usize;
         let vmo = Vmo::create(bytes).map_err(|_| WindowError::NoMemory)?;
         let theirs = Vmo::from_handle(vmo.0.duplicate(None).map_err(|_| WindowError::NoMemory)?);
-        let map = Mapping::new(vmo, bytes.next_multiple_of(4096), vabi::map_flags::READ | vabi::map_flags::WRITE)
+        let map = Mapping::new(vmo, bytes.next_multiple_of(4096), abi::map_flags::READ | abi::map_flags::WRITE)
             .map_err(|_| WindowError::NoMemory)?;
         self.display
             .attach_buffers(self.id, theirs, w as u32, h as u32, stride as u32, self.buffers)
@@ -254,7 +254,7 @@ impl Window {
     pub fn present(&mut self, damage: &[Rect]) -> Result<(), WindowError> {
         let index = self.back_index();
         let rects: Vec<dp::Rect> = damage.iter().map(|r| dp::Rect::new(r.x, r.y, r.w as u32, r.h as u32)).collect();
-        self.presented_ns = vrt::time::now_ns();
+        self.presented_ns = rt::time::now_ns();
         self.display.present(self.id, index, rects).map_err(WindowError::Ipc)?.map_err(WindowError::Display)?;
         self.shown = Some(index);
         self.in_flight = true;

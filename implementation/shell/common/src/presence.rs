@@ -20,9 +20,9 @@ use alloc::vec::Vec;
 use core::f32::consts::{PI, TAU};
 
 // Float math under `no_std` (std, linked into host tests, has these inherently).
+use gfx::{Canvas, Color, FillRule, Path};
 #[allow(unused_imports)]
 use num_traits::Float;
-use vgfx::{Canvas, Color, FillRule, Path};
 
 /// The ring's width relative to its radius.
 pub const RING_WIDTH: f32 = 0.25;
@@ -265,8 +265,8 @@ pub fn coil(c: &mut Canvas, cx: f32, cy: f32, scale: f32, spin: f32, turn: f32, 
     };
     let (a, b) = (edge(RIBBON), edge(-RIBBON));
     let width = if thin { 1.3 } else { (RIBBON * scale * 0.7).max(1.0) };
-    let mut style = vgfx::StrokeStyle::new(width);
-    style.join = vgfx::LineJoin::Round;
+    let mut style = gfx::StrokeStyle::new(width);
+    style.join = gfx::LineJoin::Round;
     // Stretches of one shade, each drawn whole (its edges as one outline,
     // which may cross itself where the ribbon turns over), so that no seams
     // show inside them. The centre line keeps the ribbon whole where it is
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn the_ring_is_drawn_round_its_centre() {
-        let mut b = vgfx::Bitmap::new(100, 100);
+        let mut b = gfx::Bitmap::new(100, 100);
         ring(&mut Canvas::for_bitmap(&mut b), 50.0, 50.0, 30.0, 6.0, 0.0, 0.0, Color::WHITE);
         let alpha = |x: i32, y: i32| b.get(x, y) >> 24;
         // On the band, all round it; nothing in the hole or beyond.

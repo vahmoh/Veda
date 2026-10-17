@@ -5,7 +5,7 @@
 //! come in: positions, sizes, text, and how much each process may have.
 //!
 //! Every number a client sends is checked before the window manager does
-//! arithmetic with it, in `i32` as `vgfx`'s rectangles do: positions are at
+//! arithmetic with it, in `i32` as `gfx`'s rectangles do: positions are at
 //! most [`COORD_MAX`] from the origin and sizes at most the screen's, so
 //! that nothing derived from them (a frame, a shadow, a damaged rectangle)
 //! can overflow. A window larger than the screen shows nothing more, and
@@ -14,8 +14,8 @@
 
 use alloc::string::String;
 
-use vgfx::Rect;
-use vproto::display::{self as dp, DisplayError};
+use gfx::Rect;
+use proto::display::{self as dp, DisplayError};
 
 /// How far from the origin a position a client gives may be (pixels).
 pub const COORD_MAX: i32 = 1 << 20;
@@ -25,7 +25,7 @@ pub const COORD_MAX: i32 = 1 << 20;
 pub const TEXT_MAX: usize = 256;
 
 /// The longest text the clipboard holds (bytes): the protocol's.
-pub use vproto::display::CLIPBOARD_MAX;
+pub use proto::display::CLIPBOARD_MAX;
 
 /// How many windows one process may have.
 pub const WINDOWS_PER_PROCESS: usize = 64;

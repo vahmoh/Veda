@@ -15,9 +15,9 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use ::gl::{Context, gl};
 use rand::{RngExt, SeedableRng};
 use rand_pcg::Pcg32;
-use vgl::{Context, gl};
 
 use super::gpu::{self, Program};
 use super::instances::{self, Instances};

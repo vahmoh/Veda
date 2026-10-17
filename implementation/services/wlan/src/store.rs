@@ -10,8 +10,8 @@
 
 use alloc::vec::Vec;
 
-use vfiles::fs::Fs;
-use vwlan::profile::{self, Profile};
+use files::fs::Fs;
+use wlan::profile::{self, Profile};
 
 const DIR: &str = "/home/user/.config/wlan";
 const PATH: &str = "/home/user/.config/wlan/networks";

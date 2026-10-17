@@ -14,7 +14,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use super::gpu::{self, Geometry, Program};
 use super::instances::{self, Instances};

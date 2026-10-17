@@ -7,13 +7,13 @@
 //! its own volume), through the same player operations as the buttons and
 //! keys.
 
+use files::format::duration as format_time;
 use music_core::order::Repeat;
-use vfiles::format::duration as format_time;
-use videos_core::control::{self, SeekError};
-use vui::agent::names::{MIN_SCORE, query_words, score};
-use vui::agent::{
+use ui::agent::names::{MIN_SCORE, query_words, score};
+use ui::agent::{
     self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, arg_str, json, show_path,
 };
+use videos_core::control::{self, SeekError};
 
 use crate::Player;
 use crate::engine::PlayState;
@@ -212,7 +212,7 @@ impl Player {
     /// (the window's copy is updated once a frame), unless a song the
     /// player asked for is still loading or a seek is not done yet.
     fn position_ms(&self) -> u64 {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let engine = self.shared.status();
         let seeked = self.seeking.is_none_or(|id| engine.seek_id == id);
         if self.requested.is_none() && seeked && engine.path == self.status.path {

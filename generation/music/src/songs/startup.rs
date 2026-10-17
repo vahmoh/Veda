@@ -8,7 +8,7 @@
 //! room with a faint echo. Shipped as `sounds/startup.wav` (48 kHz
 //! stereo, the rate sound devices run at, so it is played as it is).
 
-use vaudio::synth::{Adsr, Analog, FilterSpec, Mode, OscSpec, Part, Song, Wave};
+use audio::synth::{Adsr, Analog, FilterSpec, Mode, OscSpec, Part, Song, Wave};
 
 use crate::dsl::{self, Humanize};
 use crate::patches;

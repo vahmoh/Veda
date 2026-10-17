@@ -18,12 +18,12 @@ pub mod amd64;
 /// The linker's arguments for a Veda program, beyond the target's (a static
 /// position-independent executable):
 ///
-/// * it starts at `vrt`'s entry point, which takes the bootstrap channel;
+/// * it starts at `rt`'s entry point, which takes the bootstrap channel;
 /// * its relative relocations are packed (`DT_RELR`: a word for up to 63 of
 ///   them, where `DT_RELA` takes 24 bytes for each);
 /// * functions with the same code are kept once (Rust promises no function
 ///   an address of its own).
-pub const LINK_ARGS: &[&str] = &["--entry=_vrt_start", "-zpack-relative-relocs", "--icf=all"];
+pub const LINK_ARGS: &[&str] = &["--entry=_rt_start", "-zpack-relative-relocs", "--icf=all"];
 
 /// Whether `target` is one Veda programs are built for.
 fn is_user_target(target: &str) -> bool {

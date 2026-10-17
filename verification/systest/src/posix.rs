@@ -12,15 +12,15 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE};
-use vabi::startup::role;
-use vabi::{Error, Rights, map_flags, nr};
-use vipc::Bytes;
-use vproto::fs::{FsError, file, open_flags, seek, vfs};
-use vrt::object::{Channel, Process, Socket, Vmo};
-use vrt::process::Spawn;
-use vrt::sys::call;
-use vrt::vm;
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE};
+use abi::startup::role;
+use abi::{Error, Rights, map_flags, nr};
+use ipc::Bytes;
+use proto::fs::{FsError, file, open_flags, seek, vfs};
+use rt::object::{Channel, Process, Socket, Vmo};
+use rt::process::Spawn;
+use rt::sys::call;
+use rt::vm;
 
 use crate::{TestResult, check, vfs_client};
 
@@ -168,7 +168,7 @@ pub fn test_memory_protection() -> TestResult {
     let page = vm::allocate(None, 4096, 0, rw | map_flags::COMMIT).map_err(s)?;
     let high = vm::allocate(None, 8192, usize::MAX & !4095, rw).map_err(s)?;
     vm::unmap(None, high, 8192).map_err(s)?;
-    check(high + 8192 <= vabi::USER_SPACE_END, "a hint beyond user space is not taken")?;
+    check(high + 8192 <= abi::USER_SPACE_END, "a hint beyond user space is not taken")?;
     let wrap = vm::map(None, &vmo, 0, usize::MAX, page, map_flags::READ | map_flags::FIXED);
     check(wrap.is_err(), "a length that wraps is refused")?;
     for r in [
@@ -186,9 +186,9 @@ pub fn test_memory_protection() -> TestResult {
 /// Private memory (`vm_allocate`): its pages are freed as soon as they are
 /// unmapped or decommitted, and decommitted pages read as zeros.
 pub fn test_private_memory() -> TestResult {
-    const PAGE: usize = vabi::PAGE_SIZE;
+    const PAGE: usize = abi::PAGE_SIZE;
     let rw = map_flags::READ | map_flags::WRITE;
-    let resident = || vrt::object::process_self_info().map(|i| i.memory_bytes as usize).map_err(s);
+    let resident = || rt::object::process_self_info().map(|i| i.memory_bytes as usize).map_err(s);
     let addr = vm::allocate(None, 16 * PAGE, 0, rw).map_err(s)?;
     let untouched = resident()?;
     for i in 0..16 {
@@ -229,7 +229,7 @@ fn start_copy(what: &str) -> Result<Process, String> {
     let path = "/system/bin/systest";
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
-    let registry = vproto::with_registry(|r| r.clone_registry())
+    let registry = proto::with_registry(|r| r.clone_registry())
         .map_err(|e| format!("{e:?}"))?
         .map_err(s)?
         .map_err(|e| format!("{e:?}"))?;
@@ -240,16 +240,16 @@ fn start_copy(what: &str) -> Result<Process, String> {
 
 /// The live process that `parent` started, if any.
 fn child_of(parent: u64) -> Option<u64> {
-    let mut list = [vabi::ProcessInfo::default(); 256];
-    let n = vrt::object::process_list(&mut list).ok()?.min(list.len());
-    list[..n].iter().find(|p| p.parent_koid == parent && p.state == vabi::process_state::RUNNING).map(|p| p.koid)
+    let mut list = [abi::ProcessInfo::default(); 256];
+    let n = rt::object::process_list(&mut list).ok()?.min(list.len());
+    list[..n].iter().find(|p| p.parent_koid == parent && p.state == abi::process_state::RUNNING).map(|p| p.koid)
 }
 
 /// Whether process `koid` still runs.
 fn running(koid: u64) -> bool {
-    let mut list = [vabi::ProcessInfo::default(); 256];
-    let n = vrt::object::process_list(&mut list).unwrap_or(0).min(list.len());
-    list[..n].iter().any(|p| p.koid == koid && p.state == vabi::process_state::RUNNING)
+    let mut list = [abi::ProcessInfo::default(); 256];
+    let n = rt::object::process_list(&mut list).unwrap_or(0).min(list.len());
+    list[..n].iter().any(|p| p.koid == koid && p.state == abi::process_state::RUNNING)
 }
 
 /// Killing a job (`kill_tree`, as the Terminal's Ctrl+C does) ends the
@@ -257,24 +257,24 @@ fn running(koid: u64) -> bool {
 pub fn test_kill_job() -> TestResult {
     let leader = start_copy("job")?;
     let koid = leader.0.koid();
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(20));
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(20));
     let member = loop {
         if let Some(c) = child_of(koid) {
             break c;
         }
-        if vrt::time::now_ns() > deadline {
+        if rt::time::now_ns() > deadline {
             let _ = leader.kill_tree();
             return Err("the job's leader started nothing".into());
         }
-        vrt::time::sleep(vrt::time::Duration::from_millis(20));
+        rt::time::sleep(rt::time::Duration::from_millis(20));
     };
     leader.kill_tree().map_err(s)?;
     leader.join(deadline).map_err(s)?;
     while running(member) {
-        if vrt::time::now_ns() > deadline {
+        if rt::time::now_ns() > deadline {
             return Err("the process the leader started still runs".into());
         }
-        vrt::time::sleep(vrt::time::Duration::from_millis(20));
+        rt::time::sleep(rt::time::Duration::from_millis(20));
     }
     Ok(())
 }
@@ -288,7 +288,7 @@ pub fn job() -> i32 {
             0
         }
         Err(e) => {
-            vrt::println!("job: {e}");
+            rt::println!("job: {e}");
             1
         }
     }
@@ -298,7 +298,7 @@ pub fn job() -> i32 {
 /// decoder does before reading a file) is refused them, and keeps the rest.
 pub fn test_process_restrict() -> TestResult {
     let copy = start_copy("restricted")?;
-    let code = copy.join(vrt::time::deadline_after(vrt::time::Duration::from_secs(20))).map_err(s)?;
+    let code = copy.join(rt::time::deadline_after(rt::time::Duration::from_secs(20))).map_err(s)?;
     check(code == 0, "the restricted copy is refused what it gave up, and only that (see its log)")
 }
 
@@ -308,23 +308,23 @@ pub fn restricted() -> i32 {
     match try_restricted() {
         Ok(()) => 0,
         Err(e) => {
-            vrt::println!("restricted: {e}");
+            rt::println!("restricted: {e}");
             1
         }
     }
 }
 
 fn try_restricted() -> TestResult {
-    use vabi::restrict;
-    const PAGE: usize = vabi::PAGE_SIZE;
+    use abi::restrict;
+    const PAGE: usize = abi::PAGE_SIZE;
     let mut log = [0u8; 64];
-    check(vrt::object::log_read(0, &mut log).is_ok(), "the log can be read until then")?;
-    check(vrt::process::restrict(1 << 20) == Err(Error::InvalidArgs), "abilities it does not know are refused")?;
-    vrt::process::restrict(restrict::ALL).map_err(s)?;
+    check(rt::object::log_read(0, &mut log).is_ok(), "the log can be read until then")?;
+    check(rt::process::restrict(1 << 20) == Err(Error::InvalidArgs), "abilities it does not know are refused")?;
+    rt::process::restrict(restrict::ALL).map_err(s)?;
     let denied = Err(Error::AccessDenied);
-    check(vrt::object::log_read(0, &mut log).map(|_| ()) == denied, "the log is refused")?;
-    let mut list = [vabi::ProcessInfo::default(); 4];
-    check(vrt::object::process_list(&mut list).map(|_| ()) == denied, "the process list is refused")?;
+    check(rt::object::log_read(0, &mut log).map(|_| ()) == denied, "the log is refused")?;
+    let mut list = [abi::ProcessInfo::default(); 4];
+    check(rt::object::process_list(&mut list).map(|_| ()) == denied, "the process list is refused")?;
     let name = b"escape";
     let created = call(nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), 0, 0, 0, 0]);
     check(created.map(|_| ()) == denied, "a new process is refused")?;
@@ -338,24 +338,24 @@ fn try_restricted() -> TestResult {
     check(vm::protect(None, at, PAGE, rx) == denied, "pages are not made executable")?;
     vm::protect(None, at, PAGE, map_flags::READ).map_err(|e| format!("pages made read-only: {e}"))?;
     vm::unmap(None, at, PAGE).map_err(s)?;
-    let t = vrt::thread::spawn(|| {});
+    let t = rt::thread::spawn(|| {});
     t.join().map_err(|e| format!("a thread: {e}"))?;
-    vrt::process::restrict(restrict::NO_LOG).map_err(s)
+    rt::process::restrict(restrict::NO_LOG).map_err(s)
 }
 
 /// `systest wait`: waits until it is killed (a minute at most).
 pub fn wait() {
-    vrt::time::sleep(vrt::time::Duration::from_secs(60));
+    rt::time::sleep(rt::time::Duration::from_secs(60));
 }
 
 /// A thread's exit futex word is cleared, and its waiter woken, once the
 /// thread has ended.
 pub fn test_exit_futex() -> TestResult {
     static WORD: AtomicU32 = AtomicU32::new(1);
-    let t = vrt::thread::spawn(|| {
+    let t = rt::thread::spawn(|| {
         let _ = call(nr::THREAD_SET_EXIT_FUTEX, [WORD.as_ptr() as usize, 0, 0, 0, 0, 0]);
     });
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(5));
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(5));
     while WORD.load(Ordering::Acquire) != 0 {
         match call(nr::FUTEX_WAIT, [WORD.as_ptr() as usize, 1, deadline as usize, 0, 0, 0]) {
             Ok(_) | Err(Error::ShouldWait) => {}
@@ -432,7 +432,7 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;
     let (ours, theirs) = Socket::create().map_err(s)?;
-    let registry = vproto::with_registry(|r| r.clone_registry())
+    let registry = proto::with_registry(|r| r.clone_registry())
         .map_err(|e| format!("{e:?}"))?
         .map_err(s)?
         .map_err(|e| format!("{e:?}"))?;
@@ -449,7 +449,7 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
     }
     // SAFETY: a read-only mapping of the VFS's copy of the file.
     let process: Process = spawn.start(unsafe { image.as_slice() }).map_err(|e| format!("{path}: {e}"))?;
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(seconds));
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(seconds));
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
@@ -473,7 +473,7 @@ pub(crate) fn run_c_for(path: &str, args: &[&str], cwd: &str, seconds: u64) -> R
 /// test` gives): the arguments that have the checks of the C library and of
 /// Rust's standard library reach them too.
 fn host_args() -> Vec<String> {
-    let args = vrt::env::args();
+    let args = rt::env::args();
     match args.get(1..5) {
         Some([host, address, tcp, udp]) if host == "host" => {
             alloc::vec![host.clone(), address.clone(), tcp.clone(), udp.clone()]
@@ -490,14 +490,14 @@ fn host_args() -> Vec<String> {
 pub fn test_c_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/c/hello".into()).map_err(s)?.is_err() {
-        vrt::println!("c programs: none in this image (no cross toolchain was built)");
+        rt::println!("c programs: none in this image (no cross toolchain was built)");
         return Ok(());
     }
     // Each program linked at a fixed address and position-independent.
     for variant in ["", "-pie"] {
         let hello = format!("hello{variant}");
         let (code, out) = run_c(&format!("/system/tests/c/{hello}"), &["one", "two"], "/tmp")?;
-        vrt::println!("{hello}: {}", out.trim_end());
+        rt::println!("{hello}: {}", out.trim_end());
         check(code == 42, &format!("{hello} exited with {code}"))?;
         let greeting = out.contains("Hello from C on Veda! argc=3 argv[0]=c-test") && out.contains("cwd=/tmp");
         check(greeting, &format!("{hello}'s output"))?;
@@ -513,7 +513,7 @@ pub fn test_c_programs() -> TestResult {
                 if checks == "posix" { host.iter().map(String::as_str).collect() } else { Vec::new() };
             let (code, out) = run_c(&format!("/system/tests/c/{program}"), &args, &dir)?;
             for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-                vrt::println!("{program}: {line}");
+                rt::println!("{program}: {line}");
             }
             let passed = code == 0 && out.contains("PASS: 0 failed");
             check(passed, &format!("{program} checks failed (exit code {code})"))?;
@@ -529,7 +529,7 @@ pub fn test_c_programs() -> TestResult {
 pub fn test_rust_programs() -> TestResult {
     let fs = vfs_client()?;
     if fs.stat("/system/tests/rust/stdlib".into()).map_err(s)?.is_err() {
-        vrt::println!("rust programs: none in this image (no Rust toolchain was built)");
+        rt::println!("rust programs: none in this image (no Rust toolchain was built)");
         return Ok(());
     }
     let host = host_args();
@@ -540,7 +540,7 @@ pub fn test_rust_programs() -> TestResult {
         let _ = fs.mkdir(dir.clone());
         let (code, out) = run_c(&format!("/system/tests/rust/{program}"), &args, &dir)?;
         for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-            vrt::println!("{program}: {line}");
+            rt::println!("{program}: {line}");
         }
         let passed = code == 0 && out.contains("PASS: 0 failed");
         check(passed, &format!("{program} checks failed (exit code {code})"))?;
@@ -557,7 +557,7 @@ pub fn test_std_crates() -> TestResult {
     let _ = vfs_client()?.mkdir(dir.clone());
     let (code, out) = run_c("/system/bin/stdcrates", &[], &dir)?;
     for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
-        vrt::println!("stdcrates: {line}");
+        rt::println!("stdcrates: {line}");
     }
     let passed = code == 0 && out.contains("PASS: 0 failed");
     check(passed, &format!("stdcrates checks failed (exit code {code})"))

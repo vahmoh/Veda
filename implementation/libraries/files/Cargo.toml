@@ -2,23 +2,23 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vfiles"
+name = "files"
 description = "Files for applications: paths, file types and the apps that open them, size and time formatting, VFS access and image thumbnails"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true, optional = true }
-vimage = { workspace = true, optional = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 
 [features]
 # `thumbnails`: image thumbnails made on a background thread (needs the codecs).
-thumbnails = ["dep:vgfx", "dep:vimage"]
+thumbnails = ["dep:gfx", "dep:image"]
 
 [lints]
 workspace = true

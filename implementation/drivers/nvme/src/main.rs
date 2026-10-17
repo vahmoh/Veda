@@ -5,7 +5,7 @@
 //! about 2016, and QEMU's `nvme`.
 //!
 //! Every namespace is served as the `block` protocol under `block/<serial>`
-//! (`vproto::block::serve`; the controller's serial number, to which a
+//! (`proto::block::serve`; the controller's serial number, to which a
 //! namespace other than the first adds `-n<id>`), so the file system finds
 //! the home disk by its serial number whatever the disk.
 //!
@@ -32,12 +32,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 
-use vproto::block::{self, BlockError, BlockInfo, MAX_TRANSFER, Served};
-use vproto::pci::{DmaBuffer, Registers, pcidev};
-use vrt::object::{Channel, Interrupt};
-use vrt::println;
+use proto::block::{self, BlockError, BlockInfo, MAX_TRANSFER, Served};
+use proto::pci::{DmaBuffer, Registers, pcidev};
+use rt::object::{Channel, Interrupt};
+use rt::println;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// The BAR of the controller's registers.
 const REGISTERS: u8 = 0;
@@ -174,12 +174,12 @@ impl Controller {
 
     /// Waits until `done` holds, up to `timeout_ns`.
     fn wait(&self, timeout_ns: u64, mut done: impl FnMut(&Controller) -> bool) -> bool {
-        let end = vrt::time::now_ns() + timeout_ns;
+        let end = rt::time::now_ns() + timeout_ns;
         while !done(self) {
-            if vrt::time::now_ns() > end {
+            if rt::time::now_ns() > end {
                 return false;
             }
-            vrt::time::sleep(vrt::time::Duration::from_millis(1));
+            rt::time::sleep(rt::time::Duration::from_millis(1));
         }
         true
     }
@@ -202,7 +202,7 @@ impl Controller {
         let (qid, tail) = (q.id as usize, q.tail);
         fence(Ordering::SeqCst);
         self.w32(reg::DOORBELLS + 2 * qid * stride, tail as u32);
-        let end = vrt::time::now_ns() + COMMAND_TIMEOUT_NS;
+        let end = rt::time::now_ns() + COMMAND_TIMEOUT_NS;
         let mut spins = 0u32;
         loop {
             let q = if io { &mut self.io } else { &mut self.admin };
@@ -231,16 +231,16 @@ impl Controller {
                     code => Err(Failure::Status(code as u16)),
                 };
             }
-            if vrt::time::now_ns() > end || self.r32(reg::CSTS) & CSTS_CFS != 0 {
+            if rt::time::now_ns() > end || self.r32(reg::CSTS) & CSTS_CFS != 0 {
                 return Err(Failure::Timeout);
             }
             spins += 1;
             match &self.irq {
                 Some(irq) if spins > 50 => {
-                    let _ = irq.wait_irq(vrt::time::now_ns() + 1_000_000);
+                    let _ = irq.wait_irq(rt::time::now_ns() + 1_000_000);
                     let _ = irq.ack();
                 }
-                _ if spins > 500 => vrt::time::sleep(vrt::time::Duration::from_millis(1)),
+                _ if spins > 500 => rt::time::sleep(rt::time::Duration::from_millis(1)),
                 _ => core::hint::spin_loop(),
             }
         }
@@ -433,7 +433,7 @@ impl block::Disks for Nvme {
 }
 
 fn main() -> i32 {
-    let Some(h) = vrt::env::take_handle(vproto::startup::driver::PCIDEV) else {
+    let Some(h) = rt::env::take_handle(proto::startup::driver::PCIDEV) else {
         println!("no pcidev channel");
         return 1;
     };
@@ -494,7 +494,7 @@ fn main() -> i32 {
         println!("no room for the PRP list");
         return 1;
     }
-    c.irq = vproto::pci::enable_msix(&pci).or_else(|| vproto::pci::enable_msi(&pci));
+    c.irq = proto::pci::enable_msix(&pci).or_else(|| proto::pci::enable_msi(&pci));
     if let Err(why) = start(&mut c) {
         println!("controller at {}: {}", location, why);
         return 1;

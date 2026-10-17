@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vweb` — web clients for Veda applications.
+//! `web` — web clients for Veda applications.
 //!
 //! * [`Url`]: `http`, `https`, `ws` and `wss` URLs, the references
 //!   redirects give ([`Url::join`]), and percent-encoding for query strings
@@ -15,7 +15,7 @@
 //!   closing handshake, and a non-blocking [`ws::WebSocket::poll`] for
 //!   event loops.
 //! * [`Connection`]: the byte stream underneath — a plain
-//!   [`vnet::TcpStream`] or a TLS stream (`vtls`, certificates checked
+//!   [`net::TcpStream`] or a TLS stream (`tls`, certificates checked
 //!   against the Mozilla roots); [`connect`] picks by scheme.
 //!
 //! Nothing here panics on what a server sends: malformed responses and
@@ -33,11 +33,11 @@ use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use core::fmt;
 
-use vabi::RawHandle;
-use vnet::{NetError, TcpStream};
-use vrt::sync::Mutex;
-use vrt::time::Duration;
-use vtls::{ClientConfig, TlsError, TlsStream};
+use abi::RawHandle;
+use net::{NetError, TcpStream};
+use rt::sync::Mutex;
+use rt::time::Duration;
+use tls::{ClientConfig, TlsError, TlsStream};
 
 pub use url::Url;
 
@@ -251,7 +251,7 @@ fn tls_config() -> ClientConfig {
 /// Connects to the server of `url` (TCP, then TLS for `https`/`wss`), all
 /// within about `timeout`.
 pub fn connect(url: &Url, timeout: Duration) -> Result<Conn, WebError> {
-    let start = vrt::time::Instant::now();
+    let start = rt::time::Instant::now();
     let mut tcp = TcpStream::connect_host(&url.host, url.port, timeout)?;
     // Requests and WebSocket messages are small and latency matters.
     let _ = tcp.set_nodelay(true);
@@ -260,14 +260,14 @@ pub fn connect(url: &Url, timeout: Duration) -> Result<Conn, WebError> {
     }
     // The handshake gets what is left of the time (at least a second).
     let left = timeout.saturating_sub(start.elapsed()).max(Duration::from_secs(1));
-    let tls = vtls::connect_over(tcp, &url.host, left, &tls_config()).map_err(tls_error)?;
+    let tls = tls::connect_over(tcp, &url.host, left, &tls_config()).map_err(tls_error)?;
     Ok(Conn::Tls(Box::new(tls)))
 }
 
 /// Random bytes for WebSocket keys and masks.
 pub(crate) fn random_bytes(buf: &mut [u8]) {
     #[cfg(not(test))]
-    vrt::object::random_bytes(buf);
+    rt::object::random_bytes(buf);
     #[cfg(test)]
     {
         use core::sync::atomic::{AtomicU64, Ordering};

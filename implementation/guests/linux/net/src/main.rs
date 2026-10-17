@@ -22,12 +22,12 @@ use std::fs::File;
 use std::io;
 use std::time::{Duration, Instant};
 
+use abi::signals;
 use guest_sys::netif::{self, Frames, Interface};
 use guest_sys::retry::{self, Backoff, Ended, Served};
+use proto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
+use rt::guest::Watch;
 use rustix::event::{PollFd, PollFlags, poll};
-use vabi::signals;
-use vproto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
-use vrt::guest::Watch;
 
 /// Frames each way in a card's link, and their slots (a frame and its
 /// header).

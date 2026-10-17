@@ -12,7 +12,7 @@
 //!   (the interfaces', the DNS servers, the firewall's) is for Settings
 //!   alone; reading the firewall, and seeing other processes' sockets and
 //!   the hardware addresses, for Settings and the Terminal.
-//! * The firewall (`vnetstack`'s) decides what other machines may start
+//! * The firewall (`netstack`'s) decides what other machines may start
 //!   with this one; `netd` tells it which sockets are open to them, as
 //!   their applications' rules say, and keeps the applications the rules
 //!   keep off the network from it: their connections, pings and lookups are
@@ -26,7 +26,7 @@
 //!   application; one question waits per application, and none is asked
 //!   before the saved settings are read (they may answer it).
 //! * The protocol work itself — interfaces, DHCP, IPv6 autoconfiguration,
-//!   routing, DNS, TCP, UDP, ICMP — happens in `vnetstack` (smoltcp
+//!   routing, DNS, TCP, UDP, ICMP — happens in `netstack` (smoltcp
 //!   underneath).
 //!
 //! Everything runs on one thread around a single wait: on device rings,
@@ -50,21 +50,21 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
-use vabi::signals;
-use vnetstack::{IfaceId, MAX_PENDING_LOOKUPS, MAX_SOCKETS, ResolveId, SockId, Stack, StackEvent};
-use vproto::init::ClientIdentity;
-use vproto::net::{
+use abi::signals;
+use netstack::{IfaceId, MAX_PENDING_LOOKUPS, MAX_SOCKETS, ResolveId, SockId, Stack, StackEvent};
+use proto::init::ClientIdentity;
+use proto::net::{
     AddrFamily, AppRule, DeviceInfo, FIREWALL_NOTICE, FirewallConfig, FirewallEvent, FirewallNotice, FirewallProtocol,
     FirewallQuestion, FirewallStats, InterfaceInfo, IpConfig, NET_EVENT, NetError, NetEvent, NetStatus, NetdevError,
     RESOLVE_RESULT, RouteInfo, Scope, SocketInfo, TcpOptions, format_mac, net, netdev,
 };
-use vproto::netring::{self, LinkEndpoints, SlotMeta, kind};
-use vrt::object::{Channel, Socket};
-use vrt::println;
+use proto::netring::{self, LinkEndpoints, SlotMeta, kind};
+use rt::object::{Channel, Socket};
+use rt::println;
 
 use socket::{Conn, Events};
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// `net` connections, of all processes and of one.
 const MAX_CLIENTS: usize = 256;
@@ -122,7 +122,7 @@ struct RingLink {
     skipped: u64,
 }
 
-impl vnetstack::Link for RingLink {
+impl netstack::Link for RingLink {
     fn receive(&mut self, buf: &mut [u8]) -> Option<usize> {
         for _ in 0..MAX_SKIPPED {
             let (meta, len) = self.link.recv(buf)?;
@@ -163,10 +163,10 @@ struct Device {
 /// The devices' links by interface, for the stack.
 struct DeviceLinks<'a>(&'a mut BTreeMap<u64, Device>);
 
-impl vnetstack::Links for DeviceLinks<'_> {
-    fn link(&mut self, id: IfaceId) -> Option<&mut dyn vnetstack::Link> {
+impl netstack::Links for DeviceLinks<'_> {
+    fn link(&mut self, id: IfaceId) -> Option<&mut dyn netstack::Link> {
         let dev = self.0.values_mut().find(|d| d.iface == Some(id))?;
-        dev.link.as_mut().map(|l| l as &mut dyn vnetstack::Link)
+        dev.link.as_mut().map(|l| l as &mut dyn netstack::Link)
     }
 }
 
@@ -218,7 +218,7 @@ impl Usage {
 struct Netd {
     stack: Stack,
     /// What it waits on (see `Netd::wait`).
-    ws: vipc::WaitSet,
+    ws: ipc::WaitSet,
     net_listener: Channel,
     dev_listener: Channel,
     clients: BTreeMap<u64, Client>,
@@ -258,7 +258,7 @@ struct Netd {
 }
 
 fn now_us() -> u64 {
-    vrt::time::now_ns() / 1000
+    rt::time::now_ns() / 1000
 }
 
 /// Whether `who` may attach network devices: the device manager (whose
@@ -275,7 +275,7 @@ fn manages(who: &ClientIdentity) -> bool {
 
 /// The time now, in Unix seconds.
 fn unix_s() -> u64 {
-    vrt::time::unix_time_ns() / 1_000_000_000
+    rt::time::unix_time_ns() / 1_000_000_000
 }
 
 fn protocol_name(p: FirewallProtocol) -> &'static str {
@@ -371,7 +371,7 @@ impl Netd {
     /// Tells the desktop shell, if it listens.
     fn tell_asker(&mut self, notice: FirewallNotice) {
         if let Some(ch) = &self.asker
-            && matches!(vipc::send_event(ch, FIREWALL_NOTICE, notice), Err(vipc::IpcError::PeerClosed))
+            && matches!(ipc::send_event(ch, FIREWALL_NOTICE, notice), Err(ipc::IpcError::PeerClosed))
         {
             self.asker = None;
         }
@@ -427,7 +427,7 @@ impl Netd {
     // Devices
 
     fn accept_devices(&mut self) {
-        while let Some((ch, who)) = vproto::accept_with_identity(&self.dev_listener) {
+        while let Some((ch, who)) = proto::accept_with_identity(&self.dev_listener) {
             if !may_attach(&who) {
                 println!("{} may not attach network devices; refused", who.name);
                 continue;
@@ -458,7 +458,7 @@ impl Netd {
                     "{}: {} {} ({}, {}), link {}",
                     name,
                     match info.kind {
-                        vproto::net::InterfaceKind::Wireless => "wireless",
+                        proto::net::InterfaceKind::Wireless => "wireless",
                         _ => "ethernet",
                     },
                     format_mac(&info.mac),
@@ -513,7 +513,7 @@ impl Netd {
     // Clients
 
     fn accept_clients(&mut self) {
-        while let Some((ch, who)) = vproto::accept_with_identity(&self.net_listener) {
+        while let Some((ch, who)) = proto::accept_with_identity(&self.net_listener) {
             let mine = self.usage.get(&who.koid).map_or(0, |u| u.clients);
             if !room(who.service, self.clients.len(), MAX_CLIENTS, RESERVED_CLIENTS) || mine >= MAX_CLIENTS_PER_PROCESS
             {
@@ -736,7 +736,7 @@ impl Netd {
                     return Err(NetError::LimitReached);
                 }
                 let status = self.netd.stack.status();
-                let _ = vipc::send_event(&events, NET_EVENT, NetEvent::StatusChanged { status });
+                let _ = ipc::send_event(&events, NET_EVENT, NetEvent::StatusChanged { status });
                 self.netd.usage(self.owner).watchers += 1;
                 self.netd.watchers.push(Watcher { channel: events, owner: self.owner });
                 Ok(())
@@ -787,7 +787,7 @@ impl Netd {
                 self.check_manager()?;
                 // The stack's clock is netd's: when each happened, in Unix
                 // time.
-                let (now, unix_s) = (now_us(), vrt::time::unix_time_ns() / 1_000_000_000);
+                let (now, unix_s) = (now_us(), rt::time::unix_time_ns() / 1_000_000_000);
                 let at = |us: u64| unix_s.saturating_sub(now.saturating_sub(us) / 1_000_000);
                 Ok(self
                     .netd
@@ -812,11 +812,8 @@ impl Netd {
             fn watch_firewall(&mut self, events: Channel) -> Result<(), NetError> {
                 self.check_shell()?;
                 for question in self.netd.questions.values() {
-                    let _ = vipc::send_event(
-                        &events,
-                        FIREWALL_NOTICE,
-                        FirewallNotice::Asked { question: question.clone() },
-                    );
+                    let _ =
+                        ipc::send_event(&events, FIREWALL_NOTICE, FirewallNotice::Asked { question: question.clone() });
                 }
                 self.netd.asker = Some(events);
                 Ok(())
@@ -910,7 +907,7 @@ impl Netd {
         for id in self.stack.resolve_ready() {
             let Some(result) = self.stack.resolve_result(id) else { continue };
             if let Some(l) = self.lookups.remove(&id) {
-                let _ = vipc::send_event(&l.reply, RESOLVE_RESULT, result);
+                let _ = ipc::send_event(&l.reply, RESOLVE_RESULT, result);
                 self.release(l.owner, |u| u.lookups -= 1);
             }
         }
@@ -963,7 +960,7 @@ impl Netd {
             let mut gone = Vec::new();
             self.watchers.retain(|w| {
                 let closed =
-                    matches!(vipc::send_event(&w.channel, NET_EVENT, ev.clone()), Err(vipc::IpcError::PeerClosed));
+                    matches!(ipc::send_event(&w.channel, NET_EVENT, ev.clone()), Err(ipc::IpcError::PeerClosed));
                 if closed {
                     gone.push(w.owner);
                 }
@@ -980,14 +977,14 @@ impl Netd {
 
     fn run(&mut self) -> ! {
         loop {
-            if vrt::time::now_ns().saturating_sub(self.last_reseed) >= RESEED_NS {
+            if rt::time::now_ns().saturating_sub(self.last_reseed) >= RESEED_NS {
                 // The stack is seeded already: a reseed the kernel cannot
                 // give now waits for the next.
                 let mut seed = [0u8; 32];
-                if vrt::object::try_random_bytes(&mut seed).is_ok() {
+                if rt::object::try_random_bytes(&mut seed).is_ok() {
                     self.stack.add_entropy(&seed);
                 }
-                self.last_reseed = vrt::time::now_ns();
+                self.last_reseed = rt::time::now_ns();
             }
             // Frames in and out, timers, housekeeping; then the clients.
             self.stack.poll(now_us(), &mut DeviceLinks(&mut self.devices));
@@ -1054,7 +1051,7 @@ impl Netd {
             let lingering = self.lingering.values().min().copied();
             match self.stack.next_deadline().into_iter().chain(lingering).min() {
                 Some(t) => t.saturating_mul(1000),
-                None => vabi::DEADLINE_INFINITE,
+                None => abi::DEADLINE_INFINITE,
             }
         };
         let ready = ws.wait(deadline).unwrap_or_default();
@@ -1151,7 +1148,7 @@ fn summary(c: &FirewallConfig) -> String {
 
 fn main() -> i32 {
     let mut seed = [0u8; 64];
-    vrt::object::random_bytes(&mut seed);
+    rt::object::random_bytes(&mut seed);
     let mut stack = Stack::new(&seed, now_us());
     // Until the saved settings are read, the defaults: nothing comes in
     // that this machine did not ask for.
@@ -1161,14 +1158,14 @@ fn main() -> i32 {
     if store.is_none() {
         println!("firewall: its store could not start; the defaults hold, and changes are not kept");
     }
-    let (Ok(net_listener), Ok(dev_listener)) = (vproto::register(net::NAME), vproto::register(netdev::NAME)) else {
+    let (Ok(net_listener), Ok(dev_listener)) = (proto::register(net::NAME), proto::register(netdev::NAME)) else {
         println!("cannot register the network services");
         return 1;
     };
     println!("network service ready");
     let mut netd = Netd {
         stack,
-        ws: vipc::WaitSet::new(),
+        ws: ipc::WaitSet::new(),
         net_listener,
         dev_listener,
         clients: BTreeMap::new(),
@@ -1181,7 +1178,7 @@ fn main() -> i32 {
         lingering: BTreeMap::new(),
         events: Events::new(),
         next_key: 16,
-        last_reseed: vrt::time::now_ns(),
+        last_reseed: rt::time::now_ns(),
         firewall,
         settings_read: store.is_none(),
         store,

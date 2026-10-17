@@ -3,17 +3,17 @@
 
 //! `memory`: what the agent remembers about the user. A request to forget
 //! arrives naming its facts by id (made definite before it was classified:
-//! `vagent::memory::Memory::pin_forget`), and removes exactly those.
+//! `agent::memory::Memory::pin_forget`), and removes exactly those.
 
+use agent::tools;
 use serde_json::{Value, json};
-use vagent::tools;
 
 use super::Ctx;
 
 impl Ctx {
     /// `memory`: remember, search, forget.
     pub(super) fn memory(&self, args: &Value) -> Result<Value, String> {
-        let now = vrt::time::unix_time_ns() / 1_000_000_000;
+        let now = rt::time::unix_time_ns() / 1_000_000_000;
         let mut sh = self.shared.lock();
         let r = match args["operation"].as_str().unwrap_or("search") {
             "remember" => {

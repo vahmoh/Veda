@@ -17,10 +17,10 @@
 
 use alloc::vec::Vec;
 
-use vaudio::synth::env::Decay;
-use vaudio::synth::filter::{Mode, Svf};
-use vaudio::synth::osc::Osc;
-use vaudio::synth::voice::pan_gains;
+use audio::synth::env::Decay;
+use audio::synth::filter::{Mode, Svf};
+use audio::synth::osc::Osc;
+use audio::synth::voice::pan_gains;
 
 use super::{
     Cue, Listener, Panning, Placing, RATE, Scene, SineTable, Sounds, TIRES, TireState, Voiced, increment, noise,

@@ -20,7 +20,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use vproto::init::AppInfo;
+use proto::init::AppInfo;
 
 pub fn parse(id: &str, text: &str) -> AppInfo {
     let mut app = AppInfo {

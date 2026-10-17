@@ -79,7 +79,7 @@ pub fn normalize(db: f32, floor_db: f32, ceiling_db: f32) -> f32 {
 /// documentation).
 ///
 /// ```
-/// use vaudio::level::LevelMeter;
+/// use audio::level::LevelMeter;
 ///
 /// let mut meter = LevelMeter::new(16_000);
 /// meter.process(&[8_000i16; 160]);

@@ -12,8 +12,8 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vglsl::tgsi;
-use vglsl::types::{Dim, Sampler, Scalar};
+use glsl::tgsi;
+use glsl::types::{Dim, Sampler, Scalar};
 
 use super::draw::{blend_words, dsa_words};
 use super::protocol::*;
@@ -674,16 +674,16 @@ impl VirglBackend {
         if let Some(f) = self.internal.fetch[kind] {
             return Some(f);
         }
-        let options = vglsl::Options::default();
-        let compile = |stage, source: &str| vglsl::compile(stage, &[source], &options).shader;
-        let vs = compile(vglsl::Stage::Vertex, FETCH_VS)?;
-        let fs = compile(vglsl::Stage::Fragment, &fetch_fs(["", "i", "u"][kind]))?;
-        let bindings = vglsl::link::Bindings {
+        let options = glsl::Options::default();
+        let compile = |stage, source: &str| glsl::compile(stage, &[source], &options).shader;
+        let vs = compile(glsl::Stage::Vertex, FETCH_VS)?;
+        let fs = compile(glsl::Stage::Fragment, &fetch_fs(["", "i", "u"][kind]))?;
+        let bindings = glsl::link::Bindings {
             attributes: vec![("pos".into(), 0)],
             feedback: Vec::new(),
             feedback_separate: false,
         };
-        let p = vglsl::program::link(&vs, &fs, &bindings, &options.limits).program?;
+        let p = glsl::program::link(&vs, &fs, &bindings, &options.limits).program?;
         let at = p.linked.uniforms.iter().find(|u| u.name == "at")?.slot;
         let slots = p.linked.slots;
         let program = self.program(Arc::new(p));

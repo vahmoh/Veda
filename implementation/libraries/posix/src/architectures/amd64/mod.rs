@@ -53,7 +53,7 @@ core::arch::global_asm!(
     "    call {returned}",
     "    ud2",
     ".size __veda_thread_entry, . - __veda_thread_entry",
-    set_tls = const vabi::nr::THREAD_SET_TLS,
-    set_exit_futex = const vabi::nr::THREAD_SET_EXIT_FUTEX,
+    set_tls = const abi::nr::THREAD_SET_TLS,
+    set_exit_futex = const abi::nr::THREAD_SET_EXIT_FUTEX,
     returned = sym crate::thread::thread_returned,
 );

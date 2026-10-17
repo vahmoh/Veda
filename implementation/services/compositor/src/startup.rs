@@ -14,7 +14,7 @@
 //! it is black, and the splash is first seen on the screen the desktop
 //! will be.
 //!
-//! Then the splash (the gradient and the ring, `vsplash`) fades in from
+//! Then the splash (the gradient and the ring, `splash`) fades in from
 //! black, and comes to life: a soft light gathers around the ring and
 //! breathes, a brighter glint going round it while the system works, and
 //! the name and the tagline rise into view below. Once the desktop has
@@ -39,10 +39,10 @@ use core::f32::consts::PI;
 
 use alloc::string::String;
 
+use gfx::{Bitmap, Canvas, Color, Rect, Text};
 use num_traits::Float;
-use vgfx::{Bitmap, Canvas, Color, Rect, Text};
-use vrt::println;
-use vsplash::Ring;
+use rt::println;
+use splash::Ring;
 
 use crate::gpu::{Gpu, Slot, Splash};
 use crate::screen::{HOLD_NS, Screen};
@@ -138,7 +138,7 @@ fn outside(r: Rect, hole: Rect) -> [Rect; 4] {
     ]
 }
 
-/// `0xRRGGBB` pixels (`vsplash`'s) as the layer keeps them, opaque.
+/// `0xRRGGBB` pixels (`splash`'s) as the layer keeps them, opaque.
 fn opaque(line: &mut [u32]) {
     for px in line {
         *px |= 0xFF00_0000;
@@ -399,7 +399,7 @@ impl Startup {
         }
         let (w, h) = (self.layer.width as u32, self.layer.height as u32);
         for (y, line) in self.layer.pixels.chunks_exact_mut(w as usize).enumerate() {
-            vsplash::row(w, h, y as u32, line);
+            splash::row(w, h, y as u32, line);
             opaque(line);
         }
         self.phase = Phase::Splash;
@@ -484,8 +484,8 @@ impl Startup {
         let ring = self.ring.scaled((look.scale * 256.0) as i32, 256);
         let above = 1.0 - desktop;
         let splash = Splash {
-            top: vsplash::TOP,
-            bottom: vsplash::BOTTOM,
+            top: splash::TOP,
+            bottom: splash::BOTTOM,
             centre: (ring.cx as f32 / 16.0, ring.cy as f32 / 16.0),
             outer: ring.outer as f32 / 16.0,
             inner: ring.inner as f32 / 16.0,
@@ -591,7 +591,7 @@ impl Startup {
         for y in region.y..region.bottom() {
             let start = (y * w) as usize;
             let line = &mut self.layer.pixels[start + region.x as usize..start + region.right() as usize];
-            vsplash::background(y as u32, h as u32, region.x as u32, line);
+            splash::background(y as u32, h as u32, region.x as u32, line);
             opaque(line);
             if y < around.y || y >= around.bottom() {
                 continue;
@@ -602,11 +602,11 @@ impl Startup {
                 let i = lut + (x - around.x) as usize;
                 let lit = (light[self.distance[i] as usize] as u32 * glint[self.direction[i] as usize] as u32) >> 8;
                 let row = line[(x - region.x) as usize] & 0xFF_FFFF;
-                let mut c = if lit > 0 { vsplash::mix(row, GLOW, lit.min(256)) } else { row };
+                let mut c = if lit > 0 { splash::mix(row, GLOW, lit.min(256)) } else { row };
                 let ring_cover = if at_rest { u32::from(self.rest[i]) } else { ring.coverage(x, y) };
                 let cover = (ring_cover * ring_alpha) >> 8;
                 if cover > 0 {
-                    c = vsplash::mix(c, vsplash::RING, cover);
+                    c = splash::mix(c, splash::RING, cover);
                 }
                 line[(x - region.x) as usize] = 0xFF00_0000 | c;
             }

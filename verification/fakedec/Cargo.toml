@@ -3,7 +3,7 @@
 
 [package]
 name = "fakedec"
-description = "A stand-in for the media decoder: speaks vproto::media with drawn pictures and a tone, for testing Videos without FFmpeg"
+description = "A stand-in for the media decoder: speaks proto::media with drawn pictures and a tone, for testing Videos without FFmpeg"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,13 +14,13 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
 
 [build-dependencies]
-vbuild = { workspace = true }
+build = { workspace = true }
 
 [lints]
 workspace = true

@@ -16,7 +16,7 @@
 //!   ([`player`], [`audio`]); a second decoder makes the library's pictures
 //!   ([`thumbs`]).
 //! * A second `videos FILE` hands the file to the running player
-//!   (`vproto::instance`); [`agent`] lets the voice agent play and control
+//!   (`proto::instance`); [`agent`] lets the voice agent play and control
 //!   videos.
 //! * The decoders are processes of their own: they end with Videos.
 //! * What happens is logged concisely (`playing <title> (...)`, `paused at
@@ -43,15 +43,15 @@ mod widgets;
 
 use std::sync::Arc;
 
-use vabi::{RawHandle, signals};
-use vgfx::ShadowTemplate;
+use abi::{RawHandle, signals};
+use gfx::ShadowTemplate;
+use proto::fs::vfs;
+use proto::instance::{self, Instance};
+use rt::object::Vmo;
+use rt::println;
+use ui::{App, FileDialog, FileDialogResult, Ui, WindowSpec, WindowState};
 use videos_core::playback::{EnginePhase, Phase};
 use videos_core::store;
-use vproto::fs::vfs;
-use vproto::instance::{self, Instance};
-use vrt::object::Vmo;
-use vrt::println;
-use vui::{App, FileDialog, FileDialogResult, Ui, WindowSpec, WindowState};
 
 use library::{Card, Entry};
 use player::{Player, Request};
@@ -135,7 +135,7 @@ impl Videos {
         folder: Option<String>,
     ) -> Videos {
         let mut v = Videos {
-            vfs: vproto::connect(vfs::NAME).ok().map(vfs::Client::new),
+            vfs: proto::connect(vfs::NAME).ok().map(vfs::Client::new),
             dir: match folder {
                 Some(f) if f.len() > 1 => f.trim_end_matches('/').into(),
                 Some(f) => f,
@@ -232,7 +232,7 @@ impl Videos {
 
     /// Plays `path` (from where it was left, or the start).
     pub(crate) fn open_path(&mut self, path: String, at: OpenAt) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         if let Some(p) = &mut self.player
             && p.path == path
             && !matches!(p.phase(), Phase::Failed(_))
@@ -290,7 +290,7 @@ impl Videos {
     /// Closes the video open, remembering where it was.
     fn close_player(&mut self) {
         let Some(mut p) = self.player.take() else { return };
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         p.remember(now);
         self.take_requests(&mut p, None, now);
         self.engine.send(engine::Command::Close);
@@ -319,7 +319,7 @@ impl Videos {
                 },
                 Request::Remember { position_ms, duration_ms } => {
                     let (size, modified) = self.open_file;
-                    let now_s = vrt::time::unix_time_ns() / 1_000_000_000;
+                    let now_s = rt::time::unix_time_ns() / 1_000_000_000;
                     if self.state.remember(&p.path, position_ms, duration_ms, size, modified, now_s) {
                         self.save_soon(now);
                     }
@@ -355,7 +355,7 @@ impl Videos {
         }
         self.volume = v;
         self.muted = false;
-        self.note_volume(vrt::time::now_ns());
+        self.note_volume(rt::time::now_ns());
     }
 
     pub(crate) fn set_muted(&mut self, muted: bool) {
@@ -368,11 +368,11 @@ impl Videos {
             }
         }
         self.muted = muted;
-        self.note_volume(vrt::time::now_ns());
+        self.note_volume(rt::time::now_ns());
     }
 
     fn apply_volume(&self) {
-        let gain = if self.muted { 0.0 } else { vaudio::mix::slider_to_gain(self.volume) };
+        let gain = if self.muted { 0.0 } else { ::audio::mix::slider_to_gain(self.volume) };
         if let Some(s) = &self.sound {
             s.send(audio::Command::Volume(gain));
         }
@@ -456,15 +456,15 @@ impl Videos {
 }
 
 impl App for Videos {
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Videos::agent_invoke(self, action, args)
     }
 
@@ -604,7 +604,7 @@ impl App for Videos {
 
 /// The file what Videos remembers is kept in.
 fn state_path() -> String {
-    vfiles::path::join(&vfiles::path::join(vfiles::path::HOME, CONFIG_DIR), STATE_FILE)
+    files::path::join(&files::path::join(files::path::HOME, CONFIG_DIR), STATE_FILE)
 }
 
 /// The state saved last time, or a new one.
@@ -625,9 +625,9 @@ fn save_state(vfs: Option<&vfs::Client>, state: &store::State) -> bool {
     let Some(vfs) = vfs else { return false };
     let text = state.to_text();
     let data = text.as_bytes();
-    let mut dir = String::from(vfiles::path::HOME);
+    let mut dir = String::from(files::path::HOME);
     for part in CONFIG_DIR.split('/').filter(|p| !p.is_empty()) {
-        dir = vfiles::path::join(&dir, part);
+        dir = files::path::join(&dir, part);
         let _ = vfs.mkdir(dir.clone());
     }
     let Ok(vmo) = Vmo::create(data.len().max(1)) else { return false };
@@ -645,7 +645,7 @@ fn main() {
 
 /// Runs the program; its exit code.
 fn run() -> i32 {
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let mut decoder = String::from(engine::DECODER);
     let mut file = None;
     let mut it = args.iter().skip(1);
@@ -665,11 +665,11 @@ fn run() -> i32 {
             _ => file = Some(a.clone()),
         }
     }
-    let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+    let vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
     let is_dir =
         |p: &str| vfs.as_ref().and_then(|v| v.stat(p.into()).ok()).and_then(|r| r.ok()).is_some_and(|s| s.is_dir);
     // The library: the folder given, or the file's (as Photos does).
-    let folder = file.take_if(|p| is_dir(p)).or_else(|| file.as_deref().map(|f| vfiles::path::parent(f).into()));
+    let folder = file.take_if(|p| is_dir(p)).or_else(|| file.as_deref().map(|f| files::path::parent(f).into()));
     // One player at a time: a file goes to the player that is running.
     let server = match instance::start("videos", file.as_deref()) {
         instance::Start::Serve(server) => server,
@@ -679,7 +679,7 @@ fn run() -> i32 {
         }
     };
     let state = load_state(vfs.as_ref());
-    let gain = if state.muted { 0.0 } else { vaudio::mix::slider_to_gain(state.volume.min(100) as f32 / 100.0) };
+    let gain = if state.muted { 0.0 } else { ::audio::mix::slider_to_gain(state.volume.min(100) as f32 / 100.0) };
     let sound = audio::start(gain);
     if sound.is_none() {
         println!("no sound: cannot start the audio thread");
@@ -697,7 +697,7 @@ fn run() -> i32 {
     spec.app_id = "videos".into();
     spec.min_width = 640;
     spec.min_height = 420;
-    let code = vui::run(spec, app);
+    let code = ui::run(spec, app);
     // The decoders are processes of their own, which would outlive Videos.
     decoder::end_all();
     code

@@ -19,7 +19,7 @@
 
 use terminal_core::classify::Effect;
 use terminal_core::syntax::redact;
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, arg_str, clip, json, show_path};
+use ui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, arg_str, clip, json, show_path};
 
 use crate::{DEFAULT_FONT_SIZE, Terminal};
 
@@ -144,7 +144,7 @@ impl Terminal {
         match &self.job {
             Some(job) if !job.finished() => json!({
                 "command": job.shown.as_str(),
-                "seconds": vrt::time::now_ns().saturating_sub(job.started) / 1_000_000_000,
+                "seconds": rt::time::now_ns().saturating_sub(job.started) / 1_000_000_000,
             }),
             _ => Value::Null,
         }

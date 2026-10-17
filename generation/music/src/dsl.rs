@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A tiny composition language on top of `vaudio::synth`: drum patterns
+//! A tiny composition language on top of `audio::synth`: drum patterns
 //! as strings, melodies as `note/beats` tokens, chord progressions,
 //! arpeggios, basslines and humanisation.
 
-use vaudio::synth::Part;
-use vaudio::synth::theory::{self, note};
+use audio::synth::Part;
+use audio::synth::theory::{self, note};
 
 /// Beats per bar (everything here is in 4/4).
 pub const BAR: f64 = 4.0;
@@ -289,7 +289,7 @@ pub fn repeat<'a>(chords: &[&'a str], times: usize) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vaudio::synth::{Kit, Part};
+    use audio::synth::{Kit, Part};
 
     #[test]
     fn patterns_and_melodies() {

@@ -10,7 +10,7 @@
 
 use alloc::sync::Arc;
 
-use vabi::resource_kind;
+use abi::resource_kind;
 
 pub struct Resource {
     pub koid: u64,

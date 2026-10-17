@@ -27,7 +27,7 @@
 use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use vrt::sync::{Condvar, Mutex};
+use rt::sync::{Condvar, Mutex};
 
 use crate::error::SysResult;
 use crate::linux::errno::{EAGAIN, EINTR, EINVAL, ESRCH};
@@ -440,7 +440,7 @@ fn wait_for_handler(deadline: u64) -> bool {
 
 /// `pause`: waits for a signal handler to run; then `EINTR`.
 pub fn pause() -> SysResult {
-    wait_for_handler(vabi::DEADLINE_INFINITE);
+    wait_for_handler(abi::DEADLINE_INFINITE);
     Err(EINTR)
 }
 
@@ -455,7 +455,7 @@ pub unsafe fn rt_sigsuspend(mask: usize) -> SysResult {
     let m: u64 = unsafe { user::read(mask)? };
     let tp = current();
     let saved = STATE.lock().update(tp, |t| core::mem::replace(&mut t.mask, m & !UNCATCHABLE));
-    wait_for_handler(vabi::DEADLINE_INFINITE);
+    wait_for_handler(abi::DEADLINE_INFINITE);
     STATE.lock().update(tp, |t| t.mask = saved);
     Err(EINTR)
 }
@@ -466,7 +466,7 @@ pub unsafe fn rt_sigtimedwait(set: usize, info: usize, timeout: usize) -> SysRes
     // SAFETY: the program passed a sigset.
     let want: u64 = unsafe { user::read(set)? };
     let deadline = if timeout == 0 {
-        vabi::DEADLINE_INFINITE
+        abi::DEADLINE_INFINITE
     } else {
         // SAFETY: the program passed a timespec.
         let t: Timespec = unsafe { user::read(timeout)? };
@@ -576,8 +576,8 @@ fn wake_from_futex(tp: usize, s: u32) {
             }
             t.futex
         };
-        let _ = vrt::sys::call(vabi::nr::FUTEX_WAKE, [addr, i32::MAX as usize, 0, 0, 0, 0]);
-        vrt::time::sleep(vrt::time::Duration::from_micros(200));
+        let _ = rt::sys::call(abi::nr::FUTEX_WAKE, [addr, i32::MAX as usize, 0, 0, 0, 0]);
+        rt::time::sleep(rt::time::Duration::from_micros(200));
     }
 }
 

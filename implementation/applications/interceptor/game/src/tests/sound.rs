@@ -14,7 +14,7 @@ use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vaudio::fft::{RealFft, hann};
+use audio::fft::{RealFft, hann};
 
 use crate::audio::{
     Cue, ENGINES, Emitter, EngineState, Layout, Listener, Mixer, RATE, SIRENS, Scene, SirenState, TIRES, TireState,
@@ -29,14 +29,14 @@ use glam::Vec3;
 
 /// Writes stereo `pcm` as a WAV file and its spectrogram as a PNG.
 fn save(dir: &str, name: &str, pcm: &[i16]) {
-    let wav = vaudio::wav::write(pcm, 2, RATE, &vaudio::Tags::default());
+    let wav = audio::wav::write(pcm, 2, RATE, &audio::Tags::default());
     std::fs::write(format!("{dir}/{name}.wav"), wav).unwrap();
     let image = spectrogram(pcm);
-    std::fs::write(format!("{dir}/{name}.png"), vimage::encode_png(&image).unwrap()).unwrap();
+    std::fs::write(format!("{dir}/{name}.png"), image::encode_png(&image).unwrap()).unwrap();
 }
 
 /// The spectrogram of stereo `pcm` (its mid channel).
-fn spectrogram(pcm: &[i16]) -> vimage::Image {
+fn spectrogram(pcm: &[i16]) -> image::Image {
     const N: usize = 4096;
     const HEIGHT: u32 = 480;
     let (lo, hi) = (30.0f32, 20_000.0f32);
@@ -70,7 +70,7 @@ fn spectrogram(pcm: &[i16]) -> vimage::Image {
             px[y * columns + x] = 0xFF80_8080;
         }
     }
-    vimage::Image { width: columns as u32, height: HEIGHT, pixels: px }
+    image::Image { width: columns as u32, height: HEIGHT, pixels: px }
 }
 
 /// Black through blue, magenta and orange to pale yellow.

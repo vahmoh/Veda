@@ -13,8 +13,8 @@
 
 use core::net::IpAddr;
 
+use proto::net::NetError;
 use smoltcp::wire::IpCidr;
-use vproto::net::NetError;
 
 use crate::{IfaceId, LOOPBACK, Stack};
 

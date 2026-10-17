@@ -203,7 +203,7 @@
 +  # For the host tests of Veda's OpenGL ES, a build for this machine:
 +  # softpipe; virgl over virglrenderer's test server (vtest), as the driver
 +  # VM's renderer renders under QEMU; and iris, on this machine's Intel GPU,
-+  # as the renderer renders on a PC's. vgl's tests call them through
++  # as the renderer renders on a PC's. `gl`'s tests call them through
 +  # vgallium.so.
 +  host_args = ['-DVR_EXPORTS', '-DVR_SOFTPIPE']
 +  host_deps = [idep_nir, idep_mesautil, driver_softpipe]

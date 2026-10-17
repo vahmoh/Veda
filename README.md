@@ -109,15 +109,15 @@ from memory and leaves the PC's disks alone; see
 
 ## Make an app agentic
 
-Agent support is part of the `vui` toolkit. An application describes its
-actions, reports its state and performs actions; `vui::run` registers it
+Agent support is part of the `ui` toolkit. An application describes its
+actions, reports its state and performs actions; `ui::run` registers it
 with the agent service and answers the agent between frames:
 
 ```rust
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, json, show_path};
+use ui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, json, show_path};
 
-impl vui::App for Notes {
-    fn update(&mut self, ui: &mut vui::Ui) { /* ... */ }
+impl ui::App for Notes {
+    fn update(&mut self, ui: &mut ui::Ui) { /* ... */ }
 
     fn agent_info(&self) -> Option<AppAgentInfo> {
         Some(agent::info(
@@ -161,11 +161,11 @@ covers the rest.
 
 | Layer | What it is |
 |-------|------------|
-| **Kernel** | `vkernel`, a capability-based microkernel: isolation, scheduling, memory and IPC, on SMP with tickless timers |
+| **Kernel** | A capability-based microkernel: isolation, scheduling, memory and IPC, on SMP with tickless timers |
 | **Services** | Drivers, the file system, the window system, audio, networking and the agent, in user space; `init` restarts them if they fail |
 | **Drivers** | Veda drives its own disks; Linux drives the rest in the [driver VM](documentation/DRIVERVM.md), on Veda's hypervisor |
-| **Graphics** | A compositing window system, the immediate-mode `vui` toolkit, and OpenGL ES 3.0 on the GPU through Mesa or in software |
-| **Programs** | Rust's standard library, and C with GCC 16 and musl, over `vposix`, a POSIX layer in Rust |
+| **Graphics** | A compositing window system, the immediate-mode `ui` toolkit, and OpenGL ES 3.0 on the GPU through Mesa or in software |
+| **Programs** | Rust's standard library, and C with GCC 16 and musl, over `posix`, a POSIX layer in Rust |
 | **Network** | IPv4 and IPv6, TLS 1.3, WPA3 Wi-Fi, and a firewall in stealth mode by default |
 
 Where a proven library exists, Veda uses it: smoltcp, rustls, RustCrypto,

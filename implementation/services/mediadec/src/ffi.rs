@@ -232,8 +232,8 @@ unsafe extern "C" {
 }
 
 /// A shim error as the protocol's (`VMD_E*` are its codes, negated).
-pub fn error(code: i32) -> vproto::media::MediaError {
-    vproto::media::MediaError::from_code(code.unsigned_abs())
+pub fn error(code: i32) -> proto::media::MediaError {
+    proto::media::MediaError::from_code(code.unsigned_abs())
 }
 
 /// The text of a C string array (up to its first 0), made valid UTF-8.
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(text(b"av1\0junk"), "av1");
         assert_eq!(text(b"no terminator"), "no terminator");
         assert_eq!(text(b"bad \xff byte\0"), "bad \u{fffd} byte");
-        assert_eq!(error(-4), vproto::media::MediaError::Corrupt);
-        assert_eq!(error(-10), vproto::media::MediaError::Internal);
+        assert_eq!(error(-4), proto::media::MediaError::Corrupt);
+        assert_eq!(error(-10), proto::media::MediaError::Internal);
     }
 }

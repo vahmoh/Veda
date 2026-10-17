@@ -10,8 +10,8 @@
 
 use alloc::vec::Vec;
 
-use vproto::display::{WindowEvent, WindowKind, WindowState, modifiers};
-use vproto::input::keys;
+use proto::display::{WindowEvent, WindowKind, WindowState, modifiers};
+use proto::input::keys;
 
 use crate::keymap::KeyOutput;
 use crate::switcher::Switcher;

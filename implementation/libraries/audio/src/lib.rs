@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vaudio` — audio formats, mixing, resampling, analysis, voice processing
+//! `audio` — audio formats, mixing, resampling, analysis, voice processing
 //! and synthesis.
 //!
 //! Everything here is `no_std` + `alloc`, so the same code runs inside
@@ -35,9 +35,9 @@
 //! the meter drives the on-screen level:
 //!
 //! ```
-//! use vaudio::aec::EchoCanceller;
-//! use vaudio::level::LevelMeter;
-//! use vaudio::vad::Vad;
+//! use audio::aec::EchoCanceller;
+//! use audio::level::LevelMeter;
+//! use audio::vad::Vad;
 //!
 //! let mut aec = EchoCanceller::new(16_000, 250);
 //! let mut vad = Vad::new(16_000);

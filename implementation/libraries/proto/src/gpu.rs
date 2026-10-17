@@ -6,7 +6,7 @@
 //! Veda's renderer serves it, in the driver VM
 //! (`implementation/guests/linux/renderer`), on Mesa's Gallium driver of
 //! the GPU over the GPU's Linux driver. Each connection gets a context of
-//! its own: the client (an OpenGL ES implementation, `vgl`) creates
+//! its own: the client (an OpenGL ES implementation, `gl`) creates
 //! resources (buffers, textures) and submits command streams in
 //! virglrenderer's protocol, which the renderer carries out on Gallium.
 //! Contexts are isolated from each other: a context names resources by
@@ -33,8 +33,8 @@
 
 use alloc::string::String;
 use core::ops::Range;
-use vipc::{Bytes, enumeration, message, protocol};
-use vrt::object::{Event, Vmo};
+use ipc::{Bytes, enumeration, message, protocol};
+use rt::object::{Event, Vmo};
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

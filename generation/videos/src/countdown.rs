@@ -12,8 +12,8 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use vfont::Font;
-use vgfx::{Canvas, Color, FillRule, Path, Rect, StrokeStyle};
+use font::Font;
+use gfx::{Canvas, Color, FillRule, Path, Rect, StrokeStyle};
 
 use crate::paint::text_at;
 

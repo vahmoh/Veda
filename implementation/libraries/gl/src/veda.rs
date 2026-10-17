@@ -12,10 +12,10 @@ use alloc::vec::Vec;
 use core::ops::Range;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use vproto::gpu::{ResourceSpec, gpu};
-use vrt::object::{Event, Vmo};
-use vrt::pool::ThreadPool;
-use vrt::vm::Mapping;
+use proto::gpu::{ResourceSpec, gpu};
+use rt::object::{Event, Vmo};
+use rt::pool::ThreadPool;
+use rt::vm::Mapping;
 
 use crate::backend::{External, Memory, OutOfMemory};
 use crate::soft::{SoftBackend, Workers};
@@ -36,7 +36,7 @@ impl Workers for ThreadPool {
 /// (just below normal priority, so that the window system stays
 /// responsive).
 pub fn software_context(config: Config) -> Context {
-    let pool = ThreadPool::named("gl-worker", vrt::pool::cpus().min(64), Some(vabi::priority::NORMAL - 2));
+    let pool = ThreadPool::named("gl-worker", rt::pool::cpus().min(64), Some(abi::priority::NORMAL - 2));
     Context::new(Box::new(SoftBackend::new(Box::new(pool))), config)
 }
 
@@ -63,13 +63,13 @@ fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
                 (config.stencil_bits, crate::gl::STENCIL_BITS, "stencil"),
             ] {
                 if bits > 0 && c.get_integer(pname) == 0 {
-                    vrt::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
+                    rt::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
                 }
             }
             Some(c)
         }
         Err(e) => {
-            vrt::println!("cannot render on the GPU: {:?}", e);
+            rt::println!("cannot render on the GPU: {:?}", e);
             None
         }
     }
@@ -100,8 +100,8 @@ pub struct GpuTransport {
 impl GpuTransport {
     /// Opens a context, if the GPU service exists.
     pub fn connect() -> Option<GpuTransport> {
-        let registered = vproto::with_registry(|r| r.list()).ok()?.ok()?.iter().any(|s| s == gpu::NAME);
-        let booting = vrt::time::now_ns() < BOOT_NS;
+        let registered = proto::with_registry(|r| r.list()).ok()?.ok()?.iter().any(|s| s == gpu::NAME);
+        let booting = rt::time::now_ns() < BOOT_NS;
         if !registered && !booting {
             return None;
         }
@@ -112,23 +112,23 @@ impl GpuTransport {
     /// answer (connections to a service not registered yet wait for it).
     ///
     /// The renderer is not trusted with this process's memory: a session
-    /// whose areas break the protocol's rules (`vproto::gpu::Session`), or
+    /// whose areas break the protocol's rules (`proto::gpu::Session`), or
     /// whose memory is smaller than they say, is refused before anything of
     /// it is mapped.
     pub fn connect_to(name: &str, wait_ns: u64) -> Option<GpuTransport> {
-        let client = gpu::Client::new(vproto::connect(name).ok()?);
+        let client = gpu::Client::new(proto::connect(name).ok()?);
         client.set_timeout(wait_ns);
         let session = match client.open(SHARED) {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
-                vrt::println!("the GPU refused a context: {}", e);
+                rt::println!("the GPU refused a context: {}", e);
                 return None;
             }
             Err(_) => return None,
         };
         client.set_timeout(CALL_NS);
         let refuse = |why: &str| {
-            vrt::println!("the GPU service ({}) gave a context {why}: it is not used", session.renderer);
+            rt::println!("the GPU service ({}) gave a context {why}: it is not used", session.renderer);
         };
         let Some(layout) = session.areas().layout(SHARED) else {
             refuse("whose memory is laid out against the protocol's rules");
@@ -138,7 +138,7 @@ impl GpuTransport {
             refuse("with less memory than its areas take");
             return None;
         }
-        let map = Mapping::new(session.memory, layout.size, vabi::map_flags::READ | vabi::map_flags::WRITE).ok()?;
+        let map = Mapping::new(session.memory, layout.size, abi::map_flags::READ | abi::map_flags::WRITE).ok()?;
         Some(GpuTransport {
             client,
             caps: session.caps.0,
@@ -244,13 +244,13 @@ impl Transport for GpuTransport {
         let theirs = {
             // SAFETY: the caller's handle, borrowed for the duplication and
             // never closed here (`ManuallyDrop`).
-            let h = core::mem::ManuallyDrop::new(unsafe { vrt::object::Handle::from_raw(handle) });
+            let h = core::mem::ManuallyDrop::new(unsafe { rt::object::Handle::from_raw(handle) });
             Vmo::from_handle(h.duplicate(None).map_err(|_| OutOfMemory)?)
         };
         match self.client.import(spec, memory.stride(), theirs) {
             Ok(Ok(h)) => Ok(h),
             Ok(Err(e)) => {
-                vrt::println!("{}: cannot render into memory it is given: {}", self.renderer, e);
+                rt::println!("{}: cannot render into memory it is given: {}", self.renderer, e);
                 Err(OutOfMemory)
             }
             Err(_) => Err(OutOfMemory),
@@ -297,7 +297,7 @@ impl Transport for GpuTransport {
     fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost> {
         // A fence the renderer leaves unsignaled for longer than a call may
         // take, it never will: it has hung.
-        let start = vrt::time::now_ns();
+        let start = rt::time::now_ns();
         let hung = start.saturating_add(CALL_NS);
         let until = start.saturating_add(timeout_ns).min(hung);
         loop {
@@ -307,7 +307,7 @@ impl Transport for GpuTransport {
             if self.last_fence() >= fence {
                 return Ok(true);
             }
-            if vrt::time::now_ns() >= until {
+            if rt::time::now_ns() >= until {
                 // The caller's time is up, or the renderer's.
                 return if until < hung {
                     Ok(false)
@@ -315,8 +315,8 @@ impl Transport for GpuTransport {
                     lost(&self.renderer, format_args!("left fence {fence} unsignaled"))
                 };
             }
-            let woken = self.fences.wait(vabi::signals::SIGNALED, until);
-            if woken.is_err() && vrt::time::now_ns() < until {
+            let woken = self.fences.wait(abi::signals::SIGNALED, until);
+            if woken.is_err() && rt::time::now_ns() < until {
                 // Not timed out: the event is gone, and the renderer with it.
                 return lost(&self.renderer, format_args!("took its fences' event away"));
             }
@@ -335,7 +335,7 @@ pub struct FenceWatch {
 
 impl FenceWatch {
     /// The event: signaled whenever a fence signals.
-    pub fn event(&self) -> vabi::RawHandle {
+    pub fn event(&self) -> abi::RawHandle {
         self.event.raw()
     }
 
@@ -353,6 +353,6 @@ impl FenceWatch {
 /// Says why the GPU's context is lost (the renderer draws nothing from
 /// then on).
 fn lost<T>(renderer: &str, why: core::fmt::Arguments) -> Result<T, Lost> {
-    vrt::println!("the GPU service ({renderer}) {why}: rendering stops");
+    rt::println!("the GPU service ({renderer}) {why}: rendering stops");
     Err(Lost)
 }

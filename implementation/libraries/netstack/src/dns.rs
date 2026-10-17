@@ -26,10 +26,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, SocketAddr};
 
+use proto::net::{AddrFamily, NetError, ResolveResult};
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::udp;
 use smoltcp::wire::{DnsPacket, DnsQuestion, DnsRcode, DnsRecord, DnsRecordData, IpEndpoint, IpListenEndpoint};
-use vproto::net::{AddrFamily, NetError, ResolveResult};
 
 use crate::sockets::Proto;
 use crate::{IfaceId, Stack};

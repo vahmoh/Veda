@@ -88,7 +88,7 @@ impl Thread {
             kernel_stack_top: top,
             sched: SpinLock::new(SchedData {
                 state: State::New,
-                priority: vabi::priority::NORMAL as u8,
+                priority: abi::priority::NORMAL as u8,
                 wake_reason: WakeReason::None,
                 timeout_key: None,
                 cpu: 0,

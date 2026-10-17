@@ -3,8 +3,8 @@
 
 //! `volume`: the sound's volume and mute, set through the audio service.
 
+use proto::audio::audio;
 use serde_json::{Value, json};
-use vproto::audio::audio;
 
 use super::{Ctx, SERVICE_TIMEOUT_NS, connect};
 

@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 // Float math under `no_std` (std, linked into host tests, has these inherently).
 #[allow(unused_imports)]
 use num_traits::Float;
-use vraster::{Coverage, FillRule, Path, Rasterizer, Span, StrokeStyle, Transform};
+use raster::{Coverage, FillRule, Path, Rasterizer, Span, StrokeStyle, Transform};
 
 use crate::bitmap::Bitmap;
 use crate::color::{Color, blend_run, keep_scalar, lerp_px, over, scale};

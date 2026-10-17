@@ -35,15 +35,15 @@ mod store;
 
 use std::sync::Arc;
 
+use ::gl::backend::Present;
+use ::gl::{Config, gl};
+use abi::{WaitItem, signals};
 use interceptor_game::career::Stats;
 use interceptor_game::render::{Quality, Renderer};
 use interceptor_game::scale::Scale;
 use interceptor_game::world::World;
-use vabi::{WaitItem, signals};
-use vgl::backend::Present;
-use vgl::{Config, gl};
-use vproto::display::{Cursor, WindowEvent, WindowSpec, WindowState};
-use vui::window::{Window, connect};
+use proto::display::{Cursor, WindowEvent, WindowSpec, WindowState};
+use ui::window::{Window, connect};
 
 use app::{App, Back, Screen};
 use perf::{Perf, Phases};
@@ -70,7 +70,7 @@ fn wait_for_window(window: &mut Window, pending: &mut Vec<WindowEvent>) -> bool 
             signals: signals::READABLE | signals::PEER_CLOSED,
             ..Default::default()
         }];
-        let _ = vrt::object::wait_many(&mut items, vrt::time::now_ns() + 50_000_000);
+        let _ = rt::object::wait_many(&mut items, rt::time::now_ns() + 50_000_000);
         for ev in window.poll_events() {
             if let WindowEvent::CloseRequested {} = ev {
                 return false;
@@ -119,7 +119,7 @@ fn run() -> i32 {
     window.triple_buffer();
     // The sounds start loading while the world is made.
     let speakers = Speakers::start();
-    let (mut text, fonts) = vui::load_fonts();
+    let (mut text, fonts) = ui::load_fonts();
     let fonts = paint::Fonts { regular: fonts[0], bold: fonts[1], mono: fonts[2], mono_bold: fonts[3] };
 
     // Events that came while a frame waited for the window.
@@ -138,7 +138,7 @@ fn run() -> i32 {
 
     let (iw, ih) = internal_size(window.width, window.height, None);
     let config = Config { width: iw as u32, height: ih as u32, ..Config::default() };
-    let mut gl = vgl::veda::context(config);
+    let mut gl = ::gl::veda::context(config);
     let renderer_name: String = gl.get_string(gl::RENDERER).unwrap_or_default();
     let quality = Quality::for_renderer(&renderer_name);
     // A GPU renders every frame at the window's full resolution (whatever
@@ -147,9 +147,9 @@ fn run() -> i32 {
     let mut scale = (quality == Quality::Low).then(|| Scale::new(4, 6, SOFTWARE_TARGET_MS));
     println!("{} ({:?} quality)", renderer_name, quality);
 
-    let t0 = vrt::time::now_ns();
+    let t0 = rt::time::now_ns();
     let world = Arc::new(World::new());
-    let t1 = vrt::time::now_ns();
+    let t1 = rt::time::now_ns();
     let mut app = App::new(world.clone(), speakers, store, save);
     let mut renderer = match Renderer::new(&mut gl, &world, app.session.env(), quality) {
         Ok(r) => r,
@@ -160,7 +160,7 @@ fn run() -> i32 {
     };
     app.relight = false;
     let mut map = hud::MiniMap::new(&world);
-    let t2 = vrt::time::now_ns();
+    let t2 = rt::time::now_ns();
     println!(
         "Veda Bay made in {} ms ({} buildings), its pictures in {} ms",
         (t1 - t0) / 1_000_000,
@@ -169,7 +169,7 @@ fn run() -> i32 {
     );
     println!("ready");
 
-    let start = vrt::time::now_ns();
+    let start = rt::time::now_ns();
     let mut last = start;
     let mut perf = Perf::new(renderer_name, start);
     // When the last frame ended (where the next one's time starts).
@@ -235,7 +235,7 @@ fn run() -> i32 {
             awake = !awake;
             window.keep_awake(awake);
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         // Never a negative frame (from a clock read on another processor a
         // hair behind), nor more than a quarter of a second.
         let dt = (now.saturating_sub(last) as f64 / 1e9).min(0.25) as f32;
@@ -254,11 +254,11 @@ fn run() -> i32 {
         // Render at the internal resolution.
         let (iw, ih) = internal_size(window.width, window.height, scale.as_ref());
         gl.resize(iw as u32, ih as u32);
-        let t_render = vrt::time::now_ns();
+        let t_render = rt::time::now_ns();
         let frame = app.session.picture(&cars, &lights);
         renderer.render(&mut gl, &frame, iw, ih);
         gl.flush();
-        let t_drawn = vrt::time::now_ns();
+        let t_drawn = rt::time::now_ns();
 
         // The frame goes into the window's third buffer while the last one
         // is still on its way to the screen, and is handed over the moment
@@ -278,7 +278,7 @@ fn run() -> i32 {
                 gl.present_to(&mut dst);
             }
         }
-        let t_shown = vrt::time::now_ns();
+        let t_shown = rt::time::now_ns();
         let settings = app.save.settings;
         if app.screen == Screen::Playing {
             hud::play(&mut canvas, &mut text, &fonts, &app.session, &mut map, settings.units, app.clock);
@@ -317,7 +317,7 @@ fn run() -> i32 {
             }
         }
         drop(canvas);
-        let t_painted = vrt::time::now_ns();
+        let t_painted = rt::time::now_ns();
         if !wait_for_window(&mut window, &mut pending) {
             return 0;
         }
@@ -326,7 +326,7 @@ fn run() -> i32 {
         // The frame's length (from the last one's end) and what it went to;
         // once a second, the frame rate, the log, and the resolution it
         // calls for.
-        let t_end = vrt::time::now_ns();
+        let t_end = rt::time::now_ns();
         let ms = |from: u64, to: u64| to.saturating_sub(from) as f32 / 1e6;
         let spent = Phases {
             update: ms(frame_end, t_render),

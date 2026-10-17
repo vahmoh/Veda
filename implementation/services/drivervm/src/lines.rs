@@ -10,7 +10,7 @@
 //! an interrupt for each; functions that share a line share it.
 //!
 //! The guest routes a line to one of its processors with a hypercall
-//! ([`vhv::platform::hypercall::GSI`]): the line's interrupt is bound to the
+//! ([`hv::platform::hypercall::GSI`]): the line's interrupt is bound to the
 //! processor, at whose interrupt controller the kernel raises the vector —
 //! an edge,
 //! or a level-triggered interrupt with the line masked until the
@@ -21,8 +21,8 @@
 
 use alloc::collections::BTreeMap;
 
-use vhv::platform::{GSIS, PLATFORM_GSIS};
-use vrt::object::{Interrupt, Vcpu};
+use hv::platform::{GSIS, PLATFORM_GSIS};
+use rt::object::{Interrupt, Vcpu};
 
 struct Line {
     irq: Interrupt,

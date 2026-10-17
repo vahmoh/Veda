@@ -21,16 +21,16 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use abi::RawHandle;
+use agent::deepgram::{self, ServerMessage};
+use agent::presence::Presence;
+use net::NetError;
+use rt::object::Event;
+use rt::sync::Mutex;
+use rt::time::Duration;
 use serde_json::Value;
-use vabi::RawHandle;
-use vagent::deepgram::{self, ServerMessage};
-use vagent::presence::Presence;
-use vnet::NetError;
-use vrt::object::Event;
-use vrt::sync::Mutex;
-use vrt::time::Duration;
-use vweb::ws::{Message, WebSocket};
-use vweb::{Conn, WebError};
+use web::ws::{Message, WebSocket};
+use web::{Conn, WebError};
 
 /// Microphone audio kept while the conversation is being set up.
 const MAX_PENDING_MIC: usize = 4 * crate::voice::MIC_RATE as usize;
@@ -78,11 +78,11 @@ impl Connector {
         let signal = Event::from_handle(event.0.duplicate(None).ok()?);
         let result = Arc::new(Mutex::new(None));
         let slot = result.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("connect")
             .spawn(move || {
                 let auth = format!("Token {key}");
-                let first = vrt::time::now_ns();
+                let first = rt::time::now_ns();
                 let mut waited = false;
                 let r = loop {
                     let r = WebSocket::connect(&url, &[("Authorization", &auth)], CONNECT_TIMEOUT);
@@ -94,7 +94,7 @@ impl Connector {
                                 println!("cannot reach Deepgram yet ({e}): the network is still coming up");
                                 waited = true;
                             }
-                            vrt::time::sleep(NETWORK_RETRY);
+                            rt::time::sleep(NETWORK_RETRY);
                         }
                         _ => break r,
                     }
@@ -144,11 +144,11 @@ fn coming_up(e: &WebError, first: u64) -> bool {
                 | NetError::Unavailable
         )
     );
-    let now = vrt::time::now_ns();
+    let now = rt::time::now_ns();
     if !early || now - first >= NETWORK_SETTLE_NS {
         return false;
     }
-    match vnet::status() {
+    match net::status() {
         Ok(s) => now.saturating_sub(u64::from(s.changed_s) * 1_000_000_000) < NETWORK_SETTLE_NS,
         Err(_) => true,
     }
@@ -183,7 +183,7 @@ pub struct Session {
     /// attended until the user speaks.
     pub attended: bool,
     /// What it has shown of the user, for the window system's idle lock
-    /// (see `vagent::presence`).
+    /// (see `agent::presence`).
     pub presence: Presence,
     pending_mic: VecDeque<i16>,
     pending_inject: Vec<String>,
@@ -247,7 +247,7 @@ impl Session {
 
     /// Sends a JSON message.
     pub fn send(&mut self, v: &Value) -> Result<(), WebError> {
-        self.last_sent_ns = vrt::time::now_ns();
+        self.last_sent_ns = rt::time::now_ns();
         self.ws.send_text(&v.to_string())
     }
 
@@ -266,7 +266,7 @@ impl Session {
         for s in pcm {
             bytes.extend_from_slice(&s.to_le_bytes());
         }
-        self.last_sent_ns = vrt::time::now_ns();
+        self.last_sent_ns = rt::time::now_ns();
         self.ws.send_binary(&bytes)
     }
 
@@ -337,6 +337,6 @@ impl Session {
 
     /// Ends the conversation politely.
     pub fn close(&mut self) {
-        let _ = self.ws.close(vweb::ws::close_code::NORMAL, "");
+        let _ = self.ws.close(web::ws::close_code::NORMAL, "");
     }
 }

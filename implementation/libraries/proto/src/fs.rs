@@ -29,8 +29,8 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use vipc::{Bytes, IpcError, enumeration, message, protocol};
-use vrt::object::{Channel, Handle, Vmo};
+use ipc::{Bytes, IpcError, enumeration, message, protocol};
+use rt::object::{Channel, Handle, Vmo};
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,7 +475,7 @@ mod tests {
     use alloc::format;
     use alloc::string::ToString;
     use alloc::vec;
-    use vipc::{Encode, Encoder};
+    use ipc::{Encode, Encoder};
 
     fn entry(name: &str) -> DirEntry {
         DirEntry { name: name.into(), is_dir: false, size: 1, modified: 2, inode: 3, executable: false, socket: false }
@@ -501,9 +501,9 @@ mod tests {
             bytes += entry(&long).encoded_len();
             entries.push(entry(&long));
         }
-        let mut e = Encoder::with_header(6, 1, vipc::FLAG_RESPONSE);
+        let mut e = Encoder::with_header(6, 1, ipc::FLAG_RESPONSE);
         Ok::<_, FsError>(DirPage { entries, more: true }).encode(&mut e);
-        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
+        assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES);
     }
 
     #[test]
@@ -512,14 +512,14 @@ mod tests {
         let mut e = Encoder::with_header(23, 1, 0);
         SocketAddress::path("/".to_string() + &"p".repeat(MAX_PATH - 1)).encode(&mut e);
         (1u64, 2u64).encode(&mut e);
-        (Bytes(vec![0; MAX_DATAGRAM]), Bytes(vec![0; 2048]), Vec::<vrt::object::Handle>::new()).encode(&mut e);
-        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES, "{}", e.bytes.len());
+        (Bytes(vec![0; MAX_DATAGRAM]), Bytes(vec![0; 2048]), Vec::<rt::object::Handle>::new()).encode(&mut e);
+        assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES, "{}", e.bytes.len());
         // In the socket's inbox: who sent it, with the longest name.
-        let mut e = Encoder::with_header(socket_event::DATAGRAM, 0, vipc::FLAG_EVENT);
+        let mut e = Encoder::with_header(socket_event::DATAGRAM, 0, ipc::FLAG_EVENT);
         let from = SocketPeer { koid: 1, name: Bytes(vec![b'n'; MAX_SOCKET_NAME]) };
         SocketDatagram { from, data: Bytes(vec![0; MAX_DATAGRAM]), rights: Bytes(vec![0; 2048]), handles: vec![] }
             .encode(&mut e);
-        assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES, "{}", e.bytes.len());
+        assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES, "{}", e.bytes.len());
     }
 
     /// Pages of `names` (sorted) after a name, `per_page` at a time.

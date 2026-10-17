@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vgpio` — GPIO controllers for Veda's device manager.
+//! `gpio` — GPIO controllers for Veda's device manager.
 //!
 //! Intel's chipsets put their GPIO pads in communities of registers whose
 //! addresses the firmware gives (the controller's `_CRS`). Which ACPI pin

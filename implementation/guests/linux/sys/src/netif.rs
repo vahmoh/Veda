@@ -13,10 +13,10 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 
+use proto::netring::{Link, SlotMeta, kind};
 use rustix::ioctl::{Opcode, Updater, ioctl};
 use rustix::net::addr::{SocketAddrArg, SocketAddrLen, SocketAddrOpaque};
 use rustix::net::{AddressFamily, Protocol, SocketFlags, SocketType, bind, socket_with, sockopt};
-use vproto::netring::{Link, SlotMeta, kind};
 
 use crate::setsockopt;
 use crate::sysfs::{link_name, read};

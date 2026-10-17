@@ -7,8 +7,8 @@
 
 use alloc::string::String;
 
-use vgfx::Rect;
-use vproto::display::{Cursor, WindowKind, WindowState};
+use gfx::Rect;
+use proto::display::{Cursor, WindowKind, WindowState};
 
 use crate::buffers::Surface;
 use crate::outbox::Outbox;

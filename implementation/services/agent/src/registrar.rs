@@ -9,7 +9,7 @@
 //! answer slowly or never; so a thread of its own asks, off the path of
 //! function calls, and hands the worker the application's link once it
 //! answered ([`crate::worker::Links`]). What it said is kept for the
-//! agent's instructions (bounded first: `vagent::tools::sanitize`).
+//! agent's instructions (bounded first: `agent::tools::sanitize`).
 //!
 //! A process registers once: a new registration of the same process
 //! replaces its previous one (in the worker). One registering again and
@@ -19,11 +19,11 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vagent::policy::RegistrationLimit;
-use vproto::agent::{AgentError, agentapp};
-use vproto::init::ClientIdentity;
-use vrt::object::Channel;
-use vrt::sync::{Condvar, Mutex};
+use agent::policy::RegistrationLimit;
+use proto::agent::{AgentError, agentapp};
+use proto::init::ClientIdentity;
+use rt::object::Channel;
+use rt::sync::{Condvar, Mutex};
 
 use crate::shared::Shared;
 use crate::worker::{self, Links, NewLink};
@@ -56,7 +56,7 @@ impl Registrar {
             wake: Condvar::new(),
         });
         let r = Registrar(inner.clone());
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("registrar")
             .spawn(move || describe_registrations(&inner, &shared, &links))
             .ok()?;
@@ -70,7 +70,7 @@ impl Registrar {
             return Err(AgentError::Denied);
         }
         let mut s = self.0.state.lock();
-        if s.waiting.len() >= MAX_WAITING || !s.limit.admit(who.koid, vrt::time::now_ns()) {
+        if s.waiting.len() >= MAX_WAITING || !s.limit.admit(who.koid, rt::time::now_ns()) {
             println!("{} registers too often; refused", who.name);
             return Err(AgentError::Busy);
         }

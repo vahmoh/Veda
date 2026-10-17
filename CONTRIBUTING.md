@@ -40,7 +40,7 @@ Linux are built once.
 3. **Iterate** on what you changed:
 
    ```bash
-   cargo test -p vnetstack                                           # one crate's unit tests, on the host
+   cargo test -p netstack                                           # one crate's unit tests, on the host
    cargo orchestration script verification/ui/firewall-question.vts  # one GUI script, headless
    cargo orchestration run --cmdline run=settings                    # boot with an application started
    ```
@@ -89,9 +89,9 @@ has the detailed rules.
 
 - **Expect failure.** Services restart when they crash, and the driver VM
   when its Linux does: a client reconnects and restores what the restart
-  lost, as `vui` registers an application with the agent again.
+  lost, as `ui` registers an application with the agent again.
 - **Answer in time.** An application's frame never waits on slow work,
-  which goes to a thread ([The `vui` toolkit](documentation/DEVELOPING.md#the-vui-toolkit)),
+  which goes to a thread ([The `ui` toolkit](documentation/DEVELOPING.md#the-ui-toolkit)),
   and a call to a peer that may hang, such as a driver, has a deadline
   (`set_timeout`).
 - **Say what failed.** Errors are a crate's own enum implementing

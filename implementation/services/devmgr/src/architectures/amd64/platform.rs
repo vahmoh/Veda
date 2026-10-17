@@ -9,10 +9,10 @@
 
 use alloc::vec::Vec;
 
-use vabi::irq_flags;
-use vrt::object::{Handle, Interrupt, IoPorts, Resource};
+use abi::irq_flags;
+use rt::object::{Handle, Interrupt, IoPorts, Resource};
 
-use vproto::startup::drivervm::{I8042_COMMAND, I8042_DATA, I8042_KEYBOARD, I8042_MOUSE};
+use proto::startup::drivervm::{I8042_COMMAND, I8042_DATA, I8042_KEYBOARD, I8042_MOUSE};
 
 /// Roles of the keyboard controller's data port, its command port, and its
 /// keyboard's and mouse's interrupts, which the driver VM gets.

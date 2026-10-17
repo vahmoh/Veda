@@ -35,38 +35,38 @@ use crate::util::{self, Result};
 /// tests is here, among [`HOST_TESTED_ALONE`], [`GUEST_TESTED`] or
 /// [`NOT_TESTED`] (a test checks it).
 const HOST_TESTED: &[(&str, &[&str])] = &[
-    ("vabi", &[]),
+    ("abi", &[]),
     ("bootinfo", &[]),
-    ("velf", &[]),
-    ("vposix", &[]),
+    ("elf", &[]),
+    ("posix", &[]),
     ("mediadec", &[]),
     ("initrd", &["std"]),
-    ("vheap", &[]),
-    ("vframes", &[]),
-    ("vipc", &[]),
-    ("vraster", &[]),
-    ("vfont", &[]),
-    ("vimage", &["encode"]),
-    ("vaudio", &[]),
-    ("vproto", &[]),
-    ("vgfx", &[]),
-    ("vui", &[]),
-    ("vtext", &[]),
-    ("vfiles", &["thumbnails"]),
-    ("ventropy", &[]),
-    ("vnetstack", &[]),
-    ("vtls", &[]),
-    ("vweb", &[]),
-    ("vagent", &[]),
-    ("vwlan", &[]),
-    ("vacpi", &[]),
-    ("vgpio", &[]),
-    ("vsplash", &[]),
-    ("vglsl", &[]),
-    ("vgl", &[]),
-    ("vhv", &[]),
+    ("heap", &[]),
+    ("frames", &[]),
+    ("ipc", &[]),
+    ("raster", &[]),
+    ("font", &[]),
+    ("image", &["encode"]),
+    ("audio", &[]),
+    ("proto", &[]),
+    ("gfx", &[]),
+    ("ui", &[]),
+    ("text", &[]),
+    ("files", &["thumbnails"]),
+    ("entropy", &[]),
+    ("netstack", &[]),
+    ("tls", &[]),
+    ("web", &[]),
+    ("agent", &[]),
+    ("wlan", &[]),
+    ("acpi", &[]),
+    ("gpio", &[]),
+    ("splash", &[]),
+    ("glsl", &[]),
+    ("gl", &[]),
+    ("hv", &[]),
     ("drivervm-core", &[]),
-    ("viommu", &[]),
+    ("iommu", &[]),
     ("interceptor-game", &[]),
     ("videos-core", &[]),
     ("terminal-core", &[]),
@@ -86,10 +86,10 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 ];
 
 /// Crates with host unit tests that run in a Cargo invocation of their
-/// own: `vrt`'s tests turn on its default `runtime` feature, which Cargo
-/// would otherwise unify into the build of `vrt` that the POSIX layer's
+/// own: `rt`'s tests turn on its default `runtime` feature, which Cargo
+/// would otherwise unify into the build of `rt` that the POSIX layer's
 /// tests link (a second panic handler and allocator beside `std`'s).
-pub const HOST_TESTED_ALONE: &[&str] = &["vrt"];
+pub const HOST_TESTED_ALONE: &[&str] = &["rt"];
 
 /// The driver VM's programs with tests, which run on Linux, as the
 /// programs do (`implementation/guests/linux/`, on musl).
@@ -181,9 +181,9 @@ fn opengl_tests() -> Result {
     // Tests of OpenGL ES on the host's GPU drive the system's virglrenderer,
     // which QEMU's 3D GPU is built on, where QEMU has one.
     let virgl = QemuInstall::locate().is_ok_and(|q| q.has_gl_gpu());
-    // On QEMU's GPU, unless `VGL_TEST_RENDERNODE` names another.
-    let node = std::env::var("VGL_TEST_RENDERNODE").ok().filter(|n| !n.is_empty()).or_else(qemu::render_node);
-    let vgl = |package: &str| {
+    // On QEMU's GPU, unless `GL_TEST_RENDERNODE` names another.
+    let node = std::env::var("GL_TEST_RENDERNODE").ok().filter(|n| !n.is_empty()).or_else(qemu::render_node);
+    let gl = |package: &str| {
         let mut cmd = util::cargo();
         cmd.args(["test", "--quiet", "--package", package]);
         cmd
@@ -197,7 +197,7 @@ fn opengl_tests() -> Result {
         for (depth, how) in [("0", ""), ("1", ", depth kept as on iris")] {
             util::status("Testing", format!("OpenGL ES through Veda's renderer (Mesa's softpipe{how})"));
             util::run(
-                vgl("vgl").env("VGL_TEST_BACKEND", "gallium").env("VGL_GALLIUM_DLL", &dll).env("VR_DEPTH_LOW", depth),
+                gl("gl").env("GL_TEST_BACKEND", "gallium").env("GL_GALLIUM_DLL", &dll).env("VR_DEPTH_LOW", depth),
             )?;
         }
         if let Some(server) = util::find_on_path("virgl_test_server") {
@@ -221,10 +221,10 @@ fn opengl_tests() -> Result {
                 std::thread::sleep(Duration::from_millis(50));
             }
             util::run(
-                vgl("vgl")
-                    .env("VGL_TEST_BACKEND", "gallium")
-                    .env("VGL_GALLIUM_DEVICE", "virgl")
-                    .env("VGL_GALLIUM_DLL", &dll)
+                gl("gl")
+                    .env("GL_TEST_BACKEND", "gallium")
+                    .env("GL_GALLIUM_DEVICE", "virgl")
+                    .env("GL_GALLIUM_DLL", &dll)
                     .env("VTEST_SOCKET_NAME", &socket),
             )?;
             drop(server);
@@ -233,12 +233,12 @@ fn opengl_tests() -> Result {
             util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's iris, on this machine's Intel GPU)");
             // Interceptor's game too: its shadows, sparks and cars on the
             // GPU.
-            for package in ["vgl", "interceptor-game"] {
+            for package in ["gl", "interceptor-game"] {
                 util::run(
-                    vgl(package)
-                        .env("VGL_TEST_BACKEND", "gallium")
-                        .env("VGL_GALLIUM_DEVICE", "iris")
-                        .env("VGL_GALLIUM_DLL", &dll),
+                    gl(package)
+                        .env("GL_TEST_BACKEND", "gallium")
+                        .env("GL_GALLIUM_DEVICE", "iris")
+                        .env("GL_GALLIUM_DLL", &dll),
                 )?;
             }
         }
@@ -247,10 +247,10 @@ fn opengl_tests() -> Result {
         // QEMU renders on desktop OpenGL, and on OpenGL ES with `gl=es`.
         for (host, what) in [("desktop", "desktop OpenGL"), ("gles", "OpenGL ES")] {
             util::status("Testing", format!("OpenGL ES on the host's GPU (QEMU's virglrenderer on {what})"));
-            let mut cmd = vgl("vgl");
-            cmd.env("VGL_TEST_BACKEND", "virgl").env("VGL_TEST_HOST", host);
+            let mut cmd = gl("gl");
+            cmd.env("GL_TEST_BACKEND", "virgl").env("GL_TEST_HOST", host);
             if let Some(node) = &node {
-                cmd.env("VGL_TEST_RENDERNODE", node);
+                cmd.env("GL_TEST_RENDERNODE", node);
             }
             util::run(&mut cmd)?;
         }
@@ -688,7 +688,7 @@ mod tests {
             })
             .map(|(name, _)| name.as_str())
             .collect();
-        assert!(with_tests.contains(&"orchestration") && with_tests.contains(&"vhv"), "{with_tests:?}");
+        assert!(with_tests.contains(&"orchestration") && with_tests.contains(&"hv"), "{with_tests:?}");
         let listed: Vec<&str> = HOST_TESTED
             .iter()
             .map(|(p, _)| *p)
@@ -720,7 +720,7 @@ mod tests {
         assert_eq!(&args[..2], ["test", "--quiet"]);
         assert_eq!(args.iter().filter(|a| *a == "--package").count(), HOST_TESTED.len());
         let features = &args[args.iter().position(|a| a == "--features").unwrap() + 1];
-        assert_eq!(features, "initrd/std,vimage/encode,vfiles/thumbnails");
+        assert_eq!(features, "initrd/std,image/encode,files/thumbnails");
     }
 
     #[test]

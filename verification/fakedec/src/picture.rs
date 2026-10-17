@@ -16,7 +16,7 @@
 
 use alloc::format;
 
-use vgfx::{Canvas, Color, Rect};
+use gfx::{Canvas, Color, Rect};
 
 use crate::clip::Picture;
 

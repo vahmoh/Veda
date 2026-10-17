@@ -16,11 +16,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use abi::{RawHandle, signals};
+use rt::object::Event;
+use rt::sync::Mutex;
+use rt::thread::JoinHandle;
 use terminal_core::screen::{Screen, Style};
-use vabi::{RawHandle, signals};
-use vrt::object::Event;
-use vrt::sync::Mutex;
-use vrt::thread::JoinHandle;
 
 use crate::shell::Shell;
 
@@ -182,7 +182,7 @@ impl Output {
                     screen.finish_line();
                     let note = format!(
                         "[\u{2026} {} of output left out: it came faster than it could be shown]\n",
-                        vfiles::format::human_size(n as u64)
+                        files::format::human_size(n as u64)
                     );
                     screen.write_styled(&note, Style::DIM);
                 }
@@ -221,7 +221,7 @@ impl Job {
         let slot = Arc::new(Mutex::new(shell.take()));
         let done = Arc::new(AtomicBool::new(false));
         let (slot2, done2, out2) = (slot.clone(), done.clone(), out.clone());
-        let thread = vrt::thread::Builder::new().name("command").stack_size(STACK).spawn(move || {
+        let thread = rt::thread::Builder::new().name("command").stack_size(STACK).spawn(move || {
             let taken = slot2.lock().take();
             if let Some(mut sh) = taken {
                 sh.execute(&line, &out2);
@@ -231,7 +231,7 @@ impl Job {
             out2.wake();
         });
         match thread {
-            Ok(thread) => Some(Job { shown, started: vrt::time::now_ns(), thread, shell: slot, done }),
+            Ok(thread) => Some(Job { shown, started: rt::time::now_ns(), thread, shell: slot, done }),
             Err(_) => {
                 *shell = slot.lock().take();
                 None

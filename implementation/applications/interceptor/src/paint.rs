@@ -4,7 +4,7 @@
 //! What the menus and the dashboard are drawn with: the fonts, the
 //! palette, and a few shapes (stars, a padlock, the logo).
 
-use vgfx::{Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
+use gfx::{Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
 
 /// The fonts, by role.
 pub struct Fonts {

@@ -18,7 +18,7 @@
 
 use alloc::vec::Vec;
 
-use vabi::Error;
+use abi::Error;
 
 use crate::arch::mm::{user_access_begin, user_access_end};
 use crate::scheduler;

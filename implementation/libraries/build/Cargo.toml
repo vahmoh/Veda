@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vbuild"
+name = "build"
 description = "Build-script helper for Veda user-space programs (the linker's options for their ELF64 executables)"
 version.workspace = true
 edition.workspace = true

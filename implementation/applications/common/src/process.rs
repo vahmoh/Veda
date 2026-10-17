@@ -16,8 +16,8 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vabi::ProcessInfo;
-use vproto::init::TaskInfo;
+use abi::ProcessInfo;
+use proto::init::TaskInfo;
 
 /// How far up its parents a process's ancestry is followed.
 const MAX_DEPTH: usize = 64;
@@ -27,7 +27,7 @@ const MAX_DEPTH: usize = 64;
 pub fn list() -> Vec<ProcessInfo> {
     let mut infos = vec![ProcessInfo::default(); 256];
     loop {
-        let n = vrt::object::process_list(&mut infos).unwrap_or(0);
+        let n = rt::object::process_list(&mut infos).unwrap_or(0);
         if n <= infos.len() {
             infos.truncate(n);
             return infos;
@@ -41,7 +41,7 @@ pub fn list() -> Vec<ProcessInfo> {
 /// The running processes, by process id.
 pub fn running() -> Vec<ProcessInfo> {
     let mut infos = list();
-    infos.retain(|p| p.state == vabi::process_state::RUNNING);
+    infos.retain(|p| p.state == abi::process_state::RUNNING);
     infos.sort_by_key(|p| p.koid);
     infos
 }

@@ -5,9 +5,9 @@
 
 use alloc::string::String;
 
-use vgfx::{Align, Canvas, Color, Rect};
-use vproto::display::Cursor;
-use vproto::input::keys;
+use gfx::{Align, Canvas, Color, Rect};
+use proto::display::Cursor;
+use proto::input::keys;
 
 use crate::icons::Icon;
 use crate::theme::Font;
@@ -578,7 +578,7 @@ impl<'a> Ui<'a> {
 #[cfg(test)]
 mod tests {
     use alloc::string::String;
-    use vproto::input::keys;
+    use proto::input::keys;
 
     use super::*;
     use crate::ui::tests::{context, frame, press};

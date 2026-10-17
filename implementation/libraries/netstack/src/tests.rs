@@ -12,15 +12,15 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use proto::net::{
+    AddrFamily, Connectivity, DeviceInfo, FirewallConfig, FirewallReason, InterfaceKind, IpConfig, NetError,
+    ResolveResult, Scope, TcpOptions,
+};
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
     DhcpMessageType, DhcpPacket, DhcpRepr, EthernetAddress, EthernetFrame, EthernetProtocol, Icmpv6DstUnreachable,
     Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpProtocol, Ipv4Packet, Ipv4Repr, Ipv6Packet, Ipv6Repr, UdpPacket,
     UdpRepr,
-};
-use vproto::net::{
-    AddrFamily, Connectivity, DeviceInfo, FirewallConfig, FirewallReason, InterfaceKind, IpConfig, NetError,
-    ResolveResult, Scope, TcpOptions,
 };
 
 use crate::dns::tests::{encode_name, response};
@@ -1036,7 +1036,7 @@ fn bad_requests_are_rejected() {
         )
         .is_err()
     );
-    assert_eq!(n.a.add_interface(&device([1, 2, 3, 4, 5, 6]), true), Err(vproto::net::NetdevError::Invalid));
+    assert_eq!(n.a.add_interface(&device([1, 2, 3, 4, 5, 6]), true), Err(proto::net::NetdevError::Invalid));
 }
 
 #[test]
@@ -1207,7 +1207,7 @@ fn orphans_wait_for_the_peer_only_so_long() {
     let (sa, sb) = pair(&mut n, 7);
     n.a.close(sa);
     assert!(n.run_until(5_000, |n| n.b.tcp_view(sb).unwrap().eof));
-    let a_has = |n: &Net| n.a.socket_infos(None).iter().any(|i| i.kind == vproto::net::SocketKind::Tcp);
+    let a_has = |n: &Net| n.a.socket_infos(None).iter().any(|i| i.kind == proto::net::SocketKind::Tcp);
     assert!(a_has(&n), "FIN-WAIT-2");
     n.run(crate::ORPHAN_TIMEOUT_US / 1000 - 2_000);
     assert!(a_has(&n), "gone too early");
@@ -1289,7 +1289,7 @@ fn a_listener_holds_at_most_its_backlog() {
         .filter(|&&c| n.a.tcp_view(c).unwrap().state == TcpState::Closed { error: Some(NetError::ConnectionRefused) })
         .count();
     assert_eq!((open, refused), (2, 4));
-    let waiting = n.b.socket_infos(None).iter().filter(|i| i.kind == vproto::net::SocketKind::Tcp).count();
+    let waiting = n.b.socket_infos(None).iter().filter(|i| i.kind == proto::net::SocketKind::Tcp).count();
     assert_eq!(waiting, 2);
     // Accepting makes room again.
     assert!(n.b.tcp_accept(l).is_some());
@@ -1318,7 +1318,7 @@ fn lookups_need_no_room_in_the_socket_table() {
     while n.a.ping_open(1).is_ok() {}
     assert!(matches!(n.resolve("full.example"), ResolveResult::Found { .. }));
     // Only the pings are listed: the resolver's sockets are its own.
-    assert!(n.a.socket_infos(None).iter().all(|i| i.kind == vproto::net::SocketKind::Ping));
+    assert!(n.a.socket_infos(None).iter().all(|i| i.kind == proto::net::SocketKind::Ping));
 }
 
 #[test]

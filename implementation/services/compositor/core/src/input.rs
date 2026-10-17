@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Input drivers' events (`vproto::input`), and what each driver's
+//! Input drivers' events (`proto::input`), and what each driver's
 //! connection holds down. Each event starts the idle time again (see
 //! [`crate::idle`]).
 //!
@@ -11,7 +11,7 @@
 
 use alloc::collections::BTreeMap;
 
-use vproto::input::InputEvent;
+use proto::input::InputEvent;
 
 use crate::wm::Wm;
 

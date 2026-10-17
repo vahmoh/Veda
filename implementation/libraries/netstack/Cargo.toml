@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vnetstack"
+name = "netstack"
 description = "The Veda network stack: interfaces, DHCP, DNS, routing and sockets on top of smoltcp"
 version.workspace = true
 edition.workspace = true
@@ -10,8 +10,8 @@ license.workspace = true
 
 [dependencies]
 smoltcp = { workspace = true }
-vproto = { workspace = true }
-ventropy = { workspace = true }
+proto = { workspace = true }
+entropy = { workspace = true }
 
 [dev-dependencies]
 # DhcpRepr's DNS server list type, for the test DHCP server.

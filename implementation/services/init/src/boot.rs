@@ -6,11 +6,11 @@
 
 use alloc::vec::Vec;
 
-use vabi::resource_kind;
-use vabi::startup::role;
-use vproto::startup::devmgr as roles;
-use vrt::object::Handle;
-use vrt::println;
+use abi::resource_kind;
+use abi::startup::role;
+use proto::startup::devmgr as roles;
+use rt::object::Handle;
+use rt::println;
 
 use crate::{Init, Origin};
 
@@ -29,7 +29,7 @@ const SERVICES: [&str; 9] = ["vfs", "netd", "wlan", "devmgr", "compositor", "loc
 /// the user's files, the other owns the running drivers.)
 pub const RESTARTABLE: [&str; 7] = ["compositor", "lock", "shell", "audio", "netd", "wlan", "agent"];
 
-fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
+fn dup(h: &Option<rt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
 }
 
@@ -131,12 +131,12 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
 /// The kernel command line (from the boot information VMO).
 pub fn cmdline(init: &Init) -> alloc::string::String {
     let Some(vmo) = &init.boot_info else { return alloc::string::String::new() };
-    let mut buf = [0u8; core::mem::size_of::<vabi::KernelBootInfo>()];
+    let mut buf = [0u8; core::mem::size_of::<abi::KernelBootInfo>()];
     if vmo.read(0, &mut buf).is_err() {
         return alloc::string::String::new();
     }
     // SAFETY: KernelBootInfo is plain old data written by the kernel.
-    let info: vabi::KernelBootInfo = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const vabi::KernelBootInfo) };
+    let info: abi::KernelBootInfo = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const abi::KernelBootInfo) };
     let len = (info.cmdline_len as usize).min(info.cmdline.len());
     alloc::string::String::from_utf8_lossy(&info.cmdline[..len]).into_owned()
 }

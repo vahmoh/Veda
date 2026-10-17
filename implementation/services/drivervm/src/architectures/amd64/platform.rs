@@ -11,11 +11,11 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::{VcpuExit, vcpu_exit};
-use vproto::startup::drivervm as roles;
-use vrt::object::{Interrupt, IoPorts, Vcpu};
-use vrt::println;
-use vrt::sync::Mutex;
+use abi::{VcpuExit, vcpu_exit};
+use proto::startup::drivervm as roles;
+use rt::object::{Interrupt, IoPorts, Vcpu};
+use rt::println;
+use rt::sync::Mutex;
 
 use super::i8042::{self, I8042};
 use crate::lines::Lines;
@@ -32,7 +32,7 @@ impl Platform {
     /// What devmgr handed over of the PC: the keyboard controller, whose
     /// lines join `lines`.
     pub fn take(lines: &mut Lines) -> Platform {
-        let take = |role| vrt::env::take_handle(role);
+        let take = |role| rt::env::take_handle(role);
         let i8042 = match (
             take(roles::I8042_DATA),
             take(roles::I8042_COMMAND),
@@ -50,8 +50,8 @@ impl Platform {
     }
 
     /// What the ACPI tables say of the PC the guest has.
-    pub fn acpi(&self) -> vhv::acpi::Platform {
-        vhv::amd64::acpi::platform(self.i8042.is_some())
+    pub fn acpi(&self) -> hv::acpi::Platform {
+        hv::amd64::acpi::platform(self.i8042.is_some())
     }
 
     /// Answers processor `id`'s exit that is not a hypercall: `Ok` when it

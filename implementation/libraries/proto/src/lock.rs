@@ -33,10 +33,10 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vabi::RawHandle;
-use vipc::{enumeration, message, protocol};
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
+use abi::RawHandle;
+use ipc::{enumeration, message, protocol};
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 
 /// The fewest characters a password has.
 pub const MIN_PASSWORD: usize = 4;
@@ -207,7 +207,7 @@ impl LockLink {
             replies: Mutex::new(Vec::new()),
         });
         let s = shared.clone();
-        vrt::thread::Builder::new().name("lock-link").spawn(move || worker(s, theirs)).ok()?;
+        rt::thread::Builder::new().name("lock-link").spawn(move || worker(s, theirs)).ok()?;
         Some(LockLink { shared, event })
     }
 
@@ -318,7 +318,7 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec::Vec;
 
-    use vipc::{Decode, Decoder, Encode, Encoder};
+    use ipc::{Decode, Decoder, Encode, Encoder};
 
     use super::*;
     use crate::display::LockNotice;

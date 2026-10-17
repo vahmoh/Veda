@@ -6,7 +6,7 @@
 //! rendering and output encoding.
 
 pub use gencommon::colour::{Rgb, add, gradient, hex, mix, scale as mul, smoothstep};
-use vimage::Image;
+use image::Image;
 
 /// `a` lit by `b`, channel by channel.
 pub fn mulc(a: Rgb, b: Rgb) -> Rgb {

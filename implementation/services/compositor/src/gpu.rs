@@ -6,7 +6,7 @@
 //! Where the display flips (its driver gave the compositor pictures, see
 //! `screen`) and the GPU can draw into those pictures (the `gpu` service's
 //! renderer on the PC's own GPU), every frame is drawn by the GPU with
-//! OpenGL ES (`vgl`), straight into the picture the display shows next, as
+//! OpenGL ES (`gl`), straight into the picture the display shows next, as
 //! modern window systems compose:
 //!
 //! * every window is a texture, brought up to date where its client drew
@@ -35,16 +35,16 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use ::gl::backend::External;
+use ::gl::veda::{FenceWatch, GpuTransport};
+use ::gl::virgl::VirglBackend;
+use ::gl::{Config, Context, gl};
+use gfx::{Bitmap, Rect};
 use num_traits::Float;
-use vgfx::{Bitmap, Rect};
-use vgl::backend::External;
-use vgl::veda::{FenceWatch, GpuTransport};
-use vgl::virgl::VirglBackend;
-use vgl::{Config, Context, gl};
-use vproto::gpu::gpu;
-use vrt::object::{Event, Vmo};
-use vrt::sync::Mutex;
-use vrt::time::{Duration, now_ns};
+use proto::gpu::gpu;
+use rt::object::{Event, Vmo};
+use rt::sync::Mutex;
+use rt::time::{Duration, now_ns};
 
 use crate::pixels::Pixels;
 use crate::screen::Screen;
@@ -79,7 +79,7 @@ void main() {
 
 /// Shapes: a rounded rectangle `u_rect` filled, outlined `-u_blur`
 /// pixels wide inside its edge (`u_blur` < 0), or its shadow, blurred
-/// over `u_blur` pixels (as `vgfx::ShadowTemplate` has it); in a colour,
+/// over `u_blur` pixels (as `gfx::ShadowTemplate` has it); in a colour,
 /// or a vertical gradient. Colours are premultiplied.
 const SHAPE: &str = "#version 300 es
 precision highp float;
@@ -147,7 +147,7 @@ void main() {
 }
 ";
 
-/// The startup sequence's gradient at the pixel, as `vsplash::background`
+/// The startup sequence's gradient at the pixel, as `splash::background`
 /// has it, in the same integer arithmetic: the gradient through the middle
 /// of the pixel's row (in 128ths of a step and `h`ths), plus the 8x8
 /// ordered-dither pattern's threshold, rounded down.
@@ -188,7 +188,7 @@ out vec4 o;
 "
 );
 
-/// The startup sequence's picture (`startup`, `vsplash`) where the light
+/// The startup sequence's picture (`startup`, `splash`) where the light
 /// reaches: the gradient as [`ROWS`] has it; the light around the ring,
 /// with its glint; the ring. Faded in and at `u_opacity` as [`ROWS`].
 const SPLASH: &str = concat!(
@@ -411,12 +411,12 @@ impl Pending {
             *slot.lock() = Some(r);
             let _ = theirs.signal();
         };
-        vrt::thread::Builder::new().name("gpu-setup").spawn(body).ok()?;
+        rt::thread::Builder::new().name("gpu-setup").spawn(body).ok()?;
         Some(Pending { done, result })
     }
 
     /// Signaled once the setup is over.
-    pub(crate) fn event(&self) -> vabi::RawHandle {
+    pub(crate) fn event(&self) -> abi::RawHandle {
         self.done.raw()
     }
 
@@ -428,7 +428,7 @@ impl Pending {
 
 /// Whether the `gpu` service is registered.
 fn service_registered() -> bool {
-    vproto::with_registry(|r| r.list()).ok().and_then(|l| l.ok()).is_some_and(|l| l.iter().any(|s| s == gpu::NAME))
+    proto::with_registry(|r| r.list()).ok().and_then(|l| l.ok()).is_some_and(|l| l.iter().any(|s| s == gpu::NAME))
 }
 
 fn shader(gl: &mut Context, kind: u32, src: &str) -> Result<u32, String> {
@@ -468,7 +468,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         if now_ns() >= until {
             return Err(String::from("there is no GPU service"));
         }
-        vrt::time::sleep(SERVICE_POLL);
+        rt::time::sleep(SERVICE_POLL);
     }
     let t = GpuTransport::connect_to(gpu::NAME, CALL_NS).ok_or("the GPU service did not answer")?;
     let renderer = t.renderer().to_string();
@@ -661,7 +661,7 @@ impl Gpu {
     }
 
     /// The fences' event, for the compositor's wait.
-    pub(crate) fn fence_event(&self) -> vabi::RawHandle {
+    pub(crate) fn fence_event(&self) -> abi::RawHandle {
         self.watch.event()
     }
 
@@ -774,7 +774,7 @@ impl Gpu {
     /// The shadow of the rounded rectangle `r`, blurred over `blur`
     /// pixels around its edge. `hollow`: what is well inside `r` (fully
     /// dark, and under the opaque window that casts the shadow) is left
-    /// out, as `vgfx::ShadowTemplate` leaves it.
+    /// out, as `gfx::ShadowTemplate` leaves it.
     pub(crate) fn shadow(&mut self, r: Rect, radius: f32, blur: i32, color: [f32; 4], hollow: bool) {
         let outer = r.inflate(blur);
         if !hollow {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Veda's renderer on the host, for tests (`VGL_TEST_BACKEND=gallium`):
+//! Veda's renderer on the host, for tests (`GL_TEST_BACKEND=gallium`):
 //! the decoder that carries out virgl command streams on a Gallium driver
 //! (`implementation/guests/linux/renderer`), built with Mesa as
 //! `vgallium.so` around softpipe, Mesa's reference rasterizer. In the
@@ -9,13 +9,13 @@
 //! here the tests call it directly, a device and context of its own for
 //! each of theirs.
 //!
-//! `VGL_GALLIUM_DLL` names the library; by default it is where Mesa's build
+//! `GL_GALLIUM_DLL` names the library; by default it is where Mesa's build
 //! for this machine leaves it (`cargo orchestration linux` configures that
 //! build, `cargo orchestration test` brings the library up to date). With
-//! `VGL_GALLIUM_DEVICE=virgl` the decoder renders on virgl, over
+//! `GL_GALLIUM_DEVICE=virgl` the decoder renders on virgl, over
 //! virglrenderer's test server (`virgl_test_server`, at `VTEST_SOCKET_NAME`),
 //! as the driver VM's renderer does under QEMU, and with
-//! `VGL_GALLIUM_DEVICE=iris` on this machine's Intel GPU (iris, through its
+//! `GL_GALLIUM_DEVICE=iris` on this machine's Intel GPU (iris, through its
 //! render node), as the renderer does on a PC's; on softpipe otherwise.
 
 use std::boxed::Box;
@@ -65,7 +65,7 @@ unsafe impl Send for Lib {}
 unsafe impl Sync for Lib {}
 
 fn dll_path() -> String {
-    std::env::var("VGL_GALLIUM_DLL").unwrap_or_else(|_| {
+    std::env::var("GL_GALLIUM_DLL").unwrap_or_else(|_| {
         String::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../target/linux/build/mesa-host/src/gallium/targets/veda/vgallium.so"
@@ -103,7 +103,7 @@ fn lib() -> Option<&'static Lib> {
             if m.is_null() {
                 return None;
             }
-            let make = match std::env::var("VGL_GALLIUM_DEVICE").as_deref() {
+            let make = match std::env::var("GL_GALLIUM_DEVICE").as_deref() {
                 Ok("virgl") => Make::Plain(sym(m, "vr_device_create_vtest")),
                 Ok("iris") => Make::Drm(sym(m, "vr_device_create_drm"), intel_render_node()?),
                 _ => Make::Plain(sym(m, "vr_device_create_softpipe")),

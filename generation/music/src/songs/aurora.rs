@@ -6,7 +6,7 @@
 //! Intro (6) · A (8) · B (8) · A' (8): slow pads, glassy bells, harp
 //! arpeggios, a soft pulse and wind.
 
-use vaudio::synth::{Adsr, Analog, Bed, Part, Song, Wave};
+use audio::synth::{Adsr, Analog, Bed, Part, Song, Wave};
 
 use super::Track;
 use crate::dsl::{self, BAR, Humanize, key};
@@ -40,8 +40,8 @@ fn wind(secs: f32) -> Vec<f32> {
         (s as f32 / u32::MAX as f32) * 2.0 - 1.0
     };
     let mut f = [
-        vaudio::synth::filter::Svf::new(vaudio::synth::Mode::BandPass),
-        vaudio::synth::filter::Svf::new(vaudio::synth::Mode::BandPass),
+        audio::synth::filter::Svf::new(audio::synth::Mode::BandPass),
+        audio::synth::filter::Svf::new(audio::synth::Mode::BandPass),
     ];
     for i in 0..n {
         let t = i as f32 / SR;
@@ -84,7 +84,7 @@ pub fn track() -> Track {
     // Drone on D.
     let mut drone_inst = Analog::new(Wave::Sine, Adsr::new(4.0, 2.0, 1.0, 5.0));
     drone_inst.oscs =
-        vec![vaudio::synth::OscSpec::new(Wave::Sine, 0.8, 0.0), vaudio::synth::OscSpec::new(Wave::Triangle, 0.25, 7.0)];
+        vec![audio::synth::OscSpec::new(Wave::Sine, 0.8, 0.0), audio::synth::OscSpec::new(Wave::Triangle, 0.25, 7.0)];
     drone_inst.gain = 0.42;
     let mut drone = Part::new("drone", Box::new(drone_inst));
     drone.note(0.0, 14.0 * BAR, 38.0, 0.8);
@@ -144,7 +144,7 @@ pub fn track() -> Track {
     dsl::drums(&mut pulse, key::KICK, "x.......o.......", 14.0, 8, 0.0, &mut h);
     dsl::drums(&mut pulse, key::SHAKER, "....o.......o...", 16.0, 6, 0.0, &mut h);
     pulse.reverb = 0.35;
-    pulse.eq = vec![(vaudio::synth::BiquadKind::LowPass, 2500.0, 0.7)];
+    pulse.eq = vec![(audio::synth::BiquadKind::LowPass, 2500.0, 0.7)];
     pulse.gain = 0.55;
 
     song.parts = vec![air, drone, pad, shimmer, bells, harp, pulse];

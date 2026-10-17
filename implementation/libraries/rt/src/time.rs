@@ -5,7 +5,7 @@
 
 pub use core::time::Duration;
 
-use vabi::{clock, nr};
+use abi::{clock, nr};
 
 use crate::sys::{call, clock_get};
 
@@ -15,8 +15,8 @@ pub fn now_ns() -> u64 {
 }
 
 /// How the clocks follow the processor's clock counter.
-pub fn clock_info() -> Result<vabi::ClockInfo, vabi::Error> {
-    let mut info = vabi::ClockInfo::default();
+pub fn clock_info() -> Result<abi::ClockInfo, abi::Error> {
+    let mut info = abi::ClockInfo::default();
     call(nr::CLOCK_INFO, [&mut info as *mut _ as usize, 0, 0, 0, 0, 0])?;
     Ok(info)
 }

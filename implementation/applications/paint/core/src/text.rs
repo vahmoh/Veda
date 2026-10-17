@@ -8,7 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vgfx::{Bitmap, Canvas, Color, Rect, Text};
+use gfx::{Bitmap, Canvas, Color, Rect, Text};
 
 /// A box of text on the picture.
 #[derive(Debug, Clone, PartialEq)]

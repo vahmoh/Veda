@@ -3,8 +3,8 @@
 
 //! Visual check: renders a few shapes and strokes to a PNG for manual inspection.
 //!
-//! Run with `cargo test -p vraster -- --ignored --nocapture`; the image is written to
-//! `target/agents/vfont/samples/vraster_shapes.png` (relative to the workspace root).
+//! Run with `cargo test -p raster -- --ignored --nocapture`; the image is written to
+//! `target/agents/font/samples/raster_shapes.png` (relative to the workspace root).
 
 use alloc::vec::Vec;
 use std::string::String;
@@ -70,7 +70,7 @@ impl Canvas {
     }
 
     pub fn save(&self, name: &str) {
-        let dir = String::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../target/agents/vfont/samples"));
+        let dir = String::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../target/agents/font/samples"));
         std::fs::create_dir_all(&dir).unwrap();
         let path = std::format!("{dir}/{name}");
         std::fs::write(&path, encode_png(self.width, self.height, &self.rgb)).unwrap();
@@ -171,6 +171,6 @@ fn render_shapes_png() {
     edge.circle(640.0, 0.0, 30.0);
     draw(&mut cv, &mut r, &edge, &id, FillRule::NonZero, [100, 100, 100]);
 
-    cv.save("vraster_shapes.png");
-    cv.zoomed(20, 20, 160, 100, 4).save("vraster_shapes_zoom.png");
+    cv.save("raster_shapes.png");
+    cv.zoomed(20, 20, 160, 100, 4).save("raster_shapes_zoom.png");
 }

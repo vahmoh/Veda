@@ -11,16 +11,16 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vabi::{Error, Rights};
-use vipc::{Bytes, Encoder, FLAG_REQUEST, IpcError, Refusal};
-use vproto::launcher;
-use vrt::object::{Channel, Event, Handle};
-use vrt::println;
+use abi::{Error, Rights};
+use ipc::{Bytes, Encoder, FLAG_REQUEST, IpcError, Refusal};
+use proto::launcher;
+use rt::object::{Channel, Event, Handle};
+use rt::println;
 
 use crate::{TestResult, check};
 
 /// Whether `raw` names nothing in this process's handle table any more.
-fn closed(raw: vabi::RawHandle) -> bool {
+fn closed(raw: abi::RawHandle) -> bool {
     // SAFETY: the value is only asked about, then forgotten again: nothing
     // is closed twice.
     let h = unsafe { Handle::from_raw(raw) };
@@ -68,7 +68,7 @@ pub fn test_shared_channels() -> TestResult {
     check(a.0.duplicate(None).err() == Some(Error::AccessDenied), "a channel's end has one handle")?;
     let mut out = [0u32; 2];
     check(
-        vrt::sys::call(vabi::nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, 1 << 7, 0, 0, 0, 0])
+        rt::sys::call(abi::nr::CHANNEL_CREATE, [out.as_mut_ptr() as usize, 1 << 7, 0, 0, 0, 0])
             == Err(Error::InvalidArgs),
         "unknown flags are refused",
     )?;
@@ -86,13 +86,13 @@ pub fn test_shared_channels() -> TestResult {
     let moved = d.read().map_err(err)?.handles.pop().map(Channel::from_handle).ok_or("no handle came")?;
     check(moved.0.duplicate(None).is_ok(), "a shared end that travelled may be duplicated")?;
     drop(inbox);
-    check(writer.wait(vabi::signals::PEER_CLOSED, 0).is_err(), "an end some handle still holds is open")?;
+    check(writer.wait(abi::signals::PEER_CLOSED, 0).is_err(), "an end some handle still holds is open")?;
     drop(moved);
-    check(writer.wait(vabi::signals::PEER_CLOSED, 0).is_ok(), "closing the last handle closes it")?;
+    check(writer.wait(abi::signals::PEER_CLOSED, 0).is_ok(), "closing the last handle closes it")?;
     Ok(())
 }
 
-vipc::protocol! {
+ipc::protocol! {
     /// A server whose answers can be too large to send.
     mod big = "systest/big" {
         1 => fn get(len: u32) -> Bytes;
@@ -112,9 +112,9 @@ impl big::Server for Big {
 /// rather than leaving it waiting for ever.
 pub fn test_ipc_refusals() -> TestResult {
     let (client, server) = Channel::create().map_err(|e| e.to_string())?;
-    let serving = vrt::thread::spawn(move || {
+    let serving = rt::thread::spawn(move || {
         for _ in 0..3 {
-            let Ok(msg) = server.read_blocking(vrt::time::deadline_after(vrt::time::Duration::from_secs(10))) else {
+            let Ok(msg) = server.read_blocking(rt::time::deadline_after(rt::time::Duration::from_secs(10))) else {
                 return;
             };
             if let Ok(reply) = big::dispatch(&mut Big, msg) {
@@ -125,10 +125,10 @@ pub fn test_ipc_refusals() -> TestResult {
     let c = big::Client::new(client);
     c.set_timeout(10_000_000_000);
     check(c.get(1000).is_ok_and(|b| b.0.len() == 1000), "an answer that fits arrives")?;
-    let too_large = c.get(vabi::CHANNEL_MAX_BYTES as u32 + 1);
+    let too_large = c.get(abi::CHANNEL_MAX_BYTES as u32 + 1);
     check(too_large.err() == Some(IpcError::Refused(Refusal::TooLarge)), "an answer too large to send is refused")?;
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(10));
-    let unknown = vipc::call_until(c.channel(), Encoder::with_header(99, 77, FLAG_REQUEST), 77, deadline);
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
+    let unknown = ipc::call_until(c.channel(), Encoder::with_header(99, 77, FLAG_REQUEST), 77, deadline);
     check(
         unknown.err() == Some(IpcError::Refused(Refusal::UnknownMethod)),
         "a request for an unknown method is refused",
@@ -157,7 +157,7 @@ const VERDICT: &str = "systest/verdict";
 /// and reports what was refused.
 pub fn test_application_limits() -> TestResult {
     let s = |e: IpcError| e.to_string();
-    let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let l = launcher::Client::new(proto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let koid_of = |name: &str| -> Result<Option<u64>, String> {
         Ok(l.tasks().map_err(s)?.iter().find(|t| t.name == name).map(|t| t.koid))
     };
@@ -165,15 +165,15 @@ pub fn test_application_limits() -> TestResult {
         println!("application limits: no audio service; skipped");
         return Ok(());
     };
-    let listener = vproto::register(VERDICT).map_err(|e| alloc::format!("register {VERDICT}: {e:?}"))?;
+    let listener = proto::register(VERDICT).map_err(|e| alloc::format!("register {VERDICT}: {e:?}"))?;
     let app = l
         .launch("/system/bin/systest".into(), vec!["limits".into(), audio.to_string()])
         .map_err(s)?
         .map_err(|e| alloc::format!("launch: {e:?}"))?;
     println!("application limits: started a copy of systest as an application (process {app})");
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(20));
-    listener.wait(vabi::signals::READABLE, deadline).map_err(|e| alloc::format!("no report: {e}"))?;
-    let report = vproto::accept(&listener).ok_or("the application did not connect")?;
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(20));
+    listener.wait(abi::signals::READABLE, deadline).map_err(|e| alloc::format!("no report: {e}"))?;
+    let report = proto::accept(&listener).ok_or("the application did not connect")?;
     let msg = report.read_blocking(deadline).map_err(|e| alloc::format!("no verdict: {e}"))?;
     let bits = msg.bytes.first_chunk::<4>().map(|b| u32::from_le_bytes(*b)).ok_or("a malformed verdict")?;
     check(bits & verdict::KILL_DENIED != 0, "an application may not end a system service")?;
@@ -187,8 +187,8 @@ pub fn test_application_limits() -> TestResult {
 /// firewall: the network service refuses them to a system service, as to
 /// any other program.
 pub fn test_network_configuration() -> TestResult {
-    use vproto::net::{FirewallConfig, IpConfig, NetError, Scope, net};
-    let c = net::Client::new(vproto::connect(net::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    use proto::net::{FirewallConfig, IpConfig, NetError, Scope, net};
+    let c = net::Client::new(proto::connect(net::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let refused = |r: Result<Result<(), NetError>, IpcError>| r == Ok(Err(NetError::PermissionDenied));
     check(
         matches!(c.firewall(), Ok(Err(NetError::PermissionDenied))),
@@ -224,28 +224,28 @@ pub fn test_network_configuration() -> TestResult {
 pub fn limits(target: Option<&String>) -> i32 {
     let mut bits = 0;
     let target: u64 = target.and_then(|t| t.parse().ok()).unwrap_or(0);
-    if let Ok(ch) = vproto::connect(launcher::NAME) {
+    if let Ok(ch) = proto::connect(launcher::NAME) {
         let l = launcher::Client::new(ch);
-        if l.kill(target) == Ok(Err(vproto::init::LaunchError::Denied)) {
+        if l.kill(target) == Ok(Err(proto::init::LaunchError::Denied)) {
             bits |= verdict::KILL_DENIED;
         }
-        if matches!(l.watch(), Ok(Err(vproto::init::LaunchError::Denied))) {
+        if matches!(l.watch(), Ok(Err(proto::init::LaunchError::Denied))) {
             bits |= verdict::WATCH_DENIED;
         }
     }
     // The shell's name is a system service's; any name outside systest's own
     // is refused, registered yet or not.
-    if vproto::register("shell").is_err() && vproto::register("not-systest").is_err() {
+    if proto::register("shell").is_err() && proto::register("not-systest").is_err() {
         bits |= verdict::FOREIGN_NAME_DENIED;
     }
     println!("application limits: the rules that held: {bits:#x} of {:#x}", verdict::ALL);
-    let Ok(report) = vproto::connect(VERDICT) else { return 1 };
+    let Ok(report) = proto::connect(VERDICT) else { return 1 };
     let sent: Vec<u8> = bits.to_le_bytes().to_vec();
     if report.write(&sent, Vec::new()).is_err() {
         return 1;
     }
     // Stay until the verdict is read (the channel's other end closes).
-    let _ = report.wait(vabi::signals::PEER_CLOSED, vrt::time::deadline_after(vrt::time::Duration::from_secs(20)));
+    let _ = report.wait(abi::signals::PEER_CLOSED, rt::time::deadline_after(rt::time::Duration::from_secs(20)));
     i32::from(bits != verdict::ALL)
 }
 
@@ -255,9 +255,9 @@ pub fn limits(target: Option<&String>) -> i32 {
 /// a window not its own. On a fresh system no password is set, and the
 /// lock service unlocks the screen the window system starts locked.
 pub fn test_the_lock() -> TestResult {
-    use vproto::display::{DisplayError, display};
-    use vproto::lock::{LockError, lock};
-    let d = display::Client::new(vproto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    use proto::display::{DisplayError, display};
+    use proto::lock::{LockError, lock};
+    let d = display::Client::new(proto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     check(matches!(d.lock(), Ok(Err(DisplayError::Denied))), "a program may not lock the screen")?;
     check(matches!(d.unlock(), Ok(Err(DisplayError::Denied))), "a program may not unlock the screen")?;
     let (_ours, theirs) = Channel::create().map_err(|e| e.to_string())?;
@@ -270,13 +270,13 @@ pub fn test_the_lock() -> TestResult {
     check(matches!(awake, Ok(Err(DisplayError::NoSuchWindow))), "a program keeps the screen awake from its windows")?;
     let active = d.user_active();
     check(matches!(active, Ok(Err(DisplayError::Denied))), "a program may not say that the user is there")?;
-    let l = lock::Client::new(vproto::connect(lock::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let l = lock::Client::new(proto::connect(lock::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let set = l.set_password(String::new(), "veda1234".into());
     check(matches!(set, Ok(Err(LockError::Denied))), "a program may not set the lock screen's password")?;
     check(matches!(l.idle_timeout(), Ok(Err(LockError::Denied))), "a program may not read when the screen locks")?;
     let idle = l.set_idle_timeout(0);
     check(matches!(idle, Ok(Err(LockError::Denied))), "a program may not choose when the screen locks")?;
-    let start = vrt::time::Instant::now();
+    let start = rt::time::Instant::now();
     loop {
         let s = l.status().map_err(|e| e.to_string())?;
         check(!s.password, "no password is set on a fresh system")?;
@@ -286,6 +286,6 @@ pub fn test_the_lock() -> TestResult {
         if start.elapsed().as_millis() > 20_000 {
             return Err("the lock service did not unlock the screen".into());
         }
-        vrt::time::sleep(vrt::time::Duration::from_millis(100));
+        rt::time::sleep(rt::time::Duration::from_millis(100));
     }
 }

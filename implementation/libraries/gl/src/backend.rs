@@ -676,7 +676,7 @@ pub trait Backend {
     fn generate_mipmap(&mut self, id: ResourceId, base: u32, last: u32);
 
     /// Compiles a linked program for this renderer.
-    fn create_program(&mut self, program: Arc<vglsl::program::Program>) -> ProgramId;
+    fn create_program(&mut self, program: Arc<glsl::program::Program>) -> ProgramId;
     fn destroy_program(&mut self, id: ProgramId);
 
     fn draw(&mut self, state: &DrawState<'_>, info: &DrawInfo);

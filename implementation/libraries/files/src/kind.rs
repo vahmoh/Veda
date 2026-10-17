@@ -9,7 +9,7 @@
 //! Terminal's `open`, the desktop's icons and the pickers of Photos, Music
 //! and Settings all ask it, so "which app opens a `.qoa` file" has one
 //! answer. Only formats an application can really open are associated with
-//! it: Photos opens what `vimage` decodes, Music plays what `vaudio`
+//! it: Photos opens what `image` decodes, Music plays what `audio`
 //! decodes, Videos plays what its decoder (FFmpeg and dav1d) decodes, and
 //! the Text Editor takes text and source files.
 

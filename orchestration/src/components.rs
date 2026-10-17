@@ -12,7 +12,7 @@
 //! * User-space programs are `no_std` position-independent ELF64
 //!   executables built for its user target (`arch::USER_TARGET`), linked by
 //!   LLVM's linker, which Rust ships (`rust-lld`; Cargo's configuration
-//!   names it). Each program's `build.rs` (via the `vbuild` helper crate)
+//!   names it). Each program's `build.rs` (via the `build` helper crate)
 //!   supplies the Veda-specific linker options.
 //! * Programs on Rust's standard library are built for Veda's own target
 //!   (`arch::STD_TARGET`) by the toolchain's Rust, and linked by its C
@@ -42,12 +42,12 @@ pub struct Program {
     /// Binary (executable) name produced by the package.
     pub binary: &'static str,
     /// Built on Rust's standard library, for Veda's own target; otherwise
-    /// `no_std`, on `vrt`, for the user target.
+    /// `no_std`, on `rt`, for the user target.
     pub std: bool,
 }
 
 impl Program {
-    /// A program on `vrt` alone (`no_std`).
+    /// A program on `rt` alone (`no_std`).
     const fn native(package: &'static str) -> Program {
         Program { package, binary: package, std: false }
     }
@@ -55,6 +55,12 @@ impl Program {
     /// A program on Rust's standard library.
     const fn std(package: &'static str) -> Program {
         Program { package, binary: package, std: true }
+    }
+
+    /// The program as the binary `binary`, of a package named otherwise
+    /// (as when a library has the program's name).
+    const fn named(self, binary: &'static str) -> Program {
+        Program { binary, ..self }
     }
 }
 
@@ -73,18 +79,18 @@ pub const PROGRAMS: &[Program] = &[
     Program::native("drivervm"),
     Program::native("nvme"),
     Program::native("netd"),
-    Program::native("wlan"),
+    Program::native("wland").named("wlan"),
     Program::native("compositor"),
     Program::std("about"),
     Program::std("interceptor"),
-    Program::native("audio"),
-    Program::std("agent"),
+    Program::native("audiod").named("audio"),
+    Program::std("agentd").named("agent"),
     Program::std("music"),
     Program::std("videos"),
     Program::std("photos"),
     Program::std("terminal"),
     Program::std("taskmgr"),
-    Program::std("files"),
+    Program::std("filemgr").named("files"),
     Program::std("settings"),
     Program::std("editor"),
     Program::std("calculator"),
@@ -137,7 +143,7 @@ fn build(package: &str, target: &str, profile: Profile, file: &str) -> Result<Pa
 
 /// Builds every program except those named in `skip`.
 fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, PathBuf)>> {
-    let programs: Vec<Program> = PROGRAMS.iter().copied().filter(|p| !skip.iter().any(|s| s == p.package)).collect();
+    let programs: Vec<Program> = PROGRAMS.iter().copied().filter(|p| !skip.iter().any(|s| s == p.binary)).collect();
     let (on_std, native): (Vec<Program>, Vec<Program>) = programs.into_iter().partition(|p| p.std);
     let mut built = Vec::new();
     if !native.is_empty() {
@@ -176,8 +182,8 @@ fn build_std_programs(programs: &[Program], profile: Profile) -> Result<Vec<(Pro
 
 /// Builds the loader, the kernel and the user-space programs (all but `skip`).
 pub fn build_all(profile: Profile, skip: &[String]) -> Result<Artifacts> {
-    let bootloader = build("vboot", UEFI_TARGET, profile, "vboot.efi")?;
-    let kernel = build("vkernel", KERNEL_TARGET, profile, "vkernel")?;
+    let bootloader = build("bootloader", UEFI_TARGET, profile, "bootloader.efi")?;
+    let kernel = build("kernel", KERNEL_TARGET, profile, "kernel")?;
     let programs = build_programs(profile, skip)?;
     Ok(Artifacts { bootloader, kernel, programs })
 }

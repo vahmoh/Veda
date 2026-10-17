@@ -49,8 +49,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vipc::{Bytes, enumeration, message, protocol, union};
-use vrt::object::Channel;
+use ipc::{Bytes, enumeration, message, protocol, union};
+use rt::object::Channel;
 
 use crate::netring::LinkEndpoints;
 
@@ -665,7 +665,7 @@ pub fn signal_bars(dbm: i8) -> u8 {
 mod tests {
     use super::*;
     use alloc::vec;
-    use vipc::{Decode, Decoder, Encode, Encoder};
+    use ipc::{Decode, Decoder, Encode, Encoder};
 
     #[test]
     fn ssids_display_safely() {

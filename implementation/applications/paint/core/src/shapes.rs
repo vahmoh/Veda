@@ -9,8 +9,8 @@
 
 use alloc::vec::Vec;
 
-use vgfx::{Bitmap, Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle};
-use vraster::Point;
+use gfx::{Bitmap, Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle};
+use raster::Point;
 
 /// The kinds of shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

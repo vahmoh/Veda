@@ -14,12 +14,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
+use abi::map_flags;
 use drivervm_core::functions::{Windows, messages};
-use vabi::map_flags;
-use vhv::pci::{Bar, HostBridge};
-use vproto::pci::{DeviceInfo, cap, find_capability, pcidev};
-use vrt::object::Guest;
-use vrt::println;
+use hv::pci::{Bar, HostBridge};
+use proto::pci::{DeviceInfo, cap, find_capability, pcidev};
+use rt::object::Guest;
+use rt::println;
 
 const PAGE: u64 = 4096;
 
@@ -90,7 +90,7 @@ pub fn give(
     let mut placing = windows.clone();
     let bars = map_bars(guest, pci, info, &mut placing, &mut mapped)?;
     // No errors to the host, before its DMA is the guest's.
-    let pci_express = find_capability(pci, vhv::pci::CAP_PCI_EXPRESS);
+    let pci_express = find_capability(pci, hv::pci::CAP_PCI_EXPRESS);
     let quieted = quiet_errors(pci, pci_express);
     // Its DMA reaches the guest's memory from now on: once all the rest is
     // the guest's, before the guest runs (it never does DMA the guest
@@ -155,19 +155,19 @@ impl Quieted {
 }
 
 /// Turns off the errors the function reports to the host (its SERR# and
-/// PCI Express error reporting; see `vhv::pci`), before the guest runs:
+/// PCI Express error reporting; see `hv::pci`), before the guest runs:
 /// what the registers held.
 fn quiet_errors(pci: &pcidev::Client, pci_express: Option<u16>) -> Quieted {
     let read = |at| pci.config_read(at, 2).ok().and_then(|r| r.ok());
     let mut was = [None, None];
     if let Some(command) = read(0x04) {
-        let _ = pci.config_write(0x04, 2, command & !(vhv::pci::COMMAND_SERR as u32));
+        let _ = pci.config_write(0x04, 2, command & !(hv::pci::COMMAND_SERR as u32));
         was[0] = Some((0x04, command));
     }
-    if let Some(at) = pci_express.map(|p| p + vhv::pci::DEVCTL)
+    if let Some(at) = pci_express.map(|p| p + hv::pci::DEVCTL)
         && let Some(control) = read(at)
     {
-        let _ = pci.config_write(at, 2, control & !(vhv::pci::DEVCTL_ERROR_REPORTING as u32));
+        let _ = pci.config_write(at, 2, control & !(hv::pci::DEVCTL_ERROR_REPORTING as u32));
         was[1] = Some((at, control));
     }
     Quieted(was)
@@ -196,7 +196,7 @@ pub fn intel_gpu(pci: &pcidev::Client, name: &str) -> (Option<Vec<u8>>, Option<H
     let copy = match pci.opregion() {
         Ok(Ok(o)) => {
             let vbt = (!o.vbt.is_empty()).then_some(&o.vbt[..]);
-            let copy = vhv::igd::for_guest(&o.opregion, vbt, crate::arch::OPREGION_AT);
+            let copy = hv::igd::for_guest(&o.opregion, vbt, crate::arch::OPREGION_AT);
             let vbt = match vbt {
                 Some(v) => format!("a VBT of {} bytes after it", v.len()),
                 None => String::from("its VBT in it"),

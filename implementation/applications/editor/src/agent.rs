@@ -11,10 +11,10 @@
 //! itself: replacing the user's work (a file the agent opened, wrote over
 //! and saves) is `save_as`, which asks the user.
 
-use vfiles::path::file_name;
-use vtext::highlight::Language;
-use vtext::{Document, Pos, Selection};
-use vui::agent::{
+use files::path::file_name;
+use text::highlight::Language;
+use text::{Document, Pos, Selection};
+use ui::agent::{
     self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, arg_path, arg_str, clip,
     json, show_path,
 };
@@ -216,7 +216,7 @@ impl Editor {
         // What the file holds now is the agent's to replace again.
         tab.agent_file = true;
         let msg = format!("Saved {}", tab.title);
-        self.show_toast(msg, vrt::time::now_ns());
+        self.show_toast(msg, rt::time::now_ns());
         Ok(())
     }
 
@@ -413,7 +413,7 @@ impl Editor {
             }
             "save_as" => {
                 let path = arg_path(args, "path")?;
-                if vfiles::path::is_read_only(&path) {
+                if files::path::is_read_only(&path) {
                     return Err(format!("{} is in the read-only system folder", show_path(&path)));
                 }
                 let replaced = self.tabs[i].path.as_deref() != Some(path.as_str()) && self.file_exists(&path);

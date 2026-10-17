@@ -20,10 +20,10 @@ impl Ctx {
             v["volume"] = json!((s.master_volume * 100.0 + 0.5) as u32);
             v["muted"] = json!(s.muted);
         }
-        if let Ok(s) = vnet::status() {
+        if let Ok(s) = net::status() {
             v["internet"] = json!(format!("{:?}", s.connectivity).to_lowercase());
         }
-        if let Ok(w) = vnet::wifi::status() {
+        if let Ok(w) = net::wifi::status() {
             v["wifi"] = json!({ "state": format!("{:?}", w.state).to_lowercase(), "network": w.name.as_str() });
         }
         v

@@ -19,10 +19,10 @@
 use lock_core::idle;
 use lock_core::password::{MAX_RECORD, Record, RecordError};
 use lock_core::throttle::Throttle;
-use vproto::fs::FsError;
-use vproto::vfs;
-use vrt::object::Vmo;
-use vrt::println;
+use proto::fs::FsError;
+use proto::vfs;
+use rt::object::Vmo;
+use rt::println;
 
 /// The lock service's private directory.
 const DIR: &str = "/home/.private/lock";
@@ -60,7 +60,7 @@ pub struct WriteError;
 impl Store {
     /// Connects to the file system (waiting for it, as it starts first).
     pub fn open() -> Store {
-        let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+        let vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         if let Some(v) = &vfs {
             v.set_timeout(VFS_TIMEOUT_NS);
             let _ = v.mkdir(DIR.into());

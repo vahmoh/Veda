@@ -7,7 +7,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use vabi::{ProcessInfo, process_state};
+use abi::{ProcessInfo, process_state};
 
 use super::handle::HandleTable;
 use super::{Name, Signals};
@@ -38,7 +38,7 @@ pub struct Process {
     pending_code: SpinLock<Option<i64>>,
     pub signals: Signals,
     exited_threads_cpu_ns: AtomicU64,
-    /// What it gave up ([`vabi::restrict`]), for good.
+    /// What it gave up ([`abi::restrict`]), for good.
     restrictions: AtomicUsize,
 }
 
@@ -55,15 +55,15 @@ pub const MAX_PROCESSES: usize = 4096;
 pub const MAX_CHILDREN: usize = 1024;
 
 /// Whether `parent` may start one more process (`LimitReached` if not).
-pub fn may_create(parent: u64) -> Result<(), vabi::Error> {
+pub fn may_create(parent: u64) -> Result<(), abi::Error> {
     let all = all();
     let live = all.iter().filter(|p| !p.is_terminated());
     let (total, children) = live.fold((0, 0), |(t, c), p| (t + 1, c + usize::from(p.parent_koid == parent)));
-    if total >= MAX_PROCESSES || children >= MAX_CHILDREN { Err(vabi::Error::LimitReached) } else { Ok(()) }
+    if total >= MAX_PROCESSES || children >= MAX_CHILDREN { Err(abi::Error::LimitReached) } else { Ok(()) }
 }
 
 impl Process {
-    /// Takes `flags` ([`vabi::restrict`]) from the process, for good.
+    /// Takes `flags` ([`abi::restrict`]) from the process, for good.
     pub fn restrict(&self, flags: usize) {
         self.restrictions.fetch_or(flags, Ordering::AcqRel);
     }
@@ -108,13 +108,13 @@ impl Process {
 
     /// Registers a new thread: `BadState` once the process has terminated,
     /// `LimitReached` if it has [`MAX_THREADS`] already.
-    pub fn add_thread(&self, t: Arc<Thread>) -> Result<(), vabi::Error> {
+    pub fn add_thread(&self, t: Arc<Thread>) -> Result<(), abi::Error> {
         if self.is_terminated() {
-            return Err(vabi::Error::BadState);
+            return Err(abi::Error::BadState);
         }
         let mut threads = self.threads.lock();
         if threads.len() >= MAX_THREADS {
-            return Err(vabi::Error::LimitReached);
+            return Err(abi::Error::LimitReached);
         }
         threads.push(t);
         Ok(())
@@ -187,12 +187,12 @@ impl Process {
         drop(unstarted);
         let aspace = self.aspace.lock().take();
         drop(aspace);
-        let level = if code == vabi::EXIT_CODE_CRASHED { crate::log::Level::Warn } else { crate::log::Level::Debug };
+        let level = if code == abi::EXIT_CODE_CRASHED { crate::log::Level::Warn } else { crate::log::Level::Debug };
         crate::log::write(
             level,
             format_args!("process {} ({}) exited with code {}", self.name.as_str(), self.koid, code),
         );
-        self.signals.update(0, vabi::signals::TERMINATED);
+        self.signals.update(0, abi::signals::TERMINATED);
     }
 
     pub fn exit_code(&self) -> Option<i64> {
@@ -207,8 +207,8 @@ impl Process {
         let running_cpu: u64 = threads.iter().map(|t| t.cpu_time_ns.load(Ordering::Relaxed)).sum();
         let state = match self.state() {
             ProcessState::Created | ProcessState::Running => process_state::RUNNING,
-            ProcessState::Terminated { code } if code == vabi::EXIT_CODE_CRASHED => process_state::CRASHED,
-            ProcessState::Terminated { code } if code == vabi::EXIT_CODE_KILLED => process_state::KILLED,
+            ProcessState::Terminated { code } if code == abi::EXIT_CODE_CRASHED => process_state::CRASHED,
+            ProcessState::Terminated { code } if code == abi::EXIT_CODE_KILLED => process_state::KILLED,
             ProcessState::Terminated { .. } => process_state::EXITED,
         };
         ProcessInfo {

@@ -430,7 +430,7 @@ vr_format_from_virgl(uint32_t format)
 
 /* virgl's format as `dev` keeps it. OpenGL hosts take 24-bit depth with
  * stencil (or nothing) in the low byte of each texel, as
- * GL_UNSIGNED_INT_24_8 packs it, and clients ask for that (vgl's
+ * GL_UNSIGNED_INT_24_8 packs it, and clients ask for that (`gl`'s
  * GL_DEPTH24_STENCIL8 is S8_UINT_Z24_UNORM). A driver with depth only in
  * the lower 24 bits (iris) keeps those formats that way round: depth reads,
  * tests and clears the same, and transfers rotate each texel

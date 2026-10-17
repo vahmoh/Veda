@@ -38,16 +38,16 @@ use std::io;
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
+use abi::signals;
 use guest_sys::idle;
 use guest_sys::retry::{self, Ended};
 use guest_sys::sysfs::link_name;
+use proto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenMode, Shown, displaydev as protocol};
+use rt::guest::Watch;
+use rt::object::{Channel, Event, Vmo};
+use rt::vm::Mapping;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::time::{ClockId, clock_gettime};
-use vabi::signals;
-use vproto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenMode, Shown, displaydev as protocol};
-use vrt::guest::Watch;
-use vrt::object::{Channel, Event, Vmo};
-use vrt::vm::Mapping;
 
 use drm::{Card, DumbMap, ModeInfo, Output, Place, Scanout};
 
@@ -201,10 +201,10 @@ fn imported(card: &Card, width: u32, height: u32, stride: u32, bytes: usize) -> 
     let mut pictures = Vec::new();
     let mut framebuffers = Vec::new();
     for _ in 0..displaydev::MIN_PICTURES {
-        let fb = Vmo::create_with(bytes, vabi::vmo_flags::WRITE_COMBINING)
+        let fb = Vmo::create_with(bytes, abi::vmo_flags::WRITE_COMBINING)
             .map_err(|e| format!("no write-combining memory: {e}"))
             .and_then(|vmo| {
-                let buf: OwnedFd = vrt::guest::dmabuf(vmo.raw(), 0, bytes as u64, true).map_err(|e| format!("{e}"))?;
+                let buf: OwnedFd = rt::guest::dmabuf(vmo.raw(), 0, bytes as u64, true).map_err(|e| format!("{e}"))?;
                 let fb = card.import_framebuffer(&buf, width, height, stride).map_err(|e| format!("{e}"))?;
                 Ok((vmo, fb))
             });
@@ -234,7 +234,7 @@ fn copied(card: &Card, width: u32, height: u32, bytes: usize) -> Result<(Vec<Vmo
         let vmo = Vmo::create(bytes).map_err(|e| format!("no memory for a picture: {e}"))?;
         buffers.push(card.dumb_framebuffer(width, height).map_err(|e| format!("no buffer: {e}"))?);
         let read = Vmo::from_handle(vmo.0.duplicate(None).map_err(|e| format!("{e}"))?);
-        maps.push(Mapping::new(read, bytes, vabi::map_flags::READ).map_err(|e| format!("{e}"))?);
+        maps.push(Mapping::new(read, bytes, abi::map_flags::READ).map_err(|e| format!("{e}"))?);
         pictures.push(vmo);
     }
     Ok((pictures, Shows::Copies { buffers, pictures: maps, next: 0 }))
@@ -349,7 +349,7 @@ fn attach(d: &Display, client: protocol::Client) -> Result<Session, String> {
 fn veda_time(ns: u64) -> u64 {
     // Both clocks follow the processors' counter; their difference, read
     // now.
-    let veda = vrt::time::now_ns();
+    let veda = rt::time::now_ns();
     let now = clock_gettime(ClockId::Monotonic);
     let linux = now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64;
     (ns as i64 + (veda as i64 - linux as i64)).max(0) as u64
@@ -431,7 +431,7 @@ fn serve(d: &mut Display, s: &Session) -> Result<Ended, String> {
 /// says what that is; if it cannot be, the program stays, doing nothing.
 fn set_up() -> Display {
     loop {
-        let client = match vproto::connect(protocol::NAME) {
+        let client = match proto::connect(protocol::NAME) {
             Ok(ch) => protocol::Client::new(ch),
             Err(_) => {
                 std::thread::sleep(Duration::from_secs(1));
@@ -483,7 +483,7 @@ fn main() {
     let display = RefCell::new(set_up());
     let name = format!("kms: {}", display.borrow().name);
     let attached = || {
-        let ch = vproto::connect(protocol::NAME).map_err(|e| format!("cannot reach the compositor: {e:?}"))?;
+        let ch = proto::connect(protocol::NAME).map_err(|e| format!("cannot reach the compositor: {e:?}"))?;
         let session = attach(&display.borrow(), protocol::Client::new(ch))?;
         println!("{name}: attached to the compositor");
         Ok(session)

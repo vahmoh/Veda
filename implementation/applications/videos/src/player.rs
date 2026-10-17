@@ -19,18 +19,18 @@
 use core::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use vfiles::format::duration as time;
-use vgfx::{Align, Bitmap, Color, Filter, Rect};
+use files::format::duration as time;
+use gfx::{Align, Bitmap, Color, Filter, Rect};
+use proto::display::modifiers;
+use proto::input::keys;
+use proto::media::{FramePool, MediaInfo, SeekMode, pool as pool_layout};
+use rt::println;
+use ui::{ButtonKind, Cursor, Font, Icon, Ui, WindowState, media};
 use videos_core::layout;
 use videos_core::pacing::{Pacer, Timing};
 use videos_core::playback::{Ask, Effect, EngineState, Phase, Pictures, Playback, SoundAsk};
 use videos_core::select::{self, Picture};
 use videos_core::text;
-use vproto::display::modifiers;
-use vproto::input::keys;
-use vproto::media::{FramePool, MediaInfo, SeekMode, pool as pool_layout};
-use vrt::println;
-use vui::{ButtonKind, Cursor, Font, Icon, Ui, WindowState, media};
 
 use crate::widgets;
 use crate::{audio, engine, thumbs};
@@ -41,7 +41,7 @@ const CONTROLS_NS: u64 = 2_500_000_000;
 const SPINNER_AFTER_NS: u64 = 150_000_000;
 /// A new size is asked of the decoder once the window kept it this long.
 const RESIZE_SETTLE_NS: u64 = 150_000_000;
-/// Frames are presented this long after the pointer moved, for vui's
+/// Frames are presented this long after the pointer moved, for `ui`'s
 /// widgets to animate.
 const INTERACTIVE_NS: u64 = 700_000_000;
 /// The "Resuming from" notice stays this long.
@@ -138,7 +138,7 @@ impl Player {
         screen: (u32, u32),
         now: u64,
     ) -> Player {
-        let playback = Playback::new(vfiles::path::file_stem(&path), vfiles::path::file_name(&path), now);
+        let playback = Playback::new(files::path::file_stem(&path), files::path::file_name(&path), now);
         Player {
             path,
             id,
@@ -272,7 +272,7 @@ impl Player {
     }
 
     pub fn apply_volume(&self) {
-        let gain = if self.muted { 0.0 } else { vaudio::mix::slider_to_gain(self.volume) };
+        let gain = if self.muted { 0.0 } else { ::audio::mix::slider_to_gain(self.volume) };
         self.send_audio(audio::Command::Volume(gain));
     }
 
@@ -556,14 +556,14 @@ impl Player {
             frame.w as u64 | (frame.h as u64) << 16 | (stage.w as u64) << 32 | (stage.h as u64) << 48,
             full_screen as u64,
         ]);
-        // vui's widgets animate a moment after the pointer moves (hover,
+        // `ui`'s widgets animate a moment after the pointer moves (hover,
         // tooltips): those frames are presented too.
         let interactive = alpha > 0.01 && now - self.last_activity_ns < INTERACTIVE_NS;
         if !(picture_changed || input || interactive || look != self.look) {
             ui.skip_present();
         } else {
             self.look = look;
-            let began = vrt::time::now_ns();
+            let began = rt::time::now_ns();
             let blit = self.draw_picture(ui, stage, frame);
             let phase = self.phase().clone();
             if phase == Phase::Ended {
@@ -594,7 +594,7 @@ impl Player {
             if let Some(t) = &osd {
                 widgets::osd(ui, stage, t);
             }
-            let drawn = vrt::time::now_ns() - began;
+            let drawn = rt::time::now_ns() - began;
             self.pacer.note_draw(drawn);
             self.playback.count_drawn(drawn, blit);
             let generation = self.playback.generation();
@@ -656,7 +656,7 @@ impl Player {
         for bar in bars(stage, r) {
             ui.canvas.fill_rect(bar, black);
         }
-        let began = vrt::time::now_ns();
+        let began = rt::time::now_ns();
         let (w, h) = (p.meta.width.min(pool.width()) as i32, p.meta.height.min(pool.height()) as i32);
         let src = pool.slot_pixels(slot) as *const u32;
         // SAFETY: a slot the window holds: `h` rows of `stride` pixels in the
@@ -668,7 +668,7 @@ impl Player {
                 ui.canvas.draw_raw_scaled(src, pool.stride() as usize, w, h, r, Filter::Bilinear);
             }
         }
-        vrt::time::now_ns() - began
+        rt::time::now_ns() - began
     }
 
     fn draw_controls(&mut self, ui: &mut Ui, stage: Rect, alpha: f32, position: i64, now: u64, full_screen: bool) {

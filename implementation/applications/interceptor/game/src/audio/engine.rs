@@ -16,8 +16,8 @@
 //! from high revs unburnt fuel pops in the hot exhaust. The intake roars
 //! with the load, and a supercharger whines with the revs.
 
-use vaudio::synth::filter::{DcBlock, Mode, OnePole, Svf};
-use vaudio::synth::osc::Osc;
+use audio::synth::filter::{DcBlock, Mode, OnePole, Svf};
+use audio::synth::osc::Osc;
 
 use super::{ENGINES, EngineState, Listener, Panning, Placing, RATE, SineTable, Sounds, Voiced, noise};
 use num_traits::Float;

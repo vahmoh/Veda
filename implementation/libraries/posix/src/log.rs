@@ -14,7 +14,7 @@
 
 use alloc::vec::Vec;
 
-use vrt::sync::Mutex;
+use rt::sync::Mutex;
 
 /// The most the kernel takes in one write, and so the longest line kept
 /// whole; a longer one goes in pieces.
@@ -37,7 +37,7 @@ impl Log {
         let ended = pending.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
         // A line too long to keep whole goes as it is.
         let ended = if pending.len() - ended >= CHUNK { pending.len() } else { ended };
-        write_lines(&pending[..ended], vrt::sys::debug_write);
+        write_lines(&pending[..ended], rt::sys::debug_write);
         pending.drain(..ended);
     }
 
@@ -45,7 +45,7 @@ impl Log {
     pub fn flush(&self) {
         // At the program's end, another thread may hold the lock for ever.
         if let Some(mut pending) = self.pending.try_lock() {
-            write_lines(&pending, vrt::sys::debug_write);
+            write_lines(&pending, rt::sys::debug_write);
             pending.clear();
         }
     }

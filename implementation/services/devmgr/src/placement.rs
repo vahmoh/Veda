@@ -23,13 +23,13 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vrt::println;
+use rt::println;
 
 use crate::acpi::Acpi;
 use crate::pci::{Address, ConfigSpace, pages};
 
 const FOUR_GIB: u64 = 1 << 32;
-const PAGE: u64 = vabi::PAGE_SIZE as u64;
+const PAGE: u64 = abi::PAGE_SIZE as u64;
 
 /// Places the unplaced memory BARs of `functions`, in the windows of their
 /// root bridges as `acpi` describes them.

@@ -13,11 +13,11 @@ use alloc::vec::Vec;
 use compositor_core::switcher::Switcher;
 use compositor_core::window::{BUTTON_WIDTH, CORNER_RADIUS, Part, TITLE_HEIGHT};
 use compositor_core::wm::DecorState;
+use gfx::color::{over, scale};
+use gfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use num_traits::Float;
-use vgfx::color::{over, scale};
-use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
-use vproto::display::{Cursor, WindowKind, WindowState};
-use vrt::vm::Mapping;
+use proto::display::{Cursor, WindowKind, WindowState};
+use rt::vm::Mapping;
 
 use crate::gpu::{Gpu, Slot, Texture, rgba};
 use crate::pixels::{self, Pixels};
@@ -38,7 +38,7 @@ const POPUP_SHADOW: Color = Color::rgba(0, 0, 0, 120);
 
 /// Visual theme of the window system (dark).
 pub mod theme {
-    use vgfx::Color;
+    use gfx::Color;
     pub const DESKTOP_TOP: Color = Color::hex(0x0B1022);
     pub const DESKTOP_BOTTOM: Color = Color::hex(0x161C38);
     pub const TITLE_ACTIVE: Color = Color::hex(0x202026);
@@ -258,7 +258,7 @@ impl Decor {
             let label = self.text.ellipsize(font, 13.0, title, (cell.w - 24) as f32);
             let color = if selected { theme::TITLE_TEXT } else { theme::TITLE_TEXT_INACTIVE };
             let tr = Rect::new(cell.x + 12, bx.bottom() + 10, cell.w - 24, 24);
-            self.text.draw_in(c, font, 13.0, tr, &label, color, vgfx::Align::Center);
+            self.text.draw_in(c, font, 13.0, tr, &label, color, gfx::Align::Center);
         }
     }
 
@@ -269,7 +269,7 @@ impl Decor {
         let text_rect = Rect::new(title.x + 16, title.y, title.w - 16 - buttons * BUTTON_WIDTH - 8, TITLE_HEIGHT);
         let font = self.title_font;
         let text = title_text(w, look.unresponsive);
-        self.text.draw_in(c, font, 13.0, text_rect, &text, text_color, vgfx::Align::Left);
+        self.text.draw_in(c, font, 13.0, text_rect, &text, text_color, gfx::Align::Left);
         let dy = title.y - w.title_rect().y;
         for part in [Part::Minimize, Part::Maximize, Part::Close] {
             if part == Part::Maximize && !w.resizable {
@@ -285,7 +285,7 @@ impl Decor {
                     _ => theme::BUTTON_HOVER,
                 };
                 // Respect the window's rounded top-right corner.
-                let radius = if part == Part::Close && w.state != vproto::display::WindowState::Maximized {
+                let radius = if part == Part::Close && w.state != proto::display::WindowState::Maximized {
                     CORNER_RADIUS
                 } else {
                     0
@@ -304,7 +304,7 @@ impl Decor {
                 c.restore();
             }
             let glyph = if part == Part::Close && hovered { Color::WHITE } else { theme::GLYPH }.fade(opacity);
-            draw_button_glyph(c, part, r, glyph, w.state == vproto::display::WindowState::Maximized);
+            draw_button_glyph(c, part, r, glyph, w.state == proto::display::WindowState::Maximized);
         }
     }
 
@@ -513,7 +513,7 @@ fn render_cursor(path: &Path, w: i32, h: i32) -> Bitmap {
         let mut c = Canvas::for_bitmap(&mut shape);
         c.fill_path(path, Color::BLACK, FillRule::NonZero);
     }
-    let mut out = vgfx::shadow::silhouette_shadow(&shape, 3);
+    let mut out = gfx::shadow::silhouette_shadow(&shape, 3);
     // The shadow bitmap is padded by 6 px; shift it down-right by 1 px.
     let pad = 6;
     let mut final_bm = Bitmap::new(w + pad, h + pad);
@@ -523,10 +523,10 @@ fn render_cursor(path: &Path, w: i32, h: i32) -> Bitmap {
             *p = scale(*p, 120);
         }
         c.draw_bitmap(&out, -pad + 1, -pad + 2, 255);
-        let t = vgfx::Transform::IDENTITY;
+        let t = gfx::Transform::IDENTITY;
         c.stroke_path_transformed(
             path,
-            &StrokeStyle::new(2.0).with_join(vgfx::LineJoin::Round),
+            &StrokeStyle::new(2.0).with_join(gfx::LineJoin::Round),
             &t,
             Color::rgba(20, 20, 26, 255),
         );
@@ -589,7 +589,7 @@ fn build_cursors() -> Vec<(Cursor, Bitmap, i32, i32)> {
     let diag = |anti: bool| -> Path {
         let mut p = double_arrow(true);
         let angle = if anti { -core::f32::consts::FRAC_PI_4 } else { core::f32::consts::FRAC_PI_4 };
-        p.transform(&vgfx::Transform::rotate_about(angle, 11.0, 11.0).then_translate(1.0, 1.0));
+        p.transform(&gfx::Transform::rotate_about(angle, 11.0, 11.0).then_translate(1.0, 1.0));
         p
     };
     v.push((Cursor::ResizeDiagonal, render_cursor(&diag(false), 24, 24), 12, 12));

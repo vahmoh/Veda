@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vui` — the Veda GUI toolkit.
+//! `ui` — the Veda GUI toolkit.
 //!
 //! * [`window`]: client-side windows on top of the display protocol.
 //! * [`app`]: the event loop ([`run`]) driving an [`App`].
@@ -16,8 +16,8 @@
 //!
 //! ```ignore
 //! struct Hello { clicks: u32 }
-//! impl vui::App for Hello {
-//!     fn update(&mut self, ui: &mut vui::Ui) {
+//! impl ui::App for Hello {
+//!     fn update(&mut self, ui: &mut ui::Ui) {
 //!         let r = ui.rect().centered(160, 40);
 //!         if ui.primary_button(r, "Click me") { self.clicks += 1; }
 //!     }
@@ -45,12 +45,12 @@ pub mod window;
 pub use app::{App, Host, run};
 pub use file_dialog::{FileDialog, FileDialogMode, FileDialogResult};
 pub use fonts::{SharedText, load_fonts};
+pub use gfx::{Align, Canvas, Color, Rect};
 pub use icons::{Icon, draw_logo};
 pub use menu::{Menu, MenuItem};
+pub use proto::display::{Cursor, WindowKind, WindowSpec, WindowState};
 pub use text_input::TextInputResponse;
 pub use theme::{Font, Theme};
 pub use ui::{Context, Id, Input, Response, Ui, UiState};
-pub use vgfx::{Align, Canvas, Color, Rect};
-pub use vproto::display::{Cursor, WindowKind, WindowSpec, WindowState};
 pub use widgets::{ButtonKind, ListResponse, RowState};
 pub use window::FrameTiming;

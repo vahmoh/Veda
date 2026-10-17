@@ -6,7 +6,7 @@
 //! A bitmap with one bit per 4 KiB frame (1 = in use) covering all RAM. A
 //! rolling search hint makes single-frame allocation fast in the common case;
 //! contiguous allocations (DMA buffers, large kernel objects) look for the
-//! lowest run, a word of the bitmap at a time (`vframes`).
+//! lowest run, a word of the bitmap at a time (`frames`).
 //!
 //! It also remembers where the RAM is that the kernel owns (free RAM, its
 //! own image, the boot data, the loader's memory it takes back): physical
@@ -127,7 +127,7 @@ impl Bitmap {
 
     fn alloc_run(&mut self, count: u64, align: u64, max_frame: u64) -> Option<u64> {
         let limit = self.frames.min(max_frame);
-        let start = vframes::find_run(self.words, count, align, limit)?;
+        let start = frames::find_run(self.words, count, align, limit)?;
         for f in start..start + count {
             self.set(f, true);
         }

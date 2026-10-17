@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The boot handoff protocol between `vboot` (the UEFI loader) and `vkernel`.
+//! The boot handoff protocol between `bootloader` (the UEFI loader) and `kernel`.
 //!
 //! The loader jumps to the kernel's entry point with paging enabled, on
 //! page tables of its own that map:

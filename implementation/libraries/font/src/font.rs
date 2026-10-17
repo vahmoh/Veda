@@ -11,9 +11,9 @@
 use alloc::string::String;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use raster::{Path, Point, Rect};
 use ttf_parser::cmap::Subtable as CmapSubtable;
 use ttf_parser::{Face, FaceParsingError, GlyphId as RawGlyphId, OutlineBuilder, PlatformId, Tag};
-use vraster::{Path, Point, Rect};
 
 use crate::kern::{KernCache, Kerning};
 use crate::name::{self, name_id};

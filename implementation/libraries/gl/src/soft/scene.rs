@@ -17,8 +17,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64};
 
-use vglsl::interp::Lanes;
-use vglsl::link::Interpolation;
+use glsl::interp::Lanes;
+use glsl::link::Interpolation;
 
 use super::program::SoftProgram;
 use super::target::RenderTarget;
@@ -76,7 +76,7 @@ pub struct DrawRecord {
     /// The occlusion query counting the draw's samples.
     pub query: Option<Arc<AtomicU64>>,
     /// A shader of the draw ran away (it went round its loops more than
-    /// `vglsl::interp::MAX_LOOP_WORK` allows): what is left of it is not
+    /// `glsl::interp::MAX_LOOP_WORK` allows): what is left of it is not
     /// shaded, lest a shader that never ends take hours over a screen.
     pub abandoned: AtomicBool,
 }

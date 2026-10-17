@@ -3,7 +3,7 @@
 
 //! Protocols of the Veda system services.
 //!
-//! Each submodule declares one service protocol with `vipc::protocol!`,
+//! Each submodule declares one service protocol with `ipc::protocol!`,
 //! together with its wire types. Clients connect to a service by name through
 //! the [`registry`], which `init` implements.
 
@@ -34,7 +34,7 @@ pub mod wlan;
 pub use fs::vfs;
 pub use init::{launcher, registry};
 
-use vrt::object::Channel;
+use rt::object::Channel;
 
 /// Connects to a named service through the registry channel the process
 /// received at startup. Returns the client end of a new connection.
@@ -56,14 +56,14 @@ pub enum ServiceError {
     NotFound,
 }
 
-static REGISTRY: vrt::sync::Mutex<Option<registry::Client>> = vrt::sync::Mutex::new(None);
+static REGISTRY: rt::sync::Mutex<Option<registry::Client>> = rt::sync::Mutex::new(None);
 
 /// Runs `f` with this process's registry client. Calls from several threads
 /// are serialised so their replies cannot interleave.
 pub fn with_registry<R>(f: impl FnOnce(&registry::Client) -> R) -> Result<R, ServiceError> {
     let mut slot = REGISTRY.lock();
     if slot.is_none() {
-        let h = vrt::env::take_handle(vabi::startup::role::REGISTRY).ok_or(ServiceError::Unavailable)?;
+        let h = rt::env::take_handle(abi::startup::role::REGISTRY).ok_or(ServiceError::Unavailable)?;
         *slot = Some(registry::Client::new(Channel::from_handle(h)));
     }
     Ok(f(slot.as_ref().unwrap()))
@@ -87,7 +87,7 @@ pub fn accept(listener: &Channel) -> Option<Channel> {
 /// Reads one pending connection and who opened it.
 pub fn accept_with_identity(listener: &Channel) -> Option<(Channel, init::ClientIdentity)> {
     let msg = listener.read().ok()?;
-    match vipc::decode_event::<(Channel, init::ClientIdentity)>(msg) {
+    match ipc::decode_event::<(Channel, init::ClientIdentity)>(msg) {
         Ok((init::LISTENER_CONNECT, (ch, id))) => Some((ch, id)),
         _ => None,
     }

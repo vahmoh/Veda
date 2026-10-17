@@ -15,7 +15,7 @@
 //! A registration is an [`Observer`] on the object's [`Signals`], which
 //! holds the port weakly: a port gone leaves its observers to go when they
 //! fire, when their objects go, or when the objects they watch drop the
-//! dead ones. A port holds at most `vabi::PORT_MAX_REGISTRATIONS`
+//! dead ones. A port holds at most `abi::PORT_MAX_REGISTRATIONS`
 //! registrations, those waiting and those done whose packets are not yet
 //! taken (a registration's place passes to its packet), so that what it
 //! keeps in the kernel is bounded.
@@ -25,8 +25,8 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use vabi::PortPacket;
-use vabi::signals::READABLE;
+use abi::PortPacket;
+use abi::signals::READABLE;
 
 use crate::object::Signals;
 use crate::synchronization::SpinLock;
@@ -54,7 +54,7 @@ impl Port {
     /// Takes a registration's place, if the port has one left.
     pub fn reserve(&self) -> bool {
         self.held
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < vabi::PORT_MAX_REGISTRATIONS).then_some(n + 1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < abi::PORT_MAX_REGISTRATIONS).then_some(n + 1))
             .is_ok()
     }
 

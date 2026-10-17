@@ -9,8 +9,8 @@
 //! copy the cached pixels. While the user zooms or pans, a fast nearest-neighbour draft is
 //! shown and refined once the view has settled.
 
-use vgfx::color::{lerp_px, over};
-use vgfx::{Bitmap, Canvas, Rect};
+use gfx::color::{lerp_px, over};
+use gfx::{Bitmap, Canvas, Rect};
 
 /// Rendering quality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

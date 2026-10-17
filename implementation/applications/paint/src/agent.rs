@@ -15,6 +15,7 @@
 //! unsaved changes (`discard_changes`) destructive. Opening or starting a picture over unsaved
 //! changes is refused: the agent saves them or discards them first.
 
+use gfx::{Color, Rect};
 use paint_core::Document;
 use paint_core::codec::{self, format_of};
 use paint_core::color;
@@ -24,8 +25,7 @@ use paint_core::settings::{FontChoice, Tool};
 use paint_core::shapes::{Kind, Paint, Shape};
 use paint_core::text::TextBox;
 use paint_core::transform::{Anchor, Resample};
-use vgfx::{Color, Rect};
-use vui::agent::{
+use ui::agent::{
     self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_f64, arg_list, arg_opt_int, arg_opt_str, arg_path, arg_str,
     json, show_path,
 };
@@ -307,7 +307,7 @@ fn no_unsaved(app: &PaintApp) -> Result<(), String> {
 }
 
 /// A path to save to, with an extension Paint writes.
-fn save_path(args: &Value) -> Result<(String, vimage::Format), String> {
+fn save_path(args: &Value) -> Result<(String, image::Format), String> {
     let path = arg_path(args, "path")?;
     if path.starts_with("/system") {
         return Err("the system folder cannot be written".into());
@@ -318,7 +318,7 @@ fn save_path(args: &Value) -> Result<(String, vimage::Format), String> {
 }
 
 /// Writes the picture to `path` now (the agent waits for its answer).
-fn write(app: &mut PaintApp, path: &str, format: vimage::Format) -> Result<Value, String> {
+fn write(app: &mut PaintApp, path: &str, format: image::Format) -> Result<Value, String> {
     let (picture, version) = app.doc.snapshot();
     let bytes = codec::encode(&picture, format, 92).map_err(|e| e.to_string())?;
     app.fs.write(path, &bytes).map_err(|e| format!("{} could not be written: {e}", show_path(path)))?;
@@ -429,7 +429,7 @@ pub fn invoke(app: &mut PaintApp, action: &str, args: &Value) -> Result<Value, S
             };
             let width = opt_f32(args, "width")?.map_or(app.doc.width() - x, |w| w as i32).max(8);
             // The interface's fonts, as the text tool uses them: the process's text context.
-            let (shared, roles) = vui::SharedText::process();
+            let (shared, roles) = ui::SharedText::process();
             let index = roles[match font {
                 FontChoice::Sans => 0,
                 FontChoice::SansBold => 1,
@@ -466,7 +466,7 @@ pub fn invoke(app: &mut PaintApp, action: &str, args: &Value) -> Result<Value, S
             if let Some(s) = arg_opt_str(args, "secondary") {
                 app.settings.secondary = color::parse(s).ok_or_else(|| format!("there is no colour called {s}"))?;
             }
-            app.settings_changed(vrt::time::now_ns());
+            app.settings_changed(rt::time::now_ns());
             Ok(json!({ "primary": color_json(app.settings.primary), "secondary": color_json(app.settings.secondary) }))
         }
         "set_tool" => {
@@ -480,7 +480,7 @@ pub fn invoke(app: &mut PaintApp, action: &str, args: &Value) -> Result<Value, S
             if let Some(size) = opt_f32(args, "size")? {
                 app.settings.set_size(size);
             }
-            app.settings_changed(vrt::time::now_ns());
+            app.settings_changed(rt::time::now_ns());
             Ok(json!({ "tool": app.settings.tool.name(), "size": app.settings.size() }))
         }
         "select" => {

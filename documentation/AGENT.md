@@ -20,13 +20,14 @@ speaking at once. It falls asleep after a goodbye, or after a quiet spell
 (40 seconds by default).
 
 The service is `implementation/services/agent`; what it decides without
-I/O is in `vagent` (`implementation/libraries/agent`), tested on the host.
+I/O is in the `agent` library (`implementation/libraries/agent`), tested
+on the host.
 
 * **Waking** opens a conversation with Deepgram's Voice Agent API
   (`wss://agent.deepgram.com/v1/agent/converse`) and sends its `Settings`:
   16 kHz microphone audio in, 24 kHz voice out, Flux recognition (which
   decides when you have finished a turn), the language model, the voice,
-  the functions and the instructions (`vagent::prompt`). They include what
+  the functions and the instructions (`agent::prompt`). They include what
   it remembers about you, what is on the screen, every application's
   actions and how the last conversation ended (for reference: each
   conversation starts afresh). `mip_opt_out`, here and on the name
@@ -35,7 +36,7 @@ I/O is in `vagent` (`implementation/libraries/agent`), tested on the host.
   or the conversation ends.
 * **Doing.** The language model calls functions, which a worker thread
   runs, answering with JSON. One that needs consent answers "waiting for
-  approval", and its outcome comes later as a notice (`vagent::notice`). A
+  approval", and its outcome comes later as a notice (`agent::notice`). A
   call you cancel by speaking again is dropped, unless it had started: it
   then runs to the end, and if it may have changed something, the agent is
   told what it did.
@@ -48,10 +49,10 @@ I/O is in `vagent` (`implementation/libraries/agent`), tested on the host.
 
 With "Answer when someone says its name" on
 (`implementation/services/agent/src/listen.rs`), a voice detector
-(`vaudio::vad`) runs on the computer, and nothing is sent anywhere while
+(`audio::vad`) runs on the computer, and nothing is sent anywhere while
 nobody speaks. Speech streams to Deepgram's Nova-3 recogniser, with the
 agent's name as a key term, until 3 s of quiet, 8 s without a word, or a
-minute. `vagent::wake` wakes the agent when the name starts or ends a
+minute. `agent::wake` wakes the agent when the name starts or ends a
 sentence ("Hey Veda, …", "… Veda?"), not when it is only mentioned; one
 letter off counts ("Vida"), common words aside. What follows the name, to
 the end of the sentence, comes with the call.
@@ -65,11 +66,11 @@ television or music playing all day cannot run up the bill.
 
 ### Echo cancellation and the echo gate
 
-The audio service cancels the echo in the microphone (`vaudio::aec`, with
+The audio service cancels the echo in the microphone (`audio::aec`, with
 the mixed speaker output as the reference), but no canceller removes
 everything, and the recogniser would take what is left of the agent's voice
 for you. So while the agent's voice is audible, and for its echo's length
-after, the echo gate (`vagent::gate`) sends silence instead of the
+after, the echo gate (`agent::gate`) sends silence instead of the
 microphone, unless you are clearly louder than the echo could be; it then
 sends the last 300 ms too, so your first words are not lost. Music on its
 own is not held back.
@@ -86,7 +87,7 @@ jitter, and flushed at once when you start talking (`UserStartedSpeaking`).
 
 ## What it can do
 
-The agent's own functions (`vagent::tools`):
+The agent's own functions (`agent::tools`):
 
 | Function | What it does |
 |----------|--------------|
@@ -145,7 +146,7 @@ needs it is held, and runs only after you click Allow.
   the computer's sentence as JSON, with the marker `[System]` taken out, so
   that it cannot pass for the computer.
 * **Only the user's files.** The file actions check every path they touch
-  first (`vagent::files`), including where an item goes back to from the
+  first (`agent::files`), including where an item goes back to from the
   Trash (whose records any program can write): none may be in a private
   directory, and what they create goes in the home folder or `/tmp`. They
   reach the file system through a connection of their own, apart from the
@@ -166,7 +167,7 @@ needs it is held, and runs only after you click Allow.
   after a while without input, and a conversation held hands-free gives
   none, so the agent tells the window system that you are there
   (`display::user_active`, which only the agent may call;
-  `vagent::presence`): in a conversation you asked for (a click,
+  `agent::presence`): in a conversation you asked for (a click,
   Super+Space, its name), whenever Deepgram hears you start to speak and
   gives your words, and while its voice answers. Nothing it hears while it
   only listens for its name counts, its name included, nor anything in a
@@ -211,17 +212,17 @@ language model only with your OK, and the key not at all.
 
 ## Making an application agent-compatible
 
-Agent support is part of `vui`: an application describes its actions,
-reports what it shows and performs actions (three methods of `vui::App`),
-and `vui::run` registers it with the agent service (again after the
-service restarts) and answers its requests (`vproto::agent`'s `agentapp`
+Agent support is part of `ui`: an application describes its actions,
+reports what it shows and performs actions (three methods of `ui::App`),
+and `ui::run` registers it with the agent service (again after the
+service restarts) and answers its requests (`proto::agent`'s `agentapp`
 protocol) between frames.
 
 ```rust
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, json, show_path};
+use ui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, json, show_path};
 
-impl vui::App for Notes {
-    fn update(&mut self, ui: &mut vui::Ui) { /* ... */ }
+impl ui::App for Notes {
+    fn update(&mut self, ui: &mut ui::Ui) { /* ... */ }
 
     fn agent_info(&self) -> Option<AppAgentInfo> {
         Some(agent::info(
@@ -279,12 +280,12 @@ The built-in applications follow these conventions
   show them with `show_path`.
 
 Programs with their own loop (a game such as Interceptor) keep a
-`vui::agent::Registration`, call `serve` with their `AgentServer` once per
+`ui::agent::Registration`, call `serve` with their `AgentServer` once per
 frame (it never waits), and add `wait_items` to their wait set if they
 sleep between events.
 
 Any program may register, so the agent bounds what one says about itself
-(`vagent::tools::sanitize`):
+(`agent::tools::sanitize`):
 
 | Limit | Value |
 |-------|-------|
@@ -297,7 +298,7 @@ Any program may register, so the agent bounds what one says about itself
 
 | Tests | What they check | Run by |
 |-------|-----------------|--------|
-| Host unit tests | `vagent`, and `vaudio`'s echo canceller and voice detector | `cargo orchestration test` |
+| Host unit tests | The libraries: `agent`, and `audio`'s echo canceller and voice detector | `cargo orchestration test` |
 | `verification/agent/` | The agent in Veda, with a stand-in for Deepgram: offline, free, deterministic | `cargo orchestration test --ui` |
 | `verification/real/agent-*.vts` | The agent with the real Deepgram, which bills them | By hand |
 

@@ -7,9 +7,9 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vacpi::tables::Table;
-use viommu::amd64::dmar;
-use vrt::println;
+use acpi::tables::Table;
+use iommu::amd64::dmar;
+use rt::println;
 
 /// The memory the firmware keeps for devices: each range, with the
 /// requester ids of the functions it is for (on segment 0).

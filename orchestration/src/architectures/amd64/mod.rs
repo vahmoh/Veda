@@ -25,7 +25,7 @@ pub const KERNEL_TARGET: &str = "x86_64-unknown-none";
 /// ELF64 executables for the System V ABI, built for Linux's musl target,
 /// which gives them hard-float SSE code on stable Rust, and linked by LLVM's
 /// linker with nothing of Linux's or musl's (`implementation/libraries/build`).
-pub const USER_TARGET: &str = vbuild::amd64::TARGET;
+pub const USER_TARGET: &str = build::amd64::TARGET;
 
 /// Rust's target of the code C programs link: the POSIX layer and the media
 /// decoder's Rust half.
@@ -51,7 +51,7 @@ pub const C_TARGET: &str = "x86_64-veda";
 pub const GUEST_C_TARGET: &str = "x86_64-linux-musl";
 
 /// The machine of Veda's executables: the kernel's and its programs'.
-pub const MACHINE: velf::Machine = velf::amd64::MACHINE;
+pub const MACHINE: elf::Machine = elf::amd64::MACHINE;
 
 /// Where the loader goes on the boot partition: the boot program UEFI
 /// starts from a disk of its own on x64.

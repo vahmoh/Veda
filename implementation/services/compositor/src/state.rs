@@ -15,14 +15,14 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
+use abi::signals;
 use compositor_core::Wm;
 use compositor_core::outbox::Write;
-use vabi::signals;
-use vgfx::{Bitmap, Rect};
-use vproto::display::{self as dp, Cursor, DisplayError, LockNotice, WindowEvent};
-use vrt::object::Channel;
-use vrt::println;
-use vrt::vm::Mapping;
+use gfx::{Bitmap, Rect};
+use proto::display::{self as dp, Cursor, DisplayError, LockNotice, WindowEvent};
+use rt::object::Channel;
+use rt::println;
+use rt::vm::Mapping;
 
 use crate::decor::Decor;
 use crate::gpu::{Gpu, Pending};
@@ -73,7 +73,7 @@ pub(crate) struct Compositor {
 /// be told (it has gone, or does not read what it is told), and is dropped,
 /// so that it watches again and hears how it is then.
 fn tell_lock(channel: &Channel, locked: bool) -> bool {
-    vipc::send_event(channel, dp::LOCK_NOTICE, LockNotice::Changed { locked }).is_ok()
+    ipc::send_event(channel, dp::LOCK_NOTICE, LockNotice::Changed { locked }).is_ok()
 }
 
 /// Whether the service watching on `channel` has gone (closed it).
@@ -84,9 +84,9 @@ fn gone(channel: &Channel) -> bool {
 /// Writes `ev` on `channel`, a window's event channel.
 fn write(channel: Option<&Channel>, ev: &WindowEvent) -> Write {
     let Some(channel) = channel else { return Write::Gone };
-    match vipc::send_event(channel, dp::EVENT, ev.clone()) {
+    match ipc::send_event(channel, dp::EVENT, ev.clone()) {
         Ok(()) => Write::Sent,
-        Err(vipc::IpcError::Kernel(vabi::Error::ShouldWait)) => Write::Full,
+        Err(ipc::IpcError::Kernel(abi::Error::ShouldWait)) => Write::Full,
         Err(_) => Write::Gone,
     }
 }

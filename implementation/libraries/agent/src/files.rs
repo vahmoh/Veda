@@ -19,7 +19,7 @@
 use alloc::format;
 use alloc::string::String;
 
-use vfiles::path::{self, file_name, is_within, join, parent};
+use files::path::{self, file_name, is_within, join, parent};
 
 /// The user's home folder: `~`, and where relative paths start.
 pub const HOME: &str = path::HOME;

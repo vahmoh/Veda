@@ -9,11 +9,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vabi = { workspace = true }
-vipc = { workspace = true }
-vrt = { workspace = true, default-features = false }
-vproto = { workspace = true }
-vfiles = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+rt = { workspace = true, default-features = false }
+proto = { workspace = true }
+files = { workspace = true }
 
 [lints]
 workspace = true

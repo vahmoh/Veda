@@ -3,10 +3,10 @@
 
 //! What programs of the system's are started with, as the program that
 //! starts each and the program itself agree: the roles of the handles it
-//! gets (`vabi::startup::role::USER` and above), and what its exit code
+//! gets (`abi::startup::role::USER` and above), and what its exit code
 //! says. One definition for both sides.
 
-use vabi::startup::role::USER;
+use abi::startup::role::USER;
 
 /// What `init` hands the device manager (`devmgr`): the hardware it shares
 /// out among drivers.

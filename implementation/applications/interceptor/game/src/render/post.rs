@@ -16,7 +16,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use super::gpu::Program;
 use super::shaders::source;

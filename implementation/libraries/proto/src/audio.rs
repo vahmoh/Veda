@@ -59,9 +59,9 @@
 use alloc::string::String;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use vipc::{enumeration, message, protocol};
-use vrt::object::{Event, Vmo};
-use vrt::vm::Mapping;
+use ipc::{enumeration, message, protocol};
+use rt::object::{Event, Vmo};
+use rt::vm::Mapping;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -454,7 +454,7 @@ impl Ring {
         let vmo = Vmo::create(len).map_err(|_| RingError::NoMemory)?;
         let peer = Vmo::from_handle(vmo.0.duplicate(None).map_err(|_| RingError::NoMemory)?);
         let map =
-            Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
         // SAFETY: fresh mapping of `len` bytes.
         let ring = unsafe { Ring::init_raw(map.as_ptr(), len, capacity, channels, rate, role) };
         Ok((Ring { _map: Some(map), ..ring }, peer))
@@ -467,7 +467,7 @@ impl Ring {
             return Err(RingError::BadHeader);
         }
         let map =
-            Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
         // SAFETY: the mapping is `len` bytes long.
         let ring = unsafe { Ring::attach_raw(map.as_ptr(), len, role)? };
         Ok(Ring { _map: Some(map), ..ring })
@@ -803,10 +803,10 @@ pub fn recorded_at(clock: (u64, u64), pos: u64, rate: u32) -> Option<u64> {
 /// The client side of a playback stream: a mapped ring plus its event.
 ///
 /// ```ignore
-/// let audio = vproto::audio::audio::Client::new(vproto::connect(vproto::audio::audio::NAME)?);
+/// let audio = proto::audio::audio::Client::new(proto::connect(proto::audio::audio::NAME)?);
 /// let stream = OutputStream::open(&audio, StreamSpec::stereo(44_100, 300, "Game"))?;
 /// loop {
-///     stream.wait_writable(1024, vabi::DEADLINE_INFINITE);
+///     stream.wait_writable(1024, abi::DEADLINE_INFINITE);
 ///     let n = stream.write(&pcm[pos..]);
 ///     pos += n * 2;
 /// }
@@ -822,7 +822,7 @@ pub struct OutputStream {
 /// Why a stream could not be opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenError {
-    Ipc(vipc::IpcError),
+    Ipc(ipc::IpcError),
     Audio(AudioError),
     Ring(RingError),
 }
@@ -883,7 +883,7 @@ impl OutputStream {
             if free >= frames.min(self.ring.capacity()) {
                 return free;
             }
-            if self.event.wait(vabi::signals::SIGNALED, deadline).is_err() || vrt::time::now_ns() >= deadline {
+            if self.event.wait(abi::signals::SIGNALED, deadline).is_err() || rt::time::now_ns() >= deadline {
                 return self.free();
             }
         }
@@ -905,18 +905,18 @@ impl OutputStream {
 
     /// Frames played right now (see [`OutputStream::played_at`]).
     pub fn played_now(&self) -> u64 {
-        self.played_at(vrt::time::now_ns())
+        self.played_at(rt::time::now_ns())
     }
 }
 
 /// The client side of a capture stream: a mapped ring plus its event.
 ///
 /// ```ignore
-/// let audio = vproto::audio::audio::Client::new(vproto::connect(vproto::audio::audio::NAME)?);
+/// let audio = proto::audio::audio::Client::new(proto::connect(proto::audio::audio::NAME)?);
 /// let mic = InputStream::open(&audio, InputSpec::mono(16_000, 500, "Agent"))?;
 /// let mut frame = [0i16; 320];
 /// loop {
-///     mic.wait_readable(320, vabi::DEADLINE_INFINITE);
+///     mic.wait_readable(320, abi::DEADLINE_INFINITE);
 ///     let n = mic.read(&mut frame);
 ///     // ... use frame[..n]
 /// }
@@ -987,7 +987,7 @@ impl InputStream {
             if n >= frames.min(self.ring.capacity()) {
                 return n;
             }
-            if self.event.wait(vabi::signals::SIGNALED, deadline).is_err() || vrt::time::now_ns() >= deadline {
+            if self.event.wait(abi::signals::SIGNALED, deadline).is_err() || rt::time::now_ns() >= deadline {
                 return self.available();
             }
         }

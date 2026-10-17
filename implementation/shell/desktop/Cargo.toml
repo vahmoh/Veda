@@ -14,16 +14,16 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
-vimage = { workspace = true }
-vfiles = { workspace = true }
-vui = { workspace = true }
-vnet = { workspace = true }
-vaudio = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+image = { workspace = true }
+files = { workspace = true }
+ui = { workspace = true }
+net = { workspace = true }
+audio = { workspace = true }
 apps-common = { path = "../../applications/common" }
 shell-common = { path = "../common" }
 

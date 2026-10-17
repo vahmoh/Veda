@@ -5,8 +5,8 @@
 //! architectures have) does without: older forms of calls it has (`open`
 //! for `openat`, `pipe` for `pipe2`, ...), and `arch_prctl`.
 
-use vabi::nr as veda;
-use vrt::sys::call;
+use abi::nr as veda;
+use rt::sys::call;
 
 use super::linux::{arch_prctl as prctl, nr};
 use crate::error::{self, SysResult};

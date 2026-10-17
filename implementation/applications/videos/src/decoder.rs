@@ -3,7 +3,7 @@
 
 //! Starting a decoder: its program read once, then a process with nothing
 //! but its control channel (no registry, so no file, service or network but
-//! what it is sent), a client to speak `vproto::media` with it, and its
+//! what it is sent), a client to speak `proto::media` with it, and its
 //! heartbeat.
 //!
 //! A decoder is a process of its own, which the kernel does not end with
@@ -11,13 +11,13 @@
 //! [`end_all`] ends those still running when Videos ends (one that hangs in
 //! FFmpeg would otherwise run on for good).
 
-use vabi::map_flags;
-use vproto::fs::{FsError, vfs};
-use vproto::media::{self, Heartbeat, media::Client};
-use vrt::object::{Channel, Process};
-use vrt::process::Spawn;
-use vrt::sync::Mutex;
-use vrt::vm::Mapping;
+use abi::map_flags;
+use proto::fs::{FsError, vfs};
+use proto::media::{self, Heartbeat, media::Client};
+use rt::object::{Channel, Process};
+use rt::process::Spawn;
+use rt::sync::Mutex;
+use rt::vm::Mapping;
 
 /// The decoder's program, read once (a read-only mapping of the file
 /// system's copy).

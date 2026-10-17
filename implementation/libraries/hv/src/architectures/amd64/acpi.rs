@@ -9,7 +9,7 @@
 
 use alloc::vec::Vec;
 
-use vacpi::asm::{cat, device, eisa, io, irq_no_flags, name, resource_template};
+use acpi::asm::{cat, device, eisa, io, irq_no_flags, name, resource_template};
 
 use crate::acpi::Platform;
 
@@ -48,11 +48,11 @@ pub fn platform(i8042: bool) -> Platform {
 
 #[cfg(test)]
 mod tests {
-    use vacpi::NoMemory;
-    use vacpi::aml::Namespace;
-    use vacpi::device;
-    use vacpi::name::Path;
-    use vacpi::resource::Resource;
+    use acpi::NoMemory;
+    use acpi::aml::Namespace;
+    use acpi::device;
+    use acpi::name::Path;
+    use acpi::resource::Resource;
 
     use super::*;
     use crate::acpi::{Machine, describe};

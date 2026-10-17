@@ -9,7 +9,7 @@
 
 use alloc::vec::Vec;
 
-use vabi::{Error, RawHandle, Rights};
+use abi::{Error, RawHandle, Rights};
 
 use super::KObject;
 

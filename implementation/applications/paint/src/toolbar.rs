@@ -4,12 +4,12 @@
 //! The toolbar (Undo and Redo, the tools, the shapes, the colours and the palette) and, under
 //! it, the options of the tool in hand.
 
+use gfx::{Align, Color, Rect};
 use paint_core::fill::Reach;
 use paint_core::settings::{CUSTOM, FontChoice, Settings, Tool, palette};
 use paint_core::shapes::{Kind, Paint, Shape};
-use vgfx::{Align, Color, Rect};
-use vproto::display::Cursor;
-use vui::{Font, Icon, Ui};
+use proto::display::Cursor;
+use ui::{Font, Icon, Ui};
 
 /// What the toolbar asks of the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

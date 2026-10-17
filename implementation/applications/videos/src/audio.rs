@@ -25,15 +25,15 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vabi::{WaitItem, signals};
+use abi::{WaitItem, signals};
+use proto::audio::ring as stream_ring;
+use proto::media::{PcmRing, Record, pcm};
+use rt::object::Event;
+use rt::println;
+use rt::sync::Mutex;
 use videos_core::clock::{AudioMap, ClockModel};
 use videos_core::output::{Kept, Output};
 use videos_core::playback::{SoundState, is_newer};
-use vproto::audio::ring as stream_ring;
-use vproto::media::{PcmRing, Record, pcm};
-use vrt::object::Event;
-use vrt::println;
-use vrt::sync::Mutex;
 
 /// The output stream's buffer (ms): enough to ride out a busy moment, short
 /// enough that pausing and seeking feel immediate.
@@ -101,9 +101,9 @@ pub fn start(volume: f32) -> Option<Arc<Shared>> {
         state: Mutex::new(SoundState { rate: DEFAULT_RATE, ..SoundState::default() }),
     });
     let ours = shared.clone();
-    vrt::thread::Builder::new()
+    rt::thread::Builder::new()
         .name("audio")
-        .priority(vabi::priority::HIGH)
+        .priority(abi::priority::HIGH)
         .spawn(move || {
             let mut p = Player::new(ours, volume);
             p.run()
@@ -193,7 +193,7 @@ impl Player {
         // The output's losses as last seen.
         let mut losses = 0;
         loop {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             match self.output.keep(now) {
                 Kept::Opened => {
                     let back = self.output.losses() != losses;
@@ -205,7 +205,7 @@ impl Player {
                 Kept::None => {}
             }
             self.handle_commands();
-            self.pump(vrt::time::now_ns());
+            self.pump(rt::time::now_ns());
             self.publish();
             let mut items =
                 vec![WaitItem { handle: self.shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() }];
@@ -214,14 +214,14 @@ impl Player {
                 items.push(WaitItem { handle: a.ready.raw(), signals: signals::SIGNALED, ..Default::default() });
             }
             let mut deadline = if self.playing || self.stopping.is_some() {
-                vrt::time::now_ns() + TICK_NS
+                rt::time::now_ns() + TICK_NS
             } else {
-                vabi::DEADLINE_INFINITE
+                abi::DEADLINE_INFINITE
             };
             if let Some(at) = self.output.retry_at() {
-                deadline = deadline.min(at.max(vrt::time::now_ns() + TICK_NS));
+                deadline = deadline.min(at.max(rt::time::now_ns() + TICK_NS));
             }
-            let _ = vrt::object::wait_many(&mut items, deadline);
+            let _ = rt::object::wait_many(&mut items, deadline);
             let _ = self.shared.wake.clear();
             if let Some(s) = self.output.stream() {
                 let _ = s.event().clear();
@@ -277,10 +277,10 @@ impl Player {
                 Command::Play => {
                     self.playing = true;
                     self.stopping = None;
-                    self.resumed_ns = vrt::time::now_ns();
+                    self.resumed_ns = rt::time::now_ns();
                     self.output.set_paused(false);
                     if self.output.stream().is_none() {
-                        self.silence = Some((vrt::time::now_ns(), 0));
+                        self.silence = Some((rt::time::now_ns(), 0));
                     }
                 }
                 Command::Pause => {
@@ -288,7 +288,7 @@ impl Player {
                     // where the sound does.
                     self.playing = false;
                     self.output.set_paused(true);
-                    self.stopping = Some(vrt::time::now_ns());
+                    self.stopping = Some(rt::time::now_ns());
                     self.silence = None;
                 }
                 Command::Flush { generation } => self.flush(generation),
@@ -308,9 +308,9 @@ impl Player {
         self.heard = false;
         self.stopping = None;
         if self.silence.is_some() {
-            self.silence = Some((vrt::time::now_ns(), 0));
+            self.silence = Some((rt::time::now_ns(), 0));
         }
-        let at = self.model.clock().at(vrt::time::now_ns());
+        let at = self.model.clock().at(rt::time::now_ns());
         self.model.stand(at, generation);
     }
 
@@ -416,7 +416,7 @@ impl Player {
     /// wakes the window when the sound is first heard, ends, breaks, or the
     /// output comes or goes.
     fn publish(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let rate = self.rate();
         let mut queued = 0;
         match self.output.stream() {

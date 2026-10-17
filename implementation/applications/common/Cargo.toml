@@ -9,13 +9,13 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
-vfiles = { workspace = true }
-vui = { workspace = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+files = { workspace = true }
+ui = { workspace = true }
 
 [lints]
 workspace = true

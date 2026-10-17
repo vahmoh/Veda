@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Socket channels: the per-socket conversation with a client (see the
-//! `vproto::net` module docs for the protocol and its credit-based flow
+//! `proto::net` module docs for the protocol and its credit-based flow
 //! control).
 //!
 //! Nothing a client is owed is ever dropped because its channel is full (a
@@ -19,7 +19,7 @@
 //! the channel closed.
 //!
 //! A TCP connection whose bytes go on a kernel socket (the POSIX layer's,
-//! which processes share: see `vproto::net`) is moved between the stack and
+//! which processes share: see `proto::net`) is moved between the stack and
 //! that socket as far as each has room. What its clients wrote before they
 //! closed their end is sent all the same: the connection is closed once the
 //! end is gone and all of it is in the stack. An error is reported on the
@@ -34,12 +34,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
-use vabi::{Error, RawHandle};
-use vipc::{Encode, Encoder};
-use vnetstack::{PingEvent, SockId, Stack, TcpState};
-use vproto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest, UDP_UNMETERED_WINDOW};
-use vrt::object::{Channel, Socket};
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
+use abi::{Error, RawHandle};
+use ipc::{Encode, Encoder};
+use netstack::{PingEvent, SockId, Stack, TcpState};
+use proto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest, UDP_UNMETERED_WINDOW};
+use rt::object::{Channel, Socket};
 
 /// Bytes of datagrams a UDP client may send ahead of what the stack has
 /// taken.
@@ -59,13 +59,13 @@ pub struct Events(Encoder);
 impl Events {
     /// An encoder for events.
     pub fn new() -> Events {
-        Events(Encoder::with_header(0, 0, vipc::FLAG_EVENT))
+        Events(Encoder::with_header(0, 0, ipc::FLAG_EVENT))
     }
 
     /// Encodes an event with `fill` and writes it to `channel`.
     fn send(&mut self, channel: &Channel, fill: impl FnOnce(&mut Encoder)) -> Sent {
         let e = &mut self.0;
-        e.bytes.truncate(vipc::HEADER_LEN);
+        e.bytes.truncate(ipc::HEADER_LEN);
         fill(e);
         match channel.write(&e.bytes, core::mem::take(&mut e.handles)) {
             Ok(()) => Sent::Yes,
@@ -356,12 +356,12 @@ impl Conn {
             if !self.wants_requests() {
                 // Read on once the datagrams waiting have gone (after this
                 // one, handled as the others).
-                if let Ok((_, req)) = vipc::decode_event::<SocketRequest>(msg) {
+                if let Ok((_, req)) = ipc::decode_event::<SocketRequest>(msg) {
                     self.handle(stack, req);
                 }
                 return true;
             }
-            match vipc::decode_event::<SocketRequest>(msg) {
+            match ipc::decode_event::<SocketRequest>(msg) {
                 Ok((_, req)) => self.handle(stack, req),
                 Err(_) => self.violation(stack),
             }
@@ -388,7 +388,7 @@ impl Conn {
             }
             (Kind::Udp { pending, pending_bytes, credit_due, metered }, SocketRequest::SendTo { dest, data }) => {
                 let n = data.0.len();
-                if n > vproto::net::MAX_DATAGRAM || (*metered && n as u32 > self.credit_out) {
+                if n > proto::net::MAX_DATAGRAM || (*metered && n as u32 > self.credit_out) {
                     return self.violation(stack);
                 }
                 if *metered {

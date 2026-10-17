@@ -16,7 +16,7 @@
 
 use alloc::vec::Vec;
 
-use vproto::fs::{DirEntry, FsError, Stat, device};
+use proto::fs::{DirEntry, FsError, Stat, device};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dev {
@@ -85,7 +85,7 @@ impl Dev {
             Dev::Zero | Dev::Full => Ok(alloc::vec![0; len]),
             Dev::Random => {
                 let mut v = alloc::vec![0; len];
-                vrt::object::try_random_bytes(&mut v).map_err(|_| FsError::Io)?;
+                rt::object::try_random_bytes(&mut v).map_err(|_| FsError::Io)?;
                 Ok(v)
             }
         }

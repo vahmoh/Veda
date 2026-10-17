@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "velf"
+name = "elf"
 description = "Allocation-free ELF64 executables: validation, relocation, page permissions and the System V initial stack, for Veda's loaders"
 version.workspace = true
 edition.workspace = true

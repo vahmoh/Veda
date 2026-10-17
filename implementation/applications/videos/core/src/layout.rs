@@ -23,7 +23,7 @@ pub fn fit_frame(video_w: u32, video_h: u32, stage_w: u32, stage_h: u32) -> Fram
     if stage_w == 0 || stage_h == 0 {
         return Frame::default();
     }
-    let (w, h) = vproto::media::fit(video_w, video_h, stage_w, stage_h);
+    let (w, h) = proto::media::fit(video_w, video_h, stage_w, stage_h);
     Frame { x: ((stage_w - w) / 2) as i32, y: ((stage_h - h) / 2) as i32, w, h }
 }
 
@@ -43,7 +43,7 @@ pub fn output_size(frame: Frame, screen_w: u32, screen_h: u32) -> (u32, u32) {
     if w <= max_w && h <= max_h {
         return (w, h);
     }
-    vproto::media::fit(w, h, max_w, max_h)
+    proto::media::fit(w, h, max_w, max_h)
 }
 
 /// Bytes the frame pool may take.
@@ -54,7 +54,7 @@ pub const POOL_BUDGET: usize = 48 << 20;
 /// at least three (one shown, one ready, one being written) and at most
 /// eight.
 pub fn slots(w: u32, h: u32, fps_num: u32, fps_den: u32) -> u32 {
-    let (_, bytes) = vproto::media::FramePool::geometry(w, h);
+    let (_, bytes) = proto::media::FramePool::geometry(w, h);
     let budget = (POOL_BUDGET / bytes.max(1)) as u32;
     let fps = if fps_num > 0 && fps_den > 0 { fps_num.div_ceil(fps_den) } else { 30 };
     let ahead = fps.div_ceil(4) + 1;

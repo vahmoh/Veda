@@ -10,7 +10,7 @@
 
 use alloc::collections::BTreeMap;
 
-use viommu::amd64::vtd::{self, Cap, Ecap, Fault, Translation, desc, fsts, gcmd, reg};
+use iommu::amd64::vtd::{self, Cap, Ecap, Fault, Translation, desc, fsts, gcmd, reg};
 
 use crate::memory::paging::Cache;
 use crate::memory::{kvirt, phys, phys_to_virt};

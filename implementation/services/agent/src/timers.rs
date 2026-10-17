@@ -8,9 +8,9 @@
 //! timer and keep the agent waking up by itself (see
 //! [`crate::conversation`]).
 
-use vagent::notice::Notice;
-use vproto::shell::shell;
-use vrt::println;
+use agent::notice::Notice;
+use proto::shell::shell;
+use rt::println;
 
 use crate::Agent;
 use crate::shared::Timer;
@@ -22,7 +22,7 @@ const SHELL_TIMEOUT_NS: u64 = 1_000_000_000;
 impl Agent {
     /// Tells of the timers that came due.
     pub(crate) fn check_timers(&mut self) {
-        let unix = vrt::time::unix_time_ns() / 1_000_000_000;
+        let unix = rt::time::unix_time_ns() / 1_000_000_000;
         let due: Vec<Timer> = {
             let mut s = self.shared.lock();
             let due: Vec<Timer> = s.timers.iter().filter(|t| t.due <= unix).cloned().collect();
@@ -34,7 +34,7 @@ impl Agent {
         };
         for t in due {
             println!("timer due: {}", t.label);
-            if let Some(shell) = vproto::connect(shell::NAME).ok().map(shell::Client::new) {
+            if let Some(shell) = proto::connect(shell::NAME).ok().map(shell::Client::new) {
                 shell.set_timeout(SHELL_TIMEOUT_NS);
                 let _ = shell.notify(t.label.clone(), "Your reminder is due.".into(), "agent".into());
             }
@@ -44,10 +44,10 @@ impl Agent {
 
     /// When the main loop should look at the timers again at the latest.
     pub(crate) fn next_timer_ns(&self, now: u64) -> u64 {
-        let unix = vrt::time::unix_time_ns() / 1_000_000_000;
+        let unix = rt::time::unix_time_ns() / 1_000_000_000;
         match self.shared.lock().timers.first() {
             Some(t) => now + t.due.saturating_sub(unix).min(3600) * 1_000_000_000 + 50_000_000,
-            None => vabi::DEADLINE_INFINITE,
+            None => abi::DEADLINE_INFINITE,
         }
     }
 }

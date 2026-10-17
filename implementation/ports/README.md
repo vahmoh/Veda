@@ -135,8 +135,8 @@ in Veda's programs on the standard library.
 
 | Port | Version | Licence | What Veda uses it for |
 |------|---------|---------|-----------------------|
-| `smoltcp` | 0.14.0 | 0BSD | `netd`'s TCP/IP stack (`vnetstack`) |
-| `zune-jpeg` | 0.5.15 | MIT OR Apache-2.0 OR Zlib | `vimage`'s JPEG decoder |
+| `smoltcp` | 0.14.0 | 0BSD | `netd`'s TCP/IP stack (`netstack`) |
+| `zune-jpeg` | 0.5.15 | MIT OR Apache-2.0 OR Zlib | `image`'s JPEG decoder |
 | `libc` | 0.2.190 | MIT OR Apache-2.0 | Bindings of the C library |
 | `getrandom`, `getrandom-0.3` | 0.4.3, 0.3.4 | MIT OR Apache-2.0 | Random bytes; 0.3 for crates still on it (`rand` 0.9) |
 | `rustix` | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | POSIX and Linux system calls |
@@ -219,9 +219,9 @@ What the patches change:
 * **zune-jpeg**: sequential JPEGs with a scan per component (T.81, A.2.2),
   as jpeg-encoder writes baseline files with optimised Huffman tables,
   decode instead of coming out as stripes (`single_component_scan_rows` in
-  `src/mcu.rs`, tested by `vimage`'s `jpegs_with_a_scan_per_component`),
+  `src/mcu.rs`, tested by `image`'s `jpegs_with_a_scan_per_component`),
   and `src/lib.rs` loses a `#![macro_use]` that rustc warns will become an
-  error. Left as released, as `vimage` does not use it: CMYK and YCCK
+  error. Left as released, as `image` does not use it: CMYK and YCCK
   pictures converted to RGBA or BGRA come out three bytes a pixel
   (`src/worker.rs`).
 * **libc**: Veda takes Linux's definitions on musl, as in Rust's vendored
@@ -253,7 +253,7 @@ What the patches change:
 unmodified, under the SIL Open Font License 1.1 (`OFL.txt`); its README
 gives each one's copyright. Nothing is built or patched:
 `cargo orchestration build` installs them in `/system/fonts`, licence
-included, and `vfont`'s tests and `videogen` read them from here.
+included, and `font`'s tests and `videogen` read them from here.
 
 ## Updating a port
 

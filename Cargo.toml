@@ -5,7 +5,7 @@
 resolver = "3"
 members = [
     "orchestration",
-    "implementation/boot",
+    "implementation/bootloader",
     "implementation/kernel",
     "implementation/libraries/abi",
     "implementation/libraries/bootinfo",
@@ -122,38 +122,38 @@ authors = ["Vahid Mohammadi"]
 repository = "https://github.com/vahmoh25/Veda"
 
 [workspace.dependencies]
-vabi = { path = "implementation/libraries/abi" }
+abi = { path = "implementation/libraries/abi" }
 bootinfo = { path = "implementation/libraries/bootinfo" }
 initrd = { path = "implementation/libraries/initrd" }
-velf = { path = "implementation/libraries/elf" }
-vraster = { path = "implementation/libraries/raster" }
-vfont = { path = "implementation/libraries/font" }
-vimage = { path = "implementation/libraries/image" }
-vheap = { path = "implementation/libraries/heap" }
-vframes = { path = "implementation/libraries/frames" }
-vbuild = { path = "implementation/libraries/build" }
-vrt = { path = "implementation/libraries/rt" }
-vipc = { path = "implementation/libraries/ipc" }
-vproto = { path = "implementation/libraries/proto" }
-vgfx = { path = "implementation/libraries/gfx" }
-vui = { path = "implementation/libraries/ui" }
-vtext = { path = "implementation/libraries/text" }
-vfiles = { path = "implementation/libraries/files" }
-vaudio = { path = "implementation/libraries/audio" }
-ventropy = { path = "implementation/libraries/entropy" }
-vnetstack = { path = "implementation/libraries/netstack" }
-vnet = { path = "implementation/libraries/net" }
-vtls = { path = "implementation/libraries/tls" }
-vwlan = { path = "implementation/libraries/wlan" }
-vweb = { path = "implementation/libraries/web" }
-vagent = { path = "implementation/libraries/agent" }
-vacpi = { path = "implementation/libraries/acpi" }
-vgpio = { path = "implementation/libraries/gpio" }
-vsplash = { path = "implementation/shell/splash" }
-vglsl = { path = "implementation/libraries/glsl" }
-vgl = { path = "implementation/libraries/gl" }
-vhv = { path = "implementation/libraries/hv" }
-viommu = { path = "implementation/libraries/iommu" }
+elf = { path = "implementation/libraries/elf" }
+raster = { path = "implementation/libraries/raster" }
+font = { path = "implementation/libraries/font" }
+image = { path = "implementation/libraries/image" }
+heap = { path = "implementation/libraries/heap" }
+frames = { path = "implementation/libraries/frames" }
+build = { path = "implementation/libraries/build" }
+rt = { path = "implementation/libraries/rt" }
+ipc = { path = "implementation/libraries/ipc" }
+proto = { path = "implementation/libraries/proto" }
+gfx = { path = "implementation/libraries/gfx" }
+ui = { path = "implementation/libraries/ui" }
+text = { path = "implementation/libraries/text" }
+files = { path = "implementation/libraries/files" }
+audio = { path = "implementation/libraries/audio" }
+entropy = { path = "implementation/libraries/entropy" }
+netstack = { path = "implementation/libraries/netstack" }
+net = { path = "implementation/libraries/net" }
+tls = { path = "implementation/libraries/tls" }
+wlan = { path = "implementation/libraries/wlan" }
+web = { path = "implementation/libraries/web" }
+agent = { path = "implementation/libraries/agent" }
+acpi = { path = "implementation/libraries/acpi" }
+gpio = { path = "implementation/libraries/gpio" }
+splash = { path = "implementation/shell/splash" }
+glsl = { path = "implementation/libraries/glsl" }
+gl = { path = "implementation/libraries/gl" }
+hv = { path = "implementation/libraries/hv" }
+iommu = { path = "implementation/libraries/iommu" }
 guest-sys = { path = "implementation/guests/linux/sys" }
 guest-netlink = { path = "implementation/guests/linux/netlink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
@@ -267,9 +267,9 @@ rand_distr = { version = "0.6.0", default-features = false }
 fastnoise-lite = { version = "1.1.1", default-features = false, features = ["libm"] }
 # Fonts: ttf-parser reads the tables, character maps, names and outlines
 # (TrueType and CFF) without std, allocations or unsafe code, and never
-# panics on a malformed font; vfont builds Veda's metrics, kerning, caches
+# panics on a malformed font; `font` builds Veda's metrics, kerning, caches
 # and rendering on it. Its GPOS kerning needs `opentype-layout`; variable
-# fonts (and CFF2) would add 45 KB to every program for instances vfont
+# fonts (and CFF2) would add 45 KB to every program for instances `font`
 # does not draw. (skrifa, Google Fonts' newer parser, adds hinting but
 # some 600 KB to every program without whole-program LTO.)
 ttf-parser = { version = "0.25.1", default-features = false, features = ["opentype-layout", "no-std-float"] }
@@ -300,17 +300,17 @@ qoi = { version = "0.4.1", default-features = false, features = ["alloc"] }
 fast_image_resize = { version = "6.1.0", default-features = false, features = ["no_std"] }
 # Pixel buffers seen as the bytes the image libraries read and write.
 bytemuck = { version = "1.25.2", default-features = false }
-# Image encoding (vimage's `encode` feature), without std: Paint's saved
+# Image encoding (`image`'s `encode` feature), without std: Paint's saved
 # pictures in Veda, and generated pictures and test output on the build
 # machine. JPEG with progressive scans; PNG's zlib stream from miniz_oxide
 # (the `flate2` crate's deflate), which also makes the image tests'
 # hand-made PNGs. The `png` crate (the `image` crate's) reads the encoder's
-# PNGs back in vimage's tests: it needs std.
+# PNGs back in `image`'s tests: it needs std.
 png = "0.18.1"
 jpeg-encoder = { version = "0.7.1", default-features = false }
 miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 # CRC-32 (IEEE 802.3): the VFS's snapshots of the home directory, GPT
-# headers and the chunks of the PNGs vimage writes. Without std it picks
+# headers and the chunks of the PNGs `image` writes. Without std it picks
 # its fastest code when it is compiled (slicing by 16 tables on a plain
 # x86-64).
 crc32fast = { version = "1.5.2", default-features = false }

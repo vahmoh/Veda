@@ -10,7 +10,7 @@
 //! as a key term), until they have been quiet for a few seconds, or nothing
 //! was said in words for a while. Each piece of transcript, and what was
 //! said since the last pause, is checked for the agent's name
-//! ([`vagent::wake::call`]). A call wakes it once the sentence is over (the
+//! ([`agent::wake::call`]). A call wakes it once the sentence is over (the
 //! recogniser may finish "Hey Veda," before the rest of it), and with the
 //! rest of the sentence becomes the first thing the user said in the
 //! conversation.
@@ -18,21 +18,21 @@
 //! Nothing it hears, the agent's name included, tells the window system
 //! that the user is there: it hears whatever is said near the computer,
 //! which would otherwise keep an unattended one from locking (see
-//! `vagent::presence`).
+//! `agent::presence`).
 //!
-//! The detector is [`vaudio::vad::Vad`]; music or a television can seem
+//! The detector is [`audio::vad::Vad`]; music or a television can seem
 //! like speech to it. What the computer plays itself (music, a video)
 //! comes back into the microphone too. The audio service cancels most of
 //! it, but what is left still sounds like speech, and gets louder with the
 //! music. So while something plays, recognition starts only for a sound
 //! louder than that sound's echo can be, as the conversation's echo gate
-//! decides ([`vagent::gate`]): in the microphone as recorded too, since
+//! decides ([`agent::gate`]): in the microphone as recorded too, since
 //! someone calling over the music adds sound to the room, and what the
 //! canceller lets through does not.
 //!
 //! Other sound — a television, music from elsewhere — reaches the
 //! recogniser. When it heard no words for a while, the sound it was given
-//! is taken for such a background ([`vagent::wake::Background`]): until
+//! is taken for such a background ([`agent::wake::Background`]): until
 //! it stops, recognition starts again only for a sound that stands out
 //! from it (louder than its usual peaks), so the television does not keep
 //! the recogniser busy, while someone calling over it still does. It
@@ -49,14 +49,14 @@ use core::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use abi::{RawHandle, signals};
+use agent::deepgram;
+use agent::gate::{EchoGate, Verdict};
+use agent::wake::{self, Background, Budget};
+use audio::vad::Vad;
 use serde_json::json;
-use vabi::{RawHandle, signals};
-use vagent::deepgram;
-use vagent::gate::{EchoGate, Verdict};
-use vagent::wake::{self, Background, Budget};
-use vaudio::vad::Vad;
-use vweb::ws::{Message, WebSocket};
-use vweb::{Conn, WebError};
+use web::ws::{Message, WebSocket};
+use web::{Conn, WebError};
 
 use crate::session::{self, Connector};
 use crate::voice::MIC_RATE;
@@ -196,7 +196,7 @@ impl Listener {
             v.push((c.handle(), signals::SIGNALED));
         }
         if let Some(s) = &self.stream {
-            v.push((vweb::Connection::handle(s.connection()), signals::READABLE | signals::PEER_CLOSED));
+            v.push((web::Connection::handle(s.connection()), signals::READABLE | signals::PEER_CLOSED));
         }
         v
     }
@@ -208,7 +208,7 @@ impl Listener {
     /// Takes echo-cancelled microphone audio, and what was playing and the
     /// microphone as recorded at the same moments (empty if unknown).
     pub fn hear(&mut self, pcm: &[i16], playing: &[i16], recorded: &[i16], now: u64) {
-        use vaudio::level::rms_dbfs;
+        use audio::level::rms_dbfs;
         let mut partial = core::mem::take(&mut self.partial);
         partial.extend_from_slice(pcm);
         self.partial_playing.extend_from_slice(playing);
@@ -430,6 +430,6 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        self.stop(vrt::time::now_ns());
+        self.stop(rt::time::now_ns());
     }
 }

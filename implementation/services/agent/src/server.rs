@@ -9,13 +9,13 @@
 //! sleep and mutes it. Settings' connections are handed to Settings' own
 //! thread ([`crate::admin`]).
 
-use vagent::deepgram;
-use vproto::agent::{
+use ::agent::deepgram;
+use proto::agent::{
     AgentConfig, AgentError, AgentEvent, AgentStatus, MemoryItem, ModelCatalog, Permission, UiLink, agent,
 };
-use vproto::init::ClientIdentity;
-use vrt::object::Channel;
-use vrt::println;
+use proto::init::ClientIdentity;
+use rt::object::Channel;
+use rt::println;
 
 use crate::Agent;
 use crate::ui::Ui;
@@ -29,7 +29,7 @@ pub struct Conn {
 impl Agent {
     /// Takes the new connections (Settings' to its own thread).
     pub(crate) fn accept(&mut self, listener: &Channel) {
-        while let Some((channel, who)) = vproto::accept_with_identity(listener) {
+        while let Some((channel, who)) = proto::accept_with_identity(listener) {
             if who.app && who.name == "settings" {
                 self.settings.add(channel, who);
                 continue;
@@ -52,7 +52,7 @@ impl Agent {
                         let _ = reply.send(&c.channel);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => return true,
+                Err(abi::Error::ShouldWait) => return true,
                 Err(_) => return false,
             }
         }

@@ -8,7 +8,7 @@
 //! [`Firewall::inbound`] first, and every frame it sends passes
 //! [`Firewall::outbound`]; what programs of the machine send each other,
 //! on the loopback interface, passes neither. The settings are
-//! `vproto::net::FirewallConfig`'s, which `netd` gives the stack.
+//! `proto::net::FirewallConfig`'s, which `netd` gives the stack.
 //!
 //! * **What comes in.** A new connection (a TCP segment that only
 //!   synchronises) or a datagram for a port is let in when a port rule opens
@@ -55,12 +55,12 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
+use proto::net::{FirewallConfig, FirewallEvent, FirewallProtocol, FirewallReason, FirewallStats, Scope};
 use smoltcp::phy::Medium;
 use smoltcp::wire::{
     Icmpv4Message, Icmpv4Packet, Icmpv6Message, Icmpv6Packet, IpAddress, IpCidr, IpProtocol, Ipv4Packet, Ipv6Packet,
     TcpPacket, UdpPacket,
 };
-use vproto::net::{FirewallConfig, FirewallEvent, FirewallProtocol, FirewallReason, FirewallStats, Scope};
 
 use crate::{SockId, Stack};
 
@@ -845,9 +845,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use proto::net::{AppRule, PortRule};
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::wire::{Ipv4Cidr, Ipv4Repr, Ipv6Cidr, Ipv6Repr};
-    use vproto::net::{AppRule, PortRule};
 
     use super::*;
 

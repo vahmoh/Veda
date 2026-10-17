@@ -12,14 +12,14 @@
 //! and two instances would take turns for ever. The agent works with the
 //! newest.
 
+use abi::RawHandle;
+use agent::policy;
+use agent::tools::{self, names};
+use ipc::IpcError;
+use proto::agent::{AppAgentInfo, agentapp};
+use proto::init::AppInfo;
+use rt::time::{DateTime, Duration};
 use serde_json::{Value, json};
-use vabi::RawHandle;
-use vagent::policy;
-use vagent::tools::{self, names};
-use vipc::IpcError;
-use vproto::agent::{AppAgentInfo, agentapp};
-use vproto::init::AppInfo;
-use vrt::time::{DateTime, Duration};
 
 use super::{Ctx, Outcome, Pending, launcher, show};
 
@@ -51,10 +51,9 @@ pub(super) struct AppLink {
 
 impl AppLink {
     fn alive(&self) -> bool {
-        let mut item =
-            vabi::WaitItem { handle: self.channel, signals: vabi::signals::PEER_CLOSED, ..Default::default() };
-        let _ = vrt::object::wait_many(core::slice::from_mut(&mut item), 0);
-        item.observed & vabi::signals::PEER_CLOSED == 0
+        let mut item = abi::WaitItem { handle: self.channel, signals: abi::signals::PEER_CLOSED, ..Default::default() };
+        let _ = rt::object::wait_many(core::slice::from_mut(&mut item), 0);
+        item.observed & abi::signals::PEER_CLOSED == 0
     }
 }
 
@@ -118,9 +117,9 @@ impl Ctx {
             }
             self.note_use(&app.id);
         }
-        let end = vrt::time::deadline_after(START_TIMEOUT);
-        while vrt::time::now_ns() < end {
-            vrt::time::sleep(Duration::from_millis(50));
+        let end = rt::time::deadline_after(START_TIMEOUT);
+        while rt::time::now_ns() < end {
+            rt::time::sleep(Duration::from_millis(50));
             self.take_links();
             if self.link(&app.id).is_some() {
                 return Ok(());
@@ -134,7 +133,7 @@ impl Ctx {
     pub(super) fn note_use(&self, app: &str) {
         let t = DateTime::now();
         let mut s = self.shared.lock();
-        s.memory.note_app_use(app, vrt::time::unix_time_ns() / 1_000_000_000, t.hour as u32);
+        s.memory.note_app_use(app, rt::time::unix_time_ns() / 1_000_000_000, t.hour as u32);
         s.save_memory();
     }
 
@@ -170,7 +169,7 @@ impl Ctx {
     /// front.
     pub(super) fn open_app(&mut self, args: &Value) -> Result<Value, String> {
         let app = self.app_arg(args)?;
-        let file = args["file"].as_str().filter(|f| !f.trim().is_empty()).map(vagent::files::resolve).transpose()?;
+        let file = args["file"].as_str().filter(|f| !f.trim().is_empty()).map(agent::files::resolve).transpose()?;
         // An open application without a file to open comes to the front.
         if file.is_none()
             && let Some(id) = self.find_window(&app.id)

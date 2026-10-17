@@ -4,10 +4,10 @@
 //! Glyph outline consumers.
 //!
 //! Outlines are produced in font units with y pointing up. [`OutlineSink`] receives them;
-//! [`PathSink`] maps them into a [`vraster::Path`] (scale, y-flip, offset) and [`BoundsSink`]
+//! [`PathSink`] maps them into a [`raster::Path`] (scale, y-flip, offset) and [`BoundsSink`]
 //! computes their control box.
 
-use vraster::{Path, Point, Rect};
+use raster::{Path, Point, Rect};
 
 /// Receives the contours of a glyph outline (font units, y up). Every contour starts with
 /// `move_to` and ends with `close`.

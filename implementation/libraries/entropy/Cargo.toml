@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "ventropy"
+name = "entropy"
 description = "The random generator behind the kernel's random system call: a BLAKE2s entropy pool and a ChaCha20 stream with fast key erasure"
 version.workspace = true
 edition.workspace = true

@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::prelude::*;
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use crate::mesh::{Mesh, STRIDE};
 

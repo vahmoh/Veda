@@ -44,7 +44,7 @@
 //! `/home`, `/home/user`, `/tmp` and `/home/.private` cannot be removed,
 //! moved or replaced (see `vfs_core::access`).
 //!
-//! **Limits.** No path is longer than `vproto::fs::MAX_PATH`. A program
+//! **Limits.** No path is longer than `proto::fs::MAX_PATH`. A program
 //! holds a bounded number of connections, and all of them together stay
 //! within what the kernel waits on at once (`vfs_core::access`). Files grow
 //! only while memory is left for the rest of the system, and in `/home`
@@ -65,15 +65,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 
-use vabi::signals;
-use vipc::{Bytes, WaitSet};
-use vproto::fs::{
+use abi::signals;
+use ipc::{Bytes, WaitSet};
+use proto::fs::{
     DirEntry, DirPage, FsError, MAX_DATAGRAM, MAX_IO, MAX_SOCKET_NAME, SocketAddress, SocketDatagram, SocketPeer,
     Space, Stat, device, file, open_flags, seek, socket_kind, vfs,
 };
-use vproto::init::ClientIdentity;
-use vrt::object::{Channel, Handle, Vmo};
-use vrt::println;
+use proto::init::ClientIdentity;
+use rt::object::{Channel, Handle, Vmo};
+use rt::println;
 
 use dev::Dev;
 use persist::Store;
@@ -83,7 +83,7 @@ use vfs_core::snapshot::{self, Samples};
 use vfs_core::tree::{self, Data, Kind, Node, NodeId, Tree};
 use vfs_core::{HOME, USER};
 
-vrt::entry!(main);
+rt::entry!(main);
 
 const SYSTEM: &str = "system";
 const DEV: &str = "dev";
@@ -284,7 +284,7 @@ impl Fs {
         if more == 0 {
             return Ok(());
         }
-        let free = vrt::object::system_info().map_or(0, |i| i.free_memory);
+        let free = rt::object::system_info().map_or(0, |i| i.free_memory);
         if (more as u64).saturating_add(MEMORY_RESERVE) > free {
             return Err(FsError::NoSpace);
         }
@@ -294,7 +294,7 @@ impl Fs {
     /// Records a change to the writable file system.
     fn changed(&mut self) {
         if self.store.is_some() {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             let first = self.dirty.map_or(now, |(first, _)| first);
             self.dirty = Some((first, now));
         }
@@ -306,7 +306,7 @@ impl Fs {
             Some((first, last)) => {
                 last.saturating_add(SAVE_QUIET_NS).min(first.saturating_add(SAVE_MAX_DELAY_NS)).max(self.retry_at)
             }
-            None => vabi::DEADLINE_INFINITE,
+            None => abi::DEADLINE_INFINITE,
         }
     }
 
@@ -322,7 +322,7 @@ impl Fs {
         if let Err(e) = r {
             println!("cannot save the home directory: {}", e);
             self.dirty = Some(dirty);
-            self.retry_at = vrt::time::now_ns().saturating_add(SAVE_RETRY_NS);
+            self.retry_at = rt::time::now_ns().saturating_add(SAVE_RETRY_NS);
         }
         r
     }
@@ -397,7 +397,7 @@ impl Fs {
             return Err(FsError::NoSpace);
         }
         if data.is_empty() {
-            // Nothing to write: the file counts as changed now (`vfiles`'
+            // Nothing to write: the file counts as changed now (`files`'
             // `touch`), without its contents becoming its own.
             self.tree_mut(m)?.touch(node);
             self.changed();
@@ -840,7 +840,7 @@ impl vfs::Server for Session<'_> {
                 // Kept in memory: as much as the free memory allows, but for
                 // what is left to the rest of the system.
                 let bytes = t.measure(tree::ROOT).bytes as u64;
-                let free = vrt::object::system_info().map(|i| i.free_memory).unwrap_or(0);
+                let free = rt::object::system_info().map(|i| i.free_memory).unwrap_or(0);
                 let room = free.saturating_sub(MEMORY_RESERVE);
                 Space { total: bytes + room, used: bytes, persistent: false }
             }
@@ -1154,7 +1154,7 @@ impl file::Server for FileSession<'_> {
 
 /// A writable tree with `/tmp` and an empty `/home`.
 fn fresh_ram() -> Tree {
-    let mut ram = Tree::new(false, device::RAM, vrt::time::unix_time_ns);
+    let mut ram = Tree::new(false, device::RAM, rt::time::unix_time_ns);
     let _ = ram.mkdir_all(&[vfs_core::TMP]);
     let _ = ram.mkdir_all(&[HOME, USER]);
     ram
@@ -1164,7 +1164,7 @@ fn fresh_ram() -> Tree {
 /// directory from the home disk or, failing that, the samples. A `live`
 /// system keeps the home directory in memory without looking for a disk.
 fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
-    let mut system = Tree::new(true, device::SYSTEM, vrt::time::unix_time_ns);
+    let mut system = Tree::new(true, device::SYSTEM, rt::time::unix_time_ns);
     for f in archive.files() {
         if let Ok(comps) = tree::components(f.path) {
             let _ = system.add_file(&comps, Data::Static(f.data));
@@ -1209,12 +1209,12 @@ fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
 }
 
 fn main() -> i32 {
-    let Some(initrd_vmo) = vrt::env::take_handle(vabi::startup::role::INITRD).map(Vmo::from_handle) else {
+    let Some(initrd_vmo) = rt::env::take_handle(abi::startup::role::INITRD).map(Vmo::from_handle) else {
         println!("no initrd handle");
         return 1;
     };
     let size = initrd_vmo.size().unwrap_or(0);
-    let Ok(addr) = initrd_vmo.map(0, size, vabi::map_flags::READ) else {
+    let Ok(addr) = initrd_vmo.map(0, size, abi::map_flags::READ) else {
         println!("cannot map the initrd");
         return 1;
     };
@@ -1224,9 +1224,9 @@ fn main() -> i32 {
         println!("the initrd is corrupt");
         return 1;
     };
-    let mut fs = build(&archive, vrt::env::args().iter().any(|a| a == "live"));
+    let mut fs = build(&archive, rt::env::args().iter().any(|a| a == "live"));
 
-    let Ok(listener) = vproto::register(vfs::NAME) else {
+    let Ok(listener) = proto::register(vfs::NAME) else {
         println!("cannot register the vfs service");
         return 1;
     };
@@ -1264,7 +1264,7 @@ fn main() -> i32 {
         let Ok(ready) = ws.wait(fs.save_deadline()) else { continue };
         for (key, observed) in ready {
             if key == 0 {
-                while let Some((ch, who)) = vproto::accept_with_identity(&listener) {
+                while let Some((ch, who)) = proto::accept_with_identity(&listener) {
                     // Refused: the channel closes, and the client's calls fail.
                     if let Err(e) = fs.connections.admit(who.koid) {
                         println!("refusing a connection of {} ({}): {}", who.name, who.koid, e);
@@ -1332,7 +1332,7 @@ fn main() -> i32 {
                 next_id += 1;
             }
         }
-        if vrt::time::now_ns() >= fs.save_deadline() {
+        if rt::time::now_ns() >= fs.save_deadline() {
             let _ = fs.save();
         }
     }

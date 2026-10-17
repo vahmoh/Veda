@@ -15,9 +15,9 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use proto::net::InterfaceStats;
 use smoltcp::phy::{self, Checksum, ChecksumCapabilities, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
-use vproto::net::InterfaceStats;
 
 use crate::IfaceId;
 use crate::firewall::{Firewall, Place};

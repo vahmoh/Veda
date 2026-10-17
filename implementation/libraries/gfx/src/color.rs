@@ -20,12 +20,12 @@
 //! over pixels calls [`keep_scalar`] in its body.
 //!
 //! To check the generated code, build a program that draws and list the
-//! functions of `vgfx` that use those instructions:
+//! functions of `gfx` that use those instructions:
 //!
 //! ```text
 //! cargo build --release --target x86_64-unknown-linux-musl -p compositor
 //! objdump -d --no-show-raw-insn -C target/x86_64-unknown-linux-musl/release/compositor \
-//!   | awk '/^[0-9a-f]+ <.*>:$/ { f = $0 } /pmuludq|pshufd|punpck/ && f ~ /vgfx/ { print f }' | sort | uniq -c
+//!   | awk '/^[0-9a-f]+ <.*>:$/ { f = $0 } /pmuludq|pshufd|punpck/ && f ~ /gfx/ { print f }' | sort | uniq -c
 //! ```
 //!
 //! What it lists may only use them outside its loops: a `pshufd` that

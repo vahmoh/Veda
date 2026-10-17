@@ -3,10 +3,10 @@
 
 //! `audio` — the system audio service.
 //!
-//! * Registers `audio` (the public protocol, [`vproto::audio::audio`]):
+//! * Registers `audio` (the public protocol, [`proto::audio::audio`]):
 //!   applications open playback streams backed by shared rings, pause,
 //!   flush and adjust them, and set the master volume.
-//! * Registers `audiodev` ([`vproto::audio::audiodev`]): a sound driver
+//! * Registers `audiodev` ([`proto::audio::audiodev`]): a sound driver
 //!   attaches its output device and receives the ring the mixer fills;
 //!   devmgr says whether one is coming, which the status tells (the
 //!   startup sound waits for it).
@@ -44,19 +44,19 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::{WaitItem, signals};
-use vproto::audio::{
+use abi::{WaitItem, signals};
+use proto::audio::{
     AudioError, AudioStatus, DeviceFormat, DeviceLink, InputHandle, InputLink, InputSpec, StreamHandle, StreamSpec,
     audio, audiodev,
 };
-use vproto::init::ClientIdentity;
-use vrt::object::Channel;
-use vrt::println;
+use proto::init::ClientIdentity;
+use rt::object::Channel;
+use rt::println;
 
 use capture::Capture;
 use mixer::Mixer;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// Wait-set keys.
 const KEY_AUDIO_LISTENER: u64 = 1;
@@ -260,7 +260,7 @@ impl audiodev::Server for DriverSession<'_> {
 
 impl Service {
     fn accept(&mut self, listener: &Channel, drivers: bool) {
-        while let Some((ch, who)) = vproto::accept_with_identity(listener) {
+        while let Some((ch, who)) = proto::accept_with_identity(listener) {
             let kind = if drivers {
                 let driver = Driver::of(&who);
                 if driver == Driver::Other {
@@ -357,14 +357,14 @@ impl Service {
         }
     }
 
-    fn add(&mut self, handle: vabi::RawHandle, signals: u32, key: u64) {
+    fn add(&mut self, handle: abi::RawHandle, signals: u32, key: u64) {
         self.items.push(WaitItem { handle, signals, ..Default::default() });
         self.keys.push(key);
     }
 
     fn run(&mut self, audio_listener: Channel, dev_listener: Channel) -> ! {
         loop {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             self.items.clear();
             self.keys.clear();
             self.add(audio_listener.raw(), signals::READABLE, KEY_AUDIO_LISTENER);
@@ -385,7 +385,7 @@ impl Service {
                 });
                 self.keys.push(k);
             }
-            let _ = vrt::object::wait_many(&mut self.items, self.mixer.deadline(now));
+            let _ = rt::object::wait_many(&mut self.items, self.mixer.deadline(now));
             self.closed.clear();
             for i in 0..self.items.len() {
                 let (observed, key) = (self.items[i].observed, self.keys[i]);
@@ -416,7 +416,7 @@ impl Service {
                 let k = self.closed[i];
                 self.disconnect(k);
             }
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             self.mixer.run(now);
             self.capture.run(&self.mixer, now);
         }
@@ -424,14 +424,14 @@ impl Service {
 }
 
 fn main() -> i32 {
-    let audio_listener = match vproto::register(audio::NAME) {
+    let audio_listener = match proto::register(audio::NAME) {
         Ok(l) => l,
         Err(e) => {
             println!("cannot register: {:?}", e);
             return 1;
         }
     };
-    let dev_listener = match vproto::register(audiodev::NAME) {
+    let dev_listener = match proto::register(audiodev::NAME) {
         Ok(l) => l,
         Err(e) => {
             println!("cannot register the device endpoint: {:?}", e);
@@ -440,7 +440,7 @@ fn main() -> i32 {
     };
     println!("ready (mixing at {} Hz until a device attaches)", mixer::NULL_RATE);
     // Mixing is time-critical: run above normal applications.
-    let worker = vrt::thread::Builder::new().name("mixer").priority(vabi::priority::HIGH).spawn(move || -> () {
+    let worker = rt::thread::Builder::new().name("mixer").priority(abi::priority::HIGH).spawn(move || -> () {
         let mut svc = Service {
             mixer: Mixer::new(),
             capture: Capture::new(),

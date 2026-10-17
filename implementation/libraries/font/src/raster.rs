@@ -3,7 +3,7 @@
 
 //! Glyph rasterization: outlines to anti-aliased coverage bitmaps.
 //!
-//! Glyphs are rendered unhinted with exact-area anti-aliasing (`vraster`, non-zero rule) at
+//! Glyphs are rendered unhinted with exact-area anti-aliasing (`raster`, non-zero rule) at
 //! fractional horizontal positions. Two optional adjustments improve small sizes:
 //!
 //! * **Stem darkening** emboldens outlines by a fraction of a pixel at small sizes (fading out
@@ -12,7 +12,7 @@
 
 use alloc::vec::Vec;
 
-use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
+use raster::{Coverage, FillRule, Path, Point, Rasterizer, Transform};
 
 use crate::GlyphId;
 use crate::font::Font;

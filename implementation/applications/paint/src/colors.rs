@@ -8,12 +8,12 @@
 //! The square is drawn into a picture once for each hue (integer arithmetic for each of its
 //! pixels), and the hues' bar once.
 
+use gfx::{Align, Bitmap, Color, Rect};
 use paint_core::color::{self, Hsv};
 use paint_core::settings::Settings;
-use vgfx::{Align, Bitmap, Color, Rect};
-use vproto::display::Cursor;
-use vproto::input::keys;
-use vui::{Font, Ui};
+use proto::display::Cursor;
+use proto::input::keys;
+use ui::{Font, Ui};
 
 use crate::toolbar::swatch;
 

@@ -13,7 +13,7 @@
 //!   microphone closed and other sound back up.
 //! * A conversation that a notice started (a due reminder) is not attended
 //!   until the user speaks: until then, nothing that would wake the agent
-//!   again runs (`vagent::tools::allowed_unattended`).
+//!   again runs (`agent::tools::allowed_unattended`).
 //! * The user cancelling calls by speaking again takes them out of the
 //!   worker's queue; those that had started run to the end, and what they
 //!   did is told (see [`crate::approvals`]).
@@ -22,15 +22,15 @@
 //!   ([`Agent::user_active`]), so that the screen does not lock in the
 //!   middle of a conversation held hands-free. Nothing the agent hears
 //!   while it only listens for its name counts, nor does a conversation a
-//!   notice started (`vagent::presence` says why).
+//!   notice started (`agent::presence` says why).
 
-use vagent::deepgram::{self, Role, ServerMessage};
-use vagent::gate::{self, Verdict};
-use vagent::notice::Notice;
-use vagent::prompt::{self, PromptContext};
-use vagent::tools;
-use vproto::agent::AgentState;
-use vrt::println;
+use agent::deepgram::{self, Role, ServerMessage};
+use agent::gate::{self, Verdict};
+use agent::notice::Notice;
+use agent::prompt::{self, PromptContext};
+use agent::tools;
+use proto::agent::AgentState;
+use rt::println;
 
 use crate::session::{Connector, Incoming, Session};
 use crate::voice::{MIC_PACKET, Voice};
@@ -101,7 +101,7 @@ impl Agent {
         if !v.open_mic() {
             return;
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         self.listener = Some(listen::Listener::new(&name, &key.unwrap_or_default(), url, now, self.budget.clone()));
     }
 
@@ -169,7 +169,7 @@ impl Agent {
     /// The prompt for a conversation.
     pub(crate) fn build_prompt(&self) -> String {
         let installed = worker::installed_apps();
-        let since = (vrt::time::unix_time_ns() / 1_000_000_000).saturating_sub(RECAP_AGE_S);
+        let since = (rt::time::unix_time_ns() / 1_000_000_000).saturating_sub(RECAP_AGE_S);
         let (memory, recap, infos, name, first) = {
             let s = self.shared.lock();
             let recap: String = s
@@ -217,8 +217,8 @@ impl Agent {
 
     /// The conversation's connection is open: its settings go out, with
     /// the notices that woke the agent.
-    pub(crate) fn connected(&mut self, ws: vweb::ws::WebSocket<vweb::Conn>) {
-        let now = vrt::time::now_ns();
+    pub(crate) fn connected(&mut self, ws: web::ws::WebSocket<web::Conn>) {
+        let now = rt::time::now_ns();
         let mut s = Session::new(ws, now, core::mem::take(&mut self.attended));
         let settings = self.settings();
         if let Err(e) = s.send(&settings) {
@@ -244,7 +244,7 @@ impl Agent {
     pub(crate) fn end_conversation(&mut self, error: Option<&str>) {
         if let Some(mut s) = self.session.take() {
             s.close();
-            println!("conversation ended after {} s", (vrt::time::now_ns() - s.started_ns) / 1_000_000_000);
+            println!("conversation ended after {} s", (rt::time::now_ns() - s.started_ns) / 1_000_000_000);
             let g = &mut self.gate;
             if g.held > 0 {
                 let (cancelled, recorded) = g.coupling_db();
@@ -275,7 +275,7 @@ impl Agent {
         match error {
             Some(e) => {
                 self.set_state(AgentState::Error, e);
-                self.rest_at = Some(vrt::time::now_ns() + ERROR_SHOWN_NS);
+                self.rest_at = Some(rt::time::now_ns() + ERROR_SHOWN_NS);
             }
             None => self.rest(),
         }
@@ -311,8 +311,8 @@ impl Agent {
     }
 
     fn handle_message(&mut self, m: ServerMessage) {
-        let now = vrt::time::now_ns();
-        let unix = vrt::time::unix_time_ns() / 1_000_000_000;
+        let now = rt::time::now_ns();
+        let unix = rt::time::unix_time_ns() / 1_000_000_000;
         if let Some(s) = &mut self.session {
             s.presence.heard(&m);
         }
@@ -444,7 +444,7 @@ impl Agent {
     /// The agent's voice is coming: its turn starts (once per turn).
     fn agent_speaks(&mut self) {
         let Some(s) = &mut self.session else { return };
-        s.last_activity_ns = vrt::time::now_ns();
+        s.last_activity_ns = rt::time::now_ns();
         if s.end_requested_at.is_some() {
             s.goodbye_started = true;
         }
@@ -503,7 +503,7 @@ impl Agent {
         if self.session.is_none()
             && let Some(l) = &mut self.listener
         {
-            l.hear(&self.mic_buf, &self.playing_buf, &self.recorded_buf, vrt::time::now_ns());
+            l.hear(&self.mic_buf, &self.playing_buf, &self.recorded_buf, rt::time::now_ns());
             return;
         }
         if self.session.is_none() {
@@ -521,9 +521,9 @@ impl Agent {
 
     /// The microphone as Deepgram should hear it: 20 ms at a time, through
     /// the echo gate, so that what is left of the agent's own voice after
-    /// echo cancellation is silence to the recogniser (see `vagent::gate`).
+    /// echo cancellation is silence to the recogniser (see `agent::gate`).
     fn gate_mic(&mut self) -> Vec<i16> {
-        use vaudio::level::rms_dbfs;
+        use audio::level::rms_dbfs;
         self.mic_pending.extend_from_slice(&self.mic_buf);
         self.playing_pending.extend_from_slice(&self.playing_buf);
         self.recorded_pending.extend_from_slice(&self.recorded_buf);
@@ -574,7 +574,7 @@ impl Agent {
 
     /// Ends quiet (or unconfirmed) conversations, finishes the agent's
     /// turns, tells the window system when the user is there
-    /// (`vagent::presence`), brings settings that changed into the
+    /// (`agent::presence`), brings settings that changed into the
     /// conversation, and rests again once an error has been shown.
     pub(crate) fn housekeeping(&mut self, now: u64) {
         /// How long to wait for a goodbye after the agent asked to end.

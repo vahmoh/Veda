@@ -25,17 +25,17 @@ use core::sync::atomic::{AtomicI64, Ordering};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vabi::{WaitItem, signals};
-use videos_core::layout;
-use videos_core::playback::{EnginePhase, EngineState};
-use vproto::fs::{FsError, file, open_flags, vfs};
-use vproto::media::{
+use abi::{WaitItem, signals};
+use proto::fs::{FsError, file, open_flags, vfs};
+use proto::media::{
     self, AudioSpec, FramePool, MediaError, MediaInfo, OpenOptions, PcmRing, SeekMode, SkipLevel, VideoSpec,
     media::Client,
 };
-use vrt::object::{Channel, Event, Vmo};
-use vrt::println;
-use vrt::sync::Mutex;
+use rt::object::{Channel, Event, Vmo};
+use rt::println;
+use rt::sync::Mutex;
+use videos_core::layout;
+use videos_core::playback::{EnginePhase, EngineState};
 
 use crate::audio;
 use crate::decoder::{self, Decoder, Image};
@@ -149,9 +149,9 @@ pub fn start(decoder: String, sound: Option<Arc<audio::Shared>>) -> Option<Arc<S
         decoder_wake: Event::create().ok()?,
     });
     let ours = shared.clone();
-    vrt::thread::Builder::new()
+    rt::thread::Builder::new()
         .name("engine")
-        .priority(vabi::priority::NORMAL + 1)
+        .priority(abi::priority::NORMAL + 1)
         .spawn(move || Engine::new(ours, decoder, sound).run())
         .ok()?;
     Some(shared)
@@ -216,7 +216,7 @@ struct Engine {
 
 impl Engine {
     fn new(shared: Arc<Shared>, decoder_path: String, sound: Option<Arc<audio::Shared>>) -> Engine {
-        let total = vrt::object::system_info().map_or(0, |i| i.total_memory);
+        let total = rt::object::system_info().map_or(0, |i| i.total_memory);
         Engine {
             shared,
             sound,
@@ -249,7 +249,7 @@ impl Engine {
 
     fn vfs(&mut self) -> Option<&vfs::Client> {
         if self.vfs.is_none() {
-            self.vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+            self.vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         }
         self.vfs.as_ref()
     }
@@ -275,11 +275,11 @@ impl Engine {
                 items.push(WaitItem { handle: d.process.raw(), signals: signals::TERMINATED, ..Default::default() });
             }
             let deadline = match (&self.decoder, &self.open) {
-                (Some(_), Some(_)) => vrt::time::now_ns() + WATCH_NS,
-                (Some(_), None) => vrt::time::now_ns() + IDLE_WATCH_NS,
-                (None, _) => vabi::DEADLINE_INFINITE,
+                (Some(_), Some(_)) => rt::time::now_ns() + WATCH_NS,
+                (Some(_), None) => rt::time::now_ns() + IDLE_WATCH_NS,
+                (None, _) => abi::DEADLINE_INFINITE,
             };
-            let _ = vrt::object::wait_many(&mut items, deadline);
+            let _ = rt::object::wait_many(&mut items, deadline);
             let _ = self.shared.wake.clear();
             loop {
                 let Some(c) = self.shared.commands.lock().pop_front() else { break };
@@ -300,7 +300,7 @@ impl Engine {
         let Some(image) = &self.image else { return Err("the decoder could not be read".into()) };
         let d = decoder::start(image, "mediadec", CALL_TIMEOUT_NS)?;
         let build = d.build.clone();
-        self.beat = (d.heartbeat.count(), vrt::time::now_ns());
+        self.beat = (d.heartbeat.count(), rt::time::now_ns());
         self.decoder = Some(d);
         let b = build.clone();
         self.set_state(|s| s.decoder = Some(b));
@@ -309,15 +309,15 @@ impl Engine {
 
     /// Why the decoder is gone or useless, after a call it did not answer
     /// as it should with `e`.
-    fn why_dead(&self, e: vipc::IpcError) -> String {
+    fn why_dead(&self, e: ipc::IpcError) -> String {
         if let Some(d) = &self.decoder
             && d.process.wait(signals::TERMINATED, 0).is_ok()
         {
             return exit_reason(d.process.info().map_or(0, |i| i.exit_code));
         }
         match e {
-            vipc::IpcError::Kernel(vabi::Error::TimedOut) => String::from("it stopped answering"),
-            vipc::IpcError::PeerClosed => String::from("it went away"),
+            ipc::IpcError::Kernel(abi::Error::TimedOut) => String::from("it stopped answering"),
+            ipc::IpcError::PeerClosed => String::from("it went away"),
             e => format!("it answered wrongly: {e}"),
         }
     }
@@ -326,7 +326,7 @@ impl Engine {
     /// ended at once.
     fn call<T>(
         &mut self,
-        f: impl FnOnce(&Client) -> Result<Result<T, MediaError>, vipc::IpcError>,
+        f: impl FnOnce(&Client) -> Result<Result<T, MediaError>, ipc::IpcError>,
     ) -> Result<T, Failure> {
         let Some(d) = &self.decoder else { return Err(Failure::Dead(String::from("it is not running"))) };
         let r = f(&d.client);
@@ -334,7 +334,7 @@ impl Engine {
             Ok(r) => {
                 // It answered: alive now, whatever its heartbeat did while
                 // it worked on the call.
-                self.beat = (d.heartbeat.count(), vrt::time::now_ns());
+                self.beat = (d.heartbeat.count(), rt::time::now_ns());
                 r.map_err(Failure::Refused)
             }
             Err(e) => {
@@ -421,7 +421,7 @@ impl Engine {
 
     /// Carries out a command of the window's for the video open: a decoder
     /// that cannot is started again.
-    fn command(&mut self, f: impl FnOnce(&Client) -> Result<Result<(), MediaError>, vipc::IpcError>) {
+    fn command(&mut self, f: impl FnOnce(&Client) -> Result<Result<(), MediaError>, ipc::IpcError>) {
         if self.open.is_none() {
             return;
         }
@@ -460,10 +460,10 @@ impl Engine {
             s.info = None;
             s.error = None;
         });
-        let began = vrt::time::now_ns();
+        let began = rt::time::now_ns();
         match self.try_open(&path, start_us, play) {
             Ok(info) => {
-                let ms = ((vrt::time::now_ns() - began) / 1_000_000) as u32;
+                let ms = ((rt::time::now_ns() - began) / 1_000_000) as u32;
                 self.set_state(|s| {
                     s.phase = EnginePhase::Ready;
                     s.info = Some(info);
@@ -554,7 +554,7 @@ impl Engine {
             if frame.w > 0 {
                 layout::output_size(frame, self.screen.0, self.screen.1)
             } else {
-                vproto::media::fit(dw, dh, 1280, 720)
+                proto::media::fit(dw, dh, 1280, 720)
             }
         };
         let slots = layout::slots(w, h, v.frame_rate.num, v.frame_rate.den);
@@ -647,7 +647,7 @@ impl Engine {
     /// is ended, and started again if a video is open.
     fn watch(&mut self) {
         let Some(d) = &self.decoder else { return };
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let mut why = None;
         let mut memory = false;
         if d.process.wait(signals::TERMINATED, 0).is_ok() {
@@ -696,7 +696,7 @@ impl Engine {
     fn restart_once(&mut self, why: &str, at_us: Option<i64>, memory: bool) -> Option<(String, i64)> {
         let shown = at_us.unwrap_or_else(|| self.shared.shown_us.load(Ordering::Acquire));
         println!("decoder stopped ({why}) at {}: restarting", time(shown));
-        let began = vrt::time::now_ns();
+        let began = rt::time::now_ns();
         self.decoder = None;
         self.memory = memory;
         while self.restarts.front().is_some_and(|&t| began - t > 60_000_000_000) {
@@ -733,7 +733,7 @@ impl Engine {
         self.stopped_at = Some(shown);
         match self.resume_after_restart(resume) {
             Ok(()) => {
-                println!("decoder restarted in {} ms", (vrt::time::now_ns() - began) / 1_000_000);
+                println!("decoder restarted in {} ms", (rt::time::now_ns() - began) / 1_000_000);
                 self.set_state(|s| s.phase = EnginePhase::Ready);
                 None
             }
@@ -801,12 +801,12 @@ impl Engine {
 
 /// Why a decoder that ended did.
 fn exit_reason(code: i64) -> String {
-    if code == vabi::EXIT_CODE_PANICKED { String::from("it panicked") } else { format!("exit {code}") }
+    if code == abi::EXIT_CODE_PANICKED { String::from("it panicked") } else { format!("exit {code}") }
 }
 
 /// `m:ss` of a time in µs.
 fn time(us: i64) -> String {
-    vfiles::format::duration(us.max(0) as u64 / 1000)
+    files::format::duration(us.max(0) as u64 / 1000)
 }
 
 /// A decoder's error as a sentence for people.

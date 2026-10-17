@@ -6,11 +6,11 @@
 //! chase's and a patrol's choices, the options, the pause menu and the
 //! results.
 
+use gfx::{Align, Canvas, Color, Rect, Text};
 use interceptor_game::career::{self, Ending, MISSIONS, Mission};
 use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::road::Section;
 use interceptor_game::session::describe;
-use vgfx::{Align, Canvas, Color, Rect, Text};
 
 use crate::app::{App, Item, MAIN, Screen};
 use crate::paint::{self, ACCENT, AMBER, DIM, FAINT, Fonts, GOLD, GREEN, PANEL_DARK, RED, WHITE, rect};

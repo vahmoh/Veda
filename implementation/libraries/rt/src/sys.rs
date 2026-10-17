@@ -4,8 +4,8 @@
 //! Raw system calls. Prefer the safe wrappers in [`crate::object`] and the
 //! other modules; these exist for completeness and for low-level code.
 
-pub use vabi::nr;
-use vabi::{Error, RawHandle};
+pub use abi::nr;
+use abi::{Error, RawHandle};
 
 /// Result of a raw system call.
 pub type SysResult = Result<usize, Error>;

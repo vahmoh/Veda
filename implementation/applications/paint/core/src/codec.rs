@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Pictures from and to files: PNG, JPEG, BMP and QOI, by `vimage`'s decoders and encoders.
+//! Pictures from and to files: PNG, JPEG, BMP and QOI, by `image`'s decoders and encoders.
 //!
 //! Paint works on premultiplied pixels and files hold straight ones, so pictures are converted
 //! on the way in and out. A JPEG has no transparency: what is transparent is saved over white,
@@ -11,8 +11,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vgfx::Bitmap;
-use vimage::{DecodeOptions, Format, Image, ImageError, JpegOptions, Subsampling};
+use gfx::Bitmap;
+use image::{DecodeOptions, Format, Image, ImageError, JpegOptions, Subsampling};
 
 use crate::color::unpremultiply;
 
@@ -26,7 +26,7 @@ pub const SAVE_FORMATS: [(Format, &str, &str); 4] = [
 
 /// The format a file's name says (by its extension), if Paint knows it.
 pub fn format_of(path: &str) -> Option<Format> {
-    let ext = vfiles::path::extension(path);
+    let ext = files::path::extension(path);
     Some(match ext.as_str() {
         "png" => Format::Png,
         "jpg" | "jpeg" | "jfif" | "jpe" => Format::Jpeg,
@@ -75,12 +75,12 @@ pub struct Opened {
 
 /// Reads a picture of at most `max_pixels` pixels.
 pub fn decode(data: &[u8], max_pixels: u64) -> Result<Opened, CodecError> {
-    let format = vimage::detect(data).ok_or(ImageError::UnknownFormat)?;
+    let format = image::detect(data).ok_or(ImageError::UnknownFormat)?;
     let options = DecodeOptions { max_pixels, ..DecodeOptions::DEFAULT };
     let lenient = DecodeOptions { verify_checksums: false, ..options };
-    let (image, damaged) = match vimage::decode_with(data, &options) {
+    let (image, damaged) = match image::decode_with(data, &options) {
         Ok(i) => (i, false),
-        Err(ImageError::ChecksumMismatch(_)) => (vimage::decode_with(data, &lenient)?, true),
+        Err(ImageError::ChecksumMismatch(_)) => (image::decode_with(data, &lenient)?, true),
         Err(ImageError::TooLarge { .. }) => return Err(CodecError::TooLarge(max_pixels)),
         Err(e) => return Err(e.into()),
     };
@@ -94,7 +94,7 @@ fn straight(picture: &Bitmap, flatten: bool) -> Image {
     let pixels: Vec<u32> = picture
         .pixels
         .iter()
-        .map(|&p| if flatten { unpremultiply(vgfx::color::over(p, 0xFFFF_FFFF)) } else { unpremultiply(p) })
+        .map(|&p| if flatten { unpremultiply(gfx::color::over(p, 0xFFFF_FFFF)) } else { unpremultiply(p) })
         .collect();
     Image { width: picture.width as u32, height: picture.height as u32, pixels }
 }
@@ -111,16 +111,16 @@ pub fn encode(picture: &Bitmap, format: Format, quality: u8) -> Result<Vec<u8>, 
                 optimize_huffman: true,
                 ..JpegOptions::default()
             };
-            vimage::encode_jpeg(&image, &options)?
+            image::encode_jpeg(&image, &options)?
         }
-        other => vimage::encode(&image, other)?,
+        other => image::encode(&image, other)?,
     })
 }
 
 /// A name for a new picture's file: `Untitled.png`, or the picture's own name with the
 /// extension of `format`.
 pub fn file_name(current: Option<&str>, format: Format) -> String {
-    let base = current.map(vfiles::path::file_name).unwrap_or("Untitled");
+    let base = current.map(files::path::file_name).unwrap_or("Untitled");
     let stem = match base.rfind('.') {
         Some(i) if i > 0 => &base[..i],
         _ => base,
@@ -137,7 +137,7 @@ mod tests {
         let mut b = Bitmap::new(16, 8);
         for (i, p) in b.pixels.iter_mut().enumerate() {
             let a = if i % 3 == 0 { 0x80 } else { 0xFF };
-            *p = vgfx::color::premultiply(a << 24 | (i as u32 * 16 % 256) << 16 | 0x4080);
+            *p = gfx::color::premultiply(a << 24 | (i as u32 * 16 % 256) << 16 | 0x4080);
         }
         b
     }

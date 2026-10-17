@@ -10,9 +10,9 @@
 //! request that expires or is answered elsewhere takes its tick with it,
 //! and the next request, for whatever action, starts unticked.
 
-use vgfx::{Align, Color, Rect};
-use vproto::agent::ApprovalRequest;
-use vui::{Font, Ui};
+use gfx::{Align, Color, Rect};
+use proto::agent::ApprovalRequest;
+use ui::{Font, Ui};
 
 use crate::{Action, Model, agent};
 

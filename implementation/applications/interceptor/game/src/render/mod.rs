@@ -39,7 +39,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use crate::carmodel::Kind;
 use crate::env::Environment;

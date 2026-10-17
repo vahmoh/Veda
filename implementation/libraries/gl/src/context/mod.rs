@@ -255,7 +255,7 @@ pub struct Context {
     pub(crate) error: u32,
     pub(crate) config: Config,
     pub(crate) state: Fixed,
-    pub(crate) shading: vglsl::Options,
+    pub(crate) shading: glsl::Options,
     // Objects.
     pub(crate) buffers: Store<Buffer>,
     pub(crate) textures: Store<Texture>,
@@ -311,7 +311,7 @@ impl Context {
             error: gl::NO_ERROR,
             config,
             state: Fixed::new(config.width, config.height),
-            shading: vglsl::Options::default(),
+            shading: glsl::Options::default(),
             buffers: Store::default(),
             textures,
             renderbuffers: Store::default(),

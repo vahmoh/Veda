@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What the guest's ACPI tables say about a function given (`vhv::acpi`):
+//! What the guest's ACPI tables say about a function given (`hv::acpi`):
 //! its INTx, its constant data, and the devices the PC's firmware describes
 //! below it, with their place on its bus (I2C or SPI), their interrupt
 //! lines (which the guest gets), the GPIO pins they are wired to (`gpio`),
@@ -12,9 +12,9 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vhv::acpi::{self, Child, Function, Gpio, GpioInterrupt, HID_OVER_I2C, Resource};
-use vproto::pci::{AcpiDevice, AcpiResource, IntxLine, pcidev};
-use vrt::println;
+use hv::acpi::{self, Child, Function, Gpio, GpioInterrupt, HID_OVER_I2C, Resource};
+use proto::pci::{AcpiDevice, AcpiResource, IntxLine, pcidev};
+use rt::println;
 
 use crate::gpio::{Owner, Pins};
 use crate::lines::Lines;

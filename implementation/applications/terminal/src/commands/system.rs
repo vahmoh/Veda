@@ -7,8 +7,8 @@
 
 use apps_common::format::{cstr, uptime};
 use apps_common::process::{self, Classifier};
+use files::format::human_size;
 use terminal_core::screen::{Style, color};
-use vfiles::format::human_size;
 
 use super::{line_count, options, pad, read_stdin, usage};
 use crate::shell::{Io, Shell};
@@ -19,7 +19,7 @@ const LOGGED: usize = 64 * 1024;
 /// Which processes are the system's (see [`apps_common::process`]), from
 /// all the processes listed and what the launcher, which started the
 /// applications, says.
-fn classifier(sh: &mut Shell, all: &[vabi::ProcessInfo]) -> Classifier {
+fn classifier(sh: &mut Shell, all: &[abi::ProcessInfo]) -> Classifier {
     let tasks = sh.launcher().and_then(|l| l.tasks().ok());
     Classifier::from_tasks(all, tasks.as_deref())
 }
@@ -31,8 +31,8 @@ fn format_cpu(ns: u64) -> String {
     format!("{m}:{s:02}.{c:02}")
 }
 
-fn system_info(io: &mut Io, cmd: &str) -> Option<vabi::SystemInfo> {
-    match vrt::object::system_info() {
+fn system_info(io: &mut Io, cmd: &str) -> Option<abi::SystemInfo> {
+    match rt::object::system_info() {
         Ok(i) => Some(i),
         Err(e) => {
             io.error(cmd, &format!("cannot read system information: {e}"));
@@ -58,7 +58,7 @@ pub(super) fn cmd_ps(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let mut procs = process::list();
     let is_system = classifier(sh, &procs);
     if !all {
-        procs.retain(|p| p.state == vabi::process_state::RUNNING);
+        procs.retain(|p| p.state == abi::process_state::RUNNING);
     }
     procs.sort_by_key(|p| p.koid);
     io.styled(
@@ -81,10 +81,10 @@ pub(super) fn cmd_ps(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
         io.print(&format!("  {:>7}  {:>10}  {:>9}", p.threads, human_size(p.memory_bytes), format_cpu(p.cpu_time_ns)));
         if all {
             let state = match p.state {
-                vabi::process_state::RUNNING => "running",
-                vabi::process_state::EXITED => "exited",
-                vabi::process_state::KILLED => "killed",
-                vabi::process_state::CRASHED => "crashed",
+                abi::process_state::RUNNING => "running",
+                abi::process_state::EXITED => "exited",
+                abi::process_state::KILLED => "killed",
+                abi::process_state::CRASHED => "crashed",
                 _ => "?",
             };
             io.print(&format!("  {state}"));
@@ -107,7 +107,7 @@ pub(super) fn cmd_kill(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let force = opts.contains(&'f') || opts.contains(&'9');
     let mut procs = process::list();
     let is_system = classifier(sh, &procs);
-    procs.retain(|p| p.state == vabi::process_state::RUNNING);
+    procs.retain(|p| p.state == abi::process_state::RUNNING);
     let mut status = 0;
     for t in &targets {
         let matches: Vec<(u64, String)> = match t.parse::<u64>() {
@@ -203,14 +203,14 @@ pub(super) fn cmd_free(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
 
 pub(super) fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
     let Some(i) = system_info(io, "sysinfo") else { return 1 };
-    let screen = vproto::connect(vproto::display::display::NAME)
+    let screen = proto::connect(proto::display::display::NAME)
         .ok()
-        .and_then(|ch| vproto::display::display::Client::new(ch).screen_info().ok());
+        .and_then(|ch| proto::display::display::Client::new(ch).screen_info().ok());
     let version = cstr(&i.version);
     let used = i.total_memory.saturating_sub(i.free_memory);
     let mut info: Vec<(&str, String)> = vec![
-        ("OS", format!("Veda {} {}", version.trim_start_matches("Veda").trim(), vrt::arch::MACHINE)),
-        ("Kernel", format!("vkernel {} (microkernel)", version.trim_start_matches("Veda").trim())),
+        ("OS", format!("Veda {} {}", version.trim_start_matches("Veda").trim(), rt::arch::MACHINE)),
+        ("Kernel", format!("{} (microkernel)", version.trim_start_matches("Veda").trim())),
         ("Uptime", uptime(i.uptime_ns)),
         ("CPU", format!("{} ({} cores)", cstr(&i.cpu_brand), i.cpu_count)),
         ("Memory", format!("{} MiB / {} MiB", used >> 20, i.total_memory >> 20)),
@@ -269,7 +269,7 @@ pub(super) fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32
 }
 
 pub(super) fn cmd_date(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
-    let d = vrt::time::DateTime::now();
+    let d = rt::time::DateTime::now();
     io.println(&format!(
         "{}, {} {} {}, {:02}:{:02}:{:02}",
         d.weekday_name(),
@@ -288,7 +288,7 @@ fn read_log() -> String {
     let mut out = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut offset = 0u64;
-    while let Ok((n, next)) = vrt::object::log_read(offset, &mut buf) {
+    while let Ok((n, next)) = rt::object::log_read(offset, &mut buf) {
         if n == 0 || out.len() > 4 << 20 {
             break;
         }

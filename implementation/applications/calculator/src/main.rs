@@ -23,10 +23,10 @@ use std::path::Path;
 use calculator_core::keypad::{Action, Options};
 use calculator_core::units::{CATEGORIES, convert};
 use calculator_core::{Base, Calculator, Key, Mode, Number, Style, format_word, store};
-use vgfx::{Align, Color, Rect};
-use vproto::display::{Cursor, modifiers};
-use vproto::input::keys;
-use vui::{App, Font, Icon, MenuItem, Ui, WindowSpec};
+use gfx::{Align, Color, Rect};
+use proto::display::{Cursor, modifiers};
+use proto::input::keys;
+use ui::{App, Font, Icon, MenuItem, Ui, WindowSpec};
 
 use display::Drawn;
 
@@ -357,7 +357,7 @@ impl CalcApp {
     fn small_button(ui: &mut Ui, r: Rect, label: &str, tip: &str, enabled: bool, on: bool) -> bool {
         let t = ui.theme().clone();
         let id = ui.id(tip) ^ ((r.x as u64) << 20) ^ 0x5b7;
-        let resp = if enabled { ui.interact(id, r) } else { vui::Response::default() };
+        let resp = if enabled { ui.interact(id, r) } else { ui::Response::default() };
         let hover = ui.animate(id, if resp.hovered { 1.0 } else { 0.0 }, 9.0);
         if on {
             ui.canvas.fill_rounded_rect(r, t.radius, t.accent.with_alpha(60));
@@ -510,7 +510,7 @@ impl CalcApp {
                 let on = value >> bit & 1 == 1;
                 let enabled = bit < bits;
                 let id = ui.id("bit") ^ bit as u64;
-                let resp = if enabled { ui.interact(id, cell) } else { vui::Response::default() };
+                let resp = if enabled { ui.interact(id, cell) } else { ui::Response::default() };
                 if resp.hovered {
                     ui.canvas.fill_rounded_rect(cell.inset(1, 0, 1, 0), t.radius, Color::rgba(255, 255, 255, 18));
                     ui.set_cursor(Cursor::Hand);
@@ -959,17 +959,17 @@ impl App for CalcApp {
         true
     }
 
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(&self.calc)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         let result = agent::invoke(&mut self.calc, action, args);
-        self.store.due = Some(vrt::time::now_ns() + SAVE_DELAY_NS);
+        self.store.due = Some(rt::time::now_ns() + SAVE_DELAY_NS);
         if action == "set_mode" || action == "convert" {
             self.panel = false;
         }
@@ -984,5 +984,5 @@ fn main() {
     spec.min_width = 320;
     spec.min_height = 500;
     spec.app_id = "calculator".into();
-    std::process::exit(vui::run(spec, app));
+    std::process::exit(ui::run(spec, app));
 }

@@ -3,7 +3,7 @@
 
 //! Miscellaneous system calls: logging, clocks, sleeping, system info.
 
-use vabi::{Error, RawHandle, SystemInfo, clock, power_action, resource_kind};
+use abi::{Error, RawHandle, SystemInfo, clock, power_action, resource_kind};
 
 use super::{SysResult, deadline, get_resource, ok};
 use crate::memory::user;
@@ -19,7 +19,7 @@ pub fn debug_write(ptr: usize, len: usize) -> SysResult {
 }
 
 pub fn log_read(offset: usize, buf: usize, len: usize) -> SysResult {
-    super::task::allowed(vabi::restrict::NO_LOG)?;
+    super::task::allowed(abi::restrict::NO_LOG)?;
     let mut tmp = user::buffer(len.min(64 * 1024))?;
     let (n, next) = crate::log::read(offset as u64, &mut tmp);
     user::copy_to_user(buf as u64, &tmp[..n])?;
@@ -76,7 +76,7 @@ pub fn system_info(ptr: usize) -> SysResult {
 }
 
 pub fn system_power(res: RawHandle, action: usize) -> SysResult {
-    let r = get_resource(res, vabi::Rights::NONE)?;
+    let r = get_resource(res, abi::Rights::NONE)?;
     if !r.permits(resource_kind::POWER, 0, 0) {
         return Err(Error::AccessDenied);
     }

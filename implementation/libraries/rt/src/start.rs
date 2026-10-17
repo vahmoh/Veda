@@ -4,8 +4,8 @@
 //! Process entry point, exit codes, and the note that marks the program as
 //! a Veda program.
 
-use vabi::RawHandle;
-use velf::veda;
+use abi::RawHandle;
+use elf::veda;
 
 /// An ELF note as a note section holds it: its header (the sizes of its
 /// name and descriptor, and its type), then its name and descriptor, each
@@ -33,7 +33,7 @@ const fn padded_name() -> [u8; NAME_BYTES] {
 }
 
 /// The note by which a loader knows this program for a Veda program
-/// (`velf::veda`). The linker keeps every note section of the objects it
+/// (`elf::veda`). The linker keeps every note section of the objects it
 /// takes; [`start`] names this one, so that the object holding it is taken
 /// wherever the entry point is.
 #[used]
@@ -77,7 +77,7 @@ impl<E: core::fmt::Debug> IntoExitCode for Result<(), E> {
 
 unsafe extern "Rust" {
     /// Defined by [`crate::entry!`] in the program crate.
-    fn __vrt_main() -> i32;
+    fn __rt_main() -> i32;
 }
 
 /// The process's start, from the architecture's entry point (`arch`): it
@@ -85,8 +85,8 @@ unsafe extern "Rust" {
 pub(crate) fn start(bootstrap: RawHandle) -> ! {
     core::hint::black_box(&PROGRAM_NOTE);
     crate::env::adopt(bootstrap);
-    // SAFETY: provided by the program through `vrt::entry!`.
-    let code = unsafe { __vrt_main() };
+    // SAFETY: provided by the program through `rt::entry!`.
+    let code = unsafe { __rt_main() };
     crate::sys::process_exit(code as i64)
 }
 
@@ -95,14 +95,14 @@ pub(crate) fn start(bootstrap: RawHandle) -> ! {
 /// ```ignore
 /// #![no_std]
 /// #![no_main]
-/// vrt::entry!(main);
-/// fn main() { vrt::println!("hello"); }
+/// rt::entry!(main);
+/// fn main() { rt::println!("hello"); }
 /// ```
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
         #[unsafe(no_mangle)]
-        pub fn __vrt_main() -> i32 {
+        pub fn __rt_main() -> i32 {
             $crate::start::IntoExitCode::into_exit_code($main())
         }
     };

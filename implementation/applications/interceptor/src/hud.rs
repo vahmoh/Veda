@@ -1,19 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What is drawn over play with `vgfx`: the dashboard (speedometer,
+//! What is drawn over play with `gfx`: the dashboard (speedometer,
 //! revs, gear, siren, nitrous), the pursuit (the suspect's distance, its
 //! car's state, the time and any limit, the warnings), the map of the bay,
 //! the radio's words, the countdown, a patrol's tally; and the loading
 //! screen, the frame rate with what renders, and the statistics.
 
+use gfx::{Align, Bitmap, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
 use interceptor_game::career::{self, Units};
 use interceptor_game::driver::Role;
 use interceptor_game::game::Game;
 use interceptor_game::pursuit::{self, Pursuit, State};
 use interceptor_game::session::{self, Mode, Phase, Session};
 use interceptor_game::world::World;
-use vgfx::{Align, Bitmap, Canvas, Color, LineCap, LineJoin, Path, Rect, StrokeStyle, Text};
 
 use crate::paint::{self, ACCENT, AMBER, DIM, FAINT, Fonts, GREEN, PANEL, RED, WHITE, centered, rect};
 use crate::perf::{HISTORY, Perf};
@@ -407,7 +407,7 @@ impl MiniMap {
         arrow.line_to(px - fx * size * 0.35, py - fz * size * 0.35);
         arrow.line_to(px - fx * size * 0.7 - lx * size * 0.65, py - fz * size * 0.7 - lz * size * 0.65);
         arrow.close();
-        c.fill_path(&arrow, WHITE, vgfx::FillRule::NonZero);
+        c.fill_path(&arrow, WHITE, gfx::FillRule::NonZero);
     }
 }
 

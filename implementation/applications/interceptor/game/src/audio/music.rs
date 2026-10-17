@@ -9,8 +9,8 @@
 
 use alloc::vec::Vec;
 
-use vaudio::AudioError;
-use vaudio::source::Source;
+use audio::AudioError;
+use audio::source::Source;
 
 /// A tune: its stems, playing in step.
 struct Tune<D: AsRef<[u8]>> {
@@ -185,7 +185,7 @@ mod tests {
                 [v, v]
             })
             .collect();
-        vaudio::wav::write(&pcm, 2, 44_100, &vaudio::Tags::default())
+        audio::wav::write(&pcm, 2, 44_100, &audio::Tags::default())
     }
 
     /// The largest step between neighbouring samples of the left channel.

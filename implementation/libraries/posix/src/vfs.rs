@@ -5,8 +5,8 @@
 
 use alloc::string::String;
 
-use vproto::fs::{Stat, vfs};
-use vrt::sync::Mutex;
+use proto::fs::{Stat, vfs};
+use rt::sync::Mutex;
 
 use crate::error;
 use crate::fd::{self, Object};
@@ -24,7 +24,7 @@ static CWD: Mutex<String> = Mutex::new(String::new());
 pub fn with<R>(f: impl FnOnce(&vfs::Client) -> R) -> Result<R, isize> {
     let mut slot = VFS.lock();
     if slot.is_none() {
-        let channel = vproto::connect(vfs::NAME).map_err(|_| EIO)?;
+        let channel = proto::connect(vfs::NAME).map_err(|_| EIO)?;
         *slot = Some(vfs::Client::new(channel));
     }
     Ok(f(slot.as_ref().unwrap()))
@@ -68,7 +68,7 @@ pub fn stat_resolved(r: &Resolved) -> Result<Stat, isize> {
 }
 
 /// The user and group POSIX programs run as.
-pub const UID: u32 = vrt::process::UID;
+pub const UID: u32 = rt::process::UID;
 
 /// The POSIX view of a file's metadata.
 pub fn to_linux(st: &Stat) -> linux::Stat {

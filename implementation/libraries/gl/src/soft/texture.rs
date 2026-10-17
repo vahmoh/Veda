@@ -12,11 +12,11 @@
 
 use alloc::vec::Vec;
 
-use vglsl::builtins::TexLod;
-use vglsl::interp::{LANES, Lanes, Mask, Textures};
-use vglsl::ir::TexOp;
-use vglsl::ops::f16_to_f32;
-use vglsl::types::Dim;
+use glsl::builtins::TexLod;
+use glsl::interp::{LANES, Lanes, Mask, Textures};
+use glsl::ir::TexOp;
+use glsl::ops::f16_to_f32;
+use glsl::types::Dim;
 
 use crate::backend::{Filter, Func, SamplerState, Target, View, Wrap};
 use crate::format::{Class, Format};
@@ -549,7 +549,7 @@ impl Textures for DrawTextures<'_> {
                 continue;
             }
             let Some(t) = self.bound.get(index[lane] as usize).and_then(Option::as_ref) else {
-                let one = if matches!(op.sampler.ty, vglsl::types::Scalar::Int | vglsl::types::Scalar::Uint) {
+                let one = if matches!(op.sampler.ty, glsl::types::Scalar::Int | glsl::types::Scalar::Uint) {
                     1
                 } else {
                     1.0f32.to_bits()
@@ -754,7 +754,7 @@ impl Sampled {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vglsl::types::{Sampler, Scalar};
+    use glsl::types::{Sampler, Scalar};
 
     fn rgba8(w: u32, h: u32, levels: u32) -> (Vec<u8>, Vec<TexLevel>) {
         let mut data = Vec::new();
@@ -828,7 +828,7 @@ mod tests {
                     v[lane] = base * 0.5 + y as f32 * 0.3 / 256.0;
                 }
                 let args = [Lanes::from_f32(u), Lanes::from_f32(v)];
-                tex.sample(&op, &[0; LANES], &args, vglsl::interp::ALL, &mut out);
+                tex.sample(&op, &[0; LANES], &args, glsl::interp::ALL, &mut out);
             }
             best = best.min(t0.elapsed().as_secs_f64());
         }

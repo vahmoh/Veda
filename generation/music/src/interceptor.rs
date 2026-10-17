@@ -19,7 +19,7 @@
 
 use gencommon::output::Output;
 
-use vaudio::synth::{self, Part, Song};
+use audio::synth::{self, Part, Song};
 
 use crate::dsl::{self, BAR, Humanize, key};
 use crate::patches::{self, SR};
@@ -349,7 +349,7 @@ fn pursuit() -> (Vec<Part>, Vec<Part>, Vec<f64>) {
 /// Writes `mix` as the QOA file `name` of the game's.
 fn write(out: &mut Output, name: &str, mix: &[f32], seed: u64) -> Result<usize, String> {
     let pcm = crate::to_i16(mix, seed);
-    let file = vaudio::qoa::encode(&pcm, 2, SR as u32).map_err(|e| format!("QOA encoding: {e}"))?;
+    let file = audio::qoa::encode(&pcm, 2, SR as u32).map_err(|e| format!("QOA encoding: {e}"))?;
     out.write(&format!("games/interceptor/{name}"), &file)?;
     Ok(file.len())
 }

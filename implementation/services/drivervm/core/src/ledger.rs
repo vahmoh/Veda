@@ -34,7 +34,7 @@
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 
-use vabi::Error;
+use abi::Error;
 
 /// What a message costs besides its bytes: what the kernel and the monitor
 /// keep for it, at most.

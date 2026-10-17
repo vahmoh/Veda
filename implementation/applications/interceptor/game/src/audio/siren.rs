@@ -10,8 +10,8 @@
 //! traffic. Sirens started together drift apart, as real ones do, and each
 //! is heard with the Doppler shift of its car going by.
 
+use audio::synth::filter::{Mode, Svf};
 use num_traits::Float;
-use vaudio::synth::filter::{Mode, Svf};
 
 use super::{Listener, Panning, Placing, RATE, SIRENS, SineTable, SirenState, Sounds, Voiced};
 

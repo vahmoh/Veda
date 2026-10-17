@@ -19,7 +19,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vgfx::{Bitmap, Rect};
+use gfx::{Bitmap, Rect};
 
 /// A tile's side (a power of two).
 pub const TILE: i32 = 64;

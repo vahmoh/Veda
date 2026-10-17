@@ -31,12 +31,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use guest_sys::ReadInto;
+use proto::input::{InputEvent, InputSink, keys};
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::io::Errno;
 use rustix::ioctl::{IntegerSetter, Opcode, ioctl, opcode};
 use rustix::net::netlink::{self, SocketAddrNetlink};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, bind, socket_with};
-use vproto::input::{InputEvent, InputSink, keys};
 
 use touchpad::{Axis, Touchpad};
 

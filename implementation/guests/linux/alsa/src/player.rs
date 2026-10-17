@@ -10,8 +10,8 @@
 use std::collections::VecDeque;
 use std::io;
 
-use vproto::audio::{Ring, ring::flags};
-use vrt::time::now_ns;
+use proto::audio::{Ring, ring::flags};
+use rt::time::now_ns;
 
 use crate::pcm::{self, Pcm};
 use crate::{CHANNELS, RATE};

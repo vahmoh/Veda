@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vwlan"
+name = "wlan"
 description = "IEEE 802.11 for Veda: frames, information elements, RSN, WPA2 handshakes, WPA3 SAE, CCMP, BIP, and the station and access point state machines"
 version.workspace = true
 edition.workspace = true
@@ -24,7 +24,7 @@ base16ct = { workspace = true }
 zeroize = { workspace = true }
 # The security types and key kinds of the Wi-Fi protocols, one definition
 # for the service and the library.
-vproto = { workspace = true }
+proto = { workspace = true }
 
 [lints]
 workspace = true

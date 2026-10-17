@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "audio"
+name = "audiod"
 description = "The audio service: mixes client streams to the sound device"
 version.workspace = true
 edition.workspace = true
@@ -10,18 +10,19 @@ license.workspace = true
 
 [[bin]]
 name = "audio"
+path = "src/main.rs"
 test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vaudio = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+audio = { workspace = true }
 
 [build-dependencies]
-vbuild = { workspace = true }
+build = { workspace = true }
 
 [lints]
 workspace = true

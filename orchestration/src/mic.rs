@@ -32,9 +32,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use vaudio::qoa::{self, QoaFile};
-use vaudio::resample::Resampler;
-use vaudio::wav::{self, SampleFormat, WavInfo};
+use audio::qoa::{self, QoaFile};
+use audio::resample::Resampler;
+use audio::wav::{self, SampleFormat, WavInfo};
 
 use crate::util::{self, Result};
 use crate::voice;

@@ -10,14 +10,14 @@
 
 use std::collections::BTreeMap;
 
+use agent::config::Config;
+use agent::memory::Memory;
+use agent::policy::{self, Permissions};
+use agent::{notice, tools};
+use proto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
 use serde_json::{Value, json};
-use vagent::config::Config;
-use vagent::memory::Memory;
-use vagent::policy::{self, Permissions};
-use vagent::{notice, tools};
-use vproto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
 
-use vrt::object::Event;
+use rt::object::Event;
 
 use crate::store::{self, Store};
 
@@ -139,7 +139,7 @@ impl Shared {
     pub fn load() -> Shared {
         let store = Store::open();
         let config = store.read(store::CONFIG).map(|t| Config::from_json(&t)).unwrap_or_default();
-        let key = store.read(store::KEY).map(|k| k.trim().to_string()).filter(|k| vagent::config::valid_key(k));
+        let key = store.read(store::KEY).map(|k| k.trim().to_string()).filter(|k| agent::config::valid_key(k));
         let memory = store.read(store::MEMORY).map(|t| Memory::from_json(&t)).unwrap_or_default();
         let mut apps = BTreeMap::new();
         if let Some(v) = store.read(APPS).and_then(|t| serde_json::from_str::<Value>(&t).ok())

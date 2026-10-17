@@ -32,9 +32,9 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering, fence};
 
-use vipc::message;
-use vrt::object::{Event, Vmo};
-use vrt::vm::Mapping;
+use ipc::message;
+use rt::object::{Event, Vmo};
+use rt::vm::Mapping;
 
 /// Layout of a ring VMO. All fields are little-endian and naturally
 /// aligned; producer and consumer fields live on separate cache lines.
@@ -255,7 +255,7 @@ impl Ring {
         let vmo = Vmo::create(len).map_err(|_| RingError::NoMemory)?;
         let peer = Vmo::from_handle(vmo.0.duplicate(None).map_err(|_| RingError::NoMemory)?);
         let map =
-            Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
         // SAFETY: a fresh mapping of `len` bytes.
         let ring = unsafe { Ring::init_raw(map.as_ptr(), len, slots, slot_size, role) };
         Ok((Ring { _map: Some(map), ..ring }, peer))
@@ -270,7 +270,7 @@ impl Ring {
             return Err(RingError::BadHeader);
         }
         let map =
-            Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| RingError::NoMemory)?;
         // SAFETY: the mapping is `len` bytes long.
         let ring = unsafe { Ring::attach_raw(map.as_ptr(), len, role)? };
         Ok(Ring { _map: Some(map), ..ring })

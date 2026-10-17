@@ -9,7 +9,7 @@
 //! has the name in the VFS's abstract namespace while it is open. The VFS
 //! keeps the socket's inbox, a channel whose other end the socket holds,
 //! and writes on it the connections to a listening socket and the
-//! datagrams sent to a datagram socket (`vproto::fs::socket_event`).
+//! datagrams sent to a datagram socket (`proto::fs::socket_event`).
 //! A connection is made by the socket that connects: a kernel socket for a
 //! stream's bytes (as a pipe's), or a channel for a seqpacket connection's
 //! messages. It keeps one end and hands the other to the listener through
@@ -25,7 +25,7 @@
 //!
 //! **Sockets travel** to the processes a program starts and over sockets
 //! ([`Unix::travelling`]): a socket's channels are made shared
-//! (`vrt::object::Channel::create_shared`), so that a copy of the handle
+//! (`rt::object::Channel::create_shared`), so that a copy of the handle
 //! that carries it — its connection's kernel socket or channel, else its
 //! inbox — goes, and what the handle does not say (its names, its peer, its
 //! options) with it. Several processes then hold one socket, as on Linux:
@@ -43,7 +43,7 @@
 //!   once their socket is closed; binding the family alone, or connecting
 //!   or sending datagrams from a socket not bound that says who sends
 //!   (`SO_PASSCRED`), takes a free one of a NUL and five hex digits;
-//! * a datagram is at most `vproto::fs::MAX_DATAGRAM` bytes (`EMSGSIZE`),
+//! * a datagram is at most `proto::fs::MAX_DATAGRAM` bytes (`EMSGSIZE`),
 //!   and a datagram socket connected to another also receives from others;
 //! * a connection waiting to be accepted, and a datagram, wait in the
 //!   listener's or receiver's inbox, which holds a few hundred: the
@@ -62,15 +62,15 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
-use vabi::{Error as KError, ObjectType};
-use vipc::{Bytes, Decode, IpcError};
-use vproto::fs::{
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
+use abi::{Error as KError, ObjectType};
+use ipc::{Bytes, Decode, IpcError};
+use proto::fs::{
     FsError, MAX_DATAGRAM, MAX_SOCKET_NAME, SocketAddress, SocketConnection, SocketDatagram, SocketPeer, socket_event,
     socket_kind,
 };
-use vrt::object::{Channel, Handle, Socket};
-use vrt::sync::{Mutex, MutexGuard};
+use rt::object::{Channel, Handle, Socket};
+use rt::sync::{Mutex, MutexGuard};
 
 use crate::carry::Rights;
 use crate::error::{self, SysResult};
@@ -234,7 +234,7 @@ const AUTOBIND_NAMES: u32 = 1 << 20;
 
 /// A deadline `timeout` (ns) from now; none for none.
 fn deadline(timeout: Option<u64>) -> u64 {
-    timeout.map_or(vabi::DEADLINE_INFINITE, |t| time::monotonic_ns().saturating_add(t))
+    timeout.map_or(abi::DEADLINE_INFINITE, |t| time::monotonic_ns().saturating_add(t))
 }
 
 /// Waits on `handle` for `signals` until `deadline`: `EAGAIN` when it
@@ -324,7 +324,7 @@ impl StreamConn {
             let read = if how.peek {
                 socket.peek(&mut buf[got..]).map(|n| (n, Vec::new()))
             } else {
-                socket.read_with(&mut buf[got..], vabi::CHANNEL_MAX_HANDLES).map(|(n, handles, _)| (n, handles))
+                socket.read_with(&mut buf[got..], abi::CHANNEL_MAX_HANDLES).map(|(n, handles, _)| (n, handles))
             };
             match read {
                 Ok((n, handles)) => {
@@ -417,7 +417,7 @@ impl Mailbox {
         while held.is_none() {
             match self.channel.read() {
                 Ok(mut msg) => {
-                    let Ok((header, mut d)) = vipc::open(&mut msg) else { continue };
+                    let Ok((header, mut d)) = ipc::open(&mut msg) else { continue };
                     match header.ordinal {
                         socket_event::DATAGRAM => {
                             if let Ok(dg) = SocketDatagram::decode(&mut d) {
@@ -523,7 +523,7 @@ impl Mailbox {
                 rights: Bytes(rights.bytes),
                 handles: rights.handles,
             };
-            return match vipc::send_event(&self.channel, socket_event::DATAGRAM, d) {
+            return match ipc::send_event(&self.channel, socket_event::DATAGRAM, d) {
                 Ok(()) => Ok(data.len()),
                 // Another writer took the room: carried afresh next time.
                 Err(IpcError::Kernel(KError::ShouldWait)) if !nonblock => continue,
@@ -540,7 +540,7 @@ impl Mailbox {
                 Ok(msg) => {
                     // What is not a connection is not what the VFS sends:
                     // passed over.
-                    if let Ok((socket_event::CONNECTION, c)) = vipc::decode_event::<SocketConnection>(msg) {
+                    if let Ok((socket_event::CONNECTION, c)) = ipc::decode_event::<SocketConnection>(msg) {
                         return Ok(Some(c));
                     }
                 }
@@ -586,7 +586,7 @@ struct Dest {
     peer: Peer,
 }
 
-vipc::message! {
+ipc::message! {
     /// The options a program set (`setsockopt`): those that change what a
     /// socket does, and those that do not, kept to be read back.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -618,7 +618,7 @@ mod shape {
     pub const PAIRED: u32 = 3;
 }
 
-vipc::message! {
+ipc::message! {
     /// A socket on its way to another process, beside the handle that
     /// carries it: its connection's kernel socket or channel, else its
     /// inbox if it is bound, else none (see [`Unix::travelling`]).
@@ -916,7 +916,7 @@ impl Unix {
             return Ok(0);
         }
         let mut random = [0u8; 4];
-        vrt::object::random_bytes(&mut random);
+        rt::object::random_bytes(&mut random);
         let start = u32::from_le_bytes(random);
         for k in 0..AUTOBIND_NAMES {
             let n = start.wrapping_add(k) % AUTOBIND_NAMES;
@@ -1095,7 +1095,7 @@ impl Unix {
                 Ok(c) => c.stream.socket.shutdown().map_err(error::kernel)?,
                 Err(m) if self.kind == Kind::SeqPacket => {
                     // The peer reads to the end of what came before it.
-                    let _ = vipc::send_event(&m.channel, socket_event::END, ());
+                    let _ = ipc::send_event(&m.channel, socket_event::END, ());
                 }
                 Err(_) => {}
             }
@@ -1451,9 +1451,9 @@ mod tests {
             options: Options { recv_timeout: Some(5), passcred: true, linger: Some(3), ..Options::default() },
             shut: (true, false),
         };
-        let mut e = vipc::Encoder::new();
-        vipc::Encode::encode(t.clone(), &mut e);
+        let mut e = ipc::Encoder::new();
+        ipc::Encode::encode(t.clone(), &mut e);
         assert!(e.handles.is_empty());
-        assert_eq!(Travelling::decode(&mut vipc::Decoder::new(&e.bytes, Vec::new())).ok(), Some(t));
+        assert_eq!(Travelling::decode(&mut ipc::Decoder::new(&e.bytes, Vec::new())).ok(), Some(t));
     }
 }

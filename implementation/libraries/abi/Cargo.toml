@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vabi"
+name = "abi"
 description = "The Veda kernel ABI: system call numbers, error codes, rights, signals and shared structures"
 version.workspace = true
 edition.workspace = true

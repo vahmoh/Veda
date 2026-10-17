@@ -9,7 +9,7 @@
 //! the sender's table on write and enter the receiver's table on read.
 //!
 //! An endpoint has one handle at a time, unless the channel was made
-//! shared (`vabi::channel_flags::SHARED`): then its endpoints' handles can
+//! shared (`abi::channel_flags::SHARED`): then its endpoints' handles can
 //! be duplicated, so several processes hold one, as they hold a socket's.
 //! Each message queued on it is read by one of them, and the other
 //! endpoint sees `PEER_CLOSED` once every handle to it is closed (an
@@ -26,8 +26,8 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::Error;
-use vabi::signals::{PEER_CLOSED, READABLE, WRITABLE};
+use abi::Error;
+use abi::signals::{PEER_CLOSED, READABLE, WRITABLE};
 
 use crate::object::handle::Handle;
 use crate::object::{KObject, Signals};

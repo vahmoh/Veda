@@ -15,8 +15,8 @@
 //! then the screen goes on showing the ones it presented before, so that a
 //! window being resized shows its last frame rather than the placeholder.
 
-use vgfx::{Damage, Rect};
-use vproto::display::DisplayError;
+use gfx::{Damage, Rect};
+use proto::display::DisplayError;
 
 /// The most buffers a client attaches at once (triple buffering).
 pub const MAX_BUFFERS: u8 = 3;

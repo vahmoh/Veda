@@ -15,14 +15,14 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use abi::{WaitItem, signals};
 use interceptor_game::audio::music::Music;
 use interceptor_game::audio::{Cue, Mixer, RATE, Scene};
-use vabi::{WaitItem, signals};
-use vproto::audio::{OutputStream, StreamSpec, audio};
-use vproto::fs::vfs;
-use vrt::object::Event;
-use vrt::sync::Mutex;
-use vrt::vm::Mapping;
+use proto::audio::{OutputStream, StreamSpec, audio};
+use proto::fs::vfs;
+use rt::object::Event;
+use rt::sync::Mutex;
+use rt::vm::Mapping;
 
 /// The tunes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,9 +83,9 @@ impl Speakers {
             alive: AtomicBool::new(true),
         });
         let theirs = shared.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("speakers")
-            .priority(vabi::priority::HIGH)
+            .priority(abi::priority::HIGH)
             .spawn(move || {
                 run(&theirs);
                 theirs.alive.store(false, Ordering::Release);
@@ -138,7 +138,7 @@ impl AsRef<[u8]> for FileData {
 fn read_file(vfs: &vfs::Client, path: &str) -> Option<FileData> {
     let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;
     let size = vmo.size().ok()?;
-    let map = Mapping::new(vmo, size.max(4096), vabi::map_flags::READ).ok()?;
+    let map = Mapping::new(vmo, size.max(4096), abi::map_flags::READ).ok()?;
     Some(FileData { map, len: (len as usize).min(size) })
 }
 
@@ -146,7 +146,7 @@ fn read_file(vfs: &vfs::Client, path: &str) -> Option<FileData> {
 fn load_music() -> (Music<FileData>, Vec<(Tune, usize)>) {
     let mut music = Music::new();
     let mut tunes = Vec::new();
-    let Some(vfs) = vproto::connect(vfs::NAME).ok().map(vfs::Client::new) else {
+    let Some(vfs) = proto::connect(vfs::NAME).ok().map(vfs::Client::new) else {
         return (music, tunes);
     };
     for (tune, stems) in TUNES {
@@ -163,19 +163,19 @@ fn load_music() -> (Music<FileData>, Vec<(Tune, usize)>) {
 /// True once `name` is registered (waiting a few seconds for it, since a
 /// connection to a service that does not exist would wait forever).
 fn registered(name: &str) -> bool {
-    let deadline = vrt::time::now_ns() + 5_000_000_000;
+    let deadline = rt::time::now_ns() + 5_000_000_000;
     loop {
         let found =
-            vproto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false);
-        if found || vrt::time::now_ns() > deadline {
+            proto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false);
+        if found || rt::time::now_ns() > deadline {
             return found;
         }
-        vrt::time::sleep(vrt::time::Duration::from_millis(100));
+        rt::time::sleep(rt::time::Duration::from_millis(100));
     }
 }
 
 fn run(shared: &Shared) {
-    let audio = registered(audio::NAME).then(|| vproto::connect(audio::NAME).ok().map(audio::Client::new)).flatten();
+    let audio = registered(audio::NAME).then(|| proto::connect(audio::NAME).ok().map(audio::Client::new)).flatten();
     let Some(audio) = audio else {
         println!("no sound: the audio service is unavailable");
         return;
@@ -210,7 +210,7 @@ fn run(shared: &Shared) {
     let mut underruns = 0;
     // How busy the thread is (the time it works, how often it wakes) and
     // how often the stream ran dry, for the log every 20 s.
-    let (mut busy, mut wakes, mut since) = (0u64, 0u32, vrt::time::now_ns());
+    let (mut busy, mut wakes, mut since) = (0u64, 0u32, rt::time::now_ns());
     loop {
         let mut items = [
             WaitItem { handle: shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() },
@@ -221,8 +221,8 @@ fn run(shared: &Shared) {
                 ..Default::default()
             },
         ];
-        let _ = vrt::object::wait_many(&mut items, vrt::time::now_ns() + 20_000_000);
-        let woke = vrt::time::now_ns();
+        let _ = rt::object::wait_many(&mut items, rt::time::now_ns() + 20_000_000);
+        let woke = rt::time::now_ns();
         wakes += 1;
         let _ = shared.wake.clear();
         let (scene, tune, intensity, volume) = {
@@ -252,7 +252,7 @@ fn run(shared: &Shared) {
                 t.write(&music_block);
             }
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         // (A clock read on another processor may be a hair behind.)
         busy += now.saturating_sub(woke);
         if now.saturating_sub(since) >= 20_000_000_000 {

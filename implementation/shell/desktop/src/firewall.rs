@@ -14,9 +14,9 @@
 //! after the question appears, so that a click meant for what was under
 //! the pointer just before does not answer it.
 
-use vgfx::Rect;
-use vnet::{FirewallProtocol, FirewallQuestion, Scope};
-use vui::{ButtonKind, Font, Icon, SharedText, Ui};
+use gfx::Rect;
+use net::{FirewallProtocol, FirewallQuestion, Scope};
+use ui::{ButtonKind, Font, Icon, SharedText, Ui};
 
 use crate::{Action, Model, approval, apps};
 

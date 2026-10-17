@@ -6,10 +6,10 @@
 
 use core::cmp::Ordering;
 
-use vproto::input::keys;
-use vui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
+use proto::input::keys;
+use ui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
 
-use vfiles::format::human_size;
+use files::format::human_size;
 
 use crate::{Column, Proc, TaskManager};
 

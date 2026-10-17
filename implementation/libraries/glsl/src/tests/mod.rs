@@ -11,7 +11,7 @@ mod sema;
 mod tgsi;
 
 /// The stack of a thread Veda starts without asking for more
-/// (`vrt::thread::DEFAULT_STACK`), which a program may compile shaders on.
+/// (`rt::thread::DEFAULT_STACK`), which a program may compile shaders on.
 pub(crate) const THREAD_STACK: usize = 256 * 1024;
 
 /// Runs `f` on a thread of its own with [`THREAD_STACK`] bytes of stack and

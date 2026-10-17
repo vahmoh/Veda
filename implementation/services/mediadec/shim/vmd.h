@@ -23,7 +23,7 @@
 
 #define VMD_ABI 1
 
-/* Results: not negative on success; errors are vproto::media::MediaError's
+/* Results: not negative on success; errors are proto::media::MediaError's
  * codes, negated. */
 #define VMD_OK 0
 /* Nothing now: receive first (send), or send more (receive). */

@@ -10,11 +10,11 @@
 //! (`Shell::power_off`). Windows still open after [`CLOSE_WAIT_NS`] are
 //! listed on a card, from which the user cancels, or powers off anyway.
 
-use vgfx::{Align, Rect};
-use vproto::display::{WindowKind, WindowSpec};
-use vproto::init::power;
-use vui::window::Display;
-use vui::{ButtonKind, Font, Host, Ui};
+use gfx::{Align, Rect};
+use proto::display::{WindowKind, WindowSpec};
+use proto::init::power;
+use ui::window::Display;
+use ui::{ButtonKind, Font, Host, Ui};
 
 use crate::{Model, chrome, taskbar};
 
@@ -53,7 +53,7 @@ impl PowerOff {
 
     /// When it next needs a look (the card is due).
     pub fn deadline(&self) -> u64 {
-        if self.card.is_some() { vabi::DEADLINE_INFINITE } else { self.card_at }
+        if self.card.is_some() { abi::DEADLINE_INFINITE } else { self.card_at }
     }
 
     /// The card's window, once it shows.

@@ -15,7 +15,7 @@
 //! connection closes, what it held down (keys, buttons) is released for it.
 
 use alloc::vec::Vec;
-use vipc::union;
+use ipc::union;
 
 pub const NAME: &str = "input";
 /// Ordinal of a batch of events.
@@ -38,15 +38,15 @@ union! {
 }
 
 /// Sends a batch of events.
-pub fn report(ch: &vrt::object::Channel, events: Vec<InputEvent>) -> Result<(), vipc::IpcError> {
-    vipc::send_event(ch, REPORT, events)
+pub fn report(ch: &rt::object::Channel, events: Vec<InputEvent>) -> Result<(), ipc::IpcError> {
+    ipc::send_event(ch, REPORT, events)
 }
 
 /// A driver's connection to the input service that survives restarts of
 /// the window system: when the service goes away, the sink connects again
 /// (the registry holds the new connection until a successor registers).
 pub struct InputSink {
-    channel: vrt::object::Channel,
+    channel: rt::object::Channel,
 }
 
 impl InputSink {
@@ -60,7 +60,7 @@ impl InputSink {
     /// again is not lost (a lock screen's password starts with it). Events
     /// the service is too far behind to queue are dropped.
     pub fn report(&mut self, events: Vec<InputEvent>) {
-        if let Err(vipc::IpcError::PeerClosed) = report(&self.channel, events.clone())
+        if let Err(ipc::IpcError::PeerClosed) = report(&self.channel, events.clone())
             && let Ok(ch) = crate::connect(NAME)
         {
             let _ = report(&ch, events);

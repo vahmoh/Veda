@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vtls"
+name = "tls"
 description = "TLS for Veda applications: HTTPS and secure WebSockets with rustls and a pure-Rust cryptography provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
-vnet = { workspace = true }
+rt = { workspace = true, default-features = false }
+net = { workspace = true }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
 # `zeroize`: the hash and HMAC states derived from secrets are wiped when dropped.

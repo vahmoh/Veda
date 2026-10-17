@@ -6,7 +6,7 @@
 Veda's programs are written in Rust: the applications, and the services
 that gain from it, on the standard library; what the standard library
 stands on or runs before, what drives hardware and what must answer in
-time, on Veda's own runtime alone (`vrt`, `no_std`, built with the
+time, on Veda's own runtime alone (`rt`, `no_std`, built with the
 development machine's Rust; see
 [Architecture](ARCHITECTURE.md#user-space)). This document covers
 programs on the standard library: writing and building them, how they
@@ -22,24 +22,24 @@ to add one):
 
 ```rust
 fn main() {
-    let mut spec = vui::WindowSpec::new("My App", 800, 560);
+    let mut spec = ui::WindowSpec::new("My App", 800, 560);
     spec.app_id = "myapp".into();
-    std::process::exit(vui::run(spec, MyApp::new()));
+    std::process::exit(ui::run(spec, MyApp::new()));
 }
 ```
 
 It uses:
 
-- **Veda's libraries**: windows and widgets (`vui`), the services'
-  protocols (`vproto`), files (`vfiles`), the network (`vnet`, `vtls`,
-  `vweb`), kernel objects (`vrt::object`).
+- **Veda's libraries**: windows and widgets (`ui`), the services'
+  protocols (`proto`), files (`files`), the network (`net`, `tls`,
+  `web`), kernel objects (`rt::object`).
 - **The standard library** for what it does: threads, channels and locks,
   processes, sockets and names (`std::net`), and small files
   (`apps_common::store` reads an application's own within a limit and
   replaces them in one step). A thread sets its own priority with
-  `vrt::thread::set_priority`, or `vrt::thread::Builder` starts it with
-  one. `vnet` adds what is Veda's own (the network's state, Wi-Fi,
-  sockets a `vui` event loop can wait on), and `vfiles` moves large
+  `rt::thread::set_priority`, or `rt::thread::Builder` starts it with
+  one. `net` adds what is Veda's own (the network's state, Wi-Fi,
+  sockets a `ui` event loop can wait on), and `files` moves large
   files, such as pictures and music, in one piece of shared memory, where
   the standard library's reads and writes take a message every few
   kilobytes.
@@ -67,7 +67,7 @@ reports as a crash.
 > once (about half an hour).
 
 `cargo orchestration build` builds every program that
-`orchestration/src/components.rs` lists as `Program::std` (those on `vrt`
+`orchestration/src/components.rs` lists as `Program::std` (those on `rt`
 alone are `Program::native`) in `target/std`, with the toolchain's Rust
 and the C toolchain's driver, after bringing the C library's POSIX layer
 up to date. It empties `target/std` when the toolchain's Rust is built
@@ -135,16 +135,16 @@ Sockets go to the processes a program starts, which share them as in C.
 `std::os::unix` works as on other Unix systems, and `std::os::veda::fs`
 has `MetadataExt`: the fields of `struct stat`.
 
-**Veda's libraries** (`vui`, `vproto`, `vfiles`, ...) are `no_std` and
-build for the target as they are, `vrt` fitting itself to it. The
+**Veda's libraries** (`ui`, `proto`, `files`, ...) are `no_std` and
+build for the target as they are, `rt` fitting itself to it. The
 standard library is the program's runtime (its entry point, panic handler
-and C symbols), and `vrt`'s threads are its threads, each setting its own
+and C symbols), and `rt`'s threads are its threads, each setting its own
 priority. The POSIX layer keeps the startup message's descriptors,
 terminal and registry, and gives an application the handles of its own
 roles (`veda_startup_handle`) and a registry channel of its own
-(`veda_registry`), through which `vproto` reaches services and registers
-the program's. `vrt`'s heap stays the global allocator (unless a program
-leaves out `vrt`'s `runtime` feature); musl's `malloc` serves the C
+(`veda_registry`), through which `proto` reaches services and registers
+the program's. `rt`'s heap stays the global allocator (unless a program
+leaves out `rt`'s `runtime` feature); musl's `malloc` serves the C
 library.
 
 ## Limits

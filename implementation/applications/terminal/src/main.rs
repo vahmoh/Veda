@@ -26,16 +26,16 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use abi::{RawHandle, signals};
+use files::HOME;
+use files::path::display_path;
+use proto::display::modifiers;
+use proto::input::keys;
 use terminal_core::edit::{Edit, LineEditor};
 use terminal_core::screen::{self, Cell, Pos, Screen, Style, color};
 use terminal_core::syntax::redact;
-use vabi::{RawHandle, signals};
-use vfiles::HOME;
-use vfiles::path::display_path;
-use vproto::display::modifiers;
-use vproto::input::keys;
-use vui::ui::KeyPress;
-use vui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
+use ui::ui::KeyPress;
+use ui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
 
 use job::{Job, Output};
 use program::Console;
@@ -174,7 +174,7 @@ fn line_rows(len: usize, cols: usize) -> usize {
 /// Draws block-element and box-drawing characters as exact rectangles so
 /// that neighbouring cells join without seams. Returns `false` for other
 /// characters.
-fn draw_special(canvas: &mut vui::Canvas, c: char, x0: i32, x1: i32, y: i32, h: i32, color: Color) -> bool {
+fn draw_special(canvas: &mut ui::Canvas, c: char, x0: i32, x1: i32, y: i32, h: i32, color: Color) -> bool {
     let w = x1 - x0;
     let t = if h >= 26 { 2 } else { 1 };
     let cx = x0 + (w - t) / 2;
@@ -253,7 +253,7 @@ impl Terminal {
     fn new(cwd: &str) -> Option<Terminal> {
         let output = Output::new()?;
         let mut screen = Screen::new();
-        let version = vrt::object::system_info()
+        let version = rt::object::system_info()
             .map(|i| {
                 let n = i.version.iter().position(|&c| c == 0).unwrap_or(i.version.len());
                 String::from_utf8_lossy(&i.version[..n]).trim().into()
@@ -530,13 +530,13 @@ impl Terminal {
     /// Waits up to `timeout` ns for the running command, moving its output
     /// to the screen. Returns whether none runs any more.
     fn wait_for_job(&mut self, timeout: u64) -> bool {
-        let deadline = vrt::time::now_ns().saturating_add(timeout);
+        let deadline = rt::time::now_ns().saturating_add(timeout);
         loop {
             self.collect();
             if self.job.is_none() {
                 return true;
             }
-            if vrt::time::now_ns() >= deadline {
+            if rt::time::now_ns() >= deadline {
                 return false;
             }
             self.output.wait(deadline);
@@ -1295,14 +1295,14 @@ impl Terminal {
                 let badge = Rect::new(full.w - SCROLLBAR_W - 150, full.h - 34, 132, 26);
                 ui.canvas.fill_rounded_rect(badge, 13.0, Color::rgba(40, 42, 54, 230));
                 ui.canvas.stroke_rounded_rect(badge, 13.0, 1.0, t.border_strong);
-                ui.icon(Rect::new(badge.x + 8, badge.y, 18, badge.h), vui::Icon::ChevronDown, 14.0, t.text_dim);
+                ui.icon(Rect::new(badge.x + 8, badge.y, 18, badge.h), ui::Icon::ChevronDown, 14.0, t.text_dim);
                 ui.label(
                     badge.inset(28, 0, 8, 0),
                     &format!("{scroll} lines below"),
                     Font::Regular,
                     t.small_size,
                     t.text_dim,
-                    vui::Align::Left,
+                    ui::Align::Left,
                 );
             }
         }
@@ -1348,15 +1348,15 @@ impl Terminal {
 }
 
 impl App for Terminal {
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Terminal::agent_invoke(self, action, args)
     }
 
@@ -1382,7 +1382,7 @@ impl App for Terminal {
         }
         // The mouse first (it may select text), then the keyboard (which may
         // copy it), so that both arriving in one frame act in order. While
-        // the context menu is open, vui gives it the keyboard: no keys here.
+        // the context menu is open, `ui` gives it the keyboard: no keys here.
         let (live, prompt_len) = self.live_cells();
         let cursor_col = self.cursor_col(prompt_len);
         let mut layout = self.layout(ui, live.len(), cursor_col);
@@ -1445,7 +1445,7 @@ impl Terminal {
         ui.canvas.fill_rounded_rect(r, 8.0, Color::rgba(40, 42, 54, 240));
         ui.canvas.stroke_rounded_rect(r, 8.0, 1.0, t.warning);
         let text = text.clone();
-        ui.label(r.inset(12, 0, 12, 0), &text, Font::Regular, t.small_size, t.text, vui::Align::Left);
+        ui.label(r.inset(12, 0, 12, 0), &text, Font::Regular, t.small_size, t.text, ui::Align::Left);
         ui.repaint_at(until);
     }
 }
@@ -1522,7 +1522,7 @@ fn main() {
 
 /// Runs the program; its exit code.
 fn run() -> i32 {
-    let cwd = vrt::env::args().get(1).cloned().unwrap_or_else(|| String::from(HOME));
+    let cwd = rt::env::args().get(1).cloned().unwrap_or_else(|| String::from(HOME));
     let Some(term) = Terminal::new(&cwd) else {
         println!("cannot create events");
         return 1;
@@ -1531,5 +1531,5 @@ fn run() -> i32 {
     spec.app_id = "terminal".into();
     spec.min_width = 420;
     spec.min_height = 240;
-    vui::run(spec, term)
+    ui::run(spec, term)
 }

@@ -15,7 +15,7 @@
 //! then takes the file's place (the file system's `replace`), so a crash
 //! leaves the old file or the new one, never neither.
 
-use vfiles::fs::{Error, Fs, FsError};
+use files::fs::{Error, Fs, FsError};
 
 /// The agent's private directory.
 pub const DIR: &str = "/home/.private/agent";

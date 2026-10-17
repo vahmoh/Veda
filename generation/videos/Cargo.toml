@@ -14,14 +14,14 @@ publish = false
 gencommon = { path = "../common" }
 rav1e = { workspace = true }
 md-5 = { workspace = true }
-vaudio = { workspace = true }
-vfont = { workspace = true }
-vgfx = { workspace = true }
-vimage = { workspace = true, features = ["encode"] }
+audio = { workspace = true }
+font = { workspace = true }
+gfx = { workspace = true }
+image = { workspace = true, features = ["encode"] }
 fastnoise-lite = { workspace = true }
 rand = { workspace = true }
 rand_pcg = { workspace = true }
-vraster = { workspace = true }
+raster = { workspace = true }
 
 [lints]
 workspace = true

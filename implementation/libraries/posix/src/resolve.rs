@@ -18,10 +18,10 @@ use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_int};
 use core::net::IpAddr;
 
-use vipc::IpcError;
-use vproto::net::{AddrFamily, NetError, ResolveResult};
-use vrt::object::Channel;
-use vrt::time::Duration;
+use ipc::IpcError;
+use proto::net::{AddrFamily, NetError, ResolveResult};
+use rt::object::Channel;
+use rt::time::Duration;
 
 use crate::linux::sock::{AF_INET, AF_INET6, AF_UNSPEC};
 use crate::netd;
@@ -96,11 +96,11 @@ fn lookup(name: &str, family: AddrFamily) -> Result<(Vec<IpAddr>, String), NetEr
         let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
         Ok(c.resolve(name.clone(), family, theirs)?.map(|()| ours))
     })??;
-    let message = reply.read_blocking(vrt::time::deadline_after(LOOKUP_TIMEOUT)).map_err(|e| match e {
-        vabi::Error::TimedOut => NetError::TimedOut,
+    let message = reply.read_blocking(rt::time::deadline_after(LOOKUP_TIMEOUT)).map_err(|e| match e {
+        abi::Error::TimedOut => NetError::TimedOut,
         _ => NetError::Unavailable,
     })?;
-    match vipc::decode_event::<ResolveResult>(message) {
+    match ipc::decode_event::<ResolveResult>(message) {
         Ok((_, ResolveResult::Found { addresses, canonical, .. })) => Ok((addresses, canonical)),
         Ok((_, ResolveResult::Failed { error })) => Err(error),
         Err(_) => Err(NetError::Internal),

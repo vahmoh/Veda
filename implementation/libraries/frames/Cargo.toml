@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vframes"
+name = "frames"
 description = "Searches of the kernel's bitmap of physical memory frames"
 version.workspace = true
 edition.workspace = true

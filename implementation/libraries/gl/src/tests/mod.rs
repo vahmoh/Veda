@@ -44,26 +44,26 @@ impl Workers for StdWorkers {
 pub fn context_with(w: u32, h: u32, threads: usize, samples: u32) -> Context {
     let config = Config { width: w, height: h, samples, ..Config::default() };
     if virgl_requested() {
-        return virgl_context(config).expect("VGL_TEST_BACKEND names a renderer that is not available");
+        return virgl_context(config).expect("GL_TEST_BACKEND names a renderer that is not available");
     }
     let workers: Box<dyn Workers> = Box::new(StdWorkers(threads));
     Context::new(Box::new(SoftBackend::new(workers)), config)
 }
 
 /// Whether the tests are to run on the virgl renderer: through
-/// virglrenderer on the host's GPU (`VGL_TEST_BACKEND=virgl`), or through
-/// Veda's renderer on softpipe (`VGL_TEST_BACKEND=gallium`).
+/// virglrenderer on the host's GPU (`GL_TEST_BACKEND=virgl`), or through
+/// Veda's renderer on softpipe (`GL_TEST_BACKEND=gallium`).
 pub fn virgl_requested() -> bool {
-    std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "virgl" || v == "gallium")
+    std::env::var("GL_TEST_BACKEND").is_ok_and(|v| v == "virgl" || v == "gallium")
 }
 
 /// Whether the tests run on softpipe, through Veda's renderer
-/// (`VGL_TEST_BACKEND=gallium`, with no other `VGL_GALLIUM_DEVICE`): its
+/// (`GL_TEST_BACKEND=gallium`, with no other `GL_GALLIUM_DEVICE`): its
 /// points sit an eighth of a pixel off their place, and it filters depth
 /// before comparing it rather than the comparisons. GPUs do neither.
 pub fn on_softpipe() -> bool {
-    std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium")
-        && std::env::var("VGL_GALLIUM_DEVICE").ok().is_none_or(|d| d.is_empty() || d == "softpipe")
+    std::env::var("GL_TEST_BACKEND").is_ok_and(|v| v == "gallium")
+        && std::env::var("GL_GALLIUM_DEVICE").ok().is_none_or(|d| d.is_empty() || d == "softpipe")
 }
 
 /// Whether the renderer has multisampling (softpipe has none); tests of it
@@ -77,12 +77,12 @@ pub fn multisampling(c: &mut Context) -> bool {
 }
 
 /// A context of the virgl renderer: through Veda's renderer if
-/// `VGL_TEST_BACKEND=gallium`, otherwise through virglrenderer on the
+/// `GL_TEST_BACKEND=gallium`, otherwise through virglrenderer on the
 /// host's GPU, if it is installed.
 pub fn virgl_context(config: Config) -> Option<Context> {
     #[cfg(target_os = "linux")]
     {
-        if std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium") {
+        if std::env::var("GL_TEST_BACKEND").is_ok_and(|v| v == "gallium") {
             return crate::virgl::gallium::context(config);
         }
         crate::virgl::host::context(config)

@@ -13,7 +13,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vrt::object::{Channel, Event, Handle, Interrupt, IoPorts, Process, Resource, Socket, Thread, Vmo};
+use rt::object::{Channel, Event, Handle, Interrupt, IoPorts, Process, Resource, Socket, Thread, Vmo};
 
 /// Decoding failure (malformed or hostile message).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -486,7 +486,7 @@ handle_type!(Channel, Vmo, Event, Process, Thread, Interrupt, IoPorts, Resource,
 /// Declares a struct whose fields are encoded in order.
 ///
 /// ```ignore
-/// vipc::message! {
+/// ipc::message! {
 ///     #[derive(Debug, Clone)]
 ///     pub struct FileInfo { pub name: String, pub size: u64 }
 /// }
@@ -514,7 +514,7 @@ macro_rules! message {
 /// Declares a C-like enum encoded as `u32`.
 ///
 /// ```ignore
-/// vipc::enumeration! {
+/// ipc::enumeration! {
 ///     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 ///     pub enum FsError { NotFound = 1, AccessDenied = 2 }
 /// }
@@ -546,7 +546,7 @@ macro_rules! enumeration {
 /// Declares an enum with data, encoded as a `u32` tag plus fields.
 ///
 /// ```ignore
-/// vipc::union! {
+/// ipc::union! {
 ///     #[derive(Debug)]
 ///     pub enum Event {
 ///         1 => Resized { width: u32, height: u32 },

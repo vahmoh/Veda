@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use viommu::amd64::dmar;
+use iommu::amd64::dmar;
 
 use crate::acpi::{self, u8_at, u16_at, u32_at, u64_at};
 use crate::synchronization::Once;

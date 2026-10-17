@@ -17,23 +17,23 @@
 //!   then the whole lock screen fades out over the desktop.
 //!
 //! The field takes what is typed at the keyboard alone: nothing is copied
-//! from it, and nothing pasted into it (`vui`'s `secret_input`). What is
+//! from it, and nothing pasted into it (`ui`'s `secret_input`). What is
 //! typed is wiped from memory as it goes to be checked, and the field
 //! keeps room for the longest password, so that its text is never moved
 //! (and left behind) as it grows.
 
 use core::f32::consts::FRAC_PI_2;
 
+use gfx::{Align, Color, Rect};
 use lock_core::layout::Layout;
 use lock_core::screen::{Due, Phase, Screen, Submit, Tone};
+use proto::display::{Cursor, WindowKind, WindowSpec, modifiers};
+use proto::input::keys;
+use proto::lock::MAX_PASSWORD;
+use rt::time::DateTime;
 use shell_common::presence;
-use vgfx::{Align, Color, Rect};
-use vproto::display::{Cursor, WindowKind, WindowSpec, modifiers};
-use vproto::input::keys;
-use vproto::lock::MAX_PASSWORD;
-use vrt::time::DateTime;
-use vui::window::{Display, WindowError};
-use vui::{Font, Host, Icon, Ui};
+use ui::window::{Display, WindowError};
+use ui::{Font, Host, Icon, Ui};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::backdrop::Backdrop;
@@ -126,7 +126,7 @@ impl View {
             sent: 0,
             caps_lock: false,
         };
-        Ok(View { host, face, opened: vrt::time::now_ns(), drawn: false })
+        Ok(View { host, face, opened: rt::time::now_ns(), drawn: false })
     }
 
     /// When it was opened, and whether it has drawn itself since.
@@ -184,7 +184,7 @@ impl View {
             // wallpaper.
             self.drawn = true;
             let password = self.face.screen.password();
-            self.face.screen = Screen::new(vrt::time::now_ns(), password);
+            self.face.screen = Screen::new(rt::time::now_ns(), password);
         }
         let mut out = Vec::new();
         let View { host, face, .. } = self;
@@ -245,8 +245,8 @@ impl Face {
             let a = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
             let (pixels, _) = ui.canvas.pixels_mut();
             for px in pixels.iter_mut() {
-                *px = vgfx::color::scale(*px, a);
-                vgfx::color::keep_scalar();
+                *px = gfx::color::scale(*px, a);
+                gfx::color::keep_scalar();
             }
         }
 
@@ -254,7 +254,7 @@ impl Face {
             ui.repaint_at(t);
         }
         // The clock's next minute, and the wait's next second.
-        let wall = vrt::time::unix_time_ns();
+        let wall = rt::time::unix_time_ns();
         ui.repaint_at(now + 60_000_000_000 - wall % 60_000_000_000);
         if wait_s > 0 {
             ui.repaint_at(now + 1_000_000_000 - wall % 1_000_000_000);

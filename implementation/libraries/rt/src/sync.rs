@@ -12,7 +12,7 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vabi::{Error, nr};
+use abi::{Error, nr};
 
 use crate::sys::call;
 
@@ -74,7 +74,7 @@ impl<T: ?Sized> Mutex<T> {
             if self.state.swap(2, Ordering::Acquire) == 0 {
                 return;
             }
-            let _ = futex_wait(&self.state, 2, vabi::DEADLINE_INFINITE);
+            let _ = futex_wait(&self.state, 2, abi::DEADLINE_INFINITE);
         }
     }
 
@@ -177,7 +177,7 @@ impl Condvar {
     /// re-acquires the lock (spurious wake-ups are possible: wait in a loop
     /// that checks the condition).
     pub fn wait<'a, T: ?Sized>(&self, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-        self.wait_until(guard, vabi::DEADLINE_INFINITE).0
+        self.wait_until(guard, abi::DEADLINE_INFINITE).0
     }
 
     /// Wakes one waiting thread, if any (no system call if none waits).
@@ -253,7 +253,7 @@ impl Once {
                         self.state.compare_exchange(Self::RUNNING, Self::WAITED, Ordering::Relaxed, Ordering::Relaxed);
                 }
                 _ => {
-                    let _ = futex_wait(&self.state, Self::WAITED, vabi::DEADLINE_INFINITE);
+                    let _ = futex_wait(&self.state, Self::WAITED, abi::DEADLINE_INFINITE);
                 }
             }
         }

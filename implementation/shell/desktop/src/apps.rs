@@ -4,9 +4,9 @@
 //! Application icons: every app is shown as a rounded gradient tile with a
 //! white line glyph, coloured by app id.
 
-use vgfx::{Canvas, Color, Rect};
-use vproto::init::AppInfo;
-use vui::Icon;
+use gfx::{Canvas, Color, Rect};
+use proto::init::AppInfo;
+use ui::Icon;
 
 /// Preferred order of apps on the taskbar and in the start menu.
 const ORDER: [&str; 11] = [

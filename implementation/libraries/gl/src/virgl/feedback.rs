@@ -17,7 +17,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vglsl::interp::Env;
+use glsl::interp::Env;
 
 use super::VirglBackend;
 use super::ops::{NO_BLEND, NO_TESTS, PLAIN_RASTER};
@@ -55,12 +55,12 @@ impl VirglBackend {
 
     /// Captures one point's (1, 2, 3, 4) on the host and reads it back.
     fn check_feedback(&mut self) -> Option<bool> {
-        let options = vglsl::Options::default();
-        let vs = vglsl::compile(vglsl::Stage::Vertex, &[CHECK_VS], &options).shader?;
-        let fs = vglsl::compile(vglsl::Stage::Fragment, &[CHECK_FS], &options).shader?;
+        let options = glsl::Options::default();
+        let vs = glsl::compile(glsl::Stage::Vertex, &[CHECK_VS], &options).shader?;
+        let fs = glsl::compile(glsl::Stage::Fragment, &[CHECK_FS], &options).shader?;
         let bindings =
-            vglsl::link::Bindings { attributes: Vec::new(), feedback: vec!["v".into()], feedback_separate: false };
-        let p = vglsl::program::link(&vs, &fs, &bindings, &options.limits).program?;
+            glsl::link::Bindings { attributes: Vec::new(), feedback: vec!["v".into()], feedback_separate: false };
+        let p = glsl::program::link(&vs, &fs, &bindings, &options.limits).program?;
         let program = self.program(Arc::new(p));
         let one =
             |target, format, width| ResourceDesc { target, format, width, height: 1, depth: 1, levels: 1, samples: 0 };
@@ -105,7 +105,7 @@ impl VirglBackend {
     /// memory (`samplers`: the sampler indices its vertex shader uses).
     pub(super) fn feedback_in_guest(
         &mut self,
-        source: &Arc<vglsl::program::Program>,
+        source: &Arc<glsl::program::Program>,
         samplers: &[u32],
         s: &DrawState<'_>,
         info: &DrawInfo,

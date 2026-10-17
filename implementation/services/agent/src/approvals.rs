@@ -4,7 +4,7 @@
 //! What becomes of function calls: their results go back to the language
 //! model; calls that need the user's consent wait for the shell's answer;
 //! the outcome of an allowed action is told as a notice, with what the
-//! action said as data ([`vagent::notice`]).
+//! action said as data ([`agent::notice`]).
 //!
 //! Calls the user cancelled by speaking again (`FunctionCallCancelled`) are
 //! taken out of the worker's queue if they have not started; one that had
@@ -13,12 +13,12 @@
 //! told. A cancelled call that would have asked the user, or ended the
 //! conversation, does nothing.
 
+use agent::deepgram;
+use agent::notice::Notice;
+use agent::tools::{self, Risk};
+use proto::agent::{AgentError, AgentEvent, AgentState, ApprovalRequest};
+use rt::println;
 use serde_json::{Value, json};
-use vagent::deepgram;
-use vagent::notice::Notice;
-use vagent::tools::{self, Risk};
-use vproto::agent::{AgentError, AgentEvent, AgentState, ApprovalRequest};
-use vrt::println;
 
 use crate::Agent;
 use crate::voice::Voice;
@@ -91,7 +91,7 @@ impl Agent {
             Outcome::Result(r) => r,
             Outcome::End => {
                 if let Some(s) = &mut self.session {
-                    s.request_end(vrt::time::now_ns());
+                    s.request_end(rt::time::now_ns());
                 }
                 tools::ok(Value::Null)
             }
@@ -133,7 +133,7 @@ impl Agent {
         self.next_approval += 1;
         let label = p.action.clone();
         println!("approval {} requested: {} ({})", id, label, p.detail);
-        let approval = Approval { id, pending: p, created: vrt::time::now_ns() };
+        let approval = Approval { id, pending: p, created: rt::time::now_ns() };
         let request = approval.request();
         self.approvals.push(approval);
         if let Some(ui) = &self.ui

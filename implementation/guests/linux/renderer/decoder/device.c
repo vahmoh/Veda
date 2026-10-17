@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  *
  * Devices: a Gallium screen, and the capabilities it gives clients
- * (virgl's capability set 2, which vgl reads as it reads virglrenderer's).
+ * (virgl's capability set 2, which `gl` reads as it reads virglrenderer's).
  */
 
 #include <stdio.h>

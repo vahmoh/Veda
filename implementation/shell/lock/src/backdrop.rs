@@ -12,7 +12,7 @@
 //!
 //! As the card rises, the asking form is drawn over the resting one, more
 //! opaque as it comes. Until the wallpaper is loaded, and without one,
-//! both are the splash's gradient (`vsplash`), what the screen showed as
+//! both are the splash's gradient (`splash`), what the screen showed as
 //! the system started; a wallpaper chosen anew comes in over the one shown
 //! ([`Backdrop::draw_over`]).
 //!
@@ -23,12 +23,12 @@
 
 use std::sync::Arc;
 
+use abi::RawHandle;
+use gfx::color::lerp_px;
+use gfx::{Bitmap, Canvas};
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 use shell_common::wallpaper::{self, Wallpaper};
-use vabi::RawHandle;
-use vgfx::color::lerp_px;
-use vgfx::{Bitmap, Canvas};
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
 
 /// What the backdrop is shaded with: the splash's deep blue.
 const SHADE: u32 = 0xFF05_0711;
@@ -74,7 +74,7 @@ fn shaded(mut b: Bitmap, shade: fn(i32, i32) -> u32) -> Bitmap {
         let t = shade(y as i32, h).min(256);
         for px in row {
             *px = lerp_px(*px | 0xFF00_0000, SHADE, t);
-            vgfx::color::keep_scalar();
+            gfx::color::keep_scalar();
         }
     }
     b
@@ -87,7 +87,7 @@ impl Backdrop {
         let mut rest = Bitmap::new(w.max(1), h.max(1));
         let width = rest.width as usize;
         for (y, row) in rest.pixels.chunks_exact_mut(width).enumerate() {
-            vsplash::background(y as u32, h.max(1) as u32, 0, row);
+            splash::background(y as u32, h.max(1) as u32, 0, row);
             for px in row {
                 *px |= 0xFF00_0000;
             }
@@ -157,7 +157,7 @@ impl Painter {
         let theirs = Event::from_handle(event.0.duplicate(None).ok()?);
         let shared = Arc::new(Shared { asked: Mutex::new(None), wake: Condvar::new(), done: Mutex::new(None) });
         let worker = shared.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("backdrop")
             .stack_size(256 * 1024)
             .spawn(move || work(&worker, &theirs))
@@ -188,7 +188,7 @@ impl Painter {
 
 /// The thread: paints what is asked, the latest request first.
 fn work(shared: &Shared, ready: &Event) {
-    let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
+    let vfs = proto::connect(proto::vfs::NAME).ok().map(proto::vfs::Client::new);
     if let Some(v) = &vfs {
         v.set_timeout(VFS_TIMEOUT_NS);
     }

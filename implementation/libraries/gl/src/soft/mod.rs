@@ -9,7 +9,7 @@
 //! when its results are needed — the framebuffer changes, its images are
 //! read or written, `glFlush`, `glFinish` — with the tiles shared among the
 //! workers. Clears are recorded the same way. Shaders run on the SIMD
-//! interpreter of [`vglsl::interp`].
+//! interpreter of [`glsl::interp`].
 //!
 //! Everything a recorded draw needs later is kept with it: its uniforms
 //! and uniform buffer contents are copied, and textures it samples or
@@ -32,7 +32,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use vglsl::interp::{Env, Exec, Lanes};
+use glsl::interp::{Env, Exec, Lanes};
 
 use crate::backend::*;
 use program::SoftProgram;
@@ -465,7 +465,7 @@ impl Backend for SoftBackend {
         ops::generate_mipmap(self, id, base, last);
     }
 
-    fn create_program(&mut self, program: Arc<vglsl::program::Program>) -> ProgramId {
+    fn create_program(&mut self, program: Arc<glsl::program::Program>) -> ProgramId {
         let id = unused_id(&self.programs, &mut self.next_program);
         self.programs.insert(id, Arc::new(SoftProgram::new(program)));
         id

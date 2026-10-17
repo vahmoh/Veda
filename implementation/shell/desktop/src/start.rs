@@ -4,10 +4,10 @@
 //! The start menu: search, pinned apps, the full app list, locking the
 //! screen and power options.
 
-use vgfx::{Align, Color, Rect};
-use vproto::init::{AppInfo, power};
-use vproto::input::keys;
-use vui::{ButtonKind, Font, Icon, MenuItem, Ui};
+use gfx::{Align, Color, Rect};
+use proto::init::{AppInfo, power};
+use proto::input::keys;
+use ui::{ButtonKind, Font, Icon, MenuItem, Ui};
 
 use crate::{Action, Model, apps, chrome, taskbar};
 
@@ -269,7 +269,7 @@ impl StartMenu {
         if resp.hovered {
             let a = if resp.held { 14 } else { 24 };
             ui.canvas.fill_rounded_rect(r, 8.0, Color::rgba(255, 255, 255, a));
-            ui.set_cursor(vui::Cursor::Hand);
+            ui.set_cursor(ui::Cursor::Hand);
         }
         let s = if resp.held { 40 } else { 44 };
         let tile = Rect::new(r.x + (r.w - s) / 2, r.y + 10 + (44 - s) / 2, s, s);
@@ -282,7 +282,7 @@ impl StartMenu {
     }
 
     /// A list row: icon, name and description. Returns `true` when clicked.
-    fn app_row(ui: &mut Ui, r: Rect, app: &AppInfo, highlighted: bool, t: &vui::Theme) -> bool {
+    fn app_row(ui: &mut Ui, r: Rect, app: &AppInfo, highlighted: bool, t: &ui::Theme) -> bool {
         let id = ui.id(&app.id) ^ 0x2077 ^ (r.x as u64) << 40;
         let resp = ui.interact(id, r);
         if resp.hovered || highlighted {
@@ -290,7 +290,7 @@ impl StartMenu {
             ui.canvas.fill_rounded_rect(r, 8.0, Color::rgba(255, 255, 255, a));
         }
         if resp.hovered {
-            ui.set_cursor(vui::Cursor::Hand);
+            ui.set_cursor(ui::Cursor::Hand);
         }
         apps::draw_tile(
             &mut ui.canvas,

@@ -5,7 +5,7 @@
 //! the `random` system call.
 //!
 //! Output comes from a ChaCha20 stream whose key is replaced after every
-//! request (`ventropy::Generator`), so earlier output cannot be
+//! request (`entropy::Generator`), so earlier output cannot be
 //! reconstructed from a later state. The key is derived with BLAKE2s from
 //! an entropy pool that collects:
 //!
@@ -19,7 +19,7 @@
 //! The generator is reseeded at boot, then every [`RESEED_INTERVAL_NS`] or
 //! after [`RESEED_BYTES`] of output, whichever comes first.
 
-use ventropy::{FastPool, Generator};
+use entropy::{FastPool, Generator};
 
 use crate::arch::clock::ticks;
 use crate::arch::cpu::RANDOM_SOURCES;

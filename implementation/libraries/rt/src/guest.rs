@@ -6,17 +6,17 @@
 //! A program built for the guest (with `--cfg veda_guest`, which its
 //! configuration sets) makes its system calls here instead of the way
 //! Veda's programs do: the ones on Veda's objects, and its log, through the
-//! bridge (`/dev/veda`, `vhv::bridge`), the rest with Linux's own
+//! bridge (`/dev/veda`, `hv::bridge`), the rest with Linux's own
 //! (`arch::linux`; time from the processor's clock counter, which the guest
 //! reads as Veda does; futexes; sleeping). So the
-//! program uses `vrt`, and everything built on it (`vipc`, `vproto`), as a
+//! program uses `rt`, and everything built on it (`ipc`, `proto`), as a
 //! Veda program does. What makes no sense in the guest (processes,
 //! hardware, virtual machines) is `NotSupported`.
 
 use core::sync::atomic::{AtomicI32, Ordering};
 
-use vabi::{ClockInfo, Error, HandleBasicInfo, RawHandle, WaitItem, clock, info_topic, map_flags, nr};
-use vhv::bridge::{self as b, op};
+use abi::{ClockInfo, Error, HandleBasicInfo, RawHandle, WaitItem, clock, info_topic, map_flags, nr};
+use hv::bridge::{self as b, op};
 
 use crate::arch::linux::{self, nr as sys};
 use crate::sync::Lazy;
@@ -80,7 +80,7 @@ fn bridge<T>(op: u32, req: &mut T) -> Result<(), Error> {
             _ => return Err(Error::Io),
         }
     }
-    // SAFETY: every request starts with its status (`vhv::bridge`).
+    // SAFETY: every request starts with its status (`hv::bridge`).
     let status = unsafe { *(req as *const T as *const u32) };
     match status {
         b::OK => Ok(()),
@@ -107,7 +107,7 @@ fn now_ns() -> u64 {
 /// How long from now until Veda's monotonic `deadline`, as a Linux
 /// `timespec` (`None`: never).
 fn timeout(deadline: u64) -> Option<[i64; 2]> {
-    (deadline != vabi::DEADLINE_INFINITE).then(|| {
+    (deadline != abi::DEADLINE_INFINITE).then(|| {
         let ns = deadline.saturating_sub(now_ns());
         [(ns / 1_000_000_000) as i64, (ns % 1_000_000_000) as i64]
     })

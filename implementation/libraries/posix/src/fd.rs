@@ -32,8 +32,8 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use vrt::object::Process;
-use vrt::sync::Mutex;
+use rt::object::Process;
+use rt::sync::Mutex;
 
 use crate::epoll::{Epoll, Watcher};
 use crate::eventfd::EventFd;

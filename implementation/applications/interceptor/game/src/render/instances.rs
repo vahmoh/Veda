@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use super::gpu::{self, Geometry};
 use super::{CarView, Livery, Stats};

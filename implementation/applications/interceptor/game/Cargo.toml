@@ -9,8 +9,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vaudio = { workspace = true }
-vgl = { workspace = true }
+audio = { workspace = true }
+gl = { workspace = true }
 fastnoise-lite = { workspace = true }
 glam = { workspace = true }
 libm = { workspace = true }
@@ -23,5 +23,5 @@ rand_pcg = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-vimage = { workspace = true, features = ["encode"] }
-vgl = { workspace = true, features = ["host-virgl"] }
+image = { workspace = true, features = ["encode"] }
+gl = { workspace = true, features = ["host-virgl"] }

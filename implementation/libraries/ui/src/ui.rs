@@ -19,8 +19,8 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Align, Canvas, Color, Rect};
-use vproto::display::{Cursor, WindowEvent, WindowState, modifiers};
+use gfx::{Align, Canvas, Color, Rect};
+use proto::display::{Cursor, WindowEvent, WindowState, modifiers};
 
 use crate::fonts::SharedText;
 use crate::theme::{Font, Theme};
@@ -666,12 +666,12 @@ pub(crate) mod tests {
     /// A window's context without fonts or a display: nothing in the tests
     /// may call the compositor.
     pub(crate) fn context() -> Context {
-        let channel = vrt::object::Channel::from_handle(vrt::object::Handle::invalid());
+        let channel = rt::object::Channel::from_handle(rt::object::Handle::invalid());
         Context {
-            text: SharedText::new(vgfx::Text::new()),
+            text: SharedText::new(gfx::Text::new()),
             fonts: [0; 4],
             theme: Theme::dark(),
-            display: Rc::new(vproto::display::display::Client::new(channel)),
+            display: Rc::new(proto::display::display::Client::new(channel)),
             window_id: 0,
         }
     }

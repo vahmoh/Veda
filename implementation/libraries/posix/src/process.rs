@@ -22,11 +22,11 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use vabi::startup::role;
-use vabi::{WaitItem, signals};
-use vrt::object::{Handle, Process, Vmo};
-use vrt::process::{Spawn, SpawnError};
-use vrt::sync::Mutex;
+use abi::startup::role;
+use abi::{WaitItem, signals};
+use rt::object::{Handle, Process, Vmo};
+use rt::process::{Spawn, SpawnError};
+use rt::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -51,7 +51,7 @@ pub fn koid() -> u64 {
     if k != 0 {
         return k;
     }
-    let k = vrt::object::process_self_info().map_or(0, |i| i.koid);
+    let k = rt::object::process_self_info().map_or(0, |i| i.koid);
     KOID.store(k, Ordering::Relaxed);
     k
 }
@@ -66,7 +66,7 @@ pub fn pid() -> i32 {
 
 /// The id of the process that started this one.
 pub fn ppid() -> i32 {
-    vrt::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { pid_of(i.parent_koid) })
+    rt::object::process_self_info().map_or(0, |i| if i.parent_koid == 0 { 0 } else { pid_of(i.parent_koid) })
 }
 
 /// The processes this one started and has not waited for.
@@ -75,18 +75,18 @@ static CHILDREN: Mutex<BTreeMap<i32, Process>> = Mutex::new(BTreeMap::new());
 /// Ends the process with `code` (`exit`).
 pub fn exit(code: i32) -> ! {
     crate::fd::flush_logs();
-    vrt::sys::process_exit((code & 0xff) as i64)
+    rt::sys::process_exit((code & 0xff) as i64)
 }
 
 /// Ends the process as killed by signal `s`.
 pub fn exit_by_signal(s: u32) -> ! {
     crate::fd::flush_logs();
-    vrt::sys::process_exit(vabi::EXIT_CODE_SIGNALED - s as i64)
+    rt::sys::process_exit(abi::EXIT_CODE_SIGNALED - s as i64)
 }
 
 /// A wait status (`WIFEXITED`, `WIFSIGNALED`) for an exit code.
 fn wait_status(code: i64) -> i32 {
-    match vabi::exit_signal(code) {
+    match abi::exit_signal(code) {
         Some(s) => s as i32,
         None => ((code & 0xff) as i32) << 8,
     }
@@ -256,7 +256,7 @@ fn spawn_errno(e: SpawnError) -> isize {
         SpawnError::NotExecutable | SpawnError::BadElf(_) | SpawnError::Incompatible => ENOEXEC,
         SpawnError::TooLarge => E2BIG,
         SpawnError::Refused => EAGAIN,
-        SpawnError::Kernel(vabi::Error::NoMemory) => ENOMEM,
+        SpawnError::Kernel(abi::Error::NoMemory) => ENOMEM,
         SpawnError::Kernel(e) => error::kernel(e),
     }
 }
@@ -301,7 +301,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
 
     let mut handles = child.handles(&mut inherited)?;
     // A registry connection of its own; the terminal's state.
-    let registry = vproto::with_registry(|r| r.clone_registry()).map_err(|_| EIO)?;
+    let registry = proto::with_registry(|r| r.clone_registry()).map_err(|_| EIO)?;
     match registry {
         Ok(Ok(ch)) => handles.push((role::REGISTRY, ch.into_handle())),
         _ => return Err(EIO),
@@ -309,20 +309,20 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     if let Some(vmo) = tty::vmo_for_child() {
         handles.push((role::TERMINAL, vmo.into_handle()));
     }
-    if handles.len() > vabi::CHANNEL_MAX_HANDLES {
+    if handles.len() > abi::CHANNEL_MAX_HANDLES {
         return Err(EMFILE);
     }
 
     // The program's image.
     let (vmo, size): (Vmo, u64) = error::ipc(vfs::with(|c| c.read_file(path.clone()))?)?;
-    let image = vrt::vm::Mapping::new(vmo, (size as usize).max(1), vabi::map_flags::READ).map_err(error::kernel)?;
+    let image = rt::vm::Mapping::new(vmo, (size as usize).max(1), abi::map_flags::READ).map_err(error::kernel)?;
     // SAFETY: a read-only mapping of the VMO the VFS made for us alone.
     let bytes = unsafe { &image.as_slice()[..size as usize] };
 
     // SAFETY: the program passed NULL-terminated arrays.
     let (args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
     let name = path::file_name(&path);
-    let name = &name[..name.floor_char_boundary(vabi::NAME_MAX)];
+    let name = &name[..name.floor_char_boundary(abi::NAME_MAX)];
     let entries = inherited.entries();
     let mut spawn = Spawn::new(name).path(&path).cwd(&child.cwd);
     spawn.args = args;
@@ -402,10 +402,10 @@ fn wait_child(pid: i32, nohang: bool, reap: bool) -> Result<Option<(i32, i64)>, 
         .iter()
         .map(|(_, p)| WaitItem { handle: p.raw(), signals: signals::TERMINATED, observed: 0, _reserved: 0 })
         .collect();
-    let deadline = if nohang { 0 } else { vabi::DEADLINE_INFINITE };
-    match vrt::object::wait_many(&mut items, deadline) {
+    let deadline = if nohang { 0 } else { abi::DEADLINE_INFINITE };
+    match rt::object::wait_many(&mut items, deadline) {
         Ok(_) => {}
-        Err(vabi::Error::TimedOut) => return Ok(None),
+        Err(abi::Error::TimedOut) => return Ok(None),
         Err(e) => return Err(error::kernel(e)),
     }
     let Some(i) = items.iter().position(|it| it.observed & signals::TERMINATED != 0) else { return Ok(None) };
@@ -448,7 +448,7 @@ pub unsafe fn waitid(kind: u32, id: i32, info: usize, options: u32) -> SysResult
     let si = match found {
         None => Siginfo::default(),
         Some((p, code)) => {
-            let (si_code, status) = match vabi::exit_signal(code) {
+            let (si_code, status) = match abi::exit_signal(code) {
                 Some(s) => (wait::CLD_KILLED, s as i32),
                 None => (wait::CLD_EXITED, (code & 0xff) as i32),
             };
@@ -493,7 +493,7 @@ pub fn kill(pid: i32, s: u32) -> SysResult {
 pub unsafe fn getrusage(who: i32, buf: usize) -> SysResult {
     let mut r = Rusage::default();
     if who == 0 {
-        let ns = vrt::object::process_self_info().map_or(0, |i| i.cpu_time_ns);
+        let ns = rt::object::process_self_info().map_or(0, |i| i.cpu_time_ns);
         r.utime = Timeval { sec: (ns / 1_000_000_000) as i64, usec: ((ns % 1_000_000_000) / 1000) as i64 };
     }
     // SAFETY: the program passed a struct rusage.
@@ -549,8 +549,8 @@ mod tests {
         assert_eq!(wait_status(3), 3 << 8);
         assert_eq!(wait_status(256 + 7), 7 << 8);
         // WIFSIGNALED, WTERMSIG
-        assert_eq!(wait_status(vabi::EXIT_CODE_SIGNALED - 6), 6);
-        assert_eq!(wait_status(vabi::EXIT_CODE_CRASHED), 11);
-        assert_eq!(wait_status(vabi::EXIT_CODE_KILLED), 9);
+        assert_eq!(wait_status(abi::EXIT_CODE_SIGNALED - 6), 6);
+        assert_eq!(wait_status(abi::EXIT_CODE_CRASHED), 11);
+        assert_eq!(wait_status(abi::EXIT_CODE_KILLED), 9);
     }
 }

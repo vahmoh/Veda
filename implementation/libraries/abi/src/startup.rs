@@ -25,7 +25,7 @@
 //! so their startup message leaves both out (a message holds at most
 //! [`CHANNEL_MAX_BYTES`](crate::CHANNEL_MAX_BYTES), a command line may be
 //! longer). A loader tells Veda's own programs from POSIX ones by the note
-//! Veda's programs carry (`velf::veda`).
+//! Veda's programs carry (`elf::veda`).
 
 /// `"VSTA"`
 pub const MAGIC: u32 = u32::from_le_bytes(*b"VSTA");
@@ -50,7 +50,7 @@ pub mod role {
     /// Channel on which a service receives incoming client connections.
     pub const SERVICE_LISTENER: u32 = 17;
     /// VMO with the state of the terminal the program runs in (rows,
-    /// columns, modes); see `vproto::tty`.
+    /// columns, modes); see `proto::tty`.
     pub const TERMINAL: u32 = 18;
     /// File descriptor `n` of a POSIX program has role `FD + n`
     /// (`n < MAX_FDS`): a socket (a pipe or a terminal) or a channel to an

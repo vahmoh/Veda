@@ -3,8 +3,8 @@
 
 //! System call results and `errno`.
 
-use vipc::IpcError;
-use vproto::fs::FsError;
+use ipc::IpcError;
+use proto::fs::FsError;
 
 use crate::linux::errno::*;
 
@@ -35,8 +35,8 @@ pub fn fs(e: FsError) -> isize {
 }
 
 /// The `errno` for a kernel error.
-pub fn kernel(e: vabi::Error) -> isize {
-    use vabi::Error as K;
+pub fn kernel(e: abi::Error) -> isize {
+    use abi::Error as K;
     match e {
         K::InvalidArgs | K::OutOfRange => EINVAL,
         K::BadHandle | K::WrongType => EBADF,

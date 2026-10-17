@@ -10,7 +10,7 @@
 use alloc::format;
 use alloc::string::String;
 
-use vgfx::Color;
+use gfx::Color;
 
 use crate::brush::{self, Tip};
 use crate::color::{self, PALETTE};

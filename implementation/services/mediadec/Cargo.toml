@@ -15,9 +15,9 @@ license.workspace = true
 bench = false
 
 [dependencies]
-vabi = { workspace = true }
-vrt = { workspace = true, default-features = false }
-vproto = { workspace = true }
+abi = { workspace = true }
+rt = { workspace = true, default-features = false }
+proto = { workspace = true }
 
 [lints]
 workspace = true

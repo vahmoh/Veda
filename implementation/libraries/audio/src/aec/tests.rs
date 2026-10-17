@@ -367,7 +367,7 @@ fn hostile_input_is_harmless() {
 }
 
 /// Processing time per second of audio on the host. Run with
-/// `cargo test --release -p vaudio aec::tests::bench -- --ignored --nocapture`.
+/// `cargo test --release -p audio aec::tests::bench -- --ignored --nocapture`.
 #[test]
 #[ignore]
 fn bench_cpu_time() {

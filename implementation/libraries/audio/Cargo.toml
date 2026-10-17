@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vaudio"
+name = "audio"
 description = "Audio formats, mixing, resampling, voice processing and synthesis"
 version.workspace = true
 edition.workspace = true

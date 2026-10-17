@@ -8,16 +8,16 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vproto::pci::{Bar, Capabilities, DeviceInfo, cap};
-use vrt::println;
-use vrt::time::{Duration, sleep};
+use proto::pci::{Bar, Capabilities, DeviceInfo, cap};
+use rt::println;
+use rt::time::{Duration, sleep};
 
 use crate::arch::config::ConfigAccess;
 
 const CAP_POWER_MANAGEMENT: u8 = 0x01;
 const CAP_PCI_EXPRESS: u8 = 0x10;
 /// What a BAR's mapping reaches is whole pages.
-const PAGE: u64 = vabi::PAGE_SIZE as u64;
+const PAGE: u64 = abi::PAGE_SIZE as u64;
 /// PCI Express: Device Capabilities (function-level reset), Device Control
 /// (initiate it), Device Status (transactions pending).
 const DEVCAP: u16 = 4;

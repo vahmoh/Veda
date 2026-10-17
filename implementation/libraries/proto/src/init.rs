@@ -5,8 +5,8 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use vipc::{enumeration, message, protocol, union};
-use vrt::object::Channel;
+use ipc::{enumeration, message, protocol, union};
+use rt::object::Channel;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

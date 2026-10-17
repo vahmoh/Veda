@@ -133,14 +133,14 @@ pub(super) fn cmd_sleep(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let Some(secs) = args.get(1).and_then(|a| a.parse::<f64>().ok()).filter(|s| *s >= 0.0 && *s <= 3600.0) else {
         return io.error("sleep", "usage: sleep SECONDS (up to 3600)");
     };
-    let end = vrt::time::now_ns() + (secs * 1e9) as u64;
+    let end = rt::time::now_ns() + (secs * 1e9) as u64;
     // In short steps, so that Ctrl+C stops it at once.
-    while vrt::time::now_ns() < end {
+    while rt::time::now_ns() < end {
         if sh.interrupted() {
             return INTERRUPTED;
         }
-        let left = end.saturating_sub(vrt::time::now_ns());
-        vrt::time::sleep(vrt::time::Duration::from_nanos(left.min(50_000_000)));
+        let left = end.saturating_sub(rt::time::now_ns());
+        rt::time::sleep(rt::time::Duration::from_nanos(left.min(50_000_000)));
     }
     0
 }

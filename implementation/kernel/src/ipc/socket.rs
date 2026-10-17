@@ -31,8 +31,8 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::Error;
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
+use abi::Error;
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
 
 use crate::object::handle::Handle;
 use crate::object::{KObject, Signals};
@@ -42,7 +42,7 @@ use crate::synchronization::SpinLock;
 pub const CAPACITY: usize = 256 * 1024;
 /// Writes of at most this many bytes are never split: they go in whole or
 /// wait (POSIX `PIPE_BUF`). An endpoint is writable while this much fits.
-pub const ATOMIC_WRITE: usize = vabi::SOCKET_ATOMIC_WRITE;
+pub const ATOMIC_WRITE: usize = abi::SOCKET_ATOMIC_WRITE;
 /// A buffer that has emptied keeps its memory up to this size.
 const KEPT_BUFFER: usize = 64 * 1024;
 /// Handles waiting with the bytes of one direction at most: a write that

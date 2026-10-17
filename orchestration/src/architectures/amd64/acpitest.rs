@@ -6,11 +6,11 @@
 //! devices on QEMU's PC, named as its firmware names them, on its I/O
 //! APIC's lines.
 
-use vacpi::asm::{
+use acpi::asm::{
     HID_OVER_I2C, cat, device, dsm, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, name, resource_template,
     scope, string, table as whole, uuid,
 };
-use vacpi::resource::Gpio;
+use acpi::resource::Gpio;
 
 /// The tables [`table`] makes.
 pub const NAMES: &[&str] = &["touchpad", "gpio", "nhlt"];
@@ -86,7 +86,7 @@ mod tests {
     fn the_tables_are_whole() {
         for name in NAMES {
             let table = table(name).unwrap_or_else(|| panic!("no table {name}"));
-            assert!(vhv::acpi::is_table(&table), "{name}");
+            assert!(hv::acpi::is_table(&table), "{name}");
         }
         let nhlt = table("nhlt").unwrap();
         assert_eq!((&nhlt[..4], &nhlt[16..24], nhlt.len()), (&b"NHLT"[..], &b"TESTNHLT"[..], 37));

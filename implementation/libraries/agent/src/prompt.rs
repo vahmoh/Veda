@@ -19,8 +19,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vproto::agent::AppAgentInfo;
-use vproto::init::AppInfo;
+use proto::agent::AppAgentInfo;
+use proto::init::AppInfo;
 
 use crate::notice;
 use crate::tools;
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn what_applications_say_stays_in_their_line() {
-        use vproto::agent::{ActionSpec, ParamSpec, Risk};
+        use proto::agent::{ActionSpec, ParamSpec, Risk};
         let app = |id: &str, description: &str| AppInfo {
             id: id.into(),
             name: id.to_uppercase(),

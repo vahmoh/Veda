@@ -10,10 +10,10 @@ license.workspace = true
 
 [dependencies]
 libm = { workspace = true }
-vgfx = { workspace = true }
-vraster = { workspace = true }
-vfiles = { workspace = true }
-vimage = { workspace = true, features = ["encode"] }
+gfx = { workspace = true }
+raster = { workspace = true }
+files = { workspace = true }
+image = { workspace = true, features = ["encode"] }
 
 [lints]
 workspace = true

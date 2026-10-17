@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The firmware's ACPI tables, as far as the kernel reads them: the tables
-//! the root table lists (`vacpi::tables`, over the direct map: what a
+//! the root table lists (`acpi::tables`, over the direct map: what a
 //! table says is beyond it is not read), PCI Express configuration space
 //! (MCFG) and power control (FADT, `\_S5`). The tables that describe the architecture's own devices
 //! (its processors, interrupt controllers and IOMMU) are read by its code.
 //! The kernel loads no AML namespace (devmgr does): `\_S5`'s package is
-//! found and decoded where the DSDT defines it (`vacpi::aml::sleep_type`).
+//! found and decoded where the DSDT defines it (`acpi::aml::sleep_type`).
 
 use alloc::vec::Vec;
 
-use vacpi::tables::{self, Entry};
+use acpi::tables::{self, Entry};
 
 use crate::memory::phys_to_virt;
 use crate::synchronization::Once;
@@ -88,7 +88,7 @@ impl Firmware {
     }
 }
 
-impl vacpi::Memory for Firmware {
+impl acpi::Memory for Firmware {
     fn read(&self, address: u64, buf: &mut [u8]) -> bool {
         let Some(bytes) = self.bytes(address, buf.len()) else { return false };
         buf.copy_from_slice(bytes);
@@ -140,7 +140,7 @@ fn parse_fadt(fw: &Firmware, t: &[u8], info: &mut AcpiInfo) {
     // `\_S5`'s package, where the DSDT defines it.
     let dsdt = tables::dsdt_address(t).and_then(|a| Entry::at(fw, a)).and_then(|e| fw.table(e));
     if let Some(dsdt) = dsdt.filter(|d| &d.signature == b"DSDT")
-        && let Some((a, b)) = vacpi::aml::sleep_type(dsdt.bytes, 5)
+        && let Some((a, b)) = acpi::aml::sleep_type(dsdt.bytes, 5)
     {
         info.power.slp_typ_a = a;
         info.power.slp_typ_b = b;

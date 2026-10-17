@@ -5,7 +5,7 @@
 
 use core::sync::atomic::Ordering;
 
-use vabi::{Error, ProcessInfo, RawHandle, Rights, resource_kind, restrict};
+use abi::{Error, ProcessInfo, RawHandle, Rights, resource_kind, restrict};
 
 use super::{SysResult, current_process, get_process, get_resource, get_thread, insert, ok, read_str, target_process};
 use crate::memory::user;
@@ -18,7 +18,7 @@ const PROCESS_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Right
 const THREAD_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0);
 
 fn is_user_address(a: usize) -> bool {
-    (vabi::USER_SPACE_START..vabi::USER_SPACE_END).contains(&a)
+    (abi::USER_SPACE_START..abi::USER_SPACE_END).contains(&a)
 }
 
 /// Refuses what the calling process gave up (`flag`, [`restrict`]).
@@ -36,7 +36,7 @@ pub fn process_restrict(flags: usize) -> SysResult {
 
 pub fn process_create(name: usize, len: usize) -> SysResult {
     allowed(restrict::NO_PROCESSES)?;
-    let name = read_str(name, len, vabi::NAME_MAX * 4)?;
+    let name = read_str(name, len, abi::NAME_MAX * 4)?;
     let parent = current_process()?;
     process::may_create(parent.koid)?;
     // An address space and a handle table, from the kernel's memory.
@@ -70,7 +70,7 @@ pub fn process_start(
     arg1: usize,
 ) -> SysResult {
     let bootstrap: Option<Handle> = match arg {
-        vabi::INVALID_HANDLE => None,
+        abi::INVALID_HANDLE => None,
         arg => Some(current_process()?.handles.lock().remove(arg)?),
     };
     let p = get_process(proc, Rights::MANAGE)?;
@@ -83,7 +83,7 @@ pub fn process_start(
     }
     let child_handle = match bootstrap {
         Some(h) => p.handles.lock().insert(h)?,
-        None => vabi::INVALID_HANDLE,
+        None => abi::INVALID_HANDLE,
     };
     start_thread(&t, entry, stack, child_handle as u64, arg1 as u64)?;
     p.mark_started();
@@ -100,17 +100,17 @@ pub fn process_exit(code: i64) -> SysResult {
 /// Ends the process; with `kill_flags::DESCENDANTS`, the processes it
 /// started (and so on) as well: its handle manages its whole job.
 pub fn process_kill(raw: RawHandle, flags: usize) -> SysResult {
-    if flags & !vabi::kill_flags::DESCENDANTS != 0 {
+    if flags & !abi::kill_flags::DESCENDANTS != 0 {
         return Err(Error::InvalidArgs);
     }
     let p = get_process(raw, Rights::MANAGE)?;
     let mut victims = alloc::vec![p.clone()];
-    if flags & vabi::kill_flags::DESCENDANTS != 0 {
+    if flags & abi::kill_flags::DESCENDANTS != 0 {
         victims.extend(process::descendants(p.koid));
     }
     let me = current_process()?.koid;
     for v in &victims {
-        v.kill(vabi::EXIT_CODE_KILLED);
+        v.kill(abi::EXIT_CODE_KILLED);
     }
     if victims.iter().any(|v| v.koid == me) {
         scheduler::exit_current();
@@ -120,7 +120,7 @@ pub fn process_kill(raw: RawHandle, flags: usize) -> SysResult {
 
 pub fn thread_create(proc: RawHandle, name: usize, len: usize) -> SysResult {
     let p = target_process(proc)?;
-    let name = read_str(name, len, vabi::NAME_MAX * 4)?;
+    let name = read_str(name, len, abi::NAME_MAX * 4)?;
     let t = Thread::new_user(&p, &name).ok_or(Error::NoMemory)?;
     p.add_thread(t.clone())?;
     ok(insert(KObject::Thread(t), THREAD_RIGHTS)? as usize)
@@ -159,8 +159,8 @@ pub fn thread_exit() -> SysResult {
 /// library that keeps its threads' handles to itself lets a thread set its
 /// own).
 pub fn thread_set_priority(raw: RawHandle, prio: usize) -> SysResult {
-    let t = if raw == vabi::INVALID_HANDLE { scheduler::current() } else { get_thread(raw, Rights::MANAGE)? };
-    if prio == 0 || prio > vabi::priority::REALTIME {
+    let t = if raw == abi::INVALID_HANDLE { scheduler::current() } else { get_thread(raw, Rights::MANAGE)? };
+    if prio == 0 || prio > abi::priority::REALTIME {
         return Err(Error::InvalidArgs);
     }
     t.sched.lock().priority = prio as u8;

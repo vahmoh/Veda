@@ -26,11 +26,11 @@ mod viewer;
 
 use std::sync::Arc;
 
-use vabi::RawHandle;
-use vgfx::{Align, Color, Rect, ShadowTemplate};
-use vproto::shell::{ShellLink, ShellReply};
-use vproto::vfs;
-use vui::{App, Font, Icon, Ui, WindowSpec, WindowState};
+use abi::RawHandle;
+use gfx::{Align, Color, Rect, ShadowTemplate};
+use proto::shell::{ShellLink, ShellReply};
+use proto::vfs;
+use ui::{App, Font, Icon, Ui, WindowSpec, WindowState};
 
 use crate::catalog::{Entry, Thumb};
 use crate::loader::{Budget, Done, Loader, Picture};
@@ -114,9 +114,9 @@ impl Photos {
             current: 0,
             keyboard_nav: false,
             reveal_selection: false,
-            loader: Loader::start(Budget::for_memory(vrt::object::system_info().map_or(0, |i| i.total_memory))),
+            loader: Loader::start(Budget::for_memory(rt::object::system_info().map_or(0, |i| i.total_memory))),
             shell: ShellLink::start(),
-            vfs: vproto::connect(vfs::NAME).ok().map(vfs::Client::new),
+            vfs: proto::connect(vfs::NAME).ok().map(vfs::Client::new),
             pictures: Vec::new(),
             view: View::default(),
             cache: ViewCache::new(),
@@ -396,7 +396,7 @@ impl Photos {
     }
 
     pub fn show_toast(&mut self, text: &str, icon: Icon) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         self.toast = Some(Toast { text: text.to_string(), icon, shown_at: now, until: now + 2_800_000_000 });
     }
 
@@ -507,10 +507,10 @@ impl App for Photos {
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
         let mut handles = Vec::new();
         if let Some(l) = &self.loader {
-            handles.push((l.event_handle(), vabi::signals::SIGNALED));
+            handles.push((l.event_handle(), abi::signals::SIGNALED));
         }
         if let Some(s) = &self.shell {
-            handles.push((s.event_handle(), vabi::signals::SIGNALED));
+            handles.push((s.event_handle(), abi::signals::SIGNALED));
         }
         handles
     }
@@ -519,15 +519,15 @@ impl App for Photos {
         self.absorb();
     }
 
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Photos::agent_invoke(self, action, args)
     }
 }
@@ -535,7 +535,7 @@ impl App for Photos {
 fn main() {
     // `photos [PATH]`: a picture opens in the viewer with its folder in the library; a folder
     // opens in the library.
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let arg = args.get(1).filter(|a| !a.is_empty()).cloned();
     let mut app = Photos::new(catalog::pictures_dir());
     let mut file = None;
@@ -568,5 +568,5 @@ fn main() {
     spec.min_width = 560;
     spec.min_height = 380;
     spec.app_id = "photos".into();
-    std::process::exit(vui::run(spec, app));
+    std::process::exit(ui::run(spec, app));
 }

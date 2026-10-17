@@ -14,13 +14,13 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
-vimage = { workspace = true }
-vfiles = { workspace = true }
-vui = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+image = { workspace = true }
+files = { workspace = true }
+ui = { workspace = true }
 
 
 [lints]

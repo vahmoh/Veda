@@ -20,14 +20,14 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vabi::Rights;
-use vipc::Bytes;
-use vproto::fs::{FsError, open_flags, vfs};
-use vproto::init::TaskEvent;
-use vproto::launcher;
-use vrt::object::{Channel, Event, Interrupt, Vmo};
-use vrt::println;
-use vrt::sync::{Condvar, Mutex};
+use abi::Rights;
+use ipc::Bytes;
+use proto::fs::{FsError, open_flags, vfs};
+use proto::init::TaskEvent;
+use proto::launcher;
+use rt::object::{Channel, Event, Interrupt, Vmo};
+use rt::println;
+use rt::sync::{Condvar, Mutex};
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
@@ -37,7 +37,7 @@ mod policy;
 mod ports;
 mod posix;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 type TestResult = Result<(), String>;
 
@@ -46,7 +46,7 @@ fn check(cond: bool, what: &str) -> TestResult {
 }
 
 fn vfs_client() -> Result<vfs::Client, String> {
-    vproto::connect(vfs::NAME).map(vfs::Client::new).map_err(|e| alloc::format!("connect vfs: {e:?}"))
+    proto::connect(vfs::NAME).map(vfs::Client::new).map_err(|e| alloc::format!("connect vfs: {e:?}"))
 }
 
 fn test_vfs_system_image() -> TestResult {
@@ -105,7 +105,7 @@ fn test_vfs_space() -> TestResult {
 }
 
 fn test_launcher() -> TestResult {
-    let ch = vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?;
+    let ch = proto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?;
     let l = launcher::Client::new(ch);
     let tasks = l.tasks().map_err(|e| e.to_string())?;
     check(tasks.iter().any(|t| t.name == "init"), "init is running")?;
@@ -118,21 +118,21 @@ fn test_launcher() -> TestResult {
 /// it) to come back, and for the lock service to unlock the new one, which
 /// starts locked (no password is set).
 fn test_service_restart() -> TestResult {
-    use vproto::display::display;
-    let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    use proto::display::display;
+    let l = launcher::Client::new(proto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let koid_of = |l: &launcher::Client, name: &str| -> Result<Option<u64>, String> {
         Ok(l.tasks().map_err(|e| e.to_string())?.iter().find(|t| t.name == name).map(|t| t.koid))
     };
     // A shell registers its service after creating its windows.
     let shell_up = || {
-        let names = vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
+        let names = proto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
         names.iter().any(|n| n == "shell")
     };
-    let wait = || vrt::time::sleep(vrt::time::Duration::from_millis(200));
+    let wait = || rt::time::sleep(rt::time::Duration::from_millis(200));
     // The compositor goes with the desktop on the screen, as in use. (With
     // hardware virtualisation, systest gets here before the shell has made
     // its windows.)
-    let start = vrt::time::Instant::now();
+    let start = rt::time::Instant::now();
     while !shell_up() {
         if start.elapsed().as_millis() > 40_000 {
             return Err("the desktop shell did not start".into());
@@ -142,7 +142,7 @@ fn test_service_restart() -> TestResult {
     let shell_before = koid_of(&l, "shell")?;
     let old = koid_of(&l, "compositor")?.ok_or("the compositor is not running")?;
     l.kill(old).map_err(|e| e.to_string())?.map_err(|e| alloc::format!("kill: {e:?}"))?;
-    let start = vrt::time::Instant::now();
+    let start = rt::time::Instant::now();
     loop {
         if start.elapsed().as_millis() > 20_000 {
             return Err("the compositor was not restarted".into());
@@ -154,7 +154,7 @@ fn test_service_restart() -> TestResult {
     }
     // The registry queues this connection until the new compositor
     // registers, so the call waits for it to come up.
-    let d = display::Client::new(vproto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let d = display::Client::new(proto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let info = d.screen_info().map_err(|e| e.to_string())?;
     check(info.width > 0 && info.height > 0, "restarted compositor reports the screen")?;
     loop {
@@ -167,8 +167,8 @@ fn test_service_restart() -> TestResult {
         }
         wait();
     }
-    use vproto::lock::lock;
-    let lock = lock::Client::new(vproto::connect(lock::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    use proto::lock::lock;
+    let lock = lock::Client::new(proto::connect(lock::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     loop {
         if !lock.status().map_err(|e| e.to_string())?.locked {
             return Ok(());
@@ -183,16 +183,16 @@ fn test_service_restart() -> TestResult {
 /// Applications that crash are reported to launcher watchers (the shell
 /// shows a notification): start a copy of this program that faults.
 fn test_crash_report() -> TestResult {
-    let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let l = launcher::Client::new(proto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let events = l.watch().map_err(|e| e.to_string())?.map_err(|e| alloc::format!("watch: {e:?}"))?;
     println!("crash report: starting a copy of systest that faults on purpose");
     let koid = l
         .launch("/system/bin/systest".into(), alloc::vec!["crash".into()])
         .map_err(|e| e.to_string())?
         .map_err(|e| alloc::format!("launch: {e:?}"))?;
-    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(10));
+    let deadline = rt::time::deadline_after(rt::time::Duration::from_secs(10));
     let msg = events.read_blocking(deadline).map_err(|e| alloc::format!("no crash report: {e}"))?;
-    let (_, event) = vipc::decode_event::<TaskEvent>(msg).map_err(|e| e.to_string())?;
+    let (_, event) = ipc::decode_event::<TaskEvent>(msg).map_err(|e| e.to_string())?;
     check(event == TaskEvent::Crashed { koid, name: "systest".into() }, "the report names the crashed process")
 }
 
@@ -207,7 +207,7 @@ fn test_threads_and_locks() -> TestResult {
     let mut handles = Vec::new();
     for _ in 0..4 {
         let c = counter.clone();
-        handles.push(vrt::thread::spawn(move || {
+        handles.push(rt::thread::spawn(move || {
             for _ in 0..2000 {
                 *c.lock() += 1;
             }
@@ -221,8 +221,8 @@ fn test_threads_and_locks() -> TestResult {
     // Condition variable handshake between two threads.
     let state = Arc::new((Mutex::new(false), Condvar::new()));
     let s2 = state.clone();
-    let waker = vrt::thread::spawn(move || {
-        vrt::time::sleep(vrt::time::Duration::from_millis(20));
+    let waker = rt::thread::spawn(move || {
+        rt::time::sleep(rt::time::Duration::from_millis(20));
         *s2.0.lock() = true;
         s2.1.notify_all();
     });
@@ -235,17 +235,17 @@ fn test_threads_and_locks() -> TestResult {
 
     // A thread sets its own priority (as the standard library's threads,
     // whose handles the C library keeps, do).
-    let wanted = vabi::priority::NORMAL - 1;
+    let wanted = abi::priority::NORMAL - 1;
     let (set, done) =
         (Arc::new(Event::create().map_err(|e| e.to_string())?), Event::create().map_err(|e| e.to_string())?);
     let (theirs, finish) = (set.clone(), Event::from_handle(done.0.duplicate(None).map_err(|e| e.to_string())?));
-    let thread = vrt::thread::spawn(move || {
-        let r = vrt::thread::set_priority(wanted);
+    let thread = rt::thread::spawn(move || {
+        let r = rt::thread::set_priority(wanted);
         let _ = theirs.signal();
-        let _ = finish.wait(vabi::signals::SIGNALED, vabi::DEADLINE_INFINITE);
+        let _ = finish.wait(abi::signals::SIGNALED, abi::DEADLINE_INFINITE);
         r
     });
-    set.wait(vabi::signals::SIGNALED, vabi::DEADLINE_INFINITE).map_err(|e| e.to_string())?;
+    set.wait(abi::signals::SIGNALED, abi::DEADLINE_INFINITE).map_err(|e| e.to_string())?;
     let priority = thread.thread().info().map_err(|e| e.to_string())?.priority;
     let _ = done.signal();
     thread.join().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
@@ -265,26 +265,26 @@ fn test_ipc_primitives() -> TestResult {
     got.read(4096, &mut buf).map_err(|e| e.to_string())?;
     check(&buf == b"shared", "VMO contents shared")?;
     drop(a);
-    check(b.read().err() == Some(vabi::Error::PeerClosed), "peer closed detected")?;
+    check(b.read().err() == Some(abi::Error::PeerClosed), "peer closed detected")?;
 
     // Events wake waiters on another thread.
     let ev = Arc::new(Event::create().map_err(|e| e.to_string())?);
     let hits = Arc::new(AtomicU32::new(0));
     let (ev2, hits2) = (ev.clone(), hits.clone());
-    let t = vrt::thread::spawn(move || {
-        if ev2.wait(vabi::signals::SIGNALED, vrt::time::deadline_after(vrt::time::Duration::from_secs(5))).is_ok() {
+    let t = rt::thread::spawn(move || {
+        if ev2.wait(abi::signals::SIGNALED, rt::time::deadline_after(rt::time::Duration::from_secs(5))).is_ok() {
             hits2.fetch_add(1, Ordering::SeqCst);
         }
     });
-    vrt::time::sleep(vrt::time::Duration::from_millis(10));
+    rt::time::sleep(rt::time::Duration::from_millis(10));
     ev.signal().map_err(|e| e.to_string())?;
     t.join().map_err(|e| e.to_string())?;
     check(hits.load(Ordering::SeqCst) == 1, "event woke the waiter")?;
 
     // Timeouts expire.
-    let start = vrt::time::Instant::now();
-    let r = ev.0.wait(vabi::signals::USER_0, vrt::time::deadline_after(vrt::time::Duration::from_millis(30)));
-    check(r == Err(vabi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
+    let start = rt::time::Instant::now();
+    let r = ev.0.wait(abi::signals::USER_0, rt::time::deadline_after(rt::time::Duration::from_millis(30)));
+    check(r == Err(abi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
 /// Write-combining memory (a display engine's pictures, which it reads
@@ -292,13 +292,13 @@ fn test_ipc_primitives() -> TestResult {
 /// mapping writes is what the kernel reads of it, and the other way; the
 /// pages it commits read as zeros. Flags it does not know are refused.
 fn test_write_combining_memory() -> TestResult {
-    use vabi::{map_flags, vmo_flags};
-    const PAGE: usize = vabi::PAGE_SIZE;
-    let err = |e: vabi::Error| e.to_string();
+    use abi::{map_flags, vmo_flags};
+    const PAGE: usize = abi::PAGE_SIZE;
+    let err = |e: abi::Error| e.to_string();
     let word = |i: usize| 0x5eda_0000_0000_0000 | i as u64;
     let vmo = Vmo::create_with(4 * PAGE, vmo_flags::WRITE_COMBINING).map_err(err)?;
     let mapped = Vmo::from_handle(vmo.0.duplicate(None).map_err(err)?);
-    let map = vrt::vm::Mapping::new(mapped, 4 * PAGE, map_flags::READ | map_flags::WRITE).map_err(err)?;
+    let map = rt::vm::Mapping::new(mapped, 4 * PAGE, map_flags::READ | map_flags::WRITE).map_err(err)?;
     // The first page through the mapping (which commits it), the second
     // through the kernel.
     for i in 0..PAGE / 8 {
@@ -328,14 +328,14 @@ fn test_write_combining_memory() -> TestResult {
     committed.read(0, &mut zeros).map_err(err)?;
     check(zeros.iter().all(|&b| b == 0), "committed at once, they read as zeros")?;
     // (No flag of `vmo_flags`.)
-    check(Vmo::create_with(PAGE, 1 << 2).err() == Some(vabi::Error::InvalidArgs), "flags it does not know are refused")
+    check(Vmo::create_with(PAGE, 1 << 2).err() == Some(abi::Error::InvalidArgs), "flags it does not know are refused")
 }
 
 /// Interrupts a program raises: an edge signals each time; a
 /// level-triggered one stays raised until it is ended, which signals its
 /// event; a duplicate without `SIGNAL` cannot raise it.
 fn test_software_interrupts() -> TestResult {
-    let err = |e: vabi::Error| e.to_string();
+    let err = |e: abi::Error| e.to_string();
     let now = 0;
     let ended = Event::create().map_err(err)?;
     let level = Interrupt::create_software(true, Some(&ended)).map_err(err)?;
@@ -343,15 +343,15 @@ fn test_software_interrupts() -> TestResult {
     level.raise().map_err(err)?;
     level.raise().map_err(err)?;
     check(level.wait_irq(now).is_ok(), "raised")?;
-    check(ended.wait(vabi::signals::SIGNALED, now).is_err(), "not ended while raised")?;
+    check(ended.wait(abi::signals::SIGNALED, now).is_err(), "not ended while raised")?;
     let consumer = Interrupt(level.0.duplicate(Some(Rights(Rights::BASIC.0 | Rights::WRITE.0))).map_err(err)?);
-    check(consumer.raise() == Err(vabi::Error::AccessDenied), "its consumer cannot raise it")?;
+    check(consumer.raise() == Err(abi::Error::AccessDenied), "its consumer cannot raise it")?;
     consumer.ack().map_err(err)?;
     check(level.wait_irq(now).is_err(), "acknowledged")?;
-    check(ended.wait(vabi::signals::SIGNALED, now).is_ok(), "the ending signals its event")?;
+    check(ended.wait(abi::signals::SIGNALED, now).is_ok(), "the ending signals its event")?;
     ended.clear().map_err(err)?;
     consumer.ack().map_err(err)?;
-    check(ended.wait(vabi::signals::SIGNALED, now).is_err(), "only an interrupt raised ends")?;
+    check(ended.wait(abi::signals::SIGNALED, now).is_err(), "only an interrupt raised ends")?;
 
     let edge = Interrupt::create_software(false, None).map_err(err)?;
     edge.raise().map_err(err)?;
@@ -364,9 +364,9 @@ fn test_software_interrupts() -> TestResult {
 type Test = (&'static str, fn() -> TestResult);
 
 fn main() -> i32 {
-    match vrt::env::args().get(1).map(|a| a.as_str()) {
+    match rt::env::args().get(1).map(|a| a.as_str()) {
         Some("crash") => crash(),
-        Some("limits") => return policy::limits(vrt::env::args().get(2)),
+        Some("limits") => return policy::limits(rt::env::args().get(2)),
         Some("job") => return posix::job(),
         Some("restricted") => return posix::restricted(),
         Some("wait") => {

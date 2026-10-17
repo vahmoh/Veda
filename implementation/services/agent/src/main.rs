@@ -22,8 +22,8 @@
 //!   Anything above routine risk waits for the user's approval
 //!   ([`approvals`]), which the shell asks for — in the agent's window
 //!   when it is open, otherwise in a notification — and the outcome is told
-//!   to the agent ([`vagent::notice`]). Timers wake it when they are due
-//!   ([`timers`]).
+//!   to the agent ([`agent::notice`](::agent::notice)). Timers wake it when
+//!   they are due ([`timers`]).
 //! * **Who may do what** is decided by the registry's identity of each
 //!   connection ([`server`]): any program may register its abilities
 //!   ([`registrar`]); only the shell attaches the interface and answers
@@ -49,13 +49,13 @@ mod worker;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use vabi::{WaitItem, signals};
-use vagent::deepgram;
-use vagent::gate::EchoGate;
-use vproto::agent::{AgentEvent, AgentState, AgentStatus, agent};
-use vrt::object::Channel;
-use vrt::println;
-use vrt::sync::Mutex;
+use ::agent::deepgram;
+use ::agent::gate::EchoGate;
+use abi::{WaitItem, signals};
+use proto::agent::{AgentEvent, AgentState, AgentStatus, agent};
+use rt::object::Channel;
+use rt::println;
+use rt::sync::Mutex;
 
 use admin::SettingsServer;
 use approvals::Approval;
@@ -141,7 +141,7 @@ struct Agent {
 }
 
 impl Agent {
-    fn config(&self) -> vagent::config::Config {
+    fn config(&self) -> ::agent::config::Config {
         self.shared.lock().config.clone()
     }
 
@@ -203,7 +203,7 @@ impl Agent {
         // The window system tells the lock.
         const LOCK: u64 = 7;
         const CONN: u64 = 1 << 32;
-        self.check_lock(vrt::time::now_ns());
+        self.check_lock(rt::time::now_ns());
         self.rest();
         if self.wake_at_start {
             self.wake("start-up option", true);
@@ -211,7 +211,7 @@ impl Agent {
         // Deepgram's messages are waiting beyond what one pass handled.
         let mut backlog = false;
         loop {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             let mut items: Vec<WaitItem> = Vec::new();
             let mut keys: Vec<u64> = Vec::new();
             let mut add = |h, s, k| {
@@ -259,7 +259,7 @@ impl Agent {
             if backlog {
                 deadline = now;
             }
-            let _ = vrt::object::wait_many(&mut items, deadline);
+            let _ = rt::object::wait_many(&mut items, deadline);
             let mut closed = Vec::new();
             for (it, &k) in items.iter().zip(&keys) {
                 if it.observed == 0 {
@@ -280,7 +280,7 @@ impl Agent {
                                 Err(e) => {
                                     println!("cannot reach Deepgram: {}", e);
                                     let msg = match e {
-                                        vweb::WebError::Status { code: 401 | 403, .. } => {
+                                        web::WebError::Status { code: 401 | 403, .. } => {
                                             "Deepgram did not accept the API key. Check it in Settings."
                                         }
                                         _ => "Deepgram cannot be reached. Check the network connection.",
@@ -312,7 +312,7 @@ impl Agent {
             }
             backlog = self.session.is_some() && !self.poll_session();
             if let Some(l) = &mut self.listener
-                && let Some(said) = l.poll(vrt::time::now_ns())
+                && let Some(said) = l.poll(rt::time::now_ns())
             {
                 // What woke it is the first thing the user said.
                 self.on_wake.push(said);
@@ -326,7 +326,7 @@ impl Agent {
             if let Some(v) = &mut self.voice {
                 v.pump();
             }
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             self.check_lock(now);
             self.housekeeping(now);
             self.check_timers();
@@ -345,12 +345,12 @@ fn run() -> i32 {
     // Options from the kernel command line (handed down by init):
     // `agent.endpoint=ws://10.0.2.2:5000/` talks to a local simulator. The
     // Deepgram key goes only to Deepgram's own services, over TLS
-    // (`vagent::deepgram::is_deepgram`); any other endpoint is sent the
+    // (`agent::deepgram::is_deepgram`); any other endpoint is sent the
     // word "test" in its place.
     let mut endpoint = String::from(deepgram::AGENT_URL);
     let mut wake_at_start = false;
     let mut listen_endpoint = None;
-    for a in vrt::env::args().iter().skip(1) {
+    for a in rt::env::args().iter().skip(1) {
         wake_at_start |= a == "agent.wake";
         if let Some(e) = a.strip_prefix("agent.listen=")
             && (e.starts_with("ws://") || e.starts_with("wss://"))
@@ -376,7 +376,7 @@ fn run() -> i32 {
             s.config.voice
         );
     }
-    let listener = match vproto::register(agent::NAME) {
+    let listener = match proto::register(agent::NAME) {
         Ok(l) => l,
         Err(e) => {
             println!("cannot register: {:?}", e);
@@ -445,7 +445,7 @@ fn run() -> i32 {
         listener: None,
         listen_endpoint,
         listen_retry_at: 0,
-        budget: listen::budget(vrt::time::now_ns()),
+        budget: listen::budget(rt::time::now_ns()),
         rest_at: None,
         locked: true,
         lock_watch: LockWatch::default(),

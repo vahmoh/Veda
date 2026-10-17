@@ -465,8 +465,8 @@ mod tests {
                     .chunks(4)
                     .map(|c| 0xFF00_0000 | (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32)
                     .collect();
-                let image = vimage::Image { width: b.w as u32, height: b.h as u32, pixels: px };
-                std::fs::write(alloc::format!("{dir}/board-{k}.png"), vimage::encode_png(&image).unwrap()).unwrap();
+                let image = image::Image { width: b.w as u32, height: b.h as u32, pixels: px };
+                std::fs::write(alloc::format!("{dir}/board-{k}.png"), image::encode_png(&image).unwrap()).unwrap();
             }
         }
     }

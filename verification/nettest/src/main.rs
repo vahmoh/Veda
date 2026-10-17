@@ -18,7 +18,7 @@
 //!   from a real network rather than a hypervisor's NAT (a PC's own), plus
 //!   TCP over IPv6 when there is a global address.
 //! * `nettest ipv6`: TCP over IPv6 to example.com.
-//! * `nettest https`: HTTPS requests with `vtls` (and `vweb`'s HTTP):
+//! * `nettest https`: HTTPS requests with `tls` (and `web`'s HTTP):
 //!   `GET /` from example.com (expects 200 and the page) and
 //!   `GET /v1/projects` from api.deepgram.com without a key (expects 401),
 //!   reporting the TLS version, cipher suite, key exchange and the
@@ -49,10 +49,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vnet::{Connectivity, Duration, IpAddr, NetError, SocketAddr, TcpStream, UdpSocket, wifi};
-use vrt::println;
+use net::{Connectivity, Duration, IpAddr, NetError, SocketAddr, TcpStream, UdpSocket, wifi};
+use rt::println;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 type Check = Result<String, String>;
 
@@ -62,18 +62,18 @@ fn net(e: NetError) -> String {
 
 /// Waits until the network has a default route (through `via`, if given).
 fn wait_online_via(timeout: Duration, via: Option<&str>) -> Check {
-    let end = vrt::time::now_ns() + timeout.as_nanos() as u64;
+    let end = rt::time::now_ns() + timeout.as_nanos() as u64;
     loop {
-        if let Ok(st) = vnet::status()
+        if let Ok(st) = net::status()
             && st.connectivity == Connectivity::Routable
             && via.is_none_or(|v| st.default_interface == v)
         {
             return Ok(format!("via {} (gateway {:?})", st.default_interface, st.default_gateway));
         }
-        if vrt::time::now_ns() > end {
+        if rt::time::now_ns() > end {
             return Err(String::from("no network connection"));
         }
-        vrt::time::sleep(Duration::from_millis(250));
+        rt::time::sleep(Duration::from_millis(250));
     }
 }
 
@@ -97,22 +97,22 @@ fn check_ipv6_internet() -> Check {
 /// TCP over IPv6 to example.com from any routable IPv6 address (QEMU's NAT
 /// uses site-local ones).
 fn ipv6_tcp(global_only: bool) -> Check {
-    let end = vrt::time::now_ns() + 20_000_000_000;
+    let end = rt::time::now_ns() + 20_000_000_000;
     let global = loop {
-        let found = vnet::interfaces().map_err(net)?.iter().flat_map(|i| i.addresses.iter().map(|a| a.address)).find(
+        let found = net::interfaces().map_err(net)?.iter().flat_map(|i| i.addresses.iter().map(|a| a.address)).find(
             |a| match a {
                 IpAddr::V6(v) if global_only => (v.segments()[0] & 0xE000) == 0x2000,
                 IpAddr::V6(v) => !v.is_loopback() && (v.segments()[0] & 0xFFC0) != 0xFE80,
                 _ => false,
             },
         );
-        if found.is_some() || vrt::time::now_ns() > end {
+        if found.is_some() || rt::time::now_ns() > end {
             break found;
         }
-        vrt::time::sleep(Duration::from_millis(250));
+        rt::time::sleep(Duration::from_millis(250));
     };
     let Some(own) = global else { return Ok(String::from("skipped: no global IPv6 address")) };
-    let l = vnet::lookup("example.com", vnet::AddrFamily::V6, Duration::from_secs(15)).map_err(net)?;
+    let l = net::lookup("example.com", net::AddrFamily::V6, Duration::from_secs(15)).map_err(net)?;
     let target = *l.addresses.first().ok_or("example.com has no IPv6 address")?;
     let s = TcpStream::connect_timeout(SocketAddr::new(target, 80), Duration::from_secs(20)).map_err(net)?;
     Ok(format!("connected to {} from {:?} (own address {})", s.peer_addr(), s.local_addr(), own))
@@ -122,24 +122,24 @@ fn ipv6_tcp(global_only: bool) -> Check {
 /// the configuration, and fails if it is a hypervisor's NAT (QEMU's,
 /// 10.0.2.0/24).
 fn check_lan() -> Check {
-    let end = vrt::time::now_ns() + 60_000_000_000;
+    let end = rt::time::now_ns() + 60_000_000_000;
     let ifaces = loop {
-        let ifaces = vnet::interfaces().map_err(net)?;
+        let ifaces = net::interfaces().map_err(net)?;
         let leased = ifaces.iter().any(|i| {
-            i.kind == vnet::InterfaceKind::Ethernet && i.link_up && i.addresses.iter().any(|a| a.address.is_ipv4())
+            i.kind == net::InterfaceKind::Ethernet && i.link_up && i.addresses.iter().any(|a| a.address.is_ipv4())
         });
         if leased {
             break ifaces;
         }
-        if vrt::time::now_ns() > end {
+        if rt::time::now_ns() > end {
             let states: Vec<String> = ifaces.iter().map(|i| format!("{}: DHCP {:?}", i.name, i.dhcp.state)).collect();
             return Err(format!("no IPv4 lease after 60 s ({})", states.join(", ")));
         }
-        vrt::time::sleep(Duration::from_millis(250));
+        rt::time::sleep(Duration::from_millis(250));
     };
     let eth = ifaces
         .iter()
-        .find(|i| i.kind == vnet::InterfaceKind::Ethernet && i.link_up)
+        .find(|i| i.kind == net::InterfaceKind::Ethernet && i.link_up)
         .ok_or("no wired interface is up")?;
     let v4 = eth
         .addresses
@@ -167,12 +167,12 @@ fn check_lan() -> Check {
 
 /// Waits for the Wi-Fi service and its adapter (both may still be starting).
 fn check_wifi_adapter() -> Check {
-    let end = vrt::time::now_ns() + 60_000_000_000;
+    let end = rt::time::now_ns() + 60_000_000_000;
     while !wifi::available() {
-        if vrt::time::now_ns() > end {
+        if rt::time::now_ns() > end {
             return Err(String::from("the Wi-Fi service is not running"));
         }
-        vrt::time::sleep(Duration::from_millis(250));
+        rt::time::sleep(Duration::from_millis(250));
     }
     let s = wifi::wait_for(Duration::from_secs(60), |s| s.state != wifi::ConnState::NoAdapter).map_err(wifi)?;
     if s.state == wifi::ConnState::NoAdapter {
@@ -183,7 +183,7 @@ fn check_wifi_adapter() -> Check {
 
 /// Scans until `ssid` shows up.
 fn check_wifi_scan(ssid: &str) -> Check {
-    let end = vrt::time::now_ns() + 60_000_000_000;
+    let end = rt::time::now_ns() + 60_000_000_000;
     loop {
         let _ = wifi::scan();
         let w = wifi::Watcher::new().map_err(wifi)?;
@@ -204,7 +204,7 @@ fn check_wifi_scan(ssid: &str) -> Check {
                 names.join(", ")
             ));
         }
-        if vrt::time::now_ns() > end {
+        if rt::time::now_ns() > end {
             return Err(format!("{ssid} not found"));
         }
     }
@@ -214,7 +214,7 @@ fn check_wifi_scan(ssid: &str) -> Check {
 fn check_wifi_connect(ssid: &str, password: &str) -> Check {
     let pass = (!password.is_empty()).then_some(password);
     wifi::connect(ssid, pass, false).map_err(wifi)?;
-    let t0 = vrt::time::now_ns();
+    let t0 = rt::time::now_ns();
     let s = wifi::wait_for(Duration::from_secs(45), |s| {
         s.state == wifi::ConnState::Connected || (s.state == wifi::ConnState::Disconnected && s.last_failure.is_some())
     })
@@ -232,12 +232,12 @@ fn check_wifi_connect(ssid: &str, password: &str) -> Check {
         s.channel,
         s.signal_dbm,
         s.security.label(),
-        (vrt::time::now_ns() - t0) / 1_000_000
+        (rt::time::now_ns() - t0) / 1_000_000
     ))
 }
 
 fn check_dns(host: &str) -> Check {
-    let l = vnet::lookup(host, vnet::AddrFamily::Any, Duration::from_secs(15)).map_err(net)?;
+    let l = net::lookup(host, net::AddrFamily::Any, Duration::from_secs(15)).map_err(net)?;
     if l.addresses.is_empty() {
         return Err(String::from("no addresses"));
     }
@@ -246,9 +246,9 @@ fn check_dns(host: &str) -> Check {
 }
 
 fn check_http(url: &str, expect: &str) -> Check {
-    let t0 = vrt::time::now_ns();
-    let r = vweb::http::get(url, Duration::from_secs(20), 4 << 20).map_err(|e| format!("{e}"))?;
-    let ms = (vrt::time::now_ns() - t0) / 1_000_000;
+    let t0 = rt::time::now_ns();
+    let r = web::http::get(url, Duration::from_secs(20), 4 << 20).map_err(|e| format!("{e}"))?;
+    let ms = (rt::time::now_ns() - t0) / 1_000_000;
     if r.status != 200 {
         return Err(format!("HTTP {} {}", r.status, r.reason));
     }
@@ -262,40 +262,40 @@ fn check_http(url: &str, expect: &str) -> Check {
 /// How [`check_https`] connects.
 #[derive(Clone, Copy)]
 enum Connect {
-    /// `vtls::connect`: name lookup, TCP and the TLS handshake in one call.
+    /// `tls::connect`: name lookup, TCP and the TLS handshake in one call.
     Together,
     /// TCP first, then the handshake (`TlsStream::connect`), timed alone.
     Separately,
 }
 
 fn ms_since(t0: u64) -> u64 {
-    (vrt::time::now_ns() - t0) / 1_000_000
+    (rt::time::now_ns() - t0) / 1_000_000
 }
 
 /// `GET path` from `host` over HTTPS: expects HTTP status `status` and, if
 /// given, `text` in the response.
 fn check_https(host: &str, path: &str, status: u16, text: Option<&str>, how: Connect) -> Check {
-    let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]);
-    let t0 = vrt::time::now_ns();
+    let config = tls::ClientConfig::with_alpn(&[b"http/1.1"]);
+    let t0 = rt::time::now_ns();
     let (mut tls, timing) = match how {
         Connect::Together => {
-            let tls = vtls::connect(host, 443, Duration::from_secs(60), &config).map_err(|e| format!("{e}"))?;
+            let tls = tls::connect(host, 443, Duration::from_secs(60), &config).map_err(|e| format!("{e}"))?;
             (tls, format!("connected in {} ms (lookup, TCP, handshake)", ms_since(t0)))
         }
         Connect::Separately => {
             let mut tcp = TcpStream::connect_host(host, 443, Duration::from_secs(20)).map_err(net)?;
             let tcp_ms = ms_since(t0);
             tcp.set_read_timeout(Some(Duration::from_secs(60)));
-            let t1 = vrt::time::now_ns();
-            let tls = vtls::TlsStream::connect(tcp, host, &config).map_err(|e| format!("{e}"))?;
+            let t1 = rt::time::now_ns();
+            let tls = tls::TlsStream::connect(tcp, host, &config).map_err(|e| format!("{e}"))?;
             (tls, format!("TCP {tcp_ms} ms, TLS handshake {} ms", ms_since(t1)))
         }
     };
-    let url = vweb::Url::parse(&format!("https://{host}{path}")).map_err(|e| format!("{e}"))?;
-    vweb::http::write_request(&mut tls, "GET", &url, &[("User-Agent", "Veda-nettest"), ("Accept", "*/*")], &[])
+    let url = web::Url::parse(&format!("https://{host}{path}")).map_err(|e| format!("{e}"))?;
+    web::http::write_request(&mut tls, "GET", &url, &[("User-Agent", "Veda-nettest"), ("Accept", "*/*")], &[])
         .map_err(|e| format!("sending the request: {e}"))?;
     tls.transport_mut().set_read_timeout(Some(Duration::from_secs(30)));
-    let response = vweb::http::read_response(&mut tls, "GET", 4 << 20).map_err(|e| format!("the response: {e}"))?;
+    let response = web::http::read_response(&mut tls, "GET", 4 << 20).map_err(|e| format!("the response: {e}"))?;
     tls.close();
     let total_ms = ms_since(t0);
     let status_line = format!("HTTP {} {}", response.status, response.reason);
@@ -323,9 +323,9 @@ fn check_tcp(host: &str, port: u16) -> Check {
 
 /// Sends a DNS query for `example.com` by hand to the first DNS server.
 fn check_udp() -> Check {
-    let st = vnet::status().map_err(net)?;
+    let st = net::status().map_err(net)?;
     let server = *st.dns_servers.first().ok_or("no DNS server")?;
-    let mut sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(vnet::Ipv4Addr::UNSPECIFIED), 0)).map_err(net)?;
+    let mut sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(net::Ipv4Addr::UNSPECIFIED), 0)).map_err(net)?;
     let mut q: Vec<u8> = alloc::vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
     for label in ["example", "com"] {
         q.push(label.len() as u8);
@@ -342,7 +342,7 @@ fn check_udp() -> Check {
 }
 
 fn check_ping(target: IpAddr) -> Check {
-    let mut p = vnet::Pinger::new().map_err(net)?;
+    let mut p = net::Pinger::new().map_err(net)?;
     let mut got = Vec::new();
     for seq in 1..=3 {
         match p.ping(target, seq, 56, 0) {
@@ -357,7 +357,7 @@ fn check_ping(target: IpAddr) -> Check {
 /// Asks the DNS server for `example.com` by hand: "ok", "servfail" (or
 /// another error code) or "fail" (no answer).
 fn dns_probe(server: IpAddr, id: u16) -> String {
-    let Ok(mut sock) = UdpSocket::bind(SocketAddr::new(IpAddr::V4(vnet::Ipv4Addr::UNSPECIFIED), 0)) else {
+    let Ok(mut sock) = UdpSocket::bind(SocketAddr::new(IpAddr::V4(net::Ipv4Addr::UNSPECIFIED), 0)) else {
         return String::from("fail");
     };
     let mut q: Vec<u8> = alloc::vec![(id >> 8) as u8, id as u8, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
@@ -370,8 +370,8 @@ fn dns_probe(server: IpAddr, id: u16) -> String {
         return String::from("fail");
     }
     let mut buf = [0u8; 1500];
-    let end = vrt::time::now_ns() + 3_000_000_000;
-    while vrt::time::now_ns() < end {
+    let end = rt::time::now_ns() + 3_000_000_000;
+    while rt::time::now_ns() < end {
         match sock.recv_from(&mut buf, Some(Duration::from_millis(500))) {
             Ok((n, _)) if n >= 12 && buf[0..2] == q[0..2] && buf[2] & 0x80 != 0 => {
                 return match buf[3] & 0x0F {
@@ -389,7 +389,7 @@ fn dns_probe(server: IpAddr, id: u16) -> String {
 /// `nettest listen PORT`: takes connections from other machines on PORT
 /// forever, reporting each.
 fn listen(port: u16) -> i32 {
-    let listener = match vnet::TcpListener::bind(SocketAddr::new(IpAddr::V4(vnet::Ipv4Addr::UNSPECIFIED), port), 8) {
+    let listener = match net::TcpListener::bind(SocketAddr::new(IpAddr::V4(net::Ipv4Addr::UNSPECIFIED), port), 8) {
         Ok(l) => l,
         Err(e) => {
             println!("nettest: cannot listen on port {port}: {e}");
@@ -414,7 +414,7 @@ fn route_watch() -> ! {
     let mut last = String::new();
     let mut seq: u16 = 0;
     loop {
-        let st = vnet::status().ok();
+        let st = net::status().ok();
         let online = st.as_ref().is_some_and(|s| s.connectivity == Connectivity::Routable);
         let route = match &st {
             Some(s) if s.connectivity == Connectivity::Routable => s.default_interface.clone(),
@@ -423,7 +423,7 @@ fn route_watch() -> ! {
         let (ping, dns) = match (online, st) {
             (true, Some(s)) => {
                 seq = seq.wrapping_add(1);
-                let ping = match (s.default_gateway, vnet::Pinger::new()) {
+                let ping = match (s.default_gateway, net::Pinger::new()) {
                     (Some(gw), Ok(mut p)) => {
                         if p.ping(gw, seq, 56, 0).is_ok() {
                             "ok"
@@ -446,7 +446,7 @@ fn route_watch() -> ! {
             println!("{}", line);
             last = line;
         }
-        vrt::time::sleep(Duration::from_millis(500));
+        rt::time::sleep(Duration::from_millis(500));
     }
 }
 
@@ -471,12 +471,12 @@ fn run(checks: &[(&str, &dyn Fn() -> Check)]) -> i32 {
 }
 
 fn main() -> i32 {
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let mode = args.get(1).map(String::as_str).unwrap_or("online");
     match mode {
         "online" => {
             let gateway = || -> Check {
-                let st = vnet::status().map_err(net)?;
+                let st = net::status().map_err(net)?;
                 let gw = st.default_gateway.ok_or("no gateway")?;
                 check_ping(gw)
             };
@@ -484,7 +484,7 @@ fn main() -> i32 {
                 ("link", &|| wait_online(Duration::from_secs(60))),
                 ("dns example.com", &|| check_dns("example.com")),
                 ("dns www.wikipedia.org", &|| check_dns("www.wikipedia.org")),
-                ("dns failure", &|| match vnet::resolve("no-such-host.invalid") {
+                ("dns failure", &|| match net::resolve("no-such-host.invalid") {
                     Err(NetError::NameNotFound) => Ok(String::from("name not found, as expected")),
                     Err(e) => Err(format!("unexpected error {e}")),
                     Ok(a) => Err(format!("resolved to {a:?}")),
@@ -498,7 +498,7 @@ fn main() -> i32 {
         }
         "lan" => {
             let gateway = || -> Check {
-                let st = vnet::status().map_err(net)?;
+                let st = net::status().map_err(net)?;
                 let gw = st.default_gateway.ok_or("no gateway")?;
                 check_ping(gw)
             };
@@ -507,7 +507,7 @@ fn main() -> i32 {
                 ("real network", &check_lan),
                 ("dns example.com", &|| check_dns("example.com")),
                 ("dns www.wikipedia.org", &|| check_dns("www.wikipedia.org")),
-                ("dns failure", &|| match vnet::resolve("no-such-host.invalid") {
+                ("dns failure", &|| match net::resolve("no-such-host.invalid") {
                     Err(NetError::NameNotFound) => Ok(String::from("name not found, as expected")),
                     Err(e) => Err(format!("unexpected error {e}")),
                     Ok(a) => Err(format!("resolved to {a:?}")),
@@ -537,13 +537,13 @@ fn main() -> i32 {
                 return 2;
             };
             let gateway = || -> Check {
-                let st = vnet::status().map_err(net)?;
+                let st = net::status().map_err(net)?;
                 let gw = st.default_gateway.ok_or("no gateway")?;
                 check_ping(gw)
             };
             let hello = || -> Check {
                 let host = match host.as_str() {
-                    "gateway" => match vnet::status().map_err(net)?.default_gateway.ok_or("no gateway")? {
+                    "gateway" => match net::status().map_err(net)?.default_gateway.ok_or("no gateway")? {
                         IpAddr::V6(v6) => format!("[{v6}]"),
                         v4 => format!("{v4}"),
                     },
@@ -572,7 +572,7 @@ fn main() -> i32 {
             };
             let password = args.get(3).cloned().unwrap_or_default();
             let gateway = || -> Check {
-                let st = vnet::status().map_err(net)?;
+                let st = net::status().map_err(net)?;
                 let gw = st.default_gateway.ok_or("no gateway")?;
                 check_ping(gw)
             };

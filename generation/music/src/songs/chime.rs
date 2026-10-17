@@ -4,7 +4,7 @@
 //! "Startup Chime" — a short bell flourish, shipped as a mono 22.05 kHz
 //! WAV file (it shows that the player handles WAV, mono and resampling).
 
-use vaudio::synth::{Part, Song};
+use audio::synth::{Part, Song};
 
 use crate::dsl::{self, BAR, Humanize};
 use crate::patches;

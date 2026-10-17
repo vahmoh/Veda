@@ -37,7 +37,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vproto::media::{MediaInfo, SeekMode, SkipLevel, SlotMeta};
+use proto::media::{MediaInfo, SeekMode, SkipLevel, SlotMeta};
 
 use crate::clock::Clock;
 use crate::skip::SkipControl;
@@ -293,7 +293,7 @@ pub struct Playback {
 
 /// `m:ss` of a time in µs.
 fn time(us: i64) -> String {
-    vfiles::format::duration(us.max(0) as u64 / 1000)
+    files::format::duration(us.max(0) as u64 / 1000)
 }
 
 impl Playback {
@@ -1067,7 +1067,7 @@ pub fn skip_name(l: SkipLevel) -> &'static str {
 mod tests {
     use super::*;
     use alloc::vec;
-    use vproto::media::{AudioStream, Colour, Rational, VideoStream};
+    use proto::media::{AudioStream, Colour, Rational, VideoStream};
 
     const MS: u64 = 1_000_000;
 

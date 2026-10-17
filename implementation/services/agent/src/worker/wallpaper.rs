@@ -13,7 +13,7 @@ impl Ctx {
         let s = desktop().ok_or("the desktop is not available")?;
         let list = s.wallpapers().map_err(|_| "the desktop did not answer")?;
         let current = s.wallpaper().unwrap_or_default();
-        let name_of = |p: &str| vfiles::path::file_stem(p).to_string();
+        let name_of = |p: &str| files::path::file_stem(p).to_string();
         match args["operation"].as_str().unwrap_or("list") {
             "list" => Ok(json!({
                 "pictures": list.iter().map(|p| Value::from(name_of(p))).collect::<Vec<_>>(),
@@ -28,7 +28,7 @@ impl Ctx {
                     let w = want.to_lowercase();
                     match list.iter().find(|p| name_of(p).to_lowercase().contains(&w)) {
                         Some(p) => p.clone(),
-                        None => vagent::files::resolve(want)?,
+                        None => agent::files::resolve(want)?,
                     }
                 };
                 match s.set_wallpaper(path.clone()) {

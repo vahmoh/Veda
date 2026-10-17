@@ -6,11 +6,11 @@
 //! (through the Wi-Fi service's `wlan` protocol).
 //!
 //! ```ignore
-//! vnet::wifi::scan()?;
-//! for n in vnet::wifi::networks()? {
+//! net::wifi::scan()?;
+//! for n in net::wifi::networks()? {
 //!     println!("{} {} {} bars", n.name, n.security.label(), n.bars);
 //! }
-//! vnet::wifi::connect("Veda Home", Some("password"), true)?;
+//! net::wifi::connect("Veda Home", Some("password"), true)?;
 //! ```
 //!
 //! Joining happens in the background: `connect` returns once the attempt
@@ -27,15 +27,15 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-pub use vproto::wlan::{
+pub use proto::wlan::{
     Band, BssInfo, ConnState, FailReason, LogEntry, NetworkInfo, SavedNetwork, Security, WlanCounters, WlanDiagnostics,
     WlanError, WlanEvent, WlanStatus, signal_bars, ssid_display, valid_passphrase, valid_ssid,
 };
 
-use vipc::{Bytes, IpcError};
-use vproto::wlan::{ConnectRequest, WLAN_EVENT, wlan};
-use vrt::object::Channel;
-use vrt::sync::Mutex;
+use ipc::{Bytes, IpcError};
+use proto::wlan::{ConnectRequest, WLAN_EVENT, wlan};
+use rt::object::Channel;
+use rt::sync::Mutex;
 
 use crate::Duration;
 
@@ -61,7 +61,7 @@ impl core::fmt::Display for WifiError {
 
 /// Whether the Wi-Fi service is running.
 pub fn available() -> bool {
-    vproto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == wlan::NAME)).unwrap_or(false)).unwrap_or(false)
+    proto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == wlan::NAME)).unwrap_or(false)).unwrap_or(false)
 }
 
 fn with_client<R>(mut f: impl FnMut(&wlan::Client) -> Result<R, IpcError>) -> Result<R, WifiError> {
@@ -71,7 +71,7 @@ fn with_client<R>(mut f: impl FnMut(&wlan::Client) -> Result<R, IpcError>) -> Re
             if !available() {
                 return Err(WifiError::Unavailable);
             }
-            let ch = vproto::connect(wlan::NAME).map_err(|_| WifiError::Unavailable)?;
+            let ch = proto::connect(wlan::NAME).map_err(|_| WifiError::Unavailable)?;
             let c = wlan::Client::new(ch);
             // The service answers quickly; do not hang if it is stuck.
             c.set_timeout(10_000_000_000);
@@ -181,13 +181,13 @@ pub fn diagnostics() -> Result<WlanDiagnostics, WifiError> {
 /// Waits until [`status`] satisfies `done` or `timeout` passes; returns
 /// the last status.
 pub fn wait_for(timeout: Duration, mut done: impl FnMut(&WlanStatus) -> bool) -> Result<WlanStatus, WifiError> {
-    let end = vrt::time::deadline_after(timeout);
+    let end = rt::time::deadline_after(timeout);
     loop {
         let s = status()?;
-        if done(&s) || vrt::time::now_ns() >= end {
+        if done(&s) || rt::time::now_ns() >= end {
             return Ok(s);
         }
-        vrt::time::sleep(Duration::from_millis(100));
+        rt::time::sleep(Duration::from_millis(100));
     }
 }
 
@@ -217,24 +217,24 @@ impl Watcher {
     /// went away (create a new watcher once it is back).
     pub fn try_next(&self) -> Result<Option<WlanEvent>, WifiError> {
         match self.channel.read() {
-            Ok(msg) => match vipc::decode_event::<WlanEvent>(msg) {
+            Ok(msg) => match ipc::decode_event::<WlanEvent>(msg) {
                 Ok((WLAN_EVENT, ev)) => Ok(Some(ev)),
                 _ => Ok(None),
             },
-            Err(vabi::Error::ShouldWait) => Ok(None),
+            Err(abi::Error::ShouldWait) => Ok(None),
             Err(_) => Err(WifiError::Unavailable),
         }
     }
 
     /// Waits up to `timeout` for the next event.
     pub fn next(&self, timeout: Duration) -> Result<Option<WlanEvent>, WifiError> {
-        let deadline = vrt::time::deadline_after(timeout);
+        let deadline = rt::time::deadline_after(timeout);
         loop {
             if let Some(ev) = self.try_next()? {
                 return Ok(Some(ev));
             }
-            match self.channel.wait(vabi::signals::READABLE | vabi::signals::PEER_CLOSED, deadline) {
-                Ok(s) if s & vabi::signals::READABLE != 0 => continue,
+            match self.channel.wait(abi::signals::READABLE | abi::signals::PEER_CLOSED, deadline) {
+                Ok(s) if s & abi::signals::READABLE != 0 => continue,
                 Ok(_) => return Err(WifiError::Unavailable),
                 Err(_) => return Ok(None),
             }

@@ -11,7 +11,7 @@
 //! 0x18, and the boot parameters (the "zero page") in `rsi`. See Linux's
 //! `Documentation/arch/x86/boot.rst` and `zero-page.rst`.
 
-use vabi::{VcpuSegment, VcpuState};
+use abi::{VcpuSegment, VcpuState};
 
 /// Where the setup header starts in the image and in the boot parameters.
 const HEADER: usize = 0x1F1;

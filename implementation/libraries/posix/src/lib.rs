@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vposix` — Veda's POSIX layer.
+//! `posix` — Veda's POSIX layer.
 //!
 //! C programs on Veda use musl, a C library written for Linux, with one
 //! change: where musl would make a Linux system call, it calls
@@ -45,7 +45,7 @@
 //! The layer is built as a static library for the architecture's bare-metal
 //! target (`x86_64-unknown-none` on AMD64) and
 //! linked into musl's `libc.a` as one object that exports only these
-//! symbols. Its own memory comes from `vrt`'s heap, not from `malloc`.
+//! symbols. Its own memory comes from `rt`'s heap, not from `malloc`.
 
 #![no_std]
 
@@ -89,8 +89,8 @@ mod vfs;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vabi::startup::role;
-use vrt::object::Vmo;
+use abi::startup::role;
+use rt::object::Vmo;
 
 /// The bootstrap channel the kernel passed the process, stored by `_start`.
 #[unsafe(no_mangle)]
@@ -102,12 +102,12 @@ pub static __veda_bootstrap: AtomicU32 = AtomicU32::new(0);
 pub extern "C" fn __veda_init() {
     // Thread-local storage is set up: threads can be told apart.
     signal::threads_ready();
-    vrt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
-    let entries = vrt::env::vars();
+    rt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
+    let entries = rt::env::vars();
     let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     signal::inherit(inherited.ignored, inherited.mask);
-    vfs::set_cwd(vrt::env::cwd());
-    if let Some(h) = vrt::env::take_handle(role::TERMINAL) {
+    vfs::set_cwd(rt::env::cwd());
+    if let Some(h) = rt::env::take_handle(role::TERMINAL) {
         tty::adopt(Vmo::from_handle(h));
     }
     io::adopt_startup_fds(&inherited);
@@ -132,12 +132,12 @@ pub unsafe extern "C" fn __veda_syscall(n: isize, a: isize, b: isize, c: isize, 
 /// layer for its memory).
 #[cfg(target_os = "none")]
 #[global_allocator]
-static HEAP: vrt::heap::Heap = vrt::heap::Heap::new();
+static HEAP: rt::heap::Heap = rt::heap::Heap::new();
 
 #[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Formatted without allocating, in case the heap is what failed.
-    vrt::io::log_without_allocating(format_args!("POSIX layer panic: {info}\n"));
+    rt::io::log_without_allocating(format_args!("POSIX layer panic: {info}\n"));
     process::exit_by_signal(linux::sig::ABRT)
 }

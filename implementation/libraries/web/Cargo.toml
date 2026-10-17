@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vweb"
+name = "web"
 description = "Web clients for Veda applications: URLs, HTTP/1.1 and WebSocket over TCP or TLS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
-vnet = { workspace = true }
-vtls = { workspace = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
+net = { workspace = true }
+tls = { workspace = true }
 httparse = { workspace = true }
 percent-encoding = { workspace = true }
 base64ct = { workspace = true }

@@ -149,7 +149,7 @@ pub enum StaEvent {
 }
 
 /// The keys a managed radio is given (the Wi-Fi protocol's type).
-pub use vproto::wlan::KeyKind;
+pub use proto::wlan::KeyKind;
 
 /// What the caller must do.
 #[derive(Debug, Clone, PartialEq, Eq)]

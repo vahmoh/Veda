@@ -3,7 +3,7 @@
 
 //! Virtual machines: guests and their virtual processors.
 
-use vabi::{Error, RawHandle, Rights, VcpuExit, VcpuState, map_flags, resource_kind};
+use abi::{Error, RawHandle, Rights, VcpuExit, VcpuState, map_flags, resource_kind};
 
 use super::{SysResult, get_interrupt, get_resource, get_vmo, handle, insert, ok};
 use crate::hv::{Access, Guest, Vcpu};

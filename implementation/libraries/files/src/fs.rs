@@ -5,7 +5,7 @@
 //! bounded or mapped) and writes, appends, listings, copies, moves and
 //! removals of whole trees, and how full a file system is.
 //!
-//! [`Fs`] wraps `vproto::vfs::Client` and flattens its two error layers
+//! [`Fs`] wraps `proto::vfs::Client` and flattens its two error layers
 //! (IPC and file system) into one [`Error`]. Every call has a deadline (see
 //! [`Fs::connect`]): a VFS that stops answering fails calls rather than
 //! freezes the program.
@@ -23,12 +23,12 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::{Add, ControlFlow, Deref};
 
-use vipc::{Bytes, IpcError};
-use vproto::fs::{MAX_IO, open_flags, vfs};
-use vrt::object::Vmo;
-use vrt::vm::Mapping;
+use ipc::{Bytes, IpcError};
+use proto::fs::{MAX_IO, open_flags, vfs};
+use rt::object::Vmo;
+use rt::vm::Mapping;
 
-pub use vproto::fs::{DirEntry, DirPage, FsError, Space, Stat};
+pub use proto::fs::{DirEntry, DirPage, FsError, Space, Stat};
 
 use crate::path::{is_within, join, same_volume, unique_name};
 
@@ -175,7 +175,7 @@ impl MappedFile {
         if vmo.size().map_err(|_| Error::Fs(FsError::Io))? < len {
             return Err(Error::Fs(FsError::Io));
         }
-        let mapping = Mapping::new(vmo, len.max(1), vabi::map_flags::READ).map_err(|_| Error::TooLarge)?;
+        let mapping = Mapping::new(vmo, len.max(1), abi::map_flags::READ).map_err(|_| Error::TooLarge)?;
         Ok(MappedFile { mapping, len })
     }
 
@@ -218,7 +218,7 @@ impl Fs {
     /// the VFS has not answered it within a minute, plus, for whole-file
     /// reads and writes, time for their size.
     pub fn connect() -> Fs {
-        let client = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+        let client = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         if let Some(c) = &client {
             c.set_timeout(TIMEOUT_NS);
         }
@@ -864,10 +864,10 @@ mod tests {
         assert_eq!(flat(Ok::<_, IpcError>(Ok::<u8, FsError>(1))), Ok(1));
         assert_eq!(flat::<u8>(Ok(Err(FsError::NotFound))), Err(Error::Fs(FsError::NotFound)));
         assert_eq!(flat::<u8>(Err(IpcError::PeerClosed)), Err(Error::Ipc));
-        assert_eq!(flat::<u8>(Err(IpcError::Kernel(vabi::Error::TimedOut))), Err(Error::Ipc));
+        assert_eq!(flat::<u8>(Err(IpcError::Kernel(abi::Error::TimedOut))), Err(Error::Ipc));
         // What could not be asked, or answered, is not a VFS gone silent.
         assert_eq!(flat::<u8>(Err(IpcError::TooLarge)), Err(Error::Fs(FsError::Invalid)));
-        assert_eq!(flat::<u8>(Err(IpcError::Refused(vipc::Refusal::Malformed))), Err(Error::Fs(FsError::Invalid)));
+        assert_eq!(flat::<u8>(Err(IpcError::Refused(ipc::Refusal::Malformed))), Err(Error::Fs(FsError::Invalid)));
         assert_eq!(Error::Cancelled.to_string(), "it was stopped");
     }
 

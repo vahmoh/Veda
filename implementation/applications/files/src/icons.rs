@@ -5,10 +5,10 @@
 //! `apps_common::icons`) and large drawn icons (folders, pages with a type
 //! badge, image thumbnails) for the grid.
 
-use vgfx::{Bitmap, FillRule, Filter, Path};
-use vui::{Align, Color, Font, Rect, Ui};
+use gfx::{Bitmap, FillRule, Filter, Path};
+use ui::{Align, Color, Font, Rect, Ui};
 
-use vfiles::path::extension;
+use files::path::extension;
 
 /// The line icon and the colour of a file's type, as the desktop has them
 /// too.
@@ -35,7 +35,7 @@ pub fn draw_folder(ui: &mut Ui, r: Rect, opacity: f32) {
 }
 
 /// Draws a document page with the file's type icon and extension badge
-/// (`program` as for [`vfiles::kind::file_kind`]).
+/// (`program` as for [`files::kind::file_kind`]).
 pub fn draw_page(ui: &mut Ui, r: Rect, name: &str, program: bool, opacity: f32) {
     let s = r.w.min(r.h) as f32;
     let x = r.x as f32 + (r.w as f32 - s) / 2.0;

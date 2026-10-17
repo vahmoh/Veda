@@ -45,8 +45,8 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Damage, Rect};
-use vproto::display::{
+use gfx::{Damage, Rect};
+use proto::display::{
     self as dp, Cursor, DisplayError, ScreenInfo, WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState,
 };
 
@@ -809,8 +809,8 @@ impl<M> Wm<M> {
     /// (Shell) maximises, restores or snaps window `id`
     /// (`display::arrangement`), bringing it to the front.
     pub fn arrange(&mut self, client: u64, id: u32, arrangement: u32, now: u64) -> Result<(), DisplayError> {
-        use vproto::display::arrangement as a;
-        use vproto::input::keys;
+        use proto::display::arrangement as a;
+        use proto::input::keys;
         self.now = now;
         let state = self.managed(client, id)?;
         let key = match arrangement {

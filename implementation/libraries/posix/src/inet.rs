@@ -3,7 +3,7 @@
 
 //! Internet sockets: TCP and UDP over IPv4 and IPv6. Each is a socket of
 //! the network service (`netd`), with a channel of its own, opened in the
-//! ways of `vproto::net` that processes can share (see "Sockets that
+//! ways of `proto::net` that processes can share (see "Sockets that
 //! processes share" there), so that it can travel to the processes a
 //! program starts and over Unix domain sockets ([`Inet::travelling`]):
 //!
@@ -19,7 +19,7 @@
 //!   a receive takes one, and those it sends go on the channel as far as it
 //!   has room.
 //!
-//! Its channel is shared (`vrt::object::Channel::create_shared`), as a
+//! Its channel is shared (`rt::object::Channel::create_shared`), as a
 //! connection's kernel socket is, so whoever holds them reads and writes:
 //! as on Linux, processes that share a socket share its connection's bytes,
 //! a listener's connections and a datagram socket's datagrams, which go to
@@ -62,12 +62,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
-use vabi::ObjectType;
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, USER_0, USER_1, WRITABLE};
-use vipc::{Encode, Encoder, IpcError};
-use vproto::net::{MAX_DATAGRAM, NetError, SocketEvent, SocketRequest, TcpOptions};
-use vrt::object::{Channel, Handle, Socket};
-use vrt::sync::{Mutex, MutexGuard};
+use abi::ObjectType;
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, USER_0, USER_1, WRITABLE};
+use ipc::{Encode, Encoder, IpcError};
+use proto::net::{MAX_DATAGRAM, NetError, SocketEvent, SocketRequest, TcpOptions};
+use rt::object::{Channel, Handle, Socket};
+use rt::sync::{Mutex, MutexGuard};
 
 use crate::error::{self, SysResult};
 use crate::io::Waitable;
@@ -110,7 +110,7 @@ impl Kind {
     }
 }
 
-vipc::message! {
+ipc::message! {
     /// The options a program set (`setsockopt`); what they are for is in
     /// [`crate::socket::setsockopt`].
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,7 +183,7 @@ mod shape {
     pub const DATAGRAMS: u32 = 3;
 }
 
-vipc::message! {
+ipc::message! {
     /// A socket on its way to another process, beside the handles that carry
     /// it (see [`Inet::travelling`]).
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,15 +310,15 @@ pub struct Readiness {
 
 /// Writes a request to the socket's channel without waiting:
 /// `ShouldWait` while the channel is full.
-fn request(channel: &Channel, fill: impl FnOnce(&mut Encoder)) -> Result<(), vabi::Error> {
-    let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
+fn request(channel: &Channel, fill: impl FnOnce(&mut Encoder)) -> Result<(), abi::Error> {
+    let mut e = Encoder::with_header(0, 0, ipc::FLAG_EVENT);
     fill(&mut e);
     channel.write(&e.bytes, Vec::new())
 }
 
 /// A deadline `timeout` (ns) from now; `None` for none.
 fn deadline(timeout: Option<u64>) -> u64 {
-    timeout.map_or(vabi::DEADLINE_INFINITE, |t| time::monotonic_ns().saturating_add(t))
+    timeout.map_or(abi::DEADLINE_INFINITE, |t| time::monotonic_ns().saturating_add(t))
 }
 
 /// Waits on `channel` for a message, the end of the service or `signals`
@@ -327,7 +327,7 @@ fn deadline(timeout: Option<u64>) -> u64 {
 fn wait(channel: &Channel, signals: u32, deadline: u64) -> Result<(), isize> {
     match channel.wait(READABLE | PEER_CLOSED | signals, deadline) {
         Ok(_) => Ok(()),
-        Err(vabi::Error::TimedOut) => Err(EAGAIN),
+        Err(abi::Error::TimedOut) => Err(EAGAIN),
         Err(e) => Err(error::kernel(e)),
     }
 }
@@ -353,8 +353,8 @@ fn read_bytes(
         let read = if how.peek { socket.peek(&mut buf[got..]) } else { socket.read(&mut buf[got..]) };
         match read {
             Ok(n) => got += n,
-            Err(vabi::Error::PeerClosed) => ended = true,
-            Err(vabi::Error::ShouldWait) => {}
+            Err(abi::Error::PeerClosed) => ended = true,
+            Err(abi::Error::ShouldWait) => {}
             Err(_) if got > 0 => return Ok((got, false)),
             Err(e) => return Err(error::kernel(e)),
         }
@@ -367,7 +367,7 @@ fn read_bytes(
         match socket.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, deadline) {
             Ok(_) => {}
             Err(_) if got > 0 => return Ok((got, false)),
-            Err(vabi::Error::TimedOut) => return Err(EAGAIN),
+            Err(abi::Error::TimedOut) => return Err(EAGAIN),
             Err(e) => return Err(error::kernel(e)),
         }
     }
@@ -410,11 +410,11 @@ impl State {
                 Ok(message) => {
                     // A message that is not an event is the service's
                     // mistake: passed over.
-                    if let Ok((_, event)) = vipc::decode_event::<SocketEvent>(message) {
+                    if let Ok((_, event)) = ipc::decode_event::<SocketEvent>(message) {
                         self.absorb(event);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => break,
+                Err(abi::Error::ShouldWait) => break,
                 Err(_) => {
                     self.lose();
                     break;
@@ -513,7 +513,7 @@ impl State {
         let v6only = self.options.v6only;
         loop {
             match channel.read() {
-                Ok(message) => match vipc::decode_event::<SocketEvent>(message) {
+                Ok(message) => match ipc::decode_event::<SocketEvent>(message) {
                     // A connection the socket cannot report (IPv6 to an
                     // IPv4 socket) is closed.
                     Ok((_, SocketEvent::AcceptedBytes { socket, bytes, local, remote })) => {
@@ -528,7 +528,7 @@ impl State {
                     // Not what this listener is sent: passed over.
                     _ => {}
                 },
-                Err(vabi::Error::ShouldWait) => return None,
+                Err(abi::Error::ShouldWait) => return None,
                 Err(_) => {
                     self.lose();
                     return None;
@@ -549,7 +549,7 @@ impl State {
             Some(held) => Some(held),
             None => loop {
                 match channel.read() {
-                    Ok(message) => match vipc::decode_event::<SocketEvent>(message) {
+                    Ok(message) => match ipc::decode_event::<SocketEvent>(message) {
                         Ok((_, SocketEvent::Datagram { from, data })) => {
                             let heard = d.peer.is_none_or(|p| p.ip() == from.ip() && p.port() == from.port());
                             if heard && family.reaches(&from, v6only) {
@@ -562,7 +562,7 @@ impl State {
                         }
                         _ => {}
                     },
-                    Err(vabi::Error::ShouldWait) => break None,
+                    Err(abi::Error::ShouldWait) => break None,
                     Err(_) => {
                         self.lose();
                         return None;
@@ -1099,8 +1099,8 @@ impl Inet {
                 let dest = dest.or(d.peer).ok_or(EDESTADDRREQ)?;
                 match request(&channel, |e| SocketRequest::encode_send_to(dest, data, e)) {
                     Ok(()) => return Ok(data.len()),
-                    Err(vabi::Error::ShouldWait) if nonblock => return Err(EAGAIN),
-                    Err(vabi::Error::ShouldWait) => {}
+                    Err(abi::Error::ShouldWait) if nonblock => return Err(EAGAIN),
+                    Err(abi::Error::ShouldWait) => {}
                     Err(_) => {
                         d.closed = true;
                         return Err(EPIPE);
@@ -1111,7 +1111,7 @@ impl Inet {
             // Room in the channel, which other processes may take first.
             match channel.wait(WRITABLE | PEER_CLOSED, end) {
                 Ok(_) => {}
-                Err(vabi::Error::TimedOut) => return Err(EAGAIN),
+                Err(abi::Error::TimedOut) => return Err(EAGAIN),
                 Err(e) => return Err(error::kernel(e)),
             }
         }
@@ -1258,9 +1258,9 @@ mod tests {
             shut: (false, true),
             closed: false,
         };
-        let mut e = vipc::Encoder::new();
+        let mut e = ipc::Encoder::new();
         t.clone().encode(&mut e);
-        let back = <Travelling as vipc::Decode>::decode(&mut vipc::Decoder::new(&e.bytes, Vec::new()));
+        let back = <Travelling as ipc::Decode>::decode(&mut ipc::Decoder::new(&e.bytes, Vec::new()));
         assert_eq!(back.ok(), Some(t));
     }
 }

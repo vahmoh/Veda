@@ -3,10 +3,10 @@
 
 //! The pictures of one folder, and small helpers for paths and sizes.
 
-use vfiles::kind::is_image;
-use vfiles::path::{HOME, join, natural_cmp};
-use vproto::fs::FsError;
-use vproto::vfs;
+use files::kind::is_image;
+use files::path::{HOME, join, natural_cmp};
+use proto::fs::FsError;
+use proto::vfs;
 
 use crate::loader::{Meta, Thumbs};
 

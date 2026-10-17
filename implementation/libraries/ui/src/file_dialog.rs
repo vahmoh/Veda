@@ -19,12 +19,12 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vfiles::format::human_size;
-use vfiles::path::{extension, join, parent, resolve};
-use vgfx::{Align, Color, Rect};
-use vproto::fs::DirEntry;
-use vproto::input::keys;
-use vproto::vfs;
+use files::format::human_size;
+use files::path::{extension, join, parent, resolve};
+use gfx::{Align, Color, Rect};
+use proto::fs::DirEntry;
+use proto::input::keys;
+use proto::vfs;
 
 use crate::icons::Icon;
 use crate::theme::Font;
@@ -44,10 +44,10 @@ pub enum FileDialogResult {
     Chosen(String),
 }
 
-/// Shortcuts in the sidebar: the user's places, in `vfiles`' order with
+/// Shortcuts in the sidebar: the user's places, in `files`' order with
 /// their icons, then the system image.
 const PLACES: [(&str, &str, Icon); 7] = {
-    let p = &vfiles::path::PLACES;
+    let p = &files::path::PLACES;
     [
         (p[0].name, p[0].path, Icon::Home),
         (p[1].name, p[1].path, Icon::Monitor),
@@ -55,7 +55,7 @@ const PLACES: [(&str, &str, Icon); 7] = {
         (p[3].name, p[3].path, Icon::Image),
         (p[4].name, p[4].path, Icon::Music),
         (p[5].name, p[5].path, Icon::Video),
-        ("System", vfiles::path::SYSTEM, Icon::Cpu),
+        ("System", files::path::SYSTEM, Icon::Cpu),
     ]
 };
 
@@ -77,7 +77,7 @@ pub struct FileDialog {
 
 impl FileDialog {
     fn new(mode: FileDialogMode, title: &str, dir: &str, name: &str) -> FileDialog {
-        let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+        let vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         let mut d = FileDialog {
             mode,
             title: title.into(),

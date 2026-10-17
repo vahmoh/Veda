@@ -21,7 +21,7 @@
 //!   layouts, views and surfaces) are created once per distinct state and
 //!   cached, a bounded number of each kind; a draw binds them and sets only
 //!   what changed since the last.
-//! * Programs become two TGSI shaders ([`vglsl::tgsi`]).
+//! * Programs become two TGSI shaders ([`glsl::tgsi`]).
 //! * What the host's commands cannot do directly is drawn: scissored and
 //!   masked clears (`ops`). Such draws of the renderer's own stay out of
 //!   the application's occlusion queries.
@@ -161,7 +161,7 @@ pub struct VirglBackend {
     t: Box<dyn Transport>,
     host: HostCaps,
     caps: Caps,
-    tgsi: vglsl::tgsi::Options,
+    tgsi: glsl::tgsi::Options,
     /// Commands not yet submitted.
     cmds: Vec<u32>,
     max_words: usize,
@@ -217,7 +217,7 @@ impl VirglBackend {
             return Err(Unsupported::Transfers);
         }
         use crate::context::{DRAW_BUFFERS, UNIFORM_BUFFER_OFFSET_ALIGNMENT, VERTEX_ATTRIBS};
-        let blocks = vglsl::Options::default().limits.max_uniform_blocks;
+        let blocks = glsl::Options::default().limits.max_uniform_blocks;
         if !host.meets(DRAW_BUFFERS, VERTEX_ATTRIBS, blocks, UNIFORM_BUFFER_OFFSET_ALIGNMENT) {
             return Err(Unsupported::Limits);
         }
@@ -246,7 +246,7 @@ impl VirglBackend {
             return Err(Unsupported::Memory);
         }
         let caps = caps_for(&host);
-        let tgsi = vglsl::tgsi::Options { shadow_lod: host.has2(CAP2_TEXTURE_SHADOW_LOD) };
+        let tgsi = glsl::tgsi::Options { shadow_lod: host.has2(CAP2_TEXTURE_SHADOW_LOD) };
         let flat_3d = host.has(CAP_HOST_IS_GLES);
         Ok(VirglBackend {
             t,
@@ -1279,7 +1279,7 @@ impl Backend for VirglBackend {
         self.unqueried(|b| b.mipmap(id, base, last));
     }
 
-    fn create_program(&mut self, program: Arc<vglsl::program::Program>) -> ProgramId {
+    fn create_program(&mut self, program: Arc<glsl::program::Program>) -> ProgramId {
         self.program(program)
     }
 

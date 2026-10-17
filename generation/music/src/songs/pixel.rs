@@ -6,7 +6,7 @@
 //! Intro (4) · theme (16) · bridge (8) · cave (8) · theme with harmony
 //! (16) · fanfare (8). Two pulse channels, a triangle bass and noise drums.
 
-use vaudio::synth::{Part, Song};
+use audio::synth::{Part, Song};
 
 use super::Track;
 use crate::dsl::{self, BAR, Humanize, key};

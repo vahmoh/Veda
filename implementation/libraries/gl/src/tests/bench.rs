@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Rendering speed (run with `cargo test --release -p vgl bench -- --ignored
+//! Rendering speed (run with `cargo test --release -p gl bench -- --ignored
 //! --nocapture`).
 
 use super::*;

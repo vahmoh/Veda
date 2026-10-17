@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vagent"
+name = "agent"
 description = "The voice agent's logic: the Deepgram Voice Agent protocol, tools, memory, configuration and the approval policy"
 version.workspace = true
 edition.workspace = true
@@ -14,8 +14,8 @@ serde_json = { workspace = true }
 percent-encoding = { workspace = true }
 # The agent protocols' types (the risk of an action, what an application
 # offers), and the paths of the VFS.
-vproto = { workspace = true }
-vfiles = { workspace = true }
+proto = { workspace = true }
+files = { workspace = true }
 
 [lints]
 workspace = true

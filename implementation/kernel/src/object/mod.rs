@@ -22,7 +22,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use vabi::ObjectType;
+use abi::ObjectType;
 
 use crate::interrupt;
 use crate::ipc::{channel, event, port, socket};
@@ -40,15 +40,15 @@ pub fn new_koid() -> u64 {
 /// A short, fixed-capacity name (processes and threads).
 #[derive(Clone, Copy)]
 pub struct Name {
-    bytes: [u8; vabi::NAME_MAX],
+    bytes: [u8; abi::NAME_MAX],
     len: u8,
 }
 
 impl Name {
     pub fn new(s: &str) -> Name {
-        let mut bytes = [0u8; vabi::NAME_MAX];
+        let mut bytes = [0u8; abi::NAME_MAX];
         // Truncate on a char boundary.
-        let mut len = s.len().min(vabi::NAME_MAX);
+        let mut len = s.len().min(abi::NAME_MAX);
         while !s.is_char_boundary(len) {
             len -= 1;
         }
@@ -60,7 +60,7 @@ impl Name {
         core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("?")
     }
 
-    pub fn raw(&self) -> [u8; vabi::NAME_MAX] {
+    pub fn raw(&self) -> [u8; abi::NAME_MAX] {
         self.bytes
     }
 }

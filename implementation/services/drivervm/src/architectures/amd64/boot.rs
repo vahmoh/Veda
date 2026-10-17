@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Booting Linux on the guest the x86 way (`vhv::amd64::linux`).
+//! Booting Linux on the guest the x86 way (`hv::amd64::linux`).
 //!
 //! The guest's first 64 KiB hold what the kernel is entered with (a GDT,
 //! page tables that map the first 4 GiB as they are, the boot parameters
@@ -17,10 +17,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vabi::VcpuState;
-use vhv::amd64::linux::{self, E820_RAM, E820_RESERVED, MemoryRange};
+use abi::VcpuState;
+use hv::amd64::linux::{self, E820_RAM, E820_RESERVED, MemoryRange};
 
-pub use vhv::amd64::linux::Kernel;
+pub use hv::amd64::linux::Kernel;
 
 use super::{ACPI_AT, OPREGION_AT};
 use crate::memory::GuestMemory;

@@ -3,7 +3,7 @@
 
 //! The Veda visual theme (dark).
 
-use vgfx::Color;
+use gfx::Color;
 
 /// Font roles; mapped to loaded fonts by the toolkit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

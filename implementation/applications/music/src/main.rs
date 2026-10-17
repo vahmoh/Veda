@@ -15,7 +15,7 @@
 //!   the screen, of which only the few used lately are kept.
 //! * The library is rescanned whenever the window regains the focus, and a
 //!   second `music FILE` hands the file to the running player
-//!   (`vproto::instance`).
+//!   (`proto::instance`).
 //! * User actions are logged concisely (`playing <title>`, `paused at m:ss`,
 //!   `seek to m:ss`, `volume N%`, ...) for the GUI tests.
 //! * [`agent`] lets the voice agent play, find and control music.
@@ -31,20 +31,20 @@ mod widgets;
 
 use std::sync::Arc;
 
+use abi::{RawHandle, signals};
+use audio::fft::Analyzer;
+use files::format::duration as format_time;
+use gfx::{Align, Bitmap, Color, Rect};
 use music_core::cover::{CoverSpec, Recent};
 use music_core::order::{AfterEnd, Order, Repeat};
+use proto::input::keys;
+use proto::instance::{self, Instance};
 use rand::SeedableRng;
 use rand::seq::SliceRandom;
 use rand_pcg::Pcg32;
-use vabi::{RawHandle, signals};
-use vaudio::fft::Analyzer;
-use vfiles::format::duration as format_time;
-use vgfx::{Align, Bitmap, Color, Rect};
-use vproto::input::keys;
-use vproto::instance::{self, Instance};
-use vrt::object::Event;
-use vrt::sync::Mutex;
-use vui::{App, Font, Icon, Ui, WindowSpec, media};
+use rt::object::Event;
+use rt::sync::Mutex;
+use ui::{App, Font, Icon, Ui, WindowSpec, media};
 
 use engine::{Command, PlayState, Shared, Status};
 use library::Track;
@@ -101,7 +101,7 @@ fn round_corners(b: &mut Bitmap, radius: f32) {
             }
             for (cx, cy) in [(x, y), (w - 1 - x, y), (x, h - 1 - y), (w - 1 - x, h - 1 - y)] {
                 let p = &mut b.pixels[(cy * w + cx) as usize];
-                *p = vgfx::color::scale(*p, cov);
+                *p = gfx::color::scale(*p, cov);
             }
         }
     }
@@ -119,7 +119,7 @@ fn art_thread(covers: Arc<Mutex<Covers>>, wake: Event, notify: Event) {
                 println!("covers: {} ready", ready);
                 drawn = 0;
             }
-            let _ = wake.wait(signals::SIGNALED, vabi::DEADLINE_INFINITE);
+            let _ = wake.wait(signals::SIGNALED, abi::DEADLINE_INFINITE);
             let _ = wake.clear();
             continue;
         };
@@ -188,13 +188,13 @@ struct Player {
     perf_frames: u32,
     perf_ns: u64,
     perf_start: u64,
-    cover_shadow: vgfx::ShadowTemplate,
-    glow: vgfx::ShadowTemplate,
+    cover_shadow: gfx::ShadowTemplate,
+    glow: gfx::ShadowTemplate,
 }
 
 impl Player {
     fn new(shared: Arc<Shared>, instance: Option<Instance>) -> Player {
-        let seed = vrt::time::now_ns();
+        let seed = rt::time::now_ns();
         Player {
             shared,
             tracks: Vec::new(),
@@ -250,13 +250,13 @@ impl Player {
             perf_frames: 0,
             perf_ns: 0,
             perf_start: 0,
-            cover_shadow: vgfx::ShadowTemplate::new(14, 26),
-            glow: vgfx::ShadowTemplate::new(14, 46),
+            cover_shadow: gfx::ShadowTemplate::new(14, 26),
+            glow: gfx::ShadowTemplate::new(14, 46),
         }
     }
 
     fn gain(&self) -> f32 {
-        if self.muted { 0.0 } else { vaudio::mix::slider_to_gain(self.volume) }
+        if self.muted { 0.0 } else { audio::mix::slider_to_gain(self.volume) }
     }
 
     /// Picks up library changes from the engine (scans, added files and
@@ -303,9 +303,9 @@ impl Player {
         {
             let covers = self.covers.clone();
             let (w2, n2) = (Event::from_handle(w2), Event::from_handle(n2));
-            let ok = vrt::thread::Builder::new()
+            let ok = rt::thread::Builder::new()
                 .name("covers")
-                .priority(vabi::priority::NORMAL - 2)
+                .priority(abi::priority::NORMAL - 2)
                 .spawn(move || art_thread(covers, w2, n2))
                 .is_ok();
             if ok {
@@ -363,7 +363,7 @@ impl Player {
     }
 
     fn previous(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         if self.status.position_ms(now) > 3000 || self.order.len() <= 1 {
             self.seek_to(0);
         } else if let Some(i) = self.neighbour(-1, true) {
@@ -392,7 +392,7 @@ impl Player {
         if self.current.is_none() {
             return;
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let pos = self.status.position_ms(now) as i64 + delta_ms;
         let ms = pos.clamp(0, self.status.duration_ms().saturating_sub(500) as i64) as u64;
         self.seek_to(ms);
@@ -406,7 +406,7 @@ impl Player {
         self.shared.send(Command::Seek { ms, id: self.seek_seq });
         self.seeking = Some(self.seek_seq);
         self.status.pos_frames = ms * self.status.rate as u64 / 1000;
-        self.status.pos_ns = vrt::time::now_ns();
+        self.status.pos_ns = rt::time::now_ns();
     }
 
     fn set_volume(&mut self, v: f32) {
@@ -416,7 +416,7 @@ impl Player {
         }
         self.shared.send(Command::Volume(self.gain()));
         // Log once the value settles (a slider drag is one change).
-        self.volume_log_at = Some(vrt::time::now_ns() + 300_000_000);
+        self.volume_log_at = Some(rt::time::now_ns() + 300_000_000);
     }
 
     /// Logs the volume if a change has settled.
@@ -448,7 +448,7 @@ impl Player {
 
     fn handle_keys(&mut self, ui: &Ui, list_focused: bool) {
         for k in &ui.input.keys {
-            if k.modifiers & (vproto::display::modifiers::CTRL | vproto::display::modifiers::ALT) != 0 {
+            if k.modifiers & (proto::display::modifiers::CTRL | proto::display::modifiers::ALT) != 0 {
                 continue;
             }
             match k.code {
@@ -917,15 +917,15 @@ impl Player {
 }
 
 impl App for Player {
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Player::agent_invoke(self, action, args)
     }
 
@@ -940,7 +940,7 @@ impl App for Player {
     fn handle_signaled(&mut self, index: usize, _observed: u32) {
         if index > 0 {
             // Another Music process handed us files to play.
-            let files = self.instance.as_mut().map(|i| i.poll(vfiles::kind::is_playable_audio)).unwrap_or_default();
+            let files = self.instance.as_mut().map(|i| i.poll(files::kind::is_playable_audio)).unwrap_or_default();
             for path in files {
                 println!("opening {}", path);
                 self.shared.send(Command::AddFile { path, play: true });
@@ -954,7 +954,7 @@ impl App for Player {
     }
 
     fn update(&mut self, ui: &mut Ui) {
-        let started = vrt::time::now_ns();
+        let started = rt::time::now_ns();
         let now = ui.now();
         if core::mem::take(&mut self.activate) {
             ui.activate();
@@ -987,7 +987,7 @@ impl App for Player {
         }
         self.log_volume(ui);
         // Occasional frame-time report in the system log.
-        let spent = vrt::time::now_ns() - started;
+        let spent = rt::time::now_ns() - started;
         self.perf_frames += 1;
         self.perf_ns += spent;
         if self.perf_start == 0 {
@@ -1019,7 +1019,7 @@ fn run() -> i32 {
         println!("cannot create events");
         return 1;
     };
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let file = args.get(1).filter(|a| !a.starts_with('-')).cloned();
     // One player at a time: a file goes to the player that is running.
     let server = match instance::start("music", file.as_deref()) {
@@ -1041,5 +1041,5 @@ fn run() -> i32 {
     spec.app_id = "music".into();
     spec.min_width = 900;
     spec.min_height = 600;
-    vui::run(spec, player)
+    ui::run(spec, player)
 }

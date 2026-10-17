@@ -120,7 +120,7 @@ impl HostCaps {
         self.capability_bits_v2 & bit != 0
     }
 
-    /// Whether the host offers what OpenGL ES 3.0, as `vgl` has it, asks
+    /// Whether the host offers what OpenGL ES 3.0, as `gl` has it, asks
     /// of a renderer: as many draw buffers, vertex attributes and uniform
     /// blocks a stage, and uniform block ranges at the offsets it lets
     /// applications choose.

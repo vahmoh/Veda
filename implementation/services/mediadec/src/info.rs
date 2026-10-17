@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use vproto::media::{
+use proto::media::{
     self, AudioStream, Chapter, Colour, MAX_AUDIO_STREAMS, MAX_CHAPTERS, MAX_DURATION_US, MAX_LANGUAGE, MAX_NAME,
     MAX_SIDE, MAX_TEXT, MAX_VIDEO_STREAMS, MediaInfo, Rational, VideoStream, bounded,
 };

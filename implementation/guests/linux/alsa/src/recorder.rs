@@ -9,10 +9,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use vabi::{Error, WaitItem, signals};
-use vproto::audio::{Ring, ring::flags};
-use vrt::object::Event;
-use vrt::time::now_ns;
+use abi::{Error, WaitItem, signals};
+use proto::audio::{Ring, ring::flags};
+use rt::object::Event;
+use rt::time::now_ns;
 
 use crate::pcm::Pcm;
 use crate::{CHANNELS, RATE};
@@ -121,7 +121,7 @@ impl Recorder {
             } else {
                 let mut items =
                     [WaitItem { handle: input.wake_event.raw(), signals: signals::SIGNALED, ..Default::default() }];
-                match vrt::object::wait_many(&mut items, now_ns() + 500_000_000) {
+                match rt::object::wait_many(&mut items, now_ns() + 500_000_000) {
                     Ok(_) | Err(Error::TimedOut) => {}
                     // The wait was refused (the monitor at its limits):
                     // not at once again.

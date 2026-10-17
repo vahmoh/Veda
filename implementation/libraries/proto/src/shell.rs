@@ -15,10 +15,10 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
-use vabi::RawHandle;
-use vipc::{enumeration, protocol};
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
+use abi::RawHandle;
+use ipc::{enumeration, protocol};
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,7 @@ protocol! {
         1 => fn set_wallpaper(path: String) -> Result<(), ShellError>;
         /// Path of the current wallpaper.
         2 => fn wallpaper() -> String;
-        /// Shows a notification bubble. `icon` is a `vui::Icon` name.
+        /// Shows a notification bubble. `icon` is a `ui::Icon` name.
         3 => fn notify(title: String, body: String, icon: String) -> ();
         /// Wallpapers shipped with the system.
         4 => fn wallpapers() -> Vec<String>;
@@ -120,7 +120,7 @@ impl ShellLink {
             replies: Mutex::new(Vec::new()),
         });
         let s = shared.clone();
-        vrt::thread::Builder::new().name("shell-link").spawn(move || worker(s, theirs)).ok()?;
+        rt::thread::Builder::new().name("shell-link").spawn(move || worker(s, theirs)).ok()?;
         Some(ShellLink { shared, event })
     }
 

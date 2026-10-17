@@ -5,10 +5,10 @@
 
 use alloc::string::String;
 
+use gfx::{Color, Rect};
+use proto::display::Cursor;
+use proto::input::keys;
 use unicode_segmentation::GraphemeCursor;
-use vgfx::{Color, Rect};
-use vproto::display::Cursor;
-use vproto::input::keys;
 
 use crate::theme::Font;
 use crate::ui::{TextEditState, Ui};

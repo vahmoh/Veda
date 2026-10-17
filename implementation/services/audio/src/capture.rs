@@ -17,12 +17,12 @@
 //! 16 kHz mono, and the echo canceller removes the system's own playback,
 //! taken from the mixer's [`Reference`](crate::mixer::Reference) at the
 //! moment the frames were recorded (the driver publishes a capture
-//! clock). The canceller ([`vaudio::aec`]) estimates the remaining delay
+//! clock). The canceller ([`audio::aec`]) estimates the remaining delay
 //! itself; how well it does is logged once a minute while it works. A
 //! stream may ask for more channels beside the cleaned microphone: what
 //! was playing when it was recorded (the echo's source), and the
 //! microphone as recorded — so a voice assistant can tell its own echo
-//! from the user (see `vagent::gate`).
+//! from the user (see `agent::gate`).
 //!
 //! **Power.** The device records only while some stream is open: the
 //! service sets the ring's CAPTURE flag and signals `wake_event` when the
@@ -33,15 +33,15 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vaudio::mix;
-use vaudio::resample::Resampler;
-use vproto::audio::{
+use audio::mix;
+use audio::resample::Resampler;
+use proto::audio::{
     AudioError, DeviceFormat, InputHandle, InputLink, InputSpec, Ring, RingError, Role, recorded_at, ring,
 };
-use vrt::object::Event;
+use rt::object::Event;
 
 use crate::mixer::Mixer;
-use vaudio::aec::EchoCanceller;
+use audio::aec::EchoCanceller;
 
 /// Capture stream ids carry this bit, so `close` can tell them from
 /// playback streams.
@@ -281,7 +281,7 @@ impl Capture {
             return Err(AudioError::NoSuchStream);
         }
         if let Some(s) = self.streams.remove(&id) {
-            vrt::println!("capture stream {} \"{}\" closed ({} overruns)", id & !ID_BIT, s.name, s.overruns);
+            rt::println!("capture stream {} \"{}\" closed ({} overruns)", id & !ID_BIT, s.name, s.overruns);
         }
         self.after_close();
         Ok(())
@@ -414,8 +414,8 @@ impl Capture {
                 if echo.report_at_ns != 0 && echo.canceller.converged() {
                     let c = &echo.canceller;
                     match c.echo_delay_ms() {
-                        Some(d) => vrt::println!("echo cancellation: {:.0} dB, echo delay {:.0} ms", c.erle_db(), d),
-                        None => vrt::println!("echo cancellation: {:.0} dB", c.erle_db()),
+                        Some(d) => rt::println!("echo cancellation: {:.0} dB, echo delay {:.0} ms", c.erle_db(), d),
+                        None => rt::println!("echo cancellation: {:.0} dB", c.erle_db()),
                     }
                 }
                 echo.report_at_ns = end_ns + ECHO_REPORT_NS;

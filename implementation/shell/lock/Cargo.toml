@@ -14,13 +14,13 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
-vui = { workspace = true }
-vsplash = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+ui = { workspace = true }
+splash = { workspace = true }
 zeroize = { workspace = true, features = ["alloc"] }
 lock-core = { path = "core" }
 shell-common = { path = "../common" }

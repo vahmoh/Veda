@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vglsl"
+name = "glsl"
 description = "The OpenGL ES Shading Language (GLSL ES 1.00 and 3.00): preprocessor, parser, type checker, linker, an optimising SSA compiler, a SIMD shader interpreter and a TGSI back end"
 version.workspace = true
 edition.workspace = true

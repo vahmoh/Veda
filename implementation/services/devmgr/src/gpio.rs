@@ -6,7 +6,7 @@
 //! drives them on a driver's behalf — Veda's, or the driver VM's monitor
 //! for Linux — and only the pins that driver's devices are described with.
 //! The controllers are found and mapped here (their id and register windows
-//! come from ACPI); their pads are `vgpio`'s.
+//! come from ACPI); their pads are `gpio`'s.
 //!
 //! A pin's interrupt is an interrupt devmgr raises (`irq_raise`): a
 //! controller has one line for all its pins, which devmgr waits on; when
@@ -19,20 +19,20 @@
 //! masked and dropped.
 //!
 //! A test's ACPI table may describe a simulated controller (`VTST0002`),
-//! which devmgr drives as it does a PC's, over `vgpio::sim`'s registers;
+//! which devmgr drives as it does a PC's, over `gpio::sim`'s registers;
 //! its line is looked at after each change of its pins.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 
-use vabi::{RawHandle, Rights, cache_policy, map_flags, signals};
-use vacpi::name::Path;
-use vacpi::resource::{Gpio as Connection, Resource as AcpiResource};
-use vgpio::{Change, Layout, Pads, Registers, Trigger};
-use vproto::pci::PciError;
-use vrt::object::{Event, Interrupt, Resource, Vmo};
-use vrt::println;
+use abi::{RawHandle, Rights, cache_policy, map_flags, signals};
+use acpi::name::Path;
+use acpi::resource::{Gpio as Connection, Resource as AcpiResource};
+use gpio::{Change, Layout, Pads, Registers, Trigger};
+use proto::pci::PciError;
+use rt::object::{Event, Interrupt, Resource, Vmo};
+use rt::println;
 
 use crate::acpi::Acpi;
 
@@ -73,7 +73,7 @@ impl Registers for Window {
 
 enum Bank {
     Mapped(Vec<Window>),
-    Simulated(vgpio::sim::Controller),
+    Simulated(gpio::sim::Controller),
 }
 
 /// A controller with its communities mapped.
@@ -101,7 +101,7 @@ impl Controller {
         }
     }
 
-    fn simulated(&self) -> Option<&vgpio::sim::Controller> {
+    fn simulated(&self) -> Option<&gpio::sim::Controller> {
         match &self.bank {
             Bank::Simulated(sim) => Some(sim),
             Bank::Mapped(_) => None,
@@ -133,15 +133,15 @@ pub struct Gpio {
     next: u64,
 }
 
-fn error(e: vgpio::Error) -> PciError {
+fn error(e: gpio::Error) -> PciError {
     match e {
-        vgpio::Error::NoSuchPin => PciError::NotFound,
-        vgpio::Error::Registers => PciError::Unsupported,
-        vgpio::Error::Busy => PciError::Busy,
+        gpio::Error::NoSuchPin => PciError::NotFound,
+        gpio::Error::Registers => PciError::Unsupported,
+        gpio::Error::Busy => PciError::Busy,
     }
 }
 
-/// How a connection's pin interrupts, as `vgpio` says it.
+/// How a connection's pin interrupts, as `gpio` says it.
 pub fn trigger(c: &Connection) -> Trigger {
     match (c.edge, c.polarity) {
         (false, p) => Trigger::Level { active_low: p == 1 },
@@ -175,12 +175,12 @@ impl Gpio {
     fn open(acpi: &Acpi, mmio: &Resource, path: &Path, key: u64) -> Option<Controller> {
         let hid = acpi.identify(path).hid.unwrap_or_default();
         if hid == SIMULATED {
-            let layout = vgpio::layout("INTC1055")?;
+            let layout = gpio::layout("INTC1055")?;
             println!("gpio: {} ({}) is a simulated controller with {}'s pads", path, hid, layout.name);
-            let bank = Bank::Simulated(vgpio::sim::Controller::new(layout));
+            let bank = Bank::Simulated(gpio::sim::Controller::new(layout));
             return Some(Controller { layout, bank, line: None, key });
         }
-        let Some(layout) = vgpio::layout(&hid) else {
+        let Some(layout) = gpio::layout(&hid) else {
             println!("gpio: {} ({}) is a controller devmgr does not drive", path, hid);
             return None;
         };
@@ -207,7 +207,7 @@ impl Gpio {
             let len = length as usize;
             // The VMO, and so its mapping, starts at the page the registers
             // start on.
-            let skew = (base % vabi::PAGE_SIZE as u64) as usize;
+            let skew = (base % abi::PAGE_SIZE as u64) as usize;
             let mapped = Vmo::create_physical(mmio, base, len, cache_policy::UNCACHED).ok().and_then(|vmo| {
                 vmo.map(0, skew + len, map_flags::READ | map_flags::WRITE).ok().map(|a| (a + skew, vmo))
             });

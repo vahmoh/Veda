@@ -5,10 +5,10 @@
 //! networks in range, saved networks, every interface with its addresses,
 //! the firewall ([`crate::firewall`]), and diagnostics.
 
-use vnet::wifi::{self, ConnState, NetworkInfo, SavedNetwork, Security, WlanDiagnostics, WlanStatus, signal_bars};
-use vnet::{Connectivity, InterfaceInfo, InterfaceKind, NetStatus};
-use vui::status::Network;
-use vui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
+use net::wifi::{self, ConnState, NetworkInfo, SavedNetwork, Security, WlanDiagnostics, WlanStatus, signal_bars};
+use net::{Connectivity, InterfaceInfo, InterfaceKind, NetStatus};
+use ui::status::Network;
+use ui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
 
 /// How often the page re-reads everything while shown.
 const REFRESH_NS: u64 = 1_000_000_000;
@@ -93,7 +93,7 @@ impl NetworkPage {
     }
 
     /// The handle to wait on for Wi-Fi events.
-    pub fn wait_handle(&self) -> Option<vabi::RawHandle> {
+    pub fn wait_handle(&self) -> Option<abi::RawHandle> {
         self.watch.as_ref().map(|w| w.handle().raw())
     }
 
@@ -114,9 +114,9 @@ impl NetworkPage {
             self.saved.clear();
             self.watch = None;
         }
-        self.ifaces = vnet::interfaces().unwrap_or_default();
+        self.ifaces = net::interfaces().unwrap_or_default();
         self.ifaces.retain(|i| i.kind != InterfaceKind::Loopback);
-        self.status = vnet::status().ok();
+        self.status = net::status().ok();
     }
 
     /// Takes in events and refreshes when due. Returns when to look again.
@@ -259,7 +259,7 @@ impl NetworkPage {
                     "Channel",
                     format!("{} ({})", s.channel, if s.band == wifi::Band::Ghz5 { "5 GHz" } else { "2.4 GHz" }),
                 ),
-                ("Access point", vnet::format_mac(&s.bssid)),
+                ("Access point", net::format_mac(&s.bssid)),
                 ("Connected for", duration(s.connected_s)),
             ];
             for (label, value) in rows {
@@ -389,7 +389,7 @@ impl NetworkPage {
                     self.reveal = !self.reveal;
                     ui.repaint();
                 }
-                let valid = vnet::wifi::valid_passphrase(&self.password);
+                let valid = net::wifi::valid_passphrase(&self.password);
                 let go =
                     ui.button_full(Rect::new(field.right() + 76, ry + 4, 110, 34), None, "Join", ButtonKind::Primary);
                 if (go || resp.submitted) && valid {
@@ -482,7 +482,7 @@ impl NetworkPage {
             let mut ry = card.y + 52;
             Self::row(ui, ix, ry, iw, "Link", if i.link_up { "Up" } else { "Down" });
             ry += 26;
-            Self::row(ui, ix, ry, iw, "Hardware address", &vnet::format_mac(&i.mac));
+            Self::row(ui, ix, ry, iw, "Hardware address", &net::format_mac(&i.mac));
             ry += 26;
             for a in &i.addresses {
                 let label = if a.address.is_ipv4() { "IPv4 address" } else { "IPv6 address" };

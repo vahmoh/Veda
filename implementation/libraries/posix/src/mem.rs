@@ -13,9 +13,9 @@
 //! and a shared one is mapped through a handle without the right to write,
 //! so that `mprotect` cannot make it writable either (`EACCES`).
 
-use vabi::{Error, Rights, map_flags};
-use vrt::object::Vmo;
-use vrt::vm;
+use abi::{Error, Rights, map_flags};
+use rt::object::Vmo;
+use rt::vm;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Object};
@@ -23,7 +23,7 @@ use crate::file::VfsFile;
 use crate::linux::errno::*;
 use crate::linux::mman::*;
 
-const PAGE: usize = vabi::PAGE_SIZE;
+const PAGE: usize = abi::PAGE_SIZE;
 
 /// The kernel's mapping flags for POSIX protections.
 fn map_prot(prot: u32) -> usize {

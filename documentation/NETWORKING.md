@@ -4,7 +4,7 @@
 # Networking and Wi-Fi
 
 How Veda reaches the network: the network service (`netd`) and its
-firewall, the Wi-Fi service (`wlan`), TLS (`vtls`), the API applications
+firewall, the Wi-Fi service (`wlan`), TLS (`tls`), the API applications
 use, and the tests.
 
 **Contents:** [Components](#components) · [Who may do what](#who-may-do-what) · [Sockets in `netd`](#sockets-in-netd) · [The firewall](#the-firewall) · [Wi-Fi](#wi-fi) · [Using the network](#using-the-network) · [TLS](#tls) · [Testing](#testing) · [Limitations and next steps](#limitations-and-next-steps)
@@ -25,20 +25,20 @@ this repository.
 |------|------------|
 | `implementation/guests/linux/net`, `implementation/guests/linux/wifi` | In [the driver VM](DRIVERVM.md): `net` offers Linux's network cards to `netd` (`netdev`), `wifi` Linux's Wi-Fi radios to `wlan` as *managed* radios, which join access points on `wlan`'s commands |
 | `implementation/services/wlan` | `wlan`, the Wi-Fi service (`wlan` and `wlanphy` protocols): what to join and when, authentication, the key handshakes, saved networks |
-| `implementation/libraries/wlan` | `vwlan`: 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, the saved-network format, the connection policy |
+| `implementation/libraries/wlan` | `wlan`: 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, the saved-network format, the connection policy |
 | `implementation/services/netd` | `netd`, the network service (`net` and `netdev` protocols), and the firewall's settings store (`store.rs`) |
-| `implementation/libraries/netstack` | `vnetstack`: interfaces, IPv4 and IPv6, DHCP, SLAAC, routing between interfaces, a caching DNS resolver, sockets on smoltcp, the firewall (`firewall.rs`) |
+| `implementation/libraries/netstack` | `netstack`: interfaces, IPv4 and IPv6, DHCP, SLAAC, routing between interfaces, a caching DNS resolver, sockets on smoltcp, the firewall (`firewall.rs`) |
 | `implementation/ports/smoltcp` | [smoltcp](https://github.com/smoltcp-rs/smoltcp)'s release and Veda's patch (`implementation/ports/README.md` explains each change) |
 | `implementation/libraries/proto/src/{net,wlan,netring}.rs` | The service protocols and frame rings |
-| `implementation/libraries/net` | `vnet`: blocking, `std::net`-like `TcpStream`, `TcpListener` and `UdpSocket`, name resolution, ping, `vnet::wifi` |
-| `implementation/libraries/tls` | `vtls`: the TLS 1.3 and 1.2 client |
-| `implementation/libraries/web` | `vweb`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
+| `implementation/libraries/net` | `net`: blocking, `std::net`-like `TcpStream`, `TcpListener` and `UdpSocket`, name resolution, ping, `net::wifi` |
+| `implementation/libraries/tls` | `tls`: the TLS 1.3 and 1.2 client |
+| `implementation/libraries/web` | `web`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
 | `implementation/libraries/posix/src/inet.rs` | The POSIX layer's sockets, `netd`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
 | `implementation/shell/desktop/src/firewall.rs` | The firewall's question, as the desktop shows it |
 | `implementation/libraries/entropy`, `implementation/kernel/src/random.rs` | The kernel's random number generator |
 | `verification/nettest` | In-system network checks |
 
-Frames travel through shared-memory rings (`vproto::netring`), a
+Frames travel through shared-memory rings (`proto::netring`), a
 single-producer, single-consumer ring each way per link with wake-up
 events: one copy in and one out per frame, a system call only when the
 other side is asleep, and a full ring makes `netd` wait rather than drop
@@ -71,7 +71,7 @@ kept for system services, so that applications together cannot use it all.
 
 ## Sockets in `netd`
 
-* **Flow control** is credit-based both ways (`vproto::net`). Received data
+* **Flow control** is credit-based both ways (`proto::net`). Received data
   leaves the stack only once its message is queued to the client, so data
   a client does not read stays there and the TCP window closes; an accepted
   connection, the end of a stream or an error waits for room in the
@@ -112,9 +112,9 @@ kept for system services, so that applications together cannot use it all.
 
 ## The firewall
 
-The firewall (`vnetstack`'s `firewall.rs`) filters what comes from other
+The firewall (`netstack`'s `firewall.rs`) filters what comes from other
 machines before smoltcp sees it, on every interface but loopback. `netd`
-applies its settings (`vproto::net::FirewallConfig`), which Settings
+applies its settings (`proto::net::FirewallConfig`), which Settings
 changes.
 
 * **Defaults**: on; nothing comes in that this machine did not ask for;
@@ -302,7 +302,7 @@ are read (they may answer it), nor about system services.
 ### Radios
 
 Linux's radios are *managed* radios: Linux's 802.11 stack is their MLME on
-`wlan`'s commands (`wlanmlme_ctl`, in `vproto::wlan`), which `wifi` carries
+`wlan`'s commands (`wlanmlme_ctl`, in `proto::wlan`), which `wifi` carries
 out through nl80211 (see [the driver VM](DRIVERVM.md)). Linux retries,
 times out, encrypts and decrypts, answers the access point's SA Queries
 and watches the link; the station in `wlan` decides and authenticates.
@@ -328,30 +328,30 @@ reads).
 ### For applications
 
 ```rust
-use vnet::{Duration, TcpStream};
+use net::{Duration, TcpStream};
 
 let mut s = TcpStream::connect_host("example.com", 80, Duration::from_secs(20))?;
 // HTTP or HTTPS, following redirects; the body at most 1 MiB.
-let page = vweb::http::get("https://example.com/", Duration::from_secs(20), 1 << 20)?;
+let page = web::http::get("https://example.com/", Duration::from_secs(20), 1 << 20)?;
 
-vnet::wifi::scan()?;
-for n in vnet::wifi::networks()? {
+net::wifi::scan()?;
+for n in net::wifi::networks()? {
     // n.name, n.security, n.signal_dbm, n.bars, n.saved, n.connected
 }
-vnet::wifi::connect("Veda Home", Some("password"), true)?;
-let events = vnet::wifi::Watcher::new()?; // status changes, scans, failures
+net::wifi::connect("Veda Home", Some("password"), true)?;
+let events = net::wifi::Watcher::new()?; // status changes, scans, failures
 
-let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]); // share it
-let mut tls = vtls::connect("example.com", 443, Duration::from_secs(20), &config)?;
+let config = tls::ClientConfig::with_alpn(&[b"http/1.1"]); // share it
+let mut tls = tls::connect("example.com", 443, Duration::from_secs(20), &config)?;
 tls.write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?;
 let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection (close_notify)
 ```
 
 ## TLS
 
-`vtls` is the TLS 1.3 and 1.2 client of Veda applications (HTTPS, secure
+`tls` is the TLS 1.3 and 1.2 client of Veda applications (HTTPS, secure
 WebSockets, anything else over TLS), running in the application's process
-over a `vnet::TcpStream`.
+over a `net::TcpStream`.
 
 * **Protocol**: [rustls](https://github.com/rustls/rustls) 0.23, through
   its `no_std` unbuffered API; `TlsStream` handles partial records, several
@@ -359,13 +359,13 @@ over a `vnet::TcpStream`.
   The end of the stream is the server's close_notify: a connection that
   just ends may have been cut short by anyone on the path, and reading
   reports `TlsError::Truncated` once the data before it is read.
-* **Cryptography** is `vtls`'s own rustls provider on pure-Rust crates (no
+* **Cryptography** is `tls`'s own rustls provider on pure-Rust crates (no
   C, no assembly): AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 records;
   SHA-256/384 and HMAC, with rustls' HKDF and TLS 1.2 PRF over them;
   X25519, secp256r1 and secp384r1 key exchange; ECDSA (P-256, P-384),
   Ed25519, RSA PKCS#1 v1.5 and RSA-PSS signatures. The cipher suites are
   the three of TLS 1.3, and for TLS 1.2 ECDHE-ECDSA and ECDHE-RSA with
-  AES-GCM or ChaCha20-Poly1305. RSA verification is `vtls`'s own, on
+  AES-GCM or ChaCha20-Poly1305. RSA verification is `tls`'s own, on
   `crypto-bigint`, with *ring*'s rules (2048 to 8192-bit moduli, PSS salts
   as long as the hash). Ephemeral secrets come from the kernel's ChaCha20
   generator and are zeroed after use. `Cargo.lock` lists *ring* because of
@@ -391,13 +391,13 @@ over a `vnet::TcpStream`.
 
 | Tests | Cover |
 |-------|-------|
-| `vwlan` | Frames, RSN, crypto vectors, handshakes, SAE, the profile and policy modules; station-against-access-point runs with every security type, wrong passwords, hidden networks, replays, deauthentication, silent access points, reconnection, rekeying, and frames forged or altered on the air |
-| `vnetstack` | Two stacks over a simulated cable: DHCP (renewals, server outages, other clients' acknowledgements), TCP (quiet connections, half closes, closing with data in flight, clients that left), UDP, DNS (unreachable servers included), ICMP and its errors, IPv6, a full link; the firewall, packet by packet and between the stacks (what it lets in and turns away, stealth, pings, replies, fragments, floods, forged packets, the log) |
+| `wlan` | Frames, RSN, crypto vectors, handshakes, SAE, the profile and policy modules; station-against-access-point runs with every security type, wrong passwords, hidden networks, replays, deauthentication, silent access points, reconnection, rekeying, and frames forged or altered on the air |
+| `netstack` | Two stacks over a simulated cable: DHCP (renewals, server outages, other clients' acknowledgements), TCP (quiet connections, half closes, closing with data in flight, clients that left), UDP, DNS (unreachable servers included), ICMP and its errors, IPv6, a full link; the firewall, packet by packet and between the stacks (what it lets in and turns away, stealth, pings, replies, fragments, floods, forged packets, the log) |
 | smoltcp | Its own tests, with Veda's patch |
-| `vtls` | Handshakes with an in-memory rustls server: every cipher suite, key exchange group and certificate type, data both ways, closing from either side, key updates, records split down to single bytes, expired, future, misnamed, untrusted and client-only certificates, broken servers, every bit of the server's first flight damaged in turn; the chains of api.deepgram.com, example.com and www.google.com (captured on 2026-10-03) against the built-in roots |
+| `tls` | Handshakes with an in-memory rustls server: every cipher suite, key exchange group and certificate type, data both ways, closing from either side, key updates, records split down to single bytes, expired, future, misnamed, untrusted and client-only certificates, broken servers, every bit of the server's first flight damaged in turn; the chains of api.deepgram.com, example.com and www.google.com (captured on 2026-10-03) against the built-in roots |
 | Test vectors | RFC 8439 (the smoltcp port's ChaCha20), RFC 3394, RFC 4493, IEEE 802.11's PSK, PRF, CCMP and SAE vectors; for TLS, RFC 8448's handshake trace, RFC 4231, RFC 8032, the TLS 1.2 PRF and RSA signatures made by OpenSSL; the kernel's generator against its known answers |
 
-`cargo test -p vtls -- --ignored --nocapture` connects to those three
+`cargo test -p tls -- --ignored --nocapture` connects to those three
 servers for real with each cipher suite and group.
 
 **In Veda**, `nettest` runs from the kernel command line:
@@ -440,7 +440,7 @@ its questions.
   cards need their driver and firmware added. Next are 6 GHz channels, and
   telling Linux the country (it keeps to the world's rules, listening first
   on channels that need it). QEMU cannot emulate a Wi-Fi adapter, so beyond
-  `vwlan`'s host tests Wi-Fi is tested on PCs.
+  `wlan`'s host tests Wi-Fi is tested on PCs.
 * **Wi-Fi features** not there yet: WPA2/WPA3-Enterprise (802.1X/EAP),
   Enhanced Open (OWE), fast roaming (802.11r), power saving, 802.11n/ac
   rate control.

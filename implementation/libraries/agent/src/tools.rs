@@ -18,10 +18,10 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+pub use proto::agent::Risk;
+use proto::agent::{ActionSpec, AppAgentInfo, ParamSpec};
 use serde::Serialize;
 use serde_json::{Value, json};
-pub use vproto::agent::Risk;
-use vproto::agent::{ActionSpec, AppAgentInfo, ParamSpec};
 
 use crate::notice;
 

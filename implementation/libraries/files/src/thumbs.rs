@@ -5,7 +5,7 @@
 //!
 //! The UI asks for a thumbnail with [`Thumbnailer::get`]; unknown paths are
 //! queued for a worker thread that reads the file through its own VFS
-//! connection, decodes it with `vimage` and scales it down. Finished
+//! connection, decodes it with `image` and scales it down. Finished
 //! thumbnails come back through a mutex and an [`Event`] that the UI waits
 //! on (return [`Thumbnailer::event_handle`] from `App::wait_handles` and
 //! call [`Thumbnailer::collect`] in `update`), so decoding never blocks
@@ -16,10 +16,10 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::RawHandle;
-use vgfx::Bitmap;
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
+use abi::RawHandle;
+use gfx::Bitmap;
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 
 use crate::fs::Fs;
 
@@ -49,7 +49,7 @@ impl Thumbnailer {
         let shared =
             Arc::new(Shared { queue: Mutex::new(VecDeque::new()), wake: Condvar::new(), done: Mutex::new(Vec::new()) });
         let worker_shared = shared.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("thumbnails")
             .stack_size(512 * 1024)
             .spawn(move || worker(worker_shared, theirs, max_w, max_h))
@@ -120,8 +120,8 @@ fn worker(shared: Arc<Shared>, event: Event, max_w: u32, max_h: u32) {
 
 fn load(fs: &Fs, path: &str, max_w: u32, max_h: u32) -> Option<Bitmap> {
     let data = fs.read_limited(path, MAX_FILE).ok()?;
-    let img = vimage::decode(&data).ok()?;
-    let t = vimage::thumbnail(&img, max_w, max_h, vimage::Filter::Bilinear);
+    let img = image::decode(&data).ok()?;
+    let t = image::thumbnail(&img, max_w, max_h, image::Filter::Bilinear);
     if t.width == 0 || t.height == 0 {
         return None;
     }

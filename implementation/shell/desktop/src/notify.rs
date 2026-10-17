@@ -11,14 +11,14 @@
 //! request expires). So do the firewall's questions ([`crate::firewall`]),
 //! a few at a time, the others waiting their turn.
 
-use vgfx::{Align, Rect};
-use vnet::FirewallQuestion;
-use vproto::display::{WindowKind, WindowSpec};
-use vrt::println;
-use vui::window::Display;
-use vui::{Font, Host, Icon, Ui};
+use gfx::{Align, Rect};
+use net::FirewallQuestion;
+use proto::display::{WindowKind, WindowSpec};
+use rt::println;
+use ui::window::Display;
+use ui::{Font, Host, Icon, Ui};
 
-use vproto::agent::ApprovalRequest;
+use proto::agent::ApprovalRequest;
 
 use crate::approval::{self, Choice, Look};
 use crate::{Model, apps, chrome, firewall, taskbar};
@@ -105,7 +105,7 @@ impl View {
         ui.paragraph(Rect::new(76, 40, w - 76 - 18, h - 46), &self.body, 13.0, t.text_dim);
         if resp.hovered {
             ui.icon(Rect::new(w - 34, 10, 22, 22), Icon::Close, 12.0, t.text_dim);
-            ui.set_cursor(vui::Cursor::Hand);
+            ui.set_cursor(ui::Cursor::Hand);
         }
         chrome::popup_frame(&mut ui.canvas);
     }
@@ -226,7 +226,7 @@ impl Notifications {
                     hovered: false,
                     clicked: false,
                     approval: None,
-                    question: Some((q.clone(), false, vrt::time::now_ns() + firewall::ARM_NS)),
+                    question: Some((q.clone(), false, rt::time::now_ns() + firewall::ARM_NS)),
                 };
                 self.notes.push(Note { host, view, expires: u64::MAX, height });
             }
@@ -281,7 +281,7 @@ impl Notifications {
                     approval: None,
                     question: None,
                 };
-                self.notes.push(Note { host, view, expires: vrt::time::now_ns() + LIFETIME_NS, height: HEIGHT });
+                self.notes.push(Note { host, view, expires: rt::time::now_ns() + LIFETIME_NS, height: HEIGHT });
             }
             Err(e) => println!("cannot show a notification: {:?}", e),
         }
@@ -301,7 +301,7 @@ impl Notifications {
     }
 
     pub fn pump(&mut self, m: &mut Model) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         for n in &mut self.notes {
             n.host.pump(|ui| n.view.update(ui, m));
             if n.view.hovered {
@@ -321,7 +321,7 @@ impl Notifications {
 
     /// When the next notification expires.
     pub fn deadline(&self) -> u64 {
-        self.notes.iter().map(|n| n.expires).min().unwrap_or(vabi::DEADLINE_INFINITE)
+        self.notes.iter().map(|n| n.expires).min().unwrap_or(abi::DEADLINE_INFINITE)
     }
 
     pub fn invalidate_all(&mut self) {

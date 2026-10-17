@@ -10,7 +10,7 @@
 
 use alloc::vec::Vec;
 
-use vgfx::Rect;
+use gfx::Rect;
 
 /// Largest thumbnail width.
 pub const THUMB_W: i32 = 200;

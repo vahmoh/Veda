@@ -5,12 +5,12 @@
 //! search matches, selection, cursor) and turns keyboard and mouse input
 //! into edits and cursor movement.
 
-use vgfx::{Align, Color, Rect};
-use vproto::display::modifiers;
-use vproto::input::keys;
-use vtext::highlight::{self, Language, Span, State, Token};
-use vtext::{Document, Layout, Motion, Pos, Selection, char_width};
-use vui::{Cursor, Font, MenuItem, Ui};
+use gfx::{Align, Color, Rect};
+use proto::display::modifiers;
+use proto::input::keys;
+use text::highlight::{self, Language, Span, State, Token};
+use text::{Document, Layout, Motion, Pos, Selection, char_width};
+use ui::{Cursor, Font, MenuItem, Ui};
 
 /// View settings shared by all tabs.
 #[derive(Debug, Clone, Copy)]
@@ -132,7 +132,7 @@ impl TextView {
     }
 
     /// The widget id (for focus).
-    fn id(ui: &Ui) -> vui::Id {
+    fn id(ui: &Ui) -> ui::Id {
         ui.id("text-view")
     }
 
@@ -245,7 +245,7 @@ impl TextView {
         lang: Language,
         read_only: bool,
         wrap: Option<usize>,
-        k: &vui::ui::KeyPress,
+        k: &ui::ui::KeyPress,
     ) -> bool {
         let ctrl = k.modifiers & modifiers::CTRL != 0;
         let shift = k.modifiers & modifiers::SHIFT != 0;

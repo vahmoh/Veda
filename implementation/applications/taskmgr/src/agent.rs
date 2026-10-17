@@ -8,11 +8,11 @@
 
 use core::cmp::Ordering;
 
-use vproto::init::TaskInfo;
-use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_opt_int, arg_opt_str, json};
+use proto::init::TaskInfo;
+use ui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_opt_int, arg_opt_str, json};
 
 use crate::procs::{self, Row};
-use vfiles::format::human_size;
+use files::format::human_size;
 
 use apps_common::format::uptime;
 use apps_common::process::{self, Classifier};
@@ -182,7 +182,7 @@ impl TaskManager {
     /// A new sample when the last one is a second old, as the window takes
     /// them (CPU use is measured between two samples).
     fn refresh(&mut self) {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         if now >= self.next_sample {
             self.sample();
             self.next_sample = now + SAMPLE_NS;
@@ -307,17 +307,17 @@ impl TaskManager {
             return Err(msg);
         }
         // Wait (briefly) until it is gone, so that the table shows it.
-        let end = vrt::time::now_ns() + END_WAIT_NS;
+        let end = rt::time::now_ns() + END_WAIT_NS;
         let mut gone = false;
-        while !gone && vrt::time::now_ns() < end {
+        while !gone && rt::time::now_ns() < end {
             gone = !self.tasks()?.iter().any(|t| t.koid == koid);
             if !gone {
-                vrt::time::sleep(vrt::time::Duration::from_millis(50));
+                rt::time::sleep(rt::time::Duration::from_millis(50));
             }
         }
         if self.procs.iter().any(|p| p.koid == koid) {
             self.sample();
-            self.next_sample = vrt::time::now_ns() + SAMPLE_NS;
+            self.next_sample = rt::time::now_ns() + SAMPLE_NS;
         }
         let mut v = json!({ "ended": title, "pid": koid });
         if !gone {

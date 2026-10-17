@@ -3,7 +3,7 @@
 
 //! The TGSI back end: every program translates into well-formed text
 //! (balanced control flow, every register declared, nothing virglrenderer
-//! cannot read). That the host runs it correctly is tested in `vgl`,
+//! cannot read). That the host runs it correctly is tested in `gl`,
 //! against virglrenderer itself.
 
 use std::format;

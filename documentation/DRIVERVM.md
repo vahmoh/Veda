@@ -33,10 +33,10 @@ memory and their devices.
    lose what Veda's protocols carry (audio clocks, flip timestamps, Wi-Fi
    state); Linux's user-space APIs would tie Veda's services to Linux.
 2. **The bridge carries Veda's system calls into the guest.** A guest
-   program uses `vrt` built with `--cfg veda_guest`: its calls on Veda's
+   program uses `rt` built with `--cfg veda_guest`: its calls on Veda's
    objects become operations on `/dev/veda`, which the guest's kernel
    turns into hypercalls that the monitor carries out on the guest's own
-   handle table. So `vipc` and `vproto` work unchanged, and the guest
+   handle table. So `ipc` and `proto` work unchanged, and the guest
    reaches only the objects it was given.
 3. **The guest is fully paravirtualized.** There is no emulated hardware
    (no PIC, PIT, I/O APIC, RTC, serial port or firmware code): processor
@@ -45,7 +45,7 @@ memory and their devices.
    hypervisor decodes no instruction (MMIO decoding is the largest source
    of hypervisor bugs), and Linux boots in about 0.1 s. A small patch
    modelled on Linux's Jailhouse and ACRN guests adds the *Veda platform*.
-4. **The kernel keeps to mechanism.** `vkernel` gives a monitor process
+4. **The kernel keeps to mechanism.** It gives a monitor process
    `Guest` objects (guest-physical memory made of VMOs, and its devices'
    IOMMU domain) and `Vcpu` objects, and handles only what must be fast or
    belongs to the processor (the local APIC and its timer, `cpuid`, MSRs,
@@ -77,13 +77,13 @@ memory and their devices.
 |-------|-------|--------------|
 | Hypervisor | `implementation/kernel/src/hv`, `implementation/kernel/src/architectures/amd64/hv` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC |
 | IOMMU | `implementation/kernel/src/architectures/amd64/iommu` | Intel VT-d: DMA and interrupt remapping |
-| `vhv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
-| `viommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
+| `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
+| `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
 | Device manager | `implementation/services/devmgr` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
 | Monitor | `implementation/services/drivervm` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
 | `drivervm-core` | `implementation/services/drivervm/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
-| Guest runtime | `implementation/libraries/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
+| Guest runtime | `implementation/libraries/rt/src/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; shared code (`sys`, `netlink`) |
 | Build | `orchestration/src/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo orchestration linux`](#building) |
 
@@ -93,7 +93,7 @@ A guest finds the platform with `cpuid`: leaf `0x40000000` returns
 `VedaVedaVeda`, `0x40000001` the number of processors (local APIC ids 0
 to n-1), `0x40000010` the TSC's and the APIC timer's frequencies. A
 hypercall is `vmcall` with its number in `rax` and its arguments in
-`rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`vhv::platform`):
+`rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`hv::platform`):
 
 | Hypercall | Does |
 |-----------|------|
@@ -110,7 +110,7 @@ hypercall is `vmcall` with its number in `rax` and its arguments in
 
 GSIs are the keyboard controller's 1 and 12, the lines functions' INTx
 are wired to, and from 256 the platform's own (GPIO pins' interrupts).
-The ACPI tables (`vhv::acpi`, at the boot parameters' `acpi_rsdp_addr`)
+The ACPI tables (`hv::acpi`, at the boot parameters' `acpi_rsdp_addr`)
 are an RSDP, an XSDT, a hardware-reduced FADT and a DSDT with the PCI
 root, its functions and their INTx routing (`_PRT`), the keyboard
 controller and the platform's GPIO controllers; there is no MADT.
@@ -144,7 +144,7 @@ functions Veda would keep; `drivervm=off` gives nothing.
 
 The driver VM runs where the processors run virtual machines (VMX with
 EPT) and the image has its Linux, and gets PCI functions only where an
-IOMMU confines them (the kernel tells `devmgr` both, `vabi::platform`).
+IOMMU confines them (the kernel tells `devmgr` both, `abi::platform`).
 
 ### How a function is given
 
@@ -178,7 +178,7 @@ level-triggered one stays masked from when it fires until the guest's
 end-of-interrupt.
 
 **PCI in the guest.** The guest sees a function's own configuration space
-(`vhv::pci`) but for its memory BARs, which hold their guest-physical
+(`hv::pci`) but for its memory BARs, which hold their guest-physical
 addresses (3 GiB to 4 GiB, or above the bridge's window); there is no
 expansion ROM or I/O BAR. A function on the host's bus 0 keeps its device
 number where it can. `arch/x86/pci/veda.c` gives Linux configuration
@@ -248,7 +248,7 @@ controller (`pcidev`'s `acpi_tables`).
 
 **Intel's integrated GPUs.** The stolen memory is an RMRR at the PC's
 address, so i915 reads GGC and BDSM as on the PC and finds what the
-firmware left there. The OpRegion is copied to 0xC0000 (`vhv::igd`),
+firmware left there. The OpRegion is copied to 0xC0000 (`hv::igd`),
 without the SWSCI mailbox to the firmware. The GPU stays at 00:02.0, and
 i915 finds a read-only stand-in for the host bridge at 00:00.0. Once i915
 has the display, the compositor stops drawing into the firmware's
@@ -276,7 +276,7 @@ against Linux's device interfaces. The guest's `init` starts those its
 devices need (by PCI class; `input` always), and again when one ends: a
 second after, twice as long after each end soon after a start, up to a
 minute. A driver polls Linux's files and Veda's handles together through
-*watches* (`vrt::guest::Watch`: files readable while a handle's signals
+*watches* (`rt::guest::Watch`: files readable while a handle's signals
 are). When a watch fails (the monitor's limits, or the handle gone) or
 the service goes away, the driver ends its session and attaches again,
 later after each failure in a row (`guest_sys::retry`).
@@ -330,7 +330,7 @@ driver that cannot import). Flip timestamps, on Linux's monotonic clock,
 are Veda's too: both follow the TSC.
 
 **GPU** (`implementation/guests/linux/renderer`). The renderer serves
-`gpu`, in which `vgl` sends virgl's commands, on Mesa's Gallium driver
+`gpu`, in which `gl` sends virgl's commands, on Mesa's Gallium driver
 over the GPU's Linux driver: iris on i915, virgl on QEMU's virtio-gpu
 (which renders on the host's GPU), or softpipe for tests. Each connection
 gets a context and shared memory, bounded per process and in total. The
@@ -362,9 +362,9 @@ eight latest starts.
 | `Channel::write(bytes, handles)` | `VEDA_IOC_CHANNEL_WRITE`: copies the buffers in, checks the file holds the handles | Moves the handles out of the guest's table, writes the message |
 | `wait_many(items, deadline)` | `VEDA_IOC_WAIT`: finished at once, or sleeps until the ring says | Polls, or keeps the wait for its waiter thread, which writes the result to the ring and raises the callback vector |
 | `Mapping::new(vmo)` | `VEDA_IOC_VMO_MAP`, then `mmap` | Maps the VMO into the guest-physical window |
-| `vrt::guest::Watch::new(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait and reads its result | An ordinary wait, cancelled when the file closes |
-| `vrt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, for devices or the processor | Maps the VMO into the window until the dma-buf goes |
-| `vrt::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ` | Reads Veda's log |
+| `rt::guest::Watch::new(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait and reads its result | An ordinary wait, cancelled when the file closes |
+| `rt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, for devices or the processor | Maps the VMO into the window until the dma-buf goes |
+| `rt::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ` | Reads Veda's log |
 
 The guest's kernel lets a file use only the handles it made or received,
 and closes them when the file closes. The guest's registry
@@ -378,7 +378,7 @@ beyond a bound is refused (`LimitReached`):
 | What | Bound |
 |------|-------|
 | Handles | 16384, those in messages it sent itself included |
-| Waits that go on | Their items fit one kernel wait (`vabi::WAIT_MANY_MAX`, less the waiter's event); with the finished waits not yet in the ring, at most what the ring holds |
+| Waits that go on | Their items fit one kernel wait (`abi::WAIT_MANY_MAX`, less the waiter's event); with the finished waits not yet in the ring, at most what the ring holds |
 | Veda's memory | A quarter of the PC's, 512 MiB at least: the VMOs it made (by size, while it or a message on its way to it holds them; pages are committed as used), the messages it sent itself until it reads them, and its window mappings (`drivervm_core::ledger`) |
 | Window mappings | 4096 (`drivervm_core::window`) |
 
@@ -519,9 +519,9 @@ PS/2 and the virtio tablet (`input usb`), and virtio-gpu (`gpu on`),
 which renders on the host's GPU the firmware showed its screen on, or the
 one `VEDA_RENDERNODE` names.
 
-What touches no hardware is unit-tested on the host: `vhv`, `viommu`,
+What touches no hardware is unit-tested on the host: `hv`, `iommu`,
 `drivervm-core`, and the guest programs' logic (touchpads, sound cards'
 devices, display modes, the stick's logs, network interfaces, retries).
-The renderer's decoder is tested through vgl's tests, on softpipe and on
+The renderer's decoder is tested through `gl`'s tests, on softpipe and on
 Mesa's virgl over virglrenderer's test server
 ([Developing](DEVELOPING.md)).

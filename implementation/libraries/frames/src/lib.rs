@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vframes` — searches of the kernel's bitmap of physical memory frames,
+//! `frames` — searches of the kernel's bitmap of physical memory frames,
 //! which has a bit for each 4 KiB frame, set while the frame is in use:
 //! frame `f` is bit `f % 64` of word `f / 64`.
 //!

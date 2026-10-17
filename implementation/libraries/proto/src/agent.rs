@@ -8,8 +8,8 @@
 //!   agent ([`agent::Client::register_app`]). The app describes what it
 //!   can do ([`AppAgentInfo`]: actions with typed parameters and a
 //!   [`Risk`]), reports what it shows ([`agentapp::Client::state`], JSON)
-//!   and runs actions with JSON arguments. Applications built on `vui` get
-//!   this by implementing three methods of `vui::App`.
+//!   and runs actions with JSON arguments. Applications built on `ui` get
+//!   this by implementing three methods of `ui::App`.
 //! * [`agent`] (service `"agent"`): the **agent service**. Every program may
 //!   ask for its status and register itself; the desktop shell (and only
 //!   the shell, as the registry identifies it) attaches the agent's user
@@ -26,8 +26,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vipc::{enumeration, message, protocol, union};
-use vrt::object::{Channel, Vmo};
+use ipc::{enumeration, message, protocol, union};
+use rt::object::{Channel, Vmo};
 
 enumeration! {
     /// How much an action can affect the user, which decides whether the

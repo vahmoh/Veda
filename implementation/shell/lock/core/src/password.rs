@@ -20,7 +20,7 @@
 //! * **Checking** compares the hashes in constant time (`password-hash`'s
 //!   `Output`), and costs the same whether the password is right or not.
 //! * **New passwords** ([`acceptable`]) have at least `MIN_PASSWORD`
-//!   characters and at most `MAX_PASSWORD` bytes (`vproto::lock`'s).
+//!   characters and at most `MAX_PASSWORD` bytes (`proto::lock`'s).
 
 use alloc::string::{String, ToString};
 use core::fmt;
@@ -28,7 +28,7 @@ use core::fmt;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use argon2::{Algorithm, Argon2, Params, Version};
-use vproto::lock::{LockError, MAX_PASSWORD, MIN_PASSWORD};
+use proto::lock::{LockError, MAX_PASSWORD, MIN_PASSWORD};
 
 /// Random bytes a password is salted with.
 pub const SALT_LEN: usize = 16;

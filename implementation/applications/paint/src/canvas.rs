@@ -9,15 +9,15 @@
 //! middle button drags the picture around. Strokes follow every position the pointer passed,
 //! not one a frame.
 
+use gfx::{Color, Path, Rect, StrokeStyle};
 use paint_core::Document;
 use paint_core::render::Renderer;
 use paint_core::settings::{FontChoice, Settings, Tool};
 use paint_core::shapes::{self, Paint, Shape};
 use paint_core::text::TextBox;
 use paint_core::view::View;
-use vgfx::{Color, Path, Rect, StrokeStyle};
-use vproto::display::Cursor;
-use vui::Ui;
+use proto::display::Cursor;
+use ui::Ui;
 
 /// A handle of a frame: its corners and the middles of its sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,10 +173,10 @@ fn shape_colors(s: &Settings, primary: bool) -> (Color, Color) {
 /// The font of the interface for `choice` (indices of the text context's fonts).
 pub fn font_of(ui: &Ui, choice: FontChoice) -> usize {
     ui.ctx.font(match choice {
-        FontChoice::Sans => vui::Font::Regular,
-        FontChoice::SansBold => vui::Font::Bold,
-        FontChoice::Mono => vui::Font::Mono,
-        FontChoice::MonoBold => vui::Font::MonoBold,
+        FontChoice::Sans => ui::Font::Regular,
+        FontChoice::SansBold => ui::Font::Bold,
+        FontChoice::Mono => ui::Font::Mono,
+        FontChoice::MonoBold => ui::Font::MonoBold,
     })
 }
 

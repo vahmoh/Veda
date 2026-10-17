@@ -3,12 +3,12 @@
 
 //! Address-space management for the current (or a child) process.
 
-use vabi::{Error, map_flags, nr};
+use abi::{Error, map_flags, nr};
 
 use crate::object::{Process, Vmo};
 use crate::sys::call;
 
-pub use vabi::map_flags::{COMMIT, EXECUTE, FIXED, READ, WRITE};
+pub use abi::map_flags::{COMMIT, EXECUTE, FIXED, READ, WRITE};
 
 /// Maps `len` bytes of `vmo` (from `offset`) into `process` (or the caller
 /// when `None`). `addr` is a hint (or exact with [`FIXED`]); 0 lets the kernel
@@ -21,7 +21,7 @@ pub fn map(
     addr: usize,
     flags: usize,
 ) -> Result<usize, Error> {
-    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    let p = process.map(|p| p.raw()).unwrap_or(abi::INVALID_HANDLE);
     call(nr::VM_MAP, [p as usize, vmo.raw() as usize, offset, len, addr, flags])
 }
 
@@ -30,7 +30,7 @@ pub fn map(
 /// they are unmapped or [decommitted](decommit). `addr` and `flags` as for
 /// [`map`]. Returns the mapped address.
 pub fn allocate(process: Option<&Process>, len: usize, addr: usize, flags: usize) -> Result<usize, Error> {
-    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    let p = process.map(|p| p.raw()).unwrap_or(abi::INVALID_HANDLE);
     call(nr::VM_ALLOCATE, [p as usize, len, addr, flags, 0, 0])
 }
 
@@ -38,17 +38,17 @@ pub fn allocate(process: Option<&Process>, len: usize, addr: usize, flags: usize
 /// cover completely (`NotSupported` otherwise); they read as zeros from
 /// then on.
 pub fn decommit(process: Option<&Process>, addr: usize, len: usize) -> Result<(), Error> {
-    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    let p = process.map(|p| p.raw()).unwrap_or(abi::INVALID_HANDLE);
     call(nr::VM_DECOMMIT, [p as usize, addr, len, 0, 0, 0]).map(|_| ())
 }
 
 pub fn unmap(process: Option<&Process>, addr: usize, len: usize) -> Result<(), Error> {
-    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    let p = process.map(|p| p.raw()).unwrap_or(abi::INVALID_HANDLE);
     call(nr::VM_UNMAP, [p as usize, addr, len, 0, 0, 0]).map(|_| ())
 }
 
 pub fn protect(process: Option<&Process>, addr: usize, len: usize, flags: usize) -> Result<(), Error> {
-    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    let p = process.map(|p| p.raw()).unwrap_or(abi::INVALID_HANDLE);
     call(nr::VM_PROTECT, [p as usize, addr, len, flags, 0, 0]).map(|_| ())
 }
 

@@ -9,7 +9,7 @@
 
 use alloc::string::String;
 
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use super::gpu::{self, Program};
 use super::instances::Cars;

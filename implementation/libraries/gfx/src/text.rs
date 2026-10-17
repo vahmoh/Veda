@@ -7,8 +7,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vfont::{Font, FontCollection, GlyphCache, PositionedGlyph, subpixel_position};
-use vraster::Point;
+use font::{Font, FontCollection, GlyphCache, PositionedGlyph, subpixel_position};
+use raster::Point;
 
 use crate::canvas::Canvas;
 use crate::color::Color;

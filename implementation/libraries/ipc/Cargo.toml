@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vipc"
+name = "ipc"
 description = "Typed IPC for Veda: message codec, protocol macros and wait sets"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
 
 [lints]
 workspace = true

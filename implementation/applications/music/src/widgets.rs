@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Music's own widgets drawn on top of `vui` (the seek bar, the play
-//! button and the toggles are `vui::media`'s).
+//! Music's own widgets drawn on top of `ui` (the seek bar, the play
+//! button and the toggles are `ui::media`'s).
 
+use gfx::{Color, Rect};
 use num_traits::Float;
-use vgfx::{Color, Rect};
-use vui::Ui;
+use ui::Ui;
 
 /// A small three-bar "now playing" equaliser glyph, animated by `t`
 /// (seconds) when `moving`.

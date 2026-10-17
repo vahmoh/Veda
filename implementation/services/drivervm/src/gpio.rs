@@ -15,7 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vhv::acpi::{GpioController, GpioInterrupt};
+use hv::acpi::{GpioController, GpioInterrupt};
 
 /// Where a pin is driven: the function (its place among the guest's), the
 /// device the firmware describes below it (its index among them), and the

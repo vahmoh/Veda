@@ -13,9 +13,9 @@
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
-use vglsl::interp::{Env, Exec, LANES, Lanes, Mask};
-use vglsl::link::Interpolation;
-use vglsl::types::Scalar;
+use glsl::interp::{Env, Exec, LANES, Lanes, Mask};
+use glsl::link::Interpolation;
+use glsl::types::Scalar;
 
 use super::program::SoftProgram;
 use super::scene::{ClearCmd, Cmd, DrawRecord, LinePrim, PointPrim, SUB, Scene, TILE, Targets, Tri, sample_positions};
@@ -55,7 +55,7 @@ struct Block {
 
 impl Worker {
     pub fn new(registers: usize) -> Worker {
-        let empty = vglsl::interp::Program {
+        let empty = glsl::interp::Program {
             prologue: Vec::new(),
             main: Vec::new(),
             tex: Vec::new(),

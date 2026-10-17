@@ -2,27 +2,27 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vkernel"
+name = "kernel"
 description = "The Veda microkernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "vkernel"
+name = "kernel"
 test = false
 bench = false
 
 [dependencies]
 bootinfo = { workspace = true }
-vabi = { workspace = true }
-velf = { workspace = true }
+abi = { workspace = true }
+elf = { workspace = true }
 initrd = { workspace = true }
-ventropy = { workspace = true }
-vframes = { workspace = true }
-vhv = { workspace = true }
-vacpi = { workspace = true }
-viommu = { workspace = true }
+entropy = { workspace = true }
+frames = { workspace = true }
+hv = { workspace = true }
+acpi = { workspace = true }
+iommu = { workspace = true }
 
 [lints]
 workspace = true

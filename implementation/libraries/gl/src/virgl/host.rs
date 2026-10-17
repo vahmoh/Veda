@@ -8,8 +8,8 @@
 //! QEMU runs the system's virglrenderer on desktop OpenGL, through EGL;
 //! headless, on the GPU of a render node, through GBM: `cargo orchestration`
 //! gives it the one the firmware showed its screen on, where the host has
-//! several. So do the tests (`VGL_TEST_RENDERNODE` names another node, such
-//! as `/dev/dri/renderD129`), and on OpenGL ES with `VGL_TEST_HOST=gles`, as
+//! several. So do the tests (`GL_TEST_RENDERNODE` names another node, such
+//! as `/dev/dri/renderD129`), and on OpenGL ES with `GL_TEST_HOST=gles`, as
 //! QEMU renders with `gl=es`.
 //!
 //! virglrenderer and its contexts belong to one thread, so a thread of
@@ -312,13 +312,13 @@ unsafe fn start_egl_on(lib: Module, dpy: Dpy, es: bool) -> Option<Egl> {
     }
 }
 
-/// Opens the render node of the GPU to render on: `VGL_TEST_RENDERNODE`;
+/// Opens the render node of the GPU to render on: `GL_TEST_RENDERNODE`;
 /// else, where the host has several, the one the firmware showed its
 /// screen on, as `cargo orchestration` gives QEMU; else the first that
 /// opens.
 fn render_node() -> Option<std::fs::File> {
     let open = |path: &std::path::Path| std::fs::File::options().read(true).write(true).open(path);
-    if let Some(path) = std::env::var_os("VGL_TEST_RENDERNODE") {
+    if let Some(path) = std::env::var_os("GL_TEST_RENDERNODE") {
         return open(path.as_ref()).map_err(|e| println!("{}: {e}", path.display())).ok();
     }
     let mut nodes: Vec<_> = std::fs::read_dir("/dev/dri")
@@ -387,7 +387,7 @@ unsafe fn open_renderer() -> Option<(Module, Egl)> {
             println!("virglrenderer (libvirglrenderer.so.1) is not installed");
             return None;
         }
-        let es = std::env::var("VGL_TEST_HOST").is_ok_and(|v| v == "gles");
+        let es = std::env::var("GL_TEST_HOST").is_ok_and(|v| v == "gles");
         Some((vr, start_egl(es)?))
     }
 }
@@ -481,7 +481,7 @@ impl HostTransport {
         let (ctx, caps) = call(|g| {
             let ctx = g.next_ctx;
             g.next_ctx += 1;
-            let name = CString::new("vgl-test").unwrap();
+            let name = CString::new("gl-test").unwrap();
             // SAFETY: a new context id.
             let r = unsafe { (g.v.context_create)(ctx, 8, name.as_ptr()) };
             (if r == 0 { ctx } else { 0 }, g.caps.clone())

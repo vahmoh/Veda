@@ -4,7 +4,7 @@
 //! Program arguments, environment and the handles received at startup.
 //!
 //! A Veda program reads them from the startup message on the bootstrap
-//! channel ([`adopt`], which `vrt`'s entry point calls). A program on the
+//! channel ([`adopt`], which `rt`'s entry point calls). A program on the
 //! standard library (`target_os = "veda"`) does not: the C library's POSIX
 //! layer has read it, and keeps the descriptors, the terminal and the
 //! registry for itself. Its arguments, environment and working directory
@@ -18,9 +18,9 @@ use alloc::vec::Vec;
 
 use crate::object::Handle;
 #[cfg(not(target_os = "veda"))]
-use vabi::RawHandle;
+use abi::RawHandle;
 #[cfg(not(target_os = "veda"))]
-use vabi::startup::StartupView;
+use abi::startup::StartupView;
 
 #[cfg(not(target_os = "veda"))]
 use crate::object::Channel;
@@ -94,7 +94,7 @@ pub fn vars() -> Vec<(String, String)> {
 }
 
 /// Takes the first startup handle with the given role
-/// (see `vabi::startup::role`). In a guest of the driver VM, the guest's
+/// (see `abi::startup::role`). In a guest of the driver VM, the guest's
 /// own (a new one each time).
 #[cfg(veda_guest)]
 pub fn take_handle(role: u32) -> Option<Handle> {
@@ -103,7 +103,7 @@ pub fn take_handle(role: u32) -> Option<Handle> {
 }
 
 /// Takes the first startup handle with the given role
-/// (see `vabi::startup::role`).
+/// (see `abi::startup::role`).
 #[cfg(not(any(veda_guest, target_os = "veda")))]
 pub fn take_handle(role: u32) -> Option<Handle> {
     let mut guard = STARTUP.lock();
@@ -117,8 +117,8 @@ pub fn take_handle(role: u32) -> Option<Handle> {
 /// registry channel of the program's own (see the module's documentation).
 #[cfg(target_os = "veda")]
 pub fn take_handle(role: u32) -> Option<Handle> {
-    use vabi::startup::role;
-    let mut raw = vabi::INVALID_HANDLE;
+    use abi::startup::role;
+    let mut raw = abi::INVALID_HANDLE;
     // SAFETY: the layer writes a handle to `raw` when it succeeds.
     let status = unsafe {
         if role == role::REGISTRY { layer::veda_registry(&mut raw) } else { layer::veda_startup_handle(role, &mut raw) }
@@ -132,7 +132,7 @@ pub fn take_handle(role: u32) -> Option<Handle> {
 mod layer {
     use core::ffi::c_int;
 
-    use vabi::RawHandle;
+    use abi::RawHandle;
 
     unsafe extern "C" {
         /// Takes the handle the program started with in `role`.
@@ -150,7 +150,7 @@ pub fn handle_roles() -> Vec<u32> {
 
 /// Reads the startup message from the bootstrap channel the kernel passed
 /// the process and keeps what it says for [`args`], [`vars`], [`cwd`] and
-/// [`take_handle`]. `vrt`'s entry point does this for Rust programs; C
+/// [`take_handle`]. `rt`'s entry point does this for Rust programs; C
 /// programs' POSIX layer, which has an entry point of its own, calls it.
 #[cfg(not(target_os = "veda"))]
 pub fn adopt(bootstrap: RawHandle) {
@@ -160,7 +160,7 @@ pub fn adopt(bootstrap: RawHandle) {
 /// Decodes the startup message on the bootstrap channel.
 #[cfg(not(target_os = "veda"))]
 fn read_startup(bootstrap: RawHandle) -> Startup {
-    if bootstrap == vabi::INVALID_HANDLE {
+    if bootstrap == abi::INVALID_HANDLE {
         return Startup::default();
     }
     // SAFETY: the kernel passes us ownership of the bootstrap channel.

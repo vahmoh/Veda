@@ -3,8 +3,8 @@
 
 //! Instrument presets shared by the songs.
 
-use vaudio::synth::drums::{self, Kick};
-use vaudio::synth::{Adsr, Analog, Chip, FilterSpec, Fm, Kit, Mode, OscSpec, Pluck, Wave};
+use audio::synth::drums::{self, Kick};
+use audio::synth::{Adsr, Analog, Chip, FilterSpec, Fm, Kit, Mode, OscSpec, Pluck, Wave};
 
 use crate::dsl::key;
 

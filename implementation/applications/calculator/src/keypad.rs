@@ -8,9 +8,9 @@
 //! so that what was typed can be seen.
 
 use calculator_core::keypad::{self, Label, Layout, Look, Pad};
-use vgfx::{Align, Color, Rect};
-use vproto::display::Cursor;
-use vui::{Font, Icon, Ui};
+use gfx::{Align, Color, Rect};
+use proto::display::Cursor;
+use ui::{Font, Icon, Ui};
 
 /// How long a key lights up after its key on the keyboard is pressed (ns).
 pub const FLASH_NS: u64 = 160_000_000;
@@ -41,7 +41,7 @@ fn colors(ui: &Ui, look: Look, on: bool) -> (Color, Color, Color, Color) {
 /// was pressed on the keyboard).
 pub fn key(ui: &mut Ui, r: Rect, pad: &Pad, flash: bool) -> bool {
     let id = ui.id(pad.tip) ^ ((r.x as u64) << 32) ^ (r.y as u64) ^ 0x6b65_7970;
-    let resp = if pad.enabled { ui.interact(id, r) } else { vui::Response::default() };
+    let resp = if pad.enabled { ui.interact(id, r) } else { ui::Response::default() };
     let hover = ui.animate(id, if resp.hovered { 1.0 } else { 0.0 }, 9.0);
     let (rest, hovered, held, text) = colors(ui, pad.look, pad.on);
     let face = if resp.held || flash { held } else { rest.lerp(hovered, hover) };

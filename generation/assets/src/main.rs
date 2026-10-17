@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use gencommon::output::Output;
+use image::{JpegOptions, Subsampling};
 use paint::Buf;
-use vimage::{JpegOptions, Subsampling};
 
 /// How a generated image is stored.
 #[derive(Clone, Copy)]
@@ -80,26 +80,26 @@ fn items() -> Vec<Item> {
     ]
 }
 
-fn encode(img: &vimage::Image, store: Store) -> Vec<u8> {
-    let jpeg = |img: &vimage::Image, quality, subsampling, progressive, exif| {
+fn encode(img: &image::Image, store: Store) -> Vec<u8> {
+    let jpeg = |img: &image::Image, quality, subsampling, progressive, exif| {
         let opts = JpegOptions { quality, subsampling, optimize_huffman: true, progressive, exif };
-        vimage::encode_jpeg(img, &opts).expect("JPEG encoding")
+        image::encode_jpeg(img, &opts).expect("JPEG encoding")
     };
     match store {
         Store::Jpeg(q, s) => jpeg(img, q, s, false, None),
         Store::ProgressiveJpeg(q) => jpeg(img, q, Subsampling::Yuv420, true, None),
         Store::RotatedJpeg(q) => {
-            let stored = vimage::rotate270(img);
+            let stored = image::rotate270(img);
             jpeg(&stored, q, Subsampling::Yuv420, false, Some(paint::exif_orientation(6)))
         }
-        Store::Png => vimage::encode_png(img).expect("PNG encoding"),
+        Store::Png => image::encode_png(img).expect("PNG encoding"),
         Store::Bmp => paint::bmp24(img),
-        Store::Qoi => vimage::encode_qoi(img).expect("QOI encoding"),
+        Store::Qoi => image::encode_qoi(img).expect("QOI encoding"),
     }
 }
 
 /// The peak signal-to-noise ratio of `b` against `a` (same size), over the colour channels.
-fn psnr(a: &vimage::Image, b: &vimage::Image) -> f64 {
+fn psnr(a: &image::Image, b: &image::Image) -> f64 {
     let mut sum = 0u64;
     for (&p, &q) in a.pixels.iter().zip(&b.pixels) {
         for shift in [0, 8, 16] {
@@ -138,7 +138,7 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
         let bytes = encode(&img, item.store);
         // Every file must decode with the system's own decoder to what was drawn: exactly when
         // the format is lossless, closely when it is JPEG (quality 90 is well above 35 dB).
-        let decoded = vimage::decode(&bytes).expect("generated image decodes");
+        let decoded = image::decode(&bytes).expect("generated image decodes");
         assert_eq!((decoded.width as usize, decoded.height as usize), (item.w, item.h), "{}", item.name);
         let quality = psnr(&img, &decoded);
         match item.store {
@@ -151,7 +151,7 @@ fn run(out: &Path, filter: Option<&str>) -> Result<(), String> {
         if let Some(preview) = std::env::var_os("ASSETGEN_PREVIEW") {
             let preview = PathBuf::from(preview);
             std::fs::create_dir_all(&preview).expect("creating the preview directory");
-            let png = vimage::encode_png(&decoded).expect("PNG encoding");
+            let png = image::encode_png(&decoded).expect("PNG encoding");
             std::fs::write(preview.join(format!("{}.png", item.name)), png).expect("writing the preview");
         }
         total += bytes.len();

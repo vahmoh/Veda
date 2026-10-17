@@ -5,8 +5,8 @@
 //!
 //! Intro (4) · A (8) · B (8) · A (8) · break (2) · outro (4)
 
-use vaudio::synth::drums;
-use vaudio::synth::{Bed, Part, Song};
+use audio::synth::drums;
+use audio::synth::{Bed, Part, Song};
 
 use super::Track;
 use crate::dsl::{self, BAR, Humanize, key};
@@ -111,7 +111,7 @@ pub fn track() -> Track {
     }
     dsl::drums(&mut dr, key::SHAKER, "x.ox.ox.x.ox.oxo", 12.0, 8, swing, &mut h);
     dsl::drums(&mut dr, key::OPEN_HAT, "..............x.", 20.0, 8, swing, &mut h);
-    dr.eq = vec![(vaudio::synth::BiquadKind::HighShelf(-4.0), 5000.0, 0.7)];
+    dr.eq = vec![(audio::synth::BiquadKind::HighShelf(-4.0), 5000.0, 0.7)];
     dr.reverb = 0.1;
     dr.gain = 1.1;
 

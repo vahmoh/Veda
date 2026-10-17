@@ -14,10 +14,10 @@ path = "src/main.rs"
 bench = false
 
 [dependencies]
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
 guest-sys = { workspace = true }
 rustix = { workspace = true }
 guest-netlink = { workspace = true }

@@ -10,7 +10,7 @@ use zune_inflate::errors::DecodeErrorStatus as InflateError;
 use zune_jpeg::errors::{DecodeErrors as JpegError, UnsupportedSchemes};
 use zune_png::error::PngDecodeErrors;
 
-/// Errors returned by `vimage` decoders, encoders and image operations.
+/// Errors returned by `image` decoders, encoders and image operations.
 ///
 /// Malformed input never panics; every problem is reported as one of these variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

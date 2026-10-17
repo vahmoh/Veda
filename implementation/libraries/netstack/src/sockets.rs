@@ -36,6 +36,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv6Addr, SocketAddr};
 
+use proto::net::{FirewallProtocol, NetError, SocketInfo, SocketKind, TcpOptions};
 use smoltcp::iface::SocketHandle;
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::socket::{icmp, tcp, udp};
@@ -44,7 +45,6 @@ use smoltcp::wire::{
     Icmpv4DstUnreachable, Icmpv4Packet, Icmpv4Repr, Icmpv6Message, Icmpv6Packet, Icmpv6Repr, IpAddress, IpEndpoint,
     IpListenEndpoint,
 };
-use vproto::net::{FirewallProtocol, NetError, SocketInfo, SocketKind, TcpOptions};
 
 use crate::{IfaceId, Stack};
 
@@ -749,7 +749,7 @@ impl Stack {
     /// Sends a datagram. `Err(LimitReached)` means the send buffer is full
     /// (try again after a poll).
     pub fn udp_send(&mut self, id: SockId, dest: SocketAddr, data: &[u8]) -> Result<(), NetError> {
-        if dest.port() == 0 || data.len() > vproto::net::MAX_DATAGRAM {
+        if dest.port() == 0 || data.len() > proto::net::MAX_DATAGRAM {
             return Err(NetError::InvalidArgument);
         }
         let via = self.route(dest.ip())?;

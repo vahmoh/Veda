@@ -6,11 +6,11 @@
 //! Process creation is done entirely from user space with kernel primitives:
 //! create an empty process, map the program's image into it from a VMO,
 //! give it a stack, create its first thread and start it with a bootstrap
-//! channel carrying the startup message (`vabi::startup`).
+//! channel carrying the startup message (`abi::startup`).
 //!
 //! Every program is a static ELF64 executable for the System V ABI, checked
-//! and laid out by `velf`, and placed at a random address if it is
-//! position-independent. Its note (`velf::veda`) tells which of two kinds
+//! and laid out by `elf`, and placed at a random address if it is
+//! position-independent. Its note (`elf::veda`) tells which of two kinds
 //! it is:
 //!
 //! * **Veda programs** (Rust, on this runtime): position-independent and
@@ -19,7 +19,7 @@
 //! * **POSIX programs** (C, built by Veda's GCC; Rust on its standard
 //!   library), which relocate themselves if they are position-independent.
 //!   Their arguments, environment and auxiliary vector are laid out on
-//!   their stack as on Linux (`velf::initial_stack`); the startup message
+//!   their stack as on Linux (`elf::initial_stack`); the startup message
 //!   carries the working directory and the handles (registry, file
 //!   descriptors, terminal), and, where a Veda program's environment goes,
 //!   what their POSIX layer inherits from the one that starts them
@@ -29,9 +29,9 @@ use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::startup;
-use vabi::{Error, map_flags, nr};
-use velf::{Elf, Kind, Relro};
+use abi::startup;
+use abi::{Error, map_flags, nr};
+use elf::{Elf, Kind, Relro};
 
 use crate::object::{Channel, Handle, Process, Thread, Vmo};
 use crate::sys::call;
@@ -49,7 +49,7 @@ pub const POSIX_STACK_MAX: usize = 512 << 20;
 /// memory.
 pub const STACK_GUARD: usize = 64 << 10;
 
-/// Takes abilities from this process, for good ([`vabi::restrict`]).
+/// Takes abilities from this process, for good ([`abi::restrict`]).
 pub fn restrict(flags: usize) -> Result<(), Error> {
     call(nr::PROCESS_RESTRICT, [flags, 0, 0, 0, 0, 0]).map(|_| ())
 }
@@ -61,7 +61,7 @@ pub const UID: u32 = 1000;
 pub enum SpawnError {
     /// Not an executable (an ELF file).
     NotExecutable,
-    BadElf(velf::ElfError),
+    BadElf(elf::ElfError),
     /// A Veda program of another version of Veda's conventions.
     Incompatible,
     /// The arguments and environment do not fit (in the startup message of
@@ -94,15 +94,15 @@ impl core::fmt::Display for SpawnError {
 /// Whether `image` is a program [`Spawn::start`] runs, judged by its first
 /// bytes (those of an ELF file).
 pub fn is_executable(image: &[u8]) -> bool {
-    velf::is_elf(image)
+    elf::is_elf(image)
 }
 
 /// Where a position-independent image of `len` bytes goes: a random page
-/// of the span programs are placed in (`vabi::program_base`).
+/// of the span programs are placed in (`abi::program_base`).
 fn random_base(len: usize) -> Result<u64, Error> {
     let mut r = [0u8; 8];
     crate::object::try_random_bytes(&mut r)?;
-    Ok(vabi::program_base(len, u64::from_le_bytes(r)) as u64)
+    Ok(abi::program_base(len, u64::from_le_bytes(r)) as u64)
 }
 
 /// Maps `elf`'s image into `process`, at its address or, if it is
@@ -116,8 +116,8 @@ fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, Spawn
     let base = if elf.is_position_independent() { random_base(len)? } else { lo };
     let bias = base.wrapping_sub(lo);
     let end = base.checked_add(hi - lo);
-    if base < vabi::USER_SPACE_START as u64 || end.is_none_or(|e| e > vabi::USER_SPACE_END as u64) {
-        return Err(SpawnError::BadElf(velf::ElfError::BadSegment));
+    if base < abi::USER_SPACE_START as u64 || end.is_none_or(|e| e > abi::USER_SPACE_END as u64) {
+        return Err(SpawnError::BadElf(elf::ElfError::BadSegment));
     }
 
     // One VMO holding every segment at its offset in the span (zero
@@ -134,7 +134,7 @@ fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, Spawn
         elf.relocate(unsafe { image.as_mut_slice() }, bias).map_err(SpawnError::BadElf)?;
     }
     let relro = if relocate { Relro::ReadOnly } else { Relro::Writable };
-    for run in velf::page_runs(elf, relro) {
+    for run in elf::page_runs(elf, relro) {
         let mut flags = map_flags::FIXED;
         for (on, flag) in [(run.perms.read, map_flags::READ), (run.perms.write, map_flags::WRITE)] {
             if on {
@@ -162,7 +162,7 @@ pub struct Spawn<'a> {
     pub cwd: &'a str,
     /// The path the program was loaded from (`AT_EXECFN`), if known.
     pub path: &'a str,
-    /// Handles to pass, tagged with roles (`vabi::startup::role`).
+    /// Handles to pass, tagged with roles (`abi::startup::role`).
     pub handles: Vec<(u32, Handle)>,
     /// For a POSIX program: what its POSIX layer inherits from the one
     /// starting it, `KEY=VALUE` strings the startup message carries in place
@@ -274,7 +274,7 @@ impl<'a> Spawn<'a> {
     ) -> Result<Process, SpawnError> {
         let roles: Vec<u32> = self.handles.iter().map(|(r, _)| *r).collect();
         let msg = startup::Startup { args, env, cwd: self.cwd, roles: &roles };
-        if msg.encoded_len() > vabi::CHANNEL_MAX_BYTES || roles.len() > vabi::CHANNEL_MAX_HANDLES {
+        if msg.encoded_len() > abi::CHANNEL_MAX_BYTES || roles.len() > abi::CHANNEL_MAX_HANDLES {
             return Err(SpawnError::TooLarge);
         }
         let mut bytes = Vec::with_capacity(msg.encoded_len());
@@ -299,7 +299,7 @@ impl<'a> Spawn<'a> {
         let stack = Vmo::create(STACK_GUARD + MAIN_STACK)?;
         let base = vm::map(Some(&process), &stack, 0, STACK_GUARD + MAIN_STACK, 0, map_flags::READ | map_flags::WRITE)?;
         vm::protect(Some(&process), base, STACK_GUARD, 0)?;
-        let sp = vabi::entry_stack_pointer(base + STACK_GUARD + MAIN_STACK);
+        let sp = abi::entry_stack_pointer(base + STACK_GUARD + MAIN_STACK);
 
         // The startup message carries text.
         fn text<'b>(v: &[&'b [u8]]) -> Vec<Cow<'b, str>> {
@@ -322,31 +322,31 @@ impl<'a> Spawn<'a> {
         // Stack: guard pages, then the stack proper, its top holding the
         // arguments, environment and auxiliary vector.
         let size = elf.stack_size().map_or(POSIX_STACK, |s| (s as usize).clamp(POSIX_STACK, POSIX_STACK_MAX));
-        let size = size.next_multiple_of(vabi::PAGE_SIZE);
+        let size = size.next_multiple_of(abi::PAGE_SIZE);
         let stack = Vmo::create(STACK_GUARD + size)?;
         let base = vm::map(Some(&process), &stack, 0, STACK_GUARD + size, 0, map_flags::READ | map_flags::WRITE)?;
         vm::protect(Some(&process), base, STACK_GUARD, 0)?;
         let top = (base + STACK_GUARD + size) as u64;
         let mut random = [0u8; 16];
         crate::object::try_random_bytes(&mut random)?;
-        let aux = velf::AuxInfo {
+        let aux = elf::AuxInfo {
             phdr: elf.phdr_vaddr().wrapping_add(bias),
             phnum: elf.phnum() as u64,
             entry: elf.entry().wrapping_add(bias),
             hwcap: crate::arch::hwcap(),
-            platform: velf::NATIVE.platform,
+            platform: elf::NATIVE.platform,
             uid: UID,
             gid: UID,
             random,
             execfn: self.path.as_bytes(),
         };
         // Like Linux, a quarter of the stack at most for the arguments.
-        let len = velf::initial_stack_size(&self.args, &self.env, &aux);
+        let len = elf::initial_stack_size(&self.args, &self.env, &aux);
         if len > size / 4 {
             return Err(SpawnError::TooLarge);
         }
         let mut img = alloc::vec![0u8; len];
-        let sp = velf::initial_stack(top, &self.args, &self.env, &aux, &mut img).map_err(SpawnError::BadElf)?;
+        let sp = elf::initial_stack(top, &self.args, &self.env, &aux, &mut img).map_err(SpawnError::BadElf)?;
         stack.write(STACK_GUARD + size - len, &img)?;
 
         let entry = elf.entry().wrapping_add(bias) as usize;

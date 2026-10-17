@@ -59,21 +59,21 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::ops::Range;
 
-use vabi::{cache_policy, irq_flags, signals};
-use vacpi::Memory;
-use vacpi::name::Path;
-use vacpi::resource::Resource as FirmwareResource;
-use vacpi::value::Value;
-use vipc::WaitSet;
-use vproto::audio::audiodev;
-use vproto::displaydev::displaydev;
-use vproto::pci::{
+use ::acpi::Memory;
+use ::acpi::name::Path;
+use ::acpi::resource::Resource as FirmwareResource;
+use ::acpi::value::Value;
+use abi::{cache_policy, irq_flags, signals};
+use ipc::WaitSet;
+use proto::audio::audiodev;
+use proto::displaydev::displaydev;
+use proto::pci::{
     AcpiDevice, AcpiResource, DeviceInfo, HostBridge, InterruptLine, IntxLine, MsiAddress, OpRegion, PciError,
     ReservedMemory, pcidev,
 };
-use vproto::startup::{self, devmgr as roles, drivervm::exit_code};
-use vrt::object::{Channel, Interrupt, Process, Resource, Vmo};
-use vrt::println;
+use proto::startup::{self, devmgr as roles, drivervm::exit_code};
+use rt::object::{Channel, Interrupt, Process, Resource, Vmo};
+use rt::println;
 
 use acpi::Acpi;
 use arch::config::ConfigAccess;
@@ -81,7 +81,7 @@ use arch::platform::Platform;
 use gpio::Gpio;
 use pci::{Address, ConfigSpace, Placement};
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// Drivers for whole device classes: (class, subclass, programming
 /// interface, driver).
@@ -155,7 +155,7 @@ struct Bound {
     /// Its ACPI companion, and the devices the firmware describes below
     /// it.
     companion: Option<Path>,
-    acpi: Vec<vacpi::device::Described>,
+    acpi: Vec<::acpi::device::Described>,
     /// The driver VM has it.
     guest: bool,
     /// How many MSIs it can raise (`ConfigSpace::msi_vectors`): its driver
@@ -170,7 +170,7 @@ struct GuestDevice {
     info: DeviceInfo,
     placement: Placement,
     companion: Option<Path>,
-    acpi: Vec<vacpi::device::Described>,
+    acpi: Vec<::acpi::device::Described>,
     /// How many MSIs it can raise.
     msi_vectors: u32,
 }
@@ -199,7 +199,7 @@ fn intx_letter(pin: u8) -> char {
 /// it: the controllers of its connections resolved where they can be.
 fn wire(r: &FirmwareResource, acpi: &Acpi, scope: &Path) -> AcpiResource {
     let controller = |name: &str| {
-        let resolved = vacpi::name::NameString::parse(name).and_then(|n| acpi.ns.resolve(scope, &n));
+        let resolved = ::acpi::name::NameString::parse(name).and_then(|n| acpi.ns.resolve(scope, &n));
         resolved.map_or_else(|| String::from(name), |p| alloc::format!("{}", p))
     };
     match r {
@@ -378,7 +378,7 @@ impl pcidev::Server for DeviceSession<'_> {
             return Err(PciError::Denied);
         }
         let sid = self.dev.address.requester_id() as u64;
-        self.mgr.pci.create(vabi::resource_kind::PCI, sid, 1).map_err(|_| PciError::Denied)
+        self.mgr.pci.create(abi::resource_kind::PCI, sid, 1).map_err(|_| PciError::Denied)
     }
 
     fn reserved_memory(&mut self) -> Result<Vec<ReservedMemory>, PciError> {
@@ -401,14 +401,14 @@ impl pcidev::Server for DeviceSession<'_> {
     fn opregion(&mut self) -> Result<OpRegion, PciError> {
         self.guests_intel_gpu()?;
         let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
-        let at = self.mgr.config.read(self.dev.address, vhv::pci::intel_graphics::ASLS, 4) as u64;
-        let mut opregion = alloc::vec![0; vhv::igd::OPREGION_SIZE];
-        if at == 0 || !acpi.memory.read(at, &mut opregion) || !vhv::igd::is_opregion(&opregion) {
+        let at = self.mgr.config.read(self.dev.address, hv::pci::intel_graphics::ASLS, 4) as u64;
+        let mut opregion = alloc::vec![0; hv::igd::OPREGION_SIZE];
+        if at == 0 || !acpi.memory.read(at, &mut opregion) || !hv::igd::is_opregion(&opregion) {
             return Err(PciError::NotFound);
         }
         // Its raw VBT, if it keeps that outside, and if it can be read.
-        let vbt = vhv::igd::raw_vbt(&opregion, at)
-            .filter(|&(_, size)| size <= vhv::igd::OPREGION_ROOM)
+        let vbt = hv::igd::raw_vbt(&opregion, at)
+            .filter(|&(_, size)| size <= hv::igd::OPREGION_ROOM)
             .and_then(|(vbt_at, size)| {
                 let mut vbt = alloc::vec![0; size];
                 acpi.memory.read(vbt_at, &mut vbt).then_some(vbt)
@@ -426,7 +426,7 @@ impl pcidev::Server for DeviceSession<'_> {
             class: dword(0x08),
             subsystem: dword(0x2C),
             mchbar: dword(0x48) as u64 | (dword(0x4C) as u64) << 32,
-            graphics_control: dword(vhv::pci::intel_graphics::GGC),
+            graphics_control: dword(hv::pci::intel_graphics::GGC),
         })
     }
 
@@ -478,7 +478,7 @@ impl pcidev::Server for DeviceSession<'_> {
         let owner = owner.ok_or(PciError::NotFound)?;
         let value = acpi.ns.evaluate_child(owner, &name, &acpi.memory).ok_or(PciError::NotFound)?;
         let value = value.map_err(|_| PciError::Unsupported)?;
-        vacpi::asm::constant(&value).ok_or(PciError::Unsupported)
+        ::acpi::asm::constant(&value).ok_or(PciError::Unsupported)
     }
 
     fn acpi_interrupt(&mut self, device: u32, index: u32) -> Result<(Interrupt, InterruptLine), PciError> {
@@ -544,7 +544,7 @@ impl pcidev::Server for DeviceSession<'_> {
 impl DeviceSession<'_> {
     /// GPIO pin `index` of ACPI device `device` below this driver's PCI
     /// function: its controller, the pin, and the connection it is of.
-    fn gpio_pin(&self, device: u32, index: u32) -> Result<(&Acpi, Path, u16, vacpi::resource::Gpio), PciError> {
+    fn gpio_pin(&self, device: u32, index: u32) -> Result<(&Acpi, Path, u16, ::acpi::resource::Gpio), PciError> {
         let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
         let d = self.dev.acpi.get(device as usize).ok_or(PciError::NotFound)?;
         let (controller, pin, connection) = d.gpio(&acpi.ns, index as usize).ok_or(PciError::NotFound)?;
@@ -571,15 +571,15 @@ fn start_program(
     boot: &initrd::Archive<'static>,
     name: &str,
     args: &[String],
-    handles: Vec<(u32, vrt::object::Handle)>,
+    handles: Vec<(u32, rt::object::Handle)>,
 ) -> Option<Process> {
     let path = alloc::format!("bin/{name}");
     let Some(image) = boot.find(&path).map(|f| f.data) else {
         println!("{} is not installed", name);
         return None;
     };
-    let registry = vproto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
-    let mut spawn = vrt::process::Spawn::new(name).handle(vabi::startup::role::REGISTRY, registry.into_handle());
+    let registry = proto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
+    let mut spawn = rt::process::Spawn::new(name).handle(abi::startup::role::REGISTRY, registry.into_handle());
     for (role, h) in handles {
         spawn = spawn.handle(role, h);
     }
@@ -596,16 +596,16 @@ fn start_program(
 }
 
 /// The boot information `init` hands over (where the ACPI tables are).
-fn boot_info() -> Option<vabi::KernelBootInfo> {
-    let vmo = Vmo::from_handle(vrt::env::take_handle(vabi::startup::role::BOOT_INFO)?);
-    let mut buf = [0u8; core::mem::size_of::<vabi::KernelBootInfo>()];
+fn boot_info() -> Option<abi::KernelBootInfo> {
+    let vmo = Vmo::from_handle(rt::env::take_handle(abi::startup::role::BOOT_INFO)?);
+    let mut buf = [0u8; core::mem::size_of::<abi::KernelBootInfo>()];
     vmo.read(0, &mut buf).ok()?;
     // SAFETY: KernelBootInfo is plain old data written by the kernel.
-    Some(unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const vabi::KernelBootInfo) })
+    Some(unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const abi::KernelBootInfo) })
 }
 
 /// The devices the firmware describes below PCI function `a`; logs them.
-fn described_below(acpi: Option<&Acpi>, a: Address) -> (Option<Path>, Vec<vacpi::device::Described>) {
+fn described_below(acpi: Option<&Acpi>, a: Address) -> (Option<Path>, Vec<::acpi::device::Described>) {
     let Some(acpi) = acpi else { return (None, Vec::new()) };
     let Some(companion) = acpi.pci_companion(a.bus, a.slot, a.function) else { return (None, Vec::new()) };
     let below = acpi.children(&companion);
@@ -622,9 +622,9 @@ fn described_below(acpi: Option<&Acpi>, a: Address) -> (Option<Path>, Vec<vacpi:
 /// Maps the system image (the initrd) that `init` hands over; also
 /// returns it, for the driver VM.
 fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
-    let vmo = vrt::object::Vmo::from_handle(vrt::env::take_handle(vabi::startup::role::INITRD)?);
+    let vmo = rt::object::Vmo::from_handle(rt::env::take_handle(abi::startup::role::INITRD)?);
     let size = vmo.size().ok()?;
-    let addr = vmo.map(0, size, vabi::map_flags::READ).ok()?;
+    let addr = vmo.map(0, size, abi::map_flags::READ).ok()?;
     // SAFETY: a read-only mapping that lives as long as the process.
     let bytes: &'static [u8] = unsafe { core::slice::from_raw_parts(addr as *const u8, size) };
     Some((initrd::Archive::open(bytes).ok()?, vmo))
@@ -722,9 +722,9 @@ impl Told {
     /// Connects to whichever service it has no connection to (one that has
     /// not registered yet gets it when it does).
     fn connect(&mut self) {
-        self.since = vrt::time::now_ns();
+        self.since = rt::time::now_ns();
         if self.display.is_none()
-            && let Ok(ch) = vproto::connect(displaydev::NAME)
+            && let Ok(ch) = proto::connect(displaydev::NAME)
         {
             let c = displaydev::Client::new(ch);
             c.set_timeout(TELL_NS);
@@ -732,7 +732,7 @@ impl Told {
             self.display_said = None;
         }
         if self.audio.is_none()
-            && let Ok(ch) = vproto::connect(audiodev::NAME)
+            && let Ok(ch) = proto::connect(audiodev::NAME)
         {
             let c = audiodev::Client::new(ch);
             c.set_timeout(TELL_NS);
@@ -744,7 +744,7 @@ impl Told {
 
     /// When to try again, the wait growing each time.
     fn later(&mut self) -> u64 {
-        let at = vrt::time::now_ns().saturating_add(self.again_ns);
+        let at = rt::time::now_ns().saturating_add(self.again_ns);
         self.again_ns = (self.again_ns * 2).min(TELL_AGAIN_NS.1);
         at
     }
@@ -773,7 +773,7 @@ impl Told {
     }
 
     /// The connections, with the keys devmgr waits on them by.
-    fn channels(&self) -> impl Iterator<Item = (vabi::RawHandle, u64)> + '_ {
+    fn channels(&self) -> impl Iterator<Item = (abi::RawHandle, u64)> + '_ {
         let display = self.display.as_ref().map(|c| (c.channel().raw(), TOLD_DISPLAY));
         let audio = self.audio.as_ref().map(|c| (c.channel().raw(), TOLD_AUDIO));
         display.into_iter().chain(audio)
@@ -789,7 +789,7 @@ impl Told {
             "the audio service"
         };
         println!("{} went away: devmgr tells it again what is coming when it is back", name);
-        if vrt::time::now_ns().saturating_sub(self.since) >= 6 * TELL_AGAIN_NS.1 {
+        if rt::time::now_ns().saturating_sub(self.since) >= 6 * TELL_AGAIN_NS.1 {
             self.again_ns = TELL_AGAIN_NS.0;
         }
         if self.again_at.is_none() {
@@ -908,7 +908,7 @@ impl DriverVm {
             return;
         };
         let mut handles =
-            alloc::vec![(startup::drivervm::HYPERVISOR_RESOURCE, h.into_handle()), (vabi::startup::role::INITRD, i)];
+            alloc::vec![(startup::drivervm::HYPERVISOR_RESOURCE, h.into_handle()), (abi::startup::role::INITRD, i)];
         handles.extend(self.platform.handles());
         if let Some(variables) = self.variables.as_ref().and_then(|v| v.0.duplicate(None).ok()) {
             handles.push((startup::drivervm::VARIABLES, variables));
@@ -941,7 +941,7 @@ impl DriverVm {
             return;
         }
         self.starts += 1;
-        self.started_ns = vrt::time::now_ns();
+        self.started_ns = rt::time::now_ns();
         let mut what = String::from(if self.starts > 1 { "started drivervm again" } else { "started drivervm" });
         for a in &args {
             what.push(' ');
@@ -965,7 +965,7 @@ impl DriverVm {
             0 | 1 => 0,
             n => 1_000_000_000u64 << (n - 2).min(5),
         };
-        self.next_start_ns = Some(vrt::time::now_ns() + wait_ns);
+        self.next_start_ns = Some(rt::time::now_ns() + wait_ns);
     }
 
     /// What it brings, while it runs or is to run again (nothing, once it
@@ -981,7 +981,7 @@ impl DriverVm {
     /// before it closes its handles, the channels of its devices among
     /// them.
     fn running(&self) -> bool {
-        self.process.as_ref().and_then(|p| p.info().ok()).is_some_and(|i| i.state == vabi::process_state::RUNNING)
+        self.process.as_ref().and_then(|p| p.info().ok()).is_some_and(|i| i.state == abi::process_state::RUNNING)
     }
 
     /// Its monitor did not take the device at `address` (and said why): it
@@ -997,21 +997,21 @@ impl DriverVm {
         let Some(process) = self.process.take() else { return };
         let info = process.info().ok();
         let why = match info.map(|i| (i.state, i.exit_code)) {
-            Some((vabi::process_state::EXITED, code)) if code == exit_code::POWER_OFF as i64 => {
+            Some((abi::process_state::EXITED, code)) if code == exit_code::POWER_OFF as i64 => {
                 println!("Linux powered the driver VM off");
                 return;
             }
-            Some((vabi::process_state::EXITED, code)) if code == exit_code::RESTART as i64 => {
+            Some((abi::process_state::EXITED, code)) if code == exit_code::RESTART as i64 => {
                 String::from("Linux restarted it")
             }
-            Some((vabi::process_state::EXITED, code)) if code == exit_code::CRASHED as i64 => {
+            Some((abi::process_state::EXITED, code)) if code == exit_code::CRASHED as i64 => {
                 String::from("Linux crashed")
             }
-            Some((vabi::process_state::EXITED, code)) => alloc::format!("the monitor stopped it ({code})"),
-            Some((vabi::process_state::KILLED, _)) => String::from("the monitor was killed"),
+            Some((abi::process_state::EXITED, code)) => alloc::format!("the monitor stopped it ({code})"),
+            Some((abi::process_state::KILLED, _)) => String::from("the monitor was killed"),
             _ => String::from("the monitor crashed"),
         };
-        let ran_ns = vrt::time::now_ns().saturating_sub(self.started_ns);
+        let ran_ns = rt::time::now_ns().saturating_sub(self.started_ns);
         self.failures = if ran_ns < DRIVERVM_STABLE_NS { self.failures + 1 } else { 0 };
         let mut resets = Vec::new();
         for d in &self.devices {
@@ -1040,7 +1040,7 @@ fn listed_devices(options: &[String], option: &str) -> Vec<(u16, u16)> {
 }
 
 fn main() -> i32 {
-    let take = |role| vrt::env::take_handle(role).map(Resource::from_handle);
+    let take = |role| rt::env::take_handle(role).map(Resource::from_handle);
     let (Some(io), Some(irq), Some(mmio), Some(dma), Some(pci)) = (
         take(roles::IOPORT_RESOURCE),
         take(roles::IRQ_RESOURCE),
@@ -1079,7 +1079,7 @@ fn main() -> i32 {
         gpio: RefCell::new(Gpio::new(gpio_mmio)),
         lines: RefCell::new(BTreeMap::new()),
     };
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let live = args.iter().any(|a| a == "live");
     // The driver VM's options: `drivervm`, `drivervm=off`, and its own as
     // `drivervm.NAME=VALUE`.
@@ -1091,7 +1091,7 @@ fn main() -> i32 {
     let linux = boot.find("linux/kernel").is_some() && boot.find("linux/initramfs.cpio").is_some();
     let runs = if drivervm.iter().any(|a| a == "drivervm=off") {
         Err("drivervm=off")
-    } else if platform & vabi::platform::VIRTUALIZATION == 0 {
+    } else if platform & abi::platform::VIRTUALIZATION == 0 {
         Err("the processors cannot run virtual machines")
     } else if !linux {
         Err("the system image has no Linux for it")
@@ -1099,7 +1099,7 @@ fn main() -> i32 {
         Ok(())
     };
     // Devices go to it only where an IOMMU confines them to its memory.
-    let gives = runs.is_ok() && platform & vabi::platform::IOMMU != 0;
+    let gives = runs.is_ok() && platform & abi::platform::IOMMU != 0;
     match runs {
         Err(why) => println!("no driver VM ({}): the devices Veda has no driver for stay off", why),
         Ok(()) if !gives => println!("no IOMMU: no device can go to the driver VM"),
@@ -1205,7 +1205,7 @@ fn main() -> i32 {
     if runs.is_ok() && (!guest.is_empty() || !platform.is_empty() || drivervm.iter().any(|a| a == "drivervm")) {
         match take(roles::HYPERVISOR_RESOURCE) {
             Some(hypervisor) => {
-                let variables = vrt::env::take_handle(vabi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
+                let variables = rt::env::take_handle(abi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
                 let memory = vm_memory(&guest, mgr.acpi.as_ref());
                 vm = Some(DriverVm::new(&drivervm, memory, guest, platform, variables, hypervisor));
             }
@@ -1222,7 +1222,7 @@ fn main() -> i32 {
     const DRIVERVM: u64 = u64::MAX;
     loop {
         if let Some(v) = vm.as_mut()
-            && v.next_start_ns.is_some_and(|at| vrt::time::now_ns() >= at)
+            && v.next_start_ns.is_some_and(|at| rt::time::now_ns() >= at)
         {
             v.start(&boot, &image, &mut bound, &mut next);
             // A start that failed for good brings nothing.
@@ -1238,7 +1238,7 @@ fn main() -> i32 {
         for (handle, k) in told.channels() {
             ws.add(handle, signals::PEER_CLOSED, k);
         }
-        let mut deadline = told.again_at.unwrap_or(vabi::DEADLINE_INFINITE);
+        let mut deadline = told.again_at.unwrap_or(abi::DEADLINE_INFINITE);
         if let Some(vm) = &vm {
             if let Some(p) = &vm.process {
                 ws.add(p.raw(), signals::TERMINATED, DRIVERVM);
@@ -1247,12 +1247,12 @@ fn main() -> i32 {
                 deadline = deadline.min(at);
             }
         }
-        if ws.is_empty() && deadline == vabi::DEADLINE_INFINITE {
-            vrt::time::sleep(vrt::time::Duration::from_secs(3600));
+        if ws.is_empty() && deadline == abi::DEADLINE_INFINITE {
+            rt::time::sleep(rt::time::Duration::from_secs(3600));
             continue;
         }
         let Ok(ready) = ws.wait(deadline) else { continue };
-        if told.again_at.is_some_and(|at| vrt::time::now_ns() >= at) {
+        if told.again_at.is_some_and(|at| rt::time::now_ns() >= at) {
             told.connect();
             told.say(&coming(&vm));
         }

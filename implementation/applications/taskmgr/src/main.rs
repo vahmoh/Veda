@@ -23,10 +23,10 @@ use std::collections::{BTreeMap, VecDeque};
 
 use apps_common::format::cstr;
 use apps_common::process::{self, Classifier};
-use vproto::display::modifiers;
-use vproto::init::{AppInfo, LaunchError, launcher};
-use vproto::input::keys;
-use vui::{App, Icon, Rect, Ui, WindowSpec};
+use proto::display::modifiers;
+use proto::init::{AppInfo, LaunchError, launcher};
+use proto::input::keys;
+use ui::{App, Icon, Rect, Ui, WindowSpec};
 
 /// Seconds of history kept for the graphs.
 pub const HISTORY: usize = 60;
@@ -79,7 +79,7 @@ pub enum Dialog {
 pub struct TaskManager {
     pub tab: usize,
     pub procs: Vec<Proc>,
-    pub info: vabi::SystemInfo,
+    pub info: abi::SystemInfo,
     pub cpu_model: String,
     pub version: String,
     /// CPU usage (0..=1) and memory use (0..=1) histories.
@@ -107,7 +107,7 @@ impl TaskManager {
         let mut tm = TaskManager {
             tab: 0,
             procs: Vec::new(),
-            info: vabi::SystemInfo::default(),
+            info: abi::SystemInfo::default(),
             cpu_model: String::new(),
             version: String::new(),
             cpu_hist: VecDeque::new(),
@@ -135,14 +135,14 @@ impl TaskManager {
 
     fn launcher(&mut self) -> Option<&launcher::Client> {
         if self.launcher.is_none() {
-            self.launcher = vproto::connect(launcher::NAME).ok().map(launcher::Client::new);
+            self.launcher = proto::connect(launcher::NAME).ok().map(launcher::Client::new);
         }
         self.launcher.as_ref()
     }
 
     /// Takes a sample of the system and the processes.
     pub fn sample(&mut self) {
-        let Ok(info) = vrt::object::system_info() else { return };
+        let Ok(info) = rt::object::system_info() else { return };
         self.cpu_model = cstr(&info.cpu_brand);
         self.version = cstr(&info.version);
         let mut list = process::list();
@@ -150,7 +150,7 @@ impl TaskManager {
         // one, and what those started), from all of them.
         let tasks = self.launcher().and_then(|l| l.tasks().ok());
         let classifier = Classifier::from_tasks(&list, tasks.as_deref());
-        list.retain(|p| p.state == vabi::process_state::RUNNING);
+        list.retain(|p| p.state == abi::process_state::RUNNING);
         let cpus = info.cpu_count.max(1) as f64;
         let (cpu_now, prev_cpu) = match &self.last {
             Some((t0, idle0, per)) if info.uptime_ns > *t0 => {
@@ -238,9 +238,9 @@ impl TaskManager {
             Err(_) => self.dialog = Some(Dialog::Error("The application launcher is not responding.".into())),
         }
         // Give the kernel a moment to tear the process down, then refresh.
-        vrt::time::sleep(vrt::time::Duration::from_millis(30));
+        rt::time::sleep(rt::time::Duration::from_millis(30));
         self.sample();
-        self.next_sample = vrt::time::now_ns() + SAMPLE_NS;
+        self.next_sample = rt::time::now_ns() + SAMPLE_NS;
     }
 
     fn dialogs(&mut self, ui: &mut Ui) {
@@ -308,15 +308,15 @@ fn push(h: &mut VecDeque<f32>, v: f32) {
 }
 
 impl App for TaskManager {
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         TaskManager::agent_invoke(self, action, args)
     }
 
@@ -352,7 +352,7 @@ impl App for TaskManager {
             ui.repaint();
         }
         // Keys after the mouse (handled while drawing), so a click and a key
-        // in the same frame act in order. (While a menu is open, vui gives it
+        // in the same frame act in order. (While a menu is open, `ui` gives it
         // the keyboard and widgets see no keys.)
         if !dialog_at_start && !self.typing && !ui.input.keys.is_empty() {
             self.handle_keys(ui);
@@ -373,5 +373,5 @@ fn main() {
     spec.app_id = "taskmgr".into();
     spec.min_width = 640;
     spec.min_height = 420;
-    std::process::exit(vui::run(spec, tm));
+    std::process::exit(ui::run(spec, tm));
 }

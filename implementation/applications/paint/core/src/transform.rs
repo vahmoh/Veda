@@ -3,13 +3,13 @@
 
 //! Turning, mirroring, cropping and resizing pictures, and changing their canvas.
 //!
-//! Resizing smoothly is `vimage`'s (fast_image_resize's Lanczos filter, which keeps
+//! Resizing smoothly is `image`'s (fast_image_resize's Lanczos filter, which keeps
 //! transparency apart from colour); pixelated resizing repeats or drops whole pixels, for
 //! pixel art.
 
 use alloc::vec::Vec;
 
-use vgfx::{Bitmap, Rect};
+use gfx::{Bitmap, Rect};
 
 use crate::color::unpremultiply;
 
@@ -170,8 +170,8 @@ pub fn resize(b: &Bitmap, w: i32, h: i32, how: Resample) -> Bitmap {
         }
         Resample::Smooth => {
             let straight: Vec<u32> = b.pixels.iter().map(|&p| unpremultiply(p)).collect();
-            let image = vimage::Image { width: b.width as u32, height: b.height as u32, pixels: straight };
-            let resized = vimage::resize(&image, w as u32, h as u32, vimage::Filter::Lanczos3);
+            let image = image::Image { width: b.width as u32, height: b.height as u32, pixels: straight };
+            let resized = image::resize(&image, w as u32, h as u32, image::Filter::Lanczos3);
             Bitmap::from_straight(w, h, resized.pixels)
         }
     }

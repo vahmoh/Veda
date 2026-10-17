@@ -6,9 +6,9 @@
 //! a lock, and an event object whose signals say what a read or a write
 //! would do, for `poll` and for reads and writes that wait.
 
-use vabi::signals::{SIGNALED, USER_0};
-use vrt::object::Event;
-use vrt::sync::Mutex;
+use abi::signals::{SIGNALED, USER_0};
+use rt::object::Event;
+use rt::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -69,7 +69,7 @@ impl EventFd {
             if nonblock {
                 return Err(EAGAIN);
             }
-            self.event.wait(READABLE, vabi::DEADLINE_INFINITE).map_err(error::kernel)?;
+            self.event.wait(READABLE, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
         }
     }
 
@@ -95,7 +95,7 @@ impl EventFd {
             if nonblock {
                 return Err(EAGAIN);
             }
-            self.event.wait(WRITABLE, vabi::DEADLINE_INFINITE).map_err(error::kernel)?;
+            self.event.wait(WRITABLE, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
         }
     }
 }

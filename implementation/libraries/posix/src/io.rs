@@ -6,9 +6,9 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, TERMINATED, WRITABLE};
-use vabi::{RawHandle, WaitItem, startup};
-use vrt::object::{Channel, Socket};
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, TERMINATED, WRITABLE};
+use abi::{RawHandle, WaitItem, startup};
+use rt::object::{Channel, Socket};
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -781,7 +781,7 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
         if waits.is_empty() {
             // Nothing can become ready: wait out the time, unless a signal
             // handler runs first.
-            if crate::signal::sleep_until(deadline.unwrap_or(vabi::DEADLINE_INFINITE)) {
+            if crate::signal::sleep_until(deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
                 return Err(EINTR);
             }
             continue;
@@ -792,8 +792,8 @@ pub unsafe fn poll(fds: usize, count: usize, deadline: Option<u64>) -> SysResult
                 Some(WaitItem { handle: w.handle()?, signals: *signals, observed: 0, _reserved: 0 })
             })
             .collect();
-        match vrt::object::wait_many(&mut items, deadline.unwrap_or(vabi::DEADLINE_INFINITE)) {
-            Ok(_) | Err(vabi::Error::TimedOut) => {}
+        match rt::object::wait_many(&mut items, deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
+            Ok(_) | Err(abi::Error::TimedOut) => {}
             Err(e) => return Err(error::kernel(e)),
         }
         pfds = read_all()?;
@@ -873,27 +873,27 @@ pub fn adopt_startup_fds(inherited: &Inherited) {
     for (n, socket) in &inherited.sockets {
         let Some(n) = u32::try_from(*n).ok().filter(|&n| n < startup::role::MAX_FDS) else { continue };
         let roles = [startup::role::FD + n, startup::role::FD_EXTRA + n];
-        let handles = roles.into_iter().map_while(vrt::env::take_handle).collect();
+        let handles = roles.into_iter().map_while(rt::env::take_handle).collect();
         if let Some(desc) = crate::carry::from_parent(socket, handles) {
             let _ = fd::replace(n as i32, desc, false);
         }
     }
-    for role in vrt::env::handle_roles() {
+    for role in rt::env::handle_roles() {
         let Some(n) = startup::role::fd(role) else { continue };
-        let Some(h) = vrt::env::take_handle(role) else { continue };
+        let Some(h) = rt::env::take_handle(role) else { continue };
         let Ok(info) = h.basic_info() else { continue };
-        let desc = if info.object_type == vabi::ObjectType::Socket as u32 {
+        let desc = if info.object_type == abi::ObjectType::Socket as u32 {
             // Its access is what the handle allows.
-            let mode = match (info.rights & vabi::Rights::READ.0 != 0, info.rights & vabi::Rights::WRITE.0 != 0) {
+            let mode = match (info.rights & abi::Rights::READ.0 != 0, info.rights & abi::Rights::WRITE.0 != 0) {
                 (true, true) => o::RDWR,
                 (false, true) => o::WRONLY,
                 _ => o::RDONLY,
             };
             Description::new(Object::Stream(crate::stream::Stream::new(Socket::from_handle(h))), mode)
-        } else if info.object_type == vabi::ObjectType::Channel as u32 {
-            let f = crate::file::VfsFile::new(vrt::object::Channel::from_handle(h));
+        } else if info.object_type == abi::ObjectType::Channel as u32 {
+            let f = crate::file::VfsFile::new(rt::object::Channel::from_handle(h));
             let mode = f.open_flags().map(crate::file::access_mode).unwrap_or(o::RDWR);
-            let append = f.open_flags().is_ok_and(|fl| fl & vproto::fs::open_flags::APPEND != 0);
+            let append = f.open_flags().is_ok_and(|fl| fl & proto::fs::open_flags::APPEND != 0);
             Description::new(Object::File(f), mode | if append { o::APPEND } else { 0 })
         } else {
             continue;

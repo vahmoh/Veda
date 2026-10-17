@@ -24,7 +24,7 @@
 
 use alloc::collections::BTreeMap;
 
-use vproto::fs::FsError;
+use proto::fs::FsError;
 
 use crate::{HOME, TMP, USER};
 
@@ -69,11 +69,11 @@ pub fn fixed(comps: &[&str]) -> bool {
 }
 
 /// Connections the VFS serves at once, of all kinds. Each is a handle in its
-/// one wait set, and the kernel waits on at most `vabi::WAIT_MANY_MAX`
-/// handles together (a `vipc::WaitSet` with more polls them), so this limit
+/// one wait set, and the kernel waits on at most `abi::WAIT_MANY_MAX`
+/// handles together (a `ipc::WaitSet` with more polls them), so this limit
 /// follows the wait set's: a kernel wait port, which would take any number
 /// of handles, would lift it. The listener for new clients takes one.
-pub const MAX_CONNECTIONS: usize = vabi::WAIT_MANY_MAX - 1;
+pub const MAX_CONNECTIONS: usize = abi::WAIT_MANY_MAX - 1;
 
 /// Connections of one program (its client connections and the open files
 /// it opened): a quarter of all, so that no program can take them all.

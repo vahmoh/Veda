@@ -10,7 +10,7 @@
 
 use alloc::vec::Vec;
 
-use vraster::Point;
+use raster::Point;
 
 use crate::GlyphId;
 use crate::font::Font;

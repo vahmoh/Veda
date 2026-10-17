@@ -14,13 +14,13 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vnet = { workspace = true }
-vtls = { workspace = true }
-vweb = { workspace = true }
+rt = { workspace = true }
+net = { workspace = true }
+tls = { workspace = true }
+web = { workspace = true }
 
 [build-dependencies]
-vbuild = { workspace = true }
+build = { workspace = true }
 
 [lints]
 workspace = true

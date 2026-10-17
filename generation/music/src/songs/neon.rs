@@ -5,7 +5,7 @@
 //!
 //! Intro (8) · verse (8) · chorus (8) · breakdown (4) · chorus (8) · outro (8)
 
-use vaudio::synth::{Part, Song};
+use audio::synth::{Part, Song};
 
 use super::Track;
 use crate::dsl::{self, BAR, Humanize, key};

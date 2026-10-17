@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `fakedec` — a stand-in for the media decoder, `mediadec`: it speaks
-//! [`vproto::media`] as `mediadec` does, with pictures it draws and a tone
+//! [`proto::media`] as `mediadec` does, with pictures it draws and a tone
 //! in place of a file's, so that Videos' playback, pacing, seeking, crash
 //! recovery and agent can be developed and tested without FFmpeg.
 //!
 //! Videos starts it as it starts `mediadec` (`/system/bin/fakedec`),
-//! with nothing but the control channel ([`vproto::media::CONTROL_ROLE`]);
+//! with nothing but the control channel ([`proto::media::CONTROL_ROLE`]);
 //! as `mediadec`, it ends when the player goes away, even hung.
 //! The videos it opens are text files ([`clip`]):
 //!
@@ -18,7 +18,7 @@
 //! with faults to ask for: `crash=5` (the decoder crashes decoding 5 s),
 //! `hang=7` (it stops answering and working for good at 7 s), `slow_ms=50`
 //! (each picture takes 50 ms to decode). Anything else is refused as
-//! damaged ([`vproto::media::MediaError::Corrupt`]).
+//! damaged ([`proto::media::MediaError::Corrupt`]).
 //!
 //! Each picture shows its time and number, and a marker that is at the
 //! left edge on every whole second, when the sound (a quiet 440 Hz tone)
@@ -42,18 +42,18 @@ mod picture;
 mod session;
 mod sound;
 
-use vproto::media;
-use vrt::object::Channel;
-use vrt::println;
+use proto::media;
+use rt::object::Channel;
+use rt::println;
 
 use crate::session::Session;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// Answers the player and decodes until the player closes the control
 /// channel (as `mediadec_main` does).
 fn main() -> i32 {
-    let Some(control) = vrt::env::take_handle(media::CONTROL_ROLE) else {
+    let Some(control) = rt::env::take_handle(media::CONTROL_ROLE) else {
         println!("started without a control channel");
         return 1;
     };
@@ -62,12 +62,12 @@ fn main() -> i32 {
     // not.
     let handle = control.raw();
     let watchdog =
-        vrt::thread::Builder::new().name("watchdog").stack_size(16 << 10).spawn(move || media::watchdog(handle));
+        rt::thread::Builder::new().name("watchdog").stack_size(16 << 10).spawn(move || media::watchdog(handle));
     if watchdog.is_err() {
         println!("cannot start its watchdog");
     }
     // As `mediadec` does, before reading anything.
-    if let Err(e) = vrt::process::restrict(vabi::restrict::ALL) {
+    if let Err(e) = rt::process::restrict(abi::restrict::ALL) {
         println!("cannot give up what it does without ({e:?})");
         return 1;
     }

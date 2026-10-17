@@ -25,9 +25,9 @@ mod songs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use audio::synth;
+use audio::tags::Tags;
 use gencommon::output::Output;
-use vaudio::synth;
-use vaudio::tags::Tags;
 
 /// Converts the mix to 16-bit with triangular dither.
 fn to_i16(mix: &[f32], seed: u64) -> Vec<i16> {
@@ -98,7 +98,7 @@ fn run(out: &Path, only: Option<u32>, preview: Option<&Path>) -> Result<(), Stri
         };
         tags.set("bpm", &t.bpm.to_string());
         tags.set("art", t.art);
-        let mut file = vaudio::qoa::encode(&pcm, 2, patches::SR as u32).map_err(|e| format!("QOA encoding: {e}"))?;
+        let mut file = audio::qoa::encode(&pcm, 2, patches::SR as u32).map_err(|e| format!("QOA encoding: {e}"))?;
         file.extend(tags.encode_trailer());
         out.write(&format!("samples/Music/{}.qoa", t.title), &file)?;
         total_bytes += file.len();
@@ -123,7 +123,7 @@ fn run(out: &Path, only: Option<u32>, preview: Option<&Path>) -> Result<(), Stri
         }
         if let Some(dir) = preview {
             std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-            let w = vaudio::wav::write(&pcm, 2, patches::SR as u32, &tags);
+            let w = audio::wav::write(&pcm, 2, patches::SR as u32, &tags);
             let path = dir.join(format!("{}.wav", t.title));
             std::fs::write(&path, w).map_err(|e| format!("writing {}: {e}", path.display()))?;
         }
@@ -145,7 +145,7 @@ fn run(out: &Path, only: Option<u32>, preview: Option<&Path>) -> Result<(), Stri
             duration_ms: frames as u64 * 1000 / songs::chime::RATE as u64,
             extra: Vec::new(),
         };
-        let file = vaudio::wav::write(&pcm, 1, songs::chime::RATE, &tags);
+        let file = audio::wav::write(&pcm, 1, songs::chime::RATE, &tags);
         out.write("samples/Music/Startup Chime.wav", &file)?;
         total_bytes += file.len();
         println!(
@@ -170,7 +170,7 @@ fn run(out: &Path, only: Option<u32>, preview: Option<&Path>) -> Result<(), Stri
             duration_ms: frames as u64 * 1000 / songs::startup::RATE as u64,
             ..Tags::default()
         };
-        let file = vaudio::wav::write(&pcm, 2, songs::startup::RATE, &tags);
+        let file = audio::wav::write(&pcm, 2, songs::startup::RATE, &tags);
         out.write("sounds/startup.wav", &file)?;
         println!(
             "    {:<16} {:>4}.{:01} s  peak {:5.1} dBFS  loudness {:5.1} dB  (WAV, {} Hz)  {:5.2} MB",

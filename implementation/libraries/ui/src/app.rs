@@ -13,9 +13,9 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
-use vabi::{RawHandle, WaitItem, signals};
-use vgfx::DrawCache;
-use vproto::display::{Cursor, WindowEvent, WindowSpec};
+use abi::{RawHandle, WaitItem, signals};
+use gfx::DrawCache;
+use proto::display::{Cursor, WindowEvent, WindowSpec};
 
 pub use crate::fonts::load_fonts;
 
@@ -164,14 +164,14 @@ impl Host {
             // `invalidate`): do not wait for further events.
             0
         } else if self.dirty {
-            vabi::DEADLINE_INFINITE // waiting for FrameDone
+            abi::DEADLINE_INFINITE // waiting for FrameDone
         } else {
-            self.repaint_at.unwrap_or(vabi::DEADLINE_INFINITE)
+            self.repaint_at.unwrap_or(abi::DEADLINE_INFINITE)
         }
     }
 
     fn frame(&mut self, draw: &mut impl FnMut(&mut Ui)) {
-        self.input.now = vrt::time::now_ns();
+        self.input.now = rt::time::now_ns();
         let bg = self.ctx.theme.bg;
         let window_state = self.window.state;
         let frame_timing = self.window.frame_timing();
@@ -239,7 +239,7 @@ impl Host {
                 self.dirty = true;
             }
         }
-        if self.repaint_at.is_some_and(|t| vrt::time::now_ns() >= t) {
+        if self.repaint_at.is_some_and(|t| rt::time::now_ns() >= t) {
             self.repaint_at = None;
             self.dirty = true;
         }
@@ -257,14 +257,14 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
     let display = match connect() {
         Ok(d) => d,
         Err(e) => {
-            vrt::println!("cannot connect to the display: {:?}", e);
+            rt::println!("cannot connect to the display: {:?}", e);
             return 1;
         }
     };
     let mut host = match Host::new(&display, spec) {
         Ok(h) => h,
         Err(e) => {
-            vrt::println!("cannot create a window: {:?}", e);
+            rt::println!("cannot create a window: {:?}", e);
             return 1;
         }
     };
@@ -295,7 +295,7 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
             let (handle, signals) = reg.wait_items();
             items.push(WaitItem { handle, signals, ..Default::default() });
         }
-        let _ = vrt::object::wait_many(&mut items, host.deadline());
+        let _ = rt::object::wait_many(&mut items, host.deadline());
         for (i, it) in items.iter().enumerate().skip(1).take(extra.len()) {
             if it.observed & it.signals != 0 {
                 app.handle_signaled(i - 1, it.observed);

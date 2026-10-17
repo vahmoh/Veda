@@ -4,7 +4,7 @@
 //! `cargo orchestration acpi DIR`: what devmgr makes of a PC's ACPI tables,
 //! worked out on the host. DIR holds the tables as Linux has them
 //! (`sudo cp -r /sys/firmware/acpi/tables DIR`); the same interpreter
-//! (`vacpi`) loads the DSDT and the SSDTs and evaluates them by devmgr's
+//! (`acpi`) loads the DSDT and the SSDTs and evaluates them by devmgr's
 //! rules: the PCI root bridges' windows (where devmgr places the BARs a
 //! firmware leaves unplaced), the memory the motherboard reserves, and for
 //! each function on a root bus its ACPI device, where its INTx goes and the
@@ -19,12 +19,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use vacpi::aml::{Bounds, FieldUnit, Namespace, Object};
-use vacpi::device;
-use vacpi::name::Path as AcpiPath;
-use vacpi::resource::Resource;
-use vacpi::tables::Table;
-use vacpi::{Memory, PciFunction};
+use acpi::aml::{Bounds, FieldUnit, Namespace, Object};
+use acpi::device;
+use acpi::name::Path as AcpiPath;
+use acpi::resource::Resource;
+use acpi::tables::Table;
+use acpi::{Memory, PciFunction};
 
 use crate::util::Result;
 
@@ -204,7 +204,7 @@ fn definition_blocks(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 /// The namespace the tables make, and the tables that loaded only in part.
-fn load(tables: &[(String, Vec<u8>)], host: &Host) -> (Namespace, Vec<(String, vacpi::aml::Error)>) {
+fn load(tables: &[(String, Vec<u8>)], host: &Host) -> (Namespace, Vec<(String, acpi::aml::Error)>) {
     let mut ns = Namespace::new();
     let mut failed = Vec::new();
     for (name, data) in tables {

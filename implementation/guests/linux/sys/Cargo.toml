@@ -14,7 +14,7 @@ bench = false
 [dependencies]
 rustix = { workspace = true }
 libc = { workspace = true }
-vproto = { workspace = true }
+proto = { workspace = true }
 
 [lints]
 workspace = true

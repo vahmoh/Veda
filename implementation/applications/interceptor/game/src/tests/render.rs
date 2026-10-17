@@ -3,7 +3,7 @@
 
 //! Veda Bay renders on the host: in software, and through Veda's
 //! renderer (on softpipe, or on this machine's Intel GPU with
-//! `VGL_GALLIUM_DEVICE=iris`), as it renders in Veda.
+//! `GL_GALLIUM_DEVICE=iris`), as it renders in Veda.
 //!
 //! `INTERCEPTOR_SHOTS=dir` saves views from round the loop, at every time
 //! of day, as `INTERCEPTOR_SIZE` (1280x720 by default) PNGs, through the
@@ -15,9 +15,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vgl::backend::Present;
-use vgl::soft::{Serial, SoftBackend};
-use vgl::{Config, Context, gl};
+use ::gl::backend::Present;
+use ::gl::soft::{Serial, SoftBackend};
+use ::gl::{Config, Context, gl};
 
 use crate::carmodel::Kind;
 use crate::env::{Environment, TimeOfDay, Weather};
@@ -32,7 +32,7 @@ fn software(w: u32, h: u32) -> Context {
 
 fn renderer(w: u32, h: u32) -> Option<Context> {
     let config = Config { width: w, height: h, ..Config::default() };
-    vgl::virgl::gallium::context(config)
+    ::gl::virgl::gallium::context(config)
 }
 
 /// A camera behind and above a car in the forward lane at `s`.
@@ -62,8 +62,8 @@ fn frame_with(c: &mut Context, r: &mut Renderer, cam: &Camera, cars: &[CarView],
 }
 
 fn save(path: &str, px: &[u32], w: u32, h: u32) {
-    let image = vimage::Image { width: w, height: h, pixels: px.to_vec() };
-    std::fs::write(path, vimage::encode_png(&image).unwrap()).unwrap();
+    let image = image::Image { width: w, height: h, pixels: px.to_vec() };
+    std::fs::write(path, image::encode_png(&image).unwrap()).unwrap();
 }
 
 /// The sky at the top, the road at the bottom, all painted, and many

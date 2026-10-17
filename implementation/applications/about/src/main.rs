@@ -5,8 +5,8 @@
 //! agent reads what the window shows and can show the licences.
 
 use apps_common::format::{cstr, uptime};
-use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, json};
-use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
+use ui::agent::{self, Action, AppAgentInfo, Value, arg_bool, json};
+use ui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 
 /// What "Show licences" shows.
 const LICENCES: &str = "Veda © 2026 Vahid Mohammadi is free software: you can redistribute it and/or modify it \
@@ -16,7 +16,7 @@ const LICENCES: &str = "Veda © 2026 Vahid Mohammadi is free software: you can r
                         all under the SIL Open Font License 1.1.";
 
 struct About {
-    info: vabi::SystemInfo,
+    info: abi::SystemInfo,
     last_refresh: u64,
     show_details: bool,
 }
@@ -32,7 +32,7 @@ impl App for About {
     fn update(&mut self, ui: &mut Ui) {
         let now = ui.now();
         if now - self.last_refresh > 1_000_000_000 {
-            if let Ok(i) = vrt::object::system_info() {
+            if let Ok(i) = rt::object::system_info() {
                 self.info = i;
             }
             self.last_refresh = now;
@@ -41,7 +41,7 @@ impl App for About {
         let t = ui.theme().clone();
         let area = ui.rect().inset(32, 28, 32, 24);
 
-        vui::draw_logo(&mut ui.canvas, Rect::new(area.x, area.y + 4, 64, 64));
+        ui::draw_logo(&mut ui.canvas, Rect::new(area.x, area.y + 4, 64, 64));
         ui.label(Rect::new(area.x + 88, area.y, 400, 40), "Veda", Font::Bold, t.title_size + 6.0, t.text, Align::Left);
         let version = cstr(&self.info.version);
         ui.label(
@@ -137,8 +137,5 @@ fn main() {
     let mut spec = WindowSpec::new("About Veda", 560, 540);
     spec.resizable = false;
     spec.app_id = "about".into();
-    std::process::exit(vui::run(
-        spec,
-        About { info: vabi::SystemInfo::default(), last_refresh: 0, show_details: false },
-    ));
+    std::process::exit(ui::run(spec, About { info: abi::SystemInfo::default(), last_refresh: 0, show_details: false }));
 }

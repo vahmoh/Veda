@@ -91,6 +91,6 @@ fn map() {
             px[((sy + dy) as u32 * w + (sx + dx) as u32) as usize] = 0xFFFFFFFF;
         }
     }
-    let image = vimage::Image { width: w, height: h, pixels: px };
-    std::fs::write(path, vimage::encode_png(&image).unwrap()).unwrap();
+    let image = image::Image { width: w, height: h, pixels: px };
+    std::fs::write(path, image::encode_png(&image).unwrap()).unwrap();
 }

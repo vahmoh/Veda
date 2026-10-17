@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vrt"
+name = "rt"
 description = "The Veda user-space runtime: process entry, system calls, heap, threads, synchronisation and I/O"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vabi = { workspace = true }
-vheap = { workspace = true }
-velf = { workspace = true }
-vhv = { workspace = true }
+abi = { workspace = true }
+heap = { workspace = true }
+elf = { workspace = true }
+hv = { workspace = true }
 libm = { workspace = true }
 
 [features]

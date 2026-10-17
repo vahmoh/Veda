@@ -4,7 +4,7 @@
 //! Images for Veda: decoding, scaling and (on the build machine) encoding,
 //! on proven libraries.
 //!
-//! `vimage` opens the pictures of Photos, the wallpapers and the file
+//! `image` opens the pictures of Photos, the wallpapers and the file
 //! manager's thumbnails, and scales them. The codecs are not Veda's own:
 //!
 //! | Format | Decoder |

@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use gfx::Rect;
 use glam::Vec3;
 use interceptor_game::audio::{Cue, Emitter};
 use interceptor_game::camera::View;
@@ -22,8 +23,7 @@ use interceptor_game::env::{TimeOfDay, Weather};
 use interceptor_game::session::{Mode, Phase, Quick, Session};
 use interceptor_game::sound::Sound;
 use interceptor_game::world::World;
-use vgfx::Rect;
-use vproto::input::keys;
+use proto::input::keys;
 
 use crate::speakers::{Speakers, Tune};
 use crate::store::Store;

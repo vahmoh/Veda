@@ -11,8 +11,8 @@ license.workspace = true
 [dependencies]
 argon2 = { workspace = true }
 libm = { workspace = true }
-vgfx = { workspace = true }
-vproto = { workspace = true }
+gfx = { workspace = true }
+proto = { workspace = true }
 
 [lints]
 workspace = true

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Interoperability with real servers over the host's network (ignored by
-//! default; run with `cargo test -p vtls -- --ignored --nocapture`).
+//! default; run with `cargo test -p tls -- --ignored --nocapture`).
 //!
 //! Each server gets an HTTP/1.1 request with the default configuration,
 //! with TLS 1.2 only, with each cipher suite alone and with each key
@@ -127,7 +127,7 @@ fn fetch(host: &str, path: &str, config: &ClientConfig) -> Result<Outcome, TlsEr
     let mut tls = TlsStream::connect(Tcp(tcp), host, config)?;
     let handshake = start.elapsed();
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: vtls-test\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: tls-test\r\nAccept: */*\r\nConnection: close\r\n\r\n"
     );
     tls.write_all(request.as_bytes())?;
     let mut response = Vec::new();

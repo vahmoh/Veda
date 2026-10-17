@@ -30,8 +30,8 @@ mod unit;
 
 use alloc::vec::Vec;
 
-use viommu::amd64::dmar::{self, Dmar};
-use viommu::amd64::vtd::{self, Fault, Irte};
+use iommu::amd64::dmar::{self, Dmar};
+use iommu::amd64::vtd::{self, Fault, Irte};
 
 pub use domain::Domain;
 use unit::Unit;

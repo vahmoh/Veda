@@ -18,13 +18,13 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use guest_sys::netif::Interface;
-use vipc::Bytes;
-use vproto::netring::{Link, RxInfo, SlotMeta, kind};
-use vproto::wlan::{
+use ipc::Bytes;
+use proto::netring::{Link, RxInfo, SlotMeta, kind};
+use proto::wlan::{
     Band, ChannelInfo, KeyKind, MLME_EVENT, MlmeEvent, PhyError, PhyInfo, PhyStats, channel_flags, phy_caps,
     wlanmlme_ctl,
 };
-use vrt::object::Channel;
+use rt::object::Channel;
 
 use crate::nl80211::{self, Bss, Event, Nl80211};
 
@@ -370,7 +370,7 @@ impl Radio {
                     link.send(SlotMeta::ethernet(), &eth);
                 }
                 Out::Event(e) => {
-                    if vipc::send_event(events, MLME_EVENT, e).is_err() {
+                    if ipc::send_event(events, MLME_EVENT, e).is_err() {
                         return false;
                     }
                 }

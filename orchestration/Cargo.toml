@@ -11,12 +11,12 @@ publish = false
 
 [dependencies]
 initrd = { workspace = true, features = ["std"] }
-velf = { workspace = true }
-vbuild = { workspace = true }
+elf = { workspace = true }
+build = { workspace = true }
 sha2 = { workspace = true }
-vimage = { workspace = true }
-vacpi = { workspace = true }
-vaudio = { workspace = true }
+image = { workspace = true }
+acpi = { workspace = true }
+audio = { workspace = true }
 serde_json = { workspace = true }
 crc32fast = { workspace = true }
 tungstenite = { workspace = true }
@@ -27,9 +27,9 @@ gencommon = { path = "../generation/common" }
 
 [dev-dependencies]
 # The checks of screenshots are tested on pictures the tests make.
-vimage = { workspace = true, features = ["encode"] }
+image = { workspace = true, features = ["encode"] }
 # The test tables are whole tables, as the driver VM takes the firmware's.
-vhv = { workspace = true }
+hv = { workspace = true }
 
 [lints]
 workspace = true

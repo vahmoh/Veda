@@ -18,15 +18,15 @@
 mod session;
 mod system;
 
+use proto::fs::{DirEntry, MAX_IO, file, open_flags};
 use terminal_core::screen::{Style, color};
 use terminal_core::text::{Counts, LastLines, LineSplitter, is_binary, trim_line_end};
-use vproto::fs::{DirEntry, MAX_IO, file, open_flags};
 
 use crate::shell::{Io, Shell, Stdin};
-use vfiles::HOME;
-use vfiles::format::{format_time, human_size};
-use vfiles::kind::{EDITOR, FILES, FileKind, default_app, file_kind};
-use vfiles::path::{SYSTEM, display_path, extension, file_name, glob_match, is_read_only, join};
+use files::HOME;
+use files::format::{format_time, human_size};
+use files::kind::{EDITOR, FILES, FileKind, default_app, file_kind};
+use files::path::{SYSTEM, display_path, extension, file_name, glob_match, is_read_only, join};
 
 /// A built-in command.
 pub struct Builtin {
@@ -536,7 +536,7 @@ pub(crate) fn usage(io: &mut Io, cmd: &str) -> i32 {
 }
 
 /// The colour of a directory entry's name (`program` as for
-/// [`vfiles::kind::file_kind`]).
+/// [`files::kind::file_kind`]).
 fn entry_style(name: &str, is_dir: bool, program: bool) -> Style {
     if is_dir {
         return Style::fg(color::BRIGHT_BLUE).bold();

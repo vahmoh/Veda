@@ -7,7 +7,7 @@
 //! the screen. At first, and on machines without a display driver that
 //! can flip, that is the framebuffer the firmware left, written in place:
 //! frames are paced by a timer, and the screen may show one half written.
-//! Once a driver attaches (`vproto::displaydev`), frames go into its
+//! Once a driver attaches (`proto::displaydev`), frames go into its
 //! pictures instead, which it shows in turn from the start of a vertical
 //! blank: each frame is written into a picture that is not on the screen,
 //! then asked for. So the screen only ever shows whole frames, and the next
@@ -56,11 +56,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 
-use vgfx::{Bitmap, Damage, Rect};
-use vproto::displaydev::{self as dd, DisplayDevError, FlipState, Link, Shown};
-use vrt::object::Event;
-use vrt::println;
-use vrt::vm::Mapping;
+use gfx::{Bitmap, Damage, Rect};
+use proto::displaydev::{self as dd, DisplayDevError, FlipState, Link, Shown};
+use rt::object::Event;
+use rt::println;
+use rt::vm::Mapping;
 
 /// Shortest time between two composed frames without flips (60 Hz).
 pub(crate) const FRAME_NS: u64 = 16_666_666;
@@ -509,7 +509,7 @@ impl Screen {
         let memory = f
             .pictures
             .iter()
-            .map(|p| p.map.vmo().0.duplicate(None).map(vrt::object::Vmo::from_handle).ok())
+            .map(|p| p.map.vmo().0.duplicate(None).map(rt::object::Vmo::from_handle).ok())
             .collect::<Option<Vec<_>>>()?;
         let stride = f.pictures.first()?.pitch as u32;
         Some(crate::gpu::Pictures { memory, width: self.back.width, height: self.back.height, stride, rgb: self.rgb })
@@ -585,7 +585,7 @@ impl Screen {
     /// otherwise.
     pub(crate) fn next_frame(&self, last: u64) -> u64 {
         match &self.flips {
-            Some(f) if !f.lost && (f.pending.is_some() || f.drawing.is_some()) => vabi::DEADLINE_INFINITE,
+            Some(f) if !f.lost && (f.pending.is_some() || f.drawing.is_some()) => abi::DEADLINE_INFINITE,
             Some(f) if !f.lost && f.flipped => last,
             _ => last + FRAME_NS,
         }
@@ -665,7 +665,7 @@ impl Screen {
             if vmo.size().map_or(true, |size| size < bytes) {
                 return Err(DisplayDevError::BadPictures);
             }
-            let map = Mapping::new(vmo, bytes, vabi::map_flags::READ | vabi::map_flags::WRITE)
+            let map = Mapping::new(vmo, bytes, abi::map_flags::READ | abi::map_flags::WRITE)
                 .map_err(|_| DisplayDevError::BadPictures)?;
             let mut stale = Damage::new();
             stale.add(self.rect());
@@ -712,7 +712,7 @@ impl Screen {
 
     /// The event the driver signals when a flip waits and is carried out
     /// (or one it stopped answering at, late).
-    pub(crate) fn done_event(&self) -> Option<vabi::RawHandle> {
+    pub(crate) fn done_event(&self) -> Option<abi::RawHandle> {
         let waits = |f: &&Flips| if f.lost { f.late.is_some() } else { f.pending.is_some() };
         self.flips.as_ref().filter(waits).map(|f| f.done.raw())
     }

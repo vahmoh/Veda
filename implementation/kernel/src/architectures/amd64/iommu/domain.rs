@@ -7,8 +7,8 @@
 
 use alloc::vec::Vec;
 
-use vabi::Error;
-use viommu::amd64::vtd::{self, SL_ADDRESS, SL_READ, SL_WRITE, Translation, desc};
+use abi::Error;
+use iommu::amd64::vtd::{self, SL_ADDRESS, SL_READ, SL_WRITE, Translation, desc};
 
 use super::{Iommu, iommu, publish};
 use crate::memory::{phys, phys_to_virt};

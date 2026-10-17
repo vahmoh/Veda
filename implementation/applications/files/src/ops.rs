@@ -10,7 +10,7 @@
 //! The thread has a connection of its own to the file system. It works an
 //! item at a time (each item of the selection), saying which it is on and
 //! how many are done, and looks at the cancel flag between items. Within an
-//! item, `vfiles`' recursive walks (`Fs::copy`, `Fs::move_to`,
+//! item, `files`' recursive walks (`Fs::copy`, `Fs::move_to`,
 //! `Fs::remove_all`) run to their end; once they report progress and take a
 //! cancel hook, [`Context::step`] is where that goes.
 
@@ -18,12 +18,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vabi::RawHandle;
-use vfiles::fs::Error;
-use vfiles::path::{file_name, is_within, join, parent};
-use vfiles::{Fs, trash};
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
+use abi::RawHandle;
+use files::fs::Error;
+use files::path::{file_name, is_within, join, parent};
+use files::{Fs, trash};
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 
 /// Something to do with files.
 #[derive(Debug, Clone)]
@@ -154,7 +154,7 @@ impl Worker {
         });
         let theirs = Event::from_handle(event.0.duplicate(None).ok()?);
         let worker = shared.clone();
-        let thread = vrt::thread::Builder::new()
+        let thread = rt::thread::Builder::new()
             .name("file-operations")
             .stack_size(256 * 1024)
             .spawn(move || work(&worker, &theirs));
@@ -217,10 +217,10 @@ impl Worker {
             if self.shared.finished.lock().iter().any(|f| f.id == id) {
                 return true;
             }
-            if vrt::time::now_ns() >= deadline {
+            if rt::time::now_ns() >= deadline {
                 return false;
             }
-            let _ = self.event.wait(vabi::signals::SIGNALED, deadline);
+            let _ = self.event.wait(abi::signals::SIGNALED, deadline);
             let _ = self.event.clear();
         }
     }
@@ -263,7 +263,7 @@ struct Context<'a> {
 
 impl Context<'_> {
     /// Says that item `done` of `total` (`current`) is next; returns
-    /// whether to go on. (Once `vfiles`' walks report their progress and
+    /// whether to go on. (Once `files`' walks report their progress and
     /// can be stopped, they report through here too.)
     fn step(&mut self, done: usize, total: usize, current: &str) -> bool {
         if self.shared.cancel.load(Ordering::Acquire) {

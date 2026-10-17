@@ -35,10 +35,10 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use vabi::signals::SIGNALED;
-use vabi::{PortPacket, RawHandle};
-use vrt::object::{self, Event, Port};
-use vrt::sync::Mutex;
+use abi::signals::SIGNALED;
+use abi::{PortPacket, RawHandle};
+use rt::object::{self, Event, Port};
+use rt::sync::Mutex;
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};
@@ -228,9 +228,9 @@ impl Epoll {
             if !ready.is_empty() || deadline.is_some_and(|d| time::monotonic_ns() >= d) {
                 return Ok(ready);
             }
-            match self.watcher.port.wait_packets(&mut packets, deadline.unwrap_or(vabi::DEADLINE_INFINITE)) {
+            match self.watcher.port.wait_packets(&mut packets, deadline.unwrap_or(abi::DEADLINE_INFINITE)) {
                 Ok(n) => self.take(&packets[..n]),
-                Err(vabi::Error::TimedOut) => {}
+                Err(abi::Error::TimedOut) => {}
                 Err(e) => return Err(error::kernel(e)),
             }
         }

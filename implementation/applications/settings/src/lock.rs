@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The Lock screen page: the password the lock screen asks for, set,
-//! changed and removed through the lock service (`vproto::lock`), and how
+//! changed and removed through the lock service (`proto::lock`), and how
 //! long the screen waits without input before it locks by itself. The
 //! service keeps a hash of the password where no other program can read
 //! it, and takes a change only with the password set now, so that someone
@@ -13,9 +13,9 @@
 //! doing meanwhile. What is typed is wiped from memory once it is sent, and
 //! as the page is left.
 
-use vproto::input::keys;
-use vproto::lock::{DEFAULT_IDLE_S, IDLE_CHOICES_S, LinkError, LockLink, LockReply, LockStatus, MIN_PASSWORD};
-use vui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
+use proto::input::keys;
+use proto::lock::{DEFAULT_IDLE_S, IDLE_CHOICES_S, LinkError, LockLink, LockReply, LockStatus, MIN_PASSWORD};
+use ui::{Align, ButtonKind, Color, Font, Icon, Rect, Ui};
 use zeroize::Zeroize;
 
 /// The fields, in the order Tab goes through them.
@@ -78,7 +78,7 @@ impl LockPage {
     }
 
     /// Signalled when the lock service has answered.
-    pub fn wait_handle(&self) -> Option<vabi::RawHandle> {
+    pub fn wait_handle(&self) -> Option<abi::RawHandle> {
         self.link.as_ref().map(LockLink::event_handle)
     }
 

@@ -9,11 +9,11 @@
 
 use std::collections::BTreeSet;
 
-use vfiles::format::{friendly_time, human_size};
-use vfiles::kind::{FileKind, file_kind, kind_name};
-use vfiles::path::{display_path, file_name, is_read_only, is_within, join, parent, resolve};
-use vfiles::{HOME, trash};
-use vui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
+use files::format::{friendly_time, human_size};
+use files::kind::{FileKind, file_kind, kind_name};
+use files::path::{display_path, file_name, is_read_only, is_within, join, parent, resolve};
+use files::{HOME, trash};
+use ui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
 
 use crate::icons;
 use crate::ops::Progress;
@@ -1310,7 +1310,7 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
         Action::Open => f.open_selection(),
         Action::OpenInEditor => {
             if let Some(p) = sel.first() {
-                f.launch(vfiles::kind::EDITOR.exe, vec![p.clone()]);
+                f.launch(files::kind::EDITOR.exe, vec![p.clone()]);
             }
         }
         Action::OpenTerminal => {
@@ -1397,7 +1397,7 @@ pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
     let h = 150 + rows.len() as i32 * 30;
     ui.modal(460, h, |ui, card| {
         // The dialog has the keyboard: Esc and Enter close it.
-        let closed = ui.input.key(vproto::input::keys::ESC) || ui.input.key(vproto::input::keys::ENTER);
+        let closed = ui.input.key(proto::input::keys::ESC) || ui.input.key(proto::input::keys::ENTER);
         let t = ui.theme().clone();
         let inner = card.inset(24, 22, 24, 20);
         let icon_r = Rect::new(inner.x, inner.y, 52, 52);

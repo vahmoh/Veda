@@ -44,7 +44,7 @@ use kx::{Group, KxGroup};
 /// their secrets from this source, so a `RandomSource` is a `static`:
 ///
 /// ```ignore
-/// static RANDOM: vtls::RandomSource = vtls::RandomSource::new(my_fill);
+/// static RANDOM: tls::RandomSource = tls::RandomSource::new(my_fill);
 /// ```
 pub struct RandomSource {
     fill: fn(&mut [u8]),
@@ -92,7 +92,7 @@ impl SecureRandom for RandomSource {
 /// The kernel's random number generator: a ChaCha20 stream seeded from the
 /// firmware's RNG, the processor's random number generators and timing
 /// jitter.
-pub static SYSTEM_RANDOM: RandomSource = RandomSource::new(vrt::object::random_bytes);
+pub static SYSTEM_RANDOM: RandomSource = RandomSource::new(rt::object::random_bytes);
 
 /// The cipher suites, in order of preference: AES-128-GCM is the cheapest
 /// here (it uses the processor's AES instructions when it has them),
@@ -267,7 +267,7 @@ struct NoPrivateKeys;
 
 impl KeyProvider for NoPrivateKeys {
     fn load_private_key(&self, _key_der: PrivateKeyDer<'static>) -> Result<Arc<dyn SigningKey>, Error> {
-        Err(Error::General("vtls does not use private keys".into()))
+        Err(Error::General("tls does not use private keys".into()))
     }
 }
 

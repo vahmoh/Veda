@@ -3,7 +3,7 @@
 
 //! Memory objects and address-space management.
 
-use vabi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
+use abi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
 
 use super::{SysResult, get_resource, get_vmo, handle, insert, ok, target_process};
 use crate::memory::aspace::Perms;
@@ -169,7 +169,7 @@ pub fn vmo_pages(res: RawHandle, raw: RawHandle, offset: usize, count: usize, ou
 
 /// Refuses new executable memory to a process that gave it up.
 fn executable_allowed(perms: Perms) -> Result<(), Error> {
-    if perms.exec { super::task::allowed(vabi::restrict::NO_EXECUTE) } else { Ok(()) }
+    if perms.exec { super::task::allowed(abi::restrict::NO_EXECUTE) } else { Ok(()) }
 }
 
 pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: usize, flags: usize) -> SysResult {

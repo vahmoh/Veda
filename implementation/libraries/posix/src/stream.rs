@@ -3,9 +3,9 @@
 
 //! Byte streams: pipes and the terminal, both socket endpoints.
 
-use vabi::Error;
-use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
-use vrt::object::Socket;
+use abi::Error;
+use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
+use rt::object::Socket;
 
 use crate::linux::errno::{EAGAIN, EPIPE};
 use crate::{error, signal, tty};
@@ -46,7 +46,7 @@ impl Stream {
                 Ok(n) => return Ok(n),
                 Err(Error::PeerClosed) => return Ok(0),
                 Err(Error::ShouldWait) if nonblock => return Err(EAGAIN),
-                Err(Error::ShouldWait) => self.wait_readable(vabi::DEADLINE_INFINITE)?,
+                Err(Error::ShouldWait) => self.wait_readable(abi::DEADLINE_INFINITE)?,
                 Err(e) => return Err(error::kernel(e)),
             }
         }
@@ -75,7 +75,7 @@ impl Stream {
                 // The end of the input: what there is of the line.
                 Err(Error::PeerClosed) => break,
                 Err(Error::ShouldWait) if nonblock => return if got > 0 { Ok(got) } else { Err(EAGAIN) },
-                Err(Error::ShouldWait) => self.wait_readable(vabi::DEADLINE_INFINITE)?,
+                Err(Error::ShouldWait) => self.wait_readable(abi::DEADLINE_INFINITE)?,
                 Err(_) if got > 0 => break,
                 Err(e) => return Err(error::kernel(e)),
             }
@@ -89,8 +89,8 @@ impl Stream {
     /// waited for when that is 0 too).
     fn read_timed(&self, buf: &mut [u8], min: u8, time: u8) -> Result<usize, isize> {
         let min = (min as usize).min(buf.len());
-        let interval = vrt::time::Duration::from_millis(100 * time as u64);
-        let mut deadline = vrt::time::deadline_after(interval);
+        let interval = rt::time::Duration::from_millis(100 * time as u64);
+        let mut deadline = rt::time::deadline_after(interval);
         let mut got = 0;
         loop {
             match self.socket.read(&mut buf[got..]) {
@@ -100,7 +100,7 @@ impl Stream {
                         return Ok(got);
                     }
                     // The time between bytes starts again.
-                    deadline = vrt::time::deadline_after(interval);
+                    deadline = rt::time::deadline_after(interval);
                 }
                 Err(Error::PeerClosed) => return Ok(got),
                 Err(Error::ShouldWait) => {}
@@ -110,8 +110,8 @@ impl Stream {
             let wait_until = match (min, time) {
                 (0, 0) => return Ok(got),
                 // Until the first byte, the time does not run.
-                (_, 0) => vabi::DEADLINE_INFINITE,
-                (m, _) if m > 0 && got == 0 => vabi::DEADLINE_INFINITE,
+                (_, 0) => abi::DEADLINE_INFINITE,
+                (m, _) if m > 0 && got == 0 => abi::DEADLINE_INFINITE,
                 _ => deadline,
             };
             match self.socket.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, wait_until) {
@@ -135,7 +135,7 @@ impl Stream {
 
     /// [`write`](Self::write), raising `SIGPIPE` or not (`MSG_NOSIGNAL`).
     pub fn send(&self, data: &[u8], nonblock: bool, sigpipe: bool) -> Result<usize, isize> {
-        self.send_until(data, nonblock, sigpipe, vabi::DEADLINE_INFINITE)
+        self.send_until(data, nonblock, sigpipe, abi::DEADLINE_INFINITE)
     }
 
     /// [`send`](Self::send), waiting for room until `deadline` at most:
@@ -168,15 +168,15 @@ impl Stream {
     /// Another handle to the endpoint, for another process, with the
     /// access a descriptor has and no more: the read end of a pipe cannot
     /// be written there either.
-    pub fn shared_handle(&self, readable: bool, writable: bool) -> Result<vrt::object::Handle, isize> {
+    pub fn shared_handle(&self, readable: bool, writable: bool) -> Result<rt::object::Handle, isize> {
         let mut rights = self.socket.0.basic_info().map_err(error::kernel)?.rights;
         if !readable {
-            rights &= !vabi::Rights::READ.0;
+            rights &= !abi::Rights::READ.0;
         }
         if !writable {
-            rights &= !vabi::Rights::WRITE.0;
+            rights &= !abi::Rights::WRITE.0;
         }
-        self.socket.0.duplicate(Some(vabi::Rights(rights))).map_err(error::kernel)
+        self.socket.0.duplicate(Some(abi::Rights(rights))).map_err(error::kernel)
     }
 
     /// Bytes that can be read without waiting.

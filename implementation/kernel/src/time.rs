@@ -37,10 +37,10 @@ pub fn now_ns() -> u64 {
 }
 
 /// How the clocks follow the counter, which user space reads too.
-pub fn info() -> vabi::ClockInfo {
+pub fn info() -> abi::ClockInfo {
     let realtime = (BOOT_EPOCH_SECS.load(Ordering::Relaxed).max(0) as u64) * 1_000_000_000;
     let offset = UTC_OFFSET_S.load(Ordering::Relaxed) * 1_000_000_000;
-    vabi::ClockInfo {
+    abi::ClockInfo {
         ticks_at_zero: TICKS_AT_ZERO.load(Ordering::Relaxed),
         ns_per_tick: NS_PER_TICK_FP.load(Ordering::Relaxed),
         ticks_hz: TICKS_HZ.load(Ordering::Relaxed),

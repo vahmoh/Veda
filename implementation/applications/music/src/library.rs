@@ -5,9 +5,9 @@
 //! opened explicitly), with metadata read from the first and last few
 //! kilobytes of each file.
 
-use vaudio::source;
-use vfiles::path::{HOME, join};
-use vproto::fs::{open_flags, vfs};
+use audio::source;
+use files::path::{HOME, join};
+use proto::fs::{open_flags, vfs};
 
 /// Where the library lives: `~/Music`.
 pub fn music_dir() -> String {
@@ -49,7 +49,7 @@ pub fn hash(s: &str) -> u64 {
 fn read_range(vfs: &vfs::Client, fd: u32, offset: u64, len: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     while out.len() < len as usize {
-        let want = (len as usize - out.len()).min(vproto::fs::MAX_IO as usize) as u32;
+        let want = (len as usize - out.len()).min(proto::fs::MAX_IO as usize) as u32;
         let chunk = vfs.read(fd, offset + out.len() as u64, want).ok()?.ok()?;
         if chunk.0.is_empty() {
             break;
@@ -73,7 +73,7 @@ pub fn probe(vfs: &vfs::Client, path: &str) -> Option<Track> {
     let (head, tail) = (head?, tail?);
     let p = source::probe(&head, &tail, stat.size).ok()?;
     let t = p.tags;
-    let title = if t.title.is_empty() { vfiles::path::file_stem(path).to_string() } else { t.title.clone() };
+    let title = if t.title.is_empty() { files::path::file_stem(path).to_string() } else { t.title.clone() };
     let seed = hash(&title);
     Some(Track {
         art: t.get("art").map(|s| s.to_string()),
@@ -111,7 +111,7 @@ pub fn listing(vfs: &vfs::Client) -> Vec<Entry> {
     let Ok(Ok(entries)) = vfs.read_dir(music_dir()) else { return Vec::new() };
     entries
         .into_iter()
-        .filter(|e| !e.is_dir && vfiles::kind::is_playable_audio(&e.name))
+        .filter(|e| !e.is_dir && files::kind::is_playable_audio(&e.name))
         .map(|e| Entry { name: e.name, size: e.size, modified: e.modified })
         .collect()
 }

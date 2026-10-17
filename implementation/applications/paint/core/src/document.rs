@@ -12,8 +12,8 @@
 
 use alloc::string::String;
 
-use vgfx::{Bitmap, Canvas, Color, Filter, Rect, Text};
-use vimage::Format;
+use gfx::{Bitmap, Canvas, Color, Filter, Rect, Text};
+use image::Format;
 
 use crate::brush::{self, Stroke, Tip, union};
 use crate::color::{premultiplied, unpremultiply};

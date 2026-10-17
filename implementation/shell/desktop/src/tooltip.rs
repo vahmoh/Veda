@@ -5,10 +5,10 @@
 //! so a tooltip is a small window of the notification layer (which never
 //! takes the keyboard focus) placed just above the hovered button.
 
-use vgfx::{Align, Color, Rect};
-use vproto::display::{WindowKind, WindowSpec};
-use vui::window::Display;
-use vui::{Font, Host};
+use gfx::{Align, Color, Rect};
+use proto::display::{WindowKind, WindowSpec};
+use ui::window::Display;
+use ui::{Font, Host};
 
 use crate::taskbar;
 

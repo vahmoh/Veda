@@ -158,13 +158,13 @@ Veda's renderer, on softpipe, on Mesa's virgl over `virgl_test_server`
 hand:
 
 ```bash
-VGL_TEST_BACKEND=virgl cargo test -p vgl                      # on the host's GPU (desktop OpenGL)
-VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on OpenGL ES
-VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
-VGL_TEST_BACKEND=gallium cargo test -p vgl                    # through Veda's renderer on softpipe
-VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl     # ... with depth kept as on iris
-VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p interceptor-game   # ... on an Intel GPU
-VGL_GALLIUM_DEVICE=iris cargo test -p interceptor-game        # Interceptor's game: world, drivers, sounds, pictures
+GL_TEST_BACKEND=virgl cargo test -p gl                      # on the host's GPU (desktop OpenGL)
+GL_TEST_HOST=gles GL_TEST_BACKEND=virgl cargo test -p gl   # ... on OpenGL ES
+GL_TEST_RENDERNODE=/dev/dri/renderD129 GL_TEST_BACKEND=virgl cargo test -p gl   # ... on another GPU
+GL_TEST_BACKEND=gallium cargo test -p gl                    # through Veda's renderer on softpipe
+VR_DEPTH_LOW=1 GL_TEST_BACKEND=gallium cargo test -p gl     # ... with depth kept as on iris
+GL_TEST_BACKEND=gallium GL_GALLIUM_DEVICE=iris cargo test -p gl -p interceptor-game   # ... on an Intel GPU
+GL_GALLIUM_DEVICE=iris cargo test -p interceptor-game        # Interceptor's game: world, drivers, sounds, pictures
 ```
 
 Interceptor's game tests save pictures and sounds to the directory
@@ -250,7 +250,7 @@ from this machine.
 
 | Source | Installed as |
 |--------|--------------|
-| The programs in `PROGRAMS` (`orchestration/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `vrt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
+| The programs in `PROGRAMS` (`orchestration/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
@@ -275,14 +275,14 @@ libraries ([Rust on Veda](RUST.md)).
 1. Create a crate in `implementation/applications/<name>`, and add it to
    the workspace's `members` in `Cargo.toml` and to `PROGRAMS` in
    `orchestration/src/components.rs`, as `Program::std("<name>")`.
-2. Its `Cargo.toml` depends on `vrt`, `vabi`, `vui` and others as needed.
+2. Its `Cargo.toml` depends on `rt`, `abi`, `ui` and others as needed.
 3. Write `src/main.rs`:
 
    ```rust
    struct MyApp { /* state */ }
 
-   impl vui::App for MyApp {
-       fn update(&mut self, ui: &mut vui::Ui) {
+   impl ui::App for MyApp {
+       fn update(&mut self, ui: &mut ui::Ui) {
            // Draw and handle input for one frame. ui.rect() is the client area.
            let r = ui.rect().centered(200, 40);
            if ui.primary_button(r, "Hello") { /* ... */ }
@@ -290,14 +290,14 @@ libraries ([Rust on Veda](RUST.md)).
    }
 
    fn main() {
-       let mut spec = vui::WindowSpec::new("My App", 800, 560);
+       let mut spec = ui::WindowSpec::new("My App", 800, 560);
        spec.app_id = "myapp".into();
-       std::process::exit(vui::run(spec, MyApp { }));
+       std::process::exit(ui::run(spec, MyApp { }));
    }
    ```
 
 4. Add a manifest for the start menu, `<name>.app` beside `Cargo.toml`.
-   `icon` names a vector icon (`vui::Icon::by_name`); `pinned=true` puts
+   `icon` names a vector icon (`ui::Icon::by_name`); `pinned=true` puts
    the application in the start menu's pinned grid, and `taskbar=true`
    keeps it on the taskbar when it is not running:
 
@@ -314,54 +314,54 @@ libraries ([Rust on Veda](RUST.md)).
 5. Make it agent-compatible with `App::agent_info` (a summary, and the
    actions with their risk), `App::agent_state` (what the window shows, as
    JSON) and `App::agent_invoke` (runs an action through the keyboard's and
-   mouse's code); `vui::run` registers it with the agent. See
+   mouse's code); `ui::run` registers it with the agent. See
    [The agent](AGENT.md#making-an-application-agent-compatible).
 
-### The `vui` toolkit
+### The `ui` toolkit
 
 * **Immediate mode.** Widgets take explicit `Rect`s and return their
   interaction (`button` → `bool`, `text_input` → `TextInputResponse`,
   `list` → `ListResponse`, `menu_bar` → the chosen item, ...);
-  `vgfx::Rect` has `split_top/left/right/bottom`, `inset` and `centered`.
-* **Drawing and input.** `ui.canvas` is a `vgfx::Canvas` for custom
+  `gfx::Rect` has `split_top/left/right/bottom`, `inset` and `centered`.
+* **Drawing and input.** `ui.canvas` is a `gfx::Canvas` for custom
   drawing, `ui.ctx.text` draws text, and `ui.input` holds the frame's
-  pointer, buttons, keys (`vproto::input::keys`), typed text and scroll.
+  pointer, buttons, keys (`proto::input::keys`), typed text and scroll.
 * **Frames** are drawn when events arrive; `ui.repaint_at(deadline_ns)` or
   `ui.repaint()` asks for more.
 * **The window.** `ui.set_title`, `ui.window_state()`,
   `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
   (to the front), `ui.close_window()`.
 * **Long-running work** must not block `update`: give it to a
-  `std::thread` (which sets its priority with `vrt::thread::set_priority`)
+  `std::thread` (which sets its priority with `rt::thread::set_priority`)
   through a `std::sync::mpsc` channel, and have it signal an `Event` the
   window waits on (`App::wait_handles`), as
   `implementation/applications/paint/src/files.rs` does.
 * **Files.** Small ones of the application's own (settings, state) go
   through `std::fs` and `apps_common::store` (reads within a limit,
   replacement in one step). Pictures, music and other large ones go
-  through `vfiles::Fs::connect()` (whole files in shared memory, bounded
+  through `files::Fs::connect()` (whole files in shared memory, bounded
   or mapped; listings of any size; trees copied, moved and removed with
   their progress; a deadline on every call), or the protocol,
-  `vproto::vfs::Client` on `vproto::connect(vproto::vfs::NAME)`
+  `proto::vfs::Client` on `proto::connect(proto::vfs::NAME)`
   (`read_file` returns a VMO and a length).
-* **Other programs** start through `vproto::launcher::Client` (`launch`,
+* **Other programs** start through `proto::launcher::Client` (`launch`,
   `launch_app`).
 * **Without the toolkit,** games and other full-screen renderers use
-  `vui::window::Window`: `begin_frame()` returns a `Canvas` for the back
+  `ui::window::Window`: `begin_frame()` returns a `Canvas` for the back
   buffer, `present()` shows it, `poll_events()` returns `WindowEvent`s,
   and `can_draw()` says when the compositor is ready for the next frame;
   after `triple_buffer()`, a frame may be drawn while the last is still on
   its way, and presented once `can_draw()` says so.
 
-### Programs on `vrt` alone
+### Programs on `rt` alone
 
 Services and drivers that the standard library stands on, that drive
-hardware or that must answer in time are `no_std` programs on `vrt`
-(`Program::native`). Their `Cargo.toml` has `vbuild` as a build
-dependency, `build.rs` is `fn main() { vbuild::user_program(); }`, and
+hardware or that must answer in time are `no_std` programs on `rt`
+(`Program::native`). Their `Cargo.toml` has `build` as a build
+dependency, `build.rs` is `fn main() { build::user_program(); }`, and
 `src/main.rs` starts with `#![no_std]`, `#![no_main]`,
-`extern crate alloc;` and `vrt::entry!(main);` (a `main` returning `()`,
-an `i32` or a `Result`). They log with `vrt::println!`.
+`extern crate alloc;` and `rt::entry!(main);` (a `main` returning `()`,
+an `i32` or a `Result`). They log with `rt::println!`.
 
 ### Programs in C and on Rust's standard library
 
@@ -380,10 +380,10 @@ target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C l
 
 ### Videos and its decoder
 
-Videos (`implementation/applications/videos`) is a `vui` application;
+Videos (`implementation/applications/videos`) is a `ui` application;
 `videos/core`, tested on the host, has its playback, clock, pacing,
 choice of pictures, skipping, layout and memory, and the audio output that
-outlives the audio service, which Music shares. It speaks `vproto::media`
+outlives the audio service, which Music shares. It speaks `proto::media`
 with its decoder (a heartbeat, a frame pool, a sound ring).
 
 The decoder, `implementation/services/mediadec`, is a C program: its Rust

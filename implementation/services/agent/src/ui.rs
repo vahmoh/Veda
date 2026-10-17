@@ -5,9 +5,9 @@
 //! (status, approval requests) on a channel, and a shared page of live
 //! voice levels that the shell's animation reads every frame.
 
-use vproto::agent::{AGENT_EVENT, AgentError, AgentEvent, Live, UiLink};
-use vrt::object::{Channel, Vmo};
-use vrt::vm::Mapping;
+use proto::agent::{AGENT_EVENT, AgentError, AgentEvent, Live, UiLink};
+use rt::object::{Channel, Vmo};
+use rt::vm::Mapping;
 
 /// The link to the shell's interface of the agent.
 pub struct Ui {
@@ -22,13 +22,13 @@ impl Ui {
         let vmo = Vmo::create(4096).map_err(|_| AgentError::Busy)?;
         let peer = Vmo::from_handle(vmo.0.duplicate(None).map_err(|_| AgentError::Busy)?);
         let map =
-            Mapping::new(vmo, 4096, vabi::map_flags::READ | vabi::map_flags::WRITE).map_err(|_| AgentError::Busy)?;
+            Mapping::new(vmo, 4096, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| AgentError::Busy)?;
         Ok((Ui { events: ours, map }, UiLink { events: theirs, live: peer }))
     }
 
     /// Sends an event; `false` once the shell has gone away.
     pub fn send(&self, ev: AgentEvent) -> bool {
-        vipc::send_event(&self.events, AGENT_EVENT, ev).is_ok()
+        ipc::send_event(&self.events, AGENT_EVENT, ev).is_ok()
     }
 
     /// The live values.

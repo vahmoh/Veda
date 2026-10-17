@@ -19,10 +19,10 @@
 
 use alloc::vec::Vec;
 
-use vipc::Bytes;
-use vproto::block::{self as blk, block};
-use vproto::fs::FsError;
-use vrt::println;
+use ipc::Bytes;
+use proto::block::{self as blk, block};
+use proto::fs::FsError;
+use rt::println;
 
 use vfs_core::snapshot::{self, Samples, Sink, Source};
 use vfs_core::tree::Tree;
@@ -69,18 +69,18 @@ impl Store {
     /// Returns `None` if there is no usable home disk.
     pub fn connect() -> Option<Store> {
         let name = blk::service_name(HOME_DISK_SERIAL);
-        let start = vrt::time::now_ns();
+        let start = rt::time::now_ns();
         loop {
-            let names = vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
+            let names = proto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
             if names.contains(&name) {
                 break;
             }
-            if vrt::time::now_ns() - start > ATTACH_TIMEOUT_NS {
+            if rt::time::now_ns() - start > ATTACH_TIMEOUT_NS {
                 return None;
             }
-            vrt::time::sleep(vrt::time::Duration::from_millis(20));
+            rt::time::sleep(rt::time::Duration::from_millis(20));
         }
-        let disk = block::Client::new(vproto::connect(&name).ok()?);
+        let disk = block::Client::new(proto::connect(&name).ok()?);
         disk.set_timeout(DISK_TIMEOUT_NS);
         let info = disk.info().ok()?;
         if info.read_only || info.sector_size != SECTOR as u32 || info.sectors < 2 * (SLOT0 + 64) {

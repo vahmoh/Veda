@@ -7,12 +7,12 @@
 //! * the crates with host unit tests, for the host, their tests too;
 //! * the loader, the kernel and the POSIX layer, for their freestanding
 //!   targets;
-//! * the programs on `vrt` alone, for the user target;
+//! * the programs on `rt` alone, for the user target;
 //! * the programs on the standard library, for Veda's own target, with the
 //!   toolchain's Clippy, which knows it (the build machine's does not).
 //!
 //! Clippy checks the workspace's crates a program builds with as well, as
-//! they build for it: a library used both by programs on `vrt` and by
+//! they build for it: a library used both by programs on `rt` and by
 //! programs on the standard library is checked as each has it.
 
 use crate::arch::{BARE_TARGET, KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
@@ -36,14 +36,14 @@ pub fn command(args: &[String]) -> Result {
             util::cargo().args(["clippy", "--quiet", "--all-targets", "--package", package]).args(DENY_WARNINGS),
         )?;
     }
-    for (package, target) in [("vboot", UEFI_TARGET), ("vkernel", KERNEL_TARGET), ("vposix", BARE_TARGET)] {
+    for (package, target) in [("bootloader", UEFI_TARGET), ("kernel", KERNEL_TARGET), ("posix", BARE_TARGET)] {
         util::status("Checking", format!("{package} ({target})"));
         util::run(
             util::cargo().args(["clippy", "--quiet", "--package", package, "--target", target]).args(DENY_WARNINGS),
         )?;
     }
     let (on_std, native): (Vec<&Program>, Vec<&Program>) = PROGRAMS.iter().partition(|p| p.std);
-    util::status("Checking", format!("{} programs on vrt ({USER_TARGET})", native.len()));
+    util::status("Checking", format!("{} programs on rt ({USER_TARGET})", native.len()));
     let mut cmd = util::cargo();
     cmd.args(["clippy", "--quiet", "--target", USER_TARGET]);
     for p in &native {

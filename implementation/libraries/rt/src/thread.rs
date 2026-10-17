@@ -29,9 +29,9 @@ use alloc::sync::Arc;
 #[cfg(not(any(veda_guest, target_os = "veda")))]
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vabi::{Error, nr};
+use abi::{Error, nr};
 #[cfg(not(any(veda_guest, target_os = "veda")))]
-use vabi::{map_flags, signals};
+use abi::{map_flags, signals};
 
 #[cfg(not(any(veda_guest, target_os = "veda")))]
 use crate::object::{Handle, Thread};
@@ -120,7 +120,7 @@ pub struct JoinHandle<T> {
 impl<T> JoinHandle<T> {
     /// Waits for the thread to finish and returns its result.
     pub fn join(mut self) -> Result<T, Error> {
-        self.thread.wait(signals::TERMINATED, vabi::DEADLINE_INFINITE)?;
+        self.thread.wait(signals::TERMINATED, abi::DEADLINE_INFINITE)?;
         // The thread has ended, so its stack can go.
         if let Some(stack) = self.stack.take() {
             // SAFETY: the thread no longer runs on it.
@@ -147,7 +147,7 @@ impl<T> Drop for JoinHandle<T> {
         }
         // It has finished, and ends without touching the stack again: free
         // it once it has.
-        if self.thread.wait(signals::TERMINATED, vabi::DEADLINE_INFINITE).is_ok() {
+        if self.thread.wait(signals::TERMINATED, abi::DEADLINE_INFINITE).is_ok() {
             // SAFETY: the thread no longer runs on it.
             unsafe { stack.free() };
         }
@@ -217,7 +217,7 @@ impl Builder {
         self
     }
 
-    /// The thread's scheduling priority (see `vabi::priority`).
+    /// The thread's scheduling priority (see `abi::priority`).
     pub fn priority(mut self, p: usize) -> Builder {
         self.priority = Some(p);
         self
@@ -230,7 +230,7 @@ impl Builder {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let size = self.stack_size.checked_next_multiple_of(vabi::PAGE_SIZE).ok_or(Error::NoMemory)?;
+        let size = self.stack_size.checked_next_multiple_of(abi::PAGE_SIZE).ok_or(Error::NoMemory)?;
         let stack = Stack::new(size)?;
         let thread = match call(nr::THREAD_CREATE, [0, self.name.as_ptr() as usize, self.name.len(), 0, 0, 0]) {
             // SAFETY: the kernel just created this handle for us.
@@ -257,7 +257,7 @@ impl Builder {
             detached
         });
         let arg = Box::into_raw(Box::new(Start { body, stack })) as usize;
-        let sp = vabi::entry_stack_pointer(stack.base + stack.len);
+        let sp = abi::entry_stack_pointer(stack.base + stack.len);
         let started = started.and_then(|_| {
             call(
                 nr::THREAD_START,
@@ -309,10 +309,10 @@ where
     Builder::new().spawn(f).expect("failed to spawn thread")
 }
 
-/// Sets the calling thread's scheduling priority (see `vabi::priority`):
+/// Sets the calling thread's scheduling priority (see `abi::priority`):
 /// for a thread the standard library started, which [`Builder`] did not.
 pub fn set_priority(priority: usize) -> Result<(), Error> {
-    call(nr::THREAD_SET_PRIORITY, [vabi::INVALID_HANDLE as usize, priority, 0, 0, 0, 0]).map(|_| ())
+    call(nr::THREAD_SET_PRIORITY, [abi::INVALID_HANDLE as usize, priority, 0, 0, 0, 0]).map(|_| ())
 }
 
 /// Gives up the rest of this time slice.

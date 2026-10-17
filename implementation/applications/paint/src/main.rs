@@ -19,16 +19,16 @@ mod toolbar;
 
 use std::path::Path;
 
+use abi::RawHandle;
+use gfx::{Align, Bitmap, Color, Rect};
 use paint_core::Document;
 use paint_core::codec::{self, format_of};
 use paint_core::effects::Effect;
 use paint_core::settings::{Settings, Tool};
 use paint_core::view::MIN_ZOOM;
-use vabi::RawHandle;
-use vgfx::{Align, Bitmap, Color, Rect};
-use vproto::display::modifiers;
-use vproto::input::keys;
-use vui::{App, FileDialog, FileDialogResult, Font, Icon, Menu, MenuItem, Ui, WindowSpec};
+use proto::display::modifiers;
+use proto::input::keys;
+use ui::{App, FileDialog, FileDialogResult, Font, Icon, Menu, MenuItem, Ui, WindowSpec};
 
 use canvas::Canvas;
 use colors::{ColorDialog, Target};
@@ -98,7 +98,7 @@ const SHORTCUTS: [(&str, &str); 20] = [
 /// What the memory allows: the history's budget (bytes) and the largest picture opened
 /// (pixels), from the machine's memory.
 fn limits() -> (usize, u64) {
-    let total = vrt::object::system_info().map(|i| i.total_memory).unwrap_or(1 << 30);
+    let total = rt::object::system_info().map(|i| i.total_memory).unwrap_or(1 << 30);
     let budget = (total / 8).clamp(32 << 20, 512 << 20) as usize;
     let pixels = (total / 24).clamp(4 << 20, 64 << 20);
     (budget, pixels)
@@ -111,7 +111,7 @@ struct PaintApp {
     files: Option<Files>,
     /// Pictures the voice agent opens and saves while it waits (the window's own go through
     /// [`files`]).
-    fs: vfiles::Fs,
+    fs: ::files::Fs,
     modal: Option<Modal>,
     /// The picture copied (the window system's clipboard holds text only).
     clipboard: Option<Bitmap>,
@@ -142,7 +142,7 @@ impl PaintApp {
             settings,
             canvas: Canvas::new(),
             files: Files::start(),
-            fs: vfiles::Fs::connect(),
+            fs: ::files::Fs::connect(),
             modal: None,
             clipboard: None,
             toast: None,
@@ -188,11 +188,11 @@ impl PaintApp {
 
     /// The picture's name, as the title and dialogs say it.
     fn title(&self) -> String {
-        self.doc.path.as_deref().map_or_else(|| String::from("Untitled"), |p| String::from(vfiles::path::file_name(p)))
+        self.doc.path.as_deref().map_or_else(|| String::from("Untitled"), |p| String::from(::files::path::file_name(p)))
     }
 
     fn dir(&self) -> String {
-        self.doc.path.as_deref().map_or_else(|| String::from(PICTURES), |p| String::from(vfiles::path::parent(p)))
+        self.doc.path.as_deref().map_or_else(|| String::from(PICTURES), |p| String::from(::files::path::parent(p)))
     }
 
     // ---- files ---------------------------------------------------------------------
@@ -223,7 +223,7 @@ impl PaintApp {
         match &self.files {
             Some(f) => {
                 f.open(path, self.max_pixels);
-                self.busy = Some(format!("Opening {}", vfiles::path::file_name(path)));
+                self.busy = Some(format!("Opening {}", ::files::path::file_name(path)));
             }
             None => self.message("Couldn't open the picture", "Paint could not start its file worker.".into()),
         }
@@ -256,14 +256,14 @@ impl PaintApp {
     fn save_to(&mut self, path: &str, then: Then) {
         let (path, format) = match format_of(path) {
             Some(f) => (String::from(path), f),
-            None => (format!("{path}.png"), vimage::Format::Png),
+            None => (format!("{path}.png"), image::Format::Png),
         };
         let Some(files) = &self.files else {
             return self.message("Couldn't save the picture", "Paint could not start its file worker.".into());
         };
         let (picture, version) = self.doc.snapshot();
         files.save(&path, picture, format, version);
-        self.busy = Some(format!("Saving {}", vfiles::path::file_name(&path)));
+        self.busy = Some(format!("Saving {}", ::files::path::file_name(&path)));
         self.after_save = then;
     }
 
@@ -283,12 +283,12 @@ impl PaintApp {
                         }
                     }
                     Err(e) => self
-                        .message("Couldn't open the picture", format!("{}: {e}.", vfiles::path::display_path(&path))),
+                        .message("Couldn't open the picture", format!("{}: {e}.", ::files::path::display_path(&path))),
                 },
                 Done::Saved { path, format, version, result } => match result {
                     Ok(_) => {
                         self.doc.saved_version(version, &path, format);
-                        self.show_toast(&format!("Saved {}", vfiles::path::file_name(&path)), now);
+                        self.show_toast(&format!("Saved {}", ::files::path::file_name(&path)), now);
                         let then = core::mem::replace(&mut self.after_save, Then::Nothing);
                         self.after(then);
                     }
@@ -296,7 +296,7 @@ impl PaintApp {
                         self.after_save = Then::Nothing;
                         self.message(
                             "Couldn't save the picture",
-                            format!("{}: {e}.", vfiles::path::display_path(&path)),
+                            format!("{}: {e}.", ::files::path::display_path(&path)),
                         );
                     }
                 },
@@ -529,7 +529,7 @@ impl PaintApp {
     // ---- keyboard ------------------------------------------------------------------
 
     /// Typing into the text not yet placed. Returns whether the key was the text's.
-    fn text_key(&mut self, ui: &mut Ui, k: &vui::ui::KeyPress) -> bool {
+    fn text_key(&mut self, ui: &mut Ui, k: &ui::ui::KeyPress) -> bool {
         let Some(t) = self.doc.text() else { return false };
         let ctrl = k.modifiers & modifiers::CTRL != 0;
         let mut t = t.clone();
@@ -931,7 +931,7 @@ impl App for PaintApp {
     }
 
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
-        self.files.as_ref().map(|f| vec![(f.event_handle(), vabi::signals::SIGNALED)]).unwrap_or_default()
+        self.files.as_ref().map(|f| vec![(f.event_handle(), abi::signals::SIGNALED)]).unwrap_or_default()
     }
 
     fn close_requested(&mut self) -> bool {
@@ -949,15 +949,15 @@ impl App for PaintApp {
         true
     }
 
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         agent::invoke(self, action, args)
     }
 }
@@ -973,11 +973,11 @@ fn window_size(w: u32, h: u32) -> (u32, u32) {
 fn main() {
     let path = std::env::args().nth(1);
     let app = PaintApp::new(path.as_deref());
-    let screen = vui::window::connect().ok().and_then(|d| d.screen_info().ok());
+    let screen = ui::window::connect().ok().and_then(|d| d.screen_info().ok());
     let (w, h) = screen.map_or((1180, 680), |s| window_size(s.width, s.height));
     let mut spec = WindowSpec::new("Paint", w, h);
     spec.min_width = 640;
     spec.min_height = 460;
     spec.app_id = "paint".into();
-    std::process::exit(vui::run(spec, app));
+    std::process::exit(ui::run(spec, app));
 }

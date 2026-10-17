@@ -28,7 +28,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
         nodename: field("veda"),
         release: field(RELEASE),
         version: field(&version),
-        machine: field(vrt::arch::MACHINE),
+        machine: field(rt::arch::MACHINE),
         domainname: field("(none)"),
     };
     // SAFETY: the program passed a struct utsname.
@@ -37,7 +37,7 @@ pub unsafe fn uname(buf: usize) -> SysResult {
 }
 
 pub unsafe fn sysinfo(buf: usize) -> SysResult {
-    let i = vrt::object::system_info().unwrap_or_default();
+    let i = rt::object::system_info().unwrap_or_default();
     let s = Sysinfo {
         uptime: (i.uptime_ns / 1_000_000_000) as i64,
         totalram: i.total_memory,
@@ -57,7 +57,7 @@ fn limit(resource: u32) -> Result<Rlimit, isize> {
     let unlimited = Rlimit { cur: rlimit::INFINITY, max: rlimit::INFINITY };
     Ok(match resource {
         rlimit::STACK => {
-            let s = vrt::process::POSIX_STACK as u64;
+            let s = rt::process::POSIX_STACK as u64;
             Rlimit { cur: s, max: s }
         }
         rlimit::NOFILE => Rlimit { cur: fd::MAX_FDS as u64, max: fd::MAX_FDS as u64 },
@@ -99,13 +99,13 @@ pub unsafe fn getrandom(buf: usize, len: usize, flags: u32) -> SysResult {
     }
     // SAFETY: the program passed `len` bytes.
     let out = unsafe { user::slice_mut(buf, len)? };
-    vrt::object::try_random_bytes(out).map_err(error::kernel)?;
+    rt::object::try_random_bytes(out).map_err(error::kernel)?;
     Ok(len)
 }
 
 /// `sched_getaffinity`: every processor.
 pub unsafe fn sched_getaffinity(size: usize, mask: usize) -> SysResult {
-    let cpus = vrt::object::system_info().map_or(1, |i| i.cpu_count.max(1)) as usize;
+    let cpus = rt::object::system_info().map_or(1, |i| i.cpu_count.max(1)) as usize;
     let bytes = cpus.div_ceil(64) * 8;
     if size < bytes {
         return Err(EINVAL);
@@ -131,7 +131,7 @@ pub unsafe fn prctl(option: u32, arg: usize) -> SysResult {
     match option {
         prctl::SET_NAME => Ok(0),
         prctl::GET_NAME => {
-            let info = vrt::object::process_self_info().unwrap_or_default();
+            let info = rt::object::process_self_info().unwrap_or_default();
             let name = info.name();
             let mut out = [0u8; 16];
             let n = name.len().min(15);

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! System call dispatch. See `vabi` for the calling convention and the
+//! System call dispatch. See `abi` for the calling convention and the
 //! meaning of each call.
 
 mod hv;
@@ -13,7 +13,7 @@ mod vm;
 
 use alloc::sync::Arc;
 
-use vabi::{Error, RawHandle, Rights, nr};
+use abi::{Error, RawHandle, Rights, nr};
 
 use crate::arch::trap::TrapFrame;
 use crate::object::KObject;
@@ -139,7 +139,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
 
 /// Converts an ABI deadline into an optional blocking deadline.
 fn deadline(d: u64) -> Option<u64> {
-    if d == vabi::DEADLINE_INFINITE { None } else { Some(d) }
+    if d == abi::DEADLINE_INFINITE { None } else { Some(d) }
 }
 
 pub fn current_process() -> Result<Arc<Process>, Error> {
@@ -198,7 +198,7 @@ typed_getter!(get_port, Port, crate::ipc::port::Port);
 
 /// A process handle argument where 0 means "the calling process".
 fn target_process(raw: RawHandle) -> Result<Arc<Process>, Error> {
-    if raw == vabi::INVALID_HANDLE { current_process() } else { get_process(raw, Rights::MANAGE) }
+    if raw == abi::INVALID_HANDLE { current_process() } else { get_process(raw, Rights::MANAGE) }
 }
 
 /// Reads a string argument (UTF-8, bounded).

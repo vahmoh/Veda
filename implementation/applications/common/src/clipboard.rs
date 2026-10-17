@@ -9,8 +9,8 @@
 
 use core::fmt;
 
-use vproto::display::{CLIPBOARD_MAX, DisplayError};
-use vui::Ui;
+use proto::display::{CLIPBOARD_MAX, DisplayError};
+use ui::Ui;
 
 /// Why text did not get to the clipboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub fn copy(ui: &mut Ui, text: &str) -> Result<(), ClipboardError> {
     }
     match ui.ctx.display.set_clipboard(text.into()) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(DisplayError::Invalid)) | Err(vipc::IpcError::TooLarge) => Err(ClipboardError::TooLarge),
+        Ok(Err(DisplayError::Invalid)) | Err(ipc::IpcError::TooLarge) => Err(ClipboardError::TooLarge),
         Ok(Err(DisplayError::Denied)) => Err(ClipboardError::NotFocused),
         Ok(Err(_)) | Err(_) => Err(ClipboardError::Unavailable),
     }

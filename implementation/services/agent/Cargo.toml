@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "agent"
+name = "agentd"
 description = "The voice agent that lives in Veda: conversations through Deepgram, actions on the system and its applications, memory and approvals"
 version.workspace = true
 edition.workspace = true
@@ -10,20 +10,21 @@ license.workspace = true
 
 [[bin]]
 name = "agent"
+path = "src/main.rs"
 test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
 serde_json = { workspace = true }
-vagent = { workspace = true }
-vweb = { workspace = true }
-vnet = { workspace = true }
-vfiles = { workspace = true }
-vaudio = { workspace = true }
+agent = { workspace = true }
+web = { workspace = true }
+net = { workspace = true }
+files = { workspace = true }
+audio = { workspace = true }
 
 
 [lints]

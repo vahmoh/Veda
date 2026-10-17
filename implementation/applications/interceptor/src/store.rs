@@ -6,8 +6,8 @@
 //! [`Save::to_text`]), read at start and written whenever they change.
 
 use interceptor_game::career::Save;
-use vproto::fs::vfs;
-use vrt::object::Vmo;
+use proto::fs::vfs;
+use rt::object::Vmo;
 
 const DIR: &str = "/home/user/.config/interceptor";
 const PATH: &str = "/home/user/.config/interceptor/save";
@@ -24,7 +24,7 @@ pub struct Store {
 
 impl Store {
     pub fn new() -> Store {
-        Store { vfs: vproto::connect(vfs::NAME).ok().map(vfs::Client::new), made: false }
+        Store { vfs: proto::connect(vfs::NAME).ok().map(vfs::Client::new), made: false }
     }
 
     /// The save, or a new one where there is none (or it cannot be read,

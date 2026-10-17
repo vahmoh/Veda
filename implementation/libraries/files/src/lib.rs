@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vfiles` — working with files in Veda applications.
+//! `files` — working with files in Veda applications.
 //!
 //! * [`path`]: absolute, `/`-separated paths as the VFS uses them —
 //!   normalising, resolving against a working directory and `~`, joining and

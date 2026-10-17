@@ -4,10 +4,10 @@
 //! The icon and colour of a file's type, the same in Files and on the
 //! desktop.
 
-use vfiles::kind::{FileKind, file_kind};
-use vfiles::path::extension;
-use vgfx::Color;
-use vui::Icon;
+use files::kind::{FileKind, file_kind};
+use files::path::extension;
+use gfx::Color;
+use ui::Icon;
 
 /// Folders.
 pub const FOLDER: Color = Color::hex(0xF5B43C);
@@ -19,7 +19,7 @@ const PROGRAM: Color = Color::hex(0x4CC38A);
 const OTHER: Color = Color::hex(0x9A9AA8);
 
 /// The line icon of an item called `name` (`program` as for
-/// [`vfiles::kind::file_kind`]).
+/// [`files::kind::file_kind`]).
 pub fn kind_icon(name: &str, is_dir: bool, program: bool) -> Icon {
     if is_dir {
         return Icon::Folder;

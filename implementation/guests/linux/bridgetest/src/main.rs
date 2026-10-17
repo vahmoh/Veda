@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `bridgetest` — checks the driver VM's bridge from inside the Linux
-//! guest: Veda's objects, used by a Linux program through `vrt` exactly as
+//! guest: Veda's objects, used by a Linux program through `rt` exactly as
 //! a Veda program uses them.
 //!
 //! It reads the registry the guest sees, sends a message that carries a
@@ -14,17 +14,17 @@
 
 use std::time::Instant;
 
+use abi::signals;
 use guest_sys::checks::Checks;
-use vabi::signals;
-use vrt::object::{Channel, Event, Vmo};
-use vrt::vm::Mapping;
+use rt::object::{Channel, Event, Vmo};
+use rt::vm::Mapping;
 
 fn main() {
     let mut c = Checks::new("bridgetest");
 
     // The registry: Veda's, narrowed to what drivers attach to. (Linux
     // may be up before Veda's audio service.)
-    let list = || vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
+    let list = || proto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
     let mut names = list();
     for _ in 0..100 {
         if names.iter().any(|n| n == "audiodev") {
@@ -38,7 +38,7 @@ fn main() {
     c.check("the registry hides the file system", !names.iter().any(|n| n == "vfs"));
     let denied = Channel::create()
         .ok()
-        .and_then(|(_, server)| vproto::with_registry(|r| r.connect("vfs".into(), server)).ok())
+        .and_then(|(_, server)| proto::with_registry(|r| r.connect("vfs".into(), server)).ok())
         .and_then(|r| r.ok());
     c.check("the file system cannot be reached", matches!(denied, Some(Err(_))));
 
@@ -77,12 +77,12 @@ fn main() {
     let _ = peer.signal();
     c.check("a signaled event is seen at once", event.wait(signals::SIGNALED, 0).is_ok());
     let _ = event.clear();
-    let started = vrt::time::now_ns();
+    let started = rt::time::now_ns();
     let timed_out = event.wait(signals::SIGNALED, started + 50_000_000);
-    let waited = (vrt::time::now_ns() - started) / 1_000_000;
+    let waited = (rt::time::now_ns() - started) / 1_000_000;
     c.check(
         &format!("a wait ends at its deadline ({waited} ms of 50)"),
-        timed_out == Err(vabi::Error::TimedOut) && (45..250).contains(&waited),
+        timed_out == Err(abi::Error::TimedOut) && (45..250).contains(&waited),
     );
 
     // Another thread wakes a wait through a channel.
@@ -92,7 +92,7 @@ fn main() {
         let _ = x.write(b"wake", Vec::new());
         x
     });
-    let woke = y.read_blocking(vabi::DEADLINE_INFINITE);
+    let woke = y.read_blocking(abi::DEADLINE_INFINITE);
     if let Err(e) = &woke {
         println!("bridgetest: reading the message: {e}");
     }
@@ -108,7 +108,7 @@ fn main() {
     const ROUNDS: u32 = 200;
     let echo = std::thread::spawn(move || {
         for _ in 0..ROUNDS {
-            if ping2.wait(signals::SIGNALED, vabi::DEADLINE_INFINITE).is_err() {
+            if ping2.wait(signals::SIGNALED, abi::DEADLINE_INFINITE).is_err() {
                 return;
             }
             let _ = ping2.clear();
@@ -119,7 +119,7 @@ fn main() {
     let mut round_trips = 0;
     for _ in 0..ROUNDS {
         let _ = ping.signal();
-        if pong.wait(signals::SIGNALED, vabi::DEADLINE_INFINITE).is_err() {
+        if pong.wait(signals::SIGNALED, abi::DEADLINE_INFINITE).is_err() {
             break;
         }
         let _ = pong.clear();
@@ -131,7 +131,7 @@ fn main() {
     c.check("signals go back and forth between two threads", round_trips == ROUNDS);
 
     // Veda's clock, which the guest reads itself.
-    let (t0, t1) = (vrt::time::now_ns(), vrt::time::now_ns());
+    let (t0, t1) = (rt::time::now_ns(), rt::time::now_ns());
     c.check("Veda's clock runs", t0 > 0 && t1 >= t0);
     c.finish();
 }

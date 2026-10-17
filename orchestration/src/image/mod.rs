@@ -37,7 +37,7 @@ impl<'a> EspContents<'a> {
     fn files(&self) -> [(&'static str, &'a [u8]); 4] {
         [
             (crate::arch::UEFI_BOOT_PATH, self.bootloader),
-            ("VEDA/VKERNEL.ELF", self.kernel),
+            ("VEDA/KERNEL.ELF", self.kernel),
             ("VEDA/INITRD.IMG", self.initrd),
             (BOOT_CFG, self.boot_cfg.as_bytes()),
         ]

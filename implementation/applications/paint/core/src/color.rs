@@ -7,7 +7,7 @@
 use alloc::format;
 use alloc::string::String;
 
-use vgfx::Color;
+use gfx::Color;
 
 /// A colour's hue (0 to 360 degrees), saturation and value (0 to 1 each).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -184,7 +184,7 @@ pub const PALETTE: [u32; 28] = [
 
 /// A straight-alpha colour's premultiplied pixel, scaled by `opacity` (0 to 255).
 pub fn premultiplied(c: Color, opacity: u8) -> u32 {
-    vgfx::color::scale(c.premul(), opacity as u32)
+    gfx::color::scale(c.premul(), opacity as u32)
 }
 
 /// A premultiplied pixel with straight alpha again (for files, and colour pickers).
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(premultiplied(Color::hex(0xFF0000), 255), 0xFFFF_0000);
         assert_eq!(premultiplied(Color::hex(0xFF0000), 128), 0x8080_0000);
         for px in [0xFF12_3456, 0x8040_2010, 0x0000_0000, 0x0101_0101] {
-            assert_eq!(vgfx::color::premultiply(unpremultiply(px)), px, "{px:08x}");
+            assert_eq!(gfx::color::premultiply(unpremultiply(px)), px, "{px:08x}");
         }
         assert_eq!(unpremultiply(0x8080_0000), 0x80FF_0000);
         assert_eq!(distance(0xFF10_2030, 0xFF10_2035), 5);

@@ -10,7 +10,7 @@
 //!
 //! They travel as `KEY=VALUE` entries of the new program's startup message,
 //! where a Veda program's environment goes (a POSIX program's environment
-//! is on its stack, `vrt::process`):
+//! is on its stack, `rt::process`):
 //!
 //! | Key | Value |
 //! |-----|-------|

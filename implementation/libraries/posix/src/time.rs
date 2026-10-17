@@ -10,17 +10,17 @@ use crate::user;
 
 /// Nanoseconds since boot (never goes backwards).
 pub fn monotonic_ns() -> u64 {
-    vrt::time::now_ns()
+    rt::time::now_ns()
 }
 
 /// Nanoseconds since 1970-01-01 00:00:00 UTC.
 pub fn realtime_ns() -> u64 {
-    vrt::sys::clock_get(vabi::clock::UTC)
+    rt::sys::clock_get(abi::clock::UTC)
 }
 
 /// CPU time this process has used.
 fn cpu_ns() -> u64 {
-    vrt::object::process_self_info().map_or(0, |i| i.cpu_time_ns)
+    rt::object::process_self_info().map_or(0, |i| i.cpu_time_ns)
 }
 
 fn now(clk: u32) -> Result<u64, isize> {
@@ -79,7 +79,7 @@ pub unsafe fn clock_nanosleep(clk: u32, flags: u32, req: usize) -> SysResult {
     let ns = t.to_ns().ok_or(EINVAL)?;
     let current = now(clk)?;
     let wait = if flags & clock::TIMER_ABSTIME != 0 { ns.saturating_sub(current) } else { ns };
-    vrt::time::sleep_until(monotonic_ns().saturating_add(wait));
+    rt::time::sleep_until(monotonic_ns().saturating_add(wait));
     Ok(0)
 }
 

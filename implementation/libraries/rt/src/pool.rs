@@ -70,7 +70,7 @@ impl core::fmt::Debug for ThreadPool {
 impl ThreadPool {
     /// A pool with `threads` participants (the caller plus `threads - 1`
     /// workers named `name`, with the scheduling `priority` given, see
-    /// `vabi::priority`: workers below the system services' priority let
+    /// `abi::priority`: workers below the system services' priority let
     /// the compositor run as soon as it wakes, even while every CPU
     /// renders). Falls back to no workers if they cannot all be created.
     pub fn named(name: &'static str, threads: usize, priority: Option<usize>) -> ThreadPool {

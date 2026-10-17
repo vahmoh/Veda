@@ -196,7 +196,7 @@ fn flat_bounds(f: &Font<'_>, g: GlyphId) -> Option<Rect> {
     r
 }
 
-use vraster::PathEl;
+use ::raster::PathEl;
 
 #[test]
 fn all_outlines_parse_and_lie_within_head_bbox() {

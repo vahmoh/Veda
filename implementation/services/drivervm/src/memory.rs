@@ -13,7 +13,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use vrt::vm::Mapping;
+use rt::vm::Mapping;
 
 /// Plain data: any bytes are a valid value (requests of the bridge).
 ///
@@ -22,12 +22,12 @@ use vrt::vm::Mapping;
 pub unsafe trait Plain: Copy + Default {}
 
 // SAFETY: integers and structures of them, without padding (the bridge's
-// layouts are checked by size in `vhv::bridge`).
+// layouts are checked by size in `hv::bridge`).
 unsafe impl Plain for u32 {}
 // SAFETY: as above.
 unsafe impl Plain for u64 {}
 // SAFETY: as above.
-unsafe impl Plain for vabi::WaitItem {}
+unsafe impl Plain for abi::WaitItem {}
 macro_rules! plain {
     ($($t:ty),*) => {$(
         // SAFETY: a request of the bridge's or the platform's: integers,
@@ -36,25 +36,25 @@ macro_rules! plain {
     )*};
 }
 plain!(
-    vhv::bridge::Setup,
-    vhv::bridge::Close,
-    vhv::bridge::Duplicate,
-    vhv::bridge::ObjectInfo,
-    vhv::bridge::Signal,
-    vhv::bridge::Wait,
-    vhv::bridge::Cancel,
-    vhv::bridge::ChannelCreate,
-    vhv::bridge::ChannelWrite,
-    vhv::bridge::ChannelRead,
-    vhv::bridge::EventCreate,
-    vhv::bridge::Vmo,
-    vhv::bridge::VmoCopy,
-    vhv::bridge::VmoMap,
-    vhv::bridge::Bootstrap,
-    vhv::bridge::Clock,
-    vhv::bridge::LogRead,
-    vhv::bridge::Completion,
-    vhv::platform::Variable
+    hv::bridge::Setup,
+    hv::bridge::Close,
+    hv::bridge::Duplicate,
+    hv::bridge::ObjectInfo,
+    hv::bridge::Signal,
+    hv::bridge::Wait,
+    hv::bridge::Cancel,
+    hv::bridge::ChannelCreate,
+    hv::bridge::ChannelWrite,
+    hv::bridge::ChannelRead,
+    hv::bridge::EventCreate,
+    hv::bridge::Vmo,
+    hv::bridge::VmoCopy,
+    hv::bridge::VmoMap,
+    hv::bridge::Bootstrap,
+    hv::bridge::Clock,
+    hv::bridge::LogRead,
+    hv::bridge::Completion,
+    hv::platform::Variable
 );
 
 /// The guest's RAM, mapped here.
@@ -69,7 +69,7 @@ impl GuestMemory {
     }
 
     /// The VMO the guest's RAM is.
-    pub fn vmo(&self) -> &vrt::object::Vmo {
+    pub fn vmo(&self) -> &rt::object::Vmo {
         self.map.vmo()
     }
 

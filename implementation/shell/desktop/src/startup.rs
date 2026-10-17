@@ -19,10 +19,10 @@
 //! sound is not played: a sound well after the desktop appeared would come
 //! out of nowhere. The stream is closed once the sound has played.
 
-use vaudio::wav::{self, WavInfo};
-use vproto::audio::{OutputStream, StreamSpec, audio, ring};
-use vproto::vfs;
-use vrt::println;
+use ::audio::wav::{self, WavInfo};
+use proto::audio::{OutputStream, StreamSpec, audio, ring};
+use proto::vfs;
+use rt::println;
 
 const PATH: &str = "/system/sounds/startup.wav";
 /// How often to look for a sound card.
@@ -70,7 +70,7 @@ impl StartupSound {
         match &self.state {
             State::Waiting { next } => *next,
             State::Ready { until, .. } | State::Playing { until, .. } => *until,
-            State::Done => vabi::DEADLINE_INFINITE,
+            State::Done => abi::DEADLINE_INFINITE,
         }
     }
 

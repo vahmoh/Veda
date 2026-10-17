@@ -5,7 +5,7 @@
 //! highlighting, find and replace, word wrap and unlimited undo.
 //!
 //! The editing model (buffer, selection, undo, layout, highlighting) is the
-//! host-tested `vtext` crate; [`view`] draws it and maps input to edits.
+//! host-tested `text` crate; [`view`] draws it and maps input to edits.
 //! This module is the application around it: tabs, menus, files, dialogs,
 //! the find bar and the status bar; [`agent`] lets the voice agent read and
 //! write documents.
@@ -15,17 +15,17 @@ mod view;
 
 use core::fmt;
 
-use vfiles::format::human_size;
-use vfiles::path::{file_name, parent};
-use vgfx::{Align, Color, Rect};
-use vproto::display::modifiers;
-use vproto::fs::FsError;
-use vproto::input::keys;
-use vproto::vfs;
-use vrt::object::Vmo;
-use vtext::highlight::Language;
-use vtext::{Document, Pos};
-use vui::{App, FileDialog, FileDialogResult, Font, Icon, Menu, MenuItem, Ui, WindowSpec};
+use files::format::human_size;
+use files::path::{file_name, parent};
+use gfx::{Align, Color, Rect};
+use proto::display::modifiers;
+use proto::fs::FsError;
+use proto::input::keys;
+use proto::vfs;
+use rt::object::Vmo;
+use text::highlight::Language;
+use text::{Document, Pos};
+use ui::{App, FileDialog, FileDialogResult, Font, Icon, Menu, MenuItem, Ui, WindowSpec};
 
 use view::{Command, TextView, ViewOptions};
 
@@ -221,7 +221,7 @@ struct Editor {
     first_frame: bool,
     /// The selection's length in characters, and what it was counted for
     /// (tab, revision, selection).
-    selected_chars: Option<((TabId, u64, vtext::Selection), usize)>,
+    selected_chars: Option<((TabId, u64, text::Selection), usize)>,
 }
 
 const SHORTCUTS: [(&str, &str); 18] = [
@@ -247,7 +247,7 @@ const SHORTCUTS: [(&str, &str); 18] = [
 
 impl Editor {
     fn new(args: &[String]) -> Editor {
-        let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+        let vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         let mut ed = Editor {
             tabs: vec![Tab::untitled(TabId(0), 1)],
             next_id: 1,
@@ -804,7 +804,7 @@ impl Editor {
         let tab = &self.tabs[self.active];
         let doc = &tab.doc;
         let c = doc.cursor();
-        let col = vtext::display_col(doc.buffer().line(c.line), c.col, doc.tab_width) + 1;
+        let col = text::display_col(doc.buffer().line(c.line), c.col, doc.tab_width) + 1;
         let mut left = format!("Ln {}, Col {}", c.line + 1, col);
         let sel = doc.selection();
         if !sel.is_empty() {
@@ -1044,15 +1044,15 @@ impl App for Editor {
         }
     }
 
-    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+    fn agent_info(&self) -> Option<ui::agent::AppAgentInfo> {
         Some(agent::info())
     }
 
-    fn agent_state(&self) -> vui::agent::Value {
+    fn agent_state(&self) -> ui::agent::Value {
         agent::state(self)
     }
 
-    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+    fn agent_invoke(&mut self, action: &str, args: &ui::agent::Value) -> Result<ui::agent::Value, String> {
         Editor::agent_invoke(self, action, args)
     }
 
@@ -1091,11 +1091,11 @@ fn selected_chars(doc: &Document) -> usize {
 }
 
 fn main() {
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let editor = Editor::new(args.get(1..).unwrap_or(&[]));
     let mut spec = WindowSpec::new("Text Editor", 980, 680);
     spec.min_width = 480;
     spec.min_height = 320;
     spec.app_id = "editor".into();
-    std::process::exit(vui::run(spec, editor));
+    std::process::exit(ui::run(spec, editor));
 }

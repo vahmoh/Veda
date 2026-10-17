@@ -12,10 +12,10 @@
 //! items it has; whether the Trash has any) is compared every few seconds,
 //! and the folder is read again only when that changed.
 
-use vfiles::path::natural_cmp;
-use vfiles::{Fs, HOME, trash};
-use vgfx::{Align, Color, Rect};
-use vui::{Cursor, Icon, MenuItem, Ui};
+use files::path::natural_cmp;
+use files::{Fs, HOME, trash};
+use gfx::{Align, Color, Rect};
+use ui::{Cursor, Icon, MenuItem, Ui};
 
 use crate::{Action, Model, apps, chrome, taskbar};
 
@@ -77,7 +77,7 @@ const DRAG_START: i32 = 8;
 
 /// Which application opens a file, by extension, and the icon of its type.
 pub fn app_for_file(name: &str) -> Option<(&'static str, Icon)> {
-    let app = vfiles::default_app(name)?;
+    let app = files::default_app(name)?;
     Some((app.id, apps_common::icons::kind_icon(name, false, false)))
 }
 
@@ -225,7 +225,7 @@ impl Desktop {
             if *is_dir {
                 items.push(Shortcut {
                     label: name.clone(),
-                    app: vfiles::kind::FILES.id.into(),
+                    app: files::kind::FILES.id.into(),
                     args: vec![path.clone()],
                     icon: Icon::Folder,
                     color: "files".into(),
@@ -390,7 +390,7 @@ impl Desktop {
         if wp.width == ui.width && wp.height == ui.height {
             ui.canvas.blit(wp, wp.rect(), 0, 0);
         } else {
-            ui.canvas.draw_bitmap_scaled(wp, ui.rect(), vgfx::Filter::Bilinear, 255);
+            ui.canvas.draw_bitmap_scaled(wp, ui.rect(), gfx::Filter::Bilinear, 255);
         }
         let t = ui.theme().clone();
         for i in 0..self.items.len() {
@@ -410,7 +410,7 @@ impl Desktop {
             let tile = Rect::new(r.x + (r.w - 50) / 2, r.y + 9, 50, 50);
             ui.canvas.draw_shadow(tile.translate(0, 3), 13, 8, Color::rgba(0, 0, 0, 90));
             apps::draw_tile(&mut ui.canvas, tile, &s.color, s.icon);
-            let font = ui.ctx.font(vui::Font::Regular);
+            let font = ui.ctx.font(ui::Font::Regular);
             let label = ui.ctx.text.ellipsize(font, t.small_size + 0.5, &s.label, (r.w - 8) as f32);
             chrome::shadowed_label(
                 ui,
@@ -437,11 +437,11 @@ impl Desktop {
             Kind::Trash { .. } => "Move to the Trash".to_string(),
             _ => format!("Move to {}", target.label),
         };
-        let w = ui.measure(&text, vui::Font::Regular, t.small_size) as i32 + 24;
+        let w = ui.measure(&text, ui::Font::Regular, t.small_size) as i32 + 24;
         let badge = Rect::new((px + 24).min(ui.width - w - 4), (py + 16).min(ui.height - 34), w, 28);
         ui.canvas.fill_rounded_rect(badge, 8.0, Color::hex(0x2E2E36).with_alpha(240));
         ui.canvas.stroke_rounded_rect(badge, 8.0, 1.0, t.accent);
-        ui.label(badge, &text, vui::Font::Regular, t.small_size, t.text, Align::Center);
+        ui.label(badge, &text, ui::Font::Regular, t.small_size, t.text, Align::Center);
     }
 
     /// The context menu of the icon right-clicked last.

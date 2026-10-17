@@ -19,10 +19,10 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vglsl::Stage;
-use vglsl::link::{Bindings, Uniform};
-use vglsl::program::Program;
-use vglsl::types::{Basic, Dim, Sampler, Scalar};
+use glsl::Stage;
+use glsl::link::{Bindings, Uniform};
+use glsl::program::Program;
+use glsl::types::{Basic, Dim, Sampler, Scalar};
 
 use super::{Context, TEXTURE_UNITS, UNIFORM_BUFFER_BINDINGS, VERTEX_ATTRIBS};
 use crate::backend::ProgramId;
@@ -33,7 +33,7 @@ use crate::gl;
 pub(crate) struct ShaderObj {
     pub stage: Stage,
     pub sources: Vec<String>,
-    pub compiled: Option<vglsl::hir::Shader>,
+    pub compiled: Option<glsl::hir::Shader>,
     pub compile_status: bool,
     pub log: String,
     pub delete_pending: bool,
@@ -320,7 +320,7 @@ impl Context {
         let options = self.shading;
         if let Some(s) = self.shader_obj(shader) {
             let sources: Vec<&str> = s.sources.iter().map(String::as_str).collect();
-            let r = vglsl::compile(s.stage, &sources, &options);
+            let r = glsl::compile(s.stage, &sources, &options);
             s.compile_status = r.shader.is_some();
             s.compiled = r.shader;
             s.log = r.log;
@@ -515,7 +515,7 @@ impl Context {
                     feedback: p.feedback_varyings.clone(),
                     feedback_separate: p.feedback_separate,
                 };
-                vglsl::program::link(vs, fs, &bindings, &self.shading.limits)
+                glsl::program::link(vs, fs, &bindings, &self.shading.limits)
             }
             _ => {
                 let missing = match (p.vertex, p.fragment) {
@@ -523,7 +523,7 @@ impl Context {
                     (_, None) => "ERROR: no fragment shader is attached\n",
                     _ => "ERROR: an attached shader has not compiled successfully\n",
                 };
-                vglsl::program::LinkResult { program: None, log: String::from(missing) }
+                glsl::program::LinkResult { program: None, log: String::from(missing) }
             }
         };
         let exe = result.program.map(|prog| {
@@ -789,7 +789,7 @@ impl Context {
 
     /// The active uniforms a program reports (built-ins are filled in by
     /// the GL and not listed).
-    fn reported_uniforms(linked: &vglsl::link::Linked) -> impl Iterator<Item = (usize, &Uniform)> {
+    fn reported_uniforms(linked: &glsl::link::Linked) -> impl Iterator<Item = (usize, &Uniform)> {
         linked.uniforms.iter().enumerate().filter(|(_, u)| !u.builtin)
     }
 
@@ -808,7 +808,7 @@ impl Context {
     }
 
     /// The `(uniform, element)` a uniform name refers to.
-    fn find_uniform(linked: &vglsl::link::Linked, name: &str) -> Option<(usize, u32)> {
+    fn find_uniform(linked: &glsl::link::Linked, name: &str) -> Option<(usize, u32)> {
         if name.starts_with("gl_") {
             return None;
         }

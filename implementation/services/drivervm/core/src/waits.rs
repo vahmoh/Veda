@@ -7,7 +7,7 @@
 //! wait of the kernel's, round after round. What becomes of each at the
 //! end of a round is [`Wait::outcome`]'s.
 //!
-//! The kernel waits on at most `vabi::WAIT_MANY_MAX` items at once, so the
+//! The kernel waits on at most `abi::WAIT_MANY_MAX` items at once, so the
 //! items of the waits that go on are at most [`MAX_ITEMS`]: a wait beyond
 //! that is refused (`LimitReached`), as is one beyond what the notification
 //! ring holds, counting the waits that have finished but are not in it yet
@@ -16,12 +16,12 @@
 
 use alloc::vec::Vec;
 
-use vabi::{Error, WaitItem};
-use vhv::bridge::{self as b, Completion};
+use abi::{Error, WaitItem};
+use hv::bridge::{self as b, Completion};
 
 /// The most items of the waits that go on: the kernel's most, but the
 /// waiter's own.
-pub const MAX_ITEMS: usize = vabi::WAIT_MANY_MAX - 1;
+pub const MAX_ITEMS: usize = abi::WAIT_MANY_MAX - 1;
 
 /// The most waits that go on or have finished and are not in the ring yet:
 /// what the ring holds.
@@ -171,7 +171,7 @@ mod tests {
     use alloc::vec;
 
     use super::*;
-    use vabi::signals;
+    use abi::signals;
 
     fn wait(key: u64, items: usize) -> Wait {
         let item = WaitItem { handle: 7, signals: signals::READABLE, ..WaitItem::default() };
@@ -184,13 +184,13 @@ mod tests {
         p.admit(wait(1, 1000), 0).unwrap();
         assert_eq!(p.admit(wait(2, 24), 0), Err(Error::LimitReached));
         p.admit(wait(3, 23), 0).unwrap();
-        assert_eq!(p.items + 1, vabi::WAIT_MANY_MAX);
+        assert_eq!(p.items + 1, abi::WAIT_MANY_MAX);
         assert_eq!(p.admit(wait(4, 1), 0), Err(Error::LimitReached));
         // A wait of as many items as the kernel takes does not go on: the
         // waiter's event is one more.
         assert!(p.cancel(1));
         assert!(!p.cancel(1));
-        assert_eq!(p.admit(wait(5, vabi::WAIT_MANY_MAX), 0), Err(Error::LimitReached));
+        assert_eq!(p.admit(wait(5, abi::WAIT_MANY_MAX), 0), Err(Error::LimitReached));
         p.admit(wait(6, 1000), 0).unwrap();
         // Settled: what goes on comes back with its items.
         let all = p.take();

@@ -7,15 +7,15 @@
 
 use std::path::Path;
 
-use vaudio::wav::{SampleFormat, WavInfo};
+use audio::wav::{SampleFormat, WavInfo};
 
 use crate::script::Region;
 use crate::util::{self, Result};
 
 /// The screenshot at `path`, decoded.
-fn picture(path: &Path) -> Result<vimage::Image> {
+fn picture(path: &Path) -> Result<image::Image> {
     let data = util::read(path)?;
-    vimage::decode(&data).map_err(|e| format!("decoding {}: {e:?}", path.display()))
+    image::decode(&data).map_err(|e| format!("decoding {}: {e:?}", path.display()))
 }
 
 /// The pixels of `region` (fractions of the screen) in a picture of
@@ -222,9 +222,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("orchestration-checks-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let save = |name: &str, pixels: Vec<u32>| {
-            let image = vimage::Image::from_pixels(4, 2, pixels).unwrap();
+            let image = image::Image::from_pixels(4, 2, pixels).unwrap();
             let path = dir.join(name);
-            std::fs::write(&path, vimage::encode_png(&image).unwrap()).unwrap();
+            std::fs::write(&path, image::encode_png(&image).unwrap()).unwrap();
             path
         };
         let black = 0xFF00_0000;

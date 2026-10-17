@@ -48,8 +48,8 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use vipc::{enumeration, message, protocol, union};
-use vrt::object::{Channel, Vmo};
+use ipc::{enumeration, message, protocol, union};
+use rt::object::{Channel, Vmo};
 
 message! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -128,7 +128,7 @@ enumeration! {
 
 /// The longest text the clipboard holds (bytes), so that the answer that
 /// carries it fits in a message.
-pub const CLIPBOARD_MAX: usize = vabi::CHANNEL_MAX_BYTES - 64;
+pub const CLIPBOARD_MAX: usize = abi::CHANNEL_MAX_BYTES - 64;
 
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -12,16 +12,16 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::ops::Range;
 
-use vabi::{KernelBootInfo, cache_policy, map_flags};
-use vacpi::aml::Namespace;
-use vacpi::device::{self, Described, Identity, ResourcesError};
-use vacpi::name::Path;
-use vacpi::resource::Resource as AcpiResource;
-use vacpi::tables;
-use vacpi::{Memory, PciFunction};
-use vproto::pci::DeviceInfo;
-use vrt::object::{Resource, Vmo};
-use vrt::println;
+use abi::{KernelBootInfo, cache_policy, map_flags};
+use acpi::aml::Namespace;
+use acpi::device::{self, Described, Identity, ResourcesError};
+use acpi::name::Path;
+use acpi::resource::Resource as AcpiResource;
+use acpi::tables;
+use acpi::{Memory, PciFunction};
+use proto::pci::DeviceInfo;
+use rt::object::{Resource, Vmo};
+use rt::println;
 
 use crate::pci::{Address, ConfigSpace};
 

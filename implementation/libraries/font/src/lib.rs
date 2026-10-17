@@ -10,7 +10,7 @@
 //!   table; cached) and glyph outlines (TrueType quadratic outlines including composites, and CFF
 //!   Type 2 charstrings).
 //! * [`OutlineSink`] receives outlines in font units; [`PathSink`] / [`Font::glyph_path`] produce
-//!   [`vraster::Path`]s in pixels (scaled, y flipped).
+//!   [`raster::Path`](Path)s in pixels (scaled, y flipped).
 //! * [`rasterize_glyph`] / [`GlyphRasterizer`] render anti-aliased [`GlyphBitmap`]s at fractional
 //!   x offsets, with optional stem darkening and gamma ([`RasterOptions`]).
 //! * [`GlyphCache`] caches bitmaps keyed by font, glyph, size (1/64 px) and subpixel bin under a
@@ -57,13 +57,13 @@ mod raster;
 
 use core::fmt;
 
+pub use ::raster::{Path, Point, Rect};
 pub use cache::{CacheStats, GlyphCache, GlyphKey, SUBPIXEL_BINS, subpixel_position};
 pub use font::{Font, FontMetrics, OutlineFormat};
 pub use layout::{FontCollection, PositionedGlyph, ScaledFont};
 pub use name::name_id;
 pub use outline::{BoundsSink, OutlineSink, PathSink};
 pub use raster::{GlyphBitmap, GlyphRasterizer, MAX_GLYPH_SIZE, RasterOptions, rasterize_glyph};
-pub use vraster::{Path, Point, Rect};
 
 /// A glyph index within a font.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]

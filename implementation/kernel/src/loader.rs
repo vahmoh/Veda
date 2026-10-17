@@ -7,14 +7,14 @@
 //! root resource and handles to the boot modules; every other process is
 //! created from user space. Like every Veda program, `init` is a
 //! position-independent ELF64 executable: the kernel places it at a random
-//! address and relocates it there, as `vrt::process` does the others.
+//! address and relocates it there, as `rt::process` does the others.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use abi::startup::{self, role};
+use abi::{KernelBootInfo, Rights};
 use bootinfo::{BootInfo, MemoryKind};
-use vabi::startup::{self, role};
-use vabi::{KernelBootInfo, Rights};
 
 use crate::ipc::channel::{self, Message};
 use crate::memory::aspace::Perms;
@@ -38,8 +38,8 @@ pub fn spawn_init(boot: &BootInfo) {
     let archive = initrd::Archive::open(initrd).expect("the initrd is corrupt");
     crate::kinfo!("initrd: {} files, {} KiB", archive.len(), initrd.len() / 1024);
     let file = archive.find(INIT_PATH).expect("bin/init is missing from the initrd");
-    let elf = velf::Elf::parse(file.data).expect("init is not a valid ELF64 executable");
-    assert!(elf.kind() == velf::Kind::Veda, "init is not a Veda program of this version");
+    let elf = elf::Elf::parse(file.data).expect("init is not a valid ELF64 executable");
+    assert!(elf.kind() == elf::Kind::Veda, "init is not a Veda program of this version");
 
     let process = Process::new("init", 0).expect("out of memory creating init");
     let aspace = process.aspace().unwrap();
@@ -50,7 +50,7 @@ pub fn spawn_init(boot: &BootInfo) {
     let base = if elf.is_position_independent() {
         let mut random = [0u8; 8];
         crate::random::fill(&mut random);
-        vabi::program_base((hi - lo) as usize, u64::from_le_bytes(random)) as u64
+        abi::program_base((hi - lo) as usize, u64::from_le_bytes(random)) as u64
     } else {
         lo
     };
@@ -64,7 +64,7 @@ pub fn spawn_init(boot: &BootInfo) {
     let vmo = Vmo::new_anonymous(hi - lo, Cache::WriteBack).expect("init image too large");
     assert!(vmo.write(0, &image));
     drop(image);
-    for run in velf::page_runs(&elf, velf::Relro::ReadOnly) {
+    for run in elf::page_runs(&elf, elf::Relro::ReadOnly) {
         let perms = Perms { read: true, write: run.perms.write, exec: run.perms.exec };
         let at = run.start.wrapping_add(bias);
         aspace.map(vmo.clone(), run.start - lo, run.len, at, true, perms, Perms::ALL, false).expect("mapping init");
@@ -79,7 +79,7 @@ pub fn spawn_init(boot: &BootInfo) {
     let mut cmdline = [0u8; 256];
     cmdline[..boot.cmdline_len as usize].copy_from_slice(&boot.cmdline[..boot.cmdline_len as usize]);
     // The firmware's ACPI memory, adjacent ranges merged.
-    let mut acpi_memory = [[0u64; 2]; vabi::ACPI_MEMORY_RANGES];
+    let mut acpi_memory = [[0u64; 2]; abi::ACPI_MEMORY_RANGES];
     let mut acpi_memory_count = 0;
     // SAFETY: the loader built a valid memory map.
     for r in unsafe { boot.memory_map.as_slice() } {
@@ -165,7 +165,7 @@ pub fn spawn_init(boot: &BootInfo) {
 
     let thread = Thread::new_user(&process, "main").expect("creating init's thread");
     process.add_thread(thread.clone()).expect("init's process takes its first thread");
-    let sp = vabi::entry_stack_pointer((stack_base + STACK_SIZE) as usize) as u64;
+    let sp = abi::entry_stack_pointer((stack_base + STACK_SIZE) as usize) as u64;
     let entry = elf.entry().wrapping_add(bias);
     thread.prepare_user_entry(entry, sp, bootstrap as u64, 0);
     process.mark_started();
@@ -183,14 +183,14 @@ fn keep_alive(p: Arc<Process>) {
     *INIT.lock() = Some(p);
 }
 
-/// What the machine offers beyond what Veda needs (`vabi::platform`).
+/// What the machine offers beyond what Veda needs (`abi::platform`).
 fn platform() -> u32 {
     let mut bits = 0;
     if crate::arch::hv::available().is_ok() {
-        bits |= vabi::platform::VIRTUALIZATION;
+        bits |= abi::platform::VIRTUALIZATION;
     }
     if crate::arch::iommu::active() {
-        bits |= vabi::platform::IOMMU;
+        bits |= abi::platform::IOMMU;
     }
     bits
 }

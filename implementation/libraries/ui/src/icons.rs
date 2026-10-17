@@ -4,7 +4,7 @@
 //! The Veda icon set: simple line icons designed on a 24x24 grid, drawn
 //! as vector paths so they are crisp at any size.
 
-use vgfx::{Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
+use gfx::{Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -889,7 +889,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use vgfx::Bitmap;
+    use gfx::Bitmap;
 
     #[test]
     fn arcs_are_not_joined_to_what_comes_before() {
@@ -924,7 +924,7 @@ mod tests {
     }
 
     /// Every icon at 16, 24 and 48 pixels, white on the theme's background, for a person to look
-    /// at: `cargo test -p vui icon_gallery -- --ignored` writes `target/visual/vui-icons.png`
+    /// at: `cargo test -p ui icon_gallery -- --ignored` writes `target/visual/ui-icons.png`
     /// (from the workspace's root).
     #[test]
     #[ignore]
@@ -941,9 +941,9 @@ mod tests {
             icon.draw(&mut c, Rect::new(x + 68, y + 8, 48, 48), 48.0, Color::WHITE);
         }
         drop(c);
-        let image = vimage::Image::from_pixels(sheet.width as u32, sheet.height as u32, sheet.pixels).unwrap();
+        let image = image::Image::from_pixels(sheet.width as u32, sheet.height as u32, sheet.pixels).unwrap();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/visual");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("vui-icons.png"), vimage::encode_png(&image).unwrap()).unwrap();
+        std::fs::write(dir.join("ui-icons.png"), image::encode_png(&image).unwrap()).unwrap();
     }
 }

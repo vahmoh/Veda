@@ -420,7 +420,7 @@ pub fn exit_current() -> ! {
             TIMEOUTS.lock().remove(&key);
         }
     }
-    cur.signals.update(0, vabi::signals::TERMINATED);
+    cur.signals.update(0, abi::signals::TERMINATED);
     if let Some(p) = cur.process.clone() {
         p.thread_exited(&cur);
     }
@@ -465,7 +465,7 @@ pub fn user_exception(frame: &mut TrapFrame) {
         crate::kerror!("{} (thread {}): {}{}", cur.process_name(), cur.koid, frame.describe(), in_image);
     }
     match &cur.process {
-        Some(p) => p.kill(vabi::EXIT_CODE_CRASHED),
+        Some(p) => p.kill(abi::EXIT_CODE_CRASHED),
         None => panic!("kernel thread took a user exception"),
     }
     drop(cur);

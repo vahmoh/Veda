@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vgfx` — Veda 2D graphics.
+//! `gfx` — Veda 2D graphics.
 //!
 //! * [`Canvas`]: drawing on a borrowed buffer of premultiplied `0xAARRGGBB`
 //!   pixels — rectangles, gradients, anti-aliased rounded rectangles and
-//!   circles, vector paths (through `vraster`), coverage masks, bitmaps
+//!   circles, vector paths (through `raster`), coverage masks, bitmaps
 //!   (with scaling) and pictures with rounded corners ([`Picture`]) — all
 //!   clipped and translated, with what drawing keeps between frames in a
 //!   [`DrawCache`].
 //! * [`Bitmap`]: owned images with resizing, downscaling of any picture
 //!   ([`bitmap::downscale`]) and blurring.
 //! * [`ShadowTemplate`]: fast soft shadows.
-//! * [`Text`]: fonts and cached glyph rendering (through `vfont`).
+//! * [`Text`]: fonts and cached glyph rendering (through `font`).
 //! * [`Damage`]: changed rectangles, also found by comparing two frames.
 //!
 //! Everything is integer- and cache-friendly because Veda usually runs
@@ -36,9 +36,9 @@ pub use bitmap::Bitmap;
 pub use canvas::{Canvas, DrawCache, Filter, Picture};
 pub use color::Color;
 pub use geom::{Damage, Rect};
+pub use raster::{FillRule, LineCap, LineJoin, Path, StrokeStyle, Transform};
 pub use shadow::ShadowTemplate;
 pub use text::{Align, LineMetrics, Text};
-pub use vraster::{FillRule, LineCap, LineJoin, Path, StrokeStyle, Transform};
 
 #[cfg(test)]
 mod tests {

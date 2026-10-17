@@ -9,11 +9,11 @@
 //! Nothing here needs the user's consent: Photos never changes or deletes files (turning a
 //! picture only turns the view), and the wallpaper is easily changed back.
 
-use vfiles::format::human_size;
-use vfiles::kind::is_image;
-use vfiles::path::file_stem;
-use vproto::fs::Stat;
-use vui::agent::{
+use files::format::human_size;
+use files::kind::is_image;
+use files::path::file_stem;
+use proto::fs::Stat;
+use ui::agent::{
     self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_str, arg_path, arg_str, json, show_path,
 };
 
@@ -160,7 +160,7 @@ pub fn state(p: &Photos) -> Value {
         v["wallpaper"] = json!("being changed");
     }
     if let Some(t) = &p.toast
-        && vrt::time::now_ns() < t.until
+        && rt::time::now_ns() < t.until
     {
         v["message"] = json!(t.text.as_str());
     }
@@ -268,7 +268,7 @@ impl Photos {
     }
 
     pub(crate) fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         match action {
             "show_picture" => {
                 let i = self.picture_arg(args, "picture")?;

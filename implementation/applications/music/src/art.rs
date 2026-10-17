@@ -12,11 +12,11 @@
 
 use core::f32::consts::TAU;
 
+use gfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, StrokeStyle};
 use music_core::cover::{CoverSpec, Style};
 use num_traits::Float;
 use rand::{RngExt, SeedableRng};
 use rand_pcg::Pcg32;
-use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, StrokeStyle};
 
 /// A color from hue (turns; any value wraps around), saturation and value.
 pub fn hsv(h: f32, s: f32, v: f32) -> Color {

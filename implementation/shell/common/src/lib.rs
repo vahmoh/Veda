@@ -30,7 +30,7 @@ pub mod wallpaper;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vproto::vfs;
+use proto::vfs;
 
 /// Reads a whole file of at most `max` bytes (`None` for a larger one,
 /// whatever wrote it, or one that cannot be read).

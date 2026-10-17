@@ -6,10 +6,10 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vipc::Bytes;
-use vproto::fs::{MAX_IO, Stat, file, open_flags, seek};
-use vrt::object::Channel;
-use vrt::sync::Mutex;
+use ipc::Bytes;
+use proto::fs::{MAX_IO, Stat, file, open_flags, seek};
+use rt::object::Channel;
+use rt::sync::Mutex;
 
 use crate::error;
 use crate::linux::errno::{EINVAL, EIO};

@@ -25,7 +25,7 @@ dependencies to its errors, tests and licence headers.
   [Libraries](DEPENDENCIES.md) lists those in use, and what Veda keeps of
   its own and why.
 * **Dependencies** are declared in `[workspace.dependencies]`, each with a
-  reason. A new one of a library or of a program on `vrt` must build
+  reason. A new one of a library or of a program on `rt` must build
   `no_std` (see [Library crates](#library-crates)); a program on the
   standard library may use crates that need `std`. Avoid large dependency
   trees, and a second generation of a crate family already used. Measure
@@ -39,14 +39,14 @@ dependencies to its errors, tests and licence headers.
 * **`core` and `alloc`** are available everywhere; `std` to the programs
   on the standard library (applications, and services that gain from it),
   the host tools and the driver VM's Linux programs.
-* **The standard library, or `vrt` alone.** Applications, and services
+* **The standard library, or `rt` alone.** Applications, and services
   that gain from the standard library's threads, channels, files and
   errors or from crates that need it, are programs on the standard library
   (`Program::std` in `orchestration/src/components.rs`). What the standard
   library stands on or runs before (`init`, the file system, the network
   stack), what drives hardware (the device manager, drivers, the driver
   VM) and what must answer in time (the window system, the sound mixer)
-  stays on `vrt` alone (`Program::native`; see [Rust on Veda](RUST.md)).
+  stays on `rt` alone (`Program::native`; see [Rust on Veda](RUST.md)).
 
 ## Architectures
 
@@ -78,10 +78,10 @@ own.
   * Knowledge of an architecture's formats that tools need on any machine
     (executables' machine types, the IOMMU's tables, the virtual devices
     of the hypervisor's guests) is a public module named after it
-    (`velf::amd64`, `viommu::amd64`, `vhv::amd64`), compiled on every host
+    (`elf::amd64`, `iommu::amd64`, `hv::amd64`), compiled on every host
     for host tests and build tools too; `NATIVE` names the one of the
     architecture compiled for, where a crate needs it.
-  * Build scripts and tools (`build.rs`, `vbuild`, `orchestration`) run on
+  * Build scripts and tools (`build.rs`, `build`, `orchestration`) run on
     the build machine, but their architecture is the one Veda is built for
     (a build script's `TARGET`, `orchestration`'s `arch`), never the one
     they run on.
@@ -103,9 +103,9 @@ On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
-| `implementation/boot/` (the UEFI loader) | `x86_64-unknown-uefi` | Freestanding, soft-float, PE/COFF (the format UEFI's firmware starts) |
+| `implementation/bootloader/` (the UEFI loader) | `x86_64-unknown-uefi` | Freestanding, soft-float, PE/COFF (the format UEFI's firmware starts) |
 | `implementation/kernel/` | `x86_64-unknown-none` | Freestanding, soft-float, an ELF64 executable linked at its address |
-| User space on `vrt` alone (`implementation/libraries/`, the system services in `implementation/services/`, `implementation/drivers/`) | `x86_64-unknown-linux-musl`, `#![no_std]` | Hard-float SSE2, position-independent ELF64 executables with nothing of Linux's or musl's, linked by `rust-lld` |
+| User space on `rt` alone (`implementation/libraries/`, the system services in `implementation/services/`, `implementation/drivers/`) | `x86_64-unknown-linux-musl`, `#![no_std]` | Hard-float SSE2, position-independent ELF64 executables with nothing of Linux's or musl's, linked by `rust-lld` |
 | User space on the standard library (`implementation/applications/`, the services that use it) | `x86_64-unknown-veda` (the `rust` port's) | Static position-independent ELF executables on the C library, linked by `x86_64-veda-gcc`; Veda's libraries in them as they are, `no_std` |
 | `implementation/libraries/posix` (in the C library), `implementation/services/mediadec`'s Rust half | `x86_64-unknown-none` | The System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | Static ELF executables on musl |
@@ -116,7 +116,7 @@ On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
 ## Library crates
 
 * **`no_std`.** Libraries are `#![no_std]` (with `extern crate alloc;` when
-  they allocate), to run inside Veda, in programs on `vrt` and on the
+  they allocate), to run inside Veda, in programs on `rt` and on the
   standard library alike, **and** be unit-tested on the host. A part only
   programs on the standard library have is under
   `#[cfg(target_os = "veda")]`, with `extern crate std;`
@@ -134,7 +134,7 @@ On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
   (`.cargo/architectures/amd64/config.toml` gives the RustCrypto and dalek
   crates their portable code there, as LLVM cannot build their SIMD code
   for it). Building Veda (`cargo orchestration build`), whose programs on
-  `vrt` link without `std`, is the final check. `vimage`, for user space
+  `rt` link without `std`, is the final check. `image`, for user space
   only, does not build soft-float (`fast_image_resize`'s SIMD code), nor
   does `shell-common`, which decodes wallpapers with it.
 
@@ -142,8 +142,8 @@ On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
 
 * Pixels are `u32` in `0xAARRGGBB` order: bytes `B, G, R, A` in memory,
   as in the BGRX framebuffer.
-* Decoded images (`vimage`) use straight (non-premultiplied) alpha.
-* Render targets in `vgfx` use **premultiplied** alpha.
+* Decoded images (`image`) use straight (non-premultiplied) alpha.
+* Render targets in `gfx` use **premultiplied** alpha.
 
 ## Performance
 

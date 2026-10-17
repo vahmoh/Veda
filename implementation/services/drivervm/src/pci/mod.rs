@@ -7,7 +7,7 @@
 //! are mapped into the guest's memory, its MSIs are bound to the guest's
 //! processors, and the line its INTx is wired to is the guest's (`lines`;
 //! functions on one line share it). Linux finds them on bus 0 of the
-//! guest's PCI, their configuration space as `vhv::pci` makes it, through
+//! guest's PCI, their configuration space as `hv::pci` makes it, through
 //! the platform's hypercalls. What the PC's firmware describes below a
 //! function goes into the guest's ACPI tables ([`describe`]); the
 //! firmware's tables that describe a function's hardware go there whole (an
@@ -30,8 +30,8 @@
 //!
 //! An Intel integrated GPU's driver reads more of the PC's firmware: its
 //! OpRegion (the display's description), which the guest has a copy of
-//! (`vhv::igd`), and the PC's host bridge, which the guest has a stand-in
-//! for at 00:00.0, read-only (`vhv::pci::HostBridge`). Its stolen memory is
+//! (`hv::igd`), and the PC's host bridge, which the guest has a stand-in
+//! for at 00:00.0, read-only (`hv::pci::HostBridge`). Its stolen memory is
 //! the memory the firmware keeps for it, where the PC has it.
 //!
 //! While the guest runs, its functions' configuration space goes through
@@ -56,13 +56,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 pub use drivervm_core::functions::Windows;
 use drivervm_core::functions::places;
-use vhv::acpi::{self, Function, GpioController};
-use vhv::pci::{ConfigSpace, HostBridge, Write};
-use vhv::platform::{error, gpio};
-use vproto::pci::{DeviceInfo, pcidev};
-use vrt::object::{Channel, Guest, Interrupt, Vcpu};
-use vrt::println;
-use vrt::sync::Mutex;
+use hv::acpi::{self, Function, GpioController};
+use hv::pci::{ConfigSpace, HostBridge, Write};
+use hv::platform::{error, gpio};
+use proto::pci::{DeviceInfo, pcidev};
+use rt::object::{Channel, Guest, Interrupt, Vcpu};
+use rt::println;
+use rt::sync::Mutex;
 
 use crate::gpio::{Owner, Pins};
 use crate::lines::Lines;

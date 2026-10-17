@@ -34,7 +34,7 @@ COMMANDS:
                 and the agent's in verification/agent, several at once: --jobs N)
     clippy      Check every crate with Clippy, warnings as errors, each for what it
                 is built for: the crates with host tests (their tests too), the
-                loader, the kernel and the POSIX layer, the programs on vrt for the
+                loader, the kernel and the POSIX layer, the programs on rt for the
                 user target, and those on Rust's standard library for Veda's own
                 target, with the toolchain's Clippy
     toolchain   Build the toolchain from implementation/ports/: GCC, binutils and

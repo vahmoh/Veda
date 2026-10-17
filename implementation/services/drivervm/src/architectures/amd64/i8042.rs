@@ -11,13 +11,13 @@
 //! them (0x61's NMI controls among them) the guest does not reach.
 
 use drivervm_core::arch::i8042::Controller;
-use vrt::object::IoPorts;
-use vrt::println;
-use vrt::sync::Mutex;
+use rt::object::IoPorts;
+use rt::println;
+use rt::sync::Mutex;
 
 /// The controller's data port, and its status and command port; the
 /// keyboard's and the mouse's interrupt lines.
-pub use vhv::amd64::acpi::{I8042_COMMAND as COMMAND, I8042_DATA as DATA, KEYBOARD_GSI, MOUSE_GSI};
+pub use hv::amd64::acpi::{I8042_COMMAND as COMMAND, I8042_DATA as DATA, KEYBOARD_GSI, MOUSE_GSI};
 
 /// The controller as the guest drives it: what it does with the next data
 /// byte, and the commands dropped (each said once).

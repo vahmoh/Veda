@@ -3,14 +3,14 @@
 
 //! Network commands: `wifi`, `ifconfig`, `ping`, `nslookup`, `netstat`,
 //! `firewall`, `route` and `curl`. They talk to the network and Wi-Fi
-//! services through `vnet`; every wait is bounded, and the long ones
+//! services through `net`; every wait is bounded, and the long ones
 //! (pinging, scanning, joining a network) stop between steps after Ctrl+C.
 //! `firewall` only reads: the programs run here speak for the Terminal, so
 //! Settings alone changes the firewall.
 
+use net::wifi::{self, ConnState, WlanEvent};
+use net::{Duration, IpAddr, NetError};
 use terminal_core::screen::{Style, color};
-use vnet::wifi::{self, ConnState, WlanEvent};
-use vnet::{Duration, IpAddr, NetError};
 
 use crate::commands::pad;
 use crate::shell::{INTERRUPTED, Io, Shell};
@@ -50,7 +50,7 @@ fn print_status(io: &mut Io, s: &wifi::WlanStatus) {
     io.styled("Wi-Fi: ", Style::BOLD);
     io.println(state);
     if s.state != ConnState::NoAdapter {
-        io.println(&format!("  adapter   {} ({})", s.adapter, vnet::format_mac(&s.mac)));
+        io.println(&format!("  adapter   {} ({})", s.adapter, net::format_mac(&s.mac)));
     }
     if !s.ssid.0.is_empty()
         && matches!(
@@ -60,7 +60,7 @@ fn print_status(io: &mut Io, s: &wifi::WlanStatus) {
     {
         io.println(&format!("  network   {}", s.name));
         io.println(&format!("  security  {}", s.security.label()));
-        io.println(&format!("  access pt {} on channel {}", vnet::format_mac(&s.bssid), s.channel));
+        io.println(&format!("  access pt {} on channel {}", net::format_mac(&s.bssid), s.channel));
         io.println(&format!("  signal    {} dBm {}", s.signal_dbm, bars(wifi::signal_bars(s.signal_dbm))));
         if s.state == ConnState::Connected {
             io.println(&format!("  connected {} s", s.connected_s));
@@ -100,8 +100,8 @@ fn print_networks(io: &mut Io, nets: &[wifi::NetworkInfo]) {
 fn scan_and_wait(sh: &Shell, io: &mut Io) -> Result<(), i32> {
     let watcher = wifi::Watcher::new().map_err(|e| wifi_err(io, e))?;
     wifi::scan().map_err(|e| wifi_err(io, e))?;
-    let end = vrt::time::now_ns() + 8_000_000_000;
-    while vrt::time::now_ns() < end {
+    let end = rt::time::now_ns() + 8_000_000_000;
+    while rt::time::now_ns() < end {
         if sh.interrupted() {
             return Err(INTERRUPTED);
         }
@@ -163,7 +163,7 @@ pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             }
             io.styled(&format!("Joining {ssid}\u{2026}\n"), Style::DIM);
             // Wait for the outcome.
-            let end = vrt::time::now_ns() + 30_000_000_000;
+            let end = rt::time::now_ns() + 30_000_000_000;
             loop {
                 if sh.interrupted() {
                     return INTERRUPTED;
@@ -182,11 +182,11 @@ pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                     Ok(_) => {}
                     Err(e) => return wifi_err(io, e),
                 }
-                if vrt::time::now_ns() > end {
+                if rt::time::now_ns() > end {
                     return io.error("wifi", "no answer yet; 'wifi status' shows the progress");
                 }
                 if watcher.is_none() {
-                    vrt::time::sleep(Duration::from_millis(200));
+                    rt::time::sleep(Duration::from_millis(200));
                 }
             }
         }
@@ -253,7 +253,7 @@ pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 for b in list {
                     io.println(&format!(
                         "{}  {:>3}  {:>4} dBm {:>4}s  {}{}",
-                        vnet::format_mac(&b.bssid),
+                        net::format_mac(&b.bssid),
                         b.channel,
                         b.signal_dbm,
                         b.age_ms / 1000,
@@ -299,14 +299,14 @@ pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
 
 pub fn cmd_ifconfig(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let all = args.iter().any(|a| a == "-a");
-    let list = match vnet::interfaces() {
+    let list = match net::interfaces() {
         Ok(l) => l,
         Err(e) => return net_err(io, "ifconfig", e),
     };
-    for i in list.iter().filter(|i| all || i.kind != vnet::InterfaceKind::Loopback) {
+    for i in list.iter().filter(|i| all || i.kind != net::InterfaceKind::Loopback) {
         let kind = match i.kind {
-            vnet::InterfaceKind::Loopback => "loopback",
-            vnet::InterfaceKind::Wireless => "wireless",
+            net::InterfaceKind::Loopback => "loopback",
+            net::InterfaceKind::Wireless => "wireless",
             _ => "ethernet",
         };
         io.styled(&i.name, Style::BOLD);
@@ -314,7 +314,7 @@ pub fn cmd_ifconfig(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             ": {kind}, link {}, mtu {}, {} ({})",
             if i.link_up { "up" } else { "down" },
             i.mtu,
-            vnet::format_mac(&i.mac),
+            net::format_mac(&i.mac),
             i.driver
         ));
         for a in &i.addresses {
@@ -339,7 +339,7 @@ pub fn cmd_ifconfig(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             Style::DIM,
         );
     }
-    match vnet::status() {
+    match net::status() {
         Ok(s) => {
             io.println(&format!(
                 "status: {:?}{}",
@@ -365,13 +365,13 @@ pub fn cmd_ping(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let Some(host) = host else { return io.error("ping", "usage: ping HOST [-c COUNT]") };
     let target: IpAddr = match host.parse() {
         Ok(a) => a,
-        Err(_) => match vnet::resolve(&host) {
+        Err(_) => match net::resolve(&host) {
             Ok(list) if !list.is_empty() => list.iter().find(|a| a.is_ipv4()).copied().unwrap_or(list[0]),
             Ok(_) => return io.error("ping", &format!("{host}: no addresses")),
             Err(e) => return net_err(io, "ping", e),
         },
     };
-    let mut p = match vnet::Pinger::new() {
+    let mut p = match net::Pinger::new() {
         Ok(p) => p,
         Err(e) => return net_err(io, "ping", e),
     };
@@ -422,7 +422,7 @@ pub fn cmd_ping(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
 
 pub fn cmd_nslookup(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let Some(name) = args.get(1) else { return io.error("nslookup", "usage: nslookup NAME") };
-    match vnet::lookup(name, vnet::AddrFamily::Any, vnet::RESOLVE_TIMEOUT) {
+    match net::lookup(name, net::AddrFamily::Any, net::RESOLVE_TIMEOUT) {
         Ok(l) => {
             if l.canonical != *name && !l.canonical.is_empty() {
                 io.println(&format!("{name} is an alias for {}", l.canonical));
@@ -438,11 +438,11 @@ pub fn cmd_nslookup(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
 }
 
 pub fn cmd_netstat(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
-    match vnet::sockets() {
+    match net::sockets() {
         Ok(list) => {
             io.styled("PROTO  LOCAL                    REMOTE                   STATE         PID\n", Style::DIM);
             for s in list {
-                let a = |x: Option<vnet::SocketAddr>| x.map(|a| a.to_string()).unwrap_or_else(|| String::from("*"));
+                let a = |x: Option<net::SocketAddr>| x.map(|a| a.to_string()).unwrap_or_else(|| String::from("*"));
                 io.println(&format!(
                     "{}  {}{}{}{}",
                     pad(&format!("{:?}", s.kind).to_ascii_lowercase(), 5),
@@ -462,12 +462,12 @@ pub fn cmd_netstat(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
 /// lately, or its counts.
 pub fn cmd_firewall(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let result = match args.get(1).map(String::as_str) {
-        None | Some("show") => vnet::firewall().map(|c| {
-            let questions = vnet::firewall_questions().unwrap_or_default();
+        None | Some("show") => net::firewall().map(|c| {
+            let questions = net::firewall_questions().unwrap_or_default();
             show_firewall(io, &c, &questions)
         }),
-        Some("log") => vnet::firewall_log().map(|log| show_firewall_log(io, &log)),
-        Some("stats") => vnet::firewall_stats().map(|s| show_firewall_stats(io, &s)),
+        Some("log") => net::firewall_log().map(|log| show_firewall_log(io, &log)),
+        Some("stats") => net::firewall_stats().map(|s| show_firewall_stats(io, &s)),
         Some(other) => {
             return io.error("firewall", &format!("no subcommand '{other}': usage: firewall [log | stats]"));
         }
@@ -478,7 +478,7 @@ pub fn cmd_firewall(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     }
 }
 
-fn show_firewall(io: &mut Io, c: &vnet::FirewallConfig, questions: &[vnet::FirewallQuestion]) {
+fn show_firewall(io: &mut Io, c: &net::FirewallConfig, questions: &[net::FirewallQuestion]) {
     let onoff = |b: bool| if b { "on" } else { "off" };
     io.println(&format!("Firewall: {}", onoff(c.enabled)));
     if c.enabled {
@@ -499,7 +499,7 @@ fn show_firewall(io: &mut Io, c: &vnet::FirewallConfig, questions: &[vnet::Firew
     if !questions.is_empty() {
         io.styled("Waiting for your answer (on the desktop, or in Settings):\n", Style::DIM);
         for q in questions {
-            let proto = if q.protocol == vnet::FirewallProtocol::Tcp { "TCP" } else { "UDP" };
+            let proto = if q.protocol == net::FirewallProtocol::Tcp { "TCP" } else { "UDP" };
             io.println(&format!("  {}asks to accept connections ({proto} port {})", pad(&q.app, 16), q.port));
         }
     }
@@ -521,7 +521,7 @@ fn show_firewall(io: &mut Io, c: &vnet::FirewallConfig, questions: &[vnet::Firew
     if !c.ports.is_empty() {
         io.styled("Port rules:\n", Style::DIM);
         for r in &c.ports {
-            let proto = if r.protocol == vnet::FirewallProtocol::Tcp { "TCP" } else { "UDP" };
+            let proto = if r.protocol == net::FirewallProtocol::Tcp { "TCP" } else { "UDP" };
             let ports = if r.first == r.last { format!("{}", r.first) } else { format!("{}-{}", r.first, r.last) };
             let verdict = if r.allow { "open" } else { "closed" };
             io.println(&format!("  {}{verdict} from {}", pad(&format!("{proto} {ports}"), 16), r.from));
@@ -530,7 +530,7 @@ fn show_firewall(io: &mut Io, c: &vnet::FirewallConfig, questions: &[vnet::Firew
     io.hint("Settings changes the firewall (Network & Internet).");
 }
 
-fn show_firewall_log(io: &mut Io, log: &[vnet::FirewallEvent]) {
+fn show_firewall_log(io: &mut Io, log: &[net::FirewallEvent]) {
     if log.is_empty() {
         io.println("Nothing turned away.");
         return;
@@ -542,13 +542,13 @@ fn show_firewall_log(io: &mut Io, log: &[vnet::FirewallEvent]) {
     );
     for e in log.iter().rev() {
         let reason = match e.reason {
-            vnet::FirewallReason::NotAllowed => "not allowed",
-            vnet::FirewallReason::Probe => "probe",
-            vnet::FirewallReason::Ping => "ping",
-            vnet::FirewallReason::Invalid => "invalid",
-            vnet::FirewallReason::RateLimited => "rate limited",
-            vnet::FirewallReason::Fragment => "fragment",
-            vnet::FirewallReason::AppBlocked => "app blocked",
+            net::FirewallReason::NotAllowed => "not allowed",
+            net::FirewallReason::Probe => "probe",
+            net::FirewallReason::Ping => "ping",
+            net::FirewallReason::Invalid => "invalid",
+            net::FirewallReason::RateLimited => "rate limited",
+            net::FirewallReason::Fragment => "fragment",
+            net::FirewallReason::AppBlocked => "app blocked",
         };
         let proto = match e.protocol {
             6 => String::from("tcp"),
@@ -572,7 +572,7 @@ fn show_firewall_log(io: &mut Io, log: &[vnet::FirewallEvent]) {
     }
 }
 
-fn show_firewall_stats(io: &mut Io, s: &vnet::FirewallStats) {
+fn show_firewall_stats(io: &mut Io, s: &net::FirewallStats) {
     for (label, n) in [
         ("Let in by a rule", s.allowed),
         ("Not allowed", s.not_allowed),
@@ -588,7 +588,7 @@ fn show_firewall_stats(io: &mut Io, s: &vnet::FirewallStats) {
 }
 
 pub fn cmd_route(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
-    match vnet::routes() {
+    match net::routes() {
         Ok(list) => {
             io.styled("DESTINATION                GATEWAY                  INTERFACE  METRIC\n", Style::DIM);
             for r in list {
@@ -612,7 +612,7 @@ pub fn cmd_curl(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     };
     let url = if url.contains("://") { url.clone() } else { format!("http://{url}") };
     let terminal = io.is_terminal();
-    match vweb::http::get(&url, Duration::from_secs(20), if terminal { SHOWN } else { SAVED }) {
+    match web::http::get(&url, Duration::from_secs(20), if terminal { SHOWN } else { SAVED }) {
         Ok(r) => {
             if head_only {
                 io.println(&format!("HTTP/1.1 {} {}", r.status, r.reason));

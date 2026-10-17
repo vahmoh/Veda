@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The bridge, the monitor's side: the guest's handles, and the operations
-//! on them (`vhv::bridge` describes them).
+//! on them (`hv::bridge` describes them).
 //!
 //! The guest's handles are numbers that this table gives meaning to: each
 //! stands for a handle of this process that the guest was given or made.
@@ -27,14 +27,14 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 use core::mem::ManuallyDrop;
 
+use abi::{Error, RawHandle, Rights, WaitItem, map_flags, signals, vmo_flags};
 use drivervm_core::ledger::Ledger;
 use drivervm_core::waits::{self, Pending, Round, Wait};
 use drivervm_core::window::Window;
-use vabi::{Error, RawHandle, Rights, WaitItem, map_flags, signals, vmo_flags};
-use vhv::bridge::{self as b, op};
-use vrt::object::{Channel, Event, Guest, Handle, Vcpu, Vmo};
-use vrt::println;
-use vrt::sync::Mutex;
+use hv::bridge::{self as b, op};
+use rt::object::{Channel, Event, Guest, Handle, Vcpu, Vmo};
+use rt::println;
+use rt::sync::Mutex;
 
 use crate::memory::{GuestMemory, Plain};
 use crate::registry::Registry;
@@ -154,7 +154,7 @@ fn log_read(memory: &GuestMemory, r: &mut b::LogRead) -> Result<(), Error> {
         return Err(Error::Fault);
     }
     let mut data = alloc::vec![0u8; r.len as usize];
-    let (n, next) = vrt::object::log_read(r.offset, &mut data)?;
+    let (n, next) = rt::object::log_read(r.offset, &mut data)?;
     memory.write(r.buffer, &data[..n]);
     (r.len, r.next) = (n as u64, next);
     Ok(())
@@ -170,7 +170,7 @@ fn status(r: Result<(), Error>) -> u32 {
 /// The guest's budget of Veda's memory: a quarter of the PC's, at least
 /// [`MIN_BUDGET`].
 fn budget() -> u64 {
-    let total = vrt::object::system_info().map(|i| i.total_memory).unwrap_or(0);
+    let total = rt::object::system_info().map(|i| i.total_memory).unwrap_or(0);
     (total / 4).max(MIN_BUDGET)
 }
 
@@ -195,9 +195,9 @@ impl Bridge {
     /// platform's error if the request is not in the guest's memory.
     pub fn call(&self, memory: &GuestMemory, guest: &Guest, op: u32, gpa: u64) -> u64 {
         fn request<T: Plain>(memory: &GuestMemory, gpa: u64, f: impl FnOnce(&mut T)) -> u64 {
-            let Some(mut r) = memory.read_obj::<T>(gpa) else { return vhv::platform::error::INVALID };
+            let Some(mut r) = memory.read_obj::<T>(gpa) else { return hv::platform::error::INVALID };
             f(&mut r);
-            if memory.write_obj(gpa, &r) { 0 } else { vhv::platform::error::INVALID }
+            if memory.write_obj(gpa, &r) { 0 } else { hv::platform::error::INVALID }
         }
         match op {
             op::SETUP => request(memory, gpa, |r: &mut b::Setup| r.status = status(self.setup(memory, r))),
@@ -239,10 +239,10 @@ impl Bridge {
             op::VMO_UNMAP => request(memory, gpa, |r: &mut b::VmoMap| r.status = status(self.vmo_unmap(guest, r))),
             op::BOOTSTRAP => request(memory, gpa, |r: &mut b::Bootstrap| r.status = status(self.bootstrap(r))),
             op::CLOCK => request(memory, gpa, |r: &mut b::Clock| {
-                r.status = status(vrt::time::clock_info().map(|info| r.info = info));
+                r.status = status(rt::time::clock_info().map(|info| r.info = info));
             }),
             op::LOG_READ => request(memory, gpa, |r: &mut b::LogRead| r.status = status(log_read(memory, r))),
-            _ => vhv::platform::error::UNKNOWN,
+            _ => hv::platform::error::UNKNOWN,
         }
     }
 
@@ -483,7 +483,7 @@ impl Bridge {
     }
 
     fn bootstrap(&self, r: &mut b::Bootstrap) -> Result<(), Error> {
-        if r.role != vabi::startup::role::REGISTRY {
+        if r.role != abi::startup::role::REGISTRY {
             return Err(Error::NotFound);
         }
         r.out = self.insert(self.registry.connect()?.into_handle())?;
@@ -515,8 +515,8 @@ impl Bridge {
             items.push(memory.read_obj::<WaitItem>(r.items + i * size).ok_or(Error::Fault)?);
         }
         let mut resolved = self.table.lock().resolve(&items)?;
-        let polled = vrt::object::wait_many(&mut resolved, 0);
-        let now = vrt::time::now_ns();
+        let polled = rt::object::wait_many(&mut resolved, 0);
+        let now = rt::time::now_ns();
         match polled {
             Ok(n) if n > 0 => return finish(memory, r, &resolved, n as u32, b::OK),
             Ok(_) | Err(Error::TimedOut) if r.deadline <= now => {
@@ -552,7 +552,7 @@ impl Bridge {
             let mut failed: Vec<Option<Error>> = alloc::vec![None; snapshot.len()];
             // Finished waits the ring had no room for are posted again
             // soon, as the guest takes others from it.
-            let mut deadline = if unposted { vrt::time::now_ns().saturating_add(1_000_000) } else { u64::MAX };
+            let mut deadline = if unposted { rt::time::now_ns().saturating_add(1_000_000) } else { u64::MAX };
             {
                 let table = self.table.lock();
                 for (i, w) in snapshot.iter().enumerate() {
@@ -571,7 +571,7 @@ impl Bridge {
             }
             // (Admitted, the items fit one wait: `waits::MAX_ITEMS`.)
             let waited = if failed.iter().all(Option::is_none) {
-                vrt::object::wait_many(&mut items, deadline)
+                rt::object::wait_many(&mut items, deadline)
             } else {
                 // A handle closed meanwhile: the waits it ends end now.
                 Ok(0)
@@ -590,7 +590,7 @@ impl Bridge {
                         if failed[i].is_some() {
                             continue;
                         }
-                        match vrt::object::wait_many(&mut items[spans[i].clone()], 0) {
+                        match rt::object::wait_many(&mut items[spans[i].clone()], 0) {
                             Ok(_) | Err(Error::TimedOut) => {}
                             Err(e) => {
                                 failed[i] = Some(e);
@@ -603,11 +603,11 @@ impl Bridge {
                             println!("the bridge's waiter cannot wait ({e}); it tries again");
                             said = true;
                         }
-                        vrt::time::sleep(vrt::time::Duration::from_millis(10));
+                        rt::time::sleep(rt::time::Duration::from_millis(10));
                     }
                 }
             }
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             let mut waits = self.waits.lock();
             for mut w in waits.pending.take() {
                 // Its place in the snapshot, if it was in it.

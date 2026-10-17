@@ -4,18 +4,18 @@
 //! Veda's own interfaces, for C programs that are Veda services or talk to
 //! them directly (`<veda/ipc.h>`): handles, channels and the service
 //! registry, waiting, memory objects and events. They are the kernel's
-//! calls, but for the registry's, which go through `vproto`.
+//! calls, but for the registry's, which go through `proto`.
 //!
 //! Every call returns 0 (or a count) when it succeeds and a negative Veda
-//! error number (`vabi::Error`) when it fails. Handles are the kernel's;
+//! error number (`abi::Error`) when it fails. Handles are the kernel's;
 //! the descriptors of the POSIX side know nothing of them.
 
 use core::ffi::{CStr, c_char, c_int, c_void};
 use core::mem::ManuallyDrop;
 
-use vabi::{Error, RawHandle, WaitItem, nr};
-use vrt::object::{Channel, Handle};
-use vrt::sys::call;
+use abi::{Error, RawHandle, WaitItem, nr};
+use rt::object::{Channel, Handle};
+use rt::sys::call;
 
 fn fail(e: Error) -> c_int {
     -(e as c_int)
@@ -61,7 +61,7 @@ unsafe fn name<'a>(name: *const c_char) -> Option<&'a str> {
 /// Closes a handle.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_close(h: RawHandle) -> c_int {
-    done(vrt::sys::handle_close(h))
+    done(rt::sys::handle_close(h))
 }
 
 /// Duplicates a handle with `rights` (`~0`: those it has).
@@ -84,10 +84,10 @@ pub unsafe extern "C" fn veda_duplicate(h: RawHandle, rights: u32, out: *mut Raw
 /// `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> c_int {
-    if role < vabi::startup::role::USER {
+    if role < abi::startup::role::USER {
         return fail(Error::InvalidArgs);
     }
-    match vrt::env::take_handle(role) {
+    match rt::env::take_handle(role) {
         // SAFETY: as the caller promises.
         Some(h) => unsafe { give(out, Ok(h.into_raw() as usize)) },
         None => fail(Error::NotFound),
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> 
 
 /// A registry channel of the program's own, beside the layer's: a program
 /// in Rust on the standard library reaches services through it with Veda's
-/// own libraries (`vproto`), as a Veda program does through the channel it
+/// own libraries (`proto`), as a Veda program does through the channel it
 /// starts with. Whatever goes through it is the program's, as through the
 /// layer's (`init` knows it for the same process).
 ///
@@ -104,7 +104,7 @@ pub unsafe extern "C" fn veda_startup_handle(role: u32, out: *mut RawHandle) -> 
 /// `out` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_registry(out: *mut RawHandle) -> c_int {
-    match vproto::with_registry(|r| r.clone_registry()) {
+    match proto::with_registry(|r| r.clone_registry()) {
         // SAFETY: as the caller promises.
         Ok(Ok(Ok(ch))) => unsafe { give(out, Ok(ch.0.into_raw() as usize)) },
         Ok(Ok(Err(_))) => fail(Error::AccessDenied),
@@ -121,7 +121,7 @@ pub unsafe extern "C" fn veda_registry(out: *mut RawHandle) -> c_int {
 pub unsafe extern "C" fn veda_service_register(name_: *const c_char, listener: *mut RawHandle) -> c_int {
     // SAFETY: as the caller promises.
     let Some(n) = (unsafe { name(name_) }) else { return fail(Error::InvalidArgs) };
-    match vproto::register(n) {
+    match proto::register(n) {
         // SAFETY: as the caller promises.
         Ok(l) => unsafe { give(listener, Ok(l.0.into_raw() as usize)) },
         // Taken by another, or reserved for a system service.
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn veda_service_register(name_: *const c_char, listener: *
 /// `channel` is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_service_accept(listener: RawHandle, channel: *mut RawHandle) -> c_int {
-    match vproto::accept(&borrowed(listener)) {
+    match proto::accept(&borrowed(listener)) {
         // SAFETY: as the caller promises.
         Some(ch) => unsafe { give(channel, Ok(ch.0.into_raw() as usize)) },
         None => fail(Error::ShouldWait),
@@ -152,11 +152,11 @@ pub unsafe extern "C" fn veda_service_accept(listener: RawHandle, channel: *mut 
 pub unsafe extern "C" fn veda_service_connect(name_: *const c_char, channel: *mut RawHandle) -> c_int {
     // SAFETY: as the caller promises.
     let Some(n) = (unsafe { name(name_) }) else { return fail(Error::InvalidArgs) };
-    match vproto::connect(n) {
+    match proto::connect(n) {
         // SAFETY: as the caller promises.
         Ok(ch) => unsafe { give(channel, Ok(ch.0.into_raw() as usize)) },
-        Err(vproto::ServiceError::NotFound) => fail(Error::NotFound),
-        Err(vproto::ServiceError::Unavailable) => fail(Error::PeerClosed),
+        Err(proto::ServiceError::NotFound) => fail(Error::NotFound),
+        Err(proto::ServiceError::Unavailable) => fail(Error::PeerClosed),
     }
 }
 
@@ -216,12 +216,12 @@ pub unsafe extern "C" fn veda_channel_read(
 /// `items` holds `count` items.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn veda_wait(items: *mut WaitItem, count: usize, deadline: u64) -> c_int {
-    if count == 0 || count > vabi::WAIT_MANY_MAX {
+    if count == 0 || count > abi::WAIT_MANY_MAX {
         return fail(Error::InvalidArgs);
     }
     // SAFETY: as the caller promises.
     let items = unsafe { core::slice::from_raw_parts_mut(items, count) };
-    match vrt::object::wait_many(items, deadline) {
+    match rt::object::wait_many(items, deadline) {
         Ok(n) => n as c_int,
         Err(Error::TimedOut) => 0,
         Err(e) => fail(e),
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn veda_wait(items: *mut WaitItem, count: usize, deadline:
 /// The monotonic clock, in nanoseconds since boot.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_now_ns() -> u64 {
-    vrt::time::now_ns()
+    rt::time::now_ns()
 }
 
 /// Creates a memory object of `size` bytes, zero-filled.
@@ -257,8 +257,8 @@ pub unsafe extern "C" fn veda_vmo_map(
     flags: u32,
     addr: *mut *mut c_void,
 ) -> c_int {
-    let flags = flags as usize & (vabi::map_flags::READ | vabi::map_flags::WRITE);
-    let r = call(nr::VM_MAP, [vabi::INVALID_HANDLE as usize, vmo as usize, offset as usize, size as usize, 0, flags]);
+    let flags = flags as usize & (abi::map_flags::READ | abi::map_flags::WRITE);
+    let r = call(nr::VM_MAP, [abi::INVALID_HANDLE as usize, vmo as usize, offset as usize, size as usize, 0, flags]);
     match r {
         Ok(a) => {
             // SAFETY: as the caller promises.
@@ -272,7 +272,7 @@ pub unsafe extern "C" fn veda_vmo_map(
 /// Unmaps what [`veda_vmo_map`] mapped.
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_vmo_unmap(addr: *mut c_void, size: u64) -> c_int {
-    done(call(nr::VM_UNMAP, [vabi::INVALID_HANDLE as usize, addr as usize, size as usize, 0, 0, 0]))
+    done(call(nr::VM_UNMAP, [abi::INVALID_HANDLE as usize, addr as usize, size as usize, 0, 0, 0]))
 }
 
 /// Creates an event (signaled with `VEDA_SIGNALED`).

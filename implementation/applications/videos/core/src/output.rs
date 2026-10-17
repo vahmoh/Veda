@@ -16,13 +16,13 @@
 //! the longer it is away ([`Retry`]).
 //!
 //! Videos and Music both play through it. It belongs beside
-//! `vproto::audio::OutputStream`, where every player could use it.
+//! `proto::audio::OutputStream`, where every player could use it.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::{WaitItem, signals};
-use vproto::audio::{OutputStream, StreamSpec, audio};
+use abi::{WaitItem, signals};
+use proto::audio::{OutputStream, StreamSpec, audio};
 
 /// How long a call to the audio service may take.
 const CALL_TIMEOUT_NS: u64 = 2_000_000_000;
@@ -108,7 +108,7 @@ pub struct Output {
 /// Whether service `name` is registered now (asking the registry, which
 /// would otherwise queue a connection to a service not there yet).
 pub fn registered(name: &str) -> bool {
-    vproto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false)
+    proto::with_registry(|r| r.list().map(|l| l.iter().any(|s| s == name)).unwrap_or(false)).unwrap_or(false)
 }
 
 impl Output {
@@ -156,7 +156,7 @@ impl Output {
             if !registered(audio::NAME) {
                 return false;
             }
-            let Ok(ch) = vproto::connect(audio::NAME) else { return false };
+            let Ok(ch) = proto::connect(audio::NAME) else { return false };
             let client = audio::Client::new(ch);
             client.set_timeout(CALL_TIMEOUT_NS);
             self.client = Some(client);
@@ -178,7 +178,7 @@ impl Output {
                 true
             }
             Err(e) => {
-                vrt::println!("cannot open an audio stream ({e:?})");
+                rt::println!("cannot open an audio stream ({e:?})");
                 false
             }
         }
@@ -187,7 +187,7 @@ impl Output {
     /// The stream went with its service: a new one is tried at once.
     pub fn lost(&mut self) {
         if self.stream.is_some() || self.client.is_some() {
-            vrt::println!("the audio service went away");
+            rt::println!("the audio service went away");
             self.losses = self.losses.wrapping_add(1);
         }
         self.stream = None;
@@ -290,7 +290,7 @@ impl Output {
     /// is a service gone.
     fn call<T>(
         &mut self,
-        f: impl FnOnce(&audio::Client, u32) -> Result<Result<T, vproto::audio::AudioError>, vipc::IpcError>,
+        f: impl FnOnce(&audio::Client, u32) -> Result<Result<T, proto::audio::AudioError>, ipc::IpcError>,
     ) -> Option<T> {
         let (Some(c), Some(s)) = (&self.client, &self.stream) else { return None };
         match f(c, s.id) {

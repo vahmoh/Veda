@@ -14,7 +14,7 @@
 
 use core::f32::consts::PI;
 
-use vgfx::{Bitmap, Canvas, Color, DrawCache, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
+use gfx::{Bitmap, Canvas, Color, DrawCache, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
 
 /// The height of a glyph in pixels.
 pub const SIZE: i32 = 20;
@@ -61,7 +61,7 @@ impl Layer {
                 let cover = span.coverage_at(i) as u32;
                 if cover > 0 {
                     let px = &mut pixels[start + i as usize];
-                    *px = vgfx::color::scale(*px, 255 - cover);
+                    *px = gfx::color::scale(*px, 255 - cover);
                 }
             }
         });
@@ -72,7 +72,7 @@ impl Layer {
         let mut line = Path::new();
         line.move_to(from.0, from.1);
         line.line_to(to.0, to.1);
-        self.cut(&vraster::stroke(&line, &round(STROKE + 2.0 * GAP), 0.05));
+        self.cut(&raster::stroke(&line, &round(STROKE + 2.0 * GAP), 0.05));
         self.canvas().stroke_path(&line, &round(STROKE), color);
     }
 

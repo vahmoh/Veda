@@ -4,7 +4,7 @@
 //! Hardware access for user-space drivers: resources, I/O ports and
 //! interrupts.
 
-use vabi::{Error, MsiInfo, RawHandle, Rights, irq_flags, resource_kind};
+use abi::{Error, MsiInfo, RawHandle, Rights, irq_flags, resource_kind};
 
 use super::{SysResult, get_event, get_interrupt, get_ioports, get_resource, insert, ok};
 use crate::interrupt::Interrupt;
@@ -67,7 +67,7 @@ pub fn irq_create_software(flags: usize, ended: RawHandle) -> SysResult {
         return Err(Error::InvalidArgs);
     }
     let ended = match ended {
-        vabi::INVALID_HANDLE => None,
+        abi::INVALID_HANDLE => None,
         h => Some(get_event(h, Rights::SIGNAL)?),
     };
     let i = Interrupt::new_software(flags & irq_flags::LEVEL != 0, ended);

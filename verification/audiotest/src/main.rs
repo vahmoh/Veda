@@ -22,11 +22,11 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec;
 
-use vproto::audio::{InputSpec, InputStream, audio};
-use vrt::println;
-use vrt::time::Duration;
+use proto::audio::{InputSpec, InputStream, audio};
+use rt::println;
+use rt::time::Duration;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 const RATE: u32 = 16_000;
 
@@ -50,7 +50,7 @@ fn db(x: f64) -> f32 {
 }
 
 fn connect() -> Option<audio::Client> {
-    match vproto::connect(audio::NAME) {
+    match proto::connect(audio::NAME) {
         Ok(ch) => Some(audio::Client::new(ch)),
         Err(e) => {
             println!("audiotest: FAIL (no audio service: {:?})", e);
@@ -69,7 +69,7 @@ fn wait_for_input(client: &audio::Client) -> bool {
             println!("audiotest: input device {} ({} Hz, {} ch)", s.input_device, s.input_rate, s.input_channels);
             return true;
         }
-        vrt::time::sleep(Duration::from_millis(100));
+        rt::time::sleep(Duration::from_millis(100));
     }
     println!("audiotest: FAIL (no input device)");
     false
@@ -92,9 +92,9 @@ fn record(secs: u32) -> i32 {
     let mut second = vec![0i16; RATE as usize];
     for _ in 0..secs {
         let mut filled = 0;
-        let end = vrt::time::deadline_after(Duration::from_secs(3));
+        let end = rt::time::deadline_after(Duration::from_secs(3));
         while filled < second.len() {
-            if mic.wait_readable(320, end) == 0 && vrt::time::now_ns() >= end {
+            if mic.wait_readable(320, end) == 0 && rt::time::now_ns() >= end {
                 break;
             }
             filled += mic.read(&mut second[filled..]);
@@ -114,7 +114,7 @@ fn record(secs: u32) -> i32 {
 }
 
 fn main() -> i32 {
-    let args = vrt::env::args();
+    let args = rt::env::args();
     let mode = args.get(1).map(String::as_str).unwrap_or("record");
     let secs = args.get(2).and_then(|s| s.parse::<u32>().ok()).unwrap_or(5).clamp(1, 600);
     match mode {

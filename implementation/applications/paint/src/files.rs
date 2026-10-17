@@ -6,18 +6,18 @@
 //! jobs from one channel and gives back what it did on another, signalling an [`Event`] that
 //! the window waits on (see `App::wait_handles`); it ends with the window's side.
 //!
-//! Pictures move through `vfiles`, in one piece of shared memory each way.
+//! Pictures move through `files`, in one piece of shared memory each way.
 
 use std::cell::Cell;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Instant;
 
+use abi::RawHandle;
+use gfx::Bitmap;
+use image::Format;
 use paint_core::codec::{self, Opened};
-use vabi::RawHandle;
-use vgfx::Bitmap;
-use vimage::Format;
-use vrt::object::Event;
+use rt::object::Event;
 
 /// The largest file opened (bytes).
 const MAX_FILE: usize = 256 << 20;
@@ -57,8 +57,8 @@ impl Files {
             .stack_size(512 * 1024)
             .spawn(move || {
                 // Behind the window, which draws as it works.
-                let _ = vrt::thread::set_priority(vabi::priority::NORMAL - 1);
-                let fs = vfiles::Fs::connect();
+                let _ = rt::thread::set_priority(abi::priority::NORMAL - 1);
+                let fs = files::Fs::connect();
                 for job in todo {
                     if finished.send(work(&fs, job)).is_err() {
                         break;
@@ -107,7 +107,7 @@ impl Files {
 }
 
 /// Does `job`, saying in the log what it did and how long it took.
-fn work(fs: &vfiles::Fs, job: Job) -> Done {
+fn work(fs: &files::Fs, job: Job) -> Done {
     let started = Instant::now();
     let ms = || started.elapsed().as_millis();
     match job {
@@ -115,7 +115,7 @@ fn work(fs: &vfiles::Fs, job: Job) -> Done {
             let result = fs
                 .read_limited(&path, MAX_FILE)
                 .map_err(|e| match e {
-                    vfiles::fs::Error::TooLarge => format!("it is larger than {} MB", MAX_FILE >> 20),
+                    files::fs::Error::TooLarge => format!("it is larger than {} MB", MAX_FILE >> 20),
                     e => e.to_string(),
                 })
                 .and_then(|bytes| codec::decode(&bytes, max_pixels).map_err(|e| e.to_string()));

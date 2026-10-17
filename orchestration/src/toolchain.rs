@@ -364,14 +364,14 @@ pub fn posix_library() -> Result<PathBuf> {
     util::run(util::cargo_for(BARE_TARGET).args([
         "rustc",
         "--package",
-        "vposix",
+        "posix",
         "--target",
         BARE_TARGET,
         "--release",
         "--crate-type",
         "staticlib",
     ]))?;
-    Ok(util::target_dir().join(BARE_TARGET).join("release").join("libvposix.a"))
+    Ok(util::target_dir().join(BARE_TARGET).join("release").join("libposix.a"))
 }
 
 /// Links the POSIX layer's static library into the one relocatable object

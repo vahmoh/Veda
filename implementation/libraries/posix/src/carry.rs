@@ -24,9 +24,9 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vabi::ObjectType;
-use vipc::{Bytes, Decode, Decoder, Encode, Encoder, message};
-use vrt::object::{Channel, Handle, Process, Socket, Vmo};
+use abi::ObjectType;
+use ipc::{Bytes, Decode, Decoder, Encode, Encoder, message};
+use rt::object::{Channel, Handle, Process, Socket, Vmo};
 
 use crate::error;
 use crate::fd::{Description, Object};

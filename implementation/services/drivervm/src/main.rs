@@ -5,7 +5,7 @@
 //!
 //! Runs Linux in a virtual machine, for the drivers Veda takes from it
 //! (see `documentation/DRIVERVM.md`). The machine is Veda's paravirtual
-//! platform (`vhv::platform`): processors, memory, and hypercalls; no
+//! platform (`hv::platform`): processors, memory, and hypercalls; no
 //! emulated hardware. This program is its monitor: it lays out the guest's
 //! memory, loads the kernel and its initial RAM file system from the system
 //! image (`linux/kernel`, `linux/initramfs.cpio`), runs the virtual
@@ -15,7 +15,7 @@
 //! (`implementation/services/drivervm/src/architectures/<architecture>/`).
 //!
 //! Programs in the guest reach Veda's objects through the bridge
-//! (`vhv::bridge`): this program keeps the guest's handles and carries out
+//! (`hv::bridge`): this program keeps the guest's handles and carries out
 //! its operations on them, within bounds of what the guest makes Veda keep
 //! (handles, waits, memory, mappings), and gives it a registry narrowed to
 //! the services drivers attach to.
@@ -29,7 +29,7 @@
 //! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
 //! and the lines their INTx are wired to: `lines`); the PC's own devices,
 //! if devmgr hands them over (`arch::platform`: the keyboard controller);
-//! ACPI tables that describe them (`vhv::acpi`); and the PC's firmware
+//! ACPI tables that describe them (`hv::acpi`); and the PC's firmware
 //! variables, read-only (`variables`).
 //!
 //! The guest's life is this process's: when Linux powers the machine off,
@@ -64,21 +64,21 @@ mod variables;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vproto::startup::drivervm as roles;
-use vrt::object::{Channel, Resource, Vmo};
-use vrt::println;
+use proto::startup::drivervm as roles;
+use rt::object::{Channel, Resource, Vmo};
+use rt::println;
 
 use lines::Lines;
 use machine::{Config, Machine, Pc};
 use variables::FirmwareVariables;
 
-vrt::entry!(main);
+rt::entry!(main);
 
 /// Maps the system image (the initrd), where the guest's kernel is.
 fn system_image() -> Option<initrd::Archive<'static>> {
-    let vmo = Vmo::from_handle(vrt::env::take_handle(vabi::startup::role::INITRD)?);
+    let vmo = Vmo::from_handle(rt::env::take_handle(abi::startup::role::INITRD)?);
     let size = vmo.size().ok()?;
-    let addr = vmo.map(0, size, vabi::map_flags::READ).ok()?;
+    let addr = vmo.map(0, size, abi::map_flags::READ).ok()?;
     // SAFETY: a read-only mapping that lives as long as the process.
     let bytes: &'static [u8] = unsafe { core::slice::from_raw_parts(addr as *const u8, size) };
     initrd::Archive::open(bytes).ok()
@@ -86,7 +86,7 @@ fn system_image() -> Option<initrd::Archive<'static>> {
 
 fn config() -> Config {
     let mut c = Config::default();
-    for arg in vrt::env::args() {
+    for arg in rt::env::args() {
         match arg.split_once('=') {
             Some(("memory", v)) => c.memory_mib = v.parse().unwrap_or(c.memory_mib),
             Some(("cpus", v)) => c.cpus = v.parse().unwrap_or(c.cpus),
@@ -102,7 +102,7 @@ fn config() -> Config {
 }
 
 fn main() -> i32 {
-    let Some(hypervisor) = vrt::env::take_handle(roles::HYPERVISOR_RESOURCE).map(Resource::from_handle) else {
+    let Some(hypervisor) = rt::env::take_handle(roles::HYPERVISOR_RESOURCE).map(Resource::from_handle) else {
         println!("no hypervisor resource");
         return 1;
     };
@@ -116,11 +116,11 @@ fn main() -> i32 {
     };
     let config = config();
     let devices: Vec<Channel> =
-        core::iter::from_fn(|| vrt::env::take_handle(roles::DEVICE)).map(Channel::from_handle).collect();
+        core::iter::from_fn(|| rt::env::take_handle(roles::DEVICE)).map(Channel::from_handle).collect();
     let mut lines = Lines::default();
     let platform = arch::platform::Platform::take(&mut lines);
     let variables =
-        vrt::env::take_handle(roles::VARIABLES).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
+        rt::env::take_handle(roles::VARIABLES).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
     let pc = Pc { devices, platform, lines, variables };
     match Machine::start(&hypervisor, kernel.data, initramfs.data, pc, &config) {
         Ok(machine) => machine.wait(),

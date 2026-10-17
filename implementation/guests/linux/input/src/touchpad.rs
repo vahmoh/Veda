@@ -13,7 +13,7 @@
 //! * A physical click (a clickpad's) is the left button, or the right one
 //!   with two fingers on the pad, the middle one with three.
 
-use vproto::input::{InputEvent, keys};
+use proto::input::{InputEvent, keys};
 
 const BTN_TOOL_FINGER: u16 = 0x145;
 const BTN_TOOL_QUINTTAP: u16 = 0x148;

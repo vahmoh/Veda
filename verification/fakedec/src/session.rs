@@ -28,18 +28,18 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vabi::RawHandle;
-use vgfx::Canvas;
-use vproto::fs::file;
-use vproto::media::pool::slot_flags;
-use vproto::media::{
+use abi::RawHandle;
+use gfx::Canvas;
+use proto::fs::file;
+use proto::media::pool::slot_flags;
+use proto::media::{
     self, AudioSpec, AudioStream, Colour, DecoderInfo, FramePool, Heartbeat, MediaError, MediaInfo, OpenOptions,
     PcmRing, PictureChecksum, Rational, SeekMode, SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, VideoStream,
     open_flags, pcm,
 };
-use vrt::object::{Channel, Event, Vmo};
-use vrt::println;
-use vrt::time::Duration;
+use rt::object::{Channel, Event, Vmo};
+use rt::println;
+use rt::time::Duration;
 
 use crate::clip::{self, Clip, Fault, HEAD_BYTES, Picture, Secs};
 use crate::{picture, sound};
@@ -251,7 +251,7 @@ impl Session {
             && !self.first_picture
             && let Some((clock_us, at_ns)) = out.pool.player_clock()
         {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             let shown = clock_us.saturating_add((now.saturating_sub(at_ns) / 1000) as i64);
             if picture.pts_us.saturating_add(picture.duration_us.max(1)) < shown.saturating_sub(LATE_US) {
                 self.pictures.pop_front();
@@ -262,9 +262,9 @@ impl Session {
         }
         let Some(slot) = out.pool.claim() else { return false };
         self.pictures.pop_front();
-        let began = vrt::time::now_ns();
+        let began = rt::time::now_ns();
         draw_into(out, slot, &picture, opened.clip.duration_us);
-        self.counters.convert_ns += vrt::time::now_ns().saturating_sub(began);
+        self.counters.convert_ns += rt::time::now_ns().saturating_sub(began);
         self.counters.converted += 1;
         let mut flags = 0;
         if picture.key {
@@ -344,9 +344,9 @@ impl Session {
         }
         let picture = clip.picture(track.next);
         track.next += 1;
-        let began = vrt::time::now_ns();
+        let began = rt::time::now_ns();
         decode_picture(clip, &picture);
-        self.counters.decode_ns += vrt::time::now_ns().saturating_sub(began);
+        self.counters.decode_ns += rt::time::now_ns().saturating_sub(began);
         self.counters.stats.decoded += 1;
         self.take_picture(picture);
         true
@@ -431,7 +431,7 @@ impl Session {
     /// picture published last.
     fn position(&self) -> i64 {
         if let Some((clock_us, at_ns)) = self.video_out.as_ref().and_then(|o| o.pool.player_clock()) {
-            let since = if self.running { vrt::time::now_ns().saturating_sub(at_ns) / 1000 } else { 0 };
+            let since = if self.running { rt::time::now_ns().saturating_sub(at_ns) / 1000 } else { 0 };
             return clock_us.saturating_add(since as i64);
         }
         self.last
@@ -546,12 +546,12 @@ fn decode(clip: &Clip, from_us: i64, to_us: i64) {
     match clip.fault(from_us, to_us) {
         Some((Fault::Crash, at)) => {
             println!("crashing at {}, as the clip asks", Secs(at));
-            vrt::sys::process_exit(vabi::EXIT_CODE_CRASHED)
+            rt::sys::process_exit(abi::EXIT_CODE_CRASHED)
         }
         Some((Fault::Hang, at)) => {
             println!("hanging at {}, as the clip asks", Secs(at));
             loop {
-                vrt::time::sleep(Duration::from_secs(3600));
+                rt::time::sleep(Duration::from_secs(3600));
             }
         }
         None => {}
@@ -562,7 +562,7 @@ fn decode(clip: &Clip, from_us: i64, to_us: i64) {
 fn decode_picture(clip: &Clip, picture: &Picture) {
     decode(clip, picture.pts_us, picture.end_us());
     if clip.slow_ms > 0 {
-        vrt::time::sleep(Duration::from_millis(clip.slow_ms as u64));
+        rt::time::sleep(Duration::from_millis(clip.slow_ms as u64));
     }
 }
 

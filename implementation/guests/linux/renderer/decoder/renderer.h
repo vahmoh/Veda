@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: MIT
  *
  * Veda's renderer: carries out the virgl command streams of Veda's OpenGL
- * ES library (vgl) on a Gallium driver, in the driver VM (as virglrenderer
- * carries them out on a host's OpenGL; vgl speaks the same protocol to
+ * ES library (`gl`) on a Gallium driver, in the driver VM (as virglrenderer
+ * carries them out on a host's OpenGL; `gl` speaks the same protocol to
  * both).
  *
  * A device is a Gallium screen: the driver of the GPU (iris, or virgl on

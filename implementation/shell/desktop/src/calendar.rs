@@ -3,9 +3,9 @@
 
 //! The calendar flyout opened from the taskbar clock.
 
-use vgfx::{Align, Color, Rect};
-use vrt::time::{DateTime, days_from_civil, days_in_month, month_name, weekday};
-use vui::{Font, Icon, Ui};
+use gfx::{Align, Color, Rect};
+use rt::time::{DateTime, days_from_civil, days_in_month, month_name, weekday};
+use ui::{Font, Icon, Ui};
 
 use crate::{Model, chrome, taskbar};
 
@@ -41,7 +41,7 @@ impl Calendar {
         let t = ui.theme().clone();
         let w = ui.width;
         chrome::popup_background(&mut ui.canvas, &m.wallpaper.blurred, self.origin);
-        if ui.input.key(vproto::input::keys::ESC) {
+        if ui.input.key(proto::input::keys::ESC) {
             ui.close_window();
         }
 
@@ -51,7 +51,7 @@ impl Calendar {
         ui.label(Rect::new(PAD, 18, w - 2 * PAD, 40), &time, Font::Bold, 30.0, t.text, Align::Left);
         let date = format!("{}, {} {} {}", now.weekday_name(), now.day, now.month_name(), now.year);
         ui.label(Rect::new(PAD, 58, w - 2 * PAD, 22), &date, Font::Regular, 13.5, t.accent_hover, Align::Left);
-        let into_second = vrt::time::unix_time_ns() % 1_000_000_000;
+        let into_second = rt::time::unix_time_ns() % 1_000_000_000;
         let now_ns = ui.now();
         ui.repaint_at(now_ns + 1_000_000_000 - into_second);
         ui.canvas.fill_rect(Rect::new(0, 94, w, 1), Color::rgba(255, 255, 255, 18));

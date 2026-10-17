@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vproto"
+name = "proto"
 description = "Protocol definitions of the Veda system services"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-vipc = { workspace = true }
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
+ipc = { workspace = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
 
 [lints]
 workspace = true

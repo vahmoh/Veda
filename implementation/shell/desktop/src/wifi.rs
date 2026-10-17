@@ -5,10 +5,10 @@
 //! and off, the networks in range, joining one (with its password), leaving
 //! it, and a link to the network settings.
 
-use vgfx::{Align, Rect};
-use vnet::wifi::{self, ConnState, NetworkInfo, Security, WlanStatus, signal_bars};
-use vui::status::Network;
-use vui::{Font, Icon, Ui};
+use gfx::{Align, Rect};
+use net::wifi::{self, ConnState, NetworkInfo, Security, WlanStatus, signal_bars};
+use ui::status::Network;
+use ui::{Font, Icon, Ui};
 
 use crate::{Action, Model, chrome, taskbar};
 
@@ -140,7 +140,7 @@ impl WifiFlyout {
         let t = ui.theme().clone();
         let w = ui.width;
         chrome::popup_background(&mut ui.canvas, &m.wallpaper.blurred, self.origin);
-        if ui.input.key(vproto::input::keys::ESC) {
+        if ui.input.key(proto::input::keys::ESC) {
             ui.close_window();
         }
 
@@ -235,9 +235,9 @@ impl WifiFlyout {
         let id = ui.id(&format!("wifi-row-{}", n.name));
         let resp = ui.interact(id, head);
         if expanded {
-            ui.canvas.fill_rounded_rect(r.inset(2, 1, 2, 1), t.radius, vgfx::Color::rgba(255, 255, 255, 16));
+            ui.canvas.fill_rounded_rect(r.inset(2, 1, 2, 1), t.radius, gfx::Color::rgba(255, 255, 255, 16));
         } else if resp.hovered {
-            ui.canvas.fill_rounded_rect(head.inset(2, 1, 2, 1), t.radius, vgfx::Color::rgba(255, 255, 255, 10));
+            ui.canvas.fill_rounded_rect(head.inset(2, 1, 2, 1), t.radius, gfx::Color::rgba(255, 255, 255, 10));
         }
         if resp.clicked {
             self.select(if expanded { None } else { Some(n.ssid.0.clone()) });
@@ -339,9 +339,9 @@ impl WifiFlyout {
         let head = Rect::new(r.x, r.y, r.w, ROW);
         let resp = ui.interact(ui.id("wifi-hidden-row"), head);
         if self.hidden_open {
-            ui.canvas.fill_rounded_rect(r.inset(2, 1, 2, 1), t.radius, vgfx::Color::rgba(255, 255, 255, 16));
+            ui.canvas.fill_rounded_rect(r.inset(2, 1, 2, 1), t.radius, gfx::Color::rgba(255, 255, 255, 16));
         } else if resp.hovered {
-            ui.canvas.fill_rounded_rect(head.inset(2, 1, 2, 1), t.radius, vgfx::Color::rgba(255, 255, 255, 10));
+            ui.canvas.fill_rounded_rect(head.inset(2, 1, 2, 1), t.radius, gfx::Color::rgba(255, 255, 255, 10));
         }
         if resp.clicked {
             let open = !self.hidden_open;

@@ -6,7 +6,7 @@
 
 use alloc::sync::Arc;
 
-use vabi::Error;
+use abi::Error;
 
 use crate::arch;
 

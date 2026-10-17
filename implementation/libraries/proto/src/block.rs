@@ -16,10 +16,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vabi::signals;
-use vipc::{Bytes, WaitSet, enumeration, message, protocol};
-use vrt::object::Channel;
-use vrt::println;
+use abi::signals;
+use ipc::{Bytes, WaitSet, enumeration, message, protocol};
+use rt::object::Channel;
+use rt::println;
 
 use crate::init::ClientIdentity;
 
@@ -230,7 +230,7 @@ pub fn serve<D: Disks + ?Sized>(disks: &mut D, served: &[Served]) {
         for (&key, (channel, _)) in listeners.iter().chain(&connections) {
             ws.add(channel.raw(), signals::READABLE | signals::PEER_CLOSED, key);
         }
-        let Ok(ready) = ws.wait(vabi::DEADLINE_INFINITE) else { continue };
+        let Ok(ready) = ws.wait(abi::DEADLINE_INFINITE) else { continue };
         for (key, observed) in ready {
             if let Some((listener, disk)) = listeners.get(&key) {
                 let disk = *disk;

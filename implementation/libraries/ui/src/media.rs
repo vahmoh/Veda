@@ -5,7 +5,7 @@
 //! where the pointer is over it, the big round play button, and icon buttons
 //! that can be toggled on.
 
-use vgfx::{Color, Rect};
+use gfx::{Color, Rect};
 
 use crate::{Cursor, Font, Icon, Ui};
 
@@ -113,7 +113,7 @@ pub fn toggle_icon(
     if let Some(b) = badge {
         let br = Rect::new(r.right() - 15, r.y + 4, 12, 12);
         ui.canvas.fill_rounded_rect(br, 6.0, accent);
-        ui.label(br, b, Font::Bold, 9.0, Color::rgb(20, 20, 26), vgfx::Align::Center);
+        ui.label(br, b, Font::Bold, 9.0, Color::rgb(20, 20, 26), gfx::Align::Center);
     }
     if resp.hovered {
         ui.set_cursor(Cursor::Hand);

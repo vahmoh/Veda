@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vtls` — TLS for Veda applications: HTTPS, secure WebSockets and any
+//! `tls` — TLS for Veda applications: HTTPS, secure WebSockets and any
 //! other protocol over TLS 1.3 or TLS 1.2.
 //!
 //! ```ignore
-//! let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]);
-//! let mut tls = vtls::connect("example.com", 443, Duration::from_secs(20), &config)?;
+//! let config = tls::ClientConfig::with_alpn(&[b"http/1.1"]);
+//! let mut tls = tls::connect("example.com", 443, Duration::from_secs(20), &config)?;
 //! tls.write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?;
 //! let n = tls.read(&mut buf)?;
 //! ```
 //!
 //! * [`TlsStream`] — a client connection over any [`Transport`]
-//!   (`vnet::TcpStream` is one): blocking [`read`](TlsStream::read) and
+//!   (`net::TcpStream` is one): blocking [`read`](TlsStream::read) and
 //!   [`write_all`](TlsStream::write_all), and the non-blocking
 //!   [`try_read`](TlsStream::try_read) for event loops, which wait for the
 //!   TCP stream's handle to become readable.
@@ -61,9 +61,9 @@ pub fn connect(
     port: u16,
     timeout: Duration,
     config: &ClientConfig,
-) -> Result<TlsStream<vnet::TcpStream>, TlsError> {
-    let start = vrt::time::Instant::now();
-    let tcp = vnet::TcpStream::connect_host(host, port, timeout)?;
+) -> Result<TlsStream<net::TcpStream>, TlsError> {
+    let start = rt::time::Instant::now();
+    let tcp = net::TcpStream::connect_host(host, port, timeout)?;
     // The handshake gets what is left of the time (at least a second).
     let left = timeout.saturating_sub(start.elapsed()).max(Duration::from_secs(1));
     connect_over(tcp, host, left, config)
@@ -75,11 +75,11 @@ pub fn connect(
 /// The returned stream's TCP connection has no read or write timeout; set
 /// them through [`TlsStream::transport_mut`] if needed.
 pub fn connect_over(
-    mut tcp: vnet::TcpStream,
+    mut tcp: net::TcpStream,
     host: &str,
     timeout: Duration,
     config: &ClientConfig,
-) -> Result<TlsStream<vnet::TcpStream>, TlsError> {
+) -> Result<TlsStream<net::TcpStream>, TlsError> {
     tcp.set_read_timeout(Some(timeout));
     tcp.set_write_timeout(Some(timeout));
     let mut tls = TlsStream::connect(tcp, host, config)?;

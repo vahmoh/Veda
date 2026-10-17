@@ -43,7 +43,7 @@ use crate::util::{self, Result};
 
 /// What Veda's boot loader prints first: a machine that was reset has
 /// started again.
-const LOADER_BANNER: &str = "[vboot] Veda boot loader";
+const LOADER_BANNER: &str = "[bootloader] Veda boot loader";
 /// How long a reset may take to reach the loader (it takes about a second).
 const RESTART: Duration = Duration::from_secs(30);
 /// How long a screenshot waits at most for the screen to settle, and how

@@ -6,7 +6,7 @@
 //! Veda's loader read the firmware's variables that an operating system
 //! may read before Veda started (`bootinfo::variables`), and devmgr hands
 //! them over. The guest reads them with the platform's hypercall
-//! (`vhv::platform::hypercall::FIRMWARE_VARIABLE`), which does what UEFI's
+//! (`hv::platform::hypercall::FIRMWARE_VARIABLE`), which does what UEFI's
 //! `GetVariable` and `GetNextVariableName` do; it cannot change them.
 
 use alloc::vec;
@@ -14,9 +14,9 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use bootinfo::variables::{Name, Variables};
-use vhv::platform::{Variable, error, variable};
-use vrt::object::Vmo;
-use vrt::println;
+use hv::platform::{Variable, error, variable};
+use rt::object::Vmo;
+use rt::println;
 
 use crate::memory::GuestMemory;
 
@@ -40,7 +40,7 @@ impl FirmwareVariables {
     /// The variables devmgr handed over, mapped for the rest of the
     /// process's life (none if they are not records of theirs).
     pub fn map(vmo: Vmo) -> FirmwareVariables {
-        let mapped = vmo.size().and_then(|size| Ok((vmo.map(0, size, vabi::map_flags::READ)?, size)));
+        let mapped = vmo.size().and_then(|size| Ok((vmo.map(0, size, abi::map_flags::READ)?, size)));
         let Ok((addr, size)) = mapped else {
             println!("cannot map the PC's firmware variables");
             return FirmwareVariables::default();

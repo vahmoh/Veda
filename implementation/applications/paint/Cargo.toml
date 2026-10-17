@@ -14,13 +14,13 @@ test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
-vimage = { workspace = true, features = ["encode"] }
-vfiles = { workspace = true }
-vui = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+image = { workspace = true, features = ["encode"] }
+files = { workspace = true }
+ui = { workspace = true }
 libm = { workspace = true }
 apps-common = { path = "../common" }
 paint-core = { path = "core" }

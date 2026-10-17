@@ -8,10 +8,10 @@
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use vabi::signals::{READABLE, SIGNALED};
-use vabi::{Error, PortPacket};
-use vipc::WaitSet;
-use vrt::object::{self, Channel, Event, Port};
+use abi::signals::{READABLE, SIGNALED};
+use abi::{Error, PortPacket};
+use ipc::WaitSet;
+use rt::object::{self, Channel, Event, Port};
 
 use crate::{TestResult, check};
 
@@ -62,9 +62,9 @@ pub fn test_ports() -> TestResult {
     let (c, _d) = Channel::create().map_err(err)?;
     let sent = c.write(b"", alloc::vec![other.into_handle()]);
     check(sent == Err(Error::AccessDenied), "a port cannot travel")?;
-    let mut many = [PortPacket::default(); vabi::PORT_WAIT_MAX + 1];
+    let mut many = [PortPacket::default(); abi::PORT_WAIT_MAX + 1];
     let call =
-        vrt::sys::call(vabi::nr::PORT_WAIT, [port.raw() as usize, many.as_mut_ptr() as usize, many.len(), 0, 0, 0]);
+        rt::sys::call(abi::nr::PORT_WAIT, [port.raw() as usize, many.as_mut_ptr() as usize, many.len(), 0, 0, 0]);
     check(call == Err(Error::InvalidArgs), "a wait takes at most PORT_WAIT_MAX packets")?;
 
     // A port that goes leaves its registrations harmless.
@@ -88,7 +88,7 @@ pub fn test_many_handles() -> TestResult {
             ws.add(e.raw(), SIGNALED, i as u64);
         }
         events[round].signal().map_err(err)?;
-        let deadline = vrt::time::now_ns() + 5_000_000_000;
+        let deadline = rt::time::now_ns() + 5_000_000_000;
         let ready = ws.wait(deadline).map_err(err)?;
         let keys: Vec<u64> = ready.iter().map(|(k, _)| *k).collect();
         check(keys == alloc::vec![round as u64], "only the event signalled is ready")?;
@@ -99,6 +99,6 @@ pub fn test_many_handles() -> TestResult {
     for (i, e) in events.iter().enumerate() {
         ws.add(e.raw(), SIGNALED, i as u64);
     }
-    let ready = ws.wait(vrt::time::now_ns() + 20_000_000).map_err(err)?;
+    let ready = ws.wait(rt::time::now_ns() + 20_000_000).map_err(err)?;
     check(ready.is_empty(), "a deadline that passes reports nothing")
 }

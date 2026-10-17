@@ -8,16 +8,16 @@
 //! The rows of cards are worked out again only when the videos, where they
 //! were left, or the number of columns change.
 
-use vfiles::format::duration as time;
-use vfiles::kind::{FileKind, TYPES, VIDEOS, is_video};
-use vfiles::path::{HOME, display_path, join, natural_cmp};
-use vgfx::{Align, Bitmap, Color, Rect};
+use files::format::duration as time;
+use files::kind::{FileKind, TYPES, VIDEOS, is_video};
+use files::path::{HOME, display_path, join, natural_cmp};
+use gfx::{Align, Bitmap, Color, Rect};
+use proto::fs::FsError;
+use proto::input::keys;
+use proto::media::MediaInfo;
+use proto::vfs;
+use ui::{ButtonKind, Cursor, FileDialog, Font, Icon, Ui};
 use videos_core::text;
-use vproto::fs::FsError;
-use vproto::input::keys;
-use vproto::media::MediaInfo;
-use vproto::vfs;
-use vui::{ButtonKind, Cursor, FileDialog, Font, Icon, Ui};
 
 use crate::player::ACCENT;
 use crate::thumbs;
@@ -115,7 +115,7 @@ pub fn list(vfs: &vfs::Client, dir: &str) -> Result<Vec<Entry>, String> {
         .filter(|e| !e.is_dir && is_video(&e.name))
         .map(|e| Entry {
             path: join(dir, &e.name),
-            title: vfiles::path::file_stem(&e.name).into(),
+            title: files::path::file_stem(&e.name).into(),
             name: e.name,
             size: e.size,
             modified: e.modified,

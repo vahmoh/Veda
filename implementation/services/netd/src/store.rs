@@ -15,11 +15,11 @@
 
 use alloc::vec::Vec;
 
-use vabi::signals::{PEER_CLOSED, READABLE};
-use vfiles::fs::Fs;
-use vipc::{Decode, Decoder, Encode, Encoder};
-use vproto::net::FirewallConfig;
-use vrt::object::Channel;
+use abi::signals::{PEER_CLOSED, READABLE};
+use files::fs::Fs;
+use ipc::{Decode, Decoder, Encode, Encoder};
+use proto::net::FirewallConfig;
+use rt::object::Channel;
 
 const DIR: &str = "/home/.private/netd";
 const PATH: &str = "/home/.private/netd/firewall";
@@ -45,7 +45,7 @@ impl Store {
     /// Starts the store's thread, which reads the settings at once.
     pub fn start() -> Option<Store> {
         let (ours, theirs) = Channel::create().ok()?;
-        vrt::thread::Builder::new().name("firewall-store").spawn(move || serve(theirs)).ok()?;
+        rt::thread::Builder::new().name("firewall-store").spawn(move || serve(theirs)).ok()?;
         Some(Store { channel: ours })
     }
 
@@ -70,7 +70,7 @@ impl Store {
         let mut e = Encoder::new();
         config.clone().encode(&mut e);
         if self.channel.write(&e.bytes, Vec::new()).is_err() {
-            vrt::println!("firewall: the settings could not be handed to the store");
+            rt::println!("firewall: the settings could not be handed to the store");
         }
     }
 }
@@ -91,7 +91,7 @@ fn serve(channel: Channel) {
         return;
     }
     loop {
-        match channel.wait(READABLE | PEER_CLOSED, vabi::DEADLINE_INFINITE) {
+        match channel.wait(READABLE | PEER_CLOSED, abi::DEADLINE_INFINITE) {
             Ok(s) if s & READABLE != 0 => {}
             _ => return,
         }
@@ -106,7 +106,7 @@ fn serve(channel: Channel) {
         if let Some(config) = latest
             && !save(&fs, &config)
         {
-            vrt::println!("firewall: the settings could not be saved");
+            rt::println!("firewall: the settings could not be saved");
         }
     }
 }

@@ -7,11 +7,11 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
-use vabi::RawHandle;
-use vipc::{Bytes, IpcError};
-use vproto::net::{MAX_DATAGRAM, NetError, SocketEvent, SocketRequest};
-use vrt::object::Channel;
-use vrt::time::Duration;
+use abi::RawHandle;
+use ipc::{Bytes, IpcError};
+use proto::net::{MAX_DATAGRAM, NetError, SocketEvent, SocketRequest};
+use rt::object::Channel;
+use rt::time::Duration;
 
 use crate::{deadline, send_request, with_client};
 
@@ -58,11 +58,11 @@ impl UdpSocket {
         loop {
             match self.ch.read() {
                 Ok(msg) => {
-                    if let Ok((_, ev)) = vipc::decode_event::<SocketEvent>(msg) {
+                    if let Ok((_, ev)) = ipc::decode_event::<SocketEvent>(msg) {
                         self.absorb(ev);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => return,
+                Err(abi::Error::ShouldWait) => return,
                 Err(_) => {
                     self.error.get_or_insert(NetError::Closed);
                     return;
@@ -74,13 +74,13 @@ impl UdpSocket {
     fn wait(&mut self, end: u64) -> Result<bool, NetError> {
         match self.ch.read_blocking(end) {
             Ok(msg) => {
-                if let Ok((_, ev)) = vipc::decode_event::<SocketEvent>(msg) {
+                if let Ok((_, ev)) = ipc::decode_event::<SocketEvent>(msg) {
                     self.absorb(ev);
                 }
                 self.drain();
                 Ok(true)
             }
-            Err(vabi::Error::TimedOut) => Ok(false),
+            Err(abi::Error::TimedOut) => Ok(false),
             Err(_) => Err(NetError::Closed),
         }
     }
@@ -90,7 +90,7 @@ impl UdpSocket {
         if data.len() > MAX_DATAGRAM {
             return Err(NetError::MessageTooLarge);
         }
-        let end = vrt::time::deadline_after(Duration::from_secs(10));
+        let end = rt::time::deadline_after(Duration::from_secs(10));
         loop {
             self.drain();
             if let Some(e) = self.error {

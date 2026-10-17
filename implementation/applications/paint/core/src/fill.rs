@@ -13,8 +13,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vgfx::color::{keep_scalar, lerp_px};
-use vgfx::{Bitmap, Color, Rect};
+use gfx::color::{keep_scalar, lerp_px};
+use gfx::{Bitmap, Color, Rect};
 
 use crate::color::{distance, premultiplied};
 use crate::history::History;

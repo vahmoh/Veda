@@ -15,16 +15,16 @@ bench = false
 
 [dependencies]
 bootinfo = { workspace = true }
-vrt = { workspace = true }
-vabi = { workspace = true }
-vhv = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+hv = { workspace = true }
 drivervm-core = { path = "core" }
-vipc = { workspace = true }
-vproto = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
 initrd = { workspace = true }
 
 [build-dependencies]
-vbuild = { workspace = true }
+build = { workspace = true }
 
 [lints]
 workspace = true

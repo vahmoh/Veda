@@ -8,7 +8,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgl::{Context, gl};
+use ::gl::{Context, gl};
 
 use super::Quality;
 use super::gpu::Program;

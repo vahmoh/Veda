@@ -11,8 +11,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use vglsl::interp::{Env, Exec, LANES, Lanes};
-use vglsl::ops::f16_to_f32;
+use glsl::interp::{Env, Exec, LANES, Lanes};
+use glsl::ops::f16_to_f32;
 
 use super::program::SoftProgram;
 use crate::backend::{Attrib, AttribType, BufferRange, DrawInfo, IndexType, Mode, ResourceId};
@@ -57,7 +57,7 @@ pub fn fetches<'a>(attribs: &[Attrib], bytes: impl Fn(ResourceId) -> Option<&'a 
 /// bytes (`bytes` gives a buffer's contents), zero beyond the range and
 /// the buffer, as long as the block is.
 pub fn block_snapshots<'a>(
-    p: &vglsl::program::Program,
+    p: &glsl::program::Program,
     ranges: &[Option<BufferRange>],
     bytes: impl Fn(ResourceId) -> Option<&'a [u8]>,
 ) -> Vec<Vec<u8>> {
@@ -276,7 +276,7 @@ pub fn vertex_words(p: &SoftProgram) -> usize {
 /// instance `instance`: writes each vertex's position, point size and
 /// varyings to `out` (`vertex_words` words each), and its captured
 /// transform feedback components to `captured` if given. A shader that
-/// runs away (`vglsl`'s `Exec::runaway`) sets `abandoned`, and no batch
+/// runs away (`glsl`'s `Exec::runaway`) sets `abandoned`, and no batch
 /// is shaded once it is set: the draw is to be left out.
 #[allow(clippy::too_many_arguments)]
 pub fn shade(
@@ -298,7 +298,7 @@ pub fn shade(
             return;
         }
         let n = chunk.len();
-        let mask = if n == LANES { vglsl::interp::ALL } else { (1u32 << n) - 1 };
+        let mask = if n == LANES { glsl::interp::ALL } else { (1u32 << n) - 1 };
         // Inputs.
         for &(location, regs) in &p.attribs {
             let f = fetch.get(location as usize).copied();

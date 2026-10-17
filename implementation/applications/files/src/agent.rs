@@ -20,11 +20,11 @@
 //! action waits for its operation a few seconds, and an operation that
 //! takes longer goes on, the state saying how far it is.
 
-use vfiles::format::{format_time, human_size};
-use vfiles::kind::{EDITOR, FileKind, default_app, file_kind, kind_name};
-use vfiles::path::{extension, file_name, file_stem, is_within, join, parent, resolve};
-use vfiles::{HOME, trash};
-use vui::agent::{
+use files::format::{format_time, human_size};
+use files::kind::{EDITOR, FileKind, default_app, file_kind, kind_name};
+use files::path::{extension, file_name, file_stem, is_within, join, parent, resolve};
+use files::{HOME, trash};
+use ui::agent::{
     self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_list, arg_opt_str, arg_path, arg_str, clip, json, show_path,
 };
 
@@ -316,7 +316,7 @@ pub fn state(f: &Files) -> Value {
 
 /// A path in an action the user approves. Bare names are refused: they
 /// would mean whichever folder is shown when the user answers. (As
-/// `vui::agent::arg_path` resolves one argument, for an item of a list.)
+/// `ui::agent::arg_path` resolves one argument, for an item of a list.)
 fn explicit_path(p: &str, shown: &str) -> Result<String, String> {
     let p = p.trim();
     if !p.contains('/') && !p.starts_with('~') {
@@ -459,7 +459,7 @@ impl Files {
     /// operations' thread finished: the operation's outcome, or `None` while
     /// it goes on.
     fn await_job(&mut self, id: u64) -> Option<Finished> {
-        let done = self.worker.as_ref().is_some_and(|w| w.wait_for(id, vrt::time::now_ns() + OPERATION_WAIT_NS));
+        let done = self.worker.as_ref().is_some_and(|w| w.wait_for(id, rt::time::now_ns() + OPERATION_WAIT_NS));
         let finished = self.collect_jobs();
         if !done {
             return None;

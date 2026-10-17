@@ -8,14 +8,14 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vproto::net::format_mac;
-use vproto::netring::{RxInfo, SlotMeta};
-use vproto::wlan::{ConnState, FailReason, WlanError, WlanEvent, ssid_display};
-use vwlan::policy;
-use vwlan::profile::{self, MAX_PROFILES, Profile};
-use vwlan::rsn::Security;
-use vwlan::scan::{Bss, parse_bss};
-use vwlan::station::{Action, Credential, Failure, StaEvent, Target};
+use proto::net::format_mac;
+use proto::netring::{RxInfo, SlotMeta};
+use proto::wlan::{ConnState, FailReason, WlanError, WlanEvent, ssid_display};
+use wlan::policy;
+use wlan::profile::{self, MAX_PROFILES, Profile};
+use wlan::rsn::Security;
+use wlan::scan::{Bss, parse_bss};
+use wlan::station::{Action, Credential, Failure, StaEvent, Target};
 use zeroize::Zeroize;
 
 use crate::Wlan;
@@ -322,12 +322,12 @@ impl Wlan {
     }
 
     fn report_failure(&mut self, ssid: &[u8], reason: FailReason) {
-        self.notify(WlanEvent::ConnectFailed { ssid: vipc::Bytes(ssid.to_vec()), name: ssid_display(ssid), reason });
+        self.notify(WlanEvent::ConnectFailed { ssid: ipc::Bytes(ssid.to_vec()), name: ssid_display(ssid), reason });
     }
 
     /// Records a successful connection in the saved networks.
     fn remember(&mut self, req: &Request, security: Security, sae: bool) {
-        let unix_s = vrt::time::unix_time_ns() / 1_000_000_000;
+        let unix_s = rt::time::unix_time_ns() / 1_000_000_000;
         let changed = if let Some(p) = self.profiles.iter_mut().find(|p| p.ssid == req.ssid) {
             p.last_connected = unix_s;
             if let Some(pass) = &req.passphrase {
@@ -393,7 +393,7 @@ impl Wlan {
     }
 
     /// Handles a `connect` request from an application.
-    pub fn connect_request(&mut self, r: vproto::wlan::ConnectRequest, now: u64) -> Result<(), WlanError> {
+    pub fn connect_request(&mut self, r: proto::wlan::ConnectRequest, now: u64) -> Result<(), WlanError> {
         if !self.radio_usable() {
             return Err(WlanError::NoAdapter);
         }

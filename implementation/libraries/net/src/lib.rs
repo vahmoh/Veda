@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vnet` — networking for Veda applications.
+//! `net` — networking for Veda applications.
 //!
 //! Blocking, `std::net`-like types on top of the network service's socket
-//! protocol (`vproto::net`):
+//! protocol (`proto::net`):
 //!
 //! * [`TcpStream`] and [`TcpListener`] — connections, with timeouts;
 //!   [`TcpStream::connect_host`] resolves a name and tries each address.
@@ -25,13 +25,13 @@
 //! closed when dropped: a TCP connection is shut down gracefully, the data
 //! written before delivered.
 //!
-//! Applications with an event loop (like `vui` apps) can wait on
+//! Applications with an event loop (like `ui` apps) can wait on
 //! [`TcpStream::handle`] and call the non-blocking methods
 //! ([`TcpStream::try_read`], [`TcpStream::poll_connect`]) when it is
 //! readable.
 //!
 //! HTTP and WebSocket clients, over plain or TLS connections, are the
-//! `vweb` crate's; TLS itself is `vtls`'s, over a [`TcpStream`].
+//! `web` crate's; TLS itself is `tls`'s, over a [`TcpStream`].
 
 #![no_std]
 
@@ -47,19 +47,19 @@ use alloc::vec::Vec;
 
 pub use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 pub use ping::{PingReply, Pinger};
-pub use tcp::{TcpListener, TcpStream};
-pub use udp::UdpSocket;
-pub use vproto::net::{
+pub use proto::net::{
     AddrFamily, AppRule, Connectivity, FirewallConfig, FirewallEvent, FirewallNotice, FirewallProtocol,
     FirewallQuestion, FirewallReason, FirewallStats, InterfaceInfo, InterfaceKind, IpConfig, NetError, NetEvent,
     NetStatus, PortRule, RouteInfo, Scope, SocketInfo, TcpOptions, format_mac,
 };
-pub use vrt::time::Duration;
+pub use rt::time::Duration;
+pub use tcp::{TcpListener, TcpStream};
+pub use udp::UdpSocket;
 
-use vipc::{Encode, Encoder, IpcError};
-use vproto::net::{ResolveResult, SocketRequest, net};
-use vrt::object::Channel;
-use vrt::sync::Mutex;
+use ipc::{Encode, Encoder, IpcError};
+use proto::net::{ResolveResult, SocketRequest, net};
+use rt::object::Channel;
+use rt::sync::Mutex;
 
 /// Default time to wait for a connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -71,7 +71,7 @@ static CLIENT: Mutex<Option<net::Client>> = Mutex::new(None);
 /// Whether the network service is running (connecting to a service that
 /// is not registered would wait until it is).
 pub fn available() -> bool {
-    vproto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == net::NAME)).unwrap_or(false)).unwrap_or(false)
+    proto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == net::NAME)).unwrap_or(false)).unwrap_or(false)
 }
 
 /// Runs `f` with the connection to the network service, reconnecting once
@@ -83,7 +83,7 @@ pub(crate) fn with_client<R>(mut f: impl FnMut(&net::Client) -> Result<R, IpcErr
             if !available() {
                 return Err(NetError::Unavailable);
             }
-            let ch = vproto::connect(net::NAME).map_err(|_| NetError::Unavailable)?;
+            let ch = proto::connect(net::NAME).map_err(|_| NetError::Unavailable)?;
             *slot = Some(net::Client::new(ch));
         }
         match f(slot.as_ref().unwrap()) {
@@ -97,14 +97,14 @@ pub(crate) fn with_client<R>(mut f: impl FnMut(&net::Client) -> Result<R, IpcErr
 
 /// Sends a request on a socket channel.
 pub(crate) fn send_request(ch: &Channel, req: SocketRequest) -> Result<(), NetError> {
-    let mut e = Encoder::with_header(0, 0, vipc::FLAG_EVENT);
+    let mut e = Encoder::with_header(0, 0, ipc::FLAG_EVENT);
     req.encode(&mut e);
     loop {
         match ch.write(&e.bytes, Vec::new()) {
             Ok(()) => return Ok(()),
-            Err(vabi::Error::ShouldWait) => {
-                let s = ch.wait(vabi::signals::WRITABLE | vabi::signals::PEER_CLOSED, vabi::DEADLINE_INFINITE);
-                if s.is_ok_and(|s| s & vabi::signals::PEER_CLOSED != 0) {
+            Err(abi::Error::ShouldWait) => {
+                let s = ch.wait(abi::signals::WRITABLE | abi::signals::PEER_CLOSED, abi::DEADLINE_INFINITE);
+                if s.is_ok_and(|s| s & abi::signals::PEER_CLOSED != 0) {
                     return Err(NetError::Closed);
                 }
             }
@@ -116,8 +116,8 @@ pub(crate) fn send_request(ch: &Channel, req: SocketRequest) -> Result<(), NetEr
 /// A deadline `timeout` from now (`None`: forever).
 pub(crate) fn deadline(timeout: Option<Duration>) -> u64 {
     match timeout {
-        Some(t) => vrt::time::deadline_after(t),
-        None => vabi::DEADLINE_INFINITE,
+        Some(t) => rt::time::deadline_after(t),
+        None => abi::DEADLINE_INFINITE,
     }
 }
 
@@ -141,11 +141,11 @@ pub fn lookup(name: &str, family: AddrFamily, timeout: Duration) -> Result<Looku
         let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
         Ok(c.resolve(name.clone(), family, theirs)?.map(|()| ours))
     })??;
-    let msg = ours.read_blocking(vrt::time::deadline_after(timeout)).map_err(|e| match e {
-        vabi::Error::TimedOut => NetError::TimedOut,
+    let msg = ours.read_blocking(rt::time::deadline_after(timeout)).map_err(|e| match e {
+        abi::Error::TimedOut => NetError::TimedOut,
         _ => NetError::Unavailable,
     })?;
-    match vipc::decode_event::<ResolveResult>(msg) {
+    match ipc::decode_event::<ResolveResult>(msg) {
         Ok((_, ResolveResult::Found { addresses, ttl_s, canonical })) => Ok(Lookup { addresses, canonical, ttl_s }),
         Ok((_, ResolveResult::Failed { error })) => Err(error),
         Err(_) => Err(NetError::Internal),
@@ -239,11 +239,11 @@ pub fn watch_firewall() -> Result<Channel, NetError> {
 /// later).
 pub fn next_firewall_notice(ch: &Channel) -> Result<Option<FirewallNotice>, NetError> {
     match ch.read() {
-        Ok(msg) => match vipc::decode_event::<FirewallNotice>(msg) {
+        Ok(msg) => match ipc::decode_event::<FirewallNotice>(msg) {
             Ok((_, notice)) => Ok(Some(notice)),
             Err(_) => Ok(None),
         },
-        Err(vabi::Error::ShouldWait) => Ok(None),
+        Err(abi::Error::ShouldWait) => Ok(None),
         Err(_) => Err(NetError::Closed),
     }
 }
@@ -267,11 +267,11 @@ pub fn watch() -> Result<Channel, NetError> {
 /// `Err(Closed)` means the service went away (watch again later).
 pub fn next_event(ch: &Channel) -> Result<Option<NetEvent>, NetError> {
     match ch.read() {
-        Ok(msg) => match vipc::decode_event::<NetEvent>(msg) {
+        Ok(msg) => match ipc::decode_event::<NetEvent>(msg) {
             Ok((_, ev)) => Ok(Some(ev)),
             Err(_) => Ok(None),
         },
-        Err(vabi::Error::ShouldWait) => Ok(None),
+        Err(abi::Error::ShouldWait) => Ok(None),
         Err(_) => Err(NetError::Closed),
     }
 }

@@ -8,7 +8,7 @@
 //! taller than it is wide), so that the lock screen looks the same on a
 //! laptop and on a 4K monitor.
 
-use vgfx::Rect;
+use gfx::Rect;
 
 /// The screen's height for which a unit is a pixel.
 const BASE: f32 = 800.0;

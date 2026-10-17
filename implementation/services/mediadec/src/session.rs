@@ -19,15 +19,15 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::ptr;
 
-use vabi::RawHandle;
-use vproto::media::pool::slot_flags;
-use vproto::media::{
+use abi::RawHandle;
+use proto::media::pool::slot_flags;
+use proto::media::{
     self, AudioSpec, DecoderInfo, FramePool, Heartbeat, MediaError, MediaInfo, OpenOptions, PcmRing, PictureChecksum,
     SeekMode, SkipLevel, SlotMeta, Stats, Thumbnail, VideoSpec, open_flags, pcm, video_flags,
 };
-use vrt::object::{Channel, Event, Vmo};
-use vrt::println;
-use vrt::vm::Mapping;
+use rt::object::{Channel, Event, Vmo};
+use rt::println;
+use rt::vm::Mapping;
 
 use crate::ffi::{self, AGAIN, END, NO_TIME, OK};
 use crate::info;
@@ -371,7 +371,7 @@ impl Session {
             && !self.first_picture
             && let Some((clock_us, at_ns)) = out.pool.player_clock()
         {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             let shown = clock_us.saturating_add((now.saturating_sub(at_ns) / 1000) as i64);
             if pts.saturating_add(duration.max(1)) < shown.saturating_sub(LATE_US) {
                 self.pictures.pop_front();
@@ -383,9 +383,9 @@ impl Session {
         let Some(slot) = out.pool.claim() else { return false };
         let frame = self.pictures.pop_front().unwrap();
         let o = self.opened.as_ref().map_or(Orientation::default(), |o| o.orientation);
-        let began = vrt::time::now_ns();
+        let began = rt::time::now_ns();
         let r = convert(out, slot, &frame, o);
-        self.counters.convert_ns += vrt::time::now_ns().saturating_sub(began);
+        self.counters.convert_ns += rt::time::now_ns().saturating_sub(began);
         self.counters.converted += 1;
         if r != OK {
             out.pool.abandon(slot);
@@ -747,7 +747,7 @@ impl Session {
     /// picture published last.
     fn position(&self) -> i64 {
         if let Some((clock_us, at_ns)) = self.video_out.as_ref().and_then(|o| o.pool.player_clock()) {
-            let since = if self.running { vrt::time::now_ns().saturating_sub(at_ns) / 1000 } else { 0 };
+            let since = if self.running { rt::time::now_ns().saturating_sub(at_ns) / 1000 } else { 0 };
             return clock_us.saturating_add(since as i64);
         }
         self.last
@@ -1126,7 +1126,7 @@ impl media::media::Server for Session {
         let vmo = Vmo::create(len).map_err(|_| MediaError::NoMemory)?;
         let theirs = vmo.0.duplicate(None).map(Vmo::from_handle).map_err(|_| MediaError::NoMemory)?;
         let map =
-            Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE).map_err(|_| MediaError::NoMemory)?;
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| MediaError::NoMemory)?;
         let mut scaler = ptr::null_mut();
         let dst = map.as_ptr() as *mut u32;
         let r = if o.is_upright() {

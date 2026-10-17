@@ -5,9 +5,9 @@
 //! in their manifests) and running ones in the middle, and the agent,
 //! network, volume and clock buttons on the right.
 
-use vgfx::{Align, Color, Rect};
-use vproto::display::WindowState;
-use vui::{Font, Icon, Ui, status};
+use gfx::{Align, Color, Rect};
+use proto::display::WindowState;
+use ui::{Font, Icon, Ui, status};
 
 use crate::tooltip::Tip;
 use crate::{Action, Model, PopupKind, agent, apps, chrome, wifi};
@@ -125,7 +125,7 @@ impl Taskbar {
             tip = Some(("Start".into(), r.center().0));
         }
         let logo = if resp.held { 20 } else { 22 };
-        vui::draw_logo(&mut ui.canvas, r.centered(logo, logo));
+        ui::draw_logo(&mut ui.canvas, r.centered(logo, logo));
         if resp.pressed {
             self.start_pressed_at = ui.now();
         }
@@ -153,7 +153,7 @@ impl Taskbar {
                 ui.canvas.fill_rounded_rect(ir, 1.5, color);
             }
             if resp.hovered {
-                ui.set_cursor(vui::Cursor::Hand);
+                ui.set_cursor(ui::Cursor::Hand);
                 tip = Some((item.tip(), r.center().0));
             }
             if resp.clicked {
@@ -171,7 +171,7 @@ impl Taskbar {
         let clock = Rect::new(show_desktop.x - 6 - 96, 4, 96, h - 8);
         let resp = ui.interact(ui.id("clock"), clock);
         Self::button_bg(ui, clock, resp.hovered, resp.held, m.popup == Some(PopupKind::Calendar));
-        let now = vrt::time::DateTime::now();
+        let now = rt::time::DateTime::now();
         let time = format!("{:02}:{:02}", now.hour, now.minute);
         let date = format!("{} {} {}", &now.weekday_name()[..3], now.day, &now.month_name()[..3]);
         ui.label(Rect::new(clock.x, clock.y + 3, clock.w, 18), &time, Font::Regular, 13.0, t.text, Align::Center);
@@ -187,7 +187,7 @@ impl Taskbar {
             m.push(Action::TogglePopup(PopupKind::Calendar));
         }
         // Redraw when the minute changes.
-        let into_minute = vrt::time::unix_time_ns() % 60_000_000_000;
+        let into_minute = rt::time::unix_time_ns() % 60_000_000_000;
         let now_ns = ui.now();
         ui.repaint_at(now_ns + 60_000_000_000 - into_minute);
 

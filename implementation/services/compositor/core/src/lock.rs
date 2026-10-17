@@ -23,8 +23,8 @@
 //! The system's services hear of it (`display::watch_lock`): the lock
 //! service shows its screen, the agent stops listening.
 
-use vgfx::Rect;
-use vproto::display::{DisplayError, WindowKind};
+use gfx::Rect;
+use proto::display::{DisplayError, WindowKind};
 
 use crate::clients::Role;
 use crate::window::Window;

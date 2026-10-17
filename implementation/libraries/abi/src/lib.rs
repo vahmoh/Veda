@@ -943,7 +943,7 @@ pub const fn exit_signal(code: i64) -> Option<u32> {
 }
 
 /// Whether a process that ended with `code` crashed: a CPU fault, a panic
-/// (`vrt`'s), or for a POSIX program a signal that a fault of its own
+/// (`rt`'s), or for a POSIX program a signal that a fault of its own
 /// raises: `SIGABRT` (from `abort`, as a Rust panic in a program on the
 /// standard library raises it), `SIGSEGV`, `SIGBUS`, `SIGILL` or `SIGFPE`.
 /// A process ended by another (killed) did not crash.

@@ -12,7 +12,7 @@
 //! [`Registration::serve`] with their [`AgentServer`] between frames.
 //!
 //! ```ignore
-//! impl vui::App for Editor {
+//! impl ui::App for Editor {
 //!     fn agent_info(&self) -> Option<AppAgentInfo> {
 //!         Some(agent::info("A text editor with tabs.", alloc::vec![
 //!             Action::new("open_file", "Opens a text file in a new tab")
@@ -39,12 +39,12 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::{RawHandle, signals};
-use vproto::agent::{ActionResult, agent, agentapp};
-pub use vproto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
-use vrt::object::{Channel, Event};
-use vrt::sync::{Condvar, Mutex};
-use vrt::time::Duration;
+use abi::{RawHandle, signals};
+use proto::agent::{ActionResult, agent, agentapp};
+pub use proto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
+use rt::object::{Channel, Event};
+use rt::sync::{Condvar, Mutex};
+use rt::time::Duration;
 
 pub use serde_json::{Map, Value, json};
 
@@ -192,8 +192,8 @@ pub fn arg_path(args: &Value, name: &str) -> Result<String, String> {
     if p.is_empty() {
         return Err(alloc::format!("'{name}' is empty"));
     }
-    let p = vfiles::path::resolve(vfiles::path::HOME, p);
-    if vfiles::path::is_within(&p, "/home/.private") {
+    let p = files::path::resolve(files::path::HOME, p);
+    if files::path::is_within(&p, "/home/.private") {
         return Err("that location is private".into());
     }
     Ok(p)
@@ -201,7 +201,7 @@ pub fn arg_path(args: &Value, name: &str) -> Result<String, String> {
 
 /// How a path reads aloud ("~/Documents/notes.txt").
 pub fn show_path(path: &str) -> String {
-    vfiles::path::display_path(path)
+    files::path::display_path(path)
 }
 
 /// `text` cut to at most `max` bytes (at a character boundary), and
@@ -257,14 +257,14 @@ pub struct AgentLink {
 impl AgentLink {
     /// Registers with the agent service, if it is running.
     pub fn connect() -> Option<AgentLink> {
-        let running = vproto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == agent::NAME)))
+        let running = proto::with_registry(|r| r.list().map(|l| l.iter().any(|n| n == agent::NAME)))
             .ok()
             .and_then(|r| r.ok())
             .unwrap_or(false);
         if !running {
             return None;
         }
-        let client = agent::Client::new(vproto::connect(agent::NAME).ok()?);
+        let client = agent::Client::new(proto::connect(agent::NAME).ok()?);
         client.set_timeout(REGISTER_TIMEOUT_NS);
         let (ours, theirs) = Channel::create().ok()?;
         match client.register_app(theirs) {
@@ -288,7 +288,7 @@ impl AgentLink {
                         let _ = reply.send(&self.channel);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => return true,
+                Err(abi::Error::ShouldWait) => return true,
                 Err(_) => return false,
             }
         }
@@ -333,7 +333,7 @@ impl Registration {
             wake: Condvar::new(),
         });
         let helper = shared.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("agent-link")
             .stack_size(64 * 1024)
             .spawn(move || register_in_background(&helper, &signal))
@@ -386,7 +386,7 @@ fn register_in_background(shared: &RegistrationSlot, ready: &Event) {
                 drop(p);
                 let _ = ready.signal();
             }
-            None => vrt::time::sleep(REGISTER_RETRY),
+            None => rt::time::sleep(REGISTER_RETRY),
         }
     }
 }

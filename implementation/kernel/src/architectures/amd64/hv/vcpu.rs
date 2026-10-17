@@ -31,8 +31,8 @@ use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use vabi::{Error, VcpuExit, VcpuSegment, VcpuState, vcpu_exit};
-use vhv::amd64::lapic::{self, Delivery, Ipi, Lapic};
+use abi::{Error, VcpuExit, VcpuSegment, VcpuState, vcpu_exit};
+use hv::amd64::lapic::{self, Delivery, Ipi, Lapic};
 
 use super::vmx::{self, entry_ctl, field, proc, reason};
 use crate::arch::amd64::cpu::{self, rdmsr, wrmsr};
@@ -815,14 +815,14 @@ impl Vcpu {
             reason::CPUID => {
                 let (leaf, subleaf) = (ctx.regs.gprs[0] as u32, ctx.regs.gprs[1] as u32);
                 let cr4 = vmx::read(field::GUEST_CR4);
-                let c = vhv::amd64::cpuid::Context {
+                let c = hv::amd64::cpuid::Context {
                     apic_id: self.id,
                     cpus: self.guest.cpus,
                     tsc_khz: (crate::time::ticks_hz() / 1000) as u32,
                     osxsave: cr4 & (1 << 18) != 0,
                     xcr0: vmx::host_xcr0(),
                 };
-                let r = vhv::amd64::cpuid::guest(leaf, subleaf, &c, |l, s| {
+                let r = hv::amd64::cpuid::guest(leaf, subleaf, &c, |l, s| {
                     let r = cpu::cpuid(l, s);
                     [r.eax, r.ebx, r.ecx, r.edx]
                 });

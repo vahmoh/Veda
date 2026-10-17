@@ -23,8 +23,8 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vgfx::color::{keep_scalar, over, scale};
-use vgfx::{Bitmap, Color, Rect};
+use gfx::color::{keep_scalar, over, scale};
+use gfx::{Bitmap, Color, Rect};
 
 use crate::color::premultiplied;
 use crate::history::{History, TILE};

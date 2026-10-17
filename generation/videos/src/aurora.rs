@@ -12,11 +12,11 @@
 
 use std::f32::consts::TAU;
 
+use audio::synth::{self, Adsr, Analog, FilterSpec, Fm, Mode, OscSpec, Part, Song, Wave, theory};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use rand::{RngExt, SeedableRng};
 use rand_pcg::Pcg32;
-use vaudio::synth::{self, Adsr, Analog, FilterSpec, Fm, Mode, OscSpec, Part, Song, Wave, theory};
-use vraster::{Path, Rasterizer, Transform};
+use raster::{Path, Rasterizer, Transform};
 
 use crate::paint::{Blend, Canvas, Rgb, add, fbm1, gradient, hex, mix, noise1, scale, smoothstep, tonemap};
 

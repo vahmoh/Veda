@@ -549,7 +549,7 @@
 +#define OP_VMO_UNMAP	17
 +
 +#define VEDA_PENDING	0xFFFFFFFFu
-+/* The Veda error the driver answers with itself (vabi::Error). */
++/* The Veda error the driver answers with itself (abi::Error). */
 +#define VEDA_BAD_HANDLE	2
 +
 +#define MAX_BYTES	(64 * 1024)

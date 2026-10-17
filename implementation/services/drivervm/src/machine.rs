@@ -26,13 +26,13 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::{VcpuExit, map_flags, vcpu_exit};
-use vhv::acpi;
-use vhv::platform::{self, error, hypercall, power};
-use vrt::object::{Channel, Guest, Resource, Vcpu, Vmo};
-use vrt::println;
-use vrt::sync::Mutex;
-use vrt::vm::Mapping;
+use abi::{VcpuExit, map_flags, vcpu_exit};
+use hv::acpi;
+use hv::platform::{self, error, hypercall, power};
+use rt::object::{Channel, Guest, Resource, Vcpu, Vmo};
+use rt::println;
+use rt::sync::Mutex;
+use rt::vm::Mapping;
 
 use crate::arch::{self, PCI_LOW, platform::Platform};
 use crate::bridge::{self, Bridge};
@@ -67,7 +67,7 @@ const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_
 const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
 
 /// How the process ends, for the device manager, which started it.
-pub use vproto::startup::drivervm::exit_code;
+pub use proto::startup::drivervm::exit_code;
 
 /// What the guest has of the PC.
 pub struct Pc {
@@ -187,12 +187,12 @@ impl Machine {
         // The bridge's waits and the guest's registry, on threads of their
         // own.
         let m = machine.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("bridge-waits")
             .spawn(move || m.bridge.run_waits(&m.memory, &m.notify))
             .map_err(|e| format!("no thread for the bridge: {e}"))?;
         let m = machine.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("registry")
             .spawn(move || m.bridge.registry().run())
             .map_err(|e| format!("no thread for the registry: {e}"))?;
@@ -210,7 +210,7 @@ impl Machine {
     /// Runs virtual processor `id` on a thread of its own.
     fn spawn(self: &Arc<Self>, id: u32, vcpu: Vcpu) -> Result<(), String> {
         let machine = self.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("vcpu")
             .spawn(move || machine.run(id, vcpu))
             .map(|_| ())
@@ -220,7 +220,7 @@ impl Machine {
     /// The machine runs until a processor ends it (and this process).
     pub fn wait(&self) -> ! {
         loop {
-            vrt::time::sleep(vrt::time::Duration::from_secs(3600));
+            rt::time::sleep(rt::time::Duration::from_secs(3600));
         }
     }
 
@@ -256,8 +256,8 @@ impl Machine {
                 power::CRASHED => self.stop("Linux crashed", exit_code::CRASHED),
                 _ => error::INVALID,
             },
-            hypercall::WALLCLOCK => vrt::time::utc_time_ns(),
-            vhv::bridge::HYPERCALL => self.bridge.call(&self.memory, &self.guest, data[1] as u32, data[2]),
+            hypercall::WALLCLOCK => rt::time::utc_time_ns(),
+            hv::bridge::HYPERCALL => self.bridge.call(&self.memory, &self.guest, data[1] as u32, data[2]),
             hypercall::PCI_CONFIG_READ => self.devices.config_read(data[1], data[2], data[3]),
             hypercall::PCI_CONFIG_WRITE => self.devices.config_write(data[1], data[2], data[3], data[4]),
             // (devmgr makes the MSI: not with the processors' lock held.)
@@ -332,6 +332,6 @@ impl Machine {
             println!("linux: {}", String::from_utf8_lossy(line));
         }
         println!("{}", why);
-        vrt::sys::process_exit(code as i64)
+        rt::sys::process_exit(code as i64)
     }
 }

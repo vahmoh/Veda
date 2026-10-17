@@ -8,9 +8,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vgfx::Rect;
-use vproto::display::{self as dp, DisplayError, WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
-use vproto::input::{InputEvent, keys};
+use gfx::Rect;
+use proto::display::{self as dp, DisplayError, WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
+use proto::input::{InputEvent, keys};
 
 use crate::buffers::Buffers;
 use crate::clients::Identity;
@@ -180,11 +180,11 @@ fn titles_are_cut_and_the_window_list_fits_in_a_message() {
     }
     let list = wm.list_windows(SHELL);
     assert_eq!(list.len(), LIST_MAX);
-    let mut e = vipc::Encoder::with_header(20, 1, vipc::FLAG_RESPONSE);
+    let mut e = ipc::Encoder::with_header(20, 1, ipc::FLAG_RESPONSE);
     let widest: Vec<WindowInfo> =
         list.into_iter().map(|w| WindowInfo { app_id: String::from(&long[..limits::TEXT_MAX]), ..w }).collect();
-    vipc::Encode::encode(widest, &mut e);
-    assert!(e.bytes.len() <= vabi::CHANNEL_MAX_BYTES);
+    ipc::Encode::encode(widest, &mut e);
+    assert!(e.bytes.len() <= abi::CHANNEL_MAX_BYTES);
 }
 
 // ---- limits ----------------------------------------------------------------------

@@ -31,7 +31,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Bound;
 
-use vproto::fs::{DIR_PAGE_BYTES, DirEntry, DirPage, FsError, MAX_PATH, Stat};
+use proto::fs::{DIR_PAGE_BYTES, DirEntry, DirPage, FsError, MAX_PATH, Stat};
 
 /// Names a file or directory of a tree, never again another while the
 /// system runs (it is the inode number of `Stat`).

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `renderer` — Veda's renderer, in the driver VM: the OpenGL ES command
-//! streams of Veda's applications (vgl's, in virglrenderer's protocol)
+//! streams of Veda's applications (`gl`'s, in virglrenderer's protocol)
 //! carried out on the GPU by Mesa's Gallium driver for it, over the GPU's
 //! Linux driver: iris on i915 or xe (Intel's GPUs), virgl on virtio-gpu
 //! (QEMU's, which renders on the host's GPU); or on softpipe, Mesa's
@@ -16,7 +16,7 @@
 //! Each connection gets a context and a block of Veda's memory both sides
 //! map: a page whose first word is the number of the last fence that
 //! signaled, the command area submissions are read from, and the shared
-//! area resources may use as their storage (vgl's staging and query
+//! area resources may use as their storage (`gl`'s staging and query
 //! results). Commands are copied out of the command area before they are
 //! decoded, so a client changing them meanwhile cannot get them past the
 //! checks. Memory a client gives to render into (a display's picture)
@@ -40,12 +40,12 @@ use std::time::Duration;
 
 use std::collections::BTreeMap;
 
+use abi::{Rights, map_flags, signals};
 use guest_sys::idle;
-use vabi::{Rights, map_flags, signals};
-use vipc::{Bytes, WaitSet};
-use vproto::gpu::{GpuError, ResourceSpec, Session, gpu};
-use vrt::object::{Channel, Event, Vmo};
-use vrt::vm::Mapping;
+use ipc::{Bytes, WaitSet};
+use proto::gpu::{GpuError, ResourceSpec, Session, gpu};
+use rt::object::{Channel, Event, Vmo};
+use rt::vm::Mapping;
 
 /// A session's memory: its header page (the fence word, first), the
 /// command area, then the shared area.
@@ -427,7 +427,7 @@ impl gpu::Server for Serve<'_> {
                 // The GPU's driver takes the memory as a dma-buf, which keeps
                 // it mapped into the guest; what the driver keeps of it
                 // outlives the descriptor and the handle.
-                let fd = vrt::guest::dmabuf(memory.raw(), 0, len, true).map_err(|_| GpuError::NoMemory)?;
+                let fd = rt::guest::dmabuf(memory.raw(), 0, len, true).map_err(|_| GpuError::NoMemory)?;
                 // SAFETY: a live context, and a dma-buf of the memory.
                 let e = unsafe {
                     ffi::vr_resource_import(ctx.ctx.as_ptr(), &args(&spec), fd.as_raw_fd(), null_mut(), stride, &mut id)
@@ -515,7 +515,7 @@ fn read_client(device: &Device, clients: &mut [Client], i: usize, commands: &mut
     loop {
         let msg = match clients[i].channel.read() {
             Ok(msg) => msg,
-            Err(vabi::Error::ShouldWait) => return true,
+            Err(abi::Error::ShouldWait) => return true,
             Err(_) => return false,
         };
         let (process, all) = usage(clients, i, clients[i].process);
@@ -539,7 +539,7 @@ fn read_client(device: &Device, clients: &mut [Client], i: usize, commands: &mut
 fn serve(device: &Device, trace: bool) -> ! {
     let since = std::time::Instant::now();
     let listener = loop {
-        match vproto::register(gpu::NAME) {
+        match proto::register(gpu::NAME) {
             Ok(l) => break l,
             Err(_) if since.elapsed() < REGISTER_FOR => std::thread::sleep(Duration::from_millis(100)),
             Err(e) => {
@@ -561,7 +561,7 @@ fn serve(device: &Device, trace: bool) -> ! {
             ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, i as u64);
         }
         let pending = clients.iter().any(|c| c.context.as_ref().is_some_and(Context::pending));
-        let deadline = if pending { vrt::time::now_ns() + POLL_NS } else { vabi::DEADLINE_INFINITE };
+        let deadline = if pending { rt::time::now_ns() + POLL_NS } else { abi::DEADLINE_INFINITE };
         let ready = match ws.wait(deadline) {
             Ok(ready) => ready,
             // The monitor did not keep the wait (at its limits): not again
@@ -594,7 +594,7 @@ fn serve(device: &Device, trace: bool) -> ! {
         }
         if ready.iter().any(|&(k, _)| k == LISTENER) {
             // Within the most connections, of all and of the process.
-            while let Some((channel, who)) = vproto::accept_with_identity(&listener) {
+            while let Some((channel, who)) = proto::accept_with_identity(&listener) {
                 let its = clients.iter().filter(|c| c.process == who.koid).count();
                 if clients.len() < MAX_CLIENTS && its < PROCESS_CLIENTS {
                     clients.push(Client { channel, context: None, process: who.koid });

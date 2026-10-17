@@ -52,16 +52,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 
-use vabi::{RawHandle, WaitItem, signals};
-use vipc::{enumeration, message, protocol};
-use vrt::object::{Channel, Event, Vmo};
-use vrt::vm::Mapping;
+use abi::{RawHandle, WaitItem, signals};
+use ipc::{enumeration, message, protocol};
+use rt::object::{Channel, Event, Vmo};
+use rt::vm::Mapping;
 
 /// The protocol's version, which [`media::Client::hello`] checks.
 pub const VERSION: u32 = 2;
 
 /// The role of the control channel among the decoder's startup handles.
-pub const CONTROL_ROLE: u32 = vabi::startup::role::USER;
+pub const CONTROL_ROLE: u32 = abi::startup::role::USER;
 
 /// Limits on what [`MediaInfo`] lists, which keep it well inside one
 /// message.
@@ -547,11 +547,11 @@ pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
                         }
                     }
                     Err(e) => {
-                        vrt::println!("a request it cannot read ({e:?}): stopping");
+                        rt::println!("a request it cannot read ({e:?}): stopping");
                         return 1;
                     }
                 },
-                Err(vabi::Error::ShouldWait) => break,
+                Err(abi::Error::ShouldWait) => break,
                 Err(_) => return 0,
             }
         }
@@ -569,12 +569,12 @@ pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
             items.push(WaitItem { handle: wake, signals: signals::SIGNALED, ..Default::default() });
         }
         // Idle, it still beats now and then.
-        match vrt::object::wait_many(&mut items, vrt::time::now_ns() + BEAT_NS) {
-            Ok(_) | Err(vabi::Error::TimedOut) => {}
+        match rt::object::wait_many(&mut items, rt::time::now_ns() + BEAT_NS) {
+            Ok(_) | Err(abi::Error::TimedOut) => {}
             // A handle it cannot wait on (the application sent something
             // that is not an event): it looks again now and then rather
             // than spin.
-            Err(_) => vrt::time::sleep(vrt::time::Duration::from_millis(10)),
+            Err(_) => rt::time::sleep(rt::time::Duration::from_millis(10)),
         }
         if items[0].observed & signals::PEER_CLOSED != 0 && items[0].observed & signals::READABLE == 0 {
             return 0;
@@ -591,9 +591,9 @@ pub fn serve(control: &Channel, session: &mut impl Work) -> i32 {
 pub fn watchdog(control: RawHandle) {
     loop {
         let mut item = [WaitItem { handle: control, signals: signals::PEER_CLOSED, ..Default::default() }];
-        match vrt::object::wait_many(&mut item, vabi::DEADLINE_INFINITE) {
-            Ok(_) if item[0].observed & signals::PEER_CLOSED != 0 => vrt::sys::process_exit(0),
-            Ok(_) | Err(vabi::Error::TimedOut) => {}
+        match rt::object::wait_many(&mut item, abi::DEADLINE_INFINITE) {
+            Ok(_) if item[0].observed & signals::PEER_CLOSED != 0 => rt::sys::process_exit(0),
+            Ok(_) | Err(abi::Error::TimedOut) => {}
             Err(_) => return,
         }
     }
@@ -633,7 +633,7 @@ impl Heartbeat {
     pub fn create() -> Result<(Heartbeat, Vmo), SharedError> {
         let vmo = Vmo::create(Self::BYTES).map_err(|_| SharedError::NoMemory)?;
         let theirs = vmo.0.duplicate(None).map(Vmo::from_handle).map_err(|_| SharedError::NoMemory)?;
-        let map = Mapping::new(vmo, Self::BYTES, vabi::map_flags::READ | vabi::map_flags::WRITE)
+        let map = Mapping::new(vmo, Self::BYTES, abi::map_flags::READ | abi::map_flags::WRITE)
             .map_err(|_| SharedError::NoMemory)?;
         // SAFETY: a fresh mapping of a page, kept with the heartbeat.
         let beat = unsafe { Heartbeat::from_raw(map.as_ptr()) };
@@ -646,7 +646,7 @@ impl Heartbeat {
         if vmo.size().map_err(|_| SharedError::BadLayout)? < Self::BYTES {
             return Err(SharedError::BadLayout);
         }
-        let map = Mapping::new(vmo, Self::BYTES, vabi::map_flags::READ | vabi::map_flags::WRITE)
+        let map = Mapping::new(vmo, Self::BYTES, abi::map_flags::READ | abi::map_flags::WRITE)
             .map_err(|_| SharedError::NoMemory)?;
         // SAFETY: the mapping is a page, kept with the heartbeat.
         let beat = unsafe { Heartbeat::from_raw(map.as_ptr()) };
@@ -856,7 +856,7 @@ impl FramePool {
         let pixels = Vmo::create(len).map_err(|_| SharedError::NoMemory)?;
         let dup = |v: &Vmo| v.0.duplicate(None).map(Vmo::from_handle).map_err(|_| SharedError::NoMemory);
         let (their_state, their_pixels) = (dup(&state)?, dup(&pixels)?);
-        let rw = vabi::map_flags::READ | vabi::map_flags::WRITE;
+        let rw = abi::map_flags::READ | abi::map_flags::WRITE;
         let state = Mapping::new(state, pool::STATE_BYTES, rw).map_err(|_| SharedError::NoMemory)?;
         let pixels = Mapping::new(pixels, len, rw).map_err(|_| SharedError::NoMemory)?;
         // SAFETY: fresh mappings of the right sizes, kept with the pool.
@@ -871,7 +871,7 @@ impl FramePool {
         if state_len < pool::STATE_BYTES || pixels_len > MAX_POOL_BYTES.next_multiple_of(4096) {
             return Err(SharedError::BadLayout);
         }
-        let rw = vabi::map_flags::READ | vabi::map_flags::WRITE;
+        let rw = abi::map_flags::READ | abi::map_flags::WRITE;
         let state = Mapping::new(state, pool::STATE_BYTES, rw).map_err(|_| SharedError::NoMemory)?;
         let pixels = Mapping::new(pixels, pixels_len, rw).map_err(|_| SharedError::NoMemory)?;
         // SAFETY: the mappings are as long as given, kept with the pool.
@@ -1324,8 +1324,8 @@ impl PcmRing {
         let len = Self::bytes(capacity);
         let vmo = Vmo::create(len).map_err(|_| SharedError::NoMemory)?;
         let theirs = vmo.0.duplicate(None).map(Vmo::from_handle).map_err(|_| SharedError::NoMemory)?;
-        let map = Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE)
-            .map_err(|_| SharedError::NoMemory)?;
+        let map =
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| SharedError::NoMemory)?;
         // SAFETY: a fresh mapping of `len` bytes, kept with the ring.
         let ring = unsafe { PcmRing::init_raw(map.as_ptr(), capacity, rate) };
         Ok((PcmRing { _map: Some(map), ..ring }, theirs))
@@ -1337,8 +1337,8 @@ impl PcmRing {
         if len > Self::bytes(pcm::MAX_CAPACITY) {
             return Err(SharedError::BadLayout);
         }
-        let map = Mapping::new(vmo, len, vabi::map_flags::READ | vabi::map_flags::WRITE)
-            .map_err(|_| SharedError::NoMemory)?;
+        let map =
+            Mapping::new(vmo, len, abi::map_flags::READ | abi::map_flags::WRITE).map_err(|_| SharedError::NoMemory)?;
         // SAFETY: the mapping is `len` bytes, kept with the ring.
         let ring = unsafe { PcmRing::attach_raw(map.as_ptr(), len, Side::Decoder)? };
         Ok(PcmRing { _map: Some(map), ..ring })
@@ -1949,14 +1949,14 @@ mod tests {
             selected_audio: Some(u32::MAX),
         };
         assert!(info.is_valid());
-        let mut e = vipc::Encoder::with_header(2, 1, vipc::FLAG_RESPONSE);
-        vipc::Encode::encode(Ok::<MediaInfo, MediaError>(info), &mut e);
-        assert!(e.bytes.len() < vabi::CHANNEL_MAX_BYTES, "{} bytes", e.bytes.len());
+        let mut e = ipc::Encoder::with_header(2, 1, ipc::FLAG_RESPONSE);
+        ipc::Encode::encode(Ok::<MediaInfo, MediaError>(info), &mut e);
+        assert!(e.bytes.len() < abi::CHANNEL_MAX_BYTES, "{} bytes", e.bytes.len());
         // And the most checksums.
-        let mut e = vipc::Encoder::with_header(12, 1, vipc::FLAG_RESPONSE);
+        let mut e = ipc::Encoder::with_header(12, 1, ipc::FLAG_RESPONSE);
         let sums = vec![PictureChecksum { pts_us: i64::MAX, md5: [0xFF; 16] }; MAX_CHECKSUMS as usize];
-        vipc::Encode::encode(Ok::<Vec<PictureChecksum>, MediaError>(sums), &mut e);
-        assert!(e.bytes.len() < vabi::CHANNEL_MAX_BYTES, "{} bytes", e.bytes.len());
+        ipc::Encode::encode(Ok::<Vec<PictureChecksum>, MediaError>(sums), &mut e);
+        assert!(e.bytes.len() < abi::CHANNEL_MAX_BYTES, "{} bytes", e.bytes.len());
     }
 
     #[test]

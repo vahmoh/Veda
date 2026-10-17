@@ -8,8 +8,8 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vglsl::tgsi;
-use vglsl::types::{Basic, Scalar};
+use glsl::tgsi;
+use glsl::types::{Basic, Scalar};
 
 use super::protocol::*;
 use super::{VirglBackend, formats};
@@ -37,7 +37,7 @@ pub(super) struct Program {
     samplers: [Vec<u32>; 2],
     blocks: [Vec<u32>; 2],
     /// The program's sampler types (by sampler index).
-    sampler_types: Vec<vglsl::types::Sampler>,
+    sampler_types: Vec<glsl::types::Sampler>,
     /// The bytes each uniform block needs (by block index).
     block_sizes: Vec<u32>,
     /// Vertex shader variants capturing the second, third... separate
@@ -45,7 +45,7 @@ pub(super) struct Program {
     pub passes: Vec<u32>,
     /// The program as linked, for capturing in guest memory where the host
     /// cannot (see `feedback`).
-    source: Arc<vglsl::program::Program>,
+    source: Arc<glsl::program::Program>,
 }
 
 /// State objects of one kind made on the host, by their words, with when
@@ -197,7 +197,7 @@ impl Bound {
 /// The stream output description of a vertex shader (the words after
 /// `SO_NUM_OUTPUTS`, with it), for transform feedback: of every captured
 /// varying, or (`only`) of one, into buffer 0.
-fn stream_output(l: &vglsl::link::Linked, vs: &tgsi::Shader, only: Option<usize>) -> Vec<u32> {
+fn stream_output(l: &glsl::link::Linked, vs: &tgsi::Shader, only: Option<usize>) -> Vec<u32> {
     if l.feedback.is_empty() {
         return vec![0];
     }
@@ -390,7 +390,7 @@ fn sampler_words(s: &SamplerState) -> [u32; 8] {
 impl VirglBackend {
     // ---- Programs -------------------------------------------------------------
 
-    pub(super) fn program(&mut self, p: Arc<vglsl::program::Program>) -> ProgramId {
+    pub(super) fn program(&mut self, p: Arc<glsl::program::Program>) -> ProgramId {
         let vs = tgsi::translate(&p.vertex, &p.linked, &self.tgsi);
         let fs = tgsi::translate(&p.fragment, &p.linked, &self.tgsi);
         // virglrenderer captures several buffers only with
@@ -746,7 +746,7 @@ impl VirglBackend {
         for (stage, shader) in [(0usize, SHADER_VERTEX), (1, SHADER_FRAGMENT)] {
             {
                 // The program's uniforms, then the always-zero slot the
-                // shaders build constants from (see `vglsl::tgsi`).
+                // shaders build constants from (see `glsl::tgsi`).
                 let n = slots as usize;
                 let bound = &self.state.bound.constants[stage];
                 let unchanged = bound.len() == 6 + n * 4

@@ -20,8 +20,8 @@ pub mod platform;
 use core::ops::Range;
 
 pub use drivervm_core::arch::MAX_MSIS;
-pub use vhv::amd64::memory::{ACPI_AT, ACPI_ROOM, OPREGION_AT};
-pub use vhv::amd64::platform::msi_result;
+pub use hv::amd64::memory::{ACPI_AT, ACPI_ROOM, OPREGION_AT};
+pub use hv::amd64::platform::msi_result;
 
 /// Where PCI functions' BARs go below 4 GiB: from 3 GiB (RAM ends before)
 /// to where a PC has its I/O APIC and local APICs.

@@ -6,7 +6,7 @@
 
 use super::{Format as F, HALF_FLOAT_OES, Texel, clamp01};
 use crate::gl;
-use vglsl::ops::{f16_to_f32, f32_to_f16};
+use glsl::ops::{f16_to_f32, f32_to_f16};
 
 /// A pixel layout in application memory: a `(format, type)` pair.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

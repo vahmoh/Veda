@@ -19,12 +19,12 @@
 //!   notification): [`crate::approval`].
 //! * [`draw_orb`]: the agent's tray item, a small ring that does the same.
 
+use gfx::{Align, Canvas, Color, Rect};
+use proto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
+use rt::object::Channel;
+use rt::vm::Mapping;
 use shell_common::presence::{self, RING_WIDTH};
-use vgfx::{Align, Canvas, Color, Rect};
-use vproto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
-use vrt::object::Channel;
-use vrt::vm::Mapping;
-use vui::{Font, Icon, Ui, status};
+use ui::{Font, Icon, Ui, status};
 
 use crate::approval::{self, Choice, Look};
 use crate::{Action, Model, chrome, connect_running, taskbar};
@@ -61,11 +61,11 @@ impl AgentLink {
         let client = agent::Client::new(connect_running(agent::NAME)?);
         client.set_timeout(2_000_000_000);
         let link = client.attach_ui().ok()?.ok()?;
-        let live = Mapping::new(link.live, 4096, vabi::map_flags::READ).ok()?;
+        let live = Mapping::new(link.live, 4096, abi::map_flags::READ).ok()?;
         Some(AgentLink { client, events: link.events, live })
     }
 
-    pub fn events_handle(&self) -> vabi::RawHandle {
+    pub fn events_handle(&self) -> abi::RawHandle {
         self.events.raw()
     }
 
@@ -75,11 +75,11 @@ impl AgentLink {
         loop {
             match self.events.read() {
                 Ok(msg) => {
-                    if let Ok((AGENT_EVENT, ev)) = vipc::decode_event::<AgentEvent>(msg) {
+                    if let Ok((AGENT_EVENT, ev)) = ipc::decode_event::<AgentEvent>(msg) {
                         out.push(ev);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => return Some(out),
+                Err(abi::Error::ShouldWait) => return Some(out),
                 Err(_) => return None,
             }
         }
@@ -276,7 +276,7 @@ impl AgentWindow {
         let bar = Rect::new(0, m.screen.h - taskbar::HEIGHT, m.screen.w, taskbar::HEIGHT);
         let bg = chrome::mica_color(&m.wallpaper.blurred, bar, TINT);
         ui.canvas.fill_rect(ui.rect(), bg);
-        if ui.input.key(vproto::input::keys::ESC) {
+        if ui.input.key(proto::input::keys::ESC) {
             ui.close_window();
         }
         let now = ui.now();
@@ -289,7 +289,7 @@ impl AgentWindow {
             Rect::new(w / 2 - base as i32 - 10, cy - base as i32 - 10, 2 * base as i32 + 20, 2 * base as i32 + 20);
         let resp = ui.interact(ui.id("ring"), ring);
         if resp.hovered {
-            ui.set_cursor(vui::Cursor::Hand);
+            ui.set_cursor(ui::Cursor::Hand);
         }
         draw_presence(&mut ui.canvas, w as f32 / 2.0, cy as f32, base, &m.agent, now);
         if resp.clicked {

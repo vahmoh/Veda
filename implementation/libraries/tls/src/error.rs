@@ -8,9 +8,9 @@ use alloc::string::{String, ToString};
 use core::fmt;
 use core::net::{Ipv4Addr, Ipv6Addr};
 
+use net::NetError;
 use rustls::pki_types::{IpAddr, ServerName, UnixTime};
 use rustls::{AlertDescription, CertificateError, PeerIncompatible};
-use vnet::NetError;
 
 /// Why a TLS operation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +85,7 @@ impl From<rustls::Error> for TlsError {
 
 /// A date as `YYYY-MM-DD` (UTC).
 fn date(t: &UnixTime) -> String {
-    let d = vrt::time::DateTime::from_unix(t.as_secs());
+    let d = rt::time::DateTime::from_unix(t.as_secs());
     format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
 }
 

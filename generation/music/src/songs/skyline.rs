@@ -5,7 +5,7 @@
 //!
 //! Intro (8) · groove (8) · drop (16) · breakdown (8) · drop (16) · outro (4)
 
-use vaudio::synth::{Adsr, Fm, Part, Song};
+use audio::synth::{Adsr, Fm, Part, Song};
 
 use super::Track;
 use crate::dsl::{self, BAR, Humanize, key};

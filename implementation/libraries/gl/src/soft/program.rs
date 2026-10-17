@@ -8,11 +8,11 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vglsl::interp::{self, Input, Output, Reg};
-use vglsl::ir::{BuiltinIn, BuiltinOut};
-use vglsl::link::Interpolation;
-use vglsl::program::Program;
-use vglsl::types::{Basic, Scalar};
+use glsl::interp::{self, Input, Output, Reg};
+use glsl::ir::{BuiltinIn, BuiltinOut};
+use glsl::link::Interpolation;
+use glsl::program::Program;
+use glsl::types::{Basic, Scalar};
 
 use crate::context::DRAW_BUFFERS;
 

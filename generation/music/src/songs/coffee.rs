@@ -7,7 +7,7 @@
 //! (8) · outro (4). Fingerpicked and strummed guitars, glockenspiel,
 //! whistle, bass, shaker and claps.
 
-use vaudio::synth::{Part, Song};
+use audio::synth::{Part, Song};
 
 use super::Track;
 use crate::dsl::{self, BAR, Humanize, key};

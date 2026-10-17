@@ -7,7 +7,7 @@
 //!
 //! A socket's program gives the VFS one end of the socket's inbox, a
 //! channel, and keeps the other. The VFS writes on it what comes for the
-//! socket (`vproto::fs::socket_event`): the connections to a listening
+//! socket (`proto::fs::socket_event`): the connections to a listening
 //! stream or seqpacket socket, which carry the ends the connecting program
 //! made (the bytes then go between the two programs without the VFS), and
 //! the datagrams sent to a datagram socket. A full inbox makes connecting
@@ -33,10 +33,10 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use vabi::signals::PEER_CLOSED;
-use vipc::{Bytes, IpcError};
-use vproto::fs::{FsError, SocketConnection, SocketDatagram, SocketPeer, socket_event, socket_kind};
-use vrt::object::{Channel, Handle};
+use abi::signals::PEER_CLOSED;
+use ipc::{Bytes, IpcError};
+use proto::fs::{FsError, SocketConnection, SocketDatagram, SocketPeer, socket_event, socket_kind};
+use rt::object::{Channel, Handle};
 
 use vfs_core::tree::NodeId;
 
@@ -98,11 +98,11 @@ impl Bound {
 
     /// Writes event `ordinal` on its inbox: `Refused` when its program
     /// closed it, `Busy` while the inbox is full.
-    fn deliver<T: vipc::Encode>(&mut self, ordinal: u32, payload: T) -> Result<(), FsError> {
+    fn deliver<T: ipc::Encode>(&mut self, ordinal: u32, payload: T) -> Result<(), FsError> {
         let inbox = self.inbox.as_ref().ok_or(FsError::Refused)?;
-        match vipc::send_event(inbox, ordinal, payload) {
+        match ipc::send_event(inbox, ordinal, payload) {
             Ok(()) => Ok(()),
-            Err(IpcError::Kernel(vabi::Error::ShouldWait)) => Err(FsError::Busy),
+            Err(IpcError::Kernel(abi::Error::ShouldWait)) => Err(FsError::Busy),
             Err(IpcError::PeerClosed) => {
                 self.inbox = None;
                 Err(FsError::Refused)

@@ -12,7 +12,7 @@ publish = false
 [dependencies]
 # What the generators share (a host library of generation/).
 gencommon = { path = "../common" }
-vimage = { workspace = true, features = ["encode"] }
+image = { workspace = true, features = ["encode"] }
 
 [lints]
 workspace = true

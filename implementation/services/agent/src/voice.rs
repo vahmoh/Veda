@@ -7,7 +7,7 @@
 //!   the agent can listen while it talks (and be interrupted) without
 //!   hearing itself. Beside the cleaned microphone the audio service
 //!   delivers what was playing when it was recorded and the microphone as
-//!   recorded, for the echo gate (`vagent::gate`).
+//!   recorded, for the echo gate (`agent::gate`).
 //! * The voice: a 24 kHz mono playback stream. Deepgram's speech arrives in
 //!   bursts, at times ahead of what plays and at times behind; what does
 //!   not fit in the stream's ring waits in a queue. An answer starts
@@ -24,13 +24,13 @@
 //!   voice starving.
 //! * Levels for the interface's animation: how loud the voice that is
 //!   audible *right now* is (from the stream's played position), and how
-//!   loud the microphone is (with a meter's ballistics: `vaudio::level`).
+//!   loud the microphone is (with a meter's ballistics: `audio::level`).
 
 use std::collections::VecDeque;
 
-use vabi::{RawHandle, signals};
-use vaudio::level::{self, LevelMeter};
-use vproto::audio::{InputSpec, InputStream, OutputStream, StreamSpec, audio, ring};
+use ::audio::level::{self, LevelMeter};
+use abi::{RawHandle, signals};
+use proto::audio::{InputSpec, InputStream, OutputStream, StreamSpec, audio, ring};
 
 /// Microphone rate (what Deepgram receives).
 pub const MIC_RATE: u32 = 16_000;
@@ -92,7 +92,7 @@ pub struct Voice {
 impl Voice {
     /// Connects to the audio service (streams are opened on demand).
     pub fn new() -> Option<Voice> {
-        let client = audio::Client::new(vproto::connect(audio::NAME).ok()?);
+        let client = audio::Client::new(proto::connect(audio::NAME).ok()?);
         let mut mic_meter = LevelMeter::new(MIC_RATE);
         mic_meter.set_range(QUIET_DB, LOUD_DB);
         Some(Voice {
@@ -240,7 +240,7 @@ impl Voice {
                     println!("the voice ran dry mid-answer; gathering {} ms before playing now", self.prebuffer_ms);
                 }
             }
-            self.gathering_since = Some(vrt::time::now_ns());
+            self.gathering_since = Some(rt::time::now_ns());
             self.complete = false;
         }
         self.queue.extend(pcm.iter().copied());
@@ -263,7 +263,7 @@ impl Voice {
             let frames = (self.prebuffer_ms * (VOICE_RATE / 1000)) as usize;
             let wait_ns = (self.prebuffer_ms + PREBUFFER_GRACE_MS) as u64 * 1_000_000;
             let enough =
-                self.queue.len() >= frames || self.complete || vrt::time::now_ns().saturating_sub(since) >= wait_ns;
+                self.queue.len() >= frames || self.complete || rt::time::now_ns().saturating_sub(since) >= wait_ns;
             if !enough {
                 return;
             }

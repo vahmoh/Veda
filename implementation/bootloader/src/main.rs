@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vboot` — the Veda UEFI boot loader.
+//! `bootloader` — the Veda UEFI boot loader.
 //!
 //! Responsibilities, in order:
 //!
-//! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.ELF` and `INITRD.IMG` from the boot
+//! 1. read `\VEDA\BOOT.CFG`, `KERNEL.ELF` and `INITRD.IMG` from the boot
 //!    volume,
 //! 2. pick and set a graphics mode (of the display's own shape, where the
 //!    firmware gives its EDID) and clear the screen: it stays blank until
@@ -34,7 +34,7 @@ mod uefi;
 macro_rules! log {
     ($($arg:tt)*) => {{
         use core::fmt::Write as _;
-        let _ = writeln!($crate::arch::serial::Serial, "[vboot] {}", format_args!($($arg)*));
+        let _ = writeln!($crate::arch::serial::Serial, "[bootloader] {}", format_args!($($arg)*));
     }};
 }
 
@@ -618,7 +618,7 @@ impl FrameSource for TableFrames<'_> {
 /// Loads the kernel, an ELF64 executable linked at [`bootinfo::KERNEL_BASE`],
 /// into physically contiguous pages: its entry point, and where it is.
 fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(u64, KernelImage)> {
-    let elf = velf::Elf::parse(file).map_err(|_| "the kernel is not a valid ELF64 executable")?;
+    let elf = elf::Elf::parse(file).map_err(|_| "the kernel is not a valid ELF64 executable")?;
     let (lo, hi) = elf.span();
     if elf.is_position_independent() || lo != bootinfo::KERNEL_BASE {
         return Err("the kernel is not linked at KERNEL_BASE");
@@ -634,7 +634,7 @@ fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(u64, KernelImage)> {
     // is read-only from the start.
     let mut runs = [KernelRun::default(); KERNEL_RUNS_MAX];
     let mut run_count = 0;
-    for r in velf::page_runs(&elf, velf::Relro::ReadOnly) {
+    for r in elf::page_runs(&elf, elf::Relro::ReadOnly) {
         let slot = runs.get_mut(run_count).ok_or("the kernel has too many segments")?;
         *slot = KernelRun {
             offset: r.start - lo,
@@ -702,7 +702,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     );
     let paint = clear_screen(fw, &framebuffer);
 
-    let kernel_file = fw.read_file(root, "\\VEDA\\VKERNEL.ELF", None)?.ok_or("\\VEDA\\VKERNEL.ELF not found")?;
+    let kernel_file = fw.read_file(root, "\\VEDA\\KERNEL.ELF", None)?.ok_or("\\VEDA\\KERNEL.ELF not found")?;
     // SAFETY: the kernel file was read into kernel_file.base.
     let kernel_bytes = unsafe { core::slice::from_raw_parts(kernel_file.base as *const u8, kernel_file.size as usize) };
     let (entry, kernel) = load_kernel(fw, kernel_bytes)?;

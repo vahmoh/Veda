@@ -16,21 +16,21 @@ impl Ctx {
         let launcher = launcher().ok_or("the launcher is not available")?;
         match args["operation"].as_str().unwrap_or("info") {
             "info" => {
-                let info = vrt::object::system_info().map_err(|_| "no system information")?;
+                let info = rt::object::system_info().map_err(|_| "no system information")?;
                 Ok(json!({
                     "os": "Veda 0.1",
                     "cpus": info.cpu_count,
-                    "memory_total": vfiles::format::human_size(info.total_memory),
-                    "memory_free": vfiles::format::human_size(info.free_memory),
-                    "uptime_minutes": vrt::time::now_ns() / 60_000_000_000,
+                    "memory_total": files::format::human_size(info.total_memory),
+                    "memory_free": files::format::human_size(info.free_memory),
+                    "uptime_minutes": rt::time::now_ns() / 60_000_000_000,
                 }))
             }
             "restart" => {
-                let _ = launcher.power(vproto::init::power::REBOOT);
+                let _ = launcher.power(proto::init::power::REBOOT);
                 Ok(Value::Null)
             }
             "shutdown" => {
-                let _ = launcher.power(vproto::init::power::SHUTDOWN);
+                let _ = launcher.power(proto::init::power::SHUTDOWN);
                 Ok(Value::Null)
             }
             other => Err(format!("unknown system operation {other}")),
@@ -49,7 +49,7 @@ impl Ctx {
                         json!({
                             "name": t.name.as_str(),
                             "id": t.koid,
-                            "memory": vfiles::format::human_size(t.memory),
+                            "memory": files::format::human_size(t.memory),
                             "app": t.is_app,
                         })
                     })

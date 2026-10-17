@@ -3,14 +3,22 @@
 version = 4
 
 [[package]]
+name = "abi"
+version = "0.1.0"
+
+[[package]]
 name = "about"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "apps-common",
- "vabi",
- "vrt",
- "vui",
+ "rt",
+ "ui",
 ]
+
+[[package]]
+name = "acpi"
+version = "0.1.0"
 
 [[package]]
 name = "adler2"
@@ -68,16 +76,27 @@ dependencies = [
 name = "agent"
 version = "0.1.0"
 dependencies = [
+ "files",
+ "percent-encoding",
+ "proto",
+ "serde",
  "serde_json",
- "vabi",
- "vagent",
- "vaudio",
- "vfiles",
- "vipc",
- "vnet",
- "vproto",
- "vrt",
- "vweb",
+]
+
+[[package]]
+name = "agentd"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "agent",
+ "audio",
+ "files",
+ "ipc",
+ "net",
+ "proto",
+ "rt",
+ "serde_json",
+ "web",
 ]
 
 [[package]]
@@ -108,13 +127,13 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "apps-common"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vfiles",
- "vgfx",
- "vipc",
- "vproto",
- "vrt",
- "vui",
+ "abi",
+ "files",
+ "gfx",
+ "ipc",
+ "proto",
+ "rt",
+ "ui",
 ]
 
 [[package]]
@@ -167,29 +186,39 @@ name = "assetgen"
 version = "0.1.0"
 dependencies = [
  "gencommon",
- "vimage",
+ "image",
 ]
 
 [[package]]
 name = "audio"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vaudio",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
+ "libm",
+ "num-traits",
+ "rand 0.10.3",
+ "rand_pcg",
+]
+
+[[package]]
+name = "audiod"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "audio",
+ "build",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
 name = "audiotest"
 version = "0.1.0"
 dependencies = [
+ "build",
  "libm",
- "vbuild",
- "vproto",
- "vrt",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -289,6 +318,18 @@ name = "bootinfo"
 version = "0.1.0"
 
 [[package]]
+name = "bootloader"
+version = "0.1.0"
+dependencies = [
+ "bootinfo",
+ "elf",
+]
+
+[[package]]
+name = "build"
+version = "0.1.0"
+
+[[package]]
 name = "built"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -324,10 +365,10 @@ version = "0.1.0"
 dependencies = [
  "apps-common",
  "calculator-core",
- "vgfx",
- "vproto",
- "vrt",
- "vui",
+ "gfx",
+ "proto",
+ "rt",
+ "ui",
 ]
 
 [[package]]
@@ -428,26 +469,26 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 name = "compositor"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "build",
  "compositor-core",
+ "gfx",
+ "gl",
+ "ipc",
  "num-traits",
- "vabi",
- "vbuild",
- "vgfx",
- "vgl",
- "vipc",
- "vproto",
- "vrt",
- "vsplash",
+ "proto",
+ "rt",
+ "splash",
 ]
 
 [[package]]
 name = "compositor-core"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vgfx",
- "vipc",
- "vproto",
+ "abi",
+ "gfx",
+ "ipc",
+ "proto",
 ]
 
 [[package]]
@@ -646,16 +687,16 @@ dependencies = [
 name = "devmgr"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "acpi",
+ "build",
+ "gpio",
+ "hv",
  "initrd",
- "vabi",
- "vacpi",
- "vbuild",
- "vgpio",
- "vhv",
- "viommu",
- "vipc",
- "vproto",
- "vrt",
+ "iommu",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -675,23 +716,23 @@ dependencies = [
 name = "drivervm"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "bootinfo",
+ "build",
  "drivervm-core",
+ "hv",
  "initrd",
- "vabi",
- "vbuild",
- "vhv",
- "vipc",
- "vproto",
- "vrt",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
 name = "drivervm-core"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vhv",
+ "abi",
+ "hv",
 ]
 
 [[package]]
@@ -734,12 +775,12 @@ name = "editor"
 version = "0.1.0"
 dependencies = [
  "apps-common",
- "vfiles",
- "vgfx",
- "vproto",
- "vrt",
- "vtext",
- "vui",
+ "files",
+ "gfx",
+ "proto",
+ "rt",
+ "text",
+ "ui",
 ]
 
 [[package]]
@@ -747,6 +788,10 @@ name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
+
+[[package]]
+name = "elf"
+version = "0.1.0"
 
 [[package]]
 name = "elliptic-curve"
@@ -766,6 +811,14 @@ dependencies = [
  "sec1",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "entropy"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "chacha20",
 ]
 
 [[package]]
@@ -800,11 +853,11 @@ dependencies = [
 name = "fakedec"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vbuild",
- "vgfx",
- "vproto",
- "vrt",
+ "abi",
+ "build",
+ "gfx",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -860,16 +913,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
+name = "filemgr"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "apps-common",
+ "files",
+ "gfx",
+ "proto",
+ "rt",
+ "ui",
+]
+
+[[package]]
 name = "files"
 version = "0.1.0"
 dependencies = [
- "apps-common",
- "vabi",
- "vfiles",
- "vgfx",
- "vproto",
- "vrt",
- "vui",
+ "abi",
+ "gfx",
+ "image",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -888,6 +953,21 @@ dependencies = [
  "miniz_oxide 0.9.1",
  "zlib-rs",
 ]
+
+[[package]]
+name = "font"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "png",
+ "raster",
+ "ttf-parser",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "frames"
+version = "0.1.0"
 
 [[package]]
 name = "gencommon"
@@ -925,6 +1005,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gfx"
+version = "0.1.0"
+dependencies = [
+ "font",
+ "libm",
+ "num-traits",
+ "raster",
+]
+
+[[package]]
 name = "ghash"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -935,6 +1025,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gl"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "glsl",
+ "libm",
+ "proto",
+ "rt",
+]
+
+[[package]]
 name = "glam"
 version = "0.34.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,6 +1043,17 @@ checksum = "fc148d4ddd3930c52f9e5ae79b89805c6f07e9ff417e7b083e0348cea60a5aba"
 dependencies = [
  "libm",
 ]
+
+[[package]]
+name = "glsl"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "gpio"
+version = "0.1.0"
 
 [[package]]
 name = "group"
@@ -958,21 +1070,21 @@ dependencies = [
 name = "guest-alsa"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "guest-sys",
+ "proto",
+ "rt",
  "rustix",
- "vabi",
- "vproto",
- "vrt",
 ]
 
 [[package]]
 name = "guest-bridgetest"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "guest-sys",
- "vabi",
- "vproto",
- "vrt",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1004,19 +1116,19 @@ name = "guest-input"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "proto",
  "rustix",
- "vproto",
 ]
 
 [[package]]
 name = "guest-kms"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "guest-sys",
+ "proto",
+ "rt",
  "rustix",
- "vabi",
- "vproto",
- "vrt",
 ]
 
 [[package]]
@@ -1032,19 +1144,19 @@ name = "guest-logkeeper"
 version = "0.1.0"
 dependencies = [
  "guest-sys",
+ "rt",
  "rustix",
- "vrt",
 ]
 
 [[package]]
 name = "guest-net"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "guest-sys",
+ "proto",
+ "rt",
  "rustix",
- "vabi",
- "vproto",
- "vrt",
 ]
 
 [[package]]
@@ -1066,11 +1178,11 @@ dependencies = [
 name = "guest-renderer"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "guest-sys",
- "vabi",
- "vipc",
- "vproto",
- "vrt",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1078,21 +1190,21 @@ name = "guest-sys"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "proto",
  "rustix",
- "vproto",
 ]
 
 [[package]]
 name = "guest-wifi"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "guest-netlink",
  "guest-sys",
+ "ipc",
+ "proto",
+ "rt",
  "rustix",
- "vabi",
- "vipc",
- "vproto",
- "vrt",
 ]
 
 [[package]]
@@ -1113,6 +1225,10 @@ checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
 dependencies = [
  "byteorder",
 ]
+
+[[package]]
+name = "heap"
+version = "0.1.0"
 
 [[package]]
 name = "heapless"
@@ -1159,6 +1275,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "hv"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi",
+]
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1170,15 +1294,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "image"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "crc32fast",
+ "fast_image_resize",
+ "jpeg-encoder",
+ "miniz_oxide 0.9.1",
+ "png",
+ "qoi",
+ "zune-bmp",
+ "zune-core",
+ "zune-inflate",
+ "zune-jpeg",
+ "zune-png",
+]
+
+[[package]]
 name = "init"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "build",
  "initrd",
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1198,31 +1340,31 @@ dependencies = [
 name = "interceptor"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "gfx",
+ "gl",
  "glam",
  "interceptor-game",
  "libm",
- "vabi",
- "vgfx",
- "vgl",
- "vproto",
- "vrt",
- "vui",
+ "proto",
+ "rt",
+ "ui",
 ]
 
 [[package]]
 name = "interceptor-game"
 version = "0.1.0"
 dependencies = [
+ "audio",
  "fastnoise-lite",
+ "gl",
  "glam",
+ "image",
  "libm",
  "num-traits",
  "rand 0.10.3",
  "rand_distr",
  "rand_pcg",
- "vaudio",
- "vgl",
- "vimage",
 ]
 
 [[package]]
@@ -1234,6 +1376,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "iommu"
+version = "0.1.0"
+
+[[package]]
+name = "ipc"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "rt",
 ]
 
 [[package]]
@@ -1268,6 +1422,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
+name = "kernel"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "acpi",
+ "bootinfo",
+ "elf",
+ "entropy",
+ "frames",
+ "hv",
+ "initrd",
+ "iommu",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 
@@ -1297,15 +1466,15 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 name = "lock"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "gfx",
+ "ipc",
  "lock-core",
+ "proto",
+ "rt",
  "shell-common",
- "vabi",
- "vgfx",
- "vipc",
- "vproto",
- "vrt",
- "vsplash",
- "vui",
+ "splash",
+ "ui",
  "zeroize",
 ]
 
@@ -1314,9 +1483,9 @@ name = "lock-core"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "gfx",
  "libm",
- "vgfx",
- "vproto",
+ "proto",
 ]
 
 [[package]]
@@ -1354,9 +1523,9 @@ dependencies = [
 name = "mediadec"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vproto",
- "vrt",
+ "abi",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1398,18 +1567,18 @@ dependencies = [
 name = "music"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "audio",
+ "files",
+ "gfx",
  "music-core",
  "num-traits",
+ "proto",
  "rand 0.10.3",
  "rand_pcg",
- "vabi",
- "vaudio",
- "vfiles",
- "vgfx",
+ "rt",
+ "ui",
  "videos-core",
- "vproto",
- "vrt",
- "vui",
 ]
 
 [[package]]
@@ -1420,33 +1589,53 @@ version = "0.1.0"
 name = "musicgen"
 version = "0.1.0"
 dependencies = [
+ "audio",
  "gencommon",
- "vaudio",
- "vimage",
+ "image",
+]
+
+[[package]]
+name = "net"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
 name = "netd"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vbuild",
- "vfiles",
- "vipc",
- "vnetstack",
- "vproto",
- "vrt",
+ "abi",
+ "build",
+ "files",
+ "ipc",
+ "netstack",
+ "proto",
+ "rt",
+]
+
+[[package]]
+name = "netstack"
+version = "0.1.0"
+dependencies = [
+ "entropy",
+ "heapless",
+ "proto",
+ "smoltcp",
 ]
 
 [[package]]
 name = "nettest"
 version = "0.1.0"
 dependencies = [
- "vbuild",
- "vnet",
- "vrt",
- "vtls",
- "vweb",
+ "build",
+ "net",
+ "rt",
+ "tls",
+ "web",
 ]
 
 [[package]]
@@ -1534,10 +1723,10 @@ dependencies = [
 name = "nvme"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vbuild",
- "vproto",
- "vrt",
+ "abi",
+ "build",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1550,20 +1739,20 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "orchestration"
 version = "0.1.0"
 dependencies = [
+ "acpi",
+ "audio",
  "bootinfo",
+ "build",
  "crc32fast",
+ "elf",
  "gencommon",
+ "hv",
+ "image",
  "initrd",
  "libc",
  "serde_json",
  "sha2",
  "tungstenite",
- "vacpi",
- "vaudio",
- "vbuild",
- "velf",
- "vhv",
- "vimage",
 ]
 
 [[package]]
@@ -1598,27 +1787,27 @@ dependencies = [
 name = "paint"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "apps-common",
+ "files",
+ "gfx",
+ "image",
  "libm",
  "paint-core",
- "vabi",
- "vfiles",
- "vgfx",
- "vimage",
- "vproto",
- "vrt",
- "vui",
+ "proto",
+ "rt",
+ "ui",
 ]
 
 [[package]]
 name = "paint-core"
 version = "0.1.0"
 dependencies = [
+ "files",
+ "gfx",
+ "image",
  "libm",
- "vfiles",
- "vgfx",
- "vimage",
- "vraster",
+ "raster",
 ]
 
 [[package]]
@@ -1672,13 +1861,13 @@ dependencies = [
 name = "photos"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vfiles",
- "vgfx",
- "vimage",
- "vproto",
- "vrt",
- "vui",
+ "abi",
+ "files",
+ "gfx",
+ "image",
+ "proto",
+ "rt",
+ "ui",
 ]
 
 [[package]]
@@ -1720,6 +1909,17 @@ dependencies = [
  "cpufeatures",
  "universal-hash",
  "zeroize",
+]
+
+[[package]]
+name = "posix"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc",
+ "linux-raw-sys",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -1782,6 +1982,15 @@ checksum = "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb"
 dependencies = [
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "proto"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ipc",
+ "rt",
 ]
 
 [[package]]
@@ -1880,6 +2089,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "raster"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "png",
+]
+
+[[package]]
 name = "rav1e"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1955,6 +2172,17 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rt"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "elf",
+ "heap",
+ "hv",
+ "libm",
 ]
 
 [[package]]
@@ -2093,14 +2321,14 @@ dependencies = [
 name = "settings"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vfiles",
- "vgfx",
- "vipc",
- "vnet",
- "vproto",
- "vrt",
- "vui",
+ "abi",
+ "files",
+ "gfx",
+ "ipc",
+ "net",
+ "proto",
+ "rt",
+ "ui",
  "zeroize",
 ]
 
@@ -2130,31 +2358,31 @@ dependencies = [
 name = "shell"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "apps-common",
+ "audio",
+ "files",
+ "gfx",
+ "image",
+ "ipc",
+ "net",
+ "proto",
+ "rt",
  "shell-common",
- "vabi",
- "vaudio",
- "vfiles",
- "vgfx",
- "vimage",
- "vipc",
- "vnet",
- "vproto",
- "vrt",
- "vui",
+ "ui",
 ]
 
 [[package]]
 name = "shell-common"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "files",
+ "gfx",
+ "image",
  "num-traits",
- "vabi",
- "vfiles",
- "vgfx",
- "vimage",
- "vproto",
- "vrt",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -2219,6 +2447,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "splash"
+version = "0.1.0"
+dependencies = [
+ "gfx",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2269,24 +2504,24 @@ dependencies = [
 name = "systest"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
+ "abi",
+ "build",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
 name = "taskmgr"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "apps-common",
- "vabi",
- "vfiles",
- "vgfx",
- "vproto",
- "vrt",
- "vui",
+ "files",
+ "gfx",
+ "proto",
+ "rt",
+ "ui",
 ]
 
 [[package]]
@@ -2306,16 +2541,16 @@ dependencies = [
 name = "terminal"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "apps-common",
+ "files",
+ "ipc",
+ "net",
+ "proto",
+ "rt",
  "terminal-core",
- "vabi",
- "vfiles",
- "vipc",
- "vnet",
- "vproto",
- "vrt",
- "vui",
- "vweb",
+ "ui",
+ "web",
 ]
 
 [[package]]
@@ -2329,10 +2564,18 @@ dependencies = [
 name = "testmic"
 version = "0.1.0"
 dependencies = [
- "vbuild",
- "vnet",
- "vproto",
- "vrt",
+ "build",
+ "net",
+ "proto",
+ "rt",
+]
+
+[[package]]
+name = "text"
+version = "0.1.0"
+dependencies = [
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
@@ -2353,6 +2596,27 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "tls"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "chacha20poly1305",
+ "crypto-bigint",
+ "ed25519-dalek",
+ "hmac",
+ "net",
+ "p256",
+ "p384",
+ "rt",
+ "rustls",
+ "sha2",
+ "subtle",
+ "webpki-roots",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -2412,6 +2676,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
+name = "ui"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "files",
+ "gfx",
+ "image",
+ "ipc",
+ "libm",
+ "proto",
+ "raster",
+ "rt",
+ "serde_json",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2457,304 +2738,69 @@ dependencies = [
 ]
 
 [[package]]
-name = "vabi"
-version = "0.1.0"
-
-[[package]]
-name = "vacpi"
-version = "0.1.0"
-
-[[package]]
-name = "vagent"
-version = "0.1.0"
-dependencies = [
- "percent-encoding",
- "serde",
- "serde_json",
- "vfiles",
- "vproto",
-]
-
-[[package]]
-name = "vaudio"
-version = "0.1.0"
-dependencies = [
- "libm",
- "num-traits",
- "rand 0.10.3",
- "rand_pcg",
-]
-
-[[package]]
-name = "vboot"
-version = "0.1.0"
-dependencies = [
- "bootinfo",
- "velf",
-]
-
-[[package]]
-name = "vbuild"
-version = "0.1.0"
-
-[[package]]
-name = "velf"
-version = "0.1.0"
-
-[[package]]
-name = "ventropy"
-version = "0.1.0"
-dependencies = [
- "blake2",
- "chacha20",
-]
-
-[[package]]
-name = "vfiles"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vgfx",
- "vimage",
- "vipc",
- "vproto",
- "vrt",
-]
-
-[[package]]
-name = "vfont"
-version = "0.1.0"
-dependencies = [
- "libm",
- "png",
- "ttf-parser",
- "unicode-segmentation",
- "vraster",
-]
-
-[[package]]
-name = "vframes"
-version = "0.1.0"
-
-[[package]]
 name = "vfs"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "build",
  "crc32fast",
  "initrd",
- "vabi",
- "vbuild",
+ "ipc",
+ "proto",
+ "rt",
  "vfs-core",
- "vipc",
- "vproto",
- "vrt",
 ]
 
 [[package]]
 name = "vfs-core"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vproto",
-]
-
-[[package]]
-name = "vgfx"
-version = "0.1.0"
-dependencies = [
- "libm",
- "num-traits",
- "vfont",
- "vraster",
-]
-
-[[package]]
-name = "vgl"
-version = "0.1.0"
-dependencies = [
- "libm",
- "vabi",
- "vglsl",
- "vproto",
- "vrt",
-]
-
-[[package]]
-name = "vglsl"
-version = "0.1.0"
-dependencies = [
- "libm",
-]
-
-[[package]]
-name = "vgpio"
-version = "0.1.0"
-
-[[package]]
-name = "vheap"
-version = "0.1.0"
-
-[[package]]
-name = "vhv"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vacpi",
+ "abi",
+ "proto",
 ]
 
 [[package]]
 name = "videogen"
 version = "0.1.0"
 dependencies = [
+ "audio",
  "fastnoise-lite",
+ "font",
  "gencommon",
+ "gfx",
+ "image",
  "md-5",
  "rand 0.10.3",
  "rand_pcg",
+ "raster",
  "rav1e",
- "vaudio",
- "vfont",
- "vgfx",
- "vimage",
- "vraster",
 ]
 
 [[package]]
 name = "videos"
 version = "0.1.0"
 dependencies = [
+ "abi",
+ "audio",
+ "files",
+ "gfx",
+ "ipc",
  "libm",
- "vabi",
- "vaudio",
- "vfiles",
- "vgfx",
+ "proto",
+ "rt",
+ "ui",
  "videos-core",
- "vipc",
- "vproto",
- "vrt",
- "vui",
 ]
 
 [[package]]
 name = "videos-core"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vfiles",
- "vipc",
- "vproto",
- "vrt",
-]
-
-[[package]]
-name = "vimage"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "crc32fast",
- "fast_image_resize",
- "jpeg-encoder",
- "miniz_oxide 0.9.1",
- "png",
- "qoi",
- "zune-bmp",
- "zune-core",
- "zune-inflate",
- "zune-jpeg",
- "zune-png",
-]
-
-[[package]]
-name = "viommu"
-version = "0.1.0"
-
-[[package]]
-name = "vipc"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vrt",
-]
-
-[[package]]
-name = "vkernel"
-version = "0.1.0"
-dependencies = [
- "bootinfo",
- "initrd",
- "vabi",
- "vacpi",
- "velf",
- "ventropy",
- "vframes",
- "vhv",
- "viommu",
-]
-
-[[package]]
-name = "vnet"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vipc",
- "vproto",
- "vrt",
-]
-
-[[package]]
-name = "vnetstack"
-version = "0.1.0"
-dependencies = [
- "heapless",
- "smoltcp",
- "ventropy",
- "vproto",
-]
-
-[[package]]
-name = "vposix"
-version = "0.1.0"
-dependencies = [
- "linux-raw-sys",
- "vabi",
- "vipc",
- "vproto",
- "vrt",
-]
-
-[[package]]
-name = "vproto"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vipc",
- "vrt",
-]
-
-[[package]]
-name = "vraster"
-version = "0.1.0"
-dependencies = [
- "libm",
- "png",
-]
-
-[[package]]
-name = "vrt"
-version = "0.1.0"
-dependencies = [
- "libm",
- "vabi",
- "velf",
- "vheap",
- "vhv",
-]
-
-[[package]]
-name = "vsplash"
-version = "0.1.0"
-dependencies = [
- "vgfx",
+ "abi",
+ "files",
+ "ipc",
+ "proto",
+ "rt",
 ]
 
 [[package]]
@@ -2765,86 +2811,6 @@ checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
 dependencies = [
  "arrayvec",
  "memchr",
-]
-
-[[package]]
-name = "vtext"
-version = "0.1.0"
-dependencies = [
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
-name = "vtls"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "chacha20poly1305",
- "crypto-bigint",
- "ed25519-dalek",
- "hmac",
- "p256",
- "p384",
- "rustls",
- "sha2",
- "subtle",
- "vnet",
- "vrt",
- "webpki-roots",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "vui"
-version = "0.1.0"
-dependencies = [
- "libm",
- "serde_json",
- "unicode-segmentation",
- "vabi",
- "vfiles",
- "vgfx",
- "vimage",
- "vipc",
- "vproto",
- "vraster",
- "vrt",
-]
-
-[[package]]
-name = "vweb"
-version = "0.1.0"
-dependencies = [
- "base64ct",
- "httparse",
- "percent-encoding",
- "sha1",
- "vabi",
- "vnet",
- "vrt",
- "vtls",
-]
-
-[[package]]
-name = "vwlan"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aes-kw",
- "base16ct",
- "ccm",
- "cmac",
- "hkdf",
- "hmac",
- "p256",
- "pbkdf2",
- "sha1",
- "sha2",
- "subtle",
- "vproto",
- "zeroize",
 ]
 
 [[package]]
@@ -2905,6 +2871,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "base64ct",
+ "httparse",
+ "net",
+ "percent-encoding",
+ "rt",
+ "sha1",
+ "tls",
 ]
 
 [[package]]
@@ -3014,13 +2994,33 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "wlan"
 version = "0.1.0"
 dependencies = [
- "vabi",
- "vbuild",
- "vfiles",
- "vipc",
- "vproto",
- "vrt",
- "vwlan",
+ "aes",
+ "aes-kw",
+ "base16ct",
+ "ccm",
+ "cmac",
+ "hkdf",
+ "hmac",
+ "p256",
+ "pbkdf2",
+ "proto",
+ "sha1",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "wland"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "build",
+ "files",
+ "ipc",
+ "proto",
+ "rt",
+ "wlan",
  "zeroize",
 ]
 

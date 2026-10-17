@@ -13,13 +13,13 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vabi::map_flags;
-use vproto::fs::{open_flags, vfs};
-use vproto::media::{MediaInfo, OpenOptions, open_flags as media_open};
-use vrt::object::Event;
-use vrt::println;
-use vrt::sync::Mutex;
-use vrt::vm::Mapping;
+use abi::map_flags;
+use proto::fs::{open_flags, vfs};
+use proto::media::{MediaInfo, OpenOptions, open_flags as media_open};
+use rt::object::Event;
+use rt::println;
+use rt::sync::Mutex;
+use rt::vm::Mapping;
 
 use crate::decoder::{self, Decoder, Image};
 
@@ -105,9 +105,9 @@ pub fn start(decoder: String) -> Option<Arc<Shared>> {
         ready: Event::create().ok()?,
     });
     let ours = shared.clone();
-    vrt::thread::Builder::new()
+    rt::thread::Builder::new()
         .name("thumbnails")
-        .priority(vabi::priority::NORMAL - 2)
+        .priority(abi::priority::NORMAL - 2)
         .stack_size(256 << 10)
         .spawn(move || {
             Worker { shared: ours, path: decoder, image: None, missing: None, decoder: None, vfs: None, open: None }
@@ -135,8 +135,8 @@ impl Worker {
             let next = self.shared.queue.lock().pop_front();
             let Some(request) = next else {
                 let deadline =
-                    if self.decoder.is_some() { vrt::time::now_ns() + IDLE_NS } else { vabi::DEADLINE_INFINITE };
-                if self.shared.wake.wait(vabi::signals::SIGNALED, deadline).is_err() {
+                    if self.decoder.is_some() { rt::time::now_ns() + IDLE_NS } else { abi::DEADLINE_INFINITE };
+                if self.shared.wake.wait(abi::signals::SIGNALED, deadline).is_err() {
                     // Nothing to do for a while: the decoder goes.
                     self.decoder = None;
                     self.open = None;
@@ -176,7 +176,7 @@ impl Worker {
     /// The decoder, started if need be.
     fn decoder(&mut self) -> Result<&Decoder, String> {
         if self.vfs.is_none() {
-            self.vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+            self.vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         }
         if self.image.is_none() {
             let vfs = self.vfs.as_ref().ok_or("the file system is not running")?;
@@ -190,7 +190,7 @@ impl Worker {
                 }
             }
         }
-        if self.decoder.as_ref().is_some_and(|d| d.process.wait(vabi::signals::TERMINATED, 0).is_ok()) {
+        if self.decoder.as_ref().is_some_and(|d| d.process.wait(abi::signals::TERMINATED, 0).is_ok()) {
             self.decoder = None;
             self.open = None;
         }

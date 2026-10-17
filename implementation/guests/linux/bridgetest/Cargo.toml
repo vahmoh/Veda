@@ -16,9 +16,9 @@ bench = false
 
 [dependencies]
 guest-sys = { workspace = true }
-vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
-vproto = { workspace = true }
+rt = { workspace = true, default-features = false }
+abi = { workspace = true }
+proto = { workspace = true }
 
 [lints]
 workspace = true

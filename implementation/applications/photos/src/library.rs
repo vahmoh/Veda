@@ -3,10 +3,10 @@
 
 //! The library: a grid of thumbnail cards for the pictures in the folder.
 
-use vfiles::format::human_size;
-use vgfx::{Align, Color, Rect};
-use vproto::input::keys;
-use vui::{Cursor, Font, Icon, Ui};
+use files::format::human_size;
+use gfx::{Align, Color, Rect};
+use proto::input::keys;
+use ui::{Cursor, Font, Icon, Ui};
 
 use crate::Photos;
 use crate::catalog::{self, Thumb};

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vacpi` — ACPI for Veda's device manager.
+//! `acpi` — ACPI for Veda's device manager.
 //!
 //! Firmware describes the devices that are not on an enumerable bus, and
 //! how the ones on PCI are wired to the rest of the board, in ACPI tables.

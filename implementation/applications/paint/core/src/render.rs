@@ -12,8 +12,8 @@
 
 use alloc::vec::Vec;
 
-use vgfx::color::{keep_scalar, over};
-use vgfx::{Bitmap, Canvas, Color, Rect};
+use gfx::color::{keep_scalar, over};
+use gfx::{Bitmap, Canvas, Color, Rect};
 
 use crate::view::View;
 

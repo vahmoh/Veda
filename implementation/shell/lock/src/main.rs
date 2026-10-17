@@ -4,7 +4,7 @@
 //! `lock` — the lock screen: the system service that shows it while the
 //! screen is locked, asks for the password, and alone unlocks the screen.
 //!
-//! The window system keeps the lock (`vproto::display`): while the screen
+//! The window system keeps the lock (`proto::display`): while the screen
 //! is locked it draws only this service's windows, and gives the keyboard
 //! and the pointer to nothing else. This service watches the lock
 //! (`display::watch_lock`) and shows the lock screen ([`view`]) whenever
@@ -22,7 +22,7 @@
 //!   count is kept there too, so that restarting the service gains
 //!   nothing.
 //! * **Settings** sets, changes and removes the password through the
-//!   `lock` protocol (`vproto::lock`), giving the one set now; no one else
+//!   `lock` protocol (`proto::lock`), giving the one set now; no one else
 //!   may. The request is answered once the hasher is done.
 //! * **Locking after a while without input** is the window system's: this
 //!   service tells it how long (`display::set_idle_timeout`) whenever it
@@ -44,17 +44,17 @@ mod hasher;
 mod store;
 mod view;
 
+use abi::{WaitItem, signals};
+use ipc::{Decode, Encode};
 use lock_core::password::{SALT_LEN, acceptable};
 use lock_core::screen::{Phase, Screen};
 use lock_core::throttle::Throttle;
-use vabi::{WaitItem, signals};
-use vipc::{Decode, Encode};
-use vproto::display::{LOCK_NOTICE, LockNotice};
-use vproto::init::ClientIdentity;
-use vproto::lock::{LockError, LockStatus, lock};
-use vrt::object::{Channel, Message};
-use vrt::println;
-use vui::window::Display;
+use proto::display::{LOCK_NOTICE, LockNotice};
+use proto::init::ClientIdentity;
+use proto::lock::{LockError, LockStatus, lock};
+use rt::object::{Channel, Message};
+use rt::println;
+use ui::window::Display;
 use zeroize::Zeroizing;
 
 use backdrop::{Backdrop, Painter};
@@ -132,20 +132,20 @@ struct Lock {
 
 /// The Unix time, in seconds.
 fn unix_s() -> u64 {
-    vrt::time::unix_time_ns() / 1_000_000_000
+    rt::time::unix_time_ns() / 1_000_000_000
 }
 
 /// A new salt, from the kernel's random number generator.
 fn salt() -> [u8; SALT_LEN] {
     let mut s = [0u8; SALT_LEN];
-    vrt::object::random_bytes(&mut s);
+    rt::object::random_bytes(&mut s);
     s
 }
 
 /// Whether `name` is registered: a connection to a service not registered
 /// yet would wait for it.
 fn registered(name: &str) -> bool {
-    vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).is_some_and(|names| names.iter().any(|n| n == name))
+    proto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).is_some_and(|names| names.iter().any(|n| n == name))
 }
 
 impl Lock {
@@ -157,10 +157,10 @@ impl Lock {
             return;
         }
         self.next_try = now + RETRY_NS;
-        if !registered(vproto::display::display::NAME) {
+        if !registered(proto::display::display::NAME) {
             return;
         }
-        let Ok(display) = vui::window::connect() else { return };
+        let Ok(display) = ui::window::connect() else { return };
         display.set_timeout(DISPLAY_TIMEOUT_NS);
         let Ok(info) = display.screen_info() else { return };
         let Ok((ours, theirs)) = Channel::create() else { return };
@@ -227,11 +227,11 @@ impl Lock {
         let gone = loop {
             match ch.read() {
                 Ok(msg) => {
-                    if let Ok((LOCK_NOTICE, LockNotice::Changed { locked })) = vipc::decode_event::<LockNotice>(msg) {
+                    if let Ok((LOCK_NOTICE, LockNotice::Changed { locked })) = ipc::decode_event::<LockNotice>(msg) {
                         notices.push(locked);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => break false,
+                Err(abi::Error::ShouldWait) => break false,
                 Err(_) => break true,
             }
         };
@@ -418,7 +418,7 @@ impl Lock {
     /// the clients that sent any.
     fn serve(&mut self) {
         if let Some(l) = &self.listener {
-            while let Some((channel, who)) = vproto::accept_with_identity(l) {
+            while let Some((channel, who)) = proto::accept_with_identity(l) {
                 let own = self.clients.iter().filter(|c| c.who.koid == who.koid).count();
                 if self.clients.len() >= MAX_CLIENTS || own >= MAX_CLIENTS_EACH {
                     println!("{} has too many connections; one refused", who.name);
@@ -435,7 +435,7 @@ impl Lock {
             let alive = loop {
                 match client.channel.read() {
                     Ok(msg) => self.request(&mut client, msg),
-                    Err(vabi::Error::ShouldWait) => break true,
+                    Err(abi::Error::ShouldWait) => break true,
                     Err(_) => break false,
                 }
             };
@@ -447,7 +447,7 @@ impl Lock {
 
     /// Answers one request of `client`.
     fn request(&mut self, client: &mut Client, msg: Message) {
-        if vipc::Header::parse(&msg.bytes).is_ok_and(|h| h.ordinal == SET_PASSWORD) {
+        if ipc::Header::parse(&msg.bytes).is_ok_and(|h| h.ordinal == SET_PASSWORD) {
             return self.set_password_request(client, msg);
         }
         let settings = is_settings(&client.who);
@@ -463,7 +463,7 @@ impl Lock {
     /// checked and the new one hashed on the hasher's thread, and the
     /// request answered once that is done ([`Lock::password_set`]).
     fn set_password_request(&mut self, client: &mut Client, mut msg: Message) {
-        let decoded = vipc::open(&mut msg).and_then(|(h, mut d)| {
+        let decoded = ipc::open(&mut msg).and_then(|(h, mut d)| {
             let current = String::decode(&mut d)?;
             let new = String::decode(&mut d)?;
             d.finish()?;
@@ -472,8 +472,8 @@ impl Lock {
         let (header, current, new) = match decoded {
             Ok(v) => v,
             Err(_) => {
-                if let Ok(h) = vipc::Header::parse(&msg.bytes) {
-                    let _ = vipc::refuse(&client.channel, h, vipc::Refusal::Malformed);
+                if let Ok(h) = ipc::Header::parse(&msg.bytes) {
+                    let _ = ipc::refuse(&client.channel, h, ipc::Refusal::Malformed);
                 }
                 return;
             }
@@ -551,7 +551,7 @@ impl Lock {
     fn wait(&mut self) {
         let readable = signals::READABLE | signals::PEER_CLOSED;
         let mut items: Vec<WaitItem> = Vec::new();
-        let mut deadline = vabi::DEADLINE_INFINITE;
+        let mut deadline = abi::DEADLINE_INFINITE;
         if let Some(v) = &self.view {
             items.push(v.host().wait_item());
             deadline = deadline.min(v.host().deadline());
@@ -580,8 +580,8 @@ impl Lock {
         for c in &self.clients {
             items.push(WaitItem { handle: c.channel.raw(), signals: readable, ..Default::default() });
         }
-        items.truncate(vabi::WAIT_MANY_MAX);
-        let _ = vrt::object::wait_many(&mut items, deadline);
+        items.truncate(abi::WAIT_MANY_MAX);
+        let _ = rt::object::wait_many(&mut items, deadline);
         for (c, it) in self.clients.iter().zip(items.iter().skip(first_client)) {
             if it.observed & it.signals != 0 {
                 self.ready.push(c.id);
@@ -591,7 +591,7 @@ impl Lock {
 
     fn run(&mut self) -> ! {
         loop {
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             self.connect_display(now);
             self.take_notices(now);
             self.take_hashed(now);
@@ -605,7 +605,7 @@ impl Lock {
                     v.invalidate();
                 }
             }
-            self.pump_view(vrt::time::now_ns());
+            self.pump_view(rt::time::now_ns());
             self.serve();
             self.wait();
         }
@@ -614,7 +614,7 @@ impl Lock {
 
 /// Answers a `lock::set_password` request.
 fn answer_set(channel: &Channel, txid: u32, result: Result<(), LockError>) {
-    let mut e = vipc::Encoder::with_header(SET_PASSWORD, txid, vipc::FLAG_RESPONSE);
+    let mut e = ipc::Encoder::with_header(SET_PASSWORD, txid, ipc::FLAG_RESPONSE);
     result.encode(&mut e);
     let _ = e.send(channel);
 }
@@ -692,7 +692,7 @@ fn main() {
     if hasher.is_none() {
         println!("cannot start the hasher: no password can be checked");
     }
-    let listener = vproto::register(lock::NAME).ok();
+    let listener = proto::register(lock::NAME).ok();
     if listener.is_none() {
         println!("cannot register the lock service");
     }

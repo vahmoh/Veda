@@ -3,13 +3,13 @@
 
 //! Descriptions for people: `0:04.033`, "720p", "1280 × 720 · AV1 ·
 //! 24 fps", "FLAC · 48 kHz · stereo". Lengths and positions (`1:05`) are
-//! `vfiles::format::duration`'s.
+//! `files::format::duration`'s.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 
-use vfiles::format::duration;
-use vproto::media::{AudioStream, Rational, VideoStream};
+use files::format::duration;
+use proto::media::{AudioStream, Rational, VideoStream};
 
 /// `m:ss.mmm` (a picture's time).
 pub fn precise(us: i64) -> String {
@@ -100,7 +100,7 @@ pub fn sound(a: &AudioStream) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vproto::media::Colour;
+    use proto::media::Colour;
 
     #[test]
     fn times() {

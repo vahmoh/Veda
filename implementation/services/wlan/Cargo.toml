@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "wlan"
+name = "wland"
 description = "The Wi-Fi service: scanning, WPA2/WPA3 authentication, association, saved networks and reconnection"
 version.workspace = true
 edition.workspace = true
@@ -10,21 +10,22 @@ license.workspace = true
 
 [[bin]]
 name = "wlan"
+path = "src/main.rs"
 test = false
 bench = false
 
 [dependencies]
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vwlan = { workspace = true }
-vfiles = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+wlan = { workspace = true }
+files = { workspace = true }
 # Session keys handed to the radio are zeroed once given.
 zeroize = { workspace = true }
 
 [build-dependencies]
-vbuild = { workspace = true }
+build = { workspace = true }
 
 [lints]
 workspace = true

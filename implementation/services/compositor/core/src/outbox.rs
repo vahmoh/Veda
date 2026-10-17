@@ -21,7 +21,7 @@
 
 use alloc::collections::{BTreeSet, VecDeque};
 
-use vproto::display::WindowEvent;
+use proto::display::WindowEvent;
 
 /// How many events wait before presses are dropped.
 pub const LIMIT: usize = 128;
@@ -167,7 +167,7 @@ mod tests {
     use super::*;
     use alloc::string::String;
     use alloc::vec::Vec;
-    use vproto::display::WindowState;
+    use proto::display::WindowState;
 
     fn key(code: u16, pressed: bool) -> WindowEvent {
         WindowEvent::Key { code, pressed, repeat: false, modifiers: 0, text: String::new() }

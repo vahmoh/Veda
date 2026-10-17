@@ -24,7 +24,7 @@ rustflags = [
 # the System V ABI, built for Linux's musl target (whose `core` and `alloc`
 # stable Rust ships hard-float) and linked by LLVM's linker, which Rust
 # ships. Nothing of Linux or musl is in them: no start files or C library
-# (`link-self-contained=no`); `vrt` starts them, and `vbuild` gives the
+# (`link-self-contained=no`); `rt` starts them, and `build` gives the
 # linker the rest (see implementation/libraries/build). The driver VM's
 # Linux programs, on this target too, are built apart, with musl:
 # implementation/guests/linux/.cargo/config.toml.

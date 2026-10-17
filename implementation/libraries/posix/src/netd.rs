@@ -4,9 +4,9 @@
 //! The network service (`netd`): the connection to it that sockets and name
 //! lookups share, and the `errno` values of its errors.
 
-use vipc::IpcError;
-use vproto::net::{NetError, net};
-use vrt::sync::Mutex;
+use ipc::IpcError;
+use proto::net::{NetError, net};
+use rt::sync::Mutex;
 
 use crate::linux::errno::*;
 
@@ -16,7 +16,7 @@ static CLIENT: Mutex<Option<net::Client>> = Mutex::new(None);
 /// Whether the network service is registered: a connection to a service
 /// that is not would wait until it is.
 fn registered() -> bool {
-    vproto::with_registry(|r| r.list().is_ok_and(|names| names.iter().any(|n| n == net::NAME))).unwrap_or(false)
+    proto::with_registry(|r| r.list().is_ok_and(|names| names.iter().any(|n| n == net::NAME))).unwrap_or(false)
 }
 
 /// Runs `f` with the connection to the network service, connecting first if
@@ -29,7 +29,7 @@ pub fn with<R>(mut f: impl FnMut(&net::Client) -> Result<R, IpcError>) -> Result
             if !registered() {
                 return Err(NetError::Unavailable);
             }
-            let channel = vproto::connect(net::NAME).map_err(|_| NetError::Unavailable)?;
+            let channel = proto::connect(net::NAME).map_err(|_| NetError::Unavailable)?;
             *slot = Some(net::Client::new(channel));
         }
         let Some(client) = slot.as_ref() else { break };

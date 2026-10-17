@@ -5,7 +5,7 @@
 //! on the standard library: read whole, up to a limit, and replaced in one
 //! step, so that a save cut short leaves the last one whole.
 //!
-//! Pictures, music and other large files go through `vfiles`, which moves a
+//! Pictures, music and other large files go through `files`, which moves a
 //! file in one piece of shared memory where the standard library's reads and
 //! writes take a message for every few kilobytes.
 

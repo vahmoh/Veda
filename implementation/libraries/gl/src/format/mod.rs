@@ -22,7 +22,7 @@
 mod client;
 mod internal;
 
-use vglsl::ops::{f16_to_f32, f32_to_f16};
+use glsl::ops::{f16_to_f32, f32_to_f16};
 
 pub use client::Client;
 pub use internal::{

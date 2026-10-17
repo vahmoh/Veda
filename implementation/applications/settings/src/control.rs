@@ -18,8 +18,8 @@
 
 use core::cell::RefCell;
 
-use vproto::agent::{AgentConfig, AgentError, ModelCatalog, ModelChoice, agent};
-use vui::agent::{self as api, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_str, arg_str, json};
+use proto::agent::{AgentConfig, AgentError, ModelCatalog, ModelChoice, agent};
+use ui::agent::{self as api, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_str, arg_str, json};
 
 use crate::{SECTIONS, Section, Settings};
 
@@ -93,7 +93,7 @@ impl AgentLink {
     fn call<T>(
         &self,
         timeout_ns: u64,
-        f: impl FnOnce(&agent::Client) -> Result<Result<T, AgentError>, vipc::IpcError>,
+        f: impl FnOnce(&agent::Client) -> Result<Result<T, AgentError>, ipc::IpcError>,
     ) -> Result<T, String> {
         let mut slot = self.client.borrow_mut();
         if slot.is_none() {
@@ -101,7 +101,7 @@ impl AgentLink {
             if !crate::agent::agent_running() {
                 return Err("the agent service is not running".into());
             }
-            let ch = vproto::connect(agent::NAME).map_err(|_| "the agent service is not running")?;
+            let ch = proto::connect(agent::NAME).map_err(|_| "the agent service is not running")?;
             *slot = Some(agent::Client::new(ch));
         }
         let Some(c) = slot.as_ref() else { return Err("the agent service is not running".into()) };

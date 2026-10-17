@@ -7,11 +7,11 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::net::SocketAddr;
 
-use vabi::RawHandle;
-use vipc::{Bytes, IpcError};
-use vproto::net::{MAX_SEND, NetError, SocketEvent, SocketRequest, TcpOptions};
-use vrt::object::Channel;
-use vrt::time::Duration;
+use abi::RawHandle;
+use ipc::{Bytes, IpcError};
+use proto::net::{MAX_SEND, NetError, SocketEvent, SocketRequest, TcpOptions};
+use rt::object::Channel;
+use rt::time::Duration;
 
 use crate::{CONNECT_TIMEOUT, deadline, send_request, with_client};
 
@@ -56,7 +56,7 @@ impl TcpStream {
         let mut opts = *opts;
         opts.connect_timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
         let mut s = Self::begin_connect(addr, &opts)?;
-        let end = vrt::time::deadline_after(timeout);
+        let end = rt::time::deadline_after(timeout);
         loop {
             if s.poll_connect()? {
                 return Ok(s);
@@ -70,11 +70,11 @@ impl TcpStream {
     /// Resolves `host` and connects to the first address that answers,
     /// within `timeout` overall.
     pub fn connect_host(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, NetError> {
-        let start = vrt::time::now_ns();
+        let start = rt::time::now_ns();
         let addrs = crate::lookup(host, crate::AddrFamily::Any, timeout.min(crate::RESOLVE_TIMEOUT))?.addresses;
         let mut last = NetError::NameNotFound;
         for (i, ip) in addrs.iter().enumerate() {
-            let spent = Duration::from_nanos(vrt::time::now_ns() - start);
+            let spent = Duration::from_nanos(rt::time::now_ns() - start);
             let Some(left) = timeout.checked_sub(spent) else { break };
             // Leave time for the remaining addresses.
             let share = if i + 1 < addrs.len() { left / 2 } else { left };
@@ -149,11 +149,11 @@ impl TcpStream {
         loop {
             match self.ch.read() {
                 Ok(msg) => {
-                    if let Ok((_, ev)) = vipc::decode_event::<SocketEvent>(msg) {
+                    if let Ok((_, ev)) = ipc::decode_event::<SocketEvent>(msg) {
                         self.absorb(ev);
                     }
                 }
-                Err(vabi::Error::ShouldWait) => return true,
+                Err(abi::Error::ShouldWait) => return true,
                 Err(_) => {
                     self.error.get_or_insert(NetError::Closed);
                     return false;
@@ -167,13 +167,13 @@ impl TcpStream {
     fn wait_event(&mut self, end: u64) -> Result<bool, NetError> {
         match self.ch.read_blocking(end) {
             Ok(msg) => {
-                if let Ok((_, ev)) = vipc::decode_event::<SocketEvent>(msg) {
+                if let Ok((_, ev)) = ipc::decode_event::<SocketEvent>(msg) {
                     self.absorb(ev);
                 }
                 self.drain();
                 Ok(true)
             }
-            Err(vabi::Error::TimedOut) => Ok(false),
+            Err(abi::Error::TimedOut) => Ok(false),
             Err(_) => {
                 self.error.get_or_insert(NetError::Closed);
                 Ok(true)
@@ -388,10 +388,10 @@ impl TcpListener {
         let end = deadline(timeout);
         loop {
             let msg = self.ch.read_blocking(end).map_err(|e| match e {
-                vabi::Error::TimedOut => NetError::TimedOut,
+                abi::Error::TimedOut => NetError::TimedOut,
                 _ => NetError::Closed,
             })?;
-            match vipc::decode_event::<SocketEvent>(msg) {
+            match ipc::decode_event::<SocketEvent>(msg) {
                 Ok((_, SocketEvent::Accepted { socket, local, remote, credit })) => {
                     return Ok((TcpStream::accepted(socket, local, remote, credit), remote));
                 }

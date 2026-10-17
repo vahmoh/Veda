@@ -36,7 +36,7 @@ use crate::error::TlsError;
 
 /// The byte stream under TLS.
 ///
-/// Implemented for `vnet::TcpStream`; tests implement it for in-memory
+/// Implemented for `net::TcpStream`; tests implement it for in-memory
 /// pipes.
 pub trait Transport {
     /// Blocking read (up to the transport's own read timeout, if it has
@@ -74,21 +74,21 @@ impl<T: Transport + ?Sized> Transport for &mut T {
     }
 }
 
-impl Transport for vnet::TcpStream {
+impl Transport for net::TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, TlsError> {
-        vnet::TcpStream::read(self, buf).map_err(TlsError::from)
+        net::TcpStream::read(self, buf).map_err(TlsError::from)
     }
 
     fn try_read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TlsError> {
-        vnet::TcpStream::try_read(self, buf).map_err(TlsError::from)
+        net::TcpStream::try_read(self, buf).map_err(TlsError::from)
     }
 
     fn write_all(&mut self, data: &[u8]) -> Result<(), TlsError> {
-        vnet::TcpStream::write_all(self, data).map_err(TlsError::from)
+        net::TcpStream::write_all(self, data).map_err(TlsError::from)
     }
 
     fn try_write(&mut self, data: &[u8]) -> Result<usize, TlsError> {
-        vnet::TcpStream::try_write(self, data).map_err(TlsError::from)
+        net::TcpStream::try_write(self, data).map_err(TlsError::from)
     }
 }
 
@@ -237,7 +237,7 @@ impl<T: Transport> TlsStream<T> {
     /// `Ok(Some(0))` at the end of the stream.
     ///
     /// For event loops: when the transport is readable (for a
-    /// `vnet::TcpStream`, its `handle()`), call this until it returns
+    /// `net::TcpStream`, its `handle()`), call this until it returns
     /// `Ok(None)`. It takes everything the transport has, so the transport
     /// signals readable again only when new data arrives. It may send small
     /// protocol messages (such as a key update response), as far as the

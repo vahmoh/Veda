@@ -9,14 +9,14 @@
 //! half a refresh, so a picture lands on the blank nearest its time), gives
 //! back the ones it skipped over, and wakes again when the next is due.
 //!
-//! Every seek is a new *generation* (see `vproto::media`). Pictures of
+//! Every seek is a new *generation* (see `proto::media`). Pictures of
 //! earlier generations are given back; those of a later one (a seek the
 //! decoder carried out before the player heard of it) wait for the player
 //! to catch up.
 
 use alloc::vec::Vec;
 
-use vproto::media::SlotMeta;
+use proto::media::SlotMeta;
 
 use crate::playback::is_newer;
 

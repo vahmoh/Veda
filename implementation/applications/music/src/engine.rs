@@ -17,16 +17,16 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use vabi::{WaitItem, signals};
-use vaudio::source::Source;
-use vfiles::format::duration as format_time;
+use abi::{WaitItem, signals};
+use audio::source::Source;
+use files::format::duration as format_time;
+use proto::audio::{OutputStream, ring};
+use proto::fs::vfs;
+use rt::object::Event;
+use rt::println;
+use rt::sync::Mutex;
+use rt::vm::Mapping;
 use videos_core::output::{Kept, Output};
-use vproto::audio::{OutputStream, ring};
-use vproto::fs::vfs;
-use vrt::object::Event;
-use vrt::println;
-use vrt::sync::Mutex;
-use vrt::vm::Mapping;
 
 use crate::library::{self, Track};
 
@@ -275,7 +275,7 @@ struct Engine {
 impl Engine {
     fn read_file(&mut self, path: &str) -> Result<FileData, String> {
         if self.vfs.is_none() {
-            self.vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+            self.vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         }
         let vfs = self.vfs.as_ref().ok_or("the file system is unavailable")?;
         let (vmo, len) = match vfs.read_file(path.into()) {
@@ -284,7 +284,7 @@ impl Engine {
             Err(_) => return Err("the file system is unavailable".into()),
         };
         let size = vmo.size().map_err(|_| "cannot map the file")?;
-        let map = Mapping::new(vmo, size.max(4096), vabi::map_flags::READ).map_err(|_| "cannot map the file")?;
+        let map = Mapping::new(vmo, size.max(4096), abi::map_flags::READ).map_err(|_| "cannot map the file")?;
         Ok(FileData { map, len: (len as usize).min(size) })
     }
 
@@ -317,7 +317,7 @@ impl Engine {
     /// there) and is empty.
     fn prepare_stream(&mut self, rate: u32) {
         self.output.set_rate(rate);
-        match self.output.keep(vrt::time::now_ns()) {
+        match self.output.keep(rt::time::now_ns()) {
             Kept::Opened => self.stream_base = 0,
             Kept::Same => self.stream_base = self.output.flush().unwrap_or(0),
             Kept::None => {}
@@ -387,7 +387,7 @@ impl Engine {
         let frames = src.frames();
         let tags = src.tags();
         self.title =
-            if tags.title.is_empty() { String::from(vfiles::path::file_stem(&path)) } else { tags.title.clone() };
+            if tags.title.is_empty() { String::from(files::path::file_stem(&path)) } else { tags.title.clone() };
         println!(
             "{} {} ({}, {} Hz, {} ch, {})",
             if play { "playing" } else { "loaded" },
@@ -403,7 +403,7 @@ impl Engine {
         if play {
             self.set_paused(false);
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         self.set_status(|s| {
             s.state = if play { PlayState::Playing } else { PlayState::Paused };
             s.path = path;
@@ -493,7 +493,7 @@ impl Engine {
                 self.seek(ms);
                 // The new position goes out with the id: the UI must never
                 // take the old one for the answer.
-                let (pos, now) = (self.track_position(), vrt::time::now_ns());
+                let (pos, now) = (self.track_position(), rt::time::now_ns());
                 self.set_status(|s| {
                     s.pos_frames = pos;
                     s.pos_ns = now;
@@ -570,11 +570,11 @@ impl Engine {
     }
 
     fn run(&mut self) -> ! {
-        self.vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
+        self.vfs = proto::connect(vfs::NAME).ok().map(vfs::Client::new);
         self.rescan(true);
         loop {
-            let now = vrt::time::now_ns();
-            let mut deadline = if self.playing { now + TICK_NS } else { vabi::DEADLINE_INFINITE };
+            let now = rt::time::now_ns();
+            let mut deadline = if self.playing { now + TICK_NS } else { abi::DEADLINE_INFINITE };
             // Without a stream for the track loaded: the output is tried again.
             if self.source.is_some()
                 && let Some(at) = self.output.retry_at()
@@ -584,13 +584,13 @@ impl Engine {
             let mut items =
                 vec![WaitItem { handle: self.shared.wake.raw(), signals: signals::SIGNALED, ..Default::default() }];
             self.output.wait_items(&mut items);
-            let _ = vrt::object::wait_many(&mut items, deadline);
+            let _ = rt::object::wait_many(&mut items, deadline);
             let _ = self.shared.wake.clear();
             if let Some(s) = self.output.stream() {
                 let _ = s.event().clear();
             }
             self.output.observe();
-            if self.source.is_some() && self.output.keep(vrt::time::now_ns()) == Kept::Opened {
+            if self.source.is_some() && self.output.keep(rt::time::now_ns()) == Kept::Opened {
                 self.renewed();
             }
             self.publish_output();
@@ -606,7 +606,7 @@ impl Engine {
             }
             // Publish the position; detect the end of the track.
             let pos = self.track_position();
-            let now = vrt::time::now_ns();
+            let now = rt::time::now_ns();
             let finished = self.playing && self.eof && self.output.stream().is_some_and(drained);
             if finished {
                 println!("finished {}", self.title);
@@ -633,7 +633,7 @@ impl Engine {
 
 /// Starts the engine thread.
 pub fn start(shared: Arc<Shared>, volume: f32) -> bool {
-    let builder = vrt::thread::Builder::new().name("decoder").priority(vabi::priority::NORMAL + 4);
+    let builder = rt::thread::Builder::new().name("decoder").priority(abi::priority::NORMAL + 4);
     builder
         .spawn(move || -> () {
             let mut e = Engine {

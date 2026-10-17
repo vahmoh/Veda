@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vhv` — what Veda's hypervisor knows that touches no hardware.
+//! `hv` — what Veda's hypervisor knows that touches no hardware.
 //!
 //! * [`platform`]: the paravirtual platform guests run on: its hypercalls.
 //! * [`bridge`]: Veda's IPC for the guest's programs.

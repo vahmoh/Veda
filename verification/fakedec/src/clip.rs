@@ -33,7 +33,7 @@ use alloc::string::String;
 use core::fmt;
 use core::str::FromStr;
 
-use vproto::media::{MAX_SIDE, MAX_TEXT, bounded};
+use proto::media::{MAX_SIDE, MAX_TEXT, bounded};
 
 /// The first word of a fake video.
 pub const MAGIC: &str = "FAKEVIDEO";

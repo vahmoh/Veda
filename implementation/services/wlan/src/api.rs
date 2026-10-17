@@ -9,11 +9,11 @@
 
 use alloc::vec::Vec;
 
-use vipc::Bytes;
-use vproto::wlan::{
+use ipc::Bytes;
+use proto::wlan::{
     BssInfo, ConnectRequest, NetworkInfo, SavedNetwork, WlanDiagnostics, WlanError, WlanStatus, ssid_display, wlan,
 };
-use vrt::object::Channel;
+use rt::object::Channel;
 
 use crate::{Rights, Wlan, without_addresses};
 
@@ -63,7 +63,7 @@ impl wlan::Server for Session<'_> {
             .w
             .current
             .as_ref()
-            .filter(|c| c.state == vproto::wlan::ConnState::Connected)
+            .filter(|c| c.state == proto::wlan::ConnState::Connected)
             .map(|c| c.request.ssid.clone());
         self.w.table.networks(self.now, &self.w.profiles, connected.as_deref())
     }

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `vtext` — the text editing model behind the Text Editor.
+//! `text` — the text editing model behind the Text Editor.
 //!
 //! * [`Buffer`]: text as lines, addressed by [`Pos`] (line, byte column);
 //!   insertion, deletion, word boundaries and search.
@@ -15,7 +15,7 @@
 //! * [`highlight`]: incremental syntax highlighting for a few languages.
 //!
 //! The crate is pure logic without I/O, so all of it is unit-tested on the
-//! host (`cargo test -p vtext`).
+//! host (`cargo test -p text`).
 
 #![no_std]
 

@@ -37,16 +37,16 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use vacpi::asm::{
+use acpi::asm::{
     DEVICE_PROPERTIES, OEM_ID, cat, checksum, device, dsm, dword_memory, eisa, i2c_descriptor, int, interrupt_of, name,
     package, qword_memory, resource_template, scope, spi_descriptor_of, string, table, try_device,
     try_gpio_descriptor_of, try_name, try_string, word_bus_number,
 };
-use vacpi::resource::Spi;
-use vacpi::tables::HEADER_LEN as HEADER;
+use acpi::resource::Spi;
+use acpi::tables::HEADER_LEN as HEADER;
 
 /// A GPIO connection, as [`Resource::Gpio`] holds it.
-pub use vacpi::resource::Gpio;
+pub use acpi::resource::Gpio;
 
 /// A PCI function as the guest has it.
 #[derive(Debug, Clone)]
@@ -122,10 +122,10 @@ pub struct GpioInterrupt {
 }
 
 /// HID over I2C's `_DSM` (function 1: the HID descriptor's address).
-pub use vacpi::asm::HID_OVER_I2C;
+pub use acpi::asm::HID_OVER_I2C;
 
 /// The bytes `ToUUID` makes of a UUID's text.
-pub use vacpi::asm::uuid;
+pub use acpi::asm::uuid;
 
 /// What the architecture's machine adds to the tables.
 #[derive(Debug, Clone, Default)]
@@ -260,7 +260,7 @@ fn dsdt(m: &Machine, left_out: &mut Vec<String>) -> Vec<u8> {
 /// Whether `text` is a name a device or an object of one can have: one
 /// segment.
 fn is_name(text: &str) -> bool {
-    vacpi::name::seg(text).is_some()
+    acpi::name::seg(text).is_some()
 }
 
 /// The PCI root: bus 0, the windows the BARs are in, the functions and
@@ -335,7 +335,7 @@ fn gpio_controller(c: &GpioController) -> Option<Vec<u8>> {
         package(&[string("veda,pins"), numbers(&mut c.pins.iter().copied())]),
         package(&[string("veda,interrupt-pins"), numbers(&mut c.interrupts.iter().map(|i| i.pin))]),
     ]);
-    let dsd = package(&[vacpi::asm::buffer(&uuid(DEVICE_PROPERTIES).unwrap_or_default()), properties]);
+    let dsd = package(&[acpi::asm::buffer(&uuid(DEVICE_PROPERTIES).unwrap_or_default()), properties]);
     try_device(
         &c.name,
         &cat(&[
@@ -431,11 +431,11 @@ fn child(c: &Child, parent: &str, left_out: &mut Vec<String>) -> Option<Vec<u8>>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vacpi::NoMemory;
-    use vacpi::aml::Namespace;
-    use vacpi::device;
-    use vacpi::name::Path;
-    use vacpi::resource::Resource as Resource2;
+    use acpi::NoMemory;
+    use acpi::aml::Namespace;
+    use acpi::device;
+    use acpi::name::Path;
+    use acpi::resource::Resource as Resource2;
 
     /// Where a test machine has its tables, and the room they have.
     pub(crate) const AT: u64 = 0xE_0000;
@@ -532,19 +532,19 @@ mod tests {
         assert!(
             matches!(&r[1], Resource2::Irq { irqs, edge: false, active_low: true, wake: true, .. } if irqs == &[40])
         );
-        let hid = vacpi::value::Value::Buffer(uuid(HID_OVER_I2C).unwrap().to_vec());
+        let hid = acpi::value::Value::Buffer(uuid(HID_OVER_I2C).unwrap().to_vec());
         let args = [
             hid,
-            vacpi::value::Value::Integer(1),
-            vacpi::value::Value::Integer(1),
-            vacpi::value::Value::Package(Vec::new()),
+            acpi::value::Value::Integer(1),
+            acpi::value::Value::Integer(1),
+            acpi::value::Value::Package(Vec::new()),
         ];
         assert_eq!(
             ns.evaluate(&at("\\_SB.PCI0.SA9.ETPD._DSM"), &args, &NoMemory),
-            Ok(vacpi::value::Value::Integer(0x20))
+            Ok(acpi::value::Value::Integer(0x20))
         );
         let timing = ns.evaluate(&at("\\_SB.PCI0.SA9.FMCN"), &[], &NoMemory).unwrap();
-        assert!(matches!(timing, vacpi::value::Value::Package(p) if p.len() == 3));
+        assert!(matches!(timing, acpi::value::Value::Package(p) if p.len() == 3));
     }
 
     #[test]
@@ -624,7 +624,7 @@ mod tests {
         assert_eq!((id.hid.as_deref(), id.uid.as_deref()), (Some(GPIO_CONTROLLER), Some("0")));
         let lines = device::resources(&ns, &controller, &NoMemory).unwrap();
         assert!(matches!(&lines[..], [Resource2::Irq { irqs, edge: false, active_low: true, .. }] if irqs == &[256]));
-        use vacpi::value::Value;
+        use acpi::value::Value;
         let Ok(Value::Package(dsd)) = ns.evaluate(&at("\\_SB.GPI0._DSD"), &[], &NoMemory) else { panic!() };
         assert_eq!(dsd[0], Value::Buffer(uuid(DEVICE_PROPERTIES).unwrap().to_vec()));
         let numbers = |v: &[u16]| Value::Package(v.iter().map(|&p| Value::Integer(p as u64)).collect());
@@ -714,14 +714,14 @@ mod tests {
         assert_eq!((id.hid, id.cids, id.uid), (None, alloc::vec![String::from("PNP0C50")], None));
         let r = device::resources(&ns, &tp, &NoMemory).unwrap();
         assert!(matches!(&r[..], [Resource2::I2c(i)] if i.address == 0x15));
-        assert_eq!(ns.evaluate(&at("\\_SB.PCI0.S18.TPD0._DSD"), &[], &NoMemory), Ok(vacpi::value::Value::Integer(2)));
+        assert_eq!(ns.evaluate(&at("\\_SB.PCI0.S18.TPD0._DSD"), &[], &NoMemory), Ok(acpi::value::Value::Integer(2)));
         assert!(ns.get(&at("\\_SB.PCI0._PRT")).is_none());
-        let Ok(vacpi::value::Value::Package(dsd)) = ns.evaluate(&at("\\_SB.GPI0._DSD"), &[], &NoMemory) else {
+        let Ok(acpi::value::Value::Package(dsd)) = ns.evaluate(&at("\\_SB.GPI0._DSD"), &[], &NoMemory) else {
             panic!()
         };
-        let vacpi::value::Value::Package(properties) = &dsd[1] else { panic!() };
-        let vacpi::value::Value::Package(pins) = &properties[0] else { panic!() };
-        assert!(matches!(&pins[1], vacpi::value::Value::Package(p) if p.len() == 300));
+        let acpi::value::Value::Package(properties) = &dsd[1] else { panic!() };
+        let acpi::value::Value::Package(pins) = &properties[0] else { panic!() };
+        assert!(matches!(&pins[1], acpi::value::Value::Package(p) if p.len() == 300));
     }
 
     #[test]

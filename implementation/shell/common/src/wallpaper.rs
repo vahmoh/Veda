@@ -17,13 +17,13 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 // Float math under `no_std` (std, linked into host tests, has these inherently).
+use abi::RawHandle;
+use gfx::Bitmap;
 #[allow(unused_imports)]
 use num_traits::Float;
-use vabi::RawHandle;
-use vgfx::Bitmap;
-use vproto::shell::ShellError;
-use vrt::object::Event;
-use vrt::sync::{Condvar, Mutex};
+use proto::shell::ShellError;
+use rt::object::Event;
+use rt::sync::{Condvar, Mutex};
 
 /// Name of the built-in procedural wallpaper (used in place of a path).
 pub const PROCEDURAL: &str = "procedural";
@@ -65,14 +65,14 @@ impl Wallpaper {
 
     /// Decodes an image file and scales it to cover a `w` x `h` screen.
     pub fn load(path: &str, bytes: &[u8], w: i32, h: i32) -> Option<Wallpaper> {
-        let img = vimage::decode(bytes).ok()?;
+        let img = image::decode(bytes).ok()?;
         let src = Bitmap::from_straight(img.width as i32, img.height as i32, img.pixels);
         Some(Wallpaper::from_bitmap(path, src.cover(w, h)))
     }
 
     /// Reads and decodes the picture at `path` for a `w` x `h` screen (or
     /// makes the procedural one).
-    pub fn open(vfs: Option<&vproto::vfs::Client>, path: &str, w: i32, h: i32) -> Result<Wallpaper, ShellError> {
+    pub fn open(vfs: Option<&proto::vfs::Client>, path: &str, w: i32, h: i32) -> Result<Wallpaper, ShellError> {
         if path == PROCEDURAL {
             return Ok(Wallpaper::procedural(w, h));
         }
@@ -159,14 +159,14 @@ impl Wallpaper {
 
 /// The path of the wallpaper the user chose, as the desktop shell
 /// remembers it ([`CONFIG`]), if it remembers one.
-pub fn remembered(vfs: &vproto::vfs::Client) -> Option<String> {
+pub fn remembered(vfs: &proto::vfs::Client) -> Option<String> {
     crate::read_file(vfs, CONFIG, MAX_PATH).and_then(|b| String::from_utf8(b).ok())
 }
 
 /// The wallpaper the user chose, for a `w` x `h` screen: the one
 /// remembered, else the first installed, else (none can be read) the
 /// procedural one.
-pub fn chosen(vfs: Option<&vproto::vfs::Client>, w: i32, h: i32) -> Wallpaper {
+pub fn chosen(vfs: Option<&proto::vfs::Client>, w: i32, h: i32) -> Wallpaper {
     let saved = vfs.and_then(remembered);
     let installed = vfs.map(list).unwrap_or_default();
     for path in saved.into_iter().chain(installed.into_iter().take(1)) {
@@ -178,10 +178,10 @@ pub fn chosen(vfs: Option<&vproto::vfs::Client>, w: i32, h: i32) -> Wallpaper {
 }
 
 /// Wallpaper files shipped with the system, sorted by name.
-pub fn list(vfs: &vproto::vfs::Client) -> Vec<String> {
+pub fn list(vfs: &proto::vfs::Client) -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(Ok(entries)) = vfs.read_dir("/system/wallpapers".into()) {
-        for e in entries.iter().filter(|e| !e.is_dir && vfiles::kind::is_image(&e.name)) {
+        for e in entries.iter().filter(|e| !e.is_dir && files::kind::is_image(&e.name)) {
             out.push(format!("/system/wallpapers/{}", e.name));
         }
     }
@@ -228,7 +228,7 @@ impl Loader {
             done: Mutex::new(Vec::new()),
         });
         let worker = shared.clone();
-        vrt::thread::Builder::new()
+        rt::thread::Builder::new()
             .name("wallpaper")
             .stack_size(256 * 1024)
             .spawn(move || work(&worker, &theirs))
@@ -257,7 +257,7 @@ impl Loader {
 
 /// The worker: loads what is asked, one at a time.
 fn work(shared: &Shared, ready: &Event) {
-    let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
+    let vfs = proto::connect(proto::vfs::NAME).ok().map(proto::vfs::Client::new);
     if let Some(c) = &vfs {
         c.set_timeout(VFS_TIMEOUT_NS);
     }

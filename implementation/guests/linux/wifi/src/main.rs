@@ -29,14 +29,14 @@ mod nl80211;
 
 use std::time::{Duration, Instant};
 
+use abi::signals;
 use guest_sys::netif::{self, Frames, Interface};
 use guest_sys::retry::{self, Backoff, Ended, Served};
+use proto::netring::Link;
+use proto::wlan::{PhyInfo, RadioState, channel_flags, wlanmlme_ctl, wlanphy};
+use rt::guest::Watch;
+use rt::object::Channel;
 use rustix::event::{PollFd, PollFlags, poll};
-use vabi::signals;
-use vproto::netring::Link;
-use vproto::wlan::{PhyInfo, RadioState, channel_flags, wlanmlme_ctl, wlanphy};
-use vrt::guest::Watch;
-use vrt::object::Channel;
 
 use mlme::Radio;
 
@@ -56,7 +56,7 @@ struct Attachment {
 }
 
 fn attach(info: &PhyInfo) -> Result<Attachment, String> {
-    let ch = vproto::connect(wlanphy::NAME).map_err(|e| format!("cannot reach the Wi-Fi service: {e:?}"))?;
+    let ch = proto::connect(wlanphy::NAME).map_err(|e| format!("cannot reach the Wi-Fi service: {e:?}"))?;
     let client = wlanphy::Client::new(ch);
     let (link, ends) = Link::create(SLOTS, SLOT_SIZE).map_err(|e| format!("cannot create the link: {e}"))?;
     let (control, theirs) = Channel::create().map_err(|_| String::from("cannot create a channel"))?;
@@ -129,7 +129,7 @@ fn run(name: &str, radio: &mut Radio, att: &Attachment) -> Result<Ended, String>
                     }
                     Err(e) => println!("{name}: bad request from the Wi-Fi service: {e}"),
                 },
-                Err(vabi::Error::ShouldWait) => break,
+                Err(abi::Error::ShouldWait) => break,
                 Err(_) => return left(),
             }
         }

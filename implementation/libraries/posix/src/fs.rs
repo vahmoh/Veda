@@ -5,7 +5,7 @@
 
 use alloc::string::String;
 
-use vproto::fs::{Space, Stat, device, open_flags};
+use proto::fs::{Space, Stat, device, open_flags};
 
 use crate::error::{self, SysResult};
 use crate::fd::{self, Description, Object};

@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 
-use vabi::{Error, HandleBasicInfo, ProcessInfo, RawHandle, Rights, ThreadInfo, WaitItem, info_topic, nr};
+use abi::{Error, HandleBasicInfo, ProcessInfo, RawHandle, Rights, ThreadInfo, WaitItem, info_topic, nr};
 
 use crate::sys::{self, call, call2};
 
@@ -27,11 +27,11 @@ impl Handle {
     }
 
     pub const fn invalid() -> Handle {
-        Handle(vabi::INVALID_HANDLE)
+        Handle(abi::INVALID_HANDLE)
     }
 
     pub fn is_valid(&self) -> bool {
-        self.0 != vabi::INVALID_HANDLE
+        self.0 != abi::INVALID_HANDLE
     }
 
     pub fn raw(&self) -> RawHandle {
@@ -85,7 +85,7 @@ impl Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        if self.0 != vabi::INVALID_HANDLE {
+        if self.0 != abi::INVALID_HANDLE {
             let _ = sys::handle_close(self.0);
         }
     }
@@ -126,7 +126,7 @@ wrapper!(
     Channel
 );
 wrapper!(
-    /// A socket endpoint: one end of a byte stream (see `vabi::nr::SOCKET_CREATE`).
+    /// A socket endpoint: one end of a byte stream (see `abi::nr::SOCKET_CREATE`).
     Socket
 );
 wrapper!(
@@ -192,9 +192,9 @@ impl Channel {
     /// A channel whose endpoints may be duplicated ([`Handle::duplicate`]),
     /// so that several processes hold one: each message written on the
     /// other end is read by one of them (see
-    /// [`vabi::channel_flags::SHARED`]).
+    /// [`abi::channel_flags::SHARED`]).
     pub fn create_shared() -> Result<(Channel, Channel), Error> {
-        Channel::create_with(vabi::channel_flags::SHARED)
+        Channel::create_with(abi::channel_flags::SHARED)
     }
 
     fn create_with(flags: u32) -> Result<(Channel, Channel), Error> {
@@ -294,8 +294,8 @@ impl Channel {
         loop {
             match self.read() {
                 Err(Error::ShouldWait) => {
-                    let s = self.wait(vabi::signals::READABLE | vabi::signals::PEER_CLOSED, deadline)?;
-                    if s & vabi::signals::READABLE == 0 && s & vabi::signals::PEER_CLOSED != 0 {
+                    let s = self.wait(abi::signals::READABLE | abi::signals::PEER_CLOSED, deadline)?;
+                    if s & abi::signals::READABLE == 0 && s & abi::signals::PEER_CLOSED != 0 {
                         return Err(Error::PeerClosed);
                     }
                 }
@@ -316,7 +316,7 @@ impl Socket {
 
     /// Writes as much of `data` as fits without blocking and returns how
     /// much that was (`ShouldWait` if nothing fits; writes of at most
-    /// `vabi::SOCKET_ATOMIC_WRITE` bytes go in whole or not at all).
+    /// `abi::SOCKET_ATOMIC_WRITE` bytes go in whole or not at all).
     pub fn write(&self, data: &[u8]) -> Result<usize, Error> {
         call(nr::SOCKET_WRITE, [self.raw() as usize, data.as_ptr() as usize, data.len(), 0, 0, 0])
     }
@@ -344,8 +344,8 @@ impl Socket {
     /// read (those of one write at most: the read ends before the next
     /// write's): up to `cap` of them, and how many more were closed.
     pub fn read_with(&self, buf: &mut [u8], cap: usize) -> Result<(usize, Vec<Handle>, usize), Error> {
-        let cap = cap.min(vabi::CHANNEL_MAX_HANDLES);
-        let mut raws: Vec<RawHandle> = alloc::vec![vabi::INVALID_HANDLE; cap];
+        let cap = cap.min(abi::CHANNEL_MAX_HANDLES);
+        let mut raws: Vec<RawHandle> = alloc::vec![abi::INVALID_HANDLE; cap];
         let mut actual = [0u32; 2];
         let n = call(
             nr::SOCKET_READ,
@@ -372,12 +372,12 @@ impl Socket {
 
     /// Writes all of `data`, waiting for room as needed.
     pub fn write_all(&self, mut data: &[u8]) -> Result<(), Error> {
-        use vabi::signals::{PEER_CLOSED, WRITABLE};
+        use abi::signals::{PEER_CLOSED, WRITABLE};
         while !data.is_empty() {
             match self.write(data) {
                 Ok(n) => data = &data[n..],
                 Err(Error::ShouldWait) => {
-                    self.wait(WRITABLE | PEER_CLOSED, vabi::DEADLINE_INFINITE)?;
+                    self.wait(WRITABLE | PEER_CLOSED, abi::DEADLINE_INFINITE)?;
                 }
                 Err(e) => return Err(e),
             }
@@ -388,11 +388,11 @@ impl Socket {
     /// Reads at least one byte, waiting until there is one; `Ok(0)` at the
     /// end of the stream.
     pub fn read_blocking(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE};
+        use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE};
         loop {
             match self.read(buf) {
                 Err(Error::ShouldWait) => {
-                    self.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, vabi::DEADLINE_INFINITE)?;
+                    self.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, abi::DEADLINE_INFINITE)?;
                 }
                 Err(Error::PeerClosed) => return Ok(0),
                 other => return other,
@@ -407,8 +407,8 @@ impl Socket {
     }
 
     /// Bytes buffered for reading here, and bytes a write would accept now.
-    pub fn info(&self) -> Result<vabi::SocketInfo, Error> {
-        let mut info = vabi::SocketInfo::default();
+    pub fn info(&self) -> Result<abi::SocketInfo, Error> {
+        let mut info = abi::SocketInfo::default();
         call(
             nr::OBJECT_INFO,
             [self.raw() as usize, info_topic::SOCKET, &mut info as *mut _ as usize, size_of_val(&info), 0, 0],
@@ -428,10 +428,10 @@ impl Vmo {
     }
 
     pub fn create_committed(size: usize) -> Result<Vmo, Error> {
-        Vmo::create_with(size, vabi::vmo_flags::COMMIT)
+        Vmo::create_with(size, abi::vmo_flags::COMMIT)
     }
 
-    /// Memory as `flags` ([`vabi::vmo_flags`]) ask: committed now,
+    /// Memory as `flags` ([`abi::vmo_flags`]) ask: committed now,
     /// write-combining.
     pub fn create_with(size: usize, flags: usize) -> Result<Vmo, Error> {
         call(nr::VMO_CREATE, [size, flags, 0, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
@@ -449,11 +449,11 @@ impl Vmo {
     /// Like [`Vmo::create_contiguous`], below 4 GiB (for devices that can
     /// only address 32 bits).
     pub fn create_contiguous_below_4g(res: &Resource, size: usize) -> Result<Vmo, Error> {
-        Vmo::create_dma(res, size, vabi::dma_flags::BELOW_4G)
+        Vmo::create_dma(res, size, abi::dma_flags::BELOW_4G)
     }
 
     /// Physically contiguous memory for a device, as `flags`
-    /// ([`vabi::dma_flags`]) ask: below 4 GiB, write-combining.
+    /// ([`abi::dma_flags`]) ask: below 4 GiB, write-combining.
     pub fn create_dma(res: &Resource, size: usize, flags: usize) -> Result<Vmo, Error> {
         call(nr::VMO_CREATE_CONTIGUOUS, [res.raw() as usize, size, flags, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
     }
@@ -494,17 +494,17 @@ impl Port {
     }
 
     /// Waits until the port holds a packet or `deadline` passes, and takes
-    /// as many as `out` holds (at most `vabi::PORT_WAIT_MAX`), oldest
+    /// as many as `out` holds (at most `abi::PORT_WAIT_MAX`), oldest
     /// first: how many. `TimedOut` if the deadline passed.
-    pub fn wait_packets(&self, out: &mut [vabi::PortPacket], deadline: u64) -> Result<usize, Error> {
-        let max = out.len().min(vabi::PORT_WAIT_MAX);
+    pub fn wait_packets(&self, out: &mut [abi::PortPacket], deadline: u64) -> Result<usize, Error> {
+        let max = out.len().min(abi::PORT_WAIT_MAX);
         call(nr::PORT_WAIT, [self.raw() as usize, out.as_mut_ptr() as usize, max, deadline as usize, 0, 0])
     }
 }
 
 /// Has `port` get a packet with `key` once any of `signals` is active on
 /// `handle`'s object (at once, if one is): one packet, then register again
-/// for more (`vabi::nr::OBJECT_WAIT_ASYNC`).
+/// for more (`abi::nr::OBJECT_WAIT_ASYNC`).
 pub fn wait_async(handle: RawHandle, port: &Port, key: u64, signals: u32) -> Result<(), Error> {
     call(nr::OBJECT_WAIT_ASYNC, [handle as usize, port.raw() as usize, key as usize, signals as usize, 0, 0])
         .map(|_| ())
@@ -522,11 +522,11 @@ impl Event {
     }
 
     pub fn signal(&self) -> Result<(), Error> {
-        self.0.signal(0, vabi::signals::SIGNALED)
+        self.0.signal(0, abi::signals::SIGNALED)
     }
 
     pub fn clear(&self) -> Result<(), Error> {
-        self.0.signal(vabi::signals::SIGNALED, 0)
+        self.0.signal(abi::signals::SIGNALED, 0)
     }
 }
 
@@ -573,12 +573,12 @@ impl Process {
     /// Kills the process and every process it started that still runs
     /// (and those they started): its job, as a terminal's Ctrl+C ends it.
     pub fn kill_tree(&self) -> Result<(), Error> {
-        call(nr::PROCESS_KILL, [self.raw() as usize, vabi::kill_flags::DESCENDANTS, 0, 0, 0, 0]).map(|_| ())
+        call(nr::PROCESS_KILL, [self.raw() as usize, abi::kill_flags::DESCENDANTS, 0, 0, 0, 0]).map(|_| ())
     }
 
     /// Waits for the process to terminate and returns its exit code.
     pub fn join(&self, deadline: u64) -> Result<i64, Error> {
-        self.wait(vabi::signals::TERMINATED, deadline)?;
+        self.wait(abi::signals::TERMINATED, deadline)?;
         Ok(self.info()?.exit_code)
     }
 }
@@ -592,8 +592,8 @@ impl Interrupt {
     /// id, which the PCI resource names), of which it may have `limit` at
     /// once; returns the interrupt and the address/data pair to program
     /// into the device.
-    pub fn create_msi(res: &Resource, device: u16, limit: u32) -> Result<(Interrupt, vabi::MsiInfo), Error> {
-        let mut info = vabi::MsiInfo::default();
+    pub fn create_msi(res: &Resource, device: u16, limit: u32) -> Result<(Interrupt, abi::MsiInfo), Error> {
+        let mut info = abi::MsiInfo::default();
         let args = [res.raw() as usize, device as usize, limit as usize, &mut info as *mut _ as usize, 0, 0];
         let h = call(nr::MSI_CREATE, args)?;
         Ok((Interrupt(Handle(h as RawHandle)), info))
@@ -604,8 +604,8 @@ impl Interrupt {
     /// raised until it is ended, which signals `ended`. Whoever it is for
     /// gets a duplicate without `SIGNAL`, which raising takes.
     pub fn create_software(level: bool, ended: Option<&Event>) -> Result<Interrupt, Error> {
-        let flags = if level { vabi::irq_flags::LEVEL } else { 0 };
-        let ended = ended.map_or(vabi::INVALID_HANDLE, |e| e.raw());
+        let flags = if level { abi::irq_flags::LEVEL } else { 0 };
+        let ended = ended.map_or(abi::INVALID_HANDLE, |e| e.raw());
         call(nr::IRQ_CREATE_SOFTWARE, [flags, ended as usize, 0, 0, 0, 0]).map(|h| Interrupt(Handle(h as RawHandle)))
     }
 
@@ -621,7 +621,7 @@ impl Interrupt {
 
     /// Blocks until the interrupt fires.
     pub fn wait_irq(&self, deadline: u64) -> Result<(), Error> {
-        self.wait(vabi::signals::SIGNALED, deadline).map(|_| ())
+        self.wait(abi::signals::SIGNALED, deadline).map(|_| ())
     }
 }
 
@@ -657,7 +657,7 @@ impl IoPorts {
 }
 
 impl Resource {
-    /// Derives a narrower resource (see `vabi::resource_kind`).
+    /// Derives a narrower resource (see `abi::resource_kind`).
     pub fn create(&self, kind: usize, base: u64, size: u64) -> Result<Resource, Error> {
         call(nr::RESOURCE_CREATE, [self.raw() as usize, kind, base as usize, size as usize, 0, 0])
             .map(|h| Resource(Handle(h as RawHandle)))
@@ -676,7 +676,7 @@ impl Guest {
     }
 
     /// Makes `len` bytes of `vmo` from `offset` the guest's memory at
-    /// `gpa`, with the access `flags` give (`vabi::map_flags`).
+    /// `gpa`, with the access `flags` give (`abi::map_flags`).
     pub fn map(&self, vmo: &Vmo, offset: usize, len: usize, gpa: u64, flags: usize) -> Result<(), Error> {
         call(nr::GUEST_MAP, [self.raw() as usize, vmo.raw() as usize, offset, len, gpa as usize, flags]).map(|_| ())
     }
@@ -688,7 +688,7 @@ impl Guest {
 
     /// A virtual processor with id `id` (its interrupt controller's: the
     /// local APIC's on AMD64), in `state`.
-    pub fn create_vcpu(&self, id: u32, state: &vabi::VcpuState) -> Result<Vcpu, Error> {
+    pub fn create_vcpu(&self, id: u32, state: &abi::VcpuState) -> Result<Vcpu, Error> {
         call(nr::VCPU_CREATE, [self.raw() as usize, id as usize, state as *const _ as usize, 0, 0, 0])
             .map(|h| Vcpu(Handle(h as RawHandle)))
     }
@@ -704,8 +704,8 @@ impl Guest {
 impl Vcpu {
     /// Runs the virtual processor until it needs the monitor; `exit` brings
     /// the answer to the last exit and takes the next (see
-    /// `vabi::VcpuExit`).
-    pub fn run(&self, exit: &mut vabi::VcpuExit) -> Result<(), Error> {
+    /// `abi::VcpuExit`).
+    pub fn run(&self, exit: &mut abi::VcpuExit) -> Result<(), Error> {
         call(nr::VCPU_RUN, [self.raw() as usize, exit as *mut _ as usize, 0, 0, 0, 0]).map(|_| ())
     }
 
@@ -724,8 +724,8 @@ impl Vcpu {
     }
 
     /// The registers, while no thread runs the virtual processor.
-    pub fn state(&self) -> Result<vabi::VcpuState, Error> {
-        let mut state = vabi::VcpuState::default();
+    pub fn state(&self) -> Result<abi::VcpuState, Error> {
+        let mut state = abi::VcpuState::default();
         call(nr::VCPU_READ_STATE, [self.raw() as usize, &mut state as *mut _ as usize, 0, 0, 0, 0])?;
         Ok(state)
     }
@@ -750,7 +750,7 @@ pub fn process_self_info() -> Result<ProcessInfo, Error> {
     let len = core::mem::size_of_val(&info);
     call(
         nr::OBJECT_INFO,
-        [vabi::INVALID_HANDLE as usize, info_topic::PROCESS, &mut info as *mut _ as usize, len, 0, 0],
+        [abi::INVALID_HANDLE as usize, info_topic::PROCESS, &mut info as *mut _ as usize, len, 0, 0],
     )?;
     Ok(info)
 }
@@ -760,8 +760,8 @@ pub fn process_list(out: &mut [ProcessInfo]) -> Result<usize, Error> {
     call(nr::PROCESS_LIST, [out.as_mut_ptr() as usize, out.len(), 0, 0, 0, 0])
 }
 
-pub fn system_info() -> Result<vabi::SystemInfo, Error> {
-    let mut info = vabi::SystemInfo::default();
+pub fn system_info() -> Result<abi::SystemInfo, Error> {
+    let mut info = abi::SystemInfo::default();
     call(nr::SYSTEM_INFO, [&mut info as *mut _ as usize, 0, 0, 0, 0, 0])?;
     Ok(info)
 }
@@ -803,7 +803,7 @@ pub fn try_random_bytes(buf: &mut [u8]) -> Result<(), Error> {
 pub fn random_bytes(buf: &mut [u8]) {
     if let Err(e) = try_random_bytes(buf) {
         crate::io::log_without_allocating(format_args!("cannot get random bytes ({e:?}): ending the program\n"));
-        crate::sys::process_exit(vabi::EXIT_CODE_PANICKED);
+        crate::sys::process_exit(abi::EXIT_CODE_PANICKED);
     }
 }
 

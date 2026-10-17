@@ -78,7 +78,7 @@ impl TrapFrame {
         }
     }
 
-    /// The system call's number and arguments (see `vabi`'s calling
+    /// The system call's number and arguments (see `abi`'s calling
     /// convention).
     pub fn syscall(&self) -> (usize, [usize; 6]) {
         (self.rax as usize, [self.rdi, self.rsi, self.rdx, self.r10, self.r8, self.r9].map(|x| x as usize))

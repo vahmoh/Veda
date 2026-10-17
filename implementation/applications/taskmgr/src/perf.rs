@@ -6,10 +6,10 @@
 
 use std::collections::VecDeque;
 
-use vgfx::{LineJoin, Path, StrokeStyle};
-use vui::{Align, Color, Cursor, Font, Icon, Rect, Ui};
+use gfx::{LineJoin, Path, StrokeStyle};
+use ui::{Align, Color, Cursor, Font, Icon, Rect, Ui};
 
-use vfiles::format::human_size;
+use files::format::human_size;
 
 use apps_common::format::uptime;
 
@@ -51,7 +51,7 @@ fn graph(ui: &mut Ui, r: Rect, hist: &VecDeque<f32>, color: Color, detailed: boo
         area.close();
         ui.canvas.save();
         ui.canvas.clip_to(r);
-        ui.canvas.fill_path(&area, color.with_alpha(if detailed { 56 } else { 48 }), vgfx::FillRule::NonZero);
+        ui.canvas.fill_path(&area, color.with_alpha(if detailed { 56 } else { 48 }), gfx::FillRule::NonZero);
         let style = StrokeStyle::new(if detailed { 1.6 } else { 1.2 }).with_join(LineJoin::Round);
         ui.canvas.stroke_path(&line, &style, color);
         ui.canvas.restore();

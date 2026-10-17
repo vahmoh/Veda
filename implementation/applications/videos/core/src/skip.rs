@@ -9,7 +9,7 @@
 //! can do without (the loop filter, then pictures nothing refers to, then
 //! all but key frames), and to stop skipping once it keeps up again.
 
-use vproto::media::SkipLevel;
+use proto::media::SkipLevel;
 
 /// Late pictures, as a share of those due, above which it skips more (%).
 const BEHIND: u32 = 15;

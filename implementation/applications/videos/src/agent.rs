@@ -6,12 +6,12 @@
 //! seeking, the player's volume, full screen, back to the library), through
 //! the same operations as the buttons and keys.
 
-use vfiles::format::duration as time;
+use files::format::duration as time;
+use ui::agent::names::{self, MIN_SCORE, query_words, score};
+use ui::agent::{self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, json, show_path};
 use videos_core::control::{self, SeekError};
 use videos_core::playback::Phase;
 use videos_core::text;
-use vui::agent::names::{self, MIN_SCORE, query_words, score};
-use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, json, show_path};
 
 use crate::player::Player;
 use crate::{OpenAt, Videos};
@@ -82,7 +82,7 @@ fn playback(p: &Player) -> String {
 
 /// The video open as the agent sees it.
 fn now_playing(p: &Player) -> Value {
-    let now = vrt::time::now_ns();
+    let now = rt::time::now_ns();
     let at = p.position_us(now).max(0) as u64 / 1000;
     let mut v = json!({
         "title": p.title(),
@@ -153,7 +153,7 @@ impl Videos {
     /// What the engine said of the video open since the last frame (it
     /// may have opened, or failed).
     fn agent_sync(&mut self) -> Result<(), String> {
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         let Some(p) = &mut self.player else { return Ok(()) };
         p.sync(now);
         match p.phase() {
@@ -169,7 +169,7 @@ impl Videos {
         if let Some(i) = names::best(&q, &titles) {
             return Ok(i);
         }
-        let files: Vec<&str> = self.entries.iter().map(|e| vfiles::path::file_stem(&e.name)).collect();
+        let files: Vec<&str> = self.entries.iter().map(|e| files::path::file_stem(&e.name)).collect();
         names::best(&q, &files).ok_or_else(|| {
             let some: Vec<&str> = titles.iter().take(6).copied().collect();
             format!(
@@ -194,7 +194,7 @@ impl Videos {
         if !self.listed {
             self.reload();
         }
-        let now = vrt::time::now_ns();
+        let now = rt::time::now_ns();
         match action {
             "play" => {
                 if let Some(why) = &self.unavailable {
@@ -268,7 +268,7 @@ impl Videos {
                     Err(SeekError::PastEnd) => return Err(format!("{} is only {} long", p.title(), time(duration_ms))),
                     Err(SeekError::NotANumber) => return Err("'seconds' is not a number of seconds".into()),
                 };
-                p.seek_to(ms as i64 * 1000, vproto::media::SeekMode::Exact, now);
+                p.seek_to(ms as i64 * 1000, proto::media::SeekMode::Exact, now);
                 Ok(json!({
                     "title": p.title(),
                     "position": time(ms),
@@ -306,7 +306,7 @@ impl Videos {
                     .filter(|&i| {
                         query.is_none()
                             || score(&q, &self.entries[i].title) >= MIN_SCORE
-                            || score(&q, vfiles::path::file_stem(&self.entries[i].name)) >= MIN_SCORE
+                            || score(&q, files::path::file_stem(&self.entries[i].name)) >= MIN_SCORE
                     })
                     .collect();
                 if found.is_empty() {

@@ -15,17 +15,17 @@ bench = false
 
 [dependencies]
 compositor-core = { path = "core" }
-vrt = { workspace = true }
-vabi = { workspace = true }
-vipc = { workspace = true }
-vproto = { workspace = true }
-vgfx = { workspace = true }
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
 num-traits = { workspace = true }
-vsplash = { workspace = true }
-vgl = { workspace = true, features = ["veda"] }
+splash = { workspace = true }
+gl = { workspace = true, features = ["veda"] }
 
 [build-dependencies]
-vbuild = { workspace = true }
+build = { workspace = true }
 
 [lints]
 workspace = true

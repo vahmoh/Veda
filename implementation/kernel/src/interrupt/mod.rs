@@ -34,8 +34,8 @@
 use alloc::sync::{Arc, Weak};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use vabi::Error;
-use vabi::signals::SIGNALED;
+use abi::Error;
+use abi::signals::SIGNALED;
 
 use crate::arch::irq;
 use crate::hv::Vcpu;

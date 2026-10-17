@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 [package]
-name = "vtext"
+name = "text"
 description = "Veda text editing model: line buffer, selections, undo, search, soft wrap and syntax highlighting"
 version.workspace = true
 edition.workspace = true
