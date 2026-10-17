@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Client-side windows: connection to the compositor, double-buffered
-//! shared surfaces, frame pacing and event delivery.
+//! Client-side windows: connection to the compositor, double- or
+//! triple-buffered shared surfaces, frame pacing and event delivery.
 
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -39,6 +39,8 @@ struct Surface {
     stride: i32,
 }
 
+/// Buffers a window draws into, unless it asks for three
+/// ([`Window::triple_buffer`]).
 const BUFFERS: u8 = 2;
 
 /// When the last acknowledged frame was presented and when it reaches the
@@ -66,7 +68,9 @@ pub struct Window {
     pub id: u32,
     events: Channel,
     surface: Option<Surface>,
-    /// Buffer currently on screen (draw into the other one).
+    /// How many buffers the surface has.
+    buffers: u8,
+    /// Buffer currently on screen (draw into the next one).
     shown: Option<u8>,
     /// A presented frame has not been acknowledged yet.
     in_flight: bool,
@@ -90,6 +94,7 @@ impl Window {
             id,
             events,
             surface: None,
+            buffers: BUFFERS,
             shown: None,
             in_flight: false,
             presented_ns: 0,
@@ -145,9 +150,25 @@ impl Window {
         out
     }
 
-    /// True if a new frame may be drawn now (the previous one was shown).
+    /// True once the compositor has taken the frame presented last (its
+    /// `FrameDone` came), so that the next may be presented. With two
+    /// buffers the next is drawn only then, as the buffer it goes into was
+    /// the compositor's until then; with three ([`Window::triple_buffer`])
+    /// it may be drawn while the last is still on its way.
     pub fn can_draw(&self) -> bool {
         !self.in_flight && !self.closed
+    }
+
+    /// Gives the window three buffers rather than two, from its next frame
+    /// on: one for the frame on the screen, one for the frame presented
+    /// last, and one to draw the next into while the compositor has yet to
+    /// take that one. For windows that draw every frame and should not wait
+    /// to start, such as a game's.
+    pub fn triple_buffer(&mut self) {
+        if self.buffers != 3 {
+            self.buffers = 3;
+            self.surface = None;
+        }
     }
 
     /// The last acknowledged frame's timing.
@@ -161,13 +182,13 @@ impl Window {
             return Ok(());
         }
         let stride = w;
-        let bytes = (stride * h * 4) as usize * BUFFERS as usize;
+        let bytes = (stride * h * 4) as usize * self.buffers as usize;
         let vmo = Vmo::create(bytes).map_err(|_| WindowError::NoMemory)?;
         let theirs = Vmo::from_handle(vmo.0.duplicate(None).map_err(|_| WindowError::NoMemory)?);
         let map = Mapping::new(vmo, bytes.next_multiple_of(4096), vabi::map_flags::READ | vabi::map_flags::WRITE)
             .map_err(|_| WindowError::NoMemory)?;
         self.display
-            .attach_buffers(self.id, theirs, w as u32, h as u32, stride as u32, BUFFERS)
+            .attach_buffers(self.id, theirs, w as u32, h as u32, stride as u32, self.buffers)
             .map_err(WindowError::Ipc)?
             .map_err(WindowError::Display)?;
         self.surface = Some(Surface { map, width: w, height: h, stride });
@@ -177,7 +198,7 @@ impl Window {
 
     fn back_index(&self) -> u8 {
         match self.shown {
-            Some(i) => (i + 1) % BUFFERS,
+            Some(i) => (i + 1) % self.buffers,
             None => 0,
         }
     }
@@ -203,8 +224,9 @@ impl Window {
         let index = self.back_index();
         let s = self.surface.as_ref().ok_or(WindowError::NoMemory)?;
         let per = (s.stride * s.height) as usize;
-        // SAFETY: the mapping holds BUFFERS buffers of `per` pixels; the
-        // compositor only reads the one on screen.
+        // SAFETY: the mapping holds `self.buffers` buffers of `per` pixels
+        // (the surface is made again when that changes); the compositor only
+        // reads the one on screen.
         let pixels =
             unsafe { core::slice::from_raw_parts_mut((s.map.as_ptr() as *mut u32).add(per * index as usize), per) };
         Ok((pixels, s.width, s.height, s.stride))
@@ -219,9 +241,9 @@ impl Window {
         let shown = self.shown?;
         let s = self.surface.as_ref()?;
         let per = (s.stride * s.height) as usize;
-        // SAFETY: the mapping holds BUFFERS buffers of `per` pixels: the one
-        // on screen, which the compositor only reads, and the one the frame
-        // was drawn into, which nothing writes now.
+        // SAFETY: the mapping holds `self.buffers` buffers of `per` pixels,
+        // among them the one on screen, which the compositor only reads, and
+        // the one the frame was drawn into, which nothing writes now.
         let buffer =
             |i: u8| unsafe { core::slice::from_raw_parts((s.map.as_ptr() as *const u32).add(per * i as usize), per) };
         Some(Damage::of_changes(buffer(shown), buffer(self.back_index()), s.width, s.height, s.stride as usize))

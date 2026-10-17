@@ -903,6 +903,11 @@ impl VirglBackend {
         if row > self.staging_size {
             return;
         }
+        // The GPU finishes the frame first, and this context waits for it
+        // on its fence: a read would have the renderer wait instead, keeping
+        // its other clients waiting too (the compositor among them, where
+        // the GPU composes the screen).
+        self.sync();
         let rows = (self.staging_size / row) as u32;
         let mut y = 0;
         while y < dh {
@@ -916,8 +921,9 @@ impl VirglBackend {
                 let line = &src[k * row..][..row];
                 let out = dst.row(y as usize + k);
                 if opaque {
+                    // A word at a time (BGRA in memory is 0xAARRGGBB).
                     for (o, p) in out.iter_mut().zip(line.as_chunks::<4>().0) {
-                        *o = u32::from_le_bytes([p[0], p[1], p[2], 0xFF]);
+                        *o = u32::from_le_bytes(*p) | 0xFF00_0000;
                     }
                 } else {
                     for (o, p) in out.iter_mut().zip(line.as_chunks::<4>().0) {

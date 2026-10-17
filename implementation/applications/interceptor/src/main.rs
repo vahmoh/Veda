@@ -111,6 +111,8 @@ fn run() -> i32 {
     if save.settings.fullscreen {
         window.set_state(WindowState::Fullscreen);
     }
+    // Each frame is drawn while the last is still on its way to the screen.
+    window.triple_buffer();
     // The sounds start loading while the world is made.
     let speakers = Speakers::start();
     let (mut text, fonts) = vui::load_fonts();
@@ -246,11 +248,17 @@ fn run() -> i32 {
         gl.flush();
         let t_drawn = vrt::time::now_ns();
 
-        if !wait_for_window(&mut window, &mut pending) {
-            return 0;
-        }
-        let t_ready = vrt::time::now_ns();
-        let Ok(mut canvas) = window.begin_frame() else { continue };
+        // The frame goes into the window's third buffer while the last one
+        // is still on its way to the screen, and is handed over the moment
+        // the compositor has taken that one. Waiting for it first, and only
+        // then reading the frame back and drawing over it, the game and the
+        // compositor would take turns every frame.
+        let Ok(mut canvas) = window.begin_frame() else {
+            if !wait_for_window(&mut window, &mut pending) {
+                return 0;
+            }
+            continue;
+        };
         let (cw, ch) = (canvas.width(), canvas.height());
         {
             let (pixels, stride) = canvas.pixels_mut();
@@ -297,6 +305,10 @@ fn run() -> i32 {
             }
         }
         drop(canvas);
+        let t_painted = vrt::time::now_ns();
+        if !wait_for_window(&mut window, &mut pending) {
+            return 0;
+        }
         let _ = window.present(&[]);
 
         // The frame's length (from the last one's end) and what it went to;
@@ -307,9 +319,9 @@ fn run() -> i32 {
         let spent = Phases {
             update: ms(frame_end, t_render),
             render: ms(t_render, t_drawn),
-            wait: ms(t_drawn, t_ready),
-            show: ms(t_ready, t_shown),
-            draw: ms(t_shown, t_end),
+            show: ms(t_drawn, t_shown),
+            draw: ms(t_shown, t_painted),
+            wait: ms(t_painted, t_end),
         };
         let length = ms(frame_end, t_end);
         frame_end = t_end;

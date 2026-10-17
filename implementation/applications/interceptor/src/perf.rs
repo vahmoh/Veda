@@ -12,16 +12,17 @@ use interceptor_game::render::{Quality, device_name};
 
 /// Where a frame's time went (ms): moving the game on (with the events,
 /// the voice agent and the sounds), rendering (handing the GPU the
-/// frame's commands), waiting for the window to take a frame, showing
-/// (the picture read back into the window), and drawing the dashboard and
-/// the menus over it and handing the frame over.
+/// frame's commands), showing (the picture read back into the window's
+/// next buffer, once the GPU has drawn it), drawing the dashboard and the
+/// menus over it, and waiting for the window to take the frame (the
+/// compositor having taken the last) and handing it over.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Phases {
     pub update: f32,
     pub render: f32,
-    pub wait: f32,
     pub show: f32,
     pub draw: f32,
+    pub wait: f32,
 }
 
 /// Frames longer than this are slow (ms): long enough for a stutter.
@@ -104,8 +105,8 @@ impl Perf {
             n => format!("{n}"),
         };
         let went = format!(
-            "update {:.0}, render {:.0}, wait {:.0}, show {:.0}, draw {:.0}",
-            p.update, p.render, p.wait, p.show, p.draw
+            "update {:.0}, render {:.0}, show {:.0}, draw {:.0}, wait {:.0}",
+            p.update, p.render, p.show, p.draw, p.wait
         );
         format!("longest frame {ms:.0} ms ({went}), {slow} over {SLOW_MS:.0} ms")
     }

@@ -338,12 +338,13 @@ focus, input, who may do what, limits) is `compositor-core` (`core/`),
 tested on the host.
 
 - **Surfaces.** A client draws into the back one of two buffers in a
-  shared VMO and `present`s it. `FrameDone` comes once the other buffer is
-  free, pacing every client to the display without copying pixels, and
-  says when the frame is seen. A minimised window's frames are neither
-  composed nor acknowledged until it is shown again. Clients' memory is
-  checked when attached and never borrowed as a Rust slice, since the
-  client may be writing it.
+  shared VMO (or of three, to draw a frame while the last is on its way,
+  as a game does) and `present`s it. `FrameDone` comes once the compositor
+  has taken the frame, freeing the buffer before it, pacing every client
+  to the display without copying pixels, and says when the frame is seen.
+  A minimised window's frames are neither composed nor acknowledged until
+  it is shown again. Clients' memory is checked when attached and never
+  borrowed as a Rust slice, since the client may be writing it.
 - **Composition** is damage driven, at most once per display frame. Where
   a display flips and the GPU can draw into its pictures, the GPU composes
   every frame with OpenGL ES straight into the next picture (`gpu.rs`):
@@ -483,9 +484,10 @@ and in software on every CPU otherwise.
 - **The GPU renderer** (`vgl::virgl`) speaks virglrenderer's protocol: it
   caches state objects, sends only what changed, moves data through a
   shared staging buffer and reuses released buffers once the GPU has
-  passed their fence. It works around what virglrenderer's hosts get wrong
-  (QEMU renders on the host's desktop OpenGL, or on ANGLE's OpenGL ES when
-  headless):
+  passed their fence. Before it reads a frame back it waits on its own
+  fence, so that the renderer serves its other clients meanwhile. It
+  works around what virglrenderer's hosts get wrong (QEMU renders on the
+  host's desktop OpenGL, or on ANGLE's OpenGL ES when headless):
 
 | Host behaviour | What `vgl::virgl` does |
 |----------------|------------------------|

@@ -243,6 +243,11 @@ impl Compositor {
         let clip = region.rects().iter().fold(Rect::default(), |a, r| if a.is_empty() { *r } else { a.union(r) });
         let desktop = startup.is_none_or(|(revealing, _, _)| revealing);
         let started = vrt::time::now_ns();
+        // What the frame draws again (all of `clip`, where the desktop is
+        // drawn) is not copied first: a full-screen game changes all of the
+        // screen every frame, which would be copied whole, then drawn over.
+        let redrawn = if desktop { clip } else { Rect::default() };
+        let stale: Vec<Rect> = stale.into_iter().filter(|r| !redrawn.contains_rect(r)).collect();
         if let Some(from) = shown
             && !stale.is_empty()
         {

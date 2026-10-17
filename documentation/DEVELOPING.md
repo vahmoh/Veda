@@ -347,7 +347,9 @@ libraries ([Rust on Veda](RUST.md)).
 * **Without the toolkit,** games and other full-screen renderers use
   `vui::window::Window`: `begin_frame()` returns a `Canvas` for the back
   buffer, `present()` shows it, `poll_events()` returns `WindowEvent`s,
-  and `can_draw()` says when the compositor is ready for the next frame.
+  and `can_draw()` says when the compositor is ready for the next frame;
+  after `triple_buffer()`, a frame may be drawn while the last is still on
+  its way, and presented once `can_draw()` says so.
 
 ### Programs on `vrt` alone
 

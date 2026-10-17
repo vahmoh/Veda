@@ -84,8 +84,17 @@ impl<'a> Pixels<'a> {
         if out.try_reserve(n).is_err() {
             return false;
         }
-        out.resize(n, 0);
-        out.chunks_exact_mut(w as usize).enumerate().all(|(row, line)| self.copy_row(x, y + row as i32, line))
+        // Each row straight into the spare room, which is not cleared first:
+        // a window that changes whole (a game's, a video's) is copied every
+        // frame.
+        for (row, line) in out.spare_capacity_mut()[..n].chunks_exact_mut(w as usize).enumerate() {
+            let Some(at) = self.layout.span(self.index, x, y + row as i32, w) else { return false };
+            // SAFETY: as in `copy_row`, into room for `w` pixels.
+            unsafe { core::ptr::copy_nonoverlapping(self.base.add(at), line.as_mut_ptr().cast::<u32>(), line.len()) };
+        }
+        // SAFETY: the loop wrote all of the first `n` pixels.
+        unsafe { out.set_len(n) };
+        true
     }
 
     /// Pixel (`x`, `y`), or nothing (0) outside the buffer.
