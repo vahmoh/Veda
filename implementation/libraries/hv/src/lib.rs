@@ -14,7 +14,7 @@
 //! What is particular to the architecture its guests are (their virtual
 //! processors' interrupt controller, what the processor tells them of
 //! itself, how they find the platform and boot, the PC's devices and memory
-//! map) is in `implementation/libraries/hv/src/arch/<architecture>/`:
+//! map) is in `implementation/libraries/hv/src/architectures/<architecture>/`:
 //! [`amd64`]. It describes those machines on any host, so its unit tests
 //! run anywhere.
 //!
@@ -29,7 +29,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod acpi;
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
 pub mod bridge;
 pub mod igd;

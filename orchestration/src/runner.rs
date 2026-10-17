@@ -272,12 +272,12 @@ impl Drop for Killed {
 /// The GUI scripts `test --ui` runs: verification/ui's, then the agent's
 /// (with the stand-in for Deepgram; verification/real, which talks to the
 /// real one, is left out), each group's own and those that hold only on
-/// the architecture's machine (`arch/<architecture>/`).
+/// the architecture's machine (`architectures/<architecture>/`).
 fn ui_scripts() -> Result<Vec<PathBuf>> {
     let mut scripts = Vec::new();
     for group in ["ui", "agent"] {
         let dir = util::workspace_root().join("verification").join(group);
-        for dir in [dir.clone(), dir.join("arch").join(arch::NAME)] {
+        for dir in [dir.clone(), dir.join("architectures").join(arch::NAME)] {
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
             let mut found: Vec<PathBuf> =
                 entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "vts")).collect();

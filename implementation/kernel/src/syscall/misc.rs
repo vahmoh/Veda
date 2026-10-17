@@ -6,14 +6,14 @@
 use vabi::{Error, RawHandle, SystemInfo, clock, power_action, resource_kind};
 
 use super::{SysResult, deadline, get_resource, ok};
-use crate::mm::user;
-use crate::sched::{self, WakeReason};
+use crate::memory::user;
+use crate::scheduler::{self, WakeReason};
 use crate::time;
 
 pub fn debug_write(ptr: usize, len: usize) -> SysResult {
     let len = len.min(4096);
     let bytes = user::read_vec(ptr as u64, len, 4096)?;
-    let cur = sched::current();
+    let cur = scheduler::current();
     crate::log::write_user(cur.process_name(), &bytes);
     ok(len)
 }
@@ -36,17 +36,17 @@ pub fn clock_get(id: usize) -> SysResult {
 }
 
 pub fn clock_info(out: usize) -> SysResult {
-    crate::mm::user::write(out as u64, &time::info())?;
+    crate::memory::user::write(out as u64, &time::info())?;
     ok(0)
 }
 
 pub fn sleep(d: usize) -> SysResult {
     match deadline(d as u64) {
-        Some(d) => match sched::sleep_until(d) {
+        Some(d) => match scheduler::sleep_until(d) {
             WakeReason::Killed => Err(Error::Canceled),
             _ => ok(0),
         },
-        None => match sched::block(None) {
+        None => match scheduler::block(None) {
             WakeReason::Killed => Err(Error::Canceled),
             _ => ok(0),
         },
@@ -54,7 +54,7 @@ pub fn sleep(d: usize) -> SysResult {
 }
 
 pub fn system_info(ptr: usize) -> SysResult {
-    let (total, free) = crate::mm::phys::stats();
+    let (total, free) = crate::memory::phys::stats();
     let mut version = [0u8; 32];
     let v = concat!("Veda ", env!("CARGO_PKG_VERSION"));
     version[..v.len()].copy_from_slice(v.as_bytes());
@@ -62,13 +62,13 @@ pub fn system_info(ptr: usize) -> SysResult {
     let info = SystemInfo {
         version,
         cpu_count: crate::percpu::online().count() as u32,
-        page_size: crate::mm::PAGE_SIZE as u32,
+        page_size: crate::memory::PAGE_SIZE as u32,
         total_memory: total,
         free_memory: free,
         uptime_ns: time::now_ns(),
         process_count: procs.iter().filter(|p| !p.is_terminated()).count() as u32,
         thread_count: procs.iter().map(|p| p.thread_count() as u32).sum(),
-        idle_time_ns: sched::total_idle_ns(),
+        idle_time_ns: scheduler::total_idle_ns(),
         cpu_brand: crate::arch::cpu::brand_string(),
     };
     user::write(ptr as u64, &info)?;

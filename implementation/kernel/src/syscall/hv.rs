@@ -7,7 +7,7 @@ use vabi::{Error, RawHandle, Rights, VcpuExit, VcpuState, map_flags, resource_ki
 
 use super::{SysResult, get_interrupt, get_resource, get_vmo, handle, insert, ok};
 use crate::hv::{Access, Guest, Vcpu};
-use crate::mm::user;
+use crate::memory::user;
 use crate::object::KObject;
 
 fn get_guest(raw: RawHandle, rights: Rights) -> Result<alloc::sync::Arc<Guest>, Error> {

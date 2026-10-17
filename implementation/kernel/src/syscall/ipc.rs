@@ -9,14 +9,14 @@ use vabi::signals::{self, SIGNALED, USER_ALL};
 use vabi::{Error, HandleBasicInfo, PortPacket, RawHandle, Rights, WaitItem, channel_flags, info_topic};
 
 use super::{SysResult, current_process, deadline, get_channel, get_port, get_socket, handle, insert, ok};
-use crate::mm::user;
-use crate::object::channel::{self, Message};
-use crate::object::event::Event;
+use crate::ipc::channel::{self, Message};
+use crate::ipc::event::Event;
+use crate::ipc::port::{Observer, Port};
+use crate::ipc::socket;
+use crate::memory::user;
 use crate::object::handle::Handle;
-use crate::object::port::{Observer, Port};
-use crate::object::socket;
 use crate::object::{KObject, new_koid};
-use crate::sched::{self, WakeReason};
+use crate::scheduler::{self, WakeReason};
 
 const CHANNEL_RIGHTS: Rights = Rights(
     Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0 | Rights::SIGNAL.0 | Rights::GET_INFO.0,
@@ -145,7 +145,7 @@ pub fn object_signal(raw: RawHandle, clear: u32, set: u32) -> SysResult {
 /// Shared implementation of the wait calls. Returns the number of satisfied
 /// items; `observed` is filled for every item.
 fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64) -> Result<usize, Error> {
-    let cur = sched::current();
+    let cur = scheduler::current();
     let wait_id = new_koid();
     loop {
         let mut satisfied = 0;
@@ -166,7 +166,7 @@ fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64
                 s.add_waiter(wait_id, cur.clone(), masks[i]);
             }
         }
-        let reason = sched::block(deadline(d));
+        let reason = scheduler::block(deadline(d));
         for o in objects {
             if let Some(s) = o.signals() {
                 s.remove_waiter(wait_id);
@@ -257,7 +257,7 @@ pub fn wait_async(raw: RawHandle, port_raw: RawHandle, key: u64, signals: u32) -
     if signals == 0 {
         return Err(Error::InvalidArgs);
     }
-    if !crate::mm::phys::user_may_use(REGISTRATION_BYTES) {
+    if !crate::memory::phys::user_may_use(REGISTRATION_BYTES) {
         return Err(Error::NoMemory);
     }
     if !port.reserve() {
@@ -331,7 +331,7 @@ pub fn channel_create(out: usize, flags: u32) -> SysResult {
 /// so no failure leaves them in the caller's table without an owner.
 /// Neither endpoint of the channel may travel on it, nor any channel or
 /// socket that could reach it through what is queued
-/// ([`crate::object::would_cycle`]): `NotSupported`.
+/// ([`crate::ipc::would_cycle`]): `NotSupported`.
 pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
     let ch = get_channel(raw, Rights::WRITE);
     let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
@@ -339,7 +339,7 @@ pub fn channel_write(raw: RawHandle, bytes: usize, n_bytes: usize, handles_ptr: 
     // From here on, returning drops what was taken: the handles are closed.
     let ch = ch?;
     let moved = transferable(&raws, taken)?;
-    if crate::object::would_cycle(ch.queues(), &moved) {
+    if crate::ipc::would_cycle(ch.queues(), &moved) {
         return Err(Error::NotSupported);
     }
     let data = user::read_vec(bytes as u64, n_bytes, vabi::CHANNEL_MAX_BYTES)?;
@@ -449,7 +449,7 @@ fn transferable(raws: &[RawHandle], taken: Vec<Option<Handle>>) -> Result<Vec<Ha
 /// Writes to a socket, and with the first byte the handles named (as a
 /// channel's message carries them: the kernel's once their list is read,
 /// closed if no byte goes). None of them may reach the socket through what
-/// is queued ([`crate::object::would_cycle`]): `NotSupported`.
+/// is queued ([`crate::ipc::would_cycle`]): `NotSupported`.
 pub fn socket_write(raw: RawHandle, buf: usize, len: usize, handles_ptr: usize, n_handles: usize) -> SysResult {
     let s = get_socket(raw, Rights::WRITE);
     let raws = user::read_u32s(handles_ptr as u64, n_handles, vabi::CHANNEL_MAX_HANDLES)?;
@@ -457,7 +457,7 @@ pub fn socket_write(raw: RawHandle, buf: usize, len: usize, handles_ptr: usize, 
     // From here on, returning drops what was taken: the handles are closed.
     let s = s?;
     let moved = transferable(&raws, taken)?;
-    if crate::object::would_cycle(s.queues(), &moved) {
+    if crate::ipc::would_cycle(s.queues(), &moved) {
         return Err(Error::NotSupported);
     }
     let n = len.min(SOCKET_CHUNK);

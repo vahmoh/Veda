@@ -30,7 +30,7 @@ use vrt::println;
 use vrt::sync::{Condvar, Mutex};
 
 #[cfg(target_arch = "x86_64")]
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 mod arch;
 mod media;
 mod policy;

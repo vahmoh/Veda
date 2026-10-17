@@ -23,7 +23,7 @@ use ventropy::{FastPool, Generator};
 
 use crate::arch::clock::ticks;
 use crate::arch::cpu::RANDOM_SOURCES;
-use crate::sync::SpinLock;
+use crate::synchronization::SpinLock;
 use crate::time;
 
 /// Reseed at least this often...

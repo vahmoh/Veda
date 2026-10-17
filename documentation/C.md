@@ -216,7 +216,7 @@ against the GNU and musl keys when they were pinned), builds the POSIX
 layer for the bare target (`x86_64-unknown-none` on AMD64), and runs
 `implementation/ports/build.sh`, which patches the sources (each port's
 patch, then the architecture's) and builds them with the architecture's
-settings (`implementation/ports/arch/<architecture>/settings.sh`) in
+settings (`implementation/ports/architectures/<architecture>/settings.sh`) in
 `target/toolchain` (or `$VEDA_TOOLCHAIN`):
 
 | Directory | What it holds |
@@ -265,7 +265,7 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 
 Each port is a directory with `port.toml` (version, address, SHA-256,
 licence), `veda.patch` and, for what is the architecture's,
-`arch/<architecture>/veda.patch`;
+`architectures/<architecture>/veda.patch`;
 [`implementation/ports/README.md`](../implementation/ports/README.md)
 explains the patches and how to update a port. The ports keep their own
 licences ([Licensing](LICENSING.md)): the source of what the image

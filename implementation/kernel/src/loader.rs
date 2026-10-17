@@ -16,16 +16,16 @@ use bootinfo::{BootInfo, MemoryKind};
 use vabi::startup::{self, role};
 use vabi::{KernelBootInfo, Rights};
 
-use crate::mm::aspace::Perms;
-use crate::mm::paging::Cache;
-use crate::mm::phys_to_virt;
-use crate::mm::vmo::Vmo;
+use crate::ipc::channel::{self, Message};
+use crate::memory::aspace::Perms;
+use crate::memory::paging::Cache;
+use crate::memory::phys_to_virt;
+use crate::memory::vmo::Vmo;
 use crate::object::KObject;
-use crate::object::channel::{self, Message};
 use crate::object::handle::Handle;
 use crate::object::process::Process;
 use crate::object::resource::Resource;
-use crate::sched::{self, Thread};
+use crate::scheduler::{self, Thread};
 
 const INIT_PATH: &str = "bin/init";
 const STACK_SIZE: u64 = 1 << 20;
@@ -169,7 +169,7 @@ pub fn spawn_init(boot: &BootInfo) {
     let entry = elf.entry().wrapping_add(bias);
     thread.prepare_user_entry(entry, sp, bootstrap as u64, 0);
     process.mark_started();
-    sched::make_ready(&thread);
+    scheduler::make_ready(&thread);
     // Every process may read the log: where init is stays out of it (its
     // entry is given as the offset in its image, as crashes are).
     crate::kinfo!("started init (process {}), entry {:#x} in its image", process.koid, elf.entry());
@@ -177,7 +177,7 @@ pub fn spawn_init(boot: &BootInfo) {
 }
 
 /// The kernel keeps a reference to init so it can report if init dies.
-static INIT: crate::sync::SpinLock<Option<Arc<Process>>> = crate::sync::SpinLock::new(None);
+static INIT: crate::synchronization::SpinLock<Option<Arc<Process>>> = crate::synchronization::SpinLock::new(None);
 
 fn keep_alive(p: Arc<Process>) {
     *INIT.lock() = Some(p);

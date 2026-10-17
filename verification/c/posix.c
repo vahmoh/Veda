@@ -47,7 +47,8 @@
 #include <unistd.h>
 #include <veda/ipc.h>
 
-/* The architecture's expectations (verification/c/arch/<architecture>/). */
+/* The architecture's expectations
+ * (verification/c/architectures/<architecture>/). */
 #include "machine.h"
 
 extern char **environ;

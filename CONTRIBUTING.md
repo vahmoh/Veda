@@ -104,8 +104,8 @@ has the detailed rules.
   A new dependency goes in `[workspace.dependencies]` with its reason; a
   library that is wrong becomes a port, and the fix goes upstream.
 - **Write like the code around it**: its naming, comment density and
-  idioms. What depends on the processor architecture stays in `arch/`
-  ([Architectures](documentation/CODING.md#architectures)).
+  idioms. What depends on the processor architecture stays in
+  `architectures/` ([Architectures](documentation/CODING.md#architectures)).
 - **Explain why.** Public items have doc comments, every module a `//!`
   overview, and comments say why the code is as it is.
 - **Keep a change whole and small.** No unrelated renames or reformatting

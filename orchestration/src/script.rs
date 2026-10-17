@@ -78,7 +78,7 @@
 //! nic e1000e                       # QEMU's model of the wired card
 //! disk nvme                        # how QEMU attaches the disks: virtio or nvme
 //! memory 2048                      # the machine's memory (MiB)
-//! acpi-table touchpad              # add a table to the firmware's (orchestration/src/arch/*/acpitest.rs; adds up)
+//! acpi-table touchpad              # add a table to the firmware's (orchestration/src/architectures/*/acpitest.rs; adds up)
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store (adds up)
 //! sound hda                        # the sound card: virtio or hda (hda in a script that resets)
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)

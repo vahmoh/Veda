@@ -8,11 +8,11 @@ use core::sync::atomic::Ordering;
 use vabi::{Error, ProcessInfo, RawHandle, Rights, resource_kind, restrict};
 
 use super::{SysResult, current_process, get_process, get_resource, get_thread, insert, ok, read_str, target_process};
-use crate::mm::user;
+use crate::memory::user;
 use crate::object::KObject;
 use crate::object::handle::Handle;
 use crate::object::process::{self, Process};
-use crate::sched::{self, State, Thread};
+use crate::scheduler::{self, State, Thread};
 
 const PROCESS_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0);
 const THREAD_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0);
@@ -40,7 +40,7 @@ pub fn process_create(name: usize, len: usize) -> SysResult {
     let parent = current_process()?;
     process::may_create(parent.koid)?;
     // An address space and a handle table, from the kernel's memory.
-    if !crate::mm::phys::user_may_use(64 * 1024) {
+    if !crate::memory::phys::user_may_use(64 * 1024) {
         return Err(Error::NoMemory);
     }
     let p = Process::new(&name, parent.koid).ok_or(Error::NoMemory)?;
@@ -87,14 +87,14 @@ pub fn process_start(
     };
     start_thread(&t, entry, stack, child_handle as u64, arg1 as u64)?;
     p.mark_started();
-    sched::make_ready(&t);
+    scheduler::make_ready(&t);
     ok(0)
 }
 
 pub fn process_exit(code: i64) -> SysResult {
     let p = current_process()?;
     p.kill(code);
-    sched::exit_current()
+    scheduler::exit_current()
 }
 
 /// Ends the process; with `kill_flags::DESCENDANTS`, the processes it
@@ -113,7 +113,7 @@ pub fn process_kill(raw: RawHandle, flags: usize) -> SysResult {
         v.kill(vabi::EXIT_CODE_KILLED);
     }
     if victims.iter().any(|v| v.koid == me) {
-        sched::exit_current();
+        scheduler::exit_current();
     }
     ok(0)
 }
@@ -132,7 +132,7 @@ pub fn thread_start(raw: RawHandle, entry: usize, stack: usize, arg0: usize, arg
     if let Some(p) = &t.process {
         p.mark_started();
     }
-    sched::make_ready(&t);
+    scheduler::make_ready(&t);
     ok(0)
 }
 
@@ -140,7 +140,7 @@ pub fn thread_set_exit_futex(addr: usize) -> SysResult {
     if addr != 0 && (!is_user_address(addr) || !addr.is_multiple_of(4)) {
         return Err(Error::InvalidArgs);
     }
-    sched::current().exit_futex.store(addr as u64, Ordering::Relaxed);
+    scheduler::current().exit_futex.store(addr as u64, Ordering::Relaxed);
     ok(0)
 }
 
@@ -148,18 +148,18 @@ pub fn thread_set_exit_futex(addr: usize) -> SysResult {
 /// waiter woken now that the thread is off its user stack for good; a bad
 /// address is ignored, as there is no one left to report it to.
 pub fn thread_exit() -> SysResult {
-    let addr = sched::current().exit_futex.swap(0, Ordering::Relaxed);
+    let addr = scheduler::current().exit_futex.swap(0, Ordering::Relaxed);
     if addr != 0 && user::write(addr, &0u32).is_ok() {
-        let _ = crate::futex::wake(addr, 1);
+        let _ = crate::synchronization::futex::wake(addr, 1);
     }
-    sched::exit_current()
+    scheduler::exit_current()
 }
 
 /// Sets a thread's priority; handle 0 is the calling thread's (a thread
 /// library that keeps its threads' handles to itself lets a thread set its
 /// own).
 pub fn thread_set_priority(raw: RawHandle, prio: usize) -> SysResult {
-    let t = if raw == vabi::INVALID_HANDLE { sched::current() } else { get_thread(raw, Rights::MANAGE)? };
+    let t = if raw == vabi::INVALID_HANDLE { scheduler::current() } else { get_thread(raw, Rights::MANAGE)? };
     if prio == 0 || prio > vabi::priority::REALTIME {
         return Err(Error::InvalidArgs);
     }
@@ -173,7 +173,7 @@ pub fn thread_set_tls(value: usize) -> SysResult {
     if value != 0 && !is_user_address(value) {
         return Err(Error::InvalidArgs);
     }
-    let cur = sched::current();
+    let cur = scheduler::current();
     // SAFETY: the current thread's context, under the BKL.
     unsafe { (*cur.ctx_ptr()).set_tls(value as u64) };
     ok(0)

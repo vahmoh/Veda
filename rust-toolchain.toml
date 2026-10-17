@@ -6,8 +6,8 @@
 # one of the kernel and of the POSIX layer in the C library; and Linux's on
 # musl, of user-space programs (its ELF64 executables, without Linux's or
 # musl's code) and of the driver VM's programs. They are the AMD64 targets
-# (orchestration/src/arch/amd64 names them for the build); rustup reads them
-# from this file only.
+# (orchestration/src/architectures/amd64 names them for the build); rustup
+# reads them from this file only.
 [toolchain]
 channel = "stable"
 targets = ["x86_64-unknown-uefi", "x86_64-unknown-none", "x86_64-unknown-linux-musl"]

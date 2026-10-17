@@ -457,13 +457,13 @@ const C_TEST_VARIANTS: &[(&str, &[&str])] = &[("", &[]), ("-pie", &["-fPIE", "-s
 /// `*.cc`, each in every one of [`C_TEST_VARIANTS`]) for the system image:
 /// `(name, executable)`. None without a cross compiler. What they expect of
 /// the architecture is in the headers of
-/// `verification/c/arch/<architecture>/`.
+/// `verification/c/architectures/<architecture>/`.
 fn c_tests() -> Result<Vec<(String, Vec<u8>)>> {
     let Some(gcc) = cross_gcc() else { return Ok(Vec::new()) };
     let gxx = cross_tool("g++");
     let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
     let src = util::workspace_root().join("verification").join("c");
-    let arch_headers = src.join("arch").join(arch::NAME);
+    let arch_headers = src.join("architectures").join(arch::NAME);
     let headers = util::files_under(&arch_headers)?;
     let out = root().join("tests");
     util::create_dir_all(&out)?;

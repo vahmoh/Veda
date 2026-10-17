@@ -19,8 +19,8 @@ use crate::arch::trap::TrapFrame;
 use crate::object::KObject;
 use crate::object::handle::Handle;
 use crate::object::process::Process;
-use crate::sched;
-use crate::sync::bkl;
+use crate::scheduler;
+use crate::synchronization::bkl;
 
 /// Successful result: primary value and optional second value.
 pub type SysResult = Result<(usize, Option<usize>), Error>;
@@ -38,7 +38,7 @@ pub fn syscall_dispatch(frame: &mut TrapFrame) {
         Ok((v, second)) => frame.set_syscall_result(v as u64, second.map(|s| s as u64)),
         Err(e) => frame.set_syscall_result(e.as_return() as u64, None),
     }
-    sched::return_to_user_hook(frame);
+    scheduler::return_to_user_hook(frame);
     bkl::release();
 }
 
@@ -49,7 +49,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::CLOCK_GET => misc::clock_get(a[0]),
         nr::SLEEP => misc::sleep(a[0]),
         nr::YIELD => {
-            sched::yield_now();
+            scheduler::yield_now();
             ok(0)
         }
         nr::SYSTEM_INFO => misc::system_info(a[0]),
@@ -109,10 +109,10 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::PROCESS_RESTRICT => task::process_restrict(a[0]),
 
         nr::FUTEX_WAIT => {
-            crate::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64))?;
+            crate::synchronization::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64))?;
             ok(0)
         }
-        nr::FUTEX_WAKE => ok(crate::futex::wake(a[0] as u64, a[1])?),
+        nr::FUTEX_WAKE => ok(crate::synchronization::futex::wake(a[0] as u64, a[1])?),
 
         nr::RESOURCE_CREATE => hw::resource_create(a[0] as RawHandle, a[1], a[2] as u64, a[3] as u64),
         nr::IOPORT_CREATE => hw::ioport_create(a[0] as RawHandle, a[1], a[2]),
@@ -143,7 +143,7 @@ fn deadline(d: u64) -> Option<u64> {
 }
 
 pub fn current_process() -> Result<Arc<Process>, Error> {
-    sched::current().process.clone().ok_or(Error::BadState)
+    scheduler::current().process.clone().ok_or(Error::BadState)
 }
 
 /// Looks up a handle in the current process and checks its rights.
@@ -165,7 +165,7 @@ const NEW_OBJECT_BYTES: u64 = 4096;
 /// Refuses (`NoMemory`) a new object for user space within the kernel's
 /// reserve.
 fn may_make_object() -> Result<(), Error> {
-    if crate::mm::phys::user_may_use(NEW_OBJECT_BYTES) { Ok(()) } else { Err(Error::NoMemory) }
+    if crate::memory::phys::user_may_use(NEW_OBJECT_BYTES) { Ok(()) } else { Err(Error::NoMemory) }
 }
 
 /// Adds a handle to a new object (or a duplicate) to the current process.
@@ -185,16 +185,16 @@ macro_rules! typed_getter {
     };
 }
 
-typed_getter!(get_channel, Channel, crate::object::channel::ChannelEnd);
-typed_getter!(get_socket, Socket, crate::object::socket::SocketEnd);
-typed_getter!(get_vmo, Vmo, crate::mm::vmo::Vmo);
+typed_getter!(get_channel, Channel, crate::ipc::channel::ChannelEnd);
+typed_getter!(get_socket, Socket, crate::ipc::socket::SocketEnd);
+typed_getter!(get_vmo, Vmo, crate::memory::vmo::Vmo);
 typed_getter!(get_process, Process, Process);
-typed_getter!(get_thread, Thread, crate::sched::Thread);
+typed_getter!(get_thread, Thread, crate::scheduler::Thread);
 typed_getter!(get_resource, Resource, crate::object::resource::Resource);
 typed_getter!(get_ioports, IoPorts, crate::object::ioport::IoPorts);
-typed_getter!(get_interrupt, Interrupt, crate::object::interrupt::Interrupt);
-typed_getter!(get_event, Event, crate::object::event::Event);
-typed_getter!(get_port, Port, crate::object::port::Port);
+typed_getter!(get_interrupt, Interrupt, crate::interrupt::Interrupt);
+typed_getter!(get_event, Event, crate::ipc::event::Event);
+typed_getter!(get_port, Port, crate::ipc::port::Port);
 
 /// A process handle argument where 0 means "the calling process".
 fn target_process(raw: RawHandle) -> Result<Arc<Process>, Error> {
@@ -203,6 +203,6 @@ fn target_process(raw: RawHandle) -> Result<Arc<Process>, Error> {
 
 /// Reads a string argument (UTF-8, bounded).
 fn read_str(ptr: usize, len: usize, max: usize) -> Result<alloc::string::String, Error> {
-    let bytes = crate::mm::user::read_vec(ptr as u64, len, max)?;
+    let bytes = crate::memory::user::read_vec(ptr as u64, len, max)?;
     alloc::string::String::from_utf8(bytes).map_err(|_| Error::InvalidArgs)
 }

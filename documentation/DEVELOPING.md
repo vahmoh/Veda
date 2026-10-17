@@ -112,11 +112,11 @@ check its logs with `expect-stick` (`verification/ui/live-logs.vts`).
 
 `cargo orchestration test` runs the unit tests on the host, then `systest`
 inside Veda; `--ui` adds the scripts of `verification/ui/` (the desktop,
-the applications and the devices; `arch/amd64/`: a PC's machine only) and
-`verification/agent/` (with a stand-in for Deepgram, and a microphone fed
-from the host by `testmic`). Those in `verification/real/`, run by hand,
-use the real Internet and Deepgram, with the key in `DEEPGRAM_API_KEY`
-([The agent](AGENT.md#testing)).
+the applications and the devices; `architectures/amd64/`: a PC's machine
+only) and `verification/agent/` (with a stand-in for Deepgram, and a
+microphone fed from the host by `testmic`). Those in `verification/real/`,
+run by hand, use the real Internet and Deepgram, with the key in
+`DEEPGRAM_API_KEY` ([The agent](AGENT.md#testing)).
 
 A script (`.vts`) drives QEMU and checks the log and the screen, as its
 opening comment says. `orchestration/src/script.rs` documents the
@@ -130,7 +130,7 @@ the run, with its number.
   firmware printed and where each processor is. QEMU's loader blanks, at
   every reset, the page from which OVMF before edk2's e4f99a8554 reads a
   processor count and a memory map (`blank_at_reset`,
-  `orchestration/src/arch/amd64/qemu.rs`).
+  `orchestration/src/architectures/amd64/qemu.rs`).
 * **Outputs.** `shot`, `script` and `test` save the serial console (the
   kernel's log and every program's `println!`) to
   `target/veda/serial.log`, and headless runs' sound to

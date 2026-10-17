@@ -12,7 +12,7 @@
 //! processors, one thread each, and serves the hypercalls. What is
 //! particular to the architecture (booting Linux, the PC's own devices,
 //! the guest's memory map below 4 GiB) is in `arch`
-//! (`implementation/services/drivervm/src/arch/<architecture>/`).
+//! (`implementation/services/drivervm/src/architectures/<architecture>/`).
 //!
 //! Programs in the guest reach Veda's objects through the bridge
 //! (`vhv::bridge`): this program keeps the guest's handles and carries out
@@ -50,7 +50,7 @@
 extern crate alloc;
 
 #[cfg(target_arch = "x86_64")]
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 mod arch;
 mod bridge;
 mod gpio;

@@ -11,9 +11,9 @@ use vabi::{ProcessInfo, process_state};
 
 use super::handle::HandleTable;
 use super::{Name, Signals};
-use crate::mm::aspace::AddressSpace;
-use crate::sched::{self, Thread, WakeReason};
-use crate::sync::SpinLock;
+use crate::memory::aspace::AddressSpace;
+use crate::scheduler::{self, Thread, WakeReason};
+use crate::synchronization::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -134,7 +134,7 @@ impl Process {
         let last = {
             let mut threads = self.threads.lock();
             threads.retain(|x| x.koid != t.koid);
-            threads.iter().all(|x| x.is_dead() || x.state() == sched::State::New)
+            threads.iter().all(|x| x.is_dead() || x.state() == scheduler::State::New)
         };
         if last {
             let code = self.pending_code.lock().unwrap_or(0);
@@ -151,7 +151,7 @@ impl Process {
             }
         }
         let threads: Vec<Arc<Thread>> = self.threads.lock().clone();
-        if threads.iter().all(|t| t.state() == sched::State::New) {
+        if threads.iter().all(|t| t.state() == scheduler::State::New) {
             // Nothing is running: terminate right away.
             self.terminate(code);
             return;
@@ -159,8 +159,8 @@ impl Process {
         for t in threads {
             t.mark_kill();
             match t.state() {
-                sched::State::Blocked => sched::wake(&t, WakeReason::Killed),
-                sched::State::Running => {
+                scheduler::State::Blocked => scheduler::wake(&t, WakeReason::Killed),
+                scheduler::State::Running => {
                     let cpu = t.sched.lock().cpu;
                     if cpu != crate::percpu::cpu_id_or_boot() {
                         crate::arch::smp::reschedule(cpu);

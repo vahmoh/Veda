@@ -15,10 +15,10 @@ port() {
 }
 
 # Veda's patches of port NAME, those it has: its own (NAME/veda.patch),
-# then the architecture's (NAME/arch/$VEDA_ARCH/veda.patch).
+# then the architecture's (NAME/architectures/$VEDA_ARCH/veda.patch).
 patches() {
 	local p
-	for p in "$PORTS/$1/veda.patch" "$PORTS/$1/arch/$VEDA_ARCH/veda.patch"; do
+	for p in "$PORTS/$1/veda.patch" "$PORTS/$1/architectures/$VEDA_ARCH/veda.patch"; do
 		if [ -f "$p" ]; then echo "$p"; fi
 	done
 }

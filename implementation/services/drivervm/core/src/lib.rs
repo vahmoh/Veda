@@ -24,7 +24,7 @@ extern crate alloc;
 extern crate std;
 
 #[cfg(target_arch = "x86_64")]
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 pub mod arch;
 pub mod functions;
 pub mod ledger;

@@ -6,12 +6,12 @@
 use vabi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
 
 use super::{SysResult, get_resource, get_vmo, handle, insert, ok, target_process};
-use crate::mm::aspace::Perms;
-use crate::mm::paging::Cache;
-use crate::mm::user;
-use crate::mm::vmo::Vmo;
+use crate::memory::aspace::Perms;
+use crate::memory::paging::Cache;
+use crate::memory::user;
+use crate::memory::vmo::Vmo;
 use crate::object::KObject;
-use crate::sync::bkl;
+use crate::synchronization::bkl;
 
 const VMO_RIGHTS: Rights =
     Rights(Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::EXECUTE.0 | Rights::GET_INFO.0);
@@ -89,11 +89,11 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
     }
     // Devices' and the firmware's memory, never the kernel's RAM, nor the
     // registers the kernel keeps for itself.
-    if crate::mm::phys::overlaps_ram(paddr as u64, size as u64) {
+    if crate::memory::phys::overlaps_ram(paddr as u64, size as u64) {
         crate::kwarn!("vmo: refused a physical VMO over RAM ({:#x}, {} bytes)", paddr, size);
         return Err(Error::AccessDenied);
     }
-    if crate::mm::kvirt::is_kernels(paddr as u64, size as u64) {
+    if crate::memory::kvirt::is_kernels(paddr as u64, size as u64) {
         crate::kwarn!("vmo: refused a physical VMO over the kernel's registers ({:#x}, {} bytes)", paddr, size);
         return Err(Error::AccessDenied);
     }
@@ -106,8 +106,8 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
     // The pages the range touches (the root resource permits any range).
     let span = (size as u64)
         .checked_add(paddr as u64 & 0xFFF)
-        .and_then(crate::mm::checked_page_align_up)
-        .filter(|&span| span <= crate::mm::vmo::MAX_VMO_SIZE)
+        .and_then(crate::memory::checked_page_align_up)
+        .filter(|&span| span <= crate::memory::vmo::MAX_VMO_SIZE)
         .ok_or(Error::InvalidArgs)?;
     let vmo = Vmo::new_physical(paddr as u64, span, cache);
     let rights = Rights(Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::GET_INFO.0);

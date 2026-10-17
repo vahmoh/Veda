@@ -56,24 +56,25 @@ another architecture can be added without touching code that is not its
 own.
 
 * **Its own directory.** A crate keeps such code in
-  `src/arch/<architecture>/` (`implementation/kernel/src/arch/amd64`,
-  `orchestration/src/arch/amd64` and others). Nothing outside those
-  directories names an architecture's instructions,
-  registers, system call numbers or calling conventions, or its platform's
-  devices (a PC's interrupt controllers, timers, keyboard controller and
-  IOMMU); drivers of devices on a bus (PCI's, USB's) are each device's,
-  not an architecture's.
+  `src/architectures/<architecture>/`
+  (`implementation/kernel/src/architectures/amd64`,
+  `orchestration/src/architectures/amd64` and others). Nothing outside
+  those directories names an architecture's instructions, registers,
+  system call numbers or calling conventions, or its platform's devices (a
+  PC's interrupt controllers, timers, keyboard controller and IOMMU);
+  drivers of devices on a bus (PCI's, USB's) are each device's, not an
+  architecture's.
 * **One module, `arch`.** The rest of the crate reaches that code only
   through `arch`, whose items every architecture provides with the same
   names and meanings. The kernel's (`implementation/kernel/src/arch.rs`)
   and `orchestration`'s (`orchestration/src/arch.rs`) document their
   interface in a table. Its vocabulary is architecture-neutral: the
   clock's counter, not the TSC; a thread's TLS pointer, not its FS base.
-  Code in `src/arch/<architecture>/` may use the rest of its crate.
+  Code in `src/architectures/<architecture>/` may use the rest of its crate.
 * **Chosen by what the code does:**
   * Code that runs on the architecture (the loader, the kernel, the
     runtime, services, tests) takes the module of its compile target:
-    `#[cfg(target_arch = "x86_64")] #[path = "arch/amd64/mod.rs"] mod arch;`.
+    `#[cfg(target_arch = "x86_64")] #[path = "architectures/amd64/mod.rs"] mod arch;`.
   * Knowledge of an architecture's formats that tools need on any machine
     (executables' machine types, the IOMMU's tables, the virtual devices
     of the hypervisor's guests) is a public module named after it
@@ -85,20 +86,20 @@ own.
     (a build script's `TARGET`, `orchestration`'s `arch`), never the one
     they run on.
 * **Outside `src/`,** what tools read from places of their own is in each
-  place's `arch/<architecture>/`, where the tool allows it:
+  place's `architectures/<architecture>/`, where the tool allows it:
 
 | What | Where, for AMD64 |
 |------|------------------|
-| Cargo's settings of the targets | `.cargo/arch/amd64/config.toml`, which `.cargo/config.toml` includes |
-| The ports' settings | `implementation/ports/arch/amd64/settings.sh` |
-| A port's changes for the architecture (a patch applied after the port's own; the driver VM's kernel options) | `implementation/ports/<port>/arch/amd64/` |
-| What the C tests expect of the architecture | `verification/c/arch/amd64/` |
-| The GUI scripts that hold only on its machine | `verification/ui/arch/amd64/` |
+| Cargo's settings of the targets | `.cargo/architectures/amd64/config.toml`, which `.cargo/config.toml` includes |
+| The ports' settings | `implementation/ports/architectures/amd64/settings.sh` |
+| A port's changes for the architecture (a patch applied after the port's own; the driver VM's kernel options) | `implementation/ports/<port>/architectures/amd64/` |
+| What the C tests expect of the architecture | `verification/c/architectures/amd64/` |
+| The GUI scripts that hold only on its machine | `verification/ui/architectures/amd64/` |
 | Its Rust targets (rustup reads them nowhere else) | `rust-toolchain.toml` |
 
 ## Targets
 
-On AMD64 (`orchestration/src/arch/amd64` names them for the build):
+On AMD64 (`orchestration/src/architectures/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
@@ -130,12 +131,12 @@ On AMD64 (`orchestration/src/arch/amd64` names them for the build):
 * **Soft-float.** Check that a library builds for the kernel's soft-float
   target, which has no `std`:
   `cargo build -p <crate> --target x86_64-unknown-none`
-  (`.cargo/arch/amd64/config.toml` gives the RustCrypto and dalek crates
-  their portable code there, as LLVM cannot build their SIMD code for it).
-  Building Veda (`cargo orchestration build`), whose programs on `vrt`
-  link without `std`, is the final check. `vimage`, for user space only,
-  does not build soft-float (`fast_image_resize`'s SIMD code), nor does
-  `shell-common`, which decodes wallpapers with it.
+  (`.cargo/architectures/amd64/config.toml` gives the RustCrypto and dalek
+  crates their portable code there, as LLVM cannot build their SIMD code
+  for it). Building Veda (`cargo orchestration build`), whose programs on
+  `vrt` link without `std`, is the final check. `vimage`, for user space
+  only, does not build soft-float (`fast_image_resize`'s SIMD code), nor
+  does `shell-common`, which decodes wallpapers with it.
 
 ## Pixels and colours
 

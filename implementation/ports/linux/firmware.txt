@@ -9,7 +9,7 @@
 # wireless-regdb. `cargo orchestration linux` fetches them (into
 # target/linux/firmware); image builds check and pack them. The firmware of
 # the devices only the architecture's machines have is in its list
-# (arch/<architecture>/firmware.txt), which may name the sources here.
+# (architectures/<architecture>/firmware.txt), which may name the sources here.
 #
 # A device of Linux's whose firmware is not here does not work in the
 # driver VM: its driver (veda.config) and its firmware go in together.

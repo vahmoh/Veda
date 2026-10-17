@@ -13,11 +13,11 @@
 //!
 //! ChaCha20 and BLAKE2s are RustCrypto's (`chacha20`, `blake2`), which wipe
 //! their state when it is dropped; on the soft-float targets of the loader
-//! and kernel they run their portable code (`.cargo/arch/amd64/config.toml`).
-//! The crate has no platform code: the kernel supplies the entropy (firmware
-//! seed, the processor's random number generators, timing jitter, interrupt
-//! timing) and the locking. It is `no_std` and does not allocate, so the
-//! kernel can use it.
+//! and kernel they run their portable code
+//! (`.cargo/architectures/amd64/config.toml`). The crate has no platform
+//! code: the kernel supplies the entropy (firmware seed, the processor's
+//! random number generators, timing jitter, interrupt timing) and the
+//! locking. It is `no_std` and does not allocate, so the kernel can use it.
 
 #![no_std]
 

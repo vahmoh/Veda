@@ -12,7 +12,8 @@
 #
 # Environment:
 #   VEDA_PORTS   this directory
-#   VEDA_ARCH    the architecture built for (arch/$VEDA_ARCH/veda.patch)
+#   VEDA_ARCH    the architecture built for
+#                (architectures/$VEDA_ARCH/veda.patch)
 #   VEDA_CRATES  where to prepare them; downloads/ holds the verified archives
 #
 # Results, under $VEDA_CRATES: src/<crate>, each crate as Veda builds it.

@@ -85,14 +85,16 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 | Module | Responsibility |
 |--------|----------------|
-| `arch` | the processor architecture and its platform, behind one interface (`src/arch.rs`); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
-| `mm` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
-| `sched` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
-| `object` | handles, signals, processes, channels, sockets, events, ports, interrupts, I/O ports, resources |
+| `arch` | the processor architecture and its platform, behind one interface (`src/arch.rs`, each architecture in `src/architectures/`); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
+| `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
+| `scheduler` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
+| `object` | handles, signals, processes, I/O ports, resources |
+| `ipc` | channels, sockets, events, ports |
+| `interrupt` | interrupt objects: devices' interrupts, and programs' own, delivered to drivers or to guests |
 | `syscall` | the system call layer (numbers and types in `implementation/libraries/abi`) |
 | `hv` | the hypervisor: guests and their virtual processors, for [the driver VM](DRIVERVM.md) |
-| `sync`, `random` | the big kernel lock and spinlocks; the ChaCha20 random number generator |
-| `acpi`, `time`, `percpu`, `futex`, `loader`, `log`, `panic` | supporting subsystems |
+| `synchronization`, `random` | the big kernel lock, spinlocks and futexes; the ChaCha20 random number generator |
+| `acpi`, `time`, `percpu`, `loader`, `log`, `panic` | supporting subsystems |
 
 - **Concurrency.** Kernel code runs with interrupts disabled under a big
   kernel lock (BKL): the kernel is effectively single-threaded while user
@@ -124,7 +126,7 @@ logs (see [the driver VM](DRIVERVM.md)).
   256 KiB each way, all-or-nothing writes of up to 4096 bytes,
   half-closing, and handles that travel with the bytes written with them.
   No channel or socket may carry a handle that would keep it alive through
-  what is queued (`object::would_cycle`).
+  what is queued (`ipc::would_cycle`).
 - **Waiting.** `object_wait_many` waits on up to 1024 objects. A *port*
   keeps registrations (`object_wait_async`) and queues a packet for each
   that fires (`port_wait`), so a wait costs what is ready, not what is
@@ -802,12 +804,12 @@ the actions every `vui` application offers over the `agentapp` protocol
 ## Architectures
 
 Veda runs on AMD64 (x86-64). What depends on the architecture or its
-platform is in each component's `arch/<architecture>/` directory (a
+platform is in each component's `architectures/<architecture>/` directory (a
 crate's in its `src/`), reached through its `arch` module
 ([Coding conventions](CODING.md) has the rules). On AMD64:
 
-| Component | What is AMD64's (`arch/amd64/`) |
-|-----------|---------------------------------|
+| Component | What is AMD64's (`architectures/amd64/`) |
+|-----------|------------------------------------------|
 | `implementation/boot/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
 | `implementation/kernel/` | see `arch` in [The kernel](#the-kernel) |
 | `implementation/libraries/bootinfo` | the address space the loader hands over, and how the kernel is entered |

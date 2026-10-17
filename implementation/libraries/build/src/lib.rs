@@ -8,11 +8,11 @@
 //! at a random address and relocates.
 //!
 //! What depends on the architecture (its user target) is in
-//! `implementation/libraries/build/src/arch/<architecture>/`. A build
+//! `implementation/libraries/build/src/architectures/<architecture>/`. A build
 //! script runs on the build machine, so the target being built picks the
 //! architecture, not the machine the script runs on.
 
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
 
 /// The linker's arguments for a Veda program, beyond the target's (a static

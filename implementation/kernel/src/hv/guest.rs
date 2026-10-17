@@ -25,9 +25,9 @@ use vabi::Error;
 use super::{Access, Vcpu};
 use crate::arch::hv::GuestTables;
 use crate::arch::iommu::Domain;
-use crate::mm::PAGE_SIZE;
-use crate::mm::vmo::Vmo;
-use crate::sync::{SpinLock, SpinLockGuard};
+use crate::memory::PAGE_SIZE;
+use crate::memory::vmo::Vmo;
+use crate::synchronization::{SpinLock, SpinLockGuard};
 
 /// A guest may have at most this many processors.
 pub const MAX_VCPUS: u32 = 64;
@@ -87,7 +87,7 @@ impl Guest {
         if len == 0 || !offset.is_multiple_of(PAGE_SIZE) || !gpa.is_multiple_of(PAGE_SIZE) {
             return Err(Error::InvalidArgs);
         }
-        let len = crate::mm::checked_page_align_up(len).ok_or(Error::OutOfRange)?;
+        let len = crate::memory::checked_page_align_up(len).ok_or(Error::OutOfRange)?;
         if offset.checked_add(len).is_none_or(|e| e > vmo.size())
             || gpa.checked_add(len).is_none_or(|e| e > GuestTables::LIMIT)
         {

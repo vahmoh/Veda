@@ -7,9 +7,9 @@
 use vabi::{Error, MsiInfo, RawHandle, Rights, irq_flags, resource_kind};
 
 use super::{SysResult, get_event, get_interrupt, get_ioports, get_resource, insert, ok};
-use crate::mm::user;
+use crate::interrupt::Interrupt;
+use crate::memory::user;
 use crate::object::KObject;
-use crate::object::interrupt::Interrupt;
 use crate::object::ioport::IoPorts;
 use crate::object::resource::Resource;
 

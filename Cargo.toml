@@ -180,7 +180,7 @@ argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "pa
 # The kernel's random number generator (implementation/libraries/entropy):
 # ChaCha20 (RFC 8439) and BLAKE2s, which wipe their state when dropped. On
 # the soft-float targets they run their portable code
-# (.cargo/arch/amd64/config.toml).
+# (.cargo/architectures/amd64/config.toml).
 chacha20 = { version = "0.10.2", default-features = false, features = ["cipher", "zeroize"] }
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 # TLS (HTTPS, secure WebSockets): rustls, with a CryptoProvider built on the

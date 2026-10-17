@@ -19,7 +19,7 @@ Each port is a directory:
 |------|---------------|
 | `port.toml` | The name, version, download address, the archive's SHA-256 and the licence |
 | `veda.patch` | Veda's changes, applied with `patch -p1` to the unpacked archive |
-| `arch/<architecture>/` | The architecture's `veda.patch`, applied after the port's, and its other files, such as the driver VM kernel's options |
+| `architectures/<architecture>/` | The architecture's `veda.patch`, applied after the port's, and its other files, such as the driver VM kernel's options |
 
 The `cargo orchestration` command that builds a port downloads its archive
 first, refusing one whose SHA-256 differs from the pin. For Rust it also
@@ -30,10 +30,10 @@ release that builds it), checked against the SHA-256s in the release's
 The scripts (`build.sh`, `linux/build.sh`, `crates.sh`; `common.sh`
 holds what they share) list what they expect and make in their opening
 comments. They build for the architecture `cargo orchestration` names
-(`VEDA_ARCH`), with its settings from `arch/<architecture>/settings.sh`
-(target triples, the names other projects give the architecture, the
-media libraries' assembler). A stage runs again only when its inputs
-change.
+(`VEDA_ARCH`), with its settings from
+`architectures/<architecture>/settings.sh` (target triples, the names
+other projects give the architecture, the media libraries' assembler). A
+stage runs again only when its inputs change.
 
 ## Toolchain
 
@@ -104,12 +104,14 @@ filter, scaler and resampler that `mediadec` uses. It stays LGPL:
 
 What the patches change:
 
-* **linux**: the Veda platform (`veda.patch`, and `arch/amd64/veda.patch`),
-  whose files [The pieces](../../documentation/DRIVERVM.md#the-pieces)
-  lists. The kernel is `allnoconfig` with the options of `veda.config` and
-  `arch/<architecture>/veda.config`, and the build fails if one does not
-  take. `firmware.txt` and `arch/<architecture>/firmware.txt` list the
-  firmware it loads, with each file's source and SHA-256.
+* **linux**: the Veda platform (`veda.patch`, and
+  `architectures/amd64/veda.patch`), whose files
+  [The pieces](../../documentation/DRIVERVM.md#the-pieces) lists. The
+  kernel is `allnoconfig` with the options of `veda.config` and
+  `architectures/<architecture>/veda.config`, and the build fails if one
+  does not take. `firmware.txt` and
+  `architectures/<architecture>/firmware.txt` list the firmware it loads,
+  with each file's source and SHA-256.
 * **zlib**, **elfutils**: none; built static for the build machine.
 * **mesa**: Veda's renderer (`implementation/guests/linux/renderer`) is a
   target of Mesa's build (`src/gallium/targets/veda`): the guest's program
@@ -264,11 +266,11 @@ included, and `vfont`'s tests and `videogen` read them from here.
 2. Put the new version, address and SHA-256 in `port.toml`, and a crate's
    version in the workspace's `Cargo.toml` too.
 3. Unpack the release, apply the old `veda.patch`, then each
-   `arch/<architecture>/veda.patch`, and resolve what no longer applies.
-   Make the patches again with `diff -ruN a b`, paths starting at the
-   release's top directory: `veda.patch` against the pristine release, an
-   architecture's against the release with `veda.patch` applied (what only
-   an architecture needs goes there).
+   `architectures/<architecture>/veda.patch`, and resolve what no longer
+   applies. Make the patches again with `diff -ruN a b`, paths starting at
+   the release's top directory: `veda.patch` against the pristine release,
+   an architecture's against the release with `veda.patch` applied (what
+   only an architecture needs goes there).
 4. Rebuild with the port's command, which rebuilds what changed (run a
    crate's own tests as [Crates](#crates) shows), then run
    `cargo orchestration test`.

@@ -5,10 +5,10 @@
 //!
 //! Everything the kernel does that depends on the processor's architecture,
 //! or on the platform that comes with it, is implemented in
-//! `implementation/kernel/src/arch/<architecture>/` (AMD64's in
-//! `implementation/kernel/src/arch/amd64/`). The rest of the kernel reaches
-//! it only through the interface below, which every architecture provides
-//! with the same names and meanings:
+//! `implementation/kernel/src/architectures/<architecture>/` (AMD64's in
+//! `implementation/kernel/src/architectures/amd64/`). The rest of the
+//! kernel reaches it only through the interface below, which every
+//! architecture provides with the same names and meanings:
 //!
 //! | Item | What it provides |
 //! |------|------------------|
@@ -29,10 +29,11 @@
 //! | `hv` | virtual machines: guests' address translation, virtual processors |
 //! | `iommu` | the IOMMU: devices' DMA and interrupts remapped, devices given to guests |
 //!
-//! Code in `src/arch/<architecture>/` may use the rest of the kernel; the
-//! rest of the kernel uses nothing of it but this.
+//! Code in `src/architectures/<architecture>/` may use the rest of the
+//! kernel; the rest of the kernel uses nothing of it but this.
 
 #[cfg(target_arch = "x86_64")]
+#[path = "architectures/amd64/mod.rs"]
 mod amd64;
 #[cfg(target_arch = "x86_64")]
 pub use amd64::{
@@ -41,4 +42,4 @@ pub use amd64::{
 };
 
 #[cfg(not(target_arch = "x86_64"))]
-compile_error!("the kernel supports AMD64 only (implementation/kernel/src/arch/amd64)");
+compile_error!("the kernel supports AMD64 only (implementation/kernel/src/architectures/amd64)");

@@ -18,17 +18,18 @@ extern crate alloc;
 
 mod acpi;
 mod arch;
-mod futex;
 mod hv;
+mod interrupt;
+mod ipc;
 mod loader;
 mod log;
-mod mm;
+mod memory;
 mod object;
 mod panic;
 mod percpu;
 mod random;
-mod sched;
-mod sync;
+mod scheduler;
+mod synchronization;
 mod syscall;
 mod time;
 
@@ -36,11 +37,11 @@ use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
 use bootinfo::{BootInfo, MemoryKind};
-use sched::Thread;
-use sync::bkl;
+use scheduler::Thread;
+use synchronization::bkl;
 
 #[global_allocator]
-static HEAP: mm::heap::KernelHeap = mm::heap::KernelHeap::new();
+static HEAP: memory::heap::KernelHeap = memory::heap::KernelHeap::new();
 
 /// Options parsed from the kernel command line (`BOOT.CFG`).
 struct Options {
@@ -130,10 +131,10 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
     // Memory: frame allocator, kernel address space, heap.
     // SAFETY: the loader built a valid memory map.
     let memmap = unsafe { boot.memory_map.as_slice() };
-    mm::phys::init(memmap);
-    mm::paging::init_kernel_space(boot);
-    let reclaimed = mm::phys::reclaim(memmap, MemoryKind::LoaderReclaimable);
-    let (total, free) = mm::phys::stats();
+    memory::phys::init(memmap);
+    memory::paging::init_kernel_space(boot);
+    let reclaimed = memory::phys::reclaim(memmap, MemoryKind::LoaderReclaimable);
+    let (total, free) = memory::phys::stats();
     kinfo!(
         "memory: {} MiB usable, {} MiB free ({} KiB reclaimed from the loader)",
         total >> 20,
@@ -155,7 +156,7 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
 
     // Scheduler on the boot CPU; this boot context becomes CPU 0's idle
     // thread.
-    sched::init_cpu(Thread::new_idle_current(0));
+    scheduler::init_cpu(Thread::new_idle_current(0));
     percpu::get(0).online.store(true, Ordering::Release);
 
     let others = arch::smp::start_secondary_cpus(opts.max_cpus);
@@ -166,16 +167,16 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
     bkl::acquire();
     loader::spawn_init(boot);
     kinfo!("boot complete; handing the CPU to user space");
-    sched::idle_loop()
+    scheduler::idle_loop()
 }
 
 /// A CPU other than the boot CPU, once its architecture has set it up
 /// (`arch::smp`): it comes online with `idle` as its idle thread, says it
 /// started (`started`), and takes work.
 fn secondary_main(id: usize, idle: Arc<Thread>, started: impl FnOnce()) -> ! {
-    sched::init_cpu(idle);
+    scheduler::init_cpu(idle);
     percpu::get(id).online.store(true, Ordering::Release);
     started();
     bkl::acquire();
-    sched::idle_loop()
+    scheduler::idle_loop()
 }

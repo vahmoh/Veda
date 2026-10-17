@@ -42,7 +42,7 @@ pub use alloc::{boxed, format, rc, string, vec};
 pub use vabi;
 
 #[cfg(target_arch = "x86_64")]
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 pub mod arch;
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 mod crt;

@@ -23,7 +23,7 @@ pub fn set_framebuffer(fb: &bootinfo::Framebuffer) {
     if fb.phys_base == 0 {
         return;
     }
-    FB_ADDR.store(crate::mm::phys_to_virt(fb.phys_base), Ordering::Relaxed);
+    FB_ADDR.store(crate::memory::phys_to_virt(fb.phys_base), Ordering::Relaxed);
     FB_GEOMETRY.store(fb.width as u64 | (fb.height as u64) << 20 | (fb.stride as u64) << 40, Ordering::Relaxed);
 }
 
@@ -99,7 +99,7 @@ pub fn panicking() -> bool {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     begin();
     emergency(format_args!("\n\n*** VEDA KERNEL PANIC on CPU {} ***\n{}\n", percpu::cpu_id_or_boot(), info));
-    if let Some(t) = crate::sched::try_current() {
+    if let Some(t) = crate::scheduler::try_current() {
         emergency(format_args!("current thread: {} of {}\n", t.koid, t.process_name()));
     }
     end()

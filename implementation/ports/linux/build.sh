@@ -9,7 +9,8 @@
 #
 # Environment:
 #   VEDA_PORTS   the ports directory
-#   VEDA_ARCH    the architecture built for (../arch/$VEDA_ARCH/settings.sh)
+#   VEDA_ARCH    the architecture built for
+#                (../architectures/$VEDA_ARCH/settings.sh)
 #   VEDA_LINUX   where to build; downloads/ holds the verified archives
 #   VEDA_RENDERER      the renderer (implementation/guests/linux/renderer),
 #                whose decoder and libdrm Mesa's build compiles
@@ -48,7 +49,7 @@ mkdir -p "$SRC" "$BUILD" "$STAMPS"
 # log, port, patches, stage, quiet and unpack.
 source "$PORTS/common.sh"
 # GUEST and what the ports take from the architecture.
-source "$PORTS/arch/$VEDA_ARCH/settings.sh"
+source "$PORTS/architectures/$VEDA_ARCH/settings.sh"
 
 stage_src_zlib() { unpack zlib; }
 stage src_zlib +zlib
@@ -99,11 +100,11 @@ stage_libelf() {
 stage libelf src_elfutils zlib @DEPS
 
 # Everything off but what the driver VM needs (veda.config, and the
-# architecture's: arch/$VEDA_ARCH/veda.config), all of which must take:
+# architecture's: architectures/$VEDA_ARCH/veda.config), all of which must take:
 # Kconfig leaves out an option it does not know, or whose dependencies are
 # off, without a word.
 stage_config() {
-	cat "$PORTS/linux/veda.config" "$PORTS/linux/arch/$VEDA_ARCH/veda.config" > "$BUILD/veda.config"
+	cat "$PORTS/linux/veda.config" "$PORTS/linux/architectures/$VEDA_ARCH/veda.config" > "$BUILD/veda.config"
 	quiet "$BUILD/config.log" make -C "$SRC/linux" O="$BUILD/linux" ARCH="$LINUX_ARCH" \
 		KCONFIG_ALLCONFIG="$BUILD/veda.config" allnoconfig
 	local line missing=""
@@ -118,7 +119,7 @@ stage_config() {
 		exit 1
 	fi
 }
-stage config src_linux "$PORTS/linux/veda.config" "$PORTS/linux/arch/$VEDA_ARCH/veda.config" @LINUX_ARCH
+stage config src_linux "$PORTS/linux/veda.config" "$PORTS/linux/architectures/$VEDA_ARCH/veda.config" @LINUX_ARCH
 
 # --- the guest's C and C++ toolchain -------------------------------------------
 

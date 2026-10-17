@@ -10,7 +10,8 @@
 #
 # Environment:
 #   VEDA_PORTS       this directory
-#   VEDA_ARCH        the architecture built for (arch/$VEDA_ARCH/settings.sh)
+#   VEDA_ARCH        the architecture built for
+#                    (architectures/$VEDA_ARCH/settings.sh)
 #   VEDA_TOOLCHAIN   where to build; downloads/ holds the verified archives
 #   VEDA_POSIX_LIB   the POSIX layer (implementation/libraries/posix) as a
 #                    static library
@@ -68,7 +69,7 @@ PREFIX_MAP="-ffile-prefix-map=$ROOT=."
 # log, port, patches, stage, quiet and unpack.
 source "$PORTS/common.sh"
 # TARGET and what the ports take from the architecture.
-source "$PORTS/arch/$VEDA_ARCH/settings.sh"
+source "$PORTS/architectures/$VEDA_ARCH/settings.sh"
 
 for p in binutils gcc gmp mpfr mpc musl; do
 	eval "stage_src_$p() { unpack $p; }"

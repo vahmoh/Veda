@@ -10,7 +10,7 @@ use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::arch::serial;
-use crate::sync::SpinLock;
+use crate::synchronization::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]

@@ -45,7 +45,7 @@ extern crate alloc;
 
 mod acpi;
 #[cfg(target_arch = "x86_64")]
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 mod arch;
 mod gpio;
 mod pci;

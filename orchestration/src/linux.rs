@@ -17,9 +17,10 @@
 //!   renderer, Mesa's build around its Rust half) and packs them into the
 //!   initial RAM file system the kernel starts with, with the firmware its
 //!   drivers load (`implementation/ports/linux/firmware.txt`, and the
-//!   architecture's in `implementation/ports/linux/arch/<architecture>/`).
-//!   Both go into the system image (`linux/kernel`, `linux/initramfs.cpio`),
-//!   where `drivervm` finds them.
+//!   architecture's in
+//!   `implementation/ports/linux/architectures/<architecture>/`). Both go
+//!   into the system image (`linux/kernel`, `linux/initramfs.cpio`), where
+//!   `drivervm` finds them.
 //!
 //! The renderer's Rust half goes to Mesa's build through a place of the
 //! Linux build's own (`build/librenderer.a`), where every build copies the
@@ -391,12 +392,12 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
 
 /// The firmware of `implementation/ports/linux/firmware.txt` and of the
 /// architecture's list
-/// (`implementation/ports/linux/arch/<architecture>/firmware.txt`, which may
-/// name the sources of the first): each file's name, and where it is
-/// (fetched now if it is not, or is not the file pinned).
+/// (`implementation/ports/linux/architectures/<architecture>/firmware.txt`,
+/// which may name the sources of the first): each file's name, and where it
+/// is (fetched now if it is not, or is not the file pinned).
 fn firmware() -> Result<Vec<(String, PathBuf)>> {
     let port = ports::dir().join("linux");
-    let arch_list = port.join("arch").join(arch::NAME).join("firmware.txt");
+    let arch_list = port.join("architectures").join(arch::NAME).join("firmware.txt");
     let mut sources = std::collections::BTreeMap::new();
     let mut files = Vec::new();
     for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {

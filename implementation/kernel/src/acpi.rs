@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 
 use vacpi::tables::{self, Entry};
 
-use crate::mm::phys_to_virt;
-use crate::sync::Once;
+use crate::memory::phys_to_virt;
+use crate::synchronization::Once;
 
 #[derive(Debug, Clone, Copy)]
 pub struct McfgEntry {

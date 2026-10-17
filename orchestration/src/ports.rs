@@ -25,7 +25,7 @@ pub fn dir() -> PathBuf {
 
 /// The ports' settings for the architecture built for.
 pub fn settings() -> PathBuf {
-    dir().join("arch").join(arch::NAME).join("settings.sh")
+    dir().join("architectures").join(arch::NAME).join("settings.sh")
 }
 
 /// The SHA-256 of what builds the ports `names` (every file of their

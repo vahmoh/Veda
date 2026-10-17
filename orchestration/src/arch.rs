@@ -5,14 +5,14 @@
 //!
 //! Everything about building Veda and running it in QEMU that depends on
 //! the architecture Veda is built for (not on the one `orchestration` runs
-//! on) is in `orchestration/src/arch/<architecture>/`. Veda is built for
-//! AMD64 (`orchestration/src/arch/amd64/`). The rest of `orchestration`
-//! reaches it only through the interface below, which every architecture
-//! provides with the same names and meanings:
+//! on) is in `orchestration/src/architectures/<architecture>/`. Veda is
+//! built for AMD64 (`orchestration/src/architectures/amd64/`). The rest of
+//! `orchestration` reaches it only through the interface below, which every
+//! architecture provides with the same names and meanings:
 //!
 //! | Item | What it provides |
 //! |------|------------------|
-//! | `NAME` | the architecture's directories' name (`arch/<NAME>` throughout the tree) |
+//! | `NAME` | the architecture's directories' name (`architectures/<NAME>` throughout the tree) |
 //! | `UEFI_TARGET`, `KERNEL_TARGET`, `USER_TARGET`, `BARE_TARGET`, `GUEST_TARGET`, `STD_TARGET` | Rust's targets: of the loader; of the kernel; of user-space programs; of the code C programs link; of the driver VM's programs; of programs on Rust's standard library |
 //! | `C_TARGET`, `GUEST_C_TARGET` | the C toolchains' targets: Veda's, and the driver VM's |
 //! | `PORT_TOOLS`, `check_port_tools` | what the ports need from the system besides what every architecture's need |
@@ -22,9 +22,10 @@
 //! | `qemu` | QEMU's machine: its emulator, firmware and arguments, its chipset's devices, its processors' registers |
 //! | `acpitest` | ACPI tables that tests add to the machine's |
 //!
-//! Code in `src/arch/<architecture>/` may use the rest of `orchestration`;
-//! the rest of `orchestration` uses nothing of it but this.
+//! Code in `src/architectures/<architecture>/` may use the rest of
+//! `orchestration`; the rest of `orchestration` uses nothing of it but this.
 
+#[path = "architectures/amd64/mod.rs"]
 mod amd64;
 
 pub use amd64::{

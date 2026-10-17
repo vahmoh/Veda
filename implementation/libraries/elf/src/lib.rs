@@ -30,7 +30,7 @@
 //! refused: Veda links every program statically.
 //!
 //! An executable is for one processor ([`Machine`]): each architecture's
-//! is in `implementation/libraries/elf/src/arch/<architecture>/`
+//! is in `implementation/libraries/elf/src/architectures/<architecture>/`
 //! ([`amd64`]), on every host, so that the build machine's tools check
 //! executables for the target. [`NATIVE`] is the processor the code runs
 //! on, whose programs it loads.
@@ -43,7 +43,7 @@
 
 use core::fmt;
 
-#[path = "arch/amd64/mod.rs"]
+#[path = "architectures/amd64/mod.rs"]
 pub mod amd64;
 
 /// The processor an executable's code is for.

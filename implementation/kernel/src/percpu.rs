@@ -12,7 +12,7 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch;
-use crate::sched::CpuSched;
+use crate::scheduler::CpuSched;
 
 /// The most CPUs the kernel runs on.
 pub const MAX_CPUS: usize = 32;
