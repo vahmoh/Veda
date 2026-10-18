@@ -36,7 +36,7 @@ pub struct ResourceArgs {
 pub struct Lost;
 
 /// A virgl context.
-pub trait Transport {
+pub trait Transport: Send {
     /// The host's capability set 2 (`struct virgl_caps_v2`).
     fn caps(&self) -> &[u8];
 
@@ -123,6 +123,16 @@ impl HostMemory {
         self.layout.size()
     }
 }
+
+// SAFETY: an allocation the memory owns, as a `Box` does its own: its
+// owner (a transport, and the renderer through the pointers it took, while
+// the transport has its calls in progress) uses it from one thread at a
+// time, and shares no reference to it.
+#[cfg(any(test, feature = "host-virgl"))]
+unsafe impl Send for HostMemory {}
+// SAFETY: as for `Send`; `&HostMemory` gives only its address and size.
+#[cfg(any(test, feature = "host-virgl"))]
+unsafe impl Sync for HostMemory {}
 
 #[cfg(any(test, feature = "host-virgl"))]
 impl Drop for HostMemory {

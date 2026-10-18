@@ -1,0 +1,99 @@
+--- a/proxy/environment/meson.build
++++ b/proxy/environment/meson.build
+@@ -15,27 +15,34 @@
+ 
+ giomodules += 'gioenvironmentproxy'
+ 
+-module = shared_module(
+-  'gioenvironmentproxy',
+-  sources: sources,
+-  include_directories: top_inc,
+-  dependencies: deps,
+-  c_args: '-DGENVIRONMENTPROXY_MODULE',
+-  link_args: module_ldflags,
+-  link_depends: symbol_map,
+-  name_suffix: module_suffix,
+-  install: build_shared,
+-  install_dir: gio_module_dir
+-)
++# Static only (a system without shared libraries), the static library is
++# compiled from the sources rather than from the module's objects.
++if build_shared
++  module = shared_module(
++    'gioenvironmentproxy',
++    sources: sources,
++    include_directories: top_inc,
++    dependencies: deps,
++    c_args: '-DGENVIRONMENTPROXY_MODULE',
++    link_args: module_ldflags,
++    link_depends: symbol_map,
++    name_suffix: module_suffix,
++    install: build_shared,
++    install_dir: gio_module_dir
++  )
++endif
+ 
+ if build_static
+   gioenvironmentproxy_lib = static_library('gioenvironmentproxy',
+-    objects: module.extract_all_objects(recursive: true),
++    sources: build_shared ? [] : sources,
++    objects: build_shared ? module.extract_all_objects(recursive: true) : [],
++    include_directories: top_inc,
++    c_args: '-DGENVIRONMENTPROXY_MODULE',
+     dependencies: deps,
+     install: true,
+     install_dir: gio_module_dir
+   )
+-  pkg.generate(module)
++  pkg.generate(build_shared ? module : gioenvironmentproxy_lib)
+ 
+   gioenvironmentproxy_dep = declare_dependency(
+     link_with: gioenvironmentproxy_lib
+--- a/tls/openssl/meson.build
++++ b/tls/openssl/meson.build
+@@ -35,26 +35,32 @@
+ 
+ giomodules += 'gioopenssl'
+ 
+-module = shared_module(
+-  'gioopenssl',
+-  sources: sources,
+-  include_directories: incs,
+-  dependencies: deps,
+-  link_args: module_ldflags,
+-  link_depends: symbol_map,
+-  name_suffix: module_suffix,
+-  install: build_shared,
+-  install_dir: gio_module_dir,
+-)
++# Static only (a system without shared libraries), the static library is
++# compiled from the sources rather than from the module's objects.
++if build_shared
++  module = shared_module(
++    'gioopenssl',
++    sources: sources,
++    include_directories: incs,
++    dependencies: deps,
++    link_args: module_ldflags,
++    link_depends: symbol_map,
++    name_suffix: module_suffix,
++    install: build_shared,
++    install_dir: gio_module_dir,
++  )
++endif
+ 
+ if build_static
+   gioopenssl_lib = static_library('gioopenssl',
+-    objects: module.extract_all_objects(recursive: true),
++    sources: build_shared ? [] : sources,
++    objects: build_shared ? module.extract_all_objects(recursive: true) : [],
++    include_directories: incs,
+     dependencies: deps,
+     install: true,
+     install_dir: gio_module_dir,
+   )
+-  pkg.generate(module)
++  pkg.generate(build_shared ? module : gioopenssl_lib)
+ 
+   gioopenssl_dep = declare_dependency(link_with: gioopenssl_lib)
+   meson.override_dependency('gioopenssl', gioopenssl_dep)

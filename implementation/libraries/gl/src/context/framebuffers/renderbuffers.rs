@@ -35,7 +35,7 @@ impl Context {
         if target != gl::RENDERBUFFER {
             return self.err(gl::INVALID_ENUM);
         }
-        self.renderbuffer =
+        self.local.renderbuffer =
             if name == 0 { None } else { Some(self.renderbuffers.get_or_create(name, Renderbuffer::default)) };
     }
 
@@ -43,8 +43,8 @@ impl Context {
     pub fn delete_renderbuffers(&mut self, names: &[u32]) {
         for &name in names {
             if let Some(key) = self.renderbuffers.key(name) {
-                if self.renderbuffer == Some(key) {
-                    self.renderbuffer = None;
+                if self.local.renderbuffer == Some(key) {
+                    self.local.renderbuffer = None;
                 }
                 self.detach_from_bound_framebuffers(|a| a == Attachment::Renderbuffer(key));
             }
@@ -105,7 +105,7 @@ impl Context {
                 None => return self.err(gl::INVALID_OPERATION),
             }
         };
-        let Some(key) = self.renderbuffer else { return self.err(gl::INVALID_OPERATION) };
+        let Some(key) = self.local.renderbuffer else { return self.err(gl::INVALID_OPERATION) };
         let (w, h) = (width as u32, height as u32);
         let resource = if w > 0 && h > 0 {
             let desc = ResourceDesc {
@@ -157,7 +157,7 @@ impl Context {
         if rows.is_none_or(|bytes| bytes > memory.size()) {
             return self.err(gl::INVALID_VALUE);
         }
-        let Some(key) = self.renderbuffer else { return self.err(gl::INVALID_OPERATION) };
+        let Some(key) = self.local.renderbuffer else { return self.err(gl::INVALID_OPERATION) };
         let (w, h) = (width as u32, height as u32);
         let desc = ResourceDesc {
             target: Target::Renderbuffer,
@@ -185,7 +185,7 @@ impl Context {
             self.err(gl::INVALID_ENUM);
             return 0;
         }
-        let Some(key) = self.renderbuffer else {
+        let Some(key) = self.local.renderbuffer else {
             self.err(gl::INVALID_OPERATION);
             return 0;
         };

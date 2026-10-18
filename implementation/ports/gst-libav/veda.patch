@@ -1,0 +1,29 @@
+--- a/ext/libav/gstavviddec.c
++++ b/ext/libav/gstavviddec.c
+@@ -2056,6 +2056,12 @@
+   output_frame = gst_video_codec_frame_ref (out_dframe->frame);
+ #endif
+ 
++  /* A picture came out for it, so it is to be shown, though FFmpeg asked
++   * for no buffer for it: libdav1d's decoder allocates its own pictures
++   * (it never calls get_buffer2, which would have cleared the flag). */
++  GST_VIDEO_CODEC_FRAME_FLAG_UNSET (output_frame,
++      GST_VIDEO_CODEC_FRAME_FLAG_DECODE_ONLY);
++
+   GST_LOG_OBJECT (ffmpegdec, "Got frame from ffmpeg, sfn # %"
+       G_GUINT32_FORMAT, output_frame->system_frame_number);
+ 
+@@ -3022,8 +3028,11 @@
+ 
+     /* No decoders depending on external libraries (we don't build them, but
+      * people who build against an external ffmpeg might have them.
+-     * We have native gstreamer plugins for all of those libraries anyway. */
+-    if (!strncmp (in_plugin->name, "lib", 3)) {
++     * We have native gstreamer plugins for all of those libraries anyway.
++     * But dav1d on Veda, which has no such plugin (gst-plugins-rs's
++     * dav1ddec): it decodes AV1 with dav1d through FFmpeg. */
++    if (!strncmp (in_plugin->name, "lib", 3)
++        && strcmp (in_plugin->name, "libdav1d") != 0) {
+       GST_DEBUG
+           ("Not using external library decoder %s. Use the gstreamer-native ones instead.",
+           in_plugin->name);

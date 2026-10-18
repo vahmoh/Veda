@@ -5,18 +5,26 @@
 //! context makes at the window's size and shows in the window's pixels.
 
 use crate::backend::{Framebuffer, Present, ResourceDesc, ResourceId, Surface, Target};
-use crate::context::Context;
+use crate::context::{Context, DefaultFramebuffer};
 use crate::format::{self, Format};
 use crate::gl;
 
 impl Context {
-    /// (Re)creates the default framebuffer's buffers at `width` x `height`.
+    /// (Re)creates the default framebuffer's buffers at `width` x `height`
+    /// (none for a surfaceless context).
     pub(crate) fn create_default_framebuffer(&mut self, width: u32, height: u32) {
-        for r in [self.default_fb.color.take(), self.default_fb.depth_stencil.take()].into_iter().flatten() {
+        for r in [self.local.default_fb.color.take(), self.local.default_fb.depth_stencil.take()].into_iter().flatten()
+        {
             self.backend.destroy_resource(r);
         }
-        let color = format::sized(self.config.color).or_else(|| format::sized(gl::RGBA8)).copied();
-        let depth = match (self.config.depth_bits, self.config.stencil_bits) {
+        if self.local.config.surfaceless {
+            self.local.default_fb =
+                DefaultFramebuffer { draw_buffer: gl::BACK, read_buffer: gl::BACK, ..Default::default() };
+            self.local.default_samples = 0;
+            return;
+        }
+        let color = format::sized(self.local.config.color).or_else(|| format::sized(gl::RGBA8)).copied();
+        let depth = match (self.local.config.depth_bits, self.local.config.stencil_bits) {
             (0, 0) => None,
             (0, _) => format::sized(gl::STENCIL_INDEX8),
             (16, 0) => format::sized(gl::DEPTH_COMPONENT16),
@@ -24,7 +32,7 @@ impl Context {
             _ => format::sized(gl::DEPTH24_STENCIL8),
         }
         .copied();
-        let samples = if self.config.samples > 0 && self.backend.caps().max_samples >= 4 { 4 } else { 0 };
+        let samples = if self.local.config.samples > 0 && self.backend.caps().max_samples >= 4 { 4 } else { 0 };
         let (w, h) = (width.max(1), height.max(1));
         let make = |c: &mut Context, f: Format| {
             let desc = ResourceDesc {
@@ -38,7 +46,7 @@ impl Context {
             };
             c.backend.create_resource(&desc).ok()
         };
-        let fb = &mut self.default_fb;
+        let fb = &mut self.local.default_fb;
         fb.width = width;
         fb.height = height;
         fb.color_internal = color;
@@ -47,40 +55,59 @@ impl Context {
             fb.draw_buffer = gl::BACK;
             fb.read_buffer = gl::BACK;
         }
-        self.default_fb.color = color.and_then(|c| make(self, c.format));
-        self.default_fb.depth_stencil = depth.and_then(|d| make(self, d.format));
+        self.local.default_fb.color = color.and_then(|c| make(self, c.format));
+        self.local.default_fb.depth_stencil = depth.and_then(|d| make(self, d.format));
         // What the renderer could not make the framebuffer has not, and the
         // GL's queries (DEPTH_BITS, ...) say so.
-        if self.default_fb.color.is_none() {
-            self.default_fb.color_internal = None;
+        if self.local.default_fb.color.is_none() {
+            self.local.default_fb.color_internal = None;
         }
-        if self.default_fb.depth_stencil.is_none() {
-            self.default_fb.depth_internal = None;
+        if self.local.default_fb.depth_stencil.is_none() {
+            self.local.default_fb.depth_internal = None;
         }
-        self.default_samples = samples;
+        self.local.default_samples = samples;
+    }
+
+    /// What the context in use draws into as its default framebuffer: a
+    /// surface `width` x `height` (EGL's pbuffers), or none (a surfaceless
+    /// context's). Buffers of another size, or none before, are made anew
+    /// (their contents undefined).
+    pub fn set_surface(&mut self, size: Option<(u32, u32)>) {
+        let fb = &self.local.default_fb;
+        match size {
+            None if !self.local.config.surfaceless => {
+                self.local.config.surfaceless = true;
+                self.create_default_framebuffer(0, 0);
+            }
+            Some((w, h)) if self.local.config.surfaceless || (w, h) != (fb.width, fb.height) => {
+                self.local.config.surfaceless = false;
+                self.create_default_framebuffer(w, h);
+            }
+            _ => {}
+        }
     }
 
     /// Resizes the default framebuffer (the window changed size). Its
     /// contents become undefined.
     pub fn resize(&mut self, width: u32, height: u32) {
-        if (width, height) != (self.default_fb.width, self.default_fb.height) {
+        if (width, height) != (self.local.default_fb.width, self.local.default_fb.height) {
             self.create_default_framebuffer(width, height);
         }
     }
 
     /// The default framebuffer's color buffer and size, for presenting it.
     pub fn default_color_buffer(&self) -> Option<(ResourceId, Format, u32, u32)> {
-        let fb = &self.default_fb;
+        let fb = &self.local.default_fb;
         Some((fb.color?, fb.color_internal?.format, fb.width, fb.height))
     }
 
     /// The default framebuffer as a renderer sees it.
     pub(super) fn default_framebuffer(&self, draw: bool) -> Framebuffer {
-        let fb = &self.default_fb;
+        let fb = &self.local.default_fb;
         let mut out = Framebuffer {
             width: fb.width.max(1),
             height: fb.height.max(1),
-            samples: self.default_samples,
+            samples: self.local.default_samples,
             ..Default::default()
         };
         out.colors[0] = fb.color.map(|r| Surface { resource: r, level: 0, layer: 0 });

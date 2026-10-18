@@ -4,12 +4,14 @@
 # The firmware the driver VM's Linux loads, which the guest's initial RAM
 # file system carries (/lib/firmware). Each file by the name the kernel
 # asks for, where it comes from (a source below, and the file's path in
-# it), and its SHA-256: from a release of linux-firmware, whose WHENCE says
-# whose each file is and that anyone may redistribute it, or of
-# wireless-regdb. `cargo automation linux` fetches them (into
-# target/linux/firmware); image builds check and pack them. The firmware of
-# the devices only the architecture's machines have is in its list
-# (architectures/<architecture>/firmware.txt), which may name the sources here.
+# it), its SHA-256, and the licence it comes under (a licence of the same
+# source below): from a release of linux-firmware, whose WHENCE says whose
+# each file is and that anyone may redistribute it, or of wireless-regdb.
+# `cargo automation linux` fetches them (into target/linux/firmware);
+# image builds check and pack them. The firmware of the devices only the
+# architecture's machines have is in its list
+# (architectures/<architecture>/firmware.txt), which may name the sources
+# and licences here.
 #
 # A device of Linux's whose firmware is not here does not work in the
 # driver VM: its driver (veda.config) and its firmware go in together.
@@ -17,25 +19,36 @@
 source linux-firmware https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/{}?h=20260916
 source wireless-regdb https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain/{}?h=master-2026-09-03
 
+# The sources' terms, by their path in the source and their SHA-256, which
+# the image installs in /system/licences/firmware/<source>/: each licence
+# the files name, and linux-firmware's WHENCE, which gives every file's
+# maker and licence. A file names its own; every licence of a source the
+# image has a file of goes into it.
+licence  linux-firmware  WHENCE  9350832c1e9afc35df50fa8b9793b31d60d78ef963152eec903fc0dbc6b4a559
+licence  linux-firmware  LICENSES/LICENCE.iwlwifi_firmware  16d5040c7cf851fc693b7542e20870935b99802533ea1bfd231c377a2305e5c5
+licence  linux-firmware  LICENSES/LICENCE.ibt_firmware  5181b0b51efc79d5acb2c9bb92042878fdbad97a92114d4ab5e32e2b5b52fce4
+licence  linux-firmware  LICENSES/LICENSE.cirrus  ff6e5ab98d3e3c50d9e750580059bc23a0663a5613659828d0536db44c38f4e0
+licence  wireless-regdb  LICENSE  678b0df753c86198fc496d1f1033429bbd57f101472132ee7eaaf9f5e0a7fae1
+
 # cfg80211's regulatory database: what radios may do in each country.
-regulatory.db  wireless-regdb  regulatory.db  7e236caecd939c8ec98be4870bf30422f28ffef2565a38aaaa2d9ddabd0c2641
+regulatory.db  wireless-regdb  regulatory.db  7e236caecd939c8ec98be4870bf30422f28ffef2565a38aaaa2d9ddabd0c2641  LICENSE
 
 # Intel Wi-Fi 6E AX211 (iwlwifi, iwlmvm): the CNVi of Alder Lake and
 # Raptor Lake, with its radio's calibration (PNVM).
-iwlwifi-so-a0-gf-a0-89.ucode  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode  698c913f938d9a8adce7ab9c049b1cd37daaa7473d8185f93e98f22733092f6b
-iwlwifi-so-a0-gf-a0.pnvm  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0.pnvm  776606c7b5d0f582b5ec78a591fb1e5e621a6efa670e8261f29114bbf1b0f8d1
+iwlwifi-so-a0-gf-a0-89.ucode  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode  698c913f938d9a8adce7ab9c049b1cd37daaa7473d8185f93e98f22733092f6b  LICENSES/LICENCE.iwlwifi_firmware
+iwlwifi-so-a0-gf-a0.pnvm  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0.pnvm  776606c7b5d0f582b5ec78a591fb1e5e621a6efa670e8261f29114bbf1b0f8d1  LICENSES/LICENCE.iwlwifi_firmware
 
 # Intel AX211 Bluetooth (btusb, btintel): the AX211's USB side, which Veda
 # lends to the driver VM.
-intel/ibt-0040-0041.sfi  linux-firmware  intel/ibt-0040-0041.sfi  8dcfb3a7c1592c11c3e80505d21ee78dbde3de0c830d8e3e856371c37717b62c
-intel/ibt-0040-0041.ddc  linux-firmware  intel/ibt-0040-0041.ddc  fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077
+intel/ibt-0040-0041.sfi  linux-firmware  intel/ibt-0040-0041.sfi  8dcfb3a7c1592c11c3e80505d21ee78dbde3de0c830d8e3e856371c37717b62c  LICENSES/LICENCE.ibt_firmware
+intel/ibt-0040-0041.ddc  linux-firmware  intel/ibt-0040-0041.ddc  fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077  LICENSES/LICENCE.ibt_firmware
 
 # Cirrus Logic CS35L41 speaker amplifiers (cs35l41_hda): their DSP's speaker
 # protection (a link in linux-firmware to the algorithm's file), and the
 # board's tuning of each speaker by its id (the ASUS Zenbook Pro 16X's,
 # subsystem 10431f62).
-cirrus/cs35l41-dsp1-spk-prot-10431f62.wmfw  linux-firmware  cirrus/cs35l41/v6.61.1/halo_cspl_RAM_revB2_29.63.1.wmfw  c11cb3e25825c673a955a3519370ad77fbcd8bcf68808e8e34140a70caefcec4
-cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77
-cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6
-cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77
-cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6
+cirrus/cs35l41-dsp1-spk-prot-10431f62.wmfw  linux-firmware  cirrus/cs35l41/v6.61.1/halo_cspl_RAM_revB2_29.63.1.wmfw  c11cb3e25825c673a955a3519370ad77fbcd8bcf68808e8e34140a70caefcec4  LICENSES/LICENSE.cirrus
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77  LICENSES/LICENSE.cirrus
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6  LICENSES/LICENSE.cirrus
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77  LICENSES/LICENSE.cirrus
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6  LICENSES/LICENSE.cirrus

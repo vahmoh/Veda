@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "egl"
+description = "EGL 1.5 and OpenGL ES 3.0 for C programs: their functions over gl, with contexts that share objects and are current per thread, surfaceless and pbuffer surfaces, and fences"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gl = { workspace = true }
+
+# In Veda, contexts render on the GPU (the gpu service) or on a worker
+# thread per CPU.
+[target.'cfg(target_os = "veda")'.dependencies]
+gl = { workspace = true, features = ["veda"] }
+
+[lints]
+workspace = true

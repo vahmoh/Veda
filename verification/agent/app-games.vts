@@ -44,10 +44,15 @@ agent-call read_app '{"app":"interceptor"}' 30
 agent-result '"screen":"playing"'
 agent-call use_app '{"app":"interceptor","action":"quit_to_menu"}' 30
 agent-result '"screen":"main_menu"'
-# About Veda shows its licences for the agent and says what it shows.
+# About Veda shows its licences for the agent and says what it shows:
+# Veda's, the other parts' (the driver VM's Linux among them), and a part's
+# texts.
 agent-call use_app '{"app":"about","action":"show_licences"}' 60
 agent-result "GNU General Public License"
+agent-result '"licence":"GPL-2.0-only"'
 wait-serial "about offers 1 action(s)" 10
+agent-call use_app '{"app":"about","action":"show_licences","arguments":{"part":"musl"}}' 30
+agent-result '"files":["COPYRIGHT","SOURCE"]'
 agent-call read_app '{"app":"about"}' 30
 agent-result '"version":"Veda 0.1.0"'
 agent-result '"licences_shown":true'

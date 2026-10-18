@@ -36,14 +36,14 @@ impl Context {
     /// The buffer bound to `target`: `Err` for an unknown target.
     pub(crate) fn buffer_target(&self, target: u32) -> Result<Option<Key>, ()> {
         Ok(match target {
-            gl::ARRAY_BUFFER => self.bound.array,
+            gl::ARRAY_BUFFER => self.local.bound.array,
             gl::ELEMENT_ARRAY_BUFFER => self.vao().element_buffer,
-            gl::COPY_READ_BUFFER => self.bound.copy_read,
-            gl::COPY_WRITE_BUFFER => self.bound.copy_write,
-            gl::PIXEL_PACK_BUFFER => self.bound.pixel_pack,
-            gl::PIXEL_UNPACK_BUFFER => self.bound.pixel_unpack,
+            gl::COPY_READ_BUFFER => self.local.bound.copy_read,
+            gl::COPY_WRITE_BUFFER => self.local.bound.copy_write,
+            gl::PIXEL_PACK_BUFFER => self.local.bound.pixel_pack,
+            gl::PIXEL_UNPACK_BUFFER => self.local.bound.pixel_unpack,
             gl::TRANSFORM_FEEDBACK_BUFFER => self.tf().generic,
-            gl::UNIFORM_BUFFER => self.bound.uniform,
+            gl::UNIFORM_BUFFER => self.local.bound.uniform,
             _ => return Err(()),
         })
     }
@@ -93,12 +93,12 @@ impl Context {
     /// Points `target` at `key` (retaining it for container objects).
     fn set_buffer_binding(&mut self, target: u32, key: Option<Key>) {
         match target {
-            gl::ARRAY_BUFFER => self.bound.array = key,
-            gl::COPY_READ_BUFFER => self.bound.copy_read = key,
-            gl::COPY_WRITE_BUFFER => self.bound.copy_write = key,
-            gl::PIXEL_PACK_BUFFER => self.bound.pixel_pack = key,
-            gl::PIXEL_UNPACK_BUFFER => self.bound.pixel_unpack = key,
-            gl::UNIFORM_BUFFER => self.bound.uniform = key,
+            gl::ARRAY_BUFFER => self.local.bound.array = key,
+            gl::COPY_READ_BUFFER => self.local.bound.copy_read = key,
+            gl::COPY_WRITE_BUFFER => self.local.bound.copy_write = key,
+            gl::PIXEL_PACK_BUFFER => self.local.bound.pixel_pack = key,
+            gl::PIXEL_UNPACK_BUFFER => self.local.bound.pixel_unpack = key,
+            gl::UNIFORM_BUFFER => self.local.bound.uniform = key,
             gl::ELEMENT_ARRAY_BUFFER => {
                 if let Some(k) = key {
                     self.buffers.retain(k);
@@ -141,7 +141,7 @@ impl Context {
             };
             // Unbind it from the context and the bound containers
             // (appendix D.1.2).
-            let b = &mut self.bound;
+            let b = &mut self.local.bound;
             for slot in [
                 &mut b.array,
                 &mut b.copy_read,
@@ -406,7 +406,7 @@ impl Context {
         self.set_buffer_binding(target, key);
         let i = index as usize;
         if target == gl::UNIFORM_BUFFER {
-            self.bound.uniform_indexed[i] = IndexedBinding { buffer: key, offset, size };
+            self.local.bound.uniform_indexed[i] = IndexedBinding { buffer: key, offset, size };
         } else {
             if let Some(k) = key {
                 self.buffers.retain(k);

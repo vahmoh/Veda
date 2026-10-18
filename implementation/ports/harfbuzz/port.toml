@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# HarfBuzz: text shaping (ligatures, kerning, every script's rules) in
+# WebKit.
+name = "harfbuzz"
+version = "14.6.0"
+url = "https://github.com/harfbuzz/harfbuzz/releases/download/14.6.0/harfbuzz-14.6.0.tar.xz"
+sha256 = "d07a007327277708a2a73ae437887cdbaf282937f6d03ca5467723e9099af586"
+license = "MIT-Modern-Variant"

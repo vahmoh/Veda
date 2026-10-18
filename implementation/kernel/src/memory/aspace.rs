@@ -231,9 +231,7 @@ impl AddressSpace {
                     .is_some_and(|frame| paging::map(self.root, m.start + off, frame, m.pte_flags(), true).is_ok());
                 if !mapped {
                     // No page table entry may outlive the failed mapping.
-                    for va in (m.start..m.start + off).step_by(PAGE_SIZE as usize) {
-                        paging::unmap(self.root, va);
-                    }
+                    paging::unmap_range(self.root, m.start, m.start + off);
                     drop(map);
                     crate::arch::tlb::shootdown(m.start, off);
                     return Err(Error::NoMemory);
@@ -262,9 +260,7 @@ impl AddressSpace {
             let m = map.remove(&s).unwrap();
             let cut_start = m.start.max(addr);
             let cut_end = m.end().min(end);
-            for va in (cut_start..cut_end).step_by(PAGE_SIZE as usize) {
-                paging::unmap(self.root, va);
-            }
+            paging::unmap_range(self.root, cut_start, cut_end);
             if m.private {
                 freed.append(m.vmo.decommit(m.vmo_offset + (cut_start - m.start), cut_end - cut_start));
             }
@@ -305,9 +301,7 @@ impl AddressSpace {
         for (_, m) in map.range(first..end) {
             let from = m.start.max(addr);
             let to = m.end().min(end);
-            for va in (from..to).step_by(PAGE_SIZE as usize) {
-                paging::unmap(self.root, va);
-            }
+            paging::unmap_range(self.root, from, to);
             freed.append(m.vmo.decommit(m.vmo_offset + (from - m.start), to - from));
         }
         drop(map);
@@ -370,14 +364,11 @@ impl AddressSpace {
         Self::split_at(&mut map, end);
         for (_, m) in map.range_mut(addr..end) {
             m.perms = perms;
-            let flags = m.pte_flags();
-            for va in (m.start..m.end()).step_by(PAGE_SIZE as usize) {
-                if perms.none() {
-                    // Faults on the page are refused from now on.
-                    paging::unmap(self.root, va);
-                } else {
-                    paging::protect(self.root, va, flags);
-                }
+            if perms.none() {
+                // Faults on its pages are refused from now on.
+                paging::unmap_range(self.root, m.start, m.end());
+            } else {
+                paging::protect_range(self.root, m.start, m.end(), m.pte_flags());
             }
         }
         drop(map);

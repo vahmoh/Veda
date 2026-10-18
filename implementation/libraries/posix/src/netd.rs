@@ -4,6 +4,8 @@
 //! The network service (`netd`): the connection to it that sockets and name
 //! lookups share, and the `errno` values of its errors.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use ipc::IpcError;
 use proto::net::{NetError, net};
 use rt::sync::Mutex;
@@ -12,6 +14,17 @@ use crate::linux::errno::*;
 
 /// The connection to the network service, made on first use.
 static CLIENT: Mutex<Option<net::Client>> = Mutex::new(None);
+
+/// The program gave the network service up (`veda_confine_services`).
+static REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// The program reaches the network service no more, for good: the
+/// connection made goes, and what would need it is refused
+/// (`PermissionDenied`). Sockets connected already keep their own.
+pub fn refuse() {
+    REFUSED.store(true, Ordering::Release);
+    *CLIENT.lock() = None;
+}
 
 /// Whether the network service is registered: a connection to a service
 /// that is not would wait until it is.
@@ -23,6 +36,9 @@ fn registered() -> bool {
 /// need be, and once more if the service restarted. Calls from several
 /// threads take turns.
 pub fn with<R>(mut f: impl FnMut(&net::Client) -> Result<R, IpcError>) -> Result<R, NetError> {
+    if REFUSED.load(Ordering::Acquire) {
+        return Err(NetError::PermissionDenied);
+    }
     let mut slot = CLIENT.lock();
     for _ in 0..2 {
         if slot.is_none() {

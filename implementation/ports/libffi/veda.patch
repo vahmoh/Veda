@@ -1,0 +1,31 @@
+--- a/config.sub
++++ b/config.sub
+@@ -1751,7 +1751,7 @@
+ 	     | scout* | superux* | sysv* | rtmk* | tpf* | windiss* \
+ 	     | powermax* | dnix* | nx6 | nx7 | sei* | dragonfly* \
+ 	     | skyos* | haiku* | rdos* | toppers* | drops* | es* \
+-	     | onefs* | tirtos* | phoenix* | fuchsia* | redox* | bme* \
++	     | onefs* | tirtos* | phoenix* | fuchsia* | veda* | redox* | bme* \
+ 	     | midnightbsd* | amdhsa* | unleashed* | emscripten* | wasi* \
+ 	     | nsk* | powerunix* | genode* | zvmoe* | qnx* | emx* | zephyr* \
+ 	     | fiwix* )
+--- a/src/x86/unix64.S
++++ b/src/x86/unix64.S
+@@ -873,6 +873,6 @@
+ #endif
+ 
+ #endif /* __x86_64__ */
+-#if defined __ELF__ && (defined __linux__ || defined __FreeBSD__)
++#if defined __ELF__ && (defined __linux__ || defined __FreeBSD__ || defined __veda__)
+ 	.section	.note.GNU-stack,"",@progbits
+ #endif
+--- a/src/x86/win64.S
++++ b/src/x86/win64.S
+@@ -260,6 +260,6 @@
+ #endif
+ #endif /* __x86_64__ */
+ 
+-#if defined __ELF__ && (defined __linux__ || defined __FreeBSD__)
++#if defined __ELF__ && (defined __linux__ || defined __FreeBSD__ || defined __veda__)
+ 	.section	.note.GNU-stack,"",@progbits
+ #endif

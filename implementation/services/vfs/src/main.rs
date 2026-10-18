@@ -44,6 +44,29 @@
 //! `/home`, `/home/user`, `/tmp` and `/home/.private` cannot be removed,
 //! moved or replaced (see `vfs_core::access`).
 //!
+//! **Confined connections.** A connection can give up, for good, all but a
+//! few places of the namespace (`vfs::confine`, `vfs_core::view`): it then
+//! reaches what is inside them, each to read or to change too, and the
+//! directories on the way to them, whose listings show it what leads on to
+//! a place; nothing else is there for it. A program that handles what it
+//! cannot trust (the browser's page processes) confines its connection
+//! before it does, and no longer reaches the VFS's registry name, so that
+//! it opens no other. Its `sync` returns at once, what it changed being
+//! saved as anything is. The VFS logs the first few paths each such
+//! connection was refused where there is something.
+//!
+//! **Loans.** A connection that is not confined can lend a confined one a
+//! place to read (`vfs::lend`, `vfs::borrow`, `vfs_core::loans`): the
+//! browser lends its network process the folder of a page the user opens.
+//! The loan is a secret of random bytes, which the lender hands on over a
+//! channel of its own and which is taken once, for the place it was made
+//! for; the confined connection's view gains that place, to read, and
+//! nothing else, until the lender takes the loan back with its secret
+//! (`vfs::take_back`), or closes: the place leaves the view, and nothing
+//! else does. A confined connection lends nothing, and no connection lends
+//! the user's home folder whole, nor what holds it. The VFS logs each
+//! place so lent, and so taken back.
+//!
 //! **Limits.** No path is longer than `proto::fs::MAX_PATH`. A program
 //! holds a bounded number of connections, and all of them together stay
 //! within what the kernel waits on at once (`vfs_core::access`). Files grow
@@ -68,8 +91,8 @@ use core::cell::{Cell, RefCell};
 use abi::signals;
 use ipc::{Bytes, WaitSet};
 use proto::fs::{
-    DirEntry, DirPage, FsError, MAX_DATAGRAM, MAX_IO, MAX_SOCKET_NAME, SocketAddress, SocketDatagram, SocketPeer,
-    Space, Stat, device, file, open_flags, seek, socket_kind, vfs,
+    DirEntry, DirPage, FsError, LOAN_SIZE, MAX_DATAGRAM, MAX_IO, MAX_PLACES, MAX_SOCKET_NAME, Place, SocketAddress,
+    SocketDatagram, SocketPeer, Space, Stat, device, file, open_flags, seek, socket_kind, vfs,
 };
 use proto::init::ClientIdentity;
 use rt::object::{Channel, Handle, Vmo};
@@ -79,8 +102,10 @@ use dev::Dev;
 use persist::Store;
 use sockets::Sockets;
 use vfs_core::access::{self, Connections, PRIVATE};
+use vfs_core::loans::{Loans, TakenBack};
 use vfs_core::snapshot::{self, Samples};
 use vfs_core::tree::{self, Data, Kind, Node, NodeId, Tree};
+use vfs_core::view::{Reach, View};
 use vfs_core::{HOME, USER};
 
 rt::entry!(main);
@@ -107,6 +132,10 @@ const MEMORY_RESERVE: u64 = 64 << 20;
 const NODE_MEMORY: usize = 256;
 /// Descriptors per client connection (`vfs::open`).
 const MAX_FDS: usize = 256;
+/// The paths a confined connection was refused that the log shows: the
+/// first few, which say what the program looks for, and no more, whatever
+/// it asks.
+const LOGGED_REFUSALS: u32 = 8;
 
 /// Which tree a path lives in.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -138,6 +167,9 @@ struct Description {
     offset: u64,
     /// The program that opened it, whose connections its connections are.
     owner: u64,
+    /// Its file's modification time may be set through it: not when a
+    /// confined connection opened it in a place it only reads.
+    may_touch: bool,
 }
 
 type Shared = Rc<RefCell<Description>>;
@@ -147,10 +179,33 @@ fn in_home(m: Mount, comps: &[&str]) -> bool {
     m == Mount::Ram && comps.first() == Some(&HOME)
 }
 
+/// The system image (the initrd) in memory, which the system tree's files
+/// are bytes of: slices of its VMO give them out as they are.
+struct SystemImage {
+    vmo: Vmo,
+    /// Its mapping here.
+    bytes: &'static [u8],
+}
+
+impl SystemImage {
+    /// A VMO of `data`'s pages, if `data` is the image's from a page
+    /// boundary (as its files are): read-only, as the image is, and shared
+    /// with everyone else who reads them; programs run from these pages.
+    fn pages_of(&self, data: &[u8]) -> Option<Vmo> {
+        let offset = (data.as_ptr() as usize).checked_sub(self.bytes.as_ptr() as usize)?;
+        let inside = offset.checked_add(data.len()).is_some_and(|end| end <= self.bytes.len());
+        if data.is_empty() || !inside || !offset.is_multiple_of(abi::PAGE_SIZE) {
+            return None;
+        }
+        self.vmo.slice(offset, data.len()).ok()
+    }
+}
+
 struct Fs {
     system: Tree,
     /// The bytes of the system image's files (it never changes).
     system_bytes: u64,
+    image: SystemImage,
     ram: Tree,
     samples: Samples,
     /// The home disk, if one is attached.
@@ -166,6 +221,9 @@ struct Fs {
     connections: Connections,
     /// The Unix domain sockets bound to paths.
     sockets: Sockets,
+    /// The loans made (`vfs::lend`): those not taken yet, and those whose
+    /// place is in a view, which their lenders may take back.
+    loans: Loans,
     /// The size of `/home`'s snapshot, while known: changes move it by what
     /// they add to the snapshot and take from it, and every save measures
     /// it afresh, so that checking a write against the home disk does not
@@ -176,11 +234,25 @@ struct Fs {
 impl Fs {
     /// Resolves a path to a tree and the components inside it.
     fn route<'p>(&self, path: &'p str) -> Result<(Mount, Vec<&'p str>), FsError> {
-        let comps = tree::components(path)?;
+        Ok(Fs::route_comps(&tree::components(path)?))
+    }
+
+    /// The tree of the path of `comps` (from the root), and the components
+    /// inside it.
+    fn route_comps<'p>(comps: &[&'p str]) -> (Mount, Vec<&'p str>) {
         match comps.first() {
-            Some(&SYSTEM) => Ok((Mount::System, comps[1..].to_vec())),
-            Some(&DEV) => Ok((Mount::Dev, comps[1..].to_vec())),
-            _ => Ok((Mount::Ram, comps)),
+            Some(&SYSTEM) => (Mount::System, comps[1..].to_vec()),
+            Some(&DEV) => (Mount::Dev, comps[1..].to_vec()),
+            _ => (Mount::Ram, comps.to_vec()),
+        }
+    }
+
+    /// Whether something is at `path`.
+    fn exists(&self, path: &str) -> bool {
+        match self.route(path) {
+            Ok((Mount::Dev, comps)) => Dev::find(&comps).is_ok(),
+            Ok((m, comps)) => self.tree(m).is_ok_and(|t| t.lookup(&comps).is_ok()),
+            Err(_) => false,
         }
     }
 
@@ -507,12 +579,21 @@ const MOUNTS: [&str; 2] = [DEV, SYSTEM];
 /// One client connection.
 struct Session<'a> {
     fs: &'a mut Fs,
+    /// The connection's own number, which its loans are known by.
+    id: u64,
     fds: &'a mut BTreeMap<u32, OpenFile>,
     /// Who the client is (decides access to private directories).
     who: &'a ClientIdentity,
     /// It gave up access to private directories (`vfs::renounce_private`).
     renounced: &'a mut bool,
+    /// What it reaches, if it is confined (`vfs::confine`).
+    view: &'a mut Option<View>,
+    /// The refusals of its view so far, of which the log shows the first.
+    refusals: &'a mut u32,
     new_files: &'a mut NewFiles,
+    /// The places its requests took back from other connections' views,
+    /// which the service loop takes out of them (`vfs::take_back`).
+    taken_back: &'a mut Vec<TakenBack>,
 }
 
 impl Session<'_> {
@@ -521,14 +602,87 @@ impl Session<'_> {
         access::Client { service: self.who.service && !*self.renounced, name: &self.who.name }
     }
 
-    /// Routes a path, refusing paths inside private directories the client
-    /// may not reach.
-    fn resolve<'p>(&self, path: &'p str) -> Result<(Mount, Vec<&'p str>), FsError> {
+    /// How the connection's view reaches the path of `full`, its
+    /// components from the root: wholly, if it is not confined.
+    fn reach(&self, full: &[&str]) -> Reach {
+        self.view.as_ref().map_or(Reach::Write, |v| v.reach(full))
+    }
+
+    /// Routes a path that a request needs to reach as `need` (to look at,
+    /// to read, to change), refusing what the connection's view does not
+    /// reach so (`NotFound` where it reaches nothing), and paths inside
+    /// private directories the client may not reach.
+    fn resolve<'p>(&mut self, path: &'p str, need: Reach) -> Result<(Mount, Vec<&'p str>), FsError> {
+        let reach = self.reach(&tree::components(path)?);
+        if reach < need {
+            // What is not there at all is no refusal worth a line of the
+            // log (a program looks for files that may be there).
+            let there = self.fs.exists(path);
+            if reach == Reach::None {
+                return Err(self.refuse(path, "not there for it", FsError::NotFound, there));
+            }
+            return Err(self.refuse(path, "it may only read it", FsError::Denied, there));
+        }
         let (m, comps) = self.fs.route(path)?;
         if m == Mount::Ram && !self.access().may_reach(&comps) {
             return Err(FsError::Denied);
         }
         Ok((m, comps))
+    }
+
+    /// `e`, for what the connection's view refused it at `what` (`why`):
+    /// logged if `log`, the first few times.
+    fn refuse(&mut self, what: &str, why: &str, e: FsError, log: bool) -> FsError {
+        if log {
+            *self.refusals += 1;
+            if *self.refusals <= LOGGED_REFUSALS {
+                println!("{} (process {}), confined, was refused {}: {}", self.who.name, self.who.koid, what, why);
+            }
+        }
+        e
+    }
+
+    /// Refuses what a confined connection has none of (abstract socket
+    /// names): `Denied`.
+    fn unconfined(&mut self, what: &str) -> Result<(), FsError> {
+        if self.view.is_some() { Err(self.refuse(what, "it is confined", FsError::Denied, true)) } else { Ok(()) }
+    }
+
+    /// The request's need of a file it opens with `flags`.
+    fn need_to_open(flags: u32) -> Reach {
+        if flags & (open_flags::WRITE | open_flags::CREATE | open_flags::TRUNCATE) != 0 {
+            Reach::Write
+        } else {
+            Reach::Read
+        }
+    }
+
+    /// The entries of directory `comps` of mount `m` that a listing of it
+    /// shows the client, from the first, without the view's say (private
+    /// directories hidden, the other file systems in the root).
+    fn entries(&self, m: Mount, comps: &[&str]) -> Result<Vec<DirEntry>, FsError> {
+        if m == Mount::Dev {
+            return match Dev::find(comps)? {
+                None => Ok(Dev::list()),
+                Some(_) => Err(FsError::NotDir),
+            };
+        }
+        let t = self.fs.tree(m)?;
+        let entries = t.entries_after(t.lookup(comps)?, "")?;
+        if m != Mount::Ram {
+            return Ok(entries.collect());
+        }
+        let mounts: &[&str] = if comps.is_empty() { &MOUNTS } else { &[] };
+        let access = self.access();
+        let mounts = mounts.iter().map(|name| self.mount_entry(name));
+        Ok(tree::merge(entries, mounts).filter(|e| access.sees(comps, &e.name)).collect())
+    }
+
+    /// How many entries a listing of directory `full` (`comps` of mount
+    /// `m`) shows a connection whose view reaches it only on the way to its
+    /// places: those that lead on to one.
+    fn entries_on_the_way(&self, view: &View, m: Mount, comps: &[&str], full: &[&str]) -> Result<u64, FsError> {
+        Ok(self.entries(m, comps)?.iter().filter(|e| view.shows(full, &e.name)).count() as u64)
     }
 
     /// How many entries a listing of the writable file system's directory
@@ -568,8 +722,8 @@ impl Session<'_> {
 
     /// Renames `from` to `to`, replacing what is there if asked to.
     fn move_node(&mut self, from: &str, to: &str, replace: bool) -> Result<(), FsError> {
-        let (m1, c1) = self.resolve(from)?;
-        let (m2, c2) = self.resolve(to)?;
+        let (m1, c1) = self.resolve(from, Reach::Write)?;
+        let (m2, c2) = self.resolve(to, Reach::Write)?;
         if m1 != m2 {
             return Err(FsError::Invalid);
         }
@@ -631,7 +785,7 @@ impl Session<'_> {
 
 impl vfs::Server for Session<'_> {
     fn open(&mut self, path: String, flags: u32) -> Result<u32, FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Self::need_to_open(flags))?;
         if m == Mount::Dev {
             return Err(FsError::Invalid);
         }
@@ -667,48 +821,80 @@ impl vfs::Server for Session<'_> {
     }
 
     fn stat(&mut self, path: String) -> Result<Stat, FsError> {
-        let (m, comps) = self.resolve(&path)?;
-        if m == Mount::Dev {
-            return Ok(Dev::stat(Dev::find(&comps)?));
-        }
-        let t = self.fs.tree(m)?;
-        let mut st = t.stat(t.lookup(&comps)?)?;
-        if m == Mount::Ram && st.is_dir {
-            st.size = self.entries_seen(&comps, st.size);
+        let (m, comps) = self.resolve(&path, Reach::Through)?;
+        let mut st = if m == Mount::Dev {
+            Dev::stat(Dev::find(&comps)?)
+        } else {
+            let t = self.fs.tree(m)?;
+            let mut st = t.stat(t.lookup(&comps)?)?;
+            if m == Mount::Ram && st.is_dir {
+                st.size = self.entries_seen(&comps, st.size);
+            }
+            st
+        };
+        // A confined connection is told what it may do: change only what
+        // its view lets it, and see in a directory on the way to its places
+        // only what leads on.
+        if let Some(view) = self.view.as_ref() {
+            let full = tree::components(&path)?;
+            let reach = view.reach(&full);
+            st.read_only |= reach < Reach::Write;
+            if reach == Reach::Through && st.is_dir {
+                st.size = self.entries_on_the_way(view, m, &comps, &full)?;
+            }
         }
         Ok(st)
     }
 
     fn read_dir_page(&mut self, path: String, after: String, max: u32) -> Result<DirPage, FsError> {
-        let (m, comps) = self.resolve(&path)?;
-        if m == Mount::Dev {
-            return match Dev::find(&comps)? {
-                None => Ok(tree::page(Dev::list().into_iter().filter(|e| *e.name > *after), max)),
-                Some(_) => Err(FsError::NotDir),
-            };
-        }
-        let t = self.fs.tree(m)?;
-        let entries = t.entries_after(t.lookup(&comps)?, &after)?;
-        if m != Mount::Ram {
-            return Ok(tree::page(entries, max));
-        }
-        let mounts: &[&str] = if comps.is_empty() { &MOUNTS } else { &[] };
-        let mounts = mounts.iter().filter(|name| **name > after.as_str()).map(|name| self.mount_entry(name));
-        let access = self.access();
-        let mut page = tree::page(tree::merge(entries, mounts).filter(|e| access.sees(&comps, &e.name)), max);
-        // A directory's size is what a listing of it shows (which differs
-        // only for `/home` and `/home/.private`).
-        if comps.len() < 2 {
+        let (m, comps) = self.resolve(&path, Reach::Through)?;
+        let full = tree::components(&path)?;
+        // A confined connection's directory on the way to its places shows
+        // what leads on to them alone.
+        let on_the_way = self.view.as_ref().filter(|v| v.reach(&full) == Reach::Through);
+        let shown = |e: &DirEntry| on_the_way.is_none_or(|v| v.shows(&full, &e.name));
+        let mut page = if m == Mount::Dev {
+            match Dev::find(&comps)? {
+                None => tree::page(Dev::list().into_iter().filter(|e| *e.name > *after && shown(e)), max),
+                Some(_) => return Err(FsError::NotDir),
+            }
+        } else {
+            let t = self.fs.tree(m)?;
+            let entries = t.entries_after(t.lookup(&comps)?, &after)?;
+            if m != Mount::Ram {
+                tree::page(entries.filter(shown), max)
+            } else {
+                let mounts: &[&str] = if comps.is_empty() { &MOUNTS } else { &[] };
+                let mounts = mounts.iter().filter(|name| **name > after.as_str()).map(|name| self.mount_entry(name));
+                let access = self.access();
+                let entries = tree::merge(entries, mounts).filter(|e| access.sees(&comps, &e.name) && shown(e));
+                let mut page = tree::page(entries, max);
+                // A directory's size is what a listing of it shows (which
+                // differs only for `/home` and `/home/.private`).
+                if comps.len() < 2 {
+                    for e in page.entries.iter_mut().filter(|e| e.is_dir) {
+                        let child = [comps.as_slice(), &[e.name.as_str()]].concat();
+                        e.size = self.entries_seen(&child, e.size);
+                    }
+                }
+                page
+            }
+        };
+        // And so does a directory of it on the way to them.
+        if let Some(view) = self.view.as_ref() {
             for e in page.entries.iter_mut().filter(|e| e.is_dir) {
-                let child = [comps.as_slice(), &[e.name.as_str()]].concat();
-                e.size = self.entries_seen(&child, e.size);
+                let child = [full.as_slice(), &[e.name.as_str()]].concat();
+                if view.reach(&child) == Reach::Through {
+                    let (cm, cc) = Fs::route_comps(&child);
+                    e.size = self.entries_on_the_way(view, cm, &cc, &child)?;
+                }
             }
         }
         Ok(page)
     }
 
     fn mkdir(&mut self, path: String) -> Result<(), FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Reach::Write)?;
         if m == Mount::Dev {
             // Its devices and itself exist; nothing can be added.
             return Err(if Dev::find(&comps).is_ok() { FsError::Exists } else { FsError::ReadOnly });
@@ -718,7 +904,7 @@ impl vfs::Server for Session<'_> {
     }
 
     fn remove(&mut self, path: String) -> Result<(), FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Reach::Write)?;
         if m == Mount::Ram && access::fixed(&comps) {
             return Err(FsError::Denied);
         }
@@ -746,7 +932,7 @@ impl vfs::Server for Session<'_> {
     }
 
     fn read_file(&mut self, path: String) -> Result<(Vmo, u64), FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Reach::Read)?;
         let t = self.fs.tree(m).map_err(|_| FsError::Invalid)?;
         let d = match t.node(t.lookup(&comps)?).map(|n| &n.kind) {
             Some(Kind::File(d)) => d,
@@ -754,6 +940,13 @@ impl vfs::Server for Session<'_> {
             Some(Kind::Socket(_)) => return Err(FsError::IsSocket),
             None => return Err(FsError::NotFound),
         };
+        // The system image's bytes go as they are, its pages; others in a
+        // copy of their own.
+        if let Data::Static(bytes) = d
+            && let Some(vmo) = self.fs.image.pages_of(bytes)
+        {
+            return Ok((vmo, bytes.len() as u64));
+        }
         let bytes = d.bytes();
         let vmo = Vmo::create(bytes.len().max(1)).map_err(|_| FsError::NoSpace)?;
         vmo.write(0, bytes).map_err(|_| FsError::Io)?;
@@ -761,7 +954,7 @@ impl vfs::Server for Session<'_> {
     }
 
     fn write_file(&mut self, path: String, data: Vmo, len: u64) -> Result<(), FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Reach::Write)?;
         if len > 1 << 30 {
             return Err(FsError::NoSpace);
         }
@@ -821,12 +1014,21 @@ impl vfs::Server for Session<'_> {
         self.fs.truncate_node(m, node, len.min(MAX_FILE))
     }
 
+    /// A confined connection's returns at once: what it changes is saved
+    /// as anything is, once changes stop, and it cannot have the home
+    /// directory saved when it likes. The databases it commits with `fsync`
+    /// (the browser's network process's) go on, as a snapshot holds every
+    /// write up to a moment, in order: a crash leaves them as one at that
+    /// moment would.
     fn sync(&mut self) -> Result<(), FsError> {
+        if self.view.is_some() {
+            return Ok(());
+        }
         self.fs.save()
     }
 
     fn space(&mut self, path: String) -> Result<Space, FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Reach::Through)?;
         if m == Mount::Dev {
             return Ok(Space { total: 0, used: 0, persistent: false });
         }
@@ -849,7 +1051,8 @@ impl vfs::Server for Session<'_> {
     }
 
     fn open_file(&mut self, path: String, flags: u32) -> Result<(Channel, Stat), FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Self::need_to_open(flags))?;
+        let may_touch = self.reach(&tree::components(&path)?) == Reach::Write;
         let owner = self.who.koid;
         self.fs.connections.admit(owner)?;
         let opened = (|| {
@@ -862,7 +1065,7 @@ impl vfs::Server for Session<'_> {
                 let node = self.fs.open_node(m, &comps, flags)?;
                 (Target::Node(m, node), self.fs.tree(m)?.stat(node)?)
             };
-            let desc = Rc::new(RefCell::new(Description { target, flags, offset: 0, owner }));
+            let desc = Rc::new(RefCell::new(Description { target, flags, offset: 0, owner, may_touch }));
             let channel = self.connect_file(desc)?;
             if let Target::Node(m, node) = target {
                 self.fs.hold(m, node);
@@ -880,7 +1083,7 @@ impl vfs::Server for Session<'_> {
     }
 
     fn set_modified(&mut self, path: String, modified: u64) -> Result<(), FsError> {
-        let (m, comps) = self.resolve(&path)?;
+        let (m, comps) = self.resolve(&path, Reach::Write)?;
         let tree = self.fs.tree_mut(m)?;
         if tree.read_only {
             return Err(FsError::ReadOnly);
@@ -896,8 +1099,8 @@ impl vfs::Server for Session<'_> {
     }
 
     fn copy_file(&mut self, from: String, to: String) -> Result<(), FsError> {
-        let (m1, c1) = self.resolve(&from)?;
-        let (m2, c2) = self.resolve(&to)?;
+        let (m1, c1) = self.resolve(&from, Reach::Read)?;
+        let (m2, c2) = self.resolve(&to, Reach::Write)?;
         if m1 == Mount::Dev {
             return Err(FsError::Invalid);
         }
@@ -914,6 +1117,99 @@ impl vfs::Server for Session<'_> {
 
     fn renounce_private(&mut self) -> Result<(), FsError> {
         *self.renounced = true;
+        Ok(())
+    }
+
+    fn confine(&mut self, view: Vec<Place>) -> Result<(), FsError> {
+        // The places it borrowed stay, and count.
+        if view.len() + self.view.as_ref().map_or(0, View::borrowed) > MAX_PLACES {
+            return Err(FsError::Invalid);
+        }
+        let mut places = Vec::new();
+        for place in &view {
+            if !place.path.starts_with('/') {
+                return Err(FsError::Invalid);
+            }
+            places.push((tree::components(&place.path)?, place.write));
+        }
+        let view = View::new(places);
+        match self.view.as_mut() {
+            // Again, only narrower than its own places: what it borrowed
+            // stays its lender's to take back.
+            Some(old) => {
+                if !old.confine(view) {
+                    return Err(FsError::Denied);
+                }
+            }
+            None => *self.view = Some(view),
+        }
+        Ok(())
+    }
+
+    fn lend(&mut self, path: String) -> Result<Bytes, FsError> {
+        if !path.starts_with('/') {
+            return Err(FsError::Invalid);
+        }
+        // A confined connection lends nothing: a sandboxed program hands on
+        // no part of its sandbox.
+        if self.view.is_some() {
+            return Err(self.refuse(&path, "it may not lend", FsError::Denied, true));
+        }
+        let comps = tree::components(&path)?;
+        // Nor is the user's home folder lent whole, or what holds it.
+        if [HOME, USER].starts_with(&comps) {
+            return Err(FsError::Denied);
+        }
+        let (m, inside) = self.resolve(&path, Reach::Read)?;
+        match m {
+            Mount::Dev => drop(Dev::find(&inside)?),
+            _ => drop(self.fs.tree(m)?.lookup(&inside)?),
+        }
+        let mut secret = [0u8; LOAN_SIZE];
+        rt::object::try_random_bytes(&mut secret).map_err(|_| FsError::Io)?;
+        self.fs.loans.lend(self.id, &comps, secret, rt::time::now_ns())?;
+        Ok(Bytes(secret.to_vec()))
+    }
+
+    fn borrow(&mut self, path: String, loan: Bytes) -> Result<(), FsError> {
+        if !path.starts_with('/') || loan.0.len() != LOAN_SIZE {
+            return Err(FsError::Invalid);
+        }
+        let comps = tree::components(&path)?;
+        // A full view takes no more places, and leaves the loan untaken.
+        if let Some(view) = self.view.as_ref()
+            && view.len() >= MAX_PLACES
+            && view.would_borrow(&comps)
+        {
+            return Err(FsError::TooMany);
+        }
+        let Some(taken) = self.fs.loans.take(&loan.0, &comps, rt::time::now_ns()) else {
+            if self.view.is_none() {
+                return Err(FsError::Denied);
+            }
+            let there = self.fs.exists(&path);
+            return Err(self.refuse(&path, "no such loan", FsError::Denied, there));
+        };
+        // Its lender may take back the place it adds; one the connection
+        // reaches anyway is only taken.
+        if let Some(view) = self.view.as_mut()
+            && view.borrow(&comps, taken.id())
+        {
+            self.fs.loans.hold(taken, self.id);
+            println!("{} (process {}), confined, was lent {} to read", self.who.name, self.who.koid, path);
+        }
+        Ok(())
+    }
+
+    fn take_back(&mut self, loan: Bytes) -> Result<(), FsError> {
+        if loan.0.len() != LOAN_SIZE {
+            return Err(FsError::Invalid);
+        }
+        // The service loop takes the place out of its borrower's view
+        // before it reads another request.
+        if let Some(back) = self.fs.loans.take_back(self.id, &loan.0) {
+            self.taken_back.push(back);
+        }
         Ok(())
     }
 
@@ -934,9 +1230,10 @@ impl vfs::Server for Session<'_> {
         }
         let owner = self.who.koid;
         if at.is_abstract() {
+            self.unconfined("an abstract socket name")?;
             return self.fs.sockets.bind_abstract(owner, koid, kind, at.abstract_name.0, name.0, inbox);
         }
-        let (m, comps) = self.resolve(&at.path)?;
+        let (m, comps) = self.resolve(&at.path, Reach::Write)?;
         if m != Mount::Ram {
             // `/system` and `/dev` take nothing new.
             let exists = match m {
@@ -991,9 +1288,12 @@ impl Session<'_> {
     /// (`Refused` for none).
     fn socket_at(&mut self, to: &SocketAddress, kind: u32) -> Result<u64, FsError> {
         if to.is_abstract() {
+            self.unconfined("an abstract socket name")?;
             return self.fs.sockets.find_abstract(kind, &to.abstract_name.0);
         }
-        let (m, comps) = self.resolve(&to.path)?;
+        // Reaching a socket to connect or send is changing it, as for
+        // OpenBSD's `unveil`.
+        let (m, comps) = self.resolve(&to.path, Reach::Write)?;
         if m == Mount::Dev {
             return Dev::find(&comps).and(Err(FsError::Refused));
         }
@@ -1045,6 +1345,23 @@ impl FileSession<'_> {
 }
 
 impl file::Server for FileSession<'_> {
+    fn pages(&mut self, offset: u64, len: u64) -> Result<Vmo, FsError> {
+        self.readable()?;
+        let Target::Node(m, node) = self.desc.borrow().target else { return Err(FsError::Invalid) };
+        let tree = self.fs.tree(m)?;
+        let Some(Kind::File(Data::Static(bytes))) = tree.node(node).map(|n| &n.kind) else {
+            return Err(FsError::Invalid);
+        };
+        let page = abi::PAGE_SIZE as u64;
+        let file_pages = (bytes.len() as u64).next_multiple_of(page);
+        let within = offset.checked_add(len).is_some_and(|end| end <= file_pages);
+        if len == 0 || !offset.is_multiple_of(page) || !within {
+            return Err(FsError::Invalid);
+        }
+        let pages = self.fs.image.pages_of(bytes).ok_or(FsError::Invalid)?;
+        pages.slice(offset as usize, len as usize).map_err(|_| FsError::Invalid)
+    }
+
     fn read(&mut self, len: u32) -> Result<Bytes, FsError> {
         let offset = self.desc.borrow().offset;
         let data = self.read_at_offset(offset, len)?;
@@ -1138,6 +1455,9 @@ impl file::Server for FileSession<'_> {
 
     fn set_modified(&mut self, modified: u64) -> Result<(), FsError> {
         let Target::Node(m, node) = self.desc.borrow().target else { return Ok(()) };
+        if !self.desc.borrow().may_touch {
+            return Err(FsError::Denied);
+        }
         let tree = self.fs.tree_mut(m)?;
         if tree.read_only {
             return Err(FsError::ReadOnly);
@@ -1163,7 +1483,7 @@ fn fresh_ram() -> Tree {
 /// Builds the file systems: the system image from the initrd, and the home
 /// directory from the home disk or, failing that, the samples. A `live`
 /// system keeps the home directory in memory without looking for a disk.
-fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
+fn build(archive: &initrd::Archive<'static>, image: SystemImage, live: bool) -> Fs {
     let mut system = Tree::new(true, device::SYSTEM, rt::time::unix_time_ns);
     for f in archive.files() {
         if let Ok(comps) = tree::components(f.path) {
@@ -1195,6 +1515,7 @@ fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
     Fs {
         system,
         system_bytes,
+        image,
         ram,
         samples,
         store,
@@ -1204,6 +1525,7 @@ fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
         orphans: BTreeSet::new(),
         connections: Connections::new(),
         sockets: Sockets::new(),
+        loans: Loans::new(),
         home_len: Cell::new(None),
     }
 }
@@ -1224,7 +1546,8 @@ fn main() -> i32 {
         println!("the initrd is corrupt");
         return 1;
     };
-    let mut fs = build(&archive, rt::env::args().iter().any(|a| a == "live"));
+    let image = SystemImage { vmo: initrd_vmo, bytes };
+    let mut fs = build(&archive, image, rt::env::args().iter().any(|a| a == "live"));
 
     let Ok(listener) = proto::register(vfs::NAME) else {
         println!("cannot register the vfs service");
@@ -1238,6 +1561,9 @@ fn main() -> i32 {
         who: ClientIdentity,
         /// It gave up access to private directories.
         renounced: bool,
+        /// What it reaches, if it is confined.
+        view: Option<View>,
+        refusals: u32,
     }
     struct FileConn {
         channel: Channel,
@@ -1248,6 +1574,7 @@ fn main() -> i32 {
     let mut files: BTreeMap<u64, FileConn> = BTreeMap::new();
     let mut next_id = 1u64;
     let mut new_files = NewFiles::new();
+    let mut taken_back = Vec::new();
     // Kept from one wait to the next: its handles stay registered with the
     // kernel, so that a wait costs what is ready, however many files are
     // open.
@@ -1270,7 +1597,9 @@ fn main() -> i32 {
                         println!("refusing a connection of {} ({}): {}", who.name, who.koid, e);
                         continue;
                     }
-                    clients.insert(next_id, Client { channel: ch, fds: BTreeMap::new(), who, renounced: false });
+                    let client =
+                        Client { channel: ch, fds: BTreeMap::new(), who, renounced: false, view: None, refusals: 0 };
+                    clients.insert(next_id, client);
                     next_id += 1;
                 }
                 continue;
@@ -1306,10 +1635,14 @@ fn main() -> i32 {
                     while let Ok(msg) = client.channel.read() {
                         let mut session = Session {
                             fs: &mut fs,
+                            id: key,
                             fds: &mut client.fds,
                             who: &client.who,
                             renounced: &mut client.renounced,
+                            view: &mut client.view,
+                            refusals: &mut client.refusals,
                             new_files: &mut new_files,
+                            taken_back: &mut taken_back,
                         };
                         match vfs::dispatch(&mut session, msg) {
                             Ok(reply) => {
@@ -1322,9 +1655,19 @@ fn main() -> i32 {
                     && let Some(client) = clients.remove(&key)
                 {
                     fs.connections.release(client.who.koid);
+                    taken_back.extend(fs.loans.forget(key));
                     for f in client.fds.values() {
                         fs.release(f.mount, f.node);
                     }
+                }
+            }
+            // The places taken back leave their borrowers' views before
+            // anyone's next request.
+            for back in taken_back.drain(..) {
+                if let Some(c) = clients.get_mut(&back.borrower)
+                    && c.view.as_mut().is_some_and(|v| v.take_back(back.id))
+                {
+                    println!("{} (process {}), confined, had {} taken back", c.who.name, c.who.koid, back.path);
                 }
             }
             for (channel, desc) in new_files.drain(..) {

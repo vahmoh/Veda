@@ -1,0 +1,21 @@
+--- a/src/fcstat.c
++++ b/src/fcstat.c
+@@ -360,7 +360,7 @@
+ 	p = buf.f_fstypename;
+ #  endif
+     }
+-#elif defined(HAVE_FSTATFS) && (defined(HAVE_STRUCT_STATFS_F_FLAGS) || defined(HAVE_STRUCT_STATFS_F_FSTYPENAME) || defined(__linux__))
++#elif defined(HAVE_FSTATFS) && (defined(HAVE_STRUCT_STATFS_F_FLAGS) || defined(HAVE_STRUCT_STATFS_F_FSTYPENAME) || defined(__linux__) || defined(__veda__))
+     struct statfs buf;
+ 
+     memset (statb, 0, sizeof (FcStatFS));
+@@ -372,7 +372,8 @@
+ #  endif
+ #  if defined(HAVE_STRUCT_STATFS_F_FSTYPENAME)
+ 	p = buf.f_fstypename;
+-#  elif defined(__linux__) || defined(__EMSCRIPTEN__)
++#  elif defined(__linux__) || defined(__EMSCRIPTEN__) || defined(__veda__)
++	/* Veda's struct statfs is Linux's, with Linux's file system types. */
+ 	switch (buf.f_type) {
+ 	case 0x6969: /* nfs */
+ 	    statb->is_remote_fs = FcTrue;

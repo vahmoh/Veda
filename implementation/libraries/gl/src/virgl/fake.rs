@@ -10,10 +10,9 @@
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::ops::Range;
 
 use super::protocol::*;
@@ -232,8 +231,20 @@ impl Host {
     }
 }
 
-/// The fake host, as its transport and the tests share it.
-pub type Shared = Rc<RefCell<Host>>;
+/// The fake host, as its transport and the tests share it (the
+/// transport, as every one, may move to another thread).
+#[derive(Clone)]
+pub struct Shared(Arc<std::sync::RwLock<Host>>);
+
+impl Shared {
+    pub fn borrow(&self) -> std::sync::RwLockReadGuard<'_, Host> {
+        self.0.read().expect("the fake host")
+    }
+
+    pub fn borrow_mut(&self) -> std::sync::RwLockWriteGuard<'_, Host> {
+        self.0.write().expect("the fake host")
+    }
+}
 
 /// A transport to the fake host.
 pub struct Fake {
@@ -249,7 +260,7 @@ impl Fake {
     /// A fake host that can render to and read back every format, and the
     /// state the tests look at.
     pub fn new() -> (Fake, Shared) {
-        let host = Rc::new(RefCell::new(Host {
+        let host = Shared(Arc::new(std::sync::RwLock::new(Host {
             shared: HostMemory::new(SHARED).expect("memory for the fake host"),
             resources: BTreeMap::new(),
             next: 1,
@@ -264,7 +275,7 @@ impl Fake {
             fences: 0,
             signaled: 0,
             auto_signal: true,
-        }));
+        })));
         (Fake { host: host.clone(), caps: caps() }, host)
     }
 }

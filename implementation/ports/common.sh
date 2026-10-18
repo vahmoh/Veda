@@ -14,6 +14,14 @@ port() {
 	sed -n "s/^$2 *= *\"\(.*\)\"/\1/p" "$PORTS/$1/port.toml"
 }
 
+# The name port NAME's archive has in DOWNLOADS: `archive` in its
+# port.toml, or else the last part of its address.
+archive() {
+	local file
+	file=$(port "$1" archive)
+	echo "${file:-$(basename "$(port "$1" url)")}"
+}
+
 # Veda's patches of port NAME, those it has: its own (NAME/veda.patch),
 # then the architecture's (NAME/architectures/$VEDA_ARCH/veda.patch).
 patches() {
@@ -71,7 +79,7 @@ quiet() {
 # are for Veda).
 unpack() {
 	local name=$1 archive dir top p
-	archive=$DOWNLOADS/$(basename "$(port "$name" url)")
+	archive=$DOWNLOADS/$(archive "$name")
 	dir=$SRC/$name
 	rm -rf "$dir" "$dir.tmp"
 	mkdir -p "$dir.tmp"

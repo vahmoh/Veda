@@ -38,7 +38,7 @@
    tmake_file="t-fuchsia"
 --- /dev/null
 +++ b/gcc/config/veda.h
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,103 @@
 +/* Definitions for Veda, a POSIX environment over a capability microkernel.
 +   Copyright (C) 2026 Free Software Foundation, Inc.
 +
@@ -78,6 +78,11 @@
 +
 +#undef  CPP_SPEC
 +#define CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
++
++/* C++ sees the C library's GNU extensions, as on GNU/Linux: libstdc++
++   and the programs written for it expect them.  */
++#undef  CPLUSPLUS_CPP_SPEC
++#define CPLUSPLUS_CPP_SPEC "-D_GNU_SOURCE %(cpp)"
 +
 +/* The libraries and start files are in /system/lib (under the sysroot
 +   when cross compiling).  */
@@ -183,6 +188,17 @@
 +rdynamic
 +UrlSuffix(gcc/Link-Options.html#index-rdynamic)
 +
+--- a/libatomic/configure.tgt
++++ b/libatomic/configure.tgt
+@@ -175,7 +175,7 @@
+   *-*-linux* | *-*-gnu* | *-*-k*bsd*-gnu \
+   | *-*-netbsd* | *-*-freebsd* | *-*-openbsd* | *-*-dragonfly* \
+   | *-*-solaris2* | *-*-sysv4* | *-*-irix6* | *-*-osf* | *-*-hpux11* \
+-  | *-*-darwin* | *-*-aix* | *-*-cygwin*)
++  | *-*-darwin* | *-*-aix* | *-*-cygwin* | *-*-veda*)
+ 	# POSIX system.  The OS is supported.
+ 	config_path="${config_path} posix"
+ 	;;
 --- a/libgcc/config.host
 +++ b/libgcc/config.host
 @@ -297,6 +297,11 @@

@@ -351,7 +351,10 @@ let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection (close_n
 
 `tls` is the TLS 1.3 and 1.2 client of Veda applications (HTTPS, secure
 WebSockets, anything else over TLS), running in the application's process
-over a `net::TcpStream`.
+over a `net::TcpStream`. The web browser's engine has its own, as WebKit
+expects: OpenSSL, through GIO's glib-networking, trusting Mozilla's list
+of certificate authorities ([The web browser](BROWSER.md#webkit-on-veda),
+and [why not rustls](DEPENDENCIES.md#c-and-c-libraries)).
 
 * **Protocol**: [rustls](https://github.com/rustls/rustls) 0.23, through
   its `no_std` unbuffered API; `TlsStream` handles partial records, several

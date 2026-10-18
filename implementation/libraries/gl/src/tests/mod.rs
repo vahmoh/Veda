@@ -10,6 +10,7 @@ mod fbo;
 mod gpu_path;
 mod pipeline;
 mod render;
+mod sharing;
 mod texture;
 mod virgl;
 

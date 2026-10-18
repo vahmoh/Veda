@@ -278,6 +278,7 @@ pub fn unpack(
     let raw_f = raw(f);
     let same = same_layout(client, f);
     let rgb8 = client.format == gl::RGB && client.ty == gl::UNSIGNED_BYTE && raw_f == Format::Rgbx8Unorm;
+    let bgra8 = bgra8(client, raw_f);
     for z in 0..d {
         for y in 0..h {
             let s = layout.start + z * layout.image + y * layout.row;
@@ -290,6 +291,8 @@ pub fn unpack(
                 for (px, sp) in drow.as_chunks_mut::<4>().0.iter_mut().zip(srow.as_chunks::<3>().0) {
                     px.copy_from_slice(&[sp[0], sp[1], sp[2], 255]);
                 }
+            } else if bgra8 {
+                swap_red_blue(srow, drow);
             } else {
                 for (px, sp) in drow.chunks_exact_mut(tb).zip(srow.chunks_exact(layout.pixel)) {
                     raw_f.encode(&client.decode(sp), px);
@@ -308,17 +311,34 @@ pub fn pack(f: Format, src: &[u8], width: u32, height: u32, client: Client, layo
     let (w, h) = (width as usize, height as usize);
     let raw_f = raw(f);
     let same = same_layout(client, f);
+    let bgra8 = bgra8(client, raw_f);
     for y in 0..h {
         let srow = &src[y * w * tb..(y + 1) * w * tb];
         let o = layout.start + y * layout.row;
         let drow = &mut dst[o..o + layout.row_bytes];
         if same {
             drow.copy_from_slice(srow);
+        } else if bgra8 {
+            swap_red_blue(srow, drow);
         } else {
             for (px, dp) in srow.chunks_exact(tb).zip(drow.chunks_exact_mut(layout.pixel)) {
                 client.encode(&raw_f.decode(px), dp);
             }
         }
+    }
+}
+
+/// Whether `client` pixels are `f`'s texels with red and blue swapped:
+/// BGRA bytes and RGBA8 (BGRA is how windows and WebKit lay out pixels).
+fn bgra8(client: Client, f: Format) -> bool {
+    client.format == gl::BGRA_EXT && client.ty == gl::UNSIGNED_BYTE && f == Format::Rgba8Unorm
+}
+
+/// Copies 4-byte pixels, swapping their first and third bytes (BGRA and
+/// RGBA, either way).
+fn swap_red_blue(src: &[u8], dst: &mut [u8]) {
+    for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+        *d = [s[2], s[1], s[0], s[3]];
     }
 }
 

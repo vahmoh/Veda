@@ -14,7 +14,9 @@
 //! | [`Object::Stream`] | a socket endpoint: a pipe or the terminal | a duplicated handle |
 //! | [`Object::Inet`] | a socket of the network service (TCP, UDP): a channel to it, and a connection's socket endpoint for its bytes | the channel, shared, a connection's endpoint too, and what makes it a socket ([`crate::carry`]); one still connecting not passed |
 //! | [`Object::Unix`] | a Unix domain socket: a connection's socket endpoint or channel, an inbox the VFS writes on | the one that carries it, shared, and what makes it a socket ([`crate::carry`]) |
+//! | [`Object::Memfd`] | a memory file (`memfd_create`): a VMO | a handle to it, with the access the descriptor has, and its size and seals ([`crate::carry`]) |
 //! | [`Object::EventFd`] | a counter of the layer's (`eventfd`), and an event object | (not passed) |
+//! | [`Object::TimerFd`] | a timer of the layer's (`timerfd`), and an event object | (not passed) |
 //! | [`Object::Epoll`] | an interest list of the layer's (`epoll`), and a port | (not passed) |
 //! | [`Object::Pidfd`] | a child process (`pidfd_open`): readable once it has ended | (not passed) |
 //! | [`Object::Null`] | nothing: reads end at once, writes vanish | itself, in the startup message |
@@ -42,7 +44,9 @@ use crate::inet::Inet;
 use crate::linux::errno::{EBADF, EMFILE};
 use crate::linux::o;
 use crate::log::Log;
+use crate::memfd::Memfd;
 use crate::stream::Stream;
+use crate::timerfd::TimerFd;
 use crate::unix::Unix;
 
 /// Descriptors per process (`RLIMIT_NOFILE`).
@@ -54,7 +58,9 @@ pub enum Object {
     Stream(Stream),
     Inet(Inet),
     Unix(Unix),
+    Memfd(Memfd),
     EventFd(EventFd),
+    TimerFd(TimerFd),
     Epoll(Epoll),
     Pidfd(Process),
     Null,

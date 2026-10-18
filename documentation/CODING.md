@@ -17,7 +17,13 @@ dependencies to its errors, tests and licence headers.
   is a *port* in `implementation/ports/`: an upstream release pinned by its
   SHA-256, plus a small, explained patch, never copied into the source
   tree. `verification/c` (C and C++) tests that environment, and
-  `verification/rust` the standard library on it.
+  `verification/rust` the standard library on it. Veda's own code is C
+  only inside a C library's world, where Rust would need bindings far
+  larger than the code: the driver VM renderer's decoder, compiled in
+  Mesa's build, and the browser's bridge to WebKit
+  (`implementation/applications/browser/engine`), whose platform
+  subclasses GObject's types and answers its signals. Each is glue, kept
+  small; what it serves is Rust.
 * **Proven libraries first.** Where a mature, widely used Rust
   implementation exists (of a protocol, cryptography, a file format, text
   handling, numerical code, an ABI), Veda uses it; its own code is what is

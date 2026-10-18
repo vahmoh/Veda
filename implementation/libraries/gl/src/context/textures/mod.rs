@@ -15,7 +15,9 @@ mod storage;
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
-use super::{Attachment, Context, Image, Key, Location, MAX_LEVELS, Storage, TEXTURE_UNITS, Texture, target_index};
+use super::{
+    Attachment, Context, Image, Key, Location, MAX_LEVELS, PixelStore, Storage, TEXTURE_UNITS, Texture, target_index,
+};
 use crate::backend::{Region, ResourceDesc, Surface, Target, minify};
 use crate::etc;
 use crate::format::{self, Class, Client, ComponentType, FormatError, Internal};
@@ -36,6 +38,12 @@ fn image_target(target: u32) -> Option<(u32, usize)> {
         }
         _ => return None,
     })
+}
+
+/// Whether a texture target's images are three-dimensional uploads' (of
+/// `TexImage3D`): 3D textures' and 2D arrays'.
+fn three_d(target: u32) -> bool {
+    matches!(target, gl::TEXTURE_3D | gl::TEXTURE_2D_ARRAY)
 }
 
 /// The renderer's resource kind for a texture target.
@@ -180,7 +188,7 @@ impl Context {
     /// `glActiveTexture`.
     pub fn active_texture(&mut self, texture: u32) {
         match texture.checked_sub(gl::TEXTURE0) {
-            Some(i) if (i as usize) < TEXTURE_UNITS => self.active_texture = i as usize,
+            Some(i) if (i as usize) < TEXTURE_UNITS => self.local.active_texture = i as usize,
             _ => self.err(gl::INVALID_ENUM),
         }
     }
@@ -189,7 +197,7 @@ impl Context {
     pub fn bind_texture(&mut self, target: u32, name: u32) {
         let Some(t) = target_index(target) else { return self.err(gl::INVALID_ENUM) };
         let key = if name == 0 {
-            self.default_textures[t]
+            self.local.default_textures[t]
         } else {
             match self.textures.key(name) {
                 Some(k) if self.textures.get(k).target != target => return self.err(gl::INVALID_OPERATION),
@@ -197,7 +205,7 @@ impl Context {
                 None => self.textures.create(name, Texture::new(target)),
             }
         };
-        self.texture_units[self.active_texture][t] = key;
+        self.local.texture_units[self.local.active_texture][t] = key;
     }
 
     /// `glDeleteTextures`.
@@ -210,8 +218,8 @@ impl Context {
                 let _ = self.textures.delete(name);
                 continue;
             };
-            let defaults = self.default_textures;
-            for unit in &mut self.texture_units {
+            let defaults = self.local.default_textures;
+            for unit in &mut self.local.texture_units {
                 for (t, bound) in unit.iter_mut().enumerate() {
                     if *bound == key {
                         *bound = defaults[t];
@@ -244,15 +252,49 @@ impl Context {
         }
     }
 
+    /// The unpack storage modes of an upload: the image height and the
+    /// images skipped are three-dimensional uploads' alone (OpenGL ES 3.0,
+    /// section 3.7.2).
+    pub(crate) fn unpack_store(&self, three_d: bool) -> PixelStore {
+        let mut store = self.local.state.unpack;
+        if !three_d {
+            store.image_height = 0;
+            store.skip_images = 0;
+        }
+        store
+    }
+
+    /// The bytes from where an upload's data starts to its last pixel's
+    /// end: what `width` x `height` x `depth` pixels of `(format, ty)` take
+    /// under the unpack storage modes, of a two-dimensional image unless
+    /// `three_d` (`TexImage3D`). `None` if they take no layout (the upload
+    /// fails then, as it says).
+    pub fn unpack_size(
+        &self,
+        width: i32,
+        height: i32,
+        depth: i32,
+        format: u32,
+        ty: u32,
+        three_d: bool,
+    ) -> Option<usize> {
+        let dims = [width, height, depth].map(|x| u32::try_from(x).ok());
+        let [Some(w), Some(h), Some(d)] = dims else { return None };
+        if !format::is_format(format) || !format::is_type(ty) {
+            return None;
+        }
+        pixels::layout(Client::new(format, ty), w, h, d, &self.unpack_store(three_d)).map(|l| l.end)
+    }
+
     /// The texture bound to `target` on the active unit.
     pub(crate) fn bound_texture(&self, target: u32) -> Option<Key> {
-        target_index(target).map(|t| self.texture_units[self.active_texture][t])
+        target_index(target).map(|t| self.local.texture_units[self.local.active_texture][t])
     }
 
     /// The texture names bound to a unit (for state queries).
     pub(crate) fn unit_binding(&self, target: u32) -> u32 {
         let t = target_index(target).unwrap_or(0);
-        self.textures.name(self.texture_units[self.active_texture][t])
+        self.textures.name(self.local.texture_units[self.local.active_texture][t])
     }
 
     // ---- Image specification ------------------------------------------------
@@ -290,7 +332,7 @@ impl Context {
         layout: &pixels::Layout,
         type_bytes: usize,
     ) -> Result<Option<Cow<'a, [u8]>>, ()> {
-        let buffer = self.bound.pixel_unpack;
+        let buffer = self.local.bound.pixel_unpack;
         match (pixels, buffer) {
             (Pixels::Data(d), None) => match d.get(..layout.end) {
                 Some(d) => Ok(Some(Cow::Borrowed(d))),
@@ -422,7 +464,7 @@ impl Context {
             return self.err(gl::INVALID_OPERATION);
         }
         let client = Client::new(format, ty);
-        let unpack = self.state.unpack;
+        let unpack = self.unpack_store(three_d(tex_target));
         let Some(layout) = pixels::layout(client, w as u32, h as u32, d as u32, &unpack) else {
             return self.err(gl::INVALID_VALUE);
         };
@@ -549,7 +591,7 @@ impl Context {
             return self.err(gl::INVALID_OPERATION);
         }
         let client = Client::new(format, ty);
-        let unpack = self.state.unpack;
+        let unpack = self.unpack_store(three_d(tex_target));
         let [w, h, d] = size.map(|x| x as u32);
         let Some(layout) = pixels::layout(client, w, h, d, &unpack) else { return self.err(gl::INVALID_VALUE) };
         let Ok(src) = self.unpack_source(pixels, &layout, client.type_bytes()) else { return };
@@ -624,7 +666,7 @@ impl Context {
                 self.err(gl::INVALID_VALUE);
                 return None;
             }
-            Pixels::None if self.bound.pixel_unpack.is_none() => {
+            Pixels::None if self.local.bound.pixel_unpack.is_none() => {
                 self.err(gl::INVALID_VALUE);
                 return None;
             }

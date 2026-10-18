@@ -44,6 +44,35 @@ pub const fn entry_stack_pointer(top: usize) -> usize {
     top - 8
 }
 
+/// The user registers of a stopped thread (`thread_read_state`), as it
+/// left user code. A thread stopped in a system call has the call's
+/// result in `rax` once it has finished it, and `rcx` and `r11` as the
+/// `syscall` instruction left them (its return address and flags).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThreadState {
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub rsp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rip: u64,
+    pub rflags: u64,
+    /// The thread pointer: its FS base.
+    pub fs_base: u64,
+}
+
 /// A segment register of a virtual processor.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

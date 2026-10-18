@@ -95,9 +95,12 @@ which calls into it.
 | Names | `getaddrinfo` and `gethostbyname` ask the network service's resolver (which caches answers, knows `localhost` and puts IPv4 first) after `/etc/hosts`, if there is one; `res_query`, `res_send` and reverse lookups use musl's DNS client with the service's DNS servers |
 | `epoll` | A kernel port per instance: a wait costs what changed, however many descriptors are registered. Level-triggered, edge-triggered (as on Linux; each write to an eventfd is an event) and one-shot |
 | `eventfd`, `pidfd_open` | A counter with an event (`EFD_SEMAPHORE`, `EFD_NONBLOCK`); the child's process handle, readable once it has ended (how tokio waits for children) |
-| `mmap`, `mprotect`, `munmap`, `madvise` | Private anonymous memory is the kernel's, its pages freed once unmapped (in part too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared; any part of a mapping can be protected or unmapped |
+| `timerfd` | On the monotonic, real-time and boot clocks, one-shot or periodic, absolute or relative (`TFD_TIMER_ABSTIME`): a count of expirations to read, and an event that `poll` and `epoll` wait on, which a thread of the layer signals as timers expire |
+| `mmap`, `mprotect`, `munmap`, `madvise` | Private anonymous memory is the kernel's, its pages freed once unmapped (in part too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared, but a mapping of a file of `/system` that does not write it is the system image's own pages, shared with every process that maps them and never writable; any part of a mapping can be protected or unmapped |
+| Memory files (`memfd_create`) | A VMO: shared mappings are the memory itself, in every process the descriptor goes to (over Unix domain sockets, or to the programs a program starts); `ftruncate` and writes grow it; seals that fix its size (`F_SEAL_SHRINK`, `F_SEAL_GROW`, `F_SEAL_SEAL`, and `F_SEAL_EXEC` with `MFD_NOEXEC_SEAL`); `/dev/fd/N` opened read-only gives a descriptor whose handle cannot write the memory, nor can any process it goes to |
 | `fsync`, `fdatasync`, `sync`, `syncfs`, `O_SYNC`, `RWF_SYNC` | The VFS saves changes to the home disk at once, not a few seconds after the last one |
-| Threads, futexes, clocks | The kernel's. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack |
+| Threads, futexes, clocks | The kernel's. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack; `pthread_getattr_np` knows the main thread's stack from the startup message |
+| Local time | Without `TZ`, the system's offset from UTC (the `tz=` boot option, or the firmware's), as a POSIX `TZ` string (`<+0530>-5:30`): `localtime`, `mktime` and `tzname` follow it; `TZ` overrides it with a POSIX string (there is no tz database yet) |
 | `posix_spawn`, `waitpid` | Processes started from the program image. A process id is the kernel object id cut to 30 bits, never that of another child not yet waited for (`EAGAIN` in the rare case none can be had) |
 
 **Sockets** take `bind`, `listen`, `accept4`, `connect`, the send and
@@ -126,7 +129,21 @@ receive calls and their message forms, `shutdown`, `getsockname`,
 **Veda's own interfaces** are in `<veda/ipc.h>`, for C programs that are
 Veda services or talk to them directly: handles, channels, the service
 registry, waiting, memory objects and events. The header documents each
-call and the protocols' messages, which a program writes itself. A
+call and the protocols' messages, which a program writes itself.
+`<veda/thread.h>` stops another thread of the program, reads its
+registers (as `mcontext_t`) and lets it go on, as a garbage collector that
+scans stacks does (`veda_thread_suspend`, `veda_thread_registers`,
+`veda_thread_resume`), `<veda/memory.h>` says how much memory the
+process holds (`veda_process_memory`), and `<veda/sandbox.h>` gives up,
+for good, all of the file system but a few places, every service but a
+few, and creating processes, reading the kernel log and making memory
+executable (`veda_confine_files`, `veda_confine_services`,
+`veda_process_restrict`), as a program does before it handles what it
+cannot trust (the browser's web processes); a program that is not
+sandboxed can lend a sandboxed one a place to read
+(`veda_lend_files`, `veda_borrow_files`), and take it back
+(`veda_take_back_files`), as the browser lends its network process the
+folder of a page the user opens while a page open needs it. A
 program registers only its own name or names under it (`NAME/...`), its
 name being that of the program that speaks for it: `terminal` for a
 program the Terminal runs.
@@ -139,13 +156,14 @@ program the Terminal runs.
 | `/bin/sh` | None yet (the Terminal's shell is part of the Terminal): `system` and `popen` fail with `ENOENT` |
 | Links | No hard or symbolic links: `link` and `symlink` fail with `EPERM`, and `readlink` finds none (`EINVAL`) |
 | Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` and `chown` change nothing. Programs run as user 1000 |
-| File locks | None between processes, until the VFS arbitrates them: `F_SETLK`, `F_SETLKW` and `flock` fail with `ENOLCK` (unlocking succeeds), so software relying on them (SQLite's default locking) needs porting |
+| File locks | None between processes, until the VFS arbitrates them: `F_SETLK`, `F_SETLKW` and `flock` fail with `ENOLCK` (unlocking succeeds), so software relying on them needs porting: SQLite, in the web engine, uses its `unix-none` VFS, as each of its databases is one process's |
 | Shared libraries | Static linking only, no `dlopen` |
-| Timers | No `alarm` or interval timers: `setitimer` and `timer_create` fail with `ENOSYS` |
+| Timers | No `alarm` or interval timers: `setitimer` and `timer_create` fail with `ENOSYS`; `timerfd` is there |
 | Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`) |
 | Network sockets | TCP and UDP only. No raw or ICMP sockets (`EPROTONOSUPPORT`; `ping` is the network service's), multicast (`ENOPROTOOPT`), out-of-band data (`MSG_OOB`: `EOPNOTSUPP` to send, `EINVAL` to receive), ancillary data such as `IP_PKTINFO` (`sendmsg` with control messages: `EOPNOTSUPP`) or list of the interfaces (`getifaddrs` fails: there is no netlink) |
 | `/etc/resolv.conf` | None: the C library asks the network service, and programs that read it themselves find no DNS servers |
-| C++ | No compiler for it in the image; the cross toolchain compiles C++, with libstdc++ |
+| C++ | No compiler for it in the image; the cross toolchain compiles C++, with libstdc++ and libatomic |
+| OpenGL ES and EGL | For C code linked into a program on Rust's standard library with the `egl` crate, as WebKit is in the browser ([The web browser](BROWSER.md#drawing-pages)); no library for a C program alone yet |
 | Full-screen programs | The Terminal shows colours, carriage returns and line erasing, but has no cursor positioning: editors do not display correctly yet |
 
 | Limit | Value |
@@ -256,9 +274,9 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 | Port | Version | What changes for Veda |
 |------|---------|-----------------------|
 | `binutils` | 2.47 | Veda in `config.sub`; the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
-| `gcc` | 16.2.0 | Veda's target (`gcc/config/veda.h`: musl, static linking, `/system`), libgcc's configuration, libstdc++'s checks of the C library; `x86_64-veda` (the System V x86-64 ABI) |
+| `gcc` | 16.2.0 | Veda's target (`gcc/config/veda.h`: musl, static linking, `/system`), libgcc's configuration, libstdc++'s checks of the C library, libatomic; `x86_64-veda` (the System V x86-64 ABI) |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
-| `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`), name lookups, the program's path in `dl_iterate_phdr` |
+| `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`, the main thread's stack, the time zone), name lookups, the program's path in `dl_iterate_phdr` |
 | `rust` | 1.99.0 | Veda's target in the compiler, the standard library on the C library |
 | `dav1d` | 1.5.4 | None: built as released (meson) |
 | `ffmpeg` | 9.0.2 | `veda` as a target operating system in `configure`; only the demuxers, decoders and parsers the media decoder uses |
@@ -268,16 +286,18 @@ licence), `veda.patch` and, for what is the architecture's,
 `architectures/<architecture>/veda.patch`;
 [`implementation/ports/README.md`](../implementation/ports/README.md)
 explains the patches and how to update a port. The ports keep their own
-licences ([Licensing](LICENSING.md)): the source of what the image
-contains is each `port.toml`'s archive plus the patches beside it.
+licences ([Licensing](LICENSING.md)), whose texts the image carries in
+`/system/licences`: the source of what the image contains is each
+`port.toml`'s archive plus the patches beside it.
 
 ## Tests
 
 - **`verification/c/posix.c`** checks the C library and the POSIX layer:
-  startup, standard I/O, memory, files, pipes, threads, clocks, signals,
-  `posix_spawn`, the network (the host's servers too, through QEMU),
-  `epoll`, `eventfd`, Unix domain sockets, and sockets shared with child
-  processes.
+  startup, standard I/O, memory, the system image's files mapped in place,
+  memory files, suspending threads, files, pipes, threads, clocks and the
+  time zone, signals, `posix_spawn`, the network (the host's servers too,
+  through QEMU), `timerfd`, `epoll`, `eventfd`, Unix domain sockets, and
+  sockets shared with child processes.
 - **`verification/c/cxx.cc`** checks the C++ library: exceptions (across
   threads too), run-time types, static constructors, containers, streams,
   threads.

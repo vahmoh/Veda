@@ -3,9 +3,13 @@
 
 # Settings (1280x800 with the taskbar): applying wallpapers through the
 # desktop shell with the mouse and with the keyboard, and the Lock screen,
-# Agent, Network, Display, System and About pages. Settings logs every
-# wallpaper change.
+# Agent, Network, Display, System and About pages. The About page lists
+# the licences of the system's parts, as /system/licences/README has them,
+# and its Licence texts button opens About Veda on them. Settings logs
+# every wallpaper change.
 boot-cmdline "run=settings"
+fail-on "settings: no /system/licences/README"
+fail-on "about: no /system/licences/README"
 wait-serial "desktop ready" 90
 wait-serial "started settings" 60
 wait 4
@@ -43,4 +47,10 @@ shot target/veda/settings-4-system.png
 key down
 wait 2
 shot target/veda/settings-5-about.png
+# Licence texts (x = 1164, y = 225) opens About Veda on the licences.
+click 0.9094 0.2813
+wait-serial "started about" 30
+wait-serial "about: licences: " 20
+wait 3
+shot target/veda/settings-6-licences.png
 reject-serial "cannot change the wallpaper"

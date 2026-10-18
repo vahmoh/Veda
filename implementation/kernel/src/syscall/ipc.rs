@@ -143,6 +143,12 @@ pub fn object_signal(raw: RawHandle, clear: u32, set: u32) -> SysResult {
 
 /// Shared implementation of the wait calls. Returns the number of satisfied
 /// items; `observed` is filled for every item.
+/// Waits until `object` has one of `signals`, or `d` (an ABI deadline)
+/// passes: for calls that wait for an object themselves.
+pub(super) fn wait_for(object: &KObject, signals: u32, d: u64) -> Result<(), Error> {
+    wait_objects(core::slice::from_ref(object), &[signals], &mut [0], d).map(|_| ())
+}
+
 fn wait_objects(objects: &[KObject], masks: &[u32], observed: &mut [u32], d: u64) -> Result<usize, Error> {
     let cur = scheduler::current();
     let wait_id = new_koid();

@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libepoxy: OpenGL ES and EGL's entry points, which WebKit calls through
+# it.
+name = "libepoxy"
+version = "1.5.10"
+url = "https://download.gnome.org/sources/libepoxy/1.5/libepoxy-1.5.10.tar.xz"
+sha256 = "072cda4b59dd098bba8c2363a6247299db1fa89411dc221c8b81b8ee8192e623"
+license = "MIT"

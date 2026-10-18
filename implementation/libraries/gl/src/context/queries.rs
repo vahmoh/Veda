@@ -22,25 +22,25 @@ impl Context {
     /// `glGenQueries`.
     pub fn gen_queries(&mut self, names: &mut [u32]) {
         for n in names {
-            *n = self.queries.generate();
+            *n = self.local.queries.generate();
         }
     }
 
     /// One query name.
     pub fn gen_query(&mut self) -> u32 {
-        self.queries.generate()
+        self.local.queries.generate()
     }
 
     /// `glIsQuery`: whether `name` names a query object (one that has been
     /// begun).
     pub fn is_query(&self, name: u32) -> bool {
-        self.queries.key(name).is_some()
+        self.local.queries.key(name).is_some()
     }
 
     /// `glDeleteQueries`. An active query stays active until it ends.
     pub fn delete_queries(&mut self, names: &[u32]) {
         for &name in names {
-            if let Some((_, Some(q))) = self.queries.delete(name) {
+            if let Some((_, Some(q))) = self.local.queries.delete(name) {
                 self.drop_query(q);
             }
         }
@@ -55,12 +55,17 @@ impl Context {
     /// `glBeginQuery`.
     pub fn begin_query(&mut self, target: u32, id: u32) {
         let Some(slot) = query_slot(target) else { return self.err(gl::INVALID_ENUM) };
-        if self.active_queries[slot].is_some() || id == 0 || !self.queries.is_reserved(id) {
+        if self.local.active_queries[slot].is_some() || id == 0 || !self.local.queries.is_reserved(id) {
             return self.err(gl::INVALID_OPERATION);
         }
-        let key =
-            self.queries.get_or_create(id, || Query { target, backend: None, result: None, active: false, start: 0 });
-        let q = *self.queries.get(key);
+        let key = self.local.queries.get_or_create(id, || Query {
+            target,
+            backend: None,
+            result: None,
+            active: false,
+            start: 0,
+        });
+        let q = *self.local.queries.get(key);
         if q.target != target || q.active {
             return self.err(gl::INVALID_OPERATION);
         }
@@ -74,30 +79,30 @@ impl Context {
             }
             _ => None,
         };
-        let start = self.primitives_written;
-        *self.queries.get_mut(key) = Query { target, backend, result: None, active: true, start };
+        let start = self.local.primitives_written;
+        *self.local.queries.get_mut(key) = Query { target, backend, result: None, active: true, start };
         // The active query holds a reference, so that deleting it lets it
         // finish.
-        self.queries.retain(key);
-        self.active_queries[slot] = Some(key);
+        self.local.queries.retain(key);
+        self.local.active_queries[slot] = Some(key);
     }
 
     /// `glEndQuery`.
     pub fn end_query(&mut self, target: u32) {
         let Some(slot) = query_slot(target) else { return self.err(gl::INVALID_ENUM) };
-        let Some(key) = self.active_queries[slot] else { return self.err(gl::INVALID_OPERATION) };
-        if self.queries.get(key).target != target {
+        let Some(key) = self.local.active_queries[slot] else { return self.err(gl::INVALID_OPERATION) };
+        if self.local.queries.get(key).target != target {
             return self.err(gl::INVALID_OPERATION);
         }
-        self.active_queries[slot] = None;
-        let written = self.primitives_written;
-        let q = self.queries.get_mut(key);
+        self.local.active_queries[slot] = None;
+        let written = self.local.primitives_written;
+        let q = self.local.queries.get_mut(key);
         q.active = false;
         match q.backend {
             Some(b) => self.backend.end_query(b),
             None => q.result = Some(written - q.start),
         }
-        if let Some(dead) = self.queries.release(key) {
+        if let Some(dead) = self.local.queries.release(key) {
             self.drop_query(dead);
         }
     }
@@ -112,8 +117,8 @@ impl Context {
             self.err(gl::INVALID_ENUM);
             return 0;
         }
-        match self.active_queries[slot] {
-            Some(k) if self.queries.get(k).target == target => self.queries.name(k) as i32,
+        match self.local.active_queries[slot] {
+            Some(k) if self.local.queries.get(k).target == target => self.local.queries.name(k) as i32,
             _ => 0,
         }
     }
@@ -121,7 +126,7 @@ impl Context {
     /// `glGetQueryObjectuiv`: `QUERY_RESULT` (waiting for it) or
     /// `QUERY_RESULT_AVAILABLE`.
     pub fn get_query_objectuiv(&mut self, id: u32, pname: u32) -> u32 {
-        let Some(key) = self.queries.key(id) else {
+        let Some(key) = self.local.queries.key(id) else {
             self.err(gl::INVALID_OPERATION);
             return 0;
         };
@@ -129,7 +134,7 @@ impl Context {
             self.err(gl::INVALID_ENUM);
             return 0;
         }
-        let q = *self.queries.get(key);
+        let q = *self.local.queries.get(key);
         if q.active {
             self.err(gl::INVALID_OPERATION);
             return 0;
@@ -139,7 +144,7 @@ impl Context {
             (None, Some(b)) => {
                 let r = self.backend.query_result(b, pname == gl::QUERY_RESULT);
                 if let Some(v) = r {
-                    self.queries.get_mut(key).result = Some(v);
+                    self.local.queries.get_mut(key).result = Some(v);
                 }
                 r
             }

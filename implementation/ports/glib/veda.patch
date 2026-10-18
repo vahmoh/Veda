@@ -1,0 +1,29 @@
+--- a/glib/glib-unix.c
++++ b/glib/glib-unix.c
+@@ -1006,6 +1006,12 @@
+   g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_NOSYS,
+                "g_unix_fd_query_path() not supported on HURD");
+   return NULL;
++#elif defined (__veda__)
++  /* Veda's descriptors do not say which path they were opened by: /dev/fd
++   * has them, as on Hurd, but no link names their files. */
++  g_set_error (error, G_FILE_ERROR, G_FILE_ERROR_NOSYS,
++               "g_unix_fd_query_path() not supported on Veda");
++  return NULL;
+ #else
+   #error "g_unix_fd_query_path() not supported on this platform"
+ #endif
+--- a/meson.build
++++ b/meson.build
+@@ -2309,7 +2309,10 @@
+   }'''
+ atomic_dep = []
+ if cc.links(libatomic_test_code, args : '-latomic', name : 'check for -latomic')
+-  atomic_dep = cc.find_library('atomic')
++  # Meson tries a library it finds by linking a shared library with it,
++  # unless asked for a static one; Veda has no shared libraries, and its
++  # libatomic is static.
++  atomic_dep = cc.find_library('atomic', static : host_system == 'veda')
+ endif
+ 
+ # First check in libc, fallback to libintl, and as last chance build

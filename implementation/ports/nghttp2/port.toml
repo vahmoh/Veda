@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# nghttp2: HTTP/2's framing, for libsoup.
+name = "nghttp2"
+version = "1.70.0"
+url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz"
+sha256 = "e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2"
+license = "MIT"

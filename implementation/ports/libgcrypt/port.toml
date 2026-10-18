@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libgcrypt: the cryptography of WebKit's Web Crypto API and its digests
+# (Subresource Integrity, content security policies).
+name = "libgcrypt"
+version = "1.12.4"
+url = "https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.12.4.tar.bz2"
+sha256 = "d77f68f48879510e79a2f65977ccc68981781ea0923e5bdffac2a193ea3d660e"
+license = "LGPL-2.1-or-later"

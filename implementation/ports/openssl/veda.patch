@@ -1,0 +1,30 @@
+--- a/Configurations/50-veda.conf
++++ b/Configurations/50-veda.conf
+@@ -0,0 +1,27 @@
++## Veda: a Unix system over a capability microkernel, whose C library is
++## musl and whose programs are linked statically
++## (implementation/ports/openssl in Veda's sources). Libraries only: no
++## shared libraries, no dynamic loading.
++
++my %targets = (
++    "veda-common" => {
++        template         => 1,
++        inherit_from     => [ "BASE_unix" ],
++        CC               => "gcc",
++        CFLAGS           => picker(default => "-Wall",
++                                   debug   => "-O0 -g",
++                                   release => "-O2"),
++        cflags           => threads("-pthread"),
++        ex_libs          => add(threads("-pthread")),
++        thread_scheme    => "pthreads",
++        dso_scheme       => "none",
++        perl_platform    => 'Unix',
++    },
++    "veda-x86_64" => {
++        inherit_from     => [ "veda-common" ],
++        lib_cppflags     => add("-DL_ENDIAN"),
++        bn_ops           => "SIXTY_FOUR_BIT_LONG",
++        asm_arch         => 'x86_64',
++        perlasm_scheme   => "elf",
++    },
++);

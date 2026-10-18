@@ -16,10 +16,13 @@
 //! | TCP and UDP sockets, names | the network service: a channel per socket ([`inet`], [`socket`]), its resolver ([`resolve`]) |
 //! | Unix domain sockets | socket nodes of the VFS, which hand them connections and datagrams; socket endpoints and channels between the programs ([`unix`]) |
 //! | `epoll`, `eventfd` | a port per epoll instance ([`epoll`]); a counter of the layer's with an event ([`eventfd`]) |
+//! | `timerfd` | a timer of the layer's with an event, which a thread of the layer's signals as it expires ([`timerfd`]) |
 //! | `mmap` | the kernel's private memory, or a VMO per mapping ([`mem`]) |
+//! | `memfd_create` | a VMO, shared by every process the file goes to ([`memfd`]) |
 //! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
 //! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`, `pthread_kill`) ([`signal`]) |
+//! | a sandbox (Landlock, seccomp, namespaces) | the VFS connection and the registry channel confined, the kernel's `process_restrict` (`<veda/sandbox.h>`, [`sandbox`]) |
 //!
 //! musl's hooks into this layer are:
 //!
@@ -69,11 +72,13 @@ mod io;
 mod linux;
 mod log;
 mod mem;
+mod memfd;
 mod native;
 mod netd;
 mod path;
 mod process;
 mod resolve;
+mod sandbox;
 mod signal;
 mod sockaddr;
 mod socket;
@@ -82,6 +87,7 @@ mod syscall;
 mod system;
 mod thread;
 mod time;
+mod timerfd;
 mod tty;
 mod unix;
 mod user;
@@ -102,10 +108,14 @@ pub static __veda_bootstrap: AtomicU32 = AtomicU32::new(0);
 pub extern "C" fn __veda_init() {
     // Thread-local storage is set up: threads can be told apart.
     signal::threads_ready();
+    thread::main_thread_ready();
     rt::env::adopt(__veda_bootstrap.swap(0, Ordering::Relaxed));
     let entries = rt::env::vars();
     let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     signal::inherit(inherited.ignored, inherited.mask);
+    if let Some((top, size)) = inherited.main_stack {
+        thread::set_main_stack(top, size);
+    }
     vfs::set_cwd(rt::env::cwd());
     if let Some(h) = rt::env::take_handle(role::TERMINAL) {
         tty::adopt(Vmo::from_handle(h));

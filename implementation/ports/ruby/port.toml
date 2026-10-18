@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Ruby, for this machine: JavaScriptCore's build assembles its interpreter
+# (offlineasm) and generates code with Ruby scripts.
+name = "ruby"
+version = "3.4.11"
+url = "https://cache.ruby-lang.org/pub/ruby/3.4/ruby-3.4.11.tar.xz"
+sha256 = "f79c6e789ce4f30f77c88a40b23b93e2547c512a843dc17db27ab1f5cc66f4e4"
+license = "Ruby OR BSD-2-Clause"

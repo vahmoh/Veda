@@ -11,6 +11,8 @@
 //! * [`clipboard`]: copying text, and saying when it did not fit.
 //! * [`store`]: an application's own small files, for programs on the
 //!   standard library.
+//! * [`licences`]: the licences of the system's parts, as
+//!   `/system/licences/README` lists them (About Veda, Settings).
 //!
 //! These belong with the libraries they extend: the process lists with
 //! `proto`'s launcher protocol, the formats with `rt` and `files`, the
@@ -26,6 +28,7 @@ extern crate std;
 pub mod clipboard;
 pub mod format;
 pub mod icons;
+pub mod licences;
 pub mod process;
 #[cfg(any(test, target_os = "veda"))]
 pub mod store;

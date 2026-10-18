@@ -281,7 +281,7 @@ impl Context {
     pub fn delete_samplers(&mut self, names: &[u32]) {
         for &name in names {
             if let Some(key) = self.samplers.key(name) {
-                for unit in &mut self.sampler_units {
+                for unit in &mut self.local.sampler_units {
                     if *unit == Some(key) {
                         *unit = None;
                     }
@@ -304,7 +304,7 @@ impl Context {
                 None => return self.err(gl::INVALID_OPERATION),
             }
         };
-        self.sampler_units[unit as usize] = key;
+        self.local.sampler_units[unit as usize] = key;
     }
 
     fn sampler_parameter(&mut self, sampler: u32, pname: u32, v: Param) {

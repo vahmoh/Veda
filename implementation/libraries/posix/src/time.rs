@@ -3,6 +3,8 @@
 
 //! Clocks and sleeping.
 
+use core::fmt::Write;
+
 use crate::error::SysResult;
 use crate::linux::errno::{EFAULT, EINVAL};
 use crate::linux::{Timespec, Timeval, Tms, clock};
@@ -16,6 +18,77 @@ pub fn monotonic_ns() -> u64 {
 /// Nanoseconds since 1970-01-01 00:00:00 UTC.
 pub fn realtime_ns() -> u64 {
     rt::sys::clock_get(abi::clock::UTC)
+}
+
+/// The offset of the system's local time from UTC, in minutes east: what
+/// the kernel keeps between its two real-time clocks (`tz=` at boot, or
+/// the firmware's zone), with no rules of daylight saving.
+pub fn utc_offset_minutes() -> i64 {
+    let local = rt::sys::clock_get(abi::clock::REALTIME) as i128;
+    let utc = rt::sys::clock_get(abi::clock::UTC) as i128;
+    // The clocks are read a moment apart: to the nearest minute.
+    const MINUTE: i128 = 60_000_000_000;
+    let d = local - utc;
+    (if d >= 0 { (d + MINUTE / 2) / MINUTE } else { (d - MINUTE / 2) / MINUTE }) as i64
+}
+
+/// The system's time zone as a POSIX TZ string (`<+02>-2`, `<-0330>3:30`,
+/// `UTC0`): its offset from UTC, named as the tz database names a zone of
+/// that offset alone. The sign is POSIX's: hours west of UTC.
+fn posix_tz(offset_minutes: i64) -> TzString {
+    let mut out = TzString::default();
+    let (h, m) = (offset_minutes.unsigned_abs() / 60, offset_minutes.unsigned_abs() % 60);
+    let (east, west) = if offset_minutes > 0 { ('+', '-') } else { ('-', '+') };
+    let _ = match (offset_minutes, m) {
+        (0, _) => out.write_str("UTC0"),
+        (_, 0) => write!(out, "<{east}{h:02}>{west}{h}"),
+        _ => write!(out, "<{east}{h:02}{m:02}>{west}{h}:{m:02}"),
+    };
+    out
+}
+
+/// A POSIX TZ string, on the stack (the longest is `<+1445>-14:45`).
+#[derive(Default)]
+struct TzString {
+    buf: [u8; 24],
+    len: usize,
+}
+
+impl TzString {
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl Write for TzString {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let room = self.buf.len() - self.len;
+        let n = s.len().min(room);
+        self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len += n;
+        if n < s.len() { Err(core::fmt::Error) } else { Ok(()) }
+    }
+}
+
+/// The system's time zone, for musl when the environment has no `TZ`
+/// (there is no `/etc/localtime`): a POSIX TZ string of its offset from
+/// UTC, NUL-terminated in `buf` (cut short to fit).
+///
+/// # Safety
+/// `buf` must be valid for writes of `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __veda_tz(buf: *mut u8, size: usize) {
+    if size == 0 {
+        return;
+    }
+    let tz = posix_tz(utc_offset_minutes());
+    let s = tz.as_bytes();
+    let n = s.len().min(size - 1);
+    // SAFETY: the caller gave `size` bytes; `n + 1 <= size`.
+    unsafe {
+        core::ptr::copy_nonoverlapping(s.as_ptr(), buf, n);
+        *buf.add(n) = 0;
+    }
 }
 
 /// CPU time this process has used.
@@ -91,4 +164,19 @@ pub unsafe fn times(buf: usize) -> SysResult {
         unsafe { user::write(buf, Tms { utime: ticks, ..Default::default() })? };
     }
     Ok((monotonic_ns() / 10_000_000) as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_zones_are_posix_strings_of_their_offsets() {
+        assert_eq!(posix_tz(0).as_bytes(), b"UTC0");
+        assert_eq!(posix_tz(120).as_bytes(), b"<+02>-2");
+        assert_eq!(posix_tz(-300).as_bytes(), b"<-05>+5");
+        assert_eq!(posix_tz(330).as_bytes(), b"<+0530>-5:30");
+        assert_eq!(posix_tz(-210).as_bytes(), b"<-0330>+3:30");
+        assert_eq!(posix_tz(14 * 60 + 45).as_bytes(), b"<+1445>-14:45");
+    }
 }

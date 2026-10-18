@@ -155,6 +155,57 @@ pub fn thread_exit() -> SysResult {
     scheduler::exit_current()
 }
 
+/// A handle to the calling thread.
+pub fn thread_self() -> SysResult {
+    ok(insert(KObject::Thread(scheduler::current()), THREAD_RIGHTS)? as usize)
+}
+
+/// Stops another thread (`nr::THREAD_SUSPEND`), waiting until it has
+/// stopped if it is running: until it has entered the kernel (its user
+/// registers saved), or ended. A caller killed meanwhile undoes its
+/// suspension, so that none outlives it.
+pub fn thread_suspend(raw: RawHandle) -> SysResult {
+    let t = get_thread(raw, Rights::MANAGE)?;
+    if t.koid == scheduler::current().koid {
+        return Err(Error::InvalidArgs);
+    }
+    if t.is_dead() {
+        return Err(Error::BadState);
+    }
+    scheduler::suspend(&t)?;
+    let stopped = abi::signals::SUSPENDED | abi::signals::TERMINATED;
+    if t.signals.active() & stopped == 0
+        && let Err(e) = super::ipc::wait_for(&KObject::Thread(t.clone()), stopped, abi::DEADLINE_INFINITE)
+    {
+        let _ = scheduler::resume(&t);
+        return Err(e);
+    }
+    ok(0)
+}
+
+/// Undoes one `thread_suspend` (`nr::THREAD_RESUME`).
+pub fn thread_resume(raw: RawHandle) -> SysResult {
+    let t = get_thread(raw, Rights::MANAGE)?;
+    scheduler::resume(&t)?;
+    ok(0)
+}
+
+/// The user registers of a stopped thread (`nr::THREAD_READ_STATE`).
+pub fn thread_read_state(raw: RawHandle, buf: usize) -> SysResult {
+    let t = get_thread(raw, Rights::MANAGE)?;
+    if t.process.is_none()
+        || t.suspensions.load(Ordering::Acquire) == 0
+        || t.signals.active() & abi::signals::SUSPENDED == 0
+    {
+        return Err(Error::BadState);
+    }
+    // SAFETY: the thread is stopped (it runs no user code until resumed)
+    // and alive while `t` is, and its context is read under the BKL.
+    let state = unsafe { crate::arch::thread::user_state(t.kernel_stack_top, &*t.ctx_ptr()) };
+    user::write(buf as u64, &state)?;
+    ok(0)
+}
+
 /// Sets a thread's priority; handle 0 is the calling thread's (a thread
 /// library that keeps its threads' handles to itself lets a thread set its
 /// own).

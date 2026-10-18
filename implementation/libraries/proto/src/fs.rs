@@ -26,6 +26,15 @@
 //! it, the datagrams sent to it. Programs connect and send by address
 //! ([`SocketAddress`]); the bytes of a connection then go between them,
 //! over the ends the connection carries, without the VFS.
+//!
+//! **Confined connections.** A connection can give up, for good, all of the
+//! file system but a few places ([`vfs::Client::confine`]): a program that
+//! handles what it cannot trust (the browser's page processes) keeps only
+//! what it reads. A connection that is not confined can lend one a place
+//! to read ([`vfs::Client::lend`], [`vfs::Client::borrow`]), and take it
+//! back ([`vfs::Client::take_back`]): the browser lends its network
+//! process the folder of a page the user opens, while a page it has open
+//! needs it.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -274,6 +283,27 @@ message! {
     }
 }
 
+message! {
+    /// A place of the file system that a confined connection reaches
+    /// ([`vfs::Client::confine`]): what is at or below `path`, to read, or
+    /// to change too.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Place {
+        /// An absolute path.
+        pub path: String,
+        /// What is there may be changed too.
+        pub write: bool,
+    }
+}
+
+/// The most places a confined connection's view holds: the VFS looks at
+/// each of them for every request of the connection.
+pub const MAX_PLACES: usize = 64;
+
+/// The bytes of a loan ([`vfs::Client::lend`]): a secret, which whoever
+/// has it may take the loan with, and its lender take it back with.
+pub const LOAN_SIZE: usize = 16;
+
 /// The events the VFS writes on a socket's inbox ([`vfs::Client::bind_socket`]),
 /// by their ordinals.
 pub mod socket_event {
@@ -398,6 +428,62 @@ protocol! {
         /// not bound): `data`, and descriptors as [`SocketDatagram`] has
         /// them. `Busy` while its inbox is full.
         23 => fn send_to_socket(to: SocketAddress, from: u64, koid: u64, data: Bytes, rights: Bytes, handles: Vec<Handle>) -> Result<(), FsError>;
+        /// Confines this connection, for good, to `view`: from now on it
+        /// reaches only what is at or below its places (at most
+        /// [`MAX_PLACES`]), each to read or to change too, the innermost
+        /// place that holds a path saying which (`/dev` to read and
+        /// `/dev/null` to change); and the directories on the way to them,
+        /// which it can look at and list, but which show it only what leads
+        /// on to a place. Nothing else is there for it (`NotFound`), what
+        /// it may only read it cannot change (`Denied`), it has no
+        /// abstract socket names, which are in no place, and its `sync`
+        /// returns at once (what it changes is saved as anything is). As
+        /// OpenBSD's `unveil` does, a program gives up the rest before it
+        /// handles what it cannot trust (the browser's page processes).
+        /// Confining it again narrows the view: one that would reach what
+        /// this one's own places do not, or more wholly, is refused
+        /// (`Denied`); the places it borrowed ([`vfs::Client::borrow`])
+        /// stay, borrowed, and count towards the [`MAX_PLACES`]. What it
+        /// has open stays open.
+        24 => fn confine(view: Vec<Place>) -> Result<(), FsError>;
+        /// Lends the place `path`, a file or a directory there now, to
+        /// read: returns the loan, a secret of [`LOAN_SIZE`] random bytes,
+        /// which a confined connection takes with
+        /// [`vfs::Client::borrow`]. The lender hands it to the one it lends
+        /// to (the browser to its network process, over their own channel):
+        /// whoever has it may take it, once. Only a connection that is not
+        /// confined lends (`Denied`), and only what it reaches itself (not
+        /// another service's private directory). A loan not taken lapses
+        /// after a minute, or as this connection closes; a connection holds
+        /// at most 16 at once (`TooMany`). One taken lasts until this
+        /// connection takes it back ([`vfs::Client::take_back`]), or
+        /// closes.
+        25 => fn lend(path: String) -> Result<Bytes, FsError>;
+        /// Takes the loan `loan` of the place `path` (named as it was
+        /// lent): from now on this connection reaches what is at or below
+        /// `path`, to read, as a place of its view; it reaches nothing less
+        /// than before, and changes nothing more. (A connection that is not
+        /// confined, or whose own places hold it, reaches it already: the
+        /// loan is only taken, with nothing for its lender to take back.)
+        /// `Denied` if there is no such loan: another secret or another
+        /// place, or one taken or lapsed; `TooMany` if the view holds
+        /// [`MAX_PLACES`] places already, the loan left untaken. As a
+        /// sandbox extension does on Apple's systems, a loan lets a
+        /// sandboxed program reach what the user opened with it, and
+        /// nothing else, until its lender takes it back.
+        26 => fn borrow(path: String, loan: Bytes) -> Result<(), FsError>;
+        /// Takes back the loan `loan` this connection made
+        /// ([`vfs::Client::lend`]): one not taken yet can be taken no more,
+        /// and the place leaves the view of the confined connection that
+        /// took it, which reaches nothing else less, and nothing more; what
+        /// it has open there stays open. The loans a connection made are
+        /// taken back so as it closes too. That nothing is left to take
+        /// back (the loan lapsed, or was taken back already, or the one
+        /// that took it reached its place anyway, or closed) is no error;
+        /// nor does another's loan, or a guess, take anything back. As the
+        /// browser takes back the folder it lent its network process once
+        /// no page it has open needs it.
+        27 => fn take_back(loan: Bytes) -> Result<(), FsError>;
     }
 }
 
@@ -466,6 +552,13 @@ protocol! {
         /// Sets the modification time (nanoseconds since the Unix epoch;
         /// 0: now).
         11 => fn set_modified(modified: u64) -> Result<(), FsError>;
+        /// The file's pages from `offset` (page-aligned), `len` bytes
+        /// (rounded up to pages), if they are the system image's: to map as
+        /// they are, read-only and shared with everyone who maps them, past
+        /// the file's end zeros to the end of its last page. `Invalid` for
+        /// a file whose bytes are the file system's own, which a mapping
+        /// copies, and for a range past its last page.
+        12 => fn pages(offset: u64, len: u64) -> Result<Vmo, FsError>;
     }
 }
 

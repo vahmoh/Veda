@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser's agent interface, with a simulated Voice Agent service and
+# the host's test pages: the agent opens a page and reads it (its script
+# ran), which then has the keyboard, as after Enter in the address bar (Tab
+# and Enter follow its link); it goes to another page and back, opens,
+# shows and closes tabs, finds text, zooms and bookmarks, as the user would
+# with the toolbar; the window shows each step. Pages see the system's time
+# zone (India's offset, which only a zone of the region's names), a PDF
+# shows in WebKit's viewer (PDF.js, linked in), and private tabs forget a
+# site's cookies once the last of them closes. The pages' web processes
+# and the network process are sandboxed (see verification/ui/browser.vts).
+boot-cmdline "tz=+05:30"
+web-server
+memory 2048
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# The browser starts for the agent and describes itself.
+agent-call app_actions '{"app":"browser"}' 60
+agent-result read_page
+wait-serial "browser offers" 10
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"http://{web}/page"}}' 30
+agent-result "http://{web}/page"
+wait-serial "is sandboxed: it reads only the system image, fontconfig's cache" 60
+wait-serial "is sandboxed: it reads only the system image and the devices" 60
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Veda test page"'
+agent-result "Scripts run: 42"
+key tab
+key ret
+wait 2
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Second page"'
+agent-call use_app '{"app":"browser","action":"back"}' 30
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/second"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Second page","address":"http://{web}/second"'
+agent-result "The link was followed."
+agent-call use_app '{"app":"browser","action":"back"}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Veda test page"'
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/zone"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Zone Asia/Kolkata, 330 minutes east of UTC"
+agent-call use_app '{"app":"browser","action":"back"}' 30
+# A PDF, in WebKit's viewer: its text is in the viewer's frame, where
+# finding finds it once the viewer has drawn the page. Without the
+# viewer's files (WebKit's resources, linked in) the page stayed blank,
+# with nothing in the log.
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/files/veda.pdf"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"address":"http://{web}/files/veda.pdf"'
+wait 8
+agent-call use_app '{"app":"browser","action":"find","arguments":{"text":"PDF from the host"}}' 30
+agent-result '"found":1'
+shot target/veda/agent-app-browser-pdf.png
+agent-call use_app '{"app":"browser","action":"find","arguments":{"text":""}}' 30
+agent-call use_app '{"app":"browser","action":"back"}' 30
+# Tabs.
+agent-call use_app '{"app":"browser","action":"new_tab"}' 30
+agent-result '"tabs":2'
+agent-call use_app '{"app":"browser","action":"switch_tab","arguments":{"index":1}}' 30
+agent-result '"shown":"Veda test page"'
+agent-call use_app '{"app":"browser","action":"switch_tab","arguments":{"index":5}}' 30
+agent-result "there is no tab 5: there are 2"
+# The page: finding, zooming, a bookmark.
+agent-call use_app '{"app":"browser","action":"find","arguments":{"text":"second page"}}' 30
+agent-call use_app '{"app":"browser","action":"zoom","arguments":{"percent":140}}' 30
+agent-result '"zoom":150'
+agent-call use_app '{"app":"browser","action":"bookmark"}' 30
+agent-result '"bookmarked":true'
+wait 3
+shot target/veda/agent-app-browser.png
+agent-call read_app '{"app":"browser"}' 30
+agent-result '"index":1,"title":"Veda test page"'
+agent-result '"shown":true'
+agent-call use_app '{"app":"browser","action":"close_tab","arguments":{"index":2}}' 30
+agent-result '"tabs":1'
+# Private tabs keep a site's cookies while one is open, and the next, once
+# the last has closed, starts with none.
+agent-call use_app '{"app":"browser","action":"new_tab","arguments":{"private":true}}' 30
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/cookie"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Cookies: none"
+agent-call use_app '{"app":"browser","action":"reload"}' 30
+wait 2
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Cookies: seen=yes"
+agent-call use_app '{"app":"browser","action":"close_tab"}' 30
+agent-result '"tabs":1'
+agent-call use_app '{"app":"browser","action":"new_tab","arguments":{"private":true}}' 30
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/cookie"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Cookies: none"
+reject-serial "page stopped working"
+reject-serial "for an invalid message"
+reject-serial "browser crashed"
+reject-serial "its sandbox does not hold"
+reject-serial "cannot sandbox itself"
+reject-serial "GLib-CRITICAL"

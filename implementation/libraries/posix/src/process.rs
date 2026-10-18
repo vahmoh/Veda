@@ -215,11 +215,12 @@ impl ChildState {
                 // a pipe cannot be written in the child either.
                 Object::Stream(s) => s.shared_handle(d.readable(), d.writable())?,
                 Object::File(f) => f.duplicate()?.into_handle(),
-                // A socket: the handles that carry it (none, one, or a
-                // connection's two), and what makes them a socket.
-                Object::Unix(_) | Object::Inet(_) => {
+                // A socket or a memory file: the handles that carry it
+                // (none, one, or a connection's two), and what makes them
+                // what it is.
+                Object::Unix(_) | Object::Inet(_) | Object::Memfd(_) => {
                     let Some(socket) = crate::carry::for_child(d)? else { continue };
-                    inherited.sockets.push((n, socket.entry));
+                    inherited.carried.push((n, socket.entry));
                     let mut handles = socket.handles.into_iter();
                     let Some(first) = handles.next() else { continue };
                     if let Some(second) = handles.next() {
@@ -240,9 +241,9 @@ impl ChildState {
                     inherited.fds.push((n, Pseudo::Log));
                     continue;
                 }
-                // An eventfd, an epoll instance and a child's descriptor are
-                // the program's alone.
-                Object::EventFd(_) | Object::Epoll(_) | Object::Pidfd(_) => continue,
+                // An eventfd, a timer, an epoll instance and a child's
+                // descriptor are the program's alone.
+                Object::EventFd(_) | Object::TimerFd(_) | Object::Epoll(_) | Object::Pidfd(_) => continue,
             };
             out.push((role::FD + n as u32, h));
         }
@@ -313,11 +314,10 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
         return Err(EMFILE);
     }
 
-    // The program's image.
+    // The program's file: the system image's pages, or a copy of its own,
+    // which nothing else changes.
     let (vmo, size): (Vmo, u64) = error::ipc(vfs::with(|c| c.read_file(path.clone()))?)?;
-    let image = rt::vm::Mapping::new(vmo, (size as usize).max(1), abi::map_flags::READ).map_err(error::kernel)?;
-    // SAFETY: a read-only mapping of the VMO the VFS made for us alone.
-    let bytes = unsafe { &image.as_slice()[..size as usize] };
+    let size = usize::try_from(size).map_err(|_| ENOEXEC)?;
 
     // SAFETY: the program passed NULL-terminated arrays.
     let (args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
@@ -331,7 +331,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     spawn.inherited = entries.iter().map(String::as_str).collect();
     let unused = |koid: u64| !CHILDREN.lock().contains_key(&pid_of(koid));
     spawn.accept = Some(&unused);
-    let process = spawn.start(bytes).map_err(spawn_errno)?;
+    let process = spawn.start_file(&vmo, size).map_err(spawn_errno)?;
     let pid = pid_of(process.0.koid());
     CHILDREN.lock().insert(pid, process);
     if res != 0 {

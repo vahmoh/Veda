@@ -7,9 +7,10 @@
  * exits with the number of failed checks (0: all passed). `systest` runs it
  * inside Veda in a scratch directory, with its standard output on a pipe.
  *
- * `posix child MODE` is the program run by the spawning checks; `posix host
- * ADDRESS TCP-PORT UDP-PORT` runs the checks with the host machine's
- * servers too (see check_network). */
+ * `posix child MODE [ARGUMENT]` is the program run by the spawning checks
+ * (`posix child sandbox`, sandboxed, checks its own); `posix host ADDRESS
+ * TCP-PORT UDP-PORT` runs the checks with the host machine's servers too
+ * (see check_network). */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -39,6 +40,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/timerfd.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <sys/utsname.h>
@@ -46,6 +48,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <veda/ipc.h>
+#include <veda/memory.h>
+#include <veda/sandbox.h>
+#include <veda/thread.h>
 
 /* The architecture's expectations
  * (verification/c/architectures/<architecture>/). */
@@ -191,6 +196,173 @@ static void check_mmap(void)
 	}
 }
 
+/* The system image's files map as its own pages where a mapping does not
+ * write them: the bytes a read gives, zeros past the end of the last page,
+ * and never writable. A mapping that writes is a copy of its own. */
+static void check_system_files(void)
+{
+	const size_t page = VEDA_PAGE_SIZE;
+	char text[256];
+	int fd = open("/system/etc/version", O_RDONLY | O_CLOEXEC);
+	ssize_t n = fd >= 0 ? read(fd, text, sizeof text) : -1;
+	CHECK("a file of the system image", fd >= 0 && n > 0 && n < (ssize_t)sizeof text, "open %d, read %zd", fd, n);
+	if (fd < 0 || n <= 0)
+		return;
+	unsigned char *p = mmap(0, page, PROT_READ, MAP_PRIVATE, fd, 0);
+	CHECK("mmap a file of the system image", p != MAP_FAILED, "mmap: %s", strerror(errno));
+	if (p != MAP_FAILED) {
+		int zeros = 1;
+		for (size_t i = n; i < page; i++)
+			zeros &= p[i] == 0;
+		CHECK("its pages are the file's", !memcmp(p, text, n) && zeros, "contents differ");
+		errno = 0;
+		CHECK("its pages are never writable", mprotect(p, page, PROT_READ | PROT_WRITE) == -1 && errno == EACCES,
+		      "mprotect: %s", strerror(errno));
+		munmap(p, page);
+	}
+	unsigned char *w = mmap(0, page, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+	char again[256];
+	int copy = w != MAP_FAILED && !memcmp(w, text, n);
+	if (w != MAP_FAILED) {
+		w[0] ^= 1;
+		munmap(w, page);
+	}
+	CHECK("a mapping that writes is a copy", copy && pread(fd, again, n, 0) == n && !memcmp(again, text, n),
+	      "contents differ");
+	close(fd);
+}
+
+/* A memory file: memory with a descriptor, as WebKit's processes share
+ * their buffers: its mappings are the memory, ftruncate sizes it, seals
+ * fix its size, and a read-only descriptor of it cannot write it. */
+static void check_memfd(void)
+{
+	const size_t page = VEDA_PAGE_SIZE, len = 4 * VEDA_PAGE_SIZE;
+	int fd = memfd_create("check", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+	CHECK("memfd_create", fd >= 0, "%s", strerror(errno));
+	if (fd < 0)
+		return;
+	struct stat st;
+	CHECK("ftruncate a memory file", ftruncate(fd, len) == 0 && fstat(fd, &st) == 0 && st.st_size == (off_t)len,
+	      "size %lld", (long long)st.st_size);
+	char *a = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	char *b = mmap(0, len, PROT_READ, MAP_SHARED, fd, 0);
+	CHECK("map a memory file twice", a != MAP_FAILED && b != MAP_FAILED, "mmap: %s", strerror(errno));
+	char back[8] = { 0 };
+	if (a != MAP_FAILED && b != MAP_FAILED) {
+		strcpy(a + page, "shared");
+		CHECK("its mappings are its memory",
+		      !strcmp(b + page, "shared") && pread(fd, back, 6, page) == 6 && !strcmp(back, "shared"),
+		      "read \"%s\"", back);
+	}
+	errno = 0;
+	CHECK("seals fix its size",
+	      fcntl(fd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK) == 0 &&
+		      (fcntl(fd, F_GET_SEALS) & (F_SEAL_GROW | F_SEAL_SHRINK)) == (F_SEAL_GROW | F_SEAL_SHRINK) &&
+		      ftruncate(fd, 2 * len) == -1 && errno == EPERM,
+	      "%s", strerror(errno));
+	/* As /proc/self/fd/N on Linux. */
+	char path[32];
+	snprintf(path, sizeof path, "/dev/fd/%d", fd);
+	int ro = open(path, O_RDONLY | O_CLOEXEC);
+	CHECK("a read-only descriptor of a memory file", ro >= 0, "open %s: %s", path, strerror(errno));
+	if (ro >= 0) {
+		errno = 0;
+		void *w = mmap(0, len, PROT_READ | PROT_WRITE, MAP_SHARED, ro, 0);
+		CHECK("it cannot map the memory to write", w == MAP_FAILED && errno == EACCES, "mmap: %s", strerror(errno));
+		char *r = mmap(0, len, PROT_READ, MAP_SHARED, ro, 0);
+		CHECK("it maps the memory to read", r != MAP_FAILED && a != MAP_FAILED && !strcmp(r + page, "shared"),
+		      "contents differ");
+		if (r != MAP_FAILED)
+			munmap(r, len);
+		close(ro);
+	}
+	if (a != MAP_FAILED)
+		munmap(a, len);
+	if (b != MAP_FAILED)
+		munmap(b, len);
+	close(fd);
+}
+
+static atomic_long spins;
+static atomic_int spinner;
+static atomic_int stop_spinning;
+
+static void *spin(void *arg)
+{
+	(void)arg;
+	atomic_store(&spinner, gettid());
+	while (!atomic_load(&stop_spinning))
+		atomic_fetch_add(&spins, 1);
+	return 0;
+}
+
+/* Stopping another thread and reading its registers, as JavaScriptCore's
+ * garbage collector does (<veda/thread.h>), and where the main thread's
+ * stack is (pthread_getattr_np); the memory the process holds
+ * (<veda/memory.h>). */
+static void check_thread_suspension(void)
+{
+	pthread_t t;
+	if (pthread_create(&t, 0, spin, 0)) {
+		CHECK("a thread to stop", 0, "pthread_create failed");
+		return;
+	}
+	while (!atomic_load(&spinner))
+		sched_yield();
+	pid_t tid = atomic_load(&spinner);
+	pthread_attr_t attr;
+	void *stack = 0;
+	size_t size = 0;
+	if (!pthread_getattr_np(t, &attr)) {
+		pthread_attr_getstack(&attr, &stack, &size);
+		pthread_attr_destroy(&attr);
+	}
+	int r = veda_thread_suspend(tid);
+	long before = atomic_load(&spins);
+	usleep(20000);
+	long after = atomic_load(&spins);
+	CHECK("a suspended thread stays put", r == 0 && before == after, "suspend %d, %ld then %ld spins", r, before, after);
+	mcontext_t mc;
+	r = veda_thread_registers(tid, &mc);
+	unsigned long sp = VEDA_STACK_POINTER(mc);
+	CHECK("its registers", r == 0 && VEDA_PROGRAM_COUNTER(mc) && sp >= (unsigned long)stack &&
+	      sp < (unsigned long)stack + size, "returned %d, sp %#lx, stack %p+%zu", r, sp, stack, size);
+	r = veda_thread_resume(tid);
+	usleep(20000);
+	CHECK("a resumed thread goes on", r == 0 && atomic_load(&spins) != after, "resume %d", r);
+	CHECK("only a suspended thread is resumed", veda_thread_resume(tid) == EINVAL, "resumed twice");
+	CHECK("a thread does not suspend itself", veda_thread_suspend(gettid()) == EINVAL, "suspended itself");
+	atomic_store(&stop_spinning, 1);
+	pthread_join(t, 0);
+	CHECK("an ended thread is not suspended", veda_thread_suspend(tid) == ESRCH, "suspended");
+
+	/* The main thread's stack, as the loader made it. */
+	int local = 0;
+	stack = 0;
+	size = 0;
+	r = pthread_getattr_np(pthread_self(), &attr);
+	if (!r) {
+		pthread_attr_getstack(&attr, &stack, &size);
+		pthread_attr_destroy(&attr);
+	}
+	CHECK("the main thread's stack",
+	      !r && (char *)&local >= (char *)stack && (char *)&local < (char *)stack + size && size >= 8 << 20,
+	      "%p+%zu, a local at %p", stack, size, (void *)&local);
+
+	size_t held = veda_process_memory();
+	const size_t more = 8 << 20;
+	char *touched = malloc(more);
+	/* Through a volatile pointer: memory written and freed unread is no
+	 * memory at all to the compiler, which may make neither. */
+	if (touched)
+		for (size_t i = 0; i < more; i += VEDA_PAGE_SIZE)
+			((volatile char *)touched)[i] = 1;
+	size_t now = veda_process_memory();
+	CHECK("the memory the process holds", held > 0 && touched && now >= held + more / 2, "%zu, then %zu", held, now);
+	free(touched);
+}
+
 static void check_files(void)
 {
 	FILE *f = fopen("notes.txt", "w");
@@ -204,6 +376,11 @@ static void check_files(void)
 	struct stat st;
 	CHECK("stat", stat("notes.txt", &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 8890,
 	      "size %lld", (long long)st.st_size);
+	struct statx stx;
+	CHECK("statx",
+	      statx(AT_FDCWD, "notes.txt", 0, STATX_BASIC_STATS, &stx) == 0 && (stx.stx_mask & STATX_SIZE) &&
+		      stx.stx_size == 8890 && S_ISREG(stx.stx_mode) && stx.stx_ino == st.st_ino,
+	      "%s", strerror(errno));
 	f = fopen("notes.txt", "r");
 	char line[64];
 	int lines = 0, last = -1;
@@ -396,6 +573,29 @@ static void check_time(void)
 	CHECK("time", now > 1700000000, "time %lld", (long long)now);
 	struct timeval tv;
 	CHECK("gettimeofday", gettimeofday(&tv, 0) == 0 && tv.tv_sec >= now - 2, "behind time()");
+	/* Without TZ, local time is the system's: its offset from UTC, named
+	   as the tz database names a zone of that offset alone ("+02"). */
+	char *tz = getenv("TZ");
+	unsetenv("TZ");
+	tzset();
+	struct tm local, utc;
+	localtime_r(&now, &local);
+	gmtime_r(&now, &utc);
+	long apart = (long)(mktime(&local) - timegm(&utc));
+	int named = local.tm_gmtoff == 0 ? !strcmp(tzname[0], "UTC") : tzname[0][0] == '+' || tzname[0][0] == '-';
+	CHECK("the system's time zone", named && local.tm_gmtoff == -timezone && local.tm_gmtoff % 60 == 0 && !apart,
+	      "%s, %ld s east, %ld s apart", tzname[0], local.tm_gmtoff, apart);
+	/* TZ names another. */
+	setenv("TZ", "<-03>3", 1);
+	tzset();
+	localtime_r(&now, &local);
+	CHECK("TZ's time zone", local.tm_gmtoff == -3 * 3600 && !strcmp(tzname[0], "-03"), "%s, %ld s east", tzname[0],
+	      local.tm_gmtoff);
+	if (tz)
+		setenv("TZ", tz, 1);
+	else
+		unsetenv("TZ");
+	tzset();
 }
 
 static volatile sig_atomic_t got_signal;
@@ -431,7 +631,7 @@ static void check_signals(void)
 
 /* Starts `program child MODE` with its output on a pipe; returns what it
    wrote and stores its wait status. */
-static int spawn_child(const char *mode, char *out, size_t cap, int *status)
+static int spawn_child_with(const char *mode, const char *arg, char *out, size_t cap, int *status)
 {
 	int p[2];
 	if (pipe(p))
@@ -440,7 +640,7 @@ static int spawn_child(const char *mode, char *out, size_t cap, int *status)
 	posix_spawn_file_actions_init(&fa);
 	posix_spawn_file_actions_adddup2(&fa, p[1], 1);
 	posix_spawn_file_actions_addclose(&fa, p[0]);
-	char *argv[] = { "posix", "child", (char *)mode, 0 };
+	char *argv[] = { "posix", "child", (char *)mode, (char *)arg, 0 };
 	char *envp[] = { "VEDA_TEST=from-parent", 0 };
 	pid_t pid;
 	int r = posix_spawn(&pid, program, &fa, 0, argv, envp);
@@ -458,6 +658,12 @@ static int spawn_child(const char *mode, char *out, size_t cap, int *status)
 	out[n] = 0;
 	close(p[0]);
 	return waitpid(pid, status, 0) == pid ? 0 : -1;
+}
+
+/* Runs `posix child MODE` with its standard output in OUT: 0, or -1. */
+static int spawn_child(const char *mode, char *out, size_t cap, int *status)
+{
+	return spawn_child_with(mode, 0, out, cap, status);
 }
 
 static void check_processes(void)
@@ -684,6 +890,86 @@ static long long one_event(int ep, uint32_t *events)
 		return -1;
 	*events = out[0].events;
 	return (long long)out[0].data.u64;
+}
+
+/* Milliseconds since `t0` (monotonic). */
+static long ms_since(const struct timespec *t0)
+{
+	struct timespec t1;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	return (t1.tv_sec - t0->tv_sec) * 1000 + (t1.tv_nsec - t0->tv_nsec) / 1000000;
+}
+
+/* timerfd: disarmed, one-shot, periodic and absolute timers, what
+ * timerfd_gettime and timerfd_settime's old value say, poll and epoll
+ * waking at an expiration, and a read that waits for one. */
+static void check_timerfd(void)
+{
+	uint64_t n = 0;
+	int t = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+	CHECK("timerfd_create", t >= 0 && fcntl(t, F_GETFD) == FD_CLOEXEC, "%s", strerror(errno));
+	struct itimerspec now = { 0 };
+	int disarmed = read(t, &n, 8) < 0 && errno == EAGAIN && timerfd_gettime(t, &now) == 0 &&
+		       now.it_value.tv_sec == 0 && now.it_value.tv_nsec == 0;
+	CHECK("a disarmed timer", disarmed, "%s", strerror(errno));
+	CHECK("a timer is not written to", write(t, &n, 8) < 0 && errno == EINVAL, "%s", strerror(errno));
+
+	/* Once, 30 ms from now. */
+	struct itimerspec once = { .it_value = { .tv_nsec = 30000000 } };
+	struct timespec t0;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	int armed = timerfd_settime(t, 0, &once, 0) == 0 && timerfd_gettime(t, &now) == 0 && now.it_value.tv_sec == 0 &&
+		    now.it_value.tv_nsec > 0 && now.it_value.tv_nsec <= 30000000;
+	CHECK("a one-shot timer", armed, "%ld ns left", now.it_value.tv_nsec);
+	struct pollfd pfd = { .fd = t, .events = POLLIN };
+	int polled = poll(&pfd, 1, 1000) == 1 && (pfd.revents & POLLIN);
+	long ms = ms_since(&t0);
+	CHECK("poll wakes as it expires", polled && ms >= 25 && ms < 1000, "after %ld ms", ms);
+	CHECK("its one expiration", read(t, &n, 8) == 8 && n == 1 && read(t, &n, 8) < 0 && errno == EAGAIN,
+	      "read %llu", (unsigned long long)n);
+
+	/* Every 10 ms. */
+	struct itimerspec every = { .it_value = { .tv_nsec = 10000000 }, .it_interval = { .tv_nsec = 10000000 } };
+	struct itimerspec old = { 0 };
+	CHECK("a periodic timer", timerfd_settime(t, 0, &every, &old) == 0 && old.it_value.tv_sec == 0 &&
+		  old.it_value.tv_nsec == 0, "old value %ld ns", old.it_value.tv_nsec);
+	usleep(55000);
+	CHECK("its expirations add up", read(t, &n, 8) == 8 && n >= 4 && n <= 8, "read %llu",
+	      (unsigned long long)n);
+	CHECK("timerfd_gettime of a periodic timer", timerfd_gettime(t, &now) == 0 && now.it_interval.tv_nsec == 10000000 &&
+		  now.it_value.tv_nsec > 0 && now.it_value.tv_nsec <= 10000000, "%ld ns left", now.it_value.tv_nsec);
+	struct itimerspec off = { 0 };
+	int stopped = timerfd_settime(t, 0, &off, &old) == 0 && old.it_interval.tv_nsec == 10000000 &&
+		      timerfd_gettime(t, &now) == 0 && now.it_value.tv_nsec == 0 && now.it_interval.tv_nsec == 0;
+	CHECK("disarming it", stopped, "%ld ns left", now.it_value.tv_nsec);
+
+	/* An absolute time already past: expired at once. */
+	struct itimerspec past = { .it_value = { .tv_sec = 0, .tv_nsec = 1 } };
+	CHECK("an absolute time already past",
+	      timerfd_settime(t, TFD_TIMER_ABSTIME, &past, 0) == 0 && read(t, &n, 8) == 8 && n == 1, "read %llu",
+	      (unsigned long long)n);
+
+	/* epoll, waking as it expires. */
+	int ep = epoll_create1(EPOLL_CLOEXEC);
+	struct epoll_event ev = { .events = EPOLLIN, .data.u64 = 13 };
+	uint32_t events = 0;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	int woke = ep >= 0 && epoll_ctl(ep, EPOLL_CTL_ADD, t, &ev) == 0 && timerfd_settime(t, 0, &once, 0) == 0 &&
+		   one_event(ep, &events) == 13 && (events & EPOLLIN);
+	ms = ms_since(&t0);
+	CHECK("epoll wakes as it expires", woke && ms >= 25, "after %ld ms", ms);
+	close(ep);
+	close(t);
+
+	/* A read that waits, on a realtime timer. */
+	int w = timerfd_create(CLOCK_REALTIME, 0);
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	struct itimerspec soon = { .it_value = { .tv_nsec = 20000000 } };
+	int waited = w >= 0 && timerfd_settime(w, 0, &soon, 0) == 0 && read(w, &n, 8) == 8 && n == 1;
+	ms = ms_since(&t0);
+	CHECK("a read that waits for it", waited && ms >= 15, "read %llu after %ld ms", (unsigned long long)n, ms);
+	close(w);
+	CHECK("an unknown clock", timerfd_create(CLOCK_PROCESS_CPUTIME_ID, 0) < 0 && errno == EINVAL, "made");
 }
 
 /* eventfd and epoll: an eventfd's counts and its semaphore mode, level- and
@@ -1443,8 +1729,402 @@ static void check_shared_sockets(void)
 	unlink(path);
 }
 
+/* The order of two names of NAME_MAX + 1 bytes, for qsort. */
+static int compare_names(const void *a, const void *b)
+{
+	return strcmp(a, b);
+}
+
+/* The names a listing of directory DIR shows, in order, joined by spaces,
+   into OUT; how many, or -1 if it cannot be listed. */
+static int listing(const char *dir, char *out, size_t cap)
+{
+	DIR *d = opendir(dir);
+	if (!d)
+		return -1;
+	char names[64][256];
+	int n = 0;
+	struct dirent *e;
+	while ((e = readdir(d)) && n < 64) {
+		if (strcmp(e->d_name, ".") && strcmp(e->d_name, ".."))
+			snprintf(names[n++], sizeof names[0], "%s", e->d_name);
+	}
+	closedir(d);
+	qsort(names, n, sizeof names[0], compare_names);
+	out[0] = 0;
+	for (int i = 0; i < n; i++)
+		snprintf(out + strlen(out), cap - strlen(out), "%s%s", i ? " " : "", names[i]);
+	return n;
+}
+
+/* Calls the code at CODE, a function that returns an int. */
+static int run_code(void *code)
+{
+	int (*f)(void);
+	memcpy(&f, &code, sizeof f);
+	return f();
+}
+
+/* `posix child sandboxed-child`, started by a sandboxed program: what it
+   inherits of the sandbox (its registry channel is cloned from the
+   confined one). */
+static int sandboxed_child(void)
+{
+	veda_handle_t ch;
+	int r = veda_service_connect("display", &ch);
+	CHECK("sandbox: its child reaches the service its parent kept", r == 0, "connect returned %d", r);
+	if (r == 0)
+		veda_close(ch);
+	r = veda_service_connect("net", &ch);
+	CHECK("sandbox: and no other", r < 0, "connected to the network service");
+	errno = 0;
+	CHECK("sandbox: nor the file system", access("/system", F_OK) != 0, "it reaches /system");
+	return failures;
+}
+
+/* `posix child sandbox`: gives up, as the browser's page processes do, all
+   of the file system but the system image (to read), the devices (to read;
+   /dev/null to write) and a directory of its own (`kept`, in the parent's
+   scratch directory, to write); every service but one (the window
+   system's); and processes, the kernel log and new executable memory, but
+   for a page made executable before, as a JIT's pool is. Then it tries
+   each thing it gave up, and what it kept. */
+static int sandboxed(void)
+{
+	char text[1024], dir[1024];
+	if (!getcwd(dir, sizeof dir))
+		return 99;
+	CHECK("sandbox: the user's files are there before", access("/home/user", F_OK) == 0, "no /home/user");
+	mkdir("kept", 0755);
+	int fd = open("kept/before", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	CHECK("sandbox: a file of its own", fd >= 0 && write(fd, "kept", 4) == 4, "cannot write kept/before");
+	close(fd);
+	fd = open("outside", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	close(fd);
+	unsigned char forty_two[] = VEDA_CODE_RETURNING(42), forty_three[] = VEDA_CODE_RETURNING(43);
+	unsigned char *pool = mmap(0, VEDA_PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK("sandbox: an executable page, before", pool != MAP_FAILED, "mmap failed");
+	if (pool == MAP_FAILED)
+		return failures;
+	memcpy(pool, forty_two, sizeof forty_two);
+	CHECK("sandbox: code in it runs", run_code(pool) == 42, "it returned something else");
+
+	/* The files. */
+	struct veda_place places[] = { { "/system", 0 }, { "/dev", 0 }, { "/dev/null", 1 }, { "kept", 1 } };
+	int r = veda_confine_files(places, 4);
+	CHECK("sandbox: confining its files", r == 0, "returned %d", r);
+	errno = 0;
+	CHECK("sandbox: the user's files are not there", access("/home/user", F_OK) != 0 && errno == ENOENT,
+	      "/home/user is there");
+	errno = 0;
+	CHECK("sandbox: nor anything outside its places", open("outside", O_RDONLY) < 0 && errno == ENOENT,
+	      "it opened ./outside");
+	errno = 0;
+	CHECK("sandbox: nor can it be made", mkdir("/tmp/escape", 0755) != 0 && errno == ENOENT, "made /tmp/escape");
+	CHECK("sandbox: the root lists the way to its places", listing("/", text, sizeof text) == 3 &&
+	      !strcmp(text, "dev system tmp"), "it lists '%s'", text);
+	listing(dir, text, sizeof text);
+	CHECK("sandbox: its directory lists its place alone", !strcmp(text, "kept"), "it lists '%s'", text);
+	struct stat st;
+	CHECK("sandbox: a directory on the way counts what it shows", stat(dir, &st) == 0 && st.st_size == 1,
+	      "size %ld", (long)st.st_size);
+	fd = open("/system/tests/c/posix", O_RDONLY);
+	char magic[4] = { 0 };
+	CHECK("sandbox: the system image is read", fd >= 0 && read(fd, magic, 4) == 4 && !memcmp(magic, "\177ELF", 4),
+	      "cannot read its program");
+	close(fd);
+	CHECK("sandbox: what it only reads says so", stat("/dev/zero", &st) == 0 && !(st.st_mode & 0222),
+	      "mode %o", st.st_mode);
+	errno = 0;
+	CHECK("sandbox: nor is it changed", open("/dev/zero", O_WRONLY) < 0 && errno == EACCES, "opened /dev/zero to write");
+	fd = open("/dev/null", O_WRONLY);
+	CHECK("sandbox: what it may change is changed", fd >= 0 && write(fd, "x", 1) == 1, "cannot write /dev/null");
+	close(fd);
+	fd = open("kept/before", O_RDONLY);
+	CHECK("sandbox: its own files, made before", fd >= 0 && read(fd, magic, 4) == 4 && !memcmp(magic, "kept", 4),
+	      "cannot read kept/before");
+	close(fd);
+	fd = open("kept/after", O_WRONLY | O_CREAT, 0644);
+	CHECK("sandbox: and made after", fd >= 0 && write(fd, "x", 1) == 1, "cannot write kept/after");
+	/* As a database commits: what it changed is saved as anything is. */
+	CHECK("sandbox: and synced", fsync(fd) == 0, "fsync failed: %s", strerror(errno));
+	close(fd);
+	errno = 0;
+	CHECK("sandbox: but not moved out", rename("kept/after", "moved") != 0 && errno == ENOENT, "moved it out");
+	int u = socket(AF_UNIX, SOCK_STREAM, 0);
+	struct sockaddr_un a;
+	socklen_t len = abstract_addr(&a, "sandboxed", 9);
+	errno = 0;
+	CHECK("sandbox: no abstract socket names", bind(u, (struct sockaddr *)&a, len) != 0 && errno == EACCES,
+	      "bound one");
+	close(u);
+	struct veda_place wider[] = { { "/", 0 } }, narrower[] = { { "/system", 0 }, { "/dev/null", 1 }, { "kept", 1 } };
+	CHECK("sandbox: no wider again", veda_confine_files(wider, 1) == EACCES, "it widened them");
+	CHECK("sandbox: narrower", veda_confine_files(narrower, 3) == 0, "it cannot narrow them");
+	errno = 0;
+	CHECK("sandbox: and narrower it is", access("/dev/zero", F_OK) != 0 && errno == ENOENT, "/dev/zero is there");
+
+	/* The services. */
+	const char *display[] = { "display" }, *more[] = { "display", "net" };
+	r = veda_confine_services(display, 1);
+	CHECK("sandbox: confining its services", r == 0, "returned %d", r);
+	veda_handle_t ch;
+	r = veda_service_connect("display", &ch);
+	CHECK("sandbox: the service it kept", r == 0, "connect returned %d", r);
+	if (r == 0)
+		veda_close(ch);
+	CHECK("sandbox: not the network's", veda_service_connect("net", &ch) < 0, "connected");
+	CHECK("sandbox: nor the file system's, past its places", veda_service_connect("vfs", &ch) < 0, "connected");
+	CHECK("sandbox: nor the launcher", veda_service_connect("launcher", &ch) < 0, "connected");
+	r = veda_confine_services(more, 2);
+	CHECK("sandbox: no more services again", r == 0 && veda_service_connect("net", &ch) < 0, "reaches the network");
+	int s = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in to = ipv4(htonl(INADDR_LOOPBACK), 80);
+	errno = 0;
+	CHECK("sandbox: no TCP connection", connect(s, (struct sockaddr *)&to, sizeof to) != 0 && errno == EACCES,
+	      "connected");
+	close(s);
+	s = socket(AF_INET, SOCK_DGRAM, 0);
+	errno = 0;
+	CHECK("sandbox: no UDP", connect(s, (struct sockaddr *)&to, sizeof to) != 0 && errno == EACCES, "connected");
+	close(s);
+	char out[2048];
+	int status = 0;
+	r = spawn_child("sandboxed-child", out, sizeof out, &status);
+	fputs(out, stdout);
+	CHECK("sandbox: its child is confined alike", r == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+	      "status %#x", status);
+
+	/* The kernel. */
+	CHECK("sandbox: what the kernel does not know", veda_process_restrict(1u << 20) == EINVAL, "accepted");
+	r = veda_process_restrict(VEDA_RESTRICT_LOG | VEDA_RESTRICT_PROCESSES | VEDA_RESTRICT_EXECUTE);
+	CHECK("sandbox: giving up processes, the log and new executable memory", r == 0, "returned %d", r);
+	pid_t pid;
+	char *argv[] = { "posix", "child", "echo", 0 };
+	r = posix_spawn(&pid, program, 0, 0, argv, environ);
+	CHECK("sandbox: no process", r == EACCES, "posix_spawn returned %d", r);
+	errno = 0;
+	void *more_code = mmap(0, VEDA_PAGE_SIZE, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK("sandbox: no new executable memory", more_code == MAP_FAILED && errno == EACCES, "mapped it");
+	void *data = mmap(0, VEDA_PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	errno = 0;
+	CHECK("sandbox: nor memory made executable", data != MAP_FAILED &&
+	      mprotect(data, VEDA_PAGE_SIZE, PROT_READ | PROT_EXEC) != 0 && errno == EACCES, "made it executable");
+	memcpy(pool, forty_three, sizeof forty_three);
+	CHECK("sandbox: the page made before takes new code, which runs", run_code(pool) == 43, "it does not");
+	return failures;
+}
+
+/* A sandbox (<veda/sandbox.h>), as the browser's page processes have
+   theirs, in a child that gives up what it does not need and tries it. */
+static void check_sandbox(void)
+{
+	char out[16384];
+	int status = 0;
+	int r = spawn_child("sandbox", out, sizeof out, &status);
+	fputs(out, stdout);
+	CHECK("a sandboxed child is refused what it gave up, and keeps the rest",
+	      r == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "status %#x", status);
+}
+
+/* Writes TEXT to the file PATH: whether it did. */
+static int put(const char *path, const char *text)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	int ok = fd >= 0 && write(fd, text, strlen(text)) == (ssize_t)strlen(text);
+	if (fd >= 0)
+		close(fd);
+	return ok;
+}
+
+/* `posix child borrower LOAN`: confined to the system image and the
+   devices, it takes LOAN (hexadecimal), of `lent` in the parent's scratch
+   directory, as the browser's network process takes the folder of a page
+   the user opens; it tries what the loan lends, and what it does not. */
+static int borrower(const char *hex)
+{
+	unsigned char loan[VEDA_LOAN_SIZE], wrong[VEDA_LOAN_SIZE], mine[VEDA_LOAN_SIZE];
+	char dir[1024], text[1024];
+	if (!hex || strlen(hex) != 2 * VEDA_LOAN_SIZE || !getcwd(dir, sizeof dir))
+		return 99;
+	for (int i = 0; i < VEDA_LOAN_SIZE; i++)
+		sscanf(hex + 2 * i, "%2hhx", &loan[i]);
+	struct veda_place places[] = { { "/system", 0 }, { "/dev", 0 } };
+	int r = veda_confine_files(places, 2);
+	CHECK("loan: confining its files", r == 0, "returned %d", r);
+	errno = 0;
+	CHECK("loan: what is lent is not there before", access("lent/page.html", F_OK) != 0 && errno == ENOENT,
+	      "it is there");
+	memcpy(wrong, loan, sizeof wrong);
+	wrong[VEDA_LOAN_SIZE - 1] ^= 1;
+	CHECK("loan: another secret takes nothing", veda_borrow_files("lent", wrong) == EACCES, "it took something");
+	CHECK("loan: nor does the loan, for another place",
+	      veda_borrow_files("beside", loan) == EACCES && veda_borrow_files("lent/inside", loan) == EACCES &&
+		      veda_borrow_files(dir, loan) == EACCES, "it took another place");
+	CHECK("loan: a sandboxed program lends nothing", veda_lend_files("/system", mine) == EACCES, "it lent");
+	r = veda_borrow_files("lent", loan);
+	CHECK("loan: taken", r == 0, "returned %d", r);
+	int fd = open("lent/page.html", O_RDONLY);
+	memset(text, 0, sizeof text);
+	CHECK("loan: what was lent is read", fd >= 0 && read(fd, text, sizeof text - 1) == 4 && !strcmp(text, "page"),
+	      "read '%s'", text);
+	close(fd);
+	fd = open("lent/inside/picture", O_RDONLY);
+	CHECK("loan: and what is inside it", fd >= 0, "cannot open lent/inside/picture");
+	close(fd);
+	errno = 0;
+	CHECK("loan: but not changed", open("lent/page.html", O_WRONLY) < 0 && errno == EACCES, "opened it to write");
+	errno = 0;
+	CHECK("loan: nor added to", open("lent/new", O_WRONLY | O_CREAT, 0644) < 0 && errno == EACCES, "made lent/new");
+	errno = 0;
+	CHECK("loan: what is beside it is not there", access("beside", F_OK) != 0 && errno == ENOENT, "it is there");
+	CHECK("loan: its directory lists it alone", listing(dir, text, sizeof text) == 1 && !strcmp(text, "lent"),
+	      "it lists '%s'", text);
+	CHECK("loan: taken once", veda_borrow_files("lent", loan) == EACCES, "taken again");
+	return failures;
+}
+
+/* `posix child borrower-again LOANS`: confined as `borrower` is, it takes
+   the first of LOANS (two, hexadecimal), of `lent`, and opens what is
+   there; it says so on descriptor 3 and waits on its standard input while
+   the parent takes the loan back, as the browser takes back the folder of
+   a page no longer open. Then the place is gone, but for the file it has
+   open; nor does the second loan, which the parent took back before it was
+   taken, take anything. */
+static int borrower_again(const char *hex)
+{
+	unsigned char loan[VEDA_LOAN_SIZE], early[VEDA_LOAN_SIZE];
+	char dir[1024], text[1024];
+	if (!hex || strlen(hex) != 4 * VEDA_LOAN_SIZE || !getcwd(dir, sizeof dir))
+		return 99;
+	for (int i = 0; i < VEDA_LOAN_SIZE; i++) {
+		sscanf(hex + 2 * i, "%2hhx", &loan[i]);
+		sscanf(hex + 2 * (VEDA_LOAN_SIZE + i), "%2hhx", &early[i]);
+	}
+	struct veda_place places[] = { { "/system", 0 }, { "/dev", 0 } };
+	int r = veda_confine_files(places, 2);
+	CHECK("taking back: confining its files", r == 0, "returned %d", r);
+	CHECK("taking back: a loan taken back before it is taken takes nothing",
+	      veda_borrow_files("lent", early) == EACCES, "it took it");
+	r = veda_borrow_files("lent", loan);
+	CHECK("taking back: the loan taken", r == 0, "returned %d", r);
+	int fd = open("lent/page.html", O_RDONLY);
+	CHECK("taking back: what was lent is opened", fd >= 0, "cannot open lent/page.html");
+	char c = 't';
+	if (write(3, &c, 1) != 1 || read(0, &c, 1) != 1)
+		return 98;
+	errno = 0;
+	CHECK("taking back: what was lent is not there", access("lent/page.html", F_OK) != 0 && errno == ENOENT,
+	      "it is there");
+	errno = 0;
+	CHECK("taking back: nor what is inside it", open("lent/inside/picture", O_RDONLY) < 0 && errno == ENOENT,
+	      "opened it");
+	errno = 0;
+	CHECK("taking back: nor the way to it", access(dir, F_OK) != 0 && errno == ENOENT, "it is there");
+	memset(text, 0, sizeof text);
+	CHECK("taking back: what it has open stays open",
+	      fd >= 0 && read(fd, text, sizeof text - 1) == 4 && !strcmp(text, "page"), "read '%s'", text);
+	close(fd);
+	CHECK("taking back: nor is the loan taken again", veda_borrow_files("lent", loan) == EACCES, "taken again");
+	CHECK("taking back: the system image stays", access("/system", F_OK) == 0, "it is gone");
+	return failures;
+}
+
+/* Loans (<veda/sandbox.h>): a place lent to a sandboxed child, and nothing
+   more, as the browser lends its network process the folder of a page the
+   user opens. */
+static void check_loans(void)
+{
+	mkdir("lent", 0755);
+	mkdir("lent/inside", 0755);
+	CHECK("loan: files to lend", put("lent/page.html", "page") && put("lent/inside/picture", "picture") &&
+	      put("beside", "beside"), "cannot write them");
+	unsigned char loan[VEDA_LOAN_SIZE], other[VEDA_LOAN_SIZE];
+	CHECK("loan: of nothing", veda_lend_files("not-there", other) == ENOENT, "it lent it");
+	CHECK("loan: never of the home folder, nor what holds it",
+	      veda_lend_files("/home/user", other) == EACCES && veda_lend_files("/home", other) == EACCES &&
+		      veda_lend_files("/", other) == EACCES, "it lent one");
+	int r = veda_lend_files("lent", loan);
+	CHECK("loan: made", r == 0, "returned %d", r);
+	r = veda_lend_files("lent", other);
+	CHECK("loan: each a secret of its own", r == 0 && memcmp(loan, other, sizeof loan), "the same twice");
+	char hex[2 * VEDA_LOAN_SIZE + 1], out[8192];
+	for (int i = 0; i < VEDA_LOAN_SIZE; i++)
+		snprintf(hex + 2 * i, 3, "%02x", loan[i]);
+	int status = 0;
+	r = spawn_child_with("borrower", hex, out, sizeof out, &status);
+	fputs(out, stdout);
+	CHECK("a sandboxed child reads the place it was lent, and nothing more",
+	      r == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "status %#x", status);
+}
+
+/* Taking a loan back (<veda/sandbox.h>): from a sandboxed child that took
+   it and has a file open there (it says so on descriptor 3, and waits on
+   its standard input), as the browser takes back the folder of a page no
+   longer open; and one not taken yet. */
+static void check_taking_back(void)
+{
+	unsigned char loan[VEDA_LOAN_SIZE], early[VEDA_LOAN_SIZE], never[VEDA_LOAN_SIZE];
+	memset(never, 0x5a, sizeof never);
+	int r = veda_lend_files("lent", loan);
+	CHECK("taking back: a loan made", r == 0, "returned %d", r);
+	r = veda_lend_files("lent", early);
+	CHECK("taking back: one not taken yet", r == 0 && veda_take_back_files(early) == 0, "returned %d", r);
+	CHECK("taking back: nothing, of a loan never made", veda_take_back_files(never) == 0, "it failed");
+	char hex[4 * VEDA_LOAN_SIZE + 1], out[8192];
+	for (int i = 0; i < VEDA_LOAN_SIZE; i++)
+		snprintf(hex + 2 * i, 3, "%02x", loan[i]);
+	for (int i = 0; i < VEDA_LOAN_SIZE; i++)
+		snprintf(hex + 2 * (VEDA_LOAN_SIZE + i), 3, "%02x", early[i]);
+	int said[2], go[2], text[2];
+	if (pipe(said) || pipe(go) || pipe(text)) {
+		CHECK("taking back: pipes to the child", 0, "%s", strerror(errno));
+		return;
+	}
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+	posix_spawn_file_actions_addclose(&fa, said[0]);
+	posix_spawn_file_actions_addclose(&fa, go[1]);
+	posix_spawn_file_actions_addclose(&fa, text[0]);
+	posix_spawn_file_actions_adddup2(&fa, text[1], 1);
+	posix_spawn_file_actions_adddup2(&fa, said[1], 3);
+	posix_spawn_file_actions_adddup2(&fa, go[0], 0);
+	char *argv[] = { "posix", "child", "borrower-again", hex, 0 };
+	pid_t pid = 0;
+	int spawned = posix_spawn(&pid, program, &fa, 0, argv, environ);
+	posix_spawn_file_actions_destroy(&fa);
+	close(said[1]);
+	close(go[0]);
+	close(text[1]);
+	char c = 0;
+	int took = !spawned && read(said[0], &c, 1) == 1 && c == 't';
+	CHECK("taking back: the child took the loan", took, "posix_spawn returned %d", spawned);
+	r = veda_take_back_files(loan);
+	CHECK("taking back: taken back", r == 0, "returned %d", r);
+	CHECK("taking back: again, nothing", veda_take_back_files(loan) == 0, "it failed");
+	if (took && write(go[1], "g", 1) != 1)
+		CHECK("taking back: the child goes on", 0, "%s", strerror(errno));
+	close(go[1]);
+	close(said[0]);
+	if (!spawned) {
+		read_all(text[0], out, sizeof out);
+		fputs(out, stdout);
+	}
+	close(text[0]);
+	CHECK("a sandboxed child reaches a place taken back no more", !spawned && exited_well(pid),
+	      "it did not exit well");
+}
+
 static int child(const char *mode, const char *arg)
 {
+	if (!strcmp(mode, "sandbox"))
+		return sandboxed();
+	if (!strcmp(mode, "borrower"))
+		return borrower(arg);
+	if (!strcmp(mode, "borrower-again"))
+		return borrower_again(arg);
+	if (!strcmp(mode, "sandboxed-child"))
+		return sandboxed_child();
 	if (!strcmp(mode, "accept")) {
 		/* Descriptor 3 listens: one connection, greeted. */
 		return greet(accept4(3, 0, 0, SOCK_CLOEXEC)) ? 0 : 1;
@@ -1567,30 +2247,38 @@ static int child(const char *mode, const char *arg)
 
 int main(int argc, char **argv)
 {
-	if (argc >= 3 && !strcmp(argv[1], "child"))
-		return child(argv[2], argc >= 4 ? argv[3] : 0);
-	/* Where this program is, for the checks that start it again. */
+	/* Where this program is, for the checks that start it again (a
+	   sandboxed child's too). */
 	const char *self = (const char *)getauxval(AT_EXECFN);
 	snprintf(program, sizeof program, "%s", self && *self == '/' ? self : "/system/tests/c/posix");
+	if (argc >= 3 && !strcmp(argv[1], "child"))
+		return child(argv[2], argc >= 4 ? argv[3] : 0);
 	setvbuf(stdout, 0, _IOLBF, 0);
 	printf("posix: %s, tty %d\n", program, isatty(1));
 	check_startup();
 	check_stdio_and_strings();
 	check_heap();
 	check_mmap();
+	check_system_files();
+	check_memfd();
 	check_files();
 	check_directories();
 	check_pipes();
 	check_threads();
+	check_thread_suspension();
 	check_time();
 	check_signals();
 	check_processes();
 	check_veda_interfaces();
 	check_epoll();
+	check_timerfd();
 	check_unix_sockets();
 	check_unix_abstract();
 	check_shared_sockets();
 	check_shared_connections();
+	check_sandbox();
+	check_loans();
+	check_taking_back();
 	if (argc >= 5 && !strcmp(argv[1], "host"))
 		check_network(argv[2], atoi(argv[3]), atoi(argv[4]));
 	else

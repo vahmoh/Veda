@@ -1,0 +1,51 @@
+--- a/src/dispatch_common.c
++++ b/src/dispatch_common.c
+@@ -173,6 +173,18 @@
+ 
+ #include "dispatch_common.h"
+ 
++#if defined(__veda__)
++/* Veda links programs statically and has no dlopen(): the EGL and OpenGL
++ * ES of a program are linked into it, and found by their names through
++ * its eglGetProcAddress(), which answers for every entry point, core ones
++ * too. A program that has none has no library: epoxy says so as it would
++ * of a library it cannot open.
++ */
++/* (By its symbol: epoxy's headers make eglGetProcAddress a macro.) */
++extern void *veda_egl_get_proc_address(const char *name)
++    __asm__("eglGetProcAddress") __attribute__((weak));
++#endif
++
+ #if defined(__APPLE__)
+ #define GLX_LIB "/opt/X11/lib/libGL.1.dylib"
+ #define OPENGL_LIB "/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL"
+@@ -300,7 +312,15 @@
+         abort();
+     }
+ 
+-#ifdef _WIN32
++#if defined(__veda__)
++    (void)load;
++    if (veda_egl_get_proc_address)
++        *handle = &api;
++    else if (exit_on_fail) {
++        fprintf(stderr, "Couldn't open %s: the program has no EGL\n", lib_name);
++        abort();
++    }
++#elif defined(_WIN32)
+     *handle = LoadLibraryA(lib_name);
+ #else
+     pthread_mutex_lock(&api.mutex);
+@@ -331,7 +351,11 @@
+     void *result;
+     const char *error = "";
+ 
+-#ifdef _WIN32
++#if defined(__veda__)
++    result = *handle ? veda_egl_get_proc_address(name) : NULL;
++    if (!result)
++        error = "not in the program";
++#elif defined(_WIN32)
+     result = GetProcAddress(*handle, name);
+ #else
+     result = dlsym(*handle, name);

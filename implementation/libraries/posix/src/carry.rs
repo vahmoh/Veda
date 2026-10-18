@@ -15,6 +15,10 @@
 //! flags travel as they are when it is sent: changing them afterwards
 //! (`O_NONBLOCK`) changes them on one side only.
 //!
+//! A memory file's memory goes as a handle with the access the descriptor
+//! has (no `WRITE` right for one that may not write), its size and seals
+//! with it ([`crate::memfd`]).
+//!
 //! What has no handle to share — an eventfd, an epoll instance — cannot be
 //! sent (`EOPNOTSUPP`) or given to a child, nor can a socket still
 //! connecting.
@@ -34,6 +38,7 @@ use crate::file::{Directory, VfsFile};
 use crate::inet::Inet;
 use crate::linux::errno::EOPNOTSUPP;
 use crate::log::Log;
+use crate::memfd::{Memfd, Shared};
 use crate::stream::Stream;
 use crate::unix::Unix;
 
@@ -47,6 +52,15 @@ mod kind {
     pub const LOG: u32 = 6;
     pub const PIDFD: u32 = 7;
     pub const INET: u32 = 8;
+    pub const MEMFD: u32 = 9;
+}
+
+message! {
+    /// What a memory file's handle does not say.
+    struct MemfdState {
+        size: u64,
+        seals: u32,
+    }
 }
 
 message! {
@@ -196,7 +210,12 @@ fn carry(desc: &Description) -> Result<Carried, isize> {
         Object::Null => carried(kind::NULL, Vec::new(), Vec::new()),
         Object::Log(_) => carried(kind::LOG, Vec::new(), Vec::new()),
         Object::Pidfd(p) => carried(kind::PIDFD, Vec::new(), vec![p.0.duplicate(None).map_err(error::kernel)?]),
-        Object::EventFd(_) | Object::Epoll(_) => return Err(EOPNOTSUPP),
+        Object::Memfd(m) => {
+            let (vmo, shared) = m.travelling(desc.writable())?;
+            let state = encoded(MemfdState { size: shared.size, seals: shared.seals });
+            carried(kind::MEMFD, state, vec![vmo.into_handle()])
+        }
+        Object::EventFd(_) | Object::TimerFd(_) | Object::Epoll(_) => return Err(EOPNOTSUPP),
     })
 }
 
@@ -216,6 +235,11 @@ fn adopt(c: Carried) -> Option<Arc<Description>> {
         kind::NULL => Object::Null,
         kind::LOG => Object::Log(Log::new()),
         kind::PIDFD => Object::Pidfd(Process::from_handle(next(ObjectType::Process)?)),
+        kind::MEMFD => {
+            let state: MemfdState = decoded(&c.state.0)?;
+            let shared = Shared { size: state.size, seals: state.seals };
+            Object::Memfd(Memfd::arrived(Vmo::from_handle(next(ObjectType::Vmo)?), shared)?)
+        }
         _ => return None,
     };
     Some(Description::new(object, c.flags))

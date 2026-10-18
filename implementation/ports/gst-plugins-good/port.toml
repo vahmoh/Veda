@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# GStreamer's good plugins, the few the web needs: MP4 and Matroska (WebM)
+# demuxers, the audio parsers, WAV, ID3 tags, the automatic audio sink.
+name = "gst-plugins-good"
+version = "1.28.8"
+url = "https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.28.8.tar.xz"
+sha256 = "a7670ed900d3d03be744d25c1873b239896e9a82ce6d17f8febc6fffbaee9521"
+license = "LGPL-2.1-or-later"

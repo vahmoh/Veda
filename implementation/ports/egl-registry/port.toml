@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The Khronos Group's EGL headers (EGL/ and KHR/ of the EGL Registry, at the
+# commit pinned; the registry makes no releases): what libepoxy and WebKit
+# name EGL's types and entry points by. Veda's native types are their
+# generic Unix's.
+name = "egl-registry"
+version = "db3425b8246136faccb5e2782b5694960bd6edf1"
+url = "https://github.com/KhronosGroup/EGL-Registry/archive/db3425b8246136faccb5e2782b5694960bd6edf1.tar.gz"
+sha256 = "3d6b42b23da8030f5b29ade07d7384c5f885e713f17f04650f6cd4b8329b88e8"
+# GitHub's archive of the commit, kept under a name of its own.
+archive = "egl-registry-db3425b8.tar.gz"
+license = "Apache-2.0 AND MIT"

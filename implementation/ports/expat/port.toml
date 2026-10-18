@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Expat: the XML parser of Skia's OpenType SVG fonts (colour glyphs drawn as
+# SVG, as some emoji fonts have), in WebKit.
+name = "expat"
+version = "2.9.0"
+url = "https://github.com/libexpat/libexpat/releases/download/R_2_9_0/expat-2.9.0.tar.xz"
+sha256 = "1e6371862cc31999b368c3b89b49994f0677e1bab5f1b2b85ae3741f5d803051"
+license = "MIT"

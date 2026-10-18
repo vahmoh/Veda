@@ -6,8 +6,9 @@
 Veda builds on mature Rust libraries wherever one does what it needs in its
 environment, and keeps its own code for what is particular to Veda, the glue,
 and what no library does there. This document lists what a library must
-fit, the libraries in use, and what Veda keeps of its own and why; the
-workspace's `Cargo.toml` gives each dependency's reason beside it.
+fit, the libraries in use, the C and C++ libraries it takes where no Rust
+one will do, and what Veda keeps of its own and why; the workspace's
+`Cargo.toml` gives each dependency's reason beside it.
 
 ## What a library must fit
 
@@ -52,8 +53,43 @@ In Veda's terms:
 | Build machine only | `png`, `rav1e`, `md-5`, `tungstenite` | Test output, and a second decoder for the PNGs Veda writes; sample videos; the stand-in for Deepgram's Voice Agent API |
 
 C and C++ come as ports too: GCC, binutils and musl (the toolchain),
-FFmpeg and dav1d (video decoding), Mesa (the driver VM's renderer) and
-Linux (the driver VM's kernel).
+FFmpeg and dav1d (video decoding), Mesa (the driver VM's renderer), Linux
+(the driver VM's kernel), and WPE WebKit with the libraries it stands on
+(the browser's engine).
+
+## C and C++ libraries
+
+Veda takes a C or C++ library where no Rust library does the work, and
+builds it from its release as a port, with a patch as small as it can be
+([the ports' README](../implementation/ports/README.md)). The browser is
+the largest case:
+
+* **WPE WebKit** is its engine: a complete web engine, current with the
+  standards, made to be embedded and to bring its own platform
+  (`ENABLE_WPE_PLATFORM`) rather than expect a display server. Servo, in
+  Rust, does not render the web as a browser must yet; Chromium's and
+  Gecko's builds and process models stand on Linux's, Windows' or macOS's
+  interfaces throughout.
+* **What WebKit names** (GLib, libsoup, ICU, HarfBuzz, FreeType,
+  fontconfig, libxml2, SQLite and the rest; Skia comes inside WebKit) comes
+  with it: each is what WPE WebKit is built and tested with upstream.
+* **GStreamer for media, with FFmpeg's decoders.** WebKit's media on
+  Linux is GStreamer's, which it is built and tested with; its codecs are
+  FFmpeg's (gst-libav), the same ports of FFmpeg and dav1d that Videos'
+  decoder uses, rather than a library a codec (libvpx, libopus's decoder,
+  a GStreamer plugin in Rust for dav1d), and only the plugins the engine
+  uses, none under the GPL.
+* **OpenSSL, not rustls, for its TLS.** libsoup's TLS is GIO's, whose
+  backends are glib-networking's, on GnuTLS or OpenSSL; rustls has no GIO
+  backend, and writing one would put a new layer of Veda's, unaudited,
+  between the engine and its TLS. OpenSSL is Apache-2.0 and its long-term
+  support release is maintained for five years; GnuTLS would bring Nettle
+  and GMP. Veda's own programs keep `tls`, on rustls.
+* **Veda's own `egl`**, rather than Mesa's EGL and OpenGL ES: those drive
+  GPUs through Linux's DRM and load their drivers as shared libraries,
+  where Veda's OpenGL ES is `gl`, in Rust, rendering through virgl or in
+  software. `egl` is the C interface WebKit expects over it, checking and
+  converting the C calls' arguments for `gl`.
 
 ## Veda's own, and why
 
@@ -92,6 +128,7 @@ Linux (the driver VM's kernel).
 | `glsl` | naga 30 (`glsl-in`): its GLSL front end needs `std` and reads only GLSL 4.40 and later, not OpenGL ES's; glsl, glsl-lang: no TGSI or CPU back end either |
 | Half-precision floats (`glsl::ops`) | half 2.7: quiets signalling NaNs that Veda's TGSI lowering keeps, so the GPU and the interpreter would disagree; core's `f16` takes over once stable |
 | `gl`'s renderer, ETC2/EAC, sRGB and packed floats, virgl encoder | rayon: needs `std`; texture2ddecoder: truncates EAC to 8 bits, which OpenGL ES keeps at 11; fast-srgb8: approximate |
+| `egl`, EGL and OpenGL ES's C functions | Mesa's libEGL and libGLESv2: they drive GPUs through Linux's DRM and load drivers as shared libraries; Veda's OpenGL ES is `gl` ([above](#c-and-c-libraries)) |
 | `image`'s PNG and BMP writers | png 0.18, image: need `std`; the writers are only headers, chunks and PNG's row filters around `miniz_oxide`'s deflate |
 
 ### Applications

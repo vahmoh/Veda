@@ -462,6 +462,19 @@ impl Vmo {
         call(nr::VMO_GET_SIZE, [self.raw() as usize, 0, 0, 0, 0, 0])
     }
 
+    /// A VMO for `size` bytes (rounded up to pages) of this physical VMO's
+    /// memory from `offset` (page-aligned): the same memory, with this
+    /// handle's rights (`vmo_create_slice`).
+    pub fn slice(&self, offset: usize, size: usize) -> Result<Vmo, Error> {
+        call(nr::VMO_CREATE_SLICE, [self.raw() as usize, offset, size, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
+    }
+
+    /// Grows the VMO to `size` bytes, rounded up to pages, which read as
+    /// zeros (`vmo_set_size`: VMOs never shrink).
+    pub fn set_size(&self, size: usize) -> Result<(), Error> {
+        call(nr::VMO_SET_SIZE, [self.raw() as usize, size, 0, 0, 0, 0]).map(|_| ())
+    }
+
     pub fn read(&self, offset: usize, buf: &mut [u8]) -> Result<(), Error> {
         call(nr::VMO_READ, [self.raw() as usize, offset, buf.as_mut_ptr() as usize, buf.len(), 0, 0]).map(|_| ())
     }

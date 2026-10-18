@@ -51,18 +51,33 @@ pub fn gpu_context(config: Config) -> Option<Context> {
     backend_context(GpuTransport::connect()?, config)
 }
 
+/// The GPU's renderer, if contexts can render on one now: the `gpu`
+/// service is registered (this does not wait for it, even as the system
+/// starts) and has what contexts need. For a program that would rather draw
+/// on the CPU in its own way than with OpenGL ES in software.
+pub fn gpu_renderer() -> Option<String> {
+    let registered = proto::with_registry(|r| r.list()).ok()?.ok()?.iter().any(|s| s == gpu::NAME);
+    if !registered {
+        return None;
+    }
+    let t = GpuTransport::connect_to(gpu::NAME, CALL_NS)?;
+    let renderer = String::from(t.renderer());
+    VirglBackend::new(Box::new(t)).ok().map(|_| renderer)
+}
+
 fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
     let renderer = String::from(t.renderer());
     match VirglBackend::new(Box::new(t)) {
         Ok(b) => {
             let mut c = Context::new(Box::new(b), config);
             // A framebuffer without the buffers asked for draws, but wrongly
-            // (with no depth buffer every depth test passes): say so.
+            // (with no depth buffer every depth test passes): say so. (A
+            // surfaceless context has none to make.)
             for (bits, pname, what) in [
                 (config.depth_bits, crate::gl::DEPTH_BITS, "depth"),
                 (config.stencil_bits, crate::gl::STENCIL_BITS, "stencil"),
             ] {
-                if bits > 0 && c.get_integer(pname) == 0 {
+                if bits > 0 && !config.surfaceless && c.get_integer(pname) == 0 {
                     rt::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
                 }
             }

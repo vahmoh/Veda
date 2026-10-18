@@ -174,4 +174,10 @@ impl registry::Server for Narrowed<'_> {
     fn clone_registry(&mut self) -> Result<Channel, RegistryError> {
         self.0.connect().map_err(|_| RegistryError::Denied)
     }
+
+    /// The guest's channels are narrowed alike, all of them, and no one of
+    /// them further: one that asks is refused, and so knows it is not.
+    fn confine(&mut self, _names: Vec<String>) -> Result<(), RegistryError> {
+        Err(RegistryError::Denied)
+    }
 }

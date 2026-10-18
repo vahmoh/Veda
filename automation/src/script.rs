@@ -87,11 +87,13 @@
 //! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
 //! gpu on                           # QEMU's 3D GPU (`gpu off`: the VGA alone); skipped where QEMU has none
 //! nettest local                    # nettest checks the network against a server of the host's (no Internet)
+//! web-server                       # the host's web server runs: {web} in the command line, typed text and the agent's calls is its address
 //! agent-asleep                     # boot with the agent asleep (no conversation at start)
 //! requires c-toolchain             # only with the C tests (`cargo automation toolchain`); skipped otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
 //! requires rust-toolchain          # only with the Rust test programs (the same)
+//! requires web                     # only with the browser (`cargo automation web`); skipped otherwise
 //! ```
 
 use std::time::Duration;
@@ -105,7 +107,7 @@ use crate::qmp;
 use crate::util::Result;
 
 /// A script, parsed and checked.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     /// How the machine starts.
     pub boot: Boot,
@@ -113,8 +115,27 @@ pub struct Script {
     pub steps: Vec<(usize, Step)>,
 }
 
+impl Script {
+    /// `{web}` in the kernel command line, the text typed, and the agent's
+    /// calls and the results expected of them is the host's web server's
+    /// `address`.
+    pub fn put_web(&mut self, address: &str) {
+        for arg in &mut self.boot.cmdline {
+            *arg = arg.replace("{web}", address);
+        }
+        for (_, step) in &mut self.steps {
+            match step {
+                Step::Type(text) | Step::AgentResult(text) | Step::AgentCall { arguments: text, .. } => {
+                    *text = text.replace("{web}", address);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// How a script's machine starts.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Boot {
     /// `boot-cmdline`: the kernel command line's arguments, in order.
     pub cmdline: Vec<String>,
@@ -137,6 +158,8 @@ pub struct Boot {
     /// `nettest local`: nettest checks the network against the host's
     /// server.
     pub nettest_local: bool,
+    /// `web-server`: the host's web server runs, which `{web}` names.
+    pub web_server: bool,
     pub agent_asleep: bool,
     pub requires: Vec<Requirement>,
 }
@@ -172,6 +195,8 @@ pub enum Requirement {
     Media,
     /// The Rust test programs.
     RustToolchain,
+    /// The browser, with its web engine.
+    Web,
 }
 
 impl Requirement {
@@ -182,6 +207,7 @@ impl Requirement {
             Requirement::NativeToolchain => "native toolchain",
             Requirement::Media => "media libraries",
             Requirement::RustToolchain => "rust toolchain",
+            Requirement::Web => "web engine",
         }
     }
 }
@@ -200,7 +226,7 @@ pub type Region = [f64; 4];
 pub const SCREEN: Region = [0.0, 0.0, 1.0, 1.0];
 
 /// What a script does, line by line.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     Wait(Duration),
     WaitSerial {
@@ -794,13 +820,19 @@ impl Line {
             }
             "requires" => {
                 let what =
-                    self.one_of("requirement", &["c-toolchain", "native-toolchain", "media", "rust-toolchain"])?;
+                    self.one_of("requirement", &["c-toolchain", "native-toolchain", "media", "rust-toolchain", "web"])?;
                 boot.requires.push(match what.as_str() {
                     "c-toolchain" => Requirement::CToolchain,
                     "native-toolchain" => Requirement::NativeToolchain,
                     "media" => Requirement::Media,
+                    "web" => Requirement::Web,
                     _ => Requirement::RustToolchain,
                 });
+                return Ok(None);
+            }
+            "web-server" => {
+                once("web-server")?;
+                boot.web_server = true;
                 return Ok(None);
             }
             other => return Err(format!("unknown command '{other}'")),

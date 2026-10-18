@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# GStreamer's base plugins and libraries: playback (playbin, decodebin),
+# finding a stream's type, converting and resampling sound and pictures,
+# Ogg; the audio, video, tag and FFT libraries WebKit uses.
+name = "gst-plugins-base"
+version = "1.28.8"
+url = "https://gstreamer.freedesktop.org/src/gst-plugins-base/gst-plugins-base-1.28.8.tar.xz"
+sha256 = "ade70e3381fcbb024f1f20aa9ede9b5654aeed39d5bd70b1a98f53015e501117"
+license = "LGPL-2.1-or-later"

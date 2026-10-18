@@ -157,7 +157,12 @@ impl Epoll {
     /// `target`.
     fn ctl(&self, op: u32, fd: i32, target: &Arc<Description>, event: EpollEvent) -> SysResult {
         match &target.object {
-            Object::Stream(_) | Object::Inet(_) | Object::Unix(_) | Object::EventFd(_) | Object::Pidfd(_) => {}
+            Object::Stream(_)
+            | Object::Inet(_)
+            | Object::Unix(_)
+            | Object::EventFd(_)
+            | Object::TimerFd(_)
+            | Object::Pidfd(_) => {}
             _ => return Err(EPERM),
         }
         let (events, data) = (event.events, event.data);

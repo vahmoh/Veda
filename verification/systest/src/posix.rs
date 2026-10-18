@@ -238,6 +238,38 @@ fn start_copy(what: &str) -> Result<Process, String> {
     spawn.start(unsafe { image.as_slice() }).map_err(|e| format!("{path}: {e}"))
 }
 
+/// A program started from the system image's pages runs from them, which
+/// are none of its memory, where a copy of it holds its code.
+pub fn test_shared_program_pages() -> TestResult {
+    let fs = vfs_client()?;
+    let path = "/system/bin/systest";
+    let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
+    let size = size as usize;
+    let start = |shared: bool| -> Result<Process, String> {
+        let registry = proto::with_registry(|r| r.clone_registry())
+            .map_err(|e| format!("{e:?}"))?
+            .map_err(s)?
+            .map_err(|e| format!("{e:?}"))?;
+        let spawn = Spawn::new("systest").path(path).arg("wait").handle(role::REGISTRY, registry.into_handle());
+        let started = if shared {
+            spawn.start_file(&vmo, size)
+        } else {
+            let image = vm::Mapping::new(Vmo(vmo.0.duplicate(None).map_err(s)?), size, map_flags::READ).map_err(s)?;
+            // SAFETY: a read-only mapping of the system image's pages.
+            spawn.start(unsafe { &image.as_slice()[..size] })
+        };
+        started.map_err(|e| format!("{path}: {e}"))
+    };
+    let (shared, copied) = (start(true)?, start(false)?);
+    // Both settle into their wait.
+    rt::time::sleep(rt::time::Duration::from_millis(200));
+    let memory = |p: &Process| p.info().map(|i| i.memory_bytes as usize).map_err(s);
+    let (a, b) = (memory(&shared), memory(&copied));
+    let _ = (shared.kill(), copied.kill());
+    let (a, b) = (a?, b?);
+    check(a + size / 4 < b, &format!("{a} bytes of memory for the program from the image's pages, {b} for a copy"))
+}
+
 /// The live process that `parent` started, if any.
 fn child_of(parent: u64) -> Option<u64> {
     let mut list = [abi::ProcessInfo::default(); 256];

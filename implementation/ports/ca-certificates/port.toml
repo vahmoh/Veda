@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The certificate authorities TLS trusts, as OpenSSL (the web engine's) reads
+# them: Mozilla's roots (certdata.txt), as curl extracts them, in PEM
+# (/system/etc/ssl/cert.pem). Veda's own TLS (libraries/tls) has the same
+# roots, from webpki-roots.
+name = "ca-certificates"
+version = "2026-09-25"
+url = "https://curl.se/ca/cacert-2026-09-25.pem"
+sha256 = "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505"
+license = "MPL-2.0"

@@ -150,22 +150,44 @@ pub fn translate(root: u64, virt: u64) -> Option<(u64, Flags)> {
     if e & PRESENT == 0 { None } else { Some(((e & ADDR_MASK) + (virt & 0xFFF), flags_of(e))) }
 }
 
-/// Changes the flags of an existing mapping of a page.
-pub fn protect(root: u64, virt: u64, flags: Flags) -> bool {
-    let mut t = table(root);
-    for level in (1..=3).rev() {
-        let e = t[index(virt, level)];
-        if e & PRESENT == 0 || e & HUGE != 0 {
-            return false;
+/// Calls `f` on each present leaf entry of `[start, end)` (page-aligned,
+/// in the user half), skipping the tables that are not there: a walk over
+/// a large range that is mostly unused (a reservation, say) costs what is
+/// mapped in it, not its size.
+fn for_each_leaf(root: u64, start: u64, end: u64, f: &mut dyn FnMut(&mut u64)) {
+    fn walk(t: u64, level: u32, base: u64, start: u64, end: u64, f: &mut dyn FnMut(&mut u64)) {
+        // The bytes one entry of this level covers.
+        let span = 1u64 << (12 + 9 * level);
+        let first = (start.max(base) - base) / span;
+        let last = (end.min(base + 512 * span) - base).div_ceil(span);
+        for i in first..last {
+            let e = &mut table(t)[i as usize];
+            if *e & PRESENT == 0 {
+                continue;
+            }
+            if level == 0 {
+                f(e);
+            } else if *e & HUGE == 0 {
+                walk(*e & ADDR_MASK, level - 1, base + i * span, start, end, f);
+            }
         }
-        t = table(e & ADDR_MASK);
     }
-    let e = &mut t[index(virt, 0)];
-    if *e & PRESENT == 0 {
-        return false;
+    if start < end {
+        walk(root, 3, 0, start, end, f);
     }
-    *e = (*e & ADDR_MASK) | bits(flags);
-    true
+}
+
+/// Removes the mappings of the pages in `[start, end)`. The caller is
+/// responsible for TLB invalidation.
+pub fn unmap_range(root: u64, start: u64, end: u64) {
+    for_each_leaf(root, start, end, &mut |e| *e = 0);
+}
+
+/// Changes the flags of the pages mapped in `[start, end)`. The caller is
+/// responsible for TLB invalidation.
+pub fn protect_range(root: u64, start: u64, end: u64, flags: Flags) {
+    let leaf = bits(flags);
+    for_each_leaf(root, start, end, &mut |e| *e = (*e & ADDR_MASK) | leaf);
 }
 
 /// The kernel's own address space (used by idle and kernel threads).

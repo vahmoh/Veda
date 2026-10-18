@@ -181,6 +181,71 @@ fn shared_pages_get_both_permissions() {
     );
 }
 
+/// What [`Elf::file_pages`] says of each run.
+fn file_pages(elf: &Elf, relro: Relro) -> Vec<Option<u64>> {
+    page_runs(elf, relro).map(|r| elf.file_pages(&r)).collect()
+}
+
+#[test]
+fn pages_nothing_writes_can_be_the_files() {
+    let bytes = typical().build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    // The headers with read-only data, the code and more read-only data;
+    // not the data, which is written.
+    assert_eq!(file_pages(&elf, Relro::Writable), vec![Some(0), Some(0x1000), Some(0x3000), None]);
+    // There, the file has what the segments put in memory.
+    for run in runs(&elf, Relro::Writable) {
+        let Some(offset) = elf.file_pages(&run) else { continue };
+        for s in elf.segments().filter(|s| run.start <= s.vaddr && s.end() <= run.start + run.len) {
+            let at = (offset + s.vaddr - run.start) as usize;
+            assert_eq!(&bytes[at..at + s.data.len()], s.data);
+        }
+    }
+}
+
+#[test]
+fn zeros_writes_and_shifts_need_memory_of_their_own() {
+    // Read-only data that ends in zeros past its bytes in the file.
+    let bytes = Exe::new(0x401000, vec![seg(RX, 0x401000, 0x10, 0x10), seg(R, 0x402000, 0x10, 0x2000)]).build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    assert_eq!(file_pages(&elf, Relro::Writable), vec![Some(0), None]);
+
+    // A page code and data share is written.
+    let mut exe = Exe::new(0x401000, vec![seg(RX, 0x401000, 0x900, 0x900), seg(RW, 0x401a00, 0x10, 0x1000)]);
+    exe.headers_in_first = false;
+    exe.extra.push(extra(pt::PHDR, 0x401000, 0));
+    let bytes = exe.build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    assert_eq!(file_pages(&elf, Relro::Writable), vec![None, None]);
+
+    // Two read-only segments in one page, a page apart from each other in
+    // the file but not in memory.
+    let bytes = Exe::new(0x400000, vec![seg(RX, 0x400000, 0x100, 0x100), seg(RX, 0x400800, 0x100, 0x100)]).build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    assert_eq!(runs(&elf, Relro::Writable).len(), 1);
+    assert_eq!(file_pages(&elf, Relro::Writable), vec![None]);
+}
+
+#[test]
+fn relocated_pages_are_never_the_files() {
+    // A static position-independent executable, relocated by the loader:
+    // its RELRO pages become read-only, but relocations wrote them. (Its
+    // relocation table makes the last segment bytes of the file's.)
+    let bytes = static_pie(&[], &[0x3000], &[]).build();
+    let elf = Elf::parse_for(&bytes, amd64::MACHINE).unwrap();
+    let writable: Vec<(u64, u64)> = elf
+        .segments()
+        .filter(|s| s.perms.write)
+        .map(|s| (s.vaddr & !0xfff, s.end().next_multiple_of(0x1000)))
+        .collect();
+    for relro in [Relro::Writable, Relro::ReadOnly] {
+        for run in runs(&elf, relro) {
+            let written = writable.iter().any(|&(first, end)| first < run.start + run.len && run.start < end);
+            assert_eq!(elf.file_pages(&run).is_none(), written, "{run:?} ({relro:?})");
+        }
+    }
+}
+
 #[test]
 fn runs_skip_the_pages_between_segments() {
     // Code, then data two pages further on.

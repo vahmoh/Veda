@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libffi: calls built at run time, which GLib's signals (GClosure) make.
+name = "libffi"
+version = "3.8.0"
+url = "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz"
+sha256 = "7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4"
+license = "MIT"

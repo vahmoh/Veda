@@ -27,12 +27,20 @@ fn read_desc(desc: &Description, buf: &mut [u8], offset: Option<u64>) -> SysResu
     match (&desc.object, offset) {
         (Object::File(f), None) => f.read(buf),
         (Object::File(f), Some(at)) => f.pread(buf, at),
+        (Object::Memfd(m), at) => m.read(buf, at),
         (
-            Object::Stream(_) | Object::Inet(_) | Object::Unix(_) | Object::EventFd(_) | Object::Null | Object::Log(_),
+            Object::Stream(_)
+            | Object::Inet(_)
+            | Object::Unix(_)
+            | Object::EventFd(_)
+            | Object::TimerFd(_)
+            | Object::Null
+            | Object::Log(_),
             Some(_),
         ) => Err(ESPIPE),
         (Object::Stream(s), None) => s.read(buf, desc.nonblocking()),
         (Object::EventFd(e), None) => e.read(buf, desc.nonblocking()),
+        (Object::TimerFd(t), None) => t.read(buf, desc.nonblocking()),
         (Object::Epoll(_) | Object::Pidfd(_), _) => Err(EINVAL),
         (Object::Inet(s), None) => {
             s.recv(&mut [buf], Recv { nonblock: desc.nonblocking(), ..Recv::default() }).map(|r| r.len)
@@ -53,8 +61,15 @@ fn write_desc(desc: &Description, data: &[u8], offset: Option<u64>) -> SysResult
     match (&desc.object, offset) {
         (Object::File(f), None) => f.write(data),
         (Object::File(f), Some(at)) => f.pwrite(data, at),
+        (Object::Memfd(m), at) => m.write(data, at, desc.flags() & o::APPEND != 0),
         (
-            Object::Stream(_) | Object::Inet(_) | Object::Unix(_) | Object::EventFd(_) | Object::Null | Object::Log(_),
+            Object::Stream(_)
+            | Object::Inet(_)
+            | Object::Unix(_)
+            | Object::EventFd(_)
+            | Object::TimerFd(_)
+            | Object::Null
+            | Object::Log(_),
             Some(_),
         ) => Err(ESPIPE),
         (Object::Stream(s), None) => s.write(data, desc.nonblocking()),
@@ -64,7 +79,8 @@ fn write_desc(desc: &Description, data: &[u8], offset: Option<u64>) -> SysResult
             desc.changed();
             Ok(n)
         }
-        (Object::Epoll(_) | Object::Pidfd(_), _) => Err(EINVAL),
+        // A timer is only read (as Linux's).
+        (Object::TimerFd(_) | Object::Epoll(_) | Object::Pidfd(_), _) => Err(EINVAL),
         (Object::Inet(s), None) => s.send(data, None, desc.nonblocking(), false),
         (Object::Unix(s), None) => s.send(data, None, &[], desc.nonblocking(), false),
         (Object::Dir(_), _) => Err(EISDIR),
@@ -112,10 +128,13 @@ fn sync_all() -> SysResult {
 pub fn fsync(fd: i32) -> SysResult {
     match fd::get(fd)?.object {
         Object::File(_) | Object::Dir(_) => sync_all(),
+        // Memory has nothing to bring to storage.
+        Object::Memfd(_) => Ok(0),
         Object::Stream(_)
         | Object::Inet(_)
         | Object::Unix(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
         | Object::Epoll(_)
         | Object::Pidfd(_)
         | Object::Null
@@ -147,11 +166,12 @@ pub fn sync_file_range(fd: i32, offset: i64, len: i64, flags: u32) -> SysResult 
     }
     match fd::get(fd)?.object {
         Object::File(_) if flags & WRITE != 0 => sync_all(),
-        Object::File(_) | Object::Dir(_) => Ok(0),
+        Object::File(_) | Object::Dir(_) | Object::Memfd(_) => Ok(0),
         Object::Stream(_)
         | Object::Inet(_)
         | Object::Unix(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
         | Object::Epoll(_)
         | Object::Pidfd(_)
         | Object::Null
@@ -364,11 +384,13 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) -> SysResult {
     let desc = fd::get(fd)?;
     match &desc.object {
         Object::File(f) => f.seek(offset, whence).map(|o| o as usize),
+        Object::Memfd(m) => m.seek(offset, whence).map(|o| o as usize),
         Object::Dir(d) => d.seek(offset, whence).map(|o| o as usize),
         Object::Stream(_)
         | Object::Inet(_)
         | Object::Unix(_)
         | Object::EventFd(_)
+        | Object::TimerFd(_)
         | Object::Epoll(_)
         | Object::Pidfd(_) => Err(ESPIPE),
         Object::Null | Object::Log(_) => Ok(0),
@@ -509,6 +531,16 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
             }
         }
         fcntl::GETOWN | fcntl::SETOWN => Ok(0),
+        // Only memory files have seals ([`crate::memfd`]).
+        fcntl::ADD_SEALS => {
+            let desc = fd::get(fd)?;
+            let Object::Memfd(m) = &desc.object else { return Err(EINVAL) };
+            m.add_seals(arg as u32, desc.writable()).map(|()| 0)
+        }
+        fcntl::GET_SEALS => match &fd::get(fd)?.object {
+            Object::Memfd(m) => Ok(m.seals() as usize),
+            _ => Err(EINVAL),
+        },
         _ => Err(EINVAL),
     }
 }
@@ -559,6 +591,10 @@ pub unsafe fn ioctl(fd: i32, request: u32, arg: usize) -> SysResult {
                     let at = f.seek(0, linux::seek::CUR)?;
                     size.saturating_sub(at) as usize
                 }
+                Object::Memfd(m) => {
+                    let at = m.seek(0, linux::seek::CUR)?;
+                    m.size().saturating_sub(at) as usize
+                }
                 _ => 0,
             };
             // SAFETY: the program passed an `int`.
@@ -577,6 +613,7 @@ pub fn ftruncate(fd: i32, len: i64) -> SysResult {
     let len = u64::try_from(len).map_err(|_| EINVAL)?;
     match &desc.object {
         Object::File(f) if desc.writable() => f.truncate(len).map(|_| 0),
+        Object::Memfd(m) if desc.writable() => m.truncate(len).map(|_| 0),
         Object::Dir(_) => Err(EISDIR),
         _ => Err(EINVAL),
     }
@@ -602,6 +639,7 @@ impl Waitable {
             Waitable::Desc(d) => match &d.object {
                 Object::Stream(s) => Some(s.socket.raw()),
                 Object::EventFd(e) => Some(e.event.raw()),
+                Object::TimerFd(t) => Some(t.event().raw()),
                 Object::Pidfd(p) => Some(p.raw()),
                 _ => None,
             },
@@ -716,6 +754,13 @@ pub(crate) fn readiness(desc: &Arc<Description>, want_in: bool, want_out: bool) 
             let wait = (signals != 0).then(|| (Waitable::Desc(desc.clone()), signals));
             Ready { events, wait, seq }
         }
+        // A timer: readable once it has expired.
+        Object::TimerFd(t) => {
+            let readable = t.readable();
+            let events = if readable { IN | RDNORM } else { 0 };
+            let wait = (want_in && !readable).then(|| (Waitable::Desc(desc.clone()), crate::timerfd::READABLE));
+            Ready { events, wait, seq }
+        }
         // A child's descriptor: readable once it has ended.
         Object::Pidfd(p) => {
             let ended = p.wait(TERMINATED, 0).is_ok();
@@ -726,7 +771,7 @@ pub(crate) fn readiness(desc: &Arc<Description>, want_in: bool, want_out: bool) 
         // Another epoll instance is never ready here: they do not nest.
         Object::Epoll(_) => Ready { events: 0, wait: None, seq },
         // Files and the rest never make a reader or writer wait.
-        Object::File(_) | Object::Dir(_) | Object::Null | Object::Log(_) => {
+        Object::File(_) | Object::Memfd(_) | Object::Dir(_) | Object::Null | Object::Log(_) => {
             Ready { events: IN | RDNORM | OUT | WRNORM, wait: None, seq }
         }
     }
@@ -867,14 +912,14 @@ pub unsafe fn select(n: i32, readfds: usize, writefds: usize, exceptfds: usize, 
 
 /// Installs the descriptors a process was started with: role `FD + n`
 /// handles are kernel sockets (pipes, the terminal), `file` connections, or
-/// what carries the sockets `inherited` says; `inherited` also says the
-/// descriptors that are no kernel object.
+/// what carries the sockets and memory files `inherited` says; `inherited`
+/// also says the descriptors that are no kernel object.
 pub fn adopt_startup_fds(inherited: &Inherited) {
-    for (n, socket) in &inherited.sockets {
+    for (n, carried) in &inherited.carried {
         let Some(n) = u32::try_from(*n).ok().filter(|&n| n < startup::role::MAX_FDS) else { continue };
         let roles = [startup::role::FD + n, startup::role::FD_EXTRA + n];
         let handles = roles.into_iter().map_while(rt::env::take_handle).collect();
-        if let Some(desc) = crate::carry::from_parent(socket, handles) {
+        if let Some(desc) = crate::carry::from_parent(carried, handles) {
             let _ = fd::replace(n as i32, desc, false);
         }
     }

@@ -22,6 +22,7 @@ mod framebuffers;
 mod objects;
 mod programs;
 mod queries;
+mod sharing;
 mod state;
 mod textures;
 mod vertex;
@@ -50,11 +51,23 @@ pub struct Config {
     pub stencil_bits: u8,
     /// Samples per pixel (0 or 4).
     pub samples: u32,
+    /// No default framebuffer, as EGL's surfaceless contexts have none:
+    /// the context draws into framebuffer objects, and framebuffer 0 is
+    /// incomplete (`FRAMEBUFFER_UNDEFINED`).
+    pub surfaceless: bool,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { width: 640, height: 480, color: gl::RGBA8, depth_bits: 24, stencil_bits: 8, samples: 0 }
+        Config {
+            width: 640,
+            height: 480,
+            color: gl::RGBA8,
+            depth_bits: 24,
+            stencil_bits: 8,
+            samples: 0,
+            surfaceless: false,
+        }
     }
 }
 
@@ -249,26 +262,49 @@ pub struct IndexedBinding {
     pub size: usize,
 }
 
-/// An OpenGL ES 3.0 context.
+/// An OpenGL ES 3.0 context: the objects it shares with the other contexts
+/// of its share group (OpenGL ES 3.0, appendix D), the renderer that keeps
+/// them, and [`Local`], what the context has of its own.
+///
+/// Contexts that share objects are one `Context` with a `Local` for each:
+/// the one in use is the context's own part, the others wait in their
+/// [`Local`] ([`Context::new_local`], [`Context::swap_local`]). A binding
+/// in a context to an object another context deleted ends when the context
+/// is next in use (OpenGL ES keeps the object while it is bound).
 pub struct Context {
     pub(crate) backend: Box<dyn Backend>,
-    pub(crate) error: u32,
-    pub(crate) config: Config,
-    pub(crate) state: Fixed,
     pub(crate) shading: glsl::Options,
-    // Objects.
+    // The objects a share group shares.
     pub(crate) buffers: Store<Buffer>,
     pub(crate) textures: Store<Texture>,
     pub(crate) renderbuffers: Store<Renderbuffer>,
-    pub(crate) framebuffers: Store<FramebufferObject>,
-    pub(crate) vertex_arrays: Store<VertexArray>,
     pub(crate) samplers: Store<Sampler>,
-    pub(crate) queries: Store<Query>,
-    pub(crate) feedbacks: Store<TransformFeedback>,
     pub(crate) programs: programs::Programs,
     pub(crate) syncs: BTreeMap<u32, Sync>,
     pub(crate) next_sync: u32,
+    /// What the context in use has of its own.
+    pub(crate) local: Local,
+    /// Per-draw scratch space, kept to avoid allocating on every draw.
+    pub(crate) scratch: draw::Scratch,
+}
+
+/// What a context has of its own (OpenGL ES 3.0, appendix D): its state,
+/// its bindings, its default framebuffer, and its objects of the kinds not
+/// shared (framebuffers, vertex arrays, queries and transform feedback
+/// objects), which refer to shared ones.
+pub struct Local {
+    pub(crate) error: u32,
+    pub(crate) config: Config,
+    pub(crate) state: Fixed,
+    // Objects.
+    pub(crate) framebuffers: Store<FramebufferObject>,
+    pub(crate) vertex_arrays: Store<VertexArray>,
+    pub(crate) queries: Store<Query>,
+    pub(crate) feedbacks: Store<TransformFeedback>,
     // Bindings.
+    /// The current program's name (0: none) and its executable.
+    pub(crate) program: u32,
+    pub(crate) program_exe: Option<programs::ExeKey>,
     pub(crate) bound: BufferBindings,
     pub(crate) active_texture: usize,
     /// Per unit, the texture bound to each of [`TEXTURE_TARGETS`].
@@ -296,33 +332,21 @@ pub struct Context {
     pub(crate) default_samples: u32,
     /// Primitives transform feedback has written (for queries).
     pub(crate) primitives_written: u64,
-    /// Per-draw scratch space, kept to avoid allocating on every draw.
-    pub(crate) scratch: draw::Scratch,
 }
 
-impl Context {
-    /// A context drawing with `backend`, with a default framebuffer as
-    /// `config` describes.
-    pub fn new(backend: Box<dyn Backend>, config: Config) -> Context {
-        let mut textures = Store::default();
-        let default_textures = TEXTURE_TARGETS.map(|t| textures.create_unnamed(Texture::new(t)));
-        let mut c = Context {
-            backend,
+impl Local {
+    /// A context's own part as it starts, with its default textures.
+    fn new(config: Config, default_textures: [Key; 4]) -> Local {
+        Local {
             error: gl::NO_ERROR,
             config,
             state: Fixed::new(config.width, config.height),
-            shading: glsl::Options::default(),
-            buffers: Store::default(),
-            textures,
-            renderbuffers: Store::default(),
             framebuffers: Store::default(),
             vertex_arrays: Store::default(),
-            samplers: Store::default(),
             queries: Store::default(),
             feedbacks: Store::default(),
-            programs: programs::Programs::default(),
-            syncs: BTreeMap::new(),
-            next_sync: 1,
+            program: 0,
+            program_exe: None,
             bound: BufferBindings {
                 uniform_indexed: vec![IndexedBinding::default(); UNIFORM_BUFFER_BINDINGS],
                 ..BufferBindings::default()
@@ -343,15 +367,60 @@ impl Context {
             default_fb: DefaultFramebuffer::default(),
             default_samples: 0,
             primitives_written: 0,
+        }
+    }
+}
+
+impl Context {
+    /// A context drawing with `backend`, with a default framebuffer as
+    /// `config` describes.
+    pub fn new(backend: Box<dyn Backend>, config: Config) -> Context {
+        let mut textures = Store::default();
+        let default_textures = TEXTURE_TARGETS.map(|t| textures.create_unnamed(Texture::new(t)));
+        let mut c = Context {
+            backend,
+            shading: glsl::Options::default(),
+            buffers: Store::default(),
+            textures,
+            renderbuffers: Store::default(),
+            samplers: Store::default(),
+            programs: programs::Programs::default(),
+            syncs: BTreeMap::new(),
+            next_sync: 1,
+            local: Local::new(config, default_textures),
             scratch: draw::Scratch::default(),
         };
         c.shading.limits.max_draw_buffers = DRAW_BUFFERS as u32;
         c.shading.limits.max_combined_texture_image_units = TEXTURE_UNITS as u32;
         c.shading.limits.max_vertex_attribs = VERTEX_ATTRIBS as u32;
-        c.state.line_width = 1.0;
-        let (w, h) = (config.width, config.height);
-        c.create_default_framebuffer(w, h);
+        c.create_default_framebuffer(config.width, config.height);
         c
+    }
+
+    /// The own part of another context, which shares this one's objects:
+    /// [`Context::swap_local`] puts it in use.
+    pub fn new_local(&mut self, config: Config) -> Local {
+        let default_textures = TEXTURE_TARGETS.map(|t| self.textures.create_unnamed(Texture::new(t)));
+        let mut local = Local::new(config, default_textures);
+        self.swap_local(&mut local);
+        self.create_default_framebuffer(config.width, config.height);
+        self.swap_local(&mut local);
+        local
+    }
+
+    /// Puts another context's own part in use, and keeps the one that was
+    /// in `local`: the calls that follow are that context's.
+    pub fn swap_local(&mut self, local: &mut Local) {
+        core::mem::swap(&mut self.local, local);
+        self.forget_deleted();
+    }
+
+    /// Destroys a context's own part, which is not in use: its objects,
+    /// what they kept of the shared ones, and its default framebuffer.
+    pub fn destroy_local(&mut self, mut local: Local) {
+        self.swap_local(&mut local);
+        self.release_local();
+        self.swap_local(&mut local);
     }
 
     /// The renderer's description.
@@ -373,43 +442,50 @@ impl Context {
 
     /// Records an error (only the first since the last `get_error`).
     pub(crate) fn err(&mut self, e: u32) {
-        if self.error == gl::NO_ERROR {
-            self.error = e;
+        if self.local.error == gl::NO_ERROR {
+            self.local.error = e;
         }
+    }
+
+    /// Records an error found by the context's user, as one of its own
+    /// (what a C interface checks before it calls: a client-side array it
+    /// does not take).
+    pub fn record_error(&mut self, e: u32) {
+        self.err(e);
     }
 
     /// `glGetError`.
     pub fn get_error(&mut self) -> u32 {
-        core::mem::replace(&mut self.error, gl::NO_ERROR)
+        core::mem::replace(&mut self.local.error, gl::NO_ERROR)
     }
 
     /// The current vertex array object.
     pub(crate) fn vao(&self) -> &VertexArray {
-        match self.vertex_array {
-            Some(k) => self.vertex_arrays.get(k),
-            None => &self.default_vao,
+        match self.local.vertex_array {
+            Some(k) => self.local.vertex_arrays.get(k),
+            None => &self.local.default_vao,
         }
     }
 
     pub(crate) fn vao_mut(&mut self) -> &mut VertexArray {
-        match self.vertex_array {
-            Some(k) => self.vertex_arrays.get_mut(k),
-            None => &mut self.default_vao,
+        match self.local.vertex_array {
+            Some(k) => self.local.vertex_arrays.get_mut(k),
+            None => &mut self.local.default_vao,
         }
     }
 
     /// The current transform feedback object.
     pub(crate) fn tf(&self) -> &TransformFeedback {
-        match self.feedback {
-            Some(k) => self.feedbacks.get(k),
-            None => &self.default_feedback,
+        match self.local.feedback {
+            Some(k) => self.local.feedbacks.get(k),
+            None => &self.local.default_feedback,
         }
     }
 
     pub(crate) fn tf_mut(&mut self) -> &mut TransformFeedback {
-        match self.feedback {
-            Some(k) => self.feedbacks.get_mut(k),
-            None => &mut self.default_feedback,
+        match self.local.feedback {
+            Some(k) => self.local.feedbacks.get_mut(k),
+            None => &mut self.local.default_feedback,
         }
     }
 
@@ -423,7 +499,7 @@ impl Context {
 
     /// The state of an `Enable`/`Disable` capability.
     pub(crate) fn capability(&mut self, cap: u32) -> Option<&mut bool> {
-        let s = &mut self.state;
+        let s = &mut self.local.state;
         Some(match cap {
             gl::BLEND => &mut s.blend,
             gl::CULL_FACE => &mut s.cull_face,
@@ -475,12 +551,12 @@ impl Context {
             return self.err(gl::INVALID_VALUE);
         }
         let max = self.backend.caps().max_viewport as i32;
-        self.state.viewport = [x, y, w.min(max), h.min(max)];
+        self.local.state.viewport = [x, y, w.min(max), h.min(max)];
     }
 
     /// `glDepthRangef`.
     pub fn depth_rangef(&mut self, near: f32, far: f32) {
-        self.state.depth_range = [clamp01(near), clamp01(far)];
+        self.local.state.depth_range = [clamp01(near), clamp01(far)];
     }
 
     /// `glScissor`.
@@ -488,12 +564,12 @@ impl Context {
         if w < 0 || h < 0 {
             return self.err(gl::INVALID_VALUE);
         }
-        self.state.scissor = [x, y, w, h];
+        self.local.state.scissor = [x, y, w, h];
     }
 
     /// `glCullFace`.
     pub fn cull_face(&mut self, mode: u32) {
-        self.state.cull_mode = match mode {
+        self.local.state.cull_mode = match mode {
             gl::FRONT => Cull::Front,
             gl::BACK => Cull::Back,
             gl::FRONT_AND_BACK => Cull::Both,
@@ -503,7 +579,7 @@ impl Context {
 
     /// `glFrontFace`.
     pub fn front_face(&mut self, mode: u32) {
-        self.state.front_ccw = match mode {
+        self.local.state.front_ccw = match mode {
             gl::CCW => true,
             gl::CW => false,
             _ => return self.err(gl::INVALID_ENUM),
@@ -515,18 +591,18 @@ impl Context {
         if width.is_nan() || width <= 0.0 {
             return self.err(gl::INVALID_VALUE);
         }
-        self.state.line_width = width;
+        self.local.state.line_width = width;
     }
 
     /// `glPolygonOffset`.
     pub fn polygon_offset(&mut self, factor: f32, units: f32) {
-        self.state.polygon_offset = (factor, units);
+        self.local.state.polygon_offset = (factor, units);
     }
 
     /// `glSampleCoverage`.
     pub fn sample_coverage(&mut self, value: f32, invert: bool) {
-        self.state.sample_coverage_value = clamp01(value);
-        self.state.sample_coverage_invert = invert;
+        self.local.state.sample_coverage_value = clamp01(value);
+        self.local.state.sample_coverage_invert = invert;
     }
 
     /// `glStencilFunc`.
@@ -538,7 +614,7 @@ impl Context {
     pub fn stencil_func_separate(&mut self, face: u32, func: u32, reference: i32, mask: u32) {
         let Some(f) = compare_func(func) else { return self.err(gl::INVALID_ENUM) };
         let Some((front, back)) = faces(face) else { return self.err(gl::INVALID_ENUM) };
-        for (on, s) in [(front, &mut self.state.stencil_front), (back, &mut self.state.stencil_back)] {
+        for (on, s) in [(front, &mut self.local.state.stencil_front), (back, &mut self.local.state.stencil_back)] {
             if on {
                 s.func = f;
                 s.reference = reference;
@@ -556,10 +632,10 @@ impl Context {
     pub fn stencil_mask_separate(&mut self, face: u32, mask: u32) {
         let Some((front, back)) = faces(face) else { return self.err(gl::INVALID_ENUM) };
         if front {
-            self.state.stencil_front.write_mask = mask;
+            self.local.state.stencil_front.write_mask = mask;
         }
         if back {
-            self.state.stencil_back.write_mask = mask;
+            self.local.state.stencil_back.write_mask = mask;
         }
     }
 
@@ -574,7 +650,7 @@ impl Context {
             return self.err(gl::INVALID_ENUM);
         };
         let Some((front, back)) = faces(face) else { return self.err(gl::INVALID_ENUM) };
-        for (on, s) in [(front, &mut self.state.stencil_front), (back, &mut self.state.stencil_back)] {
+        for (on, s) in [(front, &mut self.local.state.stencil_front), (back, &mut self.local.state.stencil_back)] {
             if on {
                 s.fail = a;
                 s.depth_fail = b;
@@ -586,14 +662,14 @@ impl Context {
     /// `glDepthFunc`.
     pub fn depth_func(&mut self, func: u32) {
         match compare_func(func) {
-            Some(f) => self.state.depth_func = f,
+            Some(f) => self.local.state.depth_func = f,
             None => self.err(gl::INVALID_ENUM),
         }
     }
 
     /// `glDepthMask`.
     pub fn depth_mask(&mut self, flag: bool) {
-        self.state.depth_write = flag;
+        self.local.state.depth_write = flag;
     }
 
     /// `glBlendEquation`.
@@ -604,7 +680,7 @@ impl Context {
     /// `glBlendEquationSeparate`.
     pub fn blend_equation_separate(&mut self, rgb: u32, alpha: u32) {
         match (blend_eq(rgb), blend_eq(alpha)) {
-            (Some(a), Some(b)) => self.state.blend_eq = (a, b),
+            (Some(a), Some(b)) => self.local.state.blend_eq = (a, b),
             _ => self.err(gl::INVALID_ENUM),
         }
     }
@@ -618,8 +694,8 @@ impl Context {
     pub fn blend_func_separate(&mut self, src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32) {
         match (blend_factor(src_rgb), blend_factor(dst_rgb), blend_factor(src_alpha), blend_factor(dst_alpha)) {
             (Some(a), Some(b), Some(c), Some(d)) => {
-                self.state.blend_src = (a, c);
-                self.state.blend_dst = (b, d);
+                self.local.state.blend_src = (a, c);
+                self.local.state.blend_dst = (b, d);
             }
             _ => self.err(gl::INVALID_ENUM),
         }
@@ -627,27 +703,27 @@ impl Context {
 
     /// `glBlendColor`.
     pub fn blend_color(&mut self, r: f32, g: f32, b: f32, a: f32) {
-        self.state.blend_color = [clamp01(r), clamp01(g), clamp01(b), clamp01(a)];
+        self.local.state.blend_color = [clamp01(r), clamp01(g), clamp01(b), clamp01(a)];
     }
 
     /// `glColorMask`.
     pub fn color_mask(&mut self, r: bool, g: bool, b: bool, a: bool) {
-        self.state.color_mask = [r, g, b, a];
+        self.local.state.color_mask = [r, g, b, a];
     }
 
     /// `glClearColor`.
     pub fn clear_color(&mut self, r: f32, g: f32, b: f32, a: f32) {
-        self.state.clear_color = [r, g, b, a];
+        self.local.state.clear_color = [r, g, b, a];
     }
 
     /// `glClearDepthf`.
     pub fn clear_depthf(&mut self, d: f32) {
-        self.state.clear_depth = clamp01(d);
+        self.local.state.clear_depth = clamp01(d);
     }
 
     /// `glClearStencil`.
     pub fn clear_stencil(&mut self, s: i32) {
-        self.state.clear_stencil = s;
+        self.local.state.clear_stencil = s;
     }
 
     /// `glHint`.
@@ -656,8 +732,8 @@ impl Context {
             return self.err(gl::INVALID_ENUM);
         }
         match target {
-            gl::GENERATE_MIPMAP_HINT => self.state.generate_mipmap_hint = mode,
-            gl::FRAGMENT_SHADER_DERIVATIVE_HINT => self.state.derivative_hint = mode,
+            gl::GENERATE_MIPMAP_HINT => self.local.state.generate_mipmap_hint = mode,
+            gl::FRAGMENT_SHADER_DERIVATIVE_HINT => self.local.state.derivative_hint = mode,
             _ => self.err(gl::INVALID_ENUM),
         }
     }
@@ -669,7 +745,7 @@ impl Context {
             return self.err(gl::INVALID_VALUE);
         }
         let v = param as u32;
-        let s = &mut self.state;
+        let s = &mut self.local.state;
         match pname {
             gl::PACK_ALIGNMENT => s.pack.alignment = v,
             gl::PACK_ROW_LENGTH => s.pack.row_length = v,

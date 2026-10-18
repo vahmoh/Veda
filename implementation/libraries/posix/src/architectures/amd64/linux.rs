@@ -177,6 +177,9 @@ pub mod nr {
     pub const FALLOCATE: usize = linux_raw_sys::general::__NR_fallocate as usize;
     pub const ACCEPT4: usize = linux_raw_sys::general::__NR_accept4 as usize;
     pub const EVENTFD2: usize = linux_raw_sys::general::__NR_eventfd2 as usize;
+    pub const TIMERFD_CREATE: usize = linux_raw_sys::general::__NR_timerfd_create as usize;
+    pub const TIMERFD_SETTIME: usize = linux_raw_sys::general::__NR_timerfd_settime as usize;
+    pub const TIMERFD_GETTIME: usize = linux_raw_sys::general::__NR_timerfd_gettime as usize;
     pub const EPOLL_CREATE1: usize = linux_raw_sys::general::__NR_epoll_create1 as usize;
     pub const DUP3: usize = linux_raw_sys::general::__NR_dup3 as usize;
     pub const PIPE2: usize = linux_raw_sys::general::__NR_pipe2 as usize;
@@ -192,6 +195,7 @@ pub mod nr {
     pub const RENAMEAT2: usize = linux_raw_sys::general::__NR_renameat2 as usize;
     pub const GETRANDOM: usize = linux_raw_sys::general::__NR_getrandom as usize;
     pub const MEMBARRIER: usize = linux_raw_sys::general::__NR_membarrier as usize;
+    pub const MEMFD_CREATE: usize = linux_raw_sys::general::__NR_memfd_create as usize;
     pub const STATX: usize = linux_raw_sys::general::__NR_statx as usize;
     pub const RSEQ: usize = linux_raw_sys::general::__NR_rseq as usize;
     pub const CLOSE_RANGE: usize = linux_raw_sys::general::__NR_close_range as usize;

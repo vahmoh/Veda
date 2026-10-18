@@ -240,7 +240,8 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
     };
     let image =
         rt::vm::Mapping::new(vmo, (size as usize).max(1), map_flags::READ).map_err(|e| format!("{}: {e}", run.path))?;
-    // SAFETY: a read-only mapping of a VMO made for us alone.
+    // SAFETY: a read-only mapping of the file, which nothing changes: the
+    // system image's pages, or a copy made for us alone.
     let bytes = unsafe { &image.as_slice()[..size as usize] };
     if !is_executable(bytes) {
         return Err(spawn_error(run.path, SpawnError::NotExecutable));
@@ -313,7 +314,8 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         typed.bytes.extend_from_slice(&later);
         typed.end = false;
     }
-    let process: Process = spawn.start(bytes).map_err(|e| spawn_error(run.path, e))?;
+    // The program runs from the file's pages where it can.
+    let process: Process = spawn.start_file(image.vmo(), size as usize).map_err(|e| spawn_error(run.path, e))?;
     drop(image);
 
     console.foreground.store(true, Ordering::Release);

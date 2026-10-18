@@ -3,7 +3,7 @@
 
 [package]
 name = "apps-common"
-description = "What the built-in applications share: the running processes and which are the system's, uptimes and names for people, file-type icons, copying to the clipboard"
+description = "What the built-in applications share: the running processes and which are the system's, uptimes and names for people, file-type icons, copying to the clipboard, the licences of the system's parts"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

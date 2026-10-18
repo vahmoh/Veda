@@ -276,6 +276,8 @@ pub struct Segment<'a> {
     pub vaddr: u64,
     pub mem_size: u64,
     pub data: &'a [u8],
+    /// Where `data` is in the file.
+    pub offset: u64,
     pub perms: Perms,
 }
 
@@ -467,8 +469,42 @@ impl<'a> Elf<'a> {
             vaddr: ph.vaddr,
             mem_size: ph.mem_size,
             data: &data[ph.offset as usize..(ph.offset + ph.file_size) as usize],
+            offset: ph.offset,
             perms: Perms::from_flags(ph.flags),
         })
+    }
+
+    /// Where the pages of `run` (one of [`page_runs`]) are in the file, if
+    /// they can be the file's own: the offset of the first, when nothing
+    /// writes them (no writable segment touches them, so neither the
+    /// program nor relocations do) and every byte a segment puts in them is
+    /// the file's, at one distance from where memory has it, a whole number
+    /// of pages. Where the file is in memory page by page, such pages can
+    /// be shared by every process running the program; what else they hold
+    /// is the file's too (its bytes around the segments', and past its end
+    /// whatever follows it), which no segment puts in memory. `None` when
+    /// they need memory of their own: a copy of what the segments put
+    /// there, zeros elsewhere.
+    pub fn file_pages(&self, run: &PageRun) -> Option<u64> {
+        if run.perms.write {
+            return None;
+        }
+        let end = run.start.checked_add(run.len)?;
+        let mut distance = None;
+        for s in self.segments() {
+            if page_up(s.end())? <= run.start || end <= page_down(s.vaddr) {
+                continue;
+            }
+            // Its zeros, past its bytes in the file, would be the file's.
+            let zeros = (s.vaddr + s.data.len() as u64).max(run.start) < s.end().min(end);
+            let d = s.offset.wrapping_sub(s.vaddr);
+            if s.perms.write || zeros || !d.is_multiple_of(PAGE_SIZE) || distance.is_some_and(|other| other != d) {
+                return None;
+            }
+            distance = Some(d);
+        }
+        let offset = run.start.wrapping_add(distance?);
+        (offset.checked_add(run.len)? <= page_up(self.data.len() as u64)?).then_some(offset)
     }
 
     /// The main thread's stack size the program asks for (`PT_GNU_STACK`),

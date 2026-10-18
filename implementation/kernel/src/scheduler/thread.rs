@@ -5,7 +5,7 @@
 
 use alloc::sync::Arc;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::arch::thread::Context;
 use crate::memory::aspace::AddressSpace;
@@ -62,6 +62,13 @@ pub struct Thread {
     /// User address of a 32-bit word to clear, and wake a futex waiter on,
     /// when the thread exits (0: none; see `THREAD_SET_EXIT_FUTEX`).
     pub exit_futex: AtomicU64,
+    /// The suspensions in force (`THREAD_SUSPEND`s less `THREAD_RESUME`s,
+    /// changed under the BKL): while there are any, the thread runs no
+    /// user code.
+    pub suspensions: AtomicU32,
+    /// Whether the thread waits in the kernel for its suspensions to end,
+    /// which only their end (or its death) wakes it from.
+    pub parked: AtomicBool,
 }
 
 // SAFETY: `ctx` is only accessed by the scheduler under the BKL; everything
@@ -99,6 +106,8 @@ impl Thread {
             kill_pending: AtomicBool::new(false),
             is_idle,
             exit_futex: AtomicU64::new(0),
+            suspensions: AtomicU32::new(0),
+            parked: AtomicBool::new(false),
         }))
     }
 

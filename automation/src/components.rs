@@ -44,17 +44,25 @@ pub struct Program {
     /// Built on Rust's standard library, for Veda's own target; otherwise
     /// `no_std`, on `rt`, for the user target.
     pub std: bool,
+    /// Linked with the web engine (`cargo automation web`): left out of the
+    /// image until it is built.
+    pub web: bool,
 }
 
 impl Program {
     /// A program on `rt` alone (`no_std`).
     const fn native(package: &'static str) -> Program {
-        Program { package, binary: package, std: false }
+        Program { package, binary: package, std: false, web: false }
     }
 
     /// A program on Rust's standard library.
     const fn std(package: &'static str) -> Program {
-        Program { package, binary: package, std: true }
+        Program { package, binary: package, std: true, web: false }
+    }
+
+    /// A program on Rust's standard library with the web engine.
+    const fn web(package: &'static str) -> Program {
+        Program { package, binary: package, std: true, web: true }
     }
 
     /// The program as the binary `binary`, of a package named otherwise
@@ -97,6 +105,7 @@ pub const PROGRAMS: &[Program] = &[
     Program::std("paint"),
     Program::std("shell"),
     Program::std("lock"),
+    Program::web("browser"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +152,12 @@ fn build(package: &str, target: &str, profile: Profile, file: &str) -> Result<Pa
 
 /// Builds every program except those named in `skip`.
 fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, PathBuf)>> {
-    let programs: Vec<Program> = PROGRAMS.iter().copied().filter(|p| !skip.iter().any(|s| s == p.binary)).collect();
+    let web = crate::web::built();
+    if !web && PROGRAMS.iter().any(|p| p.web && !skip.iter().any(|s| s == p.binary)) {
+        util::status("Note", "no browser in the image: its web engine is not built (`cargo automation web`)");
+    }
+    let programs: Vec<Program> =
+        PROGRAMS.iter().copied().filter(|p| !skip.iter().any(|s| s == p.binary) && (web || !p.web)).collect();
     let (on_std, native): (Vec<Program>, Vec<Program>) = programs.into_iter().partition(|p| p.std);
     let mut built = Vec::new();
     if !native.is_empty() {
@@ -172,6 +186,8 @@ fn build_std_programs(programs: &[Program], profile: Profile) -> Result<Vec<(Pro
     toolchain::forget_old_links(&dir, &programs.iter().map(|p| p.binary).collect::<Vec<_>>())?;
     util::status("Building", format!("{} programs on the standard library ({STD_TARGET})", programs.len()));
     let mut cmd = rust.cargo_for_programs();
+    // Where the web engine is, for the programs linked with it.
+    cmd.env("VEDA_WEB", crate::web::root());
     cmd.args(["build", "--target", STD_TARGET]).args(profile.cargo_flag());
     for p in programs {
         cmd.args(["--package", p.package]);

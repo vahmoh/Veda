@@ -112,18 +112,18 @@ impl Context {
     /// `glGenFramebuffers`.
     pub fn gen_framebuffers(&mut self, names: &mut [u32]) {
         for n in names {
-            *n = self.framebuffers.generate();
+            *n = self.local.framebuffers.generate();
         }
     }
 
     /// One framebuffer name.
     pub fn gen_framebuffer(&mut self) -> u32 {
-        self.framebuffers.generate()
+        self.local.framebuffers.generate()
     }
 
     /// `glIsFramebuffer`.
     pub fn is_framebuffer(&self, name: u32) -> bool {
-        self.framebuffers.key(name).is_some()
+        self.local.framebuffers.key(name).is_some()
     }
 
     /// `glBindFramebuffer`.
@@ -131,29 +131,32 @@ impl Context {
         if !matches!(target, gl::FRAMEBUFFER | gl::DRAW_FRAMEBUFFER | gl::READ_FRAMEBUFFER) {
             return self.err(gl::INVALID_ENUM);
         }
-        let key =
-            if name == 0 { None } else { Some(self.framebuffers.get_or_create(name, FramebufferObject::default)) };
+        let key = if name == 0 {
+            None
+        } else {
+            Some(self.local.framebuffers.get_or_create(name, FramebufferObject::default))
+        };
         if target != gl::READ_FRAMEBUFFER {
-            self.draw_framebuffer = key;
+            self.local.draw_framebuffer = key;
         }
         if target != gl::DRAW_FRAMEBUFFER {
-            self.read_framebuffer = key;
+            self.local.read_framebuffer = key;
         }
     }
 
     /// `glDeleteFramebuffers`.
     pub fn delete_framebuffers(&mut self, names: &[u32]) {
         for &name in names {
-            let key = self.framebuffers.key(name);
+            let key = self.local.framebuffers.key(name);
             if key.is_some() {
-                if self.draw_framebuffer == key {
-                    self.draw_framebuffer = None;
+                if self.local.draw_framebuffer == key {
+                    self.local.draw_framebuffer = None;
                 }
-                if self.read_framebuffer == key {
-                    self.read_framebuffer = None;
+                if self.local.read_framebuffer == key {
+                    self.local.read_framebuffer = None;
                 }
             }
-            if let Some((_, Some(fb))) = self.framebuffers.delete(name) {
+            if let Some((_, Some(fb))) = self.local.framebuffers.delete(name) {
                 for a in fb.attachments() {
                     self.release_attachment(a);
                 }
@@ -184,12 +187,12 @@ impl Context {
     /// Detaches what `pred` matches from the bound framebuffers (deleting a
     /// texture or renderbuffer does so, appendix D.1.2).
     pub(crate) fn detach_from_bound_framebuffers(&mut self, pred: impl Fn(Attachment) -> bool) {
-        let mut keys: Vec<Key> = self.draw_framebuffer.into_iter().collect();
-        if self.read_framebuffer != self.draw_framebuffer {
-            keys.extend(self.read_framebuffer);
+        let mut keys: Vec<Key> = self.local.draw_framebuffer.into_iter().collect();
+        if self.local.read_framebuffer != self.local.draw_framebuffer {
+            keys.extend(self.local.read_framebuffer);
         }
         for k in keys {
-            let fb = self.framebuffers.get_mut(k);
+            let fb = self.local.framebuffers.get_mut(k);
             let mut released = Vec::new();
             for a in fb.colors.iter_mut().chain([&mut fb.depth, &mut fb.stencil]) {
                 if pred(*a) {
@@ -206,8 +209,8 @@ impl Context {
     /// `Ok(None)` for the default framebuffer.
     fn framebuffer_target(&self, target: u32) -> Result<Option<Key>, ()> {
         match target {
-            gl::FRAMEBUFFER | gl::DRAW_FRAMEBUFFER => Ok(self.draw_framebuffer),
-            gl::READ_FRAMEBUFFER => Ok(self.read_framebuffer),
+            gl::FRAMEBUFFER | gl::DRAW_FRAMEBUFFER => Ok(self.local.draw_framebuffer),
+            gl::READ_FRAMEBUFFER => Ok(self.local.read_framebuffer),
             _ => Err(()),
         }
     }
@@ -218,7 +221,7 @@ impl Context {
         for _ in 0..n {
             self.retain_attachment(a);
         }
-        let fb = self.framebuffers.get_mut(key);
+        let fb = self.local.framebuffers.get_mut(key);
         let old: Vec<Attachment> = match point {
             Point::Depth => alloc::vec![core::mem::replace(&mut fb.depth, a)],
             Point::Stencil => alloc::vec![core::mem::replace(&mut fb.stencil, a)],
@@ -387,7 +390,7 @@ impl Context {
     /// The renderer's view of a framebuffer object, or its completeness
     /// status (`CheckFramebufferStatus`) if it is not complete.
     fn fbo_state(&mut self, key: Key, draw: bool) -> Result<Framebuffer, u32> {
-        let fbo = self.framebuffers.get(key).clone();
+        let fbo = self.local.framebuffers.get(key).clone();
         let mut out = Framebuffer::default();
         let mut size: Option<(u32, u32)> = None;
         let mut samples: Option<u32> = None;
@@ -453,8 +456,9 @@ impl Context {
 
     /// The draw framebuffer as the renderer sees it, or its status.
     pub(crate) fn draw_state_framebuffer(&mut self) -> Result<Framebuffer, u32> {
-        match self.draw_framebuffer {
+        match self.local.draw_framebuffer {
             Some(k) => self.fbo_state(k, true),
+            None if self.local.config.surfaceless => Err(gl::FRAMEBUFFER_UNDEFINED),
             None => Ok(self.default_framebuffer(true)),
         }
     }
@@ -462,8 +466,9 @@ impl Context {
     /// The read framebuffer (its read buffer as draw buffer 0), or its
     /// status.
     fn read_state_framebuffer(&mut self) -> Result<Framebuffer, u32> {
-        match self.read_framebuffer {
+        match self.local.read_framebuffer {
             Some(k) => self.fbo_state(k, false),
+            None if self.local.config.surfaceless => Err(gl::FRAMEBUFFER_UNDEFINED),
             None => Ok(self.default_framebuffer(false)),
         }
     }
@@ -487,8 +492,8 @@ impl Context {
     /// The internal format of a draw framebuffer's color attachment.
     fn color_internal(&self, fbo: Option<Key>, index: usize) -> Option<Internal> {
         match fbo {
-            None => (index == 0).then_some(self.default_fb.color_internal).flatten(),
-            Some(k) => self.attachment_internal(self.framebuffers.get(k).colors.get(index).copied()?),
+            None => (index == 0).then_some(self.local.default_fb.color_internal).flatten(),
+            Some(k) => self.attachment_internal(self.local.framebuffers.get(k).colors.get(index).copied()?),
         }
     }
 
@@ -509,10 +514,10 @@ impl Context {
         let fb = self.read_state_framebuffer().map_err(|_| gl::INVALID_FRAMEBUFFER_OPERATION)?;
         let Some(index) = fb.draw_buffers[0] else { return Err(gl::INVALID_OPERATION) };
         let surface = fb.colors[index as usize].ok_or(gl::INVALID_OPERATION)?;
-        if self.read_framebuffer.is_some() && fb.samples > 0 {
+        if self.local.read_framebuffer.is_some() && fb.samples > 0 {
             return Err(gl::INVALID_OPERATION);
         }
-        let internal = self.color_internal(self.read_framebuffer, index as usize).ok_or(gl::INVALID_OPERATION)?;
+        let internal = self.color_internal(self.local.read_framebuffer, index as usize).ok_or(gl::INVALID_OPERATION)?;
         Ok(ReadColor { fb, index, surface, internal })
     }
 
@@ -523,7 +528,7 @@ impl Context {
         if bufs.len() > DRAW_BUFFERS {
             return self.err(gl::INVALID_VALUE);
         }
-        match self.draw_framebuffer {
+        match self.local.draw_framebuffer {
             None => {
                 if bufs.len() != 1 || !matches!(bufs[0], gl::BACK | gl::NONE) {
                     let known = bufs.iter().all(|&b| {
@@ -532,7 +537,7 @@ impl Context {
                     });
                     return self.err(if known { gl::INVALID_OPERATION } else { gl::INVALID_ENUM });
                 }
-                self.default_fb.draw_buffer = bufs[0];
+                self.local.default_fb.draw_buffer = bufs[0];
             }
             Some(k) => {
                 for (i, &b) in bufs.iter().enumerate() {
@@ -542,7 +547,7 @@ impl Context {
                     let known = b == gl::BACK || (gl::COLOR_ATTACHMENT0..=gl::COLOR_ATTACHMENT15).contains(&b);
                     return self.err(if known { gl::INVALID_OPERATION } else { gl::INVALID_ENUM });
                 }
-                let fb = self.framebuffers.get_mut(k);
+                let fb = self.local.framebuffers.get_mut(k);
                 fb.draw_buffers = [gl::NONE; DRAW_BUFFERS];
                 fb.draw_buffers[..bufs.len()].copy_from_slice(bufs);
             }
@@ -555,18 +560,18 @@ impl Context {
         if !(color || matches!(src, gl::BACK | gl::NONE)) {
             return self.err(gl::INVALID_ENUM);
         }
-        match self.read_framebuffer {
+        match self.local.read_framebuffer {
             None => {
                 if color {
                     return self.err(gl::INVALID_OPERATION);
                 }
-                self.default_fb.read_buffer = src;
+                self.local.default_fb.read_buffer = src;
             }
             Some(k) => {
                 if src == gl::BACK || (color && (src - gl::COLOR_ATTACHMENT0) as usize >= DRAW_BUFFERS) {
                     return self.err(gl::INVALID_OPERATION);
                 }
-                self.framebuffers.get_mut(k).read_buffer = src;
+                self.local.framebuffers.get_mut(k).read_buffer = src;
             }
         }
     }
@@ -613,7 +618,7 @@ impl Context {
         // What is attached, and its format.
         let (kind, name, a, internal) = match fbo {
             None => {
-                let fb = self.default_fb;
+                let fb = self.local.default_fb;
                 let i = match attachment {
                     gl::BACK => fb.color_internal,
                     gl::DEPTH => fb.depth_internal.filter(|i| i.format.has_depth()),
@@ -627,7 +632,7 @@ impl Context {
                 (kind, 0, Attachment::None, i)
             }
             Some(k) => {
-                let fb = self.framebuffers.get(k).clone();
+                let fb = self.local.framebuffers.get(k).clone();
                 let a = match attachment_point(attachment) {
                     Ok(Point::Depth) => fb.depth,
                     Ok(Point::Stencil) => fb.stencil,
@@ -707,17 +712,17 @@ impl Context {
     /// The draw framebuffer's color attachment 0 format (state queries:
     /// `RED_BITS`...), and its depth/stencil format.
     pub(crate) fn draw_formats(&self) -> (Option<Internal>, Option<Internal>, Option<Internal>) {
-        match self.draw_framebuffer {
+        match self.local.draw_framebuffer {
             None => {
-                let d = self.default_fb.depth_internal;
+                let d = self.local.default_fb.depth_internal;
                 (
-                    self.default_fb.color_internal,
+                    self.local.default_fb.color_internal,
                     d.filter(|i| i.format.has_depth()),
                     d.filter(|i| i.format.has_stencil()),
                 )
             }
             Some(k) => {
-                let fb = self.framebuffers.get(k);
+                let fb = self.local.framebuffers.get(k);
                 let color = fb.draw_buffers[0];
                 let c = (color != gl::NONE)
                     .then(|| fb.colors.get((color - gl::COLOR_ATTACHMENT0) as usize).copied())
@@ -730,11 +735,11 @@ impl Context {
 
     /// The read buffer's `IMPLEMENTATION_COLOR_READ_FORMAT`/`_TYPE`.
     pub(crate) fn color_read_pair(&mut self) -> Option<(u32, u32)> {
-        let fbo = self.read_framebuffer;
+        let fbo = self.local.read_framebuffer;
         let index = match fbo {
             None => 0,
             Some(k) => {
-                let r = self.framebuffers.get(k).read_buffer;
+                let r = self.local.framebuffers.get(k).read_buffer;
                 if r == gl::NONE {
                     return None;
                 }

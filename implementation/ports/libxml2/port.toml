@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libxml2: XML documents (XHTML, SVG, feeds) in WebKit, and fontconfig's
+# configuration.
+name = "libxml2"
+version = "2.15.4"
+url = "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz"
+sha256 = "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821"
+license = "MIT"

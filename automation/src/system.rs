@@ -13,6 +13,7 @@
 //! the manifests list. What tells whether a generator has run with its
 //! executable (its stamp) is kept beside its directory, out of the image.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::arch;
@@ -20,6 +21,7 @@ use crate::cli::Options;
 use crate::components;
 use crate::image;
 use crate::linux;
+use crate::notices;
 use crate::ports;
 use crate::toolchain;
 use crate::util::{self, Result};
@@ -113,13 +115,38 @@ pub fn build(o: &Options) -> Result<System> {
         let kind = if program.std { elf::Kind::Posix } else { elf::Kind::Veda };
         initrd.add(&format!("bin/{}", program.binary), shipped(path, Some(kind))?);
     }
+    // The parts of others' whose licence texts the image has
+    // (/system/licences/<part>), and the programs it has built with which
+    // targets, whose crates it has the texts of too.
+    let mut licensed = BTreeSet::new();
+    let mut groups = vec![
+        notices::Group::new(arch::KERNEL_TARGET, &["kernel"]),
+        notices::Group::new(arch::UEFI_TARGET, &["bootloader"]),
+    ];
+    let (on_std, native): (Vec<&components::Program>, Vec<_>) =
+        artifacts.programs.iter().map(|(p, _)| p).partition(|p| p.std);
+    groups.push(notices::Group::new(arch::USER_TARGET, &native.iter().map(|p| p.package).collect::<Vec<_>>()));
+    let mut std_programs = notices::Group::new(arch::STD_TARGET, &on_std.iter().map(|p| p.package).collect::<Vec<_>>());
+    std_programs.rustc = toolchain::rustc();
+    groups.push(std_programs);
     // What the toolchain makes for the image: the C and Rust test programs,
     // the C toolchain itself (gcc, as, ld, the C library and its headers, as
     // /system has them), the media decoder and its libraries' tests.
     let toolchain = toolchain::image_files(!o.skip.iter().any(|s| s == "mediadec"))?;
-    for (path, data) in toolchain {
-        initrd.add(&path, data);
+    // Every C program and every program on the standard library has the C
+    // library's POSIX layer; the media decoder, a Rust half.
+    let mut bare = Vec::new();
+    if !toolchain.is_empty() || !on_std.is_empty() {
+        bare.push("posix");
     }
+    if toolchain.iter().any(|(path, _)| path == "bin/mediadec") {
+        bare.push("mediadec");
+    }
+    groups.push(notices::Group::new(arch::BARE_TARGET, &bare));
+    add_all(&mut initrd, &mut licensed, toolchain);
+    // What the web engine needs of the system (its fonts' configuration,
+    // the certificate authorities, its licences), once it is built.
+    add_all(&mut initrd, &mut licensed, crate::web::image_files()?);
     // Videos for the stand-in decoder, fakedec (the GUI scripts').
     let clips = util::workspace_root().join("verification/fakedec/clips");
     for path in util::files_under(&clips)? {
@@ -131,10 +158,15 @@ pub fn build(o: &Options) -> Result<System> {
     // The driver VM's Linux (`cargo automation linux`, or the first time
     // an image needs it) and its programs.
     linux::build_once()?;
-    match linux::guest()? {
-        Some((kernel, initramfs)) => {
-            initrd.add("linux/kernel", kernel);
-            initrd.add("linux/initramfs.cpio", initramfs);
+    let guest = linux::guest()?;
+    match guest {
+        Some(guest) => {
+            initrd.add("linux/kernel", guest.kernel);
+            initrd.add("linux/initramfs.cpio", guest.initramfs);
+            add_all(&mut initrd, &mut licensed, guest.licences);
+            let mut programs = notices::Group::new(arch::GUEST_TARGET, &guest.packages);
+            programs.dir = Some(util::workspace_root().join("implementation").join("guests").join("linux"));
+            groups.push(programs);
         }
         None => util::status(
             "Note",
@@ -142,6 +174,25 @@ pub fn build(o: &Options) -> Result<System> {
              (`cargo automation linux` builds its Linux)",
         ),
     }
+    // The texts of the crates of every program above (Veda's own aside),
+    // then the list of what /system/licences has, which About Veda shows,
+    // with Veda's licence and the fonts'.
+    let crates = notices::crates(&groups)?;
+    add_all(&mut initrd, &mut licensed, notices::crate_files(&crates)?);
+    // Every program of the image has Rust's core and alloc (the kernel's
+    // too), every C program and every program on the standard library musl
+    // and GCC's runtime, the driver VM's programs as well: their texts come
+    // from the toolchain's build.
+    let mut needed = vec!["rust"];
+    if !on_std.is_empty() || groups.iter().any(|g| g.target == arch::GUEST_TARGET) {
+        needed.extend(["musl", "gcc"]);
+    }
+    if let Some(missing) = needed.iter().find(|part| !licensed.contains(**part)) {
+        return Err(format!(
+            "the image has {missing} without its licence texts: `cargo automation toolchain` gathers them"
+        ));
+    }
+    initrd.add("licences/README", notices::readme(&licensed, &crates, crate::web::built())?.into_bytes());
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // The licence, which About Veda refers to.
     initrd.add("LICENSE.txt", util::read(&util::workspace_root().join("LICENSE"))?);
@@ -173,17 +224,36 @@ pub fn build(o: &Options) -> Result<System> {
     // /system/apps/<name>.app).
     let applications = util::workspace_root().join("implementation").join("applications");
     let entries = std::fs::read_dir(&applications).map_err(|e| format!("reading {}: {e}", applications.display()))?;
+    // Not one whose program the image has not (left out, or not built).
+    let built: Vec<String> = artifacts.programs.iter().map(|(p, _)| format!("/system/bin/{}", p.binary)).collect();
     for app in entries.flatten() {
         let name = format!("{}.app", app.file_name().to_string_lossy());
         let manifest = app.path().join(&name);
-        if manifest.is_file() {
-            initrd.add(&format!("apps/{name}"), util::read(&manifest)?);
+        if !manifest.is_file() {
+            continue;
         }
+        let text = util::read_to_string(&manifest)?;
+        let exe = text.lines().find_map(|l| l.strip_prefix("exe=")).map(str::trim);
+        if exe.is_some_and(|e| e.starts_with("/system/bin/") && !built.iter().any(|b| b == e)) {
+            continue;
+        }
+        initrd.add(&format!("apps/{name}"), text.into_bytes());
     }
     let initrd = initrd.build();
     let bootloader = util::read(&artifacts.bootloader)?;
     let kernel = shipped(&artifacts.kernel, None)?;
     Ok(System { bootloader, kernel, initrd })
+}
+
+/// Adds `files` to `initrd`, noting in `licensed` the parts whose licence
+/// texts are among them (`licences/<part>/...`).
+fn add_all(initrd: &mut initrd::builder::Builder, licensed: &mut BTreeSet<String>, files: Vec<(String, Vec<u8>)>) {
+    for (path, data) in files {
+        if let Some((part, _)) = path.strip_prefix("licences/").and_then(|rest| rest.split_once('/')) {
+            licensed.insert(part.to_string());
+        }
+        initrd.add(&path, data);
+    }
 }
 
 /// The executable at `path` as the system ships it, checked: of `kind`, if

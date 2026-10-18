@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# ICU: Unicode, text breaking, collation, locales and Intl for WebKit,
+# HarfBuzz and libxml2 (its SHA-512 is the release's SHASUM512.txt's).
+name = "icu"
+version = "78.3"
+url = "https://github.com/unicode-org/icu/releases/download/release-78.3/icu4c-78.3-sources.tgz"
+sha256 = "3a2e7a47604ba702f345878308e6fefeca612ee895cf4a5f222e7955fabfe0c0"
+license = "Unicode-3.0"

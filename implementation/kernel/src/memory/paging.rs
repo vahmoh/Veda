@@ -6,7 +6,9 @@
 //! address space. The tables themselves, and an address space's root, are
 //! the architecture's (`arch::paging`).
 
-pub use crate::arch::paging::{activate, free_user_root, kernel_root, map, new_user_root, protect, translate, unmap};
+pub use crate::arch::paging::{
+    activate, free_user_root, kernel_root, map, new_user_root, protect_range, translate, unmap, unmap_range,
+};
 
 use super::PAGE_SIZE;
 use crate::arch;

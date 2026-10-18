@@ -93,6 +93,10 @@ impl Client {
             (DEPTH_STENCIL, FLOAT_32_UNSIGNED_INT_24_8_REV) => {
                 return Texel::Depth(f32::from_bits(word(0)), b[4]);
             }
+            (BGRA_EXT, UNSIGNED_BYTE) => {
+                let n = |i: usize| f32::from(b[i]) / 255.0;
+                return Texel::Float([n(2), n(1), n(0), n(3)]);
+            }
             _ => {}
         }
         if self.packed() {
@@ -176,6 +180,11 @@ impl Client {
             (_, UNSIGNED_SHORT_5_5_5_1) => return F::Rgb5A1Unorm.encode(t, out),
             (_, UNSIGNED_INT_10F_11F_11F_REV) => return F::R11G11B10Float.encode(t, out),
             (_, UNSIGNED_INT_5_9_9_9_REV) => return F::Rgb9E5Float.encode(t, out),
+            (BGRA_EXT, UNSIGNED_BYTE) => {
+                let u = |x: f32| (clamp01(x) * 255.0 + 0.5) as u8;
+                out[..4].copy_from_slice(&[u(c[2]), u(c[1]), u(c[0]), u(c[3])]);
+                return;
+            }
             _ => {}
         }
         let n = self.components();

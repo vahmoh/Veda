@@ -52,6 +52,8 @@ pub struct KeyPress {
 
 /// The most pointer positions [`Input::moves`] keeps between two frames.
 pub const MAX_MOVES: usize = 4096;
+/// The most events [`Input::events`] keeps between two frames.
+pub const MAX_EVENTS: usize = 4096;
 
 /// Input accumulated since the previous frame.
 #[derive(Debug, Clone, Default)]
@@ -74,6 +76,12 @@ pub struct Input {
     pub modifiers: u32,
     pub focused: bool,
     pub now: u64,
+    /// The window's input events since the previous frame, in order: what
+    /// the fields above sum up, key releases too, for what must see input
+    /// as it happened rather than frame by frame (a web page, which gets
+    /// it as events). At most [`MAX_EVENTS`]: past that, events are
+    /// dropped until the next frame.
+    pub events: Vec<WindowEvent>,
 }
 
 impl Input {
@@ -93,6 +101,7 @@ impl Input {
             modifiers: self.modifiers,
             focused: self.focused,
             now: self.now,
+            events: self.events.iter().filter(|e| !matches!(e, WindowEvent::Key { .. })).cloned().collect(),
         }
     }
 
@@ -104,16 +113,20 @@ impl Input {
         self.scroll = (0, 0);
         self.text.clear();
         self.keys.clear();
+        self.events.clear();
     }
 
     /// Ends a frame: clears what it used, but for the keys and typed text
     /// that were nobody's (`unclaimed`, [`Ui::keys_unclaimed`]), which the
     /// next frame gets.
     pub(crate) fn end_frame(&mut self, unclaimed: bool) {
-        let kept = unclaimed.then(|| (core::mem::take(&mut self.text), core::mem::take(&mut self.keys)));
+        let kept = unclaimed.then(|| {
+            let events = self.events.iter().filter(|e| matches!(e, WindowEvent::Key { .. })).cloned().collect();
+            (core::mem::take(&mut self.text), core::mem::take(&mut self.keys), events)
+        });
         self.begin_frame();
-        if let Some((text, keys)) = kept {
-            (self.text, self.keys) = (text, keys);
+        if let Some((text, keys, events)) = kept {
+            (self.text, self.keys, self.events) = (text, keys, events);
         }
     }
 
@@ -130,6 +143,18 @@ impl Input {
     }
 
     pub fn apply(&mut self, ev: &WindowEvent) {
+        let input = matches!(
+            ev,
+            WindowEvent::PointerMove { .. }
+                | WindowEvent::PointerButton { .. }
+                | WindowEvent::PointerLeave {}
+                | WindowEvent::Scroll { .. }
+                | WindowEvent::Key { .. }
+                | WindowEvent::Focus { .. }
+        );
+        if input && self.events.len() < MAX_EVENTS {
+            self.events.push(ev.clone());
+        }
         match ev {
             WindowEvent::PointerMove { x, y } => {
                 self.pointer = Some((*x, *y));
@@ -713,6 +738,35 @@ pub(crate) mod tests {
         }
         assert_eq!(input.moves.len(), MAX_MOVES);
         assert_eq!(input.pointer, Some((MAX_MOVES as i32 + 9, 0)), "the pointer itself follows on");
+    }
+
+    #[test]
+    fn a_frame_sees_its_events_in_order() {
+        let mut input = Input::default();
+        let key = |pressed| WindowEvent::Key { code: 30, pressed, repeat: false, modifiers: 0, text: "a".into() };
+        let events = [
+            WindowEvent::PointerMove { x: 3, y: 4 },
+            key(true),
+            WindowEvent::Scroll { dx: 0, dy: -1 },
+            key(false),
+            WindowEvent::FrameDone { shown: 0, seen_ns: 0, period_ns: 0 },
+        ];
+        for ev in &events {
+            input.apply(ev);
+        }
+        // Input events only, key releases among them.
+        assert_eq!(input.events, events[..4]);
+        // While another has the keyboard, no keys.
+        assert_eq!(input.without_keys().events, [events[0].clone(), events[2].clone()]);
+        // Keys nobody claimed go on to the next frame, as typed text does.
+        input.end_frame(true);
+        assert_eq!(input.events, [events[1].clone(), events[3].clone()]);
+        input.end_frame(false);
+        assert!(input.events.is_empty());
+        for _ in 0..MAX_EVENTS + 5 {
+            input.apply(&events[0]);
+        }
+        assert_eq!(input.events.len(), MAX_EVENTS);
     }
 
     /// Adds the keys `codes` and the typed `text` to `input`.

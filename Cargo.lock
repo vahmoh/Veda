@@ -12,6 +12,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "apps-common",
+ "proto",
  "rt",
  "ui",
 ]
@@ -344,6 +345,27 @@ dependencies = [
  "bootinfo",
  "elf",
 ]
+
+[[package]]
+name = "browser"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "apps-common",
+ "browser-core",
+ "egl",
+ "gfx",
+ "ipc",
+ "net",
+ "proto",
+ "rt",
+ "serde_json",
+ "ui",
+]
+
+[[package]]
+name = "browser-core"
+version = "0.1.0"
 
 [[package]]
 name = "build"
@@ -801,6 +823,13 @@ dependencies = [
  "rt",
  "text",
  "ui",
+]
+
+[[package]]
+name = "egl"
+version = "0.1.0"
+dependencies = [
+ "gl",
 ]
 
 [[package]]
@@ -2322,6 +2351,7 @@ name = "settings"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "apps-common",
  "files",
  "gfx",
  "ipc",

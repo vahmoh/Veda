@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::arch::{self, BARE_TARGET};
+use crate::notices;
 use crate::ports::{self, Port};
 use crate::util::{self, Recipe, Result};
 
@@ -329,16 +330,18 @@ fn cross_tool(name: &str) -> PathBuf {
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
 /// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
-const POSIX_LAYER_EXPORTS: [&str; 25] = [
+const POSIX_LAYER_EXPORTS: [&str; 37] = [
     "__veda_syscall",
     "__veda_init",
     "__veda_spawn",
     "__veda_lookup_name",
     "__veda_dns_servers",
+    "__veda_tz",
     "__veda_clone",
     "__veda_set_thread_area",
     "__veda_unmapself",
     "__veda_bootstrap",
+    "__veda_main_stack",
     "veda_close",
     "veda_duplicate",
     "veda_startup_handle",
@@ -355,6 +358,16 @@ const POSIX_LAYER_EXPORTS: [&str; 25] = [
     "veda_vmo_unmap",
     "veda_event_create",
     "veda_object_signal",
+    "veda_thread_suspend",
+    "veda_thread_resume",
+    "veda_thread_registers",
+    "veda_process_memory",
+    "veda_confine_files",
+    "veda_confine_services",
+    "veda_process_restrict",
+    "veda_lend_files",
+    "veda_borrow_files",
+    "veda_take_back_files",
 ];
 
 /// Builds the POSIX layer (`implementation/libraries/posix`) as a static
@@ -416,6 +429,15 @@ fn isolated_object(lib: &Path, out: &Path, exports: &[&str]) -> Result {
 /// The C library's object of the POSIX layer, as last made.
 fn posix_layer_object() -> PathBuf {
     root().join("build").join("veda.o")
+}
+
+/// Brings the cross toolchain's C library up to date with the POSIX layer
+/// (its object in `libc.a`, its headers `<veda/*.h>`), holding the
+/// toolchain's lock meanwhile: for builds of C libraries that use it (the
+/// web engine's).
+pub fn refresh_c_library() -> Result {
+    let _lock = lock()?;
+    refresh_posix_layer()
 }
 
 /// Puts the current POSIX layer into the cross toolchain's C library (and
@@ -733,7 +755,8 @@ fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 /// What the toolchain gives the system image, at their paths in it: the C
 /// and Rust test programs (`tests/c`, `tests/rust`), the native toolchain
 /// (as `/system` has it), and the media decoder (`bin/mediadec`) and its
-/// libraries' tests (`tests/media`) if `with_mediadec`. The POSIX layer
+/// libraries' tests (`tests/media`) if `with_mediadec`, with the licence
+/// texts of the ports these have (`licences/<port>`). The POSIX layer
 /// goes into the C library once, first; all of it is made while this
 /// build holds the toolchain's lock. Says what is missing, and whether
 /// the toolchain is older than its ports.
@@ -751,21 +774,36 @@ pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     files.extend(c_tests()?.into_iter().map(|(name, exe)| (format!("tests/c/{name}"), exe)));
     files.extend(rust_tests()?.into_iter().map(|(name, exe)| (format!("tests/rust/{name}"), exe)));
+    // The licence texts of the ports in them, which build.sh's `licences`
+    // stage gathers: the C library's and GCC's runtime's (in every C
+    // program and every program on Rust's standard library), and Rust's
+    // (the standard library); the C toolchain's; the media libraries'.
+    let mut licensed = vec!["musl", "gcc", "rust"];
     let native = native_files()?;
     if native.is_empty() {
         util::status("Note", "no C toolchain in the image (build it with `cargo automation toolchain`)");
+    } else {
+        licensed.extend(["binutils", "gmp", "mpfr", "mpc"]);
     }
     files.extend(native);
     if with_mediadec {
-        match mediadec()? {
-            Some(exe) => files.push(("bin/mediadec".into(), exe)),
-            None => util::status(
+        let decoder = mediadec()?;
+        if decoder.is_none() {
+            util::status(
                 "Note",
                 "no media decoder in the image: videos do not play (`cargo automation toolchain` builds FFmpeg and \
                  dav1d)",
-            ),
+            );
         }
-        files.extend(media_tests()?.into_iter().map(|(name, exe)| (format!("tests/media/{name}"), exe)));
+        let tests = media_tests()?;
+        if decoder.is_some() || !tests.is_empty() {
+            licensed.extend(["ffmpeg", "dav1d"]);
+        }
+        files.extend(decoder.map(|exe| ("bin/mediadec".to_string(), exe)));
+        files.extend(tests.into_iter().map(|(name, exe)| (format!("tests/media/{name}"), exe)));
+    }
+    for port in licensed {
+        files.extend(notices::port_texts(&root().join("licences"), port, "`cargo automation toolchain`")?);
     }
     Ok(files)
 }

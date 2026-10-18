@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use ipc::Bytes;
 use proto::fs::{MAX_IO, Stat, file, open_flags, seek};
-use rt::object::Channel;
+use rt::object::{Channel, Vmo};
 use rt::sync::Mutex;
 
 use crate::error;
@@ -53,6 +53,13 @@ impl VfsFile {
     pub fn write(&self, data: &[u8]) -> Result<usize, isize> {
         let c = self.client.lock();
         write_chunks(data, |_, chunk| error::ipc(c.write(Bytes(chunk.to_vec()))))
+    }
+
+    /// The file's pages from `offset`, `len` bytes, if they are the system
+    /// image's (`file::pages`): what a mapping that never writes them can
+    /// be, shared with everyone who maps them.
+    pub fn pages(&self, offset: u64, len: usize) -> Option<Vmo> {
+        self.client.lock().pages(offset, len as u64).ok()?.ok()
     }
 
     /// Reads at `offset` until `buf` is full or the file ends, leaving the

@@ -12,6 +12,9 @@
 //! * [`access`]: who may reach the system services' private directories,
 //!   which places of the namespace stay where they are, and how many
 //!   connections a program may hold.
+//! * [`view`]: what a confined connection reaches (`vfs::confine`).
+//! * [`loans`]: places to read that a connection lends a confined one
+//!   (`vfs::lend`, `vfs::borrow`), and takes back (`vfs::take_back`).
 
 #![no_std]
 
@@ -20,8 +23,10 @@ extern crate alloc;
 extern crate std;
 
 pub mod access;
+pub mod loans;
 pub mod snapshot;
 pub mod tree;
+pub mod view;
 
 /// The directory of the writable file system that the home disk keeps:
 /// `/home`.

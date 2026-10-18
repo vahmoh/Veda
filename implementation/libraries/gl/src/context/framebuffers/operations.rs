@@ -87,8 +87,8 @@ impl Context {
     // ---- Clearing ---------------------------------------------------------------------
 
     fn scissor_rect(&self) -> Option<Rect> {
-        let s = self.state.scissor;
-        self.state.scissor_test.then_some(Rect { x: s[0], y: s[1], w: s[2], h: s[3] })
+        let s = self.local.state.scissor;
+        self.local.state.scissor_test.then_some(Rect { x: s[0], y: s[1], w: s[2], h: s[3] })
     }
 
     /// `glClear`.
@@ -100,31 +100,31 @@ impl Context {
             Ok(fb) => fb,
             Err(_) => return self.err(gl::INVALID_FRAMEBUFFER_OPERATION),
         };
-        if self.state.rasterizer_discard {
+        if self.local.state.rasterizer_discard {
             return;
         }
         let mut c = Clear {
             scissor: self.scissor_rect(),
-            color_mask: self.state.color_mask,
-            stencil_mask: self.state.stencil_front.write_mask,
+            color_mask: self.local.state.color_mask,
+            stencil_mask: self.local.state.stencil_front.write_mask,
             ..Default::default()
         };
         if mask & gl::COLOR_BUFFER_BIT != 0 {
             for i in 0..DRAW_BUFFERS {
                 let Some(att) = fb.draw_buffers[i] else { continue };
-                let Some(internal) = self.color_internal(self.draw_framebuffer, att as usize) else { continue };
+                let Some(internal) = self.color_internal(self.local.draw_framebuffer, att as usize) else { continue };
                 // Clearing integer buffers with Clear is undefined; leave
                 // them alone.
                 if !internal.format.is_integer() && fb.colors[att as usize].is_some() {
-                    c.colors[att as usize] = Some(color_bits(internal.format, self.state.clear_color));
+                    c.colors[att as usize] = Some(color_bits(internal.format, self.local.state.clear_color));
                 }
             }
         }
-        if mask & gl::DEPTH_BUFFER_BIT != 0 && self.state.depth_write && fb.depth.is_some() {
-            c.depth = Some(self.state.clear_depth);
+        if mask & gl::DEPTH_BUFFER_BIT != 0 && self.local.state.depth_write && fb.depth.is_some() {
+            c.depth = Some(self.local.state.clear_depth);
         }
         if mask & gl::STENCIL_BUFFER_BIT != 0 && fb.stencil.is_some() {
-            c.stencil = Some(self.state.clear_stencil);
+            c.stencil = Some(self.local.state.clear_stencil);
         }
         if c.colors.iter().any(Option::is_some) || c.depth.is_some() || c.stencil.is_some() {
             self.backend.clear(&fb, &c);
@@ -146,19 +146,19 @@ impl Context {
             Ok(fb) => fb,
             Err(_) => return self.err(gl::INVALID_FRAMEBUFFER_OPERATION),
         };
-        if self.state.rasterizer_discard {
+        if self.local.state.rasterizer_discard {
             return;
         }
         let mut c = Clear {
             scissor: self.scissor_rect(),
-            color_mask: self.state.color_mask,
-            stencil_mask: self.state.stencil_front.write_mask,
+            color_mask: self.local.state.color_mask,
+            stencil_mask: self.local.state.stencil_front.write_mask,
             ..Default::default()
         };
         match buffer {
             gl::COLOR => {
                 let Some(att) = fb.draw_buffers[drawbuffer as usize] else { return };
-                let Some(internal) = self.color_internal(self.draw_framebuffer, att as usize) else { return };
+                let Some(internal) = self.color_internal(self.local.draw_framebuffer, att as usize) else { return };
                 let class = match internal.format.class() {
                     Class::Uint => Class::Uint,
                     Class::Sint => Class::Sint,
@@ -172,7 +172,7 @@ impl Context {
                 c.colors[att as usize] = Some(value);
             }
             _ => {
-                c.depth = depth.filter(|_| fb.depth.is_some() && self.state.depth_write).map(clamp01);
+                c.depth = depth.filter(|_| fb.depth.is_some() && self.local.state.depth_write).map(clamp01);
                 c.stencil = stencil.filter(|_| fb.stencil.is_some());
             }
         }
@@ -234,6 +234,17 @@ impl Context {
 
     // ---- Reading pixels ------------------------------------------------------------------
 
+    /// The bytes from where `ReadPixels`' data starts to its last pixel's
+    /// end, under the pack storage modes: what a pointer to them must hold.
+    /// `None` if they take no layout (the read fails then, as it says).
+    pub fn pack_size(&self, width: i32, height: i32, format: u32, ty: u32) -> Option<usize> {
+        let (Ok(w), Ok(h)) = (u32::try_from(width), u32::try_from(height)) else { return None };
+        if !format::is_format(format) || !format::is_type(ty) {
+            return None;
+        }
+        pixels::layout(Client::new(format, ty), w, h, 1, &self.local.state.pack).map(|l| l.end)
+    }
+
     /// `glReadPixels`.
     pub fn read_pixels<'a>(
         &mut self,
@@ -257,19 +268,23 @@ impl Context {
             Err(e) => return self.err(e),
         };
         let pair = (format, ty);
+        // EXT_read_format_bgra: what reads as RGBA bytes reads as BGRA too.
+        let bgra =
+            pair == (gl::BGRA_EXT, gl::UNSIGNED_BYTE) && required_read(&src.internal) == (gl::RGBA, gl::UNSIGNED_BYTE);
         if pair != required_read(&src.internal)
             && pair != natural_read(&src.internal)
+            && !bgra
             && !(src.internal.format == Format::Rgb10A2Unorm && pair == (gl::RGBA, gl::UNSIGNED_INT_2_10_10_10_REV))
         {
             return self.err(gl::INVALID_OPERATION);
         }
         let client = Client::new(format, ty);
-        let pack = self.state.pack;
+        let pack = self.local.state.pack;
         let Some(layout) = pixels::layout(client, width as u32, height as u32, 1, &pack) else {
             return self.err(gl::INVALID_VALUE);
         };
         // Where the pixels go: the application's memory or the pack buffer.
-        let buffer = self.bound.pixel_pack;
+        let buffer = self.local.bound.pixel_pack;
         let target = match (out, buffer) {
             (PixelsMut::Data(d), None) => {
                 if d.len() < layout.end {
@@ -400,14 +415,14 @@ impl Context {
         let mut depth = mask & gl::DEPTH_BUFFER_BIT != 0;
         let mut stencil = mask & gl::STENCIL_BUFFER_BIT != 0;
         let read = src.draw_buffers[0];
-        let read_internal = read.and_then(|i| self.color_internal(self.read_framebuffer, i as usize));
+        let read_internal = read.and_then(|i| self.color_internal(self.local.read_framebuffer, i as usize));
         if color {
             match (read, read_internal) {
                 (Some(ri), Some(rf)) if src.colors[ri as usize].is_some() => {
                     let rclass = rf.format.class();
                     for i in 0..DRAW_BUFFERS {
                         let Some(att) = dst.draw_buffers[i] else { continue };
-                        let Some(df) = self.color_internal(self.draw_framebuffer, att as usize) else { continue };
+                        let Some(df) = self.color_internal(self.local.draw_framebuffer, att as usize) else { continue };
                         let dclass = df.format.class();
                         let int = |c: Class| matches!(c, Class::Uint | Class::Sint);
                         if int(rclass) != int(dclass) || (int(rclass) && rclass != dclass) {
@@ -429,11 +444,11 @@ impl Context {
             }
         }
         let ds_internal = |c: &Context, read: bool, depth: bool| -> Option<Internal> {
-            let fbo = if read { c.read_framebuffer } else { c.draw_framebuffer };
+            let fbo = if read { c.local.read_framebuffer } else { c.local.draw_framebuffer };
             match fbo {
-                None => c.default_fb.depth_internal,
+                None => c.local.default_fb.depth_internal,
                 Some(k) => {
-                    let fb = c.framebuffers.get(k);
+                    let fb = c.local.framebuffers.get(k);
                     c.attachment_internal(if depth { fb.depth } else { fb.stencil })
                 }
             }

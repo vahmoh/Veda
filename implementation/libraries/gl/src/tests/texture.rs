@@ -689,3 +689,71 @@ fn pixels_laid_out_as_texels_move_with_their_own_pitches() {
     assert_eq!([px(0, 2), px(1, 2), px(2, 2)], [&[0xEE; 4][..], &[30, 1, 2, 255], &[40, 1, 2, 255]]);
     assert!(out[..12].iter().all(|&b| b == 0xEE));
 }
+
+#[test]
+fn bgra_pixels_upload_and_read_back() {
+    let mut c = context(2, 1);
+    // EXT_texture_format_BGRA8888: a BGRA texture, its bytes as given.
+    let bgra = [10u8, 20, 30, 255, 40, 50, 60, 128];
+    let t = c.gen_texture();
+    c.bind_texture(gl::TEXTURE_2D, t);
+    c.tex_image_2d(gl::TEXTURE_2D, 0, gl::BGRA_EXT, 2, 1, 0, gl::BGRA_EXT, gl::UNSIGNED_BYTE, &bgra[..]);
+    let f = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, f);
+    c.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, t, 0);
+    assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_COMPLETE);
+    no_error(&mut c);
+    let mut rgba = [0u8; 8];
+    c.read_pixels(0, 0, 2, 1, gl::RGBA, gl::UNSIGNED_BYTE, &mut rgba[..]);
+    assert_eq!(rgba, [30, 20, 10, 255, 60, 50, 40, 128]);
+    // EXT_read_format_bgra: and back as BGRA.
+    let mut back = [0u8; 8];
+    c.read_pixels(0, 0, 2, 1, gl::BGRA_EXT, gl::UNSIGNED_BYTE, &mut back[..]);
+    no_error(&mut c);
+    assert_eq!(back, bgra);
+    // A part of it, in BGRA again.
+    c.tex_sub_image_2d(gl::TEXTURE_2D, 0, 1, 0, 1, 1, gl::BGRA_EXT, gl::UNSIGNED_BYTE, &[1u8, 2, 3, 4][..]);
+    c.read_pixels(0, 0, 2, 1, gl::RGBA, gl::UNSIGNED_BYTE, &mut rgba[..]);
+    no_error(&mut c);
+    assert_eq!(rgba, [30, 20, 10, 255, 3, 2, 1, 4]);
+    // Rows of BGRA pixels with gaps between them (a row length and an
+    // alignment), read from what was drawn.
+    c.bind_framebuffer(gl::FRAMEBUFFER, 0);
+    c.clear_color(1.0, 0.5, 0.0, 1.0);
+    c.clear(gl::COLOR_BUFFER_BIT);
+    c.pixel_storei(gl::PACK_ROW_LENGTH, 3);
+    let mut rows = [7u8; 12];
+    c.read_pixels(0, 0, 2, 1, gl::BGRA_EXT, gl::UNSIGNED_BYTE, &mut rows[..]);
+    no_error(&mut c);
+    assert_eq!(rows, [0, 128, 255, 255, 0, 128, 255, 255, 7, 7, 7, 7]);
+    // BGRA is for unsigned bytes alone.
+    c.read_pixels(0, 0, 1, 1, gl::BGRA_EXT, gl::FLOAT, &mut [0u8; 16][..]);
+    assert_eq!(c.get_error(), gl::INVALID_OPERATION);
+}
+
+#[test]
+fn image_height_and_skipped_images_are_three_dimensional_uploads_alone() {
+    let mut c = context(1, 1);
+    c.pixel_storei(gl::UNPACK_SKIP_IMAGES, 1);
+    c.pixel_storei(gl::UNPACK_IMAGE_HEIGHT, 4);
+    // A 2D upload reads from the start, whatever images 3D ones skip ...
+    assert_eq!(c.unpack_size(2, 1, 1, gl::RGBA, gl::UNSIGNED_BYTE, false), Some(8));
+    let t = c.gen_texture();
+    c.bind_texture(gl::TEXTURE_2D, t);
+    c.tex_image_2d(gl::TEXTURE_2D, 0, gl::RGBA8, 1, 1, 0, gl::RGBA, gl::UNSIGNED_BYTE, &[9u8, 8, 7, 6][..]);
+    let f = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, f);
+    c.framebuffer_texture_2d(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, t, 0);
+    let mut px = [0u8; 4];
+    c.read_pixels(0, 0, 1, 1, gl::RGBA, gl::UNSIGNED_BYTE, &mut px[..]);
+    no_error(&mut c);
+    assert_eq!(px, [9, 8, 7, 6]);
+    // ... and a 3D one skips a whole image of 4 rows of 2 pixels.
+    assert_eq!(c.unpack_size(2, 1, 1, gl::RGBA, gl::UNSIGNED_BYTE, true), Some(32 + 8));
+    // Rows padded to the alignment, the last one not.
+    c.pixel_storei(gl::UNPACK_ALIGNMENT, 8);
+    assert_eq!(c.unpack_size(3, 2, 1, gl::RGB, gl::UNSIGNED_BYTE, false), Some(16 + 9));
+    assert_eq!(c.pack_size(3, 2, gl::RGBA, gl::UNSIGNED_BYTE), Some(24));
+    assert_eq!(c.unpack_size(-1, 2, 1, gl::RGB, gl::UNSIGNED_BYTE, false), None);
+    assert_eq!(c.pack_size(1, 1, 0x1234, gl::UNSIGNED_BYTE), None);
+}

@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Noto Color Emoji, of Unicode 18.0: emoji as color vectors (COLRv1), which
+# FreeType draws at any size (/system/fonts/noto).
+name = "noto-emoji"
+version = "2.057"
+url = "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2026-09-24-unicode18_0/2D/fonts/Noto-COLRv1.ttf"
+sha256 = "b8e25ea68db82f9e4d0aee921f4420be2be39887bd5c893a2ad98710531f9d0c"
+license = "OFL-1.1"

@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser's media, through the agent's hands, on the host's test pages,
+# whose scripts say how they played, each started by a key (pages play
+# sound only once the user has done something on them): Web Audio (a tone
+# that its analyser hears, and a sound file it decodes and plays), the
+# sound file in an <audio> element, the countdown video (AV1 and FLAC in
+# WebM) to its end, every picture shown and the colour of the first ones
+# drawn into a canvas, and the same video through Media Source Extensions,
+# appended a piece at a time. The page is read every few seconds, which
+# keeps the agent's conversation going while they play, and the user speaks
+# up between the pages, as a conversation ends 40 s after the user's last
+# turn. (The sound output is browser-media.vts's to check: the agent's
+# conversation ducks every other sound.)
+boot-cmdline "startup-sound=off"
+web-server
+memory 2048
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call app_actions '{"app":"browser"}' 60
+wait-serial "browser offers" 10
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"http://{web}/webaudio"}}' 30
+wait 3
+key spc
+wait 5
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Web Audio running at"
+agent-result "the analyser hears the tone; decoded 1.0 s of 2 channels"
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/audio"}}' 30
+wait 3
+key spc
+wait 3
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Audio played: 1.0 s"
+agent-interrupt
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/video"}}' 30
+wait 4
+key spc
+wait 8
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Playing: 640x360"
+wait 8
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Played smoothly: 640x360, 12.0 s"
+agent-result "the second bar yellow"
+agent-interrupt
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/mse"}}' 30
+wait 5
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Media Source: buffered 0.0 to 12.0 s"
+key spc
+wait 8
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Media Source playing"
+wait 8
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Media Source played: 640x360, buffered 0.0 to 12.0 s, 12.0 s"
+reject-serial "a page's sound has no stream"
+reject-serial "page stopped working"
+reject-serial "for an invalid message"
+reject-serial "browser crashed"

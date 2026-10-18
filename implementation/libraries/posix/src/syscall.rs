@@ -9,7 +9,7 @@ use crate::error::SysResult;
 use crate::fd::{self, Object};
 use crate::linux::errno::*;
 use crate::linux::{Timespec, clock, nr};
-use crate::{epoll, eventfd, fs, io, mem, process, signal, socket, system, thread, time, user, vfs};
+use crate::{epoll, eventfd, fs, io, mem, memfd, process, signal, socket, system, thread, time, timerfd, user, vfs};
 
 /// Deadline (monotonic ns) of a relative timeout, `None` for none.
 unsafe fn deadline_ts(ts: usize) -> Result<Option<u64>, isize> {
@@ -29,9 +29,11 @@ fn fallocate(fd: i32, mode: u32, offset: i64, len: i64) -> SysResult {
     }
     let end = offset.checked_add(len).filter(|&e| offset >= 0 && len > 0 && e >= 0).ok_or(EINVAL)? as u64;
     let desc = fd::get(fd)?;
-    let Object::File(f) = &desc.object else { return Err(ENODEV) };
-    if f.stat()?.size < end {
-        f.truncate(end)?;
+    match &desc.object {
+        Object::File(f) if f.stat()?.size < end => f.truncate(end)?,
+        Object::Memfd(m) if m.size() < end => m.truncate(end)?,
+        Object::File(_) | Object::Memfd(_) => {}
+        _ => return Err(ENODEV),
     }
     Ok(0)
 }
@@ -185,6 +187,10 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::EPOLL_PWAIT => epoll::epoll_wait(fd0, a[1], a[2] as i32, epoll::deadline_ms(a[3] as i32)),
             nr::EPOLL_PWAIT2 => epoll::epoll_wait(fd0, a[1], a[2] as i32, deadline_ts(a[3])?),
             nr::EVENTFD2 => eventfd::eventfd2(a[0] as u32, a[1] as u32),
+            nr::TIMERFD_CREATE => timerfd::create(a[0] as u32, a[1] as u32),
+            nr::TIMERFD_SETTIME => timerfd::settime(a[0] as i32, a[1] as u32, a[2], a[3]),
+            nr::TIMERFD_GETTIME => timerfd::gettime(a[0] as i32, a[1]),
+            nr::MEMFD_CREATE => memfd::memfd_create(a[0], a[1] as u32),
             nr::PIDFD_OPEN => process::pidfd_open(fd0, a[1] as u32),
             nr::SCHED_YIELD => {
                 rt::thread::yield_now();
@@ -286,8 +292,9 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
                 Ok(0)
             }
             nr::GETRANDOM => system::getrandom(a[0], a[1], a[2] as u32),
+            nr::STATX => fs::statx(fd0, a[1], a[2] as u32, a[3] as u32, a[4]),
             // musl falls back to the calls above.
-            nr::STATX | nr::MEMBARRIER | nr::RSEQ => Err(ENOSYS),
+            nr::MEMBARRIER | nr::RSEQ => Err(ENOSYS),
             _ => unsupported(n),
         }
     }

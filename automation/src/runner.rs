@@ -64,6 +64,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("splash", &[]),
     ("glsl", &[]),
     ("gl", &[]),
+    ("egl", &[]),
     ("hv", &[]),
     ("drivervm-core", &[]),
     ("iommu", &[]),
@@ -74,6 +75,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("music-core", &[]),
     ("calculator-core", &[]),
     ("paint-core", &[]),
+    ("browser-core", &[]),
     ("compositor-core", &[]),
     ("lock-core", &[]),
     ("shell-common", &[]),
@@ -323,7 +325,11 @@ pub fn scripts(o: &Options, files: &[PathBuf]) -> Result {
 /// Why a script cannot run on this machine, if it cannot: the part of the
 /// toolchain it needs is not built, or QEMU has not the 3D GPU it asks for.
 fn unrunnable(script: &Script, gl_gpu: impl Fn() -> bool) -> Option<String> {
-    if let Some(what) = script.boot.requires.iter().find(|r| !toolchain::built(r.part())) {
+    if script.boot.requires.contains(&crate::script::Requirement::Web) && !crate::web::built() {
+        return Some("needs the web engine: `cargo automation web`".into());
+    }
+    let toolchain_parts = script.boot.requires.iter().filter(|r| **r != crate::script::Requirement::Web);
+    if let Some(what) = toolchain_parts.clone().find(|r| !toolchain::built(r.part())) {
         return Some(format!("needs the {}: `cargo automation toolchain`", what.part()));
     }
     if script.boot.gpu == Some(true) && !gl_gpu() {
@@ -478,6 +484,16 @@ fn script_on(o: &Options, script: &Script, prebuilt: Option<&Path>) -> Result {
     if let Some(why) = unrunnable(script, || install.has_gl_gpu()) {
         return Err(format!("the script cannot run here: it {why}"));
     }
+    // nettest's local checks, against a server of this computer's, which
+    // a script's pages may be too.
+    let web = if script.boot.nettest_local || script.boot.web_server { Some(HostWeb::start()?) } else { None };
+    let mut script = script.clone();
+    if let Some(w) = &web
+        && script.boot.web_server
+    {
+        script.put_web(&w.address());
+    }
+    let script = &script;
     let boot = &script.boot;
     let mut o = o.clone();
     let mut extra: Vec<String> = Vec::new();
@@ -491,9 +507,9 @@ fn script_on(o: &Options, script: &Script, prebuilt: Option<&Path>) -> Result {
         // This computer is the gateway of the guest's network, QEMU's NAT.
         extra.push(a.boot_arg("10.0.2.2", !boot.agent_asleep));
     }
-    // nettest's local checks, against a server of this computer's.
-    let web = if boot.nettest_local { Some(HostWeb::start()?) } else { None };
-    if let Some(w) = &web {
+    if let Some(w) = &web
+        && boot.nettest_local
+    {
         extra.push(w.boot_arg());
     }
     extra.extend(boot.cmdline.iter().cloned());

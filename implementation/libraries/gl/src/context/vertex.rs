@@ -41,30 +41,30 @@ impl Context {
     /// `glGenVertexArrays`.
     pub fn gen_vertex_arrays(&mut self, names: &mut [u32]) {
         for n in names {
-            *n = self.vertex_arrays.generate();
+            *n = self.local.vertex_arrays.generate();
         }
     }
 
     /// One vertex array name.
     pub fn gen_vertex_array(&mut self) -> u32 {
-        self.vertex_arrays.generate()
+        self.local.vertex_arrays.generate()
     }
 
     /// `glIsVertexArray`.
     pub fn is_vertex_array(&self, name: u32) -> bool {
-        self.vertex_arrays.key(name).is_some()
+        self.local.vertex_arrays.key(name).is_some()
     }
 
     /// `glBindVertexArray`.
     pub fn bind_vertex_array(&mut self, name: u32) {
         if name == 0 {
-            self.vertex_array = None;
+            self.local.vertex_array = None;
             return;
         }
-        if !self.vertex_arrays.is_reserved(name) {
+        if !self.local.vertex_arrays.is_reserved(name) {
             return self.err(gl::INVALID_OPERATION);
         }
-        self.vertex_array = Some(self.vertex_arrays.get_or_create(name, VertexArray::default));
+        self.local.vertex_array = Some(self.local.vertex_arrays.get_or_create(name, VertexArray::default));
     }
 
     /// `glDeleteVertexArrays`.
@@ -73,11 +73,11 @@ impl Context {
             if name == 0 {
                 continue;
             }
-            let key = self.vertex_arrays.key(name);
-            if key.is_some() && self.vertex_array == key {
-                self.vertex_array = None;
+            let key = self.local.vertex_arrays.key(name);
+            if key.is_some() && self.local.vertex_array == key {
+                self.local.vertex_array = None;
             }
-            if let Some((_, Some(vao))) = self.vertex_arrays.delete(name) {
+            if let Some((_, Some(vao))) = self.local.vertex_arrays.delete(name) {
                 self.release_vao_buffers(&vao);
             }
         }
@@ -132,7 +132,7 @@ impl Context {
         }
         // There are no client-side arrays: without a buffer, the offset can
         // only be 0 (and the array cannot be drawn from while enabled).
-        let buffer = self.bound.array;
+        let buffer = self.local.bound.array;
         if buffer.is_none() && offset != 0 {
             return self.err(gl::INVALID_OPERATION);
         }
@@ -184,7 +184,7 @@ impl Context {
         if index as usize >= VERTEX_ATTRIBS {
             return self.err(gl::INVALID_VALUE);
         }
-        self.current_attribs[index as usize] = v;
+        self.local.current_attribs[index as usize] = v;
     }
 
     /// `glVertexAttrib1f`.
@@ -340,7 +340,7 @@ impl Context {
             self.err(gl::INVALID_VALUE);
             return None;
         }
-        Some(self.current_attribs[index as usize])
+        Some(self.local.current_attribs[index as usize])
     }
 }
 

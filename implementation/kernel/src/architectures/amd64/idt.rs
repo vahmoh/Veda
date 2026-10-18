@@ -150,6 +150,9 @@ pub extern "sysv64" fn trap_dispatch(frame: &mut TrapFrame) {
     }
 
     bkl::acquire();
+    if frame.is_user() {
+        crate::scheduler::entered_from_user();
+    }
     match vector {
         0..=31 => crate::scheduler::user_exception(frame),
         TIMER_VECTOR => {

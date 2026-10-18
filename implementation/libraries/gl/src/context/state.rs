@@ -69,6 +69,8 @@ fn extensions(ctx: &Context) -> alloc::vec::Vec<&'static str> {
         "GL_OES_packed_depth_stencil",
         "GL_OES_rgb8_rgba8",
         "GL_OES_vertex_array_object",
+        "GL_EXT_texture_format_BGRA8888",
+        "GL_EXT_read_format_bgra",
     ];
     if caps.color_buffer_float {
         v.push("GL_EXT_color_buffer_float");
@@ -87,23 +89,27 @@ fn extensions(ctx: &Context) -> alloc::vec::Vec<&'static str> {
 impl Context {
     /// The value of a state variable, or `None` (and `INVALID_ENUM`).
     fn state_value(&mut self, pname: u32) -> Option<Value> {
-        let s = &self.state;
+        let s = &self.local.state;
         let caps = self.backend.caps().clone();
         let limits = self.shading.limits;
         let name_of =
             |k: Option<super::Key>, store: &super::Store<super::Buffer>| i64::from(k.map_or(0, |k| store.name(k)));
         Some(match pname {
             // Vertex arrays and buffers.
-            gl::VERTEX_ARRAY_BINDING => int(i64::from(self.vertex_array.map_or(0, |k| self.vertex_arrays.name(k)))),
-            gl::ARRAY_BUFFER_BINDING => int(name_of(self.bound.array, &self.buffers)),
+            gl::VERTEX_ARRAY_BINDING => {
+                int(i64::from(self.local.vertex_array.map_or(0, |k| self.local.vertex_arrays.name(k))))
+            }
+            gl::ARRAY_BUFFER_BINDING => int(name_of(self.local.bound.array, &self.buffers)),
             gl::ELEMENT_ARRAY_BUFFER_BINDING => int(name_of(self.vao().element_buffer, &self.buffers)),
-            gl::COPY_READ_BUFFER_BINDING => int(name_of(self.bound.copy_read, &self.buffers)),
-            gl::COPY_WRITE_BUFFER_BINDING => int(name_of(self.bound.copy_write, &self.buffers)),
-            gl::PIXEL_PACK_BUFFER_BINDING => int(name_of(self.bound.pixel_pack, &self.buffers)),
-            gl::PIXEL_UNPACK_BUFFER_BINDING => int(name_of(self.bound.pixel_unpack, &self.buffers)),
-            gl::UNIFORM_BUFFER_BINDING => int(name_of(self.bound.uniform, &self.buffers)),
+            gl::COPY_READ_BUFFER_BINDING => int(name_of(self.local.bound.copy_read, &self.buffers)),
+            gl::COPY_WRITE_BUFFER_BINDING => int(name_of(self.local.bound.copy_write, &self.buffers)),
+            gl::PIXEL_PACK_BUFFER_BINDING => int(name_of(self.local.bound.pixel_pack, &self.buffers)),
+            gl::PIXEL_UNPACK_BUFFER_BINDING => int(name_of(self.local.bound.pixel_unpack, &self.buffers)),
+            gl::UNIFORM_BUFFER_BINDING => int(name_of(self.local.bound.uniform, &self.buffers)),
             gl::TRANSFORM_FEEDBACK_BUFFER_BINDING => int(name_of(self.tf().generic, &self.buffers)),
-            gl::TRANSFORM_FEEDBACK_BINDING => int(i64::from(self.feedback.map_or(0, |k| self.feedbacks.name(k)))),
+            gl::TRANSFORM_FEEDBACK_BINDING => {
+                int(i64::from(self.local.feedback.map_or(0, |k| self.local.feedbacks.name(k))))
+            }
             gl::TRANSFORM_FEEDBACK_ACTIVE => boolean(self.tf().active),
             gl::TRANSFORM_FEEDBACK_PAUSED => boolean(self.tf().paused),
             // Transformation and rasterization.
@@ -127,13 +133,13 @@ impl Context {
             gl::SAMPLE_COVERAGE_INVERT => boolean(s.sample_coverage_invert),
             gl::PRIMITIVE_RESTART_FIXED_INDEX => boolean(s.primitive_restart),
             // Textures.
-            gl::ACTIVE_TEXTURE => enm(gl::TEXTURE0 + self.active_texture as u32),
+            gl::ACTIVE_TEXTURE => enm(gl::TEXTURE0 + self.local.active_texture as u32),
             gl::TEXTURE_BINDING_2D => int(i64::from(self.unit_binding(gl::TEXTURE_2D))),
             gl::TEXTURE_BINDING_CUBE_MAP => int(i64::from(self.unit_binding(gl::TEXTURE_CUBE_MAP))),
             gl::TEXTURE_BINDING_3D => int(i64::from(self.unit_binding(gl::TEXTURE_3D))),
             gl::TEXTURE_BINDING_2D_ARRAY => int(i64::from(self.unit_binding(gl::TEXTURE_2D_ARRAY))),
             gl::SAMPLER_BINDING => {
-                int(i64::from(self.sampler_units[self.active_texture].map_or(0, |k| self.samplers.name(k))))
+                int(i64::from(self.local.sampler_units[self.local.active_texture].map_or(0, |k| self.samplers.name(k))))
             }
             // Per-fragment operations.
             gl::SCISSOR_TEST => boolean(s.scissor_test),
@@ -171,22 +177,24 @@ impl Context {
             gl::DEPTH_CLEAR_VALUE => floats(&[s.clear_depth], true),
             gl::STENCIL_CLEAR_VALUE => int(i64::from(s.clear_stencil)),
             gl::DRAW_FRAMEBUFFER_BINDING => {
-                int(i64::from(self.draw_framebuffer.map_or(0, |k| self.framebuffers.name(k))))
+                int(i64::from(self.local.draw_framebuffer.map_or(0, |k| self.local.framebuffers.name(k))))
             }
             gl::READ_FRAMEBUFFER_BINDING => {
-                int(i64::from(self.read_framebuffer.map_or(0, |k| self.framebuffers.name(k))))
+                int(i64::from(self.local.read_framebuffer.map_or(0, |k| self.local.framebuffers.name(k))))
             }
-            gl::RENDERBUFFER_BINDING => int(i64::from(self.renderbuffer.map_or(0, |k| self.renderbuffers.name(k)))),
-            gl::READ_BUFFER => enm(match self.read_framebuffer {
-                None => self.default_fb.read_buffer,
-                Some(k) => self.framebuffers.get(k).read_buffer,
+            gl::RENDERBUFFER_BINDING => {
+                int(i64::from(self.local.renderbuffer.map_or(0, |k| self.renderbuffers.name(k))))
+            }
+            gl::READ_BUFFER => enm(match self.local.read_framebuffer {
+                None => self.local.default_fb.read_buffer,
+                Some(k) => self.local.framebuffers.get(k).read_buffer,
             }),
             p if (gl::DRAW_BUFFER0..gl::DRAW_BUFFER0 + DRAW_BUFFERS as u32).contains(&p) => {
                 let i = (p - gl::DRAW_BUFFER0) as usize;
-                enm(match self.draw_framebuffer {
-                    None if i == 0 => self.default_fb.draw_buffer,
+                enm(match self.local.draw_framebuffer {
+                    None if i == 0 => self.local.default_fb.draw_buffer,
                     None => gl::NONE,
-                    Some(k) => self.framebuffers.get(k).draw_buffers[i],
+                    Some(k) => self.local.framebuffers.get(k).draw_buffers[i],
                 })
             }
             // Pixel storage.
@@ -304,9 +312,10 @@ impl Context {
         })
     }
 
-    /// `glGetBooleanv`.
-    pub fn get_booleanv(&mut self, pname: u32, out: &mut [bool]) {
-        let Some(v) = self.state_value(pname) else { return };
+    /// `glGetBooleanv`: how many values the state has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_booleanv(&mut self, pname: u32, out: &mut [bool]) -> usize {
+        let Some(v) = self.state_value(pname) else { return 0 };
         let mut tmp = [false; 16];
         let n = match v {
             Value::Bools(n, b) => {
@@ -327,6 +336,7 @@ impl Context {
             }
         };
         super::vertex::fill(out, &tmp[..n]);
+        n
     }
 
     /// A state value as integers.
@@ -354,24 +364,27 @@ impl Context {
         Some((n, tmp))
     }
 
-    /// `glGetInteger64v`.
-    pub fn get_integer64v(&mut self, pname: u32, out: &mut [i64]) {
-        if let Some((n, v)) = self.integers(pname) {
-            super::vertex::fill(out, &v[..n]);
-        }
+    /// `glGetInteger64v`: how many values the state has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_integer64v(&mut self, pname: u32, out: &mut [i64]) -> usize {
+        let Some((n, v)) = self.integers(pname) else { return 0 };
+        super::vertex::fill(out, &v[..n]);
+        n
     }
 
-    /// `glGetIntegerv`.
-    pub fn get_integerv(&mut self, pname: u32, out: &mut [i32]) {
-        if let Some((n, v)) = self.integers(pname) {
-            let v = v.map(|x| x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
-            super::vertex::fill(out, &v[..n]);
-        }
+    /// `glGetIntegerv`: how many values the state has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_integerv(&mut self, pname: u32, out: &mut [i32]) -> usize {
+        let Some((n, v)) = self.integers(pname) else { return 0 };
+        let v = v.map(|x| x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
+        super::vertex::fill(out, &v[..n]);
+        n
     }
 
-    /// `glGetFloatv`.
-    pub fn get_floatv(&mut self, pname: u32, out: &mut [f32]) {
-        let Some(v) = self.state_value(pname) else { return };
+    /// `glGetFloatv`: how many values the state has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_floatv(&mut self, pname: u32, out: &mut [f32]) -> usize {
+        let Some(v) = self.state_value(pname) else { return 0 };
         let mut tmp = [0.0f32; 16];
         let n = match v {
             Value::Bools(n, b) => {
@@ -392,6 +405,7 @@ impl Context {
             }
         };
         super::vertex::fill(out, &tmp[..n]);
+        n
     }
 
     /// One integer state value (`glGetIntegerv` for single values).
@@ -420,7 +434,7 @@ impl Context {
         let i = index as usize;
         let indexed = |c: &Context, uniform: bool| -> Option<(Option<super::Key>, usize, usize)> {
             if uniform {
-                let b = c.bound.uniform_indexed.get(i)?;
+                let b = c.local.bound.uniform_indexed.get(i)?;
                 Some((b.buffer, b.offset, b.size))
             } else {
                 let b = c.tf().bindings.get(i)?;

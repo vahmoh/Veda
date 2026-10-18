@@ -86,21 +86,11 @@ pub(crate) struct Programs {
     next_name: u32,
     pub exes: BTreeMap<ExeKey, Executable>,
     next_exe: ExeKey,
-    /// The current program's name (0: none) and its executable.
-    pub current: u32,
-    pub current_exe: Option<ExeKey>,
 }
 
 impl Default for Programs {
     fn default() -> Programs {
-        Programs {
-            objects: BTreeMap::new(),
-            next_name: 1,
-            exes: BTreeMap::new(),
-            next_exe: 1,
-            current: 0,
-            current_exe: None,
-        }
+        Programs { objects: BTreeMap::new(), next_name: 1, exes: BTreeMap::new(), next_exe: 1 }
     }
 }
 
@@ -490,7 +480,7 @@ impl Context {
 
     /// Whether a transform feedback object that is active uses `program`.
     fn feedback_uses(&self, program: u32) -> bool {
-        let mut objects = self.feedbacks.iter().map(|(_, t)| t).chain([&self.default_feedback]);
+        let mut objects = self.local.feedbacks.iter().map(|(_, t)| t).chain([&self.local.default_feedback]);
         objects.any(|t| t.active && t.program == Some(program))
     }
 
@@ -551,9 +541,9 @@ impl Context {
         let old = core::mem::replace(&mut p.exe, exe);
         // A successful relink of the current program installs its new
         // executable; a failed one leaves the current executable in use.
-        if let (true, Some(new)) = (self.programs.current == program, exe) {
+        if let (true, Some(new)) = (self.local.program == program, exe) {
             self.retain_exe(new);
-            let prev = self.programs.current_exe.replace(new);
+            let prev = self.local.program_exe.replace(new);
             self.release_exe(prev);
         }
         self.release_exe(old);
@@ -592,9 +582,9 @@ impl Context {
         if let Some(e) = exe {
             self.retain_exe(e);
         }
-        let prev_exe = core::mem::replace(&mut self.programs.current_exe, exe);
+        let prev_exe = core::mem::replace(&mut self.local.program_exe, exe);
         self.release_exe(prev_exe);
-        let prev = core::mem::replace(&mut self.programs.current, program);
+        let prev = core::mem::replace(&mut self.local.program, program);
         if prev != program {
             self.maybe_destroy_program(prev);
         }
@@ -603,7 +593,7 @@ impl Context {
     /// Destroys a program flagged for deletion once it is not current.
     fn maybe_destroy_program(&mut self, program: u32) {
         let pending = matches!(self.programs.objects.get(&program), Some(Object::Program(p)) if p.delete_pending);
-        if !pending || self.programs.current == program {
+        if !pending || self.local.program == program {
             return;
         }
         let Some(Object::Program(p)) = self.programs.objects.remove(&program) else { return };
@@ -967,7 +957,7 @@ impl Context {
     /// Sets a uniform of the current program: `comps` values per element
     /// of scalar kind `kind` (or a `cols` x `rows` matrix).
     fn set_uniform(&mut self, location: i32, values: Values<'_>, comps: usize, matrix: Option<(u8, u8, bool)>) {
-        let Some(exe) = self.programs.current_exe else { return self.err(gl::INVALID_OPERATION) };
+        let Some(exe) = self.local.program_exe else { return self.err(gl::INVALID_OPERATION) };
         if location == -1 {
             return;
         }
@@ -1154,8 +1144,9 @@ impl Context {
         Some((words, scalar))
     }
 
-    /// `glGetUniformfv`.
-    pub fn get_uniformfv(&mut self, program: u32, location: i32, out: &mut [f32]) {
+    /// `glGetUniformfv`: how many values the uniform has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_uniformfv(&mut self, program: u32, location: i32, out: &mut [f32]) -> usize {
         if let Some((w, s)) = self.uniform_words(program, location) {
             let v: Vec<f32> = w
                 .iter()
@@ -1167,11 +1158,14 @@ impl Context {
                 })
                 .collect();
             super::vertex::fill(out, &v);
+            return v.len();
         }
+        0
     }
 
-    /// `glGetUniformiv`.
-    pub fn get_uniformiv(&mut self, program: u32, location: i32, out: &mut [i32]) {
+    /// `glGetUniformiv`: how many values the uniform has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_uniformiv(&mut self, program: u32, location: i32, out: &mut [i32]) -> usize {
         if let Some((w, s)) = self.uniform_words(program, location) {
             let v: Vec<i32> = w
                 .iter()
@@ -1182,11 +1176,14 @@ impl Context {
                 })
                 .collect();
             super::vertex::fill(out, &v);
+            return v.len();
         }
+        0
     }
 
-    /// `glGetUniformuiv`.
-    pub fn get_uniformuiv(&mut self, program: u32, location: i32, out: &mut [u32]) {
+    /// `glGetUniformuiv`: how many values the uniform has (as many as fit are
+    /// written; 0 for an error).
+    pub fn get_uniformuiv(&mut self, program: u32, location: i32, out: &mut [u32]) -> usize {
         if let Some((w, s)) = self.uniform_words(program, location) {
             let v: Vec<u32> = w
                 .iter()
@@ -1197,11 +1194,13 @@ impl Context {
                 })
                 .collect();
             super::vertex::fill(out, &v);
+            return v.len();
         }
+        0
     }
 
     /// The current program's name (`CURRENT_PROGRAM`).
     pub(crate) fn current_program(&self) -> u32 {
-        self.programs.current
+        self.local.program
     }
 }

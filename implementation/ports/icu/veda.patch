@@ -1,0 +1,108 @@
+--- a/source/acinclude.m4
++++ b/source/acinclude.m4
+@@ -33,7 +33,7 @@
+ 	else
+ 		icu_cv_host_frag=mh-linux-va
+ 	fi ;;
+-*-*-linux*|*-*-gnu|*-*-k*bsd*-gnu|*-*-kopensolaris*-gnu) icu_cv_host_frag=mh-linux ;;
++*-*-linux*|*-*-gnu|*-*-k*bsd*-gnu|*-*-kopensolaris*-gnu|*-*-veda*) icu_cv_host_frag=mh-linux ;;
+ i[[34567]]86-*-cygwin) 
+ 	if test "$GCC" = yes; then
+ 		icu_cv_host_frag=mh-cygwin
+--- a/source/common/putil.cpp
++++ b/source/common/putil.cpp
+@@ -1158,6 +1158,35 @@
+     /* else U_TZNAME will give a better result. */
+ #endif
+ 
++#if defined(__veda__)
++    /* Veda keeps its time zone as an offset from UTC, with no rules of
++       daylight saving (the C library's, without TZ, is a POSIX string of
++       it, "<+02>-2", whose name is no zone's): the tz database's zone of
++       that offset alone, Etc/GMT-2 (whose sign, as POSIX's, is west of
++       UTC), or one of a region on that offset all year. */
++    if (getenv("TZ") == nullptr) {
++        static const struct { int32_t west; const char *id; } regions[] = {
++            { -330 * 60, "Asia/Kolkata" }, { -345 * 60, "Asia/Kathmandu" }, { -390 * 60, "Asia/Yangon" },
++            { -570 * 60, "Australia/Darwin" }, { -525 * 60, "Australia/Eucla" }, { -270 * 60, "Asia/Kabul" },
++            { -210 * 60, "Asia/Tehran" }, { 570 * 60, "Pacific/Marquesas" },
++        };
++        static char vedaZone[16];
++        int32_t west = uprv_timezone();
++        if (west == 0) {
++            return "Etc/UTC";
++        }
++        if (west % 3600 == 0 && west >= -14 * 3600 && west <= 12 * 3600) {
++            snprintf(vedaZone, sizeof vedaZone, "Etc/GMT%+d", (int)(west / 3600));
++            return vedaZone;
++        }
++        for (const auto &r : regions) {
++            if (r.west == west) {
++                return r.id;
++            }
++        }
++    }
++#endif
++
+ #if defined(CHECK_LOCALTIME_LINK) && !defined(DEBUG_SKIP_LOCALTIME_LINK)
+     /* Caller must handle threading issues */
+     if (gTimeZoneBufferPtr == nullptr) {
+--- a/source/config.sub
++++ b/source/config.sub
+@@ -2134,6 +2134,7 @@
+ 	| unos* \
+ 	| uwin* \
+ 	| uxpv* \
++	| veda* \
+ 	| v88r* \
+ 	|*vms* \
+ 	| vos* \
+--- a/source/configure
++++ b/source/configure
+@@ -5764,7 +5764,7 @@
+ 	else
+ 		icu_cv_host_frag=mh-linux-va
+ 	fi ;;
+-*-*-linux*|*-*-gnu|*-*-k*bsd*-gnu|*-*-kopensolaris*-gnu) icu_cv_host_frag=mh-linux ;;
++*-*-linux*|*-*-gnu|*-*-k*bsd*-gnu|*-*-kopensolaris*-gnu|*-*-veda*) icu_cv_host_frag=mh-linux ;;
+ i[34567]86-*-cygwin)
+ 	if test "$GCC" = yes; then
+ 		icu_cv_host_frag=mh-cygwin
+@@ -6003,7 +6003,7 @@
+             OLD_LDFLAGS="${LDFLAGS}"
+ 
+             case "${host}" in
+-            *-linux*|i*86-*-*bsd*|i*86-pc-gnu|*-haiku*)
++            *-linux*|i*86-*-*bsd*|i*86-pc-gnu|*-haiku*|*-veda*)
+                 if test "$GCC" = yes; then
+                     CPPFLAGS="${CPPFLAGS} -ffunction-sections -fdata-sections"
+                     LDFLAGS="${LDFLAGS} -Wl,--gc-sections"
+@@ -7008,7 +7008,7 @@
+ # Check to see if genccode can generate simple assembly.
+ GENCCODE_ASSEMBLY=
+ case "${host}" in
+-*-linux*|*-kfreebsd*-gnu*|i*86-*-*bsd*|i*86-pc-gnu)
++*-linux*|*-kfreebsd*-gnu*|i*86-*-*bsd*|i*86-pc-gnu|*-veda*)
+     if test "$GCC" = yes; then
+         # We're using gcc, and the simple -a gcc command line works for genccode
+         GENCCODE_ASSEMBLY="-a gcc"
+--- a/source/configure.ac
++++ b/source/configure.ac
+@@ -306,7 +306,7 @@
+             OLD_LDFLAGS="${LDFLAGS}"
+ 
+             case "${host}" in
+-            *-linux*|i*86-*-*bsd*|i*86-pc-gnu|*-haiku*)
++            *-linux*|i*86-*-*bsd*|i*86-pc-gnu|*-haiku*|*-veda*)
+                 if test "$GCC" = yes; then
+                     CPPFLAGS="${CPPFLAGS} -ffunction-sections -fdata-sections"
+                     LDFLAGS="${LDFLAGS} -Wl,--gc-sections"
+@@ -613,7 +613,7 @@
+ # Check to see if genccode can generate simple assembly.
+ GENCCODE_ASSEMBLY=
+ case "${host}" in
+-*-linux*|*-kfreebsd*-gnu*|i*86-*-*bsd*|i*86-pc-gnu)
++*-linux*|*-kfreebsd*-gnu*|i*86-*-*bsd*|i*86-pc-gnu|*-veda*)
+     if test "$GCC" = yes; then
+         # We're using gcc, and the simple -a gcc command line works for genccode
+         GENCCODE_ASSEMBLY="-a gcc"

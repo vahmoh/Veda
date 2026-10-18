@@ -60,6 +60,19 @@ fn test_vfs_system_image() -> TestResult {
     let mut buf = alloc::vec![0u8; len as usize];
     vmo.read(0, &mut buf).map_err(|e| e.to_string())?;
     check(buf.starts_with(b"Veda"), "version file contents")?;
+    // Its pages are the system image's: read-only, and a slice of them is
+    // the same bytes. There is none past their end or from inside a page,
+    // nor of memory a VMO has of its own.
+    check(vmo.write(0, b"x") == Err(abi::Error::AccessDenied), "a system file's pages are read-only")?;
+    let pages = vmo.slice(0, len as usize).map_err(|e| e.to_string())?;
+    let mut again = alloc::vec![0u8; len as usize];
+    pages.read(0, &mut again).map_err(|e| e.to_string())?;
+    check(again == buf, "a slice of a system file's pages")?;
+    let size = vmo.size().map_err(|e| e.to_string())?;
+    check(matches!(vmo.slice(0, size + 4096), Err(abi::Error::OutOfRange)), "no slice past the end")?;
+    check(matches!(vmo.slice(1, 1), Err(abi::Error::InvalidArgs)), "a slice starts on a page")?;
+    let own = Vmo::create(4096).map_err(|e| e.to_string())?;
+    check(matches!(own.slice(0, 4096), Err(abi::Error::NotSupported)), "no slice of a VMO's own memory")?;
     let denied = fs.open("/system/etc/version".into(), open_flags::WRITE).map_err(|e| e.to_string())?;
     check(denied == Err(FsError::ReadOnly), "system image is read-only")
 }
@@ -376,7 +389,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 30] = [
+    let tests: [Test; 31] = [
         ("ipc primitives", test_ipc_primitives),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
@@ -395,6 +408,7 @@ fn main() -> i32 {
         ("vfs read/write", test_vfs_read_write),
         ("vfs space", test_vfs_space),
         ("vfs open files", posix::test_vfs_open_files),
+        ("programs run from the system image", posix::test_shared_program_pages),
         ("c programs", posix::test_c_programs),
         ("rust programs", posix::test_rust_programs),
         ("crates on the standard library", posix::test_std_crates),

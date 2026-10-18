@@ -82,6 +82,20 @@ pub fn vmo_get_size(raw: RawHandle) -> SysResult {
     ok(get_vmo(raw, Rights::NONE)?.size() as usize)
 }
 
+pub fn vmo_create_slice(raw: RawHandle, offset: usize, size: usize) -> SysResult {
+    let h = handle(raw, Rights::DUPLICATE)?;
+    let KObject::Vmo(vmo) = &h.object else { return Err(Error::WrongType) };
+    let slice = vmo.slice(offset as u64, size as u64)?;
+    ok(insert(KObject::Vmo(slice), h.rights)? as usize)
+}
+
+pub fn vmo_set_size(raw: RawHandle, size: usize) -> SysResult {
+    if !get_vmo(raw, Rights::WRITE)?.grow(size as u64) {
+        return Err(Error::InvalidArgs);
+    }
+    ok(0)
+}
+
 pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usize) -> SysResult {
     let r = get_resource(res, Rights::NONE)?;
     if size == 0 || !r.permits(resource_kind::MMIO, paddr as u64, size as u64) {

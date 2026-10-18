@@ -178,3 +178,40 @@ pub unsafe fn switch(prev: *mut Context, next: *mut Context, next_stack_top: u64
     // by a previous switch; the caller keeps `prev` alive meanwhile.
     unsafe { vk_context_switch(&raw mut (*prev).rsp, (*next).rsp) };
 }
+
+/// The user registers of a thread that is not running user code, as its
+/// last entry into the kernel saved them (a trap frame at the top of its
+/// kernel stack, whose top is `kernel_stack_top`, as a new thread's is
+/// prepared), with its thread pointer from `ctx`.
+///
+/// # Safety
+/// The thread must not be running user code (it is in the kernel, or has
+/// not started), and its kernel stack must be live.
+pub unsafe fn user_state(kernel_stack_top: u64, ctx: &Context) -> abi::ThreadState {
+    let at = kernel_stack_top - core::mem::size_of::<TrapFrame>() as u64;
+    // SAFETY: per the caller, the frame its entry saved is there, and
+    // nothing writes it while it is not running user code (but a system
+    // call's result: a word at a time, under the BKL the caller holds).
+    let f = unsafe { core::ptr::read(at as *const TrapFrame) };
+    abi::ThreadState {
+        rax: f.rax,
+        rbx: f.rbx,
+        rcx: f.rcx,
+        rdx: f.rdx,
+        rsi: f.rsi,
+        rdi: f.rdi,
+        rbp: f.rbp,
+        rsp: f.rsp,
+        r8: f.r8,
+        r9: f.r9,
+        r10: f.r10,
+        r11: f.r11,
+        r12: f.r12,
+        r13: f.r13,
+        r14: f.r14,
+        r15: f.r15,
+        rip: f.rip,
+        rflags: f.rflags,
+        fs_base: ctx.fs_base,
+    }
+}

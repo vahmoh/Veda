@@ -363,6 +363,15 @@ impl<'a> Ui<'a> {
         }
     }
 
+    /// Scrolls the scroll area `id_label` by `dy` (down when positive), as
+    /// far as its content goes: for its keys (arrows, Page Up and Down).
+    pub fn scroll_by(&mut self, id_label: &str, dy: i32) {
+        let id = self.id(id_label) ^ 0x5c01;
+        let offset = self.state.floats.get(&id).copied().unwrap_or(0.0);
+        // The area keeps it within its content when it is next drawn.
+        self.state.floats.insert(id, (offset + dy as f32).max(0.0));
+    }
+
     /// Scrolls a scroll area so that `[y, y+h)` (content coordinates) is visible.
     pub fn scroll_into_view(&mut self, id_label: &str, viewport_h: i32, y: i32, h: i32) {
         let id = self.id(id_label) ^ 0x5c01;
@@ -449,6 +458,13 @@ impl<'a> Ui<'a> {
             }
         });
         out
+    }
+
+    /// Moves keyboard focus to the list `id_label`, whose arrow keys then
+    /// choose a row and Enter activates it.
+    pub fn focus_list(&mut self, id_label: &str) {
+        let id = self.id(id_label) ^ 0x1157;
+        self.focus(id);
     }
 
     /// Default row background for list painters.
@@ -631,6 +647,31 @@ mod tests {
         assert!(input.text.is_empty());
         drop(step);
         assert_eq!(text, "draftab");
+    }
+
+    #[test]
+    fn lists_given_the_keyboard_and_scroll_areas_go_by_their_keys() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        let mut selected = None;
+        let rows = |ui: &mut Ui, selected: &mut Option<usize>| {
+            ui.list(Rect::new(0, 0, 200, 100), "rows", 50, 20, selected, |_, _, _, _| {})
+        };
+        // Without the keyboard, the arrows are not the list's.
+        press(&mut input, &[keys::DOWN], "");
+        frame(&mut ctx, &mut state, &mut input, |ui| rows(ui, &mut selected));
+        assert_eq!(selected, None);
+        frame(&mut ctx, &mut state, &mut input, |ui| ui.focus_list("rows"));
+        for row in 0..2 {
+            press(&mut input, &[keys::DOWN], "");
+            let chosen = frame(&mut ctx, &mut state, &mut input, |ui| rows(ui, &mut selected));
+            assert_eq!((selected, chosen.clicked), (Some(row), Some(row)));
+        }
+        // A scroll area goes by its keys as far as its content does.
+        let area = |ui: &mut Ui| ui.scroll_area(Rect::new(0, 0, 200, 100), "text", 500, |_, offset| offset);
+        for (by, offset) in [(150, 150), (10_000, 400), (-100, 300), (-10_000, 0)] {
+            frame(&mut ctx, &mut state, &mut input, |ui| ui.scroll_by("text", by));
+            assert_eq!(frame(&mut ctx, &mut state, &mut input, area), offset, "by {by}");
+        }
     }
 
     #[test]

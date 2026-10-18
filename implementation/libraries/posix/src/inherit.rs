@@ -17,7 +17,8 @@
 //! | `posix.sigign` | the signals it ignores, in hexadecimal: bit `n - 1` for signal `n` |
 //! | `posix.sigmask` | its main thread's signal mask, likewise |
 //! | `posix.fd.N` | descriptor `N`: `dir:PATH`, `null` or `log` |
-//! | `posix.socket.N` | descriptor `N` is a socket, carried by the handles of roles `FD + N` and (a network connection's channel) `FD_EXTRA + N`, as `crate::carry` says, in hexadecimal |
+//! | `posix.stack` | the main thread's stack: its top and size, in hexadecimal (`TOP:SIZE`), as the loader made it (`abi::startup::MAIN_STACK`) |
+//! | `posix.carried.N` | descriptor `N` is a socket or a memory file, carried by the handles of roles `FD + N` and (a network connection's channel) `FD_EXTRA + N`, as `crate::carry` says, in hexadecimal |
 //!
 //! A program started by anything else inherits nothing of these: no signal
 //! ignored or blocked, and descriptors only from handles.
@@ -46,14 +47,17 @@ pub struct Inherited {
     pub mask: u64,
     /// Its descriptors that are no kernel object.
     pub fds: Vec<(i32, Pseudo)>,
-    /// Its descriptors that are sockets: what makes their handles sockets.
-    pub sockets: Vec<(i32, Vec<u8>)>,
+    /// Its descriptors that are sockets or memory files: what makes their
+    /// handles what they are.
+    pub carried: Vec<(i32, Vec<u8>)>,
+    /// Its main thread's stack: its top and size.
+    pub main_stack: Option<(usize, usize)>,
 }
 
 const IGNORED: &str = "posix.sigign";
 const MASK: &str = "posix.sigmask";
 const FD: &str = "posix.fd.";
-const SOCKET: &str = "posix.socket.";
+const CARRIED: &str = "posix.carried.";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -74,7 +78,7 @@ fn fd_number(key: &str, prefix: &str) -> Option<i32> {
 impl Inherited {
     /// The startup message's entries that say it.
     pub fn entries(&self) -> Vec<String> {
-        let mut out = Vec::with_capacity(self.fds.len() + self.sockets.len() + 2);
+        let mut out = Vec::with_capacity(self.fds.len() + self.carried.len() + 2);
         if self.ignored != 0 {
             out.push(format!("{IGNORED}={:x}", self.ignored));
         }
@@ -88,8 +92,8 @@ impl Inherited {
                 Pseudo::Log => format!("{FD}{n}=log"),
             });
         }
-        for (n, socket) in &self.sockets {
-            out.push(format!("{SOCKET}{n}={}", hex(socket)));
+        for (n, carried) in &self.carried {
+            out.push(format!("{CARRIED}{n}={}", hex(carried)));
         }
         out
     }
@@ -101,10 +105,15 @@ impl Inherited {
         for (key, value) in entries {
             match key {
                 IGNORED => out.ignored = u64::from_str_radix(value, 16).unwrap_or(0),
+                abi::startup::MAIN_STACK => {
+                    out.main_stack = value.split_once(':').and_then(|(top, size)| {
+                        Some((usize::from_str_radix(top, 16).ok()?, usize::from_str_radix(size, 16).ok()?))
+                    })
+                }
                 MASK => out.mask = u64::from_str_radix(value, 16).unwrap_or(0),
-                _ if key.starts_with(SOCKET) => {
-                    let (Some(n), Some(socket)) = (fd_number(key, SOCKET), unhex(value)) else { continue };
-                    out.sockets.push((n, socket));
+                _ if key.starts_with(CARRIED) => {
+                    let (Some(n), Some(carried)) = (fd_number(key, CARRIED), unhex(value)) else { continue };
+                    out.carried.push((n, carried));
                 }
                 _ => {
                     let Some(n) = fd_number(key, FD) else {
@@ -136,7 +145,8 @@ mod tests {
             ignored: 1 << 12,
             mask: (1 << 9) | (1 << 63),
             fds: alloc::vec![(3, Pseudo::Dir("/home/user/a=b".into())), (0, Pseudo::Null), (2, Pseudo::Log),],
-            sockets: alloc::vec![(4, b"/tmp/s:1=".to_vec()), (5, alloc::vec![]), (6, alloc::vec![0xff, 0])],
+            carried: alloc::vec![(4, b"/tmp/s:1=".to_vec()), (5, alloc::vec![]), (6, alloc::vec![0xff, 0])],
+            main_stack: None,
         };
         let entries = i.entries();
         assert_eq!(entries[0], "posix.sigign=1000");
@@ -157,11 +167,22 @@ mod tests {
             ("posix.fd.5", "dir:relative"),
             ("posix.fd.6", "log"),
             ("PATH", "/system/bin"),
-            ("posix.socket.7", "zz"),
-            ("posix.socket.8", "abc"),
-            ("posix.socket.-9", "00"),
-            ("posix.socket.x", "00"),
+            ("posix.carried.7", "zz"),
+            ("posix.carried.8", "abc"),
+            ("posix.carried.-9", "00"),
+            ("posix.carried.x", "00"),
         ]);
         assert_eq!(parsed, Inherited { fds: alloc::vec![(6, Pseudo::Log)], ..Default::default() });
+    }
+
+    #[test]
+    fn the_main_stack_comes_from_the_loader_alone() {
+        let parsed = Inherited::parse([("posix.stack", "7ffff0000000:800000")]);
+        assert_eq!(parsed.main_stack, Some((0x7fff_f000_0000, 0x80_0000)));
+        // It is never passed on to a child, whose loader says its own.
+        assert!(parsed.entries().is_empty());
+        for bad in ["7ffff0000000", "x:800000", "1:y", ""] {
+            assert_eq!(Inherited::parse([("posix.stack", bad)]).main_stack, None, "{bad}");
+        }
     }
 }

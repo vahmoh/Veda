@@ -7,9 +7,10 @@ Third-party software that Veda builds from source. Veda's own code is
 Rust; C code, Rust itself and any crate Veda changes come as ports: the
 upstream release, pinned by its SHA-256 and changed only by a small,
 readable and explained patch. The fonts Veda ships are here too, as
-released.
+released, and the data the web engine reads (more fonts, the certificate
+authorities TLS trusts), downloaded as released.
 
-**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [Driver VM](#driver-vm) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
+**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [Driver VM](#driver-vm) · [The web engine](#the-web-engine) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
 
 ## How ports are built
 
@@ -17,7 +18,7 @@ Each port is a directory:
 
 | File | What it holds |
 |------|---------------|
-| `port.toml` | The name, version, download address, the archive's SHA-256 and the licence |
+| `port.toml` | The name, version, download address, the archive's SHA-256 and the licence; `archive`, the name the download is kept under where its address's last part will not do (GitHub's archives of tags and commits); for a port of several files (`files`), the file that lists each one's SHA-256 and path under the address |
 | `veda.patch` | Veda's changes, applied with `patch -p1` to the unpacked archive |
 | `architectures/<architecture>/` | The architecture's `veda.patch`, applied after the port's, and its other files, such as the driver VM kernel's options |
 
@@ -40,6 +41,9 @@ stage runs again only when its inputs change.
 `cargo automation toolchain` builds these with `build.sh`, in
 `target/toolchain`, as [C on Veda](../../documentation/C.md#the-toolchain)
 and [Rust on Veda](../../documentation/RUST.md#the-toolchain) describe.
+Its last stage gathers their licence texts ([Licences](#licences)), and
+those of the crates Rust's standard library for Veda is built from, which
+the release vendors.
 
 | Port | Version | Licence | What Veda uses it for |
 |------|---------|---------|-----------------------|
@@ -61,14 +65,20 @@ What the patches change:
   linking, `rcrt1.o` for `-static-pie`, musl's types) and `veda.opt`
   (`-pthread`, `-rdynamic`, `-posix`); no `fixincludes` for musl's
   headers; libstdc++ checks Veda's C library as Linux's when cross
-  compiled. On AMD64, `gcc/config/i386/veda.h`: the System V x86-64 ABI,
-  the stack protector's canary where musl keeps it.
+  compiled; C++ sees the C library's GNU extensions (`_GNU_SOURCE`), as on
+  GNU/Linux; libatomic is built, as for any POSIX system. On AMD64,
+  `gcc/config/i386/veda.h`: the System V x86-64 ABI, the stack
+  protector's canary where musl keeps it.
 * **gmp**, **mpfr**, **mpc**: `config.sub` knows `veda`.
 * **musl**: `__init_libc` sets the POSIX layer up, `posix_spawn` asks it to
   start the program, `dl_iterate_phdr` names the program by `AT_EXECFN`
   (there is no `/proc/self/exe`), names not in `/etc/hosts` go to the
-  network service's resolver (`__lookup_name`), and musl's DNS client to
-  its DNS servers (`__get_resolv_conf`). On AMD64, system calls, `_start`
+  network service's resolver (`__lookup_name`), musl's DNS client to
+  its DNS servers (`__get_resolv_conf`), `pthread_getattr_np` takes the
+  main thread's stack from the layer (`__veda_main_stack`; there is no
+  `mremap` to probe it with), and with no `TZ` the time zone is the
+  system's offset from UTC (`__tz.c`, from the layer's `__veda_tz`). On
+  AMD64, system calls, `_start`
   (the bootstrap channel) and the thread routines (`src/thread/x86_64/*.s`)
   go through the layer; `vfork` takes the generic version, which fails:
   there is no `fork`. See [C on Veda](../../documentation/C.md#how-it-works).
@@ -93,7 +103,8 @@ filter, scaler and resampler that `mediadec` uses. It stays LGPL:
 ## Driver VM
 
 `cargo automation linux` builds these with `linux/build.sh`, in
-`target/linux`, for the [driver VM](../../documentation/DRIVERVM.md).
+`target/linux`, for the [driver VM](../../documentation/DRIVERVM.md), and
+gathers the kernel's and Mesa's licence texts ([Licences](#licences)).
 
 | Port | Version | Licence | What Veda uses it for |
 |------|---------|---------|-----------------------|
@@ -111,7 +122,8 @@ What the patches change:
   `architectures/<architecture>/veda.config`, and the build fails if one
   does not take. `firmware.txt` and
   `architectures/<architecture>/firmware.txt` list the firmware it loads,
-  with each file's source and SHA-256.
+  with each file's source, SHA-256 and licence, and the sources' licences
+  (`licence` lines, each text pinned by its SHA-256 as the files are).
 * **zlib**, **elfutils**: none; built static for the build machine.
 * **mesa**: Veda's renderer (`implementation/guests/linux/renderer`) is a
   target of Mesa's build (`src/gallium/targets/veda`): the guest's program
@@ -126,6 +138,154 @@ What the patches change:
   (Meson) with the guest's toolchain, built from the same binutils, GCC
   and musl releases without Veda's patches; `cargo automation` builds
   the renderer (Ninja) with the system.
+
+## The web engine
+
+`cargo automation web` builds these with `wpewebkit/build.sh`, in
+`target/web`, for [the browser](../../documentation/BROWSER.md): the
+libraries for Veda, static and position-independent, each compiled with
+the same flags (`VEDA_CFLAGS`: stack protection, a section per function
+for the link to drop what it does not use), and the tools their builds
+run, for the build machine, built from their releases without Veda's
+patches. Its last stage gathers the libraries' licence texts
+(`LICENCE_FILES`), which the image installs in `/system/licences/web`:
+a library added without them fails the build.
+
+| Port | Version | Licence | What Veda uses it for |
+|------|---------|---------|-----------------------|
+| `wpewebkit` | 2.54.1 | LGPL-2.1-or-later AND BSD-2-Clause | The web engine: HTML, CSS, JavaScript, the network process |
+| `glib` | 2.90.1 | LGPL-2.1-or-later | GLib, GObject and GIO: the event loop, objects and I/O the engine stands on |
+| `glib-networking` | 2.90.0 | LGPL-2.1-or-later | GIO's TLS, on OpenSSL, and proxies from the environment |
+| `libsoup` | 3.8.0 | LGPL-2.0-or-later | HTTP/1.1 and HTTP/2, cookies, caches, WebSockets |
+| `openssl` | 3.5.9 | Apache-2.0 | TLS, under glib-networking ([why not rustls](../../documentation/DEPENDENCIES.md#c-and-c-libraries)) |
+| `nghttp2`, `brotli`, `libpsl` | 1.70.0, 1.2.0, 0.23.3 | MIT | HTTP/2's framing; Brotli (pages, WOFF2 fonts); the Public Suffix List |
+| `icu` | 78.3 | Unicode-3.0 | Unicode, text breaking, collation, locales and `Intl` |
+| `harfbuzz` | 14.6.0 | MIT-Modern-Variant | Text shaping |
+| `freetype` | 2.15.0 | FTL OR GPL-2.0-or-later | Font files and their glyphs |
+| `fontconfig` | 2.18.3 | HPND-sell-variant | Which font serves a family and the characters a page asks for (`fonts.conf`, Veda's configuration) |
+| `expat` | 2.9.0 | MIT | Skia's SVG glyphs |
+| `libxml2`, `libxslt` | 2.15.4, 1.1.45 | MIT | XML documents and XSLT; fontconfig's configuration |
+| `sqlite` | 3.54.1 | blessing | The engine's databases: IndexedDB, local storage, cookies, HSTS |
+| `libpng`, `libjpeg-turbo`, `libwebp`, `lcms2` | 1.6.59, 3.2.0, 1.6.0, 2.19.1 | libpng-2.0; IJG AND BSD-3-Clause AND Zlib; BSD-3-Clause; MIT | Pictures and their colour profiles |
+| `libgcrypt`, `libgpg-error`, `libtasn1` | 1.12.4, 1.61, 4.21.0 | LGPL-2.1-or-later | The Web Crypto API and digests; ASN.1 for its keys |
+| `libepoxy`, `egl-registry` | 1.5.10, a commit | MIT; Apache-2.0 AND MIT | OpenGL ES and EGL's entry points, and EGL's headers |
+| `libxkbcommon` | 1.13.2 | MIT | Key symbols, which WPE's platform names keys with |
+| `libffi`, `pcre2`, `zlib` | 3.8.0, 10.49, 1.3.2 | MIT; BSD-3-Clause WITH PCRE2-exception; Zlib | GLib's closures and regular expressions; compression |
+| `gstreamer`, `gst-plugins-base`, `gst-plugins-good`, `gst-plugins-bad`, `gst-libav` | 1.28.8 | LGPL-2.1-or-later | Media: `<video>`, `<audio>`, Media Source Extensions and Web Audio. GStreamer's core and libraries, and only the plugins the engine uses: playback, finding types, converting and resampling, GIO's streams; the MP4, Matroska (WebM), Ogg and WAV demuxers, the parsers, the automatic audio sink, splitting channels, tempo, WebVTT's encoder, the video sink of players of sound alone; the decoders on FFmpeg |
+| `ffmpeg`, `dav1d` | 9.0.2, 1.5.4 | LGPL-2.1-or-later; BSD-2-Clause | The web's codecs, through gst-libav: AV1 (dav1d), VP9, VP8, H.264, Opus, Vorbis, AAC, MP3 and FLAC. The ports of Videos' decoder ([above](#toolchain)), built again for the web |
+| `libogg`, `opus` | 1.3.6, 1.6.1 | BSD-3-Clause | The Ogg container; Opus's parser, for Media Source Extensions |
+| `meson`, `pkgconf`, `gperf`, `ruby`, `libyaml` | 1.12.1, 3.0.9, 3.3, 3.4.11, 0.2.5 | Apache-2.0; ISC; GPL-3.0-or-later; Ruby OR BSD-2-Clause; MIT | For the build machine: the libraries' builds, finding them, WebKit's generated tables, JavaScriptCore's interpreter and code generators (Ruby, whose YAML is libyaml's) |
+
+GStreamer is static (`gstreamer-full`, as GStreamer's own build makes it
+for static programs): its core is built so that `gst_init` calls the
+program's `gst_init_static_plugins`; `build.sh` names the plugins
+(`GST_PLUGINS`) and makes `libgstreamer-full-1.0.a`, whose
+`gst_full_register_plugins` registers them, and `gstreamer-full-1.0.pc`,
+with which WebKit is built (`USE_GSTREAMER_FULL`) and the browser links
+them and the libraries they need ([Media](../../documentation/BROWSER.md#media)).
+No GPL code comes in: gst-plugins-bad is built without its GPL plugins,
+and FFmpeg as Videos' is, LGPL (`build.sh` checks `CONFIG_GPL 0` and
+`CONFIG_NONFREE 0`), with only the decoders and parsers of the web's
+codecs, libavformat and libavfilter without their demuxers or filters
+(gst-libav links them), its compiler's flags out of the configuration it
+records. WebKit is built again for a change of GStreamer's headers or its
+libraries' pkg-config files (`GST_HEADERS`), not of its plugins.
+
+And the data the engine reads, which the image installs:
+
+| Port | Version | Licence | What it is |
+|------|---------|---------|------------|
+| `ca-certificates` | 2026-09-25 | MPL-2.0 | Mozilla's certificate authorities, as curl extracts them (`/system/etc/ssl/cert.pem`) |
+| `noto-fonts` | 2026.10.01 | OFL-1.1 | Noto's serif, and the sans-serif faces of the scripts Veda's own fonts lack: a set of files (`files.sha256`) from the project's monthly release |
+| `noto-cjk` | 2.004 | OFL-1.1 | Noto Sans CJK, every weight in one variable collection |
+| `noto-emoji` | 2.057 | OFL-1.1 | Noto Color Emoji (COLRv1), of Unicode 18.0 |
+
+What the patches change:
+
+* **wpewebkit**: Veda as a platform (`OS(VEDA)`), most of it taking
+  Linux's way where Veda has Linux's interface: memory (bmalloc, libpas),
+  threads (stacks, names, ids, suspension through `<veda/thread.h>`, the
+  machine context), JavaScriptCore (the DFG's polled traps, WebAssembly's
+  bounds checks), shared memory as memory files, memory figures from
+  `<veda/memory.h>` and `sysinfo`, the program's path, `navigator.platform`;
+  the engine's processes as the program that embeds it, started again
+  (`Source/WebKit/Shared/veda`); the web process's sandbox, which Linux's
+  ports have of bubblewrap and seccomp (off): as it starts, before any
+  page, a web process gives up, for good, all of the file system but the
+  system image, fontconfig's cache and the devices, every service but those
+  the embedder's code in it reaches (`WEBKIT_VEDA_WEB_PROCESS_SERVICES`),
+  and creating processes, reading the kernel log and making memory
+  executable, with `<veda/sandbox.h>`, then checks that they are gone
+  (`WebProcess::initializeSandbox`, `Source/WebKit/WebProcess/veda`); the
+  network process's, which Linux's ports have none of: it gives up all of
+  the file system but the system image, the devices and the places of the
+  user's files the embedder names (`WEBKIT_VEDA_NETWORK_PROCESS_FILES`:
+  the engine's data, cache, downloads and temporary files), every service
+  but the network's, and the same of the kernel's, then checks that they
+  are gone (`NetworkProcess::initializeSandbox`,
+  `Source/WebKit/NetworkProcess/veda`); pages from the user's files, which
+  the network process reads: the embedder's loads lend it the page's
+  folder, to read, through the file system's loans (`veda_lend_files` in
+  the UI process, a new message `NetworkProcess::BorrowFiles`,
+  `veda_borrow_files`), where Cocoa's ports give a sandbox extension, and
+  the UI process takes it back (`veda_take_back_files`) once no page open
+  needs it (none shows, in any of its frames, loads or has in its history
+  a page from it, as its tabs close and their histories move on), and has
+  WebKit forget it for every web process (another message,
+  `NetworkProcess::ForgetFiles`,
+  and in what the UI process assumes each may read, so that a page's
+  navigation there fails as one outside the folders lent for it does),
+  lending it again as the embedder loads, reloads or goes back to such a
+  page; no
+  "universal file read" (a page's link or form to a file outside the
+  folders lent for it, into its window or a new one, fails, saying so,
+  rather than its process being ended for the address; a web process
+  ended for an invalid message is logged), and a web process has the
+  network process read only the places lent for its page, allowed it
+  before it has shown anything, a page from the user's files going to a
+  new process where its tab's was not allowed its folder
+  (`Source/WebKit/UIProcess/veda/FileLoansVeda.cpp`,
+  `NetworkFileLoansVeda.cpp`), and without WebCore's check that such a
+  page shows only files of its volume, which a sandboxed web process
+  cannot make (as under bubblewrap); the types of the web's files by their
+  extensions, there being no shared MIME database for xdgmime to read
+  (`MIMETypeRegistryXdg.cpp`); a static build, with xdgmime's
+  names kept apart from GIO's copy; WPE's hardware acceleration policy, as
+  GTK's (pages painted on the CPU, or composited, as the browser chooses);
+  no injected bundle; and damage that covers an antialiased layer's edges
+  (the fringe a rotating element's corners left behind). See
+  [WebKit on Veda](../../documentation/BROWSER.md#webkit-on-veda).
+* **icu**: Veda as a Linux-like platform in its build, and the system's
+  time zone named by the tz database's zone of its offset
+  (`uprv_tzname`).
+* **glib**: `g_unix_fd_query_path` says it is not supported (Veda's
+  descriptors do not know their paths); its libatomic found as the static
+  library it is.
+* **glib-networking**: its TLS and proxy modules built as static
+  libraries, which the program registers (`g_io_openssl_load`,
+  `g_io_environmentproxy_load`), there being no modules to load.
+* **libepoxy**: with no `dlopen`, it finds every function through the
+  program's own `eglGetProcAddress` (the `egl` crate's), to which it
+  refers weakly.
+* **openssl**: Veda's configuration (`Configurations/50-veda.conf`):
+  threads, no shared libraries or modules.
+* **fontconfig**: Veda's `statfs` is Linux's (`fcstat.c`); `fonts.conf`,
+  beside the port, is Veda's configuration: the fonts in `/system/fonts`,
+  the generic families and the languages' CJK faces, and the cache in
+  `/tmp/fontconfig`, which the browser makes and its web processes, which
+  cannot write there, only read.
+* **libxml2**: no test module where there are no shared libraries.
+* **gst-libav**: FFmpeg's dav1d decoder (`avdec_libdav1d`) is
+  registered, which gst-libav leaves out as one of an external library's:
+  Veda has no other AV1 decoder for GStreamer (gst-plugins-rs's `dav1ddec`
+  is built apart, with Cargo), and Videos decodes AV1 so too. A frame that
+  a picture comes out for is shown: gst-libav took one that FFmpeg asked
+  no buffer for (`get_buffer2`) to be decoded only, and dav1d's decoder
+  allocates its pictures itself.
+* **libffi**: Veda's ELF in its assembly; **libgcrypt**, **libgpg-error**,
+  **libtasn1**, **icu**: `config.sub` knows Veda; **libgpg-error**: the
+  lock type of musl's threads (`lock-obj-pub.x86_64-pc-veda.h`).
+* The others: none.
 
 ## Crates
 
@@ -253,7 +413,10 @@ What the patches change:
 unmodified, under the SIL Open Font License 1.1 (`OFL.txt`); its README
 gives each one's copyright. Nothing is built or patched:
 `cargo automation build` installs them in `/system/fonts`, licence
-included, and `font`'s tests and `videogen` read them from here.
+included, and `font`'s tests and `videogen` read them from here. Noto's
+fonts for the web engine are ports of their own ([above](#the-web-engine)),
+downloaded as released and installed in `/system/fonts/noto` with the
+browser.
 
 ## Updating a port
 
@@ -264,7 +427,8 @@ included, and `font`'s tests and `videogen` read them from here.
    the checksum crates.io's index gives, which a `Cargo.lock` with the
    release shows.
 2. Put the new version, address and SHA-256 in `port.toml`, and a crate's
-   version in the workspace's `Cargo.toml` too.
+   version in the workspace's `Cargo.toml` too. Check that the files its
+   build's `LICENCE_FILES` names still hold the release's licence.
 3. Unpack the release, apply the old `veda.patch`, then each
    `architectures/<architecture>/veda.patch`, and resolve what no longer
    applies. Make the patches again with `diff -ruN a b`, paths starting at
@@ -277,13 +441,31 @@ included, and `font`'s tests and `videogen` read them from here.
 
 ## Licences
 
-The ports keep their licences, given in the tables above. Distributing
-Veda's image means offering the source of the ports it contains: the
-archives `port.toml` names and the patches here.
+The ports keep their licences, given in the tables above. The image
+carries the texts of each one it has, as its release has them, in
+`/system/licences/<port>` (the web engine's in `/system/licences/web`),
+with `SOURCE`, which says where its source is: the archive `port.toml`
+names, and the patches here. About Veda lists them
+([Licensing](../../documentation/LICENSING.md#the-texts-in-the-image)).
+
+Each build gathers its ports' texts in a stage of its own, `licences`: the
+files of each port's release that `LICENCE_FILES` names in `build.sh`,
+`linux/build.sh` and `wpewebkit/build.sh` (with, for Rust, those of the
+crates its standard library is built from). A port added to a build
+without its texts listed there fails that build (the web engine's
+libraries whose licences ask for none are in its `LICENCE_FREE`), and an
+image build fails where it has a port without its texts: build its ports
+again (`cargo automation toolchain`, `linux` or `web`), which gathers them.
+The firmware lists name the licence each file comes under, and the image
+carries those texts in `/system/licences/firmware`.
+
+Distributing Veda's image means offering the source of the ports it
+contains: the archives `port.toml` names and the patches here.
 [Licensing](../../documentation/LICENSING.md) covers Veda as a whole.
 
 > [!NOTE]
 > Some formats FFmpeg decodes (H.264, HEVC and AAC among them) are covered
 > by patents in some countries, which the software licences do not grant.
 > Whoever distributes Veda there decides whether licences are needed, or
-> leaves those decoders out of `build.sh`.
+> leaves those decoders out of `build.sh` (Videos') and
+> `wpewebkit/build.sh` (the browser's).

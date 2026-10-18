@@ -23,7 +23,8 @@
 //!   carries the working directory and the handles (registry, file
 //!   descriptors, terminal), and, where a Veda program's environment goes,
 //!   what their POSIX layer inherits from the one that starts them
-//!   ([`Spawn::inherited`]).
+//!   ([`Spawn::inherited`]) and where their main thread's stack is
+//!   ([`startup::MAIN_STACK`]).
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -31,7 +32,7 @@ use alloc::vec::Vec;
 
 use abi::startup;
 use abi::{Error, map_flags, nr};
-use elf::{Elf, Kind, Relro};
+use elf::{Elf, Kind, PageRun, Relro};
 
 use crate::object::{Channel, Handle, Process, Thread, Vmo};
 use crate::sys::call;
@@ -107,10 +108,14 @@ fn random_base(len: usize) -> Result<u64, Error> {
 
 /// Maps `elf`'s image into `process`, at its address or, if it is
 /// position-independent, at a random one; relocated for it if `relocate`
-/// (POSIX programs relocate themselves). Returns the load bias, which moves
-/// an address of the file to where it is (downwards too: the arithmetic
-/// wraps).
-fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, SpawnError> {
+/// (POSIX programs relocate themselves). The pages nothing writes are the
+/// pages of `file`, if it is given (the VMO `elf` was parsed from, from
+/// offset 0), where it has them ([`Elf::file_pages`]): every process
+/// running the program shares them. The others are memory of the
+/// process's own, a copy of what the segments put there. Returns the load
+/// bias, which moves an address of the file to where it is (downwards too:
+/// the arithmetic wraps).
+fn load_image(process: &Process, elf: &Elf, relocate: bool, file: Option<&Vmo>) -> Result<u64, SpawnError> {
     let (lo, hi) = elf.span();
     let len = (hi - lo) as usize;
     let base = if elf.is_position_independent() { random_base(len)? } else { lo };
@@ -120,11 +125,20 @@ fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, Spawn
         return Err(SpawnError::BadElf(elf::ElfError::BadSegment));
     }
 
-    // One VMO holding every segment at its offset in the span (zero
-    // elsewhere, which is the bss), mapped page run by page run.
+    let relro = if relocate { Relro::ReadOnly } else { Relro::Writable };
+    // Each run of pages, and where the file has its pages if they can be
+    // the file's own.
+    let runs: Vec<(PageRun, Option<u64>)> =
+        elf::page_runs(elf, relro).map(|run| (run, file.and_then(|_| elf.file_pages(&run)))).collect();
+    // One VMO for the rest, holding the segments those pages show at their
+    // offsets in the span (zero elsewhere, which is the bss).
     let vmo = Vmo::create(len)?;
+    let page = abi::PAGE_SIZE as u64;
     for s in elf.segments() {
-        vmo.write((s.vaddr - lo) as usize, s.data)?;
+        let (first, end) = (s.vaddr / page * page, s.end().checked_next_multiple_of(page).unwrap_or(u64::MAX));
+        if runs.iter().any(|(run, in_file)| in_file.is_none() && run.start < end && first < run.start + run.len) {
+            vmo.write((s.vaddr - lo) as usize, s.data)?;
+        }
     }
     if relocate {
         // Through a mapping of the VMO here, which faults pages in only
@@ -133,8 +147,7 @@ fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, Spawn
         // SAFETY: a mapping of a VMO made above, which nothing else maps yet.
         elf.relocate(unsafe { image.as_mut_slice() }, bias).map_err(SpawnError::BadElf)?;
     }
-    let relro = if relocate { Relro::ReadOnly } else { Relro::Writable };
-    for run in elf::page_runs(elf, relro) {
+    for (run, in_file) in &runs {
         let mut flags = map_flags::FIXED;
         for (on, flag) in [(run.perms.read, map_flags::READ), (run.perms.write, map_flags::WRITE)] {
             if on {
@@ -145,7 +158,10 @@ fn load_image(process: &Process, elf: &Elf, relocate: bool) -> Result<u64, Spawn
             flags |= map_flags::EXECUTE | map_flags::READ;
         }
         let at = run.start.wrapping_add(bias) as usize;
-        vm::map(Some(process), &vmo, (run.start - lo) as usize, run.len as usize, at, flags)?;
+        match (file, in_file) {
+            (Some(file), Some(offset)) => vm::map(Some(process), file, *offset as usize, run.len as usize, at, flags)?,
+            _ => vm::map(Some(process), &vmo, (run.start - lo) as usize, run.len as usize, at, flags)?,
+        };
     }
     Ok(bias)
 }
@@ -229,14 +245,36 @@ impl<'a> Spawn<'a> {
     /// Loads `image` (an ELF64 executable: a Veda program or a POSIX one)
     /// into a new process and starts it.
     pub fn start(self, image: &[u8]) -> Result<Process, SpawnError> {
+        self.start_image(image, None)
+    }
+
+    /// Loads the executable that is the first `len` bytes of `file` into a
+    /// new process and starts it, as [`start`](Self::start) does, with the
+    /// program's pages that nothing writes being the file's own where it
+    /// has them a whole number of pages from where they go (as a file of
+    /// the system image does): every process running the program shares
+    /// them, and loading copies only what is written. The file must not
+    /// change while the program runs, which the caller vouches for (the
+    /// system image cannot).
+    pub fn start_file(self, file: &Vmo, len: usize) -> Result<Process, SpawnError> {
+        let map = vm::Mapping::new(Vmo(file.0.duplicate(None)?), len.max(1), map_flags::READ)?;
+        // SAFETY: a read-only mapping of the file, `len` bytes, which lives
+        // until the program is loaded; nothing changes the file meanwhile.
+        let image = unsafe { &map.as_slice()[..len] };
+        self.start_image(image, Some(file))
+    }
+
+    /// Starts the executable `image`, which is the bytes of `file` if it is
+    /// given.
+    fn start_image(self, image: &[u8], file: Option<&Vmo>) -> Result<Process, SpawnError> {
         if !is_executable(image) {
             return Err(SpawnError::NotExecutable);
         }
         let elf = Elf::parse(image).map_err(SpawnError::BadElf)?;
         match elf.kind() {
-            Kind::Veda => self.start_veda(&elf),
+            Kind::Veda => self.start_veda(&elf, file),
             Kind::OtherVeda => Err(SpawnError::Incompatible),
-            Kind::Posix => self.start_posix(&elf),
+            Kind::Posix => self.start_posix(&elf, file),
         }
     }
 
@@ -291,9 +329,9 @@ impl<'a> Spawn<'a> {
 
     /// Starts a Veda program: relocated where it is placed, its arguments
     /// and environment in its startup message.
-    fn start_veda(self, elf: &Elf) -> Result<Process, SpawnError> {
+    fn start_veda(self, elf: &Elf, file: Option<&Vmo>) -> Result<Process, SpawnError> {
         let (process, thread) = self.create_process()?;
-        let bias = load_image(&process, elf, true)?;
+        let bias = load_image(&process, elf, true, file)?;
 
         // Stack: guard pages, then the stack proper.
         let stack = Vmo::create(STACK_GUARD + MAIN_STACK)?;
@@ -315,9 +353,9 @@ impl<'a> Spawn<'a> {
     /// Starts a POSIX program: its arguments, environment and auxiliary
     /// vector on its stack, and what its POSIX layer inherits in its
     /// startup message.
-    fn start_posix(mut self, elf: &Elf) -> Result<Process, SpawnError> {
+    fn start_posix(mut self, elf: &Elf, file: Option<&Vmo>) -> Result<Process, SpawnError> {
         let (process, thread) = self.create_process()?;
-        let bias = load_image(&process, elf, false)?;
+        let bias = load_image(&process, elf, false, file)?;
 
         // Stack: guard pages, then the stack proper, its top holding the
         // arguments, environment and auxiliary vector.
@@ -350,7 +388,11 @@ impl<'a> Spawn<'a> {
         stack.write(STACK_GUARD + size - len, &img)?;
 
         let entry = elf.entry().wrapping_add(bias) as usize;
-        let inherited = core::mem::take(&mut self.inherited);
+        // Where its main thread's stack is, which only the loader knows
+        // (its top and size, without the guard pages).
+        let stack_entry = alloc::format!("{}={top:x}:{size:x}", startup::MAIN_STACK);
+        let mut inherited = core::mem::take(&mut self.inherited);
+        inherited.push(&stack_entry);
         self.launch(process, thread, entry, sp as usize, &[], &inherited)
     }
 }

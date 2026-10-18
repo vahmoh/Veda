@@ -27,6 +27,7 @@ pub mod errno {
     pub const ENOMEM: isize = linux_raw_sys::errno::ENOMEM as isize;
     pub const EACCES: isize = linux_raw_sys::errno::EACCES as isize;
     pub const EFAULT: isize = linux_raw_sys::errno::EFAULT as isize;
+    pub const EFBIG: isize = linux_raw_sys::errno::EFBIG as isize;
     pub const EBUSY: isize = linux_raw_sys::errno::EBUSY as isize;
     pub const EEXIST: isize = linux_raw_sys::errno::EEXIST as isize;
     pub const ENODEV: isize = linux_raw_sys::errno::ENODEV as isize;
@@ -114,6 +115,18 @@ pub mod at {
     pub const SYMLINK_NOFOLLOW: u32 = linux_raw_sys::general::AT_SYMLINK_NOFOLLOW;
     pub const REMOVEDIR: u32 = linux_raw_sys::general::AT_REMOVEDIR;
     pub const EMPTY_PATH: u32 = linux_raw_sys::general::AT_EMPTY_PATH;
+    pub const NO_AUTOMOUNT: u32 = linux_raw_sys::general::AT_NO_AUTOMOUNT;
+    /// `statx`'s say in how caches are treated (`AT_STATX_SYNC_AS_STAT`,
+    /// `AT_STATX_FORCE_SYNC`, `AT_STATX_DONT_SYNC`).
+    pub const STATX_SYNC_TYPE: u32 = linux_raw_sys::general::AT_STATX_SYNC_TYPE;
+}
+
+/// The major and minor numbers of device number `dev`, as glibc's
+/// `major` and `minor` split it.
+pub fn dev_parts(dev: u64) -> (u32, u32) {
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    (major as u32, minor as u32)
 }
 
 /// `access` modes.
@@ -145,6 +158,8 @@ pub mod fcntl {
     pub const GETOWN: u32 = linux_raw_sys::general::F_GETOWN;
     pub const DUPFD_QUERY: u32 = linux_raw_sys::general::F_DUPFD_QUERY;
     pub const DUPFD_CLOEXEC: u32 = linux_raw_sys::general::F_DUPFD_CLOEXEC;
+    pub const ADD_SEALS: u32 = linux_raw_sys::general::F_ADD_SEALS;
+    pub const GET_SEALS: u32 = linux_raw_sys::general::F_GET_SEALS;
     pub const FD_CLOEXEC: u32 = linux_raw_sys::general::FD_CLOEXEC;
     /// `l_type`s of a lock: shared, exclusive, not held.
     pub const F_RDLCK: i16 = linux_raw_sys::general::F_RDLCK as i16;
@@ -337,6 +352,15 @@ impl Timespec {
     }
 }
 
+/// `struct itimerspec`: a timer's period and the time to its next
+/// expiration.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Itimerspec {
+    pub interval: Timespec,
+    pub value: Timespec,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Timeval {
@@ -479,6 +503,14 @@ pub mod epoll {
     pub const CTL_DEL: u32 = linux_raw_sys::general::EPOLL_CTL_DEL;
     pub const CTL_MOD: u32 = linux_raw_sys::general::EPOLL_CTL_MOD;
     pub const CLOEXEC: u32 = linux_raw_sys::general::EPOLL_CLOEXEC;
+}
+
+/// `timerfd`'s flags.
+pub mod tfd {
+    pub const CLOEXEC: u32 = linux_raw_sys::general::TFD_CLOEXEC;
+    pub const NONBLOCK: u32 = linux_raw_sys::general::TFD_NONBLOCK;
+    pub const TIMER_ABSTIME: u32 = linux_raw_sys::general::TFD_TIMER_ABSTIME;
+    pub const TIMER_CANCEL_ON_SET: u32 = linux_raw_sys::general::TFD_TIMER_CANCEL_ON_SET;
 }
 
 /// `eventfd`'s flags.

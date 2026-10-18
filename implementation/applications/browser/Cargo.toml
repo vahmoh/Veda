@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "browser"
+description = "Browser: the web with WPE WebKit, in tabs: search from the address bar, private tabs, bookmarks, history, downloads, find in the page, zoom, full screen, and the voice agent's hands on it all"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "browser"
+test = false
+bench = false
+
+[dependencies]
+rt = { workspace = true }
+abi = { workspace = true }
+ipc = { workspace = true }
+net = { workspace = true }
+proto = { workspace = true }
+gfx = { workspace = true }
+ui = { workspace = true }
+serde_json = { workspace = true }
+apps-common = { path = "../common" }
+browser-core = { path = "core" }
+# OpenGL ES and EGL for the engine's C (see build.rs).
+egl = { workspace = true }
+
+[lints]
+workspace = true

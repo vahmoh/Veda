@@ -39,8 +39,11 @@ fn vfs_flags(flags: u32) -> u32 {
 }
 
 /// Descriptions for the names of `/dev` that differ between processes:
-/// the terminal and the program's own descriptors.
-fn open_special(path: &str) -> Option<Result<alloc::sync::Arc<Description>, isize>> {
+/// the terminal and the program's own descriptors. A descriptor's name
+/// gives that descriptor, but for a memory file, which opens as a new
+/// description with the access `flags` asks for, as on Linux (so that a
+/// program can make a read-only descriptor of one to hand out).
+fn open_special(path: &str, flags: u32) -> Option<Result<alloc::sync::Arc<Description>, isize>> {
     let fd_alias = match path {
         "/dev/stdin" => 0,
         "/dev/stdout" => 1,
@@ -59,12 +62,19 @@ fn open_special(path: &str) -> Option<Result<alloc::sync::Arc<Description>, isiz
         }
         p => p.strip_prefix("/dev/fd/")?.parse::<i32>().ok()?,
     };
-    Some(fd::get(fd_alias))
+    Some(fd::get(fd_alias).and_then(|desc| match &desc.object {
+        Object::Memfd(m) => {
+            let writable = flags & o::ACCMODE != o::RDONLY;
+            let mode = if writable { o::RDWR } else { o::RDONLY };
+            Ok(Description::new(Object::Memfd(m.reopened(writable)?), mode | (flags & o::NONBLOCK)))
+        }
+        _ => Ok(desc),
+    }))
 }
 
 /// Opens `r` with POSIX `flags`; the description to install.
 pub fn open_resolved(r: &Resolved, flags: u32) -> Result<alloc::sync::Arc<Description>, isize> {
-    if let Some(special) = open_special(&r.path) {
+    if let Some(special) = open_special(&r.path, flags) {
         return special;
     }
     if flags & o::TMPFILE == o::TMPFILE {
@@ -117,13 +127,14 @@ pub fn stat_desc(desc: &Description) -> Result<linux::Stat, isize> {
     };
     Ok(match &desc.object {
         Object::File(f) => vfs::to_linux(&f.stat()?),
+        Object::Memfd(m) => m.stat(),
         Object::Dir(d) => vfs::to_linux(&vfs::stat(&d.path)?),
         Object::Stream(s) if s.is_tty() => pseudo(linux::mode::IFCHR | 0o620, s.koid),
         Object::Stream(s) => pseudo(linux::mode::IFIFO | 0o600, s.koid),
         Object::Inet(s) => pseudo(linux::mode::IFSOCK | 0o777, s.id()),
         Object::Unix(s) => pseudo(linux::mode::IFSOCK | 0o777, s.id()),
         // Linux's anonymous inodes have no type.
-        Object::EventFd(_) | Object::Epoll(_) | Object::Pidfd(_) => pseudo(0o600, 0),
+        Object::EventFd(_) | Object::TimerFd(_) | Object::Epoll(_) | Object::Pidfd(_) => pseudo(0o600, 0),
         Object::Null | Object::Log(_) => pseudo(linux::mode::IFCHR | 0o666, 0),
     })
 }
@@ -150,10 +161,61 @@ pub unsafe fn fstatat(dirfd: i32, name: usize, buf: usize, flags: u32) -> SysRes
 }
 
 fn stat_path(r: &Resolved) -> Result<linux::Stat, isize> {
-    if let Some(special) = open_special(&r.path) {
+    if let Some(special) = open_special(&r.path, o::RDONLY) {
         return stat_desc(&*special?);
     }
     Ok(vfs::to_linux(&vfs::stat_resolved(r)?))
+}
+
+/// `statx(dirfd, name, flags, mask, buf)`: what `fstatat` says, in
+/// `struct statx`. It has what `struct stat` has, whatever `mask` asks for
+/// (as Linux may give more than asked); no file has a birth time it knows,
+/// so `STATX_BTIME` is never in the mask it reports.
+pub unsafe fn statx(dirfd: i32, name: usize, flags: u32, mask: u32, buf: usize) -> SysResult {
+    use linux_raw_sys::general::{STATX__RESERVED, STATX_BASIC_STATS, statx, statx_timestamp};
+    if mask & STATX__RESERVED != 0 {
+        return Err(EINVAL);
+    }
+    // The flags `fstatat` takes; how the caller wants caches treated
+    // (`AT_STATX_*`) changes nothing here, where nothing is cached.
+    let known = at::EMPTY_PATH | at::SYMLINK_NOFOLLOW | at::NO_AUTOMOUNT | at::STATX_SYNC_TYPE;
+    if flags & !known != 0 {
+        return Err(EINVAL);
+    }
+    // SAFETY: the program passed a string.
+    let path = unsafe { user::cstr(name)? };
+    let st = if path.is_empty() {
+        if flags & at::EMPTY_PATH == 0 {
+            return Err(ENOENT);
+        }
+        if dirfd == at::FDCWD {
+            stat_path(&crate::path::resolve(&vfs::cwd(), b".")?)?
+        } else {
+            stat_desc(&*fd::get(dirfd)?)?
+        }
+    } else {
+        stat_path(&vfs::resolve_at(dirfd, path)?)?
+    };
+    let time = |t: Timespec| statx_timestamp { tv_sec: t.sec, tv_nsec: t.nsec as u32, __reserved: 0 };
+    // SAFETY: `struct statx` is plain integers, for which zero is valid.
+    let mut sx: statx = unsafe { core::mem::zeroed() };
+    sx.stx_mask = STATX_BASIC_STATS;
+    sx.stx_blksize = st.blksize as u32;
+    sx.stx_nlink = st.nlink as u32;
+    sx.stx_uid = st.uid;
+    sx.stx_gid = st.gid;
+    sx.stx_mode = st.mode as u16;
+    sx.stx_ino = st.ino;
+    sx.stx_size = st.size as u64;
+    sx.stx_blocks = st.blocks as u64;
+    sx.stx_atime = time(st.atime);
+    sx.stx_ctime = time(st.ctime);
+    sx.stx_mtime = time(st.mtime);
+    (sx.stx_rdev_major, sx.stx_rdev_minor) = linux::dev_parts(st.rdev);
+    (sx.stx_dev_major, sx.stx_dev_minor) = linux::dev_parts(st.dev);
+    // SAFETY: the program passed a `struct statx`.
+    unsafe { user::write(buf, sx)? };
+    Ok(0)
 }
 
 pub unsafe fn fstat(fd: i32, buf: usize) -> SysResult {
@@ -166,7 +228,7 @@ pub unsafe fn fstat(fd: i32, buf: usize) -> SysResult {
 pub unsafe fn faccessat(dirfd: i32, name: usize, mode: u32) -> SysResult {
     // SAFETY: the program passed a string.
     let r = vfs::resolve_at(dirfd, unsafe { user::cstr(name)? })?;
-    if let Some(special) = open_special(&r.path) {
+    if let Some(special) = open_special(&r.path, o::RDONLY) {
         return special.map(|_| 0);
     }
     let st = vfs::stat_resolved(&r)?;
@@ -366,12 +428,13 @@ pub unsafe fn statfs(name: usize, buf: usize) -> SysResult {
 /// `fstatfs`: the file system of what `fd` is. A file's is where it was
 /// opened (if it is still there) or the one its metadata names; a pipe's
 /// or the terminal's a pipe file system's, a network socket's a socket file
-/// system's, and an eventfd's or epoll instance's that of anonymous inodes,
-/// with no space.
+/// system's, a memory file's Linux's for them (tmpfs, as memory), and an
+/// eventfd's or epoll instance's that of anonymous inodes, with no space.
 pub unsafe fn fstatfs(fd: i32, buf: usize) -> SysResult {
     const PIPEFS_MAGIC: i64 = 0x5049_5045;
     const SOCKFS_MAGIC: i64 = 0x534f_434b;
     const ANON_INODE_FS_MAGIC: i64 = 0x0904_1934;
+    const TMPFS_MAGIC: i64 = 0x0102_1994;
     let desc = fd::get(fd)?;
     let s = match &desc.object {
         Object::Dir(d) => statfs_of(&d.path)?,
@@ -389,9 +452,10 @@ pub unsafe fn fstatfs(fd: i32, buf: usize) -> SysResult {
         Object::Inet(_) | Object::Unix(_) => {
             Statfs { kind: SOCKFS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() }
         }
-        Object::EventFd(_) | Object::Epoll(_) | Object::Pidfd(_) => {
+        Object::EventFd(_) | Object::TimerFd(_) | Object::Epoll(_) | Object::Pidfd(_) => {
             Statfs { kind: ANON_INODE_FS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() }
         }
+        Object::Memfd(_) => Statfs { kind: TMPFS_MAGIC, bsize: 4096, namelen: 255, frsize: 4096, ..Default::default() },
         Object::Null | Object::Log(_) => statfs_of("/dev")?,
     };
     // SAFETY: the program passed a `struct statfs`.

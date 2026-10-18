@@ -620,7 +620,7 @@ pub struct Caps {
 }
 
 /// A renderer.
-pub trait Backend {
+pub trait Backend: Send {
     fn caps(&self) -> &Caps;
 
     /// Creates a resource. A new resource reads as zero, every byte of

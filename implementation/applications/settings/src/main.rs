@@ -22,7 +22,8 @@
 //!   turned away), Wi-Fi diagnostics.
 //! * **Display**: the screen resolution and the work area left by panels.
 //! * **System**: version, processor, memory and uptime, refreshed live.
-//! * **About**: version information and licences.
+//! * **About**: the version, and the licences of the system's parts as
+//!   `/system/licences/README` lists them; About Veda shows their texts.
 //!
 //! [`control`] lets the voice agent show pages and change its own voice,
 //! name and language model; nothing lets it change the firewall.
@@ -35,6 +36,7 @@ mod firewall;
 mod lock;
 mod network;
 
+use apps_common::licences::{self, NOTICE, Part};
 use gfx::{Bitmap, FillRule, Filter, LineJoin, Path, StrokeStyle};
 use proto::display::{ScreenInfo, modifiers};
 use proto::init::launcher;
@@ -105,8 +107,9 @@ struct Settings {
     info: abi::SystemInfo,
     info_at: u64,
     screen: Option<ScreenInfo>,
-    licence: Option<String>,
-    show_licence: bool,
+    /// The system's parts and their licences, read when the About page is
+    /// first shown.
+    parts: Vec<Part>,
     /// Keyboard cursor in the wallpaper gallery (index into choices()).
     cursor: Option<usize>,
     /// Height of the content drawn last frame (for scrolling).
@@ -257,7 +260,6 @@ impl Settings {
         if let Some(s) = &shell {
             s.request_wallpapers();
         }
-        let licence = None;
         Settings {
             section,
             fs,
@@ -274,8 +276,7 @@ impl Settings {
             info: rt::object::system_info().unwrap_or_default(),
             info_at: 0,
             screen: None,
-            licence,
-            show_licence: false,
+            parts: Vec::new(),
             cursor: None,
             content_h: 600,
             net: network::NetworkPage::new(),
@@ -388,10 +389,23 @@ impl Settings {
         if path == PROCEDURAL { "Light Ribbon".to_string() } else { title_of(path) }
     }
 
-    fn launch_app(&self, id: &str) {
+    fn launch_app(&self, id: &str, args: &[&str]) {
         if let Ok(ch) = proto::connect(launcher::NAME) {
-            let _ = launcher::Client::new(ch).launch_app(id.into(), Vec::new());
+            let args = args.iter().map(|a| a.to_string()).collect();
+            let _ = launcher::Client::new(ch).launch_app(id.into(), args);
         }
+    }
+
+    /// The system's parts and their licences, as `/system/licences/README`
+    /// lists them; Veda's and its fonts' alone without it.
+    fn read_parts(&self) -> Vec<Part> {
+        let text = self.fs.read_limited(licences::README, 1 << 20).unwrap_or_default();
+        let parts = licences::parse(&String::from_utf8_lossy(&text));
+        if parts.is_empty() {
+            println!("no {}: the licences of Veda and its fonts alone", licences::README);
+            return licences::fallback();
+        }
+        parts
     }
 
     // ---- drawing -----------------------------------------------------------
@@ -869,11 +883,11 @@ impl Settings {
         y = card.bottom() + 20;
         let b1 = Rect::new(r.x, y, 190, 38);
         if ui.button_full(b1, Some(Icon::Chart), "Task Manager", ButtonKind::Secondary) {
-            self.launch_app("taskmgr");
+            self.launch_app("taskmgr", &[]);
         }
         let b2 = Rect::new(b1.right() + 12, y, 160, 38);
         if ui.button_full(b2, Some(Icon::Terminal), "Terminal", ButtonKind::Secondary) {
-            self.launch_app("terminal");
+            self.launch_app("terminal", &[]);
         }
         y + 50 - r.y
     }
@@ -896,66 +910,39 @@ impl Settings {
         y += 92;
         let blurb = "Veda is an x86-64 operating system written from scratch in Rust: a capability-based microkernel, with drivers, file systems, the window system and every application running as isolated user-space processes.";
         y += ui.paragraph(Rect::new(r.x, y, r.w, 80), blurb, t.font_size, t.text_dim) + 22;
-        let card = Rect::new(r.x, y, r.w, 168);
-        ui.card(card);
-        let x = card.x + 22;
-        let w = card.w - 44;
-        let mut ry = card.y + 14;
-        let rows: [(&str, &str); 4] = [
-            ("Veda", "GNU General Public License 3.0 · © Vahid Mohammadi"),
-            ("Inter", "SIL Open Font License 1.1 · © The Inter Project Authors"),
-            ("JetBrains Mono", "SIL Open Font License 1.1 · © The JetBrains Mono Project Authors"),
-            ("Lato", "SIL Open Font License 1.1 · © tyPoland Łukasz Dziedzic"),
-        ];
-        for (name, lic) in rows {
-            ui.label(Rect::new(x, ry, 150, 34), name, Font::Bold, t.font_size, t.text, Align::Left);
-            ui.label(
-                Rect::new(x + 150, ry, w - 150, 34),
-                lic,
-                Font::Regular,
-                t.font_size - 1.0,
-                t.text_dim,
-                Align::Left,
-            );
-            ry += 36;
+        // The licences; About Veda shows their texts.
+        Self::section_heading(ui, r.x, y, r.w, "Licences");
+        let texts = Rect::new(r.right() - 160, y - 5, 160, 34);
+        if ui.button_full(texts, Some(Icon::Document), "Licence texts", ButtonKind::Secondary) {
+            self.launch_app("about", &["licences"]);
         }
-        y = card.bottom() + 18;
-        let mut show = self.show_licence;
-        ui.toggle(Rect::new(r.x, y, 44, 28), "licence-toggle", &mut show);
-        if show && self.licence.is_none() {
-            let text = self.fs.read("/system/fonts/OFL.txt").ok().map(|d| String::from_utf8_lossy(&d).into_owned());
-            self.licence = Some(text.unwrap_or_else(|| "The licence text could not be read.".into()));
-        }
-        self.show_licence = show;
-        ui.label(
-            Rect::new(r.x + 54, y, 300, 28),
-            "Show the font licence (OFL 1.1)",
-            Font::Regular,
-            t.font_size,
-            t.text,
-            Align::Left,
-        );
         y += 42;
-        if self.show_licence
-            && let Some(text) = self.licence.clone()
-        {
-            let font = ui.ctx.font(Font::Mono);
-            let size = t.small_size;
-            let m = ui.ctx.text.metrics(font, size);
-            let lines = ui.ctx.text.wrap(font, size, &text, (r.w - 32) as f32);
-            let h = (lines.len() as f32 * m.line_height) as i32 + 28;
-            let box_r = Rect::new(r.x, y, r.w, h);
-            ui.canvas.fill_rounded_rect(box_r, t.radius, Color::hex(0x151519));
-            ui.canvas.stroke_rounded_rect(box_r, t.radius, 1.0, t.border);
-            let mut ly = box_r.y as f32 + 14.0 + m.ascent;
-            for range in lines {
-                let line = text[range].trim_end();
-                ui.ctx.text.draw(&mut ui.canvas, font, size, (box_r.x + 16) as f32, ly.floor(), line, t.text_dim);
-                ly += m.line_height;
-            }
-            y += h + 10;
+        y += ui.paragraph(Rect::new(r.x, y, r.w, 90), NOTICE, t.font_size - 1.0, t.text_dim) + 14;
+        if self.parts.is_empty() {
+            self.parts = self.read_parts();
         }
-        y - r.y
+        // A part a row: its name and version, and beside them its licence,
+        // in as many lines as it needs.
+        let (x, w, line_h) = (r.x + 22, r.w - 44, 20);
+        let name_w = (w / 3).clamp(140, 200);
+        let font = ui.ctx.font(Font::Regular);
+        let size = t.font_size - 1.0;
+        let lines: Vec<Vec<_>> =
+            self.parts.iter().map(|p| ui.ctx.text.wrap(font, size, &p.licence, (w - name_w) as f32)).collect();
+        let rows_h: i32 = lines.iter().map(|l| l.len().max(1) as i32 * line_h + 8).sum();
+        let card = Rect::new(r.x, y, r.w, rows_h + 20);
+        ui.card(card);
+        let mut ry = card.y + 14;
+        for (part, lines) in self.parts.iter().zip(&lines) {
+            let name = Rect::new(x, ry, name_w - 12, line_h);
+            ui.label(name, &part.title(), Font::Bold, t.font_size, t.text, Align::Left);
+            for (n, range) in lines.iter().enumerate() {
+                let line = Rect::new(x + name_w, ry + n as i32 * line_h, w - name_w, line_h);
+                ui.label(line, part.licence[range.clone()].trim_end(), Font::Regular, size, t.text_dim, Align::Left);
+            }
+            ry += lines.len().max(1) as i32 * line_h + 8;
+        }
+        card.bottom() + 10 - r.y
     }
 
     fn handle_keys(&mut self, ui: &mut Ui) {

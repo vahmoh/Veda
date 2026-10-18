@@ -46,6 +46,10 @@ COMMANDS:
                 implementation/ports/linux (see documentation/DRIVERVM.md;
                 --jobs N); later builds put it in the image, with the guest's
                 programs
+    web         Build the web engine from implementation/ports/: WPE WebKit and the
+                libraries it stands on (GLib, libsoup, ICU, HarfBuzz, OpenSSL...), and
+                the tools their builds run (see documentation/BROWSER.md; --jobs N);
+                later builds link the browser with it
     acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
                 holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
                 the firmware's variables read as zeros but those given with

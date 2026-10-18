@@ -36,6 +36,14 @@ pub unsafe fn uname(buf: usize) -> SysResult {
     Ok(0)
 }
 
+/// `veda_process_memory()` (`<veda/memory.h>`): the bytes of memory this
+/// process holds, as the kernel counts them: the pages committed to its
+/// private memory and to the memory objects it maps, each once.
+#[unsafe(no_mangle)]
+pub extern "C" fn veda_process_memory() -> usize {
+    rt::object::process_self_info().map_or(0, |i| i.memory_bytes as usize)
+}
+
 pub unsafe fn sysinfo(buf: usize) -> SysResult {
     let i = rt::object::system_info().unwrap_or_default();
     let s = Sysinfo {

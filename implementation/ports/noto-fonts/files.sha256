@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# The files of noto-fonts (port.toml), as `sha256sum` writes them: each
+# one's SHA-256 and its path in the release.
+8918809882ffe61eb32baf3f4b3420fda6c022f2219b1b0272755d70ecabc7de  fonts/NotoSerif/unhinted/variable-ttf/NotoSerif[wdth,wght].ttf
+e5c3ade5b59b3af8c48c24915580cab99f083bd728a81c343741fc09a0c76c9f  fonts/NotoSerif/unhinted/variable-ttf/NotoSerif-Italic[wdth,wght].ttf
+3b735d0b7f04ddd5c6a3d7fafba8d8216420d3cbbba93ded80f34ba37369de00  fonts/NotoSansArabic/unhinted/variable-ttf/NotoSansArabic[wdth,wght].ttf
+7b81922a002a54457b75d6df7199fc6fda50a138a98c37b707b81422a9fe8bc1  fonts/NotoNaskhArabic/unhinted/variable-ttf/NotoNaskhArabic[wght].ttf
+2a0af06d3e959ebc3f50a8c0042c24b671b6b3283d1ebbf3e7d39ef2b4ce62ba  fonts/NotoSansHebrew/unhinted/variable-ttf/NotoSansHebrew[wdth,wght].ttf
+9f82923465ef82fb86c6b99cbdd4947ba832fe3335948de815b18adfd75947c7  fonts/NotoSansDevanagari/unhinted/variable-ttf/NotoSansDevanagari[wdth,wght].ttf
+f3d4a254574c1b93c2c98e2010818337e99c6a1351004e6da80a1e6cb841e8e2  fonts/NotoSansBengali/unhinted/variable-ttf/NotoSansBengali[wdth,wght].ttf
+1b29b0df004da1349788834621642324210cd7eec03ab060ce28babdc5f395e7  fonts/NotoSansTamil/unhinted/variable-ttf/NotoSansTamil[wdth,wght].ttf
+fc68d38500ce2022ccb4c01265b0f3be2183a3adcf1466d46bae81e60887869e  fonts/NotoSansTelugu/unhinted/variable-ttf/NotoSansTelugu[wdth,wght].ttf
+9addc0d54716112ac85e11bf4f3ce5b167cb91c1337c152d854e878393b5662c  fonts/NotoSansKannada/unhinted/variable-ttf/NotoSansKannada[wdth,wght].ttf
+021d71bd2437f79bdf7bcc8c6d4beec447387993fe0ae545360f79a8afe6fe4b  fonts/NotoSansMalayalam/unhinted/variable-ttf/NotoSansMalayalam[wdth,wght].ttf
+66b5ad0c7613ce2f5e0fd7dccecbe4891b57e295c13cf2cedc96935bfd7b4681  fonts/NotoSansGujarati/unhinted/variable-ttf/NotoSansGujarati[wdth,wght].ttf
+7ed72759b71a49ff0179576a11d05914a378ee069b5f136a9c1cc9316ed7f7b6  fonts/NotoSansGurmukhi/unhinted/variable-ttf/NotoSansGurmukhi[wdth,wght].ttf
+f347ec8e38979b89718c0b673e7fc532b98bbac6e7d958fc18256022c2090956  fonts/NotoSansOriya/unhinted/variable-ttf/NotoSansOriya[wdth,wght].ttf
+1fa6c155406689439bbe060b55ec085f25da7f0b0604e59681ae41b9bb9fedd4  fonts/NotoSansSinhala/unhinted/variable-ttf/NotoSansSinhala[wdth,wght].ttf
+70bcda1aae0976b35ff22660b918d0f610a4bd5c7136cf7313072c0fe0186825  fonts/NotoSansThai/unhinted/variable-ttf/NotoSansThai[wdth,wght].ttf
+7b622412ef9ec6f58dd7ef197dc0e3259c8efb703090a637e4da38a69cfd8af3  fonts/NotoSansLao/unhinted/variable-ttf/NotoSansLao[wdth,wght].ttf
+63999e7fb13866e7ba21ecc23f87ff16947d38475781a7dcb3c37808782f3609  fonts/NotoSansKhmer/unhinted/variable-ttf/NotoSansKhmer[wdth,wght].ttf
+e343a0b4a348095f666ed54007a1bbde3a6d593ff6b2e3340d18c02766be7735  fonts/NotoSansMyanmar/unhinted/variable-ttf/NotoSansMyanmar[wdth,wght].ttf
+1f79abca0ecbd8d0746cd9a5493ba6cbcc7f49ce01f3f4a44f9f482c6cc9421a  fonts/NotoSansEthiopic/unhinted/variable-ttf/NotoSansEthiopic[wdth,wght].ttf
+80a8c24d6f7713a9f977ff29573b777a53aa1184e9a561e85fe31610819884b9  fonts/NotoSansGeorgian/unhinted/variable-ttf/NotoSansGeorgian[wdth,wght].ttf
+7b409af606108e954d9fb20afa4d259356d251f950f4ef707bac2cbc8c52de9a  fonts/NotoSansArmenian/unhinted/variable-ttf/NotoSansArmenian[wdth,wght].ttf
+9dc0ef3c6eea7436e064409ae9d0e3cc1928e21ec5c1baf43096cfad208b2d0a  fonts/NotoSansSymbols/unhinted/variable-ttf/NotoSansSymbols[wght].ttf
+c4a0a80f0041ce4be81e2478faad22776d23edb98ae3f0d19bd37044820ecf9d  fonts/NotoSansSymbols2/unhinted/ttf/NotoSansSymbols2-Regular.ttf
+b127e84699212b6b2ef50aff58e0ebebeec04ffe6db1b9eb9e209c8c3d97b4aa  fonts/NotoSansMath/unhinted/ttf/NotoSansMath-Regular.ttf

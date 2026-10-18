@@ -36,6 +36,7 @@ members = [
     "implementation/libraries/gpio",
     "implementation/libraries/glsl",
     "implementation/libraries/gl",
+    "implementation/libraries/egl",
     "implementation/libraries/hv",
     "implementation/libraries/iommu",
     "implementation/services/init",
@@ -69,6 +70,8 @@ members = [
     "implementation/applications/calculator",
     "implementation/applications/calculator/core",
     "implementation/applications/paint",
+    "implementation/applications/browser",
+    "implementation/applications/browser/core",
     "implementation/applications/paint/core",
     "implementation/shell/common",
     "implementation/shell/desktop",
@@ -151,6 +154,7 @@ gpio = { path = "implementation/libraries/gpio" }
 splash = { path = "implementation/shell/splash" }
 glsl = { path = "implementation/libraries/glsl" }
 gl = { path = "implementation/libraries/gl" }
+egl = { path = "implementation/libraries/egl" }
 hv = { path = "implementation/libraries/hv" }
 iommu = { path = "implementation/libraries/iommu" }
 guest-sys = { path = "implementation/guests/linux/sys" }

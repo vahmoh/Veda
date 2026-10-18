@@ -33,6 +33,15 @@ protocol! {
         3 => fn list() -> Vec<String>;
         /// A new registry channel (to hand to a child process).
         4 => fn clone_registry() -> Result<Channel, RegistryError>;
+        /// Confines this channel, for good, to the services `names`: from
+        /// now on it connects only to them (`Denied` for any other, the
+        /// launcher too unless it is named), lists only them, registers
+        /// none, and the channels cloned from it are confined alike. A
+        /// program that handles what it cannot trust (the browser's page
+        /// processes) confines the channel it started with, from which the
+        /// others it has are cloned, before it does. Confining it again
+        /// narrows it: names it no longer reaches stay out.
+        5 => fn confine(names: Vec<String>) -> Result<(), RegistryError>;
     }
 }
 

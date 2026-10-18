@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# SQLite: the web engine's databases (IndexedDB, local storage, cookies,
+# HSTS). Its SHA3-256 on sqlite.org is
+# b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4.
+name = "sqlite"
+version = "3.54.1"
+url = "https://sqlite.org/2026/sqlite-autoconf-3540100.tar.gz"
+sha256 = "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e"
+license = "blessing"

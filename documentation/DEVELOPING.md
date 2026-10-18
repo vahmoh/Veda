@@ -21,6 +21,7 @@ Each is `cargo automation COMMAND`, run in the repository;
 | `doctor` | Checks the tools, and says what is built |
 | `toolchain` | Builds GCC, binutils, musl, the media libraries and Rust for Veda into `target/toolchain`: once, before the first build |
 | `linux` | Rebuilds the driver VM's Linux, its toolchain and Mesa in `target/linux` (the first build builds them, given the tools) |
+| `web` | Builds the web engine, WPE WebKit and the libraries it stands on, in `target/web` (an hour or more): once, before images have the browser ([The web browser](BROWSER.md#building-it)) |
 | `build` | Builds `target/veda/veda.img` |
 | `run` | Builds, then boots Veda in a QEMU window |
 | `iso` | Writes [the live system](#the-live-system), `target/veda/veda.iso` |
@@ -45,7 +46,8 @@ Their options (of values separated by `|`, the first is the default):
   `--net ethernet|none`, `--nic virtio-net-pci|e1000e|igb`,
   `--input standard|usb`, `--fresh-home`, `--live`.
 * **Scripts:** `--jobs N`, how many scripts run at once (default: one per
-  five processors); for `toolchain` and `linux`, how many build jobs.
+  five processors); for `toolchain`, `linux` and `web`, how many build
+  jobs.
 * **`shot` and `iso`:** `--wait SECS` (default 10) or `--until TEXT` (in
   the serial log), and `--out FILE`.
 
@@ -144,10 +146,17 @@ the run, with its number.
 * **The network.** The network cards' scripts check it against a server on
   the host (`nettest local`, `automation/src/hostweb.rs`), without the
   Internet.
+* **The browser.** Its scripts say `requires web`, and are skipped where
+  the web engine is not built. `web-server` serves the host's test pages
+  (`/page`, `/second`, `/zone`, `/cookie`, `/scripts`, in
+  `automation/src/hostweb.rs`)
+  at `{web}`, which the command line, typed text and the agent's calls
+  name.
 
 ```bash
 cargo automation script documentation/screenshots.vts                         # the README's screenshots
 cargo automation script documentation/interceptor.vts --resolution 1920x1200  # Interceptor's: scale it to 1280x800
+cargo automation script documentation/browser.vts                             # the browser's (the web engine built)
 ```
 
 Where QEMU has the 3D GPU, `test` also runs the OpenGL ES tests on the
@@ -252,6 +261,7 @@ from this machine.
 |--------|--------------|
 | The programs in `PROGRAMS` (`automation/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
+| The licence texts of what the image has of others' (as each part's release has them: the toolchain's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/src/notices.rs`) | `/system/licences/` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
 | What the generators' manifests list | `/system/<same relative path>` |

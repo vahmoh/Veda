@@ -1,0 +1,3421 @@
+--- a/Source/bmalloc/bmalloc/BPlatform.h
++++ b/Source/bmalloc/bmalloc/BPlatform.h
+@@ -66,6 +66,10 @@
+ #define BOS_LINUX 1
+ #endif
+ 
++#if defined(__veda__)
++#define BOS_VEDA 1
++#endif
++
+ #if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__FreeBSD_kernel__)
+ #define BOS_FREEBSD 1
+ #endif
+@@ -397,7 +401,7 @@
+ 
+ /* BENABLE(LIBPAS) is enabling libpas build. But this does not mean we use libpas for bmalloc replacement. */
+ #if !defined(BENABLE_LIBPAS)
+-#if (!BUSE(MIMALLOC) && !BUSE(SYSTEM_MALLOC)) && BCPU(ADDRESS64) && (BOS(DARWIN) || BOS(WINDOWS) || (BOS(LINUX) && (BCPU(X86_64) || BCPU(ARM64))) || BPLATFORM(PLAYSTATION))
++#if (!BUSE(MIMALLOC) && !BUSE(SYSTEM_MALLOC)) && BCPU(ADDRESS64) && (BOS(DARWIN) || BOS(WINDOWS) || ((BOS(LINUX) || BOS(VEDA)) && (BCPU(X86_64) || BCPU(ARM64))) || BPLATFORM(PLAYSTATION))
+ #define BENABLE_LIBPAS 1
+ #ifndef PAS_BMALLOC
+ #define PAS_BMALLOC 1
+@@ -468,7 +472,7 @@
+ #endif
+ #endif
+ 
+-#if ((BOS(DARWIN) || BOS(LINUX)) && \
++#if ((BOS(DARWIN) || BOS(LINUX) || BOS(VEDA)) && \
+     !BUSE(MIMALLOC) && \
+     (BCPU(X86_64) || (BCPU(ARM64) && !defined(__ILP32__) && (!BPLATFORM(IOS_FAMILY) || BPLATFORM(IOS)))))
+ #define GIGACAGE_ENABLED 1
+--- a/Source/bmalloc/bmalloc/VMAllocate.h
++++ b/Source/bmalloc/bmalloc/VMAllocate.h
+@@ -75,7 +75,7 @@
+ #define BMALLOC_VM_TAG VM_TAG_FOR_TCMALLOC_MEMORY
+ #endif
+ 
+-#if BOS(LINUX)
++#if BOS(LINUX) || BOS(VEDA)
+ #define BMALLOC_NORESERVE MAP_NORESERVE
+ #else
+ #define BMALLOC_NORESERVE 0
+@@ -303,7 +303,7 @@
+         return;
+ #endif // BENABLE(MTE) && BOS(DARWIN)
+ 
+-#if BOS(LINUX)
++#if BOS(LINUX) || BOS(VEDA)
+     BUNUSED(flags);
+     BUNUSED(tag);
+     int result = madvise(p, vmSize, MADV_DONTNEED);
+--- a/Source/bmalloc/libpas/src/libpas/pas_committed_pages_vector.c
++++ b/Source/bmalloc/libpas/src/libpas/pas_committed_pages_vector.c
+@@ -32,7 +32,7 @@
+ #include "pas_allocation_config.h"
+ #include "pas_page_malloc.h"
+ 
+-#if PAS_OS(LINUX) || PAS_OS(DARWIN)
++#if PAS_OS(LINUX) || PAS_OS(DARWIN) || PAS_OS(VEDA)
+ #include <sys/mman.h>
+ #endif
+ 
+@@ -59,7 +59,7 @@
+         num_pages, "pas_committed_pages_vector/raw_data", pas_object_allocation, allocation_config->arg);
+     vector->size = num_pages;
+ 
+-#if PAS_OS(LINUX)
++#if PAS_OS(LINUX) || PAS_OS(VEDA)
+     PAS_SYSCALL(mincore(object, size, (unsigned char*)vector->raw_data));
+ #elif PAS_OS(WINDOWS)
+     MEMORY_BASIC_INFORMATION mem_info;
+--- a/Source/bmalloc/libpas/src/libpas/pas_committed_pages_vector.h
++++ b/Source/bmalloc/libpas/src/libpas/pas_committed_pages_vector.h
+@@ -55,7 +55,7 @@
+                                                            size_t page_index)
+ {
+     PAS_ASSERT(page_index < vector->size);
+-#if PAS_OS(LINUX) || PAS_OS(WINDOWS)
++#if PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(VEDA)
+     return vector->raw_data[page_index];
+ #else
+     return vector->raw_data[page_index] & (MINCORE_REFERENCED |
+--- a/Source/bmalloc/libpas/src/libpas/pas_lock.c
++++ b/Source/bmalloc/libpas/src/libpas/pas_lock.c
+@@ -33,19 +33,27 @@
+ #include <mach/thread_switch.h>
+ #endif
+ 
+-#if PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD)
++#if PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD) || PAS_OS(VEDA)
+ 
+ #if PAS_OS(LINUX)
+ #include <linux/futex.h>
+ #include <sys/syscall.h>
+ #include <unistd.h>
++#elif PAS_OS(VEDA)
++/* Veda's C library makes Linux's system calls, futex among them; Linux's
++   headers are not there to name its operations. */
++#include <sys/syscall.h>
++#include <unistd.h>
++#define FUTEX_WAIT 0
++#define FUTEX_WAKE 1
++#define FUTEX_PRIVATE_FLAG 128
+ #elif PAS_OS(WINDOWS)
+ #include <synchapi.h>
+ #elif PAS_OS(FREEBSD)
+ #include <sys/umtx.h>
+ #endif
+ 
+-#if PAS_OS(LINUX)
++#if PAS_OS(LINUX) || PAS_OS(VEDA)
+ static inline long pas_lock_futex_wait(unsigned* addr, unsigned val)
+ {
+     return syscall(SYS_futex, addr, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, val, NULL, NULL, 0);
+@@ -115,6 +123,6 @@
+     pas_lock_futex_wake(&lock->futex);
+ }
+ 
+-#endif /* PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD) */
++#endif /* PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD) || PAS_OS(VEDA) */
+ 
+ #endif /* LIBPAS_ENABLED */
+--- a/Source/bmalloc/libpas/src/libpas/pas_lock.h
++++ b/Source/bmalloc/libpas/src/libpas/pas_lock.h
+@@ -165,7 +165,7 @@
+ 
+ PAS_END_EXTERN_C;
+ 
+-#elif PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD)
++#elif PAS_OS(LINUX) || PAS_OS(WINDOWS) || PAS_OS(FREEBSD) || PAS_OS(VEDA)
+ 
+ PAS_BEGIN_EXTERN_C;
+ 
+--- a/Source/bmalloc/libpas/src/libpas/pas_monotonic_time.c
++++ b/Source/bmalloc/libpas/src/libpas/pas_monotonic_time.c
+@@ -36,7 +36,7 @@
+ #include <windows.h>
+ #endif
+ 
+-#if PAS_OS(LINUX) || PAS_PLATFORM(PLAYSTATION)
++#if PAS_OS(LINUX) || PAS_PLATFORM(PLAYSTATION) || PAS_OS(VEDA)
+ #include <time.h>
+ #endif
+ 
+@@ -79,7 +79,7 @@
+     return result;
+ }
+ 
+-#elif PAS_OS(LINUX)
++#elif PAS_OS(LINUX) || PAS_OS(VEDA)
+ 
+ uint64_t pas_get_current_monotonic_time_nanoseconds(void)
+ {
+--- a/Source/bmalloc/libpas/src/libpas/pas_page_malloc.c
++++ b/Source/bmalloc/libpas/src/libpas/pas_page_malloc.c
+@@ -82,7 +82,9 @@
+ #endif
+ #define PAS_VM_TAG_NAME "WKFastMalloc"
+ 
+-#if PAS_OS(LINUX)
++#if PAS_OS(VEDA)
++#define PAS_NORESERVE MAP_NORESERVE
++#elif PAS_OS(LINUX)
+ #define PAS_NORESERVE MAP_NORESERVE
+ 
+ #ifndef PR_SET_VMA
+@@ -353,7 +355,7 @@
+ 
+     PAS_PROFILE(ZERO_FILL_PAGE, base, size, flags, tag);
+     PAS_MTE_HANDLE(ZERO_FILL_PAGE, base, size, flags, tag);
+-#if PAS_OS(LINUX)
++#if PAS_OS(LINUX) || PAS_OS(VEDA)
+     result = madvise(base, size, MADV_DONTNEED);
+     PAS_ASSERT(!result);
+ #else
+@@ -388,7 +390,7 @@
+ #endif
+     }
+ 
+-#if PAS_OS(LINUX)
++#if PAS_OS(LINUX) || PAS_OS(VEDA)
+     PAS_ASSERT(!is_symmetric);
+     PAS_SYSCALL(madvise(ptr, size, MADV_DODUMP));
+ #elif PAS_OS(WINDOWS)
+@@ -476,7 +478,7 @@
+ #elif PAS_OS(FREEBSD)
+     PAS_ASSERT(!is_symmetric);
+     PAS_SYSCALL(madvise(ptr, size, MADV_FREE));
+-#elif PAS_OS(LINUX)
++#elif PAS_OS(LINUX) || PAS_OS(VEDA)
+     PAS_ASSERT(!is_symmetric);
+     PAS_SYSCALL(madvise(ptr, size, MADV_DONTNEED));
+     PAS_SYSCALL(madvise(ptr, size, MADV_DONTDUMP));
+--- a/Source/bmalloc/libpas/src/libpas/pas_platform.h
++++ b/Source/bmalloc/libpas/src/libpas/pas_platform.h
+@@ -141,6 +141,10 @@
+ #define PAS_OS_LINUX 1
+ #endif
+ 
++#if defined(__veda__)
++#define PAS_OS_VEDA 1
++#endif
++
+ #if defined(__ANDROID__) || defined(ANDROID)
+ #define PAS_OS_ANDROID 1
+ #endif
+--- a/Source/bmalloc/libpas/src/libpas/pas_utils.c
++++ b/Source/bmalloc/libpas/src/libpas/pas_utils.c
+@@ -91,7 +91,7 @@
+ 
+ #if PAS_X86_64 || PAS_ARM64 || PAS_ARM32
+ 
+-#if (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED
++#if (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -172,7 +172,7 @@
+ #endif
+ 
+ 
+-#endif /* (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED */
++#endif /* (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED */
+ 
+ PAS_NEVER_INLINE PAS_NO_RETURN static void pas_crash_with_info_impl(size_t reason, size_t misc1, size_t misc2, size_t misc3, size_t misc4, size_t misc5, size_t misc6)
+ {
+--- a/Source/bmalloc/libpas/src/libpas/pas_utils.h
++++ b/Source/bmalloc/libpas/src/libpas/pas_utils.h
+@@ -233,7 +233,7 @@
+ PAS_IGNORE_WARNINGS_BEGIN("missing-noreturn")
+ PAS_IGNORE_WARNINGS_BEGIN("return-type")
+ 
+-#if (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED
++#if (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED
+ 
+ #define PAS_VA_COUNT6(x, ...) + 1
+ #define PAS_VA_COUNT5(x, ...) __VA_OPT__(PAS_VA_COUNT6(__VA_ARGS__)) + 1
+@@ -266,7 +266,7 @@
+ }
+ #endif
+ 
+-#else /* (PAS_OS(DARWIN) || PAS_OS(LINUX)) */
++#else /* (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) */
+ 
+ #if PAS_ENABLE_TESTING
+ static PAS_ALWAYS_INLINE PAS_NO_RETURN void pas_assertion_failed_inline(const char* filename, int line, const char* function, const char* expression)
+@@ -289,7 +289,7 @@
+ PAS_API PAS_NO_RETURN PAS_NEVER_INLINE void pas_assertion_failed_no_inline(const char* filename, int line, const char* function, const char* expression);
+ PAS_API PAS_NO_RETURN PAS_NEVER_INLINE void pas_assertion_failed_no_inline_with_extra_detail(const char* filename, int line, const char* function, const char* expression, size_t extra);
+ 
+-#if (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED
++#if (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED
+ 
+ /*
+    FIXME: Also consider converting PAS_ASSERT_WITH_DETAIL and PAS_ASSERT_WITH_EXTRA_DETAIL
+@@ -432,7 +432,7 @@
+ #define PAS_ASSERT_FAIL6(count, file, line, function, exp, misc1, misc2, misc3, misc4, misc5, misc6, ...) \
+         pas_assertion_failed_noreturn_silencer6(file, line, function, exp, (uint64_t)misc1, (uint64_t)misc2, (uint64_t)misc3, (uint64_t)misc4, (uint64_t)misc5, (uint64_t)misc6)
+ 
+-#else /* !((PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED) */
++#else /* !((PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED) */
+ 
+ static PAS_ALWAYS_INLINE void pas_assertion_failed_noreturn_silencer(
+     const char* filename, int line, const char* function, const char* expression)
+@@ -440,12 +440,12 @@
+     pas_assertion_failed_inline(filename, line, function, expression);
+ }
+ 
+-#endif /* (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED */
++#endif /* (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED */
+ 
+ #define PAS_LIKELY(x) __PAS_LIKELY(x)
+ #define PAS_UNLIKELY(x) __PAS_UNLIKELY(x)
+ 
+-#if (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED
++#if (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED
+ 
+ #define PAS_ASSERT_IF(cond, exp, ...) \
+     do { \
+@@ -461,7 +461,7 @@
+ #define PAS_TESTING_ASSERT(exp, ...) \
+     PAS_ASSERT_IF(PAS_ENABLE_TESTING, exp __VA_OPT__(,) __VA_ARGS__)
+ 
+-#else /* not (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED */
++#else /* not (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED */
+ 
+ #define PAS_ASSERT(exp, ...) \
+     do { \
+@@ -481,7 +481,7 @@
+         pas_assertion_failed_noreturn_silencer(__FILE__, __LINE__, __PRETTY_FUNCTION__, #exp); \
+     } while (0)
+ 
+-#endif /* (PAS_OS(DARWIN) || PAS_OS(LINUX)) && PAS_VA_OPT_SUPPORTED */
++#endif /* (PAS_OS(DARWIN) || PAS_OS(LINUX) || PAS_OS(VEDA)) && PAS_VA_OPT_SUPPORTED */
+ 
+ #define PAS_ASSERT_WITH_DETAIL(exp) \
+     do { \
+--- a/Source/cmake/OptionsWPE.cmake
++++ b/Source/cmake/OptionsWPE.cmake
+@@ -203,6 +203,16 @@
+ set(WTF_LIBRARY_TYPE OBJECT)
+ set(JavaScriptCore_LIBRARY_TYPE OBJECT)
+ set(WebCore_LIBRARY_TYPE OBJECT)
++if (CMAKE_SYSTEM_NAME STREQUAL "Veda")
++    # Veda links programs statically: the engine is static libraries, one
++    # for each of its parts, which the program that embeds it links (and
++    # whose processes it is, see Shared/veda/AuxiliaryProcessMainVeda.cpp).
++    set(bmalloc_LIBRARY_TYPE STATIC)
++    set(WTF_LIBRARY_TYPE STATIC)
++    set(JavaScriptCore_LIBRARY_TYPE STATIC)
++    set(WebCore_LIBRARY_TYPE STATIC)
++    set(WebKit_LIBRARY_TYPE STATIC)
++endif ()
+ 
+ # These are shared variables, but we special case their definition so that we can use the
+ # CMAKE_INSTALL_* variables that are populated by the GNUInstallDirs macro.
+--- a/Source/JavaScriptCore/heap/HeapHelperPool.cpp
++++ b/Source/JavaScriptCore/heap/HeapHelperPool.cpp
+@@ -39,7 +39,7 @@
+     std::call_once(
+         initializeHelperPoolOnceFlag,
+         [] {
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+             constexpr auto threadName = "HeapHelper"_s;
+ #else
+             constexpr auto threadName = "Heap Helper Thread"_s;
+--- a/Source/JavaScriptCore/jit/ExecutableMemoryHandle.h
++++ b/Source/JavaScriptCore/jit/ExecutableMemoryHandle.h
+@@ -37,7 +37,7 @@
+ #include <wtf/MetaAllocatorHandle.h>
+ #endif
+ 
+-#if BENABLE(LIBPAS) && (OS(DARWIN) || OS(LINUX) || OS(WINDOWS))
++#if BENABLE(LIBPAS) && (OS(DARWIN) || OS(LINUX) || OS(WINDOWS) || OS(VEDA))
+ #define ENABLE_LIBPAS_JIT_HEAP 1
+ #endif
+ 
+--- a/Source/JavaScriptCore/jit/JITWorklistThread.cpp
++++ b/Source/JavaScriptCore/jit/JITWorklistThread.cpp
+@@ -87,7 +87,7 @@
+ 
+ ASCIILiteral JITWorklistThread::name() const
+ {
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     return "JITWorker"_s;
+ #else
+     return "JIT Worklist Helper Thread"_s;
+--- a/Source/JavaScriptCore/jit/ThunkGenerators.cpp
++++ b/Source/JavaScriptCore/jit/ThunkGenerators.cpp
+@@ -1008,7 +1008,7 @@
+ enum MathThunkCallingConvention { };
+ typedef MathThunkCallingConvention(*MathThunk)(MathThunkCallingConvention);
+ 
+-#if CPU(X86_64) && COMPILER(GCC_COMPATIBLE) && (OS(DARWIN) || OS(LINUX))
++#if CPU(X86_64) && COMPILER(GCC_COMPATIBLE) && (OS(DARWIN) || OS(LINUX) || OS(VEDA))
+ 
+ #define defineUnaryDoubleOpWrapper(function) \
+     __asm__( \
+--- a/Source/JavaScriptCore/runtime/MachineContext.h
++++ b/Source/JavaScriptCore/runtime/MachineContext.h
+@@ -189,7 +189,7 @@
+ #error Unknown Architecture
+ #endif
+ 
+-#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD)
++#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD) || OS(VEDA)
+ 
+ #if CPU(X86_64)
+     return reinterpret_cast<void*&>((uintptr_t&) machineContext.gregs[REG_RSP]);
+@@ -308,7 +308,7 @@
+ #error Unknown Architecture
+ #endif
+ 
+-#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD)
++#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD) || OS(VEDA)
+ 
+ // The following sequence depends on glibc's sys/ucontext.h.
+ #if CPU(X86_64)
+@@ -468,7 +468,7 @@
+ #error Unknown Architecture
+ #endif
+ 
+-#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD)
++#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD) || OS(VEDA)
+ 
+ // The following sequence depends on glibc's sys/ucontext.h.
+ #if CPU(X86_64)
+@@ -644,7 +644,7 @@
+ #error Unknown Architecture
+ #endif
+ 
+-#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD)
++#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD) || OS(VEDA)
+ 
+ // The following sequence depends on glibc's sys/ucontext.h.
+ #if CPU(X86_64)
+@@ -701,7 +701,7 @@
+ #error Unknown Architecture
+ #endif
+ 
+-#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD)
++#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD) || OS(VEDA)
+ 
+ // The following sequence depends on glibc's sys/ucontext.h.
+ #if CPU(X86_64)
+@@ -821,7 +821,7 @@
+ #error Unknown Architecture
+ #endif
+ 
+-#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD)
++#elif OS(FUCHSIA) || OS(LINUX) || OS(HURD) || OS(VEDA)
+ 
+ // The following sequence depends on glibc's sys/ucontext.h.
+ #if CPU(X86_64)
+--- a/Source/JavaScriptCore/runtime/Options.cpp
++++ b/Source/JavaScriptCore/runtime/Options.cpp
+@@ -62,7 +62,7 @@
+ #include <wtf/cocoa/Entitlements.h>
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ #include <unistd.h>
+ extern "C" char **environ;
+ #endif
+@@ -654,7 +654,7 @@
+     Options::usePollingTraps() = true;
+ #endif
+ 
+-#if !ENABLE(WEBASSEMBLY)
++#if !ENABLE(WEBASSEMBLY) || OS(VEDA)
+     Options::useWasmFastMemory() = false;
+     Options::useWasmFaultSignalHandler() = false;
+ #endif
+@@ -1101,7 +1101,7 @@
+             // Allow environment vars to override options if applicable.
+             // The env var should be the name of the option prefixed with
+             // "JSC_".
+-#if PLATFORM(COCOA) || OS(LINUX)
++#if PLATFORM(COCOA) || OS(LINUX) || OS(VEDA)
+             bool hasBadOptions = false;
+ #if PLATFORM(COCOA)
+             char** envp = *_NSGetEnviron();
+@@ -1120,7 +1120,7 @@
+             }
+             if (hasBadOptions && Options::validateOptions())
+                 CRASH();
+-#endif // PLATFORM(COCOA) || OS(LINUX)
++#endif // PLATFORM(COCOA) || OS(LINUX) || OS(VEDA)
+ 
+ #if !PLATFORM(COCOA)
+ #define OVERRIDE_OPTION_WITH_HEURISTICS(type_, name_, defaultValue_, availability_, description_) \
+--- a/Source/ThirdParty/xdgmime/src/xdgmime.h
++++ b/Source/ThirdParty/xdgmime/src/xdgmime.h
+@@ -77,6 +77,8 @@
+ #define _xdg_mime_mime_type_equal             XDG_RESERVED_ENTRY(mime_type_equal)
+ #define _xdg_mime_mime_type_subclass          XDG_RESERVED_ENTRY(mime_type_subclass)
+ #define _xdg_mime_unalias_mime_type           XDG_RESERVED_ENTRY(unalias_mime_type)  
++#define _caches                               XDG_RESERVED_ENTRY(caches)
++#define _xdg_binary_or_text_fallback          XDG_RESERVED_ENTRY(binary_or_text_fallback)
+ #endif
+ 
+ extern const char xdg_mime_type_unknown[];
+--- a/Source/WebCore/page/NavigatorBase.cpp
++++ b/Source/WebCore/page/NavigatorBase.cpp
+@@ -46,7 +46,7 @@
+ #include <wtf/text/MakeString.h>
+ #include <wtf/text/WTFString.h>
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ #include "sys/utsname.h"
+ #include <wtf/StdLibExtras.h>
+ #endif
+@@ -96,7 +96,7 @@
+ 
+ String NavigatorBase::platform() const
+ {
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     static NeverDestroyed<String> platformName = [] {
+         struct utsname osname;
+         return uname(&osname) >= 0 ? makeString(unsafeSpan(osname.sysname), " "_s, unsafeSpan(osname.machine)) : emptyString();
+--- a/Source/WebCore/page/NavigatorUAData.cpp
++++ b/Source/WebCore/page/NavigatorUAData.cpp
+@@ -46,7 +46,7 @@
+ #include <wtf/glib/ChassisType.h>
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ #include "sys/utsname.h"
+ #include <wtf/StdLibExtras.h>
+ #endif
+@@ -135,7 +135,7 @@
+     if (overrideFromUserAgentString)
+         return platformOverride;
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     static NeverDestroyed<String> platformName = [] {
+         struct utsname osname;
+         return uname(&osname) >= 0 ? makeString(unsafeSpan(osname.sysname)) : emptyString();
+@@ -193,7 +193,7 @@
+         else if (hint == "model")
+             values.model = ""_s;
+         else if (hint == "platformVersion") {
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+             values.platformVersion = ""_s;
+ #elif PLATFORM(IOS_FAMILY)
+             values.platformVersion = systemMarketingVersionForUserAgentString();
+--- a/Source/WebCore/page/SecurityOrigin.cpp
++++ b/Source/WebCore/page/SecurityOrigin.cpp
+@@ -375,7 +375,7 @@
+     if (m_universalAccess)
+         return true;
+ 
+-#if !PLATFORM(IOS_FAMILY) && !ENABLE(BUBBLEWRAP_SANDBOX)
++#if !PLATFORM(IOS_FAMILY) && !ENABLE(BUBBLEWRAP_SANDBOX) && !OS(VEDA)
+     if (m_data.protocol() == "file"_s && url.protocolIsFile() && !FileSystem::filesHaveSameVolume(m_filePath, url.fileSystemPath()))
+         return false;
+ #endif
+--- a/Source/WebCore/platform/graphics/texmap/TextureMapperLayer.cpp
++++ b/Source/WebCore/platform/graphics/texmap/TextureMapperLayer.cpp
+@@ -456,6 +456,10 @@
+ static FloatRect transformRectFromLayerToGlobalCoordinateSpace(const FloatRect& rect, const TransformationMatrix& transform, const TextureMapperPaintOptions& options)
+ {
+     auto transformedRect = transform.mapRect(rect);
++    // Drawn antialiased (TextureMapper::drawTexturedQuad), the edges' fringe
++    // reaches the shader's inflation distance, a pixel, beyond the rect.
++    if (!transform.mapQuad(rect).isRectilinear())
++        transformedRect.inflate(1);
+     // Some layers are drawn on an intermediate surface and have this offset applied to convert to the
+     // intermediate surface coordinates. In order to translate back to actual coordinates,
+     // we have to undo it.
+--- a/Source/WebCore/platform/unix/SharedMemoryUnix.cpp
++++ b/Source/WebCore/platform/unix/SharedMemoryUnix.cpp
+@@ -50,6 +50,10 @@
+ #include <sys/syscall.h>
+ #endif
+ 
++#if OS(VEDA)
++#include <wtf/text/StringConcatenateNumbers.h>
++#endif
++
+ namespace WebCore {
+ 
+ SharedMemoryHandle::SharedMemoryHandle(const SharedMemoryHandle& handle)
+@@ -80,6 +84,13 @@
+ {
+     int fileDescriptor = -1;
+ 
++#if OS(VEDA)
++    do {
++        fileDescriptor = memfd_create("WebKitSharedMemory", MFD_CLOEXEC);
++    } while (fileDescriptor == -1 && errno == EINTR);
++    return UnixFileDescriptor { fileDescriptor, UnixFileDescriptor::Adopt };
++#endif
++
+ #if HAVE(LINUX_MEMFD_H)
+     static bool isMemFdAvailable = true;
+     if (isMemFdAvailable) {
+@@ -180,10 +191,25 @@
+     munmap(m_data, m_size);
+ }
+ 
+-auto SharedMemory::createHandle(Protection) -> std::optional<Handle>
++auto SharedMemory::createHandle(Protection protection) -> std::optional<Handle>
+ {
++#if OS(VEDA)
++    if (protection == Protection::ReadOnly) {
++        int fileDescriptor;
++        auto descriptorPath = makeString("/dev/fd/"_s, m_fileDescriptor.value()).utf8();
++        do {
++            fileDescriptor = open(descriptorPath.data(), O_RDONLY | O_CLOEXEC);
++        } while (fileDescriptor == -1 && errno == EINTR);
++        UnixFileDescriptor readOnly { fileDescriptor, UnixFileDescriptor::Adopt };
++        if (!readOnly)
++            return std::nullopt;
++        return { Handle(WTF::move(readOnly), m_size) };
++    }
++#else
+     // FIXME: Handle the case where the passed Protection is ReadOnly.
+     // See https://bugs.webkit.org/show_bug.cgi?id=131542.
++    UNUSED_PARAM(protection);
++#endif
+ 
+     UnixFileDescriptor duplicate { m_fileDescriptor.value(), UnixFileDescriptor::Duplicate };
+     if (!duplicate) {
+--- a/Source/WebCore/platform/xdg/MIMETypeRegistryXdg.cpp
++++ b/Source/WebCore/platform/xdg/MIMETypeRegistryXdg.cpp
+@@ -34,6 +34,33 @@
+ #define MAX_EXTENSION_COUNT 10
+ namespace WebCore {
+ 
++#if OS(VEDA)
++// The types of the files the web is made of, by their extensions: Veda has
++// no shared MIME database for xdgmime to read.
++static ASCIILiteral webTypeForExtension(StringView extension)
++{
++    static constexpr std::pair<ASCIILiteral, ASCIILiteral> types[] = {
++        { "html"_s, "text/html"_s }, { "htm"_s, "text/html"_s }, { "shtml"_s, "text/html"_s },
++        { "xhtml"_s, "application/xhtml+xml"_s }, { "xht"_s, "application/xhtml+xml"_s },
++        { "xml"_s, "application/xml"_s }, { "xsl"_s, "application/xml"_s }, { "svg"_s, "image/svg+xml"_s },
++        { "css"_s, "text/css"_s }, { "js"_s, "text/javascript"_s }, { "mjs"_s, "text/javascript"_s },
++        { "json"_s, "application/json"_s }, { "txt"_s, "text/plain"_s }, { "wasm"_s, "application/wasm"_s },
++        { "png"_s, "image/png"_s }, { "apng"_s, "image/apng"_s }, { "jpg"_s, "image/jpeg"_s },
++        { "jpeg"_s, "image/jpeg"_s }, { "gif"_s, "image/gif"_s }, { "webp"_s, "image/webp"_s },
++        { "bmp"_s, "image/bmp"_s }, { "ico"_s, "image/vnd.microsoft.icon"_s },
++        { "woff"_s, "font/woff"_s }, { "woff2"_s, "font/woff2"_s }, { "ttf"_s, "font/ttf"_s }, { "otf"_s, "font/otf"_s },
++        { "pdf"_s, "application/pdf"_s }, { "mp4"_s, "video/mp4"_s }, { "webm"_s, "video/webm"_s },
++        { "ogg"_s, "audio/ogg"_s }, { "oga"_s, "audio/ogg"_s }, { "ogv"_s, "video/ogg"_s }, { "opus"_s, "audio/ogg"_s },
++        { "mp3"_s, "audio/mpeg"_s }, { "wav"_s, "audio/wav"_s }, { "flac"_s, "audio/flac"_s },
++    };
++    for (auto& [name, type] : types) {
++        if (equalIgnoringASCIICase(extension, name))
++            return type;
++    }
++    return { };
++}
++#endif
++
+ String MIMETypeRegistry::mimeTypeForExtension(StringView string)
+ {
+     if (string.isEmpty())
+@@ -46,6 +73,11 @@
+             return String::fromUTF8(mimeType);
+     }
+ 
++#if OS(VEDA)
++    if (auto type = webTypeForExtension(string); !type.isNull())
++        return type;
++#endif
++
+     return String();
+ }
+ 
+--- a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
++++ b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
+@@ -718,6 +718,10 @@
+         RELEASE_LOG_ERROR(Loading, "loadPing: dropping ping from process %" PRIu64 " for pageID not in allow-list", m_webProcessIdentifier.toUInt64());
+         return;
+     }
++#if OS(VEDA)
++    if (loadParameters.request.url().protocolIsFile() && !mayReadFile(loadParameters.request.url().fileSystemPath()))
++        return;
++#endif
+     CONNECTION_RELEASE_LOG(Loading, "loadPing: (parentPID=%d, pageProxyID=%" PRIu64 ", webPageID=%" PRIu64 ", frameID=%" PRIu64 ", resourceID=%" PRIu64 ")", loadParameters.parentPID, loadParameters.webPageProxyID.toUInt64(), loadParameters.webPageID.toUInt64(), loadParameters.webFrameID.toUInt64(), loadParameters.identifier ? loadParameters.identifier->toUInt64() : 0);
+ 
+     auto completionHandler = [connection = m_connection, identifier = *loadParameters.identifier] (const ResourceError& error, const ResourceResponse& response) {
+--- a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.h
++++ b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.h
+@@ -281,6 +281,14 @@
+     WebSWServerToContextConnection* swContextConnection() { return m_swContextConnection.get(); }
+     void clearFrameLoadRecordsForStorageAccess(WebCore::FrameIdentifier);
+     void allowAccessToFile(const String& path);
++#if OS(VEDA)
++    // Whether the web process may have the file `path` read: it is in what
++    // the UI process allowed it (veda/NetworkFileLoansVeda.cpp).
++    bool mayReadFile(const String& path) const;
++    // The web process may no longer have the place `path` read: the UI
++    // process, which allowed it, took it back.
++    void forgetAccessToFile(const String& path);
++#endif
+     void loadCancelledDownloadRedirectRequestInFrame(const WebCore::ResourceRequest&, const WebCore::FrameIdentifier&, const WebCore::PageIdentifier&);
+ 
+     bool NODELETE isAlwaysOnLoggingAllowed() const;
+--- a/Source/WebKit/NetworkProcess/NetworkProcess.cpp
++++ b/Source/WebKit/NetworkProcess/NetworkProcess.cpp
+@@ -416,6 +416,10 @@
+ 
+     auto newConnection = NetworkConnectionToWebProcess::create(*this, identifier, sessionID, WTF::move(parameters), WTF::move(connectionIdentifiers->server));
+     Ref connection = newConnection;
++#if OS(VEDA)
++    for (auto& path : takeFileAccessAllowedBeforeConnecting(identifier))
++        connection->allowAccessToFile(path);
++#endif
+ 
+     ASSERT(!m_webProcessConnections.contains(identifier));
+     m_webProcessConnections.add(identifier, WTF::move(newConnection));
+@@ -3028,9 +3032,11 @@
+ {
+ }
+ 
++#if !OS(VEDA)
+ void NetworkProcess::initializeSandbox(const AuxiliaryProcessInitializationParameters&, SandboxInitializationParameters&)
+ {
+ }
++#endif
+ 
+ void NetworkProcess::flushCookies(PAL::SessionID, CompletionHandler<void()>&& completionHandler)
+ {
+@@ -3460,6 +3466,10 @@
+             SandboxExtension::consumePermanently(*handle);
+         connection->allowAccessToFile(path);
+     }
++#if OS(VEDA)
++    else
++        allowFileAccessBeforeConnecting(processID, path);
++#endif
+     completionHandler();
+ }
+ 
+--- a/Source/WebKit/NetworkProcess/NetworkProcess.h
++++ b/Source/WebKit/NetworkProcess/NetworkProcess.h
+@@ -489,6 +489,16 @@
+ 
+     void allowFilesAccessFromWebProcess(WebCore::ProcessIdentifier, const Vector<String>&, CompletionHandler<void()>&&);
+     void allowFileAccessFromWebProcess(WebCore::ProcessIdentifier, const String&, std::optional<WebKit::SandboxExtensionHandle>, CompletionHandler<void()>&&);
++#if OS(VEDA)
++    // Takes the UI process's loan of `path`, a place of the user's files
++    // to read from now on (veda/NetworkFileLoansVeda.cpp).
++    void borrowFiles(const String& path, const Vector<uint8_t>& loan);
++    // Forgets `path`, a place the UI process took back, for every web
++    // process: none has it read any more, even once it is lent again.
++    void forgetFiles(const String& path);
++    void allowFileAccessBeforeConnecting(WebCore::ProcessIdentifier, const String&);
++    Vector<String> takeFileAccessAllowedBeforeConnecting(WebCore::ProcessIdentifier);
++#endif
+ 
+     bool enableModernDownloadProgress() const { return m_enableModernDownloadProgress; }
+ 
+--- a/Source/WebKit/NetworkProcess/NetworkProcess.messages.in
++++ b/Source/WebKit/NetworkProcess/NetworkProcess.messages.in
+@@ -255,6 +255,10 @@
+ 
+     AllowFileAccessFromWebProcess(WebCore::ProcessIdentifier processIdentifier, String url, std::optional<WebKit::SandboxExtensionHandle> sandboxExtensionHandle) -> ()
+     AllowFilesAccessFromWebProcess(WebCore::ProcessIdentifier processIdentifier, Vector<String> urls) -> () ReplyCanDispatchOutOfOrder
++#if OS(VEDA)
++    BorrowFiles(String path, Vector<uint8_t> loan)
++    ForgetFiles(String path)
++#endif
+ 
+     TerminateRemoteWorkerContextConnectionWhenPossible(enum:uint8_t WebKit::RemoteWorkerType workerType, PAL::SessionID sessionID,  WebCore::RegistrableDomain registrableDomain, WebCore::ProcessIdentifier processIdentifier);
+     RunningOrTerminatingServiceWorkerCountForTesting(PAL::SessionID sessionID) -> (unsigned count)
+--- a/Source/WebKit/NetworkProcess/NetworkResourceLoader.cpp
++++ b/Source/WebKit/NetworkProcess/NetworkResourceLoader.cpp
+@@ -413,6 +413,14 @@
+             return;
+         }
+ #endif // ENABLE(BLOCKING_OF_LOCAL_FILE_LOADS_WITHOUT_SANDBOX_EXTENSION)
++#if OS(VEDA)
++    // A file is read for the web process only where the UI process allowed
++    // it: in a place lent for its page.
++    if (request.url().protocolIsFile() && !protect(connectionToWebProcess())->mayReadFile(request.url().fileSystemPath())) {
++        didFailLoading(ResourceError { errorDomainWebKitInternal, 0, request.url(), "This file is not in the folder of a page you opened"_s, ResourceError::Type::AccessControl });
++        return;
++    }
++#endif
+ 
+     if (load == FirstLoad::Yes) {
+         consumeSandboxExtensions();
+@@ -1565,6 +1573,13 @@
+ {
+     LOADER_RELEASE_LOG("continueWillSendRequest: (isAllowedToAskUserForCredentials=%d)", isAllowedToAskUserForCredentials);
+ 
++#if OS(VEDA)
++    if (newRequest.url().protocolIsFile() && !protect(connectionToWebProcess())->mayReadFile(newRequest.url().fileSystemPath())) {
++        didFailLoading(ResourceError { errorDomainWebKitInternal, 0, newRequest.url(), "This file is not in the folder of a page you opened"_s, ResourceError::Type::AccessControl });
++        return completionHandler({ });
++    }
++#endif
++
+     // If there is a match in the network cache, we need to reuse the original cache policy and partition.
+     // This must happen before any branch below that may store a redirect in the disk cache, otherwise a
+     // compromised WebContent process could poison the cache for an arbitrary partition.
+--- a/Source/WebKit/NetworkProcess/veda/NetworkFileLoansVeda.cpp
++++ b/Source/WebKit/NetworkProcess/veda/NetworkFileLoansVeda.cpp
+@@ -0,0 +1,129 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "NetworkProcess.h"
++
++#include "NetworkConnectionToWebProcess.h"
++#include <unistd.h>
++#include <veda/sandbox.h>
++#include <wtf/FileSystem.h>
++#include <wtf/HashMap.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/SafeStrerror.h>
++#include <wtf/text/CString.h>
++
++// Pages from the user's files, in the network process (the UI process's
++// side: UIProcess/veda/FileLoansVeda.cpp). The network process reaches a
++// folder of the user's once the UI process lends it (borrowFiles), until
++// the UI process takes it back, through the file system, once no page
++// needs it; and it reads for a web process only what the UI process
++// allowed that web process (mayReadFile): the places lent for its page,
++// the files chosen for it to upload, its own temporary files. A place
++// taken back it forgets for every web process (forgetFiles), so that none
++// has it read once it is lent again, for another page.
++
++namespace WebKit {
++
++void NetworkProcess::borrowFiles(const String& path, const Vector<uint8_t>& loan)
++{
++    if (loan.size() != VEDA_LOAN_SIZE)
++        return;
++    if (int error = veda_borrow_files(FileSystem::fileSystemRepresentation(path).data(), loan.span().data()))
++        WTFLogAlways("Network process %d cannot borrow %s: %s", getpid(), path.utf8().data(), safeStrerror(error).data());
++}
++
++// What the UI process allowed web processes that have not connected yet:
++// their connections are allowed it as they come.
++static HashMap<WebCore::ProcessIdentifier, Vector<String>>& allowedBeforeConnecting()
++{
++    static NeverDestroyed<HashMap<WebCore::ProcessIdentifier, Vector<String>>> paths;
++    return paths;
++}
++
++void NetworkProcess::allowFileAccessBeforeConnecting(WebCore::ProcessIdentifier processIdentifier, const String& path)
++{
++    allowedBeforeConnecting().ensure(processIdentifier, [] {
++        return Vector<String> { };
++    }).iterator->value.append(path);
++}
++
++Vector<String> NetworkProcess::takeFileAccessAllowedBeforeConnecting(WebCore::ProcessIdentifier processIdentifier)
++{
++    return allowedBeforeConnecting().take(processIdentifier);
++}
++
++// `path` normal and without a slash at its end; null if it is not
++// absolute.
++static String normalPath(const String& path)
++{
++    if (!path.startsWith('/'))
++        return { };
++    auto normal = FileSystem::lexicallyNormal(path);
++    while (normal.length() > 1 && normal.endsWith('/'))
++        normal = normal.left(normal.length() - 1);
++    return normal;
++}
++
++void NetworkProcess::forgetFiles(const String& path)
++{
++    auto place = normalPath(path);
++    if (place.isNull())
++        return;
++    for (auto& connection : m_webProcessConnections.values())
++        connection->forgetAccessToFile(place);
++    for (auto& paths : allowedBeforeConnecting().values())
++        paths.removeAllMatching([&](auto& allowed) { return normalPath(allowed) == place; });
++}
++
++void NetworkConnectionToWebProcess::forgetAccessToFile(const String& path)
++{
++    auto place = normalPath(path);
++    if (place.isNull())
++        return;
++    m_allowedFilePaths.removeIf([&](auto& allowed) { return normalPath(allowed) == place; });
++}
++
++// The first few files refused to web processes are logged, as the file
++// system logs a sandboxed program's first few refusals.
++static constexpr unsigned loggedRefusals = 16;
++
++bool NetworkConnectionToWebProcess::mayReadFile(const String& path) const
++{
++    auto file = normalPath(path);
++    if (!file.isNull()) {
++        for (auto& allowed : m_allowedFilePaths) {
++            auto place = normalPath(allowed);
++            if (!place.isNull() && (file == place || FileSystem::isAncestor(place, file)))
++                return true;
++        }
++    }
++    static unsigned refusals;
++    if (++refusals <= loggedRefusals)
++        WTFLogAlways("Network process %d: web process %" PRIu64 " was refused %s: it was lent for no page of its", getpid(), m_webProcessIdentifier.toUInt64(), path.utf8().data());
++    return false;
++}
++
++} // namespace WebKit
+--- a/Source/WebKit/NetworkProcess/veda/NetworkProcessVeda.cpp
++++ b/Source/WebKit/NetworkProcess/veda/NetworkProcessVeda.cpp
+@@ -0,0 +1,195 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "NetworkProcess.h"
++
++#include <algorithm>
++#include <errno.h>
++#include <spawn.h>
++#include <stdlib.h>
++#include <sys/wait.h>
++#include <unistd.h>
++#include <veda/ipc.h>
++#include <veda/sandbox.h>
++#include <wtf/FileSystem.h>
++#include <wtf/SafeStrerror.h>
++#include <wtf/Vector.h>
++#include <wtf/text/CString.h>
++#include <wtf/text/MakeString.h>
++#include <wtf/text/WTFString.h>
++
++namespace WebKit {
++
++// The places of the user's files the embedder gives the network process
++// (WEBKIT_VEDA_NETWORK_PROCESS_FILES, absolute paths separated by ':'),
++// each to read and change.
++static Vector<String> namedPlaces()
++{
++    Vector<String> places;
++    for (auto& path : String::fromUTF8(getenv("WEBKIT_VEDA_NETWORK_PROCESS_FILES")).split(':')) {
++        if (!path.startsWith('/'))
++            continue;
++        auto place = FileSystem::lexicallyNormal(path);
++        while (place.length() > 1 && place.endsWith('/'))
++            place = place.left(place.length() - 1);
++        places.append(WTF::move(place));
++    }
++    return places;
++}
++
++// Whether `path` is `place`, or inside it.
++static bool isInside(const String& path, const String& place)
++{
++    return path == place || path.startsWith(makeString(place, '/'));
++}
++
++// Something of the file system beside `places`, in a directory on the way
++// to one of them: what the sandbox is to hide, which its check looks for.
++// The user's files (/home) are looked in first, and directories before
++// those inside them. Null if there is nothing beside them.
++static String besidePlaces(const Vector<String>& places)
++{
++    Vector<String> directories;
++    for (auto& place : places) {
++        for (auto directory = FileSystem::parentPath(place); directory.length() > 1; directory = FileSystem::parentPath(directory)) {
++            if (!directories.contains(directory))
++                directories.append(directory);
++        }
++    }
++    std::ranges::stable_sort(directories, [](auto& a, auto& b) {
++        bool aHome = isInside(a, "/home"_s);
++        if (aHome != isInside(b, "/home"_s))
++            return aHome;
++        return a.length() < b.length();
++    });
++    for (auto& directory : directories) {
++        for (auto& name : FileSystem::listDirectory(directory)) {
++            auto path = FileSystem::pathByAppendingComponent(directory, name);
++            bool left = std::ranges::any_of(places, [&](auto& place) {
++                return isInside(path, place) || isInside(place, path);
++            });
++            if (!left)
++                return path;
++        }
++    }
++    return { };
++}
++
++// What of the sandbox does not hold, if anything: `beside`, which was
++// there beside its places, still is; it reaches the file system's service,
++// where a connection of its own would have all the files; or it starts
++// processes.
++static const char* sandboxHole(const String& beside)
++{
++    if (!beside.isNull() && (!access(FileSystem::fileSystemRepresentation(beside).data(), F_OK) || errno != ENOENT))
++        return "what is beside its places is there";
++    veda_handle_t channel;
++    if (!veda_service_connect("vfs", &channel)) {
++        veda_close(channel);
++        return "it reaches the file system's service";
++    }
++    // The program again, which would end at once: it is no process of
++    // WebKit's of that type.
++    CString program = FileSystem::currentExecutablePath();
++    char* arguments[] = { const_cast<char*>(program.data()), nullptr };
++    char* environment[] = { const_cast<char*>("WEBKIT_PROCESS_TYPE=none"), nullptr };
++    pid_t child;
++    int spawned = posix_spawn(&child, program.data(), nullptr, nullptr, arguments, environment);
++    if (!spawned)
++        waitpid(child, nullptr, 0);
++    if (spawned != EACCES)
++        return "it starts processes";
++    return nullptr;
++}
++
++// The network process keeps, of what it was started with:
++//
++// - Files: the system image (the program, ICU's data, the certificate
++//   authorities TLS trusts) and the devices, to read; /dev/null to write;
++//   and the places of the user's files the embedder names in
++//   WEBKIT_VEDA_NETWORK_PROCESS_FILES, to read and change. The browser
++//   names the engine's data and cache (what webkit_network_session_new
++//   is given: cookies, storage, the cache), the downloads, and its
++//   temporary files, where the network process keeps its own (TMPDIR)
++//   and the browser copies the files the user chooses for a page to
++//   upload. Nothing else, but the folders of the pages the user opens
++//   (file://), which the UI process lends it to read while a page needs
++//   them (borrowFiles, NetworkFileLoansVeda.cpp).
++// - Services: the network's (sockets, names), and no other: not the file
++//   system's (its connection to it is the one confined), not the
++//   launcher.
++// - The kernel: no processes, no kernel log, and no new executable memory:
++//   it runs no script (proxies come from the environment, never from a
++//   PAC script).
++//
++// It first makes the way to each place (the directories it is in), as the
++// sandbox lets it make a place, but nothing on the way to one. It checks
++// that what it gave up is gone before it goes on, and goes no further if
++// it is not. As on Linux, WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS leaves
++// it all.
++void NetworkProcess::initializeSandbox(const AuxiliaryProcessInitializationParameters&, SandboxInitializationParameters&)
++{
++    if (getenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS")) {
++        WTFLogAlways("Network process %d is not sandboxed (WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS)", getpid());
++        return;
++    }
++    auto named = namedPlaces();
++    Vector<CString> paths;
++    for (auto& place : named) {
++        FileSystem::makeAllDirectories(FileSystem::parentPath(place));
++        paths.append(FileSystem::fileSystemRepresentation(place));
++    }
++    Vector<struct veda_place> files {
++        { "/system", 0 },
++        { "/dev", 0 },
++        { "/dev/null", 1 },
++    };
++    for (auto& path : paths)
++        files.append(veda_place { path.data(), 1 });
++    Vector<String> places { "/system"_s, "/dev"_s };
++    places.appendVector(named);
++    String beside = besidePlaces(places);
++    static const char* const services[] = { "net" };
++    int error = veda_confine_files(files.span().data(), files.size());
++    if (!error)
++        error = veda_confine_services(services, std::size(services));
++    if (!error)
++        error = veda_process_restrict(VEDA_RESTRICT_LOG | VEDA_RESTRICT_PROCESSES | VEDA_RESTRICT_EXECUTE);
++    if (error) {
++        WTFLogAlways("Network process %d cannot sandbox itself: %s", getpid(), safeStrerror(error).data());
++        CRASH();
++    }
++    if (auto* hole = sandboxHole(beside)) {
++        WTFLogAlways("Network process %d: its sandbox does not hold: %s", getpid(), hole);
++        CRASH();
++    }
++    if (named.isEmpty())
++        WTFLogAlways("Network process %d is sandboxed: it reads only the system image and the devices, changes none of the user's files, reaches only the network service, and cannot start processes or make memory executable", getpid());
++    else
++        WTFLogAlways("Network process %d is sandboxed: it reads only the system image and the devices, and reads and changes only %s; it reaches only the network service, and cannot start processes or make memory executable", getpid(), makeStringByJoining(named.span(), ", "_s).utf8().data());
++}
++
++} // namespace WebKit
+--- a/Source/WebKit/Platform/IPC/unix/ConnectionUnix.cpp
++++ b/Source/WebKit/Platform/IPC/unix/ConnectionUnix.cpp
+@@ -463,7 +463,7 @@
+             continue;
+         }
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+         // Linux can return EPIPE instead of ECONNRESET
+         if (errno == EPIPE || errno == ECONNRESET)
+ #else
+--- a/Source/WebKit/Platform/IPC/unix/IPCUtilitiesUnix.cpp
++++ b/Source/WebKit/Platform/IPC/unix/IPCUtilitiesUnix.cpp
+@@ -35,7 +35,7 @@
+ {
+     std::array<int, 2> sockets;
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     if ((options & SetCloexecOnServer) || (options & SetCloexecOnClient)) {
+         RELEASE_ASSERT(socketpair(AF_UNIX, socketType | SOCK_CLOEXEC, 0, sockets.data()) != -1);
+ 
+--- a/Source/WebKit/PlatformWPE.cmake
++++ b/Source/WebKit/PlatformWPE.cmake
+@@ -106,6 +106,30 @@
+     "SourcesWPE.txt"
+ )
+ 
++if (CMAKE_SYSTEM_NAME STREQUAL "Veda")
++    # The entry point of the web engine's processes, which are the embedding
++    # program started again.
++    list(APPEND WebKit_SOURCES
++        Shared/veda/AuxiliaryProcessMainVeda.cpp
++    )
++    # The web process's sandbox (WebProcess::initializeSandbox).
++    list(APPEND WebKit_SOURCES
++        WebProcess/veda/WebProcessVeda.cpp
++    )
++    # The network process's sandbox (NetworkProcess::initializeSandbox).
++    list(APPEND WebKit_SOURCES
++        NetworkProcess/veda/NetworkProcessVeda.cpp
++    )
++    # Pages from the user's files, which the network process is lent.
++    list(APPEND WebKit_SOURCES
++        NetworkProcess/veda/NetworkFileLoansVeda.cpp
++        UIProcess/veda/FileLoansVeda.cpp
++    )
++    list(APPEND WebKit_PRIVATE_INCLUDE_DIRECTORIES
++        "${WEBKIT_DIR}/UIProcess/veda"
++    )
++endif ()
++
+ list(APPEND WebKit_SERIALIZATION_IN_FILES Shared/glib/RendererBufferFormat.serialization.in)
+ 
+ if (USE_GBM)
+--- a/Source/WebKit/Scripts/webkit/opaque_ipc_types.tracking.in
++++ b/Source/WebKit/Scripts/webkit/opaque_ipc_types.tracking.in
+@@ -274,6 +274,9 @@
+     [NotSentFromWebContent] MessageParamReply WebPageProxy.BindRemoteAccessibilityFrames token
+     [NotSentFromWebContent] MessageParamReply WebPageProxy.LoadSynchronousURLSchemeTask data
+     [NotSentFromWebContent] MessageParamReply NetworkConnectionToWebProcess.PerformSynchronousLoad data
++    # Veda: a loan of a place of the user's files, a secret the UI process
++    # has the file system make (UIProcess/veda/FileLoansVeda.cpp).
++    [NotSentFromWebContent] MessageParam NetworkProcess.BorrowFiles loan
+ }
+ 
+ [UnsafeWrapper] Vector<unsigned char> {
+--- a/Source/WebKit/Shared/AuxiliaryProcess.cpp
++++ b/Source/WebKit/Shared/AuxiliaryProcess.cpp
+@@ -44,7 +44,7 @@
+ #include <unistd.h>
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ #include <wtf/MemoryPressureHandler.h>
+ #if USE(GLIB)
+ #include <wtf/glib/Sandbox.h>
+@@ -296,7 +296,7 @@
+     CRASH();
+ }
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+ void AuxiliaryProcess::didReceiveMemoryPressureEvent(bool isCritical)
+ {
+     MemoryPressureHandler::singleton().triggerMemoryPressureEvent(isCritical);
+--- a/Source/WebKit/Shared/AuxiliaryProcess.h
++++ b/Source/WebKit/Shared/AuxiliaryProcess.h
+@@ -149,7 +149,7 @@
+     bool dispatchMessage(IPC::Connection&, IPC::Decoder&);
+     bool dispatchSyncMessage(IPC::Connection&, IPC::Decoder&, UniqueRef<IPC::Encoder>&);
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     void didReceiveMemoryPressureEvent(bool isCritical);
+ #endif
+ 
+--- a/Source/WebKit/Shared/AuxiliaryProcess.messages.in
++++ b/Source/WebKit/Shared/AuxiliaryProcess.messages.in
+@@ -35,7 +35,7 @@
+     [DeferSendingIfSuspendedWithCoalescingKeys=(domain, key)] PreferenceDidUpdate(String domain, String key, std::optional<String> encodedValue)
+ #endif
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     void DidReceiveMemoryPressureEvent(bool isCritical)
+ #endif
+ }
+--- a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
++++ b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
+@@ -44,6 +44,10 @@
+ 
+ static String findWebKitProcess(const ASCIILiteral processName)
+ {
++#if OS(VEDA)
++    UNUSED_PARAM(processName);
++    return FileSystem::stringFromFileSystemRepresentation(FileSystem::currentExecutablePath().data());
++#endif
+ #if ENABLE(DEVELOPER_MODE)
+     static const char* execDirectory = g_getenv("WEBKIT_EXEC_PATH");
+     if (execDirectory) {
+--- a/Source/WebKit/Shared/veda/AuxiliaryProcessMainVeda.cpp
++++ b/Source/WebKit/Shared/veda/AuxiliaryProcessMainVeda.cpp
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++
++#include "NetworkProcessMain.h"
++#include "WebProcessMain.h"
++#include <stdlib.h>
++#include <string.h>
++#include <wtf/text/StringCommon.h>
++
++#if ENABLE(GPU_PROCESS)
++#include "GPUProcessMain.h"
++#endif
++
++// The entry point of WebKit's processes on Veda, where they are the
++// program that embeds WebKit started again: the embedder's main() calls
++// it first, and returns what it returns unless it is -1 (the program is
++// not one of WebKit's processes). The launcher says which process the
++// program is to be with WEBKIT_PROCESS_TYPE, which goes no further.
++extern "C" WK_EXPORT int webkit_veda_auxiliary_process_main(int argc, char** argv)
++{
++    const char* type = getenv("WEBKIT_PROCESS_TYPE");
++    if (!type)
++        return -1;
++    int (*processMain)(int, char**) = nullptr;
++    if (!strcmp(type, "WebProcess"))
++        processMain = WebKit::WebProcessMain;
++    else if (!strcmp(type, "NetworkProcess"))
++        processMain = WebKit::NetworkProcessMain;
++#if ENABLE(GPU_PROCESS)
++    else if (!strcmp(type, "GPUProcess"))
++        processMain = WebKit::GPUProcessMain;
++#endif
++    unsetenv("WEBKIT_PROCESS_TYPE");
++    if (!processMain)
++        return EXIT_FAILURE;
++    return processMain(argc, argv);
++}
+--- a/Source/WebKit/UIProcess/API/glib/WebKitSettings.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitSettings.cpp
+@@ -182,8 +182,10 @@
+     PROP_ALLOW_FILE_ACCESS_FROM_FILE_URLS,
+     PROP_ALLOW_UNIVERSAL_ACCESS_FROM_FILE_URLS,
+     PROP_ALLOW_TOP_NAVIGATION_TO_DATA_URLS,
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     PROP_HARDWARE_ACCELERATION_POLICY,
++#endif
++#if PLATFORM(GTK)
+     PROP_ENABLE_BACK_FORWARD_NAVIGATION_GESTURES,
+ #endif
+     PROP_ENABLE_JAVASCRIPT_MARKUP,
+@@ -401,10 +403,12 @@
+     case PROP_ALLOW_TOP_NAVIGATION_TO_DATA_URLS:
+         webkit_settings_set_allow_top_navigation_to_data_urls(settings, g_value_get_boolean(value));
+         break;
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     case PROP_HARDWARE_ACCELERATION_POLICY:
+         webkit_settings_set_hardware_acceleration_policy(settings, static_cast<WebKitHardwareAccelerationPolicy>(g_value_get_enum(value)));
+         break;
++#endif
++#if PLATFORM(GTK)
+     case PROP_ENABLE_BACK_FORWARD_NAVIGATION_GESTURES:
+         webkit_settings_set_enable_back_forward_navigation_gestures(settings, g_value_get_boolean(value));
+         break;
+@@ -618,10 +622,12 @@
+     case PROP_ALLOW_TOP_NAVIGATION_TO_DATA_URLS:
+         g_value_set_boolean(value, webkit_settings_get_allow_top_navigation_to_data_urls(settings));
+         break;
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     case PROP_HARDWARE_ACCELERATION_POLICY:
+         g_value_set_enum(value, webkit_settings_get_hardware_acceleration_policy(settings));
+         break;
++#endif
++#if PLATFORM(GTK)
+     case PROP_ENABLE_BACK_FORWARD_NAVIGATION_GESTURES:
+         g_value_set_boolean(value, webkit_settings_get_enable_back_forward_navigation_gestures(settings));
+         break;
+@@ -1582,7 +1588,7 @@
+             FEATURE_DEFAULT(AllowTopNavigationToDataURLs),
+             readWriteConstructParamFlags);
+ 
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     /**
+      * WebKitSettings:hardware-acceleration-policy:
+      *
+@@ -1604,7 +1610,9 @@
+             WEBKIT_TYPE_HARDWARE_ACCELERATION_POLICY,
+             WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS,
+             readWriteConstructParamFlags);
++#endif
+ 
++#if PLATFORM(GTK)
+     /**
+      * WebKitSettings:enable-back-forward-navigation-gestures:
+      *
+@@ -3893,7 +3901,7 @@
+     g_object_notify_by_pspec(G_OBJECT(settings), sObjProperties[PROP_ALLOW_TOP_NAVIGATION_TO_DATA_URLS]);
+ }
+ 
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+ /**
+  * webkit_settings_get_hardware_acceleration_policy:
+  * @settings: a #WebKitSettings
+@@ -3928,21 +3936,27 @@
+     WebKitSettingsPrivate* priv = settings->priv;
+     bool changed = false;
+     switch (policy) {
+-#if !USE(GTK4)
++#if PLATFORM(GTK) && !USE(GTK4)
+     case WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND:
+         g_warning("WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND is deprecated and is equivalent to WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS now");
+         [[fallthrough]];
+ #endif
+     case WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS:
++#if PLATFORM(GTK)
+         if (!HardwareAccelerationManager::singleton().canUseHardwareAcceleration())
+             return;
++#endif
+ 
+         if (!priv->preferences->hardwareAccelerationEnabled()) {
+             priv->preferences->setHardwareAccelerationEnabled(true);
+             changed = true;
+         }
+ 
++#if PLATFORM(GTK)
+         if (!priv->preferences->acceleratedCompositingEnabled() && HardwareAccelerationManager::singleton().acceleratedCompositingModeEnabled()) {
++#else
++        if (!priv->preferences->acceleratedCompositingEnabled()) {
++#endif
+             priv->preferences->setAcceleratedCompositingEnabled(true);
+             priv->preferences->setForceCompositingMode(true);
+             priv->preferences->setThreadedScrollingEnabled(true);
+@@ -3967,6 +3981,9 @@
+         g_object_notify_by_pspec(G_OBJECT(settings), sObjProperties[PROP_HARDWARE_ACCELERATION_POLICY]);
+ }
+ 
++#endif // PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
++
++#if PLATFORM(GTK)
+ /**
+  * webkit_settings_get_enable_back_forward_navigation_gestures:
+  * @settings: a #WebKitSettings
+--- a/Source/WebKit/UIProcess/API/glib/WebKitSettings.h.in
++++ b/Source/WebKit/UIProcess/API/glib/WebKitSettings.h.in
+@@ -59,8 +59,8 @@
+ 
+ WEBKIT_DECLARE_FINAL_TYPE (WebKitSettings, webkit_settings, WEBKIT, SETTINGS, GObject)
+ 
+-#if PLATFORM(GTK)
+-#if USE(GTK4)
++#if PLATFORM(GTK) || PLATFORM(WPE)
++#if PLATFORM(WPE) || USE(GTK4)
+ /**
+  * WebKitHardwareAccelerationPolicy:
+  * @WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS: Hardware acceleration is always enabled, even for websites not requesting it.
+@@ -83,7 +83,7 @@
+  */
+ #endif
+ typedef enum {
+-#if !USE(GTK4)
++#if PLATFORM(GTK) && !USE(GTK4)
+     WEBKIT_HARDWARE_ACCELERATION_POLICY_ON_DEMAND,
+ #endif
+     WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS,
+@@ -498,14 +498,16 @@
+ webkit_settings_set_allow_top_navigation_to_data_urls          (WebKitSettings *settings,
+                                                                 gboolean        allowed);
+ 
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || PLATFORM(WPE)
+ WEBKIT_API WebKitHardwareAccelerationPolicy
+ webkit_settings_get_hardware_acceleration_policy               (WebKitSettings *settings);
+ 
+ WEBKIT_API void
+ webkit_settings_set_hardware_acceleration_policy               (WebKitSettings *settings,
+                                                                 WebKitHardwareAccelerationPolicy policy);
++#endif
+ 
++#if PLATFORM(GTK)
+ WEBKIT_API gboolean
+ webkit_settings_get_enable_back_forward_navigation_gestures    (WebKitSettings *settings);
+ 
+--- a/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitWebContext.cpp
+@@ -430,13 +430,14 @@
+ {
+     G_OBJECT_CLASS(webkit_web_context_parent_class)->constructed(object);
+ 
+-    GUniquePtr<char> bundleFilename(g_build_filename(injectedBundleDirectory(), INJECTED_BUNDLE_FILENAME, nullptr));
+-
+     WebKitWebContext* webContext = WEBKIT_WEB_CONTEXT(object);
+     WebKitWebContextPrivate* priv = webContext->priv;
+ 
+     Ref configuration = API::ProcessPoolConfiguration::create();
++#if !OS(VEDA)
++    GUniquePtr<char> bundleFilename(g_build_filename(injectedBundleDirectory(), INJECTED_BUNDLE_FILENAME, nullptr));
+     configuration->setInjectedBundlePath(FileSystem::stringFromFileSystemRepresentation(bundleFilename.get()));
++#endif
+     configuration->setUsesWebProcessCache(true);
+ #if PLATFORM(GTK) && !USE(GTK4)
+     configuration->setProcessSwapsOnNavigation(priv->psonEnabled);
+--- a/Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp
++++ b/Source/WebKit/UIProcess/API/glib/WebKitWebView.cpp
+@@ -99,6 +99,10 @@
+ #include <wtf/text/CStringView.h>
+ #include <wtf/text/StringBuilder.h>
+ 
++#if OS(VEDA)
++#include "FileLoansVeda.h"
++#endif
++
+ #if ENABLE(POINTER_LOCK)
+ #include "WebKitPointerLockPermissionRequest.h"
+ #endif
+@@ -3587,6 +3591,9 @@
+     g_return_if_fail(WEBKIT_IS_WEB_VIEW(webView));
+     g_return_if_fail(uri);
+ 
++#if OS(VEDA)
++    lendFilesForLoad(getPage(webView), URL({ }, String::fromUTF8(uri)));
++#endif
+     getPage(webView).loadRequest(URL({ }, String::fromUTF8(uri)));
+ }
+ 
+@@ -3704,6 +3711,9 @@
+ 
+     ResourceRequest resourceRequest;
+     webkitURIRequestGetResourceRequest(request, resourceRequest);
++#if OS(VEDA)
++    lendFilesForLoad(getPage(webView), resourceRequest.url());
++#endif
+     getPage(webView).loadRequest(WTF::move(resourceRequest));
+ }
+ 
+@@ -3753,6 +3763,9 @@
+ {
+     g_return_if_fail(WEBKIT_IS_WEB_VIEW(webView));
+ 
++#if OS(VEDA)
++    lendFilesAgain(getPage(webView), HistoryMove::Reload);
++#endif
+     getPage(webView).reload({ });
+ }
+ 
+@@ -3767,6 +3780,9 @@
+ {
+     g_return_if_fail(WEBKIT_IS_WEB_VIEW(webView));
+ 
++#if OS(VEDA)
++    lendFilesAgain(getPage(webView), HistoryMove::Reload);
++#endif
+     getPage(webView).reload(ReloadOption::FromOrigin);
+ }
+ 
+@@ -3884,6 +3900,9 @@
+ {
+     g_return_if_fail(WEBKIT_IS_WEB_VIEW(webView));
+ 
++#if OS(VEDA)
++    lendFilesAgain(getPage(webView), HistoryMove::Back);
++#endif
+     getPage(webView).goBack();
+ }
+ 
+@@ -3915,6 +3934,9 @@
+ {
+     g_return_if_fail(WEBKIT_IS_WEB_VIEW(webView));
+ 
++#if OS(VEDA)
++    lendFilesAgain(getPage(webView), HistoryMove::Forward);
++#endif
+     getPage(webView).goForward();
+ }
+ 
+@@ -4085,6 +4107,9 @@
+     g_return_if_fail(WEBKIT_IS_WEB_VIEW(webView));
+     g_return_if_fail(WEBKIT_IS_BACK_FORWARD_LIST_ITEM(listItem));
+ 
++#if OS(VEDA)
++    lendFilesAgain(getPage(webView), *webkitBackForwardListItemGetItem(listItem));
++#endif
+     getPage(webView).goToBackForwardItem(*webkitBackForwardListItemGetItem(listItem));
+ }
+ 
+--- a/Source/WebKit/UIProcess/glib/WebProcessPoolGLib.cpp
++++ b/Source/WebKit/UIProcess/glib/WebProcessPoolGLib.cpp
+@@ -161,7 +161,7 @@
+     }
+ #endif
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     if (!MemoryPressureMonitor::disabled())
+         installMemoryPressureHandler();
+ #endif
+@@ -220,7 +220,7 @@
+     parameters.availableInputDevices = availableInputDevices();
+     parameters.memoryCacheDisabled = m_memoryCacheDisabled || LegacyGlobalSettings::singleton().cacheModel() == CacheModel::DocumentViewer;
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     if (MemoryPressureMonitor::disabled())
+         parameters.shouldSuppressMemoryPressureHandler = true;
+ #endif
+--- a/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp
+@@ -232,6 +232,25 @@
+     //
+     // Please keep this comment in sync with the duplicate comment in XDGDBusProxy::launch.
+     GRefPtr<GSubprocessLauncher> launcher = adoptGRef(g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_INHERIT_FDS));
++#if OS(VEDA)
++    // The process is the program that embeds WebKit (see
++    // executablePathOfWebProcess), told which one it is to be.
++    switch (m_launchOptions.processType) {
++    case ProcessLauncher::ProcessType::Web:
++        g_subprocess_launcher_setenv(launcher.get(), "WEBKIT_PROCESS_TYPE", "WebProcess", TRUE);
++        break;
++    case ProcessLauncher::ProcessType::Network:
++        g_subprocess_launcher_setenv(launcher.get(), "WEBKIT_PROCESS_TYPE", "NetworkProcess", TRUE);
++        break;
++#if ENABLE(GPU_PROCESS)
++    case ProcessLauncher::ProcessType::GPU:
++        g_subprocess_launcher_setenv(launcher.get(), "WEBKIT_PROCESS_TYPE", "GPUProcess", TRUE);
++        break;
++#endif
++    default:
++        break;
++    }
++#endif
+     int webkitClientSocketValue = webkitSocketPair.client.release();
+     g_subprocess_launcher_take_fd(launcher.get(), webkitClientSocketValue, webkitClientSocketValue);
+ 
+--- a/Source/WebKit/UIProcess/linux/MemoryPressureMonitor.cpp
++++ b/Source/WebKit/UIProcess/linux/MemoryPressureMonitor.cpp
+@@ -26,7 +26,7 @@
+ #include "config.h"
+ #include "MemoryPressureMonitor.h"
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+ 
+ #include "WebProcessPool.h"
+ #include <mutex>
+@@ -40,6 +40,10 @@
+ #include <wtf/text/CString.h>
+ #include <wtf/text/StringToIntegerConversion.h>
+ 
++#if OS(VEDA)
++#include <sys/sysinfo.h>
++#endif
++
+ namespace WebKit {
+ 
+ IGNORE_CLANG_WARNINGS_BEGIN("unsafe-buffer-usage-in-libc-call")
+@@ -300,6 +304,20 @@
+     return memoryUsagePercentage;
+ }
+ 
++#if OS(VEDA)
++// The memory the system uses, in percent of what it has, as Veda's kernel
++// counts it: it has no /proc, no cgroups, and no page cache to count apart.
++static int systemMemoryUsedAsPercentage()
++{
++    struct sysinfo info;
++    if (sysinfo(&info) || !info.totalram)
++        return -1;
++    uint64_t total = static_cast<uint64_t>(info.totalram) * info.mem_unit;
++    uint64_t free = static_cast<uint64_t>(info.freeram) * info.mem_unit;
++    return static_cast<int>(((total - std::min(free, total)) * 100) / total);
++}
++#endif
++
+ static inline Seconds pollIntervalForUsedMemoryPercentage(int usedPercentage)
+ {
+     // Use a different poll interval depending on the currently memory used,
+@@ -357,6 +375,10 @@
+         while (true) {
+             sleep(pollInterval);
+ 
++#if OS(VEDA)
++            UNUSED_VARIABLE(memoryController);
++            int usedPercentage = systemMemoryUsedAsPercentage();
++#else
+             // Cannot operate without this one, retry opening on the next iteration after sleeping.
+             if (!tryOpeningForUnbufferedReading(memInfoFile, s_procMeminfo))
+                 continue;
+@@ -368,6 +390,7 @@
+             CString cgroupMemoryControllerPath = getCgroupControllerPath(cgroupControllerFile.get(), "memory");
+             memoryController.setMemoryControllerPath(cgroupMemoryControllerPath);
+             int usedPercentage = systemMemoryUsedAsPercentage(memInfoFile.get(), zoneInfoFile.get(), &memoryController);
++#endif
+             if (usedPercentage == -1) {
+                 WTFLogAlways("Failed to get the memory usage");
+                 pollInterval = s_maxPollingInterval;
+--- a/Source/WebKit/UIProcess/linux/MemoryPressureMonitor.h
++++ b/Source/WebKit/UIProcess/linux/MemoryPressureMonitor.h
+@@ -25,7 +25,7 @@
+ 
+ #pragma once
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+ 
+ #include <wtf/NeverDestroyed.h>
+ #include <wtf/Noncopyable.h>
+--- a/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
++++ b/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp
+@@ -94,6 +94,10 @@
+ #include <wtf/WeakHashSet.h>
+ #include <wtf/text/MakeString.h>
+ 
++#if OS(VEDA)
++#include "FileLoansVeda.h"
++#endif
++
+ #if ENABLE(SEC_ITEM_SHIM)
+ #include "SecItemShimProxy.h"
+ #endif
+@@ -279,6 +283,9 @@
+ 
+     connect();
+     sendCreationParametersToNewProcess();
++#if OS(VEDA)
++    lendFilesNeeded(*this);
++#endif
+     updateProcessAssertion();
+     networkProcessesSet().add(*this);
+ #if PLATFORM(IOS_FAMILY)
+--- a/Source/WebKit/UIProcess/soup/WebProcessPoolSoup.cpp
++++ b/Source/WebKit/UIProcess/soup/WebProcessPoolSoup.cpp
+@@ -42,7 +42,7 @@
+     parameters.languages = overrideLanguages().isEmpty() ? userPreferredLanguages() : overrideLanguages();
+     parameters.memoryPressureHandlerConfiguration = s_networkProcessMemoryPressureHandlerConfiguration;
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     if (MemoryPressureMonitor::disabled())
+         parameters.shouldSuppressMemoryPressureHandler = true;
+ #endif // OS(LINUX)
+--- a/Source/WebKit/UIProcess/veda/FileLoansVeda.cpp
++++ b/Source/WebKit/UIProcess/veda/FileLoansVeda.cpp
+@@ -0,0 +1,588 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "FileLoansVeda.h"
++
++#if OS(VEDA)
++
++#include "APIPageConfiguration.h"
++#include "NetworkProcessMessages.h"
++#include "NetworkProcessProxy.h"
++#include "PageLoadState.h"
++#include "SandboxExtension.h"
++#include "SessionState.h"
++#include "WebBackForwardList.h"
++#include "WebBackForwardListFrameItem.h"
++#include "WebBackForwardListItem.h"
++#include "WebFrameProxy.h"
++#include "WebPageProxy.h"
++#include "WebProcessPool.h"
++#include "WebProcessProxy.h"
++#include "WebsiteDataStore.h"
++#include <array>
++#include <glib.h>
++#include <veda/sandbox.h>
++#include <wtf/FileSystem.h>
++#include <wtf/HashMap.h>
++#include <wtf/HashSet.h>
++#include <wtf/MonotonicTime.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/RunLoop.h>
++#include <wtf/SafeStrerror.h>
++#include <wtf/WeakHashMap.h>
++#include <wtf/text/CString.h>
++#include <wtf/text/MakeString.h>
++
++// The network process reads a page from the user's files (file://), and
++// reaches none of them but the engine's own until the browser, which it is
++// sandboxed from, lends it one: the folder of a page the user opens, which
++// holds what the page shows beside it (its pictures, styles, scripts, the
++// pages it links to), to read. The file system makes the loan, a secret
++// that only a process that is not sandboxed can have it make
++// (veda_lend_files), and the network process takes it (BorrowFiles,
++// veda_borrow_files): from then on it reaches that folder too, and nothing
++// else more. What lends is the embedder's own loading of a page
++// (webkit_web_view_load_uri, webkit_web_view_load_request: the address the
++// user typed, a bookmark, a file opened with the browser): a page's links,
++// scripts, redirects, windows and history lend nothing, so that no page
++// widens what the network process reaches. A folder that is the home
++// folder, or holds it, is never lent: a page there lends only itself.
++//
++// The browser takes a folder back (veda_take_back_files) once no page it
++// has open needs it: none shows a page from there, in its main frame or
++// another (an iframe), is loading one, or has one in its history (back and
++// forward, its frames' too). That is as its last tab closes, or its last
++// page leaves the history of its tab; the file system then takes the
++// folder out of what the network process reaches, which a compromised
++// network process could not keep. So the network process reaches the
++// folders of the pages still open, not every one opened since the browser
++// started. The embedder's reloading a page, or going back or forward to
++// one, lends its folder again if it was lent for its tab before (as loading
++// the page again does); a page's own history lends nothing.
++//
++// Within what the network process reaches, a web process has it read only
++// what was lent for its page (AllowFileAccessFromWebProcess; the network
++// process checks every file it reads for a web process,
++// NetworkConnectionToWebProcess::mayReadFile), and is allowed a place only
++// as it starts, before it has shown anything: a process that has shown a
++// page, from the web or from the user's files, gains no place after, and a
++// page from the user's files that its process was not allowed goes to a new
++// one (WebProcessPool's processForNavigationInternal). So no page reaches
++// what was lent after it was shown, nor what was lent for another, even in
++// the same tab, whatever the user then opens there. There is no "universal
++// file read" on Veda: a page's navigation to a file outside what was lent
++// for it, in its window or a new one, is refused.
++//
++// As a place is taken back, WebKit forgets it for every web process
++// (ForgetFiles): the network process reads it for none of them, and each
++// counts as never allowed it, so that a page there later goes to a new
++// process. So a process that was allowed a folder (a window that outlived
++// the page that opened it, in that page's process) does not have it read
++// when it is lent again, for another page. The UI process forgets it
++// too, in what it assumes each of them may read (forgetReadAccessToFiles,
++// which it checks the addresses a web process gives it against): such a
++// window's navigation there fails, saying so, as a page's to any file
++// outside what was lent for it does. (Else it would go to a new process,
++// allowed nothing there, which the UI process would end, as WebKit ends
++// one that gives the address of a file it may not read: the navigation
++// would end without a word.)
++//
++// Nor is a folder taken back from under a page of it that a frame still
++// shows or is about to load: the page's web process goes on giving the UI
++// process its address (as a script pushes a state or goes to a fragment,
++// or as a load of it ends late), which the UI process, the folder
++// forgotten, would take for that of a file the process may not read, and
++// end the process. So a window keeps as its own the places lent for the
++// page that opened it, as that page goes (in a frame the page put in it,
++// the window may go on showing a page of its folder), and a page let go to
++// a file is loading it from then on, for a while, before its web process
++// starts the load (at once): its folder is not taken back between the two.
++
++namespace WebKit {
++
++// A place lent: a path, absolute, normal and without a slash at its end,
++// and whether it is a folder.
++struct LentPlace {
++    String path;
++    bool isFolder { false };
++};
++
++// A loan of a place: the secret its lender takes it back with.
++using Loan = std::array<uint8_t, VEDA_LOAN_SIZE>;
++
++// `path` normal and without a slash at its end; null if it is not
++// absolute.
++static String normalPath(const String& path)
++{
++    if (!path.startsWith('/'))
++        return { };
++    auto normal = FileSystem::lexicallyNormal(path);
++    while (normal.length() > 1 && normal.endsWith('/'))
++        normal = normal.left(normal.length() - 1);
++    return normal;
++}
++
++// Whether `path` is `place` or inside it.
++static bool isInside(const String& path, const String& place)
++{
++    if (place == "/"_s)
++        return true;
++    return path == place || (path.length() > place.length() && path.startsWith(place) && path[place.length()] == '/');
++}
++
++// Whether `path` is the user's home folder or holds it.
++static bool holdsHome(const String& path)
++{
++    static NeverDestroyed<String> home = normalPath(String::fromUTF8(g_get_home_dir()));
++    return isInside("/home"_s, path) || (!home->isNull() && isInside(home, path));
++}
++
++// The path of the file of this machine at `url`; null if it is not one.
++static String filePath(const URL& url)
++{
++    if (!url.protocolIsFile() || !url.host().isEmpty())
++        return { };
++    return normalPath(url.fileSystemPath());
++}
++
++// What loading `url` lends: the folder of the page (a folder's own, for a
++// folder's listing), or the page alone where its folder is the home folder
++// or holds it. Nothing for what is not a file of this machine, or is the
++// home folder or holds it.
++static std::optional<LentPlace> placeToLend(const URL& url)
++{
++    auto path = filePath(url);
++    if (path.isNull())
++        return std::nullopt;
++    bool isFolder = url.path().endsWith('/') || FileSystem::fileType(path) == FileSystem::FileType::Directory;
++    auto folder = isFolder ? path : FileSystem::parentPath(path);
++    if (!holdsHome(folder))
++        return LentPlace { folder, true };
++    if (!holdsHome(path))
++        return LentPlace { path, isFolder };
++    return std::nullopt;
++}
++
++// The places lent for each page: those its embedder's loads lent, and
++// those of the pages that opened it, which it may outlast (it keeps them
++// as they go). A page keeps them, lent or taken back since.
++static WeakHashMap<WebPageProxy, Vector<LentPlace>>& lentForPage()
++{
++    static NeverDestroyed<WeakHashMap<WebPageProxy, Vector<LentPlace>>> places;
++    return places;
++}
++
++// The places each network process has lent now, and their loans.
++static WeakHashMap<NetworkProcessProxy, HashMap<String, Loan>>& lentToNetworkProcess()
++{
++    static NeverDestroyed<WeakHashMap<NetworkProcessProxy, HashMap<String, Loan>>> places;
++    return places;
++}
++
++// The places each web process was allowed.
++static WeakHashMap<WebProcessProxy, Vector<LentPlace>>& allowedToProcess()
++{
++    static NeverDestroyed<WeakHashMap<WebProcessProxy, Vector<LentPlace>>> places;
++    return places;
++}
++
++// The place `process` was allowed that holds `path`.
++static std::optional<LentPlace> allowedPlaceHolding(WebProcessProxy& process, const String& path)
++{
++    if (auto places = allowedToProcess().getOptional(process)) {
++        for (auto& place : *places) {
++            if (isInside(path, place.path))
++                return place;
++        }
++    }
++    return std::nullopt;
++}
++
++// Lends `networkProcess` the place `path` to read, unless it has it lent
++// already: whether it has it.
++static bool lendTo(NetworkProcessProxy& networkProcess, const String& path)
++{
++    auto& lent = lentToNetworkProcess().ensure(networkProcess, [] {
++        return HashMap<String, Loan> { };
++    }).iterator->value;
++    if (lent.contains(path))
++        return true;
++    Loan loan;
++    if (int error = veda_lend_files(FileSystem::fileSystemRepresentation(path).data(), loan.data())) {
++        WTFLogAlways("The network process cannot be lent %s: %s", path.utf8().data(), safeStrerror(error).data());
++        return false;
++    }
++    lent.add(path, loan);
++    networkProcess.send(Messages::NetworkProcess::BorrowFiles(path, Vector<uint8_t>(loan)), 0);
++    return true;
++}
++
++void WebProcessProxy::forgetReadAccessToFiles(const String& path)
++{
++    m_localPathsWithAssumedReadAccess.removeIf([&](auto& assumed) {
++        return normalPath(assumed) == path;
++    });
++}
++
++// Takes the place `path`, lent with `loan`, back from `networkProcess`,
++// which reaches it no more, and forgets it for every web process it reads
++// for: it reads the place for none of them, and each counts as never
++// allowed it, even once the place is lent again; nor does the UI process
++// assume any of them reads it.
++static void takeBack(NetworkProcessProxy& networkProcess, const String& path, const Loan& loan)
++{
++    if (int error = veda_take_back_files(loan.data()))
++        WTFLogAlways("%s cannot be taken back from the network process: %s", path.utf8().data(), safeStrerror(error).data());
++    networkProcess.send(Messages::NetworkProcess::ForgetFiles(path), 0);
++    for (auto entry : allowedToProcess()) {
++        RefPtr dataStore = entry.key.websiteDataStore();
++        if (dataStore && dataStore->networkProcessIfExists() == &networkProcess)
++            entry.value.removeAllMatching([&](auto& place) { return place.path == path; });
++    }
++    for (auto& pool : WebProcessPool::allProcessPools()) {
++        for (auto& process : pool->processes()) {
++            RefPtr dataStore = process->websiteDataStore();
++            if (dataStore && dataStore->networkProcessIfExists() == &networkProcess)
++                process->forgetReadAccessToFiles(path);
++        }
++    }
++}
++
++// Keeps `place` among the places lent for `page`.
++static void keepForPage(WebPageProxy& page, const LentPlace& place)
++{
++    auto& places = lentForPage().ensure(page, [] {
++        return Vector<LentPlace> { };
++    }).iterator->value;
++    if (!places.containsIf([&](auto& lent) { return lent.path == place.path; }))
++        places.append(place);
++}
++
++void lendFilesForLoad(WebPageProxy& page, const URL& url)
++{
++    auto place = placeToLend(url);
++    if (!place || !lendTo(protect(page.websiteDataStore().networkProcess()).get(), place->path))
++        return;
++    keepForPage(page, *place);
++    // The page may navigate there (the UI process's own check of the
++    // addresses a web process gives it).
++    page.addPreviouslyVisitedPath(place->isFolder ? makeString(place->path, '/') : place->path);
++}
++
++// The places lent for `page` and for the pages that opened it
++// (window.open, a link opened in another tab), which it may load its pages
++// in: its own first.
++static Vector<LentPlace> placesLentFor(WebPageProxy& page)
++{
++    Vector<LentPlace> places;
++    HashSet<WebPageProxy*> seen;
++    for (RefPtr current = &page; current && seen.add(current.get()).isNewEntry; current = current->configuration().relatedPage()) {
++        if (auto lent = lentForPage().getOptional(*current))
++            places.appendVector(WTF::move(*lent));
++    }
++    return places;
++}
++
++// Whether the network process of `page` has `place` lent now.
++static bool isLentNow(WebPageProxy& page, const LentPlace& place)
++{
++    RefPtr networkProcess = page.websiteDataStore().networkProcessIfExists();
++    if (!networkProcess)
++        return false;
++    auto lent = lentToNetworkProcess().find(*networkProcess);
++    return lent != lentToNetworkProcess().end() && lent->value.contains(place.path);
++}
++
++// The place lent now for `page`, or a page that opened it, that holds
++// `path`.
++static std::optional<LentPlace> lentPlaceHolding(WebPageProxy& page, const String& path)
++{
++    for (auto& place : placesLentFor(page)) {
++        if (isInside(path, place.path) && isLentNow(page, place))
++            return place;
++    }
++    return std::nullopt;
++}
++
++// A file a page was let go to (a navigation decided), and until when it
++// counts as loading it, its web process not having started the load.
++struct DecidedFile {
++    String path;
++    MonotonicTime until;
++};
++
++// How long that is: the web process starts the load at once, as it is told
++// it may.
++static constexpr Seconds decidedLoadTime = 10_s;
++
++// The files each page was let go to.
++static WeakHashMap<WebPageProxy, Vector<DecidedFile>>& filesDecided()
++{
++    static NeverDestroyed<WeakHashMap<WebPageProxy, Vector<DecidedFile>>> files;
++    return files;
++}
++
++// Adds the addresses that `item`, a frame's in a page's history, and its
++// frames' hold.
++static void addAddresses(const WebBackForwardListFrameItem& item, Vector<URL>& urls)
++{
++    urls.append(URL { item.frameState().urlString });
++    urls.append(URL { item.frameState().originalURLString });
++    for (auto& child : item.children())
++        addAddresses(child, urls);
++}
++
++// The files of this machine that `page` shows, is loading, or has in its
++// history (back and forward), in any of its frames: their paths.
++static Vector<String> filesOf(WebPageProxy& page)
++{
++    auto& state = page.pageLoadState();
++    Vector<URL> urls { state.pendingAPIRequestURL(), state.provisionalURL(), state.url(), state.unreachableURL() };
++    // Every frame's: the main frame's, and those of the frames within it.
++    for (RefPtr frame = page.mainFrame(); frame; frame = frame->traverseNext().frame) {
++        urls.append(frame->url());
++        urls.append(frame->provisionalURL());
++        urls.append(frame->unreachableURL());
++    }
++    // Every item of its history, none skipped, with its frames'.
++    auto& history = page.backForwardList();
++    for (int delta = 0; RefPtr item = history.itemAtDeltaFromCurrentIndex(delta, AllowSkippingBackForwardItems::No); --delta)
++        addAddresses(item->mainFrameItem(), urls);
++    for (int delta = 1; RefPtr item = history.itemAtDeltaFromCurrentIndex(delta, AllowSkippingBackForwardItems::No); ++delta)
++        addAddresses(item->mainFrameItem(), urls);
++    Vector<String> files;
++    for (auto& url : urls) {
++        if (auto path = filePath(url); !path.isNull() && !files.contains(path))
++            files.append(WTF::move(path));
++    }
++    // And those it was let go to, whose loads have not started.
++    if (auto decided = filesDecided().find(page); decided != filesDecided().end()) {
++        auto now = MonotonicTime::now();
++        decided->value.removeAllMatching([&](auto& file) { return file.until <= now; });
++        for (auto& file : decided->value) {
++            if (!files.contains(file.path))
++                files.append(file.path);
++        }
++    }
++    return files;
++}
++
++// The places lent for `page`, or for a page that opened it, that it needs:
++// those that hold a page it shows, is loading, or has in its history. None
++// once it is closed.
++static Vector<LentPlace> placesNeededBy(WebPageProxy& page)
++{
++    if (page.isClosed())
++        return { };
++    auto files = filesOf(page);
++    Vector<LentPlace> needed;
++    for (auto& place : placesLentFor(page)) {
++        if (needed.containsIf([&](auto& other) { return other.path == place.path; }))
++            continue;
++        if (files.containsIf([&](auto& file) { return isInside(file, place.path); }))
++            needed.append(place);
++    }
++    return needed;
++}
++
++// The pages open, once each: those places were lent for, and those of
++// every web process (a window a page opened, which may need what was lent
++// for the page).
++static Vector<Ref<WebPageProxy>> pagesOpen()
++{
++    Vector<Ref<WebPageProxy>> pages;
++    HashSet<WebPageProxy*> seen;
++    auto add = [&](WebPageProxy& page) {
++        if (!page.isClosed() && seen.add(&page).isNewEntry)
++            pages.append(Ref<WebPageProxy> { page });
++    };
++    for (auto entry : lentForPage())
++        add(entry.key);
++    for (auto& pool : WebProcessPool::allProcessPools()) {
++        for (auto& process : pool->processes()) {
++            for (auto& page : process->pages())
++                add(page);
++        }
++    }
++    return pages;
++}
++
++// Takes back from each network process what no page that it loads for
++// needs any more.
++static void takeBackWhatNoPageNeeds()
++{
++    auto pages = pagesOpen();
++    Vector<Ref<NetworkProcessProxy>> networkProcesses;
++    for (auto entry : lentToNetworkProcess())
++        networkProcesses.append(Ref<NetworkProcessProxy> { entry.key });
++    for (auto& networkProcess : networkProcesses) {
++        HashSet<String> needed;
++        for (auto& page : pages) {
++            if (page->websiteDataStore().networkProcessIfExists() != networkProcess.ptr())
++                continue;
++            for (auto& place : placesNeededBy(page))
++                needed.add(place.path);
++        }
++        auto lent = lentToNetworkProcess().find(networkProcess.get());
++        if (lent == lentToNetworkProcess().end())
++            continue;
++        auto& loans = lent->value;
++        Vector<String> unneeded;
++        for (auto& path : loans.keys()) {
++            if (!needed.contains(path))
++                unneeded.append(path);
++        }
++        for (auto& path : unneeded)
++            takeBack(networkProcess.get(), path, loans.take(path));
++    }
++}
++
++// Whether takeBackWhatNoPageNeeds is due to run (takeBackFilesSoon).
++static bool takingBackIsDue;
++
++void takeBackFilesSoon()
++{
++    if (lentToNetworkProcess().isEmptyIgnoringNullReferences())
++        return;
++    // Each page open keeps as its own the places lent for the pages that
++    // opened it, at once: one of them may be gone by then (a tab closing),
++    // and with it what it was lent.
++    for (auto& page : pagesOpen()) {
++        for (auto& place : placesLentFor(page))
++            keepForPage(page, place);
++    }
++    if (takingBackIsDue)
++        return;
++    takingBackIsDue = true;
++    RunLoop::currentSingleton().dispatch([] {
++        takingBackIsDue = false;
++        takeBackWhatNoPageNeeds();
++    });
++}
++
++void navigationDecided(WebPageProxy& page, const URL& url)
++{
++    auto path = filePath(url);
++    if (path.isNull())
++        return;
++    filesDecided().ensure(page, [] {
++        return Vector<DecidedFile> { };
++    }).iterator->value.append({ WTF::move(path), MonotonicTime::now() + decidedLoadTime });
++    // Once that no longer counts, what no page needs is taken back.
++    RunLoop::currentSingleton().dispatchAfter(decidedLoadTime, [] {
++        takeBackFilesSoon();
++    });
++}
++
++void lendFilesNeeded(NetworkProcessProxy& networkProcess)
++{
++    for (auto& page : pagesOpen()) {
++        for (auto& place : placesNeededBy(page))
++            lendTo(networkProcess, place.path);
++    }
++}
++
++// Lends the network process of `page` again the place lent for it, or for
++// a page that opened it, that holds `url`, if it was taken back.
++static void lendAgain(WebPageProxy& page, const URL& url)
++{
++    auto path = filePath(url);
++    if (path.isNull())
++        return;
++    for (auto& place : placesLentFor(page)) {
++        if (isInside(path, place.path)) {
++            lendTo(protect(page.websiteDataStore().networkProcess()).get(), place.path);
++            return;
++        }
++    }
++}
++
++void lendFilesAgain(WebPageProxy& page, HistoryMove move)
++{
++    RefPtr<WebBackForwardListItem> item;
++    switch (move) {
++    case HistoryMove::Reload:
++        return lendAgain(page, URL { page.currentURL() });
++    case HistoryMove::Back:
++        item = page.backForwardList().goBackItemSkippingItemsWithoutUserGesture();
++        break;
++    case HistoryMove::Forward:
++        item = page.backForwardList().goForwardItemSkippingItemsWithoutUserGesture();
++        break;
++    }
++    if (item)
++        lendAgain(page, URL { item->url() });
++}
++
++void lendFilesAgain(WebPageProxy& page, WebBackForwardListItem& item)
++{
++    lendAgain(page, URL { item.url() });
++}
++
++bool mayHaveFileRead(WebProcessProxy& process, const URL& url)
++{
++    auto path = normalPath(url.fileSystemPath());
++    return !path.isNull() && allowedPlaceHolding(process, path);
++}
++
++// Instead of a sandbox extension, which Veda has not: a web process that
++// loads a page from the user's files is allowed, in the network process,
++// the place lent now for the page that holds it, if it has shown nothing
++// yet; one that has is allowed again only the places it was and that were
++// not taken back since (for a network process that started after the one
++// that allowed them). Nothing else of the user's: what was lent for no
++// page of its, or after it showed a page, the network process does not
++// read for it.
++void WebPageProxy::maybeInitializeSandboxExtensionHandle(WebProcessProxy& process, const URL& url, const URL&, bool, CompletionHandler<void(std::optional<SandboxExtension::Handle>&&)>&& completionHandler)
++{
++    auto done = [completionHandler = WTF::move(completionHandler)] mutable {
++        completionHandler(std::nullopt);
++    };
++    auto path = url.protocolIsFile() ? normalPath(url.fileSystemPath()) : String();
++    if (path.isNull())
++        return done();
++    auto place = allowedPlaceHolding(process, path);
++    if (!place && !process.hasCommittedAnyProvisionalLoads()) {
++        place = lentPlaceHolding(*this, path);
++        if (place) {
++            allowedToProcess().ensure(process, [] {
++                return Vector<LentPlace> { };
++            }).iterator->value.append(*place);
++        }
++    }
++    if (!place)
++        return done();
++    if (place->isFolder)
++        return process.assumeReadAccessToBaseURL(*this, URL::fileURLWithFileSystemPath(makeString(place->path, '/')).string(), WTF::move(done));
++    RefPtr dataStore = process.websiteDataStore();
++    if (!dataStore)
++        return done();
++    protect(dataStore->networkProcess())->sendWithAsyncReply(Messages::NetworkProcess::AllowFileAccessFromWebProcess(process.coreProcessIdentifier(), place->path, std::nullopt), WTF::move(done));
++}
++
++} // namespace WebKit
++
++#endif // OS(VEDA)
+--- a/Source/WebKit/UIProcess/veda/FileLoansVeda.h
++++ b/Source/WebKit/UIProcess/veda/FileLoansVeda.h
+@@ -0,0 +1,80 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#if OS(VEDA)
++
++#include <wtf/Forward.h>
++
++namespace WebKit {
++
++class NetworkProcessProxy;
++class WebBackForwardListItem;
++class WebPageProxy;
++class WebProcessProxy;
++
++// Pages from the user's files, which the sandboxed network process is lent
++// while a page open needs them (FileLoansVeda.cpp).
++
++// The embedder loads `url` in `page` (webkit_web_view_load_uri or
++// webkit_web_view_load_request): a page from the user's files lends the
++// network process its folder.
++void lendFilesForLoad(WebPageProxy&, const URL&);
++
++// Where the embedder takes a page in its history: the page again
++// (webkit_web_view_reload, webkit_web_view_reload_bypass_cache), back or
++// forward (webkit_web_view_go_back, webkit_web_view_go_forward).
++enum class HistoryMove : uint8_t { Reload, Back, Forward };
++
++// The embedder takes `page` there, or to `item` of its history
++// (webkit_web_view_go_to_back_forward_list_item): the place lent for the
++// page before that holds where it goes is lent again, if it was taken
++// back.
++void lendFilesAgain(WebPageProxy&, HistoryMove);
++void lendFilesAgain(WebPageProxy&, WebBackForwardListItem&);
++
++// A network process starts: it is lent what the pages open need.
++void lendFilesNeeded(NetworkProcessProxy&);
++
++// `page` was let go to `url` (WebPageProxy::decidePolicyForNavigationAction):
++// it is loading it from then on, before its web process starts the load.
++void navigationDecided(WebPageProxy&, const URL&);
++
++// What a page shows, is loading or has in its history changed (a frame of
++// it committed a load, failed one or went; its history changed), or it
++// closed: each page open keeps at once, as its own, the places lent for the
++// pages that opened it, which may be gone by then, and what no page needs
++// any more is taken back from the network process, once what changed has
++// settled.
++void takeBackFilesSoon();
++
++// Whether `process` was allowed a place that holds `url`, a file's: whether
++// it may have the network process read it.
++bool mayHaveFileRead(WebProcessProxy&, const URL&);
++
++} // namespace WebKit
++
++#endif // OS(VEDA)
+--- a/Source/WebKit/UIProcess/WebPageProxy.cpp
++++ b/Source/WebKit/UIProcess/WebPageProxy.cpp
+@@ -388,6 +388,10 @@
+ #include <WebCore/SelectionData.h>
+ #endif
+ 
++#if OS(VEDA)
++#include "FileLoansVeda.h"
++#endif
++
+ #if ENABLE(WIRELESS_PLAYBACK_TARGET) && !PLATFORM(IOS_FAMILY)
+ #include "MediaPlaybackTargetContextSerialized.h"
+ #include <WebCore/WebMediaSessionManager.h>
+@@ -2028,6 +2032,9 @@
+ 
+     if (protect(preferences())->siteIsolationEnabled())
+         protect(browsingContextGroup())->removePage(*this);
++#if OS(VEDA)
++    takeBackFilesSoon();
++#endif
+ }
+ 
+ bool WebPageProxy::tryClose()
+@@ -2065,6 +2072,8 @@
+     closePage();
+ }
+ 
++// Veda's: UIProcess/veda/FileLoansVeda.cpp.
++#if !OS(VEDA)
+ void WebPageProxy::maybeInitializeSandboxExtensionHandle(WebProcessProxy& process, const URL& url, const URL& resourceDirectoryURL, bool checkAssumedReadAccessToResourceURL, CompletionHandler<void(std::optional<SandboxExtension::Handle>&&)>&& completionHandler)
+ {
+     if (!url.protocolIsFile())
+@@ -2183,6 +2192,7 @@
+     WEBPAGEPROXY_RELEASE_LOG_ERROR(Sandbox, "maybeInitializeSandboxExtensionHandle: unable to create sandbox extension");
+     completionHandler(std::nullopt);
+ }
++#endif // !OS(VEDA)
+ 
+ void WebPageProxy::prepareToLoadWebPage(WebProcessProxy& process, LoadParameters& parameters)
+ {
+@@ -3065,6 +3075,9 @@
+     });
+ 
+     updateCanGoBackAndForward();
++#if OS(VEDA)
++    takeBackFilesSoon();
++#endif
+ }
+ 
+ void WebPageProxy::updateCanGoBackAndForward()
+@@ -7883,6 +7896,9 @@
+         automationSession->didDestroyFrame(frameID);
+     if (RefPtr frame = WebFrameProxy::webFrame(frameID))
+         frame->disconnect();
++#if OS(VEDA)
++    takeBackFilesSoon();
++#endif
+ 
+     bool didRemove = m_framesWithSubresourceLoadingForPageLoadTiming.remove(frameID);
+ #if PLATFORM(COCOA)
+@@ -8541,6 +8557,9 @@
+     }
+ 
+     frame.didFailProvisionalLoad();
++#if OS(VEDA)
++    takeBackFilesSoon();
++#endif
+ 
+     protectedPageLoadState->commitChanges();
+ #if ENABLE(WEBDRIVER_BIDI)
+@@ -8793,6 +8812,9 @@
+ #endif
+ 
+     frame->didCommitLoad(mimeType, containsPluginDocument, WTF::move(documentSecurityPolicy), WTF::move(cspOriginsThatUpgradeInsecureNavigations));
++#if OS(VEDA)
++    takeBackFilesSoon();
++#endif
+ 
+     if (frame->isMainFrame()) {
+         std::optional<WebCore::PrivateClickMeasurement> privateClickMeasurement;
+@@ -9723,11 +9745,18 @@
+             WebCore::ResourceError error { errorDomainWebKitInternal, 0, { }, "Ignoring request to load this main resource because it is outside the sandbox"_s };
+             m_navigationClient->didFailProvisionalNavigationWithError(*this, FrameInfoData { frameInfo }, navigation.get(), request.url(), error, nullptr);
+         }
++#elif OS(VEDA)
++        // Said, rather than a link that does nothing.
++        WebCore::ResourceError error { errorDomainWebKitInternal, 0, request.url(), "This file is not in the folder of a page you opened: open it from the address bar"_s };
++        m_navigationClient->didFailProvisionalNavigationWithError(*this, FrameInfoData { frameInfo }, navigation.get(), request.url(), error, nullptr);
+ #endif
+         return completionHandler(PolicyDecision { isNavigatingToAppBoundDomain() });
+     }
+ 
+     MESSAGE_CHECK_URL(process, originalRequest.url());
++#if OS(VEDA)
++    navigationDecided(*this, request.url());
++#endif
+ 
+     if (RefPtr body = request.httpBody()) {
+         for (auto& element : body->elements()) {
+@@ -10184,6 +10213,15 @@
+     Ref process = WebProcessProxy::fromConnection(connection);
+     MESSAGE_CHECK_COMPLETION(process, frame->page() == this, completionHandler({ }));
+     MESSAGE_CHECK_COMPLETION(process, !frameInfo.webPageProxyID || *frameInfo.webPageProxyID == m_identifier, completionHandler({ }));
++#if OS(VEDA)
++    // A file outside what was lent for the page: said, in the frame whose
++    // link or form it is, and no window opens.
++    if (!checkURLReceivedFromCurrentOrPreviousWebProcess(process, request.url())) {
++        WebCore::ResourceError error { errorDomainWebKitInternal, 0, request.url(), "This file is not in the folder of a page you opened: open it from the address bar"_s };
++        m_navigationClient->didFailProvisionalNavigationWithError(*this, FrameInfoData { frameInfo }, nullptr, request.url(), error, nullptr);
++        return completionHandler({ });
++    }
++#endif
+     MESSAGE_CHECK_URL_COMPLETION(process, request.url(), completionHandler({ }));
+ 
+     RefPtr<API::FrameInfo> sourceFrameInfo;
+--- a/Source/WebKit/UIProcess/WebProcessPool.cpp
++++ b/Source/WebKit/UIProcess/WebProcessPool.cpp
+@@ -141,10 +141,14 @@
+ #include <JavaScriptCore/RemoteInspector.h>
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ #include "MemoryPressureMonitor.h"
+ #endif
+ 
++#if OS(VEDA)
++#include "FileLoansVeda.h"
++#endif
++
+ #if PLATFORM(COCOA)
+ #include "DefaultWebBrowserChecks.h"
+ #include "WebPrivacyHelpers.h"
+@@ -292,7 +296,7 @@
+ 
+     platformInitialize(needsGlobalStaticInitialization);
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     if (!MemoryPressureMonitor::disabled())
+         MemoryPressureMonitor::singleton().start();
+ #endif
+@@ -447,7 +451,7 @@
+     sendToAllProcesses(Messages::WebProcess::FullKeyboardAccessModeChanged(fullKeyboardAccessEnabled));
+ }
+ 
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+ void WebProcessPool::sendMemoryPressureEvent(bool isCritical)
+ {
+     sendToAllProcesses(Messages::AuxiliaryProcess::DidReceiveMemoryPressureEvent(isCritical));
+@@ -2313,6 +2317,15 @@
+     if (processSwapRequestedByClient == ProcessSwapRequestedByClient::Yes)
+         return { createNewProcess(), nullptr, "Process swap was requested by the client"_s };
+ 
++#if OS(VEDA)
++    // A page from the user's files goes to a process that was allowed its
++    // place, or to a new one, which is allowed it as it starts: a process
++    // that has shown a page gains no place after
++    // (UIProcess/veda/FileLoansVeda.cpp).
++    if (targetURL.protocolIsFile() && sourceProcess->hasCommittedAnyProvisionalLoads() && !mayHaveFileRead(sourceProcess.get(), targetURL))
++        return { createNewProcess(), nullptr, "A page from the user's files goes to a process that may read it"_s };
++#endif
++
+     if (!m_configuration->processSwapsOnNavigation())
+         return { WTF::move(sourceProcess), nullptr, "Feature is disabled"_s };
+ 
+--- a/Source/WebKit/UIProcess/WebProcessPool.h
++++ b/Source/WebKit/UIProcess/WebProcessPool.h
+@@ -372,7 +372,7 @@
+ #endif
+ 
+     void fullKeyboardAccessModeChanged(bool fullKeyboardAccessEnabled);
+-#if OS(LINUX) && !OS(ANDROID)
++#if (OS(LINUX) && !OS(ANDROID)) || OS(VEDA)
+     void sendMemoryPressureEvent(bool isCritical);
+ #endif
+     void textCheckerStateChanged();
+--- a/Source/WebKit/UIProcess/WebProcessProxy.cpp
++++ b/Source/WebKit/UIProcess/WebProcessProxy.cpp
+@@ -1513,6 +1513,9 @@
+ void WebProcessProxy::didReceiveInvalidMessage(IPC::Connection& connection, IPC::MessageName messageName, const Vector<uint32_t>& indexOfObjectFailingDecoding)
+ {
+     logInvalidMessage(connection, messageName);
++#if OS(VEDA)
++    WTFLogAlways("Web process %d is ended for an invalid message: %s", processID(), IPC::description(messageName).characters());
++#endif
+ 
+     WebProcessPool::didReceiveInvalidMessage(messageName);
+ 
+--- a/Source/WebKit/UIProcess/WebProcessProxy.h
++++ b/Source/WebKit/UIProcess/WebProcessProxy.h
+@@ -341,6 +341,11 @@
+     void assumeReadAccessToBaseURL(WebPageProxy&, const String&, CompletionHandler<void()>&&, CreateSandboxExtensionForNetworkingProcess = CreateSandboxExtensionForNetworkingProcess::No);
+     void assumeReadAccessToBaseURLs(WebPageProxy&, const Vector<String>&, CompletionHandler<void()>&&);
+     bool hasAssumedReadAccessToURL(const URL&) const;
++#if OS(VEDA)
++    // The place `path` was taken back from the network process: this
++    // process is assumed to read it no more (veda/FileLoansVeda.cpp).
++    void forgetReadAccessToFiles(const String& path);
++#endif
+ 
+     bool checkURLReceivedFromWebProcess(const String&, CheckBackForwardList = CheckBackForwardList::Yes);
+     bool checkURLReceivedFromWebProcess(const URL&, CheckBackForwardList = CheckBackForwardList::Yes);
+--- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
++++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
+@@ -217,8 +217,12 @@
+     if (WPE_IS_BUFFER_DMA_BUF(buffer.get())) {
+         auto* dmaBuffer = WPE_BUFFER_DMA_BUF(buffer.get());
+         SkAlphaType alphaType = kPremul_SkAlphaType;
++#if USE(LIBDRM) || OS(ANDROID)
+         if (wpe_buffer_dma_buf_get_format(dmaBuffer) == DRM_FORMAT_XRGB8888)
+             alphaType = kOpaque_SkAlphaType;
++#else
++        UNUSED_PARAM(dmaBuffer);
++#endif
+         return SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, alphaType, SkColorSpace::MakeSRGB());
+     }
+ 
+--- a/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
++++ b/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
+@@ -238,10 +238,10 @@
+         } else
+             initializePlatformDisplayIfNeeded();
+     }
+-#else
+-    initializePlatformDisplayIfNeeded();
+-#endif
+     initializeVulkanIfNeeded();
++#endif
++    // The WPE platform's display is set up once a page's preferences enable
++    // hardware acceleration (DrawingAreaCoordinatedGraphics::updatePreferences).
+ #endif // PLATFORM(WPE)
+ 
+     m_availableInputDevices = parameters.availableInputDevices;
+--- a/Source/WebKit/WebProcess/veda/WebProcessVeda.cpp
++++ b/Source/WebKit/WebProcess/veda/WebProcessVeda.cpp
+@@ -0,0 +1,137 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "WebProcess.h"
++
++#include <errno.h>
++#include <netinet/in.h>
++#include <spawn.h>
++#include <stdlib.h>
++#include <sys/socket.h>
++#include <sys/wait.h>
++#include <unistd.h>
++#include <veda/sandbox.h>
++#include <wtf/FileSystem.h>
++#include <wtf/SafeStrerror.h>
++#include <wtf/Vector.h>
++#include <wtf/text/CString.h>
++#include <wtf/text/WTFString.h>
++
++namespace WebKit {
++
++// What of the sandbox does not hold, if anything: the user's files are
++// there, the process has a socket of its own, or it starts processes.
++static const char* sandboxHole()
++{
++    if (!access("/home", F_OK) || errno != ENOENT)
++        return "the user's files are there";
++    // A UDP socket's connect binds it, which the network service does; it
++    // sends nothing.
++    int socketDescriptor = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
++    if (socketDescriptor >= 0) {
++        struct sockaddr_in address { };
++        address.sin_family = AF_INET;
++        address.sin_port = htons(9);
++        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++        int connected = connect(socketDescriptor, reinterpret_cast<struct sockaddr*>(&address), sizeof(address));
++        int error = errno;
++        close(socketDescriptor);
++        if (!connected || error != EACCES)
++            return "it has a socket of its own";
++    }
++    // The program again, which would end at once: it is no process of
++    // WebKit's of that type.
++    CString program = FileSystem::currentExecutablePath();
++    char* arguments[] = { const_cast<char*>(program.data()), nullptr };
++    char* environment[] = { const_cast<char*>("WEBKIT_PROCESS_TYPE=none"), nullptr };
++    pid_t child;
++    int spawned = posix_spawn(&child, program.data(), nullptr, nullptr, arguments, environment);
++    if (!spawned)
++        waitpid(child, nullptr, 0);
++    if (spawned != EACCES)
++        return "it starts processes";
++    return nullptr;
++}
++
++// A page's process keeps, of what it was started with:
++//
++// - Files: the system image (fonts and fontconfig's configuration, the
++//   program), fontconfig's cache, which the UI process makes, and the
++//   devices, to read; /dev/null to write. Nothing of the user's.
++// - Services: those the embedder's own code in the process reaches, which
++//   it names in WEBKIT_VEDA_WEB_PROCESS_SERVICES ("gpu,audio": the GPU's,
++//   which pages composited with OpenGL ES need, and the audio service,
++//   which its media sink plays through), and no other: not the network's
++//   (the network process fetches; the web process has no sockets), not the
++//   file system's (its connection to it is the one confined), not the
++//   launcher.
++// - The kernel: no processes, no kernel log, and no new executable memory.
++//   JavaScriptCore's JIT goes on: its pool of executable memory, readable,
++//   writable and executable, was reserved as JavaScriptCore was initialized
++//   (ExecutableAllocator, in InitializeWebKit2), and its code goes there.
++//
++// It checks that what it gave up is gone before it goes on, and goes no
++// further if it is not. As on Linux, WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS
++// leaves it all.
++void WebProcess::initializeSandbox(const AuxiliaryProcessInitializationParameters&, SandboxInitializationParameters&)
++{
++    if (getenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS")) {
++        WTFLogAlways("Web process %d is not sandboxed (WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS)", getpid());
++        return;
++    }
++    static const struct veda_place files[] = {
++        { "/system", 0 },
++        { "/tmp/fontconfig", 0 },
++        { "/dev", 0 },
++        { "/dev/null", 1 },
++    };
++    String named = String::fromUTF8(getenv("WEBKIT_VEDA_WEB_PROCESS_SERVICES"));
++    Vector<CString> services;
++    for (auto& name : named.split(','))
++        services.append(name.utf8());
++    Vector<const char*> names;
++    for (auto& name : services)
++        names.append(name.data());
++    int error = veda_confine_files(files, std::size(files));
++    if (!error)
++        error = veda_confine_services(names.span().data(), names.size());
++    if (!error)
++        error = veda_process_restrict(VEDA_RESTRICT_LOG | VEDA_RESTRICT_PROCESSES | VEDA_RESTRICT_EXECUTE);
++    if (error) {
++        WTFLogAlways("Web process %d cannot sandbox itself: %s", getpid(), safeStrerror(error).data());
++        CRASH();
++    }
++    if (auto* hole = sandboxHole()) {
++        WTFLogAlways("Web process %d: its sandbox does not hold: %s", getpid(), hole);
++        CRASH();
++    }
++    if (names.isEmpty())
++        WTFLogAlways("Web process %d is sandboxed: it reads only the system image, fontconfig's cache and the devices, reaches no service, and cannot start processes, open sockets or make memory executable", getpid());
++    else
++        WTFLogAlways("Web process %d is sandboxed: it reads only the system image, fontconfig's cache and the devices, reaches only the services %s, and cannot start processes, open sockets or make memory executable", getpid(), named.utf8().data());
++}
++
++} // namespace WebKit
+--- a/Source/WebKit/WebProcess/WebCoreSupport/WebChromeClient.cpp
++++ b/Source/WebKit/WebProcess/WebCoreSupport/WebChromeClient.cpp
+@@ -1198,7 +1198,7 @@
+ #if ENABLE(WEBGL)
+ RefPtr<GraphicsContextGL> WebChromeClient::createGraphicsContextGL(const GraphicsContextGLAttributes& attributes) const
+ {
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     WebProcess::singleton().initializePlatformDisplayIfNeeded();
+     WebProcess::singleton().initializeVulkanIfNeeded();
+ #endif
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
+@@ -114,7 +114,7 @@
+ {
+     Ref page = *m_webPage->corePage();
+     Settings& settings = page->settings();
+-#if PLATFORM(GTK)
++#if PLATFORM(GTK) || ENABLE(WPE_PLATFORM)
+     if (settings.hardwareAccelerationEnabled()) {
+         WebProcess::singleton().initializePlatformDisplayIfNeeded();
+         WebProcess::singleton().initializeVulkanIfNeeded();
+--- a/Source/WebKit/WebProcess/WebProcess.cpp
++++ b/Source/WebKit/WebProcess/WebProcess.cpp
+@@ -1740,9 +1740,11 @@
+ {
+ }
+ 
++#if !OS(VEDA)
+ void WebProcess::initializeSandbox(const AuxiliaryProcessInitializationParameters&, SandboxInitializationParameters&)
+ {
+ }
++#endif
+ 
+ void WebProcess::updateActivePages(const String& overrideDisplayName)
+ {
+--- a/Source/WTF/wtf/AvailableMemory.cpp
++++ b/Source/WTF/wtf/AvailableMemory.cpp
+@@ -41,9 +41,12 @@
+ #import <mach/mach.h>
+ #import <math.h>
+ #elif OS(UNIX)
+-#if OS(FREEBSD) || OS(LINUX)
++#if OS(FREEBSD) || OS(LINUX) || OS(VEDA)
+ #include <sys/sysinfo.h>
+ #endif
++#if OS(VEDA)
++#include <veda/memory.h>
++#endif
+ #if OS(LINUX)
+ #include <fcntl.h>
+ #elif OS(FREEBSD)
+@@ -149,7 +152,7 @@
+     // Round up the memory size to a multiple of 128MB because max_mem may not be exactly 512MB
+     // (for example) and we have code that depends on those boundaries.
+     return ((sizeAccordingToKernel + multiple - 1) / multiple) * multiple;
+-#elif OS(FREEBSD) || OS(LINUX)
++#elif OS(FREEBSD) || OS(LINUX) || OS(VEDA)
+     struct sysinfo info;
+     if (!sysinfo(&info))
+         return info.totalram * info.mem_unit;
+@@ -182,7 +185,7 @@
+     return availableMemory;
+ }
+ 
+-#if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD)
++#if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD) || OS(VEDA)
+ MemoryStatus memoryStatus()
+ {
+ #if PLATFORM(IOS_FAMILY)
+@@ -192,6 +195,8 @@
+     size_t memoryFootprint = 0;
+     if (KERN_SUCCESS == task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)(&vmInfo), &vmSize))
+         memoryFootprint = static_cast<size_t>(vmInfo.phys_footprint);
++#elif OS(VEDA)
++    size_t memoryFootprint = veda_process_memory();
+ #elif OS(LINUX)
+     auto& memory = LinuxMemory::singleton();
+     size_t memoryFootprint = memory.footprint();
+--- a/Source/WTF/wtf/AvailableMemory.h
++++ b/Source/WTF/wtf/AvailableMemory.h
+@@ -32,7 +32,7 @@
+ 
+ WTF_EXPORT_PRIVATE size_t availableMemory();
+ 
+-#if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD)
++#if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD) || OS(VEDA)
+ struct MemoryStatus {
+     MemoryStatus(size_t memoryFootprint, double percentAvailableMemoryInUse)
+         : memoryFootprint(memoryFootprint)
+@@ -55,7 +55,7 @@
+ 
+ inline bool isUnderMemoryPressure()
+ {
+-#if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD)
++#if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD) || OS(VEDA)
+     constexpr double memoryPressureThreshold = 0.75;
+     return percentAvailableMemoryInUse() > memoryPressureThreshold;
+ #else
+--- a/Source/WTF/wtf/CurrentTime.cpp
++++ b/Source/WTF/wtf/CurrentTime.cpp
+@@ -303,7 +303,7 @@
+     return fromMachAbsoluteTime(mach_absolute_time());
+ #elif OS(FUCHSIA)
+     return fromRawSeconds(zx_clock_get_monotonic() / static_cast<double>(ZX_SEC(1)));
+-#elif OS(LINUX) || OS(FREEBSD) || OS(OPENBSD) || OS(NETBSD)
++#elif OS(LINUX) || OS(FREEBSD) || OS(OPENBSD) || OS(NETBSD) || OS(VEDA)
+     struct timespec ts { };
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+     return fromRawSeconds(static_cast<double>(ts.tv_sec) + ts.tv_nsec / 1.0e9);
+@@ -325,7 +325,7 @@
+     return ApproximateTime(UnbarrieredMonotonicTime::now().secondsSinceEpoch().value());
+ #elif OS(DARWIN)
+     return fromMachApproximateTime(mach_approximate_time());
+-#elif OS(LINUX)
++#elif OS(LINUX) || OS(VEDA)
+     struct timespec ts { };
+     clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+     return fromRawSeconds(static_cast<double>(ts.tv_sec) + ts.tv_nsec / 1.0e9);
+@@ -344,7 +344,7 @@
+ {
+ #if OS(DARWIN)
+     return fromMachContinuousTime(mach_continuous_time());
+-#elif OS(LINUX) || OS(OPENBSD)
++#elif OS(LINUX) || OS(OPENBSD) || OS(VEDA)
+     struct timespec ts { };
+     clock_gettime(CLOCK_BOOTTIME, &ts);
+     return fromRawSeconds(static_cast<double>(ts.tv_sec) + ts.tv_nsec / 1.0e9);
+@@ -362,7 +362,7 @@
+ {
+ #if OS(DARWIN)
+     return fromMachContinuousApproximateTime(mach_continuous_approximate_time());
+-#elif OS(LINUX) || OS(OPENBSD)
++#elif OS(LINUX) || OS(OPENBSD) || OS(VEDA)
+     struct timespec ts { };
+     clock_gettime(CLOCK_BOOTTIME, &ts);
+     return fromRawSeconds(static_cast<double>(ts.tv_sec) + ts.tv_nsec / 1.0e9);
+--- a/Source/WTF/wtf/glib/FileSystemGlib.cpp
++++ b/Source/WTF/wtf/glib/FileSystemGlib.cpp
+@@ -24,6 +24,10 @@
+ #include <wtf/FileSystem.h>
+ 
+ #include <wtf/glib/GUniquePtr.h>
++
++#if OS(VEDA)
++#include <sys/auxv.h>
++#endif
+ #include <wtf/text/CString.h>
+ #include <wtf/text/MakeString.h>
+ #include <wtf/text/WTFString.h>
+@@ -60,7 +64,13 @@
+ #endif
+ }
+ 
+-#if OS(LINUX)
++#if OS(VEDA)
++CString currentExecutablePath()
++{
++    const char* path = reinterpret_cast<const char*>(getauxval(AT_EXECFN));
++    return path ? CString(path) : CString();
++}
++#elif OS(LINUX)
+ CString currentExecutablePath()
+ {
+     static std::array<char, PATH_MAX> readLinkBuffer;
+--- a/Source/WTF/wtf/InlineASM.h
++++ b/Source/WTF/wtf/InlineASM.h
+@@ -43,7 +43,7 @@
+ #define THUMB_FUNC_PARAM(name)
+ #endif
+ 
+-#if (OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX)) && CPU(X86_64)
++#if (OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX) || OS(VEDA)) && CPU(X86_64)
+ #define GLOBAL_REFERENCE(name) #name "@plt"
+ #elif OS(LINUX) && CPU(X86) && defined(__PIC__)
+ #define GLOBAL_REFERENCE(name) SYMBOL_STRING(name) "@plt"
+@@ -64,6 +64,7 @@
+     // IBM's own file format
+ #define HIDE_SYMBOL(name) ".lglobl " #name
+ #elif  OS(LINUX)               \
++    || OS(VEDA)                \
+     || OS(FREEBSD)             \
+     || OS(FUCHSIA)             \
+     || OS(HAIKU)               \
+@@ -83,6 +84,7 @@
+ #if OS(DARWIN)
+ #define LOCAL_LABEL_STRING(name) "L" #name
+ #elif  OS(LINUX)               \
++    || OS(VEDA)                \
+     || OS(FREEBSD)             \
+     || OS(FUCHSIA)             \
+     || OS(OPENBSD)             \
+--- a/Source/WTF/wtf/MemoryPressureHandler.cpp
++++ b/Source/WTF/wtf/MemoryPressureHandler.cpp
+@@ -67,7 +67,7 @@
+ }
+ 
+ MemoryPressureHandler::MemoryPressureHandler()
+-#if (OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX)) && !OS(ANDROID)
++#if (OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX) || OS(VEDA)) && !OS(ANDROID)
+     : m_holdOffTimer(RunLoop::mainSingleton(), "MemoryPressureHandler::HoldOffTimer"_s, this, &MemoryPressureHandler::holdOffTimerFired)
+ #elif OS(WINDOWS)
+     : m_windowsMeasurementTimer(RunLoop::mainSingleton(), "MemoryPressureHandler::WindowsMeasurementTimer"_s, this, &MemoryPressureHandler::windowsMeasurementTimerFired)
+--- a/Source/WTF/wtf/MemoryPressureHandler.h
++++ b/Source/WTF/wtf/MemoryPressureHandler.h
+@@ -98,7 +98,7 @@
+     WTF_EXPORT_PRIVATE void NODELETE setMemoryFootprintPollIntervalForTesting(Seconds);
+     WTF_EXPORT_PRIVATE void setShouldUsePeriodicMemoryMonitor(bool);
+ 
+-#if OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX)
++#if OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX) || OS(VEDA)
+     WTF_EXPORT_PRIVATE void triggerMemoryPressureEvent(bool isCritical);
+ #endif
+ 
+@@ -268,7 +268,7 @@
+     HANDLE m_lowMemoryWaitHandle { nullptr };
+ #endif
+ 
+-#if (OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX)) && !OS(ANDROID)
++#if (OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(QNX) || OS(VEDA)) && !OS(ANDROID)
+     RunLoop::Timer m_holdOffTimer;
+     void holdOffTimerFired();
+ #endif
+--- a/Source/WTF/wtf/NumberOfCores.cpp
++++ b/Source/WTF/wtf/NumberOfCores.cpp
+@@ -33,7 +33,7 @@
+ 
+ #if OS(DARWIN)
+ #include <sys/sysctl.h>
+-#elif OS(LINUX) || OS(AIX) || OS(OPENBSD) || OS(NETBSD) || OS(FREEBSD) || OS(HAIKU)
++#elif OS(LINUX) || OS(AIX) || OS(OPENBSD) || OS(NETBSD) || OS(FREEBSD) || OS(HAIKU) || OS(VEDA)
+ #include <unistd.h>
+ #elif OS(QNX)
+ #include <sys/syspage.h>
+@@ -75,7 +75,7 @@
+     int sysctlResult = sysctl(name.data(), name.size(), &result, &length, 0, 0);
+ 
+     s_numberOfCores = sysctlResult < 0 ? defaultIfUnavailable : result;
+-#elif OS(LINUX) || OS(AIX) || OS(OPENBSD) || OS(NETBSD) || OS(FREEBSD) || OS(HAIKU)
++#elif OS(LINUX) || OS(AIX) || OS(OPENBSD) || OS(NETBSD) || OS(FREEBSD) || OS(HAIKU) || OS(VEDA)
+     long sysconfResult = sysconf(_SC_NPROCESSORS_ONLN);
+ 
+     s_numberOfCores = sysconfResult < 0 ? defaultIfUnavailable : static_cast<int>(sysconfResult);
+--- a/Source/WTF/wtf/Packed.h
++++ b/Source/WTF/wtf/Packed.h
+@@ -154,7 +154,7 @@
+         if (isAlignmentShiftProfitable)
+             value <<= alignmentShiftSize;
+ 
+-#if CPU(X86_64) && !(OS(DARWIN) || OS(LINUX) || OS(WINDOWS))
++#if CPU(X86_64) && !(OS(DARWIN) || OS(LINUX) || OS(WINDOWS) || OS(VEDA))
+         // The AMD specification requires that the most significant 16
+         // bits of any virtual address, bits 48 through 63, must be
+         // copies of bit 47 (in a manner akin to sign extension).
+--- a/Source/WTF/wtf/PlatformEnable.h
++++ b/Source/WTF/wtf/PlatformEnable.h
+@@ -784,7 +784,7 @@
+ #if !defined(ENABLE_DFG_JIT) && ENABLE(JIT)
+ 
+ /* Enable the DFG JIT on X86 and X86_64. */
+-#if CPU(X86_64) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(HURD) || OS(WINDOWS))
++#if CPU(X86_64) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD) || OS(HAIKU) || OS(HURD) || OS(WINDOWS) || OS(VEDA))
+ #define ENABLE_DFG_JIT 1
+ #endif
+ 
+@@ -954,7 +954,9 @@
+ #define ENABLE_EXCEPTION_SCOPE_VERIFICATION (ASSERT_ENABLED || ASAN_ENABLED)
+ #endif
+ 
+-#if ENABLE(DFG_JIT) && HAVE(MACHINE_CONTEXT) && (CPU(X86_64) || CPU(ARM64) || CPU(RISCV64))
++/* Veda's signals are taken as a system call returns: one cannot interrupt
++   code that makes none, so its VM traps are polled. */
++#if ENABLE(DFG_JIT) && HAVE(MACHINE_CONTEXT) && (CPU(X86_64) || CPU(ARM64) || CPU(RISCV64)) && !OS(VEDA)
+ #define ENABLE_SIGNAL_BASED_VM_TRAPS 1
+ #endif
+ 
+--- a/Source/WTF/wtf/PlatformHave.h
++++ b/Source/WTF/wtf/PlatformHave.h
+@@ -181,7 +181,7 @@
+ #endif // OS(DARWIN)
+ 
+ /* watchOS (ARM64_32) must not use int128_t because of wrong behavior. */
+-#if (OS(DARWIN) || OS(LINUX)) && CPU(ADDRESS64)
++#if (OS(DARWIN) || OS(LINUX) || OS(VEDA)) && CPU(ADDRESS64)
+ #define HAVE_INT128_T 1
+ #endif
+ 
+@@ -237,7 +237,7 @@
+ #define HAVE_MACH_MEMORY_ENTRY 1
+ #endif
+ 
+-#if OS(DARWIN) || OS(FUCHSIA) || ((OS(FREEBSD) || OS(HAIKU) || OS(NETBSD) || OS(OPENBSD) || OS(LINUX) || OS(HURD) || OS(QNX)) && (CPU(X86_64) || CPU(ARM) || CPU(ARM64) || CPU(RISCV64)))
++#if OS(DARWIN) || OS(FUCHSIA) || ((OS(FREEBSD) || OS(HAIKU) || OS(NETBSD) || OS(OPENBSD) || OS(LINUX) || OS(HURD) || OS(QNX) || OS(VEDA)) && (CPU(X86_64) || CPU(ARM) || CPU(ARM64) || CPU(RISCV64)))
+ #define HAVE_MACHINE_CONTEXT 1
+ #endif
+ 
+@@ -250,7 +250,7 @@
+ #define HAVE_DLADDR 1
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ #define HAVE_FALLOCATE 1
+ #endif
+ 
+--- a/Source/WTF/wtf/PlatformOS.h
++++ b/Source/WTF/wtf/PlatformOS.h
+@@ -126,6 +126,12 @@
+ #define WTF_OS_QNX 1
+ #endif
+ 
++/* OS(VEDA) - Veda: a Unix system over a capability microkernel, whose C
++   library is musl over a layer that gives it Linux's system calls. */
++#if defined(__veda__)
++#define WTF_OS_VEDA 1
++#endif
++
+ /* OS(WINDOWS) - Any version of Windows */
+ #if defined(WIN32) || defined(_WIN32)
+ #define WTF_OS_WINDOWS 1
+@@ -142,6 +148,7 @@
+     || OS(LINUX)            \
+     || OS(NETBSD)           \
+     || OS(OPENBSD)          \
++    || OS(VEDA)             \
+     || defined(unix)        \
+     || defined(__unix)      \
+     || defined(__unix__)
+--- a/Source/WTF/wtf/PlatformWPE.cmake
++++ b/Source/WTF/wtf/PlatformWPE.cmake
+@@ -42,6 +42,18 @@
+         generic/MemoryFootprintGeneric.cpp
+         generic/MemoryPressureHandlerGeneric.cpp
+     )
++elseif (CMAKE_SYSTEM_NAME STREQUAL "Veda")
++    # Veda has no /proc, which Linux's files read: its kernel says how much
++    # memory a process holds.
++    list(REMOVE_ITEM WTF_SOURCES
++        linux/CurrentProcessMemoryStatus.cpp
++        linux/HighPriorityThreads.cpp
++    )
++    list(APPEND WTF_SOURCES
++        unix/MemoryPressureHandlerUnix.cpp
++
++        veda/MemoryFootprintVeda.cpp
++    )
+ else ()
+     list(APPEND WTF_SOURCES
+         linux/MemoryFootprintLinux.cpp
+--- a/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp
++++ b/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp
+@@ -90,7 +90,7 @@
+         else
+             flags |= MAP_EXECUTABLE_FOR_JIT;
+     }
+-#elif OS(LINUX) || OS(HAIKU)
++#elif OS(LINUX) || OS(HAIKU) || OS(VEDA)
+     UNUSED_PARAM(jitCageEnabled);
+     if (uncommitted)
+         flags |= MAP_NORESERVE;
+@@ -134,12 +134,12 @@
+ 
+ void* OSAllocator::tryReserveUncommitted(size_t bytes, Usage usage, void* address, bool writable, bool executable, bool jitCageEnabled, unsigned numGuardPagesToAddOnEachEnd)
+ {
+-#if OS(LINUX) || OS(HAIKU)
++#if OS(LINUX) || OS(HAIKU) || OS(VEDA)
+     UNUSED_PARAM(usage);
+     void* result = tryReserveAndCommitImpl(bytes, usage, address, writable, executable, jitCageEnabled, numGuardPagesToAddOnEachEnd, /* uncommitted */ true);
+     if (result)
+         while (madvise(result, bytes, MADV_DONTNEED) == -1 && errno == EAGAIN) { }
+-#else // not OS(LINUX) || OS(HAIKU)
++#else // not OS(LINUX) || OS(HAIKU) || OS(VEDA)
+     void* result = tryReserveAndCommit(bytes, usage, address, writable, executable, jitCageEnabled, numGuardPagesToAddOnEachEnd);
+ #if HAVE(MADV_FREE_REUSE)
+     if (result) {
+@@ -148,7 +148,7 @@
+     }
+ #endif
+ 
+-#endif // not OS(LINUX) || OS(HAIKU)
++#endif // not OS(LINUX) || OS(HAIKU) || OS(VEDA)
+     return result;
+ }
+ 
+@@ -241,7 +241,7 @@
+ 
+ void OSAllocator::commit(void* address, size_t bytes, bool writable, bool executable)
+ {
+-#if OS(LINUX) || OS(HAIKU) || OS(QNX)
++#if OS(LINUX) || OS(HAIKU) || OS(QNX) || OS(VEDA)
+     UNUSED_PARAM(writable);
+     UNUSED_PARAM(executable);
+     while (madvise(address, bytes, MADV_WILLNEED) == -1 && errno == EAGAIN) { }
+@@ -260,7 +260,7 @@
+ 
+ void OSAllocator::decommit(void* address, size_t bytes)
+ {
+-#if OS(LINUX) || OS(HAIKU)
++#if OS(LINUX) || OS(HAIKU) || OS(VEDA)
+     while (madvise(address, bytes, MADV_DONTNEED) == -1 && errno == EAGAIN) { }
+ #elif HAVE(MADV_FREE_REUSE)
+     while (madvise(address, bytes, MADV_FREE_REUSABLE) == -1 && errno == EAGAIN) { }
+@@ -351,7 +351,7 @@
+     }
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     int result = madvise(base, size, MADV_DONTNEED);
+     RELEASE_ASSERT(!result);
+ #else
+--- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
++++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+@@ -91,6 +91,11 @@
+ #include <mach/thread_switch.h>
+ #endif
+ 
++#if OS(VEDA)
++#include <sys/syscall.h>
++#include <veda/thread.h>
++#endif
++
+ #if OS(QNX)
+ #define SA_RESTART 0
+ #endif
+@@ -99,7 +104,7 @@
+ 
+ Thread::~Thread() = default;
+ 
+-#if !OS(DARWIN)
++#if !OS(DARWIN) && !OS(VEDA)
+ class Semaphore final {
+     WTF_MAKE_NONCOPYABLE(Semaphore);
+     WTF_DEPRECATED_MAKE_FAST_ALLOCATED(Semaphore);
+@@ -190,7 +195,7 @@
+     globalSemaphoreForSuspendResume->post();
+ }
+ 
+-#endif // !OS(DARWIN)
++#endif // !OS(DARWIN) && !OS(VEDA)
+ 
+ void Thread::initializePlatformThreading()
+ {
+@@ -206,7 +211,7 @@
+     }
+     g_wtfConfig.isThreadSuspendResumeSignalConfigured = true;
+ 
+-#if !OS(DARWIN)
++#if !OS(DARWIN) && !OS(VEDA)
+     globalSemaphoreForSuspendResume.construct(0);
+ 
+     // Signal handlers are process global configuration.
+@@ -238,7 +243,7 @@
+ #endif
+ }
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ ThreadIdentifier Thread::currentID()
+ {
+     return static_cast<ThreadIdentifier>(syscall(SYS_gettid));
+@@ -247,7 +252,7 @@
+ 
+ void Thread::initializeCurrentThreadEvenIfNonWTFCreated()
+ {
+-#if !OS(DARWIN)
++#if !OS(DARWIN) && !OS(VEDA)
+     RELEASE_ASSERT(g_wtfConfig.isThreadSuspendResumeSignalConfigured);
+     sigset_t mask;
+     sigemptyset(&mask);
+@@ -580,6 +585,11 @@
+     if (result != KERN_SUCCESS)
+         return makeUnexpected(result);
+     return { };
++#elif OS(VEDA)
++    if (int result = veda_thread_suspend(m_id))
++        return makeUnexpected(result);
++    ++m_suspendCount;
++    return { };
+ #else
+     if (!m_suspendCount) {
+         targetThread.store(this);
+@@ -606,6 +616,10 @@
+ {
+ #if OS(DARWIN)
+     thread_resume(m_platformThread);
++#elif OS(VEDA)
++    int result = veda_thread_resume(m_id);
++    RELEASE_ASSERT(!result);
++    --m_suspendCount;
+ #else
+     if (m_suspendCount == 1) {
+         // When allowing sigThreadSuspendResume interrupt in the signal handler by sigsuspend and SigThreadSuspendResume is actually issued,
+@@ -669,6 +683,11 @@
+         CRASH_WITH_INFO(result, KERN_SUCCESS);
+     }
+     return metadata.userCount * sizeof(uintptr_t);
++#elif OS(VEDA)
++    ASSERT_WITH_MESSAGE(m_suspendCount, "We can get registers only if the thread is suspended.");
++    int result = veda_thread_registers(m_id, &registers.machineContext);
++    RELEASE_ASSERT(!result);
++    return sizeof(PlatformRegisters);
+ #else
+     ASSERT_WITH_MESSAGE(m_suspendCount, "We can get registers only if the thread is suspended.");
+     ASSERT(m_platformRegisters);
+--- a/Source/WTF/wtf/RAMSize.cpp
++++ b/Source/WTF/wtf/RAMSize.cpp
+@@ -30,7 +30,7 @@
+ 
+ #if OS(WINDOWS)
+ #include <windows.h>
+-#elif OS(LINUX) || OS(FREEBSD)
++#elif OS(LINUX) || OS(FREEBSD) || OS(VEDA)
+ #include <sys/sysinfo.h>
+ #elif OS(UNIX) || OS(HAIKU)
+ #endif
+--- a/Source/WTF/wtf/Threading.cpp
++++ b/Source/WTF/wtf/Threading.cpp
+@@ -120,7 +120,7 @@
+ 
+ #if defined(DEFAULT_THREAD_STACK_SIZE_IN_KB) && DEFAULT_THREAD_STACK_SIZE_IN_KB > 0
+     return DEFAULT_THREAD_STACK_SIZE_IN_KB * 1024;
+-#elif OS(LINUX) && !defined(__BIONIC__) && !defined(__GLIBC__)
++#elif (OS(LINUX) && !defined(__BIONIC__) && !defined(__GLIBC__)) || OS(VEDA)
+     // on libcs other than glibc and bionic (e.g. musl) we are either unsure how big
+     // the default thread stack is, or we know it's too small - pick a robust default
+     return 1 * MB;
+@@ -194,7 +194,7 @@
+     constexpr const size_t kVisualStudioThreadNameLimit = 32 - 1;
+     if (result.length() > kVisualStudioThreadNameLimit)
+         result = result.right(kVisualStudioThreadNameLimit);
+-#elif OS(LINUX)
++#elif OS(LINUX) || OS(VEDA)
+     constexpr const size_t kLinuxThreadNameLimit = 16 - 1;
+     if (result.length() > kLinuxThreadNameLimit)
+         result = result.right(kLinuxThreadNameLimit);
+@@ -224,7 +224,7 @@
+     }
+ #endif
+ 
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     m_id = currentID();
+ #endif
+ }
+--- a/Source/WTF/wtf/Threading.h
++++ b/Source/WTF/wtf/Threading.h
+@@ -191,7 +191,7 @@
+     WTF_EXPORT_PRIVATE size_t getRegisters(const ThreadSuspendLocker&, PlatformRegisters&);
+ 
+ #if USE(PTHREADS)
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     WTF_EXPORT_PRIVATE static ThreadIdentifier currentID();
+     ThreadIdentifier id() const { return m_id; }
+ #endif
+@@ -326,7 +326,7 @@
+     void establishPlatformSpecificHandle(PlatformThreadHandle, ThreadIdentifier);
+ #endif
+ 
+-#if USE(PTHREADS) && !OS(DARWIN)
++#if USE(PTHREADS) && !OS(DARWIN) && !OS(VEDA)
+     static void signalHandlerSuspendResume(int, siginfo_t*, void* ucontext);
+ #endif
+ 
+@@ -402,7 +402,7 @@
+ #elif OS(DARWIN)
+     mach_port_t m_platformThread { MACH_PORT_NULL };
+ #elif USE(PTHREADS)
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     ThreadIdentifier m_id { 0 };
+ #endif
+     PlatformRegisters* m_platformRegisters { nullptr };
+--- a/Source/WTF/wtf/ThreadingPrimitives.h
++++ b/Source/WTF/wtf/ThreadingPrimitives.h
+@@ -57,7 +57,7 @@
+ using PlatformMutex = pthread_mutex_t;
+ using PlatformCondition = pthread_cond_t;
+ using ThreadSpecificKey = pthread_key_t;
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+ using ThreadIdentifier = pid_t;
+ #endif
+ #elif OS(WINDOWS)
+--- a/Source/WTF/wtf/UniStdExtras.h
++++ b/Source/WTF/wtf/UniStdExtras.h
+@@ -38,7 +38,7 @@
+ inline int closeWithRetry(int fileDescriptor)
+ {
+     int ret;
+-#if OS(LINUX)
++#if OS(LINUX) || OS(VEDA)
+     // Workaround for the Linux behavior of closing the descriptor
+     // unconditionally, even if the close() call is interrupted.
+     // See https://bugs.webkit.org/show_bug.cgi?id=117266 for more
+--- a/Source/WTF/wtf/unix/MemoryPressureHandlerUnix.cpp
++++ b/Source/WTF/wtf/unix/MemoryPressureHandlerUnix.cpp
+@@ -37,6 +37,8 @@
+ 
+ #if OS(LINUX)
+ #include <wtf/linux/CurrentProcessMemoryStatus.h>
++#elif OS(VEDA)
++#include <veda/memory.h>
+ #elif OS(HAIKU)
+ #include <wtf/haiku/CurrentProcessMemoryStatus.h>
+ #elif OS(FREEBSD)
+@@ -114,7 +116,9 @@
+ 
+ static size_t processMemoryUsage()
+ {
+-#if OS(LINUX) || OS(HAIKU)
++#if OS(VEDA)
++    return veda_process_memory();
++#elif OS(LINUX) || OS(HAIKU)
+     ProcessMemoryStatus memoryStatus;
+     currentProcessMemoryStatus(memoryStatus);
+     return (memoryStatus.resident - memoryStatus.shared);
+--- a/Source/WTF/wtf/veda/MemoryFootprintVeda.cpp
++++ b/Source/WTF/wtf/veda/MemoryFootprintVeda.cpp
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2026 Vahid Mohammadi
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
++ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
++ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
++ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
++ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
++ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
++ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
++ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
++ * THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include <wtf/MemoryFootprint.h>
++
++#include <veda/memory.h>
++
++namespace WTF {
++
++// What the process holds, as Veda's kernel counts it: the pages committed
++// to its memory and to the memory objects it maps, each once.
++size_t memoryFootprint()
++{
++    return veda_process_memory();
++}
++
++} // namespace WTF
+--- a/Source/WTF/wtf/WTFConfig.cpp
++++ b/Source/WTF/wtf/WTFConfig.cpp
+@@ -50,7 +50,7 @@
+ #if PLATFORM(COCOA)
+ #include <wtf/spi/cocoa/MachVMSPI.h>
+ #include <mach/mach.h>
+-#elif OS(LINUX)
++#elif OS(LINUX) || OS(VEDA)
+ #include <sys/mman.h>
+ #endif
+ 
+@@ -224,7 +224,7 @@
+ 
+     // There's no going back now!
+     result = vm_protect(mach_task_self(), reinterpret_cast<vm_address_t>(base), size, UpdateMaximumPermission, permission == FreezePagePermission::ReadOnly ? VM_PROT_READ : VM_PROT_NONE);
+-#elif OS(LINUX)
++#elif OS(LINUX) || OS(VEDA)
+     result = mprotect(base, size, permission == FreezePagePermission::ReadOnly ? PROT_READ : PROT_NONE);
+ #else
+     // FIXME: Implement equivalent for Windows, maybe with VirtualProtect.

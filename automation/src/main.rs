@@ -23,6 +23,7 @@ mod licence;
 mod lint;
 mod linux;
 mod mic;
+mod notices;
 mod ovmfvars;
 mod ports;
 mod qemu;
@@ -33,6 +34,7 @@ mod system;
 mod toolchain;
 mod util;
 mod voice;
+mod web;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -140,6 +142,10 @@ fn doctor() -> Result {
         Ok(v) => println!("  [ok]   driver vm: {v}"),
         Err(e) => println!("  [--]   driver vm: {e}"),
     }
+    match web::status() {
+        Ok(v) => println!("  [ok]   web engine: {v}"),
+        Err(e) => println!("  [--]   web engine: {e}"),
+    }
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
@@ -203,6 +209,7 @@ fn main() -> ExitCode {
         "toolchain" => toolchain::command(rest),
         "clippy" => lint::command(rest),
         "linux" => linux::command(rest),
+        "web" => web::command(rest),
         "clean" => util::run(util::cargo().arg("clean")),
         "doctor" => doctor(),
         "help" | "--help" | "-h" => {

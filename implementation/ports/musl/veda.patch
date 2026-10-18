@@ -579,3 +579,53 @@
 -	return ec;
 +	return seen_eacces ? EACCES : err;
  }
+--- a/src/thread/pthread_getattr_np.c
++++ b/src/thread/pthread_getattr_np.c
+@@ -3,6 +3,10 @@
+ #include "libc.h"
+ #include <sys/mman.h>
+ 
++/* Veda: the main thread's stack, its top and its size (without its guard
++   pages); 0, or -1 if the layer does not know it. */
++hidden int __veda_main_stack(uintptr_t *top, size_t *size);
++
+ int pthread_getattr_np(pthread_t t, pthread_attr_t *a)
+ {
+ 	*a = (pthread_attr_t){0};
+@@ -11,6 +15,9 @@
+ 	if (t->stack) {
+ 		a->_a_stackaddr = (uintptr_t)t->stack;
+ 		a->_a_stacksize = t->stack_size;
++	} else if (!__veda_main_stack(&a->_a_stackaddr, &a->_a_stacksize)) {
++		/* Veda: the POSIX layer knows the main thread's stack, as the
++		   loader made it (there is no mremap to probe it with). */
+ 	} else {
+ 		char *p = (void *)libc.auxv;
+ 		size_t l = PAGE_SIZE;
+--- a/src/time/__tz.c
++++ b/src/time/__tz.c
+@@ -122,6 +122,11 @@
+ 	return y;
+ }
+ 
++/* Veda: the system's time zone, when the environment has no TZ: its
++   offset from UTC, as a POSIX TZ string such as "<+02>-2", NUL-terminated
++   in buf (the POSIX layer's time.rs). There is no /etc/localtime. */
++hidden void __veda_tz(char *buf, size_t size);
++
+ static void do_tzset()
+ {
+ 	char buf[NAME_MAX+25], *pathname=buf+24;
+@@ -132,7 +137,11 @@
+ 		"/usr/share/zoneinfo/\0/share/zoneinfo/\0/etc/zoneinfo/\0";
+ 
+ 	s = getenv("TZ");
+-	if (!s) s = "/etc/localtime";
++	if (!s) {
++		static char system_tz[24];
++		__veda_tz(system_tz, sizeof system_tz);
++		s = system_tz;
++	}
+ 	if (!*s) s = __utc;
+ 
+ 	if (old_tz && !strcmp(s, old_tz)) return;

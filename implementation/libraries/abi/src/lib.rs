@@ -39,7 +39,7 @@ pub mod arch;
 pub mod startup;
 
 pub use arch::{
-    PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState,
+    PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, ThreadState, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState,
     entry_stack_pointer, vcpu_exit,
 };
 
@@ -180,6 +180,18 @@ pub mod nr {
     /// reach them (a DMA resource). They stay the VMO's while it lives:
     /// pages never move, and only private memory gives pages back.
     pub const VMO_PAGES: usize = 47;
+    /// `vmo_set_size(h, size)`: grows a VMO of anonymous memory to `size`
+    /// bytes (rounded up to pages), which read as zeros. VMOs never shrink:
+    /// no mapping of one ever covers memory it no longer has. Needs
+    /// `WRITE`.
+    pub const VMO_SET_SIZE: usize = 48;
+    /// `vmo_create_slice(h, offset, size) -> h`: a VMO for `size` bytes
+    /// (rounded up to pages) of a physical VMO's memory from `offset`
+    /// (page-aligned), with the handle's rights: the same memory, which
+    /// neither VMO owns, as a program shares the pages of the system image
+    /// it runs from. Needs `DUPLICATE`; `NotSupported` for a VMO that owns
+    /// its pages, `OutOfRange` past its end.
+    pub const VMO_CREATE_SLICE: usize = 49;
 
     // --- address spaces -----------------------------------------------
     /// `vm_map(process, vmo, vmo_offset, len, addr, flags) -> addr`.
@@ -235,6 +247,25 @@ pub mod nr {
     /// for good ([`restrict`](crate::restrict)). What it holds already
     /// (handles, mappings) stays.
     pub const PROCESS_RESTRICT: usize = 72;
+    /// `thread_suspend(h)`: stops a thread, which runs no user code from
+    /// then on until as many `thread_resume`s as suspensions; returns once
+    /// it is stopped (signal [`SUSPENDED`](crate::signals::SUSPENDED)), its
+    /// user registers saved for `thread_read_state`. Not the caller itself
+    /// (`InvalidArgs`); needs `MANAGE`. A thread stopped in a system call
+    /// finishes the call first.
+    pub const THREAD_SUSPEND: usize = 73;
+    /// `thread_resume(h)`: undoes one `thread_suspend` (`BadState` if none
+    /// is in force); the thread runs again once none is.
+    pub const THREAD_RESUME: usize = 74;
+    /// `thread_read_state(h, buf: *mut ThreadState)`: the user registers of
+    /// a thread `thread_suspend` stopped (`BadState` otherwise), as it left
+    /// user code: the architecture's [`ThreadState`](crate::ThreadState).
+    /// Needs `MANAGE`.
+    pub const THREAD_READ_STATE: usize = 77;
+    /// `thread_self() -> h`: a handle to the calling thread, with `MANAGE`
+    /// (a thread library keeps its threads' handles; this gives one to the
+    /// thread the process started with).
+    pub const THREAD_SELF: usize = 78;
 
     // --- futexes ------------------------------------------------------
     /// `futex_wait(addr, expected, deadline)`.
@@ -546,6 +577,9 @@ pub mod signals {
     /// The peer of a socket writes no more: what is buffered is the rest
     /// of the stream.
     pub const PEER_WRITE_DISABLED: u32 = 1 << 5;
+    /// A thread is stopped for a `thread_suspend`: it runs no user code,
+    /// and its user registers are saved, until it is resumed.
+    pub const SUSPENDED: u32 = 1 << 6;
     /// Signals reserved for applications (settable with `object_signal`).
     pub const USER_ALL: u32 = 0xFF00_0000;
     pub const USER_0: u32 = 1 << 24;

@@ -345,11 +345,14 @@ fn finish_switch() {
     drop(prev);
 }
 
-/// First Rust code run by a new user thread.
+/// First Rust code run by a new user thread: a thread suspended before it
+/// started stops before its first instruction.
 pub fn thread_start_hook() {
     finish_switch();
     let cur = current();
+    park_while_suspended(&cur);
     if cur.kill_pending.load(Ordering::Acquire) {
+        drop(cur);
         exit_current();
     }
     bkl::release();
@@ -389,7 +392,7 @@ pub fn timer_interrupt() {
 }
 
 /// Called on every return to user mode (with the BKL held): handles
-/// preemption and pending kills.
+/// preemption, pending kills and suspensions.
 pub fn return_to_user_hook(_frame: &mut TrapFrame) {
     loop {
         if current().kill_pending.load(Ordering::Acquire) {
@@ -399,8 +402,74 @@ pub fn return_to_user_hook(_frame: &mut TrapFrame) {
             schedule();
             continue;
         }
+        let cur = current();
+        if cur.suspensions.load(Ordering::Acquire) > 0 {
+            park_while_suspended(&cur);
+            continue;
+        }
         break;
     }
+}
+
+/// Called as the current thread enters the kernel from user code (with
+/// the BKL held): a thread being suspended is stopped from now on, its
+/// user registers saved, which the thread that suspends it waits for.
+pub fn entered_from_user() {
+    let cur = current();
+    if cur.suspensions.load(Ordering::Acquire) > 0 {
+        cur.signals.update(0, abi::signals::SUSPENDED);
+    }
+}
+
+/// Keeps the current thread in the kernel while suspensions are in force
+/// on it, or until it is killed.
+fn park_while_suspended(cur: &Arc<Thread>) {
+    if cur.suspensions.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    cur.signals.update(0, abi::signals::SUSPENDED);
+    cur.parked.store(true, Ordering::Release);
+    while cur.suspensions.load(Ordering::Acquire) > 0 && !cur.kill_pending.load(Ordering::Acquire) {
+        block(None);
+    }
+    cur.parked.store(false, Ordering::Release);
+}
+
+/// Stops `t`, another thread (`THREAD_SUSPEND`): it runs no user code until
+/// [`resume`] has undone this. A thread that is not running is stopped at
+/// once (its user registers were saved as it entered the kernel, or it has
+/// not started); one running on another processor is interrupted, and the
+/// caller waits until it has entered the kernel, or ended.
+pub fn suspend(t: &Arc<Thread>) -> Result<(), abi::Error> {
+    t.suspensions
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+        .map_err(|_| abi::Error::OutOfRange)?;
+    let (state, cpu) = {
+        let s = t.sched.lock();
+        (s.state, s.cpu)
+    };
+    if state != State::Running {
+        t.signals.update(0, abi::signals::SUSPENDED);
+        return Ok(());
+    }
+    arch::smp::reschedule(cpu);
+    Ok(())
+}
+
+/// Undoes one suspension of `t` ([`suspend`]); it runs again once none is
+/// left. `BadState` if none is in force.
+pub fn resume(t: &Arc<Thread>) -> Result<(), abi::Error> {
+    let before = t
+        .suspensions
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+        .map_err(|_| abi::Error::BadState)?;
+    if before == 1 {
+        t.signals.update(abi::signals::SUSPENDED, 0);
+        if t.parked.load(Ordering::Acquire) {
+            wake(t, WakeReason::Signaled);
+        }
+    }
+    Ok(())
 }
 
 /// Voluntarily gives up the CPU.

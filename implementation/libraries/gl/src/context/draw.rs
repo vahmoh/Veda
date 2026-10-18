@@ -151,7 +151,7 @@ impl Context {
             return self.err(gl::INVALID_FRAMEBUFFER_OPERATION);
         }
         // No program: nothing is drawn (OpenGL ES 3.0 leaves it undefined).
-        let Some(exe) = self.programs.current_exe else { return };
+        let Some(exe) = self.local.program_exe else { return };
         // The arrays the program reads come from buffers, which must not be
         // mapped (there are no client-side arrays).
         let used = self.used_attribs(exe);
@@ -206,7 +206,7 @@ impl Context {
         self.resolve_attribs(&mut scratch.attribs);
         self.resolve_blocks(exe, &mut scratch.blocks);
         let has_feedback = feedback && self.resolve_feedback(exe, &mut scratch.feedback);
-        let s = &self.state;
+        let s = &self.local.state;
         let v = s.viewport;
         let x = self.programs.exe(exe);
         let state = DrawState {
@@ -278,7 +278,7 @@ impl Context {
         if feedback {
             let (_, primitives) = whole_primitives(gl_mode, count as u64);
             self.tf_mut().vertices += feedback_vertices;
-            self.primitives_written += primitives * instances as u64;
+            self.local.primitives_written += primitives * instances as u64;
         }
     }
 
@@ -342,7 +342,7 @@ impl Context {
 
     /// Writes the values of built-in uniforms (`gl_DepthRange`).
     fn fill_builtin_uniforms(&mut self, exe: ExeKey) {
-        let [near, far] = self.state.depth_range;
+        let [near, far] = self.local.state.depth_range;
         let e = self.programs.exes.get_mut(&exe).unwrap();
         let program = e.program.clone();
         for u in program.linked.uniforms.iter().filter(|u| u.builtin) {
@@ -363,11 +363,12 @@ impl Context {
             let buffer = if a.enabled { a.buffer.and_then(|k| self.buffers.get(k).resource) } else { None };
             // An enabled array the program does not read may have an empty
             // buffer (one it reads cannot: see `reads_inside`).
-            let current = match (a.enabled, self.current_attribs[i]) {
+            let current = match (a.enabled, self.local.current_attribs[i]) {
                 (true, _) => [0; 4],
                 (false, c) => c.bits(),
             };
-            let integer_current = matches!(self.current_attribs[i], super::Current::Int(_) | super::Current::Uint(_));
+            let integer_current =
+                matches!(self.local.current_attribs[i], super::Current::Int(_) | super::Current::Uint(_));
             out.push(Attrib {
                 buffer,
                 offset: a.offset,
@@ -397,8 +398,8 @@ impl Context {
                 .get(s.slot as usize)
                 .map_or(0, |v| v[0] as usize)
                 .min(TEXTURE_UNITS - 1);
-            let key = self.texture_units[unit][sampler_target(s.sampler.dim)];
-            let params = match self.sampler_units[unit] {
+            let key = self.local.texture_units[unit][sampler_target(s.sampler.dim)];
+            let params = match self.local.sampler_units[unit] {
                 Some(k) => self.samplers.get(k).params,
                 None => self.textures.get(key).sampler,
             };
@@ -432,7 +433,7 @@ impl Context {
         out.clear();
         let x = self.programs.exe(exe);
         for &binding in &x.block_bindings {
-            let b = self.bound.uniform_indexed[binding as usize];
+            let b = self.local.bound.uniform_indexed[binding as usize];
             let range = b.buffer.and_then(|k| {
                 let buf = self.buffers.get(k);
                 let r = buf.resource?;
@@ -467,7 +468,7 @@ impl Context {
 
     /// How many vertices the bound feedback buffers have room for in all.
     pub(crate) fn feedback_capacity(&self) -> u64 {
-        let Some(exe) = self.programs.current_exe else { return 0 };
+        let Some(exe) = self.local.program_exe else { return 0 };
         let strides = self.feedback_strides(exe);
         let mut cap = u64::MAX;
         for (i, &stride) in strides.iter().enumerate() {

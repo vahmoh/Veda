@@ -109,11 +109,20 @@ logs (see [the driver VM](DRIVERVM.md)).
   `MANAGE` ends the process alone or with its job (every process it
   started, recursively). A process can give up, for good, reading the
   kernel log, creating, listing and opening processes, and making memory
-  executable (`process_restrict`).
+  executable (`process_restrict`). With its connection to the VFS and its
+  registry channel confined (below), that is a sandbox: the browser's web
+  processes give up all they do not need as they start
+  (`<veda/sandbox.h>`; [the browser](BROWSER.md#security-and-privacy)).
 - **Memory.** VMOs are the unit of memory. Anonymous ones are committed on
-  page faults; a write-combining one (for a device that does not snoop the
-  caches) is kept out of the caches whenever the kernel touches it; a
-  physical one never covers RAM. `vm_protect` changes a mapping's
+  page faults and may grow (`vmo_set_size`), never shrink, so that no
+  mapping covers memory a VMO no longer has; one may be as large as 1 TiB,
+  as only the pages committed cost memory (a JavaScript engine reserves
+  some 112 GiB of address space and fills what it uses). A
+  write-combining one (for a device that does not snoop the caches) is
+  kept out of the caches whenever the kernel touches it; a physical one
+  never covers RAM, and a slice of one (`vmo_create_slice`) is the same
+  memory, as a program's pages are the system image's
+  ([User space](#user-space)). `vm_protect` changes a mapping's
   permissions within the rights of the handle it was mapped with. *Private
   memory* (`vm_allocate`) is a VMO no handle reaches, for one mapping, whose
   pages are freed when unmapped or decommitted (`vm_decommit`). Frames are
@@ -147,7 +156,11 @@ logs (see [the driver VM](DRIVERVM.md)).
   slices, preemption when a higher-priority thread wakes, tickless one-shot
   timers and eager switching of FPU and vector state (XSAVE). A thread can
   name an *exit futex*, which the kernel clears and wakes once the thread
-  has left its stack, so that thread libraries can join it.
+  has left its stack, so that thread libraries can join it. A thread
+  handle with `MANAGE` can stop the thread (`thread_suspend`, which
+  returns once it runs no user code, a system call it was in finished),
+  read its registers (`thread_read_state`) and let it go on: how a garbage
+  collector scans other threads' stacks and registers.
 
 ## User space
 
@@ -172,21 +185,29 @@ says which each is:
 - **Process creation** happens in user space (`rt::process::Spawn`):
   create a process, map the program's image, and start a thread with a
   bootstrap channel carrying the startup message (arguments, environment,
-  working directory, role-tagged handles). A position-independent program
-  is loaded at a random address (one of 2^28 pages). A crash's log line
-  gives the failing address within the program's image (`target/` keeps
-  Veda's programs with their symbols).
+  working directory, role-tagged handles, where the main thread's stack
+  is). A position-independent program is loaded at a random address (one
+  of 2^28 pages). A program from the system image runs from the image's
+  own pages where nothing writes them (its code and read-only data,
+  through slices of the image's VMO), shared by every process that runs
+  it; only the pages its writable segments touch are its own. A crash's
+  log line gives the failing address within the program's image
+  (`target/` keeps Veda's programs with their symbols).
 - **POSIX.** C programs and programs on the standard library run on musl,
   whose system calls go to `posix` (`implementation/libraries/posix`), a
   POSIX layer in Rust: files are the VFS's, pipes and terminals kernel
   sockets, network sockets `netd`'s, Unix domain sockets named by the VFS,
-  `epoll` a kernel port and threads kernel threads; `posix_spawn` starts
-  processes (see [C on Veda](C.md)).
+  `epoll` a kernel port, memory files VMOs, `timerfd` an event its thread
+  signals, and threads kernel threads; `posix_spawn` starts processes (see
+  [C on Veda](C.md)).
 - **Services** register by name with the registry in `init`, and clients
   connect by name; a connection to a service not registered yet waits for
   it (up to 64 per process). Protocols are declared with `ipc`'s macros,
   which generate typed client stubs and server dispatch code; every
-  request is answered, and events travel on a channel of their own.
+  request is answered, and events travel on a channel of their own. A
+  registry channel can be confined, for good, to a few services
+  (`registry::confine`), as are the channels cloned from it then: it
+  connects to no other, lists only them and registers none.
 - **Identity.** With each connection the registry gives the service the
   client's identity (`proto::init::ClientIdentity`: process, program name,
   and whether it is a system service, an application or a program the
@@ -259,7 +280,9 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   a later one uses.
 - **The VFS** (`vfs`) serves `/system` read-only from the initrd, keeps
   `/home` and `/tmp` in memory, and has `null`, `zero`, `full`, `random`
-  and `urandom` in `/dev`. With a disk whose serial is `veda-home`, `/home`
+  and `urandom` in `/dev`. A file of `/system` is given out as the image's
+  own pages (`file::pages`, a slice of the initrd's VMO), which programs
+  run from and map read-only, shared and never copied. With a disk whose serial is `veda-home`, `/home`
   is restored at boot and saved half a second after changes stop, into
   whichever of two checksummed slots does not hold the newest snapshot,
   header last, so an interrupted save never damages the previous one; boot
@@ -272,6 +295,58 @@ every other device to Linux in [the driver VM](DRIVERVM.md).
   connection can give up that access for good (`renounce_private`), as the
   agent's worker does. The root, `/home`, `/home/user`, `/tmp` and
   `/home/.private` cannot be removed, moved or replaced.
+- **Confined connections.** A connection can give up, for good, all of the
+  file system but a few places, each to read or to change too
+  (`vfs::confine`, as OpenBSD's `unveil`): it then reaches what is inside
+  them, and the directories on the way to them, whose listings show only
+  what leads on to a place; nothing else is there for it, nor are
+  abstract socket names (`vfs_core::view`), and its `sync` returns at
+  once, what it changed being saved as anything is. A sandboxed program
+  confines its connection and leaves the VFS out of its registry
+  channel's services, so that it opens no other. The VFS logs the first
+  paths each such connection was refused where there is something.
+- **Loans.** A connection that is not confined can lend a confined one a
+  place to read (`vfs::lend`, `vfs::borrow`, `vfs_core::loans`;
+  `veda_lend_files` and `veda_borrow_files` in `<veda/sandbox.h>`), as a
+  sandbox extension does on Apple's systems, and take it back
+  (`vfs::take_back`, `veda_take_back_files`): the browser lends its
+  network process the folder of a page the user opens, while a page open
+  needs it ([the browser](BROWSER.md#pages-from-the-users-files)). The
+  loan is a secret, 16 bytes from the kernel's random generator, which the
+  lender hands to the one it lends to over a channel of their own; whoever
+  has it may take the loan, once, naming the place it was made for, and
+  the place joins the taker's view, to read. What keeps it narrow:
+  - only a connection that is not confined lends, and only what it
+    reaches itself (another service's private directory stays private), so
+    a sandboxed program widens no view: its own grows only by a loan that
+    an unconfined program chose to make it;
+  - a loan is of one place, to read, never to change, and never of the
+    user's home folder whole, nor of `/home` or the root, which hold it;
+  - the place joins the view without anything leaving it: none of the
+    view's own places held it (one they reach already takes nothing),
+    and every borrowed place is read, so what is inside the view's other
+    places is reached as before;
+  - a place lent is its lender's to take back, with the loan's secret or
+    as its connection closes, and no one else's: it leaves the view, and
+    nothing else does, nor is anything reached more wholly after (no own
+    place of the view holds a borrowed one, and borrowed places are
+    read); only what the borrower has open there stays open. Each loan
+    adds a place of its own, so taking one back leaves the others, the
+    same place or inside it. Nor can the borrower keep one: confining
+    itself again is checked against its own places, the borrowed ones
+    staying borrowed (named, one is refused, not made its own) and
+    counting towards its 64. So the browser's network process reaches
+    the folders of the pages still open, and keeps none of the others,
+    compromised or not;
+  - a guess at a secret is right one time in 2^128, and secrets are
+    compared in constant time, so that no refusal tells how near a guess
+    came; a loan is for the place named, and taken once; one not taken
+    lapses after a minute, or as its lender's connection closes, and a
+    connection holds at most 16 untaken; a view holds at most 64 places,
+    lent or not.
+
+  The VFS logs each place it adds to a view so, and takes out of one, and
+  the first loans it refused a confined connection.
 - **Open files** are connections of the `file` protocol, each an open file
   description with its own offset, which duplicates share, as POSIX
   descriptors do; a file removed while open stays usable until its last
@@ -582,9 +657,18 @@ and in software on every CPU otherwise.
 - **The API.** `gl::Context` has every OpenGL ES 3.0 entry point, as a
   method named after the C function, checked as the specification
   requires. Vertex and index data always come from buffers (as in
-  WebGL 2), and a draw that would read past one draws nothing. Below it, a
-  `Backend` with Gallium's shape renders, and a new resource always reads
-  as zero.
+  WebGL 2), and a draw that would read past one draws nothing. Contexts
+  that share objects are one `Context` with a `Local` of each one's own
+  state (bindings, current program, vertex arrays, framebuffers), swapped
+  in as each draws. Below it, a `Backend` with Gallium's shape renders, and
+  a new resource always reads as zero.
+- **C.** `egl` (`implementation/libraries/egl`) gives C code linked into
+  a program EGL 1.5 and OpenGL ES 3.0's C functions over `gl`: one
+  surfaceless display, contexts that draw into framebuffer objects or
+  pbuffers, each thread's current context, share groups whose calls take
+  turns, fences, and every function by name through `eglGetProcAddress`,
+  which is how libepoxy finds them for WebKit
+  ([The web browser](BROWSER.md#drawing-pages)).
 - **The software renderer** (`gl::soft`) bins triangles into 64-pixel
   tiles, rasterises the tiles in parallel and shades 16 fragments at a
   time, with 4x multisampling, every ES 3.0 format, ETC2 and exact sRGB.
@@ -722,6 +806,14 @@ which run the same code as the keyboard and mouse.
 - **Paint**'s undo keeps only the 64x64 tiles each step changed, within an
   eighth of the machine's memory (32 MB to 512 MB), and draws an edit under
   way afresh from them.
+- **The Browser** (`implementation/applications/browser`) is WPE WebKit,
+  ported to Veda with the libraries it stands on and linked into one
+  program, which is also WebKit's web and network processes; the window,
+  the tabs and what the browser decides (addresses, search, history,
+  bookmarks, the session) are Rust, the latter host-tested in
+  `browser-core`. Pages are composited on the GPU through `egl` when
+  there is one, and painted on the CPU otherwise
+  ([The web browser](BROWSER.md)).
 - **Interceptor** (`implementation/applications/interceptor`), police
   pursuits through a bay city, is the largest OpenGL ES program. Its game
   (`game/`) is everything but the window, the keyboard and the speakers,
@@ -844,7 +936,7 @@ Libraries are crates named after their directory
 | `implementation/libraries/{raster,font,image}` | vector rasterisation, fonts, images |
 | `implementation/libraries/{gfx,ui,text}` | 2D drawing, the GUI toolkit, the text editing model |
 | `implementation/libraries/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
-| `implementation/libraries/{glsl,gl}` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
+| `implementation/libraries/{glsl,gl,egl}` | the GLSL ES compiler (with its TGSI back end), OpenGL ES 3.0 with its software and GPU (virgl) renderers, and EGL and OpenGL ES's C functions over it |
 | `implementation/libraries/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `implementation/libraries/{acpi,gpio}` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `implementation/libraries/{hv,iommu}` | what the hypervisor and the IOMMU driver know that touches no hardware: the guests' platform, its ACPI tables and the bridge's ABI, and each architecture's virtual devices, boot protocol and IOMMU tables |
@@ -855,7 +947,7 @@ Libraries are crates named after their directory
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
 | `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`splash`), the desktop shell (`desktop`), the lock screen (`lock`) and what they share (`common`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
-| `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), and the fonts, unmodified |
+| `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), the web engine (WPE WebKit, the libraries it stands on, and the tools their builds run, built by `wpewebkit/build.sh`), and the fonts and certificate authorities, unmodified |
 | `implementation/generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |
 | `verification/` | in-system tests, C and C++ test programs (`verification/c`), Rust's on its standard library (`verification/rust`, `verification/stdcrates`), GUI and agent scripts |
 | `automation/` | build automation, disk image creation, driving QEMU |

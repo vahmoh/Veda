@@ -1,0 +1,27 @@
+--- a/meson.build
++++ b/meson.build
+@@ -498,13 +498,17 @@
+ 
+ ## testdso module
+ 
+-testdso_mod = shared_module(
+-    'testdso',
+-    files('testdso.c'),
+-    build_rpath: get_option('libdir'),
+-    include_directories: config_dir,
+-    name_prefix: '',
+-)
++# For the tests of modules: none without them (where there are no shared
++# libraries, say).
++if want_modules
++    testdso_mod = shared_module(
++        'testdso',
++        files('testdso.c'),
++        build_rpath: get_option('libdir'),
++        include_directories: config_dir,
++        name_prefix: '',
++    )
++endif
+ 
+ ## tests
+ 

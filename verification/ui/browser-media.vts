@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser's media and their sound, on the host's test pages (1280x800
+# screen), each started by a click (pages play sound only once the user has
+# done something on them). Web Audio first: a tone and a sound file, played
+# through a stream of the audio service; the machine's sound output has
+# them. Then the countdown video (AV1 and FLAC in WebM: colour bars, then a
+# flash and a beep every second), its pictures through GStreamer into the
+# page and its sound through a stream of its own, to the end, never short.
+boot-cmdline "startup-sound=off"
+boot-cmdline "run=browser:http://{web}/webaudio"
+web-server
+memory 2048
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started browser" 60
+wait 5
+click 0.5 0.5
+wait-serial 'stream 1 "Browser" opened (44100 Hz, 2 ch)' 30
+wait 4
+shot target/veda/browser-media-1-webaudio.png
+expect-audio
+# The video, its address typed in the address bar.
+key ctrl-l
+type "{web}/video"
+key ret
+wait 5
+shot target/veda/browser-media-2-loaded.png
+click 0.5 0.5
+wait-serial 'stream 2 "Browser" opened (48000 Hz, 2 ch)' 30
+wait 3
+shot target/veda/browser-media-3-playing.png now
+wait-serial 'stream 2 "Browser" closed (0 underruns)' 30
+wait 2
+shot target/veda/browser-media-4-ended.png
+reject-serial "a page's sound has no stream"
+reject-serial "page stopped working"
+reject-serial "for an invalid message"
+reject-serial "browser crashed"

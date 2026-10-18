@@ -229,6 +229,8 @@ pub fn tex_format(internalformat: u32, format: u32, ty: u32) -> Result<Internal,
         (gl::DEPTH_COMPONENT, gl::DEPTH_COMPONENT, gl::UNSIGNED_SHORT) => Some(gl::DEPTH_COMPONENT16),
         (gl::DEPTH_COMPONENT, gl::DEPTH_COMPONENT, gl::UNSIGNED_INT) => Some(gl::DEPTH_COMPONENT24),
         (gl::DEPTH_STENCIL, gl::DEPTH_STENCIL, gl::UNSIGNED_INT_24_8) => Some(gl::DEPTH24_STENCIL8),
+        // EXT_texture_format_BGRA8888: stored as RGBA8, in RGBA's order.
+        (gl::BGRA_EXT, gl::BGRA_EXT, gl::UNSIGNED_BYTE) => Some(gl::RGBA8),
         _ => None,
     };
     if let Some(s) = from_unsized {
@@ -262,6 +264,8 @@ pub fn tex_format(internalformat: u32, format: u32, ty: u32) -> Result<Internal,
     use gl::*;
     let ok = match (format, ty) {
         (RGBA, UNSIGNED_BYTE) => matches!(internalformat, RGBA8 | RGB5_A1 | RGBA4 | SRGB8_ALPHA8),
+        // A BGRA texture's (EXT_texture_format_BGRA8888) is RGBA8.
+        (BGRA_EXT, UNSIGNED_BYTE) => internalformat == RGBA8,
         (RGBA, BYTE) => internalformat == RGBA8_SNORM,
         (RGBA, UNSIGNED_SHORT_4_4_4_4) => internalformat == RGBA4,
         (RGBA, UNSIGNED_SHORT_5_5_5_1) => internalformat == RGB5_A1,
@@ -364,5 +368,6 @@ pub fn is_format(f: u32) -> bool {
             | LUMINANCE_ALPHA
             | LUMINANCE
             | ALPHA
+            | BGRA_EXT
     )
 }

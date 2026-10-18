@@ -30,6 +30,9 @@ pub const ARRAY_BUFFER: u32 = 0x8892;
 pub const ARRAY_BUFFER_BINDING: u32 = 0x8894;
 pub const ATTACHED_SHADERS: u32 = 0x8B85;
 pub const BACK: u32 = 0x0405;
+/// `GL_BGRA_EXT` (`EXT_texture_format_BGRA8888`, `EXT_read_format_bgra`):
+/// RGBA's components in blue, green, red, alpha order.
+pub const BGRA_EXT: u32 = 0x80E1;
 pub const BLEND: u32 = 0x0BE2;
 pub const BLEND_COLOR: u32 = 0x8005;
 pub const BLEND_DST_ALPHA: u32 = 0x80CA;

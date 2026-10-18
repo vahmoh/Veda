@@ -23,6 +23,7 @@ files = { workspace = true, features = ["thumbnails"] }
 ui = { workspace = true }
 net = { workspace = true }
 zeroize = { workspace = true, features = ["alloc"] }
+apps-common = { path = "../common" }
 
 [lints]
 workspace = true

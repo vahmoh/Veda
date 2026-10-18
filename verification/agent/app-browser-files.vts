@@ -1,0 +1,244 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser and the user's files, through its network process, which is
+# sandboxed: of the user's files it reaches the engine's own, and the
+# folders of the pages the user opens, which the browser lends it (see
+# documentation/BROWSER.md). With the agent's hands and the host's test
+# pages: a download goes to Downloads, which the network process writes,
+# and opens from there as a page (file://); a picture chosen for a page to
+# upload is read whole, through a copy in the engine's temporary files,
+# the network process never reaching the picture itself; a page in
+# Documents, opened by its address, shows the picture beside it, its
+# folder lent to the network process, but not one in Pictures that it
+# reaches for, which was not opened and is not lent, nor lent as a page
+# goes there itself, or opens it in a new window, which fails, saying so,
+# the page going on; the folder is taken back as its tab closes, which a
+# window one of its pages opened outlasts, but not while a window that
+# another page there opened shows a page of it in a frame, whose page goes
+# on, the folder taken back as that window closes; it is lent again as
+# the page is opened again, for that page alone: the first window, whose
+# process WebKit let have the folder read before, may not have it read
+# again, nor go to a page of it, which fails, saying so; and what a site
+# keeps (IndexedDB, whose database commits with fsync) is kept, when the
+# browser starts again, while the temporary files went as it closed.
+web-server
+memory 2048
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call app_actions '{"app":"browser"}' 60
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"http://{web}/files/veda-download.txt"}}' 30
+wait-serial "is sandboxed: it reads only the system image and the devices" 60
+wait 5
+agent-call read_app '{"app":"browser"}' 30
+agent-result '"name":"veda-download.txt","done":true,"fraction":1'
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Downloads/veda-download.txt"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Downloaded from the host."
+# A picture to upload, chosen in the browser's dialog: the page's file
+# input fills it, and the dialog takes a path typed in.
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/upload"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "No file chosen."
+click 0.5 0.6
+wait 3
+type "/home/user/Pictures/Misty Forest.jpg"
+key ret
+wait 4
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "bytes of Misty Forest.jpg, the first ff d8"
+agent-result "Read all"
+shot target/veda/agent-app-browser-files.png
+# A page in Documents with a picture beside it, and one it reaches for in
+# Pictures. Opened by its address in a tab of its own, it lends the network
+# process its folder (the VFS logs the loan): the picture beside it shows;
+# the one in
+# Pictures, which no page opened from there, the network process does not
+# read for the page, nor reaches, and WebKit draws its broken-image icon
+# in its place (from WebKit's resources, linked in: without them, GLib
+# complains).
+agent-call files '{"operation":"write","path":"~/Documents/veda-page.html","text":"<!doctype html>\n<meta charset=utf-8>\n<title>A page from Documents</title>\n<script>\nfunction shown(i) { document.getElementById(i.id + `-says`).textContent = `${i.id}: shown, ${i.naturalWidth} by ${i.naturalHeight}`; }\nfunction missing(i) { document.getElementById(i.id + `-says`).textContent = `${i.id}: not shown`; }\n</script>\n<p id=beside-says>beside: waiting</p>\n<p id=outside-says>outside: waiting</p>\n<img id=beside src=Misty%20Forest.jpg width=320 onload=shown(this) onerror=missing(this)>\n<img id=outside src=../Pictures/Glass%20Orb.png width=320 onload=shown(this) onerror=missing(this)>\n"}' 30
+agent-result "saved"
+agent-call files '{"operation":"copy","path":"~/Pictures/Misty Forest.jpg","to":"~/Documents"}' 30
+agent-result '"done":"copy"'
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Documents/veda-page.html","new_tab":true}}' 30
+wait-serial "confined, was lent /home/user/Documents to read" 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "beside: shown, 640 by 480"
+agent-result "outside: not shown"
+wait-serial "was refused /home/user/Pictures/Glass Orb.png" 30
+shot target/veda/agent-app-browser-files-page.png
+# Nor does a page widen it by going there itself: its own navigation to a
+# file outside its folder fails, saying so, and lends nothing.
+agent-call files '{"operation":"write","path":"~/Documents/veda-away.html","text":"<!doctype html>\n<title>Going away</title>\n<p>Going to Pictures</p>\n<script>addEventListener(`load`, () => setTimeout(() => { location.href = `../Pictures/Glass%20Orb.png`; }, 300));</script>\n"}' 30
+agent-result "saved"
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Documents/veda-away.html"}}' 30
+wait 3
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Going away"'
+shot target/veda/agent-app-browser-files-away.png
+# The user speaks up, as a conversation ends 40 s after the user's last
+# turn.
+agent-interrupt
+# Nor by opening it in a new window: a page's link there with a target
+# (target=_blank, a click on it) fails as its own navigation does, saying
+# so, in its tab, and opens nothing. The page goes on (its title and
+# words, which it tells), where WebKit would end its process, as one that
+# names a file it may not read.
+agent-call files '{"operation":"write","path":"~/Documents/veda-link.html","text":"<!doctype html>\n<meta charset=utf-8>\n<title>A link to Pictures</title>\n<a target=_blank href=../Pictures/Glass%20Orb.png style=position:fixed;inset:0;font-size:6vw>Glass Orb, in a new window</a>\n"}' 30
+agent-result "saved"
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Documents/veda-link.html"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"A link to Pictures"'
+click 0.5 0.5
+wait 3
+agent-call read_app '{"app":"browser"}' 30
+agent-result '"address":"file:///home/user/Pictures/Glass%20Orb.png","index":2,"loading":false'
+agent-call use_app '{"app":"browser","action":"switch_tab","arguments":{"index":3}}' 30
+agent-result "there is no tab 3"
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"A link to Pictures"'
+agent-result "Glass Orb, in a new window"
+shot target/veda/agent-app-browser-files-new-window.png
+# And again.
+agent-interrupt
+# A page there that opens a window (a click on it), which outlasts it in a
+# tab of its own: the window, empty but for what the page put in it (it
+# shows no page of the folder), is of the page's web process, which WebKit
+# lets have the network process read the folder; a moment after its
+# opener closes, it shows the picture again, and again as it is clicked
+# (each time at another address, so that no cache answers), and a second
+# click takes it to a page of the folder. As the tab closes, no page open
+# needs the folder and the browser takes it back: the VFS takes it out of
+# what the network process reaches, and WebKit forgets it for every web
+# process, so that the network process refuses the window the picture
+# itself, never reading it, and the window does not show it.
+agent-call files '{"operation":"write","path":"~/Documents/veda-opener.html","text":"<!doctype html>\n<meta charset=utf-8>\n<title>A page that opens a window</title>\n<button id=open style=position:fixed;inset:0;width:100%;font-size:6vw>Open a window</button>\n<script>\nfunction left() {\n  const look = (what) => {\n    const says = document.getElementById(`${what}-says`);\n    const i = new Image();\n    i.onload = () => { says.textContent = `${what}: shown, ${i.naturalWidth} by ${i.naturalHeight}`; };\n    i.onerror = () => { says.textContent = `${what}: not shown`; };\n    i.src = `file:///home/user/Documents/Misty%20Forest.jpg?${what}`;\n  };\n  const waiting = setInterval(() => { if (!opener || opener.closed) { clearInterval(waiting); setTimeout(() => look(`after`), 1000); } }, 200);\n  let clicks = 0;\n  addEventListener(`click`, () => { if (++clicks == 1) look(`again`); else location.href = `file:///home/user/Documents/veda-page.html?moved`; });\n}\ndocument.getElementById(`open`).onclick = () => {\n  const w = open(``, `_blank`);\n  w.document.title = `Left open`;\n  const says = [`after`, `again`].map((what) => {\n    const p = w.document.createElement(`p`);\n    p.id = `${what}-says`;\n    p.textContent = `${what}: waiting`;\n    return p;\n  });\n  const script = w.document.createElement(`script`);\n  script.textContent = `(${left})()`;\n  w.document.body.append(...says, script);\n};\n</script>\n"}' 30
+agent-result "saved"
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Documents/veda-opener.html"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"A page that opens a window"'
+click 0.5 0.5
+wait 3
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Left open"'
+agent-result "after: waiting"
+# Nothing was taken back while the tab was open, its history all in the
+# folder, nor was the picture refused.
+reject-serial "had /home/user/Documents taken back"
+reject-serial "was refused /home/user/Documents/Misty Forest.jpg"
+agent-call use_app '{"app":"browser","action":"close_tab","arguments":{"index":2}}' 30
+agent-result '"tabs":2'
+wait-serial "confined, had /home/user/Documents taken back" 30
+wait-serial "was refused /home/user/Documents/Misty Forest.jpg: it was lent for no page of its" 30
+wait 2
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Left open"'
+agent-result "after: not shown"
+reject-serial "confined, was refused /home/user/Documents/Misty Forest.jpg"
+shot target/veda/agent-app-browser-files-taken-back.png
+# A window that another page there opens, putting a frame of a page there
+# in it (an iframe), outlasts that page too, but the folder is not taken
+# back as the page's tab closes: the window's frame shows a page of it, so
+# the window keeps it lent (it shows the picture), and the frame's page
+# goes on as it goes to a fragment and pushes a state, each of which tells
+# WebKit's UI process the page's address (where, the folder taken back and
+# forgotten, WebKit would end the frame's process, as one that names a
+# file it may not read). As the window closes, no page needs the folder,
+# and it is taken back. The user speaks up first.
+agent-interrupt
+agent-call files '{"operation":"write","path":"~/Documents/veda-pusher.html","text":"<!doctype html>\n<title>A page in a frame</title>\n<p>In a frame</p>\n<script>\naddEventListener(`load`, () => parent.postMessage(`frame: shown`, `*`));\naddEventListener(`message`, () => {\n  location.hash = `here`;\n  history.pushState(null, ``, `?pushed`);\n  parent.postMessage(`frame: at ${location.search}`, `*`);\n});\n</script>\n"}' 30
+agent-result "saved"
+agent-call files '{"operation":"write","path":"~/Documents/veda-framer.html","text":"<!doctype html>\n<meta charset=utf-8>\n<title>A page that opens a window with a frame</title>\n<button id=open style=position:fixed;inset:0;width:100%;font-size:6vw>Open a window with a frame</button>\n<script>\nfunction left() {\n  addEventListener(`message`, (e) => { document.getElementById(`frame-says`).textContent = e.data; });\n  addEventListener(`click`, () => {\n    const says = document.getElementById(`kept-says`);\n    const i = new Image();\n    i.onload = () => { says.textContent = `kept: shown, ${i.naturalWidth} by ${i.naturalHeight}`; };\n    i.onerror = () => { says.textContent = `kept: not shown`; };\n    i.src = `file:///home/user/Documents/Misty%20Forest.jpg?kept`;\n    frames[0].postMessage(`go`, `*`);\n  });\n}\ndocument.getElementById(`open`).onclick = () => {\n  const w = open(``, `_blank`);\n  w.document.title = `Left open with a frame`;\n  const says = [`frame`, `kept`].map((what) => {\n    const p = w.document.createElement(`p`);\n    p.id = `${what}-says`;\n    p.textContent = `${what}: waiting`;\n    return p;\n  });\n  const frame = w.document.createElement(`iframe`);\n  frame.src = `file:///home/user/Documents/veda-pusher.html`;\n  const script = w.document.createElement(`script`);\n  script.textContent = `(${left})()`;\n  w.document.body.append(...says, frame, script);\n};\n</script>\n"}' 30
+agent-result "saved"
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Documents/veda-framer.html","new_tab":true}}' 30
+wait-serial "confined, was lent /home/user/Documents to read" 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"A page that opens a window with a frame"'
+click 0.5 0.5
+wait 3
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Left open with a frame"'
+agent-result "frame: shown"
+agent-call use_app '{"app":"browser","action":"close_tab","arguments":{"index":3}}' 30
+agent-result '"tabs":3'
+wait 2
+click 0.5 0.5
+wait 3
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Left open with a frame"'
+agent-result "kept: shown, 640 by 480"
+agent-result "frame: at ?pushed"
+shot target/veda/agent-app-browser-files-frame.png
+agent-call use_app '{"app":"browser","action":"close_tab","arguments":{"index":3}}' 30
+agent-result '"tabs":2'
+wait-serial "confined, had /home/user/Documents taken back" 30
+# Opened again, the page lends its folder again, and shows the picture.
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"file:///home/user/Documents/veda-page.html","new_tab":true}}' 30
+wait-serial "confined, was lent /home/user/Documents to read" 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "beside: shown, 640 by 480"
+# The folder is lent for that page, not the window: the window's process,
+# which WebKit let have the folder read before, counts as never allowed it,
+# and the network process refuses it the picture again (a click on the
+# window), never reading it.
+agent-call use_app '{"app":"browser","action":"switch_tab","arguments":{"index":2}}' 30
+agent-result '"shown":"Left open"'
+click 0.5 0.5
+wait-serial "was refused /home/user/Documents/Misty Forest.jpg: it was lent for no page of its" 30
+wait 2
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "again: not shown"
+shot target/veda/agent-app-browser-files-lent-again.png
+# Nor may the window go to a page of the folder itself (its second click
+# sends it there): WebKit forgot the folder in what its UI process assumes
+# the window's process may read, too, and that navigation fails, saying
+# so, as a page's to a file outside what was lent for it does. The tab,
+# loading no more, has the address that failed, and the browser shows its
+# error over the window, which stays as it was (its title and words): the
+# page there was not read for it.
+click 0.5 0.5
+wait 4
+agent-call read_app '{"app":"browser"}' 30
+agent-result '"address":"file:///home/user/Documents/veda-page.html?moved","index":2,"loading":false'
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result '"title":"Left open"'
+agent-result "again: not shown"
+shot target/veda/agent-app-browser-files-moved.png
+agent-call use_app '{"app":"browser","action":"switch_tab","arguments":{"index":3}}' 30
+agent-result '"shown":"A page from Documents"'
+# A site's visit counted in IndexedDB, and another once the browser has
+# closed and started again; the copy to upload went as it closed.
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/storage"}}' 30
+wait 2
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Visits stored: 1"
+agent-call files '{"operation":"info","path":"/tmp/browser/uploads/0/Misty Forest.jpg"}' 30
+agent-result '"kind":"JPEG image"'
+key alt-f4
+wait-serial "browser exited" 30
+agent-call files '{"operation":"info","path":"/tmp/browser"}' 30
+agent-result "no such file"
+agent-call app_actions '{"app":"browser"}' 60
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/storage"}}' 30
+wait-serial "is sandboxed: it reads only the system image and the devices" 60
+wait 2
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Visits stored: 2"
+reject-serial "was refused /home/user/Pictures/Misty Forest.jpg"
+reject-serial "was lent /home/user/Pictures"
+reject-serial "was lent /home/user to read"
+reject-serial "cannot be lent"
+reject-serial "cannot borrow"
+reject-serial "cannot be taken back"
+reject-serial "was refused sync"
+reject-serial "page stopped working"
+reject-serial "for an invalid message"
+reject-serial "browser crashed"
+reject-serial "its sandbox does not hold"
+reject-serial "cannot sandbox itself"
+reject-serial "GLib-CRITICAL"

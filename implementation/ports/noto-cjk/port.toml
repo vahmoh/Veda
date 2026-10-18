@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Noto Sans CJK: Chinese (simplified, traditional, Hong Kong's), Japanese
+# and Korean, each with the forms its region writes, in every weight: one
+# variable OpenType collection (/system/fonts/noto).
+name = "noto-cjk"
+version = "2.004"
+url = "https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/Variable/OTC/NotoSansCJK-VF.otf.ttc"
+sha256 = "d3d8256cdec8dbcb3552284bc6b20c734dd60c2ee9df83b5758e34807c4bac32"
+license = "OFL-1.1"

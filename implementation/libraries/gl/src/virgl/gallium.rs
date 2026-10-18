@@ -146,6 +146,12 @@ pub struct GalliumTransport {
     shared: HostMemory,
 }
 
+// SAFETY: the renderer's device and context are only ever used by the
+// transport's owner, one thread at a time, and keep nothing of the thread
+// that made them (a Gallium context is no thread's own, as a GL context
+// is).
+unsafe impl Send for GalliumTransport {}
+
 impl GalliumTransport {
     pub fn new() -> Option<GalliumTransport> {
         let lib = lib()?;

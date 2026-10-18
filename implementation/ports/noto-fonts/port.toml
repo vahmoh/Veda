@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Noto's fonts for the world's scripts, as the web engine shows them: a serif
+# for Latin, Greek and Cyrillic (Inter is the system's sans-serif), and
+# sans-serif faces of the scripts Veda's own fonts lack, each one file of
+# every weight (variable fonts). The set is files.sha256's, from the Noto
+# project's monthly release (its fonts, one at a time, in /system/fonts/noto).
+name = "noto-fonts"
+version = "2026.10.01"
+url = "https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-2026.10.01/"
+files = "files.sha256"
+license = "OFL-1.1"

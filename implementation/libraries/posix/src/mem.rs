@@ -3,6 +3,8 @@
 
 //! Memory: `mmap` and friends.
 //!
+//! Memory files (`memfd_create`) map as [`crate::memfd`] says.
+//!
 //! Private anonymous memory is the kernel's private memory (`vm_allocate`):
 //! its pages are freed as soon as they are unmapped, parts of mappings
 //! included, or dropped with `MADV_DONTNEED`. Other mappings get a VMO of
@@ -11,7 +13,10 @@
 //! ranges. A file mapping is a private copy of the file's bytes: changes
 //! are never written back, so shared writable file mappings are refused,
 //! and a shared one is mapped through a handle without the right to write,
-//! so that `mprotect` cannot make it writable either (`EACCES`).
+//! so that `mprotect` cannot make it writable either (`EACCES`). A mapping
+//! that does not write a file of the system image is the image's own pages
+//! instead (shared by everyone who maps them, as programs run from them),
+//! which `mprotect` cannot make writable either, private or not.
 
 use abi::{Error, Rights, map_flags};
 use rt::object::Vmo;
@@ -26,7 +31,7 @@ use crate::linux::mman::*;
 const PAGE: usize = abi::PAGE_SIZE;
 
 /// The kernel's mapping flags for POSIX protections.
-fn map_prot(prot: u32) -> usize {
+pub(crate) fn map_prot(prot: u32) -> usize {
     let mut f = 0;
     if prot & PROT_READ != 0 {
         f |= map_flags::READ;
@@ -65,12 +70,12 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         if !desc.readable() {
             return Err(EACCES);
         }
-        if !matches!(desc.object, Object::File(_)) {
+        if !matches!(desc.object, Object::File(_) | Object::Memfd(_)) {
             return Err(ENODEV);
         }
         // Changes are never written back: a shared mapping of a file can
-        // only be read.
-        if kind != MAP_PRIVATE && prot & PROT_WRITE != 0 {
+        // only be read. (A memory file's is its memory.)
+        if matches!(desc.object, Object::File(_)) && kind != MAP_PRIVATE && prot & PROT_WRITE != 0 {
             return Err(ENODEV);
         }
         Some(desc)
@@ -91,6 +96,11 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         place |= map_flags::FIXED;
     }
     let hint = addr & !(PAGE - 1);
+    if let Some(d) = desc.as_deref()
+        && let Object::Memfd(m) = &d.object
+    {
+        return m.map(offset as u64, len, hint, place, prot, kind != MAP_PRIVATE, d.writable());
+    }
     let file = desc.as_deref().and_then(|d| match &d.object {
         Object::File(f) => Some(f),
         _ => None,
@@ -113,13 +123,19 @@ fn map_error(e: Error) -> isize {
     }
 }
 
-/// Maps `len` bytes of `file` from `offset`: a copy of them, in a VMO of
-/// the mapping's own. A private mapping is filled in place and then given
-/// the protections asked for. A shared one is filled through a mapping of
-/// its own, then mapped through a handle that cannot write: the kernel then
-/// refuses to make it writable later (`mprotect`), as its changes would
-/// never reach the file.
+/// Maps `len` bytes of `file` from `offset`: the system image's pages, if
+/// they are its and the mapping does not write them; otherwise a copy of
+/// them, in a VMO of the mapping's own. A private mapping is filled in place
+/// and then given the protections asked for. A shared one is filled through
+/// a mapping of its own, then mapped through a handle that cannot write:
+/// the kernel then refuses to make it writable later (`mprotect`), as its
+/// changes would never reach the file.
 fn map_file(file: &VfsFile, offset: u64, len: usize, hint: usize, place: usize, prot: u32, private: bool) -> SysResult {
+    if prot & PROT_WRITE == 0
+        && let Some(pages) = file.pages(offset, len)
+    {
+        return vm::map(None, &pages, 0, len, hint, map_prot(prot) | place).map_err(map_error);
+    }
     let vmo = Vmo::create(len).map_err(map_error)?;
     let writable = map_flags::READ | map_flags::WRITE;
     // Where the file's bytes go in, writable.

@@ -555,9 +555,9 @@ impl DeviceSession<'_> {
 /// Starts `driver` for a device, returning the server end of its channel.
 /// Driver images come straight from the system image (not through the file
 /// system, which may itself be waiting for a disk driver).
-fn start_driver(boot: &initrd::Archive<'static>, driver: &str, info: &DeviceInfo) -> Option<Channel> {
+fn start_driver(boot: &initrd::Archive<'static>, image: &Vmo, driver: &str, info: &DeviceInfo) -> Option<Channel> {
     let (ours, theirs) = Channel::create().ok()?;
-    start_program(boot, driver, &[], alloc::vec![(startup::driver::PCIDEV, theirs.into_handle())])?;
+    start_program(boot, image, driver, &[], alloc::vec![(startup::driver::PCIDEV, theirs.into_handle())])?;
     println!(
         "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
         driver, info.vendor, info.device, info.bus, info.slot, info.function
@@ -565,28 +565,37 @@ fn start_driver(boot: &initrd::Archive<'static>, driver: &str, info: &DeviceInfo
     Some(ours)
 }
 
-/// Starts `bin/NAME` from the system image with the registry and
-/// `handles` (by role): the process, if it started.
+/// Starts `bin/NAME` from the system image (`boot`, in `image`) with the
+/// registry and `handles` (by role): the process, if it started.
 fn start_program(
     boot: &initrd::Archive<'static>,
+    image: &Vmo,
     name: &str,
     args: &[String],
     handles: Vec<(u32, rt::object::Handle)>,
 ) -> Option<Process> {
     let path = alloc::format!("bin/{name}");
-    let Some(image) = boot.find(&path).map(|f| f.data) else {
+    let Some(file) = boot.find(&path) else {
         println!("{} is not installed", name);
         return None;
     };
     let registry = proto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
-    let mut spawn = rt::process::Spawn::new(name).handle(abi::startup::role::REGISTRY, registry.into_handle());
+    let file_path = alloc::format!("/system/{path}");
+    let mut spawn =
+        rt::process::Spawn::new(name).path(&file_path).handle(abi::startup::role::REGISTRY, registry.into_handle());
     for (role, h) in handles {
         spawn = spawn.handle(role, h);
     }
     for a in args {
         spawn = spawn.arg(a);
     }
-    match spawn.start(image) {
+    // It runs from the image's pages, which every process running it
+    // shares (from a copy of them if they cannot be had).
+    let started = match image.slice(file.offset as usize, file.data.len()) {
+        Ok(pages) => spawn.start_file(&pages, file.data.len()),
+        Err(_) => spawn.start(file.data),
+    };
+    match started {
         Ok(process) => Some(process),
         Err(e) => {
             println!("failed to start {}: {}", name, e);
@@ -933,7 +942,7 @@ impl DriverVm {
         // run's.
         let args: Vec<String> =
             self.args.iter().filter(|a| self.starts == 0 || !a.starts_with("crash=")).cloned().collect();
-        self.process = start_program(boot, "drivervm", &args, handles);
+        self.process = start_program(boot, image, "drivervm", &args, handles);
         if self.process.is_none() {
             // Its devices' channels went with the handles it did not get.
             self.failures += 1;
@@ -1180,7 +1189,7 @@ fn main() -> i32 {
             continue;
         }
         let (companion, below) = described_below(mgr.acpi.as_ref(), a);
-        if let Some(ch) = start_driver(&boot, driver, &info) {
+        if let Some(ch) = start_driver(&boot, &image, driver, &info) {
             let placement = mgr.config.placement(a);
             let msi_vectors = mgr.config.msi_vectors(a);
             let device =

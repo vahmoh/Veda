@@ -31,6 +31,10 @@ DAV1D_BINARIES="nasm = 'nasm'"
 FFMPEG_ARCH_OPTIONS=(--arch=x86_64 --x86asmexe=nasm)
 FFMPEG_ARCH_DEFINES=("HAVE_X86ASM 1" "HAVE_AVX2_EXTERNAL 1")
 
+# OpenSSL's name for the architecture, in its target for Veda
+# (veda-$OPENSSL_ARCH, which the openssl port adds): its assembly for it.
+OPENSSL_ARCH=x86_64
+
 # Linux's name for the architecture, and the kernel image its build makes
 # (the make target, and where it leaves it).
 LINUX_ARCH=x86_64

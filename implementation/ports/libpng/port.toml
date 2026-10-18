@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libpng: PNG pictures in WebKit, and FreeType's colour glyphs.
+name = "libpng"
+version = "1.6.59"
+url = "https://download.sourceforge.net/libpng/libpng-1.6.59.tar.xz"
+sha256 = "d80dd2a38a37f803cb9b6ac7b14bd6e74ddc3b654780a8380bdf93523fdb4389"
+license = "libpng-2.0"

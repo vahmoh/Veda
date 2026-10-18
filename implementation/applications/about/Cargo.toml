@@ -3,7 +3,7 @@
 
 [package]
 name = "about"
-description = "About Veda: version and system information"
+description = "About Veda: version and system information, and the licences of the system's parts"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,7 @@ bench = false
 [dependencies]
 rt = { workspace = true }
 abi = { workspace = true }
+proto = { workspace = true }
 ui = { workspace = true }
 apps-common = { path = "../common" }
 

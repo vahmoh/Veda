@@ -30,6 +30,8 @@
 #   rust/            Rust, as its releases install: the compiler for this
 #                    machine, the standard library for it and for Veda
 #                    ($RUST_TARGET)
+#   licences/        the ports' licence texts, which the image installs in
+#                    /system/licences
 #
 # Every stage keeps a fingerprint of what went into it (its commands, the
 # patches, the stages before it) and is skipped while that is unchanged.
@@ -107,7 +109,7 @@ stage musl_headers src_musl @MUSL_ARCH
 GCC_OPTIONS=(
 	--disable-nls --disable-multilib --disable-shared
 	--enable-threads=posix --enable-tls --enable-initfini-array
-	--disable-libssp --disable-libquadmath --disable-libgomp --disable-libatomic
+	--disable-libssp --disable-libquadmath --disable-libgomp
 	--disable-libsanitizer --disable-libvtv --disable-libitm --disable-lto
 	--disable-plugin --disable-libstdcxx-pch --without-isl --without-zstd --disable-bootstrap
 	gcc_cv_libc_provides_ssp=yes
@@ -168,10 +170,14 @@ stage posix_layer musl "$POSIX_LIB" @POSIX_EXPORTS
 # The C++ library checks the C library by linking programs with it, so it
 # comes once the C library is complete (the POSIX layer's content does not
 # matter to it).
+# libstdc++, and libatomic, which has the atomic operations the processor
+# cannot do in one instruction a compiler can emit (16-byte ones, which a
+# web engine's allocator does: without the indirect functions musl has
+# not, it does them under locks).
 stage_libstdcxx_cross() {
 	cd "$BUILD/gcc-cross"
-	quiet make-libstdcxx.log make -j"$JOBS" all-target-libstdc++-v3 MAKEINFO=true
-	quiet install-libstdcxx.log make install-target-libstdc++-v3 MAKEINFO=true
+	quiet make-libstdcxx.log make -j"$JOBS" all-target-libstdc++-v3 all-target-libatomic MAKEINFO=true
+	quiet install-libstdcxx.log make install-target-libstdc++-v3 install-target-libatomic MAKEINFO=true
 }
 stage libstdcxx_cross gcc_cross musl
 
@@ -539,5 +545,69 @@ stage_rust() {
 # above: it does not depend on the C toolchain's stages, only on the C
 # toolchain being there.
 stage rust src_rust rust_stage0 @RUST_HOST @RUST_TARGET @RUST_LLVM_TARGETS @TARGET @ROOT
+
+# --- the licences ------------------------------------------------------------
+
+# The ports' licence texts, as their releases have them, under
+# licences/PORT/ (the image's /system/licences/PORT): what their licences
+# ask of whoever passes on what the image has of them. The image has every
+# port above: GCC's runtime (libgcc, libstdc++, libatomic) and musl in every
+# C program and every program on Rust's standard library, binutils, GCC,
+# GMP, MPFR and MPC as its C toolchain, FFmpeg and dav1d in mediadec, and
+# Rust's standard library in its programs: Rust's own parts, and LLVM's
+# unwinder, which the driver VM's programs link (Rust's release for Linux
+# on musl has it). Each port has its texts here, and Rust's also those of
+# the crates its standard library for Veda is built from, as the release
+# vendors them; a port added without them fails the build.
+LICENCES=$ROOT/licences
+LICENCE_FILES=(
+	binutils:COPYING binutils:COPYING3 binutils:COPYING.LIB binutils:COPYING3.LIB
+	gcc:COPYING gcc:COPYING3 gcc:COPYING.LIB gcc:COPYING3.LIB gcc:COPYING.RUNTIME
+	gmp:COPYING gmp:COPYINGv2 gmp:COPYINGv3 gmp:COPYING.LESSERv3 mpfr:COPYING mpfr:COPYING.LESSER
+	mpc:COPYING.LESSER musl:COPYRIGHT dav1d:COPYING ffmpeg:LICENSE.md ffmpeg:COPYING.LGPLv2.1
+	rust:COPYRIGHT rust:LICENSE-APACHE rust:LICENSE-MIT rust:LICENSES/Unicode-3.0.txt
+	rust:library/backtrace/LICENSE-APACHE rust:library/backtrace/LICENSE-MIT
+	rust:library/compiler-builtins/LICENSE.txt rust:library/portable-simd/LICENSE-APACHE
+	rust:library/portable-simd/LICENSE-MIT rust:library/stdarch/LICENSE-APACHE rust:library/stdarch/LICENSE-MIT
+	rust:src/llvm-project/libunwind/LICENSE.TXT
+)
+LICENCE_PORTS=(binutils gcc gmp mpfr mpc musl dav1d ffmpeg rust)
+
+stage_licences() {
+	local entry port file rlib crate dir name texts
+	rm -rf "$LICENCES"
+	for port in "${LICENCE_PORTS[@]}"; do
+		if [[ " ${LICENCE_FILES[*]} " != *" $port:"* ]]; then
+			echo "$port has no licence texts in LICENCE_FILES" >&2
+			exit 1
+		fi
+	done
+	for entry in "${LICENCE_FILES[@]}"; do
+		port=${entry%%:*} file=${entry#*:}
+		mkdir -p "$LICENCES/$port/$(dirname "$file")"
+		cp -r "$SRC/$port/$file" "$LICENCES/$port/$file"
+	done
+	# The vendored crates among the libraries of Rust's standard library for
+	# Veda (lib<crate>-<hash>.rlib), with the files each has its licence in.
+	for rlib in "$RUST/lib/rustlib/$RUST_TARGET/lib"/lib*.rlib; do
+		crate=$(basename "$rlib" .rlib)
+		crate=${crate#lib}
+		crate=${crate%-*}
+		for dir in "$SRC/rust/library/vendor"/*/; do
+			name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$dir/Cargo.toml" | head -n 1)
+			[ "${name//-/_}" = "$crate" ] || continue
+			mapfile -t texts < <(find "$dir" -maxdepth 1 -type f \( -iname 'licen[cs]e*' -o -iname 'copying*' \
+				-o -iname 'copyright*' -o -iname 'notice*' -o -iname 'unlicense*' \) | sort)
+			if [ ${#texts[@]} -eq 0 ]; then
+				echo "Rust's vendored crate $(basename "$dir") has no licence texts" >&2
+				exit 1
+			fi
+			mkdir -p "$LICENCES/rust/library/vendor/$(basename "$dir")"
+			cp "${texts[@]}" "$LICENCES/rust/library/vendor/$(basename "$dir")/"
+		done
+	done
+}
+stage licences src_binutils src_gcc src_gmp src_mpfr src_mpc src_musl src_dav1d src_ffmpeg src_rust rust \
+	@LICENCE_FILES @LICENCE_PORTS @ROOT @RUST_TARGET
 
 log Finished "the toolchain ($ROOT)"

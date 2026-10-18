@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser's picture in the README (1280x800). Regenerate it with
+#
+#   cargo automation script documentation/browser.vts
+#
+# which writes documentation/images/browser.png: the browser, started from
+# the start menu's search, shows the host's page of the world's scripts and
+# emoji (`/scripts`, automation/src/hostweb.rs). The web engine must be
+# built (`cargo automation web`).
+requires web
+web-server
+memory 2048
+agent-asleep
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "Routable via eth0" 120
+wait 6
+key meta_l
+wait 2
+type "browser"
+key ret
+wait-serial "browser: pages are" 30
+wait 4
+type "{web}/scripts"
+key ret
+wait 8
+move 0.97 0.08
+wait 2
+shot documentation/images/browser.png now
+reject-serial "page stopped working"

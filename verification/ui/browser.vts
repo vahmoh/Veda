@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser on the host's test pages (1280x800 screen): it opens the
+# address it was started with and runs the page's script, follows the
+# page's link from the keyboard, goes back, opens a new tab, goes to an
+# address typed in the address bar, finds text in the page, and shows the
+# world's scripts and emoji. The page's web process is sandboxed: it
+# checked that the user's files, a socket and a process of its own are
+# refused it, and the file system refused it /home. So is the network
+# process: it checked that the user's files beside its own, the file
+# system's service and a process of its own are refused it.
+boot-cmdline "run=browser:http://{web}/page"
+web-server
+memory 2048
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started browser" 60
+wait-serial "is sandboxed: it reads only the system image, fontconfig's cache" 60
+wait-serial "confined, was refused /home: not there for it" 10
+wait-serial "is sandboxed: it reads only the system image and the devices" 60
+wait-serial "confined, was refused /home/user/" 10
+wait-serial "confined, may not reach the service 'vfs'" 10
+wait 12
+shot target/veda/browser-1-page.png
+# The link, from the keyboard: the first thing Tab reaches in the page.
+click 0.5 0.75
+key tab
+key ret
+wait 6
+shot target/veda/browser-2-link.png
+key alt-left
+wait 4
+shot target/veda/browser-3-back.png
+# A new tab, and an address typed in it.
+key ctrl-t
+wait 2
+type "{web}/second"
+key ret
+wait 6
+shot target/veda/browser-4-typed.png
+key ctrl-f
+type "followed"
+wait 3
+shot target/veda/browser-5-find.png
+key esc
+key ctrl-w
+wait 2
+shot target/veda/browser-6-closed.png
+# The world's scripts and emoji, in the system's fonts.
+key ctrl-t
+wait 2
+type "{web}/scripts"
+key ret
+wait 8
+shot target/veda/browser-7-scripts.png
+reject-serial "page stopped working"
+reject-serial "for an invalid message"
+reject-serial "browser crashed"
+reject-serial "its sandbox does not hold"
+reject-serial "cannot sandbox itself"

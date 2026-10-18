@@ -79,6 +79,14 @@ impl<'a> Ui<'a> {
         self.focus(id);
     }
 
+    /// Takes the keyboard from the text input `id_label`, if it has it.
+    pub fn blur_text_input(&mut self, id_label: &str) {
+        let id = self.id(id_label) ^ 0x7e47;
+        if self.state.focus == Some(id) {
+            self.state.focus = None;
+        }
+    }
+
     /// Sets the selection of the text input `id_label` as byte offsets into
     /// its value (`anchor == cursor` places the caret), e.g. to select a
     /// file name without its extension.
@@ -279,7 +287,9 @@ impl<'a> Ui<'a> {
             }
         }
 
-        // Keep the cursor visible.
+        // Keep the cursor visible, with no more of the box empty past the
+        // text's end than the cursor needs (the text may have become
+        // shorter).
         let inner_w = (r.w - 2 * pad) as f32;
         let disp = shown(value);
         let cx = self.ctx.text.x_for_index(font, size, &disp, to_shown(value, st.cursor));
@@ -288,7 +298,8 @@ impl<'a> Ui<'a> {
         } else if cx < st.scroll {
             st.scroll = cx;
         }
-        st.scroll = st.scroll.max(0.0);
+        let end = self.ctx.text.x_for_index(font, size, &disp, disp.len());
+        st.scroll = st.scroll.min(end - inner_w).max(0.0);
 
         // Draw.
         let bg = if focused {
@@ -364,6 +375,11 @@ impl FloorPx for f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fonts::SharedText;
+    use crate::ui::tests::{context, frame};
+    use crate::ui::{Input, UiState};
+
+    const INTER: &[u8] = include_bytes!("../../../ports/fonts/Inter-Regular.otf");
 
     #[test]
     fn carets_move_over_whole_characters_and_words() {
@@ -376,5 +392,46 @@ mod tests {
         // A no-break space separates words like any white space.
         assert_eq!(word_right(s, 0), 4);
         assert_eq!(word_left(s, s.len()), s.len() - 1);
+    }
+
+    #[test]
+    fn text_made_shorter_from_outside_shows_from_its_start() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        ctx.text = SharedText::new(gfx::Text::new());
+        ctx.text.add_font(INTER);
+        let field = Rect::new(10, 10, 200, 30);
+        // Typed past the box's end, the caret there: its text scrolls.
+        let mut value = String::from("https://example.com/a/path/longer/than/the/box/is/wide");
+        let id = frame(&mut ctx, &mut state, &mut input, |ui| {
+            ui.set_text_input_selection("address", value.len(), value.len());
+            ui.text_input(field, "address", &mut value, "");
+            ui.id("address") ^ 0x7e47
+        });
+        assert!(state.edits[&id].scroll > 0.0);
+        // Text that fits, put there by the program, caret and all: none of
+        // it is scrolled out of sight.
+        let mut value = String::from("example.com/b");
+        frame(&mut ctx, &mut state, &mut input, |ui| ui.text_input(field, "address", &mut value, ""));
+        assert_eq!(state.edits[&id].scroll, 0.0);
+    }
+
+    #[test]
+    fn a_text_input_lets_go_of_the_keyboard_it_has() {
+        let (mut ctx, mut state, mut input) = (context(), UiState::default(), Input::default());
+        let (first, second) = (Rect::new(10, 10, 200, 30), Rect::new(10, 50, 200, 30));
+        let (mut a, mut b) = (String::new(), String::new());
+        // Another's keyboard stays where it is.
+        let focused = frame(&mut ctx, &mut state, &mut input, |ui| {
+            ui.focus_text_input("b");
+            ui.blur_text_input("a");
+            ui.text_input(first, "a", &mut a, "");
+            ui.text_input(second, "b", &mut b, "").focused
+        });
+        assert!(focused);
+        let focused = frame(&mut ctx, &mut state, &mut input, |ui| {
+            ui.blur_text_input("b");
+            ui.text_input(second, "b", &mut b, "").focused
+        });
+        assert!(!focused);
     }
 }

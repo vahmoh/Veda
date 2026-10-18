@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# libxkbcommon: key symbols and keymaps, which WPE's platform library
+# names keys with.
+name = "libxkbcommon"
+version = "1.13.2"
+url = "https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-1.13.2.tar.gz"
+sha256 = "acc4d5f7c3cbba5f9f8d08d8bdbeede84ecede46792f47929aa9321873385528"
+# GitHub's archive of the tag (the project publishes no other), kept under its name.
+archive = "libxkbcommon-1.13.2.tar.gz"
+license = "MIT"

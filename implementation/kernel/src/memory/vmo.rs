@@ -9,12 +9,18 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use abi::Error;
+
 use super::paging::Cache;
 use super::{PAGE_SIZE, phys, phys_to_virt};
 use crate::synchronization::SpinLock;
 
-/// Upper bound on a single VMO (keeps page indices and arithmetic sane).
-pub const MAX_VMO_SIZE: u64 = 64 << 30;
+/// Upper bound on a single VMO: 1 TiB, which keeps page indices and
+/// arithmetic sane. A VMO costs only the pages committed to it, so the bound
+/// is not about memory: it leaves room for the address space programs
+/// reserve and fill as they need, such as a JavaScript engine's cages
+/// (WebKit's take about 112 GiB with their alignment).
+pub const MAX_VMO_SIZE: u64 = 1 << 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmoKind {
@@ -29,7 +35,8 @@ pub enum VmoKind {
 
 pub struct Vmo {
     pub koid: u64,
-    size: u64,
+    /// Its size, which only grows ([`Vmo::grow`]).
+    size: AtomicU64,
     kind: VmoKind,
     cache: Cache,
     /// Committed pages of an anonymous VMO: page index -> frame.
@@ -41,7 +48,7 @@ impl Vmo {
     fn new(size: u64, kind: VmoKind, cache: Cache) -> Arc<Vmo> {
         Arc::new(Vmo {
             koid: crate::object::new_koid(),
-            size,
+            size: AtomicU64::new(size),
             kind,
             cache,
             pages: SpinLock::new(BTreeMap::new()),
@@ -62,6 +69,22 @@ impl Vmo {
         Vmo::new(super::page_align_up(size), VmoKind::Physical { base: super::page_align_down(base) }, cache)
     }
 
+    /// A VMO for `size` bytes (rounded up to pages) of this one's memory from
+    /// `offset` (page-aligned), mapped with the same cache policy: the same
+    /// memory, which neither owns, so that it outlives neither. Only a
+    /// physical VMO's: another's pages are its own (`NotSupported`).
+    pub fn slice(&self, offset: u64, size: u64) -> Result<Arc<Vmo>, Error> {
+        let VmoKind::Physical { base } = self.kind else { return Err(Error::NotSupported) };
+        let size = super::checked_page_align_up(size).ok_or(Error::OutOfRange)?;
+        if size == 0 || !offset.is_multiple_of(PAGE_SIZE) {
+            return Err(Error::InvalidArgs);
+        }
+        if offset.checked_add(size).is_none_or(|end| end > self.size()) {
+            return Err(Error::OutOfRange);
+        }
+        Ok(Vmo::new(size, VmoKind::Physical { base: base + offset }, self.cache))
+    }
+
     /// Physically contiguous, zeroed memory for DMA, entirely below
     /// `max_addr`, mapped with `cache`.
     pub fn new_contiguous(size: u64, max_addr: u64, cache: Cache) -> Option<Arc<Vmo>> {
@@ -77,7 +100,19 @@ impl Vmo {
     }
 
     pub fn size(&self) -> u64 {
-        self.size
+        self.size.load(Ordering::Acquire)
+    }
+
+    /// Grows an anonymous VMO to `size` bytes (rounded up to pages); its new
+    /// pages read as zeros. `false` for a size it cannot have: smaller than
+    /// it is (VMOs never shrink, so no mapping covers what one no longer
+    /// has), beyond [`MAX_VMO_SIZE`], or for memory of another kind.
+    pub fn grow(&self, size: u64) -> bool {
+        let Some(size) = super::checked_page_align_up(size) else { return false };
+        if self.kind != VmoKind::Anonymous || size > MAX_VMO_SIZE {
+            return false;
+        }
+        self.size.try_update(Ordering::AcqRel, Ordering::Acquire, |now| (size >= now).then_some(size)).is_ok()
     }
 
     pub fn kind(&self) -> VmoKind {
@@ -108,7 +143,7 @@ impl Vmo {
     /// page for anonymous VMOs when `commit` is set. Returns `None` past the
     /// end, or for an uncommitted page when `commit` is false.
     pub fn page(&self, offset: u64, commit: bool) -> Option<u64> {
-        if offset >= self.size {
+        if offset >= self.size() {
             return None;
         }
         let page = offset / PAGE_SIZE;
@@ -154,14 +189,14 @@ impl Vmo {
     /// Physical address for DMA (contiguous and physical VMOs only).
     pub fn phys_addr(&self, offset: u64) -> Option<u64> {
         match self.kind {
-            VmoKind::Physical { base } | VmoKind::Contiguous { base } if offset < self.size => Some(base + offset),
+            VmoKind::Physical { base } | VmoKind::Contiguous { base } if offset < self.size() => Some(base + offset),
             _ => None,
         }
     }
 
     /// Copies VMO contents into `out`; uncommitted pages read as zero.
     pub fn read(&self, offset: u64, out: &mut [u8]) -> bool {
-        if offset.checked_add(out.len() as u64).is_none_or(|end| end > self.size) {
+        if offset.checked_add(out.len() as u64).is_none_or(|end| end > self.size()) {
             return false;
         }
         let mut done = 0usize;
@@ -188,7 +223,7 @@ impl Vmo {
 
     /// Copies `data` into the VMO, committing pages as needed.
     pub fn write(&self, offset: u64, data: &[u8]) -> bool {
-        if offset.checked_add(data.len() as u64).is_none_or(|end| end > self.size) {
+        if offset.checked_add(data.len() as u64).is_none_or(|end| end > self.size()) {
             return false;
         }
         let mut done = 0usize;
@@ -234,7 +269,7 @@ impl Drop for Vmo {
                     phys::free(f);
                 }
             }
-            VmoKind::Contiguous { base } => phys::free_contiguous(base, self.size / PAGE_SIZE),
+            VmoKind::Contiguous { base } => phys::free_contiguous(base, self.size() / PAGE_SIZE),
             VmoKind::Physical { .. } => {}
         }
     }

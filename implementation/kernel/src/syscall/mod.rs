@@ -33,6 +33,7 @@ fn ok(v: usize) -> SysResult {
 /// entry code), returning its result in `frame`.
 pub fn syscall_dispatch(frame: &mut TrapFrame) {
     bkl::acquire();
+    scheduler::entered_from_user();
     let (n, a) = frame.syscall();
     match dispatch(n, a) {
         Ok((v, second)) => frame.set_syscall_result(v as u64, second.map(|s| s as u64)),
@@ -86,6 +87,8 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::VMO_CREATE_CONTIGUOUS => vm::vmo_create_contiguous(a[0] as RawHandle, a[1], a[2]),
         nr::VMO_PHYS_ADDR => vm::vmo_phys_addr(a[0] as RawHandle, a[1]),
         nr::VMO_PAGES => vm::vmo_pages(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4]),
+        nr::VMO_SET_SIZE => vm::vmo_set_size(a[0] as RawHandle, a[1]),
+        nr::VMO_CREATE_SLICE => vm::vmo_create_slice(a[0] as RawHandle, a[1], a[2]),
         nr::VM_MAP => vm::vm_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
         nr::VM_UNMAP => vm::vm_unmap(a[0] as RawHandle, a[1], a[2]),
         nr::VM_PROTECT => vm::vm_protect(a[0] as RawHandle, a[1], a[2], a[3]),
@@ -106,6 +109,10 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::PROCESS_LIST => task::process_list(a[0], a[1]),
         nr::PROCESS_OPEN => task::process_open(a[0] as RawHandle, a[1] as u64),
         nr::THREAD_SET_EXIT_FUTEX => task::thread_set_exit_futex(a[0]),
+        nr::THREAD_SUSPEND => task::thread_suspend(a[0] as RawHandle),
+        nr::THREAD_RESUME => task::thread_resume(a[0] as RawHandle),
+        nr::THREAD_READ_STATE => task::thread_read_state(a[0] as RawHandle, a[1]),
+        nr::THREAD_SELF => task::thread_self(),
         nr::PROCESS_RESTRICT => task::process_restrict(a[0]),
 
         nr::FUTEX_WAIT => {

@@ -11,7 +11,9 @@
 //!   bounded number per process). Each connection carries the client's
 //!   identity (its process, which init knows from the registry channel it
 //!   came through). System services may register any name, and the names
-//!   they register stay theirs; other programs only names of their own.
+//!   they register stay theirs; other programs only names of their own. A
+//!   registry channel can be confined to a few services, for good
+//!   (`registry::confine`), as are the channels cloned from it.
 //! * Implements the **launcher** service: starting programs and installed
 //!   applications, listing and ending tasks, and power control, each as
 //!   far as the caller's identity allows (see [`Init::end`]).
@@ -45,8 +47,10 @@ rt::entry!(main);
 
 /// What a channel served by init speaks.
 enum ConnKind {
-    /// A process's registry channel (the koid of the process, if known).
-    Registry { owner: u64 },
+    /// A process's registry channel (the koid of the process, if known),
+    /// and the services it is confined to, if it is
+    /// (`registry::confine`).
+    Registry { owner: u64, confined: Option<BTreeSet<String>> },
     /// A launcher connection, and who opened it.
     Launcher { who: ClientIdentity },
 }
@@ -128,17 +132,31 @@ impl Init {
     }
 
     /// A fresh registry channel (we keep the server end) belonging to
-    /// process `owner` (0 until a new process's koid is known).
-    fn new_registry_channel(&mut self, owner: u64) -> Option<Channel> {
+    /// process `owner` (0 until a new process's koid is known), confined to
+    /// the services `confined` if it is.
+    fn new_registry_channel(&mut self, owner: u64, confined: Option<BTreeSet<String>>) -> Option<Channel> {
         let (ours, theirs) = Channel::create().ok()?;
-        self.add_conn(ours, ConnKind::Registry { owner });
+        self.add_conn(ours, ConnKind::Registry { owner, confined });
         Some(theirs)
+    }
+
+    /// The services registry connection `key` is confined to, if it is.
+    fn confinement(&self, key: u64) -> Option<&BTreeSet<String>> {
+        match self.conns.get(&key) {
+            Some(Conn { kind: ConnKind::Registry { confined, .. }, .. }) => confined.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Whether registry connection `key` may reach service `name`.
+    fn reaches(&self, key: u64, name: &str) -> bool {
+        self.confinement(key).is_none_or(|names| names.contains(name))
     }
 
     /// The identity of the process that owns registry connection `key`.
     fn identity(&self, key: u64) -> ClientIdentity {
         let owner = match self.conns.get(&key) {
-            Some(Conn { kind: ConnKind::Registry { owner }, .. }) => *owner,
+            Some(Conn { kind: ConnKind::Registry { owner, .. }, .. }) => *owner,
             _ => 0,
         };
         match self.children.get(&owner) {
@@ -153,9 +171,11 @@ impl Init {
         }
     }
 
-    fn image(&self, path: &str) -> Option<&'static [u8]> {
+    /// The program at `path` in the system image, and its path in the file
+    /// system (`/system/...`), which it is told it was started from.
+    fn program(&self, path: &str) -> Option<(initrd::File<'static>, String)> {
         let p = path.trim_start_matches('/').trim_start_matches("system/");
-        self.initrd.find(p).map(|f| f.data)
+        self.initrd.find(p).map(|f| (f, alloc::format!("/system/{p}")))
     }
 
     /// Starts `path` from the system image with a registry channel plus
@@ -168,9 +188,9 @@ impl Init {
         extra: Vec<(u32, Handle)>,
         origin: Origin,
     ) -> Result<u64, LaunchError> {
-        let image = self.image(path).ok_or(LaunchError::NotFound)?;
-        let registry = self.new_registry_channel(0).ok_or(LaunchError::NoMemory)?;
-        let mut spawn = rt::process::Spawn::new(name).handle(role::REGISTRY, registry.into_handle());
+        let (file, file_path) = self.program(path).ok_or(LaunchError::NotFound)?;
+        let registry = self.new_registry_channel(0, None).ok_or(LaunchError::NoMemory)?;
+        let mut spawn = rt::process::Spawn::new(name).path(&file_path).handle(role::REGISTRY, registry.into_handle());
         for a in args {
             spawn = spawn.arg(a);
         }
@@ -178,7 +198,13 @@ impl Init {
         for (r, h) in extra {
             spawn = spawn.handle(r, h);
         }
-        let process = spawn.start(image).map_err(|e| {
+        // It runs from the image's pages, which every process running it
+        // shares (from a copy of them if they cannot be had).
+        let started = match self.initrd_vmo.slice(file.offset as usize, file.data.len()) {
+            Ok(pages) => spawn.start_file(&pages, file.data.len()),
+            Err(_) => spawn.start(file.data),
+        };
+        let process = started.map_err(|e| {
             println!("failed to start {}: {}", path, e);
             match e {
                 rt::process::SpawnError::NotExecutable
@@ -192,7 +218,7 @@ impl Init {
         println!("started {} (process {})", name, koid);
         // Attribute the registry channel we just created to this process.
         if let Some(c) = self.conns.get_mut(&self.next_key) {
-            c.kind = ConnKind::Registry { owner: koid };
+            c.kind = ConnKind::Registry { owner: koid, confined: None };
         }
         self.children.insert(koid, Child { name: name.to_string(), process, origin });
         Ok(koid)
@@ -305,6 +331,13 @@ impl Init {
         impl registry::Server for Reg<'_> {
             fn connect(&mut self, name: String, server_end: Channel) -> Result<(), RegistryError> {
                 let client = self.init.identity(self.key);
+                if !self.init.reaches(self.key, &name) {
+                    println!(
+                        "{} (process {}), confined, may not reach the service '{}'",
+                        client.name, client.koid, name
+                    );
+                    return Err(RegistryError::Denied);
+                }
                 if name == launcher::NAME {
                     self.init.add_conn(server_end, ConnKind::Launcher { who: client });
                     return Ok(());
@@ -313,6 +346,9 @@ impl Init {
             }
 
             fn register(&mut self, name: String, listener: Channel) -> Result<(), RegistryError> {
+                if self.init.confinement(self.key).is_some() {
+                    return Err(RegistryError::Denied);
+                }
                 self.init.forget_if_gone(&name);
                 if self.init.services.contains_key(&name) || name == launcher::NAME || name == registry::NAME {
                     return Err(RegistryError::AlreadyRegistered);
@@ -347,13 +383,27 @@ impl Init {
                 for name in &names {
                     self.init.forget_if_gone(name);
                 }
-                self.init.services.keys().cloned().collect()
+                let names = self.init.services.keys().filter(|n| self.init.reaches(self.key, n));
+                names.cloned().collect()
             }
 
             fn clone_registry(&mut self) -> Result<Channel, RegistryError> {
-                // Whoever receives the copy speaks for the same process.
+                // Whoever receives the copy speaks for the same process, and
+                // reaches what this channel does.
                 let owner = self.init.identity(self.key).koid;
-                self.init.new_registry_channel(owner).ok_or(RegistryError::Denied)
+                let confined = self.init.confinement(self.key).cloned();
+                self.init.new_registry_channel(owner, confined).ok_or(RegistryError::Denied)
+            }
+
+            fn confine(&mut self, names: Vec<String>) -> Result<(), RegistryError> {
+                let narrowed: BTreeSet<String> = names.into_iter().filter(|n| self.init.reaches(self.key, n)).collect();
+                match self.init.conns.get_mut(&self.key) {
+                    Some(Conn { kind: ConnKind::Registry { confined, .. }, .. }) => {
+                        *confined = Some(narrowed);
+                        Ok(())
+                    }
+                    _ => Err(RegistryError::Denied),
+                }
             }
         }
         let mut reg = Reg { init: self, key };

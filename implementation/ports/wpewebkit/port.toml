@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# WPE WebKit: the web engine of Veda's browser (HTML, CSS, JavaScript,
+# networking), with Veda as one of its platforms.
+name = "wpewebkit"
+version = "2.54.1"
+url = "https://wpewebkit.org/releases/wpewebkit-2.54.1.tar.xz"
+sha256 = "0de8bdfba011f9cd63ba9a9171fa6038dd2c08237894f4082abbb821f29d3fe9"
+license = "LGPL-2.1-or-later AND BSD-2-Clause"

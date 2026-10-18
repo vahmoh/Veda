@@ -87,6 +87,8 @@ pub enum Icon {
     Redo,
     Wallpaper,
     Speaker,
+    /// The world: the web.
+    Globe,
     /// Wi-Fi with a strong signal (three arcs).
     Wifi,
     /// Wi-Fi, fair signal (two arcs).
@@ -246,6 +248,15 @@ fn build(icon: Icon) -> Builder {
         Icon::Search => {
             b.circle(10.5, 10.5, 6.5);
             b.line(15.5, 15.5, 20.5, 20.5);
+        }
+        Icon::Globe => {
+            b.circle(12.0, 12.0, 9.0);
+            // The meridian: two arcs from pole to pole, through 8 and 16.
+            b.arc(3.875, 12.0, 12.125, -47.9, 95.8);
+            b.arc(20.125, 12.0, 12.125, 132.1, 95.8);
+            b.line(3.0, 12.0, 21.0, 12.0);
+            b.line(4.6, 7.6, 19.4, 7.6);
+            b.line(4.6, 16.4, 19.4, 16.4);
         }
         Icon::Settings => {
             b.circle(12.0, 12.0, 3.0);
@@ -750,7 +761,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 96] = [
+    pub const ALL: [Icon; 97] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -823,6 +834,7 @@ impl Icon {
         Icon::Redo,
         Icon::Wallpaper,
         Icon::Speaker,
+        Icon::Globe,
         Icon::Wifi,
         Icon::WifiFair,
         Icon::WifiWeak,
@@ -879,6 +891,7 @@ impl Icon {
             "warning" => Icon::Warning,
             "calculator" | "calc" => Icon::Calculator,
             "brush" | "paint" => Icon::Brush,
+            "globe" | "web" | "browser" => Icon::Globe,
             _ => return None,
         })
     }

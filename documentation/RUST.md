@@ -95,7 +95,11 @@ Build scripts and procedural macros run on the development machine, with
 the standard library the toolchain builds for it too. A crate that
 compiles C finds Veda's compiler where the `cc` crate looks:
 `CC_x86_64_unknown_veda=x86_64-veda-gcc` (and `CXX_`, `AR_`), which
-`cargo automation` sets for Veda's programs.
+`cargo automation` sets for Veda's programs. A program that links the web
+engine (`Program::web`: the browser) finds it at `VEDA_WEB`, which
+`cargo automation` sets too: its build script compiles its C against
+WebKit's headers and links what `wpe-webkit-static-2.0.pc` names, through
+the web build's own pkg-config ([The web browser](BROWSER.md#building-it)).
 
 A program is a static ELF executable, as C programs are,
 position-independent by default (`-static-pie`) or at a fixed address

@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# GStreamer's decoders on FFmpeg (avdec_*): every audio and video codec of
+# the web the web engine decodes, AV1 through dav1d.
+name = "gst-libav"
+version = "1.28.8"
+url = "https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.28.8.tar.xz"
+sha256 = "98ad3d7f8932c495e268708903f1c3388d5f26a0db34727a9f861ee23b724177"
+license = "LGPL-2.1-or-later"

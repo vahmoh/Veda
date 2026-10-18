@@ -24,6 +24,8 @@
 #                    ($GUEST-gcc, -g++ ...), with their sysroot
 #   build/mesa/      Mesa built with it for the guest's renderer
 #                    (src/gallium/targets/veda/libvrenderer.a)
+#   licences/        the kernel's and Mesa's licence texts, which the image
+#                    installs in /system/licences
 #
 # The kernel's build tool objtool needs libelf, which few machines have the
 # headers of: zlib and elfutils' libelf are built for it first, static,
@@ -257,6 +259,37 @@ stage_mesa() {
 		"${MESA_OPTIONS[@]}" -Dveda-renderer="$RENDERER" -Dgallium-drivers=softpipe,virgl,iris
 }
 stage mesa src_mesa libstdcxx linux_headers @MESA_OPTIONS @RENDERER @RENDERER_LIB @MESON_CPU_FAMILY @MESON_CPU
+
+# --- the licences ----------------------------------------------------------------
+
+# The licence texts of what the driver VM has of the ports, as their
+# releases have them, under licences/PORT/ (the image's
+# /system/licences/PORT): the kernel's (its COPYING, and the licences its
+# files name, in LICENSES), and Mesa's (in the renderer). Its programs' C
+# library and GCC's runtime are the toolchain's releases, whose texts the
+# toolchain's build gathers; zlib, elfutils and binutils are only built for
+# the build. A port added to the guest without its texts here fails the
+# build.
+LICENCES=$ROOT/licences
+LICENCE_FILES=(linux:COPYING linux:LICENSES mesa:docs/license.rst mesa:licenses)
+LICENCE_PORTS=(linux mesa)
+
+stage_licences() {
+	local entry port file
+	rm -rf "$LICENCES"
+	for port in "${LICENCE_PORTS[@]}"; do
+		if [[ " ${LICENCE_FILES[*]} " != *" $port:"* ]]; then
+			echo "$port has no licence texts in LICENCE_FILES" >&2
+			exit 1
+		fi
+	done
+	for entry in "${LICENCE_FILES[@]}"; do
+		port=${entry%%:*} file=${entry#*:}
+		mkdir -p "$LICENCES/$port/$(dirname "$file")"
+		cp -r "$SRC/$port/$file" "$LICENCES/$port/$file"
+	done
+}
+stage licences src_linux src_mesa @LICENCE_FILES @LICENCE_PORTS @ROOT
 
 # make knows what changed.
 log Building linux

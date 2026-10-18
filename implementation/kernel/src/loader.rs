@@ -125,9 +125,10 @@ pub fn spawn_init(boot: &BootInfo) {
         rights: Rights(Rights::BASIC.0 | Rights::DUPLICATE.0),
     });
     roles.push(role::ROOT_RESOURCE);
+    // The system image's programs run from its pages (slices of it).
     handles.push(Handle {
         object: KObject::Vmo(Vmo::new_physical(boot.initrd.base, boot.initrd.size, Cache::WriteBack)),
-        rights: read_only,
+        rights: Rights(read_only.0 | Rights::EXECUTE.0),
     });
     roles.push(role::INITRD);
     if fb.phys_base != 0 {

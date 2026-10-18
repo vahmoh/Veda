@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# GNU gperf: perfect hash functions, for this machine: WebKit's build
+# generates its tables of CSS properties and HTML entities with it.
+name = "gperf"
+version = "3.3"
+url = "https://ftp.gnu.org/gnu/gperf/gperf-3.3.tar.gz"
+sha256 = "fd87e0aba7e43ae054837afd6cd4db03a3f2693deb3619085e6ed9d8d9604ad8"
+license = "GPL-3.0-or-later"

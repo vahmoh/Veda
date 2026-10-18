@@ -480,7 +480,15 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
     let watch = t.watch();
     let backend = VirglBackend::new(Box::new(t)).map_err(|e| format!("{} cannot be used: {:?}", renderer, e))?;
     // No default framebuffer to speak of: frames go into the pictures.
-    let config = Config { width: 1, height: 1, color: gl::RGBA8, depth_bits: 0, stencil_bits: 0, samples: 0 };
+    let config = Config {
+        width: 1,
+        height: 1,
+        color: gl::RGBA8,
+        depth_bits: 0,
+        stencil_bits: 0,
+        samples: 0,
+        surfaceless: false,
+    };
     let mut gl = Context::new(Box::new(backend), config);
     let (w, h) = (p.width, p.height);
     let mut targets = Vec::new();

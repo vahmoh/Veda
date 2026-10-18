@@ -40,5 +40,5 @@ pub mod virgl;
 #[cfg(test)]
 mod tests;
 
-pub use context::{Config, Context};
+pub use context::{Config, Context, Local};
 pub use pixels::{Pixels, PixelsMut};

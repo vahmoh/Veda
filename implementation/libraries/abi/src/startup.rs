@@ -29,6 +29,12 @@
 
 /// `"VSTA"`
 pub const MAGIC: u32 = u32::from_le_bytes(*b"VSTA");
+
+/// The key of the entry a POSIX program's startup message has, where a Veda
+/// program's environment goes, of its main thread's stack: `TOP:SIZE`, in
+/// hexadecimal, the stack's highest address and its size without its guard
+/// pages, as its loader made it.
+pub const MAIN_STACK: &str = "posix.stack";
 pub const VERSION: u32 = 2;
 
 /// Well-known handle roles.

@@ -156,6 +156,16 @@ impl<T> Store<T> {
     pub fn iter(&self) -> impl Iterator<Item = (Key, &T)> {
         self.objects.iter().map(|(k, e)| (*k, &e.value))
     }
+
+    /// Whether the object lives.
+    pub fn contains(&self, key: Key) -> bool {
+        self.objects.contains_key(&key)
+    }
+
+    /// The names in use (each naming an object, or generated).
+    pub fn names(&self) -> Vec<u32> {
+        self.names.keys().copied().collect()
+    }
 }
 
 // ---- Buffers -------------------------------------------------------------------

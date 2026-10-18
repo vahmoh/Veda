@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::arch::{self, GUEST_TARGET};
+use crate::notices;
 use crate::ports::{self, Port};
 use crate::util::{self, Result};
 
@@ -338,9 +339,22 @@ pub fn build_once() -> Result {
     }
 }
 
-/// The guest's kernel and initial RAM file system, for the system image,
-/// if the kernel has been built.
-pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+/// What the system image has of the driver VM.
+pub struct Guest {
+    /// Its kernel.
+    pub kernel: Vec<u8>,
+    /// Its initial RAM file system: its programs and firmware.
+    pub initramfs: Vec<u8>,
+    /// The licence texts of what it has of others' (its kernel's, Mesa's,
+    /// its firmware's), at their paths in the image (`licences/<part>/`).
+    pub licences: Vec<(String, Vec<u8>)>,
+    /// The packages of its programs, whose crates the image's licences
+    /// list too.
+    pub packages: Vec<&'static str>,
+}
+
+/// The guest for the system image, if its kernel has been built.
+pub fn guest() -> Result<Option<Guest>> {
     if !built() {
         return Ok(None);
     }
@@ -351,6 +365,10 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         cmd.args(["--package", package]);
     }
     util::run(&mut cmd)?;
+    let mut packages: Vec<&'static str> = GUEST_PROGRAMS.iter().map(|(package, ..)| *package).collect();
+    // Its kernel's licence texts (linux/build.sh's `licences` stage).
+    let gathered = root().join("licences");
+    let mut licences = notices::port_texts(&gathered, "linux", "`cargo automation linux`")?;
     let bin = guest_target_dir().join(GUEST_TARGET).join("release");
     let mut archive = cpio::Archive::new();
     archive.directory("dev");
@@ -375,53 +393,151 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let strip = root().join("toolchain").join("bin").join(format!("{}-strip", arch::GUEST_C_TARGET));
         util::run(Command::new(strip).arg("-o").arg(&stripped).arg(&exe))?;
         archive.file("bin/renderer", 0o755, &util::read(&stripped)?);
+        packages.push("guest-renderer");
+        licences.extend(notices::port_texts(&gathered, "mesa", "`cargo automation linux`")?);
     }
+    let firmware = firmware()?;
     let mut directories = std::collections::BTreeSet::new();
-    for (name, file) in firmware()? {
-        let path = format!("lib/firmware/{name}");
+    for file in &firmware.files {
+        let path = format!("lib/firmware/{}", file.name);
         // Its directories first, each once.
         for (at, _) in path.match_indices('/') {
             if directories.insert(path[..at].to_string()) {
                 archive.directory(&path[..at]);
             }
         }
-        archive.file(&path, 0o644, &util::read(&file)?);
+        archive.file(&path, 0o644, &util::read(&file.at)?);
     }
-    Ok(Some((util::read(&image())?, archive.finish())))
+    licences.extend(firmware.licence_files()?);
+    Ok(Some(Guest { kernel: util::read(&image())?, initramfs: archive.finish(), licences, packages }))
 }
 
-/// The firmware of `implementation/ports/linux/firmware.txt` and of the
-/// architecture's list
-/// (`implementation/ports/linux/architectures/<architecture>/firmware.txt`,
-/// which may name the sources of the first): each file's name, and where it
-/// is (fetched now if it is not, or is not the file pinned).
-fn firmware() -> Result<Vec<(String, PathBuf)>> {
-    let port = ports::dir().join("linux");
-    let arch_list = port.join("architectures").join(arch::NAME).join("firmware.txt");
-    let mut sources = std::collections::BTreeMap::new();
-    let mut files = Vec::new();
-    for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {
-        let text = util::read_to_string(&list)?;
+/// The firmware the guest's Linux loads ([`firmware`]): its files, and
+/// the licences of their sources.
+struct Firmware {
+    files: Vec<FirmwareFile>,
+    /// Each licence of the sources the files are from: its source, its
+    /// path there, and where it is.
+    licences: Vec<(String, String, PathBuf)>,
+}
+
+/// A file of firmware: the name the kernel asks for it by, where it is,
+/// the address it was fetched from, its source and the licence of its
+/// source's it comes under (its path there).
+struct FirmwareFile {
+    name: String,
+    at: PathBuf,
+    url: String,
+    source: String,
+    licence: String,
+}
+
+impl Firmware {
+    /// Its licences' texts, for `/system/licences/firmware/<source>/<path>`,
+    /// and `README` there, which says which file comes from where under
+    /// which.
+    fn licence_files(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut files = Vec::new();
+        for (source, path, at) in &self.licences {
+            files.push((format!("licences/firmware/{source}/{path}"), util::read(at)?));
+        }
+        let mut readme = String::from(
+            "The firmware the driver VM's Linux loads into devices (its /lib/firmware), each file as its maker \
+             released it: the address it comes from, and the licence it comes under, which allows its \
+             redistribution, in the directory of its source here. linux-firmware's WHENCE gives the maker and \
+             licence of each of its files.\n",
+        );
+        for file in &self.files {
+            readme
+                .push_str(&format!("\n{}\n  from {}\n  under {}/{}\n", file.name, file.url, file.source, file.licence));
+        }
+        files.push(("licences/firmware/README".into(), readme.into_bytes()));
+        Ok(files)
+    }
+}
+
+/// The lines of the firmware lists ([`firmware`]), as read: the sources
+/// (each one's address, `{}` standing for a file's path in it), the
+/// sources' licences (source, path, SHA-256) and the files (name, source,
+/// path, SHA-256, licence), each with the list it is in.
+#[derive(Default)]
+struct FirmwareLists {
+    sources: std::collections::BTreeMap<String, String>,
+    licences: Vec<([String; 3], PathBuf)>,
+    files: Vec<([String; 5], PathBuf)>,
+}
+
+impl FirmwareLists {
+    /// Reads the lines of `text`, the list at `list`: a source, a licence
+    /// of a source above, or a file of a source above, under a licence of
+    /// its source's above it.
+    fn read(&mut self, text: &str, list: &Path) -> Result {
+        let sha256 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+        let relative = |s: &str| !s.starts_with('/') && !s.split('/').any(|part| part.is_empty() || part == "..");
         for (n, line) in text.lines().enumerate() {
-            let bad = || format!("{}:{}: not a source or a file: {line}", list.display(), n + 1);
+            let bad = |why: &str| format!("{}:{}: {why}: {line}", list.display(), n + 1);
             let words: Vec<&str> = line.split_whitespace().collect();
             match words.as_slice() {
                 [] => {}
                 [first, ..] if first.starts_with('#') => {}
                 ["source", name, url] if url.contains("{}") => {
-                    sources.insert(name.to_string(), url.to_string());
+                    self.sources.insert(name.to_string(), url.to_string());
                 }
-                [name, source, path, sha256] if sha256.len() == 64 && !name.contains("..") => {
-                    let url = sources.get(*source).ok_or_else(bad)?.replace("{}", path);
-                    let file = root().join("firmware").join(name);
-                    fetch_firmware(&file, &url, sha256, &list)?;
-                    files.push((name.to_string(), file));
+                ["source", ..] => return Err(bad("not a source: its name, and its address with {} for a path")),
+                ["licence", source, path, hash] if sha256(hash) && relative(path) => {
+                    if !self.sources.contains_key(*source) {
+                        return Err(bad("a licence of a source not named above"));
+                    }
+                    self.licences.push(([source, path, hash].map(|w| w.to_string()), list.to_path_buf()));
                 }
-                _ => return Err(bad()),
+                ["licence", ..] => return Err(bad("not a licence: its source, its path there and its SHA-256")),
+                [name, source, path, hash, licence] if sha256(hash) && relative(name) => {
+                    if !self.sources.contains_key(*source) {
+                        return Err(bad("a file of a source not named above"));
+                    }
+                    if !self.licences.iter().any(|([s, p, _], _)| s == source && p == licence) {
+                        return Err(bad("a file under a licence its source has not above"));
+                    }
+                    self.files.push(([name, source, path, hash, licence].map(|w| w.to_string()), list.to_path_buf()));
+                }
+                [_, _, _, hash] if sha256(hash) => return Err(bad("a file without the licence it comes under")),
+                _ => return Err(bad("not a source, a licence or a file")),
             }
         }
+        Ok(())
     }
-    Ok(files)
+}
+
+/// The firmware of `implementation/ports/linux/firmware.txt` and of the
+/// architecture's list
+/// (`implementation/ports/linux/architectures/<architecture>/firmware.txt`,
+/// which may name the sources and licences of the first): each file, and
+/// the licences of the sources it has files of, where they are (fetched now
+/// if they are not, or are not the files pinned).
+fn firmware() -> Result<Firmware> {
+    let port = ports::dir().join("linux");
+    let arch_list = port.join("architectures").join(arch::NAME).join("firmware.txt");
+    let mut lists = FirmwareLists::default();
+    for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {
+        lists.read(&util::read_to_string(&list)?, &list)?;
+    }
+    let url = |source: &str, path: &str| lists.sources[source].replace("{}", path);
+    let mut licences = Vec::new();
+    for ([source, path, sha256], list) in &lists.licences {
+        if lists.files.iter().any(|([_, s, ..], _)| s == source) {
+            let at = root().join("firmware-licences").join(source).join(path);
+            fetch_firmware(&at, &url(source, path), sha256, list)?;
+            licences.push((source.clone(), path.clone(), at));
+        }
+    }
+    let mut files = Vec::new();
+    for ([name, source, path, sha256, licence], list) in &lists.files {
+        let at = root().join("firmware").join(name);
+        let url = url(source, path);
+        fetch_firmware(&at, &url, sha256, list)?;
+        files.push(FirmwareFile { name: name.clone(), at, url, source: source.clone(), licence: licence.clone() });
+    }
+    Ok(Firmware { files, licences })
 }
 
 /// Makes `file` the one of `url` whose SHA-256 is `sha256` (as `list`
@@ -553,6 +669,45 @@ mod tests {
             { "name": "veda-renderer-lib", "value": lib },
         ])
         .to_string()
+    }
+
+    #[test]
+    fn firmware_comes_under_the_licences_of_its_sources() {
+        let list = Path::new("firmware.txt");
+        let hash = "ab".repeat(32);
+        let text = format!(
+            "# A list\nsource fw https://example.org/{{}}?h=1\nsource db https://example.org/db/{{}}\n\
+             licence  fw  WHENCE  {hash}\nlicence  fw  LICENSES/LICENCE.a  {hash}\nlicence  db  LICENSE  {hash}\n\n\
+             a/b.bin  fw  a/b-1.bin  {hash}  LICENSES/LICENCE.a\n"
+        );
+        let mut lists = FirmwareLists::default();
+        lists.read(&text, list).unwrap();
+        assert_eq!(lists.licences.len(), 3);
+        assert_eq!(lists.files[0].0, ["a/b.bin", "fw", "a/b-1.bin", hash.as_str(), "LICENSES/LICENCE.a"]);
+        for (line, why) in [
+            (format!("c.bin  fw  c.bin  {hash}"), "without the licence"),
+            (format!("c.bin  fw  c.bin  {hash}  LICENSE"), "its source has not above"),
+            (format!("c.bin  other  c.bin  {hash}  WHENCE"), "source not named above"),
+            (format!("../c.bin  fw  c.bin  {hash}  WHENCE"), "not a source, a licence or a file"),
+            (format!("licence  other  LICENSE  {hash}"), "source not named above"),
+            (format!("licence  fw  ../LICENSE  {hash}"), "not a licence"),
+        ] {
+            let error = FirmwareLists::default().read(&format!("{text}{line}\n"), list).unwrap_err();
+            assert!(error.contains(why) && error.contains("firmware.txt:9:"), "{line}: {error}");
+        }
+    }
+
+    /// Veda's lists: every file under a licence of its source's.
+    #[test]
+    fn the_firmware_lists_name_each_files_licence() {
+        let port = ports::dir().join("linux");
+        let mut lists = FirmwareLists::default();
+        for list in [port.join("firmware.txt"), port.join("architectures").join(arch::NAME).join("firmware.txt")] {
+            lists.read(&util::read_to_string(&list).unwrap(), &list).unwrap();
+        }
+        assert!(!lists.files.is_empty());
+        // linux-firmware's WHENCE comes with its files.
+        assert!(lists.licences.iter().any(|([source, path, _], _)| source == "linux-firmware" && path == "WHENCE"));
     }
 
     #[test]

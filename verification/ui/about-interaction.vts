@@ -2,21 +2,41 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # Interaction smoke test for the About window (1280x800 screen with the
-# taskbar): move the window, flip a toggle, close it with OK.
+# taskbar): move the window, show the licences, which the image lists in
+# /system/licences/README, open a part's and read one of its texts, go back
+# with the keyboard and the Back button, close the window with OK.
 boot-cmdline "run=about"
 fail-on "PANIC"
+fail-on "about: no /system/licences/README"
 wait-serial "started about" 60
 wait 6
 # Drag the title bar (y = 106) 200 px to the right and 60 px down.
 drag 0.4063 0.1325 0.5625 0.2075
 wait 1
 shot target/veda/ui-1-dragged.png
-# Toggle "Show licences" (moved with the window to x = 613, y = 508).
-click 0.4789 0.635
+# Licences (moved with the window to x = 647, y = 682).
+click 0.5055 0.8525
+wait-serial "about: licences: " 20
 wait 2
-shot target/veda/ui-2-toggled.png
+shot target/veda/ui-2-licences.png
+# The third part, the C library (x = 840, y = 456): its texts' files.
+click 0.6563 0.57
+wait-serial "about: licences of musl " 20
+wait 1
+# Its first text, COPYRIGHT (y = 355).
+click 0.5938 0.4438
+wait-serial "about: showing /system/licences/musl/COPYRIGHT" 20
+wait 2
+shot target/veda/ui-3-licence.png
+# Esc goes back to the part, then to the parts; Back to the version.
+key esc
+wait 1
+key esc
+wait 1
+click 0.5055 0.8525
+wait 2
 # Click OK (x = 1033, y = 682): the window should close.
 click 0.807 0.8525
 wait 2
-shot target/veda/ui-3-closed.png
+shot target/veda/ui-4-closed.png
 expect-serial "about exited with code 0"

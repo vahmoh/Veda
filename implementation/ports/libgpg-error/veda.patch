@@ -1,0 +1,39 @@
+--- a/build-aux/config.sub
++++ b/build-aux/config.sub
+@@ -1751,7 +1751,7 @@
+ 	     | scout* | superux* | sysv* | rtmk* | tpf* | windiss* \
+ 	     | powermax* | dnix* | nx6 | nx7 | sei* | dragonfly* \
+ 	     | skyos* | haiku* | rdos* | toppers* | drops* | es* \
+-	     | onefs* | tirtos* | phoenix* | fuchsia* | redox* | bme* \
++	     | onefs* | tirtos* | phoenix* | fuchsia* | veda* | redox* | bme* \
+ 	     | midnightbsd* | amdhsa* | unleashed* | emscripten* | wasi* \
+ 	     | nsk* | powerunix* | genode* | zvmoe* | qnx* | emx* | zephyr* \
+ 	     | fiwix* )
+--- a/src/syscfg/lock-obj-pub.x86_64-pc-veda.h
++++ b/src/syscfg/lock-obj-pub.x86_64-pc-veda.h
+@@ -0,0 +1,25 @@
++## lock-obj-pub.x86_64-pc-veda.h
++## Veda's C library is musl: its pthread_mutex_t, as on x86_64-pc-linux-musl
++## To be included by mkheader into gpg-error.h
++
++typedef struct
++{
++  long _vers;
++  union {
++    volatile char _priv[40];
++    long _x_align;
++    long *_xp_align;
++  } u;
++} gpgrt_lock_t;
++
++#define GPGRT_LOCK_INITIALIZER {1,{{0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0, \
++                                    0,0,0,0,0,0,0,0}}}
++##
++## Local Variables:
++## mode: c
++## buffer-read-only: t
++## End:
++##

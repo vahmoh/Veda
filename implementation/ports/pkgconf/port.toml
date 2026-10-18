@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# pkgconf: pkg-config, for this machine, which finds the web engine's
+# libraries for Veda as their builds look for them (wpewebkit/build.sh).
+name = "pkgconf"
+version = "3.0.9"
+url = "https://github.com/pkgconf/pkgconf/releases/download/pkgconf-3.0.9/pkgconf-3.0.9.tar.xz"
+sha256 = "6ab2d3b8087dcf500e34003a6a8934dca55d0a3d6066aeafb03c352db3e68bfd"
+license = "ISC"

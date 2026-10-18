@@ -15,11 +15,19 @@
 //! Each thread has an id of its own in the process (`signal`), which musl
 //! keeps as the owner of the locks it holds: the main thread's is the
 //! process id; `gettid` gives the caller's.
+//!
+//! The layer keeps each thread's kernel handle while it lives, by its id:
+//! with it a thread stops another, reads its registers and lets it go on
+//! ([`veda_thread_suspend`], `<veda/thread.h>`), as a garbage collector
+//! that scans other threads' stacks does (JavaScriptCore's).
 
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use core::ffi::c_void;
 
 use abi::{Error, nr};
 use rt::object::{Handle, Thread};
+use rt::sync::Mutex;
 use rt::sys::call;
 
 use crate::error::{self, SysResult};
@@ -84,12 +92,137 @@ pub unsafe extern "C" fn __veda_clone(
         unsafe { core::ptr::write_volatile(ctid as *mut i32, tid) };
     }
     let entry = crate::arch::thread_entry_address();
+    // Kept from before it runs: it may end at once, and forget it.
+    let thread = Arc::new(thread);
+    HANDLES.lock().insert(tid, thread.clone());
     match call(nr::THREAD_START, [thread.raw() as usize, entry, block, block, 0, 0]) {
         Ok(_) => tid,
         Err(e) => {
+            HANDLES.lock().remove(&tid);
             crate::signal::thread_not_started(tls);
             -(error::kernel(e) as i32)
         }
+    }
+}
+
+/// The main thread's stack, its top and size, as the startup message says
+/// (both 0 until it does).
+static MAIN_STACK: Mutex<(usize, usize)> = Mutex::new((0, 0));
+
+/// Records where the main thread's stack is.
+pub fn set_main_stack(top: usize, size: usize) {
+    *MAIN_STACK.lock() = (top, size);
+}
+
+/// `__veda_main_stack(top, size)`: the main thread's stack, for musl's
+/// `pthread_getattr_np` (which on Linux probes it with `mremap`): 0, or -1
+/// if the startup message did not say.
+///
+/// # Safety
+/// `top` and `size` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __veda_main_stack(top: *mut usize, size: *mut usize) -> i32 {
+    let (t, s) = *MAIN_STACK.lock();
+    if s == 0 {
+        return -1;
+    }
+    // SAFETY: per the caller.
+    unsafe {
+        top.write(t);
+        size.write(s);
+    }
+    0
+}
+
+/// The kernel handles of this process's threads, by thread id.
+static HANDLES: Mutex<BTreeMap<i32, Arc<Thread>>> = Mutex::new(BTreeMap::new());
+
+/// Keeps the main thread's handle, as [`__veda_clone`] keeps the others':
+/// called by it, once it has an id.
+pub fn main_thread_ready() {
+    if let Ok(h) = call(nr::THREAD_SELF, [0; 6]) {
+        // SAFETY: a fresh handle from the kernel.
+        let thread = Thread(unsafe { Handle::from_raw(h as u32) });
+        HANDLES.lock().insert(crate::signal::current_tid(), Arc::new(thread));
+    }
+}
+
+/// The calling thread is ending: its handle goes.
+fn forget_current() {
+    let tid = crate::signal::current_tid();
+    let gone = HANDLES.lock().remove(&tid);
+    drop(gone);
+}
+
+/// The handle of thread `tid` of this process.
+fn handle_of(tid: i32) -> Result<Arc<Thread>, i32> {
+    HANDLES.lock().get(&tid).cloned().ok_or(ESRCH as i32)
+}
+
+/// What a failed suspension call says, as an `errno` value.
+fn suspension_errno(e: Error) -> i32 {
+    match e {
+        Error::BadHandle | Error::NotFound => ESRCH as i32,
+        e => error::kernel(e) as i32,
+    }
+}
+
+/// Stops thread `tid` of this process, another than the caller: it runs
+/// none of the program's code until [`veda_thread_resume`] lets it go on
+/// (as many times as it was stopped). Returns once it has stopped: 0, or
+/// an `errno` value (`ESRCH`: no such thread, or it has ended; `EINVAL`:
+/// the caller itself).
+#[unsafe(no_mangle)]
+pub extern "C" fn veda_thread_suspend(tid: i32) -> i32 {
+    let thread = match handle_of(tid) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    match call(nr::THREAD_SUSPEND, [thread.raw() as usize, 0, 0, 0, 0, 0]) {
+        Ok(_) => 0,
+        Err(Error::BadState) => ESRCH as i32,
+        Err(e) => suspension_errno(e),
+    }
+}
+
+/// Lets thread `tid`, which [`veda_thread_suspend`] stopped, go on: 0, or
+/// an `errno` value (`EINVAL`: it is not stopped).
+#[unsafe(no_mangle)]
+pub extern "C" fn veda_thread_resume(tid: i32) -> i32 {
+    let thread = match handle_of(tid) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    match call(nr::THREAD_RESUME, [thread.raw() as usize, 0, 0, 0, 0, 0]) {
+        Ok(_) => 0,
+        Err(Error::BadState) => EINVAL as i32,
+        Err(e) => suspension_errno(e),
+    }
+}
+
+/// The registers of thread `tid`, which [`veda_thread_suspend`] stopped,
+/// as it left the program's code, stored at `out` as the architecture's
+/// `mcontext_t` has them (its general registers; no floating point): 0,
+/// or an `errno` value (`EINVAL`: it is not stopped).
+///
+/// # Safety
+/// `out` must point at a writable `mcontext_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn veda_thread_registers(tid: i32, out: *mut c_void) -> i32 {
+    let thread = match handle_of(tid) {
+        Ok(t) => t,
+        Err(e) => return e,
+    };
+    let mut state = abi::ThreadState::default();
+    let r = call(nr::THREAD_READ_STATE, [thread.raw() as usize, &raw mut state as usize, 0, 0, 0, 0]);
+    match r {
+        Ok(_) => {
+            // SAFETY: per the caller.
+            unsafe { crate::arch::store_mcontext(&state, out) };
+            0
+        }
+        Err(Error::BadState) => EINVAL as i32,
+        Err(e) => suspension_errno(e),
     }
 }
 
@@ -112,6 +245,7 @@ pub fn set_tid_address(addr: usize) -> SysResult {
 
 /// Ends the calling thread.
 pub fn exit_thread() -> ! {
+    forget_current();
     crate::signal::thread_exited();
     rt::sys::thread_exit()
 }
@@ -132,6 +266,7 @@ pub(crate) extern "C" fn thread_returned() -> ! {
 /// The range must be the calling thread's stack, which nothing else uses.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __veda_unmapself(base: usize, size: usize) -> ! {
+    forget_current();
     crate::signal::thread_exited();
     // SAFETY: per the caller.
     unsafe { rt::thread::exit_unmapping(base, size) }

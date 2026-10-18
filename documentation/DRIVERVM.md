@@ -470,9 +470,11 @@ The firmware is what `implementation/ports/linux/firmware.txt` lists and,
 for devices only the architecture's machines have,
 `implementation/ports/linux/architectures/amd64/firmware.txt` (i915's
 DMC, GuC and HuC, the audio DSP's): pinned releases of linux-firmware,
-wireless-regdb and sof-bin, each file checked against its SHA-256. A
-device whose firmware is not listed does not work in the driver VM, so a
-driver and its firmware go in together.
+wireless-regdb and sof-bin, each file checked against its SHA-256 and
+under the licence the list names for it, whose text the system image
+carries in `/system/licences/firmware`. A device whose firmware is not
+listed does not work in the driver VM, so a driver and its firmware go in
+together.
 
 Under QEMU, Veda's hypervisor needs VMX from KVM, which takes nested
 virtualization on an Intel host (`kvm_intel nested=1`):
