@@ -119,6 +119,15 @@ VR_API int vr_fence(struct vr_context *ctx, uint64_t *seq);
 /* The number of the last fence that has signaled. Writes the results of
  * the queries that were due by then into the shared memory first. */
 VR_API uint64_t vr_fence_signaled(struct vr_context *ctx);
+/* A file descriptor that becomes readable once the oldest fence that
+ * vr_fence_signaled left pending has signaled (the next to: fences signal
+ * in order), and that fence's number in `*seq`: a sync_file of the GPU's
+ * driver, for the caller to wait for the fence among its other files
+ * rather than ask vr_fence_signaled again and again. The caller closes
+ * it. -1 if no fence is pending, or the device gives no such files
+ * (softpipe, whose fences have signaled once vr_fence returns; virgl over
+ * vtest). */
+VR_API int vr_fence_fd(struct vr_context *ctx, uint64_t *seq);
 /* Waits up to `timeout_ns` (UINT64_MAX: for ever) for fence `seq`. */
 VR_API int vr_fence_wait(struct vr_context *ctx, uint64_t seq, uint64_t timeout_ns);
 

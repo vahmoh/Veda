@@ -703,6 +703,19 @@ vr_fence_signaled(struct vr_context *ctx)
 }
 
 VR_API int
+vr_fence_fd(struct vr_context *ctx, uint64_t *seq)
+{
+   struct pipe_screen *s = ctx->dev->screen;
+   /* After retire the oldest has a handle: fences without one (queued after
+    * the device failed) signal with the fence before them, and retire
+    * forgets them. */
+   if (!ctx->num_fences || !ctx->fences[0].handle || !s->caps.native_fence_fd || !s->fence_get_fd)
+      return -1;
+   *seq = ctx->fences[0].seq;
+   return s->fence_get_fd(s, ctx->fences[0].handle);
+}
+
+VR_API int
 vr_fence_wait(struct vr_context *ctx, uint64_t seq, uint64_t timeout_ns)
 {
    if (seq > ctx->last_seq) {

@@ -17,12 +17,17 @@
 //! as the driver VM's renderer does under QEMU, and with
 //! `GL_GALLIUM_DEVICE=iris` on this machine's Intel GPU (iris, through its
 //! render node), as the renderer does on a PC's; on softpipe otherwise.
+//! Fences are waited for as the renderer waits for them, on the file of the
+//! oldest pending one (a sync_file of the GPU's driver), where the device
+//! gives one.
 
 use std::boxed::Box;
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, c_char, c_int, c_short, c_ulong, c_void};
 use std::ops::Range;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::string::String;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use std::vec;
 use std::vec::Vec;
 
@@ -57,6 +62,7 @@ struct Lib {
     submit: unsafe extern "C" fn(Ctx, *const u32, usize) -> c_int,
     fence: unsafe extern "C" fn(Ctx, *mut u64) -> c_int,
     fence_signaled: unsafe extern "C" fn(Ctx) -> u64,
+    fence_fd: unsafe extern "C" fn(Ctx, *mut u64) -> c_int,
     fence_wait: unsafe extern "C" fn(Ctx, u64, u64) -> c_int,
 }
 
@@ -121,6 +127,7 @@ fn lib() -> Option<&'static Lib> {
                 submit: sym(m, "vr_submit"),
                 fence: sym(m, "vr_fence"),
                 fence_signaled: sym(m, "vr_fence_signaled"),
+                fence_fd: sym(m, "vr_fence_fd"),
                 fence_wait: sym(m, "vr_fence_wait"),
             })
         }
@@ -131,6 +138,20 @@ fn lib() -> Option<&'static Lib> {
 /// What `vr_fence_wait` returns when the fence has not signaled in time
 /// (`VR_TIMEOUT`).
 const TIMEOUT: c_int = -4;
+
+/// `struct pollfd`, for `poll`.
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: c_short,
+    revents: c_short,
+}
+
+const POLLIN: c_short = 1;
+
+unsafe extern "C" {
+    fn poll(fds: *mut PollFd, count: c_ulong, timeout_ms: c_int) -> c_int;
+}
 
 /// Shared memory: 16 MiB of staging and the query area, as virtio-gpu's.
 const SHARED_BYTES: usize = 16 * 1024 * 1024 + 16 * 1024;
@@ -261,11 +282,41 @@ impl Transport for GalliumTransport {
     }
 
     fn wait(&mut self, fence: u64, timeout_ns: u64) -> Result<bool, Lost> {
-        // SAFETY: a context of this transport.
-        match unsafe { (self.lib.fence_wait)(self.ctx, fence, timeout_ns) } {
-            0 => Ok(true),
-            TIMEOUT => Ok(false),
-            _ => Err(Lost),
+        let until = Instant::now().checked_add(Duration::from_nanos(timeout_ns));
+        loop {
+            // SAFETY: a context of this transport.
+            if unsafe { (self.lib.fence_signaled)(self.ctx) } >= fence {
+                return Ok(true);
+            }
+            let left = until.map(|u| u.saturating_duration_since(Instant::now()));
+            if left.is_some_and(|l| l.is_zero()) {
+                return Ok(false);
+            }
+            let mut seq = 0;
+            // SAFETY: as above.
+            let fd = unsafe { (self.lib.fence_fd)(self.ctx, &mut seq) };
+            if fd >= 0 {
+                // SAFETY: a descriptor the library made for its caller.
+                let file = unsafe { OwnedFd::from_raw_fd(fd) };
+                // In milliseconds, rounded up: what is left of one is waited
+                // for too.
+                let ms = left.map_or(-1, |l| l.as_micros().div_ceil(1000).min(c_int::MAX as u128) as c_int);
+                let mut entry = PollFd { fd: file.as_raw_fd(), events: POLLIN, revents: 0 };
+                // SAFETY: the one entry given.
+                if unsafe { poll(&mut entry, 1, ms) } >= 0 {
+                    continue;
+                }
+            }
+            // The device's own wait where it gives no files (virgl over
+            // vtest) or `poll` failed; and for a fence never queued, which it
+            // refuses.
+            let ns = left.map_or(u64::MAX, |l| u64::try_from(l.as_nanos()).unwrap_or(u64::MAX));
+            // SAFETY: a context of this transport.
+            return match unsafe { (self.lib.fence_wait)(self.ctx, fence, ns) } {
+                0 => Ok(true),
+                TIMEOUT => Ok(false),
+                _ => Err(Lost),
+            };
         }
     }
 }

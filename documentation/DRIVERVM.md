@@ -336,10 +336,13 @@ over the GPU's Linux driver: iris on i915, virgl on QEMU's virtio-gpu
 gets a context and shared memory, bounded per process and in total. The
 decoder (`decoder/`, C) checks every command before Gallium carries it
 out, and adapts shaders to each driver's conventions
-(`decoder/conventions.c`). The compositor's pictures reach the GPU as
-dma-bufs, so it composes the screen in place (with virgl, the compositor
-composes on the processor). A renderer that ends is started again, and the
-compositor sets the GPU up again, three times at most.
+(`decoder/conventions.c`). The renderer polls a watch per connection (65
+of the monitor's waits at most) with the GPU driver's sync_file of each
+context's oldest pending fence, so it wakes when a client asks or a fence
+signals. The compositor's pictures reach the GPU as dma-bufs, so it
+composes the screen in place (with virgl, the compositor composes on the
+processor). A renderer that ends is started again, and the compositor sets
+the GPU up again, three times at most.
 
 **USB.** Linux drives the controllers, their hubs and every device on
 them: keyboards, mice and tablets for `input`, network adapters for `net`

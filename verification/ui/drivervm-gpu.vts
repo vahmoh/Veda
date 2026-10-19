@@ -7,13 +7,15 @@
 # through Mesa's virgl, so an OpenGL ES 3.0 program (Interceptor) renders
 # on it and its frames keep coming, and Veda's display driver for Linux
 # shows the compositor's frames on the display, the one whose memory holds
-# the firmware's framebuffer.
+# the firmware's framebuffer. The renderer waits for the GPU's fences on
+# virtio-gpu's files of them, rather than looking every millisecond.
 gpu on
 boot-cmdline "run=interceptor"
 fail-on "PANIC"
 fail-on "drivervm: processor"
 fail-on "renderer: commands refused"
 fail-on "renderer: a resource refused"
+fail-on "renderer: no file to wait for a fence on"
 fail-on "cannot render on the GPU"
 fail-on "rendering stops"
 fail-on "link: "

@@ -719,6 +719,15 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
   (commands, staging, query results, the fence word), laid out as
   `proto::gpu::Session` states, which `gl` checks before mapping it: the
   renderer is not trusted with a client's memory.
+- **Waiting.** The renderer waits for its clients and for the GPU in one
+  `poll` of Linux's files: a bridge watch (`rt::guest::Watch`) for
+  connections and one for each connection's requests, and for each
+  context's oldest pending fence the GPU driver's sync_file of it
+  (`vr_fence_fd`, from Gallium's `fence_get_fd`), readable once the fence
+  has signaled. So it writes the fence word and signals the client's event
+  as soon as the GPU signals, and wakes for nothing else; only on a device
+  that gives no such files does it look at pending fences every
+  millisecond.
 - **Checking.** Commands are copied out of the shared memory and checked
   word by word before Gallium's calls carry them out: a client can fail its
   own context, never the renderer. Gallium's state cache (`cso_context`)

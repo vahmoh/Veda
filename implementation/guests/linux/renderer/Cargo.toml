@@ -25,6 +25,7 @@ abi = { workspace = true }
 ipc = { workspace = true }
 proto = { workspace = true }
 guest-sys = { workspace = true }
+rustix = { workspace = true }
 
 [lints]
 workspace = true

@@ -23,6 +23,15 @@
 //! reaches a GPU's driver as a dma-buf of the VMO, which the GPU reads and
 //! writes through the IOMMU, and softpipe as the VMO mapped here.
 //!
+//! The program waits for its clients and the GPU at once, in one `poll` of
+//! Linux's files: for connections and each connection's requests through
+//! watches of the bridge's (files readable while a channel is), and for
+//! each context's oldest pending fence through the GPU driver's sync_file
+//! of it (readable once the fence has signaled). So it wakes when a client
+//! asks or a fence signals, and writes the fence word then; only on a
+//! device that gives no such files does it look at pending fences every
+//! millisecond.
+//!
 //! The renderer's clients are Veda's processes, which it knows by the
 //! identity the registry gives their connections: each process has a few
 //! connections at most, and its contexts' memory and the memory it gives
@@ -33,19 +42,21 @@
 //! GPU, and what to log.
 
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::os::fd::{AsRawFd, IntoRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::ptr::{NonNull, null_mut};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use std::collections::BTreeMap;
 
-use abi::{Rights, map_flags, signals};
+use abi::{RawHandle, Rights, map_flags, signals};
 use guest_sys::idle;
-use ipc::{Bytes, WaitSet};
+use ipc::Bytes;
 use proto::gpu::{GpuError, ResourceSpec, Session, gpu};
+use rt::guest::Watch;
 use rt::object::{Channel, Event, Vmo};
 use rt::vm::Mapping;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
 /// A session's memory: its header page (the fence word, first), the
 /// command area, then the shared area.
@@ -67,8 +78,12 @@ const TOTAL_IMPORT_BYTES: u64 = 1 << 30;
 /// The most pieces of memory from outside a context may have softpipe
 /// render into (mapped here until the context goes, as the decoder needs).
 const MAX_IMPORTS: usize = 4;
-/// How often signaling fences are looked for while some are pending.
+/// How often a context's pending fences are looked at when no file stands
+/// for them (the GPU's driver gave none).
 const POLL_NS: u64 = 1_000_000;
+/// How long a watch that failed (the monitor did not keep its wait, at its
+/// limits) is left before it is made again.
+const WATCH_AGAIN_NS: u64 = 100_000_000;
 /// How long a renderer started again tries for the service's name, which
 /// the one before it holds until Veda sees it gone.
 const REGISTER_FOR: Duration = Duration::from_secs(10);
@@ -130,6 +145,7 @@ mod ffi {
         pub fn vr_submit(ctx: *mut Context, words: *const u32, count: usize) -> c_int;
         pub fn vr_fence(ctx: *mut Context, seq: *mut u64) -> c_int;
         pub fn vr_fence_signaled(ctx: *mut Context) -> u64;
+        pub fn vr_fence_fd(ctx: *mut Context, seq: *mut u64) -> c_int;
     }
 }
 
@@ -143,6 +159,9 @@ struct Device {
     import: c_int,
 }
 
+/// Whether a fence had no file to wait for it on (said once).
+static UNWAITED: AtomicBool = AtomicBool::new(false);
+
 /// A client's context, and the memory it shares with the client.
 struct Context {
     ctx: NonNull<ffi::Context>,
@@ -151,6 +170,10 @@ struct Context {
     /// The last fence queued, and the last written to the fence word.
     queued: u64,
     signaled: u64,
+    /// The oldest pending fence, waited for: a file that becomes readable
+    /// once it has signaled (the GPU driver's sync_file), and its number.
+    /// None while no fence is pending, or the driver gave no file.
+    waiting: Option<(OwnedFd, u64)>,
     /// The memory from outside its resources render into, by resource:
     /// its bytes, and, for softpipe, its mapping here.
     imports: BTreeMap<u32, (u64, Option<Mapping>)>,
@@ -170,6 +193,12 @@ impl Context {
         self.signaled < self.queued
     }
 
+    /// Whether a fence is pending that no file stands for: its fences are
+    /// looked at every [`POLL_NS`].
+    fn unwaited(&self) -> bool {
+        self.pending() && self.waiting.is_none()
+    }
+
     /// What it uses: its memory, the memory it renders into.
     fn usage(&self) -> Usage {
         let retired: u64 = self.retired.iter().map(|m| m.len() as u64).sum();
@@ -187,18 +216,37 @@ impl Context {
     }
 
     /// Writes the number of the last fence that signaled into the fence
-    /// word, and tells the client when it has moved.
+    /// word, and tells the client when it has moved; then, while fences are
+    /// pending, has the file of the oldest to wait for.
     fn publish(&mut self) {
         // SAFETY: a live context.
         let done = unsafe { ffi::vr_fence_signaled(self.ctx.as_ptr()) };
-        if done <= self.signaled {
-            return;
+        if done > self.signaled {
+            self.signaled = done;
+            // SAFETY: the fence word is the mapping's first, which is page
+            // aligned and outlives this.
+            unsafe { (*self.memory.as_ptr().cast::<AtomicU64>()).store(done, Ordering::Release) };
+            let _ = self.fences.signal();
         }
-        self.signaled = done;
-        // SAFETY: the fence word is the mapping's first, which is page
-        // aligned and outlives this.
-        unsafe { (*self.memory.as_ptr().cast::<AtomicU64>()).store(done, Ordering::Release) };
-        let _ = self.fences.signal();
+        // Its fence has signaled: a later one is the oldest pending now.
+        if self.waiting.as_ref().is_some_and(|&(_, seq)| seq <= self.signaled) {
+            self.waiting = None;
+        }
+        if self.unwaited() {
+            let mut seq = 0;
+            // SAFETY: a live context, whose fences vr_fence_signaled has
+            // just looked at.
+            let fd = unsafe { ffi::vr_fence_fd(self.ctx.as_ptr(), &mut seq) };
+            if fd >= 0 {
+                // SAFETY: a descriptor the decoder made for the caller,
+                // which nothing else owns.
+                self.waiting = Some((unsafe { OwnedFd::from_raw_fd(fd) }, seq));
+            } else if !UNWAITED.swap(true, Ordering::Relaxed) {
+                println!(
+                    "renderer: no file to wait for a fence on (the GPU's driver gave none): looking every millisecond"
+                );
+            }
+        }
     }
 }
 
@@ -210,7 +258,57 @@ impl Drop for Context {
     }
 }
 
+/// A handle the program waits for among its files: through a watch of the
+/// bridge's (`rt::guest::Watch`: a file readable while one of the handle's
+/// signals is active), which is made again a while after it fails (the
+/// monitor did not keep its wait, at its limits).
+struct Watched {
+    handle: RawHandle,
+    signals: u32,
+    /// The watch; once it failed, when to make it again.
+    watch: Result<Watch, u64>,
+}
+
+impl Watched {
+    fn new(handle: RawHandle, signals: u32) -> Result<Watched, abi::Error> {
+        Ok(Watched { handle, signals, watch: Ok(Watch::new(handle, signals)?) })
+    }
+
+    /// The watch's file, while it has one.
+    fn file(&self) -> Option<BorrowedFd<'_>> {
+        self.watch.as_ref().ok().map(AsFd::as_fd)
+    }
+
+    /// What the watch saw, once `poll` found its file ready: the signals
+    /// active then ([`Watch::take`]). A watch that failed goes, to be made
+    /// again [`WATCH_AGAIN_NS`] later.
+    fn take(&mut self) -> Result<Option<u32>, abi::Error> {
+        let Ok(watch) = &self.watch else { return Ok(None) };
+        let taken = watch.take(true);
+        if taken.is_err() {
+            self.watch = Err(rt::time::now_ns().saturating_add(WATCH_AGAIN_NS));
+        }
+        taken
+    }
+
+    /// Makes the watch again, if it failed long enough before `now`; when
+    /// to try next, while it has none.
+    fn renew(&mut self, now: u64) -> Option<u64> {
+        match self.watch {
+            Ok(_) => None,
+            Err(at) if now < at => Some(at),
+            Err(_) => {
+                self.watch = Watch::new(self.handle, self.signals).map_err(|_| now.saturating_add(WATCH_AGAIN_NS));
+                self.watch.as_ref().err().copied()
+            }
+        }
+    }
+}
+
 struct Client {
+    /// Its channel readable or closed, waited for (the watch goes before
+    /// the channel does).
+    requests: Watched,
     channel: Channel,
     context: Option<Context>,
     /// Its process (its id; 0 if the registry did not say).
@@ -324,6 +422,7 @@ impl gpu::Server for Serve<'_> {
             fences,
             queued: 0,
             signaled: 0,
+            waiting: None,
             imports: BTreeMap::new(),
             retired: Vec::new(),
         });
@@ -535,6 +634,73 @@ fn read_client(device: &Device, clients: &mut [Client], i: usize, commands: &mut
     }
 }
 
+/// Takes the connections that came, within the most connections, of all
+/// and of the process.
+fn accept(listener: &Channel, clients: &mut Vec<Client>) {
+    while let Some((channel, who)) = proto::accept_with_identity(listener) {
+        let its = clients.iter().filter(|c| c.process == who.koid).count();
+        if clients.len() >= MAX_CLIENTS || its >= PROCESS_CLIENTS {
+            println!("renderer: {} (process {}) has the most connections; refused one", who.name, who.koid);
+            continue;
+        }
+        match Watched::new(channel.raw(), signals::READABLE | signals::PEER_CLOSED) {
+            Ok(requests) => clients.push(Client { requests, channel, context: None, process: who.koid }),
+            Err(e) => println!("renderer: cannot wait for {}'s requests ({e}); refused a connection", who.name),
+        }
+    }
+}
+
+/// What `poll` found ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ready {
+    /// The service's channel: connections came.
+    Connections,
+    /// Client `i`'s channel: it asked, or closed.
+    Requests(usize),
+    /// Client `i`'s context's oldest pending fence has signaled.
+    Fence(usize),
+}
+
+/// Waits until a connection comes, a client asks or closes, or the GPU
+/// signals a context's oldest pending fence (or it is time to look at
+/// fences no file stands for, or to make a failed watch again): what `poll`
+/// found ready.
+fn wait(connections: &mut Watched, clients: &mut [Client]) -> rustix::io::Result<Vec<Ready>> {
+    let now = rt::time::now_ns();
+    let mut until = connections.renew(now);
+    for c in clients.iter_mut() {
+        let next = c.requests.renew(now);
+        let look = c.context.as_ref().is_some_and(Context::unwaited).then(|| now.saturating_add(POLL_NS));
+        until = until.into_iter().chain(next).chain(look).min();
+    }
+    let mut fds = Vec::with_capacity(1 + 2 * clients.len());
+    let mut whose = Vec::with_capacity(fds.capacity());
+    if let Some(file) = connections.file() {
+        fds.push(PollFd::from_borrowed_fd(file, PollFlags::IN));
+        whose.push(Ready::Connections);
+    }
+    for (i, c) in clients.iter().enumerate() {
+        if let Some(file) = c.requests.file() {
+            fds.push(PollFd::from_borrowed_fd(file, PollFlags::IN));
+            whose.push(Ready::Requests(i));
+        }
+        if let Some((file, _)) = c.context.as_ref().and_then(|ctx| ctx.waiting.as_ref()) {
+            fds.push(PollFd::new(file, PollFlags::IN));
+            whose.push(Ready::Fence(i));
+        }
+    }
+    let timeout = until.map(|at| {
+        let ns = at.saturating_sub(now);
+        Timespec { tv_sec: (ns / 1_000_000_000) as i64, tv_nsec: (ns % 1_000_000_000) as i64 }
+    });
+    match poll(&mut fds, timeout.as_ref()) {
+        Ok(_) => Ok(fds.iter().zip(whose).filter(|(f, _)| !f.revents().is_empty()).map(|(_, w)| w).collect()),
+        // A signal: everything is looked at again.
+        Err(rustix::io::Errno::INTR) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Serves `gpu` on `device` for ever.
 fn serve(device: &Device, trace: bool) -> ! {
     let since = std::time::Instant::now();
@@ -548,59 +714,62 @@ fn serve(device: &Device, trace: bool) -> ! {
             }
         }
     };
+    let mut connections = match Watched::new(listener.raw(), signals::READABLE) {
+        Ok(w) => w,
+        Err(e) => {
+            println!("renderer: cannot wait for connections ({e})");
+            idle();
+        }
+    };
     println!("renderer: serving gpu on {}", device.name);
     let mut commands = vec![0u32; COMMANDS / 4];
     let mut clients: Vec<Client> = Vec::new();
-    // Whether a wait was refused (said once).
+    // Whether waiting failed (said once).
     let mut refused = false;
-    const LISTENER: u64 = u64::MAX;
-    loop {
-        let mut ws = WaitSet::new();
-        ws.add(listener.raw(), signals::READABLE, LISTENER);
-        for (i, c) in clients.iter().enumerate() {
-            ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, i as u64);
+    let mut failed = |what: &str| {
+        if !refused {
+            println!("renderer: {what}; trying again in a while");
+            refused = true;
         }
-        let pending = clients.iter().any(|c| c.context.as_ref().is_some_and(Context::pending));
-        let deadline = if pending { rt::time::now_ns() + POLL_NS } else { abi::DEADLINE_INFINITE };
-        let ready = match ws.wait(deadline) {
-            Ok(ready) => ready,
-            // The monitor did not keep the wait (at its limits): not again
-            // at once.
-            Err(e) => {
-                if !refused {
-                    println!("renderer: cannot wait ({e}); waiting a little");
-                    refused = true;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-                Vec::new()
-            }
-        };
-        for ctx in clients.iter_mut().filter_map(|c| c.context.as_mut()) {
-            if ctx.pending() {
+    };
+    loop {
+        let ready = wait(&mut connections, &mut clients).unwrap_or_else(|e| {
+            failed(&format!("cannot wait ({e})"));
+            std::thread::sleep(Duration::from_millis(100));
+            Vec::new()
+        });
+        // Fences first: those of the contexts whose oldest pending fence
+        // has signaled, and those no file stands for.
+        for (i, c) in clients.iter_mut().enumerate() {
+            if let Some(ctx) = c.context.as_mut()
+                && (ctx.unwaited() || ready.contains(&Ready::Fence(i)))
+            {
                 ctx.publish();
             }
         }
         // Clients, last to first (dropping one moves the last into its
         // place), then new connections. What a closing client sent before
         // it closed is carried out.
-        let mut ready_clients: Vec<(usize, u32)> =
-            ready.iter().filter(|(k, _)| *k != LISTENER).map(|&(k, o)| (k as usize, o)).collect();
-        ready_clients.sort_by_key(|&(i, _)| std::cmp::Reverse(i));
-        for (i, observed) in ready_clients {
+        let mut asked: Vec<usize> =
+            ready.iter().filter_map(|r| if let Ready::Requests(i) = *r { Some(i) } else { None }).collect();
+        asked.sort_by_key(|&i| std::cmp::Reverse(i));
+        for i in asked {
+            let observed = match clients[i].requests.take() {
+                Ok(observed) => observed.unwrap_or(0),
+                Err(e) => {
+                    failed(&format!("a watch of a client's failed ({e})"));
+                    continue;
+                }
+            };
             let keep = observed & signals::READABLE == 0 || read_client(device, &mut clients, i, &mut commands, trace);
             if !keep || observed & signals::PEER_CLOSED != 0 {
                 clients.swap_remove(i);
             }
         }
-        if ready.iter().any(|&(k, _)| k == LISTENER) {
-            // Within the most connections, of all and of the process.
-            while let Some((channel, who)) = proto::accept_with_identity(&listener) {
-                let its = clients.iter().filter(|c| c.process == who.koid).count();
-                if clients.len() < MAX_CLIENTS && its < PROCESS_CLIENTS {
-                    clients.push(Client { channel, context: None, process: who.koid });
-                } else {
-                    println!("renderer: {} (process {}) has the most connections; refused one", who.name, who.koid);
-                }
+        if ready.contains(&Ready::Connections) {
+            match connections.take() {
+                Ok(_) => accept(&listener, &mut clients),
+                Err(e) => failed(&format!("the watch for connections failed ({e})")),
             }
         }
     }
