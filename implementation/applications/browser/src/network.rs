@@ -19,11 +19,15 @@ pub struct Network {
     /// When to watch again, if it does not.
     rewatch_at: u64,
     connectivity: Connectivity,
+    /// How many times a page that failed for want of a network may have
+    /// loaded since (it came up, or changed while up): a load that was
+    /// under way meanwhile and fails after is tried again.
+    pub changes: u64,
 }
 
 impl Network {
     pub fn new() -> Network {
-        let mut n = Network { watch: None, rewatch_at: 0, connectivity: Connectivity::Offline };
+        let mut n = Network { watch: None, rewatch_at: 0, connectivity: Connectivity::Offline, changes: 0 };
         n.rewatch(0);
         n
     }
@@ -52,7 +56,7 @@ impl Network {
         if let Ok(s) = net::status() {
             self.connectivity = s.connectivity;
         }
-        self.up()
+        self.came()
     }
 
     /// Takes the service's news: whether the network changed and is up (a
@@ -74,11 +78,21 @@ impl Network {
                 }
             }
         }
-        changed && self.up()
+        changed && self.came()
+    }
+
+    /// Whether there is a network to try: if so, a page that failed for
+    /// want of one may load now ([`Network::changes`]).
+    fn came(&mut self) -> bool {
+        let up = self.up();
+        if up {
+            self.changes += 1;
+        }
+        up
     }
 
     /// Whether there is a network to try.
-    fn up(&self) -> bool {
+    pub fn up(&self) -> bool {
         !matches!(self.connectivity, Connectivity::Offline)
     }
 }

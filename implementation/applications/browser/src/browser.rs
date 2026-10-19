@@ -368,6 +368,7 @@ impl Browser {
             tab.problem = None;
             tab.loading = true;
             tab.progress = 0.05;
+            tab.network_seen = self.network.changes;
         }
         self.engine.load(view, target);
     }
@@ -609,6 +610,16 @@ impl Browser {
             Event::Uri(view, _) | Event::LoadFailed { view, .. } | Event::TlsError { view, .. } => {
                 if let Some(t) = self.tab_of(*view) {
                     t.apply(&event);
+                }
+                // A page that failed for want of a network, which came (or
+                // changed) while it was loading: it may load now, and no
+                // news of the network will come to say so.
+                if let Event::LoadFailed { uri, failure: engine::Failure::Network | engine::Failure::Host, .. } = &event
+                    && let Some(i) = self.index_of(*view)
+                    && self.tabs.get(i).is_some_and(|t| t.network_seen != self.network.changes)
+                    && self.network.up()
+                {
+                    self.go(i, &uri.clone());
                 }
                 if shown_view == Some(*view) {
                     self.sync_address();

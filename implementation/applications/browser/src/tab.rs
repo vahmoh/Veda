@@ -54,6 +54,10 @@ pub struct Tab {
     pub typed: Option<String>,
     /// The size the view was last given.
     pub size: (i32, i32),
+    /// The network's changes as the browser last sent it somewhere
+    /// (`network::Network::changes`): the engine's news of the load may
+    /// come after the network's of a change that came while it loaded.
+    pub network_seen: u64,
 }
 
 impl Tab {
@@ -79,6 +83,7 @@ impl Tab {
             found: None,
             typed: None,
             size: (0, 0),
+            network_seen: 0,
         }
     }
 
