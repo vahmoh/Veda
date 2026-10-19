@@ -222,7 +222,8 @@ machine:
 
 * **Painted on the CPU**, each page as one picture: WebKit paints what
   changed straight into the frame's shared memory. This is the mode on a
-  machine without a GPU, or with the setting off.
+  machine without a GPU, or with the setting off, and for the pages of a
+  web process the GPU gives no context (below).
 * **Composited on the GPU**: WebKit paints each layer of the page into
   tiles, and its compositor (TextureMapper) draws the layers with OpenGL
   ES, so scrolling, CSS animations and transforms run on the compositor's
@@ -236,10 +237,20 @@ finds a GPU that can render (the `gpu` service is registered and has what
 which in the log (`browser: pages are composited on the GPU: RENDERER`,
 or `painted on the CPU`, with why where memory decided). A browser
 started before the GPU's service, as the system starts, paints on the CPU
-until it starts again. In software,
-compositing would take far more of the processor than painting does, so
-it is never chosen there. Measured in QEMU (4 processors, the browser's
-window 1088x596, a GPU through virgl on the host's Intel Xe):
+until it starts again.
+
+Compositing in software would take far more of the processor than
+painting does (below), so it is never done. Each web process asks the GPU
+for its OpenGL ES context as its first page is made, and where the GPU
+gives none (it is at [its limits](DRIVERVM.md#vedas-drivers-for-linux),
+it does not answer, or its renderer is not running, as while its driver
+VM starts again), `egl` makes none in software: `eglCreateContext` fails,
+and the process paints its pages on the CPU, as with the setting off. The log says why, then what the
+process does (`egl: no context (EGL_BAD_ALLOC): WHY; OpenGL ES renders on
+the GPU or not at all`, `Web process N paints its pages on the CPU: the
+GPU gave it no OpenGL ES context`); the processes started after it ask
+again. Measured in QEMU (4 processors, the browser's window 1088x596, a
+GPU through virgl on the host's Intel Xe):
 
 | Page | Painted on the CPU | Composited on the GPU | Composited in software |
 |------|-------------------|-----------------------|------------------------|
@@ -264,6 +275,12 @@ functions and OpenGL ES 3.0's, over `gl`, Veda's OpenGL ES in Rust
   each, swapped in under the group's lock as a thread calls: their calls,
   from any threads, take turns. A binding to an object another context
   deleted is forgotten as the context comes back.
+* **On the GPU or not at all**: a share group renders on the GPU (virgl,
+  through the `gpu` service), never in software, whose worker threads, one
+  on every processor, would take them all. A context of a group of its own
+  that the GPU gives no context fails with `EGL_BAD_ALLOC`, and the log
+  says why (`gl::veda::NoGpu`); one that shares a group renders with the
+  group's. (On the host, for the tests, groups render on the processor.)
 * **Each thread** has its current context (`eglMakeCurrent`, with EGL's
   rules: a context current in another thread cannot be made current);
   fences (`EGL_KHR_fence_sync`, `EGL_KHR_wait_sync`) and GL's syncs work
@@ -271,8 +288,9 @@ functions and OpenGL ES 3.0's, over `gl`, Veda's OpenGL ES in Rust
 * **What is not there**: client-side vertex and index arrays (draws that
   would read them fail with `GL_INVALID_OPERATION`, as with a vertex array
   object bound), EGL images, and robustness. A context whose GPU stopped
-  answering draws nothing, so a page composited on a GPU that went away
-  stops changing until the browser starts again.
+  answering draws nothing, so the pages of a web process whose GPU went
+  away stop changing until the browser starts again (tabs opened while it
+  is gone, in processes of their own, are painted on the CPU).
 
 `gl` also gained what WebKit's compositor uses: surfaceless contexts and
 switching a context's surface (`Config::surfaceless`,
@@ -525,9 +543,10 @@ ports of WebKit give the network process a sandbox extension:
 | Test | What it covers |
 |------|----------------|
 | `browser-core`'s unit tests (`cargo test -p browser-core`) | Addresses and search, history, bookmarks, the session, settings, downloads' names, tabs, keys |
-| `egl`'s and `gl`'s unit tests | The display and configurations WebKit looks for, drawing surfaceless and reading BGRA back, contexts shared across threads (and EGL's access rules), fences, pbuffers, every function by name, buffers; in `gl`, sharing, deletion across contexts, surfaceless contexts, BGRA uploads and reads, and WebKit's compositing at a page's size (Skia's tiles uploaded whole and in parts, an image turned round by TextureMapper's shader, clears and solid fills, the frame read back whole), which `GL_TEST_BACKEND` runs on a GPU too |
+| `egl`'s and `gl`'s unit tests | The display and configurations WebKit looks for, drawing surfaceless and reading BGRA back, contexts shared across threads (and EGL's access rules), a context whose group would have no renderer failing with `EGL_BAD_ALLOC` rather than rendering in software (one that shares a group still made), fences, pbuffers, every function by name, buffers; in `gl`, sharing, deletion across contexts, surfaceless contexts, BGRA uploads and reads, and WebKit's compositing at a page's size (Skia's tiles uploaded whole and in parts, an image turned round by TextureMapper's shader, clears and solid fills, the frame read back whole), which `GL_TEST_BACKEND` runs on a GPU too |
 | `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/src/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
 | `verification/ui/browser-memory.vts` | The browser on a machine of 1 GiB with a GPU: it paints pages on the CPU, as compositing them would take more memory than the machine can spare, and shows a page with no process running out of memory |
+| `verification/ui/browser-gpu-gone.vts` | The GPU gone while the browser composites on it (the driver VM's renderer, on softpipe, ended for good: `veda.stop`): a tab opened then has its web process given no context, `egl` refusing one in software and saying why, and its page painted on the CPU, the same, pixel for pixel, as it was composited |
 | `verification/agent/app-browser.vts` | The agent's actions, with the stand-in for the Voice Agent API: opening and reading pages (their scripts ran), the keyboard on a page the agent opened, back, tabs, finding, zooming, bookmarking, the time zone pages see, a PDF shown in WebKit's viewer (its text found there), and private tabs forgetting cookies; the pages' web processes and the network process sandboxed, as above, and GLib never complaining |
 | `verification/agent/app-browser-files.vts` | The network process and the user's files: a download saved in Downloads and opened from there (`file://`); a picture chosen for a page to upload read whole, through its copy, never the picture itself; a page in Documents opened (`file://`) in a tab of its own, its folder lent to the network process, the picture beside it shown and one in Pictures, which the page reaches for outside its folder, refused, and a page's own navigation to Pictures failing, and its link to Pictures in a new window (`target=_blank`) failing alike, in its tab, no window opened and its process going on, Pictures never lent; the folder taken back as the tab closes, which a window one of its pages opened outlasts, and forgotten for every web process: the network process refuses the window the picture, never reading it; a window that another page there opened with a frame of a page of the folder in it keeping the folder lent as that page's tab closes (it shows the picture), the frame's page going to a fragment and pushing a state, its process going on, and the folder taken back as the window closes; the page opened again, its folder lent again, for it alone: the first window, whose process was allowed the folder before, refused the picture again, and its own navigation to a page of the folder failing, saying so, the page unread; a site's IndexedDB kept as the browser starts again, and the temporary files gone as it closed |
 | `verification/c/posix.c` | The POSIX layer's `timerfd`, memory files, suspending threads, the system image's files mapped in place and time zones, among the rest; and `<veda/sandbox.h>`: a child confines itself as a web process does (places to read and to change, one service, no processes or new executable memory), is refused all it gave up, keeps the rest (code written into memory made executable before runs), and starts a child that is confined alike; and loans: a place lent to a confined child, which reads it and what is inside it, changes none of it, finds nothing beside it, and takes the loan once, with its own secret and for its own place, as a sandboxed program lends nothing and nothing holding the home folder is lent; and taken back: the place gone from a confined child that took it, but for the file it has open there, a loan taken back before it is taken taking nothing |
@@ -559,7 +578,8 @@ without it.
   extensions or printing.
 * **PDFs**: the agent reads none of a PDF's text, which is in its
   viewer's frame, not the page's, though finding finds it there.
-* **The GPU** is chosen as the browser starts (above), and losing it
-  stops composited pages until the browser starts again.
+* **The GPU** is chosen as the browser starts (above), and a web process
+  it gives no context paints its pages on the CPU; losing it stops the
+  pages of the processes that had it until the browser starts again.
 * **Files** changed behind the browser's back are noticed by polling, as
   Veda has no inotify.

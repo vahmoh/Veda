@@ -661,7 +661,9 @@ fn context_attributes(list: &[(i64, i64)]) -> Result<(), EGLint> {
     }
 }
 
-/// `eglCreateContext`.
+/// `eglCreateContext`: `EGL_BAD_ALLOC` for a context of a share group of
+/// its own that has no renderer (in Veda, when the GPU gives none: see
+/// [`current`]), and why in the log.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn eglCreateContext(
     dpy: EGLDisplay,
@@ -688,9 +690,16 @@ pub unsafe extern "C" fn eglCreateContext(
         }
     };
     let id = o.handle();
-    let context = Arc::new(Context::new(id, i, CONFIGS[i].gl(), share.as_deref()));
-    o.contexts.insert(id, context);
-    ok(handle(id))
+    match Context::new(id, i, CONFIGS[i].gl(), share.as_deref()) {
+        Ok(context) => {
+            o.contexts.insert(id, Arc::new(context));
+            ok(handle(id))
+        }
+        Err(why) => {
+            eprintln!("egl: no context (EGL_BAD_ALLOC): {why}; OpenGL ES renders on the GPU or not at all");
+            fail(EGL_BAD_ALLOC, none)
+        }
+    }
 }
 
 /// `eglDestroyContext`: its handle goes; it lives on while current.

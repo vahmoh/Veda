@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The GPU goes away while the browser composites pages on it: the driver
+# VM's renderer (softpipe here, whatever the host has) ends for good, 120 s
+# after Linux started, as one that cannot work would. A tab opened then,
+# whose web process the GPU gives no OpenGL ES context, has its page
+# painted on the CPU, never composited in software, and the log says so;
+# the page is, pixel for pixel, what it was composited.
+requires web
+web-server
+gpu off
+memory 2048
+agent-asleep
+boot-cmdline "drivervm.renderer=softpipe"
+boot-cmdline "drivervm.cmdline=veda.stop=renderer:120"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "service 'gpu' registered" 60
+wait 4
+key meta_l
+wait 2
+type "browser"
+key ret
+wait-serial "browser: pages are composited on the GPU: softpipe" 30
+wait 4
+type "{web}/second"
+key ret
+wait 8
+shot target/veda/browser-gpu-gone-1-composited.png
+# The renderer ends for good.
+wait-serial "veda: ending renderer for good, as asked" 150
+wait-serial "veda: renderer ended" 10
+# A new tab, in a web process of its own, which the GPU gives no context:
+# Veda's registry finds the GPU's service gone as the process asks for it.
+key ctrl-t
+wait 2
+type "{web}/second"
+key ret
+wait-serial "service 'gpu' is gone" 30
+wait-serial "egl: no context (EGL_BAD_ALLOC): there is no GPU service" 30
+wait-serial "paints its pages on the CPU: the GPU gave it no OpenGL ES context" 10
+wait 8
+shot target/veda/browser-gpu-gone-2-painted.png
+# The page as it was composited, pixel for pixel (the tabs differ).
+expect-same target/veda/browser-gpu-gone-1-composited.png target/veda/browser-gpu-gone-2-painted.png 0.08 0.18 0.92 0.91
+reject-serial "page stopped working"
+reject-serial "browser crashed"

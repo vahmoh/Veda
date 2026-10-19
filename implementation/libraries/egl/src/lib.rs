@@ -20,8 +20,11 @@
 //!   program that links this library, as every program on Veda links its
 //!   libraries ([`procs`]).
 //! * In Veda, a share group renders on the GPU (virgl, through the `gpu`
-//!   service) if there is one, and on a worker thread per processor
-//!   otherwise; elsewhere (the host's tests) on the processor.
+//!   service), or not at all: where the GPU gives it no context (there is
+//!   none, it is at its limits or starting again), `eglCreateContext` fails
+//!   with `EGL_BAD_ALLOC` and the log says why, as OpenGL ES in software
+//!   would take every processor. Elsewhere (the host's tests) it renders on
+//!   the processor.
 //!
 //! What OpenGL ES's C interface has that `gl` does not take: vertex and
 //! index data in the program's memory (client-side arrays), which fail with
@@ -41,8 +44,9 @@ pub mod egl;
 pub mod gles;
 pub mod procs;
 
-/// The GPU's renderer, if contexts made now render on one ([`current`]);
-/// otherwise they render in software, which a program may rather not.
+/// The GPU's renderer, if contexts made now can render on one
+/// ([`current`]): in Veda, a context of a share group of its own fails
+/// without it.
 pub fn gpu_renderer() -> Option<String> {
     #[cfg(target_os = "veda")]
     return gl::veda::gpu_renderer();

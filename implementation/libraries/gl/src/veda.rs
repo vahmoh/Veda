@@ -9,18 +9,65 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::fmt;
 use core::ops::Range;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use proto::gpu::{ResourceSpec, gpu};
+use ipc::IpcError;
+use proto::gpu::{GpuError, ResourceSpec, gpu};
 use rt::object::{Event, Vmo};
 use rt::pool::ThreadPool;
 use rt::vm::Mapping;
 
 use crate::backend::{External, Memory, OutOfMemory};
 use crate::soft::{SoftBackend, Workers};
-use crate::virgl::{Lost, ResourceArgs, Transport, VirglBackend};
+use crate::virgl::{Lost, ResourceArgs, Transport, Unsupported, VirglBackend};
 use crate::{Config, Context};
+
+/// Why a context cannot render on the GPU.
+#[derive(Debug)]
+pub enum NoGpu {
+    /// The `gpu` service is not registered: there is no GPU to render on,
+    /// or its renderer is not running (the driver VM is starting, or the
+    /// renderer ended).
+    NoService,
+    /// The service cannot be reached from this process (its sandbox), or
+    /// the registry is gone.
+    Unreachable,
+    /// The renderer took no context: the connection closed (the renderer
+    /// has the most it takes, of all processes or of this one, or it went
+    /// away), or it did not answer.
+    NoAnswer(IpcError),
+    /// The renderer refused a context (out of memory: at its limits).
+    Refused(GpuError),
+    /// The renderer gave a session against the protocol's rules (why): it
+    /// is not used.
+    BadSession(&'static str),
+    /// The session's memory cannot be mapped here.
+    NoMemory,
+    /// The renderer (its name) cannot do what contexts need.
+    Unsupported(String, Unsupported),
+}
+
+impl fmt::Display for NoGpu {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoGpu::NoService => f.write_str("there is no GPU service (no GPU, or its renderer is not running)"),
+            NoGpu::Unreachable => f.write_str("the GPU service cannot be reached from this process"),
+            NoGpu::NoAnswer(IpcError::PeerClosed) => {
+                f.write_str("the GPU service closed the connection (it is at its limits, or gone)")
+            }
+            NoGpu::NoAnswer(IpcError::Kernel(abi::Error::TimedOut)) => {
+                f.write_str("the GPU service did not answer in time")
+            }
+            NoGpu::NoAnswer(e) => write!(f, "the GPU service did not answer ({e})"),
+            NoGpu::Refused(e) => write!(f, "the GPU refused a context ({e})"),
+            NoGpu::BadSession(why) => write!(f, "the GPU service gave a context {why}"),
+            NoGpu::NoMemory => f.write_str("the memory of a context on the GPU cannot be mapped"),
+            NoGpu::Unsupported(renderer, why) => write!(f, "cannot render on the GPU, {renderer}: {why}"),
+        }
+    }
+}
 
 impl Workers for ThreadPool {
     fn threads(&self) -> usize {
@@ -41,13 +88,18 @@ pub fn software_context(config: Config) -> Context {
 }
 
 /// A context on the GPU if there is one (the `gpu` service), with the
-/// software renderer otherwise.
+/// software renderer otherwise (saying why, when there is a GPU service).
 pub fn context(config: Config) -> Context {
-    gpu_context(config).unwrap_or_else(|| software_context(config))
+    gpu_context(config).unwrap_or_else(|e| {
+        if !matches!(e, NoGpu::NoService) {
+            rt::println!("{e}: rendering in software");
+        }
+        software_context(config)
+    })
 }
 
-/// A context on the GPU, if there is one.
-pub fn gpu_context(config: Config) -> Option<Context> {
+/// A context on the GPU, or why there is none.
+pub fn gpu_context(config: Config) -> Result<Context, NoGpu> {
     backend_context(GpuTransport::connect()?, config)
 }
 
@@ -60,12 +112,12 @@ pub fn gpu_renderer() -> Option<String> {
     if !registered {
         return None;
     }
-    let t = GpuTransport::connect_to(gpu::NAME, CALL_NS)?;
+    let t = GpuTransport::connect_to(gpu::NAME, CALL_NS).ok()?;
     let renderer = String::from(t.renderer());
     VirglBackend::new(Box::new(t)).ok().map(|_| renderer)
 }
 
-fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
+fn backend_context(t: GpuTransport, config: Config) -> Result<Context, NoGpu> {
     let renderer = String::from(t.renderer());
     match VirglBackend::new(Box::new(t)) {
         Ok(b) => {
@@ -81,12 +133,9 @@ fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
                     rt::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
                 }
             }
-            Some(c)
+            Ok(c)
         }
-        Err(e) => {
-            rt::println!("cannot render on the GPU: {:?}", e);
-            None
-        }
+        Err(e) => Err(NoGpu::Unsupported(renderer, e)),
     }
 }
 
@@ -113,14 +162,18 @@ pub struct GpuTransport {
 }
 
 impl GpuTransport {
-    /// Opens a context, if the GPU service exists.
-    pub fn connect() -> Option<GpuTransport> {
-        let registered = proto::with_registry(|r| r.list()).ok()?.ok()?.iter().any(|s| s == gpu::NAME);
+    /// Opens a context through the GPU service (waiting a little for it as
+    /// the system starts), or says why there is none.
+    pub fn connect() -> Result<GpuTransport, NoGpu> {
+        let services = proto::with_registry(|r| r.list()).map_err(|_| NoGpu::Unreachable)?;
+        let registered = services.map_err(|_| NoGpu::Unreachable)?.iter().any(|s| s == gpu::NAME);
         let booting = rt::time::now_ns() < BOOT_NS;
         if !registered && !booting {
-            return None;
+            return Err(NoGpu::NoService);
         }
         GpuTransport::connect_to(gpu::NAME, if registered { CALL_NS } else { BOOT_WAIT_NS })
+            // It did not come in the time it was given.
+            .map_err(|e| if registered { e } else { NoGpu::NoService })
     }
 
     /// Opens a context through the service `name`, giving it `wait_ns` to
@@ -130,31 +183,20 @@ impl GpuTransport {
     /// whose areas break the protocol's rules (`proto::gpu::Session`), or
     /// whose memory is smaller than they say, is refused before anything of
     /// it is mapped.
-    pub fn connect_to(name: &str, wait_ns: u64) -> Option<GpuTransport> {
-        let client = gpu::Client::new(proto::connect(name).ok()?);
+    pub fn connect_to(name: &str, wait_ns: u64) -> Result<GpuTransport, NoGpu> {
+        let client = gpu::Client::new(proto::connect(name).map_err(|_| NoGpu::Unreachable)?);
         client.set_timeout(wait_ns);
-        let session = match client.open(SHARED) {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                rt::println!("the GPU refused a context: {}", e);
-                return None;
-            }
-            Err(_) => return None,
-        };
+        let session = client.open(SHARED).map_err(NoGpu::NoAnswer)?.map_err(NoGpu::Refused)?;
         client.set_timeout(CALL_NS);
-        let refuse = |why: &str| {
-            rt::println!("the GPU service ({}) gave a context {why}: it is not used", session.renderer);
-        };
         let Some(layout) = session.areas().layout(SHARED) else {
-            refuse("whose memory is laid out against the protocol's rules");
-            return None;
+            return Err(NoGpu::BadSession("whose memory is laid out against the protocol's rules"));
         };
         if session.memory.size().ok().is_none_or(|size| size < layout.size) {
-            refuse("with less memory than its areas take");
-            return None;
+            return Err(NoGpu::BadSession("with less memory than its areas take"));
         }
-        let map = Mapping::new(session.memory, layout.size, abi::map_flags::READ | abi::map_flags::WRITE).ok()?;
-        Some(GpuTransport {
+        let map = Mapping::new(session.memory, layout.size, abi::map_flags::READ | abi::map_flags::WRITE)
+            .map_err(|_| NoGpu::NoMemory)?;
+        Ok(GpuTransport {
             client,
             caps: session.caps.0,
             map: Arc::new(map),

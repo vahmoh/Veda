@@ -49,10 +49,11 @@ struct engine_config {
 	/* Cookies from sites other than the page's are refused. */
 	int block_third_party_cookies;
 	/* Pages are composited with OpenGL ES (Veda's, which the program links:
-	 * the egl library), on the GPU if there is one and in software if not,
-	 * which takes far more of the processor than painting on it: scrolling,
-	 * animations and CSS's 3D transforms and filters as the web has them.
-	 * Otherwise the CPU paints each page as one picture. */
+	 * the egl library), on the GPU: scrolling, animations and CSS's 3D
+	 * transforms and filters as the web has them. A web process the GPU
+	 * gives no context paints its pages on the CPU, as OpenGL ES renders
+	 * nothing in software, which would take far more of the processor than
+	 * painting. Otherwise the CPU paints each page as one picture. */
 	int accelerated;
 	/* The screen: its size and scale, and how many frames a second it
 	 * shows (for animations' timing). */

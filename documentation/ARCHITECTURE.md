@@ -659,7 +659,9 @@ Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `gl`
 (`implementation/libraries/gl`), in pure Rust. `gl::veda::context`
 renders on the GPU when the `gpu` service exists and its renderer has at
 least the draw buffers, vertex attributes and uniform blocks `gl` offers,
-and in software on every CPU otherwise.
+and in software on every CPU otherwise (saying why, where there is a GPU
+service); `gl::veda::gpu_context` renders on the GPU or says why it
+cannot (`NoGpu`: no service, its limits reached, no answer).
 
 - **Shaders.** `glsl` (`implementation/libraries/glsl`) parses, checks and
   links shaders and lowers each stage to an SSA form, which it optimises
@@ -681,9 +683,10 @@ and in software on every CPU otherwise.
   a program EGL 1.5 and OpenGL ES 3.0's C functions over `gl`: one
   surfaceless display, contexts that draw into framebuffer objects or
   pbuffers, each thread's current context, share groups whose calls take
-  turns, fences, and every function by name through `eglGetProcAddress`,
-  which is how libepoxy finds them for WebKit
-  ([The web browser](BROWSER.md#drawing-pages)).
+  turns and which render on the GPU or not at all (`eglCreateContext`
+  fails rather than render in software), fences, and every function by
+  name through `eglGetProcAddress`, which is how libepoxy finds them for
+  WebKit ([The web browser](BROWSER.md#drawing-pages)).
 - **The software renderer** (`gl::soft`) bins triangles into 64-pixel
   tiles, rasterises the tiles in parallel and shades 16 fragments at a
   time, with 4x multisampling, every ES 3.0 format, ETC2 and exact sRGB.

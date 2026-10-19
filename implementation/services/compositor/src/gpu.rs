@@ -470,7 +470,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         }
         rt::time::sleep(SERVICE_POLL);
     }
-    let t = GpuTransport::connect_to(gpu::NAME, CALL_NS).ok_or("the GPU service did not answer")?;
+    let t = GpuTransport::connect_to(gpu::NAME, CALL_NS).map_err(|e| e.to_string())?;
     let renderer = t.renderer().to_string();
     if renderer == "softpipe" {
         // Mesa's reference rasterizer, the tests' stand-in for a GPU: under

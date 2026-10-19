@@ -22,9 +22,12 @@
 //! with `veda.crash=SECONDS` Linux crashes (a panic) that long after it
 //! started, for the tests of its restart, and with `veda.kill=NAME:SECONDS`
 //! driver `NAME` is ended that long after (by SIGKILL, as Linux's OOM
-//! killer ends one), for the tests of a driver's.
+//! killer ends one), for the tests of a driver's; with
+//! `veda.stop=NAME:SECONDS` it is ended for good, as one that cannot work,
+//! for the tests of what goes on without it.
 
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use guest_sys::retry::Backoff;
@@ -59,6 +62,9 @@ fn has_class(classes: &[&str]) -> bool {
 /// The longest a driver waits to be started again.
 const MOST_WAIT: Duration = Duration::from_secs(60);
 
+/// The drivers ended for good (`veda.stop`), which are not started again.
+static STOPPED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// Runs driver `name` (from `/bin`, with `args`) on a thread of its own,
 /// and again after it ends: a second after, twice as long after each end
 /// in a row up to [`MOST_WAIT`]; a second after again once it ran that
@@ -75,6 +81,10 @@ fn keep_running(name: &'static str, args: &'static [&'static str]) {
                     return;
                 }
             };
+            if STOPPED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|n| n == name) {
+                println!("veda: {name} ended ({status}); not starting it again, as asked");
+                return;
+            }
             if started.elapsed() >= MOST_WAIT {
                 backoff.reset();
             }
@@ -134,16 +144,25 @@ fn main() {
             let _ = std::fs::write("/proc/sysrq-trigger", "c");
         });
     }
-    let kill = options.iter().find_map(|o| {
-        let (name, seconds) = o.strip_prefix("veda.kill=")?.split_once(':')?;
-        Some((name.to_string(), seconds.parse::<u64>().ok()?))
-    });
-    if let Some((name, seconds)) = kill {
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(seconds));
-            println!("veda: ending {name}, as asked");
-            kill_named(&name);
+    // A driver ended (`veda.kill`, then started again as after any end), or
+    // ended for good (`veda.stop`).
+    for (option, for_good) in [("veda.kill=", false), ("veda.stop=", true)] {
+        let end = options.iter().find_map(|o| {
+            let (name, seconds) = o.strip_prefix(option)?.split_once(':')?;
+            Some((name.to_string(), seconds.parse::<u64>().ok()?))
         });
+        if let Some((name, seconds)) = end {
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(seconds));
+                if for_good {
+                    println!("veda: ending {name} for good, as asked");
+                    STOPPED.lock().unwrap_or_else(|e| e.into_inner()).push(name.clone());
+                } else {
+                    println!("veda: ending {name}, as asked");
+                }
+                kill_named(&name);
+            });
+        }
     }
     for name in options.iter().filter_map(|o| o.strip_prefix("veda.run=")).flat_map(|l| l.split(',')) {
         match Command::new(format!("/bin/{name}")).status() {

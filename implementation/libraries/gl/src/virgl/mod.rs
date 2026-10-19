@@ -95,6 +95,18 @@ pub enum Unsupported {
     Lost,
 }
 
+impl core::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Unsupported::Caps => "its capabilities are missing or too old",
+            Unsupported::Transfers => "it cannot copy between resources and memory in its commands",
+            Unsupported::Limits => "it has fewer draw buffers, vertex attributes or uniform blocks than contexts offer",
+            Unsupported::Memory => "too little memory is shared with it, or not where queries need it",
+            Unsupported::Lost => "the device failed",
+        })
+    }
+}
+
 /// A resource, as this renderer keeps track of it.
 struct Res {
     desc: ResourceDesc,

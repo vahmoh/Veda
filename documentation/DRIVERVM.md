@@ -347,7 +347,9 @@ are Veda's too: both follow the TSC.
 `gpu`, in which `gl` sends virgl's commands, on Mesa's Gallium driver
 over the GPU's Linux driver: iris on i915, virgl on QEMU's virtio-gpu
 (which renders on the host's GPU), or softpipe for tests. Each connection
-gets a context and shared memory, bounded per process and in total. The
+gets a context and shared memory, bounded per process and in total: 8
+connections and 256 MiB of contexts' memory a process, 64 and 1 GiB in
+all; past them it refuses a context (`gl::veda::NoGpu` says why). The
 decoder (`decoder/`, C) checks every command before Gallium carries it
 out, and adapts shaders to each driver's conventions
 (`decoder/conventions.c`). The renderer polls a watch per connection (65
@@ -528,7 +530,7 @@ Its options are on the kernel command line:
 | `drivervm.run=PROGRAM,...` | Programs of the guest's `/bin` for its `init` to run |
 | `drivervm.poweroff` | Power off once they are done |
 | `drivervm.crash=SECONDS` | Linux crashes once, that long after it starts |
-| `drivervm.cmdline=...` | Added to Linux's command line, commas for spaces; `veda.kill=NAME:SECONDS` ends a guest program by SIGKILL |
+| `drivervm.cmdline=...` | Added to Linux's command line, commas for spaces; `veda.kill=NAME:SECONDS` ends a guest program by SIGKILL, and `veda.stop=NAME:SECONDS` ends a driver for good (`init` does not start it again) |
 | `drivervm.renderer=softpipe` | The renderer renders on softpipe, without a GPU |
 
 Scripts (`automation/src/script.rs`) can add a firmware variable to

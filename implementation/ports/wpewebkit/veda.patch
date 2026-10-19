@@ -2823,7 +2823,19 @@
  #endif
 --- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
 +++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
-@@ -114,7 +114,7 @@
+@@ -50,6 +50,11 @@
+ #include <wtf/SetForScope.h>
+ #include <wtf/SystemTracing.h>
+ 
++#if OS(VEDA)
++#include <WebCore/PlatformDisplay.h>
++#include <unistd.h>
++#endif
++
+ namespace WebKit {
+ using namespace WebCore;
+ 
+@@ -114,13 +119,33 @@
  {
      Ref page = *m_webPage->corePage();
      Settings& settings = page->settings();
@@ -2832,6 +2844,32 @@
      if (settings.hardwareAccelerationEnabled()) {
          WebProcess::singleton().initializePlatformDisplayIfNeeded();
          WebProcess::singleton().initializeVulkanIfNeeded();
+     }
+ #endif
+     settings.setForceCompositingMode(store.getBoolValueForKey(WebPreferencesKey::forceCompositingModeKey()));
++#if OS(VEDA)
++    // Veda's OpenGL ES renders on the GPU or not at all: its EGL never
++    // composites in software, which would take several processors for a
++    // page. Where the GPU gives this process no context (there is none, it
++    // is at its limits or starting again), its pages are painted on the CPU,
++    // as with hardware acceleration off. The process asks once, as its first
++    // page is made and before the page's renderer: the context it gets is
++    // its pages' share group, which they all composite with.
++    static std::optional<bool> hasGLContext;
++    if (!hasGLContext && settings.hardwareAccelerationEnabled()) {
++        hasGLContext = !!PlatformDisplay::sharedDisplay().sharingGLContext();
++        if (!*hasGLContext)
++            WTFLogAlways("Web process %d paints its pages on the CPU: the GPU gave it no OpenGL ES context", getpid());
++    }
++    if (hasGLContext && !*hasGLContext) {
++        settings.setHardwareAccelerationEnabled(false);
++        settings.setAcceleratedCompositingEnabled(false);
++        settings.setForceCompositingMode(false);
++    }
++#endif
+     // Fixed position elements need to be composited and create stacking contexts
+     // in order to be scrolled by the ScrollingCoordinator.
+     settings.setAcceleratedCompositingForFixedPositionEnabled(settings.acceleratedCompositingEnabled());
 --- a/Source/WebKit/WebProcess/WebProcess.cpp
 +++ b/Source/WebKit/WebProcess/WebProcess.cpp
 @@ -1740,9 +1740,11 @@

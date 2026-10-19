@@ -11,7 +11,7 @@ license.workspace = true
 [features]
 # Running in Veda: the GPU service (virtio-gpu), or the software renderer on
 # a worker thread per CPU.
-veda = ["dep:rt", "dep:abi", "dep:proto"]
+veda = ["dep:rt", "dep:abi", "dep:ipc", "dep:proto"]
 # Host tests of programs using OpenGL ES: the virgl renderer on the host's
 # GPU, through the virglrenderer QEMU runs.
 host-virgl = []
@@ -21,6 +21,7 @@ glsl = { workspace = true }
 libm = { workspace = true }
 rt = { workspace = true, default-features = false, optional = true }
 abi = { workspace = true, optional = true }
+ipc = { workspace = true, optional = true }
 proto = { workspace = true, optional = true }
 
 [lints]

@@ -35,15 +35,15 @@ pub struct Group {
 
 impl Group {
     /// A group of one context, `id`, as `config` describes its default
-    /// framebuffer.
-    fn new(id: u64, config: gl::Config) -> Group {
-        Group {
-            gl: renderer(config),
+    /// framebuffer; or why it has no renderer.
+    fn new(id: u64, config: gl::Config) -> Result<Group, String> {
+        Ok(Group {
+            gl: renderer(config)?,
             loaded: id,
             parked: HashMap::new(),
             strings: HashMap::new(),
             extensions: HashMap::new(),
-        }
+        })
     }
 
     /// Puts context `id`'s own part in use.
@@ -75,16 +75,30 @@ impl Group {
     }
 }
 
-/// A share group's renderer: in Veda the GPU, if there is one, or the
-/// processors; elsewhere the processors (threads of the standard library).
+/// A share group's renderer, or why there is none (for the log). In Veda
+/// it is the GPU or nothing: OpenGL ES in software would take a worker
+/// thread on every processor, and the program that composites with EGL,
+/// the browser, paints its pages on the CPU instead. Elsewhere (the host's
+/// tests) it is the processors, threads of the standard library.
 #[cfg(target_os = "veda")]
-fn renderer(config: gl::Config) -> gl::Context {
-    gl::veda::context(config)
+fn renderer(config: gl::Config) -> Result<gl::Context, String> {
+    gl::veda::gpu_context(config).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "veda"))]
-fn renderer(config: gl::Config) -> gl::Context {
-    gl::Context::new(Box::new(gl::soft::SoftBackend::new(Box::new(StdWorkers::default()))), config)
+fn renderer(config: gl::Config) -> Result<gl::Context, String> {
+    #[cfg(test)]
+    if NO_RENDERER.get() {
+        return Err(String::from("the test's renderer is away"));
+    }
+    Ok(gl::Context::new(Box::new(gl::soft::SoftBackend::new(Box::new(StdWorkers::default()))), config))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The calling thread's new share groups have no renderer, as in Veda
+    /// without a GPU (for the tests).
+    pub static NO_RENDERER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The software renderer's workers, as threads of the standard library.
@@ -136,8 +150,9 @@ pub struct Context {
 }
 
 impl Context {
-    /// A context of a group of its own, or of `share`'s.
-    pub fn new(id: u64, config: usize, gl_config: gl::Config, share: Option<&Context>) -> Context {
+    /// A context of a group of its own, or of `share`'s; or why a group of
+    /// its own has no renderer.
+    pub fn new(id: u64, config: usize, gl_config: gl::Config, share: Option<&Context>) -> Result<Context, String> {
         let group = match share {
             Some(s) => {
                 let mut g = lock(&s.group);
@@ -146,16 +161,16 @@ impl Context {
                 drop(g);
                 s.group.clone()
             }
-            None => Arc::new(Mutex::new(Group::new(id, gl_config))),
+            None => Arc::new(Mutex::new(Group::new(id, gl_config)?)),
         };
-        Context {
+        Ok(Context {
             id,
             config,
             group,
             thread: Mutex::new(None),
             surface: Mutex::new(None),
             framed: AtomicBool::new(false),
-        }
+        })
     }
 
     /// The thread it is current in.

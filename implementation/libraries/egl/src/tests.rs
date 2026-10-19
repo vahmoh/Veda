@@ -204,6 +204,36 @@ fn contexts_share_objects_across_threads() {
 }
 
 #[test]
+fn a_context_without_a_renderer_fails_rather_than_render_in_software() {
+    let d = display();
+    let config = webkit_config(d);
+    let a = context(d, config, std::ptr::null_mut());
+    // The GPU gives no context, as in Veda when it is at its limits: one of
+    // a share group of its own fails, as WebKit hears, and is not made.
+    crate::current::NO_RENDERER.set(true);
+    let attributes = [EGL_CONTEXT_MAJOR_VERSION, 2, EGL_NONE];
+    // SAFETY: a list ending with EGL_NONE.
+    let refused = unsafe { eglCreateContext(d, config, std::ptr::null_mut(), attributes.as_ptr()) };
+    assert!(refused.is_null());
+    assert_eq!(eglGetError(), EGL_BAD_ALLOC);
+    // One that shares a group renders with the group's renderer, which it
+    // has already.
+    let b = context(d, config, a);
+    assert_eq!(eglMakeCurrent(d, std::ptr::null_mut(), std::ptr::null_mut(), b), EGL_TRUE);
+    framebuffer();
+    glClearColor(0.0, 1.0, 0.0, 1.0);
+    glClear(gl::COLOR_BUFFER_BIT);
+    assert_eq!(pixel_bgra(), [0, 255, 0, 255]);
+    eglReleaseThread();
+    // With the renderer back, so are contexts of groups of their own.
+    crate::current::NO_RENDERER.set(false);
+    let c = context(d, config, std::ptr::null_mut());
+    for context in [c, b, a] {
+        assert_eq!(eglDestroyContext(d, context), EGL_TRUE);
+    }
+}
+
+#[test]
 fn fences_signal_once_the_work_is_done() {
     let d = display();
     let config = webkit_config(d);
