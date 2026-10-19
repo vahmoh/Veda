@@ -99,8 +99,15 @@ logs (see [the driver VM](DRIVERVM.md)).
 - **Concurrency.** Kernel code runs with interrupts disabled under a big
   kernel lock (BKL): the kernel is effectively single-threaded while user
   code runs on all CPUs, and its operations are short, which keeps
-  contention low. Per-object spinlocks catch accidental recursion; TLB
-  shootdowns are acknowledged without the BKL, so they cannot deadlock.
+  contention low. The BKL is a ticket lock, taken in the order CPUs ask for
+  it, so that none waits behind more than a turn of each other however
+  busy they keep the kernel: a driver VM's processor needs it after each
+  exit from its guest, and the window system for each frame. Per-object
+  spinlocks catch accidental recursion; TLB shootdowns are acknowledged
+  without the BKL, so they cannot deadlock, and go only to the CPUs that
+  have the changed address space's page tables loaded (with no PCIDs, no
+  other holds its translations), never to idle CPUs or those running
+  other processes and guests.
 - **Capabilities.** Everything user space can touch is a kernel object
   reached through a per-process handle with rights (`abi::Rights`); there
   is no ambient authority. Hardware access needs *resource* handles:
@@ -879,8 +886,9 @@ the actions every `ui` application offers over the `agentapp` protocol
   802.11 and its cryptography against published vectors, a station against
   an access point, two TCP/IP stacks over a simulated cable, and TLS
   against a rustls server and real certificate chains.
-- **`systest`** runs inside Veda: kernel objects, threads, the clocks
-  programs read themselves, the file system,
+- **`systest`** runs inside Veda: kernel objects, threads, memory (pages
+  a process unmaps gone at once for its threads on every processor), the
+  clocks programs read themselves, the file system,
   the launcher, crash reports, the window system's restart, and the C, C++
   and Rust test programs (`verification/c`, `verification/rust`,
   `verification/stdcrates`). `nettest` checks DNS, UDP, TCP, HTTP, HTTPS

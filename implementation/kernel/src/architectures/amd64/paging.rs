@@ -269,11 +269,14 @@ pub fn free_user_root(root: u64) {
     phys::free(root);
 }
 
-/// Loads the address space `root` on this CPU (if it is not loaded).
+/// Loads the address space `root` on this CPU (if it is not loaded), with
+/// the BKL held: shootdowns of an address space's changes go to the CPUs
+/// that have it loaded (`tlb::shootdown_space`).
 pub fn activate(root: u64) {
     if super::cpu::read_cr3() != root {
         // SAFETY: every address space shares the kernel half, so the kernel
         // keeps running after the switch.
         unsafe { super::cpu::write_cr3(root) };
     }
+    super::percpu::current().loaded_root.store(root, core::sync::atomic::Ordering::Release);
 }

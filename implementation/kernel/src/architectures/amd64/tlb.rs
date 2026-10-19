@@ -3,12 +3,20 @@
 
 //! TLB shootdowns.
 //!
-//! When the BKL holder changes a user mapping that other CPUs may have
-//! cached, it asks every other online CPU to flush its TLB and waits for the
-//! acknowledgements. CPUs running user code receive an IPI; CPUs spinning on
-//! the BKL poll their request flag (see `synchronization::bkl::acquire`);
-//! idle CPUs are woken by the IPI. No CPU needs the BKL to acknowledge, so
-//! this cannot deadlock.
+//! When the BKL holder changes a mapping that other CPUs may have cached,
+//! it asks those CPUs to flush their TLBs and waits for the
+//! acknowledgements: for a user address space, the CPUs that have its page
+//! tables loaded, as no other can hold its translations (loading page
+//! tables forgets the last ones', with no PCIDs); for the kernel's own
+//! mappings, every CPU. CPUs running user code receive an IPI; CPUs
+//! spinning on the BKL poll their request flag (see
+//! `synchronization::bkl::acquire`); idle CPUs are woken by the IPI. No CPU
+//! needs the BKL to acknowledge, so this cannot deadlock, and none can load
+//! page tables meanwhile (that takes the BKL, which the requester holds).
+//!
+//! An unmap in one process so interrupts only the CPUs running it, never
+//! those running others, idle ones or the driver VM's processors (each of
+//! which leaves its guest for an IPI).
 //!
 //! Guests' physical memory (EPT) is shot down the same way: a CPU that
 //! runs a guest leaves it for the IPI, and forgets every guest's
@@ -41,8 +49,8 @@ pub(in crate::arch) fn handle_ipi() {
     service_pending();
 }
 
-/// Flushes `addr..addr+len` locally and on every other online CPU.
-pub fn shootdown(addr: u64, len: u64) {
+/// Flushes `addr..addr+len` from this CPU's TLB.
+fn flush_local(addr: u64, len: u64) {
     let pages = len.div_ceil(4096);
     if pages <= 32 {
         for i in 0..pages {
@@ -51,7 +59,23 @@ pub fn shootdown(addr: u64, len: u64) {
     } else {
         cpu::flush_tlb();
     }
-    request_all(|p| &p.tlb_flush_pending);
+}
+
+/// Flushes `addr..addr+len` locally and on every other online CPU (the
+/// kernel's own mappings, which every CPU has).
+pub fn shootdown(addr: u64, len: u64) {
+    flush_local(addr, len);
+    request(|_| true, |p| &p.tlb_flush_pending);
+}
+
+/// Flushes `addr..addr+len` of the user address space whose page tables
+/// are `root` from the TLBs that can hold it: this CPU's and every other's
+/// that has those tables loaded. With the BKL held.
+pub fn shootdown_space(root: u64, addr: u64, len: u64) {
+    if percpu::current().loaded_root.load(Ordering::Acquire) == root {
+        flush_local(addr, len);
+    }
+    request(|p| p.loaded_root.load(Ordering::Acquire) == root, |p| &p.tlb_flush_pending);
 }
 
 /// Makes every CPU forget the translations of guests' physical memory it
@@ -60,17 +84,20 @@ pub fn shootdown_guest_memory() {
     if percpu::current().vmx_on.load(Ordering::Relaxed) {
         super::hv::vmx::invept_all();
     }
-    request_all(|p| &p.ept_flush_pending);
+    request(|_| true, |p| &p.ept_flush_pending);
 }
 
-/// Sets the flag `flag` picks on every other online CPU and waits until
-/// each has acknowledged it.
-fn request_all(flag: impl Fn(&percpu::Local) -> &core::sync::atomic::AtomicBool) {
+/// Sets the flag `flag` picks on every other online CPU that `concerned`
+/// accepts and waits until each has acknowledged it.
+fn request(
+    concerned: impl Fn(&percpu::Local) -> bool,
+    flag: impl Fn(&percpu::Local) -> &core::sync::atomic::AtomicBool,
+) {
     let me = percpu::cpu_id_or_boot();
     let mut targets: [(u32, u64); MAX_CPUS] = [(u32::MAX, 0); MAX_CPUS];
     let mut n = 0;
     for p in percpu::online() {
-        if p.cpu_id == me {
+        if p.cpu_id == me || !concerned(p) {
             continue;
         }
         let before = p.tlb_flush_done.load(Ordering::Acquire);

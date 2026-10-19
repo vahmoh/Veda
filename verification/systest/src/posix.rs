@@ -247,6 +247,74 @@ pub fn test_clocks() -> TestResult {
     Ok(())
 }
 
+/// Memory threads are reading on other processors is gone for them as soon
+/// as the process unmaps it: the kernel has every processor running the
+/// process forget the page, not only the one that unmapped it. Run in a
+/// copy, which a reader's fault ends.
+pub fn test_unmapped_on_every_processor() -> TestResult {
+    let copy = start_copy("unmapped")?;
+    let code = copy.join(rt::time::deadline_after(rt::time::Duration::from_secs(20))).map_err(s)?;
+    check(code != 3, "a thread read a page after it was unmapped (see the log)")?;
+    check(code == abi::EXIT_CODE_CRASHED, &format!("the copy ends with a reader's fault (it ended with {code})"))
+}
+
+/// `systest unmapped`: a thread for each other processor reads a page over
+/// and over while the main thread, keeping its own processor busy (so that
+/// no reader runs where the unmap flushes the TLB itself), unmaps it and
+/// says so. Ends with a reader's fault; 3 if a reader that knew the page
+/// was unmapped could read it all the same (through a translation its
+/// processor kept), 1 if the readers did not start.
+pub fn unmapped() -> i32 {
+    use core::sync::atomic::AtomicUsize;
+    const READERS: usize = 63;
+    static UNMAPPED: AtomicUsize = AtomicUsize::new(0);
+    static STALE: AtomicUsize = AtomicUsize::new(0);
+    static READS: [AtomicUsize; READERS] = [const { AtomicUsize::new(0) }; READERS];
+    const PAGE: usize = abi::PAGE_SIZE;
+    let cpus = rt::object::system_info().map_or(2, |i| i.cpu_count as usize);
+    let readers = cpus.clamp(2, READERS + 1) - 1;
+    let Ok(at) = vm::allocate(None, PAGE, 0, map_flags::READ | map_flags::WRITE) else { return 1 };
+    // SAFETY: our fresh, writable page.
+    unsafe { core::ptr::write_volatile(at as *mut u64, 0xabab_abab_abab_abab) };
+    for reads in READS.iter().take(readers) {
+        let _ = rt::thread::spawn(move || {
+            loop {
+                let unmapped = UNMAPPED.load(Ordering::Acquire) != 0;
+                // SAFETY: mapped until the main thread unmaps it; a read after
+                // that faults, ending the process.
+                let _ = unsafe { core::ptr::read_volatile(at as *const u64) };
+                if unmapped {
+                    STALE.store(1, Ordering::Release);
+                }
+                reads.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+    }
+    let until = rt::time::now_ns() + 5_000_000_000;
+    while READS.iter().take(readers).any(|r| r.load(Ordering::Relaxed) < 1000) {
+        if rt::time::now_ns() >= until {
+            rt::println!("unmapped: the readers did not start");
+            return 1;
+        }
+        core::hint::spin_loop();
+    }
+    if vm::unmap(None, at, PAGE).is_err() {
+        return 1;
+    }
+    // Every processor that could translate the page has forgotten it.
+    UNMAPPED.store(1, Ordering::Release);
+    let until = rt::time::now_ns() + 2_000_000_000;
+    while rt::time::now_ns() < until {
+        if STALE.load(Ordering::Acquire) != 0 {
+            rt::println!("unmapped: a thread read the page after it was unmapped");
+            return 3;
+        }
+        core::hint::spin_loop();
+    }
+    rt::println!("unmapped: no reader read the page again");
+    1
+}
+
 /// Starts a copy of systest that does `what` (see `main`), as its child.
 fn start_copy(what: &str) -> Result<Process, String> {
     let fs = vfs_client()?;

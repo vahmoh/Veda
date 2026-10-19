@@ -233,7 +233,7 @@ impl AddressSpace {
                     // No page table entry may outlive the failed mapping.
                     paging::unmap_range(self.root, m.start, m.start + off);
                     drop(map);
-                    crate::arch::tlb::shootdown(m.start, off);
+                    crate::arch::tlb::shootdown_space(self.root, m.start, off);
                     return Err(Error::NoMemory);
                 }
             }
@@ -279,7 +279,7 @@ impl AddressSpace {
             removed.push(m);
         }
         drop(map);
-        crate::arch::tlb::shootdown(addr, end - addr);
+        crate::arch::tlb::shootdown_space(self.root, addr, end - addr);
         // Memory is freed only now that no TLB can reach it: the pages cut
         // from private memory, and the VMOs whose last mapping went.
         drop(freed);
@@ -305,7 +305,7 @@ impl AddressSpace {
             freed.append(m.vmo.decommit(m.vmo_offset + (from - m.start), to - from));
         }
         drop(map);
-        crate::arch::tlb::shootdown(addr, end - addr);
+        crate::arch::tlb::shootdown_space(self.root, addr, end - addr);
         drop(freed);
         Ok(())
     }
@@ -372,7 +372,7 @@ impl AddressSpace {
             }
         }
         drop(map);
-        crate::arch::tlb::shootdown(addr, end - addr);
+        crate::arch::tlb::shootdown_space(self.root, addr, end - addr);
         Ok(())
     }
 

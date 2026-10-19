@@ -382,6 +382,7 @@ fn main() -> i32 {
         Some("limits") => return policy::limits(rt::env::args().get(2)),
         Some("job") => return posix::job(),
         Some("restricted") => return posix::restricted(),
+        Some("unmapped") => return posix::unmapped(),
         Some("wait") => {
             posix::wait();
             return 0;
@@ -389,7 +390,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 32] = [
+    let tests: [Test; 33] = [
         ("ipc primitives", test_ipc_primitives),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
@@ -402,6 +403,7 @@ fn main() -> i32 {
         ("sockets", posix::test_sockets),
         ("memory protection", posix::test_memory_protection),
         ("private memory", posix::test_private_memory),
+        ("unmapped memory on every processor", posix::test_unmapped_on_every_processor),
         ("clocks read in programs", posix::test_clocks),
         ("thread exit futex", posix::test_exit_futex),
         ("threads and locks", test_threads_and_locks),

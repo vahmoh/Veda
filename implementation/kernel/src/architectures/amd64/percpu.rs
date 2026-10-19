@@ -4,7 +4,8 @@
 //! What AMD64 keeps for each CPU, reached through the `GS` segment base
 //! while in the kernel: the scratch slots the entry code uses at fixed
 //! offsets (`gs:[OFFSET]`), the CPU's index, its descriptor tables and its
-//! local APIC's id, and its requests for TLB and EPT shootdowns.
+//! local APIC's id, its requests for TLB and EPT shootdowns, and the page
+//! tables it has loaded, which say whether a shootdown concerns it.
 
 use core::cell::UnsafeCell;
 use core::mem::{MaybeUninit, offset_of};
@@ -41,6 +42,10 @@ pub(in crate::arch) struct Local {
     pub ept_flush_pending: AtomicBool,
     /// This CPU is in VMX operation (it can run virtual processors).
     pub vmx_on: AtomicBool,
+    /// The page tables this CPU has loaded (`paging::activate`): the only
+    /// user address space whose translations its TLB can hold, as loading
+    /// others forgets them (Veda uses no PCIDs). Changed under the BKL.
+    pub loaded_root: AtomicU64,
 }
 
 const _: () = {
@@ -66,6 +71,7 @@ const fn new_local(id: u32) -> Local {
         tlb_flush_done: AtomicU64::new(0),
         ept_flush_pending: AtomicBool::new(false),
         vmx_on: AtomicBool::new(false),
+        loaded_root: AtomicU64::new(0),
     }
 }
 
