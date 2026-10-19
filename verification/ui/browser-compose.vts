@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser's page drawn by the compositor's GPU (1280x800), as on a PC,
+# whose GPU composes the screen: Veda's renderer in the driver VM serves the
+# `gpu` protocol on softpipe (as in drivervm-compose.vts), and the
+# compositor draws the page's subsurface from a texture of its own, the
+# window's buffer blended over it where the window draws over the page.
+# The page's frames reach the screen; the link's label shown over the page
+# stays as it was over the page drawn afresh under it (zoomed in and back),
+# pixel for pixel. softpipe is slow under emulation (seconds for a frame of
+# the whole screen), so the script waits long.
+gpu off
+boot-cmdline "drivervm.renderer=softpipe"
+boot-cmdline "run=browser:http://{web}/motion"
+web-server
+memory 2048
+requires web
+agent-asleep
+fail-on "PANIC"
+fail-on "frames stay with the processor"
+fail-on "frames are drawn by the processor from now on"
+wait-serial "browser: pages are painted on the CPU" 120
+wait-serial "compositor: frames are drawn by the GPU (softpipe) from now on" 400
+wait-serial "drawn by the GPU (softpipe))" 400
+move 0.5 0.06
+wait 40
+shot target/veda/browser-compose-1-start.png
+# A click starts the box crossing the page; it stops after three seconds.
+click 0.5 0.7
+move 0.5 0.06
+wait 40
+shot target/veda/browser-compose-2-moved.png
+expect-different target/veda/browser-compose-1-start.png target/veda/browser-compose-2-moved.png 0.1 0.2 0.9 0.9
+# The link under the pointer named at the page's foot, over the page (its
+# label is translucent), then over it drawn afresh.
+move 0.154 0.345
+wait 40
+shot target/veda/browser-compose-3-link.png
+expect-different target/veda/browser-compose-2-moved.png target/veda/browser-compose-3-link.png 0.07 0.87 0.4 0.92
+key ctrl-equal
+wait 30
+key ctrl-0
+wait 30
+move 0.16 0.345
+move 0.154 0.345
+wait 40
+shot target/veda/browser-compose-4-link-afresh.png
+expect-same target/veda/browser-compose-3-link.png target/veda/browser-compose-4-link-afresh.png 0.1 0.2 0.9 0.92
+reject-serial "page stopped working"
+reject-serial "browser crashed"
+reject-serial "a page's frame cannot be shown"
+reject-serial "a page's subsurface"
+reject-serial "stopped answering"

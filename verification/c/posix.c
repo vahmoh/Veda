@@ -234,7 +234,9 @@ static void check_system_files(void)
 
 /* A memory file: memory with a descriptor, as WebKit's processes share
  * their buffers: its mappings are the memory, ftruncate sizes it, seals
- * fix its size, and a read-only descriptor of it cannot write it. */
+ * fix its size, and a read-only descriptor of it cannot write it; its
+ * memory as a handle for a Veda service (<veda/memory.h>), as the browser
+ * gives the window system a page's frames, with the descriptor's rights. */
 static void check_memfd(void)
 {
 	const size_t page = VEDA_PAGE_SIZE, len = 4 * VEDA_PAGE_SIZE;
@@ -275,8 +277,30 @@ static void check_memfd(void)
 		      "contents differ");
 		if (r != MAP_FAILED)
 			munmap(r, len);
+		veda_handle_t vmo = VEDA_INVALID_HANDLE;
+		void *v = 0;
+		int got = veda_memory_file(ro, &vmo);
+		int refused = got == 0 ? veda_vmo_map(vmo, 0, len, VEDA_MAP_READ | VEDA_MAP_WRITE, &v) : 0;
+		CHECK("its memory's handle cannot be mapped to write", got == 0 && refused == -VEDA_EACCESS_DENIED,
+		      "veda_memory_file %d, veda_vmo_map %d", got, refused);
+		if (vmo != VEDA_INVALID_HANDLE)
+			veda_close(vmo);
 		close(ro);
 	}
+	veda_handle_t vmo = VEDA_INVALID_HANDLE;
+	void *v = 0;
+	int got = veda_memory_file(fd, &vmo);
+	int mapped = got == 0 ? veda_vmo_map(vmo, 0, len, VEDA_MAP_READ, &v) : -1;
+	CHECK("a memory file's memory, as a handle", got == 0 && mapped == 0 && !strcmp((char *)v + page, "shared"),
+	      "veda_memory_file %d, veda_vmo_map %d", got, mapped);
+	if (mapped == 0)
+		veda_vmo_unmap(v, len);
+	if (vmo != VEDA_INVALID_HANDLE)
+		veda_close(vmo);
+	int other = eventfd(0, EFD_CLOEXEC);
+	CHECK("only a memory file's", veda_memory_file(other, &vmo) == EINVAL && veda_memory_file(-1, &vmo) == EBADF,
+	      "another descriptor's memory");
+	close(other);
 	if (a != MAP_FAILED)
 		munmap(a, len);
 	if (b != MAP_FAILED)

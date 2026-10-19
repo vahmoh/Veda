@@ -1,14 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 # SPDX-License-Identifier: GPL-3.0-only
 
-# The browser's frames, which it copies and presents only where they
-# changed (1280x800 screen): on the host's page of a box crossing it
-# (`/motion`), the find bar, the page's menu and the link under the pointer
-# come and go over the page while it moves; once it has stopped, the window
-# shows what WebKit draws of the page afresh (zoomed in and back), pixel for
-# pixel. First painted on the CPU (the browser started as the system
-# starts), then composited on the GPU (started again once the GPU's service
-# is there), where WebKit reads back only what changed of each frame.
+# The browser's frames (1280x800 screen): each page is a subsurface of the
+# window, whose frames the window system shows from WebKit's memory, and the
+# window's own drawing over it (the find bar, the page's menu, the link
+# under the pointer) is blended over it. On the host's page of a box
+# crossing it (`/motion`): the page's frames reach the screen; the link
+# under the pointer, the find bar and the page's menu come and go over it
+# while it moves; once it has stopped, the window shows what WebKit draws of
+# the page afresh (zoomed in and back), pixel for pixel; and the link's
+# label shown over the page stays as it was over the page drawn afresh
+# under it.
+# First painted on the CPU (the browser started as the system starts), then
+# composited on the GPU (started again once the GPU's service is there),
+# where WebKit reads back only what changed of each frame.
 boot-cmdline "run=browser:http://{web}/motion"
 web-server
 gpu on
@@ -19,6 +24,9 @@ fail-on "PANIC"
 wait-serial "desktop ready" 90
 wait-serial "browser: pages are painted on the CPU" 60
 wait 8
+move 0.5 0.06
+wait 1
+shot target/veda/browser-frames-0-cpu-start.png
 # A click starts it; then the link under the pointer, the find bar and the
 # page's menu (over the box as it passes) over it, each gone again.
 click 0.5 0.7
@@ -34,12 +42,29 @@ key esc
 move 0.5 0.06
 wait 6
 shot target/veda/browser-frames-1-cpu.png
+expect-different target/veda/browser-frames-0-cpu-start.png target/veda/browser-frames-1-cpu.png 0.1 0.2 0.9 0.9
 key ctrl-equal
 wait 3
 key ctrl-0
 wait 5
 shot target/veda/browser-frames-2-cpu-afresh.png
 expect-same target/veda/browser-frames-1-cpu.png target/veda/browser-frames-2-cpu-afresh.png 0.1 0.2 0.9 0.9
+# The link under the pointer named at the page's foot, over the page (its
+# label is translucent), then over it drawn afresh.
+move 0.154 0.345
+wait 3
+shot target/veda/browser-frames-3-cpu-link.png
+expect-different target/veda/browser-frames-2-cpu-afresh.png target/veda/browser-frames-3-cpu-link.png 0.07 0.87 0.4 0.92
+key ctrl-equal
+wait 3
+key ctrl-0
+wait 3
+move 0.16 0.345
+move 0.154 0.345
+wait 3
+shot target/veda/browser-frames-4-cpu-link-afresh.png
+expect-same target/veda/browser-frames-3-cpu-link.png target/veda/browser-frames-4-cpu-link-afresh.png 0.1 0.2 0.9 0.92
+move 0.5 0.06
 # Composited on the GPU.
 key alt-f4
 wait 4
@@ -54,6 +79,9 @@ key ctrl-l
 type "{web}/motion"
 key ret
 wait 8
+move 0.5 0.06
+wait 1
+shot target/veda/browser-frames-5-gpu-start.png
 click 0.5 0.7
 move 0.154 0.345
 wait 0.5
@@ -66,12 +94,29 @@ wait 1
 key esc
 move 0.5 0.06
 wait 6
-shot target/veda/browser-frames-3-gpu.png
+shot target/veda/browser-frames-6-gpu.png
+expect-different target/veda/browser-frames-5-gpu-start.png target/veda/browser-frames-6-gpu.png 0.1 0.2 0.9 0.9
 key ctrl-equal
 wait 3
 key ctrl-0
 wait 5
-shot target/veda/browser-frames-4-gpu-afresh.png
-expect-same target/veda/browser-frames-3-gpu.png target/veda/browser-frames-4-gpu-afresh.png 0.1 0.2 0.9 0.9
+shot target/veda/browser-frames-7-gpu-afresh.png
+expect-same target/veda/browser-frames-6-gpu.png target/veda/browser-frames-7-gpu-afresh.png 0.1 0.2 0.9 0.9
+move 0.154 0.345
+wait 3
+shot target/veda/browser-frames-8-gpu-link.png
+expect-different target/veda/browser-frames-7-gpu-afresh.png target/veda/browser-frames-8-gpu-link.png 0.07 0.87 0.4 0.92
+key ctrl-equal
+wait 3
+key ctrl-0
+wait 3
+move 0.16 0.345
+move 0.154 0.345
+wait 3
+shot target/veda/browser-frames-9-gpu-link-afresh.png
+expect-same target/veda/browser-frames-8-gpu-link.png target/veda/browser-frames-9-gpu-link-afresh.png 0.1 0.2 0.9 0.92
+move 0.5 0.06
 reject-serial "page stopped working"
 reject-serial "browser crashed"
+reject-serial "a page's frame cannot be shown"
+reject-serial "a page's subsurface"

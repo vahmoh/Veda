@@ -7,7 +7,8 @@
 //! services:
 //!
 //! * `display` — clients create windows, attach shared pixel buffers and
-//!   present frames (see `proto::display`);
+//!   present frames, and present the pictures of windows' subsurfaces
+//!   (see `proto::display`);
 //! * `input` — device drivers report keyboard and pointer events;
 //! * `displaydev` — a display driver hands over pictures it flips between
 //!   at the vertical blank (see `screen`).
@@ -259,6 +260,7 @@ fn main() -> i32 {
         screen: Screen::new(fb, pitch, info.framebuffer_format == 2, width, height, started),
         decor: Decor::new(text, title_font),
         events: BTreeMap::new(),
+        subsurface_events: BTreeMap::new(),
         clients: BTreeMap::new(),
         cursor: (Cursor::Arrow, (i32::MIN, i32::MIN)),
         cursor_rect: Rect::default(),
@@ -306,6 +308,7 @@ fn main() -> i32 {
     const INPUT_BASE: u64 = 1 << 40;
     const DRIVER_BASE: u64 = 1 << 41;
     const WRITABLE_BASE: u64 = 1 << 42;
+    const SUBSURFACE_WRITABLE_BASE: u64 = 1 << 43;
     // Kept from one wait to the next: its handles stay registered with the
     // kernel, so that a wait costs what is ready, however many clients.
     let mut ws = WaitSet::new();
@@ -371,6 +374,11 @@ fn main() -> i32 {
                 ws.add(c.raw(), signals::WRITABLE | signals::PEER_CLOSED, WRITABLE_BASE | u64::from(id));
             }
         }
+        for id in comp.wm.blocked_subsurfaces() {
+            if let Some(c) = comp.subsurface_events.get(&id) {
+                ws.add(c.raw(), signals::WRITABLE | signals::PEER_CLOSED, SUBSURFACE_WRITABLE_BASE | u64::from(id));
+            }
+        }
         let mut ready = ws.wait(deadline).unwrap_or_default();
         // The input drivers first: what they report is served first.
         ready.sort_by_key(|&(key, _)| key & INPUT_BASE == 0);
@@ -434,6 +442,9 @@ fn main() -> i32 {
                 }
                 GPU_FENCE_KEY => comp.gpu_signaled(now),
                 k if k & WRITABLE_BASE != 0 => comp.writable((k & !WRITABLE_BASE) as u32),
+                k if k & SUBSURFACE_WRITABLE_BASE != 0 => {
+                    comp.subsurface_writable((k & !SUBSURFACE_WRITABLE_BASE) as u32)
+                }
                 k if k & DRIVER_BASE != 0 => {
                     let k = k & !DRIVER_BASE;
                     if observed & signals::READABLE != 0 {

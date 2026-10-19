@@ -330,7 +330,7 @@ fn cross_tool(name: &str) -> PathBuf {
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
 /// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
-const POSIX_LAYER_EXPORTS: [&str; 37] = [
+const POSIX_LAYER_EXPORTS: [&str; 38] = [
     "__veda_syscall",
     "__veda_init",
     "__veda_spawn",
@@ -362,6 +362,7 @@ const POSIX_LAYER_EXPORTS: [&str; 37] = [
     "veda_thread_resume",
     "veda_thread_registers",
     "veda_process_memory",
+    "veda_memory_file",
     "veda_confine_files",
     "veda_confine_services",
     "veda_process_restrict",

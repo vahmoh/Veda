@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The page: the frame WebKit drew of the shown tab's view, or the
-//! browser's own page in its place — the new tab's (the sites visited
-//! most), a load's failure, a certificate's warning, a page whose process
-//! ended — and over it the find bar, the link under the pointer, a passing
-//! note, and the page's menus (a `<select>`'s options, its context menu).
+//! The page: the shown tab's view's, a subsurface of the window that the
+//! engine presents WebKit's frames to, or the browser's own page in its
+//! place — the new tab's (the sites visited most), a load's failure, a
+//! certificate's warning, a page whose process ended — and over it the find
+//! bar, the link under the pointer, a passing note, and the page's menus (a
+//! `<select>`'s options, its context menu).
 
 use browser_core::url;
-use gfx::{Align, Color, Picture, Rect};
+use gfx::{Align, Color, Rect};
 use proto::input::keys as code;
 use ui::{ButtonKind, Font, Icon, MenuItem, Ui};
 
@@ -42,29 +43,15 @@ pub fn draw(b: &mut Browser, ui: &mut Ui) {
     page_menu(b, ui);
 }
 
-/// The view's frame in the page's area, as a picture the window keeps
-/// ([`Ui::retained`]): what WebKit drew again, and what was drawn over it
-/// (the find bar, a menu), is all that is copied and presented of it. What
-/// it does not cover (its page catching up with a new size) is blank.
+/// The view's page in the page's area: its subsurface ([`Ui::subsurface`]),
+/// whose frames reach the screen without the window's, what is drawn over
+/// it (the find bar, a menu) blended over it. What its frame does not cover
+/// (none yet, or its page catching up with a new size) is blank.
 fn frame(b: &mut Browser, ui: &mut Ui, area: Rect, view: crate::engine::ViewId) {
-    let Some(mut frame) = b.engine.frame(view) else {
-        ui.canvas.fill_rect(area, PAPER);
-        return;
-    };
-    let (cw, ch) = (ui.canvas.width(), ui.canvas.height());
-    let area = area.intersect(&Rect::new(0, 0, cw, ch));
-    let (w, h) = (frame.width().min(area.w).max(0), frame.height().min(area.h).max(0));
-    let stride = frame.width().max(0) as usize;
-    if let Some(picture) = Picture::new(frame.pixels(), w, h, stride).filter(|_| w > 0 && h > 0) {
-        ui.retained(view.number(), area.x, area.y, &picture, &[frame.changed()]);
+    match b.engine.subsurface(view) {
+        Some(subsurface) => ui.subsurface(subsurface, area, PAPER),
+        None => ui.canvas.fill_rect(area, PAPER),
     }
-    if w < area.w {
-        ui.canvas.fill_rect(Rect::new(area.x + w, area.y, area.w - w, h), PAPER);
-    }
-    if h < area.h {
-        ui.canvas.fill_rect(Rect::new(area.x, area.y + h, area.w, area.h - h), PAPER);
-    }
-    frame.presented();
 }
 
 /// A tile's colour for a site: one of a few, the same for a host always.

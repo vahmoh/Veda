@@ -3,8 +3,9 @@
 
 //! The web engine (`engine/engine.h`) as the browser's thread uses it:
 //! WPE WebKit on a thread of its own, told what to do, telling what
-//! happened ([`Event`]), and drawing each view's page into a frame the
-//! browser shows ([`Frame`]).
+//! happened ([`Event`]), and presenting each view's page as a subsurface of
+//! the browser's window ([`crate::subsurfaces`]), which the window's frames
+//! place ([`Engine::subsurface`]).
 //!
 //! The engine wakes the browser with a kernel event ([`Engine::wake_handle`]),
 //! which its window's loop waits on with its own events; the browser then
@@ -14,23 +15,14 @@
 //! ([`auxiliary_process`]): `main` asks first whether it is one.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
 use std::ptr;
 
 use abi::RawHandle;
-use gfx::Rect;
 
 /// A view: one page, as a tab shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ViewId(u32);
-
-impl ViewId {
-    /// Its number, which no other view of the engine's ever has.
-    pub fn number(self) -> u64 {
-        u64::from(self.0)
-    }
-}
 
 /// A request of a page's, which waits for the browser's answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -76,17 +68,6 @@ mod ffi {
         pub data_len: usize,
     }
 
-    #[repr(C)]
-    pub struct Frame {
-        pub pixels: *const u32,
-        pub width: c_int,
-        pub height: c_int,
-        pub stride: c_int,
-        pub damage: [c_int; 4],
-        pub serial: u64,
-        pub held: *mut c_void,
-    }
-
     unsafe extern "C" {
         pub fn engine_auxiliary_main(argc: c_int, argv: *mut *mut c_char) -> c_int;
         pub fn engine_start(config: *const Config) -> c_int;
@@ -120,8 +101,8 @@ mod ffi {
         pub fn engine_download_cancel(request: u64);
         pub fn engine_next_event(event: *mut Event) -> c_int;
         pub fn engine_event_clear(event: *mut Event);
-        pub fn engine_frame_lock(view: u32, frame: *mut Frame) -> c_int;
-        pub fn engine_frame_unlock(frame: *const Frame, presented: u64);
+        pub fn engine_set_window(window: u32);
+        pub fn engine_view_subsurface(view: u32) -> u32;
     }
 }
 
@@ -410,22 +391,18 @@ impl Engine {
         unsafe { ffi::engine_download_cancel(request.0) }
     }
 
-    /// `view`'s frame, which WebKit leaves as it is while it is held.
-    pub fn frame(&self, view: ViewId) -> Option<Frame<'_>> {
-        let mut raw = ffi::Frame {
-            pixels: ptr::null(),
-            width: 0,
-            height: 0,
-            stride: 0,
-            damage: [0; 4],
-            serial: 0,
-            held: ptr::null_mut(),
-        };
-        // SAFETY: a frame to fill; on success the hold is the Frame's.
-        if unsafe { ffi::engine_frame_lock(view.0, &mut raw) } == 0 {
-            return None;
-        }
-        Some(Frame { raw, presented: 0, _engine: PhantomData })
+    /// The browser's window, whose subsurfaces the views' pages are.
+    pub fn set_window(&self, window: u32) {
+        // SAFETY: plain values.
+        unsafe { ffi::engine_set_window(window) }
+    }
+
+    /// `view`'s page's subsurface, to place where the window shows it;
+    /// `None` until the view has one ([`Event::Frame`] says when it does).
+    pub fn subsurface(&self, view: ViewId) -> Option<u32> {
+        // SAFETY: plain values.
+        let id = unsafe { ffi::engine_view_subsurface(view.0) };
+        (id != 0).then_some(id)
     }
 }
 
@@ -457,51 +434,6 @@ pub mod data {
     pub const COOKIES: u32 = 1;
     pub const CACHE: u32 = 2;
     pub const STORAGE: u32 = 4;
-}
-
-/// A view's page, as WebKit drew it last; it stays put while held.
-pub struct Frame<'a> {
-    raw: ffi::Frame,
-    presented: u64,
-    _engine: PhantomData<&'a Engine>,
-}
-
-impl Frame<'_> {
-    pub fn width(&self) -> i32 {
-        self.raw.width
-    }
-
-    pub fn height(&self) -> i32 {
-        self.raw.height
-    }
-
-    /// Its pixels, premultiplied 0xAARRGGBB, [`Frame::width`] a row.
-    pub fn pixels(&self) -> &[u32] {
-        let len = self.raw.width.max(0) as usize * self.raw.height.max(0) as usize;
-        // SAFETY: the engine holds `stride * height` pixels at `pixels`
-        // (stride is the width), which stay put while the frame is locked.
-        unsafe { std::slice::from_raw_parts(self.raw.pixels, len) }
-    }
-
-    /// What WebKit drew again since the frame was last taken (empty if
-    /// nothing): all of it the first time, and after the page's size
-    /// changed.
-    pub fn changed(&self) -> Rect {
-        let [x, y, w, h] = self.raw.damage;
-        Rect::new(x, y, w, h)
-    }
-
-    /// It reaches the screen: WebKit may draw the next.
-    pub fn presented(&mut self) {
-        self.presented = self.raw.serial;
-    }
-}
-
-impl Drop for Frame<'_> {
-    fn drop(&mut self) {
-        // SAFETY: the frame engine_frame_lock gave, held until now.
-        unsafe { ffi::engine_frame_unlock(&self.raw, self.presented) }
-    }
 }
 
 /// How a load goes.
@@ -594,6 +526,8 @@ pub mod tls {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
+    /// The view's page has a subsurface ([`Engine::subsurface`]), another
+    /// than before or none.
     Frame(ViewId),
     Title(ViewId, String),
     Uri(ViewId, String),

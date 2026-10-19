@@ -6,7 +6,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::error::{self, SysResult};
-use crate::linux::errno::{EINVAL, EPERM};
+use crate::linux::errno::{EFAULT, EINVAL, EPERM};
 use crate::linux::{Rlimit, Sysinfo, Utsname, prctl, rlimit};
 use crate::{fd, user};
 
@@ -42,6 +42,29 @@ pub unsafe fn uname(buf: usize) -> SysResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn veda_process_memory() -> usize {
     rt::object::process_self_info().map_or(0, |i| i.memory_bytes as usize)
+}
+
+/// `veda_memory_file(fd, vmo)` (`<veda/memory.h>`): a handle to the memory
+/// of the memory file on `fd`, with the descriptor's rights, written to
+/// `vmo`. EBADF for no descriptor, EINVAL for one of anything else.
+///
+/// # Safety
+/// `vmo` has room for a handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn veda_memory_file(fd: core::ffi::c_int, vmo: *mut abi::RawHandle) -> core::ffi::c_int {
+    let handle = fd::get(fd).and_then(|desc| match &desc.object {
+        fd::Object::Memfd(m) => m.memory(),
+        _ => Err(EINVAL),
+    });
+    match handle {
+        Ok(_) if vmo.is_null() => EFAULT as core::ffi::c_int,
+        Ok(h) => {
+            // SAFETY: as the caller promises; the handle is the caller's now.
+            unsafe { vmo.write(h.0.into_raw()) };
+            0
+        }
+        Err(e) => e as core::ffi::c_int,
+    }
 }
 
 pub unsafe fn sysinfo(buf: usize) -> SysResult {

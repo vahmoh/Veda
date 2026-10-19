@@ -44,7 +44,7 @@ struct Surface {
 const BUFFERS: u8 = 2;
 
 /// Which of a window's buffers a frame is drawn into, and which is on the
-/// screen: what [`crate::retained`] keeps track of.
+/// screen: what [`crate::subsurface`] keeps track of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Buffers {
     /// The surface they are in: each new one (a new size, a third buffer)
@@ -268,15 +268,15 @@ impl Window {
         self.changes_outside(Rect::default())
     }
 
-    /// Like [`Window::changes`], but `except` is left out: a picture the
-    /// window keeps ([`crate::retained`]), which is compared only where it
+    /// Like [`Window::changes`], but `except` is left out: the place of a
+    /// subsurface ([`crate::subsurface`]), which is compared only where it
     /// may have changed ([`Window::changes_within`]).
     pub fn changes_outside(&self, except: Rect) -> Option<Damage> {
         self.compare(|old, new, s| Damage::of_changes_outside(old, new, s.width, s.height, s.stride as usize, except))
     }
 
-    /// Like [`Window::changes`], of what lies in `within` alone (where a
-    /// picture the window keeps may have changed).
+    /// Like [`Window::changes`], of what lies in `within` alone (where what
+    /// is drawn over a subsurface may have changed).
     pub fn changes_within(&self, within: Rect) -> Option<Damage> {
         self.compare(|old, new, s| Damage::of_changes_within(old, new, s.width, s.height, s.stride as usize, within))
     }
@@ -298,10 +298,26 @@ impl Window {
     /// Shows the frame drawn since `begin_frame`. `damage` lists changed
     /// rectangles (empty = everything).
     pub fn present(&mut self, damage: &[Rect]) -> Result<(), WindowError> {
+        self.present_with(damage, &[], &[])
+    }
+
+    /// Like [`Window::present`], the frame placing the window's subsurfaces
+    /// as `subsurfaces` says, its buffer drawn over them within `overlays`
+    /// (see `display::present`).
+    pub fn present_with(
+        &mut self,
+        damage: &[Rect],
+        subsurfaces: &[dp::Placement],
+        overlays: &[Rect],
+    ) -> Result<(), WindowError> {
         let index = self.back_index();
-        let rects: Vec<dp::Rect> = damage.iter().map(|r| dp::Rect::new(r.x, r.y, r.w as u32, r.h as u32)).collect();
+        let wire = |r: &Rect| dp::Rect::new(r.x, r.y, r.w as u32, r.h as u32);
+        let (rects, overlays) = (damage.iter().map(wire).collect(), overlays.iter().map(wire).collect());
         self.presented_ns = rt::time::now_ns();
-        self.display.present(self.id, index, rects).map_err(WindowError::Ipc)?.map_err(WindowError::Display)?;
+        self.display
+            .present(self.id, index, rects, subsurfaces.to_vec(), overlays)
+            .map_err(WindowError::Ipc)?
+            .map_err(WindowError::Display)?;
         self.shown = Some(index);
         self.in_flight = true;
         Ok(())

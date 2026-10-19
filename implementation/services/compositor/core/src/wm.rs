@@ -56,6 +56,7 @@ use crate::input::Source;
 use crate::keymap::Keyboard;
 use crate::limits::{self, Limits};
 use crate::outbox::Write;
+use crate::subsurfaces::{Placed, Placements, Subsurface};
 use crate::switcher::Switcher;
 use crate::window::{Anim, AnimKind, Part, Snap, TITLE_HEIGHT, Window};
 
@@ -193,6 +194,16 @@ pub struct Wm<M> {
     dropped: Vec<u64>,
     /// Windows whose clients did not answer a request to close them.
     unresponsive: BTreeSet<u32>,
+    /// The subsurfaces (see [`crate::subsurfaces`]); those whose frames are
+    /// to be acknowledged; those with an acknowledgement to write, and those
+    /// whose channel was full; those gone since the compositor last took
+    /// them.
+    pub(crate) subsurfaces: BTreeMap<u32, Subsurface<M>>,
+    pub(crate) next_subsurface: u32,
+    pub(crate) subsurfaces_owed: BTreeSet<u32>,
+    pub(crate) subsurfaces_due: BTreeSet<u32>,
+    pub(crate) subsurfaces_blocked: BTreeSet<u32>,
+    pub(crate) destroyed_subsurfaces: Vec<u32>,
     /// The screen is locked (see [`crate::lock`]), and the window that had
     /// the focus as it was, which has it again once it is unlocked.
     pub(crate) locked: bool,
@@ -206,7 +217,7 @@ pub struct Wm<M> {
     pub(crate) idle_held: bool,
     pub(crate) awake: BTreeSet<u32>,
     /// When the last frame is seen, and how often frames follow.
-    frame: (u64, u64),
+    pub(crate) frame: (u64, u64),
     /// The time of what is being done (ns): animations start then.
     pub(crate) now: u64,
 }
@@ -247,6 +258,12 @@ impl<M> Wm<M> {
             destroyed: Vec::new(),
             dropped: Vec::new(),
             unresponsive: BTreeSet::new(),
+            subsurfaces: BTreeMap::new(),
+            next_subsurface: 0,
+            subsurfaces_owed: BTreeSet::new(),
+            subsurfaces_due: BTreeSet::new(),
+            subsurfaces_blocked: BTreeSet::new(),
+            destroyed_subsurfaces: Vec::new(),
             locked: false,
             unlocked_focus: None,
             idle_timeout: 0,
@@ -380,7 +397,8 @@ impl<M> Wm<M> {
         Ok(())
     }
 
-    /// The client on `key` went away: its windows go at once.
+    /// The client on `key` went away: its windows go at once, and the
+    /// subsurfaces it presented.
     pub fn disconnect(&mut self, key: u64) {
         if self.clients.remove(&key).is_none() {
             return;
@@ -388,6 +406,10 @@ impl<M> Wm<M> {
         let ids: Vec<u32> = self.windows.values().filter(|w| w.client == key).map(|w| w.id).collect();
         for id in ids {
             self.destroy_window(id);
+        }
+        let subsurfaces: Vec<u32> = self.subsurfaces.values().filter(|s| s.client == key).map(|s| s.id).collect();
+        for id in subsurfaces {
+            self.remove_subsurface(id);
         }
     }
 
@@ -576,13 +598,29 @@ impl<M> Wm<M> {
     }
 
     /// `client` presents buffer `index` of window `id`, `damage` (the
-    /// buffer's pixels) having changed, or everything if it is empty.
-    pub fn present(&mut self, client: u64, id: u32, index: u8, damage: Vec<dp::Rect>) -> Result<(), DisplayError> {
+    /// buffer's pixels) having changed, or everything if it is empty; the
+    /// frame places the window's subsurfaces as `subsurfaces` says, its
+    /// buffer drawn over them within `overlays`.
+    pub fn present(
+        &mut self,
+        client: u64,
+        id: u32,
+        index: u8,
+        damage: Vec<dp::Rect>,
+        subsurfaces: Vec<dp::Placement>,
+        overlays: Vec<dp::Rect>,
+    ) -> Result<(), DisplayError> {
         self.own(client, id)?;
+        if damage.len() > dp::DAMAGE_MAX {
+            return Err(DisplayError::Invalid);
+        }
         let rects = damage.into_iter().map(limits::rect).collect::<Result<Vec<Rect>, DisplayError>>()?;
+        let placements = self.placements(id, subsurfaces, overlays)?;
         let shown = self.windows.get(&id).is_some_and(|w| self.shown(w));
         let Some(w) = self.windows.get_mut(&id) else { return Err(DisplayError::NoSuchWindow) };
         let p = w.surface.present(index, &rects)?;
+        let moved = w.placements.differences(&placements);
+        w.placements = placements;
         self.owed.insert(id);
         // A window that cannot be seen (minimised, or behind the lock) is
         // not composed again; its frame is acknowledged once it can be.
@@ -597,11 +635,50 @@ impl<M> Wm<M> {
         } else if p.new_buffers || rects.is_empty() {
             self.damage.add(c);
         } else {
-            for d in rects {
+            for d in rects.into_iter().chain(moved) {
                 self.damage.add(d.translate(c.x, c.y).intersect(&c));
             }
         }
         Ok(())
+    }
+
+    /// Checks what a frame of window `id` says of its subsurfaces: at most
+    /// [`dp::PLACEMENTS_MAX`] of them, none another window's, each once, and
+    /// at most [`dp::OVERLAYS_MAX`] overlays; neither overlapping another
+    /// (what shows where, and how often the window is blended there, is then
+    /// plain). A subsurface that is no more (its client destroyed it as the
+    /// frame was on its way) shows the placement's background.
+    fn placements(
+        &self,
+        id: u32,
+        subsurfaces: Vec<dp::Placement>,
+        overlays: Vec<dp::Rect>,
+    ) -> Result<Placements, DisplayError> {
+        if subsurfaces.len() > dp::PLACEMENTS_MAX || overlays.len() > dp::OVERLAYS_MAX {
+            return Err(DisplayError::Invalid);
+        }
+        let mut placed: Vec<Placed> = Vec::with_capacity(subsurfaces.len());
+        for p in subsurfaces {
+            let theirs = self.subsurfaces.get(&p.subsurface).is_some_and(|s| s.window != id);
+            if theirs || placed.iter().any(|q| q.subsurface == p.subsurface) {
+                return Err(DisplayError::Invalid);
+            }
+            let background = 0xFF00_0000 | (p.background & 0xFF_FFFF);
+            let rect = limits::rect(p.rect)?;
+            if placed.iter().any(|q| q.rect.intersects(&rect)) {
+                return Err(DisplayError::Invalid);
+            }
+            placed.push(Placed { subsurface: p.subsurface, rect, background });
+        }
+        let mut checked: Vec<Rect> = Vec::with_capacity(overlays.len());
+        for o in overlays {
+            let o = limits::rect(o)?;
+            if checked.iter().any(|q| q.intersects(&o)) {
+                return Err(DisplayError::Invalid);
+            }
+            checked.push(o);
+        }
+        Ok(Placements { placed, overlays: checked })
     }
 
     /// `client` gives window `id` a title (cut to [`limits::TEXT_MAX`]).
@@ -923,6 +1000,10 @@ impl<M> Wm<M> {
         }
         self.windows.remove(&id);
         self.order.retain(|&x| x != id);
+        let subsurfaces: Vec<u32> = self.subsurfaces.values().filter(|s| s.window == id).map(|s| s.id).collect();
+        for s in subsurfaces {
+            self.remove_subsurface(s);
+        }
         self.queued.remove(&id);
         self.blocked.remove(&id);
         self.configure_due.remove(&id);
@@ -1403,6 +1484,7 @@ impl<M> Wm<M> {
         for id in shown {
             self.release_frame(id);
         }
+        self.subsurface_frames_done();
     }
 
     /// Acknowledges window `id`'s last frame now, shown or not.

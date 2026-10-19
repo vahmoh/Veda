@@ -9,13 +9,16 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use gfx::Rect;
-use proto::display::{self as dp, DisplayError, WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
+use proto::display::{
+    self as dp, DisplayError, SubsurfaceEvent, WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState,
+};
 use proto::input::{InputEvent, keys};
 
 use crate::buffers::Buffers;
 use crate::clients::Identity;
 use crate::limits;
 use crate::outbox::Write;
+use crate::subsurfaces::BUFFERS_MAX;
 use crate::window::{Part, TITLE_HEIGHT};
 use crate::wm::{LIST_MAX, UNRESPONSIVE_NS, Wm};
 
@@ -88,7 +91,7 @@ fn sent_to(wm: &mut Wm<()>, id: u32) -> Vec<WindowEvent> {
 fn draw(wm: &mut Wm<()>, client: u64, id: u32, w: u32, h: u32) {
     let layout = wm.buffer_layout(client, id, (w, h), w, 2, usize::MAX).unwrap();
     wm.attach(client, id, Buffers { layout, memory: () }).unwrap();
-    wm.present(client, id, 0, Vec::new()).unwrap();
+    wm.present(client, id, 0, Vec::new(), Vec::new(), Vec::new()).unwrap();
 }
 
 /// A desktop with the shell's desktop and taskbar, and an application
@@ -244,8 +247,8 @@ fn positions_are_checked_where_they_come_in() {
     assert_eq!(wm.set_position(APP, id, -limits::COORD_MAX, limits::COORD_MAX), Ok(()));
     draw(&mut wm, APP, id, 100, 100);
     let damage = vec![dp::Rect::new(0, 0, u32::MAX, 5)];
-    assert_eq!(wm.present(APP, id, 1, damage), Err(DisplayError::Invalid));
-    assert_eq!(wm.present(APP, id, 1, vec![dp::Rect::new(-50, -50, 70, 70)]), Ok(()));
+    assert_eq!(wm.present(APP, id, 1, damage, Vec::new(), Vec::new()), Err(DisplayError::Invalid));
+    assert_eq!(wm.present(APP, id, 1, vec![dp::Rect::new(-50, -50, 70, 70)], Vec::new(), Vec::new()), Ok(()));
 }
 
 #[test]
@@ -359,7 +362,7 @@ fn a_minimised_window_asked_to_close_may_draw_its_answer() {
     draw(&mut wm, APP, id, 600, 400);
     wm.minimize(SHELL, id, 0).unwrap();
     wm.advance(10_000_000_000);
-    wm.present(APP, id, 1, Vec::new()).unwrap();
+    wm.present(APP, id, 1, Vec::new(), Vec::new(), Vec::new()).unwrap();
     wm.frames_done(1, 2);
     assert!(!sent_to(&mut wm, id).iter().any(|e| matches!(e, WindowEvent::FrameDone { .. })));
     wm.close(SHELL, id, 3).unwrap();
@@ -407,7 +410,7 @@ fn a_minimised_window_is_not_composed_and_waits_for_its_frames() {
     wm.minimize(SHELL, id, 0).unwrap();
     wm.advance(1_000_000_000);
     wm.take_damage();
-    wm.present(APP, id, 1, Vec::new()).unwrap();
+    wm.present(APP, id, 1, Vec::new(), Vec::new(), Vec::new()).unwrap();
     assert!(wm.undamaged());
     wm.frames_done(20, 16);
     assert!(!sent_to(&mut wm, id).iter().any(|e| matches!(e, WindowEvent::FrameDone { .. })));
@@ -927,11 +930,11 @@ fn windows_behind_the_lock_wait_for_their_frames() {
     let lock = lock_screen(&mut wm);
     wm.take_damage();
     // Its frames go unseen: not composed, not acknowledged.
-    wm.present(APP, app, 1, Vec::new()).unwrap();
+    wm.present(APP, app, 1, Vec::new(), Vec::new(), Vec::new()).unwrap();
     wm.frames_done(20, 16);
     assert!(!sent_to(&mut wm, app).iter().any(|e| matches!(e, WindowEvent::FrameDone { .. })));
     // The lock screen's are.
-    wm.present(LOCK, lock, 1, Vec::new()).unwrap();
+    wm.present(LOCK, lock, 1, Vec::new(), Vec::new(), Vec::new()).unwrap();
     wm.frames_done(30, 16);
     assert!(sent_to(&mut wm, lock).iter().any(|e| matches!(e, WindowEvent::FrameDone { .. })));
     // Unlocked, the window's frame is acknowledged with the next.
@@ -1127,4 +1130,284 @@ fn full_screen_alone_does_not_keep_the_screen_awake() {
     // same.
     assert!(!wm.kept_awake());
     assert!(wm.check_idle(60 * S) && wm.locked());
+}
+
+// ---- subsurfaces ------------------------------------------------------------------------------
+
+/// The window's page: a subsurface placed under a 100-pixel toolbar.
+const PAGE: Rect = Rect::new(0, 100, 600, 300);
+
+/// The acknowledgements of subsurfaces' frames written since the last call.
+fn acknowledged(wm: &mut Wm<()>) -> Vec<u32> {
+    let mut out = Vec::new();
+    wm.deliver_subsurfaces(|id, ev| {
+        let SubsurfaceEvent::FrameDone { subsurface, .. } = ev;
+        assert_eq!(*subsurface, id);
+        out.push(id);
+        Write::Sent
+    });
+    out
+}
+
+/// Attaches a buffer of `w` x `h` named `name` to `client`'s subsurface `s`.
+fn attach(wm: &mut Wm<()>, client: u64, s: u32, name: u32, w: u32, h: u32) {
+    let layout = wm.subsurface_layout(client, s, (w, h), w, usize::MAX).unwrap();
+    wm.attach_subsurface(client, s, name, Buffers { layout, memory: () }).unwrap();
+}
+
+/// A frame of window `id` placing `subsurfaces` at `PAGE`, with `overlays`.
+fn place(wm: &mut Wm<()>, id: u32, subsurfaces: &[u32], overlays: &[Rect]) -> Result<(), DisplayError> {
+    let placements = subsurfaces
+        .iter()
+        .map(|&s| dp::Placement {
+            subsurface: s,
+            rect: dp::Rect::new(PAGE.x, PAGE.y, PAGE.w as u32, PAGE.h as u32),
+            background: 0xFFFFFF,
+        })
+        .collect();
+    let overlays = overlays.iter().map(|r| dp::Rect::new(r.x, r.y, r.w as u32, r.h as u32)).collect();
+    wm.present(APP, id, 1, vec![dp::Rect::new(0, 0, 1, 1)], placements, overlays)
+}
+
+/// A desktop with the application's window drawn, and a subsurface of it
+/// presented by the process's other connection, with two buffers, the
+/// first presented.
+fn page(wm: &mut Wm<()>) -> (u32, u32) {
+    let id = desktop(wm);
+    draw(wm, APP, id, 600, 400);
+    let s = wm.create_subsurface(APP_TOO, id).unwrap();
+    attach(wm, APP_TOO, s, 1, 600, 300);
+    attach(wm, APP_TOO, s, 2, 600, 300);
+    wm.present_subsurface(APP_TOO, s, 1, Vec::new()).unwrap();
+    wm.advance(1_000_000_000);
+    (id, s)
+}
+
+#[test]
+fn a_process_makes_subsurfaces_for_its_own_windows() {
+    let mut wm = wm();
+    let id = desktop(&mut wm);
+    // Another process's window is none of its business.
+    assert_eq!(wm.create_subsurface(OTHER, id), Err(DisplayError::NoSuchWindow));
+    assert_eq!(wm.create_subsurface(APP, 999), Err(DisplayError::NoSuchWindow));
+    // Another connection of the window's process may; then it alone
+    // attaches and presents.
+    let s = wm.create_subsurface(APP_TOO, id).unwrap();
+    assert_eq!(wm.subsurface_layout(APP, s, (10, 10), 10, usize::MAX), Err(DisplayError::NoSuchSubsurface));
+    assert_eq!(wm.present_subsurface(OTHER, s, 1, Vec::new()), Err(DisplayError::NoSuchSubsurface));
+    assert_eq!(wm.destroy_subsurface(APP, s), Err(DisplayError::NoSuchSubsurface));
+    attach(&mut wm, APP_TOO, s, 1, 10, 10);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 1, Vec::new()), Ok(None));
+    // The window's frames place it, and only the window's own subsurfaces.
+    let theirs = wm.create_window(OTHER, spec(WindowKind::Normal, 100, 100), 0).unwrap();
+    let foreign = wm.create_subsurface(OTHER, theirs).unwrap();
+    draw(&mut wm, APP, id, 600, 400);
+    assert_eq!(place(&mut wm, id, &[foreign], &[]), Err(DisplayError::Invalid));
+    assert_eq!(place(&mut wm, id, &[s, s], &[]), Err(DisplayError::Invalid));
+    assert_eq!(place(&mut wm, id, &[s], &[]), Ok(()));
+}
+
+#[test]
+fn a_frame_places_few_subsurfaces_and_overlays_that_do_not_overlap() {
+    let mut wm = wm();
+    let id = desktop(&mut wm);
+    draw(&mut wm, APP, id, 600, 400);
+    let many: Vec<u32> = (0..=dp::PLACEMENTS_MAX).map(|_| wm.create_subsurface(APP, id).unwrap()).collect();
+    // Side by side, ten pixels wide each; and overlays a pixel each.
+    let strips = |n: usize, overlap: i32| -> Vec<dp::Placement> {
+        let at = |i: usize| dp::Rect::new(i as i32 * (10 - overlap), 0, 10, 10);
+        (0..n).map(|i| dp::Placement { subsurface: many[i], rect: at(i), background: 0 }).collect()
+    };
+    let dots = |n: usize, overlap: i32| -> Vec<dp::Rect> {
+        (0..n).map(|i| dp::Rect::new(i as i32 * (2 - overlap), 50, 1 + overlap as u32, 1)).collect()
+    };
+    let frame = |wm: &mut Wm<()>, placements, overlays| wm.present(APP, id, 1, Vec::new(), placements, overlays);
+    assert_eq!(frame(&mut wm, strips(dp::PLACEMENTS_MAX + 1, 0), Vec::new()), Err(DisplayError::Invalid));
+    assert_eq!(frame(&mut wm, strips(dp::PLACEMENTS_MAX, 0), Vec::new()), Ok(()));
+    assert_eq!(frame(&mut wm, strips(2, 1), Vec::new()), Err(DisplayError::Invalid));
+    assert_eq!(frame(&mut wm, strips(1, 0), dots(dp::OVERLAYS_MAX + 1, 0)), Err(DisplayError::Invalid));
+    assert_eq!(frame(&mut wm, strips(1, 0), dots(dp::OVERLAYS_MAX, 0)), Ok(()));
+    assert_eq!(frame(&mut wm, strips(1, 0), dots(2, 1)), Err(DisplayError::Invalid));
+    let damage = vec![dp::Rect::new(0, 0, 1, 1); dp::DAMAGE_MAX + 1];
+    assert_eq!(wm.present(APP, id, 1, damage.clone(), Vec::new(), Vec::new()), Err(DisplayError::Invalid));
+    assert_eq!(wm.present_subsurface(APP, many[0], 1, damage), Err(DisplayError::Invalid));
+}
+
+#[test]
+fn presenting_gives_back_the_buffer_shown_before() {
+    let mut wm = wm();
+    let (_, s) = page(&mut wm);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 2, Vec::new()), Ok(Some(1)));
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 1, Vec::new()), Ok(Some(2)));
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 3, Vec::new()), Err(DisplayError::BadBuffer));
+    // A buffer detached while shown is nobody's to give back.
+    wm.detach_subsurface(APP_TOO, s, 1).unwrap();
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 2, Vec::new()), Ok(None));
+}
+
+#[test]
+fn a_subsurface_draws_again_where_it_changed_and_is_seen() {
+    let mut wm = wm();
+    let (id, s) = page(&mut wm);
+    let c = wm.window(id).unwrap().client_rect;
+    // Not placed yet: nothing on the screen changes.
+    wm.take_damage();
+    wm.present_subsurface(APP_TOO, s, 2, vec![dp::Rect::new(10, 20, 30, 40)]).unwrap();
+    assert!(wm.undamaged());
+    // Placed: what changed, where it is placed, and no more of it.
+    place(&mut wm, id, &[s], &[]).unwrap();
+    wm.take_damage();
+    wm.present_subsurface(APP_TOO, s, 1, vec![dp::Rect::new(10, 20, 30, 40), dp::Rect::new(590, 290, 50, 50)]).unwrap();
+    let at = |r: Rect| r.translate(c.x + PAGE.x, c.y + PAGE.y);
+    let mut damage = wm.take_damage();
+    damage.sort_by_key(|r| r.y);
+    assert_eq!(damage, [at(Rect::new(10, 20, 30, 40)), at(Rect::new(590, 290, 10, 10))]);
+    // All of its place when the client says everything changed.
+    wm.present_subsurface(APP_TOO, s, 2, Vec::new()).unwrap();
+    assert_eq!(wm.take_damage(), [at(Rect::new(0, 0, PAGE.w, PAGE.h))]);
+    // Minimised, its window is not composed again.
+    wm.minimize(SHELL, id, 0).unwrap();
+    wm.advance(2_000_000_000);
+    wm.take_damage();
+    wm.present_subsurface(APP_TOO, s, 1, Vec::new()).unwrap();
+    assert!(wm.undamaged());
+}
+
+#[test]
+fn a_frame_that_moves_a_subsurface_or_its_overlays_draws_them_again() {
+    let mut wm = wm();
+    let (id, s) = page(&mut wm);
+    let c = wm.window(id).unwrap().client_rect;
+    let screen = |r: Rect| r.translate(c.x, c.y);
+    place(&mut wm, id, &[s], &[]).unwrap();
+    wm.take_damage();
+    // A bar drawn over the page: there.
+    let bar = Rect::new(200, 110, 380, 42);
+    place(&mut wm, id, &[s], &[bar]).unwrap();
+    let damage = wm.take_damage();
+    assert!(
+        damage.iter().any(|r| r.contains_rect(&screen(bar))) && !damage.iter().any(|r| r.contains_rect(&screen(PAGE)))
+    );
+    // The bar gone, and the page gone: all of the page's place.
+    place(&mut wm, id, &[], &[]).unwrap();
+    assert!(wm.take_damage().iter().any(|r| r.contains_rect(&screen(PAGE))));
+    assert_eq!(wm.window(id).unwrap().placements.placed, []);
+}
+
+#[test]
+fn subsurface_frames_are_acknowledged_once_seen() {
+    let mut wm = wm();
+    let (id, s) = page(&mut wm);
+    // Not placed: it cannot be seen, and waits.
+    wm.frames_done(10, 16);
+    assert!(acknowledged(&mut wm).is_empty());
+    place(&mut wm, id, &[s], &[]).unwrap();
+    wm.frames_done(20, 16);
+    assert_eq!(acknowledged(&mut wm), [s]);
+    // Once a frame: nothing presented, nothing to acknowledge.
+    wm.frames_done(30, 16);
+    assert!(acknowledged(&mut wm).is_empty());
+    // Minimised: once it is back.
+    wm.present_subsurface(APP_TOO, s, 2, Vec::new()).unwrap();
+    wm.minimize(SHELL, id, 0).unwrap();
+    wm.advance(2_000_000_000);
+    wm.frames_done(40, 16);
+    assert!(acknowledged(&mut wm).is_empty());
+    wm.activate(SHELL, id, 3_000_000_000).unwrap();
+    wm.frames_done(50, 16);
+    let mut out = Vec::new();
+    wm.deliver_subsurfaces(|_, ev| {
+        out.push(ev.clone());
+        Write::Sent
+    });
+    assert_eq!(out, [SubsurfaceEvent::FrameDone { subsurface: s, seen_ns: 50, period_ns: 16 }]);
+}
+
+#[test]
+fn a_subsurfaces_acknowledgement_waits_while_its_channel_is_full() {
+    let mut wm = wm();
+    let (id, s) = page(&mut wm);
+    place(&mut wm, id, &[s], &[]).unwrap();
+    wm.frames_done(10, 16);
+    wm.deliver_subsurfaces(|_, _| Write::Full);
+    assert_eq!(wm.blocked_subsurfaces().collect::<Vec<_>>(), [s]);
+    // Frames composed meanwhile add nothing: one acknowledgement waits.
+    wm.present_subsurface(APP_TOO, s, 2, Vec::new()).unwrap();
+    wm.frames_done(26, 16);
+    assert!(acknowledged(&mut wm).is_empty());
+    let mut out = Vec::new();
+    wm.subsurface_writable(s, |id, _| {
+        out.push(id);
+        Write::Sent
+    });
+    assert_eq!(out, [s]);
+    assert_eq!(wm.blocked_subsurfaces().count(), 0);
+}
+
+#[test]
+fn subsurfaces_go_with_their_window_and_their_connection() {
+    let mut wm = wm();
+    let (id, s) = page(&mut wm);
+    let other = wm.create_subsurface(APP, id).unwrap();
+    place(&mut wm, id, &[s], &[]).unwrap();
+    // Destroyed: its place shows its background, until the window's next
+    // frame places it no more.
+    let c = wm.window(id).unwrap().client_rect;
+    wm.take_damage();
+    wm.destroy_subsurface(APP_TOO, s).unwrap();
+    assert_eq!(wm.take_damage(), [PAGE.translate(c.x, c.y)]);
+    assert!(wm.subsurface(s).is_none() && wm.window(id).unwrap().placements.of(s).is_some());
+    assert_eq!(wm.take_destroyed_subsurfaces(), [s]);
+    // A frame on its way as it went may place it still.
+    assert_eq!(place(&mut wm, id, &[s], &[]), Ok(()));
+    assert!(wm.placed_subsurface(id, s).is_none());
+    // Its connection gone, a subsurface goes; its window gone, the rest.
+    let third = wm.create_subsurface(APP_TOO, id).unwrap();
+    wm.disconnect(APP_TOO);
+    assert_eq!(wm.take_destroyed_subsurfaces(), [third]);
+    wm.destroy(APP, id, 0).unwrap();
+    wm.advance(1_000_000_000);
+    assert_eq!(wm.take_destroyed_subsurfaces(), [other]);
+    // Their ids are not given again at once.
+    let theirs = wm.create_window(OTHER, spec(WindowKind::Normal, 10, 10), 0).unwrap();
+    let again = wm.create_subsurface(OTHER, theirs);
+    assert!(again.is_ok_and(|n| ![s, other, third].contains(&n)));
+}
+
+#[test]
+fn a_process_attaches_only_so_much_to_its_subsurfaces() {
+    let mut wm = wm();
+    let id = desktop(&mut wm);
+    let s = wm.create_subsurface(APP, id).unwrap();
+    // As large as the screen at most, and within the memory.
+    assert_eq!(wm.subsurface_layout(APP, s, (1281, 10), 1281, usize::MAX), Err(DisplayError::BadBuffer));
+    assert_eq!(wm.subsurface_layout(APP, s, (100, 100), 100, 100 * 100 * 4 - 1), Err(DisplayError::BadBuffer));
+    // The process's subsurfaces together, from both its connections, a few
+    // buffers each.
+    let mut subsurfaces = Vec::new();
+    for i in 0..limits::SUBSURFACE_SCREENS_PER_PROCESS {
+        let client = if (i / BUFFERS_MAX).is_multiple_of(2) { APP } else { APP_TOO };
+        if i.is_multiple_of(BUFFERS_MAX) {
+            subsurfaces.push(wm.create_subsurface(client, id).unwrap());
+        }
+        let sub = *subsurfaces.last().unwrap();
+        let layout = wm.subsurface_layout(client, sub, (1280, 800), 1280, usize::MAX).unwrap();
+        wm.attach_subsurface(client, sub, i as u32 + 1, Buffers { layout, memory: () }).unwrap();
+    }
+    assert_eq!(wm.subsurface_layout(APP, s, (1, 1), 1, usize::MAX), Err(DisplayError::NoMemory));
+    // Another process has its own.
+    let theirs = wm.create_window(OTHER, spec(WindowKind::Normal, 100, 100), 0).unwrap();
+    let t = wm.create_subsurface(OTHER, theirs).unwrap();
+    assert!(wm.subsurface_layout(OTHER, t, (1280, 800), 1280, usize::MAX).is_ok());
+}
+
+#[test]
+fn a_process_has_only_so_many_subsurfaces() {
+    let mut wm = wm();
+    let id = desktop(&mut wm);
+    for i in 0..limits::SUBSURFACES_PER_PROCESS {
+        let client = if i % 2 == 0 { APP } else { APP_TOO };
+        wm.create_subsurface(client, id).unwrap();
+    }
+    assert_eq!(wm.create_subsurface(APP, id), Err(DisplayError::NoMemory));
 }

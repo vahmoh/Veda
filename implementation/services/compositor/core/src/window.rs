@@ -12,6 +12,7 @@ use proto::display::{Cursor, WindowKind, WindowState};
 
 use crate::buffers::Surface;
 use crate::outbox::Outbox;
+use crate::subsurfaces::Placements;
 
 /// Height of the title bar of decorated windows.
 pub const TITLE_HEIGHT: i32 = 36;
@@ -119,6 +120,9 @@ pub struct Window<M> {
     pub dismissed: bool,
     /// Its client's buffers.
     pub surface: Surface<M>,
+    /// Where its frame shown places its subsurfaces, and what of its buffer
+    /// is drawn over them.
+    pub placements: Placements,
     /// Events waiting for room on its channel.
     pub(crate) outbox: Outbox,
     /// The state it returns to when it is no longer minimised.
@@ -152,6 +156,7 @@ impl<M> Window<M> {
             parent: None,
             dismissed: false,
             surface: Surface::default(),
+            placements: Placements::default(),
             outbox: Outbox::default(),
             unminimized: WindowState::Normal,
             told: None,

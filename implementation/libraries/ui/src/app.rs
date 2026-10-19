@@ -8,24 +8,25 @@
 //!
 //! A frame is drawn whole, and only what it changed of the frame on screen
 //! is presented: a caret's blink, a fading hover or a clock's tick makes the
-//! compositor redraw that, not the window. A picture the window keeps from
-//! frame to frame ([`crate::retained`]) is copied and presented only where
-//! it changed or was drawn over. Frames are drawn when something asks for
-//! one (input, a handle the app waits on, a repaint it asked for), and once
-//! more after a frame that handled input, which may have changed what was
-//! drawn before it was handled.
+//! compositor redraw that, not the window. Where the window shows a
+//! subsurface ([`crate::subsurface`]) only what is drawn over it costs the
+//! frame, and the subsurface's own frames none. Frames are drawn when
+//! something asks for one (input, a handle the app waits on, a repaint it
+//! asked for), and once more after a frame that handled input, which may
+//! have changed what was drawn before it was handled.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use abi::{RawHandle, WaitItem, signals};
-use gfx::{Damage, DrawCache, Rect};
-use proto::display::{Cursor, WindowEvent, WindowSpec};
+use gfx::{DrawCache, Rect};
+use proto::display::{self as dp, Cursor, WindowEvent, WindowSpec};
 
 pub use crate::fonts::load_fonts;
 
 use crate::agent::{AgentServer, AppAgentInfo, Registration};
 use crate::fonts::SharedText;
+use crate::subsurface::Shown;
 use crate::theme::Theme;
 use crate::ui::{Context, Input, Ui, UiState};
 use crate::window::{Display, Window, WindowError, connect};
@@ -124,6 +125,9 @@ pub struct Host {
     /// Frames start cleared to the theme's background (see
     /// [`App::paints_every_pixel`]).
     pub clear: bool,
+    /// Where the frame presented last placed the window's subsurfaces, and
+    /// its overlays.
+    presented: (Vec<dp::Placement>, Vec<Rect>),
 }
 
 impl Host {
@@ -145,6 +149,7 @@ impl Host {
             pending: VecDeque::new(),
             close_requested: false,
             clear: true,
+            presented: (Vec::new(), Vec::new()),
         })
     }
 
@@ -186,10 +191,11 @@ impl Host {
         if self.clear {
             canvas.clear(bg);
         }
-        // What is drawn over the picture the window keeps is noted.
-        if let Some(area) = self.state.retained.begin(buffers, self.clear) {
+        // What is drawn over the subsurface the window shows is noted.
+        if let Some(area) = self.state.kept.begin(buffers, self.clear) {
             canvas.track(area);
         }
+        self.state.placements.clear();
         let mut ui = Ui::for_frame(canvas, &mut self.ctx, &mut self.state, &self.input, &quiet);
         ui.window_state = window_state;
         ui.frame_timing = frame_timing;
@@ -203,9 +209,10 @@ impl Host {
         let handled = !self.input.events.is_empty();
         let touched = ui.canvas.take_touched();
         drop(ui);
-        let kept = self.state.retained.end(touched);
+        let shown = self.state.kept.end(touched);
+        let placements = core::mem::take(&mut self.state.placements);
         if !skip {
-            self.present(kept);
+            self.present(shown, placements);
         }
         if cursor != self.cursor {
             self.cursor = cursor;
@@ -217,13 +224,15 @@ impl Host {
     }
 
     /// Presents the frame just drawn: what it changed of the frame on screen,
-    /// or nothing if it changed nothing. In `kept`, the picture the window
-    /// keeps, where it may have changed is known: only that is compared
-    /// there, so that the compositor gets no more than what did.
-    fn present(&mut self, kept: Option<(Rect, Damage)>) {
-        let changes = match kept {
-            Some((area, maybe)) => self.window.changes_outside(area).map(|mut damage| {
-                for r in maybe.rects() {
+    /// or nothing if it changed nothing, with where it places the window's
+    /// subsurfaces. Where it shows one (`shown`), where the frame may have
+    /// changed is known: only that is compared there, so that the
+    /// compositor gets no more than what did.
+    fn present(&mut self, shown: Option<Shown>, placements: Vec<dp::Placement>) {
+        let overlays = shown.as_ref().map_or_else(Vec::new, |s| s.overlays.rects().to_vec());
+        let changes = match &shown {
+            Some(s) => self.window.changes_outside(s.rect).map(|mut damage| {
+                for r in s.maybe.rects() {
                     for changed in self.window.changes_within(*r).unwrap_or_default().rects() {
                         damage.add(*changed);
                     }
@@ -232,11 +241,24 @@ impl Host {
             }),
             None => self.window.changes(),
         };
-        let _ = match changes {
-            None => self.window.present(&[]),
-            Some(damage) if damage.is_empty() => Ok(()),
-            Some(damage) => self.window.present(damage.rects()),
+        let layout = (placements, overlays);
+        let moved = layout != self.presented;
+        let presented = match changes {
+            None => self.window.present_with(&[], &layout.0, &layout.1),
+            Some(damage) if damage.is_empty() && !moved => return,
+            Some(mut damage) => {
+                if damage.is_empty() {
+                    // Only where its subsurfaces show changed: there.
+                    for p in layout.0.iter().chain(&self.presented.0) {
+                        damage.add(Rect::new(p.rect.x, p.rect.y, p.rect.w as i32, p.rect.h as i32));
+                    }
+                }
+                self.window.present_with(damage.rects(), &layout.0, &layout.1)
+            }
         };
+        if presented.is_ok() {
+            self.presented = layout;
+        }
     }
 
     /// Processes pending window events and draws if needed. Events the UI

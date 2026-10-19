@@ -310,25 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_is_put_back_as_it_is_unnoted() {
-        let src: alloc::vec::Vec<u32> = (0..10 * 8).map(|i| 0x8000_0000 | i).collect();
-        let picture = Picture::new(&src, 10, 8, 10).unwrap();
+    fn an_erased_area_is_transparent_and_unnoted() {
         let mut b = Bitmap::new(20, 20);
         let mut c = Canvas::for_bitmap(&mut b);
+        c.fill_rect(Rect::new(0, 0, 20, 20), Color::WHITE);
         c.track(Rect::new(0, 0, 20, 20));
-        // Whatever the clip and origin, without blending (half-transparent
-        // pixels copied as they are), cut to the picture and the canvas.
+        // Whatever the clip and origin, cut to the canvas.
         c.clip_to(Rect::new(0, 0, 1, 1));
         c.translate(5, 5);
-        c.put_back(&picture, Rect::new(8, 6, 4, 4), 17, 18);
-        // What of `src` lies outside the picture stays where it would have
-        // gone: its first row and column here.
-        c.put_back(&picture, Rect::new(-1, -2, 3, 3), 2, 3);
+        c.erase(Rect::new(17, 18, 10, 10));
+        c.erase(Rect::new(-3, -3, 5, 4));
         assert!(c.take_touched().unwrap().is_empty());
         drop(c);
-        assert_eq!(b.get(17, 18), src[6 * 10 + 8]);
-        assert_eq!(b.get(18, 19), src[7 * 10 + 9]);
-        assert_eq!((b.get(3, 5), b.get(4, 5)), (src[0], src[1]));
-        assert_eq!(b.pixels.iter().filter(|&&p| p != 0).count(), 6);
+        let clear = |x, y| b.get(x, y) == 0;
+        assert!(clear(17, 18) && clear(19, 19) && clear(0, 0) && clear(1, 0));
+        assert!(!clear(16, 18) && !clear(2, 0) && !clear(0, 1));
+        assert_eq!(b.pixels.iter().filter(|&&p| p == 0).count(), 3 * 2 + 2);
     }
 }

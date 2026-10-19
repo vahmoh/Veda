@@ -5,6 +5,12 @@
 //! by the processor into a canvas, or by the GPU (`gpu`), which draws the
 //! same shapes from the same formulas and takes what is text or a drawing
 //! (title bars, cursors, the switcher) from bitmaps drawn here.
+//!
+//! A window's client area shows its buffer, and its subsurfaces where its
+//! frame places them ([`Layer`]): their buffers, opaque, or their
+//! backgrounds where they do not reach, and the window's buffer again over
+//! them within its overlays, blended. Elsewhere over a subsurface the
+//! window's buffer is not read.
 
 use alloc::format;
 use alloc::string::String;
@@ -16,7 +22,7 @@ use compositor_core::wm::DecorState;
 use gfx::color::{over, scale};
 use gfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use num_traits::Float;
-use proto::display::{Cursor, WindowKind, WindowState};
+use proto::display::{self as dp, Cursor, WindowKind, WindowState};
 use rt::vm::Mapping;
 
 use crate::gpu::{Gpu, Slot, Texture, rgba};
@@ -71,6 +77,33 @@ pub struct Look {
     pub dy: i32,
 }
 
+/// A subsurface as a window's frame places it, for the processor: where
+/// in the window's client area, what shows where its buffer does not reach
+/// (`0xFF_RRGGBB`), and the buffer it shows, if any (none presented yet, or
+/// the subsurface gone).
+pub struct Layer<'a> {
+    pub rect: Rect,
+    pub background: u32,
+    pub pixels: Option<Pixels<'a>>,
+}
+
+/// A subsurface as a window's frame places it, for the GPU: as [`Layer`],
+/// with the texture its buffer is in.
+pub struct LayerTexture {
+    pub rect: Rect,
+    pub background: u32,
+    pub content: Option<Texture>,
+}
+
+/// A layer as it is drawn on the screen: its place (cut to the client
+/// area), where its buffer's first pixel is, its background and buffer.
+struct OnScreen<'l, 'a> {
+    place: Rect,
+    origin: (i32, i32),
+    background: u32,
+    pixels: Option<&'l Pixels<'a>>,
+}
+
 /// What windows are drawn with: shadows, the title font, cursors.
 pub struct Decor {
     shadow: ShadowTemplate,
@@ -80,6 +113,9 @@ pub struct Decor {
     cursors: Vec<(Cursor, Bitmap, i32, i32)>,
     /// A row of a client's pixels, copied out to be blended.
     row: Vec<u32>,
+    /// A part of a row of a window's pixels, to be blended over its
+    /// subsurfaces.
+    over: Vec<u32>,
 }
 
 /// The title a window's title bar shows.
@@ -97,6 +133,7 @@ impl Decor {
             title_font,
             cursors: build_cursors(),
             row: Vec::new(),
+            over: Vec::new(),
         }
     }
 
@@ -106,8 +143,9 @@ impl Decor {
         self.cursors.iter().find(|(k, ..)| *k == c).or_else(|| self.cursors.first()).map(|(_, b, hx, hy)| (b, *hx, *hy))
     }
 
-    /// Draws a complete window (shadow, decorations, client content).
-    pub fn draw_window(&mut self, c: &mut Canvas, w: &Window, look: Look) {
+    /// Draws a complete window (shadow, decorations, client content, its
+    /// subsurfaces `layers`).
+    pub fn draw_window(&mut self, c: &mut Canvas, w: &Window, look: Look, layers: &[Layer]) {
         let opacity = look.opacity;
         let op = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
         if op == 0 {
@@ -125,7 +163,7 @@ impl Decor {
                 }
                 let title = Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT);
                 self.draw_title_bar(c, w, title, look);
-                self.draw_client(c, w, client, op, radius);
+                self.draw_client(c, w, client, op, radius, layers);
                 if !maximized {
                     let bc = if look.focused { theme::BORDER } else { theme::BORDER_INACTIVE };
                     c.stroke_rounded_rect(frame, radius as f32, 1.0, bc.fade(opacity));
@@ -133,9 +171,9 @@ impl Decor {
             }
             WindowKind::Popup | WindowKind::Notification => {
                 self.popup_shadow.draw(c, frame.translate(0, POPUP_DROP), POPUP_SHADOW.fade(opacity), true);
-                self.draw_client(c, w, client, op, 0);
+                self.draw_client(c, w, client, op, 0, layers);
             }
-            _ => self.draw_client(c, w, client, op, 0),
+            _ => self.draw_client(c, w, client, op, 0, layers),
         }
     }
 
@@ -171,8 +209,15 @@ impl Decor {
     /// Draws a complete window with the GPU, as [`Decor::draw_window`]
     /// does: its shadow and border by shaders, its title bar from a texture
     /// drawn here (again when it changes), its client's pixels from
-    /// `content`.
-    pub fn draw_window_gpu(&mut self, g: &mut Gpu, w: &Window, look: Look, content: Option<Texture>) {
+    /// `content`, its subsurfaces from `layers`.
+    pub fn draw_window_gpu(
+        &mut self,
+        g: &mut Gpu,
+        w: &Window,
+        look: Look,
+        content: Option<Texture>,
+        layers: &[LayerTexture],
+    ) {
         let opacity = look.opacity.clamp(0.0, 1.0);
         if (opacity * 255.0) as u32 == 0 {
             return;
@@ -202,7 +247,7 @@ impl Decor {
                         g.fill(title, 0.0, rgba(tc.fade(opacity).premul()));
                     }
                 }
-                draw_client_gpu(g, w, client, opacity, radius, content);
+                draw_client_gpu(g, w, client, opacity, radius, content, layers);
                 if !maximized {
                     let bc = if look.focused { theme::BORDER } else { theme::BORDER_INACTIVE };
                     g.stroke(frame, radius as f32, 1.0, rgba(bc.fade(opacity).premul()));
@@ -211,9 +256,9 @@ impl Decor {
             WindowKind::Popup | WindowKind::Notification => {
                 let r = frame.translate(0, POPUP_DROP);
                 g.shadow(r, POPUP_RADIUS as f32, POPUP_BLUR, rgba(POPUP_SHADOW.fade(opacity).premul()), false);
-                draw_client_gpu(g, w, client, opacity, 0, content);
+                draw_client_gpu(g, w, client, opacity, 0, content, layers);
             }
-            _ => draw_client_gpu(g, w, client, opacity, 0, content),
+            _ => draw_client_gpu(g, w, client, opacity, 0, content, layers),
         }
     }
 
@@ -308,9 +353,10 @@ impl Decor {
         }
     }
 
-    /// Copies the client buffer into `dst`, rounding the bottom corners by
-    /// `radius` and applying `opacity` (0..=255).
-    fn draw_client(&mut self, c: &mut Canvas, w: &Window, dst: Rect, opacity: u32, radius: i32) {
+    /// Copies the client buffer into `dst`, with its subsurfaces `layers`,
+    /// rounding the bottom corners by `radius` and applying `opacity`
+    /// (0..=255).
+    fn draw_client(&mut self, c: &mut Canvas, w: &Window, dst: Rect, opacity: u32, radius: i32, layers: &[Layer]) {
         let Some(src) = Pixels::shown(&w.surface) else {
             if w.decorated() {
                 c.fill_rect(dst, theme::CLIENT_BACKGROUND);
@@ -341,18 +387,48 @@ impl Decor {
         let opaque = w.opaque();
         let copy = opaque && opacity == 255;
         let alpha = if opaque { 0xFF00_0000 } else { 0 };
+        // Its subsurfaces and overlays on the screen.
+        let placed: Vec<OnScreen> = layers
+            .iter()
+            .map(|l| {
+                let at = l.rect.translate(dst.x, dst.y);
+                OnScreen {
+                    place: at.intersect(&vis),
+                    origin: (at.x, at.y),
+                    background: l.background,
+                    pixels: l.pixels.as_ref(),
+                }
+            })
+            .filter(|l| !l.place.is_empty())
+            .collect();
+        let overlays: Vec<Rect> = if placed.is_empty() {
+            Vec::new()
+        } else {
+            w.placements
+                .overlays
+                .iter()
+                .map(|o| o.translate(dst.x, dst.y).intersect(&vis))
+                .filter(|o| !o.is_empty())
+                .collect()
+        };
+        let client = Client { src: &src, dst, opaque, layers: &placed, overlays: &overlays };
         for y in vis.y..vis.bottom() {
             let to = ((y - b.y) * stride + vis.x - b.x) as usize;
             let out = &mut pixels[to..to + n];
             let in_corner_rows = radius > 0 && y >= corner_top;
+            let layered = placed.iter().any(|l| l.place.y <= y && y < l.place.bottom());
             if copy && !in_corner_rows {
-                if !src.copy_row(vis.x - dst.x, y - dst.y, out) {
+                if layered {
+                    client.row(out, (vis.x, y), &mut self.over);
+                } else if !src.copy_row(vis.x - dst.x, y - dst.y, out) {
                     out.fill(theme::CLIENT_BACKGROUND.premul());
                 }
                 continue;
             }
             let line = &mut self.row[..n];
-            if !src.copy_row(vis.x - dst.x, y - dst.y, line) {
+            if layered {
+                client.row(line, (vis.x, y), &mut self.over);
+            } else if !src.copy_row(vis.x - dst.x, y - dst.y, line) {
                 continue;
             }
             if in_corner_rows {
@@ -362,6 +438,102 @@ impl Decor {
             }
         }
     }
+}
+
+/// A window's client area as it is drawn: its buffer `src` at `dst` on the
+/// screen, its subsurfaces `layers` and its `overlays` (on the screen, cut
+/// to what is drawn).
+struct Client<'c, 'l, 'a> {
+    src: &'c Pixels<'c>,
+    dst: Rect,
+    opaque: bool,
+    layers: &'c [OnScreen<'l, 'a>],
+    overlays: &'c [Rect],
+}
+
+impl Client<'_, '_, '_> {
+    /// Row `y` from `x0` on, as the window's frame shows it: its buffer,
+    /// its subsurfaces where it places them (their pixels, or their
+    /// backgrounds where they do not reach), and its buffer again over them
+    /// within its overlays, blended: into `line`. `scratch` holds the
+    /// window's pixels on their way to be blended.
+    fn row(&self, line: &mut [u32], (x0, y): (i32, i32), scratch: &mut Vec<u32>) {
+        let x1 = x0 + line.len() as i32;
+        let on_row = |r: &Rect| r.y <= y && y < r.bottom();
+        let part = |r: &Rect| (r.x.max(x0), r.right().min(x1));
+        // The window's own pixels where no subsurface is: between them
+        // (placements do not overlap).
+        let mut spans: [(i32, i32); dp::PLACEMENTS_MAX] = [(0, 0); dp::PLACEMENTS_MAX];
+        let mut n = 0;
+        for l in self.layers.iter().filter(|l| on_row(&l.place)).take(spans.len()) {
+            spans[n] = part(&l.place);
+            n += 1;
+        }
+        let spans = &mut spans[..n];
+        spans.sort_unstable();
+        let mut x = x0;
+        for &(a, b) in spans.iter().chain(core::iter::once(&(x1, x1))) {
+            if a > x {
+                let own = &mut line[(x - x0) as usize..(a - x0) as usize];
+                if !self.src.copy_row(x - self.dst.x, y - self.dst.y, own) {
+                    own.fill(theme::CLIENT_BACKGROUND.premul());
+                }
+            }
+            x = x.max(b);
+        }
+        // The subsurfaces.
+        for l in self.layers.iter().filter(|l| on_row(&l.place)) {
+            let (a, b) = part(&l.place);
+            if a >= b {
+                continue;
+            }
+            let (bx, by) = (a - l.origin.0, y - l.origin.1);
+            let reach = match l.pixels {
+                Some(p) if by < p.height() => (p.width() - bx).clamp(0, b - a),
+                _ => 0,
+            };
+            let (shown, rest) = line[(a - x0) as usize..(b - x0) as usize].split_at_mut(reach as usize);
+            if !shown.is_empty() && !l.pixels.is_some_and(|p| p.copy_row(bx, by, shown)) {
+                shown.fill(l.background);
+            } else if !self.opaque {
+                // Opaque, in whatever window: an opaque one's pixels' alpha
+                // is ignored already.
+                for p in shown.iter_mut() {
+                    *p |= 0xFF00_0000;
+                }
+            }
+            rest.fill(l.background);
+        }
+        // The window over them, in its overlays (which do not overlap).
+        for o in self.overlays.iter().filter(|o| on_row(o)) {
+            for l in self.layers.iter().filter(|l| on_row(&l.place)) {
+                let (a, b) = part(&o.intersect(&l.place));
+                if a >= b {
+                    continue;
+                }
+                let k = (b - a) as usize;
+                if scratch.len() < k {
+                    scratch.resize(k, 0);
+                }
+                if self.src.copy_row(a - self.dst.x, y - self.dst.y, &mut scratch[..k]) {
+                    blend_row(&mut line[(a - x0) as usize..(b - x0) as usize], &scratch[..k], 0, 255);
+                }
+            }
+        }
+    }
+}
+
+/// Pixel (`x`, `y`) of a window's client area as its frame shows it, from
+/// its buffer `src` and its subsurfaces `layers` (see [`Client::row`]).
+pub fn composite_pixel(src: &Pixels, layers: &[Layer], overlays: &[Rect], x: i32, y: i32) -> u32 {
+    let own = src.get(x, y);
+    let Some(l) = layers.iter().find(|l| l.rect.contains(x, y)) else { return own };
+    let (bx, by) = (x - l.rect.x, y - l.rect.y);
+    let under = match &l.pixels {
+        Some(p) if bx < p.width() && by < p.height() => p.get(bx, by) | 0xFF00_0000,
+        _ => l.background,
+    };
+    if overlays.iter().any(|o| o.contains(x, y)) { over(own, under) } else { under }
 }
 
 /// Blends `src` over `dst`, each pixel's alpha raised by `alpha` (an opaque
@@ -444,10 +616,18 @@ fn draw_button_glyph(c: &mut Canvas, part: Part, r: Rect, color: Color, maximize
 }
 
 /// Draws a window's client area with the GPU, as `Decor::draw_client`
-/// does: its pixels from `content`, the bottom corners rounded by `radius`,
-/// at `opacity`; where the client has not drawn (yet, or since it was made
-/// larger), the placeholder.
-fn draw_client_gpu(g: &mut Gpu, w: &Window, dst: Rect, opacity: f32, radius: i32, content: Option<Texture>) {
+/// does: its pixels from `content`, its subsurfaces from `layers`, the
+/// bottom corners rounded by `radius`, at `opacity`; where the client has
+/// not drawn (yet, or since it was made larger), the placeholder.
+fn draw_client_gpu(
+    g: &mut Gpu,
+    w: &Window,
+    dst: Rect,
+    opacity: f32,
+    radius: i32,
+    content: Option<Texture>,
+    layers: &[LayerTexture],
+) {
     let background = rgba(theme::CLIENT_BACKGROUND.premul());
     let (Some((bw, bh)), Some(t)) = (w.surface.size(), content) else {
         if w.decorated() {
@@ -461,7 +641,46 @@ fn draw_client_gpu(g: &mut Gpu, w: &Window, dst: Rect, opacity: f32, radius: i32
     }
     let vis = dst.intersect(&Rect::new(dst.x, dst.y, bw, bh));
     let round = (radius > 0).then_some((dst, radius as f32));
-    g.image(t, Rect::new(0, 0, vis.w, vis.h), vis, opacity, w.opaque(), round);
+    // Its own pixels where no subsurface is: under one they would show
+    // through it as the window fades.
+    let places: Vec<Rect> = layers.iter().map(|l| l.rect.translate(dst.x, dst.y).intersect(&vis)).collect();
+    for part in vis.without(&places) {
+        g.image(t, Rect::new(part.x - dst.x, part.y - dst.y, part.w, part.h), part, opacity, w.opaque(), round);
+    }
+    // Its subsurfaces: their buffers where they reach, their backgrounds
+    // where they do not.
+    for (l, &place) in layers.iter().zip(&places) {
+        if place.is_empty() {
+            continue;
+        }
+        let at = l.rect.translate(dst.x, dst.y);
+        let reach = l.content.map_or(Rect::default(), |s| Rect::new(at.x, at.y, s.w, s.h).intersect(&place));
+        if let Some(s) = l.content
+            && !reach.is_empty()
+        {
+            g.image(s, Rect::new(reach.x - at.x, reach.y - at.y, reach.w, reach.h), reach, opacity, true, round);
+        }
+        let background = rgba(l.background).map(|c| c * opacity.min(1.0));
+        if reach.is_empty() {
+            g.fill(place, 0.0, background);
+        } else {
+            g.fill(Rect::new(reach.right(), place.y, place.right() - reach.right(), place.h), 0.0, background);
+            g.fill(Rect::new(place.x, reach.bottom(), reach.w, place.bottom() - reach.bottom()), 0.0, background);
+        }
+    }
+    // The window over them, in its overlays: blended, with its alpha. (As
+    // the window fades, a little of a subsurface shows through what is
+    // drawn over it there, which the processor's composition, of the two
+    // first, does not show.)
+    for o in &w.placements.overlays {
+        let o = o.translate(dst.x, dst.y);
+        for place in &places {
+            let r = o.intersect(place);
+            if !r.is_empty() {
+                g.image(t, Rect::new(r.x - dst.x, r.y - dst.y, r.w, r.h), r, opacity, false, round);
+            }
+        }
+    }
 }
 
 /// What a decorated window's title bar is drawn from: its texture is

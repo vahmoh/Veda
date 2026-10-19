@@ -19,8 +19,8 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use gfx::{Align, Canvas, Color, Picture, Rect};
-use proto::display::{Cursor, WindowEvent, WindowState, modifiers};
+use gfx::{Align, Canvas, Color, Rect};
+use proto::display::{self as dp, Cursor, WindowEvent, WindowState, modifiers};
 
 use crate::fonts::SharedText;
 use crate::theme::{Font, Theme};
@@ -281,9 +281,10 @@ pub struct UiState {
     /// no frame asked for in [`ANIMATION_FRAMES`] go: no longer drawn,
     /// their widgets are at rest.
     pub(crate) animations: BTreeMap<Id, Animation>,
-    /// What the window's buffers hold of the picture it retains
-    /// ([`Ui::retained`]).
-    pub(crate) retained: crate::retained::Retained,
+    /// What the window's buffers hold where it shows a subsurface
+    /// ([`Ui::subsurface`]), and where this frame places its subsurfaces.
+    pub(crate) kept: crate::subsurface::Kept,
+    pub(crate) placements: Vec<dp::Placement>,
     /// Frames finished.
     frames: u64,
 }
@@ -496,28 +497,39 @@ impl<'a> Ui<'a> {
         self.skip_present = true;
     }
 
-    /// Shows `picture` with its top-left at `(x, y)` of the window (whatever
-    /// the canvas's origin), as a picture the window keeps from frame to
-    /// frame ([`crate::retained`]): a large one that changes in parts, such
-    /// as a web page. `id` names it (another id is another picture), and
-    /// `changed` is what changed of it since the last frame showed it, in
-    /// its own coordinates.
+    /// Shows subsurface `id` (one of the window's, see `proto::display`) in
+    /// `rect` of the window (whatever the canvas's origin), with `background`
+    /// where its buffer does not reach ([`crate::subsurface`]): a picture of
+    /// its own, such as a web page, whose frames reach the screen without
+    /// the window's.
     ///
-    /// The frame's buffer gets it again only where it changed since that
-    /// buffer was drawn, and where something was drawn over it then; and it
-    /// is compared with the frame on the screen only where it may differ
-    /// from it. What is drawn over it is noted as it is drawn, so it is
-    /// shown before anything else is drawn where it lies. It is for windows that
-    /// paint every pixel themselves ([`crate::App::paints_every_pixel`]):
-    /// a frame that starts cleared has it copied whole.
-    pub fn retained(&mut self, id: u64, x: i32, y: i32, picture: &Picture<'_>, changed: &[Rect]) {
-        let rect =
-            Rect::new(x, y, picture.width(), picture.height()).intersect(&Rect::new(0, 0, self.width, self.height));
-        let changed: Vec<Rect> = changed.iter().map(|r| r.translate(x, y)).collect();
-        let copy = self.state.retained.show(id, rect, &changed);
-        for r in copy.rects() {
-            self.canvas.put_back(picture, r.translate(-x, -y), r.x, r.y);
+    /// What the frame draws over it (a menu, a bar) is shown over it,
+    /// blended: the window's buffer is kept transparent there but for that,
+    /// which the canvas notes as it is drawn, so it is shown before
+    /// anything else is drawn where it lies. The frame's buffer is erased
+    /// again only where something was drawn over it when that buffer was
+    /// drawn last, and compared with the frame on the screen only where
+    /// either drew over it: the window's frames cost what is drawn over
+    /// it, never the subsurface. It is for windows that paint every pixel
+    /// themselves ([`crate::App::paints_every_pixel`]): a frame that starts
+    /// cleared erases all of it. That is so of the first a frame shows; the
+    /// place of any other is erased whole each frame, and the window's
+    /// buffer blended over all of it.
+    pub fn subsurface(&mut self, id: u32, rect: Rect, background: Color) {
+        let rect = rect.intersect(&Rect::new(0, 0, self.width, self.height));
+        // The compositor takes a few, which do not overlap.
+        let overlaps =
+            |p: &dp::Placement| Rect::new(p.rect.x, p.rect.y, p.rect.w as i32, p.rect.h as i32).intersects(&rect);
+        let placements = &self.state.placements;
+        if rect.is_empty() || placements.len() >= dp::PLACEMENTS_MAX || placements.iter().any(overlaps) {
+            return;
         }
+        for r in self.state.kept.show(rect).rects() {
+            self.canvas.erase(*r);
+        }
+        let at = dp::Rect::new(rect.x, rect.y, rect.w as u32, rect.h as u32);
+        let background = background.premul() & 0xFF_FFFF;
+        self.state.placements.push(dp::Placement { subsurface: id, rect: at, background });
     }
 
     /// The window's state (normal, maximised, minimised or full screen).

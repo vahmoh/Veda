@@ -4,9 +4,10 @@
 //! Browser: the web, with WPE WebKit, in tabs.
 //!
 //! WebKit runs on a thread of its own ([`engine`]: its C bridge,
-//! `engine/`), which draws each tab's page into a frame the window shows
-//! and hears its input; its web content and network processes are this
-//! program started again, which [`engine::auxiliary_process`] runs. What
+//! `engine/`), which presents each tab's page as a subsurface of the window
+//! ([`subsurfaces`]) and hears its input; its web content and network
+//! processes are this program started again, which
+//! [`engine::auxiliary_process`] runs. What
 //! the browser decides (addresses, search, history, bookmarks, settings,
 //! the session, downloads' names, keys) is the host-tested
 //! `browser-core`. One browser runs at a time ([`instance`]).
@@ -19,6 +20,8 @@
 //! * [`store`]: its files. [`agent`]: the voice agent's hands.
 //! * [`sound`]: pages' sound, which the engine's media plays through the
 //!   audio service.
+//! * [`subsurfaces`]: pages' subsurfaces, which the engine's thread presents
+//!   WebKit's frames to.
 
 mod agent;
 mod browser;
@@ -30,6 +33,7 @@ mod network;
 mod page;
 mod sound;
 mod store;
+mod subsurfaces;
 mod tab;
 
 use ui::WindowSpec;

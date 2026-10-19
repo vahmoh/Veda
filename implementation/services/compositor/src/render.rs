@@ -18,7 +18,7 @@ use proto::display::WindowEvent;
 use rt::println;
 use rt::vm::Mapping;
 
-use crate::decor::{self, Look, Window};
+use crate::decor::{self, Layer, LayerTexture, Look, Window};
 use crate::gpu::{Gpu, Slot};
 use crate::pixels::Pixels;
 use crate::startup::{Moved, Progress};
@@ -55,6 +55,20 @@ fn animation(w: &Window, now: u64) -> (f32, i32) {
 fn look(wm: &Wm<Mapping>, w: &Window, now: u64) -> Look {
     let (opacity, dy) = animation(w, now);
     Look { focused: wm.focused() == Some(w.id), decor: wm.decor(), unresponsive: wm.unresponsive(w.id), opacity, dy }
+}
+
+/// Window `w`'s subsurfaces, where its frame places them, for the
+/// processor.
+pub(crate) fn layers<'a>(wm: &'a Wm<Mapping>, w: &Window) -> Vec<Layer<'a>> {
+    w.placements
+        .placed
+        .iter()
+        .map(|p| Layer {
+            rect: p.rect,
+            background: p.background,
+            pixels: wm.placed_subsurface(w.id, p.subsurface).and_then(|s| s.shown()).and_then(|b| Pixels::of(b, 0)),
+        })
+        .collect()
 }
 
 impl Compositor {
@@ -176,7 +190,7 @@ impl Compositor {
                 if !wm.shown(win) || !win.paint_bounds().intersects(&r) {
                     continue;
                 }
-                decor.draw_window(&mut c, win, look(wm, win, now));
+                decor.draw_window(&mut c, win, look(wm, win, now), &layers(wm, win));
             }
             if let Some(s) = wm.switcher()
                 && s.bounds().intersects(&r)
@@ -197,11 +211,15 @@ impl Compositor {
                 out.flush(r);
             }
         }
-        // The GPU's copies of the windows, if it composes again, are made
-        // anew.
+        // The GPU's copies of the windows and their subsurfaces, if it
+        // composes again, are made anew.
         for w in self.wm.windows_mut() {
             w.surface.upload.clear();
             w.surface.upload_all = true;
+        }
+        for s in self.wm.subsurfaces_mut() {
+            s.upload.clear();
+            s.upload_all = true;
         }
         if let Some(s) = &mut self.startup {
             s.frame(&mut self.screen, now);
@@ -312,12 +330,30 @@ impl Compositor {
             // Its pixels, as the GPU has them.
             let changed = win.surface.upload.take();
             let all = core::mem::replace(&mut win.surface.upload_all, false);
-            let content = Pixels::shown(&win.surface).and_then(|p| g.window(id, &p, all, &changed));
+            let content = Pixels::shown(&win.surface).and_then(|p| g.picture(Slot::Window(id), &p, all, &changed));
             if content.is_none() {
                 win.surface.upload_all = true;
             }
+            let placed = win.placements.placed.clone();
+            // Its subsurfaces' pixels, as the GPU has them.
+            let mut layers = Vec::with_capacity(placed.len());
+            for p in placed {
+                let content = wm.subsurface_mut(p.subsurface).filter(|s| s.window == id).and_then(|s| {
+                    let changed = s.upload.take();
+                    let all = core::mem::replace(&mut s.upload_all, false);
+                    let content = s
+                        .shown()
+                        .and_then(|b| Pixels::of(b, 0))
+                        .and_then(|px| g.picture(Slot::Subsurface(p.subsurface), &px, all, &changed));
+                    if content.is_none() {
+                        s.upload_all = true;
+                    }
+                    content
+                });
+                layers.push(LayerTexture { rect: p.rect, background: p.background, content });
+            }
             let Some(win) = wm.window(id) else { continue };
-            decor.draw_window_gpu(g, win, look(wm, win, now), content);
+            decor.draw_window_gpu(g, win, look(wm, win, now), content, &layers);
         }
         if let Some(s) = wm.switcher()
             && s.bounds().intersects(&clip)

@@ -15,8 +15,9 @@
 //! any other canvas makes its own when it first needs it.
 //!
 //! A canvas can note where drawing touches an area ([`Canvas::track`]): a
-//! window keeps a picture there from frame to frame, and puts it back
-//! ([`Canvas::put_back`]) where something was drawn over it.
+//! window shows a subsurface there, keeps it transparent but for what is
+//! drawn over the subsurface, and erases that ([`Canvas::erase`]) once it
+//! is drawn there no more.
 //!
 //! The loops over pixels stay scalar (see [`crate::color`]).
 
@@ -392,23 +393,14 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Copies `src` of `picture` as it is, without blending, to device
-    /// position `(x, y)`, whatever the clip and the origin, and unnoted by
-    /// tracking ([`Canvas::track`]): how a window puts back a picture that
-    /// it keeps where the picture changed, or where something was drawn
-    /// over it.
-    pub fn put_back(&mut self, picture: &Picture<'_>, src: Rect, x: i32, y: i32) {
-        let part = src.intersect(&Rect::new(0, 0, picture.width, picture.height));
-        // Where the part of `src` in the picture goes, cut to the canvas.
-        let (x, y) = (x.saturating_add(part.x.saturating_sub(src.x)), y.saturating_add(part.y.saturating_sub(src.y)));
-        let to = Rect::new(x, y, part.w, part.h).intersect(&Rect::new(0, 0, self.width, self.height));
-        if to.is_empty() {
-            return;
-        }
-        let (sx, sy) = (part.x + to.x - x, part.y + to.y - y);
-        for row in 0..to.h {
-            let from = &picture.row(sy + row)[sx as usize..(sx + to.w) as usize];
-            self.device_row(to.y + row, to.x, to.right()).copy_from_slice(from);
+    /// Makes `r` (device coordinates) transparent, whatever the clip and
+    /// the origin, and unnoted by tracking ([`Canvas::track`]): how a window
+    /// keeps the place of a subsurface clear, but for what is drawn over the
+    /// subsurface, which the compositor blends over it.
+    pub fn erase(&mut self, r: Rect) {
+        let to = r.intersect(&Rect::new(0, 0, self.width, self.height));
+        for y in to.y..to.bottom() {
+            self.device_row(y, to.x, to.right()).fill(0);
         }
     }
 

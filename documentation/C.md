@@ -134,7 +134,8 @@ call and the protocols' messages, which a program writes itself.
 registers (as `mcontext_t`) and lets it go on, as a garbage collector that
 scans stacks does (`veda_thread_suspend`, `veda_thread_registers`,
 `veda_thread_resume`), `<veda/memory.h>` says how much memory the
-process holds (`veda_process_memory`), and `<veda/sandbox.h>` gives up,
+process holds (`veda_process_memory`) and hands a memory file's memory to
+a Veda service (`veda_memory_file`), and `<veda/sandbox.h>` gives up,
 for good, all of the file system but a few places, every service but a
 few, and creating processes, reading the kernel log and making memory
 executable (`veda_confine_files`, `veda_confine_services`,

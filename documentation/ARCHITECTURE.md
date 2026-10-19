@@ -440,14 +440,28 @@ tested on the host.
   The frames of a window that cannot be seen (minimised, or behind the
   lock) are neither composed nor acknowledged until it is shown again. Clients' memory is checked when attached and never
   borrowed as a Rust slice, since the client may be writing it.
+- **Subsurfaces.** A window may show pictures of its own in parts of it,
+  which their client presents apart from the window's frames: a process
+  makes one for its window from any of its connections (the browser's
+  engine thread presents its pages), attaches buffers in memory objects of
+  their own (WebKit's memory files), each once, and presents one at a time
+  with what changed. The answer gives back the buffer shown before, which
+  the compositor reads no more, and a `FrameDone` of their own paces them.
+  The window's frames place them, and say where the window's buffer is
+  drawn over them (its overlays: a menu, a bar), blended; elsewhere the
+  window's buffer is not read there. The processor copies a subsurface's
+  rows in place of the window's; the GPU keeps a texture of its own for
+  it. A page's frames thus reach the screen without the browser copying
+  them or drawing its window ([The web browser](BROWSER.md#how-it-fits-together)).
 - **Composition** is damage driven, at most once per display frame. Where
   a display flips and the GPU can draw into its pictures, the GPU composes
   every frame with OpenGL ES straight into the next picture (`gpu.rs`):
-  each window is a texture, and the effects are shaders from the
-  processor's formulas. If the GPU fails a read-back check, or later takes
-  two seconds over a frame, the processor composes again (the GPU is set
-  up again once its service is back, three times at most). Elsewhere the
-  processor composes into a back buffer and copies it to the screen.
+  each window and subsurface is a texture, and the effects are shaders
+  from the processor's formulas. If the GPU fails a read-back check, or
+  later takes two seconds over a frame, the processor composes again (the
+  GPU is set up again once its service is back, three times at most).
+  Elsewhere the processor composes into a back buffer and copies it to the
+  screen.
 - **The screen** (`screen.rs`) is the firmware's framebuffer, written in
   place at 60 Hz, until a display driver that can flip attaches (see
   [Displays and GPUs](#displays-and-gpus)). Then each frame goes into a
@@ -477,7 +491,8 @@ tested on the host.
   from its own windows. Only drivers
   (`devmgr`'s, and the driver VM's programs, which speak as `devmgr`)
   report input or attach a display. A process has at most 64 windows and
-  16 screens' worth of buffers.
+  16 screens' worth of buffers, and 256 subsurfaces and 64 screens' worth
+  of theirs.
 - **The lock** (`compositor-core`'s `lock`). While the screen is locked,
   the compositor draws only the lock service's windows (`WindowKind::Lock`,
   above every other layer), over a backdrop of its own until one has drawn
@@ -632,7 +647,7 @@ the service watches it and shows its window whenever it is locked.
 | `font` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterised glyphs, a glyph bitmap cache, text layout |
 | `image` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding, for Paint and the build machine's tools: PNG and BMP by Veda's writers (PNG's deflate by `miniz_oxide`), JPEG by `jpeg-encoder`, QOI by `qoi` |
 | `gfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames, and where drawing touches an area |
-| `ui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme; pictures a window keeps from frame to frame, copied and presented where they changed |
+| `ui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme; the places of a window's subsurfaces, which its frames keep clear but for what they draw over them |
 | `text` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
 
 In `ui`, the application's `update` lays out and draws the widgets each

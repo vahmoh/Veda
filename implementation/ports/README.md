@@ -255,9 +255,13 @@ What the patches change:
   names kept apart from GIO's copy; WPE's hardware acceleration policy, as
   GTK's (pages painted on the CPU, or composited, as the browser chooses);
   no injected bundle; damage that covers an antialiased layer's edges
-  (the fringe a rotating element's corners left behind); and a frame read
+  (the fringe a rotating element's corners left behind); a frame read
   back from the GPU only where it changed since its buffer was last drawn,
-  which is all the compositor draws of it (`AcceleratedSurface.cpp`). See
+  which is all the compositor draws of it (`AcceleratedSurface.cpp`); and
+  each shared buffer's memory file kept on its WPE buffer in the UI process
+  (`wpe-veda-memory-file`), which the embedder hands to Veda's window
+  system, as the page's subsurface shows it from there
+  (`AcceleratedBackingStore.cpp`). See
   [WebKit on Veda](../../documentation/BROWSER.md#webkit-on-veda).
 * **icu**: Veda as a Linux-like platform in its build, and the system's
   time zone named by the tz database's zone of its offset

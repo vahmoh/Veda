@@ -344,13 +344,19 @@ libraries ([Rust on Veda](RUST.md)).
   that handled input (which may have changed what that frame drew before
   it was handled); `ui.repaint_at(deadline_ns)` or `ui.repaint()` asks for
   more. A frame is drawn whole, and what it
-  changed of the one on the screen is found by comparing them; a large
-  picture that changes in parts (a web page) is shown with
-  `ui.retained(id, x, y, &picture, changed)` instead, by a window that
-  paints every pixel itself (`App::paints_every_pixel`): each of the
-  window's buffers gets again only what changed since it last showed the
-  picture and what was drawn over it there (the canvas notes that,
-  `Canvas::track`), and that alone is compared and presented of it.
+  changed of the one on the screen is found by comparing them. A picture
+  that changes on its own (a web page) is a subsurface of the window
+  (`proto::display`), which its client presents apart from the window's
+  frames: a frame shows it with `ui.subsurface(id, rect, background)`,
+  in a window that paints every pixel itself (`App::paints_every_pixel`).
+  The window's buffer is kept transparent there but for what the frame
+  draws over it (the canvas notes that, `Canvas::track`), which the
+  compositor blends over it: each buffer is erased again only where
+  something was drawn over the subsurface when it was drawn last, and
+  only that is compared and presented, so the window's frames cost what
+  is drawn over the subsurface, and the subsurface's frames none of the
+  window's. That is so of the first subsurface a frame shows; the place
+  of any other is erased whole each frame, and blended over whole.
 * **The window.** `ui.set_title`, `ui.window_state()`,
   `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
   (to the front), `ui.close_window()`.

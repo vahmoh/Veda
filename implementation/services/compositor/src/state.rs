@@ -19,13 +19,13 @@ use abi::signals;
 use compositor_core::Wm;
 use compositor_core::outbox::Write;
 use gfx::{Bitmap, Rect};
-use proto::display::{self as dp, Cursor, DisplayError, LockNotice, WindowEvent};
+use proto::display::{self as dp, Cursor, DisplayError, LockNotice, SubsurfaceEvent, WindowEvent};
 use rt::object::Channel;
 use rt::println;
 use rt::vm::Mapping;
 
-use crate::decor::Decor;
-use crate::gpu::{Gpu, Pending};
+use crate::decor::{self, Decor};
+use crate::gpu::{Gpu, Pending, Slot};
 use crate::pixels::{self, Pixels};
 use crate::screen::Screen;
 use crate::startup::Startup;
@@ -41,6 +41,8 @@ pub(crate) struct Compositor {
     pub(crate) decor: Decor,
     /// Each window's event channel (the compositor's end).
     pub(crate) events: BTreeMap<u32, Channel>,
+    /// Each subsurface's event channel (the compositor's end).
+    pub(crate) subsurface_events: BTreeMap<u32, Channel>,
     /// Each display client's connection.
     pub(crate) clients: BTreeMap<u64, Channel>,
     /// The cursor as drawn: its shape, where the pointer was, and what it
@@ -84,7 +86,18 @@ fn gone(channel: &Channel) -> bool {
 /// Writes `ev` on `channel`, a window's event channel.
 fn write(channel: Option<&Channel>, ev: &WindowEvent) -> Write {
     let Some(channel) = channel else { return Write::Gone };
-    match ipc::send_event(channel, dp::EVENT, ev.clone()) {
+    written(ipc::send_event(channel, dp::EVENT, ev.clone()))
+}
+
+/// Writes `ev` on `channel`, a subsurface's event channel.
+fn write_subsurface(channel: Option<&Channel>, ev: &SubsurfaceEvent) -> Write {
+    let Some(channel) = channel else { return Write::Gone };
+    written(ipc::send_event(channel, dp::SUBSURFACE_EVENT, ev.clone()))
+}
+
+/// What became of an event sent.
+fn written(sent: Result<(), ipc::IpcError>) -> Write {
+    match sent {
         Ok(()) => Write::Sent,
         Err(ipc::IpcError::Kernel(abi::Error::ShouldWait)) => Write::Full,
         Err(_) => Write::Gone,
@@ -102,10 +115,18 @@ impl Compositor {
     pub(crate) fn settle(&mut self) {
         let events = &self.events;
         self.wm.deliver(|id, ev| write(events.get(&id), ev));
+        let events = &self.subsurface_events;
+        self.wm.deliver_subsurfaces(|id, ev| write_subsurface(events.get(&id), ev));
         for id in self.wm.take_destroyed() {
             self.events.remove(&id);
             if let Some(g) = &mut self.gpu {
                 g.forget_window(id);
+            }
+        }
+        for id in self.wm.take_destroyed_subsurfaces() {
+            self.subsurface_events.remove(&id);
+            if let Some(g) = &mut self.gpu {
+                g.forget(Slot::Subsurface(id));
             }
         }
         for key in self.wm.take_dropped() {
@@ -145,6 +166,12 @@ impl Compositor {
         self.wm.writable(id, |id, ev| write(events.get(&id), ev));
     }
 
+    /// Subsurface `id`'s channel has room again.
+    pub(crate) fn subsurface_writable(&mut self, id: u32) {
+        let events = &self.subsurface_events;
+        self.wm.subsurface_writable(id, |id, ev| write_subsurface(events.get(&id), ev));
+    }
+
     /// The client on connection `key` went away, or is sent away (it does
     /// not read its answers): its windows go.
     pub(crate) fn drop_client(&mut self, key: u64) {
@@ -178,10 +205,17 @@ impl Compositor {
         if self.thumbs.as_ref().is_some_and(|(serial, _)| *serial == s.serial) {
             return;
         }
+        let wm = &self.wm;
         let thumbs = s
             .windows
             .iter()
-            .map(|id| self.wm.window(*id).and_then(|w| Pixels::shown(&w.surface)).and_then(|p| pixels::thumbnail(&p)))
+            .map(|id| {
+                let w = wm.window(*id)?;
+                let p = Pixels::shown(&w.surface)?;
+                let layers = crate::render::layers(wm, w);
+                let overlays = &w.placements.overlays;
+                pixels::thumbnail(p.width(), p.height(), |x, y| decor::composite_pixel(&p, &layers, overlays, x, y))
+            })
             .collect();
         self.thumbs = Some((s.serial, thumbs));
     }

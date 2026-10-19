@@ -5,8 +5,9 @@
  * default main context, where WebKit's work and the browser's commands
  * run. Commands come from the browser's thread in a queue, run in order;
  * events go back in another, and the browser is woken (its `wake`) when
- * the first comes. A view's frame is the one thing both threads touch, each
- * under the frame's lock.
+ * the first comes. Each view's page is a subsurface of the browser's window,
+ * which this thread presents WebKit's frames to; the browser's thread asks
+ * only which subsurface a view's is (engine_view_subsurface).
  *
  * What a page asks that waits for an answer (a dialog, a permission, a
  * menu, a download's destination) is a request: the engine keeps what
@@ -129,6 +130,9 @@ static struct {
 	WebKitWebContext *context;
 	WebKitNetworkSession *session, *private_session;
 	WebKitSettings *settings;
+	/* The browser's window, whose subsurfaces the pages are (0: not yet
+	 * known). */
+	uint32_t window;
 	/* engine_view -> struct view. */
 	GHashTable *views;
 	/* uint64_t * -> struct request. */
@@ -140,8 +144,8 @@ static struct {
 	GQueue commands;
 	gboolean draining;
 	GQueue events;
-	/* engine_view -> struct frame. */
-	GHashTable *frames;
+	/* engine_view -> its page's subsurface (see engine_view_subsurface). */
+	GHashTable *subsurfaces;
 	engine_view next_view;
 	/* The thread is ready (1) or failed (-errno): engine_start waits. */
 	GCond started;
@@ -365,97 +369,390 @@ static void requests_end_for(engine_view view)
 	}
 }
 
-/* --- frames ----------------------------------------------------------- */
+/* --- pages ------------------------------------------------------------ */
 
-/* A frame for view `id`, with the engine's reference. */
-static struct frame *frame_new(engine_view id)
-{
-	struct frame *f = g_new0(struct frame, 1);
-	f->view = id;
-	f->refs = 1;
-	g_mutex_init(&f->lock);
-	return f;
-}
+/* How many of WebKit's rectangles of damage a frame takes: more are their
+ * bounds. How many rectangles of what changed it presents: more are merged
+ * with the last. */
+#define DAMAGE_MAX 16
+#define CHANGES_MAX 32
 
-/* Drops a reference to `f`, freeing it with the last. */
-static void frame_unref(struct frame *f)
-{
-	g_mutex_lock(&E.lock);
-	gboolean last = --f->refs == 0;
-	g_mutex_unlock(&E.lock);
-	if (!last)
-		return;
-	g_mutex_clear(&f->lock);
-	g_free(f->pixels);
-	g_free(f);
-}
+/* What came of presenting a frame. */
+enum presented {
+	PRESENTED,
+	/* The view has no subsurface: the window is not known yet, or its
+	 * subsurface went to make room for others'. */
+	NO_SUBSURFACE,
+	/* The window system refused it (and the log says why). */
+	REFUSED,
+};
 
-static struct frame *frame_find(engine_view id)
+/* Tells the browser's thread the view's subsurface (engine_view_subsurface),
+ * and the browser that it changed. */
+static void publish_subsurface(struct view *view)
 {
 	g_mutex_lock(&E.lock);
-	struct frame *f = g_hash_table_lookup(E.frames, GUINT_TO_POINTER(id));
+	if (view->subsurface)
+		g_hash_table_insert(E.subsurfaces, GUINT_TO_POINTER(view->id), GUINT_TO_POINTER(view->subsurface));
+	else
+		g_hash_table_remove(E.subsurfaces, GUINT_TO_POINTER(view->id));
 	g_mutex_unlock(&E.lock);
-	return f;
+	emit(event_new(ENGINE_EVENT_FRAME, view->id));
 }
 
-/* Adds x, y, w, h to `damage`. */
-static void damage_add(int damage[4], int x, int y, int w, int h)
+uint32_t engine_view_subsurface(engine_view view)
 {
-	if (w <= 0 || h <= 0)
+	g_mutex_lock(&E.lock);
+	uint32_t subsurface = GPOINTER_TO_UINT(g_hash_table_lookup(E.subsurfaces, GUINT_TO_POINTER(view)));
+	g_mutex_unlock(&E.lock);
+	return subsurface;
+}
+
+/* A buffer WebKit and the engine have done with: the window system has done
+ * with it too. */
+static void page_buffer_gone(gpointer data)
+{
+	struct page_buffer *b = data;
+	if (b->view) {
+		g_ptr_array_remove_fast(b->view->buffers, b);
+		if (b->view->presented == b)
+			b->view->presented = NULL;
+		if (b->subsurface)
+			browser_subsurface_detach(b->subsurface, b->name);
+	}
+	g_free(b);
+}
+
+/* Gives the view a subsurface if it has none and the window is known:
+ * whether it has one. */
+static gboolean page_subsurface(struct view *view)
+{
+	if (view->subsurface)
+		return TRUE;
+	if (!E.window)
+		return FALSE;
+	view->subsurface = browser_subsurface_create(E.window);
+	if (!view->subsurface)
+		return FALSE;
+	publish_subsurface(view);
+	return TRUE;
+}
+
+/* Takes the view's subsurface away, and the window system's hold of its
+ * buffers: its frame shown is its pending one if `keep`, and WebKit's
+ * again if not. */
+static void page_drop(struct view *view, gboolean keep)
+{
+	if (!view->subsurface)
 		return;
-	if (damage[2] <= 0 || damage[3] <= 0) {
-		damage[0] = x, damage[1] = y, damage[2] = w, damage[3] = h;
+	for (guint i = 0; i < view->buffers->len; i++) {
+		struct page_buffer *b = g_ptr_array_index(view->buffers, i);
+		b->subsurface = 0;
+		b->name = 0;
+	}
+	struct page_buffer *shown = view->presented;
+	view->presented = NULL;
+	browser_subsurface_destroy(view->subsurface);
+	view->subsurface = 0;
+	if (shown && keep && !view->pending)
+		view->pending = g_object_ref(shown->buffer);
+	else if (shown)
+		wpe_view_buffer_released(view->wpe_view, shown->buffer);
+}
+
+/* Makes room in the window system for `view`'s buffers: the subsurfaces of
+ * the views not shown go, each keeping its latest frame to present as it is
+ * shown again. Whether any went. */
+static gboolean page_trim(struct view *view)
+{
+	GHashTableIter it;
+	gpointer value;
+	gboolean any = FALSE;
+	g_hash_table_iter_init(&it, E.views);
+	while (g_hash_table_iter_next(&it, NULL, &value)) {
+		struct view *other = value;
+		if (other != view && !other->shown && other->subsurface) {
+			page_drop(other, TRUE);
+			publish_subsurface(other);
+			any = TRUE;
+		}
+	}
+	return any;
+}
+
+/* Logs `what` the first few times, then every hundredth. */
+static void page_problem(const char *what)
+{
+	static guint count;
+	if (count < 3 || count % 100 == 0)
+		g_printerr("browser: a page's frame cannot be shown: %s\n", what);
+	count++;
+}
+
+/* `buffer` as attached to the view's subsurface (it is attached first if it
+ * is not): NULL if the window system does not take it. */
+static struct page_buffer *page_attach(struct view *view, WPEBuffer *buffer)
+{
+	struct page_buffer *b = wpe_buffer_get_user_data(buffer);
+	if (b && b->view == view && b->subsurface == view->subsurface && b->name)
+		return b;
+	int fd = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(buffer), "wpe-veda-memory-file")) - 1;
+	if (!WPE_IS_BUFFER_SHM(buffer) || fd < 0 ||
+	    wpe_buffer_shm_get_format(WPE_BUFFER_SHM(buffer)) != WPE_PIXEL_FORMAT_ARGB8888) {
+		page_problem("it is not in a memory file WebKit names");
+		return NULL;
+	}
+	if (!b) {
+		b = g_new0(struct page_buffer, 1);
+		b->buffer = buffer;
+		b->view = view;
+		g_ptr_array_add(view->buffers, b);
+		wpe_buffer_set_user_data(buffer, b, page_buffer_gone);
+	} else if (b->view != view) {
+		page_problem("it is another page's");
+		return NULL;
+	}
+	int width = wpe_buffer_get_width(buffer), height = wpe_buffer_get_height(buffer);
+	int stride = (int)wpe_buffer_shm_get_stride(WPE_BUFFER_SHM(buffer));
+	if (++view->next_name == 0)
+		view->next_name = 1;
+	int error = browser_subsurface_attach(view->subsurface, view->next_name, fd, width, height, stride);
+	/* The buffers of the pages not in view make room for it. */
+	if (error == ENOMEM && page_trim(view))
+		error = browser_subsurface_attach(view->subsurface, view->next_name, fd, width, height, stride);
+	if (error) {
+		page_problem(error == ENOMEM ? "the window system has no room for it" : "the window system refuses it");
+		return NULL;
+	}
+	b->subsurface = view->subsurface;
+	b->name = view->next_name;
+	return b;
+}
+
+/* WebKit's damage of `buffer`, `n` rectangles (none: all of it), cut to the
+ * buffer, into `out` (x, y, width, height each): how many (none: nothing
+ * changed). Too many to keep are their bounds. */
+static unsigned page_damage(WPEBuffer *buffer, const WPERectangle *damage, guint n, int *out)
+{
+	int width = wpe_buffer_get_width(buffer), height = wpe_buffer_get_height(buffer);
+	if (n == 0) {
+		out[0] = 0, out[1] = 0, out[2] = width, out[3] = height;
+		return 1;
+	}
+	unsigned count = 0;
+	int bounds[4] = { 0, 0, 0, 0 };
+	for (guint i = 0; i < n; i++) {
+		int x = MAX(damage[i].x, 0), y = MAX(damage[i].y, 0);
+		int w = MIN(damage[i].x + damage[i].width, width) - x;
+		int h = MIN(damage[i].y + damage[i].height, height) - y;
+		if (w <= 0 || h <= 0)
+			continue;
+		if (count < DAMAGE_MAX) {
+			int *r = out + 4 * count++;
+			r[0] = x, r[1] = y, r[2] = w, r[3] = h;
+		}
+		int x1 = bounds[2] ? MIN(bounds[0], x) : x, y1 = bounds[3] ? MIN(bounds[1], y) : y;
+		int x2 = MAX(bounds[0] + bounds[2], x + w), y2 = MAX(bounds[1] + bounds[3], y + h);
+		bounds[0] = x1, bounds[1] = y1, bounds[2] = x2 - x1, bounds[3] = y2 - y1;
+	}
+	if (n > DAMAGE_MAX) {
+		memcpy(out, bounds, sizeof bounds);
+		count = 1;
+	}
+	return count;
+}
+
+/* A buffer's pixels as the engine has them mapped, and the bytes from one
+ * row to the next: NULL unless they hold all of its rows. */
+static const uint8_t *page_pixels(WPEBuffer *buffer, guint *stride)
+{
+	if (!WPE_IS_BUFFER_SHM(buffer))
+		return NULL;
+	GBytes *bytes = wpe_buffer_shm_get_data(WPE_BUFFER_SHM(buffer));
+	gsize size = 0;
+	const uint8_t *data = bytes ? g_bytes_get_data(bytes, &size) : NULL;
+	int width = wpe_buffer_get_width(buffer), height = wpe_buffer_get_height(buffer);
+	*stride = wpe_buffer_shm_get_stride(WPE_BUFFER_SHM(buffer));
+	gboolean whole = width > 0 && height > 0 && *stride >= (guint)width * 4 && size >= (gsize)*stride * (gsize)height;
+	return data && whole ? data : NULL;
+}
+
+static inline uint64_t load64(const uint8_t *p)
+{
+	uint64_t v;
+	memcpy(&v, p, sizeof v);
+	return v;
+}
+
+static inline uint32_t load32(const uint8_t *p)
+{
+	uint32_t v;
+	memcpy(&v, p, sizeof v);
+	return v;
+}
+
+/* The first pixel at which rows `a` and `b` of `n` pixels differ (-1: none),
+ * and the last (`last`): compared two at a time from either end, so that a
+ * row costs as far as its first and last change, as the window's own
+ * frames are compared (gfx::Damage). */
+static int row_change(const uint8_t *a, const uint8_t *b, int n, int *last)
+{
+	int i = 0;
+	while (i + 2 <= n && load64(a + 4 * i) == load64(b + 4 * i))
+		i += 2;
+	while (i < n && load32(a + 4 * i) == load32(b + 4 * i))
+		i++;
+	if (i == n)
+		return -1;
+	/* One past the last that may differ. */
+	int j = n;
+	while (j - 2 > i && load64(a + 4 * (j - 2)) == load64(b + 4 * (j - 2)))
+		j -= 2;
+	while (j - 1 > i && load32(a + 4 * (j - 1)) == load32(b + 4 * (j - 1)))
+		j--;
+	*last = j - 1;
+	return i;
+}
+
+/* Adds x, y, w, h to the `*count` rectangles at `out`: the last grows to
+ * take it once there are CHANGES_MAX. */
+static void changes_add(int *out, unsigned *count, int x, int y, int w, int h)
+{
+	if (*count < CHANGES_MAX) {
+		int *r = out + 4 * (*count)++;
+		r[0] = x, r[1] = y, r[2] = w, r[3] = h;
 		return;
 	}
-	int x1 = MIN(damage[0], x), y1 = MIN(damage[1], y);
-	int x2 = MAX(damage[0] + damage[2], x + w), y2 = MAX(damage[1] + damage[3], y + h);
-	damage[0] = x1, damage[1] = y1, damage[2] = x2 - x1, damage[3] = y2 - y1;
+	int *r = out + 4 * (CHANGES_MAX - 1);
+	int x1 = MIN(r[0], x), y1 = MIN(r[1], y);
+	int x2 = MAX(r[0] + r[2], x + w), y2 = MAX(r[1] + r[3], y + h);
+	r[0] = x1, r[1] = y1, r[2] = x2 - x1, r[3] = y2 - y1;
 }
 
-int engine_frame_lock(engine_view view, struct engine_frame *frame)
+/* What did change of WebKit's `n` rectangles of damage (`damage`) between
+ * the frame in `before`, which the window system shows, and the one in
+ * `now`: each band of rows that changed as one rectangle as wide as its
+ * changes, into `out` (CHANGES_MAX rectangles at most): how many (none:
+ * nothing did). Scrolling text moves its lines, not the space between
+ * them: the window system then draws what moved alone. Without a frame of
+ * the same size to compare with, the damage. */
+static unsigned page_changes(WPEBuffer *before, WPEBuffer *now, const int *damage, unsigned n, int *out)
 {
-	/* Found and referenced at once: the view may go meanwhile, its frame
-	 * staying until this lets it go. */
-	g_mutex_lock(&E.lock);
-	struct frame *f = g_hash_table_lookup(E.frames, GUINT_TO_POINTER(view));
-	if (f)
-		f->refs++;
-	g_mutex_unlock(&E.lock);
-	if (!f)
-		return 0;
-	g_mutex_lock(&f->lock);
-	if (!f->pixels) {
-		g_mutex_unlock(&f->lock);
-		frame_unref(f);
-		return 0;
+	guint stride = 0, before_stride = 0;
+	const uint8_t *b = before ? page_pixels(before, &before_stride) : NULL;
+	const uint8_t *a = page_pixels(now, &stride);
+	if (!a || !b || before_stride != stride || wpe_buffer_get_width(before) != wpe_buffer_get_width(now) ||
+	    wpe_buffer_get_height(before) != wpe_buffer_get_height(now)) {
+		memcpy(out, damage, 4 * n * sizeof *damage);
+		return n;
 	}
-	frame->pixels = f->pixels;
-	frame->width = f->width;
-	frame->height = f->height;
-	frame->stride = f->width;
-	memcpy(frame->damage, f->damage, sizeof f->damage);
-	frame->serial = f->serial;
-	memset(f->damage, 0, sizeof f->damage);
-	f->told = FALSE;
-	frame->held = f;
-	return 1;
+	unsigned count = 0;
+	for (unsigned i = 0; i < n; i++) {
+		const int *r = damage + 4 * i;
+		/* The band being gathered: its first row and columns. */
+		int top = -1, left = 0, right = 0;
+		for (int y = r[1]; y <= r[1] + r[3]; y++) {
+			int first = -1, last = 0;
+			if (y < r[1] + r[3]) {
+				gsize at = (gsize)y * stride + (gsize)r[0] * 4;
+				first = row_change(b + at, a + at, r[2], &last);
+			}
+			if (first >= 0 && top < 0) {
+				top = y, left = first, right = last;
+			} else if (first >= 0) {
+				left = MIN(left, first), right = MAX(right, last);
+			} else if (top >= 0) {
+				changes_add(out, &count, r[0] + left, top, right - left + 1, y - top);
+				top = -1;
+			}
+		}
+	}
+	return count;
 }
 
-static void run_presented(struct command *c);
-
-void engine_frame_unlock(const struct engine_frame *frame, uint64_t presented)
+/* Presents `buffer`, the view's page's frame, `damage` (`n` rectangles; none:
+ * all of it) having changed since the one presented before, of which what did
+ * change. The buffer shown before goes back to WebKit, which may draw into it
+ * again. */
+static enum presented page_present(struct view *view, WPEBuffer *buffer, const WPERectangle *damage, guint n)
 {
-	struct frame *f = frame->held;
-	if (!f)
+	if (!page_subsurface(view))
+		return NO_SUBSURFACE;
+	struct page_buffer *b = page_attach(view, buffer);
+	if (!b)
+		return REFUSED;
+	int damaged[4 * DAMAGE_MAX], rects[4 * CHANGES_MAX];
+	unsigned n_damaged = page_damage(buffer, damage, n, damaged);
+	unsigned count = page_changes(view->presented ? view->presented->buffer : NULL, buffer, damaged, n_damaged, rects);
+	if (count == 0) {
+		/* Nothing changed (the frame is presented all the same: WebKit
+		 * waits to hear it was shown): an empty rectangle says so. */
+		memset(rects, 0, 4 * sizeof *rects);
+		count = 1;
+	}
+	int64_t released = browser_subsurface_present(view->subsurface, b->name, rects, count);
+	if (released == -2) {
+		/* The window went with its subsurfaces (the browser closes): the
+		 * pages have none from now on. */
+		E.window = 0;
+		page_drop(view, TRUE);
+		publish_subsurface(view);
+		return NO_SUBSURFACE;
+	}
+	if (released < 0) {
+		page_problem("the window system refuses to show it");
+		return REFUSED;
+	}
+	view->presented = b;
+	for (guint i = 0; released > 0 && i < view->buffers->len; i++) {
+		struct page_buffer *old = g_ptr_array_index(view->buffers, i);
+		if (old->subsurface == view->subsurface && old->name == (uint32_t)released) {
+			wpe_view_buffer_released(view->wpe_view, old->buffer);
+			break;
+		}
+	}
+	return PRESENTED;
+}
+
+/* The view's pending frame goes to its subsurface, if it can have one. */
+static void page_restore(struct view *view)
+{
+	WPEBuffer *buffer = view->pending;
+	if (!buffer)
 		return;
-	gboolean shown = presented && f->waiting && presented >= f->waiting;
-	if (shown)
-		f->waiting = 0;
-	engine_view view = f->view;
-	g_mutex_unlock(&f->lock);
-	frame_unref(f);
-	if (shown)
-		post(command_new(run_presented, view));
+	view->pending = NULL;
+	switch (page_present(view, buffer, NULL, 0)) {
+	case PRESENTED:
+		break;
+	case NO_SUBSURFACE:
+		/* Kept again; what the window showed, older, goes back (the
+		 * window went as it was presented). */
+		if (view->pending)
+			wpe_view_buffer_released(view->wpe_view, view->pending);
+		g_set_object(&view->pending, buffer);
+		break;
+	case REFUSED:
+		wpe_view_buffer_released(view->wpe_view, buffer);
+		break;
+	}
+	g_object_unref(buffer);
+}
+
+static void run_set_window(struct command *c)
+{
+	E.window = (uint32_t)c->n[0];
+	GHashTableIter it;
+	gpointer value;
+	g_hash_table_iter_init(&it, E.views);
+	while (g_hash_table_iter_next(&it, NULL, &value))
+		page_restore(value);
+}
+
+void engine_set_window(uint32_t window)
+{
+	struct command *c = command_new(run_set_window, 0);
+	c->n[0] = window;
+	post(c);
 }
 
 /* WebKit hears that the frame it drew last was shown: it draws the next
@@ -474,22 +771,34 @@ static void finish_shown(struct view *view)
 	g_object_unref(buffer);
 }
 
-static void run_presented(struct command *c)
+static void run_subsurface_shown(struct command *c)
 {
-	struct view *view = view_get(c->view);
-	if (view)
-		finish_shown(view);
+	GHashTableIter it;
+	gpointer value;
+	g_hash_table_iter_init(&it, E.views);
+	while (g_hash_table_iter_next(&it, NULL, &value)) {
+		struct view *view = value;
+		if (view->subsurface == (uint32_t)c->n[0]) {
+			finish_shown(view);
+			return;
+		}
+	}
 }
 
-/* A frame the browser does not show in time (its window cannot be seen)
- * is as good as shown: WebKit goes on, slowly. */
+void engine_subsurface_shown(uint32_t subsurface)
+{
+	struct command *c = command_new(run_subsurface_shown, 0);
+	c->n[0] = subsurface;
+	post(c);
+}
+
+/* A frame the window system does not show in time (the window cannot be
+ * seen, or the view is not the one in it) is as good as shown: WebKit goes
+ * on, slowly. */
 static gboolean shown_late(gpointer data)
 {
 	struct view *view = data;
 	view->shown_timeout = 0;
-	g_mutex_lock(&view->frame->lock);
-	view->frame->waiting = 0;
-	g_mutex_unlock(&view->frame->lock);
 	finish_shown(view);
 	return G_SOURCE_REMOVE;
 }
@@ -499,59 +808,32 @@ static gboolean shown_late(gpointer data)
 
 void engine_buffer_rendered(struct view *view, WPEBuffer *buffer, const WPERectangle *damage, guint n)
 {
-	int width = wpe_buffer_get_width(buffer), height = wpe_buffer_get_height(buffer);
-	GBytes *bytes;
-	guint stride;
-	if (WPE_IS_BUFFER_SHM(buffer)) {
-		bytes = wpe_buffer_shm_get_data(WPE_BUFFER_SHM(buffer));
-		stride = wpe_buffer_shm_get_stride(WPE_BUFFER_SHM(buffer));
-	} else {
-		bytes = wpe_buffer_import_to_pixels(buffer, NULL);
-		stride = (guint)width * 4;
-	}
-	gsize size = 0;
-	const uint8_t *src = bytes ? g_bytes_get_data(bytes, &size) : NULL;
-	struct frame *f = view->frame;
-	gboolean tell = FALSE;
-	if (src && width > 0 && height > 0 && stride >= (guint)width * 4 && size >= (gsize)stride * (gsize)height) {
-		g_mutex_lock(&f->lock);
-		gboolean whole = !f->pixels || f->width != width || f->height != height || n == 0;
-		if (f->width != width || f->height != height) {
-			g_free(f->pixels);
-			f->pixels = g_new(uint32_t, (gsize)width * (gsize)height);
-			f->width = width;
-			f->height = height;
+	enum presented presented = page_present(view, buffer, damage, n);
+	switch (presented) {
+	case PRESENTED:
+		/* The window system has the view's latest frame. */
+		if (view->pending) {
+			wpe_view_buffer_released(view->wpe_view, view->pending);
+			g_clear_object(&view->pending);
 		}
-		WPERectangle all = { 0, 0, width, height };
-		const WPERectangle *rects = whole ? &all : damage;
-		guint count = whole ? 1 : n;
-		for (guint i = 0; i < count; i++) {
-			int x = MAX(rects[i].x, 0), y = MAX(rects[i].y, 0);
-			int w = MIN(rects[i].x + rects[i].width, width) - x;
-			int h = MIN(rects[i].y + rects[i].height, height) - y;
-			if (w <= 0 || h <= 0)
-				continue;
-			for (int row = y; row < y + h; row++)
-				memcpy(f->pixels + (gsize)row * (gsize)width + x, src + (gsize)row * stride + (gsize)x * 4,
-				       (gsize)w * 4);
-			damage_add(f->damage, x, y, w, h);
-		}
-		f->serial++;
-		f->waiting = f->serial;
-		tell = !f->told;
-		f->told = TRUE;
-		g_mutex_unlock(&f->lock);
+		break;
+	case NO_SUBSURFACE:
+		/* Kept, to present once the view has a subsurface. */
+		if (view->pending)
+			wpe_view_buffer_released(view->wpe_view, view->pending);
+		g_set_object(&view->pending, buffer);
+		break;
+	case REFUSED:
+		wpe_view_buffer_released(view->wpe_view, buffer);
+		break;
 	}
-	/* Copied: WebKit may draw into it again. */
-	wpe_view_buffer_released(view->wpe_view, buffer);
-	/* It hears the frame was shown once it is (engine_frame_unlock). */
+	/* WebKit hears the frame was shown once it is
+	 * (engine_subsurface_shown), or at once if it will not be. */
 	finish_shown(view);
 	view->shown_buffer = g_object_ref(buffer);
 	view->shown_timeout = g_timeout_add(SHOWN_LATE_MS, shown_late, view);
-	if (!view->shown)
+	if (!view->shown || presented != PRESENTED)
 		finish_shown(view);
-	if (tell)
-		emit(event_new(ENGINE_EVENT_FRAME, view->id));
 }
 
 /* --- what the platform tells ------------------------------------------ */
@@ -776,7 +1058,6 @@ static WebKitWebView *on_create(WebKitWebView *web_view, WebKitNavigationAction 
 	struct view *opener = data;
 	g_mutex_lock(&E.lock);
 	engine_view id = ++E.next_view;
-	g_hash_table_insert(E.frames, GUINT_TO_POINTER(id), frame_new(id));
 	g_mutex_unlock(&E.lock);
 	struct view *view = view_make(id, opener->ephemeral, opener);
 	emit_number(ENGINE_EVENT_NEW_VIEW, id, opener->id);
@@ -1118,7 +1399,7 @@ static struct view *view_make(engine_view id, gboolean ephemeral, struct view *r
 {
 	struct view *view = g_new0(struct view, 1);
 	view->id = id;
-	view->frame = frame_find(id);
+	view->buffers = g_ptr_array_new();
 	view->scale = 1;
 	if (related) {
 		view->web_view = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "display", E.display, "related-view",
@@ -1168,13 +1449,21 @@ static void view_free(struct view *view)
 	g_signal_handlers_disconnect_by_data(webkit_web_view_get_find_controller(view->web_view), view);
 	g_signal_handlers_disconnect_by_data(webkit_web_view_get_back_forward_list(view->web_view), view);
 	finish_shown(view);
+	/* Its page goes from the window system, and its buffers back to
+	 * WebKit, before the view does. */
+	page_drop(view, FALSE);
+	if (view->pending) {
+		wpe_view_buffer_released(view->wpe_view, view->pending);
+		g_clear_object(&view->pending);
+	}
+	for (guint i = 0; i < view->buffers->len; i++)
+		((struct page_buffer *)g_ptr_array_index(view->buffers, i))->view = NULL;
+	g_ptr_array_unref(view->buffers);
+	g_mutex_lock(&E.lock);
+	g_hash_table_remove(E.subsurfaces, GUINT_TO_POINTER(view->id));
+	g_mutex_unlock(&E.lock);
 	platform_view_detach(view->wpe_view);
 	g_object_unref(view->web_view);
-	g_mutex_lock(&E.lock);
-	g_hash_table_remove(E.frames, GUINT_TO_POINTER(view->id));
-	g_mutex_unlock(&E.lock);
-	/* The engine's reference: the browser may hold the frame still. */
-	frame_unref(view->frame);
 	g_free(view->hovered);
 	g_free(view->finding);
 	g_free(view);
@@ -1189,7 +1478,6 @@ engine_view engine_view_create(int ephemeral, engine_view related)
 {
 	g_mutex_lock(&E.lock);
 	engine_view id = ++E.next_view;
-	g_hash_table_insert(E.frames, GUINT_TO_POINTER(id), frame_new(id));
 	g_mutex_unlock(&E.lock);
 	struct command *c = command_new(run_create, id);
 	c->n[0] = ephemeral;
@@ -1343,6 +1631,9 @@ static void run_show(struct command *c)
 	view->shown = c->n[0];
 	if (view->shown) {
 		wpe_view_map(view->wpe_view);
+		/* Its page's subsurface went to make room for others': its latest
+		 * frame comes back with a new one. */
+		page_restore(view);
 	} else {
 		wpe_view_unmap(view->wpe_view);
 		finish_shown(view);
@@ -2055,7 +2346,7 @@ int engine_start(const struct engine_config *config)
 	g_queue_init(&E.commands);
 	g_queue_init(&E.events);
 	E.views = g_hash_table_new(NULL, NULL);
-	E.frames = g_hash_table_new(NULL, NULL);
+	E.subsurfaces = g_hash_table_new(NULL, NULL);
 	E.requests = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL, request_free);
 	E.ready = 0;
 	/* WebKit runs on this thread as on a program's main thread, and so

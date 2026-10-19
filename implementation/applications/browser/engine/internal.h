@@ -3,7 +3,6 @@
  *
  * What engine.c and platform.c share: a view as the engine keeps it, and
  * the platform's side of it. Everything here is the engine's thread's, but
- * a view's frame, which the browser's thread reads (engine_frame_lock), and
  * the browser's sound streams, which media.c's sink uses from GStreamer's.
  */
 
@@ -16,25 +15,13 @@
 
 #include "engine.h"
 
-/* What WebKit drew of a view last, which the browser shows. */
-struct frame {
-	/* Its view's, for the command that says it was shown. */
-	engine_view view;
-	/* Its references, under the engine's lock: the engine's, until its view
-	 * goes, and the browser's while it holds the frame (engine_frame_lock).
-	 * It is freed with the last. */
-	int refs;
-	GMutex lock;
-	uint32_t *pixels;
-	int width, height;
-	/* What changed since the browser last took it: x, y, width, height. */
-	int damage[4];
-	uint64_t serial;
-	/* The browser has been told of a change it has not taken yet. */
-	gboolean told;
-	/* The serial of the frame whose buffer WebKit waits to hear was shown
-	 * (0: none). */
-	uint64_t waiting;
+/* A buffer of WebKit's as the engine keeps it (its WPE user data): the
+ * view it is a page's buffer of, and the subsurface it is attached to, as
+ * which buffer (0: none). */
+struct page_buffer {
+	WPEBuffer *buffer;
+	struct view *view;
+	uint32_t subsurface, name;
 };
 
 struct view {
@@ -42,7 +29,16 @@ struct view {
 	WebKitWebView *web_view;
 	WPEView *wpe_view;
 	WPEToplevel *toplevel;
-	struct frame *frame;
+	/* The page's subsurface of the browser's window (0: none), the buffers
+	 * attached to it (struct page_buffer), the one shown, and the next
+	 * buffer's name. The view's latest frame, if the window system does
+	 * not have it (pending: it has no subsurface), which WebKit does not
+	 * have back. */
+	uint32_t subsurface;
+	GPtrArray *buffers;
+	struct page_buffer *presented;
+	uint32_t next_name;
+	WPEBuffer *pending;
 	gboolean ephemeral;
 	int width, height;
 	double scale;
@@ -80,6 +76,29 @@ void engine_cursor(struct view *view, const char *name);
 void engine_fullscreen_requested(struct view *view, gboolean fullscreen);
 /* A page copied `text`. */
 void engine_copied(const char *text);
+
+/* --- the browser's (src/subsurfaces.rs): pages' subsurfaces ------------ */
+
+/* The engine's thread calls these, on a connection of its own to the
+ * window system; a thread of the browser's hears that frames are shown
+ * (engine_subsurface_shown). */
+
+/* A subsurface of the browser's window `window`, for a page: its id, or 0
+ * if the window system refuses one. */
+uint32_t browser_subsurface_create(uint32_t window);
+void browser_subsurface_destroy(uint32_t subsurface);
+/* Attaches the memory file on `fd` (its first `height` rows of `stride`
+ * bytes, `width` pixels each, premultiplied BGRA) to `subsurface` as buffer
+ * `name`: 0, ENOMEM if the window system has no room for it (no more of
+ * the process's buffers), or EINVAL if it refuses it. */
+int browser_subsurface_attach(uint32_t subsurface, uint32_t name, int fd, int width, int height, int stride);
+void browser_subsurface_detach(uint32_t subsurface, uint32_t name);
+/* Presents buffer `name` of `subsurface`, `n` rectangles of it (x, y,
+ * width, height each; none: all of it) having changed since the one
+ * presented before: the buffer shown before, which the window system reads
+ * no more (0: none), -1 if it could not be presented, or -2 if the
+ * subsurface is no more (it went with the window, as the browser closes). */
+int64_t browser_subsurface_present(uint32_t subsurface, uint32_t name, const int *damage, unsigned n);
 
 /* --- the browser's (src/sound.rs): its streams of the audio service ---- */
 

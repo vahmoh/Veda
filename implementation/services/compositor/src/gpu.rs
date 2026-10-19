@@ -338,6 +338,8 @@ struct Target {
 pub(crate) enum Slot {
     /// A window's contents, by its id.
     Window(u32),
+    /// A subsurface's contents, by its id.
+    Subsurface(u32),
     /// A decorated window's title bar, by its id.
     Title(u32),
     /// A cursor, by its shape's number.
@@ -973,18 +975,18 @@ impl Gpu {
         }
     }
 
-    /// A window's contents: its texture brought up to date from its
-    /// client's buffer `p` where `changed` says (all of it if the texture
-    /// is new or `all`). `None` if all of it was to be written and could
-    /// not be: what the texture holds is not the window's (it is written
-    /// again with the next frame).
-    pub(crate) fn window(&mut self, id: u32, p: &Pixels, all: bool, changed: &[Rect]) -> Option<Texture> {
+    /// A window's or a subsurface's contents, in `slot`: its texture
+    /// brought up to date from its client's buffer `p` where `changed` says
+    /// (all of it if the texture is new or `all`). `None` if all of it was
+    /// to be written and could not be: what the texture holds is not the
+    /// client's (it is written again with the next frame).
+    pub(crate) fn picture(&mut self, slot: Slot, p: &Pixels, all: bool, changed: &[Rect]) -> Option<Texture> {
         let (w, h) = (p.width(), p.height());
-        let fresh = !matches!(self.textures.get(&Slot::Window(id)), Some(&(t, _)) if (t.w, t.h) == (w, h));
-        let t = self.sized(Slot::Window(id), w, h);
+        let fresh = !matches!(self.textures.get(&slot), Some(&(t, _)) if (t.w, t.h) == (w, h));
+        let t = self.sized(slot, w, h);
         if fresh || all {
             if !self.write_client(t, p, Rect::new(0, 0, w, h)) {
-                self.forget(Slot::Window(id));
+                self.forget(slot);
                 return None;
             }
         } else {

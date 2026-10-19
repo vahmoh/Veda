@@ -145,19 +145,31 @@ an event the bridge signals. A request (a dialog, a permission, a
 download) carries an id; the browser answers it by that id, and a request
 whose page went away is refused.
 
-**Frames.** WebKit hands each frame of a page to the platform's view
-(`platform.c`) as shared memory with the rectangles that changed. The
-bridge copies those into the tab's frame and tells the window, which keeps
-the page from one of its frames to the next (`Ui::retained`): each of its
-two buffers gets again only what WebKit drew since that buffer last showed
-the page, and where something was drawn over the page there (the find
-bar, a menu, the link under the pointer, which the window's canvas notes
-as they are drawn), and only there is the page compared with the frame on
-the screen, so that the compositor gets what did change. A spinning box
-costs its box, not the page ([Drawing pages](#drawing-pages)). WebKit
-hears that the frame was shown when the window has drawn it (or after
-100 ms, when the window cannot be seen), and only then draws the next, so
-a page never runs ahead of the screen.
+**Frames.** Each tab's page is a subsurface of the browser's window
+([the window system](ARCHITECTURE.md#the-window-system)): a picture of
+its own, which the engine's thread presents and the window's frames place.
+WebKit hands each frame of a page to the platform's view (`platform.c`) in
+one of its buffers, a memory file of the page's process's (WebKit's UI
+process keeps its descriptor on the buffer), with the rectangles that
+changed. The bridge attaches each buffer to the page's subsurface once,
+as the memory behind the file (`veda_memory_file`), and presents it with
+what did change, which it finds by comparing it with the frame shown
+within what WebKit says changed (`src/subsurfaces.rs`): the window system
+shows the page from WebKit's memory, and gives back the buffer it showed
+before, which WebKit may draw into again. A page's frame costs the browser
+that compare and that call: it copies nothing of it, and its window draws
+no frame for it. The window places
+the shown tab's subsurface where the page goes (`Ui::subsurface`), its own
+buffer kept transparent there but for what it draws over the page (the
+find bar, a menu, the link under the pointer, a dialog's shade, which its
+canvas notes as they are drawn), and the window system blends that over
+the page: the window's frames cost what is drawn over the page, never the
+page ([Drawing pages](#drawing-pages)). A tab not shown keeps its last
+frame in its subsurface, so that showing it again shows it at once. WebKit
+hears that a frame was shown when the window system has shown it (a
+thread of the browser's hears it, `engine_subsurface_shown`), or after
+100 ms when it cannot be seen, and only then draws the next, so a page
+never runs ahead of the screen.
 
 **Input.** The window gives the page the pointer, the wheel and the keys
 it does not keep for itself (its shortcuts), each key as XKB's key code
@@ -171,7 +183,9 @@ browser 91 MB, the two web processes 29 and 39 MB, the network process
 (WebKit, ICU's data, Skia, and some 9 MB of GStreamer and the codecs), is
 the system image's, which is in memory
 whether the browser runs or not; under memory pressure, WebKit's
-processes give back caches as the UI process tells them to. A page
+processes give back caches as the UI process tells them to. The window
+system maps the pages' buffers to show them, which its own figure counts
+too (Veda counts memory shared between processes in each of them). A page
 composited on the GPU takes some 85 MB more in its web process than one
 painted on the CPU (the GPU's staging memory and buffers, the frames read
 back): about 120 MB for a page at 1920x1080. QEMU's default 2 GiB is
@@ -235,11 +249,11 @@ machine:
   tiles, and its compositor (TextureMapper) draws the layers with OpenGL
   ES, so scrolling, CSS animations and transforms run on the compositor's
   thread without painting again, and keep going while a page's script is
-  busy. The frame is read back into shared memory (as BGRA) for the
-  window: of each of WebKit's buffers, only what changed since the buffer
-  was last drawn, which is all the compositor draws of it, the rest of the
-  buffer holding the frame already. This is the mode when the setting is
-  on and a GPU can render.
+  busy. The frame is read back into shared memory (as BGRA), which the
+  window system shows: of each of WebKit's buffers, only what changed
+  since the buffer was last drawn, which is all the compositor draws of
+  it, the rest of the buffer holding the frame already. This is the mode
+  when the setting is on and a GPU can render.
 
 The browser chooses as it starts: it composites if `egl::gpu_renderer()`
 finds a GPU that can render (the `gpu` service is registered and has what
@@ -270,29 +284,35 @@ changed (below):
 | A long page scrolling itself | 50; 14% | 50; 10% | 50; 200% |
 | Wikipedia, scrolled with the keyboard | 60, with a 2-second pause; 17 to 28% | 60; 12 to 21% | 60; 266% |
 
-**What a frame costs.** A page frame costs what changed of it, not the
-page: WebKit reads back what changed of its buffer, the bridge copies what
-changed into the tab's frame, and the window copies and compares only what
-changed since each of its buffers last showed the page
+**What a frame costs.** A page's frame costs what changed of it, and the
+browser no copy and no frame of its window: WebKit reads back what changed
+of its buffer (composited on the GPU), the bridge compares that much of it
+with the frame shown, which is still mapped, to present what did change
+(scrolling text moves its lines, not the space between them), and the
+window system copies that from WebKit's memory to the screen
 ([Frames](#how-it-fits-together)). On the host's test pages (`/spin` and
 `/scroll`), in QEMU (4 processors, a 1920x1080 screen, the page 1600x834,
-5.2 MB a frame, a GPU through virgl on the host's Iris Xe), for each frame
-of the page:
+a GPU through virgl on the host's Iris Xe), for each frame of the page:
 
-| Page | Drawn | Frames a second | Read back from the GPU | The window copies; compares, at most | Browser; web process, of a processor |
-|------|-------|-----------------|------------------------|--------------------------------------|--------------------------------------|
-| A box spinning (CSS animation) | Composited on the GPU | 71 | 174 KB, in 2.4 ms | 174 KB; 1.4 MB | 3.9%; 3.3% |
-| A box spinning (CSS animation) | Painted on the CPU | 62 | None | 171 KB; 1.4 MB | 7.2%; 6.9% |
-| A long page scrolling itself | Composited on the GPU | 53 | 5.2 MB, in 5.4 ms | 5.2 MB; 11.5 MB | 11.3%; 12.0% |
-| A long page scrolling itself | Painted on the CPU | 62 | None | 5.2 MB; 11.5 MB | 12.7%; 16.8% |
+| Page | Drawn | Frames a second | Read back from the GPU | Presented | Browser; web process; window system, of a processor |
+|------|-------|-----------------|------------------------|-----------|------------------------------------------------------|
+| A box spinning (CSS animation) | Composited on the GPU | 69 | 174 KB, in 2.5 ms | 169 KB | 2.3%; 4.0%; 1.2% |
+| A box spinning (CSS animation) | Painted on the CPU | 62 | None | 168 KB | 3.0%; 4.9%; 1.1% |
+| A long page scrolling itself | Composited on the GPU | 58 | 2.5 MB, in 3.9 ms | 814 KB | 4.2%; 9.8%; 3.9% |
+| A long page scrolling itself | Painted on the CPU | 62 | None | 832 KB | 4.4%; 12.0%; 4.8% |
 
-Before, WebKit read back the whole frame whatever changed (5.2 ms a frame,
-which held the spinning box to 58 frames a second, its web process at
-7.6% of a processor), and the window drew two frames for each of the
-page's (`ui` served the agent, and drew again, whenever its loop woke),
-copying the whole page into each and comparing the whole window: 10.4 MB
-copied and 23 MB compared for each frame of the page, the browser at 18
-to 23% of a processor on both pages.
+Before pages were subsurfaces, the bridge copied what changed of each
+frame into the tab's frame, and the window drew a frame for each of the
+page's, copying it into its buffer and comparing it there with the frame
+on the screen: on the scrolling page 2.5 MB copied twice and 5.8 MB
+compared for each frame, the browser at 8.5% of a processor (composited;
+8.4% painted) and the spinning box's at 4.5% (4.4%), the window system as
+now. Before that, WebKit read back the whole frame whatever changed (5.2 ms
+a frame, which held the spinning box to 58 frames a second), and the
+window drew two frames for each of the page's (`ui` served the agent, and
+drew again, whenever its loop woke), copying the whole page into each and
+comparing the whole window: 10.4 MB copied and 23 MB compared for each
+frame of the page, the browser at 18 to 23% of a processor on both pages.
 
 **EGL and OpenGL ES for C.** WebKit reaches OpenGL ES through libepoxy,
 which on Veda finds every function by name through the program's
@@ -580,14 +600,16 @@ ports of WebKit give the network process a sandbox extension:
 |------|----------------|
 | `browser-core`'s unit tests (`cargo test -p browser-core`) | Addresses and search, history, bookmarks, the session, settings, downloads' names, tabs, keys |
 | `egl`'s and `gl`'s unit tests | The display and configurations WebKit looks for, drawing surfaceless and reading BGRA back, contexts shared across threads (and EGL's access rules), a context whose group would have no renderer failing with `EGL_BAD_ALLOC` rather than rendering in software (one that shares a group still made), fences, pbuffers, every function by name, buffers; in `gl`, sharing, deletion across contexts, surfaceless contexts, BGRA uploads and reads, and WebKit's compositing at a page's size (Skia's tiles uploaded whole and in parts, an image turned round by TextureMapper's shader, clears and solid fills, the frame read back whole), which `GL_TEST_BACKEND` runs on a GPU too |
-| `ui`'s and `gfx`'s unit tests | What a window keeps of a picture from frame to frame (`Ui::retained`): each buffer given what changed since it last showed the picture and what was drawn over it there, frames not presented, another picture, place or surface copied whole; what drawing touches of an area, by each kind of drawing; frames compared outside an area or within it alone; and a wait woken only by the signals it waited for |
-| `verification/ui/browser-frames.vts` | The browser's frames, drawn only where they changed, on the host's page of a box crossing it (`/motion`): the link under the pointer, the find bar and the page's menu (over the box as it passes) come and go over the page while it moves, and once it has stopped the window shows what WebKit draws of it afresh (zoomed in and back), pixel for pixel; painted on the CPU, then composited on the GPU, where WebKit reads back only what changed |
+| `compositor-core`'s unit tests (`cargo test -p compositor-core`) | Subsurfaces: made for a window of the caller's process alone, presented by the connection that made it; buffers named once, checked against their memory, a few each and so much memory a process; presenting giving back the buffer shown before, and none detached; what a present changes of the screen, where the window's frame places it and can be seen, and nothing otherwise; frames placing few subsurfaces and overlays, which do not overlap, and none of another window's, one destroyed meanwhile showing its background; their frames acknowledged once seen, one acknowledgement waiting while a channel is full; subsurfaces going with their window and their connection |
+| `ui`'s and `gfx`'s unit tests | The place of a subsurface in a window's frames (`Ui::subsurface`): each buffer erased again only where something was drawn over the subsurface when it was drawn last, what was drawn over it its overlays, frames drawing nothing over it costing nothing, another place, surface or a cleared frame erased whole, and a second subsurface in a frame erased and overlaid whole, the first kept; an erased area transparent and unnoted; what of a rectangle lies outside others (where the GPU draws a window's own pixels), each pixel once; what drawing touches of an area, by each kind of drawing; frames compared outside an area or within it alone; and a wait woken only by the signals it waited for |
+| `verification/ui/browser-frames.vts` | The browser's frames, each page a subsurface of the window, on the host's page of a box crossing it (`/motion`): the page's frames reach the screen; the link under the pointer, the find bar and the page's menu (over the box as it passes) come and go over the page while it moves, and once it has stopped the window shows what WebKit draws of it afresh (zoomed in and back), pixel for pixel; the link's label at the page's foot (translucent) shows over the page, and is the same over the page drawn afresh under it; painted on the CPU, then composited on the GPU, where WebKit reads back only what changed |
+| `verification/ui/browser-compose.vts` | The same, the screen composed by a GPU (Veda's renderer on softpipe in the driver VM), as on a PC: the compositor draws the page's subsurface from a texture of its own and blends the window's label over it |
 | `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/src/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
 | `verification/ui/browser-memory.vts` | The browser on a machine of 1 GiB with a GPU: it paints pages on the CPU, as compositing them would take more memory than the machine can spare, and shows a page with no process running out of memory |
 | `verification/ui/browser-gpu-gone.vts` | The GPU gone while the browser composites on it (the driver VM's renderer, on softpipe, ended for good: `veda.stop`): a tab opened then has its web process given no context, `egl` refusing one in software and saying why, and its page painted on the CPU, the same, pixel for pixel, as it was composited |
 | `verification/agent/app-browser.vts` | The agent's actions, with the stand-in for the Voice Agent API: opening and reading pages (their scripts ran), the keyboard on a page the agent opened, back, tabs, finding, zooming, bookmarking, the time zone pages see, a PDF shown in WebKit's viewer (its text found there), and private tabs forgetting cookies; the pages' web processes and the network process sandboxed, as above, and GLib never complaining |
 | `verification/agent/app-browser-files.vts` | The network process and the user's files: a download saved in Downloads and opened from there (`file://`); a picture chosen for a page to upload read whole, through its copy, never the picture itself; a page in Documents opened (`file://`) in a tab of its own, its folder lent to the network process, the picture beside it shown and one in Pictures, which the page reaches for outside its folder, refused, and a page's own navigation to Pictures failing, and its link to Pictures in a new window (`target=_blank`) failing alike, in its tab, no window opened and its process going on, Pictures never lent; the folder taken back as the tab closes, which a window one of its pages opened outlasts, and forgotten for every web process: the network process refuses the window the picture, never reading it; a window that another page there opened with a frame of a page of the folder in it keeping the folder lent as that page's tab closes (it shows the picture), the frame's page going to a fragment and pushing a state, its process going on, and the folder taken back as the window closes; the page opened again, its folder lent again, for it alone: the first window, whose process was allowed the folder before, refused the picture again, and its own navigation to a page of the folder failing, saying so, the page unread; a site's IndexedDB kept as the browser starts again, and the temporary files gone as it closed |
-| `verification/c/posix.c` | The POSIX layer's `timerfd`, memory files, suspending threads, the system image's files mapped in place and time zones, among the rest; and `<veda/sandbox.h>`: a child confines itself as a web process does (places to read and to change, one service, no processes or new executable memory), is refused all it gave up, keeps the rest (code written into memory made executable before runs), and starts a child that is confined alike; and loans: a place lent to a confined child, which reads it and what is inside it, changes none of it, finds nothing beside it, and takes the loan once, with its own secret and for its own place, as a sandboxed program lends nothing and nothing holding the home folder is lent; and taken back: the place gone from a confined child that took it, but for the file it has open there, a loan taken back before it is taken taking nothing |
+| `verification/c/posix.c` | The POSIX layer's `timerfd`, memory files (their memory as a handle for a Veda service, with the descriptor's rights), suspending threads, the system image's files mapped in place and time zones, among the rest; and `<veda/sandbox.h>`: a child confines itself as a web process does (places to read and to change, one service, no processes or new executable memory), is refused all it gave up, keeps the rest (code written into memory made executable before runs), and starts a child that is confined alike; and loans: a place lent to a confined child, which reads it and what is inside it, changes none of it, finds nothing beside it, and takes the loan once, with its own secret and for its own place, as a sandboxed program lends nothing and nothing holding the home folder is lent; and taken back: the place gone from a confined child that took it, but for the file it has open there, a loan taken back before it is taken taking nothing |
 | `vfs-core`'s unit tests (`cargo test -p vfs-core`) | What a confined connection's view reaches: its places, the way to them, what listings show, confining again only narrower, a place borrowed reaching nothing less and taken back reaching nothing more, each loan's place its own, confining again keeping what was borrowed; and loans: taken once, for their place, lapsing, a few for each lender, taken back by their lender alone, and ending with their lender's connection |
 | `verification/ui/browser-media.vts` | Media on the host's video page (`/video`): a click plays the countdown (videogen's, AV1 and FLAC in WebM) with its sound, which the audio service plays through a stream of the page's to the end, never short; the machine's sound output has its beeps |
 | `verification/agent/app-browser-media.vts` | The media pages' own checks, which the agent reads: Web Audio (`/webaudio`: an oscillator its analyser hears, a sound file decoded and played), a sound file in an `<audio>` element (`/audio`), the countdown played to its end with every picture shown and its first colours right, drawn into a canvas (`/video`), and the same through Media Source Extensions (`/mse`) |
@@ -618,6 +640,10 @@ without it.
   viewer's frame, not the page's, though finding finds it there.
 * **The GPU** is chosen as the browser starts (above), and a web process
   it gives no context paints its pages on the CPU; losing it stops the
-  pages of the processes that had it until the browser starts again.
+  pages of the processes that had it until the browser starts again. A
+  composited page's frames are read back into shared memory, which the
+  window system copies again into a texture of its own where the GPU
+  composes the screen (on a PC): sharing the GPU's memory between them
+  would spare both.
 * **Files** changed behind the browser's back are noticed by polling, as
   Veda has no inotify.

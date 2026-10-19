@@ -10,7 +10,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use compositor_core::buffers::Buffers;
-use proto::display::{self as dp, Cursor, DisplayError, ScreenInfo, WindowInfo, WindowSpec, WindowState, display};
+use proto::display::{
+    self as dp, Cursor, DisplayError, Placement, ScreenInfo, WindowInfo, WindowSpec, WindowState, display,
+};
 use rt::object::{Channel, Vmo};
 use rt::vm::Mapping;
 
@@ -47,8 +49,15 @@ impl display::Server for Session<'_> {
         self.comp.wm.attach(self.client, id, Buffers { layout, memory: map })
     }
 
-    fn present(&mut self, id: u32, index: u8, damage: Vec<dp::Rect>) -> Result<(), DisplayError> {
-        self.comp.wm.present(self.client, id, index, damage)
+    fn present(
+        &mut self,
+        id: u32,
+        index: u8,
+        damage: Vec<dp::Rect>,
+        subsurfaces: Vec<Placement>,
+        overlays: Vec<dp::Rect>,
+    ) -> Result<(), DisplayError> {
+        self.comp.wm.present(self.client, id, index, damage, subsurfaces, overlays)
     }
 
     fn set_title(&mut self, id: u32, title: String) -> Result<(), DisplayError> {
@@ -134,5 +143,44 @@ impl display::Server for Session<'_> {
 
     fn user_active(&mut self) -> Result<(), DisplayError> {
         self.comp.wm.user_active(self.client, self.now)
+    }
+
+    fn create_subsurface(&mut self, window: u32, events: Channel) -> Result<u32, DisplayError> {
+        let id = self.comp.wm.create_subsurface(self.client, window)?;
+        self.comp.subsurface_events.insert(id, events);
+        Ok(id)
+    }
+
+    fn attach_subsurface_buffer(
+        &mut self,
+        subsurface: u32,
+        buffer: u32,
+        memory: Vmo,
+        width: u32,
+        height: u32,
+        stride: u32,
+    ) -> Result<(), DisplayError> {
+        let bytes = memory.size().map_err(|_| DisplayError::BadBuffer)?;
+        let layout = self.comp.wm.subsurface_layout(self.client, subsurface, (width, height), stride, bytes)?;
+        let map = Mapping::new(memory, layout.bytes().next_multiple_of(4096), abi::map_flags::READ)
+            .map_err(|_| DisplayError::NoMemory)?;
+        self.comp.wm.attach_subsurface(self.client, subsurface, buffer, Buffers { layout, memory: map })
+    }
+
+    fn detach_subsurface_buffer(&mut self, subsurface: u32, buffer: u32) -> Result<(), DisplayError> {
+        self.comp.wm.detach_subsurface(self.client, subsurface, buffer)
+    }
+
+    fn present_subsurface(
+        &mut self,
+        subsurface: u32,
+        buffer: u32,
+        damage: Vec<dp::Rect>,
+    ) -> Result<Option<u32>, DisplayError> {
+        self.comp.wm.present_subsurface(self.client, subsurface, buffer, damage)
+    }
+
+    fn destroy_subsurface(&mut self, subsurface: u32) -> Result<(), DisplayError> {
+        self.comp.wm.destroy_subsurface(self.client, subsurface)
     }
 }

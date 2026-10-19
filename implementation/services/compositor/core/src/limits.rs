@@ -43,6 +43,17 @@ pub const CONNECTIONS_MAX: usize = 512;
 /// new buffers beside the old until it presents).
 pub const BUFFER_SCREENS_PER_PROCESS: usize = 16;
 
+/// How many subsurfaces one process may have: a browser's pages, one for
+/// each tab.
+pub const SUBSURFACES_PER_PROCESS: usize = 256;
+
+/// How much pixel memory one process may attach to its subsurfaces, in
+/// screens' worth: a browser keeps the last frame of each of its tabs'
+/// pages there (the memory is the page's process's, which keeps it
+/// whether the compositor shows it or not), and up to four of the page in
+/// view, as WebKit draws.
+pub const SUBSURFACE_SCREENS_PER_PROCESS: usize = 64;
+
 /// The least width of a window the user resizes, whatever its client asks.
 pub const MIN_WIDTH: i32 = 64;
 /// The least height of a window the user resizes.
@@ -100,6 +111,12 @@ impl Limits {
     pub fn buffer_bytes_per_process(&self) -> usize {
         let (w, h) = self.window();
         w as usize * h as usize * 4 * BUFFER_SCREENS_PER_PROCESS
+    }
+
+    /// The pixel memory one process may attach to its subsurfaces (bytes).
+    pub fn subsurface_bytes_per_process(&self) -> usize {
+        let (w, h) = self.window();
+        w as usize * h as usize * 4 * SUBSURFACE_SCREENS_PER_PROCESS
     }
 
     /// A size a client asked for, made one a window may have (at most

@@ -15,8 +15,9 @@
 //!   holds down; [`keymap`]: the keyboard's layout, modifiers and repeat;
 //!   [`switcher`]: the Alt+Tab switcher.
 //! * [`window`]: a window and its geometry; [`buffers`]: its client's
-//!   buffers, checked against the memory they are in; [`outbox`]: the
-//!   events on their way to it.
+//!   buffers, checked against the memory they are in; [`subsurfaces`]: the
+//!   pictures of their own it shows in parts of it, and where; [`outbox`]:
+//!   the events on their way to it.
 //! * [`clients`]: who each connection is; [`limits`]: what a client may
 //!   ask for, and how much of it.
 
@@ -36,6 +37,7 @@ pub mod limits;
 pub mod lock;
 pub mod outbox;
 pub mod pointer;
+pub mod subsurfaces;
 pub mod switcher;
 pub mod window;
 pub mod wm;

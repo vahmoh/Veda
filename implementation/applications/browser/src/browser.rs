@@ -1085,6 +1085,11 @@ impl Browser {
 }
 
 impl App for Browser {
+    fn init(&mut self, window: &ui::window::Window) {
+        // The pages are its subsurfaces.
+        self.engine.set_window(window.id);
+    }
+
     fn update(&mut self, ui: &mut Ui) {
         // A note past its time goes before the frame is drawn: the frame due
         // then is the last that would show it.

@@ -518,6 +518,11 @@ fn run_step(s: &mut Session, x: &mut Extras, step: &Step, disk: &Path) -> Result
         Step::ExpectSame { first, second, region } => {
             checks::same_pictures(&shot_path(first), &shot_path(second), *region)?
         }
+        // Two screenshots differ in a region: what was to come, move or go
+        // there did.
+        Step::ExpectDifferent { first, second, region } => {
+            checks::different_pictures(&shot_path(first), &shot_path(second), *region)?
+        }
         // A screenshot is black in a region: nothing is shown there yet.
         Step::ExpectBlack { shot, region } => checks::black_picture(&shot_path(shot), *region)?,
         Step::Move(at) => {

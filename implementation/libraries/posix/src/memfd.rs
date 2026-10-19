@@ -139,6 +139,12 @@ impl Memfd {
         (shared.size <= held && shared.size <= MAX_SIZE).then(|| Memfd::with(vmo, koid, Arc::new(Mutex::new(shared))))
     }
 
+    /// A handle to its memory, with this description's rights
+    /// (`veda_memory_file`).
+    pub fn memory(&self) -> Result<Vmo, isize> {
+        self.vmo.0.duplicate(None).map(Vmo::from_handle).map_err(error::kernel)
+    }
+
     /// What goes with the file to another process: a handle to its memory,
     /// without the right to write if `writable` is not set, and its size
     /// and seals.

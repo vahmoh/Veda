@@ -66,6 +66,35 @@ impl Rect {
         !self.intersect(o).is_empty()
     }
 
+    /// What of the rectangle lies outside all of `holes`, as rectangles
+    /// that do not overlap: about each hole, the bands across it above and
+    /// below the hole, and what lies beside it.
+    pub fn without(&self, holes: &[Rect]) -> alloc::vec::Vec<Rect> {
+        let mut parts = alloc::vec::Vec::new();
+        if !self.is_empty() {
+            parts.push(*self);
+        }
+        for hole in holes {
+            let mut rest = alloc::vec::Vec::with_capacity(parts.len() + 3);
+            for p in parts {
+                let h = p.intersect(hole);
+                if h.is_empty() {
+                    rest.push(p);
+                    continue;
+                }
+                let around = [
+                    Rect::new(p.x, p.y, p.w, h.y - p.y),
+                    Rect::new(p.x, h.bottom(), p.w, p.bottom() - h.bottom()),
+                    Rect::new(p.x, h.y, h.x - p.x, h.h),
+                    Rect::new(h.right(), h.y, p.right() - h.right(), h.h),
+                ];
+                rest.extend(around.into_iter().filter(|r| !r.is_empty()));
+            }
+            parts = rest;
+        }
+        parts
+    }
+
     /// Smallest rectangle containing both (empty rectangles are ignored).
     pub fn union(&self, o: &Rect) -> Rect {
         if self.is_empty() {
@@ -338,5 +367,33 @@ mod tests {
         assert_eq!(screen.intersect(&Rect::new(1200, 700, 200, 200)), Rect::new(1200, 700, 80, 100));
         assert_eq!(screen.centered(80, 40), Rect::new(600, 380, 80, 40));
         assert_eq!(screen.inset(10, 20, 30, 40), Rect::new(10, 20, 1240, 740));
+    }
+
+    #[test]
+    fn what_lies_outside_holes_is_covered_once() {
+        let r = Rect::new(2, 3, 20, 16);
+        let cases: [&[Rect]; 6] = [
+            &[],
+            &[Rect::new(6, 7, 5, 4)],
+            // Across an edge, and beyond it altogether.
+            &[Rect::new(-4, 10, 10, 30), Rect::new(40, 0, 5, 5)],
+            // Several, side by side and one in another's band.
+            &[Rect::new(4, 4, 4, 4), Rect::new(8, 4, 6, 10), Rect::new(16, 14, 3, 3)],
+            // The same twice, and all of it.
+            &[Rect::new(6, 7, 5, 4), Rect::new(6, 7, 5, 4)],
+            &[Rect::new(0, 0, 30, 30)],
+        ];
+        for holes in cases {
+            let parts = r.without(holes);
+            assert!(parts.iter().all(|p| !p.is_empty()));
+            for y in -2..24 {
+                for x in -2..26 {
+                    let outside = r.contains(x, y) && !holes.iter().any(|h| h.contains(x, y));
+                    let n = parts.iter().filter(|p| p.contains(x, y)).count();
+                    assert_eq!(n, usize::from(outside), "({x}, {y}) without {holes:?}: {parts:?}");
+                }
+            }
+        }
+        assert!(Rect::default().without(&[]).is_empty());
     }
 }

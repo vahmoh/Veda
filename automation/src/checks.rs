@@ -51,6 +51,20 @@ pub fn same_pictures(a: &Path, b: &Path, region: Region) -> Result {
     }
 }
 
+/// Fails unless screenshots `a` and `b` differ in `region` (as large as each
+/// other).
+pub fn different_pictures(a: &Path, b: &Path, region: Region) -> Result {
+    let (first, second) = (picture(a)?, picture(b)?);
+    if (first.width, first.height) != (second.width, second.height) {
+        return Err(format!("{} and {} differ in size", a.display(), b.display()));
+    }
+    let differ = pixels(region, first.width, first.height).any(|(x, y)| {
+        let i = (y * first.width + x) as usize;
+        first.pixels[i] != second.pixels[i]
+    });
+    if differ { Ok(()) } else { Err(format!("{} and {} are alike", a.display(), b.display())) }
+}
+
 /// Fails unless the screenshot `p` is black in `region`.
 pub fn black_picture(p: &Path, region: Region) -> Result {
     let picture = picture(p)?;
@@ -238,6 +252,9 @@ mod tests {
         );
         // The lit pixel is in the right half of the top row.
         assert_eq!(same_pictures(&a, &b, [0.0, 0.0, 0.5, 1.0]), Ok(()));
+        assert_eq!(different_pictures(&a, &b, crate::script::SCREEN), Ok(()));
+        assert!(different_pictures(&a, &b, [0.0, 0.0, 0.5, 1.0]).is_err_and(|e| e.contains("are alike")));
+        assert!(different_pictures(&a, &a, crate::script::SCREEN).is_err());
         assert_eq!(black_picture(&a, crate::script::SCREEN), Ok(()));
         assert!(black_picture(&b, crate::script::SCREEN).is_err());
         assert_eq!(black_picture(&b, [0.0, 0.5, 1.0, 1.0]), Ok(()));

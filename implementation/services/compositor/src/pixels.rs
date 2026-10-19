@@ -16,7 +16,7 @@
 
 use alloc::vec::Vec;
 
-use compositor_core::buffers::{Layout, Surface};
+use compositor_core::buffers::{Buffers, Layout, Surface};
 use compositor_core::switcher;
 use gfx::Bitmap;
 use rt::vm::Mapping;
@@ -31,7 +31,8 @@ pub(crate) fn try_bitmap(w: i32, h: i32) -> Option<Bitmap> {
     Some(Bitmap { width: w, height: h, pixels })
 }
 
-/// One of a client's buffers: the one the screen shows of its window.
+/// One of a client's buffers: the one the screen shows of its window, or
+/// of one of its subsurfaces.
 pub(crate) struct Pixels<'a> {
     layout: &'a Layout,
     base: *const u32,
@@ -42,6 +43,11 @@ impl<'a> Pixels<'a> {
     /// The buffer the screen shows of `surface`, if it has one.
     pub(crate) fn shown(surface: &'a Surface<Mapping>) -> Option<Pixels<'a>> {
         let (buffers, index) = surface.shown()?;
+        Pixels::of(buffers, index)
+    }
+
+    /// Buffer `index` of `buffers`.
+    pub(crate) fn of(buffers: &'a Buffers<Mapping>, index: u8) -> Option<Pixels<'a>> {
         // The mapping covers the buffers (it was made so); a layout that did
         // not fit it would be read from nowhere.
         if buffers.layout.bytes() > buffers.memory.len() {
@@ -98,7 +104,7 @@ impl<'a> Pixels<'a> {
     }
 
     /// Pixel (`x`, `y`), or nothing (0) outside the buffer.
-    fn get(&self, x: i32, y: i32) -> u32 {
+    pub(crate) fn get(&self, x: i32, y: i32) -> u32 {
         match self.layout.span(self.index, x, y, 1) {
             // SAFETY: as in `copy_row`: a pixel of the buffer, read by value.
             Some(at) => unsafe { self.base.add(at).read() },
@@ -107,10 +113,10 @@ impl<'a> Pixels<'a> {
     }
 }
 
-/// A small copy of what `p` shows (each pixel the mean of 3 x 3 samples),
-/// for the switcher; `None` if there is not the memory for it.
-pub(crate) fn thumbnail(p: &Pixels) -> Option<Bitmap> {
-    let (sw, sh) = (p.width(), p.height());
+/// A small copy of a window's picture, `sw` x `sh`, whose pixel (`x`, `y`)
+/// is `get(x, y)` (each pixel the mean of 3 x 3 samples), for the switcher;
+/// `None` if there is not the memory for it.
+pub(crate) fn thumbnail(sw: i32, sh: i32, get: impl Fn(i32, i32) -> u32) -> Option<Bitmap> {
     let (tw, th) = switcher::thumbnail_size(sw, sh);
     let (columns, rows) = (switcher::taps(tw, sw), switcher::taps(th, sh));
     let mut out = try_bitmap(tw, th)?;
@@ -119,7 +125,7 @@ pub(crate) fn thumbnail(p: &Pixels) -> Option<Bitmap> {
             let mut acc = [0u32; 4];
             for &sy in &rows[y * 3..y * 3 + 3] {
                 for &sx in &columns[x * 3..x * 3 + 3] {
-                    let s = p.get(sx, sy);
+                    let s = get(sx, sy);
                     acc[0] += s >> 24;
                     acc[1] += (s >> 16) & 0xFF;
                     acc[2] += (s >> 8) & 0xFF;

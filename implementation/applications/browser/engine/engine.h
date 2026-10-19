@@ -3,10 +3,10 @@
  *
  * The browser's web engine: WPE WebKit on a thread of its own, behind
  * commands, which any thread may give, and events, which the browser takes
- * as they come. WebKit draws each view's page into memory kept here (its
- * frame), which the browser shows. What to make of a request, a download
- * or an error is the browser's to decide: the engine only says what
- * happened and does what it is told.
+ * as they come. Each view's page is a subsurface of the browser's window,
+ * which the engine presents WebKit's frames to (see "pages" below). What
+ * to make of a request, a download or an error is the browser's to
+ * decide: the engine only says what happened and does what it is told.
  *
  * Each view is a page as a tab shows it: its own history, in the network
  * session of every view or, for a private one, in one that keeps nothing.
@@ -186,7 +186,8 @@ void engine_download_cancel(uint64_t request);
 /* --- events ---------------------------------------------------------- */
 
 enum engine_event_kind {
-	/* The view's frame changed. */
+	/* The view's page has a subsurface (engine_view_subsurface), another
+	 * than before or none, to place. */
 	ENGINE_EVENT_FRAME = 1,
 	/* text: its title. */
 	ENGINE_EVENT_TITLE,
@@ -351,29 +352,25 @@ struct engine_event {
 int engine_next_event(struct engine_event *event);
 void engine_event_clear(struct engine_event *event);
 
-/* --- frames ---------------------------------------------------------- */
+/* --- pages ----------------------------------------------------------- */
 
-struct engine_frame {
-	/* Premultiplied 0xAARRGGBB, `stride` pixels from row to row. */
-	const uint32_t *pixels;
-	int width, height, stride;
-	/* What changed since the frame was last taken: x, y, width, height
-	 * (all 0: nothing). */
-	int damage[4];
-	/* Each frame WebKit draws has the next one. */
-	uint64_t serial;
-	/* The engine's, for engine_frame_unlock. */
-	void *held;
-};
+/* Each view's page is a subsurface of the browser's window (see
+ * proto::display), which the engine's thread presents WebKit's frames to,
+ * in the memory WebKit drew them in: the window system shows each as it
+ * comes, without the browser copying it or drawing its window. The
+ * browser's frames place the shown view's subsurface in its window. The
+ * engine makes a view's with its first frame, once it knows the window:
+ * until then it keeps the view's latest frame, as for a view whose
+ * subsurface it gave up to make room for the others' (and which it makes
+ * again as the view is shown). */
 
-/* The view's frame, which stays put until engine_frame_unlock, even if the
- * view goes meanwhile: 1, or 0 when it has none yet (nothing is held
- * then). */
-int engine_frame_lock(engine_view view, struct engine_frame *frame);
-/* Lets the frame engine_frame_lock gave go; `presented` is the serial of
- * the frame that reached the screen, or 0: WebKit draws the next once it
- * has. */
-void engine_frame_unlock(const struct engine_frame *frame, uint64_t presented);
+/* The browser's window, whose subsurfaces the pages are. */
+void engine_set_window(uint32_t window);
+/* The view's subsurface, or 0 while it has none. */
+uint32_t engine_view_subsurface(engine_view view);
+/* The window system shows the frame presented last of `subsurface`: its
+ * page's WebKit may draw the next. From any thread. */
+void engine_subsurface_shown(uint32_t subsurface);
 
 #ifdef __cplusplus
 }

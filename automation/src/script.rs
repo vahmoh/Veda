@@ -17,6 +17,7 @@
 //! wait 2                           # sleep
 //! shot target/veda/desktop.png [now]  # save a screenshot, once the screen has settled (`now`: at once)
 //! expect-same A.png B.png [L T R B]  # fail unless two screenshots are alike (in a region: left, top, right, bottom)
+//! expect-different A.png B.png [L T R B]  # fail unless they differ (in a region): something came, moved or went
 //! expect-black A.png [L T R B]     # fail unless a screenshot is black (in a region)
 //! move 0.5 0.5                     # move the pointer
 //! click 0.1 0.97 [BUTTON]          # move, press and release (left, right, middle, wheel-up, wheel-down, ...)
@@ -246,6 +247,11 @@ pub enum Step {
         settle: bool,
     },
     ExpectSame {
+        first: String,
+        second: String,
+        region: Region,
+    },
+    ExpectDifferent {
         first: String,
         second: String,
         region: Region,
@@ -606,6 +612,11 @@ impl Line {
                 second: self.text("file name")?,
                 region: self.region()?,
             },
+            "expect-different" => Step::ExpectDifferent {
+                first: self.text("file name")?,
+                second: self.text("file name")?,
+                region: self.region()?,
+            },
             "expect-black" => Step::ExpectBlack { shot: self.text("file name")?, region: self.region()? },
             "move" => Step::Move(self.point()?),
             "click" => {
@@ -891,6 +902,10 @@ mod tests {
         assert_eq!(
             steps("expect-same a.png b.png 0 0 1 0.93"),
             [Step::ExpectSame { first: "a.png".into(), second: "b.png".into(), region: [0.0, 0.0, 1.0, 0.93] }]
+        );
+        assert_eq!(
+            steps("expect-different a.png b.png"),
+            [Step::ExpectDifferent { first: "a.png".into(), second: "b.png".into(), region: SCREEN }]
         );
         assert_eq!(steps("link wired off"), [Step::Link { up: false }]);
         assert_eq!(

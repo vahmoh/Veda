@@ -2641,7 +2641,55 @@
      bool checkURLReceivedFromWebProcess(const URL&, CheckBackForwardList = CheckBackForwardList::Yes);
 --- a/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
 +++ b/Source/WebKit/UIProcess/wpe/AcceleratedBackingStore.cpp
-@@ -217,8 +217,12 @@
+@@ -37,6 +37,10 @@
+ #include <wtf/TZoneMallocInlines.h>
+ #include <wtf/glib/GUniquePtr.h>
+ 
++#if OS(VEDA)
++#include <unistd.h>
++#endif
++
+ #if OS(ANDROID)
+ #include <drm/drm_fourcc.h>
+ #elif USE(LIBDRM)
+@@ -150,8 +154,23 @@
+     notifyBufferConfigurationIfNeeded();
+ }
+ 
++#if OS(VEDA)
++// Closes a buffer's memory file, kept as its "wpe-veda-memory-file" (the
++// descriptor plus one).
++static void closeMemoryFile(gpointer data)
++{
++    close(GPOINTER_TO_INT(data) - 1);
++}
++#endif
++
+ void AcceleratedBackingStore::didCreateSHMBuffer(uint64_t id, WebCore::ShareableBitmap::Handle&& handle)
+ {
++#if OS(VEDA)
++    // The memory file the buffer is in, which the platform hands to Veda's
++    // window system: it shows the page from there, as a subsurface of the
++    // browser's window, rather than the browser copying it.
++    auto memoryFile = WebCore::SharedMemory::Handle { handle.handle() }.releaseHandle();
++#endif
+     auto bitmap = WebCore::ShareableBitmap::create(WTF::move(handle), WebCore::SharedMemory::Protection::ReadOnly);
+     if (!bitmap)
+         return;
+@@ -164,6 +183,12 @@
+     }, bitmap.leakRef()));
+ 
+     GRefPtr<WPEBuffer> buffer = adoptGRef(WPE_BUFFER(wpe_buffer_shm_new(wpe_view_get_display(m_wpeView.get()), size.width(), size.height(), WPE_PIXEL_FORMAT_ARGB8888, bytes.get(), stride)));
++#if OS(VEDA)
++    // The descriptor, read-only as the web process sent it, plus one (so
++    // that no descriptor is NULL), closed with the buffer.
++    if (memoryFile)
++        g_object_set_data_full(G_OBJECT(buffer.get()), "wpe-veda-memory-file", GINT_TO_POINTER(memoryFile.release() + 1), closeMemoryFile);
++#endif
+     m_bufferIDs.add(buffer.get(), id);
+     m_buffers.add(id, WTF::move(buffer));
+ 
+@@ -217,8 +242,12 @@
      if (WPE_IS_BUFFER_DMA_BUF(buffer.get())) {
          auto* dmaBuffer = WPE_BUFFER_DMA_BUF(buffer.get());
          SkAlphaType alphaType = kPremul_SkAlphaType;

@@ -20,6 +20,25 @@
 //! and focus replace older ones, and a key or button pressed while it is far
 //! behind is dropped together with its release.
 //!
+//! **Subsurfaces.** A window may show pictures of its own in parts of it
+//! (a web page, a video) that are presented apart from its frames, so that
+//! their frames reach the screen without the client drawing, copying or
+//! presenting the window again. A process makes a subsurface for one of its
+//! windows (`create_subsurface`, from any of its connections: the one that
+//! presents the pictures may be a thread's own), attaches buffers to it,
+//! each a memory object of its own (`attach_subsurface_buffer`), and
+//! presents one at a time with what changed (`present_subsurface`): the
+//! answer names the buffer shown before, which the compositor reads no more,
+//! so that it can be drawn into again. A frame of the window places its
+//! subsurfaces (`present`): where each shows, cut to its rectangle, and what
+//! of the window's own buffer is drawn over them (its overlays: a menu, a
+//! bar), blended with its alpha; elsewhere a subsurface hides the window's
+//! buffer, which is not read there. A subsurface's pictures are opaque, as
+//! an opaque window's are, and input goes to the window as before. Its
+//! frames are paced as the window's are: a `SubsurfaceEvent::FrameDone` on
+//! its own event channel once the picture presented last is on the screen,
+//! and not while it cannot be seen (not placed, or its window minimised).
+//!
 //! Who a client is decides what it may do: the desktop, panels and
 //! notifications, managing other windows and hearing the shell's keys are
 //! the shell's (the system service `shell`), listing the windows the
@@ -138,6 +157,33 @@ enumeration! {
         Denied = 3,
         NoMemory = 4,
         Invalid = 5,
+        /// No such subsurface of the caller's.
+        NoSuchSubsurface = 6,
+    }
+}
+
+/// The most subsurfaces one frame of a window places.
+pub const PLACEMENTS_MAX: usize = 8;
+/// The most rectangles one frame of a window draws over its subsurfaces
+/// (its overlays).
+pub const OVERLAYS_MAX: usize = 32;
+/// The most rectangles of damage a frame (of a window or a subsurface)
+/// lists: more are refused (`Invalid`), as one rectangle around them says
+/// as much for less.
+pub const DAMAGE_MAX: usize = 64;
+
+message! {
+    /// Where a frame of a window shows one of its subsurfaces.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Placement {
+        pub subsurface: u32,
+        /// Where, in the window's client area (its pixels): the subsurface's
+        /// buffer is shown from this rectangle's top-left corner on, cut to
+        /// the rectangle.
+        pub rect: Rect,
+        /// What shows of the rectangle where the subsurface's buffer does
+        /// not reach (none presented yet, or a smaller one): `0xRRGGBB`.
+        pub background: u32,
     }
 }
 
@@ -266,6 +312,23 @@ union! {
 pub const EVENT: u32 = 1;
 
 union! {
+    /// Events on a subsurface's event channel (see
+    /// [`display::Client::create_subsurface`]).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SubsurfaceEvent {
+        /// The buffer presented last of `subsurface` is on the screen: the
+        /// next may be presented. As [`WindowEvent::FrameDone`]: it is seen
+        /// at `seen_ns`, frames following every `period_ns`; a subsurface
+        /// that cannot be seen (not placed, or its window minimised) hears
+        /// it once it can be again.
+        1 => FrameDone { subsurface: u32, seen_ns: u64, period_ns: u64 },
+    }
+}
+
+/// Ordinal of [`SubsurfaceEvent`]s on a subsurface's event channel.
+pub const SUBSURFACE_EVENT: u32 = 1;
+
+union! {
     /// Notices on a channel given to [`display::Client::watch_lock`].
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum LockNotice {
@@ -294,8 +357,16 @@ protocol! {
         /// a few screens' worth at most (`NoMemory`).
         2 => fn attach_buffers(id: u32, buffers: Vmo, width: u32, height: u32, stride: u32, count: u8) -> Result<(), DisplayError>;
         /// Shows buffer `index` (of the buffers attached last); `damage`
-        /// lists the changed rectangles (empty = everything).
-        3 => fn present(id: u32, index: u8, damage: Vec<Rect>) -> Result<(), DisplayError>;
+        /// lists the changed rectangles (empty = everything), at most
+        /// [`DAMAGE_MAX`]. From this frame on the window shows its
+        /// subsurfaces where `subsurfaces` places them (none: none, at most
+        /// [`PLACEMENTS_MAX`], each once), and its buffer over them within
+        /// `overlays` (at most [`OVERLAYS_MAX`]), blended; elsewhere within
+        /// a subsurface's rectangle its buffer is not shown. `Invalid` for
+        /// another window's subsurface, and for placements or overlays that
+        /// overlap one another; one that is no more shows the placement's
+        /// background.
+        3 => fn present(id: u32, index: u8, damage: Vec<Rect>, subsurfaces: Vec<Placement>, overlays: Vec<Rect>) -> Result<(), DisplayError>;
         4 => fn set_title(id: u32, title: String) -> Result<(), DisplayError>;
         5 => fn set_state(id: u32, state: WindowState) -> Result<(), DisplayError>;
         6 => fn destroy_window(id: u32) -> Result<(), DisplayError>;
@@ -361,5 +432,37 @@ protocol! {
         /// input for the idle lock. It does nothing while the screen is
         /// locked.
         31 => fn user_active() -> Result<(), DisplayError>;
+        /// Makes a subsurface for window `window` (see the module's
+        /// documentation), a window of the caller's process, whichever of
+        /// its connections made it (`NoSuchWindow` for another's): this
+        /// connection attaches its buffers and presents them, the window's
+        /// frames place it. Its events go on `events` ([`SubsurfaceEvent`],
+        /// ordinal [`SUBSURFACE_EVENT`]), which may be the same channel for
+        /// several. It goes with the window, with this connection, or when
+        /// destroyed. `NoMemory` past a process's limit.
+        40 => fn create_subsurface(window: u32, events: Channel) -> Result<u32, DisplayError>;
+        /// Attaches a buffer to `subsurface`, named `buffer` (not 0, nor the
+        /// name of another of its buffers: `Invalid`): `width` x `height`
+        /// pixels (at most the screen's) from the start of `memory`, each row
+        /// `stride` pixels from the next (at most 64 more than `width`),
+        /// premultiplied `0xAARRGGBB`, shown opaque. The compositor reads it
+        /// only while it is the one shown. `BadBuffer` if it does not fit in
+        /// `memory`; `NoMemory` past a few buffers, or a process's limit.
+        41 => fn attach_subsurface_buffer(subsurface: u32, buffer: u32, memory: Vmo, width: u32, height: u32, stride: u32) -> Result<(), DisplayError>;
+        /// The caller has done with `buffer` of `subsurface` (its memory is
+        /// going): it is shown still, if it is the one shown, until another
+        /// is presented.
+        42 => fn detach_subsurface_buffer(subsurface: u32, buffer: u32) -> Result<(), DisplayError>;
+        /// Shows `buffer` of `subsurface` from the next frame on, `damage`
+        /// (its pixels, at most [`DAMAGE_MAX`] rectangles; empty =
+        /// everything) having changed since the buffer presented before.
+        /// Returns the buffer shown before, which the compositor reads no
+        /// more (none if it was this one, if none was, or if it was
+        /// detached). A [`SubsurfaceEvent::FrameDone`] says when it is on
+        /// the screen.
+        43 => fn present_subsurface(subsurface: u32, buffer: u32, damage: Vec<Rect>) -> Result<Option<u32>, DisplayError>;
+        /// Destroys `subsurface`: the window shows its frames' backgrounds
+        /// where it was placed, until they place it no more.
+        44 => fn destroy_subsurface(subsurface: u32) -> Result<(), DisplayError>;
     }
 }
