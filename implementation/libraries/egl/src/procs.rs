@@ -346,6 +346,8 @@ fn table() -> &'static [(&'static str, usize)] {
             glCompressedTexImage3DOES => glCompressedTexImage3D,
             glCompressedTexSubImage3DOES => glCompressedTexSubImage3D,
             glFramebufferTexture3DOES,
+            // Veda's own.
+            glRenderbufferStorageMemoryFileVEDA,
         ];
         t.sort_unstable_by_key(|e| e.0);
         t

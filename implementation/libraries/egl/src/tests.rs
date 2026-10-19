@@ -308,6 +308,31 @@ fn every_function_is_found_by_its_name() {
 }
 
 #[test]
+fn renderbuffers_of_memory_files_take_what_veda_has() {
+    let d = display();
+    let config = webkit_config(d);
+    let c = context(d, config, std::ptr::null_mut());
+    eglMakeCurrent(d, std::ptr::null_mut(), std::ptr::null_mut(), c);
+    // SAFETY: a NUL-terminated name.
+    let found = unsafe { eglGetProcAddress(c"glRenderbufferStorageMemoryFileVEDA".as_ptr()) };
+    assert_eq!(found, glRenderbufferStorageMemoryFileVEDA as *const c_void);
+    let mut rb = 0;
+    // SAFETY: room for one name.
+    unsafe { glGenRenderbuffers(1, &mut rb) };
+    glBindRenderbuffer(gl::RENDERBUFFER, rb);
+    // Pixels' bytes are in BGRA's order or RGBA's, rows some bytes apart.
+    glRenderbufferStorageMemoryFileVEDA(gl::RENDERBUFFER, gl::RGBA8, 4, 4, 0, gl::RGB, 16);
+    assert_eq!(glGetError(), gl::INVALID_ENUM);
+    glRenderbufferStorageMemoryFileVEDA(gl::RENDERBUFFER, gl::RGBA8, 4, 4, 0, gl::BGRA_EXT, -16);
+    assert_eq!(glGetError(), gl::INVALID_VALUE);
+    // A descriptor of no memory file (none is one but in Veda).
+    glRenderbufferStorageMemoryFileVEDA(gl::RENDERBUFFER, gl::RGBA8, 4, 4, -1, gl::BGRA_EXT, 16);
+    assert_eq!(glGetError(), gl::INVALID_VALUE);
+    eglReleaseThread();
+    eglDestroyContext(d, c);
+}
+
+#[test]
 fn buffers_take_their_bytes_and_offsets() {
     let d = display();
     let config = webkit_config(d);

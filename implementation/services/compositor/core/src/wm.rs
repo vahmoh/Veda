@@ -195,15 +195,23 @@ pub struct Wm<M> {
     /// Windows whose clients did not answer a request to close them.
     unresponsive: BTreeSet<u32>,
     /// The subsurfaces (see [`crate::subsurfaces`]); those whose frames are
-    /// to be acknowledged; those with an acknowledgement to write, and those
-    /// whose channel was full; those gone since the compositor last took
-    /// them.
+    /// to be acknowledged; those with an acknowledgement to write, those
+    /// with buffers to give back, and those whose channel was full; those
+    /// gone since the compositor last took them; the last of the GPU's
+    /// fences known to have signaled.
     pub(crate) subsurfaces: BTreeMap<u32, Subsurface<M>>,
     pub(crate) next_subsurface: u32,
     pub(crate) subsurfaces_owed: BTreeSet<u32>,
     pub(crate) subsurfaces_due: BTreeSet<u32>,
+    pub(crate) subsurfaces_released: BTreeSet<u32>,
     pub(crate) subsurfaces_blocked: BTreeSet<u32>,
     pub(crate) destroyed_subsurfaces: Vec<u32>,
+    pub(crate) gpu_signaled: u64,
+    /// The serial of the last buffer attached to a subsurface, and the
+    /// serials of those of subsurfaces gone since the compositor last took
+    /// them.
+    pub(crate) next_buffer_serial: u64,
+    pub(crate) gone_buffers: Vec<u64>,
     /// The screen is locked (see [`crate::lock`]), and the window that had
     /// the focus as it was, which has it again once it is unlocked.
     pub(crate) locked: bool,
@@ -262,8 +270,12 @@ impl<M> Wm<M> {
             next_subsurface: 0,
             subsurfaces_owed: BTreeSet::new(),
             subsurfaces_due: BTreeSet::new(),
+            subsurfaces_released: BTreeSet::new(),
             subsurfaces_blocked: BTreeSet::new(),
             destroyed_subsurfaces: Vec::new(),
+            gpu_signaled: 0,
+            next_buffer_serial: 0,
+            gone_buffers: Vec::new(),
             locked: false,
             unlocked_focus: None,
             idle_timeout: 0,

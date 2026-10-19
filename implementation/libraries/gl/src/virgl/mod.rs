@@ -60,7 +60,7 @@ use crate::format::{Class, Format};
 use caps::HostCaps;
 use formats::HostFormat;
 use protocol::*;
-pub use transport::{Lost, ResourceArgs, Transport};
+pub use transport::{IMPORT_DISPLAY, IMPORT_SHARED, Lost, ResourceArgs, Transport};
 
 /// Bytes of shared memory for query results: one 16-byte slot each, but
 /// the last, which every other resource gets as its (unused) storage:
@@ -1209,17 +1209,31 @@ impl Backend for VirglBackend {
         self.destroy(id);
     }
 
-    fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, OutOfMemory> {
-        let plain = desc.target == Target::Renderbuffer && desc.samples == 0 && desc.depth == 1 && desc.levels == 1;
-        if !plain || desc.format != Format::Rgbx8Unorm {
-            return Err(OutOfMemory);
+    fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, ImportError> {
+        // A renderbuffer is drawn into (and read: copies, blits from it), a
+        // texture sampled alone; a display shows what is drawn.
+        let bind = match desc.target {
+            Target::Renderbuffer if desc.samples == 0 => BIND_RENDER_TARGET | BIND_SAMPLER_VIEW,
+            Target::Texture2D if !memory.is_scanout() => BIND_SAMPLER_VIEW,
+            _ => return Err(ImportError::Unsupported),
+        };
+        let bind = if memory.is_scanout() { bind | BIND_SCANOUT } else { bind };
+        let takes = if memory.is_scanout() { IMPORT_DISPLAY } else { IMPORT_SHARED };
+        if desc.depth != 1 || desc.levels != 1 || self.t.imports() & takes == 0 {
+            return Err(ImportError::Unsupported);
         }
-        // Kept in the memory's own order, which the host renders.
-        let virgl = if memory.bgr() { format::B8G8R8X8_UNORM } else { format::R8G8B8X8_UNORM };
+        // Kept in the memory's own order, which the host renders and samples.
+        let virgl = match (desc.format, memory.bgr()) {
+            (Format::Rgbx8Unorm, true) => format::B8G8R8X8_UNORM,
+            (Format::Rgbx8Unorm, false) => format::R8G8B8X8_UNORM,
+            (Format::Rgba8Unorm, true) => format::B8G8R8A8_UNORM,
+            (Format::Rgba8Unorm, false) => format::R8G8B8A8_UNORM,
+            _ => return Err(ImportError::Unsupported),
+        };
         let args = ResourceArgs {
             target: TARGET_2D,
             format: virgl,
-            bind: BIND_RENDER_TARGET | BIND_SAMPLER_VIEW,
+            bind,
             width: desc.width,
             height: desc.height,
             depth: 1,

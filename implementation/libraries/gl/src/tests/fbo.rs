@@ -10,7 +10,7 @@ in vec2 pos; out vec2 uv;
 void main() { gl_Position = vec4(pos, 0.0, 1.0); uv = pos * 0.5 + 0.5; }";
 
 /// A program over a full-viewport quad (attribute `pos`).
-fn full(c: &mut Context, fs: &str) -> u32 {
+pub(super) fn full(c: &mut Context, fs: &str) -> u32 {
     let p = program(c, VS, fs);
     c.use_program(p);
     buffer_f32(c, gl::ARRAY_BUFFER, &[-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0]);
@@ -580,7 +580,8 @@ fn renders_into_memory_it_is_given() {
     // last of them has finished and gone.
     let memory = unsafe {
         crate::backend::External::address(picture.as_mut_ptr().cast(), picture.len() * 4, stride as u32 * 4, true)
-    };
+    }
+    .scanout();
     // A renderer that cannot (the software one) says so.
     let mut soft = Context::new(Box::new(SoftBackend::new(Box::new(StdWorkers(1)))), Config::default());
     let rb = soft.gen_renderbuffer();

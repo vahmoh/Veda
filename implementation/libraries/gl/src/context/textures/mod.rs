@@ -553,7 +553,9 @@ impl Context {
             return None;
         }
         let key = self.bound_texture(tex_target).unwrap();
-        let Some(img) = self.textures.get(key).image(face, level as u32).copied() else {
+        // Memory from outside is the GPU's to sample alone.
+        let tex = self.textures.get(key);
+        let Some(img) = tex.image(face, level as u32).copied().filter(|_| !tex.external) else {
             self.err(gl::INVALID_OPERATION);
             return None;
         };
@@ -842,6 +844,82 @@ impl Context {
         self.tex_storage(target, levels, internalformat, width, height, depth);
     }
 
+    /// Makes the bound 2D texture's storage memory from outside, which the
+    /// GPU then samples in place: one level of `width` x `height` pixels of
+    /// `internalformat` (`GL_RGBA8`, or `GL_RGB8`, whose pixels' fourth
+    /// byte is never read), immutable, which nothing draws into or writes
+    /// (`*TexSubImage*` and `GenerateMipmap` fail with
+    /// `GL_INVALID_OPERATION`, and a draw framebuffer it is attached to is
+    /// incomplete). As a texture of an EGL image of a window's buffer, read
+    /// by a compositor. `GL_INVALID_OPERATION` if the renderer cannot take
+    /// such memory, `GL_OUT_OF_MEMORY` if not now.
+    pub fn tex_storage_external(
+        &mut self,
+        target: u32,
+        internalformat: u32,
+        width: i32,
+        height: i32,
+        memory: &crate::backend::External,
+    ) {
+        if target != gl::TEXTURE_2D {
+            return self.err(gl::INVALID_ENUM);
+        }
+        let Some(internal) = format::sized(internalformat).copied().filter(|i| matches!(i.gl, gl::RGBA8 | gl::RGB8))
+        else {
+            return self.err(gl::INVALID_ENUM);
+        };
+        if width < 1 || height < 1 {
+            return self.err(gl::INVALID_VALUE);
+        }
+        if !self.check_size(target, 0, width, height, 1) {
+            return;
+        }
+        let rows = (memory.stride() as usize).checked_mul(height as usize);
+        if (memory.stride() as usize) < width as usize * 4 || rows.is_none_or(|bytes| bytes > memory.size()) {
+            return self.err(gl::INVALID_VALUE);
+        }
+        let key = self.bound_texture(target).unwrap();
+        if self.textures.get(key).immutable_levels.is_some() {
+            return self.err(gl::INVALID_OPERATION);
+        }
+        let desc = ResourceDesc {
+            target: resource_target(target),
+            format: internal.format,
+            width: width as u32,
+            height: height as u32,
+            depth: 1,
+            levels: 1,
+            samples: 0,
+        };
+        let resource = match self.backend.import_resource(&desc, memory) {
+            Ok(r) => r,
+            Err(crate::backend::ImportError::Unsupported) => return self.err(gl::INVALID_OPERATION),
+            Err(crate::backend::ImportError::NoMemory) => return self.err(gl::OUT_OF_MEMORY),
+        };
+        let old = core::mem::replace(self.textures.get_mut(key), Texture::new(target));
+        let mut tex = Texture {
+            sampler: old.sampler,
+            base_level: old.base_level,
+            max_level: old.max_level,
+            swizzle: old.swizzle,
+            ..Texture::new(target)
+        };
+        self.destroy_texture(old);
+        tex.immutable_levels = Some(1);
+        tex.storage = Some(Storage { resource, desc, base: 0 });
+        tex.external = true;
+        tex.images[0][0] = Some(Image {
+            internal,
+            compressed: None,
+            unsized_format: false,
+            width: width as u32,
+            height: height as u32,
+            depth: 1,
+            location: Location::Storage,
+        });
+        *self.textures.get_mut(key) = tex;
+    }
+
     fn tex_storage(&mut self, target: u32, levels: i32, internalformat: u32, w: i32, h: i32, d: i32) {
         let (internal, compressed) = match (format::sized(internalformat), etc::compressed(internalformat)) {
             (Some(i), _) => (*i, None),
@@ -1064,7 +1142,9 @@ impl Context {
         let key = self.bound_texture(target).unwrap();
         let tex = self.textures.get(key);
         let (base, _) = Self::level_range(tex);
-        let Some(b) = tex.image(0, base).copied() else { return self.err(gl::INVALID_OPERATION) };
+        let Some(b) = tex.image(0, base).copied().filter(|_| !tex.external) else {
+            return self.err(gl::INVALID_OPERATION);
+        };
         let i = b.internal;
         let renderable = i.renderable || (i.float_renderable && self.backend.caps().color_buffer_float);
         let filterable = i.filterable || (i.format.class() == Class::Float && self.backend.caps().float_linear);

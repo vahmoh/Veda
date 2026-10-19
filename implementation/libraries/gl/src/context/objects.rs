@@ -326,6 +326,9 @@ pub struct Texture {
     /// Images by face (one face but for cube maps), then level.
     pub images: Vec<[Option<Image>; MAX_LEVELS]>,
     pub storage: Option<Storage>,
+    /// Its storage is memory from outside that the GPU samples alone
+    /// (`TexStorageExternal`): nothing draws into it or writes it.
+    pub external: bool,
 }
 
 impl Texture {
@@ -340,6 +343,7 @@ impl Texture {
             immutable_levels: None,
             images: alloc::vec![[None; MAX_LEVELS]; faces],
             storage: None,
+            external: false,
         }
     }
 

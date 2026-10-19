@@ -22,6 +22,9 @@ struct page_buffer {
 	WPEBuffer *buffer;
 	struct view *view;
 	uint32_t subsurface, name;
+	/* Presented, and not yet given back by the window system: WebKit does
+	 * not have it. */
+	gboolean held;
 };
 
 struct view {
@@ -81,7 +84,8 @@ void engine_copied(const char *text);
 
 /* The engine's thread calls these, on a connection of its own to the
  * window system; a thread of the browser's hears that frames are shown
- * (engine_subsurface_shown). */
+ * (engine_subsurface_shown) and buffers given back
+ * (engine_subsurface_released). */
 
 /* A subsurface of the browser's window `window`, for a page: its id, or 0
  * if the window system refuses one. */
@@ -96,8 +100,9 @@ void browser_subsurface_detach(uint32_t subsurface, uint32_t name);
 /* Presents buffer `name` of `subsurface`, `n` rectangles of it (x, y,
  * width, height each; none: all of it) having changed since the one
  * presented before: the buffer shown before, which the window system reads
- * no more (0: none), -1 if it could not be presented, or -2 if the
- * subsurface is no more (it went with the window, as the browser closes). */
+ * no more (0: none, or not yet: engine_subsurface_released says when), -1
+ * if it could not be presented, or -2 if the subsurface is no more (it went
+ * with the window, as the browser closes). */
 int64_t browser_subsurface_present(uint32_t subsurface, uint32_t name, const int *damage, unsigned n);
 
 /* --- the browser's (src/sound.rs): its streams of the audio service ---- */

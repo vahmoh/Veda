@@ -74,6 +74,7 @@ pub const BIND_RENDER_TARGET: u32 = 1 << 1;
 pub const BIND_SAMPLER_VIEW: u32 = 1 << 3;
 pub const BIND_VERTEX_BUFFER: u32 = 1 << 4;
 pub const BIND_CUSTOM: u32 = 1 << 17;
+pub const BIND_SCANOUT: u32 = 1 << 18;
 pub const BIND_STAGING: u32 = 1 << 19;
 
 // Clear bits (`PIPE_CLEAR_*`).

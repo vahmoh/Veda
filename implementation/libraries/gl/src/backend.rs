@@ -43,6 +43,23 @@ pub(crate) fn unused_id<V>(ids: &alloc::collections::BTreeMap<u32, V>, next: &mu
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct OutOfMemory;
 
+/// Why memory from outside was not made a resource
+/// ([`Backend::import_resource`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ImportError {
+    /// The renderer never takes such memory (`GL_INVALID_OPERATION`): its
+    /// GPU cannot reach it so, or it is no GPU.
+    Unsupported,
+    /// Not now: past a limit, or out of memory (`GL_OUT_OF_MEMORY`).
+    NoMemory,
+}
+
+impl From<OutOfMemory> for ImportError {
+    fn from(_: OutOfMemory) -> ImportError {
+        ImportError::NoMemory
+    }
+}
+
 /// What a resource is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
@@ -533,14 +550,18 @@ pub enum QueryKind {
     PrimitivesWritten,
 }
 
-/// Memory from outside that a resource is made of: a display's picture,
-/// which the GPU renders into in place. Rows of 32-bit pixels.
+/// Memory from outside that a resource is made of, which the GPU renders
+/// into or samples in place: a display's picture ([`External::scanout`]),
+/// or a picture processors read and write too (a page WebKit renders into
+/// the memory the window system shows it from, which the window system
+/// samples). Rows of 32-bit pixels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct External {
     memory: Memory,
     size: usize,
     stride: u32,
     bgr: bool,
+    scanout: bool,
 }
 
 /// Where the memory of an [`External`] is.
@@ -552,14 +573,20 @@ pub enum Memory {
     /// An address in this process (host tests, whose renderer draws into
     /// it from its own threads).
     Address(usize),
+    /// A memory file of the host's (`memfd_create`, sealed against
+    /// shrinking) mapped at an address in this process (host tests): a GPU's
+    /// driver takes it as a dma-buf (`udmabuf`), softpipe at the address.
+    #[cfg(all(target_os = "linux", any(test, feature = "host-virgl")))]
+    File(i32, usize),
 }
 
 impl External {
     /// `size` bytes of the memory object `handle`, rows of pixels `stride`
-    /// bytes apart, with blue in the low byte of each (`0xXXRRGGBB`) if
-    /// `bgr`, red otherwise.
+    /// bytes apart, with blue in the low byte of each (`0xAARRGGBB`) if
+    /// `bgr`, red otherwise. Without the right to write, the GPU only
+    /// samples it.
     pub fn handle(handle: u32, size: usize, stride: u32, bgr: bool) -> External {
-        External { memory: Memory::Handle(handle), size, stride, bgr }
+        External { memory: Memory::Handle(handle), size, stride, bgr, scanout: false }
     }
 
     /// `size` bytes at `address` in this process, laid out as for
@@ -572,12 +599,36 @@ impl External {
     /// accessed otherwise meanwhile but to read what was drawn once a fence
     /// after the drawing has signaled.
     pub unsafe fn address(address: *mut u8, size: usize, stride: u32, bgr: bool) -> External {
-        External { memory: Memory::Address(address as usize), size, stride, bgr }
+        External { memory: Memory::Address(address as usize), size, stride, bgr, scanout: false }
+    }
+
+    /// The memory file `fd`, `size` bytes of it mapped at `address`, laid
+    /// out as for [`External::handle`].
+    ///
+    /// # Safety
+    ///
+    /// As for [`External::address`], of the mapping; the file stays open
+    /// while a resource made of it lives.
+    #[cfg(all(target_os = "linux", any(test, feature = "host-virgl")))]
+    pub unsafe fn file(fd: i32, address: *mut u8, size: usize, stride: u32, bgr: bool) -> External {
+        External { memory: Memory::File(fd, address as usize), size, stride, bgr, scanout: false }
+    }
+
+    /// The same memory as a display's picture: what the GPU draws into it
+    /// reaches the memory, where a display reads it, rather than staying
+    /// in caches a display does not read.
+    pub fn scanout(self) -> External {
+        External { scanout: true, ..self }
     }
 
     /// Where the memory is.
     pub fn memory(&self) -> Memory {
         self.memory
+    }
+
+    /// Whether it is a display's picture ([`External::scanout`]).
+    pub fn is_scanout(&self) -> bool {
+        self.scanout
     }
 
     /// Its bytes.
@@ -628,12 +679,14 @@ pub trait Backend: Send {
     /// before: never another context's (or application's) old data.
     fn create_resource(&mut self, desc: &ResourceDesc) -> Result<ResourceId, OutOfMemory>;
     fn destroy_resource(&mut self, id: ResourceId);
-    /// A render target `desc` (a renderbuffer of 8-bit RGB, single
-    /// sampled) whose storage is `memory`: the GPU renders into the memory
-    /// itself, in its pixels' order. Renderers that cannot refuse.
-    fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, OutOfMemory> {
+    /// A resource `desc` whose storage is `memory`, in its pixels' order: a
+    /// renderbuffer of 8-bit RGB or RGBA, single sampled, which the GPU
+    /// renders into (and reads from), or a 2D texture of one level of them,
+    /// which it only samples. Renderers that cannot refuse: `Unsupported`
+    /// if they never can, `NoMemory` if not now (past a limit).
+    fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, ImportError> {
         let _ = (desc, memory);
-        Err(OutOfMemory)
+        Err(ImportError::Unsupported)
     }
 
     /// Writes data laid out in the resource's format (rows `row_pitch`

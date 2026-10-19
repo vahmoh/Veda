@@ -489,7 +489,7 @@
 +obj-$(CONFIG_VEDA_EFI)		+= efi.o
 --- /dev/null
 +++ b/drivers/virt/veda/bridge.c
-@@ -0,0 +1,1102 @@
+@@ -0,0 +1,1114 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * /dev/veda: the bridge of Veda's driver VM, through which the programs of
@@ -1245,8 +1245,18 @@
 +	bool writable;
 +};
 +
++/* How a range devices may only read is mapped for them: for reading,
++ * whichever way the importer asks (i915 maps every buffer both ways). The
++ * monitor's mapping, which the IOMMU's mirrors, refuses a device's writes
++ * anyway. */
++static enum dma_data_direction vmo_buf_dir(const struct vmo_buf *b, enum dma_data_direction dir)
++{
++	return b->writable ? dir : DMA_TO_DEVICE;
++}
++
 +/* The range as DMA addresses for the importer's device, in segments it
-+ * takes; no pages (the range is not the guest's RAM). */
++ * takes; no pages (the range is not the guest's RAM). A range devices may
++ * only read is no importer's that would only write it. */
 +static struct sg_table *vmo_buf_map(struct dma_buf_attachment *attach, enum dma_data_direction dir)
 +{
 +	struct vmo_buf *b = attach->dmabuf->priv;
@@ -1256,8 +1266,9 @@
 +	unsigned int i, n;
 +	u64 at = 0;
 +
-+	if (dir != DMA_TO_DEVICE && !b->writable)
++	if (dir == DMA_FROM_DEVICE && !b->writable)
 +		return ERR_PTR(-EACCES);
++	dir = vmo_buf_dir(b, dir);
 +	if (!seg)
 +		seg = PAGE_SIZE;
 +	n = DIV_ROUND_UP(b->len, seg);
@@ -1294,6 +1305,7 @@
 +	struct scatterlist *sg;
 +	unsigned int i;
 +
++	dir = vmo_buf_dir(attach->dmabuf->priv, dir);
 +	for_each_sgtable_dma_sg(sgt, sg, i)
 +		dma_unmap_resource(attach->dev, sg_dma_address(sg), sg_dma_len(sg), dir, DMA_ATTR_SKIP_CPU_SYNC);
 +	sg_free_table(sgt);

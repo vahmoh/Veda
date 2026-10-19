@@ -130,11 +130,12 @@ impl Context {
     }
 
     /// Makes the bound renderbuffer's storage memory from outside: a
-    /// display's picture of `width` x `height` pixels, which the GPU then
-    /// renders into in place (what `glEGLImageTargetRenderbufferStorageOES`
-    /// does with an image of a display's buffer). `internalformat` is
-    /// `GL_RGB8`: the pixels' fourth byte is never read. Fails with
-    /// `GL_INVALID_OPERATION` if the renderer cannot.
+    /// picture of `width` x `height` pixels, which the GPU then renders into
+    /// in place (what `glEGLImageTargetRenderbufferStorageOES` does with an
+    /// image of a display's buffer, or of a window's). `internalformat` is
+    /// `GL_RGBA8`, or `GL_RGB8`, whose pixels' fourth byte is never read.
+    /// Fails with `GL_INVALID_OPERATION` if the renderer cannot take such
+    /// memory, `GL_OUT_OF_MEMORY` if not now.
     pub fn renderbuffer_storage_external(
         &mut self,
         target: u32,
@@ -146,7 +147,7 @@ impl Context {
         if target != gl::RENDERBUFFER {
             return self.err(gl::INVALID_ENUM);
         }
-        let Some(i) = format::sized(internalformat).copied().filter(|i| i.gl == gl::RGB8) else {
+        let Some(i) = format::sized(internalformat).copied().filter(|i| matches!(i.gl, gl::RGBA8 | gl::RGB8)) else {
             return self.err(gl::INVALID_ENUM);
         };
         let max = self.backend.caps().max_renderbuffer_size as i32;
@@ -168,8 +169,10 @@ impl Context {
             levels: 1,
             samples: 0,
         };
-        let Ok(resource) = self.backend.import_resource(&desc, memory) else {
-            return self.err(gl::INVALID_OPERATION);
+        let resource = match self.backend.import_resource(&desc, memory) {
+            Ok(r) => r,
+            Err(crate::backend::ImportError::Unsupported) => return self.err(gl::INVALID_OPERATION),
+            Err(crate::backend::ImportError::NoMemory) => return self.err(gl::OUT_OF_MEMORY),
         };
         let rb = self.renderbuffers.get_mut(key);
         let old = core::mem::replace(

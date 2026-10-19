@@ -4,8 +4,10 @@
 # The browser's page drawn by the compositor's GPU (1280x800), as on a PC,
 # whose GPU composes the screen: Veda's renderer in the driver VM serves the
 # `gpu` protocol on softpipe (as in drivervm-compose.vts), and the
-# compositor draws the page's subsurface from a texture of its own, the
-# window's buffer blended over it where the window draws over the page.
+# compositor samples the page's subsurface in place, its buffers' memory
+# itself, nothing copied (and gives each back once the frames reading it
+# are done), the window's buffer blended over it where the window draws
+# over the page.
 # The page's frames reach the screen; the link's label shown over the page
 # stays as it was over the page drawn afresh under it (zoomed in and back),
 # pixel for pixel. softpipe is slow under emulation (seconds for a frame of
@@ -20,9 +22,11 @@ agent-asleep
 fail-on "PANIC"
 fail-on "frames stay with the processor"
 fail-on "frames are drawn by the processor from now on"
+fail-on "cannot sample subsurfaces in place"
 wait-serial "browser: pages are painted on the CPU" 120
 wait-serial "compositor: frames are drawn by the GPU (softpipe) from now on" 400
 wait-serial "drawn by the GPU (softpipe))" 400
+wait-serial "softpipe samples subsurfaces in place: their frames are never copied" 400
 move 0.5 0.06
 wait 40
 shot target/veda/browser-compose-1-start.png

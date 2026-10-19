@@ -1141,9 +1141,19 @@ const PAGE: Rect = Rect::new(0, 100, 600, 300);
 fn acknowledged(wm: &mut Wm<()>) -> Vec<u32> {
     let mut out = Vec::new();
     wm.deliver_subsurfaces(|id, ev| {
-        let SubsurfaceEvent::FrameDone { subsurface, .. } = ev;
+        let SubsurfaceEvent::FrameDone { subsurface, .. } = ev else { panic!("{ev:?}") };
         assert_eq!(*subsurface, id);
         out.push(id);
+        Write::Sent
+    });
+    out
+}
+
+/// What subsurfaces' clients were told since the last call.
+fn told(wm: &mut Wm<()>) -> Vec<SubsurfaceEvent> {
+    let mut out = Vec::new();
+    wm.deliver_subsurfaces(|_, ev| {
+        out.push(ev.clone());
         Write::Sent
     });
     out
@@ -1342,6 +1352,85 @@ fn a_subsurfaces_acknowledgement_waits_while_its_channel_is_full() {
     });
     assert_eq!(out, [s]);
     assert_eq!(wm.blocked_subsurfaces().count(), 0);
+}
+
+#[test]
+fn buffers_the_gpu_may_still_read_go_back_once_its_frame_is_done() {
+    let mut wm = wm();
+    let (id, s) = page(&mut wm);
+    place(&mut wm, id, &[s], &[]).unwrap();
+    // The GPU composes a frame reading buffer 1 in place (its fence 5),
+    // which it has yet to finish as 2 is presented: 1 is not given back.
+    wm.subsurfaces_sampled(&[s], 5);
+    wm.gpu_passed(4);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 2, Vec::new()), Ok(None));
+    wm.frames_done(10, 16);
+    assert_eq!(told(&mut wm), [SubsurfaceEvent::FrameDone { subsurface: s, seen_ns: 10, period_ns: 16 }]);
+    // Once it has, the client hears it has 1 back.
+    wm.gpu_passed(5);
+    assert_eq!(told(&mut wm), [SubsurfaceEvent::Released { subsurface: s, buffer: 1 }]);
+    // Given back before the frame's acknowledgement, when both are due; and
+    // kept for when there is room on a full channel.
+    wm.subsurfaces_sampled(&[s], 6);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 1, Vec::new()), Ok(None));
+    wm.frames_done(26, 16);
+    wm.gpu_passed(6);
+    wm.deliver_subsurfaces(|_, _| Write::Full);
+    assert_eq!(wm.blocked_subsurfaces().collect::<Vec<_>>(), [s]);
+    let mut out = Vec::new();
+    wm.subsurface_writable(s, |_, ev| {
+        out.push(ev.clone());
+        Write::Sent
+    });
+    assert_eq!(
+        out,
+        [
+            SubsurfaceEvent::Released { subsurface: s, buffer: 2 },
+            SubsurfaceEvent::FrameDone { subsurface: s, seen_ns: 26, period_ns: 16 },
+        ]
+    );
+    // A frame whose fence has passed holds nothing back.
+    wm.subsurfaces_sampled(&[s], 7);
+    wm.gpu_passed(7);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 2, Vec::new()), Ok(Some(1)));
+    // The GPU gone, what it may have read goes back, and the next one's
+    // fences count afresh.
+    wm.subsurfaces_sampled(&[s], 9);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 1, Vec::new()), Ok(None));
+    wm.gpu_changed();
+    assert_eq!(told(&mut wm), [SubsurfaceEvent::Released { subsurface: s, buffer: 2 }]);
+    wm.subsurfaces_sampled(&[s], 1);
+    assert_eq!(wm.present_subsurface(APP_TOO, s, 2, Vec::new()), Ok(None));
+    // A buffer detached before it went back is the client's: nothing told.
+    wm.detach_subsurface(APP_TOO, s, 1).unwrap();
+    wm.gpu_passed(1);
+    assert!(told(&mut wm).is_empty());
+}
+
+#[test]
+fn what_is_made_of_subsurfaces_buffers_goes_with_them() {
+    let mut wm = wm();
+    let (_, s) = page(&mut wm);
+    assert!(wm.take_gone_buffers().is_empty());
+    let serial = |wm: &Wm<()>| wm.subsurface(s).and_then(|s| s.shown_serial()).map(|(_, n)| n).unwrap();
+    // Buffer 1, shown, then detached: gone once another is shown.
+    let first = serial(&wm);
+    wm.detach_subsurface(APP_TOO, s, 1).unwrap();
+    assert!(wm.take_gone_buffers().is_empty());
+    wm.present_subsurface(APP_TOO, s, 2, Vec::new()).unwrap();
+    assert_eq!(wm.take_gone_buffers(), [first]);
+    // A name given again is another buffer.
+    let second = serial(&wm);
+    attach(&mut wm, APP_TOO, s, 1, 600, 300);
+    wm.present_subsurface(APP_TOO, s, 1, Vec::new()).unwrap();
+    assert!(serial(&wm) != first && serial(&wm) != second);
+    // A buffer not shown goes as it is detached; the rest with their
+    // subsurface.
+    wm.detach_subsurface(APP_TOO, s, 2).unwrap();
+    assert_eq!(wm.take_gone_buffers(), [second]);
+    let third = serial(&wm);
+    wm.destroy_subsurface(APP_TOO, s).unwrap();
+    assert_eq!(wm.take_gone_buffers(), [third]);
 }
 
 #[test]

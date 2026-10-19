@@ -19,7 +19,7 @@ use rt::object::{Event, Vmo};
 use rt::pool::ThreadPool;
 use rt::vm::Mapping;
 
-use crate::backend::{External, Memory, OutOfMemory};
+use crate::backend::{External, ImportError, Memory, OutOfMemory};
 use crate::soft::{SoftBackend, Workers};
 use crate::virgl::{Lost, ResourceArgs, Transport, Unsupported, VirglBackend};
 use crate::{Config, Context};
@@ -159,6 +159,8 @@ pub struct GpuTransport {
     fence_word: usize,
     fences: Arc<Event>,
     renderer: String,
+    /// What memory from outside the renderer takes (`proto::gpu::IMPORT_*`).
+    imports: u32,
 }
 
 impl GpuTransport {
@@ -205,6 +207,7 @@ impl GpuTransport {
             fence_word: layout.fence,
             fences: Arc::new(session.fences),
             renderer: session.renderer,
+            imports: session.imports,
         })
     }
 
@@ -251,6 +254,10 @@ impl Transport for GpuTransport {
         true
     }
 
+    fn imports(&self) -> u32 {
+        self.imports
+    }
+
     fn shared(&self) -> (*mut u8, usize) {
         // SAFETY: `connect_to` checked that the shared area lies inside the
         // mapping.
@@ -282,7 +289,7 @@ impl Transport for GpuTransport {
         let _ = self.client.destroy(handle);
     }
 
-    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, ImportError> {
         let a = args;
         let spec = ResourceSpec {
             target: a.target,
@@ -296,21 +303,22 @@ impl Transport for GpuTransport {
             nr_samples: a.nr_samples,
             flags: a.flags,
         };
-        let Memory::Handle(handle) = memory.memory() else { return Err(OutOfMemory) };
+        let Memory::Handle(handle) = memory.memory() else { return Err(ImportError::Unsupported) };
         // The caller keeps its handle: the renderer gets one of its own.
         let theirs = {
             // SAFETY: the caller's handle, borrowed for the duplication and
             // never closed here (`ManuallyDrop`).
             let h = core::mem::ManuallyDrop::new(unsafe { rt::object::Handle::from_raw(handle) });
-            Vmo::from_handle(h.duplicate(None).map_err(|_| OutOfMemory)?)
+            Vmo::from_handle(h.duplicate(None).map_err(|_| ImportError::NoMemory)?)
         };
         match self.client.import(spec, memory.stride(), theirs) {
             Ok(Ok(h)) => Ok(h),
+            Ok(Err(GpuError::NoMemory)) => Err(ImportError::NoMemory),
             Ok(Err(e)) => {
-                rt::println!("{}: cannot render into memory it is given: {}", self.renderer, e);
-                Err(OutOfMemory)
+                rt::println!("{}: cannot render into or sample memory it is given: {}", self.renderer, e);
+                Err(ImportError::Unsupported)
             }
-            Err(_) => Err(OutOfMemory),
+            Err(_) => Err(ImportError::NoMemory),
         }
     }
 

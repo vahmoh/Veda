@@ -273,8 +273,10 @@ impl Compositor {
             g.copy(from, target, &stale);
         }
         g.begin(target, clip);
+        // The subsurfaces whose buffers the frame reads in place.
+        let mut sampled = Vec::new();
         if !clip.is_empty() && desktop {
-            self.draw_scene(&mut g, clip, now);
+            sampled = self.draw_scene(&mut g, clip, now);
         }
         if let Some(s) = &mut self.startup {
             s.frame_gpu(&mut g, clip, now);
@@ -299,15 +301,21 @@ impl Compositor {
         }
         self.gpu = Some(g);
         match fence {
-            Some(fence) => self.screen.end_gpu_frame(real, fence),
+            Some(fence) => {
+                // Their buffers are read until the frame is done.
+                self.wm.subsurfaces_sampled(&sampled, fence);
+                self.screen.end_gpu_frame(real, fence)
+            }
             None => self.lose_gpu("the GPU stopped answering"),
         }
     }
 
     /// The desktop within `clip`, as [`Compositor::composite_cpu`] draws
     /// it: the windows bottom to top, each window's texture brought up to
-    /// date first.
-    fn draw_scene(&mut self, g: &mut Gpu, clip: Rect, now: u64) {
+    /// date first, each subsurface's buffer sampled in place where the GPU
+    /// can. The subsurfaces whose buffers it read so.
+    fn draw_scene(&mut self, g: &mut Gpu, clip: Rect, now: u64) -> Vec<u32> {
+        let mut sampled = Vec::new();
         let screen = self.screen_rect();
         let Compositor { wm, decor, thumbs, cursor, cursor_rect, .. } = self;
         let order: Vec<u32> = wm.paint_order().to_vec();
@@ -335,12 +343,19 @@ impl Compositor {
                 win.surface.upload_all = true;
             }
             let placed = win.placements.placed.clone();
-            // Its subsurfaces' pixels, as the GPU has them.
+            // Its subsurfaces' pixels: their memory, sampled in place, or
+            // (where the GPU cannot) as a texture of theirs has them.
             let mut layers = Vec::with_capacity(placed.len());
             for p in placed {
                 let content = wm.subsurface_mut(p.subsurface).filter(|s| s.window == id).and_then(|s| {
                     let changed = s.upload.take();
                     let all = core::mem::replace(&mut s.upload_all, false);
+                    if let Some(t) = s.shown_serial().and_then(|(b, serial)| g.sampled(serial, b)) {
+                        sampled.push(p.subsurface);
+                        // What a copy of it would lack is all of it.
+                        s.upload_all = true;
+                        return Some(t);
+                    }
                     let content = s
                         .shown()
                         .and_then(|b| Pixels::of(b, 0))
@@ -389,6 +404,7 @@ impl Compositor {
             let at = Rect::new(cursor.1.0 - hx, cursor.1.1 - hy, t.w, t.h);
             g.image(t, Rect::new(0, 0, t.w, t.h), at, 1.0, false, None);
         }
+        sampled
     }
 
     // ---- the GPU's arrival and departure -------------------------------------
@@ -413,6 +429,8 @@ impl Compositor {
         match checked {
             Ok(()) => {
                 println!("frames are drawn by the GPU ({}) from now on", g.renderer);
+                // Its fences count from the start.
+                self.wm.gpu_changed();
                 self.gpu = Some(g);
             }
             Err(why) => println!("frames stay with the processor: {}", why),
@@ -425,6 +443,9 @@ impl Compositor {
         if self.gpu.take().is_none() {
             return;
         }
+        // It reads nothing more: what it might have been reading goes back
+        // to the clients.
+        self.wm.gpu_changed();
         println!("{}: frames are drawn by the processor from now on", why);
         self.screen.not_drawn();
         let screen = self.screen_rect();
@@ -446,8 +467,12 @@ impl Compositor {
         }
     }
 
-    /// The GPU's fences moved: the frame it drew, if done, is asked for.
+    /// The GPU's fences moved: the frame it drew, if done, is asked for, and
+    /// the subsurfaces' buffers it no longer reads go back to their clients.
     pub(crate) fn gpu_signaled(&mut self, now: u64) {
+        if let Some(g) = &self.gpu {
+            self.wm.gpu_passed(g.fence_signaled());
+        }
         let Some((fence, since)) = self.screen.drawing() else { return };
         let done = self.gpu.as_ref().is_some_and(|g| g.signaled(fence));
         if done {

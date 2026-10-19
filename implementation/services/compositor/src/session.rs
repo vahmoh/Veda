@@ -177,6 +177,10 @@ impl display::Server for Session<'_> {
         buffer: u32,
         damage: Vec<dp::Rect>,
     ) -> Result<Option<u32>, DisplayError> {
+        // The buffer shown before goes back now if the GPU is done with it.
+        if let Some(g) = &self.comp.gpu {
+            self.comp.wm.gpu_passed(g.fence_signaled());
+        }
         self.comp.wm.present_subsurface(self.client, subsurface, buffer, damage)
     }
 

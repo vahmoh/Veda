@@ -2871,7 +2871,86 @@
  #endif
 --- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
 +++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
-@@ -453,7 +453,29 @@
+@@ -427,9 +427,13 @@
+     : RenderTargetShareableBuffer(surface, size)
+     , m_bitmap(WTF::move(bitmap))
+ {
+-    if (m_surface->usesGL())
+-        initializeColorBuffer();
+-    else if (m_surface->useSkia())
++    if (m_surface->usesGL()) {
++#if OS(VEDA)
++        m_rendersInPlace = initializeColorBufferInPlace();
++        if (!m_rendersInPlace)
++#endif
++            initializeColorBuffer();
++    } else if (m_surface->useSkia())
+         m_skiaSurface = m_bitmap->createSurface();
+ 
+     WebProcess::singleton().parentProcessConnection()->send(Messages::AcceleratedBackingStore::DidCreateSHMBuffer(m_id, WTF::move(bitmapHandle)), m_surface->surfaceID());
+@@ -437,8 +441,61 @@
+ 
+ AcceleratedSurface::RenderTargetSHMImage::~RenderTargetSHMImage() = default;
+ 
++#if OS(VEDA)
++// Veda's OpenGL ES renders into a memory file itself, as into a
++// renderbuffer of an EGL image of a dma-buf elsewhere.
++typedef void (*PFNGLRENDERBUFFERSTORAGEMEMORYFILEVEDAPROC)(GLenum target, GLenum internalformat, GLsizei width, GLsizei height, GLint fd, GLenum format, GLsizei stride);
++
++// The color buffer as the bitmap's memory file, which the window system shows
++// the page from: the GPU renders the frames there, and none is read back.
++// Only where frames are finished before they are sent, which sync() makes so
++// with a fence it waits on (Veda's EGL has none to send with a frame), and
++// where the GPU can take such memory: under QEMU (virgl's host), on a GPU
++// whose caches are not the processor's, or in software, the first refusal
++// says so, and the process's frames are read back from then on.
++bool AcceleratedSurface::RenderTargetSHMImage::initializeColorBufferInPlace()
++{
++    static std::atomic<bool> refused { false };
++    static auto renderbufferStorageMemoryFile = reinterpret_cast<PFNGLRENDERBUFFERSTORAGEMEMORYFILEVEDAPROC>(eglGetProcAddress("glRenderbufferStorageMemoryFileVEDA"));
++    if (refused || !renderbufferStorageMemoryFile || !GLFence::isSupported(PlatformDisplay::sharedDisplay().glDisplay()))
++        return false;
++    auto handle = m_bitmap->createHandle(SharedMemory::Protection::ReadWrite);
++    if (!handle)
++        return false;
++    // Veda's OpenGL ES takes the memory, and leaves the descriptor ours.
++    auto file = handle->handle().releaseHandle();
++    while (glGetError() != GL_NO_ERROR) { }
++    glGenRenderbuffers(1, &m_colorBuffer);
++    glBindRenderbuffer(GL_RENDERBUFFER, m_colorBuffer);
++    renderbufferStorageMemoryFile(GL_RENDERBUFFER, GL_RGBA8, m_size.width(), m_size.height(), file.value(), GL_BGRA_EXT, m_bitmap->bytesPerRow());
++    if (GLenum error = glGetError()) {
++        glDeleteRenderbuffers(1, &m_colorBuffer);
++        m_colorBuffer = 0;
++        // This buffer's frames are read back; and the process's from now on
++        // if the GPU never takes such memory (not just not now, past its
++        // limits).
++        if (error == GL_INVALID_OPERATION && !refused.exchange(true))
++            WTFLogAlways("Web process %d reads its pages' frames back: the GPU cannot render into the memory the window system shows them from", getpid());
++        return false;
++    }
++    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_colorBuffer);
++    if (m_surface->useSkia())
++        createSkiaSurfaceForFramebuffer(m_fbo);
++    static std::atomic<bool> said { false };
++    if (!said.exchange(true))
++        WTFLogAlways("Web process %d renders its pages straight into the memory the window system shows them from", getpid());
++    return true;
++}
++#endif
++
+ void AcceleratedSurface::RenderTargetSHMImage::didRenderFrame()
+ {
++#if OS(VEDA)
++    // In the bitmap already, once the GPU finished it, which sync() waited for.
++    if (m_rendersInPlace)
++        return;
++#endif
++
+     if (m_surface->useSkia()) {
+         if (!m_skiaSurface)
+             return;
+@@ -453,7 +510,29 @@
          return;
      }
  
@@ -2901,7 +2980,7 @@
  }
  
  std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::RenderTargetTexture::create(AcceleratedSurface& surface, const IntSize& size)
-@@ -1154,6 +1176,12 @@
+@@ -1154,6 +1233,12 @@
      if (usesGL())
          m_target->sync(m_useExplicitSync);
  
@@ -2914,7 +2993,7 @@
      Vector<IntRect, 1> damageRects;
  #if ENABLE(DAMAGE_TRACKING)
      m_damageTracker.didPresent(*m_target, targetContents);
-@@ -1162,7 +1190,9 @@
+@@ -1162,7 +1247,9 @@
      UNUSED_PARAM(targetContents);
  #endif
  
@@ -2924,6 +3003,25 @@
      m_pendingFrameNotifyTargets.insert(0, { m_target, WTF::move(damageRects) });
      m_target = nullptr;
  }
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.h
+@@ -320,7 +320,16 @@
+         bool supportsExplicitSync() const override { return false; }
+         void didRenderFrame() override;
+ 
++#if OS(VEDA)
++        bool initializeColorBufferInPlace();
++#endif
++
+         const Ref<WebCore::ShareableBitmap> m_bitmap;
++#if OS(VEDA)
++        // The GPU renders into the bitmap's own memory: no frame is read
++        // back.
++        bool m_rendersInPlace { false };
++#endif
+     };
+ 
+     class RenderTargetTexture final : public RenderTargetShareableBuffer {
 --- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
 +++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
 @@ -50,6 +50,11 @@

@@ -440,24 +440,43 @@ static gboolean page_subsurface(struct view *view)
 
 /* Takes the view's subsurface away, and the window system's hold of its
  * buffers: its frame shown is its pending one if `keep`, and WebKit's
- * again if not. */
+ * again if not; those it had yet to give back are WebKit's again. */
 static void page_drop(struct view *view, gboolean keep)
 {
 	if (!view->subsurface)
 		return;
-	for (guint i = 0; i < view->buffers->len; i++) {
-		struct page_buffer *b = g_ptr_array_index(view->buffers, i);
-		b->subsurface = 0;
-		b->name = 0;
-	}
 	struct page_buffer *shown = view->presented;
 	view->presented = NULL;
 	browser_subsurface_destroy(view->subsurface);
 	view->subsurface = 0;
+	for (guint i = 0; i < view->buffers->len; i++) {
+		struct page_buffer *b = g_ptr_array_index(view->buffers, i);
+		if (b->held && b != shown)
+			wpe_view_buffer_released(view->wpe_view, b->buffer);
+		b->subsurface = 0;
+		b->name = 0;
+		b->held = FALSE;
+	}
 	if (shown && keep && !view->pending)
 		view->pending = g_object_ref(shown->buffer);
 	else if (shown)
 		wpe_view_buffer_released(view->wpe_view, shown->buffer);
+}
+
+/* The window system has done with buffer `name` of the view's subsurface:
+ * WebKit has it back. */
+static void page_give_back(struct view *view, uint32_t name)
+{
+	for (guint i = 0; i < view->buffers->len; i++) {
+		struct page_buffer *b = g_ptr_array_index(view->buffers, i);
+		if (b->subsurface == view->subsurface && b->name == name) {
+			if (b->held && b != view->presented) {
+				b->held = FALSE;
+				wpe_view_buffer_released(view->wpe_view, b->buffer);
+			}
+			return;
+		}
+	}
 }
 
 /* Makes room in the window system for `view`'s buffers: the subsurfaces of
@@ -704,13 +723,11 @@ static enum presented page_present(struct view *view, WPEBuffer *buffer, const W
 		return REFUSED;
 	}
 	view->presented = b;
-	for (guint i = 0; released > 0 && i < view->buffers->len; i++) {
-		struct page_buffer *old = g_ptr_array_index(view->buffers, i);
-		if (old->subsurface == view->subsurface && old->name == (uint32_t)released) {
-			wpe_view_buffer_released(view->wpe_view, old->buffer);
-			break;
-		}
-	}
+	b->held = TRUE;
+	/* The buffer shown before, unless the GPU may still read it, which the
+	 * window system then says (run_subsurface_released). */
+	if (released > 0)
+		page_give_back(view, (uint32_t)released);
 	return PRESENTED;
 }
 
@@ -789,6 +806,28 @@ void engine_subsurface_shown(uint32_t subsurface)
 {
 	struct command *c = command_new(run_subsurface_shown, 0);
 	c->n[0] = subsurface;
+	post(c);
+}
+
+static void run_subsurface_released(struct command *c)
+{
+	GHashTableIter it;
+	gpointer value;
+	g_hash_table_iter_init(&it, E.views);
+	while (g_hash_table_iter_next(&it, NULL, &value)) {
+		struct view *view = value;
+		if (view->subsurface == (uint32_t)c->n[0]) {
+			page_give_back(view, (uint32_t)c->n[1]);
+			return;
+		}
+	}
+}
+
+void engine_subsurface_released(uint32_t subsurface, uint32_t buffer)
+{
+	struct command *c = command_new(run_subsurface_released, 0);
+	c->n[0] = subsurface;
+	c->n[1] = buffer;
 	post(c);
 }
 

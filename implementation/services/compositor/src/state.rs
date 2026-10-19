@@ -129,6 +129,10 @@ impl Compositor {
                 g.forget(Slot::Subsurface(id));
             }
         }
+        let gone = self.wm.take_gone_buffers();
+        if let Some(g) = &mut self.gpu {
+            g.forget_buffers(&gone);
+        }
         for key in self.wm.take_dropped() {
             // Its windows are gone: their channels closed above.
             println!("a client did not answer and was asked again: its connection is closed");

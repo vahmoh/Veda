@@ -87,7 +87,7 @@ VR_API int vr_resource_create(struct vr_context *ctx, const struct vr_resource_a
                               uint64_t backing_offset, uint64_t backing_len, uint32_t *id);
 VR_API void vr_resource_destroy(struct vr_context *ctx, uint32_t id);
 
-/* How a device takes memory from outside to render into
+/* How a device takes memory from outside to render into or sample
  * (vr_resource_import): none, a dma-buf's file descriptor (a GPU's), or
  * the memory's address in this process (softpipe). */
 enum vr_import {
@@ -97,16 +97,37 @@ enum vr_import {
 };
 VR_API enum vr_import vr_device_import(struct vr_device *dev);
 
-/* Creates a 2D render target (`args`: one level, single sampled, a format
- * of 32-bit pixels) whose storage is memory from outside, rows `stride`
- * bytes apart: a display's picture, which the device renders into in
- * place. It is the dma-buf `fd` (VR_IMPORT_FD: the device takes what it
- * needs of it, and the caller closes it) or `memory` (VR_IMPORT_MEMORY:
- * mapped by the caller for as long as the context lives). Once a fence
- * after the drawing has signaled, the memory holds what was drawn. Its
- * handle goes to `*id`. */
+/* What memory from outside a device takes (vr_resource_import), as bits: a
+ * display's pictures, which it renders into for a display to show (it may
+ * still refuse one, where what it draws would not reach the display), and
+ * pictures that processors read and write too, which it renders into or
+ * samples coherently with their caches (i915 where the GPU shares the
+ * processor's last-level cache, and softpipe). */
+#define VR_IMPORTS_DISPLAY (1u << 0)
+#define VR_IMPORTS_SHARED (1u << 1)
+VR_API unsigned vr_device_imports(struct vr_device *dev);
+
+/* Creates a 2D resource (`args`: one level, single sampled, a format of
+ * 32-bit pixels) whose storage is memory from outside, rows `stride` bytes
+ * apart, which the device renders into (`args->bind` has
+ * VIRGL_BIND_RENDER_TARGET) or samples (VIRGL_BIND_SAMPLER_VIEW), or both,
+ * in place: a display's picture (VIRGL_BIND_SCANOUT, with
+ * VIRGL_BIND_RENDER_TARGET; VR_IMPORTS_DISPLAY), or a picture processors
+ * read and write too (VR_IMPORTS_SHARED). One that is only sampled is
+ * never written: nothing draws into it, copies to it or writes it (its
+ * memory may be the client's to read only, and mapped so). It is the
+ * dma-buf `fd` (VR_IMPORT_FD: the device takes what it needs of it, and
+ * the caller closes it) or `memory` (VR_IMPORT_MEMORY: mapped by the
+ * caller until the device lets go of it, vr_device_released, or the context
+ * is gone). Once a fence after the drawing has signaled, the memory holds
+ * what was drawn. Its handle goes to `*id`. */
 VR_API int vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *args, int fd, void *memory,
                               uint32_t stride, uint32_t *id);
+/* The memory from outside (VR_IMPORT_MEMORY) the device let go of since the
+ * last call: the resources made of it are gone, and nothing renders into
+ * or samples it any more, so that it may be unmapped. Up to `max`
+ * addresses go to `out`; returns how many. */
+VR_API size_t vr_device_released(struct vr_device *dev, void **out, size_t max);
 
 /* Carries out `count` words of commands. When it returns, what transfers
  * read from the shared memory has been read and what they write there has

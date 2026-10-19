@@ -31,6 +31,18 @@ struct vr_device {
    bool depth_low;
    /* How it takes memory from outside (vr_resource_import). */
    enum vr_import import;
+   /* Whether what it does with memory from outside stays coherent with the
+    * processors' caches as it is (VR_IMPORTS_SHARED): softpipe, which is a
+    * processor, and i915 on GPUs that share the processor's last-level
+    * cache (Gen12 up to Raptor Lake), which map memory from outside cached
+    * there, so that it reads what processors wrote and they read what it
+    * drew. Not where the GPU's caches are its own (xe, i915 on Meteor Lake
+    * and later), whose mappings Gallium does not choose. */
+   bool coherent;
+   /* softpipe's: the memory of the display targets it let go of, which
+    * nothing renders into or samples any more (vr_device_released). */
+   void **released;
+   unsigned num_released, released_cap;
    /* The GPU's device (its DRM descriptor) if its driver is i915, which
     * the renderer asks to map memory from outside as a display reads it
     * (vr_resource_import); -1 otherwise. */
@@ -96,6 +108,9 @@ struct vr_resource {
    /* As created (virgl's numbers). */
    uint32_t target, format, bind;
    uint32_t width, height, depth, array_size, last_level, nr_samples;
+   /* Memory from outside that is only sampled: nothing writes it (the
+    * client may have no right to; vr_resource_import). */
+   bool readonly;
 };
 
 struct vr_fence {

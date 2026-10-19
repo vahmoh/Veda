@@ -20,6 +20,10 @@
 //! Fences are waited for as the renderer waits for them, on the file of the
 //! oldest pending one (a sync_file of the GPU's driver), where the device
 //! gives one.
+//!
+//! Memory from outside reaches softpipe at its address, as the renderer
+//! maps it, and iris as a dma-buf of a memory file (`udmabuf`), as the
+//! driver VM's bridge makes Veda's memory one (`External::file`).
 
 use std::boxed::Box;
 use std::ffi::{CStr, c_char, c_int, c_short, c_ulong, c_void};
@@ -32,7 +36,7 @@ use std::vec;
 use std::vec::Vec;
 
 use super::host::{load, sym};
-use crate::backend::{External, Memory, OutOfMemory};
+use crate::backend::{External, ImportError, Memory, OutOfMemory};
 use crate::virgl::transport::HostMemory;
 use crate::virgl::{Lost, ResourceArgs, Transport};
 
@@ -53,6 +57,8 @@ struct Lib {
     make: Make,
     device_destroy: unsafe extern "C" fn(Device),
     device_caps: unsafe extern "C" fn(Device, *mut c_void, usize) -> usize,
+    device_import: unsafe extern "C" fn(Device) -> c_int,
+    device_imports: unsafe extern "C" fn(Device) -> u32,
     context_create: unsafe extern "C" fn(Device, *mut u8, usize) -> Ctx,
     context_destroy: unsafe extern "C" fn(Ctx),
     context_error: unsafe extern "C" fn(Ctx) -> *const c_char,
@@ -118,6 +124,8 @@ fn lib() -> Option<&'static Lib> {
                 make,
                 device_destroy: sym(m, "vr_device_destroy"),
                 device_caps: sym(m, "vr_device_caps"),
+                device_import: sym(m, "vr_device_import"),
+                device_imports: sym(m, "vr_device_imports"),
                 context_create: sym(m, "vr_context_create"),
                 context_destroy: sym(m, "vr_context_destroy"),
                 context_error: sym(m, "vr_context_error"),
@@ -138,6 +146,50 @@ fn lib() -> Option<&'static Lib> {
 /// What `vr_fence_wait` returns when the fence has not signaled in time
 /// (`VR_TIMEOUT`).
 const TIMEOUT: c_int = -4;
+/// `enum vr_import`: memory from outside as a dma-buf (a GPU's driver).
+const IMPORT_FD: c_int = 1;
+
+// The C library's, for Linux's dma-bufs of memory files and for waiting on
+// fences' files.
+unsafe extern "C" {
+    fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+    fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+    fn close(fd: c_int) -> c_int;
+    fn poll(fds: *mut PollFd, count: c_ulong, timeout_ms: c_int) -> c_int;
+}
+
+/// `struct udmabuf_create` (`<linux/udmabuf.h>`).
+#[repr(C)]
+struct UdmabufCreate {
+    memfd: u32,
+    flags: u32,
+    offset: u64,
+    size: u64,
+}
+
+/// `UDMABUF_CREATE`: `_IOW('u', 0x42, struct udmabuf_create)`.
+const UDMABUF_CREATE: c_ulong = 0x4018_7542;
+const UDMABUF_FLAGS_CLOEXEC: u32 = 1;
+/// `O_RDWR | O_CLOEXEC`.
+const OPEN_FLAGS: c_int = 2 | 0o2000000;
+
+/// A dma-buf of the first `len` bytes (whole pages) of the memory file
+/// `memfd`, which must be sealed against shrinking: a descriptor the caller
+/// closes. As the driver VM's bridge gives its GPU Veda's memory.
+fn udmabuf(memfd: c_int, len: usize) -> Option<c_int> {
+    // SAFETY: a NUL-terminated path; the descriptor is closed below.
+    let dev = unsafe { open(c"/dev/udmabuf".as_ptr(), OPEN_FLAGS) };
+    if dev < 0 {
+        std::eprintln!("vgallium: no /dev/udmabuf to give the GPU memory files");
+        return None;
+    }
+    let req = UdmabufCreate { memfd: memfd as u32, flags: UDMABUF_FLAGS_CLOEXEC, offset: 0, size: len as u64 };
+    // SAFETY: the request udmabuf's ioctl takes, alive for the call.
+    let fd = unsafe { ioctl(dev, UDMABUF_CREATE, &req as *const UdmabufCreate) };
+    // SAFETY: the descriptor opened above.
+    unsafe { close(dev) };
+    (fd >= 0).then_some(fd)
+}
 
 /// `struct pollfd`, for `poll`.
 #[repr(C)]
@@ -148,10 +200,6 @@ struct PollFd {
 }
 
 const POLLIN: c_short = 1;
-
-unsafe extern "C" {
-    fn poll(fds: *mut PollFd, count: c_ulong, timeout_ms: c_int) -> c_int;
-}
 
 /// Shared memory: 16 MiB of staging and the query area, as virtio-gpu's.
 const SHARED_BYTES: usize = 16 * 1024 * 1024 + 16 * 1024;
@@ -205,6 +253,19 @@ impl GalliumTransport {
         // SAFETY: a NUL-terminated message the context keeps.
         unsafe { CStr::from_ptr((self.lib.context_error)(self.ctx)) }.to_string_lossy().into_owned()
     }
+
+    /// Runs commands as [`Transport::submit`] does, saying why the renderer
+    /// refused them rather than ending the test: for tests of what it
+    /// refuses.
+    #[cfg(test)]
+    pub fn try_submit(&mut self, commands: &[u32]) -> Result<(), String> {
+        // SAFETY: a context of this transport; the renderer checks the
+        // commands.
+        match unsafe { (self.lib.submit)(self.ctx, commands.as_ptr(), commands.len()) } {
+            0 => Ok(()),
+            _ => Err(self.error()),
+        }
+    }
 }
 
 impl Transport for GalliumTransport {
@@ -238,18 +299,38 @@ impl Transport for GalliumTransport {
         unsafe { (self.lib.resource_destroy)(self.ctx, handle) }
     }
 
-    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
-        let Memory::Address(address) = memory.memory() else { return Err(OutOfMemory) };
+    fn imports(&self) -> u32 {
+        // SAFETY: the transport's device.
+        unsafe { (self.lib.device_imports)(self.dev) }
+    }
+
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, ImportError> {
+        // SAFETY: the transport's device.
+        let by_fd = unsafe { (self.lib.device_import)(self.dev) } == IMPORT_FD;
+        let (fd, address) = match memory.memory() {
+            Memory::Address(address) if !by_fd => (-1, address),
+            Memory::File(file, address) if by_fd => {
+                let len = memory.size().next_multiple_of(4096);
+                (udmabuf(file, len).ok_or(ImportError::NoMemory)?, address)
+            }
+            Memory::File(_, address) => (-1, address),
+            _ => return Err(ImportError::Unsupported),
+        };
         let mut id = 0;
         // SAFETY: a context of this transport, which checks the rest; the
         // memory stays valid while the resource lives, as
-        // `External::address` requires of its maker (softpipe draws into
-        // it).
+        // `External::address` and `External::file` require of their makers
+        // (softpipe draws into it), and a dma-buf of it is the driver's to
+        // keep (it takes what it needs; the descriptor is closed below).
         let r =
-            unsafe { (self.lib.resource_import)(self.ctx, args, -1, address as *mut c_void, memory.stride(), &mut id) };
+            unsafe { (self.lib.resource_import)(self.ctx, args, fd, address as *mut c_void, memory.stride(), &mut id) };
+        if fd >= 0 {
+            // SAFETY: the dma-buf made above.
+            unsafe { close(fd) };
+        }
         if r != 0 {
             std::eprintln!("vgallium: {} ({args:?})", self.error());
-            return Err(OutOfMemory);
+            return Err(ImportError::Unsupported);
         }
         Ok(id)
     }

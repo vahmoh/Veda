@@ -371,6 +371,11 @@ uint32_t engine_view_subsurface(engine_view view);
 /* The window system shows the frame presented last of `subsurface`: its
  * page's WebKit may draw the next. From any thread. */
 void engine_subsurface_shown(uint32_t subsurface);
+/* The window system no longer reads buffer `buffer` of `subsurface`, which
+ * a frame presented since replaced while its GPU might still read it (it
+ * samples pages' buffers in place): WebKit may draw into it again. From any
+ * thread. */
+void engine_subsurface_released(uint32_t subsurface, uint32_t buffer);
 
 #ifdef __cplusplus
 }

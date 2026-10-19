@@ -17,7 +17,7 @@ use core::ops::Range;
 
 use super::protocol::*;
 use super::transport::{HostMemory, Lost, ResourceArgs, Transport};
-use crate::backend::OutOfMemory;
+use crate::backend::{External, ImportError, OutOfMemory};
 
 /// What a new resource's memory holds.
 pub const STALE: u8 = 0xA5;
@@ -105,6 +105,10 @@ pub struct Host {
     pub signaled: u64,
     /// Whether fences signal as soon as they are queued.
     pub auto_signal: bool,
+    /// What memory from outside it takes (`IMPORT_*`), and what it was
+    /// asked to take: each resource and its rows' stride.
+    pub imports: u32,
+    pub imported: Vec<(ResourceArgs, u32)>,
 }
 
 impl Host {
@@ -275,6 +279,8 @@ impl Fake {
             fences: 0,
             signaled: 0,
             auto_signal: true,
+            imports: 0,
+            imported: Vec::new(),
         })));
         (Fake { host: host.clone(), caps: caps() }, host)
     }
@@ -331,6 +337,21 @@ impl Transport for Fake {
         let mut h = self.host.borrow_mut();
         h.destroys += 1;
         assert!(h.resources.remove(&handle).is_some(), "resource {handle} destroyed twice");
+    }
+
+    fn imports(&self) -> u32 {
+        self.host.borrow().imports
+    }
+
+    /// Kept as a resource of its own memory: the tests look at what was
+    /// asked for.
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, ImportError> {
+        let mut h = self.host.borrow_mut();
+        h.imported.push((*args, memory.stride()));
+        let id = h.next;
+        h.next += 1;
+        h.resources.insert(id, Res::new(*args, None));
+        Ok(id)
     }
 
     fn max_submit_words(&self) -> usize {

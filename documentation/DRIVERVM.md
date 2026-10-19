@@ -357,8 +357,10 @@ of the monitor's waits at most) with the GPU driver's sync_file of each
 context's oldest pending fence, so it wakes when a client asks or a fence
 signals. The compositor's pictures reach the GPU as dma-bufs, so it
 composes the screen in place (with virgl, the compositor composes on the
-processor). A renderer that ends is started again, and the compositor sets
-the GPU up again, three times at most.
+processor), and so do the pages WebKit draws into the memory files the
+compositor samples them from (read-only, as the compositor has them). A
+renderer that ends is started again, and the compositor sets the GPU up
+again, three times at most.
 
 **USB.** Linux drives the controllers, their hubs and every device on
 them: keyboards, mice and tablets for `input`, network adapters for `net`
@@ -382,7 +384,7 @@ eight latest starts.
 | `wait_many(items, deadline)` | `VEDA_IOC_WAIT`: finished at once, or sleeps until the ring says | Polls, or keeps the wait for its waiter thread, which writes the result to the ring and raises the callback vector |
 | `Mapping::new(vmo)` | `VEDA_IOC_VMO_MAP`, then `mmap` | Maps the VMO into the guest-physical window |
 | `rt::guest::Watch::new(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait and reads its result | An ordinary wait, cancelled when the file closes |
-| `rt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, for devices or the processor | Maps the VMO into the window until the dma-buf goes |
+| `rt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, for devices or the processor; one not writable is a device's to read alone (an importer that maps every buffer both ways, as i915 does, still has it: the IOMMU refuses its writes) | Maps the VMO into the window until the dma-buf goes |
 | `rt::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ` | Reads Veda's log |
 
 The guest's kernel lets a file use only the handles it made or received,

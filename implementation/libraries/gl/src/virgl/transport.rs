@@ -12,7 +12,15 @@
 
 use core::ops::Range;
 
-use crate::backend::{External, OutOfMemory};
+use crate::backend::{External, ImportError, OutOfMemory};
+
+/// [`Transport::imports`]: a display's pictures, which the host renders into
+/// for a display to read (as `proto::gpu::IMPORT_DISPLAY`).
+pub const IMPORT_DISPLAY: u32 = 1 << 0;
+/// [`Transport::imports`]: pictures processors read and write too, which
+/// the host renders into or samples coherently with them (as
+/// `proto::gpu::IMPORT_SHARED`).
+pub const IMPORT_SHARED: u32 = 1 << 1;
 
 /// A resource as virglrenderer creates it
 /// (`virgl_renderer_resource_create_args`, without the handle).
@@ -62,12 +70,19 @@ pub trait Transport: Send {
         false
     }
 
-    /// Creates a 2D render target (`args`) whose storage is memory from
-    /// outside, which the host renders into in place; returns its handle.
-    /// Hosts that cannot refuse.
-    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
+    /// What memory from outside the host takes ([`IMPORT_DISPLAY`],
+    /// [`IMPORT_SHARED`]): none, as virglrenderer takes none.
+    fn imports(&self) -> u32 {
+        0
+    }
+
+    /// Creates a 2D resource (`args`, whose bind says whether it is drawn
+    /// into, sampled or shown by a display) whose storage is memory from
+    /// outside, which the host renders into or samples in place; returns
+    /// its handle. Hosts that cannot refuse.
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, ImportError> {
         let _ = (args, memory);
-        Err(OutOfMemory)
+        Err(ImportError::Unsupported)
     }
 
     /// The most words one submission may have.

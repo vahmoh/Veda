@@ -404,8 +404,14 @@ impl Context {
                 i if i == DRAW_BUFFERS => Point::Depth,
                 _ => Point::Stencil,
             };
+            // Memory from outside that the GPU only samples is drawn into by
+            // nothing (`tex_storage_external`).
+            let external = matches!(a, Attachment::Texture { key, .. } if self.textures.get(key).external);
             let Ok(r) = self.resolve(a, point) else { return Err(gl::FRAMEBUFFER_INCOMPLETE_ATTACHMENT) };
             let Some(r) = r else { continue };
+            if draw && external {
+                return Err(gl::FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
+            }
             any = true;
             renderbuffers |= matches!(a, Attachment::Renderbuffer(_));
             textures |= matches!(a, Attachment::Texture { .. });

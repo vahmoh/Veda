@@ -23,8 +23,12 @@
 //!   Waiting for a fence needs no call: wait for the event until the word
 //!   reaches it.
 //!
-//! The renderer can render into memory it is given ([`gpu::import`]): the
-//! display's pictures, into which the compositor draws its frames.
+//! The renderer can render into memory it is given, and sample it, in place
+//! ([`gpu::import`]): the display's pictures, into which the compositor
+//! draws its frames, and pictures that processors read too, such as a page
+//! WebKit renders into the memory the window system shows it from, which
+//! the compositor then samples rather than copies ([`Session::imports`]
+//! says which a renderer takes).
 //!
 //! The renderer is not trusted with its clients' memory (a driver VM that
 //! has been taken over must not take its clients with it): a client checks
@@ -116,8 +120,27 @@ message! {
         pub fences: Event,
         /// The renderer's name (its GPU's), for display.
         pub renderer: String,
+        /// What memory from outside [`gpu::import`] takes: [`IMPORT_DISPLAY`]
+        /// and [`IMPORT_SHARED`] (none: neither, as virgl's host takes none).
+        pub imports: u32,
     }
 }
+
+/// [`Session::imports`]: a display's pictures ([`BIND_SCANOUT`]), which the
+/// GPU renders into so that a display reads what it drew.
+pub const IMPORT_DISPLAY: u32 = 1 << 0;
+/// [`Session::imports`]: pictures that processors read and write too,
+/// which the GPU renders into or samples while its view of them stays
+/// coherent with theirs (their caches' and its own): what it drew is what
+/// they read once a fence after it has signaled, and what they wrote before
+/// is what it samples.
+pub const IMPORT_SHARED: u32 = 1 << 1;
+
+/// What [`gpu::import`] makes of the memory (`ResourceSpec::bind`, in
+/// virgl's bits): rendered into, sampled, shown by a display.
+pub const BIND_RENDER_TARGET: u32 = 1 << 1;
+pub const BIND_SAMPLER_VIEW: u32 = 1 << 3;
+pub const BIND_SCANOUT: u32 = 1 << 18;
 
 /// A page of the shared memory: areas are rounded up to whole pages.
 pub const PAGE: u64 = 4096;
@@ -214,12 +237,21 @@ protocol! {
         /// Queues a fence after everything submitted. Replies at once with
         /// its number; it signals when the GPU has done that work.
         5 => fn fence() -> Result<u64, GpuError>;
-        /// Creates a 2D render target (`spec`: one level, single sampled,
-        /// a format of 32-bit pixels) whose storage is `memory`, rows
-        /// `stride` bytes apart: a display's picture, which the GPU renders
-        /// into in place (the compositor draws its frames so). Once a fence
-        /// after the drawing has signaled, the memory holds what was drawn.
-        /// Returns its handle; `Unavailable` if the GPU cannot.
+        /// Creates a 2D resource (`spec`: one level, single sampled, a
+        /// format of 32-bit pixels) whose storage is `memory`, rows `stride`
+        /// bytes apart, which the GPU renders into ([`BIND_RENDER_TARGET`])
+        /// or samples ([`BIND_SAMPLER_VIEW`]), or both, in place:
+        ///
+        /// * with [`BIND_SCANOUT`] (and [`BIND_RENDER_TARGET`]), a display's
+        ///   picture, which the compositor draws its frames into
+        ///   ([`IMPORT_DISPLAY`]);
+        /// * without, a picture processors read and write too (a page WebKit
+        ///   renders, a buffer the compositor samples): [`IMPORT_SHARED`].
+        ///
+        /// Memory sampled alone needs no right to write, and is never
+        /// written. Once a fence after the drawing has signaled, the memory
+        /// holds what was drawn. Returns its handle; `Unavailable` if the
+        /// GPU cannot, `Invalid` for a description it does not take.
         6 => fn import(spec: ResourceSpec, stride: u32, memory: Vmo) -> Result<u32, GpuError>;
     }
 }

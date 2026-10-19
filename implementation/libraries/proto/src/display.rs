@@ -29,15 +29,18 @@
 //! each a memory object of its own (`attach_subsurface_buffer`), and
 //! presents one at a time with what changed (`present_subsurface`): the
 //! answer names the buffer shown before, which the compositor reads no more,
-//! so that it can be drawn into again. A frame of the window places its
-//! subsurfaces (`present`): where each shows, cut to its rectangle, and what
-//! of the window's own buffer is drawn over them (its overlays: a menu, a
-//! bar), blended with its alpha; elsewhere a subsurface hides the window's
-//! buffer, which is not read there. A subsurface's pictures are opaque, as
-//! an opaque window's are, and input goes to the window as before. Its
-//! frames are paced as the window's are: a `SubsurfaceEvent::FrameDone` on
-//! its own event channel once the picture presented last is on the screen,
-//! and not while it cannot be seen (not placed, or its window minimised).
+//! so that it can be drawn into again (or, while the GPU may still be
+//! reading it, as the compositor samples buffers in place, a
+//! `SubsurfaceEvent::Released` names it once it does not). A frame of the
+//! window places its subsurfaces (`present`): where each shows, cut to its
+//! rectangle, and what of the window's own buffer is drawn over them (its
+//! overlays: a menu, a bar), blended with its alpha; elsewhere a subsurface
+//! hides the window's buffer, which is not read there. A subsurface's
+//! pictures are opaque, as an opaque window's are, and input goes to the
+//! window as before. Its frames are paced as the window's are: a
+//! `SubsurfaceEvent::FrameDone` on its own event channel once the picture
+//! presented last is on the screen, and not while it cannot be seen (not
+//! placed, or its window minimised).
 //!
 //! Who a client is decides what it may do: the desktop, panels and
 //! notifications, managing other windows and hearing the shell's keys are
@@ -322,6 +325,11 @@ union! {
         /// that cannot be seen (not placed, or its window minimised) hears
         /// it once it can be again.
         1 => FrameDone { subsurface: u32, seen_ns: u64, period_ns: u64 },
+        /// `buffer` of `subsurface`, which [`display::Client::present_subsurface`]
+        /// replaced while the GPU might still read it, is read no more: it
+        /// may be drawn into again. Whether or not the subsurface can be
+        /// seen; not if the buffer was detached meanwhile.
+        2 => Released { subsurface: u32, buffer: u32 },
     }
 }
 
@@ -458,8 +466,10 @@ protocol! {
         /// everything) having changed since the buffer presented before.
         /// Returns the buffer shown before, which the compositor reads no
         /// more (none if it was this one, if none was, or if it was
-        /// detached). A [`SubsurfaceEvent::FrameDone`] says when it is on
-        /// the screen.
+        /// detached); none either if the GPU may still be reading it, which a
+        /// [`SubsurfaceEvent::Released`] then gives back, once it is not
+        /// (within a frame). A [`SubsurfaceEvent::FrameDone`] says when the
+        /// buffer presented is on the screen.
         43 => fn present_subsurface(subsurface: u32, buffer: u32, damage: Vec<Rect>) -> Result<Option<u32>, DisplayError>;
         /// Destroys `subsurface`: the window shows its frames' backgrounds
         /// where it was placed, until they place it no more.

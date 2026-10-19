@@ -507,6 +507,20 @@ vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *a, int
       vr_fail(ctx, "memory from outside in format %u, rows %u bytes apart", a->format, stride);
       return VR_INVALID;
    }
+   /* Drawn into, sampled (a copy's source too), or both; shown by a
+    * display, which needs what is drawn into it. */
+   const uint32_t uses = VIRGL_BIND_RENDER_TARGET | VIRGL_BIND_SAMPLER_VIEW;
+   bool scanout = a->bind & VIRGL_BIND_SCANOUT, drawn = a->bind & VIRGL_BIND_RENDER_TARGET;
+   if (!(a->bind & uses) || a->bind & ~(uses | VIRGL_BIND_SCANOUT) || (scanout && !drawn)) {
+      vr_fail(ctx, "memory from outside bound as 0x%x", a->bind);
+      return VR_INVALID;
+   }
+   /* Processors read it too: only where what the device does with it stays
+    * coherent with their caches. */
+   if (!scanout && !ctx->dev->coherent) {
+      vr_fail(ctx, "%s does not keep memory from outside coherent with the processors' caches", ctx->dev->name);
+      return VR_INVALID;
+   }
    struct pipe_resource t = {0};
    t.target = PIPE_TEXTURE_2D;
    t.format = format;
@@ -514,12 +528,12 @@ vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *a, int
    t.height0 = a->height;
    t.depth0 = t.array_size = 1;
    t.usage = PIPE_USAGE_DEFAULT;
-   /* A picture a display shows: drawn into, and read from in copies. */
-   t.bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED;
-   if (!s->is_format_supported(s, format, PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_RENDER_TARGET)) {
-      vr_fail(ctx, "format %s cannot be drawn into", util_format_name(format));
+   t.bind = pipe_bind(a->bind & uses);
+   if (!s->is_format_supported(s, format, PIPE_TEXTURE_2D, 0, 0, t.bind)) {
+      vr_fail(ctx, "format %s cannot be %s", util_format_name(format), drawn ? "drawn into" : "sampled");
       return VR_INVALID;
    }
+   t.bind |= PIPE_BIND_SHARED | (scanout ? PIPE_BIND_SCANOUT : 0);
    struct winsys_handle h;
    memset(&h, 0, sizeof(h));
    h.stride = stride;
@@ -543,24 +557,28 @@ vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *a, int
       h.com_obj = memory;
       break;
    default:
-      vr_fail(ctx, "the device cannot render into memory it is given");
+      vr_fail(ctx, "the device takes no memory from outside");
       return VR_INVALID;
    }
-   struct pipe_resource *pres = s->resource_from_handle(s, &t, &h, PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
+   struct pipe_resource *pres = s->resource_from_handle(s, &t, &h, drawn ? PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE : 0);
    if (!pres) {
-      vr_fail(ctx, "the driver could not render into the memory");
+      vr_fail(ctx, "the driver could not take the memory");
       return VR_NO_MEMORY;
    }
 #ifdef VR_IRIS
    /* A display would not see what the GPU draws: the client draws on the
-    * processor instead. */
-   if (ctx->dev->import == VR_IMPORT_FD && !display_coherent(ctx->dev, s, pres)) {
+    * processor instead. (A picture processors read keeps i915's mapping,
+    * which is coherent with them: `coherent`.) */
+   if (ctx->dev->import == VR_IMPORT_FD && scanout && !display_coherent(ctx->dev, s, pres)) {
       pipe_resource_reference(&pres, NULL);
       vr_fail(ctx, "what %s draws into memory from outside would not reach a display", ctx->dev->name);
       return VR_INVALID;
    }
 #endif
-   return add_resource(ctx, pres, a, 0, 0, id);
+   int e = add_resource(ctx, pres, a, 0, 0, id);
+   if (e == VR_OK)
+      vr_resource(ctx, *id)->readonly = !drawn;
+   return e;
 }
 
 VR_API void

@@ -13,7 +13,9 @@
 # under it.
 # First painted on the CPU (the browser started as the system starts), then
 # composited on the GPU (started again once the GPU's service is there),
-# where WebKit reads back only what changed of each frame.
+# where WebKit reads back only what changed of each frame: QEMU's GPU
+# (virgl's host) cannot render into the memory the window system shows
+# pages from, and the page's process says so.
 boot-cmdline "run=browser:http://{web}/motion"
 web-server
 gpu on
@@ -78,6 +80,7 @@ wait 4
 key ctrl-l
 type "{web}/motion"
 key ret
+wait-serial "reads its pages' frames back: the GPU cannot render into the memory the window system shows them from" 30
 wait 8
 move 0.5 0.06
 wait 1

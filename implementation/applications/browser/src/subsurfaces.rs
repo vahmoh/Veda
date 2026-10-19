@@ -13,7 +13,9 @@
 //! A thread of their own hears that the frames presented are on the screen,
 //! from all the subsurfaces' events, which come on one channel, and tells
 //! the engine (`engine_subsurface_shown`), whose WebKit then draws the
-//! next: pages are paced by the screen, as the window is.
+//! next: pages are paced by the screen, as the window is. It hears too of
+//! the buffers given back late, which the window system's GPU read in place
+//! while a frame it was drawing was not done (`engine_subsurface_released`).
 
 use std::ffi::c_int;
 use std::sync::{Mutex, PoisonError};
@@ -24,6 +26,7 @@ use rt::object::{Channel, Handle, Vmo};
 
 unsafe extern "C" {
     fn engine_subsurface_shown(subsurface: u32);
+    fn engine_subsurface_released(subsurface: u32, buffer: u32);
     /// `<veda/memory.h>`: the memory of the memory file on `fd`.
     fn veda_memory_file(fd: c_int, vmo: *mut abi::RawHandle) -> c_int;
 }
@@ -67,17 +70,26 @@ fn with_link<T>(call: impl FnOnce(&Link) -> T) -> Option<T> {
     link.as_ref().map(call)
 }
 
-/// Hears the subsurfaces' frames shown, as long as the process runs (the
-/// window system's end is kept: the channel never closes).
+/// Hears the subsurfaces' frames shown and buffers given back, as long as
+/// the process runs (the window system's end is kept: the channel never
+/// closes).
 fn hear(events: Channel) {
     loop {
         let Ok(observed) = events.wait(signals::READABLE | signals::PEER_CLOSED, abi::DEADLINE_INFINITE) else {
             return;
         };
         while let Ok(msg) = events.read() {
-            if let Ok((_, SubsurfaceEvent::FrameDone { subsurface, .. })) = ipc::decode_event::<SubsurfaceEvent>(msg) {
-                // SAFETY: plain values; the engine takes them from any thread.
-                unsafe { engine_subsurface_shown(subsurface) };
+            match ipc::decode_event::<SubsurfaceEvent>(msg) {
+                Ok((_, SubsurfaceEvent::FrameDone { subsurface, .. })) => {
+                    // SAFETY: plain values; the engine takes them from any
+                    // thread.
+                    unsafe { engine_subsurface_shown(subsurface) }
+                }
+                Ok((_, SubsurfaceEvent::Released { subsurface, buffer })) => {
+                    // SAFETY: as above.
+                    unsafe { engine_subsurface_released(subsurface, buffer) }
+                }
+                Err(_) => {}
             }
         }
         if observed & signals::READABLE == 0 && observed & signals::PEER_CLOSED != 0 {
@@ -181,8 +193,10 @@ pub extern "C" fn browser_subsurface_detach(subsurface: u32, name: u32) {
 
 /// Presents buffer `name` of `subsurface`, the `n` rectangles at `damage`
 /// (x, y, width, height each; none: all of it) having changed: the buffer
-/// shown before (0: none), -1 if it could not be presented, or -2 if the
-/// subsurface is no more (it went with the window, as the browser closes).
+/// shown before (0: none, or not yet: `engine_subsurface_released` gives it
+/// back once the window system's GPU has done with it), -1 if it could not
+/// be presented, or -2 if the subsurface is no more (it went with the
+/// window, as the browser closes).
 ///
 /// # Safety
 /// `damage` holds `4 * n` numbers.

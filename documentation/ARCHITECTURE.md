@@ -450,9 +450,13 @@ tested on the host.
   The window's frames place them, and say where the window's buffer is
   drawn over them (its overlays: a menu, a bar), blended; elsewhere the
   window's buffer is not read there. The processor copies a subsurface's
-  rows in place of the window's; the GPU keeps a texture of its own for
-  it. A page's frames thus reach the screen without the browser copying
-  them or drawing its window ([The web browser](BROWSER.md#how-it-fits-together)).
+  rows in place of the window's; the GPU samples its buffer in place, a
+  texture over the client's memory, where the renderer can (else it keeps
+  a texture of its own for it): a buffer presented over while a frame the
+  GPU has yet to finish reads it goes back once that frame's fence has
+  passed (`SubsurfaceEvent::Released`). A page's frames thus reach the
+  screen without the browser copying them or drawing its window, and on a
+  PC without anything copying them ([The web browser](BROWSER.md#in-place)).
 - **Composition** is damage driven, at most once per display frame. Where
   a display flips and the GPU can draw into its pictures, the GPU composes
   every frame with OpenGL ES straight into the next picture (`gpu.rs`):
@@ -758,12 +762,20 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
   on softpipe too, for tests). It also draws into memory it is given
   (`gpu::import`), such as the compositor's display pictures, which a GPU
   reaches as dma-bufs; virgl cannot, as its host draws into memory of its
-  own. On i915 it maps such memory uncached, as a display reads it: i915
-  maps memory from outside as its own by default, on Gen12 (Tiger Lake to
-  Raptor Lake) cached in the processor's last-level cache, which a display
-  engine does not read, so that the screen would show stale lines where
-  the GPU drew. Where it cannot (i915 on Meteor Lake and later, or xe), it
-  refuses the memory, and the compositor draws on the processor.
+  own. On i915 it maps a display's pictures uncached, as a display reads
+  them: i915 maps memory from outside as its own by default, on Gen12
+  (Tiger Lake to Raptor Lake) cached in the processor's last-level cache,
+  which a display engine does not read, so that the screen would show
+  stale lines where the GPU drew. Where it cannot (i915 on Meteor Lake and
+  later, or xe), it refuses the memory, and the compositor draws on the
+  processor. Memory processors read too (a page WebKit draws into the
+  memory file the window system shows it from, which the compositor
+  samples in place) keeps i915's mapping, coherent with them through the
+  cache they share; the renderer takes it only where that holds (i915 with
+  that cache, and softpipe), as `gpu::open` says (`Session::imports`).
+  Memory a client may only read (the window system's view of a page) is
+  only sampled: the guest maps it for reading, and the decoder refuses to
+  draw into it, copy to it or write it.
 
 ## Audio
 

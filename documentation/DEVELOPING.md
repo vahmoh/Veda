@@ -174,7 +174,13 @@ GL_TEST_BACKEND=gallium cargo test -p gl                    # through Veda's ren
 VR_DEPTH_LOW=1 GL_TEST_BACKEND=gallium cargo test -p gl     # ... with depth kept as on iris
 GL_TEST_BACKEND=gallium GL_GALLIUM_DEVICE=iris cargo test -p gl -p interceptor-game   # ... on an Intel GPU
 GL_GALLIUM_DEVICE=iris cargo test -p interceptor-game        # Interceptor's game: world, drivers, sounds, pictures
+GL_TEST_BACKEND=gallium GL_GALLIUM_DEVICE=iris cargo test -p gl --release bench_page_frames -- --ignored --nocapture   # a page's frames, read back or drawn in place
 ```
+
+On an Intel GPU, the tests of memory from outside (a page drawn into its
+memory file, which another context samples) give the GPU memory files as
+dma-bufs through `/dev/udmabuf`, as the driver VM gives it Veda's memory;
+without access to it they are skipped.
 
 Interceptor's game tests save pictures and sounds to the directory
 `INTERCEPTOR_SHOTS` or another variable of

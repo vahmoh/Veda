@@ -148,6 +148,98 @@ pub extern "C" fn glRenderbufferStorageMultisample(
     with_gl(|c| c.renderbuffer_storage_multisample(target, samples, internalformat, width, height));
 }
 
+/// `glRenderbufferStorageMemoryFileVEDA`, Veda's own (found by
+/// `eglGetProcAddress`): makes the bound renderbuffer's storage the memory
+/// file on `fd` (`memfd_create`), which the GPU then renders into in place,
+/// as a renderbuffer of an EGL image of a window's buffer would be: a
+/// picture of `width` x `height` pixels of `internalformat` (`GL_RGBA8`, or
+/// `GL_RGB8`, whose pixels' fourth byte is never read) from the file's
+/// start, rows `stride` bytes apart, each pixel's bytes in `format`'s order
+/// (`GL_BGRA_EXT`, blue first, as Veda's pictures and WebKit's buffers
+/// are, or `GL_RGBA`). So WebKit renders a page into the memory the window
+/// system shows it from, rather than reading each frame back. Once a fence
+/// after the drawing has signaled, the file holds what was drawn. The
+/// descriptor stays the caller's.
+///
+/// Fails with `GL_INVALID_OPERATION` where the GPU cannot take such memory
+/// (contexts in software, virgl's host under QEMU, a GPU whose caches are
+/// not the processor's), `GL_OUT_OF_MEMORY` if not now (past the
+/// renderer's limits), and `GL_INVALID_VALUE` for a descriptor of no memory
+/// file or a picture larger than the file.
+#[unsafe(no_mangle)]
+pub extern "C" fn glRenderbufferStorageMemoryFileVEDA(
+    target: GLenum,
+    internalformat: GLenum,
+    width: GLsizei,
+    height: GLsizei,
+    fd: GLint,
+    format: GLenum,
+    stride: GLsizei,
+) {
+    with_gl(|c| {
+        let bgr = match format {
+            gl::BGRA_EXT => true,
+            gl::RGBA => false,
+            _ => return c.record_error(gl::INVALID_ENUM),
+        };
+        let Ok(stride) = u32::try_from(stride) else { return c.record_error(gl::INVALID_VALUE) };
+        match memory_file(fd) {
+            // The renderer takes a handle of its own (`External::handle`).
+            Some(file) => {
+                let memory = ::gl::backend::External::handle(file.handle, file.size, stride, bgr);
+                c.renderbuffer_storage_external(target, internalformat, width, height, &memory);
+            }
+            None => c.record_error(gl::INVALID_VALUE),
+        }
+    });
+}
+
+/// The memory of a memory file, as `veda_memory_file` gives it: a handle,
+/// closed as this goes, and the file's size.
+struct MemoryFile {
+    handle: u32,
+    size: usize,
+}
+
+#[cfg(target_os = "veda")]
+unsafe extern "C" {
+    /// `<veda/memory.h>`: a handle to the memory of the memory file on `fd`.
+    fn veda_memory_file(fd: std::ffi::c_int, vmo: *mut u32) -> std::ffi::c_int;
+    /// `<veda/ipc.h>`.
+    fn veda_close(handle: u32) -> std::ffi::c_int;
+}
+
+/// The memory file on `fd`, if it is one (none outside Veda).
+#[cfg(target_os = "veda")]
+fn memory_file(fd: GLint) -> Option<MemoryFile> {
+    use std::os::fd::FromRawFd;
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: the caller's open descriptor, borrowed: never closed here.
+    let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+    let size = file.metadata().ok()?.len();
+    let mut handle = 0;
+    // SAFETY: room for the handle.
+    if unsafe { veda_memory_file(fd, &mut handle) } != 0 {
+        return None;
+    }
+    Some(MemoryFile { handle, size: usize::try_from(size).ok()? })
+}
+
+#[cfg(not(target_os = "veda"))]
+fn memory_file(_fd: GLint) -> Option<MemoryFile> {
+    None
+}
+
+#[cfg(target_os = "veda")]
+impl Drop for MemoryFile {
+    fn drop(&mut self) {
+        // SAFETY: the handle `veda_memory_file` gave, closed once.
+        unsafe { veda_close(self.handle) };
+    }
+}
+
 /// `glGetRenderbufferParameteriv`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn glGetRenderbufferParameteriv(target: GLenum, pname: GLenum, params: *mut GLint) {

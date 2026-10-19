@@ -33,6 +33,7 @@
 #endif
 
 #ifdef VR_IRIS
+#include "drm-uapi/i915_drm.h"
 #include "iris/drm/iris_drm_public.h"
 #include "util/driconf.h"
 #include "util/xmlconfig.h"
@@ -101,8 +102,14 @@ vr_device_create_iris(int fd)
    dev->import = VR_IMPORT_FD;
    drmVersionPtr version = drmGetVersion(fd);
    if (version) {
-      if (strcmp(version->name, "i915") == 0)
+      if (strcmp(version->name, "i915") == 0) {
          dev->i915_fd = fd;
+         /* The GPU shares the processor's last-level cache, where i915 maps
+          * memory from outside by default: coherent with the processors. */
+         int llc = 0;
+         struct drm_i915_getparam param = {.param = I915_PARAM_HAS_LLC, .value = &llc};
+         dev->coherent = drmIoctl(fd, DRM_IOCTL_I915_GETPARAM, &param) == 0 && llc;
+      }
       drmFreeVersion(version);
    }
    return dev;
@@ -139,10 +146,26 @@ vr_device_import(struct vr_device *dev)
    return dev->import;
 }
 
+VR_API unsigned
+vr_device_imports(struct vr_device *dev)
+{
+   if (dev->import == VR_IMPORT_NONE)
+      return 0;
+   return VR_IMPORTS_DISPLAY | (dev->coherent ? VR_IMPORTS_SHARED : 0);
+}
+
 #ifdef VR_SOFTPIPE
 /* softpipe's window system: none, but for memory from outside, which
- * softpipe renders into as a display target (a display's picture,
- * vr_resource_import, given by its address). */
+ * softpipe renders into or samples as a display target (a display's
+ * picture, a page's buffer: vr_resource_import, given by its address). It
+ * keeps the memory of the targets softpipe lets go of, for the renderer to
+ * unmap (vr_device_released). */
+struct vr_winsys {
+   struct sw_winsys base;
+   /* The device on it, once it is made (none on virgl's). */
+   struct vr_device *dev;
+};
+
 struct vr_display_target {
    void *data;
 };
@@ -203,10 +226,26 @@ dt_display(struct sw_winsys *ws, struct sw_displaytarget *dt, void *context, uns
 {
 }
 
+/* softpipe lets go of a target (its resource is gone, and nothing it does
+ * uses it any more): its memory may be unmapped. */
 static void
 dt_destroy(struct sw_winsys *ws, struct sw_displaytarget *dt)
 {
+   struct vr_device *dev = ((struct vr_winsys *)ws)->dev;
+   void *data = ((struct vr_display_target *)dt)->data;
    free(dt);
+   if (!dev)
+      return;
+   if (dev->num_released == dev->released_cap) {
+      unsigned cap = MAX2(16, 2 * dev->released_cap);
+      void **grown = realloc(dev->released, cap * sizeof(*grown));
+      /* Without the room, the memory stays mapped while its context lasts. */
+      if (!grown)
+         return;
+      dev->released = grown;
+      dev->released_cap = cap;
+   }
+   dev->released[dev->num_released++] = data;
 }
 
 static void
@@ -218,9 +257,10 @@ winsys_destroy(struct sw_winsys *ws)
 static struct sw_winsys *
 winsys_create(void)
 {
-   struct sw_winsys *ws = calloc(1, sizeof(*ws));
-   if (!ws)
+   struct vr_winsys *w = calloc(1, sizeof(*w));
+   if (!w)
       return NULL;
+   struct sw_winsys *ws = &w->base;
    ws->destroy = winsys_destroy;
    ws->is_displaytarget_format_supported = dt_format_supported;
    ws->displaytarget_create = dt_create;
@@ -246,8 +286,11 @@ vr_device_create_softpipe(void)
       return NULL;
    }
    struct vr_device *dev = device_create(screen);
-   if (dev)
+   if (dev) {
       dev->import = VR_IMPORT_MEMORY;
+      dev->coherent = true;
+      ((struct vr_winsys *)ws)->dev = dev;
+   }
    return dev;
 }
 #endif
@@ -274,7 +317,19 @@ vr_device_destroy(struct vr_device *dev)
    if (!dev)
       return;
    dev->screen->destroy(dev->screen);
+   free(dev->released);
    free(dev);
+}
+
+VR_API size_t
+vr_device_released(struct vr_device *dev, void **out, size_t max)
+{
+   size_t n = MIN2(dev->num_released, max);
+   if (!n)
+      return 0;
+   memcpy(out, dev->released + dev->num_released - n, n * sizeof(*out));
+   dev->num_released -= n;
+   return n;
 }
 
 VR_API const char *

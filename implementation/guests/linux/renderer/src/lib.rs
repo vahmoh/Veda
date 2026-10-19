@@ -19,9 +19,10 @@
 //! area resources may use as their storage (`gl`'s staging and query
 //! results). Commands are copied out of the command area before they are
 //! decoded, so a client changing them meanwhile cannot get them past the
-//! checks. Memory a client gives to render into (a display's picture)
-//! reaches a GPU's driver as a dma-buf of the VMO, which the GPU reads and
-//! writes through the IOMMU, and softpipe as the VMO mapped here.
+//! checks. Memory a client gives to render into or sample (a display's
+//! picture, a page's buffer) reaches a GPU's driver as a dma-buf of the
+//! VMO, which the GPU reads and writes through the IOMMU (reads alone, if
+//! it is only sampled), and softpipe as the VMO mapped here.
 //!
 //! The program waits for its clients and the GPU at once, in one `poll` of
 //! Linux's files: for connections and each connection's requests through
@@ -70,14 +71,16 @@ const PROCESS_CLIENTS: usize = 8;
 /// The most bytes of contexts' memory of one process, and of all.
 const PROCESS_MEMORY: u64 = 256 << 20;
 const TOTAL_MEMORY: u64 = 1 << 30;
-/// The most pieces of memory from outside (a display's pictures) a
-/// process gives to render into, and their bytes; and the bytes of all.
-const PROCESS_IMPORTS: usize = 16;
+/// The most pieces of memory from outside a process gives to render into
+/// or sample (a display's pictures, the window system's subsurfaces'
+/// buffers, a web process's pages), and their bytes; and the bytes of all.
+const PROCESS_IMPORTS: usize = 64;
 const PROCESS_IMPORT_BYTES: u64 = 512 << 20;
 const TOTAL_IMPORT_BYTES: u64 = 1 << 30;
 /// The most pieces of memory from outside a context may have softpipe
-/// render into (mapped here until the context goes, as the decoder needs).
-const MAX_IMPORTS: usize = 4;
+/// render into or sample: mapped here until softpipe lets go of them
+/// ([`Device::reap`]), which may be after their resources are destroyed.
+const MAX_IMPORTS: usize = 16;
 /// How often a context's pending fences are looked at when no file stands
 /// for them (the GPU's driver gave none).
 const POLL_NS: u64 = 1_000_000;
@@ -116,6 +119,8 @@ mod ffi {
     /// `enum vr_import`.
     pub const IMPORT_FD: c_int = 1;
     pub const IMPORT_MEMORY: c_int = 2;
+    /// virgl's bind of what is drawn into.
+    pub const BIND_RENDER_TARGET: u32 = 1 << 1;
 
     unsafe extern "C" {
         pub fn vr_device_create_softpipe() -> *mut Device;
@@ -123,6 +128,8 @@ mod ffi {
         pub fn vr_device_name(dev: *mut Device) -> *const c_char;
         pub fn vr_device_caps(dev: *mut Device, out: *mut c_void, len: usize) -> usize;
         pub fn vr_device_import(dev: *mut Device) -> c_int;
+        pub fn vr_device_imports(dev: *mut Device) -> u32;
+        pub fn vr_device_released(dev: *mut Device, out: *mut *mut c_void, max: usize) -> usize;
         pub fn vr_context_create(dev: *mut Device, shared: *mut u8, len: usize) -> *mut Context;
         pub fn vr_context_destroy(ctx: *mut Context);
         pub fn vr_context_error(ctx: *const Context) -> *const c_char;
@@ -155,8 +162,32 @@ struct Device {
     name: String,
     /// Its capability set 2 (`struct virgl_caps_v2`), for clients.
     caps: Vec<u8>,
-    /// How it takes memory from outside to render into.
+    /// How it takes memory from outside to render into or sample, and
+    /// what memory (`proto::gpu::IMPORT_*`).
     import: c_int,
+    imports: u32,
+}
+
+impl Device {
+    /// Unmaps the memory from outside softpipe has let go of, which
+    /// contexts kept after its resources went: called after anything that
+    /// may have let some go (a request, a context gone), before anything
+    /// maps more, so that an address it gives is still that mapping's.
+    fn reap(&self, clients: &mut [Client]) {
+        let mut released = [null_mut::<c_void>(); 16];
+        loop {
+            // SAFETY: a live device, and room for `released.len()` addresses.
+            let n = unsafe { ffi::vr_device_released(self.dev.as_ptr(), released.as_mut_ptr(), released.len()) };
+            for &at in &released[..n] {
+                for ctx in clients.iter_mut().filter_map(|c| c.context.as_mut()) {
+                    ctx.retired.retain(|m| m.as_ptr().cast::<c_void>() != at);
+                }
+            }
+            if n < released.len() {
+                return;
+            }
+        }
+    }
 }
 
 /// Whether a fence had no file to wait for it on (said once).
@@ -177,8 +208,9 @@ struct Context {
     /// The memory from outside its resources render into, by resource:
     /// its bytes, and, for softpipe, its mapping here.
     imports: BTreeMap<u32, (u64, Option<Mapping>)>,
-    /// softpipe's mappings of what its destroyed resources rendered into:
-    /// kept while the context lasts (what it bound may still use them).
+    /// softpipe's mappings of what its destroyed resources rendered into or
+    /// sampled: kept until softpipe lets go of them (what the context bound
+    /// may still use them), or the context goes.
     retired: Vec<Mapping>,
 }
 
@@ -436,6 +468,7 @@ impl gpu::Server for Serve<'_> {
             fence_offset: 0,
             fences: Event::from_handle(fences_theirs),
             renderer: self.device.name.clone(),
+            imports: self.device.imports,
         })
     }
 
@@ -457,8 +490,8 @@ impl gpu::Server for Serve<'_> {
             // SAFETY: a live context; the decoder checks the handle.
             unsafe { ffi::vr_resource_destroy(ctx.ctx.as_ptr(), resource) };
             // What it rendered into is the client's again; softpipe's
-            // mapping of it stays while the context lasts (what the context
-            // bound may still draw into it: the decoder's contract).
+            // mapping of it stays until softpipe lets go of it (what the
+            // context bound may still draw into it: the decoder's contract).
             if let Some((_, mapping)) = ctx.imports.remove(&resource) {
                 ctx.retired.extend(mapping);
             }
@@ -520,13 +553,21 @@ impl gpu::Server for Serve<'_> {
         {
             return Err(GpuError::NoMemory);
         }
+        // Memory only sampled is never written: the client may have it to
+        // read alone (the window system's subsurfaces' buffers), and the
+        // guest then reaches it so. Memory to draw into it must be the
+        // client's to write.
+        let drawn = spec.bind & ffi::BIND_RENDER_TARGET != 0;
+        if drawn && memory.0.basic_info().is_ok_and(|i| !Rights(i.rights).contains(Rights::WRITE)) {
+            return Err(GpuError::Invalid);
+        }
         let mut id = 0;
         let (e, mapping) = match import {
             ffi::IMPORT_FD => {
                 // The GPU's driver takes the memory as a dma-buf, which keeps
                 // it mapped into the guest; what the driver keeps of it
                 // outlives the descriptor and the handle.
-                let fd = rt::guest::dmabuf(memory.raw(), 0, len, true).map_err(|_| GpuError::NoMemory)?;
+                let fd = rt::guest::dmabuf(memory.raw(), 0, len, drawn).map_err(|_| GpuError::NoMemory)?;
                 // SAFETY: a live context, and a dma-buf of the memory.
                 let e = unsafe {
                     ffi::vr_resource_import(ctx.ctx.as_ptr(), &args(&spec), fd.as_raw_fd(), null_mut(), stride, &mut id)
@@ -534,9 +575,10 @@ impl gpu::Server for Serve<'_> {
                 (e, None)
             }
             ffi::IMPORT_MEMORY if ctx.mappings() < MAX_IMPORTS => {
-                // softpipe draws into it as this program maps it.
-                let map = Mapping::new(memory, len as usize, map_flags::READ | map_flags::WRITE)
-                    .map_err(|_| GpuError::NoMemory)?;
+                // softpipe draws into it, or samples it, as this program maps
+                // it.
+                let flags = map_flags::READ | if drawn { map_flags::WRITE } else { 0 };
+                let map = Mapping::new(memory, len as usize, flags).map_err(|_| GpuError::NoMemory)?;
                 let at = map.as_ptr().cast::<c_void>();
                 // SAFETY: a live context, and memory mapped while the
                 // context lasts (kept below, if the import is made).
@@ -599,14 +641,14 @@ fn open_device(softpipe: bool) -> Option<Device> {
         return None;
     };
     // SAFETY: a live device, and a buffer of the length given.
-    let (name, caps, import) = unsafe {
+    let (name, caps, import, imports) = unsafe {
         let name = CStr::from_ptr(ffi::vr_device_name(dev.as_ptr())).to_string_lossy().into_owned();
         let mut caps = vec![0u8; 4096];
         let len = ffi::vr_device_caps(dev.as_ptr(), caps.as_mut_ptr().cast(), caps.len());
         caps.truncate(len);
-        (name, caps, ffi::vr_device_import(dev.as_ptr()))
+        (name, caps, ffi::vr_device_import(dev.as_ptr()), ffi::vr_device_imports(dev.as_ptr()))
     };
-    Some(Device { dev, name, caps, import })
+    Some(Device { dev, name, caps, import, imports })
 }
 
 /// Carries out what client `i` has sent; false if it is to be dropped.
@@ -618,11 +660,13 @@ fn read_client(device: &Device, clients: &mut [Client], i: usize, commands: &mut
             Err(_) => return false,
         };
         let (process, all) = usage(clients, i, clients[i].process);
-        let client = &mut clients[i];
-        let mut serve = Serve { device, context: &mut client.context, process, all, commands, trace };
-        match gpu::dispatch(&mut serve, msg) {
+        let mut serve = Serve { device, context: &mut clients[i].context, process, all, commands, trace };
+        let done = gpu::dispatch(&mut serve, msg);
+        // What softpipe let go of meanwhile goes before anything maps more.
+        device.reap(clients);
+        match done {
             Ok(reply) => {
-                if reply.send(&client.channel).is_err() {
+                if reply.send(&clients[i].channel).is_err() {
                     return false;
                 }
             }
@@ -764,6 +808,8 @@ fn serve(device: &Device, trace: bool) -> ! {
             let keep = observed & signals::READABLE == 0 || read_client(device, &mut clients, i, &mut commands, trace);
             if !keep || observed & signals::PEER_CLOSED != 0 {
                 clients.swap_remove(i);
+                // What softpipe let go of as the context went went with it.
+                device.reap(&mut clients);
             }
         }
         if ready.contains(&Ready::Connections) {

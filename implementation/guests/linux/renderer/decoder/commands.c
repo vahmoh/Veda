@@ -114,6 +114,22 @@ texture_of(struct vr_context *ctx, uint32_t id)
    return r->pres;
 }
 
+/* Texture `id` as what is written: a surface's (drawn into, cleared), a
+ * blit's or a copy's destination. Not memory from outside that is only
+ * sampled, which the client may have no right to write: its pages are
+ * mapped for reading alone, and softpipe writing them would end the
+ * renderer, a GPU fault. */
+static struct pipe_resource *
+writable_texture_of(struct vr_context *ctx, uint32_t id)
+{
+   struct pipe_resource *t = texture_of(ctx, id);
+   if (t && vr_resource(ctx, id)->readonly) {
+      vr_fail(ctx, "resource %u is only sampled", id);
+      return NULL;
+   }
+   return t;
+}
+
 /* The layers (or, of a 3D texture, slices) of a level. */
 static unsigned
 level_layers(const struct pipe_resource *t, unsigned level)
@@ -645,7 +661,7 @@ create_surface(struct vr_context *ctx, const struct cmd *c)
    if (!need(ctx, c, VIRGL_OBJ_SURFACE_SIZE, "a surface"))
       return false;
    uint32_t id = arg(c, VIRGL_OBJ_SURFACE_RES_HANDLE);
-   struct pipe_resource *t = texture_of(ctx, id);
+   struct pipe_resource *t = writable_texture_of(ctx, id);
    if (!t)
       return false;
    uint32_t virgl = arg(c, VIRGL_OBJ_SURFACE_FORMAT);
@@ -1219,13 +1235,14 @@ draw_vbo(struct vr_context *ctx, const struct cmd *c)
    return true;
 }
 
-/* One side of a blit: its resource, level, format and box. */
+/* One side of a blit: its resource, level, format and box; the destination
+ * (`dst`) one that may be written. */
 static bool
-blit_side(struct vr_context *ctx, const struct cmd *c, unsigned at, struct pipe_resource **res, unsigned *level,
-          enum pipe_format *format, struct pipe_box *box)
+blit_side(struct vr_context *ctx, const struct cmd *c, unsigned at, bool dst, struct pipe_resource **res,
+          unsigned *level, enum pipe_format *format, struct pipe_box *box)
 {
    uint32_t id = arg(c, at);
-   if (!(*res = texture_of(ctx, id)))
+   if (!(*res = dst ? writable_texture_of(ctx, id) : texture_of(ctx, id)))
       return false;
    *level = arg(c, at + 1);
    uint32_t virgl = arg(c, at + 2);
@@ -1264,10 +1281,10 @@ blit(struct vr_context *ctx, const struct cmd *c)
    info.scissor = (struct pipe_scissor_state){lo & 0xffff, lo >> 16, hi & 0xffff, hi >> 16};
    if (info.mask & ~PIPE_MASK_RGBAZS || info.filter > PIPE_TEX_FILTER_LINEAR)
       return vr_fail(ctx, "a blit of mask 0x%x, filter %u", info.mask, info.filter);
-   if (!blit_side(ctx, c, VIRGL_CMD_BLIT_DST_RES_HANDLE, &info.dst.resource, &info.dst.level, &info.dst.format,
-                  &info.dst.box) ||
-       !blit_side(ctx, c, VIRGL_CMD_BLIT_SRC_RES_HANDLE, &info.src.resource, &info.src.level, &info.src.format,
-                  &info.src.box))
+   if (!blit_side(ctx, c, VIRGL_CMD_BLIT_DST_RES_HANDLE, true, &info.dst.resource, &info.dst.level,
+                  &info.dst.format, &info.dst.box) ||
+       !blit_side(ctx, c, VIRGL_CMD_BLIT_SRC_RES_HANDLE, false, &info.src.resource, &info.src.level,
+                  &info.src.format, &info.src.box))
       return false;
    /* Gallium mirrors by the source's sizes only. */
    struct pipe_box *d = &info.dst.box, *s = &info.src.box;
@@ -1329,6 +1346,8 @@ copy_region(struct vr_context *ctx, const struct cmd *c)
    struct vr_resource *dr = vr_resource(ctx, did), *sr = vr_resource(ctx, sid);
    if (!dr || !dr->pres || !sr || !sr->pres)
       return vr_fail(ctx, "a copy from resource %u to %u", sid, did);
+   if (dr->readonly)
+      return vr_fail(ctx, "a copy to resource %u, which is only sampled", did);
    struct pipe_resource *dst = dr->pres, *src = sr->pres;
    unsigned dlevel = arg(c, VIRGL_CMD_RCR_DST_LEVEL), slevel = arg(c, VIRGL_CMD_RCR_SRC_LEVEL);
    struct pipe_box sbox, dbox;
@@ -1433,9 +1452,11 @@ copy_transfer(struct vr_context *ctx, const struct cmd *c)
    if (!mem)
       return vr_fail(ctx, "a transfer of %llu bytes at %u of resource %u", (unsigned long long)size,
                      arg(c, VIRGL_COPY_TRANSFER3D_SRC_RES_OFFSET), sid);
+   bool read = arg(c, VIRGL_COPY_TRANSFER3D_FLAGS) & VIRGL_COPY_TRANSFER3D_FLAGS_READ_FROM_HOST;
+   if (!read && r->readonly)
+      return vr_fail(ctx, "a transfer to resource %u, which is only sampled", id);
    /* A cube map's faces one at a time, as Mesa's OpenGL moves them: virgl's
     * host takes no more in one transfer. */
-   bool read = arg(c, VIRGL_COPY_TRANSFER3D_FLAGS) & VIRGL_COPY_TRANSFER3D_FLAGS_READ_FROM_HOST;
    if (t->target == PIPE_TEXTURE_CUBE) {
       for (int z = 0; z < box.depth; z++) {
          struct pipe_box face = box;

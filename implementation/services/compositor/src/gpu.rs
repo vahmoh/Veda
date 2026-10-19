@@ -11,6 +11,10 @@
 //!
 //! * every window is a texture, brought up to date where its client drew
 //!   (the processor copies what changed, nothing more);
+//! * a subsurface's buffers (a web page's frames) are textures over the
+//!   client's memory itself, which the GPU samples in place: nothing is
+//!   copied at all ([`Gpu::sampled`]), where the renderer can (otherwise
+//!   they are brought up to date as windows are);
 //! * shadows, borders, rounded corners and the desktop's gradient are
 //!   shaders, as is the startup sequence: its light, ring and gradient;
 //! * what is text or a drawing (title bars, cursors, the switcher, the
@@ -39,12 +43,14 @@ use ::gl::backend::External;
 use ::gl::veda::{FenceWatch, GpuTransport};
 use ::gl::virgl::VirglBackend;
 use ::gl::{Config, Context, gl};
+use compositor_core::buffers::Buffers;
 use gfx::{Bitmap, Rect};
 use num_traits::Float;
 use proto::gpu::gpu;
 use rt::object::{Event, Vmo};
 use rt::sync::Mutex;
 use rt::time::{Duration, now_ns};
+use rt::vm::Mapping;
 
 use crate::pixels::Pixels;
 use crate::screen::Screen;
@@ -60,6 +66,10 @@ const CALL_NS: u64 = 10_000_000_000;
 const SOFTPIPE_CALL_NS: u64 = 60_000_000_000;
 /// How long the check waits for the GPU to draw.
 const CHECK_NS: u64 = 2_000_000_000;
+/// The most subsurfaces' buffers the GPU samples in place at once (the
+/// renderer bounds what a process gives it, 64 pieces of memory): past it,
+/// the one drawn least recently goes.
+const SAMPLED_MAX: usize = 32;
 
 /// Shared by the programs: a quad, `u_dest` in the screen's pixels. The
 /// pictures' first row is the screen's top one, and the GPU's too (its
@@ -349,6 +359,13 @@ pub(crate) enum Slot {
     Words(u8),
 }
 
+/// A subsurface's buffer as the GPU samples it in place.
+struct Sampled {
+    texture: Texture,
+    /// The frame that drew it last.
+    drawn: u64,
+}
+
 /// The display's pictures, which the GPU is to draw into.
 pub(crate) struct Pictures {
     pub(crate) memory: Vec<Vmo>,
@@ -382,6 +399,13 @@ pub(crate) struct Gpu {
     /// A client's pixels on their way to a texture, copied out of its
     /// memory first (see `pixels`).
     scratch: Vec<u32>,
+    /// Subsurfaces' buffers sampled in place, by serial; whether the
+    /// renderer samples them so (not once it refused), and whether the log
+    /// said it does; the frames begun.
+    sampled: BTreeMap<u64, Sampled>,
+    samples: bool,
+    said: bool,
+    frames: u64,
     /// The GPU stopped answering.
     lost: bool,
 }
@@ -496,7 +520,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
     let mut targets = Vec::new();
     for vmo in &p.memory {
         let size = vmo.size().map_err(|_| "a picture is gone")?;
-        let memory = External::handle(vmo.0.raw(), size, p.stride, !p.rgb);
+        let memory = External::handle(vmo.0.raw(), size, p.stride, !p.rgb).scanout();
         let rb = gl.gen_renderbuffer();
         gl.bind_renderbuffer(gl::RENDERBUFFER, rb);
         gl.renderbuffer_storage_external(gl::RENDERBUFFER, gl::RGB8, w, h, &memory);
@@ -586,6 +610,10 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         current: 0,
         textures: BTreeMap::new(),
         scratch: Vec::new(),
+        sampled: BTreeMap::new(),
+        samples: true,
+        said: false,
+        frames: 0,
         lost: false,
     };
     g.warm_up()?;
@@ -681,6 +709,11 @@ impl Gpu {
         self.watch.signaled() >= fence
     }
 
+    /// The last fence that has signaled: the frames up to it are done.
+    pub(crate) fn fence_signaled(&self) -> u64 {
+        self.watch.signaled()
+    }
+
     /// Whether the GPU has stopped answering.
     pub(crate) fn lost(&self) -> bool {
         self.lost
@@ -702,6 +735,7 @@ impl Gpu {
 
     /// Starts a frame into picture `target`, drawn only within `clip`.
     pub(crate) fn begin(&mut self, target: usize, clip: Rect) {
+        self.frames += 1;
         let fb = self.targets[target].framebuffer;
         self.prepare(fb, clip);
     }
@@ -995,6 +1029,84 @@ impl Gpu {
             }
         }
         Some(t)
+    }
+
+    /// A subsurface's buffer `b`, the `serial`th attached, as a texture the
+    /// GPU samples in place: the client's memory itself, which nothing
+    /// copies (the GPU reads it until the frame drawing it is done, which
+    /// the client waits for: `Wm::subsurfaces_sampled`). `None` where the
+    /// renderer cannot sample it so (virgl's host, a GPU whose caches are
+    /// not the processor's), or not now: the buffer is then copied into a
+    /// texture of the subsurface's (`picture`).
+    pub(crate) fn sampled(&mut self, serial: u64, b: &Buffers<Mapping>) -> Option<Texture> {
+        if !self.samples {
+            return None;
+        }
+        let frame = self.frames;
+        if let Some(s) = self.sampled.get_mut(&serial) {
+            s.drawn = frame;
+            return Some(s.texture);
+        }
+        while self.sampled.len() >= SAMPLED_MAX {
+            self.forget_least_drawn(frame)?;
+        }
+        let (w, h) = (b.layout.width, b.layout.height);
+        // 0xAARRGGBB: blue first in memory.
+        let memory = External::handle(b.memory.vmo().raw(), b.layout.bytes(), b.layout.stride as u32 * 4, true);
+        loop {
+            let gl = &mut self.gl;
+            let id = gl.gen_texture();
+            gl.bind_texture(gl::TEXTURE_2D, id);
+            gl.tex_storage_external(gl::TEXTURE_2D, gl::RGBA8, w, h, &memory);
+            match gl.get_error() {
+                gl::NO_ERROR => {
+                    for (p, v) in [
+                        (gl::TEXTURE_MIN_FILTER, gl::NEAREST),
+                        (gl::TEXTURE_MAG_FILTER, gl::NEAREST),
+                        (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
+                        (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
+                    ] {
+                        gl.tex_parameteri(gl::TEXTURE_2D, p, v as i32);
+                    }
+                    let texture = Texture { id, w, h };
+                    self.sampled.insert(serial, Sampled { texture, drawn: frame });
+                    if !core::mem::replace(&mut self.said, true) {
+                        rt::println!("{} samples subsurfaces in place: their frames are never copied", self.renderer);
+                    }
+                    return Some(texture);
+                }
+                // Past the renderer's limits: one drawn less recently goes,
+                // and the buffer is tried again; or it is copied.
+                gl::OUT_OF_MEMORY => {
+                    gl.delete_textures(&[id]);
+                    self.forget_least_drawn(frame)?;
+                }
+                _ => {
+                    gl.delete_textures(&[id]);
+                    self.samples = false;
+                    rt::println!("{} cannot sample subsurfaces in place: their frames are copied", self.renderer);
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// Lets the GPU's view of the subsurface buffer drawn least recently
+    /// go, if one was not drawn in frame `frame`; `None` if all were.
+    fn forget_least_drawn(&mut self, frame: u64) -> Option<()> {
+        let (&serial, _) = self.sampled.iter().filter(|(_, s)| s.drawn < frame).min_by_key(|(_, s)| s.drawn)?;
+        self.forget_buffers(&[serial]);
+        Some(())
+    }
+
+    /// Lets the GPU's view of subsurfaces' buffers `serials` go (they are
+    /// gone).
+    pub(crate) fn forget_buffers(&mut self, serials: &[u64]) {
+        for serial in serials {
+            if let Some(s) = self.sampled.remove(serial) {
+                self.gl.delete_textures(&[s.texture.id]);
+            }
+        }
     }
 
     /// Whether `slot` has a texture.
