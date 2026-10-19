@@ -156,7 +156,7 @@ the run, with its number.
 ```bash
 cargo automation script documentation/screenshots.vts                         # the README's screenshots
 cargo automation script documentation/interceptor.vts --resolution 1920x1200  # Interceptor's: scale it to 1280x800
-cargo automation script documentation/browser.vts                             # the browser's (the web engine built)
+cargo automation script documentation/browser.vts                             # the browser's, on www.vedaos.org (the web engine built)
 ```
 
 Where QEMU has the 3D GPU, `test` also runs the OpenGL ES tests on the

@@ -247,7 +247,7 @@ wait-serial "terminal exited" 20
 wait 2
 
 # The lock screen, with a password set in Settings (the Terminal starts it
-# on its page): resting, then asking for the password, half typed.
+# on its page), asking for the password, half typed.
 key meta_l
 wait 2
 type "terminal"
@@ -270,7 +270,6 @@ key meta_l-l
 wait-serial "lock: the screen is locked" 20
 move 0.97 0.08
 wait 3
-shot documentation/images/lock.png
 type "veda"
 wait 2
 shot documentation/images/lock-password.png

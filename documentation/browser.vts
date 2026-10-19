@@ -6,11 +6,10 @@
 #   cargo automation script documentation/browser.vts
 #
 # which writes documentation/images/browser.png: the browser, started from
-# the start menu's search, shows the host's page of the world's scripts and
-# emoji (`/scripts`, automation/src/hostweb.rs). The web engine must be
-# built (`cargo automation web`).
+# the start menu's search, shows Veda's website, www.vedaos.org, so the
+# host must reach the Internet. The web engine must be built
+# (`cargo automation web`).
 requires web
-web-server
 memory 2048
 agent-asleep
 fail-on "PANIC"
@@ -23,9 +22,9 @@ type "browser"
 key ret
 wait-serial "browser: pages are" 30
 wait 4
-type "{web}/scripts"
+type "www.vedaos.org"
 key ret
-wait 8
+wait 12
 move 0.97 0.08
 wait 2
 shot documentation/images/browser.png now
