@@ -97,9 +97,15 @@ pub(crate) fn hwcap() -> u64 {
     core::arch::x86_64::__cpuid(1).edx as u64
 }
 
-/// The clock's counter (the TSC), as [`abi::ClockInfo`] describes it.
-#[cfg(veda_guest)]
+/// The clock's counter (the TSC), as [`abi::ClockInfo`] describes it, read
+/// once every earlier load has completed (`lfence`): a time read after
+/// seeing another thread's is never earlier than it, as a system call's
+/// reading never was.
 pub(crate) fn clock_ticks() -> u64 {
-    // SAFETY: RDTSC is always available.
-    unsafe { core::arch::x86_64::_rdtsc() }
+    // SAFETY: LFENCE (SSE2) and RDTSC are always available on x86-64, and
+    // the kernel lets user code read the TSC (CR4.TSD is clear).
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    }
 }

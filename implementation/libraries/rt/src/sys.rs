@@ -54,7 +54,12 @@ pub fn handle_close(h: RawHandle) -> SysResult {
     call(nr::HANDLE_CLOSE, [h as usize, 0, 0, 0, 0, 0])
 }
 
+/// Clock `id`'s reading: computed here (see [`crate::time`]), or by the
+/// kernel for a clock only it reads.
 pub fn clock_get(id: usize) -> u64 {
+    if let Some(ns) = crate::time::read_clock(id) {
+        return ns;
+    }
     call(nr::CLOCK_GET, [id, 0, 0, 0, 0, 0]).unwrap_or(0) as u64
 }
 

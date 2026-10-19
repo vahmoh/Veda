@@ -223,6 +223,30 @@ pub fn test_private_memory() -> TestResult {
     check(r == Err(Error::NotSupported), "memory a VMO backs is not decommitted")
 }
 
+/// The clocks a program reads itself (`rt::time`, without a system call)
+/// are the kernel's: each reading lies between the kernel's before and
+/// after it, and the monotonic one never goes back.
+pub fn test_clocks() -> TestResult {
+    use abi::clock;
+    for (id, name) in [(clock::MONOTONIC, "monotonic"), (clock::REALTIME, "real-time"), (clock::UTC, "UTC")] {
+        let kernel = || call(nr::CLOCK_GET, [id, 0, 0, 0, 0, 0]).map(|v| v as u64).map_err(s);
+        let before = kernel()?;
+        let here = rt::sys::clock_get(id);
+        let after = kernel()?;
+        check(
+            before <= here && here <= after,
+            &format!("the {name} clock read here lies between the kernel's readings ({before} <= {here} <= {after})"),
+        )?;
+    }
+    let mut last = rt::time::now_ns();
+    for _ in 0..100_000 {
+        let now = rt::time::now_ns();
+        check(now >= last, "the monotonic clock never goes back")?;
+        last = now;
+    }
+    Ok(())
+}
+
 /// Starts a copy of systest that does `what` (see `main`), as its child.
 fn start_copy(what: &str) -> Result<Process, String> {
     let fs = vfs_client()?;

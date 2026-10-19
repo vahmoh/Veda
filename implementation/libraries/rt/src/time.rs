@@ -2,11 +2,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Clocks, durations and sleeping.
+//!
+//! The clocks are read here, without a system call: the kernel's clocks
+//! are the processor's clock counter scaled, by values it sets as it starts
+//! and never changes ([`abi::ClockInfo`]), which a program asks for once.
+//! A system call takes the kernel's lock, which every processor shares,
+//! and programs read the time often (WebKit, GLib and media pipelines
+//! thousands of times a second): reading it here keeps them off it.
 
 pub use core::time::Duration;
 
 use abi::{clock, nr};
 
+use crate::sync::Lazy;
 use crate::sys::{call, clock_get};
 
 /// Nanoseconds since boot.
@@ -19,6 +27,24 @@ pub fn clock_info() -> Result<abi::ClockInfo, abi::Error> {
     let mut info = abi::ClockInfo::default();
     call(nr::CLOCK_INFO, [&mut info as *mut _ as usize, 0, 0, 0, 0, 0])?;
     Ok(info)
+}
+
+/// The kernel's clocks' scale, asked for once (`None` if it has none to
+/// give, when the system call reads them).
+static CLOCKS: Lazy<Option<abi::ClockInfo>> = Lazy::new(|| clock_info().ok().filter(|info| info.ns_per_tick != 0));
+
+/// Clock `id` read here as the kernel reads it, or `None` for a clock only
+/// the kernel can read.
+pub(crate) fn read_clock(id: usize) -> Option<u64> {
+    let info = CLOCKS.as_ref()?;
+    let ticks = crate::arch::clock_ticks().saturating_sub(info.ticks_at_zero);
+    let now = ((ticks as u128 * info.ns_per_tick as u128) >> 32) as u64;
+    match id {
+        clock::MONOTONIC => Some(now),
+        clock::REALTIME => Some(info.realtime_at_zero.saturating_add(now)),
+        clock::UTC => Some(info.utc_at_zero.saturating_add(now)),
+        _ => None,
+    }
 }
 
 /// A monotonic timestamp.

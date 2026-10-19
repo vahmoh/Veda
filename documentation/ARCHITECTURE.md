@@ -149,7 +149,10 @@ logs (see [the driver VM](DRIVERVM.md)).
   measurement more than 5% off it (`dmesg time`). The kernel sets each
   processor's `IA32_TSC_ADJUST` to 0 as it starts and corrects any skew
   left (`dmesg smp`). The wall clock starts from the RTC, in UTC; the `tz=`
-  boot option gives local time.
+  boot option gives local time. Programs read the clocks themselves, with
+  no system call: the TSC scaled as the kernel scales it, by values it sets
+  as it starts and never changes (`clock_info`, which `rt::time` asks for
+  once), as programs read the time thousands of times a second.
 - **Processors and scheduling.** Each processor turns its caches on as it
   starts and, with Intel's hardware P-states, chooses its own speed, up to
   turbo. The scheduler has 32 priorities, round-robin within each, 10 ms
@@ -876,7 +879,8 @@ the actions every `ui` application offers over the `agentapp` protocol
   802.11 and its cryptography against published vectors, a station against
   an access point, two TCP/IP stacks over a simulated cable, and TLS
   against a rustls server and real certificate chains.
-- **`systest`** runs inside Veda: kernel objects, threads, the file system,
+- **`systest`** runs inside Veda: kernel objects, threads, the clocks
+  programs read themselves, the file system,
   the launcher, crash reports, the window system's restart, and the C, C++
   and Rust test programs (`verification/c`, `verification/rust`,
   `verification/stdcrates`). `nettest` checks DNS, UDP, TCP, HTTP, HTTPS

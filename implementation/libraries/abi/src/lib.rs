@@ -625,7 +625,9 @@ pub mod clock {
 /// How the clocks follow the processor's clock counter (`clock_info`),
 /// which every processor reads alike, and user space too (see [`arch`]):
 /// the monotonic clock is `((ticks - ticks_at_zero) * ns_per_tick) >> 32`
-/// nanoseconds; the real-time clocks are it plus their offsets.
+/// nanoseconds; the real-time clocks are it plus their offsets. It never
+/// changes once the system has started, so that a program asks for it once
+/// and reads the clocks itself (`rt::time`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClockInfo {

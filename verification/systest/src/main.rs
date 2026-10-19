@@ -389,7 +389,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 31] = [
+    let tests: [Test; 32] = [
         ("ipc primitives", test_ipc_primitives),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
@@ -402,6 +402,7 @@ fn main() -> i32 {
         ("sockets", posix::test_sockets),
         ("memory protection", posix::test_memory_protection),
         ("private memory", posix::test_private_memory),
+        ("clocks read in programs", posix::test_clocks),
         ("thread exit futex", posix::test_exit_futex),
         ("threads and locks", test_threads_and_locks),
         ("vfs system image", test_vfs_system_image),
