@@ -164,9 +164,13 @@ browser 91 MB, the two web processes 29 and 39 MB, the network process
 (WebKit, ICU's data, Skia, and some 9 MB of GStreamer and the codecs), is
 the system image's, which is in memory
 whether the browser runs or not; under memory pressure, WebKit's
-processes give back caches as the UI process tells them to. QEMU's
-default 1 GiB is enough for light browsing, with little to spare, so the
-browser's scripts give the machine 2 GiB.
+processes give back caches as the UI process tells them to. A page
+composited on the GPU takes some 85 MB more in its web process than one
+painted on the CPU (the GPU's staging memory and buffers, the frames read
+back): about 120 MB for a page at 1920x1080. QEMU's default 2 GiB is
+enough for browsing at that size; with 1 GiB (about 530 MiB for
+programs, the driver VM taking 256 of them) the browser paints on the
+CPU ([Drawing pages](#drawing-pages)).
 
 ## WebKit on Veda
 
@@ -228,9 +232,11 @@ machine:
 
 The browser chooses as it starts: it composites if `egl::gpu_renderer()`
 finds a GPU that can render (the `gpu` service is registered and has what
-`gl` needs) and says which in the log (`browser: pages are composited on
-the GPU: RENDERER`, or `painted on the CPU`). A browser started before the GPU's service, as the
-system starts, paints on the CPU until it starts again. In software,
+`gl` needs) and the system has 1 GiB of memory for programs, and says
+which in the log (`browser: pages are composited on the GPU: RENDERER`,
+or `painted on the CPU`, with why where memory decided). A browser
+started before the GPU's service, as the system starts, paints on the CPU
+until it starts again. In software,
 compositing would take far more of the processor than painting does, so
 it is never chosen there. Measured in QEMU (4 processors, the browser's
 window 1088x596, a GPU through virgl on the host's Intel Xe):
@@ -521,6 +527,7 @@ ports of WebKit give the network process a sandbox extension:
 | `browser-core`'s unit tests (`cargo test -p browser-core`) | Addresses and search, history, bookmarks, the session, settings, downloads' names, tabs, keys |
 | `egl`'s and `gl`'s unit tests | The display and configurations WebKit looks for, drawing surfaceless and reading BGRA back, contexts shared across threads (and EGL's access rules), fences, pbuffers, every function by name, buffers; in `gl`, sharing, deletion across contexts, surfaceless contexts, BGRA uploads and reads, and WebKit's compositing at a page's size (Skia's tiles uploaded whole and in parts, an image turned round by TextureMapper's shader, clears and solid fills, the frame read back whole), which `GL_TEST_BACKEND` runs on a GPU too |
 | `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/src/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
+| `verification/ui/browser-memory.vts` | The browser on a machine of 1 GiB with a GPU: it paints pages on the CPU, as compositing them would take more memory than the machine can spare, and shows a page with no process running out of memory |
 | `verification/agent/app-browser.vts` | The agent's actions, with the stand-in for the Voice Agent API: opening and reading pages (their scripts ran), the keyboard on a page the agent opened, back, tabs, finding, zooming, bookmarking, the time zone pages see, a PDF shown in WebKit's viewer (its text found there), and private tabs forgetting cookies; the pages' web processes and the network process sandboxed, as above, and GLib never complaining |
 | `verification/agent/app-browser-files.vts` | The network process and the user's files: a download saved in Downloads and opened from there (`file://`); a picture chosen for a page to upload read whole, through its copy, never the picture itself; a page in Documents opened (`file://`) in a tab of its own, its folder lent to the network process, the picture beside it shown and one in Pictures, which the page reaches for outside its folder, refused, and a page's own navigation to Pictures failing, and its link to Pictures in a new window (`target=_blank`) failing alike, in its tab, no window opened and its process going on, Pictures never lent; the folder taken back as the tab closes, which a window one of its pages opened outlasts, and forgotten for every web process: the network process refuses the window the picture, never reading it; a window that another page there opened with a frame of a page of the folder in it keeping the folder lent as that page's tab closes (it shows the picture), the frame's page going to a fragment and pushing a state, its process going on, and the folder taken back as the window closes; the page opened again, its folder lent again, for it alone: the first window, whose process was allowed the folder before, refused the picture again, and its own navigation to a page of the folder failing, saying so, the page unread; a site's IndexedDB kept as the browser starts again, and the temporary files gone as it closed |
 | `verification/c/posix.c` | The POSIX layer's `timerfd`, memory files, suspending threads, the system image's files mapped in place and time zones, among the rest; and `<veda/sandbox.h>`: a child confines itself as a web process does (places to read and to change, one service, no processes or new executable memory), is refused all it gave up, keeps the rest (code written into memory made executable before runs), and starts a child that is confined alike; and loans: a place lent to a confined child, which reads it and what is inside it, changes none of it, finds nothing beside it, and takes the loan once, with its own secret and for its own place, as a sandboxed program lends nothing and nothing holding the home folder is lent; and taken back: the place gone from a confined child that took it, but for the file it has open there, a loan taken back before it is taken taking nothing |

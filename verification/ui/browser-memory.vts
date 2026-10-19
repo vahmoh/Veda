@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser on a machine with little memory (1 GiB, about 530 MiB of it
+# for programs, the driver VM taking 256 of them), started once the GPU's
+# service is there: it paints pages on the CPU rather than composite them
+# on the GPU, which takes some 85 MB more for each page's process than the
+# machine can spare, and shows the host's page of the world's scripts with
+# no process running out of memory.
+requires web
+web-server
+gpu on
+memory 1024
+agent-asleep
+fail-on "PANIC"
+fail-on "out of memory: no page for its access"
+wait-serial "desktop ready" 90
+wait-serial "service 'gpu' registered" 60
+wait 4
+key meta_l
+wait 2
+type "browser"
+key ret
+wait-serial "browser: pages are painted on the CPU: the system has" 30
+wait 4
+type "{web}/scripts"
+key ret
+wait 10
+shot target/veda/browser-memory.png
+reject-serial "page stopped working"
+reject-serial "browser crashed"

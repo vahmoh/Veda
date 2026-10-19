@@ -38,6 +38,13 @@ use crate::browser::Browser;
 use crate::engine::{Config, Engine};
 use crate::instance::Claim;
 
+/// The least memory (that programs may have: the system's own image left
+/// out) for pages to be composited on the GPU: compositing takes some
+/// 85 MB more for each page's process than painting on the CPU (the GPU's
+/// staging memory and buffers, the frames read back), which a smaller
+/// machine is better without.
+const COMPOSITING_MEMORY: u64 = 1 << 30;
+
 /// The window's size for a screen of `w` x `h`.
 fn window_size(w: u32, h: u32) -> (u32, u32) {
     let width = (w * 85 / 100).clamp(640, 1600).min(w.saturating_sub(40).max(640));
@@ -64,12 +71,18 @@ fn main() {
     // What a browser that stopped without closing left of its temporary
     // files goes; their folder is there for the engine.
     store::clear_temporary(true);
-    // Pages composited on the GPU if there is one; painted on the CPU
-    // otherwise, which takes a fraction of the processor that compositing
-    // them in software would.
-    let gpu = if store.settings.acceleration { egl::gpu_renderer() } else { None };
+    // Pages composited on the GPU if there is one and the memory for it;
+    // painted on the CPU otherwise, which takes a fraction of the processor
+    // that compositing them in software would.
+    let memory = rt::object::system_info().map_or(0, |i| i.total_memory);
+    let enough = memory >= COMPOSITING_MEMORY;
+    let gpu = if store.settings.acceleration && enough { egl::gpu_renderer() } else { None };
     match &gpu {
         Some(renderer) => eprintln!("browser: pages are composited on the GPU: {renderer}"),
+        None if store.settings.acceleration && !enough => eprintln!(
+            "browser: pages are painted on the CPU: the system has {} MiB, too little to composite them",
+            memory >> 20
+        ),
         None => eprintln!("browser: pages are painted on the CPU"),
     }
     let config = Config {
