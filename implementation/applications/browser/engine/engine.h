@@ -361,14 +361,18 @@ struct engine_frame {
 	int damage[4];
 	/* Each frame WebKit draws has the next one. */
 	uint64_t serial;
+	/* The engine's, for engine_frame_unlock. */
+	void *held;
 };
 
-/* The view's frame, which stays put until engine_frame_unlock: 1, or 0
- * when it has none yet (the lock is not taken then). */
+/* The view's frame, which stays put until engine_frame_unlock, even if the
+ * view goes meanwhile: 1, or 0 when it has none yet (nothing is held
+ * then). */
 int engine_frame_lock(engine_view view, struct engine_frame *frame);
-/* Lets the frame go; `presented` is the serial of the frame that reached
- * the screen, or 0: WebKit draws the next once it has. */
-void engine_frame_unlock(engine_view view, uint64_t presented);
+/* Lets the frame engine_frame_lock gave go; `presented` is the serial of
+ * the frame that reached the screen, or 0: WebKit draws the next once it
+ * has. */
+void engine_frame_unlock(const struct engine_frame *frame, uint64_t presented);
 
 #ifdef __cplusplus
 }

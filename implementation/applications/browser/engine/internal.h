@@ -18,6 +18,12 @@
 
 /* What WebKit drew of a view last, which the browser shows. */
 struct frame {
+	/* Its view's, for the command that says it was shown. */
+	engine_view view;
+	/* Its references, under the engine's lock: the engine's, until its view
+	 * goes, and the browser's while it holds the frame (engine_frame_lock).
+	 * It is freed with the last. */
+	int refs;
 	GMutex lock;
 	uint32_t *pixels;
 	int width, height;

@@ -76,6 +76,7 @@ mod ffi {
         pub stride: c_int,
         pub damage: [c_int; 4],
         pub serial: u64,
+        pub held: *mut c_void,
     }
 
     unsafe extern "C" {
@@ -112,7 +113,7 @@ mod ffi {
         pub fn engine_next_event(event: *mut Event) -> c_int;
         pub fn engine_event_clear(event: *mut Event);
         pub fn engine_frame_lock(view: u32, frame: *mut Frame) -> c_int;
-        pub fn engine_frame_unlock(view: u32, presented: u64);
+        pub fn engine_frame_unlock(frame: *const Frame, presented: u64);
     }
 }
 
@@ -403,12 +404,20 @@ impl Engine {
 
     /// `view`'s frame, which WebKit leaves as it is while it is held.
     pub fn frame(&self, view: ViewId) -> Option<Frame<'_>> {
-        let mut raw = ffi::Frame { pixels: ptr::null(), width: 0, height: 0, stride: 0, damage: [0; 4], serial: 0 };
-        // SAFETY: a frame to fill; on success the lock is the Frame's.
+        let mut raw = ffi::Frame {
+            pixels: ptr::null(),
+            width: 0,
+            height: 0,
+            stride: 0,
+            damage: [0; 4],
+            serial: 0,
+            held: ptr::null_mut(),
+        };
+        // SAFETY: a frame to fill; on success the hold is the Frame's.
         if unsafe { ffi::engine_frame_lock(view.0, &mut raw) } == 0 {
             return None;
         }
-        Some(Frame { raw, view, presented: 0, _engine: PhantomData })
+        Some(Frame { raw, presented: 0, _engine: PhantomData })
     }
 }
 
@@ -445,7 +454,6 @@ pub mod data {
 /// A view's page, as WebKit drew it last; it stays put while held.
 pub struct Frame<'a> {
     raw: ffi::Frame,
-    view: ViewId,
     presented: u64,
     _engine: PhantomData<&'a Engine>,
 }
@@ -475,8 +483,8 @@ impl Frame<'_> {
 
 impl Drop for Frame<'_> {
     fn drop(&mut self) {
-        // SAFETY: the frame was locked by engine_frame_lock.
-        unsafe { ffi::engine_frame_unlock(self.view.0, self.presented) }
+        // SAFETY: the frame engine_frame_lock gave, held until now.
+        unsafe { ffi::engine_frame_unlock(&self.raw, self.presented) }
     }
 }
 

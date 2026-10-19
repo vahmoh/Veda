@@ -367,15 +367,24 @@ static void requests_end_for(engine_view view)
 
 /* --- frames ----------------------------------------------------------- */
 
-static struct frame *frame_new(void)
+/* A frame for view `id`, with the engine's reference. */
+static struct frame *frame_new(engine_view id)
 {
 	struct frame *f = g_new0(struct frame, 1);
+	f->view = id;
+	f->refs = 1;
 	g_mutex_init(&f->lock);
 	return f;
 }
 
-static void frame_free(struct frame *f)
+/* Drops a reference to `f`, freeing it with the last. */
+static void frame_unref(struct frame *f)
 {
+	g_mutex_lock(&E.lock);
+	gboolean last = --f->refs == 0;
+	g_mutex_unlock(&E.lock);
+	if (!last)
+		return;
 	g_mutex_clear(&f->lock);
 	g_free(f->pixels);
 	g_free(f);
@@ -405,12 +414,19 @@ static void damage_add(int damage[4], int x, int y, int w, int h)
 
 int engine_frame_lock(engine_view view, struct engine_frame *frame)
 {
-	struct frame *f = frame_find(view);
+	/* Found and referenced at once: the view may go meanwhile, its frame
+	 * staying until this lets it go. */
+	g_mutex_lock(&E.lock);
+	struct frame *f = g_hash_table_lookup(E.frames, GUINT_TO_POINTER(view));
+	if (f)
+		f->refs++;
+	g_mutex_unlock(&E.lock);
 	if (!f)
 		return 0;
 	g_mutex_lock(&f->lock);
 	if (!f->pixels) {
 		g_mutex_unlock(&f->lock);
+		frame_unref(f);
 		return 0;
 	}
 	frame->pixels = f->pixels;
@@ -421,20 +437,23 @@ int engine_frame_lock(engine_view view, struct engine_frame *frame)
 	frame->serial = f->serial;
 	memset(f->damage, 0, sizeof f->damage);
 	f->told = FALSE;
+	frame->held = f;
 	return 1;
 }
 
 static void run_presented(struct command *c);
 
-void engine_frame_unlock(engine_view view, uint64_t presented)
+void engine_frame_unlock(const struct engine_frame *frame, uint64_t presented)
 {
-	struct frame *f = frame_find(view);
+	struct frame *f = frame->held;
 	if (!f)
 		return;
 	gboolean shown = presented && f->waiting && presented >= f->waiting;
 	if (shown)
 		f->waiting = 0;
+	engine_view view = f->view;
 	g_mutex_unlock(&f->lock);
+	frame_unref(f);
 	if (shown)
 		post(command_new(run_presented, view));
 }
@@ -757,7 +776,7 @@ static WebKitWebView *on_create(WebKitWebView *web_view, WebKitNavigationAction 
 	struct view *opener = data;
 	g_mutex_lock(&E.lock);
 	engine_view id = ++E.next_view;
-	g_hash_table_insert(E.frames, GUINT_TO_POINTER(id), frame_new());
+	g_hash_table_insert(E.frames, GUINT_TO_POINTER(id), frame_new(id));
 	g_mutex_unlock(&E.lock);
 	struct view *view = view_make(id, opener->ephemeral, opener);
 	emit_number(ENGINE_EVENT_NEW_VIEW, id, opener->id);
@@ -1154,7 +1173,8 @@ static void view_free(struct view *view)
 	g_mutex_lock(&E.lock);
 	g_hash_table_remove(E.frames, GUINT_TO_POINTER(view->id));
 	g_mutex_unlock(&E.lock);
-	frame_free(view->frame);
+	/* The engine's reference: the browser may hold the frame still. */
+	frame_unref(view->frame);
 	g_free(view->hovered);
 	g_free(view->finding);
 	g_free(view);
@@ -1169,7 +1189,7 @@ engine_view engine_view_create(int ephemeral, engine_view related)
 {
 	g_mutex_lock(&E.lock);
 	engine_view id = ++E.next_view;
-	g_hash_table_insert(E.frames, GUINT_TO_POINTER(id), frame_new());
+	g_hash_table_insert(E.frames, GUINT_TO_POINTER(id), frame_new(id));
 	g_mutex_unlock(&E.lock);
 	struct command *c = command_new(run_create, id);
 	c->n[0] = ephemeral;
