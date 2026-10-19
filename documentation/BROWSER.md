@@ -69,7 +69,8 @@ One browser runs at a time: starting it again (`browser ADDRESS...`) gives
 the running one the addresses, in new tabs. It keeps its settings in
 `~/.config/browser`, the history, bookmarks, the session and the engine's
 cookies and storage in `~/.local/share/browser`, its cache in
-`~/.cache/browser`, and its temporary files (a copy of each file chosen
+`~/.cache/browser` (a sixteenth of the free room there as it starts, and
+64 MB at most, as the user's files are kept in memory), and its temporary files (a copy of each file chosen
 for a page to upload among them) in `/tmp/browser`, which go as it closes.
 
 ## Building it
@@ -177,14 +178,14 @@ may use.
 
 | WebKit needs | On Veda |
 |--------------|---------|
-| Memory: reserving address space, committing, decommitting | bmalloc and libpas as on Linux: Veda's private memory is committed as it is touched, and `madvise(MADV_DONTNEED)` drops pages, which read as zeros. JavaScriptCore reserves its cages (about 112 GiB of address space with their alignment) in VMOs of up to 1 TiB, which cost only the pages used |
+| Memory: reserving address space, committing, decommitting | bmalloc and libpas as on Linux: Veda's private memory is committed as it is touched, and `madvise(MADV_DONTNEED)` drops pages, which read as zeros. libpas zeroes in place what it allocates zeroed below 8 MiB (Skia's tiles, pictures), where Linux gives the pages back from 1 MiB: on Veda that costs a TLB shootdown and a page fault for each page touched again. JavaScriptCore reserves its cages (about 112 GiB of address space with their alignment) in VMOs of up to 1 TiB, which cost only the pages used |
 | The JIT | JavaScriptCore's baseline JIT, DFG and FTL, and WebAssembly's BBQ and OMG, on x86-64. The DFG polls its traps, as Veda's signals are taken as a system call returns and cannot stop code that makes none; WebAssembly checks its bounds rather than relying on guard pages' faults, which end a Veda program |
 | A garbage collector that scans every thread's stack | `veda_thread_suspend`, `veda_thread_resume` and `veda_thread_registers` (`<veda/thread.h>`): the kernel stops a thread and saves its registers, as Mach's `thread_suspend` does; Linux's way, a signal, would reach a thread only as its next system call returns |
 | Threads with large stacks and names | WTF's threads get 1 MiB stacks (musl gives 128 KiB); the main thread's stack is the startup message's (`pthread_getattr_np`) |
 | Shared memory between processes | Memory files (`memfd_create`), mapped shared; a read-only handle is a descriptor opened read-only (`/dev/fd/N`), whose kernel handle has no right to write, so no process it goes to can write the memory |
 | Timers | `timerfd` on the monotonic, real-time and boot clocks, which GLib's main loop and epoll wait on |
 | The time zone | The system's offset from UTC (the `tz=` boot option, or the firmware's): musl reads it with no `TZ` set (`__veda_tz`), and ICU names it as the tz database's zone of that offset, `Etc/GMT-2`, or a region's on it all year (`Asia/Kolkata` for +05:30) |
-| How much memory the system has, and the process | `sysinfo`, and `veda_process_memory` (`<veda/memory.h>`), for WebKit's memory pressure handling: the UI process watches the system's memory and tells the others to give some back |
+| How much memory the system has, and the process | `sysinfo`, whose free memory is what programs may still take, and `veda_process_memory` (`<veda/memory.h>`), for WebKit's memory pressure handling: the UI process watches the system's memory, four times a second once 70% of it is used, and tells the others to give some back from 80% (90%: at once, all they can), earlier than on Linux, as Veda has no swap and ends a process it has no page for |
 | Processes | One program, started again for each role (above); no injected bundle, as Veda loads no code at run time |
 | Its resources: the pictures WebCore draws (a broken image's icon, a text area's resizer, the media controls' icons), Web Audio's spatial sound, and the PDF viewer (PDF.js, with the style and script WebKit adds to it), in GResource bundles its library registers as it loads | Linked in, each bundle registering itself as the program starts (its object's constructor); `engine.c` refers to them, as a static link leaves out an object nothing refers to. The viewer is most of them, 3.7 MB of the program; its fonts, character maps and decoders have their licence texts with WebKit's |
 | Files | `statx`; GLib's file monitors poll, there being no inotify |

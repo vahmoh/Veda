@@ -80,6 +80,26 @@
      return vector->raw_data[page_index];
  #else
      return vector->raw_data[page_index] & (MINCORE_REFERENCED |
+--- a/Source/bmalloc/libpas/src/libpas/pas_internal_config.h
++++ b/Source/bmalloc/libpas/src/libpas/pas_internal_config.h
+@@ -67,7 +67,17 @@
+ #define PAS_MIN_ALIGN                    ((size_t)1 << PAS_MIN_ALIGN_SHIFT)
+ 
+ /* Use VA-based memory zeroing when the allocation size exceeds this threshold. */
++#if PAS_OS(VEDA)
++/* Veda's kernel takes page faults and TLB shootdowns one at a time, for
++   every processor: memory zeroed by giving its pages back (MADV_DONTNEED)
++   costs a shootdown, then a fault for each page as it is touched, which
++   zeroing it in place does not. What is zeroed is usually used at once (a
++   tile, a picture): only allocations larger than this give their pages
++   back, which may never be touched whole. */
++#define PAS_VA_BASED_ZERO_MEMORY_SHIFT   23
++#else
+ #define PAS_VA_BASED_ZERO_MEMORY_SHIFT   20
++#endif
+ 
+ /* This is the same as PAS_BITVECTOR_WORD_SHIFT, which is a nice performance optimization but
+    isn't necessary. It's a performance optimization because there are specialized fast code
 --- a/Source/bmalloc/libpas/src/libpas/pas_lock.c
 +++ b/Source/bmalloc/libpas/src/libpas/pas_lock.c
 @@ -33,19 +33,27 @@
@@ -638,6 +658,30 @@
      return String();
  }
  
+--- a/Source/WebKit/NetworkProcess/cache/NetworkCache.cpp
++++ b/Source/WebKit/NetworkProcess/cache/NetworkCache.cpp
+@@ -75,10 +75,21 @@
+ static size_t computeCapacity(CacheModel cacheModel, const String& cachePath)
+ {
+     if (auto diskFreeSize = FileSystem::volumeFreeSpace(cachePath)) {
++#if OS(VEDA)
++        // Veda's file system keeps the user's files in memory (saving them to
++        // its disk, if there is one): the cache takes memory as well as room
++        // on a volume far smaller than the sizes below assume. A sixteenth of
++        // what is free, and 64 MB at most.
++        uint64_t memoryCapacity = std::min<uint64_t>(*diskFreeSize / 16, 64 * KB * KB);
++#endif
+         // As a fudge factor, use 1000 instead of 1024, in case the reported byte
+         // count doesn't align exactly to a megabyte boundary.
+         *diskFreeSize /= KB * 1000;
++#if OS(VEDA)
++        return std::min<uint64_t>(calculateURLCacheDiskCapacity(cacheModel, *diskFreeSize), memoryCapacity);
++#else
+         return calculateURLCacheDiskCapacity(cacheModel, *diskFreeSize);
++#endif
+     }
+     return 0;
+ }
 --- a/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
 +++ b/Source/WebKit/NetworkProcess/NetworkConnectionToWebProcess.cpp
 @@ -718,6 +718,10 @@
@@ -1593,7 +1637,7 @@
  
  #include "WebProcessPool.h"
  #include <mutex>
-@@ -40,6 +40,10 @@
+@@ -40,18 +40,36 @@
  #include <wtf/text/CString.h>
  #include <wtf/text/StringToIntegerConversion.h>
  
@@ -1604,13 +1648,41 @@
  namespace WebKit {
  
  IGNORE_CLANG_WARNINGS_BEGIN("unsafe-buffer-usage-in-libc-call")
-@@ -300,6 +304,20 @@
+ 
+ static const size_t notSet = static_cast<size_t>(-1);
+ 
++#if OS(VEDA)
++// Veda has no swap and no page cache to give back: a process the system
++// has no page for is ended, as soon as the memory it may take (what sysinfo
++// counts as free) is gone, and a page that loads takes some 100 MB a
++// second. Memory is watched four times a second once most of it is used,
++// and processes are told to give back caches well before it runs out.
++static const Seconds s_minPollingInterval { 250_ms };
++static const Seconds s_maxPollingInterval { 2_s };
++static const double s_minUsedMemoryPercentageForPolling = 50;
++static const double s_maxUsedMemoryPercentageForPolling = 70;
++static const int s_memoryPresurePercentageThreshold = 80;
++static const int s_memoryPresurePercentageThresholdCritical = 90;
++#else
+ static const Seconds s_minPollingInterval { 1_s };
+ static const Seconds s_maxPollingInterval { 5_s };
+ static const double s_minUsedMemoryPercentageForPolling = 50;
+ static const double s_maxUsedMemoryPercentageForPolling = 85;
+ static const int s_memoryPresurePercentageThreshold = 90;
+ static const int s_memoryPresurePercentageThresholdCritical = 95;
++#endif
+ // cgroups.7: The usual place for such mounts is under a tmpfs(5)
+ // filesystem mounted at /sys/fs/cgroup.
+ static const char* s_cgroupMemoryPath = "/sys/fs/cgroup/%s/%s/%s";
+@@ -300,6 +318,22 @@
      return memoryUsagePercentage;
  }
  
 +#if OS(VEDA)
 +// The memory the system uses, in percent of what it has, as Veda's kernel
 +// counts it: it has no /proc, no cgroups, and no page cache to count apart.
++// What it counts as free is what processes may still take, so 100 is where
++// a process is refused a page.
 +static int systemMemoryUsedAsPercentage()
 +{
 +    struct sysinfo info;
@@ -1625,7 +1697,7 @@
  static inline Seconds pollIntervalForUsedMemoryPercentage(int usedPercentage)
  {
      // Use a different poll interval depending on the currently memory used,
-@@ -357,6 +375,10 @@
+@@ -357,6 +391,10 @@
          while (true) {
              sleep(pollInterval);
  
@@ -1636,7 +1708,7 @@
              // Cannot operate without this one, retry opening on the next iteration after sleeping.
              if (!tryOpeningForUnbufferedReading(memInfoFile, s_procMeminfo))
                  continue;
-@@ -368,6 +390,7 @@
+@@ -368,6 +406,7 @@
              CString cgroupMemoryControllerPath = getCgroupControllerPath(cgroupControllerFile.get(), "memory");
              memoryController.setMemoryControllerPath(cgroupMemoryControllerPath);
              int usedPercentage = systemMemoryUsedAsPercentage(memInfoFile.get(), zoneInfoFile.get(), &memoryController);
