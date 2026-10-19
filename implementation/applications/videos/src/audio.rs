@@ -103,7 +103,6 @@ pub fn start(volume: f32) -> Option<Arc<Shared>> {
     let ours = shared.clone();
     rt::thread::Builder::new()
         .name("audio")
-        .priority(abi::priority::HIGH)
         .spawn(move || {
             let mut p = Player::new(ours, volume);
             p.run()

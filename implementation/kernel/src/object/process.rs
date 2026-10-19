@@ -40,6 +40,11 @@ pub struct Process {
     exited_threads_cpu_ns: AtomicU64,
     /// What it gave up ([`abi::restrict`]), for good.
     restrictions: AtomicUsize,
+    /// The highest priority its threads may run at, given at its creation
+    /// and never above its creator's: the scheduler runs the highest ready,
+    /// so this bounds which processes its threads can keep from the
+    /// processors.
+    pub max_priority: u8,
 }
 
 /// Every process ever created that is still referenced somewhere.
@@ -73,7 +78,7 @@ impl Process {
         self.restrictions.load(Ordering::Acquire) & flag != 0
     }
 
-    pub fn new(name: &str, parent_koid: u64) -> Option<Arc<Process>> {
+    pub fn new(name: &str, parent_koid: u64, max_priority: u8) -> Option<Arc<Process>> {
         let p = Arc::new(Process {
             koid: super::new_koid(),
             parent_koid,
@@ -86,6 +91,7 @@ impl Process {
             signals: Signals::new(0),
             exited_threads_cpu_ns: AtomicU64::new(0),
             restrictions: AtomicUsize::new(0),
+            max_priority,
         });
         let mut list = PROCESSES.lock();
         list.retain(|w| w.strong_count() > 0);
@@ -221,7 +227,7 @@ impl Process {
             memory_bytes: self.aspace().map(|a| a.committed_bytes()).unwrap_or(0),
             cpu_time_ns: running_cpu + self.exited_threads_cpu_ns.load(Ordering::Relaxed),
             handles: self.handles.lock().len() as u32,
-            _reserved: 0,
+            max_priority: self.max_priority.into(),
         }
     }
 

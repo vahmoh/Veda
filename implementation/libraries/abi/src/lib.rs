@@ -211,7 +211,11 @@ pub mod nr {
     pub const VM_DECOMMIT: usize = 54;
 
     // --- processes and threads ----------------------------------------
-    /// `process_create(name, name_len) -> h`.
+    /// `process_create(name, name_len, max_priority) -> h`: a process whose
+    /// threads run at `max_priority` at most (see
+    /// [`priority`](crate::priority)), or at the caller's maximum if that is
+    /// lower; 0 gives it the caller's (`InvalidArgs` above
+    /// [`REALTIME`](crate::priority::REALTIME)).
     pub const PROCESS_CREATE: usize = 60;
     /// `process_start(process, thread, entry, stack, arg_handle, arg1)`.
     /// The bootstrap handle `arg_handle` is consumed, closed if the start
@@ -222,13 +226,18 @@ pub mod nr {
     /// `process_kill(h, flags)`: ends the process (flags from
     /// [`kill_flags`](crate::kill_flags)).
     pub const PROCESS_KILL: usize = 63;
-    /// `thread_create(process, name, name_len) -> h`.
+    /// `thread_create(process, name, name_len) -> h`: a thread of the
+    /// process at [`priority::NORMAL`](crate::priority::NORMAL), or at the
+    /// process's maximum if that is lower.
     pub const THREAD_CREATE: usize = 64;
     /// `thread_start(thread, entry, stack, arg0, arg1)`.
     pub const THREAD_START: usize = 65;
     /// `thread_exit() -> !`.
     pub const THREAD_EXIT: usize = 66;
     /// `thread_set_priority(h, priority)`; `h` 0 is the calling thread.
+    /// `priority` is from 1 to [`priority::REALTIME`](crate::priority::REALTIME),
+    /// and at most the maximum of the thread's process and of the caller's
+    /// (`AccessDenied` above it, see [`process_create`](PROCESS_CREATE)).
     pub const THREAD_SET_PRIORITY: usize = 67;
     /// `thread_set_tls(value)`: the calling thread's thread pointer, through
     /// which it finds its thread-local storage (see [`arch`](crate::arch)).
@@ -743,7 +752,9 @@ pub struct ProcessInfo {
     /// Total CPU time consumed by all threads, in nanoseconds.
     pub cpu_time_ns: u64,
     pub handles: u32,
-    pub _reserved: u32,
+    /// The highest priority its threads may run at (see
+    /// [`nr::PROCESS_CREATE`]).
+    pub max_priority: u32,
 }
 
 impl Default for ProcessInfo {
@@ -758,7 +769,7 @@ impl Default for ProcessInfo {
             memory_bytes: 0,
             cpu_time_ns: 0,
             handles: 0,
-            _reserved: 0,
+            max_priority: 0,
         }
     }
 }
@@ -842,12 +853,18 @@ pub mod cache_policy {
     pub const UNCACHED: usize = 2;
 }
 
-/// Thread priorities (0 = lowest, 31 = highest).
+/// Thread priorities (0 = lowest, 31 = highest). The scheduler runs the
+/// highest-priority threads that are ready, so a thread that never waits
+/// keeps every thread below it from its processor: a process's threads run
+/// at its maximum at most ([`nr::PROCESS_CREATE`]), which `init` gives the
+/// applications it starts as `NORMAL`, the system services' priority.
 pub mod priority {
     pub const IDLE: usize = 0;
     pub const LOW: usize = 8;
+    /// Where threads start, and the most an application's may run at.
     pub const NORMAL: usize = 16;
     pub const HIGH: usize = 24;
+    /// The most a thread may be given.
     pub const REALTIME: usize = 30;
     pub const MAX: usize = 31;
 }

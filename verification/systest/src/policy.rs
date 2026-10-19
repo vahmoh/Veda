@@ -3,9 +3,9 @@
 
 //! The rules that keep one process from harming others: what the kernel
 //! does with handles that travel on channels, how a server answers a request
-//! it cannot serve, what the launcher and the registry let an application
-//! do, who may change how the network is set up, and who may lock and
-//! unlock the screen.
+//! it cannot serve, what the launcher, the registry and the scheduler let an
+//! application do, who may change how the network is set up, and who may
+//! lock and unlock the screen.
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -143,19 +143,58 @@ mod verdict {
     pub const KILL_DENIED: u32 = 1;
     pub const WATCH_DENIED: u32 = 2;
     pub const FOREIGN_NAME_DENIED: u32 = 4;
-    pub const ALL: u32 = KILL_DENIED | WATCH_DENIED | FOREIGN_NAME_DENIED;
+    pub const PRIORITY_DENIED: u32 = 8;
+    pub const ALL: u32 = KILL_DENIED | WATCH_DENIED | FOREIGN_NAME_DENIED | PRIORITY_DENIED;
 }
 
 /// The service through which that application reports (a name of
 /// systest's own, as the registry requires of it).
 const VERDICT: &str = "systest/verdict";
 
-/// An application may not end the system's processes, hear of crashes, or
-/// register a name that is not its own: a copy of systest started through
-/// the launcher, as applications are, tries all three on a restartable
-/// service (the audio service, so that a broken rule costs only a restart)
-/// and reports what was refused.
+/// How long the application's threads spin on every processor, and how long
+/// it gives itself to start them all first.
+const SPIN_NS: u64 = 2_000_000_000;
+const SPIN_START_NS: u64 = 200_000_000;
+
+/// The application's report: the rules that held ([`verdict`]), the
+/// highest priority it could give a thread of its own, and when its threads
+/// spin on every processor at that priority (monotonic nanoseconds).
+struct Report {
+    bits: u32,
+    priority: u32,
+    from: u64,
+    until: u64,
+}
+
+impl Report {
+    fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(24);
+        out.extend_from_slice(&self.bits.to_le_bytes());
+        out.extend_from_slice(&self.priority.to_le_bytes());
+        out.extend_from_slice(&self.from.to_le_bytes());
+        out.extend_from_slice(&self.until.to_le_bytes());
+        out
+    }
+
+    fn decode(b: &[u8]) -> Option<Report> {
+        let word = |at: usize| Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?));
+        let time = |at: usize| Some(u64::from_le_bytes(b.get(at..at + 8)?.try_into().ok()?));
+        Some(Report { bits: word(0)?, priority: word(4)?, from: time(8)?, until: time(16)? })
+    }
+}
+
+/// An application may not end the system's processes, hear of crashes,
+/// register a name that is not its own, or keep the system's services from
+/// the processors (which the scheduler gives to the highest-priority
+/// threads ready): a copy of systest started through the launcher, as
+/// applications are, tries the first three on a restartable service (the
+/// audio service, so that a broken rule costs only a restart), to raise a
+/// thread above NORMAL, the services' priority, and to make a process that
+/// may, and reports what was refused. Then it spins a thread on every
+/// processor, as high as it could raise one, while the window system and
+/// init must go on answering.
 pub fn test_application_limits() -> TestResult {
+    use proto::display::display;
     let s = |e: IpcError| e.to_string();
     let l = launcher::Client::new(proto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let koid_of = |name: &str| -> Result<Option<u64>, String> {
@@ -165,6 +204,10 @@ pub fn test_application_limits() -> TestResult {
         println!("application limits: no audio service; skipped");
         return Ok(());
     };
+    // Up before the application spins: the calls made then are answers
+    // alone.
+    let d = display::Client::new(proto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    d.screen_info().map_err(s)?;
     let listener = proto::register(VERDICT).map_err(|e| alloc::format!("register {VERDICT}: {e:?}"))?;
     let app = l
         .launch("/system/bin/systest".into(), vec!["limits".into(), audio.to_string()])
@@ -175,10 +218,30 @@ pub fn test_application_limits() -> TestResult {
     listener.wait(abi::signals::READABLE, deadline).map_err(|e| alloc::format!("no report: {e}"))?;
     let report = proto::accept(&listener).ok_or("the application did not connect")?;
     let msg = report.read_blocking(deadline).map_err(|e| alloc::format!("no verdict: {e}"))?;
-    let bits = msg.bytes.first_chunk::<4>().map(|b| u32::from_le_bytes(*b)).ok_or("a malformed verdict")?;
-    check(bits & verdict::KILL_DENIED != 0, "an application may not end a system service")?;
-    check(bits & verdict::WATCH_DENIED != 0, "an application may not hear of crashes")?;
-    check(bits & verdict::FOREIGN_NAME_DENIED != 0, "an application may not register another's name")?;
+    let r = Report::decode(&msg.bytes).ok_or("a malformed verdict")?;
+    // Calls to both made and answered while its threads spin on every
+    // processor: none, if they keep the services from them.
+    let until = r.until.min(deadline);
+    rt::time::sleep_until(r.from.min(until));
+    let mut answered = 0;
+    while rt::time::now_ns() < until {
+        if d.screen_info().is_ok() && l.tasks().is_ok() && rt::time::now_ns() < until {
+            answered += 1;
+        }
+    }
+    println!(
+        "application limits: its threads spun at priority {} on every processor; the window system and init \
+         answered {answered} times meanwhile",
+        r.priority
+    );
+    check(r.bits & verdict::KILL_DENIED != 0, "an application may not end a system service")?;
+    check(r.bits & verdict::WATCH_DENIED != 0, "an application may not hear of crashes")?;
+    check(r.bits & verdict::FOREIGN_NAME_DENIED != 0, "an application may not register another's name")?;
+    check(
+        r.bits & verdict::PRIORITY_DENIED != 0,
+        "an application may not raise a thread above NORMAL, nor make a process that may",
+    )?;
+    check(answered > 0, "the window system and init answer while an application spins on every processor")?;
     check(koid_of("audio")? == Some(audio), "the audio service still runs as it did")
 }
 
@@ -238,15 +301,50 @@ pub fn limits(target: Option<&String>) -> i32 {
     if proto::register("shell").is_err() && proto::register("not-systest").is_err() {
         bits |= verdict::FOREIGN_NAME_DENIED;
     }
+    // The highest priority it may give a thread of its own, and the most a
+    // process it makes may have, asking for the most there is.
+    let priority = (abi::priority::NORMAL + 1..=abi::priority::REALTIME)
+        .rev()
+        .find(|&p| rt::thread::set_priority(p).is_ok())
+        .unwrap_or(abi::priority::NORMAL);
+    let _ = rt::thread::set_priority(abi::priority::NORMAL);
+    let child = crate::bare_process(abi::priority::REALTIME).and_then(|p| p.info()).map(|i| i.max_priority);
+    if priority == abi::priority::NORMAL && child == Ok(abi::priority::NORMAL as u32) {
+        bits |= verdict::PRIORITY_DENIED;
+    }
     println!("application limits: the rules that held: {bits:#x} of {:#x}", verdict::ALL);
     let Ok(report) = proto::connect(VERDICT) else { return 1 };
-    let sent: Vec<u8> = bits.to_le_bytes().to_vec();
+    let from = rt::time::now_ns() + SPIN_START_NS;
+    let until = from + SPIN_NS;
+    let sent = Report { bits, priority: priority as u32, from, until }.encode();
     if report.write(&sent, Vec::new()).is_err() {
         return 1;
     }
+    spin(priority, until);
     // Stay until the verdict is read (the channel's other end closes).
     let _ = report.wait(abi::signals::PEER_CLOSED, rt::time::deadline_after(rt::time::Duration::from_secs(20)));
     i32::from(bits != verdict::ALL)
+}
+
+/// Spins a thread on every processor at `priority` until `until`
+/// (monotonic nanoseconds), as a program gone wrong might.
+fn spin(priority: usize, until: u64) {
+    let cpus = rt::object::system_info().map_or(1, |i| i.cpu_count.max(1) as usize);
+    let spinners: Vec<_> = (0..cpus)
+        .filter_map(|_| {
+            let spinner = rt::thread::Builder::new().name("spinner").priority(priority);
+            spinner
+                .spawn(move || {
+                    while rt::time::now_ns() < until {
+                        core::hint::spin_loop();
+                    }
+                })
+                .ok()
+        })
+        .collect();
+    for s in spinners {
+        let _ = s.join();
+    }
 }
 
 /// The lock is the system's: a program may neither lock nor unlock the

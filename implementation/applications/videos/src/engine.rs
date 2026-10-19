@@ -149,11 +149,7 @@ pub fn start(decoder: String, sound: Option<Arc<audio::Shared>>) -> Option<Arc<S
         decoder_wake: Event::create().ok()?,
     });
     let ours = shared.clone();
-    rt::thread::Builder::new()
-        .name("engine")
-        .priority(abi::priority::NORMAL + 1)
-        .spawn(move || Engine::new(ours, decoder, sound).run())
-        .ok()?;
+    rt::thread::Builder::new().name("engine").spawn(move || Engine::new(ours, decoder, sound).run()).ok()?;
     Some(shared)
 }
 

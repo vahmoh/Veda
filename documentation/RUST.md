@@ -38,11 +38,12 @@ It uses:
   (`apps_common::store` reads an application's own within a limit and
   replaces them in one step). A thread sets its own priority with
   `rt::thread::set_priority`, or `rt::thread::Builder` starts it with
-  one. `net` adds what is Veda's own (the network's state, Wi-Fi,
-  sockets a `ui` event loop can wait on), and `files` moves large
-  files, such as pictures and music, in one piece of shared memory, where
-  the standard library's reads and writes take a message every few
-  kilobytes.
+  one, up to `NORMAL` in an application
+  ([The kernel](ARCHITECTURE.md#the-kernel)). `net` adds what is Veda's
+  own (the network's state, Wi-Fi, sockets a `ui` event loop can wait
+  on), and `files` moves large files, such as pictures and music, in one
+  piece of shared memory, where the standard library's reads and writes
+  take a message every few kilobytes.
 - **Crates that need the standard library**, declared in the workspace
   like any other ([Libraries](DEPENDENCIES.md) has the rules). Most build
   as released. Those they stand on to reach the operating system (`libc`,

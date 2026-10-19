@@ -633,7 +633,7 @@ impl Engine {
 
 /// Starts the engine thread.
 pub fn start(shared: Arc<Shared>, volume: f32) -> bool {
-    let builder = rt::thread::Builder::new().name("decoder").priority(abi::priority::NORMAL + 4);
+    let builder = rt::thread::Builder::new().name("decoder");
     builder
         .spawn(move || -> () {
             let mut e = Engine {

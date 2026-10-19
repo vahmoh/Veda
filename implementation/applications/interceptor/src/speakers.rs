@@ -85,7 +85,6 @@ impl Speakers {
         let theirs = shared.clone();
         rt::thread::Builder::new()
             .name("speakers")
-            .priority(abi::priority::HIGH)
             .spawn(move || {
                 run(&theirs);
                 theirs.alive.store(false, Ordering::Release);

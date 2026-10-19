@@ -169,7 +169,16 @@ logs (see [the driver VM](DRIVERVM.md)).
   starts and, with Intel's hardware P-states, chooses its own speed, up to
   turbo. The scheduler has 32 priorities, round-robin within each, 10 ms
   slices, preemption when a higher-priority thread wakes, tickless one-shot
-  timers and eager switching of FPU and vector state (XSAVE). A thread can
+  timers and eager switching of FPU and vector state (XSAVE). It runs the
+  highest-priority threads ready, so a thread that never waits keeps those
+  below it from its processor: a process's threads run at its *maximum
+  priority* at most, which its creator gives it (`process_create`) and
+  which is never above the creator's own. `init` gives the system's
+  services and the programs the kernel command line asks for all there is
+  (up to `REALTIME`; the sound mixer runs at `HIGH`), and what the
+  launcher starts `NORMAL`, the services' own: an application's threads,
+  and those of the processes it starts, take turns with the services
+  instead of shutting them out. A thread can
   name an *exit futex*, which the kernel clears and wakes once the thread
   has left its stack, so that thread libraries can join it. A thread
   handle with `MANAGE` can stop the thread (`thread_suspend`, which
@@ -233,8 +242,9 @@ says which each is:
   programs register only names of their own (`music`, `music/...`), so
   that none can stand in for a service not registered yet.
 - **The launcher** in `init` starts programs and installed applications
-  (their `.app` manifests), lists the running ones and ends them with their
-  jobs. Applications may end applications; only system services, Task
+  (their `.app` manifests), whose threads run at `NORMAL` at most
+  ([The kernel](#the-kernel)), lists the running ones and ends them with
+  their jobs. Applications may end applications; only system services, Task
   Manager, the Terminal's `kill -f` and programs the kernel command line
   asked for may end the system's processes. Only system services shut the
   machine down or restart it, and hear of crashes (`launcher::watch`).
@@ -938,8 +948,10 @@ the actions every `ui` application offers over the `agentapp` protocol
   against a rustls server and real certificate chains.
 - **`systest`** runs inside Veda: kernel objects, threads, memory (pages
   a process unmaps gone at once for its threads on every processor), the
-  clocks programs read themselves, the file system,
-  the launcher, crash reports, the window system's restart, and the C, C++
+  clocks programs read themselves, the file system, the launcher and what
+  it lets an application do (an application spinning on every processor,
+  as high as it may, while the services must go on answering), crash
+  reports, the window system's restart, and the C, C++
   and Rust test programs (`verification/c`, `verification/rust`,
   `verification/stdcrates`). `nettest` checks DNS, UDP, TCP, HTTP, HTTPS
   and ping, against a server on the host in the network cards' scripts

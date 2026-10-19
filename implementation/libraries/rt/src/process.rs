@@ -191,6 +191,9 @@ pub struct Spawn<'a> {
     /// from kernel object ids, which can repeat (POSIX process ids, cut
     /// to 30 bits).
     pub accept: Option<&'a dyn Fn(u64) -> bool>,
+    /// The highest priority its threads may run at (`abi::priority`),
+    /// never more than this process's (`None`: this process's).
+    pub max_priority: Option<usize>,
 }
 
 impl<'a> Spawn<'a> {
@@ -204,6 +207,7 @@ impl<'a> Spawn<'a> {
             handles: Vec::new(),
             inherited: Vec::new(),
             accept: None,
+            max_priority: None,
         }
     }
 
@@ -239,6 +243,12 @@ impl<'a> Spawn<'a> {
 
     pub fn handle(mut self, role: u32, h: Handle) -> Self {
         self.handles.push((role, h));
+        self
+    }
+
+    /// The highest priority the process's threads may run at.
+    pub fn max_priority(mut self, priority: usize) -> Self {
+        self.max_priority = Some(priority);
         self
     }
 
@@ -281,8 +291,9 @@ impl<'a> Spawn<'a> {
     fn create_process(&self) -> Result<(Process, Thread), SpawnError> {
         /// How many processes are made, at most, for one the caller accepts.
         const TRIES: usize = 4;
+        let max_priority = self.max_priority.unwrap_or(0);
         for _ in 0..TRIES {
-            let h = call(nr::PROCESS_CREATE, [self.name.as_ptr() as usize, self.name.len(), 0, 0, 0, 0])?;
+            let h = call(nr::PROCESS_CREATE, [self.name.as_ptr() as usize, self.name.len(), max_priority, 0, 0, 0])?;
             // SAFETY: fresh handle from the kernel.
             let process = Process(unsafe { Handle::from_raw(h as u32) });
             if let Some(accept) = self.accept

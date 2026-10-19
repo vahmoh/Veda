@@ -262,7 +262,54 @@ fn test_threads_and_locks() -> TestResult {
     let priority = thread.thread().info().map_err(|e| e.to_string())?.priority;
     let _ = done.signal();
     thread.join().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
-    check(priority == wanted as u32, "a thread's priority, set by itself")
+    check(priority == wanted as u32, "a thread's priority, set by itself")?;
+    priority_limits()
+}
+
+/// A process's threads run at its maximum priority at most, which its
+/// creator gives it: a process made with `LOW` (the kernel object alone,
+/// never started) reports it, its threads start at it, and none is raised
+/// above it, by systest either, though one may go lower; a process made
+/// without one has its creator's. (That none gets more than its creator
+/// has is [`policy::test_application_limits`]'s.)
+fn priority_limits() -> TestResult {
+    use abi::priority::{LOW, REALTIME};
+    let err = |e: abi::Error| e.to_string();
+    let low = bare_process(LOW).map_err(err)?;
+    let held = thread_below(&low, LOW);
+    // Its thread holds it, never started: ended, it lets go.
+    low.kill().map_err(err)?;
+    held?;
+    let own = rt::object::process_self_info().map_err(err)?.max_priority;
+    let inherited = bare_process(0).and_then(|p| p.info()).map_err(err)?.max_priority;
+    check(inherited == own, "a process made without one has its creator's")?;
+    check(bare_process(REALTIME + 1).err() == Some(abi::Error::InvalidArgs), "none is above REALTIME")
+}
+
+/// A thread made in `process`, whose maximum priority is `max`, below
+/// `NORMAL`: it starts at `max`, is not raised above it, and goes lower.
+fn thread_below(process: &rt::object::Process, max: usize) -> TestResult {
+    let err = |e: abi::Error| e.to_string();
+    check(process.info().map_err(err)?.max_priority == max as u32, "a process's maximum priority, as given")?;
+    let name = "main";
+    let created =
+        rt::sys::call(abi::nr::THREAD_CREATE, [process.raw() as usize, name.as_ptr() as usize, name.len(), 0, 0, 0]);
+    // SAFETY: a fresh handle from the kernel.
+    let thread = rt::object::Thread(unsafe { rt::object::Handle::from_raw(created.map_err(err)? as u32) });
+    let set = |p: usize| rt::sys::call(abi::nr::THREAD_SET_PRIORITY, [thread.raw() as usize, p, 0, 0, 0, 0]);
+    let at = || thread.info().map(|i| i.priority as usize).map_err(err);
+    check(at()? == max, "its threads start at it, below NORMAL")?;
+    check(set(max + 1).err() == Some(abi::Error::AccessDenied), "none is raised above it")?;
+    check(set(max - 1).is_ok() && at()? == max - 1, "below it, one runs as set")
+}
+
+/// A process whose threads may run at `max_priority` at most (0: as high as
+/// systest's): the kernel object alone, which nothing starts.
+pub fn bare_process(max_priority: usize) -> Result<rt::object::Process, abi::Error> {
+    let name = "bare";
+    let h = rt::sys::call(abi::nr::PROCESS_CREATE, [name.as_ptr() as usize, name.len(), max_priority, 0, 0, 0])?;
+    // SAFETY: a fresh handle from the kernel.
+    Ok(rt::object::Process(unsafe { rt::object::Handle::from_raw(h as u32) }))
 }
 
 fn test_ipc_primitives() -> TestResult {

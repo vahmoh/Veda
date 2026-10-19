@@ -217,7 +217,8 @@ impl Builder {
         self
     }
 
-    /// The thread's scheduling priority (see `abi::priority`).
+    /// The thread's scheduling priority (see `abi::priority`), at most its
+    /// process's maximum (`NORMAL` for an application's).
     pub fn priority(mut self, p: usize) -> Builder {
         self.priority = Some(p);
         self
@@ -311,6 +312,8 @@ where
 
 /// Sets the calling thread's scheduling priority (see `abi::priority`):
 /// for a thread the standard library started, which [`Builder`] did not.
+/// `AccessDenied` above its process's maximum (`NORMAL` for an
+/// application's).
 pub fn set_priority(priority: usize) -> Result<(), Error> {
     call(nr::THREAD_SET_PRIORITY, [abi::INVALID_HANDLE as usize, priority, 0, 0, 0, 0]).map(|_| ())
 }

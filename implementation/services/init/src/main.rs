@@ -16,7 +16,8 @@
 //!   (`registry::confine`), as are the channels cloned from it.
 //! * Implements the **launcher** service: starting programs and installed
 //!   applications, listing and ending tasks, and power control, each as
-//!   far as the caller's identity allows (see [`Init::end`]).
+//!   far as the caller's identity allows (see [`Init::end`]). What it
+//!   starts runs its threads at [`APPLICATION_PRIORITY`] at most.
 
 #![no_std]
 #![no_main]
@@ -61,7 +62,7 @@ struct Conn {
 }
 
 /// Why init started a process, which decides what the process may ask of
-/// init.
+/// init, and how high its threads may run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
     /// A system service (restarted if it exits and is restartable).
@@ -69,11 +70,21 @@ pub enum Origin {
     /// A program the kernel command line asked for (`run=`, `systest`):
     /// chosen by the machine's owner, as the services are, so it may manage
     /// the system's processes (systest ends the window system to see it
-    /// restarted).
+    /// restarted) and run as high as they may.
     Requested,
-    /// An application or program started through the launcher.
+    /// An application or program started through the launcher, whose
+    /// threads run at [`APPLICATION_PRIORITY`] at most.
     Launched,
 }
+
+/// The highest priority the threads of what the launcher starts may run at,
+/// and of the processes they start in turn: the system services' own. The
+/// scheduler runs the highest-priority threads ready, so an application's
+/// thread above it that never waited would keep the services (the window
+/// system, input, this launcher) from its processor; at it, they take
+/// turns. The system's processes may go up to `REALTIME` (the sound mixer
+/// runs at `HIGH`).
+const APPLICATION_PRIORITY: usize = abi::priority::NORMAL;
 
 /// A process started by init.
 struct Child {
@@ -197,6 +208,9 @@ impl Init {
         spawn = spawn.env("HOME=/home/user");
         for (r, h) in extra {
             spawn = spawn.handle(r, h);
+        }
+        if origin == Origin::Launched {
+            spawn = spawn.max_priority(APPLICATION_PRIORITY);
         }
         // It runs from the image's pages, which every process running it
         // shares (from a copy of them if they cannot be had).

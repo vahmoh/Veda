@@ -34,8 +34,14 @@ pub fn process_restrict(flags: usize) -> SysResult {
     ok(0)
 }
 
-pub fn process_create(name: usize, len: usize) -> SysResult {
+/// Creates a process whose threads run at `max_priority` at most (0: the
+/// caller's maximum), and never above the caller's maximum: no process can
+/// give one it starts more than it has.
+pub fn process_create(name: usize, len: usize, max_priority: usize) -> SysResult {
     allowed(restrict::NO_PROCESSES)?;
+    if max_priority > abi::priority::REALTIME {
+        return Err(Error::InvalidArgs);
+    }
     let name = read_str(name, len, abi::NAME_MAX * 4)?;
     let parent = current_process()?;
     process::may_create(parent.koid)?;
@@ -43,7 +49,11 @@ pub fn process_create(name: usize, len: usize) -> SysResult {
     if !crate::memory::phys::user_may_use(64 * 1024) {
         return Err(Error::NoMemory);
     }
-    let p = Process::new(&name, parent.koid).ok_or(Error::NoMemory)?;
+    let most = match max_priority {
+        0 => parent.max_priority,
+        p => parent.max_priority.min(p as u8),
+    };
+    let p = Process::new(&name, parent.koid, most).ok_or(Error::NoMemory)?;
     ok(insert(KObject::Process(p), PROCESS_RIGHTS)? as usize)
 }
 
@@ -208,11 +218,16 @@ pub fn thread_read_state(raw: RawHandle, buf: usize) -> SysResult {
 
 /// Sets a thread's priority; handle 0 is the calling thread's (a thread
 /// library that keeps its threads' handles to itself lets a thread set its
-/// own).
+/// own). Never above its process's maximum, nor above the caller's: a
+/// thread above the others ready keeps them from its processor for as long
+/// as it runs, which is for its process's creator to allow.
 pub fn thread_set_priority(raw: RawHandle, prio: usize) -> SysResult {
     let t = if raw == abi::INVALID_HANDLE { scheduler::current() } else { get_thread(raw, Rights::MANAGE)? };
     if prio == 0 || prio > abi::priority::REALTIME {
         return Err(Error::InvalidArgs);
+    }
+    if prio > usize::from(t.max_priority().min(current_process()?.max_priority)) {
+        return Err(Error::AccessDenied);
     }
     t.sched.lock().priority = prio as u8;
     ok(0)

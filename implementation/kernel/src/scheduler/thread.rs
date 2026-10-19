@@ -111,8 +111,9 @@ impl Thread {
         }))
     }
 
-    /// A thread that will run user code in `process`. Its kernel stack is
-    /// memory taken on user space's behalf, refused within the kernel's
+    /// A thread that will run user code in `process`, at `NORMAL` priority
+    /// or the most the process may have, if that is lower. Its kernel stack
+    /// is memory taken on user space's behalf, refused within the kernel's
     /// reserve (`phys::user_may_use`).
     pub fn new_user(process: &Arc<Process>, name: &str) -> Option<Arc<Thread>> {
         let aspace = process.aspace()?;
@@ -120,7 +121,18 @@ impl Thread {
             return None;
         }
         let stack = KernelStack::new(KERNEL_STACK_PAGES)?;
-        Thread::build(name, Some(process.clone()), Some(aspace), Some(stack), false)
+        let t = Thread::build(name, Some(process.clone()), Some(aspace), Some(stack), false)?;
+        {
+            let mut s = t.sched.lock();
+            s.priority = s.priority.min(process.max_priority);
+        }
+        Some(t)
+    }
+
+    /// The highest priority the thread may be given: its process's maximum
+    /// (a kernel thread's is any).
+    pub fn max_priority(&self) -> u8 {
+        self.process.as_ref().map_or(abi::priority::MAX as u8, |p| p.max_priority)
     }
 
     /// The idle thread representing the code already running on this CPU
