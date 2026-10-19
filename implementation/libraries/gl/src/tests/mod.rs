@@ -5,6 +5,7 @@
 
 mod api;
 mod bench;
+mod compositing;
 mod contract;
 mod fbo;
 mod gpu_path;

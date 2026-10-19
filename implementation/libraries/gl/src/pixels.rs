@@ -334,6 +334,24 @@ fn bgra8(client: Client, f: Format) -> bool {
     client.format == gl::BGRA_EXT && client.ty == gl::UNSIGNED_BYTE && f == Format::Rgba8Unorm
 }
 
+/// Whether `client` pixels are `f`'s texels with red and blue swapped
+/// (see [`swap_red_blue_rows`]).
+pub fn swaps_red_blue(client: Client, f: Format) -> bool {
+    bgra8(client, raw(f))
+}
+
+/// Swaps the first and third bytes of each 4-byte pixel of `rows` rows of
+/// `row_bytes` bytes, `row` bytes apart, in place: texels read as they are
+/// into pixels whose red and blue are the other way round.
+pub fn swap_red_blue_rows(data: &mut [u8], rows: usize, row: usize, row_bytes: usize) {
+    for y in 0..rows {
+        let Some(line) = data.get_mut(y * row..y * row + row_bytes) else { return };
+        for p in line.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+    }
+}
+
 /// Copies 4-byte pixels, swapping their first and third bytes (BGRA and
 /// RGBA, either way).
 fn swap_red_blue(src: &[u8], dst: &mut [u8]) {

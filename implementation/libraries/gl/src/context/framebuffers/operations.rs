@@ -346,9 +346,10 @@ impl Context {
 
     /// Reads `region` of the read buffer `src` into `dst`, as pixels of
     /// `client`'s layout where `layout` puts them: straight in if they are
-    /// laid out as the buffer's texels are, otherwise through the texels,
-    /// converted as they are packed. `false` if there is no memory to
-    /// convert them.
+    /// laid out as the buffer's texels are (with red and blue swapped then
+    /// in place, if that is all that differs: how WebKit reads its frames
+    /// back, whole, every frame), otherwise through the texels, converted
+    /// as they are packed. `false` if there is no memory to convert them.
     fn read_rect(
         &mut self,
         src: &ReadColor,
@@ -358,9 +359,13 @@ impl Context {
         dst: &mut [u8],
     ) -> bool {
         let (s, f) = (src.surface, src.internal.format);
-        if pixels::same_layout(client, f) {
+        let swap = pixels::swaps_red_blue(client, f);
+        if swap || pixels::same_layout(client, f) {
             let Some(dst) = dst.get_mut(layout.start..) else { return true };
             self.backend.read(s.resource, s.level, region, dst, layout.row, layout.image);
+            if swap {
+                pixels::swap_red_blue_rows(dst, region.h as usize, layout.row, layout.row_bytes);
+            }
             return true;
         }
         let row = region.w as usize * f.bytes();

@@ -690,8 +690,9 @@ and in software on every CPU otherwise.
 - **The GPU renderer** (`gl::virgl`) speaks virglrenderer's protocol: it
   caches state objects, sends only what changed, moves data through a
   shared staging buffer and reuses released buffers once the GPU has
-  passed their fence. Before it reads a frame back it waits on its own
-  fence, so that the renderer serves its other clients meanwhile. It
+  passed their fence. Before it reads an image back (a frame it presents,
+  pixels a program reads) it waits on its own fence, so that the renderer
+  serves its other clients meanwhile. It
   works around what virglrenderer's hosts get wrong (QEMU renders on the
   host's desktop OpenGL, or on ANGLE's OpenGL ES when headless):
 

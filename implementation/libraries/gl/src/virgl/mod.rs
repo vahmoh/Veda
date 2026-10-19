@@ -843,6 +843,11 @@ impl VirglBackend {
         let (sb, tb) = (fmt.bytes(), tf.bytes());
         let row_bytes = region.w as usize * tb;
         let stride = row_bytes.next_multiple_of(4).max(4);
+        // The GPU finishes drawing first, and this context waits for it on
+        // its fence: a read would have the renderer wait instead, keeping
+        // its other clients waiting too (the compositor among them, where
+        // the GPU composes the screen), as present_image says.
+        self.sync();
         for p in self.pieces(region, row_bytes) {
             let image = stride * p.h as usize;
             let len = image * p.d as usize;
