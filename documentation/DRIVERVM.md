@@ -329,7 +329,12 @@ amplifiers on SPI as the codec's side codecs (`serial-multi-instantiate`,
 **Network** (`implementation/guests/linux/net`). Each Ethernet interface,
 of a PCI or USB device, is a `netdev` device of Veda's network service:
 frames go between a raw packet socket and the device's ring, a copy each
-way. Linux has no IP stack here; it moves frames and answers nothing.
+way. Linux has no IP stack here; it moves frames and answers nothing. The
+service is told whether the link is up (the interface has a carrier) when
+the card attaches, then whenever the carrier, looked at every half second,
+is not what the service was told: a carrier that rises while the card
+attaches is told as the driver's session starts. One does: virtio_net
+raises its carrier from a work item just after the card is switched on.
 
 **Wi-Fi** (`implementation/guests/linux/wifi`). Each radio is a *managed*
 radio of Veda's Wi-Fi service ([Networking](NETWORKING.md)): Linux's
@@ -554,7 +559,8 @@ one `VEDA_RENDERNODE` names.
 
 What touches no hardware is unit-tested on the host: `hv`, `iommu`,
 `drivervm-core`, and the guest programs' logic (touchpads, sound cards'
-devices, display modes, the stick's logs, network interfaces, retries).
+devices, display modes, the stick's logs, network interfaces and their
+links, retries).
 The renderer's decoder is tested through `gl`'s tests, on softpipe and on
 Mesa's virgl over virglrenderer's test server
 ([Developing](DEVELOPING.md)).

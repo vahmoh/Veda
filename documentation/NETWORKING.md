@@ -421,7 +421,7 @@ never when an application did.
 
 | Script | Checks |
 |--------|--------|
-| `network-cable.vts` | Unplugs and replugs the wired card's cable (QMP `set_link`): the default route goes and comes back |
+| `network-cable.vts` | Plugs the wired card's cable in as the driver VM attaches the card, then unplugs and replugs it (QMP `set_link`): the default route comes, goes and comes back |
 | `drivervm-restart.vts` | Crashes the driver VM: the network comes back with it |
 | `drivervm-net.vts`, `e1000e.vts`, `drivervm-usb.vts` | Linux's drivers of QEMU's Intel 82576 and 82574L, and of its USB network adapter |
 | `settings-firewall.vts` | Changes the firewall in Settings: `netd` applies the changes and reads them back after a restart |

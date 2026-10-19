@@ -95,7 +95,8 @@ pub const HOST_TESTED_ALONE: &[&str] = &["rt"];
 
 /// The driver VM's programs with tests, which run on Linux, as the
 /// programs do (`implementation/guests/linux/`, on musl).
-const GUEST_TESTED: &[&str] = &["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper", "guest-sys", "guest-wifi"];
+const GUEST_TESTED: &[&str] =
+    &["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper", "guest-net", "guest-sys", "guest-wifi"];
 
 /// Crates with tests that `test` does not run, each with the reason: one
 /// that builds for none of the host's targets (only for a Veda target)
@@ -145,8 +146,9 @@ pub fn test(o: &Options) -> Result {
     }
     // The driver VM's programs' logic (touchpads, sound cards' devices, a
     // display's mode and where pictures go on it, the logs a stick keeps,
-    // network interfaces and Wi-Fi's frames, devices served again after
-    // their threads end), on Linux as they run.
+    // network interfaces, a card's link as the network service was told
+    // it, Wi-Fi's frames, devices served again after their threads end), on
+    // Linux as they run.
     let mut guest = linux::guest_cargo(&["test", "--quiet", "--target", arch::GUEST_TARGET]);
     for package in GUEST_TESTED {
         guest.args(["--package", package]);

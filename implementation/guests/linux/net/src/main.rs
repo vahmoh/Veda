@@ -12,11 +12,16 @@
 //! nothing on the network itself; addresses, DHCP, ARP and everything
 //! above are Veda's. Each card has a thread, which waits on the socket and
 //! the link's Veda event at once (the bridge's watches), and attaches the
-//! card again whenever the service comes back. Cards that come later (USB)
-//! are found as they do; a card's thread ends when it goes, and a card
-//! that comes then is served anew, whatever its name (Linux gives a name
-//! again: cards are known by their interfaces' indices, which it does not).
-//! A card that cannot be used is tried again, later each time.
+//! card again whenever the service comes back. The service is told whether
+//! the card's link is up (it has a carrier) as the card attaches, then
+//! whenever the carrier, looked at every half second, is not what the
+//! service was told ([`link`]). Cards that come later (USB) are found as
+//! they do; a card's thread ends when it goes, and a card that comes then
+//! is served anew, whatever its name (Linux gives a name again: cards are
+//! known by their interfaces' indices, which it does not). A card that
+//! cannot be used is tried again, later each time.
+
+mod link;
 
 use std::fs::File;
 use std::io;
@@ -28,6 +33,8 @@ use guest_sys::retry::{self, Backoff, Ended, Served};
 use proto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
 use rt::guest::Watch;
 use rustix::event::{PollFd, PollFlags, poll};
+
+use link::Reported;
 
 /// Frames each way in a card's link, and their slots (a frame and its
 /// header).
@@ -67,8 +74,7 @@ fn serve(card: Interface) {
             }
         }
     };
-    let link = if card.carrier() { "up" } else { "down" };
-    println!("{name} ({}, {}): MAC {}, link {link}", card.driver, card.location, card.mac_text());
+    println!("{name} ({}, {}): MAC {}", card.driver, card.location, card.mac_text());
     let attach = || {
         let info = DeviceInfo {
             kind: InterfaceKind::Ethernet,
@@ -77,38 +83,49 @@ fn serve(card: Interface) {
             driver: format!("{} (Linux)", card.driver),
             location: card.location.clone(),
         };
-        let att = DeviceAttachment::attach(info, SLOTS, SLOT_SIZE, card.carrier())
-            .map_err(|e| format!("cannot attach: {e}"))?;
-        println!("{name}: attached as {}", att.name);
-        Ok(att)
+        Reported::attach(
+            || card.carrier(),
+            |up| {
+                let att =
+                    DeviceAttachment::attach(info, SLOTS, SLOT_SIZE, up).map_err(|e| format!("cannot attach: {e}"))?;
+                println!("{name}: attached as {}, link {}", att.name, if up { "up" } else { "down" });
+                Ok(att)
+            },
+        )
     };
-    let why = retry::sessions(&name, attach, |att| run(&name, &card, &socket, &att));
+    let why = retry::sessions(&name, attach, |(att, reported)| run(&name, &card, &socket, &att, reported));
     println!("{name}: the card is gone: {why}");
 }
 
 /// Moves frames until the network service goes away ([`Ended::Left`]) or
-/// the card does ([`Ended::Gone`]); an error ends the session (a watch
-/// failed).
-fn run(name: &str, card: &Interface, socket: &File, att: &DeviceAttachment) -> Result<Ended, String> {
+/// the card does ([`Ended::Gone`]), and tells the service of each change
+/// of the card's link from what the attach told it (`reported`); an error
+/// ends the session (a watch failed).
+fn run(
+    name: &str,
+    card: &Interface,
+    socket: &File,
+    att: &DeviceAttachment,
+    mut reported: Reported,
+) -> Result<Ended, String> {
     let watch = |handle, signals| Watch::new(handle, signals).map_err(|e| format!("cannot watch the link: {e}"));
     let wake = watch(att.link.wake_event().raw(), signals::SIGNALED)?;
     let closed = watch(att.channel().raw(), signals::PEER_CLOSED)?;
     let failed = |e| format!("the link's watch failed ({e}); attaching again");
     let mut frames = Frames::new(SLOT_SIZE as usize);
-    let mut link_up = card.carrier();
-    let mut checked = Instant::now();
+    // The card is looked at first at once: its carrier may have changed
+    // while it attached.
+    let mut look = Instant::now();
     loop {
         if let Err(e) = frames.pump(socket, &att.link) {
             return Ok(Ended::Gone(format!("{e}")));
         }
-        if checked.elapsed() >= CHECK {
-            checked = Instant::now();
+        if Instant::now() >= look {
+            look = Instant::now() + CHECK;
             if !card.present() {
                 return Ok(Ended::Gone(String::from("its interface went")));
             }
-            let up = card.carrier();
-            if up != link_up {
-                link_up = up;
+            if let Some(up) = reported.change(card.carrier()) {
                 println!("{name}: link {}", if up { "up" } else { "down" });
                 if !att.set_link(up) {
                     println!("{name}: the network service went away; attaching again");
