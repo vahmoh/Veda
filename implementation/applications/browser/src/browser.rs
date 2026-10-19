@@ -1012,9 +1012,6 @@ impl Browser {
             ui.set_window_state(state);
         }
         let now = Self::now();
-        if self.toast.as_ref().is_some_and(|(_, until)| now >= *until) {
-            self.toast = None;
-        }
         if self.network.rewatch(now) {
             self.retry_unreached();
         }
@@ -1078,6 +1075,11 @@ impl Browser {
 
 impl App for Browser {
     fn update(&mut self, ui: &mut Ui) {
+        // A note past its time goes before the frame is drawn: the frame due
+        // then is the last that would show it.
+        if self.toast.as_ref().is_some_and(|(_, until)| Self::now() >= *until) {
+            self.toast = None;
+        }
         self.engine_events();
         self.input(ui);
         crate::chrome::draw(self, ui);

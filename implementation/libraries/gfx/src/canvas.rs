@@ -14,6 +14,10 @@
 //! ([`Canvas::with_cache`]) uses it, so that it lasts from frame to frame;
 //! any other canvas makes its own when it first needs it.
 //!
+//! A canvas can note where drawing touches an area ([`Canvas::track`]): a
+//! window keeps a picture there from frame to frame, and puts it back
+//! ([`Canvas::put_back`]) where something was drawn over it.
+//!
 //! The loops over pixels stay scalar (see [`crate::color`]).
 
 use alloc::boxed::Box;
@@ -26,7 +30,7 @@ use raster::{Coverage, FillRule, Path, Rasterizer, Span, StrokeStyle, Transform}
 
 use crate::bitmap::Bitmap;
 use crate::color::{Color, blend_run, keep_scalar, lerp_px, over, scale};
-use crate::geom::Rect;
+use crate::geom::{Damage, Rect};
 use crate::shadow::ShadowTemplate;
 
 /// Image sampling filter for scaled drawing.
@@ -165,6 +169,9 @@ pub struct Canvas<'a> {
     oy: i32,
     stack: Vec<(Rect, i32, i32)>,
     cache: Cache<'a>,
+    /// The area whose drawing is noted, and what drawing touched of it
+    /// ([`Canvas::track`]).
+    tracked: Option<(Rect, Damage)>,
 }
 
 /// Composites `px` (premultiplied) over `dst` at coverage `cov` (0..=255).
@@ -221,6 +228,42 @@ fn blend_span(pixels: &mut [u32], stride: i32, clip: Rect, px: u32, span: Span<'
     }
 }
 
+/// The rows and columns a path's spans cover, gathered while the canvas
+/// tracks drawing ([`Canvas::track`]), in the coordinates of the clip
+/// rectangle they were rasterized against.
+struct Spans {
+    gather: bool,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
+
+impl Spans {
+    fn new(gather: bool) -> Spans {
+        Spans { gather, x0: u32::MAX, y0: u32::MAX, x1: 0, y1: 0 }
+    }
+
+    #[inline]
+    fn add(&mut self, span: &Span<'_>) {
+        if self.gather && span.len > 0 {
+            self.x0 = self.x0.min(span.x);
+            self.y0 = self.y0.min(span.y);
+            self.x1 = self.x1.max(span.x + span.len);
+            self.y1 = self.y1.max(span.y + 1);
+        }
+    }
+
+    /// What they cover, in device coordinates (empty if none came).
+    fn bounds(&self, clip: Rect) -> Rect {
+        if self.x1 <= self.x0 || self.y1 <= self.y0 {
+            return Rect::default();
+        }
+        let (x, y) = (clip.x + self.x0 as i32, clip.y + self.y0 as i32);
+        Rect::new(x, y, (self.x1 - self.x0) as i32, (self.y1 - self.y0) as i32)
+    }
+}
+
 impl<'a> Canvas<'a> {
     /// Wraps a pixel buffer of `width` x `height` with `stride` pixels per row.
     pub fn new(pixels: &'a mut [u32], width: i32, height: i32, stride: i32) -> Canvas<'a> {
@@ -252,6 +295,7 @@ impl<'a> Canvas<'a> {
             oy: 0,
             stack: Vec::new(),
             cache,
+            tracked: None,
         }
     }
 
@@ -318,13 +362,60 @@ impl<'a> Canvas<'a> {
     }
 
     /// Raw access to the pixels (premultiplied), e.g. for custom effects.
+    /// What is written through it is not known: tracking takes it as all of
+    /// the area ([`Canvas::track`]).
     pub fn pixels_mut(&mut self) -> (&mut [u32], i32) {
+        self.touch(Rect::new(0, 0, self.width, self.height));
         (self.pixels, self.stride)
+    }
+
+    /// From now on, notes where drawing touches `area` (device
+    /// coordinates), until [`Canvas::take_touched`]: the rectangles that
+    /// each operation drew in, clipped as it was, of the area alone (a
+    /// [`Damage`], so near ones merge).
+    pub fn track(&mut self, area: Rect) {
+        let area = area.intersect(&Rect::new(0, 0, self.width, self.height));
+        self.tracked = Some((area, Damage::new()));
+    }
+
+    /// Where drawing touched the area [`Canvas::track`] gave, which is no
+    /// longer tracked; `None` if none was.
+    pub fn take_touched(&mut self) -> Option<Damage> {
+        self.tracked.take().map(|(_, drawn)| drawn)
+    }
+
+    /// Notes that drawing touched `d` (device coordinates).
+    #[inline]
+    pub(crate) fn touch(&mut self, d: Rect) {
+        if let Some((area, drawn)) = &mut self.tracked {
+            drawn.add(d.intersect(area));
+        }
+    }
+
+    /// Copies `src` of `picture` as it is, without blending, to device
+    /// position `(x, y)`, whatever the clip and the origin, and unnoted by
+    /// tracking ([`Canvas::track`]): how a window puts back a picture that
+    /// it keeps where the picture changed, or where something was drawn
+    /// over it.
+    pub fn put_back(&mut self, picture: &Picture<'_>, src: Rect, x: i32, y: i32) {
+        let part = src.intersect(&Rect::new(0, 0, picture.width, picture.height));
+        // Where the part of `src` in the picture goes, cut to the canvas.
+        let (x, y) = (x.saturating_add(part.x.saturating_sub(src.x)), y.saturating_add(part.y.saturating_sub(src.y)));
+        let to = Rect::new(x, y, part.w, part.h).intersect(&Rect::new(0, 0, self.width, self.height));
+        if to.is_empty() {
+            return;
+        }
+        let (sx, sy) = (part.x + to.x - x, part.y + to.y - y);
+        for row in 0..to.h {
+            let from = &picture.row(sy + row)[sx as usize..(sx + to.w) as usize];
+            self.device_row(to.y + row, to.x, to.right()).copy_from_slice(from);
+        }
     }
 
     pub fn clear(&mut self, color: Color) {
         let px = color.premul();
         let c = self.clip;
+        self.touch(c);
         for y in c.y..c.bottom() {
             self.device_row(y, c.x, c.right()).fill(px);
         }
@@ -337,6 +428,7 @@ impl<'a> Canvas<'a> {
 
     pub fn fill_rect_px(&mut self, r: Rect, px: u32) {
         let d = self.device(r);
+        self.touch(d);
         for y in d.y..d.bottom() {
             blend_run(self.device_row(y, d.x, d.right()), px);
         }
@@ -344,6 +436,7 @@ impl<'a> Canvas<'a> {
 
     pub fn fill_vertical_gradient(&mut self, r: Rect, top: Color, bottom: Color) {
         let d = self.device(r);
+        self.touch(d);
         let ry = r.y + self.oy;
         for y in d.y..d.bottom() {
             let t = if r.h > 1 { (y - ry) as f32 / (r.h - 1) as f32 } else { 0.0 };
@@ -357,6 +450,7 @@ impl<'a> Canvas<'a> {
         if d.is_empty() {
             return;
         }
+        self.touch(d);
         let rx = r.x + self.ox;
         let cols: Vec<u32> = (d.x..d.right())
             .map(|x| {
@@ -380,6 +474,7 @@ impl<'a> Canvas<'a> {
         if d.is_empty() {
             return;
         }
+        self.touch(d);
         let rad = radius.min(r.w as f32 / 2.0).min(r.h as f32 / 2.0).max(0.0);
         let band = rad.ceil() as i32;
         let (rx0, ry0) = ((r.x + self.ox) as f32, (r.y + self.oy) as f32);
@@ -453,6 +548,7 @@ impl<'a> Canvas<'a> {
         let (x0, y0) = (limit((dcx - radius - 1.0).floor()), limit((dcy - radius - 1.0).floor()));
         let (x1, y1) = (limit((dcx + radius + 1.0).ceil()), limit((dcy + radius + 1.0).ceil()));
         let d = Rect::new(x0, y0, x1 - x0, y1 - y0).intersect(&self.clip);
+        self.touch(d);
         for y in d.y..d.bottom() {
             let fy = y as f32 + 0.5 - dcy;
             let row = self.device_row(y, d.x, d.right());
@@ -478,10 +574,15 @@ impl<'a> Canvas<'a> {
         // Rasterized in the clip's coordinates: what cannot show is not
         // computed.
         let t = t.then_translate((self.ox - clip.x) as f32, (self.oy - clip.y) as f32);
-        let Canvas { pixels, stride, cache, .. } = self;
+        let Canvas { pixels, stride, cache, tracked, .. } = self;
         let stride = *stride;
         let raster: &mut Rasterizer = &mut cache.get().raster;
-        raster.fill(path, &t, rule, (clip.w as u32, clip.h as u32), |span| blend_span(pixels, stride, clip, px, span));
+        let mut spans = Spans::new(tracked.is_some());
+        raster.fill(path, &t, rule, (clip.w as u32, clip.h as u32), |span| {
+            spans.add(&span);
+            blend_span(pixels, stride, clip, px, span)
+        });
+        self.touch(spans.bounds(clip));
     }
 
     pub fn stroke_path(&mut self, path: &Path, style: &StrokeStyle, color: Color) {
@@ -495,11 +596,15 @@ impl<'a> Canvas<'a> {
             return;
         }
         let t = t.then_translate((self.ox - clip.x) as f32, (self.oy - clip.y) as f32);
-        let Canvas { pixels, stride, cache, .. } = self;
+        let Canvas { pixels, stride, cache, tracked, .. } = self;
         let stride = *stride;
         let raster: &mut Rasterizer = &mut cache.get().raster;
-        raster
-            .stroke(path, style, &t, (clip.w as u32, clip.h as u32), |span| blend_span(pixels, stride, clip, px, span));
+        let mut spans = Spans::new(tracked.is_some());
+        raster.stroke(path, style, &t, (clip.w as u32, clip.h as u32), |span| {
+            spans.add(&span);
+            blend_span(pixels, stride, clip, px, span)
+        });
+        self.touch(spans.bounds(clip));
     }
 
     pub fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Color) {
@@ -519,6 +624,7 @@ impl<'a> Canvas<'a> {
             return;
         }
         let d = self.device(Rect::new(x, y, w, h));
+        self.touch(d);
         let (mx, my) = self.to_device(x, y);
         for dy in d.y..d.bottom() {
             let from = ((dy - my) * w + d.x - mx) as usize;
@@ -544,6 +650,7 @@ impl<'a> Canvas<'a> {
         if op == 0 {
             return;
         }
+        self.touch(d);
         for dy in d.y..d.bottom() {
             let sy = src.y + dy - dy0;
             let srow = (sy * b.width + src.x - dx0) as isize;
@@ -567,6 +674,7 @@ impl<'a> Canvas<'a> {
     pub fn blit(&mut self, b: &Bitmap, src: Rect, x: i32, y: i32) {
         let src = src.intersect(&b.rect());
         let d = self.device(Rect::new(x, y, src.w, src.h));
+        self.touch(d);
         let (dx0, dy0) = self.to_device(x, y);
         for dy in d.y..d.bottom() {
             let sy = src.y + dy - dy0;
@@ -588,6 +696,7 @@ impl<'a> Canvas<'a> {
         if d.is_empty() || opacity == 0 {
             return;
         }
+        self.touch(d);
         let (px0, py0) = self.to_device(x, y);
         let most = (w as f32 / 2.0).min(h as f32 / 2.0);
         // Not-a-number and negative radii are square corners.
@@ -659,6 +768,7 @@ impl<'a> Canvas<'a> {
         if d.is_empty() {
             return;
         }
+        self.touch(d);
         let (dx0, dy0) = self.to_device(dst.x, dst.y);
         let bilinear = filter == Filter::Bilinear;
         let cols: Vec<(usize, usize, u32)> =
@@ -694,6 +804,7 @@ impl<'a> Canvas<'a> {
             return;
         }
         let d = self.device(Rect::new(x, y, w, h));
+        self.touch(d);
         let (dx0, dy0) = self.to_device(x, y);
         for dy in d.y..d.bottom() {
             let s = (dy - dy0) as usize * stride + (d.x - dx0) as usize;
@@ -725,6 +836,7 @@ impl<'a> Canvas<'a> {
         if d.is_empty() {
             return;
         }
+        self.touch(d);
         let (dx0, dy0) = self.to_device(dst.x, dst.y);
         let bilinear = filter == Filter::Bilinear;
         let cols: Vec<(usize, usize, u32)> = (d.x..d.right()).map(|x| taps(x - dx0, w, dst.w, bilinear)).collect();

@@ -12,6 +12,8 @@
 //! * [`Ui`]: the immediate-mode context passed to `App::update` each frame,
 //!   with widgets ([`widgets`], [`text_input`], [`menu`]), icons
 //!   ([`Icon`]) and the dark [`Theme`].
+//! * [`retained`]: a picture a window keeps from frame to frame
+//!   ([`Ui::retained`]), copied and presented where it changed.
 //! * [`status`]: the network and sound glyphs of the taskbar's tray.
 //!
 //! ```ignore
@@ -35,6 +37,7 @@ pub mod fonts;
 pub mod icons;
 pub mod media;
 pub mod menu;
+pub mod retained;
 pub mod status;
 pub mod text_input;
 pub mod theme;

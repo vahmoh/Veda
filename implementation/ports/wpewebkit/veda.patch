@@ -2821,6 +2821,61 @@
      WebProcess::singleton().initializePlatformDisplayIfNeeded();
      WebProcess::singleton().initializeVulkanIfNeeded();
  #endif
+--- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
++++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/AcceleratedSurface.cpp
+@@ -453,7 +453,29 @@
+         return;
+     }
+ 
++#if OS(VEDA) && ENABLE(DAMAGE_TRACKING)
++    // Only what changed since this buffer was last drawn, which is all the
++    // compositor drew of it (it scissors to that): elsewhere the bitmap still
++    // holds what it did then, which is the frame. All of it while that is not
++    // known (a new buffer, a new size).
++    IntRect rect { { }, m_bitmap->size() };
++    if (const auto& targetDamage = m_surface->renderTargetDamage()) {
++        auto changed = targetDamage->bounds();
++        // What the platform is told changed, which the damage visualizer
++        // makes the whole frame.
++        if (const auto& frameDamage = m_surface->frameDamage())
++            changed.unite(frameDamage->bounds());
++        rect.intersect(changed);
++    }
++    if (rect.isEmpty())
++        return;
++    auto stride = m_bitmap->bytesPerRow();
++    glPixelStorei(GL_PACK_ROW_LENGTH, stride / 4);
++    glReadPixels(rect.x(), rect.y(), rect.width(), rect.height(), GL_BGRA, GL_UNSIGNED_BYTE, m_bitmap->mutableSpan().subspan(rect.y() * stride + rect.x() * 4).data());
++    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
++#else
+     glReadPixels(0, 0, m_bitmap->size().width(), m_bitmap->size().height(), GL_BGRA, GL_UNSIGNED_BYTE, m_bitmap->mutableSpan().data());
++#endif
+ }
+ 
+ std::unique_ptr<AcceleratedSurface::RenderTarget> AcceleratedSurface::RenderTargetTexture::create(AcceleratedSurface& surface, const IntSize& size)
+@@ -1154,6 +1176,12 @@
+     if (usesGL())
+         m_target->sync(m_useExplicitSync);
+ 
++#if OS(VEDA)
++    // While the damage records still say what changed since the target was
++    // last current, which is what it reads back (RenderTargetSHMImage).
++    m_target->didRenderFrame();
++#endif
++
+     Vector<IntRect, 1> damageRects;
+ #if ENABLE(DAMAGE_TRACKING)
+     m_damageTracker.didPresent(*m_target, targetContents);
+@@ -1162,7 +1190,9 @@
+     UNUSED_PARAM(targetContents);
+ #endif
+ 
++#if !OS(VEDA)
+     m_target->didRenderFrame();
++#endif
+     m_pendingFrameNotifyTargets.insert(0, { m_target, WTF::move(damageRects) });
+     m_target = nullptr;
+ }
 --- a/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
 +++ b/Source/WebKit/WebProcess/WebPage/CoordinatedGraphics/DrawingAreaCoordinatedGraphicsGLib.cpp
 @@ -50,6 +50,11 @@

@@ -8,7 +8,7 @@
 //! note, and the page's menus (a `<select>`'s options, its context menu).
 
 use browser_core::url;
-use gfx::{Align, Color, Rect};
+use gfx::{Align, Color, Picture, Rect};
 use proto::input::keys as code;
 use ui::{ButtonKind, Font, Icon, MenuItem, Ui};
 
@@ -42,8 +42,10 @@ pub fn draw(b: &mut Browser, ui: &mut Ui) {
     page_menu(b, ui);
 }
 
-/// The view's frame, copied into the page's area; what it does not cover
-/// (its page catching up with a new size) is blank.
+/// The view's frame in the page's area, as a picture the window keeps
+/// ([`Ui::retained`]): what WebKit drew again, and what was drawn over it
+/// (the find bar, a menu), is all that is copied and presented of it. What
+/// it does not cover (its page catching up with a new size) is blank.
 fn frame(b: &mut Browser, ui: &mut Ui, area: Rect, view: crate::engine::ViewId) {
     let Some(mut frame) = b.engine.frame(view) else {
         ui.canvas.fill_rect(area, PAPER);
@@ -51,23 +53,16 @@ fn frame(b: &mut Browser, ui: &mut Ui, area: Rect, view: crate::engine::ViewId) 
     };
     let (cw, ch) = (ui.canvas.width(), ui.canvas.height());
     let area = area.intersect(&Rect::new(0, 0, cw, ch));
-    let (fw, fh) = (frame.width(), frame.height());
-    let (w, h) = (fw.min(area.w), fh.min(area.h));
-    {
-        let src = frame.pixels();
-        let (dst, stride) = ui.canvas.pixels_mut();
-        let stride = stride as usize;
-        for row in 0..h.max(0) as usize {
-            let d = (area.y as usize + row) * stride + area.x as usize;
-            let s = row * fw as usize;
-            dst[d..d + w as usize].copy_from_slice(&src[s..s + w as usize]);
-        }
+    let (w, h) = (frame.width().min(area.w).max(0), frame.height().min(area.h).max(0));
+    let stride = frame.width().max(0) as usize;
+    if let Some(picture) = Picture::new(frame.pixels(), w, h, stride).filter(|_| w > 0 && h > 0) {
+        ui.retained(view.number(), area.x, area.y, &picture, &[frame.changed()]);
     }
     if w < area.w {
-        ui.canvas.fill_rect(Rect::new(area.x + w, area.y, area.w - w, h.max(0)), PAPER);
+        ui.canvas.fill_rect(Rect::new(area.x + w, area.y, area.w - w, h), PAPER);
     }
     if h < area.h {
-        ui.canvas.fill_rect(Rect::new(area.x, area.y + h.max(0), area.w, area.h - h.max(0)), PAPER);
+        ui.canvas.fill_rect(Rect::new(area.x, area.y + h, area.w, area.h - h), PAPER);
     }
     frame.presented();
 }

@@ -631,8 +631,8 @@ the service watches it and shows its window whenever it is locked.
 | `raster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
 | `font` | fonts on `ttf-parser` (TrueType and CFF outlines, character maps, names): metrics, kerning, rasterised glyphs, a glyph bitmap cache, text layout |
 | `image` | images on proven libraries: JPEG, PNG and BMP decoding by zune's decoders and QOI by the `qoi` crate, into Veda's pixel layout with limits, EXIF orientation and errors to show the user; scaling by `fast_image_resize`; encoding, for Paint and the build machine's tools: PNG and BMP by Veda's writers (PNG's deflate by `miniz_oxide`), JPEG by `jpeg-encoder`, QOI by `qoi` |
-| `gfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames |
-| `ui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme |
+| `gfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps and pictures with rounded corners, shadows, text layout and rendering; downscaling and blurring; the damage between two frames, and where drawing touches an area |
+| `ui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons and the tray's status glyphs, the dark theme; pictures a window keeps from frame to frame, copied and presented where they changed |
 | `text` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
 
 In `ui`, the application's `update` lays out and draws the widgets each

@@ -340,8 +340,17 @@ libraries ([Rust on Veda](RUST.md)).
 * **Drawing and input.** `ui.canvas` is a `gfx::Canvas` for custom
   drawing, `ui.ctx.text` draws text, and `ui.input` holds the frame's
   pointer, buttons, keys (`proto::input::keys`), typed text and scroll.
-* **Frames** are drawn when events arrive; `ui.repaint_at(deadline_ns)` or
-  `ui.repaint()` asks for more.
+* **Frames** are drawn when events arrive, and once more after a frame
+  that handled input (which may have changed what that frame drew before
+  it was handled); `ui.repaint_at(deadline_ns)` or `ui.repaint()` asks for
+  more. A frame is drawn whole, and what it
+  changed of the one on the screen is found by comparing them; a large
+  picture that changes in parts (a web page) is shown with
+  `ui.retained(id, x, y, &picture, changed)` instead, by a window that
+  paints every pixel itself (`App::paints_every_pixel`): each of the
+  window's buffers gets again only what changed since it last showed the
+  picture and what was drawn over it there (the canvas notes that,
+  `Canvas::track`), and that alone is compared and presented of it.
 * **The window.** `ui.set_title`, `ui.window_state()`,
   `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
   (to the front), `ui.close_window()`.

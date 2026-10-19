@@ -43,6 +43,19 @@ struct Surface {
 /// ([`Window::triple_buffer`]).
 const BUFFERS: u8 = 2;
 
+/// Which of a window's buffers a frame is drawn into, and which is on the
+/// screen: what [`crate::retained`] keeps track of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Buffers {
+    /// The surface they are in: each new one (a new size, a third buffer)
+    /// has the next, and its buffers hold nothing of the last's.
+    pub surface: u64,
+    /// The one the frame is drawn into.
+    pub back: u8,
+    /// The one on the screen, if any is.
+    pub shown: Option<u8>,
+}
+
 /// When the last acknowledged frame was presented and when it reaches the
 /// screen, as the compositor reported with its `FrameDone`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -68,6 +81,8 @@ pub struct Window {
     pub id: u32,
     events: Channel,
     surface: Option<Surface>,
+    /// How many surfaces the window has had (see [`Buffers::surface`]).
+    surfaces: u64,
     /// How many buffers the surface has.
     buffers: u8,
     /// Buffer currently on screen (draw into the next one).
@@ -94,6 +109,7 @@ impl Window {
             id,
             events,
             surface: None,
+            surfaces: 0,
             buffers: BUFFERS,
             shown: None,
             in_flight: false,
@@ -192,6 +208,7 @@ impl Window {
             .map_err(WindowError::Ipc)?
             .map_err(WindowError::Display)?;
         self.surface = Some(Surface { map, width: w, height: h, stride });
+        self.surfaces += 1;
         self.shown = None;
         Ok(())
     }
@@ -206,22 +223,32 @@ impl Window {
     /// Returns a canvas for the next frame (the buffer that is not on
     /// screen), resizing the surface if the window size changed.
     pub fn begin_frame(&mut self) -> Result<Canvas<'_>, WindowError> {
-        let (pixels, width, height, stride) = self.back_buffer()?;
+        let (pixels, width, height, stride, _) = self.back_buffer()?;
         Ok(Canvas::new(pixels, width, height, stride))
     }
 
     /// Like [`Window::begin_frame`], drawing with `cache` (kept by the
     /// caller from frame to frame).
     pub fn begin_frame_with<'a>(&'a mut self, cache: &'a mut DrawCache) -> Result<Canvas<'a>, WindowError> {
-        let (pixels, width, height, stride) = self.back_buffer()?;
-        Ok(Canvas::with_cache(pixels, width, height, stride, cache))
+        self.begin_frame_in(cache).map(|(canvas, _)| canvas)
+    }
+
+    /// Like [`Window::begin_frame_with`], saying which buffer the frame is
+    /// drawn into and which is on the screen.
+    pub(crate) fn begin_frame_in<'a>(
+        &'a mut self,
+        cache: &'a mut DrawCache,
+    ) -> Result<(Canvas<'a>, Buffers), WindowError> {
+        let (pixels, width, height, stride, buffers) = self.back_buffer()?;
+        Ok((Canvas::with_cache(pixels, width, height, stride, cache), buffers))
     }
 
     /// The buffer the next frame is drawn into, with its width, height and
-    /// stride.
-    fn back_buffer(&mut self) -> Result<(&mut [u32], i32, i32, i32), WindowError> {
+    /// stride, and which it is.
+    fn back_buffer(&mut self) -> Result<(&mut [u32], i32, i32, i32, Buffers), WindowError> {
         self.ensure_surface()?;
         let index = self.back_index();
+        let buffers = Buffers { surface: self.surfaces, back: index, shown: self.shown };
         let s = self.surface.as_ref().ok_or(WindowError::NoMemory)?;
         let per = (s.stride * s.height) as usize;
         // SAFETY: the mapping holds `self.buffers` buffers of `per` pixels
@@ -229,7 +256,7 @@ impl Window {
         // reads the one on screen.
         let pixels =
             unsafe { core::slice::from_raw_parts_mut((s.map.as_ptr() as *mut u32).add(per * index as usize), per) };
-        Ok((pixels, s.width, s.height, s.stride))
+        Ok((pixels, s.width, s.height, s.stride, buffers))
     }
 
     /// What the frame drawn since `begin_frame` changed of the one on
@@ -238,6 +265,25 @@ impl Window {
     /// reads both frames, which costs far less than the compositor redrawing,
     /// recomposing and copying a whole window.
     pub fn changes(&self) -> Option<Damage> {
+        self.changes_outside(Rect::default())
+    }
+
+    /// Like [`Window::changes`], but `except` is left out: a picture the
+    /// window keeps ([`crate::retained`]), which is compared only where it
+    /// may have changed ([`Window::changes_within`]).
+    pub fn changes_outside(&self, except: Rect) -> Option<Damage> {
+        self.compare(|old, new, s| Damage::of_changes_outside(old, new, s.width, s.height, s.stride as usize, except))
+    }
+
+    /// Like [`Window::changes`], of what lies in `within` alone (where a
+    /// picture the window keeps may have changed).
+    pub fn changes_within(&self, within: Rect) -> Option<Damage> {
+        self.compare(|old, new, s| Damage::of_changes_within(old, new, s.width, s.height, s.stride as usize, within))
+    }
+
+    /// `compare` of the frame on screen and the one drawn since
+    /// `begin_frame`; `None` when there is none on screen.
+    fn compare(&self, compare: impl FnOnce(&[u32], &[u32], &Surface) -> Damage) -> Option<Damage> {
         let shown = self.shown?;
         let s = self.surface.as_ref()?;
         let per = (s.stride * s.height) as usize;
@@ -246,7 +292,7 @@ impl Window {
         // the one the frame was drawn into, which nothing writes now.
         let buffer =
             |i: u8| unsafe { core::slice::from_raw_parts((s.map.as_ptr() as *const u32).add(per * i as usize), per) };
-        Some(Damage::of_changes(buffer(shown), buffer(self.back_index()), s.width, s.height, s.stride as usize))
+        Some(compare(buffer(shown), buffer(self.back_index()), s))
     }
 
     /// Shows the frame drawn since `begin_frame`. `damage` lists changed

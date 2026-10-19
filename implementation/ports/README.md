@@ -254,8 +254,10 @@ What the patches change:
   (`MIMETypeRegistryXdg.cpp`); a static build, with xdgmime's
   names kept apart from GIO's copy; WPE's hardware acceleration policy, as
   GTK's (pages painted on the CPU, or composited, as the browser chooses);
-  no injected bundle; and damage that covers an antialiased layer's edges
-  (the fringe a rotating element's corners left behind). See
+  no injected bundle; damage that covers an antialiased layer's edges
+  (the fringe a rotating element's corners left behind); and a frame read
+  back from the GPU only where it changed since its buffer was last drawn,
+  which is all the compositor draws of it (`AcceleratedSurface.cpp`). See
   [WebKit on Veda](../../documentation/BROWSER.md#webkit-on-veda).
 * **icu**: Veda as a Linux-like platform in its build, and the system's
   time zone named by the tz database's zone of its offset

@@ -13,7 +13,9 @@
 //! The browser's scripts have their pages here too, its media's among
 //! them: a video (videogen's countdown, AV1 and FLAC in WebM), the same
 //! through Media Source Extensions, a sound file, and Web Audio's;
-//! their scripts say how they played. A page reads a file the user
+//! their scripts say how they played. Pages that move (a box spinning, a
+//! page scrolling itself, a box crossing the page on a click) measure and
+//! check its frames. A page reads a file the user
 //! chooses, as before an upload, another counts its visits in IndexedDB,
 //! a file comes to be downloaded, and a PDF to be shown. Files are sent
 //! whole or in the byte ranges asked for, as media players ask.
@@ -69,6 +71,71 @@ const SCRIPTS: &str = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"
 <p lang=\"ko\">한국어: 다람쥐 헌 쳇바퀴에 타고파</p>\n<p lang=\"am\">አማርኛ: ሰላም ለዓለም</p>\n\
 <p>Emoji: 😀 🎉 🌍 ❤️ 👍🏽 🇯🇵</p>\n<p style=\"font-family: serif\">Serif: The quick brown fox, Ελληνικά, Русский</p>\n\
 <p style=\"font-family: monospace\">Monospace: fn main() { println!(\"0O1lI\"); }</p>\n</body></html>\n";
+
+/// What the browser's frames are measured with: a box spinning, a CSS
+/// animation that the compositor runs (`/spin`)...
+const SPIN: &str = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Spinning</title>\n\
+<style>body { font-family: sans-serif; margin: 48px; } #box { width: 160px; height: 160px; margin: 80px; \
+background: #0a7; animation: spin 2s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }</style>\n\
+</head><body><h1>A box spinning</h1><div id=\"box\"></div></body></html>\n";
+
+/// ... and a long page that scrolls itself, a little each frame, from its
+/// foot back to its head (`/scroll`).
+const SCROLL: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Scrolling</title>
+<style>body { font-family: sans-serif; margin: 24px 40px; font-size: 18px; } p { margin: 8px 0; }</style>
+</head><body><h1>A long page scrolling itself</h1><div id="lines"></div>
+<script>
+const lines = document.getElementById('lines');
+for (let i = 1; i <= 400; i++) {
+    const p = document.createElement('p');
+    p.textContent = `Line ${i}: the quick brown fox jumps over the lazy dog.`;
+    lines.appendChild(p);
+}
+function step() {
+    if (window.scrollY + window.innerHeight >= document.body.scrollHeight)
+        window.scrollTo(0, 0);
+    else
+        window.scrollBy(0, 4);
+    requestAnimationFrame(step);
+}
+requestAnimationFrame(step);
+</script>
+</body></html>
+"#;
+
+/// What the browser's frames are checked with (`/motion`): a click starts
+/// a box moving across the page and a line counting its steps, and both
+/// stop where they always do, three seconds later.
+const MOTION: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Motion</title>
+<style>body { font-family: sans-serif; margin: 32px 40px; }
+#box { position: absolute; left: 40px; top: 200px; width: 120px; height: 120px; background: #0a7; }
+#box.moving { animation: across 3s linear forwards; }
+@keyframes across { to { transform: translate(560px, 180px); } }</style>
+</head><body><h1>Motion</h1>
+<p id="steps">Click to start.</p>
+<p><a href="/second">A link to point at</a></p>
+<div id="box"></div>
+<script>
+const steps = document.getElementById('steps'), box = document.getElementById('box');
+let started = false;
+document.addEventListener('click', () => {
+    if (started)
+        return;
+    started = true;
+    box.classList.add('moving');
+    let n = 0;
+    const timer = setInterval(() => {
+        n++;
+        steps.textContent = n < 60 ? `Step ${n} of 60` : 'Stopped after 60 steps';
+        if (n >= 60)
+            clearInterval(timer);
+    }, 50);
+});
+</script>
+</body></html>
+"#;
 
 /// The browser's video page (`/video`): the countdown (`COUNTDOWN`), which
 /// the first click or key plays, with its sound (WebKit lets pages play
@@ -508,6 +575,9 @@ fn answer(mut stream: TcpStream) {
         b"/zone" => Some((html, ZONE.as_bytes().into())),
         b"/cookie" => Some((html, COOKIE.as_bytes().into())),
         b"/scripts" => Some((html, SCRIPTS.as_bytes().into())),
+        b"/spin" => Some((html, SPIN.as_bytes().into())),
+        b"/scroll" => Some((html, SCROLL.as_bytes().into())),
+        b"/motion" => Some((html, MOTION.as_bytes().into())),
         b"/video" => Some((html, VIDEO.as_bytes().into())),
         b"/audio" => Some((html, AUDIO.as_bytes().into())),
         b"/mse" => Some((html, MSE.as_bytes().into())),
@@ -593,6 +663,9 @@ mod tests {
             ("/zone", "Zone "),
             ("/cookie", "seen=yes"),
             ("/scripts", "日本語"),
+            ("/spin", "animation: spin"),
+            ("/scroll", "window.scrollBy"),
+            ("/motion", "Stopped after 60 steps"),
             ("/video", "src=\"/media/countdown.webm\""),
             ("/audio", "src=\"/media/tone.wav\""),
             ("/mse", "MediaSource.isTypeSupported"),

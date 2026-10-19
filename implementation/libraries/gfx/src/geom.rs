@@ -204,29 +204,92 @@ impl Damage {
     /// Rows are compared two pixels at a time, from either end, so that a
     /// row costs as far as its first and last change.
     pub fn of_changes(old: &[u32], new: &[u32], width: i32, height: i32, stride: usize) -> Damage {
+        Damage::of_changes_outside(old, new, width, height, stride, Rect::default())
+    }
+
+    /// Like [`Damage::of_changes`], but `except` is left out: what lies there
+    /// is not compared (what changed of it is known otherwise, as of a
+    /// picture a window keeps). A band of rows that changed on both sides of
+    /// it spans it.
+    pub fn of_changes_outside(
+        old: &[u32],
+        new: &[u32],
+        width: i32,
+        height: i32,
+        stride: usize,
+        except: Rect,
+    ) -> Damage {
         let mut damage = Damage::new();
-        let (w, h) = (width.max(0) as usize, height.max(0) as usize);
-        let needed = if h == 0 { 0 } else { stride.saturating_mul(h - 1).saturating_add(w) };
-        if stride < w || old.len() < needed || new.len() < needed {
+        let Some((w, h)) = whole_rows(old, new, width, height, stride) else {
             damage.add(Rect::new(0, 0, width, height));
             return damage;
+        };
+        // The columns left out of the rows that cross `except`.
+        let except = except.intersect(&Rect::new(0, 0, width, height));
+        let (left, right) = (except.x.max(0) as usize, except.right().max(0) as usize);
+        damage.add_bands(0..h, |y| {
+            let (old, new) = (&old[y * stride..][..w], &new[y * stride..][..w]);
+            if except.is_empty() || (y as i32) < except.y || (y as i32) >= except.bottom() {
+                return changed_columns(old, new);
+            }
+            let before = changed_columns(&old[..left], &new[..left]);
+            let after = changed_columns(&old[right..], &new[right..]).map(|(a, b)| (a + right, b + right));
+            match (before, after) {
+                (Some((a, _)), Some((_, b))) => Some((a, b)),
+                (before, after) => before.or(after),
+            }
+        });
+        damage
+    }
+
+    /// Like [`Damage::of_changes`], but of what lies in `within` alone: only
+    /// its pixels are compared, as where a picture a window keeps may have
+    /// changed (what is outside it has not).
+    pub fn of_changes_within(old: &[u32], new: &[u32], width: i32, height: i32, stride: usize, within: Rect) -> Damage {
+        let mut damage = Damage::new();
+        let within = within.intersect(&Rect::new(0, 0, width, height));
+        if within.is_empty() {
+            return damage;
         }
+        if whole_rows(old, new, width, height, stride).is_none() {
+            damage.add(within);
+            return damage;
+        }
+        let (x0, x1) = (within.x as usize, within.right() as usize);
+        damage.add_bands(within.y as usize..within.bottom() as usize, |y| {
+            let row = y * stride;
+            changed_columns(&old[row + x0..row + x1], &new[row + x0..row + x1]).map(|(a, b)| (a + x0, b + x0))
+        });
+        damage
+    }
+
+    /// Adds each band of `rows` whose rows changed, by `changes` (the
+    /// columns from a row's first change to its last), as one rectangle as
+    /// wide as its changes.
+    fn add_bands(&mut self, rows: core::ops::Range<usize>, mut changes: impl FnMut(usize) -> Option<(usize, usize)>) {
         // The band of changed rows being gathered: its first row and columns.
         let mut band: Option<(usize, usize, usize)> = None;
-        for y in 0..=h {
-            let change = (y < h).then(|| changed_columns(&old[y * stride..][..w], &new[y * stride..][..w])).flatten();
+        for y in rows.start..=rows.end {
+            let change = (y < rows.end).then(|| changes(y)).flatten();
             band = match (band, change) {
                 (Some((top, l, r)), Some((a, b))) => Some((top, l.min(a), r.max(b))),
                 (None, Some((a, b))) => Some((y, a, b)),
                 (Some((top, l, r)), None) => {
-                    damage.add(Rect::new(l as i32, top as i32, (r - l) as i32, (y - top) as i32));
+                    self.add(Rect::new(l as i32, top as i32, (r - l) as i32, (y - top) as i32));
                     None
                 }
                 (None, None) => None,
             };
         }
-        damage
     }
+}
+
+/// The width and height of two pictures of `width` x `height` pixels with
+/// rows `stride` apart, if both buffers hold them whole.
+fn whole_rows(old: &[u32], new: &[u32], width: i32, height: i32, stride: usize) -> Option<(usize, usize)> {
+    let (w, h) = (width.max(0) as usize, height.max(0) as usize);
+    let needed = if h == 0 { 0 } else { stride.saturating_mul(h - 1).saturating_add(w) };
+    (stride >= w && old.len() >= needed && new.len() >= needed).then_some((w, h))
 }
 
 /// The columns from the first pixel that differs between two rows to the

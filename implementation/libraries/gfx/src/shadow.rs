@@ -87,6 +87,7 @@ impl ShadowTemplate {
         if s <= 0 || px == 0 || visible.is_empty() {
             return;
         }
+        c.touch(visible);
         let (x0, y0) = c.to_device(outer.x, outer.y);
         let (x1, y1) = (x0 + outer.w, y0 + outer.h);
         // The columns of the left corner or edge, of what is between, and of

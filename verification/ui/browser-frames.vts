@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser's frames, which it copies and presents only where they
+# changed (1280x800 screen): on the host's page of a box crossing it
+# (`/motion`), the find bar, the page's menu and the link under the pointer
+# come and go over the page while it moves; once it has stopped, the window
+# shows what WebKit draws of the page afresh (zoomed in and back), pixel for
+# pixel. First painted on the CPU (the browser started as the system
+# starts), then composited on the GPU (started again once the GPU's service
+# is there), where WebKit reads back only what changed of each frame.
+boot-cmdline "run=browser:http://{web}/motion"
+web-server
+gpu on
+memory 2048
+requires web
+agent-asleep
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "browser: pages are painted on the CPU" 60
+wait 8
+# A click starts it; then the link under the pointer, the find bar and the
+# page's menu (over the box as it passes) over it, each gone again.
+click 0.5 0.7
+move 0.154 0.345
+wait 0.5
+key ctrl-f
+type "Step"
+wait 0.5
+key esc
+click 0.37 0.53 right
+wait 1
+key esc
+move 0.5 0.06
+wait 6
+shot target/veda/browser-frames-1-cpu.png
+key ctrl-equal
+wait 3
+key ctrl-0
+wait 5
+shot target/veda/browser-frames-2-cpu-afresh.png
+expect-same target/veda/browser-frames-1-cpu.png target/veda/browser-frames-2-cpu-afresh.png 0.1 0.2 0.9 0.9
+# Composited on the GPU.
+key alt-f4
+wait 4
+wait-serial "service 'gpu' registered" 60
+key meta_l
+wait 2
+type "browser"
+key ret
+wait-serial "browser: pages are composited on the GPU" 30
+wait 4
+key ctrl-l
+type "{web}/motion"
+key ret
+wait 8
+click 0.5 0.7
+move 0.154 0.345
+wait 0.5
+key ctrl-f
+type "Step"
+wait 0.5
+key esc
+click 0.37 0.53 right
+wait 1
+key esc
+move 0.5 0.06
+wait 6
+shot target/veda/browser-frames-3-gpu.png
+key ctrl-equal
+wait 3
+key ctrl-0
+wait 5
+shot target/veda/browser-frames-4-gpu-afresh.png
+expect-same target/veda/browser-frames-3-gpu.png target/veda/browser-frames-4-gpu-afresh.png 0.1 0.2 0.9 0.9
+reject-serial "page stopped working"
+reject-serial "browser crashed"

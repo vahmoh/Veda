@@ -147,10 +147,17 @@ whose page went away is refused.
 
 **Frames.** WebKit hands each frame of a page to the platform's view
 (`platform.c`) as shared memory with the rectangles that changed. The
-bridge copies those into the tab's frame and tells the window, which draws
-the page area from it; WebKit hears that the frame was shown when the
-window has drawn it (or after 100 ms, when the window cannot be seen), and
-only then draws the next, so a page never runs ahead of the screen.
+bridge copies those into the tab's frame and tells the window, which keeps
+the page from one of its frames to the next (`Ui::retained`): each of its
+two buffers gets again only what WebKit drew since that buffer last showed
+the page, and where something was drawn over the page there (the find
+bar, a menu, the link under the pointer, which the window's canvas notes
+as they are drawn), and only there is the page compared with the frame on
+the screen, so that the compositor gets what did change. A spinning box
+costs its box, not the page ([Drawing pages](#drawing-pages)). WebKit
+hears that the frame was shown when the window has drawn it (or after
+100 ms, when the window cannot be seen), and only then draws the next, so
+a page never runs ahead of the screen.
 
 **Input.** The window gives the page the pointer, the wheel and the keys
 it does not keep for itself (its shortcuts), each key as XKB's key code
@@ -229,7 +236,10 @@ machine:
   ES, so scrolling, CSS animations and transforms run on the compositor's
   thread without painting again, and keep going while a page's script is
   busy. The frame is read back into shared memory (as BGRA) for the
-  window. This is the mode when the setting is on and a GPU can render.
+  window: of each of WebKit's buffers, only what changed since the buffer
+  was last drawn, which is all the compositor draws of it, the rest of the
+  buffer holding the frame already. This is the mode when the setting is
+  on and a GPU can render.
 
 The browser chooses as it starts: it composites if `egl::gpu_renderer()`
 finds a GPU that can render (the `gpu` service is registered and has what
@@ -245,18 +255,44 @@ for its OpenGL ES context as its first page is made, and where the GPU
 gives none (it is at [its limits](DRIVERVM.md#vedas-drivers-for-linux),
 it does not answer, or its renderer is not running, as while its driver
 VM starts again), `egl` makes none in software: `eglCreateContext` fails,
-and the process paints its pages on the CPU, as with the setting off. The log says why, then what the
-process does (`egl: no context (EGL_BAD_ALLOC): WHY; OpenGL ES renders on
-the GPU or not at all`, `Web process N paints its pages on the CPU: the
-GPU gave it no OpenGL ES context`); the processes started after it ask
-again. Measured in QEMU (4 processors, the browser's window 1088x596, a
-GPU through virgl on the host's Intel Xe):
+and the process paints its pages on the CPU, as with the setting off. The
+log says why, then what the process does (`egl: no context
+(EGL_BAD_ALLOC): WHY; OpenGL ES renders on the GPU or not at all`, `Web
+process N paints its pages on the CPU: the GPU gave it no OpenGL ES
+context`); the processes started after it ask again. Measured in QEMU (4
+processors, the browser's window 1088x596, a GPU through virgl on the
+host's Intel Xe), before frames were read back and drawn only where they
+changed (below):
 
 | Page | Painted on the CPU | Composited on the GPU | Composited in software |
 |------|-------------------|-----------------------|------------------------|
 | A box spinning (CSS animation) | 62 frames a second; web process 21% of a processor | 67; 8% | 75; 125% |
 | A long page scrolling itself | 50; 14% | 50; 10% | 50; 200% |
 | Wikipedia, scrolled with the keyboard | 60, with a 2-second pause; 17 to 28% | 60; 12 to 21% | 60; 266% |
+
+**What a frame costs.** A page frame costs what changed of it, not the
+page: WebKit reads back what changed of its buffer, the bridge copies what
+changed into the tab's frame, and the window copies and compares only what
+changed since each of its buffers last showed the page
+([Frames](#how-it-fits-together)). On the host's test pages (`/spin` and
+`/scroll`), in QEMU (4 processors, a 1920x1080 screen, the page 1600x834,
+5.2 MB a frame, a GPU through virgl on the host's Iris Xe), for each frame
+of the page:
+
+| Page | Drawn | Frames a second | Read back from the GPU | The window copies; compares, at most | Browser; web process, of a processor |
+|------|-------|-----------------|------------------------|--------------------------------------|--------------------------------------|
+| A box spinning (CSS animation) | Composited on the GPU | 71 | 174 KB, in 2.4 ms | 174 KB; 1.4 MB | 3.9%; 3.3% |
+| A box spinning (CSS animation) | Painted on the CPU | 62 | None | 171 KB; 1.4 MB | 7.2%; 6.9% |
+| A long page scrolling itself | Composited on the GPU | 53 | 5.2 MB, in 5.4 ms | 5.2 MB; 11.5 MB | 11.3%; 12.0% |
+| A long page scrolling itself | Painted on the CPU | 62 | None | 5.2 MB; 11.5 MB | 12.7%; 16.8% |
+
+Before, WebKit read back the whole frame whatever changed (5.2 ms a frame,
+which held the spinning box to 58 frames a second, its web process at
+7.6% of a processor), and the window drew two frames for each of the
+page's (`ui` served the agent, and drew again, whenever its loop woke),
+copying the whole page into each and comparing the whole window: 10.4 MB
+copied and 23 MB compared for each frame of the page, the browser at 18
+to 23% of a processor on both pages.
 
 **EGL and OpenGL ES for C.** WebKit reaches OpenGL ES through libepoxy,
 which on Veda finds every function by name through the program's
@@ -544,6 +580,8 @@ ports of WebKit give the network process a sandbox extension:
 |------|----------------|
 | `browser-core`'s unit tests (`cargo test -p browser-core`) | Addresses and search, history, bookmarks, the session, settings, downloads' names, tabs, keys |
 | `egl`'s and `gl`'s unit tests | The display and configurations WebKit looks for, drawing surfaceless and reading BGRA back, contexts shared across threads (and EGL's access rules), a context whose group would have no renderer failing with `EGL_BAD_ALLOC` rather than rendering in software (one that shares a group still made), fences, pbuffers, every function by name, buffers; in `gl`, sharing, deletion across contexts, surfaceless contexts, BGRA uploads and reads, and WebKit's compositing at a page's size (Skia's tiles uploaded whole and in parts, an image turned round by TextureMapper's shader, clears and solid fills, the frame read back whole), which `GL_TEST_BACKEND` runs on a GPU too |
+| `ui`'s and `gfx`'s unit tests | What a window keeps of a picture from frame to frame (`Ui::retained`): each buffer given what changed since it last showed the picture and what was drawn over it there, frames not presented, another picture, place or surface copied whole; what drawing touches of an area, by each kind of drawing; frames compared outside an area or within it alone; and a wait woken only by the signals it waited for |
+| `verification/ui/browser-frames.vts` | The browser's frames, drawn only where they changed, on the host's page of a box crossing it (`/motion`): the link under the pointer, the find bar and the page's menu (over the box as it passes) come and go over the page while it moves, and once it has stopped the window shows what WebKit draws of it afresh (zoomed in and back), pixel for pixel; painted on the CPU, then composited on the GPU, where WebKit reads back only what changed |
 | `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/src/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
 | `verification/ui/browser-memory.vts` | The browser on a machine of 1 GiB with a GPU: it paints pages on the CPU, as compositing them would take more memory than the machine can spare, and shows a page with no process running out of memory |
 | `verification/ui/browser-gpu-gone.vts` | The GPU gone while the browser composites on it (the driver VM's renderer, on softpipe, ended for good: `veda.stop`): a tab opened then has its web process given no context, `egl` refusing one in software and saying why, and its page painted on the CPU, the same, pixel for pixel, as it was composited |

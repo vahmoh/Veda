@@ -8,13 +8,18 @@
 //!
 //! A frame is drawn whole, and only what it changed of the frame on screen
 //! is presented: a caret's blink, a fading hover or a clock's tick makes the
-//! compositor redraw that, not the window.
+//! compositor redraw that, not the window. A picture the window keeps from
+//! frame to frame ([`crate::retained`]) is copied and presented only where
+//! it changed or was drawn over. Frames are drawn when something asks for
+//! one (input, a handle the app waits on, a repaint it asked for), and once
+//! more after a frame that handled input, which may have changed what was
+//! drawn before it was handled.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use abi::{RawHandle, WaitItem, signals};
-use gfx::DrawCache;
+use gfx::{Damage, DrawCache, Rect};
 use proto::display::{Cursor, WindowEvent, WindowSpec};
 
 pub use crate::fonts::load_fonts;
@@ -177,9 +182,13 @@ impl Host {
         let frame_timing = self.window.frame_timing();
         // What widgets see while an open menu or a modal dialog has the keyboard.
         let quiet = self.input.without_keys();
-        let Ok(mut canvas) = self.window.begin_frame_with(&mut self.cache) else { return };
+        let Ok((mut canvas, buffers)) = self.window.begin_frame_in(&mut self.cache) else { return };
         if self.clear {
             canvas.clear(bg);
+        }
+        // What is drawn over the picture the window keeps is noted.
+        if let Some(area) = self.state.retained.begin(buffers, self.clear) {
+            canvas.track(area);
         }
         let mut ui = Ui::for_frame(canvas, &mut self.ctx, &mut self.state, &self.input, &quiet);
         ui.window_state = window_state;
@@ -188,23 +197,42 @@ impl Host {
         ui.finish();
         let (repaint, close, cursor, skip) = (ui.repaint_at, ui.close_requested, ui.cursor, ui.skip_present);
         let unclaimed = ui.keys_unclaimed;
+        // A frame that handled input is followed by another: what the input
+        // changed after some of the frame was drawn (the highlight of a tab
+        // drawn before the click that chose another) then shows in all of it.
+        let handled = !self.input.events.is_empty();
+        let touched = ui.canvas.take_touched();
         drop(ui);
+        let kept = self.state.retained.end(touched);
         if !skip {
-            self.present();
+            self.present(kept);
         }
         if cursor != self.cursor {
             self.cursor = cursor;
             self.window.set_cursor(cursor);
         }
         self.input.end_frame(unclaimed);
-        self.repaint_at = repaint;
+        self.repaint_at = if handled { Some(self.input.now) } else { repaint };
         self.close_requested |= close;
     }
 
     /// Presents the frame just drawn: what it changed of the frame on screen,
-    /// or nothing if it changed nothing.
-    fn present(&mut self) {
-        let _ = match self.window.changes() {
+    /// or nothing if it changed nothing. In `kept`, the picture the window
+    /// keeps, where it may have changed is known: only that is compared
+    /// there, so that the compositor gets no more than what did.
+    fn present(&mut self, kept: Option<(Rect, Damage)>) {
+        let changes = match kept {
+            Some((area, maybe)) => self.window.changes_outside(area).map(|mut damage| {
+                for r in maybe.rects() {
+                    for changed in self.window.changes_within(*r).unwrap_or_default().rects() {
+                        damage.add(*changed);
+                    }
+                }
+                damage
+            }),
+            None => self.window.changes(),
+        };
+        let _ = match changes {
             None => self.window.present(&[]),
             Some(damage) if damage.is_empty() => Ok(()),
             Some(damage) => self.window.present(damage.rects()),
@@ -297,18 +325,41 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
         }
         let _ = rt::object::wait_many(&mut items, host.deadline());
         for (i, it) in items.iter().enumerate().skip(1).take(extra.len()) {
-            if it.observed & it.signals != 0 {
+            if woke(it) {
                 app.handle_signaled(i - 1, it.observed);
                 host.invalidate();
             }
         }
         if let Some(reg) = &mut agent
-            && items.last().is_some_and(|it| it.observed != 0)
+            && items.last().is_some_and(woke)
         {
             // Registered, the agent asked something (the answer may change
             // what the window shows), or the agent service went away.
             reg.serve(&mut AppAgent(&mut app));
             host.invalidate();
         }
+    }
+}
+
+/// Whether a wait returned for `item`: what it observed is every signal its
+/// object had as the wait returned, not only those waited for (a channel is
+/// writable nearly always).
+fn woke(item: &WaitItem) -> bool {
+    item.observed & item.signals != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wait_wakes_for_the_signals_waited_for_alone() {
+        let item = |signals, observed| WaitItem { handle: 0, signals, observed, ..Default::default() };
+        let link = signals::READABLE | signals::PEER_CLOSED;
+        // A channel with nothing to read is writable: no reason to wake.
+        assert!(!woke(&item(link, signals::WRITABLE)));
+        assert!(woke(&item(link, signals::WRITABLE | signals::READABLE)));
+        assert!(woke(&item(link, signals::PEER_CLOSED)));
+        assert!(!woke(&item(signals::SIGNALED, 0)));
     }
 }

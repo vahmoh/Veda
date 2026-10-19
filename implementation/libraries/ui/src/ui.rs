@@ -19,7 +19,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use gfx::{Align, Canvas, Color, Rect};
+use gfx::{Align, Canvas, Color, Picture, Rect};
 use proto::display::{Cursor, WindowEvent, WindowState, modifiers};
 
 use crate::fonts::SharedText;
@@ -281,6 +281,9 @@ pub struct UiState {
     /// no frame asked for in [`ANIMATION_FRAMES`] go: no longer drawn,
     /// their widgets are at rest.
     pub(crate) animations: BTreeMap<Id, Animation>,
+    /// What the window's buffers hold of the picture it retains
+    /// ([`Ui::retained`]).
+    pub(crate) retained: crate::retained::Retained,
     /// Frames finished.
     frames: u64,
 }
@@ -491,6 +494,30 @@ impl<'a> Ui<'a> {
     /// nothing visible changed since the last presented frame.
     pub fn skip_present(&mut self) {
         self.skip_present = true;
+    }
+
+    /// Shows `picture` with its top-left at `(x, y)` of the window (whatever
+    /// the canvas's origin), as a picture the window keeps from frame to
+    /// frame ([`crate::retained`]): a large one that changes in parts, such
+    /// as a web page. `id` names it (another id is another picture), and
+    /// `changed` is what changed of it since the last frame showed it, in
+    /// its own coordinates.
+    ///
+    /// The frame's buffer gets it again only where it changed since that
+    /// buffer was drawn, and where something was drawn over it then; and it
+    /// is compared with the frame on the screen only where it may differ
+    /// from it. What is drawn over it is noted as it is drawn, so it is
+    /// shown before anything else is drawn where it lies. It is for windows that
+    /// paint every pixel themselves ([`crate::App::paints_every_pixel`]):
+    /// a frame that starts cleared has it copied whole.
+    pub fn retained(&mut self, id: u64, x: i32, y: i32, picture: &Picture<'_>, changed: &[Rect]) {
+        let rect =
+            Rect::new(x, y, picture.width(), picture.height()).intersect(&Rect::new(0, 0, self.width, self.height));
+        let changed: Vec<Rect> = changed.iter().map(|r| r.translate(x, y)).collect();
+        let copy = self.state.retained.show(id, rect, &changed);
+        for r in copy.rects() {
+            self.canvas.put_back(picture, r.translate(-x, -y), r.x, r.y);
+        }
     }
 
     /// The window's state (normal, maximised, minimised or full screen).

@@ -19,10 +19,18 @@ use std::os::unix::ffi::OsStrExt;
 use std::ptr;
 
 use abi::RawHandle;
+use gfx::Rect;
 
 /// A view: one page, as a tab shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ViewId(u32);
+
+impl ViewId {
+    /// Its number, which no other view of the engine's ever has.
+    pub fn number(self) -> u64 {
+        u64::from(self.0)
+    }
+}
 
 /// A request of a page's, which waits for the browser's answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -473,6 +481,14 @@ impl Frame<'_> {
         // SAFETY: the engine holds `stride * height` pixels at `pixels`
         // (stride is the width), which stay put while the frame is locked.
         unsafe { std::slice::from_raw_parts(self.raw.pixels, len) }
+    }
+
+    /// What WebKit drew again since the frame was last taken (empty if
+    /// nothing): all of it the first time, and after the page's size
+    /// changed.
+    pub fn changed(&self) -> Rect {
+        let [x, y, w, h] = self.raw.damage;
+        Rect::new(x, y, w, h)
     }
 
     /// It reaches the screen: WebKit may draw the next.
