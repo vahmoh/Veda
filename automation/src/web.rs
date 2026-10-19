@@ -206,6 +206,7 @@ pub fn command(args: &[String]) -> Result {
     tools()?;
     cross_toolchain()?;
     let started = std::time::Instant::now();
+    let _machine = util::heavy_build_lock("the web engine")?;
     let _lock = lock()?;
     // The engine's libraries use the C library's Veda interfaces
     // (<veda/thread.h>, <veda/memory.h>), as the POSIX layer has them now.

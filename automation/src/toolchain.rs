@@ -953,8 +953,10 @@ pub fn command(args: &[String]) -> Result {
             other => return Err(format!("unknown option '{other}' (toolchain takes --jobs N)")),
         }
     }
-    // One build at a time (a second would empty the first's build
-    // directories under it), and no image build meanwhile.
+    // One heavy build on the machine at a time; one build of this toolchain
+    // at a time (a second would empty the first's build directories under
+    // it), and no image build meanwhile.
+    let _machine = util::heavy_build_lock("the toolchain")?;
     let _lock = lock()?;
     build(jobs)
 }

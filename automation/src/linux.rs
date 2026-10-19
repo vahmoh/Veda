@@ -278,6 +278,7 @@ pub fn command(args: &[String]) -> Result {
     }
     tools()?;
     let started = std::time::Instant::now();
+    let _machine = util::heavy_build_lock("the driver VM's Linux")?;
     let _lock = lock()?;
     let downloads = root().join("downloads");
     for name in ["zlib", "elfutils", "linux", "binutils", "gcc", "musl", "mesa"] {

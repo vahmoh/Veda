@@ -244,6 +244,10 @@ from this machine.
   A build waits, saying so, for what they share: the toolchain
   (`target/toolchain`, which image builds add to), the driver VM's Linux
   and Mesa (`target/linux`), and a target directory's generated media.
+  The heavy builds (`toolchain`, `linux` and `web`), each sized for the
+  whole machine, also take turns across every checkout, worktrees
+  included, whatever directories they build in: one waits, saying so,
+  while another runs (`$XDG_RUNTIME_DIR/veda/heavy-builds.lock`).
 * **No paths of the build machine.** Programs name the checkout, Cargo's
   home and the target directory `/veda`, `/cargo` and `/veda/target`
   (`--remap-path-prefix` through Cargo's configuration, so a build by hand

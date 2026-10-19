@@ -303,6 +303,27 @@ impl Lock {
     }
 }
 
+/// Where `cargo automation` keeps what every checkout of this user's
+/// shares, outside them all: its locks over the machine itself
+/// (`$XDG_RUNTIME_DIR/veda`, else `~/.cache/veda`).
+fn machine_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| PathBuf::from(dir).join("veda"))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("veda")))
+        .unwrap_or_else(|| std::env::temp_dir().join("veda"))
+}
+
+/// Takes the machine for a heavy build of `what` (the toolchain, the driver
+/// VM's Linux and Mesa, the web engine), waiting while another has it, in
+/// this checkout or any other. Each runs a compiler job for each processor,
+/// some of them taking gigabytes (GCC's, Rust's and WebKit's), as if it had
+/// the machine to itself: two at once, in two worktrees, which their own
+/// directories' locks do not keep apart, can exhaust its memory. Taken
+/// before those locks, so that no command waits for it holding one.
+pub fn heavy_build_lock(what: &str) -> Result<Lock> {
+    Lock::exclusive(&machine_dir().join("heavy-builds.lock"), &format!("the machine, to build {what}"))
+}
+
 /// How an output was made: the command that wrote it and what it read
 /// (each input's path, size and modification time), as a digest kept
 /// beside it (`NAME.recipe`). The output is made again when it is missing
@@ -537,6 +558,14 @@ mod tests {
         write(&input, b"int xy;").unwrap();
         assert!(!Recipe::of(&output, &cc, &[&input]).fresh());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn heavy_builds_take_turns_across_checkouts() {
+        // Kept beside no checkout: worktrees inside this one, or anywhere
+        // else, take turns with it.
+        assert!(!machine_dir().starts_with(workspace_root()));
+        assert!(!machine_dir().starts_with(target_dir()));
     }
 
     #[test]
