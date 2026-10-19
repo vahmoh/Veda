@@ -71,6 +71,10 @@ fn extensions(ctx: &Context) -> alloc::vec::Vec<&'static str> {
         "GL_OES_vertex_array_object",
         "GL_EXT_texture_format_BGRA8888",
         "GL_EXT_read_format_bgra",
+        // Row lengths and skips for uploads (OpenGL ES 3.0's own), by which
+        // WebKit sends a part of a tile from its whole, rather than copying
+        // the part out first.
+        "GL_EXT_unpack_subimage",
     ];
     if caps.color_buffer_float {
         v.push("GL_EXT_color_buffer_float");
