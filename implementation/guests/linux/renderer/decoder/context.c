@@ -322,15 +322,25 @@ zero_by_mapping(struct pipe_context *pipe, struct pipe_resource *pres, unsigned 
    return true;
 }
 
-/* Clears the multisampled image `pres`, which maps nowhere: a render
- * target or a depth buffer, cleared as such (to zero; depth 0). */
+/* Clears the multisampled image `pres`, which maps nowhere, to zero (depth
+ * 0): a color image by the driver's clear of a texture where it has one,
+ * which takes the image as it is (iris's clear of a render target takes
+ * its surface for one of iris's own, which a template is not, and would
+ * clear in a format of the template's bytes); a depth buffer as such. */
 static bool
 zero_multisampled(struct pipe_context *pipe, struct pipe_resource *pres)
 {
+   unsigned layers = util_num_layers(pres, 0);
+   if (!util_format_is_depth_or_stencil(pres->format) && pipe->clear_texture) {
+      struct pipe_box box;
+      u_box_3d(0, 0, 0, pres->width0, pres->height0, layers, &box);
+      pipe->clear_texture(pipe, pres, 0, &box, zeros);
+      return true;
+   }
    struct pipe_surface s;
    u_surface_default_template(&s, pres);
    s.first_layer = 0;
-   s.last_layer = util_num_layers(pres, 0) - 1;
+   s.last_layer = layers - 1;
    s.level = 0;
    if (util_format_is_depth_or_stencil(pres->format)) {
       if (!pipe->clear_depth_stencil)
