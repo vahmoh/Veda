@@ -35,6 +35,11 @@ const IDLE_MAX_NS: u64 = 500_000_000;
 /// timer comes this soon, to give it more: its transmitter empties its
 /// FIFO in a millisecond or two (16 bytes at 115200 baud).
 const SERIAL_NS: u64 = 1_000_000;
+/// The soonest a CPU's timer is armed for: an event already due fires as
+/// soon as the CPU takes interrupts again. A longer floor would make every
+/// thread whose deadline is nearer late, a guest's processor halted until
+/// its timer a few microseconds away too.
+const TIMER_SOONEST_NS: u64 = 1_000;
 
 /// Per-CPU scheduler state (lives in `PerCpu`).
 pub struct CpuSched {
@@ -243,7 +248,7 @@ fn arm_timer(running_idle: bool) {
     if percpu::cpu_id_or_boot() == 0 && crate::log::serial_pending() {
         deadline = deadline.min(now + SERIAL_NS);
     }
-    let deadline = deadline.max(now + 50_000);
+    let deadline = deadline.max(now + TIMER_SOONEST_NS);
     arch::timer::arm(deadline, now);
 }
 

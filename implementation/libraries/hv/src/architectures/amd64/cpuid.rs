@@ -7,11 +7,19 @@
 //! can use under Veda's hypervisor: no virtualization of its own (VMX), no
 //! MONITOR/MWAIT, performance counters, machine checks, power and thermal
 //! controls, speculation controls, debug stores, the compacted XSAVE
-//! formats (XSAVEC, XSAVES) or protection keys. Every processor has an x2APIC with a TSC-deadline
-//! timer and an invariant TSC, and says it runs under a hypervisor, whose
-//! leaves ([`super::platform`]) describe the platform. The topology is
-//! flat: one package with one thread per core, as many cores as the guest
-//! has processors, local APIC ids from 0.
+//! formats (XSAVEC, XSAVES) or protection keys. Every processor has an
+//! x2APIC with a TSC-deadline timer that keeps running while the processor
+//! idles (ARAT: a halted processor's thread sleeps until its deadline), and
+//! an invariant TSC, and says it runs under a hypervisor, whose leaves
+//! ([`super::platform`]) describe the platform. The topology is flat: one
+//! package with one thread per core, as many cores as the guest has
+//! processors, local APIC ids from 0.
+//!
+//! That the timer always runs matters: the local APIC's is a guest's only
+//! timer (the platform has no HPET or PIT), and Linux keeps a timer that
+//! may stop while the processor idles to a periodic tick, when no other
+//! timer can wake the processor for it. Its timers would then end only on
+//! the tick (every 4 ms), and its idle processors would take it.
 //!
 //! Leaves past the last one this module knows read as zeros, as a
 //! processor answers leaves beyond its highest.
@@ -84,6 +92,9 @@ const LEAF1_EDX: u32 = (1 << 0)
     | (1 << 25)
     | (1 << 26)
     | (1 << 28);
+/// Leaf 6, EAX: the local APIC's timer runs in every idle state (ARAT).
+/// Nothing else of the thermal and power management leaf.
+const ARAT: u32 = 1 << 2;
 /// Leaf 7, EBX: FSGSBASE, BMI1, AVX2, SMEP, BMI2, ERMS, INVPCID, RDSEED,
 /// ADX, SMAP, CLFLUSHOPT, CLWB, SHA. Not TSC_ADJUST, SGX, TSX, the PQ
 /// monitoring and enforcement, MPX, AVX-512 or processor trace.
@@ -146,6 +157,7 @@ pub fn guest(leaf: u32, subleaf: u32, ctx: &Context, host: impl Fn(u32, u32) -> 
             let a = (a & 0x3FFF) | ((ctx.cpus.max(1) - 1).min(0x3F) << 26);
             [a, b, c, d]
         }
+        6 => [ARAT, 0, 0, 0],
         7 if subleaf == 0 && host(0, 0)[0] >= 7 => {
             let [_, b, c, d] = host(7, 0);
             [0, b & LEAF7_EBX, c & LEAF7_ECX, d & LEAF7_EDX]
@@ -238,8 +250,16 @@ mod tests {
     fn basic_leaves_stop_at_xsave() {
         assert_eq!(guest(0, 0, &ctx(), host)[0], 0xD);
         assert_eq!(guest(0x15, 0, &ctx(), host), [0; 4]);
-        assert_eq!(guest(6, 0, &ctx(), host), [0; 4]);
         assert_eq!(guest(0xA, 0, &ctx(), host), [0; 4]);
+    }
+
+    #[test]
+    fn the_timer_runs_while_idle() {
+        // The always-running APIC timer (whatever the host's leaf says),
+        // and none of its thermal and power controls.
+        let thermal = |leaf, sub| if leaf == 6 { [0x77, 2, 9, 0] } else { host(leaf, sub) };
+        assert_eq!(guest(6, 0, &ctx(), thermal), [ARAT, 0, 0, 0]);
+        assert_eq!(guest(6, 0, &ctx(), host), [ARAT, 0, 0, 0]);
     }
 
     #[test]

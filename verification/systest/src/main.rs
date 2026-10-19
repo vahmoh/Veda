@@ -300,6 +300,36 @@ fn test_ipc_primitives() -> TestResult {
     check(r == Err(abi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
+/// A sleep ends at its deadline, however near: never before it, and of a
+/// hundred sleeps of 20 us, at least ten within 30 us of it, as a
+/// processor's timer is armed for the deadline itself (were it armed at
+/// least 50 us ahead, only a sleep that another interrupt happened to end
+/// would end that soon). The sleeps are a high-priority thread's, which
+/// threads still starting elsewhere do not hold up.
+fn test_short_sleeps() -> TestResult {
+    const SLEEP: u64 = 20_000;
+    let sleeper = rt::thread::Builder::new()
+        .name("sleeper")
+        .priority(abi::priority::HIGH)
+        .spawn(|| {
+            (0..100)
+                .map(|_| {
+                    let start = rt::time::now_ns();
+                    rt::time::sleep(rt::time::Duration::from_nanos(SLEEP));
+                    rt::time::now_ns() - start
+                })
+                .collect::<Vec<u64>>()
+        })
+        .map_err(|e| e.to_string())?;
+    let took = sleeper.join().map_err(|e| e.to_string())?;
+    let shortest = took.iter().copied().min().unwrap_or(0);
+    let on_time = took.iter().filter(|&&t| t < SLEEP + 30_000).count();
+    check(
+        shortest >= SLEEP && on_time >= 10,
+        &alloc::format!("of 100 sleeps of 20 us, {on_time} took less than 50 us (the shortest {shortest} ns)"),
+    )
+}
+
 /// Write-combining memory (a display engine's pictures, which it reads
 /// past the processor's caches) is as consistent as other memory: what a
 /// mapping writes is what the kernel reads of it, and the other way; the
@@ -390,8 +420,9 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 33] = [
+    let tests: [Test; 34] = [
         ("ipc primitives", test_ipc_primitives),
+        ("short sleeps", test_short_sleeps),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
         ("handles on channels", policy::test_channel_handles),

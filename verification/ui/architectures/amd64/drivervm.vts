@@ -5,14 +5,17 @@
 # processor's VMX (which QEMU's KVM gives Veda, nested). Linux finds Veda's
 # platform, starts its second processor on it, runs its first program, and
 # powers the machine off when asked to; no I/O port, MSR or warning on the
-# way.
-boot-cmdline "drivervm.poweroff"
+# way. Its timers end on time, in high-resolution mode on the processors'
+# local APIC timers (implementation/guests/linux/timertest).
+boot-cmdline "drivervm.run=timertest drivervm.poweroff"
 fail-on "PANIC"
 fail-on "drivervm: processor"
+fail-on "timertest: FAIL"
 wait-serial "drivervm: starting Linux" 60
 wait-serial "linux: [    0.000000] Hypervisor detected: Veda" 30
 wait-serial "smp: Brought up 1 node, 2 CPUs" 30
 wait-serial "is up, processors 0-1" 30
+wait-serial "timertest: PASS" 60
 wait-serial "drivervm: Linux powered the machine off" 30
 reject-serial "Linux touched I/O port"
 reject-serial "unchecked MSR access"

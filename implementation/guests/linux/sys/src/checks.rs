@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The checks of the guest's test programs (`bridgetest`, `pcitest`,
-//! `gpiotest`, `efivartest`): each said as it is made, and at the end
-//! whether all went well (`<program>: PASS`, which the test's script waits
-//! for, or `<program>: FAIL (n checks)`).
+//! `gpiotest`, `efivartest`, `timertest`): each said as it is made, and at
+//! the end whether all went well (`<program>: PASS`, which the test's
+//! script waits for, or `<program>: FAIL (n checks)`).
 
 /// A test program's checks.
 pub struct Checks {

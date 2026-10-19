@@ -44,6 +44,7 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-pcitest", "pcitest", "bin/pcitest"),
     ("guest-gpiotest", "gpiotest", "bin/gpiotest"),
     ("guest-efivartest", "efivartest", "bin/efivartest"),
+    ("guest-timertest", "timertest", "bin/timertest"),
     ("guest-kmspause", "kmspause", "bin/kmspause"),
     ("guest-logkeeper", "logkeeper", "bin/logkeeper"),
     ("guest-alsa", "alsa", "bin/alsa"),

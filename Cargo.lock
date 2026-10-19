@@ -1245,6 +1245,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-timertest"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "rustix",
+]
+
+[[package]]
 name = "guest-wifi"
 version = "0.1.0"
 dependencies = [

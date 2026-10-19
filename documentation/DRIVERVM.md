@@ -84,7 +84,7 @@ memory and their devices.
 | `drivervm-core` | `implementation/services/drivervm/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
 | Guest runtime | `implementation/libraries/rt/src/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; shared code (`sys`, `netlink`) |
+| Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`; shared code (`sys`, `netlink`) |
 | Build | `automation/src/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo automation linux`](#building) |
 
 ## The platform
@@ -121,12 +121,26 @@ The memory map leaves out the first 64 KiB (the processors' start-up GDT
 and page tables) and the legacy hole, where the ACPI tables are, from
 0xE0000 as on a PC.
 
+A processor's only timer is its local APIC's (in x2APIC mode, with the
+TSC-deadline timer; there is no PIT or HPET), which keeps running while
+the processor idles, as `cpuid`'s leaf 6 says (ARAT). Linux needs that to
+run its timers in high-resolution, tickless mode: without it, it would
+keep a 250 Hz tick on every processor and end every timer on one, a sleep
+of 1 ms lasting 4 ms, and idle processors would wake 250 times a second.
+Under QEMU a sleep of 1 ms ends 0.1 to 0.3 ms late (nested
+virtualization's cost), and an idle processor takes a few timer
+interrupts a second; `timertest` checks that timers end on time
+(`architectures/amd64/drivervm.vts`).
+
 ## The hypervisor
 
 On AMD64 (`implementation/kernel/src/architectures/amd64/hv`), `vcpu_run`
 enters the guest on the calling thread with the BKL released; host
 interrupts and the scheduler preempt it as they do user code, and `hlt`
-blocks it until an interrupt or the guest's timer. The guest's FPU and the
+blocks it until an interrupt or the guest's timer. While the guest runs,
+the VMX-preemption timer brings it back at its timer's deadline; while it
+halts, its thread sleeps until that deadline, however near (a processor's
+timer is armed for the next deadline itself). The guest's FPU and the
 MSRs it shares with the host are swapped, and its VMCS cleared, only when
 it leaves the kernel's loop, so it may run next on any CPU, which first
 drops stale translations (`invvpid`, `invept`). Unmapping guest memory
@@ -431,7 +445,7 @@ The scripts are in `verification/ui`.
 
 | Phase | State |
 |-------|-------|
-| Linux runs in Veda: hypervisor, monitor, platform, console, SMP, power | Done (`architectures/amd64/drivervm.vts`) |
+| Linux runs in Veda: hypervisor, monitor, platform, its timers, console, SMP, power | Done (`architectures/amd64/drivervm.vts`) |
 | The bridge: Veda's IPC in the guest | Done (`drivervm-bridge.vts`) |
 | Devices: IOMMU (DMA and interrupt remapping), PCI functions given to the guest | Done (`architectures/amd64/iommu.vts`, `drivervm-pci.vts`) |
 | Audio: ALSA → `audiodev`, playback and recording; virtio's sound devices | Done (`drivervm-audio.vts`, `drivervm-mic.vts`, `music.vts`, `volume.vts`) |

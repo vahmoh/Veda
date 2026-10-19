@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+[package]
+name = "guest-timertest"
+description = "Checks, inside the driver VM's Linux, that its timers have high resolution and end on time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "timertest"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+guest-sys = { workspace = true }
+rustix = { workspace = true }
+
+[lints]
+workspace = true

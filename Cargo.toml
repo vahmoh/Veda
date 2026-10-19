@@ -95,6 +95,7 @@ members = [
     "implementation/guests/linux/pcitest",
     "implementation/guests/linux/gpiotest",
     "implementation/guests/linux/efivartest",
+    "implementation/guests/linux/timertest",
     "implementation/guests/linux/kmspause",
     "implementation/guests/linux/logkeeper",
     "implementation/guests/linux/sys",
