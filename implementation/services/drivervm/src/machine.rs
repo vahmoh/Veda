@@ -41,6 +41,14 @@ use crate::memory::GuestMemory;
 use crate::pci::{Devices, Windows};
 use crate::variables::FirmwareVariables;
 
+/// The priority of the threads that run the guest's processors and wake it
+/// for Veda's events: above the applications' (`NORMAL`), so that the
+/// guest's timers and its devices' interrupts are acted on as they come,
+/// not once a busy thread's time slice ends. Veda's scheduler gives a
+/// process's threads above `NORMAL` half a processor's time at most, so a
+/// guest that keeps its processors busy cannot starve the rest.
+const PROCESSOR_PRIORITY: usize = abi::priority::HIGH;
+
 /// How the machine is made.
 pub struct Config {
     pub memory_mib: u32,
@@ -189,6 +197,7 @@ impl Machine {
         let m = machine.clone();
         rt::thread::Builder::new()
             .name("bridge-waits")
+            .priority(PROCESSOR_PRIORITY)
             .spawn(move || m.bridge.run_waits(&m.memory, &m.notify))
             .map_err(|e| format!("no thread for the bridge: {e}"))?;
         let m = machine.clone();
@@ -212,6 +221,7 @@ impl Machine {
         let machine = self.clone();
         rt::thread::Builder::new()
             .name("vcpu")
+            .priority(PROCESSOR_PRIORITY)
             .spawn(move || machine.run(id, vcpu))
             .map(|_| ())
             .map_err(|e| format!("no thread for processor {id}: {e}"))

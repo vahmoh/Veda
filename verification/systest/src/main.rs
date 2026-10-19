@@ -18,7 +18,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use abi::Rights;
 use ipc::Bytes;
@@ -445,6 +445,146 @@ fn test_short_sleeps() -> TestResult {
     )
 }
 
+/// A thread on every processor at `priority` that never waits nor makes a
+/// system call, until `stop` is set.
+fn spinners(priority: usize, stop: &Arc<AtomicBool>) -> Result<Vec<rt::thread::JoinHandle<()>>, String> {
+    (0..rt::pool::cpus())
+        .map(|_| {
+            let stop = stop.clone();
+            rt::thread::Builder::new()
+                .name("spinner")
+                .priority(priority)
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        core::hint::spin_loop();
+                    }
+                })
+                .map_err(|e| e.to_string())
+        })
+        .collect()
+}
+
+/// A thread that wakes outranking a running one runs at once, though the
+/// processor that woke it runs a thread as urgent as itself: on another
+/// processor, whose less urgent thread it preempts. Every processor runs a
+/// thread at the normal priority that never waits; a high-priority thread
+/// wakes another of its priority, twenty times, and spins until that one
+/// runs. Left to wait for a time slice to end somewhere, the woken one
+/// would take milliseconds; it takes less than one at the median.
+fn test_waking_preempts_elsewhere() -> TestResult {
+    const ROUNDS: usize = 20;
+    let stop = Arc::new(AtomicBool::new(false));
+    let busy = spinners(abi::priority::NORMAL, &stop)?;
+    let result = (|| {
+        let event = Arc::new(Event::create().map_err(|e| e.to_string())?);
+        // When the woken thread last ran (0: not since it was woken).
+        let ran = Arc::new(AtomicU64::new(0));
+        let (theirs, ran_at) = (event.clone(), ran.clone());
+        let woken = rt::thread::Builder::new()
+            .name("woken")
+            .priority(abi::priority::HIGH)
+            .spawn(move || {
+                for _ in 0..ROUNDS {
+                    if theirs.wait(abi::signals::SIGNALED, abi::DEADLINE_INFINITE).is_err() {
+                        return;
+                    }
+                    let _ = theirs.clear();
+                    ran_at.store(rt::time::now_ns(), Ordering::Release);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        let waker = rt::thread::Builder::new()
+            .name("waker")
+            .priority(abi::priority::HIGH)
+            .spawn(move || {
+                (0..ROUNDS)
+                    .map(|_| {
+                        rt::time::sleep(rt::time::Duration::from_millis(1));
+                        ran.store(0, Ordering::Release);
+                        let start = rt::time::now_ns();
+                        let _ = event.signal();
+                        // No system call: this processor stays this thread's.
+                        loop {
+                            let at = ran.load(Ordering::Acquire);
+                            if at != 0 {
+                                break at.saturating_sub(start);
+                            }
+                            core::hint::spin_loop();
+                        }
+                    })
+                    .collect::<Vec<u64>>()
+            })
+            .map_err(|e| e.to_string())?;
+        let mut took = waker.join().map_err(|e| e.to_string())?;
+        woken.join().map_err(|e| e.to_string())?;
+        took.sort_unstable();
+        let median = took[ROUNDS / 2];
+        check(
+            median < 1_000_000,
+            &alloc::format!(
+                "a woken thread ran {} us after it was woken at the median, {} us at the latest",
+                median / 1000,
+                took[ROUNDS - 1] / 1000
+            ),
+        )
+    })();
+    stop.store(true, Ordering::Relaxed);
+    for s in busy {
+        let _ = s.join();
+    }
+    result
+}
+
+/// Threads above the normal priority that keep the processors busy leave
+/// the normal threads most of them: a process's threads run above normal
+/// for half a processor's time in every 100 ms at most, together. A
+/// high-priority thread spins on every processor for 400 ms, while this
+/// one, at the normal priority, counts how long it runs meanwhile: at least
+/// a fifth of the time, where without the budget it would not run at all.
+fn test_elevated_budget() -> TestResult {
+    const SPIN: u64 = 400_000_000;
+    let start = rt::time::now_ns();
+    let spinning: Vec<_> = (0..rt::pool::cpus())
+        .map(|_| {
+            rt::thread::Builder::new()
+                .name("spinner")
+                .priority(abi::priority::HIGH)
+                .spawn(move || {
+                    let mut n = 0u32;
+                    loop {
+                        n = n.wrapping_add(1);
+                        // A system call now and then, to see the time.
+                        if n.is_multiple_of(4096) && rt::time::now_ns() >= start + SPIN {
+                            break;
+                        }
+                        core::hint::spin_loop();
+                    }
+                })
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    // The time this thread ran: the gaps between its readings of the clock
+    // that are too short for another thread to have run in between.
+    let (mut ran, mut last) = (0, rt::time::now_ns());
+    while last < start + SPIN {
+        let now = rt::time::now_ns();
+        if now - last < 50_000 {
+            ran += now - last;
+        }
+        last = now;
+    }
+    for s in spinning {
+        s.join().map_err(|e| e.to_string())?;
+    }
+    check(
+        ran >= SPIN / 5,
+        &alloc::format!(
+            "a normal thread ran {} ms of the 400 ms high-priority threads spun everywhere",
+            ran / 1_000_000
+        ),
+    )
+}
+
 /// Write-combining memory (a display engine's pictures, which it reads
 /// past the processor's caches) is as consistent as other memory: what a
 /// mapping writes is what the kernel reads of it, and the other way; the
@@ -535,10 +675,12 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 35] = [
+    let tests: [Test; 37] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
+        ("waking preempts elsewhere", test_waking_preempts_elsewhere),
+        ("priorities above normal have a budget", test_elevated_budget),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
         ("handles on channels", policy::test_channel_handles),

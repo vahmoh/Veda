@@ -7,14 +7,23 @@
 //!   shared by all CPUs (the BKL makes a global queue cheap and fair).
 //! * Preemptive: a running thread is preempted when its 10 ms time slice
 //!   ends and a thread of equal or higher priority is ready, or immediately
-//!   when a higher-priority thread wakes up.
+//!   when a higher-priority thread wakes up: on the CPU that woke it, an
+//!   idle one, or else the one running the least urgent thread, if that is
+//!   below it.
+//! * Priorities above `NORMAL` buy latency, not processor time: a process's
+//!   threads run above `NORMAL` for at most [`ELEVATED_BUDGET_NS`] of every
+//!   [`ELEVATED_WINDOW_NS`] together ([`Budget`]), and at `NORMAL` for the
+//!   rest of the window once they have used that, so threads that keep
+//!   processors busy (a guest's processors in a loop, however many it has)
+//!   cannot starve the rest.
 //! * No ready thread waits for ever: one below `NORMAL` that has waited
 //!   [`STARVED_NS`] for a processor runs a time slice at `NORMAL`
 //!   ([`boost_starved`]). Under a load of ordinary threads it would never
 //!   run again otherwise, nor would whoever waits for it (for a lock it
 //!   holds, which it lets go of in that slice).
 //! * Tickless: each CPU arms its timer (`arch::timer`) for its next event
-//!   (time slice end or the earliest sleeping thread's deadline).
+//!   (time slice end, the end of the running thread's budget above
+//!   `NORMAL`, or the earliest sleeping thread's deadline).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
 
 pub mod thread;
@@ -51,6 +60,58 @@ pub const STARVED_NS: u64 = 1_000_000_000;
 /// How often the run queue is looked through for threads that waited that
 /// long.
 const STARVED_SCAN_NS: u64 = 250_000_000;
+/// The processor time a process's threads above `NORMAL` run there in
+/// every [`ELEVATED_WINDOW_NS`], together: half a processor's (a little
+/// more while several run at once, as each processor charges what its
+/// thread used at least once a time slice). What needs
+/// a high priority to answer in time (the sound mixer, a guest's
+/// processors handling its interrupts) uses a few percent; a window ten
+/// slices long lets a burst of work (a frame, a guest's driver starting)
+/// finish at its priority.
+pub const ELEVATED_BUDGET_NS: u64 = 50_000_000;
+pub const ELEVATED_WINDOW_NS: u64 = 100_000_000;
+
+/// What a process's threads above `NORMAL` used of the processor time they
+/// may run there: [`ELEVATED_BUDGET_NS`] in each window of
+/// [`ELEVATED_WINDOW_NS`].
+pub struct Budget {
+    used_ns: u64,
+    window_start: u64,
+}
+
+impl Budget {
+    pub const fn new() -> Budget {
+        Budget { used_ns: 0, window_start: 0 }
+    }
+
+    /// Whether it is used up in the window `now` is in.
+    pub fn spent(&self, now: u64) -> bool {
+        self.used_ns >= ELEVATED_BUDGET_NS && now < self.window_start + ELEVATED_WINDOW_NS
+    }
+
+    /// What is left of it at `now`.
+    pub fn left(&self, now: u64) -> u64 {
+        if now >= self.window_start + ELEVATED_WINDOW_NS {
+            ELEVATED_BUDGET_NS
+        } else {
+            ELEVATED_BUDGET_NS.saturating_sub(self.used_ns)
+        }
+    }
+
+    /// Charges `ran` ns of processor time, used until `now`. A window that
+    /// has passed is followed by one that begins where it ended or where
+    /// this run began, whichever is later, and holds what of the run falls
+    /// in it.
+    pub fn charge(&mut self, ran: u64, now: u64) {
+        let end = self.window_start + ELEVATED_WINDOW_NS;
+        if now >= end {
+            self.window_start = now.saturating_sub(ran).max(end);
+            self.used_ns = now - self.window_start;
+        } else {
+            self.used_ns += ran;
+        }
+    }
+}
 
 /// Per-CPU scheduler state (lives in `PerCpu`).
 pub struct CpuSched {
@@ -62,11 +123,22 @@ pub struct CpuSched {
     pub need_resched: bool,
     pub slice_end: u64,
     pub switched_in_at: u64,
+    /// Until when the current thread's processor time is charged to its
+    /// process's budget above `NORMAL` (`Thread::charge`).
+    pub charged_to: u64,
 }
 
 impl CpuSched {
     pub const fn new() -> Self {
-        CpuSched { current: None, idle: None, prev: None, need_resched: false, slice_end: 0, switched_in_at: 0 }
+        CpuSched {
+            current: None,
+            idle: None,
+            prev: None,
+            need_resched: false,
+            slice_end: 0,
+            switched_in_at: 0,
+            charged_to: 0,
+        }
     }
 }
 
@@ -168,28 +240,47 @@ pub fn make_ready(t: &Arc<Thread>) {
     after_wakeup(prio, now);
 }
 
-/// Preemption and idle-CPU wake-up after `prio` became runnable.
+/// Preemption and idle-CPU wake-up after a thread of priority `prio`
+/// became runnable: this CPU runs it next if its own thread is less
+/// urgent. Otherwise an idle CPU picks it up, or, if none is idle, the CPU
+/// running the least urgent thread does, if that is below it: else the
+/// thread would wait for a time slice to end, though it outranks a running
+/// one.
 fn after_wakeup(prio: u8, now: u64) {
     let me = percpu::cpu_id_or_boot();
-    if let Some(cur) = try_current()
-        && (cur.is_idle || prio > cur.effective_priority(now))
-    {
+    let here = try_current().is_some_and(|cur| cur.is_idle || prio > cur.effective_priority(now));
+    if here {
         cpu_sched().need_resched = true;
     }
     // Wake one idle CPU (other than us) to pick up the work: one that has
     // not been woken already, so that threads made ready together (a thread
-    // pool's workers, say) start on different CPUs at once.
+    // pool's workers, say) start on different CPUs at once. (Here, it takes
+    // the thread this CPU puts back.)
+    let mut least: Option<(u8, &percpu::PerCpu)> = None;
     for p in percpu::online() {
         if p.cpu_id == me {
             continue;
         }
         // SAFETY: reading another CPU's current thread pointer under the BKL;
         // it only changes while that CPU holds the BKL.
-        let idle = unsafe { (*p.sched.get()).current.as_ref().is_some_and(|t| t.is_idle) };
-        if idle && !p.resched_pending.swap(true, Ordering::AcqRel) {
-            arch::smp::reschedule(p.cpu_id);
-            break;
+        let Some(cur) = (unsafe { (*p.sched.get()).current.as_ref() }) else { continue };
+        if cur.is_idle {
+            if !p.resched_pending.swap(true, Ordering::AcqRel) {
+                arch::smp::reschedule(p.cpu_id);
+                return;
+            }
+            continue;
         }
+        let theirs = cur.effective_priority(now);
+        if theirs < prio && least.is_none_or(|(l, _)| theirs < l) {
+            least = Some((theirs, p));
+        }
+    }
+    if !here
+        && let Some((_, p)) = least
+        && !p.resched_pending.swap(true, Ordering::AcqRel)
+    {
+        arch::smp::reschedule(p.cpu_id);
     }
 }
 
@@ -276,10 +367,17 @@ fn earliest_timeout() -> Option<u64> {
     TIMEOUTS.lock().first_key_value().map(|(&(d, _), _)| d)
 }
 
-/// Arms this CPU's timer for its next event.
-fn arm_timer(running_idle: bool) {
+/// Arms this CPU's timer for its next event, `running` being the thread it
+/// runs from now on.
+fn arm_timer(running: &Thread) {
     let now = time::now_ns();
-    let mut deadline = if running_idle { now + IDLE_MAX_NS } else { cpu_sched().slice_end };
+    let cs = cpu_sched();
+    let mut deadline = if running.is_idle { now + IDLE_MAX_NS } else { cs.slice_end };
+    if !running.is_idle
+        && let Some(end) = running.budget_end(cs.charged_to, now)
+    {
+        deadline = deadline.min(end);
+    }
     if let Some(t) = earliest_timeout() {
         deadline = deadline.min(t);
     }
@@ -318,7 +416,7 @@ pub fn schedule() {
                     if now >= cs.slice_end {
                         cs.slice_end = now + TIME_SLICE_NS;
                     }
-                    arm_timer(false);
+                    arm_timer(&cur);
                     return;
                 }
             }
@@ -327,7 +425,7 @@ pub fn schedule() {
                 Some(t) => t,
                 None if cur.is_idle => {
                     drop(rq);
-                    arm_timer(true);
+                    arm_timer(&cur);
                     return;
                 }
                 None => cs.idle.clone().expect("no idle thread"),
@@ -347,6 +445,8 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
         percpu::current().idle_ns.fetch_add(ran, Ordering::Relaxed);
     }
     cs.switched_in_at = now;
+    prev.charge(now.saturating_sub(cs.charged_to), now);
+    cs.charged_to = now;
 
     match &next.aspace {
         Some(a) => a.activate(),
@@ -362,7 +462,7 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     if next.boost_until.load(Ordering::Relaxed) == u64::MAX {
         next.boost_until.store(cs.slice_end, Ordering::Relaxed);
     }
-    arm_timer(next.is_idle);
+    arm_timer(&next);
 
     let (prev_ctx, next_ctx) = (prev.ctx_ptr(), next.ctx_ptr());
     // SAFETY: contexts are only touched here, under the BKL.
@@ -446,12 +546,22 @@ pub fn timer_interrupt() {
         crate::log::pump_serial();
     }
     let cs = cpu_sched();
-    let cur_idle = cs.current.as_ref().is_some_and(|t| t.is_idle);
-    if !cur_idle && now >= cs.slice_end {
+    let Some(cur) = cs.current.clone() else { return };
+    if !cur.is_idle {
+        // A thread whose process's budget above NORMAL ran out competes at
+        // NORMAL from now on.
+        let before = cur.effective_priority(now);
+        cur.charge(now.saturating_sub(cs.charged_to), now);
+        cs.charged_to = now;
+        if cur.effective_priority(now) < before {
+            cs.need_resched = true;
+        }
+    }
+    if !cur.is_idle && now >= cs.slice_end {
         cs.need_resched = true;
     }
     if !cs.need_resched {
-        arm_timer(cur_idle);
+        arm_timer(&cur);
     }
 }
 

@@ -12,7 +12,7 @@ use abi::{ProcessInfo, process_state};
 use super::handle::HandleTable;
 use super::{Name, Signals};
 use crate::memory::aspace::AddressSpace;
-use crate::scheduler::{self, Thread, WakeReason};
+use crate::scheduler::{self, Budget, Thread, WakeReason};
 use crate::synchronization::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,8 @@ pub struct Process {
     /// Exit code requested by `process_exit`/kill, applied at termination.
     pending_code: SpinLock<Option<i64>>,
     pub signals: Signals,
+    /// What its threads above `NORMAL` used of their budget there.
+    pub elevated: SpinLock<Budget>,
     exited_threads_cpu_ns: AtomicU64,
     /// What it gave up ([`abi::restrict`]), for good.
     restrictions: AtomicUsize,
@@ -89,6 +91,7 @@ impl Process {
             state: SpinLock::new(ProcessState::Created),
             pending_code: SpinLock::new(None),
             signals: Signals::new(0),
+            elevated: SpinLock::new(Budget::new()),
             exited_threads_cpu_ns: AtomicU64::new(0),
             restrictions: AtomicUsize::new(0),
             max_priority,

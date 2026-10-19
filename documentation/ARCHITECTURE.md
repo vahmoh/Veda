@@ -178,13 +178,19 @@ logs (see [the driver VM](DRIVERVM.md)).
   (up to `REALTIME`; the sound mixer runs at `HIGH`), and what the
   launcher starts `NORMAL`, the services' own: an application's threads,
   and those of the processes it starts, take turns with the services
-  instead of shutting them out. Below `NORMAL` (thumbnailers and other
-  background work), a thread that has waited a second for a processor
-  runs a time slice at `NORMAL`: otherwise, while ordinary threads keep
-  every processor busy, it would never run again, nor would a thread
-  waiting for a lock it holds. A thread can name an *exit futex*, which
-  the kernel clears and wakes once the thread has left its stack, so that
-  thread libraries can join it. A thread
+  instead of shutting them out. A thread that wakes outranking a running
+  one takes the processor that woke it, an idle one, or the one running
+  the least urgent thread. Priorities above `NORMAL` buy latency, not
+  processor time: a process's threads run above `NORMAL` for 50 ms of
+  every 100 ms at most, together, and at `NORMAL` for the rest, so that a
+  service gone wrong, or a guest's processors in a loop (the driver VM's
+  run at `HIGH`), cannot starve the rest. Below `NORMAL` (thumbnailers
+  and other background work), a thread that has waited a second for a
+  processor runs a time slice at `NORMAL`: otherwise, while ordinary
+  threads keep every processor busy, it would never run again, nor would
+  a thread waiting for a lock it holds. A thread can name an *exit
+  futex*, which the kernel clears and wakes once the thread has left its
+  stack, so that thread libraries can join it. A thread
   handle with `MANAGE` can stop the thread (`thread_suspend`, which
   returns once it runs no user code, a system call it was in finished),
   read its registers (`thread_read_state`) and let it go on: how a garbage

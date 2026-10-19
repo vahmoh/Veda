@@ -17,6 +17,8 @@ use crate::synchronization::SpinLock;
 /// Kernel stack size of every thread.
 pub const KERNEL_STACK_PAGES: u64 = 8;
 
+const NORMAL: u8 = abi::priority::NORMAL as u8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     /// Created but not started.
@@ -186,13 +188,34 @@ impl Thread {
         self.sched.lock().priority
     }
 
-    /// The priority it is scheduled at, at `now`: its own, or `NORMAL`
-    /// during a time slice the scheduler gave it after it waited too long
-    /// below `NORMAL` ([`Thread::boost_until`]).
+    /// The priority it is scheduled at, at `now`: its own, but `NORMAL` once
+    /// its process has used up its budget above `NORMAL`
+    /// ([`super::Budget`]), and during a time slice the scheduler gave it
+    /// after it waited too long below `NORMAL` ([`Thread::boost_until`]).
     pub fn effective_priority(&self, now: u64) -> u8 {
         let priority = self.priority();
-        let normal = abi::priority::NORMAL as u8;
-        if priority < normal && now < self.boost_until.load(Ordering::Relaxed) { normal } else { priority }
+        let spent = || self.process.as_ref().is_some_and(|p| p.elevated.lock().spent(now));
+        let boosted = || now < self.boost_until.load(Ordering::Relaxed);
+        if (priority > NORMAL && spent()) || (priority < NORMAL && boosted()) { NORMAL } else { priority }
+    }
+
+    /// Charges `ran` ns of processor time, used until `now`, to its
+    /// process's budget above `NORMAL`, if it runs above `NORMAL`.
+    pub fn charge(&self, ran: u64, now: u64) {
+        if self.priority() > NORMAL
+            && let Some(p) = &self.process
+        {
+            p.elevated.lock().charge(ran, now);
+        }
+    }
+
+    /// When, running from `since` (what it ran before is charged), it will
+    /// have used up what is left of its process's budget above `NORMAL`,
+    /// unless the process's other threads use it meanwhile; `None` if it
+    /// does not run above `NORMAL`, or the budget is spent.
+    pub fn budget_end(&self, since: u64, now: u64) -> Option<u64> {
+        let budget = self.process.as_ref().filter(|_| self.priority() > NORMAL)?.elevated.lock();
+        (!budget.spent(now)).then(|| since + budget.left(now))
     }
 
     /// The saved register context. Only the scheduler (under the BKL) and

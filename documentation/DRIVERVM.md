@@ -132,6 +132,16 @@ virtualization's cost), and an idle processor takes a few timer
 interrupts a second; `timertest` checks that timers end on time
 (`architectures/amd64/drivervm.vts`).
 
+The threads that run the guest's processors, and the bridge's waits, run
+at `HIGH`, above Veda's ordinary threads: the guest's timers and its
+devices' interrupts are acted on as they come, however busy Veda's
+processors are, not once a busy thread's time slice ends. With every
+processor of Veda's busy at `NORMAL`, a sleep of 1 ms in the guest ends
+0.1 ms late at the median, where at `NORMAL` it ended 9 ms late. Veda's
+scheduler gives a process's threads above `NORMAL` half a processor's
+time in every 100 ms, so a guest that keeps its processors busy runs at
+`NORMAL` once it has used that, and cannot starve the rest.
+
 ## The hypervisor
 
 On AMD64 (`implementation/kernel/src/architectures/amd64/hv`), `vcpu_run`
