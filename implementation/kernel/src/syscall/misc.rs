@@ -54,7 +54,8 @@ pub fn sleep(d: usize) -> SysResult {
 }
 
 pub fn system_info(ptr: usize) -> SysResult {
-    let (total, free) = crate::memory::phys::stats();
+    let (total, _) = crate::memory::phys::stats();
+    let free = crate::memory::phys::available_to_user();
     let mut version = [0u8; 32];
     let v = concat!("Veda ", env!("CARGO_PKG_VERSION"));
     version[..v.len()].copy_from_slice(v.as_bytes());

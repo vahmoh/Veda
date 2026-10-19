@@ -22,6 +22,7 @@ pub use thread::{State, Thread, WakeReason};
 
 use crate::arch::trap::TrapFrame;
 use crate::arch::{self, cpu};
+use crate::memory::aspace::Fault;
 use crate::percpu;
 use crate::synchronization::{SpinLock, bkl};
 use crate::time;
@@ -509,27 +510,53 @@ pub fn user_exception(frame: &mut TrapFrame) {
         None => Ok(()),
     });
     if let Some(fault) = frame.page_fault() {
-        if let Some(a) = &cur.aspace
-            && a.handle_fault(fault.address, fault.write, fault.execute)
-        {
+        let outcome =
+            cur.aspace.as_ref().map_or(Fault::Invalid, |a| a.handle_fault(fault.address, fault.write, fault.execute));
+        if outcome == Fault::Resolved {
             return;
         }
-        crate::kerror!(
-            "{} (thread {}): page fault at {:#x} ({} {}), {}{}",
-            cur.process_name(),
-            cur.koid,
-            fault.address,
-            if fault.execute {
-                "execute"
-            } else if fault.write {
-                "write"
-            } else {
-                "read"
-            },
-            if fault.present { "protection violation" } else { "not mapped" },
-            frame.location(),
-            in_image
-        );
+        if outcome == Fault::OutOfMemory {
+            // A valid access the system has no page for: say so, and what
+            // holds the memory, rather than blame the program.
+            let (total, free) = crate::memory::phys::stats();
+            let largest = crate::object::process::largest(4);
+            let holders = core::fmt::from_fn(|f| {
+                for (i, (p, bytes)) in largest.iter().enumerate() {
+                    let sep = if i == 0 { "" } else { ", " };
+                    write!(f, "{sep}{} (process {}) {} MiB", p.name.as_str(), p.koid, bytes >> 20)?;
+                }
+                Ok(())
+            });
+            crate::kerror!(
+                "{} (thread {}): out of memory: no page for its access at {:#x}, {}{}; {} MiB of {} MiB free; \
+                 the most memory: {}",
+                cur.process_name(),
+                cur.koid,
+                fault.address,
+                frame.location(),
+                in_image,
+                free >> 20,
+                total >> 20,
+                holders
+            );
+        } else {
+            crate::kerror!(
+                "{} (thread {}): page fault at {:#x} ({} {}), {}{}",
+                cur.process_name(),
+                cur.koid,
+                fault.address,
+                if fault.execute {
+                    "execute"
+                } else if fault.write {
+                    "write"
+                } else {
+                    "read"
+                },
+                if fault.present { "protection violation" } else { "not mapped" },
+                frame.location(),
+                in_image
+            );
+        }
     } else {
         crate::kerror!("{} (thread {}): {}{}", cur.process_name(), cur.koid, frame.describe(), in_image);
     }

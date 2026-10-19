@@ -235,6 +235,23 @@ pub fn all() -> Vec<Arc<Process>> {
     PROCESSES.lock().iter().filter_map(|w| w.upgrade()).collect()
 }
 
+/// The `n` live processes that hold the most memory, the most first, each
+/// with the bytes committed to what it maps (for the log, when memory runs
+/// out: what took it).
+pub fn largest(n: usize) -> Vec<(Arc<Process>, u64)> {
+    let mut sized: Vec<(Arc<Process>, u64)> = all()
+        .into_iter()
+        .filter(|p| !p.is_terminated())
+        .map(|p| {
+            let bytes = p.aspace().map_or(0, |a| a.committed_bytes());
+            (p, bytes)
+        })
+        .collect();
+    sized.sort_unstable_by_key(|&(_, bytes)| core::cmp::Reverse(bytes));
+    sized.truncate(n);
+    sized
+}
+
 /// The live processes `koid` started, those they started, and so on.
 pub fn descendants(koid: u64) -> Vec<Arc<Process>> {
     // Sorted by parent, each process's children are one run: one pass

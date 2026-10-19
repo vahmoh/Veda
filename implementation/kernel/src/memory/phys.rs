@@ -302,3 +302,9 @@ pub fn stats() -> (u64, u64) {
         None => (0, 0),
     }
 }
+
+/// Bytes of memory user space may still take: what is free beyond the
+/// kernel's reserve, which no process is given.
+pub fn available_to_user() -> u64 {
+    ALLOCATOR.lock().as_ref().map_or(0, |bm| bm.free.saturating_sub(bm.reserve()) * PAGE_SIZE)
+}

@@ -133,7 +133,12 @@ logs (see [the driver VM](DRIVERVM.md)).
   permissions within the rights of the handle it was mapped with. *Private
   memory* (`vm_allocate`) is a VMO no handle reaches, for one mapping, whose
   pages are freed when unmapped or decommitted (`vm_decommit`). Frames are
-  freed only after the TLB shootdown that makes them unreachable.
+  freed only after the TLB shootdown that makes them unreachable. The
+  kernel keeps a reserve of memory (1/64 of it, 8 to 64 MiB) for itself: a
+  process whose page fault the rest cannot satisfy is ended, the log
+  saying so (`out of memory: no page for its access`) and naming the
+  processes that hold the most; `system_info` counts as free only what
+  programs may still take.
 - **IPC.** Channels carry messages of up to 64 KiB plus 64 handles. An
   endpoint has one handle at a time unless its channel is shared
   (`channel_flags::SHARED`): then several processes can hold it, and each

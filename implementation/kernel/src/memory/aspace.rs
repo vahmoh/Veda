@@ -60,6 +60,18 @@ impl Perms {
     }
 }
 
+/// What became of a page fault ([`AddressSpace::handle_fault`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    /// The page is mapped now: the access can be made again.
+    Resolved,
+    /// Nothing is mapped there, or not with the access made.
+    Invalid,
+    /// The access is allowed, but there is no memory left to give it a
+    /// page (or a page table for it).
+    OutOfMemory,
+}
+
 /// The end of `[addr, addr+len)` with `len` rounded up to whole pages (both
 /// come from user space: any values).
 fn range_end(addr: u64, len: u64) -> Result<u64, Error> {
@@ -386,19 +398,24 @@ impl AddressSpace {
         (addr < m.end()).then(|| m.vmo_offset + (addr - m.start))
     }
 
-    /// Resolves a user page fault. Returns `false` if the access is invalid.
-    pub fn handle_fault(&self, addr: u64, write: bool, exec: bool) -> bool {
+    /// Resolves a user page fault.
+    pub fn handle_fault(&self, addr: u64, write: bool, exec: bool) -> Fault {
         let map = self.mappings.lock();
-        let Some((_, m)) = map.range(..=addr).next_back() else { return false };
+        let Some((_, m)) = map.range(..=addr).next_back() else { return Fault::Invalid };
         // The access the page tables would allow once the page is mapped.
         let granted = m.perms.effective();
         let allowed = if write || exec { (!write || granted.write) && (!exec || granted.exec) } else { granted.read };
         if addr >= m.end() || !allowed {
-            return false;
+            return Fault::Invalid;
         }
         let va = page_align_down(addr);
-        let Some(frame) = m.vmo.page(m.vmo_offset + (va - m.start), true) else { return false };
-        paging::map(self.root, va, frame, m.pte_flags(), true).is_ok()
+        // The page is inside the VMO (mappings never reach past their VMO,
+        // which never shrinks): only memory can be missing.
+        let Some(frame) = m.vmo.page(m.vmo_offset + (va - m.start), true) else { return Fault::OutOfMemory };
+        match paging::map(self.root, va, frame, m.pte_flags(), true) {
+            Ok(()) => Fault::Resolved,
+            Err(_) => Fault::OutOfMemory,
+        }
     }
 
     /// Ensures every page of `[addr, addr+len)` is mapped with the required
@@ -417,7 +434,7 @@ impl AddressSpace {
                 Some((_, flags)) => flags.user && (!write || flags.writable),
                 None => false,
             };
-            if !ok && !self.handle_fault(va, write, false) {
+            if !ok && self.handle_fault(va, write, false) != Fault::Resolved {
                 return false;
             }
             va += PAGE_SIZE;

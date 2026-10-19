@@ -926,6 +926,10 @@ pub struct SystemInfo {
     pub cpu_count: u32,
     pub page_size: u32,
     pub total_memory: u64,
+    /// The memory programs may still take: what is free, but for the
+    /// kernel's reserve, which no process is given (a page fault the
+    /// system has no page for ends the process). It reaches 0 as memory
+    /// runs out.
     pub free_memory: u64,
     pub uptime_ns: u64,
     pub process_count: u32,
