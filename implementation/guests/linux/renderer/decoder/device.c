@@ -54,6 +54,7 @@ device_create(struct pipe_screen *screen)
       return NULL;
    }
    dev->screen = screen;
+   dev->i915_fd = -1;
    snprintf(dev->name, sizeof(dev->name), "%s", screen->get_name(screen));
    dev->buffer_bind =
       PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER | PIPE_BIND_CONSTANT_BUFFER | PIPE_BIND_STREAM_OUTPUT;
@@ -95,8 +96,15 @@ vr_device_create_iris(int fd)
    driDestroyOptionCache(&options);
    driDestroyOptionInfo(&info);
    struct vr_device *dev = device_create(screen);
-   if (dev)
-      dev->import = VR_IMPORT_FD;
+   if (!dev)
+      return NULL;
+   dev->import = VR_IMPORT_FD;
+   drmVersionPtr version = drmGetVersion(fd);
+   if (version) {
+      if (strcmp(version->name, "i915") == 0)
+         dev->i915_fd = fd;
+      drmFreeVersion(version);
+   }
    return dev;
 }
 #endif

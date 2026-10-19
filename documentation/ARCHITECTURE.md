@@ -731,7 +731,12 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
   on softpipe too, for tests). It also draws into memory it is given
   (`gpu::import`), such as the compositor's display pictures, which a GPU
   reaches as dma-bufs; virgl cannot, as its host draws into memory of its
-  own.
+  own. On i915 it maps such memory uncached, as a display reads it: i915
+  maps memory from outside as its own by default, on Gen12 (Tiger Lake to
+  Raptor Lake) cached in the processor's last-level cache, which a display
+  engine does not read, so that the screen would show stale lines where
+  the GPU drew. Where it cannot (i915 on Meteor Lake and later, or xe), it
+  refuses the memory, and the compositor draws on the processor.
 
 ## Audio
 

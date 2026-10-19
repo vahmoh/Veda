@@ -31,6 +31,10 @@ struct vr_device {
    bool depth_low;
    /* How it takes memory from outside (vr_resource_import). */
    enum vr_import import;
+   /* The GPU's device (its DRM descriptor) if its driver is i915, which
+    * the renderer asks to map memory from outside as a display reads it
+    * (vr_resource_import); -1 otherwise. */
+   int i915_fd;
    /* What buffers are made for: a buffer may be bound anywhere later, and
     * a driver is told so, but virgl, whose host takes a buffer for one use
     * and lets it serve them all. */

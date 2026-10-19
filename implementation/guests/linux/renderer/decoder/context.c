@@ -12,6 +12,12 @@
 
 #include "internal.h"
 
+#ifdef VR_IRIS
+#include <xf86drm.h>
+
+#include "drm-uapi/i915_drm.h"
+#endif
+
 #include "frontend/winsys_handle.h"
 #include "util/format/u_format.h"
 #include "util/u_inlines.h"
@@ -447,6 +453,34 @@ vr_resource_create(struct vr_context *ctx, const struct vr_resource_args *a, uin
    return add_resource(ctx, pres, a, backing_offset, backing_len, id);
 }
 
+#ifdef VR_IRIS
+/* Makes what the GPU draws into `pres`, memory from outside (a picture a
+ * display shows), reach that memory, where the display reads it. i915 maps
+ * memory imported from outside as it maps its own by default: on Gen12
+ * (Tiger Lake to Raptor Lake) through its PAT's first entry, cached in the
+ * processor's last-level cache, which a display engine does not read, so
+ * that the display would show what was in memory before the GPU drew, in
+ * stale lines of 16 pixels. i915 makes its own pictures uncached as a
+ * display plane takes them; these go to the display through an import of
+ * their own (the display driver's), so the renderer's is made so here,
+ * before the GPU draws into it. False where it cannot be: i915 on Meteor
+ * Lake and later, whose mappings are chosen as they are made, and xe,
+ * whose iris chooses them from what Gallium does not say. */
+static bool
+display_coherent(struct vr_device *dev, struct pipe_screen *s, struct pipe_resource *pres)
+{
+   if (dev->i915_fd < 0)
+      return false;
+   struct winsys_handle h;
+   memset(&h, 0, sizeof(h));
+   h.type = WINSYS_HANDLE_TYPE_KMS;
+   if (!s->resource_get_handle(s, NULL, pres, &h, PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE))
+      return false;
+   struct drm_i915_gem_caching caching = {.handle = h.handle, .caching = I915_CACHING_DISPLAY};
+   return drmIoctl(dev->i915_fd, DRM_IOCTL_I915_GEM_SET_CACHING, &caching) == 0;
+}
+#endif
+
 VR_API int
 vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *a, int fd, void *memory, uint32_t stride,
                    uint32_t *id)
@@ -507,6 +541,15 @@ vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *a, int
       vr_fail(ctx, "the driver could not render into the memory");
       return VR_NO_MEMORY;
    }
+#ifdef VR_IRIS
+   /* A display would not see what the GPU draws: the client draws on the
+    * processor instead. */
+   if (ctx->dev->import == VR_IMPORT_FD && !display_coherent(ctx->dev, s, pres)) {
+      pipe_resource_reference(&pres, NULL);
+      vr_fail(ctx, "what %s draws into memory from outside would not reach a display", ctx->dev->name);
+      return VR_INVALID;
+   }
+#endif
    return add_resource(ctx, pres, a, 0, 0, id);
 }
 
