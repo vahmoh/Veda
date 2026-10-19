@@ -69,6 +69,15 @@ pub struct Thread {
     /// Whether the thread waits in the kernel for its suspensions to end,
     /// which only their end (or its death) wakes it from.
     pub parked: AtomicBool,
+    /// When it was last put in the run queue (monotonic nanoseconds): how
+    /// long a ready thread has waited for a processor
+    /// (`super::boost_starved`).
+    pub ready_since: AtomicU64,
+    /// Until when it runs at `NORMAL` at least (monotonic nanoseconds): a
+    /// time slice the scheduler gives a thread below `NORMAL` that waited
+    /// too long ready (`super::boost_starved`), `u64::MAX` until the slice
+    /// begins, as the thread next runs; 0 if none.
+    pub boost_until: AtomicU64,
 }
 
 // SAFETY: `ctx` is only accessed by the scheduler under the BKL; everything
@@ -108,6 +117,8 @@ impl Thread {
             exit_futex: AtomicU64::new(0),
             suspensions: AtomicU32::new(0),
             parked: AtomicBool::new(false),
+            ready_since: AtomicU64::new(0),
+            boost_until: AtomicU64::new(0),
         }))
     }
 
@@ -173,6 +184,15 @@ impl Thread {
 
     pub fn priority(&self) -> u8 {
         self.sched.lock().priority
+    }
+
+    /// The priority it is scheduled at, at `now`: its own, or `NORMAL`
+    /// during a time slice the scheduler gave it after it waited too long
+    /// below `NORMAL` ([`Thread::boost_until`]).
+    pub fn effective_priority(&self, now: u64) -> u8 {
+        let priority = self.priority();
+        let normal = abi::priority::NORMAL as u8;
+        if priority < normal && now < self.boost_until.load(Ordering::Relaxed) { normal } else { priority }
     }
 
     /// The saved register context. Only the scheduler (under the BKL) and

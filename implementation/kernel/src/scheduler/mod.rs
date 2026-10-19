@@ -8,6 +8,11 @@
 //! * Preemptive: a running thread is preempted when its 10 ms time slice
 //!   ends and a thread of equal or higher priority is ready, or immediately
 //!   when a higher-priority thread wakes up.
+//! * No ready thread waits for ever: one below `NORMAL` that has waited
+//!   [`STARVED_NS`] for a processor runs a time slice at `NORMAL`
+//!   ([`boost_starved`]). Under a load of ordinary threads it would never
+//!   run again otherwise, nor would whoever waits for it (for a lock it
+//!   holds, which it lets go of in that slice).
 //! * Tickless: each CPU arms its timer (`arch::timer`) for its next event
 //!   (time slice end or the earliest sleeping thread's deadline).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
@@ -16,7 +21,7 @@ pub mod thread;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::{Arc, Weak};
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 pub use thread::{State, Thread, WakeReason};
 
@@ -40,6 +45,12 @@ const SERIAL_NS: u64 = 1_000_000;
 /// thread whose deadline is nearer late, a guest's processor halted until
 /// its timer a few microseconds away too.
 const TIMER_SOONEST_NS: u64 = 1_000;
+/// How long a thread below `NORMAL` waits ready, at most, before it runs a
+/// time slice at `NORMAL`.
+pub const STARVED_NS: u64 = 1_000_000_000;
+/// How often the run queue is looked through for threads that waited that
+/// long.
+const STARVED_SCAN_NS: u64 = 250_000_000;
 
 /// Per-CPU scheduler state (lives in `PerCpu`).
 pub struct CpuSched {
@@ -74,10 +85,35 @@ struct RunQueue {
 
 impl RunQueue {
     fn push(&mut self, t: Arc<Thread>, priority: u8) {
+        t.ready_since.store(time::now_ns(), Ordering::Relaxed);
         let p = priority as usize & 31;
         self.levels[p].push_back(t);
         self.bitmap |= 1 << p;
         self.len += 1;
+    }
+
+    /// Moves the threads below `NORMAL` that have waited [`STARVED_NS`]
+    /// since `now` to the front of `NORMAL`'s, each to run its next time
+    /// slice there ([`Thread::boost_until`]).
+    fn boost_starved(&mut self, now: u64) {
+        let normal = abi::priority::NORMAL;
+        for p in 0..normal {
+            if self.levels[p].iter().all(|t| now.saturating_sub(t.ready_since.load(Ordering::Relaxed)) < STARVED_NS) {
+                continue;
+            }
+            let (starved, waiting): (VecDeque<_>, VecDeque<_>) = core::mem::take(&mut self.levels[p])
+                .into_iter()
+                .partition(|t| now.saturating_sub(t.ready_since.load(Ordering::Relaxed)) >= STARVED_NS);
+            self.levels[p] = waiting;
+            if self.levels[p].is_empty() {
+                self.bitmap &= !(1 << p);
+            }
+            for t in starved {
+                t.boost_until.store(u64::MAX, Ordering::Relaxed);
+                self.levels[normal].push_front(t);
+            }
+            self.bitmap |= 1 << normal;
+        }
     }
 
     fn highest(&self) -> Option<u8> {
@@ -121,21 +157,22 @@ pub fn init_cpu(idle: Arc<Thread>) {
 
 /// Makes a new or blocked thread runnable.
 pub fn make_ready(t: &Arc<Thread>) {
-    let prio = {
+    {
         let mut s = t.sched.lock();
         debug_assert!(matches!(s.state, State::New | State::Blocked));
         s.state = State::Ready;
-        s.priority
-    };
+    }
+    let now = time::now_ns();
+    let prio = t.effective_priority(now);
     RUNQ.lock().push(t.clone(), prio);
-    after_wakeup(prio);
+    after_wakeup(prio, now);
 }
 
 /// Preemption and idle-CPU wake-up after `prio` became runnable.
-fn after_wakeup(prio: u8) {
+fn after_wakeup(prio: u8, now: u64) {
     let me = percpu::cpu_id_or_boot();
     if let Some(cur) = try_current()
-        && (cur.is_idle || prio > cur.priority())
+        && (cur.is_idle || prio > cur.effective_priority(now))
     {
         cpu_sched().need_resched = true;
     }
@@ -158,7 +195,7 @@ fn after_wakeup(prio: u8) {
 
 /// Wakes a blocked thread. No effect on threads in other states.
 pub fn wake(t: &Arc<Thread>, reason: WakeReason) {
-    let prio = {
+    {
         let mut s = t.sched.lock();
         if s.state != State::Blocked {
             return;
@@ -168,10 +205,11 @@ pub fn wake(t: &Arc<Thread>, reason: WakeReason) {
         if let Some(key) = s.timeout_key.take() {
             TIMEOUTS.lock().remove(&key);
         }
-        s.priority
-    };
+    }
+    let now = time::now_ns();
+    let prio = t.effective_priority(now);
     RUNQ.lock().push(t.clone(), prio);
-    after_wakeup(prio);
+    after_wakeup(prio, now);
 }
 
 /// Blocks the current thread until [`wake`] is called or `deadline`
@@ -262,22 +300,23 @@ pub fn schedule() {
     cs.need_resched = false;
     let cur = cs.current.clone().expect("schedule() without a current thread");
     let cur_state = cur.state();
+    let now = time::now_ns();
     let next = {
         let mut rq = RUNQ.lock();
         if cur_state == State::Running && !cur.is_idle {
+            let prio = cur.effective_priority(now);
             match rq.highest() {
-                Some(p) if p >= cur.priority() => {
+                Some(p) if p >= prio => {
                     let next = rq.pop().unwrap();
                     cur.sched.lock().state = State::Ready;
-                    let prio = cur.priority();
                     rq.push(cur.clone(), prio);
                     next
                 }
                 _ => {
                     drop(rq);
                     // Keep running; start a fresh slice if this one ended.
-                    if time::now_ns() >= cs.slice_end {
-                        cs.slice_end = time::now_ns() + TIME_SLICE_NS;
+                    if now >= cs.slice_end {
+                        cs.slice_end = now + TIME_SLICE_NS;
                     }
                     arm_timer(false);
                     return;
@@ -319,6 +358,10 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
         s.cpu = percpu::cpu_id_or_boot();
     }
     cs.slice_end = now + TIME_SLICE_NS;
+    // A slice it was given, after it waited too long, begins.
+    if next.boost_until.load(Ordering::Relaxed) == u64::MAX {
+        next.boost_until.store(cs.slice_end, Ordering::Relaxed);
+    }
     arm_timer(next.is_idle);
 
     let (prev_ctx, next_ctx) = (prev.ctx_ptr(), next.ctx_ptr());
@@ -380,10 +423,25 @@ pub fn request_resched() {
     cpu_sched().need_resched = true;
 }
 
+/// Gives the threads below `NORMAL` that have waited [`STARVED_NS`] for a
+/// processor a time slice at `NORMAL`, looking every [`STARVED_SCAN_NS`]
+/// (on whichever processor's timer comes first).
+fn boost_starved(now: u64) {
+    static SCANNED: AtomicU64 = AtomicU64::new(0);
+    let last = SCANNED.load(Ordering::Relaxed);
+    if now < last + STARVED_SCAN_NS
+        || SCANNED.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err()
+    {
+        return;
+    }
+    RUNQ.lock().boost_starved(now);
+}
+
 /// The CPU's timer interrupt.
 pub fn timer_interrupt() {
     let now = time::now_ns();
     expire_timeouts(now);
+    boost_starved(now);
     if percpu::cpu_id_or_boot() == 0 {
         crate::log::pump_serial();
     }

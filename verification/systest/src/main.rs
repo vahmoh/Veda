@@ -312,6 +312,74 @@ pub fn bare_process(max_priority: usize) -> Result<rt::object::Process, abi::Err
     Ok(rt::object::Process(unsafe { rt::object::Handle::from_raw(h as u32) }))
 }
 
+/// No ready thread waits for ever, nor does whoever waits for it: a thread
+/// below the normal priority takes a lock, then a thread at the normal
+/// priority spins on every processor, and this thread (normal too) waits
+/// for the lock. The low thread never gets a processor again but for the
+/// time slice at the normal priority the scheduler gives a thread that
+/// has waited a second, in which it lets the lock go: this thread has the
+/// lock within a few seconds, where it would wait for ever otherwise.
+fn test_starved_threads_run() -> TestResult {
+    use core::sync::atomic::AtomicBool;
+    let err = |e: abi::Error| e.to_string();
+    let lock = Arc::new(Mutex::new(()));
+    let (held, go, stop) =
+        (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (l, h, g) = (lock.clone(), held.clone(), go.clone());
+    let holder = rt::thread::Builder::new()
+        .name("holder")
+        .priority(abi::priority::NORMAL - 2)
+        .spawn(move || {
+            let guard = l.lock();
+            h.store(true, Ordering::Release);
+            // Holds the lock until the processors are busy, never waiting.
+            while !g.load(Ordering::Acquire) {
+                core::hint::spin_loop();
+            }
+            drop(guard);
+        })
+        .map_err(err)?;
+    while !held.load(Ordering::Acquire) {
+        rt::time::sleep(rt::time::Duration::from_millis(1));
+    }
+    let spinners: Vec<_> = (0..rt::pool::cpus())
+        .map(|_| {
+            let stop = stop.clone();
+            rt::thread::Builder::new().name("spinner").spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    core::hint::spin_loop();
+                }
+            })
+        })
+        .collect::<Result<_, _>>()
+        .map_err(err)?;
+    // The holder loses its processor to the spinners before it sees this.
+    rt::time::sleep(rt::time::Duration::from_millis(50));
+    go.store(true, Ordering::Release);
+    let start = rt::time::now_ns();
+    let deadline = start + 5_000_000_000;
+    let mut waited = None;
+    while rt::time::now_ns() < deadline {
+        if lock.try_lock().is_some() {
+            waited = Some(rt::time::now_ns() - start);
+            break;
+        }
+        rt::time::sleep(rt::time::Duration::from_millis(5));
+    }
+    stop.store(true, Ordering::Relaxed);
+    for s in spinners {
+        let _ = s.join();
+    }
+    holder.join().map_err(err)?;
+    match waited {
+        Some(ns) => {
+            println!("starved threads run: the lock came after {} ms", ns / 1_000_000);
+            Ok(())
+        }
+        None => Err("a thread below the normal priority, ready, never ran again to let a lock go".into()),
+    }
+}
+
 fn test_ipc_primitives() -> TestResult {
     // Channel with a VMO handle travelling through it.
     let (a, b) = Channel::create().map_err(|e| e.to_string())?;
@@ -467,7 +535,8 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 34] = [
+    let tests: [Test; 35] = [
+        ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
         ("ports", ports::test_ports),
