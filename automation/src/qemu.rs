@@ -251,7 +251,10 @@ impl Default for VmConfig {
     fn default() -> Self {
         VmConfig {
             cpus: 4,
-            memory_mib: 1024,
+            // The system image is in memory (some 490 MiB, the web engine
+            // most of it) and the driver VM takes 256 MiB: 1 GiB would leave
+            // too little for a page composited at a laptop's size.
+            memory_mib: 2048,
             display: true,
             screen: Screen::DEFAULT,
             audio: true,

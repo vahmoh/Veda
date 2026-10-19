@@ -251,7 +251,7 @@ into the C library and links the native programs (GCC, binutils) again,
 without recompiling them. It installs the C test programs in
 `/system/tests/c` and the native toolchain in `/system`: about 80 MB,
 which Veda keeps in memory (compiling is comfortable in QEMU's default
-1 GiB).
+2 GiB).
 
 ### Packages
 

@@ -39,7 +39,7 @@ Their options (of values separated by `|`, the first is the default):
   `--cmdline "..."` (kernel arguments, 256 bytes at most with the
   build's), `--no-generate` (reuse the generated media), `--skip PROGRAM`
   (leave a program out; repeatable).
-* **QEMU:** `--smp N` (default 4), `--memory MiB` (default 1024),
+* **QEMU:** `--smp N` (default 4), `--memory MiB` (default 2048),
   `--headless`, `--serial FILE`, `--gdb` (a debugger on localhost:1234),
   `--qemu-arg ARG` (repeatable), `--gpu` or `--no-gpu` (default: a 3D GPU
   if QEMU has one), `--no-iommu`, `--sound virtio|hda`, `--no-audio`,

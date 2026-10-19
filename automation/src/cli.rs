@@ -77,7 +77,7 @@ BUILD OPTIONS:
 
 RUN OPTIONS:
     --smp N             Number of virtual CPUs (default 4)
-    --memory MiB        Guest RAM in MiB (default 1024)
+    --memory MiB        Guest RAM in MiB (default 2048)
     --headless          No display window (serial console only)
     --no-iommu          Leave the IOMMU out of QEMU's machine (it has one, remapping
                         interrupts, as the driver VM's devices need)
