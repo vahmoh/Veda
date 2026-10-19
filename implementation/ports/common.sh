@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # The helpers the build scripts of the ports share (`build.sh`,
-# `linux/build.sh` and `crates.sh`). They expect PORTS (the ports
-# directory), VEDA_ARCH (the architecture built for), DOWNLOADS (the
-# verified archives), SRC (where ports are unpacked) and STAMPS (the
-# stages' fingerprints).
+# `linux/build.sh`, `wpewebkit/build.sh` and `crates.sh`). They expect
+# PORTS (the ports directory), VEDA_ARCH (the architecture built for),
+# DOWNLOADS (the verified archives), SRC (where ports are unpacked) and
+# STAMPS (the stages' fingerprints).
 
 log() { printf '\033[1;32m%12s\033[0m %s\n' "$1" "$2"; }
 
@@ -34,7 +34,10 @@ patches() {
 # Runs stage NAME (a shell function stage_NAME) unless its fingerprint is
 # unchanged. Other arguments are what it depends on: files, stages, ports
 # as Veda builds them (+NAME: the release and Veda's patches) and
-# variables it uses (@NAME).
+# variables it uses (@NAME). Files count by their contents alone (read
+# from standard input, sha256sum names none): where the checkout is
+# changes nothing, so a build directory used from another checkout of
+# the same ports finds its stages fresh.
 stage() {
 	local name=$1
 	shift
@@ -45,10 +48,10 @@ stage() {
 			case "$dep" in
 			@*) declare -p "${dep#@}" ;;
 			+*)
-				sha256sum "$PORTS/${dep#+}/port.toml"
-				patches "${dep#+}" | while IFS= read -r p; do sha256sum "$p"; done
+				sha256sum < "$PORTS/${dep#+}/port.toml"
+				patches "${dep#+}" | while IFS= read -r p; do sha256sum < "$p"; done
 				;;
-			*) if [ -f "$dep" ]; then sha256sum "$dep"; else cat "$STAMPS/$dep"; fi ;;
+			*) if [ -f "$dep" ]; then sha256sum < "$dep"; else cat "$STAMPS/$dep"; fi ;;
 			esac
 		done
 	} | sha256sum | cut -d' ' -f1)

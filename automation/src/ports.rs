@@ -356,6 +356,59 @@ mod tests {
     }
 
     #[test]
+    fn stages_are_fresh_from_another_checkout() {
+        // Two checkouts of the same port, at different paths, building into
+        // one directory (a worktree's build with the main checkout's
+        // VEDA_TOOLCHAIN, say): the second finds the first's stages fresh,
+        // until what one of the files holds changes.
+        let dir = std::env::temp_dir().join(format!("automation-stages-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let checkouts = [dir.join("one"), dir.join("elsewhere").join("two")];
+        let architecture_patch =
+            |ports: &Path| ports.join("p").join("architectures").join(arch::NAME).join("veda.patch");
+        for ports in &checkouts {
+            util::create_dir_all(architecture_patch(ports).parent().unwrap()).unwrap();
+            util::copy(&super::dir().join("common.sh"), &ports.join("common.sh")).unwrap();
+            util::write(&ports.join("p").join("port.toml"), "name = \"p\"\nversion = \"1\"\n").unwrap();
+            util::write(&ports.join("p").join("veda.patch"), "Veda's patch\n").unwrap();
+            util::write(&architecture_patch(ports), "the architecture's patch\n").unwrap();
+            util::write(&ports.join("p").join("settings"), "a setting\n").unwrap();
+        }
+        let stamps = dir.join("stamps");
+        util::create_dir_all(&stamps).unwrap();
+        // The port's source as Veda patches it, then its build, which
+        // depends on a file and a variable too: the stages that run.
+        let ran = dir.join("ran");
+        let build = |ports: &Path| {
+            let script = r#"source "$PORTS/common.sh"
+                stage_src_p() { echo src_p >> "$RAN"; }
+                stage src_p +p
+                stage_p() { echo p >> "$RAN"; }
+                stage p src_p "$PORTS/p/settings" @ROOT"#;
+            let out = Command::new("bash")
+                .args(["-euo", "pipefail", "-c", script])
+                .env("PORTS", ports)
+                .env("VEDA_ARCH", arch::NAME)
+                .env("STAMPS", &stamps)
+                .env("ROOT", &dir)
+                .env("RAN", &ran)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            let stages = std::fs::read_to_string(&ran).unwrap_or_default();
+            let _ = std::fs::remove_file(&ran);
+            stages.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(build(&checkouts[0]), "src_p p");
+        assert_eq!(build(&checkouts[1]), "");
+        util::write(&architecture_patch(&checkouts[1]), "another patch\n").unwrap();
+        assert_eq!(build(&checkouts[1]), "src_p p");
+        util::write(&checkouts[1].join("p").join("settings"), "another setting\n").unwrap();
+        assert_eq!(build(&checkouts[1]), "p");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn fingerprints_change_with_the_ports() {
         let print = fingerprint(&["zlib"], &[dir().join("common.sh")]).unwrap();
         assert_eq!(print.len(), 64);

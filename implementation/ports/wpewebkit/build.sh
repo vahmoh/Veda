@@ -269,11 +269,17 @@ relocate_cmake_packages() {
 # CMake's description of Veda (a toolchain file), for the libraries built
 # with CMake: the system is Veda (Platform/Veda.cmake, beside this
 # script), what it finds is under system/ and the C library's sysroot.
+# CMake reads the system's description from a copy in the build, so that
+# the toolchain file names no checkout: every library's fingerprint has
+# it, and their build trees outlast the checkout that configured them.
+CMAKE_MODULES=$BUILD/cmake
+rm -rf "$CMAKE_MODULES"
+cp -r "$PORTS/wpewebkit/cmake" "$CMAKE_MODULES"
 CMAKE_TOOLCHAIN=$BUILD/veda.cmake
 cat > "$CMAKE_TOOLCHAIN" <<EOF
 set(CMAKE_SYSTEM_NAME Veda)
 set(CMAKE_SYSTEM_PROCESSOR $MESON_CPU)
-list(APPEND CMAKE_MODULE_PATH "$PORTS/wpewebkit/cmake")
+list(APPEND CMAKE_MODULE_PATH "$CMAKE_MODULES")
 set(CMAKE_C_COMPILER "$CC_VEDA")
 set(CMAKE_CXX_COMPILER "$CXX_VEDA")
 set(CMAKE_AR "$CROSS/bin/$TARGET-ar" CACHE FILEPATH "")
@@ -323,7 +329,7 @@ autoconf_veda() {
 # depends on: the cross file, the toolchain file, CMake's description of
 # the system, the helpers above, and the flags.
 declare -f meson_veda relocate_cmake_packages cmake_veda autoconf_veda > "$BUILD/helpers.sh"
-CONFIG_FILES=("$MESON_CROSS" "$CMAKE_TOOLCHAIN" "$PORTS/wpewebkit/cmake/Platform/Veda.cmake" "$BUILD/helpers.sh")
+CONFIG_FILES=("$MESON_CROSS" "$CMAKE_TOOLCHAIN" "$CMAKE_MODULES/Platform/Veda.cmake" "$BUILD/helpers.sh")
 
 # The stages of library PORT: its source as Veda patches it (`src_NAME`),
 # then its build (`NAME`, with the stage function stage_NAME), which also

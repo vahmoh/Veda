@@ -28,13 +28,15 @@ fetches its stage 0 (the compiler, standard library and Cargo of the
 release that builds it), checked against the SHA-256s in the release's
 `src/stage0`.
 
-The scripts (`build.sh`, `linux/build.sh`, `crates.sh`; `common.sh`
-holds what they share) list what they expect and make in their opening
-comments. They build for the architecture `cargo automation` names
-(`VEDA_ARCH`), with its settings from
+The scripts (`build.sh`, `linux/build.sh`, `wpewebkit/build.sh`,
+`crates.sh`; `common.sh` holds what they share) list what they expect and
+make in their opening comments. They build for the architecture
+`cargo automation` names (`VEDA_ARCH`), with its settings from
 `architectures/<architecture>/settings.sh` (target triples, the names
 other projects give the architecture, the media libraries' assembler). A
-stage runs again only when its inputs change.
+stage runs again only when its inputs change: its commands, the contents
+of the files and ports it uses (not where the checkout is), the stages
+before it, and the variables it reads, its build directory among them.
 
 ## Toolchain
 

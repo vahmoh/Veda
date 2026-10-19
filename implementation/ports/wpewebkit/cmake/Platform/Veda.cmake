@@ -4,7 +4,9 @@
 # Veda, for CMake (CMAKE_SYSTEM_NAME Veda): a Unix system whose programs
 # are linked statically, by GCC and GNU ld, with musl. CMake finds this
 # file on CMAKE_MODULE_PATH, which the toolchain file of
-# implementation/ports/wpewebkit/build.sh sets.
+# implementation/ports/wpewebkit/build.sh sets to a copy of this
+# directory in the build: a change here reaches the libraries' builds
+# when the script runs again and copies it.
 
 # No shared libraries and no dlopen: what would link them links the static
 # archives instead.

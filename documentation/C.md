@@ -246,9 +246,10 @@ settings (`implementation/ports/architectures/<architecture>/settings.sh`) in
 
 Later builds redo what changed: each stage keeps a fingerprint of what
 went into it, and where (a toolchain directory that has moved is built
-again). When the POSIX layer changes, `cargo automation build` puts it
-into the C library and links the native programs (GCC, binutils) again,
-without recompiling them. It installs the C test programs in
+again; where the checkout is does not count, only what its files hold).
+When the POSIX layer changes, `cargo automation build` puts it into the
+C library and links the native programs (GCC, binutils) again, without
+recompiling them. It installs the C test programs in
 `/system/tests/c` and the native toolchain in `/system`: about 80 MB,
 which Veda keeps in memory (compiling is comfortable in QEMU's default
 2 GiB).

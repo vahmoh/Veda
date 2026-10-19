@@ -36,7 +36,9 @@
 # Every stage keeps a fingerprint of what went into it (its commands, the
 # patches, the stages before it) and is skipped while that is unchanged.
 # Build trees keep absolute paths, so the place itself is part of it: a
-# toolchain directory that has moved is built again.
+# toolchain directory that has moved is built again. The checkout's place
+# is not: files count by their contents alone, so a checkout elsewhere
+# (another worktree) finds the stages of the same ports fresh.
 
 set -euo pipefail
 
