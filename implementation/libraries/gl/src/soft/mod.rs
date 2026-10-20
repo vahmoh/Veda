@@ -117,6 +117,7 @@ impl SoftBackend {
                 max_array_layers: 2048,
                 max_renderbuffer_size: 8192,
                 max_samples: 4,
+                multisampled: crate::format::SIZED.iter().map(|i| i.format).collect(),
                 max_viewport: 16384,
                 color_buffer_float: true,
                 float_linear: true,

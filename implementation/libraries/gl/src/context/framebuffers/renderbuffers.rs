@@ -62,8 +62,10 @@ impl Context {
 
     /// The sample counts the renderer supports for a format (descending).
     pub(crate) fn sample_counts(&self, i: &Internal) -> &'static [u32] {
+        let caps = self.backend.caps();
         let renderable = i.renderable || i.float_renderable || i.format.has_depth() || i.format.has_stencil();
-        if !renderable || i.format.is_integer() || self.backend.caps().max_samples < 4 { &[] } else { &[4] }
+        let multisampled = caps.max_samples >= 4 && caps.multisampled.contains(&i.format);
+        if !renderable || i.format.is_integer() || !multisampled { &[] } else { &[4] }
     }
 
     /// `glRenderbufferStorage`.

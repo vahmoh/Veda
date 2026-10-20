@@ -13,6 +13,9 @@ pub struct HostCaps {
     pub sampler: [u32; 16],
     pub render: [u32; 16],
     pub readback: [u32; 16],
+    /// Formats whose images can have up to `max_samples` samples (none
+    /// where the capability set ends before it says, as older hosts' do).
+    pub multisample: [u32; 16],
     pub max_texture_array_layers: u32,
     /// Color buffers a framebuffer may have.
     pub max_render_targets: u32,
@@ -59,6 +62,8 @@ mod off {
     pub const MAX_ANISOTROPY: usize = 760;
     /// The fields up to and including `max_anisotropy`.
     pub const END: usize = 764;
+    /// `supported_multisample_formats`, beyond them.
+    pub const MULTISAMPLE: usize = 768;
 }
 
 impl HostCaps {
@@ -82,6 +87,7 @@ impl HostCaps {
             sampler: mask(off::SAMPLER),
             render: mask(off::RENDER),
             readback: mask(off::READBACK),
+            multisample: if b.len() >= off::MULTISAMPLE + 64 { mask(off::MULTISAMPLE) } else { [0; 16] },
             max_texture_array_layers: u(off::MAX_TEXTURE_ARRAY_LAYERS),
             max_render_targets: u(off::MAX_RENDER_TARGETS),
             max_samples: u(off::MAX_SAMPLES),
@@ -110,6 +116,10 @@ impl HostCaps {
 
     pub fn can_read_back(&self, format: u32) -> bool {
         bit(&self.readback, format)
+    }
+
+    pub fn can_multisample(&self, format: u32) -> bool {
+        bit(&self.multisample, format)
     }
 
     pub fn has(&self, bit: u32) -> bool {

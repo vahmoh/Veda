@@ -15,6 +15,7 @@
 //! Two back ends implement it: the software renderer ([`crate::soft`]) and
 //! the virgl renderer ([`crate::virgl`]), which runs on the GPU.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
 
@@ -657,7 +658,14 @@ pub struct Caps {
     pub max_cube_map_size: u32,
     pub max_array_layers: u32,
     pub max_renderbuffer_size: u32,
+    /// `GL_MAX_SAMPLES`: 4 if renderbuffers may have 4 samples in every
+    /// format OpenGL ES 3.0 asks it of
+    /// ([`Internal::multisample_required`](crate::format::Internal::multisample_required)),
+    /// otherwise 0.
     pub max_samples: u32,
+    /// The storage formats renderbuffers of which may have 4 samples, if
+    /// `max_samples` is 4: those, and any others the renderer multisamples.
+    pub multisampled: BTreeSet<Format>,
     pub max_viewport: u32,
     /// `EXT_color_buffer_float`.
     pub color_buffer_float: bool,

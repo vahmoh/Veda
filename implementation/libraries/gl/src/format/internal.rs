@@ -52,6 +52,16 @@ pub struct Internal {
     pub filterable: bool,
 }
 
+impl Internal {
+    /// Whether OpenGL ES 3.0 requires renderbuffers of this format to have
+    /// up to `GL_MAX_SAMPLES` samples: it does of every format it requires
+    /// renderbuffers in (its color-renderable formats, depth and stencil)
+    /// but the integer ones.
+    pub fn multisample_required(&self) -> bool {
+        (self.renderable && !self.format.is_integer()) || self.format.has_depth() || self.format.has_stencil()
+    }
+}
+
 const fn fmt(
     gl: u32,
     format: Format,

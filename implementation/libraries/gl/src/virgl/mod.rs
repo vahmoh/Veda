@@ -51,7 +51,7 @@ pub(crate) mod protocol;
 mod transport;
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -1157,6 +1157,16 @@ impl VirglBackend {
 fn caps_for(h: &HostCaps) -> Caps {
     let max_2d = h.max_texture_2d_size.clamp(2048, 16384);
     let renders = |f: u32| h.can_render(f);
+    // Renderbuffers may have 4 samples in the formats the host multisamples
+    // as it keeps them (`formats`), and GL_MAX_SAMPLES says 4 only where
+    // those are every format OpenGL ES 3.0 asks it of.
+    let multisampled: BTreeSet<Format> = crate::format::SIZED
+        .iter()
+        .map(|i| i.format)
+        .filter(|&f| h.max_samples >= 4 && formats::host_format(h, f).is_some_and(|hf| h.can_multisample(hf.virgl)))
+        .collect();
+    let mut required = crate::format::SIZED.iter().filter(|i| i.multisample_required());
+    let max_samples = if required.all(|i| multisampled.contains(&i.format)) { 4 } else { 0 };
     Caps {
         // Mesa's driver of the GPU's ("softpipe", "Mesa Intel(R) Graphics
         // (ADL GT2)", "virgl (...)" under QEMU).
@@ -1166,7 +1176,8 @@ fn caps_for(h: &HostCaps) -> Caps {
         max_cube_map_size: h.max_texture_cube_size.clamp(2048, 16384),
         max_array_layers: h.max_texture_array_layers.clamp(256, 2048),
         max_renderbuffer_size: max_2d,
-        max_samples: if h.max_samples >= 4 { 4 } else { 0 },
+        max_samples,
+        multisampled,
         max_viewport: max_2d,
         color_buffer_float: [
             format::R16_FLOAT,

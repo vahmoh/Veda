@@ -292,10 +292,11 @@ fn caps() -> Vec<u8> {
     let mut put = |o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
     put(0, 2);
     for i in 0..16 {
-        // Sampling, rendering and reading back.
+        // Sampling, rendering, reading back and multisampling.
         put(4 + 4 * i, !0);
         put(68 + 4 * i, !0);
         put(560 + 4 * i, !0);
+        put(768 + 4 * i, !0);
     }
     put(268, 2048);
     put(280, 8);

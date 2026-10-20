@@ -168,6 +168,55 @@ fn feedback_the_host_cannot_record_is_shaded_in_guest_memory() {
 }
 
 #[test]
+fn multisampling_is_offered_in_the_formats_the_host_multisamples() {
+    use crate::virgl::VirglBackend;
+    use crate::virgl::protocol::format;
+    // The fake host as it is, or changed: a format's bit of
+    // `supported_multisample_formats` (at 768) cleared, the capability set
+    // ending before the mask, or fewer samples than `gl` gives.
+    let context = |change: &dyn Fn(&mut Vec<u8>)| {
+        let (mut t, _) = fake::Fake::new();
+        change(&mut t.caps);
+        let b = VirglBackend::new(std::boxed::Box::new(t)).expect("the fake host suits the renderer");
+        Context::new(std::boxed::Box::new(b), Config::default())
+    };
+    let without = |f: u32| move |caps: &mut Vec<u8>| caps[768 + f as usize / 8] &= !(1 << (f % 8));
+    // How many sample counts renderbuffers of a format may have.
+    let counts = |c: &mut Context, internalformat: u32| {
+        let mut n = [0];
+        c.get_internalformativ(gl::RENDERBUFFER, internalformat, gl::NUM_SAMPLE_COUNTS, &mut n);
+        n[0]
+    };
+    let mut c = context(&|_| {});
+    assert_eq!(c.get_integer(gl::MAX_SAMPLES), 4);
+    for f in [gl::RGBA8, gl::RGB565, gl::DEPTH24_STENCIL8, gl::DEPTH32F_STENCIL8, gl::STENCIL_INDEX8, gl::RGBA32F] {
+        assert_eq!(counts(&mut c, f), 1, "{f:#x}");
+    }
+    // OpenGL ES 3.0 asks GL_MAX_SAMPLES of 24-bit depth with stencil (which
+    // stencil alone is kept as) and of 32-bit depth with stencil: a host
+    // that cannot multisample one of them multisamples nothing here.
+    for f in [format::S8_UINT_Z24_UNORM, format::Z32_FLOAT_S8X24_UINT] {
+        let mut c = context(&without(f));
+        assert_eq!(c.get_integer(gl::MAX_SAMPLES), 0, "{f}");
+        assert_eq!(counts(&mut c, gl::RGBA8), 0, "{f}");
+        let rb = c.gen_renderbuffer();
+        c.bind_renderbuffer(gl::RENDERBUFFER, rb);
+        c.renderbuffer_storage_multisample(gl::RENDERBUFFER, 4, gl::RGBA8, 4, 4);
+        assert_eq!(c.get_error(), gl::INVALID_OPERATION, "{f}");
+    }
+    // Nor does one that does not say, or has fewer samples.
+    let mut c = context(&|caps| caps.truncate(764));
+    assert_eq!(c.get_integer(gl::MAX_SAMPLES), 0);
+    let mut c = context(&|caps| caps[284..288].copy_from_slice(&2u32.to_le_bytes()));
+    assert_eq!(c.get_integer(gl::MAX_SAMPLES), 0);
+    // A format it does not ask of goes without alone.
+    let mut c = context(&without(format::R32G32B32A32_FLOAT));
+    assert_eq!(c.get_integer(gl::MAX_SAMPLES), 4);
+    assert_eq!((counts(&mut c, gl::RGBA32F), counts(&mut c, gl::RGBA8)), (0, 1));
+    no_error(&mut c);
+}
+
+#[test]
 fn hosts_short_of_what_applications_are_offered_are_refused() {
     use crate::virgl::{Unsupported, VirglBackend};
     // Offsets in `struct virgl_caps_v2`, and values below the front end's.
