@@ -2246,14 +2246,19 @@ static WebKitSettings *settings_new(void)
 		/* Layers composited on the GPU, with OpenGL ES, by WebKit's
 		 * TextureMapper (whose few simple shaders virgl takes as they are,
 		 * rather than by Skia's GPU back end); their contents painted on the
-		 * CPU by Skia (see engine_start), canvases too. */
+		 * CPU by Skia (see engine_start), 2D canvases too. WebGL draws on
+		 * the GPU, through ANGLE, into textures the compositor samples. */
 		webkit_settings_set_hardware_acceleration_policy(settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_ALWAYS);
 		set_feature(settings, "UseSkiaForComposition", FALSE);
 		webkit_settings_set_enable_2d_canvas_acceleration(settings, FALSE);
 	} else {
 		/* Each page painted on the CPU, by Skia, into the shared memory the
-		 * frames come in. */
+		 * frames come in. WebGL draws on the GPU or not at all (OpenGL ES
+		 * in software would take every processor), and the web processes
+		 * reach no GPU then: pages find no WebGL, as in a browser without
+		 * it, and draw as they do there. */
 		webkit_settings_set_hardware_acceleration_policy(settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+		webkit_settings_set_enable_webgl(settings, FALSE);
 	}
 	webkit_settings_set_enable_developer_extras(settings, FALSE);
 	webkit_settings_set_javascript_can_open_windows_automatically(settings, FALSE);

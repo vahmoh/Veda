@@ -813,9 +813,12 @@ GST_HEADERS=$(cd "$SYSTEM" && find include/gstreamer-1.0 lib/pkgconfig -type f \
 # the egl library's), or paints each straight into shared memory. Media
 # (<video>, <audio>, Media Source Extensions, Web Audio) is GStreamer's,
 # static (gstreamer-full), its video painted on the CPU or composited
-# without GStreamer's OpenGL. What it leaves out for now: WebRTC, WebCodecs,
-# encrypted media and capture, WebGL and the GPU process, and what is
-# Linux's (bubblewrap, journald, DRM, Wayland).
+# without GStreamer's OpenGL. WebGL is ANGLE's, built into the engine
+# (libANGLE, libGLESv2), in the web process: its OpenGL back end draws with
+# the program's OpenGL ES, which it finds through the program's
+# eglGetProcAddress, sharing objects with the compositor's. What it leaves
+# out for now: WebRTC, WebCodecs, encrypted media and capture, the GPU
+# process, and what is Linux's (bubblewrap, journald, DRM, Wayland).
 WEBKIT_OPTIONS=(
 	-DPORT=WPE -DCMAKE_BUILD_TYPE=Release
 	-DENABLE_WPE_PLATFORM=ON -DENABLE_WPE_PLATFORM_HEADLESS=ON -DENABLE_WPE_PLATFORM_DRM=OFF
@@ -826,12 +829,12 @@ WEBKIT_OPTIONS=(
 	-DENABLE_SPELLCHECK=OFF -DENABLE_WEBDRIVER=OFF -DENABLE_MINIBROWSER=OFF -DENABLE_API_TESTS=OFF -DENABLE_COG=OFF
 	-DUSE_GSTREAMER=ON -DUSE_GSTREAMER_FULL=ON -DUSE_GSTREAMER_GL=OFF -DUSE_GSTREAMER_WEBRTC=OFF -DENABLE_VIDEO=ON
 	-DENABLE_WEB_AUDIO=ON -DENABLE_MEDIA_SOURCE=ON -DENABLE_MEDIA_STREAM=OFF -DENABLE_MEDIA_RECORDER=OFF
-	-DENABLE_WEB_CODECS=OFF -DENABLE_ENCRYPTED_MEDIA=OFF -DENABLE_THUNDER=OFF -DENABLE_GAMEPAD=OFF -DENABLE_WEBGL=OFF
+	-DENABLE_WEB_CODECS=OFF -DENABLE_ENCRYPTED_MEDIA=OFF -DENABLE_THUNDER=OFF -DENABLE_GAMEPAD=OFF -DENABLE_WEBGL=ON
 	-DENABLE_WEBXR=OFF -DENABLE_MEDIA_SESSION=OFF -DENABLE_GPU_PROCESS=OFF -DUSE_AVIF=OFF -DUSE_JPEGXL=OFF
 	-DUSE_LCMS=ON -DUSE_WOFF2=ON -DUSE_VULKAN=OFF -DENABLE_XSLT=ON -DENABLE_PDFJS=ON -DUSE_THIN_ARCHIVES=OFF
 )
 # Its parts' libraries, in the order they link: each needs the ones after it.
-WEBKIT_LIBRARIES=(WPEWebKit-2.0 WebCore PAL JavaScriptCore WTF bmalloc Skia xdgmime)
+WEBKIT_LIBRARIES=(WPEWebKit-2.0 WebCore GLESv2 ANGLE PAL JavaScriptCore WTF bmalloc Skia xdgmime)
 # What they need of the libraries above, beyond what WebKit's own file says
 # (it has nothing to say of a static build), and GLib's modules for TLS and
 # proxies, which the program registers (they are no shared modules here).
@@ -884,10 +887,12 @@ stage webkit src_wpewebkit host_meson host_pkgconf host_gperf host_ruby host_gli
 # system/share/licences/PORT/ (the image's /system/licences/web): what
 # their licences ask of whoever passes their binaries on. WebKit's are its
 # parts' (WebCore's, JavaScriptCore's and WTF's LGPL and BSD licences) and
-# those of the code of others it builds into the program (Skia; PDF.js and
-# what its viewer brings: Adobe's character maps, Foxit's and Liberation's
-# fonts, and OpenJPEG and PDFium's JBIG2 decoder, built into JavaScript;
-# WTF's borrowings, and xdgmime, whose terms are its sources' header). Each
+# those of the code of others it builds into the program (Skia; ANGLE, its
+# xxHash and its borrowings from Chromium, whose terms are ANGLE's and
+# whose notices are their sources' headers; PDF.js and what its viewer
+# brings: Adobe's character maps, Foxit's and Liberation's fonts, and
+# OpenJPEG and PDFium's JBIG2 decoder, built into JavaScript; WTF's
+# borrowings, and xdgmime, whose terms are its sources' header). Each
 # library above has its texts here, but for those whose licences ask for
 # none: SQLite is in the public domain, and EGL's headers only name types.
 LICENCE_FILES=(
@@ -902,6 +907,7 @@ LICENCE_FILES=(
 	zlib:LICENSE
 	wpewebkit:Source/WebCore/LICENSE-LGPL-2 wpewebkit:Source/WebCore/LICENSE-LGPL-2.1
 	wpewebkit:Source/WebCore/LICENSE-APPLE wpewebkit:Source/ThirdParty/skia/LICENSE
+	wpewebkit:Source/ThirdParty/ANGLE/LICENSE wpewebkit:Source/ThirdParty/ANGLE/src/common/third_party/xxhash/LICENSE
 	wpewebkit:Source/ThirdParty/pdfjs/LICENSE wpewebkit:Source/ThirdParty/pdfjs/web/cmaps/LICENSE
 	wpewebkit:Source/ThirdParty/pdfjs/web/standard_fonts/LICENSE_FOXIT
 	wpewebkit:Source/ThirdParty/pdfjs/web/standard_fonts/LICENSE_LIBERATION
@@ -932,6 +938,15 @@ stage_licences() {
 	mkdir -p "$dir/wpewebkit/Source/ThirdParty/xdgmime"
 	sed -n '1,/\*\//p' "$SRC/wpewebkit/Source/ThirdParty/xdgmime/src/xdgmime.c" \
 		> "$dir/wpewebkit/Source/ThirdParty/xdgmime/COPYING"
+	# The notices of the Chromium code ANGLE builds in (its base library's
+	# SHA-1, and zlib's wrapper), from their sources' headers: their terms
+	# are the BSD licence of ANGLE's LICENSE.
+	local angle=$SRC/wpewebkit/Source/ThirdParty/ANGLE
+	{
+		sed -n '1,3p' "$angle/src/common/base/anglebase/sha1.cc"
+		echo
+		sed -n '1,/\*\//p' "$angle/third_party/zlib/google/compression_utils_portable.cc"
+	} > "$dir/wpewebkit/Source/ThirdParty/ANGLE/CHROMIUM"
 }
 LICENCE_SOURCES=(src_wpewebkit)
 for port in "${LIBRARIES[@]}"; do

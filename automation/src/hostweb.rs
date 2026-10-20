@@ -15,11 +15,11 @@
 //! through Media Source Extensions, a sound file, and Web Audio's;
 //! their scripts say how they played. Pages that move (a box spinning, a
 //! page scrolling itself, a box crossing the page on a click) measure and
-//! check its frames. A page reads a file the user chooses, as before an
-//! upload, another counts its visits in IndexedDB, one takes all the
-//! memory it can, a file comes to be downloaded, and a PDF to be shown.
-//! Files are sent whole or in the byte ranges asked for, as media players
-//! ask.
+//! check its frames, and one draws with WebGL and reads back what it drew.
+//! A page reads a file the user chooses, as before an upload, another
+//! counts its visits in IndexedDB, one takes all the memory it can, a file
+//! comes to be downloaded, and a PDF to be shown. Files are sent
+//! whole or in the byte ranges asked for, as media players ask.
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
@@ -402,6 +402,165 @@ request.onsuccess = () => {
 </body></html>
 "#;
 
+/// WebGL (`/webgl`), whose script says what it found: WebGL 1 draws, with
+/// shaders of the kind pages draw skies with (noise, loops, smoothstep, a
+/// uniform for the time), quarters of known colours, which it reads back;
+/// WebGL 2, where it is offered, draws a texture through a framebuffer
+/// with GLSL ES 3.00 (`texelFetch`) and reads it back; and the sky moves,
+/// every frame, which it counts for three seconds. Then a verdict: the
+/// checks passed if WebGL 1's colours are right, WebGL 2's too or it is not
+/// offered, and the sky moved.
+const WEBGL: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>WebGL</title>
+<style>body { font-family: sans-serif; margin: 32px 40px; } canvas { display: block; margin: 12px 0; }</style>
+</head><body><h1>WebGL</h1>
+<p id="one">No script ran.</p>
+<p id="two">No script ran.</p>
+<p id="motion">No script ran.</p>
+<p id="verdict">No verdict yet.</p>
+<p id="renderer"></p>
+<canvas id="sky" width="480" height="270"></canvas>
+<canvas id="quarters" width="64" height="64"></canvas>
+<script>
+const say = (id, text) => { document.getElementById(id).textContent = text; };
+const VERTEX = 'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }';
+const QUARTERS = 'precision mediump float; uniform vec2 size;\n' +
+  'void main() { vec2 uv = gl_FragCoord.xy / size; gl_FragColor = vec4(step(0.5, uv.x), step(0.5, uv.y), 0.5, 1.0); }';
+const SKY = `precision mediump float;
+uniform vec2 size;
+uniform float time;
+float hash(vec2 p) { p = fract(p * vec2(234.34, 435.345)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 3; i++) { s += a * noise(p); p = mat2(1.6, 1.2, -1.2, 1.6) * p; a *= 0.5; }
+  return s;
+}
+void main() {
+  vec2 uv = gl_FragCoord.xy / size;
+  float band = exp(-pow((uv.y - 0.5 - 0.1 * sin(6.2831853 * uv.x + time)) / 0.08, 2.0));
+  vec3 c = mix(vec3(0.02, 0.03, 0.1), vec3(0.18, 0.9, 1.0), band) * (0.8 + 0.4 * fbm(uv * 4.0 + time * 0.1));
+  gl_FragColor = vec4(smoothstep(0.0, 1.0, c), 1.0);
+}`;
+const program = (gl, vertex, fragment) => {
+  const shader = (type, source) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, source);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+      throw new Error('a shader did not compile: ' + gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, vertex));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fragment));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error('a program did not link: ' + gl.getProgramInfoLog(p));
+  gl.useProgram(p);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const at = gl.getAttribLocation(p, 'p');
+  if (at >= 0) {
+    gl.enableVertexAttribArray(at);
+    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
+  }
+  return p;
+};
+const near = (got, want) => got.every((v, i) => Math.abs(v - want[i]) <= 2);
+const passed = { one: false, two: false, motion: false };
+const verdict = () => say('verdict', Object.values(passed).every(Boolean) ? 'WebGL checks: passed' : 'WebGL checks: not all passed');
+// WebGL 1: four quarters of known colours, read back.
+try {
+  const canvas = document.getElementById('quarters');
+  const gl = canvas.getContext('webgl');
+  if (!gl)
+    throw new Error('no context');
+  const p = program(gl, VERTEX, QUARTERS);
+  gl.uniform2f(gl.getUniformLocation(p, 'size'), canvas.width, canvas.height);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const at = (x, y) => { const px = new Uint8Array(4); gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return Array.from(px); };
+  const want = [[16, 16, [0, 0, 128, 255]], [48, 16, [255, 0, 128, 255]], [16, 48, [0, 255, 128, 255]], [48, 48, [255, 255, 128, 255]]];
+  const wrong = want.filter(([x, y, rgba]) => !near(at(x, y), rgba)).map(([x, y]) => `(${x}, ${y}) is ${at(x, y)}`);
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  say('renderer', `${gl.getParameter(gl.VERSION)}; ${gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}; ` +
+    (info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)));
+  say('one', wrong.length ? `WebGL 1: colours wrong: ${wrong.join(', ')}` : 'WebGL 1: colours right');
+  passed.one = !wrong.length;
+} catch (e) {
+  say('one', `WebGL 1 failed: ${e.message}`);
+}
+// WebGL 2: a texture of four texels drawn through a framebuffer, read back.
+try {
+  const gl = document.createElement('canvas').getContext('webgl2');
+  if (!gl) {
+    // ANGLE offers none where `gl` multisamples no format (under QEMU,
+    // where Veda's renderer finds none), as in a browser without WebGL 2.
+    passed.two = true;
+    throw new Error('not offered');
+  }
+  const texels = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 2, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, texels);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const target = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, target);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 2, 2);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+    throw new Error('the framebuffer is not complete');
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  program(gl, '#version 300 es\nin vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }',
+    '#version 300 es\nprecision mediump float; uniform sampler2D t; out vec4 color;\n' +
+    'void main() { color = texelFetch(t, ivec2(gl_FragCoord.xy), 0); }');
+  gl.viewport(0, 0, 2, 2);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const got = new Uint8Array(16);
+  gl.readPixels(0, 0, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE, got);
+  passed.two = near(Array.from(got), Array.from(texels));
+  say('two', passed.two ? 'WebGL 2: colours right' : `WebGL 2: colours wrong: ${Array.from(got)}`);
+} catch (e) {
+  say('two', passed.two ? 'WebGL 2: not offered' : `WebGL 2 failed: ${e.message}`);
+}
+// The sky, every frame, its frames counted for three seconds.
+try {
+  const canvas = document.getElementById('sky');
+  const gl = canvas.getContext('webgl');
+  if (!gl)
+    throw new Error('no context');
+  const p = program(gl, VERTEX, SKY);
+  gl.uniform2f(gl.getUniformLocation(p, 'size'), canvas.width, canvas.height);
+  const time = gl.getUniformLocation(p, 'time');
+  let frames = 0, first = 0, counted = false;
+  const draw = now => {
+    first = first || now;
+    gl.uniform1f(time, (now - first) / 1000);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    frames++;
+    if (!counted && now - first >= 3000) {
+      counted = true;
+      say('motion', `The sky moved: ${frames} frames in 3 s`);
+      passed.motion = frames >= 30;
+      verdict();
+    }
+    requestAnimationFrame(draw);
+  };
+  requestAnimationFrame(draw);
+} catch (e) {
+  say('motion', `The sky failed: ${e.message}`);
+  verdict();
+}
+</script>
+</body></html>
+"#;
+
 /// A page that takes all the memory it can (`/hog`), as a game that loads
 /// more than the machine has: a click starts it holding ever more buffers,
 /// each written through, which it never lets go of, so that its process
@@ -582,10 +741,10 @@ impl Drop for HostWeb {
 
 /// Answers one request: `GET /hello`, the browser's pages (`/page`,
 /// `/second`, `/zone`, `/cookie`, `/preferences`, `/scripts`, `/video`,
-/// `/audio`, `/mse`, `/webaudio`, `/upload`, `/storage`, `/hog`), their
-/// media (`/media/countdown.webm`, `/media/tone.wav`), a file to download
-/// (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or else
-/// nothing found.
+/// `/audio`, `/mse`, `/webaudio`, `/upload`, `/storage`, `/hog`, `/webgl`),
+/// their media (`/media/countdown.webm`, `/media/tone.wav`), a file to
+/// download (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or
+/// else nothing found.
 fn answer(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
@@ -617,6 +776,7 @@ fn answer(mut stream: TcpStream) {
         b"/upload" => Some((html, UPLOAD.as_bytes().into())),
         b"/storage" => Some((html, STORAGE.as_bytes().into())),
         b"/hog" => Some((html, HOG.as_bytes().into())),
+        b"/webgl" => Some((html, WEBGL.as_bytes().into())),
         b"/files/veda-download.txt" => Some(("application/octet-stream", DOWNLOAD.as_bytes().into())),
         b"/files/veda.pdf" => Some(("application/pdf", pdf().into())),
         b"/media/countdown.webm" => {
@@ -707,6 +867,7 @@ mod tests {
             ("/upload", "readAsArrayBuffer"),
             ("/storage", "indexedDB.open"),
             ("/hog", "new Uint8Array(32 << 20)"),
+            ("/webgl", "getContext('webgl2')"),
         ] {
             let page = get(port, path);
             assert!(page.starts_with("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"), "{page}");

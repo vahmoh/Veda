@@ -472,6 +472,121 @@
  
  #if !PLATFORM(COCOA)
  #define OVERRIDE_OPTION_WITH_HEURISTICS(type_, name_, defaultValue_, availability_, description_) \
+--- a/Source/ThirdParty/ANGLE/PlatformWPE.cmake
++++ b/Source/ThirdParty/ANGLE/PlatformWPE.cmake
+@@ -5,6 +5,15 @@
+ endif ()
+ include(linux.cmake)
+ 
++if (CMAKE_SYSTEM_NAME STREQUAL "Veda")
++    # Veda links programs statically, with Veda's EGL and OpenGL ES (the egl
++    # library), whose functions are named as OpenGL ES's: WebKit calls
++    # ANGLE's by their own names (GL_*, EGL_*), and ANGLE reaches Veda's
++    # through its eglGetProcAddress (FunctionsEGLDL.cpp), so ANGLE's
++    # exported names (glDrawArrays...) would only clash with them.
++    set(libglesv2_sources "")
++endif ()
++
+ if (USE_OPENGL)
+     # Enable GLSL compiler output.
+     list(APPEND ANGLE_DEFINITIONS ANGLE_ENABLE_GLSL)
+--- a/Source/ThirdParty/ANGLE/src/common/platform.h
++++ b/Source/ThirdParty/ANGLE/src/common/platform.h
+@@ -20,7 +20,8 @@
+ #elif defined(ANDROID) && !defined(ANGLE_ANDROID_DMA_BUF)
+ #    define ANGLE_PLATFORM_ANDROID 1
+ #    define ANGLE_PLATFORM_POSIX 1
+-#elif defined(__linux__) || defined(EMSCRIPTEN)
++#elif defined(__linux__) || defined(EMSCRIPTEN) || defined(__veda__)
++// Veda's C library has Linux's interface (musl on Veda's POSIX layer).
+ #    define ANGLE_PLATFORM_LINUX 1
+ #    define ANGLE_PLATFORM_POSIX 1
+ #elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) ||              \
+--- a/Source/ThirdParty/ANGLE/src/common/SimpleMutex.h
++++ b/Source/ThirdParty/ANGLE/src/common/SimpleMutex.h
+@@ -33,8 +33,10 @@
+ //
+ // There is no TSAN support for futex currently, so it is disabled in that case
+ #if !defined(ANGLE_WITH_TSAN)
+-#    if defined(ANGLE_PLATFORM_LINUX) || defined(ANGLE_PLATFORM_ANDROID)
+-// Linux has had futexes for a very long time.  Assume support.
++#    if (defined(ANGLE_PLATFORM_LINUX) || defined(ANGLE_PLATFORM_ANDROID)) && !defined(__veda__)
++// Linux has had futexes for a very long time.  Assume support. (Veda's
++// C library has Linux's interface, not its headers: <linux/futex.h>.
++// The mutex below is musl's, on Veda's futexes.)
+ #        define ANGLE_USE_FUTEX 1
+ #    elif defined(ANGLE_PLATFORM_WINDOWS) && !defined(ANGLE_ENABLE_WINDOWS_UWP) && \
+         !defined(ANGLE_WINDOWS_NO_FUTEX)
+--- a/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
++++ b/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
+@@ -8,10 +8,20 @@
+ 
+ #include "libANGLE/renderer/gl/egl/FunctionsEGLDL.h"
+ 
+-#include <dlfcn.h>
++#if defined(__veda__)
++// Veda links programs statically and has no dlopen(): the program's own EGL
++// (Veda's egl library) answers its eglGetProcAddress() for every entry
++// point, core ones too, as it does for libepoxy. A program without one has
++// no EGL, which initialize() says as it would of a library it cannot open.
++extern "C" void *veda_egl_get_proc_address(const char *name) __asm__("eglGetProcAddress")
++    __attribute__((weak));
++#else
++#    include <dlfcn.h>
++#endif
+ 
+ namespace rx
+ {
++#if !defined(__veda__)
+ namespace
+ {
+ // In ideal world, we would want this to be a member of FunctionsEGLDL,
+@@ -23,6 +33,7 @@
+ // referencing crbug.com/250813 and http://www.xfree86.org/4.3.0/DRI11.html
+ void *nativeEGLHandle;
+ }  // anonymous namespace
++#endif
+ 
+ FunctionsEGLDL::FunctionsEGLDL() : mGetProcAddressPtr(nullptr) {}
+ 
+@@ -33,7 +44,16 @@
+                                       const char *libName,
+                                       void *eglHandle)
+ {
+-
++#if defined(__veda__)
++    (void)libName;
++    (void)eglHandle;
++    if (!veda_egl_get_proc_address)
++    {
++        return egl::Error(EGL_NOT_INITIALIZED, "The program has no EGL");
++    }
++    mGetProcAddressPtr = reinterpret_cast<PFNEGLGETPROCADDRESSPROC>(veda_egl_get_proc_address);
++    return FunctionsEGL::initialize(platformType, nativeDisplay);
++#else
+     if (eglHandle)
+     {
+         // If the handle is provided, use it.
+@@ -60,6 +80,7 @@
+     }
+ 
+     return FunctionsEGL::initialize(platformType, nativeDisplay);
++#endif
+ }
+ 
+ void *FunctionsEGLDL::getProcAddress(const char *name) const
+@@ -69,7 +90,11 @@
+     {
+         return f;
+     }
++#if defined(__veda__)
++    return nullptr;
++#else
+     return dlsym(nativeEGLHandle, name);
++#endif
+ }
+ 
+ }  // namespace rx
 --- a/Source/ThirdParty/xdgmime/src/xdgmime.h
 +++ b/Source/ThirdParty/xdgmime/src/xdgmime.h
 @@ -77,6 +77,8 @@

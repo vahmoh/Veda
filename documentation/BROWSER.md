@@ -236,6 +236,7 @@ may use.
 | Files' types (shared-mime-info's database, which xdgmime reads) | None on Veda: WebKit knows the types of the files the web is made of (HTML, CSS, scripts, pictures, fonts, sound and video) by their extensions, so that a page from the user's files is shown as one; other files go by their contents |
 | A sandbox for the web processes (Linux's bubblewrap and seccomp), and one for the network process, which Linux's ports leave out | Veda's: the VFS connection and the registry channel confined, the kernel's `process_restrict` (`<veda/sandbox.h>`; [Security and privacy](#security-and-privacy)) |
 | Sandbox extensions (Cocoa's), which let a sandboxed process read a file the user opened | The VFS's loans (`veda_lend_files`, `veda_borrow_files`, `veda_take_back_files`): the browser lends its network process the folder of a page the user opens, and takes it back once no page open needs it ([Pages from the user's files](#pages-from-the-users-files)) |
+| WebGL: ANGLE, whose OpenGL back end opens the system's EGL (`libEGL.so.1`) | ANGLE on Veda as on Linux, its back end on Veda's EGL and OpenGL ES (`egl`, `gl`), found through the program's `eglGetProcAddress`, its contexts sharing objects with the compositor's ([WebGL](#webgl)) |
 
 **Text.** HarfBuzz shapes, FreeType renders and fontconfig chooses from
 `/system/fonts` (`implementation/ports/fontconfig/fonts.conf`): Inter for
@@ -457,6 +458,51 @@ switching a context's surface (`Config::surfaceless`,
 (`GL_EXT_texture_format_BGRA8888`, `GL_EXT_read_format_bgra`), share
 groups (`Local`), and the sizes of the pixel data C functions take
 pointers to (`Context::unpack_size`, `Context::pack_size`).
+
+### WebGL
+
+WebGL is WebKit's, on [ANGLE](https://chromium.googlesource.com/angle/angle),
+built into the engine as on WebKit's other ports, and runs in the page's
+web process (WebKit's GPU process stays off), on the GPU or not at all:
+
+* **ANGLE on Veda's OpenGL ES.** ANGLE checks each of a page's calls as
+  WebGL requires, translates its shaders to GLSL ES (which `glsl` compiles
+  for the GPU, as any program's), and draws with its OpenGL back end
+  through Veda's EGL and OpenGL ES (`egl`, `gl`). Its display is over
+  `egl`'s surfaceless one; it finds every function through the program's
+  `eglGetProcAddress`, where on Linux it would open `libEGL.so.1`, and
+  leaves out its own exported OpenGL ES names, which would clash with
+  Veda's (WebKit calls ANGLE's by ANGLE's own).
+* **No copies.** A canvas's WebGL contexts share their objects with the
+  compositor's: ANGLE makes their native contexts in the share group of
+  WebKit's sharing context (one `gl::Context` in `egl`), so the compositor
+  samples the canvas's drawing buffer, a texture, where WebGL drew it,
+  once the fence that ends each of the canvas's frames has passed. ANGLE
+  has a context of its own besides, as it starts: a second of the GPU's
+  for a process that draws WebGL ([its limits](DRIVERVM.md)).
+* **WebGL 1 and 2.** ANGLE offers WebGL 2 where `gl` multisamples every
+  format OpenGL ES 3.0 requires it to, as it does on a PC's GPU (iris).
+  Under QEMU, Veda's renderer finds no multisampling for depth with
+  stencil, so `gl` offers none: there `getContext('webgl2')` returns
+  null, as in a browser without WebGL 2, and WebGL 1 draws without
+  antialiasing.
+* **Where there is none.** Pages painted on the CPU (no GPU, the setting
+  off, a machine of 1 GiB) have no WebGL: the browser turns it off
+  (`webkit_settings_set_enable_webgl`), as their processes reach no GPU,
+  so `getContext('webgl')` returns null, as in a browser without it, and
+  pages draw as they do there (www.vedaos.org's sky stays the CSS one).
+  Nor do the pages of a web process the GPU gives no context.
+* **Checked three times.** A page's GL calls are checked by ANGLE, as
+  WebGL requires (its shaders translated so that they stay within their
+  buffers and arrays), by `gl`, as OpenGL ES requires, and by the
+  renderer's decoder in the driver VM, which bounds the GPU memory a
+  process may take ([the GPU](DRIVERVM.md)).
+
+In QEMU (4 processors, the GPU through virgl on the host's Iris Xe), the
+host's WebGL page draws its sky, a shader of noise and loops at 480x270,
+at 38 to 40 frames a second, and five canvases cleared every frame at 57;
+www.vedaos.org's sky, the Aurora wallpaper drawn by a shader under the
+page's own light, flows behind its title.
 
 ## Media
 
@@ -717,6 +763,7 @@ ports of WebKit give the network process a sandbox extension:
 | `vfs-core`'s unit tests (`cargo test -p vfs-core`) | What a confined connection's view reaches: its places, the way to them, what listings show, confining again only narrower, a place borrowed reaching nothing less and taken back reaching nothing more, each loan's place its own, confining again keeping what was borrowed; and loans: taken once, for their place, lapsing, a few for each lender, taken back by their lender alone, and ending with their lender's connection |
 | `verification/ui/browser-media.vts` | Media on the host's video page (`/video`): a click plays the countdown (videogen's, AV1 and FLAC in WebM) with its sound, which the audio service plays through a stream of the page's to the end, never short; the machine's sound output has its beeps |
 | `verification/agent/app-browser-media.vts` | The media pages' own checks, which the agent reads: Web Audio (`/webaudio`: an oscillator its analyser hears, a sound file decoded and played), a sound file in an `<audio>` element (`/audio`), the countdown played to its end with every picture shown and its first colours right, drawn into a canvas (`/video`), and the same through Media Source Extensions (`/mse`) |
+| `verification/agent/app-browser-webgl.vts` | WebGL's page's own checks, which the agent reads (`/webgl`), on the GPU (QEMU's, through virgl): WebGL 1's quarters drawn with a shader, read back in their colours, WebGL 2's texture drawn through a framebuffer (`texelFetch`) and read back where WebGL 2 is offered (not under QEMU), and a sky drawn with a shader of noise and loops moving every frame, on the screen too |
 | `automation`'s unit tests (`cargo test -p automation hostweb`) | The host's test pages, their media sent whole or in the byte ranges asked for, the file to download, and the PDF, whose table says where each of its objects is |
 
 The scripts need the engine built (`requires web`) and are skipped
@@ -729,8 +776,11 @@ without it.
   Source Extensions, as WebKit leaves them by default. The processor
   decodes, which large videos may outrun (it drops pictures to keep up),
   and HEVC is not decoded.
-* **WebGL** and the GPU process are off, and canvases are painted on the
-  CPU.
+* **WebGL** draws on the GPU or not at all ([WebGL](#webgl)): pages
+  painted on the CPU have none, nor do those of a web process the GPU
+  gives no context, and where `gl` offers no multisampling (under QEMU),
+  there is WebGL 1 without antialiasing, and no WebGL 2. The GPU process
+  is off, and 2D canvases are painted on the CPU.
 * **Pages from files** (`file://`) reach their own folder, and what is
   inside it: a picture, style or page they name outside it (`../`) is not
   there for them unless the user opened a page from there in the same tab,
