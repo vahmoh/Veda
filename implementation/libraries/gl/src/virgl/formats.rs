@@ -120,9 +120,9 @@ fn candidates(f: Format) -> &'static [(u32, Option<Format>, [u8; 4])] {
     }
 }
 
-/// Whether OpenGL ES 3.0 (with `EXT_color_buffer_float`) renders to a
-/// format: depth and stencil formats, and the color-renderable sized
-/// internal formats'.
+/// Whether OpenGL ES 3.0 (with `EXT_color_buffer_float` and
+/// `EXT_color_buffer_half_float`) renders to a format: depth and stencil
+/// formats, and the color-renderable sized internal formats'.
 pub fn gl_renderable(f: Format) -> bool {
     match f.class() {
         Class::Depth | Class::DepthStencil | Class::Stencil => true,
@@ -194,10 +194,12 @@ mod tests {
     #[test]
     fn color_renderable_formats_are_the_tables() {
         use Format::*;
-        for f in [Rgbx8Unorm, Rgba8Srgb, R11G11B10Float, Rgba16Float, Rg32Sint, Rgb10A2Uint, D16Unorm, S8Uint] {
+        for f in
+            [Rgbx8Unorm, Rgba8Srgb, R11G11B10Float, Rgba16Float, Rgbx16Float, Rg32Sint, Rgb10A2Uint, D16Unorm, S8Uint]
+        {
             assert!(gl_renderable(f), "{f:?}");
         }
-        for f in [Rgbx8Srgb, Rgb9E5Float, Rgbx16Float, Rgbx32Float, L8Unorm, Rgba8Snorm, Rgbx8Uint] {
+        for f in [Rgbx8Srgb, Rgb9E5Float, Rgbx32Float, L8Unorm, Rgba8Snorm, Rgbx8Uint] {
             assert!(!gl_renderable(f), "{f:?}");
         }
     }

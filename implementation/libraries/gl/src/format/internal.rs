@@ -45,7 +45,8 @@ pub struct Internal {
     pub component: ComponentType,
     /// Color-renderable (core OpenGL ES 3.0).
     pub renderable: bool,
-    /// Color-renderable with `EXT_color_buffer_float`.
+    /// Color-renderable with `EXT_color_buffer_float` (`RGB16F`: with
+    /// `EXT_color_buffer_half_float`, which comes with it).
     pub float_renderable: bool,
     /// Texture-filterable (32-bit floats need `OES_texture_float_linear`).
     pub filterable: bool,
@@ -98,7 +99,10 @@ pub const SIZED: &[Internal] = &[
     fmt(gl::SRGB8_ALPHA8, F::Rgba8Srgb, gl::RGBA, [8, 8, 8, 8, 0, 0], C::UnsignedNormalized, true, true),
     ffmt(gl::R16F, F::R16Float, gl::RED, [16, 0, 0, 0, 0, 0], true),
     ffmt(gl::RG16F, F::Rg16Float, gl::RG, [16, 16, 0, 0, 0, 0], true),
-    fmt(gl::RGB16F, F::Rgbx16Float, gl::RGB, [16, 16, 16, 0, 0, 0], C::Float, false, true),
+    // Color-renderable with EXT_color_buffer_half_float, as the half floats
+    // of EXT_color_buffer_float are (a host that renders no RGBX16F keeps
+    // it as RGBA16F).
+    ffmt(gl::RGB16F, F::Rgbx16Float, gl::RGB, [16, 16, 16, 0, 0, 0], true),
     ffmt(gl::RGBA16F, F::Rgba16Float, gl::RGBA, [16, 16, 16, 16, 0, 0], true),
     ffmt(gl::R32F, F::R32Float, gl::RED, [32, 0, 0, 0, 0, 0], false),
     ffmt(gl::RG32F, F::Rg32Float, gl::RG, [32, 32, 0, 0, 0, 0], false),

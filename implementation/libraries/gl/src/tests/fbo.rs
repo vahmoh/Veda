@@ -90,6 +90,17 @@ fn float_and_integer_targets() {
     let v: Vec<f32> = out.chunks(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
     let near = if tolerance() == 0 { v[1] == 1000.5 } else { v[1] == 1000.5 || v[1] == 1000.0 };
     assert!(near && [v[0], v[2], v[3]] == [-2.5, 0.125, 3.0], "{v:?}");
+    // RGB half floats too (EXT_color_buffer_half_float), alpha reading as
+    // one; a renderbuffer of them answers how it may be multisampled.
+    fbo_texture(&mut c, gl::RGB16F, 1, 1);
+    c.draw_arrays(gl::TRIANGLES, 0, 6);
+    c.read_pixels(0, 0, 1, 1, gl::RGBA, gl::FLOAT, &mut out[..]);
+    let v: Vec<f32> = out.chunks(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let near = if tolerance() == 0 { v[1] == 1000.5 } else { v[1] == 1000.5 || v[1] == 1000.0 };
+    assert!(near && [v[0], v[2], v[3]] == [-2.5, 0.125, 1.0], "{v:?}");
+    let mut counts = [0i32];
+    c.get_internalformativ(gl::RENDERBUFFER, gl::RGB16F, gl::NUM_SAMPLE_COUNTS, &mut counts);
+    no_error(&mut c);
     // Integer buffers: written by integer outputs, cleared with
     // ClearBufferiv, read as integers.
     let mut c = context(2, 1);
