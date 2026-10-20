@@ -5,12 +5,13 @@
 # says what it found, read through the agent's hands: pages are composited
 # on the GPU (QEMU's, through virgl), and WebGL draws there too, through
 # ANGLE and Veda's OpenGL ES. WebGL 1 draws four quarters of known colours
-# with a shader and reads them back; WebGL 2, where it is offered, draws a
-# texture through a framebuffer with GLSL ES 3.00 and reads it back (under
-# QEMU it is not: Veda's renderer finds no multisampling for depth with
-# stencil there, which OpenGL ES 3.0 requires); and a sky drawn with a
-# shader of noise, loops and a uniform for the time moves every frame,
-# which the page counts and the screen shows.
+# with a shader and reads them back, antialiased; WebGL 2, which ANGLE
+# offers as the GPU multisamples every format OpenGL ES 3.0 requires,
+# depth with stencil among them, draws a texture through a framebuffer with
+# GLSL ES 3.00, and into a multisampled framebuffer with depth and stencil,
+# which it resolves, reading both back; and a sky drawn with a shader of
+# noise, loops and a uniform for the time moves every frame, which the page
+# counts and the screen shows.
 web-server
 gpu on
 memory 2048
@@ -31,7 +32,8 @@ wait 1
 shot target/veda/agent-app-browser-webgl-2.png now
 expect-different target/veda/agent-app-browser-webgl-1.png target/veda/agent-app-browser-webgl-2.png 0.1 0.35 0.9 0.95
 agent-call use_app '{"app":"browser","action":"read_page"}' 60
-agent-result "WebGL 1: colours right"
+agent-result "WebGL 1: colours right, antialiased"
+agent-result "WebGL 2: colours right"
 agent-result "The sky moved:"
 agent-result "WebGL checks: passed"
 reject-serial "egl: no context"

@@ -377,6 +377,14 @@ compositor samples them from (read-only, as the compositor has them). A
 renderer that ends is started again, and the compositor sets the GPU up
 again, three times at most.
 
+What the renderer tells clients the GPU can do, as virglrenderer does
+(capability set 2), is what the driver says of each format as the
+decoder keeps it: 24-bit depth with stencil has the depth in the upper
+bits on virgl, whose hosts' OpenGL keeps it so, and in the lower on
+iris. So images multisample as the GPU does (under QEMU as the host's:
+16 samples on an Iris Xe), and `gl` has OpenGL ES 3.0's multisampling,
+which WebGL 2 needs ([WebGL](BROWSER.md#webgl)).
+
 **USB.** Linux drives the controllers, their hubs and every device on
 them: keyboards, mice and tablets for `input`, network adapters for `net`
 (CDC Ethernet and NCM, Realtek's and ASIX's), and Bluetooth adapters,

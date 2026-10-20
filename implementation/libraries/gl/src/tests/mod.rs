@@ -69,14 +69,18 @@ pub fn on_softpipe() -> bool {
         && std::env::var("GL_GALLIUM_DEVICE").ok().is_none_or(|d| d.is_empty() || d == "softpipe")
 }
 
-/// Whether the renderer has multisampling (softpipe has none); tests of it
-/// skip where it does not.
+/// Whether the renderer has multisampling: every one has but softpipe, on
+/// which tests of it skip. Elsewhere, a renderer without it has lost what
+/// the GPU offers (as Veda's renderer on virgl did, asking about depth with
+/// stencil as OpenGL hosts never keep it), and the test fails.
 pub fn multisampling(c: &mut Context) -> bool {
-    let n = c.get_integer(gl::MAX_SAMPLES);
-    if n < 4 {
-        std::println!("skipped: the renderer has no multisampling");
+    if on_softpipe() {
+        std::println!("skipped: softpipe has no multisampling");
+        return false;
     }
-    n >= 4
+    let n = c.get_integer(gl::MAX_SAMPLES);
+    assert!(n >= 4, "the renderer offers no multisampling (GL_MAX_SAMPLES {n})");
+    true
 }
 
 /// A context of the virgl renderer: through Veda's renderer if

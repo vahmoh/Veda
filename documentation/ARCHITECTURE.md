@@ -797,7 +797,9 @@ protocol from the driver VM on Mesa's Gallium drivers: iris on i915 or xe
 - **Formats** are virgl's (depth in the upper bits of
   `S8_UINT_Z24_UNORM`); on iris, which keeps depth in the lower bits, the
   renderer turns texels round as they are copied (`VR_DEPTH_LOW=1` does so
-  on softpipe too, for tests). It also draws into memory it is given
+  on softpipe too, for tests). What it reports of a format (sampled,
+  rendered, multisampled) is what the driver says of the format it keeps
+  it as. It also draws into memory it is given
   (`gpu::import`), such as the compositor's display pictures, which a GPU
   reaches as dma-bufs; virgl cannot, as its host draws into memory of its
   own. On i915 it maps a display's pictures uncached, as a display reads

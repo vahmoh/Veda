@@ -293,6 +293,115 @@ fn multisampled_framebuffers_are_resolved_only_in_place() {
     no_error(&mut c);
 }
 
+/// A framebuffer of an RGBA8 renderbuffer and a depth-stencil one of
+/// `format`, `samples` each, 8 x 8.
+fn depth_stencil_framebuffer(c: &mut Context, samples: i32, format: u32) -> u32 {
+    let f = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, f);
+    for (internalformat, attachment) in [(gl::RGBA8, gl::COLOR_ATTACHMENT0), (format, gl::DEPTH_STENCIL_ATTACHMENT)] {
+        let rb = c.gen_renderbuffer();
+        c.bind_renderbuffer(gl::RENDERBUFFER, rb);
+        c.renderbuffer_storage_multisample(gl::RENDERBUFFER, samples, internalformat, 8, 8);
+        assert_eq!(c.get_renderbuffer_parameteri(gl::RENDERBUFFER, gl::RENDERBUFFER_SAMPLES), samples);
+        c.framebuffer_renderbuffer(gl::FRAMEBUFFER, attachment, gl::RENDERBUFFER, rb);
+    }
+    assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_COMPLETE);
+    f
+}
+
+#[test]
+fn multisampled_depth_and_stencil_render_and_resolve() {
+    let mut c = context(8, 8);
+    if !multisampling(&mut c) {
+        return;
+    }
+    // Every depth and stencil format OpenGL ES 3.0 requires may have the
+    // samples GL_MAX_SAMPLES says.
+    for format in [
+        gl::DEPTH_COMPONENT16,
+        gl::DEPTH_COMPONENT24,
+        gl::DEPTH_COMPONENT32F,
+        gl::DEPTH24_STENCIL8,
+        gl::DEPTH32F_STENCIL8,
+        gl::STENCIL_INDEX8,
+    ] {
+        let (mut n, mut counts) = ([0], [0]);
+        c.get_internalformativ(gl::RENDERBUFFER, format, gl::NUM_SAMPLE_COUNTS, &mut n);
+        c.get_internalformativ(gl::RENDERBUFFER, format, gl::SAMPLES, &mut counts);
+        assert_eq!((n, counts), ([1], [4]), "{format:#x}");
+    }
+    let p = program(
+        &mut c,
+        "#version 300 es
+        in vec3 pos; void main() { gl_Position = vec4(pos, 1.0); }",
+        "#version 300 es
+        precision mediump float; uniform vec4 tint; out vec4 color; void main() { color = tint; }",
+    );
+    c.use_program(p);
+    let tint = c.get_uniform_location(p, "tint");
+    let pos = c.get_attrib_location(p, "pos") as u32;
+    c.enable_vertex_attrib_array(pos);
+    // A rectangle from x0 to x1 across the framebuffer, at depth z (whole
+    // pixels: every sample of a pixel alike).
+    let rect = |c: &mut Context, x0: f32, x1: f32, z: f32| {
+        let v = [x0, -1.0, z, x1, -1.0, z, x0, 1.0, z, x0, 1.0, z, x1, -1.0, z, x1, 1.0, z];
+        buffer_f32(c, gl::ARRAY_BUFFER, &v);
+        c.vertex_attrib_pointer(pos, 3, gl::FLOAT, false, 0, 0);
+        c.draw_arrays(gl::TRIANGLES, 0, 6);
+    };
+    let (red, green, blue, white) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255; 4]);
+    for format in [gl::DEPTH24_STENCIL8, gl::DEPTH32F_STENCIL8] {
+        let ms = depth_stencil_framebuffer(&mut c, 4, format);
+        c.viewport(0, 0, 8, 8);
+        c.clear_color(0.0, 0.0, 0.0, 1.0);
+        c.clear_depthf(1.0);
+        c.clear_stencil(0);
+        c.clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT);
+        // The left half red, at depth 0.5, marked in the stencil buffer;
+        // then green at depth 0.75 wherever it is nearer: the right half.
+        c.enable(gl::DEPTH_TEST);
+        c.depth_func(gl::LESS);
+        c.enable(gl::STENCIL_TEST);
+        c.stencil_func(gl::ALWAYS, 1, 0xFF);
+        c.stencil_op(gl::KEEP, gl::KEEP, gl::REPLACE);
+        c.uniform4f(tint, 1.0, 0.0, 0.0, 1.0);
+        rect(&mut c, -1.0, 0.0, 0.0);
+        c.stencil_op(gl::KEEP, gl::KEEP, gl::KEEP);
+        c.uniform4f(tint, 0.0, 1.0, 0.0, 1.0);
+        rect(&mut c, -1.0, 1.0, 0.5);
+        // Resolved into single-sampled buffers of the same formats.
+        let resolved = depth_stencil_framebuffer(&mut c, 0, format);
+        c.bind_framebuffer(gl::READ_FRAMEBUFFER, ms);
+        let all = gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT | gl::STENCIL_BUFFER_BIT;
+        c.blit_framebuffer(0, 0, 8, 8, 0, 0, 8, 8, all, gl::NEAREST);
+        no_error(&mut c);
+        c.bind_framebuffer(gl::FRAMEBUFFER, resolved);
+        let img = read_rgba(&mut c, 8, 8);
+        assert_eq!(
+            [px(&img, 8, 0, 0), px(&img, 8, 3, 7), px(&img, 8, 4, 0), px(&img, 8, 7, 7)],
+            [red, red, green, green]
+        );
+        // The depth resolved: blue at 0.625 is nearer than the right half
+        // only. The stencil resolved: white where it was marked.
+        c.uniform4f(tint, 0.0, 0.0, 1.0, 1.0);
+        rect(&mut c, -1.0, 1.0, 0.25);
+        c.disable(gl::DEPTH_TEST);
+        c.stencil_func(gl::EQUAL, 1, 0xFF);
+        c.uniform4f(tint, 1.0, 1.0, 1.0, 1.0);
+        rect(&mut c, -1.0, 1.0, 0.0);
+        c.disable(gl::STENCIL_TEST);
+        no_error(&mut c);
+        let img = read_rgba(&mut c, 8, 8);
+        assert_eq!(
+            [px(&img, 8, 0, 0), px(&img, 8, 3, 7), px(&img, 8, 4, 0), px(&img, 8, 7, 7)],
+            [white, white, blue, blue],
+            "{format:#x}"
+        );
+        c.bind_framebuffer(gl::FRAMEBUFFER, 0);
+        c.delete_framebuffers(&[ms, resolved]);
+    }
+}
+
 #[test]
 fn blits_scale_and_mirror() {
     let mut c = context(4, 4);

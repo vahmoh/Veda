@@ -404,12 +404,14 @@ request.onsuccess = () => {
 
 /// WebGL (`/webgl`), whose script says what it found: WebGL 1 draws, with
 /// shaders of the kind pages draw skies with (noise, loops, smoothstep, a
-/// uniform for the time), quarters of known colours, which it reads back;
-/// WebGL 2, where it is offered, draws a texture through a framebuffer
-/// with GLSL ES 3.00 (`texelFetch`) and reads it back; and the sky moves,
-/// every frame, which it counts for three seconds. Then a verdict: the
-/// checks passed if WebGL 1's colours are right, WebGL 2's too or it is not
-/// offered, and the sky moved.
+/// uniform for the time), quarters of known colours, which it reads back,
+/// antialiased, as pages have it by default where the GPU multisamples;
+/// WebGL 2 draws a texture through a framebuffer with GLSL ES 3.00
+/// (`texelFetch`), and into a multisampled framebuffer with depth and
+/// stencil, which it resolves, reading both back; and the sky moves, every
+/// frame, which it counts for three seconds. Then a verdict: the checks
+/// passed if WebGL 1's colours are right, antialiased, WebGL 2's too, and
+/// the sky moved.
 const WEBGL: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>WebGL</title>
 <style>body { font-family: sans-serif; margin: 32px 40px; } canvas { display: block; margin: 12px 0; }</style>
@@ -473,7 +475,9 @@ const program = (gl, vertex, fragment) => {
 const near = (got, want) => got.every((v, i) => Math.abs(v - want[i]) <= 2);
 const passed = { one: false, two: false, motion: false };
 const verdict = () => say('verdict', Object.values(passed).every(Boolean) ? 'WebGL checks: passed' : 'WebGL checks: not all passed');
-// WebGL 1: four quarters of known colours, read back.
+// WebGL 1: four quarters of known colours, read back, antialiased as
+// pages have it by default (a context is not where the GPU cannot
+// multisample).
 try {
   const canvas = document.getElementById('quarters');
   const gl = canvas.getContext('webgl');
@@ -488,20 +492,20 @@ try {
   const info = gl.getExtension('WEBGL_debug_renderer_info');
   say('renderer', `${gl.getParameter(gl.VERSION)}; ${gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}; ` +
     (info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)));
-  say('one', wrong.length ? `WebGL 1: colours wrong: ${wrong.join(', ')}` : 'WebGL 1: colours right');
-  passed.one = !wrong.length;
+  const antialiased = gl.getContextAttributes().antialias;
+  say('one', wrong.length ? `WebGL 1: colours wrong: ${wrong.join(', ')}` :
+    `WebGL 1: colours right, ${antialiased ? 'antialiased' : 'not antialiased'}`);
+  passed.one = !wrong.length && antialiased;
 } catch (e) {
   say('one', `WebGL 1 failed: ${e.message}`);
 }
-// WebGL 2: a texture of four texels drawn through a framebuffer, read back.
+// WebGL 2: a texture of four texels drawn through a framebuffer, then a
+// multisampled framebuffer with depth and stencil, each read back. A GPU
+// that cannot multisample every format OpenGL ES 3.0 requires offers none.
 try {
   const gl = document.createElement('canvas').getContext('webgl2');
-  if (!gl) {
-    // ANGLE offers none where `gl` multisamples no format (under QEMU,
-    // where Veda's renderer finds none), as in a browser without WebGL 2.
-    passed.two = true;
+  if (!gl)
     throw new Error('not offered');
-  }
   const texels = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]);
   const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -524,10 +528,54 @@ try {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   const got = new Uint8Array(16);
   gl.readPixels(0, 0, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE, got);
-  passed.two = near(Array.from(got), Array.from(texels));
-  say('two', passed.two ? 'WebGL 2: colours right' : `WebGL 2: colours wrong: ${Array.from(got)}`);
+  if (!near(Array.from(got), Array.from(texels)))
+    throw new Error(`colours wrong: ${Array.from(got)}`);
+  // Then 4 samples with 24-bit depth and stencil: the left column red at
+  // depth 0.5 and marked in the stencil buffer, green at 0.75 where that is
+  // nearer (the right column), and white where marked, resolved by a blit.
+  const ms = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ms);
+  for (const [format, attachment] of [[gl.RGBA8, gl.COLOR_ATTACHMENT0], [gl.DEPTH24_STENCIL8, gl.DEPTH_STENCIL_ATTACHMENT]]) {
+    gl.bindRenderbuffer(gl.RENDERBUFFER, gl.createRenderbuffer());
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, 4, format, 2, 2);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, attachment, gl.RENDERBUFFER, gl.getParameter(gl.RENDERBUFFER_BINDING));
+  }
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+    throw new Error('the multisampled framebuffer is not complete');
+  const solid = program(gl, '#version 300 es\nin vec2 p; uniform float z; void main() { gl_Position = vec4(p, z, 1.0); }',
+    '#version 300 es\nprecision mediump float; uniform vec4 tint; out vec4 color; void main() { color = tint; }');
+  const fill = (z, rgba) => {
+    gl.uniform1f(gl.getUniformLocation(solid, 'z'), z);
+    gl.uniform4fv(gl.getUniformLocation(solid, 'tint'), rgba);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  };
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.STENCIL_TEST);
+  gl.stencilFunc(gl.ALWAYS, 1, 0xff);
+  gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+  gl.enable(gl.SCISSOR_TEST);
+  gl.scissor(0, 0, 1, 2);
+  fill(0, [1, 0, 0, 1]);
+  gl.disable(gl.SCISSOR_TEST);
+  gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+  fill(0.5, [0, 1, 0, 1]);
+  gl.disable(gl.DEPTH_TEST);
+  gl.stencilFunc(gl.EQUAL, 1, 0xff);
+  fill(0, [1, 1, 1, 1]);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, ms);
+  gl.blitFramebuffer(0, 0, 2, 2, 0, 0, 2, 2, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.readPixels(0, 0, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE, got);
+  const resolved = [255, 255, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255, 0, 255, 0, 255];
+  if (!near(Array.from(got), resolved))
+    throw new Error(`multisampled colours wrong: ${Array.from(got)}`);
+  passed.two = true;
+  say('two', 'WebGL 2: colours right');
 } catch (e) {
-  say('two', passed.two ? 'WebGL 2: not offered' : `WebGL 2 failed: ${e.message}`);
+  say('two', `WebGL 2 failed: ${e.message}`);
 }
 // The sky, every frame, its frames counted for three seconds.
 try {

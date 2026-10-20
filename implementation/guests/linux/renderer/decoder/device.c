@@ -344,15 +344,18 @@ set_bit(struct virgl_supported_format_mask *mask, uint32_t format)
    mask->bitmask[format / 32] |= 1u << (format % 32);
 }
 
-/* The most samples color images can have (0: none). */
+/* The most samples images can have (0: none): RGBA8's, and 24-bit depth
+ * with stencil's as `dev` keeps it (vr_format), which OpenGL hosts under
+ * virgl have only with the depth in the upper bits. */
 static unsigned
-max_samples(struct pipe_screen *s)
+max_samples(const struct vr_device *dev)
 {
+   struct pipe_screen *s = dev->screen;
+   enum pipe_format zs = vr_format(dev, VIRGL_FORMAT_S8_UINT_Z24_UNORM);
    for (unsigned n = 16; n >= 2; n /= 2) {
       if (s->is_format_supported(s, PIPE_FORMAT_R8G8B8A8_UNORM, PIPE_TEXTURE_2D, n, n,
                                  PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW) &&
-          s->is_format_supported(s, PIPE_FORMAT_Z24_UNORM_S8_UINT, PIPE_TEXTURE_2D, n, n,
-                                 PIPE_BIND_DEPTH_STENCIL))
+          s->is_format_supported(s, zs, PIPE_TEXTURE_2D, n, n, PIPE_BIND_DEPTH_STENCIL))
          return n;
    }
    return 0;
@@ -403,7 +406,7 @@ vr_device_caps(struct vr_device *dev, void *out, size_t len)
       return 0;
    struct virgl_caps_v1 *v1 = &caps->v1;
    struct virgl_caps_v2 *v2 = &caps->v2;
-   unsigned samples = max_samples(s);
+   unsigned samples = max_samples(dev);
 
    v1->max_version = 2;
    fill_formats(dev, caps, samples);
