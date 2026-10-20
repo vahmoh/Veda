@@ -2702,6 +2702,21 @@
          return SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, alphaType, SkColorSpace::MakeSRGB());
      }
  
+--- a/Source/WebKit/UIProcess/wpe/SystemSettingsManagerProxyWPE.cpp
++++ b/Source/WebKit/UIProcess/wpe/SystemSettingsManagerProxyWPE.cpp
+@@ -186,7 +186,11 @@
+ 
+ bool SystemSettingsManagerProxy::reducedMotion() const
+ {
+-    return !getBool(m_settings, WPE_SETTING_REDUCED_MOTION, false);
++    // Whether the user prefers reduced motion, as the setting says
++    // (WPESettings.h): not its opposite, as GTK's gtk-enable-animations
++    // would be, which told every page that the user prefers it (CSS's
++    // prefers-reduced-motion), and pages that respect that stood still.
++    return getBool(m_settings, WPE_SETTING_REDUCED_MOTION, false);
+ }
+ 
+ WebCore::InterfaceContrastPreference SystemSettingsManagerProxy::interfaceContrast() const
 --- a/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
 +++ b/Source/WebKit/WebProcess/glib/WebProcessGLib.cpp
 @@ -238,10 +238,10 @@

@@ -7,10 +7,11 @@
 # and Enter follow its link); it goes to another page and back, opens,
 # shows and closes tabs, finds text, zooms and bookmarks, as the user would
 # with the toolbar; the window shows each step. Pages see the system's time
-# zone (India's offset, which only a zone of the region's names), a PDF
-# shows in WebKit's viewer (PDF.js, linked in), and private tabs forget a
-# site's cookies once the last of them closes. The pages' web processes
-# and the network process are sandboxed (see verification/ui/browser.vts).
+# zone (India's offset, which only a zone of the region's names) and no
+# preference for reduced motion, a PDF shows in WebKit's viewer (PDF.js,
+# linked in), and private tabs forget a site's cookies once the last of
+# them closes. The pages' web processes and the network process are
+# sandboxed (see verification/ui/browser.vts).
 boot-cmdline "tz=+05:30"
 web-server
 memory 2048
@@ -47,6 +48,13 @@ agent-result '"title":"Veda test page"'
 agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/zone"}}' 30
 agent-call use_app '{"app":"browser","action":"read_page"}' 60
 agent-result "Zone Asia/Kolkata, 330 minutes east of UTC"
+agent-call use_app '{"app":"browser","action":"back"}' 30
+# Pages are told what the user prefers: no reduced motion, unless the user
+# says so. (WPE WebKit 2.54 told every page the opposite of its setting,
+# and pages that respect the preference stood still.)
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"{web}/preferences"}}' 30
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "Motion: no preference"
 agent-call use_app '{"app":"browser","action":"back"}' 30
 # A PDF, in WebKit's viewer: its text is in the viewer's frame, where
 # finding finds it once the viewer has drawn the page. Without the

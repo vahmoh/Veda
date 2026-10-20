@@ -51,6 +51,14 @@ const ZONE: &str = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf
 <script>document.getElementById('zone').textContent = 'Zone ' + Intl.DateTimeFormat().resolvedOptions().timeZone + \
 ', ' + -new Date().getTimezoneOffset() + ' minutes east of UTC';</script>\n</body></html>\n";
 
+/// What a page sees of the user's preferences (`/preferences`): whether
+/// they prefer reduced motion, which pages that respect it stand still
+/// for (they do not, unless they say so).
+const PREFERENCES: &str = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Preferences</title></head>\n\
+<body><p id=\"motion\">No script ran.</p>\n\
+<script>document.getElementById('motion').textContent = 'Motion: ' + \
+(matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduced' : 'no preference');</script>\n</body></html>\n";
+
 /// What a session keeps (`/cookie`): the cookies the page was sent, then
 /// one it sets, which the page sees when the same session loads it again.
 const COOKIE: &str = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Cookies</title></head>\n\
@@ -550,8 +558,8 @@ impl Drop for HostWeb {
 }
 
 /// Answers one request: `GET /hello`, the browser's pages (`/page`,
-/// `/second`, `/zone`, `/cookie`, `/scripts`, `/video`, `/audio`, `/mse`,
-/// `/webaudio`, `/upload`, `/storage`), their media
+/// `/second`, `/zone`, `/cookie`, `/preferences`, `/scripts`, `/video`,
+/// `/audio`, `/mse`, `/webaudio`, `/upload`, `/storage`), their media
 /// (`/media/countdown.webm`, `/media/tone.wav`), a file to download
 /// (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or else
 /// nothing found.
@@ -574,6 +582,7 @@ fn answer(mut stream: TcpStream) {
         b"/second" => Some((html, SECOND.as_bytes().into())),
         b"/zone" => Some((html, ZONE.as_bytes().into())),
         b"/cookie" => Some((html, COOKIE.as_bytes().into())),
+        b"/preferences" => Some((html, PREFERENCES.as_bytes().into())),
         b"/scripts" => Some((html, SCRIPTS.as_bytes().into())),
         b"/spin" => Some((html, SPIN.as_bytes().into())),
         b"/scroll" => Some((html, SCROLL.as_bytes().into())),
@@ -662,6 +671,7 @@ mod tests {
             ("/second", "The link was followed."),
             ("/zone", "Zone "),
             ("/cookie", "seen=yes"),
+            ("/preferences", "prefers-reduced-motion"),
             ("/scripts", "日本語"),
             ("/spin", "animation: spin"),
             ("/scroll", "window.scrollBy"),

@@ -257,11 +257,15 @@ What the patches change:
   no injected bundle; damage that covers an antialiased layer's edges
   (the fringe a rotating element's corners left behind); a frame read
   back from the GPU only where it changed since its buffer was last drawn,
-  which is all the compositor draws of it (`AcceleratedSurface.cpp`); and
+  which is all the compositor draws of it (`AcceleratedSurface.cpp`);
   each shared buffer's memory file kept on its WPE buffer in the UI process
   (`wpe-veda-memory-file`), which the embedder hands to Veda's window
   system, as the page's subsurface shows it from there
-  (`AcceleratedBackingStore.cpp`). See
+  (`AcceleratedBackingStore.cpp`); and WPE's reduced motion read as its
+  setting says, where WebKit 2.54.1 tells every page the opposite, that
+  the user prefers reduced motion (`SystemSettingsManagerProxyWPE.cpp`):
+  WebKit's own fix ([bug 325212](https://bugs.webkit.org/show_bug.cgi?id=325212)),
+  which the patch drops once a release has it. See
   [WebKit on Veda](../../documentation/BROWSER.md#webkit-on-veda).
 * **icu**: Veda as a Linux-like platform in its build, and the system's
   time zone named by the tz database's zone of its offset
