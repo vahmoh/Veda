@@ -45,7 +45,7 @@ and the applications.
     <td colspan="2"><p align="center"><b>Desktop</b></p><img src="documentation/images/desktop.png" alt="The Veda desktop, with the agent's window open and listening"></td>
   </tr>
   <tr>
-    <td width="50%"><p align="center"><b>Browser</b></p><img src="documentation/images/browser.png" alt="The Browser showing Veda's website, www.vedaos.org: the ring glowing over a starry sky, the name and what Veda is"></td>
+    <td width="50%"><p align="center"><b>Browser</b></p><img src="documentation/images/browser.png" alt="The Browser showing Veda's website, www.vedaos.org: the ring glowing over its starry sky, an aurora flowing below the name and what Veda is"></td>
     <td width="50%"><p align="center"><b>Text Editor</b></p><img src="documentation/images/editor.png" alt="The Text Editor showing a Rust program with syntax highlighting"></td>
   </tr>
   <tr>
