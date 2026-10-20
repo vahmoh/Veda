@@ -195,6 +195,23 @@ enough for browsing at that size; with 1 GiB (about 530 MiB for
 programs, the driver VM taking 256 of them) the browser paints on the
 CPU ([Drawing pages](#drawing-pages)).
 
+**A page that takes all the memory** (a game that loads more than the
+machine has, as a web port of a PC game does: some 135 MB downloaded
+and copied, then a large WebAssembly memory) ends only its own tab. Each
+web process moves itself to the expendable memory class as it starts
+(`veda_process_set_memory_class`, `AuxiliaryProcessMainVeda.cpp`), so
+when memory runs out the kernel ends a page's process (of several, the
+one holding the most) before the browser, the window system or any
+application, whichever touched the page that found no memory
+([When memory runs out](ARCHITECTURE.md#the-kernel)). WebKit's UI
+process asks the system why its web process ended
+(`veda_child_ended_for_memory`): the tab says the page used too much
+memory (`a page stopped working: its web process ran out of memory` in
+the log), not that it crashed, and reloads it on a click. Before, the
+kernel ended whichever process touched a page first once memory had run
+out, which as often as not was the browser itself or its network
+process.
+
 ## WebKit on Veda
 
 WebKit's port to Veda is a patch of its release
@@ -212,7 +229,7 @@ may use.
 | Shared memory between processes | Memory files (`memfd_create`), mapped shared; a read-only handle is a descriptor opened read-only (`/dev/fd/N`), whose kernel handle has no right to write, so no process it goes to can write the memory |
 | Timers | `timerfd` on the monotonic, real-time and boot clocks, which GLib's main loop and epoll wait on |
 | The time zone | The system's offset from UTC (the `tz=` boot option, or the firmware's): musl reads it with no `TZ` set (`__veda_tz`), and ICU names it as the tz database's zone of that offset, `Etc/GMT-2`, or a region's on it all year (`Asia/Kolkata` for +05:30) |
-| How much memory the system has, and the process | `sysinfo`, whose free memory is what programs may still take, and `veda_process_memory` (`<veda/memory.h>`), for WebKit's memory pressure handling: the UI process watches the system's memory, four times a second once 70% of it is used, and tells the others to give some back from 80% (90%: at once, all they can), earlier than on Linux, as Veda has no swap and ends a process it has no page for |
+| How much memory the system has, and the process | `sysinfo`, whose free memory is what programs may still take, and `veda_process_memory` (`<veda/memory.h>`), for WebKit's memory pressure handling: the UI process watches the system's memory, four times a second once 70% of it is used, and tells the others to give some back from 80% (90%: at once, all they can), earlier than on Linux, as Veda has no swap and, once memory runs out, ends a process to make room: a page's process first, which the tab reports as the page having used too much memory ([Memory](#how-it-fits-together)) |
 | Processes | One program, started again for each role (above); no injected bundle, as Veda loads no code at run time |
 | Its resources: the pictures WebCore draws (a broken image's icon, a text area's resizer, the media controls' icons), Web Audio's spatial sound, and the PDF viewer (PDF.js, with the style and script WebKit adds to it), in GResource bundles its library registers as it loads | Linked in, each bundle registering itself as the program starts (its object's constructor); `engine.c` refers to them, as a static link leaves out an object nothing refers to. The viewer is most of them, 3.7 MB of the program; its fonts, character maps and decoders have their licence texts with WebKit's |
 | Files | `statx`; GLib's file monitors poll, there being no inotify |
@@ -692,6 +709,7 @@ ports of WebKit give the network process a sandbox extension:
 | `verification/ui/browser-compose.vts` | The same, the screen composed by a GPU (Veda's renderer on softpipe in the driver VM), as on a PC: the compositor samples the page's subsurface in place, nothing copied, and blends the window's label over it |
 | `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/src/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
 | `verification/ui/browser-memory.vts` | The browser on a machine of 1 GiB with a GPU: it paints pages on the CPU, as compositing them would take more memory than the machine can spare, and shows a page with no process running out of memory |
+| `verification/ui/browser-out-of-memory.vts` | A page that takes all the memory it can (`/hog`), as a game that loads more than the machine has: the kernel ends its web process, the first to go, and no other process; the tab says the page used too much memory, not that it crashed, and the browser shows the next page asked for |
 | `verification/ui/browser-gpu-gone.vts` | The GPU gone while the browser composites on it (the driver VM's renderer, on softpipe, ended for good: `veda.stop`): a tab opened then has its web process given no context, `egl` refusing one in software and saying why, and its page painted on the CPU, the same, pixel for pixel, as it was composited |
 | `verification/agent/app-browser.vts` | The agent's actions, with the stand-in for the Voice Agent API: opening and reading pages (their scripts ran), the keyboard on a page the agent opened, back, tabs, finding, zooming, bookmarking, the time zone pages see and their seeing no preference for reduced motion (`/preferences`), a PDF shown in WebKit's viewer (its text found there), and private tabs forgetting cookies; the pages' web processes and the network process sandboxed, as above, and GLib never complaining |
 | `verification/agent/app-browser-files.vts` | The network process and the user's files: a download saved in Downloads and opened from there (`file://`); a picture chosen for a page to upload read whole, through its copy, never the picture itself; a page in Documents opened (`file://`) in a tab of its own, its folder lent to the network process, the picture beside it shown and one in Pictures, which the page reaches for outside its folder, refused, and a page's own navigation to Pictures failing, and its link to Pictures in a new window (`target=_blank`) failing alike, in its tab, no window opened and its process going on, Pictures never lent; the folder taken back as the tab closes, which a window one of its pages opened outlasts, and forgotten for every web process: the network process refuses the window the picture, never reading it; a window that another page there opened with a frame of a page of the folder in it keeping the folder lent as that page's tab closes (it shows the picture), the frame's page going to a fragment and pushing a state, its process going on, and the folder taken back as the window closes; the page opened again, its folder lent again, for it alone: the first window, whose process was allowed the folder before, refused the picture again, and its own navigation to a page of the folder failing, saying so, the page unread; a site's IndexedDB kept as the browser starts again, and the temporary files gone as it closed |

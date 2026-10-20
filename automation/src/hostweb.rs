@@ -15,10 +15,11 @@
 //! through Media Source Extensions, a sound file, and Web Audio's;
 //! their scripts say how they played. Pages that move (a box spinning, a
 //! page scrolling itself, a box crossing the page on a click) measure and
-//! check its frames. A page reads a file the user
-//! chooses, as before an upload, another counts its visits in IndexedDB,
-//! a file comes to be downloaded, and a PDF to be shown. Files are sent
-//! whole or in the byte ranges asked for, as media players ask.
+//! check its frames. A page reads a file the user chooses, as before an
+//! upload, another counts its visits in IndexedDB, one takes all the
+//! memory it can, a file comes to be downloaded, and a PDF to be shown.
+//! Files are sent whole or in the byte ranges asked for, as media players
+//! ask.
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
@@ -401,6 +402,28 @@ request.onsuccess = () => {
 </body></html>
 "#;
 
+/// A page that takes all the memory it can (`/hog`), as a game that loads
+/// more than the machine has: a click starts it holding ever more buffers,
+/// each written through, which it never lets go of, so that its process
+/// grows until the system ends it.
+const HOG: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Memory</title></head>
+<body><p id="state">Click to take all the memory there is.</p>
+<script>
+const state = document.getElementById('state');
+const held = [];
+document.addEventListener('click', () => {
+  const grow = () => {
+    held.push(new Uint8Array(32 << 20).fill(1));
+    state.textContent = `Holding ${held.length * 32} MiB`;
+    setTimeout(grow, 0);
+  };
+  grow();
+}, { once: true });
+</script>
+</body></html>
+"#;
+
 /// A file to download (`/files/veda-download.txt`): sent as bytes of no
 /// type a page shows, which the browser saves in Downloads under its name.
 const DOWNLOAD: &str = "Downloaded from the host.\n";
@@ -559,8 +582,8 @@ impl Drop for HostWeb {
 
 /// Answers one request: `GET /hello`, the browser's pages (`/page`,
 /// `/second`, `/zone`, `/cookie`, `/preferences`, `/scripts`, `/video`,
-/// `/audio`, `/mse`, `/webaudio`, `/upload`, `/storage`), their media
-/// (`/media/countdown.webm`, `/media/tone.wav`), a file to download
+/// `/audio`, `/mse`, `/webaudio`, `/upload`, `/storage`, `/hog`), their
+/// media (`/media/countdown.webm`, `/media/tone.wav`), a file to download
 /// (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or else
 /// nothing found.
 fn answer(mut stream: TcpStream) {
@@ -593,6 +616,7 @@ fn answer(mut stream: TcpStream) {
         b"/webaudio" => Some((html, WEB_AUDIO.as_bytes().into())),
         b"/upload" => Some((html, UPLOAD.as_bytes().into())),
         b"/storage" => Some((html, STORAGE.as_bytes().into())),
+        b"/hog" => Some((html, HOG.as_bytes().into())),
         b"/files/veda-download.txt" => Some(("application/octet-stream", DOWNLOAD.as_bytes().into())),
         b"/files/veda.pdf" => Some(("application/pdf", pdf().into())),
         b"/media/countdown.webm" => {
@@ -682,6 +706,7 @@ mod tests {
             ("/webaudio", "decodeAudioData"),
             ("/upload", "readAsArrayBuffer"),
             ("/storage", "indexedDB.open"),
+            ("/hog", "new Uint8Array(32 << 20)"),
         ] {
             let page = get(port, path);
             assert!(page.starts_with("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"), "{page}");

@@ -137,7 +137,7 @@ scans stacks does (`veda_thread_suspend`, `veda_thread_registers`,
 process holds (`veda_process_memory`), hands a memory file's memory to
 a Veda service (`veda_memory_file`), moves the process to a more
 expendable memory class, ended sooner when memory runs out
-(`veda_process_set_memory_class`), and
+(`veda_process_set_memory_class`, as the browser's web processes do), and
 says whether a child was ended for memory rather than crashed
 (`veda_child_ended_for_memory`), and `<veda/sandbox.h>` gives up,
 for good, all of the file system but a few places, every service but a

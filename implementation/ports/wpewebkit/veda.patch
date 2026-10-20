@@ -1265,7 +1265,7 @@
      if (execDirectory) {
 --- a/Source/WebKit/Shared/veda/AuxiliaryProcessMainVeda.cpp
 +++ b/Source/WebKit/Shared/veda/AuxiliaryProcessMainVeda.cpp
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,71 @@
 +/*
 + * Copyright (C) 2026 Vahid Mohammadi
 + *
@@ -1297,6 +1297,10 @@
 +#include "WebProcessMain.h"
 +#include <stdlib.h>
 +#include <string.h>
++#include <unistd.h>
++#include <veda/memory.h>
++#include <wtf/Assertions.h>
++#include <wtf/SafeStrerror.h>
 +#include <wtf/text/StringCommon.h>
 +
 +#if ENABLE(GPU_PROCESS)
@@ -1314,9 +1318,15 @@
 +    if (!type)
 +        return -1;
 +    int (*processMain)(int, char**) = nullptr;
-+    if (!strcmp(type, "WebProcess"))
++    if (!strcmp(type, "WebProcess")) {
 +        processMain = WebKit::WebProcessMain;
-+    else if (!strcmp(type, "NetworkProcess"))
++        // A page's process costs least to lose when memory runs out: the
++        // kernel ends it before the browser, the window system or any
++        // application, and the browser says the page used too much memory
++        // and loads it again on a click (WebProcessProxy::didClose).
++        if (int error = veda_process_set_memory_class(VEDA_MEMORY_EXPENDABLE))
++            WTFLogAlways("Web process %d stays in its memory class: %s", getpid(), safeStrerror(error).data());
++    } else if (!strcmp(type, "NetworkProcess"))
 +        processMain = WebKit::NetworkProcessMain;
 +#if ENABLE(GPU_PROCESS)
 +    else if (!strcmp(type, "GPUProcess"))
@@ -2615,7 +2625,37 @@
      void textCheckerStateChanged();
 --- a/Source/WebKit/UIProcess/WebProcessProxy.cpp
 +++ b/Source/WebKit/UIProcess/WebProcessProxy.cpp
-@@ -1513,6 +1513,9 @@
+@@ -162,6 +162,10 @@
+ #include "RemoteMediaSessionManagerProxyMessages.h"
+ #endif
+ 
++#if OS(VEDA)
++#include <veda/memory.h>
++#endif
++
+ #define MESSAGE_CHECK(assertion) MESSAGE_CHECK_BASE(assertion, connection())
+ #define MESSAGE_CHECK_URL(url) MESSAGE_CHECK_BASE(checkURLReceivedFromWebProcess(url), connection())
+ #define MESSAGE_CHECK_COMPLETION(assertion, completion) MESSAGE_CHECK_COMPLETION_BASE(assertion, connection(), completion)
+@@ -1451,6 +1455,18 @@
+     WEBPROCESSPROXY_RELEASE_LOG_ERROR(Process, "didClose (web process crash)");
+ #endif
+ 
++#if OS(VEDA)
++    // Veda's kernel ends a page's process first when memory runs out
++    // (AuxiliaryProcessMainVeda.cpp): that is the page using too much
++    // memory, not a crash, which a wait status cannot tell apart.
++    int endedForMemory = 0;
++    if (!veda_child_ended_for_memory(processID(), &endedForMemory) && endedForMemory) {
++        WTFLogAlways("Web process %d was ended: memory ran out", processID());
++        processDidTerminateOrFailedToLaunch(ProcessTerminationReason::ExceededMemoryLimit);
++        return;
++    }
++#endif
++
+     processDidTerminateOrFailedToLaunch(terminationReason());
+ }
+ 
+@@ -1513,6 +1529,9 @@
  void WebProcessProxy::didReceiveInvalidMessage(IPC::Connection& connection, IPC::MessageName messageName, const Vector<uint32_t>& indexOfObjectFailingDecoding)
  {
      logInvalidMessage(connection, messageName);

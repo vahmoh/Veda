@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The browser and a page that takes all the memory it can (`/hog`), as a
+# game that loads more than the machine has (1280x800 screen). When memory
+# runs out, the kernel ends the page's process, which made itself the first
+# to go, not the browser, the window system or whichever process found no
+# page; the browser says the page used too much memory, rather than that it
+# crashed, and goes on: it shows the next page asked for.
+boot-cmdline "run=browser:http://{web}/hog"
+web-server
+memory 2048
+requires web
+agent-asleep
+fail-on "PANIC"
+fail-on "browser crashed"
+wait-serial "desktop ready" 90
+wait-serial "started browser" 60
+wait 10
+shot target/veda/browser-out-of-memory-0-page.png
+click 0.5 0.5
+wait-serial "a page stopped working: its web process ran out of memory" 120
+expect-serial "Web process"
+wait 3
+shot target/veda/browser-out-of-memory-1-used-too-much.png
+expect-different target/veda/browser-out-of-memory-0-page.png target/veda/browser-out-of-memory-1-used-too-much.png 0.05 0.2 0.95 0.9
+# The browser goes on.
+key ctrl-l
+type "{web}/page"
+key ret
+wait 8
+shot target/veda/browser-out-of-memory-2-next.png
+expect-different target/veda/browser-out-of-memory-1-used-too-much.png target/veda/browser-out-of-memory-2-next.png 0.05 0.2 0.95 0.9
+# Only the page's process was ended for memory: the kernel would name an
+# application or a service as such, and init would say it of the browser.
+reject-serial ", an application, "
+reject-serial ", the system's, "
+reject-serial "browser was ended: memory ran out"
+reject-serial "compositor crashed"
