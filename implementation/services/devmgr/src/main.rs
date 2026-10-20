@@ -1018,6 +1018,7 @@ impl DriverVm {
             }
             Some((abi::process_state::EXITED, code)) => alloc::format!("the monitor stopped it ({code})"),
             Some((abi::process_state::KILLED, _)) => String::from("the monitor was killed"),
+            Some((abi::process_state::OUT_OF_MEMORY, _)) => String::from("memory ran out"),
             _ => String::from("the monitor crashed"),
         };
         let ran_ns = rt::time::now_ns().saturating_sub(self.started_ns);

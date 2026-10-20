@@ -114,6 +114,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::THREAD_READ_STATE => task::thread_read_state(a[0] as RawHandle, a[1]),
         nr::THREAD_SELF => task::thread_self(),
         nr::PROCESS_RESTRICT => task::process_restrict(a[0]),
+        nr::PROCESS_SET_MEMORY_CLASS => task::process_set_memory_class(a[0] as RawHandle, a[1]),
 
         nr::FUTEX_WAIT => {
             crate::synchronization::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64))?;

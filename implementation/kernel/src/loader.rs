@@ -41,8 +41,11 @@ pub fn spawn_init(boot: &BootInfo) {
     let elf = elf::Elf::parse(file.data).expect("init is not a valid ELF64 executable");
     assert!(elf.kind() == elf::Kind::Veda, "init is not a Veda program of this version");
 
-    // Every priority there is, for init to give the system's services.
-    let process = Process::new("init", 0, abi::priority::REALTIME as u8).expect("out of memory creating init");
+    // Every priority there is, for init to give the system's services, and
+    // the system's memory class, which its services keep and the
+    // applications it starts leave.
+    let process = Process::new("init", 0, abi::priority::REALTIME as u8, abi::memory_class::SYSTEM as u8)
+        .expect("out of memory creating init");
     let aspace = process.aspace().unwrap();
 
     // The image: its segments, relocated for a random place, in a VMO mapped

@@ -379,6 +379,32 @@ pub fn pidfd_open(pid: i32, flags: u32) -> SysResult {
     fd::insert(desc, true, 0).map(|n| n as usize)
 }
 
+/// `veda_child_ended_for_memory(pid, ended)` (`<veda/memory.h>`): writes to
+/// `ended` 1 if child `pid` was ended by the system because memory ran out
+/// (`abi::EXIT_CODE_OUT_OF_MEMORY`), and 0 if it ended otherwise or still
+/// runs: which a wait status cannot say, as being ended for memory is
+/// `SIGKILL` there, as Linux's OOM killer's is. Returns 0, ECHILD if `pid`
+/// is no child of this process's not waited for yet, or EFAULT.
+///
+/// # Safety
+/// `ended` has room for an int.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn veda_child_ended_for_memory(pid: i32, ended: *mut core::ffi::c_int) -> core::ffi::c_int {
+    if ended.is_null() {
+        return EFAULT as core::ffi::c_int;
+    }
+    let state = CHILDREN.lock().get(&pid).map(|p| p.info().map(|i| i.state));
+    match state {
+        None => ECHILD as core::ffi::c_int,
+        Some(Err(e)) => error::kernel(e) as core::ffi::c_int,
+        Some(Ok(state)) => {
+            // SAFETY: as the caller promises.
+            unsafe { ended.write(core::ffi::c_int::from(state == abi::process_state::OUT_OF_MEMORY)) };
+            0
+        }
+    }
+}
+
 /// The children `pid` selects (`wait4`'s convention: -1 or a process
 /// group means any).
 fn select_children(pid: i32) -> Result<Vec<(i32, Process)>, isize> {

@@ -33,6 +33,7 @@ use rt::sync::{Condvar, Mutex};
 #[path = "architectures/amd64/mod.rs"]
 mod arch;
 mod media;
+mod memory;
 mod policy;
 mod ports;
 mod posix;
@@ -664,6 +665,8 @@ type Test = (&'static str, fn() -> TestResult);
 fn main() -> i32 {
     match rt::env::args().get(1).map(|a| a.as_str()) {
         Some("crash") => crash(),
+        Some("hold") => return memory::hold(),
+        Some("fill") => return memory::fill(),
         Some("limits") => return policy::limits(rt::env::args().get(2)),
         Some("job") => return posix::job(),
         Some("restricted") => return posix::restricted(),
@@ -675,7 +678,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 37] = [
+    let tests: [Test; 38] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
@@ -713,6 +716,8 @@ fn main() -> i32 {
         ("the lock", policy::test_the_lock),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),
+        // Last: it fills the memory, which the others need not see.
+        ("memory running out", memory::test_memory_runs_out),
     ];
     let mut failed = 0;
     for (name, f) in tests {

@@ -44,6 +44,19 @@ pub extern "C" fn veda_process_memory() -> usize {
     rt::object::process_self_info().map_or(0, |i| i.memory_bytes as usize)
 }
 
+/// `veda_process_set_memory_class(class)` (`<veda/memory.h>`): moves this
+/// process to a memory class (`abi::memory_class`, as `VEDA_MEMORY_*`), only
+/// ever towards the most expendable: what the system ends first when memory
+/// runs out. EINVAL for no such class, EACCES for a less expendable one.
+#[unsafe(no_mangle)]
+pub extern "C" fn veda_process_set_memory_class(class: core::ffi::c_int) -> core::ffi::c_int {
+    let Ok(class) = usize::try_from(class) else { return EINVAL as core::ffi::c_int };
+    match rt::process::set_memory_class(None, class) {
+        Ok(()) => 0,
+        Err(e) => error::kernel(e) as core::ffi::c_int,
+    }
+}
+
 /// `veda_memory_file(fd, vmo)` (`<veda/memory.h>`): a handle to the memory
 /// of the memory file on `fd`, with the descriptor's rights, written to
 /// `vmo`. EBADF for no descriptor, EINVAL for one of anything else.

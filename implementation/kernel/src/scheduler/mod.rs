@@ -682,6 +682,7 @@ pub fn user_exception(frame: &mut TrapFrame) {
         Some(offset) => write!(f, " ({offset:#x} in its image)"),
         None => Ok(()),
     });
+    let mut code = abi::EXIT_CODE_CRASHED;
     if let Some(fault) = frame.page_fault() {
         let outcome =
             cur.aspace.as_ref().map_or(Fault::Invalid, |a| a.handle_fault(fault.address, fault.write, fault.execute));
@@ -689,8 +690,20 @@ pub fn user_exception(frame: &mut TrapFrame) {
             return;
         }
         if outcome == Fault::OutOfMemory {
-            // A valid access the system has no page for: say so, and what
-            // holds the memory, rather than blame the program.
+            // A valid access the system has no page for: a more expendable
+            // process is ended to make room, and the access is made again.
+            if crate::memory::oom::make_room(&cur) {
+                return;
+            }
+            if cur.process.as_ref().is_some_and(|p| p.ending_with().is_some()) {
+                // Ended meanwhile (to make room for another, say): it goes
+                // as it was told to.
+                drop(cur);
+                exit_current();
+            }
+            // This process is the one to go: say so, and what holds the
+            // memory, rather than blame the program.
+            code = abi::EXIT_CODE_OUT_OF_MEMORY;
             let (total, free) = crate::memory::phys::stats();
             let largest = crate::object::process::largest(4);
             let holders = core::fmt::from_fn(|f| {
@@ -734,7 +747,7 @@ pub fn user_exception(frame: &mut TrapFrame) {
         crate::kerror!("{} (thread {}): {}{}", cur.process_name(), cur.koid, frame.describe(), in_image);
     }
     match &cur.process {
-        Some(p) => p.kill(abi::EXIT_CODE_CRASHED),
+        Some(p) => p.kill(code),
         None => panic!("kernel thread took a user exception"),
     }
     drop(cur);

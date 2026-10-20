@@ -36,7 +36,8 @@ pub fn process_restrict(flags: usize) -> SysResult {
 
 /// Creates a process whose threads run at `max_priority` at most (0: the
 /// caller's maximum), and never above the caller's maximum: no process can
-/// give one it starts more than it has.
+/// give one it starts more than it has. It is in the caller's memory
+/// class, which [`process_set_memory_class`] can move on.
 pub fn process_create(name: usize, len: usize, max_priority: usize) -> SysResult {
     allowed(restrict::NO_PROCESSES)?;
     if max_priority > abi::priority::REALTIME {
@@ -53,8 +54,16 @@ pub fn process_create(name: usize, len: usize, max_priority: usize) -> SysResult
         0 => parent.max_priority,
         p => parent.max_priority.min(p as u8),
     };
-    let p = Process::new(&name, parent.koid, most).ok_or(Error::NoMemory)?;
+    let p = Process::new(&name, parent.koid, most, parent.memory_class()).ok_or(Error::NoMemory)?;
     ok(insert(KObject::Process(p), PROCESS_RIGHTS)? as usize)
+}
+
+/// Moves a process (0: the caller) to a memory class
+/// ([`abi::memory_class`]), only ever towards the most expendable: what is
+/// ended first when memory runs out ([`crate::memory::oom`]).
+pub fn process_set_memory_class(raw: RawHandle, class: usize) -> SysResult {
+    target_process(raw)?.set_memory_class(class)?;
+    ok(0)
 }
 
 fn start_thread(t: &Thread, entry: usize, stack: usize, arg0: u64, arg1: u64) -> Result<(), Error> {

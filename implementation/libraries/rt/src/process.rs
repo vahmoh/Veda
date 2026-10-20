@@ -55,6 +55,14 @@ pub fn restrict(flags: usize) -> Result<(), Error> {
     call(nr::PROCESS_RESTRICT, [flags, 0, 0, 0, 0, 0]).map(|_| ())
 }
 
+/// Moves `process` (`None`: this one) to a memory class
+/// ([`abi::memory_class`]): what the system ends first when memory runs
+/// out. Only ever towards the most expendable.
+pub fn set_memory_class(process: Option<&Process>, class: usize) -> Result<(), Error> {
+    let h = process.map_or(abi::INVALID_HANDLE, |p| p.raw());
+    call(nr::PROCESS_SET_MEMORY_CLASS, [h as usize, class, 0, 0, 0, 0]).map(|_| ())
+}
+
 /// The user and group POSIX programs run as.
 pub const UID: u32 = 1000;
 
@@ -194,6 +202,9 @@ pub struct Spawn<'a> {
     /// The highest priority its threads may run at (`abi::priority`),
     /// never more than this process's (`None`: this process's).
     pub max_priority: Option<usize>,
+    /// Its memory class (`abi::memory_class`), never less expendable than
+    /// this process's (`None`: this process's).
+    pub memory_class: Option<usize>,
 }
 
 impl<'a> Spawn<'a> {
@@ -208,6 +219,7 @@ impl<'a> Spawn<'a> {
             inherited: Vec::new(),
             accept: None,
             max_priority: None,
+            memory_class: None,
         }
     }
 
@@ -249,6 +261,13 @@ impl<'a> Spawn<'a> {
     /// The highest priority the process's threads may run at.
     pub fn max_priority(mut self, priority: usize) -> Self {
         self.max_priority = Some(priority);
+        self
+    }
+
+    /// What the system ends first when memory runs out
+    /// ([`abi::memory_class`]).
+    pub fn memory_class(mut self, class: usize) -> Self {
+        self.memory_class = Some(class);
         self
     }
 
@@ -301,6 +320,9 @@ impl<'a> Spawn<'a> {
             {
                 // Never started: it goes with its handle.
                 continue;
+            }
+            if let Some(class) = self.memory_class {
+                set_memory_class(Some(&process), class)?;
             }
             let t = call(nr::THREAD_CREATE, [process.raw() as usize, "main".as_ptr() as usize, 4, 0, 0, 0])?;
             // SAFETY: fresh handle from the kernel.

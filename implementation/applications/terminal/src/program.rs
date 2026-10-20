@@ -214,6 +214,8 @@ fn ended(code: i64) -> (i32, Option<&'static str>) {
         None => ((code & 0xff) as i32, None),
         Some(s) => {
             let what = match s {
+                // Killed, as a shell says of SIGKILL, and why.
+                9 if code == abi::EXIT_CODE_OUT_OF_MEMORY => "Killed: out of memory",
                 4 => "Illegal instruction",
                 6 => "Aborted",
                 8 => "Floating point exception",

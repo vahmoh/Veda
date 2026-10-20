@@ -710,6 +710,41 @@ static void check_processes(void)
 	CHECK("environment", e && *e == '/', "HOME is '%s'", e ? e : "(unset)");
 }
 
+/* Memory classes (<veda/memory.h>): what the system ends first when
+ * memory runs out. A process moves only towards the most expendable, as
+ * a child of its moves itself; a child that ended by itself was not ended
+ * for memory, which its parent asks before waiting for it; and this
+ * process, an application's as systest is, moves on, and not back. Last:
+ * what it starts after stays expendable. */
+static void check_memory_classes(void)
+{
+	CHECK("an unknown memory class", veda_process_set_memory_class(7) == EINVAL, "accepted");
+	CHECK("not back to the system's class", veda_process_set_memory_class(VEDA_MEMORY_SYSTEM) == EACCES,
+	      "accepted");
+	CHECK("an application's class, as its own", veda_process_set_memory_class(VEDA_MEMORY_APPLICATION) == 0,
+	      "refused");
+	char *argv[] = { "posix", "child", "expendable", 0 };
+	char *envp[] = { 0 };
+	pid_t pid;
+	int r = posix_spawn(&pid, program, 0, 0, argv, envp);
+	CHECK("a child to move", r == 0, "posix_spawn returned %d", r);
+	if (r)
+		return;
+	siginfo_t info = { 0 };
+	r = waitid(P_PID, pid, &info, WEXITED | WNOWAIT);
+	int ended = -1;
+	int asked = veda_child_ended_for_memory(pid, &ended);
+	CHECK("a child that moved itself, and ended by itself", !r && info.si_code == CLD_EXITED && !info.si_status &&
+	      !asked && !ended, "waitid %d (code %d, status %d), asked %d, ended %d", r, info.si_code, info.si_status,
+	      asked, ended);
+	int status;
+	waitpid(pid, &status, 0);
+	CHECK("a child waited for is no child to ask of", veda_child_ended_for_memory(pid, &ended) == ECHILD,
+	      "it is");
+	CHECK("to the expendable class", veda_process_set_memory_class(VEDA_MEMORY_EXPENDABLE) == 0, "refused");
+	CHECK("and not back", veda_process_set_memory_class(VEDA_MEMORY_APPLICATION) == EACCES, "accepted");
+}
+
 /* Veda's own interfaces (<veda/ipc.h>): the program's startup handles,
  * and objects of its own. */
 static void check_veda_interfaces(void)
@@ -2143,6 +2178,11 @@ static int child(const char *mode, const char *arg)
 {
 	if (!strcmp(mode, "sandbox"))
 		return sandboxed();
+	if (!strcmp(mode, "expendable")) {
+		/* Moves itself to the expendable class, and not back. */
+		return veda_process_set_memory_class(VEDA_MEMORY_EXPENDABLE) == 0 &&
+		       veda_process_set_memory_class(VEDA_MEMORY_APPLICATION) == EACCES ? 0 : 1;
+	}
 	if (!strcmp(mode, "borrower"))
 		return borrower(arg);
 	if (!strcmp(mode, "borrower-again"))
@@ -2307,6 +2347,7 @@ int main(int argc, char **argv)
 		check_network(argv[2], atoi(argv[3]), atoi(argv[4]));
 	else
 		check_network(0, 0, 0);
+	check_memory_classes();
 	printf("%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
 	return failures;
 }

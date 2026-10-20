@@ -85,6 +85,7 @@ pub(super) fn cmd_ps(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 abi::process_state::EXITED => "exited",
                 abi::process_state::KILLED => "killed",
                 abi::process_state::CRASHED => "crashed",
+                abi::process_state::OUT_OF_MEMORY => "out of memory",
                 _ => "?",
             };
             io.print(&format!("  {state}"));

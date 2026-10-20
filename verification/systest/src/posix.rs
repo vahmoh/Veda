@@ -317,6 +317,11 @@ pub fn unmapped() -> i32 {
 
 /// Starts a copy of systest that does `what` (see `main`), as its child.
 fn start_copy(what: &str) -> Result<Process, String> {
+    start_copy_with(&[what])
+}
+
+/// Starts a copy of systest with `args`, which say what it is to do.
+pub(crate) fn start_copy_with(args: &[&str]) -> Result<Process, String> {
     let fs = vfs_client()?;
     let path = "/system/bin/systest";
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
@@ -325,7 +330,10 @@ fn start_copy(what: &str) -> Result<Process, String> {
         .map_err(|e| format!("{e:?}"))?
         .map_err(s)?
         .map_err(|e| format!("{e:?}"))?;
-    let spawn = Spawn::new("systest").path(path).arg(what).handle(role::REGISTRY, registry.into_handle());
+    let mut spawn = Spawn::new("systest").path(path).handle(role::REGISTRY, registry.into_handle());
+    for a in args {
+        spawn = spawn.arg(a);
+    }
     // SAFETY: a read-only mapping of the VFS's copy of the file.
     spawn.start(unsafe { image.as_slice() }).map_err(|e| format!("{path}: {e}"))
 }

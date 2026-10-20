@@ -134,11 +134,26 @@ logs (see [the driver VM](DRIVERVM.md)).
   memory* (`vm_allocate`) is a VMO no handle reaches, for one mapping, whose
   pages are freed when unmapped or decommitted (`vm_decommit`). Frames are
   freed only after the TLB shootdown that makes them unreachable. The
-  kernel keeps a reserve of memory (1/64 of it, 8 to 64 MiB) for itself: a
-  process whose page fault the rest cannot satisfy is ended, the log
-  saying so (`out of memory: no page for its access`) and naming the
-  processes that hold the most; `system_info` counts as free only what
-  programs may still take.
+  kernel keeps a reserve of memory (1/64 of it, 8 to 64 MiB) for itself;
+  `system_info` counts as free only what programs may still take.
+- **When memory runs out.** Memory is committed as it is touched, so it
+  runs out at a page fault, which no call can return an error from. The
+  kernel then ends a process to make room (`memory::oom`), by its *memory
+  class* (`abi::memory_class`): never one of the system's (`init` and the
+  services it starts), but, of the applications (what the launcher starts,
+  the programs the kernel command line asks for, and what they start) and
+  the *expendable* processes (a process may move itself, or one it
+  manages, there, and never back), the one of the most expendable class
+  that holds the most. The faulting thread waits until that process is
+  gone, then makes its access again; one process is ended for memory at a
+  time. Only when the faulting process is the one to go, or no other may,
+  does it end itself. The log names the process ended (`out of memory:
+  ending systest (process N, expendable, 48 MiB) to make room for ...`),
+  or the faulting one and what holds the most (`out of memory: no page
+  for its access`), and the process's exit code says it was ended for
+  memory (`EXIT_CODE_OUT_OF_MEMORY`; `SIGKILL` for POSIX programs, as
+  under Linux's OOM killer), which `<veda/memory.h>` tells a parent of its
+  child (`veda_child_ended_for_memory`).
 - **IPC.** Channels carry messages of up to 64 KiB plus 64 handles. An
   endpoint has one handle at a time unless its channel is shared
   (`channel_flags::SHARED`): then several processes can hold it, and each
@@ -961,11 +976,13 @@ the actions every `ui` application offers over the `agentapp` protocol
   clocks programs read themselves, the file system, the launcher and what
   it lets an application do (an application spinning on every processor,
   as high as it may, while the services must go on answering), crash
-  reports, the window system's restart, and the C, C++
-  and Rust test programs (`verification/c`, `verification/rust`,
-  `verification/stdcrates`). `nettest` checks DNS, UDP, TCP, HTTP, HTTPS
-  and ping, against a server on the host in the network cards' scripts
-  (`nettest local`).
+  reports, the window system's restart, memory running out (an expendable
+  process ended before an application that holds more, then the
+  application that holds the most, never the process whose access found
+  no page), and the C, C++ and Rust test programs (`verification/c`,
+  `verification/rust`, `verification/stdcrates`). `nettest` checks DNS,
+  UDP, TCP, HTTP, HTTPS and ping, against a server on the host in the
+  network cards' scripts (`nettest local`).
 - **GUI scripts** (`verification/ui/*.vts`, in the language of
   `automation/src/script.rs`) drive QEMU through QMP (mouse, keyboard,
   waits on log lines, screenshots) and fail on panics. All are checked

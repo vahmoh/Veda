@@ -5,7 +5,7 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use abi::{ProcessInfo, process_state};
 
@@ -47,6 +47,10 @@ pub struct Process {
     /// so this bounds which processes its threads can keep from the
     /// processors.
     pub max_priority: u8,
+    /// What the system ends first when memory runs out
+    /// ([`abi::memory_class`]): its creator's at first, and only ever more
+    /// expendable ([`Process::set_memory_class`]).
+    memory_class: AtomicU8,
 }
 
 /// Every process ever created that is still referenced somewhere.
@@ -80,7 +84,32 @@ impl Process {
         self.restrictions.load(Ordering::Acquire) & flag != 0
     }
 
-    pub fn new(name: &str, parent_koid: u64, max_priority: u8) -> Option<Arc<Process>> {
+    /// What the system ends first when memory runs out
+    /// ([`abi::memory_class`]).
+    pub fn memory_class(&self) -> u8 {
+        self.memory_class.load(Ordering::Acquire)
+    }
+
+    /// Moves the process to `class`: `InvalidArgs` for none of
+    /// [`abi::memory_class`]'s, `AccessDenied` for one less expendable than
+    /// its own, which would shield it more than its creator chose.
+    pub fn set_memory_class(&self, class: usize) -> Result<(), abi::Error> {
+        if class > abi::memory_class::EXPENDABLE {
+            return Err(abi::Error::InvalidArgs);
+        }
+        self.memory_class
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |now| (class as u8 >= now).then_some(class as u8))
+            .map(|_| ())
+            .map_err(|_| abi::Error::AccessDenied)
+    }
+
+    /// The code it was asked to end with ([`Process::kill`]), if it was,
+    /// whether or not its threads have all ended yet.
+    pub fn ending_with(&self) -> Option<i64> {
+        *self.pending_code.lock()
+    }
+
+    pub fn new(name: &str, parent_koid: u64, max_priority: u8, memory_class: u8) -> Option<Arc<Process>> {
         let p = Arc::new(Process {
             koid: super::new_koid(),
             parent_koid,
@@ -95,6 +124,7 @@ impl Process {
             exited_threads_cpu_ns: AtomicU64::new(0),
             restrictions: AtomicUsize::new(0),
             max_priority,
+            memory_class: AtomicU8::new(memory_class),
         });
         let mut list = PROCESSES.lock();
         list.retain(|w| w.strong_count() > 0);
@@ -196,7 +226,10 @@ impl Process {
         drop(unstarted);
         let aspace = self.aspace.lock().take();
         drop(aspace);
-        let level = if code == abi::EXIT_CODE_CRASHED { crate::log::Level::Warn } else { crate::log::Level::Debug };
+        let level = match code {
+            abi::EXIT_CODE_CRASHED | abi::EXIT_CODE_OUT_OF_MEMORY => crate::log::Level::Warn,
+            _ => crate::log::Level::Debug,
+        };
         crate::log::write(
             level,
             format_args!("process {} ({}) exited with code {}", self.name.as_str(), self.koid, code),
@@ -218,6 +251,7 @@ impl Process {
             ProcessState::Created | ProcessState::Running => process_state::RUNNING,
             ProcessState::Terminated { code } if code == abi::EXIT_CODE_CRASHED => process_state::CRASHED,
             ProcessState::Terminated { code } if code == abi::EXIT_CODE_KILLED => process_state::KILLED,
+            ProcessState::Terminated { code } if code == abi::EXIT_CODE_OUT_OF_MEMORY => process_state::OUT_OF_MEMORY,
             ProcessState::Terminated { .. } => process_state::EXITED,
         };
         ProcessInfo {
@@ -231,6 +265,8 @@ impl Process {
             cpu_time_ns: running_cpu + self.exited_threads_cpu_ns.load(Ordering::Relaxed),
             handles: self.handles.lock().len() as u32,
             max_priority: self.max_priority.into(),
+            memory_class: self.memory_class().into(),
+            _reserved: 0,
         }
     }
 

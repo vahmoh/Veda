@@ -17,7 +17,10 @@
 //! * Implements the **launcher** service: starting programs and installed
 //!   applications, listing and ending tasks, and power control, each as
 //!   far as the caller's identity allows (see [`Init::end`]). What it
-//!   starts runs its threads at [`APPLICATION_PRIORITY`] at most.
+//!   starts runs its threads at [`APPLICATION_PRIORITY`] at most, and,
+//!   like the programs the kernel command line asks for, is an
+//!   application's memory class (`abi::memory_class`): when memory runs
+//!   out, the kernel ends one of them before any system service.
 
 #![no_std]
 #![no_main]
@@ -211,6 +214,11 @@ impl Init {
         }
         if origin == Origin::Launched {
             spawn = spawn.max_priority(APPLICATION_PRIORITY);
+        }
+        // What is not a system service is ended before any of them when
+        // memory runs out, and what it starts in turn.
+        if origin != Origin::Service {
+            spawn = spawn.memory_class(abi::memory_class::APPLICATION);
         }
         // It runs from the image's pages, which every process running it
         // shares (from a copy of them if they cannot be had).
@@ -513,6 +521,7 @@ impl Init {
         match code {
             abi::EXIT_CODE_CRASHED => println!("{} crashed", child.name),
             abi::EXIT_CODE_PANICKED => println!("{} panicked", child.name),
+            abi::EXIT_CODE_OUT_OF_MEMORY => println!("{} was ended: memory ran out", child.name),
             // A POSIX program's fault: a program on the standard library
             // that panics aborts.
             c if abi::crashed(c) => println!("{} crashed (signal {})", child.name, abi::exit_signal(c).unwrap_or(0)),

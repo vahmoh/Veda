@@ -275,6 +275,14 @@ pub mod nr {
     /// (a thread library keeps its threads' handles; this gives one to the
     /// thread the process started with).
     pub const THREAD_SELF: usize = 78;
+    /// `process_set_memory_class(h, class)`: what the system ends first
+    /// when memory runs out ([`memory_class`](crate::memory_class)); `h` 0
+    /// is the calling process, another needs `MANAGE`. A process starts in
+    /// its creator's class, and only moves on towards
+    /// [`EXPENDABLE`](crate::memory_class::EXPENDABLE) (`AccessDenied`
+    /// back): no process can shield one it starts, or itself, more than it
+    /// is shielded.
+    pub const PROCESS_SET_MEMORY_CLASS: usize = 79;
 
     // --- futexes ------------------------------------------------------
     /// `futex_wait(addr, expected, deadline)`.
@@ -722,6 +730,24 @@ pub mod restrict {
     pub const ALL: usize = NO_LOG | NO_PROCESSES | NO_EXECUTE;
 }
 
+/// What the system ends first when memory runs out
+/// ([`nr::PROCESS_SET_MEMORY_CLASS`]). Memory is committed as it is
+/// touched, so it runs out at a page fault, which no call can return an
+/// error from: the kernel then ends a process to make room (of the
+/// processes above [`SYSTEM`](memory_class::SYSTEM), one of the most
+/// expendable class, the one of it that holds the most), and the access is
+/// made again. Only when no other may go does the process that touched the
+/// page end itself.
+pub mod memory_class {
+    /// The system's own processes: never ended to make room for another.
+    pub const SYSTEM: usize = 0;
+    /// Applications and what they start.
+    pub const APPLICATION: usize = 1;
+    /// What costs least to lose and is started again as needed, such as a
+    /// web page's process: ended first.
+    pub const EXPENDABLE: usize = 2;
+}
+
 /// Flags of `process_kill`.
 pub mod kill_flags {
     /// The processes it started too, those they started, and so on: a
@@ -735,6 +761,9 @@ pub mod process_state {
     pub const EXITED: u32 = 2;
     pub const KILLED: u32 = 3;
     pub const CRASHED: u32 = 4;
+    /// Ended by the system because memory ran out
+    /// ([`EXIT_CODE_OUT_OF_MEMORY`](crate::EXIT_CODE_OUT_OF_MEMORY)).
+    pub const OUT_OF_MEMORY: u32 = 5;
 }
 
 /// Information about a process.
@@ -755,6 +784,10 @@ pub struct ProcessInfo {
     /// The highest priority its threads may run at (see
     /// [`nr::PROCESS_CREATE`]).
     pub max_priority: u32,
+    /// What the system ends first when memory runs out
+    /// ([`memory_class`]).
+    pub memory_class: u32,
+    pub _reserved: u32,
 }
 
 impl Default for ProcessInfo {
@@ -770,6 +803,8 @@ impl Default for ProcessInfo {
             cpu_time_ns: 0,
             handles: 0,
             max_priority: 0,
+            memory_class: 0,
+            _reserved: 0,
         }
     }
 }
@@ -980,6 +1015,9 @@ pub const EXIT_CODE_CRASHED: i64 = -1001;
 pub const EXIT_CODE_KILLED: i64 = -1002;
 /// Exit code of a program that panicked (set by the runtime's panic handler).
 pub const EXIT_CODE_PANICKED: i64 = -1003;
+/// Exit code of a process the system ended because memory ran out, to give
+/// another process's access a page (see [`memory_class`]).
+pub const EXIT_CODE_OUT_OF_MEMORY: i64 = -1004;
 /// Exit codes of POSIX programs ended by a signal they did not handle
 /// (`abort` raises `SIGABRT`): `EXIT_CODE_SIGNALED - signal`. See
 /// [`exit_signal`].
@@ -987,12 +1025,13 @@ pub const EXIT_CODE_SIGNALED: i64 = -2000;
 
 /// The signal number (1-64) a process was ended by, if its exit code says
 /// so: [`EXIT_CODE_SIGNALED`] codes, and the kernel's own codes as the
-/// signals that stand for them (a crash is `SIGSEGV`, a kill `SIGKILL`, a
+/// signals that stand for them (a crash is `SIGSEGV`; a kill `SIGKILL`, and
+/// so is being ended for memory, as Linux's OOM killer ends a process; a
 /// Rust panic `SIGABRT`).
 pub const fn exit_signal(code: i64) -> Option<u32> {
     match code {
         EXIT_CODE_CRASHED => Some(11),
-        EXIT_CODE_KILLED => Some(9),
+        EXIT_CODE_KILLED | EXIT_CODE_OUT_OF_MEMORY => Some(9),
         EXIT_CODE_PANICKED => Some(6),
         c if c < EXIT_CODE_SIGNALED && c >= EXIT_CODE_SIGNALED - 64 => Some((EXIT_CODE_SIGNALED - c) as u32),
         _ => None,
@@ -1064,10 +1103,14 @@ mod tests {
         assert!(crashed(EXIT_CODE_CRASHED) && crashed(EXIT_CODE_PANICKED));
         // `abort` (a Rust panic on the standard library), a bad access.
         assert!(crashed(EXIT_CODE_SIGNALED - 6) && crashed(EXIT_CODE_SIGNALED - 11));
-        // Killed, or ended by another's signal; a plain exit.
-        for code in [EXIT_CODE_KILLED, EXIT_CODE_SIGNALED - 9, EXIT_CODE_SIGNALED - 15, 0, 1, -1] {
+        // Killed, ended for memory or by another's signal; a plain exit.
+        for code in
+            [EXIT_CODE_KILLED, EXIT_CODE_OUT_OF_MEMORY, EXIT_CODE_SIGNALED - 9, EXIT_CODE_SIGNALED - 15, 0, 1, -1]
+        {
             assert!(!crashed(code), "{code}");
         }
         assert_eq!(exit_signal(EXIT_CODE_SIGNALED - 6), Some(6));
+        // Ended for memory: SIGKILL, as Linux's OOM killer ends a process.
+        assert_eq!(exit_signal(EXIT_CODE_OUT_OF_MEMORY), Some(9));
     }
 }
