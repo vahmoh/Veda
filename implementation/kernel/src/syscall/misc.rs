@@ -71,6 +71,7 @@ pub fn system_info(ptr: usize) -> SysResult {
         thread_count: procs.iter().map(|p| p.thread_count() as u32).sum(),
         idle_time_ns: scheduler::total_idle_ns(),
         cpu_brand: crate::arch::cpu::brand_string(),
+        timer_interrupts: scheduler::total_timer_interrupts(),
     };
     user::write(ptr as u64, &info)?;
     ok(0)

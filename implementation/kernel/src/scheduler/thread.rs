@@ -42,8 +42,9 @@ pub struct SchedData {
     pub state: State,
     pub priority: u8,
     pub wake_reason: WakeReason,
-    /// Key in the timeout queue while blocked with a deadline.
-    pub timeout_key: Option<(u64, u64)>,
+    /// While blocked with a deadline: the CPU whose timeout queue holds it
+    /// (the one it blocked on), and its key there.
+    pub timeout_key: Option<(u32, (u64, u64))>,
     pub cpu: u32,
 }
 

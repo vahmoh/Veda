@@ -185,7 +185,10 @@ logs (see [the driver VM](DRIVERVM.md)).
   starts and, with Intel's hardware P-states, chooses its own speed, up to
   turbo. The scheduler has 32 priorities, round-robin within each, 10 ms
   slices, preemption when a higher-priority thread wakes, tickless one-shot
-  timers and eager switching of FPU and vector state (XSAVE). It runs the
+  timers and eager switching of FPU and vector state (XSAVE). It arms a
+  processor's timer only for the deadlines of the threads that sleep on
+  it, which that processor wakes, so that no deadline interrupts every
+  processor (each of which would then wait for the BKL). It runs the
   highest-priority threads ready, so a thread that never waits keeps those
   below it from its processor: a process's threads run at its *maximum
   priority* at most, which its creator gives it (`process_create`) and
@@ -196,7 +199,9 @@ logs (see [the driver VM](DRIVERVM.md)).
   and those of the processes it starts, take turns with the services
   instead of shutting them out. A thread that wakes outranking a running
   one takes the processor that woke it, an idle one, or the one running
-  the least urgent thread. Priorities above `NORMAL` buy latency, not
+  the least urgent thread; an idle processor that wakes a thread (its
+  timer, a device's interrupt) runs it, and wakes no other to race it for
+  the thread. Priorities above `NORMAL` buy latency, not
   processor time: a process's threads run above `NORMAL` for 50 ms of
   every 100 ms at most, together, and at `NORMAL` for the rest, so that a
   service gone wrong, or a guest's processors in a loop (the driver VM's

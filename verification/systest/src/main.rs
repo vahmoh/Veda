@@ -446,6 +446,28 @@ fn test_short_sleeps() -> TestResult {
     )
 }
 
+/// A thread's deadline interrupts the processor it sleeps on, not every
+/// one: for 200 sleeps of a millisecond, the processors take fewer than
+/// three timer interrupts for every two sleeps, in all (one a sleep, and
+/// the rest of the system's). With one queue of deadlines for every
+/// processor, each processor armed its timer for every sleeping thread's
+/// deadline, and took an interrupt (and waited for the BKL) for each: more
+/// than two a sleep on an idle system of four processors, and more the more
+/// processors there are.
+fn test_deadlines_interrupt_one_processor() -> TestResult {
+    const SLEEPS: u64 = 200;
+    let interrupts = || rt::object::system_info().map(|i| i.timer_interrupts).map_err(|e| e.to_string());
+    let before = interrupts()?;
+    for _ in 0..SLEEPS {
+        rt::time::sleep(rt::time::Duration::from_millis(1));
+    }
+    let taken = interrupts()? - before;
+    check(
+        taken < SLEEPS * 3 / 2,
+        &alloc::format!("{SLEEPS} sleeps of 1 ms took {taken} timer interrupts on {} processors", rt::pool::cpus()),
+    )
+}
+
 /// A thread on every processor at `priority` that never waits nor makes a
 /// system call, until `stop` is set.
 fn spinners(priority: usize, stop: &Arc<AtomicBool>) -> Result<Vec<rt::thread::JoinHandle<()>>, String> {
@@ -678,10 +700,11 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 38] = [
+    let tests: [Test; 39] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
+        ("deadlines interrupt one processor", test_deadlines_interrupt_one_processor),
         ("waking preempts elsewhere", test_waking_preempts_elsewhere),
         ("priorities above normal have a budget", test_elevated_budget),
         ("ports", ports::test_ports),

@@ -24,6 +24,8 @@ pub struct PerCpu {
     pub online: AtomicBool,
     /// Accumulated time spent in the idle thread (ns).
     pub idle_ns: AtomicU64,
+    /// Timer interrupts this CPU has taken.
+    pub timer_interrupts: AtomicU64,
     /// This idle CPU was sent a reschedule IPI and has not run the
     /// scheduler since: further wake-ups pick another CPU.
     pub resched_pending: AtomicBool,
@@ -43,6 +45,7 @@ static PERCPU: [PerCpu; MAX_CPUS] = {
             sched: UnsafeCell::new(CpuSched::new()),
             online: AtomicBool::new(false),
             idle_ns: AtomicU64::new(0),
+            timer_interrupts: AtomicU64::new(0),
             resched_pending: AtomicBool::new(false),
         });
         i += 1;

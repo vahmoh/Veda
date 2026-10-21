@@ -23,7 +23,8 @@
 //!   holds, which it lets go of in that slice).
 //! * Tickless: each CPU arms its timer (`arch::timer`) for its next event
 //!   (time slice end, the end of the running thread's budget above
-//!   `NORMAL`, or the earliest sleeping thread's deadline).
+//!   `NORMAL`, or the earliest deadline of the threads that went to sleep
+//!   on it, which it alone wakes).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
 
 pub mod thread;
@@ -207,7 +208,24 @@ static RUNQ: SpinLock<RunQueue> =
     SpinLock::new(RunQueue { levels: [const { VecDeque::new() }; 32], bitmap: 0, len: 0 });
 
 /// Blocked threads with a deadline, keyed by (deadline, koid).
-static TIMEOUTS: SpinLock<BTreeMap<(u64, u64), Weak<Thread>>> = SpinLock::new(BTreeMap::new());
+type Timeouts = BTreeMap<(u64, u64), Weak<Thread>>;
+
+/// For each CPU, the threads that blocked on it with a deadline: only its
+/// timer is armed for their deadlines, and it alone wakes them. With one
+/// queue for all, every CPU's timer was armed for the earliest deadline of
+/// all, so each deadline interrupted every CPU, and each queued for the BKL
+/// to find that the first had woken the thread; one already due made every
+/// CPU that armed its timer meanwhile take an interrupt a microsecond
+/// later, again and again while the BKL was busy. The more CPUs, the more
+/// of each.
+static TIMEOUTS: [SpinLock<Timeouts>; percpu::MAX_CPUS] = [const { SpinLock::new(BTreeMap::new()) }; percpu::MAX_CPUS];
+
+/// Takes a blocked thread's deadline, `(cpu, key)` as its
+/// [`SchedData::timeout_key`](thread::SchedData) has it, out of that CPU's
+/// queue.
+fn forget_timeout((cpu, key): (u32, (u64, u64))) {
+    TIMEOUTS[cpu as usize].lock().remove(&key);
+}
 
 /// The thread running on this CPU.
 pub fn current() -> Arc<Thread> {
@@ -248,7 +266,15 @@ pub fn make_ready(t: &Arc<Thread>) {
 /// one.
 fn after_wakeup(prio: u8, now: u64) {
     let me = percpu::cpu_id_or_boot();
-    let here = try_current().is_some_and(|cur| cur.is_idle || prio > cur.effective_priority(now));
+    let idle = try_current().is_some_and(|cur| cur.is_idle);
+    // An idle CPU runs the first thread it makes ready itself, as it leaves
+    // the interrupt that did (a timer's, a device's): another woken for it
+    // would only race it for the thread, and queue for the BKL to lose.
+    if idle && !cpu_sched().need_resched {
+        cpu_sched().need_resched = true;
+        return;
+    }
+    let here = idle || try_current().is_some_and(|cur| prio > cur.effective_priority(now));
     if here {
         cpu_sched().need_resched = true;
     }
@@ -294,7 +320,7 @@ pub fn wake(t: &Arc<Thread>, reason: WakeReason) {
         s.state = State::Ready;
         s.wake_reason = reason;
         if let Some(key) = s.timeout_key.take() {
-            TIMEOUTS.lock().remove(&key);
+            forget_timeout(key);
         }
     }
     let now = time::now_ns();
@@ -320,15 +346,15 @@ pub fn block(deadline: Option<u64>) -> WakeReason {
         s.state = State::Blocked;
         s.wake_reason = WakeReason::None;
         if let Some(d) = deadline {
-            let key = (d, cur.koid);
-            TIMEOUTS.lock().insert(key, Arc::downgrade(&cur));
-            s.timeout_key = Some(key);
+            let (cpu, key) = (percpu::cpu_id_or_boot(), (d, cur.koid));
+            TIMEOUTS[cpu as usize].lock().insert(key, Arc::downgrade(&cur));
+            s.timeout_key = Some((cpu, key));
         }
     }
     schedule();
     let mut s = cur.sched.lock();
     if let Some(key) = s.timeout_key.take() {
-        TIMEOUTS.lock().remove(&key);
+        forget_timeout(key);
     }
     s.wake_reason
 }
@@ -345,11 +371,13 @@ pub fn sleep_until(deadline: u64) -> WakeReason {
     }
 }
 
-/// Wakes every thread whose deadline has passed.
+/// Wakes every thread whose deadline has passed, of those that blocked on
+/// this CPU.
 fn expire_timeouts(now: u64) {
+    let queue = &TIMEOUTS[percpu::cpu_id_or_boot() as usize];
     loop {
         let t = {
-            let mut q = TIMEOUTS.lock();
+            let mut q = queue.lock();
             match q.first_key_value() {
                 Some((&(d, _), _)) if d <= now => q.pop_first().and_then(|(_, w)| w.upgrade()),
                 _ => break,
@@ -363,8 +391,9 @@ fn expire_timeouts(now: u64) {
     }
 }
 
+/// The earliest deadline of the threads that blocked on this CPU.
 fn earliest_timeout() -> Option<u64> {
-    TIMEOUTS.lock().first_key_value().map(|(&(d, _), _)| d)
+    TIMEOUTS[percpu::cpu_id_or_boot() as usize].lock().first_key_value().map(|(&(d, _), _)| d)
 }
 
 /// Arms this CPU's timer for its next event, `running` being the thread it
@@ -539,6 +568,7 @@ fn boost_starved(now: u64) {
 
 /// The CPU's timer interrupt.
 pub fn timer_interrupt() {
+    percpu::current().timer_interrupts.fetch_add(1, Ordering::Relaxed);
     let now = time::now_ns();
     expire_timeouts(now);
     boost_starved(now);
@@ -660,7 +690,7 @@ pub fn exit_current() -> ! {
         let mut s = cur.sched.lock();
         s.state = State::Dead;
         if let Some(key) = s.timeout_key.take() {
-            TIMEOUTS.lock().remove(&key);
+            forget_timeout(key);
         }
     }
     cur.signals.update(0, abi::signals::TERMINATED);
@@ -773,4 +803,9 @@ pub fn idle_entry(_arg: u64) -> ! {
 /// Snapshot used by `system_info`.
 pub fn total_idle_ns() -> u64 {
     percpu::online().map(|p| p.idle_ns.load(Ordering::Relaxed)).sum()
+}
+
+/// The timer interrupts all CPUs have taken, for `system_info`.
+pub fn total_timer_interrupts() -> u64 {
+    percpu::online().map(|p| p.timer_interrupts.load(Ordering::Relaxed)).sum()
 }

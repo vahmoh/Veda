@@ -990,6 +990,9 @@ pub struct SystemInfo {
     pub idle_time_ns: u64,
     /// The processor's name, as it gives it (NUL padded).
     pub cpu_brand: [u8; 48],
+    /// Timer interrupts taken across all CPUs since boot: how often they
+    /// were woken or interrupted for a deadline or the end of a time slice.
+    pub timer_interrupts: u64,
 }
 
 impl Default for SystemInfo {
@@ -1005,6 +1008,7 @@ impl Default for SystemInfo {
             thread_count: 0,
             idle_time_ns: 0,
             cpu_brand: [0; 48],
+            timer_interrupts: 0,
         }
     }
 }
