@@ -99,10 +99,13 @@ logs (see [the driver VM](DRIVERVM.md)).
 - **Concurrency.** Kernel code runs with interrupts disabled under a big
   kernel lock (BKL): the kernel is effectively single-threaded while user
   code runs on all CPUs, and its operations are short, which keeps
-  contention low. The BKL is a ticket lock, taken in the order CPUs ask for
-  it, so that none waits behind more than a turn of each other however
-  busy they keep the kernel: a driver VM's processor needs it after each
-  exit from its guest, and the window system for each frame. Per-object
+  contention low. The BKL is a queue lock (MCS), taken in the order CPUs ask
+  for it, so that none waits behind more than a turn of each other however
+  busy they keep the kernel (a driver VM's processor needs it after each
+  exit from its guest, and the window system for each frame), each waiter
+  spinning on a word of its own, so that handing it over costs the same
+  however many CPUs wait (with a ticket lock, all spun on its counter, and
+  each handover took longer the more waited). Per-object
   spinlocks catch accidental recursion; TLB shootdowns are acknowledged
   without the BKL, so they cannot deadlock, and go only to the CPUs that
   have the changed address space's page tables loaded (with no PCIDs, no
