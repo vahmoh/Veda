@@ -378,6 +378,43 @@
  
  #define defineUnaryDoubleOpWrapper(function) \
      __asm__( \
+--- a/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
++++ b/Source/JavaScriptCore/runtime/BufferMemoryHandle.cpp
+@@ -215,9 +215,14 @@
+     , m_initial(initial)
+     , m_maximum(maximum)
+ {
+-    if (sharingMode == MemorySharingMode::Default && mode == MemoryMode::BoundsChecking)
++    if (sharingMode == MemorySharingMode::Default && mode == MemoryMode::BoundsChecking) {
++#if OS(VEDA)
++        // Reserved whole on Veda (Memory::tryCreate).
++        ASSERT(mappedCapacity >= size);
++#else
+         ASSERT(mappedCapacity == size);
+-    else {
++#endif
++    } else {
+ #if ENABLE(WEBASSEMBLY)
+         Wasm::activateSignalingMemory();
+ #endif
+@@ -260,6 +265,16 @@
+             case MemorySharingMode::Default: {
+                 if (memory == nullBasePointer() && !m_size)
+                     return;
++#if OS(VEDA)
++                if (BufferMemoryManager::singleton().isInGrowableOrFastMemory(memory)) {
++                    // Reserved whole (Memory::tryCreate).
++                    constexpr bool readable = true;
++                    constexpr bool writable = true;
++                    OSAllocator::protect(memory, m_mappedCapacity, readable, writable);
++                    BufferMemoryManager::singleton().freeGrowableBoundsCheckingMemory(memory, m_mappedCapacity);
++                    break;
++                }
++#endif
+                 Gigacage::freeVirtualPages(Gigacage::Primitive, memory, m_size);
+                 break;
+             }
+
 --- a/Source/JavaScriptCore/runtime/MachineContext.h
 +++ b/Source/JavaScriptCore/runtime/MachineContext.h
 @@ -189,7 +189,7 @@
@@ -472,6 +509,114 @@
  
  #if !PLATFORM(COCOA)
  #define OVERRIDE_OPTION_WITH_HEURISTICS(type_, name_, defaultValue_, availability_, description_) \
+--- a/Source/JavaScriptCore/wasm/js/JSWebAssemblyInstance.h
++++ b/Source/JavaScriptCore/wasm/js/JSWebAssemblyInstance.h
+@@ -107,10 +107,23 @@
+     {
+         cachedMemoryBaseSizePairs()[i] = {
+             m_memories[i]->basePointer(),
+-            m_memories[i]->mappedCapacity()
++            boundsCheckingSize(m_memories[i]->memory())
+         };
+     }
+ 
++    // What a memory's accesses are checked against, in MemoryMode::BoundsChecking:
++    // where it is mapped. On Veda, a memory no thread shares is reserved
++    // whole and mapped only as far as its size (Memory::tryCreate): its
++    // size, which every growth updates here (updateCachedMemories).
++    static size_t boundsCheckingSize(const Wasm::Memory& memory)
++    {
++#if OS(VEDA)
++        if (memory.mode() == MemoryMode::BoundsChecking && memory.sharingMode() == MemorySharingMode::Default)
++            return memory.size();
++#endif
++        return memory.mappedCapacity();
++    }
++
+     void setMemory(VM& vm, unsigned i, JSWebAssemblyMemory* value)
+     {
+         if (!i)
+@@ -219,7 +232,7 @@
+ #if CPU(ARM)
+                     m_memories[i]->size();
+ #else
+-                    m_memories[i]->mappedCapacity()
++                    boundsCheckingSize(m_memories[i]->memory())
+ #endif
+                 };
+             }
+
+--- a/Source/JavaScriptCore/wasm/WasmIRGeneratorHelpers.h
++++ b/Source/JavaScriptCore/wasm/WasmIRGeneratorHelpers.h
+@@ -189,7 +189,7 @@
+     context.gpr(GPRInfo::wasmContextInstancePointer) = std::bit_cast<uintptr_t>(instance);
+     if (instance->moduleInformation().memoryCount()) {
+         context.gpr(GPRInfo::wasmBaseMemoryPointer) = std::bit_cast<uintptr_t>(instance->memory(0)->basePointer());
+-        context.gpr(GPRInfo::wasmBoundsCheckingSizeRegister) = instance->memory(0)->memory().mappedCapacity();
++        context.gpr(GPRInfo::wasmBoundsCheckingSizeRegister) = JSWebAssemblyInstance::boundsCheckingSize(instance->memory(0)->memory());
+     }
+ }
+ 
+
+--- a/Source/JavaScriptCore/wasm/WasmMemory.cpp
++++ b/Source/JavaScriptCore/wasm/WasmMemory.cpp
+@@ -209,6 +209,31 @@
+         if (!initialBytes)
+             return adoptRef(new Memory(initial, maximum, MemorySharingMode::Default, addressType, WTF::move(growSuccessCallback)));
+ 
++#if OS(VEDA)
++        // Veda commits memory as it is touched: the address space a memory
++        // may grow into costs nothing until it does, so it is reserved whole
++        // and the memory grows where it is (Memory::grow), its bounds
++        // checked against its size, not what is reserved. Otherwise each
++        // growth takes a new allocation and a copy into it, with the old
++        // and the new held at once: a game's heap, grown a step at a time
++        // to hundreds of megabytes, needed twice that at each step.
++        if (!addressType.is64Bit()) {
++            const uint64_t capacity = maximumBytes ? maximumBytes : MAX_ARRAY_BUFFER_SIZE;
++            char* reserved = nullptr;
++            tryAllocate(vm,
++                [&] () -> BufferMemoryResult::Kind {
++                    auto result = BufferMemoryManager::singleton().tryAllocateGrowableBoundsCheckingMemory(capacity);
++                    reserved = std::bit_cast<char*>(result.basePtr);
++                    return result.kind;
++                });
++            if (reserved) {
++                if (capacity > initialBytes)
++                    OSAllocator::protect(reserved + initialBytes, capacity - initialBytes, false, false);
++                return Memory::create(adoptRef(*new BufferMemoryHandle(reserved, initialBytes, capacity, initial, maximum, MemorySharingMode::Default, MemoryMode::BoundsChecking)), addressType, WTF::move(growSuccessCallback));
++            }
++        }
++#endif
++
+         void* slowMemory = Gigacage::tryAllocateZeroedVirtualPages(Gigacage::Primitive, initialBytes);
+         if (!slowMemory) {
+             BufferMemoryManager::singleton().freePhysicalBytes(initialBytes);
+@@ -335,6 +360,23 @@
+     RELEASE_ASSERT(desiredSize > size());
+     switch (mode()) {
+     case MemoryMode::BoundsChecking: {
++#if OS(VEDA)
++        if (m_handle->mappedCapacity() >= desiredSize) {
++            // Reserved whole (tryCreate): it grows where it is.
++            size_t extraBytes = desiredSize - size();
++            bool allocationSuccess = tryAllocate(vm,
++                [&] () -> BufferMemoryResult::Kind {
++                    return BufferMemoryManager::singleton().tryAllocatePhysicalBytes(extraBytes);
++                });
++            if (!allocationSuccess)
++                return makeUnexpected(GrowFailReason::OutOfMemory);
++            constexpr bool readable = true;
++            constexpr bool writable = true;
++            OSAllocator::protect(static_cast<uint8_t*>(basePointer()) + size(), extraBytes, readable, writable);
++            m_handle->updateSize(desiredSize);
++            return success();
++        }
++#endif
+         bool allocationSuccess = tryAllocate(vm,
+             [&] () -> BufferMemoryResult::Kind {
+                 return BufferMemoryManager::singleton().tryAllocatePhysicalBytes(desiredSize);
+
 --- a/Source/ThirdParty/ANGLE/PlatformWPE.cmake
 +++ b/Source/ThirdParty/ANGLE/PlatformWPE.cmake
 @@ -5,6 +5,15 @@

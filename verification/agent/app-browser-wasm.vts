@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# WebAssembly memories grow where they are, on the host's page
+# (`/wasm-memory`) in a machine of 1 GiB, whose script says what it found,
+# read through the agent's hands: a memory of at most a gigabyte, and one
+# without a maximum, each grown 100 MiB at a time to 600 MiB, keep their
+# last word at each step, the buffer the page sees as large as the memory,
+# and an access past the end throws, as WebAssembly's must. Each growth
+# copies nothing: copied, a memory is held twice as it grows (1.1 GB at the
+# last step, which this machine does not have, and the page's process
+# would be ended for memory).
+web-server
+memory 1024
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call app_actions '{"app":"browser"}' 60
+wait-serial "browser offers" 10
+agent-call use_app '{"app":"browser","action":"open","arguments":{"address":"http://{web}/wasm-memory"}}' 30
+wait 10
+agent-call use_app '{"app":"browser","action":"read_page"}' 60
+agent-result "at most a gigabyte, grew to 9601 pages (600 MiB), kept its last word, threw past its end"
+agent-result "without a maximum, grew to 9601 pages (600 MiB), kept its last word, threw past its end"
+agent-result "WebAssembly memory checks: passed"
+reject-serial "page stopped working"
+reject-serial "out of memory"

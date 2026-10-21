@@ -18,9 +18,9 @@
 //! crossing the page on a click) measure and check its frames, and one
 //! draws with WebGL and reads back what it drew. A page reads a file the
 //! user chooses, as before an upload, another counts its visits in
-//! IndexedDB, one takes all the memory it can, a file comes to be
-//! downloaded, and a PDF to be shown. Files are sent whole or in the byte
-//! ranges asked for, as media players ask.
+//! IndexedDB, one takes all the memory it can, one grows WebAssembly
+//! memories, a file comes to be downloaded, and a PDF to be shown. Files
+//! are sent whole or in the byte ranges asked for, as media players ask.
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
@@ -399,6 +399,63 @@ function start() {
 }
 document.addEventListener('click', start);
 document.addEventListener('keydown', start);
+</script>
+</body></html>
+"#;
+
+/// WebAssembly memories grown (`/wasm-memory`): one of a page, at most a
+/// gigabyte, and one without a maximum, each grown 100 MiB at a time to
+/// 600 MiB, its last word written and read back after each growth, and an
+/// access past its end, which must throw; its script says what came of
+/// each. A memory copied as it grows is held twice at each step, 1.1 GB at
+/// the last.
+const WASM_MEMORY: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>WebAssembly memory</title>
+<style>body { font-family: sans-serif; margin: 24px 40px; }</style>
+</head><body><h1>WebAssembly memory</h1>
+<p id="state">No script ran.</p>
+<script>
+// A module exporting its memory (1 page, at most 16384 or no maximum),
+// grow(pages), size(), store(at, value) and load(at).
+const head = [0, 97, 115, 109, 1, 0, 0, 0, 1, 15, 3, 96, 1, 127, 1, 127, 96, 0, 1, 127, 96, 2, 127, 127, 0, 3, 5, 4, 0,
+    1, 2, 0];
+const tail = [7, 36, 5, 3, 109, 101, 109, 2, 0, 4, 103, 114, 111, 119, 0, 0, 4, 115, 105, 122, 101, 0, 1, 5, 115, 116,
+    111, 114, 101, 0, 2, 4, 108, 111, 97, 100, 0, 3, 10, 31, 4, 6, 0, 32, 0, 64, 0, 11, 4, 0, 63, 0, 11, 9, 0, 32, 0,
+    32, 1, 54, 2, 0, 11, 7, 0, 32, 0, 40, 2, 0, 11];
+const module = most => new Uint8Array([...head, ...(most ? [5, 6, 1, 1, 1, 128, 128, 1] : [5, 3, 1, 0, 1]), ...tail]);
+const state = document.getElementById('state');
+async function grow(most) {
+    const { instance } = await WebAssembly.instantiate(module(most));
+    const m = instance.exports;
+    for (let step = 0; step < 6; step++) {
+        if (m.grow(1600) < 0)
+            return `grew no further than ${m.size()} pages`;
+        const last = m.size() * 65536 - 4;
+        m.store(last, 0x5eda + step);
+        if (m.load(last) !== 0x5eda + step)
+            return `lost its last word at ${m.size()} pages`;
+        if (m.mem.buffer.byteLength !== m.size() * 65536)
+            return `has a buffer of ${m.mem.buffer.byteLength} bytes at ${m.size()} pages`;
+    }
+    try {
+        m.load(m.size() * 65536);
+        return 'read past its end';
+    } catch (error) {
+        if (!(error instanceof WebAssembly.RuntimeError))
+            return `threw ${error} past its end`;
+    }
+    return `grew to ${m.size()} pages (${m.size() >> 4} MiB), kept its last word, threw past its end`;
+}
+(async () => {
+    try {
+        const most = await grow(true), none = await grow(false);
+        const passed = [most, none].every(r => r.startsWith('grew to 9601 pages'));
+        state.textContent = `WebAssembly memory: at most a gigabyte, ${most}; without a maximum, ${none}. `
+            + `WebAssembly memory checks: ${passed ? 'passed' : 'failed'}`;
+    } catch (error) {
+        state.textContent = `WebAssembly memory: ${error}`;
+    }
+})();
 </script>
 </body></html>
 "#;
@@ -891,7 +948,7 @@ impl Drop for HostWeb {
 /// Answers one request: `GET /hello`, the browser's pages (`/page`,
 /// `/second`, `/zone`, `/cookie`, `/preferences`, `/scripts`, `/video`,
 /// `/audio`, `/mse`, `/webaudio`, `/webaudio-stream`, `/upload`,
-/// `/storage`, `/hog`, `/webgl`),
+/// `/storage`, `/hog`, `/webgl`, `/wasm-memory`),
 /// their media (`/media/countdown.webm`, `/media/tone.wav`), a file to
 /// download (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or
 /// else nothing found.
@@ -924,6 +981,7 @@ fn answer(mut stream: TcpStream) {
         b"/mse" => Some((html, MSE.as_bytes().into())),
         b"/webaudio" => Some((html, WEB_AUDIO.as_bytes().into())),
         b"/webaudio-stream" => Some((html, WEB_AUDIO_STREAM.as_bytes().into())),
+        b"/wasm-memory" => Some((html, WASM_MEMORY.as_bytes().into())),
         b"/upload" => Some((html, UPLOAD.as_bytes().into())),
         b"/storage" => Some((html, STORAGE.as_bytes().into())),
         b"/hog" => Some((html, HOG.as_bytes().into())),
@@ -1016,6 +1074,7 @@ mod tests {
             ("/mse", "MediaSource.isTypeSupported"),
             ("/webaudio", "decodeAudioData"),
             ("/webaudio-stream", "createBufferSource"),
+            ("/wasm-memory", "WebAssembly.instantiate"),
             ("/upload", "readAsArrayBuffer"),
             ("/storage", "indexedDB.open"),
             ("/hog", "new Uint8Array(32 << 20)"),
