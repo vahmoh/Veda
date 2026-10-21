@@ -472,7 +472,13 @@ web process (WebKit's GPU process stays off), on the GPU or not at all:
   `egl`'s surfaceless one; it finds every function through the program's
   `eglGetProcAddress`, where on Linux it would open `libEGL.so.1`, and
   leaves out its own exported OpenGL ES names, which would clash with
-  Veda's (WebKit calls ANGLE's by ANGLE's own).
+  Veda's (WebKit calls ANGLE's by ANGLE's own). A buffer specified without
+  data goes to Veda's OpenGL ES without zeros to upload, as its every new
+  buffer reads as zero, and keeps its storage there
+  ([OpenGL ES and the GPU](ARCHITECTURE.md#opengl-es-and-the-gpu)): a game
+  that specifies a buffer anew for each draw (librw's streamed vertices,
+  Vice City's) made a buffer and copied its zeros hundreds of times a
+  frame.
 * **No copies.** A canvas's WebGL contexts share their objects with the
   compositor's: ANGLE makes their native contexts in the share group of
   WebKit's sharing context (one `gl::Context` in `egl`), so the compositor
@@ -765,7 +771,7 @@ ports of WebKit give the network process a sandbox extension:
 | `vfs-core`'s unit tests (`cargo test -p vfs-core`) | What a confined connection's view reaches: its places, the way to them, what listings show, confining again only narrower, a place borrowed reaching nothing less and taken back reaching nothing more, each loan's place its own, confining again keeping what was borrowed; and loans: taken once, for their place, lapsing, a few for each lender, taken back by their lender alone, and ending with their lender's connection |
 | `verification/ui/browser-media.vts` | Media on the host's video page (`/video`): a click plays the countdown (videogen's, AV1 and FLAC in WebM) with its sound, which the audio service plays through a stream of the page's to the end, never short; the machine's sound output has its beeps |
 | `verification/agent/app-browser-media.vts` | The media pages' own checks, which the agent reads: Web Audio (`/webaudio`: an oscillator its analyser hears, a sound file decoded and played), a sound file in an `<audio>` element (`/audio`), the countdown played to its end with every picture shown and its first colours right, drawn into a canvas (`/video`), and the same through Media Source Extensions (`/mse`) |
-| `verification/agent/app-browser-webgl.vts` | WebGL's page's own checks, which the agent reads (`/webgl`), on the GPU (QEMU's, through virgl): WebGL 1's quarters drawn with a shader, read back in their colours, antialiased, WebGL 2's texture drawn through a framebuffer (`texelFetch`), and its multisampled framebuffer with depth and stencil, resolved, each read back, and a sky drawn with a shader of noise and loops moving every frame, on the screen too |
+| `verification/agent/app-browser-webgl.vts` | WebGL's page's own checks, which the agent reads (`/webgl`), on the GPU (QEMU's, through virgl): WebGL 1's quarters drawn with a shader, read back in their colours, antialiased, WebGL 2's texture drawn through a framebuffer (`texelFetch`), and its multisampled framebuffer with depth and stencil, resolved, each read back, buffers given no data drawing zeros (a new one, and one given storage anew after its data was drawn), and a sky drawn with a shader of noise and loops moving every frame, on the screen too |
 | `automation`'s unit tests (`cargo test -p automation hostweb`) | The host's test pages, their media sent whole or in the byte ranges asked for, the file to download, and the PDF, whose table says where each of its objects is |
 
 The scripts need the engine built (`requires web`) and are skipped

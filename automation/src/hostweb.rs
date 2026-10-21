@@ -418,6 +418,7 @@ const WEBGL: &str = r#"<!doctype html>
 </head><body><h1>WebGL</h1>
 <p id="one">No script ran.</p>
 <p id="two">No script ran.</p>
+<p id="zeros">No script ran.</p>
 <p id="motion">No script ran.</p>
 <p id="verdict">No verdict yet.</p>
 <p id="renderer"></p>
@@ -473,7 +474,7 @@ const program = (gl, vertex, fragment) => {
   return p;
 };
 const near = (got, want) => got.every((v, i) => Math.abs(v - want[i]) <= 2);
-const passed = { one: false, two: false, motion: false };
+const passed = { one: false, two: false, zeros: false, motion: false };
 const verdict = () => say('verdict', Object.values(passed).every(Boolean) ? 'WebGL checks: passed' : 'WebGL checks: not all passed');
 // WebGL 1: four quarters of known colours, read back, antialiased as
 // pages have it by default (a context is not where the GPU cannot
@@ -576,6 +577,51 @@ try {
   say('two', 'WebGL 2: colours right');
 } catch (e) {
   say('two', `WebGL 2 failed: ${e.message}`);
+}
+// A buffer given storage without data draws zeros, as WebGL promises (a
+// page never sees what the GPU's memory held), also given storage anew
+// after it held data: black where its data drew white. ANGLE uploads no
+// zeros for it; Veda's OpenGL ES makes them.
+try {
+  const gl = document.createElement('canvas').getContext('webgl2');
+  if (!gl)
+    throw new Error('not offered');
+  const target = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, target);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 2, 2);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+  const p = program(gl, '#version 300 es\nin vec2 p; in float a; out float v; void main() { v = a; gl_Position = vec4(p, 0.0, 1.0); }',
+    '#version 300 es\nprecision mediump float; in float v; out vec4 color; void main() { color = vec4(v, v, v, 1.0); }');
+  gl.viewport(0, 0, 2, 2);
+  const at = gl.getAttribLocation(p, 'a');
+  gl.enableVertexAttribArray(at);
+  const shade = () => {
+    gl.vertexAttribPointer(at, 1, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const px = new Uint8Array(16);
+    gl.readPixels(0, 0, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return Array.from(px);
+  };
+  const all = rgba => [rgba, rgba, rgba, rgba].flat();
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([1, 1, 1]), gl.STATIC_DRAW);
+  const data = shade();
+  if (!near(data, all([255, 255, 255, 255])))
+    throw new Error(`its data drew ${data}`);
+  gl.bufferData(gl.ARRAY_BUFFER, 12, gl.STATIC_DRAW);
+  const anew = shade();
+  if (!near(anew, all([0, 0, 0, 255])))
+    throw new Error(`given storage anew, it drew ${anew}`);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, 12, gl.STATIC_DRAW);
+  const fresh = shade();
+  if (!near(fresh, all([0, 0, 0, 255])))
+    throw new Error(`a new one drew ${fresh}`);
+  passed.zeros = true;
+  say('zeros', 'WebGL 2: buffers given no data draw zeros, also given storage anew');
+} catch (e) {
+  say('zeros', `WebGL 2's buffers failed: ${e.message}`);
 }
 // The sky, every frame, its frames counted for three seconds.
 try {

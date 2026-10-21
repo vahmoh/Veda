@@ -517,6 +517,47 @@
  #        define ANGLE_USE_FUTEX 1
  #    elif defined(ANGLE_PLATFORM_WINDOWS) && !defined(ANGLE_ENABLE_WINDOWS_UWP) && \
          !defined(ANGLE_WINDOWS_NO_FUTEX)
+--- a/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/BufferGL.cpp
++++ b/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/BufferGL.cpp
+@@ -104,6 +104,15 @@
+     stateManager->bindBuffer(DestBufferOperationTarget, mBufferID);
+ 
+     const void *uploadData = data;
++#if defined(__veda__)
++    // Veda's OpenGL ES makes every buffer read as zero (`gl`'s backends
++    // promise it of every new resource), as WebGL's buffers must: given no
++    // data, it has none to upload. Uploading zeros instead would copy the
++    // whole buffer for every call, which a renderer that specifies a buffer
++    // anew for each draw (streamed vertices: librw's, a game engine's) makes
++    // hundreds of times a frame.
++    (void)zeroFillRequired;
++#else
+     if (zeroFillRequired == gl::ZeroFillRequired::Yes)
+     {
+         const angle::MemoryBuffer *scratchBuffer = nullptr;
+@@ -111,6 +120,7 @@
+             contextGL, context->getZeroFilledBuffer(static_cast<size_t>(size), &scratchBuffer));
+         uploadData = scratchBuffer->data();
+     }
++#endif
+ 
+     if (mShadowCopy.has_value())
+     {
+@@ -121,6 +131,13 @@
+             ANGLE_UNSAFE_TODO(memcpy(mShadowCopy->data(), uploadData, size));
+             uploadData = mShadowCopy->data();
+         }
++#if defined(__veda__)
++        else if (size > 0)
++        {
++            // As the buffer reads.
++            mShadowCopy->fill(0);
++        }
++#endif
+     }
+ 
+     ANGLE_GL_TRY_ALWAYS_CHECK(
+
 --- a/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
 +++ b/Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/egl/FunctionsEGLDL.cpp
 @@ -8,10 +8,20 @@

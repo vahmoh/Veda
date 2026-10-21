@@ -9,9 +9,11 @@
 # offers as the GPU multisamples every format OpenGL ES 3.0 requires,
 # depth with stencil among them, draws a texture through a framebuffer with
 # GLSL ES 3.00, and into a multisampled framebuffer with depth and stencil,
-# which it resolves, reading both back; and a sky drawn with a shader of
-# noise, loops and a uniform for the time moves every frame, which the page
-# counts and the screen shows.
+# which it resolves, reading both back; buffers given no data draw zeros,
+# never what the GPU's memory held, also a buffer given storage anew after
+# its data was drawn; and a sky drawn with a shader of noise, loops and a
+# uniform for the time moves every frame, which the page counts and the
+# screen shows.
 web-server
 gpu on
 memory 2048
@@ -34,6 +36,7 @@ expect-different target/veda/agent-app-browser-webgl-1.png target/veda/agent-app
 agent-call use_app '{"app":"browser","action":"read_page"}' 60
 agent-result "WebGL 1: colours right, antialiased"
 agent-result "WebGL 2: colours right"
+agent-result "WebGL 2: buffers given no data draw zeros, also given storage anew"
 agent-result "The sky moved:"
 agent-result "WebGL checks: passed"
 reject-serial "egl: no context"
