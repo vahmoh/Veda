@@ -79,7 +79,12 @@ million pixels the rate drops (56 Hz at 3840x2160).
   and `qmp device_del '{"id":"kbd2"}'`.
 * **Home directory.** It is kept across builds and runs on its own disk,
   `target/veda/home.img`, until `--fresh-home`; `shot`, `script` and
-  `test` use a fresh one (`test-home.img` in `$VEDA_OUT`).
+  `test` use a fresh one (`test-home.img` in `$VEDA_OUT`). A new disk is
+  a gigabyte (a file that takes room on this computer as it is written),
+  half of it the home directory's room: enough for a web game's data,
+  which a page keeps in the browser's storage (Vice City's is 135 MB). A
+  disk made before is kept as it was, 64 MiB (32 MiB of room, too little
+  for such a page): `--fresh-home` makes a new one.
 * **Kernel command line.** `run=NAME` has `init` start `/system/bin/NAME`
   after the system services, the quickest way to try an application
   (`run=NAME:ARG1,ARG2` passes arguments). `run=nettest` checks the

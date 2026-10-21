@@ -289,8 +289,12 @@ pub const WIRED_NIC_ID: &str = "nic0";
 /// QEMU id of the display device.
 const DISPLAY_ID: &str = "video0";
 
-/// Size of a new home disk.
-const HOME_DISK_BYTES: u64 = 64 << 20;
+/// Size of a new home disk: the VFS keeps two snapshots of `/home` on it,
+/// so half of it is the home directory's room, enough for a web game's
+/// data (a page keeps it in the browser's storage: Vice City's 135 MB),
+/// where 64 MiB left 32. The file takes room on this computer only as
+/// Veda writes it.
+const HOME_DISK_BYTES: u64 = 1 << 30;
 
 /// Creates an empty home disk at `path` (replacing any existing one when
 /// `fresh`). An empty disk makes Veda start a new home directory.
