@@ -80,8 +80,9 @@ unsafe extern "Rust" {
     fn __rt_main() -> i32;
 }
 
-/// The process's start, from the architecture's entry point (`arch`): it
-/// takes the bootstrap channel the kernel passed, runs `main` and exits.
+/// The process's start, from the architecture's entry point
+/// (`architecture`): it takes the bootstrap channel the kernel passed, runs
+/// `main` and exits.
 pub(crate) fn start(bootstrap: RawHandle) -> ! {
     core::hint::black_box(&PROGRAM_NOTE);
     crate::env::adopt(bootstrap);

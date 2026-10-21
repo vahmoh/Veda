@@ -88,7 +88,7 @@ fn remember_ram(map: &[MemoryRegion]) {
 
 /// Physical memory below this address is never handed out: the
 /// architecture's.
-const LOW_RESERVED: u64 = crate::arch::mm::RESERVED_BELOW;
+const LOW_RESERVED: u64 = crate::architecture::mm::RESERVED_BELOW;
 
 impl Bitmap {
     fn set(&mut self, frame: u64, used: bool) {
@@ -292,7 +292,7 @@ pub fn free_contiguous(phys: u64, count: u64) {
 
 /// Fills frames with zeroes through the direct map.
 pub fn zero_frames(phys: u64, count: u64) {
-    crate::arch::mm::zero(phys_to_virt(phys), count * PAGE_SIZE);
+    crate::architecture::mm::zero(phys_to_virt(phys), count * PAGE_SIZE);
 }
 
 /// (total usable bytes, free bytes)

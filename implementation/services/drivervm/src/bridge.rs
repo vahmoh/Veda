@@ -252,7 +252,9 @@ impl Bridge {
     }
 
     fn setup(&self, memory: &GuestMemory, r: &b::Setup) -> Result<(), Error> {
-        if !r.ring.is_multiple_of(PAGE) || !memory.contains(r.ring, PAGE) || !crate::arch::is_interrupt_vector(r.vector)
+        if !r.ring.is_multiple_of(PAGE)
+            || !memory.contains(r.ring, PAGE)
+            || !crate::architecture::is_interrupt_vector(r.vector)
         {
             return Err(Error::InvalidArgs);
         }

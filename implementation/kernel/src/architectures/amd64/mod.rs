@@ -6,8 +6,8 @@
 //! The loader jumps to [`kernel_entry`], which sets the boot processor up
 //! enough to log and to take exceptions, and hands over to the kernel; the
 //! kernel then reaches the processor and the PC platform only through the
-//! modules `crate::arch` exposes. The rest (descriptor tables, interrupt
-//! controllers, the assembly entry paths) stays in here.
+//! modules `crate::architecture` exposes. The rest (descriptor tables,
+//! interrupt controllers, the assembly entry paths) stays in here.
 
 mod acpi;
 mod apic;

@@ -56,14 +56,14 @@ fn unsupported(n: usize) -> SysResult {
 }
 
 /// Runs Linux system call `n`: one the architecture has of its own
-/// (`arch::syscall`), or one of the calls of Linux's generic ABI, which
-/// every architecture has.
+/// (`architecture::syscall`), or one of the calls of Linux's generic ABI,
+/// which every architecture has.
 ///
 /// # Safety
 /// The arguments are the program's: pointers must be valid for the call.
 pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
     // SAFETY: forwarded to the caller.
-    let r = unsafe { crate::arch::syscall::dispatch(n, a) }.unwrap_or_else(|| unsafe { generic(n, a) });
+    let r = unsafe { crate::architecture::syscall::dispatch(n, a) }.unwrap_or_else(|| unsafe { generic(n, a) });
     // A program met a descriptor not ready, or emptied or filled it: the
     // epoll instances watching it look at it again (an edge-triggered one
     // reports it once it is ready again, whatever happened meanwhile).

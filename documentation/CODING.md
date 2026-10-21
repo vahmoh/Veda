@@ -70,17 +70,18 @@ own.
   PC's interrupt controllers, timers, keyboard controller and IOMMU);
   drivers of devices on a bus (PCI's, USB's) are each device's, not an
   architecture's.
-* **One module, `arch`.** The rest of the crate reaches that code only
-  through `arch`, whose items every architecture provides with the same
-  names and meanings. The kernel's (`implementation/kernel/src/arch.rs`)
-  and `automation`'s (`automation/src/arch.rs`) document their
-  interface in a table. Its vocabulary is architecture-neutral: the
-  clock's counter, not the TSC; a thread's TLS pointer, not its FS base.
-  Code in `src/architectures/<architecture>/` may use the rest of its crate.
+* **One module, `architecture`.** The rest of the crate reaches that code
+  only through `architecture`, whose items every architecture provides
+  with the same names and meanings. The kernel's
+  (`implementation/kernel/src/architecture.rs`) and `automation`'s
+  (`automation/src/architecture.rs`) document their interface in a table.
+  Its vocabulary is architecture-neutral: the clock's counter, not the
+  TSC; a thread's TLS pointer, not its FS base. Code in
+  `src/architectures/<architecture>/` may use the rest of its crate.
 * **Chosen by what the code does:**
   * Code that runs on the architecture (the loader, the kernel, the
     runtime, services, tests) takes the module of its compile target:
-    `#[cfg(target_arch = "x86_64")] #[path = "architectures/amd64/mod.rs"] mod arch;`.
+    `#[cfg(target_arch = "x86_64")] #[path = "architectures/amd64/mod.rs"] mod architecture;`.
   * Knowledge of an architecture's formats that tools need on any machine
     (executables' machine types, the IOMMU's tables, the virtual devices
     of the hypervisor's guests) is a public module named after it
@@ -89,8 +90,8 @@ own.
     architecture compiled for, where a crate needs it.
   * Build scripts and tools (`build.rs`, `build`, `automation`) run on
     the build machine, but their architecture is the one Veda is built for
-    (a build script's `TARGET`, `automation`'s `arch`), never the one
-    they run on.
+    (a build script's `TARGET`, `automation`'s `architecture`), never the
+    one they run on.
 * **Outside `src/`,** what tools read from places of their own is in each
   place's `architectures/<architecture>/`, where the tool allows it:
 

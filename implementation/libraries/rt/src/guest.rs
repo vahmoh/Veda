@@ -7,8 +7,8 @@
 //! configuration sets) makes its system calls here instead of the way
 //! Veda's programs do: the ones on Veda's objects, and its log, through the
 //! bridge (`/dev/veda`, `hv::bridge`), the rest with Linux's own
-//! (`arch::linux`; time from the processor's clock counter, which the guest
-//! reads as Veda does; futexes; sleeping). So the
+//! (`architecture::linux`; time from the processor's clock counter, which
+//! the guest reads as Veda does; futexes; sleeping). So the
 //! program uses `rt`, and everything built on it (`ipc`, `proto`), as a
 //! Veda program does. What makes no sense in the guest (processes,
 //! hardware, virtual machines) is `NotSupported`.
@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicI32, Ordering};
 use abi::{ClockInfo, Error, HandleBasicInfo, RawHandle, WaitItem, clock, info_topic, map_flags, nr};
 use hv::bridge::{self as b, op};
 
-use crate::arch::linux::{self, nr as sys};
+use crate::architecture::linux::{self, nr as sys};
 use crate::sync::Lazy;
 
 const EINTR: isize = 4;
@@ -100,7 +100,7 @@ fn clock_info() -> ClockInfo {
 
 fn now_ns() -> u64 {
     let info = clock_info();
-    let ticks = crate::arch::clock_ticks();
+    let ticks = crate::architecture::clock_ticks();
     ((ticks.saturating_sub(info.ticks_at_zero) as u128 * info.ns_per_tick as u128) >> 32) as u64
 }
 

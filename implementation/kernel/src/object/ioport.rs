@@ -8,7 +8,7 @@ use alloc::sync::Arc;
 
 use abi::Error;
 
-use crate::arch;
+use crate::architecture;
 
 pub struct IoPorts {
     pub koid: u64,
@@ -32,12 +32,12 @@ impl IoPorts {
     pub fn read(&self, p: u16, width: usize) -> Result<u32, Error> {
         self.check(p, width)?;
         // SAFETY: the driver was granted this port range.
-        unsafe { arch::ioport::read(p, width) }.ok_or(Error::InvalidArgs)
+        unsafe { architecture::ioport::read(p, width) }.ok_or(Error::InvalidArgs)
     }
 
     pub fn write(&self, p: u16, width: usize, value: u32) -> Result<(), Error> {
         self.check(p, width)?;
         // SAFETY: the driver was granted this port range.
-        if unsafe { arch::ioport::write(p, width, value) } { Ok(()) } else { Err(Error::InvalidArgs) }
+        if unsafe { architecture::ioport::write(p, width, value) } { Ok(()) } else { Err(Error::InvalidArgs) }
     }
 }

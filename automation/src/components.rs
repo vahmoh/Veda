@@ -4,21 +4,21 @@
 //! Cross-building the individual Veda components with cargo.
 //!
 //! * The UEFI loader is built for the architecture's UEFI target
-//!   (`arch::UEFI_TARGET`), whose programs are PE/COFF images, as the
-//!   firmware starts them.
+//!   (`architecture::UEFI_TARGET`), whose programs are PE/COFF images, as
+//!   the firmware starts them.
 //! * The kernel is built for its freestanding target
-//!   (`arch::KERNEL_TARGET`): an ELF64 executable, which its `build.rs`
-//!   links at the kernel's address.
+//!   (`architecture::KERNEL_TARGET`): an ELF64 executable, which its
+//!   `build.rs` links at the kernel's address.
 //! * User-space programs are `no_std` position-independent ELF64
-//!   executables built for its user target (`arch::USER_TARGET`), linked by
-//!   LLVM's linker, which Rust ships (`rust-lld`; Cargo's configuration
-//!   names it). Each program's `build.rs` (via the `build` helper crate)
-//!   supplies the Veda-specific linker options.
+//!   executables built for its user target (`architecture::USER_TARGET`),
+//!   linked by LLVM's linker, which Rust ships (`rust-lld`; Cargo's
+//!   configuration names it). Each program's `build.rs` (via the `build`
+//!   helper crate) supplies the Veda-specific linker options.
 //! * Programs on Rust's standard library are built for Veda's own target
-//!   (`arch::STD_TARGET`) by the toolchain's Rust, and linked by its C
-//!   toolchain's driver with the C library, whose POSIX layer is brought up
-//!   to date first (`toolchain::std_rust`). They are POSIX programs: the C
-//!   library starts them.
+//!   (`architecture::STD_TARGET`) by the toolchain's Rust, and linked by
+//!   its C toolchain's driver with the C library, whose POSIX layer is
+//!   brought up to date first (`toolchain::std_rust`). They are POSIX
+//!   programs: the C library starts them.
 //!
 //! Every build names the build machine's directories by fixed names in
 //! what it compiles (`util::cargo_for`), so that none of them goes into the
@@ -26,7 +26,7 @@
 
 use std::path::PathBuf;
 
-use crate::arch::{KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
+use crate::architecture::{KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
 use crate::toolchain;
 use crate::util::{self, Result};
 

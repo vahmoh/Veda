@@ -103,7 +103,7 @@ static STARTED: AtomicU32 = AtomicU32::new(0);
 static TSC_SYNC: SpinLock<[Option<TscSync>; MAX_CPUS]> = SpinLock::new([const { None }; MAX_CPUS]);
 
 /// Programs the syscall MSRs on the current CPU.
-pub(in crate::arch) fn init_syscall_msrs() {
+pub(in crate::architecture) fn init_syscall_msrs() {
     // SAFETY: standard SYSCALL/SYSRET configuration; the selectors match
     // the GDT layout in `gdt`.
     unsafe {
@@ -115,7 +115,7 @@ pub(in crate::arch) fn init_syscall_msrs() {
 }
 
 /// Allocates the IST stacks (double fault, NMI, machine check) of a CPU.
-pub(in crate::arch) fn init_ist(id: usize) {
+pub(in crate::architecture) fn init_ist(id: usize) {
     let p = percpu::get(id);
     for slot in 0..3 {
         let stack = crate::memory::kvirt::KernelStack::new(4).expect("allocating an IST stack");
@@ -126,7 +126,7 @@ pub(in crate::arch) fn init_ist(id: usize) {
 }
 
 /// Per-CPU initialisation shared by the BSP and APs (after GDT/GS setup).
-pub(in crate::arch) fn init_this_cpu(id: usize) {
+pub(in crate::architecture) fn init_this_cpu(id: usize) {
     idt::load();
     cpu::init_cpu_features();
     init_syscall_msrs();

@@ -9,7 +9,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::arch::cpu;
+use crate::architecture::cpu;
 use crate::log::emergency;
 use crate::percpu;
 
@@ -81,7 +81,7 @@ pub fn begin() {
         // Another CPU is already panicking.
         cpu::halt_forever();
     }
-    crate::arch::smp::halt_others();
+    crate::architecture::smp::halt_others();
 }
 
 /// Ends a panic: the stop screen, then this CPU halts for good.

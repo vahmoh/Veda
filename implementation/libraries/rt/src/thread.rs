@@ -167,7 +167,7 @@ impl<T> JoinHandle<T> {
 }
 
 /// A thread [`Builder::spawn`] started, from the architecture's thread
-/// entry point (`arch`): `arg` is the [`Start`] it leaked.
+/// entry point (`architecture`): `arg` is the [`Start`] it leaked.
 #[cfg(not(any(veda_guest, target_os = "veda")))]
 pub(crate) fn run(arg: usize) -> ! {
     let (body, stack) = {
@@ -180,7 +180,7 @@ pub(crate) fn run(arg: usize) -> ! {
     // returns, so nothing of the thread's is left but its stack.
     if body() {
         // SAFETY: nothing else refers to the stack: the handle is gone.
-        unsafe { crate::arch::exit_unmapping(stack.base, stack.len) }
+        unsafe { crate::architecture::exit_unmapping(stack.base, stack.len) }
     }
     crate::sys::thread_exit()
 }
@@ -262,7 +262,7 @@ impl Builder {
         let started = started.and_then(|_| {
             call(
                 nr::THREAD_START,
-                [thread.raw() as usize, crate::arch::thread_entry as *const () as usize, sp, arg, 0, 0],
+                [thread.raw() as usize, crate::architecture::thread_entry as *const () as usize, sp, arg, 0, 0],
             )
         });
         if let Err(e) = started {
@@ -332,5 +332,5 @@ pub fn yield_now() {
 #[cfg(not(any(veda_guest, target_os = "veda")))]
 pub unsafe fn exit_unmapping(base: usize, len: usize) -> ! {
     // SAFETY: per the caller.
-    unsafe { crate::arch::exit_unmapping(base, len) }
+    unsafe { crate::architecture::exit_unmapping(base, len) }
 }

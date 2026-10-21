@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! PCI configuration space access (through the architecture's mechanism,
-//! `arch::config`), bus enumeration, which BARs a driver may have, and
-//! resetting a function.
+//! `architecture::config`), bus enumeration, which BARs a driver may have,
+//! and resetting a function.
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -12,7 +12,7 @@ use proto::pci::{Bar, Capabilities, DeviceInfo, cap};
 use rt::println;
 use rt::time::{Duration, sleep};
 
-use crate::arch::config::ConfigAccess;
+use crate::architecture::config::ConfigAccess;
 
 const CAP_POWER_MANAGEMENT: u8 = 0x01;
 const CAP_PCI_EXPRESS: u8 = 0x10;

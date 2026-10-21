@@ -15,7 +15,8 @@
 //! The entry point takes the [`BootInfo`]. Every pointer stored inside it is
 //! a *virtual* address inside the direct map, so the kernel can use it
 //! immediately. How the processor is entered, and where the direct map and
-//! the kernel are, is the architecture's part of the protocol ([`arch`]).
+//! the kernel are, is the architecture's part of the protocol
+//! ([`architecture`]).
 //!
 //! All structures are `#[repr(C)]` and contain only plain data, because the
 //! loader and kernel are separate binaries that must agree on the layout.
@@ -24,10 +25,10 @@
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-pub mod arch;
+pub mod architecture;
 pub mod variables;
 
-pub use arch::{HHDM_BASE, KERNEL_BASE, memory_type};
+pub use architecture::{HHDM_BASE, KERNEL_BASE, memory_type};
 
 /// `BootInfo::magic` value (`"VEDABOOT"` in little-endian).
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");

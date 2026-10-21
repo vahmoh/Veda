@@ -21,8 +21,8 @@
 //!   ([`boost_starved`]). Under a load of ordinary threads it would never
 //!   run again otherwise, nor would whoever waits for it (for a lock it
 //!   holds, which it lets go of in that slice).
-//! * Tickless: each CPU arms its timer (`arch::timer`) for its next event
-//!   (time slice end, the end of the running thread's budget above
+//! * Tickless: each CPU arms its timer (`architecture::timer`) for its next
+//!   event (time slice end, the end of the running thread's budget above
 //!   `NORMAL`, or the earliest deadline of the threads that went to sleep
 //!   on it, which it alone wakes).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
@@ -35,8 +35,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 pub use thread::{State, Thread, WakeReason};
 
-use crate::arch::trap::TrapFrame;
-use crate::arch::{self, cpu};
+use crate::architecture::trap::TrapFrame;
+use crate::architecture::{self, cpu};
 use crate::memory::aspace::Fault;
 use crate::percpu;
 use crate::synchronization::{SpinLock, bkl};
@@ -292,7 +292,7 @@ fn after_wakeup(prio: u8, now: u64) {
         let Some(cur) = (unsafe { (*p.sched.get()).current.as_ref() }) else { continue };
         if cur.is_idle {
             if !p.resched_pending.swap(true, Ordering::AcqRel) {
-                arch::smp::reschedule(p.cpu_id);
+                architecture::smp::reschedule(p.cpu_id);
                 return;
             }
             continue;
@@ -306,7 +306,7 @@ fn after_wakeup(prio: u8, now: u64) {
         && let Some((_, p)) = least
         && !p.resched_pending.swap(true, Ordering::AcqRel)
     {
-        arch::smp::reschedule(p.cpu_id);
+        architecture::smp::reschedule(p.cpu_id);
     }
 }
 
@@ -414,7 +414,7 @@ fn arm_timer(running: &Thread) {
         deadline = deadline.min(now + SERIAL_NS);
     }
     let deadline = deadline.max(now + TIMER_SOONEST_NS);
-    arch::timer::arm(deadline, now);
+    architecture::timer::arm(deadline, now);
 }
 
 /// Picks the next thread and switches to it if it differs from the current
@@ -512,7 +512,7 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     cs.prev = Some(prev);
     // SAFETY: `next` was prepared by `Thread::new_*` or saved by a previous
     // switch; `prev` stays alive in `cs.prev` until the switch is complete.
-    unsafe { arch::thread::switch(prev_ctx, next_ctx, next_stack_top) };
+    unsafe { architecture::thread::switch(prev_ctx, next_ctx, next_stack_top) };
     finish_switch();
 }
 
@@ -656,7 +656,7 @@ pub fn suspend(t: &Arc<Thread>) -> Result<(), abi::Error> {
         t.signals.update(0, abi::signals::SUSPENDED);
         return Ok(());
     }
-    arch::smp::reschedule(cpu);
+    architecture::smp::reschedule(cpu);
     Ok(())
 }
 

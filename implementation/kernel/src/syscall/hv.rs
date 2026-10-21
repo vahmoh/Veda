@@ -29,7 +29,7 @@ pub fn guest_create(res: RawHandle, cpus: usize) -> SysResult {
     if !r.permits(resource_kind::HYPERVISOR, 0, 0) {
         return Err(Error::AccessDenied);
     }
-    crate::arch::hv::available().map_err(|_| Error::NotSupported)?;
+    crate::architecture::hv::available().map_err(|_| Error::NotSupported)?;
     let guest = Guest::new(u32::try_from(cpus).map_err(|_| Error::InvalidArgs)?)?;
     let rights = Rights(Rights::BASIC.0 | Rights::WRITE.0 | Rights::MANAGE.0);
     ok(insert(KObject::Guest(guest), rights)? as usize)
@@ -107,7 +107,7 @@ pub fn vcpu_bind_interrupt(vcpu: RawHandle, interrupt: RawHandle, vector: usize)
         irq.unbind();
         return ok(0);
     }
-    let vector = crate::arch::hv::interrupt_vector(vector).ok_or(Error::InvalidArgs)?;
+    let vector = crate::architecture::hv::interrupt_vector(vector).ok_or(Error::InvalidArgs)?;
     irq.bind(&v, vector);
     ok(0)
 }

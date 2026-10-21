@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::arch;
+use crate::architecture;
 use crate::cli::Options;
 use crate::components;
 use crate::image;
@@ -120,13 +120,14 @@ pub fn build(o: &Options) -> Result<System> {
     // targets, whose crates it has the texts of too.
     let mut licensed = BTreeSet::new();
     let mut groups = vec![
-        notices::Group::new(arch::KERNEL_TARGET, &["kernel"]),
-        notices::Group::new(arch::UEFI_TARGET, &["bootloader"]),
+        notices::Group::new(architecture::KERNEL_TARGET, &["kernel"]),
+        notices::Group::new(architecture::UEFI_TARGET, &["bootloader"]),
     ];
     let (on_std, native): (Vec<&components::Program>, Vec<_>) =
         artifacts.programs.iter().map(|(p, _)| p).partition(|p| p.std);
-    groups.push(notices::Group::new(arch::USER_TARGET, &native.iter().map(|p| p.package).collect::<Vec<_>>()));
-    let mut std_programs = notices::Group::new(arch::STD_TARGET, &on_std.iter().map(|p| p.package).collect::<Vec<_>>());
+    groups.push(notices::Group::new(architecture::USER_TARGET, &native.iter().map(|p| p.package).collect::<Vec<_>>()));
+    let mut std_programs =
+        notices::Group::new(architecture::STD_TARGET, &on_std.iter().map(|p| p.package).collect::<Vec<_>>());
     std_programs.rustc = toolchain::rustc();
     groups.push(std_programs);
     // What the toolchain makes for the image: the C and Rust test programs,
@@ -142,7 +143,7 @@ pub fn build(o: &Options) -> Result<System> {
     if toolchain.iter().any(|(path, _)| path == "bin/mediadec") {
         bare.push("mediadec");
     }
-    groups.push(notices::Group::new(arch::BARE_TARGET, &bare));
+    groups.push(notices::Group::new(architecture::BARE_TARGET, &bare));
     add_all(&mut initrd, &mut licensed, toolchain);
     // What the web engine needs of the system (its fonts' configuration,
     // the certificate authorities, its licences), once it is built.
@@ -164,7 +165,7 @@ pub fn build(o: &Options) -> Result<System> {
             initrd.add("linux/kernel", guest.kernel);
             initrd.add("linux/initramfs.cpio", guest.initramfs);
             add_all(&mut initrd, &mut licensed, guest.licences);
-            let mut programs = notices::Group::new(arch::GUEST_TARGET, &guest.packages);
+            let mut programs = notices::Group::new(architecture::GUEST_TARGET, &guest.packages);
             programs.dir = Some(util::workspace_root().join("implementation").join("guests").join("linux"));
             groups.push(programs);
         }
@@ -184,7 +185,7 @@ pub fn build(o: &Options) -> Result<System> {
     // and GCC's runtime, the driver VM's programs as well: their texts come
     // from the toolchain's build.
     let mut needed = vec!["rust"];
-    if !on_std.is_empty() || groups.iter().any(|g| g.target == arch::GUEST_TARGET) {
+    if !on_std.is_empty() || groups.iter().any(|g| g.target == architecture::GUEST_TARGET) {
         needed.extend(["musl", "gcc"]);
     }
     if let Some(missing) = needed.iter().find(|part| !licensed.contains(**part)) {
@@ -263,7 +264,7 @@ fn add_all(initrd: &mut initrd::builder::Builder, licensed: &mut BTreeSet<String
 fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
     let mut file = util::read(path)?;
     let invalid = |e: elf::ElfError| format!("{}: {e}", path.display());
-    let found = elf::Elf::parse_for(&file, arch::MACHINE).map_err(invalid)?.kind();
+    let found = elf::Elf::parse_for(&file, architecture::MACHINE).map_err(invalid)?.kind();
     match kind {
         Some(elf::Kind::Veda) if found != elf::Kind::Veda => {
             return Err(format!("{}: not a Veda program (it lacks the note `rt` gives one)", path.display()));
@@ -276,7 +277,7 @@ fn shipped(path: &Path, kind: Option<elf::Kind>) -> Result<Vec<u8>> {
         }
         _ => {}
     }
-    let len = elf::strip(&mut file, arch::MACHINE).map_err(invalid)?;
+    let len = elf::strip(&mut file, architecture::MACHINE).map_err(invalid)?;
     file.truncate(len);
     Ok(file)
 }

@@ -17,7 +17,7 @@
 extern crate alloc;
 
 mod acpi;
-mod arch;
+mod architecture;
 mod hv;
 mod interrupt;
 mod ipc;
@@ -118,15 +118,15 @@ fn log_paint(s: &bootinfo::PaintReport) {
 }
 
 /// The kernel, once the architecture's entry code has the boot CPU ready
-/// to log and take exceptions (`arch::kernel_entry`): sets up memory, the
-/// platform and the other CPUs, and starts `init`.
+/// to log and take exceptions (`architecture::kernel_entry`): sets up
+/// memory, the platform and the other CPUs, and starts `init`.
 fn kernel_main(boot: &'static BootInfo) -> ! {
     if !boot.is_valid() {
         panic!("invalid boot information (loader/kernel version mismatch)");
     }
     let opts = parse_cmdline(boot.cmdline());
     kinfo!("Veda kernel {} starting", env!("CARGO_PKG_VERSION"));
-    arch::cpu::report();
+    architecture::cpu::report();
 
     // Memory: frame allocator, kernel address space, heap.
     // SAFETY: the loader built a valid memory map.
@@ -141,16 +141,16 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
         free >> 20,
         reclaimed >> 10
     );
-    arch::init_cpu(0);
+    architecture::init_cpu(0);
     panic::set_framebuffer(&boot.framebuffer);
 
     // Platform: ACPI, interrupt controllers, clocks and timers.
     acpi::init(boot.rsdp_phys, boot.hhdm_limit);
-    arch::init_platform();
+    architecture::init_platform();
     log_screen(&boot.screen);
     log_paint(&boot.paint);
     time::set_boot_time(&boot.boot_time, opts.tz);
-    arch::init_timer();
+    architecture::init_timer();
 
     random::init(boot.entropy());
 
@@ -159,10 +159,10 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
     scheduler::init_cpu(Thread::new_idle_current(0));
     percpu::get(0).online.store(true, Ordering::Release);
 
-    let others = arch::smp::start_secondary_cpus(opts.max_cpus);
+    let others = architecture::smp::start_secondary_cpus(opts.max_cpus);
     kinfo!("smp: {} CPU(s) online", others + 1);
-    arch::hv::report();
-    arch::iommu::init();
+    architecture::hv::report();
+    architecture::iommu::init();
 
     bkl::acquire();
     loader::spawn_init(boot);
@@ -171,8 +171,8 @@ fn kernel_main(boot: &'static BootInfo) -> ! {
 }
 
 /// A CPU other than the boot CPU, once its architecture has set it up
-/// (`arch::smp`): it comes online with `idle` as its idle thread, says it
-/// started (`started`), and takes work.
+/// (`architecture::smp`): it comes online with `idle` as its idle thread,
+/// says it started (`started`), and takes work.
 fn secondary_main(id: usize, idle: Arc<Thread>, started: impl FnOnce()) -> ! {
     scheduler::init_cpu(idle);
     percpu::get(id).online.store(true, Ordering::Release);

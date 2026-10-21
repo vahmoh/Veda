@@ -46,7 +46,7 @@ extern crate alloc;
 mod acpi;
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-mod arch;
+mod architecture;
 mod gpio;
 mod pci;
 mod placement;
@@ -76,8 +76,8 @@ use rt::object::{Channel, Interrupt, Process, Resource, Vmo};
 use rt::println;
 
 use acpi::Acpi;
-use arch::config::ConfigAccess;
-use arch::platform::Platform;
+use architecture::config::ConfigAccess;
+use architecture::platform::Platform;
 use gpio::Gpio;
 use pci::{Address, ConfigSpace, Placement};
 
@@ -825,7 +825,7 @@ const VM_MIB: u64 = 256;
 /// they need more than its default: an integrated GPU's. Not up to the
 /// memory the firmware keeps for them, which the guest has where the PC
 /// has it (above the low memory the guest keeps as the PC does,
-/// `arch::GUEST_LOW_RESERVED`).
+/// `architecture::GUEST_LOW_RESERVED`).
 fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
     if !guest.iter().any(|d| intel_gpu(&d.info)) {
         return None;
@@ -834,7 +834,7 @@ fn vm_memory(guest: &[GuestDevice], acpi: Option<&Acpi>) -> Option<u64> {
         .iter()
         .flat_map(|d| acpi.map(|a| a.reserved_memory(d.address.bus, d.address.slot, d.address.function)))
         .flatten()
-        .filter(|r| r.start >= arch::GUEST_LOW_RESERVED)
+        .filter(|r| r.start >= architecture::GUEST_LOW_RESERVED)
         .map(|r| r.start >> 20)
         .min();
     Some(kept.unwrap_or(GPU_VM_MIB).clamp(VM_MIB, GPU_VM_MIB))
@@ -847,7 +847,7 @@ struct DriverVm {
     /// `devices`, which is devmgr's.
     args: Vec<String>,
     devices: Vec<GuestDevice>,
-    /// The PC's own devices it gets (`arch::platform`).
+    /// The PC's own devices it gets (`architecture::platform`).
     platform: Platform,
     /// The firmware's variables, for Linux's drivers that read them.
     variables: Option<Vmo>,
@@ -1207,7 +1207,7 @@ fn main() -> i32 {
         acpi.ns.limit(None);
     }
 
-    // The PC's own devices go too (`arch::platform`: the keyboard
+    // The PC's own devices go too (`architecture::platform`: the keyboard
     // controller).
     let platform = if runs.is_ok() { Platform::claim(&mgr.io, &mgr.irq) } else { Platform::none() };
     // It starts for its devices, or because the boot options ask for it.

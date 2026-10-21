@@ -70,7 +70,7 @@ pub fn system_info(ptr: usize) -> SysResult {
         process_count: procs.iter().filter(|p| !p.is_terminated()).count() as u32,
         thread_count: procs.iter().map(|p| p.thread_count() as u32).sum(),
         idle_time_ns: scheduler::total_idle_ns(),
-        cpu_brand: crate::arch::cpu::brand_string(),
+        cpu_brand: crate::architecture::cpu::brand_string(),
         timer_interrupts: scheduler::total_timer_interrupts(),
     };
     user::write(ptr as u64, &info)?;
@@ -85,12 +85,12 @@ pub fn system_power(res: RawHandle, action: usize) -> SysResult {
     match action {
         power_action::POWER_OFF => {
             crate::kinfo!("power: shutting down");
-            crate::arch::power::off();
+            crate::architecture::power::off();
             Err(Error::NotSupported)
         }
         power_action::REBOOT => {
             crate::kinfo!("power: rebooting");
-            crate::arch::power::reboot();
+            crate::architecture::power::reboot();
             Err(Error::NotSupported)
         }
         _ => Err(Error::InvalidArgs),

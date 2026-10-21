@@ -404,7 +404,7 @@ impl<'a> Spawn<'a> {
             phdr: elf.phdr_vaddr().wrapping_add(bias),
             phnum: elf.phnum() as u64,
             entry: elf.entry().wrapping_add(bias),
-            hwcap: crate::arch::hwcap(),
+            hwcap: crate::architecture::hwcap(),
             platform: elf::NATIVE.platform,
             uid: UID,
             gid: UID,

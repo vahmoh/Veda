@@ -101,7 +101,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::arch;
+use crate::architecture;
 use crate::ovmfvars::{self, Variable};
 use crate::qemu::{InputDevices, NetMode};
 use crate::qmp;
@@ -144,7 +144,7 @@ pub struct Boot {
     pub nic: Option<String>,
     /// The machine's memory (MiB).
     pub memory: Option<u32>,
-    /// `acpi-table`: the names of `arch::acpitest`'s tables.
+    /// `acpi-table`: the names of `architecture::acpitest`'s tables.
     pub acpi_tables: Vec<String>,
     pub firmware_variables: Vec<Variable>,
     /// The sound card: `virtio` or `hda` (`hda` for a script that resets,
@@ -764,7 +764,7 @@ impl Line {
                 return Ok(None);
             }
             "acpi-table" => {
-                let name = self.one_of("ACPI table", arch::acpitest::NAMES)?;
+                let name = self.one_of("ACPI table", architecture::acpitest::NAMES)?;
                 boot.acpi_tables.push(name);
                 return Ok(None);
             }

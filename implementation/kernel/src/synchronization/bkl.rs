@@ -53,7 +53,7 @@ static OWNER: Line = Line(AtomicU32::new(NO_OWNER));
 /// waiting, this CPU keeps servicing TLB shootdown requests so that the
 /// holder can safely wait for them.
 pub fn acquire() {
-    debug_assert!(!crate::arch::cpu::interrupts_enabled(), "the BKL is taken with interrupts disabled");
+    debug_assert!(!crate::architecture::cpu::interrupts_enabled(), "the BKL is taken with interrupts disabled");
     let me = percpu::cpu_id_or_boot() + 1;
     // Waiting for a turn of its own would never end.
     if OWNER.0.load(Ordering::Relaxed) == me {
@@ -69,7 +69,7 @@ pub fn acquire() {
         WAITERS[(before - 1) as usize].next.store(me, Ordering::Release);
         // Acquire: what the CPU before did is seen once it has handed over.
         while waiter.waiting.load(Ordering::Acquire) {
-            crate::arch::tlb::service_pending();
+            crate::architecture::tlb::service_pending();
             core::hint::spin_loop();
         }
     }

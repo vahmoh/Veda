@@ -17,7 +17,7 @@ fn decode(ret: isize) -> SysResult {
 }
 
 #[cfg(not(veda_guest))]
-pub use crate::arch::syscall6;
+pub use crate::architecture::syscall6;
 
 #[cfg(not(veda_guest))]
 #[inline(always)]

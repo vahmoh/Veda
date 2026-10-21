@@ -9,7 +9,7 @@
 //! * Where the guest has things below 4 GiB, as a PC has them, and how
 //!   its processors' interrupts and MSIs look, and how many it may have.
 //!
-//! What of it reaches no object of Veda's is `drivervm_core::arch`
+//! What of it reaches no object of Veda's is `drivervm_core::architecture`
 //! (`implementation/services/drivervm/core/src/architectures/amd64`),
 //! tested on the host.
 
@@ -19,7 +19,7 @@ pub mod platform;
 
 use core::ops::Range;
 
-pub use drivervm_core::arch::MAX_MSIS;
+pub use drivervm_core::architecture::MAX_MSIS;
 pub use hv::amd64::memory::{ACPI_AT, ACPI_ROOM, OPREGION_AT};
 pub use hv::amd64::platform::msi_result;
 

@@ -7,30 +7,30 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-pub(in crate::arch) const MSR_EFER: u32 = 0xC000_0080;
-pub(in crate::arch) const MSR_STAR: u32 = 0xC000_0081;
-pub(in crate::arch) const MSR_LSTAR: u32 = 0xC000_0082;
-pub(in crate::arch) const MSR_SFMASK: u32 = 0xC000_0084;
-pub(in crate::arch) const MSR_FS_BASE: u32 = 0xC000_0100;
-pub(in crate::arch) const MSR_GS_BASE: u32 = 0xC000_0101;
-pub(in crate::arch) const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102;
-pub(in crate::arch) const MSR_APIC_BASE: u32 = 0x1B;
-pub(in crate::arch) const MSR_PAT: u32 = 0x277;
-pub(in crate::arch) const MSR_TSC_DEADLINE: u32 = 0x6E0;
+pub(in crate::architecture) const MSR_EFER: u32 = 0xC000_0080;
+pub(in crate::architecture) const MSR_STAR: u32 = 0xC000_0081;
+pub(in crate::architecture) const MSR_LSTAR: u32 = 0xC000_0082;
+pub(in crate::architecture) const MSR_SFMASK: u32 = 0xC000_0084;
+pub(in crate::architecture) const MSR_FS_BASE: u32 = 0xC000_0100;
+pub(in crate::architecture) const MSR_GS_BASE: u32 = 0xC000_0101;
+pub(in crate::architecture) const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102;
+pub(in crate::architecture) const MSR_APIC_BASE: u32 = 0x1B;
+pub(in crate::architecture) const MSR_PAT: u32 = 0x277;
+pub(in crate::architecture) const MSR_TSC_DEADLINE: u32 = 0x6E0;
 /// `IA32_TSC_ADJUST`: this processor's offset of the TSC from the clock all
 /// processors share (writing the TSC moves it).
-pub(in crate::arch) const MSR_TSC_ADJUST: u32 = 0x3B;
+pub(in crate::architecture) const MSR_TSC_ADJUST: u32 = 0x3B;
 /// Cycles at the base frequency and at the actual one, while running.
-pub(in crate::arch) const MSR_MPERF: u32 = 0xE7;
-pub(in crate::arch) const MSR_APERF: u32 = 0xE8;
+pub(in crate::architecture) const MSR_MPERF: u32 = 0xE7;
+pub(in crate::architecture) const MSR_APERF: u32 = 0xE8;
 /// Hardware P-states (`IA32_PM_ENABLE`, `IA32_HWP_CAPABILITIES`,
 /// `IA32_HWP_REQUEST`).
-pub(in crate::arch) const MSR_PM_ENABLE: u32 = 0x770;
-pub(in crate::arch) const MSR_HWP_CAPABILITIES: u32 = 0x771;
-pub(in crate::arch) const MSR_HWP_REQUEST: u32 = 0x774;
+pub(in crate::architecture) const MSR_PM_ENABLE: u32 = 0x770;
+pub(in crate::architecture) const MSR_HWP_CAPABILITIES: u32 = 0x771;
+pub(in crate::architecture) const MSR_HWP_REQUEST: u32 = 0x774;
 
 #[inline]
-pub(in crate::arch) fn rdmsr(msr: u32) -> u64 {
+pub(in crate::architecture) fn rdmsr(msr: u32) -> u64 {
     let (lo, hi): (u32, u32);
     // SAFETY: reading MSRs is side-effect free for the MSRs this kernel uses.
     unsafe { asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)) };
@@ -43,7 +43,7 @@ pub(in crate::arch) fn rdmsr(msr: u32) -> u64 {
 /// # Safety
 /// Writing MSRs changes fundamental CPU behaviour.
 #[inline]
-pub(in crate::arch) unsafe fn wrmsr(msr: u32, value: u64) {
+pub(in crate::architecture) unsafe fn wrmsr(msr: u32, value: u64) {
     // SAFETY: forwarded to the caller.
     unsafe {
         asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nostack, preserves_flags))
@@ -52,7 +52,7 @@ pub(in crate::arch) unsafe fn wrmsr(msr: u32, value: u64) {
 
 /// Result of a CPUID query.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::arch) struct CpuidResult {
+pub(in crate::architecture) struct CpuidResult {
     pub eax: u32,
     pub ebx: u32,
     pub ecx: u32,
@@ -60,13 +60,13 @@ pub(in crate::arch) struct CpuidResult {
 }
 
 #[inline]
-pub(in crate::arch) fn cpuid(leaf: u32, subleaf: u32) -> CpuidResult {
+pub(in crate::architecture) fn cpuid(leaf: u32, subleaf: u32) -> CpuidResult {
     let r = core::arch::x86_64::__cpuid_count(leaf, subleaf);
     CpuidResult { eax: r.eax, ebx: r.ebx, ecx: r.ecx, edx: r.edx }
 }
 
 #[inline]
-pub(in crate::arch) fn rdtsc() -> u64 {
+pub(in crate::architecture) fn rdtsc() -> u64 {
     // SAFETY: RDTSC is always available on x86-64.
     unsafe { core::arch::x86_64::_rdtsc() }
 }
@@ -74,7 +74,7 @@ pub(in crate::arch) fn rdtsc() -> u64 {
 /// The TSC, read once every earlier instruction has completed (LFENCE): it
 /// orders with the memory accesses around it.
 #[inline]
-pub(in crate::arch) fn rdtsc_ordered() -> u64 {
+pub(in crate::architecture) fn rdtsc_ordered() -> u64 {
     // SAFETY: LFENCE and RDTSC are always available on x86-64.
     unsafe {
         core::arch::x86_64::_mm_lfence();
@@ -83,7 +83,7 @@ pub(in crate::arch) fn rdtsc_ordered() -> u64 {
 }
 
 #[inline]
-pub(in crate::arch) fn read_cr2() -> u64 {
+pub(in crate::architecture) fn read_cr2() -> u64 {
     let v: u64;
     // SAFETY: reading CR2 has no side effects.
     unsafe { asm!("mov {}, cr2", out(reg) v, options(nomem, nostack, preserves_flags)) };
@@ -91,7 +91,7 @@ pub(in crate::arch) fn read_cr2() -> u64 {
 }
 
 #[inline]
-pub(in crate::arch) fn read_cr3() -> u64 {
+pub(in crate::architecture) fn read_cr3() -> u64 {
     let v: u64;
     // SAFETY: reading CR3 has no side effects.
     unsafe { asm!("mov {}, cr3", out(reg) v, options(nomem, nostack, preserves_flags)) };
@@ -101,26 +101,26 @@ pub(in crate::arch) fn read_cr3() -> u64 {
 /// # Safety
 /// `pml4` must be a valid top-level page table that maps the running code.
 #[inline]
-pub(in crate::arch) unsafe fn write_cr3(pml4: u64) {
+pub(in crate::architecture) unsafe fn write_cr3(pml4: u64) {
     // SAFETY: forwarded to the caller.
     unsafe { asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags)) };
 }
 
 #[inline]
-pub(in crate::arch) fn invlpg(addr: u64) {
+pub(in crate::architecture) fn invlpg(addr: u64) {
     // SAFETY: invalidating a TLB entry is always safe.
     unsafe { asm!("invlpg [{}]", in(reg) addr, options(nostack, preserves_flags)) };
 }
 
 /// Flushes all non-global TLB entries.
 #[inline]
-pub(in crate::arch) fn flush_tlb() {
+pub(in crate::architecture) fn flush_tlb() {
     // SAFETY: reloading CR3 with its current value only flushes the TLB.
     unsafe { write_cr3(read_cr3()) };
 }
 
 #[inline]
-pub(in crate::arch) fn halt() {
+pub(in crate::architecture) fn halt() {
     // SAFETY: HLT waits for the next interrupt.
     unsafe { asm!("hlt", options(nomem, nostack, preserves_flags)) };
 }
@@ -139,7 +139,7 @@ pub fn wait_for_interrupt() {
 /// instruction), then disables them again; their handlers change memory: a
 /// barrier to the compiler.
 #[inline]
-pub(in crate::arch) fn take_pending_interrupts() {
+pub(in crate::architecture) fn take_pending_interrupts() {
     // SAFETY: STI's shadow covers the NOP; pending interrupts are taken at
     // the NOP's boundary and their handlers return here.
     unsafe { asm!("sti", "nop", "cli", options(nostack)) };
@@ -170,7 +170,7 @@ pub fn halt_forever() -> ! {
 
 /// CPU features detected on the bootstrap processor.
 #[derive(Debug, Clone, Copy, Default)]
-pub(in crate::arch) struct Features {
+pub(in crate::architecture) struct Features {
     pub xsave: bool,
     pub avx: bool,
     pub smep: bool,
@@ -236,14 +236,14 @@ pub fn report() {
 }
 
 /// Returns the features detected by [`detect_features`].
-pub(in crate::arch) fn features() -> Features {
+pub(in crate::architecture) fn features() -> Features {
     debug_assert!(FEATURES_READY.load(Ordering::Acquire));
     // SAFETY: written once during early boot before any reader exists.
     unsafe { *core::ptr::addr_of!(FEATURES) }
 }
 
 /// Probes CPUID once on the bootstrap processor.
-pub(in crate::arch) fn detect_features() -> Features {
+pub(in crate::architecture) fn detect_features() -> Features {
     let max = cpuid(0, 0).eax;
     let l1 = cpuid(1, 0);
     let hypervisor = l1.ecx & (1 << 31) != 0;
@@ -293,7 +293,7 @@ pub(in crate::arch) fn detect_features() -> Features {
 
 /// Processors that found their caches off (`CR0.CD`) when they started, and
 /// turned them on.
-pub(in crate::arch) static CACHES_WERE_OFF: AtomicU32 = AtomicU32::new(0);
+pub(in crate::architecture) static CACHES_WERE_OFF: AtomicU32 = AtomicU32::new(0);
 
 const CR0_NW: u64 = 1 << 29;
 const CR0_CD: u64 = 1 << 30;
@@ -301,7 +301,7 @@ const CR0_CD: u64 = 1 << 30;
 /// Configures control registers and MSRs on the current CPU: caches on,
 /// SSE/XSAVE for user-space floating point, NX, SMEP/SMAP, write-combining
 /// PAT entry, the global-page bit, and hardware P-states.
-pub(in crate::arch) fn init_cpu_features() {
+pub(in crate::architecture) fn init_cpu_features() {
     let f = features();
     // SAFETY: only enables features that CPUID reported as present.
     unsafe {
@@ -387,7 +387,7 @@ fn enable_hwp() {
 
 /// The boot processor's range of hardware P-states performance levels
 /// (lowest, highest), if they are on.
-pub(in crate::arch) fn hwp_range() -> Option<(u32, u32)> {
+pub(in crate::architecture) fn hwp_range() -> Option<(u32, u32)> {
     let r = HWP_RANGE.load(Ordering::Relaxed);
     (r != 0).then_some((r & 0xFF, (r >> 8) & 0xFF))
 }
@@ -395,7 +395,7 @@ pub(in crate::arch) fn hwp_range() -> Option<(u32, u32)> {
 /// How fast this processor runs while busy (MHz): its cycles counted at the
 /// actual and at the base frequency (APERF, MPERF) over `us` microseconds
 /// of spinning, scaled to the TSC's frequency.
-pub(in crate::arch) fn measure_mhz(us: u64) -> Option<u64> {
+pub(in crate::architecture) fn measure_mhz(us: u64) -> Option<u64> {
     if !features().aperf_mperf {
         return None;
     }
@@ -408,7 +408,7 @@ pub(in crate::arch) fn measure_mhz(us: u64) -> Option<u64> {
 
 /// The processor's base and highest (turbo) frequencies in MHz, as it
 /// reports them (CPUID leaf 0x16), if it does.
-pub(in crate::arch) fn rated_mhz() -> Option<(u32, u32)> {
+pub(in crate::architecture) fn rated_mhz() -> Option<(u32, u32)> {
     if cpuid(0, 0).eax < 0x16 {
         return None;
     }

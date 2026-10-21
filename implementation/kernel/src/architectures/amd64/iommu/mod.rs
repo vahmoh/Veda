@@ -36,7 +36,7 @@ use iommu::amd64::vtd::{self, Fault, Irte};
 pub use domain::Domain;
 use unit::Unit;
 
-use crate::arch::amd64::{apic, idt, percpu};
+use crate::architecture::amd64::{apic, idt, percpu};
 use crate::memory::{phys, phys_to_virt};
 use crate::synchronization::{Once, SpinLock};
 
@@ -108,7 +108,7 @@ pub fn active() -> bool {
 /// reads memory around the caches.
 fn publish(iommu: &Iommu, phys: u64, len: u64) {
     if !iommu.coherent {
-        crate::arch::amd64::mm::flush_cache_range(phys_to_virt(phys), len);
+        crate::architecture::amd64::mm::flush_cache_range(phys_to_virt(phys), len);
     }
 }
 
@@ -239,7 +239,7 @@ fn invalidate_entry(iommu: &Iommu, index: u8) {
 /// `vector` on the boot processor: through the vector's remapping entry,
 /// which only that device may raise. `None` if interrupts are not
 /// remapped.
-pub(in crate::arch) fn msi_message(vector: u8, source: u16) -> Option<(u64, u32)> {
+pub(in crate::architecture) fn msi_message(vector: u8, source: u16) -> Option<(u64, u32)> {
     let iommu = iommu()?;
     route(iommu, vector, false, Some(source));
     Some(vtd::msi_message(vector as u16))
@@ -248,7 +248,7 @@ pub(in crate::arch) fn msi_message(vector: u8, source: u16) -> Option<(u64, u32)
 /// The redirection entry by which I/O APIC `ioapic` raises `vector` on the
 /// boot processor, through the vector's remapping entry. `None` if
 /// interrupts are not remapped.
-pub(in crate::arch) fn ioapic_entry(
+pub(in crate::architecture) fn ioapic_entry(
     ioapic: u8,
     vector: u8,
     level: bool,
@@ -262,14 +262,14 @@ pub(in crate::arch) fn ioapic_entry(
 }
 
 /// No device raises `vector` any more (its remapping entry is cleared).
-pub(in crate::arch) fn release(vector: u8) {
+pub(in crate::architecture) fn release(vector: u8) {
     if let Some(iommu) = iommu() {
         write_entry(iommu, vector, None);
     }
 }
 
 /// The fault event interrupt: logs what the units refused.
-pub(in crate::arch) fn fault_interrupt() {
+pub(in crate::architecture) fn fault_interrupt() {
     let Some(iommu) = iommu() else { return };
     for u in &iommu.units {
         u.take_faults(|f| log_fault(iommu, u, f));

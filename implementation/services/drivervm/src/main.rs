@@ -11,7 +11,7 @@
 //! image (`linux/kernel`, `linux/initramfs.cpio`), runs the virtual
 //! processors, one thread each, and serves the hypercalls. What is
 //! particular to the architecture (booting Linux, the PC's own devices,
-//! the guest's memory map below 4 GiB) is in `arch`
+//! the guest's memory map below 4 GiB) is in `architecture`
 //! (`implementation/services/drivervm/src/architectures/<architecture>/`).
 //!
 //! Programs in the guest reach Veda's objects through the bridge
@@ -28,9 +28,9 @@
 //! It gives the guest the PCI functions devmgr hands over (`pci`): their
 //! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
 //! and the lines their INTx are wired to: `lines`); the PC's own devices,
-//! if devmgr hands them over (`arch::platform`: the keyboard controller);
-//! ACPI tables that describe them (`hv::acpi`); and the PC's firmware
-//! variables, read-only (`variables`).
+//! if devmgr hands them over (`architecture::platform`: the keyboard
+//! controller); ACPI tables that describe them (`hv::acpi`); and the PC's
+//! firmware variables, read-only (`variables`).
 //!
 //! The guest's life is this process's: when Linux powers the machine off,
 //! restarts it, crashes or does something the platform does not allow,
@@ -51,7 +51,7 @@ extern crate alloc;
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-mod arch;
+mod architecture;
 mod bridge;
 mod gpio;
 mod lines;
@@ -118,7 +118,7 @@ fn main() -> i32 {
     let devices: Vec<Channel> =
         core::iter::from_fn(|| rt::env::take_handle(roles::DEVICE)).map(Channel::from_handle).collect();
     let mut lines = Lines::default();
-    let platform = arch::platform::Platform::take(&mut lines);
+    let platform = architecture::platform::Platform::take(&mut lines);
     let variables =
         rt::env::take_handle(roles::VARIABLES).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
     let pc = Pc { devices, platform, lines, variables };

@@ -37,7 +37,7 @@ static ROOM: AtomicU8 = AtomicU8::new(0);
 
 /// Sets COM1 up: 115200 baud, 8 bits, no parity, one stop bit, its FIFOs
 /// on. Nothing, without a UART there (its scratch register keeps nothing).
-pub(in crate::arch) fn init() {
+pub(in crate::architecture) fn init() {
     // SAFETY: COM1's registers; without a UART, nothing answers.
     unsafe {
         outb(SCR, 0x5A);

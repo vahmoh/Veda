@@ -16,13 +16,13 @@ use super::trap::TrapFrame;
 
 /// FPU/SSE/AVX register save area (64-byte aligned for XSAVE): a thread's,
 /// or a virtual processor's.
-pub(in crate::arch) struct FpuArea {
+pub(in crate::architecture) struct FpuArea {
     ptr: *mut u8,
     layout: Layout,
 }
 
 impl FpuArea {
-    pub(in crate::arch) fn new() -> Option<FpuArea> {
+    pub(in crate::architecture) fn new() -> Option<FpuArea> {
         let size = cpu::features().xsave_size.max(512) as usize;
         let layout = Layout::from_size_align(size, 64).ok()?;
         // SAFETY: non-zero size.
@@ -41,7 +41,7 @@ impl FpuArea {
     }
 
     /// Saves the processor's registers here.
-    pub(in crate::arch) fn save(&self) {
+    pub(in crate::architecture) fn save(&self) {
         let f = cpu::features();
         // SAFETY: the area is large enough and 64-byte aligned.
         unsafe {
@@ -54,7 +54,7 @@ impl FpuArea {
     }
 
     /// Loads the processor's registers from here.
-    pub(in crate::arch) fn restore(&self) {
+    pub(in crate::architecture) fn restore(&self) {
         let f = cpu::features();
         // SAFETY: the area holds a valid saved (or initial) state.
         unsafe {
@@ -126,14 +126,14 @@ impl Context {
     /// Saves the running thread's x87, SSE and AVX registers (this is its
     /// context) for something else to use the processor's: a virtual
     /// processor's.
-    pub(in crate::arch) fn save_fpu(&self) {
+    pub(in crate::architecture) fn save_fpu(&self) {
         if let Some(f) = &self.fpu {
             f.save();
         }
     }
 
     /// Gives the running thread its registers back ([`Self::save_fpu`]).
-    pub(in crate::arch) fn restore_fpu(&self) {
+    pub(in crate::architecture) fn restore_fpu(&self) {
         if let Some(f) = &self.fpu {
             f.restore();
         }

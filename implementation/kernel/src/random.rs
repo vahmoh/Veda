@@ -12,7 +12,7 @@
 //! * the seed the loader obtained from the firmware's `EFI_RNG_PROTOCOL`
 //!   (backed by virtio-rng under QEMU),
 //! * the processor's random number generators, where it has them
-//!   (`arch::cpu::RANDOM_SOURCES`),
+//!   (`architecture::cpu::RANDOM_SOURCES`),
 //! * timing jitter measured at boot,
 //! * the arrival times of device interrupts (folded in at every reseed).
 //!
@@ -21,8 +21,8 @@
 
 use entropy::{FastPool, Generator};
 
-use crate::arch::clock::ticks;
-use crate::arch::cpu::RANDOM_SOURCES;
+use crate::architecture::clock::ticks;
+use crate::architecture::cpu::RANDOM_SOURCES;
 use crate::synchronization::SpinLock;
 use crate::time;
 

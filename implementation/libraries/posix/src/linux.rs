@@ -3,13 +3,14 @@
 
 //! The Linux ABI that musl expects: flags and the layouts of the structures
 //! passed through system calls. What is particular to the architecture (the
-//! system call numbers, `struct stat`) is `arch::linux`'s, re-exported here.
+//! system call numbers, `struct stat`) is `architecture::linux`'s,
+//! re-exported here.
 //!
 //! The values are Linux's own, from its headers as `linux-raw-sys` generates
 //! them for each architecture, under the names and types the layer uses;
 //! the few written here say why.
 
-pub use crate::arch::linux::{EpollEvent, Stat, nr, ucontext};
+pub use crate::architecture::linux::{EpollEvent, Stat, nr, ucontext};
 
 /// `errno` values.
 pub mod errno {

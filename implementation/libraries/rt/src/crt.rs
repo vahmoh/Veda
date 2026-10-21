@@ -3,7 +3,8 @@
 
 //! Symbols that compiled Rust code expects from a C runtime, whatever the
 //! architecture: the floating-point remainders LLVM emits calls to (for
-//! `%` on `f32` and `f64`). The rest are the architecture's (`arch`).
+//! `%` on `f32` and `f64`). The rest are the architecture's
+//! (`architecture`).
 
 /// The exact remainder, as C's `fmodf` (see [`fmod`]).
 #[unsafe(no_mangle)]

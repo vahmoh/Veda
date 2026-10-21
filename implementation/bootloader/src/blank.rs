@@ -6,7 +6,7 @@
 //! firmware left there (its logo, its boot menu), and the screen stays
 //! black until the window system's splash fades in, once the display is
 //! the one the desktop will be shown on. Where the architecture can, it
-//! paints it write-combining (`arch::clear_write_combining`).
+//! paints it write-combining (`architecture::clear_write_combining`).
 //!
 //! Each row is written out of memory in 8-byte stores. No string
 //! instruction is used: on uncached memory (where the loader cannot help

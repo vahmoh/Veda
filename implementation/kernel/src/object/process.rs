@@ -202,7 +202,7 @@ impl Process {
                 scheduler::State::Running => {
                     let cpu = t.sched.lock().cpu;
                     if cpu != crate::percpu::cpu_id_or_boot() {
-                        crate::arch::smp::reschedule(cpu);
+                        crate::architecture::smp::reschedule(cpu);
                     }
                 }
                 _ => {}

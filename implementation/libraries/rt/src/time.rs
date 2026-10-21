@@ -37,7 +37,7 @@ static CLOCKS: Lazy<Option<abi::ClockInfo>> = Lazy::new(|| clock_info().ok().fil
 /// the kernel can read.
 pub(crate) fn read_clock(id: usize) -> Option<u64> {
     let info = CLOCKS.as_ref()?;
-    let ticks = crate::arch::clock_ticks().saturating_sub(info.ticks_at_zero);
+    let ticks = crate::architecture::clock_ticks().saturating_sub(info.ticks_at_zero);
     let now = ((ticks as u128 * info.ns_per_tick as u128) >> 32) as u64;
     match id {
         clock::MONOTONIC => Some(now),

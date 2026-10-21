@@ -5,14 +5,14 @@
 //! hypercalls.
 //!
 //! Guest-physical memory is one VMO, mapped at 0 in the guest and here,
-//! which Linux is loaded into as the architecture boots it (`arch::boot`,
-//! which also says what of it stays reserved).
+//! which Linux is loaded into as the architecture boots it
+//! (`architecture::boot`, which also says what of it stays reserved).
 //!
 //! The rest of the guest-physical address space:
 //!
 //! | Where | What |
 //! |-------|------|
-//! | below 4 GiB, where the architecture's machine has room (`arch::PCI_LOW`) | BARs of the guest's PCI functions |
+//! | below 4 GiB, where the architecture's machine has room (`architecture::PCI_LOW`) | BARs of the guest's PCI functions |
 //! | 64 GiB to 128 GiB | the bridge's window: VMOs guest programs map |
 //! | 128 GiB to 256 GiB | BARs that do not fit below 4 GiB |
 //!
@@ -34,7 +34,7 @@ use rt::println;
 use rt::sync::Mutex;
 use rt::vm::Mapping;
 
-use crate::arch::{self, PCI_LOW, platform::Platform};
+use crate::architecture::{self, PCI_LOW, platform::Platform};
 use crate::bridge::{self, Bridge};
 use crate::lines::Lines;
 use crate::memory::GuestMemory;
@@ -71,7 +71,7 @@ const MIB: u64 = 1 << 20;
 /// Linux starts.
 const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_len=4M drm.debug=0xe";
 /// Where PCI functions' BARs go that do not fit below 4 GiB
-/// (`arch::PCI_LOW`): above the bridge's window.
+/// (`architecture::PCI_LOW`): above the bridge's window.
 const PCI_HIGH: core::ops::Range<u64> = (128 << 30)..(256 << 30);
 
 /// How the process ends, for the device manager, which started it.
@@ -127,7 +127,7 @@ impl Machine {
         if size > PCI_LOW.start {
             return Err(format!("the guest can have at most {} MiB", PCI_LOW.start / MIB));
         }
-        let image = arch::boot::parse(kernel)?;
+        let image = architecture::boot::parse(kernel)?;
         let vmo = Vmo::create_committed(size as usize).map_err(|e| format!("no memory for the guest: {e}"))?;
         let memory = Mapping::new(vmo, size as usize, map_flags::READ | map_flags::WRITE)
             .map_err(|e| format!("cannot map the guest's memory: {e}"))?;
@@ -149,7 +149,7 @@ impl Machine {
             functions: &functions,
             gpio: &gpio,
             platform: &pc,
-            at: arch::ACPI_AT,
+            at: architecture::ACPI_AT,
             pci_low: PCI_LOW,
             pci_high: PCI_HIGH,
             firmware_tables: devices.firmware_tables(),
@@ -158,14 +158,14 @@ impl Machine {
         for what in &left_out {
             println!("the guest's ACPI tables leave out {}", what);
         }
-        if acpi_tables.len() > arch::ACPI_ROOM {
+        if acpi_tables.len() > architecture::ACPI_ROOM {
             return Err(format!("the ACPI tables take {} KiB, more than they have", acpi_tables.len() / 1024));
         }
 
         let mut cmdline = String::from(CMDLINE);
         cmdline.push_str(&devices.host_options());
         cmdline.push_str(config.cmdline.trim_end());
-        let state = arch::boot::load(&arch::boot::Load {
+        let state = architecture::boot::load(&architecture::boot::Load {
             memory: &memory,
             size,
             reserved: devices.reserved(),
@@ -296,7 +296,7 @@ impl Machine {
     fn start_cpu(self: &Arc<Self>, id: u64, entry: u64) -> u64 {
         let mut vcpus = self.vcpus.lock();
         let Some(slot) = vcpus.get_mut(id as usize).filter(|s| s.is_none()) else { return error::INVALID };
-        let state = arch::boot::secondary(entry);
+        let state = architecture::boot::secondary(entry);
         let made = self.guest.create_vcpu(id as u32, &state).and_then(|v| Ok((v.0.duplicate(None)?, v)));
         let vcpu = match made {
             Ok((copy, v)) => {

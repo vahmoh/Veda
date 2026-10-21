@@ -17,8 +17,8 @@ pub(crate) mod linux;
 /// The machine's name, as `uname -m` gives it.
 pub const MACHINE: &str = "x86_64";
 
-/// Makes Veda system call `n` (see `abi::arch`): its status, and its
-/// second result.
+/// Makes Veda system call `n` (see `abi::architecture`): its status, and
+/// its second result.
 ///
 /// # Safety
 /// Memory the call reads or writes through its arguments must be what the

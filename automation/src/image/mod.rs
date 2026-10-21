@@ -36,7 +36,7 @@ impl<'a> EspContents<'a> {
     /// The partition's files: where they go, and what they hold.
     fn files(&self) -> [(&'static str, &'a [u8]); 4] {
         [
-            (crate::arch::UEFI_BOOT_PATH, self.bootloader),
+            (crate::architecture::UEFI_BOOT_PATH, self.bootloader),
             ("VEDA/KERNEL.ELF", self.kernel),
             ("VEDA/INITRD.IMG", self.initrd),
             (BOOT_CFG, self.boot_cfg.as_bytes()),
@@ -189,7 +189,7 @@ mod tests {
         write_iso_image(&path, &esp_contents("run=editor")).unwrap();
         let image = File::open(&path).unwrap();
         assert_eq!(esp_file(&image, "VEDA/BOOT.CFG").unwrap(), b"run=editor");
-        assert_eq!(esp_file(&image, &crate::arch::UEFI_BOOT_PATH.to_ascii_lowercase()).unwrap(), b"MZ loader");
+        assert_eq!(esp_file(&image, &crate::architecture::UEFI_BOOT_PATH.to_ascii_lowercase()).unwrap(), b"MZ loader");
         assert!(esp_file(&image, LOGS).unwrap_err().contains("a directory"));
         assert!(image.length().unwrap() > LOGS_ROOM_MIB * 1024 * 1024);
         assert!(esp_file(&vec![0u8; 4096], "VEDA/BOOT.CFG").is_err());

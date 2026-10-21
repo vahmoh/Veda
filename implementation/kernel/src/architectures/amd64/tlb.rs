@@ -45,7 +45,7 @@ pub fn service_pending() {
 }
 
 /// Handler for the shootdown IPI.
-pub(in crate::arch) fn handle_ipi() {
+pub(in crate::architecture) fn handle_ipi() {
     service_pending();
 }
 

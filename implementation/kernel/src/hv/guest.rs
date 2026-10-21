@@ -23,8 +23,8 @@ use alloc::vec::Vec;
 use abi::Error;
 
 use super::{Access, Vcpu};
-use crate::arch::hv::GuestTables;
-use crate::arch::iommu::Domain;
+use crate::architecture::hv::GuestTables;
+use crate::architecture::iommu::Domain;
 use crate::memory::PAGE_SIZE;
 use crate::memory::vmo::Vmo;
 use crate::synchronization::{SpinLock, SpinLockGuard};
@@ -130,7 +130,7 @@ impl Guest {
                 d.commit(true);
             }
             drop((tables, domain, mappings));
-            crate::arch::tlb::shootdown_guest_memory();
+            crate::architecture::tlb::shootdown_guest_memory();
             return Err(e);
         }
         if let Some(d) = domain.as_ref() {
@@ -172,7 +172,7 @@ impl Guest {
             }
         }
         // Nor any processor.
-        crate::arch::tlb::shootdown_guest_memory();
+        crate::architecture::tlb::shootdown_guest_memory();
         drop(removed);
         Ok(())
     }
@@ -219,6 +219,6 @@ impl Drop for Guest {
         // tables go with the guest: no processor may keep translations of
         // them (or of the pages, which the mappings release now).
         drop(self.domain.lock().take());
-        crate::arch::tlb::shootdown_guest_memory();
+        crate::architecture::tlb::shootdown_guest_memory();
     }
 }

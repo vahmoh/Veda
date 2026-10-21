@@ -13,8 +13,8 @@
 use core::arch::asm;
 use core::sync::atomic::Ordering;
 
-use crate::arch::amd64::cpu::{self, cpuid, rdmsr, wrmsr};
-use crate::arch::amd64::percpu;
+use crate::architecture::amd64::cpu::{self, cpuid, rdmsr, wrmsr};
+use crate::architecture::amd64::percpu;
 use crate::memory::{PAGE_SIZE, phys, phys_to_virt};
 use crate::synchronization::Once;
 

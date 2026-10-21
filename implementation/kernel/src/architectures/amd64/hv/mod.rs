@@ -9,7 +9,7 @@
 
 mod ept;
 mod vcpu;
-pub(in crate::arch) mod vmx;
+pub(in crate::architecture) mod vmx;
 
 /// The tables that translate a guest's physical addresses.
 pub use ept::Ept as GuestTables;

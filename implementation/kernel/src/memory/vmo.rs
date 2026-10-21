@@ -135,7 +135,7 @@ impl Vmo {
     fn flush(&self, phys: u64, len: u64) {
         let ram = !matches!(self.kind, VmoKind::Physical { .. });
         if ram && self.cache != Cache::WriteBack {
-            crate::arch::mm::flush_cache_range(phys_to_virt(phys), len);
+            crate::architecture::mm::flush_cache_range(phys_to_virt(phys), len);
         }
     }
 

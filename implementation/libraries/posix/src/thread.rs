@@ -5,12 +5,12 @@
 //!
 //! musl creates threads with `__clone`, which the C library hands to
 //! [`__veda_clone`]: a kernel thread in this process that starts in
-//! `__veda_thread_entry` (the architecture's, `arch`), which installs the
-//! thread pointer and the thread's exit futex and calls the thread
-//! function. When a thread ends, the kernel clears its exit futex word and
-//! wakes a waiter, which is how musl knows a joined thread is gone for good
-//! (`CLONE_CHILD_CLEARTID`). A detached thread ends by freeing its own
-//! stack ([`__veda_unmapself`]).
+//! `__veda_thread_entry` (the architecture's, `architecture`), which
+//! installs the thread pointer and the thread's exit futex and calls the
+//! thread function. When a thread ends, the kernel clears its exit futex
+//! word and wakes a waiter, which is how musl knows a joined thread is gone
+//! for good (`CLONE_CHILD_CLEARTID`). A detached thread ends by freeing its
+//! own stack ([`__veda_unmapself`]).
 //!
 //! Each thread has an id of its own in the process (`signal`), which musl
 //! keeps as the owner of the locks it holds: the main thread's is the
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn __veda_clone(
         // SAFETY: as above.
         unsafe { core::ptr::write_volatile(ctid as *mut i32, tid) };
     }
-    let entry = crate::arch::thread_entry_address();
+    let entry = crate::architecture::thread_entry_address();
     // Kept from before it runs: it may end at once, and forget it.
     let thread = Arc::new(thread);
     HANDLES.lock().insert(tid, thread.clone());
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn veda_thread_registers(tid: i32, out: *mut c_void) -> i3
     match r {
         Ok(_) => {
             // SAFETY: per the caller.
-            unsafe { crate::arch::store_mcontext(&state, out) };
+            unsafe { crate::architecture::store_mcontext(&state, out) };
             0
         }
         Err(Error::BadState) => EINVAL as i32,

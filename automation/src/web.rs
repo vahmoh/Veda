@@ -19,7 +19,7 @@ use std::process::Command;
 
 use crate::ports::{self, Port};
 use crate::util::{self, Result};
-use crate::{arch, toolchain};
+use crate::{architecture, toolchain};
 
 /// The ports the web engine is built from: the tools for this machine,
 /// then the libraries in the order their builds need them, then WebKit.
@@ -220,7 +220,7 @@ pub fn command(args: &[String]) -> Result {
         Command::new("bash")
             .arg(ports.join("wpewebkit").join("build.sh"))
             .env("VEDA_PORTS", &ports)
-            .env("VEDA_ARCH", arch::NAME)
+            .env("VEDA_ARCH", architecture::NAME)
             .env("VEDA_WEB", root())
             .env("VEDA_TOOLCHAIN", toolchain::root())
             .env("JOBS", jobs.to_string()),

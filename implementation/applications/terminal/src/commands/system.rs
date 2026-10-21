@@ -210,7 +210,7 @@ pub(super) fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32
     let version = cstr(&i.version);
     let used = i.total_memory.saturating_sub(i.free_memory);
     let mut info: Vec<(&str, String)> = vec![
-        ("OS", format!("Veda {} {}", version.trim_start_matches("Veda").trim(), rt::arch::MACHINE)),
+        ("OS", format!("Veda {} {}", version.trim_start_matches("Veda").trim(), rt::architecture::MACHINE)),
         ("Kernel", format!("{} (microkernel)", version.trim_start_matches("Veda").trim())),
         ("Uptime", uptime(i.uptime_ns)),
         ("CPU", format!("{} ({} cores)", cstr(&i.cpu_brand), i.cpu_count)),

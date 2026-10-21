@@ -51,12 +51,12 @@ fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
             out.extend(dup(&init.boot_info).map(|h| (role::BOOT_INFO, h)));
             out.extend(dup(&init.firmware_variables).map(|h| (role::FIRMWARE_VARIABLES, h)));
             // The machine's ports, lines and physical addresses are the
-            // architecture's (`arch`); PCI functions are named by requester
-            // ids.
+            // architecture's (`architecture`); PCI functions are named by
+            // requester ids.
             for (r, kind, range) in [
-                (roles::IOPORT_RESOURCE, resource_kind::IOPORT, crate::arch::IO_PORTS),
-                (roles::IRQ_RESOURCE, resource_kind::IRQ, crate::arch::IRQS),
-                (roles::MMIO_RESOURCE, resource_kind::MMIO, crate::arch::MMIO),
+                (roles::IOPORT_RESOURCE, resource_kind::IOPORT, crate::architecture::IO_PORTS),
+                (roles::IRQ_RESOURCE, resource_kind::IRQ, crate::architecture::IRQS),
+                (roles::MMIO_RESOURCE, resource_kind::MMIO, crate::architecture::MMIO),
                 (roles::DMA_RESOURCE, resource_kind::DMA, 0..0),
                 (roles::HYPERVISOR_RESOURCE, resource_kind::HYPERVISOR, 0..0),
                 (roles::PCI_RESOURCE, resource_kind::PCI, 0..0x1_0000),

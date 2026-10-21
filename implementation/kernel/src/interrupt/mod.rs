@@ -19,8 +19,8 @@
 //! bound by then (the guest masks a line by having it bound to nothing).
 //!
 //! Every device interrupt has a vector of its own, from one pool
-//! (`arch::irq`): an MSI's when it is made, a line's when it is set up (any
-//! line of the machine's interrupt controllers, by its GSI).
+//! (`architecture::irq`): an MSI's when it is made, a line's when it is set
+//! up (any line of the machine's interrupt controllers, by its GSI).
 //!
 //! A program can make interrupts of its own and raise them (`irq_raise`):
 //! the lines of an interrupt controller it drives itself, which the kernel
@@ -37,7 +37,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::Error;
 use abi::signals::SIGNALED;
 
-use crate::arch::irq;
+use crate::architecture::irq;
 use crate::hv::Vcpu;
 use crate::ipc::event::Event;
 use crate::object::Signals;

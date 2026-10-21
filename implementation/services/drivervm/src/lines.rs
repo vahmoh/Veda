@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The interrupt lines the guest has: the PC's global system interrupts
-//! (GSIs) its devices use — its own devices' (`arch::platform`: a
+//! (GSIs) its devices use — its own devices' (`architecture::platform`: a
 //! keyboard controller's 1 and 12), the lines the PCI functions' INTx are
 //! wired to — by the numbers the guest's ACPI
 //! tables give them, which are the PC's; and lines the platform makes, GSIs

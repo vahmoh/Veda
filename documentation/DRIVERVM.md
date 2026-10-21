@@ -290,8 +290,8 @@ processor's reset line and the A20 gate, so the monitor, which carries
 out every access to the two ports, passes only the commands Linux's
 driver gives (none touches the output port) and drops the rest: a data
 byte is a command's parameter or the keyboard's, never the output port's
-(`drivervm_core::arch::i8042`). The guest does not reach the ports around
-them, such as 0x61 with the NMI switches.
+(`drivervm_core::architecture::i8042`). The guest does not reach the
+ports around them, such as 0x61 with the NMI switches.
 
 ## Veda's drivers for Linux
 

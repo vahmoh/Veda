@@ -85,7 +85,7 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 | Module | Responsibility |
 |--------|----------------|
-| `arch` | the processor architecture and its platform, behind one interface (`src/arch.rs`, each architecture in `src/architectures/`); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
+| `architecture` | the processor architecture and its platform, behind one interface (`src/architecture.rs`, each architecture in `src/architectures/`); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
 | `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
 | `scheduler` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
 | `object` | handles, signals, processes, I/O ports, resources |
@@ -1016,13 +1016,13 @@ the actions every `ui` application offers over the `agentapp` protocol
 
 Veda runs on AMD64 (x86-64). What depends on the architecture or its
 platform is in each component's `architectures/<architecture>/` directory (a
-crate's in its `src/`), reached through its `arch` module
+crate's in its `src/`), reached through its `architecture` module
 ([Coding conventions](CODING.md) has the rules). On AMD64:
 
 | Component | What is AMD64's (`architectures/amd64/`) |
 |-----------|------------------------------------------|
 | `implementation/bootloader/` | the kernel's page tables, the framebuffer's memory type, COM1, the TSC, the jump into the kernel |
-| `implementation/kernel/` | see `arch` in [The kernel](#the-kernel) |
+| `implementation/kernel/` | see `architecture` in [The kernel](#the-kernel) |
 | `implementation/libraries/bootinfo` | the address space the loader hands over, and how the kernel is entered |
 | `implementation/libraries/abi` | the calling convention of system calls, the user address space, a virtual processor's registers |
 | `implementation/libraries/rt` | the entry points, the system call instruction, the C runtime's helpers; the driver VM's programs' Linux system calls |

@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::agentsim::AgentSim;
-use crate::arch;
+use crate::architecture;
 use crate::automate;
 use crate::cli::{self, Options};
 use crate::hostweb::HostWeb;
@@ -149,7 +149,7 @@ pub fn test(o: &Options) -> Result {
     // network interfaces, a card's link as the network service was told
     // it, Wi-Fi's frames, devices served again after their threads end), on
     // Linux as they run.
-    let mut guest = linux::guest_cargo(&["test", "--quiet", "--target", arch::GUEST_TARGET]);
+    let mut guest = linux::guest_cargo(&["test", "--quiet", "--target", architecture::GUEST_TARGET]);
     for package in GUEST_TESTED {
         guest.args(["--package", package]);
     }
@@ -280,7 +280,7 @@ fn ui_scripts() -> Result<Vec<PathBuf>> {
     let mut scripts = Vec::new();
     for group in ["ui", "agent"] {
         let dir = util::workspace_root().join("verification").join(group);
-        for dir in [dir.clone(), dir.join("architectures").join(arch::NAME)] {
+        for dir in [dir.clone(), dir.join("architectures").join(architecture::NAME)] {
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
             let mut found: Vec<PathBuf> =
                 entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "vts")).collect();
@@ -600,12 +600,12 @@ fn script_on(o: &Options, script: &Script, prebuilt: Option<&Path>) -> Result {
     Ok(())
 }
 
-/// The ACPI tables `names` (the machine's: `arch::acpitest`), written out
-/// for QEMU.
+/// The ACPI tables `names` (the machine's: `architecture::acpitest`),
+/// written out for QEMU.
 fn acpi_tables(names: &[String]) -> Result<Vec<PathBuf>> {
     let mut tables = Vec::new();
     for name in names {
-        let table = arch::acpitest::table(name).ok_or_else(|| format!("no ACPI table '{name}'"))?;
+        let table = architecture::acpitest::table(name).ok_or_else(|| format!("no ACPI table '{name}'"))?;
         let path = util::out_dir().join(format!("acpi-{name}.aml"));
         util::create_dir_all(&util::out_dir())?;
         util::write(&path, table)?;

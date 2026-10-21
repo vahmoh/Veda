@@ -145,11 +145,12 @@ impl Memory for FirmwareMemory {
         self.read_pci_field(f, offset, 1, buf)
     }
 
-    /// Through the configuration mechanism (`arch::config`): segment 0, as
-    /// much of each function's space as it reaches, in accesses of the
-    /// field's width (configuration space has none wider than 4 bytes).
+    /// Through the configuration mechanism (`architecture::config`):
+    /// segment 0, as much of each function's space as it reaches, in
+    /// accesses of the field's width (configuration space has none wider
+    /// than 4 bytes).
     fn read_pci_field(&self, f: PciFunction, offset: u16, width: usize, buf: &mut [u8]) -> bool {
-        let reach = crate::arch::config::CONFIG_BYTES as usize;
+        let reach = crate::architecture::config::CONFIG_BYTES as usize;
         if f.segment != 0 || f.device > 31 || f.function > 7 || offset as usize + buf.len() > reach {
             return false;
         }
@@ -202,8 +203,8 @@ pub struct Acpi {
     roots: Vec<(u8, Path)>,
     /// The firmware's [`DEVICE_TABLES`].
     device_tables: Vec<tables::Table>,
-    /// The memory the firmware keeps for devices (`arch::dmar`): each
-    /// range, with the requester ids of the functions it is for.
+    /// The memory the firmware keeps for devices (`architecture::dmar`):
+    /// each range, with the requester ids of the functions it is for.
     reserved: Vec<(Vec<u16>, Range<u64>)>,
 }
 
@@ -262,7 +263,7 @@ impl Acpi {
                 String::new()
             }
         );
-        let reserved = crate::arch::dmar::reserved_memory(&tables);
+        let reserved = crate::architecture::dmar::reserved_memory(&tables);
         let device_tables = tables.into_iter().filter(|t| DEVICE_TABLES.iter().any(|d| t.is(d.signature))).collect();
         Some(Acpi { ns, memory, roots, device_tables, reserved })
     }

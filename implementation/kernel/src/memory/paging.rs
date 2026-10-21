@@ -4,14 +4,14 @@
 //! Page tables, as the rest of the kernel sees them: what a mapping allows
 //! ([`Flags`]), how its memory is cached ([`Cache`]), and the kernel's own
 //! address space. The tables themselves, and an address space's root, are
-//! the architecture's (`arch::paging`).
+//! the architecture's (`architecture::paging`).
 
-pub use crate::arch::paging::{
+pub use crate::architecture::paging::{
     activate, free_user_root, kernel_root, map, new_user_root, protect_range, translate, unmap, unmap_range,
 };
 
 use super::PAGE_SIZE;
-use crate::arch;
+use crate::architecture;
 
 /// Memory type for a mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,11 +43,11 @@ pub enum MapError {
 }
 
 /// Builds the kernel address space: the direct map of physical memory
-/// (`arch::paging::new_kernel_space`), and the kernel image with the
-/// permissions the loader found for its pages (`bootinfo::KernelImage`).
-/// Then switches to it.
+/// (`architecture::paging::new_kernel_space`), and the kernel image with
+/// the permissions the loader found for its pages
+/// (`bootinfo::KernelImage`). Then switches to it.
 pub fn init_kernel_space(boot: &bootinfo::BootInfo) {
-    let root = arch::paging::new_kernel_space(boot.hhdm_limit);
+    let root = architecture::paging::new_kernel_space(boot.hhdm_limit);
     let k = &boot.kernel;
     for r in k.runs() {
         let flags = Flags {
@@ -61,7 +61,7 @@ pub fn init_kernel_space(boot: &bootinfo::BootInfo) {
             map(root, k.virt_base + off, k.phys_base + off, flags, true).expect("mapping the kernel image");
         }
     }
-    arch::paging::install_kernel_space(root);
+    architecture::paging::install_kernel_space(root);
 }
 
 /// Loads the kernel's own address space on this CPU (for threads that have

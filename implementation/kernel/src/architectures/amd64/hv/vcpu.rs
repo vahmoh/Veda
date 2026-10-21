@@ -35,9 +35,9 @@ use abi::{Error, VcpuExit, VcpuSegment, VcpuState, vcpu_exit};
 use hv::amd64::lapic::{self, Delivery, Ipi, Lapic};
 
 use super::vmx::{self, entry_ctl, field, proc, reason};
-use crate::arch::amd64::cpu::{self, rdmsr, wrmsr};
-use crate::arch::amd64::thread::FpuArea;
-use crate::arch::amd64::{apic, gdt, idt, percpu};
+use crate::architecture::amd64::cpu::{self, rdmsr, wrmsr};
+use crate::architecture::amd64::thread::FpuArea;
+use crate::architecture::amd64::{apic, gdt, idt, percpu};
 use crate::hv::Guest;
 use crate::interrupt::Interrupt;
 use crate::memory::{phys, phys_to_virt};

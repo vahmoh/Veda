@@ -134,7 +134,7 @@ impl Unit {
     /// walks do not see the caches.
     fn publish(&self, phys: u64, len: u64) {
         if !self.ecap.coherent() {
-            crate::arch::amd64::mm::flush_cache_range(phys_to_virt(phys), len);
+            crate::architecture::amd64::mm::flush_cache_range(phys_to_virt(phys), len);
         }
     }
 

@@ -17,12 +17,12 @@ use crate::synchronization::Once;
 /// The size of a page.
 pub const PAGE_SIZE: u64 = 4096;
 
-pub(in crate::arch) const PRESENT: u64 = 1 << 0;
-pub(in crate::arch) const WRITABLE: u64 = 1 << 1;
+pub(in crate::architecture) const PRESENT: u64 = 1 << 0;
+pub(in crate::architecture) const WRITABLE: u64 = 1 << 1;
 const USER: u64 = 1 << 2;
 const PWT: u64 = 1 << 3;
 const PCD: u64 = 1 << 4;
-pub(in crate::arch) const HUGE: u64 = 1 << 7;
+pub(in crate::architecture) const HUGE: u64 = 1 << 7;
 const GLOBAL: u64 = 1 << 8;
 const NO_EXECUTE: u64 = 1 << 63;
 const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;

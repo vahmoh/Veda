@@ -15,7 +15,7 @@ use alloc::sync::Arc;
 
 use abi::{Error, RawHandle, Rights, nr};
 
-use crate::arch::trap::TrapFrame;
+use crate::architecture::trap::TrapFrame;
 use crate::object::KObject;
 use crate::object::handle::Handle;
 use crate::object::process::Process;

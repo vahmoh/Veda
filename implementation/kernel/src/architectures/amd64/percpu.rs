@@ -16,12 +16,12 @@ use super::gdt::{Gdt, Tss};
 use crate::percpu::MAX_CPUS;
 
 /// Offsets used by assembly.
-pub(in crate::arch) const OFF_USER_RSP: usize = 8;
-pub(in crate::arch) const OFF_KERNEL_RSP: usize = 16;
+pub(in crate::architecture) const OFF_USER_RSP: usize = 8;
+pub(in crate::architecture) const OFF_KERNEL_RSP: usize = 16;
 const OFF_CPU_ID: usize = 24;
 
 #[repr(C, align(64))]
-pub(in crate::arch) struct Local {
+pub(in crate::architecture) struct Local {
     /// Pointer to this structure (`gs:[0]`).
     self_ptr: *const Local,
     /// Scratch slot for the user stack pointer during `syscall` entry.
@@ -98,7 +98,7 @@ static GS_READY: AtomicBool = AtomicBool::new(false);
 ///
 /// # Safety
 /// Called once per CPU, with `id` unique.
-pub(in crate::arch) unsafe fn install(id: usize, apic_id: u32) {
+pub(in crate::architecture) unsafe fn install(id: usize, apic_id: u32) {
     let p = &LOCAL.0[id];
     let ptr = p as *const Local as *mut Local;
     // SAFETY: this CPU is the only user of its slot during bring-up.
@@ -113,7 +113,7 @@ pub(in crate::arch) unsafe fn install(id: usize, apic_id: u32) {
 
 /// The current CPU's block.
 #[inline]
-pub(in crate::arch) fn current() -> &'static Local {
+pub(in crate::architecture) fn current() -> &'static Local {
     let p: *const Local;
     // SAFETY: GS points at our Local while in kernel mode.
     unsafe { core::arch::asm!("mov {}, gs:[0]", out(reg) p, options(nostack, preserves_flags, readonly)) };
@@ -137,7 +137,7 @@ pub fn current_id() -> usize {
 ///
 /// # Safety
 /// The CPU must not be running yet.
-pub(in crate::arch) unsafe fn set_apic_id(id: usize, apic_id: u32) {
+pub(in crate::architecture) unsafe fn set_apic_id(id: usize, apic_id: u32) {
     let p = &LOCAL.0[id] as *const Local as *mut Local;
     // SAFETY: guaranteed by the caller.
     unsafe { (*p).apic_id = apic_id };
@@ -153,17 +153,17 @@ pub fn cpu_id_or_boot() -> u32 {
 }
 
 /// Block of CPU `id`.
-pub(in crate::arch) fn get(id: usize) -> &'static Local {
+pub(in crate::architecture) fn get(id: usize) -> &'static Local {
     &LOCAL.0[id]
 }
 
 /// The blocks of all CPUs that have come online.
-pub(in crate::arch) fn online() -> impl Iterator<Item = &'static Local> {
+pub(in crate::architecture) fn online() -> impl Iterator<Item = &'static Local> {
     crate::percpu::online().map(|p| get(p.cpu_id as usize))
 }
 
 /// Updates the stack used on entry from user mode (syscall and interrupts).
-pub(in crate::arch) fn set_kernel_stack(top: u64) {
+pub(in crate::architecture) fn set_kernel_stack(top: u64) {
     let p = current() as *const Local as *mut Local;
     // SAFETY: only this CPU writes its own entry-stack fields, with
     // interrupts disabled.

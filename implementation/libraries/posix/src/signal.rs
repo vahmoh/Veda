@@ -18,11 +18,12 @@
 //! is how the C library's cancellation and `__synccall` reach a thread that
 //! waits); other blocking calls (a read from a pipe) carry on.
 //!
-//! A thread is known by its thread pointer (`arch::thread_pointer`), unique
-//! while the thread lives, and has a thread id, unique among the process's
-//! live threads: the main thread's is the process id, as on Linux, and the
-//! others' are handed out as they start ([`thread_created`]) and free again
-//! once they end ([`thread_exited`]).
+//! A thread is known by its thread pointer
+//! (`architecture::thread_pointer`), unique while the thread lives, and has
+//! a thread id, unique among the process's live threads: the main thread's
+//! is the process id, as on Linux, and the others' are handed out as they
+//! start ([`thread_created`]) and free again once they end
+//! ([`thread_exited`]).
 
 use alloc::collections::BTreeMap;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -156,7 +157,7 @@ fn current() -> usize {
     if !THREADS_READY.load(Ordering::Acquire) {
         return 0;
     }
-    crate::arch::thread_pointer()
+    crate::architecture::thread_pointer()
 }
 
 /// From now on threads have thread pointers: the calling thread, the main

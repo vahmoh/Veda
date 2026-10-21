@@ -33,7 +33,7 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::agentsim::AgentSim;
-use crate::arch;
+use crate::architecture;
 use crate::checks;
 use crate::mic::{self, MicServer};
 use crate::qemu::{self, QemuInstall, VmConfig};
@@ -104,7 +104,7 @@ impl Machine {
             Err(e) => return format!("QEMU does not answer ({e})"),
         };
         match self.qmp.human("info registers -a") {
-            Ok(registers) => format!("QEMU is {status}, {}", arch::qemu::processors(&registers)),
+            Ok(registers) => format!("QEMU is {status}, {}", architecture::qemu::processors(&registers)),
             Err(e) => format!("QEMU is {status}, its processors unread ({e})"),
         }
     }

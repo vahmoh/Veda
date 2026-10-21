@@ -555,11 +555,11 @@ mod tests {
     #[test]
     fn the_programs_crates_have_their_texts() {
         let programs: Vec<&str> = crate::components::PROGRAMS.iter().filter(|p| !p.std).map(|p| p.package).collect();
-        let mut guest = Group::new(crate::arch::GUEST_TARGET, &["guest-init"]);
+        let mut guest = Group::new(crate::architecture::GUEST_TARGET, &["guest-init"]);
         guest.dir = Some(util::workspace_root().join("implementation").join("guests").join("linux"));
         let groups = [
-            Group::new(crate::arch::KERNEL_TARGET, &["kernel"]),
-            Group::new(crate::arch::USER_TARGET, &programs),
+            Group::new(crate::architecture::KERNEL_TARGET, &["kernel"]),
+            Group::new(crate::architecture::USER_TARGET, &programs),
             guest,
         ];
         let crates = crates(&groups).unwrap();

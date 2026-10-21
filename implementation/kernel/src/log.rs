@@ -3,13 +3,13 @@
 
 //! Kernel log: formatted messages go to an in-memory ring buffer that user
 //! space can read with the `log_read` system call, and from it to the
-//! serial port, as fast as the port takes them (`arch::serial`): never
-//! waited for, the rest given to it from the timer ([`pump_serial`]).
+//! serial port, as fast as the port takes them (`architecture::serial`):
+//! never waited for, the rest given to it from the timer ([`pump_serial`]).
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use crate::arch::serial;
+use crate::architecture::serial;
 use crate::synchronization::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

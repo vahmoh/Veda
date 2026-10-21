@@ -15,13 +15,13 @@
 //! and hypercalls) is the monitor's. The kernel handles only what must be
 //! fast or belongs to the processor. How guests run on the processor, and
 //! how their physical addresses are translated, is the architecture's
-//! (`arch::hv`).
+//! (`architecture::hv`).
 
 pub mod guest;
 
 pub use guest::Guest;
 
-pub use crate::arch::hv::Vcpu;
+pub use crate::architecture::hv::Vcpu;
 
 /// What a guest may do with a page of its memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

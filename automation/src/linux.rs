@@ -31,7 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::arch::{self, GUEST_TARGET};
+use crate::architecture::{self, GUEST_TARGET};
 use crate::notices;
 use crate::ports::{self, Port};
 use crate::util::{self, Result};
@@ -242,7 +242,7 @@ pub fn runnable() -> Result {
     if !built() {
         return Err("its Linux is not built (`cargo automation linux`)".into());
     }
-    arch::nested_virtualization()
+    architecture::nested_virtualization()
 }
 
 /// For `cargo automation doctor`: whether the guest has been built
@@ -292,7 +292,7 @@ pub fn command(args: &[String]) -> Result {
         Command::new("bash")
             .arg(ports.join("linux").join("build.sh"))
             .env("VEDA_PORTS", &ports)
-            .env("VEDA_ARCH", arch::NAME)
+            .env("VEDA_ARCH", architecture::NAME)
             .env("VEDA_LINUX", root())
             .env("VEDA_RENDERER", renderer_source()?)
             .env("VEDA_RENDERER_LIB", &lib)
@@ -392,7 +392,7 @@ pub fn guest() -> Result<Option<Guest>> {
         util::ninja(&mesa_build(), "src/gallium/targets/veda/renderer")?;
         let exe = mesa_build().join("src").join("gallium").join("targets").join("veda").join("renderer");
         let stripped = root().join("build").join("renderer");
-        let strip = root().join("toolchain").join("bin").join(format!("{}-strip", arch::GUEST_C_TARGET));
+        let strip = root().join("toolchain").join("bin").join(format!("{}-strip", architecture::GUEST_C_TARGET));
         util::run(Command::new(strip).arg("-o").arg(&stripped).arg(&exe))?;
         archive.file("bin/renderer", 0o755, &util::read(&stripped)?);
         packages.push("guest-renderer");
@@ -518,7 +518,7 @@ impl FirmwareLists {
 /// if they are not, or are not the files pinned).
 fn firmware() -> Result<Firmware> {
     let port = ports::dir().join("linux");
-    let arch_list = port.join("architectures").join(arch::NAME).join("firmware.txt");
+    let arch_list = port.join("architectures").join(architecture::NAME).join("firmware.txt");
     let mut lists = FirmwareLists::default();
     for list in std::iter::once(port.join("firmware.txt")).chain(arch_list.is_file().then_some(arch_list)) {
         lists.read(&util::read_to_string(&list)?, &list)?;
@@ -704,7 +704,9 @@ mod tests {
     fn the_firmware_lists_name_each_files_licence() {
         let port = ports::dir().join("linux");
         let mut lists = FirmwareLists::default();
-        for list in [port.join("firmware.txt"), port.join("architectures").join(arch::NAME).join("firmware.txt")] {
+        for list in
+            [port.join("firmware.txt"), port.join("architectures").join(architecture::NAME).join("firmware.txt")]
+        {
             lists.read(&util::read_to_string(&list).unwrap(), &list).unwrap();
         }
         assert!(!lists.files.is_empty());

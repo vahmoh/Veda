@@ -196,13 +196,15 @@ pub fn intel_gpu(pci: &pcidev::Client, name: &str) -> (Option<Vec<u8>>, Option<H
     let copy = match pci.opregion() {
         Ok(Ok(o)) => {
             let vbt = (!o.vbt.is_empty()).then_some(&o.vbt[..]);
-            let copy = hv::igd::for_guest(&o.opregion, vbt, crate::arch::OPREGION_AT);
+            let copy = hv::igd::for_guest(&o.opregion, vbt, crate::architecture::OPREGION_AT);
             let vbt = match vbt {
                 Some(v) => format!("a VBT of {} bytes after it", v.len()),
                 None => String::from("its VBT in it"),
             };
             match &copy {
-                Some(_) => println!("{name}: its OpRegion is the guest's at {:#x}, {vbt}", crate::arch::OPREGION_AT),
+                Some(_) => {
+                    println!("{name}: its OpRegion is the guest's at {:#x}, {vbt}", crate::architecture::OPREGION_AT)
+                }
                 None => println!("{name}: its OpRegion is not one the guest can have"),
             }
             copy

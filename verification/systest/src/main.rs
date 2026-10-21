@@ -31,7 +31,7 @@ use rt::sync::{Condvar, Mutex};
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-mod arch;
+mod architecture;
 mod media;
 mod memory;
 mod policy;
@@ -213,7 +213,7 @@ fn test_crash_report() -> TestResult {
 /// `systest crash`: the faulting child of [`test_crash_report`], which
 /// faults as the architecture can on purpose.
 fn crash() -> ! {
-    arch::crash()
+    architecture::crash()
 }
 
 fn test_threads_and_locks() -> TestResult {

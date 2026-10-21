@@ -10,7 +10,7 @@
 
 mod acpi;
 mod agentsim;
-mod arch;
+mod architecture;
 mod automate;
 mod checks;
 mod cli;
@@ -97,9 +97,11 @@ fn doctor() -> Result {
     check("rustc", tool_version(std::process::Command::new("rustc").arg("--version")));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();
     let targets = targets.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).map_err(|e| e.to_string());
-    for (name, target) in
-        [("uefi target", arch::UEFI_TARGET), ("kernel target", arch::KERNEL_TARGET), ("user target", arch::USER_TARGET)]
-    {
+    for (name, target) in [
+        ("uefi target", architecture::UEFI_TARGET),
+        ("kernel target", architecture::KERNEL_TARGET),
+        ("user target", architecture::USER_TARGET),
+    ] {
         check(
             name,
             targets.clone().and_then(|s| {

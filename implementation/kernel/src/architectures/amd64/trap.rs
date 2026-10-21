@@ -13,7 +13,7 @@ use super::idt::EXCEPTION_NAMES;
 use crate::log::emergency;
 
 /// Vector number recorded in the trap frame of a system call.
-pub(in crate::arch) const SYSCALL_VECTOR: u64 = 0x100;
+pub(in crate::architecture) const SYSCALL_VECTOR: u64 = 0x100;
 
 /// The page-fault exception's vector.
 const PAGE_FAULT: u64 = 14;
@@ -23,28 +23,28 @@ const PAGE_FAULT: u64 = 14;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TrapFrame {
-    pub(in crate::arch) r15: u64,
-    pub(in crate::arch) r14: u64,
-    pub(in crate::arch) r13: u64,
-    pub(in crate::arch) r12: u64,
-    pub(in crate::arch) r11: u64,
-    pub(in crate::arch) r10: u64,
-    pub(in crate::arch) r9: u64,
-    pub(in crate::arch) r8: u64,
-    pub(in crate::arch) rbp: u64,
-    pub(in crate::arch) rdi: u64,
-    pub(in crate::arch) rsi: u64,
-    pub(in crate::arch) rdx: u64,
-    pub(in crate::arch) rcx: u64,
-    pub(in crate::arch) rbx: u64,
-    pub(in crate::arch) rax: u64,
-    pub(in crate::arch) vector: u64,
-    pub(in crate::arch) error_code: u64,
-    pub(in crate::arch) rip: u64,
-    pub(in crate::arch) cs: u64,
-    pub(in crate::arch) rflags: u64,
-    pub(in crate::arch) rsp: u64,
-    pub(in crate::arch) ss: u64,
+    pub(in crate::architecture) r15: u64,
+    pub(in crate::architecture) r14: u64,
+    pub(in crate::architecture) r13: u64,
+    pub(in crate::architecture) r12: u64,
+    pub(in crate::architecture) r11: u64,
+    pub(in crate::architecture) r10: u64,
+    pub(in crate::architecture) r9: u64,
+    pub(in crate::architecture) r8: u64,
+    pub(in crate::architecture) rbp: u64,
+    pub(in crate::architecture) rdi: u64,
+    pub(in crate::architecture) rsi: u64,
+    pub(in crate::architecture) rdx: u64,
+    pub(in crate::architecture) rcx: u64,
+    pub(in crate::architecture) rbx: u64,
+    pub(in crate::architecture) rax: u64,
+    pub(in crate::architecture) vector: u64,
+    pub(in crate::architecture) error_code: u64,
+    pub(in crate::architecture) rip: u64,
+    pub(in crate::architecture) cs: u64,
+    pub(in crate::architecture) rflags: u64,
+    pub(in crate::architecture) rsp: u64,
+    pub(in crate::architecture) ss: u64,
 }
 
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == 176);
@@ -60,12 +60,12 @@ pub struct PageFault {
 }
 
 impl TrapFrame {
-    pub(in crate::arch) fn is_user(&self) -> bool {
+    pub(in crate::architecture) fn is_user(&self) -> bool {
         self.cs & 3 == 3
     }
 
     /// A frame that enters user mode at `rip` with stack `rsp`.
-    pub(in crate::arch) fn new_user(rip: u64, rsp: u64, arg0: u64, arg1: u64) -> TrapFrame {
+    pub(in crate::architecture) fn new_user(rip: u64, rsp: u64, arg0: u64, arg1: u64) -> TrapFrame {
         TrapFrame {
             rip,
             rsp,
@@ -155,7 +155,7 @@ fn dump(frame: &TrapFrame) {
 }
 
 /// A CPU exception raised by kernel code.
-pub(in crate::arch) fn kernel_exception(frame: &TrapFrame) -> ! {
+pub(in crate::architecture) fn kernel_exception(frame: &TrapFrame) -> ! {
     crate::panic::begin();
     let v = frame.vector as usize;
     emergency(format_args!(
@@ -178,7 +178,7 @@ pub(in crate::arch) fn kernel_exception(frame: &TrapFrame) -> ! {
 }
 
 /// Non-maskable interrupt: only expected as part of a panic.
-pub(in crate::arch) fn nmi(frame: &TrapFrame) -> ! {
+pub(in crate::architecture) fn nmi(frame: &TrapFrame) -> ! {
     if crate::panic::panicking() {
         cpu::halt_forever();
     }

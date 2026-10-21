@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Locating QEMU and its UEFI firmware, and assembling the command line.
-//! The machine is the architecture's (`arch::qemu`): its emulator, its
-//! firmware, and the arguments and devices particular to it.
+//! The machine is the architecture's (`architecture::qemu`): its emulator,
+//! its firmware, and the arguments and devices particular to it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::arch;
+use crate::architecture;
 use crate::util::{self, Result};
 
 /// A path as the value of one of QEMU's options, where a comma ends the
@@ -47,7 +47,7 @@ pub struct QemuInstall {
     pub firmware_code: PathBuf,
     pub firmware_vars_template: PathBuf,
     /// Memory the firmware needs blank at every reset (its start and size),
-    /// if any: see `arch::qemu::blank_at_reset`.
+    /// if any: see `architecture::qemu::blank_at_reset`.
     pub blank_at_reset: Option<(u64, u64)>,
 }
 
@@ -58,19 +58,21 @@ impl QemuInstall {
     pub fn locate() -> Result<Self> {
         let binary = std::env::var_os("QEMU")
             .map(PathBuf::from)
-            .or_else(|| util::find_on_path(arch::qemu::BINARY))
+            .or_else(|| util::find_on_path(architecture::qemu::BINARY))
             .ok_or("QEMU not found: install it or set the QEMU environment variable")?;
 
         let qemu_dir = binary.parent().unwrap_or(Path::new("."));
         let dirs = [qemu_dir.join("share"), qemu_dir.join("../share/qemu"), PathBuf::from("/usr/share/qemu")]
             .into_iter()
-            .chain(arch::qemu::FIRMWARE_DIRS.iter().map(PathBuf::from));
+            .chain(architecture::qemu::FIRMWARE_DIRS.iter().map(PathBuf::from));
         let found = dirs
-            .flat_map(|d| arch::qemu::FIRMWARE_FILES.iter().map(move |(code, vars)| (d.join(code), d.join(vars))))
+            .flat_map(|d| {
+                architecture::qemu::FIRMWARE_FILES.iter().map(move |(code, vars)| (d.join(code), d.join(vars)))
+            })
             .find(|(code, vars)| code.is_file() && vars.is_file());
         let missing = format!(
             "the UEFI firmware was not found: install it ({}) or set OVMF_CODE and OVMF_VARS",
-            arch::qemu::FIRMWARE_PACKAGES
+            architecture::qemu::FIRMWARE_PACKAGES
         );
         let firmware_code = std::env::var_os("OVMF_CODE")
             .map(PathBuf::from)
@@ -79,7 +81,7 @@ impl QemuInstall {
         let firmware_vars_template =
             std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
         let code = util::read(&firmware_code)?;
-        let blank_at_reset = arch::qemu::blank_at_reset(&code);
+        let blank_at_reset = architecture::qemu::blank_at_reset(&code);
         Ok(QemuInstall { binary, firmware_code, firmware_vars_template, blank_at_reset })
     }
 
@@ -238,7 +240,8 @@ pub struct VmConfig {
     /// one if QEMU has it.
     pub gpu: Option<bool>,
     /// An IOMMU, remapping interrupts, as PCs have (the machine's: see
-    /// `arch::qemu::machine_args`): the driver VM's devices need it.
+    /// `architecture::qemu::machine_args`): the driver VM's devices need
+    /// it.
     pub iommu: bool,
     /// QEMU's USB network adapter (`usb-net`: CDC Ethernet, which Veda has
     /// no driver for) on the xHCI controller, on a NAT of its own.
@@ -323,7 +326,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-name", "Veda"]);
     // The machine, with its own keyboard unless input is USB's; its IOMMU,
     // before the devices it translates; and its processors.
-    cmd.args(arch::qemu::machine_args(cfg.input == InputDevices::Standard, cfg.iommu));
+    cmd.args(architecture::qemu::machine_args(cfg.input == InputDevices::Standard, cfg.iommu));
     for t in &cfg.acpi_tables {
         cmd.args(["-acpitable", &format!("file={}", option_path(t))]);
     }
@@ -335,7 +338,8 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-drive", &flash(&install.firmware_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
     // What the firmware needs blank at every reset, from a file of zeros
-    // QEMU's loader writes there (see `arch::qemu::blank_at_reset`).
+    // QEMU's loader writes there (see
+    // `architecture::qemu::blank_at_reset`).
     if let Some((start, size)) = install.blank_at_reset {
         let blank = util::out_dir().join("firmware-blank.bin");
         if std::fs::metadata(&blank).map(|m| m.len()).ok() != Some(size) {
@@ -427,7 +431,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             // line output and, with the host's sound system, a line input.
             "hda" => {
                 let codec = if streams == 2 { "hda-duplex" } else { "hda-output" };
-                cmd.args(["-device", &format!("{},id=hda", arch::qemu::HDA_CONTROLLER)]);
+                cmd.args(["-device", &format!("{},id=hda", architecture::qemu::HDA_CONTROLLER)]);
                 cmd.args(["-device", &format!("{codec},bus=hda.0,audiodev=audio0")])
             }
             _ => cmd.args(["-device", &virtio(cfg, &format!("virtio-sound-pci,audiodev=audio0,streams={streams}"))]),
@@ -473,7 +477,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-qmp", &format!("unix:{},server=on,wait=off", socket_option(path)?)]);
     }
     if cfg.debug_exit {
-        cmd.args(["-device", arch::qemu::DEBUG_EXIT]);
+        cmd.args(["-device", architecture::qemu::DEBUG_EXIT]);
     }
     if cfg.gdb {
         cmd.args(["-s", "-S"]);

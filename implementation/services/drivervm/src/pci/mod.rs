@@ -36,8 +36,9 @@
 //!
 //! While the guest runs, its functions' configuration space goes through
 //! here, and its MSIs: as many for each as its MSI or MSI-X capability
-//! says it can send, [`crate::arch::MAX_MSIS`] for all of them at once,
-//! each made when the guest routes it and freed when it lets go of it.
+//! says it can send, [`crate::architecture::MAX_MSIS`] for all of them at
+//! once, each made when the guest routes it and freed when it lets go of
+//! it.
 //!
 //! The kernel's command line says where each function's memory BARs are on
 //! the host ([`Devices::host_options`]): a driver in the guest names the
@@ -100,7 +101,8 @@ pub struct Devices {
     /// The memory the firmware keeps for them, where the guest has it.
     reserved: Vec<Range<u64>>,
     /// An Intel GPU's: the guest's copy of its OpRegion (for
-    /// `crate::arch::OPREGION_AT`), and the stand-in for the PC's host bridge.
+    /// `crate::architecture::OPREGION_AT`), and the stand-in for the PC's
+    /// host bridge.
     opregion: Option<Vec<u8>>,
     host_bridge: Option<HostBridge>,
     /// Their MSIs, together.
@@ -195,7 +197,7 @@ impl Devices {
                     (devices.opregion, devices.host_bridge) = intel_gpu(&pci, &name);
                 }
                 let has_copy = intel_gpus == 0 && devices.opregion.is_some();
-                config.intel_graphics(if has_copy { crate::arch::OPREGION_AT as u32 } else { 0 });
+                config.intel_graphics(if has_copy { crate::architecture::OPREGION_AT as u32 } else { 0 });
                 intel_gpus += 1;
             }
             let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
@@ -241,7 +243,7 @@ impl Devices {
     }
 
     /// The guest's copy of an Intel GPU's OpRegion, for
-    /// `crate::arch::OPREGION_AT`.
+    /// `crate::architecture::OPREGION_AT`.
     pub fn opregion(&self) -> Option<&[u8]> {
         self.opregion.as_deref()
     }
@@ -334,15 +336,15 @@ impl Devices {
             if index >= d.msis as u64 {
                 return refuse(&format!("the function sends {} MSIs", d.msis));
             }
-            let taken = self
-                .msis
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| (n < crate::arch::MAX_MSIS).then_some(n + 1));
+            let taken = self.msis.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                (n < crate::architecture::MAX_MSIS).then_some(n + 1)
+            });
             if taken.is_err() {
-                return refuse(&format!("the guest has {} MSIs, the most it may", crate::arch::MAX_MSIS));
+                return refuse(&format!("the guest has {} MSIs, the most it may", crate::architecture::MAX_MSIS));
             }
             match s.pci.alloc_msi() {
                 Ok(Ok((irq, msg))) => {
-                    let message = crate::arch::msi_result(msg.address, msg.data);
+                    let message = crate::architecture::msi_result(msg.address, msg.data);
                     s.msis.insert(index, (irq, message));
                 }
                 _ => {

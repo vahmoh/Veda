@@ -14,8 +14,8 @@
 //!   within its budget.
 //! * [`functions`]: where the guest's PCI functions go on its bus, where
 //!   their BARs go, how many MSIs each may have.
-//! * [`arch`]: what is particular to the architecture; on AMD64 the PC's
-//!   keyboard controller, as the guest may drive it.
+//! * [`architecture`]: what is particular to the architecture; on AMD64 the
+//!   PC's keyboard controller, as the guest may drive it.
 
 #![no_std]
 
@@ -25,7 +25,7 @@ extern crate std;
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-pub mod arch;
+pub mod architecture;
 pub mod functions;
 pub mod ledger;
 pub mod waits;

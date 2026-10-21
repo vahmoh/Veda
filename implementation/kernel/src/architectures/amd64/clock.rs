@@ -25,7 +25,7 @@ pub fn ticks() -> u64 {
 }
 
 /// Registers the HPET found in the ACPI tables.
-pub(in crate::arch) fn set_hpet(phys: u64) {
+pub(in crate::architecture) fn set_hpet(phys: u64) {
     let base = crate::memory::kvirt::map_mmio(phys, 4096, Cache::Uncached);
     // SAFETY: the HPET register block is mapped uncached.
     unsafe {
@@ -45,7 +45,7 @@ fn hpet_counter() -> u64 {
 
 /// Busy-waits using the HPET or, failing that, PIT channel 2. Usable before
 /// the TSC is calibrated.
-pub(in crate::arch) fn busy_wait_ms(ms: u64) {
+pub(in crate::architecture) fn busy_wait_ms(ms: u64) {
     let period = HPET_PERIOD_FS.load(Ordering::Relaxed);
     if HPET_BASE.load(Ordering::Relaxed) != 0 && period != 0 {
         let ticks = ms * 1_000_000_000_000 / period;
@@ -119,14 +119,14 @@ fn reported_tsc_hz() -> Option<u64> {
 static TSC_SOURCE: AtomicUsize = AtomicUsize::new(0);
 const SOURCES: [&str; 3] = ["HPET", "PIT", "processor"];
 
-pub(in crate::arch) fn source() -> &'static str {
+pub(in crate::architecture) fn source() -> &'static str {
     SOURCES[TSC_SOURCE.load(Ordering::Relaxed)]
 }
 
 /// Measures the TSC frequency and starts the monotonic clock. A timer that
 /// measures more than 5% off what the processor reports is not believed
 /// (a gated or emulated PIT can count at any speed).
-pub(in crate::arch) fn calibrate() {
+pub(in crate::architecture) fn calibrate() {
     // The median of five samples ignores outliers from emulator jitter.
     let mut samples = [0u64; 5];
     for s in &mut samples {
@@ -165,7 +165,7 @@ pub(in crate::arch) fn calibrate() {
 
 /// Sets the boot processor's TSC adjustment to 0 (before the clock starts).
 /// The adjustment the firmware left, if it was not 0.
-pub(in crate::arch) fn reset_boot_tsc() -> Option<i64> {
+pub(in crate::architecture) fn reset_boot_tsc() -> Option<i64> {
     if !cpu::features().tsc_adjust {
         return None;
     }
@@ -192,7 +192,7 @@ static SYNC_BOOT_TSC: AtomicU64 = AtomicU64::new(0);
 
 /// The boot processor's part: answers a starting processor that waits for
 /// its TSC. Called while it waits for the processor to start.
-pub(in crate::arch) fn serve_tsc_sync() {
+pub(in crate::architecture) fn serve_tsc_sync() {
     let step = SYNC_STEP.load(Ordering::Acquire);
     if step % 2 == 1 {
         SYNC_BOOT_TSC.store(rdtsc_ordered(), Ordering::Relaxed);
@@ -202,7 +202,7 @@ pub(in crate::arch) fn serve_tsc_sync() {
 
 /// How a starting processor's TSC compared with the boot processor's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::arch) struct TscSync {
+pub(in crate::architecture) struct TscSync {
     /// Its adjustment as the firmware left it (set to 0 since).
     pub firmware_adjust: i64,
     /// How many ticks it was behind the boot processor's after that, and
@@ -219,7 +219,7 @@ pub(in crate::arch) struct TscSync {
 /// The starting processor's part: sets its TSC alike the boot processor's.
 /// Runs before the processor counts as started, while the boot processor
 /// answers ([`serve_tsc_sync`]).
-pub(in crate::arch) fn sync_tsc() -> TscSync {
+pub(in crate::architecture) fn sync_tsc() -> TscSync {
     let mut result = TscSync::default();
     let adjustable = cpu::features().tsc_adjust;
     if adjustable {

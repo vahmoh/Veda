@@ -191,10 +191,10 @@ fn keep_alive(p: Arc<Process>) {
 /// What the machine offers beyond what Veda needs (`abi::platform`).
 fn platform() -> u32 {
     let mut bits = 0;
-    if crate::arch::hv::available().is_ok() {
+    if crate::architecture::hv::available().is_ok() {
         bits |= abi::platform::VIRTUALIZATION;
     }
-    if crate::arch::iommu::active() {
+    if crate::architecture::iommu::active() {
         bits |= abi::platform::IOMMU;
     }
     bits

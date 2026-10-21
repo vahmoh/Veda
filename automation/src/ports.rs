@@ -16,7 +16,7 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 
 use crate::util::{self, Result};
-use crate::{arch, crates, linux, toolchain, web};
+use crate::{architecture, crates, linux, toolchain, web};
 
 /// The ports' directory.
 pub fn dir() -> PathBuf {
@@ -25,7 +25,7 @@ pub fn dir() -> PathBuf {
 
 /// The ports' settings for the architecture built for.
 pub fn settings() -> PathBuf {
-    dir().join("architectures").join(arch::NAME).join("settings.sh")
+    dir().join("architectures").join(architecture::NAME).join("settings.sh")
 }
 
 /// The SHA-256 of what builds the ports `names` (every file of their
@@ -115,11 +115,12 @@ impl Port {
             format!("  {} files under {},\n  each pinned by its SHA-256", self.set.len(), self.url)
         };
         let dir = dir().join(&self.name);
-        let patches: Vec<String> = ["veda.patch".to_string(), format!("architectures/{}/veda.patch", arch::NAME)]
-            .into_iter()
-            .filter(|patch| dir.join(patch).is_file())
-            .map(|patch| format!("implementation/ports/{}/{patch}", self.name))
-            .collect();
+        let patches: Vec<String> =
+            ["veda.patch".to_string(), format!("architectures/{}/veda.patch", architecture::NAME)]
+                .into_iter()
+                .filter(|patch| dir.join(patch).is_file())
+                .map(|patch| format!("implementation/ports/{}/{patch}", self.name))
+                .collect();
         let changes = if patches.is_empty() {
             "as released".to_string()
         } else {
@@ -365,7 +366,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let checkouts = [dir.join("one"), dir.join("elsewhere").join("two")];
         let architecture_patch =
-            |ports: &Path| ports.join("p").join("architectures").join(arch::NAME).join("veda.patch");
+            |ports: &Path| ports.join("p").join("architectures").join(architecture::NAME).join("veda.patch");
         for ports in &checkouts {
             util::create_dir_all(architecture_patch(ports).parent().unwrap()).unwrap();
             util::copy(&super::dir().join("common.sh"), &ports.join("common.sh")).unwrap();
@@ -388,7 +389,7 @@ mod tests {
             let out = Command::new("bash")
                 .args(["-euo", "pipefail", "-c", script])
                 .env("PORTS", ports)
-                .env("VEDA_ARCH", arch::NAME)
+                .env("VEDA_ARCH", architecture::NAME)
                 .env("STAMPS", &stamps)
                 .env("ROOT", &dir)
                 .env("RAN", &ran)

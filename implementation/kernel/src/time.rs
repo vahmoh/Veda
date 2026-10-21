@@ -4,8 +4,8 @@
 //! Timekeeping.
 //!
 //! The monotonic clock counts the ticks of the processor's clock counter
-//! (`arch::clock`), which every CPU reads alike, from the moment the
-//! architecture starts it ([`start`]), once it knows the counter's
+//! (`architecture::clock`), which every CPU reads alike, from the moment
+//! the architecture starts it ([`start`]), once it knows the counter's
 //! frequency. Wall-clock time is the firmware RTC reading taken by the
 //! loader, advanced by the monotonic clock. The RTC keeps UTC (unless the
 //! firmware says otherwise); local time is UTC plus the offset of the `tz=`
@@ -13,7 +13,7 @@
 
 use core::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
-use crate::arch::clock::ticks;
+use crate::architecture::clock::ticks;
 
 /// The counter's reading when the monotonic clock read 0.
 static TICKS_AT_ZERO: AtomicU64 = AtomicU64::new(0);

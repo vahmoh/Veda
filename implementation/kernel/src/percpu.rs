@@ -4,14 +4,14 @@
 //! Per-CPU data: what the kernel keeps for each CPU.
 //!
 //! A CPU finds its own [`PerCpu`] by its index, which the architecture keeps
-//! where the CPU reaches it at once (`arch::percpu`), beside whatever else
-//! the architecture keeps for the CPU.
+//! where the CPU reaches it at once (`architecture::percpu`), beside
+//! whatever else the architecture keeps for the CPU.
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::arch;
+use crate::architecture;
 use crate::scheduler::CpuSched;
 
 /// The most CPUs the kernel runs on.
@@ -57,13 +57,13 @@ static PERCPU: [PerCpu; MAX_CPUS] = {
 /// The current CPU's data (once the architecture has set the CPU up).
 #[inline]
 pub fn current() -> &'static PerCpu {
-    &PERCPU[arch::percpu::current_id()]
+    &PERCPU[architecture::percpu::current_id()]
 }
 
 /// The current CPU's index, or 0 (the boot CPU's) before it has one.
 #[inline]
 pub fn cpu_id_or_boot() -> u32 {
-    arch::percpu::cpu_id_or_boot()
+    architecture::percpu::cpu_id_or_boot()
 }
 
 /// The data of CPU `id`.

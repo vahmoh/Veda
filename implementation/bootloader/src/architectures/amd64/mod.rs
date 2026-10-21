@@ -55,10 +55,10 @@ fn supports_1g_pages() -> bool {
 }
 
 /// The kernel's address space, as the loader hands it over (see
-/// `bootinfo::arch`): physical memory below the direct map's limit both
-/// where it is (for the loader's last steps) and at `bootinfo::HHDM_BASE`,
-/// the two sharing their tables, the latter not executable; and the kernel
-/// image ([`KernelSpace::map_kernel_page`]).
+/// `bootinfo::architecture`): physical memory below the direct map's limit
+/// both where it is (for the loader's last steps) and at
+/// `bootinfo::HHDM_BASE`, the two sharing their tables, the latter not
+/// executable; and the kernel image ([`KernelSpace::map_kernel_page`]).
 pub struct KernelSpace<'a, F: FrameSource> {
     pt: paging::PageTables<'a, F>,
 }
@@ -100,7 +100,7 @@ impl<'a, F: FrameSource> KernelSpace<'a, F> {
 
 /// Enters the kernel at `entry`, which takes `info`, on the stack whose top
 /// is `stack_top`, in the address space `root` ([`KernelSpace`]), as
-/// `bootinfo::arch` says it is entered.
+/// `bootinfo::architecture` says it is entered.
 ///
 /// # Safety
 /// After `ExitBootServices`; `root` maps this code where it is, the stack

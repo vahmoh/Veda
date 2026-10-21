@@ -30,7 +30,7 @@ extern crate alloc;
 mod apps;
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-mod arch;
+mod architecture;
 mod boot;
 
 use alloc::collections::{BTreeMap, BTreeSet};

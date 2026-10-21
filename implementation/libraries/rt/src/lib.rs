@@ -43,7 +43,7 @@ pub use alloc::{boxed, format, rc, string, vec};
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-pub mod arch;
+pub mod architecture;
 #[cfg(all(feature = "runtime", not(test), not(target_os = "veda")))]
 mod crt;
 pub mod env;

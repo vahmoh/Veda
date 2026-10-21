@@ -15,7 +15,7 @@
 //! they build for it: a library used both by programs on `rt` and by
 //! programs on the standard library is checked as each has it.
 
-use crate::arch::{BARE_TARGET, KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
+use crate::architecture::{BARE_TARGET, KERNEL_TARGET, STD_TARGET, UEFI_TARGET, USER_TARGET};
 use crate::components::{PROGRAMS, Program};
 use crate::runner;
 use crate::toolchain;

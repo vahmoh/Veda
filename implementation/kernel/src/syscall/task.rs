@@ -220,7 +220,7 @@ pub fn thread_read_state(raw: RawHandle, buf: usize) -> SysResult {
     }
     // SAFETY: the thread is stopped (it runs no user code until resumed)
     // and alive while `t` is, and its context is read under the BKL.
-    let state = unsafe { crate::arch::thread::user_state(t.kernel_stack_top, &*t.ctx_ptr()) };
+    let state = unsafe { crate::architecture::thread::user_state(t.kernel_stack_top, &*t.ctx_ptr()) };
     user::write(buf as u64, &state)?;
     ok(0)
 }

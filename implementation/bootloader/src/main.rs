@@ -24,17 +24,17 @@
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-mod arch;
+mod architecture;
 mod blank;
 mod config;
 mod uefi;
 
-/// Logs a formatted line to the serial console (`arch::serial`).
+/// Logs a formatted line to the serial console (`architecture::serial`).
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {{
         use core::fmt::Write as _;
-        let _ = writeln!($crate::arch::serial::Serial, "[bootloader] {}", format_args!($($arg)*));
+        let _ = writeln!($crate::architecture::serial::Serial, "[bootloader] {}", format_args!($($arg)*));
     }};
 }
 
@@ -532,30 +532,31 @@ fn clear_screen(fw: &Firmware, fb: &Framebuffer) -> PaintReport {
     }
     let surface =
         blank::Surface { base: fb.phys_base as *mut u32, width: fb.width, height: fb.height, stride: fb.stride };
-    let start = arch::ticks();
-    report.found = arch::memory_type(fb.phys_base);
+    let start = architecture::ticks();
+    report.found = architecture::memory_type(fb.phys_base);
     if report.found == memory_type::WRITE_COMBINING {
         blank::clear(&surface);
         report.painted = report.found;
         report.made_wc = made_wc::ALREADY;
-        report.paint_ticks = (arch::ticks() - start).max(1);
+        report.paint_ticks = (architecture::ticks() - start).max(1);
         return report;
     }
-    let painted = ram_limit(fw).and_then(|limit| arch::clear_write_combining(&mut ScratchFrames(fw), &surface, limit));
+    let painted =
+        ram_limit(fw).and_then(|limit| architecture::clear_write_combining(&mut ScratchFrames(fw), &surface, limit));
     match painted {
         Ok(ticks) => {
             report.painted = memory_type::WRITE_COMBINING;
             report.made_wc = made_wc::PAGE_ATTRIBUTES;
             report.paint_ticks = ticks.max(1);
-            report.setup_ticks = (arch::ticks() - start).saturating_sub(ticks);
+            report.setup_ticks = (architecture::ticks() - start).saturating_sub(ticks);
         }
         Err(e) => {
             log!("cannot clear the screen write-combining: {e}");
-            let painting = arch::ticks();
+            let painting = architecture::ticks();
             blank::clear(&surface);
             report.painted = report.found;
             report.made_wc = made_wc::NOT;
-            report.paint_ticks = (arch::ticks() - painting).max(1);
+            report.paint_ticks = (architecture::ticks() - painting).max(1);
         }
     }
     log!(
@@ -578,7 +579,7 @@ impl FrameSource for ScratchFrames<'_> {
 }
 
 /// The end of what the direct map covers: all RAM, and at least what the
-/// architecture needs (`arch::DIRECT_MAP_MIN`), to a GiB.
+/// architecture needs (`architecture::DIRECT_MAP_MIN`), to a GiB.
 fn ram_limit(fw: &Firmware) -> Result<u64> {
     let (bytes, desc_size) = memory_map_size(fw);
     let capacity = bytes + 16 * desc_size;
@@ -588,7 +589,7 @@ fn ram_limit(fw: &Firmware) -> Result<u64> {
 
 /// [`ram_limit`], reading the memory map into `map` (`capacity` bytes).
 fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<u64> {
-    let mut limit = arch::DIRECT_MAP_MIN;
+    let mut limit = architecture::DIRECT_MAP_MIN;
     let (mut size, mut key, mut ds, mut ver) = (capacity, 0usize, 0usize, 0u32);
     // SAFETY: a buffer of `capacity` bytes.
     let s = unsafe { (fw.bs.get_memory_map)(&mut size, map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver) };
@@ -649,7 +650,7 @@ fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(u64, KernelImage)> {
 }
 
 /// Maps the kernel image's pages with the permissions of their runs (W^X).
-fn map_kernel<F: FrameSource>(space: &mut arch::KernelSpace<F>, k: &KernelImage) -> Result<()> {
+fn map_kernel<F: FrameSource>(space: &mut architecture::KernelSpace<F>, k: &KernelImage) -> Result<()> {
     for r in k.runs() {
         for off in (r.offset..r.offset + r.len).step_by(PAGE as usize) {
             space.map_kernel_page(k.virt_base + off, k.phys_base + off, r.writable, r.executable)?;
@@ -739,7 +740,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     let phys_limit = ram_limit_of(fw, raw_map, map_capacity)?;
 
     let mut frames = TableFrames(fw);
-    let mut space = arch::KernelSpace::new(&mut frames, phys_limit)?;
+    let mut space = architecture::KernelSpace::new(&mut frames, phys_limit)?;
     map_kernel(&mut space, &kernel)?;
     let root = space.root();
     log!("page tables at {:#x}, direct map limit {:#x}", root, phys_limit);
@@ -862,12 +863,12 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     // SAFETY: boot services have exited; the kernel's address space maps
     // this code where it is, the stack and the kernel, and the kernel's
     // entry follows the documented contract.
-    unsafe { arch::enter_kernel(root, stack_top, entry, info_virt) }
+    unsafe { architecture::enter_kernel(root, stack_top, entry, info_virt) }
 }
 
 #[unsafe(export_name = "efi_main")]
 extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
-    arch::serial::init();
+    architecture::serial::init();
     log!("Veda boot loader {}", env!("CARGO_PKG_VERSION"));
     // SAFETY: the firmware passes a valid system table.
     let st: &'static SystemTable = unsafe { &*st };

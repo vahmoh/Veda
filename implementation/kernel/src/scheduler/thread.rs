@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::arch::thread::Context;
+use crate::architecture::thread::Context;
 use crate::memory::aspace::AddressSpace;
 use crate::memory::kvirt::KernelStack;
 use crate::object::process::Process;

@@ -9,7 +9,7 @@
 //! exchanged through system calls. It contains no code that depends on being
 //! in the kernel or in user space.
 //!
-//! What depends on the processor's architecture is in [`arch`]
+//! What depends on the processor's architecture is in [`architecture`]
 //! (`implementation/libraries/abi/src/architectures/<architecture>/`), and
 //! re-exported here: how system calls are made, the page size, the user
 //! address space, how threads start, and the registers and exits of virtual
@@ -18,9 +18,10 @@
 //! # Calling convention
 //!
 //! A system call takes a call number (see [`nr`]) and up to six arguments,
-//! all of them machine words, in the registers [`arch`] names. It returns a
-//! status: non-negative values are success results, negative values are
-//! `-(error code)` (see [`Error`]). Some calls return a second value.
+//! all of them machine words, in the registers [`architecture`] names. It
+//! returns a status: non-negative values are success results, negative
+//! values are `-(error code)` (see [`Error`]). Some calls return a second
+//! value.
 //!
 //! # Objects and handles
 //!
@@ -35,10 +36,10 @@
 
 #[cfg(target_arch = "x86_64")]
 #[path = "architectures/amd64/mod.rs"]
-pub mod arch;
+pub mod architecture;
 pub mod startup;
 
-pub use arch::{
+pub use architecture::{
     PAGE_SIZE, PROGRAM_BASE, PROGRAM_SPAN, ThreadState, USER_SPACE_END, USER_SPACE_START, VcpuSegment, VcpuState,
     entry_stack_pointer, vcpu_exit,
 };
@@ -240,7 +241,8 @@ pub mod nr {
     /// (`AccessDenied` above it, see [`process_create`](PROCESS_CREATE)).
     pub const THREAD_SET_PRIORITY: usize = 67;
     /// `thread_set_tls(value)`: the calling thread's thread pointer, through
-    /// which it finds its thread-local storage (see [`arch`](crate::arch)).
+    /// which it finds its thread-local storage (see
+    /// [`architecture`](crate::architecture)).
     pub const THREAD_SET_TLS: usize = 68;
     /// `process_list(buf: *mut ProcessInfo, cap) -> total`.
     pub const PROCESS_LIST: usize = 69;
@@ -640,11 +642,12 @@ pub mod clock {
 }
 
 /// How the clocks follow the processor's clock counter (`clock_info`),
-/// which every processor reads alike, and user space too (see [`arch`]):
-/// the monotonic clock is `((ticks - ticks_at_zero) * ns_per_tick) >> 32`
-/// nanoseconds; the real-time clocks are it plus their offsets. It never
-/// changes once the system has started, so that a program asks for it once
-/// and reads the clocks itself (`rt::time`).
+/// which every processor reads alike, and user space too (see
+/// [`architecture`]): the monotonic clock is
+/// `((ticks - ticks_at_zero) * ns_per_tick) >> 32` nanoseconds; the
+/// real-time clocks are it plus their offsets. It never changes once the
+/// system has started, so that a program asks for it once and reads the
+/// clocks itself (`rt::time`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClockInfo {
