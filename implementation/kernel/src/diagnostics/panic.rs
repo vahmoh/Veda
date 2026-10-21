@@ -10,8 +10,8 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::architecture::cpu;
-use crate::log::emergency;
-use crate::percpu;
+use crate::diagnostics::log::emergency;
+use crate::scheduler::percpu;
 
 static PANICKING: AtomicBool = AtomicBool::new(false);
 

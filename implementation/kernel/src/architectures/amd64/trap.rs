@@ -10,7 +10,7 @@ use core::fmt::{self, Display};
 use super::cpu;
 use super::gdt::{USER_CS, USER_DS};
 use super::idt::EXCEPTION_NAMES;
-use crate::log::emergency;
+use crate::diagnostics::log::emergency;
 
 /// Vector number recorded in the trap frame of a system call.
 pub(in crate::architecture) const SYSCALL_VECTOR: u64 = 0x100;
@@ -156,13 +156,13 @@ fn dump(frame: &TrapFrame) {
 
 /// A CPU exception raised by kernel code.
 pub(in crate::architecture) fn kernel_exception(frame: &TrapFrame) -> ! {
-    crate::panic::begin();
+    crate::diagnostics::panic::begin();
     let v = frame.vector as usize;
     emergency(format_args!(
         "\n\n*** VEDA KERNEL PANIC: {} (vector {}) in kernel mode on CPU {} rip={:#x} cr2={:#x} rsp={:#x} err={:#x} ***\n",
         EXCEPTION_NAMES.get(v).copied().unwrap_or("?"),
         v,
-        crate::percpu::cpu_id_or_boot(),
+        crate::scheduler::percpu::cpu_id_or_boot(),
         frame.rip,
         cpu::read_cr2(),
         frame.rsp,
@@ -174,16 +174,16 @@ pub(in crate::architecture) fn kernel_exception(frame: &TrapFrame) -> ! {
         emergency(format_args!("  faulting address {:#x}{}\n", addr, what));
     }
     dump(frame);
-    crate::panic::end()
+    crate::diagnostics::panic::end()
 }
 
 /// Non-maskable interrupt: only expected as part of a panic.
 pub(in crate::architecture) fn nmi(frame: &TrapFrame) -> ! {
-    if crate::panic::panicking() {
+    if crate::diagnostics::panic::panicking() {
         cpu::halt_forever();
     }
-    crate::panic::begin();
+    crate::diagnostics::panic::begin();
     emergency(format_args!("\n\n*** VEDA KERNEL PANIC: unexpected NMI ***\n"));
     dump(frame);
-    crate::panic::end()
+    crate::diagnostics::panic::end()
 }

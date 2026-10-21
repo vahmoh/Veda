@@ -73,7 +73,7 @@ own.
 * **One module, `architecture`.** The rest of the crate reaches that code
   only through `architecture`, whose items every architecture provides
   with the same names and meanings. The kernel's
-  (`implementation/kernel/src/architecture.rs`) and `automation`'s
+  (`implementation/kernel/src/architectures/mod.rs`) and `automation`'s
   (`automation/src/architecture.rs`) document their interface in a table.
   Its vocabulary is architecture-neutral: the clock's counter, not the
   TSC; a thread's TLS pointer, not its FS base. Code in

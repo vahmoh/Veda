@@ -35,7 +35,7 @@ this repository.
 | `implementation/libraries/web` | `web`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
 | `implementation/libraries/posix/src/inet.rs` | The POSIX layer's sockets, `netd`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
 | `implementation/shell/desktop/src/firewall.rs` | The firewall's question, as the desktop shows it |
-| `implementation/libraries/entropy`, `implementation/kernel/src/random.rs` | The kernel's random number generator |
+| `implementation/libraries/entropy`, `implementation/kernel/src/random` | The kernel's random number generator |
 | `verification/nettest` | In-system network checks |
 
 Frames travel through shared-memory rings (`proto::netring`), a

@@ -33,7 +33,6 @@
 //! kernel; the rest of the kernel uses nothing of it but this.
 
 #[cfg(target_arch = "x86_64")]
-#[path = "architectures/amd64/mod.rs"]
 mod amd64;
 #[cfg(target_arch = "x86_64")]
 pub use amd64::{

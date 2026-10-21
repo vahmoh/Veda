@@ -14,14 +14,14 @@ pub fn debug_write(ptr: usize, len: usize) -> SysResult {
     let len = len.min(4096);
     let bytes = user::read_vec(ptr as u64, len, 4096)?;
     let cur = scheduler::current();
-    crate::log::write_user(cur.process_name(), &bytes);
+    crate::diagnostics::log::write_user(cur.process_name(), &bytes);
     ok(len)
 }
 
 pub fn log_read(offset: usize, buf: usize, len: usize) -> SysResult {
     super::task::allowed(abi::restrict::NO_LOG)?;
     let mut tmp = user::buffer(len.min(64 * 1024))?;
-    let (n, next) = crate::log::read(offset as u64, &mut tmp);
+    let (n, next) = crate::diagnostics::log::read(offset as u64, &mut tmp);
     user::copy_to_user(buf as u64, &tmp[..n])?;
     Ok((n, Some(next as usize)))
 }
@@ -62,7 +62,7 @@ pub fn system_info(ptr: usize) -> SysResult {
     let procs = crate::object::process::all();
     let info = SystemInfo {
         version,
-        cpu_count: crate::percpu::online().count() as u32,
+        cpu_count: crate::scheduler::percpu::online().count() as u32,
         page_size: crate::memory::PAGE_SIZE as u32,
         total_memory: total,
         free_memory: free,

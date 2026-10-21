@@ -125,7 +125,7 @@ pub fn write(level: Level, args: fmt::Arguments) {
         return;
     }
     let ns = crate::time::now_ns();
-    let cpu = crate::percpu::cpu_id_or_boot();
+    let cpu = crate::scheduler::percpu::cpu_id_or_boot();
     let tag = match level {
         Level::Debug => "debug",
         Level::Info => "info",
@@ -198,17 +198,17 @@ pub fn emergency(args: fmt::Arguments) {
 
 #[macro_export]
 macro_rules! kdebug {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Debug, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::diagnostics::log::write($crate::diagnostics::log::Level::Debug, format_args!($($arg)*)) };
 }
 #[macro_export]
 macro_rules! kinfo {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Info, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::diagnostics::log::write($crate::diagnostics::log::Level::Info, format_args!($($arg)*)) };
 }
 #[macro_export]
 macro_rules! kwarn {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Warn, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::diagnostics::log::write($crate::diagnostics::log::Level::Warn, format_args!($($arg)*)) };
 }
 #[macro_export]
 macro_rules! kerror {
-    ($($arg:tt)*) => { $crate::log::write($crate::log::Level::Error, format_args!($($arg)*)) };
+    ($($arg:tt)*) => { $crate::diagnostics::log::write($crate::diagnostics::log::Level::Error, format_args!($($arg)*)) };
 }

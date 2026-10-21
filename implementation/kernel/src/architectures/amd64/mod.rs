@@ -61,7 +61,7 @@ pub fn init_cpu(id: usize) {
     smp::init_this_cpu(id);
 }
 
-/// Sets the platform up (after `crate::acpi::init`): the interrupt
+/// Sets the platform up (after `crate::firmware::acpi::init`): the interrupt
 /// controllers, and the clock.
 pub fn init_platform() {
     acpi::init();

@@ -4,7 +4,7 @@
 //! Turning a PC off and resetting it.
 
 use super::port::{outb, outw};
-use crate::acpi::ACPI;
+use crate::firmware::acpi::ACPI;
 
 /// QEMU's `isa-debug-exit` device (automated tests): writing it ends QEMU.
 const DEBUG_EXIT_PORT: u16 = 0xF4;

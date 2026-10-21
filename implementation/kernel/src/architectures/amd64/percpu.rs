@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::cpu::{MSR_GS_BASE, MSR_KERNEL_GS_BASE, wrmsr};
 use super::gdt::{Gdt, Tss};
-use crate::percpu::MAX_CPUS;
+use crate::scheduler::percpu::MAX_CPUS;
 
 /// Offsets used by assembly.
 pub(in crate::architecture) const OFF_USER_RSP: usize = 8;
@@ -28,7 +28,7 @@ pub(in crate::architecture) struct Local {
     pub user_rsp: u64,
     /// Top of the running thread's kernel stack (loaded on `syscall` entry).
     pub kernel_rsp: u64,
-    /// The CPU's index (`crate::percpu`).
+    /// The CPU's index (`crate::scheduler::percpu`).
     pub cpu_id: u32,
     pub apic_id: u32,
     pub gdt: UnsafeCell<Gdt>,
@@ -159,7 +159,7 @@ pub(in crate::architecture) fn get(id: usize) -> &'static Local {
 
 /// The blocks of all CPUs that have come online.
 pub(in crate::architecture) fn online() -> impl Iterator<Item = &'static Local> {
-    crate::percpu::online().map(|p| get(p.cpu_id as usize))
+    crate::scheduler::percpu::online().map(|p| get(p.cpu_id as usize))
 }
 
 /// Updates the stack used on entry from user mode (syscall and interrupts).

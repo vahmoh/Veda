@@ -27,6 +27,7 @@
 //!   on it, which it alone wakes).
 //! * Every CPU has an idle thread that halts until an interrupt arrives.
 
+pub mod percpu;
 pub mod thread;
 
 use alloc::collections::{BTreeMap, VecDeque};
@@ -38,7 +39,6 @@ pub use thread::{State, Thread, WakeReason};
 use crate::architecture::trap::TrapFrame;
 use crate::architecture::{self, cpu};
 use crate::memory::aspace::Fault;
-use crate::percpu;
 use crate::synchronization::{SpinLock, bkl};
 use crate::time;
 
@@ -410,7 +410,7 @@ fn arm_timer(running: &Thread) {
     if let Some(t) = earliest_timeout() {
         deadline = deadline.min(t);
     }
-    if percpu::cpu_id_or_boot() == 0 && crate::log::serial_pending() {
+    if percpu::cpu_id_or_boot() == 0 && crate::diagnostics::log::serial_pending() {
         deadline = deadline.min(now + SERIAL_NS);
     }
     let deadline = deadline.max(now + TIMER_SOONEST_NS);
@@ -573,7 +573,7 @@ pub fn timer_interrupt() {
     expire_timeouts(now);
     boost_starved(now);
     if percpu::cpu_id_or_boot() == 0 {
-        crate::log::pump_serial();
+        crate::diagnostics::log::pump_serial();
     }
     let cs = cpu_sched();
     let Some(cur) = cs.current.clone() else { return };

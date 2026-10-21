@@ -23,7 +23,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::NO_OWNER;
-use crate::percpu::{self, MAX_CPUS};
+use crate::scheduler::percpu::{self, MAX_CPUS};
 
 /// A CPU's place in the queue, on a cache line of its own.
 #[repr(align(64))]

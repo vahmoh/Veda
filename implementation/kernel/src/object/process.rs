@@ -201,7 +201,7 @@ impl Process {
                 scheduler::State::Blocked => scheduler::wake(&t, WakeReason::Killed),
                 scheduler::State::Running => {
                     let cpu = t.sched.lock().cpu;
-                    if cpu != crate::percpu::cpu_id_or_boot() {
+                    if cpu != crate::scheduler::percpu::cpu_id_or_boot() {
                         crate::architecture::smp::reschedule(cpu);
                     }
                 }
@@ -227,10 +227,10 @@ impl Process {
         let aspace = self.aspace.lock().take();
         drop(aspace);
         let level = match code {
-            abi::EXIT_CODE_CRASHED | abi::EXIT_CODE_OUT_OF_MEMORY => crate::log::Level::Warn,
-            _ => crate::log::Level::Debug,
+            abi::EXIT_CODE_CRASHED | abi::EXIT_CODE_OUT_OF_MEMORY => crate::diagnostics::log::Level::Warn,
+            _ => crate::diagnostics::log::Level::Debug,
         };
-        crate::log::write(
+        crate::diagnostics::log::write(
             level,
             format_args!("process {} ({}) exited with code {}", self.name.as_str(), self.koid, code),
         );

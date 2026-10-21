@@ -85,16 +85,20 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 | Module | Responsibility |
 |--------|----------------|
-| `architecture` | the processor architecture and its platform, behind one interface (`src/architecture.rs`, each architecture in `src/architectures/`); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
+| `architecture` | the processor architecture and its platform, behind one interface (`src/architectures/mod.rs`, each architecture in a directory beside it); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
 | `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
-| `scheduler` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
+| `scheduler` | threads, priority round-robin scheduling, blocking with timeouts, idle loop, and what the kernel keeps for each CPU (`percpu`) |
 | `object` | handles, signals, processes, I/O ports, resources |
 | `ipc` | channels, sockets, events, ports |
 | `interrupt` | interrupt objects: devices' interrupts, and programs' own, delivered to drivers or to guests |
 | `syscall` | the system call layer (numbers and types in `implementation/libraries/abi`) |
 | `hv` | the hypervisor: guests and their virtual processors, for [the driver VM](DRIVERVM.md) |
-| `synchronization`, `random` | the big kernel lock, spinlocks and futexes; the ChaCha20 random number generator |
-| `acpi`, `time`, `percpu`, `loader`, `log`, `panic` | supporting subsystems |
+| `synchronization` | the big kernel lock, spinlocks and futexes |
+| `time` | the monotonic clock, from the processor's clock counter, and wall-clock time, from the firmware's RTC |
+| `random` | the ChaCha20 random number generator behind the `random` system call |
+| `firmware` | the firmware's ACPI tables, as far as the kernel reads them (`acpi`) |
+| `boot` | the first process, `init`, which the kernel starts from the initrd (`loader`) |
+| `diagnostics` | the kernel log, which user space reads and the serial console shows (`log`), and panics (`panic`) |
 
 - **Concurrency.** Kernel code runs with interrupts disabled under a big
   kernel lock (BKL): the kernel is effectively single-threaded while user

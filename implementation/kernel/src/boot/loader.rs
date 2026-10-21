@@ -107,7 +107,7 @@ pub fn spawn_init(boot: &BootInfo) {
         initrd_size: boot.initrd.size,
         cmdline,
         cmdline_len: boot.cmdline_len,
-        cpu_count: crate::percpu::online().count() as u32,
+        cpu_count: crate::scheduler::percpu::online().count() as u32,
         acpi_rsdp: boot.rsdp_phys,
         acpi_memory,
         acpi_memory_count: acpi_memory_count as u32,

@@ -17,7 +17,7 @@ use super::clock::{self, TscSync};
 use super::paging;
 use super::{apic, cpu, gdt, idt, percpu};
 use crate::memory::{phys, phys_to_virt};
-use crate::percpu::MAX_CPUS;
+use crate::scheduler::percpu::MAX_CPUS;
 use crate::scheduler::{self, Thread};
 use crate::synchronization::SpinLock;
 use crate::time;

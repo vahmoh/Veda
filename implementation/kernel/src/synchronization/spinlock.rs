@@ -9,7 +9,7 @@ use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::NO_OWNER;
-use crate::percpu;
+use crate::scheduler::percpu;
 
 /// A spinlock that panics on recursive acquisition by the same CPU.
 pub struct SpinLock<T: ?Sized> {

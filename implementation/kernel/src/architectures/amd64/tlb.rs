@@ -25,7 +25,7 @@
 use core::sync::atomic::Ordering;
 
 use super::{apic, cpu, idt::TLB_VECTOR, percpu};
-use crate::percpu::MAX_CPUS;
+use crate::scheduler::percpu::MAX_CPUS;
 
 /// Flushes the local TLB, or the guests' translations, if another CPU
 /// requested it.

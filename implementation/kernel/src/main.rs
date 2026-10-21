@@ -16,17 +16,16 @@
 
 extern crate alloc;
 
-mod acpi;
+#[path = "architectures/mod.rs"]
 mod architecture;
+mod boot;
+mod diagnostics;
+mod firmware;
 mod hv;
 mod interrupt;
 mod ipc;
-mod loader;
-mod log;
 mod memory;
 mod object;
-mod panic;
-mod percpu;
 mod random;
 mod scheduler;
 mod synchronization;
@@ -36,8 +35,11 @@ mod time;
 use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
+use boot::loader;
 use bootinfo::{BootInfo, MemoryKind};
-use scheduler::Thread;
+use diagnostics::{log, panic};
+use firmware::acpi;
+use scheduler::{Thread, percpu};
 use synchronization::bkl;
 
 #[global_allocator]

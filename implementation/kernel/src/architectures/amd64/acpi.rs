@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use iommu::amd64::dmar;
 
-use crate::acpi::{self, u8_at, u16_at, u32_at, u64_at};
+use crate::firmware::acpi::{self, u8_at, u16_at, u32_at, u64_at};
 use crate::synchronization::Once;
 
 #[derive(Debug, Clone, Copy)]
@@ -93,7 +93,7 @@ fn parse_madt(t: &[u8], p: &mut Platform) {
     }
 }
 
-/// Reads the machine's tables (after `crate::acpi::init`).
+/// Reads the machine's tables (after `crate::firmware::acpi::init`).
 pub fn init() {
     let mut p = Platform::default();
     for madt in acpi::find_all(b"APIC") {
