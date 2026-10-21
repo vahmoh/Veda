@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Web Audio as a WebAssembly game plays it, on the host's page
+# (`/webaudio-stream`): Emscripten's OpenAL queues short buffers on a
+# source, 100 ms ahead, every 25 ms. Ten seconds of a tone, started by a
+# click, which the machine's sound output has whole, without a gap. The
+# browser's sink places the page's samples further ahead of what is heard
+# than what it has written below it (the stream, the audio service's and
+# the card's queues): never so near that they come after it, which it
+# would say, and GStreamer would drop them.
+boot-cmdline "startup-sound=off"
+boot-cmdline "run=browser:http://{web}/webaudio-stream"
+web-server
+memory 2048
+requires web
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started browser" 60
+wait 5
+click 0.5 0.5
+wait-serial 'stream 1 "Browser" opened (44100 Hz, 2 ch)' 30
+wait 12
+shot target/veda/browser-web-audio.png
+expect-audio
+expect-audio-gapless 20
+reject-serial "sound comes late"
+reject-serial "page stopped working"
+reject-serial "browser crashed"

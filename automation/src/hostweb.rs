@@ -12,14 +12,15 @@
 //!
 //! The browser's scripts have their pages here too, its media's among
 //! them: a video (videogen's countdown, AV1 and FLAC in WebM), the same
-//! through Media Source Extensions, a sound file, and Web Audio's;
-//! their scripts say how they played. Pages that move (a box spinning, a
-//! page scrolling itself, a box crossing the page on a click) measure and
-//! check its frames, and one draws with WebGL and reads back what it drew.
-//! A page reads a file the user chooses, as before an upload, another
-//! counts its visits in IndexedDB, one takes all the memory it can, a file
-//! comes to be downloaded, and a PDF to be shown. Files are sent
-//! whole or in the byte ranges asked for, as media players ask.
+//! through Media Source Extensions, a sound file, and Web Audio's, once
+//! as a WebAssembly game plays it; their scripts say how they played.
+//! Pages that move (a box spinning, a page scrolling itself, a box
+//! crossing the page on a click) measure and check its frames, and one
+//! draws with WebGL and reads back what it drew. A page reads a file the
+//! user chooses, as before an upload, another counts its visits in
+//! IndexedDB, one takes all the memory it can, a file comes to be
+//! downloaded, and a PDF to be shown. Files are sent whole or in the byte
+//! ranges asked for, as media players ask.
 
 use std::borrow::Cow;
 use std::io::{Read, Write};
@@ -341,6 +342,60 @@ function start() {
             decoded = `nothing: ${error}`;
             show();
         });
+}
+document.addEventListener('click', start);
+document.addEventListener('keydown', start);
+</script>
+</body></html>
+"#;
+
+/// Web Audio as a WebAssembly game plays its sound (`/webaudio-stream`):
+/// Emscripten's OpenAL queues short buffers on a source and, every 25 ms,
+/// schedules as many as keep it 100 ms ahead of the context's time. On
+/// the first click or key, ten seconds of a tone of 440 Hz, its phase
+/// carried from buffer to buffer; its script says how many it queued, and
+/// how many it scheduled after their time had passed (which would leave a
+/// gap of the page's own).
+const WEB_AUDIO_STREAM: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Web Audio stream</title>
+<style>body { font-family: sans-serif; margin: 24px 40px; }</style>
+</head><body><h1>Web Audio stream</h1>
+<p id="state">Click or press a key to play.</p>
+<script>
+const state = document.getElementById('state');
+const FRAMES = 1024, LOOKAHEAD = 0.1, SECONDS = 10;
+let context = null, phase = 0, at = 0, queued = 0, late = 0;
+function buffer() {
+    const b = context.createBuffer(2, FRAMES, context.sampleRate);
+    const left = b.getChannelData(0), right = b.getChannelData(1);
+    for (let i = 0; i < FRAMES; i++) {
+        left[i] = right[i] = 0.25 * Math.sin(phase);
+        phase += 2 * Math.PI * 440 / context.sampleRate;
+    }
+    return b;
+}
+function schedule() {
+    const now = context.currentTime;
+    if (at < now) {
+        if (at > 0)
+            late++;
+        at = now + 0.01;
+    }
+    while (at < now + LOOKAHEAD && queued * FRAMES < SECONDS * context.sampleRate) {
+        const source = context.createBufferSource();
+        source.buffer = buffer();
+        source.connect(context.destination);
+        source.start(at);
+        at += FRAMES / context.sampleRate;
+        queued++;
+    }
+    state.textContent = `Web Audio ${context.state} at ${context.sampleRate} Hz: ${queued} buffers queued, ${late} late`;
+}
+function start() {
+    if (context)
+        return;
+    context = new AudioContext();
+    setInterval(schedule, 25);
 }
 document.addEventListener('click', start);
 document.addEventListener('keydown', start);
@@ -835,7 +890,8 @@ impl Drop for HostWeb {
 
 /// Answers one request: `GET /hello`, the browser's pages (`/page`,
 /// `/second`, `/zone`, `/cookie`, `/preferences`, `/scripts`, `/video`,
-/// `/audio`, `/mse`, `/webaudio`, `/upload`, `/storage`, `/hog`, `/webgl`),
+/// `/audio`, `/mse`, `/webaudio`, `/webaudio-stream`, `/upload`,
+/// `/storage`, `/hog`, `/webgl`),
 /// their media (`/media/countdown.webm`, `/media/tone.wav`), a file to
 /// download (`/files/veda-download.txt`) and a PDF (`/files/veda.pdf`), or
 /// else nothing found.
@@ -867,6 +923,7 @@ fn answer(mut stream: TcpStream) {
         b"/audio" => Some((html, AUDIO.as_bytes().into())),
         b"/mse" => Some((html, MSE.as_bytes().into())),
         b"/webaudio" => Some((html, WEB_AUDIO.as_bytes().into())),
+        b"/webaudio-stream" => Some((html, WEB_AUDIO_STREAM.as_bytes().into())),
         b"/upload" => Some((html, UPLOAD.as_bytes().into())),
         b"/storage" => Some((html, STORAGE.as_bytes().into())),
         b"/hog" => Some((html, HOG.as_bytes().into())),
@@ -958,6 +1015,7 @@ mod tests {
             ("/audio", "src=\"/media/tone.wav\""),
             ("/mse", "MediaSource.isTypeSupported"),
             ("/webaudio", "decodeAudioData"),
+            ("/webaudio-stream", "createBufferSource"),
             ("/upload", "readAsArrayBuffer"),
             ("/storage", "indexedDB.open"),
             ("/hog", "new Uint8Array(32 << 20)"),

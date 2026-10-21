@@ -36,6 +36,17 @@ void gst_init_static_plugins(void);
  * to stop. */
 #define WRITE_WAIT_MS 20
 
+/* What the audio service and the sound card hold ahead of what is heard,
+ * at most (µs): the service mixes two periods ahead, the card plays from
+ * six (twelve, once it has run short a few times). The sink's ring is
+ * this much longer than buffer-time, which is the latency its samples are
+ * placed with: a live source's samples (Web Audio's) are written into the
+ * ring that far ahead of what is heard, and must still be ahead of what
+ * the ring has written into the stream, which is as far ahead as the
+ * service and the card hold, and the stream itself. Else they come after
+ * it, and are dropped: the sound cuts out. */
+#define DEVICE_US 120000
+
 #define BROWSER_TYPE_AUDIO_SINK (browser_audio_sink_get_type())
 G_DECLARE_FINAL_TYPE(BrowserAudioSink, browser_audio_sink, BROWSER, AUDIO_SINK, GstAudioSink)
 
@@ -49,6 +60,8 @@ struct _BrowserAudioSink {
 	gboolean opened;
 	/* The format, from prepare. */
 	int rate, channels, bpf;
+	/* Whether the log said that the sound comes late (once a stream). */
+	gboolean said_late;
 	/* Bumped to end a write that waits for room (pause, stop, reset). */
 	gint interrupts;
 };
@@ -86,10 +99,11 @@ static gboolean sink_prepare(GstAudioSink *base, GstAudioRingBufferSpec *spec)
 	sink->rate = GST_AUDIO_INFO_RATE(&spec->info);
 	sink->channels = GST_AUDIO_INFO_CHANNELS(&spec->info);
 	sink->bpf = GST_AUDIO_INFO_BPF(&spec->info);
-	/* Segments of latency-time, as many as buffer-time holds. */
+	/* Segments of latency-time, as many as buffer-time and what the
+	 * service and the card hold ahead hold (DEVICE_US). */
 	guint64 frames = gst_util_uint64_scale_int(spec->latency_time, sink->rate, G_USEC_PER_SEC);
 	spec->segsize = (gint)MAX(frames, 64) * sink->bpf;
-	spec->segtotal = MAX(spec->buffer_time / MAX(spec->latency_time, 1), 2);
+	spec->segtotal = MAX((spec->buffer_time + DEVICE_US) / MAX(spec->latency_time, 1), 2);
 	return TRUE;
 }
 
@@ -100,8 +114,30 @@ static gboolean sink_unprepare(GstAudioSink *base)
 	browser_sound_close(sink->sound);
 	sink->sound = NULL;
 	sink->opened = FALSE;
+	sink->said_late = FALSE;
 	g_mutex_unlock(&sink->lock);
 	return TRUE;
+}
+
+/* Says once in the log if what the sink has written is so far ahead of
+ * what is heard that the samples it is given come after it (DEVICE_US):
+ * GStreamer drops them, and the sound cuts out. A sample is written into
+ * the ring the latency ahead of what is heard (seglatency's segments); the
+ * ring has written as far ahead as is queued below it. */
+static void check_late(BrowserAudioSink *sink)
+{
+	if (sink->said_late)
+		return;
+	GstAudioRingBufferSpec *spec = &GST_AUDIO_BASE_SINK(sink)->ringbuffer->spec;
+	guint segment = (guint)(spec->segsize / sink->bpf);
+	guint latency = (guint)spec->seglatency * segment;
+	guint queued = browser_sound_delay(sink->sound);
+	if (queued + segment <= latency)
+		return;
+	sink->said_late = TRUE;
+	g_printerr("browser: a page's sound comes late: %u ms of it are queued below the sink, which places "
+		   "samples %u ms ahead of what is heard: some are dropped\n",
+		   queued * 1000 / (guint)sink->rate, latency * 1000 / (guint)sink->rate);
 }
 
 static gint sink_write(GstAudioSink *base, gpointer data, guint length)
@@ -111,11 +147,10 @@ static gint sink_write(GstAudioSink *base, gpointer data, guint length)
 	gint interrupts = g_atomic_int_get(&sink->interrupts);
 	if (!sink->opened) {
 		/* The stream is the sink's device, whose buffer is small (about
-		 * 40 ms), as a GstAudioSink's writes wait for room in it: what
-		 * the sink renders lands ahead of what it has written, and is
-		 * heard; with a larger one, a live source's samples (Web Audio's)
-		 * would come after what it had already written, and be dropped. */
-		struct browser_sound *sound = browser_sound_open(sink->rate, sink->channels, sink->rate / 25);
+		 * 20 ms), as a GstAudioSink's writes wait for room in it: it is
+		 * part of how far the ring writes ahead of what is heard, which a
+		 * live source's samples must stay ahead of (DEVICE_US). */
+		struct browser_sound *sound = browser_sound_open(sink->rate, sink->channels, sink->rate / 50);
 		g_mutex_lock(&sink->lock);
 		sink->sound = sound;
 		sink->opened = TRUE;
@@ -131,6 +166,7 @@ static gint sink_write(GstAudioSink *base, gpointer data, guint length)
 		if (done < frames)
 			browser_sound_wait(sink->sound, (uint32_t)(frames - done), WRITE_WAIT_MS);
 	}
+	check_late(sink);
 	/* What a pause, stop or flush cut short is dropped, as the rest of the
 	 * segment is. */
 	return length;
@@ -198,6 +234,7 @@ static void browser_audio_sink_init(BrowserAudioSink *sink)
 	sink->sound = NULL;
 	sink->opened = FALSE;
 	sink->rate = sink->channels = sink->bpf = 0;
+	sink->said_late = FALSE;
 	sink->interrupts = 0;
 }
 

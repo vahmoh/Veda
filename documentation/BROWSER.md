@@ -551,6 +551,18 @@ and plays it.
   spare) the sound goes unheard at its pace, and the pictures still play
   at theirs. GStreamer sets the volume, and converts and resamples to what
   the stream takes.
+* **Live sound** (Web Audio's) is written into the sink's ring as far
+  ahead of what is heard as the sink's latency, its ring's length, and is
+  dropped if the ring has already written further than that into the
+  stream, where it is as far ahead as the stream, the audio service's
+  queue and the card's hold (some 90 ms; up to 160 ms once the card has
+  run short a few times). So the ring is that much (120 ms) longer than
+  the 100 ms WebKit asks for, and the stream holds about 20 ms: Web Audio
+  is heard some 230 ms after it is rendered, and none of it is dropped.
+  The ring was WebKit's 100 ms, the stream 40: as much was queued below
+  the sink as it placed samples ahead, and a game's sound cut out whenever
+  the card queued more. The sink says so in the log if it ever happens
+  (`a page's sound comes late`).
 * **Pictures** are converted to BGRx for WebKit's video sink, without
   GStreamer's OpenGL: painted on the CPU, Skia draws the current one into
   the page as WebKit paints it; composited on the GPU, the compositor
@@ -770,6 +782,7 @@ ports of WebKit give the network process a sandbox extension:
 | `verification/c/posix.c` | The POSIX layer's `timerfd`, memory files (their memory as a handle for a Veda service, with the descriptor's rights), suspending threads, the system image's files mapped in place and time zones, among the rest; and `<veda/sandbox.h>`: a child confines itself as a web process does (places to read and to change, one service, no processes or new executable memory), is refused all it gave up, keeps the rest (code written into memory made executable before runs), and starts a child that is confined alike; and loans: a place lent to a confined child, which reads it and what is inside it, changes none of it, finds nothing beside it, and takes the loan once, with its own secret and for its own place, as a sandboxed program lends nothing and nothing holding the home folder is lent; and taken back: the place gone from a confined child that took it, but for the file it has open there, a loan taken back before it is taken taking nothing; and `<veda/memory.h>`'s memory classes: a process moves only towards the most expendable, as its child moves itself, and a child that ended by itself was not ended for memory |
 | `vfs-core`'s unit tests (`cargo test -p vfs-core`) | What a confined connection's view reaches: its places, the way to them, what listings show, confining again only narrower, a place borrowed reaching nothing less and taken back reaching nothing more, each loan's place its own, confining again keeping what was borrowed; and loans: taken once, for their place, lapsing, a few for each lender, taken back by their lender alone, and ending with their lender's connection |
 | `verification/ui/browser-media.vts` | Media on the host's video page (`/video`): a click plays the countdown (videogen's, AV1 and FLAC in WebM) with its sound, which the audio service plays through a stream of the page's to the end, never short; the machine's sound output has its beeps |
+| `verification/ui/browser-web-audio.vts` | Web Audio as a WebAssembly game plays it (`/webaudio-stream`: short buffers queued 100 ms ahead every 25 ms, as Emscripten's OpenAL does): ten seconds of a tone the machine's sound output has without a gap, the sink never saying the page's sound comes late |
 | `verification/agent/app-browser-media.vts` | The media pages' own checks, which the agent reads: Web Audio (`/webaudio`: an oscillator its analyser hears, a sound file decoded and played), a sound file in an `<audio>` element (`/audio`), the countdown played to its end with every picture shown and its first colours right, drawn into a canvas (`/video`), and the same through Media Source Extensions (`/mse`) |
 | `verification/agent/app-browser-webgl.vts` | WebGL's page's own checks, which the agent reads (`/webgl`), on the GPU (QEMU's, through virgl): WebGL 1's quarters drawn with a shader, read back in their colours, antialiased, WebGL 2's texture drawn through a framebuffer (`texelFetch`), and its multisampled framebuffer with depth and stencil, resolved, each read back, buffers given no data drawing zeros (a new one, and one given storage anew after its data was drawn), and a sky drawn with a shader of noise and loops moving every frame, on the screen too |
 | `automation`'s unit tests (`cargo test -p automation hostweb`) | The host's test pages, their media sent whole or in the byte ranges asked for, the file to download, and the PDF, whose table says where each of its objects is |
