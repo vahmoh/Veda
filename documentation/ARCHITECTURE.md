@@ -606,7 +606,7 @@ they share.
 
 | Component | What it is |
 |-----------|------------|
-| `splash` (`splash`) | the startup splash's picture (a dark gradient and the Veda ring), which the compositor draws as the system starts, by the processor and the GPU alike |
+| `welcome` (`splash`) | the startup splash's picture (a dark gradient and the Veda ring), which the compositor draws as the system starts, by the processor and the GPU alike |
 | `desktop` (`shell`) | the desktop shell: the system service `shell` |
 | `lock` (`lock`), `lock/core` (`lock-core`) | the lock screen: the system service `lock`, and what it decides, tested on the host |
 | `common` (`shell-common`) | what the desktop and the lock screen share: the wallpaper and its blurred copy, and OS1's ring and coil |
@@ -1063,7 +1063,7 @@ Libraries are crates named after their directory
 | `implementation/libraries/web` | URLs, and HTTP/1.1 and WebSocket clients over TCP or TLS |
 | `implementation/libraries/wlan` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point) |
 | `implementation/services/`, `implementation/drivers/`, `implementation/applications/` | system services, drivers and applications (the applications with their manifests, `<name>.app`, and what they share in `common`) |
-| `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`splash`), the desktop shell (`desktop`), the lock screen (`lock`) and what they share (`common`) |
+| `implementation/shell/` | the shell ([The shell](#the-shell)): the splash's picture (`welcome`), the desktop shell (`desktop`), the lock screen (`lock`) and what they share (`common`) |
 | `implementation/guests/linux/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer, `logkeeper` (the system's log on the live system's stick), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`) |
 | `implementation/ports/` | third-party software built from source, most of it with a small patch of Veda's (see its `README.md`): the C toolchain (GCC, binutils, GMP, MPFR, MPC, musl), Rust for Veda's target, FFmpeg and dav1d, the driver VM's Linux (with zlib and elfutils for its build), its own toolchain (the same GCC, binutils and musl, unpatched) and Mesa, the crates Veda changes (smoltcp, zune-jpeg, libc, getrandom, rustix, errno, socket2, mio, tokio), the web engine (WPE WebKit, the libraries it stands on, and the tools their builds run, built by `wpewebkit/build.sh`), and the fonts and certificate authorities, unmodified |
 | `implementation/generation/` | host programs that make the system image's media at build time: wallpapers and sample pictures, music and the startup sound, sample videos |

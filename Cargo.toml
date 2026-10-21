@@ -77,7 +77,7 @@ members = [
     "implementation/shell/desktop",
     "implementation/shell/lock",
     "implementation/shell/lock/core",
-    "implementation/shell/splash",
+    "implementation/shell/welcome",
     "implementation/services/audio",
     "implementation/generation/assets",
     "implementation/generation/common",
@@ -152,7 +152,7 @@ wlan = { path = "implementation/libraries/wlan" }
 web = { path = "implementation/libraries/web" }
 acpi = { path = "implementation/libraries/acpi" }
 gpio = { path = "implementation/libraries/gpio" }
-splash = { path = "implementation/shell/splash" }
+splash = { path = "implementation/shell/welcome" }
 glsl = { path = "implementation/libraries/glsl" }
 gl = { path = "implementation/libraries/gl" }
 egl = { path = "implementation/libraries/egl" }

@@ -28,7 +28,7 @@ The animations are Veda's own, not look-alikes:
   the screen's resolution, as it is all soft light, and only while it is
   in view.
 * **The ring and its light** are the boot splash and the startup sequence
-  (`implementation/shell/splash`,
+  (`implementation/shell/welcome`,
   `implementation/services/compositor/src/startup.rs`): the same
   proportions, the same falloff of the light, its breath every 2.6 seconds
   and its glint going round every 2 seconds, drawn in CSS so that they are
