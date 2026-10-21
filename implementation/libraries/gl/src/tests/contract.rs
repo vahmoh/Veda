@@ -126,6 +126,43 @@ fn what_resources_held_does_not_show_in_new_ones() {
     }
 }
 
+/// A buffer specified anew in the storage it has (`respecify_buffer`)
+/// reads as a new one would, zeros, never what it held, which a copy
+/// queued before it still reads; and holds what is written next, where the
+/// caller writes it whole.
+#[test]
+fn buffers_specified_anew_read_as_new_ones() {
+    let desc = |width| ResourceDesc {
+        target: Target::Buffer,
+        format: Format::R8Uint,
+        width,
+        height: 1,
+        depth: 1,
+        levels: 1,
+        samples: 0,
+    };
+    let (held, written) = (vec![0xA5u8; 4096], vec![0x3Cu8; 4096]);
+    for (name, mut b, _) in backends() {
+        let buffer = b.create_resource(&desc(4096)).unwrap();
+        let copy = b.create_resource(&desc(4096)).unwrap();
+        b.write(buffer, 0, Region::bytes(0, 4096), &held, 4096, 4096);
+        b.copy_buffer(buffer, 0, copy, 0, 4096);
+        // The software renderer has the front end make a new resource.
+        let kept = b.respecify_buffer(buffer, 3000, false);
+        assert_eq!(kept, name != "soft", "{name}: the buffer kept its storage");
+        if kept {
+            let bytes = read_all(&mut *b, buffer, &desc(3000));
+            assert!(bytes.iter().all(|&x| x == 0), "{name}: specified anew, reads {:?}", &bytes[..16]);
+            assert!(read_all(&mut *b, copy, &desc(4096)) == held, "{name}: the copy did not read what it held");
+            assert!(b.respecify_buffer(buffer, 4096, true), "{name}: the buffer did not keep its storage");
+            b.write(buffer, 0, Region::bytes(0, 4096), &written, 4096, 4096);
+            assert!(read_all(&mut *b, buffer, &desc(4096)) == written, "{name}: it does not hold what was written");
+        }
+        b.destroy_resource(buffer);
+        b.destroy_resource(copy);
+    }
+}
+
 /// A program linked by `glsl` (vertex attribute `pos` at location 0).
 pub fn linked(vs: &str, fs: &str) -> std::sync::Arc<glsl::program::Program> {
     let options = glsl::Options::default();

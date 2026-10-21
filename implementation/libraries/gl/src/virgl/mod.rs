@@ -1220,6 +1220,38 @@ impl Backend for VirglBackend {
         self.destroy(id);
     }
 
+    /// The buffer keeps its storage, zeroed in the command stream: the host
+    /// carries commands out in order, so the draws queued before still read
+    /// what it held. A new resource for every `glBufferData` (a renderer's
+    /// streamed vertices, specified anew for each draw: librw's) would take
+    /// a call to the renderer to make it and another to destroy the old one,
+    /// hundreds of times a frame, where the pool can reuse only buffers whose
+    /// fence has passed.
+    fn respecify_buffer(&mut self, id: ResourceId, size: usize, written: bool) -> bool {
+        let Some(r) = self.resources.get_mut(&id) else { return false };
+        // Storage that holds it, but not twice as much (as the pool takes).
+        let capacity = r.capacity as usize;
+        if r.desc.target != Target::Buffer || size == 0 || size > capacity || capacity > 2 * size.max(32) {
+            return false;
+        }
+        if let Some(s) = r.shadow.as_mut() {
+            // No memory for its copy: a new resource, then (which may have
+            // none either, and fail as glBufferData does).
+            if s.data.try_reserve_exact(size.saturating_sub(s.data.len())).is_err() {
+                return false;
+            }
+            s.data.clear();
+            s.data.resize(size, 0);
+            s.valid = true;
+            s.ranges.clear();
+        }
+        r.desc.width = size as u32;
+        if !written {
+            self.unqueried(|b| b.zero_buffer(id, size));
+        }
+        true
+    }
+
     fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, ImportError> {
         // A renderbuffer is drawn into (and read: copies, blits from it), a
         // texture sampled alone; a display shows what is drawn.

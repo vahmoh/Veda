@@ -78,6 +78,53 @@ fn re_specified_buffers_reuse_their_resources() {
 }
 
 #[test]
+fn buffers_specified_anew_for_each_draw_keep_their_storage() {
+    let (mut c, host) = fake_context(4, 4);
+    triangle(&mut c);
+    // As librw streams vertices: for each draw, the buffer specified anew,
+    // empty and large, and the draw's vertices written at its start; with
+    // no flush between, no buffer's fence passes for the pool to reuse it.
+    const SIZE: usize = 280_000;
+    let vertices: Vec<u8> = [-1.0f32, -1.0, 0.0, 1.0, 3.0, -1.0, 0.0, 1.0, -1.0, 3.0, 0.0, 1.0]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    let draw = |c: &mut Context| {
+        c.buffer_data_size(gl::ARRAY_BUFFER, SIZE, gl::STREAM_DRAW);
+        c.buffer_sub_data(gl::ARRAY_BUFFER, 0, &vertices);
+        c.draw_arrays(gl::TRIANGLES, 0, 3);
+    };
+    // Its storage made, and what the first draws make, once.
+    draw(&mut c);
+    draw(&mut c);
+    let (creates, destroys) = (host.borrow().creates, host.borrow().destroys);
+    for _ in 0..100 {
+        draw(&mut c);
+    }
+    c.flush();
+    // The buffer kept its storage: no resource was made or destroyed (each
+    // a call to the renderer), and it holds the vertices, zeros after them.
+    assert_eq!((host.borrow().creates, host.borrow().destroys), (creates, destroys));
+    let got = c.map_buffer_range(gl::ARRAY_BUFFER, 0, SIZE, gl::MAP_READ_BIT).unwrap().to_vec();
+    assert_eq!(got[..vertices.len()], vertices[..]);
+    assert!(got[vertices.len()..].iter().all(|&x| x == 0));
+    c.unmap_buffer(gl::ARRAY_BUFFER);
+    // Specified with data, it keeps it too, the data whole.
+    let data: Vec<u8> = (0..SIZE).map(|i| (i % 251) as u8).collect();
+    c.buffer_data(gl::ARRAY_BUFFER, &data, gl::STREAM_DRAW);
+    assert_eq!((host.borrow().creates, host.borrow().destroys), (creates, destroys));
+    let got = c.map_buffer_range(gl::ARRAY_BUFFER, 0, SIZE, gl::MAP_READ_BIT).unwrap().to_vec();
+    assert!(got == data);
+    c.unmap_buffer(gl::ARRAY_BUFFER);
+    // Far smaller, it takes storage of its size (a buffer the pool kept).
+    c.buffer_data(gl::ARRAY_BUFFER, &vertices, gl::STREAM_DRAW);
+    let got = c.map_buffer_range(gl::ARRAY_BUFFER, 0, vertices.len(), gl::MAP_READ_BIT).unwrap().to_vec();
+    assert_eq!(got, vertices);
+    c.unmap_buffer(gl::ARRAY_BUFFER);
+    no_error(&mut c);
+}
+
+#[test]
 fn destroying_resources_waits_for_the_next_submission() {
     let (mut c, host) = fake_context(4, 4);
     triangle(&mut c);

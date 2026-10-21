@@ -94,7 +94,9 @@ impl Context {
     /// The value of a state variable, or `None` (and `INVALID_ENUM`).
     fn state_value(&mut self, pname: u32) -> Option<Value> {
         let s = &self.local.state;
-        let caps = self.backend.caps().clone();
+        // Borrowed: a copy would allocate (the renderer's name and formats)
+        // on every call, and `egl` asks for a binding around every draw.
+        let caps = self.backend.caps();
         let limits = self.shading.limits;
         let name_of =
             |k: Option<super::Key>, store: &super::Store<super::Buffer>| i64::from(k.map_or(0, |k| store.name(k)));

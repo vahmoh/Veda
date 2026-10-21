@@ -687,6 +687,16 @@ pub trait Backend: Send {
     /// before: never another context's (or application's) old data.
     fn create_resource(&mut self, desc: &ResourceDesc) -> Result<ResourceId, OutOfMemory>;
     fn destroy_resource(&mut self, id: ResourceId);
+    /// Makes buffer `id` `size` bytes of zeros, as a new one would be, for
+    /// what is drawn from now on (`glBufferData` on a buffer that has
+    /// storage): what was drawn before reads what it held. With `written`,
+    /// the caller writes all of it next, and its bytes need not be zeroed
+    /// first. `false` if this renderer cannot (it does not, or the buffer's
+    /// storage is too small), and the caller makes a new resource instead.
+    fn respecify_buffer(&mut self, id: ResourceId, size: usize, written: bool) -> bool {
+        let _ = (id, size, written);
+        false
+    }
     /// A resource `desc` whose storage is `memory`, in its pixels' order: a
     /// renderbuffer of 8-bit RGB or RGBA, single sampled, which the GPU
     /// renders into (and reads from), or a 2D texture of one level of them,

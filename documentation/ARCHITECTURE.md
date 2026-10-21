@@ -741,7 +741,7 @@ cannot (`NoGpu`: no service, its limits reached, no answer).
   that share objects are one `Context` with a `Local` of each one's own
   state (bindings, current program, vertex arrays, framebuffers), swapped
   in as each draws. Below it, a `Backend` with Gallium's shape renders, and
-  a new resource always reads as zero.
+  a new resource always reads as zero, as does a buffer specified anew.
 - **C.** `egl` (`implementation/libraries/egl`) gives C code linked into
   a program EGL 1.5 and OpenGL ES 3.0's C functions over `gl`: one
   surfaceless display, contexts that draw into framebuffer objects or
@@ -756,7 +756,11 @@ cannot (`NoGpu`: no service, its limits reached, no answer).
 - **The GPU renderer** (`gl::virgl`) speaks virglrenderer's protocol: it
   caches state objects, sends only what changed, moves data through a
   shared staging buffer and reuses released buffers once the GPU has
-  passed their fence. Before it reads an image back (a frame it presents,
+  passed their fence. A buffer specified anew (`glBufferData`) keeps its
+  storage where it fits, zeroed or written in the command stream, which
+  the host carries out in order, so the draws before it read what it held:
+  making a resource and destroying one each take a call to the renderer.
+  Before it reads an image back (a frame it presents,
   pixels a program reads) it waits on its own fence, so that the renderer
   serves its other clients meanwhile. Renderbuffers have 4 samples in the
   formats the host multisamples, and `GL_MAX_SAMPLES` is 4 only where

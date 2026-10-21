@@ -216,6 +216,17 @@ impl Context {
         if size > MAX_BUFFER_SIZE {
             return self.err(gl::OUT_OF_MEMORY);
         }
+        // The storage it has, made `size` bytes of zeros, where the renderer
+        // can: draws queued before still read what it held.
+        if let Some(r) = self.buffers.get(key).resource
+            && self.backend.respecify_buffer(r, size, data.is_some())
+        {
+            if let Some(d) = data {
+                self.backend.write(r, 0, Region::bytes(0, size), d, size, size);
+            }
+            *self.buffers.get_mut(key) = Buffer { resource: Some(r), size, usage, map: None };
+            return;
+        }
         let resource = if size == 0 {
             None
         } else {
