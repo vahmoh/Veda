@@ -3,10 +3,10 @@
 
 //! `shell-common` — what the shell's programs share.
 //!
-//! The desktop shell (`implementation/shell/desktop`) and the lock screen
-//! (`implementation/shell/lock`) are separate processes, trusted by the
-//! window system for different things, but they show the same picture
-//! and the same figure:
+//! The desktop shell (`implementation/shell/components/desktop`) and the
+//! lock screen (`implementation/shell/components/lock`) are separate
+//! processes, trusted by the window system for different things, but they
+//! show the same picture and the same figure:
 //!
 //! * [`wallpaper`]: the wallpaper the user chose, at the screen's size, and
 //!   its heavily blurred copy; the procedural one when there is none; a

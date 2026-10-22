@@ -24,8 +24,8 @@ files = { workspace = true }
 ui = { workspace = true }
 net = { workspace = true }
 audio = { workspace = true }
-apps-common = { path = "../../applications/common" }
-shell-common = { path = "../common" }
+apps-common = { path = "../../../applications/common" }
+shell-common = { path = "../../libraries" }
 
 [lints]
 workspace = true

@@ -28,14 +28,14 @@ The animations are Veda's own, not look-alikes:
   the screen's resolution, as it is all soft light, and only while it is
   in view.
 * **The ring and its light** are the boot splash and the startup sequence
-  (`implementation/shell/welcome`,
+  (`implementation/shell/components/welcome`,
   `implementation/services/compositor/src/startup.rs`): the same
   proportions, the same falloff of the light, its breath every 2.6 seconds
   and its glint going round every 2 seconds, drawn in CSS so that they are
   there before any script runs. On scroll, the ring flies into the logo in
   the header.
 * **The agent's figure** in the demo and in "Add a key. Watch it wake." is a
-  port of `implementation/shell/common/src/presence.rs` and the desktop's
+  port of `implementation/shell/libraries/src/presence.rs` and the desktop's
   `agent.rs`: OS1's ring from *Her*, breathing while it listens, trembling
   and glowing while it speaks, a light running round it while it thinks,
   and the film's coil (a ribbon wound three times around a spinning loop)

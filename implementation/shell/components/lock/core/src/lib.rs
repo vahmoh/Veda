@@ -16,9 +16,9 @@
 //!   as functions of time.
 //! * [`layout`]: where everything goes on a screen of any size.
 //!
-//! The lock service (`implementation/shell/lock`) keeps the records in its
-//! private directory, hashes on a thread of its own and draws what these
-//! say.
+//! The lock service (`implementation/shell/components/lock`) keeps the
+//! records in its private directory, hashes on a thread of its own and
+//! draws what these say.
 
 #![no_std]
 

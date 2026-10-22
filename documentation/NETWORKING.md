@@ -34,7 +34,7 @@ this repository.
 | `implementation/libraries/tls` | `tls`: the TLS 1.3 and 1.2 client |
 | `implementation/libraries/web` | `web`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
 | `implementation/libraries/posix/src/inet.rs` | The POSIX layer's sockets, `netd`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
-| `implementation/shell/desktop/src/firewall.rs` | The firewall's question, as the desktop shows it |
+| `implementation/shell/components/desktop/src/firewall.rs` | The firewall's question, as the desktop shows it |
 | `implementation/libraries/entropy`, `implementation/kernel/src/random` | The kernel's random number generator |
 | `verification/nettest` | In-system network checks |
 

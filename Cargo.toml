@@ -73,11 +73,11 @@ members = [
     "implementation/applications/browser",
     "implementation/applications/browser/core",
     "implementation/applications/paint/core",
-    "implementation/shell/common",
-    "implementation/shell/desktop",
-    "implementation/shell/lock",
-    "implementation/shell/lock/core",
-    "implementation/shell/welcome",
+    "implementation/shell/components/desktop",
+    "implementation/shell/components/lock",
+    "implementation/shell/components/lock/core",
+    "implementation/shell/components/welcome",
+    "implementation/shell/libraries",
     "implementation/services/audio",
     "implementation/generation/assets",
     "implementation/generation/common",
@@ -152,7 +152,7 @@ wlan = { path = "implementation/libraries/wlan" }
 web = { path = "implementation/libraries/web" }
 acpi = { path = "implementation/libraries/acpi" }
 gpio = { path = "implementation/libraries/gpio" }
-splash = { path = "implementation/shell/welcome" }
+splash = { path = "implementation/shell/components/welcome" }
 glsl = { path = "implementation/libraries/glsl" }
 gl = { path = "implementation/libraries/gl" }
 egl = { path = "implementation/libraries/egl" }
@@ -173,9 +173,9 @@ aes-kw = { version = "0.3", default-features = false }
 p256 = { version = "0.14", default-features = false, features = ["arithmetic", "hash2curve"] }
 subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.9", default-features = false }
-# The lock screen's password (implementation/shell/lock/core): Argon2id,
-# the memory-hard hash OWASP recommends for passwords, in the PHC string
-# format, which records its salt and parameters (same RustCrypto
+# The lock screen's password (implementation/shell/components/lock/core):
+# Argon2id, the memory-hard hash OWASP recommends for passwords, in the PHC
+# string format, which records its salt and parameters (same RustCrypto
 # generation as above).
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash", "zeroize"] }
 # The kernel's random number generator (implementation/libraries/entropy):

@@ -23,7 +23,7 @@ ui = { workspace = true }
 splash = { workspace = true }
 zeroize = { workspace = true, features = ["alloc"] }
 lock-core = { path = "core" }
-shell-common = { path = "../common" }
+shell-common = { path = "../../libraries" }
 
 [lints]
 workspace = true

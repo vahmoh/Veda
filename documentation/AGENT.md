@@ -128,12 +128,12 @@ needs it is held, and runs only after you click Allow.
   init attaches to every connection (system service names cannot be taken
   by other programs).
 * **Requests** appear in the agent's window
-  (`implementation/shell/desktop/src/agent.rs`), or as notifications
-  while it is closed, show what will happen and on what, and expire after
-  three minutes. *Always allow* is offered for sensitive actions only, and
-  Settings can take it back. Stored permissions are checked when read back:
-  only a sensitive action of the agent's own functions, or of an
-  application's description, stays allowed.
+  (`implementation/shell/components/desktop/src/agent.rs`), or as
+  notifications while it is closed, show what will happen and on what, and
+  expire after three minutes. *Always allow* is offered for sensitive
+  actions only, and Settings can take it back. Stored permissions are
+  checked when read back: only a sensitive action of the agent's own
+  functions, or of an application's description, stays allowed.
 * **The agent cannot touch the firewall** at all: Settings offers it no
   action for it, the network service takes its settings from Settings
   alone, and only the desktop shell, whose buttons the agent cannot press,

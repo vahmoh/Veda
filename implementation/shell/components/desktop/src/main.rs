@@ -18,7 +18,8 @@
 //! * the **firewall**'s questions: whether an application may accept
 //!   connections from other machines ([`firewall`]);
 //! * **locking the screen** (the start menu's lock), which the window
-//!   system does and the lock screen undoes (`implementation/shell/lock`);
+//!   system does and the lock screen undoes
+//!   (`implementation/shell/components/lock`);
 //! * **restarting and shutting down** once the applications have closed
 //!   ([`power`]).
 //!
