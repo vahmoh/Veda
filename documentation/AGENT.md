@@ -47,7 +47,7 @@ I/O is in `agent-core` (`core/`), tested on the host.
 ### Waking by name
 
 With "Answer when someone says its name" on
-(`implementation/services/agent/src/listen.rs`), a voice detector
+(`implementation/services/agent/source/listen.rs`), a voice detector
 (`audio::vad`) runs on the computer, and nothing is sent anywhere while
 nobody speaks. Speech streams to Deepgram's Nova-3 recogniser, with the
 agent's name as a key term, until 3 s of quiet, 8 s without a word, or a
@@ -128,7 +128,7 @@ needs it is held, and runs only after you click Allow.
   init attaches to every connection (system service names cannot be taken
   by other programs).
 * **Requests** appear in the agent's window
-  (`implementation/shell/components/desktop/src/agent.rs`), or as
+  (`implementation/shell/components/desktop/source/agent.rs`), or as
   notifications while it is closed, show what will happen and on what, and
   expire after three minutes. *Always allow* is offered for sensitive
   actions only, and Settings can take it back. Stored permissions are
@@ -154,9 +154,9 @@ needs it is held, and runs only after you click Allow.
   another notice) started cannot set timers, so a reminder cannot keep
   waking the agent.
 * **Not while the screen is locked.** The agent watches the lock
-  (`display::watch_lock`, `implementation/services/agent/src/lock.rs`): as
-  the screen locks, a conversation ends and the agent stops listening for
-  its name, so that nobody at a locked computer can ask it for what the
+  (`display::watch_lock`, `implementation/services/agent/source/lock.rs`):
+  as the screen locks, a conversation ends and the agent stops listening
+  for its name, so that nobody at a locked computer can ask it for what the
   lock keeps from them. It takes the screen for locked until the window
   system says otherwise, as it starts and while the window system is away.
   A reminder that comes due meanwhile is told once the screen is unlocked.
@@ -259,7 +259,7 @@ impl ui::App for Notes {
 ```
 
 The built-in applications follow these conventions
-(`implementation/applications/editor/src/agent.rs` is a compact example):
+(`implementation/applications/editor/source/agent.rs` is a compact example):
 
 * **Actions**: snake_case verbs, with short imperative descriptions for a
   language model that give units, formats and defaults; `choice` for
@@ -301,12 +301,12 @@ Any program may register, so the agent bounds what one says about itself
 | `verification/agent/` | The agent in Veda, with a stand-in for Deepgram: offline, free, deterministic | `cargo automation test --ui` |
 | `verification/real/agent-*.vts` | The agent with the real Deepgram, which bills them | By hand |
 
-The stand-in, `automation/src/agentsim.rs`, speaks the Voice Agent and
+The stand-in, `automation/source/agentsim.rs`, speaks the Voice Agent and
 streaming recognition protocols: it answers `Settings`, records what the
 agent sends, and sends function calls, voice and interruptions. Scripts
 drive it with `agent-*` commands, and the agent's microphone (`testmic`)
 with `mic-*` commands and `say` (Deepgram's text to speech, on the host),
-all listed in `automation/src/script.rs`. Scripts with `mic-echo` (the
+all listed in `automation/source/script.rs`. Scripts with `mic-echo` (the
 machine's output fed back into the microphone) run alone, after the others.
 
 The real tests type the key from `$DEEPGRAM_API_KEY` into Settings with

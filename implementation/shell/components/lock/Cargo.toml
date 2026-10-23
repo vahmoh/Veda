@@ -10,6 +10,7 @@ license.workspace = true
 
 [[bin]]
 name = "lock"
+path = "source/main.rs"
 test = false
 bench = false
 

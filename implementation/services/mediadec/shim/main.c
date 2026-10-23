@@ -23,12 +23,12 @@
 
 #include "vmd_internal.h"
 
-/* The Rust half's view of these (src/ffi.rs) must match. */
-_Static_assert(sizeof(struct vmd_io) == 32, "struct vmd_io changed: update src/ffi.rs");
-_Static_assert(sizeof(struct vmd_info) == 584, "struct vmd_info changed: update src/ffi.rs");
-_Static_assert(sizeof(struct vmd_stream) == 384, "struct vmd_stream changed: update src/ffi.rs");
-_Static_assert(sizeof(struct vmd_packet_info) == 40, "struct vmd_packet_info changed: update src/ffi.rs");
-_Static_assert(sizeof(struct vmd_frame_info) == 48, "struct vmd_frame_info changed: update src/ffi.rs");
+/* The Rust half's view of these (source/ffi.rs) must match. */
+_Static_assert(sizeof(struct vmd_io) == 32, "struct vmd_io changed: update source/ffi.rs");
+_Static_assert(sizeof(struct vmd_info) == 584, "struct vmd_info changed: update source/ffi.rs");
+_Static_assert(sizeof(struct vmd_stream) == 384, "struct vmd_stream changed: update source/ffi.rs");
+_Static_assert(sizeof(struct vmd_packet_info) == 40, "struct vmd_packet_info changed: update source/ffi.rs");
+_Static_assert(sizeof(struct vmd_frame_info) == 48, "struct vmd_frame_info changed: update source/ffi.rs");
 
 /* Messages FFmpeg may log before only one in LOG_EVERY more gets through. */
 #define LOG_FREELY 200

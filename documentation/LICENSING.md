@@ -70,5 +70,5 @@ An image build fails where it would leave a part's texts out: a port a
 build adds without its texts in the `LICENCE_FILES` of its script, a
 firmware file without the licence it comes under, a crate whose package
 has no licence file and is not among those whose terms
-`automation/src/notices.rs` says where to find (`UNPACKAGED`), or a part
+`automation/source/notices.rs` says where to find (`UNPACKAGED`), or a part
 that `notices.rs` does not describe for About Veda (`PARTS`).

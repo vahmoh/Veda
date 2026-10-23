@@ -75,17 +75,17 @@ memory and their devices.
 
 | Piece | Where | What it does |
 |-------|-------|--------------|
-| Hypervisor | `implementation/kernel/src/hv`, `implementation/kernel/src/architectures/amd64/hv` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC |
-| IOMMU | `implementation/kernel/src/architectures/amd64/iommu` | Intel VT-d: DMA and interrupt remapping |
+| Hypervisor | `implementation/kernel/source/hv`, `implementation/kernel/source/architectures/amd64/hv` | `Guest` and `Vcpu` objects; on AMD64, VMX with EPT and the virtual x2APIC |
+| IOMMU | `implementation/kernel/source/architectures/amd64/iommu` | Intel VT-d: DMA and interrupt remapping |
 | `hv` | `implementation/libraries/hv` | The platform's and the bridge's ABIs, the guest's ACPI tables, a given function's configuration space; on AMD64 the virtual local APIC, `cpuid` and Linux's boot protocol |
 | `iommu` | `implementation/libraries/iommu` | The DMAR table; the units' registers and structures |
 | Device manager | `implementation/services/devmgr` | Picks the driver VM's devices, serves their `pcidev` channels, resets them, restarts the driver VM |
 | Monitor | `implementation/services/drivervm` | The machine, its hypercalls and PCI functions, the bridge, the narrowed registry |
 | `drivervm-core` | `implementation/services/drivervm/core` | The monitor's decisions that touch no object: the bridge's books, the guest's budget and window, where functions and BARs go, the keyboard controller's commands |
 | Guest kernel | `implementation/ports/linux` | Linux with `veda.patch` (`hvc_veda.c`, `drivers/virt/veda/bridge.c` and `efi.c`, `gpio-veda.c`, an i915 change) and `architectures/amd64/veda.patch` (`arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`) |
-| Guest runtime | `implementation/libraries/rt/src/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
+| Guest runtime | `implementation/libraries/rt/source/guest.rs` | `rt`'s system calls through `/dev/veda`; watches |
 | Guest programs | `implementation/guests/linux` | `init`; the drivers `input`, `alsa`, `net`, `wifi`, `kms` and `renderer`; `logkeeper`; the tests `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `timertest`, `kmspause`; shared code (`sys`, `netlink`) |
-| Build | `automation/src/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo automation linux`](#building) |
+| Build | `automation/source/linux.rs`, `implementation/ports/linux/build.sh` | [`cargo automation linux`](#building) |
 
 ## The platform
 
@@ -116,7 +116,7 @@ root, its functions and their INTx routing (`_PRT`), the keyboard
 controller and the platform's GPIO controllers; there is no MADT.
 
 On AMD64 the monitor boots Linux through the x86 boot protocol's 64-bit
-entry (`implementation/services/drivervm/src/architectures/amd64/boot.rs`).
+entry (`implementation/services/drivervm/source/architectures/amd64/boot.rs`).
 The memory map leaves out the first 64 KiB (the processors' start-up GDT
 and page tables) and the legacy hole, where the ACPI tables are, from
 0xE0000 as on a PC.
@@ -144,7 +144,7 @@ time in every 100 ms, so a guest that keeps its processors busy runs at
 
 ## The hypervisor
 
-On AMD64 (`implementation/kernel/src/architectures/amd64/hv`), `vcpu_run`
+On AMD64 (`implementation/kernel/source/architectures/amd64/hv`), `vcpu_run`
 enters the guest on the calling thread with the BKL released; host
 interrupts and the scheduler preempt it as they do user code, and `hlt`
 blocks it until an interrupt or the guest's timer. While the guest runs,
@@ -159,7 +159,7 @@ shoots the translations down on every CPU before the pages are reused.
 ## Devices
 
 Every PCI function goes to the driver VM except those Veda keeps
-(`veda_keeps` in `implementation/services/devmgr/src/main.rs`): storage
+(`veda_keeps` in `implementation/services/devmgr/source/main.rs`): storage
 controllers, functions Veda has drivers of its own for, and the
 platform's own (bridges, system peripherals, the SMBus, the firmware's
 flash controller). A laptop's I2C and SPI controllers, with its touchpad
@@ -412,7 +412,7 @@ eight latest starts.
 
 The guest's kernel lets a file use only the handles it made or received,
 and closes them when the file closes. The guest's registry
-(`implementation/services/drivervm/src/registry.rs`) lets it connect only
+(`implementation/services/drivervm/source/registry.rs`) lets it connect only
 to `audiodev`, `displaydev`, `netdev`, `wlanphy` and `input`, and
 register only `gpu`, through 32 channels at most (one per program).
 
@@ -558,7 +558,7 @@ Its options are on the kernel command line:
 | `drivervm.cmdline=...` | Added to Linux's command line, commas for spaces; `veda.kill=NAME:SECONDS` ends a guest program by SIGKILL, and `veda.stop=NAME:SECONDS` ends a driver for good (`init` does not start it again) |
 | `drivervm.renderer=softpipe` | The renderer renders on softpipe, without a GPU |
 
-Scripts (`automation/src/script.rs`) can add a firmware variable to
+Scripts (`automation/source/script.rs`) can add a firmware variable to
 OVMF's store (`firmware-variable`) or an ACPI table (`acpi-table`), a USB
 network adapter (`usb net`), USB keyboards, mice and a tablet in place of
 PS/2 and the virtio tablet (`input usb`), and virtio-gpu (`gpu on`),

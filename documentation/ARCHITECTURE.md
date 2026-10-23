@@ -59,7 +59,8 @@ who may call what, and links to each subsystem's own document.
 | `agent` | the voice agent | yes |
 | `shell` | the desktop shell | yes |
 
-**The startup sequence** (`implementation/services/compositor/src/startup.rs`).
+**The startup sequence**
+(`implementation/services/compositor/source/startup.rs`).
 The screen stays black until the screen the desktop will be on is ready:
 the driver VM's display driver has shown its first picture, or `devmgr`
 says no driver is coming (`displaydev::expect`). The splash
@@ -85,7 +86,7 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 | Module | Responsibility |
 |--------|----------------|
-| `architecture` | the processor architecture and its platform, behind one interface (`src/architectures/mod.rs`, each architecture in a directory beside it); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
+| `architecture` | the processor architecture and its platform, behind one interface (`source/architectures/mod.rs`, each architecture in a directory beside it); on AMD64 the GDT, TSS, IDT and entry paths, APICs, timers, SMP bring-up, TLB shootdowns, page tables, the context switch, VMX and EPT, and the IOMMU (VT-d) |
 | `memory` | frame allocator, page tables, kernel heap, kernel stacks and MMIO windows, VMOs, address spaces, user copies |
 | `scheduler` | threads, priority round-robin scheduling, blocking with timeouts, idle loop, and what the kernel keeps for each CPU (`percpu`) |
 | `object` | handles, signals, processes, I/O ports, resources |
@@ -228,7 +229,7 @@ logs (see [the driver VM](DRIVERVM.md)).
 
 Every program, and the kernel, is a static ELF64 executable for the System
 V ABI; only the loader is PE/COFF, the format UEFI starts. Programs are of
-two kinds (see [Rust on Veda](RUST.md)); `automation/src/components.rs`
+two kinds (see [Rust on Veda](RUST.md)); `automation/source/components.rs`
 says which each is:
 
 | Kind | Programs | Built |
@@ -1007,7 +1008,7 @@ the actions every `ui` application offers over the `agentapp` protocol
   UDP, TCP, HTTP, HTTPS and ping, against a server on the host in the
   network cards' scripts (`nettest local`).
 - **GUI scripts** (`verification/ui/*.vts`, in the language of
-  `automation/src/script.rs`) drive QEMU through QMP (mouse, keyboard,
+  `automation/source/script.rs`) drive QEMU through QMP (mouse, keyboard,
   waits on log lines, screenshots) and fail on panics. All are checked
   before the system is built, once, and each boots an overlay of the disk
   image within a deadline. QEMU's machine has an IOMMU, so the driver VM
@@ -1022,7 +1023,7 @@ the actions every `ui` application offers over the `agentapp` protocol
 
 Veda runs on AMD64 (x86-64). What depends on the architecture or its
 platform is in each component's `architectures/<architecture>/` directory (a
-crate's in its `src/`), reached through its `architecture` module
+crate's in its `source/`), reached through its `architecture` module
 ([Coding conventions](CODING.md) has the rules). On AMD64:
 
 | Component | What is AMD64's (`architectures/amd64/`) |

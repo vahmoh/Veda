@@ -255,7 +255,7 @@
 + * munmap.
 + *
 + * These are the definitions of Veda's own
-+ * implementation/libraries/hv/src/bridge.rs.
++ * implementation/libraries/hv/source/bridge.rs.
 + */
 +#ifndef _UAPI_LINUX_VEDA_H
 +#define _UAPI_LINUX_VEDA_H
@@ -540,7 +540,7 @@
 +#include <asm/veda_para.h>
 +#include <uapi/linux/veda.h>
 +
-+/* Operations (implementation/libraries/hv/src/bridge.rs: op): the
++/* Operations (implementation/libraries/hv/source/bridge.rs: op): the
 + * ioctls' numbers, and the driver's own. */
 +#define OP_SETUP	1
 +#define OP_WAIT		6
@@ -558,7 +558,7 @@
 +#define MAX_COPY	(64 * 1024)
 +
 +/* The notification ring: one page
-+ * (implementation/libraries/hv/src/bridge.rs: ring). */
++ * (implementation/libraries/hv/source/bridge.rs: ring). */
 +#define RING_HEAD	0
 +#define RING_TAIL	64
 +#define RING_ENTRIES	128

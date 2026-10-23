@@ -7,7 +7,7 @@
  * does (JavaScriptCore's). Threads are named by their ids (gettid()).
  *
  * The POSIX layer makes the kernel's calls (thread_suspend, thread_resume,
- * thread_read_state: implementation/libraries/posix/src/thread.rs). Each
+ * thread_read_state: implementation/libraries/posix/source/thread.rs). Each
  * function returns 0 when it succeeds, or an errno value.
  */
 

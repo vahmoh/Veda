@@ -8,6 +8,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+path = "source/lib.rs"
+
 [dependencies]
 chacha20 = { workspace = true }
 blake2 = { workspace = true }

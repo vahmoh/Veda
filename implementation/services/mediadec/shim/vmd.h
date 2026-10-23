@@ -5,10 +5,10 @@
  * vmd.h - mediadec's shim: the only code of Veda's that calls FFmpeg.
  *
  * mediadec is a Rust program in C's world (a static ELF program on musl):
- * its Rust half (../src) speaks the media protocol, fills the shared frame
- * pool and sound ring and schedules the work; this shim opens, demuxes,
- * decodes (AV1 through dav1d), converts and fingerprints with FFmpeg,
- * behind plain integers and opaque objects. No floating-point value
+ * its Rust half (../source) speaks the media protocol, fills the shared
+ * frame pool and sound ring and schedules the work; this shim opens,
+ * demuxes, decodes (AV1 through dav1d), converts and fingerprints with
+ * FFmpeg, behind plain integers and opaque objects. No floating-point value
  * crosses it: the Rust half is built for the architecture's bare target
  * (<architecture>-unknown-none), which may pass them otherwise than GCC
  * (`cargo automation` refuses `float` and `double` here).

@@ -68,7 +68,7 @@ reports as a crash.
 > once (about half an hour).
 
 `cargo automation build` builds every program that
-`automation/src/components.rs` lists as `Program::std` (those on `rt`
+`automation/source/components.rs` lists as `Program::std` (those on `rt`
 alone are `Program::native`) in `target/std`, with the toolchain's Rust
 and the C toolchain's driver, after bringing the C library's POSIX layer
 up to date. It empties `target/std` when the toolchain's Rust is built

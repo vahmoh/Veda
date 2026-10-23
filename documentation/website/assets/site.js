@@ -4,11 +4,11 @@
  * vedaos.org: the page's motion, in Veda's own visual language:
  *
  * - the hero's sky is the Aurora wallpaper
- *   (implementation/generation/assets/src/wallpapers.rs) brought to life
+ *   (implementation/generation/assets/source/wallpapers.rs) brought to life
  *   in a WebGL shader; the ring's light is CSS;
  * - the agent's figure (OS1's ring and the coil from "Her") is a port of
- *   implementation/applications/shell/src/presence.rs and the states of
- *   implementation/applications/shell/src/agent.rs;
+ *   implementation/shell/libraries/source/presence.rs and the states of
+ *   implementation/shell/components/desktop/source/agent.rs;
  * - everything else is scroll-driven, and runs only while on screen.
  *
  * No dependencies. Respects prefers-reduced-motion. */
@@ -62,7 +62,7 @@
   addEventListener('resize', request);
 
   // ---- the agent's figure -----------------------------------------------
-  // As implementation/applications/shell/src/presence.rs draws it.
+  // As implementation/shell/libraries/source/presence.rs draws it.
   const RING_WIDTH = 0.25;
   const tremble = (a, r, amount, t) => {
     if (amount <= 0) return 0;
@@ -211,7 +211,7 @@
     draw(runPts, runLevel);
   };
   // How fast the coil spins, and how much more it turns as it becomes the
-  // ring (implementation/applications/shell/src/agent.rs).
+  // ring (implementation/shell/components/desktop/source/agent.rs).
   const SPIN = 2.1, SPIN_EXTRA = 9;
   /** The figure for `f` = {state, v, voice, mic} around (cx, cy), a ring
    * of radius `base`; `v` below 1 is the coil turning into the ring. */

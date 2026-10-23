@@ -8,6 +8,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+path = "source/lib.rs"
+
 [features]
 # Encoding to PNG, JPEG, QOI and BMP, without std: for programs that save
 # pictures in Veda (Paint) and for the tools that make them on the build

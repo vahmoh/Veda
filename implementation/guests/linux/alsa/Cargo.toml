@@ -10,7 +10,7 @@ license.workspace = true
 
 [[bin]]
 name = "alsa"
-path = "src/main.rs"
+path = "source/main.rs"
 bench = false
 
 [dependencies]

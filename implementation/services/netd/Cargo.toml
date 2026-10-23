@@ -10,6 +10,7 @@ license.workspace = true
 
 [[bin]]
 name = "netd"
+path = "source/main.rs"
 test = false
 bench = false
 

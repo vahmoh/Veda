@@ -80,7 +80,7 @@ void engine_fullscreen_requested(struct view *view, gboolean fullscreen);
 /* A page copied `text`. */
 void engine_copied(const char *text);
 
-/* --- the browser's (src/subsurfaces.rs): pages' subsurfaces ------------ */
+/* --- the browser's (source/subsurfaces.rs): pages' subsurfaces --------- */
 
 /* The engine's thread calls these, on a connection of its own to the
  * window system; a thread of the browser's hears that frames are shown
@@ -105,7 +105,7 @@ void browser_subsurface_detach(uint32_t subsurface, uint32_t name);
  * with the window, as the browser closes). */
 int64_t browser_subsurface_present(uint32_t subsurface, uint32_t name, const int *damage, unsigned n);
 
-/* --- the browser's (src/sound.rs): its streams of the audio service ---- */
+/* --- the browser's (source/sound.rs): its streams of the audio service - */
 
 /* What media.c's sink plays through, any thread at a time. */
 struct browser_sound;

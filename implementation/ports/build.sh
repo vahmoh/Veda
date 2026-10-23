@@ -5,7 +5,7 @@
 # Builds Veda's toolchain from the ports in this directory: C (GCC,
 # binutils and musl), the media libraries and Rust.
 # `cargo automation toolchain` runs it after downloading and verifying the
-# sources; see automation/src/toolchain.rs, documentation/C.md and
+# sources; see automation/source/toolchain.rs, documentation/C.md and
 # documentation/RUST.md.
 #
 # Environment:

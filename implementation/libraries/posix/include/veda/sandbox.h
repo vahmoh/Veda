@@ -10,9 +10,9 @@
  *
  * The POSIX layer confines its connection to the VFS (vfs::confine) and
  * its registry channel (registry::confine), and makes the kernel's call
- * (process_restrict): implementation/libraries/posix/src/sandbox.rs. Each
- * function returns 0 when it succeeds, or an errno value. What the process
- * holds already (open files, sockets, connections) stays.
+ * (process_restrict): implementation/libraries/posix/source/sandbox.rs.
+ * Each function returns 0 when it succeeds, or an errno value. What the
+ * process holds already (open files, sockets, connections) stays.
  *
  * A sandboxed process can be lent a place to read by one that is not
  * sandboxed (veda_lend_files, veda_borrow_files; vfs::lend, vfs::borrow),

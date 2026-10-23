@@ -333,7 +333,7 @@ crates.io's checksum. The workspace depends on its version, directly
 crate, and Cargo builds the port instead:
 
 1. Every `cargo automation` command first prepares the crates
-   (`automation/src/crates.rs`): it downloads and checks a changed
+   (`automation/source/crates.rs`): it downloads and checks a changed
    port's release, and `crates.sh` unpacks and patches it in
    `implementation/ports/.crates/src/<crate>`, which Git ignores.
 2. It writes `implementation/ports/.crates/config.toml`, a

@@ -7,7 +7,7 @@
 # (implementation/applications/browser), which `cargo automation` links;
 # and the tools for this machine that their builds run. `cargo automation
 # web` runs it after downloading and verifying the sources; see
-# automation/src/web.rs and documentation/BROWSER.md.
+# automation/source/web.rs and documentation/BROWSER.md.
 #
 # Environment:
 #   VEDA_PORTS       implementation/ports

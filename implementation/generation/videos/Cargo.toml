@@ -9,6 +9,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[[bin]]
+name = "videogen"
+path = "source/main.rs"
+
 [dependencies]
 # What the generators share (a host library of implementation/generation/).
 gencommon = { path = "../common" }

@@ -13,13 +13,13 @@
  * audio sink, chooses.
  *
  * The sink is a GstAudioSink: its thread writes the segments of its ring
- * buffer as they come, each into the audio service's stream (src/sound.rs,
- * opened as the first is written), which is its device, waiting while that
- * is full; the clock is the samples heard, which the service tells.
- * Pausing, stopping and flushing (a seek) end a write that waits, and pause
- * or empty the stream. Without a stream (no audio service, or no more
- * streams), the sound goes unheard at its pace, so that the pictures still
- * play at theirs.
+ * buffer as they come, each into the audio service's stream
+ * (source/sound.rs, opened as the first is written), which is its device,
+ * waiting while that is full; the clock is the samples heard, which the
+ * service tells. Pausing, stopping and flushing (a seek) end a write that
+ * waits, and pause or empty the stream. Without a stream (no audio service,
+ * or no more streams), the sound goes unheard at its pace, so that the
+ * pictures still play at theirs.
  */
 
 #include <gst/audio/audio.h>

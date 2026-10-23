@@ -3,7 +3,7 @@
 
 # Fake videos
 
-Videos for `fakedec`, the stand-in decoder (see `../src/clip.rs` for the
+Videos for `fakedec`, the stand-in decoder (see `../source/clip.rs` for the
 format), installed at `/system/tests/videos/fake` for the GUI scripts
 (`verification/ui/videos-fake.vts`):
 

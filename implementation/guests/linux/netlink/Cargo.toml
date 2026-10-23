@@ -9,6 +9,7 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
+path = "source/lib.rs"
 bench = false
 
 [dependencies]

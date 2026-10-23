@@ -6,7 +6,7 @@
 # release and applies its patches, as Cargo then builds it in place of the
 # release. `cargo automation` runs it, once it has downloaded and verified
 # the releases, whenever one of these ports has changed; see
-# automation/src/crates.rs and "Crates" in README.md.
+# automation/source/crates.rs and "Crates" in README.md.
 #
 # Arguments: the crates (the names of their ports).
 #

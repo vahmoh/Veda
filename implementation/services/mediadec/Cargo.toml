@@ -10,8 +10,9 @@ license.workspace = true
 
 # Built for the architecture's bare target as a static library and linked
 # with the C shim (shim/) and FFmpeg by Veda's GCC:
-# automation/src/toolchain.rs.
+# automation/source/toolchain.rs.
 [lib]
+path = "source/lib.rs"
 bench = false
 
 [dependencies]

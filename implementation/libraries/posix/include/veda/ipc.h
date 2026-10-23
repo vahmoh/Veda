@@ -7,9 +7,10 @@
  * registry, waiting, memory objects and events.
  *
  * They are the kernel's calls (but for the registry's), made by the POSIX
- * layer (implementation/libraries/posix/src/native.rs). Every call returns
- * 0, or a count, when it succeeds, and a negative Veda error number when it
- * fails. Handles are the kernel's; file descriptors know nothing of them.
+ * layer (implementation/libraries/posix/source/native.rs). Every call
+ * returns 0, or a count, when it succeeds, and a negative Veda error number
+ * when it fails. Handles are the kernel's; file descriptors know nothing of
+ * them.
  *
  * Messages in Veda's protocols start with a 12-byte header (the method's
  * number, a transaction number, VEDA_MSG_REQUEST or VEDA_MSG_RESPONSE),

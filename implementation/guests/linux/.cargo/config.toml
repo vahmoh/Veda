@@ -13,7 +13,7 @@
 # checkout's configuration leaves out of Veda's programs; of two
 # `link-self-contained` the last counts). And they are built with `--cfg
 # veda_guest`: their Veda runtime then makes its system calls through the
-# bridge (see implementation/libraries/rt/src/guest.rs).
+# bridge (see implementation/libraries/rt/source/guest.rs).
 [build]
 target-dir = "../../../target/guest"
 

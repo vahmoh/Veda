@@ -10,6 +10,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[[bin]]
+name = "automation"
+path = "source/main.rs"
+
 [dependencies]
 initrd = { workspace = true, features = ["std"] }
 elf = { workspace = true }

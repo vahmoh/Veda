@@ -137,10 +137,10 @@ A change is finished when it is tested where it could break:
 - **Break things on purpose.** Crashes, restarts and pulled cables have
   scripts, so that recovery is tested like any other feature.
 - **A new crate with host tests** goes in `HOST_TESTED`
-  (`automation/src/runner.rs`); a test fails until it is there.
+  (`automation/source/runner.rs`); a test fails until it is there.
 
 [Scripts and tests](documentation/DEVELOPING.md#scripts-and-tests) covers
-the scripts, whose language `automation/src/script.rs` documents.
+the scripts, whose language `automation/source/script.rs` documents.
 
 ## Documentation
 

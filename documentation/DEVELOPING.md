@@ -97,7 +97,7 @@ million pixels the rate drops (56 Hz at 3840x2160).
 ## The live system
 
 `cargo automation iso` writes a hybrid ISO image
-(`automation/src/image/iso9660.rs`) that boots with UEFI from a disc,
+(`automation/source/image/iso9660.rs`) that boots with UEFI from a disc,
 or from a stick written by Rufus (in ISO mode) or as it is. It boots with
 `live` on the kernel command line (no disk driver; `/home` in memory), at
 1920x1080 or the screen's largest mode below it, and with no time zone, as
@@ -125,7 +125,7 @@ run by hand, use the real Internet and Deepgram, with the key in
 `DEEPGRAM_API_KEY` ([The agent](AGENT.md#testing)).
 
 A script (`.vts`) drives QEMU and checks the log and the screen, as its
-opening comment says. `automation/src/script.rs` documents the
+opening comment says. `automation/source/script.rs` documents the
 language, such as how a `wait-serial` matches lines after a `checkpoint`
 and how `shot` waits (three seconds at most) for the screen to settle.
 Scripts are checked whole before anything is built: a wrong line fails
@@ -136,7 +136,7 @@ the run, with its number.
   firmware printed and where each processor is. QEMU's loader blanks, at
   every reset, the page from which OVMF before edk2's e4f99a8554 reads a
   processor count and a memory map (`blank_at_reset`,
-  `automation/src/architectures/amd64/qemu.rs`).
+  `automation/source/architectures/amd64/qemu.rs`).
 * **Outputs.** `shot`, `script` and `test` save the serial console (the
   kernel's log and every program's `println!`) to
   `target/veda/serial.log`, and headless runs' sound to
@@ -149,12 +149,12 @@ the run, with its number.
 * **Deadlines.** A script of `test --ui` is killed, with its QEMU, past
   four times its last run (at least five minutes).
 * **The network.** The network cards' scripts check it against a server on
-  the host (`nettest local`, `automation/src/hostweb.rs`), without the
+  the host (`nettest local`, `automation/source/hostweb.rs`), without the
   Internet.
 * **The browser.** Its scripts say `requires web`, and are skipped where
   the web engine is not built. `web-server` serves the host's test pages
   (`/page`, `/second`, `/zone`, `/cookie`, `/scripts`, in
-  `automation/src/hostweb.rs`)
+  `automation/source/hostweb.rs`)
   at `{web}`, which the command line, typed text and the agent's calls
   name.
 
@@ -189,7 +189,7 @@ without access to it they are skipped.
 
 Interceptor's game tests save pictures and sounds to the directory
 `INTERCEPTOR_SHOTS` or another variable of
-`implementation/applications/interceptor/game/src/tests/` names.
+`implementation/applications/interceptor/game/source/tests/` names.
 
 ## Reading the logs
 
@@ -213,8 +213,8 @@ driver VM; its log comes in Veda's (`drivervm: linux:`).
 Linux's first commit kept the firmware's setup if it logs
 `keeping the firmware's pipe bpp 24` and no
 `PPS 0 turn panel power off`. The startup's look is in
-`implementation/services/compositor/src/startup.rs`, its sound in
-`implementation/generation/music/src/songs/startup.rs`.
+`implementation/services/compositor/source/startup.rs`, its sound in
+`implementation/generation/music/source/songs/startup.rs`.
 
 | `dmesg` | Shows |
 |---------|-------|
@@ -274,9 +274,9 @@ from this machine.
 
 | Source | Installed as |
 |--------|--------------|
-| The programs in `PROGRAMS` (`automation/src/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
+| The programs in `PROGRAMS` (`automation/source/components.rs`), without the symbols that `target/x86_64-unknown-linux-musl/` (on `rt` alone) and `target/std/x86_64-unknown-veda/` (on the standard library) keep | `/system/bin/<name>` |
 | `LICENSE` (the GPL, version 3) | `/system/LICENSE.txt` |
-| The licence texts of what the image has of others' (as each part's release has them: the toolchain's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/src/notices.rs`) | `/system/licences/` |
+| The licence texts of what the image has of others' (as each part's release has them: the toolchain's, the driver VM's and the web engine's `licences` stages, the firmware lists' licences, the crates' packages), each port's `SOURCE`, and `README`, the list of the parts that About Veda shows (`automation/source/notices.rs`) | `/system/licences/` |
 | The fonts and their licence, `implementation/ports/fonts/` | `/system/fonts/` |
 | The manifests, `implementation/applications/<name>/<name>.app` | `/system/apps/<name>.app` |
 | What the generators' manifests list | `/system/<same relative path>` |
@@ -299,9 +299,17 @@ libraries ([Rust on Veda](RUST.md)).
 
 1. Create a crate in `implementation/applications/<name>`, and add it to
    the workspace's `members` in `Cargo.toml` and to `PROGRAMS` in
-   `automation/src/components.rs`, as `Program::std("<name>")`.
+   `automation/source/components.rs`, as `Program::std("<name>")`.
 2. Its `Cargo.toml` depends on `rt`, `abi`, `ui` and others as needed.
-3. Write `src/main.rs`:
+   Its program is in `source/`, where Cargo does not look unless told:
+
+   ```toml
+   [[bin]]
+   name = "<name>"
+   path = "source/main.rs"
+   ```
+
+3. Write `source/main.rs`:
 
    ```rust
    struct MyApp { /* state */ }
@@ -375,7 +383,7 @@ libraries ([Rust on Veda](RUST.md)).
   `std::thread` (which sets its priority with `rt::thread::set_priority`)
   through a `std::sync::mpsc` channel, and have it signal an `Event` the
   window waits on (`App::wait_handles`), as
-  `implementation/applications/paint/src/files.rs` does.
+  `implementation/applications/paint/source/files.rs` does.
 * **Files.** Small ones of the application's own (settings, state) go
   through `std::fs` and `apps_common::store` (reads within a limit,
   replacement in one step). Pictures, music and other large ones go
@@ -398,10 +406,11 @@ libraries ([Rust on Veda](RUST.md)).
 Services and drivers that the standard library stands on, that drive
 hardware or that must answer in time are `no_std` programs on `rt`
 (`Program::native`). Their `Cargo.toml` has `build` as a build
-dependency, `build.rs` is `fn main() { build::user_program(); }`, and
-`src/main.rs` starts with `#![no_std]`, `#![no_main]`,
-`extern crate alloc;` and `rt::entry!(main);` (a `main` returning `()`,
-an `i32` or a `Result`). They log with `rt::println!`.
+dependency and a `[[bin]]` whose `path` is `source/main.rs`, `build.rs`
+is `fn main() { build::user_program(); }`, and `source/main.rs` starts with
+`#![no_std]`, `#![no_main]`, `extern crate alloc;` and `rt::entry!(main);`
+(a `main` returning `()`, an `i32` or a `Result`). They log with
+`rt::println!`.
 
 ### Programs in C and on Rust's standard library
 
@@ -429,11 +438,11 @@ with its decoder (a heartbeat, a frame pool, a sound ring).
 The decoder, `implementation/services/mediadec`, is a C program: its Rust
 half, built for the bare target (`x86_64-unknown-none` on AMD64), is
 linked with its C shim, FFmpeg and dav1d by the cross compiler
-(`mediadec()` in `automation/src/toolchain.rs`), once `toolchain` has
+(`mediadec()` in `automation/source/toolchain.rs`), once `toolchain` has
 built the media libraries (`doctor` says whether it has). Scripts that
 need it say `requires media`. Without it, `verification/fakedec` stands
 in: `videos --decoder /system/bin/fakedec FILE` plays a text file of
-`/system/tests/videos/fake` (`verification/fakedec/src/clip.rs`) as a
+`/system/tests/videos/fake` (`verification/fakedec/source/clip.rs`) as a
 timecode and a tone, crashing, hanging or falling behind when the clip
 asks (`verification/ui/videos-fake.vts`).
 

@@ -9,5 +9,8 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+path = "source/lib.rs"
+
 [lints]
 workspace = true

@@ -48,11 +48,14 @@ dependencies to its errors, tests and licence headers.
 * **The standard library, or `rt` alone.** Applications, and services
   that gain from the standard library's threads, channels, files and
   errors or from crates that need it, are programs on the standard library
-  (`Program::std` in `automation/src/components.rs`). What the standard
+  (`Program::std` in `automation/source/components.rs`). What the standard
   library stands on or runs before (`init`, the file system, the network
   stack), what drives hardware (the device manager, drivers, the driver
   VM) and what must answer in time (the window system, the sound mixer)
   stays on `rt` alone (`Program::native`; see [Rust on Veda](RUST.md)).
+* **`source/`.** Every crate keeps its code in `source/`, where Cargo would
+  look in `src/`, so its `Cargo.toml` names it: `path = "source/lib.rs"` in
+  `[lib]`, or `path = "source/main.rs"` in its `[[bin]]`.
 
 ## Architectures
 
@@ -62,9 +65,9 @@ another architecture can be added without touching code that is not its
 own.
 
 * **Its own directory.** A crate keeps such code in
-  `src/architectures/<architecture>/`
-  (`implementation/kernel/src/architectures/amd64`,
-  `automation/src/architectures/amd64` and others). Nothing outside
+  `source/architectures/<architecture>/`
+  (`implementation/kernel/source/architectures/amd64`,
+  `automation/source/architectures/amd64` and others). Nothing outside
   those directories names an architecture's instructions, registers,
   system call numbers or calling conventions, or its platform's devices (a
   PC's interrupt controllers, timers, keyboard controller and IOMMU);
@@ -73,11 +76,11 @@ own.
 * **One module, `architecture`.** The rest of the crate reaches that code
   only through `architecture`, whose items every architecture provides
   with the same names and meanings. The kernel's
-  (`implementation/kernel/src/architectures/mod.rs`) and `automation`'s
-  (`automation/src/architecture.rs`) document their interface in a table.
+  (`implementation/kernel/source/architectures/mod.rs`) and `automation`'s
+  (`automation/source/architecture.rs`) document their interface in a table.
   Its vocabulary is architecture-neutral: the clock's counter, not the
   TSC; a thread's TLS pointer, not its FS base. Code in
-  `src/architectures/<architecture>/` may use the rest of its crate.
+  `source/architectures/<architecture>/` may use the rest of its crate.
 * **Chosen by what the code does:**
   * Code that runs on the architecture (the loader, the kernel, the
     runtime, services, tests) takes the module of its compile target:
@@ -92,7 +95,7 @@ own.
     the build machine, but their architecture is the one Veda is built for
     (a build script's `TARGET`, `automation`'s `architecture`), never the
     one they run on.
-* **Outside `src/`,** what tools read from places of their own is in each
+* **Outside `source/`,** what tools read from places of their own is in each
   place's `architectures/<architecture>/`, where the tool allows it:
 
 | What | Where, for AMD64 |
@@ -106,7 +109,7 @@ own.
 
 ## Targets
 
-On AMD64 (`automation/src/architectures/amd64` names them for the build):
+On AMD64 (`automation/source/architectures/amd64` names them for the build):
 
 | Component | Target | Notes |
 |-----------|--------|-------|
@@ -209,6 +212,6 @@ SPDX tags in the file's comment syntax:
   videos, test vectors, JSON, `documentation/website/CNAME`), as do
   `Cargo.lock`, which Cargo writes, licence texts, and the ports' patches,
   which change other projects' files.
-* **A test** of `automation`'s (`automation/src/licence.rs`), run by
+* **A test** of `automation`'s (`automation/source/licence.rs`), run by
   `cargo automation test`, checks every file of the repository, and
   every new one Git does not ignore.

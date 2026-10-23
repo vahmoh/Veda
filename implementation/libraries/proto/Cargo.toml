@@ -8,6 +8,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+path = "source/lib.rs"
+
 [dependencies]
 ipc = { workspace = true }
 rt = { workspace = true, default-features = false }

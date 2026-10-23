@@ -29,13 +29,13 @@ this repository.
 | `implementation/services/netd` | `netd`, the network service (`net` and `netdev` protocols), and the firewall's settings store (`store.rs`) |
 | `implementation/libraries/netstack` | `netstack`: interfaces, IPv4 and IPv6, DHCP, SLAAC, routing between interfaces, a caching DNS resolver, sockets on smoltcp, the firewall (`firewall.rs`) |
 | `implementation/ports/smoltcp` | [smoltcp](https://github.com/smoltcp-rs/smoltcp)'s release and Veda's patch (`implementation/ports/README.md` explains each change) |
-| `implementation/libraries/proto/src/{net,wlan,netring}.rs` | The service protocols and frame rings |
+| `implementation/libraries/proto/source/{net,wlan,netring}.rs` | The service protocols and frame rings |
 | `implementation/libraries/net` | `net`: blocking, `std::net`-like `TcpStream`, `TcpListener` and `UdpSocket`, name resolution, ping, `net::wifi` |
 | `implementation/libraries/tls` | `tls`: the TLS 1.3 and 1.2 client |
 | `implementation/libraries/web` | `web`: URLs, the HTTP/1.1 client (redirects followed) and the WebSocket client, over TCP or TLS |
-| `implementation/libraries/posix/src/inet.rs` | The POSIX layer's sockets, `netd`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
-| `implementation/shell/components/desktop/src/firewall.rs` | The firewall's question, as the desktop shows it |
-| `implementation/libraries/entropy`, `implementation/kernel/src/random` | The kernel's random number generator |
+| `implementation/libraries/posix/source/inet.rs` | The POSIX layer's sockets, `netd`'s too, for C programs and programs on Rust's standard library (see [C on Veda](C.md)) |
+| `implementation/shell/components/desktop/source/firewall.rs` | The firewall's question, as the desktop shows it |
+| `implementation/libraries/entropy`, `implementation/kernel/source/random` | The kernel's random number generator |
 | `verification/nettest` | In-system network checks |
 
 Frames travel through shared-memory rings (`proto::netring`), a

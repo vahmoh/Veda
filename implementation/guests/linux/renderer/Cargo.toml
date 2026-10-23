@@ -14,7 +14,7 @@ license.workspace = true
 # implementation/ports/mesa).
 [lib]
 name = "renderer"
-path = "src/lib.rs"
+path = "source/lib.rs"
 crate-type = ["staticlib"]
 test = false
 bench = false

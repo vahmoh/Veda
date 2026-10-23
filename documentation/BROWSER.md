@@ -115,7 +115,7 @@ automation doctor` says whether it is built.
 | Path | What it is |
 |------|------------|
 | `implementation/applications/browser/core` | `browser-core`, `no_std` and tested on the host: what the address bar's text means, search, history, bookmarks, the session, settings, downloads' names, tabs' order, and the keys pages get |
-| `implementation/applications/browser/src` | The program: the window (tabs, toolbar, page, dialogs, the browser's own pages), its files, the agent's actions, the engine's interface (`engine.rs`), and pages' sound (`sound.rs`) |
+| `implementation/applications/browser/source` | The program: the window (tabs, toolbar, page, dialogs, the browser's own pages), its files, the agent's actions, the engine's interface (`engine.rs`), and pages' sound (`sound.rs`) |
 | `implementation/applications/browser/engine` | The engine's C bridge: `engine.c` runs WebKit's API on a thread of its own; `platform.c` is WebKit's platform on Veda; `media.c` registers GStreamer's plugins and the sink that plays pages' sound |
 | `implementation/libraries/egl` | `egl`: EGL and OpenGL ES's C functions over Veda's OpenGL ES, for WebKit's compositor |
 | `implementation/ports/wpewebkit` | WebKit's release, Veda's patch, and `build.sh`, which builds the engine |
@@ -154,7 +154,7 @@ process keeps its descriptor on the buffer), with the rectangles that
 changed. The bridge attaches each buffer to the page's subsurface once,
 as the memory behind the file (`veda_memory_file`), and presents it with
 what did change, which it finds by comparing it with the frame shown
-within what WebKit says changed (`src/subsurfaces.rs`): the window system
+within what WebKit says changed (`source/subsurfaces.rs`): the window system
 shows the page from WebKit's memory, and gives back the buffer it showed
 before, which WebKit may draw into again (or, where the window system's
 GPU samples the buffer in place and a frame of its may still be reading
@@ -541,7 +541,7 @@ and plays it.
 * **Sound** goes to Veda's audio service. The sink (`vedaaudiosink`, a
   `GstAudioSink`, whose rank makes it the one `autoaudiosink`, WebKit's,
   chooses) writes 16-bit samples, mono or stereo, into a stream of the
-  service (`src/sound.rs`): one for each media element or Web Audio
+  service (`source/sound.rs`): one for each media element or Web Audio
   context that plays, opened as its first sound comes and closed as it
   stops (the service logs `stream N "Browser" opened` and `closed`), on
   one connection of the web process's, as the service keeps up to 16
@@ -773,7 +773,7 @@ ports of WebKit give the network process a sandbox extension:
 | `ui`'s and `gfx`'s unit tests | The place of a subsurface in a window's frames (`Ui::subsurface`): each buffer erased again only where something was drawn over the subsurface when it was drawn last, what was drawn over it its overlays, frames drawing nothing over it costing nothing, another place, surface or a cleared frame erased whole, and a second subsurface in a frame erased and overlaid whole, the first kept; an erased area transparent and unnoted; what of a rectangle lies outside others (where the GPU draws a window's own pixels), each pixel once; what drawing touches of an area, by each kind of drawing; frames compared outside an area or within it alone; and a wait woken only by the signals it waited for |
 | `verification/ui/browser-frames.vts` | The browser's frames, each page a subsurface of the window, on the host's page of a box crossing it (`/motion`): the page's frames reach the screen; the link under the pointer, the find bar and the page's menu (over the box as it passes) come and go over the page while it moves, and once it has stopped the window shows what WebKit draws of it afresh (zoomed in and back), pixel for pixel; the link's label at the page's foot (translucent) shows over the page, and is the same over the page drawn afresh under it; painted on the CPU, then composited on the GPU, where WebKit reads back only what changed (QEMU's GPU cannot render into the page's memory, which the page's process says) |
 | `verification/ui/browser-compose.vts` | The same, the screen composed by a GPU (Veda's renderer on softpipe in the driver VM), as on a PC: the compositor samples the page's subsurface in place, nothing copied, and blends the window's label over it |
-| `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/src/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
+| `verification/ui/browser.vts` | The browser as a person uses it, on the host's test pages (`automation/source/hostweb.rs`): clicking, Tab and Enter follow a link, Alt+Left goes back, a new tab, typing an address, finding text, closing a tab, the world's scripts and emoji; and the test page's web process sandboxed: it found the user's files, a socket and a process of its own refused, and the VFS refused it `/home`; and the network process sandboxed: the VFS refused it a file of the user's beside its places, and init the VFS's service |
 | `verification/ui/browser-memory.vts` | The browser on a machine of 1 GiB with a GPU: it paints pages on the CPU, as compositing them would take more memory than the machine can spare, and shows a page with no process running out of memory |
 | `verification/ui/browser-out-of-memory.vts` | A page that takes all the memory it can (`/hog`), as a game that loads more than the machine has: the kernel ends its web process, the first to go, and no other process; the tab says the page used too much memory, not that it crashed, and the browser shows the next page asked for |
 | `verification/ui/browser-gpu-gone.vts` | The GPU gone while the browser composites on it (the driver VM's renderer, on softpipe, ended for good: `veda.stop`): a tab opened then has its web process given no context, `egl` refusing one in software and saying why, and its page painted on the CPU, the same, pixel for pixel, as it was composited |

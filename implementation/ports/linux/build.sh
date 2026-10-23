@@ -4,7 +4,7 @@
 
 # Builds the Linux kernel of Veda's driver VM from the port in this
 # directory. `cargo automation linux` runs it after downloading and
-# verifying the sources (see automation/src/linux.rs and
+# verifying the sources (see automation/source/linux.rs and
 # documentation/DRIVERVM.md).
 #
 # Environment:

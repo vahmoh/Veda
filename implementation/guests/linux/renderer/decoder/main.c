@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  *
  * The driver VM's renderer: the decoder (this directory) and Mesa's
- * Gallium drivers, around the program's Rust half (../src), which serves
+ * Gallium drivers, around the program's Rust half (../source), which serves
  * the gpu protocol and runs the program.
  */
 
