@@ -3,7 +3,8 @@
 
 //! What a POSIX program inherits from the POSIX program that starts it,
 //! beyond the handles behind its descriptors: what `exec` keeps on Linux of
-//! the signals (those ignored, and the mask), the descriptors that are no
+//! the signals (those ignored, and the mask) and the nice value, the
+//! descriptors that are no
 //! kernel object (a directory, the empty input, the kernel log), and what
 //! makes a handle a socket (a Unix domain socket's names, peer and options,
 //! a listening Internet socket's address: `crate::carry`).
@@ -16,12 +17,15 @@
 //! |-----|-------|
 //! | `posix.sigign` | the signals it ignores, in hexadecimal: bit `n - 1` for signal `n` |
 //! | `posix.sigmask` | its main thread's signal mask, likewise |
+//! | `posix.nice` | its nice value (`crate::sched`), in decimal |
 //! | `posix.fd.N` | descriptor `N`: `dir:PATH`, `null` or `log` |
+//! | `posix.closed` | the standard descriptors (0, 1, 2) it starts without, which the parent left closed: their numbers, separated by commas |
 //! | `posix.stack` | the main thread's stack: its top and size, in hexadecimal (`TOP:SIZE`), as the loader made it (`abi::startup::MAIN_STACK`) |
 //! | `posix.carried.N` | descriptor `N` is a socket or a memory file, carried by the handles of roles `FD + N` and (a network connection's channel) `FD_EXTRA + N`, as `crate::carry` says, in hexadecimal |
 //!
 //! A program started by anything else inherits nothing of these: no signal
-//! ignored or blocked, and descriptors only from handles.
+//! ignored or blocked, a nice value of 0, and descriptors only from
+//! handles (and standard ones, which it has whether given them or not).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -45,8 +49,12 @@ pub struct Inherited {
     pub ignored: u64,
     /// Its main thread's signal mask.
     pub mask: u64,
+    /// Its nice value.
+    pub nice: i32,
     /// Its descriptors that are no kernel object.
     pub fds: Vec<(i32, Pseudo)>,
+    /// The standard descriptors it starts without.
+    pub closed: Vec<i32>,
     /// Its descriptors that are sockets or memory files: what makes their
     /// handles what they are.
     pub carried: Vec<(i32, Vec<u8>)>,
@@ -56,7 +64,9 @@ pub struct Inherited {
 
 const IGNORED: &str = "posix.sigign";
 const MASK: &str = "posix.sigmask";
+const NICE: &str = "posix.nice";
 const FD: &str = "posix.fd.";
+const CLOSED: &str = "posix.closed";
 const CARRIED: &str = "posix.carried.";
 
 fn hex(bytes: &[u8]) -> String {
@@ -85,6 +95,9 @@ impl Inherited {
         if self.mask != 0 {
             out.push(format!("{MASK}={:x}", self.mask));
         }
+        if self.nice != 0 {
+            out.push(format!("{NICE}={}", self.nice));
+        }
         for (n, fd) in &self.fds {
             out.push(match fd {
                 Pseudo::Dir(path) => format!("{FD}{n}=dir:{path}"),
@@ -94,6 +107,10 @@ impl Inherited {
         }
         for (n, carried) in &self.carried {
             out.push(format!("{CARRIED}{n}={}", hex(carried)));
+        }
+        if !self.closed.is_empty() {
+            let numbers: Vec<String> = self.closed.iter().map(i32::to_string).collect();
+            out.push(format!("{CLOSED}={}", numbers.join(",")));
         }
         out
     }
@@ -111,6 +128,11 @@ impl Inherited {
                     })
                 }
                 MASK => out.mask = u64::from_str_radix(value, 16).unwrap_or(0),
+                NICE => out.nice = value.parse().ok().filter(|n| (-20..=19).contains(n)).unwrap_or(0),
+                CLOSED => {
+                    out.closed =
+                        value.split(',').filter_map(|n| n.parse().ok()).filter(|n| (0..=2).contains(n)).collect()
+                }
                 _ if key.starts_with(CARRIED) => {
                     let (Some(n), Some(carried)) = (fd_number(key, CARRIED), unhex(value)) else { continue };
                     out.carried.push((n, carried));
@@ -144,8 +166,10 @@ mod tests {
         let i = Inherited {
             ignored: 1 << 12,
             mask: (1 << 9) | (1 << 63),
+            nice: -7,
             fds: alloc::vec![(3, Pseudo::Dir("/home/user/a=b".into())), (0, Pseudo::Null), (2, Pseudo::Log),],
             carried: alloc::vec![(4, b"/tmp/s:1=".to_vec()), (5, alloc::vec![]), (6, alloc::vec![0xff, 0])],
+            closed: alloc::vec![0, 2],
             main_stack: None,
         };
         let entries = i.entries();
@@ -161,6 +185,9 @@ mod tests {
         let parsed = Inherited::parse([
             ("posix.sigign", "zz"),
             ("posix.sigmask", "10000000000000000"),
+            ("posix.nice", "20"),
+            ("posix.nice", "x"),
+            ("posix.closed", "3,-1,x"),
             ("posix.fd.-1", "null"),
             ("posix.fd.x", "null"),
             ("posix.fd.4", "pipe"),

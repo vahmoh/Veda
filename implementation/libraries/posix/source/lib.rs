@@ -20,6 +20,7 @@
 //! | `mmap` | the kernel's private memory, or a VMO per mapping ([`mem`]) |
 //! | `memfd_create` | a VMO, shared by every process the file goes to ([`memfd`]) |
 //! | threads, TLS, futexes | kernel threads, the thread pointer, kernel futexes ([`thread`]) |
+//! | nice values, affinity | the kernel's thread priorities; every processor ([`sched`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
 //! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`, `pthread_kill`) ([`signal`]) |
 //! | a sandbox (Landlock, seccomp, namespaces) | the VFS connection and the registry channel confined, the kernel's `process_restrict` (`<veda/sandbox.h>`, [`sandbox`]) |
@@ -80,6 +81,7 @@ mod path;
 mod process;
 mod resolve;
 mod sandbox;
+mod sched;
 mod signal;
 mod sockaddr;
 mod socket;
@@ -114,6 +116,7 @@ pub extern "C" fn __veda_init() {
     let entries = rt::env::vars();
     let inherited = inherit::Inherited::parse(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     signal::inherit(inherited.ignored, inherited.mask);
+    sched::inherit(inherited.nice);
     if let Some((top, size)) = inherited.main_stack {
         thread::set_main_stack(top, size);
     }

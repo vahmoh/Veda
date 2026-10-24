@@ -13,6 +13,10 @@
 //!   brings the connection (`Connected`) and its failure (`Error`, after
 //!   which the service closes its end of the kernel socket), and takes
 //!   `Abort` and `SetNoDelay`;
+//! * a stream socket bound before it listens or connects is the service's
+//!   bound socket, which holds its address (its port is the socket's) until
+//!   `listen` makes it a listener or `connect` a connection from it, on
+//!   the same channel;
 //! * a listening socket's connections wait on its channel, one message
 //!   each, until an `accept` takes one;
 //! * a UDP socket's datagrams wait on its channel, one message each, until
@@ -35,10 +39,11 @@
 //!
 //! Compared with Linux:
 //!
-//! * a stream socket binds when it listens: `bind` records the address
-//!   (`getsockname` says it, with port 0 still 0) and `listen` reports what
-//!   `bind` would (`EADDRINUSE`, ...); a stream socket bound before it
-//!   connects connects from the address and port the service picks;
+//! * sockets share a port when no address is both's, as on Linux without
+//!   `SO_REUSEADDR` (an IPv4 socket on `0.0.0.0` and an IPv6-only one on
+//!   `::`, sockets on different addresses), whatever `SO_REUSEADDR` and
+//!   `SO_REUSEPORT` say; but a TCP port is free while connections use it,
+//!   as with `SO_REUSEADDR` (each connection is told apart by its peer);
 //! * datagram sockets bind (to any address, a free port) when they first
 //!   send or connect, as on Linux, and when they first receive; a datagram
 //!   socket's sends wait for room in its channel, not in a send buffer;
@@ -136,6 +141,14 @@ ipc::message! {
         pub hops: i32,
         /// An IPv6 socket that does not reach IPv4.
         pub v6only: bool,
+        /// TCP's hints, kept as given (the service has its own ways):
+        /// acknowledging at once, holding back small segments, waking a
+        /// listener only for data, and giving up on a peer that does not
+        /// answer (ms).
+        pub quickack: bool,
+        pub cork: bool,
+        pub defer_accept: u32,
+        pub user_timeout: u32,
     }
 }
 
@@ -159,6 +172,11 @@ impl Default for Options {
             tos: 0,
             hops: -1,
             v6only: false,
+            // Linux's: a connection starts acknowledging at once.
+            quickack: true,
+            cork: false,
+            defer_accept: 0,
+            user_timeout: 0,
         }
     }
 }
@@ -173,7 +191,7 @@ impl Options {
 
 /// What a socket is, as it travels.
 mod shape {
-    /// Neither connected nor listening, nor a datagram socket bound.
+    /// Neither bound, connected nor listening; a datagram socket not bound.
     pub const IDLE: u32 = 0;
     /// Listening (its channel goes).
     pub const LISTENING: u32 = 1;
@@ -181,6 +199,9 @@ mod shape {
     pub const STREAM: u32 = 2;
     /// A datagram socket bound (its channel goes).
     pub const DATAGRAMS: u32 = 3;
+    /// A stream socket bound, neither connected nor listening (its channel
+    /// goes).
+    pub const BOUND: u32 = 4;
 }
 
 ipc::message! {
@@ -193,8 +214,7 @@ ipc::message! {
         /// Its `socket` type.
         kind: u32,
         shape: u32,
-        /// Where it is: bound (an idle socket asked to be), listening, or
-        /// connected from.
+        /// Where it is: bound, listening, or connected from.
         local: Option<SocketAddr>,
         /// A connection's peer, or a datagram socket's.
         remote: Option<SocketAddr>,
@@ -237,12 +257,19 @@ struct Datagrams {
 
 /// Where a socket is.
 enum Conn {
-    /// A stream socket neither connected nor listening (not yet, or no
-    /// longer); a datagram socket not bound yet.
+    /// A stream socket neither bound, connected nor listening (not yet, or
+    /// no longer); a datagram socket not bound yet.
     Idle,
-    /// A connection being made, whose bytes are to go on `bytes`.
+    /// A stream socket bound: the service holds its address until it
+    /// listens or connects.
+    Bound {
+        local: SocketAddr,
+    },
+    /// A connection being made, whose bytes are to go on `bytes`, from
+    /// `from` if the socket was bound.
     Connecting {
         bytes: Socket,
+        from: Option<SocketAddr>,
     },
     Stream(Stream),
     /// Its connections wait on the channel.
@@ -257,9 +284,6 @@ struct State {
     /// hold it too, so a thread that waits keeps it open.
     channel: Option<Arc<Channel>>,
     conn: Conn,
-    /// What `bind` asked for, before the socket was bound (a stream socket
-    /// binds when it listens).
-    bound: Option<SocketAddr>,
     options: Options,
     /// An error not reported yet (`SO_ERROR`).
     error: Option<isize>,
@@ -314,6 +338,36 @@ fn request(channel: &Channel, fill: impl FnOnce(&mut Encoder)) -> Result<(), abi
     let mut e = Encoder::with_header(0, 0, ipc::FLAG_EVENT);
     fill(&mut e);
     channel.write(&e.bytes, Vec::new())
+}
+
+/// Writes a request that carries handles to a socket's channel, waiting for
+/// room in it: `fill` encodes it afresh for each try, with the handles it
+/// makes (a write takes them, even one that fails), and returns what it
+/// keeps of them.
+fn send_with<T>(channel: &Channel, mut fill: impl FnMut(&mut Encoder) -> Result<T, isize>) -> Result<T, isize> {
+    loop {
+        let mut e = Encoder::with_header(0, 0, ipc::FLAG_EVENT);
+        let kept = fill(&mut e)?;
+        match channel.write(&e.bytes, core::mem::take(&mut e.handles)) {
+            Ok(()) => return Ok(kept),
+            // Full: the processes that share the socket wrote first.
+            Err(abi::Error::ShouldWait) => {}
+            Err(_) => return Err(netd::errno(NetError::Unavailable)),
+        }
+        channel.wait(WRITABLE | PEER_CLOSED, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
+    }
+}
+
+/// The service's answer to `Listen` on `reply`: where the socket listens.
+fn listened(reply: &Channel) -> Result<SocketAddr, isize> {
+    // It answers at once, unless it is gone.
+    reply.wait(READABLE | PEER_CLOSED, abi::DEADLINE_INFINITE).map_err(error::kernel)?;
+    let answer = reply.read().map_err(|_| netd::errno(NetError::Unavailable))?;
+    match ipc::decode_event::<SocketEvent>(answer) {
+        Ok((_, SocketEvent::Listening { local })) => Ok(local),
+        Ok((_, SocketEvent::Error { error })) => Err(netd::errno(error)),
+        _ => Err(netd::errno(NetError::ProtocolViolation)),
+    }
 }
 
 /// A deadline `timeout` (ns) from now; `None` for none.
@@ -378,7 +432,6 @@ impl State {
         State {
             channel: None,
             conn: Conn::Idle,
-            bound: None,
             options: Options::default(),
             error: None,
             shut_read: false,
@@ -403,7 +456,7 @@ impl State {
                 }
                 return;
             }
-            Conn::Idle | Conn::Datagrams(_) => return,
+            Conn::Idle | Conn::Bound { .. } | Conn::Datagrams(_) => return,
         }
         loop {
             match channel.read() {
@@ -438,7 +491,9 @@ impl State {
         match event {
             SocketEvent::Connected { local, remote, .. } => {
                 if let Conn::Connecting { .. } = self.conn {
-                    let Conn::Connecting { bytes } = core::mem::replace(&mut self.conn, Conn::Idle) else { return };
+                    let Conn::Connecting { bytes, .. } = core::mem::replace(&mut self.conn, Conn::Idle) else {
+                        return;
+                    };
                     self.conn = Conn::Stream(Stream { local, remote, bytes: Arc::new(Bytes::new(bytes)) });
                 }
             }
@@ -508,18 +563,13 @@ impl State {
 
     /// The next connection on a listener's channel, without waiting (an
     /// error the service reports there instead is pending afterwards).
-    fn next_connection(&mut self, family: Family) -> Option<Accepted> {
+    fn next_connection(&mut self) -> Option<Accepted> {
         let channel = self.channel.clone()?;
-        let v6only = self.options.v6only;
         loop {
             match channel.read() {
                 Ok(message) => match ipc::decode_event::<SocketEvent>(message) {
-                    // A connection the socket cannot report (IPv6 to an
-                    // IPv4 socket) is closed.
                     Ok((_, SocketEvent::AcceptedBytes { socket, bytes, local, remote })) => {
-                        if family.reaches(&remote, v6only) {
-                            return Some(Accepted { channel: socket, bytes, local, remote });
-                        }
+                        return Some(Accepted { channel: socket, bytes, local, remote });
                     }
                     Ok((_, SocketEvent::Error { error })) => {
                         self.fail(error);
@@ -539,11 +589,9 @@ impl State {
 
     /// The next datagram for a datagram socket, without waiting: the one
     /// held, or the next on the channel it hears (a connected socket hears
-    /// its peer alone; a socket, only the family it reaches). With `keep`,
-    /// it stays to be read again.
-    fn next_datagram(&mut self, family: Family, keep: bool) -> Option<(SocketAddr, Vec<u8>)> {
+    /// its peer alone). With `keep`, it stays to be read again.
+    fn next_datagram(&mut self, keep: bool) -> Option<(SocketAddr, Vec<u8>)> {
         let channel = self.channel.clone()?;
-        let v6only = self.options.v6only;
         let Conn::Datagrams(d) = &mut self.conn else { return None };
         let next = match d.held.take() {
             Some(held) => Some(held),
@@ -551,8 +599,7 @@ impl State {
                 match channel.read() {
                     Ok(message) => match ipc::decode_event::<SocketEvent>(message) {
                         Ok((_, SocketEvent::Datagram { from, data })) => {
-                            let heard = d.peer.is_none_or(|p| p.ip() == from.ip() && p.port() == from.port());
-                            if heard && family.reaches(&from, v6only) {
+                            if d.peer.is_none_or(|p| p.ip() == from.ip() && p.port() == from.port()) {
                                 break Some((from, data.0));
                             }
                         }
@@ -612,6 +659,17 @@ impl Inet {
         self.state.lock().options
     }
 
+    /// `IPV6_V6ONLY`: before the socket has an address alone (`EINVAL`
+    /// after, as on Linux), which the service binds by it.
+    pub fn set_v6only(&self, on: bool) -> SysResult {
+        let mut st = self.state();
+        if !matches!(st.conn, Conn::Idle) {
+            return Err(EINVAL);
+        }
+        st.options.v6only = on;
+        Ok(0)
+    }
+
     /// Changes the options; a connection takes `TCP_NODELAY` at once.
     pub fn set_options(&self, f: impl FnOnce(&mut Options)) -> SysResult {
         let mut st = self.state();
@@ -645,7 +703,9 @@ impl Inet {
             Conn::Stream(s) => s.local,
             Conn::Listening { local } => *local,
             Conn::Datagrams(d) => d.local,
-            Conn::Idle | Conn::Connecting { .. } => st.bound.unwrap_or(self.family.any()),
+            Conn::Bound { local } => *local,
+            Conn::Connecting { from, .. } => from.unwrap_or(self.family.any()),
+            Conn::Idle => self.family.any(),
         }
     }
 
@@ -658,27 +718,42 @@ impl Inet {
         }
     }
 
-    /// `bind`. A stream socket binds when it listens.
+    /// `bind`.
     pub fn bind(&self, addr: SocketAddr) -> SysResult {
         let mut st = self.state();
-        if st.bound.is_some() || !matches!(st.conn, Conn::Idle) {
+        if !matches!(st.conn, Conn::Idle) {
             return Err(EINVAL);
         }
         match self.kind {
-            Kind::Stream => {
-                st.bound = Some(addr);
-                Ok(0)
-            }
-            Kind::Datagram => self.bind_datagrams(&mut st, addr).map(|()| 0),
+            Kind::Stream => self.bind_stream(&mut st, addr),
+            Kind::Datagram => self.bind_datagrams(&mut st, addr),
         }
+        .map(|()| 0)
+    }
+
+    /// Binds a stream socket to `addr`: the service holds it for the socket
+    /// until it listens or connects.
+    fn bind_stream(&self, st: &mut State, addr: SocketAddr) -> Result<(), isize> {
+        let v6only = st.options.v6only;
+        let (channel, local) = netd::with(|c| {
+            // Shared, so that the socket can travel to other processes.
+            let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
+            Ok(c.tcp_bind(addr, v6only, theirs)?.map(|local| (ours, local)))
+        })
+        .map_err(netd::errno)?
+        .map_err(netd::errno)?;
+        st.channel = Some(Arc::new(channel));
+        st.conn = Conn::Bound { local };
+        Ok(())
     }
 
     /// Binds a datagram socket to `addr`.
     fn bind_datagrams(&self, st: &mut State, addr: SocketAddr) -> Result<(), isize> {
+        let v6only = st.options.v6only;
         let (channel, local) = netd::with(|c| {
             // Shared, so that the socket can travel to other processes.
             let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
-            Ok(c.udp_bind_unmetered(addr, theirs)?.map(|local| (ours, local)))
+            Ok(c.udp_bind_unmetered(addr, v6only, theirs)?.map(|local| (ours, local)))
         })
         .map_err(netd::errno)?
         .map_err(netd::errno)?;
@@ -691,34 +766,47 @@ impl Inet {
     /// free port.
     fn autobind(&self, st: &mut State) -> Result<(), isize> {
         if matches!(st.conn, Conn::Idle) {
-            let addr = st.bound.take().unwrap_or(self.family.any());
-            self.bind_datagrams(st, addr)?;
+            self.bind_datagrams(st, self.family.any())?;
         }
         Ok(())
     }
 
-    /// `listen`.
+    /// `listen`: a socket not bound listens on any address, on a free
+    /// port.
     pub fn listen(&self, backlog: i32) -> SysResult {
         if self.kind != Kind::Stream {
             return Err(EOPNOTSUPP);
         }
         let mut st = self.state();
-        match st.conn {
-            Conn::Listening { .. } => return Ok(0),
-            Conn::Idle => {}
-            _ => return Err(EINVAL),
-        }
-        let addr = st.bound.unwrap_or(self.family.any());
         let backlog = backlog.clamp(1, 4096) as u32;
-        let options = st.options.tcp();
-        let (channel, local) = netd::with(|c| {
-            // Shared, so that the socket can travel to other processes.
-            let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
-            Ok(c.tcp_listen_bytes(addr, backlog, options, theirs)?.map(|local| (ours, local)))
-        })
-        .map_err(netd::errno)?
-        .map_err(netd::errno)?;
-        st.channel = Some(Arc::new(channel));
+        let (options, v6only) = (st.options.tcp(), st.options.v6only);
+        let local = match st.conn {
+            Conn::Listening { .. } => return Ok(0),
+            Conn::Idle => {
+                let any = self.family.any();
+                let (channel, local) = netd::with(|c| {
+                    // Shared, so that the socket can travel to other
+                    // processes.
+                    let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
+                    Ok(c.tcp_listen_bytes(any, v6only, backlog, options, theirs)?.map(|local| (ours, local)))
+                })
+                .map_err(netd::errno)?
+                .map_err(netd::errno)?;
+                st.channel = Some(Arc::new(channel));
+                local
+            }
+            // A socket that cannot listen stays bound.
+            Conn::Bound { .. } => {
+                let channel = st.channel.clone().ok_or(EINVAL)?;
+                let reply = send_with(&channel, |e| {
+                    let (reply, theirs) = Channel::create().map_err(error::kernel)?;
+                    SocketRequest::Listen { backlog, options, reply: theirs }.encode(e);
+                    Ok(reply)
+                })?;
+                listened(&reply)?
+            }
+            _ => return Err(EINVAL),
+        };
         st.conn = Conn::Listening { local };
         Ok(0)
     }
@@ -732,7 +820,7 @@ impl Inet {
                 if !matches!(st.conn, Conn::Listening { .. }) {
                     return Err(EINVAL);
                 }
-                if let Some(a) = st.next_connection(self.family) {
+                if let Some(a) = st.next_connection() {
                     let options = st.options;
                     return Ok(Inet::accepted(self, a, options));
                 }
@@ -760,7 +848,8 @@ impl Inet {
         let duplicate = |c: &Channel| c.0.duplicate(None).map_err(error::kernel);
         let channel = st.channel.clone();
         let (shape, local, remote, handles) = match (&st.conn, &channel) {
-            (Conn::Idle, _) => (shape::IDLE, st.bound, None, Vec::new()),
+            (Conn::Idle, _) => (shape::IDLE, None, None, Vec::new()),
+            (Conn::Bound { local }, Some(c)) => (shape::BOUND, Some(*local), None, vec![duplicate(c)?]),
             (Conn::Listening { local }, Some(c)) => (shape::LISTENING, Some(*local), None, vec![duplicate(c)?]),
             (Conn::Stream(s), Some(c)) => {
                 let bytes = s.bytes.socket.0.duplicate(None).map_err(error::kernel)?;
@@ -800,9 +889,10 @@ impl Inet {
         let mut state = State::new();
         let channel = |h: Handle| Some(Arc::new(Channel::from_handle(h)));
         state.conn = match (t.shape, kind) {
-            (shape::IDLE, _) => {
-                state.bound = t.local;
-                Conn::Idle
+            (shape::IDLE, _) => Conn::Idle,
+            (shape::BOUND, Kind::Stream) => {
+                state.channel = channel(next(ObjectType::Channel)?);
+                Conn::Bound { local: t.local? }
             }
             (shape::LISTENING, Kind::Stream) => {
                 state.channel = channel(next(ObjectType::Channel)?);
@@ -861,27 +951,39 @@ impl Inet {
             if let Some(e) = st.take_error() {
                 return Err(e);
             }
-            match st.conn {
-                Conn::Idle => {}
+            let options = st.options.tcp();
+            let connecting = match st.conn {
+                Conn::Idle => {
+                    let (channel, bytes) = netd::with(|c| {
+                        // Shared, so that the connection can travel to other
+                        // processes, its bytes on a kernel socket.
+                        let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
+                        let (bytes, their_bytes) = Socket::create().map_err(IpcError::Kernel)?;
+                        Ok(c.tcp_connect_bytes(remote, options, theirs, their_bytes)?.map(|()| (ours, bytes)))
+                    })
+                    .map_err(netd::errno)?
+                    .map_err(netd::errno)?;
+                    st.channel = Some(Arc::new(channel));
+                    Some(Conn::Connecting { bytes, from: None })
+                }
+                // From its address, on its channel.
+                Conn::Bound { local } => {
+                    let channel = st.channel.clone().ok_or(EINVAL)?;
+                    let bytes = send_with(&channel, |e| {
+                        let (bytes, theirs) = Socket::create().map_err(error::kernel)?;
+                        SocketRequest::Connect { remote, options, bytes: theirs }.encode(e);
+                        Ok(bytes)
+                    })?;
+                    Some(Conn::Connecting { bytes, from: Some(local) })
+                }
                 Conn::Connecting { .. } if nonblock => return Err(EALREADY),
-                Conn::Connecting { .. } => {}
+                Conn::Connecting { .. } => None,
                 Conn::Stream(_) | Conn::Listening { .. } => return Err(EISCONN),
                 Conn::Datagrams(_) => return Err(EINVAL),
-            }
-            if matches!(st.conn, Conn::Idle) {
-                let options = st.options.tcp();
-                let (channel, bytes) = netd::with(|c| {
-                    // Shared, so that the connection can travel to other
-                    // processes, its bytes on a kernel socket.
-                    let (ours, theirs) = Channel::create_shared().map_err(IpcError::Kernel)?;
-                    let (bytes, their_bytes) = Socket::create().map_err(IpcError::Kernel)?;
-                    Ok(c.tcp_connect_bytes(remote, options, theirs, their_bytes)?.map(|()| (ours, bytes)))
-                })
-                .map_err(netd::errno)?
-                .map_err(netd::errno)?;
-                st.channel = Some(Arc::new(channel));
+            };
+            if let Some(connecting) = connecting {
                 st.signalled = 0;
-                st.conn = Conn::Connecting { bytes };
+                st.conn = connecting;
                 st.shut_read = false;
                 st.shut_write = false;
                 if nonblock {
@@ -937,7 +1039,7 @@ impl Inet {
         let mut st = self.state();
         match &st.conn {
             Conn::Stream(s) => s.bytes.available(),
-            Conn::Datagrams(_) => st.next_datagram(self.family, true).map_or(0, |(_, data)| data.len()),
+            Conn::Datagrams(_) => st.next_datagram(true).map_or(0, |(_, data)| data.len()),
             _ => 0,
         }
     }
@@ -1011,7 +1113,7 @@ impl Inet {
             let channel = {
                 let mut st = self.state();
                 self.autobind(&mut st)?;
-                if let Some((from, data)) = st.next_datagram(self.family, how.peek) {
+                if let Some((from, data)) = st.next_datagram(how.peek) {
                     let mut n = 0;
                     for buf in bufs.iter_mut() {
                         let k = buf.len().min(data.len() - n);
@@ -1129,7 +1231,7 @@ impl Inet {
         match &st.conn {
             // A stream socket that is not connected is hung up, as on Linux
             // (and a write to it fails at once).
-            Conn::Idle => {
+            Conn::Idle | Conn::Bound { .. } => {
                 r.output = true;
                 r.hangup |= self.kind == Kind::Stream;
             }

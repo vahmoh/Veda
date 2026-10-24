@@ -22,6 +22,7 @@ Each is `cargo automation COMMAND`, run in the repository;
 | `toolchain` | Builds GCC, binutils, musl, the media libraries and Rust for Veda into `target/toolchain`: once, before the first build |
 | `linux` | Rebuilds the driver VM's Linux, its toolchain and Mesa in `target/linux` (the first build builds them, given the tools) |
 | `web` | Builds the web engine, WPE WebKit and the libraries it stands on, in `target/web` (an hour or more): once, before images have the browser ([The web browser](BROWSER.md#building-it)) |
+| `python` | Builds Python, CPython's interpreter and standard library with the libraries its modules stand on, in `target/python` (a few minutes): once, before images have Python ([Python on Veda](PYTHON.md#building-it)) |
 | `build` | Builds `target/veda/veda.img` |
 | `run` | Builds, then boots Veda in a QEMU window |
 | `iso` | Writes [the live system](#the-live-system), `target/veda/veda.iso` |
@@ -38,7 +39,8 @@ Their options (of values separated by `|`, the first is the default):
 * **Building:** `--debug` (no optimisations), `--resolution WxH`,
   `--cmdline "..."` (kernel arguments, 256 bytes at most with the
   build's), `--no-generate` (reuse the generated media), `--skip PROGRAM`
-  (leave a program out; repeatable).
+  (leave a program out; repeatable), `--python-tests` (CPython's own
+  tests in the image, some 90 MB, once Python is built).
 * **QEMU:** `--smp N` (default 4), `--memory MiB` (default 2048),
   `--headless`, `--serial FILE`, `--gdb` (a debugger on localhost:1234),
   `--qemu-arg ARG` (repeatable), `--gpu` or `--no-gpu` (default: a 3D GPU
@@ -151,6 +153,9 @@ the run, with its number.
 * **The network.** The network cards' scripts check it against a server on
   the host (`nettest local`, `automation/source/hostweb.rs`), without the
   Internet.
+* **Python.** Its script says `requires python`, and is skipped where
+  Python is not built; CPython's own tests run inside Veda in an image
+  built with `--python-tests` ([Python on Veda](PYTHON.md#tests)).
 * **The browser.** Its scripts say `requires web`, and are skipped where
   the web engine is not built. `web-server` serves the host's test pages
   (`/page`, `/second`, `/zone`, `/cookie`, `/scripts`, in
@@ -283,6 +288,9 @@ from this machine.
 | `verification/c/*.c` and `*.cc`, by the cross toolchain (also as `<name>-pie`), for `systest` and the scripts | `/system/tests/c/<name>` |
 | `verification/rust/*.rs`, by the toolchain's Rust (also as `<name>-fixed`), the same | `/system/tests/rust/<name>` |
 | The native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
+| Python, once built (`target/python`): the interpreter (also as `python3.15` and `python`) and its standard library; its tests in an image built with `--python-tests`; `verification/python`, for `systest` and the scripts | `/system/bin/python3`, `/system/lib/python3.15/`; `/system/lib/python3.15/test/`; `/system/tests/python/` |
+| The databases Linux keeps in `/etc`: `passwd` and `group` (the one user) and `services` (IANA's registry, from the `iana-etc` port) | `/system/etc/` |
+| The certificate authorities OpenSSL trusts (Mozilla's list, from the `ca-certificates` port), once the web engine or Python is built | `/system/etc/ssl/cert.pem` |
 | `mediadec`, the video decoder (its Rust half, the C shim, FFmpeg, dav1d), and the libraries' `checkasm` programs | `/system/bin/mediadec`, `/system/tests/media/` |
 | `verification/fakedec/clips/*`, for the stand-in decoder | `/system/tests/videos/fake/` |
 | The driver VM's Linux, once built: its kernel (a bzImage on AMD64) and the programs of `implementation/guests/linux/` | `/system/linux/kernel`, `/system/linux/initramfs.cpio` |
@@ -426,6 +434,13 @@ AMD64), and the cross compiler links ([C on Veda](C.md),
 target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
 target/toolchain/rust/bin/rustc --edition 2024 --target x86_64-unknown-veda -C linker=target/toolchain/cross/bin/x86_64-veda-gcc -O -o hello hello.rs
 ```
+
+### Programs in Python
+
+A script runs with `python3`, or as a program of its own when its first
+line names the interpreter (`#!/system/bin/python3`), in images built
+once Python is ([Python on Veda](PYTHON.md)). Packages of pure Python
+install into a virtual environment (`python3 -m venv`) with its pip.
 
 ### Videos and its decoder
 

@@ -106,6 +106,53 @@ pub fn is_executable(image: &[u8]) -> bool {
     elf::is_elf(image)
 }
 
+/// How much of a script's first line [`interpreter`] reads, as Linux reads
+/// it (`BINPRM_BUF_SIZE`): its `#!`, the interpreter, an argument and the
+/// end of the line.
+pub const SCRIPT_LINE_MAX: usize = 256;
+
+/// How deep a script's interpreter may be a script itself, and its own
+/// interpreter, and so on, as Linux allows (`BINPRM_MAX_RECURSION`).
+pub const SCRIPT_DEPTH: usize = 4;
+
+/// The program a script names on its first line to run it, and the one
+/// argument it may give that program: what [`interpreter`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interpreter<'a> {
+    pub path: &'a [u8],
+    pub argument: Option<&'a [u8]>,
+}
+
+/// The interpreter of a script (`#!PATH [ARGUMENT]` on its first line), as
+/// Linux reads it: blanks around the path and the argument left out, the
+/// rest of the line after the path one argument whatever it holds, a
+/// carriage return kept. `start` is the file's first bytes (at least
+/// [`SCRIPT_LINE_MAX`] of them, or all of a shorter file). None if it is no
+/// script, or its line names no interpreter or does not end within
+/// [`SCRIPT_LINE_MAX`] bytes (the program that runs a script with its
+/// interpreter reports that as `ENOEXEC`).
+pub fn interpreter(start: &[u8]) -> Option<Interpreter<'_>> {
+    let start = &start[..start.len().min(SCRIPT_LINE_MAX)];
+    let rest = start.strip_prefix(b"#!")?;
+    let line = match rest.iter().position(|&b| b == b'\n') {
+        Some(end) => &rest[..end],
+        // A file of one line, without its end.
+        None if start.len() < SCRIPT_LINE_MAX => rest,
+        None => return None,
+    };
+    let blank = |b: &u8| *b == b' ' || *b == b'\t';
+    let line = &line[line.iter().position(|b| !blank(b))?..];
+    let end = line.iter().position(blank).unwrap_or(line.len());
+    let (path, rest) = line.split_at(end);
+    let rest = match rest.iter().position(|b| !blank(b)) {
+        Some(first) => &rest[first..],
+        None => &[],
+    };
+    let last = rest.iter().rposition(|b| !blank(b));
+    let argument = last.map(|last| &rest[..=last]);
+    Some(Interpreter { path, argument })
+}
+
 /// Where a position-independent image of `len` bytes goes: a random page
 /// of the span programs are placed in (`abi::program_base`).
 fn random_base(len: usize) -> Result<u64, Error> {
@@ -427,5 +474,45 @@ impl<'a> Spawn<'a> {
         let mut inherited = core::mem::take(&mut self.inherited);
         inherited.push(&stack_entry);
         self.launch(process, thread, entry, sp as usize, &[], &inherited)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(text: &[u8]) -> Option<(&[u8], Option<&[u8]>)> {
+        interpreter(text).map(|i| (i.path, i.argument))
+    }
+
+    #[test]
+    fn scripts_name_their_interpreter_as_linux_reads_them() {
+        assert_eq!(read(b"#!/system/bin/python3\nprint(1)\n"), Some((&b"/system/bin/python3"[..], None)));
+        // Blanks around the path and the argument go; the rest is one
+        // argument, its blanks inside kept.
+        assert_eq!(
+            read(b"#! \t/system/bin/python3 -I -u \t\nx"),
+            Some((&b"/system/bin/python3"[..], Some(&b"-I -u"[..])))
+        );
+        // One line without its end; a carriage return is kept, as Linux
+        // keeps it.
+        assert_eq!(read(b"#!/system/bin/tool"), Some((&b"/system/bin/tool"[..], None)));
+        assert_eq!(read(b"#!/system/bin/tool\r\n"), Some((&b"/system/bin/tool\r"[..], None)));
+        // Not scripts, or no interpreter.
+        for text in [&b"\x7fELF"[..], b"# comment\n", b"#!\n", b"#!   \n", b""] {
+            assert_eq!(read(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_first_line_ends_within_its_limit() {
+        let mut long = b"#!/".to_vec();
+        long.resize(SCRIPT_LINE_MAX, b'a');
+        long.extend_from_slice(b"\nprint(1)\n");
+        assert_eq!(read(&long), None);
+        let mut fits = b"#!/".to_vec();
+        fits.resize(SCRIPT_LINE_MAX - 1, b'a');
+        fits.push(b'\n');
+        assert_eq!(read(&fits).map(|(path, _)| path.len()), Some(SCRIPT_LINE_MAX - 3));
     }
 }

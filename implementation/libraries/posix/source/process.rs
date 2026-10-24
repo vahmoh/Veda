@@ -72,6 +72,11 @@ pub fn ppid() -> i32 {
 /// The processes this one started and has not waited for.
 static CHILDREN: Mutex<BTreeMap<i32, Process>> = Mutex::new(BTreeMap::new());
 
+/// Whether `pid` is a child of this process not waited for yet.
+pub fn is_child(pid: i32) -> bool {
+    CHILDREN.lock().contains_key(&pid)
+}
+
 /// Ends the process with `code` (`exit`).
 pub fn exit(code: i32) -> ! {
     crate::fd::flush_logs();
@@ -247,6 +252,11 @@ impl ChildState {
             };
             out.push((role::FD + n as u32, h));
         }
+        // The standard descriptors it is not given it starts without, as
+        // they are here, not with those of a program nobody gave any.
+        let given =
+            |n: i32| out.iter().any(|&(r, _)| r == role::FD + n as u32) || inherited.fds.iter().any(|f| f.0 == n);
+        inherited.closed = (0..=2).filter(|&n| !given(n)).collect();
         Ok(out)
     }
 }
@@ -262,10 +272,73 @@ fn spawn_errno(e: SpawnError) -> isize {
     }
 }
 
+/// What runs a program file: the path of the program that runs (the file
+/// itself, or the interpreter of a script), its contents, and the
+/// arguments a script's interpreter is given before the script's own.
+struct Program {
+    path: String,
+    vmo: Vmo,
+    size: usize,
+    /// The arguments that replace the first one (none for a program that is
+    /// no script).
+    prefix: Vec<Vec<u8>>,
+}
+
+/// The executable file `name`, from the directory `cwd`: its absolute
+/// path, or `EACCES` if it is a directory or no program.
+fn executable(cwd: &str, name: &[u8]) -> Result<String, isize> {
+    let path = path::resolve(cwd, name)?.path;
+    let st = vfs::stat(&path)?;
+    if st.is_dir || !st.executable {
+        return Err(EACCES);
+    }
+    Ok(path)
+}
+
+/// What runs the executable file `name`, from the directory `cwd`: the
+/// file, or for a script the interpreter its first line names (`#!`), as
+/// Linux runs one: given its argument, if the line has one, then the
+/// script as `name` names it, before the arguments that follow the
+/// program's own name. An interpreter may be a script too,
+/// `rt::process::SCRIPT_DEPTH` deep (`ELOOP` beyond); a line that names
+/// none, or does not end soon enough, is `ENOEXEC`. Each file is the system image's pages, or a copy
+/// of its own that nothing else changes.
+fn program(cwd: &str, name: &[u8]) -> Result<Program, isize> {
+    let mut path = executable(cwd, name)?;
+    let mut given = name.to_vec();
+    let mut prefix: Vec<Vec<u8>> = Vec::new();
+    let mut depth = 0;
+    loop {
+        let (vmo, size): (Vmo, u64) = error::ipc(vfs::with(|c| c.read_file(path.clone()))?)?;
+        let size = usize::try_from(size).map_err(|_| ENOEXEC)?;
+        let mut start = [0u8; rt::process::SCRIPT_LINE_MAX];
+        let start = &mut start[..size.min(rt::process::SCRIPT_LINE_MAX)];
+        vmo.read(0, start).map_err(error::kernel)?;
+        if !start.starts_with(b"#!") {
+            return Ok(Program { path, vmo, size, prefix });
+        }
+        if depth == rt::process::SCRIPT_DEPTH {
+            return Err(ELOOP);
+        }
+        depth += 1;
+        let interpreter = rt::process::interpreter(start).ok_or(ENOEXEC)?;
+        // What came before stays after the script: the interpreter's
+        // arguments go first, the script's name replacing the program's.
+        let mut args = alloc::vec![interpreter.path.to_vec()];
+        args.extend(interpreter.argument.map(<[u8]>::to_vec));
+        args.push(core::mem::replace(&mut given, interpreter.path.to_vec()));
+        args.extend(prefix.drain(1.min(prefix.len())..));
+        prefix = args;
+        path = executable(cwd, interpreter.path)?;
+    }
+}
+
 /// Starts the program at `name` with the descriptors and working directory
 /// left by the file actions `ops`, which are carried out first, as the
 /// child would (a relative `name` is found from the directory they leave),
-/// and the signal state the attributes `attr` leave.
+/// and the signal state the attributes `attr` leave. A script runs with its
+/// interpreter ([`program`]); its process is named after the script, and
+/// knows the interpreter's file as its own (`AT_EXECFN`).
 ///
 /// # Safety
 /// The arguments are those of musl's `posix_spawn`.
@@ -273,7 +346,7 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
     // SAFETY: musl passes its attributes (zero if the program gave none).
     let attr: SpawnAttr = unsafe { user::read(attr)? };
     let (ignored, mask) = attr.signals(signal::ignored(), signal::current_mask());
-    let mut inherited = Inherited { ignored, mask, ..Inherited::default() };
+    let mut inherited = Inherited { ignored, mask, nice: crate::sched::nice(), ..Inherited::default() };
     let mut child = ChildState {
         fds: fd::snapshot().into_iter().map(|(n, d, cloexec)| (n, (d, cloexec))).collect(),
         cwd: vfs::cwd(),
@@ -293,12 +366,8 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
         }
     }
     // SAFETY: the program passed a path.
-    let resolved = path::resolve(&child.cwd, unsafe { user::cstr(name)? })?;
-    let path = resolved.path;
-    let st = vfs::stat(&path)?;
-    if st.is_dir || !st.executable {
-        return Err(EACCES);
-    }
+    let given = unsafe { user::cstr(name)? };
+    let program = program(&child.cwd, given)?;
 
     let mut handles = child.handles(&mut inherited)?;
     // A registry connection of its own; the terminal's state.
@@ -314,24 +383,24 @@ unsafe fn spawn(res: usize, name: usize, ops: usize, attr: usize, argv: usize, e
         return Err(EMFILE);
     }
 
-    // The program's file: the system image's pages, or a copy of its own,
-    // which nothing else changes.
-    let (vmo, size): (Vmo, u64) = error::ipc(vfs::with(|c| c.read_file(path.clone()))?)?;
-    let size = usize::try_from(size).map_err(|_| ENOEXEC)?;
-
     // SAFETY: the program passed NULL-terminated arrays.
-    let (args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
-    let name = path::file_name(&path);
+    let (mut args, env) = unsafe { (user::cstr_array(argv), user::cstr_array(envp)) };
+    if !program.prefix.is_empty() {
+        let given: Vec<&[u8]> = args.drain(1.min(args.len())..).collect();
+        args = program.prefix.iter().map(Vec::as_slice).chain(given).collect();
+    }
+    let name = path::resolve(&child.cwd, given)?.path;
+    let name = path::file_name(&name);
     let name = &name[..name.floor_char_boundary(abi::NAME_MAX)];
     let entries = inherited.entries();
-    let mut spawn = Spawn::new(name).path(&path).cwd(&child.cwd);
+    let mut spawn = Spawn::new(name).path(&program.path).cwd(&child.cwd);
     spawn.args = args;
     spawn.env = env;
     spawn.handles = handles;
     spawn.inherited = entries.iter().map(String::as_str).collect();
     let unused = |koid: u64| !CHILDREN.lock().contains_key(&pid_of(koid));
     spawn.accept = Some(&unused);
-    let process = spawn.start_file(&vmo, size).map_err(spawn_errno)?;
+    let process = spawn.start_file(&program.vmo, program.size).map_err(spawn_errno)?;
     let pid = pid_of(process.0.koid());
     CHILDREN.lock().insert(pid, process);
     if res != 0 {
@@ -490,8 +559,9 @@ pub unsafe fn waitid(kind: u32, id: i32, info: usize, options: u32) -> SysResult
 
 /// `kill`: this process, a child, or (`-1`) every child; signal 0 only
 /// checks that they exist. Signals do not cross processes: a child ends at
-/// once on a signal that ends a process by default, and is left alone on
-/// the others. Each process is the one member of its process group (its
+/// once on a signal that ends a process by default, as that signal ends a
+/// program (its parent's `waitpid` says so), and is left alone on the
+/// others. Each process is the one member of its process group (its
 /// id is the group's, `getpgid`), so `-pid` means `pid`.
 pub fn kill(pid: i32, s: u32) -> SysResult {
     if s >= sig::NSIG {
@@ -509,7 +579,7 @@ pub fn kill(pid: i32, s: u32) -> SysResult {
     }
     if s != 0 && signal::terminates(s) {
         for p in targets {
-            p.kill().map_err(error::kernel)?;
+            p.kill_with_signal(s).map_err(error::kernel)?;
         }
     }
     Ok(0)

@@ -77,6 +77,9 @@ pub struct Description {
     seq: AtomicU64,
     /// The `epoll` instances watching it, to be told of those changes.
     watchers: Mutex<Vec<(Weak<Watcher>, u64)>>,
+    /// Who `SIGIO` and `SIGURG` would go to (`F_SETOWN`): the kind of owner
+    /// (`F_OWNER_*`) above, its id below.
+    owner: AtomicU64,
 }
 
 impl Description {
@@ -86,7 +89,24 @@ impl Description {
             flags: AtomicU32::new(flags & STATUS_FLAGS),
             seq: AtomicU64::new(0),
             watchers: Mutex::new(Vec::new()),
+            owner: AtomicU64::new(Self::packed_owner(crate::linux::fcntl::F_OWNER_PID, 0)),
         })
+    }
+
+    fn packed_owner(kind: i32, id: i32) -> u64 {
+        (kind as u32 as u64) << 32 | id as u32 as u64
+    }
+
+    /// Who `SIGIO` and `SIGURG` would go to: the kind of owner
+    /// (`F_OWNER_*`) and its id (0: none).
+    pub fn owner(&self) -> (i32, i32) {
+        let packed = self.owner.load(Ordering::Acquire);
+        ((packed >> 32) as i32, packed as u32 as i32)
+    }
+
+    /// Makes `id`, of kind `kind`, the owner.
+    pub fn set_owner(&self, kind: i32, id: i32) {
+        self.owner.store(Self::packed_owner(kind, id), Ordering::Release);
     }
 
     /// How often it changed in ways the kernel's signals do not say.

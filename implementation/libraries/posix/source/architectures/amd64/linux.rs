@@ -66,6 +66,8 @@ pub mod nr {
     pub const WAIT4: usize = linux_raw_sys::general::__NR_wait4 as usize;
     pub const KILL: usize = linux_raw_sys::general::__NR_kill as usize;
     pub const UNAME: usize = linux_raw_sys::general::__NR_uname as usize;
+    pub const SETHOSTNAME: usize = linux_raw_sys::general::__NR_sethostname as usize;
+    pub const SETDOMAINNAME: usize = linux_raw_sys::general::__NR_setdomainname as usize;
     pub const FCNTL: usize = linux_raw_sys::general::__NR_fcntl as usize;
     pub const FLOCK: usize = linux_raw_sys::general::__NR_flock as usize;
     pub const FSYNC: usize = linux_raw_sys::general::__NR_fsync as usize;
@@ -124,6 +126,7 @@ pub mod nr {
     pub const GETPRIORITY: usize = linux_raw_sys::general::__NR_getpriority as usize;
     pub const SETPRIORITY: usize = linux_raw_sys::general::__NR_setpriority as usize;
     pub const SCHED_GETPARAM: usize = linux_raw_sys::general::__NR_sched_getparam as usize;
+    pub const SCHED_SETPARAM: usize = linux_raw_sys::general::__NR_sched_setparam as usize;
     pub const SCHED_SETSCHEDULER: usize = linux_raw_sys::general::__NR_sched_setscheduler as usize;
     pub const SCHED_GETSCHEDULER: usize = linux_raw_sys::general::__NR_sched_getscheduler as usize;
     pub const SCHED_GET_PRIORITY_MAX: usize = linux_raw_sys::general::__NR_sched_get_priority_max as usize;
@@ -166,6 +169,7 @@ pub mod nr {
     pub const SYMLINKAT: usize = linux_raw_sys::general::__NR_symlinkat as usize;
     pub const READLINKAT: usize = linux_raw_sys::general::__NR_readlinkat as usize;
     pub const FCHMODAT: usize = linux_raw_sys::general::__NR_fchmodat as usize;
+    pub const FCHMODAT2: usize = linux_raw_sys::general::__NR_fchmodat2 as usize;
     pub const FACCESSAT: usize = linux_raw_sys::general::__NR_faccessat as usize;
     pub const PSELECT6: usize = linux_raw_sys::general::__NR_pselect6 as usize;
     pub const PPOLL: usize = linux_raw_sys::general::__NR_ppoll as usize;

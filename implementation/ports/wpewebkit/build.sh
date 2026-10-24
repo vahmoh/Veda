@@ -61,35 +61,11 @@ unset PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR CFLAGS CXXFLAGS L
 source "$PORTS/common.sh"
 # TARGET and what the ports take from the architecture.
 source "$PORTS/architectures/$VEDA_ARCH/settings.sh"
-
-BUILD_TRIPLE=$(gcc -dumpmachine)
-
-if [ ! -x "$CROSS/bin/$TARGET-g++" ]; then
-	echo "no cross toolchain in $CROSS: build it with \`cargo automation toolchain\`" >&2
-	exit 1
-fi
-
-# What Veda gets of these libraries names their sources from the build's
-# directory, never where that is on this machine (assertions' file names).
-PREFIX_MAP="-ffile-prefix-map=$ROOT=."
-# Position-independent, for programs linked -static-pie; with stack
-# protection and stack clash protection, as befits code that parses what
-# web sites send; each function and datum in a section of its own, so that
-# a program's link drops what it does not use.
-VEDA_CFLAGS="-O2 -g0 -fPIE -fstack-protector-strong -fstack-clash-protection -ffunction-sections -fdata-sections $PREFIX_MAP"
-
-CC_VEDA=$CROSS/bin/$TARGET-gcc
-CXX_VEDA=$CROSS/bin/$TARGET-g++
+# VEDA_CFLAGS, the compilers, pkgconf (host_pkgconf), CMake's toolchain
+# file, cmake_veda and autoconf_veda: how libraries are built for Veda.
+source "$PORTS/libraries.sh"
 
 # --- tools for this machine ---------------------------------------------------
-
-# Each built from its port as released (so it depends on the release
-# alone, not on Veda's patches), into host/: what the builds below run,
-# whatever this machine has installed. Their sources are unpacked
-# apart (src/host), as some of the same ports are built for Veda with
-# Veda's patches.
-HOST_SRC=$SRC/host
-mkdir -p "$HOST_SRC"
 
 # Meson, which runs from its source (Python): the release the libraries'
 # builds need, whatever this machine has.
@@ -103,33 +79,6 @@ stage_host_meson() {
 	chmod +x "$HOST/bin/meson"
 }
 stage host_meson "$PORTS/meson/port.toml" @ROOT
-
-stage_host_pkgconf() {
-	local SRC=$HOST_SRC
-	unpack pkgconf upstream
-	local b=$BUILD/pkgconf-host
-	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	# What it leaves out of flags as the compiler's own directories: this
-	# machine's, not its own prefix (where the host's libraries below are).
-	quiet configure.log "$SRC/pkgconf/configure" --prefix="$HOST" --disable-shared --enable-static \
-		--with-system-includedir=/usr/include --with-system-libdir=/usr/lib:/lib
-	quiet make.log make -j"$JOBS"
-	quiet install.log make install
-	# pkg-config for Veda: the libraries below, under system/ (their
-	# files name /system, which the sysroot moves here), with what each
-	# needs to link statically.
-	cat > "$HOST/bin/$TARGET-pkg-config" <<-EOF
-	#!/bin/sh
-	PKG_CONFIG_SYSROOT_DIR='$ROOT' \\
-	PKG_CONFIG_LIBDIR='$SYSTEM/lib/pkgconfig:$SYSTEM/share/pkgconfig' \\
-	PKG_CONFIG_SYSTEM_INCLUDE_PATH=/system/include \\
-	PKG_CONFIG_SYSTEM_LIBRARY_PATH=/system/lib \\
-	exec '$HOST/bin/pkgconf' --static "\$@"
-	EOF
-	chmod +x "$HOST/bin/$TARGET-pkg-config"
-	ln -sf pkgconf "$HOST/bin/pkg-config"
-}
-stage host_pkgconf "$PORTS/pkgconf/port.toml" @ROOT @TARGET
 
 stage_host_gperf() {
 	local SRC=$HOST_SRC
@@ -204,8 +153,8 @@ stage host_glib "$PORTS/zlib/port.toml" "$PORTS/libffi/port.toml" "$PORTS/pcre2/
 # --- how the libraries are built for Veda --------------------------------------
 
 # Meson's description of Veda (a cross file), for the libraries built with
-# Meson: Veda's compilers, the pkg-config above, and the code generators
-# of GLib for this machine.
+# Meson: Veda's compilers, the pkg-config for Veda (libraries.sh's), and
+# the code generators of GLib for this machine.
 MESON_CROSS=$BUILD/veda.cross
 cat > "$MESON_CROSS" <<EOF
 [binaries]
@@ -266,68 +215,9 @@ relocate_cmake_packages() {
 	done < <(find "$SYSTEM/lib/cmake" -mindepth 2 -maxdepth 2 -name '*.cmake' 2>/dev/null)
 }
 
-# CMake's description of Veda (a toolchain file), for the libraries built
-# with CMake: the system is Veda (Platform/Veda.cmake, beside this
-# script), what it finds is under system/ and the C library's sysroot.
-# CMake reads the system's description from a copy in the build, so that
-# the toolchain file names no checkout: every library's fingerprint has
-# it, and their build trees outlast the checkout that configured them.
-CMAKE_MODULES=$BUILD/cmake
-rm -rf "$CMAKE_MODULES"
-cp -r "$PORTS/wpewebkit/cmake" "$CMAKE_MODULES"
-CMAKE_TOOLCHAIN=$BUILD/veda.cmake
-cat > "$CMAKE_TOOLCHAIN" <<EOF
-set(CMAKE_SYSTEM_NAME Veda)
-set(CMAKE_SYSTEM_PROCESSOR $MESON_CPU)
-list(APPEND CMAKE_MODULE_PATH "$CMAKE_MODULES")
-set(CMAKE_C_COMPILER "$CC_VEDA")
-set(CMAKE_CXX_COMPILER "$CXX_VEDA")
-set(CMAKE_AR "$CROSS/bin/$TARGET-ar" CACHE FILEPATH "")
-set(CMAKE_RANLIB "$CROSS/bin/$TARGET-ranlib" CACHE FILEPATH "")
-set(CMAKE_NM "$CROSS/bin/$TARGET-nm" CACHE FILEPATH "")
-set(CMAKE_STRIP "$CROSS/bin/$TARGET-strip" CACHE FILEPATH "")
-set(CMAKE_C_FLAGS_INIT "$VEDA_CFLAGS")
-set(CMAKE_CXX_FLAGS_INIT "$VEDA_CFLAGS")
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_FIND_ROOT_PATH "$ROOT" "$CROSS/sysroot")
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-set(PKG_CONFIG_EXECUTABLE "$HOST/bin/$TARGET-pkg-config" CACHE FILEPATH "")
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
-EOF
-
-# CMake for Veda: library NAME, configured with OPTIONS and installed into
-# system/.
-cmake_veda() {
-	local name=$1 b=$BUILD/$1
-	shift
-	rm -rf "$b"
-	quiet "$b-configure.log" cmake -S "$SRC/$name" -B "$b" -G Ninja --toolchain "$CMAKE_TOOLCHAIN" \
-		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/system -DCMAKE_INSTALL_LIBDIR=lib "$@"
-	quiet "$b-build.log" ninja -C "$b" -j"$JOBS"
-	quiet "$b-install.log" env DESTDIR="$ROOT" ninja -C "$b" install
-}
-
-# Autoconf for Veda: library NAME (its configure script SCRIPT, relative to
-# its source), configured with OPTIONS and installed into system/. The
-# library's config.sub knows Veda (its port's patch).
-autoconf_veda() {
-	local name=$1 script=$2 b=$BUILD/$1
-	shift 2
-	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet configure.log env CC="$CC_VEDA" CXX="$CXX_VEDA" AR="$TARGET-ar" RANLIB="$TARGET-ranlib" \
-		CFLAGS="$VEDA_CFLAGS" CXXFLAGS="$VEDA_CFLAGS" PKG_CONFIG="$TARGET-pkg-config" \
-		"$SRC/$name/$script" --host=$TARGET --build="$BUILD_TRIPLE" --prefix=/system --libdir=/system/lib \
-		--disable-shared --enable-static "$@"
-	quiet make.log make -j"$JOBS"
-	quiet install.log make install DESTDIR="$ROOT"
-}
-
 # How the libraries are built for Veda, which every library's build
 # depends on: the cross file, the toolchain file, CMake's description of
-# the system, the helpers above, and the flags.
+# the system, the helpers (above, and libraries.sh's), and the flags.
 declare -f meson_veda relocate_cmake_packages cmake_veda autoconf_veda > "$BUILD/helpers.sh"
 CONFIG_FILES=("$MESON_CROSS" "$CMAKE_TOOLCHAIN" "$CMAKE_MODULES/Platform/Veda.cmake" "$BUILD/helpers.sh")
 

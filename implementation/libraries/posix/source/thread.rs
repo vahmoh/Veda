@@ -24,6 +24,7 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use abi::{Error, nr};
 use rt::object::{Handle, Thread};
@@ -92,9 +93,17 @@ pub unsafe extern "C" fn __veda_clone(
         unsafe { core::ptr::write_volatile(ctid as *mut i32, tid) };
     }
     let entry = crate::architecture::thread_entry_address();
-    // Kept from before it runs: it may end at once, and forget it.
+    // Kept from before it runs: it may end at once, and forget it. It runs
+    // at its process's priority.
     let thread = Arc::new(thread);
-    HANDLES.lock().insert(tid, thread.clone());
+    {
+        let mut handles = HANDLES.lock();
+        let priority = PRIORITY.load(Ordering::Relaxed);
+        if priority != 0 {
+            let _ = call(nr::THREAD_SET_PRIORITY, [thread.raw() as usize, priority, 0, 0, 0, 0]);
+        }
+        handles.insert(tid, thread.clone());
+    }
     match call(nr::THREAD_START, [thread.raw() as usize, entry, block, block, 0, 0]) {
         Ok(_) => tid,
         Err(e) => {
@@ -137,6 +146,33 @@ pub unsafe extern "C" fn __veda_main_stack(top: *mut usize, size: *mut usize) ->
 /// The kernel handles of this process's threads, by thread id.
 static HANDLES: Mutex<BTreeMap<i32, Arc<Thread>>> = Mutex::new(BTreeMap::new());
 
+/// The kernel priority this process's threads run at (`crate::sched`; 0:
+/// where the kernel starts them), which each new one is given as it is
+/// kept in [`HANDLES`].
+static PRIORITY: AtomicUsize = AtomicUsize::new(0);
+
+/// Has every thread of this process, and each it starts from now on, run
+/// at kernel priority `priority`: `EACCES`, and no thread changed, if the
+/// process may not run that high.
+pub fn set_priority(priority: usize) -> Result<(), isize> {
+    let most = rt::object::process_self_info().map_err(error::kernel)?.max_priority as usize;
+    if priority > most {
+        return Err(EACCES);
+    }
+    let handles = HANDLES.lock();
+    for t in handles.values() {
+        // One that is ending, as it is changed, runs no more.
+        let _ = call(nr::THREAD_SET_PRIORITY, [t.raw() as usize, priority, 0, 0, 0, 0]);
+    }
+    PRIORITY.store(priority, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Whether `tid` is a thread of this process's.
+pub fn exists(tid: i32) -> bool {
+    HANDLES.lock().contains_key(&tid)
+}
+
 /// Keeps the main thread's handle, as [`__veda_clone`] keeps the others':
 /// called by it, once it has an id.
 pub fn main_thread_ready() {
@@ -157,6 +193,12 @@ fn forget_current() {
 /// The handle of thread `tid` of this process.
 fn handle_of(tid: i32) -> Result<Arc<Thread>, i32> {
     HANDLES.lock().get(&tid).cloned().ok_or(ESRCH as i32)
+}
+
+/// The processor time thread `tid` of this process has used; `None` for
+/// no such thread.
+pub fn cpu_time_ns(tid: i32) -> Option<u64> {
+    handle_of(tid).ok()?.info().ok().map(|i| i.cpu_time_ns)
 }
 
 /// What a failed suspension call says, as an `errno` value.

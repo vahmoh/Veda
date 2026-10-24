@@ -23,7 +23,9 @@
 //! ```
 //!
 //! Paths are relative (`bin/init`), use `/` as separator, and never
-//! contain `.` or `..` components. Directories are implicit.
+//! contain `.` or `..` components. Directories are implicit. Files of the
+//! same contents may share their data (the builder stores it once): a
+//! program installed under several names takes the room of one.
 
 #![no_std]
 
@@ -196,6 +198,7 @@ impl<'a> Archive<'a> {
 #[cfg(feature = "std")]
 pub mod builder {
     use super::*;
+    use std::collections::HashMap;
     use std::string::String;
     use std::vec::Vec;
 
@@ -221,7 +224,9 @@ pub mod builder {
             self
         }
 
-        /// Serialises the archive.
+        /// Serialises the archive. The data of files of the same contents
+        /// is stored once, which their entries share (in path order, the
+        /// first one's).
         pub fn build(mut self) -> Vec<u8> {
             self.files.sort_by(|a, b| a.0.cmp(&b.0));
             let count = self.files.len();
@@ -233,16 +238,27 @@ pub mod builder {
 
             let mut entries = Vec::with_capacity(count * ENTRY_SIZE);
             let mut strings = Vec::with_capacity(strings_size);
+            // Where each file's data goes: its own place, or that of the
+            // first file of the same contents, which alone is written.
             let mut offsets = Vec::with_capacity(count);
+            let mut stored: HashMap<&[u8], u64> = HashMap::new();
             for (path, data) in &self.files {
+                let (off, first) = match stored.get(data.as_slice()) {
+                    Some(&off) => (off, false),
+                    None => {
+                        let off = data_off;
+                        stored.insert(data, off);
+                        data_off = align(data_off + data.len() as u64);
+                        (off, true)
+                    }
+                };
                 entries.extend_from_slice(&(strings.len() as u32).to_le_bytes());
                 entries.extend_from_slice(&(path.len() as u32).to_le_bytes());
-                entries.extend_from_slice(&data_off.to_le_bytes());
+                entries.extend_from_slice(&off.to_le_bytes());
                 entries.extend_from_slice(&(data.len() as u64).to_le_bytes());
                 entries.extend_from_slice(&[0u8; 8]);
                 strings.extend_from_slice(path.as_bytes());
-                offsets.push(data_off);
-                data_off = align(data_off + data.len() as u64);
+                offsets.push(first.then_some(off));
             }
             let total = data_off;
 
@@ -258,8 +274,10 @@ pub mod builder {
             out.extend_from_slice(&entries);
             out.extend_from_slice(&strings);
             for ((_, data), off) in self.files.iter().zip(offsets) {
-                out.resize(off as usize, 0);
-                out.extend_from_slice(data);
+                if let Some(off) = off {
+                    out.resize(off as usize, 0);
+                    out.extend_from_slice(data);
+                }
             }
             out.resize(total as usize, 0);
             out
@@ -290,6 +308,29 @@ mod tests {
         assert!(ar.find("missing").is_none());
         let paths: std::vec::Vec<_> = ar.files().map(|f| f.path).collect();
         assert_eq!(paths, ["a.txt", "bin/init", "fonts/ui.ttf"]);
+    }
+
+    #[test]
+    fn files_of_the_same_contents_share_their_data() {
+        let program = vec![7u8; 5000];
+        let mut b = Builder::new();
+        b.add("bin/python3", program.clone());
+        b.add("bin/python3.15", program.clone());
+        b.add("bin/python", program.clone());
+        b.add("bin/other", vec![8; 100]);
+        b.add("a", vec![]);
+        b.add("b", vec![]);
+        let img = b.build();
+        // One copy of the program, aligned, and one of the other file.
+        assert_eq!(img.len() as u64, 2 * DATA_ALIGN + 5000u64.div_ceil(DATA_ALIGN) * DATA_ALIGN);
+        let ar = Archive::open(&img).unwrap();
+        let (a, b, c) =
+            (ar.find("bin/python").unwrap(), ar.find("bin/python3").unwrap(), ar.find("bin/python3.15").unwrap());
+        assert_eq!((a.data, b.data, c.data), (&program[..], &program[..], &program[..]));
+        assert!(a.offset == b.offset && b.offset == c.offset);
+        assert_eq!(ar.find("bin/other").unwrap().data, &[8; 100]);
+        assert_ne!(ar.find("bin/other").unwrap().offset, a.offset);
+        assert!(ar.find("a").unwrap().data.is_empty() && ar.find("b").unwrap().data.is_empty());
     }
 
     #[test]

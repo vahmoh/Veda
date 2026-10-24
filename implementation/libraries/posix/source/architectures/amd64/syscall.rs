@@ -53,7 +53,8 @@ pub unsafe fn dispatch(n: usize, a: [usize; 6]) -> Option<SysResult> {
             // Veda has neither hard nor symbolic links.
             nr::LINK | nr::SYMLINK | nr::MKNOD => Err(EPERM),
             nr::READLINK => fs::readlinkat(at::FDCWD, a[0]),
-            nr::CHMOD | nr::CHOWN | nr::LCHOWN => fs::chmodat(at::FDCWD, a[0]),
+            nr::CHMOD => fs::chmodat(at::FDCWD, a[0]),
+            nr::CHOWN | nr::LCHOWN => fs::chownat(at::FDCWD, a[0], a[1] as u32, a[2] as u32),
             nr::TIME => time::time(a[0]),
             nr::ARCH_PRCTL => arch_prctl(a[0] as u32, a[1]),
             // The size is a hint, which only has to be positive.

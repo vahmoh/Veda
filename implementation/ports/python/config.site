@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# What CPython's configure would learn by running programs on Veda, which a
+# cross build cannot: the answers for Veda's C library (musl's) on the POSIX
+# layer, and GCC's. python/build.sh gives configure this file, then the
+# architecture's (architectures/<architecture>/config.site), as CONFIG_SITE.
+
+# No pseudo-terminals.
+ac_cv_file__dev_ptmx=no
+ac_cv_file__dev_ptc=no
+
+# getaddrinfo() asks the network service's resolver, and answers as POSIX
+# says.
+ac_cv_buggy_getaddrinfo=no
+
+# Semaphores between processes (sem_open) are named in /dev/shm, which Veda
+# has not: those within a process (sem_init) work.
+ac_cv_posix_semaphores_enabled=no
+ac_cv_broken_sem_getvalue=no
+
+# tzset() reads POSIX time zones from TZ (there is no tz database).
+ac_cv_working_tzset=yes
+
+# GCC's labels as values; musl's threads, all of the system's scope.
+ac_cv_computed_gotos=yes
+ac_cv_pthread_system_supported=yes
+
+# musl's mbstowcs(), nice() and poll() work as POSIX says; chflags() is
+# the BSDs'.
+ac_cv_broken_mbstowcs=no
+ac_cv_broken_nice=no
+ac_cv_broken_poll=no
+ac_cv_have_chflags=no
+ac_cv_have_lchflags=no

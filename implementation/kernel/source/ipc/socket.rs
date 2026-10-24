@@ -39,7 +39,7 @@ use crate::object::{KObject, Signals};
 use crate::synchronization::SpinLock;
 
 /// Bytes buffered per direction before writers get `ShouldWait`.
-pub const CAPACITY: usize = 256 * 1024;
+pub const CAPACITY: usize = abi::SOCKET_CAPACITY;
 /// Writes of at most this many bytes are never split: they go in whole or
 /// wait (POSIX `PIPE_BUF`). An endpoint is writable while this much fits.
 pub const ATOMIC_WRITE: usize = abi::SOCKET_ATOMIC_WRITE;

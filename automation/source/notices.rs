@@ -81,6 +81,24 @@ const PARTS: &[(&str, &str, &str)] = &[
          its maker's terms",
     ),
     ("web", "WPE WebKit", "The browser's web engine and the libraries it stands on, each under its own licence"),
+    (
+        "iana-etc",
+        "IANA's service names",
+        "The services of the Internet's protocols and their ports, as the C library knows them \
+         (/system/etc/services)",
+    ),
+    (
+        "ca-certificates",
+        "Mozilla's certificate authorities",
+        "The certificate authorities that the TLS of the web engine and of Python trusts (/system/etc/ssl/cert.pem)",
+    ),
+    (
+        "python",
+        "Python",
+        "CPython, the Python interpreter and its standard library, the libraries built into it (zlib, bzip2, \
+         XZ Utils' liblzma, Zstandard, mpdecimal, Expat, SQLite and OpenSSL) and the pip that ensurepip installs, \
+         each under its own licence",
+    ),
 ];
 
 /// The texts of `port`, for `/system/licences/<port>`, as the build that
@@ -449,6 +467,10 @@ pub fn readme(parts: &BTreeSet<String>, crates: &[Crate], noto: bool) -> Result<
             "web" => {
                 let webkit = Port::named("wpewebkit")?;
                 part(name, &webkit.version, &format!("{}, and each library's own", webkit.licence), what, &texts);
+            }
+            "python" => {
+                let python = Port::named("python")?;
+                part(name, &python.version, &format!("{}, and each library's own", python.licence), what, &texts);
             }
             port => {
                 let port = Port::named(port)?;

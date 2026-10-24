@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# CPython: Python inside Veda, its interpreter and standard library (see
+# documentation/PYTHON.md). Its Sigstore bundle on python.org was checked
+# against its release manager's identity (hugo@python.org, through GitHub)
+# when it was pinned; the releases are not signed with PGP.
+name = "python"
+version = "3.15.1"
+url = "https://www.python.org/ftp/python/3.15.1/Python-3.15.1.tar.xz"
+sha256 = "673ae7232d84c894729882c8257d300ef2d26523911bfd3917ec8ce7f526f99b"
+license = "PSF-2.0"

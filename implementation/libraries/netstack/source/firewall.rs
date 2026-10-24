@@ -12,16 +12,16 @@
 //!
 //! * **What comes in.** A new connection (a TCP segment that only
 //!   synchronises) or a datagram for a port is let in when a port rule opens
-//!   the port to where it comes from, or the socket on the port is open to
-//!   it (by its application's rule, which `netd` sets with
-//!   [`Firewall::set_exposure`]). A port rule that closes the port to the
-//!   source wins over both, and blocking everything incoming sets every
-//!   rule that lets something in aside. Replies always come in: the
-//!   segments of a connection (smoltcp takes them if it has the
-//!   connection), and datagrams from where this machine sent one in the
-//!   last three minutes; so do DHCP's answers, the ICMP errors that tell
-//!   TCP and ping what became of their packets, and IPv6's neighbour
-//!   discovery (from the link itself: a hop limit of 255).
+//!   the port to where it comes from, or the socket that takes it (the one
+//!   on the port bound to its address) is open to it (by its application's
+//!   rule, which `netd` sets with [`Firewall::set_exposure`]). A port rule
+//!   that closes the port to the source wins over both, and blocking
+//!   everything incoming sets every rule that lets something in aside.
+//!   Replies always come in: the segments of a connection (smoltcp takes
+//!   them if it has the connection), and datagrams from where this machine
+//!   sent one in the last three minutes; so do DHCP's answers, the ICMP
+//!   errors that tell TCP and ping what became of their packets, and IPv6's
+//!   neighbour discovery (from the link itself: a hop limit of 255).
 //! * **Stealth.** smoltcp answers what comes for a port nothing uses (a
 //!   reset, "port unreachable"), which shows the machine is there: in
 //!   stealth mode it is dropped instead, and [`Firewall::outbound`] drops
@@ -53,6 +53,7 @@
 use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use proto::net::{FirewallConfig, FirewallEvent, FirewallProtocol, FirewallReason, FirewallStats, Scope};
@@ -62,6 +63,7 @@ use smoltcp::wire::{
     TcpPacket, UdpPacket,
 };
 
+use crate::sockets::Binding;
 use crate::{SockId, Stack};
 
 /// The things turned away that the log keeps.
@@ -145,10 +147,11 @@ struct Flow {
 }
 
 /// A socket that takes what other machines start (a TCP listener, a UDP
-/// socket), and where from.
+/// socket), to the addresses of its binding, and where from.
 #[derive(Debug, Clone)]
 struct Receiver {
     sock: SockId,
+    binding: Binding,
     from: Option<Scope>,
     app: String,
 }
@@ -233,8 +236,10 @@ pub struct LogEntry {
 pub struct Firewall {
     config: FirewallConfig,
     /// The sockets that take what other machines start, by protocol and
-    /// port (a port has one listener, or one UDP socket).
-    receivers: BTreeMap<(FirewallProtocol, u16), Receiver>,
+    /// port: one listener or UDP socket for each address of a port (those on
+    /// one port are bound to addresses apart, an IPv4 socket and an
+    /// IPv6-only one, or sockets on different addresses).
+    receivers: BTreeMap<(FirewallProtocol, u16), Vec<Receiver>>,
     ports_of: BTreeMap<SockId, (FirewallProtocol, u16)>,
     /// When the last datagram of each UDP conversation went either way.
     udp: BTreeMap<Flow, u64>,
@@ -283,28 +288,43 @@ impl Firewall {
         self.config = config;
     }
 
-    /// Socket `sock` takes what other machines start on `port`.
-    pub(crate) fn add_receiver(&mut self, sock: SockId, protocol: FirewallProtocol, port: u16) {
-        self.receivers.insert((protocol, port), Receiver { sock, from: None, app: String::new() });
+    /// Socket `sock`, bound so (`binding`), takes what other machines start
+    /// on `port`.
+    pub(crate) fn add_receiver(&mut self, sock: SockId, protocol: FirewallProtocol, port: u16, binding: Binding) {
+        self.receivers.entry((protocol, port)).or_default().push(Receiver {
+            sock,
+            binding,
+            from: None,
+            app: String::new(),
+        });
         self.ports_of.insert(sock, (protocol, port));
     }
 
     /// Socket `sock` is gone.
     pub(crate) fn remove_receiver(&mut self, sock: SockId) {
-        if let Some(key) = self.ports_of.remove(&sock)
-            && self.receivers.get(&key).is_some_and(|r| r.sock == sock)
-        {
-            self.receivers.remove(&key);
+        let Some(key) = self.ports_of.remove(&sock) else { return };
+        if let Some(on_port) = self.receivers.get_mut(&key) {
+            on_port.retain(|r| r.sock != sock);
+            if on_port.is_empty() {
+                self.receivers.remove(&key);
+            }
         }
     }
 
     /// Where socket `sock`, of application `app`, takes what other machines
     /// start from (`None`: nowhere, as a socket is until this says).
     pub fn set_exposure(&mut self, sock: SockId, from: Option<Scope>, app: &str) {
-        if let Some(r) = self.ports_of.get(&sock).and_then(|key| self.receivers.get_mut(key)) {
+        let on_port = self.ports_of.get(&sock).and_then(|key| self.receivers.get_mut(key));
+        if let Some(r) = on_port.and_then(|on_port| on_port.iter_mut().find(|r| r.sock == sock)) {
             r.from = from;
             app.clone_into(&mut r.app);
         }
+    }
+
+    /// The socket that takes what other machines start to `local` (the
+    /// sockets on a port are bound to addresses apart: one at most).
+    fn receiver(&self, protocol: FirewallProtocol, local: SocketAddr) -> Option<&Receiver> {
+        self.receivers.get(&(protocol, local.port()))?.iter().find(|r| r.binding.takes(local.ip()))
     }
 
     /// What was turned away lately, oldest first.
@@ -379,7 +399,7 @@ impl Firewall {
                 || self.refuse(FirewallReason::Fragment, place, protocol, SocketAddr::new(from, 0), 0, "", now);
         }
         let first_piece = p.more_frags();
-        let pass = self.transport(p.next_header(), p.payload(), from, place, now, first_piece);
+        let pass = self.transport(p.next_header(), p.payload(), (from, IpAddr::V4(dst)), place, now, first_piece);
         if pass && first_piece && self.config.enabled {
             if self.fragments.len() >= MAX_FRAGMENTED {
                 self.fragments.pop_first();
@@ -447,7 +467,7 @@ impl Firewall {
             if src.is_unspecified() {
                 return invalid(self);
             }
-            return self.transport(next, rest, from, place, now, false);
+            return self.transport(next, rest, (from, IpAddr::V6(dst)), place, now, false);
         }
         let Ok(m) = Icmpv6Packet::new_checked(rest) else { return invalid(self) };
         match m.msg_type() {
@@ -473,13 +493,13 @@ impl Firewall {
         }
     }
 
-    /// Whether a datagram of `protocol` from `from` goes on to smoltcp
-    /// (`piece`: the first piece of a fragmented one).
+    /// Whether a datagram of `protocol` from `from` to `to` goes on to
+    /// smoltcp (`piece`: the first piece of a fragmented one).
     fn transport(
         &mut self,
         protocol: IpProtocol,
         payload: &[u8],
-        from: IpAddr,
+        (from, to): (IpAddr, IpAddr),
         place: &Place,
         now: u64,
         piece: bool,
@@ -501,7 +521,7 @@ impl Firewall {
                 if !syn || ack || !on {
                     return true;
                 }
-                self.admit_new(FirewallProtocol::Tcp, number, remote, port, place, now)
+                self.admit_new(FirewallProtocol::Tcp, number, remote, SocketAddr::new(to, port), place, now)
             }
             IpProtocol::Udp => {
                 let Ok(u) = UdpPacket::new_checked(payload) else {
@@ -525,7 +545,7 @@ impl Firewall {
                 if from.is_ipv4() && u.src_port() == 67 && port == 68 {
                     return true;
                 }
-                self.admit_new(FirewallProtocol::Udp, number, remote, port, place, now)
+                self.admit_new(FirewallProtocol::Udp, number, remote, SocketAddr::new(to, port), place, now)
             }
             IpProtocol::Icmp => {
                 let Ok(m) = Icmpv4Packet::new_checked(payload) else {
@@ -545,32 +565,33 @@ impl Firewall {
         }
     }
 
-    /// Whether a new connection or datagram from `remote` for `port` comes
+    /// Whether a new connection or datagram from `remote` for `local` comes
     /// in.
     fn admit_new(
         &mut self,
         protocol: FirewallProtocol,
         number: u8,
         remote: SocketAddr,
-        port: u16,
+        local: SocketAddr,
         place: &Place,
         now: u64,
     ) -> bool {
-        match self.admit(protocol, port, remote.ip(), place) {
+        let port = local.port();
+        match self.admit(protocol, local, remote.ip(), place) {
             Admit::Yes => {
                 if protocol == FirewallProtocol::Tcp && !self.limit(Limit::Connections, remote.ip(), now) {
-                    let app = self.app_on(protocol, port);
+                    let app = self.app_on(protocol, local);
                     return self.refuse(FirewallReason::RateLimited, place, number, remote, port, &app, now);
                 }
                 self.stats.allowed += 1;
                 true
             }
             Admit::No => {
-                let app = self.app_on(protocol, port);
+                let app = self.app_on(protocol, local);
                 self.refuse(FirewallReason::NotAllowed, place, number, remote, port, &app, now)
             }
             Admit::Blocked => {
-                let app = self.app_on(protocol, port);
+                let app = self.app_on(protocol, local);
                 self.refuse(FirewallReason::AppBlocked, place, number, remote, port, &app, now)
             }
             Admit::Closed if self.config.stealth => {
@@ -581,9 +602,11 @@ impl Firewall {
         }
     }
 
-    /// The rules about a new connection or datagram from `from` for `port`.
-    fn admit(&self, protocol: FirewallProtocol, port: u16, from: IpAddr, place: &Place) -> Admit {
-        let receiver = self.receivers.get(&(protocol, port));
+    /// The rules about a new connection or datagram from `from` for
+    /// `local`.
+    fn admit(&self, protocol: FirewallProtocol, local: SocketAddr, from: IpAddr, place: &Place) -> Admit {
+        let receiver = self.receiver(protocol, local);
+        let port = local.port();
         let rules = &self.config.ports;
         if rules.iter().any(|r| !r.allow && r.covers(protocol, port) && place.within(&r.from, from)) {
             return Admit::No;
@@ -606,9 +629,10 @@ impl Firewall {
         }
     }
 
-    /// The application whose socket is on `port` ("" if none).
-    fn app_on(&self, protocol: FirewallProtocol, port: u16) -> String {
-        self.receivers.get(&(protocol, port)).map(|r| r.app.clone()).unwrap_or_default()
+    /// The application whose socket takes what comes to `local` ("" if
+    /// none).
+    fn app_on(&self, protocol: FirewallProtocol, local: SocketAddr) -> String {
+        self.receiver(protocol, local).map(|r| r.app.clone()).unwrap_or_default()
     }
 
     /// Whether a ping from `from` is answered.
@@ -965,7 +989,7 @@ mod tests {
     #[test]
     fn new_connections_need_a_rule_or_an_open_socket() {
         let mut fw = on(|_| {});
-        fw.add_receiver(1, FirewallProtocol::Tcp, 22);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 22, Binding::Any);
         // A listener open to nobody yet.
         assert!(!comes_in(&mut fw, &syn_from(NEIGHBOUR, 22), 0));
         assert_eq!(fw.log().last().map(|e| e.event.reason), Some(FirewallReason::NotAllowed));
@@ -1006,9 +1030,9 @@ mod tests {
                 allow: true,
             });
         });
-        fw.add_receiver(1, FirewallProtocol::Tcp, 8080);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 8080, Binding::Any);
         fw.set_exposure(1, None, "videos");
-        fw.add_receiver(2, FirewallProtocol::Udp, 5353);
+        fw.add_receiver(2, FirewallProtocol::Udp, 5353, Binding::Any);
         fw.set_exposure(2, None, "videos");
         assert!(!comes_in(&mut fw, &syn_from(STRANGER, 8080), 0));
         let last = fw.log().last().map(|e| (e.event.reason, e.event.app.clone(), e.event.port));
@@ -1028,19 +1052,45 @@ mod tests {
                 allow: false,
             })
         });
-        fw.add_receiver(1, FirewallProtocol::Tcp, 22);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 22, Binding::Any);
         fw.set_exposure(1, Some(Scope::Anywhere {}), "terminal");
         assert!(!comes_in(&mut fw, &syn_from(NEIGHBOUR, 22), 0));
         // Blocking everything incoming sets every rule aside.
         let mut fw = on(|c| c.block_incoming = true);
-        fw.add_receiver(1, FirewallProtocol::Tcp, 22);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 22, Binding::Any);
         fw.set_exposure(1, Some(Scope::Anywhere {}), "terminal");
         assert!(!comes_in(&mut fw, &syn_from(NEIGHBOUR, 22), 0));
         // A socket that is gone is a closed port.
         let mut fw = on(|c| c.stealth = false);
-        fw.add_receiver(1, FirewallProtocol::Tcp, 22);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 22, Binding::Any);
         fw.remove_receiver(1);
         assert!(comes_in(&mut fw, &syn_from(NEIGHBOUR, 22), 0));
+    }
+
+    #[test]
+    fn sockets_on_one_port_are_judged_by_their_addresses() {
+        // A port's IPv4 socket and IPv6-only one, of two applications.
+        let mut fw = on(|c| c.stealth = false);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 8080, Binding::AnyV4);
+        fw.set_exposure(1, Some(Scope::Anywhere {}), "web");
+        fw.add_receiver(2, FirewallProtocol::Tcp, 8080, Binding::AnyV6);
+        fw.set_exposure(2, None, "chat");
+        let syn6 = v6("fe80::20", "fe80::10", IpProtocol::Tcp, 64, &tcp(40000, 8080, SYN));
+        assert!(comes_in(&mut fw, &syn_from(STRANGER, 8080), 0));
+        assert!(!comes_in(&mut fw, &syn6, 0));
+        assert_eq!(fw.log().last().map(|e| e.event.app.as_str()), Some("chat"));
+        // The one that is gone leaves its addresses closed, the other's
+        // judged by it still.
+        fw.remove_receiver(1);
+        assert!(comes_in(&mut fw, &syn_from(STRANGER, 8080), 0));
+        assert!(!comes_in(&mut fw, &syn6, 0));
+        fw.set_exposure(2, Some(Scope::LocalNetwork {}), "chat");
+        assert!(comes_in(&mut fw, &syn6, 0));
+        // A socket bound to one address: what comes to others is not its.
+        fw.add_receiver(3, FirewallProtocol::Udp, 5353, Binding::Addr(ME.parse().unwrap()));
+        let to = |dst: &str| v4(NEIGHBOUR, dst, IpProtocol::Udp, &udp(5353, 5353), (0, false));
+        assert!(!comes_in(&mut fw, &to(ME), 0));
+        assert!(comes_in(&mut fw, &to("192.168.1.255"), 0));
     }
 
     #[test]
@@ -1081,7 +1131,7 @@ mod tests {
         // DHCP's answers.
         assert!(comes_in(&mut fw, &v4(NEIGHBOUR, "255.255.255.255", IpProtocol::Udp, &udp(67, 68), (0, false)), 0));
         // A UDP socket open to the local network.
-        fw.add_receiver(2, FirewallProtocol::Udp, 5353);
+        fw.add_receiver(2, FirewallProtocol::Udp, 5353, Binding::Any);
         fw.set_exposure(2, Some(Scope::LocalNetwork {}), "music");
         assert!(comes_in(&mut fw, &v4(NEIGHBOUR, ME, IpProtocol::Udp, &udp(5353, 5353), (0, false)), 0));
         assert!(!comes_in(&mut fw, &v4(STRANGER, ME, IpProtocol::Udp, &udp(5353, 5353), (0, false)), 0));
@@ -1114,7 +1164,7 @@ mod tests {
     #[test]
     fn a_flood_of_connections_is_held_back() {
         let mut fw = on(|_| {});
-        fw.add_receiver(1, FirewallProtocol::Tcp, 80);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 80, Binding::Any);
         fw.set_exposure(1, Some(Scope::Anywhere {}), "web");
         let mut let_in = 0;
         for _ in 0..100 {
@@ -1138,7 +1188,7 @@ mod tests {
     #[test]
     fn fragments_follow_their_first_piece() {
         let mut fw = on(|_| {});
-        fw.add_receiver(1, FirewallProtocol::Udp, 9000);
+        fw.add_receiver(1, FirewallProtocol::Udp, 9000, Binding::Any);
         fw.set_exposure(1, Some(Scope::Anywhere {}), "game");
         let first = v4(STRANGER, ME, IpProtocol::Udp, &udp(9000, 9000), (0, true));
         let later = v4(STRANGER, ME, IpProtocol::Udp, &[0; 16], (16, false));
@@ -1189,7 +1239,7 @@ mod tests {
         piece.extend(udp(1, 2));
         assert!(!comes_in(&mut fw, &v6("2001:db8::1", "fe80::10", IpProtocol::Ipv6Frag, 64, &piece), 0));
         // A link-local neighbour is on the local network.
-        fw.add_receiver(1, FirewallProtocol::Tcp, 22);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 22, Binding::Any);
         fw.set_exposure(1, Some(Scope::LocalNetwork {}), "terminal");
         let syn = tcp(40000, 22, SYN);
         assert!(comes_in(&mut fw, &v6("fe80::1", "fe80::10", IpProtocol::Tcp, 64, &syn), 0));
@@ -1240,14 +1290,14 @@ mod tests {
             ..FirewallConfig::default()
         };
         let mut fw = on(|x| *x = c.clone());
-        fw.add_receiver(1, FirewallProtocol::Tcp, 7000);
+        fw.add_receiver(1, FirewallProtocol::Tcp, 7000, Binding::Any);
         fw.set_exposure(1, c.incoming_for("music"), "music");
         assert!(comes_in(&mut fw, &syn_from(NEIGHBOUR, 7000), 0));
-        fw.add_receiver(2, FirewallProtocol::Tcp, 7001);
+        fw.add_receiver(2, FirewallProtocol::Tcp, 7001, Binding::Any);
         fw.set_exposure(2, c.incoming_for("editor"), "editor");
         assert!(!comes_in(&mut fw, &syn_from(NEIGHBOUR, 7001), 0));
         // Not let in, as the user answered when asked.
-        fw.add_receiver(3, FirewallProtocol::Tcp, 7002);
+        fw.add_receiver(3, FirewallProtocol::Tcp, 7002, Binding::Any);
         fw.set_exposure(3, c.incoming_for("photos"), "photos");
         assert!(!comes_in(&mut fw, &syn_from(NEIGHBOUR, 7002), 0));
         assert_eq!(fw.log().last().map(|e| e.event.reason), Some(FirewallReason::NotAllowed));

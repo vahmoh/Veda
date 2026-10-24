@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# What CPython's configure would learn by running programs on AMD64, after
+# Veda's answers (../../config.site): the System V ABI's types and the
+# processor's arithmetic.
+ac_cv_aligned_required=no
+ac_cv_wchar_t_signed=yes
+ac_cv_rshift_extends_sign=yes

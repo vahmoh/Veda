@@ -117,11 +117,13 @@ pub fn process_exit(code: i64) -> SysResult {
 }
 
 /// Ends the process; with `kill_flags::DESCENDANTS`, the processes it
-/// started (and so on) as well: its handle manages its whole job.
-pub fn process_kill(raw: RawHandle, flags: usize) -> SysResult {
-    if flags & !abi::kill_flags::DESCENDANTS != 0 {
+/// started (and so on) as well: its handle manages its whole job. They
+/// end as POSIX signal `signal` ends a program (1 to 64), or killed (0).
+pub fn process_kill(raw: RawHandle, flags: usize, signal: usize) -> SysResult {
+    if flags & !abi::kill_flags::DESCENDANTS != 0 || signal > 64 {
         return Err(Error::InvalidArgs);
     }
+    let code = if signal == 0 { abi::EXIT_CODE_KILLED } else { abi::EXIT_CODE_SIGNALED - signal as i64 };
     let p = get_process(raw, Rights::MANAGE)?;
     let mut victims = alloc::vec![p.clone()];
     if flags & abi::kill_flags::DESCENDANTS != 0 {
@@ -129,7 +131,7 @@ pub fn process_kill(raw: RawHandle, flags: usize) -> SysResult {
     }
     let me = current_process()?.koid;
     for v in &victims {
-        v.kill(abi::EXIT_CODE_KILLED);
+        v.kill(code);
     }
     if victims.iter().any(|v| v.koid == me) {
         scheduler::exit_current();

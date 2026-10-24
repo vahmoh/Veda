@@ -12,7 +12,10 @@
 //! signals (per thread), and handlers called synchronously by the thread a
 //! signal is for, once it does not block it: at once for a signal a thread
 //! raises itself; for one from another thread, as the next system call the
-//! thread makes returns. Such a signal ends the thread's wait if it waits
+//! thread makes returns. A signal the program sends itself (`kill` of its
+//! own process) is the calling thread's if it does not block it, else
+//! another's that does not; if every thread blocks it, it stays pending for
+//! the process, for the first thread to unblock it or wait for it. Such a signal ends the thread's wait if it waits
 //! for signals (`sigsuspend`, `sigwait`, `pause`, a `poll` of nothing) or on
 //! a futex (a lock, a condition, a join: the wait ends with `EINTR`, which
 //! is how the C library's cancellation and `__synccall` reach a thread that
@@ -39,12 +42,16 @@ use crate::{process, time, user};
 /// the words that hold them (a mutex's owner).
 const TID_LIMIT: i32 = 1 << 30;
 
-/// A thread's id and signal state.
+/// A thread's id, name and signal state.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 struct ThreadState {
     /// 0 for a thread this layer has not met (the main thread before the
     /// C library set up thread-local storage).
     tid: i32,
+    /// The name it gave itself (`PR_SET_NAME`), NUL-padded, or one it was
+    /// given by the thread that created it: none (all zeros) is the
+    /// process's.
+    name: [u8; THREAD_NAME_SIZE],
     mask: u64,
     pending: u64,
     /// The address of the futex it waits on (0: none), which a signal for
@@ -70,6 +77,8 @@ struct State {
     /// The number of threads with a pending signal they do not block (kept
     /// apart from the lock: [`deliver_if_any`] reads it without taking it).
     ready_threads: &'static AtomicUsize,
+    /// Signals the process sent itself while every thread blocked them.
+    pending: u64,
 }
 
 static READY_THREADS: AtomicUsize = AtomicUsize::new(0);
@@ -80,6 +89,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     tids: BTreeMap::new(),
     next_tid: 1,
     ready_threads: &READY_THREADS,
+    pending: 0,
 });
 
 /// Notified when a signal becomes pending for a thread other than the one
@@ -139,6 +149,21 @@ impl State {
         None
     }
 
+    /// Gives thread `tp` the signals pending for the process that it does
+    /// not block, or that it waits for (`want`).
+    fn claim(&mut self, tp: usize, want: u64) {
+        let claimed = self.pending & (!self.get(tp).mask | want);
+        if claimed != 0 {
+            self.pending &= !claimed;
+            self.update(tp, |t| t.pending |= claimed);
+        }
+    }
+
+    /// The thread, but `me`, that does not block signal `s`, if any.
+    fn unblocked_but(&self, me: usize, s: u32) -> Option<usize> {
+        self.threads.iter().find(|&(&tp, t)| tp != me && t.mask & bit(s) == 0).map(|(&tp, _)| tp)
+    }
+
     /// Takes the lowest pending signal of `set` from thread `tp`.
     fn take(&mut self, tp: usize, set: u64) -> Option<u32> {
         self.update(tp, |t| {
@@ -175,8 +200,8 @@ pub fn threads_ready() {
 }
 
 /// A thread with thread pointer `tp` is about to start: its id, and a fresh
-/// state with the creating thread's mask (as a thread inherits it on
-/// Linux). `EAGAIN` if no id is free.
+/// state with the creating thread's mask and name (as a thread inherits
+/// them on Linux). `EAGAIN` if no id is free.
 pub fn thread_created(tp: usize) -> Result<i32, isize> {
     let me = current();
     let pid = process::pid();
@@ -184,8 +209,8 @@ pub fn thread_created(tp: usize) -> Result<i32, isize> {
     // A thread that had this pointer has ended.
     st.forget(tp);
     let tid = st.free_tid(pid).ok_or(EAGAIN)?;
-    let mask = st.get(me).mask;
-    st.update(tp, |t| *t = ThreadState { tid, mask, ..Default::default() });
+    let ThreadState { mask, name, .. } = st.get(me);
+    st.update(tp, |t| *t = ThreadState { tid, mask, name, ..Default::default() });
     st.tids.insert(tid, tp);
     Ok(tid)
 }
@@ -205,6 +230,27 @@ pub fn thread_exited() {
 pub fn current_tid() -> i32 {
     let tid = STATE.lock().get(current()).tid;
     if tid != 0 { tid } else { process::pid() }
+}
+
+/// How many bytes a thread's name takes, its NUL with them (Linux's
+/// `TASK_COMM_LEN`).
+pub const THREAD_NAME_SIZE: usize = 16;
+
+/// The calling thread's name, NUL-padded, if it or the thread that created
+/// it gave it one (`PR_SET_NAME`).
+pub fn thread_name() -> Option<[u8; THREAD_NAME_SIZE]> {
+    let name = STATE.lock().get(current()).name;
+    (name != [0; THREAD_NAME_SIZE]).then_some(name)
+}
+
+/// Names the calling thread `name` (cut to fit, as Linux cuts it, with its
+/// NUL).
+pub fn set_thread_name(name: &[u8]) {
+    let mut padded = [0u8; THREAD_NAME_SIZE];
+    let n = name.iter().position(|&b| b == 0).unwrap_or(name.len()).min(THREAD_NAME_SIZE - 1);
+    padded[..n].copy_from_slice(&name[..n]);
+    let tp = current();
+    STATE.lock().update(tp, |t| t.name = padded);
 }
 
 fn bit(s: u32) -> u64 {
@@ -271,7 +317,7 @@ pub unsafe fn rt_sigprocmask(how: u32, set: usize, old: usize, size: usize) -> S
     let tp = current();
     let prev = {
         let mut st = STATE.lock();
-        st.update(tp, |t| {
+        let prev = st.update(tp, |t| {
             let prev = t.mask;
             if let Some(v) = new {
                 t.mask = match how {
@@ -282,7 +328,9 @@ pub unsafe fn rt_sigprocmask(how: u32, set: usize, old: usize, size: usize) -> S
                 } & !UNCATCHABLE;
             }
             Ok(prev)
-        })?
+        })?;
+        st.claim(tp, 0);
+        prev
     };
     if old != 0 {
         // SAFETY: as above.
@@ -293,7 +341,10 @@ pub unsafe fn rt_sigprocmask(how: u32, set: usize, old: usize, size: usize) -> S
 }
 
 pub unsafe fn rt_sigpending(set: usize) -> SysResult {
-    let pending = STATE.lock().get(current()).pending;
+    let pending = {
+        let st = STATE.lock();
+        st.get(current()).pending | st.pending
+    };
     // SAFETY: the program passed a sigset.
     unsafe { user::write(set, pending)? };
     Ok(0)
@@ -424,6 +475,7 @@ fn wait_for_handler(deadline: u64) -> bool {
     loop {
         {
             let mut st = STATE.lock();
+            st.claim(tp, 0);
             while st.get(tp).ready() == 0 {
                 let (guard, in_time) = ARRIVED.wait_until(st, deadline);
                 st = guard;
@@ -477,12 +529,14 @@ pub unsafe fn rt_sigtimedwait(set: usize, info: usize, timeout: usize) -> SysRes
     let taken = {
         let mut st = STATE.lock();
         loop {
+            st.claim(tp, want);
             if let Some(s) = st.take(tp, want) {
                 break s;
             }
             let (guard, in_time) = ARRIVED.wait_until(st, deadline);
             st = guard;
             if !in_time {
+                st.claim(tp, want);
                 match st.take(tp, want) {
                     Some(s) => break s,
                     None => return Err(EAGAIN),
@@ -505,7 +559,30 @@ pub fn send_self(s: u32) -> SysResult {
     if !valid(s) {
         return Err(EINVAL);
     }
-    raise(s);
+    let me = current();
+    let mut st = STATE.lock();
+    if st.get(me).mask & bit(s) == 0 {
+        drop(st);
+        raise(s);
+        return Ok(0);
+    }
+    if st.actions[s as usize].handler == sig::IGN {
+        return Ok(0);
+    }
+    match st.unblocked_but(me, s) {
+        Some(tp) => {
+            st.update(tp, |t| t.pending |= bit(s));
+            drop(st);
+            ARRIVED.notify_all();
+            wake_from_futex(tp, s);
+        }
+        // Every thread blocks it: the process keeps it pending.
+        None => {
+            st.pending |= bit(s);
+            drop(st);
+            ARRIVED.notify_all();
+        }
+    }
     Ok(0)
 }
 
@@ -626,7 +703,30 @@ mod tests {
             tids: BTreeMap::new(),
             next_tid: 1,
             ready_threads: Box::leak(Box::new(AtomicUsize::new(0))),
+            pending: 0,
         }
+    }
+
+    #[test]
+    fn signals_pending_for_the_process_go_to_the_thread_that_takes_them() {
+        let mut st = state();
+        st.update(0x100, |t| t.mask = bit(10));
+        st.update(0x200, |t| t.mask = bit(10) | bit(12));
+        // Every thread blocks 10: the process keeps it.
+        assert_eq!(st.unblocked_but(0x100, 10), None);
+        assert_eq!(st.unblocked_but(0x200, 12), Some(0x100));
+        st.pending |= bit(10);
+        // Blocked still, a thread does not take it; waiting for it, it does.
+        st.claim(0x100, 0);
+        assert_eq!((st.pending, st.get(0x100).pending), (bit(10), 0));
+        st.claim(0x200, bit(10));
+        assert_eq!(st.take(0x200, bit(10)), Some(10));
+        assert_eq!(st.pending, 0);
+        // Unblocked, it is the thread's, ready to run.
+        st.pending |= bit(10);
+        st.update(0x100, |t| t.mask = 0);
+        st.claim(0x100, 0);
+        assert_eq!((st.pending, st.get(0x100).ready()), (0, bit(10)));
     }
 
     #[test]
@@ -675,6 +775,18 @@ mod tests {
         st.update(0x100, |t| t.tid = 7);
         st.forget(0x100);
         assert_eq!((count(&st), st.tids.get(&7)), (0, None));
+    }
+
+    #[test]
+    fn a_thread_names_itself_as_linux_cuts_the_name() {
+        assert_eq!(thread_name(), None);
+        set_thread_name(b"a-thread-of-many-words\0");
+        assert_eq!(thread_name(), Some(*b"a-thread-of-man\0"));
+        set_thread_name(b"short\0garbage");
+        assert_eq!(thread_name().as_ref().map(|n| &n[..6]), Some(&b"short\0"[..]));
+        // No name: the process's, again.
+        set_thread_name(b"\0");
+        assert_eq!(thread_name(), None);
     }
 
     #[test]

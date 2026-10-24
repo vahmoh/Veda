@@ -686,21 +686,22 @@ unsafe fn timeout_value(value: usize, len: usize) -> Result<Option<u64>, isize> 
     Ok((ns > 0).then_some(ns))
 }
 
+const TCP_CORK: u32 = linux_raw_sys::net::TCP_CORK;
+const TCP_DEFER_ACCEPT: u32 = linux_raw_sys::net::TCP_DEFER_ACCEPT;
+const TCP_QUICKACK: u32 = linux_raw_sys::net::TCP_QUICKACK;
+const TCP_USER_TIMEOUT: u32 = linux_raw_sys::net::TCP_USER_TIMEOUT;
+
 /// `setsockopt`. The options of the socket level, TCP's and IP's that
 /// programs set are kept; those the network service has take effect
 /// (`TCP_NODELAY`; `SO_KEEPALIVE`, with `TCP_KEEPIDLE` as the interval, on
 /// a connection made after; `SO_LINGER` with no time); the time-outs are
 /// the layer's. The sizes of buffers are the service's, and hints about
-/// segments (`TCP_CORK`, `TCP_QUICKACK`...) are taken as given. Others,
+/// segments (`TCP_CORK`, `TCP_QUICKACK`...) are kept as given. Others,
 /// multicast's among them, are not there (`ENOPROTOOPT`).
 ///
 /// # Safety
 /// `value` must point at `len` readable bytes.
 pub unsafe fn setsockopt(fd: i32, level: u32, name: u32, value: usize, len: usize) -> SysResult {
-    const TCP_CORK: u32 = linux_raw_sys::net::TCP_CORK;
-    const TCP_DEFER_ACCEPT: u32 = linux_raw_sys::net::TCP_DEFER_ACCEPT;
-    const TCP_QUICKACK: u32 = linux_raw_sys::net::TCP_QUICKACK;
-    const TCP_USER_TIMEOUT: u32 = linux_raw_sys::net::TCP_USER_TIMEOUT;
     let desc = fd::get(fd)?;
     let len = len as u32 as usize;
     let s = match &desc.object {
@@ -750,9 +751,17 @@ pub unsafe fn setsockopt(fd: i32, level: u32, name: u32, value: usize, len: usiz
                 _ => o.keep_count = v,
             })
         }
-        (IPPROTO_TCP, TCP_MAXSEG | TCP_CORK | TCP_QUICKACK | TCP_DEFER_ACCEPT | TCP_USER_TIMEOUT) if stream => {
-            int().map(|_| 0)
+        (IPPROTO_TCP, TCP_QUICKACK) if stream => flag(|o, on| o.quickack = on),
+        (IPPROTO_TCP, TCP_CORK) if stream => flag(|o, on| o.cork = on),
+        (IPPROTO_TCP, TCP_DEFER_ACCEPT | TCP_USER_TIMEOUT) if stream => {
+            let v = u32::try_from(int()?).map_err(|_| EINVAL)?;
+            s.set_options(|o| match name {
+                TCP_DEFER_ACCEPT => o.defer_accept = v,
+                _ => o.user_timeout = v,
+            })
         }
+        // The service's segments are its own.
+        (IPPROTO_TCP, TCP_MAXSEG) if stream => int().map(|_| 0),
         (IPPROTO_IP, IP_TTL) => {
             let ttl = match int()? {
                 -1 => 64,
@@ -765,7 +774,7 @@ pub unsafe fn setsockopt(fd: i32, level: u32, name: u32, value: usize, len: usiz
             let tos = int()? as u32 & 0xff;
             s.set_options(|o| o.tos = tos)
         }
-        (IPPROTO_IPV6, IPV6_V6ONLY) if s.family == Family::V6 => flag(|o, on| o.v6only = on),
+        (IPPROTO_IPV6, IPV6_V6ONLY) if s.family == Family::V6 => s.set_v6only(int()? != 0),
         (IPPROTO_IPV6, IPV6_UNICAST_HOPS) if s.family == Family::V6 => {
             let hops = int()?;
             if !(-1..=255).contains(&hops) {
@@ -849,6 +858,10 @@ pub unsafe fn getsockopt(fd: i32, level: u32, name: u32, value: usize, len: usiz
         (IPPROTO_TCP, TCP_KEEPINTVL) if stream => int(o.keep_interval as i32),
         (IPPROTO_TCP, TCP_KEEPCNT) if stream => int(o.keep_count as i32),
         (IPPROTO_TCP, TCP_MAXSEG) if stream => int(1460),
+        (IPPROTO_TCP, TCP_QUICKACK) if stream => int(o.quickack as i32),
+        (IPPROTO_TCP, TCP_CORK) if stream => int(o.cork as i32),
+        (IPPROTO_TCP, TCP_DEFER_ACCEPT) if stream => int(o.defer_accept as i32),
+        (IPPROTO_TCP, TCP_USER_TIMEOUT) if stream => int(o.user_timeout as i32),
         (IPPROTO_IP, IP_TTL) => int(o.ttl as i32),
         (IPPROTO_IP, IP_TOS) => int(o.tos as i32),
         (IPPROTO_IPV6, IPV6_V6ONLY) if s.family == Family::V6 => int(o.v6only as i32),

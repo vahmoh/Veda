@@ -366,11 +366,12 @@ pub struct TcpListener {
 }
 
 impl TcpListener {
-    /// Listens on `addr` (port 0 picks a free port).
+    /// Listens on `addr` (port 0 picks a free port): on `::`, IPv4's
+    /// addresses too.
     pub fn bind(addr: SocketAddr, backlog: u32) -> Result<TcpListener, NetError> {
         let (ch, local) = with_client(|c| {
             let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
-            Ok(c.tcp_listen(addr, backlog, TcpOptions::default(), theirs)?.map(|local| (ours, local)))
+            Ok(c.tcp_listen(addr, false, backlog, TcpOptions::default(), theirs)?.map(|local| (ours, local)))
         })??;
         Ok(TcpListener { ch, local })
     }

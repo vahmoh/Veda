@@ -24,7 +24,9 @@ pub fn fs(e: FsError) -> isize {
         FsError::NoSpace => ENOSPC,
         FsError::Io => EIO,
         FsError::BadFd => EBADF,
-        FsError::TooMany => ENFILE,
+        // What runs out is a program's share of the VFS's open files (a
+        // quarter of all), most often: as POSIX has it, its own limit.
+        FsError::TooMany => EMFILE,
         FsError::NotEmpty => ENOTEMPTY,
         FsError::Denied => EACCES,
         FsError::IsSocket => ENXIO,

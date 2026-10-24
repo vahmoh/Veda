@@ -42,15 +42,22 @@ pub fn set_cwd(dir: String) {
 /// Resolves `name` against the directory `dirfd` (`AT_FDCWD`: the working
 /// directory).
 pub fn resolve_at(dirfd: i32, name: &[u8]) -> Result<Resolved, isize> {
-    if name.first() == Some(&b'/') {
-        return path::resolve("/", name);
+    let r = if name.first() == Some(&b'/') {
+        path::resolve("/", name)?
+    } else if dirfd == at::FDCWD {
+        path::resolve(&cwd(), name)?
+    } else {
+        let desc = fd::get(dirfd)?;
+        let Object::Dir(d) = &desc.object else { return Err(ENOTDIR) };
+        path::resolve(&d.path, name)?
+    };
+    // What a `..` climbed out of is a directory that is there.
+    for dir in &r.climbed {
+        if !stat(dir)?.is_dir {
+            return Err(ENOTDIR);
+        }
     }
-    if dirfd == at::FDCWD {
-        return path::resolve(&cwd(), name);
-    }
-    let desc = fd::get(dirfd)?;
-    let Object::Dir(d) = &desc.object else { return Err(ENOTDIR) };
-    path::resolve(&d.path, name)
+    Ok(r)
 }
 
 /// What the VFS knows about `path`.
@@ -70,8 +77,22 @@ pub fn stat_resolved(r: &Resolved) -> Result<Stat, isize> {
 /// The user and group POSIX programs run as.
 pub const UID: u32 = rt::process::UID;
 
-/// The POSIX view of a file's metadata.
-pub fn to_linux(st: &Stat) -> linux::Stat {
+/// A time of the VFS's (nanoseconds since 1970-01-01 in local time, as Veda
+/// shows times; 0: unknown) as POSIX has it, in UTC, local time being
+/// `offset` nanoseconds ahead of UTC ([`crate::time::utc_offset_ns`]).
+pub fn utc_of_local(ns: u64, offset: i64) -> u64 {
+    if ns == 0 { 0 } else { (ns as i128 - offset as i128).clamp(1, u64::MAX as i128) as u64 }
+}
+
+/// A time in UTC as the VFS keeps it, in local time (never 0, which tells
+/// the VFS "now").
+pub fn local_of_utc(ns: u64, offset: i64) -> u64 {
+    (ns as i128 + offset as i128).clamp(1, u64::MAX as i128) as u64
+}
+
+/// The POSIX view of a file's metadata, its times in UTC (see
+/// [`utc_of_local`] for `offset`).
+pub fn to_linux(st: &Stat, offset: i64) -> linux::Stat {
     let (kind, perms, nlink) = if st.is_dir {
         (mode::IFDIR, 0o755, 2)
     } else if st.socket {
@@ -85,7 +106,7 @@ pub fn to_linux(st: &Stat) -> linux::Stat {
     };
     // Nothing on a read-only file system can be written.
     let perms = if st.read_only { perms & !0o222 } else { perms };
-    let time = linux::Timespec::from_ns(st.modified);
+    let time = linux::Timespec::from_ns(utc_of_local(st.modified, offset));
     linux::Stat {
         dev: st.device,
         ino: st.inode,
@@ -111,20 +132,34 @@ mod tests {
     #[test]
     fn metadata() {
         let file = Stat { size: 1000, modified: 1_700_000_000_500_000_000, inode: 42, device: 1, ..Default::default() };
-        let s = to_linux(&file);
+        let s = to_linux(&file, 0);
         assert_eq!(s.mode, 0o100644);
         assert_eq!((s.ino, s.dev, s.nlink, s.size, s.blocks), (42, 1, 1, 1000, 2));
         assert_eq!(s.mtime, linux::Timespec { sec: 1_700_000_000, nsec: 500_000_000 });
         assert_eq!(s.uid, 1000);
 
         let program = Stat { executable: true, read_only: true, ..file };
-        assert_eq!(to_linux(&program).mode, 0o100555);
+        assert_eq!(to_linux(&program, 0).mode, 0o100555);
         let dir = Stat { is_dir: true, ..Default::default() };
-        assert_eq!(to_linux(&dir).mode, 0o40755);
-        assert_eq!(to_linux(&dir).nlink, 2);
+        assert_eq!(to_linux(&dir, 0).mode, 0o40755);
+        assert_eq!(to_linux(&dir, 0).nlink, 2);
         let null = Stat { char_device: true, inode: 3, ..Default::default() };
-        assert_eq!(to_linux(&null).mode, 0o20666);
+        assert_eq!(to_linux(&null, 0).mode, 0o20666);
         let socket = Stat { socket: true, ..Default::default() };
-        assert_eq!(to_linux(&socket).mode, 0o140755);
+        assert_eq!(to_linux(&socket, 0).mode, 0o140755);
+    }
+
+    #[test]
+    fn times_are_utc_for_posix_programs() {
+        // Two hours ahead of UTC: the VFS's 14:00 is POSIX's 12:00.
+        const HOUR: u64 = 3_600_000_000_000;
+        let offset = 2 * HOUR as i64;
+        let file = Stat { modified: 14 * HOUR, ..Default::default() };
+        assert_eq!(to_linux(&file, offset).mtime, linux::Timespec { sec: 12 * 3600, nsec: 0 });
+        assert_eq!(local_of_utc(12 * HOUR, offset), 14 * HOUR);
+        assert_eq!(utc_of_local(local_of_utc(20 * HOUR, -offset), -offset), 20 * HOUR);
+        // Unknown stays unknown, and no time set is "now" (0) to the VFS.
+        assert_eq!(utc_of_local(0, offset), 0);
+        assert_eq!(local_of_utc(0, -offset), 1);
     }
 }

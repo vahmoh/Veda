@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Zstandard: the zstd format, for Python's `compression.zstd` module. Veda
+# takes it under its BSD licence, of the two it is offered under.
+name = "zstd"
+version = "1.5.7"
+url = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
+sha256 = "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
+license = "BSD-3-Clause OR GPL-2.0-only"

@@ -262,7 +262,8 @@ says which each is:
   sockets, network sockets `netd`'s, Unix domain sockets named by the VFS,
   `epoll` a kernel port, memory files VMOs, `timerfd` an event its thread
   signals, and threads kernel threads; `posix_spawn` starts processes (see
-  [C on Veda](C.md)).
+  [C on Veda](C.md)). Python is such a program too, CPython with its
+  modules built in ([Python on Veda](PYTHON.md)).
 - **Services** register by name with the registry in `init`, and clients
   connect by name; a connection to a service not registered yet waits for
   it (up to 64 per process). Protocols are declared with `ipc`'s macros,

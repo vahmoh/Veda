@@ -95,6 +95,7 @@ cargo automation doctor      # check the tools
 cargo automation toolchain   # once, about half an hour: GCC, musl and Rust for Veda
 cargo automation linux       # once: the driver VM's Linux and Mesa
 cargo automation web         # once, an hour or more (optional): WebKit, for the browser
+cargo automation python      # once, a few minutes (optional): Python, its standard library
 cargo automation run         # build Veda and boot it in QEMU
 ```
 
@@ -194,6 +195,7 @@ a stand-in for Deepgram, so they are offline, deterministic and free.
 | [Networking](documentation/NETWORKING.md) | The network and Wi-Fi services, the firewall and TLS |
 | [The web browser](documentation/BROWSER.md) | The browser, WebKit's port to Veda, and how pages are drawn |
 | [C on Veda](documentation/C.md) and [Rust on Veda](documentation/RUST.md) | Programs, the POSIX layer and the toolchains |
+| [Python on Veda](documentation/PYTHON.md) | Python, its standard library, and CPython's port |
 | [Developing](documentation/DEVELOPING.md) | Commands, the system image and writing applications |
 | [Libraries](documentation/DEPENDENCIES.md) | What Veda builds on, and what it keeps of its own |
 | [Coding conventions](documentation/CODING.md) | How the code is written |
@@ -209,6 +211,7 @@ reviewed.
 Veda is free software under the
 [GNU General Public License, version 3](LICENSE). Copyright © 2026 Vahid
 Mohammadi. Its other parts (its fonts, firmware, toolchains, video
-decoder, web engine and the crates its programs are built with) keep their
-own licences, whose texts the system carries in `/system/licences` and
-About Veda shows; see [Licensing](documentation/LICENSING.md).
+decoder, web engine, Python and the crates its programs are built with)
+keep their own licences, whose texts the system carries in
+`/system/licences` and About Veda shows; see
+[Licensing](documentation/LICENSING.md).

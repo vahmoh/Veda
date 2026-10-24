@@ -6,8 +6,8 @@
 //! * `getaddrinfo` and `gethostbyname` ask the service's resolver
 //!   ([`__veda_lookup_name`]), which caches answers, knows `localhost` and
 //!   gives the addresses in the order they are best tried in (IPv4 first:
-//!   they work through every NAT). musl looks in `/etc/hosts` first, if
-//!   there is one.
+//!   they work through every NAT). musl looks in `/system/etc/hosts`
+//!   first, if there is one.
 //! * musl's own DNS client — `res_query` and `res_send`, and the reverse
 //!   lookups of `getnameinfo` — sends its queries to the DNS servers the
 //!   service uses ([`__veda_dns_servers`]) over the layer's sockets. There

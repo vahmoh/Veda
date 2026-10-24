@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# mpdecimal: correctly rounded decimal arithmetic, for Python's `decimal`
+# module, whose copy of it Python 3.16 drops. Its author publishes the
+# releases' SHA-256 on bytereef.org, without signatures.
+name = "mpdecimal"
+version = "4.0.1"
+url = "https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.1.tar.gz"
+sha256 = "96d33abb4bb0070c7be0fed4246cd38416188325f820468214471938545b1ac8"
+license = "BSD-2-Clause"

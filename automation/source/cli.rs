@@ -50,6 +50,10 @@ COMMANDS:
                 libraries it stands on (GLib, libsoup, ICU, HarfBuzz, OpenSSL...), and
                 the tools their builds run (see documentation/BROWSER.md; --jobs N);
                 later builds link the browser with it
+    python      Build Python from implementation/ports/: CPython's interpreter and
+                standard library, with the libraries its modules stand on (OpenSSL,
+                SQLite, zlib, XZ Utils, Zstandard...) built in (see
+                documentation/PYTHON.md; --jobs N); later builds put it in /system
     acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
                 holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
                 the firmware's variables read as zeros but those given with
@@ -74,6 +78,8 @@ BUILD OPTIONS:
                         most 256 bytes: the loader takes no more)
     --no-generate       Reuse the generated media instead of running the generators
     --skip PROGRAM      Leave a program out of the image (repeatable)
+    --python-tests      Put Python's own tests in the image (its test package, some 90 MB),
+                        once Python is built: `python3 -m test` runs them
 
 RUN OPTIONS:
     --smp N             Number of virtual CPUs (default 4)
@@ -130,6 +136,8 @@ pub struct Options {
     pub generate: bool,
     /// Programs left out of the image.
     pub skip: Vec<String>,
+    /// Python's own tests in the image.
+    pub python_tests: bool,
     /// `run`: start with a new, empty home directory.
     pub fresh_home: bool,
     /// `run`, `shot`, `script`: boot the live system from a USB stick.
@@ -155,6 +163,7 @@ pub fn parse_options(args: &[String]) -> Result<Options> {
         ui: false,
         generate: true,
         skip: Vec::new(),
+        python_tests: false,
         fresh_home: false,
         live: false,
         prebuilt: None,
@@ -210,6 +219,7 @@ pub fn parse_options(args: &[String]) -> Result<Options> {
             "--jobs" | "-j" => o.jobs = util::jobs(it.next())?,
             "--no-generate" => o.generate = false,
             "--skip" => o.skip.push(value(arg)?),
+            "--python-tests" => o.python_tests = true,
             "--fresh-home" => o.fresh_home = true,
             "--net" => {
                 let v = value(arg)?;

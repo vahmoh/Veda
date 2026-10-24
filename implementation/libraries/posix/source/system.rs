@@ -5,10 +5,12 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use rt::sync::Mutex;
+
 use crate::error::{self, SysResult};
-use crate::linux::errno::{EFAULT, EINVAL, EPERM};
+use crate::linux::errno::{EFAULT, EINVAL, EPERM, ESRCH};
 use crate::linux::{Rlimit, Sysinfo, Utsname, prctl, rlimit};
-use crate::{fd, user};
+use crate::{fd, signal, user};
 
 /// The release `uname` reports.
 const RELEASE: &str = env!("CARGO_PKG_VERSION");
@@ -111,19 +113,28 @@ fn limit(resource: u32) -> Result<Rlimit, isize> {
     })
 }
 
-/// `prlimit64` (and `getrlimit`, `setrlimit`) on this process. Limits can
-/// be lowered in name only; they are not enforced.
+/// The limits the program set (`setrlimit`), by resource: kept for it to
+/// read back, as none is enforced.
+static SET: Mutex<[Option<Rlimit>; 16]> = Mutex::new([None; 16]);
+
+/// `prlimit64` (and `getrlimit`, `setrlimit`) on this process. Limits are
+/// kept as set, lowered (or a soft one raised to its hard one), but they are
+/// not enforced; another process's are not this one's (`EPERM` for a child,
+/// `ESRCH` for no such process).
 pub unsafe fn prlimit(pid: i32, resource: u32, new: usize, old: usize) -> SysResult {
     if pid != 0 && pid != crate::process::pid() {
-        return Err(EPERM);
+        return Err(if crate::process::is_child(pid) { EPERM } else { ESRCH });
     }
-    let current = limit(resource)?;
+    let default = limit(resource)?;
+    let mut set = SET.lock();
+    let current = set[resource as usize].unwrap_or(default);
     if new != 0 {
         // SAFETY: the program passed a struct rlimit.
         let n: Rlimit = unsafe { user::read(new)? };
         if n.cur > n.max || n.max > current.max {
             return Err(if n.cur > n.max { EINVAL } else { EPERM });
         }
+        set[resource as usize] = Some(n);
     }
     if old != 0 {
         // SAFETY: as above.
@@ -147,22 +158,6 @@ pub unsafe fn getrandom(buf: usize, len: usize, flags: u32) -> SysResult {
     Ok(len)
 }
 
-/// `sched_getaffinity`: every processor.
-pub unsafe fn sched_getaffinity(size: usize, mask: usize) -> SysResult {
-    let cpus = rt::object::system_info().map_or(1, |i| i.cpu_count.max(1)) as usize;
-    let bytes = cpus.div_ceil(64) * 8;
-    if size < bytes {
-        return Err(EINVAL);
-    }
-    // SAFETY: the program passed `size` bytes.
-    let out = unsafe { user::slice_mut(mask, bytes)? };
-    out.fill(0);
-    for c in 0..cpus {
-        out[c / 8] |= 1 << (c % 8);
-    }
-    Ok(bytes)
-}
-
 static UMASK: AtomicU32 = AtomicU32::new(0o022);
 
 /// `umask`: kept for the program to read back (there are no permission
@@ -173,13 +168,29 @@ pub fn umask(mask: u32) -> SysResult {
 
 pub unsafe fn prctl(option: u32, arg: usize) -> SysResult {
     match option {
-        prctl::SET_NAME => Ok(0),
+        prctl::SET_NAME => {
+            // Its first 15 bytes at most, up to its NUL, as Linux reads it.
+            let mut name = [0u8; signal::THREAD_NAME_SIZE];
+            for (i, b) in name.iter_mut().take(signal::THREAD_NAME_SIZE - 1).enumerate() {
+                // SAFETY: the program passed a NUL-terminated name.
+                *b = unsafe { user::read(arg + i)? };
+                if *b == 0 {
+                    break;
+                }
+            }
+            signal::set_thread_name(&name);
+            Ok(0)
+        }
         prctl::GET_NAME => {
-            let info = rt::object::process_self_info().unwrap_or_default();
-            let name = info.name();
-            let mut out = [0u8; 16];
-            let n = name.len().min(15);
-            out[..n].copy_from_slice(&name.as_bytes()[..n]);
+            // A thread's own name, or else the process's.
+            let out = signal::thread_name().unwrap_or_else(|| {
+                let info = rt::object::process_self_info().unwrap_or_default();
+                let name = info.name();
+                let mut out = [0u8; signal::THREAD_NAME_SIZE];
+                let n = name.len().min(signal::THREAD_NAME_SIZE - 1);
+                out[..n].copy_from_slice(&name.as_bytes()[..n]);
+                out
+            });
             // SAFETY: the program passed 16 bytes.
             unsafe { user::write(arg, out)? };
             Ok(0)

@@ -530,7 +530,46 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
                 kind => lock(&desc, kind).and(Err(ENOLCK)),
             }
         }
-        fcntl::GETOWN | fcntl::SETOWN => Ok(0),
+        // The owner is kept, as a program may ask who it is; none is sent
+        // SIGIO or SIGURG, as Veda's signals are synchronous.
+        fcntl::SETOWN => {
+            let id = arg as i32;
+            let kind = if id < 0 { fcntl::F_OWNER_PGRP } else { fcntl::F_OWNER_PID };
+            fd::get(fd)?.set_owner(kind, id.checked_abs().ok_or(EINVAL)?);
+            Ok(0)
+        }
+        fcntl::GETOWN => match fd::get(fd)?.owner() {
+            (fcntl::F_OWNER_PGRP, id) => Ok(-id as isize as usize),
+            (_, id) => Ok(id as usize),
+        },
+        fcntl::SETOWN_EX => {
+            let desc = fd::get(fd)?;
+            // SAFETY: the program passed a `struct f_owner_ex`.
+            let [kind, id]: [i32; 2] = unsafe { user::read(arg)? };
+            if !matches!(kind, fcntl::F_OWNER_TID | fcntl::F_OWNER_PID | fcntl::F_OWNER_PGRP) || id < 0 {
+                return Err(EINVAL);
+            }
+            desc.set_owner(kind, id);
+            Ok(0)
+        }
+        fcntl::GETOWN_EX => {
+            let (kind, id) = fd::get(fd)?.owner();
+            // SAFETY: as above.
+            unsafe { user::write(arg, [kind, id])? };
+            Ok(0)
+        }
+        // A pipe holds what its kernel socket does, which does not change:
+        // as much as asked for, unless more.
+        fcntl::GETPIPE_SZ | fcntl::SETPIPE_SZ => {
+            let desc = fd::get(fd)?;
+            if !matches!(&desc.object, Object::Stream(s) if !s.is_tty()) {
+                return Err(EBADF);
+            }
+            if cmd == fcntl::SETPIPE_SZ && arg > abi::SOCKET_CAPACITY {
+                return Err(EPERM);
+            }
+            Ok(abi::SOCKET_CAPACITY)
+        }
         // Only memory files have seals ([`crate::memfd`]).
         fcntl::ADD_SEALS => {
             let desc = fd::get(fd)?;
@@ -953,10 +992,10 @@ pub fn adopt_startup_fds(inherited: &Inherited) {
         };
         let _ = fd::replace(*n, desc, false);
     }
-    // Standard streams nobody gave: input is empty, output goes to the
-    // kernel log.
+    // Standard streams nobody gave, but a POSIX program that left them
+    // closed: input is empty, output goes to the kernel log.
     for n in 0..=2 {
-        if fd::get(n).is_err() {
+        if fd::get(n).is_err() && !inherited.closed.contains(&n) {
             let object = if n == 0 { Object::Null } else { Object::Log(Log::new()) };
             let _ = fd::replace(n, Description::new(object, o::RDWR), false);
         }

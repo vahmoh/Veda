@@ -583,6 +583,12 @@ impl Process {
         call(nr::PROCESS_KILL, [self.raw() as usize, 0, 0, 0, 0, 0]).map(|_| ())
     }
 
+    /// Ends the process as POSIX signal `signal` (1 to 64) ends a program
+    /// that does not handle it: whoever waits for it sees that signal.
+    pub fn kill_with_signal(&self, signal: u32) -> Result<(), Error> {
+        call(nr::PROCESS_KILL, [self.raw() as usize, 0, signal as usize, 0, 0, 0]).map(|_| ())
+    }
+
     /// Kills the process and every process it started that still runs
     /// (and those they started): its job, as a terminal's Ctrl+C ends it.
     pub fn kill_tree(&self) -> Result<(), Error> {

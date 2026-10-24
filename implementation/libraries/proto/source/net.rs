@@ -52,6 +52,12 @@
 //! socket was sent go out first, if the stack can send them within a few
 //! seconds.
 //!
+//! A socket bound to an address holds its port there: as on Linux, sockets
+//! share a port when no address is both's, as an IPv4 socket on `0.0.0.0`
+//! and an IPv6-only one on `::` do (`v6only`; without it, `::` is IPv4's
+//! addresses too), or sockets on different addresses. What comes to an
+//! address is the one socket's whose it is.
+//!
 //! Data flow is credit-based in both directions, which bounds the memory a
 //! socket can pin in the kernel:
 //!
@@ -76,11 +82,13 @@
 //!
 //! * **TCP with its bytes on a kernel socket**
 //!   ([`net::Client::tcp_connect_bytes`], [`net::Client::tcp_listen_bytes`],
-//!   whose connections arrive as [`SocketEvent::AcceptedBytes`]). The
-//!   connection's bytes go both ways on a kernel socket of which the client
-//!   holds one end: its buffers are the flow control, whoever holds the end
-//!   reads and writes, and a reader who stops reading leaves the data in the
-//!   stack (TCP's window closes).
+//!   whose connections arrive as [`SocketEvent::AcceptedBytes`], and
+//!   [`net::Client::tcp_bind`], whose socket listens or connects later on
+//!   its channel: [`SocketRequest::Listen`], [`SocketRequest::Connect`]).
+//!   The connection's bytes go both ways on a kernel socket of which the
+//!   client holds one end: its buffers are the flow control, whoever holds
+//!   the end reads and writes, and a reader who stops reading leaves the
+//!   data in the stack (TCP's window closes).
 //!   The end of the received stream is the kernel socket's (`netd` stops
 //!   writing), and the client's end of its stream is its end's (it stops
 //!   writing, or every holder closes it). The channel carries only
@@ -236,7 +244,7 @@ message! {
 
 union! {
     /// Messages a client sends on a socket channel.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug)]
     pub enum SocketRequest {
         /// TCP: append bytes to the stream (at most [`MAX_SEND`] and the
         /// remaining send credit).
@@ -255,6 +263,16 @@ union! {
         /// Ping socket: send an ICMP echo request of `size` payload bytes.
         /// `ttl` 0 means the default (64).
         7 => Echo { dest: IpAddr, seq: u16, ttl: u8, size: u16 },
+        /// TCP socket of [`net::Client::tcp_bind`]: listen on its address,
+        /// its connections arriving as [`SocketEvent::AcceptedBytes`]. The
+        /// answer comes on `reply`: [`SocketEvent::Listening`], or
+        /// [`SocketEvent::Error`] (the socket stays bound). A listener
+        /// answers with its address.
+        8 => Listen { backlog: u32, options: TcpOptions, reply: Channel },
+        /// TCP socket of [`net::Client::tcp_bind`]: connect to `remote` from
+        /// its address, as [`net::Client::tcp_connect_bytes`] does, the
+        /// connection's bytes on `bytes`.
+        9 => Connect { remote: SocketAddr, options: TcpOptions, bytes: Socket },
     }
 }
 
@@ -292,6 +310,9 @@ union! {
         /// connection, whose bytes go on `bytes` (see the module's
         /// documentation) and its news and requests on `socket`.
         10 => AcceptedBytes { socket: Channel, bytes: Socket, local: SocketAddr, remote: SocketAddr },
+        /// The answer to [`SocketRequest::Listen`], on its reply channel:
+        /// the socket listens on `local`.
+        11 => Listening { local: SocketAddr },
     }
 }
 
@@ -847,13 +868,15 @@ protocol! {
         /// or [`SocketEvent::Error`]). An immediate error means the request
         /// itself was rejected.
         1 => fn tcp_connect(remote: SocketAddr, options: TcpOptions, socket: Channel) -> Result<(), NetError>;
-        /// Listens on `local` (port 0 picks a free port). Connections
-        /// arrive as [`SocketEvent::Accepted`] on `listener`. Returns the
-        /// address actually bound.
-        2 => fn tcp_listen(local: SocketAddr, backlog: u32, options: TcpOptions, listener: Channel) -> Result<SocketAddr, NetError>;
-        /// Opens a UDP socket bound to `local` (port 0 picks a free port).
-        /// The initial send credit arrives as a [`SocketEvent::SendCredit`].
-        3 => fn udp_bind(local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError>;
+        /// Listens on `local` (port 0 picks a free port; IPv6's addresses
+        /// alone on `::` if `v6only`). Connections arrive as
+        /// [`SocketEvent::Accepted`] on `listener`. Returns the address
+        /// actually bound.
+        2 => fn tcp_listen(local: SocketAddr, v6only: bool, backlog: u32, options: TcpOptions, listener: Channel) -> Result<SocketAddr, NetError>;
+        /// Opens a UDP socket bound to `local` (port 0 picks a free port;
+        /// IPv6's addresses alone on `::` if `v6only`). The initial send
+        /// credit arrives as a [`SocketEvent::SendCredit`].
+        3 => fn udp_bind(local: SocketAddr, v6only: bool, socket: Channel) -> Result<SocketAddr, NetError>;
         /// Like [`tcp_connect`](net::Client::tcp_connect), but the
         /// connection's bytes go on `bytes`, the service's end of a kernel
         /// socket, and `socket` carries the rest, without credit (see the
@@ -861,11 +884,21 @@ protocol! {
         6 => fn tcp_connect_bytes(remote: SocketAddr, options: TcpOptions, socket: Channel, bytes: Socket) -> Result<(), NetError>;
         /// Like [`tcp_listen`](net::Client::tcp_listen), its connections
         /// arriving as [`SocketEvent::AcceptedBytes`].
-        7 => fn tcp_listen_bytes(local: SocketAddr, backlog: u32, options: TcpOptions, listener: Channel) -> Result<SocketAddr, NetError>;
+        7 => fn tcp_listen_bytes(local: SocketAddr, v6only: bool, backlog: u32, options: TcpOptions, listener: Channel) -> Result<SocketAddr, NetError>;
         /// Like [`udp_bind`](net::Client::udp_bind), without credit: the
         /// channel's room is the flow control (see the module's
         /// documentation).
-        8 => fn udp_bind_unmetered(local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError>;
+        8 => fn udp_bind_unmetered(local: SocketAddr, v6only: bool, socket: Channel) -> Result<SocketAddr, NetError>;
+        /// Binds a TCP socket to `local` (port 0 picks a free port; IPv6's
+        /// addresses alone on `::` if `v6only`) before it listens or
+        /// connects, as POSIX's `bind` does: no other socket binds or
+        /// listens on the port at its addresses while it has it. `socket` is
+        /// the service's end of its channel, on which
+        /// [`SocketRequest::Listen`] makes it a listener,
+        /// [`SocketRequest::Connect`] a connection from the address, both of
+        /// the kind whose bytes go on kernel sockets (see the module's
+        /// documentation). Returns the address bound.
+        9 => fn tcp_bind(local: SocketAddr, v6only: bool, socket: Channel) -> Result<SocketAddr, NetError>;
         /// Opens a ping socket (ICMP echo).
         4 => fn ping_open(socket: Channel) -> Result<(), NetError>;
         /// Looks up `name` (a host name, or an address literal). One
@@ -1061,8 +1094,8 @@ mod tests {
     #[test]
     fn socket_messages_round_trip() {
         let dest: SocketAddr = "10.0.2.3:53".parse().unwrap();
-        let r = SocketRequest::SendTo { dest, data: Bytes(vec![1, 2, 3]) };
-        assert_eq!(roundtrip(r.clone()), r);
+        let r = roundtrip(SocketRequest::SendTo { dest, data: Bytes(vec![1, 2, 3]) });
+        assert!(matches!(&r, SocketRequest::SendTo { dest: to, data } if *to == dest && data.0 == [1, 2, 3]), "{r:?}");
         let e = SocketEvent::EchoReply { from: "1.1.1.1".parse().unwrap(), seq: 7, size: 56, rtt_us: 12_345 };
         let mut enc = Encoder::new();
         e.encode(&mut enc);
@@ -1234,11 +1267,13 @@ mod tests {
         let mut e = Encoder::new();
         SocketRequest::encode_send_to(from, &payload, &mut e);
         let mut d = Decoder::new(&e.bytes, Vec::new());
-        assert_eq!(SocketRequest::decode(&mut d).unwrap(), SocketRequest::SendTo { dest: from, data: Bytes(payload) });
+        let r = SocketRequest::decode(&mut d).unwrap();
+        assert!(matches!(&r, SocketRequest::SendTo { dest, data } if *dest == from && data.0 == payload), "{r:?}");
         let mut e = Encoder::new();
         SocketRequest::encode_send(b"hello", &mut e);
         let mut d = Decoder::new(&e.bytes, Vec::new());
-        assert_eq!(SocketRequest::decode(&mut d).unwrap(), SocketRequest::Send { data: Bytes(b"hello".to_vec()) });
+        let r = SocketRequest::decode(&mut d).unwrap();
+        assert!(matches!(&r, SocketRequest::Send { data } if data.0 == b"hello"), "{r:?}");
     }
 
     #[test]

@@ -12,10 +12,12 @@ mod acpi;
 mod agentsim;
 mod architecture;
 mod automate;
+mod certificates;
 mod checks;
 mod cli;
 mod components;
 mod crates;
+mod databases;
 mod hostweb;
 mod image;
 #[cfg(test)]
@@ -26,6 +28,7 @@ mod mic;
 mod notices;
 mod ovmfvars;
 mod ports;
+mod python;
 mod qemu;
 mod qmp;
 mod runner;
@@ -148,6 +151,10 @@ fn doctor() -> Result {
         Ok(v) => println!("  [ok]   web engine: {v}"),
         Err(e) => println!("  [--]   web engine: {e}"),
     }
+    match python::status() {
+        Ok(v) => println!("  [ok]   python: {v}"),
+        Err(e) => println!("  [--]   python: {e}"),
+    }
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
@@ -212,6 +219,7 @@ fn main() -> ExitCode {
         "clippy" => lint::command(rest),
         "linux" => linux::command(rest),
         "web" => web::command(rest),
+        "python" => python::command(rest),
         "clean" => util::run(util::cargo().arg("clean")),
         "doctor" => doctor(),
         "help" | "--help" | "-h" => {

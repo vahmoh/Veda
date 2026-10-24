@@ -15,13 +15,17 @@
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
+#include <pwd.h>
+#include <sched.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <spawn.h>
@@ -37,6 +41,7 @@
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -156,6 +161,13 @@ static void check_startup(void)
 	/* Where the program was loaded: right for this program's own code. */
 	CHECK("entry point", getauxval(AT_ENTRY) == (unsigned long)_start, "AT_ENTRY %#lx, _start %p",
 	      getauxval(AT_ENTRY), (void *)_start);
+	/* dladdr names the program for its own code, by the path it was started
+	   from, with where its ELF header is; nothing else is in it. */
+	Dl_info info = { 0 };
+	int named = dladdr((void *)check_startup, &info) && info.dli_fname && execfn &&
+		    !strcmp(info.dli_fname, execfn) && info.dli_fbase && !memcmp(info.dli_fbase, "\177ELF", 4);
+	int stack;
+	CHECK("dladdr", named && !dladdr(&stack, &info), "named %s", info.dli_fname ? info.dli_fname : "nothing");
 }
 
 static void check_mmap(void)
@@ -230,6 +242,31 @@ static void check_system_files(void)
 	CHECK("a mapping that writes is a copy", copy && pread(fd, again, n, 0) == n && !memcmp(again, text, n),
 	      "contents differ");
 	close(fd);
+}
+
+/* The C library's databases, in /system/etc: the services of the
+ * Internet's protocols, by name and by port, and the one user, as whom
+ * programs run, with the home the system gives it. */
+static void check_databases(void)
+{
+	struct servent *http = getservbyname("http", "tcp");
+	CHECK("a service by name", http && ntohs(http->s_port) == 80 && !strcmp(http->s_proto, "tcp"), "%s",
+	      http ? http->s_name : "none");
+	struct servent *dns = getservbyport(htons(53), "udp");
+	CHECK("a service by port", dns && !strcmp(dns->s_name, "domain"), "%s", dns ? dns->s_name : "none");
+	struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = 0;
+	int gai = getaddrinfo("127.0.0.1", "https", &hints, &res);
+	CHECK("getaddrinfo of a service",
+	      gai == 0 && res && ntohs(((struct sockaddr_in *)res->ai_addr)->sin_port) == 443, "%s", gai_strerror(gai));
+	if (res)
+		freeaddrinfo(res);
+	struct passwd *pw = getpwuid(getuid());
+	CHECK("the user",
+	      pw && !strcmp(pw->pw_name, "user") && pw->pw_gid == getgid() && !strcmp(pw->pw_dir, "/home/user") &&
+		      getpwnam("user") && getpwnam("user")->pw_uid == getuid(),
+	      "%s", pw ? pw->pw_name : "none");
+	struct group *gr = getgrgid(getgid());
+	CHECK("its group", gr && !strcmp(gr->gr_name, "user"), "%s", gr ? gr->gr_name : "none");
 }
 
 /* A memory file: memory with a descriptor, as WebKit's processes share
@@ -405,6 +442,18 @@ static void check_files(void)
 	      statx(AT_FDCWD, "notes.txt", 0, STATX_BASIC_STATS, &stx) == 0 && (stx.stx_mask & STATX_SIZE) &&
 		      stx.stx_size == 8890 && S_ISREG(stx.stx_mode) && stx.stx_ino == st.st_ino,
 	      "%s", strerror(errno));
+	/* File times are UTC, whatever the system's time zone: a file just
+	   written was modified now, and a time set is the time read back. */
+	time_t written = st.st_mtime, now = time(0);
+	struct timespec set[2] = { { .tv_nsec = UTIME_OMIT }, { .tv_sec = 1000000000, .tv_nsec = 500 } };
+	int times = utimensat(AT_FDCWD, "notes.txt", set, 0) == 0 && stat("notes.txt", &st) == 0 &&
+		    st.st_mtim.tv_sec == 1000000000 && st.st_mtim.tv_nsec == 500;
+	CHECK("file times", written >= now - 60 && written <= now + 60 && times, "written at %lld, now %lld, set %lld",
+	      (long long)written, (long long)now, (long long)st.st_mtime);
+	/* A file is the user's, who cannot give it away. */
+	CHECK("chown to its owner", chown("notes.txt", getuid(), -1) == 0 && st.st_uid == getuid(), "%s",
+	      strerror(errno));
+	CHECK("chown to another user", chown("notes.txt", 0, 0) < 0 && errno == EPERM, "%s", strerror(errno));
 	f = fopen("notes.txt", "r");
 	char line[64];
 	int lines = 0, last = -1;
@@ -488,6 +537,12 @@ static void check_directories(void)
 	CHECK("mkdir existing", mkdir("sub", 0755) != 0 && errno == EEXIST, "made it twice");
 	FILE *f = fopen("sub/one", "w");
 	fclose(f);
+	/* `..` leaves a directory that is there: neither a missing name nor a
+	   file is one. */
+	struct stat st;
+	int climbed = stat("sub/deeper/..", &st) == 0 && S_ISDIR(st.st_mode) && stat("sub/missing/..", &st) < 0 &&
+		      errno == ENOENT && stat("sub/one/..", &st) < 0 && errno == ENOTDIR;
+	CHECK("paths with ..", climbed, "%s", strerror(errno));
 	DIR *d = opendir("sub");
 	int seen = 0, dot = 0;
 	struct dirent *e;
@@ -527,6 +582,20 @@ static void check_pipes(void)
 	CHECK("pipe2 nonblocking", pipe2(p, O_NONBLOCK | O_CLOEXEC) == 0 && read(p[0], buf, 1) < 0 && errno == EAGAIN,
 	      "read did not fail with EAGAIN");
 	CHECK("close-on-exec", fcntl(p[0], F_GETFD) == FD_CLOEXEC, "flag missing");
+	/* A pipe's size, which does not change: as much as asked for, unless
+	   more. */
+	int size = fcntl(p[1], F_GETPIPE_SZ);
+	CHECK("a pipe's size",
+	      size == 256 * 1024 && fcntl(p[1], F_SETPIPE_SZ, 4096) == size &&
+		      fcntl(p[1], F_SETPIPE_SZ, 1 << 20) < 0 && errno == EPERM,
+	      "size %d", size);
+	/* Its owner, to whom SIGIO would go, is kept. */
+	struct f_owner_ex owner = { F_OWNER_PID, getpid() }, got = { 0 };
+	int owned = fcntl(p[0], F_SETOWN_EX, &owner) == 0 && fcntl(p[0], F_GETOWN_EX, &got) == 0 &&
+		    got.type == F_OWNER_PID && got.pid == getpid() && fcntl(p[0], F_GETOWN) == getpid() &&
+		    fcntl(p[0], F_SETOWN, -7) == 0 && fcntl(p[0], F_GETOWN) == -7 && fcntl(p[0], F_GETOWN_EX, &got) == 0 &&
+		    got.type == F_OWNER_PGRP && got.pid == 7;
+	CHECK("a descriptor's owner", owned, "owner %d of type %d", got.pid, got.type);
 	signal(SIGPIPE, SIG_IGN);
 	close(p[0]);
 	CHECK("EPIPE", write(p[1], "x", 1) < 0 && errno == EPIPE, "write to a closed pipe worked");
@@ -584,6 +653,25 @@ static void check_threads(void)
 	nanosleep(&ts, 0);
 }
 
+static long ns_between(struct timespec a, struct timespec b)
+{
+	return (b.tv_sec - a.tv_sec) * 1000000000L + (b.tv_nsec - a.tv_nsec);
+}
+
+/* Spins for 50 ms of its own CPU time, by its clock (`pthread_getcpuclockid`). */
+static void *spin_cpu(void *arg)
+{
+	clockid_t c;
+	struct timespec a, b = { 0 };
+	if (pthread_getcpuclockid(pthread_self(), &c) || clock_gettime(c, &a))
+		return 0;
+	do
+		clock_gettime(c, &b);
+	while (ns_between(a, b) < 50000000L);
+	*(long *)arg = ns_between(a, b);
+	return 0;
+}
+
 static void check_time(void)
 {
 	struct timespec a, b;
@@ -620,6 +708,19 @@ static void check_time(void)
 	else
 		unsetenv("TZ");
 	tzset();
+	/* A thread's CPU time is its own: the thread waiting for another that
+	   spins has not spun. */
+	pthread_t t;
+	long spun = 0;
+	struct timespec mine0, mine1, all0, all1;
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mine0);
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &all0);
+	int joined = pthread_create(&t, 0, spin_cpu, &spun) == 0 && pthread_join(t, 0) == 0;
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mine1);
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &all1);
+	CHECK("threads' CPU time", joined && spun >= 50000000L && ns_between(mine0, mine1) < 25000000L &&
+	      ns_between(all0, all1) >= 50000000L, "the thread spun %ld ns, this one %ld, the process %ld", spun,
+	      ns_between(mine0, mine1), ns_between(all0, all1));
 }
 
 static volatile sig_atomic_t got_signal;
@@ -628,6 +729,25 @@ static jmp_buf jump;
 static void on_signal(int s)
 {
 	got_signal = s;
+}
+
+/* Sleeps for a minute, unless a signal handler runs first: what is left of
+   the sleep, or -1 if it was not interrupted. */
+static void *sleep_until_signalled(void *arg)
+{
+	struct timespec minute = { .tv_sec = 60 }, left = { 0 };
+	int r = nanosleep(&minute, &left);
+	*(long *)arg = r < 0 && errno == EINTR ? left.tv_sec : -1;
+	return 0;
+}
+
+/* Sends the process SIGUSR2, which every thread blocks, a moment later. */
+static void *send_process_signal(void *arg)
+{
+	(void)arg;
+	usleep(50000);
+	kill(getpid(), SIGUSR2);
+	return 0;
 }
 
 static void check_signals(void)
@@ -645,6 +765,25 @@ static void check_signals(void)
 	int blocked = got_signal == 0;
 	sigprocmask(SIG_SETMASK, &old, 0);
 	CHECK("blocked signals wait", blocked && got_signal == SIGUSR2, "delivered at the wrong time");
+	/* A handler that runs for a sleeping thread ends its sleep. */
+	pthread_t sleeper;
+	long left = -1;
+	int woken = pthread_create(&sleeper, 0, sleep_until_signalled, &left) == 0;
+	usleep(50000);
+	woken = woken && pthread_kill(sleeper, SIGUSR1) == 0 && pthread_join(sleeper, 0) == 0;
+	CHECK("a signal ends a sleep", woken && left > 50 && left <= 60, "%ld s left", left);
+	/* A signal sent to the process while every thread blocks it is pending
+	   for the process, for the thread that waits for it. */
+	sigprocmask(SIG_BLOCK, &set, 0);
+	pthread_t sender;
+	int taken = 0;
+	if (pthread_create(&sender, 0, send_process_signal, 0) == 0) {
+		struct timespec ten = { .tv_sec = 10 };
+		taken = sigtimedwait(&set, 0, &ten) == SIGUSR2;
+		pthread_join(sender, 0);
+	}
+	sigprocmask(SIG_SETMASK, &old, 0);
+	CHECK("a signal pending for the process", taken, "%s", strerror(errno));
 	volatile int jumped = 0;
 	if (setjmp(jump) == 0)
 		longjmp(jump, 1);
@@ -701,6 +840,27 @@ static void check_processes(void)
 	r = spawn_child("abort", out, sizeof out, &status);
 	CHECK("child killed by a signal", r == 0 && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
 	      "status %#x", status);
+	/* A child that waits for its input, ended by its parent's signal: its
+	   wait status names that signal. */
+	int in[2];
+	if (pipe(in) == 0) {
+		posix_spawn_file_actions_t fa;
+		posix_spawn_file_actions_init(&fa);
+		posix_spawn_file_actions_adddup2(&fa, in[0], 0);
+		char *argv[] = { "posix", "child", "upper", 0 };
+		char *envp[] = { 0 };
+		pid_t pid;
+		r = posix_spawn(&pid, program, &fa, 0, argv, envp);
+		posix_spawn_file_actions_destroy(&fa);
+		close(in[0]);
+		CHECK("a child to end", r == 0, "posix_spawn returned %d", r);
+		if (!r) {
+			CHECK("kill", kill(pid, SIGTERM) == 0, "%s", strerror(errno));
+			CHECK("child ended by its parent's signal", waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) &&
+			      WTERMSIG(status) == SIGTERM, "status %#x", status);
+		}
+		close(in[1]);
+	}
 	CHECK("child sees the directory", spawn_child("cwd", out, sizeof out, &status) == 0 &&
 	      WEXITSTATUS(status) == 0, "child status %#x: '%s'", status, out);
 	FILE *p = popen("missing-program", "r");
@@ -931,6 +1091,161 @@ static void check_network(const char *host, int tcp_port, int udp_port)
 	close(u);
 }
 
+/* A TCP socket has its port from `bind` on, as on Linux: `getsockname` says
+ * it, no other socket binds it meanwhile, and the socket listens there, or
+ * connects from it; closed, a bound socket's port and a listener's are free
+ * at once. */
+static void check_tcp_binding(void)
+{
+	struct sockaddr_in at = ipv4(htonl(INADDR_LOOPBACK), 0), got, from = at, peer;
+	socklen_t len = sizeof at;
+	int bound = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("bind a TCP socket",
+	      bind(bound, (struct sockaddr *)&at, sizeof at) == 0 && getsockname(bound, (struct sockaddr *)&at, &len) == 0 &&
+		      at.sin_port != 0,
+	      "port %d", ntohs(at.sin_port));
+	int other = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("binding a port bound", bind(other, (struct sockaddr *)&at, sizeof at) < 0 && errno == EADDRINUSE,
+	      "bound");
+	CHECK("binding again", bind(bound, (struct sockaddr *)&at, sizeof at) < 0 && errno == EINVAL, "bound");
+	len = sizeof got;
+	CHECK("listen where bound",
+	      listen(bound, 4) == 0 && getsockname(bound, (struct sockaddr *)&got, &len) == 0 && got.sin_port == at.sin_port,
+	      "port %d", ntohs(got.sin_port));
+	CHECK("binding a port listened on", bind(other, (struct sockaddr *)&at, sizeof at) < 0 && errno == EADDRINUSE,
+	      "bound");
+	int client = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0), conn = -1;
+	socklen_t fromlen = sizeof from, peerlen = sizeof peer;
+	int connected = bind(client, (struct sockaddr *)&from, sizeof from) == 0 &&
+			getsockname(client, (struct sockaddr *)&from, &fromlen) == 0 &&
+			connect(client, (struct sockaddr *)&at, sizeof at) == 0 &&
+			(conn = accept4(bound, (struct sockaddr *)&peer, &peerlen, SOCK_CLOEXEC)) >= 0;
+	CHECK("connect from where bound", connected && from.sin_port != 0 && peer.sin_port == from.sin_port,
+	      "bound to port %d, seen from %d", ntohs(from.sin_port), ntohs(peer.sin_port));
+	close(conn);
+	close(client);
+	close(bound);
+	CHECK("a listener's port freed", bind(other, (struct sockaddr *)&at, sizeof at) == 0, "errno %d", errno);
+	close(other);
+	int again = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("a bound socket's port freed", bind(again, (struct sockaddr *)&at, sizeof at) == 0, "errno %d", errno);
+	close(again);
+}
+
+/* The nice value is the process's, which the programs it starts inherit,
+ * and below 0 only as far as the process may run above normal (an
+ * application not at all); the threads run on every processor, and an
+ * affinity that leaves some out cannot be had. */
+static void check_scheduling(void)
+{
+	errno = 0;
+	int was = getpriority(PRIO_PROCESS, 0);
+	CHECK("the nice value at start", was == 0 && errno == 0, "%d (%s)", was, strerror(errno));
+	CHECK("nice", nice(5) == 5 && getpriority(PRIO_PROCESS, getpid()) == 5, "%s", strerror(errno));
+	int favoured = setpriority(PRIO_PROCESS, 0, -1) == 0;
+	int now = getpriority(PRIO_PROCESS, 0);
+	CHECK("favoured above normal, or refused", favoured ? now == -1 : errno == EACCES && now == 5, "%d (%s)", now,
+	      strerror(errno));
+	CHECK("another process's nice value", setpriority(PRIO_PROCESS, 1, 0) < 0 && errno == ESRCH, "%s",
+	      strerror(errno));
+	setpriority(PRIO_PROCESS, 0, 5);
+	char *argv[] = { program, "child", "nice", 0 };
+	pid_t pid;
+	int status = 0;
+	int ran = posix_spawn(&pid, program, 0, 0, argv, environ) == 0 && waitpid(pid, &status, 0) == pid;
+	CHECK("a child's nice value is its parent's", ran && WIFEXITED(status) && WEXITSTATUS(status) == 25,
+	      "status %#x", status);
+	CHECK("back to normal", setpriority(PRIO_PROCESS, 0, 0) == 0 && getpriority(PRIO_PROCESS, 0) == 0, "%s",
+	      strerror(errno));
+
+	cpu_set_t all, some;
+	long processors = sysconf(_SC_NPROCESSORS_ONLN);
+	CHECK("the threads' processors",
+	      sched_getaffinity(0, sizeof all, &all) == 0 && CPU_COUNT(&all) == processors, "%d of %ld",
+	      CPU_COUNT(&all), processors);
+	CHECK("an affinity of every processor", sched_setaffinity(0, sizeof all, &all) == 0, "%s", strerror(errno));
+	CPU_ZERO(&some);
+	CPU_SET(0, &some);
+	int restricted = sched_setaffinity(0, sizeof some, &some);
+	CHECK("an affinity that leaves processors out",
+	      processors == 1 ? restricted == 0 : restricted < 0 && errno == EOPNOTSUPP, "%s", strerror(errno));
+	CPU_ZERO(&some);
+	CHECK("an affinity of no processor", sched_setaffinity(0, sizeof some, &some) < 0 && errno == EINVAL, "%s",
+	      strerror(errno));
+}
+
+/* Sockets bound to addresses apart share a port, as on Linux: an IPv4
+ * socket on 0.0.0.0 and an IPV6_V6ONLY one on ::, each taking what comes to
+ * its version's addresses; :: alone is IPv4's addresses too. IPV6_V6ONLY is
+ * set before bind. */
+static void check_shared_ports(void)
+{
+	int on = 1;
+	struct sockaddr_in any4 = ipv4(htonl(INADDR_ANY), 0);
+	socklen_t len = sizeof any4;
+	int v4 = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("listen on IPv4's addresses",
+	      bind(v4, (struct sockaddr *)&any4, sizeof any4) == 0 &&
+		      getsockname(v4, (struct sockaddr *)&any4, &len) == 0 && listen(v4, 4) == 0,
+	      "%s", strerror(errno));
+	struct sockaddr_in6 any6 = { .sin6_family = AF_INET6, .sin6_port = any4.sin_port, .sin6_addr = IN6ADDR_ANY_INIT };
+	int both = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK(":: is IPv4's addresses too", bind(both, (struct sockaddr *)&any6, sizeof any6) < 0 && errno == EADDRINUSE,
+	      "%s", strerror(errno));
+	int v6 = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	CHECK("listen on IPv6's addresses, on the same port",
+	      setsockopt(v6, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on) == 0 &&
+		      bind(v6, (struct sockaddr *)&any6, sizeof any6) == 0 && listen(v6, 4) == 0,
+	      "%s", strerror(errno));
+	CHECK("IPV6_V6ONLY before bind alone",
+	      setsockopt(v6, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on) < 0 && errno == EINVAL, "%s", strerror(errno));
+	struct sockaddr_in to4 = ipv4(htonl(INADDR_LOOPBACK), ntohs(any4.sin_port));
+	struct sockaddr_in6 to6 = { .sin6_family = AF_INET6, .sin6_port = any4.sin_port, .sin6_addr = IN6ADDR_LOOPBACK_INIT };
+	int c4 = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0), c6 = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int a4 = -1, a6 = -1;
+	int taken = connect(c4, (struct sockaddr *)&to4, sizeof to4) == 0 &&
+		    connect(c6, (struct sockaddr *)&to6, sizeof to6) == 0 &&
+		    (a4 = accept4(v4, NULL, NULL, SOCK_CLOEXEC)) >= 0 && (a6 = accept4(v6, NULL, NULL, SOCK_CLOEXEC)) >= 0;
+	CHECK("connections to each version's listener", taken, "%s", strerror(errno));
+	close(a4);
+	close(a6);
+	close(c4);
+	close(c6);
+	close(both);
+	close(v6);
+	close(v4);
+
+	/* Datagrams alike. */
+	char buf[16] = { 0 };
+	struct sockaddr_in dgram4 = ipv4(htonl(INADDR_ANY), 0);
+	len = sizeof dgram4;
+	int u4 = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0), u6 = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	int sender = socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	struct sockaddr_in6 dgram6 = { .sin6_family = AF_INET6, .sin6_addr = IN6ADDR_ANY_INIT };
+	int bound = bind(u4, (struct sockaddr *)&dgram4, sizeof dgram4) == 0 &&
+		    getsockname(u4, (struct sockaddr *)&dgram4, &len) == 0 &&
+		    setsockopt(u6, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof on) == 0 &&
+		    (dgram6.sin6_port = dgram4.sin_port, bind(u6, (struct sockaddr *)&dgram6, sizeof dgram6) == 0);
+	CHECK("datagram sockets of each version on one port", bound, "%s", strerror(errno));
+	/* From a socket of both versions: to 127.0.0.1 through its mapped
+	 * address, and to ::1. */
+	struct sockaddr_in6 mapped = { .sin6_family = AF_INET6, .sin6_port = dgram4.sin_port };
+	inet_pton(AF_INET6, "::ffff:127.0.0.1", &mapped.sin6_addr);
+	to6.sin6_port = dgram4.sin_port;
+	int sent = sendto(sender, "four", 4, 0, (struct sockaddr *)&mapped, sizeof mapped) == 4 &&
+		   sendto(sender, "six", 3, 0, (struct sockaddr *)&to6, sizeof to6) == 3;
+	struct timeval second = { .tv_sec = 1 };
+	setsockopt(u4, SOL_SOCKET, SO_RCVTIMEO, &second, sizeof second);
+	setsockopt(u6, SOL_SOCKET, SO_RCVTIMEO, &second, sizeof second);
+	int got4 = recv(u4, buf, sizeof buf, 0) == 4 && !memcmp(buf, "four", 4);
+	int got6 = recv(u6, buf, sizeof buf, 0) == 3 && !memcmp(buf, "six", 3);
+	CHECK("datagrams to each version's socket", sent && got4 && got6, "sent %d, IPv4 %d, IPv6 %d", sent, got4,
+	      got6);
+	close(sender);
+	close(u6);
+	close(u4);
+}
+
 /* Writes to an eventfd after a moment, from another thread. */
 static void *write_later(void *arg)
 {
@@ -1001,6 +1316,11 @@ static void check_timerfd(void)
 	int stopped = timerfd_settime(t, 0, &off, &old) == 0 && old.it_interval.tv_nsec == 10000000 &&
 		      timerfd_gettime(t, &now) == 0 && now.it_value.tv_nsec == 0 && now.it_interval.tv_nsec == 0;
 	CHECK("disarming it", stopped, "%ld ns left", now.it_value.tv_nsec);
+	/* Disarmed, a timer keeps the period it was given, as on Linux. */
+	struct itimerspec period = { .it_interval = { .tv_nsec = 5000000 } };
+	int kept = timerfd_settime(t, 0, &period, 0) == 0 && timerfd_gettime(t, &now) == 0 && now.it_value.tv_nsec == 0 &&
+		   now.it_interval.tv_nsec == 5000000 && read(t, &n, 8) < 0 && errno == EAGAIN;
+	CHECK("a disarmed timer's period", kept, "%ld ns", now.it_interval.tv_nsec);
 
 	/* An absolute time already past: expired at once. */
 	struct itimerspec past = { .it_value = { .tv_sec = 0, .tv_nsec = 1 } };
@@ -1088,6 +1408,28 @@ static void check_epoll(void)
 		      errno == ENOENT;
 	CHECK("EPOLL_CTL_DEL", deleted, "failed");
 	close(p[0]);
+
+	/* A level-triggered registration that stays ready (a writable end)
+	   does not hide another that becomes so (the reading end of the same
+	   pair). */
+	int sp[2];
+	int both = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp) == 0;
+	ev = (struct epoll_event){ .events = EPOLLIN, .data.u64 = 20 };
+	both = both && epoll_ctl(ep, EPOLL_CTL_ADD, sp[0], &ev) == 0;
+	ev = (struct epoll_event){ .events = EPOLLOUT, .data.u64 = 21 };
+	both = both && epoll_ctl(ep, EPOLL_CTL_ADD, sp[1], &ev) == 0 && epoll_wait(ep, out, 4, 0) == 1 &&
+	       out[0].data.u64 == 21 && write(sp[1], "x", 1) == 1;
+	int seen = 0;
+	for (int i = 0; both && i < 50 && seen != 3; i++) {
+		int got = epoll_wait(ep, out, 4, 100);
+		for (int j = 0; j < got; j++)
+			seen |= out[j].data.u64 == 20 ? 1 : out[j].data.u64 == 21 ? 2 : 0;
+	}
+	CHECK("a pair's two ends", seen == 3, "seen %d", seen);
+	epoll_ctl(ep, EPOLL_CTL_DEL, sp[0], 0);
+	epoll_ctl(ep, EPOLL_CTL_DEL, sp[1], 0);
+	close(sp[0]);
+	close(sp[1]);
 
 	/* Each write to an eventfd is an event, read or not: what async
 	   runtimes' wakers count on. */
@@ -2232,6 +2574,10 @@ static int child(const char *mode, const char *arg)
 		}
 		return n == 0 ? 0 : 2;
 	}
+	if (!strcmp(mode, "nice")) {
+		/* Its nice value, from 0 to 39. */
+		return getpriority(PRIO_PROCESS, 0) + 20;
+	}
 	if (!strcmp(mode, "say")) {
 		/* Descriptor 3 is a connection: the child's line on it. */
 		return write(3, "from the child\n", 15) == 15 ? 0 : 1;
@@ -2324,6 +2670,7 @@ int main(int argc, char **argv)
 	check_heap();
 	check_mmap();
 	check_system_files();
+	check_databases();
 	check_memfd();
 	check_files();
 	check_directories();
@@ -2347,6 +2694,9 @@ int main(int argc, char **argv)
 		check_network(argv[2], atoi(argv[3]), atoi(argv[4]));
 	else
 		check_network(0, 0, 0);
+	check_tcp_binding();
+	check_shared_ports();
+	check_scheduling();
 	check_memory_classes();
 	printf("%s: %d failed\n", failures ? "FAIL" : "PASS", failures);
 	return failures;

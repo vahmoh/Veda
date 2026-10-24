@@ -19,7 +19,7 @@ use std::process::Command;
 
 use crate::ports::{self, Port};
 use crate::util::{self, Result};
-use crate::{architecture, toolchain};
+use crate::{architecture, certificates, toolchain};
 
 /// The ports the web engine is built from: the tools for this machine,
 /// then the libraries in the order their builds need them, then WebKit.
@@ -70,10 +70,10 @@ pub const PORTS: &[&str] = &[
 ];
 
 /// What the web engine has in the system image that is not built: the
-/// certificate authorities its TLS trusts and the fonts of the world's
-/// scripts. They are fetched with the engine, and a change of theirs
-/// rebuilds none of it.
-pub const DATA_PORTS: &[&str] = &["ca-certificates", "noto-fonts", "noto-cjk", "noto-emoji"];
+/// fonts of the world's scripts, and the certificate authorities its TLS
+/// trusts (which the image has with Python's too: `certificates`). They
+/// are fetched with the engine, and a change of theirs rebuilds none of it.
+pub const DATA_PORTS: &[&str] = &[certificates::PORT, "noto-fonts", "noto-cjk", "noto-emoji"];
 
 /// What the build runs from this machine beyond a C compiler: the build
 /// systems of the libraries (CMake and Ninja, Autoconf's shell and make),
@@ -97,8 +97,9 @@ fn lock() -> Result<util::Lock> {
 /// The ports and what builds them, whose fingerprint `cargo automation
 /// web` notes.
 fn ports_fingerprint() -> Result<String> {
-    let dir = ports::dir();
-    ports::fingerprint(PORTS, &[dir.join("common.sh"), ports::settings()])
+    let mut extra = ports::library_build_files()?;
+    extra.push(ports::settings());
+    ports::fingerprint(PORTS, &extra)
 }
 
 fn ports_note() -> PathBuf {
@@ -144,12 +145,12 @@ fn cross_toolchain() -> Result {
 
 /// What the web engine gives the system image, at their paths in it, once
 /// it is built: fontconfig's configuration (the system's fonts, as WebKit
-/// finds them: `implementation/ports/fontconfig/fonts.conf`), the
-/// certificate authorities its TLS trusts (the `ca-certificates` port),
-/// Noto's fonts (`fonts/noto`, whose licence is the other fonts'
-/// `fonts/OFL.txt`), and the licence texts of WebKit and its libraries
-/// (`licences/web/PORT/...`, from `build.sh`'s `licences` stage), which the
-/// browser goes nowhere without. Data ports not fetched yet are fetched.
+/// finds them: `implementation/ports/fontconfig/fonts.conf`), Noto's fonts
+/// (`fonts/noto`, whose licence is the other fonts' `fonts/OFL.txt`), and
+/// the licence texts of WebKit and its libraries (`licences/web/PORT/...`,
+/// from `build.sh`'s `licences` stage), which the browser goes nowhere
+/// without. Data ports not fetched yet are fetched. The certificate
+/// authorities its TLS trusts are `certificates`'.
 pub fn image_files() -> Result<Vec<(String, Vec<u8>)>> {
     if !built() {
         return Ok(Vec::new());
@@ -157,14 +158,12 @@ pub fn image_files() -> Result<Vec<(String, Vec<u8>)>> {
     let downloads = root().join("downloads");
     let config = ports::dir().join("fontconfig").join("fonts.conf");
     let mut files = vec![("etc/fonts/fonts.conf".to_string(), util::read(&config)?)];
-    for name in DATA_PORTS {
+    for name in DATA_PORTS.iter().filter(|name| **name != certificates::PORT) {
         let port = Port::named(name)?;
         ports::fetch(&port, &downloads)?;
         for path in port.files(&downloads) {
             let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            let at =
-                if *name == "ca-certificates" { "etc/ssl/cert.pem".to_string() } else { format!("fonts/noto/{file}") };
-            files.push((at, util::read(&path)?));
+            files.push((format!("fonts/noto/{file}"), util::read(&path)?));
         }
     }
     let licences = root().join("system").join("share").join("licences");
@@ -180,16 +179,10 @@ pub fn image_files() -> Result<Vec<(String, Vec<u8>)>> {
         }
         files.push((format!("licences/web/{rel}"), util::read(&path)?));
     }
-    // Where each one's source is; and of Mozilla's list of certificate
-    // authorities, which the Mozilla Public License covers, where it and
-    // its licence are, as that licence asks.
+    // Where each one's source is.
     for port in ported {
         files.push((format!("licences/web/{port}/SOURCE"), Port::named(&port)?.source_note().into_bytes()));
     }
-    let note = Port::named("ca-certificates")?.source_note()
-        + "\nThe list is Mozilla's (its first lines say where its source is), under the Mozilla Public License 2.0, \
-           whose text is at https://mozilla.org/MPL/2.0/.\n";
-    files.push(("licences/web/ca-certificates/SOURCE".into(), note.into_bytes()));
     Ok(files)
 }
 

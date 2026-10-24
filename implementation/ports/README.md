@@ -10,7 +10,7 @@ readable and explained patch. The fonts Veda ships are here too, as
 released, and the data the web engine reads (more fonts, the certificate
 authorities TLS trusts), downloaded as released.
 
-**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [Driver VM](#driver-vm) · [The web engine](#the-web-engine) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
+**Contents:** [How ports are built](#how-ports-are-built) · [Toolchain](#toolchain) · [Driver VM](#driver-vm) · [The web engine](#the-web-engine) · [Python](#python) · [Crates](#crates) · [Fonts](#fonts) · [Updating a port](#updating-a-port) · [Licences](#licences)
 
 ## How ports are built
 
@@ -29,7 +29,8 @@ release that builds it), checked against the SHA-256s in the release's
 `src/stage0`.
 
 The scripts (`build.sh`, `linux/build.sh`, `wpewebkit/build.sh`,
-`crates.sh`; `common.sh` holds what they share) list what they expect and
+`python/build.sh`, `crates.sh`; `common.sh` holds what they share) list
+what they expect and
 make in their opening comments. They build for the architecture
 `cargo automation` names (`VEDA_ARCH`), with its settings from
 `architectures/<architecture>/settings.sh` (target triples, the names
@@ -57,6 +58,14 @@ the release vendors.
 | `dav1d` | 1.5.4 | BSD-2-Clause | AV1, in FFmpeg |
 | `ffmpeg` | 9.0.2 | LGPL-2.1-or-later | `mediadec`, the sandboxed decoder of Videos |
 
+And the data the C library reads, which the image installs with the
+toolchain (`automation/source/databases.rs`, which writes the user
+database, `passwd` and `group`, beside it):
+
+| Port | Version | Licence | What it is |
+|------|---------|---------|------------|
+| `iana-etc` | 20260930 | CC0-1.0 | IANA's registry of service names and port numbers, as iana-etc converts it (`/system/etc/services`) |
+
 What the patches change:
 
 * **binutils**: `veda` in `config.sub`; on AMD64, `x86_64-veda` in BFD
@@ -74,16 +83,18 @@ What the patches change:
 * **gmp**, **mpfr**, **mpc**: `config.sub` knows `veda`.
 * **musl**: `__init_libc` sets the POSIX layer up, `posix_spawn` asks it to
   start the program, `dl_iterate_phdr` names the program by `AT_EXECFN`
-  (there is no `/proc/self/exe`), names not in `/etc/hosts` go to the
-  network service's resolver (`__lookup_name`), musl's DNS client to
-  its DNS servers (`__get_resolv_conf`), `pthread_getattr_np` takes the
-  main thread's stack from the layer (`__veda_main_stack`; there is no
-  `mremap` to probe it with), and with no `TZ` the time zone is the
-  system's offset from UTC (`__tz.c`, from the layer's `__veda_tz`). On
-  AMD64, system calls, `_start`
-  (the bootstrap channel) and the thread routines (`src/thread/x86_64/*.s`)
-  go through the layer; `vfork` takes the generic version, which fails:
-  there is no `fork`. See [C on Veda](../../documentation/C.md#how-it-works).
+  (there is no `/proc/self/exe`), the databases Linux keeps in `/etc`
+  (`hosts`, `services`, `passwd`, `group`, `shadow`, `shells`) are in
+  `/system/etc`, names not in its `hosts` go to the network service's
+  resolver (`__lookup_name`), musl's DNS client to its DNS servers
+  (`__get_resolv_conf`), `pthread_getattr_np` takes the main thread's
+  stack from the layer (`__veda_main_stack`; there is no `mremap` to probe
+  it with), and with no `TZ` the time zone is the system's offset from UTC
+  (`__tz.c`, from the layer's `__veda_tz`). On AMD64, system calls,
+  `_start` (the bootstrap channel) and the thread routines
+  (`src/thread/x86_64/*.s`) go through the layer; `vfork` takes the
+  generic version, which fails: there is no `fork`. See
+  [C on Veda](../../documentation/C.md#how-it-works).
 * **rust**: Veda's target in the compiler (`Os::Veda`,
   `spec/base/veda.rs`; on AMD64 `x86_64-unknown-veda`, linked by
   `x86_64-veda-gcc`, in `STAGE0_MISSING_TARGETS`) and in `library/std`,
@@ -309,6 +320,54 @@ What the patches change:
   lock type of musl's threads (`lock-obj-pub.x86_64-pc-veda.h`).
 * The others: none.
 
+## Python
+
+`cargo automation python` builds these with `python/build.sh`, in
+`target/python`, for [Python on Veda](../../documentation/PYTHON.md): the
+libraries its modules stand on, for Veda, static and position-independent,
+compiled as the web engine's are (`VEDA_CFLAGS`), then CPython, its
+modules built into the interpreter; and, for the build machine, pkgconf and
+the same release of Python, which CPython's build runs. The ports it shares
+with the web engine are built for each apart. Its last stage gathers the
+licence texts of Python and of the libraries built into it
+(`LICENCE_FILES`), and those of pip and the packages it vendors, from the
+wheel `ensurepip` carries, which the image installs in
+`/system/licences/python`.
+
+| Port | Version | Licence | What Veda uses it for |
+|------|---------|---------|-----------------------|
+| `python` | 3.15.1 | PSF-2.0 | CPython: the interpreter and its standard library |
+| `zlib`, `bzip2`, `xz`, `zstd` | 1.3.2, 1.0.8, 5.8.4, 1.5.7 | Zlib; bzip2-1.0.6; 0BSD; BSD-3-Clause OR GPL-2.0-only | `zlib`, `bz2`, `lzma` (liblzma) and `compression.zstd` |
+| `mpdecimal` | 4.0.1 | BSD-2-Clause | `decimal` |
+| `expat` | 2.9.0 | MIT | `xml.etree`, `xml.parsers.expat` |
+| `sqlite` | 3.54.1 | blessing | `sqlite3`, `dbm.sqlite3` |
+| `openssl` | 3.5.9 | Apache-2.0 | `ssl`, `hashlib`, `hmac` |
+| `pkgconf` | 3.0.9 | ISC | For the build machine: finding the libraries |
+
+What the patch changes:
+
+* **python**: Veda as a platform of CPython's build (`configure.ac`, and
+  `configure`, generated from it by Autoconf 2.72; `config.sub`,
+  `Misc/platform_triplet.c`): `x86_64-veda`, its modules built into the
+  interpreter, without the functions musl has that Veda does not carry
+  out (`fork`, `exec*`, `dlopen`, links, alarms, pseudo-terminals, named
+  semaphores, `if_nameindex`); programs started with `posix_spawn`
+  (`Modules/_posixsubprocess.c`, `Lib/os.py`'s `spawn*`, `multiprocessing`
+  spawning alone); the interpreter's own path from the loader
+  (`Modules/getpath.c`), UTF-8 as the locale's encoding
+  (`Include/pyport.h`), Linux's abstract socket names
+  (`Modules/socketmodule.c`), the thread names' limit, the basic
+  interactive interpreter in Veda's Terminal (`Lib/_pyrepl/main.py`),
+  virtual environments as copies (`Lib/venv`), the asyncio shell without
+  the tools that read other processes' memory; and CPython's tests,
+  which skip what Veda has not by what they need
+  ([Python on Veda](../../documentation/PYTHON.md#the-port)).
+  `config.site` answers configure's run-time checks.
+* **sqlite**: none; built from the amalgamation, with its unix-none VFS,
+  which locks no files (Veda's file system cannot arbitrate locks between
+  processes yet).
+* The others: none.
+
 ## Crates
 
 Rust crates that Veda changes. The releases of all but smoltcp and
@@ -370,7 +429,7 @@ cargo test --lib --manifest-path implementation/ports/.crates/src/smoltcp/Cargo.
 
 What the patches change:
 
-* **smoltcp**: seven changes, each with tests of its own.
+* **smoltcp**: eight changes, each with tests of its own.
   * **Unpredictable protocol numbers** (`src/rand.rs`): given
     `Config::random_key`, initial sequence numbers, DHCP and DNS ids, IPv4
     identification and source ports come from ChaCha20, not the
@@ -398,6 +457,16 @@ What the patches change:
   * **Neighbours found at once** (`src/iface/neighbor.rs`): ARP requests
     and Neighbor Solicitations are rate-limited per address (RFC 1122,
     2.3.2.1), not for the whole cache.
+  * **Addresses matched as on Linux** (`src/socket/tcp.rs`,
+    `src/socket/udp.rs`): a socket bound to the unspecified address of one
+    IP version (`0.0.0.0`, `::`) takes the packets to every address of
+    that version and no other, as an IPv4 socket and an IPv6-only one
+    (`IPV6_V6ONLY`) do, and a UDP one sends from the address of its route;
+    a UDP socket bound to one address takes what comes to that address
+    alone. Released, a socket bound to an unspecified address took nothing
+    sent to the host's own addresses, and sent from the unspecified
+    address; one bound to an address took every broadcast and multicast on
+    its port, of either version.
 * **zune-jpeg**: sequential JPEGs with a scan per component (T.81, A.2.2),
   as jpeg-encoder writes baseline files with optimised Huffman tables,
   decode instead of coming out as stripes (`single_component_scan_rows` in
@@ -472,12 +541,13 @@ names, and the patches here. About Veda lists them
 
 Each build gathers its ports' texts in a stage of its own, `licences`: the
 files of each port's release that `LICENCE_FILES` names in `build.sh`,
-`linux/build.sh` and `wpewebkit/build.sh` (with, for Rust, those of the
-crates its standard library is built from). A port added to a build
-without its texts listed there fails that build (the web engine's
+`linux/build.sh`, `wpewebkit/build.sh` and `python/build.sh` (with, for
+Rust, those of the crates its standard library is built from). A port
+added to a build without its texts listed there fails that build (the
 libraries whose licences ask for none are in its `LICENCE_FREE`), and an
 image build fails where it has a port without its texts: build its ports
-again (`cargo automation toolchain`, `linux` or `web`), which gathers them.
+again (`cargo automation toolchain`, `linux`, `web` or `python`), which
+gathers them.
 The firmware lists name the licence each file comes under, and the image
 carries those texts in `/system/licences/firmware`.
 

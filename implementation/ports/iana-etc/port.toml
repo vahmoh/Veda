@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The services the Internet's protocols are known by, and their ports, as
+# the C library reads them (/system/etc/services: the service names of
+# getaddrinfo, getservbyname and getnameinfo): IANA's registry of service
+# names and port numbers, as iana-etc converts it. IANA and the IETF dedicate
+# the registry to the public domain (CC0 1.0: their "Joint Statement
+# Concerning Copyright Rights in the Protocol Registries").
+name = "iana-etc"
+version = "20260930"
+url = "https://github.com/Mic92/iana-etc/releases/download/20260930/iana-etc-20260930.tar.gz"
+sha256 = "ead94c150ba26a30a33c36722b97624fd9ff24c80abcd6303a21af52b24f9e55"
+license = "CC0-1.0"

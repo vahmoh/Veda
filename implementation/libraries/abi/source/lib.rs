@@ -224,8 +224,10 @@ pub mod nr {
     pub const PROCESS_START: usize = 61;
     /// `process_exit(code) -> !`.
     pub const PROCESS_EXIT: usize = 62;
-    /// `process_kill(h, flags)`: ends the process (flags from
-    /// [`kill_flags`](crate::kill_flags)).
+    /// `process_kill(h, flags, signal)`: ends the process (flags from
+    /// [`kill_flags`](crate::kill_flags)): as if by POSIX signal `signal`
+    /// (1 to 64), its exit code [`EXIT_CODE_SIGNALED`](crate::EXIT_CODE_SIGNALED)
+    /// less the signal; with 0, killed ([`EXIT_CODE_KILLED`](crate::EXIT_CODE_KILLED)).
     pub const PROCESS_KILL: usize = 63;
     /// `thread_create(process, name, name_len) -> h`: a thread of the
     /// process at [`priority::NORMAL`](crate::priority::NORMAL), or at the
@@ -708,6 +710,10 @@ pub struct SocketInfo {
 /// in whole or not at all (POSIX `PIPE_BUF`).
 pub const SOCKET_ATOMIC_WRITE: usize = 4096;
 
+/// Bytes a socket holds each way: a writer waits for room within them (a
+/// pipe's size, as POSIX programs see it).
+pub const SOCKET_CAPACITY: usize = 256 * 1024;
+
 /// Basic information about any handle. `object_info` on
 /// [`INVALID_HANDLE`] describes the calling process (topics
 /// [`info_topic::HANDLE_BASIC`] and [`info_topic::PROCESS`]).
@@ -1018,7 +1024,8 @@ impl Default for SystemInfo {
 
 /// Exit code reported for processes terminated by an unhandled CPU fault.
 pub const EXIT_CODE_CRASHED: i64 = -1001;
-/// Exit code reported for processes killed with `process_kill`.
+/// Exit code reported for processes killed with `process_kill`, but by
+/// a signal.
 pub const EXIT_CODE_KILLED: i64 = -1002;
 /// Exit code of a program that panicked (set by the runtime's panic handler).
 pub const EXIT_CODE_PANICKED: i64 = -1003;

@@ -7,10 +7,16 @@
 //! smoltcp sockets live in the socket set of one interface, so:
 //!
 //! * a TCP connection is created on the interface its route picks;
-//! * a TCP listener or UDP socket bound to the unspecified address gets one
+//! * a TCP listener or UDP socket bound to an unspecified address gets one
 //!   smoltcp socket per interface (and new interfaces get one too), so it
 //!   is reachable everywhere;
 //! * a ping socket gets an ICMP socket on each interface it sends through.
+//!
+//! Sockets share a port when no address is in the [`Binding`]s of two of
+//! them, as on Linux: an IPv4 socket on `0.0.0.0` and an IPv6-only one on
+//! `::`, or sockets on different addresses. What comes to an address is
+//! then one socket's, and the firewall judges it by that socket's
+//! application.
 //!
 //! smoltcp closes a socket the same way after a reset and after a timeout;
 //! the stack tells them apart (refused, reset, timed out) from its own
@@ -34,7 +40,7 @@
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque, btree_map};
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::net::{IpAddr, Ipv6Addr, SocketAddr};
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use proto::net::{FirewallProtocol, NetError, SocketInfo, SocketKind, TcpOptions};
 use smoltcp::iface::SocketHandle;
@@ -87,6 +93,75 @@ pub(crate) enum Proto {
     Udp,
 }
 
+/// The local addresses a socket takes packets for, by which the sockets on
+/// a port are told apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Binding {
+    /// Every address, of both versions: IPv6's unspecified address, not
+    /// IPv6-only.
+    Any,
+    /// Every IPv4 address: `0.0.0.0`.
+    AnyV4,
+    /// Every IPv6 address: `::`, IPv6-only.
+    AnyV6,
+    /// One address.
+    Addr(IpAddr),
+}
+
+impl Binding {
+    /// The binding of a socket bound to `addr`, IPv6-only (`v6only`) or
+    /// not.
+    pub(crate) fn of(addr: IpAddr, v6only: bool) -> Binding {
+        match addr {
+            IpAddr::V4(a) if a.is_unspecified() => Binding::AnyV4,
+            IpAddr::V6(a) if a.is_unspecified() && v6only => Binding::AnyV6,
+            IpAddr::V6(a) if a.is_unspecified() => Binding::Any,
+            a => Binding::Addr(a),
+        }
+    }
+
+    /// Whether the socket takes what comes to `addr`.
+    pub(crate) fn takes(self, addr: IpAddr) -> bool {
+        match self {
+            Binding::Any => true,
+            Binding::AnyV4 => addr.is_ipv4(),
+            Binding::AnyV6 => addr.is_ipv6(),
+            Binding::Addr(a) => a == addr,
+        }
+    }
+
+    /// Whether the socket reaches `remote`, from an address of its version.
+    fn reaches(self, remote: IpAddr) -> bool {
+        match self {
+            Binding::Any => true,
+            Binding::AnyV4 => remote.is_ipv4(),
+            Binding::AnyV6 => remote.is_ipv6(),
+            Binding::Addr(a) => a.is_ipv4() == remote.is_ipv4(),
+        }
+    }
+
+    /// Whether an address is in both bindings: then the sockets cannot
+    /// share a port.
+    fn overlaps(self, other: Binding) -> bool {
+        match (self, other) {
+            (Binding::Addr(a), b) | (b, Binding::Addr(a)) => b.takes(a),
+            (Binding::AnyV4, Binding::AnyV6) | (Binding::AnyV6, Binding::AnyV4) => false,
+            _ => true,
+        }
+    }
+
+    /// What smoltcp binds or listens on for the binding, on `port`.
+    fn endpoint(self, port: u16) -> IpListenEndpoint {
+        let addr = match self {
+            Binding::Any => None,
+            Binding::AnyV4 => Some(IpAddress::Ipv4(Ipv4Addr::UNSPECIFIED)),
+            Binding::AnyV6 => Some(IpAddress::Ipv6(Ipv6Addr::UNSPECIFIED)),
+            Binding::Addr(a) => Some(a.into()),
+        };
+        IpListenEndpoint { addr, port }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     Connecting,
@@ -127,6 +202,7 @@ pub(crate) struct TcpSock {
 
 pub(crate) struct Listener {
     pub local: SocketAddr,
+    pub binding: Binding,
     pub backlog: usize,
     pub members: Vec<(IfaceId, SocketHandle)>,
     pub accepted: VecDeque<SockId>,
@@ -134,8 +210,17 @@ pub(crate) struct Listener {
     pub owner: u64,
 }
 
+/// A TCP socket bound to an address it has yet to listen on or connect
+/// from: the port is its own meanwhile, as POSIX's `bind` makes it.
+pub(crate) struct BoundSock {
+    pub local: SocketAddr,
+    pub binding: Binding,
+    pub owner: u64,
+}
+
 pub(crate) struct UdpSock {
     pub local: SocketAddr,
+    pub binding: Binding,
     pub members: Vec<(IfaceId, SocketHandle)>,
     pub owner: u64,
     /// Bytes of datagrams received, last seen (to tell new arrivals).
@@ -157,6 +242,7 @@ pub(crate) struct PingSock {
 pub(crate) enum Entry {
     Tcp(TcpSock),
     Listener(Listener),
+    Bound(BoundSock),
     Udp(UdpSock),
     Ping(PingSock),
 }
@@ -465,27 +551,77 @@ impl Stack {
         }
         validate(opts)?;
         self.check_limit()?;
-        let id_if = self.route(remote.ip())?;
+        let iface = self.route(remote.ip())?;
         let port = self.alloc_port(Proto::Tcp)?;
+        let t = self.connection(iface, remote, IpListenEndpoint { addr: None, port }, opts, owner)?;
+        self.socks.reserve(Proto::Tcp, port);
+        Ok(self.socks.insert(Entry::Tcp(t)))
+    }
+
+    /// Starts the connection of a bound TCP socket ([`Stack::tcp_bind`]) to
+    /// `remote`, from its address and port. A socket that cannot connect
+    /// stays bound.
+    pub fn tcp_connect_bound(&mut self, id: SockId, remote: SocketAddr, opts: &TcpOptions) -> Result<(), NetError> {
+        let Some(Entry::Bound(b)) = self.socks.map.get(&id) else { return Err(NetError::InvalidArgument) };
+        let (local, binding, owner) = (b.local, b.binding, b.owner);
+        if remote.port() == 0 {
+            return Err(NetError::InvalidArgument);
+        }
+        validate(opts)?;
+        if !binding.reaches(remote.ip()) {
+            return Err(NetError::NoRoute);
+        }
+        let iface = self.route(remote.ip())?;
+        let from = (!local.ip().is_unspecified()).then_some(local.ip());
+        if from.is_some_and(|addr| !self.iface(iface).is_some_and(|i| i.iface.has_ip_addr(addr))) {
+            // The address is another interface's: what the connection sent
+            // from it would not find its way back.
+            return Err(NetError::InvalidArgument);
+        }
+        // Another connection between the same two ends.
+        let taken = self.socks.map.values().any(|e| {
+            matches!(e, Entry::Tcp(t) if t.phase != Phase::Closed
+                && t.remote == Some(remote)
+                && (t.port == local.port() || t.local.is_some_and(|l| l.port() == local.port())))
+        });
+        if taken {
+            return Err(NetError::AddressNotAvailable);
+        }
+        let endpoint = IpListenEndpoint { addr: from.map(Into::into), port: local.port() };
+        let t = self.connection(iface, remote, endpoint, opts, owner)?;
+        // Its port is the connection's now.
+        self.socks.map.insert(id, Entry::Tcp(t));
+        Ok(())
+    }
+
+    /// A connection to `remote` from `local` for process `owner`, started on
+    /// interface `iface` (whose address it is from, if `local` has none).
+    fn connection(
+        &mut self,
+        iface: IfaceId,
+        remote: SocketAddr,
+        local: IpListenEndpoint,
+        opts: &TcpOptions,
+        owner: u64,
+    ) -> Result<TcpSock, NetError> {
         let now = self.now_us;
-        let i = self.iface_mut(id_if).ok_or(NetError::NoRoute)?;
+        let i = self.iface_mut(iface).ok_or(NetError::NoRoute)?;
         let mut s = tcp_socket();
         apply_options(&mut s, opts);
-        s.connect(i.iface.context(), IpEndpoint::from(remote), port).map_err(|e| match e {
+        s.connect(i.iface.context(), IpEndpoint::from(remote), local).map_err(|e| match e {
             tcp::ConnectError::Unaddressable => NetError::NoRoute,
             tcp::ConnectError::InvalidState => NetError::Internal,
         })?;
         let handle = i.sockets.add(s);
-        self.socks.reserve(Proto::Tcp, port);
         let timeout = if opts.connect_timeout_ms > 0 {
             opts.connect_timeout_ms as u64 * 1000
         } else {
             DEFAULT_CONNECT_TIMEOUT_US
         };
-        Ok(self.socks.insert(Entry::Tcp(TcpSock {
-            iface: id_if,
+        Ok(TcpSock {
+            iface,
             handle: Some(handle),
-            port,
+            port: local.port,
             phase: Phase::Connecting,
             connect_deadline_us: now + timeout,
             closed_by_us: false,
@@ -501,41 +637,121 @@ impl Stack {
             owner,
             peer_fin: false,
             leftover: VecDeque::new(),
-        })))
+        })
     }
 
-    /// Listens on `local` (port 0 picks a free one) for process `owner`.
-    /// Returns the listener and the address bound.
+    /// Binds a TCP socket to `local` (port 0 picks a free one), IPv6-only
+    /// (`v6only`) or not, for process `owner`, before it listens
+    /// ([`Stack::tcp_listen_bound`]) or connects
+    /// ([`Stack::tcp_connect_bound`]): the port is its own from now on, as
+    /// POSIX's `bind` makes it. Returns the socket and the address bound.
+    pub fn tcp_bind(&mut self, local: SocketAddr, v6only: bool, owner: u64) -> Result<(SockId, SocketAddr), NetError> {
+        self.check_limit()?;
+        let (local, binding) = self.tcp_local(local, v6only)?;
+        self.socks.reserve(Proto::Tcp, local.port());
+        Ok((self.socks.insert(Entry::Bound(BoundSock { local, binding, owner })), local))
+    }
+
+    /// Listens on `local` (port 0 picks a free one), IPv6-only (`v6only`)
+    /// or not, for process `owner`. Returns the listener and the address
+    /// bound.
     pub fn tcp_listen(
         &mut self,
         local: SocketAddr,
+        v6only: bool,
         backlog: u32,
         opts: &TcpOptions,
         owner: u64,
     ) -> Result<(SockId, SocketAddr), NetError> {
         validate(opts)?;
         self.check_limit()?;
+        let (local, binding) = self.tcp_local(local, v6only)?;
+        let l = self.listener(local, binding, backlog, opts, owner)?;
+        self.socks.reserve(Proto::Tcp, local.port());
+        let id = self.socks.insert(Entry::Listener(l));
+        self.firewall.add_receiver(id, FirewallProtocol::Tcp, local.port(), binding);
+        Ok((id, local))
+    }
+
+    /// Makes a bound TCP socket ([`Stack::tcp_bind`]) a listener on its
+    /// address, which it returns. A socket that cannot listen stays bound.
+    pub fn tcp_listen_bound(&mut self, id: SockId, backlog: u32, opts: &TcpOptions) -> Result<SocketAddr, NetError> {
+        let Some(Entry::Bound(b)) = self.socks.map.get(&id) else { return Err(NetError::InvalidArgument) };
+        let (local, binding, owner) = (b.local, b.binding, b.owner);
+        validate(opts)?;
+        let l = self.listener(local, binding, backlog, opts, owner)?;
+        // Its port is the listener's now.
+        self.socks.map.insert(id, Entry::Listener(l));
+        self.firewall.add_receiver(id, FirewallProtocol::Tcp, local.port(), binding);
+        Ok(local)
+    }
+
+    /// The address a TCP socket asking for `local` (IPv6-only or not) binds
+    /// to, and its binding: one of the machine's addresses (or an
+    /// unspecified one), with a port no listener or other bound socket
+    /// whose binding overlaps has (port 0: a free one).
+    fn tcp_local(&mut self, local: SocketAddr, v6only: bool) -> Result<(SocketAddr, Binding), NetError> {
         if !bind_ok(self, local.ip()) {
             return Err(NetError::AddressNotAvailable);
         }
+        let binding = Binding::of(local.ip(), v6only);
         let port = if local.port() == 0 { self.alloc_port(Proto::Tcp)? } else { local.port() };
-        let listening = self.socks.map.values().any(|e| matches!(e, Entry::Listener(l) if l.local.port() == port));
-        if listening {
+        if self.port_taken(FirewallProtocol::Tcp, port, binding) {
             return Err(NetError::AddressInUse);
         }
-        let local = SocketAddr::new(local.ip(), port);
+        Ok((SocketAddr::new(local.ip(), port), binding))
+    }
+
+    /// The sockets on `port` of `protocol`, with their bindings: the TCP
+    /// listeners and bound TCP sockets on it (connections share theirs:
+    /// each is told apart by its peer), or the UDP sockets.
+    fn holders(&self, protocol: FirewallProtocol, port: u16) -> impl Iterator<Item = (SockId, Binding)> + '_ {
+        self.socks.map.iter().filter_map(move |(&id, e)| {
+            let (local, binding) = match (protocol, e) {
+                (FirewallProtocol::Tcp, Entry::Listener(l)) => (l.local, l.binding),
+                (FirewallProtocol::Tcp, Entry::Bound(b)) => (b.local, b.binding),
+                (FirewallProtocol::Udp, Entry::Udp(u)) => (u.local, u.binding),
+                _ => return None,
+            };
+            (local.port() == port).then_some((id, binding))
+        })
+    }
+
+    /// The sockets that hold `port` of `protocol` (see
+    /// [`Stack::tcp_bind`] and [`Stack::udp_bind`]), whatever they are bound
+    /// to.
+    pub fn port_holders(&self, protocol: FirewallProtocol, port: u16) -> Vec<SockId> {
+        self.holders(protocol, port).map(|(id, _)| id).collect()
+    }
+
+    /// Whether `port` of `protocol` is taken for a socket bound so
+    /// (`binding`): a socket on it has a binding that overlaps, or, for UDP,
+    /// a query of the resolver's (bound to every address) is on it.
+    fn port_taken(&self, protocol: FirewallProtocol, port: u16, binding: Binding) -> bool {
+        self.holders(protocol, port).any(|(_, b)| b.overlaps(binding))
+            || (protocol == FirewallProtocol::Udp && self.dns_has_port(port))
+    }
+
+    /// A listener on `local` (bound so: `binding`) for process `owner`, its
+    /// listening sockets on the interfaces that have its address.
+    fn listener(
+        &mut self,
+        local: SocketAddr,
+        binding: Binding,
+        backlog: u32,
+        opts: &TcpOptions,
+        owner: u64,
+    ) -> Result<Listener, NetError> {
         let backlog = (backlog as usize).clamp(1, LISTEN_PER_IFACE);
-        let mut l = Listener { local, backlog, members: Vec::new(), accepted: VecDeque::new(), opts: *opts, owner };
+        let mut l =
+            Listener { local, binding, backlog, members: Vec::new(), accepted: VecDeque::new(), opts: *opts, owner };
         for id in ifaces_for(self, local.ip()) {
             self.add_listen_members(&mut l, id);
         }
         if l.members.is_empty() {
             return Err(NetError::AddressNotAvailable);
         }
-        self.socks.reserve(Proto::Tcp, port);
-        let id = self.socks.insert(Entry::Listener(l));
-        self.firewall.add_receiver(id, FirewallProtocol::Tcp, port);
-        Ok((id, local))
+        Ok(l)
     }
 
     /// Gives a listener listening sockets on interface `id`: as many as its
@@ -549,14 +765,17 @@ impl Stack {
         for _ in have..want {
             let mut s = tcp_socket();
             apply_options(&mut s, &l.opts);
-            let ep = if l.local.ip().is_unspecified() {
-                IpListenEndpoint { addr: None, port: l.local.port() }
-            } else {
-                IpListenEndpoint { addr: Some(l.local.ip().into()), port: l.local.port() }
-            };
-            if s.listen(ep).is_ok() {
+            if s.listen(l.binding.endpoint(l.local.port())).is_ok() {
                 l.members.push((id, i.sockets.add(s)));
             }
+        }
+    }
+
+    /// The address a listener listens on.
+    pub fn tcp_listener_address(&self, listener: SockId) -> Option<SocketAddr> {
+        match self.socks.map.get(&listener) {
+            Some(Entry::Listener(l)) => Some(l.local),
+            _ => None,
         }
     }
 
@@ -708,25 +927,28 @@ impl Stack {
     // ---------------------------------------------------------------
     // UDP
 
-    /// Opens a UDP socket bound to `local` (port 0 picks a free one) for
-    /// process `owner`.
-    pub fn udp_bind(&mut self, local: SocketAddr, owner: u64) -> Result<(SockId, SocketAddr), NetError> {
+    /// Opens a UDP socket bound to `local` (port 0 picks a free one),
+    /// IPv6-only (`v6only`) or not, for process `owner`: a port is taken for
+    /// sockets whose bindings overlap, as a TCP one is
+    /// ([`Stack::tcp_bind`]).
+    pub fn udp_bind(&mut self, local: SocketAddr, v6only: bool, owner: u64) -> Result<(SockId, SocketAddr), NetError> {
         self.check_limit()?;
         if !bind_ok(self, local.ip()) {
             return Err(NetError::AddressNotAvailable);
         }
+        let binding = Binding::of(local.ip(), v6only);
         let port = if local.port() == 0 { self.alloc_port(Proto::Udp)? } else { local.port() };
-        if self.socks.in_use(Proto::Udp, port) {
+        if self.port_taken(FirewallProtocol::Udp, port, binding) {
             return Err(NetError::AddressInUse);
         }
         let local = SocketAddr::new(local.ip(), port);
-        let mut u = UdpSock { local, members: Vec::new(), owner, last_rx: 0, full_at: None };
+        let mut u = UdpSock { local, binding, members: Vec::new(), owner, last_rx: 0, full_at: None };
         for id in ifaces_for(self, local.ip()) {
             self.add_udp_member(&mut u, id);
         }
         self.socks.reserve(Proto::Udp, port);
         let id = self.socks.insert(Entry::Udp(u));
-        self.firewall.add_receiver(id, FirewallProtocol::Udp, port);
+        self.firewall.add_receiver(id, FirewallProtocol::Udp, port, binding);
         Ok((id, local))
     }
 
@@ -736,12 +958,7 @@ impl Stack {
         }
         let Some(i) = self.iface_mut(id) else { return };
         let mut s = udp_socket(UDP_PACKETS, UDP_BYTES);
-        let ep = if u.local.ip().is_unspecified() {
-            IpListenEndpoint { addr: None, port: u.local.port() }
-        } else {
-            IpListenEndpoint { addr: Some(u.local.ip().into()), port: u.local.port() }
-        };
-        if s.bind(ep).is_ok() {
+        if s.bind(u.binding.endpoint(u.local.port())).is_ok() {
             u.members.push((id, i.sockets.add(s)));
         }
     }
@@ -751,6 +968,15 @@ impl Stack {
     pub fn udp_send(&mut self, id: SockId, dest: SocketAddr, data: &[u8]) -> Result<(), NetError> {
         if dest.port() == 0 || data.len() > proto::net::MAX_DATAGRAM {
             return Err(NetError::InvalidArgument);
+        }
+        let binding = match self.socks.map.get(&id) {
+            Some(Entry::Udp(u)) => u.binding,
+            _ => return Err(NetError::Closed),
+        };
+        // A socket sends from an address of its version: smoltcp panics at
+        // a packet from an address of one version to one of the other.
+        if !binding.reaches(dest.ip()) {
+            return Err(NetError::NoRoute);
         }
         let via = self.route(dest.ip())?;
         let member = match self.socks.map.get(&id) {
@@ -1032,6 +1258,7 @@ impl Stack {
                 self.socks.release(Proto::Tcp, l.local.port());
                 self.firewall.remove_receiver(id);
             }
+            Entry::Bound(b) => self.socks.release(Proto::Tcp, b.local.port()),
             Entry::Udp(u) => {
                 for (iface, h) in u.members {
                     if let Some(i) = self.iface_mut(iface) {
@@ -1085,7 +1312,7 @@ impl Stack {
                 Some(Entry::Listener(_)) => self.maintain_listener(id, now),
                 Some(Entry::Udp(_)) => self.maintain_udp(id),
                 Some(Entry::Ping(_)) => self.maintain_ping(id, now),
-                None => {}
+                Some(Entry::Bound(_)) | None => {}
             }
         }
     }
@@ -1439,6 +1666,18 @@ impl Stack {
                     owner: l.owner,
                     interface: String::new(),
                     rx_queued: l.accepted.len() as u32,
+                    tx_queued: 0,
+                }),
+                // Bound, neither listening nor connected: CLOSED, as TCP
+                // calls it.
+                Entry::Bound(b) if mine(b.owner) => out.push(SocketInfo {
+                    kind: SocketKind::Tcp,
+                    local: Some(b.local),
+                    remote: None,
+                    state: "CLOSED".into(),
+                    owner: b.owner,
+                    interface: String::new(),
+                    rx_queued: 0,
                     tx_queued: 0,
                 }),
                 Entry::Udp(u) if mine(u.owner) => out.push(SocketInfo {

@@ -38,7 +38,7 @@ use abi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE, WRITABLE};
 use abi::{Error, RawHandle};
 use ipc::{Encode, Encoder};
 use netstack::{PingEvent, SockId, Stack, TcpState};
-use proto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest, UDP_UNMETERED_WINDOW};
+use proto::net::{MAX_SEND, NetError, RECEIVE_WINDOW, SocketEvent, SocketRequest, TcpOptions, UDP_UNMETERED_WINDOW};
 use rt::object::{Channel, Socket};
 
 /// Bytes of datagrams a UDP client may send ahead of what the stack has
@@ -86,6 +86,13 @@ enum Sent {
 }
 
 enum Kind {
+    /// A TCP socket bound to an address, which its client makes a listener
+    /// or a connection, both of the `Bytes` kind (see [`Turn`]).
+    Bound {
+        /// Its client is a system service, whose listening nobody is asked
+        /// about.
+        service: bool,
+    },
     Tcp {
         /// `Connected` was sent.
         announced: bool,
@@ -111,6 +118,16 @@ enum Kind {
         metered: bool,
     },
     Ping,
+}
+
+/// What the client of a bound socket asked to make of it, which the
+/// service does, the firewall having its say ([`Conn::take_turn`]).
+pub enum Turn {
+    /// Listen, the answer going on `reply` (asked of a listener too, which
+    /// answers with its address).
+    Listen { backlog: u32, options: TcpOptions, reply: Channel },
+    /// Connect, the connection's bytes going on `bytes`.
+    Connect { remote: SocketAddr, options: TcpOptions, bytes: Socket },
 }
 
 /// A TCP connection's bytes on a kernel socket.
@@ -157,6 +174,9 @@ pub struct Conn {
     /// The socket is finished (error reported or the stream ended): drop
     /// it once the client closes the channel.
     pub done: bool,
+    /// What the client asked to make of the socket, which the service is
+    /// to do before it reads on.
+    turn: Option<Turn>,
     /// The application the socket is for, by the name the system knows it
     /// by: the firewall's rules name it.
     pub app: String,
@@ -186,9 +206,16 @@ impl Conn {
             gone: false,
             forgotten: false,
             done: false,
+            turn: None,
             app,
             network: true,
         }
+    }
+
+    /// A TCP socket bound to an address, of a system service's if
+    /// `service`.
+    pub fn bound(channel: Channel, id: SockId, owner: u64, service: bool, app: String) -> Conn {
+        Conn::new(channel, id, Kind::Bound { service }, owner, app)
     }
 
     /// A TCP connection being made.
@@ -235,6 +262,32 @@ impl Conn {
     /// Whether the application may use the network, as the firewall says.
     pub fn set_network(&mut self, may: bool) {
         self.network = may;
+    }
+
+    /// What the client asked to make of the socket, if anything: the
+    /// service does it, and reads on.
+    pub fn take_turn(&mut self) -> Option<Turn> {
+        self.turn.take()
+    }
+
+    /// For a bound socket, whether its client is a system service; `None`
+    /// for any other socket.
+    pub fn bound_by_service(&self) -> Option<bool> {
+        match self.kind {
+            Kind::Bound { service } => Some(service),
+            _ => None,
+        }
+    }
+
+    /// The bound socket listens now (the stack's socket is a listener).
+    pub fn listening(&mut self) {
+        self.kind = Kind::Listener { bytes: true };
+    }
+
+    /// The bound socket is a connection being made now, whose bytes go on
+    /// `end`, the service's end of a kernel socket.
+    pub fn connecting(&mut self, end: Socket) {
+        self.kind = Kind::Bytes(Bytes::new(end, false));
     }
 
     /// Whether the client must be heard: requests are read only from a
@@ -325,8 +378,9 @@ impl Conn {
         self.forgotten && matches!(self.kind, Kind::Udp { .. })
     }
 
-    /// Records an error for the client; it is reported on the next pump.
-    fn fail(&mut self, error: NetError) {
+    /// Records an error for the client; it is reported on the next pump,
+    /// and the socket is finished.
+    pub fn fail(&mut self, error: NetError) {
         if !self.done {
             self.failure.get_or_insert(error);
         }
@@ -341,10 +395,14 @@ impl Conn {
         self.fail(NetError::ProtocolViolation);
     }
 
-    /// Handles the client's requests. Returns `false` when the client closed
-    /// the channel (and every request it sent before was handled).
+    /// Handles the client's requests, up to one the service is to do
+    /// ([`Conn::take_turn`]). Returns `false` when the client closed the
+    /// channel (and every request it sent before was handled).
     pub fn handle_requests(&mut self, stack: &mut Stack) -> bool {
         for _ in 0..REQUEST_BUDGET {
+            if self.turn.is_some() {
+                return true;
+            }
             let msg = match self.channel.read() {
                 Ok(m) => m,
                 Err(Error::ShouldWait) => return true,
@@ -424,6 +482,15 @@ impl Conn {
             (Kind::Ping, SocketRequest::Echo { dest, seq, ttl, size }) => {
                 stack.ping_send(self.id, dest, seq, ttl, size)
             }
+            // The processes that share a bound socket may each ask it to
+            // listen.
+            (
+                Kind::Bound { .. } | Kind::Listener { bytes: true },
+                SocketRequest::Listen { backlog, options, reply },
+            ) => self.turn = Some(Turn::Listen { backlog, options, reply }),
+            (Kind::Bound { .. }, SocketRequest::Connect { remote, options, bytes }) => {
+                self.turn = Some(Turn::Connect { remote, options, bytes })
+            }
             _ => self.violation(stack),
         }
     }
@@ -439,6 +506,8 @@ impl Conn {
         }
         if self.failure.is_none() {
             let sent = match self.kind {
+                // Nothing comes to a bound socket.
+                Kind::Bound { .. } => Sent::Yes,
                 Kind::Tcp { .. } => self.pump_tcp(stack, events),
                 Kind::Bytes(_) => self.pump_bytes(stack, events),
                 Kind::Listener { bytes } => self.pump_listener(stack, events, room, accepted, bytes),

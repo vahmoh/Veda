@@ -102,7 +102,9 @@ message! {
         pub size: u64,
         pub is_dir: bool,
         pub read_only: bool,
-        /// Modification time, nanoseconds since the Unix epoch (0 = unknown).
+        /// Modification time: nanoseconds since 1970-01-01 in local time,
+        /// as `rt::time::unix_time_ns` gives it and Veda shows times (the
+        /// POSIX layer gives programs UTC); 0 = unknown.
         pub modified: u64,
         /// Identifies the file within its file system (never reused while
         /// the system runs): the inode number of POSIX programs.
@@ -382,7 +384,7 @@ protocol! {
         /// Renames `from` to `to`, replacing `to` if it exists (a file, or
         /// an empty directory if `from` is a directory), in one step.
         16 => fn replace(from: String, to: String) -> Result<(), FsError>;
-        /// Sets the modification time (nanoseconds since the Unix epoch; 0:
+        /// Sets the modification time (as [`Stat::modified`] has it; 0:
         /// now).
         17 => fn set_modified(path: String, modified: u64) -> Result<(), FsError>;
         /// Copies the file `from` to `to`, which must not exist yet, in one
@@ -549,8 +551,8 @@ protocol! {
         9 => fn flags() -> u32;
         /// Turns append mode on or off (the one flag that can change).
         10 => fn set_append(append: bool) -> Result<(), FsError>;
-        /// Sets the modification time (nanoseconds since the Unix epoch;
-        /// 0: now).
+        /// Sets the modification time (as [`Stat::modified`] has it; 0:
+        /// now).
         11 => fn set_modified(modified: u64) -> Result<(), FsError>;
         /// The file's pages from `offset` (page-aligned), `len` bytes
         /// (rounded up to pages), if they are the system image's: to map as

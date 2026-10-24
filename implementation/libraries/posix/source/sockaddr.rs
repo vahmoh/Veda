@@ -49,17 +49,6 @@ impl Family {
             Family::V6 => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
         }
     }
-
-    /// Whether a socket of the family (IPv6 alone, `v6only`) has a peer at
-    /// `addr`: IPv4 sockets do not reach IPv6, nor IPv6-alone ones IPv4.
-    pub fn reaches(self, addr: &SocketAddr, v6only: bool) -> bool {
-        match (self, addr) {
-            (Family::V4, SocketAddr::V4(_)) => true,
-            (Family::V4, SocketAddr::V6(a)) => a.ip().to_ipv4_mapped().is_some(),
-            (Family::V6, SocketAddr::V4(_)) => !v6only,
-            (Family::V6, SocketAddr::V6(_)) => true,
-        }
-    }
 }
 
 /// What an address a program passed names.
@@ -223,11 +212,9 @@ mod tests {
         assert_eq!(Ipv6Addr::from(m.addr), "::ffff:10.0.2.2".parse::<Ipv6Addr>().unwrap());
         assert_eq!(read_raw(&mapped, Family::V6, false), Ok(Target::Addr(v4)));
         assert_eq!(read_raw(&mapped, Family::V6, true), Err(ENETUNREACH));
-        assert!(Family::V6.reaches(&v4, false) && !Family::V6.reaches(&v4, true));
         // An IPv4 socket has no IPv6 peers.
         let v6: SocketAddr = "[2001:db8::7]:443".parse().unwrap();
         assert_eq!(Raw::of(v6, Family::V4), None);
-        assert!(!Family::V4.reaches(&v6, false));
     }
 
     #[test]

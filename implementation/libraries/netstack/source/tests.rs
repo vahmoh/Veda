@@ -10,11 +10,11 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::net::{IpAddr, Ipv4Addr, SocketAddr};
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use proto::net::{
-    AddrFamily, Connectivity, DeviceInfo, FirewallConfig, FirewallReason, InterfaceKind, IpConfig, NetError,
-    ResolveResult, Scope, TcpOptions,
+    AddrFamily, Connectivity, DeviceInfo, FirewallConfig, FirewallProtocol, FirewallReason, InterfaceKind, IpConfig,
+    NetError, ResolveResult, Scope, TcpOptions,
 };
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
@@ -142,7 +142,7 @@ impl Net {
         let b_eth = b.add_interface(&device(SERVER_MAC), true).unwrap();
         b.configure(b_eth, IpConfig::Static { address: SERVER_IP.into(), prefix_len: 24, gateway: None, dns: vec![] })
             .unwrap();
-        let (dns_sock, _) = b.udp_bind("0.0.0.0:53".parse().unwrap(), 0).unwrap();
+        let (dns_sock, _) = b.udp_bind("0.0.0.0:53".parse().unwrap(), false, 0).unwrap();
         Net {
             a,
             b,
@@ -458,6 +458,19 @@ fn pattern(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i * 7 + i / 251) as u8).collect()
 }
 
+/// The link-local address of `stack`'s cable.
+fn link_local(stack: &Stack) -> Ipv6Addr {
+    stack
+        .interfaces()
+        .into_iter()
+        .flat_map(|i| i.addresses)
+        .find_map(|a| match a.address {
+            IpAddr::V6(v) if v.is_unicast_link_local() => Some(v),
+            _ => None,
+        })
+        .expect("a link-local address")
+}
+
 #[test]
 fn dhcp_configures_the_interface() {
     let mut n = Net::new();
@@ -500,7 +513,7 @@ fn dhcp_retries_until_a_server_answers() {
 fn tcp_round_trip() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 4, &TcpOptions::default(), 0).unwrap();
     let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
     let sb = accept(&mut n, l);
     let data = pattern(300_000);
@@ -536,7 +549,7 @@ fn tcp_round_trip() {
 fn tcp_survives_heavy_loss() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:9000".parse().unwrap(), 2, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:9000".parse().unwrap(), false, 2, &TcpOptions::default(), 0).unwrap();
     let sa = connect(&mut n, "10.0.2.2:9000".parse().unwrap());
     let sb = accept(&mut n, l);
     n.loss = 15;
@@ -558,11 +571,136 @@ fn refused_and_timed_out_connections() {
     assert_eq!(n.a.tcp_view(t).unwrap().state, TcpState::Closed { error: Some(NetError::TimedOut) });
 }
 
+/// A TCP socket bound before it listens or connects has its port from the
+/// start (port 0: a free one), which no other socket binds or listens on
+/// while it has it; it listens there, and its port is free once it closes.
+#[test]
+fn bound_sockets_hold_their_port() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let o = TcpOptions::default();
+    let (b, local) = n.b.tcp_bind("0.0.0.0:0".parse().unwrap(), false, 0).unwrap();
+    assert_ne!(local.port(), 0);
+    assert_eq!(n.b.tcp_bind(local, false, 0), Err(NetError::AddressInUse));
+    assert_eq!(n.b.tcp_listen(local, false, 4, &o, 0), Err(NetError::AddressInUse));
+    assert_eq!(n.b.port_holders(FirewallProtocol::Tcp, local.port()), vec![b]);
+    assert_eq!(n.b.tcp_listen_bound(b, 4, &o), Ok(local));
+    // Listening, it is a listener, and no longer bound.
+    assert_eq!(n.b.tcp_listen_bound(b, 4, &o), Err(NetError::InvalidArgument));
+    let sa = connect(&mut n, SocketAddr::new(IpAddr::V4(SERVER_IP), local.port()));
+    let sb = accept(&mut n, b);
+    transfer(&mut n, sa, sb, b"bound first", 1_000);
+    n.b.close(b);
+    assert!(n.b.port_holders(FirewallProtocol::Tcp, local.port()).is_empty());
+    let (again, _) = n.b.tcp_bind(local, false, 0).unwrap();
+    // A socket bound and closed gives its port back too.
+    n.b.close(again);
+    assert!(n.b.tcp_bind(local, false, 0).is_ok());
+}
+
+/// A bound TCP socket connects from its address and port; not from an
+/// address the route's interface does not have, and not between the same two
+/// ends as another connection.
+#[test]
+fn bound_sockets_connect_from_their_address() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let o = TcpOptions::default();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 4, &o, 0).unwrap();
+    let server: SocketAddr = "10.0.2.2:7".parse().unwrap();
+    let from = SocketAddr::new(IpAddr::V4(CLIENT_IP), 40000);
+    let (s, _) = n.a.tcp_bind(from, false, 1).unwrap();
+    assert_eq!(n.a.tcp_connect_bound(s, "10.0.2.2:0".parse().unwrap(), &o), Err(NetError::InvalidArgument));
+    n.a.tcp_connect_bound(s, server, &o).unwrap();
+    let open = n.run_until(5_000, |n| matches!(n.a.tcp_view(s).unwrap().state, TcpState::Open { .. }));
+    assert!(open, "no connection: {:?}", n.a.tcp_view(s));
+    assert_eq!(n.a.tcp_view(s).unwrap().state, TcpState::Open { local: from, remote: server });
+    let sb = accept(&mut n, l);
+    assert_eq!(n.b.tcp_remote(sb), Some(from));
+    // The port is free to bind (connections share theirs), not to connect
+    // to the same peer from.
+    let (t, _) = n.a.tcp_bind(from, false, 1).unwrap();
+    assert_eq!(n.a.tcp_connect_bound(t, server, &o), Err(NetError::AddressNotAvailable));
+    // The loopback address has no way to other machines.
+    let (u, _) = n.a.tcp_bind("127.0.0.1:0".parse().unwrap(), false, 1).unwrap();
+    assert_eq!(n.a.tcp_connect_bound(u, server, &o), Err(NetError::InvalidArgument));
+    // Failing, they stay bound.
+    assert_eq!(n.a.port_holders(FirewallProtocol::Tcp, from.port()), vec![t]);
+}
+
+/// Sockets share a port when no address is in both their bindings, as on
+/// Linux: an IPv4 socket and an IPv6-only one, or sockets on different
+/// addresses. Each takes what comes to its own addresses.
+#[test]
+fn sockets_bound_to_addresses_apart_share_a_port() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let o = TcpOptions::default();
+    let (any4, any6): (SocketAddr, SocketAddr) = ("0.0.0.0:7".parse().unwrap(), "[::]:7".parse().unwrap());
+    let (l4, _) = n.b.tcp_listen(any4, false, 4, &o, 0).unwrap();
+    // `::` is IPv4's addresses too, unless IPv6-only.
+    assert_eq!(n.b.tcp_listen(any6, false, 4, &o, 0), Err(NetError::AddressInUse));
+    let (l6, _) = n.b.tcp_listen(any6, true, 4, &o, 0).unwrap();
+    for (taken, v6only) in [("10.0.2.2:7", false), ("[::1]:7", true), ("[::]:7", true)] {
+        assert_eq!(n.b.tcp_bind(taken.parse().unwrap(), v6only, 0), Err(NetError::AddressInUse), "{taken}");
+    }
+    assert_eq!(n.b.port_holders(FirewallProtocol::Tcp, 7).len(), 2);
+    let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
+    let sb = accept(&mut n, l4);
+    transfer(&mut n, sa, sb, b"over IPv4", 1_000);
+    let b_ll = link_local(&n.b);
+    let sa6 = connect(&mut n, SocketAddr::new(IpAddr::V6(b_ll), 7));
+    let sb6 = accept(&mut n, l6);
+    transfer(&mut n, sa6, sb6, b"over IPv6", 1_000);
+    assert_eq!(n.b.tcp_accept(l4), None);
+    // Addresses of one version apart, and UDP alike.
+    let (one, _) = n.b.udp_bind("10.0.2.2:5000".parse().unwrap(), false, 0).unwrap();
+    let (other, _) = n.b.udp_bind("127.0.0.1:5000".parse().unwrap(), false, 0).unwrap();
+    assert_eq!(n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), false, 0), Err(NetError::AddressInUse));
+    let (only6, _) = n.b.udp_bind("[::]:5000".parse().unwrap(), true, 0).unwrap();
+    let (from, _) = n.a.udp_bind("[::]:0".parse().unwrap(), false, 1).unwrap();
+    n.a.udp_send(from, "10.0.2.2:5000".parse().unwrap(), b"to IPv4").unwrap();
+    n.a.udp_send(from, SocketAddr::new(IpAddr::V6(b_ll), 5000), b"to IPv6").unwrap();
+    let mut buf = [0u8; 64];
+    let mut got = Vec::new();
+    n.run_until(2_000, |n| {
+        for s in [one, other, only6] {
+            if let Some((len, _)) = udp_recv(&mut n.b, s, &mut buf) {
+                got.push((s, buf[..len].to_vec()));
+            }
+        }
+        got.len() == 2
+    });
+    assert_eq!(got, vec![(one, b"to IPv4".to_vec()), (only6, b"to IPv6".to_vec())]);
+}
+
+/// A socket reaches the addresses of its version alone: from an IPv4
+/// address, no IPv6 one (smoltcp could not make such a packet), and from an
+/// IPv6-only socket, no IPv4 one.
+#[test]
+fn sockets_reach_their_version_alone() {
+    let mut n = Net::new();
+    assert!(n.configured());
+    let o = TcpOptions::default();
+    let cases = [("127.0.0.1:0", false, "[::1]:9"), ("0.0.0.0:0", false, "[::1]:9"), ("[::]:0", true, "127.0.0.1:9")];
+    for (local, v6only, remote) in cases {
+        let (u, _) = n.a.udp_bind(local.parse().unwrap(), v6only, 1).unwrap();
+        assert_eq!(n.a.udp_send(u, remote.parse().unwrap(), b"x"), Err(NetError::NoRoute), "{local} to {remote}");
+        let (t, _) = n.a.tcp_bind(local.parse().unwrap(), v6only, 1).unwrap();
+        assert_eq!(n.a.tcp_connect_bound(t, remote.parse().unwrap(), &o), Err(NetError::NoRoute));
+    }
+    // Both versions, from `::`.
+    let (both, _) = n.a.udp_bind("[::]:0".parse().unwrap(), false, 1).unwrap();
+    n.a.udp_send(both, "127.0.0.1:9".parse().unwrap(), b"x").unwrap();
+    n.a.udp_send(both, "[::1]:9".parse().unwrap(), b"x").unwrap();
+    n.run(10);
+}
+
 #[test]
 fn reset_connections_report_reset() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 1, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 1, &TcpOptions::default(), 0).unwrap();
     let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
     let sb = accept(&mut n, l);
     n.b.tcp_abort(sb);
@@ -574,7 +712,7 @@ fn reset_connections_report_reset() {
 fn short_link_outage_keeps_connections() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 1, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 1, &TcpOptions::default(), 0).unwrap();
     let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
     let sb = accept(&mut n, l);
     transfer(&mut n, sa, sb, &pattern(10_000), 10_000);
@@ -594,7 +732,7 @@ fn short_link_outage_keeps_connections() {
 fn a_new_address_aborts_old_connections() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 1, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 1, &TcpOptions::default(), 0).unwrap();
     let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
     let _sb = accept(&mut n, l);
     n.a.set_link(n.a_eth, false);
@@ -621,7 +759,7 @@ fn long_outage_drops_the_address() {
 fn removing_the_interface_aborts_connections() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 1, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 1, &TcpOptions::default(), 0).unwrap();
     let sa = connect(&mut n, "10.0.2.2:7".parse().unwrap());
     let _ = accept(&mut n, l);
     n.a.remove_interface(n.a_eth);
@@ -684,9 +822,9 @@ fn dns_failures_and_failover() {
 fn udp_and_ping() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (sa, local) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
+    let (sa, local) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), false, 1).unwrap();
     assert!(local.port() >= 49152);
-    let (sb, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), 0).unwrap();
+    let (sb, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), false, 0).unwrap();
     n.a.udp_send(sa, "10.0.2.2:5000".parse().unwrap(), b"hello").unwrap();
     let mut buf = [0u8; 64];
     let mut got = None;
@@ -784,15 +922,7 @@ fn ipv6_errors_tell_ping_why_too() {
     // its way: the far end says the address is unreachable, quoting it.
     let mut n = Net::new();
     assert!(n.configured());
-    let b_ll =
-        n.b.interfaces()
-            .into_iter()
-            .flat_map(|i| i.addresses)
-            .find_map(|a| match a.address {
-                IpAddr::V6(v) if v.is_unicast_link_local() => Some(v),
-                _ => None,
-            })
-            .expect("the far end's link-local address");
+    let b_ll = link_local(&n.b);
     let p = n.a.ping_open(1).unwrap();
     n.recorded = Some(Vec::new());
     n.a.ping_send(p, IpAddr::V6(b_ll), 9, 0, 32);
@@ -856,7 +986,7 @@ fn ipv6_errors_tell_ping_why_too() {
 #[test]
 fn loopback_connections() {
     let mut n = Net::new();
-    let (l, _) = n.a.tcp_listen("127.0.0.1:8080".parse().unwrap(), 2, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.a.tcp_listen("127.0.0.1:8080".parse().unwrap(), false, 2, &TcpOptions::default(), 0).unwrap();
     let c = n.a.tcp_connect("127.0.0.1:8080".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
     let mut acc = None;
     n.run_until(2_000, |n| {
@@ -901,8 +1031,8 @@ fn poll_as_the_service(stack: &mut Stack, now: u64) -> Vec<SockId> {
 fn what_comes_after_the_last_taken_makes_a_socket_ready() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (ua, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
-    let (ub, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), 0).unwrap();
+    let (ua, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), false, 1).unwrap();
+    let (ub, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), false, 0).unwrap();
     let to_b = SocketAddr::new(IpAddr::V4(SERVER_IP), 5000);
     let mut buf = [0u8; 8];
     // Each time, the next is on the cable when `b` takes the last.
@@ -941,15 +1071,15 @@ fn loopback_traffic_waits_for_no_timer() {
     let mut s = Stack::new(b"loopback seed for tests, 32+ bytes", 1_000_000);
     let now = 1_000_000;
     // A datagram, which arrives in the poll that sends it.
-    let (a, _) = s.udp_bind("127.0.0.1:0".parse().unwrap(), 0).unwrap();
-    let (b, b_addr) = s.udp_bind("127.0.0.1:0".parse().unwrap(), 0).unwrap();
+    let (a, _) = s.udp_bind("127.0.0.1:0".parse().unwrap(), false, 0).unwrap();
+    let (b, b_addr) = s.udp_bind("127.0.0.1:0".parse().unwrap(), false, 0).unwrap();
     poll_as_the_service(&mut s, now);
     s.udp_send(a, b_addr, b"hi").unwrap();
     assert!(poll_as_the_service(&mut s, now).contains(&b));
     let mut buf = [0u8; 8];
     assert_eq!(udp_recv(&mut s, b, &mut buf).map(|(n, _)| n), Some(2));
     // A connection, made and used while the clock stands still.
-    let (l, _) = s.tcp_listen("127.0.0.1:8080".parse().unwrap(), 2, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = s.tcp_listen("127.0.0.1:8080".parse().unwrap(), false, 2, &TcpOptions::default(), 0).unwrap();
     let c = s.tcp_connect("127.0.0.1:8080".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
     poll_as_the_service(&mut s, now);
     let server = s.tcp_accept(l).expect("the connection is accepted at once");
@@ -1026,9 +1156,9 @@ fn bad_requests_are_rejected() {
     assert_eq!(n.a.tcp_connect("10.0.2.2:0".parse().unwrap(), &o, 1), Err(NetError::InvalidArgument));
     assert_eq!(n.a.tcp_connect("0.0.0.0:80".parse().unwrap(), &o, 1), Err(NetError::InvalidArgument));
     assert_eq!(n.a.tcp_connect("224.0.0.1:80".parse().unwrap(), &o, 1), Err(NetError::InvalidArgument));
-    assert_eq!(n.a.udp_bind("192.0.2.1:1".parse().unwrap(), 1), Err(NetError::AddressNotAvailable));
-    let (_, _) = n.a.udp_bind("0.0.0.0:6000".parse().unwrap(), 1).unwrap();
-    assert_eq!(n.a.udp_bind("0.0.0.0:6000".parse().unwrap(), 1), Err(NetError::AddressInUse));
+    assert_eq!(n.a.udp_bind("192.0.2.1:1".parse().unwrap(), false, 1), Err(NetError::AddressNotAvailable));
+    let (_, _) = n.a.udp_bind("0.0.0.0:6000".parse().unwrap(), false, 1).unwrap();
+    assert_eq!(n.a.udp_bind("0.0.0.0:6000".parse().unwrap(), false, 1), Err(NetError::AddressInUse));
     assert!(
         n.a.configure(
             n.a_eth,
@@ -1063,7 +1193,7 @@ fn socket_limit_is_enforced() {
 /// socket, b's).
 fn pair(n: &mut Net, port: u16) -> (SockId, SockId) {
     let local: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
-    let (l, _) = n.b.tcp_listen(local, 4, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen(local, false, 4, &TcpOptions::default(), 0).unwrap();
     let sa = connect(n, SocketAddr::new(IpAddr::V4(SERVER_IP), port));
     let sb = accept(n, l);
     (sa, sb)
@@ -1226,7 +1356,7 @@ fn keep_alives_need_at_least_a_second() {
     assert_eq!(n.a.tcp_connect(to, &opts(1), 1), Err(NetError::InvalidArgument));
     assert_eq!(n.a.tcp_connect(to, &opts(999), 1), Err(NetError::InvalidArgument));
     assert_eq!(
-        n.a.tcp_listen("0.0.0.0:8".parse().unwrap(), 1, &opts(10), 1).map(|_| ()),
+        n.a.tcp_listen("0.0.0.0:8".parse().unwrap(), false, 1, &opts(10), 1).map(|_| ()),
         Err(NetError::InvalidArgument)
     );
     assert!(n.a.tcp_connect(to, &opts(1000), 1).is_ok());
@@ -1239,7 +1369,7 @@ fn unanswered_keep_alives_time_the_connection_out() {
     // the connection timed out (it was not reset).
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 4, &TcpOptions::default(), 0).unwrap();
     let opts = TcpOptions { keepalive_ms: 1000, ..TcpOptions::default() };
     let sa = n.a.tcp_connect("10.0.2.2:7".parse().unwrap(), &opts, 1).unwrap();
     let _sb = accept(&mut n, l);
@@ -1273,7 +1403,7 @@ fn a_listener_holds_at_most_its_backlog() {
     // refused instead of piling up.
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 2, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 2, &TcpOptions::default(), 0).unwrap();
     let to: SocketAddr = "10.0.2.2:7".parse().unwrap();
     let mut conns = Vec::new();
     for _ in 0..6 {
@@ -1301,7 +1431,7 @@ fn a_listener_holds_at_most_its_backlog() {
 fn accepted_connections_respect_the_socket_limit() {
     let mut n = Net::new();
     assert!(n.configured());
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 4, &TcpOptions::default(), 0).unwrap();
     while n.b.ping_open(0).is_ok() {}
     let c = n.a.tcp_connect("10.0.2.2:7".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
     assert!(n.run_until(3_000, |n| matches!(n.a.tcp_view(c).unwrap().state, TcpState::Closed { .. })));
@@ -1461,8 +1591,8 @@ fn received_data_leaves_the_stack_only_as_far_as_it_is_taken() {
     let k = tcp_recv(&mut n.a, sa, &mut buf).unwrap();
     assert_eq!(&buf[..k], &pattern(5000)[100..100 + k]);
     // UDP: a datagram not taken is offered again.
-    let (ua, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
-    let (ub, _) = n.b.udp_bind("0.0.0.0:5001".parse().unwrap(), 0).unwrap();
+    let (ua, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), false, 1).unwrap();
+    let (ub, _) = n.b.udp_bind("0.0.0.0:5001".parse().unwrap(), false, 0).unwrap();
     n.a.udp_send(ua, "10.0.2.2:5001".parse().unwrap(), b"datagram").unwrap();
     assert!(n.run_until(2_000, |n| n.b.udp_recv_with(ub, |_, _| false) == Some(false)));
     assert_eq!(n.b.udp_recv_with(ub, |_, data| data == b"datagram"), Some(true));
@@ -1481,7 +1611,7 @@ fn the_firewall_keeps_out_connections_nobody_allowed() {
     let mut n = Net::new();
     assert!(n.configured());
     guard_b(&mut n, |_| {});
-    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), 4, &TcpOptions::default(), 0).unwrap();
+    let (l, _) = n.b.tcp_listen("0.0.0.0:7".parse().unwrap(), false, 4, &TcpOptions::default(), 0).unwrap();
     let s = n.a.tcp_connect("10.0.2.2:7".parse().unwrap(), &TcpOptions::default(), 1).unwrap();
     n.run(2_000);
     assert_eq!(n.a.tcp_view(s).unwrap().state, TcpState::Connecting);
@@ -1517,8 +1647,8 @@ fn what_this_machine_asked_for_comes_back_through_its_firewall() {
     n.a.set_firewall(FirewallConfig::default());
     assert!(n.configured());
     assert!(matches!(n.resolve("www.example"), ResolveResult::Found { .. }));
-    let (sa, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
-    let (sb, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), 0).unwrap();
+    let (sa, _) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), false, 1).unwrap();
+    let (sb, _) = n.b.udp_bind("0.0.0.0:5000".parse().unwrap(), false, 0).unwrap();
     n.a.udp_send(sa, "10.0.2.2:5000".parse().unwrap(), b"question").unwrap();
     let mut buf = [0u8; 64];
     let mut got = None;
@@ -1535,7 +1665,7 @@ fn what_this_machine_asked_for_comes_back_through_its_firewall() {
     });
     assert_eq!(back.map(|(len, _)| &buf[..len]), Some(&b"answer"[..]));
     // What nobody asked for, to another of a's ports, does not come in.
-    let (sc, port) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), 1).unwrap();
+    let (sc, port) = n.a.udp_bind("0.0.0.0:0".parse().unwrap(), false, 1).unwrap();
     n.b.udp_send(sb, SocketAddr::new(IpAddr::V4(CLIENT_IP), port.port()), b"unasked").unwrap();
     n.run(500);
     assert!(udp_recv(&mut n.a, sc, &mut buf).is_none());

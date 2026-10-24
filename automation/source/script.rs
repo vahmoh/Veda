@@ -95,6 +95,7 @@
 //! requires media                   # only with the media decoder (FFmpeg and dav1d, the same)
 //! requires rust-toolchain          # only with the Rust test programs (the same)
 //! requires web                     # only with the browser (`cargo automation web`); skipped otherwise
+//! requires python                  # only with Python (`cargo automation python`); skipped otherwise
 //! ```
 
 use std::time::Duration;
@@ -198,6 +199,8 @@ pub enum Requirement {
     RustToolchain,
     /// The browser, with its web engine.
     Web,
+    /// Python.
+    Python,
 }
 
 impl Requirement {
@@ -209,6 +212,7 @@ impl Requirement {
             Requirement::Media => "media libraries",
             Requirement::RustToolchain => "rust toolchain",
             Requirement::Web => "web engine",
+            Requirement::Python => "python",
         }
     }
 }
@@ -830,13 +834,16 @@ impl Line {
                 return Ok(None);
             }
             "requires" => {
-                let what =
-                    self.one_of("requirement", &["c-toolchain", "native-toolchain", "media", "rust-toolchain", "web"])?;
+                let what = self.one_of(
+                    "requirement",
+                    &["c-toolchain", "native-toolchain", "media", "rust-toolchain", "web", "python"],
+                )?;
                 boot.requires.push(match what.as_str() {
                     "c-toolchain" => Requirement::CToolchain,
                     "native-toolchain" => Requirement::NativeToolchain,
                     "media" => Requirement::Media,
                     "web" => Requirement::Web,
+                    "python" => Requirement::Python,
                     _ => Requirement::RustToolchain,
                 });
                 return Ok(None);

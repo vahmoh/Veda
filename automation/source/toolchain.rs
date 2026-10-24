@@ -40,9 +40,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::architecture::{self, BARE_TARGET};
-use crate::notices;
 use crate::ports::{self, Port};
 use crate::util::{self, Recipe, Result};
+use crate::{databases, notices};
 
 /// Where the toolchain is built.
 pub fn root() -> PathBuf {
@@ -434,6 +434,12 @@ fn posix_layer_object() -> PathBuf {
     root().join("build").join("veda.o")
 }
 
+/// The cross toolchain's C library, which its programs are linked with:
+/// musl's archive, with the POSIX layer in it.
+pub fn c_library() -> PathBuf {
+    root().join("cross").join("sysroot").join("system").join("lib").join("libc.a")
+}
+
 /// Brings the cross toolchain's C library up to date with the POSIX layer
 /// (its object in `libc.a`, its headers `<veda/*.h>`), holding the
 /// toolchain's lock meanwhile: for builds of C libraries that use it (the
@@ -756,8 +762,9 @@ fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 /// What the toolchain gives the system image, at their paths in it: the C
-/// and Rust test programs (`tests/c`, `tests/rust`), the native toolchain
-/// (as `/system` has it), and the media decoder (`bin/mediadec`) and its
+/// library's databases (`etc/services`, `etc/passwd`...), the C and Rust
+/// test programs (`tests/c`, `tests/rust`), the native toolchain (as
+/// `/system` has it), and the media decoder (`bin/mediadec`) and its
 /// libraries' tests (`tests/media`) if `with_mediadec`, with the licence
 /// texts of the ports these have (`licences/<port>`). The POSIX layer
 /// goes into the C library once, first; all of it is made while this
@@ -774,7 +781,7 @@ pub fn image_files(with_mediadec: bool) -> Result<Vec<(String, Vec<u8>)>> {
         refresh_posix_layer()?;
     }
     relink_native()?;
-    let mut files = Vec::new();
+    let mut files = databases::image_files(&root().join("downloads"))?;
     files.extend(c_tests()?.into_iter().map(|(name, exe)| (format!("tests/c/{name}"), exe)));
     files.extend(rust_tests()?.into_iter().map(|(name, exe)| (format!("tests/rust/{name}"), exe)));
     // The licence texts of the ports in them, which build.sh's `licences`
@@ -977,6 +984,8 @@ fn build(jobs: usize) -> Result {
     for port in toolchain_ports()? {
         ports::fetch(&port, &downloads)?;
     }
+    // And the C library's databases, which images take from the downloads.
+    ports::fetch(&Port::named(databases::PORT)?, &downloads)?;
     let rust_host = rust_host()?;
     let rust_stage0 = fetch_rust_stage0(&downloads, &rust_host)?;
     // The script makes the C library's object of the POSIX layer once its

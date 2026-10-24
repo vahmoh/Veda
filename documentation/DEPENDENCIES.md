@@ -91,6 +91,12 @@ the largest case:
   software. `egl` is the C interface WebKit expects over it, checking and
   converting the C calls' arguments for `gl`.
 
+**Python** is CPython, the reference interpreter, whose standard library
+and behaviour Python's programs expect (RustPython, in Rust, runs a part
+of them); its modules stand on the libraries python.org's builds use
+(zlib, bzip2, XZ Utils, Zstandard, mpdecimal, Expat, SQLite and OpenSSL),
+each a port ([Python on Veda](PYTHON.md)).
+
 ## Veda's own, and why
 
 ### Kernel, loader and system

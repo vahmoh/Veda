@@ -14,7 +14,7 @@ use crate::linux::errno::*;
 use crate::linux::{self, Statfs, Timespec, access, at, o};
 use crate::path::Resolved;
 use crate::stream::Stream;
-use crate::{tty, user, vfs};
+use crate::{time, tty, user, vfs};
 
 /// The VFS flags for POSIX open flags.
 fn vfs_flags(flags: u32) -> u32 {
@@ -126,9 +126,9 @@ pub fn stat_desc(desc: &Description) -> Result<linux::Stat, isize> {
         ..Default::default()
     };
     Ok(match &desc.object {
-        Object::File(f) => vfs::to_linux(&f.stat()?),
+        Object::File(f) => vfs::to_linux(&f.stat()?, time::utc_offset_ns()),
         Object::Memfd(m) => m.stat(),
-        Object::Dir(d) => vfs::to_linux(&vfs::stat(&d.path)?),
+        Object::Dir(d) => vfs::to_linux(&vfs::stat(&d.path)?, time::utc_offset_ns()),
         Object::Stream(s) if s.is_tty() => pseudo(linux::mode::IFCHR | 0o620, s.koid),
         Object::Stream(s) => pseudo(linux::mode::IFIFO | 0o600, s.koid),
         Object::Inet(s) => pseudo(linux::mode::IFSOCK | 0o777, s.id()),
@@ -164,7 +164,7 @@ fn stat_path(r: &Resolved) -> Result<linux::Stat, isize> {
     if let Some(special) = open_special(&r.path, o::RDONLY) {
         return stat_desc(&*special?);
     }
-    Ok(vfs::to_linux(&vfs::stat_resolved(r)?))
+    Ok(vfs::to_linux(&vfs::stat_resolved(r)?, time::utc_offset_ns()))
 }
 
 /// `statx(dirfd, name, flags, mask, buf)`: what `fstatat` says, in
@@ -345,7 +345,7 @@ pub unsafe fn utimensat(dirfd: i32, name: usize, times: usize) -> SysResult {
         match t[1].nsec {
             UTIME_OMIT => None,
             UTIME_NOW => Some(0),
-            _ => Some(t[1].to_ns().ok_or(EINVAL)?.max(1)),
+            _ => Some(vfs::local_of_utc(t[1].to_ns().ok_or(EINVAL)?, time::utc_offset_ns())),
         }
     };
     if name == 0 {
@@ -366,13 +366,35 @@ pub unsafe fn utimensat(dirfd: i32, name: usize, times: usize) -> SysResult {
     Ok(0)
 }
 
-/// `chmod` and `chown`: Veda keeps no owners or permission bits; a name
-/// that exists accepts any.
+/// `chmod`: Veda keeps no permission bits; a name that exists accepts any
+/// (but on a read-only file system).
 pub unsafe fn chmodat(dirfd: i32, name: usize) -> SysResult {
     // SAFETY: the program passed a string.
     let r = vfs::resolve_at(dirfd, unsafe { user::cstr(name)? })?;
     let st = vfs::stat(&r.path)?;
     if st.read_only { Err(EROFS) } else { Ok(0) }
+}
+
+/// `chown`, `lchown`, `fchownat`: every file is the one user's and its
+/// group's, and stays so: giving a name that exists to them (or -1, which
+/// keeps an id) changes nothing, and to anyone else is refused (`EPERM`,
+/// as an unprivileged user's is on Linux).
+pub unsafe fn chownat(dirfd: i32, name: usize, uid: u32, gid: u32) -> SysResult {
+    // SAFETY: per the caller.
+    unsafe { chmodat(dirfd, name)? };
+    keeps_owner(uid, gid).map(|()| 0)
+}
+
+/// `fchown`, as [`chownat`].
+pub fn fchown(fd: i32, uid: u32, gid: u32) -> SysResult {
+    fd::get(fd)?;
+    keeps_owner(uid, gid).map(|()| 0)
+}
+
+/// Whether `uid` and `gid` leave a file's owner as it is.
+fn keeps_owner(uid: u32, gid: u32) -> Result<(), isize> {
+    let kept = |id: u32| id == u32::MAX || id == vfs::UID;
+    if kept(uid) && kept(gid) { Ok(()) } else { Err(EPERM) }
 }
 
 /// What `statfs` reports for the file system holding a file whose

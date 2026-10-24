@@ -9,7 +9,9 @@ use crate::error::SysResult;
 use crate::fd::{self, Object};
 use crate::linux::errno::*;
 use crate::linux::{Timespec, clock, nr};
-use crate::{epoll, eventfd, fs, io, mem, memfd, process, signal, socket, system, thread, time, timerfd, user, vfs};
+use crate::{
+    epoll, eventfd, fs, io, mem, memfd, process, sched, signal, socket, system, thread, time, timerfd, user, vfs,
+};
 
 /// Deadline (monotonic ns) of a relative timeout, `None` for none.
 unsafe fn deadline_ts(ts: usize) -> Result<Option<u64>, isize> {
@@ -199,8 +201,8 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::DUP => io::dup(fd0),
             nr::DUP3 => io::dup3(fd0, a[1] as i32, a[2] as u32, false),
             nr::CLOSE_RANGE => io::close_range(a[0] as u32, a[1] as u32, a[2] as u32),
-            nr::NANOSLEEP => time::clock_nanosleep(clock::MONOTONIC, 0, a[0]),
-            nr::CLOCK_NANOSLEEP => time::clock_nanosleep(a[0] as u32, a[1] as u32, a[2]),
+            nr::NANOSLEEP => time::clock_nanosleep(clock::MONOTONIC, 0, a[0], a[1]),
+            nr::CLOCK_NANOSLEEP => time::clock_nanosleep(a[0] as u32, a[1] as u32, a[2], a[3]),
             nr::GETPID | nr::GETPGID | nr::GETSID | nr::SETSID => Ok(process::pid() as usize),
             nr::GETTID => Ok(signal::current_tid() as usize),
             nr::GETPPID => Ok(process::ppid() as usize),
@@ -234,6 +236,8 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::TGKILL if fd0 == process::pid() => signal::send_to_thread(a[1] as i32, a[2] as u32),
             nr::TGKILL => Err(ESRCH),
             nr::UNAME => system::uname(a[0]),
+            // The machine's names are the system's: no program changes them.
+            nr::SETHOSTNAME | nr::SETDOMAINNAME => Err(EPERM),
             nr::FCNTL => io::fcntl(fd0, a[1] as u32, a[2]),
             nr::FLOCK => io::flock(fd0, a[1] as u32),
             nr::FSYNC | nr::FDATASYNC => io::fsync(fd0),
@@ -256,8 +260,12 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             // Veda has neither hard nor symbolic links.
             nr::LINKAT | nr::SYMLINKAT | nr::MKNODAT => Err(EPERM),
             nr::READLINKAT => fs::readlinkat(fd0, a[1]),
-            nr::FCHMODAT | nr::FCHOWNAT => fs::chmodat(fd0, a[1]),
-            nr::FCHMOD | nr::FCHOWN => fd::get(fd0).map(|_| 0),
+            // fchmodat2's flags (AT_SYMLINK_NOFOLLOW) change nothing: there
+            // are no links, and no modes.
+            nr::FCHMODAT | nr::FCHMODAT2 => fs::chmodat(fd0, a[1]),
+            nr::FCHOWNAT => fs::chownat(fd0, a[1], a[2] as u32, a[3] as u32),
+            nr::FCHMOD => fd::get(fd0).map(|_| 0),
+            nr::FCHOWN => fs::fchown(fd0, a[1] as u32, a[2] as u32),
             nr::UMASK => system::umask(a[0] as u32),
             nr::UTIMENSAT => fs::utimensat(fd0, a[1], a[2]),
             nr::STATFS => fs::statfs(a[0], a[1]),
@@ -275,14 +283,16 @@ unsafe fn generic(n: usize, a: [usize; 6]) -> SysResult {
             nr::FUTEX => thread::futex(a[0], a[1] as u32, a[2] as u32, a[3], a[4], a[5] as u32),
             nr::SET_TID_ADDRESS => thread::set_tid_address(a[0]),
             nr::SET_ROBUST_LIST => Ok(0),
-            nr::SCHED_GETAFFINITY => system::sched_getaffinity(a[1], a[2]),
-            nr::SCHED_SETAFFINITY => Ok(0),
-            nr::SCHED_GETSCHEDULER | nr::SCHED_GET_PRIORITY_MAX | nr::SCHED_GET_PRIORITY_MIN => Ok(0),
-            nr::SCHED_GETPARAM => user::write(a[1], 0i32).map(|_| 0),
-            nr::SCHED_SETSCHEDULER => Err(EPERM),
-            // The raw system call returns 20 - nice.
-            nr::GETPRIORITY => Ok(20),
-            nr::SETPRIORITY => Ok(0),
+            nr::SCHED_GETAFFINITY => sched::sched_getaffinity(a[0] as i32, a[1], a[2]),
+            nr::SCHED_SETAFFINITY => sched::sched_setaffinity(a[0] as i32, a[1], a[2]),
+            nr::SCHED_GETSCHEDULER => sched::sched_getscheduler(a[0] as i32),
+            nr::SCHED_GETPARAM => sched::sched_getparam(a[0] as i32, a[1]),
+            nr::SCHED_SETSCHEDULER => sched::sched_setscheduler(a[0] as i32, Some(a[1] as u32), a[2]),
+            nr::SCHED_SETPARAM => sched::sched_setscheduler(a[0] as i32, None, a[1]),
+            nr::SCHED_GET_PRIORITY_MAX => sched::priority_range(a[0] as u32).map(|(_, max)| max as usize),
+            nr::SCHED_GET_PRIORITY_MIN => sched::priority_range(a[0] as u32).map(|(min, _)| min as usize),
+            nr::GETPRIORITY => sched::getpriority(a[0] as u32, a[1] as u32),
+            nr::SETPRIORITY => sched::setpriority(a[0] as u32, a[1] as u32, a[2] as i32),
             nr::GETCPU => {
                 for p in &a[..2] {
                     if *p != 0 {

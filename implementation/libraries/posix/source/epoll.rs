@@ -229,6 +229,12 @@ impl Epoll {
     fn wait(&self, max: usize, deadline: Option<u64>) -> Result<Vec<EpollEvent>, isize> {
         let mut packets = [PortPacket::default(); PACKETS];
         loop {
+            // What the port has already is looked at with what is queued: a
+            // level-triggered registration that stays ready would otherwise
+            // keep those signalled meanwhile from being seen.
+            if let Ok(n) = self.watcher.port.wait_packets(&mut packets, 0) {
+                self.take(&packets[..n]);
+            }
             let ready = self.collect(max);
             if !ready.is_empty() || deadline.is_some_and(|d| time::monotonic_ns() >= d) {
                 return Ok(ready);

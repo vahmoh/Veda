@@ -1,3 +1,27 @@
+--- a/include/paths.h
++++ b/include/paths.h
+@@ -15,8 +15,8 @@
+ #define	_PATH_MOUNTED	"/etc/mtab"
+ #define	_PATH_NOLOGIN	"/etc/nologin"
+ #define	_PATH_SENDMAIL	"/usr/sbin/sendmail"
+-#define	_PATH_SHADOW	"/etc/shadow"
+-#define	_PATH_SHELLS	"/etc/shells"
++#define	_PATH_SHADOW	"/system/etc/shadow"
++#define	_PATH_SHELLS	"/system/etc/shells"
+ #define	_PATH_TTY	"/dev/tty"
+ #define _PATH_UTMP	"/dev/null/utmp"
+ #define	_PATH_VI	"/usr/bin/vi"
+--- a/include/shadow.h
++++ b/include/shadow.h
+@@ -10,7 +10,7 @@
+ 
+ #include <bits/alltypes.h>
+ 
+-#define	SHADOW "/etc/shadow"
++#define	SHADOW "/system/etc/shadow"
+ 
+ struct spwd {
+ 	char *sp_namp;
 --- a/src/env/__libc_start_main.c
 +++ b/src/env/__libc_start_main.c
 @@ -15,6 +15,10 @@
@@ -19,6 +43,53 @@
  
  	if (aux[AT_UID]==aux[AT_EUID] && aux[AT_GID]==aux[AT_EGID]
  		&& !aux[AT_SECURE]) return;
+--- a/src/ldso/dladdr.c
++++ b/src/ldso/dladdr.c
+@@ -1,9 +1,41 @@
+ #define _GNU_SOURCE
+ #include <dlfcn.h>
++#include <link.h>
++#include <stdint.h>
+ 
+-static int stub_dladdr(const void *addr, Dl_info *info)
++/* Veda's programs are linked statically: dladdr names the program for an
++   address in one of its segments, as dl_iterate_phdr gives them (by the
++   path it was started from), and the address of its ELF header. Its
++   symbols are not kept: no symbol is named. */
++struct found {
++	uintptr_t addr;
++	Dl_info *info;
++};
++
++static int in_segment(struct dl_phdr_info *p, size_t size, void *data)
++{
++	struct found *f = data;
++	size_t i;
++	int in = 0;
++	uintptr_t header = p->dlpi_addr;
++	for (i=0; i<p->dlpi_phnum; i++) {
++		const ElfW(Phdr) *ph = &p->dlpi_phdr[i];
++		if (ph->p_type != PT_LOAD) continue;
++		if (f->addr - (p->dlpi_addr + ph->p_vaddr) < ph->p_memsz) in = 1;
++		if (ph->p_offset == 0) header = p->dlpi_addr + ph->p_vaddr;
++	}
++	if (!in) return 0;
++	f->info->dli_fname = p->dlpi_name;
++	f->info->dli_fbase = (void *)header;
++	f->info->dli_sname = 0;
++	f->info->dli_saddr = 0;
++	return 1;
++}
++
++static int static_dladdr(const void *addr, Dl_info *info)
+ {
+-	return 0;
++	struct found f = { (uintptr_t)addr, info };
++	return dl_iterate_phdr(in_segment, &f);
+ }
+ 
+-weak_alias(stub_dladdr, dladdr);
++weak_alias(static_dladdr, dladdr);
 --- a/src/ldso/dl_iterate_phdr.c
 +++ b/src/ldso/dl_iterate_phdr.c
 @@ -29,7 +29,9 @@
@@ -32,8 +103,48 @@
  	info.dlpi_phdr  = (void *)aux[AT_PHDR];
  	info.dlpi_phnum = aux[AT_PHNUM];
  	info.dlpi_adds  = 0;
+--- a/src/legacy/getusershell.c
++++ b/src/legacy/getusershell.c
+@@ -16,7 +16,7 @@
+ 
+ void setusershell(void)
+ {
+-	if (!f) f = fopen("/etc/shells", "rbe");
++	if (!f) f = fopen("/system/etc/shells", "rbe");
+ 	if (!f) f = fmemopen((void *)defshells, sizeof defshells - 1, "rb");
+ }
+ 
+--- a/src/network/getnameinfo.c
++++ b/src/network/getnameinfo.c
+@@ -47,7 +47,7 @@
+ 	char line[512], *p, *z;
+ 	unsigned char _buf[1032], atmp[16];
+ 	struct address iplit;
+-	FILE _f, *f = __fopen_rb_ca("/etc/hosts", &_f, _buf, sizeof _buf);
++	FILE _f, *f = __fopen_rb_ca("/system/etc/hosts", &_f, _buf, sizeof _buf);
+ 	if (!f) return;
+ 	if (family == AF_INET) {
+ 		memcpy(atmp+12, a, 4);
+@@ -88,7 +88,7 @@
+ 	unsigned long svport;
+ 	char line[128], *p, *z;
+ 	unsigned char _buf[1032];
+-	FILE _f, *f = __fopen_rb_ca("/etc/services", &_f, _buf, sizeof _buf);
++	FILE _f, *f = __fopen_rb_ca("/system/etc/services", &_f, _buf, sizeof _buf);
+ 	if (!f) return;
+ 	while (fgets(line, sizeof line, f)) {
+ 		if ((p=strchr(line, '#'))) *p++='\n', *p=0;
 --- a/src/network/lookup_name.c
 +++ b/src/network/lookup_name.c
+@@ -52,7 +52,7 @@
+ 	size_t l = strlen(name);
+ 	int cnt = 0, badfam = 0, have_canon = 0;
+ 	unsigned char _buf[1032];
+-	FILE _f, *f = __fopen_rb_ca("/etc/hosts", &_f, _buf, sizeof _buf);
++	FILE _f, *f = __fopen_rb_ca("/system/etc/hosts", &_f, _buf, sizeof _buf);
+ 	if (!f) switch (errno) {
+ 	case ENOENT:
+ 	case ENOTDIR:
 @@ -98,138 +98,11 @@
  	return cnt ? cnt : badfam;
  }
@@ -211,6 +322,17 @@
  	for (i=0; i<cnt; i++) if (buf[i].family != AF_INET) break;
  	if (i==cnt) return cnt;
  
+--- a/src/network/lookup_serv.c
++++ b/src/network/lookup_serv.c
+@@ -70,7 +70,7 @@
+ 	size_t l = strlen(name);
+ 
+ 	unsigned char _buf[1032];
+-	FILE _f, *f = __fopen_rb_ca("/etc/services", &_f, _buf, sizeof _buf);
++	FILE _f, *f = __fopen_rb_ca("/system/etc/services", &_f, _buf, sizeof _buf);
+ 	if (!f) switch (errno) {
+ 	case ENOENT:
+ 	case ENOTDIR:
 --- a/src/network/resolvconf.c
 +++ b/src/network/resolvconf.c
 @@ -6,89 +6,20 @@
@@ -312,6 +434,81 @@
 +	conf->nns = __veda_dns_servers(conf->ns, MAXNS);
 +	return conf->nns ? 0 : -1;
  }
+--- a/src/passwd/getgr_a.c
++++ b/src/passwd/getgr_a.c
+@@ -26,7 +26,7 @@
+ 	*res = 0;
+ 
+ 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cs);
+-	f = fopen("/etc/group", "rbe");
++	f = fopen("/system/etc/group", "rbe");
+ 	if (!f) {
+ 		rv = errno;
+ 		goto done;
+--- a/src/passwd/getgrent.c
++++ b/src/passwd/getgrent.c
+@@ -16,7 +16,7 @@
+ {
+ 	struct group *res;
+ 	size_t size=0, nmem=0;
+-	if (!f) f = fopen("/etc/group", "rbe");
++	if (!f) f = fopen("/system/etc/group", "rbe");
+ 	if (!f) return 0;
+ 	__getgrent_a(f, &gr, &line, &size, &mem, &nmem, &res);
+ 	return res;
+--- a/src/passwd/getgrouplist.c
++++ b/src/passwd/getgrouplist.c
+@@ -43,7 +43,7 @@
+ 	}
+ 	fclose(f);
+ 
+-	f = fopen("/etc/group", "rbe");
++	f = fopen("/system/etc/group", "rbe");
+ 	if (!f && errno != ENOENT && errno != ENOTDIR)
+ 		goto cleanup;
+ 
+--- a/src/passwd/getpw_a.c
++++ b/src/passwd/getpw_a.c
+@@ -27,7 +27,7 @@
+ 
+ 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cs);
+ 
+-	f = fopen("/etc/passwd", "rbe");
++	f = fopen("/system/etc/passwd", "rbe");
+ 	if (!f) {
+ 		rv = errno;
+ 		goto done;
+--- a/src/passwd/getpwent.c
++++ b/src/passwd/getpwent.c
+@@ -16,7 +16,7 @@
+ struct passwd *getpwent()
+ {
+ 	struct passwd *res;
+-	if (!f) f = fopen("/etc/passwd", "rbe");
++	if (!f) f = fopen("/system/etc/passwd", "rbe");
+ 	if (!f) return 0;
+ 	__getpwent_a(f, &pw, &line, &size, &res);
+ 	return res;
+--- a/src/passwd/getspnam_r.c
++++ b/src/passwd/getspnam_r.c
+@@ -80,7 +80,7 @@
+ 		return errno = ERANGE;
+ 
+ 	/* Protect against truncation */
+-	if (snprintf(path, sizeof path, "/etc/tcb/%s/shadow", name) >= sizeof path)
++	if (snprintf(path, sizeof path, "/system/etc/tcb/%s/shadow", name) >= sizeof path)
+ 		return errno = EINVAL;
+ 
+ 	fd = open(path, O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+@@ -96,7 +96,7 @@
+ 	} else {
+ 		if (errno != ENOENT && errno != ENOTDIR)
+ 			return errno;
+-		f = fopen("/etc/shadow", "rbe");
++		f = fopen("/system/etc/shadow", "rbe");
+ 		if (!f) {
+ 			if (errno != ENOENT && errno != ENOTDIR)
+ 				return errno;
 --- a/src/process/posix_spawn.c
 +++ b/src/process/posix_spawn.c
 @@ -1,219 +1,60 @@

@@ -35,7 +35,6 @@ pub mod errno {
     pub const ENOTDIR: isize = linux_raw_sys::errno::ENOTDIR as isize;
     pub const EISDIR: isize = linux_raw_sys::errno::EISDIR as isize;
     pub const EINVAL: isize = linux_raw_sys::errno::EINVAL as isize;
-    pub const ENFILE: isize = linux_raw_sys::errno::ENFILE as isize;
     pub const EMFILE: isize = linux_raw_sys::errno::EMFILE as isize;
     pub const ENOTTY: isize = linux_raw_sys::errno::ENOTTY as isize;
     pub const ENOSPC: isize = linux_raw_sys::errno::ENOSPC as isize;
@@ -47,6 +46,7 @@ pub mod errno {
     pub const ENOLCK: isize = linux_raw_sys::errno::ENOLCK as isize;
     pub const ENOSYS: isize = linux_raw_sys::errno::ENOSYS as isize;
     pub const ENOTEMPTY: isize = linux_raw_sys::errno::ENOTEMPTY as isize;
+    pub const ELOOP: isize = linux_raw_sys::errno::ELOOP as isize;
     pub const EILSEQ: isize = linux_raw_sys::errno::EILSEQ as isize;
     pub const ENOTSOCK: isize = linux_raw_sys::errno::ENOTSOCK as isize;
     pub const EOPNOTSUPP: isize = linux_raw_sys::errno::EOPNOTSUPP as isize;
@@ -157,6 +157,15 @@ pub mod fcntl {
     pub const SETLKW: u32 = linux_raw_sys::general::F_SETLKW;
     pub const SETOWN: u32 = linux_raw_sys::general::F_SETOWN;
     pub const GETOWN: u32 = linux_raw_sys::general::F_GETOWN;
+    pub const SETOWN_EX: u32 = linux_raw_sys::general::F_SETOWN_EX;
+    pub const GETOWN_EX: u32 = linux_raw_sys::general::F_GETOWN_EX;
+    /// Kinds of owner (`struct f_owner_ex`'s `type`): a thread, a
+    /// process, a process group.
+    pub const F_OWNER_TID: i32 = linux_raw_sys::general::F_OWNER_TID as i32;
+    pub const F_OWNER_PID: i32 = linux_raw_sys::general::F_OWNER_PID as i32;
+    pub const F_OWNER_PGRP: i32 = linux_raw_sys::general::F_OWNER_PGRP as i32;
+    pub const SETPIPE_SZ: u32 = linux_raw_sys::general::F_SETPIPE_SZ;
+    pub const GETPIPE_SZ: u32 = linux_raw_sys::general::F_GETPIPE_SZ;
     pub const DUPFD_QUERY: u32 = linux_raw_sys::general::F_DUPFD_QUERY;
     pub const DUPFD_CLOEXEC: u32 = linux_raw_sys::general::F_DUPFD_CLOEXEC;
     pub const ADD_SEALS: u32 = linux_raw_sys::general::F_ADD_SEALS;
@@ -300,6 +309,24 @@ pub mod rlimit {
     pub const NOFILE: u32 = linux_raw_sys::general::RLIMIT_NOFILE;
     /// musl's `RLIM_INFINITY`: every bit of the 64-bit limit.
     pub const INFINITY: u64 = u64::MAX;
+}
+
+/// Scheduling policies (`sched_setscheduler`).
+pub mod policy {
+    pub const NORMAL: u32 = linux_raw_sys::general::SCHED_NORMAL;
+    pub const FIFO: u32 = linux_raw_sys::general::SCHED_FIFO;
+    pub const RR: u32 = linux_raw_sys::general::SCHED_RR;
+    pub const BATCH: u32 = linux_raw_sys::general::SCHED_BATCH;
+    pub const IDLE: u32 = linux_raw_sys::general::SCHED_IDLE;
+    pub const DEADLINE: u32 = linux_raw_sys::general::SCHED_DEADLINE;
+    pub const RESET_ON_FORK: u32 = linux_raw_sys::general::SCHED_RESET_ON_FORK;
+}
+
+/// What `getpriority` and `setpriority` name.
+pub mod prio {
+    pub const PROCESS: u32 = linux_raw_sys::general::PRIO_PROCESS;
+    pub const PGRP: u32 = linux_raw_sys::general::PRIO_PGRP;
+    pub const USER: u32 = linux_raw_sys::general::PRIO_USER;
 }
 
 /// Signals.

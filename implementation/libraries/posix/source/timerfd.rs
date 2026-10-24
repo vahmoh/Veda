@@ -51,7 +51,8 @@ struct Timer {
 struct State {
     /// The next expiration (monotonic ns), while armed.
     deadline: Option<u64>,
-    /// The period (ns); 0 for a timer that expires once.
+    /// The period (ns), kept while the timer is disarmed; 0 for a timer
+    /// that expires once.
     interval: u64,
     /// Expirations not read yet.
     expirations: u64,
@@ -215,8 +216,9 @@ pub unsafe fn settime(fd: i32, flags: u32, new: usize, old: usize) -> SysResult 
         (v, true) => Some(v),
     };
     {
+        // A timer disarmed keeps its period, as Linux's does: it says it.
         let mut s = timer.state.lock();
-        *s = State { deadline, interval: if deadline.is_some() { interval } else { 0 }, expirations: 0 };
+        *s = State { deadline, interval, expirations: 0 };
         let _ = timer.event.0.signal(READABLE, 0);
     }
     if deadline.is_some() {

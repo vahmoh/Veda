@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: © 2026 Vahid Mohammadi
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Python in the Terminal (1280x800 with the taskbar): a script run by
+# python3, its exit status as $?; a script that is a program of its own (its
+# first line names its interpreter); the interactive interpreter, the basic
+# one, which reads the lines typed for it without a warning and ends at
+# Ctrl+D; a program ended by Ctrl+C (status 130); and a virtual environment,
+# whose pip is such a script. Results are checked with the shell's `logger`
+# command, which writes to the serial log.
+requires python
+boot-cmdline "run=terminal"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+type "cd /tmp && echo 'import sys; print(sys.platform); sys.exit(3)' > status.py && python3 status.py; logger python-status-$?"
+key ret
+wait-serial "terminal: python-status-3" 60
+# A program of its own, by its first line, given its arguments.
+type 'echo "#!/system/bin/python3" > hello.py'
+key ret
+type "echo 'import sys; print(sys.argv[1], 6 * 7)' >> hello.py && ./hello.py hello | grep 'hello 42' && logger script-ok"
+key ret
+wait-serial "terminal: script-ok" 60
+# The interactive interpreter: its banner and prompt, a line typed for it,
+# and the end of its input.
+type "python3"
+key ret
+wait 5
+shot target/veda/python-1-interpreter.png
+type "open('/tmp/answer.txt', 'w').write(str(6 * 7))"
+key ret
+type "print('the answer is', 6 * 7)"
+key ret
+wait 2
+shot target/veda/python-2-answered.png
+key ctrl-d
+wait 2
+type "grep 42 /tmp/answer.txt && logger interpreter-ok"
+key ret
+wait-serial "terminal: interpreter-ok" 30
+# The basic interpreter, without a warning that the other cannot be had:
+# its prompts and messages go to the file.
+type "python3 2> repl.txt"
+key ret
+wait 5
+key ctrl-d
+wait 2
+type "grep -c '>>>' repl.txt && logger prompted; grep pyrepl repl.txt; logger warned-$?"
+key ret
+wait-serial "terminal: prompted" 30
+wait-serial "terminal: warned-1" 30
+# Ctrl+C ends a program (130), the rest of its command line too.
+type "python3 -c 'import time; time.sleep(60)'; logger not-skipped"
+key ret
+wait 4
+key ctrl-c
+wait 2
+type "logger interrupted-$?"
+key ret
+wait-serial "terminal: interrupted-130" 30
+reject-serial "terminal: not-skipped"
+# A virtual environment: its interpreter, and its pip, a script whose first
+# line names that interpreter.
+type "python3 -m venv /tmp/env && /tmp/env/bin/python -c 'import sys; print(sys.prefix)' | grep /tmp/env && logger venv-ok"
+key ret
+wait-serial "terminal: venv-ok" 180
+type "/tmp/env/bin/pip --version | grep 'from /tmp/env/lib/python3.15/site-packages/pip' && logger pip-ok"
+key ret
+wait-serial "terminal: pip-ok" 180
+shot target/veda/python-3-done.png

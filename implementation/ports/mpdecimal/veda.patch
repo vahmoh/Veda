@@ -1,0 +1,10 @@
+--- a/config.sub
++++ b/config.sub
+@@ -2135,6 +2135,7 @@
+ 	| uwin* \
+ 	| uxpv* \
+ 	| v88r* \
++	| veda* \
+ 	|*vms* \
+ 	| vos* \
+ 	| vsta* \

@@ -16,7 +16,7 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 
 use crate::util::{self, Result};
-use crate::{architecture, crates, linux, toolchain, web};
+use crate::{architecture, crates, linux, python, toolchain, web};
 
 /// The ports' directory.
 pub fn dir() -> PathBuf {
@@ -26,6 +26,17 @@ pub fn dir() -> PathBuf {
 /// The ports' settings for the architecture built for.
 pub fn settings() -> PathBuf {
     dir().join("architectures").join(architecture::NAME).join("settings.sh")
+}
+
+/// What every build of libraries for Veda (the web engine's, Python's)
+/// runs besides its own script: the helpers the build scripts share
+/// (`common.sh`), how libraries are built for Veda (`libraries.sh`) and
+/// CMake's description of Veda (`cmake/`).
+pub fn library_build_files() -> Result<Vec<PathBuf>> {
+    let dir = dir();
+    let mut files = vec![dir.join("common.sh"), dir.join("libraries.sh")];
+    files.extend(util::files_under(&dir.join("cmake"))?);
+    Ok(files)
 }
 
 /// The SHA-256 of what builds the ports `names` (every file of their
@@ -245,8 +256,8 @@ pub fn fetch(port: &Port, downloads: &Path) -> Result {
 
 /// Downloads the archive at `url` into `downloads` unless it is there, and
 /// checks it against `sha256`, which `pinned_by` pins; returns its path. An
-/// archive another build has (the toolchain's, the driver VM's Linux's or the
-/// crates') is copied.
+/// archive another build has (the toolchain's, the driver VM's Linux's, the
+/// crates', the web engine's or Python's) is copied.
 pub fn download(url: &str, sha256: &str, pinned_by: &str, downloads: &Path) -> Result<PathBuf> {
     download_as(url, file_name(url), sha256, pinned_by, downloads)
 }
@@ -257,7 +268,7 @@ fn download_as(url: &str, file: &str, sha256: &str, pinned_by: &str, downloads: 
     if archive.is_file() && sha256_of(&archive)? == sha256 {
         return Ok(archive);
     }
-    for other in [toolchain::root(), linux::root(), crates::root(), web::root()] {
+    for other in [toolchain::root(), linux::root(), crates::root(), web::root(), python::root()] {
         let other = other.join("downloads");
         let copy = other.join(file);
         if other != downloads && copy.is_file() && sha256_of(&copy)? == sha256 {

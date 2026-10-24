@@ -961,7 +961,17 @@
  
          // If the remote supports selective acknowledgement, add the option to the outgoing
          // segment.
-@@ -1705,7 +1756,10 @@
+@@ -1575,6 +1626,9 @@
+         } else {
+             // We're listening, reject packets not matching the listen endpoint.
+             let addr_ok = match self.listen_endpoint.addr {
++                // Veda: the unspecified address of a version is any address
++                // of that version (a socket bound to 0.0.0.0, or to :: alone).
++                Some(addr) if addr.is_unspecified() => ip_repr.dst_addr().version() == addr.version(),
+                 Some(addr) => ip_repr.dst_addr() == addr,
+                 None => true,
+             };
+@@ -1705,7 +1759,10 @@
  
          let window_start = self.remote_seq_no + self.rx_buffer.len();
          let window_end = if let Some(last_ack) = self.remote_last_ack {
@@ -973,7 +983,7 @@
          } else {
              window_start
          };
-@@ -2289,9 +2343,40 @@
+@@ -2289,9 +2346,40 @@
          }
      }
  
@@ -1015,7 +1025,7 @@
              (_, _) => false,
          }
      }
-@@ -2470,6 +2555,8 @@
+@@ -2470,6 +2558,8 @@
          if self.timed_out(cx.now()) {
              // If a timeout expires, we should abort the connection.
              net_debug!("timeout exceeded");
@@ -1024,7 +1034,7 @@
              self.set_state(State::Closed);
          } else if self.timer.should_retransmit(cx.now()) {
              if let Timer::Retransmit { .. } = self.timer {
-@@ -2826,6 +2913,7 @@
+@@ -2826,6 +2916,7 @@
              .max(repr.seq_number + repr.segment_len());
          self.remote_last_ack = repr.ack_number;
          self.remote_last_win = repr.window_len;
@@ -1032,7 +1042,7 @@
  
          if repr.segment_len() > 0 {
              self.rtte
-@@ -2887,7 +2975,9 @@
+@@ -2887,7 +2978,9 @@
              let timeout_poll_at = match (self.remote_last_ts, self.timeout) {
                  // If we're transmitting or retransmitting data, we need to poll at the moment
                  // when the timeout would expire.
@@ -1043,7 +1053,7 @@
                  // Otherwise we have no timeout.
                  (_, _) => PollAt::Ingress,
              };
-@@ -4754,6 +4844,59 @@
+@@ -4754,6 +4847,59 @@
      }
  
      #[test]
@@ -1103,7 +1113,7 @@
      fn test_established_send() {
          let mut s = socket_established();
          // First roundtrip after establishing.
-@@ -5421,6 +5564,8 @@
+@@ -5421,6 +5567,8 @@
              }
          );
          assert_eq!(s.state, State::Closed);
@@ -1112,7 +1122,7 @@
      }
  
      #[test]
-@@ -8599,6 +8744,10 @@
+@@ -8599,6 +8747,10 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1123,7 +1133,7 @@
      }
  
      #[test]
-@@ -8606,10 +8755,8 @@
+@@ -8606,10 +8758,8 @@
          let mut s = socket_established();
          s.set_timeout(Some(Duration::from_millis(2000)));
          recv_nothing!(s, time 250);
@@ -1136,7 +1146,7 @@
          s.send_slice(b"abcdef").unwrap();
          assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Now);
          recv!(s, time 255, Ok(TcpRepr {
-@@ -8639,6 +8786,102 @@
+@@ -8639,6 +8789,102 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1239,7 +1249,7 @@
      }
  
      #[test]
-@@ -8686,6 +8929,7 @@
+@@ -8686,6 +8932,7 @@
          }));
          recv_nothing!(s, time 205);
          assert_eq!(s.state, State::Closed);
@@ -1247,7 +1257,7 @@
      }
  
      #[test]
-@@ -8705,6 +8949,7 @@
+@@ -8705,6 +8952,7 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1255,7 +1265,7 @@
      }
  
      #[test]
-@@ -8724,6 +8969,7 @@
+@@ -8724,6 +8972,7 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.state, State::Closed);
@@ -1263,7 +1273,7 @@
      }
  
      #[test]
-@@ -8740,6 +8986,8 @@
+@@ -8740,6 +8989,8 @@
              ..RECV_TEMPL
          }));
          assert_eq!(s.socket.poll_at(&mut s.cx), PollAt::Ingress);
@@ -1272,6 +1282,197 @@
      }
  
      // =========================================================================================//
+@@ -9547,6 +9798,50 @@
+         assert!(!s.socket.accepts(&mut s.cx, &ip_repr_wrong_dst, &tcp_repr));
+     }
+ 
++    // Veda: a socket listening on the unspecified address of a version takes
++    // the connections to any address of that version alone.
++    #[test]
++    #[cfg(all(feature = "proto-ipv4", feature = "proto-ipv6"))]
++    fn test_listen_unspecified_address_of_a_version() {
++        use crate::wire::{Ipv4Address, Ipv4Repr, Ipv6Address, Ipv6Repr};
++
++        let syn = TcpRepr {
++            control: TcpControl::Syn,
++            seq_number: REMOTE_SEQ,
++            ack_number: None,
++            ..SEND_TEMPL
++        };
++        let v4 = IpRepr::Ipv4(Ipv4Repr {
++            src_addr: Ipv4Address::new(192, 168, 1, 2),
++            dst_addr: Ipv4Address::new(192, 168, 1, 1),
++            next_header: IpProtocol::Tcp,
++            payload_len: syn.buffer_len(),
++            hop_limit: 64,
++        });
++        let v6 = IpRepr::Ipv6(Ipv6Repr {
++            src_addr: Ipv6Address::new(0xfe80, 0, 0, 0, 0, 0, 0, 2),
++            dst_addr: Ipv6Address::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
++            next_header: IpProtocol::Tcp,
++            payload_len: syn.buffer_len(),
++            hop_limit: 64,
++        });
++
++        let mut s = socket();
++        s.listen((Ipv4Address::UNSPECIFIED, LOCAL_PORT)).unwrap();
++        assert!(s.socket.accepts(&mut s.cx, &v4, &syn));
++        assert!(!s.socket.accepts(&mut s.cx, &v6, &syn));
++
++        let mut s = socket();
++        s.listen((Ipv6Address::UNSPECIFIED, LOCAL_PORT)).unwrap();
++        assert!(!s.socket.accepts(&mut s.cx, &v4, &syn));
++        assert!(s.socket.accepts(&mut s.cx, &v6, &syn));
++
++        let mut s = socket();
++        s.listen(LOCAL_PORT).unwrap();
++        assert!(s.socket.accepts(&mut s.cx, &v4, &syn));
++        assert!(s.socket.accepts(&mut s.cx, &v6, &syn));
++    }
++
+     // =========================================================================================//
+     // Timer tests
+     // =========================================================================================//
+--- a/src/socket/udp.rs
++++ b/src/socket/udp.rs
+@@ -474,19 +474,19 @@
+         self.rx_buffer.payload_bytes_count()
+     }
+ 
+-    pub(crate) fn accepts(&self, cx: &mut Context, ip_repr: &IpRepr, repr: &UdpRepr) -> bool {
++    pub(crate) fn accepts(&self, _cx: &mut Context, ip_repr: &IpRepr, repr: &UdpRepr) -> bool {
+         if self.endpoint.port != repr.dst_port {
+             return false;
+         }
+-        if self.endpoint.addr.is_some()
+-            && self.endpoint.addr != Some(ip_repr.dst_addr())
+-            && !cx.is_broadcast(&ip_repr.dst_addr())
+-            && !ip_repr.dst_addr().is_multicast()
+-        {
+-            return false;
++        // Veda: as on Linux, a socket bound to an address takes what comes to
++        // that address alone (no broadcasts, no multicasts to others), and
++        // one bound to the unspecified address of a version (0.0.0.0, or ::
++        // alone) what comes to any address of that version.
++        match self.endpoint.addr {
++            Some(addr) if addr.is_unspecified() => ip_repr.dst_addr().version() == addr.version(),
++            Some(addr) => ip_repr.dst_addr() == addr,
++            None => true,
+         }
+-
+-        true
+     }
+ 
+     pub(crate) fn process(
+@@ -544,8 +544,10 @@
+                 s
+             } else {
+                 match endpoint.addr {
+-                    Some(addr) => addr,
+-                    None => match cx.get_source_address(&packet_meta.endpoint.addr) {
++                    // Veda: bound to the unspecified address of a version, it
++                    // sends from the address the route gives, as unbound.
++                    Some(addr) if !addr.is_unspecified() => addr,
++                    _ => match cx.get_source_address(&packet_meta.endpoint.addr) {
+                         Some(addr) => addr,
+                         None => {
+                             net_trace!(
+@@ -1015,6 +1017,95 @@
+         assert!(!socket.accepts(cx, &REMOTE_IP_REPR, &udp_repr));
+     }
+ 
++    // Veda: a socket bound to the unspecified address of a version takes the
++    // datagrams to any address of that version alone, and sends from the
++    // address the route to the remote end gives.
++    #[cfg(all(feature = "proto-ipv4", feature = "proto-ipv6"))]
++    #[rstest]
++    #[case::ip(Medium::Ip)]
++    #[cfg(feature = "medium-ip")]
++    #[case::ethernet(Medium::Ethernet)]
++    #[cfg(feature = "medium-ethernet")]
++    fn test_unspecified_address_of_a_version(#[case] medium: Medium) {
++        use crate::wire::{Ipv4Address, Ipv4Repr, Ipv6Address, Ipv6Repr};
++
++        let (mut iface, _, _) = setup(medium);
++        let cx = iface.context();
++        let v4 = IpRepr::Ipv4(Ipv4Repr {
++            src_addr: Ipv4Address::new(192, 168, 1, 2),
++            dst_addr: Ipv4Address::new(192, 168, 1, 1),
++            next_header: IpProtocol::Udp,
++            payload_len: 8 + 6,
++            hop_limit: 64,
++        });
++        let v6 = IpRepr::Ipv6(Ipv6Repr {
++            src_addr: Ipv6Address::new(0xfe80, 0, 0, 0, 0, 0, 0, 2),
++            dst_addr: Ipv6Address::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
++            next_header: IpProtocol::Udp,
++            payload_len: 8 + 6,
++            hop_limit: 64,
++        });
++
++        let mut any_v4 = socket(buffer(1), buffer(1));
++        assert_eq!(any_v4.bind((Ipv4Address::UNSPECIFIED, LOCAL_PORT)), Ok(()));
++        assert!(any_v4.accepts(cx, &v4, &REMOTE_UDP_REPR));
++        assert!(!any_v4.accepts(cx, &v6, &REMOTE_UDP_REPR));
++
++        let mut any_v6 = socket(buffer(1), buffer(1));
++        assert_eq!(any_v6.bind((Ipv6Address::UNSPECIFIED, LOCAL_PORT)), Ok(()));
++        assert!(!any_v6.accepts(cx, &v4, &REMOTE_UDP_REPR));
++        assert!(any_v6.accepts(cx, &v6, &REMOTE_UDP_REPR));
++
++        let mut any = socket(buffer(1), buffer(1));
++        assert_eq!(any.bind(LOCAL_PORT), Ok(()));
++        assert!(any.accepts(cx, &v4, &REMOTE_UDP_REPR));
++        assert!(any.accepts(cx, &v6, &REMOTE_UDP_REPR));
++
++        let remote = IpEndpoint::new(Ipv4Address::new(192, 168, 1, 2).into(), REMOTE_PORT);
++        assert_eq!(any_v4.send_slice(PAYLOAD, remote), Ok(()));
++        assert_eq!(
++            any_v4.dispatch(cx, |_, _, (ip_repr, _, _)| {
++                assert_eq!(ip_repr.src_addr(), Ipv4Address::new(192, 168, 1, 1).into());
++                Ok::<_, ()>(())
++            }),
++            Ok(())
++        );
++    }
++
++    // Veda: as on Linux, broadcasts go to the sockets bound to any address,
++    // not to those bound to one.
++    #[cfg(feature = "proto-ipv4")]
++    #[rstest]
++    #[case::ip(Medium::Ip)]
++    #[cfg(feature = "medium-ip")]
++    #[case::ethernet(Medium::Ethernet)]
++    #[cfg(feature = "medium-ethernet")]
++    fn test_broadcasts_go_to_sockets_of_any_address(#[case] medium: Medium) {
++        use crate::wire::{Ipv4Address, Ipv4Repr};
++
++        let (mut iface, _, _) = setup(medium);
++        let cx = iface.context();
++        let broadcast = IpRepr::Ipv4(Ipv4Repr {
++            src_addr: Ipv4Address::new(192, 168, 1, 2),
++            dst_addr: Ipv4Address::BROADCAST,
++            next_header: IpProtocol::Udp,
++            payload_len: 8 + 6,
++            hop_limit: 64,
++        });
++
++        let mut any = socket(buffer(1), buffer(0));
++        assert_eq!(any.bind(LOCAL_PORT), Ok(()));
++        assert!(any.accepts(cx, &broadcast, &REMOTE_UDP_REPR));
++
++        let mut any_v4 = socket(buffer(1), buffer(0));
++        assert_eq!(any_v4.bind((Ipv4Address::UNSPECIFIED, LOCAL_PORT)), Ok(()));
++        assert!(any_v4.accepts(cx, &broadcast, &REMOTE_UDP_REPR));
++
++        let mut one = socket(buffer(1), buffer(0));
++        assert_eq!(one.bind((Ipv4Address::new(192, 168, 1, 1), LOCAL_PORT)), Ok(()));
++        assert!(!one.accepts(cx, &broadcast, &REMOTE_UDP_REPR));
++    }
++
+     #[rstest]
+     #[case::ip(Medium::Ip)]
+     #[cfg(feature = "medium-ip")]
 --- a/src/wire/icmpv4.rs
 +++ b/src/wire/icmpv4.rs
 @@ -4,7 +4,7 @@

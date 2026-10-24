@@ -230,24 +230,66 @@ fn ended(code: i64) -> (i32, Option<&'static str>) {
     }
 }
 
+/// A program to start: its file's path and image, mapped, and the
+/// arguments it starts with.
+struct Program {
+    path: String,
+    image: rt::vm::Mapping,
+    size: usize,
+    args: Vec<String>,
+}
+
+/// What runs the file at `path`, started with `args`: the file, or for a
+/// script the interpreter its first line names (`#!`, from the directory
+/// `cwd`), given its argument and the script's path before the arguments
+/// but the first, as `posix_spawn` runs one. An interpreter may be a script
+/// too, `rt::process::SCRIPT_DEPTH` deep.
+fn program(fs: &vfs::Client, cwd: &str, path: &str, args: &[String]) -> Result<Program, String> {
+    let (mut path, mut args) = (path.to_string(), args.to_vec());
+    let mut depth = 0;
+    loop {
+        let (vmo, size) = match fs.read_file(path.clone()) {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => return Err(format!("{path}: {e}")),
+            Err(_) => return Err("the file system is not responding".into()),
+        };
+        let size = size as usize;
+        let image = rt::vm::Mapping::new(vmo, size.max(1), map_flags::READ).map_err(|e| format!("{path}: {e}"))?;
+        // SAFETY: a read-only mapping of the file, which nothing changes:
+        // the system image's pages, or a copy made for us alone.
+        let bytes = unsafe { &image.as_slice()[..size] };
+        if is_executable(bytes) {
+            return Ok(Program { path, image, size, args });
+        }
+        if !bytes.starts_with(b"#!") {
+            return Err(spawn_error(&path, SpawnError::NotExecutable));
+        }
+        if depth == rt::process::SCRIPT_DEPTH {
+            return Err(format!("{path}: its interpreter is a script, and so on, too deep"));
+        }
+        depth += 1;
+        let interpreter = rt::process::interpreter(bytes)
+            .and_then(|i| Some((core::str::from_utf8(i.path).ok()?, i.argument.map(core::str::from_utf8))))
+            .ok_or_else(|| format!("{path}: its first line names no interpreter that can run it"))?;
+        let (interpreter, argument) = match interpreter {
+            (interpreter, Some(Ok(argument))) => (interpreter, Some(argument)),
+            (interpreter, None) => (interpreter, None),
+            (_, Some(Err(_))) => return Err(format!("{path}: its interpreter's argument is not UTF-8")),
+        };
+        let mut started = vec![interpreter.to_string()];
+        started.extend(argument.map(str::to_string));
+        started.push(core::mem::replace(&mut path, files::path::resolve(cwd, interpreter)));
+        started.extend(args.drain(1.min(args.len())..));
+        args = started;
+    }
+}
+
 /// Starts `run` and waits for it, showing its output in `out`. Ctrl+C
 /// (`interrupt`, with [`Console::wake`]) ends it.
 pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) -> Result<Ended, String> {
     // The program's image.
     let fs = proto::connect(vfs::NAME).map(vfs::Client::new).map_err(|_| "the file system is unavailable")?;
-    let (vmo, size) = match fs.read_file(run.path.into()) {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => return Err(format!("{}: {e}", run.path)),
-        Err(_) => return Err("the file system is not responding".into()),
-    };
-    let image =
-        rt::vm::Mapping::new(vmo, (size as usize).max(1), map_flags::READ).map_err(|e| format!("{}: {e}", run.path))?;
-    // SAFETY: a read-only mapping of the file, which nothing changes: the
-    // system image's pages, or a copy made for us alone.
-    let bytes = unsafe { &image.as_slice()[..size as usize] };
-    if !is_executable(bytes) {
-        return Err(spawn_error(run.path, SpawnError::NotExecutable));
-    }
+    let program = program(&fs, run.cwd, run.path, run.args)?;
 
     // The terminal: a fresh pair for each program, so that the end of one
     // program's input (Ctrl+D) is not the next one's.
@@ -302,9 +344,10 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         handles.push((role::TERMINAL, h));
     }
 
+    // Named after the file run, a script's too.
     let name = run.path.rsplit('/').next().unwrap_or(run.path);
-    let mut spawn = Spawn::new(name).path(run.path).cwd(run.cwd);
-    spawn.args = run.args.iter().map(|a| a.as_bytes()).collect();
+    let mut spawn = Spawn::new(name).path(&program.path).cwd(run.cwd);
+    spawn.args = program.args.iter().map(|a| a.as_bytes()).collect();
     spawn.env = run.env.iter().map(|e| e.as_bytes()).collect();
     spawn.handles = handles;
     // What earlier programs left unread comes first.
@@ -317,8 +360,9 @@ pub fn run(console: &Console, run: Run, out: &Output, interrupt: &AtomicBool) ->
         typed.end = false;
     }
     // The program runs from the file's pages where it can.
-    let process: Process = spawn.start_file(image.vmo(), size as usize).map_err(|e| spawn_error(run.path, e))?;
-    drop(image);
+    let process: Process =
+        spawn.start_file(program.image.vmo(), program.size).map_err(|e| spawn_error(&program.path, e))?;
+    drop(program);
 
     console.foreground.store(true, Ordering::Release);
     let _ = console.wake.clear();

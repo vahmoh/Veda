@@ -325,7 +325,7 @@ fn check_tcp(host: &str, port: u16) -> Check {
 fn check_udp() -> Check {
     let st = net::status().map_err(net)?;
     let server = *st.dns_servers.first().ok_or("no DNS server")?;
-    let mut sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(net::Ipv4Addr::UNSPECIFIED), 0)).map_err(net)?;
+    let mut sock = UdpSocket::bind(SocketAddr::new(any_address_for(server), 0)).map_err(net)?;
     let mut q: Vec<u8> = alloc::vec![0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
     for label in ["example", "com"] {
         q.push(label.len() as u8);
@@ -339,6 +339,15 @@ fn check_udp() -> Check {
         return Err(String::from("not a DNS answer"));
     }
     Ok(format!("{n}-byte answer from {from}"))
+}
+
+/// The unspecified address of `addr`'s version: a socket bound to it
+/// reaches `addr`.
+fn any_address_for(addr: IpAddr) -> IpAddr {
+    match addr {
+        IpAddr::V4(_) => IpAddr::V4(net::Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(_) => IpAddr::V6(net::Ipv6Addr::UNSPECIFIED),
+    }
 }
 
 fn check_ping(target: IpAddr) -> Check {
@@ -357,7 +366,7 @@ fn check_ping(target: IpAddr) -> Check {
 /// Asks the DNS server for `example.com` by hand: "ok", "servfail" (or
 /// another error code) or "fail" (no answer).
 fn dns_probe(server: IpAddr, id: u16) -> String {
-    let Ok(mut sock) = UdpSocket::bind(SocketAddr::new(IpAddr::V4(net::Ipv4Addr::UNSPECIFIED), 0)) else {
+    let Ok(mut sock) = UdpSocket::bind(SocketAddr::new(any_address_for(server), 0)) else {
         return String::from("fail");
     };
     let mut q: Vec<u8> = alloc::vec![(id >> 8) as u8, id as u8, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];

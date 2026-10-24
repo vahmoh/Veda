@@ -56,13 +56,13 @@ use proto::init::ClientIdentity;
 use proto::net::{
     AddrFamily, AppRule, DeviceInfo, FIREWALL_NOTICE, FirewallConfig, FirewallEvent, FirewallNotice, FirewallProtocol,
     FirewallQuestion, FirewallStats, InterfaceInfo, IpConfig, NET_EVENT, NetError, NetEvent, NetStatus, NetdevError,
-    RESOLVE_RESULT, RouteInfo, Scope, SocketInfo, TcpOptions, format_mac, net, netdev,
+    RESOLVE_RESULT, RouteInfo, Scope, SocketEvent, SocketInfo, TcpOptions, format_mac, net, netdev,
 };
 use proto::netring::{self, LinkEndpoints, SlotMeta, kind};
 use rt::object::{Channel, Socket};
 use rt::println;
 
-use socket::{Conn, Events};
+use socket::{Conn, Events, Turn};
 
 rt::entry!(main);
 
@@ -368,6 +368,30 @@ impl Netd {
         self.tell_asker(FirewallNotice::Asked { question });
     }
 
+    /// Whether `app` may reach `remote` (`PermissionDenied`, noted, if the
+    /// firewall keeps it off the network).
+    fn may_reach(&mut self, app: &str, protocol: u8, remote: SocketAddr) -> Result<(), NetError> {
+        if remote.ip().is_loopback() || self.firewall.allows_network(app) {
+            return Ok(());
+        }
+        self.stack.note_app_blocked(protocol, remote, app);
+        Err(NetError::PermissionDenied)
+    }
+
+    /// A socket of `app`'s (a system service's if `service`) bound to
+    /// `local` (asked for; `bound` taken): one that takes what other
+    /// machines start, a listener or a datagram socket on a port of the
+    /// application's choosing (one on a port the system picked is a
+    /// client's, whose replies come in anyway), has the user asked whether
+    /// the application may. A system service is part of the system: nobody
+    /// is asked.
+    fn listens(&mut self, app: &str, service: bool, protocol: FirewallProtocol, local: SocketAddr, bound: SocketAddr) {
+        let server = protocol == FirewallProtocol::Tcp || local.port() != 0;
+        if server && !local.ip().is_loopback() && !service {
+            self.ask(app, protocol, bound.port());
+        }
+    }
+
     /// Tells the desktop shell, if it listens.
     fn tell_asker(&mut self, notice: FirewallNotice) {
         if let Some(ch) = &self.asker
@@ -568,14 +592,9 @@ impl Netd {
                 if self.settings { Ok(()) } else { Err(NetError::PermissionDenied) }
             }
 
-            /// Whether the client may reach `remote` (`PermissionDenied`,
-            /// noted, if the firewall keeps it off the network).
+            /// Whether the client may reach `remote` (see [`Netd::may_reach`]).
             fn may_reach(&mut self, protocol: u8, remote: SocketAddr) -> Result<(), NetError> {
-                if remote.ip().is_loopback() || self.netd.firewall.allows_network(&self.app) {
-                    return Ok(());
-                }
-                self.netd.stack.note_app_blocked(protocol, remote, &self.app);
-                Err(NetError::PermissionDenied)
+                self.netd.may_reach(&self.app, protocol, remote)
             }
 
             /// A new socket of the client's: where it is open to other
@@ -589,16 +608,27 @@ impl Netd {
                 self.netd.add_socket(conn);
             }
 
-            /// A socket bound to `local` (asked for; `bound` taken): one that
-            /// takes what other machines start, a listener or a datagram
-            /// socket on a port of the application's choosing (one on a port
-            /// the system picked is a client's, whose replies come in
-            /// anyway), has the user asked whether the application may. A
-            /// system service is part of the system: nobody is asked.
+            /// A socket of the client's bound to `local` (asked for; `bound`
+            /// taken): see [`Netd::listens`].
             fn listens(&mut self, protocol: FirewallProtocol, local: SocketAddr, bound: SocketAddr) {
-                let server = protocol == FirewallProtocol::Tcp || local.port() != 0;
-                if server && !local.ip().is_loopback() && !self.service {
-                    self.netd.ask(&self.app, protocol, bound.port());
+                self.netd.listens(&self.app, self.service, protocol, local, bound);
+            }
+
+            /// Binds with `bind`, and once more if the port was taken by
+            /// sockets whose clients closed them already (see
+            /// [`Netd::reap`]).
+            fn bind<T>(
+                &mut self,
+                protocol: FirewallProtocol,
+                local: SocketAddr,
+                mut bind: impl FnMut(&mut Stack) -> Result<T, NetError>,
+            ) -> Result<T, NetError> {
+                match bind(&mut self.netd.stack) {
+                    Err(NetError::AddressInUse) if local.port() != 0 => {
+                        self.netd.reap(protocol, local.port());
+                        bind(&mut self.netd.stack)
+                    }
+                    other => other,
                 }
             }
 
@@ -637,13 +667,16 @@ impl Netd {
             fn tcp_listen(
                 &mut self,
                 local: SocketAddr,
+                v6only: bool,
                 backlog: u32,
                 options: TcpOptions,
                 listener: Channel,
             ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
-                let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
-                self.track(Conn::listener(listener, id, self.owner, false, self.app.clone()));
+                let owner = self.owner;
+                let (id, bound) =
+                    self.bind(FirewallProtocol::Tcp, local, |s| s.tcp_listen(local, v6only, backlog, &options, owner))?;
+                self.track(Conn::listener(listener, id, owner, false, self.app.clone()));
                 self.listens(FirewallProtocol::Tcp, local, bound);
                 Ok(bound)
             }
@@ -651,29 +684,47 @@ impl Netd {
             fn tcp_listen_bytes(
                 &mut self,
                 local: SocketAddr,
+                v6only: bool,
                 backlog: u32,
                 options: TcpOptions,
                 listener: Channel,
             ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
-                let (id, bound) = self.netd.stack.tcp_listen(local, backlog, &options, self.owner)?;
-                self.track(Conn::listener(listener, id, self.owner, true, self.app.clone()));
+                let owner = self.owner;
+                let (id, bound) =
+                    self.bind(FirewallProtocol::Tcp, local, |s| s.tcp_listen(local, v6only, backlog, &options, owner))?;
+                self.track(Conn::listener(listener, id, owner, true, self.app.clone()));
                 self.listens(FirewallProtocol::Tcp, local, bound);
                 Ok(bound)
             }
 
-            fn udp_bind(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
+            fn tcp_bind(&mut self, local: SocketAddr, v6only: bool, socket: Channel) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
-                let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
-                self.track(Conn::udp(socket, id, self.owner, true, self.app.clone()));
+                let owner = self.owner;
+                let (id, bound) = self.bind(FirewallProtocol::Tcp, local, |s| s.tcp_bind(local, v6only, owner))?;
+                self.track(Conn::bound(socket, id, owner, self.service, self.app.clone()));
+                Ok(bound)
+            }
+
+            fn udp_bind(&mut self, local: SocketAddr, v6only: bool, socket: Channel) -> Result<SocketAddr, NetError> {
+                self.check_quota()?;
+                let owner = self.owner;
+                let (id, bound) = self.bind(FirewallProtocol::Udp, local, |s| s.udp_bind(local, v6only, owner))?;
+                self.track(Conn::udp(socket, id, owner, true, self.app.clone()));
                 self.listens(FirewallProtocol::Udp, local, bound);
                 Ok(bound)
             }
 
-            fn udp_bind_unmetered(&mut self, local: SocketAddr, socket: Channel) -> Result<SocketAddr, NetError> {
+            fn udp_bind_unmetered(
+                &mut self,
+                local: SocketAddr,
+                v6only: bool,
+                socket: Channel,
+            ) -> Result<SocketAddr, NetError> {
                 self.check_quota()?;
-                let (id, bound) = self.netd.stack.udp_bind(local, self.owner)?;
-                self.track(Conn::udp(socket, id, self.owner, false, self.app.clone()));
+                let owner = self.owner;
+                let (id, bound) = self.bind(FirewallProtocol::Udp, local, |s| s.udp_bind(local, v6only, owner))?;
+                self.track(Conn::udp(socket, id, owner, false, self.app.clone()));
                 self.listens(FirewallProtocol::Udp, local, bound);
                 Ok(bound)
             }
@@ -1117,6 +1168,69 @@ impl Netd {
                 self.work.insert(id);
             } else {
                 self.close_socket(id);
+            }
+        } else if let Some(turn) = conn.take_turn() {
+            self.turn(id, turn);
+        }
+    }
+
+    /// Does what the client of a bound socket asked to make of it (the
+    /// firewall having its say), then reads on.
+    fn turn(&mut self, id: SockId, turn: Turn) {
+        let Some(conn) = self.sockets.get_mut(&id) else { return };
+        let app = conn.app.clone();
+        match turn {
+            Turn::Listen { backlog, options, reply } => {
+                let answer = match conn.bound_by_service() {
+                    Some(service) => {
+                        let listening = self.stack.tcp_listen_bound(id, backlog, &options);
+                        if let Ok(local) = listening {
+                            conn.listening();
+                            let from = self.firewall.incoming_for(&app);
+                            self.stack.set_exposure(id, from, &app);
+                            self.listens(&app, service, FirewallProtocol::Tcp, local, local);
+                        }
+                        listening
+                    }
+                    // Listening already (another of the processes that share
+                    // it asked first).
+                    None => self.stack.tcp_listener_address(id).ok_or(NetError::InvalidArgument),
+                };
+                let answer = match answer {
+                    Ok(local) => SocketEvent::Listening { local },
+                    Err(error) => SocketEvent::Error { error },
+                };
+                // An answer nobody waits for any more is no matter.
+                let _ = ipc::send_event(&reply, 0, answer);
+            }
+            Turn::Connect { remote, options, bytes } => {
+                let connecting =
+                    self.may_reach(&app, 6, remote).and_then(|()| self.stack.tcp_connect_bound(id, remote, &options));
+                let Some(conn) = self.sockets.get_mut(&id) else { return };
+                match connecting {
+                    Ok(()) => conn.connecting(bytes),
+                    // Reported on the channel, as a connection's failure is.
+                    Err(error) => conn.fail(error),
+                }
+            }
+        }
+        // What it has to say now (a connection's failure); the channel's
+        // next requests are read when the service next waits.
+        self.work.insert(id);
+    }
+
+    /// Closes the sockets on `port` (of `protocol`) whose clients closed
+    /// them, which the service has not seen to yet: a program that closes a
+    /// socket and binds its port again finds it free, as on Linux (the close
+    /// came first).
+    fn reap(&mut self, protocol: FirewallProtocol, port: u16) {
+        for id in self.stack.port_holders(protocol, port) {
+            let observed = match self.sockets.get(&id) {
+                Some(conn) if conn.channel_heard() => conn.channel.wait(signals::PEER_CLOSED, 0).unwrap_or(0),
+                _ => 0,
+            };
+            if observed & signals::PEER_CLOSED != 0 {
+                self.socket_signalled(id, observed);
             }
         }
     }

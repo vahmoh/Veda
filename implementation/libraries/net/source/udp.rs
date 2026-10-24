@@ -26,11 +26,12 @@ pub struct UdpSocket {
 }
 
 impl UdpSocket {
-    /// Binds to `addr` (port 0 picks a free port).
+    /// Binds to `addr` (port 0 picks a free port): on `::`, IPv4's
+    /// addresses too.
     pub fn bind(addr: SocketAddr) -> Result<UdpSocket, NetError> {
         let (ch, local) = with_client(|c| {
             let (ours, theirs) = Channel::create().map_err(IpcError::Kernel)?;
-            Ok(c.udp_bind(addr, theirs)?.map(|local| (ours, local)))
+            Ok(c.udp_bind(addr, false, theirs)?.map(|local| (ours, local)))
         })??;
         Ok(UdpSocket { ch, local, credit: 0, queue: VecDeque::new(), unacked: 0, error: None })
     }

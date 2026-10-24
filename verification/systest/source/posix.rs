@@ -5,7 +5,8 @@
 //! memory, the thread exit futex, the VFS's open-file connections, ending a
 //! job, and the C programs themselves (`/system/tests/c`, built by the cross
 //! toolchain), and the Rust programs on its standard library, which stand
-//! on the C library too (`/system/tests/rust`, built by Rust's).
+//! on the C library too (`/system/tests/rust`, built by Rust's), as Python
+//! does (`/system/tests/python`).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -678,6 +679,31 @@ pub fn test_rust_programs() -> TestResult {
         check(passed, &format!("{program} checks failed (exit code {code})"))?;
     }
     Ok(())
+}
+
+/// Python's standard library works on Veda as `documentation/PYTHON.md`
+/// says (`verification/python/stdlib.py`, with the host's servers when
+/// there are some), where the image has Python: its interpreter, from
+/// subprocesses and virtual environments (with pip) to TLS, SQLite and the
+/// compression formats, and what Veda has not failing as said. Given ten
+/// minutes, as it builds an environment.
+pub fn test_python() -> TestResult {
+    let fs = vfs_client()?;
+    if fs.stat("/system/bin/python3".into()).map_err(s)?.is_err() {
+        rt::println!("python: not in this image (Python was not built)");
+        return Ok(());
+    }
+    let host = host_args();
+    let mut args = alloc::vec!["/system/tests/python/stdlib.py"];
+    args.extend(host.iter().map(String::as_str));
+    let dir = String::from("/tmp/python-test");
+    let _ = fs.mkdir(dir.clone());
+    let (code, out) = run_c_for("/system/bin/python3", &args, &dir, 600)?;
+    for line in out.lines().filter(|l| !l.starts_with("ok - ")) {
+        rt::println!("python: {line}");
+    }
+    let passed = code == 0 && out.contains("PASS: 0 failed");
+    check(passed, &format!("Python's checks failed (exit code {code})"))
 }
 
 /// Crates that need Rust's standard library work as Veda's ports of them

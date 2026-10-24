@@ -6,7 +6,10 @@
 //! The file system service takes absolute, normalised UTF-8 paths. POSIX
 //! paths are bytes, relative to the working directory (or a directory
 //! descriptor), and may hold `.`, `..` and repeated or trailing slashes.
-//! Veda has no symbolic links, so `..` can be resolved textually.
+//! Veda has no symbolic links, so `..` can be resolved textually, once the
+//! directories it climbs out of are known to be there, as POSIX resolves a
+//! path component by component ([`Resolved::climbed`]: `missing/..` is no
+//! path, nor is `file/..`).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -24,6 +27,10 @@ pub const NAME_MAX: usize = 255;
 pub struct Resolved {
     pub path: String,
     pub dir_only: bool,
+    /// The directories of the name that a `..` climbed out of, which must
+    /// be there: the deepest of each climb (those it climbs to are its
+    /// parents).
+    pub climbed: Vec<String>,
 }
 
 /// Resolves `name` against the absolute directory `base`.
@@ -35,31 +42,50 @@ pub fn resolve(base: &str, name: &[u8]) -> Result<Resolved, isize> {
         return Err(ENAMETOOLONG);
     }
     let name = core::str::from_utf8(name).map_err(|_| EILSEQ)?;
-    let mut comps: Vec<&str> = Vec::new();
     let start = if name.starts_with('/') { "" } else { base };
-    for c in start.split('/').chain(name.split('/')) {
+    // The base is a directory that is there; the name's own components are
+    // those after it.
+    let mut comps: Vec<&str> = start.split('/').filter(|c| !c.is_empty()).collect();
+    let mut known = comps.len();
+    let mut climbed = Vec::new();
+    let mut descended = false;
+    for c in name.split('/') {
         match c {
             "" | "." => {}
             ".." => {
+                if descended && comps.len() > known {
+                    climbed.push(join(&comps));
+                }
                 comps.pop();
+                known = known.min(comps.len());
+                descended = false;
             }
             c if c.len() > NAME_MAX => return Err(ENAMETOOLONG),
-            c => comps.push(c),
+            c => {
+                comps.push(c);
+                descended = true;
+            }
         }
     }
     let dir_only = name.ends_with('/') || name.ends_with("/.") || name.ends_with("/..") || name == "." || name == "..";
-    let mut path = String::with_capacity(name.len() + base.len() + 1);
-    for c in &comps {
+    let path = join(&comps);
+    if path.len() >= PATH_MAX {
+        return Err(ENAMETOOLONG);
+    }
+    Ok(Resolved { path, dir_only, climbed })
+}
+
+/// The absolute path of `comps` (`/` for none).
+fn join(comps: &[&str]) -> String {
+    let mut path = String::with_capacity(comps.iter().map(|c| c.len() + 1).sum::<usize>().max(1));
+    for c in comps {
         path.push('/');
         path.push_str(c);
     }
     if path.is_empty() {
         path.push('/');
     }
-    if path.len() >= PATH_MAX {
-        return Err(ENAMETOOLONG);
-    }
-    Ok(Resolved { path, dir_only })
+    path
 }
 
 /// The directory holding `path` (`/` for `/` itself).
@@ -93,6 +119,18 @@ mod tests {
         assert_eq!(r("/tmp", "."), Ok(("/tmp".into(), true)));
         assert_eq!(r("/tmp", "dir/"), Ok(("/tmp/dir".into(), true)));
         assert_eq!(r("/tmp", "dir/."), Ok(("/tmp/dir".into(), true)));
+    }
+
+    #[test]
+    fn knows_the_directories_dot_dot_climbs_out_of() {
+        let climbed = |base: &str, name: &str| resolve(base, name.as_bytes()).unwrap().climbed;
+        assert_eq!(climbed("/home/user", "src/../b.c"), ["/home/user/src"]);
+        // The deepest of a climb, and of each climb.
+        assert_eq!(climbed("/tmp", "a/b/../../c/../d"), ["/tmp/a/b", "/tmp/c"]);
+        // Nothing for the base's own (it is there), or a name without `..`.
+        assert!(climbed("/home/user", "../..").is_empty());
+        assert!(climbed("/", "/system/bin/gcc").is_empty());
+        assert_eq!(climbed("/tmp", "/x/.."), ["/x"]);
     }
 
     #[test]

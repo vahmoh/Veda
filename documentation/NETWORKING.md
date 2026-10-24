@@ -98,6 +98,20 @@ kept for system services, so that applications together cannot use it all.
   with the end of the stream).
 * **A listener** holds at most its backlog of connections not accepted yet;
   further attempts are refused.
+* **A TCP socket bound** before it listens or connects (POSIX's `bind`,
+  `tcp_bind` in `proto::net`) is a socket of `netd`'s that holds its port,
+  a free one if it asked for none: on its channel, `Listen` makes it a
+  listener (answering on a channel of its own, so that processes sharing
+  the socket each hear theirs) and `Connect` a connection from its address
+  and port. When the socket that had a port is closed, the port is free at
+  once for the next to bind, since `netd` closes the sockets in the way
+  whose clients closed them first.
+* **Sockets share a port** when no address is both's, as on Linux: an
+  IPv4 socket on `0.0.0.0` and an IPv6-only one on `::` (`v6only` in
+  `proto::net`; without it, `::` is IPv4's addresses too), or sockets on
+  different addresses. What comes to an address is one socket's, and the
+  firewall judges it by that socket's application; a socket bound to an
+  address of one version sends to that version alone.
 * **Ping** reports why a request failed: no answer in time, or what a
   router said (destination or host unreachable, time to live exceeded) and
   its address, so pings with a small TTL find the routers on the way.

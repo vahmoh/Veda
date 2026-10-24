@@ -92,14 +92,17 @@ which calls into it.
 | Pipes, the terminal | Kernel sockets: byte streams whose endpoints several processes can share. A shared state page (`proto::tty`) marks the terminal and holds its size and modes |
 | TCP and UDP, over IPv4 and IPv6 | Sockets of the network service (`netd`) |
 | Unix domain sockets: stream, datagram, seqpacket | Bound to a path, a node of the VFS (`S_IFSOCK`; `unlink` removes it); bound to an abstract name (a `sun_path` that starts with a NUL), a name in the VFS's abstract namespace while open. Connections are kernel sockets (channels for seqpacket) between the two programs |
-| Names | `getaddrinfo` and `gethostbyname` ask the network service's resolver (which caches answers, knows `localhost` and puts IPv4 first) after `/etc/hosts`, if there is one; `res_query`, `res_send` and reverse lookups use musl's DNS client with the service's DNS servers |
+| Names | `getaddrinfo` and `gethostbyname` ask the network service's resolver (which caches answers, knows `localhost` and puts IPv4 first) after `/system/etc/hosts`, if there is one; `res_query`, `res_send` and reverse lookups use musl's DNS client with the service's DNS servers |
+| Users, groups, services | The databases Linux keeps in `/etc` are in `/system/etc`: `passwd` and `group` have the one user (`user`, 1000, its home `/home/user`), as which every program runs; `services` is IANA's registry of service names and ports, which `getaddrinfo`, `getservbyname` and `getnameinfo` read |
 | `epoll` | A kernel port per instance: a wait costs what changed, however many descriptors are registered. Level-triggered, edge-triggered (as on Linux; each write to an eventfd is an event) and one-shot |
 | `eventfd`, `pidfd_open` | A counter with an event (`EFD_SEMAPHORE`, `EFD_NONBLOCK`); the child's process handle, readable once it has ended (how tokio waits for children) |
 | `timerfd` | On the monotonic, real-time and boot clocks, one-shot or periodic, absolute or relative (`TFD_TIMER_ABSTIME`): a count of expirations to read, and an event that `poll` and `epoll` wait on, which a thread of the layer signals as timers expire |
 | `mmap`, `mprotect`, `munmap`, `madvise` | Private anonymous memory is the kernel's, its pages freed once unmapped (in part too) or dropped with `MADV_DONTNEED`; files are mapped as copies, read-only if shared, but a mapping of a file of `/system` that does not write it is the system image's own pages, shared with every process that maps them and never writable; any part of a mapping can be protected or unmapped |
 | Memory files (`memfd_create`) | A VMO: shared mappings are the memory itself, in every process the descriptor goes to (over Unix domain sockets, or to the programs a program starts); `ftruncate` and writes grow it; seals that fix its size (`F_SEAL_SHRINK`, `F_SEAL_GROW`, `F_SEAL_SEAL`, and `F_SEAL_EXEC` with `MFD_NOEXEC_SEAL`); `/dev/fd/N` opened read-only gives a descriptor whose handle cannot write the memory, nor can any process it goes to |
 | `fsync`, `fdatasync`, `sync`, `syncfs`, `O_SYNC`, `RWF_SYNC` | The VFS saves changes to the home disk at once, not a few seconds after the last one |
-| Threads, futexes, clocks | The kernel's. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack; `pthread_getattr_np` knows the main thread's stack from the startup message |
+| Threads, futexes, clocks | The kernel's. Thread ids are the process's own, the main thread's its process id; `pthread_join` waits on the thread's exit futex; a detached thread frees its own stack; `pthread_getattr_np` knows the main thread's stack from the startup message; a thread's CPU time is its own (`CLOCK_THREAD_CPUTIME_ID`, `pthread_getcpuclockid`), and a thread names itself (`prctl`, `pthread_setname_np`), which the layer keeps |
+| Nice values, processors | One nice value for the process (POSIX's; Linux keeps one per thread), which the programs it starts inherit: its threads run at a kernel priority of it, 0 the normal one, 19 `LOW` and -20 `HIGH`, strictly above one another (the kernel gives a thread that waited long a turn). Below 0 only as far as the process may run above normal (`EACCES` for applications). Threads run on every processor, which `sched_getaffinity` names; an affinity that leaves some out cannot be set (`EOPNOTSUPP`) |
+| `dladdr`, `dl_iterate_phdr` | The program alone, statically linked: its segments, and its path as the loader gives it (`AT_EXECFN`); `dladdr` names no symbol |
 | Local time | Without `TZ`, the system's offset from UTC (the `tz=` boot option, or the firmware's), as a POSIX `TZ` string (`<+0530>-5:30`): `localtime`, `mktime` and `tzname` follow it; `TZ` overrides it with a POSIX string (there is no tz database yet) |
 | `posix_spawn`, `waitpid` | Processes started from the program image. A process id is the kernel object id cut to 30 bits, never that of another child not yet waited for (`EAGAIN` in the rare case none can be had) |
 
@@ -160,8 +163,8 @@ program the Terminal runs.
 | `fork`, `exec` | None (`ENOSYS`). Processes start with `posix_spawn`, which most build tools and browsers already use, or `vfork` and `exec`, which port to it directly |
 | `/bin/sh` | None yet (the Terminal's shell is part of the Terminal): `system` and `popen` fail with `ENOENT` |
 | Links | No hard or symbolic links: `link` and `symlink` fail with `EPERM`, and `readlink` finds none (`EINVAL`) |
-| Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` and `chown` change nothing. Programs run as user 1000 |
-| File locks | None between processes, until the VFS arbitrates them: `F_SETLK`, `F_SETLKW` and `flock` fail with `ENOLCK` (unlocking succeeds), so software relying on them needs porting: SQLite, in the web engine, uses its `unix-none` VFS, as each of its databases is one process's |
+| Permissions | No owners or permission bits: a program file (ELF or `#!`) is executable, nothing else is; `chmod` changes nothing, and `chown` to another user or group is refused (`EPERM`, as for Linux's unprivileged users). Programs run as user 1000 |
+| File locks | None between processes, until the VFS arbitrates them: `F_SETLK`, `F_SETLKW` and `flock` fail with `ENOLCK` (unlocking succeeds), so software relying on them needs porting: SQLite, in the web engine (each of whose databases is one process's) and in Python, uses its `unix-none` VFS, which locks nothing: a database is one connection's to write at a time |
 | Shared libraries | Static linking only, no `dlopen` |
 | Timers | No `alarm` or interval timers: `setitimer` and `timer_create` fail with `ENOSYS`; `timerfd` is there |
 | Shared file mappings | Read-only, as changes would never reach the file: `PROT_WRITE` fails with `ENODEV`, and `mprotect` cannot add it (`EACCES`) |
@@ -174,6 +177,8 @@ program the Terminal runs.
 | Limit | Value |
 |-------|-------|
 | Descriptors a started program inherits | 62 kernel objects (files, pipes, the terminal) at most, none numbered 256 or more (`EMFILE`): open what children need not have with `O_CLOEXEC` |
+| Files open at once | Some 250 per program, its quarter of what the VFS holds open (`EMFILE`); descriptors of other kinds, 1024 in all |
+| A file | 2 GiB (`ENOSPC` past it, as on a full disk), kept in memory whole: a file seeked past its end takes the space it skips |
 | The main thread's stack | 8 MiB, or more if the executable asks (`-Wl,-z,stack-size=N`), up to 512 MiB; guard pages below |
 | Pipes and the terminal | 256 KiB each way; writes of up to 4096 bytes are never split |
 | A Unix domain datagram | 56 KiB (`EMSGSIZE`) |
@@ -190,20 +195,27 @@ program the Terminal runs.
   (`pthread_kill`, `tgkill`, and the C library's for `pthread_cancel`,
   `setrlimit` and the `set*id` calls), which a thread takes as its next
   system call returns; handlers and per-thread masks work. Signals end a
-  wait for signals (`sigsuspend`, `sigwait`, `pause`, a `poll` of nothing)
-  or on a lock, a condition or a thread (`EINTR`, after the handler);
-  other blocking calls, such as a read from a pipe, carry on, and the
-  signal waits for them.
+  wait for signals (`sigsuspend`, `sigwait`, `pause`, a `poll` of nothing),
+  a sleep (`nanosleep`, `clock_nanosleep`) or a wait on a lock, a
+  condition or a thread (`EINTR`, after the handler); other blocking
+  calls, such as a read from a pipe, carry on, and the signal waits for
+  them. A signal a program sends itself (`kill` of its own process) is the
+  calling thread's unless it blocks it, then another thread's; while every
+  thread blocks it, it is pending for the process, for the first thread
+  that unblocks it or waits for it (`sigwait`).
 - **`kill`** reaches only the program and its children (`ESRCH`
-  otherwise), and does not signal a child: it ends it with a signal that
-  ends a process by default, and leaves it alone with another.
+  otherwise), and does not signal a child: a signal that ends a process
+  by default ends it, as the child's wait status says (`WTERMSIG`), and
+  another leaves it alone.
 
 ### Sockets and epoll
 
-- **A TCP socket binds when it listens**: `bind` records the address
-  (`getsockname` says it, port 0 still 0) and `listen` reports what `bind`
-  would (`EADDRINUSE`...); one bound before it connects connects from the
-  address and port the network service picks.
+- **Ports** are shared by sockets bound to addresses apart, as on Linux
+  without `SO_REUSEADDR`: an IPv4 socket on `0.0.0.0` and an
+  `IPV6_V6ONLY` one on `::`, or sockets on different addresses
+  (`SO_REUSEADDR` and `SO_REUSEPORT` change nothing); a TCP port is free
+  while connections use it, as with `SO_REUSEADDR`. `IPV6_V6ONLY` is set
+  before `bind`, as on Linux (`EINVAL` after).
 - **UDP sends** wait for room in the socket's channel to the service, not
   in a send buffer.
 - **Not passed on**: a TCP socket still connecting stays with its program
@@ -282,7 +294,7 @@ sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmp
 | `binutils` | 2.47 | Veda in `config.sub`; the `x86_64-veda` target (ELF, `elf_x86_64`, separate code pages) |
 | `gcc` | 16.2.0 | Veda's target (`gcc/config/veda.h`: musl, static linking, `/system`), libgcc's configuration, libstdc++'s checks of the C library, libatomic; `x86_64-veda` (the System V x86-64 ABI) |
 | `gmp`, `mpfr`, `mpc` | 6.3.0, 4.2.2, 1.4.1 | `config.sub` knows Veda |
-| `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`, the main thread's stack, the time zone), name lookups, the program's path in `dl_iterate_phdr` |
+| `musl` | 1.2.6 | Its hooks into the POSIX layer (system calls, `_start`, thread entry points, `__init_libc`, `posix_spawn`, the main thread's stack, the time zone), name lookups, its databases in `/system/etc`, the program in `dl_iterate_phdr` and `dladdr` |
 | `rust` | 1.99.0 | Veda's target in the compiler, the standard library on the C library |
 | `dav1d` | 1.5.4 | None: built as released (meson) |
 | `ffmpeg` | 9.0.2 | `veda` as a target operating system in `configure`; only the demuxers, decoders and parsers the media decoder uses |
@@ -300,10 +312,12 @@ licences ([Licensing](LICENSING.md)), whose texts the image carries in
 
 - **`verification/c/posix.c`** checks the C library and the POSIX layer:
   startup, standard I/O, memory, the system image's files mapped in place,
-  memory files, suspending threads, files, pipes, threads, clocks and the
-  time zone, signals, `posix_spawn`, the network (the host's servers too,
-  through QEMU), `timerfd`, `epoll`, `eventfd`, Unix domain sockets, and
-  sockets shared with child processes.
+  the C library's databases, memory files, suspending threads, files (their
+  owner too), pipes, threads, clocks (threads' CPU time too) and the time
+  zone, signals, `posix_spawn`, the network (binding TCP ports, ports
+  shared by IPv4 and IPv6-only sockets, and the host's servers through
+  QEMU), nice values and processors, `timerfd`, `epoll`, `eventfd`, Unix
+  domain sockets, and sockets shared with child processes.
 - **`verification/c/cxx.cc`** checks the C++ library: exceptions (across
   threads too), run-time types, static constructors, containers, streams,
   threads.

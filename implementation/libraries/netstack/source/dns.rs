@@ -551,6 +551,11 @@ impl Stack {
         Ok((via, handle, port))
     }
 
+    /// Whether a query socket (bound to every address) is on `port`.
+    pub(crate) fn dns_has_port(&self, port: u16) -> bool {
+        self.dns.lookups.values().flat_map(|l| &l.queries).any(|q| q.attempt.as_ref().is_some_and(|a| a.port == port))
+    }
+
     /// Closes a query socket.
     fn dns_close(&mut self, a: Attempt) {
         if let Some(i) = self.iface_mut(a.iface) {

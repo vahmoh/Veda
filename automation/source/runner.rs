@@ -327,10 +327,14 @@ pub fn scripts(o: &Options, files: &[PathBuf]) -> Result {
 /// Why a script cannot run on this machine, if it cannot: the part of the
 /// toolchain it needs is not built, or QEMU has not the 3D GPU it asks for.
 fn unrunnable(script: &Script, gl_gpu: impl Fn() -> bool) -> Option<String> {
-    if script.boot.requires.contains(&crate::script::Requirement::Web) && !crate::web::built() {
+    use crate::script::Requirement;
+    if script.boot.requires.contains(&Requirement::Web) && !crate::web::built() {
         return Some("needs the web engine: `cargo automation web`".into());
     }
-    let toolchain_parts = script.boot.requires.iter().filter(|r| **r != crate::script::Requirement::Web);
+    if script.boot.requires.contains(&Requirement::Python) && !crate::python::built() {
+        return Some("needs Python: `cargo automation python`".into());
+    }
+    let toolchain_parts = script.boot.requires.iter().filter(|r| !matches!(r, Requirement::Web | Requirement::Python));
     if let Some(what) = toolchain_parts.clone().find(|r| !toolchain::built(r.part())) {
         return Some(format!("needs the {}: `cargo automation toolchain`", what.part()));
     }
