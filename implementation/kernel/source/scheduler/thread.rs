@@ -59,7 +59,9 @@ pub struct Thread {
     pub sched: SpinLock<SchedData>,
     ctx: UnsafeCell<Context>,
     pub signals: Signals,
-    pub cpu_time_ns: AtomicU64,
+    /// The processor time of its turns that have ended
+    /// ([`super::cpu_time_ns`] adds the one it is running).
+    pub(super) cpu_time_ns: AtomicU64,
     pub kill_pending: AtomicBool,
     pub is_idle: bool,
     /// User address of a 32-bit word to clear, and wake a futex waiter on,

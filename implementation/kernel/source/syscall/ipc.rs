@@ -104,14 +104,14 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
         },
         info_topic::THREAD => match &h.object {
             KObject::Thread(t) => {
-                let s = t.sched.lock();
-                let info = abi::ThreadInfo {
-                    koid: t.koid,
-                    state: s.state as u32,
-                    priority: s.priority as u32,
-                    cpu_time_ns: t.cpu_time_ns.load(core::sync::atomic::Ordering::Relaxed),
+                let (state, priority) = {
+                    let s = t.sched.lock();
+                    (s.state, s.priority)
                 };
-                drop(s);
+                // Not under the thread's lock, which it takes.
+                let cpu_time_ns = scheduler::cpu_time_ns(t);
+                let info =
+                    abi::ThreadInfo { koid: t.koid, state: state as u32, priority: priority as u32, cpu_time_ns };
                 write(as_bytes(&info))
             }
             _ => Err(Error::WrongType),

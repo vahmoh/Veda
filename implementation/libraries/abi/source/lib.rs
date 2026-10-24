@@ -787,7 +787,8 @@ pub struct ProcessInfo {
     pub exit_code: i64,
     /// Resident memory (committed pages) in bytes.
     pub memory_bytes: u64,
-    /// Total CPU time consumed by all threads, in nanoseconds.
+    /// Total CPU time consumed by all threads, those that have ended too, in
+    /// nanoseconds: each thread's as [`ThreadInfo::cpu_time_ns`] has it.
     pub cpu_time_ns: u64,
     pub handles: u32,
     /// The highest priority its threads may run at (see
@@ -832,6 +833,9 @@ pub struct ThreadInfo {
     pub koid: u64,
     pub state: u32,
     pub priority: u32,
+    /// The processor time it has used, in nanoseconds, up to the moment of
+    /// asking: a thread running on a processor has its turn there so far
+    /// counted too.
     pub cpu_time_ns: u64,
 }
 
@@ -995,7 +999,8 @@ pub struct SystemInfo {
     pub uptime_ns: u64,
     pub process_count: u32,
     pub thread_count: u32,
-    /// Accumulated idle time across all CPUs (for CPU usage graphs).
+    /// Accumulated idle time across all CPUs, up to the moment of asking
+    /// (for CPU usage graphs).
     pub idle_time_ns: u64,
     /// The processor's name, as it gives it (NUL padded).
     pub cpu_brand: [u8; 48],

@@ -608,6 +608,126 @@ fn test_elevated_budget() -> TestResult {
     )
 }
 
+/// A thread's CPU time counts the turn it is running, on whichever
+/// processor, up to the moment it is read, and so does its process's. A
+/// thread spins, never waiting nor making a system call but those that read
+/// its CPU time and its process's: it sees both advance every millisecond,
+/// its own by no more than the clock does; this thread, reading them while
+/// the other spins, never reads less than that one last read itself; and
+/// once the spinner has ended, the process has kept all its time. A turn
+/// lasts until the thread waits or another takes its processor: were it
+/// counted only as it ended, the spinner's time would stand still.
+fn test_cpu_time_while_running() -> TestResult {
+    const ROUNDS: usize = 20;
+    /// The clock before and after the spinning thread read its CPU time
+    /// and its process's.
+    struct Reading {
+        before: u64,
+        thread: u64,
+        process: u64,
+        after: u64,
+    }
+    /// What the spinner shares: its last readings of its CPU time and its
+    /// process's, how many it has kept, and whether it is to stop.
+    #[derive(Default)]
+    struct Shared {
+        thread: AtomicU64,
+        process: AtomicU64,
+        kept: AtomicU32,
+        stop: AtomicBool,
+    }
+    let err = |e: abi::Error| e.to_string();
+    let shared = Arc::new(Shared::default());
+    let theirs = shared.clone();
+    let start = rt::object::process_self_info().map_err(err)?.cpu_time_ns;
+    let spinner = rt::thread::Builder::new()
+        .name("spinner")
+        .spawn(move || -> Result<Vec<Reading>, abi::Error> {
+            let own = rt::sys::call(abi::nr::THREAD_SELF, [0; 6])?;
+            // SAFETY: a fresh handle from the kernel.
+            let own = rt::object::Thread(unsafe { rt::object::Handle::from_raw(own as u32) });
+            // Room for every reading kept, so that none asks for memory.
+            let mut readings = Vec::with_capacity(ROUNDS + 1);
+            loop {
+                let before = rt::time::now_ns();
+                let thread = own.info()?.cpu_time_ns;
+                let process = rt::object::process_self_info()?.cpu_time_ns;
+                let after = rt::time::now_ns();
+                theirs.thread.store(thread, Ordering::Release);
+                theirs.process.store(process, Ordering::Release);
+                if readings.len() <= ROUNDS {
+                    readings.push(Reading { before, thread, process, after });
+                    theirs.kept.fetch_add(1, Ordering::Release);
+                } else if theirs.stop.load(Ordering::Acquire) {
+                    return Ok(readings);
+                }
+                while rt::time::now_ns() < after + 1_000_000 {
+                    core::hint::spin_loop();
+                }
+            }
+        })
+        .map_err(err)?;
+    let watched = rt::object::Thread(spinner.thread().0.duplicate(None).map_err(err)?);
+    // This thread reads them every millisecond, until the spinner has kept
+    // all its readings, each after it has seen what the spinner last read.
+    let crossed = (|| {
+        let deadline = rt::time::now_ns() + 10_000_000_000;
+        loop {
+            rt::time::sleep(rt::time::Duration::from_millis(1));
+            let done = shared.kept.load(Ordering::Acquire) as usize > ROUNDS;
+            let (thread_seen, process_seen) =
+                (shared.thread.load(Ordering::Acquire), shared.process.load(Ordering::Acquire));
+            let thread = watched.info().map_err(err)?.cpu_time_ns;
+            let process = rt::object::process_self_info().map_err(err)?.cpu_time_ns;
+            check(
+                thread >= thread_seen && process >= process_seen,
+                &alloc::format!(
+                    "read by another thread as it spun, a thread's CPU time was {thread} ns and its process's \
+                     {process} ns, after it had read {thread_seen} ns and {process_seen} ns itself"
+                ),
+            )?;
+            if done {
+                return Ok(());
+            }
+            if rt::time::now_ns() > deadline {
+                return Err(alloc::format!(
+                    "the spinning thread did not read its CPU time {} times in 10 s",
+                    ROUNDS + 1
+                ));
+            }
+        }
+    })();
+    shared.stop.store(true, Ordering::Release);
+    let readings = spinner.join().map_err(err)?.map_err(err)?;
+    let (first, last) = (&readings[0], &readings[ROUNDS]);
+    let still = readings.windows(2).filter(|w| w[1].thread <= w[0].thread).count();
+    let still_process = readings.windows(2).filter(|w| w[1].process <= w[0].process).count();
+    check(
+        still == 0 && still_process == 0,
+        &alloc::format!(
+            "a thread spinning saw its CPU time stand still in {still} of {ROUNDS} milliseconds (from {} ns to {} \
+             ns), its process's in {still_process}",
+            first.thread,
+            last.thread
+        ),
+    )?;
+    if let Some(w) = readings.windows(2).find(|w| w[1].thread - w[0].thread > w[1].after - w[0].before) {
+        return Err(alloc::format!(
+            "a thread's CPU time went from {} ns to {} ns while the clock went on {} ns",
+            w[0].thread,
+            w[1].thread,
+            w[1].after - w[0].before
+        ));
+    }
+    crossed?;
+    let used = watched.info().map_err(err)?.cpu_time_ns;
+    let grew = rt::object::process_self_info().map_err(err)?.cpu_time_ns.saturating_sub(start);
+    check(
+        grew >= used,
+        &alloc::format!("a process's CPU time grew by {grew} ns while a thread of its, now ended, used {used} ns"),
+    )
+}
+
 /// Write-combining memory (a display engine's pictures, which it reads
 /// past the processor's caches) is as consistent as other memory: what a
 /// mapping writes is what the kernel reads of it, and the other way; the
@@ -700,13 +820,14 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 40] = [
+    let tests: [Test; 41] = [
         ("starved threads run", test_starved_threads_run),
         ("ipc primitives", test_ipc_primitives),
         ("short sleeps", test_short_sleeps),
         ("deadlines interrupt one processor", test_deadlines_interrupt_one_processor),
         ("waking preempts elsewhere", test_waking_preempts_elsewhere),
         ("priorities above normal have a budget", test_elevated_budget),
+        ("cpu time counts the running turn", test_cpu_time_while_running),
         ("ports", ports::test_ports),
         ("waiting on many handles", ports::test_many_handles),
         ("handles on channels", policy::test_channel_handles),

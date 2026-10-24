@@ -167,9 +167,10 @@ impl Process {
         }
     }
 
-    /// Called by a thread of this process as it exits.
+    /// Called by a thread of this process as it exits. The processor time
+    /// it used comes to [`Process::keep_cpu_time`] as it is switched out
+    /// for the last time.
     pub fn thread_exited(self: &Arc<Self>, t: &Thread) {
-        self.exited_threads_cpu_ns.fetch_add(t.cpu_time_ns.load(Ordering::Relaxed), Ordering::Relaxed);
         let last = {
             let mut threads = self.threads.lock();
             threads.retain(|x| x.koid != t.koid);
@@ -179,6 +180,14 @@ impl Process {
             let code = self.pending_code.lock().unwrap_or(0);
             self.terminate(code);
         }
+    }
+
+    /// Keeps `ns`, the processor time of a thread of this process that has
+    /// exited, as the scheduler switches it out for the last time: until
+    /// then (with the BKL held throughout) it is in neither its threads'
+    /// time nor this.
+    pub fn keep_cpu_time(&self, ns: u64) {
+        self.exited_threads_cpu_ns.fetch_add(ns, Ordering::Relaxed);
     }
 
     /// Requests termination of every thread with `code` (kill or crash).
@@ -246,7 +255,7 @@ impl Process {
 
     pub fn info(&self) -> ProcessInfo {
         let threads = self.threads.lock();
-        let running_cpu: u64 = threads.iter().map(|t| t.cpu_time_ns.load(Ordering::Relaxed)).sum();
+        let running_cpu: u64 = threads.iter().map(|t| scheduler::cpu_time_ns(t)).sum();
         let state = match self.state() {
             ProcessState::Created | ProcessState::Running => process_state::RUNNING,
             ProcessState::Terminated { code } if code == abi::EXIT_CODE_CRASHED => process_state::CRASHED,

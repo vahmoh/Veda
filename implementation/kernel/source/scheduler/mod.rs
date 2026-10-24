@@ -237,6 +237,31 @@ pub fn try_current() -> Option<Arc<Thread>> {
     cpu_sched().current.clone()
 }
 
+/// The processor time `t` has used: its turns that have ended (a turn ends
+/// as [`switch_to`] switches the thread out), and the one it is running,
+/// on whichever CPU, so far. Read under the BKL, which every switch holds,
+/// it is never less than a reading before it, whichever CPU read that.
+pub fn cpu_time_ns(t: &Thread) -> u64 {
+    // The CPU that runs it, if any does: `switch_to` names it before it
+    // makes the thread its current one.
+    let cpu = t.sched.lock().cpu;
+    let running = running_for(percpu::get(cpu as usize), time::now_ns(), |cur| cur.koid == t.koid);
+    t.cpu_time_ns.load(Ordering::Relaxed) + running
+}
+
+/// How long CPU `p` has run its current thread at `now`, if `which` is
+/// true of that thread (0 if not).
+fn running_for(p: &percpu::PerCpu, now: u64, which: impl FnOnce(&Thread) -> bool) -> u64 {
+    debug_assert!(bkl::held_by_me(), "a CPU's scheduler state read without the BKL");
+    // SAFETY: a CPU's scheduler state changes only under the BKL, which the
+    // caller holds (as `after_wakeup` reads other CPUs' current threads).
+    let cs = unsafe { &*p.sched.get() };
+    match &cs.current {
+        Some(cur) if which(cur) => now.saturating_sub(cs.switched_in_at),
+        _ => 0,
+    }
+}
+
 /// Installs the idle thread of this CPU as its current thread.
 pub fn init_cpu(idle: Arc<Thread>) {
     let cs = cpu_sched();
@@ -472,6 +497,14 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     prev.cpu_time_ns.fetch_add(ran, Ordering::Relaxed);
     if prev.is_idle {
         percpu::current().idle_ns.fetch_add(ran, Ordering::Relaxed);
+    }
+    // A thread that has ended has left its process's threads
+    // (`Process::thread_exited`): the process keeps the time it used, this
+    // last turn too.
+    if let Some(p) = &prev.process
+        && prev.is_dead()
+    {
+        p.keep_cpu_time(prev.cpu_time_ns.load(Ordering::Relaxed));
     }
     cs.switched_in_at = now;
     prev.charge(now.saturating_sub(cs.charged_to), now);
@@ -800,9 +833,11 @@ pub fn idle_entry(_arg: u64) -> ! {
     idle_loop()
 }
 
-/// Snapshot used by `system_info`.
+/// Snapshot used by `system_info`: the CPUs' idle time, the stretch an
+/// idle one is in so far too (under the BKL, as [`cpu_time_ns`]).
 pub fn total_idle_ns() -> u64 {
-    percpu::online().map(|p| p.idle_ns.load(Ordering::Relaxed)).sum()
+    let now = time::now_ns();
+    percpu::online().map(|p| p.idle_ns.load(Ordering::Relaxed) + running_for(p, now, |cur| cur.is_idle)).sum()
 }
 
 /// The timer interrupts all CPUs have taken, for `system_info`.
